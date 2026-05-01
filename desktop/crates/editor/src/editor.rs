@@ -38,7 +38,9 @@ use gpui_component::{
 use parking_lot::RwLock;
 use smol::unblock;
 use syntax::languages;
-use ui::{GithubEmojiInput, StatusThemeExt as _, Theme, UiIconName};
+use ui::{
+  MARKDOWN_COMPOSER_CHROME_HEIGHT_PX, MarkdownComposer, StatusThemeExt as _, Theme, UiIconName,
+};
 use unicode_segmentation::UnicodeSegmentation;
 
 use crate::{
@@ -179,6 +181,14 @@ pub type ReviewCommentSuggestionActionFactory = Arc<
 pub type ReviewCommentLinkHandler = Arc<dyn Fn(&str, &mut Window, &mut App) -> bool>;
 pub type ReviewCommentImageUploadHandler =
   Arc<dyn Fn(&ExternalPaths, Entity<InputState>, &mut Window, &mut App)>;
+pub type ReviewCommentPreviewRenderer = Arc<
+  dyn Fn(
+    &str,
+    Option<gfm_markdown_viewer::SuggestionContext>,
+    &mut Window,
+    &mut App,
+  ) -> gpui::AnyElement,
+>;
 type ReviewCommentAssetUrlResolver = Arc<dyn Fn(&str) -> Option<String> + Send + Sync>;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -219,7 +229,8 @@ fn next_review_comment_body(raw_value: &str, initial_value: &str) -> Option<Arc<
 }
 
 fn review_comment_composer_body_height_px(editor_line_height_px: f32) -> f32 {
-  REVIEW_COMMENT_COMPOSER_TEXTAREA_HEIGHT_PX
+  MARKDOWN_COMPOSER_CHROME_HEIGHT_PX
+    + REVIEW_COMMENT_COMPOSER_TEXTAREA_HEIGHT_PX
     + REVIEW_COMMENT_COMPOSER_ACTIONS_HEIGHT_PX.max(editor_line_height_px)
     + REVIEW_COMMENT_COMPOSER_ACTIONS_GAP_PX
 }
@@ -540,16 +551,20 @@ pub struct Editor {
   review_comment_link_handler: Option<ReviewCommentLinkHandler>,
   review_comment_asset_url_resolver: Option<ReviewCommentAssetUrlResolver>,
   review_comment_image_upload_handler: Option<ReviewCommentImageUploadHandler>,
+  review_comment_preview_renderer: Option<ReviewCommentPreviewRenderer>,
   review_comment_create_input: Option<Entity<InputState>>,
   review_comment_create_draft: Option<ReviewCommentCreateDraft>,
   review_comment_create_drag_start_display_line: Option<usize>,
   review_comment_create_drag_active: bool,
   review_comment_create_submitting: bool,
   review_comment_create_error: Option<Arc<str>>,
+  review_comment_create_preview_open: bool,
+  review_comment_edit_preview_open: bool,
   review_comment_reply_input: Option<Entity<InputState>>,
   replying_to_review_comment_id: Option<u64>,
   review_comment_reply_submitting: bool,
   review_comment_reply_error: Option<Arc<str>>,
+  review_comment_reply_preview_open: bool,
   hovered_review_comment_create_display_line: Option<usize>,
   collapsed_review_comments: HashSet<u64>,
   review_comment_scroll_epoch: usize,
@@ -956,16 +971,20 @@ impl Editor {
       review_comment_link_handler: None,
       review_comment_asset_url_resolver: None,
       review_comment_image_upload_handler: None,
+      review_comment_preview_renderer: None,
       review_comment_create_input: None,
       review_comment_create_draft: None,
       review_comment_create_drag_start_display_line: None,
       review_comment_create_drag_active: false,
       review_comment_create_submitting: false,
       review_comment_create_error: None,
+      review_comment_create_preview_open: false,
+      review_comment_edit_preview_open: false,
       review_comment_reply_input: None,
       replying_to_review_comment_id: None,
       review_comment_reply_submitting: false,
       review_comment_reply_error: None,
+      review_comment_reply_preview_open: false,
       hovered_review_comment_create_display_line: None,
       collapsed_review_comments: HashSet::new(),
       review_comment_scroll_epoch: 0,
@@ -1792,6 +1811,20 @@ impl Editor {
     cx.notify();
   }
 
+  pub fn set_review_comment_preview_renderer(
+    &mut self,
+    renderer: Option<ReviewCommentPreviewRenderer>,
+    cx: &mut Context<Self>,
+  ) {
+    self.review_comment_preview_renderer = renderer;
+    if self.review_comment_preview_renderer.is_none() {
+      self.review_comment_create_preview_open = false;
+      self.review_comment_edit_preview_open = false;
+      self.review_comment_reply_preview_open = false;
+    }
+    cx.notify();
+  }
+
   fn review_comment_drop_zone(
     &self,
     id: impl Into<gpui::ElementId>,
@@ -1815,6 +1848,7 @@ impl Editor {
     self.editing_review_comment_id = None;
     self.review_comment_edit_initial_body = None;
     self.review_comment_edit_error = None;
+    self.review_comment_edit_preview_open = false;
   }
 
   fn clear_review_comment_create_state(&mut self) {
@@ -1823,6 +1857,7 @@ impl Editor {
     self.review_comment_create_drag_active = false;
     self.review_comment_create_submitting = false;
     self.review_comment_create_error = None;
+    self.review_comment_create_preview_open = false;
     self.hovered_review_comment_create_display_line = None;
   }
 
@@ -1830,6 +1865,7 @@ impl Editor {
     self.replying_to_review_comment_id = None;
     self.review_comment_reply_submitting = false;
     self.review_comment_reply_error = None;
+    self.review_comment_reply_preview_open = false;
   }
 
   pub fn finish_review_comment_edit_submission(
@@ -2507,6 +2543,38 @@ impl Editor {
       return false;
     }
     !self.original_lines_for_create_draft(cx).is_empty()
+  }
+
+  fn review_comment_create_preview_suggestion_context(
+    &self,
+    cx: &App,
+  ) -> Option<gfm_markdown_viewer::SuggestionContext> {
+    let draft = self.review_comment_create_draft?;
+    if draft.side != ReviewCommentSide::Right {
+      return None;
+    }
+    let original_lines = self.original_lines_for_create_draft(cx);
+    if original_lines.is_empty() {
+      return None;
+    }
+    let start_line = (draft.start_line.unwrap_or(draft.line) as usize).saturating_add(1);
+    Some(gfm_markdown_viewer::SuggestionContext {
+      original_start_line: Some(start_line),
+      suggested_start_line: Some(start_line),
+      original_lines,
+      path: Arc::from(""),
+    })
+  }
+
+  fn review_comment_preview_suggestion_context_for_id(
+    &self,
+    comment_id: u64,
+  ) -> Option<gfm_markdown_viewer::SuggestionContext> {
+    self
+      .review_comments
+      .iter()
+      .find(|comment| comment.id == comment_id)
+      .and_then(|comment| comment.suggestion_context.clone())
   }
 
   fn insert_review_comment_suggestion(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -3751,14 +3819,20 @@ impl Editor {
           if let Some(input_state) = self.review_comment_edit_input.clone() {
             let cancel_editor = editor_entity.clone();
             let save_editor = editor_entity.clone();
+            let toggle_editor = editor_entity.clone();
             let message_id = message.id;
             let edit_error = self
               .review_comment_edit_error
               .as_ref()
               .and_then(|(id, error)| (*id == message_id).then_some(error.clone()));
+            let edit_preview_open = self.review_comment_edit_preview_open;
+            let edit_preview_renderer = self.review_comment_preview_renderer.clone();
+            let edit_preview_suggestion_context =
+              self.review_comment_preview_suggestion_context_for_id(message_id);
             v_flex()
               .on_action(cx.listener(Self::on_review_comment_edit_input_escape))
               .gap_2()
+              .font_family(theme.font_family.clone())
               .child(
                 self
                   .review_comment_drop_zone(
@@ -3766,12 +3840,25 @@ impl Editor {
                     input_state.clone(),
                     cx,
                   )
-                  .child(
-                    GithubEmojiInput::new(&input_state)
+                  .child({
+                    let mut composer = MarkdownComposer::new(&input_state)
                       .disabled(is_edit_submitting)
-                      .font_family(theme.font_family.clone())
-                      .h(px(REVIEW_COMMENT_COMPOSER_TEXTAREA_HEIGHT_PX)),
-                  ),
+                      .h(px(REVIEW_COMMENT_COMPOSER_TEXTAREA_HEIGHT_PX))
+                      .preview_open(edit_preview_open)
+                      .on_toggle_preview(move |_, cx| {
+                        toggle_editor.update(cx, |editor, cx| {
+                          editor.review_comment_edit_preview_open =
+                            !editor.review_comment_edit_preview_open;
+                          cx.notify();
+                        });
+                      });
+                    if let Some(renderer) = edit_preview_renderer {
+                      composer = composer.preview(move |text, window, cx| {
+                        renderer(text, edit_preview_suggestion_context.clone(), window, cx)
+                      });
+                    }
+                    composer
+                  }),
               )
               .child(
                 h_flex()
@@ -4082,7 +4169,12 @@ impl Editor {
           if let Some(input_state) = self.review_comment_reply_input.clone() {
             let cancel_editor = editor_entity.clone();
             let save_editor = editor_entity.clone();
+            let toggle_editor = editor_entity.clone();
             let reply_error = self.review_comment_reply_error.clone();
+            let reply_preview_open = self.review_comment_reply_preview_open;
+            let reply_preview_renderer = self.review_comment_preview_renderer.clone();
+            let reply_preview_suggestion_context =
+              self.review_comment_preview_suggestion_context_for_id(reply_to_id);
             v_flex()
               .on_action(cx.listener(Self::on_review_comment_reply_input_escape))
               .pt(px(REVIEW_COMMENT_VERTICAL_PADDING_PX))
@@ -4090,6 +4182,7 @@ impl Editor {
               .gap(px(REVIEW_COMMENT_HEADER_BODY_GAP_PX))
               .border_t(px(REVIEW_COMMENT_REPLY_BORDER_TOP_PX))
               .border_color(theme.border)
+              .font_family(theme.font_family.clone())
               .child(
                 h_flex()
                   .items_center()
@@ -4106,12 +4199,25 @@ impl Editor {
                         input_state.clone(),
                         cx,
                       )
-                      .child(
-                        GithubEmojiInput::new(&input_state)
+                      .child({
+                        let mut composer = MarkdownComposer::new(&input_state)
                           .disabled(is_reply_submitting)
-                          .font_family(theme.font_family.clone())
-                          .h(px(REVIEW_COMMENT_COMPOSER_TEXTAREA_HEIGHT_PX)),
-                      ),
+                          .h(px(REVIEW_COMMENT_COMPOSER_TEXTAREA_HEIGHT_PX))
+                          .preview_open(reply_preview_open)
+                          .on_toggle_preview(move |_, cx| {
+                            toggle_editor.update(cx, |editor, cx| {
+                              editor.review_comment_reply_preview_open =
+                                !editor.review_comment_reply_preview_open;
+                              cx.notify();
+                            });
+                          });
+                        if let Some(renderer) = reply_preview_renderer {
+                          composer = composer.preview(move |text, window, cx| {
+                            renderer(text, reply_preview_suggestion_context.clone(), window, cx)
+                          });
+                        }
+                        composer
+                      }),
                   )
                   .child(
                     h_flex()
@@ -4307,6 +4413,11 @@ impl Editor {
         let can_suggest = self.can_insert_review_comment_suggestion(cx);
         let is_create_submitting = self.review_comment_create_submitting;
         let create_error = self.review_comment_create_error.clone();
+        let create_preview_open = self.review_comment_create_preview_open;
+        let create_preview_renderer = self.review_comment_preview_renderer.clone();
+        let create_preview_suggestion_context =
+          self.review_comment_create_preview_suggestion_context(cx);
+        let create_toggle_editor = editor_entity.clone();
         Some(
           div()
             .w(px(REVIEW_COMMENT_FIXED_WIDTH_PX))
@@ -4326,6 +4437,7 @@ impl Editor {
                 .pt(px(REVIEW_COMMENT_CARD_PADDING_X_PX))
                 .pb(px(REVIEW_COMMENT_CARD_PADDING_X_PX))
                 .gap(px(REVIEW_COMMENT_COMPOSER_ACTIONS_GAP_PX))
+                .font_family(theme.font_family.clone())
                 .child(
                   self
                     .review_comment_drop_zone(
@@ -4333,12 +4445,25 @@ impl Editor {
                       input_state.clone(),
                       cx,
                     )
-                    .child(
-                      GithubEmojiInput::new(&input_state)
+                    .child({
+                      let mut composer = MarkdownComposer::new(&input_state)
                         .disabled(is_create_submitting)
-                        .font_family(theme.font_family.clone())
-                        .h(px(REVIEW_COMMENT_COMPOSER_TEXTAREA_HEIGHT_PX)),
-                    ),
+                        .h(px(REVIEW_COMMENT_COMPOSER_TEXTAREA_HEIGHT_PX))
+                        .preview_open(create_preview_open)
+                        .on_toggle_preview(move |_, cx| {
+                          create_toggle_editor.update(cx, |editor, cx| {
+                            editor.review_comment_create_preview_open =
+                              !editor.review_comment_create_preview_open;
+                            cx.notify();
+                          });
+                        });
+                      if let Some(renderer) = create_preview_renderer {
+                        composer = composer.preview(move |text, window, cx| {
+                          renderer(text, create_preview_suggestion_context.clone(), window, cx)
+                        });
+                      }
+                      composer
+                    }),
                 )
                 .child(
                   h_flex()
@@ -9084,13 +9209,17 @@ pub mod tests {
   fn test_review_comment_composer_body_height_uses_fixed_textarea_size(_cx: &mut TestAppContext) {
     assert_eq!(
       review_comment_composer_body_height_px(20.0),
-      REVIEW_COMMENT_COMPOSER_TEXTAREA_HEIGHT_PX
+      MARKDOWN_COMPOSER_CHROME_HEIGHT_PX
+        + REVIEW_COMMENT_COMPOSER_TEXTAREA_HEIGHT_PX
         + REVIEW_COMMENT_COMPOSER_ACTIONS_HEIGHT_PX
         + REVIEW_COMMENT_COMPOSER_ACTIONS_GAP_PX
     );
     assert_eq!(
       review_comment_composer_body_height_px(40.0),
-      REVIEW_COMMENT_COMPOSER_TEXTAREA_HEIGHT_PX + 40.0 + REVIEW_COMMENT_COMPOSER_ACTIONS_GAP_PX
+      MARKDOWN_COMPOSER_CHROME_HEIGHT_PX
+        + REVIEW_COMMENT_COMPOSER_TEXTAREA_HEIGHT_PX
+        + 40.0
+        + REVIEW_COMMENT_COMPOSER_ACTIONS_GAP_PX
     );
   }
 
@@ -9155,16 +9284,20 @@ pub mod tests {
           review_comment_link_handler: None,
           review_comment_asset_url_resolver: None,
           review_comment_image_upload_handler: None,
+          review_comment_preview_renderer: None,
           review_comment_create_input: None,
           review_comment_create_draft: None,
           review_comment_create_drag_start_display_line: None,
           review_comment_create_drag_active: false,
           review_comment_create_submitting: false,
           review_comment_create_error: None,
+          review_comment_create_preview_open: false,
+          review_comment_edit_preview_open: false,
           review_comment_reply_input: None,
           replying_to_review_comment_id: None,
           review_comment_reply_submitting: false,
           review_comment_reply_error: None,
+          review_comment_reply_preview_open: false,
           hovered_review_comment_create_display_line: None,
           collapsed_review_comments: HashSet::new(),
           review_comment_scroll_epoch: 0,

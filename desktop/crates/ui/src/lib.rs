@@ -6,6 +6,7 @@ mod github_emoji_completion;
 mod github_search_palette;
 mod github_url;
 mod icons;
+mod markdown_composer;
 mod reaction_bar;
 mod scroll_routing;
 mod search_file_palette;
@@ -58,6 +59,10 @@ pub use icons::{
   FILE_ICON_SIZE_PX, FileIcon, UiIconName, file_icon_for_name, file_icon_for_path,
   file_icon_path_for_name, file_icon_path_for_name_with_theme, file_icon_path_for_path,
   file_icon_path_for_path_with_theme,
+};
+pub use markdown_composer::{
+  MARKDOWN_COMPOSER_CHROME_HEIGHT_PX, MARKDOWN_COMPOSER_TAB_BAR_GAP_PX,
+  MARKDOWN_COMPOSER_TAB_BAR_HEIGHT_PX, MarkdownComposer,
 };
 pub use reaction_bar::{ReactionBar, ReactionGroup, ReactionOption, ReactionToggle};
 pub use scroll_routing::{
