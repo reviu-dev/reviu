@@ -48,7 +48,7 @@ use ui::{
   CommandPalette, CommandPaletteAction, CommandPaletteCommand, CommandPaletteConfig,
   CommandPaletteGithubRepoTab, CommandPaletteHandler, CommandPalettePage, ConfirmDialog,
   DETAILS_PAGE_CONTAINER_MAX_WIDTH, DropdownSelectConfig, DropdownSelectItem, FILE_ICON_SIZE_PX,
-  GithubEmojiInput, Input, InputState, ReactionBar, SearchFileEntry, SearchFileHandler,
+  Input, InputState, MarkdownComposer, ReactionBar, SearchFileEntry, SearchFileHandler,
   SelectableRowStyle, StatusTag, StatusThemeExt as _, UiIconName, VariableList,
   VariableListDelegate, VariableListEvent, VariableListState, WindowExt, dropdown_select,
   file_icon_path_for_name_with_theme, h_resizable, parse_github_url_action, resizable_panel,
@@ -2031,16 +2031,19 @@ struct GithubIssueDetailsSheetView {
   comment_input: Option<Entity<InputState>>,
   comment_input_submitting: bool,
   comment_input_error: Option<SharedString>,
+  comment_input_preview_open: bool,
   edit_input: Option<Entity<InputState>>,
   editing_comment_id: Option<u64>,
   edit_initial_body: Option<String>,
   edit_submitting: bool,
   edit_error: Option<SharedString>,
+  edit_preview_open: bool,
   description_edit_input: Option<Entity<InputState>>,
   description_editing: bool,
   description_initial_body: Option<String>,
   description_submitting: bool,
   description_error: Option<SharedString>,
+  description_preview_open: bool,
   reaction_task: Option<Task<()>>,
   reaction_error: Option<(String, SharedString)>,
   issue_list: gpui::ListState,
@@ -2078,16 +2081,19 @@ impl GithubIssueDetailsSheetView {
       comment_input: None,
       comment_input_submitting: false,
       comment_input_error: None,
+      comment_input_preview_open: false,
       edit_input: None,
       editing_comment_id: None,
       edit_initial_body: None,
       edit_submitting: false,
       edit_error: None,
+      edit_preview_open: false,
       description_edit_input: None,
       description_editing: false,
       description_initial_body: None,
       description_submitting: false,
       description_error: None,
+      description_preview_open: false,
       reaction_task: None,
       reaction_error: None,
       issue_list: gpui::ListState::new(0, gpui::ListAlignment::Top, px(300.)),
@@ -2111,14 +2117,17 @@ impl GithubIssueDetailsSheetView {
     self.request_generation = self.request_generation.saturating_add(1);
     self.comment_input_submitting = false;
     self.comment_input_error = None;
+    self.comment_input_preview_open = false;
     self.editing_comment_id = None;
     self.edit_initial_body = None;
     self.edit_submitting = false;
     self.edit_error = None;
+    self.edit_preview_open = false;
     self.description_editing = false;
     self.description_initial_body = None;
     self.description_submitting = false;
     self.description_error = None;
+    self.description_preview_open = false;
     self.reaction_task = None;
     self.reaction_error = None;
     let generation = self.request_generation;
@@ -2400,7 +2409,14 @@ impl GithubIssueDetailsSheetView {
           .is_some();
         let page_for_cancel = issue_details_page.clone();
         let page_for_save = issue_details_page.clone();
+        let page_for_toggle = issue_details_page.clone();
         let input_for_drop = input_state.clone();
+        let edit_preview_open = self.edit_preview_open;
+        let edit_submitting = self.edit_submitting;
+        let edit_markdown_options = self.build_issue_composer_markdown_options(
+          issue_comment_scope_id(issue.id, comment_id).wrapping_add(1),
+          cx,
+        );
         v_flex()
           .gap_2()
           .child(
@@ -2416,9 +2432,17 @@ impl GithubIssueDetailsSheetView {
                 }
               }))
               .child(
-                GithubEmojiInput::new(&input_state)
-                  .disabled(self.edit_submitting)
-                  .h(px(ISSUE_COMMENT_INPUT_HEIGHT_PX)),
+                MarkdownComposer::new(&input_state)
+                  .disabled(edit_submitting)
+                  .h(px(ISSUE_COMMENT_INPUT_HEIGHT_PX))
+                  .preview_open(edit_preview_open)
+                  .on_toggle_preview(move |_, cx| {
+                    page_for_toggle.update(cx, |this, cx| {
+                      this.edit_preview_open = !this.edit_preview_open;
+                      cx.notify();
+                    });
+                  })
+                  .preview(move |text, _, cx| render_markdown(text, &edit_markdown_options, cx)),
               ),
           )
           .when_some(self.edit_error.clone(), |this, error| {
@@ -2566,6 +2590,14 @@ impl GithubIssueDetailsSheetView {
       self.comment_input_submitting || self.edit_submitting || self.description_submitting;
 
     let comment_input_for_drop = comment_input.clone();
+    let comment_input_preview_open = self.comment_input_preview_open;
+    let page_for_toggle = cx.entity().clone();
+    let issue_id = self.issue.as_ref().map(|i| i.id).unwrap_or(0);
+    let comment_markdown_options = self.build_issue_composer_markdown_options(
+      issue_description_scope_id(issue_id).wrapping_add(99),
+      cx,
+    );
+
     v_flex()
       .gap_2()
       .pt_2()
@@ -2582,7 +2614,18 @@ impl GithubIssueDetailsSheetView {
               this.handle_issue_comment_drop(paths, input.clone(), window, cx);
             }
           }))
-          .child(GithubEmojiInput::new(comment_input).h(px(ISSUE_COMMENT_INPUT_HEIGHT_PX))),
+          .child(
+            MarkdownComposer::new(comment_input)
+              .h(px(ISSUE_COMMENT_INPUT_HEIGHT_PX))
+              .preview_open(comment_input_preview_open)
+              .on_toggle_preview(move |_, cx| {
+                page_for_toggle.update(cx, |this, cx| {
+                  this.comment_input_preview_open = !this.comment_input_preview_open;
+                  cx.notify();
+                });
+              })
+              .preview(move |text, _, cx| render_markdown(text, &comment_markdown_options, cx)),
+          ),
       )
       .when_some(self.comment_input_error.clone(), |this, error| {
         this.child(div().text_xs().text_color(theme.status_red()).child(error))
@@ -2860,6 +2903,39 @@ impl GithubIssueDetailsSheetView {
     self.edit_initial_body = None;
     self.edit_submitting = false;
     self.edit_error = None;
+    self.edit_preview_open = false;
+  }
+
+  fn build_issue_composer_markdown_options(
+    &self,
+    scope_id: usize,
+    cx: &mut Context<Self>,
+  ) -> MarkdownRenderOptions {
+    let view_for_link = cx.entity().clone();
+    let link_handler = Arc::new(move |url: &str, window: &mut Window, cx: &mut App| {
+      let handled = view_for_link.update(cx, |this, cx| this.handle_gfm_link(url, window, cx));
+      if handled {
+        LinkAction::Handled
+      } else {
+        LinkAction::Open
+      }
+    });
+
+    let mut options = MarkdownRenderOptions::with_on_link(link_handler)
+      .with_state(self.markdown_state.clone())
+      .with_syntax_cache(self.syntax_highlight_cache.clone())
+      .with_asset_url_resolver(github_shared::make_asset_url_resolver(&self.api))
+      .with_scope_id(scope_id)
+      .with_hardbreaks();
+
+    if let Some(issue) = self.issue.as_ref() {
+      options = options.with_github_issue_reference_context(
+        issue.repository.owner.as_str(),
+        issue.repository.repo.as_str(),
+      );
+    }
+
+    options
   }
 
   fn clear_description_edit_state(&mut self) {
@@ -2867,6 +2943,7 @@ impl GithubIssueDetailsSheetView {
     self.description_initial_body = None;
     self.description_submitting = false;
     self.description_error = None;
+    self.description_preview_open = false;
   }
 
   fn upsert_issue_comment(&mut self, comment: crate::api::GithubIssueDetailsComment) {
@@ -3156,6 +3233,7 @@ impl GithubIssueDetailsSheetView {
           Ok(comment) => {
             this.upsert_issue_comment(comment);
             this.comment_input_error = None;
+            this.comment_input_preview_open = false;
             if let Some(input_state) = this.comment_input.clone() {
               input_state.update(cx, |state, cx| {
                 state.set_value("", window, cx);
@@ -3491,7 +3569,14 @@ impl Render for GithubIssueDetailsSheetView {
                   .is_some();
                 let page_for_cancel = issue_details_page.clone();
                 let page_for_save = issue_details_page.clone();
+                let page_for_toggle = issue_details_page.clone();
                 let input_for_drop = input_state.clone();
+                let description_preview_open = self.description_preview_open;
+                let description_submitting = self.description_submitting;
+                let description_markdown_options = self.build_issue_composer_markdown_options(
+                  issue_description_scope_id(issue.id).wrapping_add(1),
+                  cx,
+                );
                 v_flex()
                   .gap_2()
                   .child(
@@ -3507,9 +3592,19 @@ impl Render for GithubIssueDetailsSheetView {
                         }
                       }))
                       .child(
-                        Input::new(&input_state)
-                          .disabled(self.description_submitting)
-                          .h(px(ISSUE_DESCRIPTION_INPUT_HEIGHT_PX)),
+                        MarkdownComposer::new(&input_state)
+                          .disabled(description_submitting)
+                          .h(px(ISSUE_DESCRIPTION_INPUT_HEIGHT_PX))
+                          .preview_open(description_preview_open)
+                          .on_toggle_preview(move |_, cx| {
+                            page_for_toggle.update(cx, |this, cx| {
+                              this.description_preview_open = !this.description_preview_open;
+                              cx.notify();
+                            });
+                          })
+                          .preview(move |text, _, cx| {
+                            render_markdown(text, &description_markdown_options, cx)
+                          }),
                       ),
                   )
                   .when_some(self.description_error.clone(), |this, error| {

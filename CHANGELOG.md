@@ -4,6 +4,10 @@ All notable changes to Reviu are documented here.
 
 ## 0.9.0
 
+### Preview Comments and Descriptions Before Posting
+
+Every comment and description composer in the app now has Write and Preview tabs. Switch to Preview to see exactly how the rendered markdown, including issue references, code references and emoji shortcodes, will appear before you post.
+
 ### Insert a Suggestion While Reviewing a Pull Request
 
 The PR Changes review composer now shows a Suggest button when commenting on the right side of the diff. Clicking it inserts a `suggestion` code block prefilled with the lines you selected, ready to edit before posting. Reviewers see the same diff-style block they can apply with one click.

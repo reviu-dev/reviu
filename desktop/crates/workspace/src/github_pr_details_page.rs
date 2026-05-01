@@ -62,8 +62,8 @@ use smol::unblock;
 
 use ui::{
   CommandPalette, CommandPaletteAction, CommandPaletteCommand, CommandPaletteConfig,
-  CommandPaletteHandler, CommandPalettePage, ConfirmDialog, FILE_ICON_SIZE_PX, GithubEmojiInput,
-  Input, InputState, Popover, ReactionBar, ScrollAxes, SearchFileEntry, SearchFileHandler,
+  CommandPaletteHandler, CommandPalettePage, ConfirmDialog, FILE_ICON_SIZE_PX, Input, InputState,
+  MarkdownComposer, Popover, ReactionBar, ScrollAxes, SearchFileEntry, SearchFileHandler,
   SelectableRowStyle, StatusTag, StatusThemeExt, UiIconName, WindowExt,
   file_icon_path_for_name_with_theme, h_resizable, parse_github_url_action, resizable_panel,
   restrict_scroll_to_wheel_axis, scrollable_node, selectable_list_item,
@@ -2713,6 +2713,7 @@ pub struct GithubPrDetailsPage {
   review_decision: GithubPrReviewDecision,
   review_popover_open: bool,
   review_form_reset_pending: bool,
+  review_preview_open: bool,
   submit_review_task: Option<Task<()>>,
   submit_review_loading: bool,
   submit_review_error: Option<SharedString>,
@@ -2745,6 +2746,7 @@ pub struct GithubPrDetailsPage {
   overview_issue_comment_input: Entity<InputState>,
   overview_issue_comment_submitting: bool,
   overview_issue_comment_error: Option<SharedString>,
+  overview_issue_comment_preview_open: bool,
   reviews_task: Option<Task<()>>,
   reviews_loading: bool,
   reviews_error: Option<SharedString>,
@@ -2758,10 +2760,12 @@ pub struct GithubPrDetailsPage {
   overview_edit_initial_body: Option<String>,
   overview_edit_submitting: bool,
   overview_edit_error: Option<SharedString>,
+  overview_edit_preview_open: bool,
   overview_reply_input: Option<Entity<InputState>>,
   overview_reply_target_comment_id: Option<u64>,
   overview_reply_submitting: bool,
   overview_reply_error: Option<SharedString>,
+  overview_reply_preview_open: bool,
   suggested_change_commit_target: Option<SuggestedChangeCommitTarget>,
   suggested_change_commit_title_input: Entity<InputState>,
   suggested_change_commit_message_input: Entity<InputState>,
@@ -2788,6 +2792,7 @@ pub struct GithubPrDetailsPage {
   pr_description_initial_body: Option<String>,
   pr_description_submitting: bool,
   pr_description_error: Option<SharedString>,
+  pr_description_preview_open: bool,
   file_loading: bool,
   file_error: Option<SharedString>,
   tree_state: Entity<TreeState>,
@@ -3277,6 +3282,7 @@ impl GithubPrDetailsPage {
       review_decision: GithubPrReviewDecision::default(),
       review_popover_open: false,
       review_form_reset_pending: false,
+      review_preview_open: false,
       submit_review_task: None,
       submit_review_loading: false,
       submit_review_error: None,
@@ -3309,6 +3315,7 @@ impl GithubPrDetailsPage {
       overview_issue_comment_input,
       overview_issue_comment_submitting: false,
       overview_issue_comment_error: None,
+      overview_issue_comment_preview_open: false,
       reviews_task: None,
       reviews_loading: false,
       reviews_error: None,
@@ -3322,10 +3329,12 @@ impl GithubPrDetailsPage {
       overview_edit_initial_body: None,
       overview_edit_submitting: false,
       overview_edit_error: None,
+      overview_edit_preview_open: false,
       overview_reply_input: None,
       overview_reply_target_comment_id: None,
       overview_reply_submitting: false,
       overview_reply_error: None,
+      overview_reply_preview_open: false,
       suggested_change_commit_target: None,
       suggested_change_commit_title_input,
       suggested_change_commit_message_input,
@@ -3352,6 +3361,7 @@ impl GithubPrDetailsPage {
       pr_description_initial_body: None,
       pr_description_submitting: false,
       pr_description_error: None,
+      pr_description_preview_open: false,
       file_loading: false,
       file_error: None,
       tree_state,
@@ -5431,6 +5441,7 @@ impl GithubPrDetailsPage {
     self.pr_description_initial_body = None;
     self.pr_description_submitting = false;
     self.pr_description_error = None;
+    self.pr_description_preview_open = false;
   }
 
   fn start_pr_description_edit(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -5610,12 +5621,14 @@ impl GithubPrDetailsPage {
     self.overview_edit_initial_body = None;
     self.overview_edit_error = None;
     self.overview_edit_submitting = false;
+    self.overview_edit_preview_open = false;
   }
 
   fn clear_overview_reply_state(&mut self) {
     self.overview_reply_target_comment_id = None;
     self.overview_reply_error = None;
     self.overview_reply_submitting = false;
+    self.overview_reply_preview_open = false;
   }
 
   fn reset_overview_comment_inputs(&mut self, window: &mut Window, cx: &mut App) {
@@ -6470,6 +6483,7 @@ impl GithubPrDetailsPage {
     self.review_form_reset_pending = false;
     self.review_decision = GithubPrReviewDecision::Comment;
     self.submit_review_error = None;
+    self.review_preview_open = false;
     self.review_input.update(cx, |input, cx| {
       input.set_value("", window, cx);
     });
@@ -6969,6 +6983,40 @@ impl GithubPrDetailsPage {
         }
       });
       editor.set_review_comment_image_upload_handler(Some(image_upload_handler), cx);
+
+      let preview_renderer: editor::ReviewCommentPreviewRenderer = Arc::new({
+        let view = view.clone();
+        move |text: &str,
+              suggestion_context: Option<SuggestionContext>,
+              _window: &mut Window,
+              cx: &mut App|
+              -> AnyElement {
+          let mut options = view
+            .update(cx, |this, cx| {
+              this.build_overview_composer_markdown_options(4_444, cx)
+            })
+            .unwrap_or_default();
+          if let Some(mut ctx) = suggestion_context {
+            if ctx.path.as_ref().is_empty() {
+              if let Some(path) = view
+                .update(cx, |this, _| {
+                  this
+                    .selected_file
+                    .as_ref()
+                    .map(|file| Arc::<str>::from(file.path.as_ref()))
+                })
+                .ok()
+                .flatten()
+              {
+                ctx.path = path;
+              }
+            }
+            options = options.with_suggestion_context(ctx);
+          }
+          render_markdown(text, &options, cx)
+        }
+      });
+      editor.set_review_comment_preview_renderer(Some(preview_renderer), cx);
     });
   }
 
@@ -6992,6 +7040,7 @@ impl GithubPrDetailsPage {
       editor.set_review_comment_suggestion_action_factory(None, cx);
       editor.set_review_comment_asset_url_resolver(None, cx);
       editor.set_review_comment_image_upload_handler(None, cx);
+      editor.set_review_comment_preview_renderer(None, cx);
       editor.set_review_comment_pr_number(None, cx);
       editor.set_editable_review_comment_ids(std::iter::empty::<u64>(), cx);
       editor.set_review_comments(Vec::new(), cx);
@@ -7825,6 +7874,7 @@ impl GithubPrDetailsPage {
             let mapped = pull_request_issue_comment_from_issue_details_comment(comment);
             this.upsert_issue_comment(mapped);
             this.overview_issue_comment_error = None;
+            this.overview_issue_comment_preview_open = false;
             this.overview_issue_comment_input.update(cx, |input, cx| {
               input.set_value("", window, cx);
             });
@@ -10064,6 +10114,9 @@ impl GithubPrDetailsPage {
       || Self::validate_review_submission(self.review_decision, review_body.as_str()).is_some();
     let review_decision_index = Self::review_decision_index(self.review_decision);
     let review_button_disabled = self.pull_request.is_none();
+    let review_preview_open = self.review_preview_open;
+    let review_markdown_options = self.build_overview_composer_markdown_options(5_555, cx);
+    let page_for_review_toggle = cx.entity().clone();
 
     Popover::new("pr-review-popover")
       .anchor(Corner::TopRight)
@@ -10112,9 +10165,17 @@ impl GithubPrDetailsPage {
           )
           .child(
             div().w_full().child(
-              GithubEmojiInput::new(&self.review_input)
+              MarkdownComposer::new(&self.review_input)
                 .w_full()
-                .h(px(PR_REVIEW_INPUT_HEIGHT_PX)),
+                .h(px(PR_REVIEW_INPUT_HEIGHT_PX))
+                .preview_open(review_preview_open)
+                .on_toggle_preview(move |_, cx| {
+                  page_for_review_toggle.update(cx, |this, cx| {
+                    this.review_preview_open = !this.review_preview_open;
+                    cx.notify();
+                  });
+                })
+                .preview(move |text, _, cx| render_markdown(text, &review_markdown_options, cx)),
             ),
           )
           .child(
@@ -11634,11 +11695,51 @@ impl GithubPrDetailsPage {
     }
   }
 
+  fn build_overview_composer_markdown_options(
+    &self,
+    scope_offset: usize,
+    cx: &mut Context<Self>,
+  ) -> MarkdownRenderOptions {
+    let pr_page_for_links = cx.entity().clone();
+    let link_handler = Arc::new(move |url: &str, window: &mut Window, cx: &mut App| {
+      let handled = pr_page_for_links.update(cx, |this, cx| this.handle_gfm_link(url, window, cx));
+      if handled {
+        LinkAction::Handled
+      } else {
+        LinkAction::Open
+      }
+    });
+
+    let mut options = MarkdownRenderOptions::with_on_link(link_handler)
+      .with_state(self.description_markdown_state.clone())
+      .with_syntax_cache(self.syntax_highlight_cache.clone())
+      .with_asset_url_resolver(github_shared::make_asset_url_resolver(&self.api))
+      .with_hardbreaks();
+
+    if let Some(pr) = self.pull_request.as_ref() {
+      let scope_id = (pr.number as usize)
+        .wrapping_mul(1_000_003)
+        .wrapping_add(scope_offset);
+      options = options
+        .with_github_issue_reference_context(
+          pr.repository.owner.as_str(),
+          pr.repository.repo.as_str(),
+        )
+        .with_scope_id(scope_id);
+    }
+
+    options
+  }
+
   fn render_overview_add_comment_section(
     &self,
     theme: &gpui_component::Theme,
     cx: &mut Context<Self>,
   ) -> AnyElement {
+    let preview_open = self.overview_issue_comment_preview_open;
+    let markdown_options = self.build_overview_composer_markdown_options(7_777, cx);
+    let page_for_toggle = cx.entity().clone();
+
     v_flex()
       .gap_2()
       .pt_2()
@@ -11653,8 +11754,17 @@ impl GithubPrDetailsPage {
             this.handle_overview_issue_comment_drop(paths, window, cx);
           }))
           .child(
-            GithubEmojiInput::new(&self.overview_issue_comment_input)
-              .h(px(OVERVIEW_COMMENT_INPUT_HEIGHT_PX)),
+            MarkdownComposer::new(&self.overview_issue_comment_input)
+              .h(px(OVERVIEW_COMMENT_INPUT_HEIGHT_PX))
+              .preview_open(preview_open)
+              .on_toggle_preview(move |_, cx| {
+                page_for_toggle.update(cx, |this, cx| {
+                  this.overview_issue_comment_preview_open =
+                    !this.overview_issue_comment_preview_open;
+                  cx.notify();
+                });
+              })
+              .preview(move |text, _, cx| render_markdown(text, &markdown_options, cx)),
           ),
       )
       .when_some(self.overview_issue_comment_error.clone(), |this, error| {
@@ -12138,7 +12248,11 @@ impl GithubPrDetailsPage {
           .is_some();
         let page_for_cancel = pr_page.clone();
         let page_for_save = pr_page.clone();
+        let page_for_toggle = pr_page.clone();
         let input_for_drop = input_state.clone();
+        let edit_preview_open = self.overview_edit_preview_open;
+        let edit_markdown_options = self.build_overview_composer_markdown_options(8_888, cx);
+        let edit_submitting = self.overview_edit_submitting;
         let content = v_flex()
           .gap_2()
           .child(
@@ -12154,9 +12268,17 @@ impl GithubPrDetailsPage {
                 }
               }))
               .child(
-                GithubEmojiInput::new(&input_state)
-                  .disabled(self.overview_edit_submitting)
-                  .h(px(OVERVIEW_COMMENT_INPUT_HEIGHT_PX)),
+                MarkdownComposer::new(&input_state)
+                  .disabled(edit_submitting)
+                  .h(px(OVERVIEW_COMMENT_INPUT_HEIGHT_PX))
+                  .preview_open(edit_preview_open)
+                  .on_toggle_preview(move |_, cx| {
+                    page_for_toggle.update(cx, |this, cx| {
+                      this.overview_edit_preview_open = !this.overview_edit_preview_open;
+                      cx.notify();
+                    });
+                  })
+                  .preview(move |text, _, cx| render_markdown(text, &edit_markdown_options, cx)),
               ),
           )
           .when_some(self.overview_edit_error.clone(), |this, error| {
@@ -12234,7 +12356,10 @@ impl GithubPrDetailsPage {
           github_shared::normalize_non_empty_text(input_state.read(cx).value().as_str()).is_some();
         let page_for_cancel = pr_page.clone();
         let page_for_save = pr_page.clone();
+        let page_for_toggle = pr_page.clone();
         let input_for_drop = input_state.clone();
+        let reply_preview_open = self.overview_reply_preview_open;
+        let reply_markdown_options = self.build_overview_composer_markdown_options(9_999, cx);
         Some(
           v_flex()
             .gap_2()
@@ -12254,7 +12379,18 @@ impl GithubPrDetailsPage {
                     this.handle_overview_reply_drop(paths, input.clone(), window, cx);
                   }
                 }))
-                .child(GithubEmojiInput::new(&input_state).h(px(OVERVIEW_COMMENT_INPUT_HEIGHT_PX))),
+                .child(
+                  MarkdownComposer::new(&input_state)
+                    .h(px(OVERVIEW_COMMENT_INPUT_HEIGHT_PX))
+                    .preview_open(reply_preview_open)
+                    .on_toggle_preview(move |_, cx| {
+                      page_for_toggle.update(cx, |this, cx| {
+                        this.overview_reply_preview_open = !this.overview_reply_preview_open;
+                        cx.notify();
+                      });
+                    })
+                    .preview(move |text, _, cx| render_markdown(text, &reply_markdown_options, cx)),
+                ),
             )
             .when_some(self.overview_reply_error.clone(), |this, error| {
               this.child(div().text_xs().text_color(theme.status_red()).child(error))
@@ -12620,7 +12756,12 @@ impl GithubPrDetailsPage {
                     .is_some();
                   let page_for_cancel = pr_page.clone();
                   let page_for_save = pr_page.clone();
+                  let page_for_toggle = pr_page.clone();
                   let input_for_drop = input_state.clone();
+                  let edit_preview_open = self.overview_edit_preview_open;
+                  let edit_markdown_options = reply_markdown_options
+                    .clone()
+                    .with_scope_id(reply_scope_id.wrapping_add(8_888));
                   v_flex()
                     .gap_2()
                     .child(
@@ -12638,8 +12779,18 @@ impl GithubPrDetailsPage {
                           }
                         }))
                         .child(
-                          GithubEmojiInput::new(&input_state)
-                            .h(px(OVERVIEW_COMMENT_INPUT_HEIGHT_PX)),
+                          MarkdownComposer::new(&input_state)
+                            .h(px(OVERVIEW_COMMENT_INPUT_HEIGHT_PX))
+                            .preview_open(edit_preview_open)
+                            .on_toggle_preview(move |_, cx| {
+                              page_for_toggle.update(cx, |this, cx| {
+                                this.overview_edit_preview_open = !this.overview_edit_preview_open;
+                                cx.notify();
+                              });
+                            })
+                            .preview(move |text, _, cx| {
+                              render_markdown(text, &edit_markdown_options, cx)
+                            }),
                         ),
                     )
                     .when_some(self.overview_edit_error.clone(), |this, error| {
@@ -12715,7 +12866,12 @@ impl GithubPrDetailsPage {
                       .is_some();
                   let page_for_cancel = pr_page.clone();
                   let page_for_save = pr_page.clone();
+                  let page_for_toggle = pr_page.clone();
                   let input_for_drop = input_state.clone();
+                  let reply_preview_open = self.overview_reply_preview_open;
+                  let reply_composer_markdown_options = reply_markdown_options
+                    .clone()
+                    .with_scope_id(reply_scope_id.wrapping_add(9_999));
                   Some(
                     v_flex()
                       .gap_2()
@@ -12737,8 +12893,19 @@ impl GithubPrDetailsPage {
                             }
                           }))
                           .child(
-                            GithubEmojiInput::new(&input_state)
-                              .h(px(OVERVIEW_COMMENT_INPUT_HEIGHT_PX)),
+                            MarkdownComposer::new(&input_state)
+                              .h(px(OVERVIEW_COMMENT_INPUT_HEIGHT_PX))
+                              .preview_open(reply_preview_open)
+                              .on_toggle_preview(move |_, cx| {
+                                page_for_toggle.update(cx, |this, cx| {
+                                  this.overview_reply_preview_open =
+                                    !this.overview_reply_preview_open;
+                                  cx.notify();
+                                });
+                              })
+                              .preview(move |text, _, cx| {
+                                render_markdown(text, &reply_composer_markdown_options, cx)
+                              }),
                           ),
                       )
                       .when_some(self.overview_reply_error.clone(), |this, error| {
@@ -13776,7 +13943,14 @@ impl GithubPrDetailsPage {
                 .is_some();
               let page_for_cancel = pr_page.clone();
               let page_for_save = pr_page.clone();
+              let page_for_toggle = pr_page.clone();
               let input_for_drop = input_state.clone();
+              let pr_description_preview_open = self.pr_description_preview_open;
+              let pr_description_submitting = self.pr_description_submitting;
+              let pr_description_markdown_options = self.build_overview_composer_markdown_options(
+                pr_description_scope_id(pr.number).wrapping_add(1),
+                cx,
+              );
               v_flex()
                 .gap_2()
                 .child(
@@ -13792,9 +13966,19 @@ impl GithubPrDetailsPage {
                       }
                     }))
                     .child(
-                      Input::new(&input_state)
-                        .disabled(self.pr_description_submitting)
-                        .h(px(OVERVIEW_DESCRIPTION_INPUT_HEIGHT_PX)),
+                      MarkdownComposer::new(&input_state)
+                        .disabled(pr_description_submitting)
+                        .h(px(OVERVIEW_DESCRIPTION_INPUT_HEIGHT_PX))
+                        .preview_open(pr_description_preview_open)
+                        .on_toggle_preview(move |_, cx| {
+                          page_for_toggle.update(cx, |this, cx| {
+                            this.pr_description_preview_open = !this.pr_description_preview_open;
+                            cx.notify();
+                          });
+                        })
+                        .preview(move |text, _, cx| {
+                          render_markdown(text, &pr_description_markdown_options, cx)
+                        }),
                     ),
                 )
                 .when_some(self.pr_description_error.clone(), |this, error| {
