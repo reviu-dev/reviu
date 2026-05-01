@@ -78,11 +78,7 @@ impl SyntaxHighlightCache {
   /// Schedule async syntax highlighting for a code block.
   /// Returns plain spans immediately. The highlight runs on a background thread.
   /// When complete, the result is inserted into the cache and `has_new_highlights` is set.
-  pub(crate) fn schedule_highlight(
-    self: &Arc<Self>,
-    code: &CodeBlock,
-    display_value: &str,
-  ) {
+  pub(crate) fn schedule_highlight(self: &Arc<Self>, code: &CodeBlock, display_value: &str) {
     let key = Self::cache_key(code);
 
     if !lock_recover(&self.pending).insert(key) {

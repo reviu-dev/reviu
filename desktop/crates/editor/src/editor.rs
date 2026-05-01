@@ -2473,6 +2473,66 @@ impl Editor {
     self.refresh_review_comment_projection(cx);
   }
 
+  fn original_lines_for_create_draft(&self, cx: &App) -> Vec<String> {
+    let Some(draft) = self.review_comment_create_draft else {
+      return Vec::new();
+    };
+    let Some(projection) = self.projection.as_ref() else {
+      return Vec::new();
+    };
+    let document = self.document.read(cx);
+    let mut lines = Vec::new();
+    for display_line in draft.first_display_line..=draft.last_display_line {
+      let Some(doc_line) = projection.display_to_doc_line(display_line) else {
+        continue;
+      };
+      let line_content = document
+        .line_content(doc_line)
+        .map(|cow| cow.into_owned())
+        .unwrap_or_default();
+      let trimmed = line_content.trim_end_matches(|c: char| c == '\n' || c == '\r');
+      lines.push(trimmed.to_string());
+    }
+    lines
+  }
+
+  pub(crate) fn can_insert_review_comment_suggestion(&self, cx: &App) -> bool {
+    let Some(draft) = self.review_comment_create_draft else {
+      return false;
+    };
+    if draft.side != ReviewCommentSide::Right {
+      return false;
+    }
+    if self.review_comment_create_submitting {
+      return false;
+    }
+    !self.original_lines_for_create_draft(cx).is_empty()
+  }
+
+  fn insert_review_comment_suggestion(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    if !self.can_insert_review_comment_suggestion(cx) {
+      return;
+    }
+    let Some(input) = self.review_comment_create_input.clone() else {
+      return;
+    };
+    let lines = self.original_lines_for_create_draft(cx);
+    if lines.is_empty() {
+      return;
+    }
+    let block = format!("```suggestion\n{}\n```\n", lines.join("\n"));
+    let prefix = if input.read(cx).value().is_empty() {
+      ""
+    } else {
+      "\n\n"
+    };
+    let body = format!("{prefix}{block}");
+    input.update(cx, |state, cx| {
+      state.insert(body, window, cx);
+      state.focus(window, cx);
+    });
+  }
+
   fn resolve_review_comment_thread_root(
     comment: &ReviewComment,
     comments_by_id: &HashMap<u64, &ReviewComment>,
@@ -4242,7 +4302,9 @@ impl Editor {
       let composer_card = if let Some(input_state) = self.review_comment_create_input.clone() {
         let cancel_editor = editor_entity.clone();
         let save_editor = editor_entity.clone();
+        let suggest_editor = editor_entity.clone();
         let can_save = self.review_comment_create_handler.is_some();
+        let can_suggest = self.can_insert_review_comment_suggestion(cx);
         let is_create_submitting = self.review_comment_create_submitting;
         let create_error = self.review_comment_create_error.clone();
         Some(
@@ -4284,9 +4346,34 @@ impl Editor {
                     .justify_between()
                     .gap_2()
                     .child(
-                      div()
+                      h_flex()
                         .flex_1()
                         .min_w_0()
+                        .items_center()
+                        .gap_2()
+                        .when(can_suggest, |this| {
+                          this.child(
+                            div()
+                              .on_mouse_down(MouseButton::Left, |_, _, cx| {
+                                cx.stop_propagation();
+                              })
+                              .child(
+                                Button::new("review-comment-create-suggest")
+                                  .ghost()
+                                  .xsmall()
+                                  .compact()
+                                  .icon(Icon::new(UiIconName::FileDiff))
+                                  .label("Suggest")
+                                  .disabled(is_create_submitting)
+                                  .on_click(move |_, window, cx| {
+                                    cx.stop_propagation();
+                                    suggest_editor.update(cx, |editor, cx| {
+                                      editor.insert_review_comment_suggestion(window, cx);
+                                    });
+                                  }),
+                              ),
+                          )
+                        })
                         .when_some(create_error, |this, error| {
                           this.child(
                             div()
@@ -10020,6 +10107,73 @@ pub mod tests {
         })
       );
     });
+  }
+
+  #[gpui::test]
+  fn test_original_lines_for_create_draft_collects_right_side_lines(cx: &mut TestAppContext) {
+    let mut ctx = EditorTestContext::with_text(cx.clone(), "fn main() {\n  println!();\n}\n");
+
+    ctx.editor.update(&mut ctx.cx, |editor, _| {
+      editor.set_projection(Some(Projection::full(3)));
+      editor.review_comment_create_draft = Some(ReviewCommentCreateDraft {
+        first_display_line: 0,
+        last_display_line: 2,
+        line: 2,
+        side: ReviewCommentSide::Right,
+        start_line: Some(0),
+        start_side: Some(ReviewCommentSide::Right),
+      });
+    });
+
+    let lines = ctx.editor.read_with(&ctx.cx, |editor, cx| {
+      editor.original_lines_for_create_draft(cx)
+    });
+    assert_eq!(lines, vec!["fn main() {", "  println!();", "}"]);
+  }
+
+  #[gpui::test]
+  fn test_can_insert_review_comment_suggestion_requires_right_side(cx: &mut TestAppContext) {
+    let mut ctx = EditorTestContext::with_text(cx.clone(), "a\nb\n");
+
+    ctx.editor.update(&mut ctx.cx, |editor, _| {
+      editor.set_projection(Some(Projection::full(2)));
+      editor.review_comment_create_draft = Some(ReviewCommentCreateDraft {
+        first_display_line: 0,
+        last_display_line: 0,
+        line: 0,
+        side: ReviewCommentSide::Left,
+        start_line: None,
+        start_side: None,
+      });
+    });
+
+    let allowed = ctx.editor.read_with(&ctx.cx, |editor, cx| {
+      editor.can_insert_review_comment_suggestion(cx)
+    });
+    assert!(!allowed);
+  }
+
+  #[gpui::test]
+  fn test_can_insert_review_comment_suggestion_disabled_while_submitting(cx: &mut TestAppContext) {
+    let mut ctx = EditorTestContext::with_text(cx.clone(), "a\nb\n");
+
+    ctx.editor.update(&mut ctx.cx, |editor, _| {
+      editor.set_projection(Some(Projection::full(2)));
+      editor.review_comment_create_draft = Some(ReviewCommentCreateDraft {
+        first_display_line: 0,
+        last_display_line: 0,
+        line: 0,
+        side: ReviewCommentSide::Right,
+        start_line: None,
+        start_side: None,
+      });
+      editor.review_comment_create_submitting = true;
+    });
+
+    let allowed = ctx.editor.read_with(&ctx.cx, |editor, cx| {
+      editor.can_insert_review_comment_suggestion(cx)
+    });
+    assert!(!allowed);
   }
 
   // ============================================================================
