@@ -1,6 +1,6 @@
 import { env } from '../../lib/env.js'
 
-import { shipit } from '../../lib/shipit.js'
+import { stowline } from '../../lib/stowline.js'
 
 type FeedbackType = 'bug' | 'feature'
 type AppProfile = 'prod' | 'dev'
@@ -44,12 +44,12 @@ interface CreateCrashReportParams {
   userEmail?: string
 }
 
-const SHIPIT_TITLE_MAX_CHARS = 180
-const SHIPIT_BACKTRACE_MAX_CHARS = 12_000
+const STOWLINE_TITLE_MAX_CHARS = 180
+const STOWLINE_BACKTRACE_MAX_CHARS = 12_000
 
 export async function createFeedbackIssue(params: CreateFeedbackParams) {
-  return shipit.issues.create.mutate({
-    projectId: env.SHIPIT_PROJECT_ID,
+  return stowline.issues.create.mutate({
+    projectId: env.STOWLINE_PROJECT_ID,
     title: params.title,
     description: params.description,
     labels: ['user-feedback', params.type],
@@ -79,7 +79,7 @@ function trimMultiline(value: string, maxChars: number) {
 function buildCrashReportIssueTitle(params: CreateCrashReportParams) {
   return trimSingleLine(
     `Desktop crash on ${params.os}/${params.arch}: ${params.message}`,
-    SHIPIT_TITLE_MAX_CHARS,
+    STOWLINE_TITLE_MAX_CHARS,
   )
 }
 
@@ -153,7 +153,7 @@ function buildCrashReportIssueDescription(params: CreateCrashReportParams) {
       '## Backtrace',
       '',
       '```text',
-      trimMultiline(backtrace, SHIPIT_BACKTRACE_MAX_CHARS),
+      trimMultiline(backtrace, STOWLINE_BACKTRACE_MAX_CHARS),
       '```',
     )
   }
@@ -169,8 +169,8 @@ export async function createCrashReportIssue(params: CreateCrashReportParams) {
     `profile:${params.appProfile}`,
   ]
 
-  return shipit.issues.create.mutate({
-    projectId: env.SHIPIT_PROJECT_ID,
+  return stowline.issues.create.mutate({
+    projectId: env.STOWLINE_PROJECT_ID,
     title: buildCrashReportIssueTitle(params),
     description: buildCrashReportIssueDescription(params),
     labels,

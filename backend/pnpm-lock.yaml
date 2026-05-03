@@ -29,9 +29,9 @@ importers:
       '@polar-sh/sdk':
         specifier: ^0.47.0
         version: 0.47.0
-      '@shipit-dev/sdk':
-        specifier: ^0.1.2
-        version: 0.1.2(@trpc/server@11.16.0(typescript@6.0.3))(typescript@6.0.3)
+      '@stowline/sdk':
+        specifier: ^0.1.0
+        version: 0.1.0(@trpc/server@11.16.0(typescript@6.0.3))(typescript@6.0.3)
       better-auth:
         specifier: ^1.6.5
         version: 1.6.5(@opentelemetry/api@1.9.1)(drizzle-kit@0.31.10)(drizzle-orm@0.45.2(@opentelemetry/api@1.9.1)(@types/pg@8.20.0)(knex@3.2.9(pg@8.20.0))(kysely@0.28.16)(pg@8.20.0))(pg@8.20.0)(react-dom@19.2.4(react@19.2.4))(react@19.2.4)(vitest@4.1.4(@opentelemetry/api@1.9.1)(@types/node@24.12.2)(vite@7.3.1(@types/node@24.12.2)(jiti@2.6.1)(tsx@4.21.0)(yaml@2.8.2)))
@@ -2040,9 +2040,6 @@ packages:
     cpu: [x64]
     os: [win32]
 
-  '@shipit-dev/sdk@0.1.2':
-    resolution: {integrity: sha512-tsZSA5hKv7aT+r8J4ij8osl7wT0d9ZuowFibdWFoT8B58Bi02xdGjHPrrJLVOmm5V9u4GSP3nrLaEo9Sszz1ng==}
-
   '@sindresorhus/base62@1.0.0':
     resolution: {integrity: sha512-TeheYy0ILzBEI/CO55CP6zJCSdSWeRtGnHy8U8dWSUH4I68iqTsy7HkMktR4xakThc9jotkPQUXT4ITdbV7cHA==}
     engines: {node: '>=18'}
@@ -2267,6 +2264,9 @@ packages:
 
   '@standard-schema/utils@0.3.0':
     resolution: {integrity: sha512-e7Mew686owMaPJVNNLs55PUvgz371nKgwsc4vxE49zsODpJEnxgxRo2y/OKrqueavXgZNMDVj3DdHFlaSAeU8g==}
+
+  '@stowline/sdk@0.1.0':
+    resolution: {integrity: sha512-kfz4luBGPITXLOYhVCSEmYR57hK91FMFrqBLQLiR4PFSLSyTonBHaK3TEWC3IL3kbuN29BBqnk3ZQqiRXIxlEA==}
 
   '@stripe/react-stripe-js@4.0.2':
     resolution: {integrity: sha512-l2wau+8/LOlHl+Sz8wQ1oDuLJvyw51nQCsu6/ljT6smqzTszcMHifjAJoXlnMfcou3+jK/kQyVe04u/ufyTXgg==}
@@ -6256,13 +6256,6 @@ snapshots:
   '@rollup/rollup-win32-x64-msvc@4.58.0':
     optional: true
 
-  '@shipit-dev/sdk@0.1.2(@trpc/server@11.16.0(typescript@6.0.3))(typescript@6.0.3)':
-    dependencies:
-      '@trpc/client': 11.16.0(@trpc/server@11.16.0(typescript@6.0.3))(typescript@6.0.3)
-    transitivePeerDependencies:
-      - '@trpc/server'
-      - typescript
-
   '@sindresorhus/base62@1.0.0': {}
 
   '@smithy/chunked-blob-reader-native@4.2.3':
@@ -6603,6 +6596,13 @@ snapshots:
   '@standard-schema/spec@1.1.0': {}
 
   '@standard-schema/utils@0.3.0': {}
+
+  '@stowline/sdk@0.1.0(@trpc/server@11.16.0(typescript@6.0.3))(typescript@6.0.3)':
+    dependencies:
+      '@trpc/client': 11.16.0(@trpc/server@11.16.0(typescript@6.0.3))(typescript@6.0.3)
+    transitivePeerDependencies:
+      - '@trpc/server'
+      - typescript
 
   '@stripe/react-stripe-js@4.0.2(@stripe/stripe-js@7.9.0)(react-dom@19.2.4(react@19.2.4))(react@19.2.4)':
     dependencies:

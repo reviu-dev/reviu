@@ -28,7 +28,7 @@
     "@octokit/request": "^10.0.8",
     "@polar-sh/better-auth": "^1.8.3",
     "@polar-sh/sdk": "^0.47.0",
-    "@shipit-dev/sdk": "^0.1.2",
+    "@stowline/sdk": "^0.1.0",
     "better-auth": "^1.6.5",
     "dotenv": "^17.4.2",
     "drizzle-orm": "^0.45.2",
