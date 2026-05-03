@@ -3932,7 +3932,7 @@ mod tests {
 
   #[test]
   fn submit_crash_report_posts_expected_route_and_payload() {
-    let body = r#"{"issueId":"issue-123","url":"https://shipit.example.com/issues/issue-123"}"#;
+    let body = r#"{"issueId":"issue-123","url":"https://stowline.example.com/issues/issue-123"}"#;
     let (base_url, request, handle) =
       start_single_response_server_with_request("201 Created", body);
     let api = make_test_api_client(base_url);
