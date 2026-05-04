@@ -45,6 +45,24 @@ test('robots and sitemap are generated', async () => {
   )
 })
 
+test('llms files describe Reviu for AI crawlers', async () => {
+  const llms = await readDistFile('llms.txt')
+  const llmsFull = await readDistFile('llms-full.txt')
+
+  assert.match(llms, /^# Reviu/m)
+  assert.match(llms, /Native Rust \+ GPUI desktop Git client/)
+  assert.match(llms, /Reviu Free covers local Git workflows/)
+  assert.match(llms, /Reviu Pro adds GitHub workflows/)
+  assert.match(llms, /https:\/\/reviu\.dev\/llms-full\.txt/)
+  assert.match(llms, /Do not claim AI review/)
+
+  assert.match(llmsFull, /^# Reviu Full LLM Context/m)
+  assert.match(llmsFull, /not an Electron app/)
+  assert.match(llmsFull, /GitHub features require Sign in with GitHub/)
+  assert.match(llmsFull, /https:\/\/reviu\.dev\/blog\/why-github-pr-review-still-feels-slow/)
+  assert.match(llmsFull, /Do not claim GitHub workflows are free/)
+})
+
 test('blog article ships canonical article metadata and crawlable content', async () => {
   const html = await readDistFile(
     'blog/why-github-pr-review-still-feels-slow/index.html',
