@@ -10287,7 +10287,7 @@ impl GithubPrDetailsPage {
       .child(Tab::new().label("Overview"))
       .child(changes_tab);
 
-    let changes_tools = self.render_pr_changes_header_tools(cx);
+    let header_tools = self.render_pr_header_tools(cx);
 
     let back_button = || {
       Button::new("pr-back")
@@ -10385,7 +10385,7 @@ impl GithubPrDetailsPage {
           .items_center()
           .gap_4()
           .child(tab_bar)
-          .when_some(changes_tools, |this, tools| this.child(tools)),
+          .when_some(header_tools, |this, tools| this.child(tools)),
       )
   }
 
@@ -10476,37 +10476,54 @@ impl GithubPrDetailsPage {
     )
   }
 
-  fn render_pr_changes_header_tools(&mut self, cx: &mut Context<Self>) -> Option<AnyElement> {
-    if self.active_tab_ix != PR_TAB_CHANGES_IX || self.pull_request.is_none() {
+  fn render_pr_header_tools(&mut self, cx: &mut Context<Self>) -> Option<AnyElement> {
+    if self.pull_request.is_none() {
       return None;
     }
     let theme = cx.theme().clone();
+    let show_file_search = self.active_tab_ix == PR_TAB_CHANGES_IX;
+    let show_local_project_controls =
+      matches!(self.active_tab_ix, PR_TAB_OVERVIEW_IX | PR_TAB_CHANGES_IX);
     let tree_search_active = self.tree_search_query_normalized().is_some();
-    let local_project_controls = self.render_local_project_controls(&theme, cx);
+    let local_project_controls = show_local_project_controls
+      .then(|| self.render_local_project_controls(&theme, cx, show_file_search))
+      .flatten();
+
+    if !show_file_search && local_project_controls.is_none() {
+      return None;
+    }
 
     Some(
       h_flex()
         .items_center()
         .gap_3()
-        .child(
-          div()
-            .relative()
-            .w(px(280.0))
-            .child(Input::new(&self.tree_search_input).w_full().pr(px(28.0)))
-            .when(tree_search_active && self.tree_search_loading, |this| {
-              this.child(
-                h_flex()
-                  .absolute()
-                  .top_0()
-                  .right_2()
-                  .bottom_0()
-                  .items_center()
-                  .child(Spinner::new().small()),
-              )
-            }),
-        )
+        .when(show_file_search, |this| {
+          this.child(
+            div()
+              .id("github-pr-file-contents-search")
+              .debug_selector(|| "github-pr-file-contents-search".to_string())
+              .relative()
+              .w(px(280.0))
+              .child(Input::new(&self.tree_search_input).w_full().pr(px(28.0)))
+              .when(tree_search_active && self.tree_search_loading, |this| {
+                this.child(
+                  h_flex()
+                    .absolute()
+                    .top_0()
+                    .right_2()
+                    .bottom_0()
+                    .items_center()
+                    .child(Spinner::new().small()),
+                )
+              }),
+          )
+        })
         .when_some(local_project_controls, |this, controls| {
-          this.child(controls)
+          this.child(
+            h_flex()
+              .debug_selector(|| "github-pr-local-project-controls".to_string())
+              .child(controls),
+          )
         })
         .into_any_element(),
     )
@@ -10516,6 +10533,7 @@ impl GithubPrDetailsPage {
     &self,
     theme: &gpui_component::Theme,
     cx: &mut Context<Self>,
+    show_ready_toggle: bool,
   ) -> Option<AnyElement> {
     let availability = self.local_project_availability(cx);
     if matches!(availability, GithubPrLocalProjectAvailability::Hidden) {
@@ -10523,6 +10541,9 @@ impl GithubPrDetailsPage {
     }
 
     if matches!(availability, GithubPrLocalProjectAvailability::Ready { .. }) {
+      if !show_ready_toggle {
+        return None;
+      }
       let local_project_mode = self.local_project_mode_active(cx);
       return Some(
         Switch::new("github-pr-local-project-switch")
@@ -16752,6 +16773,54 @@ mod tests {
       .size;
     assert!(count_bounds.width > gpui::px(0.0));
     assert!(count_bounds.height > gpui::px(0.0));
+  }
+
+  #[gpui::test]
+  fn pr_header_shows_branch_switch_on_overview_but_search_only_on_changes(cx: &mut TestAppContext) {
+    init_gpui_test(cx);
+    cx.update(|cx| {
+      ActiveLocalRepoStore::set(
+        cx,
+        Some(make_active_local_repo_for_branch("main", "head", true)),
+      );
+    });
+    let (page, cx) = cx.add_window_view(|window, cx| GithubPrDetailsPage::new(window, cx));
+
+    page.update_in(cx, |this, _window, cx| {
+      this.active_tab_ix = PR_TAB_OVERVIEW_IX;
+      this.pull_request = Some(make_pr_details_for_stats());
+      cx.notify();
+    });
+    cx.run_until_parked();
+
+    let availability = page.read_with(cx, |this, cx| this.local_project_availability(cx));
+    assert!(matches!(
+      availability,
+      GithubPrLocalProjectAvailability::NeedsBranchSwitch {
+        has_uncommitted_changes: true,
+        ..
+      }
+    ));
+
+    let controls_bounds = cx
+      .debug_bounds("github-pr-local-project-controls")
+      .expect("local project controls should render on overview")
+      .size;
+    assert!(controls_bounds.width > gpui::px(0.0));
+    assert!(controls_bounds.height > gpui::px(0.0));
+    assert!(cx.debug_bounds("github-pr-file-contents-search").is_none());
+
+    page.update_in(cx, |this, _window, cx| {
+      this.active_tab_ix = PR_TAB_CHANGES_IX;
+      cx.notify();
+    });
+    cx.run_until_parked();
+
+    assert!(
+      cx.debug_bounds("github-pr-local-project-controls")
+        .is_some()
+    );
+    assert!(cx.debug_bounds("github-pr-file-contents-search").is_some());
   }
 
   #[gpui::test]
