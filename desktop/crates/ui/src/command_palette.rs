@@ -64,6 +64,7 @@ pub struct CommandPaletteCommand {
   pub id: CommandPaletteCommandId,
   pub name: SharedString,
   pub description: Option<SharedString>,
+  pub disabled_reason: Option<SharedString>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -157,6 +158,7 @@ pub enum CommandPaletteAction {
     name: String,
   },
   CreatePullRequest,
+  OpenPullRequest,
   CreateBranchFrom {
     name: String,
     base: CommandPaletteBranch,
@@ -629,6 +631,7 @@ fn compute_recent_commands(
 
   let mut scored: Vec<(Rc<CommandPaletteCommand>, f64)> = commands
     .iter()
+    .filter(|c| !c.is_disabled())
     .map(|c| {
       let score = scorer(cx, c.id, now_secs);
       (c.clone(), score)
@@ -703,19 +706,45 @@ impl ListDelegate for CommandListDelegate {
     let theme = cx.theme().clone();
 
     self.item_at(ix).map(|command| {
+      let disabled_reason = command.disabled_reason.clone();
       list_base_item(ix, is_last_overall, self.selected_index, &theme)
+        .when(command.is_disabled(), |item| item.opacity(0.55))
         .child(
           h_flex()
             .items_center()
             .gap_2()
             .child(command.icon())
-            .child(Label::new(command.name.clone())),
+            .min_w(px(0.0))
+            .child(
+              div()
+                .flex_1()
+                .overflow_hidden()
+                .text_ellipsis()
+                .child(Label::new(command.name.clone())),
+            ),
         )
-        .suffix(|_, _| {
-          Button::new("action")
-            .ghost()
-            .small()
-            .icon(IconName::ArrowRight)
+        .suffix(move |_, cx| {
+          h_flex()
+            .items_center()
+            .when_some(disabled_reason.clone(), |this, reason| {
+              this.child(
+                div()
+                  .w(px(220.0))
+                  .overflow_hidden()
+                  .text_ellipsis()
+                  .text_xs()
+                  .text_color(cx.theme().muted_foreground)
+                  .child(reason),
+              )
+            })
+            .when(disabled_reason.is_none(), |this| {
+              this.child(
+                Button::new("action")
+                  .ghost()
+                  .small()
+                  .icon(IconName::ArrowRight),
+              )
+            })
         })
     })
   }
@@ -800,6 +829,7 @@ pub enum CommandPaletteCommandId {
   InteractiveRebaseHeadCount,
   AbortRebase,
   CreatePullRequest,
+  OpenPullRequest,
   CherryPick,
   StageAll,
   UnstageAll,
@@ -856,6 +886,7 @@ impl CommandPaletteCommandId {
       Self::InteractiveRebaseHeadCount => "interactive_rebase_head_count",
       Self::AbortRebase => "abort_rebase",
       Self::CreatePullRequest => "create_pull_request",
+      Self::OpenPullRequest => "open_pull_request",
       Self::CherryPick => "cherry_pick",
       Self::StageAll => "stage_all",
       Self::UnstageAll => "unstage_all",
@@ -912,6 +943,7 @@ impl CommandPaletteCommandId {
       "interactive_rebase_head_count" => Some(Self::InteractiveRebaseHeadCount),
       "abort_rebase" => Some(Self::AbortRebase),
       "create_pull_request" => Some(Self::CreatePullRequest),
+      "open_pull_request" => Some(Self::OpenPullRequest),
       "cherry_pick" => Some(Self::CherryPick),
       "stage_all" => Some(Self::StageAll),
       "unstage_all" => Some(Self::UnstageAll),
@@ -995,422 +1027,450 @@ impl CommandPaletteCommand {
     )
   }
 
-  pub fn switch_repository() -> Self {
+  fn new(
+    id: CommandPaletteCommandId,
+    name: impl Into<SharedString>,
+    description: impl Into<SharedString>,
+  ) -> Self {
     Self {
-      id: CommandPaletteCommandId::SwitchRepository,
-      name: "Switch repository".into(),
-      description: Some("Switch to another recent repository".into()),
+      id,
+      name: name.into(),
+      description: Some(description.into()),
+      disabled_reason: None,
     }
+  }
+
+  pub fn disabled(mut self, reason: impl Into<SharedString>) -> Self {
+    self.disabled_reason = Some(reason.into());
+    self
+  }
+
+  pub fn is_disabled(&self) -> bool {
+    self.disabled_reason.is_some()
+  }
+
+  pub fn switch_repository() -> Self {
+    Self::new(
+      CommandPaletteCommandId::SwitchRepository,
+      "Switch repository",
+      "Switch to another recent repository",
+    )
   }
 
   pub fn forget_repository() -> Self {
-    Self {
-      id: CommandPaletteCommandId::ForgetRepository,
-      name: "Forget repository".into(),
-      description: Some("Remove a repository from the recent list".into()),
-    }
+    Self::new(
+      CommandPaletteCommandId::ForgetRepository,
+      "Forget repository",
+      "Remove a repository from the recent list",
+    )
   }
 
   pub fn switch_branch() -> Self {
-    Self {
-      id: CommandPaletteCommandId::SwitchBranch,
-      name: "Switch branch".into(),
-      description: Some("Checkout or create branches".into()),
-    }
+    Self::new(
+      CommandPaletteCommandId::SwitchBranch,
+      "Switch branch",
+      "Checkout or create branches",
+    )
   }
 
   pub fn commit() -> Self {
-    Self {
-      id: CommandPaletteCommandId::Commit,
-      name: "Commit".into(),
-      description: Some("Create a commit (stages all changes if needed)".into()),
-    }
+    Self::new(
+      CommandPaletteCommandId::Commit,
+      "Commit",
+      "Create a commit (stages all changes if needed)",
+    )
   }
 
   pub fn checkout_detached() -> Self {
-    Self {
-      id: CommandPaletteCommandId::CheckoutDetached,
-      name: "Git checkout detached".into(),
-      description: Some("Detach HEAD at a commit hash or tag".into()),
-    }
+    Self::new(
+      CommandPaletteCommandId::CheckoutDetached,
+      "Git checkout detached",
+      "Detach HEAD at a commit hash or tag",
+    )
   }
 
   pub fn continue_rebase() -> Self {
-    Self {
-      id: CommandPaletteCommandId::ContinueRebase,
-      name: "Rebase continue".into(),
-      description: Some("Continue the current rebase".into()),
-    }
+    Self::new(
+      CommandPaletteCommandId::ContinueRebase,
+      "Rebase continue",
+      "Continue the current rebase",
+    )
   }
 
   pub fn skip_rebase() -> Self {
-    Self {
-      id: CommandPaletteCommandId::SkipRebase,
-      name: "Rebase skip".into(),
-      description: Some("Skip the current rebase commit".into()),
-    }
+    Self::new(
+      CommandPaletteCommandId::SkipRebase,
+      "Rebase skip",
+      "Skip the current rebase commit",
+    )
   }
 
   pub fn push(label: impl Into<SharedString>) -> Self {
-    Self {
-      id: CommandPaletteCommandId::Push,
-      name: label.into(),
-      description: Some("Push local commits to the remote branch".into()),
-    }
+    Self::new(
+      CommandPaletteCommandId::Push,
+      label,
+      "Push local commits to the remote branch",
+    )
   }
 
   pub fn force_push() -> Self {
-    Self {
-      id: CommandPaletteCommandId::ForcePush,
-      name: "Force push (with lease)".into(),
-      description: Some("Force push local commits to the remote branch".into()),
-    }
+    Self::new(
+      CommandPaletteCommandId::ForcePush,
+      "Force push (with lease)",
+      "Force push local commits to the remote branch",
+    )
   }
 
   pub fn undo_last_commit() -> Self {
-    Self {
-      id: CommandPaletteCommandId::UndoLastCommit,
-      name: "Undo last commit".into(),
-      description: Some("Undo the most recent local commit".into()),
-    }
+    Self::new(
+      CommandPaletteCommandId::UndoLastCommit,
+      "Undo last commit",
+      "Undo the most recent local commit",
+    )
   }
 
   pub fn amend() -> Self {
-    Self {
-      id: CommandPaletteCommandId::Amend,
-      name: "Amend".into(),
-      description: Some("Amend the most recent commit".into()),
-    }
+    Self::new(
+      CommandPaletteCommandId::Amend,
+      "Amend",
+      "Amend the most recent commit",
+    )
   }
 
   pub fn stage_selected_file() -> Self {
-    Self {
-      id: CommandPaletteCommandId::StageSelectedFile,
-      name: "Stage file".into(),
-      description: Some("Stage the selected file".into()),
-    }
+    Self::new(
+      CommandPaletteCommandId::StageSelectedFile,
+      "Stage file",
+      "Stage the selected file",
+    )
   }
 
   pub fn unstage_selected_file() -> Self {
-    Self {
-      id: CommandPaletteCommandId::UnstageSelectedFile,
-      name: "Unstage file".into(),
-      description: Some("Unstage the selected file".into()),
-    }
+    Self::new(
+      CommandPaletteCommandId::UnstageSelectedFile,
+      "Unstage file",
+      "Unstage the selected file",
+    )
   }
 
   pub fn accept_all_current_conflicts() -> Self {
-    Self {
-      id: CommandPaletteCommandId::AcceptAllCurrentConflicts,
-      name: "Accept all current conflicts".into(),
-      description: Some("Resolve all conflict regions by keeping current changes".into()),
-    }
+    Self::new(
+      CommandPaletteCommandId::AcceptAllCurrentConflicts,
+      "Accept all current conflicts",
+      "Resolve all conflict regions by keeping current changes",
+    )
   }
 
   pub fn accept_all_incoming_conflicts() -> Self {
-    Self {
-      id: CommandPaletteCommandId::AcceptAllIncomingConflicts,
-      name: "Accept all incoming conflicts".into(),
-      description: Some("Resolve all conflict regions by keeping incoming changes".into()),
-    }
+    Self::new(
+      CommandPaletteCommandId::AcceptAllIncomingConflicts,
+      "Accept all incoming conflicts",
+      "Resolve all conflict regions by keeping incoming changes",
+    )
   }
 
   pub fn merge_branch() -> Self {
-    Self {
-      id: CommandPaletteCommandId::MergeBranch,
-      name: "Merge branch".into(),
-      description: Some("Merge a branch into the current branch".into()),
-    }
+    Self::new(
+      CommandPaletteCommandId::MergeBranch,
+      "Merge branch",
+      "Merge a branch into the current branch",
+    )
   }
 
   pub fn rebase_branch() -> Self {
-    Self {
-      id: CommandPaletteCommandId::RebaseBranch,
-      name: "Rebase branch".into(),
-      description: Some("Rebase the current branch onto another branch".into()),
-    }
+    Self::new(
+      CommandPaletteCommandId::RebaseBranch,
+      "Rebase branch",
+      "Rebase the current branch onto another branch",
+    )
   }
 
   pub fn interactive_rebase() -> Self {
-    Self {
-      id: CommandPaletteCommandId::InteractiveRebase,
-      name: "Rebase interactive".into(),
-      description: Some("Interactively edit and reorder commits before rebasing".into()),
-    }
+    Self::new(
+      CommandPaletteCommandId::InteractiveRebase,
+      "Rebase interactive",
+      "Interactively edit and reorder commits before rebasing",
+    )
   }
 
   pub fn interactive_rebase_onto_branch() -> Self {
-    Self {
-      id: CommandPaletteCommandId::InteractiveRebaseOntoBranch,
-      name: "Onto branch".into(),
-      description: Some("Start interactive rebase onto another branch".into()),
-    }
+    Self::new(
+      CommandPaletteCommandId::InteractiveRebaseOntoBranch,
+      "Onto branch",
+      "Start interactive rebase onto another branch",
+    )
   }
 
   pub fn interactive_rebase_edit_branch() -> Self {
-    Self {
-      id: CommandPaletteCommandId::InteractiveRebaseEditBranch,
-      name: "Edit branch commits".into(),
-      description: Some(
-        "Reorder, squash, or edit commits without incorporating upstream changes".into(),
-      ),
-    }
+    Self::new(
+      CommandPaletteCommandId::InteractiveRebaseEditBranch,
+      "Edit branch commits",
+      "Reorder, squash, or edit commits without incorporating upstream changes",
+    )
   }
 
   pub fn interactive_rebase_head_count() -> Self {
-    Self {
-      id: CommandPaletteCommandId::InteractiveRebaseHeadCount,
-      name: "Last N commits (HEAD~n)".into(),
-      description: Some("Start interactive rebase for the last N commits".into()),
-    }
+    Self::new(
+      CommandPaletteCommandId::InteractiveRebaseHeadCount,
+      "Last N commits (HEAD~n)",
+      "Start interactive rebase for the last N commits",
+    )
   }
 
   pub fn abort_merge() -> Self {
-    Self {
-      id: CommandPaletteCommandId::AbortMerge,
-      name: "Abort merge".into(),
-      description: Some("Abort the current merge operation".into()),
-    }
+    Self::new(
+      CommandPaletteCommandId::AbortMerge,
+      "Abort merge",
+      "Abort the current merge operation",
+    )
   }
 
   pub fn abort_rebase() -> Self {
-    Self {
-      id: CommandPaletteCommandId::AbortRebase,
-      name: "Abort rebase".into(),
-      description: Some("Abort the current rebase operation".into()),
-    }
+    Self::new(
+      CommandPaletteCommandId::AbortRebase,
+      "Abort rebase",
+      "Abort the current rebase operation",
+    )
   }
 
   pub fn create_branch() -> Self {
-    Self {
-      id: CommandPaletteCommandId::CreateBranch,
-      name: "Create branch".into(),
-      description: Some("Create a new branch".into()),
-    }
+    Self::new(
+      CommandPaletteCommandId::CreateBranch,
+      "Create branch",
+      "Create a new branch",
+    )
   }
 
   pub fn create_pull_request() -> Self {
-    Self {
-      id: CommandPaletteCommandId::CreatePullRequest,
-      name: "Create pull request".into(),
-      description: Some("Create a pull request for the current branch".into()),
-    }
+    Self::new(
+      CommandPaletteCommandId::CreatePullRequest,
+      "Create pull request",
+      "Create a pull request for the current branch",
+    )
+  }
+
+  pub fn open_pull_request(number: u64) -> Self {
+    Self::new(
+      CommandPaletteCommandId::OpenPullRequest,
+      format!("Open PR #{number}"),
+      "Open the pull request for the current branch",
+    )
   }
 
   pub fn create_branch_from() -> Self {
-    Self {
-      id: CommandPaletteCommandId::CreateBranchFrom,
-      name: "Create branch from...".into(),
-      description: Some("Create a new branch from an existing branch".into()),
-    }
+    Self::new(
+      CommandPaletteCommandId::CreateBranchFrom,
+      "Create branch from...",
+      "Create a new branch from an existing branch",
+    )
   }
 
   pub fn delete_branch() -> Self {
-    Self {
-      id: CommandPaletteCommandId::DeleteBranch,
-      name: "Delete branch".into(),
-      description: Some("Force delete a local branch, or delete a remote branch".into()),
-    }
+    Self::new(
+      CommandPaletteCommandId::DeleteBranch,
+      "Delete branch",
+      "Force delete a local branch, or delete a remote branch",
+    )
   }
 
   pub fn cherry_pick() -> Self {
-    Self {
-      id: CommandPaletteCommandId::CherryPick,
-      name: "Cherry pick".into(),
-      description: Some("Apply one or more commits to the current branch".into()),
-    }
+    Self::new(
+      CommandPaletteCommandId::CherryPick,
+      "Cherry pick",
+      "Apply one or more commits to the current branch",
+    )
   }
 
   pub fn stage_all() -> Self {
-    Self {
-      id: CommandPaletteCommandId::StageAll,
-      name: "Stage all".into(),
-      description: Some("Stage all changed files".into()),
-    }
+    Self::new(
+      CommandPaletteCommandId::StageAll,
+      "Stage all",
+      "Stage all changed files",
+    )
   }
 
   pub fn unstage_all() -> Self {
-    Self {
-      id: CommandPaletteCommandId::UnstageAll,
-      name: "Unstage all".into(),
-      description: Some("Unstage all staged files".into()),
-    }
+    Self::new(
+      CommandPaletteCommandId::UnstageAll,
+      "Unstage all",
+      "Unstage all staged files",
+    )
   }
 
   pub fn pull() -> Self {
-    Self {
-      id: CommandPaletteCommandId::Pull,
-      name: "Pull".into(),
-      description: Some("Pull changes from the remote branch".into()),
-    }
+    Self::new(
+      CommandPaletteCommandId::Pull,
+      "Pull",
+      "Pull changes from the remote branch",
+    )
   }
 
   pub fn fetch() -> Self {
-    Self {
-      id: CommandPaletteCommandId::Fetch,
-      name: "Fetch".into(),
-      description: Some("Fetch updates from remote repositories".into()),
-    }
+    Self::new(
+      CommandPaletteCommandId::Fetch,
+      "Fetch",
+      "Fetch updates from remote repositories",
+    )
   }
 
   pub fn stash() -> Self {
-    Self {
-      id: CommandPaletteCommandId::Stash,
-      name: "Stash".into(),
-      description: Some("Stash tracked changes".into()),
-    }
+    Self::new(
+      CommandPaletteCommandId::Stash,
+      "Stash",
+      "Stash tracked changes",
+    )
   }
 
   pub fn stash_with_untracked() -> Self {
-    Self {
-      id: CommandPaletteCommandId::StashIncludeUntracked,
-      name: "Stash with untracked".into(),
-      description: Some("Stash tracked and untracked changes".into()),
-    }
+    Self::new(
+      CommandPaletteCommandId::StashIncludeUntracked,
+      "Stash with untracked",
+      "Stash tracked and untracked changes",
+    )
   }
 
   pub fn apply_stash() -> Self {
-    Self {
-      id: CommandPaletteCommandId::ApplyStash,
-      name: "Apply stash".into(),
-      description: Some("Apply a stash entry without dropping it".into()),
-    }
+    Self::new(
+      CommandPaletteCommandId::ApplyStash,
+      "Apply stash",
+      "Apply a stash entry without dropping it",
+    )
   }
 
   pub fn drop_stash() -> Self {
-    Self {
-      id: CommandPaletteCommandId::DropStash,
-      name: "Drop stash".into(),
-      description: Some("Delete a stash entry".into()),
-    }
+    Self::new(
+      CommandPaletteCommandId::DropStash,
+      "Drop stash",
+      "Delete a stash entry",
+    )
   }
 
   pub fn pop_stash() -> Self {
-    Self {
-      id: CommandPaletteCommandId::PopStash,
-      name: "Pop stash".into(),
-      description: Some("Apply and delete a stash entry".into()),
-    }
+    Self::new(
+      CommandPaletteCommandId::PopStash,
+      "Pop stash",
+      "Apply and delete a stash entry",
+    )
   }
 
   pub fn open_repository() -> Self {
-    Self {
-      id: CommandPaletteCommandId::OpenRepository,
-      name: "Open repository".into(),
-      description: Some("Pick and open a local repository".into()),
-    }
+    Self::new(
+      CommandPaletteCommandId::OpenRepository,
+      "Open repository",
+      "Pick and open a local repository",
+    )
   }
 
   pub fn open_github_page() -> Self {
-    Self {
-      id: CommandPaletteCommandId::OpenGithubPage,
-      name: "Go to GitHub".into(),
-      description: Some("Navigate to the GitHub page".into()),
-    }
+    Self::new(
+      CommandPaletteCommandId::OpenGithubPage,
+      "Go to GitHub",
+      "Navigate to the GitHub page",
+    )
   }
 
   pub fn create_github_repository() -> Self {
-    Self {
-      id: CommandPaletteCommandId::CreateGithubRepository,
-      name: "Create GitHub repository".into(),
-      description: Some("Create a new repository under your account or an organization".into()),
-    }
+    Self::new(
+      CommandPaletteCommandId::CreateGithubRepository,
+      "Create GitHub repository",
+      "Create a new repository under your account or an organization",
+    )
   }
 
   pub fn search_github_repository() -> Self {
-    Self {
-      id: CommandPaletteCommandId::SearchGithubRepository,
-      name: "Search GitHub repository".into(),
-      description: Some("Find a repository on GitHub by name or owner".into()),
-    }
+    Self::new(
+      CommandPaletteCommandId::SearchGithubRepository,
+      "Search GitHub repository",
+      "Find a repository on GitHub by name or owner",
+    )
   }
 
   pub fn open_git_page() -> Self {
-    Self {
-      id: CommandPaletteCommandId::OpenGitPage,
-      name: "Go to Git".into(),
-      description: Some("Navigate to the Git page".into()),
-    }
+    Self::new(
+      CommandPaletteCommandId::OpenGitPage,
+      "Go to Git",
+      "Navigate to the Git page",
+    )
   }
 
   pub fn open_github_from_url() -> Self {
-    Self {
-      id: CommandPaletteCommandId::OpenGithubFromUrl,
-      name: "Open from GitHub URL".into(),
-      description: Some("Open a supported GitHub page from a GitHub URL".into()),
-    }
+    Self::new(
+      CommandPaletteCommandId::OpenGithubFromUrl,
+      "Open from GitHub URL",
+      "Open a supported GitHub page from a GitHub URL",
+    )
   }
 
   pub fn switch_to_pr_branch() -> Self {
-    Self {
-      id: CommandPaletteCommandId::SwitchToPrBranch,
-      name: "Switch to PR branch".into(),
-      description: Some("Switch the local repository to the current pull request branch".into()),
-    }
+    Self::new(
+      CommandPaletteCommandId::SwitchToPrBranch,
+      "Switch to PR branch",
+      "Switch the local repository to the current pull request branch",
+    )
   }
 
   pub fn copy_pr_branch() -> Self {
-    Self {
-      id: CommandPaletteCommandId::CopyPrBranch,
-      name: "Copy PR branch name".into(),
-      description: Some("Copy the source branch name of the current pull request".into()),
-    }
+    Self::new(
+      CommandPaletteCommandId::CopyPrBranch,
+      "Copy PR branch name",
+      "Copy the source branch name of the current pull request",
+    )
   }
 
   pub fn toggle_unchanged_files(currently_shown: bool) -> Self {
     if currently_shown {
-      Self {
-        id: CommandPaletteCommandId::ToggleUnchangedFiles,
-        name: "Hide unchanged files".into(),
-        description: Some("Show only files changed in this pull request".into()),
-      }
+      Self::new(
+        CommandPaletteCommandId::ToggleUnchangedFiles,
+        "Hide unchanged files",
+        "Show only files changed in this pull request",
+      )
     } else {
-      Self {
-        id: CommandPaletteCommandId::ToggleUnchangedFiles,
-        name: "Show unchanged files".into(),
-        description: Some("Show all project files alongside changed files".into()),
-      }
+      Self::new(
+        CommandPaletteCommandId::ToggleUnchangedFiles,
+        "Show unchanged files",
+        "Show all project files alongside changed files",
+      )
     }
   }
 
   pub fn open_settings_page() -> Self {
-    Self {
-      id: CommandPaletteCommandId::OpenSettingsPage,
-      name: "Go to Settings".into(),
-      description: Some("Navigate to Settings".into()),
-    }
+    Self::new(
+      CommandPaletteCommandId::OpenSettingsPage,
+      "Go to Settings",
+      "Navigate to Settings",
+    )
   }
 
   pub fn open_billing_page() -> Self {
-    Self {
-      id: CommandPaletteCommandId::OpenBillingPage,
-      name: "Go to Billing".into(),
-      description: Some("Navigate to Billing".into()),
-    }
+    Self::new(
+      CommandPaletteCommandId::OpenBillingPage,
+      "Go to Billing",
+      "Navigate to Billing",
+    )
   }
 
   pub fn open_about_page() -> Self {
-    Self {
-      id: CommandPaletteCommandId::OpenAboutPage,
-      name: "Go to About".into(),
-      description: Some("Navigate to About".into()),
-    }
+    Self::new(
+      CommandPaletteCommandId::OpenAboutPage,
+      "Go to About",
+      "Navigate to About",
+    )
   }
 
   pub fn send_feedback() -> Self {
-    Self {
-      id: CommandPaletteCommandId::SendFeedback,
-      name: "Send Feedback".into(),
-      description: Some("Report a bug or suggest a feature".into()),
-    }
+    Self::new(
+      CommandPaletteCommandId::SendFeedback,
+      "Send Feedback",
+      "Report a bug or suggest a feature",
+    )
   }
 
   pub fn open_git_config_page() -> Self {
-    Self {
-      id: CommandPaletteCommandId::OpenGitConfigPage,
-      name: "Go to Git Config".into(),
-      description: Some("Edit ~/.gitconfig".into()),
-    }
+    Self::new(
+      CommandPaletteCommandId::OpenGitConfigPage,
+      "Go to Git Config",
+      "Edit ~/.gitconfig",
+    )
   }
 
   pub fn default_global_commands(
@@ -1496,6 +1556,7 @@ impl CommandPaletteCommand {
       | CommandPaletteCommandId::PopStash => CommandPaletteGroup::Stash,
 
       CommandPaletteCommandId::CreatePullRequest
+      | CommandPaletteCommandId::OpenPullRequest
       | CommandPaletteCommandId::SwitchToPrBranch
       | CommandPaletteCommandId::CopyPrBranch
       | CommandPaletteCommandId::ToggleUnchangedFiles => CommandPaletteGroup::PullRequest,
@@ -1563,7 +1624,9 @@ impl CommandPaletteCommand {
       CommandPaletteCommandId::CreateBranch | CommandPaletteCommandId::CreateBranchFrom => {
         Icon::new(IconName::Plus)
       }
-      CommandPaletteCommandId::CreatePullRequest => Icon::new(UiIconName::GitPullRequestArrow),
+      CommandPaletteCommandId::CreatePullRequest | CommandPaletteCommandId::OpenPullRequest => {
+        Icon::new(UiIconName::GitPullRequestArrow)
+      }
       CommandPaletteCommandId::OpenGitPage => Icon::new(UiIconName::GitBranch),
       CommandPaletteCommandId::OpenGithubPage => Icon::new(IconName::Github),
       CommandPaletteCommandId::OpenGithubFromUrl => Icon::new(IconName::Github),
@@ -1597,6 +1660,11 @@ impl CommandPaletteCommand {
       .as_ref()
       .map(|text| text.as_ref().to_lowercase().contains(&query))
       .unwrap_or(false)
+      || self
+        .disabled_reason
+        .as_ref()
+        .map(|text| text.as_ref().to_lowercase().contains(&query))
+        .unwrap_or(false)
   }
 }
 
@@ -1896,7 +1964,7 @@ impl CommandPalette {
           if let ListEvent::Confirm(ix) = ev
             && let Some(command) = list_state.read(cx).delegate().item_at(*ix)
           {
-            command_palette.select_command(command.id, cx, window);
+            command_palette.select_command_entry(command.as_ref(), cx, window);
           }
         },
       ),
@@ -1907,7 +1975,7 @@ impl CommandPalette {
           if let ListEvent::Confirm(ix) = ev
             && let Some(command) = list_state.read(cx).delegate().item_at(*ix)
           {
-            command_palette.select_command(command.id, cx, window);
+            command_palette.select_command_entry(command.as_ref(), cx, window);
           }
         },
       ),
@@ -1962,7 +2030,7 @@ impl CommandPalette {
                   );
                 }
                 BranchListWithCommands::CommandPaletteCommand(command) => {
-                  command_palette.select_command(command.id, cx, window);
+                  command_palette.select_command_entry(command, cx, window);
                 }
               }
             }
@@ -2424,6 +2492,20 @@ impl CommandPalette {
     });
   }
 
+  fn select_command_entry(
+    &mut self,
+    command: &CommandPaletteCommand,
+    cx: &mut Context<Self>,
+    window: &mut Window,
+  ) {
+    if let Some(reason) = command.disabled_reason.as_ref() {
+      window.push_notification(Notification::info(reason.clone()), cx);
+      return;
+    }
+
+    self.select_command(command.id, cx, window);
+  }
+
   fn select_command(
     &mut self,
     command: CommandPaletteCommandId,
@@ -2535,6 +2617,9 @@ impl CommandPalette {
       }
       CommandPaletteCommandId::CreatePullRequest => {
         self.trigger_action(command, CommandPaletteAction::CreatePullRequest, window, cx);
+      }
+      CommandPaletteCommandId::OpenPullRequest => {
+        self.trigger_action(command, CommandPaletteAction::OpenPullRequest, window, cx);
       }
       CommandPaletteCommandId::CherryPick => {
         self.cherry_pick_input.update(cx, |input, cx| {
@@ -3157,6 +3242,10 @@ mod tests {
       CommandPaletteGroup::PullRequest
     );
     assert_eq!(
+      CommandPaletteCommand::open_pull_request(42).group(),
+      CommandPaletteGroup::PullRequest
+    );
+    assert_eq!(
       CommandPaletteCommand::switch_repository().group(),
       CommandPaletteGroup::Repository
     );
@@ -3248,6 +3337,22 @@ mod tests {
     assert_eq!(command.id, CommandPaletteCommandId::CreatePullRequest);
     assert_eq!(command.name.as_ref(), "Create pull request");
     assert!(command.matches("current branch"));
+  }
+
+  #[test]
+  fn open_pull_request_command_is_available_with_expected_metadata() {
+    let command = CommandPaletteCommand::open_pull_request(42);
+    assert_eq!(command.id, CommandPaletteCommandId::OpenPullRequest);
+    assert_eq!(command.name.as_ref(), "Open PR #42");
+    assert!(command.matches("pull request for the current branch"));
+  }
+
+  #[test]
+  fn disabled_command_keeps_reason_searchable() {
+    let command = CommandPaletteCommand::interactive_rebase()
+      .disabled("Commit or stash worktree changes first");
+    assert!(command.is_disabled());
+    assert!(command.matches("stash worktree"));
   }
 
   #[test]
@@ -3469,6 +3574,7 @@ mod tests {
       CommandPaletteCommandId::InteractiveRebaseHeadCount,
       CommandPaletteCommandId::AbortRebase,
       CommandPaletteCommandId::CreatePullRequest,
+      CommandPaletteCommandId::OpenPullRequest,
       CommandPaletteCommandId::CherryPick,
       CommandPaletteCommandId::StageAll,
       CommandPaletteCommandId::UnstageAll,
