@@ -2,6 +2,12 @@
 
 All notable changes to Reviu are documented here.
 
+## 0.10.0
+
+### Clearer Command Palette Availability
+
+The Git command palette now keeps temporarily blocked actions visible with a short reason, so you can see why an action is not ready yet.
+
 ## 0.9.0
 
 ### Preview Comments and Descriptions Before Posting

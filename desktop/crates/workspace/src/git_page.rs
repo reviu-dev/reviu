@@ -1822,6 +1822,35 @@ impl GitPage {
     .then_some(branch_context)
   }
 
+  fn current_branch_pr_button_state(&self, cx: &App) -> GitBranchPullRequestButtonState {
+    let branch_context = self.github_branch_context(cx);
+    Self::branch_pr_button_state(
+      branch_context.as_ref(),
+      AuthStateStore::has_github_access(cx),
+      Self::branch_has_github_upstream(self.branch_status.as_ref()),
+      Self::should_publish_branch_and_create_pull_request(
+        self.branch_status.as_ref(),
+        self.has_unpublished_branch_commits,
+      ),
+      self.branch_pr_lookup_loading,
+      self.branch_pr_lookup_result.as_ref(),
+    )
+  }
+
+  fn branch_pull_request_palette_command(&self, cx: &App) -> Option<CommandPaletteCommand> {
+    match self.current_branch_pr_button_state(cx) {
+      GitBranchPullRequestButtonState::Create => Some(CommandPaletteCommand::create_pull_request()),
+      GitBranchPullRequestButtonState::OpenExisting { number, .. } => {
+        Some(CommandPaletteCommand::open_pull_request(number))
+      }
+      GitBranchPullRequestButtonState::Checking => Some(
+        CommandPaletteCommand::create_pull_request().disabled("Checking for an open pull request"),
+      ),
+      GitBranchPullRequestButtonState::Hidden
+      | GitBranchPullRequestButtonState::PublishAndCreate => None,
+    }
+  }
+
   fn should_apply_created_pull_request(
     active_context: Option<&GithubBranchContext>,
     created_context: &GithubBranchContext,
@@ -4248,6 +4277,8 @@ impl GitPage {
       }
       if self.should_show_continue_rebase_palette_command() {
         commands.push(CommandPaletteCommand::continue_rebase());
+      } else if let Some(reason) = self.continue_rebase_disabled_reason() {
+        commands.push(CommandPaletteCommand::continue_rebase().disabled(reason));
       }
       if self.should_show_skip_rebase_palette_command() {
         commands.push(CommandPaletteCommand::skip_rebase());
@@ -4286,10 +4317,22 @@ impl GitPage {
       }
       if self.should_show_pull_palette_command() {
         commands.push(CommandPaletteCommand::pull());
+      } else if self.selected_repo.is_some()
+        && self
+          .branch_status
+          .as_ref()
+          .is_some_and(|status| status.has_upstream)
+        && let Some(reason) = self.operation_in_progress_disabled_reason()
+      {
+        commands.push(CommandPaletteCommand::pull().disabled(reason));
       }
       commands.push(CommandPaletteCommand::fetch());
       if self.should_show_cherry_pick_palette_command() {
         commands.push(CommandPaletteCommand::cherry_pick());
+      } else if self.selected_repo.is_some()
+        && let Some(reason) = self.operation_in_progress_disabled_reason()
+      {
+        commands.push(CommandPaletteCommand::cherry_pick().disabled(reason));
       }
 
       let (show_stash, show_stash_with_untracked) = Self::stash_command_flags(&self.status_entries);
@@ -4364,23 +4407,29 @@ impl GitPage {
         }
         if self.should_show_merge_branch_palette_command() {
           commands.push(CommandPaletteCommand::merge_branch());
+        } else if let Some(reason) = self.operation_in_progress_disabled_reason() {
+          commands.push(CommandPaletteCommand::merge_branch().disabled(reason));
         }
         if self.merge_in_progress {
           commands.push(CommandPaletteCommand::abort_merge());
         }
         if self.should_show_rebase_branch_palette_command() {
           commands.push(CommandPaletteCommand::rebase_branch());
+        } else if let Some(reason) = self.operation_in_progress_disabled_reason() {
+          commands.push(CommandPaletteCommand::rebase_branch().disabled(reason));
         }
         if self.should_show_interactive_rebase_palette_command() {
           commands.push(CommandPaletteCommand::interactive_rebase());
+        } else if let Some(reason) = self.interactive_rebase_disabled_reason() {
+          commands.push(CommandPaletteCommand::interactive_rebase().disabled(reason));
         }
         if self.rebase_in_progress {
           commands.push(CommandPaletteCommand::abort_rebase());
         }
       }
 
-      if self.create_pull_request_branch_context(cx).is_some() {
-        commands.push(CommandPaletteCommand::create_pull_request());
+      if let Some(command) = self.branch_pull_request_palette_command(cx) {
+        commands.push(command);
       }
     }
 
@@ -4612,6 +4661,25 @@ impl GitPage {
         window.on_next_frame(move |window, cx| {
           open_create_pull_request_dialog(api, window_handle, git_page, branch_context, window, cx);
         });
+        Ok(())
+      }
+      CommandPaletteAction::OpenPullRequest => {
+        let GitBranchPullRequestButtonState::OpenExisting {
+          owner,
+          repo,
+          number,
+        } = self.current_branch_pr_button_state(cx)
+        else {
+          return Err("No open pull request found for this branch.".into());
+        };
+        GithubPrDetailsPageHandle::show_with_open_target(
+          owner.into(),
+          repo.into(),
+          number,
+          false,
+          None,
+          cx,
+        );
         Ok(())
       }
       CommandPaletteAction::OpenSettingsPage => {
@@ -7182,6 +7250,40 @@ impl GitPage {
       && !Self::is_detached_head(self.branch_status.as_ref())
   }
 
+  fn continue_rebase_disabled_reason(&self) -> Option<&'static str> {
+    (self.selected_repo.is_some() && self.rebase_in_progress && !self.can_continue_rebase_command())
+      .then_some("Resolve and stage conflicts first")
+  }
+
+  fn operation_in_progress_disabled_reason(&self) -> Option<&'static str> {
+    if self.rebase_in_progress {
+      Some("Finish or abort the current rebase first")
+    } else if self.merge_in_progress {
+      Some("Finish or abort the current merge first")
+    } else {
+      None
+    }
+  }
+
+  fn interactive_rebase_disabled_reason(&self) -> Option<&'static str> {
+    if self.selected_repo.is_none() || self.should_show_interactive_rebase_palette_command() {
+      return None;
+    }
+    if let Some(reason) = self.operation_in_progress_disabled_reason() {
+      return Some(reason);
+    }
+    if !self.has_head_commit {
+      return Some("Create a commit first");
+    }
+    if !self.status_entries.is_empty() {
+      return Some("Commit or stash worktree changes first");
+    }
+    if Self::is_detached_head(self.branch_status.as_ref()) {
+      return Some("Checkout a branch first");
+    }
+    None
+  }
+
   fn should_show_pull_palette_command(&self) -> bool {
     !self.rebase_in_progress
       && !self.merge_in_progress
@@ -7797,17 +7899,7 @@ impl GitPage {
     let repo_options = self.repo_dropdown_items.clone();
     let branch_options = self.branch_dropdown_items.clone();
     let branch_context = self.github_branch_context(cx);
-    let branch_pr_button_state = Self::branch_pr_button_state(
-      branch_context.as_ref(),
-      AuthStateStore::has_github_access(cx),
-      Self::branch_has_github_upstream(self.branch_status.as_ref()),
-      Self::should_publish_branch_and_create_pull_request(
-        self.branch_status.as_ref(),
-        self.has_unpublished_branch_commits,
-      ),
-      self.branch_pr_lookup_loading,
-      self.branch_pr_lookup_result.as_ref(),
-    );
+    let branch_pr_button_state = self.current_branch_pr_button_state(cx);
 
     let repo_dropdown = dropdown_select(
       DropdownSelectConfig::new("git-header-repo-select")
@@ -10475,30 +10567,38 @@ mod tests {
 
     let (git_page, cx) = add_git_page_window_with_root(cx);
 
-    let command_ids = git_page.update(cx, |this, cx| {
+    let commands = git_page.update(cx, |this, cx| {
       this.selected_repo = Some(repo.path.clone());
       this.branch_status = Some(make_branch_status("main", 0, 0, true));
       this.branch_pr_lookup_loading = false;
       this.branch_pr_lookup_result = None;
-      this
-        .build_command_palette_contents(1, cx)
-        .commands
-        .into_iter()
-        .map(|command| command.id)
-        .collect::<Vec<_>>()
+      this.build_command_palette_contents(1, cx).commands
     });
-    assert!(command_ids.contains(&CommandPaletteCommandId::CreatePullRequest));
+    assert!(
+      commands
+        .iter()
+        .any(|command| command.id == CommandPaletteCommandId::CreatePullRequest)
+    );
+    assert!(
+      !commands
+        .iter()
+        .any(|command| command.id == CommandPaletteCommandId::OpenPullRequest)
+    );
 
-    let hidden_command_ids = git_page.update(cx, |this, cx| {
+    let commands_with_existing_pr = git_page.update(cx, |this, cx| {
       this.branch_pr_lookup_result = Some(make_branch_pull_request(42));
-      this
-        .build_command_palette_contents(1, cx)
-        .commands
-        .into_iter()
-        .map(|command| command.id)
-        .collect::<Vec<_>>()
+      this.build_command_palette_contents(1, cx).commands
     });
-    assert!(!hidden_command_ids.contains(&CommandPaletteCommandId::CreatePullRequest));
+    assert!(
+      !commands_with_existing_pr
+        .iter()
+        .any(|command| command.id == CommandPaletteCommandId::CreatePullRequest)
+    );
+    let open_pr_command = commands_with_existing_pr
+      .iter()
+      .find(|command| command.id == CommandPaletteCommandId::OpenPullRequest)
+      .expect("existing branch PR should add an open command");
+    assert_eq!(open_pr_command.name.as_ref(), "Open PR #42");
   }
 
   #[gpui::test]
@@ -11173,6 +11273,57 @@ mod tests {
       assert!(!this.should_show_stage_selected_file_palette_command());
       assert!(!this.should_show_unstage_selected_file_palette_command());
     });
+  }
+
+  #[gpui::test]
+  fn command_palette_keeps_temporarily_blocked_commands_visible_with_reasons(
+    cx: &mut TestAppContext,
+  ) {
+    init_gpui_test(cx);
+    let repo = TempRepo::init("git-page-palette-disabled-reasons");
+    let rel_path = Path::new("README.md");
+    let _ = commit_text_file(&repo.path, rel_path, "initial\n", "initial");
+    std::fs::write(repo.path.join(rel_path), "changed\n").expect("modify tracked file");
+    let (git_page, cx) = add_git_page_window_with_root(cx);
+
+    let dirty_worktree_reason = git_page.update(cx, |this, cx| {
+      this.selected_repo = Some(repo.path.clone());
+      this.branch_status = Some(make_branch_status("main", 0, 0, true));
+      this.has_head_commit = true;
+      this.status_entries = list_repo_status(&repo.path).expect("list status");
+      this
+        .build_command_palette_contents(1, cx)
+        .commands
+        .into_iter()
+        .find(|command| command.id == CommandPaletteCommandId::InteractiveRebase)
+        .and_then(|command| command.disabled_reason)
+    });
+    assert_eq!(
+      dirty_worktree_reason.as_ref().map(|reason| reason.as_ref()),
+      Some("Commit or stash worktree changes first")
+    );
+
+    let rebase_continue_reason = git_page.update(cx, |this, cx| {
+      this.rebase_in_progress = true;
+      this.status_entries = vec![RepoStatusEntry {
+        path: rel_path.to_path_buf(),
+        old_path: None,
+        status: RepoStatusKind::Conflicted,
+        stage: RepoStage::Unstaged,
+      }];
+      this
+        .build_command_palette_contents(1, cx)
+        .commands
+        .into_iter()
+        .find(|command| command.id == CommandPaletteCommandId::ContinueRebase)
+        .and_then(|command| command.disabled_reason)
+    });
+    assert_eq!(
+      rebase_continue_reason
+        .as_ref()
+        .map(|reason| reason.as_ref()),
+      Some("Resolve and stage conflicts first")
+    );
   }
 
   #[test]
