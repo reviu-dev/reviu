@@ -4,7 +4,7 @@
 
 - Reviu is a desktop Git client.
 - `Free`: local Git workflow.
-- `Reviu Pro`: GitHub integration (`$19/month` in app billing UI).
+- `Reviu Pro`: GitHub integration (`$9/month` or `$79/year` in app billing UI).
 - Core UX: keyboard-first navigation, fast diff/review workflows, in-app GitHub context.
 - Product/copy source for landing: `APP_FEATURES.md`.
 

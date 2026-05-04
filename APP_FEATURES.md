@@ -49,7 +49,7 @@ If pricing changes, update desktop billing, landing copy, structured data, and t
 
 ### Local UX strengths
 
-- Keyboard-first command palette for local Git actions, with grouped commands, recent commands, and success/error feedback.
+- Keyboard-first command palette for local Git actions, with grouped commands, recent commands, visible disabled states with short reasons, and success/error feedback.
 - Configurable keyboard shortcuts for core Git, navigation, review, and app actions.
 - File search on code and diff pages.
 - Persistent app settings for theme, font size, diff view, whitespace handling, indentation guides, and editor display options.
@@ -81,16 +81,16 @@ If pricing changes, update desktop billing, landing copy, structured data, and t
 - Open repository commit details with metadata, co-authors, changed files, and inline or split diffs.
 - Browse repository pull requests with open, merged, and closed tabs plus search and filters.
 - Browse repository issues with open, closed, and not-planned tabs plus search and filters.
-- View issue details, edit issue descriptions, create/edit/delete issue comments, and add/remove issue reactions in-app.
+- View issue details, edit issue descriptions, preview issue descriptions and comments before posting, create/edit/delete issue comments, and add/remove issue reactions in-app.
 
 ### Pull request review
 
 - Open pull requests directly inside the desktop app.
 - Review changed files in inline or split diff modes, with syntax highlighting, file navigation, and optional unchanged local files.
-- Render Markdown, SVG, image previews, GitHub-hosted assets, and suggested-change diffs in review flows.
-- Create, reply to, edit, and delete review comments.
+- Render Markdown, SVG, image previews, GitHub-hosted assets, linked GitHub code references, and suggested-change diffs in review flows.
+- Create, reply to, edit, delete, and preview review comments before posting.
 - Resolve and unresolve pull request review threads.
-- Apply suggested changes as commits to the pull request branch with reviewer co-author support.
+- Insert suggestions from selected diff lines and apply suggested changes as commits to the pull request branch with reviewer co-author support.
 - Add and remove reactions on pull request descriptions, issue comments, review comments, and reviews.
 - Use emoji autocomplete and drag-and-drop image upload in pull request and issue composers.
 - Submit reviews from the PR page, including comment, approve, and request changes flows.
@@ -98,7 +98,7 @@ If pricing changes, update desktop billing, landing copy, structured data, and t
 - See merge readiness, conflicts, out-of-date state, skipped checks, required checks, and provider images inside the PR view.
 - Merge pull requests from Reviu when the repository state allows it, including merge commit, squash, and rebase methods.
 - Enable and disable auto-merge when the pull request is blocked by pending checks or reviews.
-- Browse pull request commits with search and filtering.
+- Browse pull request commits with search and filtering, and review pull request changes commit by commit.
 - Keep pull request commit links inside Reviu when they point to the current review.
 
 ### Local-to-GitHub bridge
@@ -155,7 +155,7 @@ What the current landing underrepresents:
 - The depth of the local Git workflow: merge, branch deletion, advanced rebase modes, stash variants, hunk-level restore, conflict keyboard actions, and configurable shortcuts.
 - Diff editor polish: histogram diffs, precise word highlights, hide-whitespace mode, image previews, and indentation guide options.
 - Repository actions: star, watch, fork, clone, create repository, commit details, and GitHub profiles.
-- PR review depth is present at a high level, but still compresses suggested changes, reactions, emoji autocomplete, image upload, labels, assignees, reviewers, draft/ready state, auto-merge, and commit browsing.
+- PR review depth is present at a high level, but still compresses comment/description previews, suggested changes, linked code reference previews, reactions, emoji autocomplete, image upload, labels, assignees, reviewers, draft/ready state, auto-merge, and commit-by-commit review.
 - Issue editing and issue comment/reaction flows.
 - Desktop and support polish like crash recovery, in-app updates, feedback, menu/tray/dock badges, and the internal admin dashboard.
 
