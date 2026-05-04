@@ -198,6 +198,80 @@ Suggested product name:
 
 This is more precise than "AI Review" and fits Reviu's current product promise: reduce fragmented review work without claiming to replace human judgment.
 
+## Packaging Direction
+
+The preferred packaging model is a three-tier plan structure:
+
+### Free
+
+Price:
+
+- `$0`
+
+Includes:
+
+- Local Git workflows.
+- No GitHub integration.
+- No AI features.
+
+### Pro
+
+Price:
+
+- `$9/month` or `$79/year`
+
+Includes:
+
+- GitHub integration.
+- Notifications, repositories, pull requests, issues, checks, comments, merge actions, and browser extensions.
+- Bring-your-own-key AI support for users who connect their own OpenAI, Anthropic, or compatible provider account.
+
+Notes:
+
+- In this tier, AI provider usage is billed to the user's provider account.
+- Reviu should still provide the product UI, prompt orchestration, schema validation, and safe posting controls.
+- This keeps current Pro pricing intact while giving advanced users access to AI features.
+
+### Pro AI
+
+Price:
+
+- `$19/month` or `$149/year`
+
+Includes:
+
+- Everything in Pro.
+- Reviu-managed AI included.
+- Higher monthly AI quota.
+- No provider API key required for standard AI actions.
+
+Notes:
+
+- This tier is the cleanest landing-page story for AI because users can try AI features without setting up an external API key.
+- The plan needs quota, rate limit, abuse protection, provider kill switches, and usage visibility before launch.
+- AI costs should be measured in beta before finalizing included monthly quota.
+
+## AI Provider Strategy
+
+The app should support both user-owned and Reviu-managed AI, but they should be treated as different credential modes.
+
+Credential modes:
+
+- `user_key`: the user provides an OpenAI, Anthropic, or compatible API key.
+- `reviu_managed`: Reviu pays the provider and gates usage through Pro AI quotas.
+- `local`: the desktop app talks to a local OpenAI-compatible endpoint such as Ollama or LM Studio.
+
+Recommended rollout:
+
+1. Build the AI abstraction around provider + credential mode from the start.
+2. Ship Pro with `user_key` support first if cost risk needs to stay low.
+3. Add Pro AI with `reviu_managed` once usage and cost per action are measured.
+4. Add `local` as an advanced mode for users who want local models and accept quality/performance tradeoffs.
+
+For server-side GitHub AI features like AI PR Brief, the desktop should send only the PR identity and action request. The backend should fetch canonical PR context, build the prompt, call the selected provider, validate structured output, cache results, and return UI-ready JSON.
+
+For local-model mode, the backend can expose canonical AI context while the desktop performs the local provider call, because a cloud backend cannot call the user's `localhost`.
+
 ## Landing Copy Direction
 
 Primary message:
