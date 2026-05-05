@@ -130,6 +130,7 @@ WRITE_MANIFEST_ARTIFACT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/write-man
 apply_dmg_layout() {
   local volume_name="$1"
   local app_name="$2"
+  local has_background="$3"
 
   if [[ "${REVIU_SKIP_DMG_LAYOUT:-0}" == "1" ]]; then
     log "Skipping Finder layout customization"
@@ -141,6 +142,11 @@ apply_dmg_layout() {
     return
   fi
 
+  local background_clause=""
+  if [[ "${has_background}" == "1" ]]; then
+    background_clause='set background picture of opts to file ".background:background.png"'
+  fi
+
   log "Applying Finder layout"
   if ! /usr/bin/osascript <<EOF
 tell application "Finder"
@@ -149,13 +155,14 @@ tell application "Finder"
     set current view of container window to icon view
     set toolbar visible of container window to false
     set statusbar visible of container window to false
-    set bounds of container window to {120, 120, 660, 440}
+    set bounds of container window to {120, 120, 660, 580}
     set opts to the icon view options of container window
     set arrangement of opts to not arranged
     set icon size of opts to 128
     set text size of opts to 12
-    set position of item "${app_name}.app" to {150, 140}
-    set position of item "Applications" to {390, 140}
+    ${background_clause}
+    set position of item "${app_name}.app" to {150, 170}
+    set position of item "Applications" to {390, 170}
     update without registering applications
     delay 1
     close
@@ -368,6 +375,16 @@ main() {
   cp -R "${app_path}" "${dmg_root}/${app_name}.app"
   ln -s /Applications "${dmg_root}/Applications"
 
+  local background_source="${SCRIPT_DIR}/assets/dmg-background.png"
+  local has_background="0"
+  if [[ -f "${background_source}" ]]; then
+    mkdir -p "${dmg_root}/.background"
+    cp "${background_source}" "${dmg_root}/.background/background.png"
+    has_background="1"
+  else
+    log "DMG background image not found at ${background_source}; skipping"
+  fi
+
   if [[ "${REVIU_DRY_RUN:-0}" == "1" ]]; then
     : > "${dmg_path}"
   else
@@ -387,7 +404,7 @@ main() {
       die "Failed to mount temporary DMG. hdiutil output: ${attach_info}"
     fi
 
-    apply_dmg_layout "${volume_name}" "${app_name}"
+    apply_dmg_layout "${volume_name}" "${app_name}" "${has_background}"
 
     hdiutil detach "${device}" -quiet
     device=""
