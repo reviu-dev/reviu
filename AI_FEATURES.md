@@ -272,6 +272,52 @@ For server-side GitHub AI features like AI PR Brief, the desktop should send onl
 
 For local-model mode, the backend can expose canonical AI context while the desktop performs the local provider call, because a cloud backend cannot call the user's `localhost`.
 
+## V1 Implementation Status
+
+The first implementation is focused on AI PR Brief with BYOK credentials and an architecture that can later support Reviu-managed AI.
+
+Implemented backend foundation:
+
+- Pro-gated AI routes under `/ai`.
+- `GET /ai/settings`, `PUT /ai/settings`, and `DELETE /ai/settings`.
+- `POST /ai/github/pr/brief`.
+- BYOK credential mode: `user_key`.
+- Providers: OpenAI and Anthropic.
+- Provider abstraction built on the AI SDK package.
+- Encrypted API key storage using `AI_CREDENTIALS_SECRET`.
+- No persisted API key hint. The backend derives `apiKeyHint` from the decrypted key when returning settings.
+- PR brief cache keyed by user, repo, PR number, head SHA, and context hash.
+- Usage events for generated briefs with provider, model, credential mode, token counts, and PR identity.
+- Structured model output validation before returning data to the client.
+
+Implemented desktop foundation:
+
+- AI settings page for BYOK provider, model, and API key.
+- API key input is masked and cleared after saving.
+- Saved key display uses `apiKeyHint` only.
+- PR Overview AI Brief panel with generate/refresh state.
+- Loading skeleton for first-generation state.
+- Brief sections: summary, review-first files, risks, and blockers.
+- Structured file targets open the PR Changes tab and select the referenced file.
+
+Current V1 behavior:
+
+- The desktop sends only PR identity and `forceRefresh`.
+- The backend fetches canonical PR details, files, commits, conversation, checks, and merge readiness.
+- The backend builds provider prompts, calls the selected model, validates JSON output, resolves file targets, caches the brief, and returns UI-ready structured JSON.
+- The response is not GFM. Links are structured targets so Reviu can navigate internally without parsing markdown links.
+
+Intentionally deferred:
+
+- Reviu-managed AI and Pro AI quotas.
+- Local LLM mode.
+- Command palette AI actions.
+- Changed-since-last-review.
+- Comment composer assistant.
+- PR description generation.
+- Usage/quota UI.
+- Provider cost dashboards and kill switches.
+
 ## Landing Copy Direction
 
 Primary message:
@@ -312,18 +358,19 @@ Better alternatives:
 
 Likely backend responsibilities:
 
-- Model/provider integration.
-- Prompt construction with scoped GitHub and diff context.
-- Subscription gating.
-- Usage limits and rate limiting.
+- Model/provider integration. V1 supports OpenAI and Anthropic through a shared provider layer.
+- Prompt construction with scoped GitHub and diff context. V1 PR Brief context is built server-side from canonical GitHub data.
+- Subscription gating. V1 AI routes are Pro-gated.
+- Usage limits and rate limiting. Still needed before Reviu-managed AI.
 - Audit-friendly logging without storing sensitive prompts unnecessarily.
-- Cache generated summaries per PR head SHA and conversation/check state.
+- Cache generated summaries per PR head SHA and conversation/check state. V1 uses PR head SHA plus a context hash.
+- Encrypted BYOK credential storage. V1 stores only the encrypted key, not a persisted key hint.
 
 Likely desktop responsibilities:
 
-- Render briefs and changed-since summaries on the PR page.
+- Render briefs and changed-since summaries on the PR page. V1 renders AI PR Brief in the PR Overview tab.
 - Add AI actions to PR, issue, and review composers.
-- Add AI state, loading, retry, and error UI.
+- Add AI state, loading, retry, and error UI. V1 includes settings state, PR brief loading skeleton, refresh, and error copy.
 - Preserve keyboard-first access through command palette actions.
 - Make generated text editable before posting.
 
