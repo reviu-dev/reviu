@@ -40,6 +40,7 @@ const envSchema = z.object({
   ASSETS_USE_MOCK: z.stringbool().default(false),
   ASSETS_MOCK_ROOT: z.string().optional(),
   ASSETS_BASE_URL: z.url().optional(),
+  AI_CREDENTIALS_SECRET: z.string().optional(),
 })
 
 export type Env = z.infer<typeof envSchema>

@@ -185,6 +185,164 @@ impl User {
   }
 }
 
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum AiProvider {
+  Openai,
+  Anthropic,
+}
+
+impl AiProvider {
+  pub fn label(self) -> &'static str {
+    match self {
+      Self::Openai => "OpenAI",
+      Self::Anthropic => "Anthropic",
+    }
+  }
+
+  pub fn default_model(self) -> &'static str {
+    match self {
+      Self::Openai => "gpt-5.4-mini",
+      Self::Anthropic => "claude-sonnet-4-6",
+    }
+  }
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AiCredentialMode {
+  UserKey,
+  ReviuManaged,
+  Local,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[allow(dead_code)]
+pub struct AiSettings {
+  pub configured: bool,
+  #[serde(default, rename = "credentialMode")]
+  pub credential_mode: Option<AiCredentialMode>,
+  #[serde(default)]
+  pub provider: Option<AiProvider>,
+  #[serde(default)]
+  pub model: Option<String>,
+  #[serde(default, rename = "apiKeyHint")]
+  pub api_key_hint: Option<String>,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+pub struct AiSettingsResponse {
+  pub settings: AiSettings,
+}
+
+#[derive(Debug, Serialize)]
+struct AiSettingsRequest<'a> {
+  provider: AiProvider,
+  #[serde(rename = "apiKey")]
+  api_key: &'a str,
+  #[serde(skip_serializing_if = "Option::is_none")]
+  model: Option<&'a str>,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum AiPrBriefPriority {
+  High,
+  Medium,
+  Low,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum AiPrBriefTargetType {
+  PrFile,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
+pub struct AiPrBriefTarget {
+  #[serde(rename = "type")]
+  pub target_type: AiPrBriefTargetType,
+  pub path: String,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+pub struct AiPrBriefReviewFirstItem {
+  pub path: String,
+  pub reason: String,
+  pub priority: AiPrBriefPriority,
+  #[serde(default)]
+  pub target: Option<AiPrBriefTarget>,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+pub struct AiPrBriefRisk {
+  pub title: String,
+  pub detail: String,
+  #[serde(default)]
+  pub path: Option<String>,
+  #[serde(default)]
+  pub target: Option<AiPrBriefTarget>,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum AiPrBriefBlockerType {
+  Check,
+  Thread,
+  Merge,
+  Draft,
+  Outdated,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[allow(dead_code)]
+pub struct AiPrBriefBlocker {
+  #[serde(rename = "type")]
+  pub blocker_type: AiPrBriefBlockerType,
+  pub label: String,
+  pub detail: String,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[allow(dead_code)]
+pub struct AiPrBrief {
+  pub summary: Vec<String>,
+  #[serde(rename = "reviewFirst")]
+  pub review_first: Vec<AiPrBriefReviewFirstItem>,
+  pub risks: Vec<AiPrBriefRisk>,
+  pub blockers: Vec<AiPrBriefBlocker>,
+  #[serde(rename = "generatedAt")]
+  pub generated_at: String,
+  pub owner: String,
+  pub repo: String,
+  #[serde(rename = "pullNumber")]
+  pub pull_number: u64,
+  #[serde(rename = "headSha")]
+  pub head_sha: String,
+  #[serde(rename = "contextHash")]
+  pub context_hash: String,
+  pub provider: AiProvider,
+  #[serde(rename = "credentialMode")]
+  pub credential_mode: AiCredentialMode,
+  pub model: String,
+  pub cached: bool,
+}
+
+#[derive(Debug, Serialize)]
+struct AiPrBriefRequest<'a> {
+  owner: &'a str,
+  repo: &'a str,
+  #[serde(rename = "pullNumber")]
+  pull_number: u64,
+  #[serde(rename = "forceRefresh")]
+  force_refresh: bool,
+}
+
+#[derive(Debug, Deserialize)]
+struct AiPrBriefResponse {
+  brief: AiPrBrief,
+}
+
 #[derive(Clone, Debug, Deserialize)]
 pub struct GithubPullRequestLabel {
   pub name: String,
@@ -1984,6 +2142,88 @@ impl ApiClient {
       anyhow::bail!("missing checkout url");
     }
     Ok(payload.url)
+  }
+
+  pub fn fetch_ai_settings(&self) -> Result<AiSettings> {
+    let response = self.authed_request(Method::GET, "/ai/settings").send()?;
+    let status = response.status();
+    Self::record_http_status("GET", "/ai/settings", status);
+    if status == StatusCode::UNAUTHORIZED {
+      anyhow::bail!("unauthorized")
+    }
+    if !status.is_success() {
+      return Err(Self::api_error_from_response(response));
+    }
+    let payload = response.json::<AiSettingsResponse>()?;
+    Ok(payload.settings)
+  }
+
+  pub fn save_ai_settings(
+    &self,
+    provider: AiProvider,
+    model: Option<&str>,
+    api_key: &str,
+  ) -> Result<AiSettings> {
+    let trimmed_model = model.map(str::trim).filter(|value| !value.is_empty());
+    let response = self
+      .authed_request(Method::PUT, "/ai/settings")
+      .json(&AiSettingsRequest {
+        provider,
+        api_key: api_key.trim(),
+        model: trimmed_model,
+      })
+      .send()?;
+    let status = response.status();
+    Self::record_http_status("PUT", "/ai/settings", status);
+    if status == StatusCode::UNAUTHORIZED {
+      anyhow::bail!("unauthorized")
+    }
+    if !status.is_success() {
+      return Err(Self::api_error_from_response(response));
+    }
+    let payload = response.json::<AiSettingsResponse>()?;
+    Ok(payload.settings)
+  }
+
+  pub fn delete_ai_settings(&self) -> Result<()> {
+    let response = self.authed_request(Method::DELETE, "/ai/settings").send()?;
+    let status = response.status();
+    Self::record_http_status("DELETE", "/ai/settings", status);
+    if status == StatusCode::UNAUTHORIZED {
+      anyhow::bail!("unauthorized")
+    }
+    if !status.is_success() {
+      return Err(Self::api_error_from_response(response));
+    }
+    Ok(())
+  }
+
+  pub fn generate_github_pr_brief(
+    &self,
+    owner: &str,
+    repo: &str,
+    number: u64,
+    force_refresh: bool,
+  ) -> Result<AiPrBrief> {
+    let response = self
+      .authed_request(Method::POST, "/ai/github/pr/brief")
+      .json(&AiPrBriefRequest {
+        owner,
+        repo,
+        pull_number: number,
+        force_refresh,
+      })
+      .send()?;
+    let status = response.status();
+    Self::record_http_status("POST", "/ai/github/pr/brief", status);
+    if status == StatusCode::UNAUTHORIZED {
+      anyhow::bail!("unauthorized")
+    }
+    if !status.is_success() {
+      return Err(Self::api_error_from_response(response));
+    }
+    let payload = response.json::<AiPrBriefResponse>()?;
+    Ok(payload.brief)
   }
 
   pub fn fetch_github_pull_requests(
@@ -7173,6 +7413,142 @@ mod tests {
       "request: {request}"
     );
     assert!(request.contains("\"redirect\":false"), "request: {request}");
+  }
+
+  #[test]
+  fn fetch_ai_settings_parses_configured_payload() {
+    let body = r#"{
+      "settings": {
+        "configured": true,
+        "credentialMode": "user_key",
+        "provider": "anthropic",
+        "model": "claude-sonnet-4-6",
+        "apiKeyHint": "sk-...1234"
+      }
+    }"#;
+    let (base_url, handle) = start_single_response_server("200 OK", body);
+    let api = make_test_api_client(base_url);
+
+    let settings = api.fetch_ai_settings().expect("ai settings");
+
+    assert!(settings.configured);
+    assert_eq!(settings.provider, Some(AiProvider::Anthropic));
+    assert_eq!(settings.credential_mode, Some(AiCredentialMode::UserKey));
+    assert_eq!(settings.model.as_deref(), Some("claude-sonnet-4-6"));
+    assert_eq!(settings.api_key_hint.as_deref(), Some("sk-...1234"));
+    handle.join().expect("join server thread");
+  }
+
+  #[test]
+  fn save_ai_settings_puts_expected_payload() {
+    let body = r#"{
+      "settings": {
+        "configured": true,
+        "credentialMode": "user_key",
+        "provider": "openai",
+        "model": "gpt-5.4-mini",
+        "apiKeyHint": "sk-...abcd"
+      }
+    }"#;
+    let (base_url, request, handle) = start_single_response_server_with_request("200 OK", body);
+    let api = make_test_api_client(base_url);
+
+    let settings = api
+      .save_ai_settings(AiProvider::Openai, Some("gpt-5.4-mini"), "sk-test")
+      .expect("save ai settings");
+
+    assert!(settings.configured);
+    handle.join().expect("join server thread");
+    let request = request
+      .lock()
+      .expect("lock request")
+      .clone()
+      .unwrap_or_default();
+    assert!(request.contains("PUT /ai/settings "), "request: {request}");
+    assert!(
+      request.contains("\"provider\":\"openai\""),
+      "request: {request}"
+    );
+    assert!(
+      request.contains("\"apiKey\":\"sk-test\""),
+      "request: {request}"
+    );
+    assert!(
+      request.contains("\"model\":\"gpt-5.4-mini\""),
+      "request: {request}"
+    );
+  }
+
+  #[test]
+  fn generate_github_pr_brief_posts_pr_identity_and_parses_brief() {
+    let body = r#"{
+      "brief": {
+        "summary": ["Touches parser and test coverage."],
+        "reviewFirst": [{
+          "path": "src/parser.rs",
+          "reason": "Core behavior changed.",
+          "priority": "high",
+          "target": { "type": "pr_file", "path": "src/parser.rs" }
+        }],
+        "risks": [{
+          "title": "Parser regression",
+          "detail": "Fallback handling changed.",
+          "path": "src/parser.rs",
+          "target": { "type": "pr_file", "path": "src/parser.rs" }
+        }],
+        "blockers": [{
+          "type": "check",
+          "label": "CI failed",
+          "detail": "Unit tests are failing."
+        }],
+        "generatedAt": "2026-05-05T18:00:00.000Z",
+        "owner": "acme",
+        "repo": "widget",
+        "pullNumber": 42,
+        "headSha": "deadbeef",
+        "contextHash": "hash",
+        "provider": "openai",
+        "credentialMode": "user_key",
+        "model": "gpt-5.4-mini",
+        "cached": false
+      }
+    }"#;
+    let (base_url, request, handle) = start_single_response_server_with_request("200 OK", body);
+    let api = make_test_api_client(base_url);
+
+    let brief = api
+      .generate_github_pr_brief("acme", "widget", 42, false)
+      .expect("generate brief");
+
+    assert_eq!(brief.summary, vec!["Touches parser and test coverage."]);
+    assert_eq!(brief.review_first[0].priority, AiPrBriefPriority::High);
+    assert_eq!(
+      brief.review_first[0]
+        .target
+        .as_ref()
+        .map(|target| target.path.as_str()),
+      Some("src/parser.rs")
+    );
+    handle.join().expect("join server thread");
+    let request = request
+      .lock()
+      .expect("lock request")
+      .clone()
+      .unwrap_or_default();
+    assert!(
+      request.contains("POST /ai/github/pr/brief "),
+      "request: {request}"
+    );
+    assert!(request.contains("\"owner\":\"acme\""), "request: {request}");
+    assert!(
+      request.contains("\"repo\":\"widget\""),
+      "request: {request}"
+    );
+    assert!(request.contains("\"pullNumber\":42"), "request: {request}");
+    assert!(
+      request.contains("\"forceRefresh\":false"),
+      "request: {request}"
+    );
   }
 
   #[test]

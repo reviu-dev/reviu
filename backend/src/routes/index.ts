@@ -1,6 +1,7 @@
 import type { Hono } from 'hono'
 
 import { adminRoutes } from './admin.js'
+import { aiRoutes } from './ai.js'
 import { assetsRoutes } from './assets.js'
 import { authRoutes } from './auth.js'
 import { crashReportRoutes } from './crash_reports.js'
@@ -12,6 +13,7 @@ import { userRoutes } from './user.js'
 
 export function routes(app: Hono) {
   app.route('/admin', adminRoutes)
+  app.route('/ai', aiRoutes)
   app.route('/assets', assetsRoutes)
   app.route('/auth', authRoutes)
   app.route('/crash-reports', crashReportRoutes)

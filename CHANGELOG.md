@@ -4,6 +4,10 @@ All notable changes to Reviu are documented here.
 
 ## 0.10.0
 
+### AI Pull Request Briefs
+
+Reviu Pro can now connect to a user-provided OpenAI or Anthropic key and generate a concise AI brief from a GitHub pull request overview. The brief highlights the summary, files to review first, risks, and blockers, with file links that open directly in the PR changes view.
+
 ### Edit Commits Now Handles Merge Commits
 
 Edit Commits no longer refuses to start when the selected range contains merge commits. Reviu shows a confirmation dialog telling you how many merges will be dropped, then continues like `git rebase -i` does on the command line.
