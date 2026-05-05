@@ -10816,44 +10816,40 @@ impl GithubPrDetailsPage {
               .rounded(theme.radius),
           ),
       )
-      .child(
-        v_flex()
-          .gap_2()
-          .children((0..3).map(|ix| {
-            h_flex()
-              .items_center()
-              .gap_3()
-              .p_2()
-              .rounded(theme.radius)
-              .bg(theme.muted.opacity(0.35))
+      .child(v_flex().gap_2().children((0..3).map(|ix| {
+        h_flex()
+          .items_center()
+          .gap_3()
+          .p_2()
+          .rounded(theme.radius)
+          .bg(theme.muted.opacity(0.35))
+          .child(
+            v_flex()
+              .flex_1()
+              .gap_2()
               .child(
-                v_flex()
-                  .flex_1()
-                  .gap_2()
-                  .child(
-                    Skeleton::new()
-                      .w(px(if ix == 0 { 220.0 } else { 180.0 }))
-                      .h(px(13.0))
-                      .rounded(theme.radius),
-                  )
-                  .child(
-                    Skeleton::new()
-                      .w_full()
-                      .max_w(px(if ix == 1 { 500.0 } else { 430.0 }))
-                      .h(px(12.0))
-                      .rounded(theme.radius)
-                      .secondary(),
-                  ),
+                Skeleton::new()
+                  .w(px(if ix == 0 { 220.0 } else { 180.0 }))
+                  .h(px(13.0))
+                  .rounded(theme.radius),
               )
               .child(
                 Skeleton::new()
-                  .w(px(44.0))
+                  .w_full()
+                  .max_w(px(if ix == 1 { 500.0 } else { 430.0 }))
                   .h(px(12.0))
                   .rounded(theme.radius)
                   .secondary(),
-              )
-          })),
-      )
+              ),
+          )
+          .child(
+            Skeleton::new()
+              .w(px(44.0))
+              .h(px(12.0))
+              .rounded(theme.radius)
+              .secondary(),
+          )
+      })))
       .into_any_element()
   }
 
@@ -10923,9 +10919,7 @@ impl GithubPrDetailsPage {
       )
       .when(
         self.ai_pr_brief_loading && self.ai_pr_brief.is_none(),
-        |this| {
-          this.child(Self::render_ai_pr_brief_skeleton(&theme))
-        },
+        |this| this.child(Self::render_ai_pr_brief_skeleton(&theme)),
       )
       .when_some(self.ai_pr_brief_error.clone(), |this, error| {
         this.child(div().text_sm().text_color(theme.status_red()).child(error))
@@ -10978,6 +10972,7 @@ impl GithubPrDetailsPage {
                     .child(
                       v_flex()
                         .min_w_0()
+                        .items_start()
                         .gap_1()
                         .child(Self::render_ai_pr_brief_path_button(
                           format!("github-pr-ai-review-first-{ix}"),
