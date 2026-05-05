@@ -73,11 +73,12 @@ use crate::{
   ShowCommandPalette, ShowFileSearch,
   active_local_repo::{ActiveLocalRepo, ActiveLocalRepoStore},
   api::{
-    ApiClient, ApiError, GithubIssueDetailsComment, GithubIssueReferenceTargetKind,
-    GithubPullRequestChecksRollupState, GithubPullRequestChecksSummary, GithubPullRequestCommit,
-    GithubPullRequestConversation, GithubPullRequestDescriptionUpdate, GithubPullRequestDetails,
-    GithubPullRequestFile, GithubPullRequestIssueComment, GithubPullRequestIssueCommentUser,
-    GithubPullRequestLabel, GithubPullRequestMergeMethod, GithubPullRequestMergeReadiness,
+    AiPrBrief, AiPrBriefPriority, AiPrBriefTarget, ApiClient, ApiError, GithubIssueDetailsComment,
+    GithubIssueReferenceTargetKind, GithubPullRequestChecksRollupState,
+    GithubPullRequestChecksSummary, GithubPullRequestCommit, GithubPullRequestConversation,
+    GithubPullRequestDescriptionUpdate, GithubPullRequestDetails, GithubPullRequestFile,
+    GithubPullRequestIssueComment, GithubPullRequestIssueCommentUser, GithubPullRequestLabel,
+    GithubPullRequestMergeMethod, GithubPullRequestMergeReadiness,
     GithubPullRequestMergeReadinessStatus, GithubPullRequestMergeResult, GithubPullRequestReview,
     GithubPullRequestReviewComment, GithubPullRequestReviewEvent, GithubPullRequestReviewState,
     GithubPullRequestState, GithubReactionContent, GithubReactionGroup, GithubRepository,
@@ -2709,6 +2710,10 @@ pub struct GithubPrDetailsPage {
   status_action_loading: bool,
   update_branch_task: Option<Task<()>>,
   update_branch_loading: bool,
+  ai_pr_brief_task: Option<Task<()>>,
+  ai_pr_brief_loading: bool,
+  ai_pr_brief_error: Option<SharedString>,
+  ai_pr_brief: Option<AiPrBrief>,
   review_input: Entity<InputState>,
   review_decision: GithubPrReviewDecision,
   review_popover_open: bool,
@@ -3278,6 +3283,10 @@ impl GithubPrDetailsPage {
       status_action_loading: false,
       update_branch_task: None,
       update_branch_loading: false,
+      ai_pr_brief_task: None,
+      ai_pr_brief_loading: false,
+      ai_pr_brief_error: None,
+      ai_pr_brief: None,
       review_input,
       review_decision: GithubPrReviewDecision::default(),
       review_popover_open: false,
@@ -4911,6 +4920,66 @@ impl GithubPrDetailsPage {
     });
 
     self.checks_task = Some(task);
+  }
+
+  fn ai_pr_brief_error_message(error: &anyhow::Error) -> SharedString {
+    match error
+      .downcast_ref::<ApiError>()
+      .and_then(ApiError::status_code_u16)
+    {
+      Some(403) => "Reviu Pro is required to generate AI pull request briefs.".into(),
+      Some(409) => {
+        "Configure an AI provider and API key in Settings before generating a brief.".into()
+      }
+      _ => error.to_string().into(),
+    }
+  }
+
+  fn load_ai_pr_brief(&mut self, force_refresh: bool, cx: &mut Context<Self>) {
+    let Some(context) = self.current_pr_context.as_ref().cloned() else {
+      self.ai_pr_brief_error = Some("No pull request selected.".into());
+      cx.notify();
+      return;
+    };
+    if self.ai_pr_brief_loading {
+      return;
+    }
+
+    self.ai_pr_brief_loading = true;
+    self.ai_pr_brief_error = None;
+    if force_refresh {
+      self.ai_pr_brief = None;
+    }
+
+    let api = self.api.clone();
+    let owner = context.owner;
+    let repo = context.repo;
+    let number = context.number;
+    let task = cx.spawn(async move |this, cx| {
+      let result =
+        unblock(move || api.generate_github_pr_brief(&owner, &repo, number, force_refresh)).await;
+
+      let _ = this.update(cx, |this, cx| {
+        this.ai_pr_brief_loading = false;
+        match result {
+          Ok(brief) => {
+            this.ai_pr_brief = Some(brief);
+            this.ai_pr_brief_error = None;
+            this.add_pr_breadcrumb("AI PR brief generated", Map::new());
+          }
+          Err(error) => {
+            let error_message = error.to_string();
+            this.ai_pr_brief_error = Some(Self::ai_pr_brief_error_message(&error));
+            this.add_pr_breadcrumb("AI PR brief generation failed", Map::new());
+            this.record_pr_error("github.pr.ai_brief", error_message.as_str(), Map::new());
+          }
+        }
+        this.ai_pr_brief_task = None;
+        cx.notify();
+      });
+    });
+
+    self.ai_pr_brief_task = Some(task);
   }
 
   fn fetch_merge_readiness_for_context(
@@ -9477,6 +9546,10 @@ impl GithubPrDetailsPage {
     self.status_action_loading = false;
     self.update_branch_task = None;
     self.update_branch_loading = false;
+    self.ai_pr_brief_task = None;
+    self.ai_pr_brief_loading = false;
+    self.ai_pr_brief_error = None;
+    self.ai_pr_brief = None;
     self.mark_merge_form_reset_pending();
     self.review_popover_open = false;
     self.mark_review_form_reset_pending();
@@ -10674,6 +10747,342 @@ impl GithubPrDetailsPage {
         )
         .into_any_element(),
     )
+  }
+
+  fn open_ai_pr_brief_path(&mut self, path: &str, window: &mut Window, cx: &mut Context<Self>) {
+    self.saved_pr_selected_tree_id = Some(path.to_string());
+    if self.active_tab_ix != PR_TAB_CHANGES_IX {
+      self.set_active_tab(PR_TAB_CHANGES_IX, window, cx);
+    }
+    if self.file_lookup.contains_key(path) {
+      self.select_visible_tree_path(path, cx);
+    }
+  }
+
+  fn ai_priority_label(priority: AiPrBriefPriority) -> &'static str {
+    match priority {
+      AiPrBriefPriority::High => "High",
+      AiPrBriefPriority::Medium => "Medium",
+      AiPrBriefPriority::Low => "Low",
+    }
+  }
+
+  fn ai_priority_color(priority: AiPrBriefPriority, theme: &gpui_component::Theme) -> Hsla {
+    match priority {
+      AiPrBriefPriority::High => theme.status_red(),
+      AiPrBriefPriority::Medium => theme.status_yellow(),
+      AiPrBriefPriority::Low => theme.muted_foreground,
+    }
+  }
+
+  fn render_ai_pr_brief_path_button(
+    id: String,
+    target: Option<AiPrBriefTarget>,
+    fallback_path: String,
+    cx: &mut Context<Self>,
+  ) -> AnyElement {
+    let path = target
+      .as_ref()
+      .map(|target| target.path.clone())
+      .unwrap_or(fallback_path);
+    Button::new(id)
+      .small()
+      .ghost()
+      .label(path.clone())
+      .on_click(cx.listener(move |this, _, window, cx| {
+        this.open_ai_pr_brief_path(path.as_str(), window, cx);
+      }))
+      .into_any_element()
+  }
+
+  fn render_ai_pr_brief_skeleton(theme: &gpui_component::Theme) -> AnyElement {
+    v_flex()
+      .gap_3()
+      .child(
+        v_flex()
+          .gap_2()
+          .child(
+            Skeleton::new()
+              .w_full()
+              .max_w(px(520.0))
+              .h(px(14.0))
+              .rounded(theme.radius),
+          )
+          .child(
+            Skeleton::new()
+              .w_full()
+              .max_w(px(420.0))
+              .h(px(14.0))
+              .rounded(theme.radius),
+          ),
+      )
+      .child(
+        v_flex()
+          .gap_2()
+          .children((0..3).map(|ix| {
+            h_flex()
+              .items_center()
+              .gap_3()
+              .p_2()
+              .rounded(theme.radius)
+              .bg(theme.muted.opacity(0.35))
+              .child(
+                v_flex()
+                  .flex_1()
+                  .gap_2()
+                  .child(
+                    Skeleton::new()
+                      .w(px(if ix == 0 { 220.0 } else { 180.0 }))
+                      .h(px(13.0))
+                      .rounded(theme.radius),
+                  )
+                  .child(
+                    Skeleton::new()
+                      .w_full()
+                      .max_w(px(if ix == 1 { 500.0 } else { 430.0 }))
+                      .h(px(12.0))
+                      .rounded(theme.radius)
+                      .secondary(),
+                  ),
+              )
+              .child(
+                Skeleton::new()
+                  .w(px(44.0))
+                  .h(px(12.0))
+                  .rounded(theme.radius)
+                  .secondary(),
+              )
+          })),
+      )
+      .into_any_element()
+  }
+
+  fn render_ai_pr_brief_section(&self, cx: &mut Context<Self>) -> AnyElement {
+    let theme = cx.theme().clone();
+    let force_refresh = self.ai_pr_brief.is_some();
+    let action_label = if self.ai_pr_brief_loading {
+      if force_refresh {
+        "Refreshing..."
+      } else {
+        "Generating..."
+      }
+    } else if force_refresh {
+      "Refresh"
+    } else {
+      "Generate"
+    };
+
+    v_flex()
+      .id("github-pr-ai-brief")
+      .w_full()
+      .gap_3()
+      .border_1()
+      .border_color(theme.border)
+      .rounded(theme.radius_lg)
+      .p_3()
+      .child(
+        h_flex()
+          .items_center()
+          .justify_between()
+          .gap_3()
+          .child(
+            h_flex()
+              .min_w_0()
+              .items_center()
+              .gap_2()
+              .child(
+                Icon::new(IconName::Bot)
+                  .size_4()
+                  .text_color(theme.accent_foreground),
+              )
+              .child(
+                div()
+                  .font_medium()
+                  .text_color(theme.foreground)
+                  .child("AI Brief"),
+              )
+              .when_some(self.ai_pr_brief.as_ref(), |this, brief| {
+                this.child(
+                  div()
+                    .text_xs()
+                    .text_color(theme.muted_foreground)
+                    .child(if brief.cached { "Cached" } else { "New" }),
+                )
+              }),
+          )
+          .child(
+            Button::new("github-pr-ai-brief-generate")
+              .small()
+              .outline()
+              .label(action_label)
+              .disabled(self.ai_pr_brief_loading)
+              .on_click(cx.listener(move |this, _, _, cx| {
+                this.load_ai_pr_brief(force_refresh, cx);
+              })),
+          ),
+      )
+      .when(
+        self.ai_pr_brief_loading && self.ai_pr_brief.is_none(),
+        |this| {
+          this.child(Self::render_ai_pr_brief_skeleton(&theme))
+        },
+      )
+      .when_some(self.ai_pr_brief_error.clone(), |this, error| {
+        this.child(div().text_sm().text_color(theme.status_red()).child(error))
+      })
+      .when(
+        self.ai_pr_brief.is_none() && !self.ai_pr_brief_loading,
+        |this| {
+          this.child(
+            div()
+              .text_sm()
+              .text_color(theme.muted_foreground)
+              .child("Generate a concise review brief from the pull request context."),
+          )
+        },
+      )
+      .when_some(self.ai_pr_brief.clone(), |this, brief| {
+        this
+          .child(v_flex().gap_1().children(brief.summary.iter().map(|item| {
+            h_flex()
+              .items_start()
+              .gap_2()
+              .text_sm()
+              .text_color(theme.foreground)
+              .child(
+                div()
+                  .pt(px(7.0))
+                  .child(div().size(px(5.0)).rounded_full().bg(theme.border)),
+              )
+              .child(div().min_w_0().child(item.clone()))
+          })))
+          .when(!brief.review_first.is_empty(), |this| {
+            this.child(
+              v_flex()
+                .gap_2()
+                .child(
+                  div()
+                    .text_xs()
+                    .font_medium()
+                    .text_color(theme.muted_foreground)
+                    .child("Review first"),
+                )
+                .children(brief.review_first.iter().enumerate().map(|(ix, item)| {
+                  h_flex()
+                    .items_start()
+                    .justify_between()
+                    .gap_3()
+                    .p_2()
+                    .rounded(theme.radius)
+                    .bg(theme.muted.opacity(0.35))
+                    .child(
+                      v_flex()
+                        .min_w_0()
+                        .gap_1()
+                        .child(Self::render_ai_pr_brief_path_button(
+                          format!("github-pr-ai-review-first-{ix}"),
+                          item.target.clone(),
+                          item.path.clone(),
+                          cx,
+                        ))
+                        .child(
+                          div()
+                            .text_sm()
+                            .text_color(theme.muted_foreground)
+                            .child(item.reason.clone()),
+                        ),
+                    )
+                    .child(
+                      div()
+                        .flex_shrink_0()
+                        .text_xs()
+                        .text_color(Self::ai_priority_color(item.priority, &theme))
+                        .child(Self::ai_priority_label(item.priority)),
+                    )
+                })),
+            )
+          })
+          .when(!brief.risks.is_empty(), |this| {
+            this.child(
+              v_flex()
+                .gap_2()
+                .child(
+                  div()
+                    .text_xs()
+                    .font_medium()
+                    .text_color(theme.muted_foreground)
+                    .child("Risks"),
+                )
+                .children(brief.risks.iter().enumerate().map(|(ix, risk)| {
+                  v_flex()
+                    .gap_1()
+                    .p_2()
+                    .rounded(theme.radius)
+                    .bg(theme.muted.opacity(0.35))
+                    .child(
+                      h_flex()
+                        .items_center()
+                        .gap_2()
+                        .child(
+                          div()
+                            .font_medium()
+                            .text_sm()
+                            .text_color(theme.foreground)
+                            .child(risk.title.clone()),
+                        )
+                        .when_some(risk.target.clone(), |this, target| {
+                          this.child(Self::render_ai_pr_brief_path_button(
+                            format!("github-pr-ai-risk-{ix}"),
+                            Some(target),
+                            risk.path.clone().unwrap_or_default(),
+                            cx,
+                          ))
+                        }),
+                    )
+                    .child(
+                      div()
+                        .text_sm()
+                        .text_color(theme.muted_foreground)
+                        .child(risk.detail.clone()),
+                    )
+                })),
+            )
+          })
+          .when(!brief.blockers.is_empty(), |this| {
+            this.child(
+              v_flex()
+                .gap_2()
+                .child(
+                  div()
+                    .text_xs()
+                    .font_medium()
+                    .text_color(theme.muted_foreground)
+                    .child("Blockers"),
+                )
+                .children(brief.blockers.iter().map(|blocker| {
+                  v_flex()
+                    .gap_1()
+                    .p_2()
+                    .rounded(theme.radius)
+                    .bg(theme.muted.opacity(0.35))
+                    .child(
+                      div()
+                        .font_medium()
+                        .text_sm()
+                        .text_color(theme.foreground)
+                        .child(blocker.label.clone()),
+                    )
+                    .child(
+                      div()
+                        .text_sm()
+                        .text_color(theme.muted_foreground)
+                        .child(blocker.detail.clone()),
+                    )
+                })),
+            )
+          })
+      })
+      .into_any_element()
   }
 
   fn render_overview_status_section(&self, cx: &mut Context<Self>) -> AnyElement {
@@ -14078,6 +14487,7 @@ impl GithubPrDetailsPage {
       .when_some(self.render_review_requested_alert(cx), |this, alert| {
         this.child(alert)
       })
+      .child(self.render_ai_pr_brief_section(cx))
       .child(self.render_overview_status_section(cx));
 
     let timeline_items = build_overview_timeline_items(
