@@ -17,34 +17,47 @@ export const aiPrBriefBodySchema = z.object({
   forceRefresh: z.boolean().optional().default(false),
 })
 
+const aiPrBriefTargetSchema = z.object({
+  type: z.literal('pr_file'),
+  path: z.string().trim().min(1),
+})
+
+const aiPrBriefBlockerSchema = z.object({
+  type: z.enum(['check', 'thread', 'merge', 'draft', 'outdated']),
+  label: z.string().trim().min(1),
+  detail: z.string().trim().min(1),
+})
+
 export const aiPrBriefModelOutputSchema = z.object({
   summary: z.array(z.string().trim().min(1)).min(1).max(4),
   reviewFirst: z.array(z.object({
     path: z.string().trim().min(1),
     reason: z.string().trim().min(1),
     priority: aiBriefPrioritySchema,
-    target: z.object({
-      type: z.literal('pr_file'),
-      path: z.string().trim().min(1),
-    }).optional(),
+  })).max(6),
+  risks: z.array(z.object({
+    title: z.string().trim().min(1),
+    detail: z.string().trim().min(1),
+    path: z.string().trim().min(1).nullable(),
+  })).max(6),
+  blockers: z.array(aiPrBriefBlockerSchema).max(6),
+})
+
+export const aiPrBriefSchema = z.object({
+  summary: z.array(z.string().trim().min(1)).min(1).max(4),
+  reviewFirst: z.array(z.object({
+    path: z.string().trim().min(1),
+    reason: z.string().trim().min(1),
+    priority: aiBriefPrioritySchema,
+    target: aiPrBriefTargetSchema.optional(),
   })).max(6),
   risks: z.array(z.object({
     title: z.string().trim().min(1),
     detail: z.string().trim().min(1),
     path: z.string().trim().min(1).nullable().optional(),
-    target: z.object({
-      type: z.literal('pr_file'),
-      path: z.string().trim().min(1),
-    }).nullable().optional(),
+    target: aiPrBriefTargetSchema.nullable().optional(),
   })).max(6),
-  blockers: z.array(z.object({
-    type: z.enum(['check', 'thread', 'merge', 'draft', 'outdated']),
-    label: z.string().trim().min(1),
-    detail: z.string().trim().min(1),
-  })).max(6),
-})
-
-export const aiPrBriefSchema = aiPrBriefModelOutputSchema.extend({
+  blockers: z.array(aiPrBriefBlockerSchema).max(6),
   generatedAt: z.iso.datetime(),
   owner: z.string(),
   repo: z.string(),

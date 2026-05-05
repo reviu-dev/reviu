@@ -6,7 +6,7 @@ import type {
   PullRequestDetailsResponse,
   PullRequestFileResponse,
 } from '../github/types.js'
-import type { AiCredentialMode, AiPrBrief, AiProvider, AiSettingsBody } from './schemas.js'
+import type { AiCredentialMode, AiPrBrief, AiPrBriefModelOutput, AiProvider, AiSettingsBody } from './schemas.js'
 import { createHash, randomUUID } from 'node:crypto'
 import { and, desc, eq } from 'drizzle-orm'
 import { db } from '../../db/index.js'
@@ -227,7 +227,7 @@ function summarizeMergeReadiness(mergeReadiness: GithubPullRequestMergeReadiness
 }
 
 function resolveModelReferences(
-  output: Omit<AiPrBrief, 'generatedAt' | 'owner' | 'repo' | 'pullNumber' | 'headSha' | 'contextHash' | 'provider' | 'credentialMode' | 'model' | 'cached'>,
+  output: AiPrBriefModelOutput,
   files: PullRequestFileResponse[],
 ) {
   const validPaths = new Set(files.flatMap(file => [file.filename, file.previous_filename].filter(Boolean) as string[]))
