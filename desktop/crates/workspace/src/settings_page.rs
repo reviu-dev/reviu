@@ -7,10 +7,11 @@ use gpui::{
 };
 
 use gpui_component::{
-  ActiveTheme as _, Disableable, IconName, Selectable, Sizable, Size, Theme, ThemeMode,
+  ActiveTheme as _, Disableable, IconName, IndexPath, Selectable, Sizable, Size, Theme, ThemeMode,
   button::{Button, ButtonVariants},
   h_flex,
   kbd::Kbd,
+  select::{Select, SelectState},
   setting::{NumberFieldOptions, SettingField, SettingGroup, SettingItem, SettingPage, Settings},
   v_flex,
 };
@@ -25,7 +26,7 @@ use ui::{
 use crate::{
   CloseWorkspacePage, ShowCommandPalette,
   api::{AiProvider, AiSettings, ApiClient},
-  auth_state::AuthStateStore,
+  auth_state::{AuthState, AuthStateStore},
   config::{AppSettings as PersistedSettings, CloneProtocol},
   github_navigation::{open_commit_target, open_pr_target, open_profile_target, open_repo_target},
   github_page::GithubPageHandle,
@@ -58,7 +59,7 @@ pub struct SettingsPage {
   shortcut_error: Option<ShortcutCaptureError>,
   api: ApiClient,
   ai_provider: AiProvider,
-  ai_model_input: gpui::Entity<InputState>,
+  ai_model_select: gpui::Entity<SelectState<Vec<SharedString>>>,
   ai_api_key_input: gpui::Entity<InputState>,
   ai_configured: bool,
   ai_api_key_hint: Option<SharedString>,
@@ -68,6 +69,7 @@ pub struct SettingsPage {
   ai_settings_error: Option<SharedString>,
   ai_settings_notice: Option<SharedString>,
   ai_settings_task: Option<Task<()>>,
+  ai_settings_loaded: bool,
   size: Size,
   _subscriptions: Vec<Subscription>,
 }
@@ -80,10 +82,14 @@ impl SettingsPage {
         view.handle_shortcut_capture(event, window, cx);
       });
     });
-    let ai_model_input = cx.new(|cx| {
-      InputState::new(window, cx)
-        .placeholder("Model")
-        .default_value(AiProvider::Openai.default_model())
+    let initial_provider = AiProvider::Openai;
+    let ai_model_select = cx.new(|cx| {
+      SelectState::new(
+        provider_model_items(initial_provider),
+        provider_default_model_index(initial_provider),
+        window,
+        cx,
+      )
     });
     let ai_api_key_input = cx.new(|cx| {
       InputState::new(window, cx)
@@ -104,8 +110,8 @@ impl SettingsPage {
       shortcut_recording: None,
       shortcut_error: None,
       api: WorkspaceApi::global(cx).api.clone(),
-      ai_provider: AiProvider::Openai,
-      ai_model_input,
+      ai_provider: initial_provider,
+      ai_model_select,
       ai_api_key_input,
       ai_configured: false,
       ai_api_key_hint: None,
@@ -115,10 +121,15 @@ impl SettingsPage {
       ai_settings_error: None,
       ai_settings_notice: None,
       ai_settings_task: None,
+      ai_settings_loaded: false,
       size: Size::default(),
       _subscriptions: vec![shortcut_capture_subscription],
     };
-    this.load_ai_settings(cx);
+    let auth_subscription = cx.observe_global::<AuthStateStore>(|this, cx| {
+      this.load_ai_settings_if_authenticated(cx);
+    });
+    this._subscriptions.push(auth_subscription);
+    this.load_ai_settings_if_authenticated(cx);
     this
   }
 
@@ -131,16 +142,28 @@ impl SettingsPage {
     if let Some(provider) = settings.provider {
       self.ai_provider = provider;
     }
-    let model = settings
+    let model: SharedString = settings
       .model
-      .unwrap_or_else(|| self.ai_provider.default_model().to_string());
-    self
-      .ai_model_input
-      .update(cx, |input, cx| input.set_value(model, window, cx));
+      .unwrap_or_else(|| self.ai_provider.default_model().to_string())
+      .into();
+    self.ai_model_select.update(cx, |select, cx| {
+      select.set_items(provider_model_items(self.ai_provider), window, cx);
+      select.set_selected_value(&model, window, cx);
+    });
     self
       .ai_api_key_input
       .update(cx, |input, cx| input.set_value("", window, cx));
     self.ai_api_key_hint = settings.api_key_hint.map(Into::into);
+  }
+
+  fn load_ai_settings_if_authenticated(&mut self, cx: &mut Context<Self>) {
+    if self.ai_settings_loaded || self.ai_settings_loading {
+      return;
+    }
+    if !matches!(AuthStateStore::get(cx), AuthState::Authenticated(_)) {
+      return;
+    }
+    self.load_ai_settings(cx);
   }
 
   fn load_ai_settings(&mut self, cx: &mut Context<Self>) {
@@ -157,6 +180,7 @@ impl SettingsPage {
         this.ai_settings_loading = false;
         match result {
           Ok(settings) => {
+            this.ai_settings_loaded = true;
             let window_handle = this.window_handle;
             let _ = cx.update_window(window_handle, |_, window, cx| {
               this.apply_ai_settings(settings, window, cx);
@@ -180,19 +204,16 @@ impl SettingsPage {
       return;
     }
 
-    let previous_default = self.ai_provider.default_model();
-    let current_model = self.ai_model_input.read(cx).value();
     self.ai_provider = provider;
-    if current_model.trim().is_empty() || current_model.as_ref() == previous_default {
-      self.ai_model_input.update(cx, |input, cx| {
-        input.set_value(provider.default_model(), window, cx)
-      });
-    }
+    self.ai_model_select.update(cx, |select, cx| {
+      select.set_items(provider_model_items(provider), window, cx);
+      select.set_selected_index(provider_default_model_index(provider), window, cx);
+    });
     self.ai_settings_notice = None;
     cx.notify();
   }
 
-  fn save_ai_settings(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+  fn save_ai_settings(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
     if self.ai_settings_saving {
       return;
     }
@@ -205,15 +226,12 @@ impl SettingsPage {
       return;
     }
 
-    let model = self.ai_model_input.read(cx).value().trim().to_string();
-    let model = if model.is_empty() {
-      self.ai_provider.default_model().to_string()
-    } else {
-      model
-    };
-    self
-      .ai_model_input
-      .update(cx, |input, cx| input.set_value(model.clone(), window, cx));
+    let model = self
+      .ai_model_select
+      .read(cx)
+      .selected_value()
+      .map(|value| value.to_string())
+      .unwrap_or_else(|| self.ai_provider.default_model().to_string());
 
     self.ai_settings_saving = true;
     self.ai_settings_error = None;
@@ -512,15 +530,15 @@ impl SettingsPage {
           SettingField::render({
             let view = view.clone();
             move |_, _, cx| {
-              let input = view.read(cx).ai_model_input.clone();
+              let select = view.read(cx).ai_model_select.clone();
               div()
                 .w(px(280.0))
-                .child(Input::new(&input).w_full())
+                .child(Select::new(&select).w_full())
                 .into_any_element()
             }
           }),
         )
-        .description("Leave the default unless you want to pin a specific model."),
+        .description("Pick which model Reviu calls for AI features."),
         SettingItem::new(
           "API Key",
           SettingField::render({
@@ -533,7 +551,7 @@ impl SettingsPage {
                 .w(px(280.0))
                 .flex()
                 .flex_col()
-                .items_end()
+                .items_start()
                 .gap_1()
                 .child(Input::new(&input).w_full().mask_toggle())
                 .when_some(hint, |this, hint| {
@@ -1158,6 +1176,23 @@ impl Render for SettingsPage {
           .pages(self.setting_pages(window, cx)),
       )
   }
+}
+
+fn provider_model_items(provider: AiProvider) -> Vec<SharedString> {
+  provider
+    .available_models()
+    .iter()
+    .map(|name| SharedString::from(*name))
+    .collect()
+}
+
+fn provider_default_model_index(provider: AiProvider) -> Option<IndexPath> {
+  let default = provider.default_model();
+  provider
+    .available_models()
+    .iter()
+    .position(|name| *name == default)
+    .map(|row| IndexPath::default().row(row))
 }
 
 impl Focusable for SettingsPage {
