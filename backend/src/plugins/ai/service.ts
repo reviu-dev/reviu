@@ -322,6 +322,37 @@ export async function deleteAiSettings(userId: string) {
   await db.delete(aiUserSetting).where(eq(aiUserSetting.userId, userId))
 }
 
+export async function getLatestPrBrief(
+  userId: string,
+  owner: string,
+  repo: string,
+  pullNumber: number,
+): Promise<AiPrBrief | null> {
+  const normalizedOwner = normalizeOwnerRepo(owner)
+  const normalizedRepo = normalizeOwnerRepo(repo)
+  const row = await db.query.aiPrBrief.findFirst({
+    where: and(
+      eq(aiPrBrief.userId, userId),
+      eq(aiPrBrief.owner, normalizedOwner),
+      eq(aiPrBrief.repo, normalizedRepo),
+      eq(aiPrBrief.pullNumber, pullNumber),
+    ),
+    orderBy: desc(aiPrBrief.createdAt),
+  })
+
+  if (!row) {
+    return null
+  }
+
+  return aiPrBriefSchema.parse({
+    ...(row.briefJson as object),
+    provider: row.provider,
+    credentialMode: row.credentialMode,
+    model: row.model,
+    cached: true,
+  })
+}
+
 async function loadCachedBrief(
   userId: string,
   owner: string,

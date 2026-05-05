@@ -17,6 +17,12 @@ export const aiPrBriefBodySchema = z.object({
   forceRefresh: z.boolean().optional().default(false),
 })
 
+export const aiPrBriefQuerySchema = z.object({
+  owner: z.string().trim().min(1),
+  repo: z.string().trim().min(1),
+  pullNumber: z.coerce.number().int().positive(),
+})
+
 const aiPrBriefTargetSchema = z.object({
   type: z.literal('pr_file'),
   path: z.string().trim().min(1),

@@ -4627,6 +4627,7 @@ impl GithubPrDetailsPage {
     if should_refresh_pr_overview_data(self.active_tab_ix) {
       self.refresh_pull_request_conversation_for_current_pull_request(true, cx);
       self.refresh_review_people_options_for_current_context(cx);
+      self.reload_ai_pr_brief_for_current_context(cx);
     }
 
     if should_refresh_pr_changes_data(self.active_tab_ix) {
@@ -4933,6 +4934,44 @@ impl GithubPrDetailsPage {
       }
       _ => error.to_string().into(),
     }
+  }
+
+  fn reload_ai_pr_brief_for_current_context(&mut self, cx: &mut Context<Self>) {
+    let Some(context) = self.current_pr_context.as_ref().cloned() else {
+      return;
+    };
+    if self.ai_pr_brief_loading {
+      return;
+    }
+
+    let api = self.api.clone();
+    let owner = context.owner;
+    let repo = context.repo;
+    let number = context.number;
+    let task = cx.spawn(async move |this, cx| {
+      let result = unblock(move || api.fetch_latest_github_pr_brief(&owner, &repo, number)).await;
+
+      let _ = this.update(cx, |this, cx| {
+        match result {
+          Ok(Some(brief)) => {
+            this.ai_pr_brief = Some(brief);
+            this.ai_pr_brief_error = None;
+          }
+          Ok(None) => {}
+          Err(error) => {
+            let message = error.to_string();
+            if !github_shared::is_unauthorized_error_message(message.as_str()) {
+              this.add_pr_breadcrumb("Load cached AI PR brief failed", Map::new());
+              this.record_pr_error("github.pr.ai_brief.cached", message.as_str(), Map::new());
+            }
+          }
+        }
+        this.ai_pr_brief_task = None;
+        cx.notify();
+      });
+    });
+
+    self.ai_pr_brief_task = Some(task);
   }
 
   fn load_ai_pr_brief(&mut self, force_refresh: bool, cx: &mut Context<Self>) {
@@ -9802,6 +9841,7 @@ impl GithubPrDetailsPage {
     self.checks_task = Some(checks_task);
     self.fetch_merge_readiness_for_context(owner.clone(), repo.clone(), number, cx);
     self.fetch_pull_request_files_for_context(owner, repo, number, cx);
+    self.reload_ai_pr_brief_for_current_context(cx);
   }
 
   fn navigate_back(&self, cx: &mut Context<Self>) {
@@ -13649,6 +13689,39 @@ impl GithubPrDetailsPage {
           ),
       );
 
+    let ai_brief_section = v_flex()
+      .w_full()
+      .gap_3()
+      .border_1()
+      .border_color(theme.border)
+      .rounded(theme.radius_lg)
+      .p_3()
+      .child(
+        h_flex()
+          .items_center()
+          .justify_between()
+          .gap_3()
+          .child(
+            h_flex()
+              .items_center()
+              .gap_2()
+              .child(Skeleton::new().size(px(16.0)).rounded(theme.radius))
+              .child(
+                Skeleton::new()
+                  .w(px(60.0))
+                  .h(px(14.0))
+                  .rounded(theme.radius),
+              ),
+          )
+          .child(
+            Skeleton::new()
+              .w(px(80.0))
+              .h(px(24.0))
+              .rounded(theme.radius),
+          ),
+      )
+      .child(Self::render_ai_pr_brief_skeleton(theme));
+
     div()
       .px_10()
       .pb_4()
@@ -13711,6 +13784,7 @@ impl GithubPrDetailsPage {
               .child(right_people)
           })
           .child(description)
+          .child(ai_brief_section)
           .child(status_section),
       )
       .into_any_element()

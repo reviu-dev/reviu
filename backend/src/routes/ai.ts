@@ -1,11 +1,12 @@
 import { zValidator } from '@hono/zod-validator'
 import { Hono } from 'hono'
 import { authMiddlewarePro } from '../middlewares/auth.js'
-import { aiPrBriefBodySchema, aiSettingsBodySchema } from '../plugins/ai/schemas.js'
+import { aiPrBriefBodySchema, aiPrBriefQuerySchema, aiSettingsBodySchema } from '../plugins/ai/schemas.js'
 import {
   deleteAiSettings,
   generateGithubPrBrief,
   getAiSettings,
+  getLatestPrBrief,
   saveAiSettings,
 } from '../plugins/ai/service.js'
 
@@ -46,6 +47,18 @@ aiRoutes
     const user = ctx.get('user')!
     await deleteAiSettings(user.id)
     return ctx.json({ ok: true }, 200)
+  })
+  .get('/github/pr/brief', zValidator('query', aiPrBriefQuerySchema), async (ctx) => {
+    const user = ctx.get('user')!
+    const query = ctx.req.valid('query')
+
+    try {
+      const brief = await getLatestPrBrief(user.id, query.owner, query.repo, query.pullNumber)
+      return ctx.json({ brief }, 200)
+    }
+    catch (error) {
+      return ctx.json({ error: (error as Error).message }, honoStatus(error))
+    }
   })
   .post('/github/pr/brief', zValidator('json', aiPrBriefBodySchema), async (ctx) => {
     const user = ctx.get('user')!

@@ -354,6 +354,11 @@ struct AiPrBriefResponse {
   brief: AiPrBrief,
 }
 
+#[derive(Debug, Deserialize)]
+struct AiPrBriefOptionalResponse {
+  brief: Option<AiPrBrief>,
+}
+
 #[derive(Clone, Debug, Deserialize)]
 pub struct GithubPullRequestLabel {
   pub name: String,
@@ -2207,6 +2212,32 @@ impl ApiClient {
       return Err(Self::api_error_from_response(response));
     }
     Ok(())
+  }
+
+  pub fn fetch_latest_github_pr_brief(
+    &self,
+    owner: &str,
+    repo: &str,
+    number: u64,
+  ) -> Result<Option<AiPrBrief>> {
+    let response = self
+      .authed_request(Method::GET, "/ai/github/pr/brief")
+      .query(&[
+        ("owner", owner.to_string()),
+        ("repo", repo.to_string()),
+        ("pullNumber", number.to_string()),
+      ])
+      .send()?;
+    let status = response.status();
+    Self::record_http_status("GET", "/ai/github/pr/brief", status);
+    if status == StatusCode::UNAUTHORIZED {
+      anyhow::bail!("unauthorized")
+    }
+    if !status.is_success() {
+      return Err(Self::api_error_from_response(response));
+    }
+    let payload = response.json::<AiPrBriefOptionalResponse>()?;
+    Ok(payload.brief)
   }
 
   pub fn generate_github_pr_brief(
