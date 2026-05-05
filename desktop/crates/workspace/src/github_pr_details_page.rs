@@ -10936,15 +10936,7 @@ impl GithubPrDetailsPage {
                   .font_medium()
                   .text_color(theme.foreground)
                   .child("AI Brief"),
-              )
-              .when_some(self.ai_pr_brief.as_ref(), |this, brief| {
-                this.child(
-                  div()
-                    .text_xs()
-                    .text_color(theme.muted_foreground)
-                    .child(if brief.cached { "Cached" } else { "New" }),
-                )
-              }),
+              ),
           )
           .child(
             Button::new("github-pr-ai-brief-generate")
