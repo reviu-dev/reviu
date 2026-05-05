@@ -50,10 +50,16 @@ pub struct InteractiveRebaseTodoEntry {
   pub action: InteractiveRebaseAction,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq, Default)]
+pub struct InteractiveRebasePreview {
+  pub commits: Vec<InteractiveRebaseCommit>,
+  pub dropped_merge_count: usize,
+}
+
 pub fn list_interactive_rebase_commits(
   repo_root: &Path,
   target: &InteractiveRebaseTarget,
-) -> Result<Vec<InteractiveRebaseCommit>> {
+) -> Result<InteractiveRebasePreview> {
   let repo =
     Repository::open(repo_root).with_context(|| format!("open repo at {:?}", repo_root))?;
   let base = resolve_target_base_oid(&repo, target)?;
@@ -65,7 +71,8 @@ pub fn start_interactive_rebase(
   target: &InteractiveRebaseTarget,
   todo_entries: &[InteractiveRebaseTodoEntry],
 ) -> Result<()> {
-  let commits = list_interactive_rebase_commits(repo_root, target)?;
+  let preview = list_interactive_rebase_commits(repo_root, target)?;
+  let commits = preview.commits;
   if commits.is_empty() {
     bail!("no commits to rebase");
   }
@@ -153,7 +160,7 @@ fn resolve_head_count_base_oid(repo: &Repository, count: usize) -> Result<Oid> {
 fn collect_interactive_rebase_commits(
   repo: &Repository,
   base: Oid,
-) -> Result<Vec<InteractiveRebaseCommit>> {
+) -> Result<InteractiveRebasePreview> {
   let head_oid = repo
     .head()
     .and_then(|head| head.peel_to_commit())
@@ -170,11 +177,13 @@ fn collect_interactive_rebase_commits(
     .with_context(|| format!("hide base commit {base} from revwalk"))?;
 
   let mut commits = Vec::new();
+  let mut dropped_merge_count = 0usize;
   for oid in walk {
     let oid = oid.context("read revwalk entry")?;
     let commit = repo.find_commit(oid).context("read commit")?;
     if commit.parent_count() > 1 {
-      bail!("interactive rebase does not support merge commits in this range");
+      dropped_merge_count += 1;
+      continue;
     }
     let summary = commit
       .summary()
@@ -191,7 +200,10 @@ fn collect_interactive_rebase_commits(
     });
   }
 
-  Ok(commits)
+  Ok(InteractiveRebasePreview {
+    commits,
+    dropped_merge_count,
+  })
 }
 
 fn validate_interactive_rebase_todo(
@@ -502,10 +514,12 @@ mod tests {
     let _ = commit_text_file(&repo.path, Path::new("b.txt"), "b\n", "commit b");
     let _ = commit_text_file(&repo.path, Path::new("c.txt"), "c\n", "commit c");
 
-    let commits =
+    let preview =
       list_interactive_rebase_commits(&repo.path, &InteractiveRebaseTarget::HeadCount(3))
         .expect("list commits for head count");
-    let summaries = commits
+    assert_eq!(preview.dropped_merge_count, 0);
+    let summaries = preview
+      .commits
       .iter()
       .map(|commit| commit.summary.as_str())
       .collect::<Vec<_>>();
@@ -539,7 +553,7 @@ mod tests {
       "feature 2",
     );
 
-    let commits = list_interactive_rebase_commits(
+    let preview = list_interactive_rebase_commits(
       &repo.path,
       &InteractiveRebaseTarget::Branch(BranchRef {
         name: base_branch,
@@ -547,7 +561,9 @@ mod tests {
       }),
     )
     .expect("list commits for branch target");
-    let summaries = commits
+    assert_eq!(preview.dropped_merge_count, 0);
+    let summaries = preview
+      .commits
       .iter()
       .map(|commit| commit.summary.as_str())
       .collect::<Vec<_>>();
@@ -555,7 +571,7 @@ mod tests {
   }
 
   #[test]
-  fn list_interactive_rebase_commits_rejects_merge_commits_in_selected_range() {
+  fn list_interactive_rebase_commits_skips_merge_commits_and_reports_count() {
     let repo = TempRepo::init("interactive-rebase-merge-reject");
     let _ = commit_text_file(&repo.path, Path::new("README.md"), "base\n", "initial");
     let base_branch = current_branch_name(&repo.path);
@@ -604,12 +620,175 @@ mod tests {
       )
       .expect("create merge commit");
 
-    let error = list_interactive_rebase_commits(&repo.path, &InteractiveRebaseTarget::HeadCount(2))
-      .expect_err("merge commit should be rejected");
-    assert!(
-      error.to_string().contains("does not support merge commits"),
-      "unexpected error: {error}"
+    let preview =
+      list_interactive_rebase_commits(&repo.path, &InteractiveRebaseTarget::HeadCount(2))
+        .expect("list commits with merge in range");
+    assert_eq!(preview.dropped_merge_count, 1);
+    let summaries = preview
+      .commits
+      .iter()
+      .map(|commit| commit.summary.as_str())
+      .collect::<Vec<_>>();
+    assert_eq!(summaries, vec!["main change", "feature change"]);
+  }
+
+  #[test]
+  fn list_interactive_rebase_commits_reports_count_for_multiple_merges() {
+    let repo = TempRepo::init("interactive-rebase-merge-multi");
+    let _ = commit_text_file(&repo.path, Path::new("README.md"), "base\n", "initial");
+    let base_branch = current_branch_name(&repo.path);
+
+    create_branch_at_head(&repo.path, "topic-a");
+    switch_to_branch(&repo.path, "topic-a");
+    let _ = commit_text_file(&repo.path, Path::new("a.txt"), "a\n", "topic a change");
+    let topic_a_oid = Repository::open(&repo.path)
+      .expect("open repo")
+      .head()
+      .and_then(|head| head.peel_to_commit())
+      .expect("read topic a head")
+      .id();
+
+    switch_to_branch(&repo.path, &base_branch);
+    create_branch_at_head(&repo.path, "topic-b");
+    switch_to_branch(&repo.path, "topic-b");
+    let _ = commit_text_file(&repo.path, Path::new("b.txt"), "b\n", "topic b change");
+    let topic_b_oid = Repository::open(&repo.path)
+      .expect("open repo")
+      .head()
+      .and_then(|head| head.peel_to_commit())
+      .expect("read topic b head")
+      .id();
+
+    switch_to_branch(&repo.path, &base_branch);
+    let _ = commit_text_file(&repo.path, Path::new("main.txt"), "main\n", "main change");
+
+    let repo_handle = Repository::open(&repo.path).expect("open repo");
+    let main_commit = repo_handle
+      .head()
+      .and_then(|head| head.peel_to_commit())
+      .expect("read main head");
+    let signature = Signature::now("Reviu Tests", "tests@reviu.local").expect("signature");
+
+    let topic_a_commit = repo_handle
+      .find_commit(topic_a_oid)
+      .expect("find topic a commit");
+    let merge_a_oid = repo_handle
+      .commit(
+        Some("HEAD"),
+        &signature,
+        &signature,
+        "merge topic-a",
+        &main_commit.tree().expect("tree"),
+        &[&main_commit, &topic_a_commit],
+      )
+      .expect("create first merge commit");
+
+    let merge_a_commit = repo_handle
+      .find_commit(merge_a_oid)
+      .expect("find merge a commit");
+    let topic_b_commit = repo_handle
+      .find_commit(topic_b_oid)
+      .expect("find topic b commit");
+    let _ = repo_handle
+      .commit(
+        Some("HEAD"),
+        &signature,
+        &signature,
+        "merge topic-b",
+        &merge_a_commit.tree().expect("tree"),
+        &[&merge_a_commit, &topic_b_commit],
+      )
+      .expect("create second merge commit");
+
+    let preview =
+      list_interactive_rebase_commits(&repo.path, &InteractiveRebaseTarget::HeadCount(3))
+        .expect("list commits with two merges in range");
+    assert_eq!(preview.dropped_merge_count, 2);
+    let summaries = preview
+      .commits
+      .iter()
+      .map(|commit| commit.summary.as_str())
+      .collect::<Vec<_>>();
+    assert_eq!(
+      summaries,
+      vec!["main change", "topic a change", "topic b change"]
     );
+  }
+
+  #[test]
+  fn start_interactive_rebase_succeeds_when_range_contains_merge_commit() {
+    let repo = TempRepo::init("interactive-rebase-start-with-merge");
+    let _ = commit_text_file(&repo.path, Path::new("README.md"), "base\n", "initial");
+    let base_branch = current_branch_name(&repo.path);
+    create_branch_at_head(&repo.path, "feature");
+
+    let _ = commit_text_file(
+      &repo.path,
+      Path::new("main.txt"),
+      "main change\n",
+      "main change",
+    );
+    let main_commit_oid = Repository::open(&repo.path)
+      .expect("open repo")
+      .head()
+      .and_then(|head| head.peel_to_commit())
+      .expect("read main head")
+      .id();
+
+    switch_to_branch(&repo.path, "feature");
+    let _ = commit_text_file(
+      &repo.path,
+      Path::new("feature.txt"),
+      "feature\n",
+      "feature change",
+    );
+    let feature_commit_oid = Repository::open(&repo.path)
+      .expect("open repo")
+      .head()
+      .and_then(|head| head.peel_to_commit())
+      .expect("read feature head")
+      .id();
+
+    switch_to_branch(&repo.path, &base_branch);
+    {
+      let repo_handle = Repository::open(&repo.path).expect("open repo");
+      let main_commit = repo_handle
+        .find_commit(main_commit_oid)
+        .expect("find main commit");
+      let feature_commit = repo_handle
+        .find_commit(feature_commit_oid)
+        .expect("find feature commit");
+      let signature = Signature::now("Reviu Tests", "tests@reviu.local").expect("signature");
+      let _ = repo_handle
+        .commit(
+          Some("HEAD"),
+          &signature,
+          &signature,
+          "merge feature",
+          &main_commit.tree().expect("tree"),
+          &[&main_commit, &feature_commit],
+        )
+        .expect("create merge commit");
+    }
+
+    let _ = commit_text_file(&repo.path, Path::new("after.txt"), "after\n", "after merge");
+
+    let preview =
+      list_interactive_rebase_commits(&repo.path, &InteractiveRebaseTarget::HeadCount(3))
+        .expect("list commits");
+    assert_eq!(preview.dropped_merge_count, 1);
+    assert_eq!(preview.commits.len(), 3);
+    let todo = preview
+      .commits
+      .iter()
+      .map(|commit| InteractiveRebaseTodoEntry {
+        oid: commit.oid.clone(),
+        action: InteractiveRebaseAction::Pick,
+      })
+      .collect::<Vec<_>>();
+
+    start_interactive_rebase(&repo.path, &InteractiveRebaseTarget::HeadCount(3), &todo)
+      .expect("interactive rebase should succeed when merges are dropped");
   }
 
   #[test]
@@ -622,7 +801,8 @@ mod tests {
 
     let commits =
       list_interactive_rebase_commits(&repo.path, &InteractiveRebaseTarget::HeadCount(3))
-        .expect("list commits");
+        .expect("list commits")
+        .commits;
     assert_eq!(commits.len(), 3);
 
     let todo = vec![
@@ -659,7 +839,8 @@ mod tests {
 
     let commits =
       list_interactive_rebase_commits(&repo.path, &InteractiveRebaseTarget::HeadCount(3))
-        .expect("list commits");
+        .expect("list commits")
+        .commits;
 
     let todo = vec![
       InteractiveRebaseTodoEntry {
@@ -695,7 +876,8 @@ mod tests {
 
     let commits =
       list_interactive_rebase_commits(&repo.path, &InteractiveRebaseTarget::HeadCount(2))
-        .expect("list commits");
+        .expect("list commits")
+        .commits;
     let todo = vec![
       InteractiveRebaseTodoEntry {
         oid: commits[0].oid.clone(),
@@ -749,19 +931,20 @@ mod tests {
       kind: BranchKind::Local,
     };
 
-    let branch_commits = list_interactive_rebase_commits(
+    let branch_preview = list_interactive_rebase_commits(
       &repo.path,
       &InteractiveRebaseTarget::Branch(branch_ref.clone()),
     )
     .expect("list commits for Branch");
-    let in_place_commits = list_interactive_rebase_commits(
+    let in_place_preview = list_interactive_rebase_commits(
       &repo.path,
       &InteractiveRebaseTarget::BranchInPlace(branch_ref),
     )
     .expect("list commits for BranchInPlace");
 
-    assert_eq!(branch_commits, in_place_commits);
-    let summaries = in_place_commits
+    assert_eq!(branch_preview, in_place_preview);
+    let summaries = in_place_preview
+      .commits
       .iter()
       .map(|c| c.summary.as_str())
       .collect::<Vec<_>>();
@@ -790,7 +973,9 @@ mod tests {
       kind: BranchKind::Local,
     };
     let target = InteractiveRebaseTarget::BranchInPlace(branch_ref);
-    let commits = list_interactive_rebase_commits(&repo.path, &target).expect("list commits");
+    let commits = list_interactive_rebase_commits(&repo.path, &target)
+      .expect("list commits")
+      .commits;
     assert_eq!(commits.len(), 2);
 
     let todo = vec![
@@ -844,7 +1029,9 @@ mod tests {
       kind: BranchKind::Local,
     };
     let target = InteractiveRebaseTarget::BranchInPlace(branch_ref);
-    let commits = list_interactive_rebase_commits(&repo.path, &target).expect("list commits");
+    let commits = list_interactive_rebase_commits(&repo.path, &target)
+      .expect("list commits")
+      .commits;
     assert_eq!(commits.len(), 3);
 
     let todo = vec![

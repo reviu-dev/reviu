@@ -5114,15 +5114,8 @@ impl GitPage {
         } else {
           InteractiveRebaseTarget::Branch(branch_ref)
         };
-        let commits = self.prepare_interactive_rebase_commits(&target)?;
-        let view = cx.entity();
-        window.on_next_frame(move |window, cx| {
-          let target = target.clone();
-          let commits = commits.clone();
-          view.update(cx, move |view, cx| {
-            view.open_interactive_rebase_todo_view_with_commits(target, commits, window, cx);
-          });
-        });
+        let preview = self.prepare_interactive_rebase_commits(&target)?;
+        self.dispatch_interactive_rebase_target(target, preview, window, cx);
         Ok(())
       }
       CommandPaletteAction::InteractiveRebaseHeadCount { count } => {
@@ -5134,15 +5127,8 @@ impl GitPage {
         }
         should_post_action_refresh = false;
         let target = InteractiveRebaseTarget::HeadCount(count);
-        let commits = self.prepare_interactive_rebase_commits(&target)?;
-        let view = cx.entity();
-        window.on_next_frame(move |window, cx| {
-          let target = target.clone();
-          let commits = commits.clone();
-          view.update(cx, move |view, cx| {
-            view.open_interactive_rebase_todo_view_with_commits(target, commits, window, cx);
-          });
-        });
+        let preview = self.prepare_interactive_rebase_commits(&target)?;
+        self.dispatch_interactive_rebase_target(target, preview, window, cx);
         Ok(())
       }
       CommandPaletteAction::AbortRebase => {
@@ -5697,7 +5683,7 @@ impl GitPage {
   fn prepare_interactive_rebase_commits(
     &self,
     target: &InteractiveRebaseTarget,
-  ) -> Result<Vec<git::InteractiveRebaseCommit>, SharedString> {
+  ) -> Result<git::InteractiveRebasePreview, SharedString> {
     let Some(repo_root) = self.selected_repo.clone() else {
       return Err("No repository selected.".into());
     };
@@ -5705,12 +5691,71 @@ impl GitPage {
       return Err("Interactive rebase is currently disabled.".into());
     }
 
-    let commits = list_interactive_rebase_commits(&repo_root, target)
+    let preview = list_interactive_rebase_commits(&repo_root, target)
       .map_err(|err| -> SharedString { format!("Action failed: {err}").into() })?;
-    if commits.is_empty() {
+    if preview.commits.is_empty() {
       return Err("No commits available for interactive rebase.".into());
     }
-    Ok(commits)
+    Ok(preview)
+  }
+
+  fn dispatch_interactive_rebase_target(
+    &mut self,
+    target: InteractiveRebaseTarget,
+    preview: git::InteractiveRebasePreview,
+    window: &mut Window,
+    cx: &mut Context<Self>,
+  ) {
+    if preview.dropped_merge_count == 0 {
+      let view = cx.entity();
+      let commits = preview.commits;
+      window.on_next_frame(move |window, cx| {
+        let target = target.clone();
+        let commits = commits.clone();
+        view.update(cx, move |view, cx| {
+          view.open_interactive_rebase_todo_view_with_commits(target, commits, window, cx);
+        });
+      });
+      return;
+    }
+
+    let count = preview.dropped_merge_count;
+    let title: SharedString = "Drop merge commits?".into();
+    let message: SharedString = if count == 1 {
+      "1 merge commit will be dropped from the rebase. Its changes will be re-applied through the picked commits.".into()
+    } else {
+      format!(
+        "{count} merge commits will be dropped from the rebase. Their changes will be re-applied through the picked commits."
+      )
+      .into()
+    };
+    let view = cx.entity();
+    let commits = preview.commits;
+
+    window.on_next_frame(move |window, cx| {
+      let view = view.clone();
+      let target = target.clone();
+      let commits = commits.clone();
+      let title = title.clone();
+      let message = message.clone();
+      window.open_alert_dialog(cx, move |alert, _, _| {
+        let view = view.clone();
+        let target = target.clone();
+        let commits = commits.clone();
+        ConfirmDialog::new(title.clone(), div().child(message.clone()))
+          .confirm_text("Continue")
+          .cancel_text("Cancel")
+          .on_confirm(move |_, window, cx| {
+            let target = target.clone();
+            let commits = commits.clone();
+            view.update(cx, move |view, cx| {
+              view.open_interactive_rebase_todo_view_with_commits(target, commits, window, cx);
+            });
+            true
+          })
+          .build(alert)
+      });
+    });
   }
 
   fn close_interactive_rebase_todo_view(&mut self, window: &mut Window, cx: &mut Context<Self>) {

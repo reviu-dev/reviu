@@ -2586,8 +2586,9 @@ mod tests {
       name: "feature".to_string(),
       kind: BranchKind::Local,
     });
-    let commits =
-      crate::list_interactive_rebase_commits(&repo.path, &target).expect("list commits to rebase");
+    let commits = crate::list_interactive_rebase_commits(&repo.path, &target)
+      .expect("list commits to rebase")
+      .commits;
     assert_eq!(commits.len(), 1);
     let todo = vec![crate::InteractiveRebaseTodoEntry {
       oid: commits[0].oid.clone(),

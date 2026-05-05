@@ -4,6 +4,10 @@ All notable changes to Reviu are documented here.
 
 ## 0.10.0
 
+### Edit Commits Now Handles Merge Commits
+
+Edit Commits no longer refuses to start when the selected range contains merge commits. Reviu shows a confirmation dialog telling you how many merges will be dropped, then continues like `git rebase -i` does on the command line.
+
 ### Clearer Command Palette Availability
 
 The Git command palette now keeps temporarily blocked actions visible with a short reason, so you can see why an action is not ready yet.
