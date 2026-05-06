@@ -227,6 +227,7 @@ pub enum CommandPaletteAction {
   ToggleUnchangedFiles,
   OpenPrMergePopover,
   OpenPrReviewPopover,
+  TogglePrCommitByCommit,
   OpenGitConfigPage,
   OpenSettingsPage,
   OpenBillingPage,
@@ -853,6 +854,7 @@ pub enum CommandPaletteCommandId {
   ToggleUnchangedFiles,
   OpenPrMergePopover,
   OpenPrReviewPopover,
+  TogglePrCommitByCommit,
   OpenGitConfigPage,
   OpenSettingsPage,
   OpenBillingPage,
@@ -912,6 +914,7 @@ impl CommandPaletteCommandId {
       Self::ToggleUnchangedFiles => "toggle_unchanged_files",
       Self::OpenPrMergePopover => "open_pr_merge_popover",
       Self::OpenPrReviewPopover => "open_pr_review_popover",
+      Self::TogglePrCommitByCommit => "toggle_pr_commit_by_commit",
       Self::OpenGitConfigPage => "open_git_config_page",
       Self::OpenSettingsPage => "open_settings_page",
       Self::OpenBillingPage => "open_billing_page",
@@ -971,6 +974,7 @@ impl CommandPaletteCommandId {
       "toggle_unchanged_files" => Some(Self::ToggleUnchangedFiles),
       "open_pr_merge_popover" => Some(Self::OpenPrMergePopover),
       "open_pr_review_popover" => Some(Self::OpenPrReviewPopover),
+      "toggle_pr_commit_by_commit" => Some(Self::TogglePrCommitByCommit),
       "open_git_config_page" => Some(Self::OpenGitConfigPage),
       "open_settings_page" => Some(Self::OpenSettingsPage),
       "open_billing_page" => Some(Self::OpenBillingPage),
@@ -1441,6 +1445,22 @@ impl CommandPaletteCommand {
     )
   }
 
+  pub fn toggle_pr_commit_by_commit(in_commit_by_commit_mode: bool) -> Self {
+    if in_commit_by_commit_mode {
+      Self::new(
+        CommandPaletteCommandId::TogglePrCommitByCommit,
+        "Show all changes",
+        "Exit commit-by-commit review and show all pull request changes",
+      )
+    } else {
+      Self::new(
+        CommandPaletteCommandId::TogglePrCommitByCommit,
+        "Review commit by commit",
+        "Step through pull request changes one commit at a time",
+      )
+    }
+  }
+
   pub fn toggle_unchanged_files(currently_shown: bool) -> Self {
     if currently_shown {
       Self::new(
@@ -1585,7 +1605,8 @@ impl CommandPaletteCommand {
       | CommandPaletteCommandId::CopyPrBranch
       | CommandPaletteCommandId::ToggleUnchangedFiles
       | CommandPaletteCommandId::OpenPrMergePopover
-      | CommandPaletteCommandId::OpenPrReviewPopover => CommandPaletteGroup::PullRequest,
+      | CommandPaletteCommandId::OpenPrReviewPopover
+      | CommandPaletteCommandId::TogglePrCommitByCommit => CommandPaletteGroup::PullRequest,
 
       CommandPaletteCommandId::SwitchRepository
       | CommandPaletteCommandId::ForgetRepository
@@ -1661,6 +1682,7 @@ impl CommandPaletteCommand {
       CommandPaletteCommandId::ToggleUnchangedFiles => Icon::new(UiIconName::ScanEye),
       CommandPaletteCommandId::OpenPrMergePopover => Icon::new(UiIconName::GitMerge),
       CommandPaletteCommandId::OpenPrReviewPopover => Icon::new(UiIconName::Eye),
+      CommandPaletteCommandId::TogglePrCommitByCommit => Icon::new(UiIconName::GitCommitHorizontal),
       CommandPaletteCommandId::OpenGitConfigPage => Self::git_config_icon(),
       CommandPaletteCommandId::OpenSettingsPage => Icon::new(IconName::Settings2),
       CommandPaletteCommandId::OpenBillingPage => Icon::new(UiIconName::CreditCard),
@@ -2749,6 +2771,14 @@ impl CommandPalette {
         self.trigger_action(
           command,
           CommandPaletteAction::OpenPrReviewPopover,
+          window,
+          cx,
+        );
+      }
+      CommandPaletteCommandId::TogglePrCommitByCommit => {
+        self.trigger_action(
+          command,
+          CommandPaletteAction::TogglePrCommitByCommit,
           window,
           cx,
         );
