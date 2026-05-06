@@ -4650,7 +4650,10 @@ impl GitPage {
       | CommandPaletteAction::CopyPrBranch
       | CommandPaletteAction::ToggleUnchangedFiles
       | CommandPaletteAction::OpenPrMergePopover
-      | CommandPaletteAction::OpenPrReviewPopover => Err(anyhow::anyhow!("Command not available.")),
+      | CommandPaletteAction::OpenPrReviewPopover
+      | CommandPaletteAction::TogglePrCommitByCommit => {
+        Err(anyhow::anyhow!("Command not available."))
+      }
       CommandPaletteAction::CreatePullRequest => {
         let branch_context = self
           .create_pull_request_branch_context(cx)

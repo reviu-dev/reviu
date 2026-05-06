@@ -4393,6 +4393,11 @@ impl GithubPrDetailsPage {
         commands.push(CommandPaletteCommand::open_pr_review_popover());
       }
     }
+    if !self.commits.is_empty() && !self.commits_loading && self.commits_error.is_none() {
+      commands.push(CommandPaletteCommand::toggle_pr_commit_by_commit(
+        self.selected_commit_sha.is_some(),
+      ));
+    }
     commands.extend(CommandPaletteCommand::default_global_commands(
       CommandPalettePage::GithubPrDetails,
       include_github,
@@ -15911,6 +15916,17 @@ impl GithubPrDetailsPage {
         }
         self.focus_review_input(window);
         cx.notify();
+        Ok(())
+      }
+      CommandPaletteAction::TogglePrCommitByCommit => {
+        if self.commits.is_empty() || self.commits_loading || self.commits_error.is_some() {
+          return Err("No commits available.".into());
+        }
+        if self.selected_commit_sha.is_some() {
+          self.exit_commit_by_commit_review(cx);
+        } else {
+          self.enter_commit_by_commit_review(cx);
+        }
         Ok(())
       }
       CommandPaletteAction::SearchGithubRepository => {
