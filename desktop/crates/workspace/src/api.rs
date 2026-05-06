@@ -210,11 +210,7 @@ impl AiProvider {
   pub fn available_models(self) -> &'static [&'static str] {
     match self {
       Self::Openai => &["gpt-5.4", "gpt-5.4-mini", "gpt-5.4-nano", "o4-mini"],
-      Self::Anthropic => &[
-        "claude-opus-4-7",
-        "claude-sonnet-4-6",
-        "claude-haiku-4-5",
-      ],
+      Self::Anthropic => &["claude-opus-4-7", "claude-sonnet-4-6", "claude-haiku-4-5"],
     }
   }
 }

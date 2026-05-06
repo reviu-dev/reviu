@@ -16,6 +16,10 @@ Edit Commits no longer refuses to start when the selected range contains merge c
 
 The Git command palette now keeps temporarily blocked actions visible with a short reason, so you can see why an action is not ready yet.
 
+### Open Merge and Review Popovers from the Command Palette
+
+The command palette on a pull request now exposes "Merge pull request" and "Review pull request" actions. Picking one opens the same popover as the header buttons, so you can submit a review or merge without leaving the keyboard.
+
 ## 0.9.0
 
 ### Preview Comments and Descriptions Before Posting
