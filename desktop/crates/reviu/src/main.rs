@@ -12,7 +12,7 @@ use std::sync::{Arc, mpsc};
 use std::time::Duration;
 use ui::{AppAssets, PAGE_HEADER_HEIGHT, parse_github_url_action};
 use workspace::{
-  AppProfile, AuthCallbackTarget, WorkspaceView, build_app_menus,
+  AppProfile, AuthCallbackTarget, AuthStateStore, WorkspaceView, build_app_menus,
   github_navigation::{open_commit_target, open_pr_target, open_repo_target},
   install_app_key_bindings, install_crash_reporter, show_startup_crash_report_notification,
   take_pending_startup_crash_report,
@@ -344,6 +344,7 @@ fn main() {
 
     std::mem::drop(cx.register_url_scheme(app_profile.url_scheme()));
     cx.spawn(async move |cx| {
+      let mut pending_open_github_urls: Vec<String> = Vec::new();
       loop {
         cx.background_executor()
           .timer(Duration::from_millis(200))
@@ -351,17 +352,18 @@ fn main() {
         while let Ok(urls) = open_url_rx.try_recv() {
           let mut codes = Vec::new();
           let mut should_handle_subscription_callback = false;
-          let mut open_github_urls = Vec::new();
           for url in &urls {
             if let Some(code) = extract_auth_code(url) {
               codes.push(code);
             } else if is_subscription_callback(url) {
               should_handle_subscription_callback = true;
             } else if let Some(github_url) = extract_open_url(url) {
-              open_github_urls.push(github_url);
+              pending_open_github_urls.push(github_url);
             }
           }
-          if codes.is_empty() && !should_handle_subscription_callback && open_github_urls.is_empty()
+          if codes.is_empty()
+            && !should_handle_subscription_callback
+            && pending_open_github_urls.is_empty()
           {
             continue;
           }
@@ -372,10 +374,18 @@ fn main() {
             if should_handle_subscription_callback {
               AuthCallbackTarget::handle_subscription_callback(cx);
             }
-            for github_url in open_github_urls {
-              handle_open_github_url(&github_url, cx);
-            }
           });
+        }
+        if !pending_open_github_urls.is_empty() {
+          let auth_known = cx.update(|cx| AuthStateStore::is_known(cx));
+          if auth_known {
+            let urls: Vec<String> = pending_open_github_urls.drain(..).collect();
+            cx.update(|cx| {
+              for github_url in urls {
+                handle_open_github_url(&github_url, cx);
+              }
+            });
+          }
         }
       }
     })
