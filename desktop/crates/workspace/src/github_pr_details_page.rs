@@ -29,7 +29,7 @@ use git::{
 };
 use gpui::{
   AnyElement, AnyWindowHandle, App, ClipboardItem, Context, Corner, Entity, ExternalPaths,
-  FocusHandle, Focusable, Hsla, Image, InteractiveElement, ListAlignment,
+  FocusHandle, Focusable, Hsla, Image, InteractiveElement, Keystroke, ListAlignment,
   ListState as GpuiListState, MouseButton, ObjectFit, ParentElement, PathBuilder, Render,
   RenderImage, SharedString, Styled, Task, Window, canvas, deferred, div, img, list, point,
   prelude::*, px, white,
@@ -42,6 +42,7 @@ use gpui_component::{
   collapsible::Collapsible,
   h_flex,
   input::InputEvent,
+  kbd::Kbd,
   label::Label,
   menu::{DropdownMenu as _, PopupMenuItem},
   notification::Notification,
@@ -2696,6 +2697,7 @@ pub struct GithubPrDetailsPage {
   merge_readiness_error: Option<SharedString>,
   merge_readiness: Option<GithubPullRequestMergeReadiness>,
   merge_popover_open: bool,
+  merge_method_focus_handle: FocusHandle,
   merge_form_reset_pending: bool,
   merge_method: GithubPullRequestMergeMethod,
   merge_commit_title_input: Entity<InputState>,
@@ -3269,6 +3271,7 @@ impl GithubPrDetailsPage {
       merge_readiness_error: None,
       merge_readiness: None,
       merge_popover_open: false,
+      merge_method_focus_handle: cx.focus_handle(),
       merge_form_reset_pending: true,
       merge_method: GithubPullRequestMergeMethod::Merge,
       merge_commit_title_input,
@@ -3439,6 +3442,8 @@ impl GithubPrDetailsPage {
     this.subscribe_to_assignee_input(window, cx);
     this.subscribe_to_requested_reviewer_input(window, cx);
     this.subscribe_to_label_input(window, cx);
+    this.subscribe_to_review_input(window, cx);
+    this.subscribe_to_merge_commit_inputs(window, cx);
     this
   }
 
@@ -4376,6 +4381,18 @@ impl GithubPrDetailsPage {
     if self.pull_request.is_some() {
       commands.push(CommandPaletteCommand::copy_pr_branch());
     }
+    if !self.is_pull_request_merged() {
+      if self
+        .pull_request
+        .as_ref()
+        .is_some_and(|pull_request| !pull_request.draft)
+      {
+        commands.push(CommandPaletteCommand::open_pr_merge_popover());
+      }
+      if self.pull_request.is_some() {
+        commands.push(CommandPaletteCommand::open_pr_review_popover());
+      }
+    }
     commands.extend(CommandPaletteCommand::default_global_commands(
       CommandPalettePage::GithubPrDetails,
       include_github,
@@ -5065,7 +5082,7 @@ impl GithubPrDetailsPage {
     self.merge_readiness_task = Some(task);
   }
 
-  fn submit_pull_request_merge(&mut self, _: &mut Window, cx: &mut Context<Self>) {
+  fn submit_pull_request_merge(&mut self, window: &mut Window, cx: &mut Context<Self>) {
     if self.merge_submit_loading {
       return;
     }
@@ -5100,7 +5117,7 @@ impl GithubPrDetailsPage {
     self.merge_submit_loading = true;
     self.merge_submit_error = None;
 
-    let task = cx.spawn(async move |this, cx| {
+    let task = cx.spawn_in(window, async move |this, cx| {
       let result = unblock(move || {
         api.merge_pull_request(
           &owner,
@@ -5114,12 +5131,13 @@ impl GithubPrDetailsPage {
       })
       .await;
 
-      let _ = this.update(cx, |this, cx| {
+      let _ = this.update_in(cx, |this, window, cx| {
         this.merge_submit_loading = false;
         match result {
           Ok(GithubPullRequestMergeResult { merged: true, .. }) => {
             this.merge_popover_open = false;
             this.mark_merge_form_reset_pending();
+            this.refocus_page_shortcuts(window, cx);
             this.add_pr_breadcrumb("Merge pull request succeeded", Map::new());
             this.reload_current_pull_request(cx);
             if AuthStateStore::has_github_access(cx) {
@@ -5939,6 +5957,74 @@ impl GithubPrDetailsPage {
           this.add_requested_reviewer_value(state.read(cx).value().as_str(), window, cx);
         }
         _ => {}
+      },
+    )
+    .detach();
+  }
+
+  fn subscribe_to_merge_commit_inputs(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    let title_input = self.merge_commit_title_input.clone();
+    let message_input = self.merge_commit_message_input.clone();
+    for input in [title_input, message_input] {
+      cx.subscribe_in(
+        &input,
+        window,
+        |this, state, event: &InputEvent, window, cx| {
+          if let InputEvent::PressEnter { secondary: true } = event {
+            if !this.merge_popover_open || this.merge_submit_loading {
+              return;
+            }
+            let can_submit_merge = this.merge_readiness.as_ref().is_some_and(|readiness| {
+              readiness.can_merge_now
+                && this
+                  .selected_merge_method()
+                  .is_some_and(|method| readiness.available_methods.contains(&method))
+            });
+            if !can_submit_merge {
+              return;
+            }
+            let raw = state.read(cx).value().to_string();
+            let trimmed = raw.trim_end_matches('\n').to_string();
+            if trimmed != raw {
+              state.update(cx, |input, cx| {
+                input.set_value(trimmed, window, cx);
+              });
+            }
+            this.submit_pull_request_merge(window, cx);
+          }
+        },
+      )
+      .detach();
+    }
+  }
+
+  fn subscribe_to_review_input(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    cx.subscribe_in(
+      &self.review_input,
+      window,
+      |this, state, event: &InputEvent, window, cx| {
+        if let InputEvent::PressEnter { secondary: true } = event {
+          if !this.review_popover_open || this.submit_review_loading || this.pull_request.is_none()
+          {
+            return;
+          }
+          if this.is_current_user_pr_author(cx)
+            && !matches!(this.review_decision, GithubPrReviewDecision::Comment)
+          {
+            return;
+          }
+          let raw_body = state.read(cx).value().to_string();
+          let trimmed = raw_body.trim_end_matches('\n').to_string();
+          if trimmed != raw_body {
+            state.update(cx, |input, cx| {
+              input.set_value(trimmed.clone(), window, cx);
+            });
+          }
+          if Self::validate_review_submission(this.review_decision, trimmed.as_str()).is_some() {
+            return;
+          }
+          this.submit_pull_request_review(window, cx);
+        }
       },
     )
     .detach();
@@ -6964,6 +7050,7 @@ impl GithubPrDetailsPage {
           Ok(review) => {
             this.review_popover_open = false;
             this.reset_review_form(window, cx);
+            this.refocus_page_shortcuts(window, cx);
             upsert_review_local(&mut this.reviews, review);
             if let Some(pr) = this.pull_request.as_mut() {
               if let Some(login) = Self::current_github_login(cx) {
@@ -9851,6 +9938,7 @@ impl GithubPrDetailsPage {
   fn render_merge_popover(
     &mut self,
     theme: &gpui_component::Theme,
+    window: &mut Window,
     cx: &mut Context<Self>,
   ) -> gpui::AnyElement {
     let merge_readiness = self.merge_readiness.clone();
@@ -9985,6 +10073,13 @@ impl GithubPrDetailsPage {
                 group = group.child(Radio::new(id).label(merge_method_label(*method)));
               }
 
+              let focus_handle = self.merge_method_focus_handle.clone();
+              let is_focused = focus_handle.is_focused(window);
+              let ring_color = if is_focused {
+                theme.ring
+              } else {
+                gpui::transparent_black()
+              };
               this
                 .child(
                   div()
@@ -9992,7 +10087,15 @@ impl GithubPrDetailsPage {
                     .text_color(theme.muted_foreground)
                     .child("Choose how GitHub should merge this pull request."),
                 )
-                .child(group)
+                .child(
+                  div()
+                    .track_focus(&focus_handle)
+                    .p_1()
+                    .rounded(theme.radius)
+                    .border_2()
+                    .border_color(ring_color)
+                    .child(group),
+                )
             },
           )
           .when(show_commit_fields, |this| {
@@ -10123,6 +10226,7 @@ impl GithubPrDetailsPage {
                     .primary()
                     .small()
                     .label("Merge pull request")
+                    .child(Kbd::new(Keystroke::parse("cmd-enter").unwrap()).ml_1())
                     .loading(self.merge_submit_loading)
                     .disabled(!can_submit_merge || auto_merge_submit_loading)
                     .on_click(cx.listener(|this, _, window, cx| {
@@ -10361,6 +10465,7 @@ impl GithubPrDetailsPage {
                   .primary()
                   .small()
                   .label("Submit review")
+                  .child(Kbd::new(Keystroke::parse("cmd-enter").unwrap()).ml_1())
                   .loading(self.submit_review_loading)
                   .disabled(submit_review_disabled)
                   .on_click(cx.listener(|this, _, window, cx| {
@@ -10372,7 +10477,7 @@ impl GithubPrDetailsPage {
       .into_any_element()
   }
 
-  fn render_header(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
+  fn render_header(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
     let theme = cx.theme().clone();
     let changes_tab = if let Some(pull_request) = self.pull_request.as_ref() {
       Tab::new().child(
@@ -10463,7 +10568,7 @@ impl GithubPrDetailsPage {
               this.child(
                 div()
                   .debug_selector(|| "github-pr-merge-button".to_string())
-                  .child(self.render_merge_popover(&theme, cx)),
+                  .child(self.render_merge_popover(&theme, window, cx)),
               )
             },
           )
@@ -15763,6 +15868,51 @@ impl GithubPrDetailsPage {
         self.set_show_local_project_files(next, cx);
         Ok(())
       }
+      CommandPaletteAction::OpenPrMergePopover => {
+        if self.pull_request.is_none() {
+          return Err("No pull request loaded.".into());
+        }
+        if self.is_pull_request_merged() {
+          return Err("Pull request already merged.".into());
+        }
+        if self
+          .pull_request
+          .as_ref()
+          .is_some_and(|pull_request| pull_request.draft)
+        {
+          return Err("Pull request is a draft.".into());
+        }
+        self.merge_popover_open = true;
+        if self.merge_form_reset_pending {
+          self.reset_merge_form(window, cx);
+        }
+        let focus_handle = self.merge_method_focus_handle.clone();
+        window.on_next_frame(move |window, cx| {
+          window.focus(&focus_handle, cx);
+        });
+        cx.notify();
+        Ok(())
+      }
+      CommandPaletteAction::OpenPrReviewPopover => {
+        if self.pull_request.is_none() {
+          return Err("No pull request loaded.".into());
+        }
+        if self.is_pull_request_merged() {
+          return Err("Pull request already merged.".into());
+        }
+        self.review_popover_open = true;
+        if self.review_form_reset_pending {
+          self.reset_review_form(window, cx);
+        }
+        if self.is_current_user_pr_author(cx)
+          && !matches!(self.review_decision, GithubPrReviewDecision::Comment)
+        {
+          self.review_decision = GithubPrReviewDecision::Comment;
+        }
+        self.focus_review_input(window);
+        cx.notify();
+        Ok(())
+      }
       CommandPaletteAction::SearchGithubRepository => {
         let api = WorkspaceApi::global(cx).api.clone();
         crate::github_search_dialog::open_github_search_dialog(api, window, cx);
@@ -16151,7 +16301,7 @@ impl Render for GithubPrDetailsPage {
       .debug_selector(|| "github-pr-details-main-panel".to_string())
       .size_full()
       .overflow_hidden()
-      .child(self.render_header(cx))
+      .child(self.render_header(window, cx))
       .child(v_flex().flex_1().min_h_0().child(content));
 
     div()

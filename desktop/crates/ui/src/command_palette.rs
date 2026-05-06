@@ -225,6 +225,8 @@ pub enum CommandPaletteAction {
   SwitchToPrBranch,
   CopyPrBranch,
   ToggleUnchangedFiles,
+  OpenPrMergePopover,
+  OpenPrReviewPopover,
   OpenGitConfigPage,
   OpenSettingsPage,
   OpenBillingPage,
@@ -849,6 +851,8 @@ pub enum CommandPaletteCommandId {
   SwitchToPrBranch,
   CopyPrBranch,
   ToggleUnchangedFiles,
+  OpenPrMergePopover,
+  OpenPrReviewPopover,
   OpenGitConfigPage,
   OpenSettingsPage,
   OpenBillingPage,
@@ -906,6 +910,8 @@ impl CommandPaletteCommandId {
       Self::SwitchToPrBranch => "switch_to_pr_branch",
       Self::CopyPrBranch => "copy_pr_branch",
       Self::ToggleUnchangedFiles => "toggle_unchanged_files",
+      Self::OpenPrMergePopover => "open_pr_merge_popover",
+      Self::OpenPrReviewPopover => "open_pr_review_popover",
       Self::OpenGitConfigPage => "open_git_config_page",
       Self::OpenSettingsPage => "open_settings_page",
       Self::OpenBillingPage => "open_billing_page",
@@ -963,6 +969,8 @@ impl CommandPaletteCommandId {
       "switch_to_pr_branch" => Some(Self::SwitchToPrBranch),
       "copy_pr_branch" => Some(Self::CopyPrBranch),
       "toggle_unchanged_files" => Some(Self::ToggleUnchangedFiles),
+      "open_pr_merge_popover" => Some(Self::OpenPrMergePopover),
+      "open_pr_review_popover" => Some(Self::OpenPrReviewPopover),
       "open_git_config_page" => Some(Self::OpenGitConfigPage),
       "open_settings_page" => Some(Self::OpenSettingsPage),
       "open_billing_page" => Some(Self::OpenBillingPage),
@@ -1417,6 +1425,22 @@ impl CommandPaletteCommand {
     )
   }
 
+  pub fn open_pr_merge_popover() -> Self {
+    Self::new(
+      CommandPaletteCommandId::OpenPrMergePopover,
+      "Merge pull request",
+      "Open the merge popover for the current pull request",
+    )
+  }
+
+  pub fn open_pr_review_popover() -> Self {
+    Self::new(
+      CommandPaletteCommandId::OpenPrReviewPopover,
+      "Review pull request",
+      "Open the review popover for the current pull request",
+    )
+  }
+
   pub fn toggle_unchanged_files(currently_shown: bool) -> Self {
     if currently_shown {
       Self::new(
@@ -1559,7 +1583,9 @@ impl CommandPaletteCommand {
       | CommandPaletteCommandId::OpenPullRequest
       | CommandPaletteCommandId::SwitchToPrBranch
       | CommandPaletteCommandId::CopyPrBranch
-      | CommandPaletteCommandId::ToggleUnchangedFiles => CommandPaletteGroup::PullRequest,
+      | CommandPaletteCommandId::ToggleUnchangedFiles
+      | CommandPaletteCommandId::OpenPrMergePopover
+      | CommandPaletteCommandId::OpenPrReviewPopover => CommandPaletteGroup::PullRequest,
 
       CommandPaletteCommandId::SwitchRepository
       | CommandPaletteCommandId::ForgetRepository
@@ -1633,6 +1659,8 @@ impl CommandPaletteCommand {
       CommandPaletteCommandId::SwitchToPrBranch => Icon::new(UiIconName::GitBranch),
       CommandPaletteCommandId::CopyPrBranch => Icon::new(IconName::Copy),
       CommandPaletteCommandId::ToggleUnchangedFiles => Icon::new(UiIconName::ScanEye),
+      CommandPaletteCommandId::OpenPrMergePopover => Icon::new(UiIconName::GitMerge),
+      CommandPaletteCommandId::OpenPrReviewPopover => Icon::new(UiIconName::Eye),
       CommandPaletteCommandId::OpenGitConfigPage => Self::git_config_icon(),
       CommandPaletteCommandId::OpenSettingsPage => Icon::new(IconName::Settings2),
       CommandPaletteCommandId::OpenBillingPage => Icon::new(UiIconName::CreditCard),
@@ -2705,6 +2733,22 @@ impl CommandPalette {
         self.trigger_action(
           command,
           CommandPaletteAction::ToggleUnchangedFiles,
+          window,
+          cx,
+        );
+      }
+      CommandPaletteCommandId::OpenPrMergePopover => {
+        self.trigger_action(
+          command,
+          CommandPaletteAction::OpenPrMergePopover,
+          window,
+          cx,
+        );
+      }
+      CommandPaletteCommandId::OpenPrReviewPopover => {
+        self.trigger_action(
+          command,
+          CommandPaletteAction::OpenPrReviewPopover,
           window,
           cx,
         );

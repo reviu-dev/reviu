@@ -1152,7 +1152,6 @@ impl Render for SettingsPage {
           .icon(IconName::Close)
           .ghost()
           .compact()
-          .tooltip("Close settings")
           .on_click(|_, _, cx| {
             NavigationHistory::navigate_back(cx);
           }),
