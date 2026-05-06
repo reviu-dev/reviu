@@ -84,6 +84,7 @@ pub mod status_bar;
 mod workspace;
 
 pub use app_profile::{AppProfile, URL_SCHEME_PROD};
+pub use auth_state::AuthStateStore;
 pub use crash_report::{
   StartupCrashReport, install_crash_reporter, show_startup_crash_report_notification,
   take_pending_startup_crash_report,

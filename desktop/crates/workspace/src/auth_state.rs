@@ -38,6 +38,10 @@ impl AuthStateStore {
     Self::get(cx).has_github_access()
   }
 
+  pub fn is_known(cx: &App) -> bool {
+    !matches!(Self::get(cx), AuthState::Unknown)
+  }
+
   pub fn is_admin(cx: &App) -> bool {
     Self::get(cx).is_admin()
   }
