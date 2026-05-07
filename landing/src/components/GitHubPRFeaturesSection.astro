@@ -1,13 +1,13 @@
 ---
 import gitHubPrChangesDark from "../assets/app_screenshots/github_pr_changes_dark.png";
 import gitHubPrChangesLight from "../assets/app_screenshots/github_pr_changes_light.png";
-import BadgeCheckIcon from "@lucide/astro/icons/badge-check";
 import GitMergeConflictIcon from "@lucide/astro/icons/git-merge-conflict";
 import GitMergeIcon from "@lucide/astro/icons/git-merge";
 import GitPullRequestArrowIcon from "@lucide/astro/icons/git-pull-request-arrow";
 import { Image } from "astro:assets";
 import MessageCircleReplyIcon from "@lucide/astro/icons/message-circle-reply";
 import SearchCheckIcon from "@lucide/astro/icons/search-check";
+import SparklesIcon from "@lucide/astro/icons/sparkles";
 
 const features = [
   {
@@ -23,10 +23,10 @@ const features = [
     icon: MessageCircleReplyIcon,
   },
   {
-    name: "Checks stay visible",
+    name: "AI brief before you dive in",
     description:
-      "Track passing, pending, and failing status from the same PR page before you merge.",
-    icon: BadgeCheckIcon,
+      "Bring your OpenAI or Anthropic key and get a Pro-only PR brief: summary, files to review first, risks, and blockers, with file links that jump straight into the diff.",
+    icon: SparklesIcon,
   },
   {
     name: "Review and merge in one place",

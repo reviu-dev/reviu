@@ -100,6 +100,7 @@ If pricing changes, update desktop billing, landing copy, structured data, and t
 - Enable and disable auto-merge when the pull request is blocked by pending checks or reviews.
 - Browse pull request commits with search and filtering, and review pull request changes commit by commit.
 - Keep pull request commit links inside Reviu when they point to the current review.
+- AI pull request briefs (Reviu Pro) that use a user-provided OpenAI or Anthropic key to produce a summary, files to review first by priority, risks, and blockers, with file links that open in the PR changes view.
 
 ### Local-to-GitHub bridge
 
@@ -172,7 +173,7 @@ Good claims:
 Avoid these unless they are explicitly shipped and verified:
 
 - Team workflows or enterprise features that do not exist yet.
-- AI review, code generation, or automated code-fix claims.
+- AI review, AI code generation, AI suggested changes, or automated code-fix claims. The AI pull request brief feature is allowed: claim it as a triage helper that uses the user's own OpenAI or Anthropic key, never as an AI reviewer.
 - Self-hosted Git provider support.
 - Free GitHub workflow claims. GitHub workflows are Pro-gated.
 - Pricing that does not match app billing and landing copy.
