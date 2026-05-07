@@ -22,9 +22,10 @@ use git::{
   delete_untracked_file, detached_head_label, diff_set_from_patch, drop_stash, fetch,
   head_commit_status, is_merge_in_progress, is_rebase_in_progress, list_branches,
   list_commit_changed_files, list_commit_history, list_interactive_rebase_commits,
-  list_repo_status, list_stashes, load_commit_file_diff, merge_branch, pop_stash, pull, push,
-  rebase_branch, resolve_branch_ref, restore_file, restore_renamed_file, skip_rebase, stage_all,
-  stage_file, start_interactive_rebase, switch_branch, undo_last_commit, unstage_all, unstage_file,
+  list_repo_head_files, list_repo_status, list_stashes, load_commit_file_diff, merge_branch,
+  pop_stash, pull, push, rebase_branch, resolve_branch_ref, restore_file, restore_renamed_file,
+  skip_rebase, stage_all, stage_file, start_interactive_rebase, switch_branch, undo_last_commit,
+  unstage_all, unstage_file,
 };
 use gpui::{
   AnyElement, AnyWindowHandle, App, Context, Corner, Entity, FocusHandle, Focusable, Global, Image,
@@ -4525,19 +4526,14 @@ impl GitPage {
   }
 
   fn open_file_search_palette(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-    if self.selected_repo.is_none() || self.status_entries.is_empty() {
+    if self.selected_repo.is_none() {
       return;
     }
 
-    let entries = self
-      .status_entries
-      .iter()
-      .map(|entry| {
-        let file_label = entry.path.to_string_lossy();
-        let file_label = file_label.replace(['\n', '\r'], "");
-        SearchFileEntry::new(entry.path.clone(), file_label)
-      })
-      .collect::<Vec<_>>();
+    let entries = self.git_file_search_entries();
+    if entries.is_empty() {
+      return;
+    }
 
     let view = cx.entity();
     let handler: SearchFileHandler = Arc::new(move |path, window, cx| {
@@ -4558,6 +4554,45 @@ impl GitPage {
       Ok(())
     });
     open_shared_file_search_palette(window, cx, entries, handler, false);
+  }
+
+  fn git_file_search_entries(&self) -> Vec<SearchFileEntry> {
+    let Some(root_path) = self.selected_repo.as_ref() else {
+      return Vec::new();
+    };
+
+    let changed_entries = self
+      .status_entries
+      .iter()
+      .map(|entry| {
+        let file_label = entry.path.to_string_lossy();
+        let file_label = file_label.replace(['\n', '\r'], "");
+        SearchFileEntry::new(entry.path.clone(), file_label).grouped("Changed")
+      })
+      .collect::<Vec<_>>();
+
+    let mut changed_paths = HashSet::new();
+    for entry in &self.status_entries {
+      changed_paths.insert(entry.path.clone());
+      if let Some(old_path) = entry.old_path.as_ref() {
+        changed_paths.insert(old_path.clone());
+      }
+    }
+
+    let unchanged_entries = list_repo_head_files(root_path)
+      .unwrap_or_default()
+      .into_iter()
+      .filter(|path| !changed_paths.contains(path))
+      .map(|path| {
+        let file_label = path.to_string_lossy();
+        let file_label = file_label.replace(['\n', '\r'], "");
+        SearchFileEntry::new(path, file_label).grouped("Unchanged")
+      });
+
+    changed_entries
+      .into_iter()
+      .chain(unchanged_entries)
+      .collect()
   }
 
   fn merge_branch_action(
@@ -14458,6 +14493,54 @@ mod tests {
       name: "feature".into(),
       kind: CommandPaletteBranchKind::Local,
     }));
+  }
+
+  #[gpui::test]
+  fn git_file_search_entries_group_changed_files_before_unchanged_project_files(
+    cx: &mut TestAppContext,
+  ) {
+    init_gpui_test(cx);
+    let repo = TempRepo::init("git-page-file-search-groups");
+    let _ = commit_text_file(
+      &repo.path,
+      Path::new("README.md"),
+      "initial\n",
+      "add readme",
+    );
+    std::fs::create_dir_all(repo.path.join("src")).expect("create src dir");
+    let _ = commit_text_file(
+      &repo.path,
+      Path::new("src/main.rs"),
+      "fn main() {}\n",
+      "add main",
+    );
+    std::fs::write(repo.path.join("README.md"), "updated\n").expect("modify readme");
+
+    let (git_page, cx) = add_git_page_window_with_root(cx);
+
+    let entries = git_page.update(cx, |this, _cx| {
+      this.selected_repo = Some(repo.path.clone());
+      this.status_entries = list_repo_status(&repo.path).expect("list status");
+      this.git_file_search_entries()
+    });
+
+    let labels = entries
+      .iter()
+      .map(|entry| {
+        (
+          entry.group.as_ref().map(|group| group.to_string()),
+          entry.label.to_string(),
+        )
+      })
+      .collect::<Vec<_>>();
+
+    assert_eq!(
+      labels,
+      vec![
+        (Some("Changed".to_string()), "README.md".to_string()),
+        (Some("Unchanged".to_string()), "src/main.rs".to_string()),
+      ]
+    );
   }
 
   #[gpui::test]
