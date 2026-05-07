@@ -8,6 +8,10 @@ All notable changes to Reviu are documented here.
 
 The Git page file search now includes tracked project files alongside changed files. Changed files stay grouped at the top, with unchanged files below, so keyboard navigation can jump to any file without hiding active work.
 
+### Git Command Preview
+
+Merge and rebase branch pickers now show the Git command that will run for the selected target. Interactive rebase commit-count entry also previews the `git rebase -i HEAD~n` command before it starts.
+
 ### Better Rebase Branch Choices
 
 Rebase branch pickers no longer default to the current local branch. Reviu now prioritizes the current upstream and default branch when choosing a rebase base, and the interactive rebase option is labeled more clearly as editing commits since a branch.

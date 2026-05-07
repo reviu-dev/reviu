@@ -3,7 +3,7 @@ use std::{collections::BTreeMap, rc::Rc, sync::Arc};
 use crate::github_url::parse_github_url_action;
 use crate::{SelectableRowStyle, UiIconName, file_icon_path_for_name, selectable_list_item};
 use gpui::{
-  App, Context, Entity, FocusHandle, Focusable, Global, InteractiveElement, IntoElement,
+  App, Context, Div, Entity, FocusHandle, Focusable, Global, InteractiveElement, IntoElement,
   ParentElement, Render, SharedString, Styled, Subscription, Task, Window, div, prelude::*, px,
 };
 use gpui_component::{
@@ -1841,6 +1841,40 @@ pub struct CommandPalette {
 }
 
 impl CommandPalette {
+  fn git_shell_arg(value: &str) -> String {
+    if value
+      .chars()
+      .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_' | '.' | '/'))
+    {
+      return value.to_string();
+    }
+
+    format!("'{}'", value.replace('\'', "'\\''"))
+  }
+
+  fn branch_git_command(
+    screen: CommandPaletteScreen,
+    branch: &CommandPaletteBranch,
+  ) -> Option<String> {
+    let branch_name = Self::git_shell_arg(branch.name.as_ref());
+    match screen {
+      CommandPaletteScreen::MergeBranch => Some(format!("git merge {branch_name}")),
+      CommandPaletteScreen::RebaseBranch => Some(format!("git rebase {branch_name}")),
+      CommandPaletteScreen::InteractiveRebaseBranch => Some(format!("git rebase -i {branch_name}")),
+      CommandPaletteScreen::InteractiveRebaseEditBranch => Some(format!(
+        "git rebase -i --onto $(git merge-base HEAD {branch_name}) {branch_name}"
+      )),
+      _ => None,
+    }
+  }
+
+  fn interactive_rebase_head_count_git_command(value: &str) -> String {
+    match Self::parse_interactive_rebase_head_count(value) {
+      Some(count) => format!("git rebase -i HEAD~{count}"),
+      None => "git rebase -i HEAD~n".to_string(),
+    }
+  }
+
   fn parse_cherry_pick_commit_hashes(value: &str) -> Option<Vec<String>> {
     let commits = value
       .split_whitespace()
@@ -2893,6 +2927,25 @@ impl CommandPalette {
     placeholder: &'static str,
     cx: &Context<Self>,
   ) -> impl IntoElement {
+    self.render_search_list_with_sections_and_attached_footer(
+      list,
+      item_count,
+      visible_headers,
+      placeholder,
+      false,
+      cx,
+    )
+  }
+
+  fn render_search_list_with_sections_and_attached_footer<D: ListDelegate>(
+    &self,
+    list: &Entity<ListState<D>>,
+    item_count: usize,
+    visible_headers: usize,
+    placeholder: &'static str,
+    has_attached_footer: bool,
+    cx: &Context<Self>,
+  ) -> impl IntoElement {
     let height_px = LIST_ITEM_HEIGHT * item_count as f32
       + SECTION_HEADER_HEIGHT * visible_headers as f32
       + LIST_INPUT_HEIGHT;
@@ -2903,6 +2956,53 @@ impl CommandPalette {
       .search_placeholder(placeholder)
       .border_color(cx.theme().border)
       .rounded(cx.theme().radius)
+      .when(has_attached_footer, |list| {
+        list.rounded_bl_none().rounded_br_none()
+      })
+  }
+
+  fn render_git_command_preview(
+    &self,
+    command: impl Into<SharedString>,
+    cx: &Context<Self>,
+  ) -> Div {
+    let theme = cx.theme();
+    h_flex()
+      .items_center()
+      .gap_1()
+      .px_3()
+      .py_2()
+      .rounded_b(theme.radius)
+      .border_1()
+      .border_t_0()
+      .border_color(theme.border)
+      .bg(theme.muted)
+      .text_xs()
+      .text_color(theme.muted_foreground)
+      .child(
+        div()
+          .min_w_0()
+          .flex_1()
+          .overflow_hidden()
+          .whitespace_nowrap()
+          .text_ellipsis()
+          .text_color(theme.foreground)
+          .child(command.into()),
+      )
+  }
+
+  fn selected_branch_git_command(
+    &self,
+    list: &Entity<ListState<BranchesListDelegate>>,
+    cx: &Context<Self>,
+  ) -> Option<String> {
+    let delegate = list.read(cx);
+    let delegate = delegate.delegate();
+    let branch = delegate
+      .selected_index
+      .and_then(|ix| delegate.matched_branches.get(ix.row))
+      .or_else(|| delegate.matched_branches.first())?;
+    Self::branch_git_command(self.screen, branch.as_ref())
   }
 
   fn render_root(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
@@ -3046,13 +3146,21 @@ impl CommandPalette {
       .delegate()
       .matched_branches
       .len();
+    let command = self.selected_branch_git_command(&self.branches_list, cx);
 
-    v_flex().h_full().child(self.render_search_list(
-      &self.branches_list,
-      count_branches,
-      "Search branches...",
-      cx,
-    ))
+    v_flex()
+      .h_full()
+      .child(self.render_search_list_with_sections_and_attached_footer(
+        &self.branches_list,
+        count_branches,
+        0,
+        "Search branches...",
+        command.is_some(),
+        cx,
+      ))
+      .when_some(command, |this, command| {
+        this.child(self.render_git_command_preview(command, cx))
+      })
   }
 
   fn render_interactive_rebase_mode(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
@@ -3075,9 +3183,17 @@ impl CommandPalette {
   }
 
   fn render_interactive_rebase_head_count(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
+    let command = self
+      .interactive_rebase_head_count_input
+      .read(cx)
+      .value()
+      .to_string();
+    let command = Self::interactive_rebase_head_count_git_command(&command);
+
     v_flex()
       .gap_3()
       .child(Input::new(&self.interactive_rebase_head_count_input).border_color(cx.theme().border))
+      .child(self.render_git_command_preview(command, cx))
   }
 
   fn render_rebase_branch(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
@@ -3087,13 +3203,21 @@ impl CommandPalette {
       .delegate()
       .matched_branches
       .len();
+    let command = self.selected_branch_git_command(&self.rebase_branches_list, cx);
 
-    v_flex().h_full().child(self.render_search_list(
-      &self.rebase_branches_list,
-      count_branches,
-      "Search base branches...",
-      cx,
-    ))
+    v_flex()
+      .h_full()
+      .child(self.render_search_list_with_sections_and_attached_footer(
+        &self.rebase_branches_list,
+        count_branches,
+        0,
+        "Search base branches...",
+        command.is_some(),
+        cx,
+      ))
+      .when_some(command, |this, command| {
+        this.child(self.render_git_command_preview(command, cx))
+      })
   }
 
   fn render_open_github_from_url(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
@@ -3184,8 +3308,9 @@ impl Render for CommandPalette {
 #[cfg(test)]
 mod tests {
   use super::{
-    CommandPalette, CommandPaletteCommand, CommandPaletteCommandId, CommandPaletteConfig,
-    CommandPaletteGroup, CommandPaletteHandler, CommandPaletteInitialScreen,
+    CommandPalette, CommandPaletteBranch, CommandPaletteBranchKind, CommandPaletteCommand,
+    CommandPaletteCommandId, CommandPaletteConfig, CommandPaletteGroup, CommandPaletteHandler,
+    CommandPaletteInitialScreen, CommandPaletteScreen,
   };
   use std::rc::Rc;
   use std::sync::Arc;
@@ -3304,6 +3429,59 @@ mod tests {
     assert_eq!(
       CommandPalette::parse_interactive_rebase_head_count("0"),
       None
+    );
+  }
+
+  #[test]
+  fn branch_git_command_describes_merge_and_rebase_commands() {
+    let branch = CommandPaletteBranch {
+      name: "origin/main".into(),
+      kind: CommandPaletteBranchKind::Remote,
+    };
+
+    assert_eq!(
+      CommandPalette::branch_git_command(CommandPaletteScreen::MergeBranch, &branch),
+      Some("git merge origin/main".to_string())
+    );
+    assert_eq!(
+      CommandPalette::branch_git_command(CommandPaletteScreen::RebaseBranch, &branch),
+      Some("git rebase origin/main".to_string())
+    );
+    assert_eq!(
+      CommandPalette::branch_git_command(CommandPaletteScreen::InteractiveRebaseBranch, &branch),
+      Some("git rebase -i origin/main".to_string())
+    );
+    assert_eq!(
+      CommandPalette::branch_git_command(
+        CommandPaletteScreen::InteractiveRebaseEditBranch,
+        &branch
+      ),
+      Some("git rebase -i --onto $(git merge-base HEAD origin/main) origin/main".to_string())
+    );
+  }
+
+  #[test]
+  fn branch_git_command_shell_quotes_unusual_branch_names() {
+    let branch = CommandPaletteBranch {
+      name: "feature/needs quote".into(),
+      kind: CommandPaletteBranchKind::Local,
+    };
+
+    assert_eq!(
+      CommandPalette::branch_git_command(CommandPaletteScreen::RebaseBranch, &branch),
+      Some("git rebase 'feature/needs quote'".to_string())
+    );
+  }
+
+  #[test]
+  fn interactive_rebase_head_count_git_command_uses_valid_count_or_placeholder() {
+    assert_eq!(
+      CommandPalette::interactive_rebase_head_count_git_command(" 4 "),
+      "git rebase -i HEAD~4"
+    );
+    assert_eq!(
+      CommandPalette::interactive_rebase_head_count_git_command("1"),
+      "git rebase -i HEAD~n"
     );
   }
 
