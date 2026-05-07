@@ -119,9 +119,12 @@ import { logger } from '../../lib/logger.js'
 import { getGithubMetricsContext } from './metrics/github-metrics-context.js'
 import { githubMetricsCollector } from './metrics/github-metrics.js'
 
+const GITHUB_REST_API_VERSION = '2026-03-10'
+
 function githubAuthHeaders(token: string, extraHeaders?: Record<string, string>): RequestHeaders {
   return {
-    authorization: `Bearer ${token}`,
+    'authorization': `Bearer ${token}`,
+    'x-github-api-version': GITHUB_REST_API_VERSION,
     ...extraHeaders,
   }
 }

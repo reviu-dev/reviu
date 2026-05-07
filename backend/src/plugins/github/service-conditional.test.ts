@@ -53,6 +53,7 @@ describe('github service conditional requests', () => {
         state: 'all',
         headers: expect.objectContaining({
           'authorization': 'Bearer github-token',
+          'x-github-api-version': '2026-03-10',
           'if-none-match': '"cached-etag"',
           'if-modified-since': 'Fri, 13 Mar 2026 17:00:00 GMT',
         }),
