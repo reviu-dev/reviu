@@ -7993,7 +7993,7 @@ impl GitPage {
       .flex_1()
       .min_h_0()
       .key_context(crate::shortcuts::GIT_HISTORY_TREE_CONTEXT)
-      .child(tree_view.flex_1().w_full())
+      .child(tree_view.pb_1().flex_1().w_full())
       .when(tree_focused, |this| {
         this.child(
           div()
