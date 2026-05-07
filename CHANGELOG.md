@@ -2,6 +2,12 @@
 
 All notable changes to Reviu are documented here.
 
+## 0.11.0
+
+### Better Rebase Branch Choices
+
+Rebase branch pickers no longer default to the current local branch. Reviu now prioritizes the current upstream and default branch when choosing a rebase base, and the interactive rebase option is labeled more clearly as editing commits since a branch.
+
 ## 0.10.0
 
 ### AI Pull Request Briefs

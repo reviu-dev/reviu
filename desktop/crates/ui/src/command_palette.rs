@@ -1216,7 +1216,7 @@ impl CommandPaletteCommand {
   pub fn interactive_rebase_edit_branch() -> Self {
     Self::new(
       CommandPaletteCommandId::InteractiveRebaseEditBranch,
-      "Edit branch commits",
+      "Edit commits since branch",
       "Reorder, squash, or edit commits without incorporating upstream changes",
     )
   }
@@ -1720,6 +1720,7 @@ impl CommandPaletteCommand {
 
 pub struct CommandPaletteConfig {
   pub branches: Vec<CommandPaletteBranch>,
+  pub rebase_branches: Vec<CommandPaletteBranch>,
   pub delete_branches: Vec<CommandPaletteBranch>,
   pub stashes: Vec<CommandPaletteStash>,
   pub default_stash_message: Option<SharedString>,
@@ -1737,6 +1738,7 @@ impl CommandPaletteConfig {
   ) -> Self {
     Self {
       branches,
+      rebase_branches: Vec::new(),
       delete_branches: Vec::new(),
       stashes: Vec::new(),
       default_stash_message: None,
@@ -1745,6 +1747,11 @@ impl CommandPaletteConfig {
       initial_screen: CommandPaletteInitialScreen::Root,
       on_action,
     }
+  }
+
+  pub fn with_rebase_branches(mut self, rebase_branches: Vec<CommandPaletteBranch>) -> Self {
+    self.rebase_branches = rebase_branches;
+    self
   }
 
   pub fn with_repositories(mut self, repositories: Vec<CommandPaletteRepository>) -> Self {
@@ -1817,6 +1824,7 @@ pub struct CommandPalette {
   interactive_rebase_mode_list: Entity<ListState<CommandListDelegate>>,
   repositories_list: Entity<ListState<RepositoriesListDelegate>>,
   branches_list: Entity<ListState<BranchesListDelegate>>,
+  rebase_branches_list: Entity<ListState<BranchesListDelegate>>,
   delete_branches_list: Entity<ListState<BranchesListDelegate>>,
   stashes_list: Entity<ListState<StashesListDelegate>>,
   branches_with_commands_list: Entity<ListState<BranchesListWithCommandsDelegate>>,
@@ -1905,6 +1913,23 @@ impl CommandPalette {
 
     let branches_list =
       cx.new(|cx| ListState::new(branches_list_delegate, window, cx).searchable(true));
+
+    let default_rebase_branches: Vec<Rc<CommandPaletteBranch>> = config
+      .rebase_branches
+      .iter()
+      .cloned()
+      .map(Rc::new)
+      .collect();
+
+    let rebase_branches_list_delegate = BranchesListDelegate {
+      _branches: default_rebase_branches.clone(),
+      matched_branches: default_rebase_branches.clone(),
+      selected_index: None,
+      query: "".into(),
+    };
+
+    let rebase_branches_list =
+      cx.new(|cx| ListState::new(rebase_branches_list_delegate, window, cx).searchable(true));
 
     let default_delete_branches: Vec<Rc<CommandPaletteBranch>> = config
       .delete_branches
@@ -2093,44 +2118,21 @@ impl CommandPalette {
         |command_palette, list_state, ev: &ListEvent, window, cx| {
           if let ListEvent::Confirm(ix) = ev {
             match command_palette.screen {
-              CommandPaletteScreen::MergeBranch
-              | CommandPaletteScreen::RebaseBranch
-              | CommandPaletteScreen::InteractiveRebaseBranch
-              | CommandPaletteScreen::InteractiveRebaseEditBranch => {
+              CommandPaletteScreen::MergeBranch => {
                 let branch = {
                   let list = list_state.read(cx);
                   list.delegate().matched_branches.get(ix.row).cloned()
                 };
 
                 if let Some(branch) = branch {
-                  let (id, action) = match command_palette.screen {
-                    CommandPaletteScreen::MergeBranch => (
-                      CommandPaletteCommandId::MergeBranch,
-                      CommandPaletteAction::MergeBranch {
-                        name: (*branch).clone(),
-                      },
-                    ),
-                    CommandPaletteScreen::RebaseBranch => (
-                      CommandPaletteCommandId::RebaseBranch,
-                      CommandPaletteAction::RebaseBranch {
-                        name: (*branch).clone(),
-                      },
-                    ),
-                    CommandPaletteScreen::InteractiveRebaseBranch => (
-                      CommandPaletteCommandId::InteractiveRebaseOntoBranch,
-                      CommandPaletteAction::InteractiveRebaseBranch {
-                        name: (*branch).clone(),
-                      },
-                    ),
-                    CommandPaletteScreen::InteractiveRebaseEditBranch => (
-                      CommandPaletteCommandId::InteractiveRebaseEditBranch,
-                      CommandPaletteAction::InteractiveRebaseEditBranch {
-                        name: (*branch).clone(),
-                      },
-                    ),
-                    _ => unreachable!(),
-                  };
-                  command_palette.trigger_action(id, action, window, cx);
+                  command_palette.trigger_action(
+                    CommandPaletteCommandId::MergeBranch,
+                    CommandPaletteAction::MergeBranch {
+                      name: (*branch).clone(),
+                    },
+                    window,
+                    cx,
+                  );
                 }
               }
               CommandPaletteScreen::CreateBranchFrom => {
@@ -2144,6 +2146,43 @@ impl CommandPalette {
                 command_palette.select_command(CommandPaletteCommandId::CreateBranch, cx, window);
               }
               _ => {}
+            }
+          }
+        },
+      ),
+      cx.subscribe_in(
+        &rebase_branches_list,
+        window,
+        |command_palette, list_state, ev: &ListEvent, window, cx| {
+          if let ListEvent::Confirm(ix) = ev {
+            let branch = {
+              let list = list_state.read(cx);
+              list.delegate().matched_branches.get(ix.row).cloned()
+            };
+
+            if let Some(branch) = branch {
+              let (id, action) = match command_palette.screen {
+                CommandPaletteScreen::RebaseBranch => (
+                  CommandPaletteCommandId::RebaseBranch,
+                  CommandPaletteAction::RebaseBranch {
+                    name: (*branch).clone(),
+                  },
+                ),
+                CommandPaletteScreen::InteractiveRebaseBranch => (
+                  CommandPaletteCommandId::InteractiveRebaseOntoBranch,
+                  CommandPaletteAction::InteractiveRebaseBranch {
+                    name: (*branch).clone(),
+                  },
+                ),
+                CommandPaletteScreen::InteractiveRebaseEditBranch => (
+                  CommandPaletteCommandId::InteractiveRebaseEditBranch,
+                  CommandPaletteAction::InteractiveRebaseEditBranch {
+                    name: (*branch).clone(),
+                  },
+                ),
+                _ => return,
+              };
+              command_palette.trigger_action(id, action, window, cx);
             }
           }
         },
@@ -2240,6 +2279,7 @@ impl CommandPalette {
       repositories_list,
       branches_list,
       delete_branches_list,
+      rebase_branches_list,
       stashes_list,
       branches_with_commands_list,
       open_github_url_input,
@@ -2513,11 +2553,15 @@ impl CommandPalette {
           state.focus(window, cx);
         });
       }
-      CommandPaletteScreen::MergeBranch
-      | CommandPaletteScreen::RebaseBranch
+      CommandPaletteScreen::MergeBranch => {
+        self.branches_list.update(cx, |state, cx| {
+          state.focus(window, cx);
+        });
+      }
+      CommandPaletteScreen::RebaseBranch
       | CommandPaletteScreen::InteractiveRebaseBranch
       | CommandPaletteScreen::InteractiveRebaseEditBranch => {
-        self.branches_list.update(cx, |state, cx| {
+        self.rebase_branches_list.update(cx, |state, cx| {
           state.focus(window, cx);
         });
       }
@@ -3027,7 +3071,7 @@ impl CommandPalette {
   }
 
   fn render_interactive_rebase_branch(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
-    self.render_merge_branch(cx)
+    self.render_rebase_branch(cx)
   }
 
   fn render_interactive_rebase_head_count(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
@@ -3037,7 +3081,19 @@ impl CommandPalette {
   }
 
   fn render_rebase_branch(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
-    self.render_merge_branch(cx)
+    let count_branches = self
+      .rebase_branches_list
+      .read(cx)
+      .delegate()
+      .matched_branches
+      .len();
+
+    v_flex().h_full().child(self.render_search_list(
+      &self.rebase_branches_list,
+      count_branches,
+      "Search base branches...",
+      cx,
+    ))
   }
 
   fn render_open_github_from_url(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
@@ -3533,7 +3589,7 @@ mod tests {
     );
     assert_eq!(
       interactive_rebase_edit_branch.name.as_ref(),
-      "Edit branch commits"
+      "Edit commits since branch"
     );
     assert!(interactive_rebase_edit_branch.matches("without incorporating upstream"));
 

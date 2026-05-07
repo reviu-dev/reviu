@@ -16,10 +16,11 @@ use git::{
   MergeBranchOutcome, PullOutcome, RebaseBranchOutcome, RepoStage, RepoStatusEntry, RepoStatusKind,
   abort_merge, abort_rebase, amend_commit, apply_stash, branch_has_unpublished_commits,
   checkout_detached_target, cherry_pick_commits, commit_changes, continue_rebase, create_branch,
-  create_branch_from, create_stash, current_branch_status, current_github_remote_repo,
-  current_head_sha, current_history_revision, current_rebase_commit_message, default_stash_message,
-  delete_branch, delete_untracked_file, detached_head_label, diff_set_from_patch, drop_stash,
-  fetch, head_commit_status, is_merge_in_progress, is_rebase_in_progress, list_branches,
+  create_branch_from, create_stash, current_branch_status, current_branch_upstream,
+  current_github_remote_repo, current_head_sha, current_history_revision,
+  current_rebase_commit_message, default_remote_branch, default_stash_message, delete_branch,
+  delete_untracked_file, detached_head_label, diff_set_from_patch, drop_stash, fetch,
+  head_commit_status, is_merge_in_progress, is_rebase_in_progress, list_branches,
   list_commit_changed_files, list_commit_history, list_interactive_rebase_commits,
   list_repo_status, list_stashes, load_commit_file_diff, merge_branch, pop_stash, pull, push,
   rebase_branch, resolve_branch_ref, restore_file, restore_renamed_file, skip_rebase, stage_all,
@@ -828,6 +829,7 @@ fn open_create_pull_request_dialog(
 struct GitCommandPaletteContents {
   commands: Vec<CommandPaletteCommand>,
   branches: Vec<CommandPaletteBranch>,
+  rebase_branches: Vec<CommandPaletteBranch>,
   delete_branches: Vec<CommandPaletteBranch>,
   stashes: Vec<CommandPaletteStash>,
   default_stash_message: Option<SharedString>,
@@ -4219,6 +4221,7 @@ impl GitPage {
     let GitCommandPaletteContents {
       commands,
       branches: palette_branches,
+      rebase_branches: palette_rebase_branches,
       delete_branches: palette_delete_branches,
       stashes: palette_stashes,
       default_stash_message: palette_default_stash_message,
@@ -4233,6 +4236,7 @@ impl GitPage {
 
     let mut config = CommandPaletteConfig::new(palette_branches, commands, handler)
       .with_repositories(palette_repositories)
+      .with_rebase_branches(palette_rebase_branches)
       .with_delete_branches(palette_delete_branches)
       .with_stashes(palette_stashes);
     if let Some(default_stash_message) = palette_default_stash_message {
@@ -4258,6 +4262,68 @@ impl GitPage {
     });
   }
 
+  fn command_palette_branch(branch: &BranchRef) -> CommandPaletteBranch {
+    CommandPaletteBranch {
+      name: branch.name.clone().into(),
+      kind: match branch.kind {
+        BranchKind::Local => CommandPaletteBranchKind::Local,
+        BranchKind::Remote => CommandPaletteBranchKind::Remote,
+      },
+    }
+  }
+
+  fn command_palette_rebase_branches(
+    branches: &[BranchRef],
+    current_branch_name: Option<&str>,
+    upstream_branch: Option<&BranchRef>,
+    default_branch: Option<&BranchRef>,
+  ) -> Vec<CommandPaletteBranch> {
+    let mut candidates = branches
+      .iter()
+      .enumerate()
+      .filter(|(_, branch)| {
+        !matches!(
+          (branch.kind, current_branch_name),
+          (BranchKind::Local, Some(current_branch_name)) if branch.name == current_branch_name
+        )
+      })
+      .map(|(index, branch)| {
+        (
+          index,
+          Self::rebase_branch_priority(branch, upstream_branch, default_branch),
+          branch,
+        )
+      })
+      .collect::<Vec<_>>();
+
+    candidates.sort_by(|a, b| a.1.cmp(&b.1).then_with(|| a.0.cmp(&b.0)));
+    candidates
+      .into_iter()
+      .map(|(_, _, branch)| Self::command_palette_branch(branch))
+      .collect()
+  }
+
+  fn rebase_branch_priority(
+    branch: &BranchRef,
+    upstream_branch: Option<&BranchRef>,
+    default_branch: Option<&BranchRef>,
+  ) -> usize {
+    if upstream_branch.is_some_and(|upstream| upstream == branch) {
+      return 0;
+    }
+    if default_branch.is_some_and(|default| default == branch) {
+      return 1;
+    }
+    match (branch.kind, branch.name.as_str()) {
+      (BranchKind::Local, "main" | "master") => 2,
+      (
+        BranchKind::Remote,
+        "origin/main" | "origin/master" | "upstream/main" | "upstream/master",
+      ) => 2,
+      _ => 3,
+    }
+  }
+
   fn build_command_palette_contents(
     &self,
     palette_repositories_len: usize,
@@ -4268,6 +4334,7 @@ impl GitPage {
     let mut stashes = Vec::new();
     let mut default_stash_message_value = None;
     let mut branches = Vec::new();
+    let mut rebase_branches = Vec::new();
     let mut delete_branches = Vec::new();
 
     if let Some(root_path) = self.selected_repo.clone() {
@@ -4391,15 +4458,17 @@ impl GitPage {
             },
           })
           .collect::<Vec<_>>();
+        let upstream_branch = current_branch_upstream(&root_path).ok().flatten();
+        let default_branch = default_remote_branch(&root_path).ok().flatten();
+        rebase_branches = Self::command_palette_rebase_branches(
+          &repo_branches,
+          current_branch_name.as_deref(),
+          upstream_branch.as_ref(),
+          default_branch.as_ref(),
+        );
         branches = repo_branches
-          .into_iter()
-          .map(|branch| CommandPaletteBranch {
-            name: branch.name.into(),
-            kind: match branch.kind {
-              BranchKind::Local => CommandPaletteBranchKind::Local,
-              BranchKind::Remote => CommandPaletteBranchKind::Remote,
-            },
-          })
+          .iter()
+          .map(Self::command_palette_branch)
           .collect::<Vec<_>>();
         commands.push(CommandPaletteCommand::switch_branch());
         if !delete_branches.is_empty() {
@@ -4413,7 +4482,7 @@ impl GitPage {
         if self.merge_in_progress {
           commands.push(CommandPaletteCommand::abort_merge());
         }
-        if self.should_show_rebase_branch_palette_command() {
+        if self.should_show_rebase_branch_palette_command() && !rebase_branches.is_empty() {
           commands.push(CommandPaletteCommand::rebase_branch());
         } else if let Some(reason) = self.operation_in_progress_disabled_reason() {
           commands.push(CommandPaletteCommand::rebase_branch().disabled(reason));
@@ -4448,6 +4517,7 @@ impl GitPage {
     GitCommandPaletteContents {
       commands,
       branches,
+      rebase_branches,
       delete_branches,
       stashes,
       default_stash_message: default_stash_message_value,
@@ -14294,6 +14364,100 @@ mod tests {
         kind: CommandPaletteBranchKind::Local,
       }]
     );
+  }
+
+  #[test]
+  fn command_palette_rebase_branches_exclude_current_branch_and_prioritize_base_branches() {
+    let branches = vec![
+      BranchRef {
+        name: "feature".into(),
+        kind: BranchKind::Local,
+      },
+      BranchRef {
+        name: "topic".into(),
+        kind: BranchKind::Local,
+      },
+      BranchRef {
+        name: "main".into(),
+        kind: BranchKind::Local,
+      },
+      BranchRef {
+        name: "origin/main".into(),
+        kind: BranchKind::Remote,
+      },
+      BranchRef {
+        name: "origin/feature".into(),
+        kind: BranchKind::Remote,
+      },
+    ];
+
+    let rebase_branches = GitPage::command_palette_rebase_branches(
+      &branches,
+      Some("feature"),
+      Some(&BranchRef {
+        name: "origin/feature".into(),
+        kind: BranchKind::Remote,
+      }),
+      Some(&BranchRef {
+        name: "origin/main".into(),
+        kind: BranchKind::Remote,
+      }),
+    );
+
+    assert_eq!(
+      rebase_branches,
+      vec![
+        CommandPaletteBranch {
+          name: "origin/feature".into(),
+          kind: CommandPaletteBranchKind::Remote,
+        },
+        CommandPaletteBranch {
+          name: "origin/main".into(),
+          kind: CommandPaletteBranchKind::Remote,
+        },
+        CommandPaletteBranch {
+          name: "main".into(),
+          kind: CommandPaletteBranchKind::Local,
+        },
+        CommandPaletteBranch {
+          name: "topic".into(),
+          kind: CommandPaletteBranchKind::Local,
+        },
+      ]
+    );
+  }
+
+  #[gpui::test]
+  fn command_palette_rebase_targets_do_not_include_current_local_branch(cx: &mut TestAppContext) {
+    init_gpui_test(cx);
+    let repo = TempRepo::init("git-page-command-palette-rebase-targets");
+    let _ = commit_text_file(&repo.path, Path::new("README.md"), "initial\n", "initial");
+    let current_branch = current_branch_status(&repo.path)
+      .expect("read current branch")
+      .name;
+    create_branch(&repo.path, "feature").expect("create feature branch");
+
+    let (git_page, cx) = add_git_page_window_with_root(cx);
+
+    let (branches, rebase_branches) = git_page.update(cx, |this, cx| {
+      this.selected_repo = Some(repo.path.clone());
+      this.branch_status = Some(make_branch_status(&current_branch, 0, 0, true));
+      let contents = this.build_command_palette_contents(1, cx);
+      (contents.branches, contents.rebase_branches)
+    });
+
+    assert!(branches.contains(&CommandPaletteBranch {
+      name: current_branch.clone().into(),
+      kind: CommandPaletteBranchKind::Local,
+    }));
+    assert!(!rebase_branches.contains(&CommandPaletteBranch {
+      name: current_branch.into(),
+      kind: CommandPaletteBranchKind::Local,
+    }));
+    assert!(rebase_branches.contains(&CommandPaletteBranch {
+      name: "feature".into(),
+      kind: CommandPaletteBranchKind::Local,
+    }));
   }
 
   #[gpui::test]

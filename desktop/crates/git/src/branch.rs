@@ -120,6 +120,27 @@ pub fn current_branch_status(repo_root: &Path) -> Result<BranchStatus> {
   })
 }
 
+pub fn current_branch_upstream(repo_root: &Path) -> Result<Option<BranchRef>> {
+  let repo =
+    Repository::open(repo_root).with_context(|| format!("open repo at {:?}", repo_root))?;
+  let head = repo.head()?;
+  if !head.is_branch() {
+    return Ok(None);
+  }
+
+  let Some(local_name) = head.shorthand() else {
+    return Ok(None);
+  };
+  let Ok(local_branch) = repo.find_branch(local_name, BranchType::Local) else {
+    return Ok(None);
+  };
+  let Ok(upstream) = local_branch.upstream() else {
+    return Ok(None);
+  };
+
+  branch_ref_from_full_name(upstream.name()?.unwrap_or(""))
+}
+
 pub fn branch_has_unpublished_commits(repo_root: &Path) -> Result<bool> {
   let repo =
     Repository::open(repo_root).with_context(|| format!("open repo at {:?}", repo_root))?;
@@ -508,6 +529,69 @@ fn preferred_remote_name(repo: &Repository) -> Result<Option<String>> {
 
   let remotes = repo.remotes().context("list remotes")?;
   Ok(remotes.iter().flatten().next().map(str::to_string))
+}
+
+pub fn default_remote_branch(repo_root: &Path) -> Result<Option<BranchRef>> {
+  let repo =
+    Repository::open(repo_root).with_context(|| format!("open repo at {:?}", repo_root))?;
+
+  let mut remote_names = Vec::new();
+  if let Some(preferred_remote) = preferred_remote_name(&repo)? {
+    remote_names.push(preferred_remote);
+  }
+  if !remote_names.iter().any(|name| name == "origin") && repo.find_remote("origin").is_ok() {
+    remote_names.push("origin".to_string());
+  }
+  let remotes = repo.remotes().context("list remotes")?;
+  for remote_name in remotes.iter().flatten() {
+    if !remote_names.iter().any(|name| name == remote_name) {
+      remote_names.push(remote_name.to_string());
+    }
+  }
+
+  for remote_name in remote_names {
+    let head_ref = format!("refs/remotes/{remote_name}/HEAD");
+    if let Ok(reference) = repo.find_reference(&head_ref)
+      && let Some(target) = reference.symbolic_target()
+      && let Some(branch) = branch_ref_from_full_name(target)?
+    {
+      return Ok(Some(branch));
+    }
+
+    for candidate in ["main", "master"] {
+      let branch_name = format!("{remote_name}/{candidate}");
+      if repo.find_branch(&branch_name, BranchType::Remote).is_ok() {
+        return Ok(Some(BranchRef {
+          name: branch_name,
+          kind: BranchKind::Remote,
+        }));
+      }
+    }
+  }
+
+  Ok(None)
+}
+
+fn branch_ref_from_full_name(name: &str) -> Result<Option<BranchRef>> {
+  if let Some(name) = name.strip_prefix("refs/remotes/") {
+    return Ok(Some(BranchRef {
+      name: name.to_string(),
+      kind: BranchKind::Remote,
+    }));
+  }
+  if let Some(name) = name.strip_prefix("refs/heads/") {
+    return Ok(Some(BranchRef {
+      name: name.to_string(),
+      kind: BranchKind::Local,
+    }));
+  }
+  if !name.is_empty() {
+    return Ok(Some(BranchRef {
+      name: name.to_string(),
+      kind: BranchKind::Remote,
+    }));
+  }
+  Ok(None)
 }
 
 fn resolve_remote_branch_name(repo: &Repository, branch_name: &str) -> Result<Option<String>> {
