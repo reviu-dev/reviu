@@ -4,6 +4,10 @@ All notable changes to Reviu are documented here.
 
 ## 0.11.0
 
+### File Search Includes Project Files
+
+The Git page file search now includes tracked project files alongside changed files. Changed files stay grouped at the top, with unchanged files below, so keyboard navigation can jump to any file without hiding active work.
+
 ### Better Rebase Branch Choices
 
 Rebase branch pickers no longer default to the current local branch. Reviu now prioritizes the current upstream and default branch when choosing a rebase base, and the interactive rebase option is labeled more clearly as editing commits since a branch.
