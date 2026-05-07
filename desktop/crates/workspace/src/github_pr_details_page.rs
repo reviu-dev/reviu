@@ -10938,7 +10938,16 @@ impl GithubPrDetailsPage {
     Button::new(id)
       .small()
       .ghost()
-      .label(path.clone())
+      .flex_shrink()
+      .min_w_0()
+      .child(
+        div()
+          .min_w_0()
+          .overflow_hidden()
+          .whitespace_nowrap()
+          .text_ellipsis_start()
+          .child(path.clone()),
+      )
       .on_click(cx.listener(move |this, _, window, cx| {
         this.open_ai_pr_brief_path(path.as_str(), window, cx);
       }))
@@ -11160,8 +11169,10 @@ impl GithubPrDetailsPage {
                       h_flex()
                         .items_center()
                         .gap_2()
+                        .min_w_0()
                         .child(
                           div()
+                            .flex_shrink_0()
                             .font_medium()
                             .text_sm()
                             .text_color(theme.foreground)
