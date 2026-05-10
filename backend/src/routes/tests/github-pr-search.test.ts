@@ -99,6 +99,7 @@ describe('github pull request search routes', () => {
         filters: {
           repos: ['acme/reviu', 'acme/api'],
           labels: ['bug', 'needs design'],
+          excluded_labels: ['team/reveal', 'dependencies'],
           authors: ['@me'],
           assignees: ['alice'],
           requested_reviewers: ['@me'],
@@ -116,7 +117,7 @@ describe('github pull request search routes', () => {
     expect(response.headers.get('x-reviu-cache-scope')).toBe('viewer')
     expect(fetchGithubPullRequestSearchGraphql).toHaveBeenCalledWith({
       token: 'github-token',
-      query: 'is:pr state:open archived:false repo:acme/reviu repo:acme/api (label:"bug" OR label:"needs design") author:@me assignee:alice user-review-requested:@me review:required draft:false sort:updated-desc',
+      query: 'is:pr state:open archived:false repo:acme/reviu repo:acme/api (label:"bug" OR label:"needs design") -label:"team/reveal" -label:"dependencies" author:@me assignee:alice user-review-requested:@me review:required draft:false sort:updated-desc',
       limit: 20,
     })
   })
@@ -131,6 +132,7 @@ describe('github pull request search routes', () => {
         filters: {
           repos: ['acme/reviu', 'acme/api'],
           labels: [],
+          excluded_labels: [],
           authors: [],
           assignees: [],
           requested_reviewers: [],
@@ -150,7 +152,7 @@ describe('github pull request search routes', () => {
 
   it('searches repository pull requests through the existing repo list route', async () => {
     const response = await request(
-      '/repos/acme/widget/pr?state=closed&label=bug&label=needs%20design&author=%40me&assignee=alice&requested_reviewer=bob&review_status=changes_requested&include_drafts=false&base=main&sort=comments_desc',
+      '/repos/acme/widget/pr?state=closed&label=bug&label=needs%20design&exclude_label=team%2Freveal&exclude_label=dependencies&author=%40me&assignee=alice&requested_reviewer=bob&review_status=changes_requested&include_drafts=false&base=main&sort=comments_desc',
     )
 
     expect(response.status).toBe(200)
@@ -163,7 +165,7 @@ describe('github pull request search routes', () => {
     })
     expect(fetchGithubPullRequestSearchGraphql).toHaveBeenCalledWith({
       token: 'github-token',
-      query: 'is:pr archived:false repo:acme/widget (label:"bug" OR label:"needs design") author:@me assignee:alice review-requested:bob review:changes_requested draft:false base:main sort:comments-desc state:closed -is:merged',
+      query: 'is:pr archived:false repo:acme/widget (label:"bug" OR label:"needs design") -label:"team/reveal" -label:"dependencies" author:@me assignee:alice review-requested:bob review:changes_requested draft:false base:main sort:comments-desc state:closed -is:merged',
       limit: 30,
     })
   })

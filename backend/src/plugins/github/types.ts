@@ -488,6 +488,7 @@ export type GithubPullRequestSearchSort
 export interface GithubPullRequestSearchFilters {
   repos: string[]
   labels: string[]
+  excluded_labels: string[]
   authors: string[]
   assignees: string[]
   requested_reviewers: string[]

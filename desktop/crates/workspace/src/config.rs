@@ -1107,6 +1107,7 @@ mod tests {
       filters: crate::github_home_tabs::GithubPullRequestSearchFilters {
         repos: vec!["acme/reviu".to_string()],
         labels: vec!["frontend".to_string()],
+        excluded_labels: vec!["dependencies".to_string()],
         authors: vec!["alice".to_string()],
         assignees: vec!["bob".to_string()],
         requested_reviewers: vec!["@me".to_string()],

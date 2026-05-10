@@ -408,6 +408,13 @@ function buildPullRequestSearchQuery(
     parts.push(labelGroup)
   }
 
+  const excludedLabelQualifiers = filters.excluded_labels
+    .map(label => buildGithubSearchQualifier('-label', label, { quote: true }))
+    .filter((value): value is string => Boolean(value))
+  if (excludedLabelQualifiers.length > 0) {
+    parts.push(...excludedLabelQualifiers)
+  }
+
   const authorGroup = buildGithubSearchAnyOfGroup(
     filters.authors.map(author => buildGithubSearchQualifier('author', author)),
   )
@@ -454,6 +461,7 @@ function normalizePullRequestSearchCacheKey(filters: GithubPullRequestSearchFilt
   return JSON.stringify({
     repos: [...filters.repos].sort(),
     labels: [...filters.labels].sort(),
+    excluded_labels: [...filters.excluded_labels].sort(),
     authors: [...filters.authors].sort(),
     assignees: [...filters.assignees].sort(),
     requested_reviewers: [...filters.requested_reviewers].sort(),
@@ -584,6 +592,7 @@ function repositoryPullRequestFiltersInput(url: string) {
   return {
     repos: [],
     labels: uniqueSearchParamValues(params, 'label'),
+    excluded_labels: uniqueSearchParamValues(params, 'exclude_label'),
     authors: uniqueSearchParamValues(params, 'author'),
     assignees: uniqueSearchParamValues(params, 'assignee'),
     requested_reviewers: uniqueSearchParamValues(params, 'requested_reviewer'),
@@ -693,6 +702,7 @@ async function fetchPullRequestFilterOptions(
       query: buildPullRequestSearchQuery({
         repos: normalizedRepos,
         labels: [],
+        excluded_labels: [],
         authors: [],
         assignees: [],
         requested_reviewers: [],

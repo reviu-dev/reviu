@@ -137,6 +137,7 @@ const pullRequestSearchFiltersStringListSchema = z
 export const pullRequestSearchFiltersSchema = z.object({
   repos: pullRequestSearchFiltersStringListSchema,
   labels: pullRequestSearchFiltersStringListSchema,
+  excluded_labels: pullRequestSearchFiltersStringListSchema,
   authors: pullRequestSearchFiltersStringListSchema,
   assignees: pullRequestSearchFiltersStringListSchema,
   requested_reviewers: pullRequestSearchFiltersStringListSchema,
