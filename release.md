@@ -64,7 +64,7 @@ dist/release/ci/windows-aarch64/desktop-update.manifest.json
 Merge the local macOS manifest with the CI partial manifests:
 
 ```bash
-bash desktop/scripts/merge-release-manifests.sh 0.4.0 \
+bash desktop/scripts/merge-release-manifests.sh 0.10.0 \
   dist/release/desktop-update.manifest.json \
   dist/release/ci/linux-x86_64/desktop-update.manifest.json \
   dist/release/ci/linux-aarch64/desktop-update.manifest.json \
