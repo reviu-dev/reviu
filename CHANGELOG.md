@@ -8,6 +8,10 @@ All notable changes to Reviu are documented here.
 
 The Git page file search now includes tracked project files alongside changed files. Changed files stay grouped at the top, with unchanged files below, so keyboard navigation can jump to any file without hiding active work.
 
+### Exclude Labels From Pull Request Lists
+
+GitHub pull request lists can now exclude labels, matching GitHub's `-label:` search syntax. Saved lists and repository pull request filters can hide teams, dependencies, or other labels that do not belong in the current review queue.
+
 ### Git Command Preview
 
 Merge and rebase branch pickers now show the Git command that will run for the selected target. Interactive rebase commit-count entry also previews the `git rebase -i HEAD~n` command before it starts.

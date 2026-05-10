@@ -1538,6 +1538,9 @@ fn github_repository_pull_request_filter_query(
   for label in &filters.labels {
     query.push(("label".to_string(), label.clone()));
   }
+  for label in &filters.excluded_labels {
+    query.push(("exclude_label".to_string(), label.clone()));
+  }
   for author in &filters.authors {
     query.push(("author".to_string(), author.clone()));
   }
@@ -4334,6 +4337,7 @@ mod tests {
     let filters = crate::github_home_tabs::GithubPullRequestSearchFilters {
       repos: vec!["acme/reviu".to_string()],
       labels: vec!["bug".to_string()],
+      excluded_labels: vec!["team/reveal".to_string()],
       authors: vec!["@me".to_string()],
       assignees: vec!["alice".to_string()],
       requested_reviewers: vec!["@me".to_string()],
@@ -4363,6 +4367,10 @@ mod tests {
     );
     assert!(
       request.contains("\"labels\":[\"bug\"]"),
+      "request: {request}"
+    );
+    assert!(
+      request.contains("\"excluded_labels\":[\"team/reveal\"]"),
       "request: {request}"
     );
     assert!(
@@ -4882,6 +4890,7 @@ mod tests {
     let api = make_test_api_client(base_url);
     let filters = GithubPullRequestSearchFilters {
       labels: vec!["needs design".to_string()],
+      excluded_labels: vec!["team/reveal".to_string()],
       authors: vec!["@me".to_string()],
       assignees: vec!["alice".to_string()],
       requested_reviewers: vec!["bob".to_string()],
@@ -4908,6 +4917,10 @@ mod tests {
     );
     assert!(
       request_line.contains("label=needs+design"),
+      "request_line: {request_line}"
+    );
+    assert!(
+      request_line.contains("exclude_label=team%2Freveal"),
       "request_line: {request_line}"
     );
     assert!(

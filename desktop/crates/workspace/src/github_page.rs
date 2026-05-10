@@ -296,6 +296,12 @@ fn pull_request_tab_filter_tag_labels(filters: &GithubPullRequestSearchFilters) 
   labels.extend(filters.labels.iter().map(|label| label.to_string()));
   labels.extend(
     filters
+      .excluded_labels
+      .iter()
+      .map(|label| format!("-label: {label}")),
+  );
+  labels.extend(
+    filters
       .authors
       .iter()
       .map(|author| format!("Author: {author}")),
@@ -1389,6 +1395,7 @@ struct GithubPullRequestTabDialog {
   name_input: Entity<InputState>,
   repo_input: Entity<InputState>,
   label_input: Entity<InputState>,
+  excluded_label_input: Entity<InputState>,
   author_input: Entity<InputState>,
   assignee_input: Entity<InputState>,
   requested_reviewer_input: Entity<InputState>,
@@ -1397,6 +1404,7 @@ struct GithubPullRequestTabDialog {
   filter_options: GithubPullRequestFilterOptions,
   selected_repos: Vec<String>,
   selected_labels: Vec<String>,
+  selected_excluded_labels: Vec<String>,
   selected_authors: Vec<String>,
   selected_assignees: Vec<String>,
   selected_requested_reviewers: Vec<String>,
@@ -1525,6 +1533,8 @@ impl GithubPullRequestTabDialog {
     let name_input = cx.new(|cx| InputState::new(window, cx).placeholder("List name"));
     let repo_input = cx.new(|cx| InputState::new(window, cx).placeholder("Add repositories..."));
     let label_input = cx.new(|cx| InputState::new(window, cx).placeholder("Add labels..."));
+    let excluded_label_input =
+      cx.new(|cx| InputState::new(window, cx).placeholder("Add excluded labels..."));
     let author_input = cx.new(|cx| InputState::new(window, cx).placeholder("Add authors..."));
     let assignee_input = cx.new(|cx| InputState::new(window, cx).placeholder("Add assignees..."));
     let requested_reviewer_input =
@@ -1533,6 +1543,11 @@ impl GithubPullRequestTabDialog {
     let mut subscriptions = vec![
       cx.subscribe_in(&repo_input, window, Self::on_repo_input_event),
       cx.subscribe_in(&label_input, window, Self::on_label_input_event),
+      cx.subscribe_in(
+        &excluded_label_input,
+        window,
+        Self::on_excluded_label_input_event,
+      ),
       cx.subscribe_in(&author_input, window, Self::on_author_input_event),
       cx.subscribe_in(&assignee_input, window, Self::on_assignee_input_event),
       cx.subscribe_in(
@@ -1565,6 +1580,7 @@ impl GithubPullRequestTabDialog {
       name_input,
       repo_input,
       label_input,
+      excluded_label_input,
       author_input,
       assignee_input,
       requested_reviewer_input,
@@ -1578,6 +1594,10 @@ impl GithubPullRequestTabDialog {
       selected_labels: initial_tab
         .as_ref()
         .map(|tab| tab.filters.labels.clone())
+        .unwrap_or_default(),
+      selected_excluded_labels: initial_tab
+        .as_ref()
+        .map(|tab| tab.filters.excluded_labels.clone())
         .unwrap_or_default(),
       selected_authors: initial_tab
         .as_ref()
@@ -1653,6 +1673,15 @@ impl GithubPullRequestTabDialog {
     self.label_input.read(cx).value().trim().to_string()
   }
 
+  fn excluded_label_query(&self, cx: &App) -> String {
+    self
+      .excluded_label_input
+      .read(cx)
+      .value()
+      .trim()
+      .to_string()
+  }
+
   fn author_query(&self, cx: &App) -> String {
     self.author_input.read(cx).value().trim().to_string()
   }
@@ -1696,7 +1725,21 @@ impl GithubPullRequestTabDialog {
 
   fn add_label_value(&mut self, raw_value: &str, window: &mut Window, cx: &mut Context<Self>) {
     if push_filter_token(&mut self.selected_labels, raw_value) {
+      remove_filter_token(&mut self.selected_excluded_labels, raw_value);
       Self::clear_input(&self.label_input, window, cx);
+      cx.notify();
+    }
+  }
+
+  fn add_excluded_label_value(
+    &mut self,
+    raw_value: &str,
+    window: &mut Window,
+    cx: &mut Context<Self>,
+  ) {
+    if push_filter_token(&mut self.selected_excluded_labels, raw_value) {
+      remove_filter_token(&mut self.selected_labels, raw_value);
+      Self::clear_input(&self.excluded_label_input, window, cx);
       cx.notify();
     }
   }
@@ -1735,6 +1778,11 @@ impl GithubPullRequestTabDialog {
 
   fn remove_label(&mut self, label: &str, cx: &mut Context<Self>) {
     remove_filter_token(&mut self.selected_labels, label);
+    cx.notify();
+  }
+
+  fn remove_excluded_label(&mut self, label: &str, cx: &mut Context<Self>) {
+    remove_filter_token(&mut self.selected_excluded_labels, label);
     cx.notify();
   }
 
@@ -1806,6 +1854,7 @@ impl GithubPullRequestTabDialog {
         filters: GithubPullRequestSearchFilters {
           repos: self.selected_repos.clone(),
           labels: self.selected_labels.clone(),
+          excluded_labels: self.selected_excluded_labels.clone(),
           authors: self.selected_authors.clone(),
           assignees: self.selected_assignees.clone(),
           requested_reviewers: self.selected_requested_reviewers.clone(),
@@ -1847,6 +1896,22 @@ impl GithubPullRequestTabDialog {
       InputEvent::Change => cx.notify(),
       InputEvent::PressEnter { .. } => {
         self.add_label_value(state.read(cx).value().as_str(), window, cx);
+      }
+      _ => {}
+    }
+  }
+
+  fn on_excluded_label_input_event(
+    &mut self,
+    state: &Entity<InputState>,
+    event: &InputEvent,
+    window: &mut Window,
+    cx: &mut Context<Self>,
+  ) {
+    match event {
+      InputEvent::Change => cx.notify(),
+      InputEvent::PressEnter { .. } => {
+        self.add_excluded_label_value(state.read(cx).value().as_str(), window, cx);
       }
       _ => {}
     }
@@ -1980,10 +2045,17 @@ impl Render for GithubPullRequestTabDialog {
   fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
     let theme = cx.theme().clone();
     let repo_suggestions = self.matching_repo_suggestions(cx);
+    let mut selected_label_filters = self.selected_labels.clone();
+    selected_label_filters.extend(self.selected_excluded_labels.clone());
     let label_suggestions = matching_filter_option_labels(
       &self.filter_options.labels,
       &self.label_query(cx),
-      &self.selected_labels,
+      &selected_label_filters,
+    );
+    let excluded_label_suggestions = matching_filter_option_labels(
+      &self.filter_options.labels,
+      &self.excluded_label_query(cx),
+      &selected_label_filters,
     );
     let author_suggestions = matching_user_filter_suggestions(
       &self.filter_options.authors,
@@ -2118,6 +2190,62 @@ impl Render for GithubPullRequestTabDialog {
                         move |_, window, cx| {
                           view.update(cx, |this, cx| {
                             this.add_label_value(&label, window, cx);
+                          });
+                        }
+                      })
+                  }),
+                ))
+              }),
+          )
+          .child(
+            v_flex()
+              .gap_1()
+              .child(
+                h_flex()
+                  .justify_between()
+                  .items_center()
+                  .child(div().text_sm().child("Excluded labels"))
+                  .when(self.filter_options_loading, |this| {
+                    this.child(Spinner::new().xsmall())
+                  }),
+              )
+              .when(!self.selected_excluded_labels.is_empty(), |this| {
+                this.child(Self::render_token_row(
+                  "github-tab-excluded-label",
+                  &self.selected_excluded_labels,
+                  {
+                    let view = cx.entity().clone();
+                    move |value, _, cx| {
+                      view.update(cx, |this, cx| this.remove_excluded_label(&value, cx));
+                    }
+                  },
+                ))
+              })
+              .child(
+                Input::new(&self.excluded_label_input)
+                  .w_full()
+                  .disabled(needs_repos),
+              )
+              .when(needs_repos, |this| {
+                this.child(
+                  div()
+                    .text_xs()
+                    .text_color(theme.muted_foreground)
+                    .child("Select at least one repository to load labels."),
+                )
+              })
+              .when(!excluded_label_suggestions.is_empty(), |this| {
+                this.child(h_flex().gap_1().flex_wrap().children(
+                  excluded_label_suggestions.into_iter().map(|label| {
+                    Button::new(format!("github-tab-excluded-label-suggestion-{label}"))
+                      .label(label.clone())
+                      .xsmall()
+                      .outline()
+                      .on_click({
+                        let view = cx.entity().clone();
+                        move |_, window, cx| {
+                          view.update(cx, |this, cx| {
+                            this.add_excluded_label_value(&label, window, cx);
                           });
                         }
                       })
@@ -4489,6 +4617,7 @@ mod tests {
     let labels = pull_request_tab_filter_tag_labels(&GithubPullRequestSearchFilters {
       repos: vec!["acme/reviu".to_string()],
       labels: vec!["bug".to_string()],
+      excluded_labels: vec!["team/reveal".to_string()],
       authors: vec!["@me".to_string()],
       assignees: vec!["alice".to_string()],
       requested_reviewers: vec!["bob".to_string()],
@@ -4503,6 +4632,7 @@ mod tests {
       vec![
         "acme/reviu".to_string(),
         "bug".to_string(),
+        "-label: team/reveal".to_string(),
         "Author: @me".to_string(),
         "Assignee: alice".to_string(),
         "Reviewer: bob".to_string(),

@@ -29,6 +29,8 @@ pub struct GithubPullRequestSearchFilters {
   #[serde(default)]
   pub labels: Vec<String>,
   #[serde(default)]
+  pub excluded_labels: Vec<String>,
+  #[serde(default)]
   pub authors: Vec<String>,
   #[serde(default)]
   pub assignees: Vec<String>,
@@ -49,6 +51,7 @@ impl Default for GithubPullRequestSearchFilters {
     Self {
       repos: Vec::new(),
       labels: Vec::new(),
+      excluded_labels: Vec::new(),
       authors: Vec::new(),
       assignees: Vec::new(),
       requested_reviewers: Vec::new(),
@@ -168,6 +171,13 @@ pub fn normalize_github_pull_request_filters(
         .map(String::as_str)
         .collect::<Vec<_>>(),
     ),
+    excluded_labels: normalize_non_empty_list(
+      &filters
+        .excluded_labels
+        .iter()
+        .map(String::as_str)
+        .collect::<Vec<_>>(),
+    ),
     authors: normalize_non_empty_list(
       &filters
         .authors
@@ -238,6 +248,7 @@ mod tests {
     let filters = GithubPullRequestSearchFilters::default();
 
     assert!(filters.include_drafts);
+    assert!(filters.excluded_labels.is_empty());
   }
 
   #[test]
@@ -245,6 +256,7 @@ mod tests {
     let filters = normalize_github_pull_request_filters(&GithubPullRequestSearchFilters {
       repos: vec![" acme/reviu ".to_string(), "acme/reviu".to_string()],
       labels: vec![" bug ".to_string(), "bug".to_string()],
+      excluded_labels: vec![" team/reveal ".to_string(), "TEAM/REVEAL".to_string()],
       authors: vec![" @me ".to_string(), "@me".to_string()],
       assignees: vec![" alice ".to_string(), "Alice".to_string()],
       requested_reviewers: vec![" bob ".to_string(), "bob".to_string()],
@@ -256,6 +268,7 @@ mod tests {
 
     assert_eq!(filters.repos, vec!["acme/reviu".to_string()]);
     assert_eq!(filters.labels, vec!["bug".to_string()]);
+    assert_eq!(filters.excluded_labels, vec!["team/reveal".to_string()]);
     assert_eq!(filters.authors, vec!["@me".to_string()]);
     assert_eq!(filters.assignees, vec!["alice".to_string()]);
     assert_eq!(filters.requested_reviewers, vec!["bob".to_string()]);

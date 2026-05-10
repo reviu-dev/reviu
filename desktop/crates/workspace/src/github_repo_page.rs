@@ -372,6 +372,7 @@ enum RepoIssueFilterTokenKind {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum RepoPullRequestFilterTokenKind {
   Label,
+  ExcludedLabel,
   Author,
   Assignee,
   RequestedReviewer,
@@ -380,6 +381,7 @@ enum RepoPullRequestFilterTokenKind {
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum RepoPullRequestFilterChip {
   Label(String),
+  ExcludedLabel(String),
   Author(String),
   Assignee(String),
   RequestedReviewer(String),
@@ -428,6 +430,13 @@ fn repo_pull_request_filter_chips(
       .iter()
       .cloned()
       .map(RepoPullRequestFilterChip::Label),
+  );
+  chips.extend(
+    filters
+      .excluded_labels
+      .iter()
+      .cloned()
+      .map(RepoPullRequestFilterChip::ExcludedLabel),
   );
   chips.extend(
     filters
@@ -3803,6 +3812,7 @@ pub struct GithubRepoPage {
   svg_preview_task: Option<Task<()>>,
   pull_requests_search_input: Entity<InputState>,
   pull_request_filter_label_input: Entity<InputState>,
+  pull_request_filter_excluded_label_input: Entity<InputState>,
   pull_request_filter_author_input: Entity<InputState>,
   pull_request_filter_assignee_input: Entity<InputState>,
   pull_request_filter_reviewer_input: Entity<InputState>,
@@ -4038,6 +4048,8 @@ impl GithubRepoPage {
       cx.new(|cx| InputState::new(window, cx).placeholder("Search pull requests..."));
     let pull_request_filter_label_input =
       cx.new(|cx| InputState::new(window, cx).placeholder("Add label..."));
+    let pull_request_filter_excluded_label_input =
+      cx.new(|cx| InputState::new(window, cx).placeholder("Add excluded label..."));
     let pull_request_filter_author_input =
       cx.new(|cx| InputState::new(window, cx).placeholder("Add author..."));
     let pull_request_filter_assignee_input =
@@ -4122,6 +4134,7 @@ impl GithubRepoPage {
       svg_preview_task: None,
       pull_requests_search_input,
       pull_request_filter_label_input,
+      pull_request_filter_excluded_label_input,
       pull_request_filter_author_input,
       pull_request_filter_assignee_input,
       pull_request_filter_reviewer_input,
@@ -4301,6 +4314,10 @@ impl GithubRepoPage {
       (
         self.pull_request_filter_label_input.clone(),
         RepoPullRequestFilterTokenKind::Label,
+      ),
+      (
+        self.pull_request_filter_excluded_label_input.clone(),
+        RepoPullRequestFilterTokenKind::ExcludedLabel,
       ),
       (
         self.pull_request_filter_author_input.clone(),
@@ -4559,6 +4576,9 @@ impl GithubRepoPage {
   ) -> &mut Vec<String> {
     match kind {
       RepoPullRequestFilterTokenKind::Label => &mut self.pull_request_filters.labels,
+      RepoPullRequestFilterTokenKind::ExcludedLabel => {
+        &mut self.pull_request_filters.excluded_labels
+      }
       RepoPullRequestFilterTokenKind::Author => &mut self.pull_request_filters.authors,
       RepoPullRequestFilterTokenKind::Assignee => &mut self.pull_request_filters.assignees,
       RepoPullRequestFilterTokenKind::RequestedReviewer => {
@@ -4570,6 +4590,9 @@ impl GithubRepoPage {
   fn pull_request_filter_input(&self, kind: RepoPullRequestFilterTokenKind) -> Entity<InputState> {
     match kind {
       RepoPullRequestFilterTokenKind::Label => self.pull_request_filter_label_input.clone(),
+      RepoPullRequestFilterTokenKind::ExcludedLabel => {
+        self.pull_request_filter_excluded_label_input.clone()
+      }
       RepoPullRequestFilterTokenKind::Author => self.pull_request_filter_author_input.clone(),
       RepoPullRequestFilterTokenKind::Assignee => self.pull_request_filter_assignee_input.clone(),
       RepoPullRequestFilterTokenKind::RequestedReviewer => {
@@ -4587,6 +4610,17 @@ impl GithubRepoPage {
   ) {
     if !push_filter_token(self.pull_request_filter_tokens_mut(kind), value) {
       return;
+    }
+    match kind {
+      RepoPullRequestFilterTokenKind::Label => {
+        remove_filter_token(&mut self.pull_request_filters.excluded_labels, value);
+      }
+      RepoPullRequestFilterTokenKind::ExcludedLabel => {
+        remove_filter_token(&mut self.pull_request_filters.labels, value);
+      }
+      RepoPullRequestFilterTokenKind::Author
+      | RepoPullRequestFilterTokenKind::Assignee
+      | RepoPullRequestFilterTokenKind::RequestedReviewer => {}
     }
 
     self.pull_request_filters = normalize_github_pull_request_filters(&self.pull_request_filters);
@@ -4699,6 +4733,7 @@ impl GithubRepoPage {
   fn clear_pull_request_filter_inputs(&mut self, cx: &mut Context<Self>) {
     let inputs = [
       self.pull_request_filter_label_input.clone(),
+      self.pull_request_filter_excluded_label_input.clone(),
       self.pull_request_filter_author_input.clone(),
       self.pull_request_filter_assignee_input.clone(),
       self.pull_request_filter_reviewer_input.clone(),
@@ -8426,6 +8461,8 @@ impl GithubRepoPage {
 
   fn render_pull_request_filters_panel(&self, cx: &mut Context<Self>) -> impl IntoElement {
     let theme = cx.theme().clone();
+    let mut selected_label_filters = self.pull_request_filters.labels.clone();
+    selected_label_filters.extend(self.pull_request_filters.excluded_labels.clone());
     let label_suggestions = matching_filter_option_labels(
       &self.pull_request_filter_options.labels,
       self
@@ -8433,7 +8470,16 @@ impl GithubRepoPage {
         .read(cx)
         .value()
         .as_ref(),
-      &self.pull_request_filters.labels,
+      &selected_label_filters,
+    );
+    let excluded_label_suggestions = matching_filter_option_labels(
+      &self.pull_request_filter_options.labels,
+      self
+        .pull_request_filter_excluded_label_input
+        .read(cx)
+        .value()
+        .as_ref(),
+      &selected_label_filters,
     );
     let author_suggestions = matching_filter_option_users(
       &self.pull_request_filter_options.authors,
@@ -8515,6 +8561,14 @@ impl GithubRepoPage {
         self.pull_request_filter_label_input.clone(),
         &self.pull_request_filters.labels,
         label_suggestions,
+        cx,
+      ))
+      .child(self.render_pull_request_filter_token_section(
+        "Excluded labels",
+        RepoPullRequestFilterTokenKind::ExcludedLabel,
+        self.pull_request_filter_excluded_label_input.clone(),
+        &self.pull_request_filters.excluded_labels,
+        excluded_label_suggestions,
         cx,
       ))
       .child(self.render_pull_request_filter_token_section(
@@ -9326,6 +9380,7 @@ mod tests {
   fn repo_pull_request_filter_chips_expand_active_filters() {
     let filters = GithubPullRequestSearchFilters {
       labels: vec!["bug".to_string()],
+      excluded_labels: vec!["team/reveal".to_string()],
       authors: vec!["@me".to_string()],
       assignees: vec!["alice".to_string()],
       requested_reviewers: vec!["bob".to_string()],
@@ -9342,6 +9397,7 @@ mod tests {
       chips,
       vec![
         RepoPullRequestFilterChip::Label("bug".to_string()),
+        RepoPullRequestFilterChip::ExcludedLabel("team/reveal".to_string()),
         RepoPullRequestFilterChip::Author("@me".to_string()),
         RepoPullRequestFilterChip::Assignee("alice".to_string()),
         RepoPullRequestFilterChip::RequestedReviewer("bob".to_string()),
