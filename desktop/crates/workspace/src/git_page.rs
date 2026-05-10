@@ -1654,6 +1654,7 @@ pub struct GitPage {
   history_rows_cache: Vec<HistoryRenderRow>,
   history_tree_nodes: HashMap<String, HistoryTreeNode>,
   selected_file: Option<PathBuf>,
+  selected_file_source: Option<SelectedFileSource>,
   selected_file_index_hint: Option<IndexPath>,
   select_first_file_after_restore: bool,
   force_list_selection: bool,
@@ -1698,6 +1699,12 @@ pub struct GitPage {
 struct SelectedFileUpdate {
   clear_selection: bool,
   sync_diff_view: bool,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum SelectedFileSource {
+  StatusEntry,
+  ProjectFile,
 }
 
 impl GitPage {
@@ -2137,6 +2144,7 @@ impl GitPage {
 
   fn selected_file_update(
     selected_file: Option<&Path>,
+    selected_file_source: Option<SelectedFileSource>,
     status_entries: &[RepoStatusEntry],
     has_history_file_selection: bool,
     sync_diff_when_selected_retained: bool,
@@ -2153,6 +2161,13 @@ impl GitPage {
       .iter()
       .any(|entry| entry.path.as_path() == selected_file);
     if !is_selected_file_present {
+      if selected_file_source == Some(SelectedFileSource::ProjectFile) {
+        return SelectedFileUpdate {
+          clear_selection: false,
+          sync_diff_view: sync_diff_when_selected_retained,
+        };
+      }
+
       return SelectedFileUpdate {
         clear_selection: true,
         sync_diff_view: false,
@@ -2368,6 +2383,7 @@ impl GitPage {
 
     let selected_file_update = Self::selected_file_update(
       self.selected_file.as_deref(),
+      self.selected_file_source,
       &self.status_entries,
       self.history_opened_commit_file.is_some(),
       sync_diff_when_selected_retained,
@@ -2375,6 +2391,7 @@ impl GitPage {
     if selected_file_update.clear_selection {
       self.invalidate_open_file_task();
       self.selected_file = None;
+      self.selected_file_source = None;
       self.editor = None;
       self.binary_preview = None;
       self.ensure_page_shortcut_focus(cx);
@@ -2387,7 +2404,7 @@ impl GitPage {
     if self.select_first_file_after_restore {
       self.select_first_file_after_restore = false;
       if let Some(first_path) = self.status_entries.first().map(|entry| entry.path.clone()) {
-        self.open_file(first_path, cx);
+        self.open_status_file(first_path, cx);
       }
     }
 
@@ -2915,6 +2932,7 @@ impl GitPage {
       history_rows_cache: Vec::new(),
       history_tree_nodes: HashMap::new(),
       selected_file: None,
+      selected_file_source: None,
       selected_file_index_hint: None,
       select_first_file_after_restore: false,
       force_list_selection: false,
@@ -3021,6 +3039,7 @@ impl GitPage {
       history_rows_cache: Vec::new(),
       history_tree_nodes: HashMap::new(),
       selected_file: None,
+      selected_file_source: None,
       selected_file_index_hint: None,
       select_first_file_after_restore: false,
       force_list_selection: false,
@@ -3372,7 +3391,7 @@ impl GitPage {
           let row = state.read(cx).delegate().row_at(*ix);
           if let Some(row) = row {
             this.selected_file_index_hint = Some(*ix);
-            this.open_file(row.entry.path.clone(), cx);
+            this.open_status_file(row.entry.path.clone(), cx);
           }
         }
         ListEvent::Cancel => {}
@@ -3421,6 +3440,7 @@ impl GitPage {
     self.selected_repo = Some(repo_root.clone());
     self.invalidate_open_file_task();
     self.selected_file = None;
+    self.selected_file_source = None;
     self.select_first_file_after_restore = false;
     self.operation_error = None;
     self.editor = None;
@@ -3468,6 +3488,7 @@ impl GitPage {
     self.selected_repo = None;
     self.invalidate_open_file_task();
     self.selected_file = None;
+    self.selected_file_source = None;
     self.select_first_file_after_restore = false;
     self.operation_error = None;
     self.editor = None;
@@ -3762,6 +3783,7 @@ impl GitPage {
           this.rebase_in_progress = false;
           this.operation_error = None;
           this.selected_file = None;
+          this.selected_file_source = None;
           this.editor = None;
           this.binary_preview = None;
           this.interactive_rebase_todo_view = None;
@@ -4663,7 +4685,7 @@ impl GitPage {
           if reveal_first_conflict_on_open {
             self.open_file_revealing_first_conflict(path, cx);
           } else {
-            self.open_file(path, cx);
+            self.open_status_file(path, cx);
           }
           Ok(())
         } else {
@@ -5774,7 +5796,7 @@ impl GitPage {
         }
         this.reload_status(cx);
         if let Some(path) = conflicted_path {
-          this.open_file(path, cx);
+          this.open_status_file(path, cx);
         }
         if let Some(error_message) = error_message {
           this.operation_error = Some(error_message.into());
@@ -5975,7 +5997,7 @@ impl GitPage {
         this.reload_status(cx);
         this.refresh_branches(cx);
         if let Some(path) = conflicted_path {
-          this.open_file(path, cx);
+          this.open_status_file(path, cx);
         }
         if let Some(message) = rebase_message {
           let _ = cx.update_window(window_handle, |_, window, cx| {
@@ -6252,17 +6274,35 @@ impl GitPage {
   }
 
   fn open_file_revealing_first_conflict(&mut self, rel_path: PathBuf, cx: &mut Context<Self>) {
-    self.open_file_internal(rel_path, true, cx);
+    self.open_file_internal(rel_path, true, SelectedFileSource::StatusEntry, cx);
   }
 
   fn open_file(&mut self, rel_path: PathBuf, cx: &mut Context<Self>) {
-    self.open_file_internal(rel_path, false, cx);
+    let selected_file_source = self.selected_file_source_for_open_path(&rel_path);
+    self.open_file_internal(rel_path, false, selected_file_source, cx);
+  }
+
+  fn open_status_file(&mut self, rel_path: PathBuf, cx: &mut Context<Self>) {
+    self.open_file_internal(rel_path, false, SelectedFileSource::StatusEntry, cx);
+  }
+
+  fn selected_file_source_for_open_path(&self, rel_path: &Path) -> SelectedFileSource {
+    if self
+      .status_entries
+      .iter()
+      .any(|entry| entry.path.as_path() == rel_path)
+    {
+      SelectedFileSource::StatusEntry
+    } else {
+      SelectedFileSource::ProjectFile
+    }
   }
 
   fn open_file_internal(
     &mut self,
     rel_path: PathBuf,
     reveal_first_conflict: bool,
+    selected_file_source: SelectedFileSource,
     cx: &mut Context<Self>,
   ) {
     let Some(repo_root) = self.selected_repo.clone() else {
@@ -6281,6 +6321,7 @@ impl GitPage {
     self.hide_whitespace = app_settings.hide_whitespace;
     self.pending_conflict_reveal_path = reveal_first_conflict.then_some(rel_path.clone());
     if self.selected_file.as_ref() == Some(&rel_path) && self.history_opened_commit_file.is_none() {
+      self.selected_file_source = Some(selected_file_source);
       if reveal_first_conflict {
         self.reveal_first_conflict_in_editor(cx);
       }
@@ -6296,6 +6337,7 @@ impl GitPage {
     let had_history_file_selection = self.history_opened_commit_file.is_some();
     self.history_opened_commit_file = None;
     self.selected_file = Some(rel_path.clone());
+    self.selected_file_source = Some(selected_file_source);
     self.sync_sentry_git_context();
     let mut data = Map::new();
     data.insert(
@@ -6449,6 +6491,7 @@ impl GitPage {
     self.invalidate_open_file_task();
     self.history_opened_commit_file = Some((commit_oid.clone(), rel_path.clone()));
     self.selected_file = Some(rel_path.clone());
+    self.selected_file_source = None;
     self.sync_sentry_git_context();
     let mut data = Map::new();
     data.insert(
@@ -6496,6 +6539,7 @@ impl GitPage {
           Self::build_binary_preview(rel_path.as_path(), commit_file.binary_bytes.clone());
         this.editor = Some(editor);
         this.selected_file = Some(rel_path.clone());
+        this.selected_file_source = None;
         this.history_opened_commit_file = Some((commit_oid.clone(), rel_path.clone()));
         this.sync_sentry_git_context();
         this.svg_preview = None;
@@ -11937,6 +11981,7 @@ mod tests {
   fn selected_file_update_clears_missing_selection_without_history_file() {
     let update = GitPage::selected_file_update(
       Some(Path::new("src/missing.rs")),
+      Some(SelectedFileSource::StatusEntry),
       &[make_status_entry("src/exists.rs", RepoStage::Unstaged)],
       false,
       true,
@@ -11954,7 +11999,26 @@ mod tests {
   fn selected_file_update_keeps_selection_and_syncs_when_present() {
     let update = GitPage::selected_file_update(
       Some(Path::new("src/main.rs")),
+      Some(SelectedFileSource::StatusEntry),
       &[make_status_entry("src/main.rs", RepoStage::Unstaged)],
+      false,
+      true,
+    );
+    assert_eq!(
+      update,
+      SelectedFileUpdate {
+        clear_selection: false,
+        sync_diff_view: true,
+      }
+    );
+  }
+
+  #[test]
+  fn selected_file_update_keeps_project_file_when_missing_from_status() {
+    let update = GitPage::selected_file_update(
+      Some(Path::new("src/main.rs")),
+      Some(SelectedFileSource::ProjectFile),
+      &[make_status_entry("src/other.rs", RepoStage::Unstaged)],
       false,
       true,
     );
@@ -11971,6 +12035,7 @@ mod tests {
   fn selected_file_update_never_clears_when_history_file_is_open() {
     let update = GitPage::selected_file_update(
       Some(Path::new("src/main.rs")),
+      Some(SelectedFileSource::StatusEntry),
       &[make_status_entry("src/other.rs", RepoStage::Unstaged)],
       true,
       true,
@@ -11982,6 +12047,7 @@ mod tests {
   fn selected_file_update_is_noop_without_selection() {
     let update = GitPage::selected_file_update(
       None,
+      Some(SelectedFileSource::StatusEntry),
       &[make_status_entry("src/main.rs", RepoStage::Unstaged)],
       false,
       true,
@@ -15929,6 +15995,81 @@ mod tests {
     assert_eq!(selected_file, Some(rel_path.to_path_buf()));
     assert!(!is_read_only);
     assert_eq!(contents, "v2\n");
+  }
+
+  #[gpui::test]
+  async fn reload_status_keeps_unchanged_project_file_open(cx: &mut TestAppContext) {
+    init_gpui_test(cx);
+    let repo = TempRepo::init("git-page-clean-project-file-stays-open");
+    let rel_path = Path::new("src/main.rs");
+    std::fs::create_dir_all(repo.path.join("src")).expect("create source dir");
+    let _ = commit_text_file(&repo.path, rel_path, "fn main() {}\n", "initial");
+
+    let (git_page, cx) = add_git_page_window_with_root(cx);
+    cx.executor().allow_parking();
+
+    git_page.update_in(cx, |this, _window, cx| {
+      this.selected_repo = Some(repo.path.clone());
+      this.open_file(rel_path.to_path_buf(), cx);
+    });
+    await_git_page_background_tasks(git_page.clone(), cx).await;
+
+    let reload_task = git_page.update_in(cx, |this, _window, cx| {
+      this.reload_status(cx);
+      this.status_task.take().expect("reload status task")
+    });
+    reload_task.await;
+    await_git_page_background_tasks(git_page.clone(), cx).await;
+
+    git_page.read_with(cx, |this, _cx| {
+      assert_eq!(this.selected_file.as_deref(), Some(rel_path));
+      assert_eq!(
+        this.selected_file_source,
+        Some(SelectedFileSource::ProjectFile)
+      );
+      assert!(this.editor.is_some());
+      assert!(this.status_entries.is_empty());
+    });
+  }
+
+  #[gpui::test]
+  async fn project_file_selection_uses_status_entry_after_file_changes(cx: &mut TestAppContext) {
+    init_gpui_test(cx);
+    let repo = TempRepo::init("git-page-project-file-becomes-changed");
+    let rel_path = Path::new("src/main.rs");
+    std::fs::create_dir_all(repo.path.join("src")).expect("create source dir");
+    let _ = commit_text_file(&repo.path, rel_path, "fn main() {}\n", "initial");
+
+    let (git_page, cx) = add_git_page_window_with_root(cx);
+    cx.executor().allow_parking();
+
+    git_page.update_in(cx, |this, _window, cx| {
+      this.selected_repo = Some(repo.path.clone());
+      this.open_file(rel_path.to_path_buf(), cx);
+    });
+    await_git_page_background_tasks(git_page.clone(), cx).await;
+
+    std::fs::write(
+      repo.path.join(rel_path),
+      "fn main() { println!(\"changed\"); }\n",
+    )
+    .expect("modify project file");
+
+    let reload_task = git_page.update_in(cx, |this, _window, cx| {
+      this.reload_status(cx);
+      this.status_task.take().expect("reload status task")
+    });
+    reload_task.await;
+    await_git_page_background_tasks(git_page.clone(), cx).await;
+
+    git_page.read_with(cx, |this, _cx| {
+      assert_eq!(this.selected_file.as_deref(), Some(rel_path));
+      assert!(this.editor.is_some());
+      assert_eq!(
+        this.selected_file_entry().map(|entry| entry.status),
+        Some(RepoStatusKind::Modified)
+      );
+    });
   }
 
   #[gpui::test]
