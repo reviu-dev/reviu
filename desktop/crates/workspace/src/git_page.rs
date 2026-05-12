@@ -3,7 +3,7 @@ use std::{
   path::{Path, PathBuf},
   rc::Rc,
   sync::Arc,
-  time::Duration,
+  time::{Duration, Instant},
 };
 
 use editor::{
@@ -96,7 +96,8 @@ use ui::{
 const SIDEBAR_DEFAULT_WIDTH: f32 = 400.0;
 const SIDEBAR_MIN_WIDTH: f32 = 250.0;
 const SIDEBAR_MAX_WIDTH: f32 = 1500.0;
-const STATUS_POLL_INTERVAL_MS: u64 = 800;
+const STATUS_POLL_INTERVAL_MS: u64 = 3_000;
+const UNPUBLISHED_BRANCH_RECHECK_INTERVAL: Duration = Duration::from_secs(30);
 const EDITOR_HEADER_HEIGHT: f32 = 40.0;
 const HISTORY_MAX_COMMITS: usize = 200;
 const HISTORY_AUTHOR_MAX_WIDTH: f32 = 180.0;
@@ -1635,6 +1636,8 @@ pub struct GitPage {
   can_push: bool,
   can_force_push: bool,
   has_unpublished_branch_commits: bool,
+  unpublished_branch_check_key: Option<UnpublishedBranchCheckKey>,
+  unpublished_branch_checked_at: Option<Instant>,
   force_push_after_rebase: bool,
   push_pull_in_progress: bool,
   publish_branch_and_create_pr_in_progress: bool,
@@ -1705,6 +1708,16 @@ struct SelectedFileUpdate {
 enum SelectedFileSource {
   StatusEntry,
   ProjectFile,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct UnpublishedBranchCheckKey {
+  repo_root: PathBuf,
+  branch_name: String,
+  ahead: usize,
+  behind: usize,
+  has_upstream: bool,
+  head_sha: Option<String>,
 }
 
 impl GitPage {
@@ -2256,6 +2269,59 @@ impl GitPage {
 
   fn current_status_refresh_generation(&self) -> u64 {
     self.status_refresh_generation
+  }
+
+  fn unpublished_branch_check_key(
+    repo_root: &Path,
+    branch_status: &BranchStatus,
+    head_sha: Option<String>,
+  ) -> UnpublishedBranchCheckKey {
+    UnpublishedBranchCheckKey {
+      repo_root: repo_root.to_path_buf(),
+      branch_name: branch_status.name.clone(),
+      ahead: branch_status.ahead,
+      behind: branch_status.behind,
+      has_upstream: branch_status.has_upstream,
+      head_sha,
+    }
+  }
+
+  fn should_recheck_unpublished_branch(
+    next_key: &UnpublishedBranchCheckKey,
+    cached_key: Option<&UnpublishedBranchCheckKey>,
+    force_recheck: bool,
+  ) -> bool {
+    force_recheck || cached_key != Some(next_key)
+  }
+
+  fn resolve_polled_unpublished_branch_commits(
+    repo_root: &Path,
+    branch_status: Option<&BranchStatus>,
+    cached_key: Option<&UnpublishedBranchCheckKey>,
+    cached_value: bool,
+    force_recheck: bool,
+  ) -> Option<(bool, Option<UnpublishedBranchCheckKey>, bool)> {
+    let Some(branch_status) = branch_status else {
+      return Some((false, None, true));
+    };
+
+    if Self::is_detached_head(Some(branch_status)) {
+      return Some((false, None, true));
+    }
+
+    if branch_status.has_upstream {
+      let next_key = Self::unpublished_branch_check_key(repo_root, branch_status, None);
+      return Some((branch_status.ahead > 0, Some(next_key), true));
+    }
+
+    let head_sha = current_head_sha(repo_root).ok().flatten();
+    let next_key = Self::unpublished_branch_check_key(repo_root, branch_status, head_sha);
+    if !Self::should_recheck_unpublished_branch(&next_key, cached_key, force_recheck) {
+      return Some((cached_value, Some(next_key), false));
+    }
+
+    let has_unpublished_branch_commits = branch_has_unpublished_commits(repo_root).ok()?;
+    Some((has_unpublished_branch_commits, Some(next_key), true))
   }
 
   fn should_refresh_editor_for_path(selected_file: Option<&Path>, rel_path: &Path) -> bool {
@@ -2913,6 +2979,8 @@ impl GitPage {
       can_push: false,
       can_force_push: false,
       has_unpublished_branch_commits: false,
+      unpublished_branch_check_key: None,
+      unpublished_branch_checked_at: None,
       force_push_after_rebase: false,
       push_pull_in_progress: false,
       publish_branch_and_create_pr_in_progress: false,
@@ -3020,6 +3088,8 @@ impl GitPage {
       can_push: false,
       can_force_push: false,
       has_unpublished_branch_commits: false,
+      unpublished_branch_check_key: None,
+      unpublished_branch_checked_at: None,
       force_push_after_rebase: false,
       push_pull_in_progress: false,
       publish_branch_and_create_pr_in_progress: false,
@@ -3675,6 +3745,8 @@ impl GitPage {
       self.can_push = false;
       self.can_force_push = false;
       self.has_unpublished_branch_commits = false;
+      self.unpublished_branch_check_key = None;
+      self.unpublished_branch_checked_at = None;
       self.force_push_after_rebase = false;
       self.push_pull_in_progress = false;
       self.publish_branch_and_create_pr_in_progress = false;
@@ -3775,6 +3847,8 @@ impl GitPage {
           this.can_push = false;
           this.can_force_push = false;
           this.has_unpublished_branch_commits = false;
+          this.unpublished_branch_check_key = None;
+          this.unpublished_branch_checked_at = None;
           this.force_push_after_rebase = false;
           this.push_pull_in_progress = false;
           this.publish_branch_and_create_pr_in_progress = false;
@@ -3869,9 +3943,17 @@ impl GitPage {
           .await;
 
         let poll_state = match this.update(cx, |this, _| {
+          if this.status_refresh_in_progress {
+            return None;
+          }
           let Some(repo_root) = this.selected_repo.clone() else {
             return None;
           };
+          let now = Instant::now();
+          let force_unpublished_branch_recheck =
+            this.unpublished_branch_checked_at.is_none_or(|checked_at| {
+              now.duration_since(checked_at) >= UNPUBLISHED_BRANCH_RECHECK_INTERVAL
+            });
           Some((
             repo_root,
             this.sidebar_mode == GitSidebarMode::History,
@@ -3879,6 +3961,10 @@ impl GitPage {
             this.history_commits.is_empty(),
             // Polling should not supersede an explicit refresh that is already in flight.
             this.current_status_refresh_generation(),
+            this.unpublished_branch_check_key.clone(),
+            this.has_unpublished_branch_commits,
+            force_unpublished_branch_recheck,
+            now,
           ))
         }) {
           Ok(Some(value)) => value,
@@ -3891,6 +3977,10 @@ impl GitPage {
           cached_history_revision,
           history_empty,
           refresh_generation,
+          cached_unpublished_branch_key,
+          cached_unpublished_branch_commits,
+          force_unpublished_branch_recheck,
+          unpublished_branch_checked_at,
         ) = poll_state;
         let requested_repo = repo_root.clone();
 
@@ -3898,7 +3988,17 @@ impl GitPage {
           let entries = list_repo_status(&repo_root).ok()?;
           let branch = current_branch_status(&repo_root).ok();
           let head_status = head_commit_status(&repo_root).ok();
-          let unpublished_branch_commits = branch_has_unpublished_commits(&repo_root).ok()?;
+          let (
+            unpublished_branch_commits,
+            unpublished_branch_check_key,
+            unpublished_branch_checked,
+          ) = Self::resolve_polled_unpublished_branch_commits(
+            &repo_root,
+            branch.as_ref(),
+            cached_unpublished_branch_key.as_ref(),
+            cached_unpublished_branch_commits,
+            force_unpublished_branch_recheck,
+          )?;
           let merge_in_progress = is_merge_in_progress(&repo_root).unwrap_or(false);
           let rebase_in_progress = is_rebase_in_progress(&repo_root).unwrap_or(false);
           let rebase_commit_message = if rebase_in_progress {
@@ -3933,6 +4033,8 @@ impl GitPage {
             polled_history_revision,
             should_refresh_history,
             history,
+            unpublished_branch_check_key,
+            unpublished_branch_checked,
           ))
         })
         .await;
@@ -3947,6 +4049,8 @@ impl GitPage {
           polled_history_revision,
           should_refresh_history,
           history,
+          unpublished_branch_check_key,
+          unpublished_branch_checked,
         )) = status
         else {
           continue;
@@ -3972,6 +4076,12 @@ impl GitPage {
             false,
             cx,
           );
+          if unpublished_branch_checked {
+            this.unpublished_branch_checked_at = unpublished_branch_check_key
+              .as_ref()
+              .map(|_| unpublished_branch_checked_at);
+          }
+          this.unpublished_branch_check_key = unpublished_branch_check_key;
           if include_history {
             if let Some(history) = history {
               this.history_commits = history;
@@ -4013,12 +4123,27 @@ impl GitPage {
     let history_empty = self.history_commits.is_empty();
     let requested_repo = repo_root.clone();
     let refresh_generation = self.current_status_refresh_generation();
+    let cached_unpublished_branch_key = self.unpublished_branch_check_key.clone();
+    let cached_unpublished_branch_commits = self.has_unpublished_branch_commits;
+    let unpublished_branch_checked_at = Instant::now();
+    let force_unpublished_branch_recheck =
+      self.unpublished_branch_checked_at.is_none_or(|checked_at| {
+        unpublished_branch_checked_at.duration_since(checked_at)
+          >= UNPUBLISHED_BRANCH_RECHECK_INTERVAL
+      });
     let task = cx.spawn(async move |this, cx| {
       let status = unblock(move || {
         let entries = list_repo_status(&repo_root).ok()?;
         let branch = current_branch_status(&repo_root).ok();
         let head_status = head_commit_status(&repo_root).ok();
-        let unpublished_branch_commits = branch_has_unpublished_commits(&repo_root).ok()?;
+        let (unpublished_branch_commits, unpublished_branch_check_key, unpublished_branch_checked) =
+          Self::resolve_polled_unpublished_branch_commits(
+            &repo_root,
+            branch.as_ref(),
+            cached_unpublished_branch_key.as_ref(),
+            cached_unpublished_branch_commits,
+            force_unpublished_branch_recheck,
+          )?;
         let merge_in_progress = is_merge_in_progress(&repo_root).unwrap_or(false);
         let rebase_in_progress = is_rebase_in_progress(&repo_root).unwrap_or(false);
         let rebase_commit_message = if rebase_in_progress {
@@ -4053,6 +4178,8 @@ impl GitPage {
           polled_history_revision,
           should_refresh_history,
           history,
+          unpublished_branch_check_key,
+          unpublished_branch_checked,
         ))
       })
       .await;
@@ -4068,6 +4195,8 @@ impl GitPage {
         polled_history_revision,
         should_refresh_history,
         history,
+        unpublished_branch_check_key,
+        unpublished_branch_checked,
       )) = status
       else {
         return;
@@ -4093,6 +4222,12 @@ impl GitPage {
           false,
           cx,
         );
+        if unpublished_branch_checked {
+          this.unpublished_branch_checked_at = unpublished_branch_check_key
+            .as_ref()
+            .map(|_| unpublished_branch_checked_at);
+        }
+        this.unpublished_branch_check_key = unpublished_branch_check_key;
         if include_history {
           if let Some(history) = history {
             this.history_commits = history;
@@ -18104,6 +18239,80 @@ mod tests {
       3
     ));
     assert!(!GitPage::should_apply_status_refresh(None, repo, 3, 3));
+  }
+
+  #[test]
+  fn unpublished_branch_check_derives_tracked_branch_from_ahead_count() {
+    let repo = Path::new("/tmp/repo");
+    let branch = make_branch_status("main", 2, 0, true);
+    let (has_unpublished_commits, check_key, checked) =
+      GitPage::resolve_polled_unpublished_branch_commits(repo, Some(&branch), None, false, false)
+        .expect("tracked branch should not need the expensive unpublished check");
+
+    assert!(has_unpublished_commits);
+    assert!(checked);
+    assert_eq!(
+      check_key,
+      Some(UnpublishedBranchCheckKey {
+        repo_root: repo.to_path_buf(),
+        branch_name: "main".to_string(),
+        ahead: 2,
+        behind: 0,
+        has_upstream: true,
+        head_sha: None,
+      })
+    );
+  }
+
+  #[test]
+  fn unpublished_branch_check_reuses_cached_local_branch_key_until_forced_or_changed() {
+    let repo = Path::new("/tmp/repo");
+    let branch = make_branch_status("feature", 0, 0, false);
+    let cached_key =
+      GitPage::unpublished_branch_check_key(repo, &branch, Some("head-a".to_string()));
+    let same_key = GitPage::unpublished_branch_check_key(repo, &branch, Some("head-a".to_string()));
+    let changed_head_key =
+      GitPage::unpublished_branch_check_key(repo, &branch, Some("head-b".to_string()));
+    let changed_repo_key = GitPage::unpublished_branch_check_key(
+      Path::new("/tmp/other-repo"),
+      &branch,
+      Some("head-a".to_string()),
+    );
+
+    assert!(!GitPage::should_recheck_unpublished_branch(
+      &same_key,
+      Some(&cached_key),
+      false
+    ));
+    assert!(GitPage::should_recheck_unpublished_branch(
+      &same_key,
+      Some(&cached_key),
+      true
+    ));
+    assert!(GitPage::should_recheck_unpublished_branch(
+      &changed_head_key,
+      Some(&cached_key),
+      false
+    ));
+    assert!(GitPage::should_recheck_unpublished_branch(
+      &changed_repo_key,
+      Some(&cached_key),
+      false
+    ));
+
+    let cached_headless_key = GitPage::unpublished_branch_check_key(repo, &branch, None);
+    let (has_unpublished_commits, returned_key, checked) =
+      GitPage::resolve_polled_unpublished_branch_commits(
+        repo,
+        Some(&branch),
+        Some(&cached_headless_key),
+        true,
+        false,
+      )
+      .expect("unchanged key should reuse cached unpublished state");
+    assert!(has_unpublished_commits);
+    assert_eq!(returned_key, Some(cached_headless_key));
+    assert!(!checked);
   }
 
   #[test]
