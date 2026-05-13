@@ -2007,6 +2007,20 @@ impl Editor {
         .rows(6)
         .placeholder("Edit review comment...")
     });
+    cx.subscribe_in(
+      &input,
+      window,
+      |editor, state, event: &InputEvent, window, cx| {
+        if let InputEvent::PressEnter { secondary: true } = event {
+          let Some(comment_id) = editor.editing_review_comment_id else {
+            return;
+          };
+          Self::trim_review_comment_input_trailing_newline(state, window, cx);
+          editor.save_review_comment_edit(comment_id, window, cx);
+        }
+      },
+    )
+    .detach();
     self.review_comment_edit_input = Some(input.clone());
     input
   }
@@ -2161,6 +2175,17 @@ impl Editor {
         .rows(6)
         .placeholder("Add review comment...")
     });
+    cx.subscribe_in(
+      &input,
+      window,
+      |editor, state, event: &InputEvent, window, cx| {
+        if let InputEvent::PressEnter { secondary: true } = event {
+          Self::trim_review_comment_input_trailing_newline(state, window, cx);
+          editor.save_review_comment_create(window, cx);
+        }
+      },
+    )
+    .detach();
     self.review_comment_create_input = Some(input.clone());
     input
   }
@@ -2180,8 +2205,33 @@ impl Editor {
         .rows(6)
         .placeholder("Reply to review comment...")
     });
+    cx.subscribe_in(
+      &input,
+      window,
+      |editor, state, event: &InputEvent, window, cx| {
+        if let InputEvent::PressEnter { secondary: true } = event {
+          Self::trim_review_comment_input_trailing_newline(state, window, cx);
+          editor.save_review_comment_reply(window, cx);
+        }
+      },
+    )
+    .detach();
     self.review_comment_reply_input = Some(input.clone());
     input
+  }
+
+  fn trim_review_comment_input_trailing_newline(
+    state: &Entity<InputState>,
+    window: &mut Window,
+    cx: &mut Context<Self>,
+  ) {
+    let raw = state.read(cx).value().to_string();
+    let trimmed = raw.trim_end_matches('\n').to_string();
+    if trimmed != raw {
+      state.update(cx, |input, cx| {
+        input.set_value(trimmed, window, cx);
+      });
+    }
   }
 
   fn start_review_comment_reply(
@@ -8617,6 +8667,7 @@ pub mod tests {
   use super::*;
   use gpui::TestAppContext;
   use std::path::Path;
+  use std::sync::{Arc as StdArc, Mutex};
 
   fn tiny_png_bytes() -> Vec<u8> {
     vec![
@@ -10626,6 +10677,54 @@ pub mod tests {
         })
       );
     });
+  }
+
+  #[gpui::test]
+  fn test_review_comment_create_secondary_enter_submits(cx: &mut TestAppContext) {
+    cx.update(gpui_component::init);
+    let ctx = EditorTestContext::with_text(cx.clone(), "a\nb");
+    let editor = ctx.editor.clone();
+    let submitted = StdArc::new(Mutex::new(None));
+    let submitted_for_handler = submitted.clone();
+    let (_root, cx) =
+      cx.add_window_view(|window, cx| gpui_component::Root::new(editor.clone(), window, cx));
+
+    ctx.editor.update_in(cx, |editor, window, cx| {
+      let handler: ReviewCommentCreateHandler = Arc::new(move |request, _, _| {
+        *submitted_for_handler.lock().expect("submitted lock") =
+          Some((request.line, request.side, request.body.to_string()));
+      });
+      editor.set_review_comment_create_handler(Some(handler), cx);
+      editor.review_comment_create_draft = Some(ReviewCommentCreateDraft {
+        first_display_line: 0,
+        last_display_line: 0,
+        line: 0,
+        side: ReviewCommentSide::Right,
+        start_line: None,
+        start_side: None,
+      });
+
+      let input = editor.ensure_review_comment_create_input(window, cx);
+      input.update(cx, |input, cx| {
+        input.set_value("please fix\n".to_string(), window, cx);
+        cx.emit(InputEvent::PressEnter { secondary: true });
+      });
+    });
+
+    assert_eq!(
+      submitted.lock().expect("submitted lock").as_ref(),
+      Some(&(0, ReviewCommentSide::Right, "please fix".to_string()))
+    );
+    let input_value = ctx.editor.read_with(cx, |editor, cx| {
+      editor
+        .review_comment_create_input
+        .as_ref()
+        .expect("create input")
+        .read(cx)
+        .value()
+        .to_string()
+    });
+    assert_eq!(input_value, "please fix");
   }
 
   #[gpui::test]
