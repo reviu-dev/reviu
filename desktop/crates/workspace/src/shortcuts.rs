@@ -16,13 +16,13 @@ use std::collections::HashSet;
 
 use crate::config::ConfigStore;
 use crate::{
-  AcceptBothConflict, CloseWorkspacePage, CommitChanges, FocusFileTree, ForcePushChanges,
-  MarkNotificationDone, NavigateBack, NextAnnotation, NextPageTab, NextPrCommit, NextReviewComment,
-  OpenGitChangesSidebar, OpenGitHistorySidebar, OpenGitPage, OpenGithubPage, OpenRepository,
-  OpenSettingsPage, PreviousAnnotation, PreviousPageTab, PreviousPrCommit, PreviousReviewComment,
-  PullChanges, PushChanges, RefreshCurrentPage, RestoreFile, RestoreHunk, ShowBranchSwitcher,
-  ShowCommandPalette, ShowFileSearch, SwitchToPrBranch, ToggleCommitByCommit, ToggleDiffView,
-  ToggleFileStage, ToggleHideWhitespace, ToggleHunkStage, ToggleTerminalSidebar,
+  AcceptBothConflict, CloseWorkspacePage, CommentHunk, CommitChanges, FocusFileTree,
+  ForcePushChanges, MarkNotificationDone, NavigateBack, NextAnnotation, NextPageTab, NextPrCommit,
+  NextReviewComment, OpenGitChangesSidebar, OpenGitHistorySidebar, OpenGitPage, OpenGithubPage,
+  OpenRepository, OpenSettingsPage, PreviousAnnotation, PreviousPageTab, PreviousPrCommit,
+  PreviousReviewComment, PullChanges, PushChanges, RefreshCurrentPage, RestoreFile, RestoreHunk,
+  ShowBranchSwitcher, ShowCommandPalette, ShowFileSearch, SwitchToPrBranch, ToggleCommitByCommit,
+  ToggleDiffView, ToggleFileStage, ToggleHideWhitespace, ToggleHunkStage, ToggleTerminalSidebar,
 };
 
 pub const SHOW_COMMAND_PALETTE_SHORTCUT: &str = "cmd-k";
@@ -177,6 +177,7 @@ pub enum ShortcutId {
   ToggleCommitByCommit,
   PreviousPrCommit,
   NextPrCommit,
+  CommentHunk,
   ToggleHunkStage,
   RestoreHunk,
   ToggleFileStage,
@@ -218,6 +219,7 @@ impl ShortcutId {
       ShortcutId::ToggleCommitByCommit => "toggle_commit_by_commit",
       ShortcutId::PreviousPrCommit => "previous_pr_commit",
       ShortcutId::NextPrCommit => "next_pr_commit",
+      ShortcutId::CommentHunk => "comment_hunk",
       ShortcutId::ToggleHunkStage => "toggle_hunk_stage",
       ShortcutId::RestoreHunk => "restore_hunk",
       ShortcutId::ToggleFileStage => "toggle_file_stage",
@@ -259,6 +261,7 @@ impl ShortcutId {
       "toggle_commit_by_commit" => Some(ShortcutId::ToggleCommitByCommit),
       "previous_pr_commit" => Some(ShortcutId::PreviousPrCommit),
       "next_pr_commit" => Some(ShortcutId::NextPrCommit),
+      "comment_hunk" => Some(ShortcutId::CommentHunk),
       "toggle_hunk_stage" => Some(ShortcutId::ToggleHunkStage),
       "restore_hunk" => Some(ShortcutId::RestoreHunk),
       "toggle_file_stage" => Some(ShortcutId::ToggleFileStage),
@@ -293,7 +296,7 @@ pub struct ShortcutDefinition {
   pub active_contexts: &'static [&'static str],
 }
 
-const SHORTCUT_DEFINITIONS: [ShortcutDefinition; 36] = [
+const SHORTCUT_DEFINITIONS: [ShortcutDefinition; 37] = [
   ShortcutDefinition {
     id: ShortcutId::ShowCommandPalette,
     title: "Command Palette",
@@ -436,6 +439,17 @@ const SHORTCUT_DEFINITIONS: [ShortcutDefinition; 36] = [
     context: PR_CHANGES_ONLY_CONTEXT,
     display_context: WORKSPACE_GITHUB_PR_CHANGES_CONTEXT,
     active_contexts: &PR_CHANGES_ONLY_ACTIVE_CONTEXTS,
+  },
+  ShortcutDefinition {
+    id: ShortcutId::CommentHunk,
+    title: "Comment Hunk",
+    description: "Start a local review comment on the focused hunk.",
+    scope_label: "Git page",
+    category: ShortcutCategory::LocalGit,
+    keystroke: "cmd-alt-enter",
+    context: HUNK_ACTION_CONTEXT,
+    display_context: WORKSPACE_GIT_CONTEXT,
+    active_contexts: &GIT_ONLY_ACTIVE_CONTEXTS,
   },
   ShortcutDefinition {
     id: ShortcutId::ToggleHunkStage,
@@ -947,7 +961,8 @@ impl ShortcutDefinition {
   fn key_binding_with_keystroke(self, keystroke: &str, generation: u32) -> KeyBinding {
     let base = shortcut_binding_context(&guarded_shortcut_context(self.context), generation);
     let context = match self.id {
-      ShortcutId::ToggleHunkStage
+      ShortcutId::CommentHunk
+      | ShortcutId::ToggleHunkStage
       | ShortcutId::RestoreHunk
       | ShortcutId::ToggleFileStage
       | ShortcutId::RestoreFile
@@ -1016,6 +1031,7 @@ impl ShortcutDefinition {
       }
       ShortcutId::PreviousPrCommit => KeyBinding::new(keystroke, PreviousPrCommit, Some(&context)),
       ShortcutId::NextPrCommit => KeyBinding::new(keystroke, NextPrCommit, Some(&context)),
+      ShortcutId::CommentHunk => KeyBinding::new(keystroke, CommentHunk, Some(&context)),
       ShortcutId::ToggleHunkStage => KeyBinding::new(keystroke, ToggleHunkStage, Some(&context)),
       ShortcutId::RestoreHunk => KeyBinding::new(keystroke, RestoreHunk, Some(&context)),
       ShortcutId::ToggleFileStage => KeyBinding::new(keystroke, ToggleFileStage, Some(&context)),
@@ -1394,6 +1410,7 @@ fn with_shortcut_action<T>(id: ShortcutId, f: impl FnOnce(&dyn Action) -> T) -> 
     ShortcutId::ToggleCommitByCommit => f(&ToggleCommitByCommit),
     ShortcutId::PreviousPrCommit => f(&PreviousPrCommit),
     ShortcutId::NextPrCommit => f(&NextPrCommit),
+    ShortcutId::CommentHunk => f(&CommentHunk),
     ShortcutId::ToggleHunkStage => f(&ToggleHunkStage),
     ShortcutId::RestoreHunk => f(&RestoreHunk),
     ShortcutId::ToggleFileStage => f(&ToggleFileStage),
@@ -1571,6 +1588,18 @@ mod tests {
       "/git",
       &["List"],
       "cmd-enter",
+      workspace_key_bindings(),
+    ));
+    assert!(has_binding_with_bindings_in_contexts(
+      "/git",
+      &["Editor"],
+      "cmd-alt-enter",
+      workspace_key_bindings(),
+    ));
+    assert!(has_binding_with_bindings_in_contexts(
+      "/git",
+      &["List"],
+      "cmd-alt-enter",
       workspace_key_bindings(),
     ));
     assert!(has_binding("/git", "cmd-u"));

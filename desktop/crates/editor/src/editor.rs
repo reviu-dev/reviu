@@ -2341,6 +2341,78 @@ impl Editor {
     }
   }
 
+  fn review_comment_create_display_range_for_group(
+    &self,
+    group_id: &Arc<str>,
+    cx: &App,
+  ) -> Option<(usize, usize)> {
+    let projection = self.projection.as_ref()?;
+    let mut right_targets = Vec::new();
+    let mut left_targets = Vec::new();
+
+    for (display_line, line) in projection.lines.iter().enumerate() {
+      let preferred_side = match line {
+        DisplayLine::Doc {
+          change: Some(_),
+          group_id: Some(id),
+          ..
+        }
+        | DisplayLine::Modified {
+          group_id: Some(id), ..
+        } if id.as_ref() == group_id.as_ref() => Some(ReviewCommentSide::Right),
+        DisplayLine::Removed {
+          group_id: Some(id), ..
+        } if id.as_ref() == group_id.as_ref() => Some(ReviewCommentSide::Left),
+        _ => None,
+      };
+      let Some(preferred_side) = preferred_side else {
+        continue;
+      };
+      let Some(target) = self.review_comment_create_target_for_display_line(display_line, cx)
+      else {
+        continue;
+      };
+      if target.side != preferred_side {
+        continue;
+      }
+
+      match target.side {
+        ReviewCommentSide::Right => right_targets.push(target.display_line),
+        ReviewCommentSide::Left => left_targets.push(target.display_line),
+      }
+    }
+
+    let targets = if right_targets.is_empty() {
+      &left_targets
+    } else {
+      &right_targets
+    };
+    Some((*targets.first()?, *targets.last()?))
+  }
+
+  pub fn start_review_comment_for_active_hunk(
+    &mut self,
+    window: &mut Window,
+    cx: &mut Context<Self>,
+  ) -> bool {
+    let Some(group_id) = self.active_hunk_group_id(cx) else {
+      return false;
+    };
+    let Some((first_display_line, last_display_line)) =
+      self.review_comment_create_display_range_for_group(&group_id, cx)
+    else {
+      return false;
+    };
+
+    self.start_review_comment_create_drag(first_display_line, cx);
+    self.update_review_comment_create_drag_from_display_line(Some(last_display_line), cx);
+    if self.review_comment_create_draft.is_none() {
+      return false;
+    }
+    self.finish_review_comment_create_drag(window, cx);
+    true
+  }
+
   fn set_review_comment_create_hover_from_display_line(
     &mut self,
     display_line: Option<usize>,
@@ -9635,6 +9707,96 @@ pub mod tests {
     })
   }
 
+  fn projection_with_mixed_review_hunk() -> (Arc<Projection>, Arc<str>) {
+    let group_id = Arc::<str>::from("hunk-0");
+    (
+      Arc::new(Projection {
+        lines: vec![
+          DisplayLine::Removed {
+            text: "old".into(),
+            anchor_line: 0,
+            old_line: 0,
+            hunk: HunkState::Unstaged,
+            group_id: Some(group_id.clone()),
+            secondary: false,
+          },
+          DisplayLine::Doc {
+            doc_line: 0,
+            old_line: None,
+            change: Some(ChangeKind::Added),
+            hunk: Some(HunkState::Unstaged),
+            group_id: Some(group_id.clone()),
+            secondary: false,
+          },
+          DisplayLine::Doc {
+            doc_line: 1,
+            old_line: None,
+            change: Some(ChangeKind::Added),
+            hunk: Some(HunkState::Unstaged),
+            group_id: Some(group_id.clone()),
+            secondary: false,
+          },
+        ],
+        display_to_doc: vec![None, Some(0), Some(1)],
+        doc_to_display: vec![Some(1), Some(2)],
+        visible_doc_lines: vec![0, 1],
+        start_gap: None,
+        end_gap: None,
+        groups: HashMap::new(),
+      }),
+      group_id,
+    )
+  }
+
+  fn projection_with_deleted_review_hunk() -> (Arc<Projection>, Arc<str>) {
+    let group_id = Arc::<str>::from("hunk-0");
+    (
+      Arc::new(Projection {
+        lines: vec![
+          DisplayLine::Doc {
+            doc_line: 0,
+            old_line: Some(0),
+            change: None,
+            hunk: None,
+            group_id: None,
+            secondary: false,
+          },
+          DisplayLine::Removed {
+            text: "old 1".into(),
+            anchor_line: 0,
+            old_line: 1,
+            hunk: HunkState::Unstaged,
+            group_id: Some(group_id.clone()),
+            secondary: false,
+          },
+          DisplayLine::Removed {
+            text: "old 2".into(),
+            anchor_line: 0,
+            old_line: 2,
+            hunk: HunkState::Unstaged,
+            group_id: Some(group_id.clone()),
+            secondary: false,
+          },
+          DisplayLine::Doc {
+            doc_line: 1,
+            old_line: Some(3),
+            change: None,
+            hunk: None,
+            group_id: None,
+            secondary: false,
+          },
+        ],
+        display_to_doc: vec![Some(0), None, None, Some(1)],
+        doc_to_display: vec![Some(0), Some(3)],
+        visible_doc_lines: vec![0, 1],
+        start_gap: None,
+        end_gap: None,
+        groups: HashMap::new(),
+      }),
+      group_id,
+    )
+  }
+
   fn projection_with_hidden_start_and_end() -> Arc<Projection> {
     let start_gap = GapId { start: 0, end: 1 };
     let end_gap = GapId { start: 4, end: 5 };
@@ -10406,6 +10568,38 @@ pub mod tests {
         side: ReviewCommentSide::Left,
       })
     );
+  }
+
+  #[gpui::test]
+  fn test_review_comment_create_range_for_hunk_prefers_new_side(cx: &mut TestAppContext) {
+    let mut ctx = EditorTestContext::with_text(cx.clone(), "new 1\nnew 2");
+    let (projection, group_id) = projection_with_mixed_review_hunk();
+
+    ctx.editor.update(&mut ctx.cx, |editor, _| {
+      editor.set_projection(Some((*projection).clone()));
+    });
+
+    let range = ctx.editor.read_with(&ctx.cx, |editor, cx| {
+      editor.review_comment_create_display_range_for_group(&group_id, cx)
+    });
+
+    assert_eq!(range, Some((1, 2)));
+  }
+
+  #[gpui::test]
+  fn test_review_comment_create_range_for_deleted_hunk_uses_old_side(cx: &mut TestAppContext) {
+    let mut ctx = EditorTestContext::with_text(cx.clone(), "a\nb");
+    let (projection, group_id) = projection_with_deleted_review_hunk();
+
+    ctx.editor.update(&mut ctx.cx, |editor, _| {
+      editor.set_projection(Some((*projection).clone()));
+    });
+
+    let range = ctx.editor.read_with(&ctx.cx, |editor, cx| {
+      editor.review_comment_create_display_range_for_group(&group_id, cx)
+    });
+
+    assert_eq!(range, Some((1, 2)));
   }
 
   #[gpui::test]
