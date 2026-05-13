@@ -76,6 +76,8 @@ const REVIEW_ANNOTATION_CONTEXT: &str =
 const REVIEW_COMMENT_CONTEXT: &str = "WorkspaceGithubPr";
 const HUNK_ACTION_CONTEXT: &str = "WorkspaceGit";
 const HUNK_ACTION_DESCENDANT_FOCUS: &str = "List || Editor";
+const COMMENT_HUNK_CONTEXT: &str = "WorkspaceGit || WorkspaceGithubPrChanges";
+const COMMENT_HUNK_DESCENDANT_FOCUS: &str = "List || Editor || Tree";
 const PAGE_TAB_CONTEXT: &str = "WorkspaceGithubHome || WorkspaceGithubRepo || WorkspaceGithubRepoCode || WorkspaceGithubPr || WorkspaceGithubPrChanges";
 pub const PR_CHANGES_ONLY_CONTEXT: &str = "WorkspaceGithubPrChanges";
 
@@ -130,6 +132,9 @@ const PR_PAGE_ACTIVE_CONTEXTS: [&str; 2] = [
 ];
 
 const PR_CHANGES_ONLY_ACTIVE_CONTEXTS: [&str; 1] = [WORKSPACE_GITHUB_PR_CHANGES_CONTEXT];
+
+const COMMENT_HUNK_ACTIVE_CONTEXTS: [&str; 2] =
+  [WORKSPACE_GIT_CONTEXT, WORKSPACE_GITHUB_PR_CHANGES_CONTEXT];
 
 const REPO_AND_PR_PAGE_ACTIVE_CONTEXTS: [&str; 5] = [
   WORKSPACE_GITHUB_HOME_CONTEXT,
@@ -443,13 +448,13 @@ const SHORTCUT_DEFINITIONS: [ShortcutDefinition; 37] = [
   ShortcutDefinition {
     id: ShortcutId::CommentHunk,
     title: "Comment Hunk",
-    description: "Start a local review comment on the focused hunk.",
-    scope_label: "Git page",
+    description: "Start a review comment on the focused hunk.",
+    scope_label: "Git page and PR Changes",
     category: ShortcutCategory::LocalGit,
     keystroke: "cmd-alt-enter",
-    context: HUNK_ACTION_CONTEXT,
+    context: COMMENT_HUNK_CONTEXT,
     display_context: WORKSPACE_GIT_CONTEXT,
-    active_contexts: &GIT_ONLY_ACTIVE_CONTEXTS,
+    active_contexts: &COMMENT_HUNK_ACTIVE_CONTEXTS,
   },
   ShortcutDefinition {
     id: ShortcutId::ToggleHunkStage,
@@ -961,8 +966,10 @@ impl ShortcutDefinition {
   fn key_binding_with_keystroke(self, keystroke: &str, generation: u32) -> KeyBinding {
     let base = shortcut_binding_context(&guarded_shortcut_context(self.context), generation);
     let context = match self.id {
-      ShortcutId::CommentHunk
-      | ShortcutId::ToggleHunkStage
+      ShortcutId::CommentHunk => {
+        format!("({}) > ({})", base, COMMENT_HUNK_DESCENDANT_FOCUS)
+      }
+      ShortcutId::ToggleHunkStage
       | ShortcutId::RestoreHunk
       | ShortcutId::ToggleFileStage
       | ShortcutId::RestoreFile
@@ -1697,6 +1704,30 @@ mod tests {
         "{keystroke} should be active on {pathname}"
       );
     }
+  }
+
+  #[test]
+  fn comment_hunk_shortcut_is_available_on_git_and_pr_changes() {
+    for descendant in ["List", "Editor", "Tree"] {
+      assert!(has_binding_with_bindings_in_contexts(
+        "/github/owner/repo/pull/42/changes",
+        &[descendant],
+        "cmd-alt-enter",
+        workspace_key_bindings(),
+      ));
+    }
+    assert!(!has_binding_with_bindings_in_contexts(
+      "/github/owner/repo/pull/42",
+      &["Editor"],
+      "cmd-alt-enter",
+      workspace_key_bindings(),
+    ));
+    assert!(!has_binding_with_bindings_in_contexts(
+      "/github/owner/repo/code",
+      &["Editor"],
+      "cmd-alt-enter",
+      workspace_key_bindings(),
+    ));
   }
 
   #[test]

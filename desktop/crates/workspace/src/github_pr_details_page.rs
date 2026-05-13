@@ -9,8 +9,9 @@ use editor::{
   CloseFind, DiffViewMode, Editor, Find, HunkNavigationDirection,
   REVIEW_COMMENT_CARD_CONTENT_GAP_PX, REVIEW_COMMENT_CARD_PADDING_X_PX,
   REVIEW_COMMENT_HEADER_BODY_GAP_PX, REVIEW_COMMENT_VERTICAL_PADDING_PX, ReviewComment,
-  ReviewCommentCodeReferencePreview, ReviewCommentCreateHandler, ReviewCommentCreateRequest,
-  ReviewCommentDeleteHandler, ReviewCommentEditHandler, ReviewCommentImageUploadHandler,
+  ReviewCommentCancelHandler, ReviewCommentCodeReferencePreview, ReviewCommentCreateHandler,
+  ReviewCommentCreateRequest, ReviewCommentDeleteHandler, ReviewCommentEditHandler,
+  ReviewCommentImageUploadHandler,
   ReviewCommentLinkHandler, ReviewCommentResolveHandler, ReviewCommentSide,
   ReviewCommentSuggestionActionFactory,
 };
@@ -7114,6 +7115,21 @@ impl GithubPrDetailsPage {
       });
       editor.set_review_comment_create_handler(Some(create_handler), cx);
 
+      let cancel_handler: ReviewCommentCancelHandler = Arc::new({
+        let view = view.clone();
+        move |window, _cx| {
+          let view = view.clone();
+          window.on_next_frame(move |window, cx| {
+            let _ = view.update(cx, |this, cx| {
+              if this.active_tab_ix == PR_TAB_CHANGES_IX {
+                this.focus_changes_tree(window, cx);
+              }
+            });
+          });
+        }
+      });
+      editor.set_review_comment_cancel_handler(Some(cancel_handler), cx);
+
       let delete_handler: ReviewCommentDeleteHandler = Arc::new({
         let view = view.clone();
         move |comment_id, window, cx| {
@@ -7236,6 +7252,7 @@ impl GithubPrDetailsPage {
       editor.set_review_comment_edit_handler(None, cx);
       editor.set_review_comment_delete_handler(None, cx);
       editor.set_review_comment_create_handler(None, cx);
+      editor.set_review_comment_cancel_handler(None, cx);
       editor.set_review_comment_resolve_handler(None, cx);
       editor.set_review_comment_suggestion_action_factory(None, cx);
       editor.set_review_comment_asset_url_resolver(None, cx);
@@ -7658,9 +7675,13 @@ impl GithubPrDetailsPage {
             error_message = Some(Arc::from(error_message_text));
           }
         }
+        let success = error_message.is_none();
         this.diff_editor.update(cx, |editor, cx| {
           editor.finish_review_comment_edit_submission(comment_id, error_message, cx);
         });
+        if success {
+          this.focus_changes_tree_via_window_handle(cx);
+        }
         cx.notify();
       });
     });
@@ -7789,9 +7810,13 @@ impl GithubPrDetailsPage {
             error_message = Some(Arc::from(error_message_text));
           }
         }
+        let success = error_message.is_none();
         this.diff_editor.update(cx, |editor, cx| {
           editor.finish_review_comment_create_submission(error_message, cx);
         });
+        if success {
+          this.focus_changes_tree_via_window_handle(cx);
+        }
         cx.notify();
       });
     });
@@ -8546,6 +8571,18 @@ impl GithubPrDetailsPage {
   fn focus_changes_tree(&mut self, window: &mut Window, cx: &mut Context<Self>) {
     self.tree_state.update(cx, |state, cx| {
       state.focus(window, cx);
+    });
+  }
+
+  fn focus_changes_tree_via_window_handle(&self, cx: &mut App) {
+    if self.active_tab_ix != PR_TAB_CHANGES_IX {
+      return;
+    }
+    let tree = self.tree_state.clone();
+    let _ = cx.update_window(self.window_handle, move |_, window, cx| {
+      tree.update(cx, |state, cx| {
+        state.focus(window, cx);
+      });
     });
   }
 
@@ -15690,6 +15727,26 @@ impl GithubPrDetailsPage {
     cx.stop_propagation();
   }
 
+  fn comment_hunk_action(
+    &mut self,
+    _: &crate::CommentHunk,
+    window: &mut Window,
+    cx: &mut Context<Self>,
+  ) {
+    if self.active_tab_ix != PR_TAB_CHANGES_IX {
+      return;
+    }
+    if self.selected_commit_sha.is_some() {
+      return;
+    }
+    let editor = self.diff_editor.clone();
+    if editor.update(cx, |editor, cx| {
+      editor.start_review_comment_for_active_hunk(window, cx)
+    }) {
+      cx.stop_propagation();
+    }
+  }
+
   fn focus_file_tree_action(
     &mut self,
     _: &crate::FocusFileTree,
@@ -16348,6 +16405,7 @@ impl Render for GithubPrDetailsPage {
       .on_action(cx.listener(GithubPrDetailsPage::next_pr_commit_action))
       .on_action(cx.listener(GithubPrDetailsPage::toggle_hide_whitespace_action))
       .on_action(cx.listener(GithubPrDetailsPage::focus_file_tree_action))
+      .on_action(cx.listener(GithubPrDetailsPage::comment_hunk_action))
       .on_action(cx.listener(GithubPrDetailsPage::previous_page_tab_action))
       .on_action(cx.listener(GithubPrDetailsPage::next_page_tab_action))
       .on_action(cx.listener(GithubPrDetailsPage::show_file_search_action))
