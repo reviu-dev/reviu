@@ -5840,6 +5840,16 @@ impl GitPage {
     cx.stop_propagation();
   }
 
+  fn copy_review_comments_for_agent_action(
+    &mut self,
+    _: &crate::CopyReviewCommentsForAgent,
+    window: &mut Window,
+    cx: &mut Context<Self>,
+  ) {
+    self.copy_agent_review_to_clipboard(window, cx);
+    cx.stop_propagation();
+  }
+
   fn comment_hunk_action(
     &mut self,
     _: &crate::CommentHunk,
@@ -10510,6 +10520,7 @@ impl Render for GitPage {
       .on_action(cx.listener(GitPage::previous_annotation_action))
       .on_action(cx.listener(GitPage::next_annotation_action))
       .on_action(cx.listener(GitPage::comment_hunk_action))
+      .on_action(cx.listener(GitPage::copy_review_comments_for_agent_action))
       .on_action(cx.listener(GitPage::toggle_hunk_stage_action))
       .on_action(cx.listener(GitPage::restore_hunk_action))
       .on_action(cx.listener(GitPage::toggle_file_stage_action))
