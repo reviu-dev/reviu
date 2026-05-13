@@ -405,7 +405,6 @@ impl Render for AboutPage {
           .icon(IconName::Close)
           .ghost()
           .compact()
-          .tooltip("Close about")
           .on_click(|_, _, cx| {
             NavigationHistory::navigate_back(cx);
           }),
