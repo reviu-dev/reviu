@@ -26,6 +26,7 @@ actions!(
     ToggleCommitByCommit,
     PreviousPrCommit,
     NextPrCommit,
+    CommentHunk,
     ToggleHunkStage,
     RestoreHunk,
     ToggleFileStage,

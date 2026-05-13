@@ -5839,6 +5839,22 @@ impl GitPage {
     cx.stop_propagation();
   }
 
+  fn comment_hunk_action(
+    &mut self,
+    _: &crate::CommentHunk,
+    window: &mut Window,
+    cx: &mut Context<Self>,
+  ) {
+    let Some(editor) = self.editor.clone() else {
+      return;
+    };
+    if editor.update(cx, |editor, cx| {
+      editor.start_review_comment_for_active_hunk(window, cx)
+    }) {
+      cx.stop_propagation();
+    }
+  }
+
   fn toggle_hunk_stage_action(
     &mut self,
     _: &crate::ToggleHunkStage,
@@ -10469,6 +10485,7 @@ impl Render for GitPage {
       .on_action(cx.listener(GitPage::toggle_hide_whitespace_action))
       .on_action(cx.listener(GitPage::previous_annotation_action))
       .on_action(cx.listener(GitPage::next_annotation_action))
+      .on_action(cx.listener(GitPage::comment_hunk_action))
       .on_action(cx.listener(GitPage::toggle_hunk_stage_action))
       .on_action(cx.listener(GitPage::restore_hunk_action))
       .on_action(cx.listener(GitPage::toggle_file_stage_action))
