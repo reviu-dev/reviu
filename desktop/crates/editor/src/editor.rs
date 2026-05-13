@@ -152,6 +152,12 @@ pub enum DiffViewMode {
   Split,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ReviewCommentDisplayMode {
+  Conversation,
+  LocalNote,
+}
+
 #[derive(Clone, Debug)]
 pub struct EditorFileLoad {
   pub content: String,
@@ -530,6 +536,7 @@ pub struct Editor {
   review_comment_thread_order: Vec<u64>,
   review_comment_wrap_columns: usize,
   review_comment_line_height_px: f32,
+  review_comment_display_mode: ReviewCommentDisplayMode,
   review_comment_markdown_states: HashMap<u64, MarkdownRenderState>,
   review_comment_markdown_cache: HashMap<u64, ReviewCommentMarkdownCacheEntry>,
   review_comment_code_reference_previews: HashMap<u64, Vec<ReviewCommentCodeReferencePreview>>,
@@ -548,6 +555,7 @@ pub struct Editor {
   auto_collapsed_resolved_thread_ids: HashSet<u64>,
   review_comment_suggestion_action_factory: Option<ReviewCommentSuggestionActionFactory>,
   review_comment_create_handler: Option<ReviewCommentCreateHandler>,
+  review_comment_replies_enabled: bool,
   review_comment_link_handler: Option<ReviewCommentLinkHandler>,
   review_comment_asset_url_resolver: Option<ReviewCommentAssetUrlResolver>,
   review_comment_image_upload_handler: Option<ReviewCommentImageUploadHandler>,
@@ -950,6 +958,7 @@ impl Editor {
       review_comment_thread_order: Vec::new(),
       review_comment_wrap_columns: REVIEW_COMMENT_DEFAULT_WRAP_COLUMNS,
       review_comment_line_height_px: REVIEW_COMMENT_DEFAULT_LINE_HEIGHT_PX,
+      review_comment_display_mode: ReviewCommentDisplayMode::Conversation,
       review_comment_markdown_states: HashMap::new(),
       review_comment_markdown_cache: HashMap::new(),
       review_comment_code_reference_previews: HashMap::new(),
@@ -968,6 +977,7 @@ impl Editor {
       auto_collapsed_resolved_thread_ids: HashSet::new(),
       review_comment_suggestion_action_factory: None,
       review_comment_create_handler: None,
+      review_comment_replies_enabled: true,
       review_comment_link_handler: None,
       review_comment_asset_url_resolver: None,
       review_comment_image_upload_handler: None,
@@ -1743,6 +1753,33 @@ impl Editor {
     cx.notify();
   }
 
+  pub fn set_review_comment_replies_enabled(&mut self, enabled: bool, cx: &mut Context<Self>) {
+    if self.review_comment_replies_enabled == enabled {
+      return;
+    }
+    self.review_comment_replies_enabled = enabled;
+    if !enabled {
+      self.clear_review_comment_reply_state();
+    }
+    cx.notify();
+  }
+
+  pub fn set_review_comment_display_mode(
+    &mut self,
+    mode: ReviewCommentDisplayMode,
+    cx: &mut Context<Self>,
+  ) {
+    if self.review_comment_display_mode == mode {
+      return;
+    }
+    self.review_comment_display_mode = mode;
+    if matches!(mode, ReviewCommentDisplayMode::LocalNote) {
+      self.collapsed_review_comments.clear();
+      self.clear_review_comment_reply_state();
+    }
+    self.refresh_review_comment_projection(cx);
+  }
+
   pub fn set_review_comment_resolve_handler(
     &mut self,
     handler: Option<ReviewCommentResolveHandler>,
@@ -2153,7 +2190,8 @@ impl Editor {
     window: &mut Window,
     cx: &mut Context<Self>,
   ) {
-    if self.review_comment_create_handler.is_none()
+    if !self.review_comment_replies_enabled
+      || self.review_comment_create_handler.is_none()
       || self.review_comment_create_drag_active
       || self.review_comment_create_submitting
       || self.review_comment_edit_submitting_id.is_some()
@@ -2226,7 +2264,8 @@ impl Editor {
   }
 
   fn save_review_comment_reply(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-    if self.review_comment_create_drag_active
+    if !self.review_comment_replies_enabled
+      || self.review_comment_create_drag_active
       || self.review_comment_create_submitting
       || self.review_comment_edit_submitting_id.is_some()
       || self.review_comment_reply_submitting
@@ -3519,6 +3558,58 @@ impl Editor {
       .into_any_element()
   }
 
+  fn render_review_comment_direct_actions(
+    message_id: u64,
+    body: Arc<str>,
+    can_delete: bool,
+    editor_entity: Entity<Editor>,
+  ) -> gpui::AnyElement {
+    let edit_editor = editor_entity.clone();
+    let delete_editor = editor_entity;
+    div()
+      .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+      .child(
+        h_flex()
+          .items_center()
+          .gap_1()
+          .child(
+            Button::new(format!("review-comment-edit-{message_id}"))
+              .ghost()
+              .xsmall()
+              .compact()
+              .icon(UiIconName::SquarePen)
+              .tooltip("Edit")
+              .on_click({
+                let body = body.clone();
+                move |_, window, cx| {
+                  cx.stop_propagation();
+                  let body = body.clone();
+                  edit_editor.update(cx, |editor, cx| {
+                    editor.start_review_comment_edit(message_id, body, window, cx);
+                  });
+                }
+              }),
+          )
+          .when(can_delete, |this| {
+            this.child(
+              Button::new(format!("review-comment-delete-{message_id}"))
+                .ghost()
+                .xsmall()
+                .compact()
+                .icon(UiIconName::Trash)
+                .tooltip("Delete")
+                .on_click(move |_, window, cx| {
+                  cx.stop_propagation();
+                  delete_editor.update(cx, |editor, cx| {
+                    editor.request_review_comment_delete(message_id, window, cx);
+                  });
+                }),
+            )
+          }),
+      )
+      .into_any_element()
+  }
+
   fn render_review_comments_overlay(
     &mut self,
     editor_entity: Entity<Editor>,
@@ -3539,6 +3630,10 @@ impl Editor {
     let theme = cx.theme().clone();
     let overlay_x_offset = self.review_comment_overlay_x_offset();
     let review_comment_header_height = line_height * REVIEW_COMMENT_HEADER_HEIGHT_LINES;
+    let is_local_note_mode = matches!(
+      self.review_comment_display_mode,
+      ReviewCommentDisplayMode::LocalNote
+    );
     let mut overlay = div()
       .absolute()
       .top(px(0.0))
@@ -3564,40 +3659,56 @@ impl Editor {
       let editor = editor_entity.clone();
       let is_collapsed = layout.collapsed;
       let last_message_id = layout.messages.last().map(|message| message.id);
-      let toggle_icon = if is_collapsed {
-        IconName::ChevronRight
+      let toggle_button = if is_local_note_mode {
+        None
       } else {
-        IconName::ChevronDown
-      };
-      let toggle_button = Button::new(format!("review-comment-toggle-{}", thread_id))
-        .icon(toggle_icon)
-        .ghost()
-        .xsmall()
-        .compact()
-        .on_click(move |_, _, cx| {
-          cx.stop_propagation();
-          editor.update(cx, |editor, cx| {
-            editor.toggle_review_comment_thread(thread_id, cx)
+        let toggle_icon = if is_collapsed {
+          IconName::ChevronRight
+        } else {
+          IconName::ChevronDown
+        };
+        let toggle_button = Button::new(format!("review-comment-toggle-{}", thread_id))
+          .icon(toggle_icon)
+          .ghost()
+          .xsmall()
+          .compact()
+          .on_click(move |_, _, cx| {
+            cx.stop_propagation();
+            editor.update(cx, |editor, cx| {
+              editor.toggle_review_comment_thread(thread_id, cx)
+            });
           });
-        });
-      let toggle_button = div()
-        .on_mouse_down(MouseButton::Left, |_, _, cx| {
-          cx.stop_propagation();
-        })
-        .child(toggle_button);
+        Some(
+          div()
+            .on_mouse_down(MouseButton::Left, |_, _, cx| {
+              cx.stop_propagation();
+            })
+            .child(toggle_button)
+            .into_any_element(),
+        )
+      };
       let first_message_id = first_message.id;
-      let first_message_actions_menu = if !review_comment_submission_in_flight
+      let first_message_actions = if !review_comment_submission_in_flight
         && self.editable_review_comment_ids.contains(&first_message.id)
       {
         let body = first_message.body.clone();
         let can_delete = review_comment_delete_handler.is_some();
-        Some(Self::render_review_comment_actions_menu(
-          first_message_id,
-          body,
-          can_delete,
-          format!("review-comment-actions-{}", first_message_id),
-          editor_entity.clone(),
-        ))
+        Some(if is_local_note_mode {
+          Self::render_review_comment_direct_actions(
+            first_message_id,
+            body,
+            can_delete,
+            editor_entity.clone(),
+          )
+        } else {
+          Self::render_review_comment_actions_menu(
+            first_message_id,
+            body,
+            can_delete,
+            format!("review-comment-actions-{}", first_message_id),
+            editor_entity.clone(),
+          )
+        })
       } else {
         None
       };
@@ -3654,107 +3765,134 @@ impl Editor {
               }),
           )
       });
-      let first_message_reply_button = if last_message_id == Some(first_message_id) {
-        let is_replying = self.replying_to_review_comment_id == Some(first_message_id);
-        let disabled_reason = if review_comment_submission_in_flight {
-          Some("A comment submission is in progress.")
-        } else if self.replying_to_review_comment_id.is_some() && !is_replying {
-          Some("Finish or cancel the open reply first.")
+      let first_message_reply_button =
+        if self.review_comment_replies_enabled && last_message_id == Some(first_message_id) {
+          let is_replying = self.replying_to_review_comment_id == Some(first_message_id);
+          let disabled_reason = if review_comment_submission_in_flight {
+            Some("A comment submission is in progress.")
+          } else if self.replying_to_review_comment_id.is_some() && !is_replying {
+            Some("Finish or cancel the open reply first.")
+          } else {
+            None
+          };
+          let disabled = disabled_reason.is_some();
+          let editor = editor_entity.clone();
+          Some(
+            div()
+              .on_mouse_down(MouseButton::Left, |_, _, cx| {
+                cx.stop_propagation();
+              })
+              .child({
+                let button = Button::new(format!("review-comment-reply-{}", first_message_id))
+                  .ghost()
+                  .xsmall()
+                  .compact()
+                  .icon(UiIconName::MessageCircleReply)
+                  .label("Reply")
+                  .selected(is_replying)
+                  .disabled(disabled)
+                  .on_click(move |_, window, cx| {
+                    cx.stop_propagation();
+                    editor.update(cx, |editor, cx| {
+                      if is_replying {
+                        editor.cancel_review_comment_reply(cx);
+                      } else {
+                        editor.start_review_comment_reply(first_message_id, window, cx);
+                      }
+                    });
+                  });
+                if let Some(reason) = disabled_reason {
+                  button.tooltip(reason)
+                } else {
+                  button
+                }
+              }),
+          )
         } else {
           None
         };
-        let disabled = disabled_reason.is_some();
-        let editor = editor_entity.clone();
-        Some(
-          div()
-            .on_mouse_down(MouseButton::Left, |_, _, cx| {
-              cx.stop_propagation();
-            })
-            .child({
-              let button = Button::new(format!("review-comment-reply-{}", first_message_id))
-                .ghost()
-                .xsmall()
-                .compact()
-                .icon(UiIconName::MessageCircleReply)
-                .label("Reply")
-                .selected(is_replying)
-                .disabled(disabled)
-                .on_click(move |_, window, cx| {
-                  cx.stop_propagation();
-                  editor.update(cx, |editor, cx| {
-                    if is_replying {
-                      editor.cancel_review_comment_reply(cx);
-                    } else {
-                      editor.start_review_comment_reply(first_message_id, window, cx);
-                    }
-                  });
-                });
-              if let Some(reason) = disabled_reason {
-                button.tooltip(reason)
-              } else {
-                button
-              }
-            }),
-        )
-      } else {
-        None
-      };
 
       let line_label = first_message
         .line_label
         .clone()
         .or_else(|| Some(Arc::from(format!("L{}", first_message.line + 1))));
 
-      let meta = h_flex()
-        .items_center()
-        .gap_2()
-        .child(
-          Avatar::new()
-            .name(first_message.author.to_string())
-            .when_some(first_message.avatar_url.clone(), |this, url| {
-              this.src(url.as_ref().to_string())
-            })
-            .small(),
-        )
-        .child(
-          div()
-            .text_sm()
-            .text_color(theme.foreground)
-            .child(first_message.author.to_string()),
-        )
-        .when_some(line_label, |this, label| {
-          this
-            .child(
+      let meta = if is_local_note_mode {
+        h_flex()
+          .items_center()
+          .gap_2()
+          .when_some(line_label, |this, label| {
+            this.child(
               div()
                 .text_xs()
                 .text_color(theme.muted_foreground)
                 .child(label.as_ref().to_string()),
             )
-            .child(
+          })
+          .when(first_message.is_outdated, |this| {
+            this
+              .child(
+                div()
+                  .text_xs()
+                  .text_color(theme.muted_foreground)
+                  .child("•"),
+              )
+              .child(
+                div()
+                  .text_xs()
+                  .text_color(theme.status_orange())
+                  .child("Outdated"),
+              )
+          })
+      } else {
+        h_flex()
+          .items_center()
+          .gap_2()
+          .child(
+            Avatar::new()
+              .name(first_message.author.to_string())
+              .when_some(first_message.avatar_url.clone(), |this, url| {
+                this.src(url.as_ref().to_string())
+              })
+              .small(),
+          )
+          .child(
+            div()
+              .text_sm()
+              .text_color(theme.foreground)
+              .child(first_message.author.to_string()),
+          )
+          .when_some(line_label, |this, label| {
+            this
+              .child(
+                div()
+                  .text_xs()
+                  .text_color(theme.muted_foreground)
+                  .child(label.as_ref().to_string()),
+              )
+              .child(
+                div()
+                  .text_xs()
+                  .text_color(theme.muted_foreground)
+                  .child("•"),
+              )
+          })
+          .when(!first_message.created_at.is_empty(), |this| {
+            this.child(
               div()
                 .text_xs()
                 .text_color(theme.muted_foreground)
-                .child("•"),
+                .child(first_message.created_at.as_ref().to_string()),
             )
-        })
-        .child(
-          div()
-            .text_xs()
-            .text_color(theme.muted_foreground)
-            .child(first_message.created_at.as_ref().to_string()),
-        );
+          })
+      };
 
       let header_editor = editor_entity.clone();
-      let header = h_flex()
+      let mut header = h_flex()
         .items_center()
         .h(review_comment_header_height)
         .justify_between()
         .gap_2()
-        .on_mouse_down(MouseButton::Left, move |_, _, cx| {
-          header_editor.update(cx, |editor, cx| {
-            editor.toggle_review_comment_thread(thread_id, cx)
-          });
-        })
         .child(meta)
         .child(
           h_flex()
@@ -3766,9 +3904,16 @@ impl Editor {
             .when_some(first_message_reply_button, |this, button| {
               this.child(button)
             })
-            .when_some(first_message_actions_menu, |this, menu| this.child(menu))
-            .child(toggle_button),
+            .when_some(first_message_actions, |this, actions| this.child(actions))
+            .when_some(toggle_button, |this, button| this.child(button)),
         );
+      if !is_local_note_mode {
+        header = header.on_mouse_down(MouseButton::Left, move |_, _, cx| {
+          header_editor.update(cx, |editor, cx| {
+            editor.toggle_review_comment_thread(thread_id, cx)
+          });
+        });
+      }
 
       let link_handler = {
         let editor = editor_entity.clone();
@@ -4047,7 +4192,7 @@ impl Editor {
           } else {
             None
           };
-          let message_reply_button = if is_last_message {
+          let message_reply_button = if self.review_comment_replies_enabled && is_last_message {
             let message_id = message.id;
             let is_replying = self.replying_to_review_comment_id == Some(message_id);
             let disabled_reason = if review_comment_submission_in_flight {
@@ -4308,7 +4453,9 @@ impl Editor {
           v_flex()
             .px(px(REVIEW_COMMENT_CARD_PADDING_X_PX))
             .child(header)
-            .when(!is_collapsed, |this| this.child(thread_messages)),
+            .when(is_local_note_mode || !is_collapsed, |this| {
+              this.child(thread_messages)
+            }),
         );
 
       overlay = overlay.child(
@@ -9263,6 +9410,7 @@ pub mod tests {
           review_comment_thread_order: Vec::new(),
           review_comment_wrap_columns: REVIEW_COMMENT_DEFAULT_WRAP_COLUMNS,
           review_comment_line_height_px: REVIEW_COMMENT_DEFAULT_LINE_HEIGHT_PX,
+          review_comment_display_mode: ReviewCommentDisplayMode::Conversation,
           review_comment_markdown_states: HashMap::new(),
           review_comment_markdown_cache: HashMap::new(),
           review_comment_code_reference_previews: HashMap::new(),
@@ -9281,6 +9429,7 @@ pub mod tests {
           auto_collapsed_resolved_thread_ids: HashSet::new(),
           review_comment_suggestion_action_factory: None,
           review_comment_create_handler: None,
+          review_comment_replies_enabled: true,
           review_comment_link_handler: None,
           review_comment_asset_url_resolver: None,
           review_comment_image_upload_handler: None,
@@ -10073,6 +10222,49 @@ pub mod tests {
       assert!(editor.replying_to_review_comment_id.is_none());
       assert!(!editor.review_comment_reply_submitting);
       assert!(editor.review_comment_reply_error.is_none());
+    });
+  }
+
+  #[gpui::test]
+  fn test_set_review_comment_replies_enabled_false_clears_reply_state(cx: &mut TestAppContext) {
+    let mut ctx = EditorTestContext::with_text(cx.clone(), "a\nb");
+
+    ctx.editor.update(&mut ctx.cx, |editor, cx| {
+      editor.replying_to_review_comment_id = Some(42);
+      editor.review_comment_reply_submitting = true;
+      editor.review_comment_reply_error = Some(Arc::from("request failed"));
+      editor.review_comment_reply_preview_open = true;
+
+      editor.set_review_comment_replies_enabled(false, cx);
+
+      assert!(!editor.review_comment_replies_enabled);
+      assert!(editor.replying_to_review_comment_id.is_none());
+      assert!(!editor.review_comment_reply_submitting);
+      assert!(editor.review_comment_reply_error.is_none());
+      assert!(!editor.review_comment_reply_preview_open);
+    });
+  }
+
+  #[gpui::test]
+  fn test_set_review_comment_display_mode_local_note_clears_conversation_state(
+    cx: &mut TestAppContext,
+  ) {
+    let mut ctx = EditorTestContext::with_text(cx.clone(), "a\nb");
+
+    ctx.editor.update(&mut ctx.cx, |editor, cx| {
+      editor.collapsed_review_comments.insert(1);
+      editor.replying_to_review_comment_id = Some(42);
+      editor.review_comment_reply_preview_open = true;
+
+      editor.set_review_comment_display_mode(ReviewCommentDisplayMode::LocalNote, cx);
+
+      assert_eq!(
+        editor.review_comment_display_mode,
+        ReviewCommentDisplayMode::LocalNote
+      );
+      assert!(editor.collapsed_review_comments.is_empty());
+      assert!(editor.replying_to_review_comment_id.is_none());
+      assert!(!editor.review_comment_reply_preview_open);
     });
   }
 
