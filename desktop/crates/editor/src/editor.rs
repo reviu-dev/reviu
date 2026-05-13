@@ -185,6 +185,7 @@ pub type ReviewCommentSuggestionActionFactory = Arc<
     + Sync,
 >;
 pub type ReviewCommentLinkHandler = Arc<dyn Fn(&str, &mut Window, &mut App) -> bool>;
+pub type ReviewCommentCancelHandler = Arc<dyn Fn(&mut Window, &mut App)>;
 pub type ReviewCommentImageUploadHandler =
   Arc<dyn Fn(&ExternalPaths, Entity<InputState>, &mut Window, &mut App)>;
 pub type ReviewCommentPreviewRenderer = Arc<
@@ -555,6 +556,7 @@ pub struct Editor {
   auto_collapsed_resolved_thread_ids: HashSet<u64>,
   review_comment_suggestion_action_factory: Option<ReviewCommentSuggestionActionFactory>,
   review_comment_create_handler: Option<ReviewCommentCreateHandler>,
+  review_comment_cancel_handler: Option<ReviewCommentCancelHandler>,
   review_comment_replies_enabled: bool,
   review_comment_link_handler: Option<ReviewCommentLinkHandler>,
   review_comment_asset_url_resolver: Option<ReviewCommentAssetUrlResolver>,
@@ -977,6 +979,7 @@ impl Editor {
       auto_collapsed_resolved_thread_ids: HashSet::new(),
       review_comment_suggestion_action_factory: None,
       review_comment_create_handler: None,
+      review_comment_cancel_handler: None,
       review_comment_replies_enabled: true,
       review_comment_link_handler: None,
       review_comment_asset_url_resolver: None,
@@ -1753,6 +1756,15 @@ impl Editor {
     cx.notify();
   }
 
+  pub fn set_review_comment_cancel_handler(
+    &mut self,
+    handler: Option<ReviewCommentCancelHandler>,
+    cx: &mut Context<Self>,
+  ) {
+    self.review_comment_cancel_handler = handler;
+    cx.notify();
+  }
+
   pub fn set_review_comment_replies_enabled(&mut self, enabled: bool, cx: &mut Context<Self>) {
     if self.review_comment_replies_enabled == enabled {
       return;
@@ -2078,14 +2090,18 @@ impl Editor {
   fn on_review_comment_edit_input_escape(
     &mut self,
     _: &InputEscape,
-    _: &mut Window,
+    window: &mut Window,
     cx: &mut Context<Self>,
   ) {
     if self.review_comment_edit_submitting_id.is_some() {
       cx.stop_propagation();
       return;
     }
+    let was_editing = self.editing_review_comment_id.is_some();
     self.cancel_review_comment_edit(cx);
+    if was_editing {
+      self.invoke_review_comment_cancel_handler(window, cx);
+    }
     cx.stop_propagation();
   }
 
@@ -2302,14 +2318,18 @@ impl Editor {
   fn on_review_comment_reply_input_escape(
     &mut self,
     _: &InputEscape,
-    _: &mut Window,
+    window: &mut Window,
     cx: &mut Context<Self>,
   ) {
     if self.review_comment_reply_submitting {
       cx.stop_propagation();
       return;
     }
+    let was_replying = self.replying_to_review_comment_id.is_some();
     self.cancel_review_comment_reply(cx);
+    if was_replying {
+      self.invoke_review_comment_cancel_handler(window, cx);
+    }
     cx.stop_propagation();
   }
 
@@ -2616,15 +2636,25 @@ impl Editor {
   fn on_review_comment_create_input_escape(
     &mut self,
     _: &InputEscape,
-    _: &mut Window,
+    window: &mut Window,
     cx: &mut Context<Self>,
   ) {
     if self.review_comment_create_submitting {
       cx.stop_propagation();
       return;
     }
+    let had_draft = self.review_comment_create_draft.is_some();
     self.cancel_review_comment_create(cx);
+    if had_draft {
+      self.invoke_review_comment_cancel_handler(window, cx);
+    }
     cx.stop_propagation();
+  }
+
+  fn invoke_review_comment_cancel_handler(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    if let Some(handler) = self.review_comment_cancel_handler.clone() {
+      handler(window, cx);
+    }
   }
 
   fn save_review_comment_create(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -3917,7 +3947,11 @@ impl Editor {
                     cx.stop_propagation();
                     editor.update(cx, |editor, cx| {
                       if is_replying {
+                        let was_replying = editor.replying_to_review_comment_id.is_some();
                         editor.cancel_review_comment_reply(cx);
+                        if was_replying {
+                          editor.invoke_review_comment_cancel_handler(window, cx);
+                        }
                       } else {
                         editor.start_review_comment_reply(first_message_id, window, cx);
                       }
@@ -4163,10 +4197,14 @@ impl Editor {
                               .compact()
                               .label("Cancel")
                               .disabled(is_edit_submitting)
-                              .on_click(move |_, _, cx| {
+                              .on_click(move |_, window, cx| {
                                 cx.stop_propagation();
                                 cancel_editor.update(cx, |editor, cx| {
+                                  let was_editing = editor.editing_review_comment_id.is_some();
                                   editor.cancel_review_comment_edit(cx);
+                                  if was_editing {
+                                    editor.invoke_review_comment_cancel_handler(window, cx);
+                                  }
                                 });
                               }),
                           ),
@@ -4344,7 +4382,11 @@ impl Editor {
                       cx.stop_propagation();
                       editor.update(cx, |editor, cx| {
                         if is_replying {
+                          let was_replying = editor.replying_to_review_comment_id.is_some();
                           editor.cancel_review_comment_reply(cx);
+                          if was_replying {
+                            editor.invoke_review_comment_cancel_handler(window, cx);
+                          }
                         } else {
                           editor.start_review_comment_reply(message_id, window, cx);
                         }
@@ -4522,10 +4564,15 @@ impl Editor {
                                   .compact()
                                   .label("Cancel")
                                   .disabled(is_reply_submitting)
-                                  .on_click(move |_, _, cx| {
+                                  .on_click(move |_, window, cx| {
                                     cx.stop_propagation();
                                     cancel_editor.update(cx, |editor, cx| {
+                                      let was_replying =
+                                        editor.replying_to_review_comment_id.is_some();
                                       editor.cancel_review_comment_reply(cx);
+                                      if was_replying {
+                                        editor.invoke_review_comment_cancel_handler(window, cx);
+                                      }
                                     });
                                   }),
                               ),
@@ -4795,10 +4842,14 @@ impl Editor {
                                 .compact()
                                 .label("Cancel")
                                 .disabled(is_create_submitting)
-                                .on_click(move |_, _, cx| {
+                                .on_click(move |_, window, cx| {
                                   cx.stop_propagation();
                                   cancel_editor.update(cx, |editor, cx| {
+                                    let had_draft = editor.review_comment_create_draft.is_some();
                                     editor.cancel_review_comment_create(cx);
+                                    if had_draft {
+                                      editor.invoke_review_comment_cancel_handler(window, cx);
+                                    }
                                   });
                                 }),
                             ),
@@ -9552,6 +9603,7 @@ pub mod tests {
           auto_collapsed_resolved_thread_ids: HashSet::new(),
           review_comment_suggestion_action_factory: None,
           review_comment_create_handler: None,
+          review_comment_cancel_handler: None,
           review_comment_replies_enabled: true,
           review_comment_link_handler: None,
           review_comment_asset_url_resolver: None,

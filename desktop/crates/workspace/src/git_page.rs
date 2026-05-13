@@ -9,8 +9,9 @@ use std::{
 use editor::{
   CloseFind, ConflictNavigationDirection, ConflictNavigationState, ConflictResolution,
   DiffViewMode, Editor, Find, HunkAction, HunkNavigationDirection, HunkState, ReviewComment,
-  ReviewCommentCreateHandler, ReviewCommentCreateRequest, ReviewCommentDeleteHandler,
-  ReviewCommentDisplayMode, ReviewCommentEditHandler, ReviewCommentSide,
+  ReviewCommentCancelHandler, ReviewCommentCreateHandler, ReviewCommentCreateRequest,
+  ReviewCommentDeleteHandler, ReviewCommentDisplayMode, ReviewCommentEditHandler,
+  ReviewCommentSide,
 };
 use gfm_markdown_viewer::{MarkdownRenderOptions, SuggestionContext, render_markdown};
 use git::{
@@ -6678,9 +6679,9 @@ impl GitPage {
         let view = view.clone();
         move |request, window, _cx| {
           let view = view.clone();
-          window.on_next_frame(move |_window, cx| {
+          window.on_next_frame(move |window, cx| {
             let _ = view.update(cx, |this, cx| {
-              this.create_agent_review_comment(request, cx);
+              this.create_agent_review_comment(request, window, cx);
             });
           });
         }
@@ -6693,9 +6694,9 @@ impl GitPage {
         let view = view.clone();
         move |comment_id, body, window, _cx| {
           let view = view.clone();
-          window.on_next_frame(move |_window, cx| {
+          window.on_next_frame(move |window, cx| {
             let _ = view.update(cx, |this, cx| {
-              this.update_agent_review_comment(comment_id, body, cx);
+              this.update_agent_review_comment(comment_id, body, window, cx);
             });
           });
         }
@@ -6714,6 +6715,21 @@ impl GitPage {
         }
       });
       editor.set_review_comment_delete_handler(Some(delete_handler), cx);
+
+      let cancel_handler: ReviewCommentCancelHandler = Arc::new({
+        let view = view.clone();
+        move |window, _cx| {
+          let view = view.clone();
+          window.on_next_frame(move |window, cx| {
+            let _ = view.update(cx, |this, cx| {
+              if this.sidebar_mode == GitSidebarMode::Changes {
+                this.focus_changes_sidebar_list(window, cx);
+              }
+            });
+          });
+        }
+      });
+      editor.set_review_comment_cancel_handler(Some(cancel_handler), cx);
 
       let preview_renderer: editor::ReviewCommentPreviewRenderer = Arc::new(
         |text: &str,
@@ -6796,6 +6812,7 @@ impl GitPage {
   fn create_agent_review_comment(
     &mut self,
     request: ReviewCommentCreateRequest,
+    window: &mut Window,
     cx: &mut Context<Self>,
   ) {
     let parent = request.in_reply_to_id.and_then(|parent_id| {
@@ -6837,6 +6854,9 @@ impl GitPage {
     });
     self.sync_agent_review_comments_to_editor(cx);
     self.finish_agent_review_create(None, cx);
+    if self.sidebar_mode == GitSidebarMode::Changes {
+      self.focus_changes_sidebar_list(window, cx);
+    }
     cx.notify();
   }
 
@@ -6852,6 +6872,7 @@ impl GitPage {
     &mut self,
     comment_id: u64,
     body: Arc<str>,
+    window: &mut Window,
     cx: &mut Context<Self>,
   ) {
     if let Some(comment) = self
@@ -6865,6 +6886,9 @@ impl GitPage {
         editor.update(cx, |editor, cx| {
           editor.finish_review_comment_edit_submission(comment_id, None, cx);
         });
+      }
+      if self.sidebar_mode == GitSidebarMode::Changes {
+        self.focus_changes_sidebar_list(window, cx);
       }
       cx.notify();
     }
