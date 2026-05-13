@@ -97,6 +97,7 @@ const SIDEBAR_DEFAULT_WIDTH: f32 = 400.0;
 const SIDEBAR_MIN_WIDTH: f32 = 250.0;
 const SIDEBAR_MAX_WIDTH: f32 = 1500.0;
 const STATUS_POLL_INTERVAL_MS: u64 = 3_000;
+const INACTIVE_STATUS_POLL_INTERVAL: Duration = Duration::from_secs(60);
 const UNPUBLISHED_BRANCH_RECHECK_INTERVAL: Duration = Duration::from_secs(30);
 const EDITOR_HEADER_HEIGHT: f32 = 40.0;
 const HISTORY_MAX_COMMITS: usize = 200;
@@ -1694,6 +1695,7 @@ pub struct GitPage {
   status_refresh_generation: u64,
   branch_refresh_generation: u64,
   poll_task: Option<Task<()>>,
+  poll_window_active: bool,
   commit_input: Entity<InputState>,
   operation_error: Option<SharedString>,
 }
@@ -2269,6 +2271,22 @@ impl GitPage {
 
   fn current_status_refresh_generation(&self) -> u64 {
     self.status_refresh_generation
+  }
+
+  fn status_poll_interval(window_active: bool) -> Duration {
+    if window_active {
+      Duration::from_millis(STATUS_POLL_INTERVAL_MS)
+    } else {
+      INACTIVE_STATUS_POLL_INTERVAL
+    }
+  }
+
+  fn should_poll_status(
+    window_active: bool,
+    selected_repo: Option<&Path>,
+    status_refresh_in_progress: bool,
+  ) -> bool {
+    window_active && selected_repo.is_some() && !status_refresh_in_progress
   }
 
   fn unpublished_branch_check_key(
@@ -3041,6 +3059,7 @@ impl GitPage {
       status_refresh_generation: 0,
       branch_refresh_generation: 0,
       poll_task: None,
+      poll_window_active: true,
       commit_input,
       operation_error: None,
     };
@@ -3048,6 +3067,7 @@ impl GitPage {
     view.subscribe_to_file_list(cx);
     view.subscribe_to_commit_input(window, cx);
     view.subscribe_to_history_tree_focus(window, cx);
+    view.subscribe_to_window_activation(window, cx);
     view.reload_status(cx);
     view.refresh_branches(cx);
     view.start_polling(cx);
@@ -3146,6 +3166,7 @@ impl GitPage {
       status_refresh_generation: 0,
       branch_refresh_generation: 0,
       poll_task: None,
+      poll_window_active: true,
       commit_input,
       operation_error: None,
     };
@@ -3153,6 +3174,7 @@ impl GitPage {
     view.subscribe_to_file_list(cx);
     view.subscribe_to_commit_input(window, cx);
     view.subscribe_to_history_tree_focus(window, cx);
+    view.subscribe_to_window_activation(window, cx);
     GitPageHandle::register(cx);
     view
   }
@@ -3480,6 +3502,16 @@ impl GitPage {
         });
       },
     )
+    .detach();
+  }
+
+  fn subscribe_to_window_activation(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    cx.on_focus_in(&self.focus_handle.clone(), window, |this, _window, cx| {
+      this.poll_window_active = true;
+      if this.selected_repo.is_some() && !this.status_refresh_in_progress {
+        this.reload_status(cx);
+      }
+    })
     .detach();
   }
 
@@ -3938,17 +3970,37 @@ impl GitPage {
 
     self.poll_task = Some(cx.spawn(async move |this, cx| {
       loop {
+        let poll_window_active = match this.update(cx, |this, _| this.poll_window_active) {
+          Ok(window_active) => window_active,
+          Err(_) => return,
+        };
         cx.background_executor()
-          .timer(Duration::from_millis(STATUS_POLL_INTERVAL_MS))
+          .timer(Self::status_poll_interval(poll_window_active))
           .await;
 
+        let window_handle = match this.update(cx, |this, _| this.window_handle) {
+          Ok(window_handle) => window_handle,
+          Err(_) => return,
+        };
+        let window_active = match window_handle.update(cx, |_, window, _| window.is_window_active())
+        {
+          Ok(window_active) => window_active,
+          Err(_) => return,
+        };
+
         let poll_state = match this.update(cx, |this, _| {
-          if this.status_refresh_in_progress {
+          this.poll_window_active = window_active;
+          if !Self::should_poll_status(
+            window_active,
+            this.selected_repo.as_deref(),
+            this.status_refresh_in_progress,
+          ) {
             return None;
           }
-          let Some(repo_root) = this.selected_repo.clone() else {
-            return None;
-          };
+          let repo_root = this
+            .selected_repo
+            .clone()
+            .expect("selected repo is checked before polling");
           let now = Instant::now();
           let force_unpublished_branch_recheck =
             this.unpublished_branch_checked_at.is_none_or(|checked_at| {
@@ -18239,6 +18291,28 @@ mod tests {
       3
     ));
     assert!(!GitPage::should_apply_status_refresh(None, repo, 3, 3));
+  }
+
+  #[test]
+  fn status_poll_interval_slows_down_for_inactive_window() {
+    assert_eq!(
+      GitPage::status_poll_interval(true),
+      Duration::from_millis(STATUS_POLL_INTERVAL_MS)
+    );
+    assert_eq!(
+      GitPage::status_poll_interval(false),
+      INACTIVE_STATUS_POLL_INTERVAL
+    );
+  }
+
+  #[test]
+  fn should_poll_status_requires_active_window_repo_and_idle_refresh() {
+    let repo = Path::new("/tmp/repo");
+
+    assert!(GitPage::should_poll_status(true, Some(repo), false));
+    assert!(!GitPage::should_poll_status(false, Some(repo), false));
+    assert!(!GitPage::should_poll_status(true, None, false));
+    assert!(!GitPage::should_poll_status(true, Some(repo), true));
   }
 
   #[test]
