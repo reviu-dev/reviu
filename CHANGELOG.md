@@ -2,6 +2,16 @@
 
 All notable changes to Reviu are documented here.
 
+## 0.12.0
+
+### Review Comment Shortcut
+
+Starts a review comment on the focused hunk from your keyboard. Works on Git page and GitHub PR.
+
+### Review Comments For An AI Agent
+
+Collect review comments on the Git page, copy them as structured markdown to send to an AI agent.
+
 ## 0.11.0
 
 ### File Search Includes Project Files
