@@ -44,6 +44,10 @@ objc2-app-kit = { version = "0.3", features = [
 image = { workspace = true }
 tray-icon = { workspace = true }
 
+[target.'cfg(target_os = "linux")'.dependencies]
+gtk = { workspace = true }
+libloading = { workspace = true }
+
 [dev-dependencies]
 git2 = { workspace = true }
 gpui = { workspace = true, features = ["test-support"] }

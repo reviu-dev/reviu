@@ -102,6 +102,8 @@ imara-diff = "0.2.0"
 sentry = "0.46.2"
 image = { version = "0.25.10", default-features = false, features = ["png"] }
 tray-icon = "0.22.0"
+gtk = "0.18"
+libloading = "0.8"
 percent-encoding = "2.3"
 windows-sys = { version = "0.61.2", features = [
   "Win32_Foundation",
