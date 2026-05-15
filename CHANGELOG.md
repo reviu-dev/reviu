@@ -2,6 +2,12 @@
 
 All notable changes to Reviu are documented here.
 
+## 0.13.0
+
+### Linux System Tray Startup
+
+Reviu now checks the Linux system tray runtime before creating the tray icon, preventing startup crashes in environments where GTK or AppIndicator is not available. If the tray cannot be created, the app continues without the tray icon.
+
 ## 0.12.0
 
 ### Review Comments For An AI Agent

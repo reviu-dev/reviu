@@ -30,6 +30,29 @@ fn notification_menu_title(notification: &GithubNotification) -> String {
   )
 }
 
+#[cfg(any(test, target_os = "linux"))]
+fn gtk_tray_init_error_message(error: impl std::fmt::Display) -> String {
+  format!("Unable to initialize GTK for the Reviu system tray: {error}")
+}
+
+#[cfg(any(test, target_os = "linux"))]
+const LINUX_APPINDICATOR_LIBRARY_NAMES: &[&str] = &[
+  "libayatana-appindicator3.so.1",
+  "libappindicator3.so.1",
+  "libayatana-appindicator3.so",
+  "libappindicator3.so",
+];
+
+#[cfg(any(test, target_os = "linux"))]
+fn linux_appindicator_unavailable_message(errors: &[String]) -> String {
+  let mut message = "Unable to initialize the Reviu system tray because neither ayatana-appindicator3 nor appindicator3 is available.".to_string();
+  if !errors.is_empty() {
+    message.push('\n');
+    message.push_str(&errors.join("\n"));
+  }
+  message
+}
+
 #[cfg(target_os = "macos")]
 mod macos {
   use std::cell::RefCell;
@@ -266,6 +289,10 @@ mod desktop_tray {
   }
 
   pub fn init_status_bar(icon_png: &[u8]) {
+    if !ensure_platform_tray_runtime() {
+      return;
+    }
+
     TRAY_STATE.with(|cell| {
       if cell.borrow().is_some() {
         return;
@@ -356,6 +383,12 @@ mod desktop_tray {
   }
 
   fn poll_menu_events() {
+    if !has_tray_state() {
+      return;
+    }
+
+    drain_platform_events();
+
     while let Ok(event) = MenuEvent::receiver().try_recv() {
       if event.id == OPEN_REVIU_MENU_ID {
         PENDING_OPEN_REVIU.with(|cell| *cell.borrow_mut() = true);
@@ -372,6 +405,54 @@ mod desktop_tray {
       });
     }
   }
+
+  fn has_tray_state() -> bool {
+    TRAY_STATE.with(|cell| cell.borrow().is_some())
+  }
+
+  #[cfg(target_os = "linux")]
+  fn ensure_platform_tray_runtime() -> bool {
+    if let Err(error) = gtk::init() {
+      eprintln!("{}", super::gtk_tray_init_error_message(error));
+      return false;
+    }
+
+    match ensure_linux_appindicator_library() {
+      Ok(()) => true,
+      Err(error) => {
+        eprintln!("{error}");
+        false
+      }
+    }
+  }
+
+  #[cfg(target_os = "windows")]
+  fn ensure_platform_tray_runtime() -> bool {
+    true
+  }
+
+  #[cfg(target_os = "linux")]
+  fn ensure_linux_appindicator_library() -> Result<(), String> {
+    let mut errors = Vec::new();
+    for name in super::LINUX_APPINDICATOR_LIBRARY_NAMES {
+      match unsafe { libloading::Library::new(name) } {
+        Ok(_) => return Ok(()),
+        Err(error) => errors.push(format!("{name}: {error}")),
+      }
+    }
+
+    Err(super::linux_appindicator_unavailable_message(&errors))
+  }
+
+  #[cfg(target_os = "linux")]
+  fn drain_platform_events() {
+    while gtk::events_pending() {
+      gtk::main_iteration_do(false);
+    }
+  }
+
+  #[cfg(target_os = "windows")]
+  fn drain_platform_events() {}
 
   fn populate_menu(
     menu: &Menu,
@@ -512,7 +593,9 @@ pub fn has_pending_interaction() -> bool {
 #[cfg(test)]
 mod tests {
   use super::{
-    notification_menu_title, status_bar_title, status_bar_tooltip, unread_notification_count_label,
+    LINUX_APPINDICATOR_LIBRARY_NAMES, gtk_tray_init_error_message,
+    linux_appindicator_unavailable_message, notification_menu_title, status_bar_title,
+    status_bar_tooltip, unread_notification_count_label,
   };
   use crate::api::{GithubNotification, GithubNotificationRepository, GithubNotificationSubject};
 
@@ -538,6 +621,28 @@ mod tests {
       status_bar_tooltip(2),
       "Reviu - 2 unread notifications".to_string()
     );
+  }
+
+  #[test]
+  fn gtk_tray_init_error_message_names_tray_context() {
+    assert_eq!(
+      gtk_tray_init_error_message("Failed to initialize GTK"),
+      "Unable to initialize GTK for the Reviu system tray: Failed to initialize GTK"
+    );
+  }
+
+  #[test]
+  fn linux_appindicator_unavailable_message_includes_attempted_libraries() {
+    let errors: Vec<String> = LINUX_APPINDICATOR_LIBRARY_NAMES
+      .iter()
+      .map(|name| format!("{name}: missing"))
+      .collect();
+
+    let message = linux_appindicator_unavailable_message(&errors);
+
+    assert!(message.contains("neither ayatana-appindicator3 nor appindicator3 is available"));
+    assert!(message.contains("libayatana-appindicator3.so.1: missing"));
+    assert!(message.contains("libappindicator3.so: missing"));
   }
 
   #[test]
