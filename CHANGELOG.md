@@ -4,6 +4,10 @@ All notable changes to Reviu are documented here.
 
 ## 0.13.0
 
+### Pull Request Target Branch Editing
+
+GitHub pull request details now let you change the target branch from Reviu. The overview refreshes after the change so the diff, commits, checks, and merge state match the new target.
+
 ### Linux System Tray Startup
 
 Reviu now checks the Linux system tray runtime before creating the tray icon, preventing startup crashes in environments where GTK or AppIndicator is not available. If the tray cannot be created, the app continues without the tray icon.

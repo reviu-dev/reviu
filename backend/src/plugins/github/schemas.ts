@@ -12,6 +12,10 @@ export const updateDescriptionBodySchema = z.object({
   body: z.string().transform(value => value.trim()),
 })
 
+export const updatePullRequestBaseBodySchema = z.object({
+  base: z.string().trim().min(1, 'Missing base branch'),
+})
+
 export const createPullRequestLineCommentBodySchema = z.object({
   body: z.string().trim().min(1, 'Missing comment body'),
   path: z.string().trim().min(1, 'Missing comment path'),

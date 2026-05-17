@@ -131,6 +131,7 @@ import {
   pullRequestStatusMutationBodySchema,
   pullRequestUsersMutationBodySchema,
   updateDescriptionBodySchema,
+  updatePullRequestBaseBodySchema,
   updatePullRequestCommentBodySchema,
 } from '../plugins/github/schemas.js'
 import {
@@ -2121,6 +2122,50 @@ export const githubRoutes = githubRouter
       }))
       const pullRequest = mapGithubPullRequestDescriptionUpdate(data)
       return ctx.json({ pullRequest }, 200)
+    }
+    catch (error) {
+      const status = (error as { status?: number }).status
+      if (status === 403 || status === 404 || status === 422) {
+        return ctx.json({ error: (error as Error).message }, status)
+      }
+      return ctx.json({ error: (error as Error).message }, 502)
+    }
+  })
+  .patch('/pr/:id/base', zValidator(
+    'json',
+    updatePullRequestBaseBodySchema,
+  ), async (ctx) => {
+    const { org, repo } = ctx.req.query()
+    const pullNumber = Number(ctx.req.param('id'))
+    const { base } = ctx.req.valid('json')
+
+    if (!org || !repo || Number.isNaN(pullNumber)) {
+      return ctx.json({ error: 'Missing org, repo, or id' }, 400)
+    }
+
+    const user = ctx.get('user')!
+    const githubToken = user.github.accessToken
+
+    try {
+      const params: UpdatePullRequestParams = {
+        owner: org,
+        repo,
+        pull_number: pullNumber,
+        base,
+      }
+
+      await patchGithubPullRequest({ token: githubToken, params })
+      await invalidateGithubCacheTags([
+        ...getGithubPullRequestMutationTags({
+          userId: user.id,
+          owner: org,
+          repo,
+          pullNumber,
+        }),
+        getGithubPullRequestCommitsTag(org, repo, pullNumber),
+        getGithubPullRequestFilesTag(org, repo, pullNumber),
+      ])
+      return ctx.body(null, 204)
     }
     catch (error) {
       const status = (error as { status?: number }).status
