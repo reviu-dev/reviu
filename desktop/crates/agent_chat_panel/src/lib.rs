@@ -23,6 +23,7 @@ use gpui_component::{
   h_flex,
   input::InputEvent,
   scroll::ScrollableElement as _,
+  spinner::Spinner,
   v_flex,
 };
 use ui::{Input, InputState, StatusThemeExt as _};
@@ -1026,17 +1027,12 @@ impl Render for AgentChatPanel {
         h_flex()
           .gap_2()
           .items_center()
+          .child(Spinner::new().xsmall().color(theme.muted_foreground))
           .child(
             div()
               .text_xs()
               .text_color(theme.muted_foreground)
               .child(format!("{} is thinking...", self.backend.label)),
-          )
-          .child(
-            div()
-              .text_xs()
-              .text_color(theme.muted_foreground)
-              .child("●●●"),
           ),
       );
     }
