@@ -757,9 +757,13 @@ async fn run_driver(
               }
             }
             if let Some(response) = response_opt {
-              let mapped = response
-                .map(|r| r.stop_reason)
-                .map_err(|e| anyhow!("acp prompt error: {e}"));
+              let mapped = response.map(|r| r.stop_reason).map_err(|e| {
+                if e.code == agent_client_protocol::schema::ErrorCode::AuthRequired {
+                  anyhow!("auth_required: {e}")
+                } else {
+                  anyhow!("acp prompt error: {e}")
+                }
+              });
               let _ = reply.send(mapped);
             }
           }
