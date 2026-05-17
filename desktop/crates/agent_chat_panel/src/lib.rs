@@ -57,6 +57,20 @@ struct DiffSummary {
   path: String,
   added: u32,
   removed: u32,
+  #[serde(default)]
+  lines: Vec<DiffLine>,
+}
+
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+struct DiffLine {
+  kind: DiffLineKind,
+  text: String,
+}
+
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
+enum DiffLineKind {
+  Added,
+  Removed,
 }
 
 #[derive(Clone, Debug)]
@@ -497,15 +511,45 @@ fn extract_diffs(content: &[ToolCallContent]) -> Vec<DiffSummary> {
     .filter_map(|c| match c {
       ToolCallContent::Diff(d) => {
         let (added, removed) = diff_line_counts(d.old_text.as_deref(), &d.new_text);
+        let lines = build_diff_lines(d.old_text.as_deref().unwrap_or(""), &d.new_text);
         Some(DiffSummary {
           path: d.path.display().to_string(),
           added,
           removed,
+          lines,
         })
       }
       _ => None,
     })
     .collect()
+}
+
+fn build_diff_lines(old: &str, new: &str) -> Vec<DiffLine> {
+  use imara_diff::{Algorithm, Diff, InternedInput};
+  let input = InternedInput::new(old, new);
+  let diff = Diff::compute(Algorithm::Histogram, &input);
+  let old_lines: Vec<&str> = old.lines().collect();
+  let new_lines: Vec<&str> = new.lines().collect();
+  let mut out = Vec::new();
+  for hunk in diff.hunks() {
+    for i in hunk.before.clone() {
+      if let Some(line) = old_lines.get(i as usize) {
+        out.push(DiffLine {
+          kind: DiffLineKind::Removed,
+          text: (*line).to_string(),
+        });
+      }
+    }
+    for i in hunk.after.clone() {
+      if let Some(line) = new_lines.get(i as usize) {
+        out.push(DiffLine {
+          kind: DiffLineKind::Added,
+          text: (*line).to_string(),
+        });
+      }
+    }
+  }
+  out
 }
 
 fn diff_line_counts(old_text: Option<&str>, new_text: &str) -> (u32, u32) {
@@ -658,9 +702,9 @@ fn render_tool_call(t: &ToolCallView, theme: &gpui_component::Theme) -> gpui::An
       )
     })
     .when(!t.diffs.is_empty(), |this| {
-      let mut diff_col = v_flex().gap_1();
+      let mut diff_col = v_flex().gap_2();
       for d in &t.diffs {
-        diff_col = diff_col.child(
+        let mut block = v_flex().gap_0p5().child(
           h_flex()
             .gap_2()
             .child(
@@ -682,6 +726,30 @@ fn render_tool_call(t: &ToolCallView, theme: &gpui_component::Theme) -> gpui::An
                 .child(format!("-{}", d.removed)),
             ),
         );
+        if !d.lines.is_empty() {
+          let mut body = v_flex()
+            .font_family("monospace")
+            .text_xs()
+            .border_1()
+            .border_color(theme.border)
+            .rounded(px(3.));
+          for line in &d.lines {
+            let (prefix, bg, fg) = match line.kind {
+              DiffLineKind::Added => ("+", theme.status_green().opacity(0.15), theme.foreground),
+              DiffLineKind::Removed => ("-", theme.status_red().opacity(0.15), theme.foreground),
+            };
+            body = body.child(
+              div()
+                .w_full()
+                .px_2()
+                .bg(bg)
+                .text_color(fg)
+                .child(format!("{prefix} {}", line.text)),
+            );
+          }
+          block = block.child(body);
+        }
+        diff_col = diff_col.child(block);
       }
       this.child(diff_col)
     })
