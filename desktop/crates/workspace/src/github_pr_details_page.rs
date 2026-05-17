@@ -11,9 +11,8 @@ use editor::{
   REVIEW_COMMENT_HEADER_BODY_GAP_PX, REVIEW_COMMENT_VERTICAL_PADDING_PX, ReviewComment,
   ReviewCommentCancelHandler, ReviewCommentCodeReferencePreview, ReviewCommentCreateHandler,
   ReviewCommentCreateRequest, ReviewCommentDeleteHandler, ReviewCommentEditHandler,
-  ReviewCommentImageUploadHandler,
-  ReviewCommentLinkHandler, ReviewCommentResolveHandler, ReviewCommentSide,
-  ReviewCommentSuggestionActionFactory,
+  ReviewCommentImageUploadHandler, ReviewCommentLinkHandler, ReviewCommentResolveHandler,
+  ReviewCommentSide, ReviewCommentSuggestionActionFactory,
 };
 use gfm_markdown_viewer::{
   GithubBlobLineReference, GithubCodeReferencePreview, GithubDiffLine, GithubDiffLineKind,
@@ -49,6 +48,7 @@ use gpui_component::{
   notification::Notification,
   radio::{Radio, RadioGroup},
   scroll::ScrollableElement,
+  select::{SearchableVec, Select, SelectEvent, SelectItem, SelectState},
   skeleton::Skeleton,
   spinner::Spinner,
   switch::Switch,
@@ -84,6 +84,7 @@ use crate::{
     GithubPullRequestMergeReadinessStatus, GithubPullRequestMergeResult, GithubPullRequestReview,
     GithubPullRequestReviewComment, GithubPullRequestReviewEvent, GithubPullRequestReviewState,
     GithubPullRequestState, GithubReactionContent, GithubReactionGroup, GithubRepository,
+    GithubRepositoryBranch,
   },
   auth_state::{AuthState, AuthStateStore},
   config::{AppSettings, ConfigStore},
@@ -158,6 +159,78 @@ fn pr_tab_url_segment(tab_ix: usize) -> &'static str {
     PR_TAB_CHANGES_IX => "changes",
     _ => "", // overview = no suffix
   }
+}
+
+fn sorted_branch_names_for_target_selector(
+  branches: Vec<GithubRepositoryBranch>,
+  current_base: &str,
+  head_ref: &str,
+) -> Vec<String> {
+  let mut names = branches
+    .into_iter()
+    .map(|branch| branch.name)
+    .filter(|name| !name.trim().is_empty())
+    .filter(|name| !name.eq_ignore_ascii_case(head_ref))
+    .collect::<Vec<_>>();
+  if !current_base.trim().is_empty()
+    && !current_base.eq_ignore_ascii_case(head_ref)
+    && !names
+      .iter()
+      .any(|name| name.eq_ignore_ascii_case(current_base))
+  {
+    names.push(current_base.to_string());
+  }
+  names.sort_by_key(|name| name.to_ascii_lowercase());
+  names.dedup_by(|a, b| a.eq_ignore_ascii_case(b));
+  names
+}
+
+#[derive(Clone)]
+struct PrTargetBranchSelectItem {
+  branch: String,
+  label: SharedString,
+}
+
+impl PrTargetBranchSelectItem {
+  fn new(branch: String) -> Self {
+    let label: SharedString = branch.clone().into();
+    Self { branch, label }
+  }
+}
+
+impl SelectItem for PrTargetBranchSelectItem {
+  type Value = String;
+
+  fn title(&self) -> SharedString {
+    self.label.clone()
+  }
+
+  fn render(&self, _: &mut Window, _: &mut App) -> impl IntoElement {
+    div()
+      .w_full()
+      .overflow_hidden()
+      .text_ellipsis()
+      .child(self.label.clone())
+  }
+
+  fn value(&self) -> &Self::Value {
+    &self.branch
+  }
+
+  fn matches(&self, query: &str) -> bool {
+    self.label.to_lowercase().contains(&query.to_lowercase())
+  }
+}
+
+fn build_target_branch_select_items(
+  branches: Vec<GithubRepositoryBranch>,
+  current_base: &str,
+  head_ref: &str,
+) -> Vec<PrTargetBranchSelectItem> {
+  sorted_branch_names_for_target_selector(branches, current_base, head_ref)
+    .into_iter()
+    .map(PrTargetBranchSelectItem::new)
+    .collect()
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -2713,6 +2786,14 @@ pub struct GithubPrDetailsPage {
   status_action_loading: bool,
   update_branch_task: Option<Task<()>>,
   update_branch_loading: bool,
+  target_branch_select: Entity<SelectState<SearchableVec<PrTargetBranchSelectItem>>>,
+  target_branch_task: Option<Task<()>>,
+  target_branch_loading: bool,
+  target_branch_error: Option<SharedString>,
+  target_branch_request_generation: u64,
+  target_branch_update_task: Option<Task<()>>,
+  target_branch_update_loading: bool,
+  target_branch_update_error: Option<SharedString>,
   ai_pr_brief_task: Option<Task<()>>,
   ai_pr_brief_loading: bool,
   ai_pr_brief_error: Option<SharedString>,
@@ -3245,6 +3326,15 @@ impl GithubPrDetailsPage {
     let requested_reviewer_input =
       cx.new(|cx| InputState::new(window, cx).placeholder("Request review..."));
     let label_input = cx.new(|cx| InputState::new(window, cx).placeholder("Add a label..."));
+    let target_branch_select = cx.new(|cx| {
+      SelectState::new(
+        SearchableVec::new(Vec::<PrTargetBranchSelectItem>::new()),
+        None,
+        window,
+        cx,
+      )
+      .searchable(true)
+    });
     let tree_search_input =
       cx.new(|cx| InputState::new(window, cx).placeholder("Search in file contents..."));
 
@@ -3287,6 +3377,14 @@ impl GithubPrDetailsPage {
       status_action_loading: false,
       update_branch_task: None,
       update_branch_loading: false,
+      target_branch_select,
+      target_branch_task: None,
+      target_branch_loading: false,
+      target_branch_error: None,
+      target_branch_request_generation: 0,
+      target_branch_update_task: None,
+      target_branch_update_loading: false,
+      target_branch_update_error: None,
       ai_pr_brief_task: None,
       ai_pr_brief_loading: false,
       ai_pr_brief_error: None,
@@ -3443,6 +3541,7 @@ impl GithubPrDetailsPage {
     this.subscribe_to_assignee_input(window, cx);
     this.subscribe_to_requested_reviewer_input(window, cx);
     this.subscribe_to_label_input(window, cx);
+    this.subscribe_to_target_branch_select(cx);
     this.subscribe_to_review_input(window, cx);
     this.subscribe_to_merge_commit_inputs(window, cx);
     this
@@ -4701,6 +4800,7 @@ impl GithubPrDetailsPage {
             this.resolved_local_repo_task = None;
             this.error = None;
             this.add_pr_breadcrumb("Refresh PR details succeeded", Map::new());
+            this.refresh_target_branch_options(cx);
             let description_requests = this.description_code_reference_requests.clone();
             this.schedule_code_reference_fetches(description_requests.iter(), cx);
             this.sync_review_comments(cx);
@@ -5524,6 +5624,149 @@ impl GithubPrDetailsPage {
     cx.notify();
   }
 
+  fn can_edit_target_branch(&self, pr: &GithubPullRequestDetails) -> bool {
+    pr.state == GithubPullRequestState::Open
+      && pr.merged_at.is_none()
+      && !self.target_branch_update_loading
+  }
+
+  fn refresh_target_branch_options(&mut self, cx: &mut Context<Self>) {
+    let Some(pull_request) = self.pull_request.as_ref() else {
+      return;
+    };
+
+    let owner = pull_request.repository.owner.clone();
+    let repo = pull_request.repository.repo.clone();
+    let current_base = pull_request.base_ref_name.clone();
+    let head_ref = pull_request.head_ref_name.clone();
+    self.target_branch_loading = true;
+    self.target_branch_error = None;
+    self.target_branch_request_generation = self.target_branch_request_generation.wrapping_add(1);
+    let request_generation = self.target_branch_request_generation;
+    let api = self.api.clone();
+
+    let task = cx.spawn(async move |this, cx| {
+      let result = unblock(move || api.fetch_github_repository_branches(&owner, &repo)).await;
+
+      let _ = this.update(cx, |this, cx| {
+        if request_generation != this.target_branch_request_generation {
+          return;
+        }
+
+        this.target_branch_task = None;
+        this.target_branch_loading = false;
+
+        match result {
+          Ok(branches) => {
+            let items =
+              build_target_branch_select_items(branches, &current_base, &head_ref);
+            this.set_target_branch_select_items(items, Some(current_base), cx);
+            this.target_branch_error = None;
+          }
+          Err(error) => {
+            let message = error.to_string();
+            this.set_target_branch_select_items(Vec::new(), None, cx);
+            this.target_branch_error = Some(message.clone().into());
+            this.record_pr_error("github.pr.target_branch_options", &message, Map::new());
+          }
+        }
+
+        cx.notify();
+      });
+    });
+
+    self.target_branch_task = Some(task);
+    cx.notify();
+  }
+
+  fn set_target_branch_select_items(
+    &mut self,
+    items: Vec<PrTargetBranchSelectItem>,
+    selected_branch: Option<String>,
+    cx: &mut Context<Self>,
+  ) {
+    let target_branch_select = self.target_branch_select.clone();
+    let window_handle = self.window_handle;
+    let _ = cx.update_window(window_handle, move |_, window, cx| {
+      target_branch_select.update(cx, |state, cx| {
+        state.set_items(SearchableVec::new(items), window, cx);
+        if let Some(selected_branch) = selected_branch.as_ref() {
+          state.set_selected_value(selected_branch, window, cx);
+        } else {
+          state.set_selected_index(None, window, cx);
+        }
+      });
+    });
+  }
+
+  fn submit_target_branch_update(&mut self, branch: String, cx: &mut Context<Self>) {
+    if self.target_branch_update_loading {
+      return;
+    }
+
+    let Some(pull_request) = self.pull_request.as_ref() else {
+      return;
+    };
+
+    if branch.eq_ignore_ascii_case(pull_request.base_ref_name.as_str()) {
+      return;
+    }
+
+    let owner = pull_request.repository.owner.clone();
+    let repo = pull_request.repository.repo.clone();
+    let number = pull_request.number;
+    let api = self.api.clone();
+    self.target_branch_update_loading = true;
+    self.target_branch_update_error = None;
+
+    let task = cx.spawn(async move |this, cx| {
+      let branch_for_request = branch.clone();
+      let result =
+        unblock(move || api.update_pull_request_base(&owner, &repo, number, &branch_for_request))
+          .await;
+
+      let _ = this.update(cx, |this, cx| {
+        this.target_branch_update_loading = false;
+        this.target_branch_update_task = None;
+
+        match result {
+          Ok(()) => {
+            this.target_branch_update_error = None;
+            this.add_pr_breadcrumb("Update PR target branch succeeded", Map::new());
+            if let Some(pull_request) = this.pull_request.as_mut() {
+              pull_request.base_ref_name = branch;
+            }
+            this.reload_current_pull_request(cx);
+          }
+          Err(error) => {
+            let message = error.to_string();
+            this.target_branch_update_error = Some(message.clone().into());
+            this.add_pr_breadcrumb("Update PR target branch failed", Map::new());
+            this.record_pr_error("github.pr.target_branch_update", &message, Map::new());
+            let restore_base = this
+              .pull_request
+              .as_ref()
+              .map(|pr| pr.base_ref_name.clone());
+            if let Some(base) = restore_base {
+              let select = this.target_branch_select.clone();
+              let window_handle = this.window_handle;
+              let _ = cx.update_window(window_handle, move |_, window, cx| {
+                select.update(cx, |state, cx| {
+                  state.set_selected_value(&base, window, cx);
+                });
+              });
+            }
+          }
+        }
+
+        cx.notify();
+      });
+    });
+
+    self.target_branch_update_task = Some(task);
+    cx.notify();
+  }
+
   fn editable_review_comment_ids(&self, cx: &App) -> HashSet<u64> {
     let Some(login) = Self::current_github_login(cx) else {
       return HashSet::new();
@@ -6049,6 +6292,19 @@ impl GithubPrDetailsPage {
           this.add_label_value(state.read(cx).value().as_str(), window, cx);
         }
         _ => {}
+      },
+    )
+    .detach();
+  }
+
+  fn subscribe_to_target_branch_select(&mut self, cx: &mut Context<Self>) {
+    cx.subscribe(
+      &self.target_branch_select,
+      |this, _state, event: &SelectEvent<SearchableVec<PrTargetBranchSelectItem>>, cx| {
+        if let SelectEvent::Confirm(Some(branch)) = event {
+          this.target_branch_update_error = None;
+          this.submit_target_branch_update(branch.clone(), cx);
+        }
       },
     )
     .detach();
@@ -9714,6 +9970,14 @@ impl GithubPrDetailsPage {
     self.status_action_loading = false;
     self.update_branch_task = None;
     self.update_branch_loading = false;
+    self.target_branch_task = None;
+    self.target_branch_loading = false;
+    self.target_branch_error = None;
+    self.target_branch_request_generation = self.target_branch_request_generation.wrapping_add(1);
+    self.target_branch_update_task = None;
+    self.target_branch_update_loading = false;
+    self.target_branch_update_error = None;
+    self.set_target_branch_select_items(Vec::new(), None, cx);
     self.ai_pr_brief_task = None;
     self.ai_pr_brief_loading = false;
     self.ai_pr_brief_error = None;
@@ -9860,6 +10124,7 @@ impl GithubPrDetailsPage {
             this.resolved_local_repo_task = None;
             this.error = None;
             this.add_pr_breadcrumb("Load PR details succeeded", Map::new());
+            this.refresh_target_branch_options(cx);
             let description_requests = this.description_code_reference_requests.clone();
             this.schedule_code_reference_fetches(description_requests.iter(), cx);
             this.sync_review_comments(cx);
@@ -13992,6 +14257,7 @@ impl GithubPrDetailsPage {
     .collect::<Vec<_>>();
     let label_suggestions =
       matching_label_options(&self.label_options, &self.label_query(cx), &pr.labels);
+    let can_edit_target_branch = self.can_edit_target_branch(pr);
 
     let content = v_flex()
       .w_full()
@@ -14111,6 +14377,24 @@ impl GithubPrDetailsPage {
             )
           });
 
+        let target_branch_select = v_flex()
+          .gap_1()
+          .child(
+            Select::new(&self.target_branch_select)
+              .placeholder(pr.base_ref_name.clone())
+              .search_placeholder("Search branches...")
+              .xsmall()
+              .w(px(220.0))
+              .menu_width(px(280.0))
+              .disabled(!can_edit_target_branch),
+          )
+          .when_some(self.target_branch_error.clone(), |this, error| {
+            this.child(div().text_xs().text_color(theme.status_red()).child(error))
+          })
+          .when_some(self.target_branch_update_error.clone(), |this, error| {
+            this.child(div().text_xs().text_color(theme.status_red()).child(error))
+          });
+
         let source_target = h_flex().items_center().gap_2().child(
           h_flex()
             .items_center()
@@ -14148,13 +14432,7 @@ impl GithubPrDetailsPage {
                     .text_color(theme.muted_foreground)
                     .child("Target"),
                 )
-                .child(
-                  div()
-                    .text_sm()
-                    .text_color(theme.foreground)
-                    .child(pr.base_ref_name.clone()),
-                )
-                .child(Clipboard::new("copy-pr-branch-target").value(pr.base_ref_name.clone())),
+                .child(target_branch_select),
             ),
         );
 
@@ -19723,6 +20001,17 @@ mod tests {
     }
   }
 
+  fn make_repo_branch(name: &str) -> GithubRepositoryBranch {
+    GithubRepositoryBranch {
+      name: name.to_string(),
+      commit: crate::api::GithubRepositoryBranchCommit {
+        sha: format!("{name}-sha"),
+        url: format!("https://api.github.com/repos/acme/widget/commits/{name}"),
+      },
+      protected: false,
+    }
+  }
+
   #[test]
   fn status_letter_covers_all_file_statuses() {
     assert_eq!(status_letter(GithubPrFileStatus::Added), "A");
@@ -19822,6 +20111,33 @@ mod tests {
     assert!(!merge_method_supports_commit_message(
       GithubPullRequestMergeMethod::Rebase
     ));
+  }
+
+  #[test]
+  fn target_branch_selector_sorts_dedupes_and_keeps_current_base() {
+    let branches = vec![
+      make_repo_branch("release/next"),
+      make_repo_branch("main"),
+      make_repo_branch("Main"),
+    ];
+
+    let names = sorted_branch_names_for_target_selector(branches, "develop", "feature");
+
+    assert_eq!(names, vec!["develop", "main", "release/next"]);
+  }
+
+  #[test]
+  fn target_branch_selector_excludes_head_branch() {
+    let branches = vec![
+      make_repo_branch("main"),
+      make_repo_branch("feature"),
+      make_repo_branch("Feature"),
+      make_repo_branch("release/next"),
+    ];
+
+    let names = sorted_branch_names_for_target_selector(branches, "main", "feature");
+
+    assert_eq!(names, vec!["main", "release/next"]);
   }
 
   #[test]

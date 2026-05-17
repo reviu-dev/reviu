@@ -1829,6 +1829,11 @@ struct UpdateGithubDescriptionRequest<'a> {
 }
 
 #[derive(Debug, Serialize)]
+struct UpdateGithubPullRequestBaseRequest<'a> {
+  base: &'a str,
+}
+
+#[derive(Debug, Serialize)]
 struct GithubReactionMutationRequest<'a> {
   #[serde(rename = "subjectId")]
   subject_id: &'a str,
@@ -2960,6 +2965,30 @@ impl ApiClient {
     }
     let payload = response.json::<GithubPullRequestDescriptionUpdateResponse>()?;
     Ok(payload.pull_request)
+  }
+
+  pub fn update_pull_request_base(
+    &self,
+    owner: &str,
+    repo: &str,
+    number: u64,
+    base: &str,
+  ) -> Result<()> {
+    let route = format!("/github/pr/{number}/base");
+    let response = self
+      .authed_request(Method::PATCH, route.as_str())
+      .query(&[("org", owner), ("repo", repo)])
+      .json(&UpdateGithubPullRequestBaseRequest { base })
+      .send()?;
+    let status = response.status();
+    Self::record_http_status("PATCH", route.as_str(), status);
+    if status == StatusCode::UNAUTHORIZED {
+      anyhow::bail!("unauthorized")
+    }
+    if !status.is_success() {
+      return Err(Self::api_error_from_response(response));
+    }
+    Ok(())
   }
 
   pub fn add_pull_request_assignee(
@@ -6226,6 +6255,26 @@ mod tests {
   }
 
   #[test]
+  fn update_pull_request_base_uses_expected_route_and_body() {
+    let (base_url, request, handle) =
+      start_single_response_server_with_request("204 No Content", "");
+    let api = make_test_api_client(base_url);
+
+    api
+      .update_pull_request_base("acme", "widget", 42, "release/next")
+      .expect("update pull request base");
+
+    handle.join().expect("join server thread");
+    let request = request
+      .lock()
+      .expect("lock request")
+      .clone()
+      .unwrap_or_default();
+    assert!(request.starts_with("PATCH /github/pr/42/base?org=acme&repo=widget HTTP/1.1"));
+    assert!(request.contains(r#""base":"release/next""#));
+  }
+
+  #[test]
   fn fetch_pull_request_files_parses_success_payload() {
     let body = r#"{
       "files": [
@@ -7851,6 +7900,19 @@ mod tests {
 
     let err = api
       .update_pull_request_description("acme", "widget", 42, "Body")
+      .err();
+    assert!(err.is_some());
+    assert!(err.expect("error").to_string().contains("unauthorized"));
+    handle.join().expect("join server thread");
+  }
+
+  #[test]
+  fn update_pull_request_base_returns_unauthorized_error() {
+    let (base_url, handle) = start_single_response_server("401 Unauthorized", "");
+    let api = make_test_api_client(base_url);
+
+    let err = api
+      .update_pull_request_base("acme", "widget", 42, "release/next")
       .err();
     assert!(err.is_some());
     assert!(err.expect("error").to_string().contains("unauthorized"));
