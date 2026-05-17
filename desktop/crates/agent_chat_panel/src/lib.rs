@@ -10,7 +10,7 @@ use agent_client_protocol::schema::{
   ContentBlock, ToolCall, ToolCallContent, ToolCallId, ToolCallStatus, ToolCallUpdate, ToolKind,
 };
 use futures::future::BoxFuture;
-use gfm_markdown_viewer::{MarkdownRenderOptions, render_markdown};
+use gfm_markdown_viewer::{LinkAction, MarkdownRenderOptions, render_markdown};
 use gpui::{
   Context, Entity, FocusHandle, Focusable, IntoElement, ParentElement, Render, ScrollHandle,
   SharedString, Styled, Task, Window, div, prelude::*, px,
@@ -768,7 +768,9 @@ impl Render for AgentChatPanel {
   fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
     let theme = cx.theme().clone();
     let theme = &theme;
-    let md_options = MarkdownRenderOptions::default();
+    let md_options = MarkdownRenderOptions::with_on_link(Arc::new(|_url, _window, _cx| {
+      LinkAction::Open
+    }));
 
     let header_text: SharedString = match &self.status {
       Status::Connecting => format!("Connecting to {}...", self.backend.label).into(),
