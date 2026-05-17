@@ -161,8 +161,8 @@ impl TerminalAuthCommand {
   }
 
   /// Try to launch the command in the user's native terminal. Returns true if
-  /// a terminal was spawned. Only macOS is currently supported; other
-  /// platforms should fall back to clipboard copy.
+  /// a terminal was spawned; the caller should fall back to clipboard copy
+  /// otherwise.
   pub fn try_launch_terminal(&self, executable: &str) -> bool {
     let shell_cmd = self.to_shell_string(executable);
     #[cfg(target_os = "macos")]
@@ -175,7 +175,34 @@ impl TerminalAuthCommand {
         .spawn()
         .is_ok();
     }
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(target_os = "linux")]
+    {
+      let bash_cmd = format!("{shell_cmd}; echo; echo 'Press Enter to close'; read _",);
+      // Try common terminal emulators in order.
+      for term in ["x-terminal-emulator", "gnome-terminal", "konsole", "xterm"] {
+        if std::process::Command::new(term)
+          .arg("-e")
+          .arg("bash")
+          .arg("-c")
+          .arg(&bash_cmd)
+          .spawn()
+          .is_ok()
+        {
+          return true;
+        }
+      }
+      return false;
+    }
+    #[cfg(target_os = "windows")]
+    {
+      let full = format!("start \"\" cmd /k {shell_cmd}");
+      return std::process::Command::new("cmd")
+        .arg("/c")
+        .arg(full)
+        .spawn()
+        .is_ok();
+    }
+    #[allow(unreachable_code)]
     {
       let _ = shell_cmd;
       false

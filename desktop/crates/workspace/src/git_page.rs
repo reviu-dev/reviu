@@ -64,6 +64,17 @@ use agent_chat_panel::AgentChatPanel;
 fn agent_chat_state_dir() -> Option<std::path::PathBuf> {
   Some(dirs::config_dir()?.join("reviu").join("agent-chats"))
 }
+
+/// Prune chat histories older than 30 days. Best-effort, runs once per app launch.
+fn prune_agent_chat_state_once() {
+  use std::sync::OnceLock;
+  static PRUNED: OnceLock<()> = OnceLock::new();
+  PRUNED.get_or_init(|| {
+    if let Some(dir) = agent_chat_state_dir() {
+      let _ = AgentChatPanel::prune_old_state(&dir, std::time::Duration::from_secs(60 * 60 * 24 * 30));
+    }
+  });
+}
 use terminal::TerminalView;
 
 use crate::{
@@ -7633,6 +7644,7 @@ impl GitPage {
     if self.agent_chat_view.is_some() {
       return;
     }
+    prune_agent_chat_state_once();
     let cwd = self
       .selected_repo
       .clone()
