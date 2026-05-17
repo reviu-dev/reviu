@@ -931,6 +931,24 @@ impl Render for AgentChatPanel {
           )
           .child(render_markdown(&self.pending_agent, &md_options, cx)),
       );
+    } else if self.in_flight {
+      messages = messages.child(
+        h_flex()
+          .gap_2()
+          .items_center()
+          .child(
+            div()
+              .text_xs()
+              .text_color(theme.muted_foreground)
+              .child(format!("{} is thinking...", self.backend.label)),
+          )
+          .child(
+            div()
+              .text_xs()
+              .text_color(theme.muted_foreground)
+              .child("●●●"),
+          ),
+      );
     }
 
     v_flex()
