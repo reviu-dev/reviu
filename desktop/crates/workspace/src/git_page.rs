@@ -58,6 +58,12 @@ use gpui_component::{
 };
 use sentry::protocol::{Map, Value};
 use smol::unblock;
+use agent_acp::BackendConfig;
+use agent_chat_panel::AgentChatPanel;
+
+fn agent_chat_state_dir() -> Option<std::path::PathBuf> {
+  Some(dirs::config_dir()?.join("reviu").join("agent-chats"))
+}
 use terminal::TerminalView;
 
 use crate::{
@@ -120,6 +126,11 @@ const GIT_TERMINAL_SIDEBAR_DEBUG_SELECTOR: &str = "git-terminal-sidebar";
 const TERMINAL_SIDEBAR_DEFAULT_WIDTH: f32 = 420.0;
 const TERMINAL_SIDEBAR_MIN_WIDTH: f32 = 280.0;
 const TERMINAL_SIDEBAR_MAX_WIDTH: f32 = 1200.0;
+const GIT_AGENT_BUTTON_DEBUG_SELECTOR: &str = "git-agent-button";
+const GIT_AGENT_SIDEBAR_DEBUG_SELECTOR: &str = "git-agent-sidebar";
+const AGENT_SIDEBAR_DEFAULT_WIDTH: f32 = 480.0;
+const AGENT_SIDEBAR_MIN_WIDTH: f32 = 320.0;
+const AGENT_SIDEBAR_MAX_WIDTH: f32 = 1200.0;
 
 type RepoSelectHandler = Rc<dyn Fn(PathBuf, &mut Window, &mut App)>;
 type BranchSelectHandler = Rc<dyn Fn(BranchRef, &mut Window, &mut App)>;
@@ -1669,12 +1680,14 @@ pub struct GitPage {
   force_list_selection: bool,
   editor: Option<Entity<Editor>>,
   terminal_view: Entity<TerminalView>,
+  agent_chat_view: Option<Entity<AgentChatPanel>>,
   interactive_rebase_todo_view: Option<Entity<InteractiveRebaseTodoView>>,
   diff_view: DiffViewMode,
   hide_whitespace: bool,
   git_unified_file_view: bool,
   show_markdown_preview: bool,
   show_terminal_sidebar: bool,
+  show_agent_sidebar: bool,
   agent_review_comments: Vec<LocalAgentReviewComment>,
   next_agent_review_comment_id: u64,
   binary_preview: Option<GitBinaryPreview>,
@@ -3192,6 +3205,7 @@ impl GitPage {
       force_list_selection: false,
       editor: None,
       terminal_view: cx.new(|cx| TerminalView::new(terminal_working_directory.clone(), cx)),
+      agent_chat_view: None,
       interactive_rebase_todo_view: None,
       diff_view: if app_settings.split_diff_view {
         DiffViewMode::Split
@@ -3202,6 +3216,7 @@ impl GitPage {
       git_unified_file_view: app_settings.git_unified_file_view,
       show_markdown_preview: false,
       show_terminal_sidebar: false,
+      show_agent_sidebar: false,
       agent_review_comments: Vec::new(),
       next_agent_review_comment_id: 1,
       binary_preview: None,
@@ -3305,12 +3320,14 @@ impl GitPage {
       force_list_selection: false,
       editor: None,
       terminal_view: cx.new(|cx| TerminalView::new(None, cx)),
+      agent_chat_view: None,
       interactive_rebase_todo_view: None,
       diff_view: DiffViewMode::Inline,
       hide_whitespace: false,
       git_unified_file_view: false,
       show_markdown_preview: false,
       show_terminal_sidebar: false,
+      show_agent_sidebar: false,
       agent_review_comments: Vec::new(),
       next_agent_review_comment_id: 1,
       binary_preview: None,
@@ -7044,6 +7061,65 @@ impl GitPage {
     changed
   }
 
+  fn send_agent_review_to_agent(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    self.sync_agent_review_comments_to_editor(cx);
+    let copyable_ids = self
+      .agent_review_comments
+      .iter()
+      .filter(|comment| agent_review_comment_is_copyable(comment))
+      .map(|comment| comment.id)
+      .collect::<HashSet<_>>();
+
+    if copyable_ids.is_empty() {
+      window.push_notification(Notification::info("No local review comments to send"), cx);
+      return;
+    }
+
+    let review = format_agent_review_export(&self.agent_review_comments);
+    let count = copyable_ids.len();
+
+    self.ensure_agent_chat_view(window, cx);
+    self.show_agent_sidebar = true;
+    self.show_terminal_sidebar = false;
+
+    let Some(panel) = self.agent_chat_view.clone() else {
+      window.push_notification(Notification::error("Failed to open agent panel"), cx);
+      return;
+    };
+
+    let dispatched = panel.update(cx, |panel, cx| {
+      if !panel.is_ready() {
+        return false;
+      }
+      panel.send_external_prompt(review, cx)
+    });
+
+    if !dispatched {
+      window.push_notification(
+        Notification::info("Agent not ready yet. Try again in a moment."),
+        cx,
+      );
+      cx.notify();
+      return;
+    }
+
+    for comment in &mut self.agent_review_comments {
+      if copyable_ids.contains(&comment.id) {
+        comment.state = LocalAgentReviewCommentState::Copied;
+      }
+    }
+    self.sync_agent_review_comments_to_editor(cx);
+    window.push_notification(
+      Notification::success(format!(
+        "Sent {count} review {} to {}",
+        if count == 1 { "comment" } else { "comments" },
+        BackendConfig::claude().label,
+      )),
+      cx,
+    );
+    cx.notify();
+  }
+
   fn copy_agent_review_to_clipboard(&mut self, window: &mut Window, cx: &mut Context<Self>) {
     self.sync_agent_review_comments_to_editor(cx);
     let copyable_ids = self
@@ -7521,6 +7597,7 @@ impl GitPage {
 
     self.show_terminal_sidebar = !self.show_terminal_sidebar;
     if self.show_terminal_sidebar {
+      self.show_agent_sidebar = false;
       self.focus_terminal_sidebar_on_next_frame(window, cx);
     } else {
       self.focus_editor_or_page(window, cx);
@@ -7544,6 +7621,57 @@ impl GitPage {
     cx: &mut Context<Self>,
   ) {
     self.toggle_terminal_sidebar_visibility(window, cx);
+    cx.stop_propagation();
+  }
+
+  fn ensure_agent_chat_view(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    if let Some(view) = self.agent_chat_view.as_ref()
+      && view.read(cx).needs_reconnect()
+    {
+      self.agent_chat_view = None;
+    }
+    if self.agent_chat_view.is_some() {
+      return;
+    }
+    let cwd = self
+      .selected_repo
+      .clone()
+      .unwrap_or_else(|| std::path::PathBuf::from("."));
+    let state_path = agent_chat_state_dir().map(|dir| AgentChatPanel::state_path_for_repo(&dir, &cwd));
+    let view =
+      cx.new(|cx| AgentChatPanel::new(BackendConfig::claude(), cwd, state_path, window, cx));
+    self.agent_chat_view = Some(view);
+  }
+
+  fn toggle_agent_sidebar_visibility(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    if self.show_agent_sidebar {
+      self.show_agent_sidebar = false;
+      self.focus_editor_or_page(window, cx);
+      cx.notify();
+      return;
+    }
+    self.ensure_agent_chat_view(window, cx);
+    self.show_agent_sidebar = true;
+    self.show_terminal_sidebar = false;
+    cx.notify();
+  }
+
+  fn toggle_agent_sidebar_click(
+    &mut self,
+    _: &gpui::ClickEvent,
+    window: &mut Window,
+    cx: &mut Context<Self>,
+  ) {
+    self.toggle_agent_sidebar_visibility(window, cx);
+  }
+
+  fn toggle_agent_sidebar_action(
+    &mut self,
+    _: &crate::ToggleAgentSidebar,
+    window: &mut Window,
+    cx: &mut Context<Self>,
+  ) {
+    self.toggle_agent_sidebar_visibility(window, cx);
     cx.stop_propagation();
   }
 
@@ -9146,11 +9274,32 @@ impl GitPage {
       })
       .on_click(cx.listener(Self::toggle_terminal_sidebar_click));
 
+    let agent_sidebar_button = Button::new("git-toggle-agent-sidebar")
+      .label("Agent")
+      .icon(UiIconName::Sparkles)
+      .outline()
+      .with_variant(ButtonVariant::Secondary)
+      .xsmall()
+      .p_2()
+      .selected(self.show_agent_sidebar)
+      .disabled(self.selected_repo.is_none())
+      .tooltip(if self.show_agent_sidebar {
+        "Hide agent sidebar"
+      } else {
+        "Show agent sidebar"
+      })
+      .on_click(cx.listener(Self::toggle_agent_sidebar_click));
+
     let header_right = h_flex()
       .items_center()
       .gap_2()
       .flex_shrink_0()
-      .when_some(branch_pr_button, |this, button| this.child(button));
+      .when_some(branch_pr_button, |this, button| this.child(button))
+      .child(
+        div()
+          .debug_selector(|| GIT_AGENT_BUTTON_DEBUG_SELECTOR.to_string())
+          .child(agent_sidebar_button),
+      );
     let header_right = if can_access_terminal_sidebar {
       header_right.child(
         div()
@@ -9482,10 +9631,28 @@ impl GitPage {
       .xsmall()
       .ghost()
       .tooltip("Copy local review comments for agent")
-      .on_click(move |_, window, cx| {
-        view.update(cx, |this, cx| {
-          this.copy_agent_review_to_clipboard(window, cx);
-        });
+      .on_click({
+        let view = view.clone();
+        move |_, window, cx| {
+          view.update(cx, |this, cx| {
+            this.copy_agent_review_to_clipboard(window, cx);
+          });
+        }
+      });
+
+    let send_agent_review_button = Button::new("editor-send-agent-review")
+      .label("Send to Agent")
+      .icon(UiIconName::Sparkles)
+      .xsmall()
+      .ghost()
+      .tooltip("Send local review comments to the agent")
+      .on_click({
+        let view = view.clone();
+        move |_, window, cx| {
+          view.update(cx, |this, cx| {
+            this.send_agent_review_to_agent(window, cx);
+          });
+        }
       });
 
     let file_status = if is_history_commit_file {
@@ -9612,7 +9779,9 @@ impl GitPage {
           .when(is_markdown || is_svg, |this| this.child(preview_button))
           .when(show_whitespace_button, |this| this.child(whitespace_button))
           .when(!is_history_commit_file && agent_review_count > 0, |this| {
-            this.child(copy_agent_review_button)
+            this
+              .child(copy_agent_review_button)
+              .child(send_agent_review_button)
           })
           .child(toggle_button),
       )
@@ -10453,19 +10622,53 @@ impl GitPage {
       .into_any_element()
   }
 
+  fn render_agent_sidebar(&mut self, cx: &mut Context<Self>) -> AnyElement {
+    let theme = cx.theme().clone();
+    let mut container = div()
+      .size_full()
+      .min_w(px(0.0))
+      .min_h_0()
+      .bg(theme.sidebar)
+      .debug_selector(|| GIT_AGENT_SIDEBAR_DEBUG_SELECTOR.to_string());
+    if let Some(view) = self.agent_chat_view.clone() {
+      container = container.child(view);
+    }
+    container.into_any_element()
+  }
+
   fn render_main_content(&mut self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
     let editor_area = self.render_editor_area(window, cx);
-    if !self.show_terminal_sidebar || !AuthStateStore::is_admin(cx) {
+    let show_terminal = self.show_terminal_sidebar && AuthStateStore::is_admin(cx);
+    let show_agent = self.show_agent_sidebar;
+    if !show_terminal && !show_agent {
       return editor_area;
     }
 
-    ui::h_resizable("git-page-editor-terminal-split")
+    let (sidebar_element, default_width, min_width, max_width, split_id) = if show_agent {
+      (
+        self.render_agent_sidebar(cx),
+        AGENT_SIDEBAR_DEFAULT_WIDTH,
+        AGENT_SIDEBAR_MIN_WIDTH,
+        AGENT_SIDEBAR_MAX_WIDTH,
+        "git-page-editor-agent-split",
+      )
+    } else {
+      (
+        self.render_terminal_sidebar(cx),
+        TERMINAL_SIDEBAR_DEFAULT_WIDTH,
+        TERMINAL_SIDEBAR_MIN_WIDTH,
+        TERMINAL_SIDEBAR_MAX_WIDTH,
+        "git-page-editor-terminal-split",
+      )
+    };
+
+    ui::h_resizable(split_id)
       .child(ui::resizable_panel().child(editor_area))
       .child(
         ui::resizable_panel()
-          .size(px(TERMINAL_SIDEBAR_DEFAULT_WIDTH))
-          .size_range(px(TERMINAL_SIDEBAR_MIN_WIDTH)..px(TERMINAL_SIDEBAR_MAX_WIDTH))
-          .child(self.render_terminal_sidebar(cx)),
+          .size(px(default_width))
+          .size_range(px(min_width)..px(max_width))
+          .child(sidebar_element),
       )
       .into_any_element()
   }
@@ -10509,6 +10712,7 @@ impl Render for GitPage {
       .on_action(cx.listener(GitPage::close_find_action))
       .on_action(cx.listener(GitPage::open_repository_action))
       .on_action(cx.listener(GitPage::toggle_terminal_sidebar_action))
+      .on_action(cx.listener(GitPage::toggle_agent_sidebar_action))
       .on_action(cx.listener(GitPage::commit_changes_action))
       .on_action(cx.listener(GitPage::open_git_history_sidebar_action))
       .on_action(cx.listener(GitPage::open_git_changes_sidebar_action))

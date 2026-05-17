@@ -10,6 +10,8 @@ members = [
   "crates/ui",
   "crates/workspace",
   "crates/reviu",
+  "crates/agent_acp",
+  "crates/agent_chat_panel",
 ]
 
 [workspace.package]
@@ -97,6 +99,8 @@ sha2 = "0.10"
 base64 = "0.22"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
+thiserror = "1.0"
+which = "6"
 comrak = "0.22"
 imara-diff = "0.2.0"
 sentry = "0.46.2"
@@ -122,7 +126,17 @@ gfm_markdown_viewer = { path = "crates/gfm_markdown_viewer" }
 terminal = { path = "crates/terminal" }
 ui = { path = "crates/ui" }
 workspace = { path = "crates/workspace" }
+agent_acp = { path = "crates/agent_acp" }
+agent_chat_panel = { path = "crates/agent_chat_panel" }
 gpui-router = { git = "https://github.com/justjavac/gpui-router" }
+
+# ACP integration
+agent-client-protocol = { version = "=0.11.1", features = ["unstable"] }
+agent-client-protocol-schema = { version = "=0.12.0", features = ["unstable"] }
+async-channel = "2"
+async-process = "2"
+futures = "0.3"
+shell-words = "1.1"
 
 [profile.release]
 debug = "line-tables-only"
