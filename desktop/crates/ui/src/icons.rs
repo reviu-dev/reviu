@@ -45,6 +45,7 @@ pub enum UiIconName {
   FoldVertical,
   UnfoldVertical,
   Puzzle,
+  Sparkles,
   // Brands
   BrandX,
   GoogleChrome,
@@ -96,6 +97,7 @@ impl IconNamed for UiIconName {
       UiIconName::FoldVertical => "icons/fold-vertical.svg",
       UiIconName::UnfoldVertical => "icons/unfold-vertical.svg",
       UiIconName::Puzzle => "icons/puzzle.svg",
+      UiIconName::Sparkles => "icons/sparkles.svg",
       // Brands
       UiIconName::BrandX => "icons/brands/x.svg",
       UiIconName::GoogleChrome => "icons/brands/googlechrome.svg",

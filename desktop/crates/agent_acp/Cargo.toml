@@ -1,0 +1,22 @@
+[package]
+name = "agent_acp"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[dependencies]
+agent-client-protocol = { workspace = true }
+agent-client-protocol-schema = { workspace = true }
+anyhow = { workspace = true }
+async-channel = { workspace = true }
+async-process = { workspace = true }
+futures = { workspace = true }
+serde_json = { workspace = true }
+shell-words = { workspace = true }
+smol = { workspace = true }
+thiserror = { workspace = true }
+which = { workspace = true }
+
+[[example]]
+name = "yolo"
+path = "examples/yolo.rs"

@@ -23,7 +23,7 @@ use crate::{
   PreviousPrCommit, PreviousReviewComment, PullChanges, PushChanges, RefreshCurrentPage,
   RestoreFile, RestoreHunk, ShowBranchSwitcher, ShowCommandPalette, ShowFileSearch,
   SwitchToPrBranch, ToggleCommitByCommit, ToggleDiffView, ToggleFileStage, ToggleHideWhitespace,
-  ToggleHunkStage, ToggleTerminalSidebar,
+  ToggleAgentSidebar, ToggleHunkStage, ToggleTerminalSidebar,
 };
 
 pub const SHOW_COMMAND_PALETTE_SHORTCUT: &str = "cmd-k";
@@ -64,6 +64,7 @@ const OPEN_GIT_PAGE_CONTEXT: &str = "Workspace";
 const OPEN_GITHUB_PAGE_CONTEXT: &str = "Workspace";
 const REFRESH_CURRENT_PAGE_CONTEXT: &str = "WorkspaceGit || WorkspaceGithubHome || WorkspaceGithubRepo || WorkspaceGithubRepoCode || WorkspaceGithubPr || WorkspaceGithubPrChanges || WorkspaceGithubCommit";
 const TOGGLE_TERMINAL_CONTEXT: &str = "WorkspaceGit";
+const TOGGLE_AGENT_CONTEXT: &str = "WorkspaceGit";
 const SHOW_BRANCH_SWITCHER_CONTEXT: &str = "WorkspaceGit";
 const OPEN_GIT_HISTORY_SIDEBAR_CONTEXT: &str = "WorkspaceGit";
 const OPEN_GIT_CHANGES_SIDEBAR_CONTEXT: &str = "WorkspaceGit";
@@ -169,6 +170,7 @@ pub enum ShortcutId {
   CloseWorkspacePage,
   OpenSettingsPage,
   ToggleTerminalSidebar,
+  ToggleAgentSidebar,
   ShowBranchSwitcher,
   OpenGitHistorySidebar,
   OpenGitChangesSidebar,
@@ -212,6 +214,7 @@ impl ShortcutId {
       ShortcutId::CloseWorkspacePage => "close_workspace_page",
       ShortcutId::OpenSettingsPage => "open_settings_page",
       ShortcutId::ToggleTerminalSidebar => "toggle_terminal_sidebar",
+      ShortcutId::ToggleAgentSidebar => "toggle_agent_sidebar",
       ShortcutId::ShowBranchSwitcher => "show_branch_switcher",
       ShortcutId::OpenGitHistorySidebar => "open_git_history_sidebar",
       ShortcutId::OpenGitChangesSidebar => "open_git_changes_sidebar",
@@ -255,6 +258,7 @@ impl ShortcutId {
       "close_workspace_page" => Some(ShortcutId::CloseWorkspacePage),
       "open_settings_page" => Some(ShortcutId::OpenSettingsPage),
       "toggle_terminal_sidebar" => Some(ShortcutId::ToggleTerminalSidebar),
+      "toggle_agent_sidebar" => Some(ShortcutId::ToggleAgentSidebar),
       "show_branch_switcher" => Some(ShortcutId::ShowBranchSwitcher),
       "open_git_history_sidebar" => Some(ShortcutId::OpenGitHistorySidebar),
       "open_git_changes_sidebar" => Some(ShortcutId::OpenGitChangesSidebar),
@@ -305,7 +309,7 @@ pub struct ShortcutDefinition {
   pub active_contexts: &'static [&'static str],
 }
 
-const SHORTCUT_DEFINITIONS: [ShortcutDefinition; 38] = [
+const SHORTCUT_DEFINITIONS: [ShortcutDefinition; 39] = [
   ShortcutDefinition {
     id: ShortcutId::ShowCommandPalette,
     title: "Command Palette",
@@ -655,6 +659,17 @@ const SHORTCUT_DEFINITIONS: [ShortcutDefinition; 38] = [
     category: ShortcutCategory::LocalGit,
     keystroke: "cmd-j",
     context: TOGGLE_TERMINAL_CONTEXT,
+    display_context: WORKSPACE_GIT_CONTEXT,
+    active_contexts: &GIT_ONLY_ACTIVE_CONTEXTS,
+  },
+  ShortcutDefinition {
+    id: ShortcutId::ToggleAgentSidebar,
+    title: "Toggle Agent",
+    description: "Show or hide the agent chat sidebar on the Git page.",
+    scope_label: "Git page",
+    category: ShortcutCategory::LocalGit,
+    keystroke: "cmd-shift-j",
+    context: TOGGLE_AGENT_CONTEXT,
     display_context: WORKSPACE_GIT_CONTEXT,
     active_contexts: &GIT_ONLY_ACTIVE_CONTEXTS,
   },
@@ -1022,6 +1037,9 @@ impl ShortcutDefinition {
       ShortcutId::OpenSettingsPage => KeyBinding::new(keystroke, OpenSettingsPage, Some(&context)),
       ShortcutId::ToggleTerminalSidebar => {
         KeyBinding::new(keystroke, ToggleTerminalSidebar, Some(&context))
+      }
+      ShortcutId::ToggleAgentSidebar => {
+        KeyBinding::new(keystroke, ToggleAgentSidebar, Some(&context))
       }
       ShortcutId::ShowBranchSwitcher => {
         KeyBinding::new(keystroke, ShowBranchSwitcher, Some(&context))
@@ -1421,6 +1439,7 @@ fn with_shortcut_action<T>(id: ShortcutId, f: impl FnOnce(&dyn Action) -> T) -> 
     ShortcutId::CloseWorkspacePage => f(&CloseWorkspacePage),
     ShortcutId::OpenSettingsPage => f(&OpenSettingsPage),
     ShortcutId::ToggleTerminalSidebar => f(&ToggleTerminalSidebar),
+    ShortcutId::ToggleAgentSidebar => f(&ToggleAgentSidebar),
     ShortcutId::ShowBranchSwitcher => f(&ShowBranchSwitcher),
     ShortcutId::OpenGitHistorySidebar => f(&OpenGitHistorySidebar),
     ShortcutId::OpenGitChangesSidebar => f(&OpenGitChangesSidebar),

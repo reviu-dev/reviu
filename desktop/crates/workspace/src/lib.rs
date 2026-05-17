@@ -9,6 +9,7 @@ actions!(
     OpenGithubPage,
     RefreshCurrentPage,
     ToggleTerminalSidebar,
+    ToggleAgentSidebar,
     ShowBranchSwitcher,
     OpenGitHistorySidebar,
     OpenGitChangesSidebar,
