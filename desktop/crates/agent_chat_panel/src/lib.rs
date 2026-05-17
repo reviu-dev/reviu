@@ -10,7 +10,9 @@ use agent_client_protocol::schema::{
   ContentBlock, ToolCall, ToolCallContent, ToolCallId, ToolCallStatus, ToolCallUpdate, ToolKind,
 };
 use futures::future::BoxFuture;
-use gfm_markdown_viewer::{LinkAction, MarkdownRenderOptions, render_markdown};
+use gfm_markdown_viewer::{
+  LinkAction, MarkdownRenderOptions, SyntaxHighlightCache, render_markdown,
+};
 use gpui::{
   Context, Entity, FocusHandle, Focusable, IntoElement, ParentElement, Render, ScrollHandle,
   SharedString, Styled, Task, Window, div, prelude::*, px,
@@ -100,6 +102,7 @@ pub struct AgentChatPanel {
   auth_methods: Vec<AuthMethodInfo>,
   auth_required: bool,
   state_path: Option<PathBuf>,
+  syntax_cache: Arc<SyntaxHighlightCache>,
   _connect_task: Option<Task<()>>,
   _events_task: Option<Task<()>>,
   _permission_task: Option<Task<()>>,
@@ -152,6 +155,7 @@ impl AgentChatPanel {
       auth_methods: Vec::new(),
       auth_required: false,
       state_path,
+      syntax_cache: Arc::new(SyntaxHighlightCache::new()),
       _connect_task: None,
       _events_task: None,
       _permission_task: None,
@@ -768,9 +772,9 @@ impl Render for AgentChatPanel {
   fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
     let theme = cx.theme().clone();
     let theme = &theme;
-    let md_options = MarkdownRenderOptions::with_on_link(Arc::new(|_url, _window, _cx| {
-      LinkAction::Open
-    }));
+    let md_options =
+      MarkdownRenderOptions::with_on_link(Arc::new(|_url, _window, _cx| LinkAction::Open))
+        .with_syntax_cache(self.syntax_cache.clone());
 
     let header_text: SharedString = match &self.status {
       Status::Connecting => format!("Connecting to {}...", self.backend.label).into(),
