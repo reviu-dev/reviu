@@ -159,6 +159,28 @@ impl TerminalAuthCommand {
     }
     parts.join(" ")
   }
+
+  /// Try to launch the command in the user's native terminal. Returns true if
+  /// a terminal was spawned. Only macOS is currently supported; other
+  /// platforms should fall back to clipboard copy.
+  pub fn try_launch_terminal(&self, executable: &str) -> bool {
+    let shell_cmd = self.to_shell_string(executable);
+    #[cfg(target_os = "macos")]
+    {
+      let escaped = shell_cmd.replace('\\', "\\\\").replace('"', "\\\"");
+      let script = format!("tell application \"Terminal\" to do script \"{escaped}\"");
+      return std::process::Command::new("osascript")
+        .arg("-e")
+        .arg(&script)
+        .spawn()
+        .is_ok();
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+      let _ = shell_cmd;
+      false
+    }
+  }
 }
 
 /// Multi-turn session against a running ACP agent.

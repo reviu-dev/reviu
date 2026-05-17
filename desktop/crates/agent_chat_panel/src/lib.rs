@@ -750,8 +750,10 @@ impl Render for AgentChatPanel {
           let shell_cmd = cmd.to_shell_string(executable);
           let preview = shell_cmd.clone();
           let copy_value = shell_cmd.clone();
-          let button_id =
-            SharedString::from(format!("auth-copy-{}", method.id));
+          let copy_id = SharedString::from(format!("auth-copy-{}", method.id));
+          let open_id = SharedString::from(format!("auth-open-{}", method.id));
+          let launch_cmd = cmd.clone();
+          let exec_owned = executable.to_string();
           row = row.child(
             div()
               .text_xs()
@@ -759,13 +761,37 @@ impl Render for AgentChatPanel {
               .child(format!("`{preview}`")),
           );
           row = row.child(
-            Button::new(button_id)
-              .label("Copy command")
-              .small()
-              .ghost()
-              .on_click(cx.listener(move |_, _, _, cx| {
-                cx.write_to_clipboard(gpui::ClipboardItem::new_string(copy_value.clone()));
-              })),
+            h_flex()
+              .gap_2()
+              .child(if cfg!(target_os = "macos") {
+                Button::new(open_id)
+                  .label("Open in Terminal")
+                  .small()
+                  .primary()
+                  .on_click(cx.listener(move |_, _, _, cx| {
+                    if !launch_cmd.try_launch_terminal(&exec_owned) {
+                      cx.write_to_clipboard(gpui::ClipboardItem::new_string(
+                        copy_value.clone(),
+                      ));
+                    }
+                  }))
+              } else {
+                Button::new(open_id)
+                  .label("Open in Terminal")
+                  .small()
+                  .primary()
+                  .disabled(true)
+                  .tooltip("Not supported on this platform yet")
+              })
+              .child(
+                Button::new(copy_id)
+                  .label("Copy command")
+                  .small()
+                  .ghost()
+                  .on_click(cx.listener(move |_, _, _, cx| {
+                    cx.write_to_clipboard(gpui::ClipboardItem::new_string(shell_cmd.clone()));
+                  })),
+              ),
           );
         }
         card = card.child(row);
