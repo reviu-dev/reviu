@@ -421,6 +421,33 @@ impl AgentChatPanel {
     let hex = hash.to_hex();
     state_dir.join(format!("{}.json", &hex.as_str()[..16]))
   }
+
+  /// Delete saved chat files in `state_dir` that have not been written within
+  /// `max_age`. Best-effort: errors are silently ignored so a stale FS state
+  /// can never block app startup.
+  pub fn prune_old_state(state_dir: &std::path::Path, max_age: std::time::Duration) -> usize {
+    let Ok(entries) = std::fs::read_dir(state_dir) else {
+      return 0;
+    };
+    let now = std::time::SystemTime::now();
+    let mut pruned = 0;
+    for entry in entries.flatten() {
+      let Ok(meta) = entry.metadata() else { continue };
+      if !meta.is_file() {
+        continue;
+      }
+      let Ok(modified) = meta.modified() else {
+        continue;
+      };
+      let Ok(age) = now.duration_since(modified) else {
+        continue;
+      };
+      if age > max_age && std::fs::remove_file(entry.path()).is_ok() {
+        pruned += 1;
+      }
+    }
+    pruned
+  }
 }
 
 fn load_state_from_path(path: &std::path::Path) -> Option<(Vec<ChatItem>, HashMap<ToolCallId, usize>)> {
@@ -763,7 +790,7 @@ impl Render for AgentChatPanel {
           row = row.child(
             h_flex()
               .gap_2()
-              .child(if cfg!(target_os = "macos") {
+              .child(
                 Button::new(open_id)
                   .label("Open in Terminal")
                   .small()
@@ -774,15 +801,8 @@ impl Render for AgentChatPanel {
                         copy_value.clone(),
                       ));
                     }
-                  }))
-              } else {
-                Button::new(open_id)
-                  .label("Open in Terminal")
-                  .small()
-                  .primary()
-                  .disabled(true)
-                  .tooltip("Not supported on this platform yet")
-              })
+                  })),
+              )
               .child(
                 Button::new(copy_id)
                   .label("Copy command")
@@ -1017,6 +1037,44 @@ mod tests {
     assert!(!permission_option_is_destructive(
       &PermissionOptionKind::AllowAlways
     ));
+  }
+
+  #[test]
+  fn prune_old_state_deletes_files_older_than_threshold() {
+    let dir = std::env::temp_dir().join(format!(
+      "reviu-agent-prune-{}",
+      std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_nanos()
+    ));
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("a.json"), "[]").unwrap();
+    std::fs::write(dir.join("b.json"), "[]").unwrap();
+    // sleep a hair so files have age > 0
+    std::thread::sleep(std::time::Duration::from_millis(20));
+    let pruned = AgentChatPanel::prune_old_state(&dir, std::time::Duration::from_millis(1));
+    assert_eq!(pruned, 2);
+    assert!(!dir.join("a.json").exists());
+    assert!(!dir.join("b.json").exists());
+    std::fs::remove_dir_all(&dir).ok();
+  }
+
+  #[test]
+  fn prune_old_state_keeps_recent_files() {
+    let dir = std::env::temp_dir().join(format!(
+      "reviu-agent-prune-keep-{}",
+      std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_nanos()
+    ));
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("fresh.json"), "[]").unwrap();
+    let pruned = AgentChatPanel::prune_old_state(&dir, std::time::Duration::from_secs(60));
+    assert_eq!(pruned, 0);
+    assert!(dir.join("fresh.json").exists());
+    std::fs::remove_dir_all(&dir).ok();
   }
 
   #[test]
