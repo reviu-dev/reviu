@@ -1,7 +1,4 @@
 //! Minimal ACP agent used by integration tests.
-//!
-//! Responds to `initialize`, `session/new`, and `session/prompt` with the
-//! barest valid replies. No filesystem, terminal, or permission interactions.
 
 use agent_client_protocol::schema::{
   AgentCapabilities, ContentBlock, Implementation, InitializeRequest, InitializeResponse,

@@ -317,9 +317,7 @@ impl AgentChatPanel {
     self.dispatch_prompt(text, cx);
   }
 
-  /// Send a prompt programmatically (e.g. from another panel). Pushes the text
-  /// into chat history as if the user typed it, then waits for the agent reply.
-  /// Returns false if the agent isn't ready or another turn is in flight.
+  /// Send a prompt programmatically; false if not ready or already in flight.
   pub fn send_external_prompt(&mut self, text: String, cx: &mut Context<Self>) -> bool {
     let text = text.trim().to_string();
     if text.is_empty() {
@@ -413,8 +411,7 @@ impl AgentChatPanel {
     }
   }
 
-  /// Compute the on-disk state path for a given repo. Hash the canonical
-  /// repo path so file names are stable but bounded in length.
+  /// On-disk state path for a repo; hashes canonical path for stable filenames.
   pub fn state_path_for_repo(state_dir: &std::path::Path, repo: &std::path::Path) -> PathBuf {
     let canonical = repo.canonicalize().unwrap_or_else(|_| repo.to_path_buf());
     let hash = blake3::hash(canonical.to_string_lossy().as_bytes());
@@ -422,9 +419,7 @@ impl AgentChatPanel {
     state_dir.join(format!("{}.json", &hex.as_str()[..16]))
   }
 
-  /// Delete saved chat files in `state_dir` that have not been written within
-  /// `max_age`. Best-effort: errors are silently ignored so a stale FS state
-  /// can never block app startup.
+  /// Delete chat files older than `max_age`; best-effort, errors ignored.
   pub fn prune_old_state(state_dir: &std::path::Path, max_age: std::time::Duration) -> usize {
     let Ok(entries) = std::fs::read_dir(state_dir) else {
       return 0;

@@ -65,7 +65,6 @@ fn agent_chat_state_dir() -> Option<std::path::PathBuf> {
   Some(dirs::config_dir()?.join("reviu").join("agent-chats"))
 }
 
-/// Prune chat histories older than 30 days. Best-effort, runs once per app launch.
 fn prune_agent_chat_state_once() {
   use std::sync::OnceLock;
   static PRUNED: OnceLock<()> = OnceLock::new();

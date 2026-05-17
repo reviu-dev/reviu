@@ -108,8 +108,7 @@ enum DriverCmd {
   Stop,
 }
 
-/// Spawn handle used to launch the driver task. Caller passes a GPUI / smol /
-/// custom executor that knows how to run a detached `Future<Output = ()>`.
+/// Spawns a detached `Future<Output = ()>` on the caller's executor.
 pub trait DriverSpawner: Send + Sync + 'static {
   fn spawn(&self, future: futures::future::BoxFuture<'static, ()>);
 }
@@ -160,9 +159,7 @@ impl TerminalAuthCommand {
     parts.join(" ")
   }
 
-  /// Try to launch the command in the user's native terminal. Returns true if
-  /// a terminal was spawned; the caller should fall back to clipboard copy
-  /// otherwise.
+  /// Try launching the command in the user's native terminal; false on failure.
   pub fn try_launch_terminal(&self, executable: &str) -> bool {
     let shell_cmd = self.to_shell_string(executable);
     #[cfg(target_os = "macos")]
@@ -178,7 +175,6 @@ impl TerminalAuthCommand {
     #[cfg(target_os = "linux")]
     {
       let bash_cmd = format!("{shell_cmd}; echo; echo 'Press Enter to close'; read _",);
-      // Try common terminal emulators in order.
       for term in ["x-terminal-emulator", "gnome-terminal", "konsole", "xterm"] {
         if std::process::Command::new(term)
           .arg("-e")
@@ -210,9 +206,7 @@ impl TerminalAuthCommand {
   }
 }
 
-/// Multi-turn session against a running ACP agent.
-///
-/// Dropping the session signals the driver to stop and kills the child.
+/// Multi-turn session against a running ACP agent. Drop kills the child.
 pub struct AgentSession {
   cmd_tx: Sender<DriverCmd>,
   event_rx: Option<Receiver<AgentEvent>>,
@@ -223,8 +217,6 @@ pub struct AgentSession {
 
 impl AgentSession {
   /// Spawn the agent backend and create a new session in `cwd`.
-  ///
-  /// `spawner` runs the long-lived driver future on the caller's executor.
   pub async fn spawn(
     backend: BackendConfig,
     cwd: PathBuf,
@@ -379,9 +371,8 @@ fn auth_method_terminal_command(m: &AuthMethod) -> Option<TerminalAuthCommand> {
   }
 }
 
-/// Pick the safest reasonable permission option. Prefers `AllowOnce` (no
-/// memory of choice) over `AllowAlways`; returns `None` (cancel) if no
-/// allow-style option is available, so destructive defaults never auto-apply.
+// Prefer AllowOnce over AllowAlways; return None for reject-only sets so
+// destructive defaults never auto-apply.
 fn pick_default_permission_option(
   options: &[PermissionOption],
 ) -> Option<agent_client_protocol::schema::PermissionOptionId> {
@@ -394,10 +385,9 @@ fn pick_default_permission_option(
   by_kind(&PermissionOptionKind::AllowOnce).or_else(|| by_kind(&PermissionOptionKind::AllowAlways))
 }
 
-/// Returns Ok if `path` resolves to a location inside `root`.
-///
-/// For writes, the target file may not exist yet, so we canonicalize the
-/// closest existing ancestor and join the remaining tail before checking.
+// Resolve `path` against `root`; reject anything that escapes `root` via
+// `..` or symlinks. Handles non-existent targets by canonicalizing the
+// nearest existing ancestor first.
 fn validate_path_in_root(path: &std::path::Path, root: &std::path::Path) -> Result<PathBuf> {
   let root = root
     .canonicalize()
