@@ -5,7 +5,7 @@ use agent_client_protocol::schema::{
   NewSessionRequest, NewSessionResponse, PromptRequest, PromptResponse, SessionId,
   SessionNotification, SessionUpdate, StopReason, TextContent,
 };
-use agent_client_protocol::{Agent, ConnectionTo, Client, Dispatch};
+use agent_client_protocol::{Agent, Client, ConnectionTo, Dispatch};
 use smol::Unblock;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {

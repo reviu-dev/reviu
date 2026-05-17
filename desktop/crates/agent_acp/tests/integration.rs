@@ -73,7 +73,6 @@ fn agent_message_chunk_arrives_on_events_channel() {
     });
 
     session.send_prompt("hi").await.expect("prompt");
-    // Drop session to close events channel and let drain task finish.
     drop(session);
     let collected = recv_task.await;
     assert_eq!(collected.as_deref(), Some("ack"));
