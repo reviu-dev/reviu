@@ -257,6 +257,7 @@ dependencies = [
  "gfm_markdown_viewer",
  "gpui",
  "gpui-component",
+ "imara-diff",
  "serde",
  "serde_json",
  "ui",

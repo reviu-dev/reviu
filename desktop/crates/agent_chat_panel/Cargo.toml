@@ -10,6 +10,7 @@ agent-client-protocol = { workspace = true }
 anyhow = { workspace = true }
 async-channel = { workspace = true }
 blake3 = { workspace = true }
+imara-diff = { workspace = true }
 futures = { workspace = true }
 gfm_markdown_viewer = { workspace = true }
 gpui = { workspace = true }

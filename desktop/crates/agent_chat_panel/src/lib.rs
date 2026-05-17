@@ -7,7 +7,7 @@ use agent_acp::{
   PermissionOptionKind, PermissionPrompt,
 };
 use agent_client_protocol::schema::{
-  ContentBlock, ToolCall, ToolCallId, ToolCallStatus, ToolCallUpdate, ToolKind,
+  ContentBlock, ToolCall, ToolCallContent, ToolCallId, ToolCallStatus, ToolCallUpdate, ToolKind,
 };
 use futures::future::BoxFuture;
 use gfm_markdown_viewer::{MarkdownRenderOptions, render_markdown};
@@ -23,7 +23,7 @@ use gpui_component::{
   scroll::ScrollableElement as _,
   v_flex,
 };
-use ui::{Input, InputState};
+use ui::{Input, InputState, StatusThemeExt as _};
 
 #[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 enum ChatRole {
@@ -46,6 +46,15 @@ struct ToolCallView {
   kind: ToolKind,
   status: ToolCallStatus,
   locations: Vec<(PathBuf, Option<u32>)>,
+  #[serde(default)]
+  diffs: Vec<DiffSummary>,
+}
+
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+struct DiffSummary {
+  path: String,
+  added: u32,
+  removed: u32,
 }
 
 #[derive(Clone, Debug)]
@@ -462,11 +471,43 @@ fn load_state_from_path(path: &std::path::Path) -> Option<(Vec<ChatItem>, HashMa
   Some((items, index))
 }
 
+fn extract_diffs(content: &[ToolCallContent]) -> Vec<DiffSummary> {
+  content
+    .iter()
+    .filter_map(|c| match c {
+      ToolCallContent::Diff(d) => {
+        let (added, removed) = diff_line_counts(d.old_text.as_deref(), &d.new_text);
+        Some(DiffSummary {
+          path: d.path.display().to_string(),
+          added,
+          removed,
+        })
+      }
+      _ => None,
+    })
+    .collect()
+}
+
+fn diff_line_counts(old_text: Option<&str>, new_text: &str) -> (u32, u32) {
+  use imara_diff::{Algorithm, Diff, InternedInput};
+  let old = old_text.unwrap_or("");
+  let input = InternedInput::new(old, new_text);
+  let diff = Diff::compute(Algorithm::Histogram, &input);
+  let mut added = 0u32;
+  let mut removed = 0u32;
+  for hunk in diff.hunks() {
+    added += hunk.after.end - hunk.after.start;
+    removed += hunk.before.end - hunk.before.start;
+  }
+  (added, removed)
+}
+
 fn upsert_tool_call_pure(
   items: &mut Vec<ChatItem>,
   index: &mut HashMap<ToolCallId, usize>,
   call: ToolCall,
 ) {
+  let diffs = extract_diffs(&call.content);
   let view = ToolCallView {
     id: call.tool_call_id.clone(),
     title: call.title,
@@ -477,6 +518,7 @@ fn upsert_tool_call_pure(
       .into_iter()
       .map(|l| (l.path, l.line))
       .collect(),
+    diffs,
   };
   if let Some(&idx) = index.get(&call.tool_call_id) {
     if let Some(ChatItem::Tool(existing)) = items.get_mut(idx) {
@@ -511,6 +553,9 @@ fn apply_tool_call_update_pure(
   }
   if let Some(locs) = update.fields.locations {
     view.locations = locs.into_iter().map(|l| (l.path, l.line)).collect();
+  }
+  if let Some(content) = update.fields.content {
+    view.diffs = extract_diffs(&content);
   }
 }
 
@@ -591,6 +636,34 @@ fn render_tool_call(t: &ToolCallView, theme: &gpui_component::Theme) -> gpui::An
           .text_color(theme.muted_foreground)
           .child(locations),
       )
+    })
+    .when(!t.diffs.is_empty(), |this| {
+      let mut diff_col = v_flex().gap_1();
+      for d in &t.diffs {
+        diff_col = diff_col.child(
+          h_flex()
+            .gap_2()
+            .child(
+              div()
+                .text_xs()
+                .text_color(theme.foreground)
+                .child(d.path.clone()),
+            )
+            .child(
+              div()
+                .text_xs()
+                .text_color(theme.status_green())
+                .child(format!("+{}", d.added)),
+            )
+            .child(
+              div()
+                .text_xs()
+                .text_color(theme.status_red())
+                .child(format!("-{}", d.removed)),
+            ),
+        );
+      }
+      this.child(diff_col)
     })
     .into_any_element()
 }
@@ -1016,6 +1089,45 @@ mod tests {
     };
     assert_eq!(view.locations.len(), 1);
     assert_eq!(view.locations[0].1, Some(42));
+  }
+
+  #[test]
+  fn diff_line_counts_full_replacement() {
+    let (added, removed) = diff_line_counts(Some("a\nb\nc\n"), "x\ny\nz\n");
+    assert_eq!(added, 3);
+    assert_eq!(removed, 3);
+  }
+
+  #[test]
+  fn diff_line_counts_pure_addition() {
+    let (added, removed) = diff_line_counts(None, "new line\n");
+    assert_eq!(added, 1);
+    assert_eq!(removed, 0);
+  }
+
+  #[test]
+  fn diff_line_counts_identical_is_zero() {
+    let (added, removed) = diff_line_counts(Some("same\nlines\n"), "same\nlines\n");
+    assert_eq!(added, 0);
+    assert_eq!(removed, 0);
+  }
+
+  #[test]
+  fn extract_diffs_collects_per_file() {
+    use agent_client_protocol::schema::Diff;
+    let content = vec![
+      ToolCallContent::Diff(Diff::new("foo.rs", "new\n")),
+      ToolCallContent::Diff(
+        Diff::new("bar.rs", "after\n")
+          .old_text(Some("before\n".to_string())),
+      ),
+    ];
+    let diffs = extract_diffs(&content);
+    assert_eq!(diffs.len(), 2);
+    assert_eq!(diffs[0].path, "foo.rs");
+    assert_eq!(diffs[0].added, 1);
+    assert_eq!(diffs[1].added, 1);
+    assert_eq!(diffs[1].removed, 1);
   }
 
   #[test]
