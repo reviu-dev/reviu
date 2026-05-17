@@ -98,6 +98,7 @@ pub struct AgentChatPanel {
   usage: Option<(u64, u64)>,
   agent_version: Option<String>,
   auth_methods: Vec<AuthMethodInfo>,
+  auth_required: bool,
   state_path: Option<PathBuf>,
   _connect_task: Option<Task<()>>,
   _events_task: Option<Task<()>>,
@@ -149,6 +150,7 @@ impl AgentChatPanel {
       usage: None,
       agent_version: None,
       auth_methods: Vec::new(),
+      auth_required: false,
       state_path,
       _connect_task: None,
       _events_task: None,
@@ -363,11 +365,25 @@ impl AgentChatPanel {
             text: pending,
           }));
         }
-        if let Err(e) = result {
-          panel.items.push(ChatItem::Message(ChatMessage {
-            role: ChatRole::System,
-            text: format!("[error] {e}"),
-          }));
+        match result {
+          Ok(_) => {
+            panel.auth_required = false;
+          }
+          Err(e) => {
+            let msg = format!("{e}");
+            if msg.contains("auth_required") {
+              panel.auth_required = true;
+              panel.items.push(ChatItem::Message(ChatMessage {
+                role: ChatRole::System,
+                text: "Authentication required. Sign in below and retry.".into(),
+              }));
+            } else {
+              panel.items.push(ChatItem::Message(ChatMessage {
+                role: ChatRole::System,
+                text: format!("[error] {e}"),
+              }));
+            }
+          }
         }
         panel.in_flight = false;
         panel.persist_state();
@@ -811,7 +827,7 @@ impl Render for AgentChatPanel {
       );
     }
 
-    if matches!(self.status, Status::Ready) && !self.auth_methods.is_empty() {
+    if matches!(self.status, Status::Ready) && self.auth_required && !self.auth_methods.is_empty() {
       let executable = self.backend.command;
       let mut card = v_flex()
         .gap_2()
