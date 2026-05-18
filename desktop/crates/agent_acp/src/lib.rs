@@ -45,6 +45,47 @@ pub struct BackendConfig {
   pub install_hint: &'static str,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum BackendKind {
+  Claude,
+  Codex,
+}
+
+impl BackendKind {
+  pub fn all() -> &'static [BackendKind] {
+    &[BackendKind::Claude, BackendKind::Codex]
+  }
+
+  pub fn label(&self) -> &'static str {
+    match self {
+      BackendKind::Claude => "Claude",
+      BackendKind::Codex => "Codex",
+    }
+  }
+
+  pub fn storage_key(&self) -> &'static str {
+    match self {
+      BackendKind::Claude => "claude",
+      BackendKind::Codex => "codex",
+    }
+  }
+
+  pub fn from_storage_key(s: &str) -> Option<Self> {
+    match s {
+      "claude" => Some(BackendKind::Claude),
+      "codex" => Some(BackendKind::Codex),
+      _ => None,
+    }
+  }
+
+  pub fn config(&self) -> BackendConfig {
+    match self {
+      BackendKind::Claude => BackendConfig::claude(),
+      BackendKind::Codex => BackendConfig::codex(),
+    }
+  }
+}
+
 impl BackendConfig {
   pub fn claude() -> Self {
     Self {

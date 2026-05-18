@@ -46,6 +46,7 @@ actions!(
 
 mod about_page;
 mod active_local_repo;
+mod agent_settings;
 mod api;
 pub mod app_log;
 mod app_profile;

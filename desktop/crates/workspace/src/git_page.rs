@@ -61,6 +61,8 @@ use smol::unblock;
 use agent_acp::BackendConfig;
 use agent_chat_panel::AgentChatPanel;
 
+use crate::agent_settings::AgentSettings;
+
 fn agent_chat_state_dir() -> Option<std::path::PathBuf> {
   Some(dirs::config_dir()?.join("reviu").join("agent-chats"))
 }
@@ -7649,8 +7651,8 @@ impl GitPage {
       .clone()
       .unwrap_or_else(|| std::path::PathBuf::from("."));
     let state_path = agent_chat_state_dir().map(|dir| AgentChatPanel::state_path_for_repo(&dir, &cwd));
-    let view =
-      cx.new(|cx| AgentChatPanel::new(BackendConfig::claude(), cwd, state_path, window, cx));
+    let backend = AgentSettings::load().config();
+    let view = cx.new(|cx| AgentChatPanel::new(backend, cwd, state_path, window, cx));
     self.agent_chat_view = Some(view);
   }
 
