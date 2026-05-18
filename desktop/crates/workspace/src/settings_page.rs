@@ -55,6 +55,7 @@ pub struct SettingsPage {
   hide_whitespace: bool,
   clone_protocol: CloneProtocol,
   menu_bar_icon: bool,
+  agent_backend: agent_acp::BackendKind,
   shortcut_recording: Option<ShortcutId>,
   shortcut_error: Option<ShortcutCaptureError>,
   api: ApiClient,
@@ -107,6 +108,7 @@ impl SettingsPage {
       hide_whitespace: settings.hide_whitespace,
       clone_protocol: settings.clone_protocol,
       menu_bar_icon: settings.menu_bar_icon,
+      agent_backend: crate::agent_settings::AgentSettings::load(),
       shortcut_recording: None,
       shortcut_error: None,
       api: WorkspaceApi::global(cx).api.clone(),
@@ -487,6 +489,34 @@ impl SettingsPage {
           )
           .description(
             "Protocol used when cloning a GitHub repository. HTTPS uses your credential helper; SSH uses your configured SSH key.",
+          ),
+          SettingItem::new(
+            "Agent Backend",
+            SettingField::dropdown(
+              agent_acp::BackendKind::all()
+                .iter()
+                .map(|k| (k.storage_key().into(), k.label().into()))
+                .collect(),
+              {
+                let view = view.clone();
+                move |cx: &App| view.read(cx).agent_backend.storage_key().into()
+              },
+              {
+                let view = view.clone();
+                move |val: SharedString, cx: &mut App| {
+                  let kind = agent_acp::BackendKind::from_storage_key(val.as_ref())
+                    .unwrap_or(agent_acp::BackendKind::Claude);
+                  view.update(cx, |view, _| {
+                    view.agent_backend = kind;
+                  });
+                  crate::agent_settings::AgentSettings::save(kind);
+                }
+              },
+            )
+            .default_value(self.agent_backend.storage_key()),
+          )
+          .description(
+            "Which AI coding agent to launch from the Git page Agent sidebar. Requires the agent CLI to be installed and signed in.",
           ),
         ]),
       ].into_iter().chain(self.menu_bar_settings_groups(view.clone(), default_menu_bar_icon))),
