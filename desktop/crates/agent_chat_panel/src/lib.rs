@@ -1447,12 +1447,15 @@ impl Render for AgentChatPanel {
                           h_flex()
                             .group(group_for_render.clone())
                             .w_full()
+                            .max_w(px(280.))
                             .gap_2()
                             .items_center()
                             .child(
                               div()
                                 .flex_1()
+                                .min_w_0()
                                 .text_sm()
+                                .truncate()
                                 .when(is_current, |this| this.font_weight(gpui::FontWeight::BOLD))
                                 .child(title_for_render.clone()),
                             )
