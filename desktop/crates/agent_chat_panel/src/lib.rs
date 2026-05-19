@@ -13,6 +13,7 @@ use futures::future::BoxFuture;
 use gfm_markdown_viewer::{
   LinkAction, MarkdownRenderOptions, SyntaxHighlightCache, render_markdown,
 };
+use gpui::Corner;
 use gpui::{
   Context, Entity, FocusHandle, Focusable, IntoElement, ParentElement, Render, ScrollHandle,
   SharedString, Styled, Task, Window, div, prelude::*, px,
@@ -27,7 +28,6 @@ use gpui_component::{
   spinner::Spinner,
   v_flex,
 };
-use gpui::Corner;
 use ui::{Input, InputState, StatusThemeExt as _, UiIconName};
 
 #[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -154,8 +154,8 @@ impl AgentChatPanel {
     let backend = backend_kind.config();
     let input = cx.new(|cx| {
       InputState::new(window, cx)
-        .auto_grow(2, 8)
-        .placeholder("Message Claude... (Enter to send, Shift+Enter for newline)")
+        .auto_grow(1, 8)
+        .placeholder("Message...")
     });
     let focus_handle = cx.focus_handle();
 
@@ -308,7 +308,12 @@ impl AgentChatPanel {
     self._permission_task = Some(task);
   }
 
-  fn answer_permission(&mut self, prompt_id: u64, option_id: Option<String>, cx: &mut Context<Self>) {
+  fn answer_permission(
+    &mut self,
+    prompt_id: u64,
+    option_id: Option<String>,
+    cx: &mut Context<Self>,
+  ) {
     if let Some(session) = self.session.as_ref() {
       session.answer_permission(prompt_id, option_id.clone());
     }
@@ -443,10 +448,7 @@ impl AgentChatPanel {
   }
 
   pub fn needs_reconnect(&self) -> bool {
-    matches!(
-      self.status,
-      Status::Error(_) | Status::MissingBinary { .. }
-    )
+    matches!(self.status, Status::Error(_) | Status::MissingBinary { .. })
   }
 
   pub fn backend_kind(&self) -> BackendKind {
@@ -740,11 +742,7 @@ fn truncate_title(text: &str) -> String {
 
 fn load_active_conversation(
   dir: &std::path::Path,
-) -> Option<(
-  ConversationMeta,
-  Vec<ChatItem>,
-  HashMap<ToolCallId, usize>,
-)> {
+) -> Option<(ConversationMeta, Vec<ChatItem>, HashMap<ToolCallId, usize>)> {
   let active_path = dir.join("active.txt");
   let active_id = std::fs::read_to_string(&active_path).ok()?;
   let active_id = active_id.trim().to_string();
@@ -757,11 +755,7 @@ fn load_active_conversation(
 
 fn load_conversation_file(
   path: &std::path::Path,
-) -> Option<(
-  ConversationMeta,
-  Vec<ChatItem>,
-  HashMap<ToolCallId, usize>,
-)> {
+) -> Option<(ConversationMeta, Vec<ChatItem>, HashMap<ToolCallId, usize>)> {
   let raw = std::fs::read_to_string(path).ok()?;
   let parsed: PersistedConversation = serde_json::from_str(&raw).ok()?;
   let mut items = Vec::with_capacity(parsed.items.len());
@@ -1242,9 +1236,7 @@ impl Render for AgentChatPanel {
                   .primary()
                   .on_click(cx.listener(move |_, _, _, cx| {
                     if !launch_cmd.try_launch_terminal(&exec_owned) {
-                      cx.write_to_clipboard(gpui::ClipboardItem::new_string(
-                        copy_value.clone(),
-                      ));
+                      cx.write_to_clipboard(gpui::ClipboardItem::new_string(copy_value.clone()));
                     }
                   })),
               )
@@ -1346,12 +1338,7 @@ impl Render for AgentChatPanel {
               (Status::Ready, Some(v)) => format!(" v{v}"),
               _ => String::new(),
             };
-            let label = format!(
-              "{}{}{}",
-              current.label(),
-              version_suffix,
-              label_suffix
-            );
+            let label = format!("{}{}{}", current.label(), version_suffix, label_suffix);
             let entity = cx.entity().downgrade();
             Button::new("agent-chat-backend")
               .label(label)
@@ -1379,12 +1366,7 @@ impl Render for AgentChatPanel {
               .gap_3()
               .items_center()
               .when_some(usage_text, |this, t| {
-                this.child(
-                  div()
-                    .text_xs()
-                    .text_color(theme.muted_foreground)
-                    .child(t),
-                )
+                this.child(div().text_xs().text_color(theme.muted_foreground).child(t))
               })
               .child({
                 let entity = cx.entity().downgrade();
@@ -1468,7 +1450,11 @@ mod tests {
   fn upsert_inserts_new_tool_call() {
     let mut items: Vec<ChatItem> = Vec::new();
     let mut index = HashMap::new();
-    upsert_tool_call_pure(&mut items, &mut index, call("a", "Read foo", ToolKind::Read));
+    upsert_tool_call_pure(
+      &mut items,
+      &mut index,
+      call("a", "Read foo", ToolKind::Read),
+    );
     assert_eq!(items.len(), 1);
     assert_eq!(index.len(), 1);
     let ChatItem::Tool(view) = &items[0] else {
@@ -1575,10 +1561,7 @@ mod tests {
     use agent_client_protocol::schema::Diff;
     let content = vec![
       ToolCallContent::Diff(Diff::new("foo.rs", "new\n")),
-      ToolCallContent::Diff(
-        Diff::new("bar.rs", "after\n")
-          .old_text(Some("before\n".to_string())),
-      ),
+      ToolCallContent::Diff(Diff::new("bar.rs", "after\n").old_text(Some("before\n".to_string()))),
     ];
     let diffs = extract_diffs(&content);
     assert_eq!(diffs.len(), 2);
