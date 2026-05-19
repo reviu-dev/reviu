@@ -58,7 +58,6 @@ use gpui_component::{
 };
 use sentry::protocol::{Map, Value};
 use smol::unblock;
-use agent_acp::BackendConfig;
 use agent_chat_panel::AgentChatPanel;
 
 use crate::agent_settings::AgentSettings;
@@ -7125,7 +7124,7 @@ impl GitPage {
       Notification::success(format!(
         "Sent {count} review {} to {}",
         if count == 1 { "comment" } else { "comments" },
-        BackendConfig::claude().label,
+        AgentSettings::load().label(),
       )),
       cx,
     );
@@ -7651,7 +7650,7 @@ impl GitPage {
       .clone()
       .unwrap_or_else(|| std::path::PathBuf::from("."));
     let state_path = agent_chat_state_dir().map(|dir| AgentChatPanel::state_path_for_repo(&dir, &cwd));
-    let backend = AgentSettings::load().config();
+    let backend = AgentSettings::load();
     let view = cx.new(|cx| AgentChatPanel::new(backend, cwd, state_path, window, cx));
     self.agent_chat_view = Some(view);
   }
