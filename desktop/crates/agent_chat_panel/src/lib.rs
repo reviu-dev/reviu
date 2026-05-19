@@ -1381,15 +1381,15 @@ impl Render for AgentChatPanel {
                       let entity_load = entity.clone();
                       let entity_delete = entity.clone();
                       let title: SharedString = if meta.title.is_empty() {
-                        format!("Conversation {} ({} msgs)", meta.id, meta.message_count).into()
+                        format!("Conversation {}", meta.id).into()
                       } else {
-                        format!("{} ({} msgs)", meta.title, meta.message_count).into()
+                        meta.title.clone().into()
                       };
                       let group_name = SharedString::from(format!("hist-row-{}", meta.id));
                       let group_for_render = group_name.clone();
-                      let button_id =
-                        SharedString::from(format!("hist-delete-{}", meta.id));
+                      let button_id = SharedString::from(format!("hist-delete-{}", meta.id));
                       let title_for_render = title.clone();
+                      let is_current = id == current_id;
                       menu = menu.item(
                         PopupMenuItem::element(move |_, _| {
                           let entity_delete = entity_delete.clone();
@@ -1403,6 +1403,7 @@ impl Render for AgentChatPanel {
                               div()
                                 .flex_1()
                                 .text_sm()
+                                .when(is_current, |this| this.font_weight(gpui::FontWeight::BOLD))
                                 .child(title_for_render.clone()),
                             )
                             .child(
@@ -1420,10 +1421,10 @@ impl Render for AgentChatPanel {
                             )
                             .into_any_element()
                         })
-                        .disabled(id == current_id)
                         .on_click(move |_, _, cx| {
                           let id = id_load.clone();
-                          let _ = entity_load.update(cx, |panel, cx| panel.load_conversation(&id, cx));
+                          let _ =
+                            entity_load.update(cx, |panel, cx| panel.load_conversation(&id, cx));
                         }),
                       );
                       let _ = id;
