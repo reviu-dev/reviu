@@ -6,6 +6,7 @@ use std::{
   time::{Duration, Instant},
 };
 
+use agent_chat_panel::AgentChatPanel;
 use editor::{
   CloseFind, ConflictNavigationDirection, ConflictNavigationState, ConflictResolution,
   DiffViewMode, Editor, Find, HunkAction, HunkNavigationDirection, HunkState, ReviewComment,
@@ -58,7 +59,6 @@ use gpui_component::{
 };
 use sentry::protocol::{Map, Value};
 use smol::unblock;
-use agent_chat_panel::AgentChatPanel;
 
 use crate::agent_settings::AgentSettings;
 
@@ -71,7 +71,8 @@ fn prune_agent_chat_state_once() {
   static PRUNED: OnceLock<()> = OnceLock::new();
   PRUNED.get_or_init(|| {
     if let Some(dir) = agent_chat_state_dir() {
-      let _ = AgentChatPanel::prune_old_state(&dir, std::time::Duration::from_secs(60 * 60 * 24 * 30));
+      let _ =
+        AgentChatPanel::prune_old_state(&dir, std::time::Duration::from_secs(60 * 60 * 24 * 30));
     }
   });
 }
@@ -7649,7 +7650,8 @@ impl GitPage {
       .selected_repo
       .clone()
       .unwrap_or_else(|| std::path::PathBuf::from("."));
-    let state_dir = agent_chat_state_dir().map(|dir| AgentChatPanel::state_dir_for_repo(&dir, &cwd));
+    let state_dir =
+      agent_chat_state_dir().map(|dir| AgentChatPanel::state_dir_for_repo(&dir, &cwd));
     let backend = AgentSettings::load();
     let view = cx.new(|cx| AgentChatPanel::new(backend, cwd, state_dir, window, cx));
     self.agent_chat_view = Some(view);
@@ -7665,7 +7667,18 @@ impl GitPage {
     self.ensure_agent_chat_view(window, cx);
     self.show_agent_sidebar = true;
     self.show_terminal_sidebar = false;
+    self.focus_agent_sidebar_on_next_frame(window, cx);
     cx.notify();
+  }
+
+  fn focus_agent_sidebar_on_next_frame(&mut self, window: &mut Window, _cx: &mut Context<Self>) {
+    let Some(view) = self.agent_chat_view.clone() else {
+      return;
+    };
+    window.on_next_frame(move |window, cx| {
+      let focus_handle = view.read(cx).input_focus_handle(cx);
+      window.focus(&focus_handle, cx);
+    });
   }
 
   fn toggle_agent_sidebar_click(
