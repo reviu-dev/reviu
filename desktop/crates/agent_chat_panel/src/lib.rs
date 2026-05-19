@@ -951,8 +951,9 @@ impl Render for AgentChatPanel {
       .min_h_0()
       .gap_3()
       .p_3()
+      .overflow_y_scroll()
       .track_scroll(&self.scroll_handle)
-      .overflow_y_scrollbar();
+      .vertical_scrollbar(&self.scroll_handle);
 
     if let Status::MissingBinary { command, hint } = &self.status {
       messages = messages.child(
