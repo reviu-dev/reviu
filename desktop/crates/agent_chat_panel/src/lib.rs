@@ -484,6 +484,25 @@ impl AgentChatPanel {
     cx.notify();
   }
 
+  pub fn delete_conversation(&mut self, id: &str, cx: &mut Context<Self>) {
+    let Some(dir) = self.state_dir.clone() else {
+      return;
+    };
+    let path = dir.join(format!("{id}.json"));
+    let _ = std::fs::remove_file(&path);
+    if self.current_conv.id == id {
+      let _ = std::fs::remove_file(dir.join("active.txt"));
+      self.current_conv = new_conversation_meta();
+      self.items.clear();
+      self.tool_index.clear();
+      self.pending_agent.clear();
+      self.in_flight = false;
+      self.usage = None;
+      self.respawn_session(cx);
+    }
+    cx.notify();
+  }
+
   pub fn load_conversation(&mut self, id: &str, cx: &mut Context<Self>) {
     let Some(dir) = self.state_dir.clone() else {
       return;
@@ -1357,20 +1376,57 @@ impl Render for AgentChatPanel {
                     let mut menu = menu;
                     for meta in &conversations {
                       let id = meta.id.clone();
-                      let entity = entity.clone();
-                      let title = if meta.title.is_empty() {
-                        format!("Conversation {} ({} msgs)", meta.id, meta.message_count)
+                      let id_load = meta.id.clone();
+                      let id_delete = meta.id.clone();
+                      let entity_load = entity.clone();
+                      let entity_delete = entity.clone();
+                      let title: SharedString = if meta.title.is_empty() {
+                        format!("Conversation {} ({} msgs)", meta.id, meta.message_count).into()
                       } else {
-                        format!("{} ({} msgs)", meta.title, meta.message_count)
+                        format!("{} ({} msgs)", meta.title, meta.message_count).into()
                       };
+                      let group_name = SharedString::from(format!("hist-row-{}", meta.id));
+                      let group_for_render = group_name.clone();
+                      let button_id =
+                        SharedString::from(format!("hist-delete-{}", meta.id));
+                      let title_for_render = title.clone();
                       menu = menu.item(
-                        PopupMenuItem::new(title)
-                          .disabled(id == current_id)
-                          .on_click(move |_, _, cx| {
-                            let id = id.clone();
-                            let _ = entity.update(cx, |panel, cx| panel.load_conversation(&id, cx));
-                          }),
+                        PopupMenuItem::element(move |_, _| {
+                          let entity_delete = entity_delete.clone();
+                          let id_delete = id_delete.clone();
+                          h_flex()
+                            .group(group_for_render.clone())
+                            .w_full()
+                            .gap_2()
+                            .items_center()
+                            .child(
+                              div()
+                                .flex_1()
+                                .text_sm()
+                                .child(title_for_render.clone()),
+                            )
+                            .child(
+                              Button::new(button_id.clone())
+                                .icon(UiIconName::Trash)
+                                .xsmall()
+                                .ghost()
+                                .opacity(0.0)
+                                .group_hover(group_for_render.clone(), |this| this.opacity(1.0))
+                                .on_click(move |_, _, cx| {
+                                  let _ = entity_delete.update(cx, |panel, cx| {
+                                    panel.delete_conversation(&id_delete, cx)
+                                  });
+                                }),
+                            )
+                            .into_any_element()
+                        })
+                        .disabled(id == current_id)
+                        .on_click(move |_, _, cx| {
+                          let id = id_load.clone();
+                          let _ = entity_load.update(cx, |panel, cx| panel.load_conversation(&id, cx));
+                        }),
                       );
+                      let _ = id;
                     }
                     menu
                   })
