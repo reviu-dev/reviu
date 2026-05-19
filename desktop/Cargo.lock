@@ -253,6 +253,7 @@ dependencies = [
  "anyhow",
  "async-channel 2.5.0",
  "blake3",
+ "dirs 5.0.1",
  "futures",
  "gfm_markdown_viewer",
  "gpui",

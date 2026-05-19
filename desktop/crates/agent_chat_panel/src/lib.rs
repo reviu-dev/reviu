@@ -3,7 +3,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use agent_acp::{
-  AgentEvent, AgentSession, AuthMethodInfo, BackendAvailability, BackendConfig,
+  AgentEvent, AgentSession, AuthMethodInfo, BackendAvailability, BackendConfig, BackendKind,
   PermissionOptionKind, PermissionPrompt,
 };
 use agent_client_protocol::schema::{
@@ -22,10 +22,12 @@ use gpui_component::{
   button::{Button, ButtonVariants as _},
   h_flex,
   input::InputEvent,
+  menu::{DropdownMenu as _, PopupMenuItem},
   scroll::ScrollableElement as _,
   spinner::Spinner,
   v_flex,
 };
+use gpui::Corner;
 use ui::{Input, InputState, StatusThemeExt as _};
 
 #[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -102,7 +104,9 @@ enum Status {
 }
 
 pub struct AgentChatPanel {
+  backend_kind: BackendKind,
   backend: BackendConfig,
+  cwd: PathBuf,
   status: Status,
   items: Vec<ChatItem>,
   tool_index: HashMap<ToolCallId, usize>,
@@ -126,12 +130,13 @@ pub struct AgentChatPanel {
 
 impl AgentChatPanel {
   pub fn new(
-    backend: BackendConfig,
+    backend_kind: BackendKind,
     cwd: PathBuf,
     state_path: Option<PathBuf>,
     window: &mut Window,
     cx: &mut Context<Self>,
   ) -> Self {
+    let backend = backend_kind.config();
     let input = cx.new(|cx| {
       InputState::new(window, cx)
         .auto_grow(2, 8)
@@ -155,7 +160,9 @@ impl AgentChatPanel {
       .unwrap_or_default();
 
     let mut panel = Self {
+      backend_kind,
       backend: backend.clone(),
+      cwd: cwd.clone(),
       status: Status::Connecting,
       items: loaded_items,
       tool_index: loaded_index,
@@ -426,6 +433,79 @@ impl AgentChatPanel {
     )
   }
 
+  pub fn backend_kind(&self) -> BackendKind {
+    self.backend_kind
+  }
+
+  pub fn switch_backend(&mut self, kind: BackendKind, cx: &mut Context<Self>) {
+    if kind == self.backend_kind {
+      return;
+    }
+    self.backend_kind = kind;
+    self.backend = kind.config();
+    self.session = None;
+    self.in_flight = false;
+    self.pending_agent.clear();
+    self.auth_required = false;
+    self.auth_methods.clear();
+    self.agent_version = None;
+    self.usage = None;
+    self.status = Status::Connecting;
+
+    if let BackendAvailability::MissingBinary {
+      command,
+      install_hint,
+    } = self.backend.check_availability()
+    {
+      self.status = Status::MissingBinary {
+        command,
+        hint: install_hint,
+      };
+      cx.notify();
+      return;
+    }
+
+    let backend = self.backend.clone();
+    let cwd = self.cwd.clone();
+    let executor = cx.background_executor().clone();
+    let spawner = move |fut: BoxFuture<'static, ()>| {
+      executor.spawn(fut).detach();
+    };
+    let task = cx.spawn(async move |this, cx| {
+      let result = AgentSession::spawn(backend, cwd, spawner).await;
+      match result {
+        Ok(mut session) => {
+          let info = session.init_info().clone();
+          let events = session.take_events();
+          let permissions = session.take_permission_prompts();
+          let session = Arc::new(session);
+          let _ = this.update(cx, |panel, cx| {
+            panel.session = Some(session.clone());
+            panel.status = Status::Ready;
+            panel.agent_version = info.version;
+            panel.auth_methods = info.auth_methods;
+            if let Some(rx) = events {
+              panel.start_event_forwarder(rx, cx);
+            }
+            if let Some(rx) = permissions {
+              panel.start_permission_forwarder(rx, cx);
+            }
+            cx.notify();
+          });
+        }
+        Err(e) => {
+          let msg = format!("{e}");
+          let _ = this.update(cx, |panel, cx| {
+            panel.status = Status::Error(msg);
+            cx.notify();
+          });
+        }
+      }
+    });
+    self._connect_task = Some(task);
+    cx.notify();
+  }
+
   fn clear_chat(&mut self, cx: &mut Context<Self>) {
     self.items.clear();
     self.tool_index.clear();
@@ -487,6 +567,18 @@ impl AgentChatPanel {
     }
     pruned
   }
+}
+
+pub fn persist_choice(kind: BackendKind) {
+  let Some(dir) = dirs::config_dir() else {
+    return;
+  };
+  let path = dir.join("reviu").join("agent.json");
+  if let Some(parent) = path.parent() {
+    let _ = std::fs::create_dir_all(parent);
+  }
+  let body = serde_json::json!({ "backend": kind.storage_key() });
+  let _ = std::fs::write(&path, body.to_string());
 }
 
 fn load_state_from_path(path: &std::path::Path) -> Option<(Vec<ChatItem>, HashMap<ToolCallId, usize>)> {
@@ -845,15 +937,7 @@ impl Render for AgentChatPanel {
       MarkdownRenderOptions::with_on_link(Arc::new(|_url, _window, _cx| LinkAction::Open))
         .with_syntax_cache(self.syntax_cache.clone());
 
-    let header_text: SharedString = match &self.status {
-      Status::Connecting => format!("Connecting to {}...", self.backend.label).into(),
-      Status::Ready => match &self.agent_version {
-        Some(v) => format!("{} · v{v}", self.backend.label).into(),
-        None => self.backend.label.into(),
-      },
-      Status::Error(e) => format!("Error: {e}").into(),
-      Status::MissingBinary { command, .. } => format!("`{command}` not found").into(),
-    };
+    let _ = SharedString::from("");
 
     let usage_text: Option<SharedString> = self.usage.map(|(used, size)| {
       let used_k = used as f64 / 1000.0;
@@ -1048,7 +1132,46 @@ impl Render for AgentChatPanel {
           .justify_between()
           .border_b_1()
           .border_color(theme.border)
-          .child(div().text_sm().text_color(theme.foreground).child(header_text))
+          .child({
+            let current = self.backend_kind;
+            let label_suffix = match &self.status {
+              Status::Connecting => " (connecting...)",
+              Status::Error(_) => " (error)",
+              Status::MissingBinary { .. } => " (not installed)",
+              Status::Ready => "",
+            };
+            let version_suffix = match (&self.status, &self.agent_version) {
+              (Status::Ready, Some(v)) => format!(" v{v}"),
+              _ => String::new(),
+            };
+            let label = format!(
+              "{}{}{}",
+              current.label(),
+              version_suffix,
+              label_suffix
+            );
+            let entity = cx.entity().downgrade();
+            Button::new("agent-chat-backend")
+              .label(label)
+              .small()
+              .ghost()
+              .dropdown_menu_with_anchor(Corner::TopLeft, move |menu, _, _| {
+                let mut menu = menu;
+                for kind in BackendKind::all() {
+                  let kind = *kind;
+                  let entity = entity.clone();
+                  menu = menu.item(
+                    PopupMenuItem::new(kind.label().to_string())
+                      .disabled(kind == current)
+                      .on_click(move |_, _, cx| {
+                        persist_choice(kind);
+                        let _ = entity.update(cx, |panel, cx| panel.switch_backend(kind, cx));
+                      }),
+                  );
+                }
+                menu
+              })
+          })
           .child(
             h_flex()
               .gap_3()
