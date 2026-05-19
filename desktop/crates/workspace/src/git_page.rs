@@ -7649,9 +7649,9 @@ impl GitPage {
       .selected_repo
       .clone()
       .unwrap_or_else(|| std::path::PathBuf::from("."));
-    let state_path = agent_chat_state_dir().map(|dir| AgentChatPanel::state_path_for_repo(&dir, &cwd));
+    let state_dir = agent_chat_state_dir().map(|dir| AgentChatPanel::state_dir_for_repo(&dir, &cwd));
     let backend = AgentSettings::load();
-    let view = cx.new(|cx| AgentChatPanel::new(backend, cwd, state_path, window, cx));
+    let view = cx.new(|cx| AgentChatPanel::new(backend, cwd, state_dir, window, cx));
     self.agent_chat_view = Some(view);
   }
 
@@ -9228,7 +9228,6 @@ impl GitPage {
           .with_variant(ButtonVariant::Secondary)
           .xsmall()
           .p_2()
-          .tooltip("Create a pull request for this branch")
           .on_click(move |_, window, cx| {
             open_create_pull_request_dialog(
               WorkspaceApi::global(cx).api.clone(),
@@ -9279,11 +9278,6 @@ impl GitPage {
       .p_2()
       .selected(self.show_terminal_sidebar)
       .disabled(self.selected_repo.is_none())
-      .tooltip(if self.show_terminal_sidebar {
-        "Hide terminal sidebar"
-      } else {
-        "Show terminal sidebar"
-      })
       .on_click(cx.listener(Self::toggle_terminal_sidebar_click));
 
     let agent_sidebar_button = Button::new("git-toggle-agent-sidebar")
@@ -9295,11 +9289,6 @@ impl GitPage {
       .p_2()
       .selected(self.show_agent_sidebar)
       .disabled(self.selected_repo.is_none())
-      .tooltip(if self.show_agent_sidebar {
-        "Hide agent sidebar"
-      } else {
-        "Show agent sidebar"
-      })
       .on_click(cx.listener(Self::toggle_agent_sidebar_click));
 
     let header_right = h_flex()

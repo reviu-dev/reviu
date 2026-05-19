@@ -28,7 +28,7 @@ use gpui_component::{
   v_flex,
 };
 use gpui::Corner;
-use ui::{Input, InputState, StatusThemeExt as _};
+use ui::{Input, InputState, StatusThemeExt as _, UiIconName};
 
 #[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 enum ChatRole {
@@ -96,6 +96,20 @@ enum PersistedChatItem {
   Tool(ToolCallView),
 }
 
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+pub struct ConversationMeta {
+  pub id: String,
+  pub started_at_secs: u64,
+  pub title: String,
+  pub message_count: usize,
+}
+
+#[derive(serde::Serialize, serde::Deserialize)]
+struct PersistedConversation {
+  meta: ConversationMeta,
+  items: Vec<PersistedChatItem>,
+}
+
 enum Status {
   Connecting,
   Ready,
@@ -120,7 +134,8 @@ pub struct AgentChatPanel {
   agent_version: Option<String>,
   auth_methods: Vec<AuthMethodInfo>,
   auth_required: bool,
-  state_path: Option<PathBuf>,
+  state_dir: Option<PathBuf>,
+  current_conv: ConversationMeta,
   syntax_cache: Arc<SyntaxHighlightCache>,
   _connect_task: Option<Task<()>>,
   _events_task: Option<Task<()>>,
@@ -132,7 +147,7 @@ impl AgentChatPanel {
   pub fn new(
     backend_kind: BackendKind,
     cwd: PathBuf,
-    state_path: Option<PathBuf>,
+    state_dir: Option<PathBuf>,
     window: &mut Window,
     cx: &mut Context<Self>,
   ) -> Self {
@@ -154,10 +169,10 @@ impl AgentChatPanel {
       },
     );
 
-    let (loaded_items, loaded_index) = state_path
+    let (current_conv, loaded_items, loaded_index) = state_dir
       .as_deref()
-      .and_then(load_state_from_path)
-      .unwrap_or_default();
+      .and_then(load_active_conversation)
+      .unwrap_or_else(|| (new_conversation_meta(), Vec::new(), HashMap::new()));
 
     let mut panel = Self {
       backend_kind,
@@ -176,7 +191,8 @@ impl AgentChatPanel {
       agent_version: None,
       auth_methods: Vec::new(),
       auth_required: false,
-      state_path,
+      state_dir,
+      current_conv,
       syntax_cache: Arc::new(SyntaxHighlightCache::new()),
       _connect_task: None,
       _events_task: None,
@@ -437,6 +453,95 @@ impl AgentChatPanel {
     self.backend_kind
   }
 
+  pub fn new_conversation(&mut self, cx: &mut Context<Self>) {
+    self.persist_state();
+    self.current_conv = new_conversation_meta();
+    self.items.clear();
+    self.tool_index.clear();
+    self.pending_agent.clear();
+    self.in_flight = false;
+    self.usage = None;
+    self.respawn_session(cx);
+    cx.notify();
+  }
+
+  pub fn load_conversation(&mut self, id: &str, cx: &mut Context<Self>) {
+    let Some(dir) = self.state_dir.clone() else {
+      return;
+    };
+    self.persist_state();
+    let path = dir.join(format!("{id}.json"));
+    let Some((meta, items, index)) = load_conversation_file(&path) else {
+      return;
+    };
+    self.current_conv = meta;
+    self.items = items;
+    self.tool_index = index;
+    self.pending_agent.clear();
+    let _ = std::fs::write(dir.join("active.txt"), &self.current_conv.id);
+    self.respawn_session(cx);
+    cx.notify();
+  }
+
+  fn respawn_session(&mut self, cx: &mut Context<Self>) {
+    self.session = None;
+    self.in_flight = false;
+    self.auth_required = false;
+    self.auth_methods.clear();
+    self.agent_version = None;
+    self.usage = None;
+    self.status = Status::Connecting;
+    if let BackendAvailability::MissingBinary {
+      command,
+      install_hint,
+    } = self.backend.check_availability()
+    {
+      self.status = Status::MissingBinary {
+        command,
+        hint: install_hint,
+      };
+      return;
+    }
+    let backend = self.backend.clone();
+    let cwd = self.cwd.clone();
+    let executor = cx.background_executor().clone();
+    let spawner = move |fut: BoxFuture<'static, ()>| {
+      executor.spawn(fut).detach();
+    };
+    let task = cx.spawn(async move |this, cx| {
+      let result = AgentSession::spawn(backend, cwd, spawner).await;
+      match result {
+        Ok(mut session) => {
+          let info = session.init_info().clone();
+          let events = session.take_events();
+          let permissions = session.take_permission_prompts();
+          let session = Arc::new(session);
+          let _ = this.update(cx, |panel, cx| {
+            panel.session = Some(session.clone());
+            panel.status = Status::Ready;
+            panel.agent_version = info.version;
+            panel.auth_methods = info.auth_methods;
+            if let Some(rx) = events {
+              panel.start_event_forwarder(rx, cx);
+            }
+            if let Some(rx) = permissions {
+              panel.start_permission_forwarder(rx, cx);
+            }
+            cx.notify();
+          });
+        }
+        Err(e) => {
+          let msg = format!("{e}");
+          let _ = this.update(cx, |panel, cx| {
+            panel.status = Status::Error(msg);
+            cx.notify();
+          });
+        }
+      }
+    });
+    self._connect_task = Some(task);
+  }
+
   pub fn switch_backend(&mut self, kind: BackendKind, cx: &mut Context<Self>) {
     if kind == self.backend_kind {
       return;
@@ -506,18 +611,24 @@ impl AgentChatPanel {
     cx.notify();
   }
 
-  fn clear_chat(&mut self, cx: &mut Context<Self>) {
-    self.items.clear();
-    self.tool_index.clear();
-    self.pending_agent.clear();
-    self.persist_state();
-    cx.notify();
-  }
-
-  fn persist_state(&self) {
-    let Some(path) = self.state_path.as_ref() else {
+  fn persist_state(&mut self) {
+    let Some(dir) = self.state_dir.as_ref() else {
       return;
     };
+    // Update meta count + title before writing.
+    self.current_conv.message_count = self
+      .items
+      .iter()
+      .filter(|i| matches!(i, ChatItem::Message(_)))
+      .count();
+    if self.current_conv.title.is_empty() {
+      if let Some(first_user) = self.items.iter().find_map(|i| match i {
+        ChatItem::Message(m) if matches!(m.role, ChatRole::User) => Some(m.text.clone()),
+        _ => None,
+      }) {
+        self.current_conv.title = truncate_title(&first_user);
+      }
+    }
     let persisted: Vec<PersistedChatItem> = self
       .items
       .iter()
@@ -527,31 +638,53 @@ impl AgentChatPanel {
         ChatItem::Permission(_) => None,
       })
       .collect();
-    if let Some(parent) = path.parent() {
-      let _ = std::fs::create_dir_all(parent);
+    let _ = std::fs::create_dir_all(dir);
+    let conv = PersistedConversation {
+      meta: self.current_conv.clone(),
+      items: persisted,
+    };
+    let conv_path = dir.join(format!("{}.json", self.current_conv.id));
+    if let Ok(json) = serde_json::to_string(&conv) {
+      let _ = std::fs::write(&conv_path, json);
     }
-    if let Ok(json) = serde_json::to_string(&persisted) {
-      let _ = std::fs::write(path, json);
-    }
+    let active_path = dir.join("active.txt");
+    let _ = std::fs::write(&active_path, &self.current_conv.id);
   }
 
-  /// On-disk state path for a repo; hashes canonical path for stable filenames.
-  pub fn state_path_for_repo(state_dir: &std::path::Path, repo: &std::path::Path) -> PathBuf {
+  pub fn list_conversations(&self) -> Vec<ConversationMeta> {
+    let Some(dir) = self.state_dir.as_ref() else {
+      return Vec::new();
+    };
+    list_conversations_in(dir)
+  }
+
+  pub fn current_conversation(&self) -> &ConversationMeta {
+    &self.current_conv
+  }
+
+  /// Per-repo directory hosting one file per conversation + an `active.txt` pointer.
+  pub fn state_dir_for_repo(state_dir: &std::path::Path, repo: &std::path::Path) -> PathBuf {
     let canonical = repo.canonicalize().unwrap_or_else(|_| repo.to_path_buf());
     let hash = blake3::hash(canonical.to_string_lossy().as_bytes());
     let hex = hash.to_hex();
-    state_dir.join(format!("{}.json", &hex.as_str()[..16]))
+    state_dir.join(&hex.as_str()[..16])
   }
 
-  /// Delete chat files older than `max_age`; best-effort, errors ignored.
+  /// Delete conversation files older than `max_age`; best-effort, errors ignored.
   pub fn prune_old_state(state_dir: &std::path::Path, max_age: std::time::Duration) -> usize {
+    let now = std::time::SystemTime::now();
+    let mut pruned = 0;
     let Ok(entries) = std::fs::read_dir(state_dir) else {
       return 0;
     };
-    let now = std::time::SystemTime::now();
-    let mut pruned = 0;
     for entry in entries.flatten() {
+      let path = entry.path();
       let Ok(meta) = entry.metadata() else { continue };
+      if meta.is_dir() {
+        pruned += Self::prune_old_state(&path, max_age);
+        let _ = std::fs::remove_dir(&path);
+        continue;
+      }
       if !meta.is_file() {
         continue;
       }
@@ -561,7 +694,7 @@ impl AgentChatPanel {
       let Ok(age) = now.duration_since(modified) else {
         continue;
       };
-      if age > max_age && std::fs::remove_file(entry.path()).is_ok() {
+      if age > max_age && std::fs::remove_file(&path).is_ok() {
         pruned += 1;
       }
     }
@@ -581,12 +714,59 @@ pub fn persist_choice(kind: BackendKind) {
   let _ = std::fs::write(&path, body.to_string());
 }
 
-fn load_state_from_path(path: &std::path::Path) -> Option<(Vec<ChatItem>, HashMap<ToolCallId, usize>)> {
+fn new_conversation_meta() -> ConversationMeta {
+  let now = std::time::SystemTime::now()
+    .duration_since(std::time::UNIX_EPOCH)
+    .map(|d| d.as_secs())
+    .unwrap_or(0);
+  ConversationMeta {
+    id: now.to_string(),
+    started_at_secs: now,
+    title: String::new(),
+    message_count: 0,
+  }
+}
+
+fn truncate_title(text: &str) -> String {
+  let trimmed = text.trim().lines().next().unwrap_or("").trim();
+  let max = 80;
+  if trimmed.chars().count() <= max {
+    trimmed.to_string()
+  } else {
+    let head: String = trimmed.chars().take(max).collect();
+    format!("{head}...")
+  }
+}
+
+fn load_active_conversation(
+  dir: &std::path::Path,
+) -> Option<(
+  ConversationMeta,
+  Vec<ChatItem>,
+  HashMap<ToolCallId, usize>,
+)> {
+  let active_path = dir.join("active.txt");
+  let active_id = std::fs::read_to_string(&active_path).ok()?;
+  let active_id = active_id.trim().to_string();
+  if active_id.is_empty() {
+    return None;
+  }
+  let conv_path = dir.join(format!("{active_id}.json"));
+  load_conversation_file(&conv_path)
+}
+
+fn load_conversation_file(
+  path: &std::path::Path,
+) -> Option<(
+  ConversationMeta,
+  Vec<ChatItem>,
+  HashMap<ToolCallId, usize>,
+)> {
   let raw = std::fs::read_to_string(path).ok()?;
-  let parsed: Vec<PersistedChatItem> = serde_json::from_str(&raw).ok()?;
-  let mut items = Vec::with_capacity(parsed.len());
+  let parsed: PersistedConversation = serde_json::from_str(&raw).ok()?;
+  let mut items = Vec::with_capacity(parsed.items.len());
   let mut index = HashMap::new();
-  for item in parsed {
+  for item in parsed.items {
     match item {
       PersistedChatItem::Message(m) => items.push(ChatItem::Message(m)),
       PersistedChatItem::Tool(t) => {
@@ -595,7 +775,28 @@ fn load_state_from_path(path: &std::path::Path) -> Option<(Vec<ChatItem>, HashMa
       }
     }
   }
-  Some((items, index))
+  Some((parsed.meta, items, index))
+}
+
+fn list_conversations_in(dir: &std::path::Path) -> Vec<ConversationMeta> {
+  let Ok(entries) = std::fs::read_dir(dir) else {
+    return Vec::new();
+  };
+  let mut metas: Vec<ConversationMeta> = entries
+    .flatten()
+    .filter_map(|entry| {
+      let path = entry.path();
+      let name = path.file_name()?.to_str()?.to_string();
+      if !name.ends_with(".json") {
+        return None;
+      }
+      let raw = std::fs::read_to_string(&path).ok()?;
+      let parsed: PersistedConversation = serde_json::from_str(&raw).ok()?;
+      Some(parsed.meta)
+    })
+    .collect();
+  metas.sort_by(|a, b| b.started_at_secs.cmp(&a.started_at_secs));
+  metas
 }
 
 fn extract_diffs(content: &[ToolCallContent]) -> Vec<DiffSummary> {
@@ -1185,14 +1386,43 @@ impl Render for AgentChatPanel {
                     .child(t),
                 )
               })
-              .child(
-                Button::new("agent-chat-clear")
-                  .label("Clear")
+              .child({
+                let entity = cx.entity().downgrade();
+                let conversations = self.list_conversations();
+                let current_id = self.current_conv.id.clone();
+                Button::new("agent-chat-history")
+                  .icon(UiIconName::History)
                   .small()
                   .ghost()
-                  .disabled(self.items.is_empty() && self.pending_agent.is_empty())
-                  .tooltip("Clear chat history for this repo")
-                  .on_click(cx.listener(|panel, _, _, cx| panel.clear_chat(cx))),
+                  .disabled(conversations.is_empty())
+                  .dropdown_menu_with_anchor(Corner::TopRight, move |menu, _, _| {
+                    let mut menu = menu;
+                    for meta in &conversations {
+                      let id = meta.id.clone();
+                      let entity = entity.clone();
+                      let title = if meta.title.is_empty() {
+                        format!("Conversation {} ({} msgs)", meta.id, meta.message_count)
+                      } else {
+                        format!("{} ({} msgs)", meta.title, meta.message_count)
+                      };
+                      menu = menu.item(
+                        PopupMenuItem::new(title)
+                          .disabled(id == current_id)
+                          .on_click(move |_, _, cx| {
+                            let id = id.clone();
+                            let _ = entity.update(cx, |panel, cx| panel.load_conversation(&id, cx));
+                          }),
+                      );
+                    }
+                    menu
+                  })
+              })
+              .child(
+                Button::new("agent-chat-new")
+                  .icon(UiIconName::MessageCirclePlus)
+                  .small()
+                  .ghost()
+                  .on_click(cx.listener(|panel, _, _, cx| panel.new_conversation(cx))),
               ),
           ),
       )
