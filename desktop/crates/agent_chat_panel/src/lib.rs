@@ -1344,13 +1344,35 @@ impl Render for AgentChatPanel {
                 for kind in BackendKind::all() {
                   let kind = *kind;
                   let entity = entity.clone();
+                  let is_current = kind == current;
+                  let label_text: SharedString = kind.label().into();
                   menu = menu.item(
-                    PopupMenuItem::new(kind.label().to_string())
-                      .disabled(kind == current)
-                      .on_click(move |_, _, cx| {
-                        persist_choice(kind);
-                        let _ = entity.update(cx, |panel, cx| panel.switch_backend(kind, cx));
-                      }),
+                    PopupMenuItem::element(move |_, cx| {
+                      let theme = cx.theme().clone();
+                      h_flex()
+                        .w_full()
+                        .gap_2()
+                        .items_center()
+                        .child(
+                          div()
+                            .flex_1()
+                            .text_sm()
+                            .when(is_current, |this| this.font_weight(gpui::FontWeight::BOLD))
+                            .child(label_text.clone()),
+                        )
+                        .when(is_current, |this| {
+                          this.child(
+                            gpui_component::Icon::new(UiIconName::Check)
+                              .small()
+                              .text_color(theme.foreground),
+                          )
+                        })
+                        .into_any_element()
+                    })
+                    .on_click(move |_, _, cx| {
+                      persist_choice(kind);
+                      let _ = entity.update(cx, |panel, cx| panel.switch_backend(kind, cx));
+                    }),
                   );
                 }
                 menu
