@@ -1317,10 +1317,7 @@ impl Render for AgentChatPanel {
           .items_center()
           .justify_center()
           .gap_2()
-          .child(
-            gpui_component::Icon::new(UiIconName::Sparkles)
-              .text_color(theme.muted_foreground),
-          )
+          .child(gpui_component::Icon::new(UiIconName::Sparkles).text_color(theme.muted_foreground))
           .child(
             div()
               .text_sm()
@@ -1494,14 +1491,19 @@ impl Render for AgentChatPanel {
           this.child(empty_state)
         } else {
           this.child(
-            v_flex()
-              .id("agent-chat-messages")
+            div()
               .flex_1()
               .min_h_0()
-              .overflow_y_scroll()
-              .track_scroll(&self.scroll_handle)
-              .vertical_scrollbar(&self.scroll_handle)
-              .child(messages),
+              .relative()
+              .child(
+                v_flex()
+                  .id("agent-chat-messages")
+                  .size_full()
+                  .overflow_y_scroll()
+                  .track_scroll(&self.scroll_handle)
+                  .child(messages),
+              )
+              .vertical_scrollbar(&self.scroll_handle),
           )
         }
       })
