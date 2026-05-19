@@ -1311,6 +1311,27 @@ impl Render for AgentChatPanel {
               .child(format!("{} is thinking...", self.backend.label)),
           ),
       );
+    } else if self.items.is_empty() && matches!(self.status, Status::Ready | Status::Connecting) {
+      messages = messages.child(
+        v_flex()
+          .size_full()
+          .items_center()
+          .justify_center()
+          .gap_2()
+          .child(gpui_component::Icon::new(UiIconName::Sparkles).text_color(theme.muted_foreground))
+          .child(
+            div()
+              .text_sm()
+              .text_color(theme.muted_foreground)
+              .child(format!("Start a conversation with {}", self.backend.label)),
+          )
+          .child(
+            div()
+              .text_xs()
+              .text_color(theme.muted_foreground)
+              .child("Send a message below to begin."),
+          ),
+      );
     }
 
     v_flex()
