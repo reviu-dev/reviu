@@ -19,7 +19,7 @@ use gpui::{
   SharedString, Styled, Task, Window, div, prelude::*, px,
 };
 use gpui_component::{
-  ActiveTheme as _, Disableable as _, Sizable as _,
+  ActiveTheme as _, Disableable as _, IconName, Sizable as _,
   button::{Button, ButtonVariants as _},
   h_flex,
   input::InputEvent,
@@ -1334,14 +1334,11 @@ impl Render for AgentChatPanel {
               Status::MissingBinary { .. } => " (not installed)",
               Status::Ready => "",
             };
-            let version_suffix = match (&self.status, &self.agent_version) {
-              (Status::Ready, Some(v)) => format!(" v{v}"),
-              _ => String::new(),
-            };
-            let label = format!("{}{}{}", current.label(), version_suffix, label_suffix);
+            let label = format!("{}{}", current.label(), label_suffix);
             let entity = cx.entity().downgrade();
             Button::new("agent-chat-backend")
               .label(label)
+              .icon(IconName::ChevronDown)
               .small()
               .ghost()
               .dropdown_menu_with_anchor(Corner::TopLeft, move |menu, _, _| {
