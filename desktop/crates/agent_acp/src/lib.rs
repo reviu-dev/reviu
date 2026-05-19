@@ -1,9 +1,9 @@
 use agent_client_protocol::schema::{
   AuthMethod, CancelNotification, ClientCapabilities, ContentBlock, FileSystemCapabilities,
-  InitializeRequest, NewSessionRequest, PermissionOption, PromptRequest, ProtocolVersion,
-  ReadTextFileRequest, ReadTextFileResponse, RequestPermissionOutcome, RequestPermissionRequest,
-  RequestPermissionResponse, SelectedPermissionOutcome, SessionNotification, StopReason,
-  TextContent, WriteTextFileRequest, WriteTextFileResponse,
+  InitializeRequest, LoadSessionRequest, NewSessionRequest, PermissionOption, PromptRequest,
+  ProtocolVersion, ReadTextFileRequest, ReadTextFileResponse, RequestPermissionOutcome,
+  RequestPermissionRequest, RequestPermissionResponse, SelectedPermissionOutcome, SessionId,
+  SessionNotification, StopReason, TextContent, WriteTextFileRequest, WriteTextFileResponse,
 };
 use agent_client_protocol::{Agent, Client, ConnectionTo};
 use anyhow::{Context, Result, anyhow};
@@ -13,9 +13,9 @@ use futures::channel::oneshot;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::process::Stdio;
+use std::sync::Arc;
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::Arc;
 use std::time::Duration;
 
 pub use agent_client_protocol::schema::PermissionOptionKind;
@@ -169,6 +169,8 @@ pub struct AgentInitInfo {
   pub name: Option<String>,
   pub version: Option<String>,
   pub auth_methods: Vec<AuthMethodInfo>,
+  pub supports_load_session: bool,
+  pub session_id: Option<String>,
 }
 
 #[derive(Clone, Debug)]
@@ -263,6 +265,24 @@ impl AgentSession {
     cwd: PathBuf,
     spawner: impl DriverSpawner,
   ) -> Result<Self> {
+    Self::spawn_inner(backend, cwd, None, spawner).await
+  }
+
+  pub async fn spawn_with_load(
+    backend: BackendConfig,
+    cwd: PathBuf,
+    load_session_id: String,
+    spawner: impl DriverSpawner,
+  ) -> Result<Self> {
+    Self::spawn_inner(backend, cwd, Some(load_session_id), spawner).await
+  }
+
+  async fn spawn_inner(
+    backend: BackendConfig,
+    cwd: PathBuf,
+    load_session: Option<String>,
+    spawner: impl DriverSpawner,
+  ) -> Result<Self> {
     let mut cmd = Command::new(backend.command);
     cmd.args(&backend.args);
     cmd.current_dir(&cwd);
@@ -292,6 +312,7 @@ impl AgentSession {
     let driver_future = Box::pin(run_driver(
       transport,
       cwd,
+      load_session,
       cmd_rx,
       event_tx,
       permission_tx,
@@ -364,7 +385,8 @@ impl AgentSession {
       })
       .await
       .map_err(|_| anyhow!("agent driver closed"))?;
-    rx.await.map_err(|_| anyhow!("agent driver dropped reply"))?
+    rx.await
+      .map_err(|_| anyhow!("agent driver dropped reply"))?
   }
 }
 
@@ -584,8 +606,12 @@ async fn forward_stderr(stderr: async_process::ChildStderr) {
 }
 
 async fn run_driver(
-  transport: agent_client_protocol::ByteStreams<async_process::ChildStdin, async_process::ChildStdout>,
+  transport: agent_client_protocol::ByteStreams<
+    async_process::ChildStdin,
+    async_process::ChildStdout,
+  >,
   cwd: PathBuf,
+  load_session: Option<String>,
   cmd_rx: Receiver<DriverCmd>,
   event_tx: Sender<AgentEvent>,
   permission_tx: Sender<PermissionPrompt>,
@@ -606,66 +632,67 @@ async fn run_driver(
       },
       agent_client_protocol::on_receive_notification!(),
     )
-    .on_receive_request({
-      let permission_tx = permission_tx.clone();
-      let permission_replies = permission_replies.clone();
-      let permission_counter = permission_counter.clone();
-      async move |request: RequestPermissionRequest, responder, _connection| {
-        use futures::FutureExt;
-        let id = permission_counter.fetch_add(1, Ordering::Relaxed);
-        let title = request
-          .tool_call
-          .fields
-          .title
-          .clone()
-          .unwrap_or_else(|| "Permission required".to_string());
-        let prompt = PermissionPrompt {
-          id,
-          tool_call_title: title,
-          options: request
-            .options
-            .iter()
-            .map(|o| PermissionPromptOption {
-              option_id: o.option_id.0.to_string(),
-              label: o.name.clone(),
-              kind: o.kind.clone(),
-            })
-            .collect(),
-        };
-        let (reply_tx, reply_rx) = oneshot::channel::<Option<String>>();
-        if let Ok(mut map) = permission_replies.lock() {
-          map.insert(id, reply_tx);
-        }
-        let send_result = permission_tx.send(prompt).await;
-
-        let outcome = if send_result.is_err() {
-          // No listener: fall back to safe default.
-          permission_replies.lock().ok().map(|mut m| m.remove(&id));
-          match pick_default_permission_option(&request.options) {
-            Some(id) => RequestPermissionOutcome::Selected(SelectedPermissionOutcome::new(id)),
-            None => RequestPermissionOutcome::Cancelled,
+    .on_receive_request(
+      {
+        let permission_tx = permission_tx.clone();
+        let permission_replies = permission_replies.clone();
+        let permission_counter = permission_counter.clone();
+        async move |request: RequestPermissionRequest, responder, _connection| {
+          use futures::FutureExt;
+          let id = permission_counter.fetch_add(1, Ordering::Relaxed);
+          let title = request
+            .tool_call
+            .fields
+            .title
+            .clone()
+            .unwrap_or_else(|| "Permission required".to_string());
+          let prompt = PermissionPrompt {
+            id,
+            tool_call_title: title,
+            options: request
+              .options
+              .iter()
+              .map(|o| PermissionPromptOption {
+                option_id: o.option_id.0.to_string(),
+                label: o.name.clone(),
+                kind: o.kind.clone(),
+              })
+              .collect(),
+          };
+          let (reply_tx, reply_rx) = oneshot::channel::<Option<String>>();
+          if let Ok(mut map) = permission_replies.lock() {
+            map.insert(id, reply_tx);
           }
-        } else {
-          let timeout = smol::Timer::after(Duration::from_secs(300)).fuse();
-          futures::pin_mut!(timeout);
-          futures::select_biased! {
-            answer = reply_rx.fuse() => {
-              match answer.ok().flatten() {
-                Some(option_id) => RequestPermissionOutcome::Selected(
-                  SelectedPermissionOutcome::new(option_id),
-                ),
-                None => RequestPermissionOutcome::Cancelled,
+          let send_result = permission_tx.send(prompt).await;
+
+          let outcome = if send_result.is_err() {
+            // No listener: fall back to safe default.
+            permission_replies.lock().ok().map(|mut m| m.remove(&id));
+            match pick_default_permission_option(&request.options) {
+              Some(id) => RequestPermissionOutcome::Selected(SelectedPermissionOutcome::new(id)),
+              None => RequestPermissionOutcome::Cancelled,
+            }
+          } else {
+            let timeout = smol::Timer::after(Duration::from_secs(300)).fuse();
+            futures::pin_mut!(timeout);
+            futures::select_biased! {
+              answer = reply_rx.fuse() => {
+                match answer.ok().flatten() {
+                  Some(option_id) => RequestPermissionOutcome::Selected(
+                    SelectedPermissionOutcome::new(option_id),
+                  ),
+                  None => RequestPermissionOutcome::Cancelled,
+                }
+              }
+              _ = timeout => {
+                permission_replies.lock().ok().map(|mut m| m.remove(&id));
+                RequestPermissionOutcome::Cancelled
               }
             }
-            _ = timeout => {
-              permission_replies.lock().ok().map(|mut m| m.remove(&id));
-              RequestPermissionOutcome::Cancelled
-            }
-          }
-        };
-        responder.respond(RequestPermissionResponse::new(outcome))
-      }
-    },
+          };
+          responder.respond(RequestPermissionResponse::new(outcome))
+        }
+      },
       agent_client_protocol::on_receive_request!(),
     )
     .on_receive_request(
@@ -673,8 +700,8 @@ async fn run_driver(
         let root = fs_root_read.clone();
         let content = smol::unblock(move || -> Result<String> {
           let resolved = validate_path_in_root(&request.path, &root)?;
-          let mut text = std::fs::read_to_string(&resolved)
-            .with_context(|| format!("read {resolved:?}"))?;
+          let mut text =
+            std::fs::read_to_string(&resolved).with_context(|| format!("read {resolved:?}"))?;
           if let Some(line) = request.line {
             let start = line.saturating_sub(1) as usize;
             let mut lines: Vec<&str> = text.lines().collect();
@@ -694,9 +721,10 @@ async fn run_driver(
         .await;
         match content {
           Ok(text) => responder.respond(ReadTextFileResponse::new(text)),
-          Err(e) => Err(agent_client_protocol::Error::internal_error().data(
-            serde_json::Value::String(e.to_string()),
-          )),
+          Err(e) => Err(
+            agent_client_protocol::Error::internal_error()
+              .data(serde_json::Value::String(e.to_string())),
+          ),
         }
       },
       agent_client_protocol::on_receive_request!(),
@@ -717,9 +745,10 @@ async fn run_driver(
         .await;
         match result {
           Ok(()) => responder.respond(WriteTextFileResponse::new()),
-          Err(e) => Err(agent_client_protocol::Error::internal_error().data(
-            serde_json::Value::String(e.to_string()),
-          )),
+          Err(e) => Err(
+            agent_client_protocol::Error::internal_error()
+              .data(serde_json::Value::String(e.to_string())),
+          ),
         }
       },
       agent_client_protocol::on_receive_request!(),
@@ -747,14 +776,32 @@ async fn run_driver(
             terminal_command: auth_method_terminal_command(m),
           })
           .collect(),
+        supports_load_session: init.agent_capabilities.load_session,
+        session_id: None,
       };
-      let session = connection
-        .send_request(NewSessionRequest::new(cwd))
-        .block_task()
-        .await?;
-      let session_id = session.session_id;
+      let session_id = match load_session.clone() {
+        Some(id) if info.supports_load_session => {
+          let sid = SessionId::new(id);
+          connection
+            .send_request(LoadSessionRequest::new(sid.clone(), cwd.clone()))
+            .block_task()
+            .await?;
+          sid
+        }
+        _ => {
+          connection
+            .send_request(NewSessionRequest::new(cwd.clone()))
+            .block_task()
+            .await?
+            .session_id
+        }
+      };
+      let info_with_session = AgentInitInfo {
+        session_id: Some(session_id.0.to_string()),
+        ..info
+      };
 
-      let _ = ready_tx.send(Ok(info));
+      let _ = ready_tx.send(Ok(info_with_session));
 
       use futures::FutureExt;
 
