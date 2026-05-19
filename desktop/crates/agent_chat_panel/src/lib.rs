@@ -1340,11 +1340,14 @@ impl Render for AgentChatPanel {
       .bg(theme.background)
       .child(
         h_flex()
-          .h(px(36.))
+          .h(px(40.))
+          .min_h(px(40.))
+          .max_h(px(40.))
           .flex_shrink_0()
           .px_3()
           .items_center()
           .justify_between()
+          .bg(theme.sidebar)
           .border_b_1()
           .border_color(theme.border)
           .child({
