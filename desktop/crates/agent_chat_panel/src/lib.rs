@@ -102,6 +102,8 @@ pub struct ConversationMeta {
   pub started_at_secs: u64,
   pub title: String,
   pub message_count: usize,
+  #[serde(default)]
+  pub session_id: Option<String>,
 }
 
 #[derive(serde::Serialize, serde::Deserialize)]
@@ -217,8 +219,12 @@ impl AgentChatPanel {
       executor.spawn(fut).detach();
     };
 
+    let load_session_id = panel.current_conv.session_id.clone();
     let task = cx.spawn(async move |this, cx| {
-      let result = AgentSession::spawn(backend, cwd, spawner).await;
+      let result = match load_session_id {
+        Some(id) => AgentSession::spawn_with_load(backend, cwd, id, spawner).await,
+        None => AgentSession::spawn(backend, cwd, spawner).await,
+      };
       match result {
         Ok(mut session) => {
           let info = session.init_info().clone();
@@ -230,6 +236,10 @@ impl AgentChatPanel {
             panel.status = Status::Ready;
             panel.agent_version = info.version;
             panel.auth_methods = info.auth_methods;
+            if let Some(sid) = info.session_id {
+              panel.current_conv.session_id = Some(sid);
+              panel.persist_state();
+            }
             if let Some(rx) = events {
               panel.start_event_forwarder(rx, cx);
             }
@@ -330,11 +340,18 @@ impl AgentChatPanel {
   fn on_event(&mut self, event: AgentEvent) {
     match event {
       AgentEvent::AgentMessageChunk(chunk) => {
+        if !self.in_flight {
+          return;
+        }
         if let ContentBlock::Text(t) = chunk.content {
           self.pending_agent.push_str(&t.text);
         }
       }
-      AgentEvent::AgentThoughtChunk(_) => {}
+      AgentEvent::AgentThoughtChunk(_) => {
+        if !self.in_flight {
+          return;
+        }
+      }
       AgentEvent::ToolCall(call) => {
         self.upsert_tool_call(call);
       }
@@ -486,6 +503,11 @@ impl AgentChatPanel {
   }
 
   fn respawn_session(&mut self, cx: &mut Context<Self>) {
+    let load_session_id = self.current_conv.session_id.clone();
+    self.respawn_session_with(load_session_id, cx);
+  }
+
+  fn respawn_session_with(&mut self, load_session_id: Option<String>, cx: &mut Context<Self>) {
     self.session = None;
     self.in_flight = false;
     self.auth_required = false;
@@ -511,7 +533,10 @@ impl AgentChatPanel {
       executor.spawn(fut).detach();
     };
     let task = cx.spawn(async move |this, cx| {
-      let result = AgentSession::spawn(backend, cwd, spawner).await;
+      let result = match load_session_id {
+        Some(id) => AgentSession::spawn_with_load(backend, cwd, id, spawner).await,
+        None => AgentSession::spawn(backend, cwd, spawner).await,
+      };
       match result {
         Ok(mut session) => {
           let info = session.init_info().clone();
@@ -523,6 +548,10 @@ impl AgentChatPanel {
             panel.status = Status::Ready;
             panel.agent_version = info.version;
             panel.auth_methods = info.auth_methods;
+            if let Some(sid) = info.session_id {
+              panel.current_conv.session_id = Some(sid);
+              panel.persist_state();
+            }
             if let Some(rx) = events {
               panel.start_event_forwarder(rx, cx);
             }
@@ -550,66 +579,10 @@ impl AgentChatPanel {
     }
     self.backend_kind = kind;
     self.backend = kind.config();
-    self.session = None;
-    self.in_flight = false;
-    self.pending_agent.clear();
-    self.auth_required = false;
-    self.auth_methods.clear();
-    self.agent_version = None;
-    self.usage = None;
-    self.status = Status::Connecting;
-
-    if let BackendAvailability::MissingBinary {
-      command,
-      install_hint,
-    } = self.backend.check_availability()
-    {
-      self.status = Status::MissingBinary {
-        command,
-        hint: install_hint,
-      };
-      cx.notify();
-      return;
-    }
-
-    let backend = self.backend.clone();
-    let cwd = self.cwd.clone();
-    let executor = cx.background_executor().clone();
-    let spawner = move |fut: BoxFuture<'static, ()>| {
-      executor.spawn(fut).detach();
-    };
-    let task = cx.spawn(async move |this, cx| {
-      let result = AgentSession::spawn(backend, cwd, spawner).await;
-      match result {
-        Ok(mut session) => {
-          let info = session.init_info().clone();
-          let events = session.take_events();
-          let permissions = session.take_permission_prompts();
-          let session = Arc::new(session);
-          let _ = this.update(cx, |panel, cx| {
-            panel.session = Some(session.clone());
-            panel.status = Status::Ready;
-            panel.agent_version = info.version;
-            panel.auth_methods = info.auth_methods;
-            if let Some(rx) = events {
-              panel.start_event_forwarder(rx, cx);
-            }
-            if let Some(rx) = permissions {
-              panel.start_permission_forwarder(rx, cx);
-            }
-            cx.notify();
-          });
-        }
-        Err(e) => {
-          let msg = format!("{e}");
-          let _ = this.update(cx, |panel, cx| {
-            panel.status = Status::Error(msg);
-            cx.notify();
-          });
-        }
-      }
-    });
-    self._connect_task = Some(task);
+    // Session id is backend-specific; clear it so we don't try to load a
+    // claude session on codex (or vice-versa).
+    self.current_conv.session_id = None;
+    self.respawn_session_with(None, cx);
     cx.notify();
   }
 
@@ -617,6 +590,11 @@ impl AgentChatPanel {
     let Some(dir) = self.state_dir.as_ref() else {
       return;
     };
+    // Skip writing while the conversation has no user-visible content yet
+    // (avoids polluting disk + History with empty drafts).
+    if self.items.is_empty() && self.pending_agent.is_empty() {
+      return;
+    }
     // Update meta count + title before writing.
     self.current_conv.message_count = self
       .items
@@ -726,6 +704,7 @@ fn new_conversation_meta() -> ConversationMeta {
     started_at_secs: now,
     title: String::new(),
     message_count: 0,
+    session_id: None,
   }
 }
 
