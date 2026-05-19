@@ -1138,15 +1138,7 @@ impl Render for AgentChatPanel {
       format!("{used_k:.1}k / {size_k:.0}k").into()
     });
 
-    let mut messages = v_flex()
-      .id("agent-chat-messages")
-      .flex_1()
-      .min_h_0()
-      .gap_3()
-      .p_3()
-      .overflow_y_scroll()
-      .track_scroll(&self.scroll_handle)
-      .vertical_scrollbar(&self.scroll_handle);
+    let mut messages = v_flex().gap_3().p_3();
 
     if let Status::MissingBinary { command, hint } = &self.status {
       messages = messages.child(
@@ -1311,14 +1303,24 @@ impl Render for AgentChatPanel {
               .child(format!("{} is thinking...", self.backend.label)),
           ),
       );
-    } else if self.items.is_empty() && matches!(self.status, Status::Ready | Status::Connecting) {
-      messages = messages.child(
+    }
+
+    let show_empty_state = self.items.is_empty()
+      && self.pending_agent.is_empty()
+      && !self.in_flight
+      && matches!(self.status, Status::Ready | Status::Connecting);
+    let empty_state = if show_empty_state {
+      Some(
         v_flex()
-          .size_full()
+          .flex_1()
+          .min_h_0()
           .items_center()
           .justify_center()
           .gap_2()
-          .child(gpui_component::Icon::new(UiIconName::Sparkles).text_color(theme.muted_foreground))
+          .child(
+            gpui_component::Icon::new(UiIconName::Sparkles)
+              .text_color(theme.muted_foreground),
+          )
           .child(
             div()
               .text_sm()
@@ -1331,8 +1333,10 @@ impl Render for AgentChatPanel {
               .text_color(theme.muted_foreground)
               .child("Send a message below to begin."),
           ),
-      );
-    }
+      )
+    } else {
+      None
+    };
 
     v_flex()
       .size_full()
@@ -1340,6 +1344,7 @@ impl Render for AgentChatPanel {
       .child(
         h_flex()
           .h(px(36.))
+          .flex_shrink_0()
           .px_3()
           .items_center()
           .justify_between()
@@ -1484,9 +1489,25 @@ impl Render for AgentChatPanel {
               ),
           ),
       )
-      .child(messages)
+      .map(|this| {
+        if let Some(empty_state) = empty_state {
+          this.child(empty_state)
+        } else {
+          this.child(
+            v_flex()
+              .id("agent-chat-messages")
+              .flex_1()
+              .min_h_0()
+              .overflow_y_scroll()
+              .track_scroll(&self.scroll_handle)
+              .vertical_scrollbar(&self.scroll_handle)
+              .child(messages),
+          )
+        }
+      })
       .child(
         h_flex()
+          .flex_shrink_0()
           .p_2()
           .gap_2()
           .border_t_1()
