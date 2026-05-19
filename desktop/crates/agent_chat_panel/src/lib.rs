@@ -129,7 +129,6 @@ pub struct AgentChatPanel {
   pending_agent: String,
   session: Option<Arc<AgentSession>>,
   input: Entity<InputState>,
-  focus_handle: FocusHandle,
   in_flight: bool,
   scroll_handle: ScrollHandle,
   usage: Option<(u64, u64)>,
@@ -159,8 +158,6 @@ impl AgentChatPanel {
         .auto_grow(1, 8)
         .placeholder("Message...")
     });
-    let focus_handle = cx.focus_handle();
-
     let input_sub = cx.subscribe_in(
       &input,
       window,
@@ -186,7 +183,6 @@ impl AgentChatPanel {
       pending_agent: String::new(),
       session: None,
       input,
-      focus_handle,
       in_flight: false,
       scroll_handle: ScrollHandle::new(),
       usage: None,
@@ -1117,8 +1113,14 @@ fn render_permission(
 }
 
 impl Focusable for AgentChatPanel {
-  fn focus_handle(&self, _: &gpui::App) -> FocusHandle {
-    self.focus_handle.clone()
+  fn focus_handle(&self, cx: &gpui::App) -> FocusHandle {
+    self.input.read(cx).focus_handle(cx)
+  }
+}
+
+impl AgentChatPanel {
+  pub fn input_focus_handle(&self, cx: &gpui::App) -> FocusHandle {
+    self.input.read(cx).focus_handle(cx)
   }
 }
 
