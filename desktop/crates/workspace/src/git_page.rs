@@ -10745,7 +10745,7 @@ impl Render for GitPage {
       .on_action(cx.listener(GitPage::restore_file_shortcut_action))
       .on_action(cx.listener(GitPage::accept_both_conflict_action))
       .child(self.render_header(window, cx))
-      .child(content)
+      .child(div().flex_1().min_h_0().child(content))
   }
 }
 
