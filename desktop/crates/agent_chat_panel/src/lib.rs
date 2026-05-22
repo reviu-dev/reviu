@@ -362,11 +362,11 @@ impl AgentChatPanel {
   }
 
   fn upsert_tool_call(&mut self, call: ToolCall) {
-    upsert_tool_call_pure(&mut self.items, &mut self.tool_index, call);
+    upsert_tool_call_pure(&mut self.items, &mut self.tool_index, call, &self.cwd);
   }
 
   fn apply_tool_call_update(&mut self, update: ToolCallUpdate) {
-    apply_tool_call_update_pure(&mut self.items, &self.tool_index, update);
+    apply_tool_call_update_pure(&mut self.items, &self.tool_index, update, &self.cwd);
   }
 
   fn cancel(&mut self, cx: &mut Context<Self>) {
@@ -787,7 +787,7 @@ fn list_conversations_in(dir: &std::path::Path) -> Vec<ConversationMeta> {
   metas
 }
 
-fn extract_diffs(content: &[ToolCallContent]) -> Vec<DiffSummary> {
+fn extract_diffs(content: &[ToolCallContent], cwd: &std::path::Path) -> Vec<DiffSummary> {
   content
     .iter()
     .filter_map(|c| match c {
@@ -795,7 +795,7 @@ fn extract_diffs(content: &[ToolCallContent]) -> Vec<DiffSummary> {
         let (added, removed) = diff_line_counts(d.old_text.as_deref(), &d.new_text);
         let lines = build_diff_lines(d.old_text.as_deref().unwrap_or(""), &d.new_text);
         Some(DiffSummary {
-          path: d.path.display().to_string(),
+          path: relativize_path(&d.path, cwd),
           added,
           removed,
           lines,
@@ -852,8 +852,9 @@ fn upsert_tool_call_pure(
   items: &mut Vec<ChatItem>,
   index: &mut HashMap<ToolCallId, usize>,
   call: ToolCall,
+  cwd: &std::path::Path,
 ) {
-  let diffs = extract_diffs(&call.content);
+  let diffs = extract_diffs(&call.content, cwd);
   let view = ToolCallView {
     id: call.tool_call_id.clone(),
     title: call.title,
@@ -881,6 +882,7 @@ fn apply_tool_call_update_pure(
   items: &mut [ChatItem],
   index: &HashMap<ToolCallId, usize>,
   update: ToolCallUpdate,
+  cwd: &std::path::Path,
 ) {
   let Some(&idx) = index.get(&update.tool_call_id) else {
     return;
@@ -901,8 +903,20 @@ fn apply_tool_call_update_pure(
     view.locations = locs.into_iter().map(|l| (l.path, l.line)).collect();
   }
   if let Some(content) = update.fields.content {
-    view.diffs = extract_diffs(&content);
+    view.diffs = extract_diffs(&content, cwd);
   }
+}
+
+fn relativize_path(path: &std::path::Path, cwd: &std::path::Path) -> String {
+  if let Ok(stripped) = path.strip_prefix(cwd) {
+    return stripped.display().to_string();
+  }
+  if let (Ok(canon_path), Ok(canon_cwd)) = (path.canonicalize(), cwd.canonicalize())
+    && let Ok(stripped) = canon_path.strip_prefix(&canon_cwd)
+  {
+    return stripped.display().to_string();
+  }
+  path.display().to_string()
 }
 
 fn timeline_row(content: gpui::AnyElement, theme: &gpui_component::Theme) -> gpui::AnyElement {
