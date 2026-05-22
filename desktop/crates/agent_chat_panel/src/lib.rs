@@ -985,16 +985,6 @@ fn tool_kind_label(kind: &ToolKind) -> &'static str {
   }
 }
 
-fn tool_status_glyph(status: &ToolCallStatus) -> &'static str {
-  match status {
-    ToolCallStatus::Pending => "○",
-    ToolCallStatus::InProgress => "◐",
-    ToolCallStatus::Completed => "●",
-    ToolCallStatus::Failed => "✗",
-    _ => "·",
-  }
-}
-
 fn render_tool_call(t: &ToolCallView, theme: &gpui_component::Theme) -> gpui::AnyElement {
   let title_color = match t.status {
     ToolCallStatus::Failed => theme.danger,
