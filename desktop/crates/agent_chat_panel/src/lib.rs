@@ -1562,8 +1562,6 @@ impl Render for AgentChatPanel {
               .child(
                 div()
                   .id("agent-chat-messages")
-                  .flex_1()
-                  .flex_col()
                   .size_full()
                   .overflow_y_scroll()
                   .track_scroll(&self.scroll_handle)
