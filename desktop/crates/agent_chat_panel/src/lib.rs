@@ -905,6 +905,30 @@ fn apply_tool_call_update_pure(
   }
 }
 
+fn timeline_row(content: gpui::AnyElement, theme: &gpui_component::Theme) -> gpui::AnyElement {
+  h_flex()
+    .w_full()
+    .gap_3()
+    .items_start()
+    .child(
+      v_flex()
+        .w(px(8.))
+        .flex_shrink_0()
+        .items_center()
+        .child(
+          div()
+            .w(px(6.))
+            .h(px(6.))
+            .mt(px(8.))
+            .rounded_full()
+            .bg(theme.muted_foreground),
+        )
+        .child(div().w(px(1.)).flex_1().bg(theme.border)),
+    )
+    .child(div().flex_1().min_w_0().child(content))
+    .into_any_element()
+}
+
 fn tool_kind_label(kind: &ToolKind) -> &'static str {
   match kind {
     ToolKind::Read => "Read",
@@ -1250,32 +1274,43 @@ impl Render for AgentChatPanel {
 
     for item in &self.items {
       match item {
-        ChatItem::Message(m) => {
-          let (label, color) = match m.role {
-            ChatRole::User => ("You", theme.primary),
-            ChatRole::Agent => (self.backend.label, theme.foreground),
-            ChatRole::System => ("System", theme.muted_foreground),
-          };
-          let body: gpui::AnyElement = match m.role {
-            ChatRole::Agent => render_markdown(&m.text, &md_options, cx),
-            _ => div()
-              .text_sm()
-              .text_color(theme.foreground)
-              .child(m.text.clone())
-              .into_any_element(),
-          };
-          messages = messages.child(
-            v_flex()
-              .gap_1()
-              .child(div().text_xs().text_color(color).child(label.to_string()))
-              .child(body),
-          );
-        }
+        ChatItem::Message(m) => match m.role {
+          ChatRole::User => {
+            messages = messages.child(
+              div()
+                .px_3()
+                .py_2()
+                .rounded(theme.radius)
+                .bg(theme.muted)
+                .border_1()
+                .border_color(theme.border)
+                .text_sm()
+                .text_color(theme.foreground)
+                .child(m.text.clone()),
+            );
+          }
+          ChatRole::Agent => {
+            messages = messages.child(timeline_row(
+              render_markdown(&m.text, &md_options, cx),
+              theme,
+            ));
+          }
+          ChatRole::System => {
+            messages = messages.child(timeline_row(
+              div()
+                .text_xs()
+                .text_color(theme.muted_foreground)
+                .child(m.text.clone())
+                .into_any_element(),
+              theme,
+            ));
+          }
+        },
         ChatItem::Tool(t) => {
-          messages = messages.child(render_tool_call(t, theme));
+          messages = messages.child(timeline_row(render_tool_call(t, theme), theme));
         }
         ChatItem::Permission(p) => {
-          messages = messages.child(render_permission(p, theme, cx));
+          messages = messages.child(timeline_row(render_permission(p, theme, cx), theme));
         }
       }
     }
@@ -1337,7 +1372,9 @@ impl Render for AgentChatPanel {
       None
     };
 
-    v_flex()
+    div()
+      .flex()
+      .flex_col()
       .size_full()
       .bg(theme.background)
       .child(
@@ -1504,8 +1541,10 @@ impl Render for AgentChatPanel {
               .min_h_0()
               .relative()
               .child(
-                v_flex()
+                div()
                   .id("agent-chat-messages")
+                  .flex_1()
+                  .flex_col()
                   .size_full()
                   .overflow_y_scroll()
                   .track_scroll(&self.scroll_handle)
@@ -1516,7 +1555,9 @@ impl Render for AgentChatPanel {
         }
       })
       .child(
-        h_flex()
+        div()
+          .flex()
+          .items_center()
           .flex_shrink_0()
           .p_2()
           .gap_2()
