@@ -906,6 +906,14 @@ fn apply_tool_call_update_pure(
 }
 
 fn timeline_row(content: gpui::AnyElement, theme: &gpui_component::Theme) -> gpui::AnyElement {
+  timeline_row_with_color(content, theme, theme.muted_foreground)
+}
+
+fn timeline_row_with_color(
+  content: gpui::AnyElement,
+  theme: &gpui_component::Theme,
+  bullet_color: gpui::Hsla,
+) -> gpui::AnyElement {
   h_flex()
     .w_full()
     .gap_3()
@@ -921,12 +929,32 @@ fn timeline_row(content: gpui::AnyElement, theme: &gpui_component::Theme) -> gpu
             .h(px(6.))
             .mt(px(8.))
             .rounded_full()
-            .bg(theme.muted_foreground),
+            .bg(bullet_color),
         )
         .child(div().w(px(1.)).flex_1().bg(theme.border)),
     )
     .child(div().flex_1().min_w_0().child(content))
     .into_any_element()
+}
+
+fn tool_detail_label(t: &ToolCallView) -> String {
+  if let Some((path, line)) = t.locations.first() {
+    let name = path
+      .file_name()
+      .and_then(|s| s.to_str())
+      .unwrap_or_else(|| path.to_str().unwrap_or(""));
+    return match line {
+      Some(l) => format!("{name} (line {l})"),
+      None => name.to_string(),
+    };
+  }
+  let kind = tool_kind_label(&t.kind);
+  let stripped = t
+    .title
+    .strip_prefix(kind)
+    .map(|s| s.trim_start().to_string())
+    .unwrap_or_else(|| t.title.clone());
+  stripped
 }
 
 fn tool_kind_label(kind: &ToolKind) -> &'static str {
@@ -954,59 +982,36 @@ fn tool_status_glyph(status: &ToolCallStatus) -> &'static str {
 }
 
 fn render_tool_call(t: &ToolCallView, theme: &gpui_component::Theme) -> gpui::AnyElement {
-  let status_color = match t.status {
-    ToolCallStatus::Completed => theme.success,
+  let title_color = match t.status {
     ToolCallStatus::Failed => theme.danger,
     ToolCallStatus::InProgress => theme.warning,
-    _ => theme.muted_foreground,
+    _ => theme.foreground,
   };
-  let locations: String = t
-    .locations
-    .iter()
-    .map(|(p, line)| match line {
-      Some(l) => format!("{}:{l}", p.display()),
-      None => p.display().to_string(),
-    })
-    .collect::<Vec<_>>()
-    .join(", ");
+  let detail = tool_detail_label(t);
 
   v_flex()
     .gap_1()
-    .p_2()
-    .border_1()
-    .border_color(theme.border)
-    .rounded(px(4.))
     .child(
       h_flex()
         .gap_2()
         .items_center()
-        .child(
-          div()
-            .text_xs()
-            .text_color(status_color)
-            .child(tool_status_glyph(&t.status).to_string()),
-        )
-        .child(
-          div()
-            .text_xs()
-            .text_color(theme.muted_foreground)
-            .child(tool_kind_label(&t.kind).to_string()),
-        )
+        .flex_wrap()
         .child(
           div()
             .text_sm()
-            .text_color(theme.foreground)
-            .child(t.title.clone()),
-        ),
+            .font_weight(gpui::FontWeight::BOLD)
+            .text_color(title_color)
+            .child(tool_kind_label(&t.kind).to_string()),
+        )
+        .when(!detail.is_empty(), |this| {
+          this.child(
+            div()
+              .text_sm()
+              .text_color(theme.muted_foreground)
+              .child(detail.clone()),
+          )
+        }),
     )
-    .when(!locations.is_empty(), |this| {
-      this.child(
-        div()
-          .text_xs()
-          .text_color(theme.muted_foreground)
-          .child(locations),
-      )
-    })
     .when(!t.diffs.is_empty(), |this| {
       let mut diff_col = v_flex().gap_2();
       for d in &t.diffs {
@@ -1281,7 +1286,7 @@ impl Render for AgentChatPanel {
                 .px_3()
                 .py_2()
                 .rounded(theme.radius)
-                .bg(theme.muted)
+                .bg(theme.input_background())
                 .border_1()
                 .border_color(theme.border)
                 .text_sm()
@@ -1307,7 +1312,17 @@ impl Render for AgentChatPanel {
           }
         },
         ChatItem::Tool(t) => {
-          messages = messages.child(timeline_row(render_tool_call(t, theme), theme));
+          let bullet = match t.status {
+            ToolCallStatus::Completed => theme.status_green(),
+            ToolCallStatus::Failed => theme.danger,
+            ToolCallStatus::InProgress => theme.warning,
+            _ => theme.muted_foreground,
+          };
+          messages = messages.child(timeline_row_with_color(
+            render_tool_call(t, theme),
+            theme,
+            bullet,
+          ));
         }
         ChatItem::Permission(p) => {
           messages = messages.child(timeline_row(render_permission(p, theme, cx), theme));
