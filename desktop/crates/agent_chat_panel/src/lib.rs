@@ -1611,6 +1611,10 @@ mod tests {
     c
   }
 
+  fn test_cwd() -> &'static std::path::Path {
+    std::path::Path::new("/")
+  }
+
   #[test]
   fn upsert_inserts_new_tool_call() {
     let mut items: Vec<ChatItem> = Vec::new();
@@ -1619,6 +1623,7 @@ mod tests {
       &mut items,
       &mut index,
       call("a", "Read foo", ToolKind::Read),
+      test_cwd(),
     );
     assert_eq!(items.len(), 1);
     assert_eq!(index.len(), 1);
@@ -1632,8 +1637,18 @@ mod tests {
   fn upsert_replaces_existing_by_id() {
     let mut items: Vec<ChatItem> = Vec::new();
     let mut index = HashMap::new();
-    upsert_tool_call_pure(&mut items, &mut index, call("a", "Old", ToolKind::Read));
-    upsert_tool_call_pure(&mut items, &mut index, call("a", "New", ToolKind::Edit));
+    upsert_tool_call_pure(
+      &mut items,
+      &mut index,
+      call("a", "Old", ToolKind::Read),
+      test_cwd(),
+    );
+    upsert_tool_call_pure(
+      &mut items,
+      &mut index,
+      call("a", "New", ToolKind::Edit),
+      test_cwd(),
+    );
     assert_eq!(items.len(), 1);
     let ChatItem::Tool(view) = &items[0] else {
       panic!()
@@ -1646,8 +1661,18 @@ mod tests {
   fn upsert_appends_distinct_ids_in_order() {
     let mut items: Vec<ChatItem> = Vec::new();
     let mut index = HashMap::new();
-    upsert_tool_call_pure(&mut items, &mut index, call("a", "A", ToolKind::Read));
-    upsert_tool_call_pure(&mut items, &mut index, call("b", "B", ToolKind::Edit));
+    upsert_tool_call_pure(
+      &mut items,
+      &mut index,
+      call("a", "A", ToolKind::Read),
+      test_cwd(),
+    );
+    upsert_tool_call_pure(
+      &mut items,
+      &mut index,
+      call("b", "B", ToolKind::Edit),
+      test_cwd(),
+    );
     assert_eq!(items.len(), 2);
     assert_eq!(index.get(&ToolCallId::from("a")), Some(&0));
     assert_eq!(index.get(&ToolCallId::from("b")), Some(&1));
@@ -1657,12 +1682,17 @@ mod tests {
   fn apply_update_merges_partial_fields() {
     let mut items: Vec<ChatItem> = Vec::new();
     let mut index = HashMap::new();
-    upsert_tool_call_pure(&mut items, &mut index, call("a", "Initial", ToolKind::Read));
+    upsert_tool_call_pure(
+      &mut items,
+      &mut index,
+      call("a", "Initial", ToolKind::Read),
+      test_cwd(),
+    );
 
     let mut fields = ToolCallUpdateFields::default();
     fields.status = Some(ToolCallStatus::InProgress);
     let update = ToolCallUpdate::new(ToolCallId::from("a"), fields);
-    apply_tool_call_update_pure(&mut items, &index, update);
+    apply_tool_call_update_pure(&mut items, &index, update, test_cwd());
 
     let ChatItem::Tool(view) = &items[0] else {
       panic!()
@@ -1678,7 +1708,7 @@ mod tests {
     let mut fields = ToolCallUpdateFields::default();
     fields.status = Some(ToolCallStatus::Completed);
     let update = ToolCallUpdate::new(ToolCallId::from("ghost"), fields);
-    apply_tool_call_update_pure(&mut items, &index, update);
+    apply_tool_call_update_pure(&mut items, &index, update, test_cwd());
     assert!(items.is_empty());
   }
 
@@ -1686,12 +1716,17 @@ mod tests {
   fn apply_update_replaces_locations() {
     let mut items: Vec<ChatItem> = Vec::new();
     let mut index = HashMap::new();
-    upsert_tool_call_pure(&mut items, &mut index, call("a", "Edit", ToolKind::Edit));
+    upsert_tool_call_pure(
+      &mut items,
+      &mut index,
+      call("a", "Edit", ToolKind::Edit),
+      test_cwd(),
+    );
 
     let mut fields = ToolCallUpdateFields::default();
     fields.locations = Some(vec![ToolCallLocation::new("foo.rs").line(42_u32)]);
     let update = ToolCallUpdate::new(ToolCallId::from("a"), fields);
-    apply_tool_call_update_pure(&mut items, &index, update);
+    apply_tool_call_update_pure(&mut items, &index, update, test_cwd());
 
     let ChatItem::Tool(view) = &items[0] else {
       panic!()
@@ -1728,7 +1763,7 @@ mod tests {
       ToolCallContent::Diff(Diff::new("foo.rs", "new\n")),
       ToolCallContent::Diff(Diff::new("bar.rs", "after\n").old_text(Some("before\n".to_string()))),
     ];
-    let diffs = extract_diffs(&content);
+    let diffs = extract_diffs(&content, test_cwd());
     assert_eq!(diffs.len(), 2);
     assert_eq!(diffs[0].path, "foo.rs");
     assert_eq!(diffs[0].added, 1);
