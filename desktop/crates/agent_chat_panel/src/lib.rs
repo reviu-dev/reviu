@@ -1213,6 +1213,23 @@ fn relativize_path(path: &std::path::Path, cwd: &std::path::Path) -> String {
   path.display().to_string()
 }
 
+fn short_model_label(name: &str, description: Option<&str>) -> String {
+  let Some(desc) = description else {
+    return name.to_string();
+  };
+  let before_separator = desc.split(" · ").next().unwrap_or(desc);
+  let before_qualifier = before_separator
+    .split_once(" with ")
+    .map(|(head, _)| head)
+    .unwrap_or(before_separator);
+  let trimmed = before_qualifier.trim();
+  if trimmed.is_empty() {
+    name.to_string()
+  } else {
+    trimmed.to_string()
+  }
+}
+
 fn render_selector_item(
   name: SharedString,
   description: Option<SharedString>,
@@ -2027,7 +2044,7 @@ impl AgentChatPanel {
     let current_label: SharedString = current_id
       .as_ref()
       .and_then(|id| models.iter().find(|m| m.model_id == *id))
-      .map(|m| m.name.clone().into())
+      .map(|m| short_model_label(&m.name, m.description.as_deref()).into())
       .unwrap_or_else(|| "Model".into());
     let entity = cx.entity().downgrade();
     Button::new("agent-chat-model")
@@ -2524,6 +2541,31 @@ mod tests {
     assert_eq!(metas[1].id, "recent_started_stale");
     assert_eq!(metas[2].id, "old");
     std::fs::remove_dir_all(&dir).ok();
+  }
+
+  #[test]
+  fn short_model_label_extracts_identifier_from_description() {
+    assert_eq!(
+      short_model_label(
+        "Default (recommended)",
+        Some("Opus 4.7 with 1M context · Most capable for complex work"),
+      ),
+      "Opus 4.7"
+    );
+    assert_eq!(
+      short_model_label("Sonnet", Some("Sonnet 4.6 · Best for everyday tasks")),
+      "Sonnet 4.6"
+    );
+    assert_eq!(
+      short_model_label("Haiku", Some("Haiku 4.5 · Fastest for quick answers")),
+      "Haiku 4.5"
+    );
+  }
+
+  #[test]
+  fn short_model_label_falls_back_to_name_when_no_description() {
+    assert_eq!(short_model_label("Sonnet", None), "Sonnet");
+    assert_eq!(short_model_label("Sonnet", Some("")), "Sonnet");
   }
 
   #[test]
