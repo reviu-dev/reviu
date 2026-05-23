@@ -16,14 +16,14 @@ use std::collections::HashSet;
 
 use crate::config::ConfigStore;
 use crate::{
-  AcceptBothConflict, CloseWorkspacePage, CommentHunk, CommitChanges,
-  FocusFileTree, ForcePushChanges, MarkNotificationDone, NavigateBack, NextAnnotation, NextPageTab,
-  NextPrCommit, NextReviewComment, OpenGitChangesSidebar, OpenGitHistorySidebar, OpenGitPage,
-  OpenGithubPage, OpenRepository, OpenSettingsPage, PreviousAnnotation, PreviousPageTab,
-  PreviousPrCommit, PreviousReviewComment, PullChanges, PushChanges, RefreshCurrentPage,
-  RestoreFile, RestoreHunk, ShowBranchSwitcher, ShowCommandPalette, ShowFileSearch,
-  SwitchToPrBranch, ToggleCommitByCommit, ToggleDiffView, ToggleFileStage, ToggleHideWhitespace,
-  ToggleAgentSidebar, ToggleHunkStage, ToggleTerminalSidebar,
+  AcceptBothConflict, CloseWorkspacePage, CommentHunk, CommitChanges, FocusFileTree,
+  ForcePushChanges, MarkNotificationDone, NavigateBack, NextAnnotation, NextPageTab, NextPrCommit,
+  NextReviewComment, OpenGitChangesSidebar, OpenGitHistorySidebar, OpenGitPage, OpenGithubPage,
+  OpenRepository, OpenSettingsPage, PreviousAnnotation, PreviousPageTab, PreviousPrCommit,
+  PreviousReviewComment, PullChanges, PushChanges, RefreshCurrentPage, RestoreFile, RestoreHunk,
+  SendReviewCommentsToAgent, ShowBranchSwitcher, ShowCommandPalette, ShowFileSearch,
+  SwitchToPrBranch, ToggleAgentSidebar, ToggleCommitByCommit, ToggleDiffView, ToggleFileStage,
+  ToggleHideWhitespace, ToggleHunkStage, ToggleTerminalSidebar,
 };
 
 pub const SHOW_COMMAND_PALETTE_SHORTCUT: &str = "cmd-k";
@@ -186,6 +186,7 @@ pub enum ShortcutId {
   PreviousPrCommit,
   NextPrCommit,
   CommentHunk,
+  SendReviewCommentsToAgent,
   ToggleHunkStage,
   RestoreHunk,
   ToggleFileStage,
@@ -229,6 +230,7 @@ impl ShortcutId {
       ShortcutId::PreviousPrCommit => "previous_pr_commit",
       ShortcutId::NextPrCommit => "next_pr_commit",
       ShortcutId::CommentHunk => "comment_hunk",
+      ShortcutId::SendReviewCommentsToAgent => "send_review_comments_to_agent",
       ShortcutId::ToggleHunkStage => "toggle_hunk_stage",
       ShortcutId::RestoreHunk => "restore_hunk",
       ShortcutId::ToggleFileStage => "toggle_file_stage",
@@ -272,6 +274,7 @@ impl ShortcutId {
       "previous_pr_commit" => Some(ShortcutId::PreviousPrCommit),
       "next_pr_commit" => Some(ShortcutId::NextPrCommit),
       "comment_hunk" => Some(ShortcutId::CommentHunk),
+      "send_review_comments_to_agent" => Some(ShortcutId::SendReviewCommentsToAgent),
       "toggle_hunk_stage" => Some(ShortcutId::ToggleHunkStage),
       "restore_hunk" => Some(ShortcutId::RestoreHunk),
       "toggle_file_stage" => Some(ShortcutId::ToggleFileStage),
@@ -306,7 +309,7 @@ pub struct ShortcutDefinition {
   pub active_contexts: &'static [&'static str],
 }
 
-const SHORTCUT_DEFINITIONS: [ShortcutDefinition; 38] = [
+const SHORTCUT_DEFINITIONS: [ShortcutDefinition; 39] = [
   ShortcutDefinition {
     id: ShortcutId::ShowCommandPalette,
     title: "Command Palette",
@@ -460,6 +463,17 @@ const SHORTCUT_DEFINITIONS: [ShortcutDefinition; 38] = [
     context: COMMENT_HUNK_CONTEXT,
     display_context: WORKSPACE_GIT_CONTEXT,
     active_contexts: &COMMENT_HUNK_ACTIVE_CONTEXTS,
+  },
+  ShortcutDefinition {
+    id: ShortcutId::SendReviewCommentsToAgent,
+    title: "Send Review Comments To Agent",
+    description: "Send all local review comments to the in-app agent.",
+    scope_label: "Git page",
+    category: ShortcutCategory::LocalGit,
+    keystroke: "cmd-shift-a",
+    context: "WorkspaceGit",
+    display_context: WORKSPACE_GIT_CONTEXT,
+    active_contexts: &GIT_ONLY_ACTIVE_CONTEXTS,
   },
   ShortcutDefinition {
     id: ShortcutId::ToggleHunkStage,
@@ -1058,6 +1072,9 @@ impl ShortcutDefinition {
       ShortcutId::PreviousPrCommit => KeyBinding::new(keystroke, PreviousPrCommit, Some(&context)),
       ShortcutId::NextPrCommit => KeyBinding::new(keystroke, NextPrCommit, Some(&context)),
       ShortcutId::CommentHunk => KeyBinding::new(keystroke, CommentHunk, Some(&context)),
+      ShortcutId::SendReviewCommentsToAgent => {
+        KeyBinding::new(keystroke, SendReviewCommentsToAgent, Some(&context))
+      }
       ShortcutId::ToggleHunkStage => KeyBinding::new(keystroke, ToggleHunkStage, Some(&context)),
       ShortcutId::RestoreHunk => KeyBinding::new(keystroke, RestoreHunk, Some(&context)),
       ShortcutId::ToggleFileStage => KeyBinding::new(keystroke, ToggleFileStage, Some(&context)),
@@ -1438,6 +1455,7 @@ fn with_shortcut_action<T>(id: ShortcutId, f: impl FnOnce(&dyn Action) -> T) -> 
     ShortcutId::PreviousPrCommit => f(&PreviousPrCommit),
     ShortcutId::NextPrCommit => f(&NextPrCommit),
     ShortcutId::CommentHunk => f(&CommentHunk),
+    ShortcutId::SendReviewCommentsToAgent => f(&SendReviewCommentsToAgent),
     ShortcutId::ToggleHunkStage => f(&ToggleHunkStage),
     ShortcutId::RestoreHunk => f(&RestoreHunk),
     ShortcutId::ToggleFileStage => f(&ToggleFileStage),
