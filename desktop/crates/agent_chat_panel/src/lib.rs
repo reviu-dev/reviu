@@ -1004,35 +1004,52 @@ fn relativize_path(path: &std::path::Path, cwd: &std::path::Path) -> String {
   path.display().to_string()
 }
 
-fn timeline_row(content: gpui::AnyElement, theme: &gpui_component::Theme) -> gpui::AnyElement {
-  timeline_row_with_color(content, theme, theme.muted_foreground)
+fn timeline_row(
+  content: gpui::AnyElement,
+  theme: &gpui_component::Theme,
+  is_last: bool,
+) -> gpui::AnyElement {
+  timeline_row_with_color(content, theme, theme.muted_foreground, is_last)
 }
 
 fn timeline_row_with_color(
   content: gpui::AnyElement,
   theme: &gpui_component::Theme,
   bullet_color: gpui::Hsla,
+  is_last: bool,
 ) -> gpui::AnyElement {
   h_flex()
     .w_full()
     .gap_3()
-    .items_start()
+    .items_stretch()
     .child(
-      v_flex()
+      div()
+        .relative()
         .w(px(8.))
         .flex_shrink_0()
-        .items_center()
+        .when(!is_last, |this| {
+          this.child(
+            div()
+              .absolute()
+              .top(px(14.))
+              .bottom(px(-8.))
+              .left(px(3.5))
+              .w(px(1.))
+              .bg(theme.border),
+          )
+        })
         .child(
           div()
+            .absolute()
+            .top(px(8.))
+            .left(px(1.))
             .w(px(6.))
             .h(px(6.))
-            .mt(px(8.))
             .rounded_full()
             .bg(bullet_color),
-        )
-        .child(div().w(px(1.)).flex_1().bg(theme.border)),
+        ),
     )
-    .child(div().flex_1().min_w_0().child(content))
+    .child(div().flex_1().min_w_0().pb_3().child(content))
     .into_any_element()
 }
 
@@ -1259,7 +1276,7 @@ impl Render for AgentChatPanel {
       format!("{used_k:.1}k / {size_k:.0}k").into()
     });
 
-    let mut messages = v_flex().gap_3().p_3();
+    let mut messages = v_flex().p_3();
 
     if let Status::MissingBinary { command, hint } = &self.status {
       messages = messages.child(
@@ -1367,7 +1384,29 @@ impl Render for AgentChatPanel {
       messages = messages.child(card);
     }
 
-    for item in &self.items {
+    let has_trailer = !self.pending_agent.is_empty() || self.in_flight;
+    let total_items = self.items.len();
+    let is_user_message = |item: &ChatItem| {
+      matches!(
+        item,
+        ChatItem::Message(ChatMessage {
+          role: ChatRole::User,
+          ..
+        })
+      )
+    };
+    for (idx, item) in self.items.iter().enumerate() {
+      let next_is_user = self
+        .items
+        .get(idx + 1)
+        .map(is_user_message)
+        .unwrap_or(false);
+      let is_end_of_group = if idx + 1 == total_items {
+        !has_trailer
+      } else {
+        next_is_user
+      };
+      let is_last_row = is_end_of_group;
       match item {
         ChatItem::Message(m) => match m.role {
           ChatRole::User => {
@@ -1388,6 +1427,7 @@ impl Render for AgentChatPanel {
             messages = messages.child(timeline_row(
               render_markdown(&m.text, &md_options, cx),
               theme,
+              is_last_row,
             ));
           }
           ChatRole::System => {
@@ -1398,6 +1438,7 @@ impl Render for AgentChatPanel {
                 .child(m.text.clone())
                 .into_any_element(),
               theme,
+              is_last_row,
             ));
           }
         },
@@ -1412,10 +1453,15 @@ impl Render for AgentChatPanel {
             render_tool_call(t, theme),
             theme,
             bullet,
+            is_last_row,
           ));
         }
         ChatItem::Permission(p) => {
-          messages = messages.child(timeline_row(render_permission(p, theme, cx), theme));
+          messages = messages.child(timeline_row(
+            render_permission(p, theme, cx),
+            theme,
+            is_last_row,
+          ));
         }
       }
     }
