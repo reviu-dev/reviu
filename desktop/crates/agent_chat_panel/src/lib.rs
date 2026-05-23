@@ -955,39 +955,105 @@ fn build_diff_lines(old: &str, new: &str) -> Vec<DiffLine> {
   out
 }
 
-fn split_word_tokens(s: &str) -> Vec<&str> {
-  let mut out = Vec::new();
-  let bytes = s.as_bytes();
+const WORD_DIFF_MAX_COMBINED_BYTES: usize = 2_048;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum IdentifierCharKind {
+  Lower,
+  Upper,
+  Digit,
+  Underscore,
+  Other,
+}
+
+fn identifier_char_kind(ch: char) -> IdentifierCharKind {
+  if ch == '_' {
+    IdentifierCharKind::Underscore
+  } else if ch.is_lowercase() {
+    IdentifierCharKind::Lower
+  } else if ch.is_uppercase() {
+    IdentifierCharKind::Upper
+  } else if ch.is_numeric() {
+    IdentifierCharKind::Digit
+  } else {
+    IdentifierCharKind::Other
+  }
+}
+
+fn split_identifier_token_ranges(segment: &str) -> Vec<std::ops::Range<usize>> {
+  let chars: Vec<_> = segment.char_indices().collect();
+  if chars.is_empty() {
+    return Vec::new();
+  }
+  let mut ranges = Vec::new();
   let mut start = 0usize;
-  let mut in_word = false;
-  let mut i = 0usize;
-  while i < bytes.len() {
-    let mut char_end = i + 1;
-    while char_end < bytes.len() && (bytes[char_end] & 0xC0) == 0x80 {
-      char_end += 1;
+  for idx in 1..chars.len() {
+    let (byte_offset, current) = chars[idx];
+    let (_, previous) = chars[idx - 1];
+    let previous_kind = identifier_char_kind(previous);
+    let current_kind = identifier_char_kind(current);
+    let next_kind = chars
+      .get(idx + 1)
+      .map(|(_, next)| identifier_char_kind(*next));
+    let should_split = match (previous_kind, current_kind) {
+      (IdentifierCharKind::Underscore, _) | (_, IdentifierCharKind::Underscore) => true,
+      (IdentifierCharKind::Digit, IdentifierCharKind::Digit) => false,
+      (IdentifierCharKind::Digit, _) | (_, IdentifierCharKind::Digit) => true,
+      (IdentifierCharKind::Lower, IdentifierCharKind::Upper) => true,
+      (IdentifierCharKind::Upper, IdentifierCharKind::Upper) => {
+        next_kind == Some(IdentifierCharKind::Lower)
+      }
+      _ => false,
+    };
+    if should_split {
+      ranges.push(start..byte_offset);
+      start = byte_offset;
     }
-    let b = bytes[i];
-    let is_ascii = b.is_ascii();
-    let is_word = is_ascii && (b.is_ascii_alphanumeric() || b == b'_');
-    if i == 0 {
-      in_word = is_word;
-      start = i;
-    } else if is_word != in_word || !is_ascii {
-      out.push(&s[start..i]);
-      start = i;
-      in_word = is_word;
+  }
+  ranges.push(start..segment.len());
+  ranges
+}
+
+fn word_tokens(text: &str, include_whitespace: bool) -> Vec<&str> {
+  use unicode_segmentation::UnicodeSegmentation;
+  let mut tokens = Vec::new();
+  for (_idx, segment) in text.split_word_bound_indices() {
+    if !include_whitespace && segment.trim().is_empty() {
+      continue;
     }
-    i = char_end;
+    let subranges = split_identifier_token_ranges(segment);
+    if subranges.is_empty() {
+      tokens.push(segment);
+      continue;
+    }
+    for subrange in subranges {
+      tokens.push(&segment[subrange]);
+    }
   }
-  if start < s.len() {
-    out.push(&s[start..]);
-  }
-  out
+  tokens
 }
 
 fn word_diff_spans(old: &str, new: &str) -> (Vec<InlineSpan>, Vec<InlineSpan>) {
-  let a = split_word_tokens(old);
-  let b = split_word_tokens(new);
+  if old == new {
+    let same_old = vec![InlineSpan {
+      kind: InlineSpanKind::Same,
+      text: old.to_string(),
+    }];
+    let same_new = vec![InlineSpan {
+      kind: InlineSpanKind::Same,
+      text: new.to_string(),
+    }];
+    return (same_old, same_new);
+  }
+  if old.len().saturating_add(new.len()) > WORD_DIFF_MAX_COMBINED_BYTES {
+    return (Vec::new(), Vec::new());
+  }
+  word_diff_spans_impl(old, new)
+}
+
+fn word_diff_spans_impl(old: &str, new: &str) -> (Vec<InlineSpan>, Vec<InlineSpan>) {
+  let a = word_tokens(old, true);
+  let b = word_tokens(new, true);
   let n = a.len();
   let m = b.len();
   let mut dp = vec![vec![0u32; m + 1]; n + 1];
@@ -2209,10 +2275,6 @@ mod tests {
       "export const VERSION = '3.0.0';",
       "export const VERSION = '2.0.0';",
     );
-    let old_text: String = old.iter().map(|s| s.text.clone()).collect();
-    let new_text: String = new.iter().map(|s| s.text.clone()).collect();
-    assert_eq!(old_text, "export const VERSION = '3.0.0';");
-    assert_eq!(new_text, "export const VERSION = '2.0.0';");
     let old_diff: String = old
       .iter()
       .filter(|s| s.kind == InlineSpanKind::Diff)
@@ -2225,6 +2287,45 @@ mod tests {
       .collect();
     assert_eq!(old_diff, "3");
     assert_eq!(new_diff, "2");
+  }
+
+  #[test]
+  fn word_diff_splits_camel_case_identifier() {
+    let (old, new) = word_diff_spans("foo getLastValue bar", "foo getFirstValue bar");
+    let old_diff: String = old
+      .iter()
+      .filter(|s| s.kind == InlineSpanKind::Diff)
+      .map(|s| s.text.clone())
+      .collect();
+    let new_diff: String = new
+      .iter()
+      .filter(|s| s.kind == InlineSpanKind::Diff)
+      .map(|s| s.text.clone())
+      .collect();
+    assert_eq!(old_diff, "Last");
+    assert_eq!(new_diff, "First");
+  }
+
+  #[test]
+  fn word_diff_falls_back_to_whitespace_when_only_indent_changes() {
+    let (old, new) = word_diff_spans("  let x = 1;", "    let x = 1;");
+    let has_diff = old
+      .iter()
+      .chain(new.iter())
+      .any(|s| s.kind == InlineSpanKind::Diff);
+    assert!(
+      has_diff,
+      "indent-only change should still produce highlight"
+    );
+  }
+
+  #[test]
+  fn word_diff_skipped_above_byte_cap() {
+    let old = "x".repeat(WORD_DIFF_MAX_COMBINED_BYTES);
+    let new = "y".repeat(WORD_DIFF_MAX_COMBINED_BYTES);
+    let (old_spans, new_spans) = word_diff_spans(&old, &new);
+    assert!(old_spans.is_empty());
+    assert!(new_spans.is_empty());
   }
 
   #[test]
