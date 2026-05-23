@@ -2027,7 +2027,7 @@ impl AgentChatPanel {
       .ghost()
       .disabled(models.is_empty())
       .dropdown_menu_with_anchor(Corner::BottomLeft, move |menu, _, _| {
-        let mut menu = menu;
+        let mut menu = menu.label("Select a model");
         for m in models.iter() {
           let model_id = m.model_id.clone();
           let entity = entity.clone();
@@ -2065,7 +2065,7 @@ impl AgentChatPanel {
       .ghost()
       .disabled(modes.is_empty())
       .dropdown_menu_with_anchor(Corner::BottomLeft, move |menu, _, _| {
-        let mut menu = menu;
+        let mut menu = menu.label("Select a mode");
         for m in modes.iter() {
           let mode_id = m.id.clone();
           let entity = entity.clone();
@@ -2122,6 +2122,7 @@ impl AgentChatPanel {
         .map(|(_, n, _)| n.clone().into())
         .unwrap_or_else(|| opt.name.clone().into());
       let button_id = SharedString::from(format!("agent-chat-cfg-{}", opt.id.0));
+      let opt_label: SharedString = format!("Select {}", opt.name.to_lowercase()).into();
       let entity = cx.entity().downgrade();
       let is_empty = flat_options.is_empty();
       let button = Button::new(button_id)
@@ -2131,7 +2132,7 @@ impl AgentChatPanel {
         .ghost()
         .disabled(is_empty)
         .dropdown_menu_with_anchor(Corner::BottomLeft, move |menu, _, _| {
-          let mut menu = menu;
+          let mut menu = menu.label(opt_label.clone());
           for (value_id, name, description) in flat_options.iter() {
             let value_id = value_id.clone();
             let name: SharedString = name.clone().into();
