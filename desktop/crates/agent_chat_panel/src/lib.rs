@@ -73,12 +73,26 @@ struct DiffSummary {
 struct DiffLine {
   kind: DiffLineKind,
   text: String,
+  #[serde(default)]
+  spans: Vec<InlineSpan>,
 }
 
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
 enum DiffLineKind {
   Added,
   Removed,
+}
+
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
+enum InlineSpanKind {
+  Same,
+  Diff,
+}
+
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+struct InlineSpan {
+  kind: InlineSpanKind,
+  text: String,
 }
 
 #[derive(Clone, Debug)]
@@ -899,22 +913,141 @@ fn build_diff_lines(old: &str, new: &str) -> Vec<DiffLine> {
   let new_lines: Vec<&str> = new.lines().collect();
   let mut out = Vec::new();
   for hunk in diff.hunks() {
-    for i in hunk.before.clone() {
-      if let Some(line) = old_lines.get(i as usize) {
-        out.push(DiffLine {
-          kind: DiffLineKind::Removed,
-          text: (*line).to_string(),
-        });
-      }
+    let removed: Vec<&str> = hunk
+      .before
+      .clone()
+      .filter_map(|i| old_lines.get(i as usize).copied())
+      .collect();
+    let added: Vec<&str> = hunk
+      .after
+      .clone()
+      .filter_map(|i| new_lines.get(i as usize).copied())
+      .collect();
+    let paired = removed.len().min(added.len());
+    for k in 0..paired {
+      let (old_spans, new_spans) = word_diff_spans(removed[k], added[k]);
+      out.push(DiffLine {
+        kind: DiffLineKind::Removed,
+        text: removed[k].to_string(),
+        spans: old_spans,
+      });
+      out.push(DiffLine {
+        kind: DiffLineKind::Added,
+        text: added[k].to_string(),
+        spans: new_spans,
+      });
     }
-    for i in hunk.after.clone() {
-      if let Some(line) = new_lines.get(i as usize) {
-        out.push(DiffLine {
-          kind: DiffLineKind::Added,
-          text: (*line).to_string(),
-        });
-      }
+    for line in removed.iter().skip(paired) {
+      out.push(DiffLine {
+        kind: DiffLineKind::Removed,
+        text: (*line).to_string(),
+        spans: Vec::new(),
+      });
     }
+    for line in added.iter().skip(paired) {
+      out.push(DiffLine {
+        kind: DiffLineKind::Added,
+        text: (*line).to_string(),
+        spans: Vec::new(),
+      });
+    }
+  }
+  out
+}
+
+fn split_word_tokens(s: &str) -> Vec<&str> {
+  let mut out = Vec::new();
+  let bytes = s.as_bytes();
+  let mut start = 0usize;
+  let mut in_word = false;
+  let mut i = 0usize;
+  while i < bytes.len() {
+    let mut char_end = i + 1;
+    while char_end < bytes.len() && (bytes[char_end] & 0xC0) == 0x80 {
+      char_end += 1;
+    }
+    let b = bytes[i];
+    let is_ascii = b.is_ascii();
+    let is_word = is_ascii && (b.is_ascii_alphanumeric() || b == b'_');
+    if i == 0 {
+      in_word = is_word;
+      start = i;
+    } else if is_word != in_word || !is_ascii {
+      out.push(&s[start..i]);
+      start = i;
+      in_word = is_word;
+    }
+    i = char_end;
+  }
+  if start < s.len() {
+    out.push(&s[start..]);
+  }
+  out
+}
+
+fn word_diff_spans(old: &str, new: &str) -> (Vec<InlineSpan>, Vec<InlineSpan>) {
+  let a = split_word_tokens(old);
+  let b = split_word_tokens(new);
+  let n = a.len();
+  let m = b.len();
+  let mut dp = vec![vec![0u32; m + 1]; n + 1];
+  for i in 0..n {
+    for j in 0..m {
+      dp[i + 1][j + 1] = if a[i] == b[j] {
+        dp[i][j] + 1
+      } else {
+        dp[i + 1][j].max(dp[i][j + 1])
+      };
+    }
+  }
+  let mut old_spans: Vec<InlineSpan> = Vec::new();
+  let mut new_spans: Vec<InlineSpan> = Vec::new();
+  let mut i = n;
+  let mut j = m;
+  while i > 0 || j > 0 {
+    if i > 0 && j > 0 && a[i - 1] == b[j - 1] {
+      old_spans.push(InlineSpan {
+        kind: InlineSpanKind::Same,
+        text: a[i - 1].to_string(),
+      });
+      new_spans.push(InlineSpan {
+        kind: InlineSpanKind::Same,
+        text: b[j - 1].to_string(),
+      });
+      i -= 1;
+      j -= 1;
+    } else if j > 0 && (i == 0 || dp[i][j - 1] >= dp[i - 1][j]) {
+      new_spans.push(InlineSpan {
+        kind: InlineSpanKind::Diff,
+        text: b[j - 1].to_string(),
+      });
+      j -= 1;
+    } else {
+      old_spans.push(InlineSpan {
+        kind: InlineSpanKind::Diff,
+        text: a[i - 1].to_string(),
+      });
+      i -= 1;
+    }
+  }
+  old_spans.reverse();
+  new_spans.reverse();
+  (
+    merge_adjacent_spans(old_spans),
+    merge_adjacent_spans(new_spans),
+  )
+}
+
+fn merge_adjacent_spans(spans: Vec<InlineSpan>) -> Vec<InlineSpan> {
+  let mut out: Vec<InlineSpan> = Vec::new();
+  for s in spans {
+    if let Some(last) = out.last_mut()
+      && last.kind == s.kind
+    {
+      last.text.push_str(&s.text);
+      continue;
+    }
+    out.push(s);
   }
   out
 }
@@ -1151,9 +1284,30 @@ fn render_tool_call(t: &ToolCallView, theme: &gpui_component::Theme) -> gpui::An
             .border_color(theme.border)
             .rounded(px(3.));
           for line in &d.lines {
-            let (prefix, bg, fg) = match line.kind {
-              DiffLineKind::Added => ("+", theme.status_green().opacity(0.15), theme.foreground),
-              DiffLineKind::Removed => ("-", theme.status_red().opacity(0.15), theme.foreground),
+            let (bg, fg, hl_bg) = match line.kind {
+              DiffLineKind::Added => (
+                theme.status_green().opacity(0.15),
+                theme.foreground,
+                theme.status_green().opacity(0.4),
+              ),
+              DiffLineKind::Removed => (
+                theme.status_red().opacity(0.15),
+                theme.foreground,
+                theme.status_red().opacity(0.4),
+              ),
+            };
+            let text_col: gpui::AnyElement = if line.spans.is_empty() {
+              div().flex_1().child(line.text.clone()).into_any_element()
+            } else {
+              let mut row = h_flex().flex_1().flex_wrap();
+              for span in &line.spans {
+                let mut chunk = div().child(span.text.clone());
+                if span.kind == InlineSpanKind::Diff {
+                  chunk = chunk.bg(hl_bg);
+                }
+                row = row.child(chunk);
+              }
+              row.into_any_element()
             };
             body = body.child(
               h_flex()
@@ -1161,8 +1315,7 @@ fn render_tool_call(t: &ToolCallView, theme: &gpui_component::Theme) -> gpui::An
                 .px_2()
                 .bg(bg)
                 .text_color(fg)
-                .child(div().w(px(12.)).flex_shrink_0().child(prefix))
-                .child(div().flex_1().child(line.text.clone())),
+                .child(text_col),
             );
           }
           block = block.child(body);
@@ -2045,6 +2198,58 @@ mod tests {
     };
     assert_eq!(view.title, "Initial");
     assert!(matches!(view.status, ToolCallStatus::InProgress));
+  }
+
+  #[test]
+  fn word_diff_highlights_only_changed_words() {
+    let (old, new) = word_diff_spans(
+      "export const VERSION = '3.0.0';",
+      "export const VERSION = '2.0.0';",
+    );
+    let old_text: String = old.iter().map(|s| s.text.clone()).collect();
+    let new_text: String = new.iter().map(|s| s.text.clone()).collect();
+    assert_eq!(old_text, "export const VERSION = '3.0.0';");
+    assert_eq!(new_text, "export const VERSION = '2.0.0';");
+    let old_diff: String = old
+      .iter()
+      .filter(|s| s.kind == InlineSpanKind::Diff)
+      .map(|s| s.text.clone())
+      .collect();
+    let new_diff: String = new
+      .iter()
+      .filter(|s| s.kind == InlineSpanKind::Diff)
+      .map(|s| s.text.clone())
+      .collect();
+    assert_eq!(old_diff, "3");
+    assert_eq!(new_diff, "2");
+  }
+
+  #[test]
+  fn word_diff_empty_for_identical() {
+    let (old, new) = word_diff_spans("same line", "same line");
+    assert!(old.iter().all(|s| s.kind == InlineSpanKind::Same));
+    assert!(new.iter().all(|s| s.kind == InlineSpanKind::Same));
+  }
+
+  #[test]
+  fn build_diff_lines_pairs_and_carries_spans() {
+    let lines = build_diff_lines(
+      "export const VERSION = '3.0.0';\n",
+      "export const VERSION = '2.0.0';\n",
+    );
+    let removed = lines
+      .iter()
+      .filter(|l| l.kind == DiffLineKind::Removed)
+      .count();
+    let added = lines
+      .iter()
+      .filter(|l| l.kind == DiffLineKind::Added)
+      .count();
+    assert_eq!(removed, 1);
+    assert_eq!(added, 1);
+    for l in &lines {
+      assert!(!l.spans.is_empty(), "paired lines should have spans");
+    }
   }
 
   #[test]
