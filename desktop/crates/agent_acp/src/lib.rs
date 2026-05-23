@@ -1,9 +1,12 @@
 use agent_client_protocol::schema::{
   AuthMethod, CancelNotification, ClientCapabilities, ContentBlock, FileSystemCapabilities,
-  InitializeRequest, LoadSessionRequest, NewSessionRequest, PermissionOption, PromptRequest,
-  ProtocolVersion, ReadTextFileRequest, ReadTextFileResponse, RequestPermissionOutcome,
-  RequestPermissionRequest, RequestPermissionResponse, SelectedPermissionOutcome, SessionId,
-  SessionNotification, StopReason, TextContent, WriteTextFileRequest, WriteTextFileResponse,
+  InitializeRequest, LoadSessionRequest, ModelId, ModelInfo, NewSessionRequest, PermissionOption,
+  PromptRequest, ProtocolVersion, ReadTextFileRequest, ReadTextFileResponse,
+  RequestPermissionOutcome, RequestPermissionRequest, RequestPermissionResponse,
+  SelectedPermissionOutcome, SessionConfigId, SessionConfigOption, SessionConfigOptionValue,
+  SessionId, SessionMode, SessionModeId, SessionNotification, SetSessionConfigOptionRequest,
+  SetSessionModeRequest, SetSessionModelRequest, StopReason, TextContent, WriteTextFileRequest,
+  WriteTextFileResponse,
 };
 use agent_client_protocol::{Agent, Client, ConnectionTo};
 use anyhow::{Context, Result, anyhow};
@@ -20,6 +23,18 @@ use std::time::Duration;
 
 pub use agent_client_protocol::schema::PermissionOptionKind;
 pub use agent_client_protocol::schema::SessionUpdate as AgentEvent;
+pub use agent_client_protocol::schema::{
+  ModelId as AcpModelId, ModelInfo as AcpModelInfo, SessionConfigId as AcpSessionConfigId,
+  SessionConfigKind as AcpSessionConfigKind, SessionConfigOption as AcpSessionConfigOption,
+  SessionConfigOptionCategory as AcpSessionConfigOptionCategory,
+  SessionConfigOptionValue as AcpSessionConfigOptionValue,
+  SessionConfigSelect as AcpSessionConfigSelect,
+  SessionConfigSelectGroup as AcpSessionConfigSelectGroup,
+  SessionConfigSelectOption as AcpSessionConfigSelectOption,
+  SessionConfigSelectOptions as AcpSessionConfigSelectOptions,
+  SessionConfigValueId as AcpSessionConfigValueId, SessionMode as AcpSessionMode,
+  SessionModeId as AcpSessionModeId,
+};
 
 #[derive(Clone, Debug)]
 pub struct PermissionPromptOption {
@@ -147,6 +162,19 @@ enum DriverCmd {
   },
   Cancel,
   Stop,
+  SetMode {
+    mode_id: SessionModeId,
+    reply: oneshot::Sender<Result<()>>,
+  },
+  SetModel {
+    model_id: ModelId,
+    reply: oneshot::Sender<Result<()>>,
+  },
+  SetConfigOption {
+    config_id: SessionConfigId,
+    value: SessionConfigOptionValue,
+    reply: oneshot::Sender<Result<()>>,
+  },
 }
 
 /// Spawns a detached `Future<Output = ()>` on the caller's executor.
@@ -171,6 +199,11 @@ pub struct AgentInitInfo {
   pub auth_methods: Vec<AuthMethodInfo>,
   pub supports_load_session: bool,
   pub session_id: Option<String>,
+  pub available_modes: Vec<SessionMode>,
+  pub current_mode_id: Option<SessionModeId>,
+  pub available_models: Vec<ModelInfo>,
+  pub current_model_id: Option<ModelId>,
+  pub config_options: Vec<SessionConfigOption>,
 }
 
 #[derive(Clone, Debug)]
@@ -372,6 +405,53 @@ impl AgentSession {
   /// Cancel the in-flight prompt (best effort).
   pub fn cancel(&self) {
     let _ = self.cmd_tx.try_send(DriverCmd::Cancel);
+  }
+
+  /// Set the active session mode (e.g. Plan/Build for Claude, reasoning effort for Codex).
+  pub async fn set_mode(&self, mode_id: SessionModeId) -> Result<()> {
+    let (tx, rx) = oneshot::channel();
+    self
+      .cmd_tx
+      .send(DriverCmd::SetMode { mode_id, reply: tx })
+      .await
+      .map_err(|_| anyhow!("agent driver closed"))?;
+    rx.await
+      .map_err(|_| anyhow!("agent driver dropped reply"))?
+  }
+
+  /// Set the active model for the session.
+  pub async fn set_model(&self, model_id: ModelId) -> Result<()> {
+    let (tx, rx) = oneshot::channel();
+    self
+      .cmd_tx
+      .send(DriverCmd::SetModel {
+        model_id,
+        reply: tx,
+      })
+      .await
+      .map_err(|_| anyhow!("agent driver closed"))?;
+    rx.await
+      .map_err(|_| anyhow!("agent driver dropped reply"))?
+  }
+
+  /// Set a value on an arbitrary session config option (thinking budget, verbosity, etc).
+  pub async fn set_config_option(
+    &self,
+    config_id: SessionConfigId,
+    value: SessionConfigOptionValue,
+  ) -> Result<()> {
+    let (tx, rx) = oneshot::channel();
+    self
+      .cmd_tx
+      .send(DriverCmd::SetConfigOption {
+        config_id,
+        value,
+        reply: tx,
+      })
+      .await
+      .map_err(|_| anyhow!("agent driver closed"))?;
+    rx.await
+      .map_err(|_| anyhow!("agent driver dropped reply"))?
   }
 
   /// Send a prompt and wait for the agent's `stop_reason`.
@@ -778,26 +858,49 @@ async fn run_driver(
           .collect(),
         supports_load_session: init.agent_capabilities.load_session,
         session_id: None,
+        available_modes: Vec::new(),
+        current_mode_id: None,
+        available_models: Vec::new(),
+        current_model_id: None,
+        config_options: Vec::new(),
       };
-      let session_id = match load_session.clone() {
+      let (session_id, modes, models, config_options) = match load_session.clone() {
         Some(id) if info.supports_load_session => {
           let sid = SessionId::new(id);
-          connection
+          let resp = connection
             .send_request(LoadSessionRequest::new(sid.clone(), cwd.clone()))
             .block_task()
             .await?;
-          sid
+          (sid, resp.modes, resp.models, resp.config_options)
         }
         _ => {
-          connection
+          let resp = connection
             .send_request(NewSessionRequest::new(cwd.clone()))
             .block_task()
-            .await?
-            .session_id
+            .await?;
+          (
+            resp.session_id,
+            resp.modes,
+            resp.models,
+            resp.config_options,
+          )
         }
+      };
+      let (available_modes, current_mode_id) = match modes {
+        Some(s) => (s.available_modes, Some(s.current_mode_id)),
+        None => (Vec::new(), None),
+      };
+      let (available_models, current_model_id) = match models {
+        Some(s) => (s.available_models, Some(s.current_model_id)),
+        None => (Vec::new(), None),
       };
       let info_with_session = AgentInitInfo {
         session_id: Some(session_id.0.to_string()),
+        available_modes,
+        current_mode_id,
+        available_models,
+        current_model_id,
+        config_options: config_options.unwrap_or_default(),
         ..info
       };
 
@@ -832,6 +935,37 @@ async fn run_driver(
                     Ok(DriverCmd::Prompt { reply: other_reply, .. }) => {
                       let _ = other_reply.send(Err(anyhow!("another prompt in flight")));
                     }
+                    Ok(DriverCmd::SetMode { mode_id, reply: set_reply }) => {
+                      let r = connection
+                        .send_request(SetSessionModeRequest::new(session_id.clone(), mode_id))
+                        .block_task()
+                        .await
+                        .map(|_| ())
+                        .map_err(|e| anyhow!("set_mode: {e}"));
+                      let _ = set_reply.send(r);
+                    }
+                    Ok(DriverCmd::SetModel { model_id, reply: set_reply }) => {
+                      let r = connection
+                        .send_request(SetSessionModelRequest::new(session_id.clone(), model_id))
+                        .block_task()
+                        .await
+                        .map(|_| ())
+                        .map_err(|e| anyhow!("set_model: {e}"));
+                      let _ = set_reply.send(r);
+                    }
+                    Ok(DriverCmd::SetConfigOption { config_id, value, reply: set_reply }) => {
+                      let r = connection
+                        .send_request(SetSessionConfigOptionRequest::new(
+                          session_id.clone(),
+                          config_id,
+                          value,
+                        ))
+                        .block_task()
+                        .await
+                        .map(|_| ())
+                        .map_err(|e| anyhow!("set_config_option: {e}"));
+                      let _ = set_reply.send(r);
+                    }
                     Err(_) => {
                       let _ = reply.send(Err(anyhow!("agent driver closed")));
                       break 'outer;
@@ -859,6 +993,41 @@ async fn run_driver(
             let _ = connection.send_notification(CancelNotification::new(session_id.clone()));
           }
           DriverCmd::Stop => break,
+          DriverCmd::SetMode { mode_id, reply } => {
+            let r = connection
+              .send_request(SetSessionModeRequest::new(session_id.clone(), mode_id))
+              .block_task()
+              .await
+              .map(|_| ())
+              .map_err(|e| anyhow!("set_mode: {e}"));
+            let _ = reply.send(r);
+          }
+          DriverCmd::SetModel { model_id, reply } => {
+            let r = connection
+              .send_request(SetSessionModelRequest::new(session_id.clone(), model_id))
+              .block_task()
+              .await
+              .map(|_| ())
+              .map_err(|e| anyhow!("set_model: {e}"));
+            let _ = reply.send(r);
+          }
+          DriverCmd::SetConfigOption {
+            config_id,
+            value,
+            reply,
+          } => {
+            let r = connection
+              .send_request(SetSessionConfigOptionRequest::new(
+                session_id.clone(),
+                config_id,
+                value,
+              ))
+              .block_task()
+              .await
+              .map(|_| ())
+              .map_err(|e| anyhow!("set_config_option: {e}"));
+            let _ = reply.send(r);
+          }
         }
       }
       Ok(())

@@ -9,6 +9,11 @@ use agent_acp::{
 use agent_client_protocol::schema::{
   ContentBlock, ToolCall, ToolCallContent, ToolCallId, ToolCallStatus, ToolCallUpdate, ToolKind,
 };
+use agent_client_protocol::schema::{
+  ModelId, ModelInfo, SessionConfigId, SessionConfigKind, SessionConfigOption,
+  SessionConfigOptionCategory, SessionConfigOptionValue, SessionConfigSelectOptions,
+  SessionConfigValueId, SessionMode, SessionModeId,
+};
 use futures::future::BoxFuture;
 use gfm_markdown_viewer::{
   LinkAction, MarkdownRenderOptions, SyntaxHighlightCache, render_markdown,
@@ -138,6 +143,11 @@ pub struct AgentChatPanel {
   state_dir: Option<PathBuf>,
   current_conv: ConversationMeta,
   syntax_cache: Arc<SyntaxHighlightCache>,
+  available_modes: Vec<SessionMode>,
+  current_mode_id: Option<SessionModeId>,
+  available_models: Vec<ModelInfo>,
+  current_model_id: Option<ModelId>,
+  config_options: Vec<SessionConfigOption>,
   _connect_task: Option<Task<()>>,
   _events_task: Option<Task<()>>,
   _permission_task: Option<Task<()>>,
@@ -192,6 +202,11 @@ impl AgentChatPanel {
       state_dir,
       current_conv,
       syntax_cache: Arc::new(SyntaxHighlightCache::new()),
+      available_modes: Vec::new(),
+      current_mode_id: None,
+      available_models: Vec::new(),
+      current_model_id: None,
+      config_options: Vec::new(),
       _connect_task: None,
       _events_task: None,
       _permission_task: None,
@@ -232,6 +247,11 @@ impl AgentChatPanel {
             panel.status = Status::Ready;
             panel.agent_version = info.version;
             panel.auth_methods = info.auth_methods;
+            panel.available_modes = info.available_modes;
+            panel.current_mode_id = info.current_mode_id;
+            panel.available_models = info.available_models;
+            panel.current_model_id = info.current_model_id;
+            panel.config_options = info.config_options;
             if let Some(sid) = info.session_id {
               panel.current_conv.session_id = Some(sid);
               panel.persist_state();
@@ -357,6 +377,12 @@ impl AgentChatPanel {
       AgentEvent::UsageUpdate(usage) => {
         self.usage = Some((usage.used, usage.size));
       }
+      AgentEvent::CurrentModeUpdate(u) => {
+        self.current_mode_id = Some(u.current_mode_id);
+      }
+      AgentEvent::ConfigOptionUpdate(u) => {
+        self.config_options = u.config_options;
+      }
       _ => {}
     }
   }
@@ -367,6 +393,55 @@ impl AgentChatPanel {
 
   fn apply_tool_call_update(&mut self, update: ToolCallUpdate) {
     apply_tool_call_update_pure(&mut self.items, &self.tool_index, update, &self.cwd);
+  }
+
+  fn set_mode(&mut self, mode_id: SessionModeId, cx: &mut Context<Self>) {
+    let Some(session) = self.session.clone() else {
+      return;
+    };
+    self.current_mode_id = Some(mode_id.clone());
+    cx.notify();
+    cx.spawn(async move |_, _| {
+      let _ = session.set_mode(mode_id).await;
+    })
+    .detach();
+  }
+
+  fn set_model(&mut self, model_id: ModelId, cx: &mut Context<Self>) {
+    let Some(session) = self.session.clone() else {
+      return;
+    };
+    self.current_model_id = Some(model_id.clone());
+    cx.notify();
+    cx.spawn(async move |_, _| {
+      let _ = session.set_model(model_id).await;
+    })
+    .detach();
+  }
+
+  fn set_config_option(
+    &mut self,
+    config_id: SessionConfigId,
+    value_id: SessionConfigValueId,
+    cx: &mut Context<Self>,
+  ) {
+    let Some(session) = self.session.clone() else {
+      return;
+    };
+    for opt in self.config_options.iter_mut() {
+      if opt.id == config_id
+        && let SessionConfigKind::Select(sel) = &mut opt.kind
+      {
+        sel.current_value = value_id.clone();
+      }
+    }
+    cx.notify();
+    cx.spawn(async move |_, _| {
+      let _ = session
+        .set_config_option(config_id, SessionConfigOptionValue::from(value_id))
+        .await;
+    })
+    .detach();
   }
 
   fn cancel(&mut self, cx: &mut Context<Self>) {
@@ -529,6 +604,11 @@ impl AgentChatPanel {
     self.auth_methods.clear();
     self.agent_version = None;
     self.usage = None;
+    self.available_modes.clear();
+    self.current_mode_id = None;
+    self.available_models.clear();
+    self.current_model_id = None;
+    self.config_options.clear();
     self.status = Status::Connecting;
     if let BackendAvailability::MissingBinary {
       command,
@@ -563,6 +643,11 @@ impl AgentChatPanel {
             panel.status = Status::Ready;
             panel.agent_version = info.version;
             panel.auth_methods = info.auth_methods;
+            panel.available_modes = info.available_modes;
+            panel.current_mode_id = info.current_mode_id;
+            panel.available_models = info.available_models;
+            panel.current_model_id = info.current_model_id;
+            panel.config_options = info.config_options;
             if let Some(sid) = info.session_id {
               panel.current_conv.session_id = Some(sid);
               panel.persist_state();
@@ -1572,30 +1657,242 @@ impl Render for AgentChatPanel {
         }
       })
       .child(
-        div()
-          .flex()
-          .items_center()
+        v_flex()
           .flex_shrink_0()
           .p_2()
           .gap_2()
           .border_t_1()
           .border_color(theme.border)
           .child(Input::new(&self.input).w_full())
-          .child(if self.in_flight {
-            Button::new("agent-chat-stop")
-              .label("Stop")
-              .small()
-              .danger()
-              .on_click(cx.listener(|panel, _, _, cx| panel.cancel(cx)))
-          } else {
-            Button::new("agent-chat-send")
-              .label("Send")
-              .small()
-              .primary()
-              .disabled(!matches!(self.status, Status::Ready))
-              .on_click(cx.listener(|panel, _, window, cx| panel.submit(window, cx)))
-          }),
+          .child(
+            h_flex()
+              .items_center()
+              .justify_between()
+              .gap_2()
+              .child(
+                h_flex()
+                  .gap_1()
+                  .flex_wrap()
+                  .child(self.render_model_selector(cx))
+                  .child(self.render_mode_selector(cx))
+                  .children(self.render_config_option_selectors(cx)),
+              )
+              .child(if self.in_flight {
+                Button::new("agent-chat-stop")
+                  .label("Stop")
+                  .small()
+                  .danger()
+                  .on_click(cx.listener(|panel, _, _, cx| panel.cancel(cx)))
+              } else {
+                Button::new("agent-chat-send")
+                  .label("Send")
+                  .small()
+                  .primary()
+                  .disabled(!matches!(self.status, Status::Ready))
+                  .on_click(cx.listener(|panel, _, window, cx| panel.submit(window, cx)))
+              }),
+          ),
       )
+  }
+}
+
+impl AgentChatPanel {
+  fn render_model_selector(&self, cx: &mut Context<Self>) -> gpui::AnyElement {
+    let models = self.available_models.clone();
+    let current_id = self.current_model_id.clone();
+    let current_label: SharedString = current_id
+      .as_ref()
+      .and_then(|id| models.iter().find(|m| m.model_id == *id))
+      .map(|m| m.name.clone().into())
+      .unwrap_or_else(|| "Model".into());
+    let entity = cx.entity().downgrade();
+    Button::new("agent-chat-model")
+      .label(current_label)
+      .icon(IconName::ChevronDown)
+      .xsmall()
+      .ghost()
+      .disabled(models.is_empty())
+      .dropdown_menu_with_anchor(Corner::BottomLeft, move |menu, _, _| {
+        let mut menu = menu;
+        for m in models.iter() {
+          let model_id = m.model_id.clone();
+          let entity = entity.clone();
+          let is_current = current_id.as_ref() == Some(&model_id);
+          let label_text: SharedString = m.name.clone().into();
+          menu = menu.item(
+            PopupMenuItem::element(move |_, cx| {
+              let theme = cx.theme().clone();
+              h_flex()
+                .w_full()
+                .gap_2()
+                .items_center()
+                .child(
+                  div()
+                    .flex_1()
+                    .text_sm()
+                    .when(is_current, |this| this.font_weight(gpui::FontWeight::BOLD))
+                    .child(label_text.clone()),
+                )
+                .when(is_current, |this| {
+                  this.child(
+                    gpui_component::Icon::new(UiIconName::Check)
+                      .small()
+                      .text_color(theme.foreground),
+                  )
+                })
+                .into_any_element()
+            })
+            .on_click(move |_, _, cx| {
+              let model_id = model_id.clone();
+              let _ = entity.update(cx, |panel, cx| panel.set_model(model_id, cx));
+            }),
+          );
+        }
+        menu
+      })
+      .into_any_element()
+  }
+
+  fn render_mode_selector(&self, cx: &mut Context<Self>) -> gpui::AnyElement {
+    let modes = self.available_modes.clone();
+    let current_id = self.current_mode_id.clone();
+    let current_label: SharedString = current_id
+      .as_ref()
+      .and_then(|id| modes.iter().find(|m| m.id == *id))
+      .map(|m| m.name.clone().into())
+      .unwrap_or_else(|| "Mode".into());
+    let entity = cx.entity().downgrade();
+    Button::new("agent-chat-mode")
+      .label(current_label)
+      .icon(IconName::ChevronDown)
+      .xsmall()
+      .ghost()
+      .disabled(modes.is_empty())
+      .dropdown_menu_with_anchor(Corner::BottomLeft, move |menu, _, _| {
+        let mut menu = menu;
+        for m in modes.iter() {
+          let mode_id = m.id.clone();
+          let entity = entity.clone();
+          let is_current = current_id.as_ref() == Some(&mode_id);
+          let label_text: SharedString = m.name.clone().into();
+          menu = menu.item(
+            PopupMenuItem::element(move |_, cx| {
+              let theme = cx.theme().clone();
+              h_flex()
+                .w_full()
+                .gap_2()
+                .items_center()
+                .child(
+                  div()
+                    .flex_1()
+                    .text_sm()
+                    .when(is_current, |this| this.font_weight(gpui::FontWeight::BOLD))
+                    .child(label_text.clone()),
+                )
+                .when(is_current, |this| {
+                  this.child(
+                    gpui_component::Icon::new(UiIconName::Check)
+                      .small()
+                      .text_color(theme.foreground),
+                  )
+                })
+                .into_any_element()
+            })
+            .on_click(move |_, _, cx| {
+              let mode_id = mode_id.clone();
+              let _ = entity.update(cx, |panel, cx| panel.set_mode(mode_id, cx));
+            }),
+          );
+        }
+        menu
+      })
+      .into_any_element()
+  }
+
+  fn render_config_option_selectors(&self, cx: &mut Context<Self>) -> Vec<gpui::AnyElement> {
+    let mut out: Vec<gpui::AnyElement> = Vec::new();
+    for opt in &self.config_options {
+      if matches!(
+        opt.category,
+        Some(SessionConfigOptionCategory::Model) | Some(SessionConfigOptionCategory::Mode)
+      ) {
+        continue;
+      }
+      let SessionConfigKind::Select(sel) = &opt.kind else {
+        continue;
+      };
+      let config_id = opt.id.clone();
+      let current_value = sel.current_value.clone();
+      let flat_options: Vec<(SessionConfigValueId, String)> = match &sel.options {
+        SessionConfigSelectOptions::Ungrouped(opts) => opts
+          .iter()
+          .map(|o| (o.value.clone(), o.name.clone()))
+          .collect(),
+        SessionConfigSelectOptions::Grouped(groups) => groups
+          .iter()
+          .flat_map(|g| g.options.iter().map(|o| (o.value.clone(), o.name.clone())))
+          .collect(),
+        _ => Vec::new(),
+      };
+      let current_label: SharedString = flat_options
+        .iter()
+        .find(|(v, _)| v == &current_value)
+        .map(|(_, n)| n.clone().into())
+        .unwrap_or_else(|| opt.name.clone().into());
+      let button_id = SharedString::from(format!("agent-chat-cfg-{}", opt.id.0));
+      let entity = cx.entity().downgrade();
+      let is_empty = flat_options.is_empty();
+      let button = Button::new(button_id)
+        .label(current_label)
+        .icon(IconName::ChevronDown)
+        .xsmall()
+        .ghost()
+        .disabled(is_empty)
+        .dropdown_menu_with_anchor(Corner::BottomLeft, move |menu, _, _| {
+          let mut menu = menu;
+          for (value_id, name) in flat_options.iter() {
+            let value_id = value_id.clone();
+            let name: SharedString = name.clone().into();
+            let entity = entity.clone();
+            let config_id = config_id.clone();
+            let is_current = value_id == current_value;
+            menu = menu.item(
+              PopupMenuItem::element(move |_, cx| {
+                let theme = cx.theme().clone();
+                h_flex()
+                  .w_full()
+                  .gap_2()
+                  .items_center()
+                  .child(
+                    div()
+                      .flex_1()
+                      .text_sm()
+                      .when(is_current, |this| this.font_weight(gpui::FontWeight::BOLD))
+                      .child(name.clone()),
+                  )
+                  .when(is_current, |this| {
+                    this.child(
+                      gpui_component::Icon::new(UiIconName::Check)
+                        .small()
+                        .text_color(theme.foreground),
+                    )
+                  })
+                  .into_any_element()
+              })
+              .on_click(move |_, _, cx| {
+                let value_id = value_id.clone();
+                let config_id = config_id.clone();
+                let _ = entity.update(cx, |panel, cx| {
+                  panel.set_config_option(config_id, value_id, cx)
+                });
+              }),
+            );
+          }
+          menu
+        });
+      out.push(button.into_any_element());
+    }
+    out
   }
 }
 
