@@ -1203,6 +1203,49 @@ fn relativize_path(path: &std::path::Path, cwd: &std::path::Path) -> String {
   path.display().to_string()
 }
 
+fn render_selector_item(
+  name: SharedString,
+  description: Option<SharedString>,
+  is_current: bool,
+  cx: &gpui::App,
+) -> gpui::AnyElement {
+  let theme = cx.theme().clone();
+  let has_description = description.is_some();
+  h_flex()
+    .w_full()
+    .gap_2()
+    .map(|this| {
+      if has_description {
+        this.items_start()
+      } else {
+        this.items_center()
+      }
+    })
+    .child(
+      v_flex()
+        .flex_1()
+        .min_w_0()
+        .gap_0p5()
+        .child(
+          div()
+            .text_sm()
+            .when(is_current, |this| this.font_weight(gpui::FontWeight::BOLD))
+            .child(name),
+        )
+        .when_some(description, |this, d| {
+          this.child(div().text_xs().text_color(theme.muted_foreground).child(d))
+        }),
+    )
+    .when(is_current, |this| {
+      this.child(
+        gpui_component::Icon::new(UiIconName::Check)
+          .small()
+          .text_color(theme.foreground),
+      )
+    })
+    .into_any_element()
+}
+
 fn timeline_row(
   content: gpui::AnyElement,
   theme: &gpui_component::Theme,
@@ -1990,28 +2033,10 @@ impl AgentChatPanel {
           let entity = entity.clone();
           let is_current = current_id.as_ref() == Some(&model_id);
           let label_text: SharedString = m.name.clone().into();
+          let description: Option<SharedString> = m.description.clone().map(Into::into);
           menu = menu.item(
             PopupMenuItem::element(move |_, cx| {
-              let theme = cx.theme().clone();
-              h_flex()
-                .w_full()
-                .gap_2()
-                .items_center()
-                .child(
-                  div()
-                    .flex_1()
-                    .text_sm()
-                    .when(is_current, |this| this.font_weight(gpui::FontWeight::BOLD))
-                    .child(label_text.clone()),
-                )
-                .when(is_current, |this| {
-                  this.child(
-                    gpui_component::Icon::new(UiIconName::Check)
-                      .small()
-                      .text_color(theme.foreground),
-                  )
-                })
-                .into_any_element()
+              render_selector_item(label_text.clone(), description.clone(), is_current, cx)
             })
             .on_click(move |_, _, cx| {
               let model_id = model_id.clone();
@@ -2046,28 +2071,10 @@ impl AgentChatPanel {
           let entity = entity.clone();
           let is_current = current_id.as_ref() == Some(&mode_id);
           let label_text: SharedString = m.name.clone().into();
+          let description: Option<SharedString> = m.description.clone().map(Into::into);
           menu = menu.item(
             PopupMenuItem::element(move |_, cx| {
-              let theme = cx.theme().clone();
-              h_flex()
-                .w_full()
-                .gap_2()
-                .items_center()
-                .child(
-                  div()
-                    .flex_1()
-                    .text_sm()
-                    .when(is_current, |this| this.font_weight(gpui::FontWeight::BOLD))
-                    .child(label_text.clone()),
-                )
-                .when(is_current, |this| {
-                  this.child(
-                    gpui_component::Icon::new(UiIconName::Check)
-                      .small()
-                      .text_color(theme.foreground),
-                  )
-                })
-                .into_any_element()
+              render_selector_item(label_text.clone(), description.clone(), is_current, cx)
             })
             .on_click(move |_, _, cx| {
               let mode_id = mode_id.clone();
@@ -2094,21 +2101,25 @@ impl AgentChatPanel {
       };
       let config_id = opt.id.clone();
       let current_value = sel.current_value.clone();
-      let flat_options: Vec<(SessionConfigValueId, String)> = match &sel.options {
+      let flat_options: Vec<(SessionConfigValueId, String, Option<String>)> = match &sel.options {
         SessionConfigSelectOptions::Ungrouped(opts) => opts
           .iter()
-          .map(|o| (o.value.clone(), o.name.clone()))
+          .map(|o| (o.value.clone(), o.name.clone(), o.description.clone()))
           .collect(),
         SessionConfigSelectOptions::Grouped(groups) => groups
           .iter()
-          .flat_map(|g| g.options.iter().map(|o| (o.value.clone(), o.name.clone())))
+          .flat_map(|g| {
+            g.options
+              .iter()
+              .map(|o| (o.value.clone(), o.name.clone(), o.description.clone()))
+          })
           .collect(),
         _ => Vec::new(),
       };
       let current_label: SharedString = flat_options
         .iter()
-        .find(|(v, _)| v == &current_value)
-        .map(|(_, n)| n.clone().into())
+        .find(|(v, _, _)| v == &current_value)
+        .map(|(_, n, _)| n.clone().into())
         .unwrap_or_else(|| opt.name.clone().into());
       let button_id = SharedString::from(format!("agent-chat-cfg-{}", opt.id.0));
       let entity = cx.entity().downgrade();
@@ -2121,34 +2132,16 @@ impl AgentChatPanel {
         .disabled(is_empty)
         .dropdown_menu_with_anchor(Corner::BottomLeft, move |menu, _, _| {
           let mut menu = menu;
-          for (value_id, name) in flat_options.iter() {
+          for (value_id, name, description) in flat_options.iter() {
             let value_id = value_id.clone();
             let name: SharedString = name.clone().into();
+            let description: Option<SharedString> = description.clone().map(Into::into);
             let entity = entity.clone();
             let config_id = config_id.clone();
             let is_current = value_id == current_value;
             menu = menu.item(
               PopupMenuItem::element(move |_, cx| {
-                let theme = cx.theme().clone();
-                h_flex()
-                  .w_full()
-                  .gap_2()
-                  .items_center()
-                  .child(
-                    div()
-                      .flex_1()
-                      .text_sm()
-                      .when(is_current, |this| this.font_weight(gpui::FontWeight::BOLD))
-                      .child(name.clone()),
-                  )
-                  .when(is_current, |this| {
-                    this.child(
-                      gpui_component::Icon::new(UiIconName::Check)
-                        .small()
-                        .text_color(theme.foreground),
-                    )
-                  })
-                  .into_any_element()
+                render_selector_item(name.clone(), description.clone(), is_current, cx)
               })
               .on_click(move |_, _, cx| {
                 let value_id = value_id.clone();
