@@ -119,6 +119,7 @@ enum PersistedChatItem {
 pub struct ConversationMeta {
   pub id: String,
   pub started_at_secs: u64,
+  pub updated_at_secs: u64,
   pub title: String,
   pub message_count: usize,
   #[serde(default)]
@@ -715,6 +716,7 @@ impl AgentChatPanel {
       .iter()
       .filter(|i| matches!(i, ChatItem::Message(_)))
       .count();
+    self.current_conv.updated_at_secs = now_secs();
     if self.current_conv.title.is_empty() {
       if let Some(first_user) = self.items.iter().find_map(|i| match i {
         ChatItem::Message(m) if matches!(m.role, ChatRole::User) => Some(m.text.clone()),
@@ -816,10 +818,18 @@ fn new_conversation_meta() -> ConversationMeta {
   ConversationMeta {
     id: now.to_string(),
     started_at_secs: now,
+    updated_at_secs: now,
     title: String::new(),
     message_count: 0,
     session_id: None,
   }
+}
+
+fn now_secs() -> u64 {
+  std::time::SystemTime::now()
+    .duration_since(std::time::UNIX_EPOCH)
+    .map(|d| d.as_secs())
+    .unwrap_or(0)
 }
 
 fn truncate_title(text: &str) -> String {
@@ -882,7 +892,7 @@ fn list_conversations_in(dir: &std::path::Path) -> Vec<ConversationMeta> {
       Some(parsed.meta)
     })
     .collect();
-  metas.sort_by(|a, b| b.started_at_secs.cmp(&a.started_at_secs));
+  metas.sort_by(|a, b| b.updated_at_secs.cmp(&a.updated_at_secs));
   metas
 }
 
@@ -2471,6 +2481,48 @@ mod tests {
     let pruned = AgentChatPanel::prune_old_state(&dir, std::time::Duration::from_secs(60));
     assert_eq!(pruned, 0);
     assert!(dir.join("fresh.json").exists());
+    std::fs::remove_dir_all(&dir).ok();
+  }
+
+  #[test]
+  fn list_conversations_sorted_by_updated_at_desc() {
+    let dir = std::env::temp_dir().join(format!(
+      "reviu-agent-sort-{}",
+      std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_nanos()
+    ));
+    std::fs::create_dir_all(&dir).unwrap();
+    let mk = |id: &str, started: u64, updated: u64| {
+      let conv = PersistedConversation {
+        meta: ConversationMeta {
+          id: id.to_string(),
+          started_at_secs: started,
+          updated_at_secs: updated,
+          title: id.to_string(),
+          message_count: 1,
+          session_id: None,
+        },
+        items: vec![PersistedChatItem::Message(ChatMessage {
+          role: ChatRole::User,
+          text: "hi".into(),
+        })],
+      };
+      std::fs::write(
+        dir.join(format!("{id}.json")),
+        serde_json::to_string(&conv).unwrap(),
+      )
+      .unwrap();
+    };
+    mk("old", 1000, 1000);
+    mk("recent_started_stale", 5000, 5000);
+    mk("old_started_recent_updated", 2000, 9000);
+
+    let metas = list_conversations_in(&dir);
+    assert_eq!(metas[0].id, "old_started_recent_updated");
+    assert_eq!(metas[1].id, "recent_started_stale");
+    assert_eq!(metas[2].id, "old");
     std::fs::remove_dir_all(&dir).ok();
   }
 
