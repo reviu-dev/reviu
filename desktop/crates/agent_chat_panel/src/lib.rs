@@ -1414,6 +1414,7 @@ impl Render for AgentChatPanel {
               div()
                 .px_3()
                 .py_2()
+                .mb_3()
                 .rounded(theme.radius)
                 .bg(theme.input_background())
                 .border_1()
