@@ -1139,12 +1139,13 @@ fn render_tool_call(t: &ToolCallView, theme: &gpui_component::Theme) -> gpui::An
               DiffLineKind::Removed => ("-", theme.status_red().opacity(0.15), theme.foreground),
             };
             body = body.child(
-              div()
+              h_flex()
                 .w_full()
                 .px_2()
                 .bg(bg)
                 .text_color(fg)
-                .child(format!("{prefix} {}", line.text)),
+                .child(div().w(px(12.)).flex_shrink_0().child(prefix))
+                .child(div().flex_1().child(line.text.clone())),
             );
           }
           block = block.child(body);
