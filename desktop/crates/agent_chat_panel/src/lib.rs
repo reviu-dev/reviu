@@ -1280,20 +1280,23 @@ fn render_tool_call(t: &ToolCallView, theme: &gpui_component::Theme) -> gpui::An
           let mut body = v_flex()
             .font_family("monospace")
             .text_xs()
+            .bg(theme.background)
             .border_1()
             .border_color(theme.border)
-            .rounded(px(3.));
+            .rounded(px(3.))
+            .overflow_hidden();
+          let ui_theme = ui::Theme::new(theme.is_dark());
           for line in &d.lines {
             let (bg, fg, hl_bg) = match line.kind {
               DiffLineKind::Added => (
-                theme.status_green().opacity(0.15),
+                ui_theme.diff_added_background(),
                 theme.foreground,
-                theme.status_green().opacity(0.4),
+                ui_theme.diff_word_added_background(),
               ),
               DiffLineKind::Removed => (
-                theme.status_red().opacity(0.15),
+                ui_theme.diff_removed_background(),
                 theme.foreground,
-                theme.status_red().opacity(0.4),
+                ui_theme.diff_word_removed_background(),
               ),
             };
             let text_col: gpui::AnyElement = if line.spans.is_empty() {
