@@ -1480,7 +1480,7 @@ impl Render for AgentChatPanel {
       .flex()
       .flex_col()
       .size_full()
-      .bg(theme.background)
+      .bg(theme.sidebar)
       .child(
         h_flex()
           .h(px(40.))
@@ -1661,6 +1661,7 @@ impl Render for AgentChatPanel {
           .flex_shrink_0()
           .p_2()
           .gap_2()
+          .bg(theme.sidebar)
           .border_t_1()
           .border_color(theme.border)
           .child(Input::new(&self.input).w_full())
