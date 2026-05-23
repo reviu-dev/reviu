@@ -33,7 +33,7 @@ use git::{
   unstage_all, unstage_file,
 };
 use gpui::{
-  AnyElement, AnyWindowHandle, App, ClipboardItem, Context, Corner, Entity, FocusHandle, Focusable,
+  AnyElement, AnyWindowHandle, App, Context, Corner, Entity, FocusHandle, Focusable,
   Global, Image, InteractiveElement, ObjectFit, ParentElement, PathPromptOptions, Pixels, Render,
   RenderImage, SharedString, Styled, Subscription, Task, WeakEntity, Window, actions, div, img,
   prelude::*, px,
@@ -5869,16 +5869,6 @@ impl GitPage {
     cx.stop_propagation();
   }
 
-  fn copy_review_comments_for_agent_action(
-    &mut self,
-    _: &crate::CopyReviewCommentsForAgent,
-    window: &mut Window,
-    cx: &mut Context<Self>,
-  ) {
-    self.copy_agent_review_to_clipboard(window, cx);
-    cx.stop_propagation();
-  }
-
   fn comment_hunk_action(
     &mut self,
     _: &crate::CommentHunk,
@@ -7130,38 +7120,6 @@ impl GitPage {
       cx,
     );
     cx.notify();
-  }
-
-  fn copy_agent_review_to_clipboard(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-    self.sync_agent_review_comments_to_editor(cx);
-    let copyable_ids = self
-      .agent_review_comments
-      .iter()
-      .filter(|comment| agent_review_comment_is_copyable(comment))
-      .map(|comment| comment.id)
-      .collect::<HashSet<_>>();
-
-    if copyable_ids.is_empty() {
-      window.push_notification(Notification::info("No local review comments to copy"), cx);
-      return;
-    }
-
-    let review = format_agent_review_export(&self.agent_review_comments);
-    let count = copyable_ids.len();
-    cx.write_to_clipboard(ClipboardItem::new_string(review));
-    for comment in &mut self.agent_review_comments {
-      if copyable_ids.contains(&comment.id) {
-        comment.state = LocalAgentReviewCommentState::Copied;
-      }
-    }
-    self.sync_agent_review_comments_to_editor(cx);
-    window.push_notification(
-      Notification::success(format!(
-        "Copied {count} local review {}",
-        if count == 1 { "comment" } else { "comments" }
-      )),
-      cx,
-    );
   }
 
   fn selected_file_source_for_open_path(&self, rel_path: &Path) -> SelectedFileSource {
@@ -9639,23 +9597,8 @@ impl GitPage {
       .filter(|comment| agent_review_comment_is_copyable(comment))
       .count();
     let view = cx.entity();
-    let copy_agent_review_button = Button::new("editor-copy-agent-review")
-      .label(format!("Copy Review ({agent_review_count})"))
-      .icon(IconName::Copy)
-      .xsmall()
-      .ghost()
-      .tooltip("Copy local review comments for agent")
-      .on_click({
-        let view = view.clone();
-        move |_, window, cx| {
-          view.update(cx, |this, cx| {
-            this.copy_agent_review_to_clipboard(window, cx);
-          });
-        }
-      });
-
     let send_agent_review_button = Button::new("editor-send-agent-review")
-      .label("Send to Agent")
+      .label(format!("Send to Agent ({agent_review_count})"))
       .icon(UiIconName::Sparkles)
       .xsmall()
       .ghost()
@@ -9793,9 +9736,7 @@ impl GitPage {
           .when(is_markdown || is_svg, |this| this.child(preview_button))
           .when(show_whitespace_button, |this| this.child(whitespace_button))
           .when(!is_history_commit_file && agent_review_count > 0, |this| {
-            this
-              .child(copy_agent_review_button)
-              .child(send_agent_review_button)
+            this.child(send_agent_review_button)
           })
           .child(toggle_button),
       )
@@ -10738,7 +10679,6 @@ impl Render for GitPage {
       .on_action(cx.listener(GitPage::previous_annotation_action))
       .on_action(cx.listener(GitPage::next_annotation_action))
       .on_action(cx.listener(GitPage::comment_hunk_action))
-      .on_action(cx.listener(GitPage::copy_review_comments_for_agent_action))
       .on_action(cx.listener(GitPage::toggle_hunk_stage_action))
       .on_action(cx.listener(GitPage::restore_hunk_action))
       .on_action(cx.listener(GitPage::toggle_file_stage_action))

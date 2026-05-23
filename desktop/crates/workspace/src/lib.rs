@@ -28,7 +28,6 @@ actions!(
     PreviousPrCommit,
     NextPrCommit,
     CommentHunk,
-    CopyReviewCommentsForAgent,
     ToggleHunkStage,
     RestoreHunk,
     ToggleFileStage,
