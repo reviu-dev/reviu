@@ -13,7 +13,8 @@ use agent_acp::{
   PermissionOptionKind, PermissionPrompt,
 };
 use agent_client_protocol::schema::{
-  ContentBlock, ToolCall, ToolCallId, ToolCallStatus, ToolCallUpdate, ToolKind,
+  ContentBlock, Plan, PlanEntryPriority, PlanEntryStatus, ToolCall, ToolCallId, ToolCallStatus,
+  ToolCallUpdate, ToolKind,
 };
 use agent_client_protocol::schema::{
   ModelId, ModelInfo, SessionConfigId, SessionConfigKind, SessionConfigOption,
@@ -72,11 +73,50 @@ struct PermissionItem {
   resolved: Option<String>,
 }
 
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+struct PlanView {
+  entries: Vec<PlanEntryView>,
+}
+
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+struct PlanEntryView {
+  content: String,
+  priority: PlanEntryPriorityView,
+  status: PlanEntryStatusView,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+enum PlanEntryPriorityView {
+  Low,
+  Medium,
+  High,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+enum PlanEntryStatusView {
+  Pending,
+  InProgress,
+  Completed,
+}
+
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+struct ThoughtView {
+  text: String,
+  #[serde(default = "default_thought_collapsed")]
+  collapsed: bool,
+}
+
+fn default_thought_collapsed() -> bool {
+  true
+}
+
 #[derive(Clone, Debug)]
 enum ChatItem {
   Message(ChatMessage),
   Tool(ToolCallView),
   Permission(PermissionItem),
+  Plan(PlanView),
+  Thought(ThoughtView),
 }
 
 #[derive(serde::Serialize, serde::Deserialize)]
@@ -84,6 +124,8 @@ enum ChatItem {
 enum PersistedChatItem {
   Message(ChatMessage),
   Tool(ToolCallView),
+  Plan(PlanView),
+  Thought(ThoughtView),
 }
 
 #[derive(serde::Serialize, serde::Deserialize)]
@@ -107,6 +149,7 @@ pub struct AgentChatPanel {
   items: Vec<ChatItem>,
   tool_index: HashMap<ToolCallId, usize>,
   pending_agent: String,
+  pending_thought: String,
   session: Option<Arc<AgentSession>>,
   input: Entity<InputState>,
   in_flight: bool,
@@ -166,6 +209,7 @@ impl AgentChatPanel {
       items: loaded_items,
       tool_index: loaded_index,
       pending_agent: String::new(),
+      pending_thought: String::new(),
       session: None,
       input,
       in_flight: false,
@@ -278,6 +322,7 @@ impl AgentChatPanel {
 
   fn on_agent_disconnected(&mut self, cx: &mut Context<Self>) {
     if matches!(self.status, Status::Ready) {
+      self.flush_pending_thought();
       self.status = Status::Error("Agent disconnected".into());
       self.items.push(ChatItem::Message(ChatMessage {
         role: ChatRole::System,
@@ -338,9 +383,12 @@ impl AgentChatPanel {
           self.pending_agent.push_str(&t.text);
         }
       }
-      AgentEvent::AgentThoughtChunk(_) => {
+      AgentEvent::AgentThoughtChunk(chunk) => {
         if !self.in_flight {
           return;
+        }
+        if let ContentBlock::Text(t) = chunk.content {
+          self.pending_thought.push_str(&t.text);
         }
       }
       AgentEvent::ToolCall(call) => {
@@ -358,7 +406,39 @@ impl AgentChatPanel {
       AgentEvent::ConfigOptionUpdate(u) => {
         self.config_options = u.config_options;
       }
+      AgentEvent::Plan(plan) => {
+        self.apply_plan(plan);
+      }
       _ => {}
+    }
+  }
+
+  fn apply_plan(&mut self, plan: Plan) {
+    let view = plan_view_from_acp(&plan);
+    if let Some(last) = self.items.last_mut()
+      && let ChatItem::Plan(existing) = last
+    {
+      *existing = view;
+      return;
+    }
+    self.items.push(ChatItem::Plan(view));
+  }
+
+  fn flush_pending_thought(&mut self) {
+    if self.pending_thought.is_empty() {
+      return;
+    }
+    let text = std::mem::take(&mut self.pending_thought);
+    self.items.push(ChatItem::Thought(ThoughtView {
+      text,
+      collapsed: true,
+    }));
+  }
+
+  fn toggle_thought_collapsed(&mut self, idx: usize, cx: &mut Context<Self>) {
+    if let Some(ChatItem::Thought(t)) = self.items.get_mut(idx) {
+      t.collapsed = !t.collapsed;
+      cx.notify();
     }
   }
 
@@ -460,6 +540,7 @@ impl AgentChatPanel {
       text: text.clone(),
     }));
     self.pending_agent.clear();
+    self.pending_thought.clear();
     self.in_flight = true;
     self.persist_state();
     self.scroll_handle.scroll_to_bottom();
@@ -468,6 +549,7 @@ impl AgentChatPanel {
     cx.spawn(async move |this, cx| {
       let result = session.send_prompt(text).await;
       let _ = this.update(cx, |panel, cx| {
+        panel.flush_pending_thought();
         let pending = std::mem::take(&mut panel.pending_agent);
         if !pending.is_empty() {
           panel.items.push(ChatItem::Message(ChatMessage {
@@ -524,6 +606,7 @@ impl AgentChatPanel {
     self.items.clear();
     self.tool_index.clear();
     self.pending_agent.clear();
+    self.pending_thought.clear();
     self.in_flight = false;
     self.usage = None;
     self.respawn_session(cx);
@@ -542,6 +625,7 @@ impl AgentChatPanel {
       self.items.clear();
       self.tool_index.clear();
       self.pending_agent.clear();
+      self.pending_thought.clear();
       self.in_flight = false;
       self.usage = None;
       self.respawn_session(cx);
@@ -562,6 +646,7 @@ impl AgentChatPanel {
     self.items = items;
     self.tool_index = index;
     self.pending_agent.clear();
+    self.pending_thought.clear();
     let _ = std::fs::write(dir.join("active.txt"), &self.current_conv.id);
     self.respawn_session(cx);
     cx.notify();
@@ -691,6 +776,8 @@ impl AgentChatPanel {
       .filter_map(|item| match item {
         ChatItem::Message(m) => Some(PersistedChatItem::Message(m.clone())),
         ChatItem::Tool(t) => Some(PersistedChatItem::Tool(t.clone())),
+        ChatItem::Plan(p) => Some(PersistedChatItem::Plan(p.clone())),
+        ChatItem::Thought(t) => Some(PersistedChatItem::Thought(t.clone())),
         ChatItem::Permission(_) => None,
       })
       .collect();
@@ -793,6 +880,8 @@ fn load_conversation_file(
         index.insert(t.id.clone(), items.len());
         items.push(ChatItem::Tool(t));
       }
+      PersistedChatItem::Plan(p) => items.push(ChatItem::Plan(p)),
+      PersistedChatItem::Thought(t) => items.push(ChatItem::Thought(t)),
     }
   }
   Some((parsed.meta, items, index))
@@ -1019,6 +1108,133 @@ fn tool_kind_label(kind: &ToolKind) -> &'static str {
     ToolKind::Fetch => "Fetch",
     _ => "Tool",
   }
+}
+
+fn plan_view_from_acp(plan: &Plan) -> PlanView {
+  PlanView {
+    entries: plan
+      .entries
+      .iter()
+      .map(|e| PlanEntryView {
+        content: e.content.clone(),
+        priority: match e.priority {
+          PlanEntryPriority::High => PlanEntryPriorityView::High,
+          PlanEntryPriority::Medium => PlanEntryPriorityView::Medium,
+          PlanEntryPriority::Low => PlanEntryPriorityView::Low,
+          _ => PlanEntryPriorityView::Medium,
+        },
+        status: match e.status {
+          PlanEntryStatus::Pending => PlanEntryStatusView::Pending,
+          PlanEntryStatus::InProgress => PlanEntryStatusView::InProgress,
+          PlanEntryStatus::Completed => PlanEntryStatusView::Completed,
+          _ => PlanEntryStatusView::Pending,
+        },
+      })
+      .collect(),
+  }
+}
+
+fn render_plan(plan: &PlanView, theme: &gpui_component::Theme) -> gpui::AnyElement {
+  let mut col = v_flex().gap_1().child(
+    div()
+      .text_sm()
+      .font_weight(gpui::FontWeight::BOLD)
+      .text_color(theme.foreground)
+      .child("Plan"),
+  );
+  for entry in &plan.entries {
+    let (icon, color) = match entry.status {
+      PlanEntryStatusView::Completed => (UiIconName::CircleCheck, theme.status_green()),
+      PlanEntryStatusView::InProgress => (UiIconName::CircleDot, theme.warning),
+      PlanEntryStatusView::Pending => (UiIconName::CircleDot, theme.muted_foreground),
+    };
+    let strike = entry.status == PlanEntryStatusView::Completed;
+    col = col.child(
+      h_flex()
+        .gap_2()
+        .items_start()
+        .child(gpui_component::Icon::new(icon).small().text_color(color))
+        .child(
+          div()
+            .flex_1()
+            .text_sm()
+            .text_color(if strike {
+              theme.muted_foreground
+            } else {
+              theme.foreground
+            })
+            .when(strike, |this| this.line_through())
+            .child(entry.content.clone()),
+        ),
+    );
+  }
+  col.into_any_element()
+}
+
+fn render_thought(
+  idx: usize,
+  thought: &ThoughtView,
+  theme: &gpui_component::Theme,
+  cx: &mut Context<AgentChatPanel>,
+) -> gpui::AnyElement {
+  let collapsed = thought.collapsed;
+  let icon = if collapsed {
+    IconName::ChevronRight
+  } else {
+    IconName::ChevronDown
+  };
+  let preview: SharedString = thought
+    .text
+    .lines()
+    .next()
+    .unwrap_or("")
+    .chars()
+    .take(80)
+    .collect::<String>()
+    .into();
+  let toggle_id = SharedString::from(format!("agent-chat-thought-toggle-{idx}"));
+  let body_text = thought.text.clone();
+  v_flex()
+    .gap_1()
+    .child(
+      h_flex()
+        .id(SharedString::from(format!("agent-chat-thought-{idx}")))
+        .gap_2()
+        .items_center()
+        .cursor_pointer()
+        .on_click(cx.listener(move |panel, _, _, cx| panel.toggle_thought_collapsed(idx, cx)))
+        .child(
+          gpui_component::Icon::new(icon)
+            .small()
+            .text_color(theme.muted_foreground),
+        )
+        .child(
+          div()
+            .text_xs()
+            .text_color(theme.muted_foreground)
+            .child(if collapsed {
+              SharedString::from(format!("Thought: {preview}"))
+            } else {
+              SharedString::from("Thought")
+            }),
+        )
+        .child(div().flex_1())
+        .child(Button::new(toggle_id).xsmall().ghost().label(if collapsed {
+          "Expand"
+        } else {
+          "Collapse"
+        }))
+        .into_any_element(),
+    )
+    .when(!collapsed, |this| {
+      this.child(
+        div()
+          .text_xs()
+          .text_color(theme.muted_foreground)
+          .child(body_text),
+      )
+    })
+    .into_any_element()
 }
 
 fn render_tool_call(t: &ToolCallView, theme: &gpui_component::Theme) -> gpui::AnyElement {
@@ -1417,6 +1633,21 @@ impl Render for AgentChatPanel {
         ChatItem::Permission(p) => {
           messages = messages.child(timeline_row(
             render_permission(p, theme, cx),
+            theme,
+            is_last_row,
+          ));
+        }
+        ChatItem::Plan(p) => {
+          messages = messages.child(timeline_row_with_color(
+            render_plan(p, theme),
+            theme,
+            theme.primary,
+            is_last_row,
+          ));
+        }
+        ChatItem::Thought(t) => {
+          messages = messages.child(timeline_row(
+            render_thought(idx, t, theme, cx),
             theme,
             is_last_row,
           ));
@@ -1987,6 +2218,30 @@ mod tests {
     };
     assert_eq!(view.locations.len(), 1);
     assert_eq!(view.locations[0].1, Some(42));
+  }
+
+  #[test]
+  fn plan_view_from_acp_maps_status_and_priority() {
+    use agent_client_protocol::schema::PlanEntry;
+    let plan = Plan::new(vec![
+      PlanEntry::new(
+        "do thing",
+        PlanEntryPriority::High,
+        PlanEntryStatus::InProgress,
+      ),
+      PlanEntry::new(
+        "done thing",
+        PlanEntryPriority::Low,
+        PlanEntryStatus::Completed,
+      ),
+    ]);
+    let view = plan_view_from_acp(&plan);
+    assert_eq!(view.entries.len(), 2);
+    assert_eq!(view.entries[0].content, "do thing");
+    assert_eq!(view.entries[0].priority, PlanEntryPriorityView::High);
+    assert_eq!(view.entries[0].status, PlanEntryStatusView::InProgress);
+    assert_eq!(view.entries[1].status, PlanEntryStatusView::Completed);
+    assert_eq!(view.entries[1].priority, PlanEntryPriorityView::Low);
   }
 
   #[test]
