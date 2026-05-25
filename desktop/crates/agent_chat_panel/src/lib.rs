@@ -29,8 +29,8 @@ use gfm_markdown_viewer::{
 };
 use gpui::Corner;
 use gpui::{
-  Context, Entity, FocusHandle, Focusable, IntoElement, ParentElement, Render, ScrollHandle,
-  SharedString, Styled, Task, Window, div, prelude::*, px,
+  Context, Entity, FocusHandle, Focusable, IntoElement, ParentElement, Render, SharedString,
+  Styled, Task, Window, div, prelude::*, px,
 };
 use gpui_component::{
   ActiveTheme as _, Disableable as _, IconName, Sizable as _,
@@ -136,6 +136,19 @@ struct PersistedConversation {
   items: Vec<PersistedChatItem>,
 }
 
+#[derive(Clone, Copy, Debug)]
+enum ExtraBeforeKind {
+  MissingBinary,
+  Error,
+  Auth,
+}
+
+#[derive(Clone, Copy, Debug)]
+enum ExtraAfterKind {
+  Pending,
+  Spinner,
+}
+
 enum Status {
   Connecting,
   Ready,
@@ -155,7 +168,7 @@ pub struct AgentChatPanel {
   session: Option<Arc<AgentSession>>,
   input: Entity<InputState>,
   in_flight: bool,
-  scroll_handle: ScrollHandle,
+  messages_list: gpui::ListState,
   usage: Option<(u64, u64)>,
   agent_version: Option<String>,
   auth_methods: Vec<AuthMethodInfo>,
@@ -215,7 +228,7 @@ impl AgentChatPanel {
       session: None,
       input,
       in_flight: false,
-      scroll_handle: ScrollHandle::new(),
+      messages_list: gpui::ListState::new(0, gpui::ListAlignment::Top, px(300.)),
       usage: None,
       agent_version: None,
       auth_methods: Vec::new(),
@@ -283,6 +296,7 @@ impl AgentChatPanel {
             if let Some(rx) = permissions {
               panel.start_permission_forwarder(rx, cx);
             }
+            panel.sync_list_count();
             cx.notify();
           });
         }
@@ -290,6 +304,7 @@ impl AgentChatPanel {
           let msg = format!("{e}");
           let _ = this.update(cx, |panel, cx| {
             panel.status = Status::Error(msg);
+            panel.sync_list_count();
             cx.notify();
           });
         }
@@ -309,7 +324,8 @@ impl AgentChatPanel {
         let _ = this.update(cx, |panel, cx| {
           panel.on_event(event);
           panel.persist_state();
-          panel.scroll_handle.scroll_to_bottom();
+          panel.sync_list_count();
+          panel.messages_list.scroll_to_end();
           cx.notify();
         });
       }
@@ -332,8 +348,363 @@ impl AgentChatPanel {
       }));
       self.in_flight = false;
       self.session = None;
+      self.sync_list_count();
       cx.notify();
     }
+  }
+
+  fn extras_before_count(&self) -> usize {
+    let mut n = 0;
+    if matches!(self.status, Status::MissingBinary { .. }) {
+      n += 1;
+    }
+    if matches!(self.status, Status::Error(_)) {
+      n += 1;
+    }
+    if matches!(self.status, Status::Ready) && self.auth_required && !self.auth_methods.is_empty() {
+      n += 1;
+    }
+    n
+  }
+
+  fn extras_after_count(&self) -> usize {
+    if !self.pending_agent.is_empty() {
+      1
+    } else if self.in_flight {
+      1
+    } else {
+      0
+    }
+  }
+
+  fn total_list_items(&self) -> usize {
+    self.extras_before_count() + self.items.len() + self.extras_after_count()
+  }
+
+  fn sync_list_count(&mut self) {
+    let new_count = self.total_list_items();
+    let old_count = self.messages_list.item_count();
+    if new_count == old_count {
+      return;
+    }
+    if new_count > old_count {
+      self
+        .messages_list
+        .splice(old_count..old_count, new_count - old_count);
+    } else {
+      self.messages_list.reset(new_count);
+    }
+  }
+
+  fn mark_last_item_changed(&mut self) {
+    let count = self.messages_list.item_count();
+    if count > 0 {
+      self.messages_list.remeasure_items(count - 1..count);
+    }
+  }
+
+  fn mark_item_changed_at(&mut self, list_ix: usize) {
+    if list_ix < self.messages_list.item_count() {
+      self.messages_list.remeasure_items(list_ix..list_ix + 1);
+    }
+  }
+
+  fn list_ix_for_item(&self, item_idx: usize) -> usize {
+    self.extras_before_count() + item_idx
+  }
+
+  fn extras_before_kinds(&self) -> Vec<ExtraBeforeKind> {
+    let mut v = Vec::new();
+    if matches!(self.status, Status::MissingBinary { .. }) {
+      v.push(ExtraBeforeKind::MissingBinary);
+    }
+    if matches!(self.status, Status::Error(_)) {
+      v.push(ExtraBeforeKind::Error);
+    }
+    if matches!(self.status, Status::Ready) && self.auth_required && !self.auth_methods.is_empty() {
+      v.push(ExtraBeforeKind::Auth);
+    }
+    v
+  }
+
+  fn extras_after_kind(&self) -> Option<ExtraAfterKind> {
+    if !self.pending_agent.is_empty() {
+      Some(ExtraAfterKind::Pending)
+    } else if self.in_flight {
+      Some(ExtraAfterKind::Spinner)
+    } else {
+      None
+    }
+  }
+
+  fn render_list_item(
+    &mut self,
+    list_ix: usize,
+    theme: &gpui_component::Theme,
+    cx: &mut Context<Self>,
+  ) -> gpui::AnyElement {
+    let extras_before = self.extras_before_kinds();
+    let element = if list_ix < extras_before.len() {
+      self.render_extra_before(extras_before[list_ix], theme, cx)
+    } else {
+      let item_ix = list_ix - extras_before.len();
+      if item_ix < self.items.len() {
+        let md_options =
+          MarkdownRenderOptions::with_on_link(Arc::new(|_url, _window, _cx| LinkAction::Open))
+            .with_syntax_cache(self.syntax_cache.clone());
+        self.render_item_at(item_ix, theme, &md_options, cx)
+      } else if let Some(kind) = self.extras_after_kind() {
+        self.render_extra_after(kind, theme, cx)
+      } else {
+        div().into_any_element()
+      }
+    };
+    if list_ix == 0 {
+      div().pt_3().child(element).into_any_element()
+    } else {
+      element
+    }
+  }
+
+  fn render_extra_before(
+    &mut self,
+    kind: ExtraBeforeKind,
+    theme: &gpui_component::Theme,
+    cx: &mut Context<Self>,
+  ) -> gpui::AnyElement {
+    match kind {
+      ExtraBeforeKind::MissingBinary => {
+        let Status::MissingBinary { command, hint } = &self.status else {
+          return div().into_any_element();
+        };
+        v_flex()
+          .px_3()
+          .gap_2()
+          .p_3()
+          .border_1()
+          .border_color(theme.border)
+          .rounded(px(4.))
+          .child(
+            div()
+              .text_sm()
+              .text_color(theme.danger)
+              .child(format!("`{command}` not found on PATH")),
+          )
+          .child(
+            div()
+              .text_sm()
+              .text_color(theme.foreground)
+              .child(hint.clone()),
+          )
+          .into_any_element()
+      }
+      ExtraBeforeKind::Error => {
+        let Status::Error(e) = &self.status else {
+          return div().into_any_element();
+        };
+        div()
+          .px_3()
+          .text_sm()
+          .text_color(theme.danger)
+          .child(format!("Failed to start agent: {e}"))
+          .into_any_element()
+      }
+      ExtraBeforeKind::Auth => self.render_auth_card(theme, cx),
+    }
+  }
+
+  fn render_auth_card(
+    &mut self,
+    theme: &gpui_component::Theme,
+    cx: &mut Context<Self>,
+  ) -> gpui::AnyElement {
+    let executable = self.backend.command;
+    let mut card = v_flex()
+      .px_3()
+      .gap_2()
+      .p_2()
+      .border_1()
+      .border_color(theme.border)
+      .rounded(px(4.))
+      .child(
+        div()
+          .text_xs()
+          .text_color(theme.muted_foreground)
+          .child("Sign-in options offered by the agent:".to_string()),
+      );
+    for method in self.auth_methods.clone() {
+      let mut row = v_flex().gap_1();
+      row = row.child(
+        div()
+          .text_sm()
+          .text_color(theme.foreground)
+          .child(method.name.clone()),
+      );
+      if let Some(desc) = method.description.clone() {
+        row = row.child(
+          div()
+            .text_xs()
+            .text_color(theme.muted_foreground)
+            .child(desc),
+        );
+      }
+      if let Some(cmd) = method.terminal_command.clone() {
+        let shell_cmd = cmd.to_shell_string(executable);
+        let preview = shell_cmd.clone();
+        let copy_value = shell_cmd.clone();
+        let copy_id = SharedString::from(format!("auth-copy-{}", method.id));
+        let open_id = SharedString::from(format!("auth-open-{}", method.id));
+        let launch_cmd = cmd.clone();
+        let exec_owned = executable.to_string();
+        row = row.child(
+          div()
+            .text_xs()
+            .text_color(theme.muted_foreground)
+            .child(format!("`{preview}`")),
+        );
+        row = row.child(
+          h_flex()
+            .gap_2()
+            .child(
+              Button::new(open_id)
+                .label("Open in Terminal")
+                .small()
+                .primary()
+                .on_click(cx.listener(move |_, _, _, cx| {
+                  if !launch_cmd.try_launch_terminal(&exec_owned) {
+                    cx.write_to_clipboard(gpui::ClipboardItem::new_string(copy_value.clone()));
+                  }
+                })),
+            )
+            .child(
+              Button::new(copy_id)
+                .label("Copy command")
+                .small()
+                .ghost()
+                .on_click(cx.listener(move |_, _, _, cx| {
+                  cx.write_to_clipboard(gpui::ClipboardItem::new_string(shell_cmd.clone()));
+                })),
+            ),
+        );
+      }
+      card = card.child(row);
+    }
+    card.into_any_element()
+  }
+
+  fn render_extra_after(
+    &mut self,
+    kind: ExtraAfterKind,
+    theme: &gpui_component::Theme,
+    cx: &mut Context<Self>,
+  ) -> gpui::AnyElement {
+    match kind {
+      ExtraAfterKind::Pending => {
+        let md_options =
+          MarkdownRenderOptions::with_on_link(Arc::new(|_url, _window, _cx| LinkAction::Open))
+            .with_syntax_cache(self.syntax_cache.clone());
+        v_flex()
+          .px_3()
+          .pb_3()
+          .gap_1()
+          .child(
+            div()
+              .text_xs()
+              .text_color(theme.muted_foreground)
+              .child(format!("{} (typing...)", self.backend.label)),
+          )
+          .child(render_markdown(&self.pending_agent, &md_options, cx))
+          .into_any_element()
+      }
+      ExtraAfterKind::Spinner => h_flex()
+        .px_3()
+        .pb_3()
+        .gap_2()
+        .items_center()
+        .child(Spinner::new().xsmall().color(theme.muted_foreground))
+        .child(
+          div()
+            .text_xs()
+            .text_color(theme.muted_foreground)
+            .child(format!("{} is thinking...", self.backend.label)),
+        )
+        .into_any_element(),
+    }
+  }
+
+  fn render_item_at(
+    &mut self,
+    idx: usize,
+    theme: &gpui_component::Theme,
+    md_options: &MarkdownRenderOptions,
+    cx: &mut Context<Self>,
+  ) -> gpui::AnyElement {
+    let has_trailer = self.extras_after_kind().is_some();
+    let total = self.items.len();
+    let next_is_user = self
+      .items
+      .get(idx + 1)
+      .map(|i| {
+        matches!(
+          i,
+          ChatItem::Message(ChatMessage {
+            role: ChatRole::User,
+            ..
+          })
+        )
+      })
+      .unwrap_or(false);
+    let is_end_of_group = if idx + 1 == total {
+      !has_trailer
+    } else {
+      next_is_user
+    };
+    let is_last_row = is_end_of_group;
+
+    let item = self.items[idx].clone();
+    let element: gpui::AnyElement = match &item {
+      ChatItem::Message(m) => match m.role {
+        ChatRole::User => div()
+          .px_3()
+          .py_2()
+          .mb_3()
+          .rounded(theme.radius)
+          .bg(theme.input_background())
+          .border_1()
+          .border_color(theme.border)
+          .text_sm()
+          .text_color(theme.foreground)
+          .child(m.text.clone())
+          .into_any_element(),
+        ChatRole::Agent => {
+          timeline_row(render_markdown(&m.text, md_options, cx), theme, is_last_row)
+        }
+        ChatRole::System => timeline_row(
+          div()
+            .text_xs()
+            .text_color(theme.muted_foreground)
+            .child(m.text.clone())
+            .into_any_element(),
+          theme,
+          is_last_row,
+        ),
+      },
+      ChatItem::Tool(t) => {
+        let bullet = match t.status {
+          ToolCallStatus::Completed => theme.status_green(),
+          ToolCallStatus::Failed => theme.danger,
+          ToolCallStatus::InProgress => theme.warning,
+          _ => theme.muted_foreground,
+        };
+        timeline_row_with_color(render_tool_call(t, theme, cx), theme, bullet, is_last_row)
+      }
+      ChatItem::Permission(p) => timeline_row(render_permission(p, theme, cx), theme, is_last_row),
+      ChatItem::Plan(p) => {
+        timeline_row_with_color(render_plan(p, theme), theme, theme.primary, is_last_row)
+      }
+      ChatItem::Thought(t) => timeline_row(render_thought(idx, t, theme, cx), theme, is_last_row),
+    };
+    div().px_3().child(element).into_any_element()
   }
 
   fn start_permission_forwarder(
@@ -348,7 +719,8 @@ impl AgentChatPanel {
             prompt,
             resolved: None,
           }));
-          panel.scroll_handle.scroll_to_bottom();
+          panel.sync_list_count();
+          panel.messages_list.scroll_to_end();
           cx.notify();
         });
       }
@@ -365,12 +737,18 @@ impl AgentChatPanel {
     if let Some(session) = self.session.as_ref() {
       session.answer_permission(prompt_id, option_id.clone());
     }
-    for item in self.items.iter_mut() {
+    let mut hit: Option<usize> = None;
+    for (i, item) in self.items.iter_mut().enumerate() {
       if let ChatItem::Permission(p) = item
         && p.prompt.id == prompt_id
       {
         p.resolved = Some(option_id.clone().unwrap_or_else(|| "cancel".into()));
+        hit = Some(i);
       }
+    }
+    if let Some(i) = hit {
+      let list_ix = self.list_ix_for_item(i);
+      self.mark_item_changed_at(list_ix);
     }
     cx.notify();
   }
@@ -384,6 +762,8 @@ impl AgentChatPanel {
         if let ContentBlock::Text(t) = chunk.content {
           self.pending_agent.push_str(&t.text);
         }
+        self.sync_list_count();
+        self.mark_last_item_changed();
       }
       AgentEvent::AgentThoughtChunk(chunk) => {
         if !self.in_flight {
@@ -392,12 +772,25 @@ impl AgentChatPanel {
         if let ContentBlock::Text(t) = chunk.content {
           self.pending_thought.push_str(&t.text);
         }
+        self.sync_list_count();
+        self.mark_last_item_changed();
       }
       AgentEvent::ToolCall(call) => {
+        let new_id = call.tool_call_id.clone();
+        let is_new = !self.tool_index.contains_key(&new_id);
         self.upsert_tool_call(call);
+        if !is_new && let Some(&item_idx) = self.tool_index.get(&new_id) {
+          let list_ix = self.list_ix_for_item(item_idx);
+          self.mark_item_changed_at(list_ix);
+        }
       }
       AgentEvent::ToolCallUpdate(update) => {
+        let id = update.tool_call_id.clone();
         self.apply_tool_call_update(update);
+        if let Some(&item_idx) = self.tool_index.get(&id) {
+          let list_ix = self.list_ix_for_item(item_idx);
+          self.mark_item_changed_at(list_ix);
+        }
       }
       AgentEvent::UsageUpdate(usage) => {
         self.usage = Some((usage.used, usage.size));
@@ -433,6 +826,9 @@ impl AgentChatPanel {
       && let ChatItem::Plan(existing) = last
     {
       *existing = view;
+      let last_idx = self.items.len() - 1;
+      let list_ix = self.list_ix_for_item(last_idx);
+      self.mark_item_changed_at(list_ix);
       return;
     }
     self.items.push(ChatItem::Plan(view));
@@ -450,22 +846,30 @@ impl AgentChatPanel {
   }
 
   fn toggle_diff_expanded(&mut self, tool_id: ToolCallId, diff_idx: usize, cx: &mut Context<Self>) {
-    for item in &mut self.items {
+    let mut hit: Option<usize> = None;
+    for (i, item) in self.items.iter_mut().enumerate() {
       if let ChatItem::Tool(t) = item
         && t.id == tool_id
       {
         if let Some(d) = t.diffs.get_mut(diff_idx) {
           d.expanded = !d.expanded;
-          cx.notify();
+          hit = Some(i);
         }
-        return;
+        break;
       }
+    }
+    if let Some(i) = hit {
+      let list_ix = self.list_ix_for_item(i);
+      self.mark_item_changed_at(list_ix);
+      cx.notify();
     }
   }
 
   fn toggle_thought_collapsed(&mut self, idx: usize, cx: &mut Context<Self>) {
     if let Some(ChatItem::Thought(t)) = self.items.get_mut(idx) {
       t.collapsed = !t.collapsed;
+      let list_ix = self.list_ix_for_item(idx);
+      self.mark_item_changed_at(list_ix);
       cx.notify();
     }
   }
@@ -571,7 +975,8 @@ impl AgentChatPanel {
     self.pending_thought.clear();
     self.in_flight = true;
     self.persist_state();
-    self.scroll_handle.scroll_to_bottom();
+    self.sync_list_count();
+    self.messages_list.scroll_to_end();
     cx.notify();
 
     cx.spawn(async move |this, cx| {
@@ -607,7 +1012,8 @@ impl AgentChatPanel {
         }
         panel.in_flight = false;
         panel.persist_state();
-        panel.scroll_handle.scroll_to_bottom();
+        panel.sync_list_count();
+        panel.messages_list.scroll_to_end();
         cx.notify();
       });
     })
@@ -638,6 +1044,7 @@ impl AgentChatPanel {
     self.in_flight = false;
     self.usage = None;
     self.respawn_session(cx);
+    self.sync_list_count();
     cx.notify();
   }
 
@@ -658,6 +1065,7 @@ impl AgentChatPanel {
       self.usage = None;
       self.respawn_session(cx);
     }
+    self.sync_list_count();
     cx.notify();
   }
 
@@ -677,6 +1085,7 @@ impl AgentChatPanel {
     self.pending_thought.clear();
     let _ = std::fs::write(dir.join("active.txt"), &self.current_conv.id);
     self.respawn_session(cx);
+    self.sync_list_count();
     cx.notify();
   }
 
@@ -707,8 +1116,10 @@ impl AgentChatPanel {
         command,
         hint: install_hint,
       };
+      self.sync_list_count();
       return;
     }
+    self.sync_list_count();
     let backend = self.backend.clone();
     let cwd = self.cwd.clone();
     let executor = cx.background_executor().clone();
@@ -746,6 +1157,7 @@ impl AgentChatPanel {
             if let Some(rx) = permissions {
               panel.start_permission_forwarder(rx, cx);
             }
+            panel.sync_list_count();
             cx.notify();
           });
         }
@@ -753,6 +1165,7 @@ impl AgentChatPanel {
           let msg = format!("{e}");
           let _ = this.update(cx, |panel, cx| {
             panel.status = Status::Error(msg);
+            panel.sync_list_count();
             cx.notify();
           });
         }
@@ -1500,9 +1913,6 @@ impl Render for AgentChatPanel {
   fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
     let theme = cx.theme().clone();
     let theme = &theme;
-    let md_options =
-      MarkdownRenderOptions::with_on_link(Arc::new(|_url, _window, _cx| LinkAction::Open))
-        .with_syntax_cache(self.syntax_cache.clone());
 
     let _ = SharedString::from("");
 
@@ -1512,243 +1922,8 @@ impl Render for AgentChatPanel {
       format!("{used_k:.1}k / {size_k:.0}k").into()
     });
 
-    let mut messages = v_flex().p_3();
-
-    if let Status::MissingBinary { command, hint } = &self.status {
-      messages = messages.child(
-        v_flex()
-          .gap_2()
-          .p_3()
-          .border_1()
-          .border_color(theme.border)
-          .rounded(px(4.))
-          .child(
-            div()
-              .text_sm()
-              .text_color(theme.danger)
-              .child(format!("`{command}` not found on PATH")),
-          )
-          .child(
-            div()
-              .text_sm()
-              .text_color(theme.foreground)
-              .child(hint.clone()),
-          ),
-      );
-    }
-
-    if let Status::Error(e) = &self.status {
-      messages = messages.child(
-        div()
-          .text_sm()
-          .text_color(theme.danger)
-          .child(format!("Failed to start agent: {e}")),
-      );
-    }
-
-    if matches!(self.status, Status::Ready) && self.auth_required && !self.auth_methods.is_empty() {
-      let executable = self.backend.command;
-      let mut card = v_flex()
-        .gap_2()
-        .p_2()
-        .border_1()
-        .border_color(theme.border)
-        .rounded(px(4.))
-        .child(
-          div()
-            .text_xs()
-            .text_color(theme.muted_foreground)
-            .child("Sign-in options offered by the agent:".to_string()),
-        );
-      for method in self.auth_methods.clone() {
-        let mut row = v_flex().gap_1();
-        row = row.child(
-          div()
-            .text_sm()
-            .text_color(theme.foreground)
-            .child(method.name.clone()),
-        );
-        if let Some(desc) = method.description.clone() {
-          row = row.child(
-            div()
-              .text_xs()
-              .text_color(theme.muted_foreground)
-              .child(desc),
-          );
-        }
-        if let Some(cmd) = method.terminal_command.clone() {
-          let shell_cmd = cmd.to_shell_string(executable);
-          let preview = shell_cmd.clone();
-          let copy_value = shell_cmd.clone();
-          let copy_id = SharedString::from(format!("auth-copy-{}", method.id));
-          let open_id = SharedString::from(format!("auth-open-{}", method.id));
-          let launch_cmd = cmd.clone();
-          let exec_owned = executable.to_string();
-          row = row.child(
-            div()
-              .text_xs()
-              .text_color(theme.muted_foreground)
-              .child(format!("`{preview}`")),
-          );
-          row = row.child(
-            h_flex()
-              .gap_2()
-              .child(
-                Button::new(open_id)
-                  .label("Open in Terminal")
-                  .small()
-                  .primary()
-                  .on_click(cx.listener(move |_, _, _, cx| {
-                    if !launch_cmd.try_launch_terminal(&exec_owned) {
-                      cx.write_to_clipboard(gpui::ClipboardItem::new_string(copy_value.clone()));
-                    }
-                  })),
-              )
-              .child(
-                Button::new(copy_id)
-                  .label("Copy command")
-                  .small()
-                  .ghost()
-                  .on_click(cx.listener(move |_, _, _, cx| {
-                    cx.write_to_clipboard(gpui::ClipboardItem::new_string(shell_cmd.clone()));
-                  })),
-              ),
-          );
-        }
-        card = card.child(row);
-      }
-      messages = messages.child(card);
-    }
-
-    let has_trailer = !self.pending_agent.is_empty() || self.in_flight;
-    let total_items = self.items.len();
-    let is_user_message = |item: &ChatItem| {
-      matches!(
-        item,
-        ChatItem::Message(ChatMessage {
-          role: ChatRole::User,
-          ..
-        })
-      )
-    };
-    for (idx, item) in self.items.iter().enumerate() {
-      let next_is_user = self
-        .items
-        .get(idx + 1)
-        .map(is_user_message)
-        .unwrap_or(false);
-      let is_end_of_group = if idx + 1 == total_items {
-        !has_trailer
-      } else {
-        next_is_user
-      };
-      let is_last_row = is_end_of_group;
-      match item {
-        ChatItem::Message(m) => match m.role {
-          ChatRole::User => {
-            messages = messages.child(
-              div()
-                .px_3()
-                .py_2()
-                .mb_3()
-                .rounded(theme.radius)
-                .bg(theme.input_background())
-                .border_1()
-                .border_color(theme.border)
-                .text_sm()
-                .text_color(theme.foreground)
-                .child(m.text.clone()),
-            );
-          }
-          ChatRole::Agent => {
-            messages = messages.child(timeline_row(
-              render_markdown(&m.text, &md_options, cx),
-              theme,
-              is_last_row,
-            ));
-          }
-          ChatRole::System => {
-            messages = messages.child(timeline_row(
-              div()
-                .text_xs()
-                .text_color(theme.muted_foreground)
-                .child(m.text.clone())
-                .into_any_element(),
-              theme,
-              is_last_row,
-            ));
-          }
-        },
-        ChatItem::Tool(t) => {
-          let bullet = match t.status {
-            ToolCallStatus::Completed => theme.status_green(),
-            ToolCallStatus::Failed => theme.danger,
-            ToolCallStatus::InProgress => theme.warning,
-            _ => theme.muted_foreground,
-          };
-          messages = messages.child(timeline_row_with_color(
-            render_tool_call(t, theme, cx),
-            theme,
-            bullet,
-            is_last_row,
-          ));
-        }
-        ChatItem::Permission(p) => {
-          messages = messages.child(timeline_row(
-            render_permission(p, theme, cx),
-            theme,
-            is_last_row,
-          ));
-        }
-        ChatItem::Plan(p) => {
-          messages = messages.child(timeline_row_with_color(
-            render_plan(p, theme),
-            theme,
-            theme.primary,
-            is_last_row,
-          ));
-        }
-        ChatItem::Thought(t) => {
-          messages = messages.child(timeline_row(
-            render_thought(idx, t, theme, cx),
-            theme,
-            is_last_row,
-          ));
-        }
-      }
-    }
-
-    if !self.pending_agent.is_empty() {
-      messages = messages.child(
-        v_flex()
-          .gap_1()
-          .child(
-            div()
-              .text_xs()
-              .text_color(theme.muted_foreground)
-              .child(format!("{} (typing...)", self.backend.label)),
-          )
-          .child(render_markdown(&self.pending_agent, &md_options, cx)),
-      );
-    } else if self.in_flight {
-      messages = messages.child(
-        h_flex()
-          .gap_2()
-          .items_center()
-          .child(Spinner::new().xsmall().color(theme.muted_foreground))
-          .child(
-            div()
-              .text_xs()
-              .text_color(theme.muted_foreground)
-              .child(format!("{} is thinking...", self.backend.label)),
-          ),
-      );
-    }
-
-    let show_empty_state = self.items.is_empty()
-      && self.pending_agent.is_empty()
-      && !self.in_flight
-      && matches!(self.status, Status::Ready | Status::Connecting);
+    let show_empty_state =
+      self.total_list_items() == 0 && matches!(self.status, Status::Ready | Status::Connecting);
     let empty_state = if show_empty_state {
       Some(
         v_flex()
@@ -1938,20 +2113,23 @@ impl Render for AgentChatPanel {
         if let Some(empty_state) = empty_state {
           this.child(empty_state)
         } else {
+          let entity = cx.entity().clone();
+          let messages_list = self.messages_list.clone();
           this.child(
             div()
               .flex_1()
               .min_h_0()
               .relative()
               .child(
-                div()
-                  .id("agent-chat-messages")
-                  .size_full()
-                  .overflow_y_scroll()
-                  .track_scroll(&self.scroll_handle)
-                  .child(messages),
+                gpui::list(messages_list, move |ix, _window, cx| {
+                  entity.update(cx, |panel, cx| {
+                    let theme = cx.theme().clone();
+                    panel.render_list_item(ix, &theme, cx)
+                  })
+                })
+                .size_full(),
               )
-              .vertical_scrollbar(&self.scroll_handle),
+              .vertical_scrollbar(&self.messages_list),
           )
         }
       })
