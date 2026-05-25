@@ -6,7 +6,8 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use crate::diff::{
-  DiffLineKind, DiffSummary, InlineSpanKind, MAX_DIFF_LINES_COLLAPSED, extract_diffs,
+  DiffLineKind, DiffSummary, InlineSpanKind, MAX_DIFF_LINES_COLLAPSED,
+  MAX_TOOL_OUTPUT_LINES_COLLAPSED, extract_diffs, extract_outputs,
 };
 pub use crate::persistence::{ConversationMeta, state_dir_for_repo};
 use crate::persistence::{new_conversation_meta, now_secs, truncate_title};
@@ -67,6 +68,15 @@ struct ToolCallView {
   locations: Vec<(PathBuf, Option<u32>)>,
   #[serde(default)]
   diffs: Vec<DiffSummary>,
+  #[serde(default)]
+  outputs: Vec<ToolOutput>,
+}
+
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+pub(crate) struct ToolOutput {
+  pub text: String,
+  #[serde(skip)]
+  pub expanded: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -865,6 +875,31 @@ impl AgentChatPanel {
     }
   }
 
+  fn toggle_output_expanded(
+    &mut self,
+    tool_id: ToolCallId,
+    output_idx: usize,
+    cx: &mut Context<Self>,
+  ) {
+    let mut hit: Option<usize> = None;
+    for (i, item) in self.items.iter_mut().enumerate() {
+      if let ChatItem::Tool(t) = item
+        && t.id == tool_id
+      {
+        if let Some(o) = t.outputs.get_mut(output_idx) {
+          o.expanded = !o.expanded;
+          hit = Some(i);
+        }
+        break;
+      }
+    }
+    if let Some(i) = hit {
+      let list_ix = self.list_ix_for_item(i);
+      self.mark_item_changed_at(list_ix);
+      cx.notify();
+    }
+  }
+
   fn toggle_thought_collapsed(&mut self, idx: usize, cx: &mut Context<Self>) {
     if let Some(ChatItem::Thought(t)) = self.items.get_mut(idx) {
       t.collapsed = !t.collapsed;
@@ -1356,6 +1391,7 @@ fn upsert_tool_call_pure(
   cwd: &std::path::Path,
 ) {
   let diffs = extract_diffs(&call.content, cwd);
+  let outputs = extract_outputs(&call.content);
   let view = ToolCallView {
     id: call.tool_call_id.clone(),
     title: call.title,
@@ -1367,6 +1403,7 @@ fn upsert_tool_call_pure(
       .map(|l| (l.path, l.line))
       .collect(),
     diffs,
+    outputs,
   };
   if let Some(&idx) = index.get(&call.tool_call_id) {
     if let Some(ChatItem::Tool(existing)) = items.get_mut(idx) {
@@ -1405,6 +1442,7 @@ fn apply_tool_call_update_pure(
   }
   if let Some(content) = update.fields.content {
     view.diffs = extract_diffs(&content, cwd);
+    view.outputs = extract_outputs(&content);
   }
 }
 
@@ -1819,6 +1857,65 @@ fn render_tool_call(
         diff_col = diff_col.child(block);
       }
       this.child(diff_col)
+    })
+    .when(!t.outputs.is_empty(), |this| {
+      let mut out_col = v_flex().gap_2();
+      for (out_idx, output) in t.outputs.iter().enumerate() {
+        let lines: Vec<&str> = output.text.lines().collect();
+        let total = lines.len();
+        let visible = if output.expanded {
+          total
+        } else {
+          total.min(MAX_TOOL_OUTPUT_LINES_COLLAPSED)
+        };
+        let body_text: String = lines
+          .iter()
+          .take(visible)
+          .copied()
+          .collect::<Vec<_>>()
+          .join("\n");
+        let mut block = v_flex().gap_0p5().child(
+          div()
+            .font_family("monospace")
+            .text_xs()
+            .bg(theme.background)
+            .border_1()
+            .border_color(theme.border)
+            .rounded(px(3.))
+            .overflow_hidden()
+            .px_2()
+            .py_1()
+            .text_color(theme.foreground)
+            .whitespace_normal()
+            .child(body_text),
+        );
+        if total > MAX_TOOL_OUTPUT_LINES_COLLAPSED {
+          let remaining = total.saturating_sub(visible);
+          let label: SharedString = if output.expanded {
+            "Show less".into()
+          } else {
+            format!(
+              "Show {remaining} more line{}",
+              if remaining == 1 { "" } else { "s" }
+            )
+            .into()
+          };
+          let button_id =
+            SharedString::from(format!("agent-chat-output-expand-{}-{out_idx}", tool_id.0));
+          let tool_id_for_click = tool_id.clone();
+          block = block.child(
+            Button::new(button_id)
+              .label(label)
+              .xsmall()
+              .ghost()
+              .on_click(cx.listener(move |panel, _, _, cx| {
+                panel.toggle_output_expanded(tool_id_for_click.clone(), out_idx, cx);
+              })),
+          );
+        }
+        out_col = out_col.child(block);
+      }
+      this.child(out_col)
     })
     .into_any_element()
 }
