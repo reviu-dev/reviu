@@ -36,6 +36,11 @@ fn gtk_tray_init_error_message(error: impl std::fmt::Display) -> String {
 }
 
 #[cfg(any(test, target_os = "linux"))]
+fn gtk_tray_no_display_message() -> &'static str {
+  "Unable to initialize the Reviu system tray: no GDK display available (Wayland/headless session without GTK support)."
+}
+
+#[cfg(any(test, target_os = "linux"))]
 const LINUX_APPINDICATOR_LIBRARY_NAMES: &[&str] = &[
   "libayatana-appindicator3.so.1",
   "libappindicator3.so.1",
@@ -303,30 +308,42 @@ mod desktop_tray {
         return;
       };
 
-      let menu = Menu::new();
-      let Ok(()) = populate_menu(&menu, 0, &[], &mut HashMap::new()) else {
-        eprintln!("Unable to initialize Reviu system tray menu.");
-        return;
+      let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let menu = Menu::new();
+        populate_menu(&menu, 0, &[], &mut HashMap::new())
+          .map_err(|_| "menu populate".to_string())?;
+
+        let builder = TrayIconBuilder::new()
+          .with_icon(icon)
+          .with_menu(Box::new(menu.clone()))
+          .with_tooltip(status_bar_tooltip(0))
+          .with_menu_on_left_click(true)
+          .with_menu_on_right_click(true);
+
+        let tray = builder.build().map_err(|_| "tray build".to_string())?;
+        Ok::<_, String>((menu, tray))
+      }));
+
+      let state = match result {
+        Ok(Ok((menu, tray))) => TrayState {
+          icon: tray,
+          menu,
+          notifications: Vec::new(),
+          notification_items: HashMap::new(),
+        },
+        Ok(Err(stage)) => {
+          eprintln!("Unable to initialize Reviu system tray ({stage}).");
+          return;
+        }
+        Err(_) => {
+          eprintln!(
+            "Reviu system tray initialization panicked; continuing without a tray icon."
+          );
+          return;
+        }
       };
 
-      let builder = TrayIconBuilder::new()
-        .with_icon(icon)
-        .with_menu(Box::new(menu.clone()))
-        .with_tooltip(status_bar_tooltip(0))
-        .with_menu_on_left_click(true)
-        .with_menu_on_right_click(true);
-
-      let Ok(icon) = builder.build() else {
-        eprintln!("Unable to initialize Reviu system tray icon.");
-        return;
-      };
-
-      *cell.borrow_mut() = Some(TrayState {
-        icon,
-        menu,
-        notifications: Vec::new(),
-        notification_items: HashMap::new(),
-      });
+      *cell.borrow_mut() = Some(state);
     });
   }
 
@@ -414,6 +431,11 @@ mod desktop_tray {
   fn ensure_platform_tray_runtime() -> bool {
     if let Err(error) = gtk::init() {
       eprintln!("{}", super::gtk_tray_init_error_message(error));
+      return false;
+    }
+
+    if gtk::gdk::Screen::default().is_none() {
+      eprintln!("{}", super::gtk_tray_no_display_message());
       return false;
     }
 
