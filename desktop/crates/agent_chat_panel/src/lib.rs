@@ -13,8 +13,8 @@ use agent_acp::{
   PermissionOptionKind, PermissionPrompt,
 };
 use agent_client_protocol::schema::{
-  ContentBlock, Plan, PlanEntryPriority, PlanEntryStatus, ToolCall, ToolCallId, ToolCallStatus,
-  ToolCallUpdate, ToolKind,
+  ContentBlock, Plan, PlanEntryPriority, PlanEntryStatus, SessionInfoUpdate, ToolCall, ToolCallId,
+  ToolCallStatus, ToolCallUpdate, ToolKind,
 };
 use agent_client_protocol::schema::{
   ModelId, ModelInfo, SessionConfigId, SessionConfigKind, SessionConfigOption,
@@ -409,8 +409,20 @@ impl AgentChatPanel {
       AgentEvent::Plan(plan) => {
         self.apply_plan(plan);
       }
+      AgentEvent::SessionInfoUpdate(info) => {
+        self.apply_session_info(info);
+      }
       _ => {}
     }
+  }
+
+  fn apply_session_info(&mut self, info: SessionInfoUpdate) {
+    if let Some(title) = info.title.value() {
+      self.current_conv.title = title.clone();
+    } else if info.title.is_null() {
+      self.current_conv.title.clear();
+    }
+    self.persist_state();
   }
 
   fn apply_plan(&mut self, plan: Plan) {
@@ -2218,6 +2230,32 @@ mod tests {
     };
     assert_eq!(view.locations.len(), 1);
     assert_eq!(view.locations[0].1, Some(42));
+  }
+
+  #[test]
+  fn session_info_update_sets_title_value_and_null_clears() {
+    let mut meta = new_conversation_meta();
+    meta.title = "hello".into();
+    let value_update = SessionInfoUpdate::new().title("renamed");
+    if let Some(title) = value_update.title.value() {
+      meta.title = title.clone();
+    }
+    assert_eq!(meta.title, "renamed");
+
+    let null_update = SessionInfoUpdate::new().title(None::<String>);
+    if null_update.title.is_null() {
+      meta.title.clear();
+    }
+    assert!(meta.title.is_empty());
+
+    let undefined_update = SessionInfoUpdate::new();
+    let snapshot = meta.title.clone();
+    if let Some(title) = undefined_update.title.value() {
+      meta.title = title.clone();
+    } else if undefined_update.title.is_null() {
+      meta.title.clear();
+    }
+    assert_eq!(meta.title, snapshot);
   }
 
   #[test]
