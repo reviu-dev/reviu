@@ -5,7 +5,9 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use crate::diff::{DiffLineKind, DiffSummary, InlineSpanKind, extract_diffs};
+use crate::diff::{
+  DiffLineKind, DiffSummary, InlineSpanKind, MAX_DIFF_LINES_COLLAPSED, extract_diffs,
+};
 pub use crate::persistence::{ConversationMeta, state_dir_for_repo};
 use crate::persistence::{new_conversation_meta, now_secs, truncate_title};
 use agent_acp::{
@@ -445,6 +447,20 @@ impl AgentChatPanel {
       text,
       collapsed: true,
     }));
+  }
+
+  fn toggle_diff_expanded(&mut self, tool_id: ToolCallId, diff_idx: usize, cx: &mut Context<Self>) {
+    for item in &mut self.items {
+      if let ChatItem::Tool(t) = item
+        && t.id == tool_id
+      {
+        if let Some(d) = t.diffs.get_mut(diff_idx) {
+          d.expanded = !d.expanded;
+          cx.notify();
+        }
+        return;
+      }
+    }
   }
 
   fn toggle_thought_collapsed(&mut self, idx: usize, cx: &mut Context<Self>) {
@@ -1249,13 +1265,18 @@ fn render_thought(
     .into_any_element()
 }
 
-fn render_tool_call(t: &ToolCallView, theme: &gpui_component::Theme) -> gpui::AnyElement {
+fn render_tool_call(
+  t: &ToolCallView,
+  theme: &gpui_component::Theme,
+  cx: &mut Context<AgentChatPanel>,
+) -> gpui::AnyElement {
   let title_color = match t.status {
     ToolCallStatus::Failed => theme.danger,
     ToolCallStatus::InProgress => theme.warning,
     _ => theme.foreground,
   };
   let detail = tool_detail_label(t);
+  let tool_id = t.id.clone();
 
   v_flex()
     .gap_1()
@@ -1282,7 +1303,7 @@ fn render_tool_call(t: &ToolCallView, theme: &gpui_component::Theme) -> gpui::An
     )
     .when(!t.diffs.is_empty(), |this| {
       let mut diff_col = v_flex().gap_2();
-      for d in &t.diffs {
+      for (diff_idx, d) in t.diffs.iter().enumerate() {
         let mut block = v_flex().gap_0p5().child(
           h_flex()
             .gap_2()
@@ -1306,6 +1327,12 @@ fn render_tool_call(t: &ToolCallView, theme: &gpui_component::Theme) -> gpui::An
             ),
         );
         if !d.lines.is_empty() {
+          let total = d.lines.len();
+          let visible = if d.expanded {
+            total
+          } else {
+            total.min(MAX_DIFF_LINES_COLLAPSED)
+          };
           let mut body = v_flex()
             .font_family("monospace")
             .text_xs()
@@ -1315,7 +1342,7 @@ fn render_tool_call(t: &ToolCallView, theme: &gpui_component::Theme) -> gpui::An
             .rounded(px(3.))
             .overflow_hidden();
           let ui_theme = ui::Theme::new(theme.is_dark());
-          for line in &d.lines {
+          for line in d.lines.iter().take(visible) {
             let (bg, fg, hl_bg) = match line.kind {
               DiffLineKind::Added => (
                 ui_theme.diff_added_background(),
@@ -1351,6 +1378,30 @@ fn render_tool_call(t: &ToolCallView, theme: &gpui_component::Theme) -> gpui::An
             );
           }
           block = block.child(body);
+          if total > MAX_DIFF_LINES_COLLAPSED {
+            let remaining = total.saturating_sub(visible);
+            let label: SharedString = if d.expanded {
+              "Show less".into()
+            } else {
+              format!(
+                "Show {remaining} more line{}",
+                if remaining == 1 { "" } else { "s" }
+              )
+              .into()
+            };
+            let button_id =
+              SharedString::from(format!("agent-chat-diff-expand-{}-{diff_idx}", tool_id.0));
+            let tool_id = tool_id.clone();
+            block = block.child(
+              Button::new(button_id)
+                .label(label)
+                .xsmall()
+                .ghost()
+                .on_click(cx.listener(move |panel, _, _, cx| {
+                  panel.toggle_diff_expanded(tool_id.clone(), diff_idx, cx);
+                })),
+            );
+          }
         }
         diff_col = diff_col.child(block);
       }
@@ -1636,7 +1687,7 @@ impl Render for AgentChatPanel {
             _ => theme.muted_foreground,
           };
           messages = messages.child(timeline_row_with_color(
-            render_tool_call(t, theme),
+            render_tool_call(t, theme, cx),
             theme,
             bullet,
             is_last_row,
@@ -2230,6 +2281,16 @@ mod tests {
     };
     assert_eq!(view.locations.len(), 1);
     assert_eq!(view.locations[0].1, Some(42));
+  }
+
+  #[test]
+  fn diff_expansion_defaults_to_collapsed() {
+    use agent_client_protocol::schema::{Diff, ToolCallContent};
+    let content = vec![ToolCallContent::Diff(
+      Diff::new("foo.rs", "new\n").old_text(Some("old\n".to_string())),
+    )];
+    let diffs = crate::diff::extract_diffs(&content, test_cwd());
+    assert!(!diffs[0].expanded);
   }
 
   #[test]

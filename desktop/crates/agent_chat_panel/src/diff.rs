@@ -7,7 +7,12 @@ pub(crate) struct DiffSummary {
   pub removed: u32,
   #[serde(default)]
   pub lines: Vec<DiffLine>,
+  #[serde(skip)]
+  pub expanded: bool,
 }
+
+/// Visible diff lines per block when collapsed. Beyond this, an expander button is shown.
+pub(crate) const MAX_DIFF_LINES_COLLAPSED: usize = 40;
 
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub(crate) struct DiffLine {
@@ -277,6 +282,7 @@ pub(crate) fn extract_diffs(
           added,
           removed,
           lines,
+          expanded: false,
         })
       }
       _ => None,
