@@ -238,7 +238,7 @@ jobs:
           targets: ${{ matrix.target }}
 
       - name: Build Linux archive
-        timeout-minutes: 30
+        timeout-minutes: 40
         shell: bash
         run: |
           set -euo pipefail
