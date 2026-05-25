@@ -1,4 +1,4 @@
-use agent_client_protocol::schema::ToolCallContent;
+use agent_client_protocol::schema::{ContentBlock, ToolCallContent};
 
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub(crate) struct DiffSummary {
@@ -13,6 +13,26 @@ pub(crate) struct DiffSummary {
 
 /// Visible diff lines per block when collapsed. Beyond this, an expander button is shown.
 pub(crate) const MAX_DIFF_LINES_COLLAPSED: usize = 40;
+
+/// Visible tool output lines per block when collapsed. Beyond this, an expander button is shown.
+pub(crate) const MAX_TOOL_OUTPUT_LINES_COLLAPSED: usize = 20;
+
+/// Extracts text content blocks from tool call output. Returns one entry per `Content` block.
+pub(crate) fn extract_outputs(content: &[ToolCallContent]) -> Vec<crate::ToolOutput> {
+  content
+    .iter()
+    .filter_map(|c| match c {
+      ToolCallContent::Content(text_content) => match &text_content.content {
+        ContentBlock::Text(t) => Some(crate::ToolOutput {
+          text: t.text.clone(),
+          expanded: false,
+        }),
+        _ => None,
+      },
+      _ => None,
+    })
+    .collect()
+}
 
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub(crate) struct DiffLine {
@@ -416,6 +436,26 @@ mod tests {
     let (added, removed) = diff_line_counts(Some("same\nlines\n"), "same\nlines\n");
     assert_eq!(added, 0);
     assert_eq!(removed, 0);
+  }
+
+  #[test]
+  fn extract_outputs_collects_text_content_blocks() {
+    use agent_client_protocol::schema::{
+      Content as AcpContent, ContentBlock, TextContent, ToolCallContent,
+    };
+    let content = vec![
+      ToolCallContent::Content(AcpContent::new(ContentBlock::Text(TextContent::new(
+        "hello stdout",
+      )))),
+      ToolCallContent::Content(AcpContent::new(ContentBlock::Text(TextContent::new(
+        "second block",
+      )))),
+    ];
+    let outs = extract_outputs(&content);
+    assert_eq!(outs.len(), 2);
+    assert_eq!(outs[0].text, "hello stdout");
+    assert_eq!(outs[1].text, "second block");
+    assert!(!outs[0].expanded);
   }
 
   #[test]
