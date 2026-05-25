@@ -4,6 +4,10 @@ All notable changes to Reviu are documented here.
 
 ## 0.13.0
 
+### Agent Sidebar
+
+The Git page now has an Agent sidebar that runs Claude Code or Codex directly inside Reviu, using your existing subscription. Pick the model, mode, reasoning effort, or thinking budget that the backend advertises. The execution plan and the agent's reasoning surface inline as the work progresses. Open with the Agent button or Cmd-Shift-J. Send local review comments straight to the agent with Cmd-Shift-A.
+
 ### Pull Request Target Branch Editing
 
 GitHub pull request details now let you change the target branch from Reviu. The overview refreshes after the change so the diff, commits, checks, and merge state match the new target.
