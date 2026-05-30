@@ -2251,10 +2251,15 @@ impl Render for AgentChatPanel {
               Status::Ready => "",
             };
             let label = format!("{}{}", current.label(), label_suffix);
+            let brand_icon = match current {
+              BackendKind::Claude => UiIconName::Claude,
+              BackendKind::Codex => UiIconName::OpenAi,
+            };
             let entity = cx.entity().downgrade();
             Button::new("agent-chat-backend")
               .label(label)
-              .icon(IconName::ChevronDown)
+              .icon(brand_icon)
+              .dropdown_caret(true)
               .small()
               .ghost()
               .dropdown_menu_with_anchor(Corner::TopLeft, move |menu, _, _| {
@@ -2264,6 +2269,10 @@ impl Render for AgentChatPanel {
                   let entity = entity.clone();
                   let is_current = kind == current;
                   let label_text: SharedString = kind.label().into();
+                  let brand_icon = match kind {
+                    BackendKind::Claude => UiIconName::Claude,
+                    BackendKind::Codex => UiIconName::OpenAi,
+                  };
                   menu = menu.item(
                     PopupMenuItem::element(move |_, cx| {
                       let theme = cx.theme().clone();
@@ -2271,6 +2280,11 @@ impl Render for AgentChatPanel {
                         .w_full()
                         .gap_2()
                         .items_center()
+                        .child(
+                          gpui_component::Icon::new(brand_icon)
+                            .small()
+                            .text_color(theme.foreground),
+                        )
                         .child(
                           div()
                             .flex_1()
