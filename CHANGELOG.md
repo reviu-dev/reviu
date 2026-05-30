@@ -4,6 +4,10 @@ All notable changes to Reviu are documented here.
 
 ## 0.14.0
 
+### Syntax Highlighting In Agent Tool Output
+
+File contents shown by the agent (Read, Edit, Write) now display with syntax colors based on the file path. Diff hunks keep their added/removed background while tokens follow the language's color scheme, so code in the Agent sidebar reads like it does in the editor.
+
 ### Agent Sidebar Finds Node In Packaged Builds
 
 The Agent sidebar now locates `npx` (used to launch Claude and Codex) when Reviu is started from the dock or Finder on macOS and from desktop launchers on Linux. Packaged builds no longer fall back to a minimal system PATH that missed Node installed via nvm or Homebrew, so the agents start without manual PATH tweaks.
