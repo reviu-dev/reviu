@@ -24,5 +24,11 @@ percent-encoding = { workspace = true }
 [target.'cfg(target_os = "windows")'.dependencies]
 windows-sys = { workspace = true }
 
+[target.'cfg(unix)'.dependencies]
+anyhow = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+shell-words = { workspace = true }
+
 [build-dependencies]
 embed-resource = { workspace = true }

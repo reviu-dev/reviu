@@ -7047,6 +7047,7 @@ dependencies = [
 name = "reviu"
 version = "0.13.0"
 dependencies = [
+ "anyhow",
  "editor",
  "embed-resource",
  "gpui",
@@ -7056,6 +7057,9 @@ dependencies = [
  "percent-encoding",
  "reqwest_client",
  "sentry",
+ "serde",
+ "serde_json",
+ "shell-words",
  "ui",
  "windows-sys 0.61.2",
  "workspace",
