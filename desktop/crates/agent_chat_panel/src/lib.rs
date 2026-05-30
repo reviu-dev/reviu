@@ -1444,7 +1444,10 @@ fn apply_tool_call_update_pure(
 }
 
 fn short_model_label(name: &str, description: Option<&str>) -> String {
-  let Some(desc) = description else {
+  // Claude descriptions follow "<id> [with X] · <blurb>" so the model id can be
+  // pulled out. Other backends (Codex) use a free-form blurb with no separator;
+  // fall back to the dropdown name there.
+  let Some(desc) = description.filter(|d| d.contains(" · ")) else {
     return name.to_string();
   };
   let before_separator = desc.split(" · ").next().unwrap_or(desc);
@@ -1470,6 +1473,7 @@ fn render_selector_item(
   let has_description = description.is_some();
   h_flex()
     .w_full()
+    .max_w(px(360.))
     .gap_2()
     .map(|this| {
       if has_description {
@@ -1486,11 +1490,22 @@ fn render_selector_item(
         .child(
           div()
             .text_sm()
+            .whitespace_nowrap()
+            .overflow_hidden()
+            .text_ellipsis()
             .when(is_current, |this| this.font_weight(gpui::FontWeight::BOLD))
             .child(name),
         )
         .when_some(description, |this, d| {
-          this.child(div().text_xs().text_color(theme.muted_foreground).child(d))
+          this.child(
+            div()
+              .text_xs()
+              .whitespace_nowrap()
+              .overflow_hidden()
+              .text_ellipsis()
+              .text_color(theme.muted_foreground)
+              .child(d),
+          )
         }),
     )
     .when(is_current, |this| {
@@ -2285,7 +2300,10 @@ impl AgentChatPanel {
       .ghost()
       .disabled(models.is_empty())
       .dropdown_menu_with_anchor(Corner::BottomLeft, move |menu, _, _| {
-        let mut menu = menu.label("Select a model");
+        let mut menu = menu
+          .label("Select a model")
+          .max_h(px(360.))
+          .scrollable(true);
         for m in models.iter() {
           let model_id = m.model_id.clone();
           let entity = entity.clone();
@@ -2734,6 +2752,26 @@ mod tests {
   fn short_model_label_falls_back_to_name_when_no_description() {
     assert_eq!(short_model_label("Sonnet", None), "Sonnet");
     assert_eq!(short_model_label("Sonnet", Some("")), "Sonnet");
+  }
+
+  #[test]
+  fn short_model_label_uses_name_when_description_has_no_separator() {
+    assert_eq!(
+      short_model_label(
+        "gpt-5.2-codex (high)",
+        Some("Frontier agentic coding model. Greater reasoning depth for complex problems"),
+      ),
+      "gpt-5.2-codex (high)"
+    );
+    assert_eq!(
+      short_model_label(
+        "GPT-5.5 (high)",
+        Some(
+          "Frontier model for complex coding, research, and real-world work. Greater reasoning depth for complex problems"
+        ),
+      ),
+      "GPT-5.5 (high)"
+    );
   }
 
   #[test]
