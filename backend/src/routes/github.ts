@@ -172,6 +172,7 @@ import {
   fetchGithubRepositoryCommitsConditionally,
   fetchGithubRepositoryContentConditionally,
   fetchGithubRepositoryContentObjectConditionally,
+  fetchGithubRepositoryContributors,
   fetchGithubRepositoryLabels,
   fetchGithubRepositoryOverview,
   fetchGithubRepositoryReadmeConditionally,
@@ -1301,11 +1302,18 @@ async function fetchRepositoryDetailsWithCache(
     githubCache.getOrLoad<GithubRepositoryDetails>({
       ...cachePolicy,
       load: async () => {
-        const data = await fetchGithubRepositoryOverview({
-          token: githubToken,
-          owner,
-          name: repo,
-        })
+        const [data, contributorsResult] = await Promise.all([
+          fetchGithubRepositoryOverview({
+            token: githubToken,
+            owner,
+            name: repo,
+          }),
+          fetchGithubRepositoryContributors({
+            token: githubToken,
+            owner,
+            repo,
+          }),
+        ])
 
         const { totalSize, edges } = data.languages
         const languages = totalSize > 0
@@ -1355,11 +1363,8 @@ async function fetchRepositoryDetailsWithCache(
               author_avatar_url: node.author?.user?.avatarUrl ?? null,
               authors: mapGithubGraphqlCommitAuthors(node.authors.nodes),
             })),
-            contributors: data.mentionableUsers.nodes.map(user => ({
-              login: user.login,
-              avatar_url: user.avatarUrl,
-            })),
-            contributors_count: data.mentionableUsers.totalCount,
+            contributors: contributorsResult.contributors,
+            contributors_count: contributorsResult.total_count,
           } satisfies GithubRepositoryDetails,
         }
       },

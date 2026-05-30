@@ -409,13 +409,6 @@ const GITHUB_GRAPHQL_REPOSITORY_OVERVIEW_QUERY = `
           }
         }
       }
-      mentionableUsers(first: 20) {
-        totalCount
-        nodes {
-          login
-          avatarUrl
-        }
-      }
     }
   }
 `
@@ -1318,13 +1311,6 @@ interface GithubGraphqlRepositoryOverviewResponse {
           name: string
           color: string | null
         }
-      }>
-    }
-    mentionableUsers: {
-      totalCount: number
-      nodes: Array<{
-        login: string
-        avatarUrl: string
       }>
     }
   }
@@ -3552,6 +3538,73 @@ export async function fetchGithubRepositoryOverview(
   })
 
   return data.repository
+}
+
+export interface GithubRepositoryContributorsResult {
+  contributors: Array<{ login: string, avatar_url: string }>
+  total_count: number
+}
+
+const GITHUB_CONTRIBUTORS_PER_PAGE = 100
+
+export async function fetchGithubRepositoryContributors(
+  { token, owner, repo }: { token: string, owner: string, repo: string },
+): Promise<GithubRepositoryContributorsResult> {
+  const route = 'GET /repos/{owner}/{repo}/contributors' as const
+  const startedAt = Date.now()
+
+  try {
+    const response = await request(route, buildGithubRequestOptions<typeof route>(
+      token,
+      { owner, repo, per_page: GITHUB_CONTRIBUTORS_PER_PAGE, anon: 'true' },
+    ))
+    const durationMs = Date.now() - startedAt
+    logGithubRateLimit(route, response.status, response.headers)
+    recordGithubRequestMetric(route, response.status, response.headers, durationMs)
+
+    const items = Array.isArray(response.data) ? response.data : []
+    const contributors: Array<{ login: string, avatar_url: string }> = []
+    for (const item of items) {
+      if (typeof item?.login === 'string' && typeof item?.avatar_url === 'string') {
+        contributors.push({ login: item.login, avatar_url: item.avatar_url })
+      }
+    }
+
+    const lastPage = parseGithubLinkLastPage(readGithubHeader(response.headers, 'link'))
+    const total_count = lastPage && lastPage > 1
+      ? lastPage * GITHUB_CONTRIBUTORS_PER_PAGE
+      : contributors.length
+
+    return { contributors, total_count }
+  }
+  catch (error) {
+    const githubError = error as GithubErrorLike
+    const durationMs = Date.now() - startedAt
+    logGithubRateLimit(route, githubError.status ?? 0, githubError.response?.headers)
+    recordGithubRequestMetric(route, githubError.status ?? 0, githubError.response?.headers, durationMs)
+    throw error
+  }
+}
+
+function parseGithubLinkLastPage(linkHeader: string | undefined): number | null {
+  if (!linkHeader) {
+    return null
+  }
+  for (const segment of linkHeader.split(',')) {
+    const match = segment.match(/<([^>]+)>;\s*rel="([^"]+)"/)
+    if (!match || match[2] !== 'last') {
+      continue
+    }
+    try {
+      const page = new URL(match[1]!).searchParams.get('page')
+      const parsed = page ? Number.parseInt(page, 10) : Number.NaN
+      return Number.isNaN(parsed) ? null : parsed
+    }
+    catch {
+      return null
+    }
+  }
+  return null
 }
 
 export async function starGithubRepository(
