@@ -1,4 +1,5 @@
 use agent_client_protocol::schema::{ContentBlock, ToolCallContent};
+use syntax::HighlightSpan;
 
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub(crate) struct DiffSummary {
@@ -24,8 +25,9 @@ pub(crate) fn extract_outputs(content: &[ToolCallContent]) -> Vec<crate::ToolOut
     .filter_map(|c| match c {
       ToolCallContent::Content(text_content) => match &text_content.content {
         ContentBlock::Text(t) => Some(crate::ToolOutput {
-          text: t.text.clone(),
+          text: crate::strip_markdown_code_fence(&t.text).to_string(),
           expanded: false,
+          syntax_spans: Vec::new(),
         }),
         _ => None,
       },
@@ -40,6 +42,8 @@ pub(crate) struct DiffLine {
   pub text: String,
   #[serde(default)]
   pub spans: Vec<InlineSpan>,
+  #[serde(skip)]
+  pub syntax_spans: Vec<HighlightSpan>,
 }
 
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
@@ -248,11 +252,13 @@ pub(crate) fn build_diff_lines(old: &str, new: &str) -> Vec<DiffLine> {
         kind: DiffLineKind::Removed,
         text: removed[k].to_string(),
         spans: old_spans,
+        syntax_spans: Vec::new(),
       });
       out.push(DiffLine {
         kind: DiffLineKind::Added,
         text: added[k].to_string(),
         spans: new_spans,
+        syntax_spans: Vec::new(),
       });
     }
     for line in removed.iter().skip(paired) {
@@ -260,6 +266,7 @@ pub(crate) fn build_diff_lines(old: &str, new: &str) -> Vec<DiffLine> {
         kind: DiffLineKind::Removed,
         text: (*line).to_string(),
         spans: Vec::new(),
+        syntax_spans: Vec::new(),
       });
     }
     for line in added.iter().skip(paired) {
@@ -267,6 +274,7 @@ pub(crate) fn build_diff_lines(old: &str, new: &str) -> Vec<DiffLine> {
         kind: DiffLineKind::Added,
         text: (*line).to_string(),
         spans: Vec::new(),
+        syntax_spans: Vec::new(),
       });
     }
   }

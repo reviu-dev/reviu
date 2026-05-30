@@ -31,10 +31,9 @@ use gfm_markdown_viewer::{
 use gpui::Corner;
 use gpui::{
   Context, Entity, FocusHandle, Focusable, Font, FontStyle, FontWeight, Hsla, IntoElement,
-  ParentElement, Render, SharedString, StyledText, TextRun, Styled, Task, Window, div,
-  prelude::*, px,
+  ParentElement, Render, SharedString, Styled, StyledText, Task, TextRun, Window, div, prelude::*,
+  px,
 };
-use syntax::{HighlightSpan, SyntaxHighlighter, SyntaxTheme, highlights_to_text_runs, languages};
 use gpui_component::{
   ActiveTheme as _, Disableable as _, IconName, Sizable as _,
   button::{Button, ButtonVariants as _},
@@ -45,6 +44,7 @@ use gpui_component::{
   spinner::Spinner,
   v_flex,
 };
+use syntax::{HighlightSpan, SyntaxHighlighter, SyntaxTheme, highlights_to_text_runs, languages};
 use ui::{Input, InputState, StatusThemeExt as _, UiIconName};
 
 #[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -79,6 +79,8 @@ pub(crate) struct ToolOutput {
   pub text: String,
   #[serde(skip)]
   pub expanded: bool,
+  #[serde(skip)]
+  pub syntax_spans: Vec<HighlightSpan>,
 }
 
 #[derive(Clone, Debug)]
@@ -1383,6 +1385,29 @@ fn list_conversations_in(dir: &std::path::Path) -> Vec<ConversationMeta> {
   metas
 }
 
+fn populate_syntax_spans(view: &mut ToolCallView) {
+  let out_lang = view
+    .locations
+    .first()
+    .and_then(|(p, _)| languages::detect_language_config_for_path(p));
+  if let Some(cfg) = out_lang {
+    for out in &mut view.outputs {
+      let mut h = SyntaxHighlighter::new(cfg);
+      out.syntax_spans = h.highlight_text(&out.text).unwrap_or_default();
+    }
+  }
+  for d in &mut view.diffs {
+    let Some(cfg) = languages::detect_language_config_for_path(std::path::Path::new(&d.path))
+    else {
+      continue;
+    };
+    for line in &mut d.lines {
+      let mut h = SyntaxHighlighter::new(cfg);
+      line.syntax_spans = h.highlight_text(&line.text).unwrap_or_default();
+    }
+  }
+}
+
 fn upsert_tool_call_pure(
   items: &mut Vec<ChatItem>,
   index: &mut HashMap<ToolCallId, usize>,
@@ -1391,7 +1416,7 @@ fn upsert_tool_call_pure(
 ) {
   let diffs = extract_diffs(&call.content, cwd);
   let outputs = extract_outputs(&call.content);
-  let view = ToolCallView {
+  let mut view = ToolCallView {
     id: call.tool_call_id.clone(),
     title: call.title,
     kind: call.kind,
@@ -1404,6 +1429,7 @@ fn upsert_tool_call_pure(
     diffs,
     outputs,
   };
+  populate_syntax_spans(&mut view);
   if let Some(&idx) = index.get(&call.tool_call_id) {
     if let Some(ChatItem::Tool(existing)) = items.get_mut(idx) {
       *existing = view;
@@ -1443,6 +1469,7 @@ fn apply_tool_call_update_pure(
     view.diffs = extract_diffs(&content, cwd);
     view.outputs = extract_outputs(&content);
   }
+  populate_syntax_spans(view);
 }
 
 fn short_model_label(name: &str, description: Option<&str>) -> String {
@@ -1589,13 +1616,7 @@ fn tool_detail_label(t: &ToolCallView) -> String {
   stripped
 }
 
-fn detect_language_for_tool(t: &ToolCallView) -> Option<&'static syntax::LanguageConfig> {
-  t.locations
-    .first()
-    .and_then(|(p, _)| languages::detect_language_config_for_path(p))
-}
-
-fn strip_markdown_code_fence(text: &str) -> &str {
+pub(crate) fn strip_markdown_code_fence(text: &str) -> &str {
   let trimmed = text.trim_matches('\n');
   let mut lines = trimmed.lines();
   let Some(first) = lines.next() else {
@@ -1606,7 +1627,10 @@ fn strip_markdown_code_fence(text: &str) -> &str {
     return text;
   }
   let after_marker = first_trim.trim_start_matches('`');
-  if after_marker.chars().any(|c| !c.is_alphanumeric() && c != '-' && c != '_' && c != '.') {
+  if after_marker
+    .chars()
+    .any(|c| !c.is_alphanumeric() && c != '-' && c != '_' && c != '.')
+  {
     return text;
   }
   let last = match trimmed.rsplit_once('\n') {
@@ -1623,20 +1647,6 @@ fn strip_markdown_code_fence(text: &str) -> &str {
     return "";
   }
   &trimmed[body_start..body_end]
-}
-
-fn highlight_with_config(
-  config: Option<&'static syntax::LanguageConfig>,
-  text: &str,
-) -> Vec<HighlightSpan> {
-  let Some(cfg) = config else {
-    return Vec::new();
-  };
-  if text.is_empty() {
-    return Vec::new();
-  }
-  let mut h = SyntaxHighlighter::new(cfg);
-  h.highlight_text(text).unwrap_or_default()
 }
 
 fn mono_font_for(theme: &gpui_component::Theme) -> Font {
@@ -1934,8 +1944,6 @@ fn render_tool_call(
           let ui_theme = ui::Theme::new(theme.is_dark());
           let syntax_theme = ui_theme.syntax();
           let mono_font = mono_font_for(theme);
-          let lang_config =
-            languages::detect_language_config_for_path(std::path::Path::new(&d.path));
           for line in d.lines.iter().take(visible) {
             let (bg, fg, hl_bg) = match line.kind {
               DiffLineKind::Added => (
@@ -1949,11 +1957,10 @@ fn render_tool_call(
                 ui_theme.diff_word_removed_background(),
               ),
             };
-            let line_syntax = highlight_with_config(lang_config, &line.text);
             let runs = build_text_runs(
               &line.text,
               &line.spans,
-              &line_syntax,
+              &line.syntax_spans,
               &syntax_theme,
               fg,
               Some(hl_bg),
@@ -2008,28 +2015,34 @@ fn render_tool_call(
     })
     .when(!t.outputs.is_empty(), |this| {
       let mut out_col = v_flex().gap_2();
-      let lang_config = detect_language_for_tool(t);
       let ui_theme = ui::Theme::new(theme.is_dark());
       let syntax_theme = ui_theme.syntax();
       let mono_font = mono_font_for(theme);
       for (out_idx, output) in t.outputs.iter().enumerate() {
-        let stripped = strip_markdown_code_fence(&output.text);
-        let lines: Vec<&str> = stripped.lines().collect();
-        let total = lines.len();
+        let total = output.text.lines().count();
         let visible = if output.expanded {
           total
         } else {
           total.min(MAX_TOOL_OUTPUT_LINES_COLLAPSED)
         };
-        let body_text: String = lines
-          .iter()
-          .take(visible)
-          .copied()
-          .collect::<Vec<_>>()
-          .join("\n");
-        let syntax_spans = highlight_with_config(lang_config, &body_text);
+        let body_text: String = if visible >= total {
+          output.text.clone()
+        } else {
+          let mut count = 0usize;
+          let mut end = output.text.len();
+          for (i, b) in output.text.as_bytes().iter().enumerate() {
+            if *b == b'\n' {
+              count += 1;
+              if count == visible {
+                end = i;
+                break;
+              }
+            }
+          }
+          output.text[..end].to_string()
+        };
         let runs = highlights_to_text_runs(
-          &syntax_spans,
+          &output.syntax_spans,
           &body_text,
           theme.foreground,
           mono_font.clone(),
