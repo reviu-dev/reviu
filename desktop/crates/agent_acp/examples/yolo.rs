@@ -6,9 +6,7 @@ fn main() -> Result<()> {
   smol::block_on(async {
     let mut args = std::env::args().skip(1);
     let backend_name = args.next().unwrap_or_else(|| "claude".into());
-    let prompt = args
-      .next()
-      .unwrap_or_else(|| "say hi in one word".into());
+    let prompt = args.next().unwrap_or_else(|| "say hi in one word".into());
     let follow_up = args.next();
 
     let backend = match backend_name.as_str() {

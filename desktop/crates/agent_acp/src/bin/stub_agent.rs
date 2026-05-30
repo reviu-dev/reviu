@@ -37,11 +37,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
           let session_id = req.session_id.clone();
           let _ = cx.send_notification(SessionNotification::new(
             session_id,
-            SessionUpdate::AgentMessageChunk(
-              agent_client_protocol::schema::ContentChunk::new(ContentBlock::Text(
-                TextContent::new("ack"),
-              )),
-            ),
+            SessionUpdate::AgentMessageChunk(agent_client_protocol::schema::ContentChunk::new(
+              ContentBlock::Text(TextContent::new("ack")),
+            )),
           ));
           responder.respond(PromptResponse::new(StopReason::EndTurn))
         },
