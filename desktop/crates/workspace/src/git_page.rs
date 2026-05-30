@@ -33,10 +33,9 @@ use git::{
   unstage_all, unstage_file,
 };
 use gpui::{
-  AnyElement, AnyWindowHandle, App, Context, Corner, Entity, FocusHandle, Focusable,
-  Global, Image, InteractiveElement, ObjectFit, ParentElement, PathPromptOptions, Pixels, Render,
-  RenderImage, SharedString, Styled, Subscription, Task, WeakEntity, Window, actions, div, img,
-  prelude::*, px,
+  AnyElement, AnyWindowHandle, App, Context, Corner, Entity, FocusHandle, Focusable, Global, Image,
+  InteractiveElement, ObjectFit, ParentElement, PathPromptOptions, Pixels, Render, RenderImage,
+  SharedString, Styled, Subscription, Task, WeakEntity, Window, actions, div, img, prelude::*, px,
 };
 use gpui_component::{
   ActiveTheme as _, Disableable, Icon, IconName, IndexPath, Selectable, Sizable, StyledExt,

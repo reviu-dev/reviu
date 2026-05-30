@@ -27,10 +27,7 @@ fn init_and_prompt_round_trip_against_stub_agent() {
     assert_eq!(info.name.as_deref(), Some("stub-agent"));
 
     if let Some(events) = session.take_events() {
-      smol::spawn(async move {
-        while events.recv().await.is_ok() {}
-      })
-      .detach();
+      smol::spawn(async move { while events.recv().await.is_ok() {} }).detach();
     }
 
     let stop = session.send_prompt("hi").await.expect("prompt");
@@ -43,10 +40,7 @@ fn multi_turn_against_stub_agent() {
   smol::block_on(async {
     let mut session = spawn_stub_session().await;
     if let Some(events) = session.take_events() {
-      smol::spawn(async move {
-        while events.recv().await.is_ok() {}
-      })
-      .detach();
+      smol::spawn(async move { while events.recv().await.is_ok() {} }).detach();
     }
 
     for _ in 0..3 {

@@ -336,9 +336,7 @@ mod desktop_tray {
           return;
         }
         Err(_) => {
-          eprintln!(
-            "Reviu system tray initialization panicked; continuing without a tray icon."
-          );
+          eprintln!("Reviu system tray initialization panicked; continuing without a tray icon.");
           return;
         }
       };

@@ -5658,8 +5658,7 @@ impl GithubPrDetailsPage {
 
         match result {
           Ok(branches) => {
-            let items =
-              build_target_branch_select_items(branches, &current_base, &head_ref);
+            let items = build_target_branch_select_items(branches, &current_base, &head_ref);
             this.set_target_branch_select_items(items, Some(current_base), cx);
             this.target_branch_error = None;
           }
