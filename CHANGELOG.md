@@ -2,6 +2,16 @@
 
 All notable changes to Reviu are documented here.
 
+## 0.14.0
+
+### Agent Sidebar Finds Node In Packaged Builds
+
+The Agent sidebar now locates `npx` (used to launch Claude and Codex) when Reviu is started from the dock or Finder on macOS and from desktop launchers on Linux. Packaged builds no longer fall back to a minimal system PATH that missed Node installed via nvm or Homebrew, so the agents start without manual PATH tweaks.
+
+### Accurate Contributors On GitHub Repo Page
+
+The Contributors section on a GitHub repository overview now lists the people who actually committed to the repo, matching GitHub's own sidebar. Previously, repositories owned by an organization showed mentionable org members instead of contributors, so the avatar list and total count did not match GitHub.
+
 ## 0.13.0
 
 ### Agent Sidebar
