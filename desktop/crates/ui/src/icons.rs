@@ -47,6 +47,9 @@ pub enum UiIconName {
   UnfoldVertical,
   Puzzle,
   Sparkles,
+  BookOpen,
+  Search,
+  Globe,
   // Brands
   BrandX,
   GoogleChrome,
@@ -102,6 +105,9 @@ impl IconNamed for UiIconName {
       UiIconName::UnfoldVertical => "icons/unfold-vertical.svg",
       UiIconName::Puzzle => "icons/puzzle.svg",
       UiIconName::Sparkles => "icons/sparkles.svg",
+      UiIconName::BookOpen => "icons/book-open.svg",
+      UiIconName::Search => "icons/search.svg",
+      UiIconName::Globe => "icons/globe.svg",
       // Brands
       UiIconName::BrandX => "icons/brands/x.svg",
       UiIconName::GoogleChrome => "icons/brands/googlechrome.svg",
