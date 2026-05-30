@@ -220,7 +220,15 @@ fn macos_titlebar_options() -> TitlebarOptions {
   options
 }
 
+#[cfg(unix)]
+mod shell_env;
+
 fn main() {
+  #[cfg(unix)]
+  shell_env::handle_printenv_flag();
+  #[cfg(unix)]
+  shell_env::load();
+
   let app_profile = AppProfile::current();
   let startup_deeplink_url = startup_deeplink_url(app_profile);
 
