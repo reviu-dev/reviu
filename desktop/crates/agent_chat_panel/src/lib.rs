@@ -158,8 +158,7 @@ enum ExtraBeforeKind {
 
 #[derive(Clone, Copy, Debug)]
 enum ExtraAfterKind {
-  Pending,
-  Spinner,
+  Generating,
   Error,
 }
 
@@ -182,6 +181,8 @@ pub struct AgentChatPanel {
   session: Option<Arc<AgentSession>>,
   input: Entity<InputState>,
   in_flight: bool,
+  turn_started_at: Option<std::time::Instant>,
+  _tick_task: Option<Task<()>>,
   messages_list: gpui::ListState,
   usage: Option<(u64, u64)>,
   agent_version: Option<String>,
@@ -242,6 +243,8 @@ impl AgentChatPanel {
       session: None,
       input,
       in_flight: false,
+      turn_started_at: None,
+      _tick_task: None,
       messages_list: gpui::ListState::new(0, gpui::ListAlignment::Top, px(300.)),
       usage: None,
       agent_version: None,
@@ -326,7 +329,47 @@ impl AgentChatPanel {
       }
     });
     panel._connect_task = Some(task);
+    panel.sync_list_count();
+    panel.start_tick_task(cx);
     panel
+  }
+
+  fn start_turn(&mut self, cx: &mut Context<Self>) {
+    self.in_flight = true;
+    self.turn_started_at = Some(std::time::Instant::now());
+    self.start_tick_task(cx);
+  }
+
+  fn end_turn(&mut self) {
+    self.in_flight = false;
+    self.turn_started_at = None;
+    self._tick_task = None;
+  }
+
+  fn start_tick_task(&mut self, cx: &mut Context<Self>) {
+    if self._tick_task.is_some() {
+      return;
+    }
+    let task = cx.spawn(async move |this, cx| {
+      loop {
+        cx.background_executor()
+          .timer(std::time::Duration::from_millis(500))
+          .await;
+        let active = this
+          .update(cx, |panel, cx| {
+            let active = panel.in_flight || matches!(panel.status, Status::Connecting);
+            if active {
+              cx.notify();
+            }
+            active
+          })
+          .unwrap_or(false);
+        if !active {
+          break;
+        }
+      }
+    });
+    self._tick_task = Some(task);
   }
 
   fn start_event_forwarder(
@@ -361,7 +404,7 @@ impl AgentChatPanel {
         role: ChatRole::System,
         text: "Agent disconnected. Toggle the panel to reconnect.".into(),
       }));
-      self.in_flight = false;
+      self.end_turn();
       self.session = None;
       self.sync_list_count();
       cx.notify();
@@ -437,10 +480,8 @@ impl AgentChatPanel {
   fn extras_after_kind(&self) -> Option<ExtraAfterKind> {
     if matches!(self.status, Status::Error(_)) {
       Some(ExtraAfterKind::Error)
-    } else if !self.pending_agent.is_empty() {
-      Some(ExtraAfterKind::Pending)
-    } else if self.in_flight {
-      Some(ExtraAfterKind::Spinner)
+    } else if matches!(self.status, Status::Connecting) || self.in_flight {
+      Some(ExtraAfterKind::Generating)
     } else {
       None
     }
@@ -586,6 +627,60 @@ impl AgentChatPanel {
     card.into_any_element()
   }
 
+  fn render_generating(
+    &self,
+    theme: &gpui_component::Theme,
+    cx: &mut Context<Self>,
+  ) -> gpui::AnyElement {
+    let connecting = matches!(self.status, Status::Connecting);
+    let elapsed = self
+      .turn_started_at
+      .map(|t| t.elapsed().as_secs())
+      .unwrap_or(0);
+    let is_long = elapsed >= 10;
+    let label_color = if is_long {
+      theme.warning
+    } else {
+      theme.muted_foreground
+    };
+    let brand_icon = match self.backend_kind {
+      BackendKind::Claude => UiIconName::Claude,
+      BackendKind::Codex => UiIconName::OpenAi,
+    };
+    let verb: SharedString = if connecting {
+      format!("Connecting to {}...", self.backend.label).into()
+    } else if !self.pending_agent.is_empty() {
+      format!("{} is typing...", self.backend.label).into()
+    } else {
+      format!("{} is thinking...", self.backend.label).into()
+    };
+    let elapsed_label: Option<SharedString> =
+      (!connecting && elapsed >= 2).then(|| format!("{elapsed}s").into());
+
+    let mut row = h_flex()
+      .gap_2()
+      .items_center()
+      .child(
+        gpui_component::Icon::new(brand_icon)
+          .small()
+          .text_color(label_color),
+      )
+      .child(Spinner::new().xsmall().color(label_color))
+      .child(div().text_xs().text_color(label_color).child(verb));
+    if let Some(e) = elapsed_label {
+      row = row.child(div().text_xs().text_color(theme.muted_foreground).child(e));
+    }
+
+    let mut container = v_flex().px_3().pb_3().gap_1().child(row);
+    if !self.pending_agent.is_empty() {
+      let md_options =
+        MarkdownRenderOptions::with_on_link(Arc::new(|_url, _window, _cx| LinkAction::Open))
+          .with_syntax_cache(self.syntax_cache.clone());
+      container = container.child(render_markdown(&self.pending_agent, &md_options, cx));
+    }
+    container.into_any_element()
+  }
+
   fn render_extra_after(
     &mut self,
     kind: ExtraAfterKind,
@@ -593,36 +688,7 @@ impl AgentChatPanel {
     cx: &mut Context<Self>,
   ) -> gpui::AnyElement {
     match kind {
-      ExtraAfterKind::Pending => {
-        let md_options =
-          MarkdownRenderOptions::with_on_link(Arc::new(|_url, _window, _cx| LinkAction::Open))
-            .with_syntax_cache(self.syntax_cache.clone());
-        v_flex()
-          .px_3()
-          .pb_3()
-          .gap_1()
-          .child(
-            div()
-              .text_xs()
-              .text_color(theme.muted_foreground)
-              .child(format!("{} (typing...)", self.backend.label)),
-          )
-          .child(render_markdown(&self.pending_agent, &md_options, cx))
-          .into_any_element()
-      }
-      ExtraAfterKind::Spinner => h_flex()
-        .px_3()
-        .pb_3()
-        .gap_2()
-        .items_center()
-        .child(Spinner::new().xsmall().color(theme.muted_foreground))
-        .child(
-          div()
-            .text_xs()
-            .text_color(theme.muted_foreground)
-            .child(format!("{} is thinking...", self.backend.label)),
-        )
-        .into_any_element(),
+      ExtraAfterKind::Generating => self.render_generating(theme, cx),
       ExtraAfterKind::Error => {
         let Status::Error(e) = &self.status else {
           return div().into_any_element();
@@ -645,10 +711,8 @@ impl AgentChatPanel {
     md_options: &MarkdownRenderOptions,
     cx: &mut Context<Self>,
   ) -> gpui::AnyElement {
-    let has_continuation_trailer = matches!(
-      self.extras_after_kind(),
-      Some(ExtraAfterKind::Pending | ExtraAfterKind::Spinner)
-    );
+    let has_continuation_trailer =
+      matches!(self.extras_after_kind(), Some(ExtraAfterKind::Generating));
     let total = self.items.len();
     let next_is_user = self
       .items
@@ -1007,7 +1071,7 @@ impl AgentChatPanel {
     }));
     self.pending_agent.clear();
     self.pending_thought.clear();
-    self.in_flight = true;
+    self.start_turn(cx);
     self.persist_state();
     self.sync_list_count();
     self.messages_list.scroll_to_end();
@@ -1044,7 +1108,7 @@ impl AgentChatPanel {
             }
           }
         }
-        panel.in_flight = false;
+        panel.end_turn();
         panel.persist_state();
         panel.sync_list_count();
         panel.messages_list.scroll_to_end();
@@ -1075,7 +1139,7 @@ impl AgentChatPanel {
     self.tool_index.clear();
     self.pending_agent.clear();
     self.pending_thought.clear();
-    self.in_flight = false;
+    self.end_turn();
     self.usage = None;
     self.respawn_session(cx);
     self.sync_list_count();
@@ -1095,7 +1159,7 @@ impl AgentChatPanel {
       self.tool_index.clear();
       self.pending_agent.clear();
       self.pending_thought.clear();
-      self.in_flight = false;
+      self.end_turn();
       self.usage = None;
       self.respawn_session(cx);
     }
@@ -1130,7 +1194,7 @@ impl AgentChatPanel {
 
   fn respawn_session_with(&mut self, load_session_id: Option<String>, cx: &mut Context<Self>) {
     self.session = None;
-    self.in_flight = false;
+    self.end_turn();
     self.auth_required = false;
     self.auth_methods.clear();
     self.agent_version = None;
@@ -1206,6 +1270,7 @@ impl AgentChatPanel {
       }
     });
     self._connect_task = Some(task);
+    self.start_tick_task(cx);
   }
 
   pub fn switch_backend(&mut self, kind: BackendKind, cx: &mut Context<Self>) {
@@ -1736,6 +1801,20 @@ fn tool_kind_label(kind: &ToolKind) -> &'static str {
   }
 }
 
+fn tool_kind_icon(kind: &ToolKind) -> UiIconName {
+  match kind {
+    ToolKind::Read => UiIconName::BookOpen,
+    ToolKind::Edit => UiIconName::SquarePen,
+    ToolKind::Delete => UiIconName::Trash,
+    ToolKind::Move => UiIconName::RefreshCw,
+    ToolKind::Search => UiIconName::Search,
+    ToolKind::Execute => UiIconName::SquareTerminal,
+    ToolKind::Think => UiIconName::Sparkles,
+    ToolKind::Fetch => UiIconName::Globe,
+    _ => UiIconName::Puzzle,
+  }
+}
+
 fn plan_view_from_acp(plan: &Plan) -> PlanView {
   PlanView {
     entries: plan
@@ -1883,6 +1962,11 @@ fn render_tool_call(
         .gap_2()
         .items_center()
         .flex_wrap()
+        .child(
+          gpui_component::Icon::new(tool_kind_icon(&t.kind))
+            .small()
+            .text_color(title_color),
+        )
         .child(
           div()
             .text_sm()
@@ -2243,7 +2327,7 @@ impl Render for AgentChatPanel {
           .child({
             let current = self.backend_kind;
             let label_suffix = match &self.status {
-              Status::Connecting => " (connecting...)",
+              Status::Connecting => "",
               Status::Error(_) => " (error)",
               Status::MissingBinary { .. } => " (not installed)",
               Status::Ready => "",
