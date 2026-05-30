@@ -632,7 +632,7 @@ impl AgentChatPanel {
           .pb_3()
           .text_sm()
           .text_color(theme.danger)
-          .child(format!("Failed to start agent: {e}"))
+          .child(e.clone())
           .into_any_element()
       }
     }

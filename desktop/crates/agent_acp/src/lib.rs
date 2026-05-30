@@ -360,10 +360,10 @@ impl AgentSession {
       result = ready_rx.fuse() => match result {
         Ok(Ok(info)) => info,
         Ok(Err(e)) => return Err(e),
-        Err(_) => return Err(anyhow!("agent driver failed before ready")),
+        Err(_) => return Err(anyhow!("Agent process exited before it became ready. Check the agent logs.")),
       },
       _ = smol::Timer::after(Duration::from_secs(60)).fuse() => {
-        return Err(anyhow!("agent did not respond within 60s (check Node.js / network)"));
+        return Err(anyhow!("Agent did not respond within 60s. Check Node.js installation and network."));
       }
     };
 
@@ -867,11 +867,24 @@ async fn run_driver(
       let (session_id, modes, models, config_options) = match load_session.clone() {
         Some(id) if info.supports_load_session => {
           let sid = SessionId::new(id);
-          let resp = connection
+          match connection
             .send_request(LoadSessionRequest::new(sid.clone(), cwd.clone()))
             .block_task()
-            .await?;
-          (sid, resp.modes, resp.models, resp.config_options)
+            .await
+          {
+            Ok(resp) => (sid, resp.modes, resp.models, resp.config_options),
+            Err(e) => {
+              let raw = format!("{e}");
+              let msg = if raw.to_lowercase().contains("resource not found") {
+                "Saved conversation no longer available on the agent. Start a new conversation."
+                  .to_string()
+              } else {
+                format!("Failed to load saved conversation: {raw}")
+              };
+              let _ = ready_tx.send(Err(anyhow!(msg)));
+              return Ok(());
+            }
+          }
         }
         _ => {
           let resp = connection
