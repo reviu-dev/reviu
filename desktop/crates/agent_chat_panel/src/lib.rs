@@ -266,6 +266,7 @@ impl AgentChatPanel {
         command,
         hint: install_hint,
       };
+      panel.sync_list_count();
       return panel;
     }
 
@@ -490,10 +491,6 @@ impl AgentChatPanel {
         v_flex()
           .px_3()
           .gap_2()
-          .p_3()
-          .border_1()
-          .border_color(theme.border)
-          .rounded(px(4.))
           .child(
             div()
               .text_sm()
