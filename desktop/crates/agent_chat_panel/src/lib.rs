@@ -153,7 +153,6 @@ struct PersistedConversation {
 #[derive(Clone, Copy, Debug)]
 enum ExtraBeforeKind {
   MissingBinary,
-  Error,
   Auth,
 }
 
@@ -161,6 +160,7 @@ enum ExtraBeforeKind {
 enum ExtraAfterKind {
   Pending,
   Spinner,
+  Error,
 }
 
 enum Status {
@@ -373,9 +373,6 @@ impl AgentChatPanel {
     if matches!(self.status, Status::MissingBinary { .. }) {
       n += 1;
     }
-    if matches!(self.status, Status::Error(_)) {
-      n += 1;
-    }
     if matches!(self.status, Status::Ready) && self.auth_required && !self.auth_methods.is_empty() {
       n += 1;
     }
@@ -383,9 +380,7 @@ impl AgentChatPanel {
   }
 
   fn extras_after_count(&self) -> usize {
-    if !self.pending_agent.is_empty() {
-      1
-    } else if self.in_flight {
+    if self.extras_after_kind().is_some() {
       1
     } else {
       0
@@ -433,9 +428,6 @@ impl AgentChatPanel {
     if matches!(self.status, Status::MissingBinary { .. }) {
       v.push(ExtraBeforeKind::MissingBinary);
     }
-    if matches!(self.status, Status::Error(_)) {
-      v.push(ExtraBeforeKind::Error);
-    }
     if matches!(self.status, Status::Ready) && self.auth_required && !self.auth_methods.is_empty() {
       v.push(ExtraBeforeKind::Auth);
     }
@@ -443,7 +435,9 @@ impl AgentChatPanel {
   }
 
   fn extras_after_kind(&self) -> Option<ExtraAfterKind> {
-    if !self.pending_agent.is_empty() {
+    if matches!(self.status, Status::Error(_)) {
+      Some(ExtraAfterKind::Error)
+    } else if !self.pending_agent.is_empty() {
       Some(ExtraAfterKind::Pending)
     } else if self.in_flight {
       Some(ExtraAfterKind::Spinner)
@@ -507,17 +501,6 @@ impl AgentChatPanel {
               .text_color(theme.foreground)
               .child(hint.clone()),
           )
-          .into_any_element()
-      }
-      ExtraBeforeKind::Error => {
-        let Status::Error(e) = &self.status else {
-          return div().into_any_element();
-        };
-        div()
-          .px_3()
-          .text_sm()
-          .text_color(theme.danger)
-          .child(format!("Failed to start agent: {e}"))
           .into_any_element()
       }
       ExtraBeforeKind::Auth => self.render_auth_card(theme, cx),
@@ -640,6 +623,18 @@ impl AgentChatPanel {
             .child(format!("{} is thinking...", self.backend.label)),
         )
         .into_any_element(),
+      ExtraAfterKind::Error => {
+        let Status::Error(e) = &self.status else {
+          return div().into_any_element();
+        };
+        div()
+          .px_3()
+          .pb_3()
+          .text_sm()
+          .text_color(theme.danger)
+          .child(format!("Failed to start agent: {e}"))
+          .into_any_element()
+      }
     }
   }
 
@@ -650,7 +645,10 @@ impl AgentChatPanel {
     md_options: &MarkdownRenderOptions,
     cx: &mut Context<Self>,
   ) -> gpui::AnyElement {
-    let has_trailer = self.extras_after_kind().is_some();
+    let has_continuation_trailer = matches!(
+      self.extras_after_kind(),
+      Some(ExtraAfterKind::Pending | ExtraAfterKind::Spinner)
+    );
     let total = self.items.len();
     let next_is_user = self
       .items
@@ -666,7 +664,7 @@ impl AgentChatPanel {
       })
       .unwrap_or(false);
     let is_end_of_group = if idx + 1 == total {
-      !has_trailer
+      !has_continuation_trailer
     } else {
       next_is_user
     };
