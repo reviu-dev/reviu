@@ -6,7 +6,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use crate::diff::{
-  DiffLineKind, DiffSummary, InlineSpanKind, MAX_DIFF_LINES_COLLAPSED,
+  DiffLineKind, DiffSummary, InlineSpan, InlineSpanKind, MAX_DIFF_LINES_COLLAPSED,
   MAX_TOOL_OUTPUT_LINES_COLLAPSED, extract_diffs, extract_outputs,
 };
 pub use crate::persistence::{ConversationMeta, state_dir_for_repo};
@@ -30,9 +30,11 @@ use gfm_markdown_viewer::{
 };
 use gpui::Corner;
 use gpui::{
-  Context, Entity, FocusHandle, Focusable, IntoElement, ParentElement, Render, SharedString,
-  Styled, Task, Window, div, prelude::*, px,
+  Context, Entity, FocusHandle, Focusable, Font, FontStyle, FontWeight, Hsla, IntoElement,
+  ParentElement, Render, SharedString, StyledText, TextRun, Styled, Task, Window, div,
+  prelude::*, px,
 };
+use syntax::{HighlightSpan, SyntaxHighlighter, SyntaxTheme, highlights_to_text_runs, languages};
 use gpui_component::{
   ActiveTheme as _, Disableable as _, IconName, Sizable as _,
   button::{Button, ButtonVariants as _},
@@ -1587,6 +1589,131 @@ fn tool_detail_label(t: &ToolCallView) -> String {
   stripped
 }
 
+fn detect_language_for_tool(t: &ToolCallView) -> Option<&'static syntax::LanguageConfig> {
+  t.locations
+    .first()
+    .and_then(|(p, _)| languages::detect_language_config_for_path(p))
+}
+
+fn strip_markdown_code_fence(text: &str) -> &str {
+  let trimmed = text.trim_matches('\n');
+  let mut lines = trimmed.lines();
+  let Some(first) = lines.next() else {
+    return text;
+  };
+  let first_trim = first.trim();
+  if !first_trim.starts_with("```") {
+    return text;
+  }
+  let after_marker = first_trim.trim_start_matches('`');
+  if after_marker.chars().any(|c| !c.is_alphanumeric() && c != '-' && c != '_' && c != '.') {
+    return text;
+  }
+  let last = match trimmed.rsplit_once('\n') {
+    Some((_, l)) => l,
+    None => return text,
+  };
+  if last.trim() != "```" {
+    return text;
+  }
+  let body_start = first.len() + 1;
+  let body_end = trimmed.len() - last.len();
+  let body_end = body_end.saturating_sub(1);
+  if body_end < body_start {
+    return "";
+  }
+  &trimmed[body_start..body_end]
+}
+
+fn highlight_with_config(
+  config: Option<&'static syntax::LanguageConfig>,
+  text: &str,
+) -> Vec<HighlightSpan> {
+  let Some(cfg) = config else {
+    return Vec::new();
+  };
+  if text.is_empty() {
+    return Vec::new();
+  }
+  let mut h = SyntaxHighlighter::new(cfg);
+  h.highlight_text(text).unwrap_or_default()
+}
+
+fn mono_font_for(theme: &gpui_component::Theme) -> Font {
+  Font {
+    family: theme.mono_font_family.clone(),
+    style: FontStyle::Normal,
+    weight: FontWeight::NORMAL,
+    ..Default::default()
+  }
+}
+
+fn build_text_runs(
+  text: &str,
+  word_spans: &[InlineSpan],
+  syntax_spans: &[HighlightSpan],
+  syntax_theme: &SyntaxTheme,
+  default_color: Hsla,
+  word_diff_bg: Option<Hsla>,
+  base_font: &Font,
+) -> Vec<TextRun> {
+  let len = text.len();
+  if len == 0 {
+    return Vec::new();
+  }
+
+  let mut diff_ranges: Vec<std::ops::Range<usize>> = Vec::new();
+  if !word_spans.is_empty() && word_diff_bg.is_some() {
+    let mut pos = 0usize;
+    for span in word_spans {
+      let end = (pos + span.text.len()).min(len);
+      if span.kind == InlineSpanKind::Diff && end > pos {
+        diff_ranges.push(pos..end);
+      }
+      pos = end;
+    }
+  }
+
+  let mut boundaries: Vec<usize> = vec![0, len];
+  for r in &diff_ranges {
+    boundaries.push(r.start);
+    boundaries.push(r.end);
+  }
+  for s in syntax_spans {
+    boundaries.push(s.byte_range.start.min(len));
+    boundaries.push(s.byte_range.end.min(len));
+  }
+  boundaries.sort_unstable();
+  boundaries.dedup();
+
+  let mut runs = Vec::new();
+  for win in boundaries.windows(2) {
+    let s = win[0];
+    let e = win[1];
+    if e <= s {
+      continue;
+    }
+    let fg = syntax_spans
+      .iter()
+      .find(|h| h.byte_range.start <= s && s < h.byte_range.end)
+      .map(|h| syntax_theme.color_for_token(h.token_type))
+      .unwrap_or(default_color);
+    let bg = diff_ranges
+      .iter()
+      .find(|r| r.start <= s && s < r.end)
+      .and(word_diff_bg);
+    runs.push(TextRun {
+      len: e - s,
+      font: base_font.clone(),
+      color: fg,
+      background_color: bg,
+      underline: None,
+      strikethrough: None,
+    });
+  }
+  runs
+}
+
 fn tool_kind_label(kind: &ToolKind) -> &'static str {
   match kind {
     ToolKind::Read => "Read",
@@ -1805,6 +1932,10 @@ fn render_tool_call(
             .rounded(px(3.))
             .overflow_hidden();
           let ui_theme = ui::Theme::new(theme.is_dark());
+          let syntax_theme = ui_theme.syntax();
+          let mono_font = mono_font_for(theme);
+          let lang_config =
+            languages::detect_language_config_for_path(std::path::Path::new(&d.path));
           for line in d.lines.iter().take(visible) {
             let (bg, fg, hl_bg) = match line.kind {
               DiffLineKind::Added => (
@@ -1818,18 +1949,23 @@ fn render_tool_call(
                 ui_theme.diff_word_removed_background(),
               ),
             };
-            let text_col: gpui::AnyElement = if line.spans.is_empty() {
+            let line_syntax = highlight_with_config(lang_config, &line.text);
+            let runs = build_text_runs(
+              &line.text,
+              &line.spans,
+              &line_syntax,
+              &syntax_theme,
+              fg,
+              Some(hl_bg),
+              &mono_font,
+            );
+            let text_col: gpui::AnyElement = if runs.is_empty() {
               div().flex_1().child(line.text.clone()).into_any_element()
             } else {
-              let mut row = h_flex().flex_1().flex_wrap();
-              for span in &line.spans {
-                let mut chunk = div().child(span.text.clone());
-                if span.kind == InlineSpanKind::Diff {
-                  chunk = chunk.bg(hl_bg);
-                }
-                row = row.child(chunk);
-              }
-              row.into_any_element()
+              div()
+                .flex_1()
+                .child(StyledText::new(SharedString::from(line.text.clone())).with_runs(runs))
+                .into_any_element()
             };
             body = body.child(
               h_flex()
@@ -1872,8 +2008,13 @@ fn render_tool_call(
     })
     .when(!t.outputs.is_empty(), |this| {
       let mut out_col = v_flex().gap_2();
+      let lang_config = detect_language_for_tool(t);
+      let ui_theme = ui::Theme::new(theme.is_dark());
+      let syntax_theme = ui_theme.syntax();
+      let mono_font = mono_font_for(theme);
       for (out_idx, output) in t.outputs.iter().enumerate() {
-        let lines: Vec<&str> = output.text.lines().collect();
+        let stripped = strip_markdown_code_fence(&output.text);
+        let lines: Vec<&str> = stripped.lines().collect();
         let total = lines.len();
         let visible = if output.expanded {
           total
@@ -1886,21 +2027,33 @@ fn render_tool_call(
           .copied()
           .collect::<Vec<_>>()
           .join("\n");
-        let mut block = v_flex().gap_0p5().child(
-          div()
-            .font_family("monospace")
-            .text_xs()
-            .bg(theme.background)
-            .border_1()
-            .border_color(theme.border)
-            .rounded(px(3.))
-            .overflow_hidden()
-            .px_2()
-            .py_1()
-            .text_color(theme.foreground)
-            .whitespace_normal()
-            .child(body_text),
+        let syntax_spans = highlight_with_config(lang_config, &body_text);
+        let runs = highlights_to_text_runs(
+          &syntax_spans,
+          &body_text,
+          theme.foreground,
+          mono_font.clone(),
+          &syntax_theme,
         );
+        let mut content_div = div()
+          .font_family("monospace")
+          .text_xs()
+          .bg(theme.background)
+          .border_1()
+          .border_color(theme.border)
+          .rounded(px(3.))
+          .overflow_hidden()
+          .px_2()
+          .py_1()
+          .text_color(theme.foreground)
+          .whitespace_normal();
+        if runs.is_empty() {
+          content_div = content_div.child(body_text);
+        } else {
+          content_div =
+            content_div.child(StyledText::new(SharedString::from(body_text)).with_runs(runs));
+        }
+        let mut block = v_flex().gap_0p5().child(content_div);
         if total > MAX_TOOL_OUTPUT_LINES_COLLAPSED {
           let remaining = total.saturating_sub(visible);
           let label: SharedString = if output.expanded {

@@ -53,14 +53,6 @@ const EDITOR_CHAR_WIDTH_SAMPLE: &str =
 const REVIEW_COMMENT_CHAR_WIDTH_SAMPLE: &str =
   "the quick brown fox jumps over the lazy dog, with spaces and punctuation. ";
 
-fn clamp_to_char_boundary(text: &str, byte_offset: usize) -> usize {
-  let mut byte_offset = byte_offset.min(text.len());
-  while byte_offset > 0 && !text.is_char_boundary(byte_offset) {
-    byte_offset -= 1;
-  }
-  byte_offset
-}
-
 fn indent_guide_byte_ranges(text: &str, tab_spaces: usize) -> Vec<Range<usize>> {
   if tab_spaces == 0 {
     return Vec::new();
@@ -327,68 +319,19 @@ fn position_hits_review_comment_line(position_map: &PositionMap, position: Point
   )
 }
 
-/// Helper to convert syntax highlights to TextRuns for rendering
 pub(crate) fn highlights_to_text_runs(
   highlights: &[HighlightSpan],
   line_text: &str,
   theme: &Theme,
   base_style: &TextStyle,
 ) -> Vec<TextRun> {
-  let mut runs = Vec::new();
-  let line_len = line_text.len();
-  let mut current_pos = 0;
-
-  // Filter and clip highlights for this line
-  let mut line_highlights: Vec<_> = highlights
-    .iter()
-    .filter_map(|h| {
-      let start = clamp_to_char_boundary(line_text, h.byte_range.start.min(line_len));
-      let end = clamp_to_char_boundary(line_text, h.byte_range.end.min(line_len));
-      (end > start).then_some((start..end, h.token_type))
-    })
-    .collect();
-
-  line_highlights.sort_by_key(|(range, _)| range.start);
-
-  for (range, token_type) in line_highlights {
-    // Gap before highlight (normal text)
-    if range.start > current_pos {
-      runs.push(TextRun {
-        len: range.start - current_pos,
-        font: base_style.font(),
-        color: base_style.color,
-        background_color: None,
-        underline: None,
-        strikethrough: None,
-      });
-    }
-
-    // The highlighted span
-    runs.push(TextRun {
-      len: range.len(),
-      font: base_style.font(),
-      color: theme.syntax().color_for_token(token_type),
-      background_color: None,
-      underline: None,
-      strikethrough: None,
-    });
-
-    current_pos = range.end;
-  }
-
-  // Final gap
-  if current_pos < line_len {
-    runs.push(TextRun {
-      len: line_len - current_pos,
-      font: base_style.font(),
-      color: base_style.color,
-      background_color: None,
-      underline: None,
-      strikethrough: None,
-    });
-  }
-
-  runs
+  syntax::highlights_to_text_runs(
+    highlights,
+    line_text,
+    base_style.color,
+    base_style.font(),
+    &theme.syntax(),
+  )
 }
 
 #[derive(Clone, Debug)]

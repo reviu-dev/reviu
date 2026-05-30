@@ -261,6 +261,7 @@ dependencies = [
  "imara-diff",
  "serde",
  "serde_json",
+ "syntax",
  "ui",
  "unicode-segmentation",
 ]

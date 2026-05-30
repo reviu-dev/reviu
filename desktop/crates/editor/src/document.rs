@@ -13,7 +13,10 @@ use std::{
   time::{Duration, Instant},
 };
 use syntax::languages;
-use syntax::{HighlightSpan, SyntaxHighlighter};
+use syntax::{
+  HighlightSpan, SyntaxHighlighter, compute_line_bounds, highlight_text_to_line_spans,
+  line_index_for_byte,
+};
 
 // Avoid expensive full-file highlight passes on very large buffers at open time.
 const FULL_HIGHLIGHT_MAX_LINES: usize = 30_000;
@@ -508,41 +511,6 @@ fn build_viewport_text(buffer: &TextBuffer, start_line: usize, end_line: usize) 
   text
 }
 
-fn highlight_text_to_line_spans(
-  text: &str,
-  config: &'static syntax::LanguageConfig,
-) -> Result<Vec<Arc<[HighlightSpan]>>, String> {
-  let line_bounds = compute_line_bounds(text);
-  let line_starts: Vec<usize> = line_bounds.iter().map(|(start, _)| *start).collect();
-  let mut line_spans: Vec<Vec<HighlightSpan>> = vec![Vec::new(); line_bounds.len()];
-
-  let mut highlighter = SyntaxHighlighter::new(config);
-  highlighter.highlight_text_stream(
-    text,
-    |_| true,
-    |span| {
-      let start_line = line_index_for_byte(&line_starts, span.byte_range.start);
-      let end_offset = span.byte_range.end.saturating_sub(1);
-      let end_line = line_index_for_byte(&line_starts, end_offset);
-
-      for line_idx in start_line..=end_line {
-        let (line_start, line_end) = line_bounds[line_idx];
-        let local_start = span.byte_range.start.max(line_start) - line_start;
-        let local_end = span.byte_range.end.min(line_end) - line_start;
-        if local_end > local_start {
-          line_spans[line_idx].push(HighlightSpan {
-            byte_range: local_start..local_end,
-            token_type: span.token_type,
-          });
-        }
-      }
-      true
-    },
-  )?;
-
-  Ok(line_spans.into_iter().map(Arc::from).collect())
-}
-
 struct HighlightBatch {
   start_line: usize,
   lines: Vec<Arc<[HighlightSpan]>>,
@@ -666,38 +634,6 @@ impl HighlightStreamState {
       start = batch_end;
     }
     self.next_flush_line = ready_line;
-  }
-}
-
-fn compute_line_bounds(text: &str) -> Vec<(usize, usize)> {
-  let bytes = text.as_bytes();
-  let mut bounds = Vec::new();
-  let mut line_start = 0;
-
-  for (idx, byte) in bytes.iter().enumerate() {
-    if *byte == b'\n' {
-      let mut line_end = idx;
-      if line_end > line_start && bytes[line_end - 1] == b'\r' {
-        line_end -= 1;
-      }
-      bounds.push((line_start, line_end));
-      line_start = idx + 1;
-    }
-  }
-
-  let mut line_end = bytes.len();
-  if line_end > line_start && bytes[line_end - 1] == b'\r' {
-    line_end -= 1;
-  }
-  bounds.push((line_start, line_end));
-
-  bounds
-}
-
-fn line_index_for_byte(line_starts: &[usize], offset: usize) -> usize {
-  match line_starts.binary_search(&offset) {
-    Ok(idx) => idx,
-    Err(idx) => idx.saturating_sub(1),
   }
 }
 
