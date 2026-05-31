@@ -47,6 +47,14 @@ If pricing changes, update desktop billing, landing copy, structured data, and t
 - Resolve conflicts with dedicated current, incoming, both, and accept-all actions.
 - Navigate hunks and conflicts from the keyboard with focused hunk highlighting.
 
+### AI agent panel
+
+- Built-in agent panel in the local Git sidebar, connecting to Claude or Codex through the Agent Client Protocol with a user-supplied API key.
+- Chat with the agent about local changes, with conversation history persisted per repository.
+- Plan/Build session modes for Claude and reasoning-effort selection for Codex.
+- Visible tool calls, plans, thoughts, diff summaries, and tool outputs inside the chat.
+- Review-to-agent inline comments on diff lines, with Draft, Copied, Addressed, and Outdated states and an export action to send the batch to the agent.
+
 ### Local UX strengths
 
 - Keyboard-first command palette for local Git actions, with grouped commands, recent commands, visible disabled states with short reasons, and success/error feedback.
