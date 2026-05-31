@@ -73,15 +73,10 @@ function renderMarkdown(md: string): string {
 
       {
         entries.length > 0 && (
-          <div
-            class="mt-12 space-y-0"
-            data-reveal-root
-            data-reveal-threshold="0.05"
-          >
-            {entries.map((entry, index) => (
+          <div class="mt-12 space-y-0">
+            {entries.map((entry) => (
               <article
-                class="reviu-reveal group relative border-l-2 border-border pb-12 pl-8 last:pb-0"
-                style={`--reveal-delay: ${Math.min(index * 80, 600)}ms;`}
+                class="group relative border-l-2 border-border pb-12 pl-8 last:pb-0"
               >
                 <div class="absolute top-0 -left-[9px] flex size-4 items-center justify-center rounded-full border-2 border-primary bg-background" />
 
