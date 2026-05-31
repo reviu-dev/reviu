@@ -2,8 +2,15 @@
 import CommandIcon from "@lucide/astro/icons/command";
 import GitBranchIcon from "@lucide/astro/icons/git-branch";
 import MessageCircleReplyIcon from "@lucide/astro/icons/message-circle-reply";
+import SparklesIcon from "@lucide/astro/icons/sparkles";
 
 const switchCards = [
+  {
+    title: "Using Claude Code, Codex CLI, or Cursor?",
+    description:
+      "Reviu is the missing review surface. Let the agent write the code, then read the diff in a real editor with inline comments to send back.",
+    icon: SparklesIcon,
+  },
   {
     title: "Coming from Fork?",
     description:
@@ -25,26 +32,22 @@ const switchCards = [
 ];
 ---
 
-<section
-  class="py-24 sm:py-32"
-  data-reveal-root
-  data-reveal-threshold="0.18"
->
+<section class="py-24 sm:py-32" data-reveal-root data-reveal-threshold="0.18">
   <div class="mx-auto max-w-7xl px-6 lg:px-8">
     <div class="reviu-reveal mx-auto max-w-3xl text-center">
       <h2 class="text-base/7 font-semibold text-primary">Why Switch</h2>
       <p
         class="mt-2 text-4xl font-semibold tracking-tight text-balance text-foreground sm:text-5xl"
       >
-        Reviu is for developers who review pull requests every day.
+        Reviu is for developers who ship code their agent wrote.
       </p>
       <p class="mt-6 text-lg/8 text-muted-foreground">
         Existing Git clients are strong at local history. Reviu focuses on the
-        handoff between local changes and GitHub review.
+        loop from agent diff to local commit to GitHub merge.
       </p>
     </div>
 
-    <div class="mt-12 grid gap-6 lg:grid-cols-3">
+    <div class="mt-12 grid gap-6 sm:grid-cols-2 2xl:grid-cols-4">
       {
         switchCards.map((card, index) => (
           <article
