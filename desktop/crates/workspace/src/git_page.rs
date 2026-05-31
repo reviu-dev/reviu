@@ -9507,6 +9507,7 @@ impl GitPage {
                 .flex_1()
                 .overflow_hidden()
                 .text_ellipsis_start()
+                .text_xs()
                 .text_color(theme.muted_foreground)
                 .child(format!("- {}", dir_path)),
             )
