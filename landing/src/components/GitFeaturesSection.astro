@@ -4,7 +4,7 @@ import GitPullRequestIcon from "@lucide/astro/icons/git-pull-request";
 import GitCommitHorizontalIcon from "@lucide/astro/icons/git-commit-horizontal";
 import GitMergeConflictIcon from "@lucide/astro/icons/git-merge-conflict";
 import PencilLineIcon from "@lucide/astro/icons/pencil-line";
-import SplitIcon from "@lucide/astro/icons/split";
+import SparklesIcon from "@lucide/astro/icons/sparkles";
 import Badge from "./Badge.astro";
 import { Image } from "astro:assets";
 import gitDark from "../assets/app_screenshots/git_dark.png";
@@ -12,16 +12,10 @@ import gitLight from "../assets/app_screenshots/git_light.png";
 
 const features = [
   {
-    name: "A real-time diff editor",
+    name: "Diff editor with inline and split views",
     description:
-      "Edit your changes directly inside the diff view. Review and modify code in one place instead of switching between your editor and your Git client.",
+      "Edit changes directly in the diff. Stage, unstage, and restore individual hunks. Switch between inline and split layouts.",
     icon: PencilLineIcon,
-  },
-  {
-    name: "Inline and split diff views",
-    description:
-      "Switch between inline and split diff layouts. Stage, unstage, and restore individual hunks to keep your commits precise.",
-    icon: SplitIcon,
   },
   {
     name: "Resolve conflicts without leaving the app.",
@@ -40,6 +34,12 @@ const features = [
     description:
       "Every Git action is reachable from the command palette. Navigate and operate entirely from the keyboard.",
     icon: CommandIcon,
+  },
+  {
+    name: "AI agent panel with review-to-agent",
+    description:
+      "Chat with Claude or Codex about your changes from the sidebar. Leave inline review comments on diff lines and send them to the agent.",
+    icon: SparklesIcon,
   },
   {
     name: "Your branch, your PR, one click away",
