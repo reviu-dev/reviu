@@ -4,6 +4,7 @@ import GitBranchIcon from "@lucide/astro/icons/git-branch";
 import DownloadIcon from "@lucide/astro/icons/download";
 import GitPullRequestIcon from "@lucide/astro/icons/git-pull-request";
 import KeyboardIcon from "@lucide/astro/icons/keyboard";
+import SparklesIcon from "@lucide/astro/icons/sparkles";
 import ZapIcon from "@lucide/astro/icons/zap";
 import gitDark from "../assets/app_screenshots/git_dark.png";
 import gitLight from "../assets/app_screenshots/git_light.png";
@@ -73,7 +74,7 @@ import LogoLight from "../assets/logo_light.svg";
         <span
           class="inline-flex rounded-full bg-primary/10 px-3 py-1 text-sm/6 font-semibold text-primary ring-1 ring-primary/20 ring-inset dark:ring-primary/25"
         >
-          Native Git + GitHub review
+          Local Git · AI review · GitHub PRs
         </span>
       </div>
 
@@ -81,16 +82,16 @@ import LogoLight from "../assets/logo_light.svg";
         class="reviu-reveal mt-10 text-4xl font-semibold tracking-tight text-pretty text-foreground sm:text-6xl"
         style="--reveal-delay: 200ms;"
       >
-        Review GitHub pull requests from a native Git client.
+        Review your code with an agent before you push.
       </h1>
 
       <p
         class="reviu-reveal mt-8 text-lg font-medium text-pretty text-muted-foreground sm:text-xl/8"
         style="--reveal-delay: 300ms;"
       >
-        Use Reviu free for local Git. Upgrade to Reviu Pro to manage GitHub
-        notifications, repositories, issues, pull request reviews, comments, and
-        merge actions without living in browser tabs.
+        Edit, review, and commit local changes alongside an AI agent in your
+        sidebar - free. Upgrade to Reviu Pro to review and merge GitHub pull
+        requests in the same native app.
       </p>
 
       <div
@@ -100,6 +101,10 @@ import LogoLight from "../assets/logo_light.svg";
         <span class="inline-flex items-center gap-2">
           <ZapIcon class="size-4 text-primary" aria-hidden="true" />
           Rust · GPU-accelerated
+        </span>
+        <span class="inline-flex items-center gap-2">
+          <SparklesIcon class="size-4 text-primary" aria-hidden="true" />
+          AI review built in
         </span>
         <span class="inline-flex items-center gap-2">
           <KeyboardIcon class="size-4 text-primary" aria-hidden="true" />
