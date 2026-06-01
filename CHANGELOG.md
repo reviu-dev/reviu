@@ -4,6 +4,10 @@ All notable changes to Reviu are documented here.
 
 ## 0.15.0
 
+### Terminal On Git Page
+
+Open a terminal next to your diff on the Git page. It launches in the selected repository so `git`, build commands, and scripts run with the right working directory without leaving Reviu. Use the Terminal button in the header or the keyboard shortcut from Settings. If the shell exits or fails to start, a banner shows what happened with a Restart button.
+
 ### Calmer Editor Hover
 
 Hunk actions and review comment overlays no longer flicker when the mouse leaves the diff or hovers over the Agent or Terminal panels.

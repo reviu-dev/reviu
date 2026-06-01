@@ -298,7 +298,6 @@ impl SettingsPage {
     let default_git_unified_file_view = self.git_unified_file_view;
     let default_split_diff_view = self.split_diff_view;
     let default_menu_bar_icon = self.menu_bar_icon;
-    let is_admin = AuthStateStore::is_admin(cx);
 
     vec![
       SettingPage::new("General").default_open(true).groups(vec![
@@ -491,7 +490,7 @@ impl SettingsPage {
         ]),
       ].into_iter().chain(self.menu_bar_settings_groups(view.clone(), default_menu_bar_icon))),
       Self::ai_settings_page(view.clone()),
-      Self::keyboard_shortcuts_page(view.clone(), is_admin, window, cx),
+      Self::keyboard_shortcuts_page(view.clone(), window, cx),
     ]
   }
 
@@ -715,41 +714,23 @@ impl SettingsPage {
       ])]
   }
 
-  fn keyboard_shortcuts_page(
-    view: gpui::Entity<Self>,
-    is_admin: bool,
-    window: &Window,
-    cx: &App,
-  ) -> SettingPage {
+  fn keyboard_shortcuts_page(view: gpui::Entity<Self>, window: &Window, cx: &App) -> SettingPage {
     SettingPage::new("Keyboard Shortcuts")
       .description(
         "Edit desktop shortcuts grouped by workflow. Use the search field to filter by action or key combo. Changes apply immediately in the app.",
       )
       .resettable(false)
       .groups([
-        Self::keyboard_shortcuts_group(ShortcutCategory::Core, view.clone(), is_admin, window, cx),
-        Self::keyboard_shortcuts_group(
-          ShortcutCategory::Review,
-          view.clone(),
-          is_admin,
-          window,
-          cx,
-        ),
-        Self::keyboard_shortcuts_group(
-          ShortcutCategory::LocalGit,
-          view.clone(),
-          is_admin,
-          window,
-          cx,
-        ),
-        Self::keyboard_shortcuts_group(ShortcutCategory::App, view, is_admin, window, cx),
+        Self::keyboard_shortcuts_group(ShortcutCategory::Core, view.clone(), window, cx),
+        Self::keyboard_shortcuts_group(ShortcutCategory::Review, view.clone(), window, cx),
+        Self::keyboard_shortcuts_group(ShortcutCategory::LocalGit, view.clone(), window, cx),
+        Self::keyboard_shortcuts_group(ShortcutCategory::App, view, window, cx),
       ])
   }
 
   fn keyboard_shortcuts_group(
     category: ShortcutCategory,
     view: gpui::Entity<Self>,
-    is_admin: bool,
     window: &Window,
     cx: &App,
   ) -> SettingGroup {
@@ -758,16 +739,8 @@ impl SettingsPage {
         .iter()
         .copied()
         .filter(move |definition| definition.category == category)
-        .filter(move |definition| Self::shortcut_is_visible(*definition, is_admin))
         .map(move |definition| Self::keyboard_shortcut_item(view.clone(), definition, window, cx)),
     )
-  }
-
-  fn shortcut_is_visible(definition: ShortcutDefinition, is_admin: bool) -> bool {
-    match definition.id {
-      ShortcutId::ToggleTerminalSidebar => is_admin,
-      _ => true,
-    }
   }
 
   fn keyboard_shortcut_item(
@@ -1218,16 +1191,5 @@ mod tests {
     assert!(description.contains("Open file search"));
     assert!(description.contains("Shortcut: cmd-p."));
     assert!(description.contains("Git, Repo Code, and PR Changes pages"));
-  }
-
-  #[test]
-  fn toggle_terminal_shortcut_is_hidden_for_non_admins() {
-    let toggle_terminal = *shortcut_definitions()
-      .iter()
-      .find(|definition| definition.id == ShortcutId::ToggleTerminalSidebar)
-      .expect("toggle terminal shortcut");
-
-    assert!(!SettingsPage::shortcut_is_visible(toggle_terminal, false));
-    assert!(SettingsPage::shortcut_is_visible(toggle_terminal, true));
   }
 }

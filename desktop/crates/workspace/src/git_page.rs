@@ -7552,15 +7552,6 @@ impl GitPage {
   }
 
   fn toggle_terminal_sidebar_visibility(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-    if !AuthStateStore::is_admin(cx) {
-      if self.show_terminal_sidebar {
-        self.show_terminal_sidebar = false;
-        self.focus_editor_or_page(window, cx);
-        cx.notify();
-      }
-      return;
-    }
-
     self.show_terminal_sidebar = !self.show_terminal_sidebar;
     if self.show_terminal_sidebar {
       self.show_agent_sidebar = false;
@@ -9235,7 +9226,6 @@ impl GitPage {
       .when_some(branch_info, |this, info| this.child(info))
       .child(fetch_button);
 
-    let can_access_terminal_sidebar = AuthStateStore::is_admin(cx);
     let terminal_sidebar_button = Button::new("git-toggle-terminal-sidebar")
       .label("Terminal")
       .icon(UiIconName::SquareTerminal)
@@ -9267,16 +9257,12 @@ impl GitPage {
         div()
           .debug_selector(|| GIT_AGENT_BUTTON_DEBUG_SELECTOR.to_string())
           .child(agent_sidebar_button),
-      );
-    let header_right = if can_access_terminal_sidebar {
-      header_right.child(
+      )
+      .child(
         div()
           .debug_selector(|| GIT_TERMINAL_BUTTON_DEBUG_SELECTOR.to_string())
           .child(terminal_sidebar_button),
-      )
-    } else {
-      header_right
-    };
+      );
 
     div()
       .h(px(PAGE_HEADER_HEIGHT))
@@ -10590,7 +10576,7 @@ impl GitPage {
 
   fn render_main_content(&mut self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
     let editor_area = self.render_editor_area(window, cx);
-    let show_terminal = self.show_terminal_sidebar && AuthStateStore::is_admin(cx);
+    let show_terminal = self.show_terminal_sidebar;
     let show_agent = self.show_agent_sidebar;
     if !show_terminal && !show_agent {
       return editor_area;
@@ -10628,10 +10614,6 @@ impl GitPage {
 
 impl Render for GitPage {
   fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-    if !AuthStateStore::is_admin(cx) {
-      self.show_terminal_sidebar = false;
-    }
-
     let working_directory = self.selected_repo.clone();
     self.terminal_view.update(cx, |view, cx| {
       view.set_working_directory(working_directory, cx);
@@ -17382,59 +17364,6 @@ mod tests {
     git_page.update_in(cx, |this, window, cx| {
       this.toggle_terminal_sidebar_action(&crate::ToggleTerminalSidebar, window, cx);
       assert!(this.show_terminal_sidebar);
-    });
-
-    git_page.update_in(cx, |this, window, cx| {
-      this.toggle_terminal_sidebar_action(&crate::ToggleTerminalSidebar, window, cx);
-      assert!(!this.show_terminal_sidebar);
-    });
-  }
-
-  #[gpui::test]
-  fn non_admin_users_do_not_render_terminal_button_or_sidebar(cx: &mut TestAppContext) {
-    init_gpui_test(cx);
-    let repo = TempDir::new("git-page-terminal-sidebar-non-admin");
-    cx.update(|cx| {
-      AuthStateStore::set(
-        cx,
-        AuthState::Authenticated(Box::new(make_authenticated_test_user(UserRole::Pro))),
-      );
-    });
-
-    let (git_page, cx) = add_git_page_window_with_root(cx);
-    git_page.update_in(cx, |this, _window, cx| {
-      this.selected_repo = Some(repo.path.clone());
-      this.show_terminal_sidebar = true;
-      cx.notify();
-    });
-
-    assert!(
-      cx.debug_bounds(GIT_TERMINAL_BUTTON_DEBUG_SELECTOR)
-        .is_none(),
-      "non-admin users should not see the terminal button"
-    );
-    assert!(
-      cx.debug_bounds(GIT_TERMINAL_SIDEBAR_DEBUG_SELECTOR)
-        .is_none(),
-      "non-admin users should not render the terminal sidebar"
-    );
-  }
-
-  #[gpui::test]
-  fn non_admin_terminal_action_does_not_open_embedded_terminal_sidebar(cx: &mut TestAppContext) {
-    init_gpui_test(cx);
-    let repo = TempDir::new("git-page-terminal-sidebar-non-admin-action");
-    cx.update(|cx| {
-      AuthStateStore::set(
-        cx,
-        AuthState::Authenticated(Box::new(make_authenticated_test_user(UserRole::Pro))),
-      );
-    });
-
-    let (git_page, cx) = add_git_page_window_with_root(cx);
-    git_page.update_in(cx, |this, window, cx| {
-      this.selected_repo = Some(repo.path.clone());
-      this.focus_page(window, cx);
     });
 
     git_page.update_in(cx, |this, window, cx| {
