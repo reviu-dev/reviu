@@ -589,7 +589,7 @@ fn paint_cursor(
           point(cursor_left, cursor_top),
           point(cursor_right, cursor_bottom),
         ),
-        cursor_color.opacity(0.35),
+        cursor_color,
       ));
     }
     alacritty_terminal::vte::ansi::CursorShape::Underline => {
