@@ -3,7 +3,7 @@ use gpui::{
   App, ClipboardItem, Context, FocusHandle, Focusable, Font, FontFallbacks, FontFeatures,
   FontStyle, FontWeight, InteractiveElement, IntoElement, KeyDownEvent, Modifiers, MouseButton,
   ParentElement, Pixels, Render, ScrollWheelEvent, Styled, Task, TouchPhase, Window, div,
-  prelude::*, px, rgb,
+  prelude::*, px, relative, rgb,
 };
 use gpui_component::ActiveTheme as _;
 use gpui_component::Sizable as _;
@@ -674,6 +674,7 @@ impl Render for TerminalView {
           .overflow_hidden()
           .font(terminal_font(theme.mono_font_family.clone()))
           .text_sm()
+          .line_height(relative(1.2))
           .text_color(theme.foreground)
           .child(TerminalElement::new(
             cx.entity().clone(),
