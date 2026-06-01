@@ -3,7 +3,7 @@ use gpui::{
   App, ClipboardItem, Context, FocusHandle, Focusable, Font, FontFallbacks, FontFeatures,
   FontStyle, FontWeight, InteractiveElement, IntoElement, KeyDownEvent, Modifiers, MouseButton,
   ParentElement, Pixels, Render, ScrollWheelEvent, Styled, Task, TouchPhase, Window, div,
-  prelude::*, px,
+  prelude::*, px, rgb,
 };
 use gpui_component::ActiveTheme as _;
 use gpui_component::Sizable as _;
@@ -658,8 +658,8 @@ impl Render for TerminalView {
     let terminal_palette = TerminalPalette::themed(
       theme.sidebar,
       theme.foreground,
-      theme.primary,
-      theme.selection.opacity(0.6),
+      rgb(0x7aa2f7).into(),
+      rgb(0x33467a).into(),
     );
     let terminal_screen = div()
       .id("terminal-screen")
