@@ -195,6 +195,7 @@ impl Element for TerminalElement {
 
     paint_cursor(
       window,
+      cx,
       &self.palette,
       bounds,
       &prepaint.screen,
@@ -554,6 +555,7 @@ fn row_selection_bounds(
 
 fn paint_cursor(
   window: &mut Window,
+  cx: &mut App,
   palette: &TerminalPalette,
   bounds: Bounds<Pixels>,
   screen: &ScreenSnapshot,
@@ -591,6 +593,15 @@ fn paint_cursor(
         ),
         cursor_color,
       ));
+      paint_cursor_glyph(
+        window,
+        cx,
+        palette,
+        screen,
+        cursor.point,
+        point(cursor_left, cursor_top),
+        line_height,
+      );
     }
     alacritty_terminal::vte::ansi::CursorShape::Underline => {
       let height = px(2.0);
@@ -644,6 +655,56 @@ fn paint_cursor(
       ));
     }
   }
+}
+
+fn paint_cursor_glyph(
+  window: &mut Window,
+  cx: &mut App,
+  palette: &TerminalPalette,
+  screen: &ScreenSnapshot,
+  cursor_point: ViewportPoint,
+  origin: Point<Pixels>,
+  line_height: Pixels,
+) {
+  let Some(cell) = screen
+    .cells
+    .iter()
+    .find(|cell| cell.row == cursor_point.row && cell.col == cursor_point.col)
+  else {
+    return;
+  };
+  if cell.flags.contains(Flags::HIDDEN) {
+    return;
+  }
+  let ch = match cell.c {
+    '\t' | '\0' | ' ' => return,
+    other => other,
+  };
+
+  let text_style = window.text_style();
+  let font_size = text_style.font_size.to_pixels(window.rem_size());
+  let mut font = text_style.font();
+  if cell.flags.contains(Flags::BOLD) {
+    font.weight = FontWeight::BOLD;
+  }
+  if cell.flags.contains(Flags::ITALIC) {
+    font.style = FontStyle::Italic;
+  }
+
+  let mut buf = String::with_capacity(ch.len_utf8());
+  buf.push(ch);
+  let run = TextRun {
+    len: buf.len(),
+    font,
+    color: palette.background(),
+    background_color: None,
+    underline: None,
+    strikethrough: None,
+  };
+  let shaped = window
+    .text_system()
+    .shape_line(buf.into(), font_size, &[run], None);
+  let _ = shaped.paint(origin, line_height, TextAlign::Left, None, window, cx);
 }
 
 fn cursor_span(screen: &ScreenSnapshot, point: ViewportPoint) -> usize {
