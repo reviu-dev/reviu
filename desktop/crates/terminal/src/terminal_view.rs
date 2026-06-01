@@ -5,6 +5,8 @@ use gpui::{
   Task, TouchPhase, Window, div, prelude::*, px,
 };
 use gpui_component::ActiveTheme as _;
+use gpui_component::Sizable as _;
+use gpui_component::button::{Button, ButtonVariant, ButtonVariants as _};
 use gpui_component::tooltip::Tooltip;
 use std::time::Duration;
 use std::{path::PathBuf, sync::Arc};
@@ -17,6 +19,7 @@ use crate::{
 const SESSION_POLL_INTERVAL: Duration = Duration::from_millis(16);
 const TERMINAL_SCREEN_DEBUG_SELECTOR: &str = "terminal-screen-bounds";
 const TERMINAL_SURFACE_DEBUG_SELECTOR: &str = "terminal-surface-bounds";
+const TERMINAL_BANNER_DEBUG_SELECTOR: &str = "terminal-banner";
 
 fn selection_mode_for_click_count(click_count: usize) -> TerminalSelectionMode {
   match click_count {
@@ -401,7 +404,7 @@ impl TerminalView {
     cx.notify();
   }
 
-  fn restart_session(&mut self) {
+  pub fn restart_session(&mut self) {
     self.error = None;
     self.reset_selection();
     self.hovered_hyperlink = None;
@@ -684,9 +687,16 @@ impl Render for TerminalView {
       terminal_screen
     };
 
+    let banner_message = self
+      .error
+      .clone()
+      .or_else(|| self.screen.exit_status.clone());
+
     div()
       .id("terminal-scaffold")
       .size_full()
+      .flex()
+      .flex_col()
       .bg(theme.sidebar)
       .on_mouse_down(
         MouseButton::Left,
@@ -696,7 +706,36 @@ impl Render for TerminalView {
       )
       .on_key_down(cx.listener(Self::on_key_down))
       .track_focus(&self.focus_handle)
-      .child(terminal_screen)
+      .when_some(banner_message, |this, message| {
+        this.child(
+          div()
+            .debug_selector(|| TERMINAL_BANNER_DEBUG_SELECTOR.to_string())
+            .flex_shrink_0()
+            .flex()
+            .items_center()
+            .justify_between()
+            .gap_2()
+            .px_3()
+            .py_2()
+            .bg(theme.muted)
+            .border_b_1()
+            .border_color(theme.border)
+            .text_sm()
+            .text_color(theme.foreground)
+            .child(div().flex_1().min_w_0().child(message))
+            .child(
+              Button::new("terminal-restart")
+                .label("Restart")
+                .with_variant(ButtonVariant::Secondary)
+                .xsmall()
+                .on_click(cx.listener(|this, _, _window, cx| {
+                  this.restart_session();
+                  cx.notify();
+                })),
+            ),
+        )
+      })
+      .child(div().flex_1().min_h_0().child(terminal_screen))
   }
 }
 
