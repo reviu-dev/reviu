@@ -82,4 +82,60 @@ pub use variable_list::{VariableList, VariableListDelegate, VariableListEvent, V
 
 pub fn init(cx: &mut gpui::App) {
   variable_list::init(cx);
+  load_bundled_fonts(cx);
+}
+
+fn load_bundled_fonts(cx: &mut gpui::App) {
+  use gpui::AssetSource as _;
+
+  let assets = AppAssets;
+  let mut fonts = Vec::new();
+  for path in ["fonts/lilex/Lilex-Regular.ttf"] {
+    match assets.load(path) {
+      Ok(Some(data)) => {
+        eprintln!("ui: loaded bundled font {path} ({} bytes)", data.len());
+        #[cfg(target_os = "macos")]
+        register_with_core_text(&data);
+        fonts.push(data);
+      }
+      Ok(None) => eprintln!("ui: bundled font missing: {path}"),
+      Err(err) => eprintln!("ui: failed to load bundled font {path}: {err}"),
+    }
+  }
+  if fonts.is_empty() {
+    return;
+  }
+  if let Err(err) = cx.text_system().add_fonts(fonts) {
+    eprintln!("ui: text_system.add_fonts failed: {err}");
+  }
+}
+
+#[cfg(target_os = "macos")]
+fn register_with_core_text(data: &[u8]) {
+  use core_graphics::data_provider::CGDataProvider;
+  use core_graphics::font::CGFont;
+  use foreign_types_shared::ForeignType;
+
+  let provider = CGDataProvider::from_buffer(std::sync::Arc::new(data.to_vec()));
+  let Ok(cg_font) = CGFont::from_data_provider(provider) else {
+    eprintln!("ui: CGFont::from_data_provider failed");
+    return;
+  };
+
+  unsafe {
+    let mut error: core_foundation::error::CFErrorRef = std::ptr::null_mut();
+    let ok = CTFontManagerRegisterGraphicsFont(cg_font.as_ptr(), &mut error);
+    if !ok {
+      eprintln!("ui: CTFontManagerRegisterGraphicsFont failed");
+    }
+  }
+}
+
+#[cfg(target_os = "macos")]
+#[link(name = "CoreText", kind = "framework")]
+unsafe extern "C" {
+  fn CTFontManagerRegisterGraphicsFont(
+    font: *mut core_graphics::sys::CGFont,
+    error: *mut core_foundation::error::CFErrorRef,
+  ) -> bool;
 }

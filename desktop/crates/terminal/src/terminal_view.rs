@@ -1,8 +1,9 @@
 use alacritty_terminal::term::cell::Flags;
 use gpui::{
-  App, ClipboardItem, Context, FocusHandle, Focusable, InteractiveElement, IntoElement,
-  KeyDownEvent, Modifiers, MouseButton, ParentElement, Pixels, Render, ScrollWheelEvent, Styled,
-  Task, TouchPhase, Window, div, prelude::*, px,
+  App, ClipboardItem, Context, FocusHandle, Focusable, Font, FontFallbacks, FontFeatures,
+  FontStyle, FontWeight, InteractiveElement, IntoElement, KeyDownEvent, Modifiers, MouseButton,
+  ParentElement, Pixels, Render, ScrollWheelEvent, Styled, Task, TouchPhase, Window, div,
+  prelude::*, px,
 };
 use gpui_component::ActiveTheme as _;
 use gpui_component::Sizable as _;
@@ -671,7 +672,7 @@ impl Render for TerminalView {
           .debug_selector(|| TERMINAL_SURFACE_DEBUG_SELECTOR.to_string())
           .size_full()
           .overflow_hidden()
-          .font_family(theme.mono_font_family.clone())
+          .font(terminal_font(theme.mono_font_family.clone()))
           .text_sm()
           .text_color(theme.foreground)
           .child(TerminalElement::new(
@@ -736,6 +737,21 @@ impl Render for TerminalView {
         )
       })
       .child(div().flex_1().min_h_0().child(terminal_screen))
+  }
+}
+
+fn terminal_font(family: gpui::SharedString) -> Font {
+  Font {
+    family,
+    features: FontFeatures::default(),
+    weight: FontWeight::NORMAL,
+    style: FontStyle::Normal,
+    fallbacks: Some(FontFallbacks::from_fonts(vec![
+      "Lilex".into(),
+      "Symbols Nerd Font Mono".into(),
+      "Symbols Nerd Font".into(),
+      "Apple Color Emoji".into(),
+    ])),
   }
 }
 
