@@ -14,7 +14,7 @@ use editor::{
   ReviewCommentDeleteHandler, ReviewCommentDisplayMode, ReviewCommentEditHandler,
   ReviewCommentSide,
 };
-use gfm_markdown_viewer::{MarkdownRenderOptions, SuggestionContext, render_markdown};
+use gfm_markdown_viewer::SuggestionContext;
 use git::{
   BranchKind, BranchRef, BranchStatus, CommitChangedFile, CommitFileChangeKind, HeadCommitStatus,
   HistoryCommitNode, HistoryRevision, InteractiveRebaseTarget, InteractiveRebaseTodoEntry,
@@ -6768,21 +6768,8 @@ impl GitPage {
         }
       });
       editor.set_review_comment_cancel_handler(Some(cancel_handler), cx);
-
-      let preview_renderer: editor::ReviewCommentPreviewRenderer = Arc::new(
-        |text: &str,
-         suggestion_context: Option<SuggestionContext>,
-         _window: &mut Window,
-         cx: &mut App|
-         -> AnyElement {
-          let mut options = MarkdownRenderOptions::default();
-          if let Some(ctx) = suggestion_context {
-            options = options.with_suggestion_context(ctx);
-          }
-          render_markdown(text, &options, cx)
-        },
-      );
-      editor.set_review_comment_preview_renderer(Some(preview_renderer), cx);
+      editor.set_review_comment_card_width(px(600.0), cx);
+      editor.set_review_comment_textarea_height(px(90.0), cx);
     });
   }
 
