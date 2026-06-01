@@ -235,9 +235,13 @@ fn next_review_comment_body(raw_value: &str, initial_value: &str) -> Option<Arc<
   }
 }
 
-fn review_comment_composer_body_height_px(editor_line_height_px: f32) -> f32 {
-  MARKDOWN_COMPOSER_CHROME_HEIGHT_PX
-    + REVIEW_COMMENT_COMPOSER_TEXTAREA_HEIGHT_PX
+fn review_comment_composer_body_height_px(
+  textarea_height_px: f32,
+  chrome_height_px: f32,
+  editor_line_height_px: f32,
+) -> f32 {
+  chrome_height_px
+    + textarea_height_px
     + REVIEW_COMMENT_COMPOSER_ACTIONS_HEIGHT_PX.max(editor_line_height_px)
     + REVIEW_COMMENT_COMPOSER_ACTIONS_GAP_PX
 }
@@ -562,6 +566,8 @@ pub struct Editor {
   review_comment_asset_url_resolver: Option<ReviewCommentAssetUrlResolver>,
   review_comment_image_upload_handler: Option<ReviewCommentImageUploadHandler>,
   review_comment_preview_renderer: Option<ReviewCommentPreviewRenderer>,
+  review_comment_card_width: Pixels,
+  review_comment_textarea_height: Pixels,
   review_comment_create_input: Option<Entity<InputState>>,
   review_comment_create_draft: Option<ReviewCommentCreateDraft>,
   review_comment_create_drag_start_display_line: Option<usize>,
@@ -985,6 +991,8 @@ impl Editor {
       review_comment_asset_url_resolver: None,
       review_comment_image_upload_handler: None,
       review_comment_preview_renderer: None,
+      review_comment_card_width: px(REVIEW_COMMENT_FIXED_WIDTH_PX),
+      review_comment_textarea_height: px(REVIEW_COMMENT_COMPOSER_TEXTAREA_HEIGHT_PX),
       review_comment_create_input: None,
       review_comment_create_draft: None,
       review_comment_create_drag_start_display_line: None,
@@ -1348,8 +1356,8 @@ impl Editor {
 
   fn computed_review_comment_wrap_columns(&self) -> usize {
     let char_width_px = (self.measured_review_comment_char_width() / px(1.0)).max(1.0);
-    let available_px =
-      (REVIEW_COMMENT_FIXED_WIDTH_PX - REVIEW_COMMENT_HORIZONTAL_PADDING_PX).max(char_width_px);
+    let card_width_px = self.review_comment_card_width / px(1.0);
+    let available_px = (card_width_px - REVIEW_COMMENT_HORIZONTAL_PADDING_PX).max(char_width_px);
     let columns = (available_px / char_width_px).floor() as usize;
     columns.clamp(
       REVIEW_COMMENT_MIN_WRAP_COLUMNS,
@@ -1872,6 +1880,46 @@ impl Editor {
       self.review_comment_reply_preview_open = false;
     }
     cx.notify();
+  }
+
+  pub fn set_review_comment_card_width(&mut self, width: Pixels, cx: &mut Context<Self>) {
+    if self.review_comment_card_width == width {
+      return;
+    }
+    self.review_comment_card_width = width;
+    if self.diffs.is_some() {
+      self.rebuild_projection(cx);
+    } else {
+      cx.notify();
+    }
+  }
+
+  pub fn set_review_comment_textarea_height(&mut self, height: Pixels, cx: &mut Context<Self>) {
+    if self.review_comment_textarea_height == height {
+      return;
+    }
+    self.review_comment_textarea_height = height;
+    if self.diffs.is_some() {
+      self.rebuild_projection(cx);
+    } else {
+      cx.notify();
+    }
+  }
+
+  fn review_comment_composer_chrome_height_px(&self) -> f32 {
+    if self.review_comment_preview_renderer.is_some() {
+      MARKDOWN_COMPOSER_CHROME_HEIGHT_PX
+    } else {
+      0.0
+    }
+  }
+
+  fn review_comment_composer_body_height_px(&self) -> f32 {
+    review_comment_composer_body_height_px(
+      self.review_comment_textarea_height / px(1.0),
+      self.review_comment_composer_chrome_height_px(),
+      self.review_comment_line_height_px,
+    )
   }
 
   fn review_comment_drop_zone(
@@ -4144,7 +4192,7 @@ impl Editor {
                   .child({
                     let mut composer = MarkdownComposer::new(&input_state)
                       .disabled(is_edit_submitting)
-                      .h(px(REVIEW_COMMENT_COMPOSER_TEXTAREA_HEIGHT_PX))
+                      .h(self.review_comment_textarea_height)
                       .preview_open(edit_preview_open)
                       .on_toggle_preview(move |_, cx| {
                         toggle_editor.update(cx, |editor, cx| {
@@ -4511,7 +4559,7 @@ impl Editor {
                       .child({
                         let mut composer = MarkdownComposer::new(&input_state)
                           .disabled(is_reply_submitting)
-                          .h(px(REVIEW_COMMENT_COMPOSER_TEXTAREA_HEIGHT_PX))
+                          .h(self.review_comment_textarea_height)
                           .preview_open(reply_preview_open)
                           .on_toggle_preview(move |_, cx| {
                             toggle_editor.update(cx, |editor, cx| {
@@ -4608,7 +4656,7 @@ impl Editor {
       }
 
       let card = div()
-        .w(px(REVIEW_COMMENT_FIXED_WIDTH_PX))
+        .w(self.review_comment_card_width)
         .bg(theme.sidebar)
         .border(px(REVIEW_COMMENT_CARD_BORDER_PX))
         .border_color(theme.border)
@@ -4736,7 +4784,7 @@ impl Editor {
         let create_toggle_editor = editor_entity.clone();
         Some(
           div()
-            .w(px(REVIEW_COMMENT_FIXED_WIDTH_PX))
+            .w(self.review_comment_card_width)
             .bg(theme.sidebar)
             .border(px(REVIEW_COMMENT_CARD_BORDER_PX))
             .border_color(theme.border)
@@ -4764,7 +4812,7 @@ impl Editor {
                     .child({
                       let mut composer = MarkdownComposer::new(&input_state)
                         .disabled(is_create_submitting)
-                        .h(px(REVIEW_COMMENT_COMPOSER_TEXTAREA_HEIGHT_PX))
+                        .h(self.review_comment_textarea_height)
                         .preview_open(create_preview_open)
                         .on_toggle_preview(move |_, cx| {
                           create_toggle_editor.update(cx, |editor, cx| {
@@ -5267,7 +5315,7 @@ impl Editor {
         )
       };
       let estimated_height = if self.editing_review_comment_id == Some(comment_id) {
-        review_comment_composer_body_height_px(self.review_comment_line_height_px)
+        self.review_comment_composer_body_height_px()
       } else {
         let has_previews = self
           .review_comment_code_reference_previews
@@ -5313,7 +5361,7 @@ impl Editor {
       });
       review_comment_body_heights_px.insert(
         REVIEW_COMMENT_CREATE_DRAFT_COMMENT_ID,
-        review_comment_composer_body_height_px(self.review_comment_line_height_px),
+        self.review_comment_composer_body_height_px(),
       );
     }
     if show_review_comment_reply_composer && let Some(reply_to_comment) = reply_target_comment {
@@ -5336,7 +5384,7 @@ impl Editor {
       });
       review_comment_body_heights_px.insert(
         REVIEW_COMMENT_REPLY_DRAFT_COMMENT_ID,
-        review_comment_composer_body_height_px(self.review_comment_line_height_px),
+        self.review_comment_composer_body_height_px(),
       );
     }
 
@@ -9534,18 +9582,30 @@ pub mod tests {
   #[gpui::test]
   fn test_review_comment_composer_body_height_uses_fixed_textarea_size(_cx: &mut TestAppContext) {
     assert_eq!(
-      review_comment_composer_body_height_px(20.0),
+      review_comment_composer_body_height_px(
+        REVIEW_COMMENT_COMPOSER_TEXTAREA_HEIGHT_PX,
+        MARKDOWN_COMPOSER_CHROME_HEIGHT_PX,
+        20.0
+      ),
       MARKDOWN_COMPOSER_CHROME_HEIGHT_PX
         + REVIEW_COMMENT_COMPOSER_TEXTAREA_HEIGHT_PX
         + REVIEW_COMMENT_COMPOSER_ACTIONS_HEIGHT_PX
         + REVIEW_COMMENT_COMPOSER_ACTIONS_GAP_PX
     );
     assert_eq!(
-      review_comment_composer_body_height_px(40.0),
+      review_comment_composer_body_height_px(
+        REVIEW_COMMENT_COMPOSER_TEXTAREA_HEIGHT_PX,
+        MARKDOWN_COMPOSER_CHROME_HEIGHT_PX,
+        40.0
+      ),
       MARKDOWN_COMPOSER_CHROME_HEIGHT_PX
         + REVIEW_COMMENT_COMPOSER_TEXTAREA_HEIGHT_PX
         + 40.0
         + REVIEW_COMMENT_COMPOSER_ACTIONS_GAP_PX
+    );
+    assert_eq!(
+      review_comment_composer_body_height_px(80.0, 0.0, 20.0),
+      80.0 + REVIEW_COMMENT_COMPOSER_ACTIONS_HEIGHT_PX + REVIEW_COMMENT_COMPOSER_ACTIONS_GAP_PX
     );
   }
 
@@ -9614,6 +9674,8 @@ pub mod tests {
           review_comment_asset_url_resolver: None,
           review_comment_image_upload_handler: None,
           review_comment_preview_renderer: None,
+          review_comment_card_width: px(REVIEW_COMMENT_FIXED_WIDTH_PX),
+          review_comment_textarea_height: px(REVIEW_COMMENT_COMPOSER_TEXTAREA_HEIGHT_PX),
           review_comment_create_input: None,
           review_comment_create_draft: None,
           review_comment_create_drag_start_display_line: None,
