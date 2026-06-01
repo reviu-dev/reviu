@@ -18,84 +18,84 @@ impl Default for TerminalPalette {
   fn default() -> Self {
     let ansi_colors = [
       hsla_from_rgb(Rgb {
-        r: 0x00,
-        g: 0x00,
-        b: 0x00,
+        r: 0x1d,
+        g: 0x20,
+        b: 0x2f,
       }),
       hsla_from_rgb(Rgb {
-        r: 0xcc,
-        g: 0x00,
-        b: 0x00,
+        r: 0xf7,
+        g: 0x76,
+        b: 0x8e,
       }),
       hsla_from_rgb(Rgb {
-        r: 0x4e,
+        r: 0x9e,
+        g: 0xce,
+        b: 0x6a,
+      }),
+      hsla_from_rgb(Rgb {
+        r: 0xe0,
+        g: 0xaf,
+        b: 0x68,
+      }),
+      hsla_from_rgb(Rgb {
+        r: 0x7a,
+        g: 0xa2,
+        b: 0xf7,
+      }),
+      hsla_from_rgb(Rgb {
+        r: 0xbb,
         g: 0x9a,
-        b: 0x06,
+        b: 0xf7,
       }),
       hsla_from_rgb(Rgb {
-        r: 0xc4,
-        g: 0xa0,
-        b: 0x00,
+        r: 0x7d,
+        g: 0xcf,
+        b: 0xff,
       }),
       hsla_from_rgb(Rgb {
-        r: 0x34,
-        g: 0x65,
-        b: 0xa4,
+        r: 0xa9,
+        g: 0xb1,
+        b: 0xd6,
       }),
       hsla_from_rgb(Rgb {
-        r: 0x75,
-        g: 0x50,
-        b: 0x7b,
+        r: 0x41,
+        g: 0x48,
+        b: 0x68,
       }),
       hsla_from_rgb(Rgb {
-        r: 0x06,
-        g: 0x98,
-        b: 0x9a,
+        r: 0xff,
+        g: 0x9e,
+        b: 0xb1,
       }),
       hsla_from_rgb(Rgb {
-        r: 0xd3,
-        g: 0xd7,
-        b: 0xcf,
+        r: 0xb9,
+        g: 0xf2,
+        b: 0x7c,
       }),
       hsla_from_rgb(Rgb {
-        r: 0x55,
-        g: 0x57,
-        b: 0x53,
-      }),
-      hsla_from_rgb(Rgb {
-        r: 0xef,
-        g: 0x29,
-        b: 0x29,
+        r: 0xff,
+        g: 0xc7,
+        b: 0x77,
       }),
       hsla_from_rgb(Rgb {
         r: 0x8a,
+        g: 0xb5,
+        b: 0xff,
+      }),
+      hsla_from_rgb(Rgb {
+        r: 0xc8,
+        g: 0xa6,
+        b: 0xff,
+      }),
+      hsla_from_rgb(Rgb {
+        r: 0x9c,
         g: 0xe2,
-        b: 0x34,
+        b: 0xff,
       }),
       hsla_from_rgb(Rgb {
-        r: 0xfc,
-        g: 0xe9,
-        b: 0x4f,
-      }),
-      hsla_from_rgb(Rgb {
-        r: 0x72,
-        g: 0x9f,
-        b: 0xcf,
-      }),
-      hsla_from_rgb(Rgb {
-        r: 0xad,
-        g: 0x7f,
-        b: 0xa8,
-      }),
-      hsla_from_rgb(Rgb {
-        r: 0x34,
-        g: 0xe2,
-        b: 0xe2,
-      }),
-      hsla_from_rgb(Rgb {
-        r: 0xee,
-        g: 0xee,
-        b: 0xec,
+        r: 0xc0,
+        g: 0xca,
+        b: 0xf5,
       }),
     ];
 
@@ -129,10 +129,10 @@ impl Default for TerminalPalette {
     Self {
       ansi_colors,
       indexed_colors,
-      foreground: rgb(0xd3d7cf).into(),
-      background: rgb(0x101215).into(),
+      foreground: rgb(0xc0caf5).into(),
+      background: rgb(0x1a1b26).into(),
       cursor: rgb(0x7aa2f7).into(),
-      selection: rgb(0x30435f).into(),
+      selection: rgb(0x33467a).into(),
     }
   }
 }
