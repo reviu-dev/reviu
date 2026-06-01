@@ -2074,6 +2074,7 @@ impl Element for EditorElement {
       window.on_mouse_event({
         let editor = self.editor.clone();
         let position_map = Rc::clone(&position_map);
+        let scroll_hitbox = prepaint.scroll_hitbox.clone();
         move |event: &MouseMoveEvent, phase, window, cx| {
           if phase == DispatchPhase::Bubble {
             let is_selecting = editor.read(cx).is_selecting;
@@ -2082,8 +2083,9 @@ impl Element for EditorElement {
                 editor.mouse_dragged(event, &position_map, window, cx);
               });
             } else {
+              let is_occluded = !scroll_hitbox.is_hovered(window);
               editor.update(cx, |editor, cx| {
-                editor.mouse_moved(event, &position_map, cx);
+                editor.mouse_moved(event, &position_map, is_occluded, cx);
               });
             }
           }
