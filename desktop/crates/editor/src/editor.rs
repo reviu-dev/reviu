@@ -8017,12 +8017,15 @@ impl Editor {
     &mut self,
     event: &MouseMoveEvent,
     position_map: &PositionMap,
+    is_occluded: bool,
     cx: &mut Context<Self>,
   ) {
-    if !position_map.bounds.contains(&event.position) {
+    let in_bounds = !is_occluded && position_map.bounds.contains(&event.position);
+    if !in_bounds {
       let had_hovered_group = self.hovered_group_id.take().is_some();
       let had_hovered_conflict = self.hovered_conflict_start_line.take().is_some();
-      let in_adjacent_gutter_band = event.position.y >= position_map.bounds.top()
+      let in_adjacent_gutter_band = !is_occluded
+        && event.position.y >= position_map.bounds.top()
         && event.position.y <= position_map.bounds.bottom()
         && event.position.x >= position_map.bounds.left() - self.gutter_width()
         && event.position.x < position_map.bounds.left();
@@ -8034,6 +8037,8 @@ impl Editor {
           .take()
           .is_some()
       };
+      // Prevent paint pass from re-deriving hover from stale position.
+      self.last_mouse_position = None;
       if had_hovered_group || had_hovered_conflict || had_review_comment_create_hover {
         cx.notify();
       }
