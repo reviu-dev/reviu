@@ -2,6 +2,16 @@
 
 All notable changes to Reviu are documented here.
 
+## 0.15.0
+
+### Calmer Editor Hover
+
+Hunk actions and review comment overlays no longer flicker when the mouse leaves the diff or hovers over the Agent or Terminal panels.
+
+### Compact Review Comments On Git Page
+
+Review comments on the Git page now use a smaller card with a shorter input, leaving more room for the diff.
+
 ## 0.14.0
 
 ### Syntax Highlighting In Agent Tool Output
