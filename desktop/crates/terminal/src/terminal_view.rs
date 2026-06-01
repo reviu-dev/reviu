@@ -655,11 +655,18 @@ impl Focusable for TerminalView {
 impl Render for TerminalView {
   fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
     let theme = cx.theme().clone();
+    let is_dark = theme.is_dark();
+    let (cursor_color, selection_color) = if is_dark {
+      (rgb(0x7aa2f7).into(), rgb(0x33467a).into())
+    } else {
+      (rgb(0x2563eb).into(), rgb(0x60a5fa).into())
+    };
     let terminal_palette = TerminalPalette::themed(
+      is_dark,
       theme.sidebar,
       theme.foreground,
-      rgb(0x7aa2f7).into(),
-      rgb(0x33467a).into(),
+      cursor_color,
+      selection_color,
     );
     let terminal_screen = div()
       .id("terminal-screen")
