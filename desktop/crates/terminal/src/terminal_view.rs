@@ -814,8 +814,8 @@ fn selection_matches_screen_text(
 #[cfg(test)]
 mod tests {
   use super::{
-    TERMINAL_SURFACE_DEBUG_SELECTOR, TerminalView, selection_matches_screen_text,
-    selection_mode_for_click_count, selection_text_from_screen,
+    TERMINAL_BANNER_DEBUG_SELECTOR, TERMINAL_SURFACE_DEBUG_SELECTOR, TerminalView,
+    selection_matches_screen_text, selection_mode_for_click_count, selection_text_from_screen,
   };
   use crate::{
     ScreenSnapshot, TerminalBounds, TerminalCellSnapshot, TerminalSelectionMode, TerminalSession,
@@ -1613,5 +1613,46 @@ mod tests {
     });
 
     assert_eq!(cx.opened_url(), None);
+  }
+
+  #[gpui::test]
+  fn banner_renders_when_session_spawn_fails(cx: &mut TestAppContext) {
+    init_gpui_test(cx);
+
+    let missing = std::env::temp_dir().join("reviu-terminal-missing-cwd-banner");
+    let _ = std::fs::remove_dir_all(&missing);
+
+    let (view, cx) = cx.add_window_view(|_, cx| TerminalView::new(Some(missing.clone()), cx));
+    let cx: &mut VisualTestContext = cx;
+
+    let banner_bounds = cx.debug_bounds(TERMINAL_BANNER_DEBUG_SELECTOR);
+    assert!(
+      banner_bounds.is_some(),
+      "banner should render when session spawn fails"
+    );
+
+    let (has_error, has_session) =
+      view.read_with(cx, |view, _| (view.error.is_some(), view.session.is_some()));
+    assert!(has_error, "spawn failure should populate error");
+    assert!(
+      !has_session,
+      "no session should be active after spawn failure"
+    );
+  }
+
+  #[gpui::test]
+  fn restart_session_clears_error_and_respawns(cx: &mut TestAppContext) {
+    init_gpui_test(cx);
+
+    let view = cx.new(|cx| TerminalView::new(Some(std::env::temp_dir()), cx));
+
+    view.update(cx, |view, _| {
+      assert!(view.session.is_some(), "initial spawn should succeed");
+      view.error = Some("forced error".to_string());
+      view.restart_session();
+
+      assert!(view.error.is_none(), "restart should clear error");
+      assert!(view.session.is_some(), "restart should respawn session");
+    });
   }
 }
