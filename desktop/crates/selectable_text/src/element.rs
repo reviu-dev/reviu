@@ -3,8 +3,7 @@ use std::ops::Range;
 use gpui::{
   App, Bounds, ClipboardItem, CursorStyle, DispatchPhase, Element, ElementId, GlobalElementId,
   Hitbox, HitboxBehavior, Hsla, InspectorElementId, IntoElement, LayoutId, MouseButton,
-  MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels, SharedString, StyledText, TextAlign,
-  TextRun, Window, fill, point,
+  MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels, SharedString, StyledText, TextRun, Window,
 };
 use gpui_component::ActiveTheme as _;
 
@@ -51,6 +50,68 @@ impl SelectableText {
     let active = self.registry.active_for(self.text_id)?;
     selection_range(&active, self.text.as_ref())
   }
+
+  fn runs_with_selection(&self, window: &Window, cx: &App) -> Vec<TextRun> {
+    let base_runs = if self.runs.is_empty() {
+      let text_style = window.text_style();
+      vec![TextRun {
+        len: self.text.len(),
+        font: text_style.font(),
+        color: text_style.color,
+        background_color: None,
+        underline: None,
+        strikethrough: None,
+      }]
+    } else {
+      self.runs.clone()
+    };
+
+    let Some(range) = self.resolved_range() else {
+      return base_runs;
+    };
+    let bg = self.selection_bg.unwrap_or_else(|| cx.theme().selection);
+    apply_selection_to_runs(base_runs, range, bg)
+  }
+}
+
+pub fn apply_selection_to_runs(
+  runs: Vec<TextRun>,
+  selection: Range<usize>,
+  selection_color: Hsla,
+) -> Vec<TextRun> {
+  let mut updated = Vec::new();
+  let mut offset = 0usize;
+  for run in runs {
+    let run_start = offset;
+    let run_end = offset + run.len;
+    offset = run_end;
+
+    if selection.end <= run_start || selection.start >= run_end {
+      updated.push(run);
+      continue;
+    }
+
+    let overlap_start = selection.start.max(run_start);
+    let overlap_end = selection.end.min(run_end);
+
+    if overlap_start > run_start {
+      let mut prefix = run.clone();
+      prefix.len = overlap_start - run_start;
+      updated.push(prefix);
+    }
+
+    let mut selected = run.clone();
+    selected.len = overlap_end - overlap_start;
+    selected.background_color = Some(selection_color);
+    updated.push(selected);
+
+    if overlap_end < run_end {
+      let mut suffix = run.clone();
+      suffix.len = run_end - overlap_end;
+      updated.push(suffix);
+    }
+  }
+  updated
 }
 
 pub fn selection_range(active: &ActiveSelection, text: &str) -> Option<Range<usize>> {
@@ -126,11 +187,8 @@ impl Element for SelectableText {
     window: &mut Window,
     cx: &mut App,
   ) -> (LayoutId, Self::RequestLayoutState) {
-    self.styled_text = if self.runs.is_empty() {
-      StyledText::new(self.text.clone())
-    } else {
-      StyledText::new(self.text.clone()).with_runs(self.runs.clone())
-    };
+    let runs = self.runs_with_selection(window, cx);
+    self.styled_text = StyledText::new(self.text.clone()).with_runs(runs);
     let (layout_id, _) = self
       .styled_text
       .request_layout(None, inspector_id, window, cx);
@@ -167,11 +225,6 @@ impl Element for SelectableText {
     let text_for_event = self.text.clone();
     let registry = self.registry.clone();
     let text_id = self.text_id;
-
-    if let Some(range) = self.resolved_range() {
-      let bg = self.selection_bg.unwrap_or_else(|| cx.theme().selection);
-      paint_selection_quads(&text_layout, &range, bg, window);
-    }
 
     if hitbox.is_hovered(window) {
       window.set_cursor_style(CursorStyle::IBeam, hitbox);
@@ -287,64 +340,6 @@ impl Element for SelectableText {
   }
 }
 
-fn paint_selection_quads(
-  layout: &gpui::TextLayout,
-  range: &Range<usize>,
-  bg: Hsla,
-  window: &mut Window,
-) {
-  let line_height = layout.line_height();
-  let Some(start_pos) = layout.position_for_index(range.start) else {
-    return;
-  };
-  let Some(end_pos) = layout.position_for_index(range.end) else {
-    return;
-  };
-
-  if (start_pos.y - end_pos.y).abs() < gpui::px(1.0) {
-    window.paint_quad(fill(
-      Bounds::from_corners(start_pos, point(end_pos.x, start_pos.y + line_height)),
-      bg,
-    ));
-    return;
-  }
-
-  let first_line_end = layout
-    .position_for_index(range.end.min(layout.text().len()))
-    .map(|p| p.x)
-    .unwrap_or(start_pos.x);
-
-  window.paint_quad(fill(
-    Bounds::from_corners(
-      start_pos,
-      point(
-        first_line_end.max(start_pos.x + gpui::px(8.)),
-        start_pos.y + line_height,
-      ),
-    ),
-    bg,
-  ));
-
-  let mut current_y = start_pos.y + line_height;
-  while current_y + line_height <= end_pos.y {
-    window.paint_quad(fill(
-      Bounds::from_corners(
-        point(gpui::px(0.0), current_y),
-        point(gpui::px(10_000.0), current_y + line_height),
-      ),
-      bg,
-    ));
-    current_y += line_height;
-  }
-
-  window.paint_quad(fill(
-    Bounds::from_corners(point(gpui::px(0.0), end_pos.y), end_pos),
-    bg,
-  ));
-
-  let _ = TextAlign::Left;
-}
-
 impl IntoElement for SelectableText {
   type Element = Self;
 
@@ -425,5 +420,75 @@ mod tests {
       anchor_word: None,
     };
     assert!(selection_range(&active, text).is_none());
+  }
+
+  fn dummy_run(len: usize) -> TextRun {
+    TextRun {
+      len,
+      font: gpui::Font {
+        family: gpui::SharedString::from("monospace"),
+        features: gpui::FontFeatures::default(),
+        weight: gpui::FontWeight::NORMAL,
+        style: gpui::FontStyle::Normal,
+        fallbacks: None,
+      },
+      color: Hsla::default(),
+      background_color: None,
+      underline: None,
+      strikethrough: None,
+    }
+  }
+
+  #[test]
+  fn apply_selection_splits_run_around_selection() {
+    let bg = Hsla {
+      h: 0.6,
+      s: 0.8,
+      l: 0.5,
+      a: 1.0,
+    };
+    let runs = vec![dummy_run(10)];
+    let updated = apply_selection_to_runs(runs, 3..7, bg);
+    assert_eq!(updated.len(), 3);
+    assert_eq!(updated[0].len, 3);
+    assert!(updated[0].background_color.is_none());
+    assert_eq!(updated[1].len, 4);
+    assert_eq!(updated[1].background_color, Some(bg));
+    assert_eq!(updated[2].len, 3);
+    assert!(updated[2].background_color.is_none());
+  }
+
+  #[test]
+  fn apply_selection_at_run_start_drops_prefix() {
+    let bg = Hsla {
+      h: 0.6,
+      s: 0.8,
+      l: 0.5,
+      a: 1.0,
+    };
+    let runs = vec![dummy_run(10)];
+    let updated = apply_selection_to_runs(runs, 0..4, bg);
+    assert_eq!(updated.len(), 2);
+    assert_eq!(updated[0].len, 4);
+    assert_eq!(updated[0].background_color, Some(bg));
+    assert_eq!(updated[1].len, 6);
+  }
+
+  #[test]
+  fn apply_selection_spanning_multiple_runs_marks_each_overlap() {
+    let bg = Hsla {
+      h: 0.6,
+      s: 0.8,
+      l: 0.5,
+      a: 1.0,
+    };
+    let runs = vec![dummy_run(4), dummy_run(4), dummy_run(4)];
+    let updated = apply_selection_to_runs(runs, 2..10, bg);
+    let selected_lens: Vec<usize> = updated
+      .iter()
+      .filter(|r| r.background_color == Some(bg))
+      .map(|r| r.len)
+      .collect();
+    assert_eq!(selected_lens, vec![2, 4, 2]);
   }
 }
