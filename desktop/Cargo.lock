@@ -11273,6 +11273,7 @@ dependencies = [
  "time",
  "tray-icon",
  "ui",
+ "uuid",
 ]
 
 [[package]]

@@ -229,6 +229,11 @@ impl BillingPage {
 
     self.checkout_loading = true;
     self.error = None;
+    crate::analytics::track_with(
+      cx,
+      "subscription_checkout_started",
+      Some(serde_json::json!({ "slug": slug })),
+    );
 
     let api = self.api.clone();
     let task = cx.spawn(async move |this, cx| {

@@ -4613,6 +4613,7 @@ impl GitPage {
     cx: &mut Context<Self>,
     initial_screen: Option<CommandPaletteInitialScreen>,
   ) {
+    crate::analytics::track(cx, "command_palette_opened");
     let mut palette_repositories = ConfigStore::load_recent_repositories()
       .into_iter()
       .map(|repo| CommandPaletteRepository {
@@ -5559,6 +5560,7 @@ impl GitPage {
         let mut start_data = Map::new();
         start_data.insert("target_branch".into(), branch_ref.name.clone().into());
         self.add_git_breadcrumb("Rebase started", start_data);
+        crate::analytics::track(cx, "rebase_done");
         match rebase_branch(&root_path, &branch_ref) {
           Ok(outcome) => {
             let mut data = Map::new();
@@ -5715,6 +5717,7 @@ impl GitPage {
         let Some(root_path) = self.selected_repo.clone() else {
           return Err("No repository selected.".into());
         };
+        crate::analytics::track(cx, "stash_created");
         let result = create_stash(&root_path, include_untracked, message.as_deref());
         if result.is_ok() {
           window.push_notification(Notification::success("Stashed changes"), cx);
@@ -5768,6 +5771,7 @@ impl GitPage {
           return Err("Cherry-pick command is currently disabled.".into());
         }
         let count = commit_hashes.len();
+        crate::analytics::track(cx, "cherry_pick_done");
         let result = cherry_pick_commits(&root_path, &commit_hashes);
         if result.is_ok() {
           let label = if count == 1 { "commit" } else { "commits" };
@@ -6102,6 +6106,7 @@ impl GitPage {
     let mut start_data = Map::new();
     start_data.insert("stage_all_needed".into(), stage_all_needed.into());
     self.add_git_breadcrumb("Commit started", start_data);
+    crate::analytics::track(cx, "commit_made");
 
     let window_handle = window.window_handle();
     let commit_input = self.commit_input.clone();
@@ -6538,6 +6543,7 @@ impl GitPage {
       return;
     }
     self.add_git_breadcrumb("Fetch started", Map::new());
+    crate::analytics::track(cx, "fetch_done");
     self.fetch_in_progress = true;
     let editor = self.editor.clone();
     let task = cx.spawn(async move |this, cx| {
@@ -6621,6 +6627,7 @@ impl GitPage {
     }
 
     self.add_git_breadcrumb("Push started", Map::new());
+    crate::analytics::track(cx, "push_done");
     self.push_pull_in_progress = true;
     let task = cx.spawn(async move |this, cx| {
       let result = unblock(move || push(&repo_root, false)).await;
@@ -6657,6 +6664,7 @@ impl GitPage {
     }
 
     self.add_git_breadcrumb("Force push started", Map::new());
+    crate::analytics::track(cx, "force_push_done");
     self.push_pull_in_progress = true;
     let task = cx.spawn(async move |this, cx| {
       let result = unblock(move || push(&repo_root, true)).await;
@@ -7555,6 +7563,7 @@ impl GitPage {
     self.show_terminal_sidebar = !self.show_terminal_sidebar;
     if self.show_terminal_sidebar {
       self.show_agent_sidebar = false;
+      crate::analytics::track(cx, "terminal_opened");
       self.focus_terminal_sidebar_on_next_frame(window, cx);
     } else {
       self.focus_editor_or_page(window, cx);
@@ -7612,6 +7621,7 @@ impl GitPage {
     self.ensure_agent_chat_view(window, cx);
     self.show_agent_sidebar = true;
     self.show_terminal_sidebar = false;
+    crate::analytics::track(cx, "agent_opened");
     self.focus_agent_sidebar_on_next_frame(window, cx);
     cx.notify();
   }

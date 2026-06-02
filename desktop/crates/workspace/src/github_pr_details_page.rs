@@ -7298,6 +7298,7 @@ impl GithubPrDetailsPage {
 
     self.submit_review_loading = true;
     self.submit_review_error = None;
+    crate::analytics::track(cx, "github_pr_review_submitted");
     cx.notify();
 
     let task = cx.spawn_in(window, async move |this, cx| {
@@ -9940,6 +9941,7 @@ impl GithubPrDetailsPage {
     });
     self.sync_sentry_pr_context();
     self.add_pr_breadcrumb("Load pull request started", Map::new());
+    crate::analytics::track(cx, "github_pr_viewed");
     self.error = None;
     self.pull_request = None;
     self.files_loading = true;
