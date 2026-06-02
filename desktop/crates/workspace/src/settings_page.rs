@@ -55,6 +55,7 @@ pub struct SettingsPage {
   hide_whitespace: bool,
   clone_protocol: CloneProtocol,
   menu_bar_icon: bool,
+  analytics_enabled: bool,
   shortcut_recording: Option<ShortcutId>,
   shortcut_error: Option<ShortcutCaptureError>,
   api: ApiClient,
@@ -107,6 +108,7 @@ impl SettingsPage {
       hide_whitespace: settings.hide_whitespace,
       clone_protocol: settings.clone_protocol,
       menu_bar_icon: settings.menu_bar_icon,
+      analytics_enabled: settings.analytics_enabled,
       shortcut_recording: None,
       shortcut_error: None,
       api: WorkspaceApi::global(cx).api.clone(),
@@ -298,6 +300,7 @@ impl SettingsPage {
     let default_git_unified_file_view = self.git_unified_file_view;
     let default_split_diff_view = self.split_diff_view;
     let default_menu_bar_icon = self.menu_bar_icon;
+    let default_analytics_enabled = self.analytics_enabled;
 
     vec![
       SettingPage::new("General").default_open(true).groups(vec![
@@ -486,6 +489,31 @@ impl SettingsPage {
           )
           .description(
             "Protocol used when cloning a GitHub repository. HTTPS uses your credential helper; SSH uses your configured SSH key.",
+          ),
+        ]),
+        SettingGroup::new().title("Privacy").items(vec![
+          SettingItem::new(
+            "Send Anonymous Usage Data",
+            SettingField::checkbox(
+              {
+                let view = view.clone();
+                move |cx: &App| view.read(cx).analytics_enabled
+              },
+              {
+                let view = view.clone();
+                move |val: bool, cx: &mut App| {
+                  view.update(cx, |view, _| {
+                    view.analytics_enabled = val;
+                  });
+
+                  PersistedSettings::update(cx, |s| s.analytics_enabled = val);
+                }
+              },
+            )
+            .default_value(default_analytics_enabled),
+          )
+          .description(
+            "Help improve Reviu by sending anonymous feature usage events (no repository, file, or account data). See the privacy policy on reviu.dev for details.",
           ),
         ]),
       ].into_iter().chain(self.menu_bar_settings_groups(view.clone(), default_menu_bar_icon))),

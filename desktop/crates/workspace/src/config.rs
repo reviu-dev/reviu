@@ -60,15 +60,21 @@ const COMMAND_USAGES_TABLE: ConfigTable = ConfigTable {
   create_sql: "CREATE TABLE IF NOT EXISTS command_usages (command_id TEXT PRIMARY KEY, recent_timestamps TEXT NOT NULL)",
 };
 
+const ANALYTICS_META_TABLE: ConfigTable = ConfigTable {
+  name: "analytics_meta",
+  create_sql: "CREATE TABLE IF NOT EXISTS analytics_meta (id INTEGER PRIMARY KEY CHECK (id = 1), device_id TEXT NOT NULL)",
+};
+
 pub const COMMAND_USAGE_TIMESTAMP_CAP: usize = 30;
 
-const CONFIG_TABLES: [ConfigTable; 6] = [
+const CONFIG_TABLES: [ConfigTable; 7] = [
   RECENT_REPOS_TABLE,
   SETTINGS_TABLE,
   PINNED_REPOS_TABLE,
   SHORTCUT_OVERRIDES_TABLE,
   GITHUB_HOME_PULL_REQUEST_TABS_TABLE,
   COMMAND_USAGES_TABLE,
+  ANALYTICS_META_TABLE,
 ];
 
 #[cfg(test)]
@@ -118,6 +124,7 @@ pub struct AppSettings {
   pub hide_whitespace: bool,
   pub clone_protocol: CloneProtocol,
   pub menu_bar_icon: bool,
+  pub analytics_enabled: bool,
 }
 
 impl Global for AppSettings {}
@@ -147,6 +154,7 @@ impl Default for AppSettings {
       hide_whitespace: false,
       clone_protocol: CloneProtocol::Https,
       menu_bar_icon: true,
+      analytics_enabled: true,
     }
   }
 }
@@ -239,6 +247,7 @@ impl ConfigStore {
     let mut has_hide_whitespace = false;
     let mut has_clone_protocol = false;
     let mut has_menu_bar_icon = false;
+    let mut has_analytics_enabled = false;
     let mut stmt = self
       .conn
       .prepare(&format!("PRAGMA table_info({})", SETTINGS_TABLE.name))?;
@@ -265,6 +274,9 @@ impl ConfigStore {
       }
       if column == "menu_bar_icon" {
         has_menu_bar_icon = true;
+      }
+      if column == "analytics_enabled" {
+        has_analytics_enabled = true;
       }
     }
 
@@ -332,6 +344,16 @@ impl ConfigStore {
       self.conn.execute(
         &format!(
           "ALTER TABLE {} ADD COLUMN menu_bar_icon INTEGER NOT NULL DEFAULT 1",
+          SETTINGS_TABLE.name
+        ),
+        [],
+      )?;
+    }
+
+    if !has_analytics_enabled {
+      self.conn.execute(
+        &format!(
+          "ALTER TABLE {} ADD COLUMN analytics_enabled INTEGER NOT NULL DEFAULT 1",
           SETTINGS_TABLE.name
         ),
         [],
@@ -445,7 +467,7 @@ impl ConfigStore {
   fn load_app_settings_inner(&self) -> AppSettings {
     let settings = self.conn.query_row(
       &format!(
-        "SELECT auto_switch_theme, dark_mode, indent_rainbow, font_size, git_unified_file_view, split_diff_view, hide_whitespace, clone_protocol, menu_bar_icon FROM {} WHERE id = 1",
+        "SELECT auto_switch_theme, dark_mode, indent_rainbow, font_size, git_unified_file_view, split_diff_view, hide_whitespace, clone_protocol, menu_bar_icon, analytics_enabled FROM {} WHERE id = 1",
         SETTINGS_TABLE.name
       ),
       [],
@@ -459,6 +481,7 @@ impl ConfigStore {
         let hide_whitespace: i64 = row.get(6)?;
         let clone_protocol: String = row.get(7)?;
         let menu_bar_icon: i64 = row.get(8)?;
+        let analytics_enabled: i64 = row.get(9)?;
         Ok(AppSettings {
           auto_switch_theme: auto_switch_theme != 0,
           dark_mode: dark_mode != 0,
@@ -469,6 +492,7 @@ impl ConfigStore {
           hide_whitespace: hide_whitespace != 0,
           clone_protocol: CloneProtocol::from_str(&clone_protocol),
           menu_bar_icon: menu_bar_icon != 0,
+          analytics_enabled: analytics_enabled != 0,
         })
       },
     );
@@ -487,6 +511,39 @@ impl ConfigStore {
       return;
     };
     store.persist_app_settings_inner(settings);
+  }
+
+  pub fn load_or_create_analytics_device_id() -> Option<String> {
+    let store = Self::open_with_tables()?;
+    store.load_or_create_analytics_device_id_inner()
+  }
+
+  fn load_or_create_analytics_device_id_inner(&self) -> Option<String> {
+    let existing: rusqlite::Result<String> = self.conn.query_row(
+      &format!(
+        "SELECT device_id FROM {} WHERE id = 1",
+        ANALYTICS_META_TABLE.name
+      ),
+      [],
+      |row| row.get::<_, String>(0),
+    );
+    if let Ok(id) = existing {
+      return Some(id);
+    }
+
+    let id = uuid::Uuid::new_v4().to_string();
+    if let Err(err) = self.conn.execute(
+      &format!(
+        "INSERT INTO {} (id, device_id) VALUES (1, ?1)
+         ON CONFLICT(id) DO UPDATE SET device_id = excluded.device_id",
+        ANALYTICS_META_TABLE.name
+      ),
+      params![id],
+    ) {
+      eprintln!("Failed to persist analytics device id: {}", err);
+      return None;
+    }
+    Some(id)
   }
 
   pub fn load_command_usages() -> HashMap<String, Vec<i64>> {
@@ -785,8 +842,8 @@ impl ConfigStore {
   fn persist_app_settings_inner(&self, settings: AppSettings) {
     if let Err(err) = self.conn.execute(
       &format!(
-        "INSERT INTO {} (id, auto_switch_theme, dark_mode, indent_rainbow, font_size, git_unified_file_view, split_diff_view, hide_whitespace, clone_protocol, menu_bar_icon)
-         VALUES (1, ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
+        "INSERT INTO {} (id, auto_switch_theme, dark_mode, indent_rainbow, font_size, git_unified_file_view, split_diff_view, hide_whitespace, clone_protocol, menu_bar_icon, analytics_enabled)
+         VALUES (1, ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
          ON CONFLICT(id) DO UPDATE
          SET auto_switch_theme = excluded.auto_switch_theme,
              dark_mode = excluded.dark_mode,
@@ -796,7 +853,8 @@ impl ConfigStore {
              split_diff_view = excluded.split_diff_view,
              hide_whitespace = excluded.hide_whitespace,
              clone_protocol = excluded.clone_protocol,
-             menu_bar_icon = excluded.menu_bar_icon",
+             menu_bar_icon = excluded.menu_bar_icon,
+             analytics_enabled = excluded.analytics_enabled",
         SETTINGS_TABLE.name
       ),
       params![
@@ -829,6 +887,11 @@ impl ConfigStore {
         },
         settings.clone_protocol.as_str(),
         if settings.menu_bar_icon { 1_i64 } else { 0_i64 },
+        if settings.analytics_enabled {
+          1_i64
+        } else {
+          0_i64
+        },
       ],
     ) {
       eprintln!("Failed to persist app settings: {}", err);

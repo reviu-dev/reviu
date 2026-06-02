@@ -2,7 +2,7 @@
 import Layout from "../layouts/Layout.astro";
 import SiteFooter from "../components/SiteFooter.astro";
 
-const lastUpdated = "May 22, 2026";
+const lastUpdated = "June 2, 2026";
 ---
 
 <Layout
@@ -80,6 +80,11 @@ const lastUpdated = "May 22, 2026";
           Aggregate website traffic and sampled session replay on
           <code>reviu.dev</code> (see section 3).
         </li>
+        <li>
+          Anonymous desktop feature usage events (event name, application
+          version, operating system, and a random per-install device
+          identifier), only if you opt in (see section 5.5).
+        </li>
       </ul>
 
       <h2 class="mt-10 text-2xl font-semibold text-foreground">
@@ -97,7 +102,9 @@ const lastUpdated = "May 22, 2026";
         analytics cookies for this setup. If analytics implementation changes
         in the future and non-essential cookies are introduced, this policy and
         consent handling will be updated accordingly. The desktop application
-        does not embed Umami or any website-style analytics.
+        does not embed website-style page analytics or session replay; the only
+        Umami usage on the desktop is the opt-in product analytics described in
+        section 5.5.
       </p>
 
       <h2 class="mt-10 text-2xl font-semibold text-foreground">
@@ -222,10 +229,31 @@ const lastUpdated = "May 22, 2026";
         or stored by Reviu.
       </p>
 
+      <h3 class="mt-6 text-lg font-semibold text-foreground">
+        5.5 Umami (desktop product analytics)
+      </h3>
+      <p class="mt-3 text-sm/7 text-muted-foreground">
+        The desktop application sends anonymous feature usage events to a
+        Reviu-operated Umami instance. Each event contains: an event name
+        (for example <code>agent_opened</code>, <code>terminal_opened</code>,
+        <code>commit_made</code>), the application version, the operating
+        system, and a random device identifier generated on first launch and
+        stored locally. This identifier is not linked to your GitHub account
+        or email.
+      </p>
+      <p class="mt-3 text-sm/7 text-muted-foreground">
+        The following are never transmitted: repository contents, file paths,
+        diffs, commit messages, branch or remote names, GitHub data, your IP
+        address (stripped at ingestion), or any other personally identifying
+        information. Product analytics is enabled by default and can be
+        disabled at any time from the in-app settings; disabling it stops
+        further event collection immediately.
+      </p>
       <p class="mt-6 text-sm/7 text-muted-foreground">
         The desktop application does not contact any other third-party
-        services. It does not embed Umami, PostHog, Google Analytics, or any
-        usage analytics SDK.
+        services. It does not embed PostHog, Google Analytics, or any usage
+        analytics SDK other than the opt-in Umami integration described
+        above.
       </p>
 
       <h2 class="mt-10 text-2xl font-semibold text-foreground">
@@ -244,15 +272,22 @@ const lastUpdated = "May 22, 2026";
         <li>
           Comply with accounting, tax, and legal obligations (legal obligation).
         </li>
+        <li>
+          Measure aggregate desktop feature usage to prioritize product work
+          (legitimate interests, based on anonymous events with no personal
+          identifiers and a one-click opt-out in the in-app settings).
+        </li>
       </ul>
 
       <h2 class="mt-10 text-2xl font-semibold text-foreground">
         7. Hosting and Infrastructure
       </h2>
       <p class="mt-4 text-sm/7 text-muted-foreground">
-        The Reviu backend and website are hosted on infrastructure provided by
-        Hetzner (EU). Sentry receives crash reports on its US ingestion
-        endpoint. Polar processes billing on its own infrastructure.
+        The Reviu backend and website are hosted on infrastructure provided
+        by Hetzner (EU). Website and desktop analytics are collected by a
+        self-hosted Umami instance at <code>analytics.jorisgallot.dev</code>,
+        also hosted in the EU. Sentry receives crash reports on its US
+        ingestion endpoint. Polar processes billing on its own infrastructure.
       </p>
 
       <h2 class="mt-10 text-2xl font-semibold text-foreground">
@@ -279,9 +314,11 @@ const lastUpdated = "May 22, 2026";
       <p class="mt-4 text-sm/7 text-muted-foreground">
         We retain personal data only as long as necessary for service delivery,
         legal compliance, dispute resolution, and enforcement of agreements.
-        Local agent chat history on your device is pruned after 30 days. You
-        can delete your local application state at any time by removing the
-        Reviu config directory.
+        Local agent chat history on your device is pruned after 30 days.
+        Anonymous desktop product analytics events are retained in Umami for
+        up to 6 months before being deleted or aggregated. You can delete
+        your local application state at any time by removing the Reviu config
+        directory.
       </p>
 
       <h2 class="mt-10 text-2xl font-semibold text-foreground">

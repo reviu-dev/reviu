@@ -27,6 +27,7 @@ time = { workspace = true }
 sha2 = { workspace = true }
 sentry = { workspace = true }
 gpui-router = { workspace = true }
+uuid = { workspace = true }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2 = "0.6"

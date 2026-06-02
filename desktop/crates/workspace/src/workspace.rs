@@ -374,6 +374,8 @@ impl WorkspaceView {
     cx.set_global(shortcuts::load_shortcut_overrides());
     cx.set_global(crate::command_usage::CommandUsageStore::load());
     crate::command_usage::install_palette_usage_recorder(cx);
+    crate::analytics::Analytics::init(cx);
+    crate::analytics::track(cx, "app_started");
     set_indent_rainbow_enabled(settings.indent_rainbow);
     Theme::global_mut(cx).font_size = px(settings.font_size);
     if settings.auto_switch_theme {
@@ -805,6 +807,7 @@ impl WorkspaceView {
     if AuthStateStore::has_github_access(cx) {
       GithubPageHandle::refresh(cx);
     }
+    crate::analytics::track(cx, "github_home_viewed");
     NavigationHistory::navigate("/github", cx);
   }
 
