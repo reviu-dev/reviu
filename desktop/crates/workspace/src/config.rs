@@ -1068,6 +1068,7 @@ mod tests {
 
     let settings = AppSettings {
       auto_switch_theme: false,
+      analytics_enabled: false,
       dark_mode: true,
       indent_rainbow: true,
       font_size: 20.0,
