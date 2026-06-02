@@ -1884,29 +1884,20 @@ fn format_agent_review_export(comments: &[LocalAgentReviewComment]) -> String {
       .then_with(|| a.id.cmp(&b.id))
   });
 
-  let mut output = String::from("Fix these review comments:\n");
-  let mut current_path: Option<&Path> = None;
+  let mut output = String::new();
 
   for comment in comments {
-    if current_path != Some(comment.path.as_path()) {
-      current_path = Some(comment.path.as_path());
-      if !output.is_empty() {
-        output.push('\n');
-      }
-      output.push_str("## ");
-      output.push_str(&comment.path.to_string_lossy().replace(['\n', '\r'], ""));
+    if !output.is_empty() {
       output.push('\n');
     }
-
-    output.push_str("\n### ");
+    output.push_str("### ");
+    output.push_str(&comment.path.to_string_lossy().replace(['\n', '\r'], ""));
+    output.push(':');
     output.push_str(&agent_review_line_label(comment));
     output.push_str(" (");
     output.push_str(agent_review_side_label(comment.side));
     output.push_str(" side)");
-    if comment.in_reply_to_id.is_some() {
-      output.push_str(" reply");
-    }
-    output.push_str("\n\n");
+    output.push('\n');
     output.push_str(comment.body.trim());
     output.push('\n');
   }
@@ -10774,9 +10765,9 @@ mod tests {
 
     let export = format_agent_review_export(&comments);
 
-    assert!(export.contains("## src/main.rs\n\n### L2 (new side)"));
+    assert!(export.contains("### src/main.rs:L2 (new side)"));
     assert!(export.contains("```suggestion\nlet value = shared();\n```"));
-    assert!(export.contains("## src/lib.rs\n\n### L5 (new side)"));
+    assert!(export.contains("### src/lib.rs:L5 (new side)"));
     assert!(export.find("src/lib.rs") < export.find("src/main.rs"));
   }
 
