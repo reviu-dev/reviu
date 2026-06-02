@@ -469,10 +469,7 @@ impl gpui::IntoElement for SelectableText {
 }
 
 pub(crate) fn selection_state_for(state: &MarkdownRenderState, text_id: usize) -> SelectionState {
-  let selection = state.selection.lock().unwrap();
-  if let Some(active) = selection.as_ref()
-    && active.text_id == text_id
-  {
+  if let Some(active) = state.selection_registry.active_for(text_id as u64) {
     return SelectionState {
       anchor: Some(active.anchor),
       range: SelectionRange {
@@ -492,13 +489,14 @@ pub(crate) fn update_selection_state(
   head: usize,
   dragging: bool,
 ) {
-  let mut selection = state.selection.lock().unwrap();
-  *selection = Some(ActiveSelection {
-    text_id,
+  state.selection_registry.set(
+    text_id as u64,
     anchor,
     head,
     dragging,
-  });
+    selectable_text::SelectionMode::Character,
+    None,
+  );
 }
 
 pub(crate) fn selection_for_text(
@@ -506,25 +504,8 @@ pub(crate) fn selection_for_text(
   text_id: usize,
   text: &SharedString,
 ) -> Option<Range<usize>> {
-  let text = text.as_ref();
-  let text_len = text.len();
-  let selection = state.selection.lock().unwrap();
-  let active = selection.as_ref()?;
-  if active.text_id != text_id || active.anchor == active.head {
-    return None;
-  }
-  let mut range = SelectionRange {
-    start: active.anchor,
-    end: active.head,
-  }
-  .normalized();
-  range.start = clamp_to_char_boundary(text, range.start.min(text_len));
-  range.end = clamp_to_char_boundary(text, range.end.min(text_len));
-  if range.start >= range.end {
-    None
-  } else {
-    Some(range)
-  }
+  let active = state.selection_registry.active_for(text_id as u64)?;
+  selectable_text::selection_range(&active, text.as_ref())
 }
 
 pub(crate) fn selection_text(

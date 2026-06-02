@@ -205,7 +205,7 @@ pub enum LinkAction {
 pub struct MarkdownRenderState {
   pub(crate) instance_id: usize,
   pub(crate) details_open: Arc<Mutex<HashMap<usize, bool>>>,
-  pub(crate) selection: Arc<Mutex<Option<ActiveSelection>>>,
+  pub(crate) selection_registry: selectable_text::SelectionRegistry,
 }
 
 impl Default for MarkdownRenderState {
@@ -214,7 +214,7 @@ impl Default for MarkdownRenderState {
     Self {
       instance_id: NEXT_ID.fetch_add(1, Ordering::Relaxed),
       details_open: Arc::new(Mutex::new(HashMap::new())),
-      selection: Arc::new(Mutex::new(None)),
+      selection_registry: selectable_text::SelectionRegistry::new(),
     }
   }
 }
@@ -222,6 +222,12 @@ impl Default for MarkdownRenderState {
 impl MarkdownRenderState {
   pub fn new() -> Self {
     Self::default()
+  }
+
+  pub fn with_selection_registry(registry: selectable_text::SelectionRegistry) -> Self {
+    let mut state = Self::default();
+    state.selection_registry = registry;
+    state
   }
 }
 
@@ -232,14 +238,6 @@ pub(crate) struct SelectionRange {
 }
 
 impl SelectionRange {
-  pub(crate) fn normalized(self) -> Range<usize> {
-    if self.start <= self.end {
-      self.start..self.end
-    } else {
-      self.end..self.start
-    }
-  }
-
   pub(crate) fn is_empty(self) -> bool {
     self.start == self.end
   }
@@ -249,14 +247,6 @@ impl SelectionRange {
 pub(crate) struct SelectionState {
   pub(crate) anchor: Option<usize>,
   pub(crate) range: SelectionRange,
-  pub(crate) dragging: bool,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct ActiveSelection {
-  pub(crate) text_id: usize,
-  pub(crate) anchor: usize,
-  pub(crate) head: usize,
   pub(crate) dragging: bool,
 }
 
