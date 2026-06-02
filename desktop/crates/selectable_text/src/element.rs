@@ -53,7 +53,7 @@ impl SelectableText {
   }
 }
 
-pub(crate) fn selection_range(active: &ActiveSelection, text: &str) -> Option<Range<usize>> {
+pub fn selection_range(active: &ActiveSelection, text: &str) -> Option<Range<usize>> {
   let len = text.len();
   let mut range = normalize_range(active.anchor.min(len), active.head.min(len));
   range.start = clamp_to_char_boundary(text, range.start);
@@ -65,7 +65,7 @@ pub(crate) fn selection_range(active: &ActiveSelection, text: &str) -> Option<Ra
   }
 }
 
-fn mode_for_click_count(count: usize) -> SelectionMode {
+pub fn mode_for_click_count(count: usize) -> SelectionMode {
   match count {
     2 => SelectionMode::Word,
     3.. => SelectionMode::Line,
@@ -73,7 +73,7 @@ fn mode_for_click_count(count: usize) -> SelectionMode {
   }
 }
 
-pub(crate) fn extend_selection(
+pub fn extend_selection(
   text: &str,
   mode: SelectionMode,
   anchor_word: Option<Range<usize>>,

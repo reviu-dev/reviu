@@ -17,7 +17,7 @@ impl Default for SelectionMode {
 }
 
 #[derive(Clone, Debug)]
-pub(crate) struct ActiveSelection {
+pub struct ActiveSelection {
   pub text_id: u64,
   pub anchor: usize,
   pub head: usize,
@@ -38,7 +38,7 @@ impl SelectionRegistry {
     *self.0.lock().unwrap() = None;
   }
 
-  pub(crate) fn active_for(&self, text_id: u64) -> Option<ActiveSelection> {
+  pub fn active_for(&self, text_id: u64) -> Option<ActiveSelection> {
     let guard = self.0.lock().unwrap();
     match guard.as_ref() {
       Some(active) if active.text_id == text_id => Some(active.clone()),
@@ -46,7 +46,7 @@ impl SelectionRegistry {
     }
   }
 
-  pub(crate) fn set(
+  pub fn set(
     &self,
     text_id: u64,
     anchor: usize,
@@ -74,7 +74,7 @@ impl SelectionRegistry {
   }
 }
 
-pub(crate) fn normalize_range(start: usize, end: usize) -> Range<usize> {
+pub fn normalize_range(start: usize, end: usize) -> Range<usize> {
   if start <= end { start..end } else { end..start }
 }
 

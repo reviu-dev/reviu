@@ -3052,6 +3052,7 @@ dependencies = [
  "gpui-component",
  "once_cell",
  "reqwest",
+ "selectable_text",
  "syntax",
  "tree-sitter",
  "tree-sitter-html",
