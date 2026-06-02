@@ -16,6 +16,7 @@ futures = { workspace = true }
 gfm_markdown_viewer = { workspace = true }
 gpui = { workspace = true }
 gpui-component = { workspace = true }
+selectable_text = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 syntax = { workspace = true }

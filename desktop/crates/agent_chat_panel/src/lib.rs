@@ -191,6 +191,8 @@ pub struct AgentChatPanel {
   state_dir: Option<PathBuf>,
   current_conv: ConversationMeta,
   syntax_cache: Arc<SyntaxHighlightCache>,
+  markdown_state: gfm_markdown_viewer::MarkdownRenderState,
+  selection_registry: selectable_text::SelectionRegistry,
   available_modes: Vec<SessionMode>,
   current_mode_id: Option<SessionModeId>,
   available_models: Vec<ModelInfo>,
@@ -253,6 +255,8 @@ impl AgentChatPanel {
       state_dir,
       current_conv,
       syntax_cache: Arc::new(SyntaxHighlightCache::new()),
+      markdown_state: gfm_markdown_viewer::MarkdownRenderState::new(),
+      selection_registry: selectable_text::SelectionRegistry::new(),
       available_modes: Vec::new(),
       current_mode_id: None,
       available_models: Vec::new(),
@@ -501,7 +505,8 @@ impl AgentChatPanel {
       if item_ix < self.items.len() {
         let md_options =
           MarkdownRenderOptions::with_on_link(Arc::new(|_url, _window, _cx| LinkAction::Open))
-            .with_syntax_cache(self.syntax_cache.clone());
+            .with_syntax_cache(self.syntax_cache.clone())
+            .with_state(self.markdown_state.clone());
         self.render_item_at(item_ix, theme, &md_options, cx)
       } else if let Some(kind) = self.extras_after_kind() {
         self.render_extra_after(kind, theme, cx)
@@ -735,6 +740,8 @@ impl AgentChatPanel {
     let is_last_row = is_end_of_group;
 
     let item = self.items[idx].clone();
+    let registry = self.selection_registry.clone();
+    let item_id_base = (idx as u64) << 32;
     let element: gpui::AnyElement = match &item {
       ChatItem::Message(m) => match m.role {
         ChatRole::User => div()
@@ -747,7 +754,12 @@ impl AgentChatPanel {
           .border_color(theme.border)
           .text_sm()
           .text_color(theme.foreground)
-          .child(m.text.clone())
+          .child(selectable_text::SelectableText::new(
+            item_id_base,
+            SharedString::from(m.text.clone()),
+            Vec::new(),
+            registry.clone(),
+          ))
           .into_any_element(),
         ChatRole::Agent => {
           timeline_row(render_markdown(&m.text, md_options, cx), theme, is_last_row)
@@ -756,7 +768,12 @@ impl AgentChatPanel {
           div()
             .text_xs()
             .text_color(theme.muted_foreground)
-            .child(m.text.clone())
+            .child(selectable_text::SelectableText::new(
+              item_id_base | 0x1,
+              SharedString::from(m.text.clone()),
+              Vec::new(),
+              registry.clone(),
+            ))
             .into_any_element(),
           theme,
           is_last_row,
@@ -769,7 +786,12 @@ impl AgentChatPanel {
           ToolCallStatus::InProgress => theme.warning,
           _ => theme.muted_foreground,
         };
-        timeline_row_with_color(render_tool_call(t, theme, cx), theme, bullet, is_last_row)
+        timeline_row_with_color(
+          render_tool_call(t, theme, item_id_base, &registry, cx),
+          theme,
+          bullet,
+          is_last_row,
+        )
       }
       ChatItem::Permission(p) => timeline_row(render_permission(p, theme, cx), theme, is_last_row),
       ChatItem::Plan(p) => {
@@ -1945,6 +1967,8 @@ fn render_thought(
 fn render_tool_call(
   t: &ToolCallView,
   theme: &gpui_component::Theme,
+  item_id_base: u64,
+  registry: &selectable_text::SelectionRegistry,
   cx: &mut Context<AgentChatPanel>,
 ) -> gpui::AnyElement {
   let title_color = match t.status {
@@ -2130,7 +2154,8 @@ fn render_tool_call(
           mono_font.clone(),
           &syntax_theme,
         );
-        let mut content_div = div()
+        let text_id = item_id_base | 0x100 | (out_idx as u64);
+        let content_div = div()
           .font_family("monospace")
           .text_xs()
           .bg(theme.background)
@@ -2141,13 +2166,13 @@ fn render_tool_call(
           .px_2()
           .py_1()
           .text_color(theme.foreground)
-          .whitespace_normal();
-        if runs.is_empty() {
-          content_div = content_div.child(body_text);
-        } else {
-          content_div =
-            content_div.child(StyledText::new(SharedString::from(body_text)).with_runs(runs));
-        }
+          .whitespace_normal()
+          .child(selectable_text::SelectableText::new(
+            text_id,
+            SharedString::from(body_text),
+            runs,
+            registry.clone(),
+          ));
         let mut block = v_flex().gap_0p5().child(content_div);
         if total > MAX_TOOL_OUTPUT_LINES_COLLAPSED {
           let remaining = total.saturating_sub(visible);

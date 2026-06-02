@@ -259,6 +259,7 @@ dependencies = [
  "gpui",
  "gpui-component",
  "imara-diff",
+ "selectable_text",
  "serde",
  "serde_json",
  "syntax",
@@ -7589,6 +7590,14 @@ checksum = "6ce2691df843ecc5d231c0b14ece2acc3efb62c0a398c7e1d875f3983ce020e3"
 dependencies = [
  "core-foundation-sys",
  "libc",
+]
+
+[[package]]
+name = "selectable_text"
+version = "0.14.0"
+dependencies = [
+ "gpui",
+ "gpui-component",
 ]
 
 [[package]]

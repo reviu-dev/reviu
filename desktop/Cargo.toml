@@ -12,6 +12,7 @@ members = [
   "crates/reviu",
   "crates/agent_acp",
   "crates/agent_chat_panel",
+  "crates/selectable_text",
 ]
 
 [workspace.package]
@@ -128,6 +129,7 @@ ui = { path = "crates/ui" }
 workspace = { path = "crates/workspace" }
 agent_acp = { path = "crates/agent_acp" }
 agent_chat_panel = { path = "crates/agent_chat_panel" }
+selectable_text = { path = "crates/selectable_text" }
 gpui-router = { git = "https://github.com/justjavac/gpui-router" }
 
 # ACP integration

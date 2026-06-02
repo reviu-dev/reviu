@@ -1,0 +1,12 @@
+[package]
+name = "selectable_text"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[dependencies]
+gpui = { workspace = true }
+gpui-component = { workspace = true }
+
+[dev-dependencies]
+gpui = { workspace = true, features = ["test-support"] }
