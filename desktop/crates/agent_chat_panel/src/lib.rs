@@ -233,6 +233,10 @@ impl AgentChatPanel {
       .and_then(load_active_conversation)
       .unwrap_or_else(|| (new_conversation_meta(), Vec::new(), HashMap::new()));
 
+    let selection_registry = selectable_text::SelectionRegistry::new();
+    let markdown_state =
+      gfm_markdown_viewer::MarkdownRenderState::with_selection_registry(selection_registry.clone());
+
     let mut panel = Self {
       backend_kind,
       backend: backend.clone(),
@@ -255,8 +259,8 @@ impl AgentChatPanel {
       state_dir,
       current_conv,
       syntax_cache: Arc::new(SyntaxHighlightCache::new()),
-      markdown_state: gfm_markdown_viewer::MarkdownRenderState::new(),
-      selection_registry: selectable_text::SelectionRegistry::new(),
+      markdown_state,
+      selection_registry,
       available_modes: Vec::new(),
       current_mode_id: None,
       available_models: Vec::new(),
