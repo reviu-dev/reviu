@@ -1,7 +1,7 @@
 ---
 import CommandIcon from "@lucide/astro/icons/command";
 import GitPullRequestIcon from "@lucide/astro/icons/git-pull-request";
-import GitCommitHorizontalIcon from "@lucide/astro/icons/git-commit-horizontal";
+import TerminalIcon from "@lucide/astro/icons/terminal";
 import GitMergeConflictIcon from "@lucide/astro/icons/git-merge-conflict";
 import PencilLineIcon from "@lucide/astro/icons/pencil-line";
 import SparklesIcon from "@lucide/astro/icons/sparkles";
@@ -24,16 +24,16 @@ const features = [
     icon: GitMergeConflictIcon,
   },
   {
-    name: "The full local Git workflow",
+    name: "Full local Git workflow, keyboard-first",
     description:
-      "Commit, amend, undo, fetch, pull, push, force push with lease, branch, rebase, stash, and cherry-pick - all in one place.",
-    icon: GitCommitHorizontalIcon,
+      "Commit, amend, undo, fetch, pull, push, force push with lease, branch, rebase, stash, cherry-pick - every action reachable from the command palette.",
+    icon: CommandIcon,
   },
   {
-    name: "Keyboard-first command palette",
+    name: "Built-in terminal next to your diff",
     description:
-      "Every Git action is reachable from the command palette. Navigate and operate entirely from the keyboard.",
-    icon: CommandIcon,
+      "Run git, build commands, and scripts without leaving Reviu. Launches in the selected repo so the working directory is always right.",
+    icon: TerminalIcon,
   },
   {
     name: "Agent panel with review-to-agent",
