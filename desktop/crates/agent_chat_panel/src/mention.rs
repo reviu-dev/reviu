@@ -38,9 +38,13 @@ impl DiffMention {
   }
 }
 
+/// Token inserted into the input for the current diff-view selection.
+pub(crate) const SELECTION_TOKEN: &str = "@selection ";
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum MentionCandidate {
   Diff(DiffMention),
+  Selection,
   File(String),
 }
 
@@ -49,6 +53,7 @@ impl MentionCandidate {
   pub(crate) fn token(&self) -> String {
     match self {
       MentionCandidate::Diff(d) => format!("@{} ", d.keyword()),
+      MentionCandidate::Selection => SELECTION_TOKEN.to_string(),
       MentionCandidate::File(path) => format!("@{path} "),
     }
   }
@@ -104,6 +109,7 @@ fn is_boundary(ch: Option<char>) -> bool {
 pub(crate) fn matching_mentions(
   query: &str,
   files: &[String],
+  has_selection: bool,
   max: usize,
 ) -> Vec<MentionCandidate> {
   let query = query.to_ascii_lowercase();
@@ -113,6 +119,10 @@ pub(crate) fn matching_mentions(
     if query.is_empty() || diff.keyword().starts_with(query.as_str()) {
       out.push(MentionCandidate::Diff(diff));
     }
+  }
+
+  if has_selection && (query.is_empty() || "selection".starts_with(query.as_str())) {
+    out.push(MentionCandidate::Selection);
   }
 
   let mut scored = files
@@ -157,6 +167,7 @@ fn file_score(path: &str, query: &str) -> Option<u8> {
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub(crate) enum ResolvedMention {
   Diff(DiffMention),
+  Selection,
   File(String),
 }
 
@@ -183,7 +194,11 @@ fn token_after_at(text: &str, at_ix: usize) -> Option<&str> {
 
 /// Diff and file mentions in submitted text, in order, de-duplicated. File tokens count only when
 /// they match a known repo path, so prose like `@everyone` is ignored.
-pub(crate) fn resolve_mentions(text: &str, files: &[String]) -> Vec<ResolvedMention> {
+pub(crate) fn resolve_mentions(
+  text: &str,
+  files: &[String],
+  has_selection: bool,
+) -> Vec<ResolvedMention> {
   let known = files.iter().map(String::as_str).collect::<HashSet<_>>();
   let mut out = Vec::new();
   let mut seen = HashSet::new();
@@ -193,6 +208,8 @@ pub(crate) fn resolve_mentions(text: &str, files: &[String]) -> Vec<ResolvedMent
     };
     let mention = if let Some(diff) = diff_from_keyword(token) {
       ResolvedMention::Diff(diff)
+    } else if has_selection && token == "selection" {
+      ResolvedMention::Selection
     } else if known.contains(token) {
       ResolvedMention::File(token.to_string())
     } else {
@@ -261,7 +278,7 @@ mod tests {
 
   #[test]
   fn matching_surfaces_diff_keywords_first() {
-    let candidates = matching_mentions("d", &[], 8);
+    let candidates = matching_mentions("d", &[], false, 8);
     assert_eq!(
       candidates,
       vec![MentionCandidate::Diff(DiffMention::Working)]
@@ -270,7 +287,7 @@ mod tests {
 
   #[test]
   fn matching_empty_query_lists_all_diff_kinds() {
-    let candidates = matching_mentions("", &[], 8);
+    let candidates = matching_mentions("", &[], false, 8);
     assert_eq!(
       candidates,
       vec![
@@ -282,13 +299,19 @@ mod tests {
   }
 
   #[test]
+  fn matching_offers_selection_only_when_available() {
+    assert!(!matching_mentions("sel", &[], false, 8).contains(&MentionCandidate::Selection));
+    assert!(matching_mentions("sel", &[], true, 8).contains(&MentionCandidate::Selection));
+  }
+
+  #[test]
   fn matching_ranks_files_by_filename_match() {
     let files = vec![
       "src/lib.rs".to_string(),
       "src/mention.rs".to_string(),
       "docs/mention_notes.md".to_string(),
     ];
-    let candidates = matching_mentions("mention", &files, 8);
+    let candidates = matching_mentions("mention", &files, false, 8);
     assert_eq!(
       candidates,
       vec![
@@ -313,7 +336,7 @@ mod tests {
   #[test]
   fn resolve_mentions_extracts_diff_keywords() {
     assert_eq!(
-      resolve_mentions("please review @diff and @branch", &[]),
+      resolve_mentions("please review @diff and @branch", &[], false),
       vec![
         ResolvedMention::Diff(DiffMention::Working),
         ResolvedMention::Diff(DiffMention::Branch),
@@ -324,20 +347,20 @@ mod tests {
   #[test]
   fn resolve_mentions_ignores_partial_words_and_unknown_files() {
     assert_eq!(
-      resolve_mentions("@diff @diffx @src/diff.rs", &[]),
+      resolve_mentions("@diff @diffx @src/diff.rs", &[], false),
       vec![ResolvedMention::Diff(DiffMention::Working)]
     );
   }
 
   #[test]
   fn resolve_mentions_requires_boundary() {
-    assert!(resolve_mentions("email@diff", &[]).is_empty());
+    assert!(resolve_mentions("email@diff", &[], false).is_empty());
   }
 
   #[test]
   fn resolve_mentions_classifies_diffs_and_known_files() {
     let files = vec!["src/lib.rs".to_string()];
-    let mentions = resolve_mentions("review @diff and @src/lib.rs and @everyone", &files);
+    let mentions = resolve_mentions("review @diff and @src/lib.rs and @everyone", &files, false);
     assert_eq!(
       mentions,
       vec![
@@ -348,9 +371,18 @@ mod tests {
   }
 
   #[test]
+  fn resolve_mentions_selection_only_when_available() {
+    assert!(resolve_mentions("explain @selection", &[], false).is_empty());
+    assert_eq!(
+      resolve_mentions("explain @selection", &[], true),
+      vec![ResolvedMention::Selection]
+    );
+  }
+
+  #[test]
   fn resolve_mentions_dedupes() {
     let files = vec!["a.rs".to_string()];
-    let mentions = resolve_mentions("@a.rs @a.rs @diff @diff", &files);
+    let mentions = resolve_mentions("@a.rs @a.rs @diff @diff", &files, false);
     assert_eq!(
       mentions,
       vec![

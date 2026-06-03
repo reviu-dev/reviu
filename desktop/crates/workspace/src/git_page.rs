@@ -5873,6 +5873,45 @@ impl GitPage {
     cx.stop_propagation();
   }
 
+  fn add_selection_to_agent_action(
+    &mut self,
+    _: &crate::AddSelectionToAgent,
+    window: &mut Window,
+    cx: &mut Context<Self>,
+  ) {
+    self.add_selection_to_agent(window, cx);
+    cx.stop_propagation();
+  }
+
+  fn add_selection_to_agent(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    let Some(editor) = self.editor.clone() else {
+      window.push_notification(Notification::info("Open a file diff first"), cx);
+      return;
+    };
+    let Some(text) = editor.read(cx).selected_text_for_copy(cx) else {
+      window.push_notification(Notification::info("Select code in the diff first"), cx);
+      return;
+    };
+    let path = self
+      .selected_file
+      .as_ref()
+      .map(|p| p.to_string_lossy().to_string())
+      .unwrap_or_else(|| "selection".to_string());
+
+    self.ensure_agent_chat_view(window, cx);
+    self.show_agent_sidebar = true;
+    self.show_terminal_sidebar = false;
+
+    let Some(panel) = self.agent_chat_view.clone() else {
+      window.push_notification(Notification::error("Failed to open agent panel"), cx);
+      return;
+    };
+    panel.update(cx, |panel, cx| {
+      panel.add_selection_context(path, text, window, cx);
+    });
+    cx.notify();
+  }
+
   fn comment_hunk_action(
     &mut self,
     _: &crate::CommentHunk,
@@ -10660,6 +10699,7 @@ impl Render for GitPage {
       .on_action(cx.listener(GitPage::next_annotation_action))
       .on_action(cx.listener(GitPage::comment_hunk_action))
       .on_action(cx.listener(GitPage::send_review_comments_to_agent_action))
+      .on_action(cx.listener(GitPage::add_selection_to_agent_action))
       .on_action(cx.listener(GitPage::toggle_hunk_stage_action))
       .on_action(cx.listener(GitPage::restore_hunk_action))
       .on_action(cx.listener(GitPage::toggle_file_stage_action))
