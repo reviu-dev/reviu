@@ -157,7 +157,7 @@ pub fn parse_command_string(s: &str) -> Result<(PathBuf, Vec<String>)> {
 
 enum DriverCmd {
   Prompt {
-    text: String,
+    blocks: Vec<ContentBlock>,
     reply: oneshot::Sender<Result<StopReason>>,
   },
   Cancel,
@@ -454,15 +454,19 @@ impl AgentSession {
       .map_err(|_| anyhow!("agent driver dropped reply"))?
   }
 
-  /// Send a prompt and wait for the agent's `stop_reason`.
+  /// Send a plain-text prompt and wait for the agent's `stop_reason`.
   pub async fn send_prompt(&self, text: impl Into<String>) -> Result<StopReason> {
+    self
+      .send_prompt_blocks(vec![ContentBlock::Text(TextContent::new(text.into()))])
+      .await
+  }
+
+  /// Send a prompt made of arbitrary content blocks (text, resource links, embedded resources).
+  pub async fn send_prompt_blocks(&self, blocks: Vec<ContentBlock>) -> Result<StopReason> {
     let (tx, rx) = oneshot::channel();
     self
       .cmd_tx
-      .send(DriverCmd::Prompt {
-        text: text.into(),
-        reply: tx,
-      })
+      .send(DriverCmd::Prompt { blocks, reply: tx })
       .await
       .map_err(|_| anyhow!("agent driver closed"))?;
     rx.await
@@ -923,12 +927,9 @@ async fn run_driver(
 
       'outer: while let Ok(cmd) = cmd_rx.recv().await {
         match cmd {
-          DriverCmd::Prompt { text, reply } => {
+          DriverCmd::Prompt { blocks, reply } => {
             let prompt_fut = connection
-              .send_request(PromptRequest::new(
-                session_id.clone(),
-                vec![ContentBlock::Text(TextContent::new(text))],
-              ))
+              .send_request(PromptRequest::new(session_id.clone(), blocks))
               .block_task()
               .fuse();
             futures::pin_mut!(prompt_fut);

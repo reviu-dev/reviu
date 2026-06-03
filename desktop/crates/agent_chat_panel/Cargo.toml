@@ -9,6 +9,7 @@ agent_acp = { workspace = true }
 agent-client-protocol = { workspace = true }
 anyhow = { workspace = true }
 async-channel = { workspace = true }
+async-process = { workspace = true }
 blake3 = { workspace = true }
 dirs = { workspace = true }
 imara-diff = { workspace = true }
