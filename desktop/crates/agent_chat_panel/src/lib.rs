@@ -182,6 +182,15 @@ struct SelectionContext {
   text: String,
 }
 
+/// Emitted so the host (Git page) can act on panel interactions.
+#[derive(Clone, Debug)]
+pub enum AgentChatPanelEvent {
+  /// User clicked a tool-call file location; open it in the diff view.
+  OpenPath { path: PathBuf, line: Option<u32> },
+}
+
+impl gpui::EventEmitter<AgentChatPanelEvent> for AgentChatPanel {}
+
 pub struct AgentChatPanel {
   backend_kind: BackendKind,
   backend: BackendConfig,
@@ -2214,6 +2223,27 @@ fn render_tool_call(
   };
   let detail = tool_detail_label(t);
   let tool_id = t.id.clone();
+  let detail_el = (!detail.is_empty()).then(|| match t.locations.first().cloned() {
+    Some((path, line)) => div()
+      .id(("agent-tool-location", item_id_base as usize))
+      .text_sm()
+      .text_color(theme.muted_foreground)
+      .cursor_pointer()
+      .hover(|this| this.text_color(theme.foreground))
+      .child(detail.clone())
+      .on_click(cx.listener(move |_panel, _ev, _window, cx| {
+        cx.emit(AgentChatPanelEvent::OpenPath {
+          path: path.clone(),
+          line,
+        });
+      }))
+      .into_any_element(),
+    None => div()
+      .text_sm()
+      .text_color(theme.muted_foreground)
+      .child(detail.clone())
+      .into_any_element(),
+  });
 
   v_flex()
     .gap_1()
@@ -2234,14 +2264,7 @@ fn render_tool_call(
             .text_color(title_color)
             .child(tool_kind_label(&t.kind).to_string()),
         )
-        .when(!detail.is_empty(), |this| {
-          this.child(
-            div()
-              .text_sm()
-              .text_color(theme.muted_foreground)
-              .child(detail.clone()),
-          )
-        }),
+        .children(detail_el),
     )
     .when(!t.diffs.is_empty(), |this| {
       let mut diff_col = v_flex().gap_2();

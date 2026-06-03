@@ -12,6 +12,10 @@ Type `@` in the Agent panel to pull repository context into your message. Pick a
 
 Select lines in a diff and press the Send Selection To Agent shortcut (`cmd-shift-l`, configurable in Settings) to drop an `@selection` reference into the Agent panel. Your selected code rides along with the next message as context, so you can ask the agent to explain or rework exactly what you highlighted.
 
+### Open Agent File References
+
+File locations the agent touches (the path shown on Read, Edit, and other tool calls) are now clickable. Click one to open that file in the diff view, so you can jump straight to what the agent changed without hunting for it in the file list.
+
 ## 0.15.0
 
 ### Terminal On Git Page

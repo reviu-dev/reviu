@@ -6,7 +6,7 @@ use std::{
   time::{Duration, Instant},
 };
 
-use agent_chat_panel::AgentChatPanel;
+use agent_chat_panel::{AgentChatPanel, AgentChatPanelEvent};
 use editor::{
   CloseFind, ConflictNavigationDirection, ConflictNavigationState, ConflictResolution,
   DiffViewMode, Editor, Find, HunkAction, HunkNavigationDirection, HunkState, ReviewComment,
@@ -63,6 +63,14 @@ use crate::agent_settings::AgentSettings;
 
 fn agent_chat_state_dir() -> Option<std::path::PathBuf> {
   Some(dirs::config_dir()?.join("reviu").join("agent-chats"))
+}
+
+/// Agent tool-call locations are absolute; the diff view opens by repo-relative path.
+fn agent_path_to_repo_relative(path: PathBuf, repo_root: Option<&Path>) -> PathBuf {
+  repo_root
+    .and_then(|root| path.strip_prefix(root).ok())
+    .map(Path::to_path_buf)
+    .unwrap_or(path)
 }
 
 fn prune_agent_chat_state_once() {
@@ -7638,7 +7646,18 @@ impl GitPage {
       agent_chat_state_dir().map(|dir| AgentChatPanel::state_dir_for_repo(&dir, &cwd));
     let backend = AgentSettings::load();
     let view = cx.new(|cx| AgentChatPanel::new(backend, cwd, state_dir, window, cx));
+    cx.subscribe(&view, |this, _panel, event: &AgentChatPanelEvent, cx| {
+      let AgentChatPanelEvent::OpenPath { path, .. } = event;
+      this.open_agent_path(path.clone(), cx);
+    })
+    .detach();
     self.agent_chat_view = Some(view);
+  }
+
+  fn open_agent_path(&mut self, path: PathBuf, cx: &mut Context<Self>) {
+    let rel_path = agent_path_to_repo_relative(path, self.selected_repo.as_deref());
+    self.open_file(rel_path, cx);
+    cx.notify();
   }
 
   fn toggle_agent_sidebar_visibility(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -10729,6 +10748,32 @@ mod tests {
   use ui::CommandPaletteCommandId;
 
   use crate::api::{ApiClient, User, UserRole, UserSubscription};
+
+  #[test]
+  fn agent_path_strips_repo_root_when_absolute() {
+    let root = Path::new("/home/u/proj");
+    assert_eq!(
+      agent_path_to_repo_relative(PathBuf::from("/home/u/proj/src/lib.rs"), Some(root)),
+      PathBuf::from("src/lib.rs")
+    );
+  }
+
+  #[test]
+  fn agent_path_kept_when_outside_root_or_already_relative() {
+    let root = Path::new("/home/u/proj");
+    assert_eq!(
+      agent_path_to_repo_relative(PathBuf::from("src/lib.rs"), Some(root)),
+      PathBuf::from("src/lib.rs")
+    );
+    assert_eq!(
+      agent_path_to_repo_relative(PathBuf::from("/other/x.rs"), Some(root)),
+      PathBuf::from("/other/x.rs")
+    );
+    assert_eq!(
+      agent_path_to_repo_relative(PathBuf::from("/abs/x.rs"), None),
+      PathBuf::from("/abs/x.rs")
+    );
+  }
 
   #[test]
   fn format_git_file_name_label_extracts_file_name() {
