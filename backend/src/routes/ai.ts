@@ -1,9 +1,10 @@
 import { zValidator } from '@hono/zod-validator'
 import { Hono } from 'hono'
 import { authMiddlewarePro } from '../middlewares/auth.js'
-import { aiPrBriefBodySchema, aiPrBriefQuerySchema, aiSettingsBodySchema } from '../plugins/ai/schemas.js'
+import { aiCommitMessageBodySchema, aiPrBriefBodySchema, aiPrBriefQuerySchema, aiSettingsBodySchema } from '../plugins/ai/schemas.js'
 import {
   deleteAiSettings,
+  generateCommitMessage,
   generateGithubPrBrief,
   getAiSettings,
   getLatestPrBrief,
@@ -55,6 +56,18 @@ aiRoutes
     try {
       const brief = await getLatestPrBrief(user.id, query.owner, query.repo, query.pullNumber)
       return ctx.json({ brief }, 200)
+    }
+    catch (error) {
+      return ctx.json({ error: (error as Error).message }, honoStatus(error))
+    }
+  })
+  .post('/commit-message', zValidator('json', aiCommitMessageBodySchema), async (ctx) => {
+    const user = ctx.get('user')!
+    const body = ctx.req.valid('json')
+
+    try {
+      const result = await generateCommitMessage({ userId: user.id, diff: body.diff })
+      return ctx.json(result, 200)
     }
     catch (error) {
       return ctx.json({ error: (error as Error).message }, honoStatus(error))

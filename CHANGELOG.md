@@ -4,6 +4,10 @@ All notable changes to Reviu are documented here.
 
 ## 0.16.0
 
+### Generate Commit Messages With AI
+
+A Generate button beside the commit message box writes a commit message from your changes. It reads your staged diff (or all uncommitted changes when nothing is staged), sends it to your configured AI provider, and fills the box with a Conventional Commits message you can edit before committing.
+
 ### Add Context With @ In The Agent Panel
 
 Type `@` in the Agent panel to pull repository context into your message. Pick a file by name to reference it, or choose `@diff`, `@staged`, or `@branch` to attach your uncommitted changes, staged changes, or the diff against the base branch. The diff is sent to the agent with your message, so you can ask things like "review @diff" without copying anything by hand. Use arrow keys and Enter to pick, Escape to dismiss.

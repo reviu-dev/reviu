@@ -1,8 +1,8 @@
-import type { AiPrBriefModelOutput, AiProvider } from './schemas.js'
+import type { AiCommitMessageModelOutput, AiPrBriefModelOutput, AiProvider } from './schemas.js'
 import { createAnthropic } from '@ai-sdk/anthropic'
 import { createOpenAI } from '@ai-sdk/openai'
 import { generateText, Output } from 'ai'
-import { aiPrBriefModelOutputSchema } from './schemas.js'
+import { aiCommitMessageModelOutputSchema, aiPrBriefModelOutputSchema } from './schemas.js'
 
 interface AiProviderRequest {
   provider: AiProvider
@@ -37,6 +37,12 @@ function aiSdkUsage(usage: { inputTokens?: number, outputTokens?: number }): AiP
   }
 }
 
+export function formatCommitMessage(subject: string, body?: string): string {
+  const trimmedSubject = subject.trim()
+  const trimmedBody = (body ?? '').trim()
+  return trimmedBody ? `${trimmedSubject}\n\n${trimmedBody}` : trimmedSubject
+}
+
 export async function generateAiPrBriefWithProvider(
   request: AiProviderRequest,
 ): Promise<AiProviderResult<AiPrBriefModelOutput>> {
@@ -50,6 +56,27 @@ export async function generateAiPrBriefWithProvider(
     system: request.systemPrompt,
     prompt: request.userPrompt,
     maxOutputTokens: 1800,
+  })
+
+  return {
+    output: result.output,
+    usage: aiSdkUsage(result.usage),
+  }
+}
+
+export async function generateAiCommitMessageWithProvider(
+  request: AiProviderRequest,
+): Promise<AiProviderResult<AiCommitMessageModelOutput>> {
+  const result = await generateText({
+    model: modelForRequest(request),
+    output: Output.object({
+      schema: aiCommitMessageModelOutputSchema,
+      name: 'reviu_commit_message',
+      description: 'A Conventional Commits message for the staged changes.',
+    }),
+    system: request.systemPrompt,
+    prompt: request.userPrompt,
+    maxOutputTokens: 600,
   })
 
   return {

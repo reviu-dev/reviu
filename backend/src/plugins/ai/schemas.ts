@@ -10,6 +10,16 @@ export const aiSettingsBodySchema = z.object({
   model: z.string().trim().min(1).optional(),
 })
 
+export const aiCommitMessageBodySchema = z.object({
+  diff: z.string().trim().min(1).max(200_000),
+})
+
+export const aiCommitMessageModelOutputSchema = z.object({
+  subject: z.string().trim().min(1).max(100),
+  // Required (OpenAI strict schemas require every key); empty string means "no body".
+  body: z.string().trim(),
+})
+
 export const aiPrBriefBodySchema = z.object({
   owner: z.string().trim().min(1),
   repo: z.string().trim().min(1),
@@ -79,5 +89,6 @@ export const aiPrBriefSchema = z.object({
 export type AiProvider = z.infer<typeof aiProviderSchema>
 export type AiCredentialMode = z.infer<typeof aiCredentialModeSchema>
 export type AiSettingsBody = z.infer<typeof aiSettingsBodySchema>
+export type AiCommitMessageModelOutput = z.infer<typeof aiCommitMessageModelOutputSchema>
 export type AiPrBriefModelOutput = z.infer<typeof aiPrBriefModelOutputSchema>
 export type AiPrBrief = z.infer<typeof aiPrBriefSchema>

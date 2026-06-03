@@ -20,7 +20,7 @@ import {
   fetchGithubPullRequestFilesAllPages,
 } from '../github/service.js'
 import { apiKeyHint, decryptSecret, encryptSecret } from './crypto.js'
-import { generateAiPrBriefWithProvider } from './providers.js'
+import { formatCommitMessage, generateAiCommitMessageWithProvider, generateAiPrBriefWithProvider } from './providers.js'
 import { aiPrBriefSchema } from './schemas.js'
 
 const DEFAULT_MODELS: Record<AiProvider, string> = {
@@ -32,6 +32,7 @@ const MAX_CONTEXT_FILES = 80
 const MAX_PATCH_CHARS_PER_FILE = 2800
 const MAX_CONTEXT_COMMITS = 80
 const MAX_CONTEXT_COMMENTS = 80
+const MAX_COMMIT_DIFF_CHARS = 60_000
 
 interface GithubPrBriefInput {
   userId: string
@@ -565,4 +566,63 @@ export async function generateGithubPrBrief({
   )
 
   return brief
+}
+
+function commitMessageSystemPrompt() {
+  return [
+    'You write commit messages for a software project.',
+    'Use the Conventional Commits format for the subject: type(optional scope): description.',
+    'Subject: imperative mood, concise, no trailing period, 72 characters or fewer.',
+    'Body: explain what changed and why, not how. Use an empty string when the subject is self-explanatory.',
+    'Use only the provided diff. Do not invent changes.',
+  ].join('\n')
+}
+
+function commitMessageUserPrompt(diff: string) {
+  return [
+    'Write a commit message for the following staged diff.',
+    'Return a JSON object with `subject` and `body` (use an empty `body` when no extra detail is needed).',
+    'Diff:',
+    truncateText(diff, MAX_COMMIT_DIFF_CHARS),
+  ].join('\n\n')
+}
+
+export async function generateCommitMessage({
+  userId,
+  diff,
+}: {
+  userId: string
+  diff: string
+}): Promise<{ message: string, provider: AiProvider, model: string }> {
+  const settingRow = await getAiSettingsRow(userId)
+  if (!settingRow) {
+    throw Object.assign(new Error('AI settings are not configured.'), { status: 409 })
+  }
+
+  const setting = parseAiSetting(settingRow)
+  const generated = await generateAiCommitMessageWithProvider({
+    provider: setting.provider,
+    apiKey: setting.apiKey,
+    model: setting.model,
+    systemPrompt: commitMessageSystemPrompt(),
+    userPrompt: commitMessageUserPrompt(diff),
+  })
+
+  const message = formatCommitMessage(generated.output.subject, generated.output.body)
+
+  await db.insert(aiUsageEvent).values({
+    id: randomUUID(),
+    userId,
+    task: 'git.commit.message',
+    provider: setting.provider,
+    credentialMode: setting.credentialMode,
+    model: setting.model,
+    inputTokens: generated.usage.inputTokens,
+    outputTokens: generated.usage.outputTokens,
+    owner: null,
+    repo: null,
+    pullNumber: null,
+  })
+
+  return { message, provider: setting.provider, model: setting.model }
 }

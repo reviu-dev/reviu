@@ -3540,7 +3540,7 @@ export async function fetchGithubRepositoryOverview(
   return data.repository
 }
 
-export interface GithubRepositoryContributorsResult {
+interface GithubRepositoryContributorsResult {
   contributors: Array<{ login: string, avatar_url: string }>
   total_count: number
 }
