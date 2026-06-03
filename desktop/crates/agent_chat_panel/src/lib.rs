@@ -175,6 +175,13 @@ enum Status {
 const MENTION_MENU_MAX_ITEMS: usize = 10;
 const MAX_REPO_FILES: usize = 20_000;
 
+/// Code selected in the Git diff view, pushed in to attach as `@selection` context.
+#[derive(Clone, Debug)]
+struct SelectionContext {
+  path: String,
+  text: String,
+}
+
 pub struct AgentChatPanel {
   backend_kind: BackendKind,
   backend: BackendConfig,
@@ -182,6 +189,7 @@ pub struct AgentChatPanel {
   status: Status,
   items: Vec<ChatItem>,
   repo_files: Arc<Vec<String>>,
+  active_selection: Option<SelectionContext>,
   mention_selected_ix: usize,
   mention_dismissed: Option<MentionTrigger>,
   tool_index: HashMap<ToolCallId, usize>,
@@ -253,6 +261,7 @@ impl AgentChatPanel {
       status: Status::Connecting,
       items: loaded_items,
       repo_files: Arc::new(Vec::new()),
+      active_selection: None,
       mention_selected_ix: 0,
       mention_dismissed: None,
       tool_index: loaded_index,
@@ -1099,6 +1108,7 @@ impl AgentChatPanel {
     let candidates = mention::matching_mentions(
       &trigger.query,
       self.repo_files.as_slice(),
+      self.active_selection.is_some(),
       MENTION_MENU_MAX_ITEMS,
     );
     if candidates.is_empty() {
@@ -1269,6 +1279,38 @@ impl AgentChatPanel {
     self.dispatch_prompt(text, cx)
   }
 
+  /// Stash a diff-view selection and drop an `@selection` token into the input so the next message
+  /// attaches the selected lines as context.
+  pub fn add_selection_context(
+    &mut self,
+    path: String,
+    text: String,
+    window: &mut Window,
+    cx: &mut Context<Self>,
+  ) {
+    self.active_selection = Some(SelectionContext { path, text });
+
+    let value = self.input.read(cx).value().to_string();
+    let cursor = self.input.read(cx).cursor().min(value.len());
+    let needs_space = value[..cursor]
+      .chars()
+      .next_back()
+      .is_some_and(|ch| !ch.is_whitespace());
+    let insert = if needs_space {
+      format!(" {}", mention::SELECTION_TOKEN)
+    } else {
+      mention::SELECTION_TOKEN.to_string()
+    };
+    let utf16_range = mention::byte_range_to_utf16_range(&value, cursor..cursor);
+    self.input.update(cx, |input, cx| {
+      input.replace_text_in_range(Some(utf16_range), &insert, window, cx);
+      input.focus(window, cx);
+    });
+
+    self.mention_dismissed = None;
+    cx.notify();
+  }
+
   fn dispatch_prompt(&mut self, text: String, cx: &mut Context<Self>) -> bool {
     if self.in_flight {
       return false;
@@ -1291,8 +1333,9 @@ impl AgentChatPanel {
 
     let cwd = self.cwd.clone();
     let files = self.repo_files.clone();
+    let selection = self.active_selection.take();
     cx.spawn(async move |this, cx| {
-      let blocks = build_prompt_blocks(text, files, cwd).await;
+      let blocks = build_prompt_blocks(text, files, selection, cwd).await;
       let result = session.send_prompt_blocks(blocks).await;
       let _ = this.update(cx, |panel, cx| {
         panel.flush_pending_thought();
@@ -2942,6 +2985,10 @@ fn mention_labels(candidate: &MentionCandidate) -> (String, String) {
       format!("@{}", diff.keyword()),
       diff.description().to_string(),
     ),
+    MentionCandidate::Selection => (
+      "@selection".to_string(),
+      "Selected code in diff".to_string(),
+    ),
     MentionCandidate::File(path) => {
       let name = path.rsplit('/').next().unwrap_or(path).to_string();
       (name, path.clone())
@@ -3005,9 +3052,10 @@ async fn detect_base_ref(cwd: &Path) -> Option<String> {
 async fn build_prompt_blocks(
   text: String,
   files: Arc<Vec<String>>,
+  selection: Option<SelectionContext>,
   cwd: PathBuf,
 ) -> Vec<ContentBlock> {
-  let mentions = mention::resolve_mentions(&text, files.as_slice());
+  let mentions = mention::resolve_mentions(&text, files.as_slice(), selection.is_some());
   let mut blocks = vec![ContentBlock::Text(TextContent::new(text))];
 
   for mention in mentions {
@@ -3023,6 +3071,15 @@ async fn build_prompt_blocks(
         blocks.push(ContentBlock::Resource(EmbeddedResource::new(
           EmbeddedResourceResource::TextResourceContents(resource),
         )));
+      }
+      ResolvedMention::Selection => {
+        if let Some(selection) = selection.as_ref() {
+          let uri = format!("reviu-selection://{}", selection.path);
+          let resource = TextResourceContents::new(selection.text.clone(), uri);
+          blocks.push(ContentBlock::Resource(EmbeddedResource::new(
+            EmbeddedResourceResource::TextResourceContents(resource),
+          )));
+        }
       }
     }
   }

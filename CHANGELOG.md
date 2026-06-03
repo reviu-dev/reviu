@@ -8,6 +8,10 @@ All notable changes to Reviu are documented here.
 
 Type `@` in the Agent panel to pull repository context into your message. Pick a file by name to reference it, or choose `@diff`, `@staged`, or `@branch` to attach your uncommitted changes, staged changes, or the diff against the base branch. The diff is sent to the agent with your message, so you can ask things like "review @diff" without copying anything by hand. Use arrow keys and Enter to pick, Escape to dismiss.
 
+### Send A Diff Selection To The Agent
+
+Select lines in a diff and press the Send Selection To Agent shortcut (`cmd-shift-l`, configurable in Settings) to drop an `@selection` reference into the Agent panel. Your selected code rides along with the next message as context, so you can ask the agent to explain or rework exactly what you highlighted.
+
 ## 0.15.0
 
 ### Terminal On Git Page

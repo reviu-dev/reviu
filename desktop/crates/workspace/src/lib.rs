@@ -29,6 +29,7 @@ actions!(
     NextPrCommit,
     CommentHunk,
     SendReviewCommentsToAgent,
+    AddSelectionToAgent,
     ToggleHunkStage,
     RestoreHunk,
     ToggleFileStage,
