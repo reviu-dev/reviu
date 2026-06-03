@@ -1,14 +1,16 @@
 mod diff;
+mod mention;
 mod persistence;
 
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use crate::diff::{
   DiffLineKind, DiffSummary, InlineSpan, InlineSpanKind, MAX_DIFF_LINES_COLLAPSED,
   MAX_TOOL_OUTPUT_LINES_COLLAPSED, extract_diffs, extract_outputs,
 };
+use crate::mention::{DiffMention, MentionCandidate, MentionTrigger, ResolvedMention};
 pub use crate::persistence::{ConversationMeta, state_dir_for_repo};
 use crate::persistence::{new_conversation_meta, now_secs, truncate_title};
 use agent_acp::{
@@ -16,8 +18,9 @@ use agent_acp::{
   PermissionOptionKind, PermissionPrompt,
 };
 use agent_client_protocol::schema::{
-  ContentBlock, Plan, PlanEntryPriority, PlanEntryStatus, SessionInfoUpdate, ToolCall, ToolCallId,
-  ToolCallStatus, ToolCallUpdate, ToolKind,
+  ContentBlock, EmbeddedResource, EmbeddedResourceResource, Plan, PlanEntryPriority,
+  PlanEntryStatus, ResourceLink, SessionInfoUpdate, TextContent, TextResourceContents, ToolCall,
+  ToolCallId, ToolCallStatus, ToolCallUpdate, ToolKind,
 };
 use agent_client_protocol::schema::{
   ModelId, ModelInfo, SessionConfigId, SessionConfigKind, SessionConfigOption,
@@ -30,15 +33,15 @@ use gfm_markdown_viewer::{
 };
 use gpui::Corner;
 use gpui::{
-  Context, Entity, FocusHandle, Focusable, Font, FontStyle, FontWeight, Hsla, IntoElement,
-  ParentElement, Render, SharedString, Styled, StyledText, Task, TextRun, Window, div, prelude::*,
-  px,
+  AnyElement, App, Context, Empty, Entity, EntityInputHandler as _, FocusHandle, Focusable, Font,
+  FontStyle, FontWeight, Hsla, IntoElement, MouseButton, ParentElement, Render, SharedString,
+  Styled, StyledText, Task, TextRun, Window, deferred, div, prelude::*, px,
 };
 use gpui_component::{
   ActiveTheme as _, Disableable as _, IconName, Sizable as _,
   button::{Button, ButtonVariants as _},
   h_flex,
-  input::InputEvent,
+  input::{self, InputEvent},
   menu::{DropdownMenu as _, PopupMenuItem},
   scroll::ScrollableElement as _,
   spinner::Spinner,
@@ -169,12 +172,18 @@ enum Status {
   MissingBinary { command: String, hint: String },
 }
 
+const MENTION_MENU_MAX_ITEMS: usize = 10;
+const MAX_REPO_FILES: usize = 20_000;
+
 pub struct AgentChatPanel {
   backend_kind: BackendKind,
   backend: BackendConfig,
   cwd: PathBuf,
   status: Status,
   items: Vec<ChatItem>,
+  repo_files: Arc<Vec<String>>,
+  mention_selected_ix: usize,
+  mention_dismissed: Option<MentionTrigger>,
   tool_index: HashMap<ToolCallId, usize>,
   pending_agent: String,
   pending_thought: String,
@@ -216,7 +225,7 @@ impl AgentChatPanel {
     let input = cx.new(|cx| {
       InputState::new(window, cx)
         .auto_grow(1, 8)
-        .placeholder("Message...")
+        .placeholder("Message... (@ to add files or diffs)")
     });
     let input_sub = cx.subscribe_in(
       &input,
@@ -243,6 +252,9 @@ impl AgentChatPanel {
       cwd: cwd.clone(),
       status: Status::Connecting,
       items: loaded_items,
+      repo_files: Arc::new(Vec::new()),
+      mention_selected_ix: 0,
+      mention_dismissed: None,
       tool_index: loaded_index,
       pending_agent: String::new(),
       pending_thought: String::new(),
@@ -271,6 +283,18 @@ impl AgentChatPanel {
       _permission_task: None,
       _input_sub: Some(input_sub),
     };
+
+    {
+      let files_cwd = cwd.clone();
+      cx.spawn(async move |this, cx| {
+        let files = list_repo_files(files_cwd).await;
+        let _ = this.update(cx, |panel, cx| {
+          panel.repo_files = Arc::new(files);
+          cx.notify();
+        });
+      })
+      .detach();
+    }
 
     if let BackendAvailability::MissingBinary {
       command,
@@ -1062,6 +1086,168 @@ impl AgentChatPanel {
     cx.notify();
   }
 
+  fn mention_snapshot(&self, cx: &App) -> Option<(MentionTrigger, Vec<MentionCandidate>)> {
+    let input = self.input.read(cx);
+    let trigger = mention::mention_trigger_at_cursor(input.value().as_ref(), input.cursor())?;
+    if self
+      .mention_dismissed
+      .as_ref()
+      .is_some_and(|dismissed| dismissed == &trigger)
+    {
+      return None;
+    }
+    let candidates = mention::matching_mentions(
+      &trigger.query,
+      self.repo_files.as_slice(),
+      MENTION_MENU_MAX_ITEMS,
+    );
+    if candidates.is_empty() {
+      return None;
+    }
+    Some((trigger, candidates))
+  }
+
+  fn mention_on_enter(
+    &mut self,
+    action: &input::Enter,
+    window: &mut Window,
+    cx: &mut Context<Self>,
+  ) {
+    if action.secondary {
+      return;
+    }
+    let Some((trigger, candidates)) = self.mention_snapshot(cx) else {
+      return;
+    };
+    let ix = self.mention_selected_ix.min(candidates.len() - 1);
+    self.insert_mention(&trigger, &candidates[ix], window, cx);
+    cx.stop_propagation();
+  }
+
+  fn mention_on_move(&mut self, delta: i32, cx: &mut Context<Self>) {
+    let Some((_, candidates)) = self.mention_snapshot(cx) else {
+      return;
+    };
+    let len = candidates.len();
+    self.mention_selected_ix = if delta < 0 {
+      if self.mention_selected_ix == 0 {
+        len - 1
+      } else {
+        self.mention_selected_ix - 1
+      }
+    } else {
+      (self.mention_selected_ix + 1) % len
+    };
+    cx.stop_propagation();
+    cx.notify();
+  }
+
+  fn mention_on_escape(&mut self, cx: &mut Context<Self>) {
+    let Some((trigger, _)) = self.mention_snapshot(cx) else {
+      return;
+    };
+    self.mention_dismissed = Some(trigger);
+    cx.stop_propagation();
+    cx.notify();
+  }
+
+  fn insert_mention(
+    &mut self,
+    trigger: &MentionTrigger,
+    candidate: &MentionCandidate,
+    window: &mut Window,
+    cx: &mut Context<Self>,
+  ) {
+    let token = candidate.token();
+    let text = self.input.read(cx).value();
+    let replace_range = mention::byte_range_to_utf16_range(text.as_ref(), trigger.range.clone());
+    self.input.update(cx, |input, cx| {
+      input.replace_text_in_range(Some(replace_range), &token, window, cx);
+      input.focus(window, cx);
+    });
+    self.mention_selected_ix = 0;
+    self.mention_dismissed = None;
+    cx.notify();
+  }
+
+  fn render_mention_overlay(&mut self, cx: &mut Context<Self>) -> AnyElement {
+    let Some((_, candidates)) = self.mention_snapshot(cx) else {
+      return Empty.into_any_element();
+    };
+    let selected_ix = self.mention_selected_ix.min(candidates.len() - 1);
+    let theme = cx.theme().clone();
+    let entity = cx.entity();
+
+    deferred(
+      div()
+        .id("agent-mention-menu")
+        .absolute()
+        .left_0()
+        .bottom(gpui::relative(1.0))
+        .mb_1()
+        .w(px(360.))
+        .max_h(px(240.))
+        .overflow_hidden()
+        .occlude()
+        .bg(theme.popover)
+        .text_color(theme.popover_foreground)
+        .border_1()
+        .border_color(theme.border)
+        .rounded(theme.radius)
+        .shadow_lg()
+        .p_1()
+        .children(candidates.into_iter().enumerate().map(|(ix, candidate)| {
+          let selected = ix == selected_ix;
+          let (primary, secondary) = mention_labels(&candidate);
+          let entity_click = entity.clone();
+          let entity_hover = entity.clone();
+          h_flex()
+            .id(("agent-mention-item", ix))
+            .w_full()
+            .items_center()
+            .justify_between()
+            .gap_2()
+            .px_2()
+            .py_1()
+            .rounded(theme.radius)
+            .text_xs()
+            .line_height(gpui::relative(1.2))
+            .cursor_pointer()
+            .when(selected, |this| {
+              this.bg(theme.accent).text_color(theme.accent_foreground)
+            })
+            .hover(|this| this.bg(theme.accent.opacity(0.8)))
+            .on_mouse_move(move |_, _, cx| {
+              entity_hover.update(cx, |panel, cx| {
+                if panel.mention_selected_ix != ix {
+                  panel.mention_selected_ix = ix;
+                  cx.notify();
+                }
+              });
+            })
+            .on_mouse_down(MouseButton::Left, move |_, window, cx| {
+              entity_click.update(cx, |panel, cx| {
+                if let Some((trigger, candidates)) = panel.mention_snapshot(cx)
+                  && let Some(candidate) = candidates.get(ix)
+                {
+                  panel.insert_mention(&trigger, &candidate.clone(), window, cx);
+                }
+                cx.stop_propagation();
+              });
+            })
+            .child(SharedString::from(primary))
+            .child(
+              div()
+                .text_color(theme.muted_foreground)
+                .truncate()
+                .child(SharedString::from(secondary)),
+            )
+        })),
+    )
+    .with_priority(2)
+    .into_any_element()
+  }
+
   fn submit(&mut self, window: &mut Window, cx: &mut Context<Self>) {
     let text = self.input.read(cx).value().to_string();
     let text = text.trim().to_string();
@@ -1103,8 +1289,11 @@ impl AgentChatPanel {
     self.messages_list.scroll_to_end();
     cx.notify();
 
+    let cwd = self.cwd.clone();
+    let files = self.repo_files.clone();
     cx.spawn(async move |this, cx| {
-      let result = session.send_prompt(text).await;
+      let blocks = build_prompt_blocks(text, files, cwd).await;
+      let result = session.send_prompt_blocks(blocks).await;
       let _ = this.update(cx, |panel, cx| {
         panel.flush_pending_thought();
         let pending = std::mem::take(&mut panel.pending_agent);
@@ -2541,7 +2730,26 @@ impl Render for AgentChatPanel {
           .bg(theme.sidebar)
           .border_t_1()
           .border_color(theme.border)
-          .child(Input::new(&self.input).w_full())
+          .child(
+            div()
+              .id("agent-mention-input")
+              .relative()
+              .w_full()
+              .capture_action(cx.listener(|panel, action: &input::Enter, window, cx| {
+                panel.mention_on_enter(action, window, cx);
+              }))
+              .capture_action(cx.listener(|panel, _: &input::MoveUp, _, cx| {
+                panel.mention_on_move(-1, cx);
+              }))
+              .capture_action(cx.listener(|panel, _: &input::MoveDown, _, cx| {
+                panel.mention_on_move(1, cx);
+              }))
+              .capture_action(cx.listener(|panel, _: &input::Escape, _, cx| {
+                panel.mention_on_escape(cx);
+              }))
+              .child(Input::new(&self.input).w_full())
+              .child(self.render_mention_overlay(cx)),
+          )
           .child(
             h_flex()
               .items_center()
@@ -2725,6 +2933,125 @@ impl AgentChatPanel {
       out.push(button.into_any_element());
     }
     out
+  }
+}
+
+fn mention_labels(candidate: &MentionCandidate) -> (String, String) {
+  match candidate {
+    MentionCandidate::Diff(diff) => (
+      format!("@{}", diff.keyword()),
+      diff.description().to_string(),
+    ),
+    MentionCandidate::File(path) => {
+      let name = path.rsplit('/').next().unwrap_or(path).to_string();
+      (name, path.clone())
+    }
+  }
+}
+
+async fn list_repo_files(cwd: PathBuf) -> Vec<String> {
+  let output = async_process::Command::new("git")
+    .args(["ls-files", "--cached", "--others", "--exclude-standard"])
+    .current_dir(&cwd)
+    .output()
+    .await;
+  match output {
+    Ok(output) if output.status.success() => String::from_utf8_lossy(&output.stdout)
+      .lines()
+      .map(|line| line.trim().to_string())
+      .filter(|line| !line.is_empty())
+      .take(MAX_REPO_FILES)
+      .collect(),
+    _ => Vec::new(),
+  }
+}
+
+async fn run_git(cwd: &Path, args: &[&str]) -> anyhow::Result<String> {
+  let output = async_process::Command::new("git")
+    .args(args)
+    .current_dir(cwd)
+    .output()
+    .await?;
+  if !output.status.success() {
+    anyhow::bail!(
+      "git {} failed: {}",
+      args.join(" "),
+      String::from_utf8_lossy(&output.stderr).trim()
+    );
+  }
+  Ok(String::from_utf8_lossy(&output.stdout).to_string())
+}
+
+async fn detect_base_ref(cwd: &Path) -> Option<String> {
+  if let Ok(out) = run_git(cwd, &["rev-parse", "--abbrev-ref", "origin/HEAD"]).await {
+    let reference = out.trim();
+    if !reference.is_empty() && reference != "origin/HEAD" {
+      return Some(reference.to_string());
+    }
+  }
+  for candidate in ["origin/main", "origin/master", "main", "master"] {
+    if run_git(cwd, &["rev-parse", "--verify", "--quiet", candidate])
+      .await
+      .is_ok()
+    {
+      return Some(candidate.to_string());
+    }
+  }
+  None
+}
+
+/// Build the ACP content blocks for a submitted message: the typed text, plus a `ResourceLink` per
+/// `@file` mention and an embedded diff `Resource` per `@diff`/`@staged`/`@branch` mention.
+async fn build_prompt_blocks(
+  text: String,
+  files: Arc<Vec<String>>,
+  cwd: PathBuf,
+) -> Vec<ContentBlock> {
+  let mentions = mention::resolve_mentions(&text, files.as_slice());
+  let mut blocks = vec![ContentBlock::Text(TextContent::new(text))];
+
+  for mention in mentions {
+    match mention {
+      ResolvedMention::File(path) => {
+        let uri = format!("file://{}", cwd.join(&path).display());
+        blocks.push(ContentBlock::ResourceLink(ResourceLink::new(path, uri)));
+      }
+      ResolvedMention::Diff(diff) => {
+        let (kind, content) = resolve_diff(diff, &cwd).await;
+        let resource = TextResourceContents::new(content, format!("reviu-diff://{kind}"))
+          .mime_type(Some("text/x-diff".to_string()));
+        blocks.push(ContentBlock::Resource(EmbeddedResource::new(
+          EmbeddedResourceResource::TextResourceContents(resource),
+        )));
+      }
+    }
+  }
+
+  blocks
+}
+
+async fn resolve_diff(diff: DiffMention, cwd: &Path) -> (&'static str, String) {
+  match diff {
+    DiffMention::Working => ("working", diff_text(run_git(cwd, &["diff", "HEAD"]).await)),
+    DiffMention::Staged => (
+      "staged",
+      diff_text(run_git(cwd, &["diff", "--cached"]).await),
+    ),
+    DiffMention::Branch => match detect_base_ref(cwd).await {
+      Some(base) => (
+        "branch",
+        diff_text(run_git(cwd, &["diff", &format!("{base}...HEAD")]).await),
+      ),
+      None => ("branch", "(could not determine base branch)".to_string()),
+    },
+  }
+}
+
+fn diff_text(diff: anyhow::Result<String>) -> String {
+  match diff {
+    Ok(diff) if diff.trim().is_empty() => "(no changes)".to_string(),
+    Ok(diff) => mention::truncate_diff(&diff),
+    Err(err) => format!("(error: {err})"),
   }
 }
 

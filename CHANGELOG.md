@@ -2,6 +2,12 @@
 
 All notable changes to Reviu are documented here.
 
+## 0.16.0
+
+### Add Context With @ In The Agent Panel
+
+Type `@` in the Agent panel to pull repository context into your message. Pick a file by name to reference it, or choose `@diff`, `@staged`, or `@branch` to attach your uncommitted changes, staged changes, or the diff against the base branch. The diff is sent to the agent with your message, so you can ask things like "review @diff" without copying anything by hand. Use arrow keys and Enter to pick, Escape to dismiss.
+
 ## 0.15.0
 
 ### Terminal On Git Page

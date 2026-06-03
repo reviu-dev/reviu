@@ -252,6 +252,7 @@ dependencies = [
  "agent_acp",
  "anyhow",
  "async-channel 2.5.0",
+ "async-process",
  "blake3",
  "dirs 5.0.1",
  "futures",
