@@ -73,6 +73,23 @@ fn agent_path_to_repo_relative(path: PathBuf, repo_root: Option<&Path>) -> PathB
     .unwrap_or(path)
 }
 
+/// Staged diff (`git diff --cached`), or all uncommitted changes (`git diff HEAD`) as a fallback.
+fn read_commit_diff(repo_root: &Path, staged: bool) -> anyhow::Result<String> {
+  let args: &[&str] = if staged {
+    &["diff", "--cached"]
+  } else {
+    &["diff", "HEAD"]
+  };
+  let output = std::process::Command::new("git")
+    .args(args)
+    .current_dir(repo_root)
+    .output()?;
+  if !output.status.success() {
+    anyhow::bail!("git {} failed", args.join(" "));
+  }
+  Ok(String::from_utf8_lossy(&output.stdout).to_string())
+}
+
 fn prune_agent_chat_state_once() {
   use std::sync::OnceLock;
   static PRUNED: OnceLock<()> = OnceLock::new();
@@ -1679,6 +1696,7 @@ pub struct GitPage {
   publish_branch_and_create_pr_in_progress: bool,
   fetch_in_progress: bool,
   has_staged_changes: bool,
+  generating_commit_message: bool,
   merge_in_progress: bool,
   rebase_in_progress: bool,
   sidebar_mode: GitSidebarMode,
@@ -3195,6 +3213,7 @@ impl GitPage {
       publish_branch_and_create_pr_in_progress: false,
       fetch_in_progress: false,
       has_staged_changes: false,
+      generating_commit_message: false,
       merge_in_progress: false,
       rebase_in_progress: false,
       sidebar_mode: GitSidebarMode::Changes,
@@ -3310,6 +3329,7 @@ impl GitPage {
       publish_branch_and_create_pr_in_progress: false,
       fetch_in_progress: false,
       has_staged_changes: false,
+      generating_commit_message: false,
       merge_in_progress: false,
       rebase_in_progress: false,
       sidebar_mode: GitSidebarMode::Changes,
@@ -3608,6 +3628,47 @@ impl GitPage {
     let _ = cx.update_window(self.window_handle, move |_, window, cx| {
       window.push_notification(Notification::error(error).id::<T>().title(title), cx);
     });
+  }
+
+  fn generate_commit_message(&mut self, cx: &mut Context<Self>) {
+    if self.generating_commit_message {
+      return;
+    }
+    let Some(repo_root) = self.selected_repo.clone() else {
+      return;
+    };
+    let staged = self.has_staged_changes;
+    let api = self.api.clone();
+    self.operation_error = None;
+    self.generating_commit_message = true;
+    cx.notify();
+
+    cx.spawn(async move |this, cx| {
+      let result = unblock(move || {
+        let diff = read_commit_diff(&repo_root, staged)?;
+        if diff.trim().is_empty() {
+          anyhow::bail!("No changes to summarize");
+        }
+        api.generate_commit_message(&diff)
+      })
+      .await;
+
+      let _ = this.update(cx, |this, cx| {
+        this.generating_commit_message = false;
+        match result {
+          Ok(message) => {
+            this.operation_error = None;
+            this.set_commit_input_value(&message, None, cx);
+          }
+          Err(error) => {
+            this.operation_error =
+              Some(format!("Could not generate commit message: {error}").into());
+          }
+        }
+        cx.notify();
+      });
+    })
+    .detach();
   }
 
   fn set_commit_input_value(
@@ -10217,6 +10278,7 @@ impl GitPage {
   fn render_commit_bar(&mut self, window: &Window, cx: &mut Context<Self>) -> impl IntoElement {
     let theme = cx.theme().clone();
     let input = self.commit_input.clone();
+    let show_generate = AuthStateStore::get(cx).has_pro_access();
     let has_conflicts = Self::has_conflicted_entries(&self.status_entries);
     let detached_head = Self::is_detached_head(self.branch_status.as_ref());
     let operation_error = self.operation_error.clone();
@@ -10258,13 +10320,22 @@ impl GitPage {
             .title("Operation failed"),
         )
       })
-      .child(
-        div()
-          .w_full()
-          .min_w_0()
-          .key_context("CommitInput")
-          .child(Input::new(&input).w_full()),
-      )
+      .child(div().w_full().min_w_0().key_context("CommitInput").child({
+        let mut commit_box = Input::new(&input).w_full();
+        if show_generate {
+          commit_box = commit_box.suffix(
+            Button::new("generate-commit-message")
+              .icon(UiIconName::Sparkles)
+              .ghost()
+              .small()
+              .loading(self.generating_commit_message)
+              .disabled(self.status_entries.is_empty() || self.generating_commit_message)
+              .tooltip("Generate commit message")
+              .on_click(cx.listener(|this, _, _, cx| this.generate_commit_message(cx))),
+          );
+        }
+        commit_box
+      }))
       .child(
         div()
           .w_full()
@@ -10768,6 +10839,32 @@ mod tests {
       agent_path_to_repo_relative(PathBuf::from("/home/u/proj/src/lib.rs"), Some(root)),
       PathBuf::from("src/lib.rs")
     );
+  }
+
+  #[test]
+  fn read_commit_diff_returns_staged_changes() {
+    let repo = TempRepo::init("read-commit-diff");
+    commit_text_file(&repo.path, Path::new("a.txt"), "one\n", "init");
+    std::fs::write(repo.path.join("a.txt"), "one\ntwo\n").expect("write file");
+    let git = Repository::open(&repo.path).expect("open repo");
+    let mut index = git.index().expect("index");
+    index.add_path(Path::new("a.txt")).expect("stage file");
+    index.write().expect("write index");
+
+    let diff = read_commit_diff(&repo.path, true).expect("staged diff");
+
+    assert!(diff.contains("a.txt"), "diff mentions the file: {diff}");
+    assert!(diff.contains("two"), "diff includes the added line: {diff}");
+  }
+
+  #[test]
+  fn read_commit_diff_empty_when_nothing_staged() {
+    let repo = TempRepo::init("read-commit-diff-clean");
+    commit_text_file(&repo.path, Path::new("a.txt"), "one\n", "init");
+
+    let diff = read_commit_diff(&repo.path, true).expect("staged diff");
+
+    assert!(diff.trim().is_empty(), "no staged changes: {diff}");
   }
 
   #[test]

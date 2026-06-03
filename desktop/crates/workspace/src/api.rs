@@ -355,6 +355,16 @@ struct AiPrBriefOptionalResponse {
   brief: Option<AiPrBrief>,
 }
 
+#[derive(Debug, Serialize)]
+struct AiCommitMessageRequest<'a> {
+  diff: &'a str,
+}
+
+#[derive(Debug, Deserialize)]
+struct AiCommitMessageResponse {
+  message: String,
+}
+
 #[derive(Clone, Debug, Deserialize)]
 pub struct GithubPullRequestLabel {
   pub name: String,
@@ -2270,6 +2280,23 @@ impl ApiClient {
     }
     let payload = response.json::<AiPrBriefResponse>()?;
     Ok(payload.brief)
+  }
+
+  pub fn generate_commit_message(&self, diff: &str) -> Result<String> {
+    let response = self
+      .authed_request(Method::POST, "/ai/commit-message")
+      .json(&AiCommitMessageRequest { diff })
+      .send()?;
+    let status = response.status();
+    Self::record_http_status("POST", "/ai/commit-message", status);
+    if status == StatusCode::UNAUTHORIZED {
+      anyhow::bail!("unauthorized")
+    }
+    if !status.is_success() {
+      return Err(Self::api_error_from_response(response));
+    }
+    let payload = response.json::<AiCommitMessageResponse>()?;
+    Ok(payload.message)
   }
 
   pub fn fetch_github_pull_requests(
