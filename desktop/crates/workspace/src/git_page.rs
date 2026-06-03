@@ -3639,7 +3639,6 @@ impl GitPage {
     };
     let staged = self.has_staged_changes;
     let api = self.api.clone();
-    self.operation_error = None;
     self.generating_commit_message = true;
     cx.notify();
 
@@ -3656,14 +3655,12 @@ impl GitPage {
       let _ = this.update(cx, |this, cx| {
         this.generating_commit_message = false;
         match result {
-          Ok(message) => {
-            this.operation_error = None;
-            this.set_commit_input_value(&message, None, cx);
-          }
-          Err(error) => {
-            this.operation_error =
-              Some(format!("Could not generate commit message: {error}").into());
-          }
+          Ok(message) => this.set_commit_input_value(&message, None, cx),
+          Err(error) => this.push_git_error_notification_with_id::<GitActionErrorNotificationId>(
+            "Commit message",
+            format!("{error}").into(),
+            cx,
+          ),
         }
         cx.notify();
       });
