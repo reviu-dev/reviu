@@ -6097,6 +6097,23 @@ impl Editor {
     cx.notify();
   }
 
+  /// Center and place the cursor on a document line (0-based), clamped to the file.
+  pub fn reveal_source_line(&mut self, doc_line: usize, cx: &mut Context<Self>) {
+    let line_count = self.document.read(cx).len_lines();
+    if line_count == 0 {
+      return;
+    }
+    let doc_line = doc_line.min(line_count - 1);
+    let target_display_line = self.doc_to_display_line(doc_line).unwrap_or(doc_line);
+    let target_offset = self.document.read(cx).line_to_char(doc_line);
+    let total_lines = self.display_line_count(line_count);
+
+    self.move_to(target_offset, cx);
+    self.center_display_line_in_viewport(target_display_line, total_lines);
+    self.ensure_cursor_visible_with_policy(CursorRevealPolicy::WithPadding, cx);
+    cx.notify();
+  }
+
   fn conflict_center_display_line(&self, conflict_start_line: usize, cx: &App) -> Option<usize> {
     let regions = self.conflict_regions(cx);
     let region = regions

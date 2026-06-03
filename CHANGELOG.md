@@ -14,7 +14,7 @@ Select lines in a diff and press the Send Selection To Agent shortcut (`cmd-shif
 
 ### Open Agent File References
 
-File locations the agent touches (the path shown on Read, Edit, and other tool calls) are now clickable. Click one to open that file in the diff view, so you can jump straight to what the agent changed without hunting for it in the file list.
+File locations the agent touches (the path shown on Read, Edit, and other tool calls) are now clickable. Click one to open that file in the diff view and jump straight to the referenced line, so you land on what the agent changed without hunting for it in the file list.
 
 ## 0.15.0
 

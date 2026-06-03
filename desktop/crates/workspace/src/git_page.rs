@@ -6740,16 +6740,16 @@ impl GitPage {
   }
 
   fn open_file_revealing_first_conflict(&mut self, rel_path: PathBuf, cx: &mut Context<Self>) {
-    self.open_file_internal(rel_path, true, SelectedFileSource::StatusEntry, cx);
+    self.open_file_internal(rel_path, true, SelectedFileSource::StatusEntry, None, cx);
   }
 
   fn open_file(&mut self, rel_path: PathBuf, cx: &mut Context<Self>) {
     let selected_file_source = self.selected_file_source_for_open_path(&rel_path);
-    self.open_file_internal(rel_path, false, selected_file_source, cx);
+    self.open_file_internal(rel_path, false, selected_file_source, None, cx);
   }
 
   fn open_status_file(&mut self, rel_path: PathBuf, cx: &mut Context<Self>) {
-    self.open_file_internal(rel_path, false, SelectedFileSource::StatusEntry, cx);
+    self.open_file_internal(rel_path, false, SelectedFileSource::StatusEntry, None, cx);
   }
 
   fn install_agent_review_handlers_for_editor(
@@ -7181,6 +7181,7 @@ impl GitPage {
     rel_path: PathBuf,
     reveal_first_conflict: bool,
     selected_file_source: SelectedFileSource,
+    reveal_line: Option<u32>,
     cx: &mut Context<Self>,
   ) {
     let Some(repo_root) = self.selected_repo.clone() else {
@@ -7197,11 +7198,18 @@ impl GitPage {
       self.diff_view = saved_mode;
     }
     self.hide_whitespace = app_settings.hide_whitespace;
+    // Agent line numbers are 1-based; the editor reveals by 0-based doc line.
+    let reveal_doc_line = reveal_line.map(|line| line.saturating_sub(1) as usize);
     self.pending_conflict_reveal_path = reveal_first_conflict.then_some(rel_path.clone());
     if self.selected_file.as_ref() == Some(&rel_path) && self.history_opened_commit_file.is_none() {
       self.selected_file_source = Some(selected_file_source);
       if reveal_first_conflict {
         self.reveal_first_conflict_in_editor(cx);
+      }
+      if let Some(doc_line) = reveal_doc_line
+        && let Some(editor) = self.editor.clone()
+      {
+        editor.update(cx, |editor, cx| editor.reveal_source_line(doc_line, cx));
       }
       return;
     }
@@ -7281,6 +7289,9 @@ impl GitPage {
           editor.set_is_unmerged(is_unmerged, cx);
           if should_reveal_first_conflict {
             editor.reveal_first_conflict(cx);
+          }
+          if let Some(doc_line) = reveal_doc_line {
+            editor.reveal_source_line(doc_line, cx);
           }
         });
         this.binary_preview = binary_preview;
@@ -7647,16 +7658,17 @@ impl GitPage {
     let backend = AgentSettings::load();
     let view = cx.new(|cx| AgentChatPanel::new(backend, cwd, state_dir, window, cx));
     cx.subscribe(&view, |this, _panel, event: &AgentChatPanelEvent, cx| {
-      let AgentChatPanelEvent::OpenPath { path, .. } = event;
-      this.open_agent_path(path.clone(), cx);
+      let AgentChatPanelEvent::OpenPath { path, line } = event;
+      this.open_agent_path(path.clone(), *line, cx);
     })
     .detach();
     self.agent_chat_view = Some(view);
   }
 
-  fn open_agent_path(&mut self, path: PathBuf, cx: &mut Context<Self>) {
+  fn open_agent_path(&mut self, path: PathBuf, line: Option<u32>, cx: &mut Context<Self>) {
     let rel_path = agent_path_to_repo_relative(path, self.selected_repo.as_deref());
-    self.open_file(rel_path, cx);
+    let selected_file_source = self.selected_file_source_for_open_path(&rel_path);
+    self.open_file_internal(rel_path, false, selected_file_source, line, cx);
     cx.notify();
   }
 
