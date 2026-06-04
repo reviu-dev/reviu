@@ -11349,7 +11349,7 @@ impl GithubPrDetailsPage {
               .items_center()
               .gap_2()
               .child(
-                Icon::new(IconName::Bot)
+                Icon::new(UiIconName::Sparkles)
                   .size_4()
                   .text_color(theme.accent_foreground),
               )
