@@ -77,6 +77,107 @@ const CONFIG_TABLES: [ConfigTable; 7] = [
   ANALYTICS_META_TABLE,
 ];
 
+type Migration = fn(&Connection) -> rusqlite::Result<()>;
+
+/// Ordered config-database migrations. The vector index + 1 is the migration's `user_version`.
+/// Only append; never reorder or edit a shipped migration. v1 is an idempotent baseline so any
+/// pre-existing database (which has `user_version` 0) converges to the current schema.
+const MIGRATIONS: &[Migration] = &[migrate_v1_baseline];
+
+fn schema_version(conn: &Connection) -> rusqlite::Result<i64> {
+  conn.query_row("PRAGMA user_version", [], |row| row.get(0))
+}
+
+fn set_schema_version(conn: &Connection, version: i64) -> rusqlite::Result<()> {
+  // PRAGMA cannot be parameterized; `version` is a controlled integer, not user input.
+  conn.execute_batch(&format!("PRAGMA user_version = {version}"))
+}
+
+fn run_migrations(conn: &Connection) -> rusqlite::Result<()> {
+  let mut current = schema_version(conn)?;
+  for (index, migration) in MIGRATIONS.iter().enumerate() {
+    let version = index as i64 + 1;
+    if current >= version {
+      continue;
+    }
+    conn.execute_batch("BEGIN")?;
+    let applied = migration(conn).and_then(|()| set_schema_version(conn, version));
+    match applied {
+      Ok(()) => {
+        conn.execute_batch("COMMIT")?;
+        current = version;
+      }
+      Err(err) => {
+        let _ = conn.execute_batch("ROLLBACK");
+        return Err(err);
+      }
+    }
+  }
+  Ok(())
+}
+
+fn migrate_v1_baseline(conn: &Connection) -> rusqlite::Result<()> {
+  create_baseline_tables(conn)?;
+  ensure_default_rows(conn)?;
+  ensure_settings_columns(conn)?;
+  Ok(())
+}
+
+fn create_baseline_tables(conn: &Connection) -> rusqlite::Result<()> {
+  for table in CONFIG_TABLES {
+    conn.execute(table.create_sql, [])?;
+  }
+  Ok(())
+}
+
+fn ensure_default_rows(conn: &Connection) -> rusqlite::Result<()> {
+  conn.execute(
+    &format!(
+      "INSERT INTO {} (id) VALUES (1)
+       ON CONFLICT(id) DO NOTHING",
+      SETTINGS_TABLE.name
+    ),
+    [],
+  )?;
+  Ok(())
+}
+
+/// Add any settings columns missing from an older `settings` table. Guarded per column so the
+/// baseline stays idempotent across every database age.
+fn ensure_settings_columns(conn: &Connection) -> rusqlite::Result<()> {
+  const COLUMNS: &[(&str, &str)] = &[
+    ("indent_rainbow", "INTEGER NOT NULL DEFAULT 0"),
+    ("font_size", "REAL NOT NULL DEFAULT 16.0"),
+    ("git_unified_file_view", "INTEGER NOT NULL DEFAULT 0"),
+    ("split_diff_view", "INTEGER NOT NULL DEFAULT 0"),
+    ("hide_whitespace", "INTEGER NOT NULL DEFAULT 0"),
+    ("clone_protocol", "TEXT NOT NULL DEFAULT 'https'"),
+    ("menu_bar_icon", "INTEGER NOT NULL DEFAULT 1"),
+    ("analytics_enabled", "INTEGER NOT NULL DEFAULT 1"),
+  ];
+
+  let mut existing = std::collections::HashSet::new();
+  let mut stmt = conn.prepare(&format!("PRAGMA table_info({})", SETTINGS_TABLE.name))?;
+  let rows = stmt.query_map([], |row| row.get::<_, String>(1))?;
+  for row in rows {
+    existing.insert(row?);
+  }
+
+  for (column, definition) in COLUMNS {
+    if !existing.contains(*column) {
+      conn.execute(
+        &format!(
+          "ALTER TABLE {} ADD COLUMN {column} {definition}",
+          SETTINGS_TABLE.name
+        ),
+        [],
+      )?;
+    }
+  }
+
+  Ok(())
+}
+
 #[cfg(test)]
 thread_local! {
   static TEST_DB_PATH: RefCell<Option<PathBuf>> = const { RefCell::new(None) };
@@ -205,162 +306,11 @@ impl ConfigStore {
 
   fn open_with_tables() -> Option<Self> {
     let store = Self::open()?;
-    if let Err(err) = store.ensure_tables() {
-      eprintln!("Failed to initialize config tables: {}", err);
-      return None;
-    }
-    if let Err(err) = store.ensure_default_rows() {
-      eprintln!("Failed to initialize default config values: {}", err);
-      return None;
-    }
-    if let Err(err) = store.ensure_settings_columns() {
-      eprintln!("Failed to initialize settings schema: {}", err);
+    if let Err(err) = run_migrations(&store.conn) {
+      eprintln!("Failed to migrate config database: {}", err);
       return None;
     }
     Some(store)
-  }
-
-  fn ensure_tables(&self) -> rusqlite::Result<()> {
-    for table in CONFIG_TABLES {
-      self.conn.execute(table.create_sql, [])?;
-    }
-    Ok(())
-  }
-
-  fn ensure_default_rows(&self) -> rusqlite::Result<()> {
-    self.conn.execute(
-      &format!(
-        "INSERT INTO {} (id) VALUES (1)
-         ON CONFLICT(id) DO NOTHING",
-        SETTINGS_TABLE.name
-      ),
-      [],
-    )?;
-    Ok(())
-  }
-
-  fn ensure_settings_columns(&self) -> rusqlite::Result<()> {
-    let mut has_indent_rainbow = false;
-    let mut has_font_size = false;
-    let mut has_git_unified_file_view = false;
-    let mut has_split_diff_view = false;
-    let mut has_hide_whitespace = false;
-    let mut has_clone_protocol = false;
-    let mut has_menu_bar_icon = false;
-    let mut has_analytics_enabled = false;
-    let mut stmt = self
-      .conn
-      .prepare(&format!("PRAGMA table_info({})", SETTINGS_TABLE.name))?;
-    let rows = stmt.query_map([], |row| row.get::<_, String>(1))?;
-    for row in rows {
-      let column = row?;
-      if column == "indent_rainbow" {
-        has_indent_rainbow = true;
-      }
-      if column == "font_size" {
-        has_font_size = true;
-      }
-      if column == "git_unified_file_view" {
-        has_git_unified_file_view = true;
-      }
-      if column == "split_diff_view" {
-        has_split_diff_view = true;
-      }
-      if column == "hide_whitespace" {
-        has_hide_whitespace = true;
-      }
-      if column == "clone_protocol" {
-        has_clone_protocol = true;
-      }
-      if column == "menu_bar_icon" {
-        has_menu_bar_icon = true;
-      }
-      if column == "analytics_enabled" {
-        has_analytics_enabled = true;
-      }
-    }
-
-    if !has_indent_rainbow {
-      self.conn.execute(
-        &format!(
-          "ALTER TABLE {} ADD COLUMN indent_rainbow INTEGER NOT NULL DEFAULT 0",
-          SETTINGS_TABLE.name
-        ),
-        [],
-      )?;
-    }
-
-    if !has_font_size {
-      self.conn.execute(
-        &format!(
-          "ALTER TABLE {} ADD COLUMN font_size REAL NOT NULL DEFAULT 16.0",
-          SETTINGS_TABLE.name
-        ),
-        [],
-      )?;
-    }
-
-    if !has_git_unified_file_view {
-      self.conn.execute(
-        &format!(
-          "ALTER TABLE {} ADD COLUMN git_unified_file_view INTEGER NOT NULL DEFAULT 0",
-          SETTINGS_TABLE.name
-        ),
-        [],
-      )?;
-    }
-
-    if !has_split_diff_view {
-      self.conn.execute(
-        &format!(
-          "ALTER TABLE {} ADD COLUMN split_diff_view INTEGER NOT NULL DEFAULT 0",
-          SETTINGS_TABLE.name
-        ),
-        [],
-      )?;
-    }
-
-    if !has_hide_whitespace {
-      self.conn.execute(
-        &format!(
-          "ALTER TABLE {} ADD COLUMN hide_whitespace INTEGER NOT NULL DEFAULT 0",
-          SETTINGS_TABLE.name
-        ),
-        [],
-      )?;
-    }
-
-    if !has_clone_protocol {
-      self.conn.execute(
-        &format!(
-          "ALTER TABLE {} ADD COLUMN clone_protocol TEXT NOT NULL DEFAULT 'https'",
-          SETTINGS_TABLE.name
-        ),
-        [],
-      )?;
-    }
-
-    if !has_menu_bar_icon {
-      self.conn.execute(
-        &format!(
-          "ALTER TABLE {} ADD COLUMN menu_bar_icon INTEGER NOT NULL DEFAULT 1",
-          SETTINGS_TABLE.name
-        ),
-        [],
-      )?;
-    }
-
-    if !has_analytics_enabled {
-      self.conn.execute(
-        &format!(
-          "ALTER TABLE {} ADD COLUMN analytics_enabled INTEGER NOT NULL DEFAULT 1",
-          SETTINGS_TABLE.name
-        ),
-        [],
-      )?;
-    }
-
-    Ok(())
   }
 
   pub fn load_recent_repositories() -> Vec<RecentRepository> {
@@ -1234,6 +1184,107 @@ mod tests {
       usages.get("commit"),
       Some(&vec![1_000, 2_000, 3_000, 4_000])
     );
+
+    ConfigStore::set_test_db_path(None);
+  }
+
+  fn settings_columns(db_path: &Path) -> std::collections::HashSet<String> {
+    let conn = Connection::open(db_path).expect("open db");
+    let mut stmt = conn
+      .prepare(&format!("PRAGMA table_info({})", SETTINGS_TABLE.name))
+      .expect("table_info");
+    let rows = stmt
+      .query_map([], |row| row.get::<_, String>(1))
+      .expect("query columns");
+    rows.map(|row| row.expect("column name")).collect()
+  }
+
+  fn db_user_version(db_path: &Path) -> i64 {
+    Connection::open(db_path)
+      .expect("open db")
+      .query_row("PRAGMA user_version", [], |row| row.get(0))
+      .expect("user_version")
+  }
+
+  const ALL_SETTINGS_COLUMNS: &[&str] = &[
+    "auto_switch_theme",
+    "dark_mode",
+    "indent_rainbow",
+    "font_size",
+    "git_unified_file_view",
+    "split_diff_view",
+    "hide_whitespace",
+    "clone_protocol",
+    "menu_bar_icon",
+    "analytics_enabled",
+  ];
+
+  #[test]
+  fn migrations_stamp_version_and_full_schema_on_fresh_db() {
+    let db_path = unique_test_db_path("migrate-fresh");
+    let _ = fs::remove_file(&db_path);
+    ConfigStore::set_test_db_path(Some(db_path.clone()));
+
+    // Triggers open_with_tables -> run_migrations on an empty database.
+    let _ = ConfigStore::load_app_settings();
+
+    assert_eq!(db_user_version(&db_path), 1);
+    let columns = settings_columns(&db_path);
+    for column in ALL_SETTINGS_COLUMNS {
+      assert!(columns.contains(*column), "missing column {column}");
+    }
+
+    ConfigStore::set_test_db_path(None);
+  }
+
+  #[test]
+  fn migrations_are_idempotent_across_runs() {
+    let db_path = unique_test_db_path("migrate-idempotent");
+    let _ = fs::remove_file(&db_path);
+    ConfigStore::set_test_db_path(Some(db_path.clone()));
+
+    let _ = ConfigStore::load_app_settings();
+    let mut settings = ConfigStore::load_app_settings();
+    settings.dark_mode = true;
+    ConfigStore::persist_app_settings(settings);
+    // Second open must not re-run v1 or disturb stored data.
+    let reloaded = ConfigStore::load_app_settings();
+
+    assert_eq!(db_user_version(&db_path), 1);
+    assert!(reloaded.dark_mode);
+
+    ConfigStore::set_test_db_path(None);
+  }
+
+  #[test]
+  fn migrations_upgrade_legacy_db_without_data_loss() {
+    let db_path = unique_test_db_path("migrate-legacy");
+    let _ = fs::remove_file(&db_path);
+
+    // Simulate an old install: only the original columns, user_version left at 0.
+    {
+      let conn = Connection::open(&db_path).expect("open legacy db");
+      conn
+        .execute_batch(
+          "CREATE TABLE settings (id INTEGER PRIMARY KEY CHECK (id = 1), \
+           auto_switch_theme INTEGER NOT NULL DEFAULT 1, \
+           dark_mode INTEGER NOT NULL DEFAULT 0); \
+           INSERT INTO settings (id, dark_mode) VALUES (1, 1);",
+        )
+        .expect("seed legacy schema");
+      assert_eq!(db_user_version(&db_path), 0);
+    }
+
+    ConfigStore::set_test_db_path(Some(db_path.clone()));
+    let settings = ConfigStore::load_app_settings();
+
+    // Pre-existing value preserved, schema brought up to date, version stamped.
+    assert!(settings.dark_mode, "legacy value must survive migration");
+    assert_eq!(db_user_version(&db_path), 1);
+    let columns = settings_columns(&db_path);
+    for column in ALL_SETTINGS_COLUMNS {
+      assert!(columns.contains(*column), "missing column {column}");
+    }
 
     ConfigStore::set_test_db_path(None);
   }
