@@ -1,0 +1,26 @@
+# Gate dependency licenses: keep the shipped binary free of strong copyleft (GPL/AGPL)
+# so reviu can ship proprietary / under FSL. Anything not in `allow` fails the check.
+[licenses]
+confidence-threshold = 0.9
+allow = [
+  "MIT",
+  "MIT-0",
+  "Apache-2.0",
+  "Apache-2.0 WITH LLVM-exception",
+  "BSD-2-Clause",
+  "BSD-3-Clause",
+  "ISC",
+  "Zlib",
+  "Unicode-3.0",
+  "Unlicense",
+  "0BSD",
+  "CC0-1.0",
+  "CDLA-Permissive-2.0",
+  "MPL-2.0",
+  "NCSA",
+  "bzip2-1.0.6",
+]
+
+# reviu's own crates (publish = false) are not externally licensed; skip them.
+[licenses.private]
+ignore = true
