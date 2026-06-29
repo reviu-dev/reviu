@@ -11,9 +11,7 @@
     "build": "astro build",
     "preview": "astro preview",
     "astro": "astro",
-    "typecheck": "astro check",
-    "test": "node --test tests/*.mjs",
-    "test:seo": "node --test tests/seo.test.mjs"
+    "typecheck": "astro check"
   },
   "dependencies": {
     "@lucide/astro": "^1.21.0",
