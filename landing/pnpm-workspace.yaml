@@ -1,3 +1,11 @@
+shellEmulator: true
+
+trustPolicy: no-downgrade
+
+# transitive via astro/vite file-watching; flagged for a provenance regression, not a takeover.
+trustPolicyExclude:
+  - chokidar
+
 allowBuilds:
   # transitive via astro/vite; needs its platform binary downloaded.
   esbuild: true
