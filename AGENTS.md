@@ -66,9 +66,6 @@
 - Framework: GPUI.
 - For desktop icons, use gpui-components icons (IconName) or our custom icons (UiIconName), all coming from lucide
 - GPUI tip: for `on_click` and overflow containers, set an `id`.
-- Examples:
-  - `./desktop/gpui`
-  - `./desktop/gpui-components`
 
 ## Backend notes
 
