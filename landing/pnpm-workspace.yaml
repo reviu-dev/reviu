@@ -1,0 +1,5 @@
+allowBuilds:
+  # transitive via astro/vite; needs its platform binary downloaded.
+  esbuild: true
+  # downloads prebuilt libvips binaries for image processing.
+  sharp: true
