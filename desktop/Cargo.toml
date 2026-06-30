@@ -19,6 +19,7 @@ members = [
 version = "0.16.0"
 edition = "2024"
 publish = false
+license-file = "../LICENSE"
 
 [workspace.dependencies]
 # External crates

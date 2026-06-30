@@ -1,6 +1,7 @@
 {
   "name": "reviu-landing",
   "type": "module",
+  "license": "SEE LICENSE IN LICENSE",
   "version": "0.0.1",
   "packageManager": "pnpm@11.8.0",
   "engines": {

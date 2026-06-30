@@ -3,6 +3,7 @@ name = "reviu"
 version.workspace = true
 edition.workspace = true
 publish.workspace = true
+license-file.workspace = true
 
 [package.metadata.bundle]
 name = "Reviu"
