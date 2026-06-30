@@ -2,15 +2,19 @@
 
 use app_root::AppRoot;
 use editor::Quit;
-use gpui::{
-  App, Bounds, Focusable, TitlebarOptions, WindowBounds, WindowOptions, point, prelude::*, px, size,
-};
-use gpui_component::{Root, TitleBar};
+use gpui::{App, Bounds, Focusable, WindowBounds, WindowOptions, prelude::*, px, size};
+#[cfg(target_os = "macos")]
+use gpui::{TitlebarOptions, point};
+use gpui_component::Root;
+#[cfg(target_os = "macos")]
+use gpui_component::TitleBar;
 use reqwest_client::ReqwestClient;
 use std::borrow::Cow;
 use std::sync::{Arc, mpsc};
 use std::time::Duration;
-use ui::{AppAssets, PAGE_HEADER_HEIGHT, parse_github_url_action};
+use ui::{AppAssets, parse_github_url_action};
+#[cfg(target_os = "macos")]
+use ui::PAGE_HEADER_HEIGHT;
 use workspace::{
   AppProfile, AuthCallbackTarget, AuthStateStore, WorkspaceView, build_app_menus,
   github_navigation::{open_commit_target, open_pr_target, open_repo_target},
@@ -230,7 +234,9 @@ fn main() {
   shell_env::load();
 
   let app_profile = AppProfile::current();
-  let _startup_deeplink_url = startup_deeplink_url(app_profile);
+  // Used only on Linux/Windows (deeplink forwarding); unused on macOS.
+  #[allow(unused_variables)]
+  let startup_deeplink_url = startup_deeplink_url(app_profile);
 
   // On Linux, the .desktop file launches a new process for deeplinks.
   // If an instance is already running, forward the URL via Unix socket and exit.
