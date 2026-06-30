@@ -12,9 +12,9 @@ use reqwest_client::ReqwestClient;
 use std::borrow::Cow;
 use std::sync::{Arc, mpsc};
 use std::time::Duration;
-use ui::{AppAssets, parse_github_url_action};
 #[cfg(target_os = "macos")]
 use ui::PAGE_HEADER_HEIGHT;
+use ui::{AppAssets, parse_github_url_action};
 use workspace::{
   AppProfile, AuthCallbackTarget, AuthStateStore, WorkspaceView, build_app_menus,
   github_navigation::{open_commit_target, open_pr_target, open_repo_target},
