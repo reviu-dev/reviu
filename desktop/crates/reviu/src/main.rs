@@ -242,10 +242,10 @@ fn main() {
   // If an instance is already running, forward the URL via Unix socket and exit.
   #[cfg(target_os = "linux")]
   {
-    if let Some(url) = startup_deeplink_url.as_deref() {
-      if linux_single_instance::try_forward_url(url) {
-        std::process::exit(0);
-      }
+    if let Some(url) = startup_deeplink_url.as_deref()
+      && linux_single_instance::try_forward_url(url)
+    {
+      std::process::exit(0);
     }
   }
 
@@ -253,10 +253,10 @@ fn main() {
   // Forward the URL to the running instance so the existing window handles it.
   #[cfg(target_os = "windows")]
   {
-    if let Some(url) = startup_deeplink_url.as_deref() {
-      if windows_single_instance::try_forward_url(url) {
-        std::process::exit(0);
-      }
+    if let Some(url) = startup_deeplink_url.as_deref()
+      && windows_single_instance::try_forward_url(url)
+    {
+      std::process::exit(0);
     }
   }
 
