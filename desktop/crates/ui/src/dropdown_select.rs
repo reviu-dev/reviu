@@ -657,8 +657,8 @@ mod tests {
   #[test]
   fn apply_search_query_filters_label_and_prefix() {
     let options = vec![
-      DropdownSelectOption::new("a", "reviu").prefix("/Users/joris/workspace/"),
-      DropdownSelectOption::new("b", "git-playground").prefix("/Users/joris/workspace/"),
+      DropdownSelectOption::new("a", "reviu").prefix("/Users/example/workspace/"),
+      DropdownSelectOption::new("b", "git-playground").prefix("/Users/example/workspace/"),
       DropdownSelectOption::new("c", "other").prefix("/tmp/"),
     ];
 

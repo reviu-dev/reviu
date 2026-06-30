@@ -11070,12 +11070,12 @@ mod tests {
   #[test]
   fn recent_repo_item_splits_prefix_and_name() {
     let repo = RecentRepository {
-      path: PathBuf::from("/Users/joris/workspace/reviu"),
+      path: PathBuf::from("/Users/example/workspace/reviu"),
     };
-    let item = RecentRepoItem::new(&repo, Some(Path::new("/Users/joris/workspace/reviu")));
+    let item = RecentRepoItem::new(&repo, Some(Path::new("/Users/example/workspace/reviu")));
 
-    assert_eq!(item.path, PathBuf::from("/Users/joris/workspace/reviu"));
-    assert_eq!(item.prefix.as_ref(), "/Users/joris/workspace/");
+    assert_eq!(item.path, PathBuf::from("/Users/example/workspace/reviu"));
+    assert_eq!(item.prefix.as_ref(), "/Users/example/workspace/");
     assert_eq!(item.name.as_ref(), "reviu");
     assert!(item.is_selected);
   }

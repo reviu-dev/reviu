@@ -428,7 +428,7 @@ mod tests {
   #[test]
   fn sanitize_repo_path_returns_repo_name_and_short_hash() {
     let (repo_name, repo_hash) =
-      sanitize_repo_path(Path::new("/Users/joris/workspace/reviu/desktop"));
+      sanitize_repo_path(Path::new("/Users/example/workspace/reviu/desktop"));
     assert_eq!(repo_name, "desktop");
     assert_eq!(repo_hash.len(), 12);
     assert!(!repo_hash.contains('/'));
