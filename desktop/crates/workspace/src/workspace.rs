@@ -1028,7 +1028,7 @@ impl WorkspaceView {
         AuthCallbackTarget::start_sign_in(cx);
       });
 
-    let show_file_search_button = page_has_file_search(&pathname);
+    let show_file_search_button = page_has_file_search(pathname);
     let refresh_button = page_supports_refresh(page).then(|| {
       let label = refresh_label_for_workspace_page(page)
         .expect("refresh label should exist for refreshable workspace pages");

@@ -696,10 +696,8 @@ fn parse_github_remote_repo(url: &str) -> Option<GithubRemoteRepo> {
     path
   } else if let Some(path) = url.strip_prefix("ssh://git@github.com/") {
     path
-  } else if let Some(path) = url.strip_prefix("git@github.com:") {
-    path
   } else {
-    return None;
+    url.strip_prefix("git@github.com:")?
   };
 
   let path = path

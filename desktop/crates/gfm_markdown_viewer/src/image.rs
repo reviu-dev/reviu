@@ -561,12 +561,11 @@ impl MarkdownImageRenderContext<'_> {
       &image_data.themed_url(self.is_dark_mode),
       self.image_base_url,
     );
-    if is_github_user_attachment_url(&url) {
-      if let Some(resolver) = self.asset_url_resolver {
-        if let Some(resolved) = resolve_github_asset_url_async(&url, resolver) {
-          return resolved;
-        }
-      }
+    if is_github_user_attachment_url(&url)
+      && let Some(resolver) = self.asset_url_resolver
+      && let Some(resolved) = resolve_github_asset_url_async(&url, resolver)
+    {
+      return resolved;
     }
     url
   }

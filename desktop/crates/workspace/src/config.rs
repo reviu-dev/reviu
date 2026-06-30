@@ -11,7 +11,6 @@ use std::{
 use dirs::config_dir;
 use gpui::Keystroke;
 use rusqlite::{Connection, params};
-use serde_json;
 
 use crate::AppProfile;
 use crate::github_home_tabs::{

@@ -273,35 +273,32 @@ where
     window: &mut Window,
     cx: &mut Context<Self>,
   ) {
-    match event {
-      InputEvent::Change => {
-        let text = state.read(cx).value();
-        let text = text.trim().to_string();
-        if Some(&text) == self.last_query.as_ref() {
-          return;
-        }
-
-        self.set_searching(true, window, cx);
-        let search = self.delegate.perform_search(&text, window, cx);
-        let next_selected_index = if self.items_count(cx) > 0 {
-          Some(0)
-        } else {
-          None
-        };
-        self.set_selected_index_internal(next_selected_index, window, cx, false);
-
-        self._search_task = cx.spawn_in(window, async move |this, window| {
-          search.await;
-
-          let _ = this.update_in(window, |this, window, cx| {
-            this.scroll_handle.scroll_to_item(0, ScrollStrategy::Top);
-            this.last_query = Some(text);
-            this.sync_selected_index(window, cx);
-            this.set_searching(false, window, cx);
-          });
-        });
+    if let InputEvent::Change = event {
+      let text = state.read(cx).value();
+      let text = text.trim().to_string();
+      if Some(&text) == self.last_query.as_ref() {
+        return;
       }
-      _ => {}
+
+      self.set_searching(true, window, cx);
+      let search = self.delegate.perform_search(&text, window, cx);
+      let next_selected_index = if self.items_count(cx) > 0 {
+        Some(0)
+      } else {
+        None
+      };
+      self.set_selected_index_internal(next_selected_index, window, cx, false);
+
+      self._search_task = cx.spawn_in(window, async move |this, window| {
+        search.await;
+
+        let _ = this.update_in(window, |this, window, cx| {
+          this.scroll_handle.scroll_to_item(0, ScrollStrategy::Top);
+          this.last_query = Some(text);
+          this.sync_selected_index(window, cx);
+          this.set_searching(false, window, cx);
+        });
+      });
     }
   }
 

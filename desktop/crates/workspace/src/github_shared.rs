@@ -505,9 +505,7 @@ fn parse_diff_hunk_starts(header: &str) -> Option<(usize, usize)> {
 fn parse_diff_hunk_start(header: &str, marker: char) -> Option<usize> {
   let marker_ix = header.find(marker)?;
   let after_marker = &header[marker_ix + marker.len_utf8()..];
-  let end = after_marker
-    .find(|c: char| c == ' ' || c == ',')
-    .unwrap_or(after_marker.len());
+  let end = after_marker.find([' ', ',']).unwrap_or(after_marker.len());
   after_marker[..end].parse::<usize>().ok()
 }
 

@@ -1569,13 +1569,13 @@ impl AgentChatPanel {
       .filter(|i| matches!(i, ChatItem::Message(_)))
       .count();
     self.current_conv.updated_at_secs = now_secs();
-    if self.current_conv.title.is_empty() {
-      if let Some(first_user) = self.items.iter().find_map(|i| match i {
+    if self.current_conv.title.is_empty()
+      && let Some(first_user) = self.items.iter().find_map(|i| match i {
         ChatItem::Message(m) if matches!(m.role, ChatRole::User) => Some(m.text.clone()),
         _ => None,
-      }) {
-        self.current_conv.title = truncate_title(&first_user);
-      }
+      })
+    {
+      self.current_conv.title = truncate_title(&first_user);
     }
     let persisted: Vec<PersistedChatItem> = self
       .items
@@ -1711,7 +1711,7 @@ fn list_conversations_in(dir: &std::path::Path) -> Vec<ConversationMeta> {
       Some(parsed.meta)
     })
     .collect();
-  metas.sort_by(|a, b| b.updated_at_secs.cmp(&a.updated_at_secs));
+  metas.sort_by_key(|m| std::cmp::Reverse(m.updated_at_secs));
   metas
 }
 
@@ -1760,11 +1760,11 @@ fn upsert_tool_call_pure(
     outputs,
   };
   populate_syntax_spans(&mut view);
-  if let Some(&idx) = index.get(&call.tool_call_id) {
-    if let Some(ChatItem::Tool(existing)) = items.get_mut(idx) {
-      *existing = view;
-      return;
-    }
+  if let Some(&idx) = index.get(&call.tool_call_id)
+    && let Some(ChatItem::Tool(existing)) = items.get_mut(idx)
+  {
+    *existing = view;
+    return;
   }
   let idx = items.len();
   index.insert(call.tool_call_id, idx);
@@ -1938,12 +1938,11 @@ fn tool_detail_label(t: &ToolCallView) -> String {
     };
   }
   let kind = tool_kind_label(&t.kind);
-  let stripped = t
-    .title
+
+  t.title
     .strip_prefix(kind)
     .map(|s| s.trim_start().to_string())
-    .unwrap_or_else(|| t.title.clone());
-  stripped
+    .unwrap_or_else(|| t.title.clone())
 }
 
 pub(crate) fn strip_markdown_code_fence(text: &str) -> &str {

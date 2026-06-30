@@ -79,7 +79,7 @@ impl SettingsPage {
   pub fn new(window: &mut Window, cx: &mut Context<Self>, settings: PersistedSettings) -> Self {
     let view = cx.entity();
     let shortcut_capture_subscription = cx.intercept_keystrokes(move |event, window, cx| {
-      let _ = view.update(cx, |view, cx| {
+      view.update(cx, |view, cx| {
         view.handle_shortcut_capture(event, window, cx);
       });
     });

@@ -225,9 +225,10 @@ impl MarkdownRenderState {
   }
 
   pub fn with_selection_registry(registry: selectable_text::SelectionRegistry) -> Self {
-    let mut state = Self::default();
-    state.selection_registry = registry;
-    state
+    Self {
+      selection_registry: registry,
+      ..Self::default()
+    }
   }
 }
 

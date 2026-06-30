@@ -46,6 +46,12 @@ impl Drop for PendingGuard {
   }
 }
 
+impl Default for SyntaxHighlightCache {
+  fn default() -> Self {
+    Self::new()
+  }
+}
+
 impl SyntaxHighlightCache {
   pub fn new() -> Self {
     Self {

@@ -3,17 +3,12 @@ use std::{
   sync::{Arc, Mutex},
 };
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub enum SelectionMode {
+  #[default]
   Character,
   Word,
   Line,
-}
-
-impl Default for SelectionMode {
-  fn default() -> Self {
-    Self::Character
-  }
 }
 
 #[derive(Clone, Debug)]

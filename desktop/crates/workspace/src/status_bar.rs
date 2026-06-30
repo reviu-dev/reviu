@@ -129,10 +129,10 @@ mod macos {
       let status_bar = NSStatusBar::systemStatusBar();
       let item = status_bar.statusItemWithLength(NSVariableStatusItemLength);
 
-      if let Some(button) = item.button(mtm) {
-        if let Some(icon) = load_template_icon(icon_png) {
-          button.setImage(Some(&icon));
-        }
+      if let Some(button) = item.button(mtm)
+        && let Some(icon) = load_template_icon(icon_png)
+      {
+        button.setImage(Some(&icon));
       }
 
       let menu = NSMenu::new(mtm);

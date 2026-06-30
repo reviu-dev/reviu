@@ -3155,7 +3155,7 @@ impl GitPage {
     let api = self.api.clone();
     cx.spawn(async move |_, cx| {
       let result = unblock(move || api.fetch_github_notifications()).await;
-      let _ = cx.update(|cx| {
+      cx.update(|cx| {
         if let Ok(notifications) = result {
           let unread = notifications.iter().filter(|n| n.unread).count();
           NotificationCountStore::set(cx, unread);
@@ -4920,9 +4920,7 @@ impl GitPage {
           .filter(|branch| match branch.kind {
             BranchKind::Local => current_branch_name
               .as_ref()
-              .map_or(true, |current_branch_name| {
-                branch.name != *current_branch_name
-              }),
+              .is_none_or(|current_branch_name| branch.name != *current_branch_name),
             BranchKind::Remote => true,
           })
           .map(|branch| CommandPaletteBranch {
@@ -6900,11 +6898,7 @@ impl GitPage {
       let Some(line) = document.line_content(line_ix) else {
         continue;
       };
-      lines.push(
-        line
-          .trim_end_matches(|ch| ch == '\r' || ch == '\n')
-          .to_string(),
-      );
+      lines.push(line.trim_end_matches(['\r', '\n']).to_string());
     }
 
     if lines.is_empty() {
@@ -7139,11 +7133,9 @@ impl GitPage {
       let document = document.read(cx);
       (0..document.len_lines())
         .filter_map(|line_ix| {
-          document.line_content(line_ix).map(|line| {
-            line
-              .trim_end_matches(|ch| ch == '\r' || ch == '\n')
-              .to_string()
-          })
+          document
+            .line_content(line_ix)
+            .map(|line| line.trim_end_matches(['\r', '\n']).to_string())
         })
         .collect::<Vec<_>>()
     };
@@ -9730,7 +9722,7 @@ impl GitPage {
       selected_entry.as_ref().map(|entry| entry.status)
     };
     let annotation_navigation =
-      Self::annotation_navigation_state_for(file_status, &editor_state, cx);
+      Self::annotation_navigation_state_for(file_status, editor_state, cx);
     let can_navigate_annotations = Self::can_navigate_annotations(annotation_navigation);
     let show_accept_all_conflict_actions = matches!(file_status, Some(RepoStatusKind::Conflicted));
     let can_accept_all_conflicts = Self::can_accept_all_conflicts(

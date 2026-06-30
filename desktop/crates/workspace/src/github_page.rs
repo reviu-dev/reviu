@@ -544,7 +544,7 @@ impl GithubRepositoryListDelegate {
       .cloned()
       .collect();
 
-    rows.sort_by(|a, b| b.pinned.cmp(&a.pinned));
+    rows.sort_by_key(|r| std::cmp::Reverse(r.pinned));
     self.matched_rows = rows;
   }
 

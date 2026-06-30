@@ -244,7 +244,7 @@ where
                           .label(option.emoji.clone())
                           .tooltip(option.label.clone())
                           .on_click(move |_, window, cx| {
-                            let _ = popover.update(cx, |popover, cx| {
+                            popover.update(cx, |popover, cx| {
                               popover.dismiss(window, cx);
                             });
                             if let Some(on_toggle) = on_toggle.as_ref() {

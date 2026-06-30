@@ -607,9 +607,9 @@ impl Element for GutterElement {
             }),
           };
 
-          let stripe_color = if is_active_hunk_line && conflict_kind.is_none() {
-            Some(active_hunk_focus_color)
-          } else if is_active_conflict_line && conflict_kind.is_some() {
+          let stripe_color = if (is_active_hunk_line && conflict_kind.is_none())
+            || (is_active_conflict_line && conflict_kind.is_some())
+          {
             Some(active_hunk_focus_color)
           } else {
             base_stripe_color

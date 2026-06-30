@@ -739,7 +739,7 @@ async fn run_driver(
               .map(|o| PermissionPromptOption {
                 option_id: o.option_id.0.to_string(),
                 label: o.name.clone(),
-                kind: o.kind.clone(),
+                kind: o.kind,
               })
               .collect(),
           };

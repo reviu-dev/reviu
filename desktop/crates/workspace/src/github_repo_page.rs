@@ -1041,11 +1041,11 @@ fn build_branch_dropdown_items(
   names.sort();
   names.dedup();
 
-  if let Some(selected) = selected_branch.map(str::trim).filter(|s| !s.is_empty()) {
-    if !names.iter().any(|n| n == selected) {
-      names.push(selected.to_string());
-      names.sort();
-    }
+  if let Some(selected) = selected_branch.map(str::trim).filter(|s| !s.is_empty())
+    && !names.iter().any(|n| n == selected)
+  {
+    names.push(selected.to_string());
+    names.sort();
   }
 
   names
@@ -4289,19 +4289,16 @@ impl GithubRepoPage {
     window: &mut Window,
     cx: &mut Context<Self>,
   ) {
-    match event {
-      InputEvent::PressEnter { .. } => {
-        let value = state.read(cx).value().trim().to_string();
-        if !value.is_empty() {
-          self.add_issue_filter_token(kind, value);
-          state.update(cx, |state, cx| {
-            state.set_value("", window, cx);
-          });
-          self.reset_issue_pages();
-          self.refresh_issues(cx);
-        }
+    if let InputEvent::PressEnter { .. } = event {
+      let value = state.read(cx).value().trim().to_string();
+      if !value.is_empty() {
+        self.add_issue_filter_token(kind, value);
+        state.update(cx, |state, cx| {
+          state.set_value("", window, cx);
+        });
+        self.reset_issue_pages();
+        self.refresh_issues(cx);
       }
-      _ => {}
     }
   }
 
@@ -5070,11 +5067,11 @@ impl GithubRepoPage {
 
       let _ = this.update(cx, |this, cx| {
         this.star_task = None;
-        if let Ok(star_result) = result {
-          if let Some(repository) = this.repository.as_mut() {
-            repository.viewer_has_starred = star_result.viewer_has_starred;
-            repository.stargazers_count = star_result.stargazers_count;
-          }
+        if let Ok(star_result) = result
+          && let Some(repository) = this.repository.as_mut()
+        {
+          repository.viewer_has_starred = star_result.viewer_has_starred;
+          repository.stargazers_count = star_result.stargazers_count;
         }
         cx.notify();
       });
@@ -5555,7 +5552,6 @@ impl GithubRepoPage {
           state.focus(window, cx);
         });
       });
-      return;
     }
   }
 

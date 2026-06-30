@@ -230,7 +230,7 @@ fn main() {
   shell_env::load();
 
   let app_profile = AppProfile::current();
-  let startup_deeplink_url = startup_deeplink_url(app_profile);
+  let _startup_deeplink_url = startup_deeplink_url(app_profile);
 
   // On Linux, the .desktop file launches a new process for deeplinks.
   // If an instance is already running, forward the URL via Unix socket and exit.
@@ -387,7 +387,7 @@ fn main() {
         if !pending_open_github_urls.is_empty() {
           let auth_known = cx.update(|cx| AuthStateStore::is_known(cx));
           if auth_known {
-            let urls: Vec<String> = pending_open_github_urls.drain(..).collect();
+            let urls: Vec<String> = std::mem::take(&mut pending_open_github_urls);
             cx.update(|cx| {
               for github_url in urls {
                 handle_open_github_url(&github_url, cx);
@@ -566,13 +566,13 @@ fn extract_open_url_for_scheme(url: &str, scheme: &str) -> Option<String> {
     return None;
   }
   for pair in query.split('&') {
-    if let Some(value) = pair.strip_prefix("url=") {
-      if !value.is_empty() {
-        let decoded = percent_encoding::percent_decode_str(value)
-          .decode_utf8()
-          .ok()?;
-        return Some(decoded.into_owned());
-      }
+    if let Some(value) = pair.strip_prefix("url=")
+      && !value.is_empty()
+    {
+      let decoded = percent_encoding::percent_decode_str(value)
+        .decode_utf8()
+        .ok()?;
+      return Some(decoded.into_owned());
     }
   }
   None

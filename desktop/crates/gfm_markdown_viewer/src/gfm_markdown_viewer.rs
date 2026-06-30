@@ -989,12 +989,11 @@ fn highlight_full_text(text: &str, language_hint: Option<&str>) -> Arc<Vec<Inlin
   let cache_key = preview_highlight_cache_key(language_hint, text);
 
   // Check cache.
-  if let Ok(guard) = PREVIEW_HIGHLIGHT_CACHE.lock() {
-    if let Some(cache) = guard.as_ref() {
-      if let Some(cached) = cache.get(cache_key) {
-        return cached.clone();
-      }
-    }
+  if let Ok(guard) = PREVIEW_HIGHLIGHT_CACHE.lock()
+    && let Some(cache) = guard.as_ref()
+    && let Some(cached) = cache.get(cache_key)
+  {
+    return cached.clone();
   }
 
   let spans = code_block_language_config(language_hint)
@@ -1431,15 +1430,15 @@ fn render_block(
       // Build children, stripping the alert marker from the first paragraph
       let rendered_children = if let Some((_, remaining_first_text)) = &alert {
         let mut modified_children = children.clone();
-        if let Some(Block::Paragraph(inlines)) = modified_children.first_mut() {
-          if let Some(Inline::Text(text)) = inlines.first_mut() {
-            *text = remaining_first_text.clone();
-            if text.is_empty() {
+        if let Some(Block::Paragraph(inlines)) = modified_children.first_mut()
+          && let Some(Inline::Text(text)) = inlines.first_mut()
+        {
+          *text = remaining_first_text.clone();
+          if text.is_empty() {
+            inlines.remove(0);
+            // Also remove leading SoftBreak if present
+            if matches!(inlines.first(), Some(Inline::SoftBreak)) {
               inlines.remove(0);
-              // Also remove leading SoftBreak if present
-              if matches!(inlines.first(), Some(Inline::SoftBreak)) {
-                inlines.remove(0);
-              }
             }
           }
         }
@@ -2654,10 +2653,10 @@ fn build_code_block_spans(
   syntax_cache: Option<&Arc<crate::syntax_cache::SyntaxHighlightCache>>,
 ) -> (SharedString, Vec<InlineSpan>, Vec<LinkRange>) {
   // Check cache first — returns highlighted spans if previously computed
-  if let Some(cache) = syntax_cache {
-    if let Some(cached) = cache.get(code) {
-      return cached;
-    }
+  if let Some(cache) = syntax_cache
+    && let Some(cached) = cache.get(code)
+  {
+    return cached;
   }
 
   let display_value = code_block_display_value(code);
@@ -2673,19 +2672,19 @@ fn build_code_block_spans(
   }
 
   // If we have a cache, schedule async highlight and return plain spans now
-  if let Some(cache) = syntax_cache {
-    if code_block_language_config(code.lang.as_deref()).is_some() {
-      cache.schedule_highlight(code, &display_value);
-      // Return plain (uncolored) spans — will be replaced on next render after background completes
-      let plain_spans = vec![InlineSpan {
-        range: 0..text_len,
-        style: base_style,
-        link: None,
-        syntax_token: None,
-        background: None,
-      }];
-      return (text, plain_spans, Vec::new());
-    }
+  if let Some(cache) = syntax_cache
+    && code_block_language_config(code.lang.as_deref()).is_some()
+  {
+    cache.schedule_highlight(code, &display_value);
+    // Return plain (uncolored) spans — will be replaced on next render after background completes
+    let plain_spans = vec![InlineSpan {
+      range: 0..text_len,
+      style: base_style,
+      link: None,
+      syntax_token: None,
+      background: None,
+    }];
+    return (text, plain_spans, Vec::new());
   }
 
   // No cache — synchronous highlight (fallback for preview cards etc.)

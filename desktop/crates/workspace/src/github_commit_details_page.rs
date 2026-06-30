@@ -483,7 +483,7 @@ impl GithubCommitDetailsPage {
 
     self.selected_file = selected.clone();
     self.selected_tree_id = selected.as_ref().map(|file| file.path.to_string());
-    if selected.as_ref().map_or(true, |file| {
+    if selected.as_ref().is_none_or(|file| {
       let path = Path::new(file.path.as_ref());
       !is_markdown_path(path) && !is_svg_path(path)
     }) {
@@ -641,10 +641,8 @@ impl GithubCommitDetailsPage {
         };
 
         let contents = GithubCommitFileContents { base, head };
-        if is_selected_file {
-          if let Some(file) = this.selected_file.clone() {
-            this.apply_full_diff(&file, &contents, cx);
-          }
+        if is_selected_file && let Some(file) = this.selected_file.clone() {
+          this.apply_full_diff(&file, &contents, cx);
         }
         this.file_contents.insert(key_for_task, contents);
         cx.notify();

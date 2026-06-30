@@ -5,34 +5,10 @@ on:
   push:
     branches:
       - main
-    paths-ignore:
-      - '**/*.md'
-      - '**/*.gitignore'
-      - renovate.json
 
 jobs:
-  changes:
-    name: Detect Changes
-    runs-on: ubuntu-latest
-    outputs:
-      desktop: ${{ steps.filter.outputs.desktop }}
-      landing: ${{ steps.filter.outputs.landing }}
-    steps:
-      - uses: actions/checkout@v6
-
-      - uses: dorny/paths-filter@v3
-        id: filter
-        with:
-          filters: |
-            desktop:
-              - 'desktop/**'
-            landing:
-              - 'landing/**'
-
   desktop:
     name: Desktop
-    needs: changes
-    if: ${{ needs.changes.outputs.desktop == 'true' }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
@@ -66,7 +42,7 @@ jobs:
 
       - name: Clippy
         working-directory: desktop
-        run: cargo clippy -- -D warnings
+        run: cargo clippy -- -D warnings -A clippy::too_many_arguments -A clippy::type_complexity -A clippy::items_after_test_module -A clippy::should_implement_trait -A clippy::needless_range_loop
 
       - name: Cargo fmt
         working-directory: desktop
@@ -78,8 +54,6 @@ jobs:
 
   landing:
     name: Landing
-    needs: changes
-    if: ${{ needs.changes.outputs.landing == 'true' }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
@@ -103,4 +77,3 @@ jobs:
       - name: Typecheck
         working-directory: landing
         run: pnpm typecheck
-

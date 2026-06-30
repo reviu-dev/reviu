@@ -2765,7 +2765,7 @@ impl Editor {
         .line_content(doc_line)
         .map(|cow| cow.into_owned())
         .unwrap_or_default();
-      let trimmed = line_content.trim_end_matches(|c: char| c == '\n' || c == '\r');
+      let trimmed = line_content.trim_end_matches(['\n', '\r']);
       lines.push(trimmed.to_string());
     }
     lines
@@ -2796,7 +2796,7 @@ impl Editor {
     if original_lines.is_empty() {
       return None;
     }
-    let start_line = (draft.start_line.unwrap_or(draft.line) as usize).saturating_add(1);
+    let start_line = draft.start_line.unwrap_or(draft.line).saturating_add(1);
     Some(gfm_markdown_viewer::SuggestionContext {
       original_start_line: Some(start_line),
       suggested_start_line: Some(start_line),
@@ -7819,13 +7819,10 @@ impl Editor {
         .and_then(|line| self.doc_to_display_line(line))
       {
         prev
-      } else if let Some(next) = projection
-        .next_visible_doc_line(doc_line)
-        .and_then(|line| self.doc_to_display_line(line))
-      {
-        next
       } else {
-        return None;
+        projection
+          .next_visible_doc_line(doc_line)
+          .and_then(|line| self.doc_to_display_line(line))?
       }
     } else {
       doc_line
@@ -8455,10 +8452,9 @@ impl Render for Editor {
     };
     if previous_editor_line_height_px > 0.0
       && (line_height_px - previous_editor_line_height_px).abs() > 0.05
+      && self.diffs.is_some()
     {
-      if self.diffs.is_some() {
-        self.rebuild_projection(cx);
-      }
+      self.rebuild_projection(cx);
     }
     let wrap_columns = self.computed_review_comment_wrap_columns();
     if wrap_columns != self.review_comment_wrap_columns {

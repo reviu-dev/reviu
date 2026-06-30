@@ -1166,7 +1166,7 @@ impl Element for EditorElement {
         &viewport_lines,
         self.diff_view,
         projection.as_deref(),
-        &document,
+        document,
         &theme,
       )
     };

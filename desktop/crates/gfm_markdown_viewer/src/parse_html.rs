@@ -160,12 +160,12 @@ pub(crate) fn extract_summary(inner: &str) -> (Option<String>, String) {
 }
 
 pub(crate) fn summary_inlines_from_text(summary_text: &str) -> Vec<Inline> {
-  if summary_text.contains('<') {
-    if let Some(nodes) = parse_html_fragment_nodes(summary_text) {
-      let inlines = html_nodes_to_inlines(&nodes);
-      if !inlines.is_empty() {
-        return inlines;
-      }
+  if summary_text.contains('<')
+    && let Some(nodes) = parse_html_fragment_nodes(summary_text)
+  {
+    let inlines = html_nodes_to_inlines(&nodes);
+    if !inlines.is_empty() {
+      return inlines;
     }
   }
 

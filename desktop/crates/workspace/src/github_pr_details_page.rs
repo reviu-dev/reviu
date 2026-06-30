@@ -950,17 +950,17 @@ fn reviewer_status_for_login(
     };
     match review.state {
       GithubPullRequestReviewState::Approved => {
-        if latest_approved.map_or(true, |ts| submitted_at > ts) {
+        if latest_approved.is_none_or(|ts| submitted_at > ts) {
           latest_approved = Some(submitted_at);
         }
       }
       GithubPullRequestReviewState::RequestChanges => {
-        if latest_changes.map_or(true, |ts| submitted_at > ts) {
+        if latest_changes.is_none_or(|ts| submitted_at > ts) {
           latest_changes = Some(submitted_at);
         }
       }
       GithubPullRequestReviewState::Commented => {
-        if latest_comment.map_or(true, |ts| submitted_at > ts) {
+        if latest_comment.is_none_or(|ts| submitted_at > ts) {
           latest_comment = Some(submitted_at);
         }
       }
@@ -1446,7 +1446,7 @@ fn overview_check_rows(checks: &GithubPullRequestChecksSummary) -> Vec<OverviewC
   for check in &checks.other_checks {
     let title = non_empty_owned(&check.name).unwrap_or_else(|| "Check run".to_string());
     let finished_at = (check.state != GithubPullRequestChecksRollupState::Pending)
-      .then(|| check.completed_at.as_deref())
+      .then_some(check.completed_at.as_deref())
       .flatten();
 
     rows.push(OverviewCheckRow {
@@ -1558,22 +1558,22 @@ fn overview_review_status_info(
   author_login: &str,
 ) -> Option<OverviewReviewStatusInfo> {
   // Branch protection explicitly blocks the merge for review requirements.
-  if let Some(readiness) = merge_readiness {
-    if matches!(
+  if let Some(readiness) = merge_readiness
+    && matches!(
       readiness.status,
       GithubPullRequestMergeReadinessStatus::Blocked
-    ) {
-      let state = readiness
-        .mergeable_state
-        .as_deref()
-        .map(str::trim)
-        .map(str::to_ascii_lowercase);
-      if !matches!(state.as_deref(), Some("dirty") | Some("behind")) {
-        return Some(OverviewReviewStatusInfo {
-          title: "Review required",
-          message: readiness.message.clone(),
-        });
-      }
+    )
+  {
+    let state = readiness
+      .mergeable_state
+      .as_deref()
+      .map(str::trim)
+      .map(str::to_ascii_lowercase);
+    if !matches!(state.as_deref(), Some("dirty") | Some("behind")) {
+      return Some(OverviewReviewStatusInfo {
+        title: "Review required",
+        message: readiness.message.clone(),
+      });
     }
   }
 
@@ -4515,10 +4515,7 @@ impl GithubPrDetailsPage {
       return;
     };
 
-    let method_available = readiness
-      .available_methods
-      .iter()
-      .any(|method| *method == self.merge_method);
+    let method_available = readiness.available_methods.contains(&self.merge_method);
 
     if !method_available {
       self.merge_method = readiness
@@ -4544,8 +4541,7 @@ impl GithubPrDetailsPage {
     self.merge_readiness.as_ref().and_then(|readiness| {
       readiness
         .available_methods
-        .iter()
-        .any(|method| *method == self.merge_method)
+        .contains(&self.merge_method)
         .then_some(self.merge_method)
     })
   }
@@ -4838,10 +4834,10 @@ impl GithubPrDetailsPage {
     conversation: GithubPullRequestConversation,
     cx: &mut Context<Self>,
   ) {
-    if let Some(pull_request) = self.pull_request.as_mut() {
-      if pull_request.node_id == conversation.pull_request.node_id {
-        pull_request.reactions = conversation.pull_request.reactions;
-      }
+    if let Some(pull_request) = self.pull_request.as_mut()
+      && pull_request.node_id == conversation.pull_request.node_id
+    {
+      pull_request.reactions = conversation.pull_request.reactions;
     }
     self.issue_comments = conversation.issue_comments;
     self.reviews = conversation.reviews;
@@ -7314,11 +7310,11 @@ impl GithubPrDetailsPage {
             this.reset_review_form(window, cx);
             this.refocus_page_shortcuts(window, cx);
             upsert_review_local(&mut this.reviews, review);
-            if let Some(pr) = this.pull_request.as_mut() {
-              if let Some(login) = Self::current_github_login(cx) {
-                pr.requested_reviewers
-                  .retain(|r| !r.login.eq_ignore_ascii_case(&login));
-              }
+            if let Some(pr) = this.pull_request.as_mut()
+              && let Some(login) = Self::current_github_login(cx)
+            {
+              pr.requested_reviewers
+                .retain(|r| !r.login.eq_ignore_ascii_case(&login));
             }
             this.refresh_pull_request_conversation_for_current_pull_request(false, cx);
             this.add_pr_breadcrumb("Submit PR review succeeded", Map::new());
@@ -7469,8 +7465,8 @@ impl GithubPrDetailsPage {
             })
             .unwrap_or_default();
           if let Some(mut ctx) = suggestion_context {
-            if ctx.path.as_ref().is_empty() {
-              if let Some(path) = view
+            if ctx.path.as_ref().is_empty()
+              && let Some(path) = view
                 .update(cx, |this, _| {
                   this
                     .selected_file
@@ -7479,9 +7475,8 @@ impl GithubPrDetailsPage {
                 })
                 .ok()
                 .flatten()
-              {
-                ctx.path = path;
-              }
+            {
+              ctx.path = path;
             }
             options = options.with_suggestion_context(ctx);
           }
@@ -8045,11 +8040,11 @@ impl GithubPrDetailsPage {
             } else {
               this.review_comments.push(created_comment);
             }
-            if let Some(pr) = this.pull_request.as_mut() {
-              if let Some(login) = Self::current_github_login(cx) {
-                pr.requested_reviewers
-                  .retain(|r| !r.login.eq_ignore_ascii_case(&login));
-              }
+            if let Some(pr) = this.pull_request.as_mut()
+              && let Some(login) = Self::current_github_login(cx)
+            {
+              pr.requested_reviewers
+                .retain(|r| !r.login.eq_ignore_ascii_case(&login));
             }
             this.review_comments_error = None;
             this.sync_review_comments(cx);
@@ -8214,11 +8209,11 @@ impl GithubPrDetailsPage {
     reactions: Vec<GithubReactionGroup>,
     cx: &mut Context<Self>,
   ) -> bool {
-    if let Some(pull_request) = self.pull_request.as_mut() {
-      if pull_request.node_id == subject_id {
-        pull_request.reactions = reactions;
-        return true;
-      }
+    if let Some(pull_request) = self.pull_request.as_mut()
+      && pull_request.node_id == subject_id
+    {
+      pull_request.reactions = reactions;
+      return true;
     }
 
     if let Some(comment) = self
@@ -9466,34 +9461,33 @@ impl GithubPrDetailsPage {
   fn toggle_hide_whitespace(&mut self, cx: &mut Context<Self>) {
     self.hide_whitespace = !self.hide_whitespace;
     // Recompute diff without resetting scroll or selection
-    if let Some(path) = self.current_selected_tree_path() {
-      if let Some(file) = self.file_lookup.get(&path).cloned() {
-        if let Some(contents) = self.file_contents.get(&path).cloned() {
-          let head = contents.head.as_deref().unwrap_or("");
-          let base = contents.base.as_deref();
-          if let Ok(diff) = compute_buffer_diff(
-            DiffKind::Uncommitted,
-            base,
-            head,
-            Path::new(file.path.as_ref()),
-            self.hide_whitespace,
-          ) {
-            let diff_set = Some(DiffSet {
-              uncommitted: diff,
-              unstaged: FileDiff {
-                kind: DiffKind::Unstaged,
-                hunks: Vec::new(),
-              },
-              staged: FileDiff {
-                kind: DiffKind::Staged,
-                hunks: Vec::new(),
-              },
-            });
-            self.diff_editor.update(cx, |editor, cx| {
-              editor.set_diffs(diff_set, cx);
-            });
-          }
-        }
+    if let Some(path) = self.current_selected_tree_path()
+      && let Some(file) = self.file_lookup.get(&path).cloned()
+      && let Some(contents) = self.file_contents.get(&path).cloned()
+    {
+      let head = contents.head.as_deref().unwrap_or("");
+      let base = contents.base.as_deref();
+      if let Ok(diff) = compute_buffer_diff(
+        DiffKind::Uncommitted,
+        base,
+        head,
+        Path::new(file.path.as_ref()),
+        self.hide_whitespace,
+      ) {
+        let diff_set = Some(DiffSet {
+          uncommitted: diff,
+          unstaged: FileDiff {
+            kind: DiffKind::Unstaged,
+            hunks: Vec::new(),
+          },
+          staged: FileDiff {
+            kind: DiffKind::Staged,
+            hunks: Vec::new(),
+          },
+        });
+        self.diff_editor.update(cx, |editor, cx| {
+          editor.set_diffs(diff_set, cx);
+        });
       }
     }
     cx.notify();
@@ -11003,9 +10997,7 @@ impl GithubPrDetailsPage {
   }
 
   fn render_pr_header_tools(&mut self, cx: &mut Context<Self>) -> Option<AnyElement> {
-    if self.pull_request.is_none() {
-      return None;
-    }
+    self.pull_request.as_ref()?;
     let theme = cx.theme().clone();
     let show_file_search = self.active_tab_ix == PR_TAB_CHANGES_IX;
     let show_local_project_controls =
@@ -13201,16 +13193,14 @@ impl GithubPrDetailsPage {
       } else {
         Some(div().into_any_element())
       }
-    } else if let Some(body) = &item.body {
-      Some(
+    } else {
+      item.body.as_ref().map(|body| {
         div()
           .w_full()
           .min_w_0()
           .child(render_markdown(body.as_str(), &markdown_options, cx))
-          .into_any_element(),
-      )
-    } else {
-      None
+          .into_any_element()
+      })
     };
 
     // Reply composer for root
@@ -14455,14 +14445,14 @@ impl GithubPrDetailsPage {
                   .w(px(260.0))
                   .gap_2()
                   .when(!pr.labels.is_empty(), |this| {
-                    this.child(h_flex().gap_1().flex_wrap().children(
-                      pr.labels.iter().cloned().map(|label| {
+                    this.child(h_flex().gap_1().flex_wrap().children(pr.labels.iter().map(
+                      |label| {
                         let page = pr_page.clone();
                         let label_name = label.name.clone();
                         h_flex()
                           .items_center()
                           .gap_1()
-                          .child(github_shared::github_label_tag(&label, &theme))
+                          .child(github_shared::github_label_tag(label, &theme))
                           .child(
                             Button::new(format!("pr-label-remove-{}", label_name))
                               .ghost()
@@ -14476,8 +14466,8 @@ impl GithubPrDetailsPage {
                                 });
                               }),
                           )
-                      }),
-                    ))
+                      },
+                    )))
                   })
                   .child(
                     Input::new(&self.label_input)
@@ -14485,21 +14475,24 @@ impl GithubPrDetailsPage {
                       .disabled(!can_edit_labels || self.label_options_loading),
                   )
                   .when(!label_suggestions.is_empty(), |this| {
-                    this.child(h_flex().gap_1().flex_wrap().children(
-                      label_suggestions.iter().cloned().map(|label| {
-                        let page = pr_page.clone();
-                        let label_name = label.name.clone();
-                        Button::new(format!("pr-label-suggestion-{}", label.name))
-                          .label(label.name.clone())
-                          .xsmall()
-                          .outline()
-                          .on_click(move |_, window, cx| {
-                            page.update(cx, |this, cx| {
-                              this.add_label_value(&label_name, window, cx);
-                            });
-                          })
-                      }),
-                    ))
+                    this.child(
+                      h_flex()
+                        .gap_1()
+                        .flex_wrap()
+                        .children(label_suggestions.iter().map(|label| {
+                          let page = pr_page.clone();
+                          let label_name = label.name.clone();
+                          Button::new(format!("pr-label-suggestion-{}", label.name))
+                            .label(label.name.clone())
+                            .xsmall()
+                            .outline()
+                            .on_click(move |_, window, cx| {
+                              page.update(cx, |this, cx| {
+                                this.add_label_value(&label_name, window, cx);
+                              });
+                            })
+                        })),
+                    )
                   }),
               )
           };
@@ -14587,7 +14580,7 @@ impl GithubPrDetailsPage {
               .gap_2()
               .when(!pr.requested_reviewers.is_empty(), |this| {
                 this.child(h_flex().gap_1().flex_wrap().children(
-                  pr.requested_reviewers.iter().cloned().map(|user| {
+                  pr.requested_reviewers.iter().map(|user| {
                     let page = pr_page.clone();
                     let login = user.login.clone();
                     h_flex()
@@ -14644,32 +14637,34 @@ impl GithubPrDetailsPage {
               }),
           );
 
-        let assignees_popover =
-          Popover::new("pr-assignees-popover")
-            .anchor(Corner::TopRight)
-            .open(self.assignee_popover_open)
-            .on_open_change(cx.listener(|this, open, _window, cx| {
-              this.assignee_popover_open = *open;
-              if *open {
-                this.people_mutation_error = None;
-              }
-              cx.notify();
-            }))
-            .trigger(
-              Button::new("pr-assignees-edit")
-                .ghost()
-                .xsmall()
-                .compact()
-                .icon(UiIconName::SquarePen)
-                .disabled(!can_edit_people),
-            )
-            .child(
-              v_flex()
-                .w(px(260.0))
-                .gap_2()
-                .when(!pr.assignees.is_empty(), |this| {
-                  this.child(h_flex().gap_1().flex_wrap().children(
-                    pr.assignees.iter().cloned().map(|user| {
+        let assignees_popover = Popover::new("pr-assignees-popover")
+          .anchor(Corner::TopRight)
+          .open(self.assignee_popover_open)
+          .on_open_change(cx.listener(|this, open, _window, cx| {
+            this.assignee_popover_open = *open;
+            if *open {
+              this.people_mutation_error = None;
+            }
+            cx.notify();
+          }))
+          .trigger(
+            Button::new("pr-assignees-edit")
+              .ghost()
+              .xsmall()
+              .compact()
+              .icon(UiIconName::SquarePen)
+              .disabled(!can_edit_people),
+          )
+          .child(
+            v_flex()
+              .w(px(260.0))
+              .gap_2()
+              .when(!pr.assignees.is_empty(), |this| {
+                this.child(
+                  h_flex()
+                    .gap_1()
+                    .flex_wrap()
+                    .children(pr.assignees.iter().map(|user| {
                       let page = pr_page.clone();
                       let login = user.login.clone();
                       h_flex()
@@ -14697,34 +14692,34 @@ impl GithubPrDetailsPage {
                               });
                             }),
                         )
-                    }),
-                  ))
-                })
-                .child(
-                  Input::new(&self.assignee_input)
-                    .w_full()
-                    .disabled(!can_edit_people || self.review_people_options_loading),
+                    })),
                 )
-                .when(!assignee_suggestions.is_empty(), |this| {
-                  this.child(h_flex().gap_1().flex_wrap().children(
-                    assignee_suggestions.into_iter().map(|assignee| {
-                      Button::new(format!("pr-assignee-suggestion-{}", assignee.login))
-                        .label(assignee.login.clone())
-                        .xsmall()
-                        .outline()
-                        .on_click({
-                          let page = pr_page.clone();
-                          let login = assignee.login.clone();
-                          move |_, window, cx| {
-                            page.update(cx, |this, cx| {
-                              this.add_assignee_value(&login, window, cx);
-                            });
-                          }
-                        })
-                    }),
-                  ))
-                }),
-            );
+              })
+              .child(
+                Input::new(&self.assignee_input)
+                  .w_full()
+                  .disabled(!can_edit_people || self.review_people_options_loading),
+              )
+              .when(!assignee_suggestions.is_empty(), |this| {
+                this.child(h_flex().gap_1().flex_wrap().children(
+                  assignee_suggestions.into_iter().map(|assignee| {
+                    Button::new(format!("pr-assignee-suggestion-{}", assignee.login))
+                      .label(assignee.login.clone())
+                      .xsmall()
+                      .outline()
+                      .on_click({
+                        let page = pr_page.clone();
+                        let login = assignee.login.clone();
+                        move |_, window, cx| {
+                          page.update(cx, |this, cx| {
+                            this.add_assignee_value(&login, window, cx);
+                          });
+                        }
+                      })
+                  }),
+                ))
+              }),
+          );
 
         let merged_reviewers = merged_reviewers(
           &pr.requested_reviewers,

@@ -101,7 +101,7 @@ impl DispatcherState {
 thread_local! {
   /// Rebuilt each frame as scroll-aware nodes paint themselves. Innermost
   /// nodes end up at the back of the vec (depth-first paint order).
-  static REGISTRY: RefCell<Vec<ScrollNode>> = RefCell::new(Vec::new());
+  static REGISTRY: RefCell<Vec<ScrollNode>> = const { RefCell::new(Vec::new()) };
   static DISPATCHER: Cell<DispatcherState> = const { Cell::new(DispatcherState::empty()) };
 }
 

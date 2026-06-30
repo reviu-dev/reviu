@@ -186,7 +186,7 @@ pub struct TerminalCursorSnapshot {
   pub shape: CursorShape,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Default)]
 pub struct ScreenSnapshot {
   pub rows: usize,
   pub cols: usize,
@@ -197,22 +197,6 @@ pub struct ScreenSnapshot {
   pub title: Option<String>,
   pub mode: TermMode,
   pub exit_status: Option<String>,
-}
-
-impl Default for ScreenSnapshot {
-  fn default() -> Self {
-    Self {
-      rows: 0,
-      cols: 0,
-      display_offset: 0,
-      colors: Colors::default(),
-      cells: Vec::new(),
-      cursor: None,
-      title: None,
-      mode: TermMode::default(),
-      exit_status: None,
-    }
-  }
 }
 
 #[derive(Default)]
@@ -257,10 +241,8 @@ impl TerminalListener {
 impl EventListener for TerminalListener {
   fn send_event(&self, event: Event) {
     match &event {
-      Event::PtyWrite(text) => {
-        if self.write_to_pty(text.as_bytes().to_vec()) {
-          return;
-        }
+      Event::PtyWrite(text) if self.write_to_pty(text.as_bytes().to_vec()) => {
+        return;
       }
       Event::TextAreaSizeRequest(formatter) => {
         let response = formatter(*self.window_size.lock());

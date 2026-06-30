@@ -17,7 +17,7 @@ static ENABLED: OnceLock<bool> = OnceLock::new();
 
 fn is_enabled() -> bool {
   *ENABLED.get_or_init(|| {
-    if std::env::var("REVIU_LOG").map_or(false, |v| matches!(v.as_str(), "1" | "true")) {
+    if std::env::var("REVIU_LOG").is_ok_and(|v| matches!(v.as_str(), "1" | "true")) {
       return true;
     }
     AppProfile::current().is_dev()
@@ -55,10 +55,10 @@ pub fn log(message: &str) {
   }
 
   // Truncate if the file is too large.
-  if let Ok(meta) = fs::metadata(&path) {
-    if meta.len() > MAX_LOG_SIZE {
-      let _ = fs::remove_file(&path);
-    }
+  if let Ok(meta) = fs::metadata(&path)
+    && meta.len() > MAX_LOG_SIZE
+  {
+    let _ = fs::remove_file(&path);
   }
 
   let timestamp = SystemTime::now()

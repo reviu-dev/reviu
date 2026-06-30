@@ -71,7 +71,7 @@ impl TerminalView {
         let Some(this) = this.upgrade() else {
           break;
         };
-        let _ = this.update(cx, |this, cx| this.poll_session(cx));
+        this.update(cx, |this, cx| this.poll_session(cx));
       }
     });
 

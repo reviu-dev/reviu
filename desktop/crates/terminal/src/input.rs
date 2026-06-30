@@ -24,14 +24,14 @@ pub fn encode_key_down(event: &KeyDownEvent, mode: TermMode) -> Option<String> {
     return Some(sequence);
   }
 
-  if modifiers.control {
-    if let Some(sequence) = encode_control_key(keystroke.key.as_str()) {
-      return Some(if modifiers.alt {
-        format!("\u{1b}{sequence}")
-      } else {
-        sequence
-      });
-    }
+  if modifiers.control
+    && let Some(sequence) = encode_control_key(keystroke.key.as_str())
+  {
+    return Some(if modifiers.alt {
+      format!("\u{1b}{sequence}")
+    } else {
+      sequence
+    });
   }
 
   keystroke
