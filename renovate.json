@@ -1,0 +1,37 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "mode": "full",
+  "extends": [
+    "config:recommended",
+    "helpers:pinGitHubActionDigests"
+  ],
+  "rangeStrategy": "bump",
+  "platformAutomerge": true,
+  "minimumReleaseAge": "3 days",
+  "postUpdateOptions": ["pnpmDedupe"],
+  "lockFileMaintenance": { "enabled": true },
+  "ignorePaths": ["desktop/vendor/**"],
+  "packageRules": [
+    {
+      "matchUpdateTypes": ["minor", "patch"],
+      "automerge": true
+    },
+    {
+      "matchManagers": ["github-actions"],
+      "automerge": true
+    },
+    {
+      "description": "gpui/zed git deps drive the vendored GPL strip (sum_tree). Review manually, never automerge.",
+      "matchManagers": ["cargo"],
+      "matchPackageNames": [
+        "gpui",
+        "gpui_platform",
+        "reqwest_client",
+        "gpui-component",
+        "gpui-component-assets",
+        "gpui-router"
+      ],
+      "automerge": false
+    }
+  ]
+}
