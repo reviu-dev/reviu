@@ -1,0 +1,18 @@
+# Third-Party Notices
+
+The Reviu desktop application bundles third-party open-source software. The
+licenses below apply to the dependencies linked into the shipped binary.
+
+{{#each licenses}}
+## {{name}}
+
+Used by:
+{{#each used_by}}
+- {{crate.name}} {{crate.version}}
+{{/each}}
+
+```
+{{{text}}}
+```
+
+{{/each}}

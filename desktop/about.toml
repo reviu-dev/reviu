@@ -1,0 +1,28 @@
+# cargo-about config: generate THIRD-PARTY-NOTICES for the shipped desktop binary.
+# Accepted set mirrors deny.toml (GPL/AGPL excluded; ztracing/zlog stripped via vendor/sum_tree).
+accepted = [
+    "MIT",
+    "MIT-0",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "Zlib",
+    "Unicode-3.0",
+    "Unlicense",
+    "0BSD",
+    "CC0-1.0",
+    "CDLA-Permissive-2.0",
+    "MPL-2.0",
+    "NCSA",
+    "bzip2-1.0.6",
+]
+
+# Build- and dev-only deps don't ship in the binary, so they need no attribution.
+ignore-build-dependencies = true
+ignore-dev-dependencies = true
+
+[private]
+# Skip our own publish = false crates.
+ignore = true
