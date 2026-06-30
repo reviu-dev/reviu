@@ -1,5 +1,6 @@
+#[cfg(not(target_os = "windows"))]
+use std::ffi::OsString;
 use std::{
-  ffi::OsString,
   fs::{self, File},
   io::Read,
   path::{Path, PathBuf},
@@ -246,11 +247,11 @@ pub fn download_update_artifact(update: &AvailableAppUpdate) -> Result<ReadyToIn
     let restart_binary_path = current_linux_install_layout()
       .ok()
       .map(|layout| layout.restart_binary_path);
-    return Ok(ReadyToInstallAppUpdate {
+    Ok(ReadyToInstallAppUpdate {
       update: update.clone(),
       artifact_path,
       restart_binary_path,
-    });
+    })
   }
 
   #[cfg(not(target_os = "linux"))]

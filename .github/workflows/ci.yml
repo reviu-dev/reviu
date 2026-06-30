@@ -55,6 +55,13 @@ jobs:
         working-directory: desktop
         run: cargo fmt -- --check
 
+      # Tests shell out to `git`, which refuses to commit without an identity.
+      - name: Configure git identity
+        if: runner.os != 'Windows'
+        run: |
+          git config --global user.email "ci@reviu.dev"
+          git config --global user.name "Reviu CI"
+
       # Tests assume Unix-style paths; skip Windows.
       - name: Cargo test
         if: runner.os != 'Windows'
