@@ -1,15 +1,25 @@
 # Reviu
 
-Desktop Git client with a keyboard-first workflow.  
-`Free`: local Git. `Reviu Pro`: GitHub integration.
+A keyboard-first desktop Git client, built in Rust with [GPUI](https://gpui.rs).
+Review your AI agent's code before you push, then take it to merge.
 
-## Monorepo
+- **Free**: local Git workflow + a built-in agent panel (Claude and Codex).
+- **Reviu Pro**: in-app GitHub integration (notifications, pull request review,
+  issues, merge actions). `$9/month` or `$79/year`.
 
-- `desktop/`: Rust + GPUI app
-- `backend/`: Hono API + Better Auth + Polar billing
-- `landing/`: Astro + Vue marketing site
+Download builds at [reviu.dev](https://reviu.dev).
 
-## Run locally
+## Repository layout
+
+- `desktop/`: the Rust + GPUI desktop app (this is the client).
+- `landing/`: the Astro marketing site ([reviu.dev](https://reviu.dev)).
+- `extension/`: browser extension for GitHub repos, PRs, and issues.
+
+The GitHub-integration backend (the service powering Reviu Pro) is closed-source
+and lives in a separate private repository. The Free features (local Git and the
+agent panel) run fully without it.
+
+## Build from source
 
 ### Desktop
 
@@ -17,32 +27,24 @@ Desktop Git client with a keyboard-first workflow.
 cd desktop && cargo run
 ```
 
-#### With Sentry
-
-```sh
-cd desktop && SENTRY_ENABLE_DEV=1 cargo run
-```
+Release build:
 
 ```sh
 cd desktop && cargo run --release -p reviu
 ```
 
-`SENTRY_ENABLE_DEV` is only read in debug builds
-
-### Backend
-
-Requirements: Node and pnpm
+With Sentry enabled in a debug build (off by default; `SENTRY_ENABLE_DEV` is only
+read in debug builds):
 
 ```sh
-cd backend
-nvm use
-pnpm install
-pnpm dev
+cd desktop && SENTRY_ENABLE_DEV=1 cargo run
 ```
 
-Required env vars are validated in `backend/src/lib/env.ts`.
+See [`desktop/README.md`](desktop/README.md) for build/release details.
 
 ### Landing
+
+Requires Node 26 and pnpm 11.
 
 ```sh
 cd landing
@@ -50,8 +52,12 @@ pnpm install
 pnpm dev
 ```
 
-## Useful docs
+## License
 
-- [Product/features summary](APP_FEATURES.md)
-- [Agent/dev map](AGENTS.md)
-- [Desktop build/release details](desktop/README.md)
+Source-available under [FSL-1.1-ALv2](LICENSE) (Functional Source License, Apache 2.0
+future license): use, modify and redistribute freely for any non-competing purpose;
+each version converts to Apache-2.0 two years after its release.
+
+## Security
+
+See [SECURITY.md](SECURITY.md) to report a vulnerability.
