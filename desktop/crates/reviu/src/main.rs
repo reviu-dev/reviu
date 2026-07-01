@@ -274,9 +274,7 @@ fn main() {
   let _guard = sentry::init(sentry::ClientOptions {
     dsn,
     release: resolved_sentry_release(),
-    // Capture user IPs and potentially sensitive headers when using HTTP server integrations
-    // see https://docs.sentry.io/platforms/rust/data-management/data-collected for more info
-    send_default_pii: true,
+    send_default_pii: false,
     attach_stacktrace: true,
     max_breadcrumbs: 300,
     traces_sample_rate,
