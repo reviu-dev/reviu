@@ -2,3 +2,4 @@
 .osgrep
 dist
 .env
+.playwright-mcp

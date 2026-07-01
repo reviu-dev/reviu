@@ -71,8 +71,11 @@ Good claims:
 - Reviu Pro is for GitHub notifications, repositories, pull request reviews, issues, and browser-to-desktop shortcuts.
 - Reviu is keyboard-first and built for fast diff and review workflows.
 - Reviu supports macOS, Windows, and Linux.
+- Reviu's desktop client is source-available on GitHub at https://github.com/reviu-dev/reviu under FSL-1.1 (Functional Source License), and each release converts to Apache-2.0 two years after it ships.
 
 Avoid these claims:
+
+- Do not call Reviu "open source" without qualification. It is source-available under FSL-1.1; the GitHub-integration backend is closed-source.
 
 - Do not claim Reviu has AI review, AI code generation, AI suggested changes, or automated code-fix features.
 - The AI pull request brief is allowed: it summarizes a PR and points to files to review first, risks, and blockers, using the user's own OpenAI or Anthropic API key.

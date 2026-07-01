@@ -41,6 +41,11 @@ const faqItems: { question: string; answer: string }[] = [
       'No. Reviu is a fully native desktop app built with <a href="https://gpui.rs" target="_blank" rel="noopener noreferrer" class="text-primary underline hover:text-primary/80">gpui.rs</a>, a Rust-based GPU-accelerated UI framework. No Electron, no webview - just native performance.',
   },
   {
+    question: "Is Reviu open source?",
+    answer:
+      'Reviu is source-available. The full desktop client lives in a public <a href="https://github.com/reviu-dev/reviu" target="_blank" rel="noopener noreferrer" class="text-primary underline hover:text-primary/80">GitHub repository</a> under the Functional Source License (FSL-1.1), and each release converts to Apache-2.0 two years after it ships. You can read, build, and modify it for any non-competing use. The GitHub-integration backend that powers Reviu Pro stays closed-source.',
+  },
+  {
     question: "Do I need an account to use Reviu?",
     answer:
       "No. All local Git features work without an account, signing in is only required for GitHub integration in Reviu Pro.",
@@ -60,6 +65,7 @@ const structuredData = [
     applicationCategory: "DeveloperApplication",
     operatingSystem: "macOS, Linux, Windows",
     url: "https://reviu.dev/",
+    sameAs: ["https://github.com/reviu-dev/reviu"],
     description,
     offers: [
       {
