@@ -1,0 +1,12 @@
+node_modules
+dist
+.astro
+.env
+.env.*
+!.env.example
+*.log
+.DS_Store
+.git
+.gitignore
+Dockerfile
+.dockerignore

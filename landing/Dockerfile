@@ -2,9 +2,12 @@ FROM node:26-alpine AS build
 
 WORKDIR /app
 
+# pnpm runs its pre-script deps check non-interactively; without this it aborts on no TTY.
+ENV CI=true
+
 RUN npm i -g corepack@latest && corepack enable
 
-COPY package.json pnpm-lock.yaml ./
+COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
 
 RUN pnpm install --frozen-lockfile
 
