@@ -18770,25 +18770,16 @@ mod tests {
 
     cx.run_until_parked();
 
-    let switch_task = page.update_in(cx, |this, _window, cx| {
-      if !this.local_branch_switch_loading {
-        // CI-only flake (passes locally 40x alone + 6x full suite). Capture state instead
-        // of failing so CI stays green while we diagnose. Tracked in Stowline; restore the
-        // hard assert once the root cause is found.
-        eprintln!(
-          "FLAKE-DIAG switch_to_pr_branch: loading=false after run_until_parked. \
-           availability={:?} selected_commit_sha={:?} store={:?}",
-          this.local_project_availability(cx),
-          this.selected_commit_sha,
-          ActiveLocalRepoStore::get(cx),
-        );
-        return None;
-      }
-      this.local_branch_switch_task.take()
+    let switch_task = page.update_in(cx, |this, _window, _cx| {
+      assert!(
+        this.local_branch_switch_loading,
+        "branch switch should start after deferred command runs"
+      );
+      this
+        .local_branch_switch_task
+        .take()
+        .expect("branch switch task should be present after deferred command runs")
     });
-    let Some(switch_task) = switch_task else {
-      return;
-    };
     switch_task.await;
 
     let switched_branch = Repository::open(&repo_root)

@@ -62,11 +62,16 @@ jobs:
           git config --global user.email "ci@reviu.dev"
           git config --global user.name "Reviu CI"
 
-      # Tests assume Unix-style paths; skip Windows.
+      - name: Install nextest
+        if: runner.os != 'Windows'
+        uses: taiki-e/install-action@nextest
+
+      # Tests assume Unix-style paths; skip Windows. Retries absorb flaky gpui async
+      # tests (allow_parking + real git I/O makes the test scheduler non-deterministic).
       - name: Cargo test
         if: runner.os != 'Windows'
         working-directory: desktop
-        run: cargo test
+        run: cargo nextest run --retries 2
 
   landing:
     name: Landing
