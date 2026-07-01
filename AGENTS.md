@@ -13,6 +13,8 @@
 - `landing/`: Astro marketing site.
 - `extension/`: browser extension.
 
+The GitHub-integration backend (Reviu Pro) is closed-source in a separate private repo and is not part of this tree. Only the desktop-side API client (`api.rs`) lives here.
+
 ## Feature -> code map
 
 - App entry + global keybindings:
@@ -27,17 +29,12 @@
   - `desktop/crates/ui/src/command_palette.rs`
 - GitHub home (notifications + latest PRs):
   - `desktop/crates/workspace/src/github_page.rs`
-  - `backend/src/routes/github.ts` (`/notifications`, `/pr/latest`)
 - GitHub repo details (Overview, Readme, Code, PRs, Issues, branch select):
   - `desktop/crates/workspace/src/github_repo_page.rs`
-  - `backend/src/routes/github.ts` (`/repos/:owner/:repo*`)
 - GitHub PR details and review (inline/split diff, comment create/edit/reply/delete):
   - `desktop/crates/workspace/src/github_pr_details_page.rs`
-  - `backend/src/routes/github.ts` (`/pr/:id*`)
-- Desktop API client/backend contract:
+- Desktop API client (talks to the GitHub-integration backend):
   - `desktop/crates/workspace/src/api.rs`
-  - `backend/src/routes/github.ts`
-  - `backend/src/services/github.ts`
 - Markdown/GFM rendering:
   - `desktop/crates/gfm_markdown_viewer/src/gfm_markdown_viewer.rs`
 
