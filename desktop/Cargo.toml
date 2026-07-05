@@ -35,7 +35,7 @@ gpui-component-assets = { git = "https://github.com/longbridge/gpui-component", 
 reqwest_client = { git = "https://github.com/zed-industries/zed", package = "reqwest_client" }
 unicode-segmentation = "1.12"
 ropey = "1.6"
-dirs = "5.0"
+dirs = "5.0.1"
 tree-sitter-highlight = "0.25"
 tree-sitter = "0.25"
 tree-sitter-astro-next = "0.1.1"
