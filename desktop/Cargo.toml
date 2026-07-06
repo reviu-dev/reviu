@@ -82,7 +82,7 @@ git2 = { version = "0.20.1", features = [
   "vendored-libgit2",
   "vendored-openssl",
 ] }
-parking_lot = "0.12"
+parking_lot = "0.12.5"
 smol = "2.0"
 time = { version = "0.3", features = ["formatting", "macros", "parsing"] }
 blake3 = "1.8.5"
