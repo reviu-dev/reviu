@@ -2,6 +2,12 @@
 
 All notable changes to Reviu are documented here.
 
+## 0.17.0
+
+### Consistent Interface Font On Linux And Windows
+
+Reviu now ships with its interface font, so the app looks the same on every platform. Previously the interface only picked up the intended font on macOS and fell back to a typewriter-style monospace font on Linux and Windows; text throughout the app now renders in a clean proportional font, with code and diffs in the bundled monospace font.
+
 ## 0.16.0
 
 ### Generate Commit Messages With AI

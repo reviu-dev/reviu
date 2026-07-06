@@ -313,6 +313,16 @@ fn main() {
   app.run(move |cx: &mut App| {
     gpui_component::init(cx);
     ui::init(cx);
+    // gpui-component defaults the UI font to `.SystemUIFont`, which only
+    // resolves on macOS; elsewhere it falls back to a monospace face. Point
+    // the theme at the fonts we bundle (see ui::init) so Linux and Windows
+    // render with the same proportional/monospace pair as macOS.
+    #[cfg(not(target_os = "macos"))]
+    {
+      let theme = gpui_component::Theme::global_mut(cx);
+      theme.font_family = "Inter".into();
+      theme.mono_font_family = "Lilex".into();
+    }
     let http_client = ReqwestClient::user_agent("reviu").expect("Failed to create HTTP client");
     cx.set_http_client(Arc::new(http_client));
 

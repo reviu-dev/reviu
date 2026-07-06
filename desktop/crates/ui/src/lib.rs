@@ -85,12 +85,30 @@ pub fn init(cx: &mut gpui::App) {
   load_bundled_fonts(cx);
 }
 
+/// Fonts shipped inside the app binary and registered at startup.
+///
+/// Lilex is the monospace face used for code and diffs. Inter is the
+/// proportional UI face: macOS resolves `.SystemUIFont` natively, but Linux
+/// and Windows have no such family and fall back to a monospace face, so we
+/// ship Inter and point the theme at it (see reviu's `main.rs`).
+const BUNDLED_FONTS: &[&str] = &[
+  "fonts/lilex/Lilex-Regular.ttf",
+  "fonts/inter/Inter-Regular.otf",
+  "fonts/inter/Inter-Italic.otf",
+  "fonts/inter/Inter-Medium.otf",
+  "fonts/inter/Inter-MediumItalic.otf",
+  "fonts/inter/Inter-SemiBold.otf",
+  "fonts/inter/Inter-SemiBoldItalic.otf",
+  "fonts/inter/Inter-Bold.otf",
+  "fonts/inter/Inter-BoldItalic.otf",
+];
+
 fn load_bundled_fonts(cx: &mut gpui::App) {
   use gpui::AssetSource as _;
 
   let assets = AppAssets;
   let mut fonts = Vec::new();
-  for path in ["fonts/lilex/Lilex-Regular.ttf"] {
+  for &path in BUNDLED_FONTS {
     match assets.load(path) {
       Ok(Some(data)) => {
         eprintln!("ui: loaded bundled font {path} ({} bytes)", data.len());
@@ -138,4 +156,39 @@ unsafe extern "C" {
     font: *mut core_graphics::sys::CGFont,
     error: *mut core_foundation::error::CFErrorRef,
   ) -> bool;
+}
+
+#[cfg(test)]
+mod tests {
+  use gpui::AssetSource as _;
+
+  use super::{AppAssets, BUNDLED_FONTS};
+
+  /// Every font we point the theme at must actually be embedded in the
+  /// binary. If one goes missing, the UI silently falls back to a monospace
+  /// face on Linux/Windows (the bug this bundling fixes), so guard it here.
+  #[test]
+  fn bundled_fonts_are_embedded() {
+    for &path in BUNDLED_FONTS {
+      let data = AppAssets
+        .load(path)
+        .unwrap_or_else(|err| panic!("loading bundled font {path} failed: {err}"))
+        .unwrap_or_else(|| panic!("bundled font {path} is not embedded in the binary"));
+      assert!(!data.is_empty(), "bundled font {path} is empty");
+    }
+  }
+
+  /// The theme's fonts must be represented in the bundle so the interface and
+  /// code/diff views render deterministically off macOS.
+  #[test]
+  fn bundle_covers_ui_and_mono_fonts() {
+    assert!(
+      BUNDLED_FONTS.iter().any(|p| p.contains("Inter")),
+      "no bundled Inter (UI) font"
+    );
+    assert!(
+      BUNDLED_FONTS.iter().any(|p| p.contains("Lilex")),
+      "no bundled Lilex (mono) font"
+    );
+  }
 }
