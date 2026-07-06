@@ -1,6 +1,5 @@
 ---
 import "../styles/global.css";
-import gitLight from "../assets/app_screenshots/git_light.png";
 
 interface StructuredData {
   [key: string]: unknown;
@@ -25,7 +24,7 @@ const {
   title = defaultTitle,
   description = defaultDescription,
   pathname = Astro.url.pathname,
-  image = gitLight,
+  image = "/og.png",
   robots = "index,follow",
   type = "website",
   structuredData = [],
@@ -70,7 +69,7 @@ const isProd = import.meta.env.MODE === "production";
     <meta property="og:image" content={imageUrl} />
     <meta
       property="og:image:alt"
-      content="Screenshot of the Reviu desktop Git client."
+      content="Reviu - review your agent's code before you push."
     />
     <meta name="twitter:card" content="summary_large_image" />
     <meta name="twitter:title" content={pageTitle} />
