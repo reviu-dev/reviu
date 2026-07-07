@@ -15375,6 +15375,7 @@ impl GithubPrDetailsPage {
                     .flex_1()
                     .overflow_hidden()
                     .text_ellipsis()
+                    .text_sm()
                     .child(item.label.clone()),
                 )
                 .when(comment_count > 0, |this| {
@@ -15584,6 +15585,8 @@ impl GithubPrDetailsPage {
       .border_color(theme.border)
       .child(
         h_flex()
+          .min_w_0()
+          .flex_1()
           .items_center()
           .gap_2()
           .child(
@@ -15600,34 +15603,36 @@ impl GithubPrDetailsPage {
               .flex_1()
               .items_center()
               .gap_1()
-              .when_some(old_file_name.clone(), |this, old_name| {
-                this
-                  .child(
-                    div()
-                      .min_w_0()
-                      .overflow_hidden()
-                      .text_ellipsis_start()
-                      .text_color(theme.muted_foreground)
-                      .line_through()
-                      .child(old_name),
-                  )
-                  .child(
-                    Icon::new(IconName::ArrowRight)
-                      .size_3()
-                      .text_color(theme.muted_foreground),
-                  )
-              })
-              .child({
-                let mut label = Label::new(file_name);
-                if !dir_path.is_empty() && old_file_name.is_none() {
-                  label = label.secondary(format!("- {}", dir_path));
-                }
-                label.truncate()
-              })
-              .when(old_file_name.is_some() && !dir_path.is_empty(), |this| {
+              .text_sm()
+              .child(
+                h_flex()
+                  .min_w_0()
+                  .items_center()
+                  .gap_1()
+                  .when_some(old_file_name.clone(), |this, old_name| {
+                    this
+                      .child(
+                        div()
+                          .min_w_0()
+                          .overflow_hidden()
+                          .text_ellipsis_start()
+                          .text_color(theme.muted_foreground)
+                          .line_through()
+                          .child(old_name),
+                      )
+                      .child(
+                        Icon::new(IconName::ArrowRight)
+                          .size_3()
+                          .text_color(theme.muted_foreground),
+                      )
+                  })
+                  .child(Label::new(file_name).truncate()),
+              )
+              .when(!dir_path.is_empty(), |this| {
                 this.child(
                   div()
                     .min_w_0()
+                    .flex_1()
                     .overflow_hidden()
                     .text_ellipsis_start()
                     .text_color(theme.muted_foreground)
@@ -15638,6 +15643,7 @@ impl GithubPrDetailsPage {
       )
       .child(
         h_flex()
+          .flex_shrink_0()
           .items_center()
           .gap_2()
           .when_some(hunk_navigation, |this, state| {

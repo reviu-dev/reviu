@@ -1239,6 +1239,7 @@ impl GithubCommitDetailsPage {
                     .flex_1()
                     .overflow_hidden()
                     .text_ellipsis()
+                    .text_sm()
                     .child(item.label.clone()),
                 ),
             );
@@ -1366,9 +1367,10 @@ impl GithubCommitDetailsPage {
       .border_color(theme.border)
       .child(
         h_flex()
+          .min_w_0()
+          .flex_1()
           .items_center()
           .gap_2()
-          .min_w_0()
           .child(
             div()
               .text_xs()
@@ -1377,16 +1379,36 @@ impl GithubCommitDetailsPage {
               .child(status_letter),
           )
           .child(icon)
-          .child({
-            let mut label = Label::new(file_name);
-            if !dir_path.is_empty() {
-              label = label.secondary(format!("- {dir_path}"));
-            }
-            label.truncate()
-          }),
+          .child(
+            h_flex()
+              .min_w_0()
+              .flex_1()
+              .items_center()
+              .gap_1()
+              .text_sm()
+              .child(
+                h_flex()
+                  .min_w_0()
+                  .items_center()
+                  .gap_1()
+                  .child(Label::new(file_name).truncate()),
+              )
+              .when(!dir_path.is_empty(), |this| {
+                this.child(
+                  div()
+                    .min_w_0()
+                    .flex_1()
+                    .overflow_hidden()
+                    .text_ellipsis_start()
+                    .text_color(theme.muted_foreground)
+                    .child(format!("- {dir_path}")),
+                )
+              }),
+          ),
       )
       .child(
         h_flex()
+          .flex_shrink_0()
           .items_center()
           .gap_2()
           .child(whitespace_button)

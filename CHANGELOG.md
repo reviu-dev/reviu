@@ -8,6 +8,10 @@ All notable changes to Reviu are documented here.
 
 Reviu now ships with its interface font, so the app looks the same on every platform. Previously the interface only picked up the intended font on macOS and fell back to a typewriter-style monospace font on Linux and Windows; text throughout the app now renders in a clean proportional font, with code and diffs in the bundled monospace font.
 
+### Long File Paths Keep The Diff Toolbar In View
+
+When a file has a long name or deep path, diff and file headers now keep their controls (whitespace, split/inline, preview) pinned and reachable instead of pushing them off the edge. The folder path truncates from the start so the most specific part stays visible. File names in the change lists and headers across the Git, pull request, commit, and repository views also render at a consistent, more compact size.
+
 ## 0.16.0
 
 ### Generate Commit Messages With AI

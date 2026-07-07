@@ -936,6 +936,7 @@ fn render_git_path_label(
     .min_w_0()
     .overflow_hidden()
     .gap_0()
+    .text_sm()
     .when(line_through, |this| this.line_through())
     .child(
       div()
@@ -994,6 +995,7 @@ fn render_repo_status_label(
       .min_w_0()
       .flex_1()
       .items_center()
+      .text_sm()
       .gap_1()
       .child(
         div()
@@ -1024,6 +1026,7 @@ fn render_repo_status_label(
     .min_w_0()
     .flex_1()
     .overflow_hidden()
+    .text_sm()
     .text_ellipsis_start()
     .when(status == Some(RepoStatusKind::Deleted), |this| {
       this.line_through()
