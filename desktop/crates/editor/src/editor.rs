@@ -10307,6 +10307,7 @@ pub mod tests {
           is_outdated: false,
           viewer_can_resolve: false,
           viewer_can_unresolve: false,
+          is_pending: false,
         }],
         cx,
       );
@@ -10441,6 +10442,7 @@ pub mod tests {
             is_outdated: false,
             viewer_can_resolve: false,
             viewer_can_unresolve: false,
+            is_pending: false,
           },
           ReviewComment {
             id: 2,
@@ -10458,6 +10460,7 @@ pub mod tests {
             is_outdated: false,
             viewer_can_resolve: false,
             viewer_can_unresolve: false,
+            is_pending: false,
           },
           ReviewComment {
             id: 3,
@@ -10475,6 +10478,7 @@ pub mod tests {
             is_outdated: false,
             viewer_can_resolve: false,
             viewer_can_unresolve: false,
+            is_pending: false,
           },
         ],
         cx,
@@ -10503,6 +10507,7 @@ pub mod tests {
             is_outdated: false,
             viewer_can_resolve: false,
             viewer_can_unresolve: false,
+            is_pending: false,
           },
           ReviewComment {
             id: 2,
@@ -10520,6 +10525,7 @@ pub mod tests {
             is_outdated: false,
             viewer_can_resolve: false,
             viewer_can_unresolve: false,
+            is_pending: false,
           },
           ReviewComment {
             id: 3,
@@ -10537,6 +10543,7 @@ pub mod tests {
             is_outdated: false,
             viewer_can_resolve: false,
             viewer_can_unresolve: false,
+            is_pending: false,
           },
         ],
         cx,

@@ -1671,6 +1671,7 @@ mod tests {
       is_outdated: false,
       viewer_can_resolve: false,
       viewer_can_unresolve: false,
+      is_pending: false,
     }
   }
 
