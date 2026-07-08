@@ -356,6 +356,27 @@ jobs:
           fi
           bash ./desktop/scripts/merge-release-manifests.sh "${VERSION}" "${manifests[@]}"
 
+      - name: Build release notes from CHANGELOG
+        id: notes
+        shell: bash
+        run: |
+          set -euo pipefail
+          notes_file="release-notes.md"
+          # Extract the section for this version: lines between "## <version>" and the next "## ".
+          awk -v heading="## ${VERSION}" '
+            $0 == heading { capture = 1; next }
+            /^## / { if (capture) exit }
+            capture { print }
+          ' CHANGELOG.md | sed '/./,$!d' > "${notes_file}"
+          if [[ -s "${notes_file}" ]]; then
+            echo "Using CHANGELOG.md section for ${VERSION}:"
+            cat "${notes_file}"
+            echo "have_notes=true" >> "${GITHUB_OUTPUT}"
+          else
+            echo "No CHANGELOG.md section for ${VERSION}; falling back to generated notes."
+            echo "have_notes=false" >> "${GITHUB_OUTPUT}"
+          fi
+
       - name: Create draft release
         shell: bash
         run: |
@@ -368,6 +389,12 @@ jobs:
           echo "Release assets:"
           printf '  - %s\n' "${assets[@]}"
 
+          if [[ "${{ steps.notes.outputs.have_notes }}" == "true" ]]; then
+            notes_args=(--notes-file release-notes.md)
+          else
+            notes_args=(--generate-notes)
+          fi
+
           # Re-runnable: replace an existing *draft* for this tag; never touch a published release.
           if [[ "$(gh release view "${TAG}" --json isDraft -q .isDraft 2>/dev/null)" == "true" ]]; then
             gh release delete "${TAG}" --yes --cleanup-tag
@@ -376,7 +403,7 @@ jobs:
           gh release create "${TAG}" \
             --draft \
             --target "${{ github.event.workflow_run.head_sha }}" \
-            --title "${TAG}" \
-            --generate-notes \
+            --title "Reviu ${TAG}" \
+            "${notes_args[@]}" \
             "${assets[@]}" \
             dist/release/desktop-update.manifest.json
