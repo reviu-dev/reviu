@@ -216,6 +216,13 @@ enum ReviewCommentBodySegment {
   Preview(ReviewCommentCodeReferencePreview),
 }
 
+/// Whether a new review comment posts immediately or joins the viewer's pending review.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ReviewCommentMode {
+  SingleComment,
+  PendingReview,
+}
+
 #[derive(Clone, Debug)]
 pub struct ReviewCommentCreateRequest {
   pub line: usize,
@@ -224,6 +231,7 @@ pub struct ReviewCommentCreateRequest {
   pub start_side: Option<ReviewCommentSide>,
   pub in_reply_to_id: Option<u64>,
   pub body: Arc<str>,
+  pub mode: ReviewCommentMode,
 }
 
 fn next_review_comment_body(raw_value: &str, initial_value: &str) -> Option<Arc<str>> {
@@ -562,6 +570,7 @@ pub struct Editor {
   review_comment_create_handler: Option<ReviewCommentCreateHandler>,
   review_comment_cancel_handler: Option<ReviewCommentCancelHandler>,
   review_comment_replies_enabled: bool,
+  has_pending_review: bool,
   review_comment_link_handler: Option<ReviewCommentLinkHandler>,
   review_comment_asset_url_resolver: Option<ReviewCommentAssetUrlResolver>,
   review_comment_image_upload_handler: Option<ReviewCommentImageUploadHandler>,
@@ -657,6 +666,7 @@ struct ReviewCommentMessageLayout {
   is_outdated: bool,
   viewer_can_resolve: bool,
   viewer_can_unresolve: bool,
+  is_pending: bool,
 }
 
 #[derive(Clone)]
@@ -987,6 +997,7 @@ impl Editor {
       review_comment_create_handler: None,
       review_comment_cancel_handler: None,
       review_comment_replies_enabled: true,
+      has_pending_review: false,
       review_comment_link_handler: None,
       review_comment_asset_url_resolver: None,
       review_comment_image_upload_handler: None,
@@ -1784,6 +1795,14 @@ impl Editor {
     cx.notify();
   }
 
+  pub fn set_has_pending_review(&mut self, has_pending_review: bool, cx: &mut Context<Self>) {
+    if self.has_pending_review == has_pending_review {
+      return;
+    }
+    self.has_pending_review = has_pending_review;
+    cx.notify();
+  }
+
   pub fn set_review_comment_display_mode(
     &mut self,
     mode: ReviewCommentDisplayMode,
@@ -2245,7 +2264,7 @@ impl Editor {
       |editor, state, event: &InputEvent, window, cx| {
         if let InputEvent::PressEnter { secondary: true } = event {
           Self::trim_review_comment_input_trailing_newline(state, window, cx);
-          editor.save_review_comment_create(window, cx);
+          editor.save_review_comment_create(ReviewCommentMode::SingleComment, window, cx);
         }
       },
     )
@@ -2426,6 +2445,7 @@ impl Editor {
         start_side: None,
         in_reply_to_id: Some(in_reply_to_id),
         body,
+        mode: ReviewCommentMode::SingleComment,
       },
       window,
       cx,
@@ -2705,7 +2725,12 @@ impl Editor {
     }
   }
 
-  fn save_review_comment_create(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+  fn save_review_comment_create(
+    &mut self,
+    mode: ReviewCommentMode,
+    window: &mut Window,
+    cx: &mut Context<Self>,
+  ) {
     if self.review_comment_create_drag_active
       || self.review_comment_create_submitting
       || self.review_comment_reply_submitting
@@ -2738,6 +2763,7 @@ impl Editor {
         start_side: draft.start_side,
         in_reply_to_id: None,
         body,
+        mode,
       },
       window,
       cx,
@@ -3607,6 +3633,7 @@ impl Editor {
           is_outdated: comment.is_outdated,
           viewer_can_resolve: comment.viewer_can_resolve,
           viewer_can_unresolve: comment.viewer_can_unresolve,
+          is_pending: comment.is_pending,
         });
       }
 
@@ -3678,6 +3705,7 @@ impl Editor {
           is_outdated: comment.is_outdated,
           viewer_can_resolve: comment.viewer_can_resolve,
           viewer_can_unresolve: comment.viewer_can_unresolve,
+          is_pending: comment.is_pending,
         }],
         collapsed: self.collapsed_review_comments.contains(&comment.id),
       });
@@ -4034,19 +4062,12 @@ impl Editor {
             )
           })
           .when(first_message.is_outdated, |this| {
-            this
-              .child(
-                div()
-                  .text_xs()
-                  .text_color(theme.muted_foreground)
-                  .child("•"),
-              )
-              .child(
-                div()
-                  .text_xs()
-                  .text_color(theme.status_orange())
-                  .child("Outdated"),
-              )
+            this.child(
+              ui::StatusTag::new(theme.status_orange())
+                .outline()
+                .small()
+                .child("Outdated"),
+            )
           })
       } else {
         h_flex()
@@ -4102,6 +4123,14 @@ impl Editor {
           h_flex()
             .items_center()
             .gap_1()
+            .when(first_message.is_pending, |this| {
+              this.child(
+                ui::StatusTag::new(theme.status_yellow())
+                  .outline()
+                  .small()
+                  .child("Pending"),
+              )
+            })
             .when_some(first_message_resolve_button, |this, button| {
               this.child(button)
             })
@@ -4772,8 +4801,10 @@ impl Editor {
       let composer_card = if let Some(input_state) = self.review_comment_create_input.clone() {
         let cancel_editor = editor_entity.clone();
         let save_editor = editor_entity.clone();
+        let review_editor = editor_entity.clone();
         let suggest_editor = editor_entity.clone();
         let can_save = self.review_comment_create_handler.is_some();
+        let has_pending_review = self.has_pending_review;
         let can_suggest = self.can_insert_review_comment_suggestion(cx);
         let is_create_submitting = self.review_comment_create_submitting;
         let create_error = self.review_comment_create_error.clone();
@@ -4909,14 +4940,46 @@ impl Editor {
                             })
                             .child(
                               Button::new("review-comment-create-save")
+                                .ghost()
                                 .xsmall()
                                 .compact()
-                                .label("Save")
+                                .label("Add single comment")
                                 .disabled(!can_save || is_create_submitting)
                                 .on_click(move |_, window, cx| {
                                   cx.stop_propagation();
                                   save_editor.update(cx, |editor, cx| {
-                                    editor.save_review_comment_create(window, cx);
+                                    editor.save_review_comment_create(
+                                      ReviewCommentMode::SingleComment,
+                                      window,
+                                      cx,
+                                    );
+                                  });
+                                }),
+                            ),
+                        )
+                        .child(
+                          div()
+                            .on_mouse_down(MouseButton::Left, |_, _, cx| {
+                              cx.stop_propagation();
+                            })
+                            .child(
+                              Button::new("review-comment-create-start-review")
+                                .xsmall()
+                                .compact()
+                                .label(if has_pending_review {
+                                  "Add review comment"
+                                } else {
+                                  "Start a review"
+                                })
+                                .disabled(!can_save || is_create_submitting)
+                                .on_click(move |_, window, cx| {
+                                  cx.stop_propagation();
+                                  review_editor.update(cx, |editor, cx| {
+                                    editor.save_review_comment_create(
+                                      ReviewCommentMode::PendingReview,
+                                      window,
+                                      cx,
+                                    );
                                   });
                                 }),
                             ),
@@ -5358,6 +5421,7 @@ impl Editor {
         is_outdated: false,
         viewer_can_resolve: false,
         viewer_can_unresolve: false,
+        is_pending: false,
       });
       review_comment_body_heights_px.insert(
         REVIEW_COMMENT_CREATE_DRAFT_COMMENT_ID,
@@ -5381,6 +5445,7 @@ impl Editor {
         is_outdated: false,
         viewer_can_resolve: false,
         viewer_can_unresolve: false,
+        is_pending: false,
       });
       review_comment_body_heights_px.insert(
         REVIEW_COMMENT_REPLY_DRAFT_COMMENT_ID,
@@ -9683,6 +9748,7 @@ pub mod tests {
           review_comment_create_handler: None,
           review_comment_cancel_handler: None,
           review_comment_replies_enabled: true,
+          has_pending_review: false,
           review_comment_link_handler: None,
           review_comment_asset_url_resolver: None,
           review_comment_image_upload_handler: None,

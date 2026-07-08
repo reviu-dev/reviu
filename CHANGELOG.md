@@ -4,6 +4,10 @@ All notable changes to Reviu are documented here.
 
 ## 0.17.0
 
+### Stack Review Comments Before Submitting
+
+Review a pull request the way GitHub does: start a review and stack several comments as drafts instead of posting each one the moment you write it. Every inline comment now offers "Add single comment" (posts immediately, as before) or "Start a review" (holds it as a pending draft, marked "Pending"). Drafts stay private until you submit the review as Approve, Request changes, or Comment, and they sync with github.com, so a review you began in the browser shows up in Reviu and vice versa. You can edit, delete, and reply to drafts before submitting, and the submit dialog shows how many pending comments will be published.
+
 ### Consistent Interface Font On Linux And Windows
 
 Reviu now ships with its interface font, so the app looks the same on every platform. Previously the interface only picked up the intended font on macOS and fell back to a typewriter-style monospace font on Linux and Windows; text throughout the app now renders in a clean proportional font, with code and diffs in the bundled monospace font.

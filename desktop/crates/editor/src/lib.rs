@@ -17,8 +17,8 @@ pub use editor::{
   HunkAction, HunkNavigationDirection, HunkNavigationState, ReviewCommentCancelHandler,
   ReviewCommentCodeReferencePreview, ReviewCommentCreateHandler, ReviewCommentCreateRequest,
   ReviewCommentDeleteHandler, ReviewCommentDisplayMode, ReviewCommentEditHandler,
-  ReviewCommentImageUploadHandler, ReviewCommentLinkHandler, ReviewCommentPreviewRenderer,
-  ReviewCommentResolveHandler, ReviewCommentSuggestionActionFactory,
+  ReviewCommentImageUploadHandler, ReviewCommentLinkHandler, ReviewCommentMode,
+  ReviewCommentPreviewRenderer, ReviewCommentResolveHandler, ReviewCommentSuggestionActionFactory,
 };
 pub use editor_element::{EditorElement, PositionMap, benchmark_word_diff_ranges};
 pub use gutter_element::GutterElement;

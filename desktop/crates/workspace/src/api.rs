@@ -1073,6 +1073,11 @@ pub struct GithubPullRequestReviewComment {
   #[serde(rename = "original_line")]
   pub original_line: Option<i64>,
   pub side: Option<String>,
+  // Backend marks these for comments belonging to the viewer's unsubmitted pending review.
+  #[serde(default)]
+  pub is_pending: bool,
+  #[serde(default, rename = "pull_request_review_node_id")]
+  pub pull_request_review_node_id: Option<String>,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -1823,6 +1828,12 @@ struct GithubPullRequestReviewResponse {
   review: GithubPullRequestReview,
 }
 
+#[derive(Debug, Deserialize)]
+struct GithubPendingReviewReplyResponse {
+  #[serde(rename = "node_id")]
+  node_id: String,
+}
+
 #[derive(Debug, Serialize)]
 struct UpdateGithubPullRequestCommentRequest<'a> {
   body: &'a str,
@@ -1895,6 +1906,50 @@ struct ApplyGithubSuggestedChangeRequest<'a> {
 
 #[derive(Debug, Serialize)]
 struct CreateGithubPullRequestReviewRequest<'a> {
+  event: GithubPullRequestReviewEvent,
+  #[serde(skip_serializing_if = "Option::is_none")]
+  body: Option<&'a str>,
+}
+
+#[derive(Debug, Serialize)]
+struct StartGithubPendingReviewRequest<'a> {
+  #[serde(rename = "pullRequestId")]
+  pull_request_id: &'a str,
+}
+
+#[derive(Debug, Serialize)]
+struct AddGithubPendingReviewThreadRequest<'a> {
+  #[serde(rename = "pullRequestId")]
+  pull_request_id: &'a str,
+  #[serde(rename = "pullRequestReviewId")]
+  pull_request_review_id: &'a str,
+  path: &'a str,
+  body: &'a str,
+  #[serde(rename = "subjectType")]
+  subject_type: &'a str,
+  #[serde(skip_serializing_if = "Option::is_none")]
+  line: Option<u64>,
+  #[serde(skip_serializing_if = "Option::is_none")]
+  side: Option<&'a str>,
+  #[serde(rename = "startLine", skip_serializing_if = "Option::is_none")]
+  start_line: Option<u64>,
+  #[serde(rename = "startSide", skip_serializing_if = "Option::is_none")]
+  start_side: Option<&'a str>,
+}
+
+#[derive(Debug, Serialize)]
+struct ReplyGithubPendingReviewThreadRequest<'a> {
+  #[serde(rename = "pullRequestReviewId")]
+  pull_request_review_id: &'a str,
+  #[serde(rename = "pullRequestReviewThreadId")]
+  pull_request_review_thread_id: &'a str,
+  body: &'a str,
+}
+
+#[derive(Debug, Serialize)]
+struct SubmitGithubPendingReviewRequest<'a> {
+  #[serde(rename = "pullRequestReviewId")]
+  pull_request_review_id: &'a str,
   event: GithubPullRequestReviewEvent,
   #[serde(skip_serializing_if = "Option::is_none")]
   body: Option<&'a str>,
@@ -3812,6 +3867,191 @@ impl ApiClient {
     let route = format!("/github/pr/{number}/reviews");
     let trimmed_body = body.trim();
     let payload = CreateGithubPullRequestReviewRequest {
+      event,
+      body: if matches!(event, GithubPullRequestReviewEvent::Approve) && trimmed_body.is_empty() {
+        None
+      } else {
+        Some(trimmed_body)
+      },
+    };
+    let response = self
+      .authed_request(Method::POST, route.as_str())
+      .query(&[("org", owner), ("repo", repo)])
+      .json(&payload)
+      .send()?;
+    let status = response.status();
+    Self::record_http_status("POST", route.as_str(), status);
+    if status == StatusCode::UNAUTHORIZED {
+      anyhow::bail!("unauthorized")
+    }
+    if !status.is_success() {
+      anyhow::bail!("unexpected status: {}", status);
+    }
+    let payload = response.json::<GithubPullRequestReviewResponse>()?;
+    Ok(payload.review)
+  }
+
+  pub fn start_pending_review(
+    &self,
+    owner: &str,
+    repo: &str,
+    number: u64,
+    pull_request_id: &str,
+  ) -> Result<GithubPullRequestReview> {
+    let route = format!("/github/pr/{number}/pending-review");
+    let response = self
+      .authed_request(Method::POST, route.as_str())
+      .query(&[("org", owner), ("repo", repo)])
+      .json(&StartGithubPendingReviewRequest { pull_request_id })
+      .send()?;
+    let status = response.status();
+    Self::record_http_status("POST", route.as_str(), status);
+    if status == StatusCode::UNAUTHORIZED {
+      anyhow::bail!("unauthorized")
+    }
+    if !status.is_success() {
+      anyhow::bail!("unexpected status: {}", status);
+    }
+    let payload = response.json::<GithubPullRequestReviewResponse>()?;
+    Ok(payload.review)
+  }
+
+  #[allow(clippy::too_many_arguments)]
+  pub fn add_pending_review_thread(
+    &self,
+    owner: &str,
+    repo: &str,
+    number: u64,
+    pull_request_id: &str,
+    pull_request_review_id: &str,
+    path: &str,
+    body: &str,
+    subject_type: &str,
+    line: Option<u64>,
+    side: Option<&str>,
+    start_line: Option<u64>,
+    start_side: Option<&str>,
+  ) -> Result<GithubPullRequestReviewComment> {
+    let route = format!("/github/pr/{number}/pending-review/threads");
+    let response = self
+      .authed_request(Method::POST, route.as_str())
+      .query(&[("org", owner), ("repo", repo)])
+      .json(&AddGithubPendingReviewThreadRequest {
+        pull_request_id,
+        pull_request_review_id,
+        path,
+        body,
+        subject_type,
+        line,
+        side,
+        start_line,
+        start_side,
+      })
+      .send()?;
+    let status = response.status();
+    Self::record_http_status("POST", route.as_str(), status);
+    if status == StatusCode::UNAUTHORIZED {
+      anyhow::bail!("unauthorized")
+    }
+    if !status.is_success() {
+      anyhow::bail!("unexpected status: {}", status);
+    }
+    let payload = response.json::<GithubPullRequestCommentResponse>()?;
+    Ok(payload.comment)
+  }
+
+  pub fn reply_pending_review_thread(
+    &self,
+    owner: &str,
+    repo: &str,
+    number: u64,
+    pull_request_review_id: &str,
+    pull_request_review_thread_id: &str,
+    body: &str,
+  ) -> Result<String> {
+    let route = format!("/github/pr/{number}/pending-review/replies");
+    let response = self
+      .authed_request(Method::POST, route.as_str())
+      .query(&[("org", owner), ("repo", repo)])
+      .json(&ReplyGithubPendingReviewThreadRequest {
+        pull_request_review_id,
+        pull_request_review_thread_id,
+        body,
+      })
+      .send()?;
+    let status = response.status();
+    Self::record_http_status("POST", route.as_str(), status);
+    if status == StatusCode::UNAUTHORIZED {
+      anyhow::bail!("unauthorized")
+    }
+    if !status.is_success() {
+      anyhow::bail!("unexpected status: {}", status);
+    }
+    let payload = response.json::<GithubPendingReviewReplyResponse>()?;
+    Ok(payload.node_id)
+  }
+
+  pub fn update_pending_review_comment(
+    &self,
+    owner: &str,
+    repo: &str,
+    number: u64,
+    comment_node_id: &str,
+    body: &str,
+  ) -> Result<()> {
+    let route = format!("/github/pr/{number}/pending-review/comments/{comment_node_id}");
+    let response = self
+      .authed_request(Method::PATCH, route.as_str())
+      .query(&[("org", owner), ("repo", repo)])
+      .json(&UpdateGithubPullRequestCommentRequest { body })
+      .send()?;
+    let status = response.status();
+    Self::record_http_status("PATCH", route.as_str(), status);
+    if status == StatusCode::UNAUTHORIZED {
+      anyhow::bail!("unauthorized")
+    }
+    if !status.is_success() {
+      anyhow::bail!("unexpected status: {}", status);
+    }
+    Ok(())
+  }
+
+  pub fn delete_pending_review_comment(
+    &self,
+    owner: &str,
+    repo: &str,
+    number: u64,
+    comment_node_id: &str,
+  ) -> Result<()> {
+    let route = format!("/github/pr/{number}/pending-review/comments/{comment_node_id}");
+    let response = self
+      .authed_request(Method::DELETE, route.as_str())
+      .query(&[("org", owner), ("repo", repo)])
+      .send()?;
+    let status = response.status();
+    Self::record_http_status("DELETE", route.as_str(), status);
+    if status == StatusCode::UNAUTHORIZED {
+      anyhow::bail!("unauthorized")
+    }
+    if !status.is_success() {
+      anyhow::bail!("unexpected status: {}", status);
+    }
+    Ok(())
+  }
+
+  pub fn submit_pending_review(
+    &self,
+    owner: &str,
+    repo: &str,
+    number: u64,
+    pull_request_review_id: &str,
+    event: GithubPullRequestReviewEvent,
+    body: &str,
+  ) -> Result<GithubPullRequestReview> {
+    let route = format!("/github/pr/{number}/pending-review/submit");
+    let trimmed_body = body.trim();
+    let payload = SubmitGithubPendingReviewRequest {
+      pull_request_review_id,
       event,
       body: if matches!(event, GithubPullRequestReviewEvent::Approve) && trimmed_body.is_empty() {
         None
@@ -6991,6 +7231,103 @@ mod tests {
     assert_eq!(comment.body, "New comment body");
     assert_eq!(comment.path, "src/main.rs");
     handle.join().expect("join server thread");
+  }
+
+  #[test]
+  fn add_pending_review_thread_uses_expected_route_and_payload() {
+    let body = r#"{
+      "comment": {
+        "id": 5,
+        "pull_request_review_id": 12,
+        "diff_hunk": "@@ -1 +1 @@",
+        "path": "src/main.rs",
+        "position": 1,
+        "original_position": 1,
+        "commit_id": "head123",
+        "original_commit_id": "base123",
+        "in_reply_to_id": null,
+        "user": { "login": "octocat", "avatar_url": null },
+        "body": "Draft comment",
+        "created_at": "2026-02-15T12:00:00Z",
+        "updated_at": "2026-02-16T12:01:00Z",
+        "start_line": null,
+        "original_start_line": null,
+        "start_side": null,
+        "line": 1,
+        "original_line": 1,
+        "side": "RIGHT"
+      }
+    }"#;
+    let (base_url, request, handle) = start_single_response_server_with_request("200 OK", body);
+    let api = make_test_api_client(base_url);
+
+    let comment = api
+      .add_pending_review_thread(
+        "acme",
+        "widget",
+        42,
+        "PR_node",
+        "PRR_node",
+        "src/main.rs",
+        "Draft comment",
+        "LINE",
+        Some(1),
+        Some("RIGHT"),
+        None,
+        None,
+      )
+      .expect("add pending review thread");
+    assert_eq!(comment.id, 5);
+    assert_eq!(comment.body, "Draft comment");
+
+    handle.join().expect("join server thread");
+    let request = request
+      .lock()
+      .expect("lock request")
+      .clone()
+      .unwrap_or_default();
+    assert!(request.contains("POST /github/pr/42/pending-review/threads"));
+    assert!(request.contains("\"pullRequestId\":\"PR_node\""));
+    assert!(request.contains("\"pullRequestReviewId\":\"PRR_node\""));
+    assert!(request.contains("\"subjectType\":\"LINE\""));
+    assert!(request.contains("\"line\":1"));
+  }
+
+  #[test]
+  fn submit_pending_review_uses_expected_route_and_payload() {
+    let body = r#"{
+      "review": {
+        "id": 12,
+        "state": "APPROVED",
+        "html_url": "https://github.com/acme/widget/pull/42",
+        "body": "LGTM",
+        "user": { "login": "octocat", "avatar_url": null }
+      }
+    }"#;
+    let (base_url, request, handle) = start_single_response_server_with_request("200 OK", body);
+    let api = make_test_api_client(base_url);
+
+    let review = api
+      .submit_pending_review(
+        "acme",
+        "widget",
+        42,
+        "PRR_node",
+        GithubPullRequestReviewEvent::Approve,
+        "LGTM",
+      )
+      .expect("submit pending review");
+    assert_eq!(review.id, 12);
+
+    handle.join().expect("join server thread");
+    let request = request
+      .lock()
+      .expect("lock request")
+      .clone()
+      .unwrap_or_default();
+    assert!(request.contains("POST /github/pr/42/pending-review/submit"));
+    assert!(request.contains("\"pullRequestReviewId\":\"PRR_node\""));
+    assert!(request.contains("\"event\":\"APPROVE\""));
   }
 
   #[test]

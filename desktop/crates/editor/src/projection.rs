@@ -60,6 +60,8 @@ pub struct ReviewComment {
   pub is_outdated: bool,
   pub viewer_can_resolve: bool,
   pub viewer_can_unresolve: bool,
+  // Part of the viewer's unsubmitted pending review (draft comment).
+  pub is_pending: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]

@@ -11,8 +11,8 @@ use editor::{
   REVIEW_COMMENT_HEADER_BODY_GAP_PX, REVIEW_COMMENT_VERTICAL_PADDING_PX, ReviewComment,
   ReviewCommentCancelHandler, ReviewCommentCodeReferencePreview, ReviewCommentCreateHandler,
   ReviewCommentCreateRequest, ReviewCommentDeleteHandler, ReviewCommentEditHandler,
-  ReviewCommentImageUploadHandler, ReviewCommentLinkHandler, ReviewCommentResolveHandler,
-  ReviewCommentSide, ReviewCommentSuggestionActionFactory,
+  ReviewCommentImageUploadHandler, ReviewCommentLinkHandler, ReviewCommentMode,
+  ReviewCommentResolveHandler, ReviewCommentSide, ReviewCommentSuggestionActionFactory,
 };
 use gfm_markdown_viewer::{
   GithubBlobLineReference, GithubCodeReferencePreview, GithubDiffLine, GithubDiffLineKind,
@@ -815,6 +815,7 @@ fn review_comment_to_editor_comment(
     is_outdated: comment.is_outdated,
     viewer_can_resolve: comment.viewer_can_resolve,
     viewer_can_unresolve: comment.viewer_can_unresolve,
+    is_pending: comment.is_pending,
   })
 }
 
@@ -2844,6 +2845,9 @@ pub struct GithubPrDetailsPage {
   review_comments_loading: bool,
   review_comments_error: Option<SharedString>,
   review_comments: Vec<GithubPullRequestReviewComment>,
+  // Viewer's unsubmitted pending review (GraphQL node ids), when one exists on this PR.
+  pending_review_id: Option<String>,
+  pending_review_pull_request_id: Option<String>,
   overview_edit_input: Option<Entity<InputState>>,
   overview_edit_target: Option<OverviewCommentTarget>,
   overview_edit_initial_body: Option<String>,
@@ -3435,6 +3439,8 @@ impl GithubPrDetailsPage {
       review_comments_loading: false,
       review_comments_error: None,
       review_comments: Vec::new(),
+      pending_review_id: None,
+      pending_review_pull_request_id: None,
       overview_edit_input: None,
       overview_edit_target: None,
       overview_edit_initial_body: None,
@@ -4834,6 +4840,7 @@ impl GithubPrDetailsPage {
     conversation: GithubPullRequestConversation,
     cx: &mut Context<Self>,
   ) {
+    let pull_request_node_id = conversation.pull_request.node_id.clone();
     if let Some(pull_request) = self.pull_request.as_mut()
       && pull_request.node_id == conversation.pull_request.node_id
     {
@@ -4849,6 +4856,14 @@ impl GithubPrDetailsPage {
     self.reviews_error = None;
     self.review_comments_loading = false;
     self.review_comments_error = None;
+    // Drafts are marked (is_pending) by the backend from each comment's review state;
+    // derive the pending-review node id from any draft, keep the PR node id for starting one.
+    self.pending_review_id = self
+      .review_comments
+      .iter()
+      .find(|comment| comment.is_pending)
+      .and_then(|comment| comment.pull_request_review_node_id.clone());
+    self.pending_review_pull_request_id = Some(pull_request_node_id);
     self.sync_review_comments(cx);
     self.prefetch_overview_root_review_comment_files(cx);
   }
@@ -7291,6 +7306,7 @@ impl GithubPrDetailsPage {
     let number = pull_request.number;
     let event = Self::review_decision_to_api_event(decision);
     let api = self.api.clone();
+    let pending_review_id = self.pending_review_id.clone();
 
     self.submit_review_loading = true;
     self.submit_review_error = None;
@@ -7298,8 +7314,14 @@ impl GithubPrDetailsPage {
     cx.notify();
 
     let task = cx.spawn_in(window, async move |this, cx| {
-      let result =
-        unblock(move || api.submit_pull_request_review(&owner, &repo, number, event, &body)).await;
+      let result = unblock(move || {
+        if let Some(review_id) = pending_review_id {
+          api.submit_pending_review(&owner, &repo, number, &review_id, event, &body)
+        } else {
+          api.submit_pull_request_review(&owner, &repo, number, event, &body)
+        }
+      })
+      .await;
 
       let _ = this.update_in(cx, |this, window, cx| {
         this.submit_review_loading = false;
@@ -7307,6 +7329,8 @@ impl GithubPrDetailsPage {
         match result {
           Ok(review) => {
             this.review_popover_open = false;
+            this.pending_review_id = None;
+            this.pending_review_pull_request_id = None;
             this.reset_review_form(window, cx);
             this.refocus_page_shortcuts(window, cx);
             upsert_review_local(&mut this.reviews, review);
@@ -7891,17 +7915,32 @@ impl GithubPrDetailsPage {
     let owner = pull_request.repository.owner.clone();
     let repo = pull_request.repository.repo.clone();
     let number = pull_request.number;
+    // Draft edits go through the pending-review GraphQL endpoint (by node id).
+    let pending_comment_node_id = self
+      .review_comments
+      .iter()
+      .find(|comment| comment.id == comment_id)
+      .filter(|comment| comment.is_pending)
+      .map(|comment| comment.node_id.clone());
     let api = self.api.clone();
+    let body_for_api = body.clone();
     let task = cx.spawn(async move |this, cx| {
       let result = unblock(move || {
-        api.update_pull_request_review_comment(&owner, &repo, number, comment_id, &body)
+        if let Some(node_id) = pending_comment_node_id {
+          api.update_pending_review_comment(&owner, &repo, number, &node_id, &body_for_api)?;
+          Ok::<_, anyhow::Error>(None)
+        } else {
+          api
+            .update_pull_request_review_comment(&owner, &repo, number, comment_id, &body_for_api)
+            .map(Some)
+        }
       })
       .await;
 
       let _ = this.update(cx, |this, cx| {
         let mut error_message: Option<Arc<str>> = None;
         match result {
-          Ok(updated_comment) => {
+          Ok(Some(updated_comment)) => {
             if let Some(existing) = this
               .review_comments
               .iter_mut()
@@ -7910,6 +7949,17 @@ impl GithubPrDetailsPage {
               *existing = updated_comment;
             } else {
               this.review_comments.push(updated_comment);
+            }
+            this.review_comments_error = None;
+            this.sync_review_comments(cx);
+          }
+          Ok(None) => {
+            if let Some(existing) = this
+              .review_comments
+              .iter_mut()
+              .find(|comment| comment.id == comment_id)
+            {
+              existing.body = body;
             }
             this.review_comments_error = None;
             this.sync_review_comments(cx);
@@ -7966,6 +8016,7 @@ impl GithubPrDetailsPage {
     let owner = pull_request.repository.owner.clone();
     let repo = pull_request.repository.repo.clone();
     let number = pull_request.number;
+    let pull_request_node_id = pull_request.node_id.clone();
     let in_reply_to_id = request.in_reply_to_id;
     let line_comment_payload = if in_reply_to_id.is_none() {
       let Some(selected_file) = self.selected_file.as_ref() else {
@@ -8003,6 +8054,140 @@ impl GithubPrDetailsPage {
     };
     let body = request.body.as_ref().to_string();
     let api = self.api.clone();
+
+    // Pending-review path: draft a new top-level comment into the viewer's pending review,
+    // starting one on GitHub if none exists yet. Replies stay immediate (single comments).
+    if matches!(request.mode, ReviewCommentMode::PendingReview)
+      && in_reply_to_id.is_none()
+      && let Some((path, _commit_id, line, side, start_line, start_side)) = line_comment_payload
+    {
+      let pull_request_id = self
+        .pending_review_pull_request_id
+        .clone()
+        .unwrap_or(pull_request_node_id);
+      let existing_review_id = self.pending_review_id.clone();
+      let task = cx.spawn(async move |this, cx| {
+        let result = unblock(move || {
+          let review_id = match existing_review_id {
+            Some(id) => id,
+            None => {
+              api
+                .start_pending_review(&owner, &repo, number, &pull_request_id)?
+                .node_id
+            }
+          };
+          let comment = api.add_pending_review_thread(
+            &owner,
+            &repo,
+            number,
+            &pull_request_id,
+            &review_id,
+            &path,
+            &body,
+            "LINE",
+            Some(line),
+            Some(side.as_str()),
+            start_line,
+            start_side.as_deref(),
+          )?;
+          Ok::<_, anyhow::Error>((review_id, pull_request_id, comment))
+        })
+        .await;
+
+        let _ = this.update(cx, |this, cx| {
+          let mut error_message: Option<Arc<str>> = None;
+          match result {
+            Ok((review_id, pull_request_id, mut created_comment)) => {
+              this.pending_review_id = Some(review_id);
+              this.pending_review_pull_request_id = Some(pull_request_id);
+              created_comment.is_pending = true;
+              if let Some(existing) = this
+                .review_comments
+                .iter_mut()
+                .find(|comment| comment.id == created_comment.id)
+              {
+                *existing = created_comment;
+              } else {
+                this.review_comments.push(created_comment);
+              }
+              this.review_comments_error = None;
+              this.sync_review_comments(cx);
+            }
+            Err(error) => {
+              let error_message_text = error.to_string();
+              this.review_comments_error = Some(error_message_text.clone().into());
+              this.add_pr_breadcrumb("Add pending review comment failed", Map::new());
+              this.record_pr_error(
+                "github.pr.pending_review.add_comment",
+                error_message_text.as_str(),
+                Map::new(),
+              );
+              error_message = Some(Arc::from(error_message_text));
+            }
+          }
+          let success = error_message.is_none();
+          this.diff_editor.update(cx, |editor, cx| {
+            editor.finish_review_comment_create_submission(error_message, cx);
+          });
+          if success {
+            this.focus_changes_tree_via_window_handle(cx);
+          }
+          cx.notify();
+        });
+      });
+      self.review_comments_task = Some(task);
+      return;
+    }
+
+    // Pending-review path: a reply joins the pending review when one is in progress.
+    if let Some(in_reply_to_id) = in_reply_to_id
+      && let Some(review_id) = self.pending_review_id.clone()
+      && let Some(thread_node_id) = self
+        .review_comments
+        .iter()
+        .find(|comment| comment.id == in_reply_to_id)
+        .map(|comment| comment.thread_id.clone())
+        .filter(|thread_id| !thread_id.is_empty())
+    {
+      let task = cx.spawn(async move |this, cx| {
+        let result = unblock(move || {
+          api.reply_pending_review_thread(&owner, &repo, number, &review_id, &thread_node_id, &body)
+        })
+        .await;
+
+        let _ = this.update(cx, |this, cx| {
+          let mut error_message: Option<Arc<str>> = None;
+          match result {
+            Ok(_reply_node_id) => {
+              this.review_comments_error = None;
+              // Reply returns a node id only; refetch to surface the draft reply with full data.
+              this.refresh_pull_request_conversation_for_current_pull_request(false, cx);
+            }
+            Err(error) => {
+              let error_message_text = error.to_string();
+              this.review_comments_error = Some(error_message_text.clone().into());
+              this.add_pr_breadcrumb("Add pending review reply failed", Map::new());
+              this.record_pr_error(
+                "github.pr.pending_review.reply",
+                error_message_text.as_str(),
+                Map::new(),
+              );
+              error_message = Some(Arc::from(error_message_text));
+            }
+          }
+          let success = error_message.is_none();
+          this.diff_editor.update(cx, |editor, cx| {
+            editor.finish_review_comment_create_submission(error_message, cx);
+          });
+          if success {
+            this.focus_changes_tree_via_window_handle(cx);
+          }
+          cx.notify();
+        });
+      });
+      self.review_comments_task = Some(task);
+      return;
+    }
 
     let task = cx.spawn(async move |this, cx| {
       let result = unblock(move || {
@@ -8154,12 +8339,21 @@ impl GithubPrDetailsPage {
     self.sync_review_comments(cx);
     cx.notify();
 
+    // Draft deletes go through the pending-review GraphQL endpoint (by node id).
+    let pending_node_id = removed_comment
+      .is_pending
+      .then(|| removed_comment.node_id.clone());
     let api = self.api.clone();
 
     let task = cx.spawn(async move |this, cx| {
-      let result =
-        unblock(move || api.delete_pull_request_review_comment(&owner, &repo, number, comment_id))
-          .await;
+      let result = unblock(move || {
+        if let Some(node_id) = pending_node_id {
+          api.delete_pending_review_comment(&owner, &repo, number, &node_id)
+        } else {
+          api.delete_pull_request_review_comment(&owner, &repo, number, comment_id)
+        }
+      })
+      .await;
 
       let _ = this.update(cx, |this, cx| {
         if let Err(error) = result {
@@ -9403,10 +9597,12 @@ impl GithubPrDetailsPage {
     let preview_map = self.cached_review_comment_code_reference_previews(&preview_requests);
     let pr_number = self.pull_request.as_ref().map(|pr| pr.number);
     let editable_comment_ids = self.editable_review_comment_ids(cx);
+    let has_pending_review = self.pending_review_id.is_some();
     self.diff_editor.update(cx, move |editor, cx| {
       editor.set_review_comment_pr_number(pr_number, cx);
       editor.set_editable_review_comment_ids(editable_comment_ids.iter().copied(), cx);
       editor.set_review_comments(comments, cx);
+      editor.set_has_pending_review(has_pending_review, cx);
       editor.set_review_comment_code_reference_previews(preview_map, cx);
     });
     self.schedule_code_reference_fetches(
@@ -10636,6 +10832,11 @@ impl GithubPrDetailsPage {
     let review_preview_open = self.review_preview_open;
     let review_markdown_options = self.build_overview_composer_markdown_options(5_555, cx);
     let page_for_review_toggle = cx.entity().clone();
+    let pending_comment_count = self
+      .review_comments
+      .iter()
+      .filter(|comment| comment.is_pending)
+      .count();
 
     Popover::new("pr-review-popover")
       .anchor(Corner::TopRight)
@@ -10682,6 +10883,19 @@ impl GithubPrDetailsPage {
               .text_color(theme.foreground)
               .child("Submit review"),
           )
+          .when(pending_comment_count > 0, |this| {
+            let label = if pending_comment_count == 1 {
+              "1 pending comment will be published".to_string()
+            } else {
+              format!("{pending_comment_count} pending comments will be published")
+            };
+            this.child(
+              div()
+                .text_xs()
+                .text_color(theme.status_yellow())
+                .child(label),
+            )
+          })
           .child(
             div().w_full().child(
               MarkdownComposer::new(&self.review_input)
@@ -19472,6 +19686,8 @@ mod tests {
       line: Some(1),
       original_line: Some(1),
       side: Some("RIGHT".to_string()),
+      is_pending: false,
+      pull_request_review_node_id: None,
     }
   }
 

@@ -7083,6 +7083,7 @@ impl GitPage {
       is_outdated: matches!(comment.state, LocalAgentReviewCommentState::Outdated),
       viewer_can_resolve: false,
       viewer_can_unresolve: false,
+      is_pending: false,
     }
   }
 
