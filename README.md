@@ -42,16 +42,6 @@ cd desktop && SENTRY_ENABLE_DEV=1 cargo run
 
 See [`desktop/README.md`](desktop/README.md) for build/release details.
 
-### Landing
-
-Requires Node 26 and pnpm 11.
-
-```sh
-cd landing
-pnpm install
-pnpm dev
-```
-
 ## License
 
 Source-available under [FSL-1.1-ALv2](LICENSE) (Functional Source License, Apache 2.0
