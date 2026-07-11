@@ -19,27 +19,6 @@ The GitHub-integration backend (the service powering Reviu Pro) is closed-source
 and lives in a separate private repository. The Free features (local Git and the
 agent panel) run fully without it.
 
-## Build from source
-
-### Desktop
-
-```sh
-cd desktop && cargo run
-```
-
-Release build:
-
-```sh
-cd desktop && cargo run --release -p reviu
-```
-
-With Sentry enabled in a debug build (off by default; `SENTRY_ENABLE_DEV` is only
-read in debug builds):
-
-```sh
-cd desktop && SENTRY_ENABLE_DEV=1 cargo run
-```
-
 See [`desktop/README.md`](desktop/README.md) for build/release details.
 
 ## License
