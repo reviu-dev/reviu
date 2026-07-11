@@ -1,0 +1,3 @@
+# Tree-sitter grammars are vendored/generated; keep them out of GitHub language stats.
+desktop/crates/syntax/grammars/** linguist-vendored
+desktop/tree-sitter-vue/** linguist-vendored
