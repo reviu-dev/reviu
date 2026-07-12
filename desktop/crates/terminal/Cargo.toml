@@ -5,7 +5,7 @@ edition.workspace = true
 publish.workspace = true
 
 [dependencies]
-alacritty_terminal = "0.26.0-rc1"
+alacritty_terminal = "0.26.0"
 anyhow = { workspace = true }
 gpui = { workspace = true }
 gpui-component = { workspace = true }
