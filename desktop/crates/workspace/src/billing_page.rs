@@ -232,7 +232,7 @@ impl BillingPage {
     crate::analytics::track_with(
       cx,
       "subscription_checkout_started",
-      Some(serde_json::json!({ "slug": slug })),
+      Some(serde_json::json!({ "slug": slug, "source": "billing_page" })),
     );
 
     let api = self.api.clone();
@@ -640,7 +640,7 @@ impl BillingPage {
             .label("Sign in with GitHub")
             .small()
             .on_click(|_, _, cx| {
-              AuthCallbackTarget::start_sign_in(cx);
+              AuthCallbackTarget::start_sign_in(cx, "billing_page");
             }),
         ),
       )

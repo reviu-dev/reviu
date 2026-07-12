@@ -806,8 +806,8 @@ impl WorkspaceView {
   fn open_github_home(cx: &mut App) {
     if AuthStateStore::has_github_access(cx) {
       GithubPageHandle::refresh(cx);
+      crate::analytics::track(cx, "github_home_viewed");
     }
-    crate::analytics::track(cx, "github_home_viewed");
     NavigationHistory::navigate("/github", cx);
   }
 
@@ -954,7 +954,7 @@ impl WorkspaceView {
       crate::browser_extensions_dialog::open_browser_extensions_dialog(window, cx);
     });
     let sign_in = Rc::new(|_window: &mut Window, cx: &mut App| {
-      AuthCallbackTarget::start_sign_in(cx);
+      AuthCallbackTarget::start_sign_in(cx, "user_menu");
     });
     let sign_out = Rc::new(|_window: &mut Window, cx: &mut App| {
       AuthCallbackTarget::sign_out(cx);
@@ -1025,7 +1025,7 @@ impl WorkspaceView {
       .gap_2()
       .small()
       .on_click(|_, _, cx| {
-        AuthCallbackTarget::start_sign_in(cx);
+        AuthCallbackTarget::start_sign_in(cx, "top_bar");
       });
 
     let show_file_search_button = page_has_file_search(pathname);

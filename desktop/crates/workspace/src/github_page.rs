@@ -56,7 +56,10 @@ use crate::{
   github_pr_details_page::GithubPrDetailsPageHandle,
   github_shared,
   navigation::NavigationHistory,
-  pricing_copy::{GITHUB_UPGRADE_DESCRIPTION, PRO_ANNUAL_SLUG, PRO_MONTHLY_SLUG},
+  pricing_copy::{
+    GITHUB_UPGRADE_DESCRIPTION, PRO_ANNUAL_PERIOD, PRO_ANNUAL_PRICE, PRO_ANNUAL_SLUG,
+    PRO_MONTHLY_PERIOD, PRO_MONTHLY_PRICE, PRO_MONTHLY_SLUG,
+  },
   sentry_context,
   workspace::WorkspaceApi,
 };
@@ -373,8 +376,8 @@ fn github_locked_presentation(access_state: GithubAccessState) -> Option<GithubL
   match access_state {
     GithubAccessState::Available => None,
     GithubAccessState::NeedsSignIn => Some(GithubLockedPresentation {
-      title: "Sign in to bring GitHub work into the app.",
-      description: "Sign in with GitHub to unlock notifications, repository browsing, pull request reviews, issues, and branch-to-PR shortcuts in one place.",
+      title: "Try Reviu Pro free for 14 days.",
+      description: "Sign in with GitHub, then start a free trial to unlock notifications, repository browsing, pull request reviews, issues, and branch-to-PR shortcuts.",
       action: GithubLockedAction::SignIn,
     }),
     GithubAccessState::NeedsSubscription => Some(GithubLockedPresentation {
@@ -382,6 +385,20 @@ fn github_locked_presentation(access_state: GithubAccessState) -> Option<GithubL
       description: GITHUB_UPGRADE_DESCRIPTION,
       action: GithubLockedAction::Subscribe,
     }),
+  }
+}
+
+fn github_sign_in_pricing_note() -> String {
+  format!(
+    "14-day free trial, then {PRO_MONTHLY_PRICE} {PRO_MONTHLY_PERIOD} or {PRO_ANNUAL_PRICE} {PRO_ANNUAL_PERIOD}."
+  )
+}
+
+fn paywall_analytics_state(access_state: GithubAccessState) -> Option<&'static str> {
+  match access_state {
+    GithubAccessState::Available => None,
+    GithubAccessState::NeedsSignIn => Some("needs_sign_in"),
+    GithubAccessState::NeedsSubscription => Some("needs_subscription"),
   }
 }
 
@@ -1326,6 +1343,7 @@ pub struct GithubPage {
   subscribe_loading: bool,
   subscribe_task: Option<Task<()>>,
   last_access_state: GithubAccessState,
+  tracked_paywall_state: Option<GithubAccessState>,
   _subscriptions: Vec<Subscription>,
 }
 
@@ -2472,6 +2490,7 @@ impl GithubPage {
       subscribe_loading: false,
       subscribe_task: None,
       last_access_state: AuthStateStore::github_access_state(cx),
+      tracked_paywall_state: None,
       _subscriptions: Vec::new(),
     };
 
@@ -3307,6 +3326,11 @@ impl GithubPage {
 
     self.subscribe_loading = true;
     self.access_error = None;
+    crate::analytics::track_with(
+      cx,
+      "subscription_checkout_started",
+      Some(serde_json::json!({ "slug": slug, "source": "github_paywall" })),
+    );
 
     let api = self.api.clone();
     let task = cx.spawn(async move |this, cx| {
@@ -3715,15 +3739,24 @@ impl GithubPage {
     let action_section: gpui::AnyElement = match presentation.action {
       GithubLockedAction::SignIn => div()
         .flex()
-        .justify_start()
+        .flex_col()
+        .gap_2()
         .child(
-          Button::new("github-access-sign-in")
-            .icon(IconName::Github)
-            .label("Sign in with GitHub")
-            .small()
-            .on_click(|_, _, cx| {
-              AuthCallbackTarget::start_sign_in(cx);
-            }),
+          div().flex().justify_start().child(
+            Button::new("github-access-sign-in")
+              .icon(IconName::Github)
+              .label("Sign in with GitHub")
+              .small()
+              .on_click(|_, _, cx| {
+                AuthCallbackTarget::start_sign_in(cx, "github_paywall");
+              }),
+          ),
+        )
+        .child(
+          div()
+            .text_sm()
+            .text_color(theme.muted_foreground)
+            .child(github_sign_in_pricing_note()),
         )
         .into_any_element(),
       GithubLockedAction::Subscribe => {
@@ -3868,11 +3901,22 @@ impl Render for GithubPage {
       self.last_access_state = access_state;
       if matches!(access_state, GithubAccessState::Available) {
         self.focus_on_next_render = true;
+        self.tracked_paywall_state = None;
         self.refresh_pull_requests(cx);
       }
     }
 
     if !matches!(access_state, GithubAccessState::Available) {
+      if self.tracked_paywall_state != Some(access_state)
+        && let Some(state) = paywall_analytics_state(access_state)
+      {
+        self.tracked_paywall_state = Some(access_state);
+        crate::analytics::track_with(
+          cx,
+          "paywall_viewed",
+          Some(serde_json::json!({ "state": state })),
+        );
+      }
       self.focus_on_next_render = false;
       return self
         .render_locked_page(access_state, window, cx)
@@ -4425,7 +4469,9 @@ mod tests {
       .expect("sign-in state should have locked presentation");
 
     assert_eq!(presentation.action, GithubLockedAction::SignIn);
+    assert!(presentation.title.contains("free for 14 days"));
     assert!(presentation.description.contains("Sign in"));
+    assert!(presentation.description.contains("free trial"));
   }
 
   #[test]
@@ -4435,6 +4481,26 @@ mod tests {
 
     assert_eq!(presentation.action, GithubLockedAction::Subscribe);
     assert!(presentation.description.contains("Reviu Pro"));
+  }
+
+  #[test]
+  fn github_sign_in_pricing_note_mentions_trial_and_both_prices() {
+    let note = github_sign_in_pricing_note();
+
+    assert_eq!(note, "14-day free trial, then $9 / month or $79 / year.");
+  }
+
+  #[test]
+  fn paywall_analytics_state_maps_locked_states_only() {
+    assert_eq!(paywall_analytics_state(GithubAccessState::Available), None);
+    assert_eq!(
+      paywall_analytics_state(GithubAccessState::NeedsSignIn),
+      Some("needs_sign_in")
+    );
+    assert_eq!(
+      paywall_analytics_state(GithubAccessState::NeedsSubscription),
+      Some("needs_subscription")
+    );
   }
 
   #[test]

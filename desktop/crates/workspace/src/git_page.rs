@@ -1646,11 +1646,11 @@ impl AuthCallbackTarget {
     let _ = weak.update(cx, |this, cx| this.handle_auth_code(code, cx));
   }
 
-  pub fn start_sign_in(cx: &mut App) {
+  pub fn start_sign_in(cx: &mut App, source: &'static str) {
     let Some(weak) = cx.global::<Self>().git_page.clone() else {
       return;
     };
-    let _ = weak.update(cx, |this, cx| this.start_github_sign_in(cx));
+    let _ = weak.update(cx, |this, cx| this.start_github_sign_in(source, cx));
   }
 
   pub fn sign_out(cx: &mut App) {
@@ -3057,6 +3057,7 @@ impl GitPage {
           let _ = write_task.await;
           let _ = this.update(cx, |this, cx| {
             this.api.set_bearer_token(token);
+            crate::analytics::track(cx, "sign_in_completed");
             this.refresh_auth_state(cx);
           });
         }
@@ -3072,6 +3073,7 @@ impl GitPage {
   }
 
   fn handle_subscription_callback(&mut self, cx: &mut Context<Self>) {
+    crate::analytics::track(cx, "subscription_callback_received");
     self.refresh_auth_state(cx);
 
     NavigationHistory::navigate("/billing", cx);
@@ -3128,7 +3130,12 @@ impl GitPage {
     self.auth_task = Some(task);
   }
 
-  fn start_github_sign_in(&mut self, cx: &mut Context<Self>) {
+  fn start_github_sign_in(&mut self, source: &'static str, cx: &mut Context<Self>) {
+    crate::analytics::track_with(
+      cx,
+      "sign_in_started",
+      Some(serde_json::json!({ "source": source })),
+    );
     let api = self.api.clone();
     let task = cx.spawn(async move |_, cx| {
       let result = unblock(move || api.sign_in_with_github()).await;

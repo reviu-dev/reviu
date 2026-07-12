@@ -54,7 +54,10 @@ pub fn track(cx: &mut App, name: &'static str) {
 }
 
 pub fn track_with(cx: &mut App, name: &'static str, data: Option<Value>) {
-  if !AppSettings::get(cx).analytics_enabled {
+  let analytics_enabled = cx
+    .try_global::<AppSettings>()
+    .is_some_and(|settings| settings.analytics_enabled);
+  if !analytics_enabled {
     return;
   }
   let Some(analytics) = cx.try_global::<Analytics>().cloned() else {
