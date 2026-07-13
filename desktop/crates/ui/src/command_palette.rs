@@ -1381,6 +1381,14 @@ impl CommandPaletteCommand {
     )
   }
 
+  pub fn open_github_page_locked() -> Self {
+    Self::new(
+      CommandPaletteCommandId::OpenGithubPage,
+      "Go to GitHub",
+      "Requires Reviu Pro. 14-day free trial",
+    )
+  }
+
   pub fn create_github_repository() -> Self {
     Self::new(
       CommandPaletteCommandId::CreateGithubRepository,
@@ -1527,8 +1535,12 @@ impl CommandPaletteCommand {
       commands.push(Self::open_git_page());
     }
 
-    if include_github && current_page != CommandPalettePage::Github {
-      commands.push(Self::open_github_page());
+    if current_page != CommandPalettePage::Github {
+      commands.push(if include_github {
+        Self::open_github_page()
+      } else {
+        Self::open_github_page_locked()
+      });
     }
 
     if include_github {
@@ -3628,6 +3640,24 @@ mod tests {
       !commands
         .iter()
         .any(|c| c.id == CommandPaletteCommandId::SearchGithubRepository)
+    );
+  }
+
+  #[test]
+  fn default_global_commands_show_locked_go_to_github_when_github_is_disabled() {
+    let commands = CommandPaletteCommand::default_global_commands(
+      super::CommandPalettePage::Git,
+      /* include_github */ false,
+    );
+    let github = commands
+      .iter()
+      .find(|c| c.id == CommandPaletteCommandId::OpenGithubPage)
+      .expect("go to github should stay visible without github access");
+    assert!(
+      github
+        .description
+        .as_ref()
+        .is_some_and(|description| description.contains("Reviu Pro"))
     );
   }
 

@@ -217,6 +217,7 @@ struct GithubBranchContext {
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum GitBranchPullRequestButtonState {
   Hidden,
+  LockedPro,
   Checking,
   PublishAndCreate,
   OpenExisting {
@@ -229,6 +230,7 @@ enum GitBranchPullRequestButtonState {
 
 struct GitBranchSwitchNotificationId;
 struct GitActionErrorNotificationId;
+struct GitProPushHintNotificationId;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum GitPageOpenAction {
@@ -1697,6 +1699,7 @@ pub struct GitPage {
   force_push_after_rebase: bool,
   push_pull_in_progress: bool,
   publish_branch_and_create_pr_in_progress: bool,
+  pro_push_hint_shown: bool,
   fetch_in_progress: bool,
   has_staged_changes: bool,
   generating_commit_message: bool,
@@ -2013,7 +2016,7 @@ impl GitPage {
     };
 
     if !can_open_in_app {
-      return GitBranchPullRequestButtonState::Hidden;
+      return GitBranchPullRequestButtonState::LockedPro;
     }
 
     if !has_github_upstream {
@@ -2084,6 +2087,7 @@ impl GitPage {
         CommandPaletteCommand::create_pull_request().disabled("Checking for an open pull request"),
       ),
       GitBranchPullRequestButtonState::Hidden
+      | GitBranchPullRequestButtonState::LockedPro
       | GitBranchPullRequestButtonState::PublishAndCreate => None,
     }
   }
@@ -3221,6 +3225,7 @@ impl GitPage {
       force_push_after_rebase: false,
       push_pull_in_progress: false,
       publish_branch_and_create_pr_in_progress: false,
+      pro_push_hint_shown: false,
       fetch_in_progress: false,
       has_staged_changes: false,
       generating_commit_message: false,
@@ -3337,6 +3342,7 @@ impl GitPage {
       force_push_after_rebase: false,
       push_pull_in_progress: false,
       publish_branch_and_create_pr_in_progress: false,
+      pro_push_hint_shown: false,
       fetch_in_progress: false,
       has_staged_changes: false,
       generating_commit_message: false,
@@ -3625,6 +3631,66 @@ impl GitPage {
   fn push_git_action_success_notification(&self, message: SharedString, cx: &mut Context<Self>) {
     let _ = cx.update_window(self.window_handle, move |_, window, cx| {
       window.push_notification(Notification::success(message), cx);
+    });
+  }
+
+  fn should_show_pro_push_hint(
+    already_shown: bool,
+    has_github_access: bool,
+    has_github_branch_context: bool,
+  ) -> bool {
+    !already_shown && !has_github_access && has_github_branch_context
+  }
+
+  fn maybe_show_pro_push_hint(&mut self, cx: &mut Context<Self>) {
+    if !Self::should_show_pro_push_hint(
+      self.pro_push_hint_shown,
+      AuthStateStore::has_github_access(cx),
+      self.github_branch_context(cx).is_some(),
+    ) {
+      return;
+    }
+
+    self.pro_push_hint_shown = true;
+    crate::analytics::track_with(
+      cx,
+      "pro_teaser_shown",
+      Some(serde_json::json!({ "source": "post_push_notification" })),
+    );
+    let _ = cx.update_window(self.window_handle, move |_, window, cx| {
+      window.push_notification(
+        Notification::new()
+          .id::<GitProPushHintNotificationId>()
+          .title("Review pull requests in Reviu")
+          .message(
+            "Reviu Pro brings GitHub pull requests, reviews, and notifications into the app. 14-day free trial.",
+          )
+          .content(move |_, _, _cx| {
+            div()
+              .flex()
+              .mt_3()
+              .child(
+                Button::new("git-pro-push-hint-open")
+                  .primary()
+                  .compact()
+                  .small()
+                  .label("See Reviu Pro")
+                  .on_click(move |_, window, cx| {
+                    crate::analytics::track_with(
+                      cx,
+                      "pro_teaser_clicked",
+                      Some(serde_json::json!({ "source": "post_push_notification" })),
+                    );
+                    NavigationHistory::navigate("/github", cx);
+                    window.on_next_frame(|window, cx| {
+                      window.remove_notification::<GitProPushHintNotificationId>(cx);
+                    });
+                  }),
+              )
+              .into_any_element()
+          }),
+        cx,
+      );
     });
   }
 
@@ -6742,6 +6808,7 @@ impl GitPage {
             this.force_push_after_rebase = false;
             this.add_git_breadcrumb("Push succeeded", Map::new());
             this.push_git_action_success_notification("Pushed".into(), cx);
+            this.maybe_show_pro_push_hint(cx);
           }
           Err(error) => {
             let error_message = error.to_string();
@@ -9250,6 +9317,23 @@ impl GitPage {
 
     let branch_pr_button = match branch_pr_button_state {
       GitBranchPullRequestButtonState::Hidden => None,
+      GitBranchPullRequestButtonState::LockedPro => Some(
+        Button::new("git-branch-pr-locked")
+          .label("Create PR")
+          .icon(UiIconName::GitPullRequestArrow)
+          .outline()
+          .with_variant(ButtonVariant::Secondary)
+          .xsmall()
+          .p_2()
+          .on_click(|_, _, cx| {
+            crate::analytics::track_with(
+              cx,
+              "pro_teaser_clicked",
+              Some(serde_json::json!({ "source": "branch_pr_button" })),
+            );
+            NavigationHistory::navigate("/github", cx);
+          }),
+      ),
       GitBranchPullRequestButtonState::Checking => Some(
         Button::new("git-branch-pr-status")
           .label("Checking PR")
@@ -9273,7 +9357,6 @@ impl GitPage {
             .p_2()
             .loading(self.publish_branch_and_create_pr_in_progress)
             .disabled(self.push_pull_in_progress || self.publish_branch_and_create_pr_in_progress)
-            .tooltip("Publish this branch to GitHub and create a pull request")
             .on_click(cx.listener(|this, _, _window, cx| {
               this.publish_branch_and_create_pull_request_action(cx);
             }))
@@ -11903,12 +11986,12 @@ mod tests {
     );
     assert_eq!(
       GitPage::branch_pr_button_state(Some(&context), false, true, false, true, None),
-      GitBranchPullRequestButtonState::Hidden
+      GitBranchPullRequestButtonState::LockedPro
     );
   }
 
   #[test]
-  fn branch_pr_button_state_hides_branch_pull_request_button_without_github_access() {
+  fn branch_pr_button_state_locks_branch_pull_request_button_without_github_access() {
     let context = GithubBranchContext {
       owner: "acme".to_string(),
       repo: "widget".to_string(),
@@ -11925,8 +12008,24 @@ mod tests {
         false,
         Some(&pull_request),
       ),
+      GitBranchPullRequestButtonState::LockedPro
+    );
+  }
+
+  #[test]
+  fn branch_pr_button_state_stays_hidden_without_github_branch_context() {
+    assert_eq!(
+      GitPage::branch_pr_button_state(None, false, true, false, false, None),
       GitBranchPullRequestButtonState::Hidden
     );
+  }
+
+  #[test]
+  fn pro_push_hint_shows_once_for_free_users_on_github_repos() {
+    assert!(GitPage::should_show_pro_push_hint(false, false, true));
+    assert!(!GitPage::should_show_pro_push_hint(true, false, true));
+    assert!(!GitPage::should_show_pro_push_hint(false, true, true));
+    assert!(!GitPage::should_show_pro_push_hint(false, false, false));
   }
 
   #[test]
