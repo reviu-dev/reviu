@@ -14,7 +14,7 @@ use crate::github_home_tabs::{
 };
 use crate::sentry_context;
 
-const DEFAULT_API_BASE_URL: &str = "http://localhost:3000";
+const DEFAULT_API_BASE_URL: &str = "http://localhost:3001";
 const KEYCHAIN_USERNAME: &str = "bearer";
 
 #[derive(Debug)]
