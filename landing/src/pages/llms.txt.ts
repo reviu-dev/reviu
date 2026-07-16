@@ -1,6 +1,15 @@
 import type { APIRoute } from "astro";
+import { comparisons, getComparisonUrl } from "../lib/comparisons";
 
 const absoluteUrl = (pathname: string, site: URL) => new URL(pathname, site).href;
+
+const comparisonLinks = (site: URL) =>
+  comparisons
+    .map(
+      (comparison) =>
+        `- [Reviu vs ${comparison.name}](${absoluteUrl(getComparisonUrl(comparison.slug), site)}): Honest comparison of Reviu and ${comparison.name}.`,
+    )
+    .join("\n");
 
 const renderLlmsTxt = (site: URL) => `# Reviu
 
@@ -15,6 +24,11 @@ Reviu is built for developers who want local Git, GitHub notifications, reposito
 - [Why GitHub PR Review Still Feels Slow](${absoluteUrl("/blog/why-github-pr-review-still-feels-slow", site)}): Article about keeping local Git and GitHub review context in one desktop workflow.
 - [Install script](${absoluteUrl("/install.sh", site)}): Linux install script for Reviu.
 - [Full LLM context](${absoluteUrl("/llms-full.txt", site)}): Detailed product facts, feature boundaries, pricing, and messaging guardrails.
+
+## Comparisons
+
+- [Compare Reviu](${absoluteUrl("/vs", site)}): Index of Reviu comparisons with other desktop Git clients.
+${comparisonLinks(site)}
 
 ## Pricing
 

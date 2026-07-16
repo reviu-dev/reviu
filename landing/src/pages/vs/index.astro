@@ -1,0 +1,80 @@
+---
+import Layout from "../../layouts/Layout.astro";
+import SiteFooter from "../../components/SiteFooter.astro";
+import { comparisons, getComparisonUrl } from "../../lib/comparisons";
+
+const description =
+  "Compare Reviu with GitHub Desktop, Fork, Tower, and GitKraken. See how a native Rust Git client with an agent review panel and in-app GitHub pull request review stacks up.";
+
+const structuredData = {
+  "@context": "https://schema.org",
+  "@type": "ItemList",
+  name: "Reviu Git client comparisons",
+  itemListElement: comparisons.map((comparison, index) => ({
+    "@type": "ListItem",
+    position: index + 1,
+    name: `Reviu vs ${comparison.name}`,
+    url: `https://reviu.dev${getComparisonUrl(comparison.slug)}`,
+  })),
+};
+---
+
+<Layout
+  title="Compare Git Clients"
+  description={description}
+  pathname="/vs"
+  structuredData={structuredData}
+>
+  <main class="py-20 sm:py-24">
+    <section class="mx-auto max-w-5xl px-6 lg:px-8">
+      <a
+        href="/"
+        class="inline-flex items-center rounded-md bg-background px-3 py-2 text-sm font-semibold text-foreground hover:bg-muted/50"
+      >
+        &larr; Back
+      </a>
+
+      <div class="mt-6" data-reveal-root data-reveal-threshold="0.05">
+        <h1
+          class="reviu-reveal text-4xl font-semibold tracking-tight text-foreground sm:text-5xl"
+        >
+          Compare Reviu
+        </h1>
+        <p
+          class="reviu-reveal mt-4 text-lg text-muted-foreground"
+          style="--reveal-delay: 100ms;"
+        >
+          Honest comparisons between Reviu and other desktop Git clients, so you
+          can pick the right tool for your workflow.
+        </p>
+      </div>
+
+      <div
+        class="mt-12 grid gap-6 sm:grid-cols-2"
+        data-reveal-root
+        data-reveal-threshold="0.05"
+      >
+        {
+          comparisons.map((comparison, index) => (
+            <a
+              href={getComparisonUrl(comparison.slug)}
+              class="reviu-reveal group rounded-2xl border border-border bg-background p-6 transition-colors hover:border-primary/40 hover:bg-muted/30"
+              style={`--reveal-delay: ${index * 80}ms;`}
+            >
+              <h2 class="text-xl font-semibold tracking-tight text-foreground">
+                Reviu vs {comparison.name}
+              </h2>
+              <p class="mt-3 text-sm/7 text-muted-foreground">
+                {comparison.intro[0]}
+              </p>
+              <span class="mt-4 inline-flex text-sm font-semibold text-primary group-hover:text-primary/80">
+                Read comparison
+              </span>
+            </a>
+          ))
+        }
+      </div>
+    </section>
+  </main>
+  <SiteFooter />
+</Layout>

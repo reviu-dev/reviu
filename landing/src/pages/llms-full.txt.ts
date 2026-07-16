@@ -1,6 +1,15 @@
 import type { APIRoute } from "astro";
+import { comparisons, getComparisonUrl } from "../lib/comparisons";
 
 const absoluteUrl = (pathname: string, site: URL) => new URL(pathname, site).href;
+
+const comparisonLinks = (site: URL) =>
+  comparisons
+    .map(
+      (comparison) =>
+        `- [Reviu vs ${comparison.name}](${absoluteUrl(getComparisonUrl(comparison.slug), site)}): How Reviu compares to ${comparison.name} on engine, platforms, pricing, and GitHub review.`,
+    )
+    .join("\n");
 
 const renderLlmsFullTxt = (site: URL) => `# Reviu Full LLM Context
 
@@ -58,6 +67,8 @@ Reviu supports macOS on Apple Silicon and Intel, Windows on ARM64 and x64, and L
 - [Changelog](${absoluteUrl("/changelog", site)}): User-facing release notes.
 - [Blog](${absoluteUrl("/blog", site)}): Articles about Git workflows and pull request review.
 - [Why GitHub PR Review Still Feels Slow](${absoluteUrl("/blog/why-github-pr-review-still-feels-slow", site)}): Article about local Git and GitHub review context.
+- [Compare Reviu](${absoluteUrl("/vs", site)}): Index of comparisons with other desktop Git clients.
+${comparisonLinks(site)}
 - [Privacy Policy](${absoluteUrl("/privacy", site)}): Privacy terms for Reviu.
 - [Terms of Service](${absoluteUrl("/terms", site)}): Product and subscription terms.
 - [Linux install script](${absoluteUrl("/install.sh", site)}): Shell installer for Linux builds.
