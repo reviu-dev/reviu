@@ -8,6 +8,9 @@ importers:
 
   .:
     dependencies:
+      '@fontsource/poppins':
+        specifier: ^5.2.7
+        version: 5.2.7
       '@lucide/astro':
         specifier: ^1.21.0
         version: 1.21.0(astro@6.4.8(jiti@2.7.0)(lightningcss@1.32.0)(rollup@4.56.0)(yaml@2.9.0))
@@ -296,6 +299,9 @@ packages:
     engines: {node: '>=18'}
     cpu: [x64]
     os: [win32]
+
+  '@fontsource/poppins@5.2.7':
+    resolution: {integrity: sha512-6uQyPmseo4FgI97WIhA4yWRlNaoLk4vSDK/PyRwdqqZb5zAEuc+Kunt8JTMcsHYUEGYBtN15SNkMajMdqUSUmg==}
 
   '@img/colour@1.0.0':
     resolution: {integrity: sha512-A5P/LfWGFSl6nsckYtjw9da+19jB8hkJ6ACTGcDfEJ0aE+l2n2El7dsVM7UVHZQ9s2lmYMWlrS21YLy2IR1LUw==}
@@ -2314,6 +2320,8 @@ snapshots:
 
   '@esbuild/win32-x64@0.27.7':
     optional: true
+
+  '@fontsource/poppins@5.2.7': {}
 
   '@img/colour@1.0.0': {}
 

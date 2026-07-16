@@ -1,5 +1,4 @@
 ---
-import { Image } from "astro:assets";
 import GitBranchIcon from "@lucide/astro/icons/git-branch";
 import DownloadIcon from "@lucide/astro/icons/download";
 import GithubIcon from "../assets/icons/github.svg?raw";
@@ -10,6 +9,10 @@ import gitDark from "../assets/app_screenshots/git_dark.png";
 import gitLight from "../assets/app_screenshots/git_light.png";
 import LogoDark from "../assets/logo_dark.svg";
 import LogoLight from "../assets/logo_light.svg";
+import ThemePicture from "./ThemePicture.astro";
+import { themeImageSources } from "../lib/themeImage";
+
+const heroImage = await themeImageSources(gitLight, gitDark, 1400, 829);
 ---
 
 <section
@@ -162,25 +165,12 @@ import LogoLight from "../assets/logo_light.svg";
         <div
           class="-m-2 rounded-xl bg-gray-900/5 p-2 ring-1 ring-gray-900/10 ring-inset lg:-m-4 lg:rounded-2xl lg:p-4 dark:bg-white/2.5 dark:ring-white/10"
         >
-          <Image
-            src={gitLight}
+          <ThemePicture
+            sources={heroImage}
             alt="Reviu desktop interface preview"
-            width={1400}
-            height={829}
-            layout="constrained"
-            fit="contain"
             loading="eager"
-            class="w-full rounded-sm sm:rounded-[13px] bg-white/0 shadow-xl ring-1 ring-gray-900/10 dark:hidden"
-          />
-          <Image
-            src={gitDark}
-            alt="Reviu desktop interface preview"
-            width={1400}
-            height={829}
-            layout="constrained"
-            fit="contain"
-            loading="eager"
-            class="w-full rounded-sm sm:rounded-[13px] bg-white/5 shadow-2xl ring-1 ring-white/10 not-dark:hidden"
+            fetchpriority="high"
+            class="w-full rounded-sm sm:rounded-[13px] shadow-xl ring-1 ring-gray-900/10 dark:shadow-2xl dark:ring-white/10"
           />
         </div>
       </div>

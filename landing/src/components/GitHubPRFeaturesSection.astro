@@ -4,10 +4,18 @@ import gitHubPrChangesLight from "../assets/app_screenshots/github_pr_changes_li
 import GitMergeConflictIcon from "@lucide/astro/icons/git-merge-conflict";
 import GitMergeIcon from "@lucide/astro/icons/git-merge";
 import GitPullRequestArrowIcon from "@lucide/astro/icons/git-pull-request-arrow";
-import { Image } from "astro:assets";
 import MessageCircleReplyIcon from "@lucide/astro/icons/message-circle-reply";
 import SearchCheckIcon from "@lucide/astro/icons/search-check";
 import SparklesIcon from "@lucide/astro/icons/sparkles";
+import ThemePicture from "./ThemePicture.astro";
+import { themeImageSources } from "../lib/themeImage";
+
+const sectionImage = await themeImageSources(
+  gitHubPrChangesLight,
+  gitHubPrChangesDark,
+  3020,
+  1894,
+);
 
 const features = [
   {
@@ -73,19 +81,11 @@ const features = [
       class="reviu-reveal mx-auto max-w-7xl px-6 lg:px-8"
       style="--reveal-delay: 150ms;"
     >
-      <Image
-        width="3020"
-        height="1894"
-        src={gitHubPrChangesLight}
-        alt="Reviu pull request review screenshot in light mode"
-        class="mb-[-12%] rounded-sm sm:rounded-xl shadow-2xl ring-1 ring-gray-900/10 dark:hidden"
-      />
-      <Image
-        width="3020"
-        height="1894"
-        src={gitHubPrChangesDark}
-        alt="Reviu pull request review screenshot in dark mode"
-        class="mb-[-12%] rounded-sm sm:rounded-xl shadow-2xl ring-1 ring-white/10 not-dark:hidden"
+      <ThemePicture
+        sources={sectionImage}
+        alt="Reviu pull request review screenshot"
+        loading="lazy"
+        class="mb-[-12%] rounded-sm sm:rounded-xl shadow-2xl ring-1 ring-gray-900/10 dark:ring-white/10"
       />
       <div aria-hidden="true" class="relative">
         <div

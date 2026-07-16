@@ -6,9 +6,12 @@ import GitMergeConflictIcon from "@lucide/astro/icons/git-merge-conflict";
 import PencilLineIcon from "@lucide/astro/icons/pencil-line";
 import SparklesIcon from "@lucide/astro/icons/sparkles";
 import Badge from "./Badge.astro";
-import { Image } from "astro:assets";
+import ThemePicture from "./ThemePicture.astro";
+import { themeImageSources } from "../lib/themeImage";
 import gitDark from "../assets/app_screenshots/git_dark.png";
 import gitLight from "../assets/app_screenshots/git_light.png";
+
+const sectionImage = await themeImageSources(gitLight, gitDark, 3020, 1894);
 
 const features = [
   {
@@ -78,19 +81,11 @@ const features = [
       class="reviu-reveal mx-auto max-w-7xl px-6 lg:px-8"
       style="--reveal-delay: 150ms;"
     >
-      <Image
-        width="3020"
-        height="1894"
-        src={gitLight}
-        alt="Reviu Git conflict resolution screenshot in light mode"
-        class="mb-[-12%] rounded-sm sm:rounded-xl shadow-2xl ring-1 ring-gray-900/10 dark:hidden"
-      />
-      <Image
-        width="3020"
-        height="1894"
-        src={gitDark}
-        alt="Reviu Git conflict resolution screenshot in dark mode"
-        class="mb-[-12%] rounded-sm sm:rounded-xl shadow-2xl ring-1 ring-white/10 not-dark:hidden"
+      <ThemePicture
+        sources={sectionImage}
+        alt="Reviu Git conflict resolution screenshot"
+        loading="lazy"
+        class="mb-[-12%] rounded-sm sm:rounded-xl shadow-2xl ring-1 ring-gray-900/10 dark:ring-white/10"
       />
       <div aria-hidden="true" class="relative">
         <div

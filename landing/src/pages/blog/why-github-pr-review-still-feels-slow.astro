@@ -1,6 +1,8 @@
 ---
 import Layout from "../../layouts/Layout.astro";
 import SiteFooter from "../../components/SiteFooter.astro";
+import ThemePicture from "../../components/ThemePicture.astro";
+import { themeImageSources } from "../../lib/themeImage";
 import gitLight from "../../assets/app_screenshots/git_light.png";
 import gitDark from "../../assets/app_screenshots/git_dark.png";
 import githubHomeLight from "../../assets/app_screenshots/github_home_light.png";
@@ -8,6 +10,25 @@ import githubHomeDark from "../../assets/app_screenshots/github_home_dark.png";
 import githubPrConvLight from "../../assets/app_screenshots/github_pr_conv_light.png";
 import githubPrConvDark from "../../assets/app_screenshots/github_pr_conv_dark.png";
 import { blogPosts } from "../../lib/blog";
+
+const prConvImage = await themeImageSources(
+  githubPrConvLight,
+  githubPrConvDark,
+  githubPrConvLight.width,
+  githubPrConvLight.height,
+);
+const githubHomeImage = await themeImageSources(
+  githubHomeLight,
+  githubHomeDark,
+  githubHomeLight.width,
+  githubHomeLight.height,
+);
+const gitImage = await themeImageSources(
+  gitLight,
+  gitDark,
+  gitLight.width,
+  gitLight.height,
+);
 
 const post = blogPosts.find(
   (item) => item.slug === "why-github-pr-review-still-feels-slow",
@@ -91,23 +112,12 @@ const structuredData = {
       </header>
 
       <figure class="mt-10">
-        <img
-          src={githubPrConvLight.src}
-          width={githubPrConvLight.width}
-          height={githubPrConvLight.height}
+        <ThemePicture
+          sources={prConvImage}
           alt="Reviu pull request review screen with changed files, diff context, and review comments."
-          class="w-full rounded-lg border border-border bg-secondary dark:hidden"
           loading="eager"
-          decoding="async"
-        />
-        <img
-          src={githubPrConvDark.src}
-          width={githubPrConvDark.width}
-          height={githubPrConvDark.height}
-          alt="Reviu pull request review screen with changed files, diff context, and review comments."
-          class="w-full rounded-lg border border-border bg-secondary not-dark:hidden"
-          loading="eager"
-          decoding="async"
+          fetchpriority="high"
+          class="w-full rounded-lg border border-border bg-secondary"
         />
       </figure>
 
@@ -184,23 +194,11 @@ const structuredData = {
         </p>
 
         <figure>
-          <img
-            src={githubHomeLight.src}
-            width={githubHomeLight.width}
-            height={githubHomeLight.height}
+          <ThemePicture
+            sources={githubHomeImage}
             alt="Reviu GitHub home screen with notifications and pull request lists."
-            class="w-full rounded-lg border border-border bg-secondary dark:hidden"
             loading="lazy"
-            decoding="async"
-          />
-          <img
-            src={githubHomeDark.src}
-            width={githubHomeDark.width}
-            height={githubHomeDark.height}
-            alt="Reviu GitHub home screen with notifications and pull request lists."
-            class="w-full rounded-lg border border-border bg-secondary not-dark:hidden"
-            loading="lazy"
-            decoding="async"
+            class="w-full rounded-lg border border-border bg-secondary"
           />
         </figure>
 
@@ -250,23 +248,11 @@ const structuredData = {
         </p>
 
         <figure>
-          <img
-            src={gitLight.src}
-            width={gitLight.width}
-            height={gitLight.height}
+          <ThemePicture
+            sources={gitImage}
             alt="Reviu local Git screen with staged and unstaged files plus a split diff."
-            class="w-full rounded-lg border border-border bg-secondary dark:hidden"
             loading="lazy"
-            decoding="async"
-          />
-          <img
-            src={gitDark.src}
-            width={gitDark.width}
-            height={gitDark.height}
-            alt="Reviu local Git screen with staged and unstaged files plus a split diff."
-            class="w-full rounded-lg border border-border bg-secondary not-dark:hidden"
-            loading="lazy"
-            decoding="async"
+            class="w-full rounded-lg border border-border bg-secondary"
           />
         </figure>
 

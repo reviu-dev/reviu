@@ -5,9 +5,17 @@ import BellIcon from "@lucide/astro/icons/bell";
 import CommandIcon from "@lucide/astro/icons/command";
 import FolderIcon from "@lucide/astro/icons/folder";
 import GitPullRequestArrowIcon from "@lucide/astro/icons/git-pull-request-arrow";
-import { Image } from "astro:assets";
 import MonitorIcon from "@lucide/astro/icons/monitor";
 import SearchCheckIcon from "@lucide/astro/icons/search-check";
+import ThemePicture from "./ThemePicture.astro";
+import { themeImageSources } from "../lib/themeImage";
+
+const sectionImage = await themeImageSources(
+  gitHubHomeLight,
+  gitHubHomeDark,
+  3020,
+  1894,
+);
 
 const features = [
   {
@@ -74,19 +82,11 @@ const features = [
       class="reviu-reveal mx-auto max-w-7xl px-6 lg:px-8"
       style="--reveal-delay: 150ms;"
     >
-      <Image
-        width="3020"
-        height="1894"
-        src={gitHubHomeLight}
-        alt="Reviu GitHub home screenshot in light mode"
-        class="mb-[-12%] rounded-sm sm:rounded-xl shadow-2xl ring-1 ring-gray-900/10 dark:hidden"
-      />
-      <Image
-        width="3020"
-        height="1894"
-        src={gitHubHomeDark}
-        alt="Reviu GitHub home screenshot in dark mode"
-        class="mb-[-12%] rounded-sm sm:rounded-xl shadow-2xl ring-1 ring-white/10 not-dark:hidden"
+      <ThemePicture
+        sources={sectionImage}
+        alt="Reviu GitHub home screenshot"
+        loading="lazy"
+        class="mb-[-12%] rounded-sm sm:rounded-xl shadow-2xl ring-1 ring-gray-900/10 dark:ring-white/10"
       />
       <div aria-hidden="true" class="relative">
         <div

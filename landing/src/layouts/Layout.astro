@@ -1,4 +1,8 @@
 ---
+import "@fontsource/poppins/latin-400.css";
+import "@fontsource/poppins/latin-500.css";
+import "@fontsource/poppins/latin-600.css";
+import "@fontsource/poppins/latin-700.css";
 import "../styles/global.css";
 
 interface StructuredData {
@@ -37,9 +41,28 @@ const pageTitle =
 const canonicalUrl = new URL(pathname, site).toString();
 const imagePath = typeof image === "string" ? image : image.src;
 const imageUrl = new URL(imagePath, site).toString();
-const structuredDataItems = Array.isArray(structuredData)
-  ? structuredData
-  : [structuredData];
+const siteStructuredData = [
+  {
+    "@context": "https://schema.org",
+    "@type": "Organization",
+    name: "Reviu",
+    url: site.toString(),
+    logo: new URL("/web-app-manifest-512x512.png", site).toString(),
+    sameAs: ["https://github.com/reviu-dev/reviu"],
+  },
+  {
+    "@context": "https://schema.org",
+    "@type": "WebSite",
+    name: "Reviu",
+    url: site.toString(),
+    publisher: { "@type": "Organization", name: "Reviu" },
+  },
+];
+
+const structuredDataItems = [
+  ...siteStructuredData,
+  ...(Array.isArray(structuredData) ? structuredData : [structuredData]),
+];
 
 const isProd = import.meta.env.MODE === "production";
 ---
@@ -47,7 +70,7 @@ const isProd = import.meta.env.MODE === "production";
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta name="description" content={description} />
     <meta name="robots" content={robots} />
     <meta name="theme-color" content="#2563EB" />
@@ -76,12 +99,6 @@ const isProd = import.meta.env.MODE === "production";
     <meta name="twitter:description" content={description} />
     <meta name="twitter:image" content={imageUrl} />
     <title>{pageTitle}</title>
-    <link rel="preconnect" href="https://fonts.googleapis.com" />
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-    <link
-      rel="stylesheet"
-      href="https://fonts.googleapis.com/css2?family=Poppins:wght@400;500;600;700&display=swap"
-    />
     <script is:inline>
       document.documentElement.classList.add("reviu-motion");
     </script>
