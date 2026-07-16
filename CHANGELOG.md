@@ -4,6 +4,10 @@ All notable changes to Reviu are documented here.
 
 ## 0.18.0
 
+### Keyboard Shortcuts On The Terminal And Agent Buttons
+
+The Terminal and Agent toggle buttons on the Git page now show their keyboard shortcuts, the same as the command palette and commit buttons, so the toggles are easier to learn.
+
 ### Open A Repository From The Repository Selector
 
 The repository selector on the Git page now includes an "Open repository…" option, so you can pick a new folder to work on right from the dropdown. Opening a repository was previously only reachable through the `cmd-o` shortcut.

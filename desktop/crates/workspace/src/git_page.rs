@@ -9210,7 +9210,7 @@ impl GitPage {
       .into_any_element()
   }
 
-  fn render_header(&self, _window: &Window, cx: &mut Context<Self>) -> impl IntoElement {
+  fn render_header(&self, window: &Window, cx: &mut Context<Self>) -> impl IntoElement {
     let theme = cx.theme().clone();
     let push_pull_loading = self.push_pull_in_progress;
     let on_repo_select = self.repo_select_handler(cx);
@@ -9483,6 +9483,19 @@ impl GitPage {
       .xsmall()
       .p_2()
       .selected(self.show_terminal_sidebar)
+      .child(
+        div()
+          .ml_1()
+          .text_color(theme.muted_foreground)
+          .child(
+            Kbd::new(shortcuts::resolved_display_shortcut_keystroke_in(
+              cx,
+              window,
+              ShortcutId::ToggleTerminalSidebar,
+            ))
+            .appearance(false),
+          ),
+      )
       .disabled(self.selected_repo.is_none())
       .on_click(cx.listener(Self::toggle_terminal_sidebar_click));
 
@@ -9494,6 +9507,19 @@ impl GitPage {
       .xsmall()
       .p_2()
       .selected(self.show_agent_sidebar)
+      .child(
+        div()
+          .ml_1()
+          .text_color(theme.muted_foreground)
+          .child(
+            Kbd::new(shortcuts::resolved_display_shortcut_keystroke_in(
+              cx,
+              window,
+              ShortcutId::ToggleAgentSidebar,
+            ))
+            .appearance(false),
+          ),
+      )
       .disabled(self.selected_repo.is_none())
       .on_click(cx.listener(Self::toggle_agent_sidebar_click));
 
