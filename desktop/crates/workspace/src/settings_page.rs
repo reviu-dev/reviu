@@ -71,6 +71,9 @@ pub struct SettingsPage {
   ai_settings_notice: Option<SharedString>,
   ai_settings_task: Option<Task<()>>,
   ai_settings_loaded: bool,
+  ai_models_loading: bool,
+  ai_models_error: Option<SharedString>,
+  ai_models_task: Option<Task<()>>,
   size: Size,
   _subscriptions: Vec<Subscription>,
 }
@@ -86,8 +89,8 @@ impl SettingsPage {
     let initial_provider = AiProvider::Openai;
     let ai_model_select = cx.new(|cx| {
       SelectState::new(
-        provider_model_items(initial_provider),
-        provider_default_model_index(initial_provider),
+        vec![SharedString::from(initial_provider.default_model())],
+        Some(IndexPath::default()),
         window,
         cx,
       )
@@ -124,6 +127,9 @@ impl SettingsPage {
       ai_settings_notice: None,
       ai_settings_task: None,
       ai_settings_loaded: false,
+      ai_models_loading: false,
+      ai_models_error: None,
+      ai_models_task: None,
       size: Size::default(),
       _subscriptions: vec![shortcut_capture_subscription],
     };
@@ -149,7 +155,7 @@ impl SettingsPage {
       .unwrap_or_else(|| self.ai_provider.default_model().to_string())
       .into();
     self.ai_model_select.update(cx, |select, cx| {
-      select.set_items(provider_model_items(self.ai_provider), window, cx);
+      select.set_items(vec![model.clone()], window, cx);
       select.set_selected_value(&model, window, cx);
     });
     self
@@ -187,6 +193,9 @@ impl SettingsPage {
             let _ = cx.update_window(window_handle, |_, window, cx| {
               this.apply_ai_settings(settings, window, cx);
             });
+            if this.ai_configured {
+              this.refresh_ai_models(cx);
+            }
           }
           Err(error) => {
             let message = error.to_string();
@@ -201,17 +210,74 @@ impl SettingsPage {
     self.ai_settings_task = Some(task);
   }
 
+  fn refresh_ai_models(&mut self, cx: &mut Context<Self>) {
+    if self.ai_models_loading {
+      return;
+    }
+
+    let api_key = self.ai_api_key_input.read(cx).value().trim().to_string();
+    let key = (!api_key.is_empty()).then_some(api_key);
+    self.ai_models_loading = true;
+    self.ai_models_error = None;
+    let api = self.api.clone();
+    let provider = self.ai_provider;
+    let task = cx.spawn(async move |this, cx| {
+      let result = unblock(move || api.list_ai_models(provider, key.as_deref())).await;
+      let _ = this.update(cx, |this, cx| {
+        this.ai_models_loading = false;
+        match result {
+          Ok(response) => {
+            let window_handle = this.window_handle;
+            let _ = cx.update_window(window_handle, |_, window, cx| {
+              let items: Vec<SharedString> = response
+                .models
+                .iter()
+                .map(|model| SharedString::from(model.id.clone()))
+                .collect();
+              if items.is_empty() {
+                return;
+              }
+              let current = this.ai_model_select.read(cx).selected_value().map(|value| value.to_string());
+              let keep = current
+                .as_deref()
+                .is_some_and(|value| items.iter().any(|item| item.as_ref() == value));
+              let target = if keep {
+                SharedString::from(current.unwrap())
+              } else {
+                SharedString::from(response.default_model.clone())
+              };
+              this.ai_model_select.update(cx, |select, cx| {
+                select.set_items(items, window, cx);
+                select.set_selected_value(&target, window, cx);
+              });
+            });
+          }
+          Err(error) => {
+            this.ai_models_error = Some(error.to_string().into());
+          }
+        }
+        cx.notify();
+      });
+    });
+    self.ai_models_task = Some(task);
+  }
+
   fn set_ai_provider(&mut self, provider: AiProvider, window: &mut Window, cx: &mut Context<Self>) {
     if self.ai_provider == provider {
       return;
     }
 
     self.ai_provider = provider;
+    let model = SharedString::from(provider.default_model());
     self.ai_model_select.update(cx, |select, cx| {
-      select.set_items(provider_model_items(provider), window, cx);
-      select.set_selected_index(provider_default_model_index(provider), window, cx);
+      select.set_items(vec![model.clone()], window, cx);
+      select.set_selected_value(&model, window, cx);
     });
     self.ai_settings_notice = None;
+    self.ai_models_error = None;
+    if !self.ai_api_key_input.read(cx).value().trim().is_empty() {
+      self.refresh_ai_models(cx);
+    }
     cx.notify();
   }
 
@@ -253,6 +319,7 @@ impl SettingsPage {
               this.apply_ai_settings(settings, window, cx);
             });
             this.ai_settings_notice = Some("AI settings saved.".into());
+            this.refresh_ai_models(cx);
           }
           Err(error) => {
             this.ai_settings_error = Some(error.to_string().into());
@@ -557,15 +624,47 @@ impl SettingsPage {
           SettingField::render({
             let view = view.clone();
             move |_, _, cx| {
-              let select = view.read(cx).ai_model_select.clone();
+              let state = view.read(cx);
+              let select = state.ai_model_select.clone();
+              let loading = state.ai_models_loading;
+              let error = state.ai_models_error.clone();
               div()
                 .w(px(280.0))
+                .flex()
+                .flex_col()
+                .items_start()
+                .gap_1()
                 .child(Select::new(&select).w_full())
+                .child(
+                  Button::new("settings-ai-refresh-models")
+                    .small()
+                    .ghost()
+                    .label(if loading { "Refreshing..." } else { "Refresh models" })
+                    .disabled(loading)
+                    .on_click({
+                      let view = view.clone();
+                      move |_, _, cx| {
+                        view.update(cx, |view, cx| {
+                          view.refresh_ai_models(cx);
+                        });
+                      }
+                    }),
+                )
+                .when_some(error, |this, error| {
+                  this.child(
+                    div()
+                      .text_xs()
+                      .text_color(cx.theme().status_red())
+                      .child(error),
+                  )
+                })
                 .into_any_element()
             }
           }),
         )
-        .description("Pick which model Reviu calls for AI features."),
+        .description(
+          "Pick which model Reviu calls for AI features. Refresh to pull the current list from your provider.",
+        ),
         SettingItem::new(
           "API Key",
           SettingField::render({
@@ -1176,23 +1275,6 @@ impl Render for SettingsPage {
           .pages(self.setting_pages(window, cx)),
       )
   }
-}
-
-fn provider_model_items(provider: AiProvider) -> Vec<SharedString> {
-  provider
-    .available_models()
-    .iter()
-    .map(|name| SharedString::from(*name))
-    .collect()
-}
-
-fn provider_default_model_index(provider: AiProvider) -> Option<IndexPath> {
-  let default = provider.default_model();
-  provider
-    .available_models()
-    .iter()
-    .position(|name| *name == default)
-    .map(|row| IndexPath::default().row(row))
 }
 
 impl Focusable for SettingsPage {

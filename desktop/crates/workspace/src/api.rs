@@ -206,13 +206,6 @@ impl AiProvider {
       Self::Anthropic => "claude-sonnet-4-6",
     }
   }
-
-  pub fn available_models(self) -> &'static [&'static str] {
-    match self {
-      Self::Openai => &["gpt-5.4", "gpt-5.4-mini", "gpt-5.4-nano", "o4-mini"],
-      Self::Anthropic => &["claude-opus-4-7", "claude-sonnet-4-6", "claude-haiku-4-5"],
-    }
-  }
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq, Serialize)]
@@ -249,6 +242,27 @@ struct AiSettingsRequest<'a> {
   api_key: &'a str,
   #[serde(skip_serializing_if = "Option::is_none")]
   model: Option<&'a str>,
+}
+
+#[derive(Debug, Serialize)]
+struct AiModelsRequest<'a> {
+  provider: AiProvider,
+  #[serde(rename = "apiKey", skip_serializing_if = "Option::is_none")]
+  api_key: Option<&'a str>,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+pub struct AiModelChoice {
+  pub id: String,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+pub struct AiModelsResponse {
+  #[allow(dead_code)]
+  pub provider: AiProvider,
+  pub models: Vec<AiModelChoice>,
+  #[serde(rename = "default")]
+  pub default_model: String,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq)]
@@ -2104,6 +2118,13 @@ impl ApiClient {
     .into()
   }
 
+  fn ai_error_from_response(response: reqwest::blocking::Response) -> anyhow::Error {
+    if response.status() == StatusCode::FORBIDDEN {
+      return anyhow::anyhow!("Reviu Pro is required for AI features.");
+    }
+    Self::api_error_from_response(response)
+  }
+
   pub fn sign_in_with_github(&self) -> Result<Option<String>> {
     Ok(Some(self.desktop_sign_in_url()))
   }
@@ -2237,7 +2258,7 @@ impl ApiClient {
       anyhow::bail!("unauthorized")
     }
     if !status.is_success() {
-      return Err(Self::api_error_from_response(response));
+      return Err(Self::ai_error_from_response(response));
     }
     let payload = response.json::<AiSettingsResponse>()?;
     Ok(payload.settings)
@@ -2264,10 +2285,34 @@ impl ApiClient {
       anyhow::bail!("unauthorized")
     }
     if !status.is_success() {
-      return Err(Self::api_error_from_response(response));
+      return Err(Self::ai_error_from_response(response));
     }
     let payload = response.json::<AiSettingsResponse>()?;
     Ok(payload.settings)
+  }
+
+  pub fn list_ai_models(
+    &self,
+    provider: AiProvider,
+    api_key: Option<&str>,
+  ) -> Result<AiModelsResponse> {
+    let trimmed_key = api_key.map(str::trim).filter(|value| !value.is_empty());
+    let response = self
+      .authed_request(Method::POST, "/ai/models")
+      .json(&AiModelsRequest {
+        provider,
+        api_key: trimmed_key,
+      })
+      .send()?;
+    let status = response.status();
+    Self::record_http_status("POST", "/ai/models", status);
+    if status == StatusCode::UNAUTHORIZED {
+      anyhow::bail!("unauthorized")
+    }
+    if !status.is_success() {
+      return Err(Self::ai_error_from_response(response));
+    }
+    Ok(response.json::<AiModelsResponse>()?)
   }
 
   pub fn delete_ai_settings(&self) -> Result<()> {
@@ -2278,7 +2323,7 @@ impl ApiClient {
       anyhow::bail!("unauthorized")
     }
     if !status.is_success() {
-      return Err(Self::api_error_from_response(response));
+      return Err(Self::ai_error_from_response(response));
     }
     Ok(())
   }
@@ -2303,7 +2348,7 @@ impl ApiClient {
       anyhow::bail!("unauthorized")
     }
     if !status.is_success() {
-      return Err(Self::api_error_from_response(response));
+      return Err(Self::ai_error_from_response(response));
     }
     let payload = response.json::<AiPrBriefOptionalResponse>()?;
     Ok(payload.brief)
@@ -2331,7 +2376,7 @@ impl ApiClient {
       anyhow::bail!("unauthorized")
     }
     if !status.is_success() {
-      return Err(Self::api_error_from_response(response));
+      return Err(Self::ai_error_from_response(response));
     }
     let payload = response.json::<AiPrBriefResponse>()?;
     Ok(payload.brief)
@@ -2348,7 +2393,7 @@ impl ApiClient {
       anyhow::bail!("unauthorized")
     }
     if !status.is_success() {
-      return Err(Self::api_error_from_response(response));
+      return Err(Self::ai_error_from_response(response));
     }
     let payload = response.json::<AiCommitMessageResponse>()?;
     Ok(payload.message)
@@ -7941,6 +7986,72 @@ mod tests {
       request.contains("\"model\":\"gpt-5.4-mini\""),
       "request: {request}"
     );
+  }
+
+  #[test]
+  fn list_ai_models_posts_provider_and_key_and_parses_models() {
+    let body = r#"{
+      "provider": "anthropic",
+      "models": [
+        { "id": "claude-opus-4-8", "label": "Claude Opus 4.8" },
+        { "id": "claude-sonnet-4-6", "label": "Claude Sonnet 4.6" }
+      ],
+      "default": "claude-sonnet-4-6"
+    }"#;
+    let (base_url, request, handle) = start_single_response_server_with_request("200 OK", body);
+    let api = make_test_api_client(base_url);
+
+    let response = api
+      .list_ai_models(AiProvider::Anthropic, Some("sk-ant-secret"))
+      .expect("list ai models");
+
+    assert_eq!(response.default_model, "claude-sonnet-4-6");
+    assert_eq!(
+      response
+        .models
+        .iter()
+        .map(|model| model.id.as_str())
+        .collect::<Vec<_>>(),
+      ["claude-opus-4-8", "claude-sonnet-4-6"]
+    );
+
+    handle.join().expect("join server thread");
+    let request = request
+      .lock()
+      .expect("lock request")
+      .clone()
+      .unwrap_or_default();
+    assert!(request.contains("POST /ai/models "), "request: {request}");
+    assert!(
+      request.contains("\"provider\":\"anthropic\""),
+      "request: {request}"
+    );
+    assert!(
+      request.contains("\"apiKey\":\"sk-ant-secret\""),
+      "request: {request}"
+    );
+  }
+
+  #[test]
+  fn list_ai_models_omits_api_key_when_absent() {
+    let body =
+      r#"{ "provider": "openai", "models": [{ "id": "gpt-5.4-mini" }], "default": "gpt-5.4-mini" }"#;
+    let (base_url, request, handle) = start_single_response_server_with_request("200 OK", body);
+    let api = make_test_api_client(base_url);
+
+    let response = api
+      .list_ai_models(AiProvider::Openai, None)
+      .expect("list ai models");
+    assert_eq!(response.models.len(), 1);
+
+    handle.join().expect("join server thread");
+    let request = request
+      .lock()
+      .expect("lock request")
+      .clone()
+      .unwrap_or_default();
+    assert!(request.contains("POST /ai/models "), "request: {request}");
+    assert!(!request.contains("apiKey"), "apiKey omitted: {request}");
   }
 
   #[test]

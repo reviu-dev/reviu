@@ -175,14 +175,23 @@ pub(crate) fn capture_unexpected_error(
   );
 }
 
+// 403 on /ai is the Reviu Pro gate for non-subscribers, not a bug worth a Sentry event.
+fn expected_http_reason(route: &str, status: u16) -> Option<&'static str> {
+  match status {
+    401 => Some("unauthorized"),
+    403 if route.starts_with("/ai") => Some("forbidden"),
+    _ => None,
+  }
+}
+
 pub(crate) fn record_http_status(method: &str, route: &str, status: u16) {
   let mut data = Map::new();
   data.insert("method".into(), method.to_string().into());
   data.insert("route".into(), route.to_string().into());
   data.insert("status".into(), status.into());
 
-  if status == 401 {
-    record_expected_error("api.http", "unauthorized", data);
+  if let Some(reason) = expected_http_reason(route, status) {
+    record_expected_error("api.http", reason, data);
     return;
   }
 
@@ -416,7 +425,8 @@ pub(crate) fn clear_github_pr_context() {
 #[cfg(test)]
 mod tests {
   use super::{
-    DEDUP_WINDOW, auth_state_tag, sanitize_repo_path, should_capture_error, workspace_page_tag,
+    DEDUP_WINDOW, auth_state_tag, expected_http_reason, sanitize_repo_path, should_capture_error,
+    workspace_page_tag,
   };
   use crate::workspace::WorkspacePage;
   use crate::{
@@ -452,6 +462,16 @@ mod tests {
       workspace_page_tag(WorkspacePage::GithubCommitDetails),
       "github_commit_details"
     );
+  }
+
+  #[test]
+  fn expected_http_reason_flags_pro_gate_and_auth() {
+    assert_eq!(expected_http_reason("/ai/settings", 401), Some("unauthorized"));
+    assert_eq!(expected_http_reason("/ai/models", 403), Some("forbidden"));
+    assert_eq!(expected_http_reason("/ai/github/pr/brief", 403), Some("forbidden"));
+    // 403 outside /ai stays an unexpected error worth capturing.
+    assert_eq!(expected_http_reason("/github/repos", 403), None);
+    assert_eq!(expected_http_reason("/ai/models", 500), None);
   }
 
   #[test]

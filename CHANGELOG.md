@@ -4,6 +4,10 @@ All notable changes to Reviu are documented here.
 
 ## 0.18.0
 
+### Up-To-Date AI Model List From Your Provider
+
+The model picker in AI settings now pulls the current model list straight from your provider (OpenAI or Anthropic) instead of a fixed built-in list, so new models show up without waiting for an app update. The list refreshes when you open settings, switch provider, or save a key, and a Refresh button pulls it on demand.
+
 ### Keyboard Shortcuts On The Terminal And Agent Buttons
 
 The Terminal and Agent toggle buttons on the Git page now show their keyboard shortcuts, the same as the command palette and commit buttons, so the toggles are easier to learn.
