@@ -8034,8 +8034,7 @@ mod tests {
 
   #[test]
   fn list_ai_models_omits_api_key_when_absent() {
-    let body =
-      r#"{ "provider": "openai", "models": [{ "id": "gpt-5.4-mini" }], "default": "gpt-5.4-mini" }"#;
+    let body = r#"{ "provider": "openai", "models": [{ "id": "gpt-5.4-mini" }], "default": "gpt-5.4-mini" }"#;
     let (base_url, request, handle) = start_single_response_server_with_request("200 OK", body);
     let api = make_test_api_client(base_url);
 

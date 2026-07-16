@@ -9484,17 +9484,14 @@ impl GitPage {
       .p_2()
       .selected(self.show_terminal_sidebar)
       .child(
-        div()
-          .ml_1()
-          .text_color(theme.muted_foreground)
-          .child(
-            Kbd::new(shortcuts::resolved_display_shortcut_keystroke_in(
-              cx,
-              window,
-              ShortcutId::ToggleTerminalSidebar,
-            ))
-            .appearance(false),
-          ),
+        div().ml_1().text_color(theme.muted_foreground).child(
+          Kbd::new(shortcuts::resolved_display_shortcut_keystroke_in(
+            cx,
+            window,
+            ShortcutId::ToggleTerminalSidebar,
+          ))
+          .appearance(false),
+        ),
       )
       .disabled(self.selected_repo.is_none())
       .on_click(cx.listener(Self::toggle_terminal_sidebar_click));
@@ -9508,17 +9505,14 @@ impl GitPage {
       .p_2()
       .selected(self.show_agent_sidebar)
       .child(
-        div()
-          .ml_1()
-          .text_color(theme.muted_foreground)
-          .child(
-            Kbd::new(shortcuts::resolved_display_shortcut_keystroke_in(
-              cx,
-              window,
-              ShortcutId::ToggleAgentSidebar,
-            ))
-            .appearance(false),
-          ),
+        div().ml_1().text_color(theme.muted_foreground).child(
+          Kbd::new(shortcuts::resolved_display_shortcut_keystroke_in(
+            cx,
+            window,
+            ShortcutId::ToggleAgentSidebar,
+          ))
+          .appearance(false),
+        ),
       )
       .disabled(self.selected_repo.is_none())
       .on_click(cx.listener(Self::toggle_agent_sidebar_click));
@@ -11035,7 +11029,10 @@ mod tests {
       action.value().as_os_str().is_empty(),
       "empty path is the sentinel the repo select handler checks to open the picker"
     );
-    assert!(action.matches("anything"), "action stays visible while searching");
+    assert!(
+      action.matches("anything"),
+      "action stays visible while searching"
+    );
   }
 
   #[test]

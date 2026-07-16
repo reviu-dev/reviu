@@ -466,9 +466,15 @@ mod tests {
 
   #[test]
   fn expected_http_reason_flags_pro_gate_and_auth() {
-    assert_eq!(expected_http_reason("/ai/settings", 401), Some("unauthorized"));
+    assert_eq!(
+      expected_http_reason("/ai/settings", 401),
+      Some("unauthorized")
+    );
     assert_eq!(expected_http_reason("/ai/models", 403), Some("forbidden"));
-    assert_eq!(expected_http_reason("/ai/github/pr/brief", 403), Some("forbidden"));
+    assert_eq!(
+      expected_http_reason("/ai/github/pr/brief", 403),
+      Some("forbidden")
+    );
     // 403 outside /ai stays an unexpected error worth capturing.
     assert_eq!(expected_http_reason("/github/repos", 403), None);
     assert_eq!(expected_http_reason("/ai/models", 500), None);

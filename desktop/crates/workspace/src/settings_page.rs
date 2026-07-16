@@ -237,7 +237,11 @@ impl SettingsPage {
               if items.is_empty() {
                 return;
               }
-              let current = this.ai_model_select.read(cx).selected_value().map(|value| value.to_string());
+              let current = this
+                .ai_model_select
+                .read(cx)
+                .selected_value()
+                .map(|value| value.to_string());
               let keep = current
                 .as_deref()
                 .is_some_and(|value| items.iter().any(|item| item.as_ref() == value));
