@@ -1471,6 +1471,7 @@ struct RecentRepoItem {
   name: SharedString,
   prefix: SharedString,
   is_selected: bool,
+  is_action: bool,
 }
 
 impl RecentRepoItem {
@@ -1488,6 +1489,18 @@ impl RecentRepoItem {
       name: name.into(),
       prefix: prefix.into(),
       is_selected: selected_repo.is_some_and(|selected| selected == repo.path.as_path()),
+      is_action: false,
+    }
+  }
+
+  // Sentinel item (empty path) that triggers the open-repository picker on select.
+  fn open_action() -> Self {
+    Self {
+      path: PathBuf::new(),
+      name: "Open repository…".into(),
+      prefix: SharedString::default(),
+      is_selected: false,
+      is_action: true,
     }
   }
 }
@@ -1504,6 +1517,10 @@ impl DropdownSelectItem for RecentRepoItem {
   }
 
   fn matches(&self, query: &str) -> bool {
+    if self.is_action {
+      return true;
+    }
+
     let query = query.trim();
     if query.is_empty() {
       return true;
@@ -1515,6 +1532,18 @@ impl DropdownSelectItem for RecentRepoItem {
   }
 
   fn render_item(&self, _window: &mut Window, cx: &mut App) -> AnyElement {
+    if self.is_action {
+      return h_flex()
+        .min_w_0()
+        .items_center()
+        .gap_1()
+        .text_sm()
+        .text_color(cx.theme().muted_foreground)
+        .child(Icon::new(IconName::FolderOpen).size_3())
+        .child(self.name.clone())
+        .into_any_element();
+    }
+
     h_flex()
       .min_w_0()
       .overflow_hidden()
@@ -3555,6 +3584,10 @@ impl GitPage {
     let view = cx.entity();
     Rc::new(move |repo_root, window, cx| {
       view.update(cx, |this, cx| {
+        if repo_root.as_os_str().is_empty() {
+          this.start_open_repository(window, cx);
+          return;
+        }
         this.handle_repo_select_confirm(repo_root, cx);
         this.refocus_page_shortcuts_after_dropdown_select(window, cx);
       });
@@ -9182,7 +9215,8 @@ impl GitPage {
     let push_pull_loading = self.push_pull_in_progress;
     let on_repo_select = self.repo_select_handler(cx);
     let on_branch_select = self.branch_select_handler(cx);
-    let repo_options = self.repo_dropdown_items.clone();
+    let mut repo_options = self.repo_dropdown_items.clone();
+    repo_options.push(RecentRepoItem::open_action());
     let branch_options = self.branch_dropdown_items.clone();
     let branch_context = self.github_branch_context(cx);
     let branch_pr_button_state = self.current_branch_pr_button_state(cx);
@@ -10965,6 +10999,17 @@ mod tests {
       agent_path_to_repo_relative(PathBuf::from("/abs/x.rs"), None),
       PathBuf::from("/abs/x.rs")
     );
+  }
+
+  #[test]
+  fn open_action_repo_item_is_sentinel() {
+    let action = RecentRepoItem::open_action();
+    assert!(action.is_action);
+    assert!(
+      action.value().as_os_str().is_empty(),
+      "empty path is the sentinel the repo select handler checks to open the picker"
+    );
+    assert!(action.matches("anything"), "action stays visible while searching");
   }
 
   #[test]
