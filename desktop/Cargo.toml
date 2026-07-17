@@ -106,7 +106,7 @@ thiserror = "1.0.69"
 which = "6.0.3"
 comrak = "0.22"
 imara-diff = "0.2.0"
-sentry = "0.46.2"
+sentry = "0.48.5"
 image = { version = "0.25.10", default-features = false, features = ["png"] }
 tray-icon = "0.22.0"
 gtk = "0.18.2"
