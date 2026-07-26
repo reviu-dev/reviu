@@ -14,6 +14,6 @@ anyhow = { workspace = true }
 serde = { workspace = true }
 
 [target.'cfg(target_os = "macos")'.dependencies]
-core-foundation = "0.10"
+core-foundation = "0.10.1"
 core-graphics = "0.25"
 foreign-types-shared = "0.3.1"
