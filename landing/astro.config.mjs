@@ -7,6 +7,8 @@ import tailwindcss from '@tailwindcss/vite';
 // https://astro.build/config
 export default defineConfig({
   site: 'https://reviu.dev',
+  // Canonical URLs have no trailing slash; keeps sitemap and <link rel=canonical> identical.
+  trailingSlash: 'never',
   vite: {
     plugins: [
       tailwindcss(), 
