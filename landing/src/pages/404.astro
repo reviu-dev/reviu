@@ -1,0 +1,89 @@
+---
+import Layout from "../layouts/Layout.astro";
+import SiteFooter from "../components/SiteFooter.astro";
+import { blogPosts, getBlogPostUrl } from "../lib/blog";
+import { comparisons, getComparisonUrl } from "../lib/comparisons";
+
+const links: { label: string; href: string }[] = [
+  { label: "Compare Git clients", href: "/vs" },
+  ...comparisons.map((comparison) => ({
+    label: `Reviu vs ${comparison.name}`,
+    href: getComparisonUrl(comparison.slug),
+  })),
+  { label: "Changelog", href: "/changelog" },
+  { label: "Blog", href: "/blog" },
+  ...blogPosts.map((post) => ({
+    label: post.title,
+    href: getBlogPostUrl(post.slug),
+  })),
+];
+---
+
+<Layout
+  title="Page not found"
+  description="That page does not exist."
+  pathname="/404"
+  robots="noindex,follow"
+>
+  <main class="py-20 sm:py-24">
+    <section class="mx-auto max-w-3xl px-6 lg:px-8">
+      <div data-reveal-root data-reveal-threshold="0.05">
+        <p
+          class="reviu-reveal inline-flex rounded-full bg-primary/10 px-3 py-1 text-sm/6 font-semibold text-primary ring-1 ring-primary/20 ring-inset dark:ring-primary/25"
+        >
+          404
+        </p>
+        <h1
+          class="reviu-reveal mt-6 text-4xl font-semibold tracking-tight text-foreground sm:text-5xl"
+          style="--reveal-delay: 60ms;"
+        >
+          This page does not exist
+        </h1>
+        <p
+          class="reviu-reveal mt-4 text-lg text-muted-foreground"
+          style="--reveal-delay: 120ms;"
+        >
+          The link is dead or the page moved. Everything below still works.
+        </p>
+
+        <div
+          class="reviu-reveal mt-8 flex flex-wrap items-center gap-3"
+          style="--reveal-delay: 180ms;"
+        >
+          <a
+            href="/"
+            class="reviu-hover-lift flex items-center gap-2 rounded-md bg-primary px-3.5 py-2.5 text-sm font-semibold text-white shadow-xs transition-colors hover:bg-primary/80 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary"
+          >
+            Back home
+          </a>
+          <a
+            href="/vs"
+            class="inline-flex items-center rounded-md bg-background px-3 py-2 text-sm font-semibold text-foreground hover:bg-muted/50"
+          >
+            Compare Git clients
+          </a>
+        </div>
+      </div>
+
+      <ul
+        class="mt-12 grid gap-3 sm:grid-cols-2"
+        data-reveal-root
+        data-reveal-threshold="0.05"
+      >
+        {
+          links.map((link, index) => (
+            <li class="reviu-reveal" style={`--reveal-delay: ${index * 40}ms;`}>
+              <a
+                href={link.href}
+                class="text-muted-foreground underline underline-offset-4 transition-colors hover:text-primary"
+              >
+                {link.label}
+              </a>
+            </li>
+          ))
+        }
+      </ul>
+    </section>
+  </main>
+  <SiteFooter />
+</Layout>
