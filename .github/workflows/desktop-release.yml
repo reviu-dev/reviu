@@ -27,7 +27,7 @@ jobs:
       tag: ${{ steps.release_meta.outputs.tag }}
       sentry_release: ${{ steps.release_meta.outputs.sentry_release }}
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
           ref: ${{ github.event.workflow_run.head_sha }}
 
@@ -88,11 +88,11 @@ jobs:
       MANIFEST_ARCH: ${{ matrix.manifest_arch }}
       API_BASE_URL: https://api.reviu.dev
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
           ref: ${{ github.event.workflow_run.head_sha }}
       - name: Setup Rust
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
         with:
           targets: ${{ matrix.target }}
       - name: Install cargo-bundle
@@ -176,7 +176,7 @@ jobs:
           fi
           sentry-cli debug-files upload "${app_path}"
       - name: Upload release assets
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: desktop-release-macos-${{ matrix.arch }}
           if-no-files-found: error
@@ -217,7 +217,7 @@ jobs:
       MANIFEST_ARCH: ${{ matrix.manifest_arch }}
       API_BASE_URL: https://api.reviu.dev
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
           ref: ${{ github.event.workflow_run.head_sha }}
 
@@ -238,7 +238,7 @@ jobs:
             libxdo-dev
 
       - name: Setup Rust
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
         with:
           targets: ${{ matrix.target }}
 
@@ -250,7 +250,7 @@ jobs:
           bash ./desktop/scripts/build-linux-archive.sh "${VERSION}" "${MANIFEST_ARCH}"
 
       - name: Upload release artifacts
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: desktop-release-linux-${{ matrix.arch }}
           if-no-files-found: error
@@ -283,12 +283,12 @@ jobs:
       MANIFEST_ARCH: ${{ matrix.manifest_arch }}
       API_BASE_URL: https://api.reviu.dev
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
           ref: ${{ github.event.workflow_run.head_sha }}
 
       - name: Setup Rust
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
         with:
           targets: ${{ matrix.target }}
 
@@ -317,7 +317,7 @@ jobs:
           bash ./desktop/scripts/build-windows-installer.sh "${VERSION}" "${MANIFEST_ARCH}"
 
       - name: Upload release artifacts
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: desktop-release-windows-${{ matrix.arch }}
           if-no-files-found: error
@@ -336,12 +336,12 @@ jobs:
       VERSION: ${{ needs.prepare-release.outputs.version }}
       TAG: ${{ needs.prepare-release.outputs.tag }}
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
           ref: ${{ github.event.workflow_run.head_sha }}
 
       - name: Download all build artifacts
-        uses: actions/download-artifact@v7
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
         with:
           path: artifacts
 
