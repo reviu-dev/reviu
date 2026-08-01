@@ -108,7 +108,7 @@ comrak = "0.22"
 imara-diff = "0.2.0"
 sentry = "0.48.5"
 image = { version = "0.25.10", default-features = false, features = ["png"] }
-tray-icon = "0.24.1"
+tray-icon = "0.24.2"
 gtk = "0.18.2"
 libloading = "0.8"
 percent-encoding = "2.3.2"
