@@ -18997,7 +18997,7 @@ mod tests {
       this.commit_input.update(cx, |_input, cx| {
         cx.emit(InputEvent::PressEnter {
           secondary: true,
-          ..
+          shift: false,
         })
       });
     });
