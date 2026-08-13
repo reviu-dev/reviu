@@ -82,6 +82,17 @@ fn checkpoint_insert_index(items: &[ChatItem]) -> usize {
     .unwrap_or(items.len())
 }
 
+fn tool_index_for_items(items: &[ChatItem]) -> HashMap<ToolCallId, usize> {
+  items
+    .iter()
+    .enumerate()
+    .filter_map(|(ix, item)| match item {
+      ChatItem::Tool(tool) => Some((tool.id.clone(), ix)),
+      _ => None,
+    })
+    .collect()
+}
+
 /// Number of items to keep so the checkpoint marker is the last remaining item.
 fn checkpoint_truncate_len(items: &[ChatItem], ref_name: &str) -> Option<usize> {
   items
@@ -1460,15 +1471,7 @@ impl AgentChatPanel {
   }
 
   fn rebuild_tool_index(&mut self) {
-    self.tool_index = self
-      .items
-      .iter()
-      .enumerate()
-      .filter_map(|(ix, item)| match item {
-        ChatItem::Tool(tool) => Some((tool.id.clone(), ix)),
-        _ => None,
-      })
-      .collect();
+    self.tool_index = tool_index_for_items(&self.items);
   }
 
   /// Stash a diff-view selection and drop an `@selection` token into the input so the next message
@@ -3418,6 +3421,43 @@ mod tests {
       Some(1)
     );
     assert_eq!(checkpoint_truncate_len(&items, "refs/unknown"), None);
+  }
+
+  #[test]
+  fn tool_index_tracks_positions_after_checkpoint_insertion_and_truncation() {
+    let tool_view = |id: &str, title: &str, kind: ToolKind| {
+      let arc: std::sync::Arc<str> = std::sync::Arc::from(id);
+      ChatItem::Tool(ToolCallView {
+        id: ToolCallId::new(arc),
+        title: title.to_string(),
+        kind,
+        status: ToolCallStatus::Completed,
+        locations: Vec::new(),
+        diffs: Vec::new(),
+        outputs: Vec::new(),
+      })
+    };
+    let mut items = vec![
+      user_message("prompt"),
+      tool_view("tool-1", "Read", ToolKind::Read),
+      agent_message("done"),
+      tool_view("tool-2", "Edit", ToolKind::Edit),
+    ];
+
+    // Marker inserted before the prompt shifts every tool index by one.
+    items.insert(checkpoint_insert_index(&items), checkpoint_marker("refs/reviu/checkpoints/s/1"));
+    let index = tool_index_for_items(&items);
+    let tool_1: std::sync::Arc<str> = std::sync::Arc::from("tool-1");
+    let tool_2: std::sync::Arc<str> = std::sync::Arc::from("tool-2");
+    assert_eq!(index.get(&ToolCallId::new(tool_1.clone())), Some(&2));
+    assert_eq!(index.get(&ToolCallId::new(tool_2.clone())), Some(&4));
+
+    // Truncating at the marker leaves no tool entries behind.
+    let keep_len =
+      checkpoint_truncate_len(&items, "refs/reviu/checkpoints/s/1").expect("marker present");
+    items.truncate(keep_len);
+    let index = tool_index_for_items(&items);
+    assert!(index.is_empty());
   }
 
   #[test]
