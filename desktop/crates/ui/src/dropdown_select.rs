@@ -2,7 +2,7 @@ use std::rc::Rc;
 
 use gpui::prelude::FluentBuilder as _;
 use gpui::{
-  AnyElement, App, AppContext as _, Context, Corner, Entity, FocusHandle, Focusable, IntoElement,
+  Anchor, AnyElement, App, AppContext as _, Context, Entity, FocusHandle, Focusable, IntoElement,
   ParentElement, Pixels, RenderOnce, SharedString, Styled, Task, WeakEntity, Window, div, px,
   relative,
 };
@@ -174,7 +174,7 @@ pub struct DropdownSelectConfig<I: DropdownSelectItem + 'static> {
   pub tab_stop: bool,
   pub width: Pixels,
   pub menu_width: Pixels,
-  pub anchor: Corner,
+  pub anchor: Anchor,
   pub on_select: Option<DropdownSelectHandler<I::Value>>,
 }
 
@@ -192,7 +192,7 @@ impl<I: DropdownSelectItem + 'static> DropdownSelectConfig<I> {
       tab_stop: true,
       width: px(240.),
       menu_width: px(240.),
-      anchor: Corner::TopLeft,
+      anchor: Anchor::TopLeft,
       on_select: None,
     }
   }
@@ -247,7 +247,7 @@ impl<I: DropdownSelectItem + 'static> DropdownSelectConfig<I> {
     self
   }
 
-  pub fn anchor(mut self, anchor: Corner) -> Self {
+  pub fn anchor(mut self, anchor: Anchor) -> Self {
     self.anchor = anchor;
     self
   }

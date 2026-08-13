@@ -3,7 +3,7 @@ use gpui_component::IndexPath;
 use gpui_component::notification::Notification;
 use gpui_component::select::{Select, SelectState};
 use smol::unblock;
-use ui::{ConfirmDialog, Input, InputState, WindowExt};
+use ui::{ConfirmDialog, Input, InputState, Textarea, TextareaState, WindowExt};
 
 use crate::{api::ApiClient, workspace::WorkspaceApi};
 
@@ -30,7 +30,7 @@ fn open_feedback_dialog_inner(window: &mut Window, cx: &mut App) {
   let title_input = cx.new(|cx| InputState::new(window, cx).placeholder("Brief summary..."));
 
   let description_input = cx.new(|cx| {
-    InputState::new(window, cx)
+    TextareaState::new(window, cx)
       .auto_grow(3, 8)
       .placeholder("Describe in detail...")
   });
@@ -55,7 +55,7 @@ fn open_feedback_dialog_inner(window: &mut Window, cx: &mut App) {
         .gap_3()
         .child(Select::new(&type_select).placeholder("Select type..."))
         .child(Input::new(&title_input).w_full())
-        .child(Input::new(&description_input).w_full()),
+        .child(Textarea::new(&description_input).w_full()),
     )
     .content_as_body()
     .confirm_text("Submit")

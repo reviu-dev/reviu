@@ -100,7 +100,7 @@ impl ListDelegate for GithubSearchListDelegate {
               .items_center()
               .gap_2()
               .min_w_0()
-              .flex_shrink()
+              .flex_shrink(1.)
               .child(Label::new(primary).truncate())
               .when(entry.private, |this| {
                 this.child(

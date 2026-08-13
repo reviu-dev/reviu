@@ -1607,7 +1607,7 @@ fn render_table(
     header_row = header_row.child(
       div()
         .flex_basis(gpui::relative(basis))
-        .flex_grow()
+        .flex_grow(1.)
         .min_w_0()
         .h_full()
         .px_3()
@@ -1646,7 +1646,7 @@ fn render_table(
       row_el = row_el.child(
         div()
           .flex_basis(gpui::relative(basis))
-          .flex_grow()
+          .flex_grow(1.)
           .min_w_0()
           .px_3()
           .py_2()

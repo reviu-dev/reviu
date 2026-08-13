@@ -22,7 +22,6 @@ fn open_browser_extensions_dialog_inner(window: &mut Window, cx: &mut App) {
     alert
       .title("Browser extension")
       .description("Open any GitHub pull request in Reviu directly from your browser.")
-      .overlay_closable(true)
       .child(
         v_flex()
           .gap_2()

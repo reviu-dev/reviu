@@ -183,7 +183,7 @@ where
       .refine_style(&style)
       .child(
         Popover::new(format!("{id_prefix}-add-reaction-popover"))
-          .anchor(gpui::Corner::TopRight)
+          .anchor(gpui::Anchor::TopRight)
           .appearance(false)
           .trigger(
             Button::new(format!("{id_prefix}-add-reaction"))

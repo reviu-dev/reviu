@@ -441,7 +441,7 @@ where
     let scroll_handle = self.scroll_handle.clone();
 
     v_flex()
-      .flex_grow()
+      .flex_grow(1.)
       .relative()
       .size_full()
       .when_some(self.options.max_height, |this, max_height| {

@@ -12,7 +12,7 @@ use gfm_markdown_viewer::{
   MarkdownRenderState, extract_github_blob_line_references, render_markdown,
 };
 use gpui::{
-  AnyElement, AnyWindowHandle, App, Context, Corner, Div, Entity, ExternalPaths, FocusHandle,
+  Anchor, AnyElement, AnyWindowHandle, App, Context, Div, Entity, ExternalPaths, FocusHandle,
   Focusable, Hsla, Image, InteractiveElement, Interactivity, ObjectFit, ParentElement,
   PathPromptOptions, Pixels, Render, RenderImage, RenderOnce, SharedString, Stateful,
   StatefulInteractiveElement as _, StyleRefinement, Styled, Subscription, Task, Window, div, img,
@@ -49,7 +49,7 @@ use ui::{
   CommandPaletteGithubRepoTab, CommandPaletteHandler, CommandPalettePage, ConfirmDialog,
   DETAILS_PAGE_CONTAINER_MAX_WIDTH, DropdownSelectConfig, DropdownSelectItem, FILE_ICON_SIZE_PX,
   Input, InputState, MarkdownComposer, ReactionBar, SearchFileEntry, SearchFileHandler,
-  SelectableRowStyle, StatusTag, StatusThemeExt as _, UiIconName, VariableList,
+  SelectableRowStyle, StatusTag, StatusThemeExt as _, TextareaState, UiIconName, VariableList,
   VariableListDelegate, VariableListEvent, VariableListState, WindowExt, dropdown_select,
   file_icon_path_for_name_with_theme, h_resizable, parse_github_url_action, resizable_panel,
   selectable_list_item,
@@ -2037,17 +2037,17 @@ struct GithubIssueDetailsSheetView {
   pending_comment_scroll_id: Option<u64>,
   pending_comment_scroll_attempts: u8,
   request_generation: u64,
-  comment_input: Option<Entity<InputState>>,
+  comment_input: Option<Entity<TextareaState>>,
   comment_input_submitting: bool,
   comment_input_error: Option<SharedString>,
   comment_input_preview_open: bool,
-  edit_input: Option<Entity<InputState>>,
+  edit_input: Option<Entity<TextareaState>>,
   editing_comment_id: Option<u64>,
   edit_initial_body: Option<String>,
   edit_submitting: bool,
   edit_error: Option<SharedString>,
   edit_preview_open: bool,
-  description_edit_input: Option<Entity<InputState>>,
+  description_edit_input: Option<Entity<TextareaState>>,
   description_editing: bool,
   description_initial_body: Option<String>,
   description_submitting: bool,
@@ -2854,14 +2854,13 @@ impl GithubIssueDetailsSheetView {
     &mut self,
     window: &mut Window,
     cx: &mut Context<Self>,
-  ) -> Entity<InputState> {
+  ) -> Entity<TextareaState> {
     if let Some(input) = self.comment_input.as_ref() {
       return input.clone();
     }
 
     let input = cx.new(|cx| {
-      InputState::new(window, cx)
-        .multi_line(true)
+      TextareaState::new(window, cx)
         .rows(6)
         .placeholder("Add comment...")
     });
@@ -2873,14 +2872,13 @@ impl GithubIssueDetailsSheetView {
     &mut self,
     window: &mut Window,
     cx: &mut Context<Self>,
-  ) -> Entity<InputState> {
+  ) -> Entity<TextareaState> {
     if let Some(input) = self.edit_input.as_ref() {
       return input.clone();
     }
 
     let input = cx.new(|cx| {
-      InputState::new(window, cx)
-        .multi_line(true)
+      TextareaState::new(window, cx)
         .rows(6)
         .placeholder("Edit comment...")
     });
@@ -2892,14 +2890,13 @@ impl GithubIssueDetailsSheetView {
     &mut self,
     window: &mut Window,
     cx: &mut Context<Self>,
-  ) -> Entity<InputState> {
+  ) -> Entity<TextareaState> {
     if let Some(input) = self.description_edit_input.as_ref() {
       return input.clone();
     }
 
     let input = cx.new(|cx| {
-      InputState::new(window, cx)
-        .multi_line(true)
+      TextareaState::new(window, cx)
         .rows(6)
         .placeholder("Edit description...")
     });
@@ -3105,7 +3102,7 @@ impl GithubIssueDetailsSheetView {
   fn handle_issue_comment_drop(
     &mut self,
     paths: &ExternalPaths,
-    input: Entity<InputState>,
+    input: Entity<TextareaState>,
     window: &mut Window,
     cx: &mut Context<Self>,
   ) {
@@ -3124,7 +3121,7 @@ impl GithubIssueDetailsSheetView {
   fn handle_issue_edit_drop(
     &mut self,
     paths: &ExternalPaths,
-    input: Entity<InputState>,
+    input: Entity<TextareaState>,
     window: &mut Window,
     cx: &mut Context<Self>,
   ) {
@@ -3143,7 +3140,7 @@ impl GithubIssueDetailsSheetView {
   fn handle_issue_description_edit_drop(
     &mut self,
     paths: &ExternalPaths,
-    input: Entity<InputState>,
+    input: Entity<TextareaState>,
     window: &mut Window,
     cx: &mut Context<Self>,
   ) {
@@ -5096,7 +5093,7 @@ impl GithubRepoPage {
     let view = cx.entity();
 
     RepoWatchMenuTrigger::new(label, icon_color, watch_hover_bg, theme.radius)
-      .dropdown_menu_with_anchor(Corner::TopRight, move |menu, _, _| {
+      .dropdown_menu_with_anchor(Anchor::TopRight, move |menu, _, _| {
         let view_default = view.clone();
         let view_all = view.clone();
         let view_ignore = view.clone();
@@ -5586,10 +5583,7 @@ impl GithubRepoPage {
       return;
     }
     if !should_fetch_readme_for_branch(
-      self
-        .readme_loaded_branch
-        .as_deref()
-        .map(|branch| branch.as_ref()),
+      self.readme_loaded_branch.as_deref(),
       &branch,
       self.readme_error.is_some(),
     ) {
@@ -7152,7 +7146,7 @@ impl GithubRepoPage {
       .ghost()
       .small()
       .compact()
-      .dropdown_menu_with_anchor(Corner::TopRight, move |menu, _, _| {
+      .dropdown_menu_with_anchor(Anchor::TopRight, move |menu, _, _| {
         let view_url = github_url.clone();
         let download_url = zip_url.clone();
         menu

@@ -28,7 +28,7 @@ use git::{
   search_repo_head_contents, switch_to_branch_name, sync_current_branch_to_head,
 };
 use gpui::{
-  AnyElement, AnyWindowHandle, App, ClipboardItem, Context, Corner, Entity, ExternalPaths,
+  Anchor, AnyElement, AnyWindowHandle, App, ClipboardItem, Context, Entity, ExternalPaths,
   FocusHandle, Focusable, Hsla, Image, InteractiveElement, Keystroke, ListAlignment,
   ListState as GpuiListState, MouseButton, ObjectFit, ParentElement, PathBuilder, Render,
   RenderImage, SharedString, Styled, Task, Window, canvas, deferred, div, img, list, point,
@@ -66,7 +66,7 @@ use ui::{
   CommandPalette, CommandPaletteAction, CommandPaletteCommand, CommandPaletteConfig,
   CommandPaletteHandler, CommandPalettePage, ConfirmDialog, FILE_ICON_SIZE_PX, Input, InputState,
   MarkdownComposer, Popover, ReactionBar, ScrollAxes, SearchFileEntry, SearchFileHandler,
-  SelectableRowStyle, StatusTag, StatusThemeExt, UiIconName, WindowExt,
+  SelectableRowStyle, StatusTag, StatusThemeExt, Textarea, TextareaState, UiIconName, WindowExt,
   file_icon_path_for_name_with_theme, h_resizable, parse_github_url_action, resizable_panel,
   restrict_scroll_to_wheel_axis, scrollable_node, selectable_list_item,
 };
@@ -2776,7 +2776,7 @@ pub struct GithubPrDetailsPage {
   merge_form_reset_pending: bool,
   merge_method: GithubPullRequestMergeMethod,
   merge_commit_title_input: Entity<InputState>,
-  merge_commit_message_input: Entity<InputState>,
+  merge_commit_message_input: Entity<TextareaState>,
   merge_submit_task: Option<Task<()>>,
   merge_submit_loading: bool,
   merge_submit_error: Option<SharedString>,
@@ -2799,7 +2799,7 @@ pub struct GithubPrDetailsPage {
   ai_pr_brief_loading: bool,
   ai_pr_brief_error: Option<SharedString>,
   ai_pr_brief: Option<AiPrBrief>,
-  review_input: Entity<InputState>,
+  review_input: Entity<TextareaState>,
   review_decision: GithubPrReviewDecision,
   review_popover_open: bool,
   review_form_reset_pending: bool,
@@ -2833,7 +2833,7 @@ pub struct GithubPrDetailsPage {
   label_mutation_task: Option<Task<()>>,
   label_mutation_loading: bool,
   label_mutation_error: Option<SharedString>,
-  overview_issue_comment_input: Entity<InputState>,
+  overview_issue_comment_input: Entity<TextareaState>,
   overview_issue_comment_submitting: bool,
   overview_issue_comment_error: Option<SharedString>,
   overview_issue_comment_preview_open: bool,
@@ -2848,20 +2848,20 @@ pub struct GithubPrDetailsPage {
   // Viewer's unsubmitted pending review (GraphQL node ids), when one exists on this PR.
   pending_review_id: Option<String>,
   pending_review_pull_request_id: Option<String>,
-  overview_edit_input: Option<Entity<InputState>>,
+  overview_edit_input: Option<Entity<TextareaState>>,
   overview_edit_target: Option<OverviewCommentTarget>,
   overview_edit_initial_body: Option<String>,
   overview_edit_submitting: bool,
   overview_edit_error: Option<SharedString>,
   overview_edit_preview_open: bool,
-  overview_reply_input: Option<Entity<InputState>>,
+  overview_reply_input: Option<Entity<TextareaState>>,
   overview_reply_target_comment_id: Option<u64>,
   overview_reply_submitting: bool,
   overview_reply_error: Option<SharedString>,
   overview_reply_preview_open: bool,
   suggested_change_commit_target: Option<SuggestedChangeCommitTarget>,
   suggested_change_commit_title_input: Entity<InputState>,
-  suggested_change_commit_message_input: Entity<InputState>,
+  suggested_change_commit_message_input: Entity<TextareaState>,
   suggested_change_include_co_author: bool,
   suggested_change_commit_loading: bool,
   suggested_change_commit_error: Option<SharedString>,
@@ -2880,7 +2880,7 @@ pub struct GithubPrDetailsPage {
   review_comment_code_reference_cache: HashMap<String, Option<ReviewCommentCodeReferencePreview>>,
   review_comment_code_reference_tasks: HashMap<String, Task<()>>,
   pending_review_comment_link_comment_id: Option<u64>,
-  pr_description_edit_input: Option<Entity<InputState>>,
+  pr_description_edit_input: Option<Entity<TextareaState>>,
   pr_description_editing: bool,
   pr_description_initial_body: Option<String>,
   pr_description_submitting: bool,
@@ -3302,27 +3302,21 @@ impl GithubPrDetailsPage {
     let merge_commit_title_input =
       cx.new(|cx| InputState::new(window, cx).placeholder("Commit title (optional)"));
     let merge_commit_message_input = cx.new(|cx| {
-      InputState::new(window, cx)
-        .multi_line(true)
+      TextareaState::new(window, cx)
         .rows(5)
         .placeholder("Commit message (optional)")
     });
-    let review_input = cx.new(|cx| {
-      InputState::new(window, cx)
-        .multi_line(true)
-        .placeholder("Add an overall review comment...")
-    });
+    let review_input =
+      cx.new(|cx| TextareaState::new(window, cx).placeholder("Add an overall review comment..."));
     let overview_issue_comment_input = cx.new(|cx| {
-      InputState::new(window, cx)
-        .multi_line(true)
+      TextareaState::new(window, cx)
         .rows(6)
         .placeholder("Add comment...")
     });
     let suggested_change_commit_title_input =
       cx.new(|cx| InputState::new(window, cx).placeholder("Apply suggestion from code review"));
     let suggested_change_commit_message_input = cx.new(|cx| {
-      InputState::new(window, cx)
-        .multi_line(true)
+      TextareaState::new(window, cx)
         .rows(4)
         .placeholder("Commit message (optional)")
     });
@@ -5806,14 +5800,13 @@ impl GithubPrDetailsPage {
     &mut self,
     window: &mut Window,
     cx: &mut Context<Self>,
-  ) -> Entity<InputState> {
+  ) -> Entity<TextareaState> {
     if let Some(input) = self.pr_description_edit_input.as_ref() {
       return input.clone();
     }
 
     let input = cx.new(|cx| {
-      InputState::new(window, cx)
-        .multi_line(true)
+      TextareaState::new(window, cx)
         .rows(6)
         .placeholder("Edit description...")
     });
@@ -5967,14 +5960,13 @@ impl GithubPrDetailsPage {
     &mut self,
     window: &mut Window,
     cx: &mut Context<Self>,
-  ) -> Entity<InputState> {
+  ) -> Entity<TextareaState> {
     if let Some(input) = self.overview_edit_input.as_ref() {
       return input.clone();
     }
 
     let input = cx.new(|cx| {
-      InputState::new(window, cx)
-        .multi_line(true)
+      TextareaState::new(window, cx)
         .rows(6)
         .placeholder("Edit comment...")
     });
@@ -5986,14 +5978,13 @@ impl GithubPrDetailsPage {
     &mut self,
     window: &mut Window,
     cx: &mut Context<Self>,
-  ) -> Entity<InputState> {
+  ) -> Entity<TextareaState> {
     if let Some(input) = self.overview_reply_input.as_ref() {
       return input.clone();
     }
 
     let input = cx.new(|cx| {
-      InputState::new(window, cx)
-        .multi_line(true)
+      TextareaState::new(window, cx)
         .rows(6)
         .placeholder("Reply to review comment...")
     });
@@ -6221,40 +6212,67 @@ impl GithubPrDetailsPage {
     .detach();
   }
 
+  fn can_submit_merge_from_input(&self) -> bool {
+    if !self.merge_popover_open || self.merge_submit_loading {
+      return false;
+    }
+    self.merge_readiness.as_ref().is_some_and(|readiness| {
+      readiness.can_merge_now
+        && self
+          .selected_merge_method()
+          .is_some_and(|method| readiness.available_methods.contains(&method))
+    })
+  }
+
   fn subscribe_to_merge_commit_inputs(&mut self, window: &mut Window, cx: &mut Context<Self>) {
     let title_input = self.merge_commit_title_input.clone();
     let message_input = self.merge_commit_message_input.clone();
-    for input in [title_input, message_input] {
-      cx.subscribe_in(
-        &input,
-        window,
-        |this, state, event: &InputEvent, window, cx| {
-          if let InputEvent::PressEnter { secondary: true } = event {
-            if !this.merge_popover_open || this.merge_submit_loading {
-              return;
-            }
-            let can_submit_merge = this.merge_readiness.as_ref().is_some_and(|readiness| {
-              readiness.can_merge_now
-                && this
-                  .selected_merge_method()
-                  .is_some_and(|method| readiness.available_methods.contains(&method))
-            });
-            if !can_submit_merge {
-              return;
-            }
-            let raw = state.read(cx).value().to_string();
-            let trimmed = raw.trim_end_matches('\n').to_string();
-            if trimmed != raw {
-              state.update(cx, |input, cx| {
-                input.set_value(trimmed, window, cx);
-              });
-            }
-            this.submit_pull_request_merge(window, cx);
+    cx.subscribe_in(
+      &title_input,
+      window,
+      |this, state, event: &InputEvent, window, cx| {
+        if let InputEvent::PressEnter {
+          secondary: true, ..
+        } = event
+        {
+          if !this.can_submit_merge_from_input() {
+            return;
           }
-        },
-      )
-      .detach();
-    }
+          let raw = state.read(cx).value().to_string();
+          let trimmed = raw.trim_end_matches('\n').to_string();
+          if trimmed != raw {
+            state.update(cx, |input, cx| {
+              input.set_value(trimmed, window, cx);
+            });
+          }
+          this.submit_pull_request_merge(window, cx);
+        }
+      },
+    )
+    .detach();
+    cx.subscribe_in(
+      &message_input,
+      window,
+      |this, state, event: &InputEvent, window, cx| {
+        if let InputEvent::PressEnter {
+          secondary: true, ..
+        } = event
+        {
+          if !this.can_submit_merge_from_input() {
+            return;
+          }
+          let raw = state.read(cx).value().to_string();
+          let trimmed = raw.trim_end_matches('\n').to_string();
+          if trimmed != raw {
+            state.update(cx, |input, cx| {
+              input.set_value(trimmed, window, cx);
+            });
+          }
+          this.submit_pull_request_merge(window, cx);
+        }
+      },
+    )
+    .detach();
   }
 
   fn subscribe_to_review_input(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -6262,7 +6280,10 @@ impl GithubPrDetailsPage {
       &self.review_input,
       window,
       |this, state, event: &InputEvent, window, cx| {
-        if let InputEvent::PressEnter { secondary: true } = event {
+        if let InputEvent::PressEnter {
+          secondary: true, ..
+        } = event
+        {
           if !this.review_popover_open || this.submit_review_loading || this.pull_request.is_none()
           {
             return;
@@ -8658,7 +8679,7 @@ impl GithubPrDetailsPage {
   fn upload_dropped_images(
     &mut self,
     paths: &ExternalPaths,
-    input: Entity<InputState>,
+    input: Entity<TextareaState>,
     on_error: impl Fn(&mut Self, String, &mut Context<Self>) + Send + 'static + Clone,
     window: &mut Window,
     cx: &mut Context<Self>,
@@ -8687,7 +8708,7 @@ impl GithubPrDetailsPage {
   fn handle_overview_reply_drop(
     &mut self,
     paths: &ExternalPaths,
-    input: Entity<InputState>,
+    input: Entity<TextareaState>,
     window: &mut Window,
     cx: &mut Context<Self>,
   ) {
@@ -8705,7 +8726,7 @@ impl GithubPrDetailsPage {
   fn handle_overview_edit_drop(
     &mut self,
     paths: &ExternalPaths,
-    input: Entity<InputState>,
+    input: Entity<TextareaState>,
     window: &mut Window,
     cx: &mut Context<Self>,
   ) {
@@ -8723,7 +8744,7 @@ impl GithubPrDetailsPage {
   fn handle_pr_description_edit_drop(
     &mut self,
     paths: &ExternalPaths,
-    input: Entity<InputState>,
+    input: Entity<TextareaState>,
     window: &mut Window,
     cx: &mut Context<Self>,
   ) {
@@ -8745,7 +8766,7 @@ impl GithubPrDetailsPage {
   fn handle_diff_editor_review_comment_drop(
     &mut self,
     paths: &ExternalPaths,
-    input: Entity<InputState>,
+    input: Entity<TextareaState>,
     window: &mut Window,
     cx: &mut Context<Self>,
   ) {
@@ -10493,7 +10514,7 @@ impl GithubPrDetailsPage {
       });
 
     Popover::new("pr-merge-popover")
-      .anchor(Corner::TopRight)
+      .anchor(Anchor::TopRight)
       .w(px(PR_MERGE_POPOVER_WIDTH))
       .open(self.merge_popover_open)
       .on_open_change(cx.listener(|this, open, window, cx| {
@@ -10615,7 +10636,7 @@ impl GithubPrDetailsPage {
                   .w_full()
                   .debug_selector(|| "github-pr-merge-message-input".to_string())
                   .child(
-                    Input::new(&self.merge_commit_message_input)
+                    Textarea::new(&self.merge_commit_message_input)
                       .w_full()
                       .h(px(PR_MERGE_MESSAGE_INPUT_HEIGHT_PX)),
                   ),
@@ -10760,7 +10781,7 @@ impl GithubPrDetailsPage {
       .icon(UiIconName::EllipsisVertical)
       .ghost()
       .small()
-      .dropdown_menu_with_anchor(Corner::TopRight, move |menu, _, _| {
+      .dropdown_menu_with_anchor(Anchor::TopRight, move |menu, _, _| {
         let view = view.clone();
         let mut menu = menu;
 
@@ -10839,7 +10860,7 @@ impl GithubPrDetailsPage {
       .count();
 
     Popover::new("pr-review-popover")
-      .anchor(Corner::TopRight)
+      .anchor(Anchor::TopRight)
       .w(px(PR_REVIEW_POPOVER_WIDTH))
       .open(self.review_popover_open)
       .on_open_change(cx.listener(|this, open, window, cx| {
@@ -11447,7 +11468,7 @@ impl GithubPrDetailsPage {
     Button::new(id)
       .small()
       .ghost()
-      .flex_shrink()
+      .flex_shrink(1.)
       .min_w_0()
       .child(
         div()
@@ -13090,7 +13111,7 @@ impl GithubPrDetailsPage {
               .child(
                 div()
                   .w_full()
-                  .child(Input::new(&message_input).w_full().h(px(86.0))),
+                  .child(Textarea::new(&message_input).w_full().h(px(86.0))),
               )
               .child(
                 Switch::new(format!("pr-commit-suggestion-coauthor-{comment_id}"))
@@ -14644,7 +14665,7 @@ impl GithubPrDetailsPage {
         let labels_popover =
           |trigger| {
             Popover::new("pr-labels-popover")
-              .anchor(Corner::TopRight)
+              .anchor(Anchor::TopRight)
               .open(self.label_popover_open)
               .on_open_change(cx.listener(|this, open, _window, cx| {
                 this.label_popover_open = *open;
@@ -14771,7 +14792,7 @@ impl GithubPrDetailsPage {
           .child(label_block);
 
         let reviewers_popover = Popover::new("pr-reviewers-popover")
-          .anchor(Corner::TopRight)
+          .anchor(Anchor::TopRight)
           .open(self.reviewer_popover_open)
           .on_open_change(cx.listener(|this, open, _window, cx| {
             this.reviewer_popover_open = *open;
@@ -14852,7 +14873,7 @@ impl GithubPrDetailsPage {
           );
 
         let assignees_popover = Popover::new("pr-assignees-popover")
-          .anchor(Corner::TopRight)
+          .anchor(Anchor::TopRight)
           .open(self.assignee_popover_open)
           .on_open_change(cx.listener(|this, open, _window, cx| {
             this.assignee_popover_open = *open;

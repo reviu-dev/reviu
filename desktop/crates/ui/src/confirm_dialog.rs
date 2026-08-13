@@ -121,7 +121,6 @@ impl ConfirmDialog {
     let alert = alert
       .title(self.title)
       .close_button(true)
-      .overlay_closable(true)
       .button_props(props);
 
     match self.content_placement {

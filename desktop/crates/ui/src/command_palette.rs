@@ -2300,7 +2300,7 @@ impl CommandPalette {
     window: &mut Window,
     cx: &mut Context<Self>,
   ) {
-    if let InputEvent::PressEnter { secondary: _ } = event {
+    if let InputEvent::PressEnter { .. } = event {
       let branch_name = state.read(cx).value().to_string();
       if branch_name.is_empty() {
         return;

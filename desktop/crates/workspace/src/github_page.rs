@@ -3922,12 +3922,7 @@ impl Render for GithubPage {
       .unwrap_or_else(|| "Search pull requests...".to_string());
     let show_manage_tabs = self.managing_pull_request_tabs();
     let now = OffsetDateTime::now_utc();
-    let greeting = github_home_greeting_at(
-      github_home_display_name(&auth_state)
-        .as_deref()
-        .map(|display_name| &**display_name),
-      now,
-    );
+    let greeting = github_home_greeting_at(github_home_display_name(&auth_state).as_deref(), now);
     let date_label = github_home_date_label_at(now);
 
     let pull_requests_list = VariableList::new(&self.pull_requests)

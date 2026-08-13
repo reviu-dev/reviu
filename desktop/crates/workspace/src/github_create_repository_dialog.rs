@@ -14,7 +14,7 @@ use gpui_component::{
   v_flex,
 };
 use smol::unblock;
-use ui::{Input, InputState, StatusThemeExt, WindowExt};
+use ui::{Input, InputState, StatusThemeExt, Textarea, TextareaState, WindowExt};
 
 use crate::{
   api::{ApiClient, CreateRepositoryOwner, GithubUserOrganization},
@@ -35,7 +35,7 @@ pub struct CreateRepositoryDialog {
   api: ApiClient,
   window_handle: AnyWindowHandle,
   name_input: Entity<InputState>,
-  description_input: Entity<InputState>,
+  description_input: Entity<TextareaState>,
   owner_select: Entity<SelectState<Vec<String>>>,
   owners: Vec<OwnerChoice>,
   selected_owner_index: Option<usize>,
@@ -63,7 +63,7 @@ impl CreateRepositoryDialog {
   ) -> Self {
     let name_input = cx.new(|cx| InputState::new(window, cx).placeholder("my-repository"));
     let description_input = cx.new(|cx| {
-      InputState::new(window, cx)
+      TextareaState::new(window, cx)
         .auto_grow(2, 5)
         .placeholder("A short description (optional)")
     });
@@ -338,7 +338,7 @@ impl Render for CreateRepositoryDialog {
             v_flex()
               .gap_1()
               .child(div().text_sm().child("Description"))
-              .child(Input::new(&self.description_input).w_full()),
+              .child(Textarea::new(&self.description_input).w_full()),
           )
           .child(
             Checkbox::new("github-create-repository-private")

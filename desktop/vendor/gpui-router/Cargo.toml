@@ -1,0 +1,21 @@
+# Vendored from justjavac/gpui-router @ b8b4228 (MIT). Upstream does not compile
+# against current gpui (ambiguous `render` since gpui grew a `View` trait); see
+# the RenderOnce disambiguation in src/route.rs.
+[package]
+name = "gpui-router"
+version = "0.3.0"
+edition = "2024"
+publish = false
+license = "MIT"
+description = "A router for GPUI App."
+
+[lib]
+path = "src/lib.rs"
+doctest = false
+
+[dependencies]
+gpui = { git = "https://github.com/zed-industries/zed" }
+gpui-router-macros = { path = "../gpui-router-macros" }
+hashbrown = "0.16.0"
+matchit = "0.8.6"
+smallvec = "1.15.1"

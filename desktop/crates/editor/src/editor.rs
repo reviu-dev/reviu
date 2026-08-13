@@ -20,7 +20,7 @@ use gfm_markdown_viewer::{
 };
 use git::{ApplyLocation, DiffSet, FileDiff, GitFileBases, GitStore, RepoFile};
 use gpui::{
-  App, Bounds, Context, Corner, CursorStyle, Entity, EntityInputHandler, ExternalPaths,
+  Anchor, App, Bounds, Context, CursorStyle, Entity, EntityInputHandler, ExternalPaths,
   FocusHandle, Focusable, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels, Point,
   ScrollHandle, ShapedLine, SharedString, Subscription, Task, UTF16Selection, Window, black, div,
   point, prelude::*, px, white,
@@ -30,7 +30,7 @@ use gpui_component::{
   avatar::Avatar,
   button::{Button, ButtonVariants as _},
   h_flex,
-  input::{Escape as InputEscape, Input, InputEvent, InputState},
+  input::{Escape as InputEscape, Input, InputEvent, InputState, TextareaState},
   menu::{DropdownMenu as _, PopupMenuItem},
   resizable::{h_resizable, resizable_panel},
   v_flex,
@@ -187,7 +187,7 @@ pub type ReviewCommentSuggestionActionFactory = Arc<
 pub type ReviewCommentLinkHandler = Arc<dyn Fn(&str, &mut Window, &mut App) -> bool>;
 pub type ReviewCommentCancelHandler = Arc<dyn Fn(&mut Window, &mut App)>;
 pub type ReviewCommentImageUploadHandler =
-  Arc<dyn Fn(&ExternalPaths, Entity<InputState>, &mut Window, &mut App)>;
+  Arc<dyn Fn(&ExternalPaths, Entity<TextareaState>, &mut Window, &mut App)>;
 pub type ReviewCommentPreviewRenderer = Arc<
   dyn Fn(
     &str,
@@ -556,7 +556,7 @@ pub struct Editor {
   review_comment_pr_number: Option<u64>,
   editable_review_comment_ids: HashSet<u64>,
   review_comment_edit_handler: Option<ReviewCommentEditHandler>,
-  review_comment_edit_input: Option<Entity<InputState>>,
+  review_comment_edit_input: Option<Entity<TextareaState>>,
   editing_review_comment_id: Option<u64>,
   review_comment_edit_initial_body: Option<Arc<str>>,
   review_comment_edit_submitting_id: Option<u64>,
@@ -577,7 +577,7 @@ pub struct Editor {
   review_comment_preview_renderer: Option<ReviewCommentPreviewRenderer>,
   review_comment_card_width: Pixels,
   review_comment_textarea_height: Pixels,
-  review_comment_create_input: Option<Entity<InputState>>,
+  review_comment_create_input: Option<Entity<TextareaState>>,
   review_comment_create_draft: Option<ReviewCommentCreateDraft>,
   review_comment_create_drag_start_display_line: Option<usize>,
   review_comment_create_drag_active: bool,
@@ -585,7 +585,7 @@ pub struct Editor {
   review_comment_create_error: Option<Arc<str>>,
   review_comment_create_preview_open: bool,
   review_comment_edit_preview_open: bool,
-  review_comment_reply_input: Option<Entity<InputState>>,
+  review_comment_reply_input: Option<Entity<TextareaState>>,
   replying_to_review_comment_id: Option<u64>,
   review_comment_reply_submitting: bool,
   review_comment_reply_error: Option<Arc<str>>,
@@ -1944,7 +1944,7 @@ impl Editor {
   fn review_comment_drop_zone(
     &self,
     id: impl Into<gpui::ElementId>,
-    input: Entity<InputState>,
+    input: Entity<TextareaState>,
     cx: &mut Context<Self>,
   ) -> gpui::Stateful<gpui::Div> {
     let handler = self.review_comment_image_upload_handler.clone();
@@ -2075,14 +2075,13 @@ impl Editor {
     &mut self,
     window: &mut Window,
     cx: &mut Context<Self>,
-  ) -> Entity<InputState> {
+  ) -> Entity<TextareaState> {
     if let Some(input) = self.review_comment_edit_input.as_ref() {
       return input.clone();
     }
 
     let input = cx.new(|cx| {
-      InputState::new(window, cx)
-        .multi_line(true)
+      TextareaState::new(window, cx)
         .rows(6)
         .placeholder("Edit review comment...")
     });
@@ -2090,7 +2089,10 @@ impl Editor {
       &input,
       window,
       |editor, state, event: &InputEvent, window, cx| {
-        if let InputEvent::PressEnter { secondary: true } = event {
+        if let InputEvent::PressEnter {
+          secondary: true, ..
+        } = event
+        {
           let Some(comment_id) = editor.editing_review_comment_id else {
             return;
           };
@@ -2247,14 +2249,13 @@ impl Editor {
     &mut self,
     window: &mut Window,
     cx: &mut Context<Self>,
-  ) -> Entity<InputState> {
+  ) -> Entity<TextareaState> {
     if let Some(input) = self.review_comment_create_input.as_ref() {
       return input.clone();
     }
 
     let input = cx.new(|cx| {
-      InputState::new(window, cx)
-        .multi_line(true)
+      TextareaState::new(window, cx)
         .rows(6)
         .placeholder("Add review comment...")
     });
@@ -2262,7 +2263,10 @@ impl Editor {
       &input,
       window,
       |editor, state, event: &InputEvent, window, cx| {
-        if let InputEvent::PressEnter { secondary: true } = event {
+        if let InputEvent::PressEnter {
+          secondary: true, ..
+        } = event
+        {
           Self::trim_review_comment_input_trailing_newline(state, window, cx);
           editor.save_review_comment_create(ReviewCommentMode::SingleComment, window, cx);
         }
@@ -2277,14 +2281,13 @@ impl Editor {
     &mut self,
     window: &mut Window,
     cx: &mut Context<Self>,
-  ) -> Entity<InputState> {
+  ) -> Entity<TextareaState> {
     if let Some(input) = self.review_comment_reply_input.as_ref() {
       return input.clone();
     }
 
     let input = cx.new(|cx| {
-      InputState::new(window, cx)
-        .multi_line(true)
+      TextareaState::new(window, cx)
         .rows(6)
         .placeholder("Reply to review comment...")
     });
@@ -2292,7 +2295,10 @@ impl Editor {
       &input,
       window,
       |editor, state, event: &InputEvent, window, cx| {
-        if let InputEvent::PressEnter { secondary: true } = event {
+        if let InputEvent::PressEnter {
+          secondary: true, ..
+        } = event
+        {
           Self::trim_review_comment_input_trailing_newline(state, window, cx);
           editor.save_review_comment_reply(window, cx);
         }
@@ -2304,7 +2310,7 @@ impl Editor {
   }
 
   fn trim_review_comment_input_trailing_newline(
-    state: &Entity<InputState>,
+    state: &Entity<TextareaState>,
     window: &mut Window,
     cx: &mut Context<Self>,
   ) {
@@ -3051,7 +3057,7 @@ impl Editor {
         self.find_query = state.read(cx).value().to_string();
         self.refresh_find_matches(self.measured_editor_line_height(), true, cx);
       }
-      InputEvent::PressEnter { secondary } => {
+      InputEvent::PressEnter { secondary, .. } => {
         if *secondary {
           self.find_previous_match(window, cx);
         } else {
@@ -3755,7 +3761,7 @@ impl Editor {
           .compact()
           .icon(IconName::Ellipsis)
           .tooltip("More actions")
-          .dropdown_menu_with_anchor(Corner::TopRight, move |menu, _, _| {
+          .dropdown_menu_with_anchor(Anchor::TopRight, move |menu, _, _| {
             let editor_edit = editor_edit.clone();
             let editor_delete = editor_delete.clone();
             let body_for_edit = body_for_edit.clone();
@@ -10912,7 +10918,10 @@ pub mod tests {
       let input = editor.ensure_review_comment_create_input(window, cx);
       input.update(cx, |input, cx| {
         input.set_value("please fix\n".to_string(), window, cx);
-        cx.emit(InputEvent::PressEnter { secondary: true });
+        cx.emit(InputEvent::PressEnter {
+          secondary: true,
+          shift: false,
+        });
       });
     });
 

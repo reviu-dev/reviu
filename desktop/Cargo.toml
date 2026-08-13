@@ -31,6 +31,7 @@ gpui_platform = { git = "https://github.com/zed-industries/zed", package = "gpui
   "runtime_shaders",
 ] }
 gpui-component = { git = "https://github.com/longbridge/gpui-component", branch = "main" }
+gpui-base = { git = "https://github.com/longbridge/gpui-component", branch = "main" }
 gpui-component-assets = { git = "https://github.com/longbridge/gpui-component", branch = "main" }
 reqwest_client = { git = "https://github.com/zed-industries/zed", package = "reqwest_client" }
 unicode-segmentation = "1.13.3"
@@ -132,7 +133,7 @@ workspace = { path = "crates/workspace" }
 agent_acp = { path = "crates/agent_acp" }
 agent_chat_panel = { path = "crates/agent_chat_panel" }
 selectable_text = { path = "crates/selectable_text" }
-gpui-router = { git = "https://github.com/justjavac/gpui-router" }
+gpui-router = { path = "vendor/gpui-router" }
 
 # ACP integration
 agent-client-protocol = { version = "=0.11.1", features = ["unstable"] }
@@ -146,9 +147,9 @@ shell-words = "1.1.1"
 debug = "line-tables-only"
 
 [patch.crates-io]
-gpui = { git = "https://github.com/zed-industries/zed" }
+gpui = { git = "https://github.com/zed-industries/zed", version = "0.2.2" }
 tree-sitter-scss = { git = "https://github.com/tree-sitter-grammars/tree-sitter-scss", rev = "2ef6d42e3ad7a8208900f9346f4529806ae0f9f9" }
 
-# Strip GPL-3.0 transitive deps (ztracing -> zlog) that sum_tree pulls into the binary. See vendor/sum_tree.
+# Strip GPL-3.0 deps (ztracing -> zlog) that gpui and sum_tree pull into the binary. See vendor/ztracing.
 [patch."https://github.com/zed-industries/zed"]
-sum_tree = { path = "vendor/sum_tree" }
+ztracing = { path = "vendor/ztracing" }

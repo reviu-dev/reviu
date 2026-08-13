@@ -641,7 +641,7 @@ impl TerminalView {
         self.scroll_remainder %= line_height;
         (delta_lines != 0).then_some(delta_lines)
       }
-      TouchPhase::Ended => None,
+      TouchPhase::Ended | TouchPhase::Cancelled => None,
     }
   }
 }

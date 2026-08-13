@@ -2,7 +2,7 @@ use std::path::Path;
 use std::sync::Arc;
 
 use gpui::{
-  AnyElement, App, Context, Corner, Entity, ExternalPaths, Hsla, IntoElement, MouseButton,
+  Anchor, AnyElement, App, Context, Entity, ExternalPaths, Hsla, IntoElement, MouseButton,
   ParentElement as _, SharedString, Styled, Window, div, prelude::*,
 };
 use gpui_component::{
@@ -11,7 +11,7 @@ use gpui_component::{
   button::{Button, ButtonVariants as _},
   clipboard::Clipboard,
   h_flex,
-  input::InputState,
+  input::TextareaState,
   label::Label,
   menu::{DropdownMenu as _, PopupMenuItem},
   skeleton::Skeleton,
@@ -182,7 +182,7 @@ pub(crate) fn render_comment_actions_menu(
           .compact()
           .icon(IconName::Ellipsis)
           .tooltip("More actions")
-          .dropdown_menu_with_anchor(Corner::TopRight, move |mut menu, _, _| {
+          .dropdown_menu_with_anchor(Anchor::TopRight, move |mut menu, _, _| {
             let actions = actions.clone();
             if let Some(on_quote_reply) = actions.on_quote_reply {
               menu = menu.item(
@@ -258,11 +258,11 @@ pub(crate) fn upload_placeholder_id() -> String {
 }
 
 pub(crate) fn replace_placeholder_in_input(
-  input: &mut InputState,
+  input: &mut TextareaState,
   placeholder: &str,
   replacement: &str,
   window: &mut Window,
-  cx: &mut Context<InputState>,
+  cx: &mut Context<TextareaState>,
 ) {
   let current = input.value().to_string();
   let Some(index) = current.find(placeholder) else {
@@ -284,7 +284,7 @@ pub(crate) fn replace_placeholder_in_input(
 /// Non-image paths are skipped silently.
 pub(crate) fn upload_dropped_images<V: 'static>(
   paths: &ExternalPaths,
-  input: Entity<InputState>,
+  input: Entity<TextareaState>,
   api: ApiClient,
   on_error: impl Fn(&mut V, String, &mut Context<V>) + Send + 'static + Clone,
   window: &mut Window,

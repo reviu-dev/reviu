@@ -33,7 +33,7 @@ use git::{
   unstage_all, unstage_file,
 };
 use gpui::{
-  AnyElement, AnyWindowHandle, App, Context, Corner, Entity, FocusHandle, Focusable, Global, Image,
+  Anchor, AnyElement, AnyWindowHandle, App, Context, Entity, FocusHandle, Focusable, Global, Image,
   InteractiveElement, ObjectFit, ParentElement, PathPromptOptions, Pixels, Render, RenderImage,
   SharedString, Styled, Subscription, Task, WeakEntity, Window, actions, div, img, prelude::*, px,
 };
@@ -136,8 +136,8 @@ use ui::{
   CommandPaletteInitialScreen, CommandPalettePage, CommandPaletteRepository, CommandPaletteStash,
   ConfirmDialog, DropdownSelectConfig, DropdownSelectItem, FILE_ICON_SIZE_PX, Input, InputState,
   PAGE_HEADER_HEIGHT, SearchFileEntry, SearchFileHandler, SelectableRowStyle, StatusAlert,
-  StatusThemeExt, UiIconName, WindowExt, dropdown_select, file_icon_path_for_path_with_theme,
-  selectable_list_item,
+  StatusThemeExt, Textarea, TextareaState, UiIconName, WindowExt, dropdown_select,
+  file_icon_path_for_path_with_theme, selectable_list_item,
 };
 
 const SIDEBAR_DEFAULT_WIDTH: f32 = 400.0;
@@ -387,7 +387,7 @@ struct CreatePullRequestDialog {
   branch_context: GithubBranchContext,
   title_input: Entity<InputState>,
   base_input: Entity<InputState>,
-  body_input: Entity<InputState>,
+  body_input: Entity<TextareaState>,
   template_select: Entity<SelectState<Vec<String>>>,
   draft: bool,
   default_branch_loading: bool,
@@ -486,7 +486,7 @@ impl CreatePullRequestDialog {
       title_input: cx.new(|cx| InputState::new(window, cx).placeholder("Pull request title")),
       base_input: cx.new(|cx| InputState::new(window, cx).placeholder("Base branch")),
       body_input: cx.new(|cx| {
-        InputState::new(window, cx)
+        TextareaState::new(window, cx)
           .auto_grow(4, 10)
           .placeholder("Add an optional description...")
       }),
@@ -806,7 +806,7 @@ impl Render for CreatePullRequestDialog {
                   }),
               )
               .child(
-                Input::new(&self.body_input)
+                Textarea::new(&self.body_input)
                   .w_full()
                   .disabled(self.template_loading),
               ),
@@ -1558,7 +1558,7 @@ impl DropdownSelectItem for RecentRepoItem {
           .text_color(cx.theme().muted_foreground)
           .child(self.prefix.clone()),
       )
-      .child(div().flex_shrink().child(self.name.clone()))
+      .child(div().flex_shrink(1.).child(self.name.clone()))
       .into_any_element()
   }
 
@@ -1577,7 +1577,7 @@ impl DropdownSelectItem for RecentRepoItem {
       )
       .child(
         div()
-          .flex_shrink()
+          .flex_shrink(1.)
           .text_color(cx.theme().foreground)
           .child(self.name.clone()),
       )
@@ -1788,7 +1788,7 @@ pub struct GitPage {
   branch_refresh_generation: u64,
   poll_task: Option<Task<()>>,
   poll_window_active: bool,
-  commit_input: Entity<InputState>,
+  commit_input: Entity<TextareaState>,
   operation_error: Option<SharedString>,
 }
 
@@ -3225,7 +3225,7 @@ impl GitPage {
     let history_tree = cx.new(|cx| TreeState::new(cx));
 
     let commit_input = cx.new(|cx| {
-      InputState::new(window, cx)
+      TextareaState::new(window, cx)
         .auto_grow(1, 5)
         .placeholder("Commit message...")
     });
@@ -3344,7 +3344,7 @@ impl GitPage {
     let _ = file_list.read(cx).focus_handle(cx).tab_stop(true);
     let history_tree = cx.new(|cx| TreeState::new(cx));
     let commit_input = cx.new(|cx| {
-      InputState::new(window, cx)
+      TextareaState::new(window, cx)
         .auto_grow(1, 5)
         .placeholder("Commit message...")
     });
@@ -3886,7 +3886,10 @@ impl GitPage {
       &self.commit_input,
       window,
       |this, _state, event: &InputEvent, window, cx| {
-        if let InputEvent::PressEnter { secondary: true } = event {
+        if let InputEvent::PressEnter {
+          secondary: true, ..
+        } = event
+        {
           this.commit_changes_inner(window, cx);
         }
       },
@@ -10332,7 +10335,7 @@ impl GitPage {
       .rounded_l_none()
       .border_l_0()
       .disabled(!menu_enabled)
-      .dropdown_menu_with_anchor(Corner::BottomRight, move |menu, _, _| {
+      .dropdown_menu_with_anchor(Anchor::BottomRight, move |menu, _, _| {
         let amend_view = amend_view.clone();
         let undo_view = undo_view.clone();
         let push_view = push_view.clone();
@@ -10446,20 +10449,28 @@ impl GitPage {
         )
       })
       .child(div().w_full().min_w_0().key_context("CommitInput").child({
-        let mut commit_box = Input::new(&input).w_full();
+        let commit_box = Textarea::new(&input).w_full();
         if show_generate {
-          commit_box = commit_box.suffix(
-            Button::new("generate-commit-message")
-              .icon(UiIconName::Sparkles)
-              .ghost()
-              .small()
-              .loading(self.generating_commit_message)
-              .disabled(self.status_entries.is_empty() || self.generating_commit_message)
-              .tooltip("Generate commit message")
-              .on_click(cx.listener(|this, _, _, cx| this.generate_commit_message(cx))),
-          );
+          div()
+            .relative()
+            .w_full()
+            .child(commit_box)
+            .child(
+              div().absolute().top_1().right_1().child(
+                Button::new("generate-commit-message")
+                  .icon(UiIconName::Sparkles)
+                  .ghost()
+                  .small()
+                  .loading(self.generating_commit_message)
+                  .disabled(self.status_entries.is_empty() || self.generating_commit_message)
+                  .tooltip("Generate commit message")
+                  .on_click(cx.listener(|this, _, _, cx| this.generate_commit_message(cx))),
+              ),
+            )
+            .into_any_element()
+        } else {
+          commit_box.into_any_element()
         }
-        commit_box
       }))
       .child(
         div()
@@ -14157,7 +14168,10 @@ mod tests {
     assert!(dialog_open_before_confirm);
 
     git_page.update_in(cx, |_this, window, cx| {
-      window.dispatch_action(Box::new(gpui_component::dialog::ConfirmDialog), cx);
+      window.dispatch_action(
+        Box::new(gpui_base::actions::Confirm { secondary: false }),
+        cx,
+      );
     });
     cx.cx.run_until_parked();
     cx.run_until_parked();
@@ -18981,7 +18995,10 @@ mod tests {
       });
 
       this.commit_input.update(cx, |_input, cx| {
-        cx.emit(InputEvent::PressEnter { secondary: true })
+        cx.emit(InputEvent::PressEnter {
+          secondary: true,
+          ..
+        })
       });
     });
 
@@ -19303,10 +19320,14 @@ mod tests {
     );
     assert_eq!(notification_count, 1);
 
+    // Autohide is paused while the window is inactive; activate it first.
+    root.update_in(cx, |_this, window, _cx| window.activate_window());
+    cx.cx.run_until_parked();
+    cx.run_until_parked();
     cx.executor().advance_clock(Duration::from_secs(5));
     cx.cx.run_until_parked();
     cx.run_until_parked();
-    cx.executor().advance_clock(Duration::from_millis(200));
+    cx.executor().advance_clock(Duration::from_secs(1));
     cx.cx.run_until_parked();
     cx.run_until_parked();
 

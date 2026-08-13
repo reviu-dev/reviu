@@ -6,7 +6,7 @@ use git::{
   InteractiveRebaseTodoEntry,
 };
 use gpui::{
-  AnyElement, App, Context, Corner, Entity, FocusHandle, Focusable, InteractiveElement,
+  Anchor, AnyElement, App, Context, Entity, FocusHandle, Focusable, InteractiveElement,
   IntoElement, KeyDownEvent, ParentElement, Render, RenderOnce, SharedString, Styled, Subscription,
   WeakEntity, Window, div, prelude::*, px, white,
 };
@@ -150,7 +150,7 @@ impl RenderOnce for InteractiveRebaseTodoListItem {
         .tab_stop(false)
         .width(px(130.))
         .menu_width(px(130.))
-        .anchor(Corner::TopLeft)
+        .anchor(Anchor::TopLeft)
         .on_select(Rc::new(move |new_action, _, cx| {
           let _ = view_for_action.update(cx, |view, cx| {
             view.set_row_action(row_index, new_action, cx);

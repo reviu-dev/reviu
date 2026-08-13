@@ -8,7 +8,7 @@ use std::{
 use editor::{DiffViewMode, Editor, HunkNavigationDirection};
 use git::{DiffKind, DiffSet, FileDiff, compute_buffer_diff};
 use gpui::{
-  AnyElement, App, Context, Corner, Entity, FocusHandle, Focusable, ParentElement, Render,
+  Anchor, AnyElement, App, Context, Entity, FocusHandle, Focusable, ParentElement, Render,
   RenderImage, SharedString, Styled, Task, Window, div, img, prelude::*, px,
 };
 use gpui_component::{
@@ -935,7 +935,7 @@ impl GithubCommitDetailsPage {
                       .ghost()
                       .small()
                       .compact()
-                      .dropdown_menu_with_anchor(Corner::TopRight, move |menu, _, _| {
+                      .dropdown_menu_with_anchor(Anchor::TopRight, move |menu, _, _| {
                         let view_url = url.clone();
                         menu.item(
                           PopupMenuItem::new("View on GitHub")

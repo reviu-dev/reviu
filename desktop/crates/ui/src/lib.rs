@@ -43,18 +43,19 @@ pub use github_search_palette::{
   GithubSearchRepoEntry,
 };
 pub use github_url::parse_github_url_action;
+pub use gpui::Anchor;
 pub use gpui_component::Disableable;
+pub use gpui_component::IconName;
 pub use gpui_component::WindowExt;
 pub use gpui_component::button::Button;
 pub use gpui_component::button::ButtonVariants;
-pub use gpui_component::input::{Input, InputState};
+pub use gpui_component::input::{Input, InputState, Textarea, TextareaState};
 pub use gpui_component::popover::Popover;
 pub use gpui_component::resizable::{ResizableState, h_resizable, resizable_panel};
 pub use gpui_component::select::{
   SearchableVec, Select, SelectEvent, SelectGroup, SelectItem, SelectState,
 };
 pub use gpui_component::sidebar::{Sidebar, SidebarItem};
-pub use gpui_component::{Anchor, IconName};
 pub use gpui_component::{Collapsible, Sizable};
 pub use icons::{
   FILE_ICON_SIZE_PX, FileIcon, UiIconName, file_icon_for_name, file_icon_for_path,

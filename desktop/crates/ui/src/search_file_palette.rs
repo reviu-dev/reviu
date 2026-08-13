@@ -190,7 +190,7 @@ impl ListDelegate for SearchFileListDelegate {
               .items_center()
               .gap_2()
               .min_w_0()
-              .flex_shrink()
+              .flex_shrink(1.)
               .child(file_icon)
               .child(Label::new(file_name).truncate()),
           )

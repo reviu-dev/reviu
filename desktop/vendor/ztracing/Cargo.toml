@@ -1,0 +1,14 @@
+# Permissive no-op stand-in for zed's ztracing (GPL-3.0-or-later), patched over the
+# git dependency so neither ztracing nor its GPL dependency zlog reaches the binary.
+# Mirrors the upstream crate's public surface with profiling disabled.
+[package]
+name = "ztracing"
+version = "0.1.0"
+edition = "2024"
+publish = false
+license = "Apache-2.0"
+description = "No-op stub for zed's ztracing"
+
+[dependencies]
+tracing = "0.1"
+ztracing_macro = { path = "../ztracing_macro" }

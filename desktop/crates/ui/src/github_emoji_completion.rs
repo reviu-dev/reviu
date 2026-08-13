@@ -7,8 +7,8 @@ use gpui::{
   prelude::FluentBuilder as _, px,
 };
 use gpui_component::{
-  ActiveTheme as _, Sizable, Size, h_flex,
-  input::{self, Input, InputState},
+  ActiveTheme as _, h_flex,
+  input::{self, Textarea, TextareaState},
 };
 
 const MAX_EMOJI_COMPLETIONS: usize = 8;
@@ -44,14 +44,14 @@ fn emoji_completion_label(emoji: &GithubEmoji) -> String {
 
 #[derive(IntoElement)]
 pub struct GithubEmojiInput {
-  input: Input,
-  input_state: Entity<InputState>,
+  input: Textarea,
+  input_state: Entity<TextareaState>,
 }
 
 impl GithubEmojiInput {
-  pub fn new(input_state: &Entity<InputState>) -> Self {
+  pub fn new(input_state: &Entity<TextareaState>) -> Self {
     Self {
-      input: Input::new(input_state),
+      input: Textarea::new(input_state),
       input_state: input_state.clone(),
     }
   }
@@ -70,13 +70,6 @@ impl GithubEmojiInput {
 impl Styled for GithubEmojiInput {
   fn style(&mut self) -> &mut StyleRefinement {
     self.input.style()
-  }
-}
-
-impl Sizable for GithubEmojiInput {
-  fn with_size(mut self, size: impl Into<Size>) -> Self {
-    self.input = self.input.with_size(size);
-    self
   }
 }
 
@@ -131,7 +124,7 @@ struct GithubEmojiOverlayRegistry {
 impl Global for GithubEmojiOverlayRegistry {}
 
 fn github_emoji_overlay_for_input(
-  input_state: &Entity<InputState>,
+  input_state: &Entity<TextareaState>,
   cx: &mut App,
 ) -> Entity<GithubEmojiCompletionOverlay> {
   if !cx.has_global::<GithubEmojiOverlayRegistry>() {
@@ -157,14 +150,14 @@ fn github_emoji_overlay_for_input(
 }
 
 struct GithubEmojiCompletionOverlay {
-  input: Entity<InputState>,
+  input: Entity<TextareaState>,
   selected_ix: usize,
   dismissed_trigger: Option<EmojiShortcodeTrigger>,
   _subscriptions: Vec<gpui::Subscription>,
 }
 
 impl GithubEmojiCompletionOverlay {
-  fn new(input: Entity<InputState>, cx: &mut Context<Self>) -> Self {
+  fn new(input: Entity<TextareaState>, cx: &mut Context<Self>) -> Self {
     let _subscriptions = vec![cx.observe(&input, |this, _, cx| {
       this.sync_selection(cx);
     })];
@@ -192,7 +185,8 @@ impl GithubEmojiCompletionOverlay {
   fn snapshot(&self, cx: &App) -> Option<EmojiCompletionSnapshot> {
     let input = self.input.read(cx);
     let text = input.value();
-    let trigger = emoji_shortcode_trigger_at_cursor(text.as_ref(), input.cursor())?;
+    let cursor = input.base_state().read(cx).cursor();
+    let trigger = emoji_shortcode_trigger_at_cursor(text.as_ref(), cursor)?;
     if self
       .dismissed_trigger
       .as_ref()
@@ -281,7 +275,9 @@ impl GithubEmojiCompletionOverlay {
     let text = self.input.read(cx).value();
     let replace_range = byte_range_to_utf16_range(text.as_ref(), snapshot.trigger.range.clone());
     self.input.update(cx, |input, cx| {
-      input.replace_text_in_range(Some(replace_range), emoji.emoji, window, cx);
+      input.base_state().clone().update(cx, |base, cx| {
+        base.replace_text_in_range(Some(replace_range), emoji.emoji, window, cx);
+      });
       input.focus(window, cx);
     });
 
@@ -297,7 +293,7 @@ impl Render for GithubEmojiCompletionOverlay {
       let input = self.input.read(cx);
       (
         input.focus_handle(cx).is_focused(window),
-        input.cursor_position(),
+        input.base_state().read(cx).cursor_position(),
       )
     };
     if !is_focused {

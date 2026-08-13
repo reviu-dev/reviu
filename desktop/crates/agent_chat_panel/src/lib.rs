@@ -31,7 +31,7 @@ use futures::future::BoxFuture;
 use gfm_markdown_viewer::{
   LinkAction, MarkdownRenderOptions, SyntaxHighlightCache, render_markdown,
 };
-use gpui::Corner;
+use gpui::Anchor;
 use gpui::{
   AnyElement, App, Context, Empty, Entity, EntityInputHandler as _, FocusHandle, Focusable, Font,
   FontStyle, FontWeight, Hsla, IntoElement, MouseButton, ParentElement, Render, SharedString,
@@ -41,14 +41,14 @@ use gpui_component::{
   ActiveTheme as _, Disableable as _, IconName, Sizable as _,
   button::{Button, ButtonVariants as _},
   h_flex,
-  input::{self, InputEvent},
+  input::{self, InputEvent, Textarea, TextareaState},
   menu::{DropdownMenu as _, PopupMenuItem},
   scroll::ScrollableElement as _,
   spinner::Spinner,
   v_flex,
 };
 use syntax::{HighlightSpan, SyntaxHighlighter, SyntaxTheme, highlights_to_text_runs, languages};
-use ui::{Input, InputState, StatusThemeExt as _, UiIconName};
+use ui::{StatusThemeExt as _, UiIconName};
 
 #[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 enum ChatRole {
@@ -205,7 +205,7 @@ pub struct AgentChatPanel {
   pending_agent: String,
   pending_thought: String,
   session: Option<Arc<AgentSession>>,
-  input: Entity<InputState>,
+  input: Entity<TextareaState>,
   in_flight: bool,
   turn_started_at: Option<std::time::Instant>,
   _tick_task: Option<Task<()>>,
@@ -240,7 +240,7 @@ impl AgentChatPanel {
   ) -> Self {
     let backend = backend_kind.config();
     let input = cx.new(|cx| {
-      InputState::new(window, cx)
+      TextareaState::new(window, cx)
         .auto_grow(1, 8)
         .placeholder("Message... (@ to add files or diffs)")
     });
@@ -1106,7 +1106,8 @@ impl AgentChatPanel {
 
   fn mention_snapshot(&self, cx: &App) -> Option<(MentionTrigger, Vec<MentionCandidate>)> {
     let input = self.input.read(cx);
-    let trigger = mention::mention_trigger_at_cursor(input.value().as_ref(), input.cursor())?;
+    let cursor = input.base_state().read(cx).cursor();
+    let trigger = mention::mention_trigger_at_cursor(input.value().as_ref(), cursor)?;
     if self
       .mention_dismissed
       .as_ref()
@@ -1181,7 +1182,9 @@ impl AgentChatPanel {
     let text = self.input.read(cx).value();
     let replace_range = mention::byte_range_to_utf16_range(text.as_ref(), trigger.range.clone());
     self.input.update(cx, |input, cx| {
-      input.replace_text_in_range(Some(replace_range), &token, window, cx);
+      input.base_state().clone().update(cx, |base, cx| {
+        base.replace_text_in_range(Some(replace_range), &token, window, cx);
+      });
       input.focus(window, cx);
     });
     self.mention_selected_ix = 0;
@@ -1300,7 +1303,13 @@ impl AgentChatPanel {
     self.active_selection = Some(SelectionContext { path, text });
 
     let value = self.input.read(cx).value().to_string();
-    let cursor = self.input.read(cx).cursor().min(value.len());
+    let cursor = self
+      .input
+      .read(cx)
+      .base_state()
+      .read(cx)
+      .cursor()
+      .min(value.len());
     let needs_space = value[..cursor]
       .chars()
       .next_back()
@@ -1312,7 +1321,9 @@ impl AgentChatPanel {
     };
     let utf16_range = mention::byte_range_to_utf16_range(&value, cursor..cursor);
     self.input.update(cx, |input, cx| {
-      input.replace_text_in_range(Some(utf16_range), &insert, window, cx);
+      input.base_state().clone().update(cx, |base, cx| {
+        base.replace_text_in_range(Some(utf16_range), &insert, window, cx);
+      });
       input.focus(window, cx);
     });
 
@@ -2627,7 +2638,7 @@ impl Render for AgentChatPanel {
               .dropdown_caret(true)
               .small()
               .ghost()
-              .dropdown_menu_with_anchor(Corner::TopLeft, move |menu, _, _| {
+              .dropdown_menu_with_anchor(Anchor::TopLeft, move |menu, _, _| {
                 let mut menu = menu;
                 for kind in BackendKind::all() {
                   let kind = *kind;
@@ -2691,7 +2702,7 @@ impl Render for AgentChatPanel {
                   .small()
                   .ghost()
                   .disabled(conversations.is_empty())
-                  .dropdown_menu_with_anchor(Corner::TopRight, move |menu, _, _| {
+                  .dropdown_menu_with_anchor(Anchor::TopRight, move |menu, _, _| {
                     let mut menu = menu;
                     for meta in &conversations {
                       let id = meta.id.clone();
@@ -2812,7 +2823,7 @@ impl Render for AgentChatPanel {
               .capture_action(cx.listener(|panel, _: &input::Escape, _, cx| {
                 panel.mention_on_escape(cx);
               }))
-              .child(Input::new(&self.input).w_full())
+              .child(Textarea::new(&self.input).w_full())
               .child(self.render_mention_overlay(cx)),
           )
           .child(
@@ -2863,7 +2874,7 @@ impl AgentChatPanel {
       .xsmall()
       .ghost()
       .disabled(models.is_empty())
-      .dropdown_menu_with_anchor(Corner::BottomLeft, move |menu, _, _| {
+      .dropdown_menu_with_anchor(Anchor::BottomLeft, move |menu, _, _| {
         let mut menu = menu
           .label("Select a model")
           .max_h(px(360.))
@@ -2904,7 +2915,7 @@ impl AgentChatPanel {
       .xsmall()
       .ghost()
       .disabled(modes.is_empty())
-      .dropdown_menu_with_anchor(Corner::BottomLeft, move |menu, _, _| {
+      .dropdown_menu_with_anchor(Anchor::BottomLeft, move |menu, _, _| {
         let mut menu = menu.label("Select a mode");
         for m in modes.iter() {
           let mode_id = m.id.clone();
@@ -2971,7 +2982,7 @@ impl AgentChatPanel {
         .xsmall()
         .ghost()
         .disabled(is_empty)
-        .dropdown_menu_with_anchor(Corner::BottomLeft, move |menu, _, _| {
+        .dropdown_menu_with_anchor(Anchor::BottomLeft, move |menu, _, _| {
           let mut menu = menu.label(opt_label.clone());
           for (value_id, name, description) in flat_options.iter() {
             let value_id = value_id.clone();

@@ -1,5 +1,5 @@
 use gpui::{
-  App, Context, Corner, FocusHandle, Focusable, InteractiveElement, IntoElement, ParentElement,
+  Anchor, App, Context, FocusHandle, Focusable, InteractiveElement, IntoElement, ParentElement,
   Render, SharedString, Styled, Task, Window, div, prelude::*, px,
 };
 use gpui_component::{
@@ -380,7 +380,7 @@ impl GithubProfilePage {
           .ghost()
           .small()
           .compact()
-          .dropdown_menu_with_anchor(Corner::TopRight, move |menu, _, _| {
+          .dropdown_menu_with_anchor(Anchor::TopRight, move |menu, _, _| {
             let view_url = profile_url.clone();
             menu.item(
               PopupMenuItem::new("View on GitHub")

@@ -86,7 +86,7 @@ pub fn user_menu(config: UserMenuConfig) -> Option<AnyElement> {
           .compact()
           .small()
           .child(Icon::new(UiIconName::EllipsisVertical).size_4())
-          .dropdown_menu_with_anchor(gpui::Corner::TopRight, move |menu: PopupMenu, _, _| {
+          .dropdown_menu_with_anchor(gpui::Anchor::TopRight, move |menu: PopupMenu, _, _| {
             let mut menu = menu;
 
             if current_page != UserMenuPage::GitConfig
@@ -159,7 +159,7 @@ pub fn user_menu(config: UserMenuConfig) -> Option<AnyElement> {
           .ghost()
           .compact()
           .child(avatar)
-          .dropdown_menu_with_anchor(gpui::Corner::TopRight, move |menu: PopupMenu, _, _| {
+          .dropdown_menu_with_anchor(gpui::Anchor::TopRight, move |menu: PopupMenu, _, _| {
             let mut menu = menu.item(
               PopupMenuItem::new(user_email.clone())
                 .icon(IconName::User)

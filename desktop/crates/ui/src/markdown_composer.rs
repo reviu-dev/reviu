@@ -6,8 +6,8 @@ use gpui::{
   prelude::FluentBuilder as _,
 };
 use gpui_component::{
-  ActiveTheme as _, Sizable, Size,
-  input::InputState,
+  ActiveTheme as _,
+  input::TextareaState,
   tab::{Tab, TabBar},
   v_flex,
 };
@@ -27,9 +27,8 @@ pub type MarkdownComposerToggleFn = dyn Fn(&mut Window, &mut App);
 
 #[derive(IntoElement)]
 pub struct MarkdownComposer {
-  input_state: Entity<InputState>,
+  input_state: Entity<TextareaState>,
   style: StyleRefinement,
-  size: Size,
   height: Option<DefiniteLength>,
   disabled: bool,
   preview_open: bool,
@@ -38,11 +37,10 @@ pub struct MarkdownComposer {
 }
 
 impl MarkdownComposer {
-  pub fn new(input_state: &Entity<InputState>) -> Self {
+  pub fn new(input_state: &Entity<TextareaState>) -> Self {
     Self {
       input_state: input_state.clone(),
       style: StyleRefinement::default(),
-      size: Size::default(),
       height: None,
       disabled: false,
       preview_open: false,
@@ -87,20 +85,13 @@ impl MarkdownComposer {
     if let Some(height) = self.height {
       input = input.h(height);
     }
-    input.with_size(self.size)
+    input
   }
 }
 
 impl Styled for MarkdownComposer {
   fn style(&mut self) -> &mut StyleRefinement {
     &mut self.style
-  }
-}
-
-impl Sizable for MarkdownComposer {
-  fn with_size(mut self, size: impl Into<Size>) -> Self {
-    self.size = size.into();
-    self
   }
 }
 

@@ -1,0 +1,18 @@
+# Vendored from justjavac/gpui-router @ b8b4228 (MIT), see vendor/gpui-router.
+[package]
+name = "gpui-router-macros"
+version = "0.3.0"
+edition = "2024"
+publish = false
+license = "MIT"
+description = "Router macros for gpui"
+
+[lib]
+path = "src/lib.rs"
+proc-macro = true
+doctest = false
+
+[dependencies]
+proc-macro2 = "1"
+quote = "1"
+syn = { version = "2", features = ["full"] }
