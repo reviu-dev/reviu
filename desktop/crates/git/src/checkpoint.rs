@@ -345,6 +345,35 @@ mod tests {
   }
 
   #[test]
+  fn checkpoint_works_in_repo_without_initial_commit() {
+    let repo = TempRepo::init("checkpoint-no-head");
+    std::fs::write(repo.path.join("draft.txt"), "wip\n").expect("write untracked");
+
+    let checkpoint = create_checkpoint(&repo.path, "session-e").expect("create without HEAD");
+
+    std::fs::write(repo.path.join("draft.txt"), "changed\n").expect("modify");
+    restore_checkpoint(&repo.path, &checkpoint.ref_name).expect("restore");
+
+    assert_eq!(read(&repo.path, "draft.txt"), "wip\n");
+  }
+
+  #[test]
+  fn restore_leaves_ignored_files_alone() {
+    let repo = TempRepo::init("checkpoint-ignored");
+    commit_file(&repo.path, Path::new(".gitignore"), "target/\n", "ignore");
+
+    let checkpoint = create_checkpoint(&repo.path, "session-f").expect("create");
+
+    std::fs::create_dir_all(repo.path.join("target")).expect("mkdir");
+    std::fs::write(repo.path.join("target/artifact.bin"), "build\n").expect("write ignored");
+
+    restore_checkpoint(&repo.path, &checkpoint.ref_name).expect("restore");
+
+    // Created after the checkpoint but ignored: must survive the restore.
+    assert_eq!(read(&repo.path, "target/artifact.bin"), "build\n");
+  }
+
+  #[test]
   fn checkpoints_are_isolated_per_session() {
     let repo = TempRepo::init("checkpoint-sessions");
     commit_file(&repo.path, Path::new("a.txt"), "v1\n", "initial");
