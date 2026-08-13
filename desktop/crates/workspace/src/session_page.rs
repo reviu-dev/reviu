@@ -12,8 +12,8 @@ use editor::{
 };
 use gfm_markdown_viewer::SuggestionContext;
 use gpui::{
-  AnyElement, App, Context, Entity, FocusHandle, Focusable, Render, SharedString, Task, Window,
-  div, prelude::*, px,
+  AnyElement, AnyWindowHandle, App, Context, Entity, FocusHandle, Focusable, Render, SharedString,
+  Task, Window, div, prelude::*, px,
 };
 use gpui_component::{
   ActiveTheme as _, Sizable as _, h_flex, notification::Notification, v_flex,
@@ -83,6 +83,7 @@ enum CenterView {
 
 pub struct SessionPage {
   focus_handle: FocusHandle,
+  window_handle: AnyWindowHandle,
   agent_chat_view: Option<Entity<AgentChatPanel>>,
   review_panel: Entity<ReviewPanel>,
   selected_repo: Option<PathBuf>,
@@ -93,6 +94,8 @@ pub struct SessionPage {
   open_file_task: Option<Task<()>>,
   agent_review_comments: Vec<LocalAgentReviewComment>,
   next_agent_review_comment_id: u64,
+  current_branch: Option<SharedString>,
+  _branch_task: Option<Task<()>>,
 }
 
 impl SessionPage {
@@ -112,8 +115,9 @@ impl SessionPage {
     )
     .detach();
 
-    Self {
+    let mut page = Self {
       focus_handle: cx.focus_handle(),
+      window_handle: window.window_handle(),
       agent_chat_view: None,
       review_panel,
       selected_repo,
@@ -124,7 +128,25 @@ impl SessionPage {
       open_file_task: None,
       agent_review_comments: Vec::new(),
       next_agent_review_comment_id: 1,
-    }
+      current_branch: None,
+      _branch_task: None,
+    };
+    page.refresh_branch(cx);
+    page
+  }
+
+  fn refresh_branch(&mut self, cx: &mut Context<Self>) {
+    let Some(repo_root) = self.selected_repo.clone() else {
+      return;
+    };
+    let task = cx.spawn(async move |this, cx| {
+      let status = unblock(move || git::current_branch_status(&repo_root)).await;
+      let _ = this.update(cx, |this, cx| {
+        this.current_branch = status.ok().map(|status| status.name.into());
+        cx.notify();
+      });
+    });
+    self._branch_task = Some(task);
   }
 
   fn ensure_agent_chat_view(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -155,17 +177,109 @@ impl SessionPage {
           let rel_path = agent_path_to_repo_relative(path.clone(), this.selected_repo.as_deref());
           this.open_diff(rel_path, *line, window, cx);
         }
+        AgentChatPanelEvent::TurnStarted => {
+          this.create_turn_checkpoint(cx);
+        }
         AgentChatPanelEvent::TurnFinished => {
           this.review_panel.update(cx, |panel, cx| panel.refresh(cx));
           if let Some(editor) = this.editor.clone() {
             editor.update(cx, |editor, cx| editor.refresh_git_state(cx));
           }
           this.sync_agent_review_comments_to_editor(cx);
+          this.refresh_branch(cx);
+        }
+        AgentChatPanelEvent::RollbackRequested { ref_name } => {
+          this.rollback_to_checkpoint(ref_name.clone(), window, cx);
         }
       },
     )
     .detach();
     self.agent_chat_view = Some(view);
+  }
+
+  fn create_turn_checkpoint(&mut self, cx: &mut Context<Self>) {
+    let Some(repo_root) = self.selected_repo.clone() else {
+      return;
+    };
+    let Some(panel) = self.agent_chat_view.clone() else {
+      return;
+    };
+    let session_id = panel.read(cx).current_conversation().id.clone();
+
+    cx.spawn(async move |this, cx| {
+      let result = unblock(move || git::create_checkpoint(&repo_root, &session_id)).await;
+      let Ok(checkpoint) = result else {
+        return;
+      };
+      let _ = this.update(cx, |this, cx| {
+        if let Some(panel) = this.agent_chat_view.clone() {
+          panel.update(cx, |panel, cx| {
+            panel.record_checkpoint(checkpoint.ref_name, cx);
+          });
+        }
+      });
+    })
+    .detach();
+  }
+
+  fn rollback_to_checkpoint(
+    &mut self,
+    ref_name: String,
+    window: &mut Window,
+    cx: &mut Context<Self>,
+  ) {
+    let Some(repo_root) = self.selected_repo.clone() else {
+      return;
+    };
+    let Some(panel) = self.agent_chat_view.clone() else {
+      return;
+    };
+    if panel.read(cx).is_turn_in_flight() {
+      window.push_notification(
+        Notification::info("Wait for the agent to finish before rolling back"),
+        cx,
+      );
+      return;
+    }
+    let session_id = panel.read(cx).current_conversation().id.clone();
+
+    cx.spawn(async move |this, cx| {
+      let restore_repo_root = repo_root.clone();
+      let restore_ref = ref_name.clone();
+      let result = unblock(move || {
+        // Safety net: snapshot the current state so the rollback itself is undoable.
+        git::create_checkpoint(&restore_repo_root, &session_id)?;
+        git::restore_checkpoint(&restore_repo_root, &restore_ref)
+      })
+      .await;
+
+      let _ = this.update(cx, |this, cx| {
+        match result {
+          Ok(()) => {
+            if let Some(panel) = this.agent_chat_view.clone() {
+              panel.update(cx, |panel, cx| {
+                panel.truncate_at_checkpoint(&ref_name, cx);
+              });
+            }
+            this.review_panel.update(cx, |panel, cx| panel.refresh(cx));
+            if let Some(editor) = this.editor.clone() {
+              editor.update(cx, |editor, cx| editor.refresh_git_state(cx));
+            }
+            this.sync_agent_review_comments_to_editor(cx);
+          }
+          Err(error) => {
+            let _ = cx.update_window(this.window_handle, |_, window, cx| {
+              window.push_notification(
+                Notification::error(format!("Rollback failed: {error}")),
+                cx,
+              );
+            });
+          }
+        }
+        cx.notify();
+      });
+    })
+    .detach();
   }
 
   fn open_diff(
@@ -826,6 +940,49 @@ impl SessionPage {
         )
     });
 
+    let repo_name = self
+      .selected_repo
+      .as_deref()
+      .and_then(|path| path.file_name())
+      .map(|name| name.to_string_lossy().into_owned());
+
+    let repo_context = repo_name.map(|name| {
+      h_flex()
+        .items_center()
+        .gap_2()
+        .px_3()
+        .py_2()
+        .border_t_1()
+        .border_color(theme.border)
+        .child(
+          div()
+            .text_xs()
+            .text_color(theme.foreground)
+            .truncate()
+            .child(name),
+        )
+        .when_some(self.current_branch.clone(), |this, branch| {
+          this.child(
+            h_flex()
+              .items_center()
+              .gap_1()
+              .min_w(px(0.0))
+              .child(
+                gpui_component::Icon::new(UiIconName::GitBranch)
+                  .size_3()
+                  .text_color(theme.muted_foreground),
+              )
+              .child(
+                div()
+                  .text_xs()
+                  .text_color(theme.muted_foreground)
+                  .truncate()
+                  .child(branch),
+              ),
+          )
+        })
+    });
+
     v_flex()
       .size_full()
       .min_w(px(0.0))
@@ -843,6 +1000,7 @@ impl SessionPage {
           .py_1()
           .children(rows),
       )
+      .children(repo_context)
       .into_any_element()
   }
 
