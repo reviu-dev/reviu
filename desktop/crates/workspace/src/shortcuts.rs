@@ -79,7 +79,7 @@ const REVIEW_ANNOTATION_CONTEXT: &str =
 const REVIEW_COMMENT_CONTEXT: &str = "WorkspaceGithubPr";
 const HUNK_ACTION_CONTEXT: &str = "WorkspaceGit";
 const HUNK_ACTION_DESCENDANT_FOCUS: &str = "List || Editor";
-const COMMENT_HUNK_CONTEXT: &str = "WorkspaceGit || WorkspaceGithubPrChanges";
+const COMMENT_HUNK_CONTEXT: &str = "WorkspaceGit || WorkspaceGithubPrChanges || WorkspaceSession";
 const COMMENT_HUNK_DESCENDANT_FOCUS: &str = "List || Editor || Tree";
 const PAGE_TAB_CONTEXT: &str = "WorkspaceGithubHome || WorkspaceGithubRepo || WorkspaceGithubRepoCode || WorkspaceGithubPr || WorkspaceGithubPrChanges";
 pub const PR_CHANGES_ONLY_CONTEXT: &str = "WorkspaceGithubPrChanges";
@@ -116,6 +116,9 @@ const REFRESHABLE_PAGE_ACTIVE_CONTEXTS: [&str; 7] = [
 
 const GIT_ONLY_ACTIVE_CONTEXTS: [&str; 1] = [WORKSPACE_GIT_CONTEXT];
 
+const GIT_AND_SESSION_ACTIVE_CONTEXTS: [&str; 2] =
+  [WORKSPACE_GIT_CONTEXT, WORKSPACE_SESSION_CONTEXT];
+
 const SECONDARY_PAGE_ACTIVE_CONTEXTS: [&str; 4] = [
   WORKSPACE_BILLING_CONTEXT,
   WORKSPACE_GIT_CONFIG_CONTEXT,
@@ -136,8 +139,11 @@ const PR_PAGE_ACTIVE_CONTEXTS: [&str; 2] = [
 
 const PR_CHANGES_ONLY_ACTIVE_CONTEXTS: [&str; 1] = [WORKSPACE_GITHUB_PR_CHANGES_CONTEXT];
 
-const COMMENT_HUNK_ACTIVE_CONTEXTS: [&str; 2] =
-  [WORKSPACE_GIT_CONTEXT, WORKSPACE_GITHUB_PR_CHANGES_CONTEXT];
+const COMMENT_HUNK_ACTIVE_CONTEXTS: [&str; 3] = [
+  WORKSPACE_GIT_CONTEXT,
+  WORKSPACE_GITHUB_PR_CHANGES_CONTEXT,
+  WORKSPACE_SESSION_CONTEXT,
+];
 
 const REPO_AND_PR_PAGE_ACTIVE_CONTEXTS: [&str; 5] = [
   WORKSPACE_GITHUB_HOME_CONTEXT,
@@ -472,12 +478,12 @@ const SHORTCUT_DEFINITIONS: [ShortcutDefinition; 40] = [
     id: ShortcutId::SendReviewCommentsToAgent,
     title: "Send Review Comments To Agent",
     description: "Send all local review comments to the in-app agent.",
-    scope_label: "Git page",
+    scope_label: "Git and Sessions pages",
     category: ShortcutCategory::LocalGit,
     keystroke: "cmd-shift-a",
-    context: "WorkspaceGit",
+    context: "WorkspaceGit || WorkspaceSession",
     display_context: WORKSPACE_GIT_CONTEXT,
-    active_contexts: &GIT_ONLY_ACTIVE_CONTEXTS,
+    active_contexts: &GIT_AND_SESSION_ACTIVE_CONTEXTS,
   },
   ShortcutDefinition {
     id: ShortcutId::AddSelectionToAgent,

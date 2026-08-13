@@ -12,6 +12,10 @@ Reviu now opens on a new Sessions workspace built around working with a coding a
 
 The right panel of the Sessions workspace now shows your working-tree changes and refreshes automatically each time the agent finishes a turn, so you always see what the agent just touched. Write a commit message (or generate one with AI from your diff) and commit without leaving the workspace; unstaged changes are staged automatically, matching the Git page behavior.
 
+### Review The Agent's Diff And Comment Back
+
+Click a changed file in the Sessions workspace (or a file location in the agent's tool calls) to open its diff right where the conversation was; Escape brings the conversation back. Comment on diff lines like a pull request review, then send all your comments to the agent in one batch: they arrive as a structured prompt with file, lines, and side, and each comment tracks whether the agent addressed it or whether the code moved on (outdated). Sending the batch returns you to the conversation to watch the agent work.
+
 ## 0.18.0
 
 ### No More Failed Single Comments During A Review

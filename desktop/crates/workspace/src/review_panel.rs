@@ -43,6 +43,13 @@ pub(crate) fn split_path_label(path: &std::path::Path) -> (String, String) {
   (dir, file)
 }
 
+#[derive(Clone, Debug)]
+pub enum ReviewPanelEvent {
+  OpenFile { path: PathBuf },
+}
+
+impl gpui::EventEmitter<ReviewPanelEvent> for ReviewPanel {}
+
 pub struct ReviewPanel {
   focus_handle: FocusHandle,
   window_handle: AnyWindowHandle,
@@ -203,6 +210,7 @@ impl ReviewPanel {
   ) -> AnyElement {
     let theme = cx.theme().clone();
     let (dir, file) = split_path_label(&entry.path);
+    let path = entry.path.clone();
 
     div()
       .id(("review-panel-file-row", ix))
@@ -210,7 +218,11 @@ impl ReviewPanel {
       .px_2()
       .py_1()
       .rounded(px(5.0))
+      .cursor_pointer()
       .hover(|s| s.bg(theme.secondary_hover))
+      .on_click(cx.listener(move |_, _, _, cx| {
+        cx.emit(ReviewPanelEvent::OpenFile { path: path.clone() });
+      }))
       .child(
         h_flex()
           .items_center()
