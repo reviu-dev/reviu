@@ -65,6 +65,19 @@ struct ChatMessage {
   text: String,
 }
 
+fn review_export_label(text: &str) -> String {
+  let count = text
+    .lines()
+    .filter(|line| line.starts_with("### "))
+    .count()
+    .max(1);
+  if count == 1 {
+    "1 review comment".to_string()
+  } else {
+    format!("{count} review comments")
+  }
+}
+
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 struct ToolCallView {
   #[allow(dead_code)]
@@ -829,17 +842,7 @@ impl AgentChatPanel {
           is_last_row,
         ),
         ChatRole::ReviewExport => {
-          let count = m
-            .text
-            .lines()
-            .filter(|line| line.starts_with("### "))
-            .count()
-            .max(1);
-          let label = if count == 1 {
-            "1 review comment".to_string()
-          } else {
-            format!("{count} review comments")
-          };
+          let label = review_export_label(&m.text);
           div()
             .mb_3()
             .rounded(theme.radius)
@@ -3231,6 +3234,31 @@ mod tests {
 
   fn test_cwd() -> &'static std::path::Path {
     std::path::Path::new("/")
+  }
+
+  #[test]
+  fn review_export_label_counts_sections() {
+    assert_eq!(review_export_label("no sections here"), "1 review comment");
+    assert_eq!(
+      review_export_label("### a.rs:L1 (new side)\nfix\n"),
+      "1 review comment"
+    );
+    assert_eq!(
+      review_export_label("### a.rs:L1 (new side)\nfix\n\n### b.rs:L2 (new side)\nrename\n"),
+      "2 review comments"
+    );
+  }
+
+  #[test]
+  fn review_export_role_survives_persistence_roundtrip() {
+    let message = ChatMessage {
+      role: ChatRole::ReviewExport,
+      text: "### a.rs:L1 (new side)\nfix\n".to_string(),
+    };
+    let json = serde_json::to_string(&message).expect("serialize");
+    let restored: ChatMessage = serde_json::from_str(&json).expect("deserialize");
+    assert_eq!(restored.role, ChatRole::ReviewExport);
+    assert_eq!(restored.text, message.text);
   }
 
   #[test]
