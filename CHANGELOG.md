@@ -8,6 +8,10 @@ All notable changes to Reviu are documented here.
 
 Reviu now opens on a new Sessions workspace built around working with a coding agent. The left sidebar lists your agent sessions so you can switch between conversations or start a new one, the center is the agent conversation, and the right panel is reserved for reviewing the changes the agent makes. The Git and GitHub pages remain available from the navigation tabs while the new workspace takes shape.
 
+### Review And Commit From The Sessions Workspace
+
+The right panel of the Sessions workspace now shows your working-tree changes and refreshes automatically each time the agent finishes a turn, so you always see what the agent just touched. Write a commit message (or generate one with AI from your diff) and commit without leaving the workspace; unstaged changes are staged automatically, matching the Git page behavior.
+
 ## 0.18.0
 
 ### No More Failed Single Comments During A Review

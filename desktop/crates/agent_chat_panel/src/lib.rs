@@ -187,6 +187,8 @@ struct SelectionContext {
 pub enum AgentChatPanelEvent {
   /// User clicked a tool-call file location; open it in the diff view.
   OpenPath { path: PathBuf, line: Option<u32> },
+  /// The agent finished a turn; the working tree may have changed.
+  TurnFinished,
 }
 
 impl gpui::EventEmitter<AgentChatPanelEvent> for AgentChatPanel {}
@@ -1390,6 +1392,7 @@ impl AgentChatPanel {
         panel.persist_state();
         panel.sync_list_count();
         panel.messages_list.scroll_to_end();
+        cx.emit(AgentChatPanelEvent::TurnFinished);
         cx.notify();
       });
     })

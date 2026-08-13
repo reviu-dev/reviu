@@ -74,7 +74,7 @@ fn agent_path_to_repo_relative(path: PathBuf, repo_root: Option<&Path>) -> PathB
 }
 
 /// Staged diff (`git diff --cached`), or all uncommitted changes (`git diff HEAD`) as a fallback.
-fn read_commit_diff(repo_root: &Path, staged: bool) -> anyhow::Result<String> {
+pub(crate) fn read_commit_diff(repo_root: &Path, staged: bool) -> anyhow::Result<String> {
   let args: &[&str] = if staged {
     &["diff", "--cached"]
   } else {
@@ -7809,9 +7809,13 @@ impl GitPage {
       agent_chat_state_dir().map(|dir| AgentChatPanel::state_dir_for_repo(&dir, &cwd));
     let backend = AgentSettings::load();
     let view = cx.new(|cx| AgentChatPanel::new(backend, cwd, state_dir, window, cx));
-    cx.subscribe(&view, |this, _panel, event: &AgentChatPanelEvent, cx| {
-      let AgentChatPanelEvent::OpenPath { path, line } = event;
-      this.open_agent_path(path.clone(), *line, cx);
+    cx.subscribe(&view, |this, _panel, event: &AgentChatPanelEvent, cx| match event {
+      AgentChatPanelEvent::OpenPath { path, line } => {
+        this.open_agent_path(path.clone(), *line, cx);
+      }
+      AgentChatPanelEvent::TurnFinished => {
+        this.reload_status(cx);
+      }
     })
     .detach();
     self.agent_chat_view = Some(view);
