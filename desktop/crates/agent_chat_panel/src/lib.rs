@@ -55,6 +55,8 @@ enum ChatRole {
   User,
   Agent,
   System,
+  /// Local review comments sent as a batch; rendered as a structured card.
+  ReviewExport,
 }
 
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
@@ -826,6 +828,55 @@ impl AgentChatPanel {
           theme,
           is_last_row,
         ),
+        ChatRole::ReviewExport => {
+          let count = m
+            .text
+            .lines()
+            .filter(|line| line.starts_with("### "))
+            .count()
+            .max(1);
+          let label = if count == 1 {
+            "1 review comment".to_string()
+          } else {
+            format!("{count} review comments")
+          };
+          div()
+            .mb_3()
+            .rounded(theme.radius)
+            .border_1()
+            .border_color(theme.border)
+            .overflow_hidden()
+            .child(
+              gpui::div()
+                .flex()
+                .items_center()
+                .gap_2()
+                .px_3()
+                .py_1p5()
+                .border_b_1()
+                .border_color(theme.border)
+                .child(
+                  gpui_component::Icon::new(UiIconName::MessageCircleReply)
+                    .size_4()
+                    .text_color(theme.warning),
+                )
+                .child(
+                  div()
+                    .text_xs()
+                    .font_weight(gpui::FontWeight::SEMIBOLD)
+                    .text_color(theme.warning)
+                    .child(label),
+                ),
+            )
+            .child(
+              div()
+                .px_3()
+                .py_2()
+                .text_sm()
+                .child(render_markdown(&m.text, md_options, cx)),
+            )
+            .into_any_element()
+        }
       },
       ChatItem::Tool(t) => {
         let bullet = match t.status {
@@ -1290,7 +1341,16 @@ impl AgentChatPanel {
     if text.is_empty() {
       return false;
     }
-    self.dispatch_prompt(text, cx)
+    self.dispatch_prompt_with_role(text, ChatRole::User, cx)
+  }
+
+  /// Send a review-comment batch; displayed as a structured review card.
+  pub fn send_external_review(&mut self, text: String, cx: &mut Context<Self>) -> bool {
+    let text = text.trim().to_string();
+    if text.is_empty() {
+      return false;
+    }
+    self.dispatch_prompt_with_role(text, ChatRole::ReviewExport, cx)
   }
 
   /// Stash a diff-view selection and drop an `@selection` token into the input so the next message
@@ -1334,6 +1394,15 @@ impl AgentChatPanel {
   }
 
   fn dispatch_prompt(&mut self, text: String, cx: &mut Context<Self>) -> bool {
+    self.dispatch_prompt_with_role(text, ChatRole::User, cx)
+  }
+
+  fn dispatch_prompt_with_role(
+    &mut self,
+    text: String,
+    role: ChatRole,
+    cx: &mut Context<Self>,
+  ) -> bool {
     if self.in_flight {
       return false;
     }
@@ -1342,7 +1411,7 @@ impl AgentChatPanel {
     };
 
     self.items.push(ChatItem::Message(ChatMessage {
-      role: ChatRole::User,
+      role,
       text: text.clone(),
     }));
     self.pending_agent.clear();

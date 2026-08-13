@@ -48,6 +48,7 @@ actions!(
 
 mod about_page;
 mod active_local_repo;
+mod agent_review;
 mod agent_settings;
 mod analytics;
 mod api;
