@@ -208,10 +208,22 @@ enum FileStageButtonAction {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-struct GithubBranchContext {
-  owner: String,
-  repo: String,
-  branch: String,
+pub(crate) struct GithubBranchContext {
+  pub owner: String,
+  pub repo: String,
+  pub branch: String,
+}
+
+/// Invoked after the dialog successfully creates a pull request.
+pub(crate) type PullRequestCreatedHandler =
+  Rc<dyn Fn(&GithubBranchContext, &GithubPullRequest, &mut gpui::App)>;
+
+fn git_page_created_handler(git_page: WeakEntity<GitPage>) -> PullRequestCreatedHandler {
+  Rc::new(move |context, pull_request, cx| {
+    let _ = git_page.update(cx, |git_page, cx| {
+      git_page.apply_created_pull_request(context, pull_request, cx);
+    });
+  })
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -383,7 +395,7 @@ impl GitPageHandle {
 struct CreatePullRequestDialog {
   api: ApiClient,
   window_handle: AnyWindowHandle,
-  git_page: WeakEntity<GitPage>,
+  on_created: PullRequestCreatedHandler,
   branch_context: GithubBranchContext,
   title_input: Entity<InputState>,
   base_input: Entity<InputState>,
@@ -462,7 +474,7 @@ impl CreatePullRequestDialog {
   fn new(
     api: ApiClient,
     window_handle: AnyWindowHandle,
-    git_page: WeakEntity<GitPage>,
+    on_created: PullRequestCreatedHandler,
     branch_context: GithubBranchContext,
     window: &mut Window,
     cx: &mut Context<Self>,
@@ -481,7 +493,7 @@ impl CreatePullRequestDialog {
     let mut this = Self {
       api,
       window_handle,
-      git_page,
+      on_created,
       branch_context,
       title_input: cx.new(|cx| InputState::new(window, cx).placeholder("Pull request title")),
       base_input: cx.new(|cx| InputState::new(window, cx).placeholder("Base branch")),
@@ -664,7 +676,7 @@ impl CreatePullRequestDialog {
     let repo = self.branch_context.repo.clone();
     let branch = self.branch_context.branch.clone();
     let branch_context = self.branch_context.clone();
-    let git_page = self.git_page.clone();
+    let on_created = self.on_created.clone();
     let draft = self.draft;
     let window_handle = self.window_handle;
 
@@ -690,10 +702,7 @@ impl CreatePullRequestDialog {
 
         match result {
           Ok(pull_request) => {
-            let created_pull_request = pull_request.clone();
-            let _ = git_page.update(cx, |git_page, cx| {
-              git_page.apply_created_pull_request(&branch_context, &created_pull_request, cx);
-            });
+            on_created(&branch_context, &pull_request, cx);
             window.close_dialog(cx);
             GithubPrDetailsPageHandle::show_with_open_target(
               pull_request.repository.owner.into(),
@@ -852,10 +861,10 @@ impl Render for CreatePullRequestDialog {
   }
 }
 
-fn open_create_pull_request_dialog(
+pub(crate) fn open_create_pull_request_dialog(
   api: ApiClient,
   window_handle: AnyWindowHandle,
-  git_page: WeakEntity<GitPage>,
+  on_created: PullRequestCreatedHandler,
   branch_context: GithubBranchContext,
   window: &mut Window,
   cx: &mut App,
@@ -864,7 +873,7 @@ fn open_create_pull_request_dialog(
     CreatePullRequestDialog::new(
       api.clone(),
       window_handle,
-      git_page,
+      on_created,
       branch_context,
       window,
       cx,
@@ -2037,12 +2046,12 @@ impl GitPage {
             this.force_push_after_rebase = false;
             this.add_git_breadcrumb("Publish branch and create PR succeeded", Map::new());
             this.reload_status(cx);
-            let git_page = cx.entity().downgrade();
+            let on_created = git_page_created_handler(cx.entity().downgrade());
             let _ = cx.update_window(window_handle, |_, window, cx| {
               open_create_pull_request_dialog(
                 api.clone(),
                 window_handle,
-                git_page,
+                on_created,
                 branch_context.clone(),
                 window,
                 cx,
@@ -5190,9 +5199,16 @@ impl GitPage {
           .ok_or_else(|| SharedString::from("Command not available."))?;
         let api = self.api.clone();
         let window_handle = self.window_handle;
-        let git_page = cx.entity().downgrade();
+        let on_created = git_page_created_handler(cx.entity().downgrade());
         window.on_next_frame(move |window, cx| {
-          open_create_pull_request_dialog(api, window_handle, git_page, branch_context, window, cx);
+          open_create_pull_request_dialog(
+            api,
+            window_handle,
+            on_created,
+            branch_context,
+            window,
+            cx,
+          );
         });
         Ok(())
       }
@@ -9369,7 +9385,7 @@ impl GitPage {
             open_create_pull_request_dialog(
               WorkspaceApi::global(cx).api.clone(),
               window.window_handle(),
-              git_page.clone(),
+              git_page_created_handler(git_page.clone()),
               branch_context.clone(),
               window,
               cx,

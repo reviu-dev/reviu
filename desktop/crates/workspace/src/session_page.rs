@@ -16,7 +16,7 @@ use gpui::{
   Task, Window, div, prelude::*, px,
 };
 use gpui_component::{
-  ActiveTheme as _, Sizable as _, h_flex, notification::Notification, v_flex,
+  ActiveTheme as _, Icon, Sizable as _, h_flex, notification::Notification, v_flex,
 };
 use smol::unblock;
 
@@ -34,6 +34,7 @@ use crate::github_navigation::{
   open_commit_target, open_pr_target, open_profile_target, open_repo_target,
 };
 use crate::navigation::NavigationHistory;
+use crate::notification_count::NotificationCountStore;
 use crate::review_panel::{ReviewPanel, ReviewPanelEvent};
 use crate::workspace::WorkspaceApi;
 use crate::{CloseWorkspacePage, CommentHunk, SendReviewCommentsToAgent, ShowCommandPalette};
@@ -900,7 +901,7 @@ impl SessionPage {
           .on_click(cx.listener(|this, _, window, cx| this.new_session(window, cx))),
       );
 
-    let rows = conversations.into_iter().enumerate().map(|(ix, meta)| {
+    let rows: Vec<_> = conversations.into_iter().enumerate().map(|(ix, meta)| {
       let is_current = meta.id == current_id;
       let id = meta.id.clone();
       let title = session_row_title(&meta);
@@ -938,6 +939,82 @@ impl SessionPage {
                 .child(time),
             ),
         )
+    })
+    .collect();
+
+    let github_section = AuthStateStore::has_github_access(cx).then(|| {
+      let notification_count = NotificationCountStore::get(cx);
+      let row = |id: &'static str,
+                 icon: UiIconName,
+                 label: &'static str,
+                 count: Option<usize>,
+                 cx: &mut Context<Self>| {
+        div()
+          .id(id)
+          .mx_2()
+          .px_2()
+          .py_1()
+          .rounded(px(5.0))
+          .cursor_pointer()
+          .hover(|s| s.bg(theme.secondary_hover))
+          .on_click(cx.listener(|_, _, _, cx| {
+            crate::github_page::GithubPageHandle::refresh(cx);
+            NavigationHistory::navigate("/github", cx);
+          }))
+          .child(
+            h_flex()
+              .items_center()
+              .gap_2()
+              .child(
+                Icon::new(icon)
+                  .size_3()
+                  .text_color(theme.muted_foreground),
+              )
+              .child(
+                div()
+                  .flex_1()
+                  .text_sm()
+                  .text_color(theme.foreground)
+                  .child(label),
+              )
+              .when_some(count.filter(|count| *count > 0), |this, count| {
+                this.child(
+                  div()
+                    .text_xs()
+                    .text_color(theme.muted_foreground)
+                    .child(count.to_string()),
+                )
+              }),
+          )
+      };
+
+      v_flex()
+        .py_1()
+        .border_t_1()
+        .border_color(theme.border)
+        .child(
+          div()
+            .px_3()
+            .py_1()
+            .text_xs()
+            .font_weight(gpui::FontWeight::SEMIBOLD)
+            .text_color(theme.muted_foreground)
+            .child("GitHub"),
+        )
+        .child(row(
+          "session-page-github-inbox",
+          UiIconName::CircleDot,
+          "Inbox",
+          Some(notification_count),
+          cx,
+        ))
+        .child(row(
+          "session-page-github-prs",
+          UiIconName::GitPullRequest,
+          "Pull requests",
+          None,
+          cx,
+        ))
     });
 
     let repo_name = self
@@ -1000,6 +1077,7 @@ impl SessionPage {
           .py_1()
           .children(rows),
       )
+      .children(github_section)
       .children(repo_context)
       .into_any_element()
   }
@@ -1293,6 +1371,12 @@ mod tests {
       gpui_component::init(cx);
       if !cx.has_global::<crate::config::AppSettings>() {
         cx.set_global(crate::config::AppSettings::default());
+      }
+      if !cx.has_global::<AuthStateStore>() {
+        cx.set_global(AuthStateStore::default());
+      }
+      if !cx.has_global::<WorkspaceApi>() {
+        cx.set_global(WorkspaceApi::new());
       }
     });
 
