@@ -1,7 +1,5 @@
-use gpui::{AppContext as _, Context, ParentElement, Styled, Window};
-use ui::{
-  SearchFileEntry, SearchFileHandler, SearchFilePalette, SearchFilePaletteConfig, WindowExt,
-};
+use gpui::{AppContext as _, Context, Window};
+use ui::{SearchFileEntry, SearchFileHandler, SearchFilePalette, SearchFilePaletteConfig};
 
 pub fn open_file_search_palette<T: 'static>(
   window: &mut Window,
@@ -20,16 +18,5 @@ pub fn open_file_search_palette<T: 'static>(
 
   let palette =
     cx.new(|cx| SearchFilePalette::new(window, cx, SearchFilePaletteConfig::new(entries, handler)));
-  let palette_for_dialog = palette.clone();
-
-  window.open_dialog(cx, move |dialog, _, _| {
-    dialog
-      .p_0()
-      .border_0()
-      .min_h_0()
-      .overlay_closable(true)
-      .keyboard(true)
-      .close_button(false)
-      .child(palette_for_dialog.clone())
-  });
+  ui::open_palette_dialog(palette, window, cx);
 }

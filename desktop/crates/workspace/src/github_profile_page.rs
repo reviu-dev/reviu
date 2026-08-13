@@ -245,7 +245,7 @@ impl GithubProfilePage {
 
     let config = CommandPaletteConfig::new(Vec::new(), commands, handler);
     let palette = cx.new(|cx| CommandPalette::new(window, cx, config));
-    ui::open_command_palette_dialog(palette, window, cx);
+    ui::open_palette_dialog(palette, window, cx);
   }
 
   fn show_command_palette_action(

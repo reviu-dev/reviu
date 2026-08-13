@@ -4831,7 +4831,7 @@ impl GitPage {
     }
 
     let palette = cx.new(|cx| CommandPalette::new(window, cx, config));
-    ui::open_command_palette_dialog(palette, window, cx);
+    ui::open_palette_dialog(palette, window, cx);
   }
 
   fn command_palette_branch(branch: &BranchRef) -> CommandPaletteBranch {

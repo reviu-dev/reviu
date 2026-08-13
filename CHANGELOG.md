@@ -6,7 +6,7 @@ All notable changes to Reviu are documented here.
 
 ### Refreshed Command Palette
 
-The command palette has a cleaner, roomier look: a larger search field, rounded rows with subtler icons, and details like a stash's commit hash shown on the right of each row. A new footer strip lists the keyboard hints (navigate, run, close) so the palette is easier to learn, and it adapts to each screen, whether you are picking a branch or typing a stash message.
+The command palette has a cleaner, roomier look: a larger search field, rounded rows with subtler icons, and details like a stash's commit hash shown on the right of each row. A new footer strip lists the keyboard hints (navigate, run, close) so the palette is easier to learn, and it adapts to each screen, whether you are picking a branch or typing a stash message. The file search and GitHub repository search dialogs share the same refreshed look, so every palette in the app now feels consistent.
 
 ### Up-To-Date AI Model List From Your Provider
 

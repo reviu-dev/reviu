@@ -1,23 +1,23 @@
 use std::{rc::Rc, sync::Arc, time::Duration};
 
-use crate::{SelectableRowStyle, UiIconName, selectable_list_item};
+use crate::UiIconName;
+use crate::palette::{
+  palette_footer, palette_list_item, palette_search_list, update_selected_index,
+};
 use gpui::{
   AnyElement, App, AppContext as _, Context, Div, Entity, FocusHandle, Focusable, IntoElement,
-  ParentElement, Render, SharedString, Styled, Subscription, Task, Window, div, prelude::*, px,
+  ParentElement, Render, SharedString, Styled, Subscription, Task, Window, div, prelude::*,
 };
 use gpui_component::{
   ActiveTheme as _, Icon, IconName, IndexPath, Sizable as _, WindowExt,
   avatar::Avatar,
   h_flex,
   label::Label,
-  list::{List, ListDelegate, ListEvent, ListItem, ListState},
+  list::{ListDelegate, ListEvent, ListItem, ListState},
   v_flex,
 };
 
-const LIST_INPUT_HEIGHT: f32 = 35.0;
-const LIST_ITEM_HEIGHT: f32 = 32.0;
 const SEARCH_DEBOUNCE_MS: u64 = 280;
-const PLACEHOLDER_ROW_SPAN: usize = 4;
 
 #[derive(Clone, Debug)]
 pub struct GithubSearchRepoEntry {
@@ -51,24 +51,6 @@ impl GithubSearchPaletteConfig {
   }
 }
 
-fn list_base_item(
-  ix: IndexPath,
-  total_items: usize,
-  selected_index: Option<IndexPath>,
-  theme: &gpui_component::Theme,
-) -> ListItem {
-  let is_last_item = ix.row + 1 == total_items;
-
-  selectable_list_item(
-    ix,
-    Some(ix) == selected_index,
-    SelectableRowStyle::Flush,
-    theme,
-  )
-  .h_8()
-  .when(is_last_item, |item| item.rounded_b(theme.radius))
-}
-
 struct GithubSearchListDelegate {
   matched_repositories: Vec<Rc<GithubSearchRepoEntry>>,
   selected_index: Option<IndexPath>,
@@ -91,9 +73,8 @@ impl ListDelegate for GithubSearchListDelegate {
     _window: &mut Window,
     cx: &mut Context<ListState<Self>>,
   ) -> Option<Self::Item> {
-    let total_items = self.matched_repositories.len();
     let theme = cx.theme().clone();
-    let base_item = list_base_item(ix, total_items, self.selected_index, &theme);
+    let base_item = palette_list_item(ix, self.selected_index);
 
     self.matched_repositories.get(ix.row).map(|entry| {
       let primary: SharedString = entry.full_name.clone();
@@ -163,8 +144,7 @@ impl ListDelegate for GithubSearchListDelegate {
     _window: &mut Window,
     cx: &mut Context<ListState<Self>>,
   ) {
-    self.selected_index = ix;
-    cx.notify();
+    update_selected_index(&mut self.selected_index, ix, cx);
   }
 
   fn loading(&self, _cx: &App) -> bool {
@@ -255,11 +235,11 @@ impl ListDelegate for GithubSearchListDelegate {
 
 fn render_placeholder(cx: &App, icon: IconName, message: &'static str) -> impl IntoElement {
   v_flex()
-    .size_full()
+    .w_full()
     .items_center()
     .justify_center()
     .gap_2()
-    .p_6()
+    .py_8()
     .text_color(cx.theme().muted_foreground)
     .child(Icon::new(icon).size_6())
     .child(Label::new(message))
@@ -373,31 +353,17 @@ impl Focusable for GithubSearchPalette {
 impl Render for GithubSearchPalette {
   fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
     let theme = cx.theme().clone();
-    let count = self
-      .results_list
-      .read(cx)
-      .delegate()
-      .matched_repositories
-      .len();
-    let rows_for_height = count.max(PLACEHOLDER_ROW_SPAN);
 
     v_flex()
       .track_focus(&self.focus_handle)
-      .max_h_128()
-      .child(
-        List::new(&self.results_list)
-          .w_full()
-          .h(px(
-            LIST_ITEM_HEIGHT * rows_for_height as f32 + LIST_INPUT_HEIGHT,
-          ))
-          .border_1()
-          .search_placeholder("Search GitHub repositories...")
-          .border_color(theme.border)
-          .rounded(theme.radius),
-      )
+      .child(palette_search_list(
+        &self.results_list,
+        "Search GitHub repositories...",
+      ))
       .when(self.error.is_some(), |parent| {
         parent.child(self.render_error(&theme, &self.error.clone().unwrap_or_default()))
       })
+      .child(palette_footer(true, "select", cx))
   }
 }
 

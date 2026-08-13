@@ -1,9 +1,9 @@
 use std::sync::Arc;
 
-use gpui::{App, AppContext as _, ParentElement, Styled, Window, px};
+use gpui::{App, AppContext as _, Window};
 use ui::{
   GithubRepoSearchFn, GithubRepoSelectFn, GithubSearchPalette, GithubSearchPaletteConfig,
-  GithubSearchRepoEntry, WindowExt,
+  GithubSearchRepoEntry,
 };
 
 use crate::{api::ApiClient, github_navigation::open_repo_target};
@@ -55,17 +55,5 @@ fn open_github_search_dialog_inner(api: ApiClient, window: &mut Window, cx: &mut
       GithubSearchPaletteConfig::new(search_fn, on_select),
     )
   });
-  let palette_for_dialog = palette.clone();
-
-  window.open_dialog(cx, move |dialog, _, _| {
-    dialog
-      .p_0()
-      .w(px(520.0))
-      .border_0()
-      .min_h_0()
-      .overlay_closable(true)
-      .keyboard(true)
-      .close_button(false)
-      .child(palette_for_dialog.clone())
-  });
+  ui::open_palette_dialog(palette, window, cx);
 }

@@ -1,8 +1,10 @@
 use std::{path::PathBuf, rc::Rc, sync::Arc};
 
-use crate::{
-  FILE_ICON_SIZE_PX, SelectableRowStyle, file_icon_path_for_path_with_theme, selectable_list_item,
+use crate::palette::{
+  palette_empty, palette_footer, palette_list_item, palette_search_list, palette_section_header,
+  update_selected_index,
 };
+use crate::{FILE_ICON_SIZE_PX, file_icon_path_for_path_with_theme};
 use gpui::{
   AnyElement, App, Context, Div, Entity, FocusHandle, Focusable, IntoElement, ParentElement,
   Render, SharedString, Styled, Subscription, Task, Window, div, img, prelude::*, px,
@@ -10,38 +12,9 @@ use gpui::{
 use gpui_component::{
   ActiveTheme as _, Icon, IconName, IndexPath, WindowExt, h_flex,
   label::Label,
-  list::{List, ListDelegate, ListEvent, ListItem, ListState},
+  list::{ListDelegate, ListEvent, ListItem, ListState},
   v_flex,
 };
-
-const LIST_INPUT_HEIGHT: f32 = 35.0;
-const LIST_ITEM_HEIGHT: f32 = 32.0;
-const SECTION_HEADER_HEIGHT: f32 = 28.0;
-
-fn list_base_item(
-  ix: IndexPath,
-  is_last_overall: bool,
-  selected_index: Option<IndexPath>,
-  theme: &gpui_component::Theme,
-) -> ListItem {
-  selectable_list_item(
-    ix,
-    Some(ix) == selected_index,
-    SelectableRowStyle::Flush,
-    theme,
-  )
-  .h_8()
-  .when(is_last_overall, |item| item.rounded_b(theme.radius))
-}
-
-fn update_selected_index<D: ListDelegate>(
-  selected_index: &mut Option<IndexPath>,
-  ix: Option<IndexPath>,
-  cx: &mut Context<ListState<D>>,
-) {
-  *selected_index = ix;
-  cx.notify();
-}
 
 #[derive(Clone, Debug)]
 pub struct SearchFileEntry {
@@ -113,6 +86,7 @@ impl SearchFileListDelegate {
     self.matched_sections = build_file_sections(files);
   }
 
+  #[cfg(test)]
   fn matched_total_count(&self) -> usize {
     self
       .matched_sections
@@ -179,15 +153,9 @@ impl ListDelegate for SearchFileListDelegate {
     _window: &mut Window,
     cx: &mut Context<ListState<Self>>,
   ) -> Option<Self::Item> {
-    let last_section_ix = self.matched_sections.len().saturating_sub(1);
-    let total_in_last_section = self
-      .matched_sections
-      .last()
-      .map_or(0, |section| section.files.len());
-    let is_last_overall = ix.section == last_section_ix && ix.row + 1 == total_in_last_section;
     let theme = cx.theme().clone();
 
-    let base_item = list_base_item(ix, is_last_overall, self.selected_index, &theme);
+    let base_item = palette_list_item(ix, self.selected_index);
 
     self.item_at(ix).map(|entry| {
       let file_icon: AnyElement = file_icon_path_for_path_with_theme(&entry.path, &theme)
@@ -255,15 +223,15 @@ impl ListDelegate for SearchFileListDelegate {
     }
     let label = self.matched_sections.get(section)?.label.clone()?;
 
-    Some(
-      h_flex()
-        .px_3()
-        .pt_2()
-        .pb_1()
-        .text_xs()
-        .text_color(cx.theme().muted_foreground)
-        .child(label),
-    )
+    Some(palette_section_header(label, cx))
+  }
+
+  fn render_empty(
+    &mut self,
+    _window: &mut Window,
+    cx: &mut Context<ListState<Self>>,
+  ) -> impl IntoElement {
+    palette_empty(cx)
   }
 
   fn set_selected_index(
@@ -353,29 +321,13 @@ impl SearchFilePalette {
     }
   }
 
-  fn render_search_list<D: ListDelegate>(
-    &self,
-    list: &Entity<ListState<D>>,
-    count: usize,
-    visible_headers: usize,
-    placeholder: &'static str,
-    cx: &Context<Self>,
-  ) -> impl IntoElement {
-    List::new(list)
-      .w_full()
-      .h(px(
-        LIST_ITEM_HEIGHT * count as f32
-          + SECTION_HEADER_HEIGHT * visible_headers as f32
-          + LIST_INPUT_HEIGHT,
-      ))
-      .border_1()
-      .search_placeholder(placeholder)
-      .border_color(cx.theme().border)
-      .rounded(cx.theme().radius)
-  }
-
   fn render_error(&self, theme: &gpui_component::Theme, error: &SharedString) -> Div {
-    div().text_sm().text_color(theme.red).child(error.clone())
+    div()
+      .px_3()
+      .py_2()
+      .text_sm()
+      .text_color(theme.red)
+      .child(error.clone())
   }
 }
 
@@ -388,26 +340,14 @@ impl Focusable for SearchFilePalette {
 impl Render for SearchFilePalette {
   fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
     let theme = cx.theme().clone();
-    let delegate = self.files_list.read(cx);
-    let count = delegate.delegate().matched_total_count();
-    let visible_headers = match delegate.delegate().visible_sections_count() {
-      0 | 1 => 0,
-      count => count,
-    };
 
     v_flex()
       .track_focus(&self.focus_handle)
-      .max_h_128()
-      .child(self.render_search_list(
-        &self.files_list,
-        count,
-        visible_headers,
-        "Search files...",
-        cx,
-      ))
+      .child(palette_search_list(&self.files_list, "Search files..."))
       .when(self.error.is_some(), |parent| {
         parent.child(self.render_error(&theme, &self.error.clone().unwrap_or_default()))
       })
+      .child(palette_footer(true, "open", cx))
   }
 }
 

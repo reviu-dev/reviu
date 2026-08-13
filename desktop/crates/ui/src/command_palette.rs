@@ -1,22 +1,24 @@
 use std::{collections::BTreeMap, rc::Rc, sync::Arc};
 
 use crate::github_url::parse_github_url_action;
+use crate::palette::{
+  palette_empty, palette_footer, palette_list_item, palette_search_list, palette_section_header,
+  update_selected_index,
+};
 use crate::{UiIconName, file_icon_path_for_name};
 use gpui::{
   App, Context, Div, Entity, FocusHandle, Focusable, Global, InteractiveElement, IntoElement,
-  ParentElement, Render, SharedString, Styled, Subscription, Task, Window, div, prelude::*, px,
+  ParentElement, Render, SharedString, Styled, Subscription, Task, Window, div, prelude::*,
 };
 use gpui_component::{
-  ActiveTheme as _, Icon, IconName, IndexPath, Sizable, Size, WindowExt, h_flex,
+  ActiveTheme as _, Icon, IconName, IndexPath, Sizable, WindowExt, h_flex,
   input::{Input, InputEvent, InputState},
   label::Label,
-  list::{List, ListDelegate, ListEvent, ListItem, ListState},
+  list::{ListDelegate, ListEvent, ListItem, ListState},
   notification::Notification,
   v_flex,
 };
 
-const PALETTE_WIDTH: f32 = 620.0;
-const PALETTE_LIST_MAX_HEIGHT: f32 = 400.0;
 pub const COMMAND_PALETTE_CONTEXT: &str = "CommandPalette";
 
 pub type CommandPaletteUsageRecorder = fn(CommandPaletteCommandId, &App);
@@ -30,15 +32,6 @@ pub type CommandPaletteUsageScorer = fn(&App, CommandPaletteCommandId, i64) -> f
 pub struct CommandPaletteUsageScorerGlobal(pub CommandPaletteUsageScorer);
 
 impl Global for CommandPaletteUsageScorerGlobal {}
-
-fn list_base_item(ix: IndexPath, selected_index: Option<IndexPath>) -> ListItem {
-  ListItem::new(ix)
-    .selected(Some(ix) == selected_index)
-    .mx_1()
-    .px_2()
-    .py_1p5()
-    .rounded_md()
-}
 
 fn palette_row(
   icon: Icon,
@@ -79,25 +72,6 @@ fn palette_row(
           .child(hint),
       )
     })
-}
-
-fn palette_empty(cx: &App) -> gpui::AnyElement {
-  v_flex()
-    .items_center()
-    .py_8()
-    .text_sm()
-    .text_color(cx.theme().muted_foreground)
-    .child("No matching results")
-    .into_any_element()
-}
-
-fn update_selected_index<D: ListDelegate>(
-  selected_index: &mut Option<IndexPath>,
-  ix: Option<IndexPath>,
-  cx: &mut Context<ListState<D>>,
-) {
-  *selected_index = ix;
-  cx.notify();
 }
 
 #[derive(Clone, Debug)]
@@ -323,7 +297,7 @@ impl ListDelegate for BranchesListDelegate {
     let theme = cx.theme().clone();
 
     self.matched_branches.get(ix.row).map(|branch| {
-      list_base_item(ix, self.selected_index).child(palette_row(
+      palette_list_item(ix, self.selected_index).child(palette_row(
         Icon::new(UiIconName::GitBranch),
         branch.name.clone(),
         None,
@@ -400,7 +374,7 @@ impl ListDelegate for RepositoriesListDelegate {
     let theme = cx.theme().clone();
 
     self.matched_repositories.get(ix.row).map(|repository| {
-      list_base_item(ix, self.selected_index).child(palette_row(
+      palette_list_item(ix, self.selected_index).child(palette_row(
         Icon::new(IconName::FolderOpen),
         repository.path.clone(),
         None,
@@ -479,7 +453,7 @@ impl ListDelegate for StashesListDelegate {
     self.matched_stashes.get(ix.row).map(|stash| {
       let label: SharedString = format!("#{} {}", stash.index, stash.name.as_ref()).into();
       let oid: SharedString = stash.oid.chars().take(7).collect::<String>().into();
-      list_base_item(ix, self.selected_index).child(palette_row(
+      palette_list_item(ix, self.selected_index).child(palette_row(
         Icon::new(IconName::Inbox),
         label,
         Some(oid),
@@ -563,7 +537,7 @@ impl ListDelegate for BranchesListWithCommandsDelegate {
     cx: &mut Context<ListState<Self>>,
   ) -> Option<Self::Item> {
     let theme = cx.theme().clone();
-    let base_item = list_base_item(ix, self.selected_index);
+    let base_item = palette_list_item(ix, self.selected_index);
 
     self
       .matched_branches_and_commands
@@ -725,7 +699,7 @@ impl ListDelegate for CommandListDelegate {
     let theme = cx.theme().clone();
 
     self.item_at(ix).map(|command| {
-      list_base_item(ix, self.selected_index)
+      palette_list_item(ix, self.selected_index)
         .when(command.is_disabled(), |item| item.opacity(0.55))
         .child(palette_row(
           command.icon(),
@@ -754,15 +728,7 @@ impl ListDelegate for CommandListDelegate {
       return None;
     }
     let (group, _) = self.matched_sections.get(section)?;
-    Some(
-      div()
-        .px_3()
-        .pt_3()
-        .pb_1()
-        .text_xs()
-        .text_color(cx.theme().muted_foreground)
-        .child(group.label()),
-    )
+    Some(palette_section_header(group.label(), cx))
   }
 
   fn set_selected_index(
@@ -2918,11 +2884,7 @@ impl CommandPalette {
     list: &Entity<ListState<D>>,
     placeholder: &'static str,
   ) -> impl IntoElement {
-    List::new(list)
-      .w_full()
-      .max_h(px(PALETTE_LIST_MAX_HEIGHT))
-      .with_size(Size::Large)
-      .search_placeholder(placeholder)
+    palette_search_list(list, placeholder)
   }
 
   fn render_git_command_preview(
@@ -3108,36 +3070,8 @@ impl CommandPalette {
   }
 
   fn render_footer(&self, cx: &Context<Self>) -> impl IntoElement {
-    let theme = cx.theme();
-    let key = |label: &'static str| {
-      div()
-        .px_1()
-        .rounded_sm()
-        .bg(theme.muted)
-        .text_color(theme.muted_foreground)
-        .child(label)
-    };
     let (navigable, enter_label) = Self::footer_key_hints(self.screen);
-
-    h_flex()
-      .px_3()
-      .py_2()
-      .gap_4()
-      .border_t_1()
-      .border_color(theme.border)
-      .text_xs()
-      .text_color(theme.muted_foreground)
-      .when(navigable, |this| {
-        this.child(
-          h_flex()
-            .gap_1()
-            .child(key("↑"))
-            .child(key("↓"))
-            .child("navigate"),
-        )
-      })
-      .child(h_flex().gap_1().child(key("↵")).child(enter_label))
-      .child(h_flex().gap_1().child(key("esc")).child("close"))
+    palette_footer(navigable, enter_label, cx)
   }
 }
 
@@ -3200,25 +3134,6 @@ impl Render for CommandPalette {
       .child(content)
       .child(self.render_footer(cx))
   }
-}
-
-pub fn open_command_palette_dialog(
-  palette: Entity<CommandPalette>,
-  window: &mut Window,
-  cx: &mut App,
-) {
-  window.open_dialog(cx, move |dialog, _, _| {
-    dialog
-      .on_ok(|_, _, _| false)
-      .w(px(PALETTE_WIDTH))
-      .p_0()
-      .gap_0()
-      .min_h_0()
-      .overlay_closable(true)
-      .keyboard(true)
-      .close_button(false)
-      .child(palette.clone())
-  });
 }
 
 #[cfg(test)]
