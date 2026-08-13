@@ -1,6 +1,7 @@
 use std::path::PathBuf;
 
 mod branch;
+mod checkpoint;
 mod commit;
 mod diff;
 mod history;
@@ -9,6 +10,7 @@ mod status;
 mod store;
 
 pub use branch::*;
+pub use checkpoint::*;
 pub use commit::*;
 pub use diff::*;
 pub use git2::ApplyLocation;

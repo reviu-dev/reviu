@@ -7666,12 +7666,94 @@ impl GitPage {
       AgentChatPanelEvent::OpenPath { path, line } => {
         this.open_agent_path(path.clone(), *line, cx);
       }
+      AgentChatPanelEvent::TurnStarted => {
+        this.create_agent_turn_checkpoint(cx);
+      }
       AgentChatPanelEvent::TurnFinished => {
         this.reload_status(cx);
+      }
+      AgentChatPanelEvent::RollbackRequested { ref_name } => {
+        this.rollback_to_agent_checkpoint(ref_name.clone(), cx);
       }
     })
     .detach();
     self.agent_chat_view = Some(view);
+  }
+
+  fn create_agent_turn_checkpoint(&mut self, cx: &mut Context<Self>) {
+    let Some(repo_root) = self.selected_repo.clone() else {
+      return;
+    };
+    let Some(panel) = self.agent_chat_view.clone() else {
+      return;
+    };
+    let session_id = panel.read(cx).current_conversation().id.clone();
+
+    cx.spawn(async move |this, cx| {
+      let result = unblock(move || git::create_checkpoint(&repo_root, &session_id)).await;
+      let Ok(checkpoint) = result else {
+        return;
+      };
+      let _ = this.update(cx, |this, cx| {
+        if let Some(panel) = this.agent_chat_view.clone() {
+          panel.update(cx, |panel, cx| {
+            panel.record_checkpoint(checkpoint.ref_name, cx);
+          });
+        }
+      });
+    })
+    .detach();
+  }
+
+  fn rollback_to_agent_checkpoint(&mut self, ref_name: String, cx: &mut Context<Self>) {
+    let Some(repo_root) = self.selected_repo.clone() else {
+      return;
+    };
+    let Some(panel) = self.agent_chat_view.clone() else {
+      return;
+    };
+    if panel.read(cx).is_turn_in_flight() {
+      self.push_git_action_error_notification(
+        "Rollback",
+        "Wait for the agent to finish before rolling back".into(),
+        cx,
+      );
+      return;
+    }
+    let session_id = panel.read(cx).current_conversation().id.clone();
+
+    cx.spawn(async move |this, cx| {
+      let restore_repo_root = repo_root.clone();
+      let restore_ref = ref_name.clone();
+      let result = unblock(move || {
+        // Safety net: snapshot the current state so the rollback itself is undoable.
+        git::create_checkpoint(&restore_repo_root, &session_id)?;
+        git::restore_checkpoint(&restore_repo_root, &restore_ref)
+      })
+      .await;
+
+      let _ = this.update(cx, |this, cx| {
+        match result {
+          Ok(()) => {
+            if let Some(panel) = this.agent_chat_view.clone() {
+              panel.update(cx, |panel, cx| {
+                panel.truncate_at_checkpoint(&ref_name, cx);
+              });
+            }
+            this.reload_status(cx);
+          }
+          Err(error) => {
+            this.push_git_action_error_notification(
+              "Rollback failed",
+              format!("{error}").into(),
+              cx,
+            );
+          }
+        }
+        cx.notify();
+      });
+    })
+    .detach();
   }
 
   fn open_agent_path(&mut self, path: PathBuf, line: Option<u32>, cx: &mut Context<Self>) {

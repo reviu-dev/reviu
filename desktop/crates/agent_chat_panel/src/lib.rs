@@ -65,6 +65,31 @@ struct ChatMessage {
   text: String,
 }
 
+/// The marker goes right before the prompt that triggered it (the last user-authored
+/// message), so a rollback lands on the state that preceded that prompt.
+fn checkpoint_insert_index(items: &[ChatItem]) -> usize {
+  items
+    .iter()
+    .rposition(|item| {
+      matches!(
+        item,
+        ChatItem::Message(ChatMessage {
+          role: ChatRole::User | ChatRole::ReviewExport,
+          ..
+        })
+      )
+    })
+    .unwrap_or(items.len())
+}
+
+/// Number of items to keep so the checkpoint marker is the last remaining item.
+fn checkpoint_truncate_len(items: &[ChatItem], ref_name: &str) -> Option<usize> {
+  items
+    .iter()
+    .position(|item| matches!(item, ChatItem::Checkpoint(marker) if marker.ref_name == ref_name))
+    .map(|marker_ix| marker_ix + 1)
+}
+
 fn review_export_label(text: &str) -> String {
   let count = text
     .lines()
@@ -151,6 +176,14 @@ enum ChatItem {
   Permission(PermissionItem),
   Plan(PlanView),
   Thought(ThoughtView),
+  Checkpoint(CheckpointMarker),
+}
+
+/// Working-tree snapshot taken before the prompt that follows it.
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+struct CheckpointMarker {
+  ref_name: String,
+  created_at_secs: u64,
 }
 
 #[derive(serde::Serialize, serde::Deserialize)]
@@ -160,6 +193,7 @@ enum PersistedChatItem {
   Tool(ToolCallView),
   Plan(PlanView),
   Thought(ThoughtView),
+  Checkpoint(CheckpointMarker),
 }
 
 #[derive(serde::Serialize, serde::Deserialize)]
@@ -202,8 +236,12 @@ struct SelectionContext {
 pub enum AgentChatPanelEvent {
   /// User clicked a tool-call file location; open it in the diff view.
   OpenPath { path: PathBuf, line: Option<u32> },
+  /// A prompt was dispatched; the host may snapshot the working tree.
+  TurnStarted,
   /// The agent finished a turn; the working tree may have changed.
   TurnFinished,
+  /// User asked to roll back to a checkpoint marker.
+  RollbackRequested { ref_name: String },
 }
 
 impl gpui::EventEmitter<AgentChatPanelEvent> for AgentChatPanel {}
@@ -900,6 +938,38 @@ impl AgentChatPanel {
         timeline_row_with_color(render_plan(p, theme), theme, theme.primary, is_last_row)
       }
       ChatItem::Thought(t) => timeline_row(render_thought(idx, t, theme, cx), theme, is_last_row),
+      ChatItem::Checkpoint(marker) => {
+        let ref_name = marker.ref_name.clone();
+        div()
+          .id(("chat-checkpoint", idx))
+          .group("chat-checkpoint-row")
+          .mb_2()
+          .flex()
+          .items_center()
+          .gap_2()
+          .child(div().flex_1().h_px().bg(theme.border))
+          .child(
+            div()
+              .text_xs()
+              .text_color(theme.muted_foreground)
+              .child("checkpoint"),
+          )
+          .child(
+            gpui_component::button::Button::new(("chat-checkpoint-rollback", idx))
+              .ghost()
+              .compact()
+              .small()
+              .label("Roll back")
+              .tooltip("Restore files and conversation to this point")
+              .on_click(cx.listener(move |_, _, _, cx| {
+                cx.emit(AgentChatPanelEvent::RollbackRequested {
+                  ref_name: ref_name.clone(),
+                });
+              })),
+          )
+          .child(div().flex_1().h_px().bg(theme.border))
+          .into_any_element()
+      }
     };
     div().px_3().child(element).into_any_element()
   }
@@ -1356,6 +1426,51 @@ impl AgentChatPanel {
     self.dispatch_prompt_with_role(text, ChatRole::ReviewExport, cx)
   }
 
+  /// Record a working-tree checkpoint taken for the in-flight prompt. The marker is
+  /// inserted before the prompt so rolling back lands on the state that preceded it.
+  pub fn record_checkpoint(&mut self, ref_name: String, cx: &mut Context<Self>) {
+    let marker = ChatItem::Checkpoint(CheckpointMarker {
+      ref_name,
+      created_at_secs: now_secs(),
+    });
+    let insert_ix = checkpoint_insert_index(&self.items);
+    self.items.insert(insert_ix, marker);
+    self.rebuild_tool_index();
+    self.persist_state();
+    self.sync_list_count();
+    cx.notify();
+  }
+
+  /// Drop everything after a checkpoint marker (the marker itself stays) and restart
+  /// the agent session: the provider-side context no longer matches the transcript.
+  pub fn truncate_at_checkpoint(&mut self, ref_name: &str, cx: &mut Context<Self>) -> bool {
+    let Some(keep_len) = checkpoint_truncate_len(&self.items, ref_name) else {
+      return false;
+    };
+    self.items.truncate(keep_len);
+    self.rebuild_tool_index();
+    self.pending_agent.clear();
+    self.pending_thought.clear();
+    self.end_turn();
+    self.persist_state();
+    self.respawn_session(cx);
+    self.sync_list_count();
+    cx.notify();
+    true
+  }
+
+  fn rebuild_tool_index(&mut self) {
+    self.tool_index = self
+      .items
+      .iter()
+      .enumerate()
+      .filter_map(|(ix, item)| match item {
+        ChatItem::Tool(tool) => Some((tool.id.clone(), ix)),
+        _ => None,
+      })
+      .collect();
+  }
+
   /// Stash a diff-view selection and drop an `@selection` token into the input so the next message
   /// attaches the selected lines as context.
   pub fn add_selection_context(
@@ -1419,6 +1534,7 @@ impl AgentChatPanel {
     }));
     self.pending_agent.clear();
     self.pending_thought.clear();
+    cx.emit(AgentChatPanelEvent::TurnStarted);
     self.start_turn(cx);
     self.persist_state();
     self.sync_list_count();
@@ -1471,6 +1587,10 @@ impl AgentChatPanel {
     .detach();
 
     true
+  }
+
+  pub fn is_turn_in_flight(&self) -> bool {
+    self.in_flight
   }
 
   pub fn is_ready(&self) -> bool {
@@ -1671,6 +1791,7 @@ impl AgentChatPanel {
         ChatItem::Tool(t) => Some(PersistedChatItem::Tool(t.clone())),
         ChatItem::Plan(p) => Some(PersistedChatItem::Plan(p.clone())),
         ChatItem::Thought(t) => Some(PersistedChatItem::Thought(t.clone())),
+        ChatItem::Checkpoint(c) => Some(PersistedChatItem::Checkpoint(c.clone())),
         ChatItem::Permission(_) => None,
       })
       .collect();
@@ -1775,6 +1896,7 @@ fn load_conversation_file(
       }
       PersistedChatItem::Plan(p) => items.push(ChatItem::Plan(p)),
       PersistedChatItem::Thought(t) => items.push(ChatItem::Thought(t)),
+      PersistedChatItem::Checkpoint(c) => items.push(ChatItem::Checkpoint(c)),
     }
   }
   Some((parsed.meta, items, index))
@@ -3234,6 +3356,83 @@ mod tests {
 
   fn test_cwd() -> &'static std::path::Path {
     std::path::Path::new("/")
+  }
+
+  fn user_message(text: &str) -> ChatItem {
+    ChatItem::Message(ChatMessage {
+      role: ChatRole::User,
+      text: text.to_string(),
+    })
+  }
+
+  fn agent_message(text: &str) -> ChatItem {
+    ChatItem::Message(ChatMessage {
+      role: ChatRole::Agent,
+      text: text.to_string(),
+    })
+  }
+
+  fn checkpoint_marker(ref_name: &str) -> ChatItem {
+    ChatItem::Checkpoint(CheckpointMarker {
+      ref_name: ref_name.to_string(),
+      created_at_secs: 0,
+    })
+  }
+
+  #[test]
+  fn checkpoint_insert_index_lands_before_last_user_prompt() {
+    let items = vec![
+      user_message("first"),
+      agent_message("done"),
+      user_message("second"),
+    ];
+    assert_eq!(checkpoint_insert_index(&items), 2);
+
+    let empty: Vec<ChatItem> = Vec::new();
+    assert_eq!(checkpoint_insert_index(&empty), 0);
+
+    let review_only = vec![ChatItem::Message(ChatMessage {
+      role: ChatRole::ReviewExport,
+      text: "### a.rs:L1 (new side)\nfix\n".to_string(),
+    })];
+    assert_eq!(checkpoint_insert_index(&review_only), 0);
+  }
+
+  #[test]
+  fn checkpoint_truncate_len_keeps_marker_and_drops_rest() {
+    let items = vec![
+      checkpoint_marker("refs/reviu/checkpoints/s/1"),
+      user_message("first"),
+      agent_message("done"),
+      checkpoint_marker("refs/reviu/checkpoints/s/2"),
+      user_message("second"),
+      agent_message("done again"),
+    ];
+
+    assert_eq!(
+      checkpoint_truncate_len(&items, "refs/reviu/checkpoints/s/2"),
+      Some(4)
+    );
+    assert_eq!(
+      checkpoint_truncate_len(&items, "refs/reviu/checkpoints/s/1"),
+      Some(1)
+    );
+    assert_eq!(checkpoint_truncate_len(&items, "refs/unknown"), None);
+  }
+
+  #[test]
+  fn checkpoint_marker_survives_persistence_roundtrip() {
+    let marker = CheckpointMarker {
+      ref_name: "refs/reviu/checkpoints/s/1".to_string(),
+      created_at_secs: 42,
+    };
+    let json = serde_json::to_string(&PersistedChatItem::Checkpoint(marker.clone()))
+      .expect("serialize");
+    let restored: PersistedChatItem = serde_json::from_str(&json).expect("deserialize");
+    match restored {
+      PersistedChatItem::Checkpoint(restored) => assert_eq!(restored, marker),
+      _ => panic!("expected checkpoint item"),
+    }
   }
 
   #[test]
