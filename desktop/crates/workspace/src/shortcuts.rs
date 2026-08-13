@@ -34,6 +34,7 @@ pub const GITHUB_PR_CHANGES_TREE_CONTEXT: &str = "GithubPrChangesTree";
 pub const GITHUB_NOTIFICATIONS_LIST_CONTEXT: &str = "GithubNotificationsList";
 
 pub const WORKSPACE_CONTEXT: &str = "Workspace";
+pub const WORKSPACE_SESSION_CONTEXT: &str = "Workspace WorkspaceSession";
 pub const WORKSPACE_GIT_CONTEXT: &str = "Workspace WorkspaceGit";
 pub const WORKSPACE_GITHUB_HOME_CONTEXT: &str = "Workspace WorkspaceGithubHome";
 pub const WORKSPACE_GITHUB_REPO_CONTEXT: &str = "Workspace WorkspaceGithubRepo";
@@ -1315,13 +1316,14 @@ pub fn key_context_for_pathname(pathname: &str) -> &'static str {
   }
 
   match pathname {
+    "/session" => WORKSPACE_SESSION_CONTEXT,
     "/git" => WORKSPACE_GIT_CONTEXT,
     "/github" => WORKSPACE_GITHUB_HOME_CONTEXT,
     "/billing" => WORKSPACE_BILLING_CONTEXT,
     "/git-config" => WORKSPACE_GIT_CONFIG_CONTEXT,
     "/settings" => WORKSPACE_SETTINGS_CONTEXT,
     "/about" => WORKSPACE_ABOUT_CONTEXT,
-    _ => WORKSPACE_GIT_CONTEXT,
+    _ => WORKSPACE_SESSION_CONTEXT,
   }
 }
 

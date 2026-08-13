@@ -80,6 +80,7 @@ pub(crate) struct CrashContextSnapshot {
 
 fn workspace_page_tag(page: WorkspacePage) -> &'static str {
   match page {
+    WorkspacePage::Session => "session",
     WorkspacePage::Git => "git",
     WorkspacePage::Github => "github",
     WorkspacePage::GithubProfile => "github_profile",
