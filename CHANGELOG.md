@@ -2,6 +2,12 @@
 
 All notable changes to Reviu are documented here.
 
+## 1.0.0
+
+### New Agent-First Workspace
+
+Reviu now opens on a new Sessions workspace built around working with a coding agent. The left sidebar lists your agent sessions so you can switch between conversations or start a new one, the center is the agent conversation, and the right panel is reserved for reviewing the changes the agent makes. The Git and GitHub pages remain available from the navigation tabs while the new workspace takes shape.
+
 ## 0.18.0
 
 ### No More Failed Single Comments During A Review

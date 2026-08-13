@@ -61,7 +61,7 @@ use smol::unblock;
 
 use crate::agent_settings::AgentSettings;
 
-fn agent_chat_state_dir() -> Option<std::path::PathBuf> {
+pub(crate) fn agent_chat_state_dir() -> Option<std::path::PathBuf> {
   Some(dirs::config_dir()?.join("reviu").join("agent-chats"))
 }
 
@@ -90,7 +90,7 @@ fn read_commit_diff(repo_root: &Path, staged: bool) -> anyhow::Result<String> {
   Ok(String::from_utf8_lossy(&output.stdout).to_string())
 }
 
-fn prune_agent_chat_state_once() {
+pub(crate) fn prune_agent_chat_state_once() {
   use std::sync::OnceLock;
   static PRUNED: OnceLock<()> = OnceLock::new();
   PRUNED.get_or_init(|| {

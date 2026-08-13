@@ -7,6 +7,7 @@ actions!(
     CloseWorkspacePage,
     OpenGitPage,
     OpenGithubPage,
+    OpenSessionPage,
     RefreshCurrentPage,
     ToggleTerminalSidebar,
     ToggleAgentSidebar,
@@ -84,6 +85,7 @@ mod notification_count;
 mod number_format;
 mod pricing_copy;
 mod sentry_context;
+mod session_page;
 mod settings_page;
 mod shortcuts;
 pub mod status_bar;
