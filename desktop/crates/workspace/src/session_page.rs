@@ -1016,6 +1016,12 @@ impl Focusable for SessionPage {
 #[cfg(test)]
 mod tests {
   use super::*;
+  use editor::ReviewCommentMode;
+  use git2::{Repository, Signature};
+  use gpui::TestAppContext;
+  use std::path::Path;
+  use std::sync::atomic::{AtomicU64, Ordering};
+  use std::time::{SystemTime, UNIX_EPOCH};
 
   fn meta_with_title(title: &str) -> ConversationMeta {
     ConversationMeta {
@@ -1048,5 +1054,217 @@ mod tests {
     assert_eq!(session_row_title(&meta_with_title("")), "New session");
     assert_eq!(session_row_title(&meta_with_title("   ")), "New session");
     assert_eq!(session_row_title(&meta_with_title("Fix scroll")), "Fix scroll");
+  }
+
+  struct TempRepo {
+    path: PathBuf,
+  }
+
+  impl TempRepo {
+    fn init(prefix: &str) -> Self {
+      let mut path = std::env::temp_dir();
+      let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("system clock before unix epoch")
+        .as_nanos();
+      path.push(format!("reviu-{prefix}-{}-{nanos}", std::process::id()));
+      std::fs::create_dir_all(&path).expect("create temp dir");
+      Repository::init(&path).expect("init git repository");
+      Self { path }
+    }
+  }
+
+  impl Drop for TempRepo {
+    fn drop(&mut self) {
+      let _ = std::fs::remove_dir_all(&self.path);
+    }
+  }
+
+  fn commit_text_file(repo_root: &Path, rel_path: &Path, contents: &str, message: &str) {
+    let repo = Repository::open(repo_root).expect("open repo");
+    std::fs::write(repo_root.join(rel_path), contents).expect("write worktree file");
+
+    let mut index = repo.index().expect("open index");
+    index.add_path(rel_path).expect("stage file");
+    index.write().expect("write index");
+    let tree_id = index.write_tree().expect("write tree");
+    let tree = repo.find_tree(tree_id).expect("find tree");
+    let signature = Signature::now("Reviu Tests", "tests@reviu.local").expect("signature");
+    let parent = repo.head().ok().and_then(|head| head.peel_to_commit().ok());
+    let parents: Vec<_> = parent.iter().collect();
+    repo
+      .commit(
+        Some("HEAD"),
+        &signature,
+        &signature,
+        message,
+        &tree,
+        &parents,
+      )
+      .expect("commit");
+  }
+
+  fn isolate_config_store_for_test() {
+    static NEXT_DB_ID: AtomicU64 = AtomicU64::new(1);
+    let id = NEXT_DB_ID.fetch_add(1, Ordering::Relaxed);
+    let db_path = std::env::temp_dir().join(format!(
+      "reviu-session-page-test-config-{}-{id}.sqlite",
+      std::process::id()
+    ));
+    let _ = std::fs::remove_file(&db_path);
+    ConfigStore::set_test_db_path(Some(db_path));
+  }
+
+  struct EmptyTestView;
+
+  impl Render for EmptyTestView {
+    fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+      div()
+    }
+  }
+
+  // The page is created but never mounted: rendering would spawn a real agent process
+  // via ensure_agent_chat_view.
+  fn add_session_page_window(
+    repo_root: PathBuf,
+    cx: &mut TestAppContext,
+  ) -> (Entity<SessionPage>, &mut gpui::VisualTestContext) {
+    isolate_config_store_for_test();
+    ConfigStore::persist_recent_repository(&repo_root);
+    cx.update(|cx| {
+      gpui_component::init(cx);
+      if !cx.has_global::<crate::config::AppSettings>() {
+        cx.set_global(crate::config::AppSettings::default());
+      }
+    });
+
+    let mut mounted: Option<Entity<SessionPage>> = None;
+    let (_root, cx) = cx.add_window_view(|window, cx| {
+      let page = cx.new(|cx| SessionPage::new(window, cx));
+      mounted = Some(page.clone());
+      let empty = cx.new(|_| EmptyTestView);
+      gpui_component::Root::new(empty, window, cx)
+    });
+    (mounted.expect("session page"), cx)
+  }
+
+  async fn await_open_file(page: &Entity<SessionPage>, cx: &mut gpui::VisualTestContext) {
+    let task = page.update(cx, |page, _| page.open_file_task.take());
+    if let Some(task) = task {
+      task.await;
+    }
+    cx.run_until_parked();
+  }
+
+  fn create_request(line: usize, body: &str) -> ReviewCommentCreateRequest {
+    ReviewCommentCreateRequest {
+      line,
+      side: ReviewCommentSide::Right,
+      start_line: None,
+      start_side: None,
+      in_reply_to_id: None,
+      body: Arc::from(body),
+      mode: ReviewCommentMode::SingleComment,
+    }
+  }
+
+  #[gpui::test]
+  async fn open_diff_switches_center_and_escape_returns(cx: &mut TestAppContext) {
+    let repo = TempRepo::init("session-page-open-diff");
+    commit_text_file(&repo.path, Path::new("README.md"), "v1\n", "initial");
+    std::fs::write(repo.path.join("README.md"), "v2\n").expect("update file");
+
+    let (page, cx) = add_session_page_window(repo.path.clone(), cx);
+    cx.executor().allow_parking();
+    cx.run_until_parked();
+
+    page.update_in(cx, |page, window, cx| {
+      page.open_diff(PathBuf::from("README.md"), None, window, cx);
+      assert_eq!(page.center, CenterView::Diff);
+    });
+    await_open_file(&page, cx).await;
+
+    page.read_with(cx, |page, _| {
+      assert!(page.editor.is_some());
+      assert_eq!(page.selected_file, Some(PathBuf::from("README.md")));
+    });
+
+    page.update_in(cx, |page, window, cx| {
+      page.close_workspace_page_action(&CloseWorkspacePage, window, cx);
+    });
+    page.read_with(cx, |page, _| {
+      assert_eq!(page.center, CenterView::Conversation);
+      // Editor kept for instant reopen of the same file.
+      assert!(page.editor.is_some());
+    });
+  }
+
+  #[gpui::test]
+  async fn review_comments_create_sync_and_delete(cx: &mut TestAppContext) {
+    let repo = TempRepo::init("session-page-review-comments");
+    commit_text_file(&repo.path, Path::new("README.md"), "v1\n", "initial");
+    std::fs::write(repo.path.join("README.md"), "v2\n").expect("update file");
+
+    let (page, cx) = add_session_page_window(repo.path.clone(), cx);
+    cx.executor().allow_parking();
+    cx.run_until_parked();
+
+    page.update_in(cx, |page, window, cx| {
+      page.open_diff(PathBuf::from("README.md"), None, window, cx);
+    });
+    await_open_file(&page, cx).await;
+
+    page.update_in(cx, |page, window, cx| {
+      page.create_agent_review_comment(create_request(0, "extract helper"), window, cx);
+    });
+
+    let comment_id = page.read_with(cx, |page, _| {
+      assert_eq!(page.agent_review_comments.len(), 1);
+      let comment = &page.agent_review_comments[0];
+      assert_eq!(comment.state, LocalAgentReviewCommentState::Draft);
+      assert_eq!(comment.path, PathBuf::from("README.md"));
+      assert_eq!(page.copyable_review_comment_count(), 1);
+      comment.id
+    });
+
+    page.update(cx, |page, cx| {
+      page.delete_agent_review_comment(comment_id, cx);
+    });
+    page.read_with(cx, |page, _| {
+      assert!(page.agent_review_comments.is_empty());
+      assert_eq!(page.copyable_review_comment_count(), 0);
+    });
+  }
+
+  #[gpui::test]
+  async fn send_without_agent_panel_keeps_drafts(cx: &mut TestAppContext) {
+    let repo = TempRepo::init("session-page-send-no-agent");
+    commit_text_file(&repo.path, Path::new("README.md"), "v1\n", "initial");
+    std::fs::write(repo.path.join("README.md"), "v2\n").expect("update file");
+
+    let (page, cx) = add_session_page_window(repo.path.clone(), cx);
+    cx.executor().allow_parking();
+    cx.run_until_parked();
+
+    page.update_in(cx, |page, window, cx| {
+      page.open_diff(PathBuf::from("README.md"), None, window, cx);
+    });
+    await_open_file(&page, cx).await;
+
+    page.update_in(cx, |page, window, cx| {
+      page.create_agent_review_comment(create_request(0, "still a draft"), window, cx);
+      // No agent chat view mounted: the send must not mark anything as sent.
+      assert!(page.agent_chat_view.is_none());
+      page.send_agent_review_to_agent(window, cx);
+    });
+
+    page.read_with(cx, |page, _| {
+      assert_eq!(page.agent_review_comments.len(), 1);
+      assert_eq!(
+        page.agent_review_comments[0].state,
+        LocalAgentReviewCommentState::Draft
+      );
+      assert_eq!(page.center, CenterView::Diff);
+    });
   }
 }
