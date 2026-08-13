@@ -4,6 +4,10 @@ All notable changes to Reviu are documented here.
 
 ## 0.18.0
 
+### No More Failed Single Comments During A Review
+
+While you have a review in progress, GitHub only accepts comments added to that review, and posting a standalone comment fails. Reviu now matches github.com: the "Add single comment" button is hidden while a review is pending, and the keyboard shortcut adds the comment to your pending review instead of failing with an error.
+
 ### Refreshed Command Palette
 
 The command palette has a cleaner, roomier look: a larger search field, rounded rows with subtler icons, and details like a stash's commit hash shown on the right of each row. A new footer strip lists the keyboard hints (navigate, run, close) so the palette is easier to learn, and it adapts to each screen, whether you are picking a branch or typing a stash message. The file search and GitHub repository search dialogs share the same refreshed look, so every palette in the app now feels consistent.

@@ -223,6 +223,15 @@ pub enum ReviewCommentMode {
   PendingReview,
 }
 
+/// GitHub rejects standalone comments (422) while the viewer has a pending review.
+pub fn review_comment_submit_mode(has_pending_review: bool) -> ReviewCommentMode {
+  if has_pending_review {
+    ReviewCommentMode::PendingReview
+  } else {
+    ReviewCommentMode::SingleComment
+  }
+}
+
 #[derive(Clone, Debug)]
 pub struct ReviewCommentCreateRequest {
   pub line: usize,
@@ -2268,7 +2277,8 @@ impl Editor {
         } = event
         {
           Self::trim_review_comment_input_trailing_newline(state, window, cx);
-          editor.save_review_comment_create(ReviewCommentMode::SingleComment, window, cx);
+          let mode = review_comment_submit_mode(editor.has_pending_review);
+          editor.save_review_comment_create(mode, window, cx);
         }
       },
     )
@@ -4939,30 +4949,33 @@ impl Editor {
                                 }),
                             ),
                         )
-                        .child(
-                          div()
-                            .on_mouse_down(MouseButton::Left, |_, _, cx| {
-                              cx.stop_propagation();
-                            })
-                            .child(
-                              Button::new("review-comment-create-save")
-                                .ghost()
-                                .xsmall()
-                                .compact()
-                                .label("Add single comment")
-                                .disabled(!can_save || is_create_submitting)
-                                .on_click(move |_, window, cx| {
-                                  cx.stop_propagation();
-                                  save_editor.update(cx, |editor, cx| {
-                                    editor.save_review_comment_create(
-                                      ReviewCommentMode::SingleComment,
-                                      window,
-                                      cx,
-                                    );
-                                  });
-                                }),
-                            ),
-                        )
+                        .when(!has_pending_review, |this| {
+                          // GitHub rejects standalone comments while a review is pending.
+                          this.child(
+                            div()
+                              .on_mouse_down(MouseButton::Left, |_, _, cx| {
+                                cx.stop_propagation();
+                              })
+                              .child(
+                                Button::new("review-comment-create-save")
+                                  .ghost()
+                                  .xsmall()
+                                  .compact()
+                                  .label("Add single comment")
+                                  .disabled(!can_save || is_create_submitting)
+                                  .on_click(move |_, window, cx| {
+                                    cx.stop_propagation();
+                                    save_editor.update(cx, |editor, cx| {
+                                      editor.save_review_comment_create(
+                                        ReviewCommentMode::SingleComment,
+                                        window,
+                                        cx,
+                                      );
+                                    });
+                                  }),
+                              ),
+                          )
+                        })
                         .child(
                           div()
                             .on_mouse_down(MouseButton::Left, |_, _, cx| {
@@ -8856,6 +8869,18 @@ pub mod tests {
   use gpui::TestAppContext;
   use std::path::Path;
   use std::sync::{Arc as StdArc, Mutex};
+
+  #[test]
+  fn submit_mode_joins_pending_review_when_one_exists() {
+    assert_eq!(
+      review_comment_submit_mode(false),
+      ReviewCommentMode::SingleComment
+    );
+    assert_eq!(
+      review_comment_submit_mode(true),
+      ReviewCommentMode::PendingReview
+    );
+  }
 
   fn tiny_png_bytes() -> Vec<u8> {
     vec![
