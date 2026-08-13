@@ -3,12 +3,12 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use agent_chat_panel::{AgentChatPanel, ConversationMeta};
+use agent_chat_panel::{AgentChatPanel, AgentChatPanelEvent, ConversationMeta};
 use gpui::{
   AnyElement, App, Context, Entity, FocusHandle, Focusable, Render, SharedString, Window, div,
   prelude::*, px,
 };
-use gpui_component::{ActiveTheme as _, Icon, Sizable as _, h_flex, v_flex};
+use gpui_component::{ActiveTheme as _, Sizable as _, h_flex, v_flex};
 
 use crate::agent_settings::AgentSettings;
 use crate::auth_state::AuthStateStore;
@@ -18,6 +18,7 @@ use crate::github_navigation::{
   open_commit_target, open_pr_target, open_profile_target, open_repo_target,
 };
 use crate::navigation::NavigationHistory;
+use crate::review_panel::ReviewPanel;
 use crate::workspace::WorkspaceApi;
 use crate::{CloseWorkspacePage, ShowCommandPalette};
 use ui::{
@@ -61,18 +62,21 @@ pub(crate) fn session_row_title(meta: &ConversationMeta) -> SharedString {
 pub struct SessionPage {
   focus_handle: FocusHandle,
   agent_chat_view: Option<Entity<AgentChatPanel>>,
+  review_panel: Entity<ReviewPanel>,
   selected_repo: Option<PathBuf>,
 }
 
 impl SessionPage {
-  pub fn new(_window: &mut Window, cx: &mut Context<Self>) -> Self {
+  pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
     let selected_repo = ConfigStore::load_recent_repositories()
       .first()
       .map(|repo| repo.path.clone());
+    let review_panel = cx.new(|cx| ReviewPanel::new(selected_repo.clone(), window, cx));
 
     Self {
       focus_handle: cx.focus_handle(),
       agent_chat_view: None,
+      review_panel,
       selected_repo,
     }
   }
@@ -97,6 +101,16 @@ impl SessionPage {
     let view = cx.new(|cx| AgentChatPanel::new(backend, cwd, state_dir, window, cx));
     // Sidebar reads conversation state from the panel; re-render when it changes.
     cx.observe(&view, |_, _, cx| cx.notify()).detach();
+    cx.subscribe(&view, |this, _panel, event: &AgentChatPanelEvent, cx| {
+      match event {
+        // Diff view arrives in P2; ignore tool-call path clicks for now.
+        AgentChatPanelEvent::OpenPath { .. } => {}
+        AgentChatPanelEvent::TurnFinished => {
+          this.review_panel.update(cx, |panel, cx| panel.refresh(cx));
+        }
+      }
+    })
+    .detach();
     self.agent_chat_view = Some(view);
   }
 
@@ -349,29 +363,12 @@ impl SessionPage {
     container.into_any_element()
   }
 
-  fn render_review_panel(&mut self, cx: &mut Context<Self>) -> AnyElement {
-    let theme = cx.theme().clone();
-    v_flex()
+  fn render_review_panel(&mut self, _cx: &mut Context<Self>) -> AnyElement {
+    div()
       .size_full()
       .min_w(px(0.0))
       .min_h_0()
-      .bg(theme.sidebar)
-      .border_l_1()
-      .border_color(theme.border)
-      .items_center()
-      .justify_center()
-      .gap_2()
-      .child(
-        Icon::new(UiIconName::FileDiff)
-          .size_4()
-          .text_color(theme.muted_foreground),
-      )
-      .child(
-        div()
-          .text_sm()
-          .text_color(theme.muted_foreground)
-          .child("Review panel"),
-      )
+      .child(self.review_panel.clone())
       .into_any_element()
   }
 }

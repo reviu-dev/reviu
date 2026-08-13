@@ -85,6 +85,7 @@ mod notification_count;
 mod number_format;
 mod pricing_copy;
 mod sentry_context;
+mod review_panel;
 mod session_page;
 mod settings_page;
 mod shortcuts;
