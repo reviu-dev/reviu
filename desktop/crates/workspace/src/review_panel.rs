@@ -3,7 +3,8 @@
 use std::path::PathBuf;
 
 use git::{
-  RepoStage, RepoStatusEntry, RepoStatusKind, commit_changes, list_repo_status, stage_all,
+  RepoStage, RepoStatusEntry, RepoStatusKind, commit_changes, current_branch_status,
+  current_github_remote_repo, list_repo_status, stage_all,
 };
 use gpui::{
   AnyElement, AnyWindowHandle, App, Context, Entity, FocusHandle, Focusable, Render, SharedString,
@@ -11,8 +12,16 @@ use gpui::{
 };
 use gpui_component::{ActiveTheme as _, Disableable as _, Icon, Sizable as _, h_flex, v_flex};
 use smol::unblock;
+use std::rc::Rc;
 
-use crate::git_page::read_commit_diff;
+use crate::api::GithubPullRequest;
+use crate::auth_state::AuthStateStore;
+use crate::git_page::{
+  GithubBranchContext, PullRequestCreatedHandler, open_create_pull_request_dialog,
+  read_commit_diff,
+};
+use crate::github_navigation::open_pr_target;
+use crate::github_shared::{pull_request_status_color, pull_request_status_label};
 use crate::workspace::WorkspaceApi;
 use ui::{
   Button, ButtonVariants as _, StatusThemeExt as _, Textarea, TextareaState, UiIconName,
@@ -50,6 +59,21 @@ pub enum ReviewPanelEvent {
 
 impl gpui::EventEmitter<ReviewPanelEvent> for ReviewPanel {}
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ReviewPanelTab {
+  Changes,
+  PullRequest,
+}
+
+#[derive(Clone, Debug)]
+enum BranchPrState {
+  NoAccess,
+  NoRemote,
+  Loading,
+  Missing(GithubBranchContext),
+  Found(GithubBranchContext, Box<GithubPullRequest>),
+}
+
 pub struct ReviewPanel {
   focus_handle: FocusHandle,
   window_handle: AnyWindowHandle,
@@ -59,8 +83,11 @@ pub struct ReviewPanel {
   committing: bool,
   generating_message: bool,
   last_error: Option<SharedString>,
+  active_tab: ReviewPanelTab,
+  branch_pr: BranchPrState,
   _refresh_task: Option<Task<()>>,
   _commit_task: Option<Task<()>>,
+  _pr_task: Option<Task<()>>,
 }
 
 impl ReviewPanel {
@@ -80,8 +107,11 @@ impl ReviewPanel {
       committing: false,
       generating_message: false,
       last_error: None,
+      active_tab: ReviewPanelTab::Changes,
+      branch_pr: BranchPrState::Loading,
       _refresh_task: None,
       _commit_task: None,
+      _pr_task: None,
     };
     panel.refresh(cx);
     panel
@@ -108,6 +138,49 @@ impl ReviewPanel {
       });
     });
     self._refresh_task = Some(task);
+    self.refresh_branch_pull_request(cx);
+  }
+
+  fn refresh_branch_pull_request(&mut self, cx: &mut Context<Self>) {
+    let Some(repo_root) = self.repo_root.clone() else {
+      return;
+    };
+    if !AuthStateStore::has_github_access(cx) {
+      self.branch_pr = BranchPrState::NoAccess;
+      cx.notify();
+      return;
+    }
+
+    self.branch_pr = BranchPrState::Loading;
+    let api = WorkspaceApi::global(cx).api.clone();
+    let task = cx.spawn(async move |this, cx| {
+      let state = unblock(move || {
+        let Ok(Some(remote)) = current_github_remote_repo(&repo_root) else {
+          return BranchPrState::NoRemote;
+        };
+        let Ok(branch) = current_branch_status(&repo_root) else {
+          return BranchPrState::NoRemote;
+        };
+        let context = GithubBranchContext {
+          owner: remote.owner,
+          repo: remote.repo,
+          branch: branch.name,
+        };
+        match api.fetch_pull_request_for_branch(&context.owner, &context.repo, &context.branch) {
+          Ok(Some(pull_request)) => BranchPrState::Found(context, Box::new(pull_request)),
+          Ok(None) => BranchPrState::Missing(context),
+          // Keep the tab usable on transient API errors: offer Create against the context.
+          Err(_) => BranchPrState::Missing(context),
+        }
+      })
+      .await;
+
+      let _ = this.update(cx, |this, cx| {
+        this.branch_pr = state;
+        cx.notify();
+      });
+    });
+    self._pr_task = Some(task);
   }
 
   fn has_staged_changes(&self) -> bool {
@@ -310,6 +383,190 @@ impl ReviewPanel {
       .into_any_element()
   }
 
+  fn render_tabs(&self, cx: &mut Context<Self>) -> AnyElement {
+    let theme = cx.theme().clone();
+    let tab = |id: &'static str, label: &'static str, target: ReviewPanelTab, active: bool| {
+      div()
+        .id(id)
+        .px_2()
+        .py_1()
+        .rounded(px(5.0))
+        .text_xs()
+        .cursor_pointer()
+        .when(active, |this| {
+          this
+            .bg(theme.secondary_active)
+            .text_color(theme.foreground)
+        })
+        .when(!active, |this| {
+          this
+            .text_color(theme.muted_foreground)
+            .hover(|s| s.bg(theme.secondary_hover))
+        })
+        .child(label)
+        .on_click(cx.listener(move |this, _, _, cx| {
+          if this.active_tab != target {
+            this.active_tab = target;
+            if target == ReviewPanelTab::PullRequest {
+              this.refresh_branch_pull_request(cx);
+            }
+            cx.notify();
+          }
+        }))
+    };
+
+    h_flex()
+      .items_center()
+      .gap_1()
+      .child(tab(
+        "review-panel-tab-changes",
+        "Changes",
+        ReviewPanelTab::Changes,
+        self.active_tab == ReviewPanelTab::Changes,
+      ))
+      .child(tab(
+        "review-panel-tab-pr",
+        "Pull request",
+        ReviewPanelTab::PullRequest,
+        self.active_tab == ReviewPanelTab::PullRequest,
+      ))
+      .into_any_element()
+  }
+
+  fn pr_created_handler(&self, cx: &mut Context<Self>) -> PullRequestCreatedHandler {
+    let panel = cx.entity().downgrade();
+    Rc::new(move |_context, _pull_request, cx| {
+      let _ = panel.update(cx, |panel, cx| {
+        panel.refresh_branch_pull_request(cx);
+      });
+    })
+  }
+
+  fn render_pr_message(&self, text: &'static str, cx: &mut Context<Self>) -> AnyElement {
+    let theme = cx.theme().clone();
+    v_flex()
+      .flex_1()
+      .items_center()
+      .justify_center()
+      .gap_2()
+      .px_4()
+      .child(
+        Icon::new(UiIconName::GitPullRequest)
+          .size_4()
+          .text_color(theme.muted_foreground),
+      )
+      .child(
+        div()
+          .text_sm()
+          .text_center()
+          .text_color(theme.muted_foreground)
+          .child(text),
+      )
+      .into_any_element()
+  }
+
+  fn render_pr_tab(&self, cx: &mut Context<Self>) -> AnyElement {
+    let theme = cx.theme().clone();
+    match &self.branch_pr {
+      BranchPrState::NoAccess => {
+        self.render_pr_message("Sign in with GitHub to link this branch to a pull request", cx)
+      }
+      BranchPrState::NoRemote => self.render_pr_message("No GitHub remote on this repository", cx),
+      BranchPrState::Loading => self.render_pr_message("Loading pull request...", cx),
+      BranchPrState::Missing(context) => {
+        let context = context.clone();
+        v_flex()
+          .flex_1()
+          .items_center()
+          .justify_center()
+          .gap_3()
+          .px_4()
+          .child(
+            Icon::new(UiIconName::GitPullRequestArrow)
+              .size_4()
+              .text_color(theme.muted_foreground),
+          )
+          .child(
+            div()
+              .text_sm()
+              .text_center()
+              .text_color(theme.muted_foreground)
+              .child(format!("No pull request for {}", context.branch)),
+          )
+          .child(
+            Button::new("review-panel-create-pr")
+              .primary()
+              .small()
+              .label("Create pull request")
+              .on_click(cx.listener(move |this, _, window, cx| {
+                open_create_pull_request_dialog(
+                  WorkspaceApi::global(cx).api.clone(),
+                  this.window_handle,
+                  this.pr_created_handler(cx),
+                  context.clone(),
+                  window,
+                  cx,
+                );
+              })),
+          )
+          .into_any_element()
+      }
+      BranchPrState::Found(context, pull_request) => {
+        let status = pull_request.status();
+        let owner = context.owner.clone();
+        let repo = context.repo.clone();
+        let number = pull_request.number;
+
+        v_flex()
+          .gap_2()
+          .p_3()
+          .child(
+            h_flex()
+              .items_center()
+              .gap_2()
+              .child(
+                div()
+                  .text_xs()
+                  .font_weight(gpui::FontWeight::SEMIBOLD)
+                  .text_color(pull_request_status_color(status, &theme))
+                  .child(pull_request_status_label(status)),
+              )
+              .child(
+                div()
+                  .text_xs()
+                  .text_color(theme.muted_foreground)
+                  .child(format!("#{number}")),
+              ),
+          )
+          .child(
+            div()
+              .text_sm()
+              .text_color(theme.foreground)
+              .child(pull_request.title.clone()),
+          )
+          .child(
+            div()
+              .text_xs()
+              .text_color(theme.muted_foreground)
+              .child(format!(
+                "{} comments · {}",
+                pull_request.comments_count, context.branch
+              )),
+          )
+          .child(
+            Button::new("review-panel-open-pr")
+              .small()
+              .w_full()
+              .label("Open pull request")
+              .on_click(cx.listener(move |_, _, _, cx| {
+                open_pr_target(owner.clone(), repo.clone(), number, false, None, cx);
+              })),
+          )
+          .into_any_element()
+      }
+    }
+  }
+
   fn render_empty_state(&self, cx: &mut Context<Self>) -> AnyElement {
     let theme = cx.theme().clone();
     v_flex()
@@ -344,59 +601,61 @@ impl Render for ReviewPanel {
     let header = h_flex()
       .items_center()
       .justify_between()
-      .px_3()
+      .px_2()
       .py_2()
+      .child(self.render_tabs(cx))
       .child(
         h_flex()
           .items_center()
-          .gap_2()
-          .child(
-            div()
-              .text_xs()
-              .font_weight(gpui::FontWeight::SEMIBOLD)
-              .text_color(theme.muted_foreground)
-              .child("Changes"),
+          .gap_1()
+          .when(
+            self.active_tab == ReviewPanelTab::Changes && entry_count > 0,
+            |this| {
+              this.child(
+                div()
+                  .text_xs()
+                  .text_color(theme.muted_foreground)
+                  .child(entry_count.to_string()),
+              )
+            },
           )
-          .when(entry_count > 0, |this| {
-            this.child(
-              div()
-                .text_xs()
-                .text_color(theme.muted_foreground)
-                .child(entry_count.to_string()),
-            )
-          }),
-      )
-      .child(
-        Button::new("review-panel-refresh")
-          .icon(UiIconName::RefreshCw)
-          .ghost()
-          .compact()
-          .small()
-          .tooltip("Refresh changes")
-          .on_click(cx.listener(|this, _, _, cx| this.refresh(cx))),
+          .child(
+            Button::new("review-panel-refresh")
+              .icon(UiIconName::RefreshCw)
+              .ghost()
+              .compact()
+              .small()
+              .tooltip("Refresh")
+              .on_click(cx.listener(|this, _, _, cx| this.refresh(cx))),
+          ),
       );
 
-    let body = if self.status_entries.is_empty() {
-      self.render_empty_state(cx)
-    } else {
-      let rows: Vec<AnyElement> = self
-        .status_entries
-        .clone()
-        .iter()
-        .enumerate()
-        .map(|(ix, entry)| self.render_file_row(ix, entry, cx))
-        .collect();
-      div()
-        .id("review-panel-file-list")
-        .flex_1()
-        .min_h_0()
-        .overflow_y_scroll()
-        .py_1()
-        .children(rows)
-        .into_any_element()
+    let body = match self.active_tab {
+      ReviewPanelTab::Changes => {
+        if self.status_entries.is_empty() {
+          self.render_empty_state(cx)
+        } else {
+          let rows: Vec<AnyElement> = self
+            .status_entries
+            .clone()
+            .iter()
+            .enumerate()
+            .map(|(ix, entry)| self.render_file_row(ix, entry, cx))
+            .collect();
+          div()
+            .id("review-panel-file-list")
+            .flex_1()
+            .min_h_0()
+            .overflow_y_scroll()
+            .py_1()
+            .children(rows)
+            .into_any_element()
+        }
+      }
+      ReviewPanelTab::PullRequest => self.render_pr_tab(cx),
     };
 
-    v_flex()
+    let mut panel = v_flex()
       .size_full()
       .min_w(px(0.0))
       .min_h_0()
@@ -405,8 +664,11 @@ impl Render for ReviewPanel {
       .border_color(theme.border)
       .track_focus(&self.focus_handle)
       .child(header)
-      .child(body)
-      .child(self.render_commit_zone(cx))
+      .child(body);
+    if self.active_tab == ReviewPanelTab::Changes {
+      panel = panel.child(self.render_commit_zone(cx));
+    }
+    panel
   }
 }
 
@@ -500,6 +762,14 @@ mod tests {
     repo_root: Option<PathBuf>,
     cx: &mut TestAppContext,
   ) -> (Entity<ReviewPanel>, &mut gpui::VisualTestContext) {
+    cx.update(|cx| {
+      if !cx.has_global::<AuthStateStore>() {
+        cx.set_global(AuthStateStore::default());
+      }
+      if !cx.has_global::<WorkspaceApi>() {
+        cx.set_global(WorkspaceApi::new());
+      }
+    });
     let mut mounted: Option<Entity<ReviewPanel>> = None;
     let (_root, cx) = cx.add_window_view(|window, cx| {
       let panel = cx.new(|cx| ReviewPanel::new(repo_root.clone(), window, cx));
@@ -507,6 +777,22 @@ mod tests {
       gpui_component::Root::new(panel, window, cx)
     });
     (mounted.expect("review panel"), cx)
+  }
+
+  #[gpui::test]
+  async fn branch_pr_requires_github_access(cx: &mut TestAppContext) {
+    cx.update(|cx| gpui_component::init(cx));
+    let repo = TempRepo::init("review-panel-pr-gate");
+    commit_text_file(&repo.path, Path::new("README.md"), "v1\n", "initial");
+
+    let (panel, cx) = add_review_panel_window(Some(repo.path.clone()), cx);
+    cx.executor().allow_parking();
+    cx.run_until_parked();
+
+    // Default auth state is Unknown: no GitHub access, no lookup attempted.
+    panel.read_with(cx, |panel, _| {
+      assert!(matches!(panel.branch_pr, BranchPrState::NoAccess));
+    });
   }
 
   #[gpui::test]

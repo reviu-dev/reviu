@@ -12,6 +12,10 @@ Reviu now opens on a new Sessions workspace built around working with a coding a
 
 The right panel of the Sessions workspace now shows your working-tree changes and refreshes automatically each time the agent finishes a turn, so you always see what the agent just touched. Write a commit message (or generate one with AI from your diff) and commit without leaving the workspace; unstaged changes are staged automatically, matching the Git page behavior.
 
+### GitHub In The Sessions Workspace
+
+The Sessions workspace now surfaces your GitHub context without leaving it. The right panel gains a Pull request tab showing the pull request linked to your current branch (state, title, comment count) with one click to open it, or a Create pull request button when the branch has none, using the same dialog as the Git page. The sidebar gains a compact GitHub section with your notification inbox count and a shortcut to your pull requests.
+
 ### Checkpoints: Roll Back Any Agent Turn
 
 Every prompt now snapshots your working tree (including untracked files) before the agent starts, shown as a discreet checkpoint line in the conversation. Roll back restores your files exactly as they were at that point (your branch, HEAD, and staged state are never touched) and trims the conversation back to the checkpoint, so a bad agent turn is never more than one click from undone. The rollback itself takes a safety snapshot first, so even a rollback can be recovered. Checkpoints live under hidden git refs, are pruned automatically, and work on both the Sessions workspace and the Git page.
