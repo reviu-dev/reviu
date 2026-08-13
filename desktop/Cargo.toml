@@ -153,3 +153,9 @@ tree-sitter-scss = { git = "https://github.com/tree-sitter-grammars/tree-sitter-
 # Strip GPL-3.0 deps (ztracing -> zlog) that gpui and sum_tree pull into the binary. See vendor/ztracing.
 [patch."https://github.com/zed-industries/zed"]
 ztracing = { path = "vendor/ztracing" }
+# TestWindow raw handles return Err instead of panicking; unbreaks gpui-component's
+# macOS native integrations (accessibility, autofill) in test windows.
+# gpui_platform and reqwest_client ride along so the graph keeps a single http_client.
+gpui = { git = "https://github.com/joris-gallot/zed", branch = "reviu/test-window-raw-handle", version = "=0.2.2" }
+gpui_platform = { git = "https://github.com/joris-gallot/zed", branch = "reviu/test-window-raw-handle" }
+reqwest_client = { git = "https://github.com/joris-gallot/zed", branch = "reviu/test-window-raw-handle" }
