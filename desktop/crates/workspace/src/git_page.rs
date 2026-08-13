@@ -4831,19 +4831,7 @@ impl GitPage {
     }
 
     let palette = cx.new(|cx| CommandPalette::new(window, cx, config));
-    let palette_for_dialog = palette.clone();
-
-    window.open_dialog(cx, move |dialog, _, _| {
-      dialog
-        .on_ok(|_, _, _| false)
-        .p_0()
-        .border_0()
-        .min_h_0()
-        .overlay_closable(true)
-        .keyboard(true)
-        .close_button(false)
-        .child(palette_for_dialog.clone())
-    });
+    ui::open_command_palette_dialog(palette, window, cx);
   }
 
   fn command_palette_branch(branch: &BranchRef) -> CommandPaletteBranch {

@@ -30,7 +30,7 @@ pub use command_palette::{
   CommandPaletteGithubRepoTab, CommandPaletteGroup, CommandPaletteHandler,
   CommandPaletteInitialScreen, CommandPalettePage, CommandPaletteRepository, CommandPaletteStash,
   CommandPaletteUsageRecorder, CommandPaletteUsageRecorderGlobal, CommandPaletteUsageScorer,
-  CommandPaletteUsageScorerGlobal,
+  CommandPaletteUsageScorerGlobal, open_command_palette_dialog,
 };
 pub use confirm_dialog::ConfirmDialog;
 pub use dropdown_select::{

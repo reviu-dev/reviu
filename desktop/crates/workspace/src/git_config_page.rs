@@ -20,7 +20,7 @@ use gpui_component::{
 use ui::{
   CommandPalette, CommandPaletteAction, CommandPaletteCommand, CommandPaletteConfig,
   CommandPaletteHandler, CommandPalettePage, FILE_ICON_SIZE_PX, PAGE_HEADER_HEIGHT, StatusThemeExt,
-  WindowExt, file_icon_path_for_path_with_theme,
+  file_icon_path_for_path_with_theme,
 };
 
 use crate::{
@@ -128,19 +128,7 @@ impl GitConfigPage {
 
     let config = CommandPaletteConfig::new(Vec::new(), commands, handler);
     let palette = cx.new(|cx| CommandPalette::new(window, cx, config));
-    let palette_for_dialog = palette.clone();
-
-    window.open_dialog(cx, move |dialog, _, _| {
-      dialog
-        .on_ok(|_, _, _| false)
-        .p_0()
-        .border_0()
-        .min_h_0()
-        .overlay_closable(true)
-        .keyboard(true)
-        .close_button(false)
-        .child(palette_for_dialog.clone())
-    });
+    ui::open_command_palette_dialog(palette, window, cx);
   }
 
   fn handle_command_palette_action(

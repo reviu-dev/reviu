@@ -1,15 +1,13 @@
 use std::{collections::BTreeMap, rc::Rc, sync::Arc};
 
 use crate::github_url::parse_github_url_action;
-use crate::{SelectableRowStyle, UiIconName, file_icon_path_for_name, selectable_list_item};
+use crate::{UiIconName, file_icon_path_for_name};
 use gpui::{
   App, Context, Div, Entity, FocusHandle, Focusable, Global, InteractiveElement, IntoElement,
   ParentElement, Render, SharedString, Styled, Subscription, Task, Window, div, prelude::*, px,
 };
 use gpui_component::{
-  ActiveTheme as _, Icon, IconName, IndexPath, Sizable, WindowExt,
-  button::{Button, ButtonVariants},
-  h_flex,
+  ActiveTheme as _, Icon, IconName, IndexPath, Sizable, Size, WindowExt, h_flex,
   input::{Input, InputEvent, InputState},
   label::Label,
   list::{List, ListDelegate, ListEvent, ListItem, ListState},
@@ -17,9 +15,8 @@ use gpui_component::{
   v_flex,
 };
 
-const LIST_INPUT_HEIGHT: f32 = 35.0;
-const LIST_ITEM_HEIGHT: f32 = 32.0; // Height of each list item in pixels (h_8)
-const SECTION_HEADER_HEIGHT: f32 = 28.0;
+const PALETTE_WIDTH: f32 = 620.0;
+const PALETTE_LIST_MAX_HEIGHT: f32 = 400.0;
 pub const COMMAND_PALETTE_CONTEXT: &str = "CommandPalette";
 
 pub type CommandPaletteUsageRecorder = fn(CommandPaletteCommandId, &App);
@@ -34,20 +31,64 @@ pub struct CommandPaletteUsageScorerGlobal(pub CommandPaletteUsageScorer);
 
 impl Global for CommandPaletteUsageScorerGlobal {}
 
-fn list_base_item(
-  ix: IndexPath,
-  is_last_overall: bool,
-  selected_index: Option<IndexPath>,
+fn list_base_item(ix: IndexPath, selected_index: Option<IndexPath>) -> ListItem {
+  ListItem::new(ix)
+    .selected(Some(ix) == selected_index)
+    .mx_1()
+    .px_2()
+    .py_1p5()
+    .rounded_md()
+}
+
+fn palette_row(
+  icon: Icon,
+  label: SharedString,
+  hint: Option<SharedString>,
   theme: &gpui_component::Theme,
-) -> ListItem {
-  selectable_list_item(
-    ix,
-    Some(ix) == selected_index,
-    SelectableRowStyle::Flush,
-    theme,
-  )
-  .h_8()
-  .when(is_last_overall, |item| item.rounded_b(theme.radius))
+) -> impl IntoElement {
+  h_flex()
+    .w_full()
+    .items_center()
+    .justify_between()
+    .gap_3()
+    .child(
+      h_flex()
+        .min_w_0()
+        .flex_1()
+        .items_center()
+        .gap_2()
+        .child(icon.small().text_color(theme.muted_foreground))
+        .child(
+          div()
+            .min_w_0()
+            .flex_1()
+            .text_sm()
+            .overflow_hidden()
+            .text_ellipsis()
+            .child(Label::new(label)),
+        ),
+    )
+    .when_some(hint, |row, hint| {
+      row.child(
+        div()
+          .text_xs()
+          .text_color(theme.muted_foreground)
+          .whitespace_nowrap()
+          .text_ellipsis()
+          .overflow_hidden()
+          .child(hint),
+      )
+    })
+}
+
+fn palette_empty(cx: &App) -> gpui::AnyElement {
+  v_flex()
+    .items_center()
+    .py_8()
+    .text_sm()
+    .text_color(cx.theme().muted_foreground)
+    .child("No matching results")
+    .into_any_element()
 }
 
 fn update_selected_index<D: ListDelegate>(
@@ -279,27 +320,24 @@ impl ListDelegate for BranchesListDelegate {
     _window: &mut Window,
     cx: &mut Context<ListState<Self>>,
   ) -> Option<Self::Item> {
-    let total_items = self.matched_branches.len();
     let theme = cx.theme().clone();
 
-    let is_last = ix.row + 1 == total_items;
-    let base_item = list_base_item(ix, is_last, self.selected_index, &theme);
-
     self.matched_branches.get(ix.row).map(|branch| {
-      base_item.child(
-        h_flex()
-          .items_center()
-          .gap_2()
-          .child(Icon::new(UiIconName::GitBranch))
-          .child(
-            div()
-              .flex_1()
-              .overflow_hidden()
-              .text_ellipsis()
-              .child(Label::new(branch.name.clone())),
-          ),
-      )
+      list_base_item(ix, self.selected_index).child(palette_row(
+        Icon::new(UiIconName::GitBranch),
+        branch.name.clone(),
+        None,
+        &theme,
+      ))
     })
+  }
+
+  fn render_empty(
+    &mut self,
+    _window: &mut Window,
+    cx: &mut Context<ListState<Self>>,
+  ) -> impl IntoElement {
+    palette_empty(cx)
   }
 
   fn set_selected_index(
@@ -359,27 +397,24 @@ impl ListDelegate for RepositoriesListDelegate {
     _window: &mut Window,
     cx: &mut Context<ListState<Self>>,
   ) -> Option<Self::Item> {
-    let total_items = self.matched_repositories.len();
     let theme = cx.theme().clone();
 
-    let is_last = ix.row + 1 == total_items;
-    let base_item = list_base_item(ix, is_last, self.selected_index, &theme);
-
     self.matched_repositories.get(ix.row).map(|repository| {
-      base_item.child(
-        h_flex()
-          .items_center()
-          .gap_2()
-          .child(Icon::new(IconName::FolderOpen))
-          .child(
-            div()
-              .flex_1()
-              .overflow_hidden()
-              .text_ellipsis()
-              .child(Label::new(repository.path.clone())),
-          ),
-      )
+      list_base_item(ix, self.selected_index).child(palette_row(
+        Icon::new(IconName::FolderOpen),
+        repository.path.clone(),
+        None,
+        &theme,
+      ))
     })
+  }
+
+  fn render_empty(
+    &mut self,
+    _window: &mut Window,
+    cx: &mut Context<ListState<Self>>,
+  ) -> impl IntoElement {
+    palette_empty(cx)
   }
 
   fn set_selected_index(
@@ -439,27 +474,26 @@ impl ListDelegate for StashesListDelegate {
     _window: &mut Window,
     cx: &mut Context<ListState<Self>>,
   ) -> Option<Self::Item> {
-    let total_items = self.matched_stashes.len();
     let theme = cx.theme().clone();
-    let is_last = ix.row + 1 == total_items;
-    let base_item = list_base_item(ix, is_last, self.selected_index, &theme);
 
     self.matched_stashes.get(ix.row).map(|stash| {
       let label: SharedString = format!("#{} {}", stash.index, stash.name.as_ref()).into();
-      base_item.child(
-        h_flex()
-          .items_center()
-          .gap_2()
-          .child(Icon::new(IconName::Inbox))
-          .child(
-            div()
-              .flex_1()
-              .overflow_hidden()
-              .text_ellipsis()
-              .child(Label::new(label)),
-          ),
-      )
+      let oid: SharedString = stash.oid.chars().take(7).collect::<String>().into();
+      list_base_item(ix, self.selected_index).child(palette_row(
+        Icon::new(IconName::Inbox),
+        label,
+        Some(oid),
+        &theme,
+      ))
     })
+  }
+
+  fn render_empty(
+    &mut self,
+    _window: &mut Window,
+    cx: &mut Context<ListState<Self>>,
+  ) -> impl IntoElement {
+    palette_empty(cx)
   }
 
   fn set_selected_index(
@@ -528,37 +562,34 @@ impl ListDelegate for BranchesListWithCommandsDelegate {
     _window: &mut Window,
     cx: &mut Context<ListState<Self>>,
   ) -> Option<Self::Item> {
-    let total_items = self.matched_branches_and_commands.len();
     let theme = cx.theme().clone();
-
-    let is_last = ix.row + 1 == total_items;
-    let base_item = list_base_item(ix, is_last, self.selected_index, &theme);
+    let base_item = list_base_item(ix, self.selected_index);
 
     self
       .matched_branches_and_commands
       .get(ix.row)
       .map(|branch| match branch.as_ref() {
-        BranchListWithCommands::CommandPaletteCommand(command) => base_item.child(
-          h_flex()
-            .items_center()
-            .gap_2()
-            .child(command.icon())
-            .child(Label::new(command.name.clone())),
-        ),
-        BranchListWithCommands::SwitchBranch(branch) => base_item.child(
-          h_flex()
-            .items_center()
-            .gap_2()
-            .child(Icon::new(UiIconName::GitBranch))
-            .child(
-              div()
-                .flex_1()
-                .overflow_hidden()
-                .text_ellipsis()
-                .child(Label::new(branch.name.clone())),
-            ),
-        ),
+        BranchListWithCommands::CommandPaletteCommand(command) => base_item.child(palette_row(
+          command.icon(),
+          command.name.clone(),
+          None,
+          &theme,
+        )),
+        BranchListWithCommands::SwitchBranch(branch) => base_item.child(palette_row(
+          Icon::new(UiIconName::GitBranch),
+          branch.name.clone(),
+          None,
+          &theme,
+        )),
       })
+  }
+
+  fn render_empty(
+    &mut self,
+    _window: &mut Window,
+    cx: &mut Context<ListState<Self>>,
+  ) -> impl IntoElement {
+    palette_empty(cx)
   }
 
   fn set_selected_index(
@@ -662,14 +693,6 @@ impl CommandListDelegate {
     );
   }
 
-  fn matched_total_count(&self) -> usize {
-    self.matched_sections.iter().map(|(_, v)| v.len()).sum()
-  }
-
-  fn visible_sections_count(&self) -> usize {
-    self.matched_sections.len()
-  }
-
   fn item_at(&self, ix: IndexPath) -> Option<Rc<CommandPaletteCommand>> {
     self
       .matched_sections
@@ -699,57 +722,26 @@ impl ListDelegate for CommandListDelegate {
     _window: &mut Window,
     cx: &mut Context<ListState<Self>>,
   ) -> Option<Self::Item> {
-    let last_section_ix = self.matched_sections.len().saturating_sub(1);
-    let total_in_last_section = self
-      .matched_sections
-      .last()
-      .map(|(_, items)| items.len())
-      .unwrap_or(0);
-    let is_last_overall = ix.section == last_section_ix && ix.row + 1 == total_in_last_section;
     let theme = cx.theme().clone();
 
     self.item_at(ix).map(|command| {
-      let disabled_reason = command.disabled_reason.clone();
-      list_base_item(ix, is_last_overall, self.selected_index, &theme)
+      list_base_item(ix, self.selected_index)
         .when(command.is_disabled(), |item| item.opacity(0.55))
-        .child(
-          h_flex()
-            .items_center()
-            .gap_2()
-            .child(command.icon())
-            .min_w(px(0.0))
-            .child(
-              div()
-                .flex_1()
-                .overflow_hidden()
-                .text_ellipsis()
-                .child(Label::new(command.name.clone())),
-            ),
-        )
-        .suffix(move |_, cx| {
-          h_flex()
-            .items_center()
-            .when_some(disabled_reason.clone(), |this, reason| {
-              this.child(
-                div()
-                  .w(px(220.0))
-                  .overflow_hidden()
-                  .text_ellipsis()
-                  .text_xs()
-                  .text_color(cx.theme().muted_foreground)
-                  .child(reason),
-              )
-            })
-            .when(disabled_reason.is_none(), |this| {
-              this.child(
-                Button::new("action")
-                  .ghost()
-                  .small()
-                  .icon(IconName::ArrowRight),
-              )
-            })
-        })
+        .child(palette_row(
+          command.icon(),
+          command.name.clone(),
+          command.disabled_reason.clone(),
+          &theme,
+        ))
     })
+  }
+
+  fn render_empty(
+    &mut self,
+    _window: &mut Window,
+    cx: &mut Context<ListState<Self>>,
+  ) -> impl IntoElement {
+    palette_empty(cx)
   }
 
   fn render_section_header(
@@ -763,9 +755,9 @@ impl ListDelegate for CommandListDelegate {
     }
     let (group, _) = self.matched_sections.get(section)?;
     Some(
-      h_flex()
+      div()
         .px_3()
-        .pt_2()
+        .pt_3()
         .pb_1()
         .text_xs()
         .text_color(cx.theme().muted_foreground)
@@ -2924,53 +2916,13 @@ impl CommandPalette {
   fn render_search_list<D: ListDelegate>(
     &self,
     list: &Entity<ListState<D>>,
-    count: usize,
     placeholder: &'static str,
-    cx: &Context<Self>,
   ) -> impl IntoElement {
-    self.render_search_list_with_sections(list, count, 0, placeholder, cx)
-  }
-
-  fn render_search_list_with_sections<D: ListDelegate>(
-    &self,
-    list: &Entity<ListState<D>>,
-    item_count: usize,
-    visible_headers: usize,
-    placeholder: &'static str,
-    cx: &Context<Self>,
-  ) -> impl IntoElement {
-    self.render_search_list_with_sections_and_attached_footer(
-      list,
-      item_count,
-      visible_headers,
-      placeholder,
-      false,
-      cx,
-    )
-  }
-
-  fn render_search_list_with_sections_and_attached_footer<D: ListDelegate>(
-    &self,
-    list: &Entity<ListState<D>>,
-    item_count: usize,
-    visible_headers: usize,
-    placeholder: &'static str,
-    has_attached_footer: bool,
-    cx: &Context<Self>,
-  ) -> impl IntoElement {
-    let height_px = LIST_ITEM_HEIGHT * item_count as f32
-      + SECTION_HEADER_HEIGHT * visible_headers as f32
-      + LIST_INPUT_HEIGHT;
     List::new(list)
       .w_full()
-      .h(px(height_px))
-      .border_1()
+      .max_h(px(PALETTE_LIST_MAX_HEIGHT))
+      .with_size(Size::Large)
       .search_placeholder(placeholder)
-      .border_color(cx.theme().border)
-      .rounded(cx.theme().radius)
-      .when(has_attached_footer, |list| {
-        list.rounded_bl_none().rounded_br_none()
-      })
   }
 
   fn render_git_command_preview(
@@ -2984,9 +2936,7 @@ impl CommandPalette {
       .gap_1()
       .px_3()
       .py_2()
-      .rounded_b(theme.radius)
-      .border_1()
-      .border_t_0()
+      .border_t_1()
       .border_color(theme.border)
       .bg(theme.muted)
       .text_xs()
@@ -3017,110 +2967,50 @@ impl CommandPalette {
     Self::branch_git_command(self.screen, branch.as_ref())
   }
 
-  fn render_root(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
-    let commands_delegate = self.commands_list.read(cx).delegate();
-    let count_commands = commands_delegate.matched_total_count();
-    let visible_headers = {
-      let sections = commands_delegate.visible_sections_count();
-      if sections > 1 { sections } else { 0 }
-    };
-
+  fn render_input_screen(&self, input: &Entity<InputState>, cx: &Context<Self>) -> Div {
     v_flex()
-      .h_full()
-      .child(self.render_search_list_with_sections(
-        &self.commands_list,
-        count_commands,
-        visible_headers,
-        "Search commands...",
-        cx,
-      ))
+      .p_2()
+      .child(Input::new(input).border_color(cx.theme().border))
   }
 
-  fn render_switch_repository(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
-    let count_items = self
-      .repositories_list
-      .read(cx)
-      .delegate()
-      .matched_repositories
-      .len();
-
-    v_flex().h_full().child(self.render_search_list(
-      &self.repositories_list,
-      count_items,
-      "Search repositories...",
-      cx,
-    ))
+  fn render_root(&mut self, _cx: &mut Context<Self>) -> impl IntoElement {
+    self.render_search_list(&self.commands_list, "Search commands...")
   }
 
-  fn render_forget_repository(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
-    let count_items = self
-      .repositories_list
-      .read(cx)
-      .delegate()
-      .matched_repositories
-      .len();
-
-    v_flex().h_full().child(self.render_search_list(
-      &self.repositories_list,
-      count_items,
-      "Select repository to forget...",
-      cx,
-    ))
+  fn render_switch_repository(&mut self, _cx: &mut Context<Self>) -> impl IntoElement {
+    self.render_search_list(&self.repositories_list, "Search repositories...")
   }
 
-  fn render_switch_branch(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
-    let count_items = self
-      .branches_with_commands_list
-      .read(cx)
-      .delegate()
-      .matched_branches_and_commands
-      .len();
+  fn render_forget_repository(&mut self, _cx: &mut Context<Self>) -> impl IntoElement {
+    self.render_search_list(&self.repositories_list, "Select repository to forget...")
+  }
 
-    v_flex().h_full().child(self.render_search_list(
-      &self.branches_with_commands_list,
-      count_items,
-      "Search branches...",
-      cx,
-    ))
+  fn render_switch_branch(&mut self, _cx: &mut Context<Self>) -> impl IntoElement {
+    self.render_search_list(&self.branches_with_commands_list, "Search branches...")
   }
 
   fn render_create_branch(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
-    v_flex()
-      .gap_3()
-      .child(Input::new(&self.create_branch_input).border_color(cx.theme().border))
+    self.render_input_screen(&self.create_branch_input, cx)
   }
 
   fn render_checkout_detached(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
-    v_flex()
-      .gap_3()
-      .child(Input::new(&self.checkout_detached_input).border_color(cx.theme().border))
+    self.render_input_screen(&self.checkout_detached_input, cx)
   }
 
   fn render_cherry_pick(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
-    v_flex()
-      .gap_3()
-      .child(Input::new(&self.cherry_pick_input).border_color(cx.theme().border))
+    self.render_input_screen(&self.cherry_pick_input, cx)
   }
 
   fn render_stash(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
-    v_flex()
-      .gap_3()
-      .child(Input::new(&self.stash_input).border_color(cx.theme().border))
+    self.render_input_screen(&self.stash_input, cx)
   }
 
   fn render_stash_include_untracked(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
     self.render_stash(cx)
   }
 
-  fn render_select_stash(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
-    let count_stashes = self.stashes_list.read(cx).delegate().matched_stashes.len();
-
-    v_flex().h_full().child(self.render_search_list(
-      &self.stashes_list,
-      count_stashes,
-      "Search stashes...",
-      cx,
-    ))
+  fn render_select_stash(&mut self, _cx: &mut Context<Self>) -> impl IntoElement {
+    self.render_search_list(&self.stashes_list, "Search stashes...")
   }
 
   fn render_apply_stash(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
@@ -3135,59 +3025,25 @@ impl CommandPalette {
     self.render_select_stash(cx)
   }
 
-  fn render_delete_branch(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
-    let count_branches = self
-      .delete_branches_list
-      .read(cx)
-      .delegate()
-      .matched_branches
-      .len();
-
-    v_flex().h_full().child(self.render_search_list(
-      &self.delete_branches_list,
-      count_branches,
-      "Select branch to delete...",
-      cx,
-    ))
+  fn render_delete_branch(&mut self, _cx: &mut Context<Self>) -> impl IntoElement {
+    self.render_search_list(&self.delete_branches_list, "Select branch to delete...")
   }
 
   fn render_merge_branch(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
-    let count_branches = self
-      .branches_list
-      .read(cx)
-      .delegate()
-      .matched_branches
-      .len();
     let command = self.selected_branch_git_command(&self.branches_list, cx);
 
     v_flex()
-      .h_full()
-      .child(self.render_search_list_with_sections_and_attached_footer(
-        &self.branches_list,
-        count_branches,
-        0,
-        "Search branches...",
-        command.is_some(),
-        cx,
-      ))
+      .child(self.render_search_list(&self.branches_list, "Search branches..."))
       .when_some(command, |this, command| {
         this.child(self.render_git_command_preview(command, cx))
       })
   }
 
-  fn render_interactive_rebase_mode(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
-    let count_modes = self
-      .interactive_rebase_mode_list
-      .read(cx)
-      .delegate()
-      .matched_total_count();
-
-    v_flex().h_full().child(self.render_search_list(
+  fn render_interactive_rebase_mode(&mut self, _cx: &mut Context<Self>) -> impl IntoElement {
+    self.render_search_list(
       &self.interactive_rebase_mode_list,
-      count_modes,
       "Select interactive rebase mode...",
-      cx,
-    ))
+    )
   }
 
   fn render_interactive_rebase_branch(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
@@ -3203,55 +3059,85 @@ impl CommandPalette {
     let command = Self::interactive_rebase_head_count_git_command(&command);
 
     v_flex()
-      .gap_3()
-      .child(Input::new(&self.interactive_rebase_head_count_input).border_color(cx.theme().border))
+      .child(self.render_input_screen(&self.interactive_rebase_head_count_input, cx))
       .child(self.render_git_command_preview(command, cx))
   }
 
   fn render_rebase_branch(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
-    let count_branches = self
-      .rebase_branches_list
-      .read(cx)
-      .delegate()
-      .matched_branches
-      .len();
     let command = self.selected_branch_git_command(&self.rebase_branches_list, cx);
 
     v_flex()
-      .h_full()
-      .child(self.render_search_list_with_sections_and_attached_footer(
-        &self.rebase_branches_list,
-        count_branches,
-        0,
-        "Search base branches...",
-        command.is_some(),
-        cx,
-      ))
+      .child(self.render_search_list(&self.rebase_branches_list, "Search base branches..."))
       .when_some(command, |this, command| {
         this.child(self.render_git_command_preview(command, cx))
       })
   }
 
   fn render_open_github_from_url(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
-    v_flex()
-      .gap_3()
-      .child(Input::new(&self.open_github_url_input).border_color(cx.theme().border))
+    self.render_input_screen(&self.open_github_url_input, cx)
   }
 
-  fn render_create_branch_from(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
-    let count_branches = self
-      .branches_list
-      .read(cx)
-      .delegate()
-      .matched_branches
-      .len();
+  fn render_create_branch_from(&mut self, _cx: &mut Context<Self>) -> impl IntoElement {
+    self.render_search_list(&self.branches_list, "Search branches...")
+  }
 
-    v_flex().h_full().child(self.render_search_list(
-      &self.branches_list,
-      count_branches,
-      "Search branches...",
-      cx,
-    ))
+  fn footer_key_hints(screen: CommandPaletteScreen) -> (bool, &'static str) {
+    match screen {
+      CommandPaletteScreen::Root => (true, "run"),
+      CommandPaletteScreen::SwitchRepository
+      | CommandPaletteScreen::ForgetRepository
+      | CommandPaletteScreen::SwitchBranch
+      | CommandPaletteScreen::DeleteBranch
+      | CommandPaletteScreen::MergeBranch
+      | CommandPaletteScreen::RebaseBranch
+      | CommandPaletteScreen::InteractiveRebaseMode
+      | CommandPaletteScreen::InteractiveRebaseBranch
+      | CommandPaletteScreen::InteractiveRebaseEditBranch
+      | CommandPaletteScreen::ApplyStash
+      | CommandPaletteScreen::DropStash
+      | CommandPaletteScreen::PopStash
+      | CommandPaletteScreen::CreateBranchFrom => (true, "select"),
+      CommandPaletteScreen::CheckoutDetached
+      | CommandPaletteScreen::CreateBranch
+      | CommandPaletteScreen::InteractiveRebaseHeadCount
+      | CommandPaletteScreen::CherryPick
+      | CommandPaletteScreen::Stash
+      | CommandPaletteScreen::StashIncludeUntracked
+      | CommandPaletteScreen::OpenGithubFromUrl => (false, "confirm"),
+    }
+  }
+
+  fn render_footer(&self, cx: &Context<Self>) -> impl IntoElement {
+    let theme = cx.theme();
+    let key = |label: &'static str| {
+      div()
+        .px_1()
+        .rounded_sm()
+        .bg(theme.muted)
+        .text_color(theme.muted_foreground)
+        .child(label)
+    };
+    let (navigable, enter_label) = Self::footer_key_hints(self.screen);
+
+    h_flex()
+      .px_3()
+      .py_2()
+      .gap_4()
+      .border_t_1()
+      .border_color(theme.border)
+      .text_xs()
+      .text_color(theme.muted_foreground)
+      .when(navigable, |this| {
+        this.child(
+          h_flex()
+            .gap_1()
+            .child(key("↑"))
+            .child(key("↓"))
+            .child("navigate"),
+        )
+      })
+      .child(h_flex().gap_1().child(key("↵")).child(enter_label))
+      .child(h_flex().gap_1().child(key("esc")).child("close"))
   }
 }
 
@@ -3307,14 +3193,32 @@ impl Render for CommandPalette {
         .into_any_element(),
     };
 
-    div()
-      .max_h_128()
+    v_flex()
       .key_context(COMMAND_PALETTE_CONTEXT)
       .track_focus(&self.focus_handle)
-      .child(content)
-      .h_full()
       .text_color(theme.foreground)
+      .child(content)
+      .child(self.render_footer(cx))
   }
+}
+
+pub fn open_command_palette_dialog(
+  palette: Entity<CommandPalette>,
+  window: &mut Window,
+  cx: &mut App,
+) {
+  window.open_dialog(cx, move |dialog, _, _| {
+    dialog
+      .on_ok(|_, _, _| false)
+      .w(px(PALETTE_WIDTH))
+      .p_0()
+      .gap_0()
+      .min_h_0()
+      .overlay_closable(true)
+      .keyboard(true)
+      .close_button(false)
+      .child(palette.clone())
+  });
 }
 
 #[cfg(test)]
@@ -3326,6 +3230,30 @@ mod tests {
   };
   use std::rc::Rc;
   use std::sync::Arc;
+
+  #[test]
+  fn footer_hints_match_screen_kind() {
+    assert_eq!(
+      CommandPalette::footer_key_hints(CommandPaletteScreen::Root),
+      (true, "run")
+    );
+    assert_eq!(
+      CommandPalette::footer_key_hints(CommandPaletteScreen::SwitchBranch),
+      (true, "select")
+    );
+    assert_eq!(
+      CommandPalette::footer_key_hints(CommandPaletteScreen::MergeBranch),
+      (true, "select")
+    );
+    assert_eq!(
+      CommandPalette::footer_key_hints(CommandPaletteScreen::CreateBranch),
+      (false, "confirm")
+    );
+    assert_eq!(
+      CommandPalette::footer_key_hints(CommandPaletteScreen::Stash),
+      (false, "confirm")
+    );
+  }
 
   #[test]
   fn interactive_rebase_variants_have_interactive_rebase_as_recents_parent() {

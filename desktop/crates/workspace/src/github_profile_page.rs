@@ -17,7 +17,7 @@ use smol::unblock;
 
 use ui::{
   CommandPalette, CommandPaletteAction, CommandPaletteCommand, CommandPaletteConfig,
-  CommandPaletteHandler, CommandPalettePage, StatusThemeExt as _, UiIconName, WindowExt,
+  CommandPaletteHandler, CommandPalettePage, StatusThemeExt as _, UiIconName,
 };
 
 use crate::{
@@ -245,19 +245,7 @@ impl GithubProfilePage {
 
     let config = CommandPaletteConfig::new(Vec::new(), commands, handler);
     let palette = cx.new(|cx| CommandPalette::new(window, cx, config));
-    let palette_for_dialog = palette.clone();
-
-    window.open_dialog(cx, move |dialog, _, _| {
-      dialog
-        .on_ok(|_, _, _| false)
-        .p_0()
-        .border_0()
-        .min_h_0()
-        .overlay_closable(true)
-        .keyboard(true)
-        .close_button(false)
-        .child(palette_for_dialog.clone())
-    });
+    ui::open_command_palette_dialog(palette, window, cx);
   }
 
   fn show_command_palette_action(
