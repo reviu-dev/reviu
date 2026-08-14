@@ -16,7 +16,8 @@ use std::collections::HashSet;
 
 use crate::config::ConfigStore;
 use crate::{
-  AcceptBothConflict, AddSelectionToAgent, CloseWorkspacePage, CommentHunk, CommitChanges,
+  AcceptBothConflict, AddSelectionToAgent, CloseFileView, CloseWorkspacePage, CommentHunk,
+  CommitChanges,
   FocusFileTree, ForcePushChanges, MarkNotificationDone, NavigateBack, NextAnnotation, NextPageTab,
   NextPrCommit, NextReviewComment, OpenGitChangesSidebar, OpenGitHistorySidebar, OpenGitPage,
   OpenGithubPage, OpenRepository, OpenSettingsPage, PreviousAnnotation, PreviousPageTab,
@@ -57,6 +58,7 @@ const COMMIT_CHANGES_DESCENDANT_FOCUS: &str = "CommitInput";
 const PULL_CHANGES_CONTEXT: &str = "WorkspaceGit";
 const PUSH_CHANGES_CONTEXT: &str = "WorkspaceGit";
 const FORCE_PUSH_CHANGES_CONTEXT: &str = "WorkspaceGit";
+const WORKSPACE_SESSION_CONTEXT_NAME: &str = "WorkspaceSession";
 const CLOSE_WORKSPACE_PAGE_CONTEXT: &str =
   "WorkspaceBilling || WorkspaceGitConfig || WorkspaceSettings || WorkspaceAbout";
 const OPEN_SETTINGS_CONTEXT: &str = "Workspace";
@@ -115,6 +117,8 @@ const REFRESHABLE_PAGE_ACTIVE_CONTEXTS: [&str; 7] = [
 ];
 
 const GIT_ONLY_ACTIVE_CONTEXTS: [&str; 1] = [WORKSPACE_GIT_CONTEXT];
+
+const SESSION_ONLY_ACTIVE_CONTEXTS: [&str; 1] = [WORKSPACE_SESSION_CONTEXT];
 
 const GIT_AND_SESSION_ACTIVE_CONTEXTS: [&str; 2] =
   [WORKSPACE_GIT_CONTEXT, WORKSPACE_SESSION_CONTEXT];
@@ -175,6 +179,7 @@ pub enum ShortcutId {
   PushChanges,
   ForcePushChanges,
   CloseWorkspacePage,
+  CloseFileView,
   OpenSettingsPage,
   ToggleTerminalSidebar,
   ShowBranchSwitcher,
@@ -219,6 +224,7 @@ impl ShortcutId {
       ShortcutId::PushChanges => "push_changes",
       ShortcutId::ForcePushChanges => "force_push_changes",
       ShortcutId::CloseWorkspacePage => "close_workspace_page",
+      ShortcutId::CloseFileView => "close_file_view",
       ShortcutId::OpenSettingsPage => "open_settings_page",
       ShortcutId::ToggleTerminalSidebar => "toggle_terminal_sidebar",
       ShortcutId::ShowBranchSwitcher => "show_branch_switcher",
@@ -263,6 +269,7 @@ impl ShortcutId {
       "push_changes" => Some(ShortcutId::PushChanges),
       "force_push_changes" => Some(ShortcutId::ForcePushChanges),
       "close_workspace_page" => Some(ShortcutId::CloseWorkspacePage),
+      "close_file_view" => Some(ShortcutId::CloseFileView),
       "open_settings_page" => Some(ShortcutId::OpenSettingsPage),
       "toggle_terminal_sidebar" => Some(ShortcutId::ToggleTerminalSidebar),
       "show_branch_switcher" => Some(ShortcutId::ShowBranchSwitcher),
@@ -316,7 +323,7 @@ pub struct ShortcutDefinition {
   pub active_contexts: &'static [&'static str],
 }
 
-const SHORTCUT_DEFINITIONS: [ShortcutDefinition; 39] = [
+const SHORTCUT_DEFINITIONS: [ShortcutDefinition; 40] = [
   ShortcutDefinition {
     id: ShortcutId::ShowCommandPalette,
     title: "Command Palette",
@@ -746,6 +753,17 @@ const SHORTCUT_DEFINITIONS: [ShortcutDefinition; 39] = [
     display_context: WORKSPACE_SETTINGS_CONTEXT,
     active_contexts: &SECONDARY_PAGE_ACTIVE_CONTEXTS,
   },
+  ShortcutDefinition {
+    id: ShortcutId::CloseFileView,
+    title: "Close File View",
+    description: "Close the open file and go back to the conversation.",
+    scope_label: "Sessions page",
+    category: ShortcutCategory::App,
+    keystroke: "escape",
+    context: WORKSPACE_SESSION_CONTEXT_NAME,
+    display_context: WORKSPACE_SESSION_CONTEXT,
+    active_contexts: &SESSION_ONLY_ACTIVE_CONTEXTS,
+  },
 ];
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -1041,6 +1059,7 @@ impl ShortcutDefinition {
       ShortcutId::CloseWorkspacePage => {
         KeyBinding::new(keystroke, CloseWorkspacePage, Some(&context))
       }
+      ShortcutId::CloseFileView => KeyBinding::new(keystroke, CloseFileView, Some(&context)),
       ShortcutId::OpenSettingsPage => KeyBinding::new(keystroke, OpenSettingsPage, Some(&context)),
       ShortcutId::ToggleTerminalSidebar => {
         KeyBinding::new(keystroke, ToggleTerminalSidebar, Some(&context))
@@ -1445,6 +1464,7 @@ fn with_shortcut_action<T>(id: ShortcutId, f: impl FnOnce(&dyn Action) -> T) -> 
     ShortcutId::PushChanges => f(&PushChanges),
     ShortcutId::ForcePushChanges => f(&ForcePushChanges),
     ShortcutId::CloseWorkspacePage => f(&CloseWorkspacePage),
+    ShortcutId::CloseFileView => f(&CloseFileView),
     ShortcutId::OpenSettingsPage => f(&OpenSettingsPage),
     ShortcutId::ToggleTerminalSidebar => f(&ToggleTerminalSidebar),
     ShortcutId::ShowBranchSwitcher => f(&ShowBranchSwitcher),

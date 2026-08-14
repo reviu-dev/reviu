@@ -5,6 +5,7 @@ actions!(
   [
     NavigateBack,
     CloseWorkspacePage,
+    CloseFileView,
     OpenGitPage,
     OpenGithubPage,
     OpenSessionPage,
