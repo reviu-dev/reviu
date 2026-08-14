@@ -177,6 +177,20 @@ impl ReviewPanel {
         .auto_grow(1, 5)
         .placeholder("Commit message...")
     });
+    // cmd-enter from inside the input commits, matching the Git page.
+    cx.subscribe_in(
+      &commit_input,
+      window,
+      |this, _state, event: &gpui_component::input::InputEvent, _window, cx| {
+        if let gpui_component::input::InputEvent::PressEnter {
+          secondary: true, ..
+        } = event
+        {
+          this.commit(cx);
+        }
+      },
+    )
+    .detach();
 
     let mut panel = Self {
       focus_handle: cx.focus_handle(),
@@ -438,15 +452,21 @@ impl ReviewPanel {
       .into_any_element()
   }
 
-  fn render_commit_zone(&self, cx: &mut Context<Self>) -> AnyElement {
+  fn render_commit_zone(&self, window: &Window, cx: &mut Context<Self>) -> AnyElement {
     let theme = cx.theme().clone();
     let can_commit = !self.committing
       && !self.status_entries.is_empty()
       && !self.commit_input.read(cx).value().trim().is_empty();
+    let show_generate = AuthStateStore::get(cx).has_pro_access();
+    let commit_shortcut = crate::shortcuts::resolved_display_shortcut_keystroke_in(
+      cx,
+      window,
+      crate::shortcuts::ShortcutId::CommitChanges,
+    );
 
     v_flex()
       .gap_2()
-      .p_3()
+      .p_2()
       .border_t_1()
       .border_color(theme.border)
       .when_some(self.last_error.clone(), |this, error| {
@@ -457,33 +477,38 @@ impl ReviewPanel {
             .child(error),
         )
       })
-      .child(
-        h_flex()
-          .items_end()
-          .gap_2()
-          .child(div().flex_1().child(Textarea::new(&self.commit_input).w_full()))
-          .child(
-            Button::new("review-panel-generate-message")
-              .icon(UiIconName::Sparkles)
-              .ghost()
-              .compact()
-              .small()
-              .loading(self.generating_message)
-              .disabled(self.generating_message || self.status_entries.is_empty())
-              .tooltip("Generate commit message")
-              .on_click(cx.listener(|this, _, _, cx| this.generate_commit_message(cx))),
-          ),
-      )
+      .child(div().w_full().min_w_0().key_context("CommitInput").child({
+        let commit_box = Textarea::new(&self.commit_input).w_full();
+        if show_generate {
+          div()
+            .relative()
+            .w_full()
+            .child(commit_box)
+            .child(
+              div().absolute().top_1().right_1().child(
+                Button::new("review-panel-generate-message")
+                  .icon(UiIconName::Sparkles)
+                  .ghost()
+                  .small()
+                  .loading(self.generating_message)
+                  .disabled(self.generating_message || self.status_entries.is_empty())
+                  .tooltip("Generate commit message")
+                  .on_click(cx.listener(|this, _, _, cx| this.generate_commit_message(cx))),
+              ),
+            )
+            .into_any_element()
+        } else {
+          commit_box.into_any_element()
+        }
+      }))
       .child(
         Button::new("review-panel-commit")
-          .primary()
+          .label("Commit")
+          .with_variant(gpui_component::button::ButtonVariant::Secondary)
+          .outline()
           .small()
           .w_full()
-          .label(if self.committing {
-            "Committing..."
-          } else {
-            "Commit"
-          })
+          .child(gpui_component::kbd::Kbd::new(commit_shortcut).ml_1())
           .loading(self.committing)
           .disabled(!can_commit)
           .on_click(cx.listener(|this, _, _, cx| this.commit(cx))),
@@ -888,10 +913,11 @@ impl Render for ReviewPanel {
       .min_h_0()
       .bg(theme.sidebar)
       .track_focus(&self.focus_handle)
+      .on_action(cx.listener(|this, _: &crate::CommitChanges, _, cx| this.commit(cx)))
       .child(header)
       .child(body);
     if self.active_tab == ReviewPanelTab::Changes {
-      panel = panel.child(self.render_commit_zone(cx));
+      panel = panel.child(self.render_commit_zone(_window, cx));
     }
     panel
   }
