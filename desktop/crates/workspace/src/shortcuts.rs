@@ -52,7 +52,7 @@ pub const WORKSPACE_ABOUT_CONTEXT: &str = "Workspace WorkspaceAbout";
 const FILE_SEARCH_CONTEXT: &str =
   "WorkspaceGit || WorkspaceGithubRepoCode || WorkspaceGithubPrChanges || WorkspaceSession";
 const OPEN_REPOSITORY_CONTEXT: &str = "WorkspaceGit";
-const COMMIT_CHANGES_CONTEXT: &str = "WorkspaceGit";
+const COMMIT_CHANGES_CONTEXT: &str = "WorkspaceGit || WorkspaceSession";
 const COMMIT_CHANGES_DESCENDANT_FOCUS: &str = "CommitInput";
 const PULL_CHANGES_CONTEXT: &str = "WorkspaceGit";
 const PUSH_CHANGES_CONTEXT: &str = "WorkspaceGit";
@@ -634,7 +634,7 @@ const SHORTCUT_DEFINITIONS: [ShortcutDefinition; 39] = [
     keystroke: "cmd-enter",
     context: COMMIT_CHANGES_CONTEXT,
     display_context: WORKSPACE_GIT_CONTEXT,
-    active_contexts: &GIT_ONLY_ACTIVE_CONTEXTS,
+    active_contexts: &GIT_AND_SESSION_ACTIVE_CONTEXTS,
   },
   ShortcutDefinition {
     id: ShortcutId::PullChanges,
