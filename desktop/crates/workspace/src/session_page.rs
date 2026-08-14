@@ -1074,8 +1074,6 @@ impl SessionPage {
       .min_w(px(0.0))
       .min_h_0()
       .bg(theme.sidebar)
-      .border_r_1()
-      .border_color(theme.border)
       .child(header)
       .child(
         div()

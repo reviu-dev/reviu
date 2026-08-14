@@ -878,8 +878,6 @@ impl Render for ReviewPanel {
       .min_w(px(0.0))
       .min_h_0()
       .bg(theme.sidebar)
-      .border_l_1()
-      .border_color(theme.border)
       .track_focus(&self.focus_handle)
       .child(header)
       .child(body);
