@@ -32,6 +32,7 @@ use gfm_markdown_viewer::{
   LinkAction, MarkdownRenderOptions, SyntaxHighlightCache, render_markdown,
 };
 use gpui::Anchor;
+use gpui::AnimationExt as _;
 use gpui::{
   AnyElement, App, Context, Empty, Entity, EntityInputHandler as _, FocusHandle, Focusable, Font,
   FontStyle, FontWeight, Hsla, IntoElement, MouseButton, ParentElement, Render, SharedString,
@@ -44,7 +45,6 @@ use gpui_component::{
   input::{self, InputEvent, Textarea, TextareaState},
   menu::{DropdownMenu as _, PopupMenuItem},
   scroll::ScrollableElement as _,
-  spinner::Spinner,
   v_flex,
 };
 use syntax::{HighlightSpan, SyntaxHighlighter, SyntaxTheme, highlights_to_text_runs, languages};
@@ -783,8 +783,19 @@ impl AgentChatPanel {
           .small()
           .text_color(label_color),
       )
-      .child(Spinner::new().xsmall().color(label_color))
-      .child(div().text_xs().text_color(label_color).child(verb));
+      .child(
+        div()
+          .text_xs()
+          .text_color(label_color)
+          .child(verb)
+          .with_animation(
+            "agent-chat-thinking-pulse",
+            gpui::Animation::new(std::time::Duration::from_millis(1400))
+              .repeat()
+              .with_easing(gpui::pulsating_between(0.35, 1.0)),
+            |label, delta| label.opacity(delta),
+          ),
+      );
     if let Some(e) = elapsed_label {
       row = row.child(div().text_xs().text_color(theme.muted_foreground).child(e));
     }
@@ -832,23 +843,25 @@ impl AgentChatPanel {
     let has_continuation_trailer =
       matches!(self.extras_after_kind(), Some(ExtraAfterKind::Generating));
     let total = self.items.len();
-    let next_is_user = self
+    // The timeline rail stops when the next item starts a new visual group:
+    // a user-authored message or a checkpoint divider.
+    let next_starts_new_group = self
       .items
       .get(idx + 1)
       .map(|i| {
         matches!(
           i,
           ChatItem::Message(ChatMessage {
-            role: ChatRole::User,
+            role: ChatRole::User | ChatRole::ReviewExport,
             ..
-          })
+          }) | ChatItem::Checkpoint(_)
         )
       })
       .unwrap_or(false);
     let is_end_of_group = if idx + 1 == total {
       !has_continuation_trailer
     } else {
-      next_is_user
+      next_starts_new_group
     };
     let is_last_row = is_end_of_group;
 
@@ -2551,6 +2564,14 @@ fn render_plan(plan: &PlanView, theme: &gpui_component::Theme) -> gpui::AnyEleme
   col.into_any_element()
 }
 
+/// First non-empty line of a thought, cleaned of markdown emphasis markers.
+fn thought_preview(text: &str) -> Option<String> {
+  let line = text.lines().map(str::trim).find(|line| !line.is_empty())?;
+  let cleaned = line.replace("**", "").replace('`', "");
+  let preview: String = cleaned.trim().chars().take(80).collect();
+  (!preview.is_empty()).then_some(preview)
+}
+
 fn render_thought(
   idx: usize,
   thought: &ThoughtView,
@@ -2563,55 +2584,46 @@ fn render_thought(
   } else {
     IconName::ChevronDown
   };
-  let preview: SharedString = thought
-    .text
-    .lines()
-    .next()
-    .unwrap_or("")
-    .chars()
-    .take(80)
-    .collect::<String>()
-    .into();
-  let toggle_id = SharedString::from(format!("agent-chat-thought-toggle-{idx}"));
-  let body_text = thought.text.clone();
+  let preview = thought.text.as_str();
+  let header_label: SharedString = match (collapsed, thought_preview(preview)) {
+    (true, Some(preview)) => format!("Thought · {preview}").into(),
+    _ => "Thought".into(),
+  };
+  let body_text = thought.text.trim().to_string();
   v_flex()
     .gap_1()
     .child(
       h_flex()
         .id(SharedString::from(format!("agent-chat-thought-{idx}")))
-        .gap_2()
+        .gap_1p5()
         .items_center()
         .cursor_pointer()
+        .rounded(theme.radius)
+        .hover(|s| s.bg(theme.secondary_hover))
         .on_click(cx.listener(move |panel, _, _, cx| panel.toggle_thought_collapsed(idx, cx)))
         .child(
           gpui_component::Icon::new(icon)
-            .small()
+            .size_3()
             .text_color(theme.muted_foreground),
         )
         .child(
           div()
             .text_xs()
             .text_color(theme.muted_foreground)
-            .child(if collapsed {
-              SharedString::from(format!("Thought: {preview}"))
-            } else {
-              SharedString::from("Thought")
-            }),
+            .truncate()
+            .child(header_label),
         )
-        .child(div().flex_1())
-        .child(Button::new(toggle_id).xsmall().ghost().label(if collapsed {
-          "Expand"
-        } else {
-          "Collapse"
-        }))
         .into_any_element(),
     )
-    .when(!collapsed, |this| {
+    .when(!collapsed && !body_text.is_empty(), |this| {
+      let md_options =
+        MarkdownRenderOptions::with_on_link(Arc::new(|_url, _window, _cx| LinkAction::Open));
       this.child(
         div()
+          .pl_4()
           .text_xs()
           .text_color(theme.muted_foreground)
-          .child(body_text),
+          .child(render_markdown(&body_text, &md_options, cx)),
       )
     })
     .into_any_element()
@@ -3771,6 +3783,16 @@ mod tests {
       Some("claude-opus-5")
     );
     assert_eq!(model_choice_from_settings(&settings, "unknown"), None);
+  }
+
+  #[test]
+  fn thought_preview_skips_blank_lines_and_strips_emphasis() {
+    assert_eq!(
+      thought_preview("\n\n**Planning readme inspection strategy**\ndetails"),
+      Some("Planning readme inspection strategy".to_string())
+    );
+    assert_eq!(thought_preview("   \n\n  "), None);
+    assert_eq!(thought_preview(""), None);
   }
 
   #[test]
