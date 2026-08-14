@@ -40,7 +40,8 @@ use crate::workspace::WorkspaceApi;
 use crate::file_search_palette::open_file_search_palette;
 use crate::file_view::{BinaryPreview, build_binary_preview, render_binary_preview, render_file_title};
 use crate::{
-  CloseWorkspacePage, CommentHunk, SendReviewCommentsToAgent, ShowCommandPalette, ShowFileSearch,
+  CloseFileView, CloseWorkspacePage, CommentHunk, SendReviewCommentsToAgent, ShowCommandPalette,
+  ShowFileSearch,
 };
 use ui::{
   Button, ButtonVariants as _, CommandPalette, CommandPaletteAction, CommandPaletteCommand,
@@ -901,6 +902,19 @@ impl SessionPage {
     NavigationHistory::navigate_back(cx);
   }
 
+  fn close_file_view_action(
+    &mut self,
+    _: &CloseFileView,
+    window: &mut Window,
+    cx: &mut Context<Self>,
+  ) {
+    if self.center != CenterView::Diff {
+      return;
+    }
+    self.close_diff(window, cx);
+    cx.stop_propagation();
+  }
+
   fn show_command_palette_action(
     &mut self,
     _: &ShowCommandPalette,
@@ -1463,6 +1477,7 @@ impl Render for SessionPage {
       .min_h_0()
       .track_focus(&self.focus_handle)
       .on_action(cx.listener(Self::close_workspace_page_action))
+      .on_action(cx.listener(Self::close_file_view_action))
       .on_action(cx.listener(Self::show_command_palette_action))
       .on_action(cx.listener(Self::show_file_search_action))
       .on_action(cx.listener(Self::send_review_comments_to_agent_action))
