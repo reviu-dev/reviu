@@ -1472,8 +1472,7 @@ impl AgentChatPanel {
       ref_name,
       created_at_secs: now_secs(),
     });
-    let insert_ix = checkpoint_insert_index(&self.items);
-    self.items.insert(insert_ix, marker);
+    place_checkpoint_marker(&mut self.items, marker);
     self.rebuild_tool_index();
     self.persist_state();
     self.sync_list_count();
@@ -2116,6 +2115,42 @@ fn strip_effort_suffix(name: &str) -> &str {
     &trimmed[..open]
   } else {
     name
+  }
+}
+
+/// One menu entry per base model: adapters list every model x effort combo
+/// ("GPT-5.6-Sol (low)", "(medium)", ...) while the effort has its own selector.
+/// Selecting a group picks its first variant (the model's default effort).
+fn deduped_model_entries(
+  models: &[ModelInfo],
+  current_id: Option<&ModelId>,
+) -> Vec<(String, ModelId, Option<String>, bool)> {
+  let mut entries: Vec<(String, ModelId, Option<String>, bool)> = Vec::new();
+  for model in models {
+    let label = strip_effort_suffix(&model.name).to_string();
+    let is_current = current_id == Some(&model.model_id);
+    if let Some(existing) = entries.iter_mut().find(|(existing, ..)| *existing == label) {
+      existing.3 |= is_current;
+    } else {
+      entries.push((
+        label,
+        model.model_id.clone(),
+        model.description.clone(),
+        is_current,
+      ));
+    }
+  }
+  entries
+}
+
+/// Insert the marker before the prompt it snapshots; a marker already sitting
+/// there (e.g. right after a rollback) is replaced instead of stacked.
+fn place_checkpoint_marker(items: &mut Vec<ChatItem>, marker: ChatItem) {
+  let insert_ix = checkpoint_insert_index(items);
+  if insert_ix > 0 && matches!(items.get(insert_ix - 1), Some(ChatItem::Checkpoint(_))) {
+    items[insert_ix - 1] = marker;
+  } else {
+    items.insert(insert_ix, marker);
   }
 }
 
@@ -3208,12 +3243,12 @@ impl AgentChatPanel {
           .label("Select a model")
           .max_h(px(360.))
           .scrollable(true);
-        for m in models.iter() {
-          let model_id = m.model_id.clone();
+        for (label, model_id, description, is_current) in
+          deduped_model_entries(&models, current_id.as_ref())
+        {
           let entity = entity.clone();
-          let is_current = current_id.as_ref() == Some(&model_id);
-          let label_text: SharedString = m.name.clone().into();
-          let description: Option<SharedString> = m.description.clone().map(Into::into);
+          let label_text: SharedString = label.into();
+          let description: Option<SharedString> = description.map(Into::into);
           menu = menu.item(
             PopupMenuItem::element(move |_, cx| {
               render_selector_item(label_text.clone(), description.clone(), is_current, cx)
@@ -3587,6 +3622,58 @@ mod tests {
     items.truncate(keep_len);
     let index = tool_index_for_items(&items);
     assert!(index.is_empty());
+  }
+
+  #[test]
+  fn place_checkpoint_marker_replaces_trailing_marker_instead_of_stacking() {
+    // After a rollback the marker is the last item; the next prompt's checkpoint
+    // must replace it, not stack a second divider.
+    let mut items = vec![
+      user_message("first"),
+      agent_message("done"),
+      checkpoint_marker("refs/reviu/checkpoints/s/1"),
+      user_message("second"),
+    ];
+    // The new prompt "second" was just pushed; its checkpoint lands before it.
+    place_checkpoint_marker(&mut items, checkpoint_marker("refs/reviu/checkpoints/s/2"));
+    assert_eq!(items.len(), 4);
+    assert!(
+      matches!(&items[2], ChatItem::Checkpoint(marker) if marker.ref_name == "refs/reviu/checkpoints/s/2")
+    );
+
+    // No marker before the prompt: a fresh one is inserted.
+    let mut items = vec![user_message("first")];
+    place_checkpoint_marker(&mut items, checkpoint_marker("refs/reviu/checkpoints/s/3"));
+    assert_eq!(items.len(), 2);
+    assert!(matches!(&items[0], ChatItem::Checkpoint(_)));
+  }
+
+  #[test]
+  fn deduped_model_entries_collapses_effort_variants() {
+    let model = |id: &str, name: &str, description: &str| {
+      let arc: std::sync::Arc<str> = std::sync::Arc::from(id);
+      let mut info = ModelInfo::new(ModelId::new(arc), name.to_string());
+      info.description = Some(description.to_string());
+      info
+    };
+    let models = vec![
+      model("sol-low", "GPT-5.6-Sol (low)", "Fast"),
+      model("sol-high", "GPT-5.6-Sol (high)", "Deep"),
+      model("terra-low", "GPT-5.6-Terra (low)", "Balanced"),
+    ];
+    let current: std::sync::Arc<str> = std::sync::Arc::from("sol-high");
+    let current = ModelId::new(current);
+
+    let entries = deduped_model_entries(&models, Some(&current));
+
+    assert_eq!(entries.len(), 2);
+    assert_eq!(entries[0].0, "GPT-5.6-Sol");
+    // Click target is the first variant of the group (the model's default effort).
+    assert_eq!(entries[0].1.0.as_ref(), "sol-low");
+    // The group is marked current even though the current id is another variant.
+    assert!(entries[0].3);
+    assert_eq!(entries[1].0, "GPT-5.6-Terra");
+    assert!(!entries[1].3);
   }
 
   #[test]
