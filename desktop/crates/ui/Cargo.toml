@@ -6,6 +6,7 @@ publish.workspace = true
 
 [dependencies]
 gpui = { workspace = true }
+gpui-base = { workspace = true }
 gpui-component = { workspace = true }
 gpui-component-assets = { workspace = true }
 rust-embed = { workspace = true }
