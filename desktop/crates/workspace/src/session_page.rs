@@ -172,6 +172,8 @@ impl SessionPage {
       agent_chat_state_dir().map(|dir| AgentChatPanel::state_dir_for_repo(&dir, &cwd));
     let backend = AgentSettings::load();
     let view = cx.new(|cx| AgentChatPanel::new(backend, cwd, state_dir, window, cx));
+    // The sessions sidebar owns the conversation list; hide the panel's own controls.
+    view.update(cx, |panel, _| panel.set_conversation_controls_visible(false));
     // Sidebar reads conversation state from the panel; re-render when it changes.
     cx.observe(&view, |_, _, cx| cx.notify()).detach();
     cx.subscribe_in(
@@ -738,6 +740,14 @@ impl SessionPage {
     cx.notify();
   }
 
+  fn delete_session(&mut self, id: &str, cx: &mut Context<Self>) {
+    let Some(panel) = self.agent_chat_view.clone() else {
+      return;
+    };
+    panel.update(cx, |panel, cx| panel.delete_conversation(id, cx));
+    cx.notify();
+  }
+
   fn select_session(&mut self, id: &str, window: &mut Window, cx: &mut Context<Self>) {
     self.ensure_agent_chat_view(window, cx);
     let Some(panel) = self.agent_chat_view.clone() else {
@@ -966,11 +976,14 @@ impl SessionPage {
     let rows: Vec<_> = conversations.into_iter().enumerate().map(|(ix, meta)| {
       let is_current = meta.id == current_id;
       let id = meta.id.clone();
+      let delete_id = meta.id.clone();
       let title = session_row_title(&meta);
       let time = format_relative_secs(meta.updated_at_secs, now);
+      let group_name = SharedString::from(format!("session-row-{}", meta.id));
 
       div()
         .id(("session-page-session-row", ix))
+        .group(group_name.clone())
         .mx_2()
         .px_2()
         .py_1p5()
@@ -998,7 +1011,21 @@ impl SessionPage {
               div()
                 .text_xs()
                 .text_color(theme.muted_foreground)
+                .group_hover(group_name.clone(), |this| this.opacity(0.0))
                 .child(time),
+            )
+            .child(
+              Button::new(("session-page-session-delete", ix))
+                .icon(UiIconName::Trash)
+                .xsmall()
+                .ghost()
+                .opacity(0.0)
+                .group_hover(group_name.clone(), |this| this.opacity(1.0))
+                .tooltip("Delete session")
+                .on_click(cx.listener(move |this, _, _, cx| {
+                  cx.stop_propagation();
+                  this.delete_session(&delete_id, cx);
+                })),
             ),
         )
     })
