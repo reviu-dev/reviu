@@ -108,7 +108,7 @@ impl BackendConfig {
       command: "npx",
       args: vec![
         "-y".into(),
-        "@agentclientprotocol/claude-agent-acp@0.35.0".into(),
+        "@agentclientprotocol/claude-agent-acp@0.68.0".into(),
       ],
       install_hint: "Requires Node.js. The package is fetched via npx on first run. Sign in with `claude /login` to use your subscription.",
     }

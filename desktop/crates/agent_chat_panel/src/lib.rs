@@ -420,6 +420,7 @@ impl AgentChatPanel {
             panel.available_models = info.available_models;
             panel.current_model_id = info.current_model_id;
             panel.config_options = info.config_options;
+            panel.apply_saved_model_choice(cx);
             if let Some(sid) = info.session_id {
               panel.current_conv.session_id = Some(sid);
               panel.persist_state();
@@ -951,6 +952,8 @@ impl AgentChatPanel {
       ChatItem::Thought(t) => timeline_row(render_thought(idx, t, theme, cx), theme, is_last_row),
       ChatItem::Checkpoint(marker) => {
         let ref_name = marker.ref_name.clone();
+        // A trailing marker has nothing after it to undo.
+        let can_roll_back = idx + 1 < total;
         div()
           .id(("chat-checkpoint", idx))
           .group("chat-checkpoint-row")
@@ -965,19 +968,21 @@ impl AgentChatPanel {
               .text_color(theme.muted_foreground)
               .child("checkpoint"),
           )
-          .child(
-            gpui_component::button::Button::new(("chat-checkpoint-rollback", idx))
-              .ghost()
-              .compact()
-              .small()
-              .label("Roll back")
-              .tooltip("Restore files and conversation to this point")
-              .on_click(cx.listener(move |_, _, _, cx| {
-                cx.emit(AgentChatPanelEvent::RollbackRequested {
-                  ref_name: ref_name.clone(),
-                });
-              })),
-          )
+          .when(can_roll_back, |this| {
+            this.child(
+              gpui_component::button::Button::new(("chat-checkpoint-rollback", idx))
+                .ghost()
+                .compact()
+                .small()
+                .label("Roll back")
+                .tooltip("Restore files and conversation to this point")
+                .on_click(cx.listener(move |_, _, _, cx| {
+                  cx.emit(AgentChatPanelEvent::RollbackRequested {
+                    ref_name: ref_name.clone(),
+                  });
+                })),
+            )
+          })
           .child(div().flex_1().h_px().bg(theme.border))
           .into_any_element()
       }
@@ -1201,12 +1206,35 @@ impl AgentChatPanel {
     let Some(session) = self.session.clone() else {
       return;
     };
+    persist_model_choice(self.backend_kind, model_id.0.as_ref());
     self.current_model_id = Some(model_id.clone());
     cx.notify();
     cx.spawn(async move |_, _| {
       let _ = session.set_model(model_id).await;
     })
     .detach();
+  }
+
+  /// Reapply the last model the user picked for this backend, if the agent still offers it.
+  fn apply_saved_model_choice(&mut self, cx: &mut Context<Self>) {
+    let Some(saved) = load_model_choice(self.backend_kind) else {
+      return;
+    };
+    if self
+      .current_model_id
+      .as_ref()
+      .is_some_and(|current| current.0.as_ref() == saved)
+    {
+      return;
+    }
+    let Some(model) = self
+      .available_models
+      .iter()
+      .find(|model| model.model_id.0.as_ref() == saved)
+    else {
+      return;
+    };
+    self.set_model(model.model_id.clone(), cx);
   }
 
   fn set_config_option(
@@ -1572,9 +1600,18 @@ impl AgentChatPanel {
                 text: "Authentication required. Sign in below and retry.".into(),
               }));
             } else {
+              let raw = format!("{e}");
+              let text = match humanize_agent_error(&raw) {
+                Some(human) => {
+                  // Full payload stays greppable in the app logs.
+                  eprintln!("[agent] prompt error: {raw}");
+                  format!("[error] {human}")
+                }
+                None => format!("[error] {raw}"),
+              };
               panel.items.push(ChatItem::Message(ChatMessage {
                 role: ChatRole::System,
-                text: format!("[error] {e}"),
+                text,
               }));
             }
           }
@@ -1721,6 +1758,7 @@ impl AgentChatPanel {
             panel.available_models = info.available_models;
             panel.current_model_id = info.current_model_id;
             panel.config_options = info.config_options;
+            panel.apply_saved_model_choice(cx);
             if let Some(sid) = info.session_id {
               panel.current_conv.session_id = Some(sid);
               panel.persist_state();
@@ -1858,16 +1896,64 @@ impl AgentChatPanel {
   }
 }
 
-pub fn persist_choice(kind: BackendKind) {
-  let Some(dir) = dirs::config_dir() else {
+fn agent_settings_path() -> Option<PathBuf> {
+  Some(dirs::config_dir()?.join("reviu").join("agent.json"))
+}
+
+fn read_agent_settings_json() -> serde_json::Value {
+  agent_settings_path()
+    .and_then(|path| std::fs::read_to_string(path).ok())
+    .and_then(|raw| serde_json::from_str(&raw).ok())
+    .unwrap_or_else(|| serde_json::json!({}))
+}
+
+fn write_agent_settings_json(value: &serde_json::Value) {
+  let Some(path) = agent_settings_path() else {
     return;
   };
-  let path = dir.join("reviu").join("agent.json");
   if let Some(parent) = path.parent() {
     let _ = std::fs::create_dir_all(parent);
   }
-  let body = serde_json::json!({ "backend": kind.storage_key() });
-  let _ = std::fs::write(&path, body.to_string());
+  let _ = std::fs::write(&path, value.to_string());
+}
+
+fn settings_with_backend(mut settings: serde_json::Value, key: &str) -> serde_json::Value {
+  settings["backend"] = serde_json::Value::String(key.to_string());
+  settings
+}
+
+fn settings_with_model(
+  mut settings: serde_json::Value,
+  backend_key: &str,
+  model_id: &str,
+) -> serde_json::Value {
+  if !settings["models"].is_object() {
+    settings["models"] = serde_json::json!({});
+  }
+  settings["models"][backend_key] = serde_json::Value::String(model_id.to_string());
+  settings
+}
+
+fn model_choice_from_settings(settings: &serde_json::Value, backend_key: &str) -> Option<String> {
+  settings
+    .get("models")?
+    .get(backend_key)?
+    .as_str()
+    .map(str::to_string)
+}
+
+pub fn persist_choice(kind: BackendKind) {
+  let settings = settings_with_backend(read_agent_settings_json(), kind.storage_key());
+  write_agent_settings_json(&settings);
+}
+
+fn persist_model_choice(kind: BackendKind, model_id: &str) {
+  let settings = settings_with_model(read_agent_settings_json(), kind.storage_key(), model_id);
+  write_agent_settings_json(&settings);
+}
+
+fn load_model_choice(kind: BackendKind) -> Option<String> {
+  model_choice_from_settings(&read_agent_settings_json(), kind.storage_key())
 }
 
 fn load_active_conversation(
@@ -2013,12 +2099,32 @@ fn apply_tool_call_update_pure(
   populate_syntax_spans(view);
 }
 
+/// Codex names embed the model's DEFAULT reasoning level ("GPT-5.6-Sol (low)"),
+/// which contradicts the separate effort selector showing the applied value.
+fn strip_effort_suffix(name: &str) -> &str {
+  const EFFORT_LEVELS: [&str; 8] = [
+    "none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra",
+  ];
+  let trimmed = name.trim_end();
+  let Some(open) = trimmed.rfind(" (") else {
+    return name;
+  };
+  let Some(inner) = trimmed[open + 2..].strip_suffix(')') else {
+    return name;
+  };
+  if open > 0 && EFFORT_LEVELS.contains(&inner.to_ascii_lowercase().as_str()) {
+    &trimmed[..open]
+  } else {
+    name
+  }
+}
+
 fn short_model_label(name: &str, description: Option<&str>) -> String {
   // Claude descriptions follow "<id> [with X] · <blurb>" so the model id can be
   // pulled out. Other backends (Codex) use a free-form blurb with no separator;
   // fall back to the dropdown name there.
   let Some(desc) = description.filter(|d| d.contains(" · ")) else {
-    return name.to_string();
+    return strip_effort_suffix(name).to_string();
   };
   let before_separator = desc.split(" · ").next().unwrap_or(desc);
   let before_qualifier = before_separator
@@ -2027,10 +2133,33 @@ fn short_model_label(name: &str, description: Option<&str>) -> String {
     .unwrap_or(before_separator);
   let trimmed = before_qualifier.trim();
   if trimmed.is_empty() {
-    name.to_string()
+    strip_effort_suffix(name).to_string()
   } else {
     trimmed.to_string()
   }
+}
+
+/// Pull the human-readable message out of a structured agent error, e.g. Codex's
+/// `Internal error: {"message": "{\"detail\":\"...\"}", ...}` envelopes.
+fn humanize_agent_error(raw: &str) -> Option<String> {
+  fn extract(value: &serde_json::Value) -> Option<String> {
+    if let Some(detail) = value.get("detail").and_then(|detail| detail.as_str()) {
+      return Some(detail.to_string());
+    }
+    let message = value.get("message").and_then(|message| message.as_str())?;
+    if let Ok(inner) = serde_json::from_str::<serde_json::Value>(message)
+      && let Some(found) = extract(&inner)
+    {
+      return Some(found);
+    }
+    Some(message.to_string())
+  }
+
+  let start = raw.find('{')?;
+  let value: serde_json::Value = serde_json::from_str(raw[start..].trim()).ok()?;
+  extract(&value)
+    .map(|message| message.trim().to_string())
+    .filter(|message| !message.is_empty())
 }
 
 fn render_selector_item(
@@ -3476,6 +3605,54 @@ mod tests {
   }
 
   #[test]
+  fn strip_effort_suffix_removes_known_levels_only() {
+    assert_eq!(strip_effort_suffix("GPT-5.6-Sol (low)"), "GPT-5.6-Sol");
+    assert_eq!(strip_effort_suffix("GPT-5.6-Sol (xhigh)"), "GPT-5.6-Sol");
+    assert_eq!(strip_effort_suffix("GPT-5.6-Sol"), "GPT-5.6-Sol");
+    // Parenthesized content that is not an effort level stays.
+    assert_eq!(strip_effort_suffix("Claude (latest)"), "Claude (latest)");
+    // A name that is only a suffix stays untouched.
+    assert_eq!(strip_effort_suffix(" (low)"), " (low)");
+  }
+
+  #[test]
+  fn humanize_agent_error_extracts_nested_detail() {
+    let raw = r#"acp prompt error: Internal error: {
+      "message": "{\"detail\":\"The 'gpt-5.2-codex' model is not supported when using Codex with a ChatGPT account.\"}",
+      "codex_error_info": "other"
+    }"#;
+    assert_eq!(
+      humanize_agent_error(raw).as_deref(),
+      Some("The 'gpt-5.2-codex' model is not supported when using Codex with a ChatGPT account.")
+    );
+
+    let flat = r#"error: {"message": "rate limited"}"#;
+    assert_eq!(humanize_agent_error(flat).as_deref(), Some("rate limited"));
+
+    assert_eq!(humanize_agent_error("plain text failure"), None);
+    assert_eq!(humanize_agent_error("error: {not json"), None);
+  }
+
+  #[test]
+  fn agent_settings_json_keeps_backend_and_models_independent() {
+    let settings = serde_json::json!({});
+    let settings = settings_with_model(settings, "codex", "gpt-5.6-sol");
+    let settings = settings_with_backend(settings, "claude");
+    let settings = settings_with_model(settings, "claude", "claude-opus-5");
+
+    assert_eq!(settings["backend"], "claude");
+    assert_eq!(
+      model_choice_from_settings(&settings, "codex").as_deref(),
+      Some("gpt-5.6-sol")
+    );
+    assert_eq!(
+      model_choice_from_settings(&settings, "claude").as_deref(),
+      Some("claude-opus-5")
+    );
+    assert_eq!(model_choice_from_settings(&settings, "unknown"), None);
+  }
+
+  #[test]
   fn review_export_label_counts_sections() {
     assert_eq!(review_export_label("no sections here"), "1 review comment");
     assert_eq!(
@@ -3803,12 +3980,13 @@ mod tests {
 
   #[test]
   fn short_model_label_uses_name_when_description_has_no_separator() {
+    // The default-effort suffix is dropped: the effort selector shows the applied value.
     assert_eq!(
       short_model_label(
         "gpt-5.2-codex (high)",
         Some("Frontier agentic coding model. Greater reasoning depth for complex problems"),
       ),
-      "gpt-5.2-codex (high)"
+      "gpt-5.2-codex"
     );
     assert_eq!(
       short_model_label(
@@ -3817,7 +3995,7 @@ mod tests {
           "Frontier model for complex coding, research, and real-world work. Greater reasoning depth for complex problems"
         ),
       ),
-      "GPT-5.5 (high)"
+      "GPT-5.5"
     );
   }
 
