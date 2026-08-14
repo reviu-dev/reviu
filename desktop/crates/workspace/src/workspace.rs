@@ -107,7 +107,7 @@ pub(crate) fn workspace_page_from_pathname(pathname: &str) -> WorkspacePage {
 /// Returns true when the current path supports file search.
 /// Git page always does; repo page on /code tab; PR details on /changes tab.
 fn page_has_file_search(pathname: &str) -> bool {
-  if pathname == "/git" {
+  if pathname == "/git" || pathname == "/session" {
     return true;
   }
   if pathname.starts_with("/github/") {
@@ -1542,6 +1542,7 @@ mod tests {
   #[test]
   fn page_has_file_search_matches_correct_paths() {
     assert!(page_has_file_search("/git"));
+    assert!(page_has_file_search("/session"));
     assert!(page_has_file_search("/github/owner/repo/code"));
     assert!(page_has_file_search("/github/owner/repo/pull/123/changes"));
     assert!(!page_has_file_search("/github"));

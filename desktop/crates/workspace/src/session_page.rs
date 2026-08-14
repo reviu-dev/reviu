@@ -37,10 +37,14 @@ use crate::navigation::NavigationHistory;
 use crate::notification_count::NotificationCountStore;
 use crate::review_panel::{ReviewPanel, ReviewPanelEvent};
 use crate::workspace::WorkspaceApi;
-use crate::{CloseWorkspacePage, CommentHunk, SendReviewCommentsToAgent, ShowCommandPalette};
+use crate::file_search_palette::open_file_search_palette;
+use crate::{
+  CloseWorkspacePage, CommentHunk, SendReviewCommentsToAgent, ShowCommandPalette, ShowFileSearch,
+};
 use ui::{
   Button, ButtonVariants as _, CommandPalette, CommandPaletteAction, CommandPaletteCommand,
-  CommandPaletteConfig, CommandPaletteHandler, CommandPalettePage, UiIconName, WindowExt as _,
+  CommandPaletteConfig, CommandPaletteHandler, CommandPalettePage, SearchFileEntry,
+  SearchFileHandler, UiIconName, WindowExt as _,
 };
 
 const SESSIONS_SIDEBAR_DEFAULT_WIDTH: f32 = 250.0;
@@ -779,6 +783,55 @@ impl SessionPage {
     self.open_command_palette(window, cx);
   }
 
+  fn show_file_search_action(
+    &mut self,
+    _: &ShowFileSearch,
+    window: &mut Window,
+    cx: &mut Context<Self>,
+  ) {
+    self.open_file_search(window, cx);
+    cx.stop_propagation();
+  }
+
+  fn open_file_search(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    let Some(repo_root) = self.selected_repo.clone() else {
+      return;
+    };
+
+    let status_entries: Vec<git::RepoStatusEntry> =
+      self.review_panel.read(cx).status_entries().to_vec();
+    let mut changed_paths = HashSet::new();
+    for entry in &status_entries {
+      changed_paths.insert(entry.path.clone());
+      if let Some(old_path) = entry.old_path.as_ref() {
+        changed_paths.insert(old_path.clone());
+      }
+    }
+
+    let file_label = |path: &PathBuf| path.to_string_lossy().replace(['\n', '\r'], "");
+    let changed = status_entries
+      .iter()
+      .map(|entry| SearchFileEntry::new(entry.path.clone(), file_label(&entry.path)).grouped("Changed"));
+    let unchanged = git::list_repo_head_files(&repo_root)
+      .unwrap_or_default()
+      .into_iter()
+      .filter(|path| !changed_paths.contains(path))
+      .map(|path| {
+        let label = file_label(&path);
+        SearchFileEntry::new(path, label).grouped("Unchanged")
+      });
+    let entries: Vec<SearchFileEntry> = changed.chain(unchanged).collect();
+
+    let view = cx.entity();
+    let handler: SearchFileHandler = Arc::new(move |path, window, cx| {
+      view.update(cx, |view, cx| {
+        view.open_diff(path, None, window, cx);
+      });
+      Ok(())
+    });
+    open_file_search_palette(window, cx, entries, handler, false);
+  }
+
   fn open_command_palette(&mut self, window: &mut Window, cx: &mut Context<Self>) {
     let include_github = AuthStateStore::has_github_access(cx);
     let commands =
@@ -1246,6 +1299,7 @@ impl Render for SessionPage {
       .track_focus(&self.focus_handle)
       .on_action(cx.listener(Self::close_workspace_page_action))
       .on_action(cx.listener(Self::show_command_palette_action))
+      .on_action(cx.listener(Self::show_file_search_action))
       .on_action(cx.listener(Self::send_review_comments_to_agent_action))
       .on_action(cx.listener(Self::comment_hunk_action))
       .child(
