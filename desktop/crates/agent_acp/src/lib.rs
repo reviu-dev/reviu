@@ -118,7 +118,7 @@ impl BackendConfig {
     Self {
       label: "Codex",
       command: "npx",
-      args: vec!["-y".into(), "@zed-industries/codex-acp@0.9.4".into()],
+      args: vec!["-y".into(), "@agentclientprotocol/codex-acp@1.3.0".into()],
       install_hint: "Requires Node.js and `codex login` for ChatGPT subscription auth.",
     }
   }
@@ -578,6 +578,16 @@ mod tests {
   }
 
   #[test]
+  fn truncate_stderr_line_keeps_short_lines_and_caps_long_ones() {
+    assert_eq!(truncate_stderr_line("short error"), "short error");
+
+    let long = "x".repeat(STDERR_LINE_MAX_CHARS + 500);
+    let truncated = truncate_stderr_line(&long);
+    assert!(truncated.starts_with(&"x".repeat(STDERR_LINE_MAX_CHARS)));
+    assert!(truncated.ends_with("[... 500 chars truncated]"));
+  }
+
+  #[test]
   fn parse_command_simple() {
     let (cmd, args) = parse_command_string("npx -y package").unwrap();
     assert_eq!(cmd, PathBuf::from("npx"));
@@ -680,12 +690,25 @@ mod tests {
   }
 }
 
+/// Adapters occasionally dump huge payloads on stderr (model instruction templates,
+/// full API bodies); cap each line so real errors above stay visible.
+const STDERR_LINE_MAX_CHARS: usize = 2000;
+
+fn truncate_stderr_line(line: &str) -> std::borrow::Cow<'_, str> {
+  if line.chars().count() <= STDERR_LINE_MAX_CHARS {
+    return std::borrow::Cow::Borrowed(line);
+  }
+  let head: String = line.chars().take(STDERR_LINE_MAX_CHARS).collect();
+  let dropped = line.chars().count() - STDERR_LINE_MAX_CHARS;
+  std::borrow::Cow::Owned(format!("{head} [... {dropped} chars truncated]"))
+}
+
 async fn forward_stderr(stderr: async_process::ChildStderr) {
   use futures::io::{AsyncBufReadExt, BufReader};
   let reader = BufReader::new(stderr);
   let mut lines = reader.lines();
   while let Some(Ok(line)) = futures::stream::StreamExt::next(&mut lines).await {
-    eprintln!("[acp-server] {line}");
+    eprintln!("[acp-server] {}", truncate_stderr_line(&line));
   }
 }
 
