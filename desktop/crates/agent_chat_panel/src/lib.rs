@@ -954,36 +954,70 @@ impl AgentChatPanel {
         let ref_name = marker.ref_name.clone();
         // A trailing marker has nothing after it to undo.
         let can_roll_back = idx + 1 < total;
+        let hairline = || div().flex_1().h_px().bg(theme.border.opacity(0.5));
+
+        let center: gpui::AnyElement = if can_roll_back {
+          div()
+            .id(("chat-checkpoint-rollback", idx))
+            .flex()
+            .items_center()
+            .gap_1()
+            .px_2()
+            .py(px(2.))
+            .rounded_full()
+            .border_1()
+            .border_color(theme.border.opacity(0.7))
+            .text_xs()
+            .text_color(theme.muted_foreground)
+            .cursor_pointer()
+            .hover(|s| {
+              s.text_color(theme.foreground)
+                .border_color(theme.muted_foreground)
+                .bg(theme.secondary_hover)
+            })
+            .child(
+              gpui_component::Icon::new(UiIconName::History)
+                .size_3()
+                .text_color(theme.muted_foreground),
+            )
+            .child("Roll back")
+            .tooltip(|window, cx| {
+              gpui_component::tooltip::Tooltip::new(
+                "Restore files and conversation to this checkpoint",
+              )
+              .build(window, cx)
+            })
+            .on_click(cx.listener(move |_, _, _, cx| {
+              cx.emit(AgentChatPanelEvent::RollbackRequested {
+                ref_name: ref_name.clone(),
+              });
+            }))
+            .into_any_element()
+        } else {
+          div()
+            .flex()
+            .items_center()
+            .gap_1()
+            .text_xs()
+            .text_color(theme.muted_foreground.opacity(0.8))
+            .child(
+              gpui_component::Icon::new(UiIconName::History)
+                .size_3()
+                .text_color(theme.muted_foreground.opacity(0.8)),
+            )
+            .child("Checkpoint")
+            .into_any_element()
+        };
+
         div()
           .id(("chat-checkpoint", idx))
-          .group("chat-checkpoint-row")
-          .mb_2()
+          .my_2()
           .flex()
           .items_center()
-          .gap_2()
-          .child(div().flex_1().h_px().bg(theme.border))
-          .child(
-            div()
-              .text_xs()
-              .text_color(theme.muted_foreground)
-              .child("checkpoint"),
-          )
-          .when(can_roll_back, |this| {
-            this.child(
-              gpui_component::button::Button::new(("chat-checkpoint-rollback", idx))
-                .ghost()
-                .compact()
-                .small()
-                .label("Roll back")
-                .tooltip("Restore files and conversation to this point")
-                .on_click(cx.listener(move |_, _, _, cx| {
-                  cx.emit(AgentChatPanelEvent::RollbackRequested {
-                    ref_name: ref_name.clone(),
-                  });
-                })),
-            )
-          })
-          .child(div().flex_1().h_px().bg(theme.border))
+          .gap_3()
+          .child(hairline())
+          .child(center)
+          .child(hairline())
           .into_any_element()
       }
     };
