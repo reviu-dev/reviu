@@ -456,6 +456,14 @@ impl SessionPage {
         });
         this.binary_preview = binary_preview;
         this.editor = Some(editor.clone());
+        // Focus once loaded: the requester (file tree, list, search) may still hold
+        // focus, and there was no editor to focus when the open was requested.
+        if this.center == CenterView::Diff {
+          let _ = cx.update_window(this.window_handle, |_, window, cx| {
+            let focus_handle = editor.read(cx).focus_handle(cx);
+            window.focus(&focus_handle, cx);
+          });
+        }
         this.install_agent_review_handlers_for_editor(&editor, cx);
         this.sync_agent_review_comments_to_editor(cx);
         cx.subscribe(&editor, |this, _editor, event: &EditorEvent, cx| match event {
