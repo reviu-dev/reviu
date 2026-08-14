@@ -10928,6 +10928,101 @@ pub mod tests {
     });
   }
 
+  struct EscapeBubbleHarness {
+    editor: Entity<Editor>,
+    bubbled: StdArc<Mutex<bool>>,
+  }
+
+  impl Render for EscapeBubbleHarness {
+    fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+      let bubbled = self.bubbled.clone();
+      div()
+        .size_full()
+        .on_action(move |_: &crate::actions::CloseFind, _, _| {
+          *bubbled.lock().expect("bubbled lock") = true;
+        })
+        .child(self.editor.clone())
+    }
+  }
+
+  #[gpui::test]
+  fn test_escape_bubbles_to_host_when_no_find_panel_is_open(cx: &mut TestAppContext) {
+    cx.update(gpui_component::init);
+    cx.update(|cx| {
+      cx.bind_keys([gpui::KeyBinding::new(
+        "escape",
+        crate::actions::CloseFind,
+        Some("Editor"),
+      )]);
+    });
+    let ctx = EditorTestContext::with_text(cx.clone(), "a\nb");
+    let editor = ctx.editor.clone();
+    let bubbled = StdArc::new(Mutex::new(false));
+    let harness_bubbled = bubbled.clone();
+
+    let (_root, cx) = cx.add_window_view(|window, cx| {
+      let harness = cx.new(|_| EscapeBubbleHarness {
+        editor: editor.clone(),
+        bubbled: harness_bubbled,
+      });
+      gpui_component::Root::new(harness, window, cx)
+    });
+
+    ctx.editor.update_in(cx, |editor, window, cx| {
+      let handle = editor.focus_handle(cx);
+      window.focus(&handle, cx);
+    });
+    cx.run_until_parked();
+    cx.simulate_keystrokes("escape");
+    cx.run_until_parked();
+
+    assert!(
+      *bubbled.lock().expect("bubbled lock"),
+      "escape should reach the host when the editor has no find panel to close"
+    );
+  }
+
+  #[gpui::test]
+  fn test_escape_is_consumed_when_find_panel_is_open(cx: &mut TestAppContext) {
+    cx.update(gpui_component::init);
+    cx.update(|cx| {
+      cx.bind_keys([gpui::KeyBinding::new(
+        "escape",
+        crate::actions::CloseFind,
+        Some("Editor"),
+      )]);
+    });
+    let ctx = EditorTestContext::with_text(cx.clone(), "a\nb");
+    let editor = ctx.editor.clone();
+    let bubbled = StdArc::new(Mutex::new(false));
+    let harness_bubbled = bubbled.clone();
+
+    let (_root, cx) = cx.add_window_view(|window, cx| {
+      let harness = cx.new(|_| EscapeBubbleHarness {
+        editor: editor.clone(),
+        bubbled: harness_bubbled,
+      });
+      gpui_component::Root::new(harness, window, cx)
+    });
+
+    ctx.editor.update_in(cx, |editor, window, cx| {
+      editor.open_find_panel(window, cx);
+      let handle = editor.focus_handle(cx);
+      window.focus(&handle, cx);
+    });
+    cx.run_until_parked();
+    cx.simulate_keystrokes("escape");
+    cx.run_until_parked();
+
+    ctx.editor.read_with(cx, |editor, _| {
+      assert!(!editor.find_panel_open, "find panel should be closed");
+    });
+    assert!(
+      !*bubbled.lock().expect("bubbled lock"),
+      "escape closing the find panel must not also close the file view"
+    );
+  }
+
   #[gpui::test]
   fn test_review_comment_create_secondary_enter_submits(cx: &mut TestAppContext) {
     cx.update(gpui_component::init);

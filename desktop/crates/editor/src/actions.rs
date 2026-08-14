@@ -801,8 +801,10 @@ pub fn close_find(
   window: &mut Window,
   cx: &mut Context<Editor>,
 ) {
-  if editor.close_find_panel(window, cx) {
-    cx.stop_propagation();
+  // Actions stop propagating by default in the bubble phase; let escape reach the
+  // host (to close the file view) when there was no find panel to close.
+  if !editor.close_find_panel(window, cx) {
+    cx.propagate();
   }
 }
 
