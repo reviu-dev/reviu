@@ -110,6 +110,15 @@ pub fn open_palette_dialog<V: Render>(view: Entity<V>, window: &mut Window, cx: 
       .overlay_closable(true)
       .keyboard(true)
       .close_button(false)
-      .child(view.clone())
+      .child(
+        // The dialog backdrop does not reliably receive clicks; close on any
+        // mouse down outside the palette ourselves.
+        div()
+          .id("palette-dialog-content")
+          .on_mouse_down_out(|_, window, cx| {
+            window.close_dialog(cx);
+          })
+          .child(view.clone()),
+      )
   });
 }
