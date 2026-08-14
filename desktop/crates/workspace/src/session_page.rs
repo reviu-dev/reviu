@@ -1054,10 +1054,15 @@ impl SessionPage {
     let now = now_secs();
 
     let header = h_flex()
+      .h(px(40.))
+      .min_h(px(40.))
+      .max_h(px(40.))
+      .flex_shrink_0()
       .items_center()
       .justify_between()
       .px_3()
-      .py_2()
+      .border_b_1()
+      .border_color(theme.border)
       .child(
         div()
           .text_xs()
@@ -1330,10 +1335,13 @@ impl SessionPage {
     let save_editor = self.editor.clone();
 
     h_flex()
+      .h(px(40.))
+      .min_h(px(40.))
+      .max_h(px(40.))
+      .flex_shrink_0()
       .items_center()
       .gap_3()
       .px_3()
-      .py_2()
       .border_b_1()
       .border_color(theme.border)
       .child(

@@ -820,10 +820,15 @@ impl Render for ReviewPanel {
     let entry_count = self.status_entries.len();
 
     let header = h_flex()
+      .h(px(40.))
+      .min_h(px(40.))
+      .max_h(px(40.))
+      .flex_shrink_0()
       .items_center()
       .justify_between()
       .px_2()
-      .py_2()
+      .border_b_1()
+      .border_color(theme.border)
       .child(self.render_tabs(cx))
       .child(
         h_flex()
