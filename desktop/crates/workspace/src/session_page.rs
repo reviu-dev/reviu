@@ -16,7 +16,8 @@ use gpui::{
   Task, Window, div, prelude::*, px,
 };
 use gpui_component::{
-  ActiveTheme as _, Icon, Sizable as _, h_flex, notification::Notification, v_flex,
+  ActiveTheme as _, Disableable as _, Icon, Sizable as _, h_flex, notification::Notification,
+  v_flex,
 };
 use smol::unblock;
 
@@ -40,8 +41,7 @@ use crate::workspace::WorkspaceApi;
 use crate::file_search_palette::open_file_search_palette;
 use crate::file_view::{BinaryPreview, build_binary_preview, render_binary_preview, render_file_title};
 use crate::{
-  CloseFileView, CloseWorkspacePage, CommentHunk, SendReviewCommentsToAgent, ShowCommandPalette,
-  ShowFileSearch,
+  CloseWorkspacePage, CommentHunk, SendReviewCommentsToAgent, ShowCommandPalette, ShowFileSearch,
 };
 use ui::{
   Button, ButtonVariants as _, CommandPalette, CommandPaletteAction, CommandPaletteCommand,
@@ -902,9 +902,11 @@ impl SessionPage {
     NavigationHistory::navigate_back(cx);
   }
 
+  /// Escape is bound to the editor's CloseFind; it bubbles up here when there was
+  /// no find panel to close, which is our cue to close the file view.
   fn close_file_view_action(
     &mut self,
-    _: &CloseFileView,
+    _: &editor::CloseFind,
     window: &mut Window,
     cx: &mut Context<Self>,
   ) {
@@ -1360,7 +1362,7 @@ impl SessionPage {
     let file_title = self
       .selected_file
       .as_deref()
-      .map(|path| render_file_title(path, cx));
+      .map(|path| render_file_title(path, file_dirty, cx));
 
     h_flex()
       .h(px(40.))
@@ -1383,13 +1385,14 @@ impl SessionPage {
           .on_click(cx.listener(|this, _, window, cx| this.close_diff(window, cx))),
       )
       .children(file_title)
-      .when(file_dirty, |this| {
+      .when(save_editor.is_some(), |this| {
+        let save_editor = save_editor.clone();
         this.child(
           Button::new("session-page-save-file")
-            .small()
-            .compact()
             .label("Save")
-            .tooltip("Save file (cmd-s)")
+            .xsmall()
+            .ghost()
+            .disabled(!file_dirty)
             .on_click(move |_, _, cx| {
               if let Some(editor) = save_editor.clone() {
                 editor.update(cx, |editor, cx| editor.save(cx));

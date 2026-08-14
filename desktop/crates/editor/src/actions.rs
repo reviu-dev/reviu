@@ -801,7 +801,9 @@ pub fn close_find(
   window: &mut Window,
   cx: &mut Context<Editor>,
 ) {
-  editor.close_find_panel(window, cx);
+  if editor.close_find_panel(window, cx) {
+    cx.stop_propagation();
+  }
 }
 
 // === System Actions ===

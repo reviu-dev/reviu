@@ -3341,15 +3341,18 @@ impl Editor {
     cx.notify();
   }
 
-  pub(crate) fn close_find_panel(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+  /// Returns whether a panel was actually closed, so callers can let the key
+  /// event bubble when there was nothing to close.
+  pub(crate) fn close_find_panel(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {
     if !self.find_panel_open {
-      return;
+      return false;
     }
 
     self.find_panel_open = false;
     self.reset_find_input(window, cx);
     window.focus(&self.focus_handle, cx);
     cx.notify();
+    true
   }
 
   pub(crate) fn find_next_match(&mut self, window: &mut Window, cx: &mut Context<Self>) {

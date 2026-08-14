@@ -152,9 +152,9 @@ pub(crate) fn render_binary_preview(preview: &BinaryPreview, cx: &gpui::App) -> 
   }
 }
 
-/// File title used in editor/diff headers: type icon, file name, then the
-/// directory path trailing on the right.
-pub(crate) fn render_file_title(path: &Path, cx: &gpui::App) -> AnyElement {
+/// File title used in editor/diff headers: type icon, file name, unsaved dot,
+/// then the directory path trailing on the right.
+pub(crate) fn render_file_title(path: &Path, is_dirty: bool, cx: &gpui::App) -> AnyElement {
   let theme = cx.theme().clone();
   let dir = file_dir_label(path);
 
@@ -180,6 +180,15 @@ pub(crate) fn render_file_title(path: &Path, cx: &gpui::App) -> AnyElement {
         .text_color(theme.foreground)
         .child(file_name_label(path)),
     )
+    .when(is_dirty, |this| {
+      this.child(
+        div()
+          .size_2()
+          .rounded_full()
+          .bg(theme.foreground)
+          .flex_shrink_0(),
+      )
+    })
     .when(!dir.is_empty(), |this| {
       this.child(
         div()
