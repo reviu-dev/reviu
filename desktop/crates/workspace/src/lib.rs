@@ -10,7 +10,6 @@ actions!(
     OpenSessionPage,
     RefreshCurrentPage,
     ToggleTerminalSidebar,
-    ToggleAgentSidebar,
     ShowBranchSwitcher,
     OpenGitHistorySidebar,
     OpenGitChangesSidebar,

@@ -86,6 +86,52 @@ enum CenterView {
   Diff,
 }
 
+/// Global entry point so other pages (git page review comments, selections)
+/// can route work into the sessions shell.
+pub(crate) struct SessionPageHandle {
+  page: Option<gpui::WeakEntity<SessionPage>>,
+}
+
+impl gpui::Global for SessionPageHandle {}
+
+impl SessionPageHandle {
+  pub fn register(cx: &mut Context<SessionPage>) {
+    cx.set_global(Self {
+      page: Some(cx.entity().downgrade()),
+    });
+  }
+
+  fn with_page(cx: &mut App, f: impl FnOnce(&mut SessionPage, &mut Window, &mut Context<SessionPage>)) {
+    let Some(page) = cx
+      .try_global::<Self>()
+      .and_then(|handle| handle.page.clone())
+      .and_then(|weak| weak.upgrade())
+    else {
+      return;
+    };
+    let window_handle = page.read(cx).window_handle;
+    let _ = cx.update_window(window_handle, |_, window, cx| {
+      page.update(cx, |page, cx| f(page, window, cx));
+    });
+  }
+
+  /// Navigate to the sessions shell and send a review-comment batch to the agent.
+  pub fn send_review(text: String, cx: &mut App) {
+    NavigationHistory::navigate("/session", cx);
+    Self::with_page(cx, move |page, window, cx| {
+      page.deliver_review_export(text, window, cx);
+    });
+  }
+
+  /// Navigate to the sessions shell and attach a code selection as agent context.
+  pub fn add_selection(path: String, text: String, cx: &mut App) {
+    NavigationHistory::navigate("/session", cx);
+    Self::with_page(cx, move |page, window, cx| {
+      page.deliver_selection_context(path, text, window, cx);
+    });
+  }
+}
+
 pub struct SessionPage {
   focus_handle: FocusHandle,
   window_handle: AnyWindowHandle,
@@ -100,6 +146,8 @@ pub struct SessionPage {
   agent_review_comments: Vec<LocalAgentReviewComment>,
   next_agent_review_comment_id: u64,
   current_branch: Option<SharedString>,
+  // Review export waiting for the agent connection to become ready.
+  pending_review_export: Option<String>,
   _branch_task: Option<Task<()>>,
 }
 
@@ -134,10 +182,59 @@ impl SessionPage {
       agent_review_comments: Vec::new(),
       next_agent_review_comment_id: 1,
       current_branch: None,
+      pending_review_export: None,
       _branch_task: None,
     };
+    SessionPageHandle::register(cx);
     page.refresh_branch(cx);
     page
+  }
+
+  fn deliver_review_export(&mut self, text: String, window: &mut Window, cx: &mut Context<Self>) {
+    self.ensure_agent_chat_view(window, cx);
+    let Some(panel) = self.agent_chat_view.clone() else {
+      return;
+    };
+    let sent = panel.update(cx, |panel, cx| {
+      panel.is_ready() && panel.send_external_review(text.clone(), cx)
+    });
+    if !sent {
+      self.pending_review_export = Some(text);
+    }
+    self.focus_agent_input_on_next_frame(window, cx);
+    cx.notify();
+  }
+
+  fn deliver_selection_context(
+    &mut self,
+    path: String,
+    text: String,
+    window: &mut Window,
+    cx: &mut Context<Self>,
+  ) {
+    self.ensure_agent_chat_view(window, cx);
+    let Some(panel) = self.agent_chat_view.clone() else {
+      return;
+    };
+    panel.update(cx, |panel, cx| {
+      panel.add_selection_context(path, text, window, cx);
+    });
+    self.focus_agent_input_on_next_frame(window, cx);
+    cx.notify();
+  }
+
+  fn flush_pending_review_export(&mut self, cx: &mut Context<Self>) {
+    let Some(panel) = self.agent_chat_view.clone() else {
+      return;
+    };
+    if self.pending_review_export.is_none() || !panel.read(cx).is_ready() {
+      return;
+    }
+    if let Some(text) = self.pending_review_export.take() {
+      panel.update(cx, |panel, cx| {
+        panel.send_external_review(text, cx);
+      });
+    }
   }
 
   fn refresh_branch(&mut self, cx: &mut Context<Self>) {
@@ -175,7 +272,12 @@ impl SessionPage {
     // The sessions sidebar owns the conversation list; hide the panel's own controls.
     view.update(cx, |panel, _| panel.set_conversation_controls_visible(false));
     // Sidebar reads conversation state from the panel; re-render when it changes.
-    cx.observe(&view, |_, _, cx| cx.notify()).detach();
+    // Also the flush point for a review export queued while the agent was connecting.
+    cx.observe(&view, |this, _, cx| {
+      this.flush_pending_review_export(cx);
+      cx.notify();
+    })
+    .detach();
     cx.subscribe_in(
       &view,
       window,
