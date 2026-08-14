@@ -50,7 +50,7 @@ pub const WORKSPACE_SETTINGS_CONTEXT: &str = "Workspace WorkspaceSettings";
 pub const WORKSPACE_ABOUT_CONTEXT: &str = "Workspace WorkspaceAbout";
 
 const FILE_SEARCH_CONTEXT: &str =
-  "WorkspaceGit || WorkspaceGithubRepoCode || WorkspaceGithubPrChanges";
+  "WorkspaceGit || WorkspaceGithubRepoCode || WorkspaceGithubPrChanges || WorkspaceSession";
 const OPEN_REPOSITORY_CONTEXT: &str = "WorkspaceGit";
 const COMMIT_CHANGES_CONTEXT: &str = "WorkspaceGit";
 const COMMIT_CHANGES_DESCENDANT_FOCUS: &str = "CommitInput";
@@ -98,10 +98,11 @@ const ALL_WORKSPACE_ACTIVE_CONTEXTS: [&str; 11] = [
   WORKSPACE_ABOUT_CONTEXT,
 ];
 
-const FILE_SEARCH_ACTIVE_CONTEXTS: [&str; 3] = [
+const FILE_SEARCH_ACTIVE_CONTEXTS: [&str; 4] = [
   WORKSPACE_GIT_CONTEXT,
   WORKSPACE_GITHUB_REPO_CODE_CONTEXT,
   WORKSPACE_GITHUB_PR_CHANGES_CONTEXT,
+  WORKSPACE_SESSION_CONTEXT,
 ];
 
 const REFRESHABLE_PAGE_ACTIVE_CONTEXTS: [&str; 7] = [

@@ -287,6 +287,10 @@ impl ReviewPanel {
     self._pr_task = Some(task);
   }
 
+  pub(crate) fn status_entries(&self) -> &[RepoStatusEntry] {
+    &self.status_entries
+  }
+
   fn has_staged_changes(&self) -> bool {
     self
       .status_entries
