@@ -112,11 +112,13 @@ pub fn open_palette_dialog<V: Render>(view: Entity<V>, window: &mut Window, cx: 
       .close_button(false)
       .child(
         // The dialog backdrop does not reliably receive clicks; close on any
-        // mouse down outside the palette ourselves.
+        // mouse down outside the palette ourselves. Dispatching Cancel (instead
+        // of close_dialog) follows the same path as Escape, which restores
+        // focus to the page so global shortcuts keep working.
         div()
           .id("palette-dialog-content")
           .on_mouse_down_out(|_, window, cx| {
-            window.close_dialog(cx);
+            window.dispatch_action(Box::new(gpui_base::actions::Cancel), cx);
           })
           .child(view.clone()),
       )
