@@ -724,6 +724,8 @@ impl SessionPage {
   }
 
   fn new_session(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    // Revives the panel when the previous backend connection errored out.
+    self.ensure_agent_chat_view(window, cx);
     let Some(panel) = self.agent_chat_view.clone() else {
       return;
     };
@@ -733,6 +735,7 @@ impl SessionPage {
   }
 
   fn select_session(&mut self, id: &str, window: &mut Window, cx: &mut Context<Self>) {
+    self.ensure_agent_chat_view(window, cx);
     let Some(panel) = self.agent_chat_view.clone() else {
       return;
     };
@@ -1231,7 +1234,13 @@ impl SessionPage {
 
 impl Render for SessionPage {
   fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-    self.ensure_agent_chat_view(window, cx);
+    // Create-only here: ensure_agent_chat_view drops a panel in error state to
+    // reconnect it, and doing that every frame respawns the agent in a loop
+    // (scroll resets, focus stolen, npx spawned repeatedly). Reconnection happens
+    // on explicit user actions instead.
+    if self.agent_chat_view.is_none() {
+      self.ensure_agent_chat_view(window, cx);
+    }
 
     div()
       .size_full()
