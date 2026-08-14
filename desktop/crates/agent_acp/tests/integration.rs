@@ -20,6 +20,34 @@ async fn spawn_stub_session() -> AgentSession {
 }
 
 #[test]
+fn failed_session_load_falls_back_to_a_fresh_session() {
+  smol::block_on(async {
+    let cwd = std::env::current_dir().expect("cwd");
+    // The stub advertises load_session but errors on session/load: the spawn must
+    // still succeed with a brand-new session instead of failing the connection.
+    let mut session = AgentSession::spawn_with_load(
+      stub_backend(),
+      cwd,
+      "stale-session-id".to_string(),
+      |fut| {
+        smol::spawn(fut).detach();
+      },
+    )
+    .await
+    .expect("spawn with stale session id");
+
+    let info = session.init_info().clone();
+    assert_eq!(info.session_id.as_deref(), Some("stub-session"));
+
+    if let Some(events) = session.take_events() {
+      smol::spawn(async move { while events.recv().await.is_ok() {} }).detach();
+    }
+    let stop = session.send_prompt("hi").await.expect("prompt");
+    assert!(matches!(stop, StopReason::EndTurn));
+  });
+}
+
+#[test]
 fn init_and_prompt_round_trip_against_stub_agent() {
   smol::block_on(async {
     let mut session = spawn_stub_session().await;

@@ -20,7 +20,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         async move |req: InitializeRequest, responder, _: ConnectionTo<Client>| {
           responder.respond(
             InitializeResponse::new(req.protocol_version)
-              .agent_capabilities(AgentCapabilities::new())
+              // load_session advertised but not handled: session/load errors with
+              // method_not_found, which exercises the fall-back-to-new-session path.
+              .agent_capabilities(AgentCapabilities::new().load_session(true))
               .agent_info(Implementation::new("stub-agent", "0.0.1")),
           )
         },

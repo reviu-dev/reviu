@@ -108,7 +108,7 @@ impl BackendConfig {
       command: "npx",
       args: vec![
         "-y".into(),
-        "@agentclientprotocol/claude-agent-acp@0.68.0".into(),
+        "@agentclientprotocol/claude-agent-acp@0.35.0".into(),
       ],
       install_hint: "Requires Node.js. The package is fetched via npx on first run. Sign in with `claude /login` to use your subscription.",
     }
@@ -900,16 +900,21 @@ async fn run_driver(
             .await
           {
             Ok(resp) => (sid, resp.modes, resp.models, resp.config_options),
+            // Agents often cannot restore sessions after a restart; fall back to a
+            // fresh session instead of failing the whole connection. The local
+            // transcript is kept by the host, only provider-side context is lost.
             Err(e) => {
-              let raw = format!("{e}");
-              let msg = if raw.to_lowercase().contains("resource not found") {
-                "Saved conversation no longer available on the agent. Start a new conversation."
-                  .to_string()
-              } else {
-                format!("Failed to load saved conversation: {raw}")
-              };
-              let _ = ready_tx.send(Err(anyhow!(msg)));
-              return Ok(());
+              eprintln!("[agent] failed to load saved session, starting fresh: {e}");
+              let resp = connection
+                .send_request(NewSessionRequest::new(cwd.clone()))
+                .block_task()
+                .await?;
+              (
+                resp.session_id,
+                resp.modes,
+                resp.models,
+                resp.config_options,
+              )
             }
           }
         }
