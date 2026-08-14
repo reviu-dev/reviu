@@ -74,6 +74,30 @@ enum BranchPrState {
   Found(GithubBranchContext, Box<GithubPullRequest>),
 }
 
+fn branch_pr_state_for_lookup(
+  remote: Option<git::GithubRemoteRepo>,
+  branch: Option<String>,
+  fetch: impl FnOnce(&GithubBranchContext) -> anyhow::Result<Option<GithubPullRequest>>,
+) -> BranchPrState {
+  let Some(remote) = remote else {
+    return BranchPrState::NoRemote;
+  };
+  let Some(branch) = branch else {
+    return BranchPrState::NoRemote;
+  };
+  let context = GithubBranchContext {
+    owner: remote.owner,
+    repo: remote.repo,
+    branch,
+  };
+  match fetch(&context) {
+    Ok(Some(pull_request)) => BranchPrState::Found(context, Box::new(pull_request)),
+    Ok(None) => BranchPrState::Missing(context),
+    // Keep the tab usable on transient API errors: offer Create against the context.
+    Err(_) => BranchPrState::Missing(context),
+  }
+}
+
 pub struct ReviewPanel {
   focus_handle: FocusHandle,
   window_handle: AnyWindowHandle,
@@ -155,23 +179,13 @@ impl ReviewPanel {
     let api = WorkspaceApi::global(cx).api.clone();
     let task = cx.spawn(async move |this, cx| {
       let state = unblock(move || {
-        let Ok(Some(remote)) = current_github_remote_repo(&repo_root) else {
-          return BranchPrState::NoRemote;
-        };
-        let Ok(branch) = current_branch_status(&repo_root) else {
-          return BranchPrState::NoRemote;
-        };
-        let context = GithubBranchContext {
-          owner: remote.owner,
-          repo: remote.repo,
-          branch: branch.name,
-        };
-        match api.fetch_pull_request_for_branch(&context.owner, &context.repo, &context.branch) {
-          Ok(Some(pull_request)) => BranchPrState::Found(context, Box::new(pull_request)),
-          Ok(None) => BranchPrState::Missing(context),
-          // Keep the tab usable on transient API errors: offer Create against the context.
-          Err(_) => BranchPrState::Missing(context),
-        }
+        branch_pr_state_for_lookup(
+          current_github_remote_repo(&repo_root).ok().flatten(),
+          current_branch_status(&repo_root).ok().map(|status| status.name),
+          |context| {
+            api.fetch_pull_request_for_branch(&context.owner, &context.repo, &context.branch)
+          },
+        )
       })
       .await;
 
@@ -777,6 +791,78 @@ mod tests {
       gpui_component::Root::new(panel, window, cx)
     });
     (mounted.expect("review panel"), cx)
+  }
+
+  fn test_remote() -> git::GithubRemoteRepo {
+    git::GithubRemoteRepo {
+      owner: "acme".to_string(),
+      repo: "widget".to_string(),
+    }
+  }
+
+  fn test_pull_request() -> GithubPullRequest {
+    serde_json::from_value(serde_json::json!({
+      "number": 42,
+      "title": "Add widgets",
+      "state": "open",
+      "draft": false,
+      "updated_at": "2026-08-13T00:00:00Z",
+      "labels": [],
+      "repository": { "owner": "acme", "repo": "widget" }
+    }))
+    .expect("build test pull request")
+  }
+
+  #[test]
+  fn branch_pr_state_requires_remote_and_branch() {
+    let no_remote = branch_pr_state_for_lookup(None, Some("main".to_string()), |_| {
+      panic!("fetch must not run without a remote")
+    });
+    assert!(matches!(no_remote, BranchPrState::NoRemote));
+
+    let no_branch = branch_pr_state_for_lookup(Some(test_remote()), None, |_| {
+      panic!("fetch must not run without a branch")
+    });
+    assert!(matches!(no_branch, BranchPrState::NoRemote));
+  }
+
+  #[test]
+  fn branch_pr_state_maps_lookup_results() {
+    let found = branch_pr_state_for_lookup(
+      Some(test_remote()),
+      Some("feature/x".to_string()),
+      |context| {
+        assert_eq!(context.owner, "acme");
+        assert_eq!(context.repo, "widget");
+        assert_eq!(context.branch, "feature/x");
+        Ok(Some(test_pull_request()))
+      },
+    );
+    match found {
+      BranchPrState::Found(context, pull_request) => {
+        assert_eq!(context.branch, "feature/x");
+        assert_eq!(pull_request.number, 42);
+      }
+      other => panic!("expected Found, got {other:?}"),
+    }
+
+    let missing = branch_pr_state_for_lookup(
+      Some(test_remote()),
+      Some("feature/x".to_string()),
+      |_| Ok(None),
+    );
+    assert!(matches!(missing, BranchPrState::Missing(_)));
+
+    // API errors degrade to Missing so the tab still offers Create against the context.
+    let errored = branch_pr_state_for_lookup(
+      Some(test_remote()),
+      Some("feature/x".to_string()),
+      |_| Err(anyhow::anyhow!("network down")),
+    );
+    match errored {
+      BranchPrState::Missing(context) => assert_eq!(context.branch, "feature/x"),
+      other => panic!("expected Missing, got {other:?}"),
+    }
   }
 
   #[gpui::test]
