@@ -6,7 +6,7 @@ use std::{
   time::{Duration, Instant},
 };
 
-use agent_chat_panel::{AgentChatPanel, AgentChatPanelEvent};
+use agent_chat_panel::AgentChatPanel;
 use editor::{
   CloseFind, ConflictNavigationDirection, ConflictNavigationState, ConflictResolution,
   DiffViewMode, Editor, Find, HunkAction, HunkNavigationDirection, HunkState, ReviewComment,
@@ -58,8 +58,6 @@ use gpui_component::{
 };
 use sentry::protocol::{Map, Value};
 use smol::unblock;
-
-use crate::agent_settings::AgentSettings;
 
 pub(crate) fn agent_chat_state_dir() -> Option<std::path::PathBuf> {
   Some(dirs::config_dir()?.join("reviu").join("agent-chats"))
@@ -162,11 +160,6 @@ const GIT_TERMINAL_SIDEBAR_DEBUG_SELECTOR: &str = "git-terminal-sidebar";
 const TERMINAL_SIDEBAR_DEFAULT_WIDTH: f32 = 480.0;
 const TERMINAL_SIDEBAR_MIN_WIDTH: f32 = 320.0;
 const TERMINAL_SIDEBAR_MAX_WIDTH: f32 = 1200.0;
-const GIT_AGENT_BUTTON_DEBUG_SELECTOR: &str = "git-agent-button";
-const GIT_AGENT_SIDEBAR_DEBUG_SELECTOR: &str = "git-agent-sidebar";
-const AGENT_SIDEBAR_DEFAULT_WIDTH: f32 = 480.0;
-const AGENT_SIDEBAR_MIN_WIDTH: f32 = 320.0;
-const AGENT_SIDEBAR_MAX_WIDTH: f32 = 1200.0;
 
 type RepoSelectHandler = Rc<dyn Fn(PathBuf, &mut Window, &mut App)>;
 type BranchSelectHandler = Rc<dyn Fn(BranchRef, &mut Window, &mut App)>;
@@ -1761,14 +1754,12 @@ pub struct GitPage {
   force_list_selection: bool,
   editor: Option<Entity<Editor>>,
   terminal_view: Entity<TerminalView>,
-  agent_chat_view: Option<Entity<AgentChatPanel>>,
   interactive_rebase_todo_view: Option<Entity<InteractiveRebaseTodoView>>,
   diff_view: DiffViewMode,
   hide_whitespace: bool,
   git_unified_file_view: bool,
   show_markdown_preview: bool,
   show_terminal_sidebar: bool,
-  show_agent_sidebar: bool,
   agent_review_comments: Vec<LocalAgentReviewComment>,
   next_agent_review_comment_id: u64,
   binary_preview: Option<GitBinaryPreview>,
@@ -3140,7 +3131,6 @@ impl GitPage {
       force_list_selection: false,
       editor: None,
       terminal_view: cx.new(|cx| TerminalView::new(terminal_working_directory.clone(), cx)),
-      agent_chat_view: None,
       interactive_rebase_todo_view: None,
       diff_view: if app_settings.split_diff_view {
         DiffViewMode::Split
@@ -3151,7 +3141,6 @@ impl GitPage {
       git_unified_file_view: app_settings.git_unified_file_view,
       show_markdown_preview: false,
       show_terminal_sidebar: false,
-      show_agent_sidebar: false,
       agent_review_comments: Vec::new(),
       next_agent_review_comment_id: 1,
       binary_preview: None,
@@ -3257,14 +3246,12 @@ impl GitPage {
       force_list_selection: false,
       editor: None,
       terminal_view: cx.new(|cx| TerminalView::new(None, cx)),
-      agent_chat_view: None,
       interactive_rebase_todo_view: None,
       diff_view: DiffViewMode::Inline,
       hide_whitespace: false,
       git_unified_file_view: false,
       show_markdown_preview: false,
       show_terminal_sidebar: false,
-      show_agent_sidebar: false,
       agent_review_comments: Vec::new(),
       next_agent_review_comment_id: 1,
       binary_preview: None,
@@ -5931,18 +5918,8 @@ impl GitPage {
       .map(|p| p.to_string_lossy().to_string())
       .unwrap_or_else(|| "selection".to_string());
 
-    self.ensure_agent_chat_view(window, cx);
-    self.show_agent_sidebar = true;
-    self.show_terminal_sidebar = false;
-
-    let Some(panel) = self.agent_chat_view.clone() else {
-      window.push_notification(Notification::error("Failed to open agent panel"), cx);
-      return;
-    };
-    panel.update(cx, |panel, cx| {
-      panel.add_selection_context(path, text, window, cx);
-    });
-    cx.notify();
+    // The agent lives in the sessions shell; attach the selection there.
+    crate::session_page::SessionPageHandle::add_selection(path, text, cx);
   }
 
   fn comment_hunk_action(
@@ -7141,32 +7118,7 @@ impl GitPage {
     }
 
     let review = format_agent_review_export(&self.agent_review_comments);
-    let count = copyable_ids.len();
-
-    self.ensure_agent_chat_view(window, cx);
-    self.show_agent_sidebar = true;
-    self.show_terminal_sidebar = false;
-
-    let Some(panel) = self.agent_chat_view.clone() else {
-      window.push_notification(Notification::error("Failed to open agent panel"), cx);
-      return;
-    };
-
-    let dispatched = panel.update(cx, |panel, cx| {
-      if !panel.is_ready() {
-        return false;
-      }
-      panel.send_external_review(review, cx)
-    });
-
-    if !dispatched {
-      window.push_notification(
-        Notification::info("Agent not ready yet. Try again in a moment."),
-        cx,
-      );
-      cx.notify();
-      return;
-    }
+    let _ = window;
 
     for comment in &mut self.agent_review_comments {
       if copyable_ids.contains(&comment.id) {
@@ -7174,15 +7126,10 @@ impl GitPage {
       }
     }
     self.sync_agent_review_comments_to_editor(cx);
-    window.push_notification(
-      Notification::success(format!(
-        "Sent {count} review {} to {}",
-        if count == 1 { "comment" } else { "comments" },
-        AgentSettings::load().label(),
-      )),
-      cx,
-    );
     cx.notify();
+
+    // The agent lives in the sessions shell; route the batch there.
+    crate::session_page::SessionPageHandle::send_review(review, cx);
   }
 
   fn selected_file_source_for_open_path(&self, rel_path: &Path) -> SelectedFileSource {
@@ -7632,7 +7579,6 @@ impl GitPage {
   fn toggle_terminal_sidebar_visibility(&mut self, window: &mut Window, cx: &mut Context<Self>) {
     self.show_terminal_sidebar = !self.show_terminal_sidebar;
     if self.show_terminal_sidebar {
-      self.show_agent_sidebar = false;
       crate::analytics::track(cx, "terminal_opened");
       self.focus_terminal_sidebar_on_next_frame(window, cx);
     } else {
@@ -7660,168 +7606,6 @@ impl GitPage {
     cx.stop_propagation();
   }
 
-  fn ensure_agent_chat_view(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-    if let Some(view) = self.agent_chat_view.as_ref()
-      && view.read(cx).needs_reconnect()
-    {
-      self.agent_chat_view = None;
-    }
-    if self.agent_chat_view.is_some() {
-      return;
-    }
-    prune_agent_chat_state_once();
-    let cwd = self
-      .selected_repo
-      .clone()
-      .unwrap_or_else(|| std::path::PathBuf::from("."));
-    let state_dir =
-      agent_chat_state_dir().map(|dir| AgentChatPanel::state_dir_for_repo(&dir, &cwd));
-    let backend = AgentSettings::load();
-    let view = cx.new(|cx| AgentChatPanel::new(backend, cwd, state_dir, window, cx));
-    cx.subscribe(&view, |this, _panel, event: &AgentChatPanelEvent, cx| match event {
-      AgentChatPanelEvent::OpenPath { path, line } => {
-        this.open_agent_path(path.clone(), *line, cx);
-      }
-      AgentChatPanelEvent::TurnStarted => {
-        this.create_agent_turn_checkpoint(cx);
-      }
-      AgentChatPanelEvent::TurnFinished => {
-        this.reload_status(cx);
-      }
-      AgentChatPanelEvent::RollbackRequested { ref_name } => {
-        this.rollback_to_agent_checkpoint(ref_name.clone(), cx);
-      }
-    })
-    .detach();
-    self.agent_chat_view = Some(view);
-  }
-
-  fn create_agent_turn_checkpoint(&mut self, cx: &mut Context<Self>) {
-    let Some(repo_root) = self.selected_repo.clone() else {
-      return;
-    };
-    let Some(panel) = self.agent_chat_view.clone() else {
-      return;
-    };
-    let session_id = panel.read(cx).current_conversation().id.clone();
-
-    cx.spawn(async move |this, cx| {
-      let result = unblock(move || git::create_checkpoint(&repo_root, &session_id)).await;
-      let Ok(checkpoint) = result else {
-        return;
-      };
-      let _ = this.update(cx, |this, cx| {
-        if let Some(panel) = this.agent_chat_view.clone() {
-          panel.update(cx, |panel, cx| {
-            panel.record_checkpoint(checkpoint.ref_name, cx);
-          });
-        }
-      });
-    })
-    .detach();
-  }
-
-  fn rollback_to_agent_checkpoint(&mut self, ref_name: String, cx: &mut Context<Self>) {
-    let Some(repo_root) = self.selected_repo.clone() else {
-      return;
-    };
-    let Some(panel) = self.agent_chat_view.clone() else {
-      return;
-    };
-    if panel.read(cx).is_turn_in_flight() {
-      self.push_git_action_error_notification(
-        "Rollback",
-        "Wait for the agent to finish before rolling back".into(),
-        cx,
-      );
-      return;
-    }
-    let session_id = panel.read(cx).current_conversation().id.clone();
-
-    cx.spawn(async move |this, cx| {
-      let restore_repo_root = repo_root.clone();
-      let restore_ref = ref_name.clone();
-      let result = unblock(move || {
-        // Safety net: snapshot the current state so the rollback itself is undoable.
-        git::create_checkpoint(&restore_repo_root, &session_id)?;
-        git::restore_checkpoint(&restore_repo_root, &restore_ref)
-      })
-      .await;
-
-      let _ = this.update(cx, |this, cx| {
-        match result {
-          Ok(()) => {
-            if let Some(panel) = this.agent_chat_view.clone() {
-              panel.update(cx, |panel, cx| {
-                panel.truncate_at_checkpoint(&ref_name, cx);
-              });
-            }
-            this.reload_status(cx);
-          }
-          Err(error) => {
-            this.push_git_action_error_notification(
-              "Rollback failed",
-              format!("{error}").into(),
-              cx,
-            );
-          }
-        }
-        cx.notify();
-      });
-    })
-    .detach();
-  }
-
-  fn open_agent_path(&mut self, path: PathBuf, line: Option<u32>, cx: &mut Context<Self>) {
-    let rel_path = agent_path_to_repo_relative(path, self.selected_repo.as_deref());
-    let selected_file_source = self.selected_file_source_for_open_path(&rel_path);
-    self.open_file_internal(rel_path, false, selected_file_source, line, cx);
-    cx.notify();
-  }
-
-  fn toggle_agent_sidebar_visibility(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-    if self.show_agent_sidebar {
-      self.show_agent_sidebar = false;
-      self.focus_editor_or_page(window, cx);
-      cx.notify();
-      return;
-    }
-    self.ensure_agent_chat_view(window, cx);
-    self.show_agent_sidebar = true;
-    self.show_terminal_sidebar = false;
-    crate::analytics::track(cx, "agent_opened");
-    self.focus_agent_sidebar_on_next_frame(window, cx);
-    cx.notify();
-  }
-
-  fn focus_agent_sidebar_on_next_frame(&mut self, window: &mut Window, _cx: &mut Context<Self>) {
-    let Some(view) = self.agent_chat_view.clone() else {
-      return;
-    };
-    window.on_next_frame(move |window, cx| {
-      let focus_handle = view.read(cx).input_focus_handle(cx);
-      window.focus(&focus_handle, cx);
-    });
-  }
-
-  fn toggle_agent_sidebar_click(
-    &mut self,
-    _: &gpui::ClickEvent,
-    window: &mut Window,
-    cx: &mut Context<Self>,
-  ) {
-    self.toggle_agent_sidebar_visibility(window, cx);
-  }
-
-  fn toggle_agent_sidebar_action(
-    &mut self,
-    _: &crate::ToggleAgentSidebar,
-    window: &mut Window,
-    cx: &mut Context<Self>,
-  ) {
-    self.toggle_agent_sidebar_visibility(window, cx);
-    cx.stop_propagation();
-  }
 
   fn ensure_page_shortcut_focus(&self, cx: &mut Context<Self>) {
     let focus_handle = self.focus_handle.clone();
@@ -9442,37 +9226,11 @@ impl GitPage {
       .disabled(self.selected_repo.is_none())
       .on_click(cx.listener(Self::toggle_terminal_sidebar_click));
 
-    let agent_sidebar_button = Button::new("git-toggle-agent-sidebar")
-      .label("Agent")
-      .icon(UiIconName::Sparkles)
-      .outline()
-      .with_variant(ButtonVariant::Secondary)
-      .xsmall()
-      .p_2()
-      .selected(self.show_agent_sidebar)
-      .child(
-        div().ml_1().text_color(theme.muted_foreground).child(
-          Kbd::new(shortcuts::resolved_display_shortcut_keystroke_in(
-            cx,
-            window,
-            ShortcutId::ToggleAgentSidebar,
-          ))
-          .appearance(false),
-        ),
-      )
-      .disabled(self.selected_repo.is_none())
-      .on_click(cx.listener(Self::toggle_agent_sidebar_click));
-
     let header_right = h_flex()
       .items_center()
       .gap_2()
       .flex_shrink_0()
       .when_some(branch_pr_button, |this, button| this.child(button))
-      .child(
-        div()
-          .debug_selector(|| GIT_AGENT_BUTTON_DEBUG_SELECTOR.to_string())
-          .child(agent_sidebar_button),
-      )
       .child(
         div()
           .debug_selector(|| GIT_TERMINAL_BUTTON_DEBUG_SELECTOR.to_string())
@@ -10793,53 +10551,19 @@ impl GitPage {
       .into_any_element()
   }
 
-  fn render_agent_sidebar(&mut self, cx: &mut Context<Self>) -> AnyElement {
-    let theme = cx.theme().clone();
-    let mut container = div()
-      .size_full()
-      .min_w(px(0.0))
-      .min_h_0()
-      .bg(theme.sidebar)
-      .debug_selector(|| GIT_AGENT_SIDEBAR_DEBUG_SELECTOR.to_string());
-    if let Some(view) = self.agent_chat_view.clone() {
-      container = container.child(view);
-    }
-    container.into_any_element()
-  }
-
   fn render_main_content(&mut self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
     let editor_area = self.render_editor_area(window, cx);
-    let show_terminal = self.show_terminal_sidebar;
-    let show_agent = self.show_agent_sidebar;
-    if !show_terminal && !show_agent {
+    if !self.show_terminal_sidebar {
       return editor_area;
     }
 
-    let (sidebar_element, default_width, min_width, max_width, split_id) = if show_agent {
-      (
-        self.render_agent_sidebar(cx),
-        AGENT_SIDEBAR_DEFAULT_WIDTH,
-        AGENT_SIDEBAR_MIN_WIDTH,
-        AGENT_SIDEBAR_MAX_WIDTH,
-        "git-page-editor-agent-split",
-      )
-    } else {
-      (
-        self.render_terminal_sidebar(cx),
-        TERMINAL_SIDEBAR_DEFAULT_WIDTH,
-        TERMINAL_SIDEBAR_MIN_WIDTH,
-        TERMINAL_SIDEBAR_MAX_WIDTH,
-        "git-page-editor-terminal-split",
-      )
-    };
-
-    ui::h_resizable(split_id)
+    ui::h_resizable("git-page-editor-terminal-split")
       .child(ui::resizable_panel().child(editor_area))
       .child(
         ui::resizable_panel()
-          .size(px(default_width))
-          .size_range(px(min_width)..px(max_width))
-          .child(sidebar_element),
+          .size(px(TERMINAL_SIDEBAR_DEFAULT_WIDTH))
+          .size_range(px(TERMINAL_SIDEBAR_MIN_WIDTH)..px(TERMINAL_SIDEBAR_MAX_WIDTH))
+          .child(self.render_terminal_sidebar(cx)),
       )
       .into_any_element()
   }
@@ -10879,7 +10603,6 @@ impl Render for GitPage {
       .on_action(cx.listener(GitPage::close_find_action))
       .on_action(cx.listener(GitPage::open_repository_action))
       .on_action(cx.listener(GitPage::toggle_terminal_sidebar_action))
-      .on_action(cx.listener(GitPage::toggle_agent_sidebar_action))
       .on_action(cx.listener(GitPage::commit_changes_action))
       .on_action(cx.listener(GitPage::open_git_history_sidebar_action))
       .on_action(cx.listener(GitPage::open_git_changes_sidebar_action))

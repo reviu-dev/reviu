@@ -12,6 +12,10 @@ Reviu now opens on a new Sessions workspace built around working with a coding a
 
 The right panel of the Sessions workspace now shows your working-tree changes and refreshes automatically each time the agent finishes a turn, so you always see what the agent just touched. Write a commit message (or generate one with AI from your diff) and commit without leaving the workspace; unstaged changes are staged automatically, matching the Git page behavior.
 
+### One Home For The Agent
+
+The agent now lives only in the Sessions workspace; the Git page is a focused Git tool again (staging, history, stash, rebase, terminal) without its own agent sidebar. The bridges remain: send your local review comments to the agent (`cmd-shift-a`) or attach a diff selection (`cmd-shift-l`) from the Git page, and Reviu switches to the session with your content delivered, queued automatically if the agent is still connecting. Running the agent in two places at once caused conflicting conversation state; one home fixes that class of issues.
+
 ### Take Over From The Agent: Files Tab And Editing
 
 A Files tab in the right panel shows your whole repository as a tree (modified files marked), and clicking a file opens it in the editor at the center, whether the agent touched it or not. Files are editable right there: type your changes and Save (or cmd-s); your manual edits land in the same changeset as the agent's work, the Changes panel picks them up immediately, and the agent sees them on its next turn. The agent codes first, but taking over is always one click away.
