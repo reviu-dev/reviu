@@ -4,13 +4,18 @@ use std::path::PathBuf;
 
 use git::{
   RepoStage, RepoStatusEntry, RepoStatusKind, commit_changes, current_branch_status,
-  current_github_remote_repo, list_repo_status, stage_all,
+  current_github_remote_repo, list_repo_status, list_repo_worktree_files, stage_all,
 };
 use gpui::{
   AnyElement, AnyWindowHandle, App, Context, Entity, FocusHandle, Focusable, Render, SharedString,
-  Task, Window, div, prelude::*, px,
+  Task, Window, div, img, prelude::*, px,
 };
-use gpui_component::{ActiveTheme as _, Disableable as _, Icon, Sizable as _, h_flex, v_flex};
+use gpui_component::{
+  ActiveTheme as _, Disableable as _, Icon, IconName, Sizable as _, h_flex,
+  tree::{TreeItem, TreeState, tree},
+  v_flex,
+};
+use std::collections::BTreeMap;
 use smol::unblock;
 use std::rc::Rc;
 
@@ -62,7 +67,53 @@ impl gpui::EventEmitter<ReviewPanelEvent> for ReviewPanel {}
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum ReviewPanelTab {
   Changes,
+  Files,
   PullRequest,
+}
+
+/// Nested tree items from repo-relative paths. File ids are the relative path;
+/// directory ids get a trailing slash so they never collide with file ids.
+pub(crate) fn build_worktree_tree_items(files: &[PathBuf]) -> Vec<TreeItem> {
+  #[derive(Default)]
+  struct Node {
+    dirs: BTreeMap<String, Node>,
+    files: Vec<String>,
+  }
+
+  let mut root = Node::default();
+  for file in files {
+    let components: Vec<String> = file
+      .components()
+      .map(|component| component.as_os_str().to_string_lossy().into_owned())
+      .collect();
+    let Some((file_name, dirs)) = components.split_last() else {
+      continue;
+    };
+    let mut node = &mut root;
+    for dir in dirs {
+      node = node.dirs.entry(dir.clone()).or_default();
+    }
+    node.files.push(file_name.clone());
+  }
+
+  fn items_for(node: &Node, prefix: &str) -> Vec<TreeItem> {
+    let mut items = Vec::new();
+    for (name, child) in &node.dirs {
+      let child_prefix = format!("{prefix}{name}/");
+      items.push(
+        TreeItem::new(child_prefix.clone(), name.clone())
+          .children(items_for(child, &child_prefix)),
+      );
+    }
+    let mut files = node.files.clone();
+    files.sort();
+    for name in files {
+      items.push(TreeItem::new(format!("{prefix}{name}"), name));
+    }
+    items
+  }
+
+  items_for(&root, "")
 }
 
 #[derive(Clone, Debug)]
@@ -109,9 +160,14 @@ pub struct ReviewPanel {
   last_error: Option<SharedString>,
   active_tab: ReviewPanelTab,
   branch_pr: BranchPrState,
+  files_tree_state: Entity<TreeState>,
+  files_loaded: bool,
+  files_loading: bool,
+  selected_tree_id: Option<String>,
   _refresh_task: Option<Task<()>>,
   _commit_task: Option<Task<()>>,
   _pr_task: Option<Task<()>>,
+  _files_task: Option<Task<()>>,
 }
 
 impl ReviewPanel {
@@ -133,12 +189,43 @@ impl ReviewPanel {
       last_error: None,
       active_tab: ReviewPanelTab::Changes,
       branch_pr: BranchPrState::Loading,
+      files_tree_state: cx.new(|cx| TreeState::new(cx)),
+      files_loaded: false,
+      files_loading: false,
+      selected_tree_id: None,
       _refresh_task: None,
       _commit_task: None,
       _pr_task: None,
+      _files_task: None,
     };
     panel.refresh(cx);
     panel
+  }
+
+  fn load_worktree_files(&mut self, cx: &mut Context<Self>) {
+    let Some(repo_root) = self.repo_root.clone() else {
+      return;
+    };
+    if self.files_loading {
+      return;
+    }
+    self.files_loading = true;
+
+    let task = cx.spawn(async move |this, cx| {
+      let files = unblock(move || list_repo_worktree_files(&repo_root)).await;
+      let _ = this.update(cx, |this, cx| {
+        this.files_loading = false;
+        if let Ok(files) = files {
+          let items = build_worktree_tree_items(&files);
+          this.files_tree_state.update(cx, |state, cx| {
+            state.set_items(items, cx);
+          });
+          this.files_loaded = true;
+        }
+        cx.notify();
+      });
+    });
+    self._files_task = Some(task);
   }
 
   pub fn refresh(&mut self, cx: &mut Context<Self>) {
@@ -163,6 +250,9 @@ impl ReviewPanel {
     });
     self._refresh_task = Some(task);
     self.refresh_branch_pull_request(cx);
+    if self.files_loaded {
+      self.load_worktree_files(cx);
+    }
   }
 
   fn refresh_branch_pull_request(&mut self, cx: &mut Context<Self>) {
@@ -439,10 +529,123 @@ impl ReviewPanel {
         self.active_tab == ReviewPanelTab::Changes,
       ))
       .child(tab(
+        "review-panel-tab-files",
+        "Files",
+        ReviewPanelTab::Files,
+        self.active_tab == ReviewPanelTab::Files,
+      ))
+      .child(tab(
         "review-panel-tab-pr",
         "Pull request",
         ReviewPanelTab::PullRequest,
         self.active_tab == ReviewPanelTab::PullRequest,
+      ))
+      .into_any_element()
+  }
+
+  fn render_files_tab(&mut self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
+    let theme = cx.theme().clone();
+
+    // A file row was selected (directories end with '/'): open it in the editor.
+    if let Some(selected_id) = self
+      .files_tree_state
+      .read(cx)
+      .selected_entry()
+      .map(|entry| entry.item().id.to_string())
+      && Some(selected_id.as_str()) != self.selected_tree_id.as_deref()
+    {
+      self.selected_tree_id = Some(selected_id.clone());
+      if !selected_id.ends_with('/') {
+        let path = PathBuf::from(selected_id);
+        cx.on_next_frame(window, move |_, _, cx| {
+          cx.emit(ReviewPanelEvent::OpenFile { path });
+        });
+      }
+    }
+
+    if !self.files_loaded {
+      if !self.files_loading {
+        self.load_worktree_files(cx);
+      }
+      return v_flex()
+        .flex_1()
+        .items_center()
+        .justify_center()
+        .child(
+          div()
+            .text_sm()
+            .text_color(theme.muted_foreground)
+            .child("Loading files..."),
+        )
+        .into_any_element();
+    }
+
+    let modified: std::collections::HashSet<PathBuf> = self
+      .status_entries
+      .iter()
+      .map(|entry| entry.path.clone())
+      .collect();
+
+    div()
+      .flex_1()
+      .min_h_0()
+      .py_1()
+      .child(tree(
+        &self.files_tree_state,
+        move |ix, entry, selected, _window, cx| {
+          let theme = cx.theme().clone();
+          let item = entry.item();
+          let is_folder = entry.is_folder();
+          let icon: AnyElement = if is_folder {
+            Icon::new(if entry.is_expanded() {
+              IconName::FolderOpen
+            } else {
+              IconName::Folder
+            })
+            .size_3()
+            .text_color(theme.muted_foreground)
+            .into_any_element()
+          } else {
+            ui::file_icon_path_for_name_with_theme(item.label.as_ref(), &theme)
+              .map(|path| img(path).size(px(ui::FILE_ICON_SIZE_PX)).into_any_element())
+              .unwrap_or_else(|| {
+                Icon::new(IconName::File)
+                  .size_3()
+                  .text_color(theme.muted_foreground)
+                  .into_any_element()
+              })
+          };
+          let is_modified = !is_folder && modified.contains(&PathBuf::from(item.id.as_ref()));
+
+          let indent = px(8.) + px(14.) * entry.depth();
+          ui::selectable_list_item(ix, selected, ui::SelectableRowStyle::Inset, &theme)
+            .w_full()
+            .px_2()
+            .pl(indent)
+            .child(
+              h_flex()
+                .items_center()
+                .gap_2()
+                .child(icon)
+                .child(
+                  div()
+                    .flex_1()
+                    .overflow_hidden()
+                    .text_ellipsis()
+                    .text_sm()
+                    .child(item.label.clone()),
+                )
+                .when(is_modified, |this| {
+                  this.child(
+                    div()
+                      .text_xs()
+                      .font_weight(gpui::FontWeight::BOLD)
+                      .text_color(theme.status_yellow())
+                      .child("M"),
+                  )
+                }),
+            )
+        },
       ))
       .into_any_element()
   }
@@ -645,6 +848,7 @@ impl Render for ReviewPanel {
       );
 
     let body = match self.active_tab {
+      ReviewPanelTab::Files => self.render_files_tab(_window, cx),
       ReviewPanelTab::Changes => {
         if self.status_entries.is_empty() {
           self.render_empty_state(cx)
@@ -811,6 +1015,53 @@ mod tests {
       "repository": { "owner": "acme", "repo": "widget" }
     }))
     .expect("build test pull request")
+  }
+
+  fn tree_ids(items: &[TreeItem]) -> Vec<String> {
+    let mut ids = Vec::new();
+    for item in items {
+      ids.push(item.id.to_string());
+      ids.extend(tree_ids(&item.children));
+    }
+    ids
+  }
+
+  #[test]
+  fn build_worktree_tree_items_nests_dirs_first_then_files_sorted() {
+    let files = vec![
+      PathBuf::from("src/main.rs"),
+      PathBuf::from("README.md"),
+      PathBuf::from("src/api/client.rs"),
+      PathBuf::from("Cargo.toml"),
+    ];
+
+    let items = build_worktree_tree_items(&files);
+
+    // Top level: dirs first (src/), then files alphabetically.
+    assert_eq!(
+      items.iter().map(|item| item.id.to_string()).collect::<Vec<_>>(),
+      vec!["src/", "Cargo.toml", "README.md"]
+    );
+    // Depth-first: directory ids end with '/', file ids are the relative path.
+    assert_eq!(
+      tree_ids(&items),
+      vec![
+        "src/",
+        "src/api/",
+        "src/api/client.rs",
+        "src/main.rs",
+        "Cargo.toml",
+        "README.md"
+      ]
+    );
+    let src = &items[0];
+    assert!(src.is_folder());
+    assert_eq!(src.label.to_string(), "src");
+  }
+
+  #[test]
+  fn build_worktree_tree_items_handles_empty_input() {
+    assert!(build_worktree_tree_items(&[]).is_empty());
   }
 
   #[test]

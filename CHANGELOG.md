@@ -12,6 +12,10 @@ Reviu now opens on a new Sessions workspace built around working with a coding a
 
 The right panel of the Sessions workspace now shows your working-tree changes and refreshes automatically each time the agent finishes a turn, so you always see what the agent just touched. Write a commit message (or generate one with AI from your diff) and commit without leaving the workspace; unstaged changes are staged automatically, matching the Git page behavior.
 
+### Take Over From The Agent: Files Tab And Editing
+
+A Files tab in the right panel shows your whole repository as a tree (modified files marked), and clicking a file opens it in the editor at the center, whether the agent touched it or not. Files are editable right there: type your changes and Save (or cmd-s); your manual edits land in the same changeset as the agent's work, the Changes panel picks them up immediately, and the agent sees them on its next turn. The agent codes first, but taking over is always one click away.
+
 ### GitHub In The Sessions Workspace
 
 The Sessions workspace now surfaces your GitHub context without leaving it. The right panel gains a Pull request tab showing the pull request linked to your current branch (state, title, comment count) with one click to open it, or a Create pull request button when the branch has none, using the same dialog as the Git page. The sidebar gains a compact GitHub section with your notification inbox count and a shortcut to your pull requests.

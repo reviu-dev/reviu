@@ -503,6 +503,15 @@ struct ReviewCommentCreateDraft {
   start_side: Option<ReviewCommentSide>,
 }
 
+/// Emitted so hosts can react to editor lifecycle changes.
+#[derive(Clone, Debug)]
+pub enum EditorEvent {
+  /// The buffer was written to disk.
+  Saved,
+}
+
+impl gpui::EventEmitter<EditorEvent> for Editor {}
+
 pub struct Editor {
   pub document: Entity<Document>,
   pub focus_handle: FocusHandle,
@@ -5578,6 +5587,7 @@ impl Editor {
       let _ = this.update(cx, |editor, cx| match result {
         Ok((file_mtime, index_mtime)) => {
           editor.is_dirty = false;
+          cx.emit(EditorEvent::Saved);
           editor.file_mtime = file_mtime;
           if needs_index_write {
             editor.git_state.index_dirty = false;
