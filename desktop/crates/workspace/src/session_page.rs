@@ -38,6 +38,7 @@ use crate::notification_count::NotificationCountStore;
 use crate::review_panel::{ReviewPanel, ReviewPanelEvent};
 use crate::workspace::WorkspaceApi;
 use crate::file_search_palette::open_file_search_palette;
+use crate::file_view::{BinaryPreview, build_binary_preview, render_binary_preview, render_file_title};
 use crate::{
   CloseWorkspacePage, CommentHunk, SendReviewCommentsToAgent, ShowCommandPalette, ShowFileSearch,
 };
@@ -140,6 +141,7 @@ pub struct SessionPage {
   selected_repo: Option<PathBuf>,
   center: CenterView,
   editor: Option<Entity<Editor>>,
+  binary_preview: Option<BinaryPreview>,
   selected_file: Option<PathBuf>,
   open_file_generation: u64,
   open_file_task: Option<Task<()>>,
@@ -176,6 +178,7 @@ impl SessionPage {
       selected_repo,
       center: CenterView::Conversation,
       editor: None,
+      binary_preview: None,
       selected_file: None,
       open_file_generation: 0,
       open_file_task: None,
@@ -425,6 +428,7 @@ impl SessionPage {
     let generation = self.open_file_generation;
     self.selected_file = Some(rel_path.clone());
     self.editor = None;
+    self.binary_preview = None;
 
     let file_path = repo_root.join(&rel_path);
     let load_repo_root = repo_root.clone();
@@ -439,6 +443,8 @@ impl SessionPage {
         if this.selected_file.as_ref() != Some(&rel_path) {
           return;
         }
+        let binary_preview =
+          build_binary_preview(rel_path.as_path(), loaded.binary_bytes.clone());
         let editor =
           cx.new(move |cx| Editor::new_with_loaded_file(repo_root, file_path, loaded, cx));
         editor.update(cx, |editor, cx| {
@@ -448,6 +454,7 @@ impl SessionPage {
             editor.reveal_source_line(doc_line, cx);
           }
         });
+        this.binary_preview = binary_preview;
         this.editor = Some(editor.clone());
         this.install_agent_review_handlers_for_editor(&editor, cx);
         this.sync_agent_review_comments_to_editor(cx);
@@ -1323,16 +1330,15 @@ impl SessionPage {
   fn render_diff_header(&self, cx: &mut Context<Self>) -> AnyElement {
     let theme = cx.theme().clone();
     let copyable_count = self.copyable_review_comment_count();
-    let (dir, file) = self
-      .selected_file
-      .as_deref()
-      .map(crate::review_panel::split_path_label)
-      .unwrap_or_default();
     let file_dirty = self
       .editor
       .as_ref()
       .is_some_and(|editor| editor.read(cx).is_dirty);
     let save_editor = self.editor.clone();
+    let file_title = self
+      .selected_file
+      .as_deref()
+      .map(|path| render_file_title(path, cx));
 
     h_flex()
       .h(px(40.))
@@ -1354,23 +1360,7 @@ impl SessionPage {
           .tooltip("Back to the conversation (Esc)")
           .on_click(cx.listener(|this, _, window, cx| this.close_diff(window, cx))),
       )
-      .child(
-        h_flex()
-          .flex_1()
-          .min_w(px(0.0))
-          .overflow_hidden()
-          .text_sm()
-          .whitespace_nowrap()
-          .when(!dir.is_empty(), |this| {
-            this.child(
-              div()
-                .text_color(theme.muted_foreground)
-                .truncate()
-                .child(dir),
-            )
-          })
-          .child(div().text_color(theme.foreground).child(file)),
-      )
+      .children(file_title)
       .when(file_dirty, |this| {
         this.child(
           Button::new("session-page-save-file")
@@ -1407,7 +1397,9 @@ impl SessionPage {
 
   fn render_diff_view(&mut self, cx: &mut Context<Self>) -> AnyElement {
     let theme = cx.theme().clone();
-    let body: AnyElement = if let Some(editor) = self.editor.clone() {
+    let body: AnyElement = if let Some(preview) = self.binary_preview.as_ref() {
+      render_binary_preview(preview, cx)
+    } else if let Some(editor) = self.editor.clone() {
       div()
         .flex_1()
         .min_h_0()
