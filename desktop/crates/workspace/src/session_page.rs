@@ -1257,15 +1257,43 @@ impl SessionPage {
       .min_h_0()
       .bg(theme.sidebar)
       .child(header)
-      .child(
+      .child(if rows.is_empty() {
+        v_flex()
+          .flex_1()
+          .min_h_0()
+          .items_center()
+          .justify_center()
+          .gap_2()
+          .px_4()
+          .child(
+            Icon::new(UiIconName::MessageCirclePlus)
+              .size_4()
+              .text_color(theme.muted_foreground),
+          )
+          .child(
+            div()
+              .text_sm()
+              .text_color(theme.muted_foreground)
+              .child("No sessions yet"),
+          )
+          .child(
+            div()
+              .text_xs()
+              .text_center()
+              .text_color(theme.muted_foreground.opacity(0.8))
+              .child("Message the agent to start one"),
+          )
+          .into_any_element()
+      } else {
         div()
           .id("session-page-session-list")
           .flex_1()
           .min_h_0()
           .overflow_y_scroll()
           .py_1()
-          .children(rows),
-      )
+          .children(rows)
+          .into_any_element()
+      })
       .children(github_section)
       .children(repo_context)
       .into_any_element()
