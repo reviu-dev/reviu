@@ -65,7 +65,6 @@ const OPEN_GIT_PAGE_CONTEXT: &str = "Workspace";
 const OPEN_GITHUB_PAGE_CONTEXT: &str = "Workspace";
 const REFRESH_CURRENT_PAGE_CONTEXT: &str = "WorkspaceGit || WorkspaceGithubHome || WorkspaceGithubRepo || WorkspaceGithubRepoCode || WorkspaceGithubPr || WorkspaceGithubPrChanges || WorkspaceGithubCommit";
 const TOGGLE_TERMINAL_CONTEXT: &str = "WorkspaceGit";
-const TOGGLE_AGENT_CONTEXT: &str = "WorkspaceGit";
 const SHOW_BRANCH_SWITCHER_CONTEXT: &str = "WorkspaceGit";
 const OPEN_GIT_HISTORY_SIDEBAR_CONTEXT: &str = "WorkspaceGit";
 const OPEN_GIT_CHANGES_SIDEBAR_CONTEXT: &str = "WorkspaceGit";
