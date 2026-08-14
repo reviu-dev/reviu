@@ -2991,15 +2991,41 @@ impl Render for AgentChatPanel {
       format!("{used_k:.1}k / {size_k:.0}k").into()
     });
 
-    let show_empty_state =
-      self.total_list_items() == 0 && matches!(self.status, Status::Ready | Status::Connecting);
+    let connecting = matches!(self.status, Status::Connecting);
+    let show_empty_state = self.items.is_empty()
+      && self.extras_before_kinds().is_empty()
+      && matches!(self.status, Status::Ready | Status::Connecting);
     let empty_state = if show_empty_state {
-      Some(
+      let brand_icon = match self.backend_kind {
+        BackendKind::Claude => UiIconName::Claude,
+        BackendKind::Codex => UiIconName::OpenAi,
+      };
+      let content = if connecting {
         v_flex()
-          .flex_1()
-          .min_h_0()
           .items_center()
-          .justify_center()
+          .gap_3()
+          .child(
+            gpui_component::Icon::new(brand_icon)
+              .large()
+              .text_color(theme.muted_foreground),
+          )
+          .child(
+            div()
+              .text_sm()
+              .text_color(theme.muted_foreground)
+              .child(format!("Connecting to {}...", self.backend.label)),
+          )
+          .with_animation(
+            "agent-chat-connecting-pulse",
+            gpui::Animation::new(std::time::Duration::from_millis(1400))
+              .repeat()
+              .with_easing(gpui::pulsating_between(0.4, 1.0)),
+            |content, delta| content.opacity(delta),
+          )
+          .into_any_element()
+      } else {
+        v_flex()
+          .items_center()
           .gap_2()
           .child(gpui_component::Icon::new(UiIconName::Sparkles).text_color(theme.muted_foreground))
           .child(
@@ -3013,7 +3039,16 @@ impl Render for AgentChatPanel {
               .text_xs()
               .text_color(theme.muted_foreground)
               .child("Send a message below to begin."),
-          ),
+          )
+          .into_any_element()
+      };
+      Some(
+        v_flex()
+          .flex_1()
+          .min_h_0()
+          .items_center()
+          .justify_center()
+          .child(content),
       )
     } else {
       None
