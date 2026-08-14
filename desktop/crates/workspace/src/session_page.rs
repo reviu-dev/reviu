@@ -6,9 +6,9 @@ use std::sync::Arc;
 
 use agent_chat_panel::{AgentChatPanel, AgentChatPanelEvent, ConversationMeta};
 use editor::{
-  DiffViewMode, Editor, ReviewComment, ReviewCommentCreateHandler, ReviewCommentCreateRequest,
-  ReviewCommentDeleteHandler, ReviewCommentDisplayMode, ReviewCommentEditHandler,
-  ReviewCommentSide,
+  DiffViewMode, Editor, EditorEvent, ReviewComment, ReviewCommentCreateHandler,
+  ReviewCommentCreateRequest, ReviewCommentDeleteHandler, ReviewCommentDisplayMode,
+  ReviewCommentEditHandler, ReviewCommentSide,
 };
 use gfm_markdown_viewer::SuggestionContext;
 use gpui::{
@@ -343,6 +343,12 @@ impl SessionPage {
         this.editor = Some(editor.clone());
         this.install_agent_review_handlers_for_editor(&editor, cx);
         this.sync_agent_review_comments_to_editor(cx);
+        cx.subscribe(&editor, |this, _editor, event: &EditorEvent, cx| match event {
+          EditorEvent::Saved => {
+            this.review_panel.update(cx, |panel, cx| panel.refresh(cx));
+          }
+        })
+        .detach();
         cx.notify();
       });
     });
@@ -1106,6 +1112,11 @@ impl SessionPage {
       .as_deref()
       .map(crate::review_panel::split_path_label)
       .unwrap_or_default();
+    let file_dirty = self
+      .editor
+      .as_ref()
+      .is_some_and(|editor| editor.read(cx).is_dirty);
+    let save_editor = self.editor.clone();
 
     h_flex()
       .items_center()
@@ -1141,6 +1152,20 @@ impl SessionPage {
           })
           .child(div().text_color(theme.foreground).child(file)),
       )
+      .when(file_dirty, |this| {
+        this.child(
+          Button::new("session-page-save-file")
+            .small()
+            .compact()
+            .label("Save")
+            .tooltip("Save file (cmd-s)")
+            .on_click(move |_, _, cx| {
+              if let Some(editor) = save_editor.clone() {
+                editor.update(cx, |editor, cx| editor.save(cx));
+              }
+            }),
+        )
+      })
       .when(copyable_count > 0, |this| {
         this.child(
           Button::new("session-page-send-review")
