@@ -294,6 +294,7 @@ pub struct AgentChatPanel {
   _events_task: Option<Task<()>>,
   _permission_task: Option<Task<()>>,
   _input_sub: Option<gpui::Subscription>,
+  show_conversation_controls: bool,
 }
 
 impl AgentChatPanel {
@@ -366,6 +367,7 @@ impl AgentChatPanel {
       _events_task: None,
       _permission_task: None,
       _input_sub: Some(input_sub),
+      show_conversation_controls: true,
     };
 
     {
@@ -1677,6 +1679,12 @@ impl AgentChatPanel {
 
   pub fn is_turn_in_flight(&self) -> bool {
     self.in_flight
+  }
+
+  /// Hide the header history/new-conversation buttons when the host provides
+  /// its own session list (the sessions shell sidebar).
+  pub fn set_conversation_controls_visible(&mut self, visible: bool) {
+    self.show_conversation_controls = visible;
   }
 
   pub fn is_ready(&self) -> bool {
@@ -3103,7 +3111,7 @@ impl Render for AgentChatPanel {
               .when_some(usage_text, |this, t| {
                 this.child(div().text_xs().text_color(theme.muted_foreground).child(t))
               })
-              .child({
+              .when(self.show_conversation_controls, |this| this.child({
                 let entity = cx.entity().downgrade();
                 let conversations = self.list_conversations();
                 let current_id = self.current_conv.id.clone();
@@ -3174,14 +3182,16 @@ impl Render for AgentChatPanel {
                     }
                     menu
                   })
-              })
-              .child(
-                Button::new("agent-chat-new")
-                  .icon(UiIconName::MessageCirclePlus)
-                  .small()
-                  .ghost()
-                  .on_click(cx.listener(|panel, _, _, cx| panel.new_conversation(cx))),
-              ),
+              }))
+              .when(self.show_conversation_controls, |this| {
+                this.child(
+                  Button::new("agent-chat-new")
+                    .icon(UiIconName::MessageCirclePlus)
+                    .small()
+                    .ghost()
+                    .on_click(cx.listener(|panel, _, _, cx| panel.new_conversation(cx))),
+                )
+              }),
           ),
       )
       .map(|this| {
