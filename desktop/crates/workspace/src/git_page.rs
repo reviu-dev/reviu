@@ -9,12 +9,10 @@ use std::{
 use agent_chat_panel::AgentChatPanel;
 use editor::{
   CloseFind, ConflictNavigationDirection, ConflictNavigationState, ConflictResolution,
-  DiffViewMode, Editor, Find, HunkAction, HunkNavigationDirection, HunkState, ReviewComment,
+  DiffViewMode, Editor, Find, HunkAction, HunkNavigationDirection, HunkState,
   ReviewCommentCancelHandler, ReviewCommentCreateHandler, ReviewCommentCreateRequest,
   ReviewCommentDeleteHandler, ReviewCommentDisplayMode, ReviewCommentEditHandler,
-  ReviewCommentSide,
 };
-use gfm_markdown_viewer::SuggestionContext;
 use git::{
   BranchKind, BranchRef, BranchStatus, CommitChangedFile, CommitFileChangeKind, HeadCommitStatus,
   HistoryCommitNode, HistoryRevision, InteractiveRebaseTarget, InteractiveRebaseTodoEntry,
@@ -645,8 +643,7 @@ pub struct GitPage {
   git_unified_file_view: bool,
   show_markdown_preview: bool,
   show_terminal_sidebar: bool,
-  agent_review_comments: Vec<LocalAgentReviewComment>,
-  next_agent_review_comment_id: u64,
+  agent_review: AgentReviewComments,
   binary_preview: Option<BinaryPreview>,
   svg_preview: Option<Result<Arc<RenderImage>, SharedString>>,
   svg_preview_source: Option<SharedString>,
@@ -699,10 +696,7 @@ struct UnpublishedBranchCheckKey {
   head_sha: Option<String>,
 }
 
-use crate::agent_review::{
-  LocalAgentReviewComment, LocalAgentReviewCommentState, agent_review_comment_is_copyable,
-  agent_review_line_label, format_agent_review_export, next_agent_review_comment_state,
-};
+use crate::agent_review::AgentReviewComments;
 
 impl GitPage {
   fn sidebar_mode_tag(mode: GitSidebarMode) -> &'static str {
@@ -1719,8 +1713,7 @@ impl GitPage {
       git_unified_file_view: app_settings.git_unified_file_view,
       show_markdown_preview: false,
       show_terminal_sidebar: false,
-      agent_review_comments: Vec::new(),
-      next_agent_review_comment_id: 1,
+      agent_review: AgentReviewComments::new(),
       binary_preview: None,
       svg_preview: None,
       svg_preview_source: None,
@@ -1829,8 +1822,7 @@ impl GitPage {
       git_unified_file_view: false,
       show_markdown_preview: false,
       show_terminal_sidebar: false,
-      agent_review_comments: Vec::new(),
-      next_agent_review_comment_id: 1,
+      agent_review: AgentReviewComments::new(),
       binary_preview: None,
       svg_preview: None,
       svg_preview_source: None,
@@ -2044,8 +2036,7 @@ impl GitPage {
     self.select_first_file_after_restore = false;
     self.operation_error = None;
     self.editor = None;
-    self.agent_review_comments.clear();
-    self.next_agent_review_comment_id = 1;
+    self.agent_review.clear();
     self.binary_preview = None;
     self.interactive_rebase_todo_view = None;
     self.merge_in_progress = false;
@@ -2094,8 +2085,7 @@ impl GitPage {
     self.select_first_file_after_restore = false;
     self.operation_error = None;
     self.editor = None;
-    self.agent_review_comments.clear();
-    self.next_agent_review_comment_id = 1;
+    self.agent_review.clear();
     self.binary_preview = None;
     self.interactive_rebase_todo_view = None;
     self.merge_in_progress = false;

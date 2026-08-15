@@ -678,11 +678,7 @@ impl GitPage {
         });
       });
 
-    let agent_review_count = self
-      .agent_review_comments
-      .iter()
-      .filter(|comment| agent_review_comment_is_copyable(comment))
-      .count();
+    let agent_review_count = self.agent_review.copyable_count();
     let view = cx.entity();
     let send_agent_review_button = Button::new("editor-send-agent-review")
       .label(format!("Send to Agent ({agent_review_count})"))

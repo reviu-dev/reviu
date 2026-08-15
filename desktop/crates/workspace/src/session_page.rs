@@ -6,11 +6,9 @@ use std::sync::Arc;
 
 use agent_chat_panel::{AgentChatPanel, AgentChatPanelEvent, ConversationMeta};
 use editor::{
-  DiffViewMode, Editor, EditorEvent, ReviewComment, ReviewCommentCreateHandler,
-  ReviewCommentCreateRequest, ReviewCommentDeleteHandler, ReviewCommentDisplayMode,
-  ReviewCommentEditHandler, ReviewCommentSide,
+  DiffViewMode, Editor, EditorEvent, ReviewCommentCreateHandler, ReviewCommentCreateRequest,
+  ReviewCommentDeleteHandler, ReviewCommentDisplayMode, ReviewCommentEditHandler,
 };
-use gfm_markdown_viewer::SuggestionContext;
 use gpui::AnimationExt as _;
 use gpui::{
   AnyElement, AnyWindowHandle, App, Context, Entity, FocusHandle, Focusable, Render, SharedString,
@@ -23,8 +21,7 @@ use gpui_component::{
 use smol::unblock;
 
 use crate::agent_review::{
-  LocalAgentReviewComment, LocalAgentReviewCommentState, agent_review_comment_is_copyable,
-  agent_review_line_label, format_agent_review_export, next_agent_review_comment_state,
+  AgentReviewComments, original_lines_for_request, sync_comments_to_editor,
 };
 use crate::agent_settings::AgentSettings;
 use crate::auth_state::AuthStateStore;
@@ -176,8 +173,7 @@ pub struct SessionPage {
   selected_file: Option<PathBuf>,
   open_file_generation: u64,
   open_file_task: Option<Task<()>>,
-  agent_review_comments: Vec<LocalAgentReviewComment>,
-  next_agent_review_comment_id: u64,
+  agent_review: AgentReviewComments,
   current_branch: Option<SharedString>,
   // Review export waiting for the agent connection to become ready.
   pending_review_export: Option<String>,
@@ -214,8 +210,7 @@ impl SessionPage {
       selected_file: None,
       open_file_generation: 0,
       open_file_task: None,
-      agent_review_comments: Vec::new(),
-      next_agent_review_comment_id: 1,
+      agent_review: AgentReviewComments::new(),
       current_branch: None,
       pending_review_export: None,
       repo_command_in_flight: false,
@@ -547,9 +542,9 @@ impl SessionPage {
         let view = view.clone();
         move |request, window, _cx| {
           let view = view.clone();
-          window.on_next_frame(move |window, cx| {
+          window.on_next_frame(move |_window, cx| {
             let _ = view.update(cx, |this, cx| {
-              this.create_agent_review_comment(request, window, cx);
+              this.create_agent_review_comment(request, cx);
             });
           });
         }
@@ -586,82 +581,21 @@ impl SessionPage {
     });
   }
 
-  fn agent_review_original_lines_for_request(
-    &self,
-    request: &ReviewCommentCreateRequest,
-    cx: &App,
-  ) -> (Option<usize>, Vec<String>) {
-    if request.side != ReviewCommentSide::Right {
-      return (None, Vec::new());
-    }
-
-    let Some(editor) = self.editor.as_ref() else {
-      return (None, Vec::new());
-    };
-
-    let start = request.start_line.unwrap_or(request.line).min(request.line);
-    let end = request.start_line.unwrap_or(request.line).max(request.line);
-    let document = editor.read(cx).document().clone();
-    let document = document.read(cx);
-    let mut lines = Vec::new();
-
-    for line_ix in start..=end {
-      let Some(line) = document.line_content(line_ix) else {
-        continue;
-      };
-      lines.push(line.trim_end_matches(['\r', '\n']).to_string());
-    }
-
-    if lines.is_empty() {
-      (None, Vec::new())
-    } else {
-      (Some(start.saturating_add(1)), lines)
-    }
-  }
-
   fn create_agent_review_comment(
     &mut self,
     request: ReviewCommentCreateRequest,
-    _window: &mut Window,
     cx: &mut Context<Self>,
   ) {
-    let parent = request.in_reply_to_id.and_then(|parent_id| {
-      self
-        .agent_review_comments
-        .iter()
-        .find(|comment| comment.id == parent_id)
-        .cloned()
-    });
-    let Some(path) = parent
-      .as_ref()
-      .map(|comment| comment.path.clone())
-      .or_else(|| self.selected_file.clone())
-    else {
-      self.finish_agent_review_create(Some(Arc::from("No selected file")), cx);
+    let original = original_lines_for_request(self.editor.as_ref(), &request, cx);
+    let created = self
+      .agent_review
+      .create(&request, self.selected_file.as_deref(), original);
+
+    if let Err(error) = created {
+      self.finish_agent_review_create(Some(error), cx);
       return;
-    };
+    }
 
-    let (original_start_line, original_lines) = if request.in_reply_to_id.is_some() {
-      (None, Vec::new())
-    } else {
-      self.agent_review_original_lines_for_request(&request, cx)
-    };
-
-    let id = self.next_agent_review_comment_id;
-    self.next_agent_review_comment_id = self.next_agent_review_comment_id.saturating_add(1);
-    self.agent_review_comments.push(LocalAgentReviewComment {
-      id,
-      in_reply_to_id: request.in_reply_to_id,
-      path,
-      line: request.line,
-      side: request.side,
-      start_line: request.start_line,
-      start_side: request.start_side,
-      body: request.body.clone(),
-      original_start_line,
-      original_lines,
-      state: LocalAgentReviewCommentState::Draft,
-    });
     self.sync_agent_review_comments_to_editor(cx);
     self.finish_agent_review_create(None, cx);
     cx.notify();
@@ -681,20 +615,17 @@ impl SessionPage {
     body: Arc<str>,
     cx: &mut Context<Self>,
   ) {
-    if let Some(comment) = self
-      .agent_review_comments
-      .iter_mut()
-      .find(|comment| comment.id == comment_id)
-    {
-      comment.body = body;
-      self.sync_agent_review_comments_to_editor(cx);
-      if let Some(editor) = self.editor.clone() {
-        editor.update(cx, |editor, cx| {
-          editor.finish_review_comment_edit_submission(comment_id, None, cx);
-        });
-      }
-      cx.notify();
+    if !self.agent_review.update(comment_id, body) {
+      return;
     }
+
+    self.sync_agent_review_comments_to_editor(cx);
+    if let Some(editor) = self.editor.clone() {
+      editor.update(cx, |editor, cx| {
+        editor.finish_review_comment_edit_submission(comment_id, None, cx);
+      });
+    }
+    cx.notify();
   }
 
   fn delete_agent_review_comment(&mut self, comment_id: u64, cx: &mut Context<Self>) {
@@ -704,10 +635,9 @@ impl SessionPage {
       });
     }
 
-    self
-      .agent_review_comments
-      .retain(|comment| comment.id != comment_id && comment.in_reply_to_id != Some(comment_id));
+    self.agent_review.delete(comment_id);
     self.sync_agent_review_comments_to_editor(cx);
+
     if let Some(editor) = self.editor.clone() {
       editor.update(cx, |editor, cx| {
         editor.finish_review_comment_delete_submission(comment_id, cx);
@@ -716,124 +646,29 @@ impl SessionPage {
     cx.notify();
   }
 
-  fn local_agent_review_comment_to_editor_comment(
-    comment: &LocalAgentReviewComment,
-  ) -> ReviewComment {
-    let line_label = Some(Arc::<str>::from(agent_review_line_label(comment)));
-    let suggestion_context = if comment.original_lines.is_empty() {
-      None
-    } else {
-      Some(SuggestionContext {
-        original_start_line: comment.original_start_line,
-        suggested_start_line: comment.original_start_line,
-        original_lines: comment.original_lines.clone(),
-        path: Arc::from(comment.path.to_string_lossy().as_ref()),
-      })
-    };
-
-    ReviewComment {
-      id: comment.id,
-      in_reply_to_id: comment.in_reply_to_id,
-      line: comment.line,
-      side: comment.side,
-      author: Arc::from(""),
-      avatar_url: None,
-      line_label,
-      body: comment.body.clone(),
-      suggestion_context,
-      created_at: Arc::from(""),
-      thread_id: None,
-      is_resolved: false,
-      is_outdated: matches!(comment.state, LocalAgentReviewCommentState::Outdated),
-      viewer_can_resolve: false,
-      viewer_can_unresolve: false,
-      is_pending: false,
-    }
-  }
-
-  fn refresh_agent_review_comment_states_for_selected_file(&mut self, cx: &App) {
-    let Some(editor) = self.editor.clone() else {
-      return;
-    };
-    let Some(selected_file) = self.selected_file.clone() else {
-      return;
-    };
-
-    let current_file_lines = {
-      let document = editor.read(cx).document().clone();
-      let document = document.read(cx);
-      (0..document.len_lines())
-        .filter_map(|line_ix| {
-          document
-            .line_content(line_ix)
-            .map(|line| line.trim_end_matches(['\r', '\n']).to_string())
-        })
-        .collect::<Vec<_>>()
-    };
-
-    for comment in &mut self.agent_review_comments {
-      if comment.path != selected_file {
-        continue;
-      }
-      comment.state = next_agent_review_comment_state(comment, &current_file_lines);
-    }
-  }
-
   fn sync_agent_review_comments_to_editor(&mut self, cx: &mut Context<Self>) {
-    let Some(editor) = self.editor.clone() else {
-      return;
-    };
-    let Some(selected_file) = self.selected_file.clone() else {
-      editor.update(cx, |editor, cx| {
-        editor.set_review_comments(Vec::new(), cx);
-        editor.set_editable_review_comment_ids(std::iter::empty::<u64>(), cx);
-      });
-      return;
-    };
-
-    self.refresh_agent_review_comment_states_for_selected_file(cx);
-
-    let comments = self
-      .agent_review_comments
-      .iter()
-      .filter(|comment| comment.path == selected_file)
-      .filter(|comment| agent_review_comment_is_copyable(comment))
-      .map(Self::local_agent_review_comment_to_editor_comment)
-      .collect::<Vec<_>>();
-    let editable_ids = comments
-      .iter()
-      .map(|comment| comment.id)
-      .collect::<Vec<_>>();
-
-    editor.update(cx, |editor, cx| {
-      editor.set_editable_review_comment_ids(editable_ids, cx);
-      editor.set_review_comments(comments, cx);
-    });
+    let editor = self.editor.clone();
+    sync_comments_to_editor(
+      &mut self.agent_review,
+      editor.as_ref(),
+      self.selected_file.as_deref(),
+      cx,
+    );
   }
 
   fn copyable_review_comment_count(&self) -> usize {
-    self
-      .agent_review_comments
-      .iter()
-      .filter(|comment| agent_review_comment_is_copyable(comment))
-      .count()
+    self.agent_review.copyable_count()
   }
 
   fn send_agent_review_to_agent(&mut self, window: &mut Window, cx: &mut Context<Self>) {
     self.sync_agent_review_comments_to_editor(cx);
-    let copyable_ids = self
-      .agent_review_comments
-      .iter()
-      .filter(|comment| agent_review_comment_is_copyable(comment))
-      .map(|comment| comment.id)
-      .collect::<HashSet<_>>();
 
-    if copyable_ids.is_empty() {
+    if self.agent_review.copyable_count() == 0 {
       window.push_notification(Notification::info("No review comments to send"), cx);
       return;
     }
 
-    let review = format_agent_review_export(&self.agent_review_comments);
+    let review = self.agent_review.export();
     let Some(panel) = self.agent_chat_view.clone() else {
       return;
     };
@@ -854,11 +689,7 @@ impl SessionPage {
       return;
     }
 
-    for comment in &mut self.agent_review_comments {
-      if copyable_ids.contains(&comment.id) {
-        comment.state = LocalAgentReviewCommentState::Copied;
-      }
-    }
+    self.agent_review.mark_copyable_as_copied();
     self.sync_agent_review_comments_to_editor(cx);
     // Back to the conversation to watch the agent address the comments.
     self.close_diff(window, cx);
@@ -1647,8 +1478,10 @@ impl Focusable for SessionPage {
 #[cfg(test)]
 mod tests {
   use super::*;
+  use crate::agent_review::LocalAgentReviewCommentState;
   use crate::workspace::WorkspaceApi;
   use editor::ReviewCommentMode;
+  use editor::ReviewCommentSide;
   use git2::{Repository, Signature};
   use gpui::TestAppContext;
   use std::path::Path;
@@ -1900,13 +1733,13 @@ mod tests {
     });
     await_open_file(&page, cx).await;
 
-    page.update_in(cx, |page, window, cx| {
-      page.create_agent_review_comment(create_request(0, "extract helper"), window, cx);
+    page.update_in(cx, |page, _window, cx| {
+      page.create_agent_review_comment(create_request(0, "extract helper"), cx);
     });
 
     let comment_id = page.read_with(cx, |page, _| {
-      assert_eq!(page.agent_review_comments.len(), 1);
-      let comment = &page.agent_review_comments[0];
+      assert_eq!(page.agent_review.all().len(), 1);
+      let comment = &page.agent_review.all()[0];
       assert_eq!(comment.state, LocalAgentReviewCommentState::Draft);
       assert_eq!(comment.path, PathBuf::from("README.md"));
       assert_eq!(page.copyable_review_comment_count(), 1);
@@ -1917,7 +1750,7 @@ mod tests {
       page.delete_agent_review_comment(comment_id, cx);
     });
     page.read_with(cx, |page, _| {
-      assert!(page.agent_review_comments.is_empty());
+      assert!(page.agent_review.is_empty());
       assert_eq!(page.copyable_review_comment_count(), 0);
     });
   }
@@ -1938,16 +1771,16 @@ mod tests {
     await_open_file(&page, cx).await;
 
     page.update_in(cx, |page, window, cx| {
-      page.create_agent_review_comment(create_request(0, "still a draft"), window, cx);
+      page.create_agent_review_comment(create_request(0, "still a draft"), cx);
       // No agent chat view mounted: the send must not mark anything as sent.
       assert!(page.agent_chat_view.is_none());
       page.send_agent_review_to_agent(window, cx);
     });
 
     page.read_with(cx, |page, _| {
-      assert_eq!(page.agent_review_comments.len(), 1);
+      assert_eq!(page.agent_review.all().len(), 1);
       assert_eq!(
-        page.agent_review_comments[0].state,
+        page.agent_review.all()[0].state,
         LocalAgentReviewCommentState::Draft
       );
       assert_eq!(page.center, CenterView::Diff);
