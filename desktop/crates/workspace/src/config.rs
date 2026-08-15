@@ -137,6 +137,7 @@ fn ensure_settings_columns(conn: &Connection) -> rusqlite::Result<()> {
     ("clone_protocol", "TEXT NOT NULL DEFAULT 'https'"),
     ("menu_bar_icon", "INTEGER NOT NULL DEFAULT 1"),
     ("analytics_enabled", "INTEGER NOT NULL DEFAULT 1"),
+    ("home_page", "TEXT NOT NULL DEFAULT 'session'"),
   ];
 
   let mut existing = std::collections::HashSet::new();
@@ -175,6 +176,36 @@ pub struct RecentRepository {
   pub path: PathBuf,
 }
 
+/// Where the app lands on launch.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum HomePage {
+  Session,
+  Git,
+}
+
+impl HomePage {
+  pub fn as_str(self) -> &'static str {
+    match self {
+      Self::Session => "session",
+      Self::Git => "git",
+    }
+  }
+
+  pub fn from_str(value: &str) -> Self {
+    match value {
+      "git" => Self::Git,
+      _ => Self::Session,
+    }
+  }
+
+  pub fn pathname(self) -> &'static str {
+    match self {
+      Self::Session => "/session",
+      Self::Git => "/git",
+    }
+  }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum CloneProtocol {
   Https,
@@ -209,6 +240,7 @@ pub struct AppSettings {
   pub clone_protocol: CloneProtocol,
   pub menu_bar_icon: bool,
   pub analytics_enabled: bool,
+  pub home_page: HomePage,
 }
 
 impl Global for AppSettings {}
@@ -239,6 +271,7 @@ impl Default for AppSettings {
       clone_protocol: CloneProtocol::Https,
       menu_bar_icon: true,
       analytics_enabled: true,
+      home_page: HomePage::Session,
     }
   }
 }
@@ -400,7 +433,7 @@ impl ConfigStore {
   fn load_app_settings_inner(&self) -> AppSettings {
     let settings = self.conn.query_row(
       &format!(
-        "SELECT auto_switch_theme, dark_mode, indent_rainbow, font_size, git_unified_file_view, split_diff_view, hide_whitespace, clone_protocol, menu_bar_icon, analytics_enabled FROM {} WHERE id = 1",
+        "SELECT auto_switch_theme, dark_mode, indent_rainbow, font_size, git_unified_file_view, split_diff_view, hide_whitespace, clone_protocol, menu_bar_icon, analytics_enabled, home_page FROM {} WHERE id = 1",
         SETTINGS_TABLE.name
       ),
       [],
@@ -415,6 +448,7 @@ impl ConfigStore {
         let clone_protocol: String = row.get(7)?;
         let menu_bar_icon: i64 = row.get(8)?;
         let analytics_enabled: i64 = row.get(9)?;
+        let home_page: String = row.get(10)?;
         Ok(AppSettings {
           auto_switch_theme: auto_switch_theme != 0,
           dark_mode: dark_mode != 0,
@@ -426,6 +460,7 @@ impl ConfigStore {
           clone_protocol: CloneProtocol::from_str(&clone_protocol),
           menu_bar_icon: menu_bar_icon != 0,
           analytics_enabled: analytics_enabled != 0,
+          home_page: HomePage::from_str(&home_page),
         })
       },
     );
@@ -638,8 +673,8 @@ impl ConfigStore {
   fn persist_app_settings_inner(&self, settings: AppSettings) {
     if let Err(err) = self.conn.execute(
       &format!(
-        "INSERT INTO {} (id, auto_switch_theme, dark_mode, indent_rainbow, font_size, git_unified_file_view, split_diff_view, hide_whitespace, clone_protocol, menu_bar_icon, analytics_enabled)
-         VALUES (1, ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
+        "INSERT INTO {} (id, auto_switch_theme, dark_mode, indent_rainbow, font_size, git_unified_file_view, split_diff_view, hide_whitespace, clone_protocol, menu_bar_icon, analytics_enabled, home_page)
+         VALUES (1, ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)
          ON CONFLICT(id) DO UPDATE
          SET auto_switch_theme = excluded.auto_switch_theme,
              dark_mode = excluded.dark_mode,
@@ -650,7 +685,8 @@ impl ConfigStore {
              hide_whitespace = excluded.hide_whitespace,
              clone_protocol = excluded.clone_protocol,
              menu_bar_icon = excluded.menu_bar_icon,
-             analytics_enabled = excluded.analytics_enabled",
+             analytics_enabled = excluded.analytics_enabled,
+             home_page = excluded.home_page",
         SETTINGS_TABLE.name
       ),
       params![
@@ -688,6 +724,7 @@ impl ConfigStore {
         } else {
           0_i64
         },
+        settings.home_page.as_str(),
       ],
     ) {
       eprintln!("Failed to persist app settings: {}", err);
@@ -829,6 +866,7 @@ mod tests {
       hide_whitespace: true,
       clone_protocol: CloneProtocol::Ssh,
       menu_bar_icon: false,
+      home_page: HomePage::Git,
     };
     ConfigStore::persist_app_settings(settings);
 
@@ -842,8 +880,25 @@ mod tests {
     assert!(loaded.hide_whitespace);
     assert_eq!(loaded.clone_protocol, CloneProtocol::Ssh);
     assert!(!loaded.menu_bar_icon);
+    assert_eq!(loaded.home_page, HomePage::Git);
 
     ConfigStore::set_test_db_path(None);
+  }
+
+  #[test]
+  fn home_page_defaults_to_sessions_and_maps_to_routes() {
+    assert_eq!(AppSettings::default().home_page, HomePage::Session);
+    assert_eq!(HomePage::Session.pathname(), "/session");
+    assert_eq!(HomePage::Git.pathname(), "/git");
+  }
+
+  #[test]
+  fn home_page_parsing_falls_back_to_sessions() {
+    assert_eq!(HomePage::from_str("git"), HomePage::Git);
+    assert_eq!(HomePage::from_str("session"), HomePage::Session);
+    assert_eq!(HomePage::from_str("github"), HomePage::Session);
+    assert_eq!(HomePage::from_str(""), HomePage::Session);
+    assert_eq!(HomePage::Git.as_str(), "git");
   }
 
   #[test]

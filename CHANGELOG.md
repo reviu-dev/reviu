@@ -56,6 +56,10 @@ Reviu no longer asks for an OpenAI or Anthropic API key, and the AI settings are
 
 The agent conversation now reads in a centered column instead of stretching across the whole window, so long answers stay readable however wide you work. The composer is one box again: the message field and its controls share a single frame that lights up when you type in it. The agent's extra settings (reasoning effort, sandbox, approvals) collapse from a row of unlabeled dropdowns into one control that shows what is actually in effect, like `high · off`, and only stands out once you change something.
 
+### Choose Where Reviu Opens
+
+Settings gains a Home Page choice: Sessions, the default, or Git for those who come to Reviu for the Git client first. Reviu opens there on every launch.
+
 ## 0.18.0
 
 ### No More Failed Single Comments During A Review
