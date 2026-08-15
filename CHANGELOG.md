@@ -44,6 +44,10 @@ Reviu no longer carries its own repository browser (Overview, Readme, Code, Issu
 
 The GitHub home page is gone. Your notifications now live directly in the Sessions sidebar: unread count, one click to open (pull requests open in Reviu, everything else on github.com), and a check button to mark a notification as done without leaving your session. The top navigation is down to two tabs, Sessions and Git, on `cmd-1` and `cmd-2`. Without Reviu Pro, GitHub links land on the billing page.
 
+### A Pull Request Page Focused On The Diff
+
+The pull request Overview is now a summary, not a second GitHub. It keeps what you act on (branches, labels, assignees and reviewers, checks, merge readiness, the AI brief) and hands the rest to an Open on GitHub button: the long description and the comment thread. The nested scrollbar that came with the embedded conversation is gone, and auto-merge moves back to GitHub. The Changes tab is untouched: inline diff comments, suggestions, and sending your review to the agent all work as before.
+
 ## 0.18.0
 
 ### No More Failed Single Comments During A Review

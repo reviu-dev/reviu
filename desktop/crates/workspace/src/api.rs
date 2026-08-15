@@ -439,13 +439,6 @@ pub enum GithubIssueStateReason {
 }
 
 #[derive(Clone, Debug, Deserialize)]
-pub struct GithubIssueUser {
-  pub login: String,
-  #[serde(rename = "avatar_url")]
-  pub avatar_url: Option<String>,
-}
-
-#[derive(Clone, Debug, Deserialize)]
 #[allow(dead_code)]
 pub struct GithubIssue {
   pub id: u64,
@@ -461,7 +454,6 @@ pub struct GithubIssue {
   pub closed_at: Option<String>,
   pub labels: Vec<GithubPullRequestLabel>,
   pub comments_count: u64,
-  pub user: Option<GithubIssueUser>,
   pub repository: GithubRepository,
 }
 
@@ -470,15 +462,12 @@ pub struct GithubIssue {
 pub struct GithubIssueDetailsComment {
   #[serde(rename = "node_id", default)]
   pub node_id: String,
-  #[serde(default)]
-  pub reactions: Vec<GithubReactionGroup>,
   pub id: u64,
   pub body: Option<String>,
   #[serde(rename = "created_at")]
   pub created_at: String,
   #[serde(rename = "updated_at")]
   pub updated_at: String,
-  pub user: Option<GithubIssueUser>,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -486,8 +475,6 @@ pub struct GithubIssueDetailsComment {
 pub struct GithubIssueDetails {
   #[serde(rename = "node_id", default)]
   pub node_id: String,
-  #[serde(default)]
-  pub reactions: Vec<GithubReactionGroup>,
   pub id: u64,
   pub number: u64,
   pub title: String,
@@ -502,7 +489,6 @@ pub struct GithubIssueDetails {
   pub closed_at: Option<String>,
   pub labels: Vec<GithubPullRequestLabel>,
   pub comments: Vec<GithubIssueDetailsComment>,
-  pub user: Option<GithubIssueUser>,
   pub repository: GithubRepository,
 }
 
@@ -714,15 +700,6 @@ pub struct GithubPullRequestCommitUser {
   pub avatar_url: Option<String>,
 }
 
-#[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
-pub struct GithubCommitAuthorIdentity {
-  pub name: Option<String>,
-  pub email: Option<String>,
-  pub login: Option<String>,
-  #[serde(rename = "avatar_url")]
-  pub avatar_url: Option<String>,
-}
-
 #[derive(Clone, Debug, Deserialize)]
 pub struct GithubPullRequestCommit {
   pub sha: String,
@@ -733,10 +710,6 @@ pub struct GithubPullRequestCommit {
   pub committed_at: Option<String>,
   #[serde(rename = "parent_sha")]
   pub parent_sha: Option<String>,
-  pub author: Option<GithubPullRequestCommitUser>,
-  pub committer: Option<GithubPullRequestCommitUser>,
-  #[serde(default)]
-  pub authors: Vec<GithubCommitAuthorIdentity>,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -775,73 +748,11 @@ pub struct GithubPullRequestIssueCommentUser {
   pub avatar_url: Option<String>,
 }
 
-#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq, Hash)]
-#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
-pub enum GithubReactionContent {
-  Confused,
-  Eyes,
-  Heart,
-  Hooray,
-  Laugh,
-  Rocket,
-  ThumbsDown,
-  ThumbsUp,
-}
-
-impl GithubReactionContent {
-  pub const ALL: [Self; 8] = [
-    Self::ThumbsUp,
-    Self::Laugh,
-    Self::Confused,
-    Self::Rocket,
-    Self::ThumbsDown,
-    Self::Hooray,
-    Self::Heart,
-    Self::Eyes,
-  ];
-
-  pub fn emoji(self) -> &'static str {
-    match self {
-      Self::ThumbsUp => "👍",
-      Self::ThumbsDown => "👎",
-      Self::Laugh => "😄",
-      Self::Hooray => "🎉",
-      Self::Confused => "😕",
-      Self::Heart => "❤️",
-      Self::Rocket => "🚀",
-      Self::Eyes => "👀",
-    }
-  }
-
-  pub fn label(self) -> &'static str {
-    match self {
-      Self::ThumbsUp => "Thumbs up",
-      Self::ThumbsDown => "Thumbs down",
-      Self::Laugh => "Laugh",
-      Self::Hooray => "Hooray",
-      Self::Confused => "Confused",
-      Self::Heart => "Heart",
-      Self::Rocket => "Rocket",
-      Self::Eyes => "Eyes",
-    }
-  }
-}
-
-#[derive(Clone, Debug, Deserialize)]
-pub struct GithubReactionGroup {
-  pub content: GithubReactionContent,
-  pub count: u64,
-  #[serde(rename = "viewer_has_reacted")]
-  pub viewer_has_reacted: bool,
-}
-
 #[derive(Clone, Debug, Deserialize)]
 #[allow(dead_code)]
 pub struct GithubPullRequestIssueComment {
   #[serde(rename = "node_id", default)]
   pub node_id: String,
-  #[serde(default)]
-  pub reactions: Vec<GithubReactionGroup>,
   pub id: u64,
   pub body: String,
   #[serde(rename = "created_at")]
@@ -875,8 +786,6 @@ pub enum GithubPullRequestReviewState {
 pub struct GithubPullRequestReview {
   #[serde(rename = "node_id", default)]
   pub node_id: String,
-  #[serde(default)]
-  pub reactions: Vec<GithubReactionGroup>,
   pub id: u64,
   pub body: Option<String>,
   pub state: GithubPullRequestReviewState,
@@ -894,8 +803,6 @@ pub struct GithubPullRequestReview {
 pub struct GithubPullRequestReviewComment {
   #[serde(rename = "node_id", default)]
   pub node_id: String,
-  #[serde(default)]
-  pub reactions: Vec<GithubReactionGroup>,
   #[serde(default, rename = "is_outdated")]
   pub is_outdated: bool,
   #[serde(default, rename = "thread_id")]
@@ -995,8 +902,6 @@ pub enum GithubPullRequestMergeReadinessStatus {
 pub struct GithubPullRequestDetails {
   #[serde(rename = "node_id")]
   pub node_id: String,
-  #[serde(default)]
-  pub reactions: Vec<GithubReactionGroup>,
   pub number: u64,
   pub title: String,
   pub state: GithubPullRequestState,
@@ -1081,14 +986,6 @@ pub struct GithubPullRequestMergeReadiness {
   #[serde(rename = "mergeable_state")]
   pub mergeable_state: Option<String>,
   pub rebaseable: Option<bool>,
-  #[serde(rename = "auto_merge_enabled")]
-  pub auto_merge_enabled: bool,
-  #[serde(default, rename = "auto_merge")]
-  pub auto_merge: Option<GithubPullRequestAutoMergeDetails>,
-  #[serde(default, rename = "viewer_can_enable_auto_merge")]
-  pub viewer_can_enable_auto_merge: bool,
-  #[serde(default, rename = "viewer_can_disable_auto_merge")]
-  pub viewer_can_disable_auto_merge: bool,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -1403,20 +1300,9 @@ struct GithubIssueReferenceTargetResponse {
 }
 
 #[derive(Debug, Deserialize)]
-struct GithubIssueCommentResponse {
-  comment: GithubIssueDetailsComment,
-}
-
-#[derive(Debug, Deserialize)]
 struct GithubPullRequestDetailsResponse {
   #[serde(rename = "pullRequest")]
   pull_request: GithubPullRequestDetails,
-}
-
-#[derive(Debug, Deserialize)]
-struct GithubPullRequestDescriptionUpdateResponse {
-  #[serde(rename = "pullRequest")]
-  pull_request: GithubPullRequestDescriptionUpdate,
 }
 
 #[derive(Debug, Deserialize)]
@@ -1480,8 +1366,6 @@ struct GithubPullRequestCommitsResponse {
 pub struct GithubPullRequestConversationPullRequest {
   #[serde(rename = "node_id")]
   pub node_id: String,
-  #[serde(default)]
-  pub reactions: Vec<GithubReactionGroup>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -1498,11 +1382,6 @@ pub struct GithubPullRequestConversation {
 #[derive(Debug, Deserialize)]
 struct GithubPullRequestConversationResponse {
   conversation: GithubPullRequestConversation,
-}
-
-#[derive(Debug, Deserialize)]
-struct GithubReactionGroupsResponse {
-  reactions: Vec<GithubReactionGroup>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -1527,25 +1406,8 @@ struct UpdateGithubPullRequestCommentRequest<'a> {
 }
 
 #[derive(Debug, Serialize)]
-struct UpdateGithubIssueCommentRequest<'a> {
-  body: &'a str,
-}
-
-#[derive(Debug, Serialize)]
-struct UpdateGithubDescriptionRequest<'a> {
-  body: &'a str,
-}
-
-#[derive(Debug, Serialize)]
 struct UpdateGithubPullRequestBaseRequest<'a> {
   base: &'a str,
-}
-
-#[derive(Debug, Serialize)]
-struct GithubReactionMutationRequest<'a> {
-  #[serde(rename = "subjectId")]
-  subject_id: &'a str,
-  content: GithubReactionContent,
 }
 
 #[derive(Debug, Serialize)]
@@ -1647,17 +1509,6 @@ struct CreateGithubPullRequestMergeRequest<'a> {
   method: GithubPullRequestMergeMethod,
   #[serde(rename = "expectedHeadSha")]
   expected_head_sha: &'a str,
-  #[serde(rename = "commitTitle", skip_serializing_if = "Option::is_none")]
-  commit_title: Option<&'a str>,
-  #[serde(rename = "commitMessage", skip_serializing_if = "Option::is_none")]
-  commit_message: Option<&'a str>,
-}
-
-#[derive(Debug, Serialize)]
-struct EnableGithubPullRequestAutoMergeRequest<'a> {
-  #[serde(rename = "pullRequestId")]
-  pull_request_id: &'a str,
-  method: GithubPullRequestMergeMethod,
   #[serde(rename = "commitTitle", skip_serializing_if = "Option::is_none")]
   commit_title: Option<&'a str>,
   #[serde(rename = "commitMessage", skip_serializing_if = "Option::is_none")]
@@ -2288,75 +2139,6 @@ impl ApiClient {
     Ok(payload.target)
   }
 
-  pub fn create_issue_comment(
-    &self,
-    owner: &str,
-    repo: &str,
-    issue_number: u64,
-    body: &str,
-  ) -> Result<GithubIssueDetailsComment> {
-    let route = format!("/github/repos/{owner}/{repo}/issues/{issue_number}/comments");
-    let response = self
-      .authed_request(Method::POST, route.as_str())
-      .json(&UpdateGithubIssueCommentRequest { body })
-      .send()?;
-    let status = response.status();
-    Self::record_http_status("POST", route.as_str(), status);
-    if status == StatusCode::UNAUTHORIZED {
-      anyhow::bail!("unauthorized")
-    }
-    if !status.is_success() {
-      anyhow::bail!("unexpected status: {}", status);
-    }
-    let payload = response.json::<GithubIssueCommentResponse>()?;
-    Ok(payload.comment)
-  }
-
-  pub fn update_issue_comment(
-    &self,
-    owner: &str,
-    repo: &str,
-    issue_number: u64,
-    comment_id: u64,
-    body: &str,
-  ) -> Result<GithubIssueDetailsComment> {
-    let route = format!("/github/repos/{owner}/{repo}/issues/{issue_number}/comments/{comment_id}");
-    let response = self
-      .authed_request(Method::PATCH, route.as_str())
-      .json(&UpdateGithubIssueCommentRequest { body })
-      .send()?;
-    let status = response.status();
-    Self::record_http_status("PATCH", route.as_str(), status);
-    if status == StatusCode::UNAUTHORIZED {
-      anyhow::bail!("unauthorized")
-    }
-    if !status.is_success() {
-      anyhow::bail!("unexpected status: {}", status);
-    }
-    let payload = response.json::<GithubIssueCommentResponse>()?;
-    Ok(payload.comment)
-  }
-
-  pub fn delete_issue_comment(
-    &self,
-    owner: &str,
-    repo: &str,
-    issue_number: u64,
-    comment_id: u64,
-  ) -> Result<()> {
-    let route = format!("/github/repos/{owner}/{repo}/issues/{issue_number}/comments/{comment_id}");
-    let response = self.authed_request(Method::DELETE, route.as_str()).send()?;
-    let status = response.status();
-    Self::record_http_status("DELETE", route.as_str(), status);
-    if status == StatusCode::UNAUTHORIZED {
-      anyhow::bail!("unauthorized")
-    }
-    if !status.is_success() {
-      anyhow::bail!("unexpected status: {}", status);
-    }
-    Ok(())
-  }
-
   pub fn fetch_pull_request_details(
     &self,
     owner: &str,
@@ -2424,31 +2206,6 @@ impl ApiClient {
     }
     let payload = response.json::<GithubPullRequestChecksSummaryResponse>()?;
     Ok(payload.checks)
-  }
-
-  pub fn update_pull_request_description(
-    &self,
-    owner: &str,
-    repo: &str,
-    number: u64,
-    body: &str,
-  ) -> Result<GithubPullRequestDescriptionUpdate> {
-    let route = format!("/github/pr/{number}");
-    let response = self
-      .authed_request(Method::PATCH, route.as_str())
-      .query(&[("org", owner), ("repo", repo)])
-      .json(&UpdateGithubDescriptionRequest { body })
-      .send()?;
-    let status = response.status();
-    Self::record_http_status("PATCH", route.as_str(), status);
-    if status == StatusCode::UNAUTHORIZED {
-      anyhow::bail!("unauthorized")
-    }
-    if !status.is_success() {
-      anyhow::bail!("unexpected status: {}", status);
-    }
-    let payload = response.json::<GithubPullRequestDescriptionUpdateResponse>()?;
-    Ok(payload.pull_request)
   }
 
   pub fn update_pull_request_base(
@@ -2673,68 +2430,6 @@ impl ApiClient {
     Ok(())
   }
 
-  pub fn enable_pull_request_auto_merge(
-    &self,
-    owner: &str,
-    repo: &str,
-    number: u64,
-    pull_request_id: &str,
-    method: GithubPullRequestMergeMethod,
-    commit_title: Option<&str>,
-    commit_message: Option<&str>,
-  ) -> Result<()> {
-    let route = format!("/github/pr/{number}/auto-merge");
-    let trimmed_title = commit_title
-      .map(str::trim)
-      .filter(|value| !value.is_empty());
-    let trimmed_message = commit_message
-      .map(str::trim)
-      .filter(|value| !value.is_empty());
-    let response = self
-      .authed_request(Method::POST, route.as_str())
-      .query(&[("org", owner), ("repo", repo)])
-      .json(&EnableGithubPullRequestAutoMergeRequest {
-        pull_request_id,
-        method,
-        commit_title: trimmed_title,
-        commit_message: trimmed_message,
-      })
-      .send()?;
-    let status = response.status();
-    Self::record_http_status("POST", route.as_str(), status);
-    if status == StatusCode::UNAUTHORIZED {
-      anyhow::bail!("unauthorized")
-    }
-    if !status.is_success() {
-      return Err(Self::api_error_from_response(response));
-    }
-    Ok(())
-  }
-
-  pub fn disable_pull_request_auto_merge(
-    &self,
-    owner: &str,
-    repo: &str,
-    number: u64,
-    pull_request_id: &str,
-  ) -> Result<()> {
-    let route = format!("/github/pr/{number}/auto-merge");
-    let response = self
-      .authed_request(Method::DELETE, route.as_str())
-      .query(&[("org", owner), ("repo", repo)])
-      .json(&GithubPullRequestStatusMutationRequest { pull_request_id })
-      .send()?;
-    let status = response.status();
-    Self::record_http_status("DELETE", route.as_str(), status);
-    if status == StatusCode::UNAUTHORIZED {
-      anyhow::bail!("unauthorized")
-    }
-    if !status.is_success() {
-      return Err(Self::api_error_from_response(response));
-    }
-    Ok(())
-  }
-
   pub fn merge_pull_request(
     &self,
     owner: &str,
@@ -2907,64 +2602,6 @@ impl ApiClient {
     }
     let payload = response.json::<GithubPullRequestConversationResponse>()?;
     Ok(payload.conversation)
-  }
-
-  pub fn add_pull_request_reaction(
-    &self,
-    owner: &str,
-    repo: &str,
-    number: u64,
-    subject_id: &str,
-    content: GithubReactionContent,
-  ) -> Result<Vec<GithubReactionGroup>> {
-    let route = format!("/github/pr/{number}/reactions");
-    let response = self
-      .authed_request(Method::POST, route.as_str())
-      .query(&[("org", owner), ("repo", repo)])
-      .json(&GithubReactionMutationRequest {
-        subject_id,
-        content,
-      })
-      .send()?;
-    let status = response.status();
-    Self::record_http_status("POST", route.as_str(), status);
-    if status == StatusCode::UNAUTHORIZED {
-      anyhow::bail!("unauthorized")
-    }
-    if !status.is_success() {
-      return Err(Self::api_error_from_response(response));
-    }
-    let payload = response.json::<GithubReactionGroupsResponse>()?;
-    Ok(payload.reactions)
-  }
-
-  pub fn remove_pull_request_reaction(
-    &self,
-    owner: &str,
-    repo: &str,
-    number: u64,
-    subject_id: &str,
-    content: GithubReactionContent,
-  ) -> Result<Vec<GithubReactionGroup>> {
-    let route = format!("/github/pr/{number}/reactions");
-    let response = self
-      .authed_request(Method::DELETE, route.as_str())
-      .query(&[("org", owner), ("repo", repo)])
-      .json(&GithubReactionMutationRequest {
-        subject_id,
-        content,
-      })
-      .send()?;
-    let status = response.status();
-    Self::record_http_status("DELETE", route.as_str(), status);
-    if status == StatusCode::UNAUTHORIZED {
-      anyhow::bail!("unauthorized")
-    }
-    if !status.is_success() {
-      return Err(Self::api_error_from_response(response));
-    }
-    let payload = response.json::<GithubReactionGroupsResponse>()?;
-    Ok(payload.reactions)
   }
 
   pub fn update_pull_request_review_comment(
@@ -3708,7 +3345,6 @@ mod tests {
   ) -> GithubPullRequestDetails {
     GithubPullRequestDetails {
       node_id: "PR_kwDOExample".to_string(),
-      reactions: Vec::new(),
       number: 42,
       title: "Test PR".to_string(),
       state,
@@ -4253,157 +3889,6 @@ mod tests {
   }
 
   #[test]
-  fn create_issue_comment_parses_success_payload() {
-    let body = r#"{
-      "comment": {
-        "id": 9002,
-        "body": "New issue comment",
-        "created_at": "2026-02-20T10:00:00Z",
-        "updated_at": "2026-02-20T10:05:00Z",
-        "user": {
-          "login": "octocat",
-          "name": "The Octocat",
-          "avatar_url": "https://example.com/octocat.png"
-        }
-      }
-    }"#;
-    let (base_url, handle) = start_single_response_server("200 OK", body);
-    let api = make_test_api_client(base_url);
-
-    let comment = api
-      .create_issue_comment("acme", "widget", 77, "New issue comment")
-      .expect("create issue comment");
-    assert_eq!(comment.id, 9002);
-    assert_eq!(comment.body.as_deref(), Some("New issue comment"));
-    assert_eq!(
-      comment.user.as_ref().map(|user| user.login.as_str()),
-      Some("octocat")
-    );
-    handle.join().expect("join server thread");
-  }
-
-  #[test]
-  fn create_issue_comment_uses_expected_route() {
-    let body = r#"{
-      "comment": {
-        "id": 9002,
-        "body": "New issue comment",
-        "created_at": "2026-02-20T10:00:00Z",
-        "updated_at": "2026-02-20T10:05:00Z",
-        "user": null
-      }
-    }"#;
-    let (base_url, request_line, handle) =
-      start_single_response_server_with_request_line("200 OK", body);
-    let api = make_test_api_client(base_url);
-
-    let _ = api
-      .create_issue_comment("acme", "widget", 77, "New issue comment")
-      .expect("create issue comment");
-
-    handle.join().expect("join server thread");
-    let request_line = request_line
-      .lock()
-      .expect("lock request line")
-      .clone()
-      .unwrap_or_default();
-    assert_eq!(
-      request_line,
-      "POST /github/repos/acme/widget/issues/77/comments HTTP/1.1"
-    );
-  }
-
-  #[test]
-  fn update_issue_comment_parses_success_payload() {
-    let body = r#"{
-      "comment": {
-        "id": 9002,
-        "body": "Updated issue comment",
-        "created_at": "2026-02-20T10:00:00Z",
-        "updated_at": "2026-02-20T11:00:00Z",
-        "user": {
-          "login": "octocat",
-          "name": "The Octocat",
-          "avatar_url": "https://example.com/octocat.png"
-        }
-      }
-    }"#;
-    let (base_url, handle) = start_single_response_server("200 OK", body);
-    let api = make_test_api_client(base_url);
-
-    let comment = api
-      .update_issue_comment("acme", "widget", 77, 9002, "Updated issue comment")
-      .expect("update issue comment");
-    assert_eq!(comment.id, 9002);
-    assert_eq!(comment.body.as_deref(), Some("Updated issue comment"));
-    handle.join().expect("join server thread");
-  }
-
-  #[test]
-  fn update_issue_comment_uses_expected_route() {
-    let body = r#"{
-      "comment": {
-        "id": 9002,
-        "body": "Updated issue comment",
-        "created_at": "2026-02-20T10:00:00Z",
-        "updated_at": "2026-02-20T11:00:00Z",
-        "user": null
-      }
-    }"#;
-    let (base_url, request_line, handle) =
-      start_single_response_server_with_request_line("200 OK", body);
-    let api = make_test_api_client(base_url);
-
-    let _ = api
-      .update_issue_comment("acme", "widget", 77, 9002, "Updated issue comment")
-      .expect("update issue comment");
-
-    handle.join().expect("join server thread");
-    let request_line = request_line
-      .lock()
-      .expect("lock request line")
-      .clone()
-      .unwrap_or_default();
-    assert_eq!(
-      request_line,
-      "PATCH /github/repos/acme/widget/issues/77/comments/9002 HTTP/1.1"
-    );
-  }
-
-  #[test]
-  fn delete_issue_comment_returns_ok_on_success() {
-    let (base_url, handle) = start_single_response_server("200 OK", "{}");
-    let api = make_test_api_client(base_url);
-
-    api
-      .delete_issue_comment("acme", "widget", 77, 9002)
-      .expect("delete issue comment");
-    handle.join().expect("join server thread");
-  }
-
-  #[test]
-  fn delete_issue_comment_uses_expected_route() {
-    let (base_url, request_line, handle) =
-      start_single_response_server_with_request_line("200 OK", "{}");
-    let api = make_test_api_client(base_url);
-
-    api
-      .delete_issue_comment("acme", "widget", 77, 9002)
-      .expect("delete issue comment");
-
-    handle.join().expect("join server thread");
-    let request_line = request_line
-      .lock()
-      .expect("lock request line")
-      .clone()
-      .unwrap_or_default();
-    assert_eq!(
-      request_line,
-      "DELETE /github/repos/acme/widget/issues/77/comments/9002 HTTP/1.1"
-    );
-  }
-
-  #[test]
   fn fetch_pull_request_details_parses_success_payload() {
     let body = r#"{
       "pullRequest": {
@@ -4638,8 +4123,7 @@ mod tests {
         "can_merge_now": true,
         "viewer_can_merge": true,
         "mergeable_state": "clean",
-        "rebaseable": true,
-        "auto_merge_enabled": false
+        "rebaseable": true
       }
     }"#;
     let (base_url, handle) = start_single_response_server("200 OK", body);
@@ -4681,8 +4165,7 @@ mod tests {
         "can_merge_now": false,
         "viewer_can_merge": false,
         "mergeable_state": null,
-        "rebaseable": null,
-        "auto_merge_enabled": false
+        "rebaseable": null
       }
     }"#;
     let (base_url, request_line, handle) =
@@ -4881,55 +4364,6 @@ mod tests {
     assert_eq!(
       request_line,
       "GET /github/pr/42/checks?org=acme&repo=widget HTTP/1.1"
-    );
-  }
-
-  #[test]
-  fn update_pull_request_description_parses_success_payload() {
-    let body = r#"{
-      "pullRequest": {
-        "number": 42,
-        "body": "Updated PR description",
-        "updated_at": "2026-02-15T13:00:00Z"
-      }
-    }"#;
-    let (base_url, handle) = start_single_response_server("200 OK", body);
-    let api = make_test_api_client(base_url);
-
-    let pull_request = api
-      .update_pull_request_description("acme", "widget", 42, "Updated PR description")
-      .expect("update pull request description");
-    assert_eq!(pull_request.number, 42);
-    assert_eq!(pull_request.body.as_deref(), Some("Updated PR description"));
-    handle.join().expect("join server thread");
-  }
-
-  #[test]
-  fn update_pull_request_description_uses_expected_route() {
-    let body = r#"{
-      "pullRequest": {
-        "number": 42,
-        "body": "",
-        "updated_at": "2026-02-15T13:00:00Z"
-      }
-    }"#;
-    let (base_url, request_line, handle) =
-      start_single_response_server_with_request_line("200 OK", body);
-    let api = make_test_api_client(base_url);
-
-    let _ = api
-      .update_pull_request_description("acme", "widget", 42, "")
-      .expect("update pull request description");
-
-    handle.join().expect("join server thread");
-    let request_line = request_line
-      .lock()
-      .expect("lock request line")
-      .clone()
-      .unwrap_or_default();
-    assert_eq!(
-      request_line,
-      "PATCH /github/pr/42?org=acme&repo=widget HTTP/1.1"
     );
   }
 
@@ -5238,18 +4672,8 @@ mod tests {
     assert_eq!(commits[0].sha, "1111111111111111111111111111111111111111");
     assert_eq!(commits[0].message, "feat: add commit filter");
     assert_eq!(
-      commits[0].author.as_ref().map(|user| user.login.as_str()),
-      Some("octocat")
-    );
-    assert_eq!(
       commits[0].parent_sha.as_deref(),
       Some("0000000000000000000000000000000000000000")
-    );
-    assert_eq!(commits[0].authors.len(), 2);
-    assert_eq!(commits[0].authors[0].login.as_deref(), Some("octocat"));
-    assert_eq!(
-      commits[0].authors[1].email.as_deref(),
-      Some("coauthor@example.com")
     );
     handle.join().expect("join server thread");
   }
@@ -5281,24 +4705,14 @@ mod tests {
   fn fetch_pull_request_conversation_parses_success_payload() {
     let body = r#"{
       "conversation": {
-        "pull_request": {
-          "node_id": "PR_kwDOExample",
-          "reactions": [
-            {
-              "content": "THUMBS_UP",
-              "count": 2,
-              "viewer_has_reacted": true
-            }
-          ]
-        },
+        "pull_request": { "node_id": "PR_kwDOExample" },
         "issue_comments": [
           {
             "node_id": "IC_kwDOExample",
             "id": 11,
             "body": "Can you add tests?",
             "created_at": "2026-02-28T10:00:00Z",
-            "updated_at": "2026-02-28T10:05:00Z",
-            "user": { "login": "octocat", "avatar_url": null }
+            "updated_at": "2026-02-28T10:05:00Z"
           }
         ],
         "reviews": [
@@ -5346,10 +4760,6 @@ mod tests {
       .fetch_pull_request_conversation("acme", "widget", 42)
       .expect("fetch pull request conversation");
     assert_eq!(conversation.pull_request.node_id, "PR_kwDOExample");
-    assert_eq!(
-      conversation.pull_request.reactions[0].content,
-      GithubReactionContent::ThumbsUp
-    );
     assert_eq!(conversation.issue_comments[0].node_id, "IC_kwDOExample");
     assert_eq!(
       conversation.reviews[0].state,
@@ -5380,95 +4790,6 @@ mod tests {
       request_line,
       "GET /github/pr/42/conversation?org=acme&repo=widget HTTP/1.1"
     );
-  }
-
-  #[test]
-  fn add_pull_request_reaction_serializes_subject_and_content() {
-    let body = r#"{
-      "reactions": [
-        { "content": "THUMBS_UP", "count": 3, "viewer_has_reacted": true }
-      ]
-    }"#;
-    let (base_url, request, handle) = start_single_response_server_with_request("200 OK", body);
-    let api = make_test_api_client(base_url);
-
-    let reactions = api
-      .add_pull_request_reaction(
-        "acme",
-        "widget",
-        42,
-        "IC_kwDOExample",
-        GithubReactionContent::ThumbsUp,
-      )
-      .expect("add pull request reaction");
-
-    assert_eq!(reactions.len(), 1);
-    assert_eq!(reactions[0].content, GithubReactionContent::ThumbsUp);
-    assert!(reactions[0].viewer_has_reacted);
-    handle.join().expect("join server thread");
-    let request = request
-      .lock()
-      .expect("lock request")
-      .clone()
-      .unwrap_or_default();
-    assert!(request.starts_with("POST /github/pr/42/reactions?org=acme&repo=widget HTTP/1.1"));
-    assert!(request.contains("\"subjectId\":\"IC_kwDOExample\""));
-    assert!(request.contains("\"content\":\"THUMBS_UP\""));
-  }
-
-  #[test]
-  fn remove_pull_request_reaction_uses_delete_reactions_route() {
-    let body = r#"{"reactions":[]}"#;
-    let (base_url, request_line, handle) =
-      start_single_response_server_with_request_line("200 OK", body);
-    let api = make_test_api_client(base_url);
-
-    let reactions = api
-      .remove_pull_request_reaction(
-        "acme",
-        "widget",
-        42,
-        "IC_kwDOExample",
-        GithubReactionContent::Heart,
-      )
-      .expect("remove pull request reaction");
-
-    assert!(reactions.is_empty());
-    handle.join().expect("join server thread");
-    let request_line = request_line
-      .lock()
-      .expect("lock request line")
-      .clone()
-      .unwrap_or_default();
-    assert_eq!(
-      request_line,
-      "DELETE /github/pr/42/reactions?org=acme&repo=widget HTTP/1.1"
-    );
-  }
-
-  #[test]
-  fn add_pull_request_reaction_surfaces_backend_error_message() {
-    let body = r#"{"error":"The openai organization restricts OAuth app access. Ask an organization owner to approve Reviu, then try again."}"#;
-    let (base_url, handle) = start_single_response_server("403 FORBIDDEN", body);
-    let api = make_test_api_client(base_url);
-
-    let err = api
-      .add_pull_request_reaction(
-        "openai",
-        "reviu",
-        42,
-        "PR_kwDOExample",
-        GithubReactionContent::ThumbsUp,
-      )
-      .expect_err("add pull request reaction should fail");
-
-    assert_eq!(
-      err.to_string(),
-      "The openai organization restricts OAuth app access. Ask an organization owner to approve Reviu, then try again."
-    );
-    let api_error = err.downcast_ref::<ApiError>().expect("api error");
-    assert_eq!(api_error.status_code_u16(), Some(403));
-    handle.join().expect("join server thread");
   }
 
   #[test]
@@ -6511,61 +5832,11 @@ mod tests {
   }
 
   #[test]
-  fn create_issue_comment_returns_unauthorized_error() {
-    let (base_url, handle) = start_single_response_server("401 Unauthorized", "");
-    let api = make_test_api_client(base_url);
-
-    let err = api
-      .create_issue_comment("acme", "widget", 77, "New issue comment")
-      .err();
-    assert!(err.is_some());
-    assert!(err.expect("error").to_string().contains("unauthorized"));
-    handle.join().expect("join server thread");
-  }
-
-  #[test]
-  fn update_issue_comment_returns_unauthorized_error() {
-    let (base_url, handle) = start_single_response_server("401 Unauthorized", "");
-    let api = make_test_api_client(base_url);
-
-    let err = api
-      .update_issue_comment("acme", "widget", 77, 9002, "Updated issue comment")
-      .err();
-    assert!(err.is_some());
-    assert!(err.expect("error").to_string().contains("unauthorized"));
-    handle.join().expect("join server thread");
-  }
-
-  #[test]
-  fn delete_issue_comment_returns_unauthorized_error() {
-    let (base_url, handle) = start_single_response_server("401 Unauthorized", "");
-    let api = make_test_api_client(base_url);
-
-    let err = api.delete_issue_comment("acme", "widget", 77, 9002).err();
-    assert!(err.is_some());
-    assert!(err.expect("error").to_string().contains("unauthorized"));
-    handle.join().expect("join server thread");
-  }
-
-  #[test]
   fn fetch_pull_request_details_returns_unauthorized_error() {
     let (base_url, handle) = start_single_response_server("401 Unauthorized", "");
     let api = make_test_api_client(base_url);
 
     let err = api.fetch_pull_request_details("acme", "widget", 42).err();
-    assert!(err.is_some());
-    assert!(err.expect("error").to_string().contains("unauthorized"));
-    handle.join().expect("join server thread");
-  }
-
-  #[test]
-  fn update_pull_request_description_returns_unauthorized_error() {
-    let (base_url, handle) = start_single_response_server("401 Unauthorized", "");
-    let api = make_test_api_client(base_url);
-
-    let err = api
-      .update_pull_request_description("acme", "widget", 42, "Body")
-      .err();
     assert!(err.is_some());
     assert!(err.expect("error").to_string().contains("unauthorized"));
     handle.join().expect("join server thread");

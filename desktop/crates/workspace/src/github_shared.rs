@@ -1,59 +1,14 @@
 use std::path::Path;
 use std::sync::Arc;
 
-use gpui::{
-  Anchor, AnyElement, App, Context, Entity, ExternalPaths, Hsla, IntoElement, MouseButton,
-  ParentElement as _, Styled, Window, div, prelude::*,
-};
-use gpui_component::{
-  Colorize, Icon, IconName, Sizable as _,
-  avatar::Avatar,
-  button::{Button, ButtonVariants as _},
-  clipboard::Clipboard,
-  h_flex,
-  input::TextareaState,
-  menu::{DropdownMenu as _, PopupMenuItem},
-  tag::Tag,
-  tooltip::Tooltip,
-  v_flex,
-};
+use gpui::{Context, Entity, ExternalPaths, Hsla, ParentElement as _, Window};
+use gpui_component::{Colorize, Sizable as _, input::TextareaState, tag::Tag};
 use smol::unblock;
-use ui::{
-  ReactionGroup as UiReactionGroup, ReactionOption as UiReactionOption, StatusTag,
-  StatusThemeExt as _, UiIconName,
+use ui::{StatusTag, StatusThemeExt as _};
+
+use crate::api::{
+  ApiClient, GithubPullRequestLabel, GithubPullRequestState, GithubPullRequestStatus,
 };
-
-use crate::{
-  api::{
-    ApiClient, GithubCommitAuthorIdentity, GithubPullRequestLabel, GithubPullRequestState,
-    GithubPullRequestStatus, GithubReactionContent, GithubReactionGroup,
-  },
-  date_format::format_relative_time,
-};
-
-pub(crate) fn github_reaction_options() -> Vec<UiReactionOption<GithubReactionContent>> {
-  GithubReactionContent::ALL
-    .into_iter()
-    .map(|content| UiReactionOption::new(content, content.emoji(), content.label()))
-    .collect()
-}
-
-pub(crate) fn github_reaction_groups(
-  reactions: &[GithubReactionGroup],
-) -> Vec<UiReactionGroup<GithubReactionContent>> {
-  reactions
-    .iter()
-    .map(|reaction| {
-      UiReactionGroup::new(
-        reaction.content,
-        reaction.content.emoji(),
-        reaction.content.label(),
-        reaction.count,
-        reaction.viewer_has_reacted,
-      )
-    })
-    .collect()
-}
 
 pub(crate) fn make_asset_url_resolver(
   api: &ApiClient,
@@ -76,92 +31,6 @@ pub(crate) fn try_open_github_asset_url(url: &str, api: &ApiClient, cx: &mut gpu
     Err(_) => cx.open_url(url),
   }
   true
-}
-
-pub(crate) type CommentMenuAction = Arc<dyn Fn(&gpui::ClickEvent, &mut Window, &mut App) + 'static>;
-
-#[derive(Clone, Default)]
-pub(crate) struct CommentActionsMenu {
-  pub(crate) on_quote_reply: Option<CommentMenuAction>,
-  pub(crate) on_edit: Option<CommentMenuAction>,
-  pub(crate) on_delete: Option<CommentMenuAction>,
-}
-
-impl CommentActionsMenu {
-  pub(crate) fn is_empty(&self) -> bool {
-    self.on_quote_reply.is_none() && self.on_edit.is_none() && self.on_delete.is_none()
-  }
-}
-
-/// Shared "⋯" actions menu for a comment. Caller passes whichever actions
-/// apply; the menu is rendered only when at least one is available. Keeps
-/// the menu decoupled from any specific page type (PR overview, issue
-/// sheet, editor overlay) so each caller just wires closures that know how
-/// to perform the action on its own entity.
-pub(crate) fn render_comment_actions_menu(
-  button_id: String,
-  actions: CommentActionsMenu,
-) -> Option<AnyElement> {
-  if actions.is_empty() {
-    return None;
-  }
-
-  Some(
-    div()
-      .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-      .child(
-        Button::new(button_id)
-          .ghost()
-          .xsmall()
-          .compact()
-          .icon(IconName::Ellipsis)
-          .tooltip("More actions")
-          .dropdown_menu_with_anchor(Anchor::TopRight, move |mut menu, _, _| {
-            let actions = actions.clone();
-            if let Some(on_quote_reply) = actions.on_quote_reply {
-              menu = menu.item(
-                PopupMenuItem::new("Quote reply")
-                  .icon(Icon::new(UiIconName::MessageCircleReply))
-                  .on_click(move |event, window, cx| on_quote_reply(event, window, cx)),
-              );
-            }
-            if let Some(on_edit) = actions.on_edit {
-              menu = menu.item(
-                PopupMenuItem::new("Edit")
-                  .icon(Icon::new(UiIconName::SquarePen))
-                  .on_click(move |event, window, cx| on_edit(event, window, cx)),
-              );
-            }
-            if let Some(on_delete) = actions.on_delete {
-              menu = menu.item(
-                PopupMenuItem::new("Delete")
-                  .icon(Icon::new(UiIconName::Trash))
-                  .on_click(move |event, window, cx| on_delete(event, window, cx)),
-              );
-            }
-            menu
-          }),
-      )
-      .into_any_element(),
-  )
-}
-
-/// Format a comment body as a GitHub-style quote block followed by an
-/// empty line so the cursor lands ready to type.
-pub(crate) fn quote_reply_markdown(body: &str) -> String {
-  let mut out = String::new();
-  let body = body.trim_end_matches('\n');
-  if body.is_empty() {
-    out.push_str("> \n");
-  } else {
-    for line in body.split('\n') {
-      out.push_str("> ");
-      out.push_str(line);
-      out.push('\n');
-    }
-  }
-  out.push('\n');
-  out
 }
 
 pub(crate) fn image_content_type_and_name_for_path(path: &Path) -> Option<(String, String)> {
@@ -269,10 +138,6 @@ pub(crate) fn upload_dropped_images<V: 'static>(
     })
     .detach();
   }
-}
-
-pub(crate) fn short_sha(sha: &str) -> String {
-  sha.chars().take(7).collect()
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -426,164 +291,6 @@ pub(crate) fn commit_subject(message: &str) -> String {
     .to_string()
 }
 
-fn commit_author_display_name(author: &GithubCommitAuthorIdentity) -> String {
-  author
-    .login
-    .as_ref()
-    .or(author.name.as_ref())
-    .or(author.email.as_ref())
-    .filter(|value| !value.trim().is_empty())
-    .cloned()
-    .unwrap_or_else(|| "unknown".to_string())
-}
-
-fn fallback_commit_author(
-  author_login: Option<&str>,
-  author_avatar_url: Option<&str>,
-) -> GithubCommitAuthorIdentity {
-  GithubCommitAuthorIdentity {
-    name: author_login.map(str::to_string),
-    email: None,
-    login: author_login.map(str::to_string),
-    avatar_url: author_avatar_url.map(str::to_string),
-  }
-}
-
-pub(crate) fn commit_authors_for_display(
-  authors: &[GithubCommitAuthorIdentity],
-  author_login: Option<&str>,
-  author_avatar_url: Option<&str>,
-) -> Vec<GithubCommitAuthorIdentity> {
-  if authors.is_empty() {
-    vec![fallback_commit_author(author_login, author_avatar_url)]
-  } else {
-    authors.to_vec()
-  }
-}
-
-pub(crate) fn commit_authors_label(authors: &[GithubCommitAuthorIdentity]) -> String {
-  match authors {
-    [] => "unknown".to_string(),
-    [author] => commit_author_display_name(author),
-    [first, second] => format!(
-      "{} and {}",
-      commit_author_display_name(first),
-      commit_author_display_name(second)
-    ),
-    [first, second, rest @ ..] => {
-      let remaining_count = rest.len();
-      let suffix = if remaining_count == 1 {
-        "other"
-      } else {
-        "others"
-      };
-      format!(
-        "{}, {}, and {} {}",
-        commit_author_display_name(first),
-        commit_author_display_name(second),
-        remaining_count,
-        suffix
-      )
-    }
-  }
-}
-
-pub(crate) fn render_commit_author_avatars(authors: &[GithubCommitAuthorIdentity]) -> gpui::Div {
-  let mut avatars = h_flex().items_center().flex_shrink_0();
-  for (ix, author) in authors.iter().take(3).enumerate() {
-    avatars = avatars.child(
-      div().when(ix > 0, |this| this.ml(gpui::px(-4.0))).child(
-        Avatar::new()
-          .name(commit_author_display_name(author))
-          .when_some(author.avatar_url.clone(), |this, url| this.src(url))
-          .small(),
-      ),
-    );
-  }
-
-  if authors.len() > 3 {
-    avatars = avatars.child(
-      Tag::secondary()
-        .small()
-        .rounded_full()
-        .ml_1()
-        .child(format!("+{}", authors.len() - 3)),
-    );
-  }
-
-  avatars
-}
-
-pub(crate) fn render_commit_row_content_with_authors(
-  sha: &str,
-  message: &str,
-  committed_at: &str,
-  authors: &[GithubCommitAuthorIdentity],
-  author_login: Option<&str>,
-  author_avatar_url: Option<&str>,
-  theme: &gpui_component::Theme,
-) -> gpui::Div {
-  let subject = commit_subject(message);
-  let short = short_sha(sha);
-  let authors = commit_authors_for_display(authors, author_login, author_avatar_url);
-  let author = commit_authors_label(&authors);
-  let date_label = format_relative_time(committed_at);
-  let full_sha = sha.to_string();
-
-  h_flex()
-    .w_full()
-    .min_w_0()
-    .items_center()
-    .gap_3()
-    .child(render_commit_author_avatars(&authors))
-    .child(
-      v_flex()
-        .min_w_0()
-        .flex_1()
-        .gap_1()
-        .child(
-          div()
-            .min_w_0()
-            .overflow_hidden()
-            .text_ellipsis()
-            .text_sm()
-            .font_weight(gpui::FontWeight::MEDIUM)
-            .text_color(theme.foreground)
-            .child(subject),
-        )
-        .child(
-          h_flex()
-            .min_w_0()
-            .items_center()
-            .gap_1()
-            .text_xs()
-            .text_color(theme.muted_foreground)
-            .child(
-              h_flex()
-                .flex_shrink_0()
-                .items_center()
-                .gap_0p5()
-                .child(
-                  Tag::secondary()
-                    .small()
-                    .rounded_full()
-                    .text_color(theme.muted_foreground)
-                    .child(short.clone()),
-                )
-                .child(
-                  div()
-                    .id(format!("copy-commit-sha-tooltip-{short}"))
-                    .hoverable_tooltip(|window, cx| Tooltip::new("Copy sha").build(window, cx))
-                    .child(Clipboard::new(format!("copy-commit-sha-{short}")).value(full_sha)),
-                ),
-            )
-            .child(div().flex_shrink_0().child(author))
-            .child("·")
-            .child(div().flex_shrink_0().child(date_label)),
-        ),
-    )
-}
-
 pub(crate) fn repo_label(owner: &str, repo: &str) -> String {
   format!("{owner}/{repo}")
 }
@@ -733,42 +440,22 @@ pub(crate) fn normalize_non_empty_text(value: &str) -> Option<String> {
   }
 }
 
-pub(crate) fn next_trimmed_text_update(raw_value: &str, initial_value: &str) -> Option<String> {
-  let next_value = raw_value.trim();
-  if next_value == initial_value.trim() {
-    None
-  } else {
-    Some(next_value.to_string())
-  }
-}
-
 #[cfg(test)]
 mod tests {
   use super::{
-    DiffHunkLineKind, commit_authors_label, extract_original_line_range_from_diff_hunk,
+    DiffHunkLineKind, extract_original_line_range_from_diff_hunk,
     extract_original_lines_from_diff_hunk, github_label_color, is_unauthorized_error_message,
-    line_snippets_from_content, logins_match_case_insensitive, next_trimmed_text_update,
-    normalize_non_empty_text, parse_diff_hunk_lines, pr_url, pull_request_status_color,
-    pull_request_status_label, repo_label, short_sha,
+    line_snippets_from_content, logins_match_case_insensitive, normalize_non_empty_text,
+    parse_diff_hunk_lines, pr_url, pull_request_status_color, pull_request_status_label,
+    repo_label,
   };
-  use crate::api::{GithubCommitAuthorIdentity, GithubPullRequestLabel, GithubPullRequestStatus};
+  use crate::api::{GithubPullRequestLabel, GithubPullRequestStatus};
   use gpui::TestAppContext;
   use gpui_component::{ActiveTheme as _, Colorize as _};
   use ui::StatusThemeExt as _;
 
   fn init_gpui_test(cx: &mut TestAppContext) {
     cx.update(gpui_component::init);
-  }
-
-  #[test]
-  fn short_sha_truncates_to_seven_characters() {
-    assert_eq!(short_sha("1234567890abcdef"), "1234567");
-  }
-
-  #[test]
-  fn short_sha_keeps_short_values_and_empty_string() {
-    assert_eq!(short_sha("abc"), "abc");
-    assert_eq!(short_sha(""), "");
   }
 
   #[test]
@@ -889,70 +576,6 @@ mod tests {
       Some("hello world".to_string())
     );
     assert_eq!(normalize_non_empty_text(" \n\t "), None);
-  }
-
-  #[test]
-  fn next_trimmed_text_update_returns_none_when_value_is_unchanged_after_trim() {
-    assert_eq!(
-      next_trimmed_text_update("  hello world  ", "hello world"),
-      None
-    );
-  }
-
-  #[test]
-  fn next_trimmed_text_update_returns_trimmed_value_when_changed() {
-    assert_eq!(
-      next_trimmed_text_update("  hello reviu  ", "hello world"),
-      Some("hello reviu".to_string())
-    );
-  }
-
-  #[test]
-  fn next_trimmed_text_update_allows_empty_string_to_clear_value() {
-    assert_eq!(
-      next_trimmed_text_update("   ", "hello world"),
-      Some(String::new())
-    );
-  }
-
-  #[test]
-  fn commit_authors_label_formats_single_and_multiple_authors() {
-    let author = |login: Option<&str>, name: Option<&str>| GithubCommitAuthorIdentity {
-      name: name.map(str::to_string),
-      email: None,
-      login: login.map(str::to_string),
-      avatar_url: None,
-    };
-
-    assert_eq!(commit_authors_label(&[]), "unknown");
-    assert_eq!(
-      commit_authors_label(&[author(Some("octocat"), Some("Octo Cat"))]),
-      "octocat"
-    );
-    assert_eq!(
-      commit_authors_label(&[
-        author(Some("octocat"), Some("Octo Cat")),
-        author(None, Some("Co Author")),
-      ]),
-      "octocat and Co Author"
-    );
-    assert_eq!(
-      commit_authors_label(&[
-        author(Some("octocat"), Some("Octo Cat")),
-        author(None, Some("Co Author")),
-        author(Some("user"), None),
-      ]),
-      "octocat, Co Author, and 1 other"
-    );
-    assert_eq!(
-      commit_authors_label(&[
-        author(Some("octocat"), Some("Octo Cat")),
-        author(None, Some("Co Author")),
-        author(Some("user"), None),
-        author(Some("foo-bar"), None),
-      ]),
-      "octocat, Co Author, and 2 others"
-    );
   }
 
   #[test]
