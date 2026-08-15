@@ -2388,6 +2388,8 @@ fn markdown_view(id: impl Into<gpui::ElementId>, source: &str, cx: &App) -> gpui
   TextView::markdown(id, SharedString::from(source.to_string()))
     .style(style)
     .selectable(true)
+    // Body text inherits from here; headings scale off `heading_base_font_size`.
+    .text_sm()
     .into_any_element()
 }
 
