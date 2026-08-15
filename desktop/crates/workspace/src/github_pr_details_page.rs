@@ -6,20 +6,15 @@ use std::{
 };
 
 use editor::{
-  CloseFind, DiffViewMode, Editor, Find, HunkNavigationDirection,
-  REVIEW_COMMENT_CARD_CONTENT_GAP_PX, REVIEW_COMMENT_CARD_PADDING_X_PX,
-  REVIEW_COMMENT_HEADER_BODY_GAP_PX, REVIEW_COMMENT_VERTICAL_PADDING_PX, ReviewComment,
+  CloseFind, DiffViewMode, Editor, Find, HunkNavigationDirection, ReviewComment,
   ReviewCommentCancelHandler, ReviewCommentCodeReferencePreview, ReviewCommentCreateHandler,
   ReviewCommentCreateRequest, ReviewCommentDeleteHandler, ReviewCommentEditHandler,
   ReviewCommentImageUploadHandler, ReviewCommentLinkHandler, ReviewCommentMode,
   ReviewCommentResolveHandler, ReviewCommentSide, ReviewCommentSuggestionActionFactory,
 };
 use gfm_markdown_viewer::{
-  GithubBlobLineReference, GithubCodeReferencePreview, GithubDiffLine, GithubDiffLineKind,
-  LinkAction, MarkdownRenderOptions, MarkdownRenderState, SuggestionActionContext,
-  SuggestionContext, extract_github_blob_line_references,
-  render_github_code_reference_preview_card, render_github_diff_code_reference_preview_card,
-  render_markdown,
+  GithubBlobLineReference, LinkAction, MarkdownRenderOptions, MarkdownRenderState,
+  SuggestionActionContext, SuggestionContext, extract_github_blob_line_references, render_markdown,
 };
 use git::{
   DiffKind, DiffSet, FileDiff, GitStore, RepoStatusKind, compute_buffer_diff, create_stash,
@@ -29,10 +24,9 @@ use git::{
 };
 use gpui::{
   Anchor, AnyElement, AnyWindowHandle, App, ClipboardItem, Context, Entity, ExternalPaths,
-  FocusHandle, Focusable, Hsla, Image, InteractiveElement, Keystroke, ListAlignment,
-  ListState as GpuiListState, MouseButton, ObjectFit, ParentElement, PathBuilder, Render,
-  RenderImage, SharedString, Styled, Task, Window, canvas, deferred, div, img, list, point,
-  prelude::*, px, white,
+  FocusHandle, Focusable, Hsla, Image, InteractiveElement, Keystroke, MouseButton, ObjectFit,
+  ParentElement, PathBuilder, Render, RenderImage, SharedString, Styled, Task, Window, canvas,
+  deferred, div, img, point, prelude::*, px, white,
 };
 use gpui_component::{
   ActiveTheme as _, Disableable, Icon, IconName, Selectable, Sizable as _, StyledExt,
@@ -65,8 +59,8 @@ use smol::unblock;
 use ui::{
   CommandPalette, CommandPaletteAction, CommandPaletteCommand, CommandPaletteConfig,
   CommandPaletteHandler, CommandPalettePage, ConfirmDialog, FILE_ICON_SIZE_PX, Input, InputState,
-  MarkdownComposer, Popover, ReactionBar, ScrollAxes, SearchFileEntry, SearchFileHandler,
-  SelectableRowStyle, StatusTag, StatusThemeExt, Textarea, TextareaState, UiIconName, WindowExt,
+  MarkdownComposer, Popover, ScrollAxes, SearchFileEntry, SearchFileHandler, SelectableRowStyle,
+  StatusThemeExt, Textarea, TextareaState, UiIconName, WindowExt,
   file_icon_path_for_name_with_theme, h_resizable, parse_github_url_action, resizable_panel,
   restrict_scroll_to_wheel_axis, scrollable_node, selectable_list_item,
 };
@@ -75,17 +69,15 @@ use crate::{
   ShowCommandPalette, ShowFileSearch,
   active_local_repo::{ActiveLocalRepo, ActiveLocalRepoStore},
   api::{
-    AiPrBrief, AiPrBriefPriority, AiPrBriefTarget, ApiClient, ApiError, GithubIssueDetailsComment,
+    AiPrBrief, AiPrBriefPriority, AiPrBriefTarget, ApiClient, ApiError,
     GithubIssueReferenceTargetKind, GithubPullRequestChecksRollupState,
     GithubPullRequestChecksSummary, GithubPullRequestCommit, GithubPullRequestConversation,
-    GithubPullRequestDescriptionUpdate, GithubPullRequestDetails, GithubPullRequestFile,
-    GithubPullRequestFilterOptionLabel, GithubPullRequestFilterOptionUser,
-    GithubPullRequestIssueComment, GithubPullRequestIssueCommentUser, GithubPullRequestLabel,
+    GithubPullRequestDetails, GithubPullRequestFile, GithubPullRequestFilterOptionLabel,
+    GithubPullRequestFilterOptionUser, GithubPullRequestIssueComment, GithubPullRequestLabel,
     GithubPullRequestMergeMethod, GithubPullRequestMergeReadiness,
     GithubPullRequestMergeReadinessStatus, GithubPullRequestMergeResult, GithubPullRequestReview,
     GithubPullRequestReviewComment, GithubPullRequestReviewEvent, GithubPullRequestReviewState,
-    GithubPullRequestState, GithubReactionContent, GithubReactionGroup, GithubRepository,
-    GithubRepositoryBranch,
+    GithubPullRequestState, GithubRepository, GithubRepositoryBranch,
   },
   auth_state::{AuthState, AuthStateStore},
   config::{AppSettings, ConfigStore},
@@ -285,9 +277,6 @@ const PR_MERGE_POPOVER_WIDTH: f32 = 520.0;
 const PR_MERGE_MESSAGE_INPUT_HEIGHT_PX: f32 = 100.0;
 const PR_REVIEW_POPOVER_WIDTH: f32 = 500.0;
 const PR_REVIEW_INPUT_HEIGHT_PX: f32 = 100.0;
-const OVERVIEW_COMMENT_INPUT_HEIGHT_PX: f32 = 100.0;
-const OVERVIEW_DESCRIPTION_INPUT_HEIGHT_PX: f32 = 500.0;
-const OVERVIEW_CONVERSATION_META_GAP_PX: f32 = 8.0;
 const GITHUB_PR_MARKDOWN_PREVIEW_EDITOR_DEBUG_SELECTOR: &str =
   "github-pr-markdown-preview-editor-pane";
 const GITHUB_PR_MARKDOWN_PREVIEW_RENDER_DEBUG_SELECTOR: &str =
@@ -300,12 +289,6 @@ struct GithubPrStatusActionNotificationId;
 enum GithubPrBinaryPreview {
   RasterImage(Arc<Image>),
   UnsupportedBinary,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum OverviewCommentKind {
-  Issue,
-  Review,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -367,12 +350,6 @@ impl GithubPrStatusAction {
   }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-struct OverviewCommentTarget {
-  kind: OverviewCommentKind,
-  id: u64,
-}
-
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct SuggestedChangeCommitTarget {
   comment_id: u64,
@@ -383,38 +360,8 @@ struct SuggestedChangeCommitTarget {
   suggested_lines: Vec<String>,
 }
 
-enum OverviewCommentUpdateResult {
-  Issue(GithubPullRequestIssueComment),
-  Review(Box<GithubPullRequestReviewComment>),
-}
-
-impl OverviewCommentUpdateResult {
-  fn review(comment: GithubPullRequestReviewComment) -> Self {
-    Self::Review(Box::new(comment))
-  }
-}
-
-fn pr_description_scope_id(pr_number: u64) -> usize {
-  (pr_number as usize).wrapping_mul(1_000_003).wrapping_add(1)
-}
-
 fn code_reference_requests_from_markdown(markdown: &str) -> Vec<GithubBlobLineReference> {
   extract_github_blob_line_references(markdown)
-}
-
-fn gfm_preview_from_review_preview(
-  preview: &ReviewCommentCodeReferencePreview,
-) -> GithubCodeReferencePreview {
-  GithubCodeReferencePreview {
-    url: preview.url.clone(),
-    repo: preview.repo.clone(),
-    path: preview.path.clone(),
-    reference: preview.reference.clone(),
-    start_line: preview.start_line,
-    end_line: preview.end_line,
-    snippets: preview.snippets.clone(),
-    full_content: preview.full_content.clone(),
-  }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -668,12 +615,6 @@ fn resolve_diff_shas_for_context(
   Some((base_sha.to_string(), head_sha.to_string()))
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum ReviewCommentPreviewSide {
-  Left,
-  Right,
-}
-
 fn positive_line_number(value: Option<i64>) -> Option<usize> {
   value.and_then(|value| (value > 0).then_some(value as usize))
 }
@@ -708,21 +649,6 @@ fn review_comment_preview_line_range(
       comment.original_line.or(comment.original_start_line),
     )
   })
-}
-
-fn review_comment_preview_side(
-  comment: &GithubPullRequestReviewComment,
-) -> ReviewCommentPreviewSide {
-  let side = comment
-    .side
-    .as_deref()
-    .or(comment.start_side.as_deref())
-    .unwrap_or("RIGHT");
-  if side.eq_ignore_ascii_case("LEFT") {
-    ReviewCommentPreviewSide::Left
-  } else {
-    ReviewCommentPreviewSide::Right
-  }
 }
 
 fn review_comment_targets_file(
@@ -842,82 +768,6 @@ fn visible_review_comment_counts_by_path(
   }
 
   counts
-}
-
-fn github_blob_url(
-  owner: &str,
-  repo: &str,
-  reference: &str,
-  path: &str,
-  start_line: usize,
-  end_line: usize,
-) -> String {
-  if start_line == end_line {
-    format!("https://github.com/{owner}/{repo}/blob/{reference}/{path}#L{start_line}")
-  } else {
-    format!("https://github.com/{owner}/{repo}/blob/{reference}/{path}#L{start_line}-L{end_line}")
-  }
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
-enum GithubPrOverviewConversationItemKind {
-  IssueComment,
-  Review,
-  ReviewComment,
-}
-
-#[derive(Clone, Debug)]
-struct GithubPrOverviewConversationItem {
-  kind: GithubPrOverviewConversationItemKind,
-  id: u64,
-  is_outdated: bool,
-  thread_id: Option<String>,
-  is_resolved: bool,
-  viewer_can_resolve: bool,
-  viewer_can_unresolve: bool,
-  reaction_subject_id: String,
-  reactions: Vec<GithubReactionGroup>,
-  timestamp: String,
-  author_login: String,
-  author_avatar_url: Option<String>,
-  body: Option<String>,
-  review_state: Option<GithubPullRequestReviewState>,
-  replies: Vec<GithubPrOverviewConversationReply>,
-  thread_comment_ids: Vec<u64>,
-}
-
-#[derive(Clone, Debug)]
-struct GithubPrOverviewConversationReply {
-  id: u64,
-  is_outdated: bool,
-  reaction_subject_id: String,
-  reactions: Vec<GithubReactionGroup>,
-  timestamp: String,
-  author_login: String,
-  author_avatar_url: Option<String>,
-  body: String,
-}
-
-#[derive(Clone, Debug)]
-struct GithubPrReviewCommentPreview {
-  code: GithubCodeReferencePreview,
-  diff_lines: Vec<GithubDiffLine>,
-}
-
-#[derive(Clone, Debug)]
-enum GithubPrOverviewTimelineItem {
-  Commit(GithubPullRequestCommit),
-  Conversation(GithubPrOverviewConversationItem),
-}
-
-fn review_state_inline_label(state: Option<GithubPullRequestReviewState>) -> Option<&'static str> {
-  match state? {
-    GithubPullRequestReviewState::Approved => Some("approved these changes"),
-    GithubPullRequestReviewState::RequestChanges => Some("requested changes"),
-    GithubPullRequestReviewState::Commented => Some("left a review comment"),
-    GithubPullRequestReviewState::Dismissed => Some("dismissed review"),
-    GithubPullRequestReviewState::Pending => None,
-  }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -1675,14 +1525,6 @@ fn overview_conflicts_info(
   None
 }
 
-fn conversation_source_priority(kind: GithubPrOverviewConversationItemKind) -> u8 {
-  match kind {
-    GithubPrOverviewConversationItemKind::IssueComment => 0,
-    GithubPrOverviewConversationItemKind::Review => 1,
-    GithubPrOverviewConversationItemKind::ReviewComment => 2,
-  }
-}
-
 fn resolve_review_comment_thread_root_id(
   comment: &GithubPullRequestReviewComment,
   comments_by_id: &HashMap<u64, &GithubPullRequestReviewComment>,
@@ -1726,264 +1568,6 @@ fn overview_root_review_comment_ids(
   }
 
   root_ids
-}
-
-fn build_overview_conversation_items(
-  issue_comments: &[GithubPullRequestIssueComment],
-  reviews: &[GithubPullRequestReview],
-  review_comments: &[GithubPullRequestReviewComment],
-) -> Vec<GithubPrOverviewConversationItem> {
-  let mut items = Vec::new();
-
-  items.extend(issue_comments.iter().map(|comment| {
-    let body = comment.body.trim();
-    GithubPrOverviewConversationItem {
-      kind: GithubPrOverviewConversationItemKind::IssueComment,
-      id: comment.id,
-      is_outdated: false,
-      thread_id: None,
-      is_resolved: false,
-      viewer_can_resolve: false,
-      viewer_can_unresolve: false,
-      reaction_subject_id: comment.node_id.clone(),
-      reactions: comment.reactions.clone(),
-      timestamp: comment.created_at.clone(),
-      author_login: comment
-        .user
-        .as_ref()
-        .map(|user| user.login.clone())
-        .unwrap_or_else(|| "unknown".to_string()),
-      author_avatar_url: comment
-        .user
-        .as_ref()
-        .and_then(|user| user.avatar_url.clone()),
-      body: Some(if body.is_empty() {
-        "No comment body.".to_string()
-      } else {
-        body.to_string()
-      }),
-      review_state: None,
-      replies: Vec::new(),
-      thread_comment_ids: Vec::new(),
-    }
-  }));
-
-  items.extend(reviews.iter().filter_map(|review| {
-    let submitted_at = review.submitted_at.as_ref()?;
-    let body = review
-      .body
-      .as_deref()
-      .map(str::trim)
-      .filter(|value| !value.is_empty())
-      .map(ToString::to_string);
-
-    // Skip empty "COMMENTED" reviews — these are auto-created envelopes
-    // for inline review comments that already appear as ReviewComment items.
-    if matches!(review.state, GithubPullRequestReviewState::Commented) && body.is_none() {
-      return None;
-    }
-
-    Some(GithubPrOverviewConversationItem {
-      kind: GithubPrOverviewConversationItemKind::Review,
-      id: review.id,
-      is_outdated: false,
-      thread_id: None,
-      is_resolved: false,
-      viewer_can_resolve: false,
-      viewer_can_unresolve: false,
-      reaction_subject_id: review.node_id.clone(),
-      reactions: review.reactions.clone(),
-      timestamp: submitted_at.clone(),
-      author_login: review
-        .user
-        .as_ref()
-        .map(|user| user.login.clone())
-        .unwrap_or_else(|| "unknown".to_string()),
-      author_avatar_url: review
-        .user
-        .as_ref()
-        .and_then(|user| user.avatar_url.clone()),
-      body,
-      review_state: (!matches!(review.state, GithubPullRequestReviewState::Commented))
-        .then_some(review.state),
-      replies: Vec::new(),
-      thread_comment_ids: Vec::new(),
-    })
-  }));
-
-  let comments_by_id: HashMap<u64, &GithubPullRequestReviewComment> = review_comments
-    .iter()
-    .map(|comment| (comment.id, comment))
-    .collect();
-  let mut threads: HashMap<u64, Vec<&GithubPullRequestReviewComment>> = HashMap::new();
-  for comment in review_comments {
-    let root_id = resolve_review_comment_thread_root_id(comment, &comments_by_id);
-    threads.entry(root_id).or_default().push(comment);
-  }
-
-  for mut thread_comments in threads.into_values() {
-    thread_comments.sort_by(|a, b| {
-      a.created_at
-        .cmp(&b.created_at)
-        .then_with(|| a.id.cmp(&b.id))
-    });
-
-    let root_comment = thread_comments
-      .iter()
-      .find(|comment| comment.in_reply_to_id.is_none())
-      .copied()
-      .or_else(|| thread_comments.first().copied());
-    let Some(root_comment) = root_comment else {
-      continue;
-    };
-
-    let body = root_comment.body.trim();
-    let replies = thread_comments
-      .iter()
-      .copied()
-      .filter(|comment| comment.id != root_comment.id)
-      .map(|comment| GithubPrOverviewConversationReply {
-        id: comment.id,
-        is_outdated: comment.is_outdated,
-        reaction_subject_id: comment.node_id.clone(),
-        reactions: comment.reactions.clone(),
-        timestamp: comment.created_at.clone(),
-        author_login: comment.user.login.clone(),
-        author_avatar_url: comment.user.avatar_url.clone(),
-        body: {
-          let body = comment.body.trim();
-          if body.is_empty() {
-            "No comment body.".to_string()
-          } else {
-            body.to_string()
-          }
-        },
-      })
-      .collect();
-    let thread_comment_ids = thread_comments.iter().map(|comment| comment.id).collect();
-
-    items.push(GithubPrOverviewConversationItem {
-      kind: GithubPrOverviewConversationItemKind::ReviewComment,
-      id: root_comment.id,
-      is_outdated: root_comment.is_outdated,
-      thread_id: (!root_comment.thread_id.is_empty()).then(|| root_comment.thread_id.clone()),
-      is_resolved: root_comment.is_resolved,
-      viewer_can_resolve: root_comment.viewer_can_resolve,
-      viewer_can_unresolve: root_comment.viewer_can_unresolve,
-      reaction_subject_id: root_comment.node_id.clone(),
-      reactions: root_comment.reactions.clone(),
-      timestamp: root_comment.created_at.clone(),
-      author_login: root_comment.user.login.clone(),
-      author_avatar_url: root_comment.user.avatar_url.clone(),
-      body: Some(if body.is_empty() {
-        "No comment body.".to_string()
-      } else {
-        body.to_string()
-      }),
-      review_state: None,
-      replies,
-      thread_comment_ids,
-    });
-  }
-
-  items.sort_by(|a, b| {
-    a.timestamp
-      .cmp(&b.timestamp)
-      .then_with(|| conversation_source_priority(a.kind).cmp(&conversation_source_priority(b.kind)))
-      .then_with(|| a.id.cmp(&b.id))
-  });
-
-  items
-}
-
-fn overview_timeline_item_timestamp(item: &GithubPrOverviewTimelineItem) -> &str {
-  match item {
-    GithubPrOverviewTimelineItem::Commit(commit) => commit_sort_timestamp(commit),
-    GithubPrOverviewTimelineItem::Conversation(item) => item.timestamp.as_str(),
-  }
-}
-
-fn overview_timeline_item_priority(item: &GithubPrOverviewTimelineItem) -> u8 {
-  match item {
-    GithubPrOverviewTimelineItem::Commit(_) => 0,
-    GithubPrOverviewTimelineItem::Conversation(item) => 1 + conversation_source_priority(item.kind),
-  }
-}
-
-fn build_overview_timeline_items(
-  commits: &[GithubPullRequestCommit],
-  issue_comments: &[GithubPullRequestIssueComment],
-  reviews: &[GithubPullRequestReview],
-  review_comments: &[GithubPullRequestReviewComment],
-) -> Vec<GithubPrOverviewTimelineItem> {
-  let mut items = commits
-    .iter()
-    .cloned()
-    .map(GithubPrOverviewTimelineItem::Commit)
-    .collect::<Vec<_>>();
-
-  items.extend(
-    build_overview_conversation_items(issue_comments, reviews, review_comments)
-      .into_iter()
-      .map(GithubPrOverviewTimelineItem::Conversation),
-  );
-
-  items.sort_by(|a, b| {
-    overview_timeline_item_timestamp(a)
-      .cmp(overview_timeline_item_timestamp(b))
-      .then_with(|| overview_timeline_item_priority(a).cmp(&overview_timeline_item_priority(b)))
-      .then_with(|| match (a, b) {
-        (GithubPrOverviewTimelineItem::Commit(a), GithubPrOverviewTimelineItem::Commit(b)) => {
-          a.sha.cmp(&b.sha)
-        }
-        (
-          GithubPrOverviewTimelineItem::Conversation(a),
-          GithubPrOverviewTimelineItem::Conversation(b),
-        ) => a.id.cmp(&b.id),
-        _ => std::cmp::Ordering::Equal,
-      })
-  });
-
-  items
-}
-
-fn pull_request_issue_comment_from_issue_details_comment(
-  comment: GithubIssueDetailsComment,
-) -> GithubPullRequestIssueComment {
-  GithubPullRequestIssueComment {
-    node_id: comment.node_id,
-    reactions: comment.reactions,
-    id: comment.id,
-    body: comment.body.unwrap_or_default(),
-    created_at: comment.created_at,
-    updated_at: comment.updated_at,
-    user: comment.user.map(|user| GithubPullRequestIssueCommentUser {
-      login: user.login,
-      avatar_url: user.avatar_url,
-    }),
-  }
-}
-
-fn next_overview_comment_body(raw_value: &str, initial_value: &str) -> Option<String> {
-  let next_body = github_shared::normalize_non_empty_text(raw_value)?;
-  let initial_body = initial_value.trim();
-  if next_body == initial_body {
-    None
-  } else {
-    Some(next_body)
-  }
-}
-
-fn next_pr_description_body(raw_value: &str, initial_value: &str) -> Option<String> {
-  github_shared::next_trimmed_text_update(raw_value, initial_value)
-}
-
-fn apply_pull_request_description_update_local(
-  pull_request: &mut GithubPullRequestDetails,
-  update: GithubPullRequestDescriptionUpdate,
-) {
-  pull_request.body = update.body;
-  pull_request.updated_at = update.updated_at;
 }
 
 fn filter_option_users_contains(
@@ -2082,14 +1666,6 @@ fn remove_label(labels: &mut Vec<GithubPullRequestLabel>, name: &str) {
   labels.retain(|label| !label.name.eq_ignore_ascii_case(name));
 }
 
-fn build_suggestion_context(
-  review_comments: &[GithubPullRequestReviewComment],
-  comment_id: u64,
-) -> Option<SuggestionContext> {
-  let comment = review_comments.iter().find(|c| c.id == comment_id)?;
-  suggestion_context_from_review_comment(comment)
-}
-
 fn suggestion_context_from_review_comment(
   comment: &GithubPullRequestReviewComment,
 ) -> Option<SuggestionContext> {
@@ -2112,167 +1688,8 @@ fn suggestion_context_from_review_comment(
   })
 }
 
-fn gfm_diff_line_kind(kind: github_shared::DiffHunkLineKind) -> GithubDiffLineKind {
-  match kind {
-    github_shared::DiffHunkLineKind::Context => GithubDiffLineKind::Context,
-    github_shared::DiffHunkLineKind::Added => GithubDiffLineKind::Added,
-    github_shared::DiffHunkLineKind::Removed => GithubDiffLineKind::Removed,
-  }
-}
-
-fn gfm_diff_lines_from_hunk(diff_hunk: &str) -> Vec<GithubDiffLine> {
-  github_shared::parse_diff_hunk_lines(diff_hunk)
-    .into_iter()
-    .map(|line| GithubDiffLine {
-      old_line: line.old_line,
-      new_line: line.new_line,
-      content: Arc::from(line.content.as_str()),
-      kind: gfm_diff_line_kind(line.kind),
-    })
-    .collect()
-}
-
-fn diff_line_number_for_side(
-  line: &GithubDiffLine,
-  side: ReviewCommentPreviewSide,
-) -> Option<usize> {
-  match side {
-    ReviewCommentPreviewSide::Left => line.old_line,
-    ReviewCommentPreviewSide::Right => line.new_line,
-  }
-}
-
-fn diff_line_matches_range(
-  line: &GithubDiffLine,
-  side: ReviewCommentPreviewSide,
-  start_line: usize,
-  end_line: usize,
-) -> bool {
-  diff_line_number_for_side(line, side)
-    .is_some_and(|line_number| line_number >= start_line && line_number <= end_line)
-}
-
-fn gfm_diff_lines_from_hunk_for_range(
-  diff_hunk: &str,
-  side: ReviewCommentPreviewSide,
-  start_line: usize,
-  end_line: usize,
-) -> Vec<GithubDiffLine> {
-  let lines = gfm_diff_lines_from_hunk(diff_hunk);
-  let mut filtered = Vec::new();
-  let mut ix = 0;
-
-  while ix < lines.len() {
-    if lines[ix].kind == GithubDiffLineKind::Context {
-      if diff_line_matches_range(&lines[ix], side, start_line, end_line) {
-        filtered.push(lines[ix].clone());
-      }
-      ix += 1;
-      continue;
-    }
-
-    let block_start = ix;
-    while ix < lines.len() && lines[ix].kind != GithubDiffLineKind::Context {
-      ix += 1;
-    }
-    let block = &lines[block_start..ix];
-    let block_intersects_range = block
-      .iter()
-      .any(|line| diff_line_matches_range(line, side, start_line, end_line));
-    if !block_intersects_range {
-      continue;
-    }
-
-    let has_added = block
-      .iter()
-      .any(|line| line.kind == GithubDiffLineKind::Added);
-    let has_removed = block
-      .iter()
-      .any(|line| line.kind == GithubDiffLineKind::Removed);
-    if has_added && has_removed {
-      filtered.extend(block.iter().cloned());
-    } else {
-      filtered.extend(
-        block
-          .iter()
-          .filter(|line| diff_line_matches_range(line, side, start_line, end_line))
-          .cloned(),
-      );
-    }
-  }
-
-  filtered
-}
-
-fn suggestion_context_from_review_comment_preview(
-  preview: &GithubPrReviewCommentPreview,
-) -> Option<SuggestionContext> {
-  if preview.code.snippets.is_empty() {
-    return None;
-  }
-
-  Some(SuggestionContext {
-    original_start_line: Some(preview.code.start_line),
-    suggested_start_line: Some(preview.code.start_line),
-    original_lines: preview
-      .code
-      .snippets
-      .iter()
-      .map(|line| line.as_ref().to_string())
-      .collect(),
-    path: preview.code.path.clone(),
-  })
-}
-
 fn review_comment_owned_by_login(comment: &GithubPullRequestReviewComment, login: &str) -> bool {
   github_shared::logins_match_case_insensitive(comment.user.login.as_str(), login)
-}
-
-fn issue_comment_owned_by_login(comment: &GithubPullRequestIssueComment, login: &str) -> bool {
-  comment
-    .user
-    .as_ref()
-    .is_some_and(|user| github_shared::logins_match_case_insensitive(user.login.as_str(), login))
-}
-
-fn upsert_issue_comment_local(
-  comments: &mut Vec<GithubPullRequestIssueComment>,
-  mut comment: GithubPullRequestIssueComment,
-) {
-  if let Some(existing) = comments
-    .iter_mut()
-    .find(|existing| existing.id == comment.id)
-  {
-    if comment.node_id.is_empty() {
-      comment.node_id.clone_from(&existing.node_id);
-    }
-    if comment.reactions.is_empty() {
-      comment.reactions.clone_from(&existing.reactions);
-    }
-    *existing = comment;
-    return;
-  }
-  comments.push(comment);
-}
-
-fn upsert_review_comment_local(
-  comments: &mut Vec<GithubPullRequestReviewComment>,
-  mut comment: GithubPullRequestReviewComment,
-) {
-  if let Some(existing) = comments
-    .iter_mut()
-    .find(|existing| existing.id == comment.id)
-  {
-    if comment.node_id.is_empty() {
-      comment.node_id.clone_from(&existing.node_id);
-    }
-    if comment.reactions.is_empty() {
-      comment.reactions.clone_from(&existing.reactions);
-    }
-    *existing = comment;
-    return;
-  }
-  comments.push(comment);
 }
 
 fn upsert_review_local(
@@ -2283,94 +1700,11 @@ fn upsert_review_local(
     if review.node_id.is_empty() {
       review.node_id.clone_from(&existing.node_id);
     }
-    if review.reactions.is_empty() {
-      review.reactions.clone_from(&existing.reactions);
-    }
     *existing = review;
     return;
   }
 
   reviews.push(review);
-}
-
-fn remove_issue_comment_local(
-  comments: &mut Vec<GithubPullRequestIssueComment>,
-  comment_id: u64,
-) -> Option<(usize, GithubPullRequestIssueComment)> {
-  let (index, removed) = comments
-    .iter()
-    .enumerate()
-    .find(|(_, comment)| comment.id == comment_id)
-    .map(|(index, comment)| (index, comment.clone()))?;
-  comments.remove(index);
-  Some((index, removed))
-}
-
-fn restore_issue_comment_local(
-  comments: &mut Vec<GithubPullRequestIssueComment>,
-  index: usize,
-  comment: GithubPullRequestIssueComment,
-) {
-  let insert_index = index.min(comments.len());
-  comments.insert(insert_index, comment);
-}
-
-fn remove_review_comment_local(
-  comments: &mut Vec<GithubPullRequestReviewComment>,
-  comment_id: u64,
-) -> Option<(usize, GithubPullRequestReviewComment)> {
-  let (index, removed) = comments
-    .iter()
-    .enumerate()
-    .find(|(_, comment)| comment.id == comment_id)
-    .map(|(index, comment)| (index, comment.clone()))?;
-  comments.remove(index);
-  Some((index, removed))
-}
-
-fn restore_review_comment_local(
-  comments: &mut Vec<GithubPullRequestReviewComment>,
-  index: usize,
-  comment: GithubPullRequestReviewComment,
-) {
-  let insert_index = index.min(comments.len());
-  comments.insert(insert_index, comment);
-}
-
-fn is_last_review_thread_message(thread_comment_ids: &[u64], comment_id: u64) -> bool {
-  thread_comment_ids.last().copied() == Some(comment_id)
-}
-
-fn allows_overview_review_reply_action(
-  kind: GithubPrOverviewConversationItemKind,
-  thread_comment_ids: &[u64],
-  comment_id: u64,
-) -> bool {
-  kind == GithubPrOverviewConversationItemKind::ReviewComment
-    && is_last_review_thread_message(thread_comment_ids, comment_id)
-}
-
-fn overview_root_is_editing(
-  editing_target: Option<OverviewCommentTarget>,
-  root_target: Option<OverviewCommentTarget>,
-) -> bool {
-  root_target.is_some() && editing_target == root_target
-}
-
-fn overview_conversation_scope_id(
-  pr_number: u64,
-  kind: GithubPrOverviewConversationItemKind,
-  id: u64,
-) -> usize {
-  let kind_part = match kind {
-    GithubPrOverviewConversationItemKind::IssueComment => 1usize,
-    GithubPrOverviewConversationItemKind::Review => 2usize,
-    GithubPrOverviewConversationItemKind::ReviewComment => 3usize,
-  };
-  (pr_number as usize)
-    .wrapping_mul(1_000_003)
-    .wrapping_add(kind_part.wrapping_mul(10_007))
-    .wrapping_add(id as usize)
 }
 
 fn overview_change_stat_labels(pr: &GithubPullRequestDetails) -> [String; 2] {
@@ -2778,9 +2112,6 @@ pub struct GithubPrDetailsPage {
   merge_submit_task: Option<Task<()>>,
   merge_submit_loading: bool,
   merge_submit_error: Option<SharedString>,
-  auto_merge_submit_task: Option<Task<()>>,
-  auto_merge_submit_loading: bool,
-  auto_merge_submit_error: Option<SharedString>,
   status_action_task: Option<Task<()>>,
   status_action_loading: bool,
   update_branch_task: Option<Task<()>>,
@@ -2831,10 +2162,6 @@ pub struct GithubPrDetailsPage {
   label_mutation_task: Option<Task<()>>,
   label_mutation_loading: bool,
   label_mutation_error: Option<SharedString>,
-  overview_issue_comment_input: Entity<TextareaState>,
-  overview_issue_comment_submitting: bool,
-  overview_issue_comment_error: Option<SharedString>,
-  overview_issue_comment_preview_open: bool,
   reviews_task: Option<Task<()>>,
   reviews_loading: bool,
   reviews_error: Option<SharedString>,
@@ -2846,17 +2173,6 @@ pub struct GithubPrDetailsPage {
   // Viewer's unsubmitted pending review (GraphQL node ids), when one exists on this PR.
   pending_review_id: Option<String>,
   pending_review_pull_request_id: Option<String>,
-  overview_edit_input: Option<Entity<TextareaState>>,
-  overview_edit_target: Option<OverviewCommentTarget>,
-  overview_edit_initial_body: Option<String>,
-  overview_edit_submitting: bool,
-  overview_edit_error: Option<SharedString>,
-  overview_edit_preview_open: bool,
-  overview_reply_input: Option<Entity<TextareaState>>,
-  overview_reply_target_comment_id: Option<u64>,
-  overview_reply_submitting: bool,
-  overview_reply_error: Option<SharedString>,
-  overview_reply_preview_open: bool,
   suggested_change_commit_target: Option<SuggestedChangeCommitTarget>,
   suggested_change_commit_title_input: Entity<InputState>,
   suggested_change_commit_message_input: Entity<TextareaState>,
@@ -2871,19 +2187,15 @@ pub struct GithubPrDetailsPage {
   expanded_resolved_threads: HashSet<u64>,
   selected_file_review_comment_ids: Vec<u64>,
   active_review_comment_id: Option<u64>,
-  active_overview_conversation_id: Option<u64>,
-  show_overview_conversation_counter: bool,
   review_comment_handlers_enabled: bool,
   description_code_reference_requests: Vec<GithubBlobLineReference>,
   review_comment_code_reference_cache: HashMap<String, Option<ReviewCommentCodeReferencePreview>>,
   review_comment_code_reference_tasks: HashMap<String, Task<()>>,
   pending_review_comment_link_comment_id: Option<u64>,
-  pr_description_edit_input: Option<Entity<TextareaState>>,
   pr_description_editing: bool,
   pr_description_initial_body: Option<String>,
   pr_description_submitting: bool,
   pr_description_error: Option<SharedString>,
-  pr_description_preview_open: bool,
   file_loading: bool,
   file_error: Option<SharedString>,
   tree_state: Entity<TreeState>,
@@ -2932,9 +2244,6 @@ pub struct GithubPrDetailsPage {
   syntax_highlight_cache: Arc<gfm_markdown_viewer::SyntaxHighlightCache>,
   overview_checks_open: bool,
   overview_checks_scroll_handle: gpui::ScrollHandle,
-  overview_timeline_items: Vec<GithubPrOverviewTimelineItem>,
-  overview_list: GpuiListState,
-  overview_list_count: usize,
   svg_preview: Option<Result<Arc<RenderImage>, SharedString>>,
   svg_preview_source: Option<SharedString>,
   svg_preview_task: Option<Task<()>>,
@@ -3302,11 +2611,6 @@ impl GithubPrDetailsPage {
     });
     let review_input =
       cx.new(|cx| TextareaState::new(window, cx).placeholder("Add an overall review comment..."));
-    let overview_issue_comment_input = cx.new(|cx| {
-      TextareaState::new(window, cx)
-        .rows(6)
-        .placeholder("Add comment...")
-    });
     let suggested_change_commit_title_input =
       cx.new(|cx| InputState::new(window, cx).placeholder("Apply suggestion from code review"));
     let suggested_change_commit_message_input = cx.new(|cx| {
@@ -3362,9 +2666,6 @@ impl GithubPrDetailsPage {
       merge_submit_task: None,
       merge_submit_loading: false,
       merge_submit_error: None,
-      auto_merge_submit_task: None,
-      auto_merge_submit_loading: false,
-      auto_merge_submit_error: None,
       status_action_task: None,
       status_action_loading: false,
       update_branch_task: None,
@@ -3415,10 +2716,6 @@ impl GithubPrDetailsPage {
       label_mutation_task: None,
       label_mutation_loading: false,
       label_mutation_error: None,
-      overview_issue_comment_input,
-      overview_issue_comment_submitting: false,
-      overview_issue_comment_error: None,
-      overview_issue_comment_preview_open: false,
       reviews_task: None,
       reviews_loading: false,
       reviews_error: None,
@@ -3429,17 +2726,6 @@ impl GithubPrDetailsPage {
       review_comments: Vec::new(),
       pending_review_id: None,
       pending_review_pull_request_id: None,
-      overview_edit_input: None,
-      overview_edit_target: None,
-      overview_edit_initial_body: None,
-      overview_edit_submitting: false,
-      overview_edit_error: None,
-      overview_edit_preview_open: false,
-      overview_reply_input: None,
-      overview_reply_target_comment_id: None,
-      overview_reply_submitting: false,
-      overview_reply_error: None,
-      overview_reply_preview_open: false,
       suggested_change_commit_target: None,
       suggested_change_commit_title_input,
       suggested_change_commit_message_input,
@@ -3454,19 +2740,15 @@ impl GithubPrDetailsPage {
       expanded_resolved_threads: HashSet::new(),
       selected_file_review_comment_ids: Vec::new(),
       active_review_comment_id: None,
-      active_overview_conversation_id: None,
-      show_overview_conversation_counter: false,
       review_comment_handlers_enabled: true,
       description_code_reference_requests: Vec::new(),
       review_comment_code_reference_cache: HashMap::new(),
       review_comment_code_reference_tasks: HashMap::new(),
       pending_review_comment_link_comment_id: None,
-      pr_description_edit_input: None,
       pr_description_editing: false,
       pr_description_initial_body: None,
       pr_description_submitting: false,
       pr_description_error: None,
-      pr_description_preview_open: false,
       file_loading: false,
       file_error: None,
       tree_state,
@@ -3519,9 +2801,6 @@ impl GithubPrDetailsPage {
       syntax_highlight_cache: Arc::new(gfm_markdown_viewer::SyntaxHighlightCache::new()),
       overview_checks_open: false,
       overview_checks_scroll_handle: gpui::ScrollHandle::new(),
-      overview_timeline_items: Vec::new(),
-      overview_list: GpuiListState::new(0, ListAlignment::Top, px(300.)),
-      overview_list_count: 0,
       svg_preview: None,
       svg_preview_source: None,
       svg_preview_task: None,
@@ -4829,11 +4108,6 @@ impl GithubPrDetailsPage {
     cx: &mut Context<Self>,
   ) {
     let pull_request_node_id = conversation.pull_request.node_id.clone();
-    if let Some(pull_request) = self.pull_request.as_mut()
-      && pull_request.node_id == conversation.pull_request.node_id
-    {
-      pull_request.reactions = conversation.pull_request.reactions;
-    }
     self.issue_comments = conversation.issue_comments;
     self.reviews = conversation.reviews;
     self.review_comments = conversation.review_comments;
@@ -5271,137 +4545,6 @@ impl GithubPrDetailsPage {
     self.merge_submit_task = Some(task);
   }
 
-  fn submit_enable_auto_merge(&mut self, _: &mut Window, cx: &mut Context<Self>) {
-    if self.auto_merge_submit_loading {
-      return;
-    }
-
-    let Some(pull_request) = self.pull_request.as_ref() else {
-      self.auto_merge_submit_error = Some("No pull request selected".into());
-      return;
-    };
-
-    let Some(readiness) = self.merge_readiness.as_ref() else {
-      self.auto_merge_submit_error = Some("Merge readiness is not available yet.".into());
-      return;
-    };
-
-    let Some(method) = self.selected_merge_method() else {
-      self.auto_merge_submit_error = Some("No merge method is available.".into());
-      return;
-    };
-
-    if !readiness.viewer_can_enable_auto_merge {
-      self.auto_merge_submit_error =
-        Some("Auto-merge is not available for this pull request.".into());
-      return;
-    }
-
-    let owner = pull_request.repository.owner.clone();
-    let repo = pull_request.repository.repo.clone();
-    let number = pull_request.number;
-    let pull_request_id = pull_request.node_id.clone();
-    let commit_title = self.merge_commit_title_input.read(cx).value().to_string();
-    let commit_message = self.merge_commit_message_input.read(cx).value().to_string();
-    let api = self.api.clone();
-    self.auto_merge_submit_loading = true;
-    self.auto_merge_submit_error = None;
-    self.merge_submit_error = None;
-
-    let task = cx.spawn(async move |this, cx| {
-      let result = unblock(move || {
-        api.enable_pull_request_auto_merge(
-          &owner,
-          &repo,
-          number,
-          &pull_request_id,
-          method,
-          Some(commit_title.as_str()),
-          Some(commit_message.as_str()),
-        )
-      })
-      .await;
-
-      let _ = this.update(cx, |this, cx| {
-        this.auto_merge_submit_loading = false;
-        this.auto_merge_submit_task = None;
-        match result {
-          Ok(()) => {
-            this.merge_popover_open = false;
-            this.mark_merge_form_reset_pending();
-            this.add_pr_breadcrumb("Enable auto-merge succeeded", Map::new());
-            this.reload_merge_readiness_for_current_pull_request(cx);
-            cx.refresh_windows();
-          }
-          Err(error) => {
-            let error_message = error.to_string();
-            this.auto_merge_submit_error = Some(error_message.clone().into());
-            this.add_pr_breadcrumb("Enable auto-merge failed", Map::new());
-            this.record_pr_error(
-              "github.pr.enable_auto_merge",
-              error_message.as_str(),
-              Map::new(),
-            );
-          }
-        }
-        cx.notify();
-      });
-    });
-
-    self.auto_merge_submit_task = Some(task);
-  }
-
-  fn submit_disable_auto_merge(&mut self, _: &mut Window, cx: &mut Context<Self>) {
-    if self.auto_merge_submit_loading {
-      return;
-    }
-
-    let Some(pull_request) = self.pull_request.as_ref() else {
-      self.auto_merge_submit_error = Some("No pull request selected".into());
-      return;
-    };
-
-    let owner = pull_request.repository.owner.clone();
-    let repo = pull_request.repository.repo.clone();
-    let number = pull_request.number;
-    let pull_request_id = pull_request.node_id.clone();
-    let api = self.api.clone();
-    self.auto_merge_submit_loading = true;
-    self.auto_merge_submit_error = None;
-
-    let task = cx.spawn(async move |this, cx| {
-      let result = unblock(move || {
-        api.disable_pull_request_auto_merge(&owner, &repo, number, &pull_request_id)
-      })
-      .await;
-
-      let _ = this.update(cx, |this, cx| {
-        this.auto_merge_submit_loading = false;
-        this.auto_merge_submit_task = None;
-        match result {
-          Ok(()) => {
-            this.add_pr_breadcrumb("Disable auto-merge succeeded", Map::new());
-            this.reload_merge_readiness_for_current_pull_request(cx);
-            cx.refresh_windows();
-          }
-          Err(error) => {
-            let error_message = error.to_string();
-            this.auto_merge_submit_error = Some(error_message.clone().into());
-            this.add_pr_breadcrumb("Disable auto-merge failed", Map::new());
-            this.record_pr_error(
-              "github.pr.disable_auto_merge",
-              error_message.as_str(),
-              Map::new(),
-            );
-          }
-        }
-        cx.notify();
-      });
-    });
-
-    self.auto_merge_submit_task = Some(task);
-  }
-
   fn is_current_user_pr_author(&self, cx: &App) -> bool {
     let Some(pull_request) = self.pull_request.as_ref() else {
       return false;
@@ -5462,16 +4605,6 @@ impl GithubPrDetailsPage {
         .unwrap_or(true),
       mergeable_state: Some("draft".to_string()),
       rebaseable: existing.and_then(|readiness| readiness.rebaseable),
-      auto_merge_enabled: existing
-        .map(|readiness| readiness.auto_merge_enabled)
-        .unwrap_or(false),
-      auto_merge: existing.and_then(|readiness| readiness.auto_merge.clone()),
-      viewer_can_enable_auto_merge: existing
-        .map(|readiness| readiness.viewer_can_enable_auto_merge)
-        .unwrap_or(false),
-      viewer_can_disable_auto_merge: existing
-        .map(|readiness| readiness.viewer_can_disable_auto_merge)
-        .unwrap_or(false),
     })
   }
 
@@ -5773,385 +4906,6 @@ impl GithubPrDetailsPage {
       .filter(|comment| review_comment_owned_by_login(comment, &login))
       .map(|comment| comment.id)
       .collect()
-  }
-
-  fn editable_issue_comment_ids(&self, cx: &App) -> HashSet<u64> {
-    let Some(login) = Self::current_github_login(cx) else {
-      return HashSet::new();
-    };
-
-    self
-      .issue_comments
-      .iter()
-      .filter_map(|comment| issue_comment_owned_by_login(comment, &login).then_some(comment.id))
-      .collect()
-  }
-
-  fn ensure_pr_description_edit_input(
-    &mut self,
-    window: &mut Window,
-    cx: &mut Context<Self>,
-  ) -> Entity<TextareaState> {
-    if let Some(input) = self.pr_description_edit_input.as_ref() {
-      return input.clone();
-    }
-
-    let input = cx.new(|cx| {
-      TextareaState::new(window, cx)
-        .rows(6)
-        .placeholder("Edit description...")
-    });
-    self.pr_description_edit_input = Some(input.clone());
-    input
-  }
-
-  fn clear_pr_description_edit_state(&mut self) {
-    self.pr_description_editing = false;
-    self.pr_description_initial_body = None;
-    self.pr_description_submitting = false;
-    self.pr_description_error = None;
-    self.pr_description_preview_open = false;
-  }
-
-  fn start_pr_description_edit(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-    if self.pr_description_submitting || self.overview_comment_submission_in_flight() {
-      return;
-    }
-    let Some(pull_request) = self.pull_request.as_ref() else {
-      return;
-    };
-
-    let initial_body = pull_request.body.clone().unwrap_or_default();
-    let input = self.ensure_pr_description_edit_input(window, cx);
-    let initial_body_for_input = initial_body.clone();
-    input.update(cx, |state, cx| {
-      state.set_value(initial_body_for_input.clone(), window, cx);
-    });
-
-    let input_for_focus = input.clone();
-    window.on_next_frame(move |window, cx| {
-      input_for_focus.update(cx, |state, cx| {
-        state.focus(window, cx);
-      });
-    });
-
-    self.pr_description_editing = true;
-    self.pr_description_initial_body = Some(initial_body);
-    self.pr_description_error = None;
-    cx.notify();
-  }
-
-  fn cancel_pr_description_edit(&mut self, cx: &mut Context<Self>) {
-    if self.pr_description_submitting || !self.pr_description_editing {
-      return;
-    }
-    self.clear_pr_description_edit_state();
-    cx.notify();
-  }
-
-  fn submit_pr_description_edit(&mut self, cx: &mut Context<Self>) {
-    if self.pr_description_submitting
-      || !self.pr_description_editing
-      || self.overview_comment_submission_in_flight()
-    {
-      return;
-    }
-    let Some((owner, repo, number)) = self.pull_request.as_ref().map(|pull_request| {
-      (
-        pull_request.repository.owner.clone(),
-        pull_request.repository.repo.clone(),
-        pull_request.number,
-      )
-    }) else {
-      self.pr_description_error = Some("No pull request selected".into());
-      cx.notify();
-      return;
-    };
-    let Some(input) = self.pr_description_edit_input.as_ref() else {
-      return;
-    };
-    let initial_body = self
-      .pr_description_initial_body
-      .as_deref()
-      .unwrap_or_default()
-      .to_string();
-    let raw_value = input.read(cx).value().to_string();
-    let Some(next_body) = next_pr_description_body(raw_value.as_str(), initial_body.as_str())
-    else {
-      self.clear_pr_description_edit_state();
-      cx.notify();
-      return;
-    };
-
-    self.pr_description_submitting = true;
-    self.pr_description_error = None;
-    cx.notify();
-
-    let api = self.api.clone();
-    let task = cx.spawn(async move |this, cx| {
-      let result = unblock(move || {
-        api.update_pull_request_description(&owner, &repo, number, next_body.as_str())
-      })
-      .await;
-
-      let _ = this.update(cx, |this, cx| {
-        this.pr_description_submitting = false;
-        match result {
-          Ok(update) => {
-            if let Some(pull_request) = this.pull_request.as_mut() {
-              apply_pull_request_description_update_local(pull_request, update);
-            }
-            if let Some(pull_request) = this.pull_request.as_ref() {
-              this.description_code_reference_requests =
-                Self::description_code_reference_requests_for_pull_request(pull_request);
-              let description_requests = this.description_code_reference_requests.clone();
-              this.schedule_code_reference_fetches(description_requests.iter(), cx);
-            }
-            this.clear_pr_description_edit_state();
-          }
-          Err(error) => {
-            let error_message = error.to_string();
-            this.pr_description_error = Some(error_message.clone().into());
-            this.record_pr_error(
-              "github.pr.description.update",
-              error_message.as_str(),
-              Map::new(),
-            );
-          }
-        }
-        cx.notify();
-      });
-    });
-    self.details_task = Some(task);
-  }
-
-  fn overview_comment_submission_in_flight(&self) -> bool {
-    self.overview_issue_comment_submitting
-      || self.overview_edit_submitting
-      || self.overview_reply_submitting
-      || self.pr_description_submitting
-  }
-
-  fn overview_comment_body_for_target(&self, target: OverviewCommentTarget) -> Option<String> {
-    match target.kind {
-      OverviewCommentKind::Issue => self
-        .issue_comments
-        .iter()
-        .find(|comment| comment.id == target.id)
-        .map(|comment| comment.body.clone()),
-      OverviewCommentKind::Review => self
-        .review_comments
-        .iter()
-        .find(|comment| comment.id == target.id)
-        .map(|comment| comment.body.clone()),
-    }
-  }
-
-  fn ensure_overview_edit_input(
-    &mut self,
-    window: &mut Window,
-    cx: &mut Context<Self>,
-  ) -> Entity<TextareaState> {
-    if let Some(input) = self.overview_edit_input.as_ref() {
-      return input.clone();
-    }
-
-    let input = cx.new(|cx| {
-      TextareaState::new(window, cx)
-        .rows(6)
-        .placeholder("Edit comment...")
-    });
-    self.overview_edit_input = Some(input.clone());
-    input
-  }
-
-  fn ensure_overview_reply_input(
-    &mut self,
-    window: &mut Window,
-    cx: &mut Context<Self>,
-  ) -> Entity<TextareaState> {
-    if let Some(input) = self.overview_reply_input.as_ref() {
-      return input.clone();
-    }
-
-    let input = cx.new(|cx| {
-      TextareaState::new(window, cx)
-        .rows(6)
-        .placeholder("Reply to review comment...")
-    });
-    self.overview_reply_input = Some(input.clone());
-    input
-  }
-
-  fn clear_overview_edit_state(&mut self) {
-    self.overview_edit_target = None;
-    self.overview_edit_initial_body = None;
-    self.overview_edit_error = None;
-    self.overview_edit_submitting = false;
-    self.overview_edit_preview_open = false;
-  }
-
-  fn clear_overview_reply_state(&mut self) {
-    self.overview_reply_target_comment_id = None;
-    self.overview_reply_error = None;
-    self.overview_reply_submitting = false;
-    self.overview_reply_preview_open = false;
-  }
-
-  fn reset_overview_comment_inputs(&mut self, window: &mut Window, cx: &mut App) {
-    self
-      .overview_issue_comment_input
-      .update(cx, |input, cx| input.set_value("", window, cx));
-    if let Some(input) = self.overview_edit_input.as_ref() {
-      input.update(cx, |input, cx| input.set_value("", window, cx));
-    }
-    if let Some(input) = self.overview_reply_input.as_ref() {
-      input.update(cx, |input, cx| input.set_value("", window, cx));
-    }
-  }
-
-  fn start_overview_comment_edit(
-    &mut self,
-    target: OverviewCommentTarget,
-    window: &mut Window,
-    cx: &mut Context<Self>,
-  ) {
-    if self.overview_comment_submission_in_flight() {
-      return;
-    }
-
-    let Some(initial_body) = self.overview_comment_body_for_target(target) else {
-      return;
-    };
-
-    self.clear_overview_reply_state();
-    let input = self.ensure_overview_edit_input(window, cx);
-    let initial_body_for_input = initial_body.clone();
-    input.update(cx, |state, cx| {
-      state.set_value(initial_body_for_input.clone(), window, cx);
-    });
-
-    let input_for_focus = input.clone();
-    window.on_next_frame(move |window, cx| {
-      input_for_focus.update(cx, |state, cx| {
-        state.focus(window, cx);
-      });
-    });
-
-    self.overview_edit_target = Some(target);
-    self.overview_edit_initial_body = Some(initial_body);
-    self.overview_edit_error = None;
-    cx.notify();
-  }
-
-  fn cancel_overview_comment_edit(&mut self, cx: &mut Context<Self>) {
-    if self.overview_edit_submitting || self.overview_edit_target.is_none() {
-      return;
-    }
-    self.clear_overview_edit_state();
-    cx.notify();
-  }
-
-  fn start_overview_review_comment_reply(
-    &mut self,
-    comment_id: u64,
-    window: &mut Window,
-    cx: &mut Context<Self>,
-  ) {
-    if self.overview_comment_submission_in_flight() {
-      return;
-    }
-    if !self
-      .review_comments
-      .iter()
-      .any(|comment| comment.id == comment_id)
-    {
-      return;
-    }
-
-    let input = self.ensure_overview_reply_input(window, cx);
-    input.update(cx, |state, cx| {
-      state.set_value("", window, cx);
-    });
-
-    let input_for_focus = input.clone();
-    window.on_next_frame(move |window, cx| {
-      input_for_focus.update(cx, |state, cx| {
-        state.focus(window, cx);
-      });
-    });
-
-    self.overview_edit_target = None;
-    self.overview_edit_initial_body = None;
-    self.overview_edit_error = None;
-    self.overview_reply_target_comment_id = Some(comment_id);
-    self.overview_reply_error = None;
-    cx.notify();
-  }
-
-  fn cancel_overview_review_comment_reply(&mut self, cx: &mut Context<Self>) {
-    if self.overview_reply_submitting || self.overview_reply_target_comment_id.is_none() {
-      return;
-    }
-    self.clear_overview_reply_state();
-    cx.notify();
-  }
-
-  // Inserts the target comment as a quote block + @mention into the "Add
-  // comment" composer at the bottom of the overview, scrolls there, and
-  // focuses the input. Matches the GitHub "Quote reply" flow.
-  fn start_overview_quote_reply(
-    &mut self,
-    target: OverviewCommentTarget,
-    window: &mut Window,
-    cx: &mut Context<Self>,
-  ) {
-    let Some(body) = self.body_for_overview_target(target) else {
-      return;
-    };
-    let quote = github_shared::quote_reply_markdown(&body);
-    let input = self.overview_issue_comment_input.clone();
-    input.update(cx, |input, cx| {
-      let current = input.value().to_string();
-      let needs_separator = !current.is_empty() && !current.ends_with("\n\n");
-      if needs_separator {
-        let prefix = if current.ends_with('\n') {
-          "\n"
-        } else {
-          "\n\n"
-        };
-        let next = format!("{current}{prefix}{quote}");
-        input.set_value(next, window, cx);
-      } else {
-        let next = format!("{current}{quote}");
-        input.set_value(next, window, cx);
-      }
-    });
-    self
-      .overview_list
-      .scroll_to_reveal_item(self.overview_list_count.saturating_sub(1));
-    let input_for_focus = input.clone();
-    window.on_next_frame(move |window, cx| {
-      input_for_focus.update(cx, |input, cx| {
-        input.focus(window, cx);
-      });
-    });
-    cx.notify();
-  }
-
-  fn body_for_overview_target(&self, target: OverviewCommentTarget) -> Option<String> {
-    match target.kind {
-      OverviewCommentKind::Issue => self
-        .issue_comments
-        .iter()
-        .find(|comment| comment.id == target.id)
-        .map(|comment| comment.body.clone()),
-      OverviewCommentKind::Review => self
-        .review_comments
-        .iter()
-        .find(|comment| comment.id == target.id)
-        .map(|comment| comment.body.clone()),
-    }
   }
 
   fn subscribe_to_tree_search_input(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -7021,27 +5775,6 @@ impl GithubPrDetailsPage {
     )
   }
 
-  fn review_comment_is_outdated_for_ui(&self, comment_id: u64, is_outdated: bool) -> bool {
-    if is_outdated
-      || self
-        .stale_suggested_change_comment_ids
-        .contains(&comment_id)
-    {
-      return true;
-    }
-
-    build_suggestion_context(&self.review_comments, comment_id)
-      .and_then(|context| {
-        Self::suggested_change_original_lines_match_current_head(
-          &self.file_contents,
-          context.path.as_ref(),
-          context.original_start_line,
-          &context.original_lines,
-        )
-      })
-      .is_some_and(|matches| !matches)
-  }
-
   fn suggested_change_target_matches_context(
     target: &SuggestedChangeCommitTarget,
     comment_id: u64,
@@ -7794,106 +6527,6 @@ impl GithubPrDetailsPage {
     cx.notify();
   }
 
-  fn render_overview_conversation_counter(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
-    if !self.show_overview_conversation_counter {
-      return None;
-    }
-    let active_id = self.active_overview_conversation_id?;
-    let ids = self.overview_conversation_ids();
-    if ids.is_empty() {
-      return None;
-    }
-    let active_index = ids.iter().position(|id| *id == active_id)?;
-    let theme = cx.theme().clone();
-    let view = cx.entity();
-
-    Some(
-      div()
-        .absolute()
-        .top(px(16.0))
-        .left(px(24.0))
-        .child(
-          h_flex()
-            .items_center()
-            .gap_2()
-            .py_1()
-            .pl_3()
-            .pr_1()
-            .rounded(theme.radius)
-            .bg(theme.background)
-            .border_1()
-            .border_color(theme.border)
-            .shadow_sm()
-            .child(
-              div()
-                .text_xs()
-                .text_color(theme.muted_foreground)
-                .child(format!("{}/{}", active_index + 1, ids.len())),
-            )
-            .child(
-              Button::new("github-pr-overview-conversation-counter-close")
-                .ghost()
-                .xsmall()
-                .compact()
-                .tab_stop(false)
-                .icon(IconName::Close)
-                .on_click(move |_, _, cx| {
-                  view.update(cx, |this, cx| {
-                    this.show_overview_conversation_counter = false;
-                    cx.notify();
-                  });
-                }),
-            ),
-        )
-        .into_any_element(),
-    )
-  }
-
-  fn overview_conversation_ids(&self) -> Vec<u64> {
-    self
-      .overview_timeline_items
-      .iter()
-      .filter_map(|item| match item {
-        GithubPrOverviewTimelineItem::Conversation(conversation) => Some(conversation.id),
-        _ => None,
-      })
-      .collect()
-  }
-
-  fn navigate_overview_conversation(
-    &mut self,
-    direction: ReviewCommentNavigationDirection,
-    cx: &mut Context<Self>,
-  ) {
-    let conversation_ids = self.overview_conversation_ids();
-    let Some(index) = next_review_comment_navigation_index(
-      &conversation_ids,
-      self.active_overview_conversation_id,
-      direction,
-    ) else {
-      return;
-    };
-    let Some(conversation_id) = conversation_ids.get(index).copied() else {
-      return;
-    };
-
-    let timeline_position = self.overview_timeline_items.iter().position(|item| {
-      matches!(
-        item,
-        GithubPrOverviewTimelineItem::Conversation(conversation)
-          if conversation.id == conversation_id
-      )
-    });
-    if let Some(timeline_ix) = timeline_position {
-      // Item index 0 is the header; timeline items start at 1.
-      let list_ix = timeline_ix + 1;
-      self.overview_list.scroll_to_reveal_item(list_ix);
-    }
-    self.active_overview_conversation_id = Some(conversation_id);
-    self.show_overview_conversation_counter = true;
-    cx.notify();
-  }
-
   fn submit_review_comment_edit(&mut self, comment_id: u64, body: String, cx: &mut Context<Self>) {
     if self.selected_commit_sha.is_some() {
       let message = Arc::<str>::from("Review comments are disabled for commit-level diffs");
@@ -8395,272 +7028,6 @@ impl GithubPrDetailsPage {
     self.review_comments_task = Some(task);
   }
 
-  fn upsert_issue_comment(&mut self, comment: GithubPullRequestIssueComment) {
-    upsert_issue_comment_local(&mut self.issue_comments, comment);
-  }
-
-  fn upsert_review_comment(&mut self, comment: GithubPullRequestReviewComment) {
-    upsert_review_comment_local(&mut self.review_comments, comment);
-  }
-
-  fn update_reaction_groups_for_subject(
-    &mut self,
-    subject_id: &str,
-    reactions: Vec<GithubReactionGroup>,
-    cx: &mut Context<Self>,
-  ) -> bool {
-    if let Some(pull_request) = self.pull_request.as_mut()
-      && pull_request.node_id == subject_id
-    {
-      pull_request.reactions = reactions;
-      return true;
-    }
-
-    if let Some(comment) = self
-      .issue_comments
-      .iter_mut()
-      .find(|comment| comment.node_id == subject_id)
-    {
-      comment.reactions = reactions;
-      return true;
-    }
-
-    if let Some(review) = self
-      .reviews
-      .iter_mut()
-      .find(|review| review.node_id == subject_id)
-    {
-      review.reactions = reactions;
-      return true;
-    }
-
-    if let Some(comment) = self
-      .review_comments
-      .iter_mut()
-      .find(|comment| comment.node_id == subject_id)
-    {
-      comment.reactions = reactions;
-      self.sync_review_comments(cx);
-      return true;
-    }
-
-    false
-  }
-
-  fn submit_pull_request_reaction_toggle(
-    &mut self,
-    subject_id: String,
-    content: GithubReactionContent,
-    viewer_has_reacted: bool,
-    cx: &mut Context<Self>,
-  ) {
-    if self.reaction_task.is_some() || subject_id.trim().is_empty() {
-      return;
-    }
-
-    let Some((owner, repo, number)) = self.pull_request.as_ref().map(|pull_request| {
-      (
-        pull_request.repository.owner.clone(),
-        pull_request.repository.repo.clone(),
-        pull_request.number,
-      )
-    }) else {
-      self.reaction_error = Some((subject_id, "No pull request selected".into()));
-      cx.notify();
-      return;
-    };
-
-    self.reaction_error = None;
-    cx.notify();
-
-    let api = self.api.clone();
-    let task_subject_id = subject_id.clone();
-    let task = cx.spawn(async move |this, cx| {
-      let result = unblock(move || {
-        if viewer_has_reacted {
-          api.remove_pull_request_reaction(&owner, &repo, number, &task_subject_id, content)
-        } else {
-          api.add_pull_request_reaction(&owner, &repo, number, &task_subject_id, content)
-        }
-      })
-      .await;
-
-      let _ = this.update(cx, |this, cx| {
-        this.reaction_task = None;
-        match result {
-          Ok(reactions) => {
-            this.update_reaction_groups_for_subject(subject_id.as_str(), reactions, cx);
-            this.reaction_error = None;
-            this.add_pr_breadcrumb("Toggle PR reaction succeeded", Map::new());
-          }
-          Err(error) => {
-            let error_message = error.to_string();
-            this.reaction_error = Some((subject_id.clone(), error_message.clone().into()));
-            this.add_pr_breadcrumb("Toggle PR reaction failed", Map::new());
-            this.record_pr_error(
-              "github.pr.reaction.toggle",
-              error_message.as_str(),
-              Map::new(),
-            );
-          }
-        }
-        cx.notify();
-      });
-    });
-    self.reaction_task = Some(task);
-  }
-
-  fn submit_overview_issue_comment_create(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-    if self.overview_comment_submission_in_flight() || self.overview_issue_comment_submitting {
-      return;
-    }
-    let Some((owner, repo, issue_number)) = self.pull_request.as_ref().map(|pull_request| {
-      (
-        pull_request.repository.owner.clone(),
-        pull_request.repository.repo.clone(),
-        pull_request.number,
-      )
-    }) else {
-      self.overview_issue_comment_error = Some("No pull request selected".into());
-      cx.notify();
-      return;
-    };
-
-    let raw_body = self
-      .overview_issue_comment_input
-      .read(cx)
-      .value()
-      .to_string();
-    let Some(body) = github_shared::normalize_non_empty_text(raw_body.as_str()) else {
-      return;
-    };
-
-    self.overview_issue_comment_submitting = true;
-    self.overview_issue_comment_error = None;
-    cx.notify();
-
-    let api = self.api.clone();
-    let task = cx.spawn_in(window, async move |this, cx| {
-      let result =
-        unblock(move || api.create_issue_comment(&owner, &repo, issue_number, body.as_str())).await;
-      let _ = this.update_in(cx, |this, window, cx| {
-        this.overview_issue_comment_submitting = false;
-        match result {
-          Ok(comment) => {
-            let mapped = pull_request_issue_comment_from_issue_details_comment(comment);
-            this.upsert_issue_comment(mapped);
-            this.overview_issue_comment_error = None;
-            this.overview_issue_comment_preview_open = false;
-            this.overview_issue_comment_input.update(cx, |input, cx| {
-              input.set_value("", window, cx);
-            });
-          }
-          Err(error) => {
-            let error_message = error.to_string();
-            this.overview_issue_comment_error = Some(error_message.clone().into());
-            this.record_pr_error(
-              "github.pr.issue_comment.create",
-              error_message.as_str(),
-              Map::new(),
-            );
-          }
-        }
-        cx.notify();
-      });
-    });
-    self.issue_comments_task = Some(task);
-  }
-
-  fn submit_overview_comment_edit(&mut self, cx: &mut Context<Self>) {
-    if self.overview_comment_submission_in_flight()
-      || self.overview_edit_submitting
-      || self.overview_edit_target.is_none()
-    {
-      return;
-    }
-    let Some((owner, repo, issue_number)) = self.pull_request.as_ref().map(|pull_request| {
-      (
-        pull_request.repository.owner.clone(),
-        pull_request.repository.repo.clone(),
-        pull_request.number,
-      )
-    }) else {
-      self.overview_edit_error = Some("No pull request selected".into());
-      cx.notify();
-      return;
-    };
-    let Some(target) = self.overview_edit_target else {
-      return;
-    };
-    let Some(initial_body) = self.overview_edit_initial_body.clone() else {
-      return;
-    };
-    let Some(input) = self.overview_edit_input.as_ref() else {
-      return;
-    };
-    let raw_body = input.read(cx).value().to_string();
-    let Some(next_body) = next_overview_comment_body(raw_body.as_str(), initial_body.as_str())
-    else {
-      self.clear_overview_edit_state();
-      cx.notify();
-      return;
-    };
-
-    self.overview_edit_submitting = true;
-    self.overview_edit_error = None;
-    cx.notify();
-
-    let api = self.api.clone();
-    let task = cx.spawn(async move |this, cx| {
-      let result = unblock(move || match target.kind {
-        OverviewCommentKind::Issue => api
-          .update_issue_comment(&owner, &repo, issue_number, target.id, next_body.as_str())
-          .map(pull_request_issue_comment_from_issue_details_comment)
-          .map(OverviewCommentUpdateResult::Issue),
-        OverviewCommentKind::Review => api
-          .update_pull_request_review_comment(
-            &owner,
-            &repo,
-            issue_number,
-            target.id,
-            next_body.as_str(),
-          )
-          .map(OverviewCommentUpdateResult::review),
-      })
-      .await;
-
-      let _ = this.update(cx, |this, cx| {
-        this.overview_edit_submitting = false;
-        match result {
-          Ok(OverviewCommentUpdateResult::Issue(comment)) => {
-            this.upsert_issue_comment(comment);
-            this.clear_overview_edit_state();
-          }
-          Ok(OverviewCommentUpdateResult::Review(comment)) => {
-            this.upsert_review_comment(*comment);
-            this.sync_review_comments(cx);
-            this.clear_overview_edit_state();
-          }
-          Err(error) => {
-            let error_message = error.to_string();
-            this.overview_edit_error = Some(error_message.clone().into());
-            let operation = match target.kind {
-              OverviewCommentKind::Issue => "github.pr.issue_comment.update",
-              OverviewCommentKind::Review => "github.pr.review_comment.update_overview",
-            };
-            this.record_pr_error(operation, error_message.as_str(), Map::new());
-          }
-        }
-        cx.notify();
-      });
-    });
-
-    match target.kind {
-      OverviewCommentKind::Issue => self.issue_comments_task = Some(task),
-      OverviewCommentKind::Review => self.review_comments_task = Some(task),
-    }
-  }
-
   fn upload_dropped_images(
     &mut self,
     paths: &ExternalPaths,
@@ -8670,78 +7037,6 @@ impl GithubPrDetailsPage {
     cx: &mut Context<Self>,
   ) {
     github_shared::upload_dropped_images(paths, input, self.api.clone(), on_error, window, cx);
-  }
-
-  fn handle_overview_issue_comment_drop(
-    &mut self,
-    paths: &ExternalPaths,
-    window: &mut Window,
-    cx: &mut Context<Self>,
-  ) {
-    let input = self.overview_issue_comment_input.clone();
-    self.upload_dropped_images(
-      paths,
-      input,
-      |this, message, _cx| {
-        this.overview_issue_comment_error = Some(message.into());
-      },
-      window,
-      cx,
-    );
-  }
-
-  fn handle_overview_reply_drop(
-    &mut self,
-    paths: &ExternalPaths,
-    input: Entity<TextareaState>,
-    window: &mut Window,
-    cx: &mut Context<Self>,
-  ) {
-    self.upload_dropped_images(
-      paths,
-      input,
-      |this, message, _cx| {
-        this.overview_reply_error = Some(message.into());
-      },
-      window,
-      cx,
-    );
-  }
-
-  fn handle_overview_edit_drop(
-    &mut self,
-    paths: &ExternalPaths,
-    input: Entity<TextareaState>,
-    window: &mut Window,
-    cx: &mut Context<Self>,
-  ) {
-    self.upload_dropped_images(
-      paths,
-      input,
-      |this, message, _cx| {
-        this.overview_edit_error = Some(message.into());
-      },
-      window,
-      cx,
-    );
-  }
-
-  fn handle_pr_description_edit_drop(
-    &mut self,
-    paths: &ExternalPaths,
-    input: Entity<TextareaState>,
-    window: &mut Window,
-    cx: &mut Context<Self>,
-  ) {
-    self.upload_dropped_images(
-      paths,
-      input,
-      |this, message, _cx| {
-        this.pr_description_error = Some(message.into());
-      },
-      window,
-      cx,
-    );
   }
 
   // Handles drops inside any of the diff-editor review-comment composers
@@ -8768,203 +7063,6 @@ impl GithubPrDetailsPage {
       window,
       cx,
     );
-  }
-
-  fn submit_overview_review_comment_reply(&mut self, cx: &mut Context<Self>) {
-    if self.overview_comment_submission_in_flight()
-      || self.overview_reply_submitting
-      || self.overview_reply_target_comment_id.is_none()
-    {
-      return;
-    }
-
-    let Some((owner, repo, number)) = self.pull_request.as_ref().map(|pull_request| {
-      (
-        pull_request.repository.owner.clone(),
-        pull_request.repository.repo.clone(),
-        pull_request.number,
-      )
-    }) else {
-      self.overview_reply_error = Some("No pull request selected".into());
-      cx.notify();
-      return;
-    };
-    let Some(in_reply_to_id) = self.overview_reply_target_comment_id else {
-      return;
-    };
-    let Some(input) = self.overview_reply_input.as_ref() else {
-      return;
-    };
-    let raw_body = input.read(cx).value().to_string();
-    let Some(body) = github_shared::normalize_non_empty_text(raw_body.as_str()) else {
-      return;
-    };
-
-    self.overview_reply_submitting = true;
-    self.overview_reply_error = None;
-    cx.notify();
-
-    let api = self.api.clone();
-    let task = cx.spawn(async move |this, cx| {
-      let result = unblock(move || {
-        api.reply_pull_request_review_comment(&owner, &repo, number, in_reply_to_id, body.as_str())
-      })
-      .await;
-
-      let _ = this.update(cx, |this, cx| {
-        this.overview_reply_submitting = false;
-        match result {
-          Ok(comment) => {
-            this.upsert_review_comment(comment);
-            this.sync_review_comments(cx);
-            this.clear_overview_reply_state();
-          }
-          Err(error) => {
-            let error_message = error.to_string();
-            this.overview_reply_error = Some(error_message.clone().into());
-            this.record_pr_error(
-              "github.pr.review_comment.reply_overview",
-              error_message.as_str(),
-              Map::new(),
-            );
-          }
-        }
-        cx.notify();
-      });
-    });
-    self.review_comments_task = Some(task);
-  }
-
-  fn confirm_overview_comment_delete(
-    &mut self,
-    target: OverviewCommentTarget,
-    window: &mut Window,
-    cx: &mut Context<Self>,
-  ) {
-    if self.overview_comment_submission_in_flight() {
-      return;
-    }
-    let title: SharedString = "Delete comment?".into();
-    let message: SharedString = "This comment will be permanently deleted.".into();
-    let view = cx.entity();
-
-    window.open_alert_dialog(cx, move |alert, _, _| {
-      let view = view.clone();
-      ConfirmDialog::new(title.clone(), div().child(message.clone()))
-        .confirm_text("Delete")
-        .cancel_text("Cancel")
-        .destructive()
-        .on_confirm(move |_, _, cx| {
-          view.update(cx, |this, cx| {
-            this.submit_overview_comment_delete(target, cx);
-          });
-          true
-        })
-        .build(alert)
-    });
-  }
-
-  fn submit_overview_comment_delete(
-    &mut self,
-    target: OverviewCommentTarget,
-    cx: &mut Context<Self>,
-  ) {
-    if self.overview_comment_submission_in_flight() {
-      return;
-    }
-    let Some((owner, repo, issue_number)) = self.pull_request.as_ref().map(|pull_request| {
-      (
-        pull_request.repository.owner.clone(),
-        pull_request.repository.repo.clone(),
-        pull_request.number,
-      )
-    }) else {
-      return;
-    };
-
-    match target.kind {
-      OverviewCommentKind::Issue => {
-        let Some((removed_index, removed_comment)) =
-          remove_issue_comment_local(&mut self.issue_comments, target.id)
-        else {
-          return;
-        };
-        self.overview_issue_comment_submitting = true;
-        self.overview_issue_comment_error = None;
-        cx.notify();
-
-        let api = self.api.clone();
-        let task = cx.spawn(async move |this, cx| {
-          let result =
-            unblock(move || api.delete_issue_comment(&owner, &repo, issue_number, target.id)).await;
-          let _ = this.update(cx, |this, cx| {
-            this.overview_issue_comment_submitting = false;
-            if let Err(error) = result {
-              restore_issue_comment_local(
-                &mut this.issue_comments,
-                removed_index,
-                removed_comment.clone(),
-              );
-              let error_message = error.to_string();
-              this.overview_issue_comment_error = Some(error_message.clone().into());
-              this.record_pr_error(
-                "github.pr.issue_comment.delete",
-                error_message.as_str(),
-                Map::new(),
-              );
-            } else {
-              this.overview_issue_comment_error = None;
-            }
-            cx.notify();
-          });
-        });
-        self.issue_comments_task = Some(task);
-      }
-      OverviewCommentKind::Review => {
-        let Some((removed_index, removed_comment)) =
-          remove_review_comment_local(&mut self.review_comments, target.id)
-        else {
-          return;
-        };
-        self.overview_edit_submitting = true;
-        self.overview_edit_error = None;
-        self.sync_review_comments(cx);
-        cx.notify();
-
-        let api = self.api.clone();
-        let task = cx.spawn(async move |this, cx| {
-          let result = unblock(move || {
-            api.delete_pull_request_review_comment(&owner, &repo, issue_number, target.id)
-          })
-          .await;
-          let _ = this.update(cx, |this, cx| {
-            this.overview_edit_submitting = false;
-            if let Err(error) = result {
-              restore_review_comment_local(
-                &mut this.review_comments,
-                removed_index,
-                removed_comment.clone(),
-              );
-              let error_message = error.to_string();
-              this.overview_edit_error = Some(error_message.clone().into());
-              this.record_pr_error(
-                "github.pr.review_comment.delete_overview",
-                error_message.as_str(),
-                Map::new(),
-              );
-            } else if this
-              .overview_edit_target
-              .is_some_and(|edit_target| edit_target.id == target.id)
-            {
-              this.clear_overview_edit_state();
-            }
-            this.sync_review_comments(cx);
-            cx.notify();
-          });
-        });
-        self.review_comments_task = Some(task);
-      }
-    }
   }
 
   fn set_active_tab(&mut self, ix: usize, window: &mut Window, cx: &mut Context<Self>) {
@@ -9367,98 +7465,6 @@ impl GithubPrDetailsPage {
     }
   }
 
-  fn overview_root_review_comment_preview(
-    &self,
-    comment_id: u64,
-  ) -> Option<GithubPrReviewCommentPreview> {
-    let comments_by_id: HashMap<u64, &GithubPullRequestReviewComment> = self
-      .review_comments
-      .iter()
-      .map(|comment| (comment.id, comment))
-      .collect();
-    let comment = comments_by_id.get(&comment_id).copied()?;
-    let root_id = resolve_review_comment_thread_root_id(comment, &comments_by_id);
-    if root_id != comment_id {
-      return None;
-    }
-
-    let file = self.file_for_review_comment_path(comment.path.as_str())?;
-    let contents = self.file_contents.get(file.path.as_ref())?;
-    let (start_line, end_line) = review_comment_preview_line_range(comment)?;
-    let diff_refs = self.resolve_diff_refs()?;
-
-    let preferred_source = match review_comment_preview_side(comment) {
-      ReviewCommentPreviewSide::Left => contents.base.as_ref().map(|content| {
-        (
-          content.as_str(),
-          diff_refs.base_owner.clone(),
-          diff_refs.base_repo.clone(),
-          diff_refs.base_sha.clone(),
-        )
-      }),
-      ReviewCommentPreviewSide::Right => contents.head.as_ref().map(|content| {
-        (
-          content.as_str(),
-          diff_refs.head_owner.clone(),
-          diff_refs.head_repo.clone(),
-          diff_refs.head_sha.clone(),
-        )
-      }),
-    };
-
-    let fallback_source = match review_comment_preview_side(comment) {
-      ReviewCommentPreviewSide::Left => contents.head.as_ref().map(|content| {
-        (
-          content.as_str(),
-          diff_refs.head_owner.clone(),
-          diff_refs.head_repo.clone(),
-          diff_refs.head_sha.clone(),
-        )
-      }),
-      ReviewCommentPreviewSide::Right => contents.base.as_ref().map(|content| {
-        (
-          content.as_str(),
-          diff_refs.base_owner.clone(),
-          diff_refs.base_repo.clone(),
-          diff_refs.base_sha.clone(),
-        )
-      }),
-    };
-
-    let (content, owner, repo, reference) = preferred_source.or(fallback_source)?;
-    let snippets = github_shared::line_snippets_from_content(content, start_line, end_line)?;
-    let actual_end_line = start_line.saturating_add(snippets.len().saturating_sub(1));
-    let url = github_blob_url(
-      owner.as_str(),
-      repo.as_str(),
-      reference.as_str(),
-      comment.path.as_str(),
-      start_line,
-      actual_end_line,
-    );
-
-    let diff_lines = gfm_diff_lines_from_hunk_for_range(
-      comment.diff_hunk.as_str(),
-      review_comment_preview_side(comment),
-      start_line,
-      actual_end_line,
-    );
-
-    Some(GithubPrReviewCommentPreview {
-      code: GithubCodeReferencePreview {
-        url: Arc::<str>::from(url),
-        repo: Arc::<str>::from(github_shared::repo_label(owner.as_str(), repo.as_str())),
-        path: Arc::<str>::from(comment.path.as_str()),
-        reference: Arc::<str>::from(reference),
-        start_line,
-        end_line: actual_end_line,
-        snippets: snippets.into_iter().map(Arc::<str>::from).collect(),
-        full_content: Some(Arc::<str>::from(content)),
-      },
-      diff_lines,
-    })
-  }
-
   fn cached_review_comment_code_reference_previews(
     &self,
     requests: &HashMap<u64, Vec<GithubBlobLineReference>>,
@@ -9482,29 +7488,6 @@ impl GithubPrDetailsPage {
         }
       })
       .collect()
-  }
-
-  fn cached_github_code_reference_previews_for_requests(
-    &self,
-    requests: &[GithubBlobLineReference],
-  ) -> Option<Arc<HashMap<Arc<str>, GithubCodeReferencePreview>>> {
-    let previews: HashMap<Arc<str>, GithubCodeReferencePreview> = requests
-      .iter()
-      .filter_map(|reference| {
-        self
-          .review_comment_code_reference_cache
-          .get(&reference.url)
-          .and_then(|preview| preview.as_ref())
-          .map(gfm_preview_from_review_preview)
-          .map(|preview| (preview.url.clone(), preview))
-      })
-      .collect();
-
-    if previews.is_empty() {
-      None
-    } else {
-      Some(Arc::new(previews))
-    }
   }
 
   fn schedule_code_reference_fetches<'a, I>(&mut self, references: I, cx: &mut Context<Self>)
@@ -10160,9 +8143,6 @@ impl GithubPrDetailsPage {
     self.merge_popover_open = false;
     self.merge_submit_task = None;
     self.merge_submit_loading = false;
-    self.auto_merge_submit_task = None;
-    self.auto_merge_submit_loading = false;
-    self.auto_merge_submit_error = None;
     self.status_action_task = None;
     self.status_action_loading = false;
     self.update_branch_task = None;
@@ -10209,25 +8189,14 @@ impl GithubPrDetailsPage {
     self.issue_comments_loading = true;
     self.issue_comments_error = None;
     self.issue_comments.clear();
-    self.overview_issue_comment_submitting = false;
-    self.overview_issue_comment_error = None;
     self.reviews_loading = true;
     self.reviews_error = None;
     self.reviews.clear();
     self.review_comments_loading = true;
     self.review_comments_error = None;
     self.review_comments.clear();
-    self.overview_edit_target = None;
-    self.overview_edit_initial_body = None;
-    self.overview_edit_submitting = false;
-    self.overview_edit_error = None;
-    self.overview_reply_target_comment_id = None;
-    self.overview_reply_submitting = false;
-    self.overview_reply_error = None;
     self.selected_file_review_comment_ids.clear();
     self.active_review_comment_id = None;
-    self.active_overview_conversation_id = None;
-    self.show_overview_conversation_counter = false;
     self.description_code_reference_requests.clear();
     self.review_comment_code_reference_cache.clear();
     self.review_comment_code_reference_tasks.clear();
@@ -10298,7 +8267,6 @@ impl GithubPrDetailsPage {
       self
         .label_input
         .update(cx, |input, cx| input.set_value("", window, cx));
-      self.reset_overview_comment_inputs(window, cx);
     });
 
     let details_api = self.api.clone();
@@ -10469,25 +8437,6 @@ impl GithubPrDetailsPage {
     });
     let show_commit_fields = selected_method.is_some_and(merge_method_supports_commit_message);
     let merge_button_disabled = self.pull_request.is_none();
-    let auto_merge_details = merge_readiness
-      .as_ref()
-      .and_then(|readiness| readiness.auto_merge.clone());
-    let auto_merge_enabled = auto_merge_details.is_some()
-      || merge_readiness
-        .as_ref()
-        .is_some_and(|readiness| readiness.auto_merge_enabled);
-    let can_enable_auto_merge = !auto_merge_enabled
-      && merge_readiness
-        .as_ref()
-        .is_some_and(|readiness| readiness.viewer_can_enable_auto_merge)
-      && selected_method.is_some()
-      && matches!(merge_status, GithubPullRequestMergeReadinessStatus::Blocked);
-    let can_disable_auto_merge = auto_merge_enabled
-      && merge_readiness
-        .as_ref()
-        .is_some_and(|readiness| readiness.viewer_can_disable_auto_merge);
-    let auto_merge_submit_loading = self.auto_merge_submit_loading;
-    let auto_merge_submit_error = self.auto_merge_submit_error.clone();
     let merge_message = self
       .merge_submit_error
       .clone()
@@ -10644,41 +8593,6 @@ impl GithubPrDetailsPage {
                 .child(message),
             )
           })
-          .when(auto_merge_enabled, |this| {
-            let details = auto_merge_details.clone();
-            let label = match details.as_ref() {
-              Some(details) => {
-                let method_label = merge_method_label(details.merge_method);
-                match details.enabled_by.as_ref() {
-                  Some(user) => format!(
-                    "Auto-merge enabled by @{} ({}). GitHub will merge once all requirements are met.",
-                    user.login, method_label,
-                  ),
-                  None => format!(
-                    "Auto-merge enabled ({}). GitHub will merge once all requirements are met.",
-                    method_label,
-                  ),
-                }
-              }
-              None => {
-                "Auto-merge is enabled. GitHub will merge once all requirements are met.".to_string()
-              }
-            };
-            this.child(
-              div()
-                .text_xs()
-                .text_color(theme.status_green())
-                .child(label),
-            )
-          })
-          .when_some(auto_merge_submit_error, |this, message| {
-            this.child(
-              div()
-                .text_xs()
-                .text_color(theme.status_red())
-                .child(message),
-            )
-          })
           .child(
             h_flex()
               .items_center()
@@ -10689,55 +8603,25 @@ impl GithubPrDetailsPage {
                   .ghost()
                   .small()
                   .label("Cancel")
-                  .disabled(self.merge_submit_loading || auto_merge_submit_loading)
+                  .disabled(self.merge_submit_loading)
                   .on_click(cx.listener(|this, _, window, cx| {
                     this.merge_popover_open = false;
                     this.reset_merge_form(window, cx);
                     cx.notify();
                   })),
               )
-              .when(can_enable_auto_merge, |this| {
-                this.child(
-                  Button::new("pr-auto-merge-enable")
-                    .with_variant(ButtonVariant::Secondary)
-                    .outline()
-                    .small()
-                    .label("Enable auto-merge")
-                    .loading(auto_merge_submit_loading)
-                    .disabled(self.merge_submit_loading)
-                    .on_click(cx.listener(|this, _, window, cx| {
-                      this.submit_enable_auto_merge(window, cx);
-                    })),
-                )
-              })
-              .when(can_disable_auto_merge, |this| {
-                this.child(
-                  Button::new("pr-auto-merge-disable")
-                    .with_variant(ButtonVariant::Secondary)
-                    .outline()
-                    .small()
-                    .label("Disable auto-merge")
-                    .loading(auto_merge_submit_loading)
-                    .disabled(self.merge_submit_loading)
-                    .on_click(cx.listener(|this, _, window, cx| {
-                      this.submit_disable_auto_merge(window, cx);
-                    })),
-                )
-              })
-              .when(!auto_merge_enabled, |this| {
-                this.child(
-                  Button::new("pr-merge-submit")
-                    .primary()
-                    .small()
-                    .label("Merge pull request")
-                    .child(Kbd::new(Keystroke::parse("cmd-enter").unwrap()).ml_1())
-                    .loading(self.merge_submit_loading)
-                    .disabled(!can_submit_merge || auto_merge_submit_loading)
-                    .on_click(cx.listener(|this, _, window, cx| {
-                      this.submit_pull_request_merge(window, cx);
-                    })),
-                )
-              }),
+              .child(
+                Button::new("pr-merge-submit")
+                  .primary()
+                  .small()
+                  .label("Merge pull request")
+                  .child(Kbd::new(Keystroke::parse("cmd-enter").unwrap()).ml_1())
+                  .loading(self.merge_submit_loading)
+                  .disabled(!can_submit_merge)
+                  .on_click(cx.listener(|this, _, window, cx| {
+                    this.submit_pull_request_merge(window, cx);
+                  })),
+              ),
           ),
       )
       .into_any_element()
@@ -12219,11 +10103,6 @@ impl GithubPrDetailsPage {
 
   fn toggle_overview_checks(&mut self, cx: &mut Context<Self>) {
     self.overview_checks_open = !self.overview_checks_open;
-
-    if self.overview_list.item_count() > 0 {
-      self.overview_list.remeasure_items(0..1);
-    }
-
     cx.notify();
   }
 
@@ -12556,238 +10435,6 @@ impl GithubPrDetailsPage {
     item.into_any_element()
   }
 
-  fn render_overview_timeline_marker(
-    icon: AnyElement,
-    color: Hsla,
-    theme: &gpui_component::Theme,
-  ) -> AnyElement {
-    div()
-      .size(px(24.0))
-      .rounded_full()
-      .border_1()
-      .border_color(color.opacity(0.45))
-      .bg(theme.background)
-      .flex()
-      .items_center()
-      .justify_center()
-      .child(icon)
-      .into_any_element()
-  }
-
-  fn render_overview_timeline_marker_filled(icon_name: UiIconName, bg_color: Hsla) -> AnyElement {
-    div()
-      .size(px(24.0))
-      .rounded_full()
-      .bg(bg_color)
-      .flex()
-      .items_center()
-      .justify_center()
-      .child(Icon::new(icon_name).size_3().text_color(gpui::white()))
-      .into_any_element()
-  }
-
-  fn render_overview_timeline_shell(
-    id: String,
-    marker: AnyElement,
-    body: AnyElement,
-    is_first: bool,
-    is_last: bool,
-    theme: &gpui_component::Theme,
-  ) -> AnyElement {
-    div()
-      .flex()
-      .flex_row()
-      .id(id)
-      .w_full()
-      .min_w_0()
-      .gap_3()
-      .child(
-        div()
-          .relative()
-          .w(px(52.0))
-          .min_h(px(56.0))
-          .flex_shrink_0()
-          .when(!is_first, |this| {
-            this.child(
-              div()
-                .absolute()
-                .top_0()
-                .left(px(25.5))
-                .w(px(1.0))
-                .h(px(12.0))
-                .bg(theme.border),
-            )
-          })
-          .when(!is_last, |this| {
-            this.child(
-              div()
-                .absolute()
-                .top(px(34.0))
-                .bottom_0()
-                .left(px(25.5))
-                .w(px(1.0))
-                .bg(theme.border),
-            )
-          })
-          .child(div().absolute().top(px(10.0)).left(px(14.0)).child(marker)),
-      )
-      .child(div().min_w_0().flex_1().pb_4().child(body))
-      .into_any_element()
-  }
-
-  fn render_overview_commit_timeline_item(
-    &self,
-    commit: &GithubPullRequestCommit,
-    is_first: bool,
-    is_last: bool,
-    cx: &mut Context<Self>,
-  ) -> AnyElement {
-    let theme = cx.theme().clone();
-    let short_sha = github_shared::short_sha(&commit.sha);
-    let commit_user = commit.author.as_ref().or(commit.committer.as_ref());
-    let committed_at = commit
-      .committed_at
-      .as_deref()
-      .or(commit.authored_at.as_deref())
-      .unwrap_or("-");
-    let selected = self.selected_commit_sha.as_deref() == Some(commit.sha.as_str());
-    let sha = commit.sha.clone();
-    let hover_bg = theme.accent.opacity(0.55);
-    let marker_color = theme.muted_foreground;
-    let marker = Self::render_overview_timeline_marker(
-      Icon::new(UiIconName::GitCommitHorizontal)
-        .size_3()
-        .text_color(marker_color)
-        .into_any_element(),
-      marker_color,
-      &theme,
-    );
-
-    let body = github_shared::render_commit_row_content_with_authors(
-      &commit.sha,
-      &commit.message,
-      committed_at,
-      &commit.authors,
-      commit_user.map(|u| u.login.as_str()),
-      commit_user.and_then(|u| u.avatar_url.as_deref()),
-      &theme,
-    )
-    .id(format!("github-pr-overview-timeline-commit-row-{sha}"))
-    .rounded(theme.radius)
-    .px_2()
-    .py_2()
-    .cursor_pointer()
-    .when(selected, |this| this.bg(hover_bg))
-    .hover(move |this| this.bg(hover_bg))
-    .on_click(cx.listener(move |this, _, window, cx| {
-      this.select_commit_filter(Some(sha.clone()), cx);
-      this.set_active_tab(PR_TAB_CHANGES_IX, window, cx);
-    }))
-    .into_any_element();
-
-    Self::render_overview_timeline_shell(
-      format!("github-pr-overview-timeline-commit-{short_sha}"),
-      marker,
-      body,
-      is_first,
-      is_last,
-      &theme,
-    )
-  }
-
-  fn render_overview_conversation_timeline_item(
-    &self,
-    item: &GithubPrOverviewConversationItem,
-    is_first: bool,
-    is_last: bool,
-    pr_number: u64,
-    pr_owner: SharedString,
-    pr_repo: SharedString,
-    cx: &mut Context<Self>,
-  ) -> AnyElement {
-    let theme = cx.theme().clone();
-    let (marker_icon_name, marker_color, filled) = match item.review_state {
-      Some(GithubPullRequestReviewState::Approved) => {
-        (UiIconName::Check, theme.status_green(), true)
-      }
-      Some(GithubPullRequestReviewState::RequestChanges) => {
-        (UiIconName::FileDiff, theme.status_red(), true)
-      }
-      _ if item.kind == GithubPrOverviewConversationItemKind::ReviewComment => {
-        (UiIconName::Eye, theme.muted_foreground, false)
-      }
-      _ => (UiIconName::MessageCircle, theme.muted_foreground, false),
-    };
-    let marker = if filled {
-      Self::render_overview_timeline_marker_filled(marker_icon_name, marker_color)
-    } else {
-      Self::render_overview_timeline_marker(
-        Icon::new(marker_icon_name)
-          .size_3()
-          .text_color(marker_color)
-          .into_any_element(),
-        marker_color,
-        &theme,
-      )
-    };
-    let body = self.render_overview_conversation_item(item, pr_number, pr_owner, pr_repo, cx);
-
-    let is_active = self.active_overview_conversation_id == Some(item.id);
-    let body = if is_active {
-      div()
-        .relative()
-        .child(body)
-        .child(
-          div()
-            .absolute()
-            .top_0()
-            .right_0()
-            .bottom_0()
-            .left_0()
-            .border_2()
-            .rounded(theme.radius)
-            .border_color(theme.ring.alpha(0.1)),
-        )
-        .into_any_element()
-    } else {
-      body
-    };
-
-    Self::render_overview_timeline_shell(
-      format!(
-        "github-pr-overview-timeline-conversation-{}-{}",
-        conversation_source_priority(item.kind),
-        item.id
-      ),
-      marker,
-      body,
-      is_first,
-      is_last,
-      &theme,
-    )
-  }
-
-  fn render_overview_timeline_item(
-    &self,
-    item: &GithubPrOverviewTimelineItem,
-    is_first: bool,
-    is_last: bool,
-    pr_number: u64,
-    pr_owner: SharedString,
-    pr_repo: SharedString,
-    cx: &mut Context<Self>,
-  ) -> AnyElement {
-    match item {
-      GithubPrOverviewTimelineItem::Commit(commit) => {
-        self.render_overview_commit_timeline_item(commit, is_first, is_last, cx)
-      }
-      GithubPrOverviewTimelineItem::Conversation(item) => self
-        .render_overview_conversation_timeline_item(
-          item, is_first, is_last, pr_number, pr_owner, pr_repo, cx,
-        ),
-    }
-  }
-
   fn build_overview_composer_markdown_options(
     &self,
     scope_offset: usize,
@@ -12822,157 +10469,6 @@ impl GithubPrDetailsPage {
     }
 
     options
-  }
-
-  fn render_overview_add_comment_section(
-    &self,
-    theme: &gpui_component::Theme,
-    cx: &mut Context<Self>,
-  ) -> AnyElement {
-    let preview_open = self.overview_issue_comment_preview_open;
-    let markdown_options = self.build_overview_composer_markdown_options(7_777, cx);
-    let page_for_toggle = cx.entity().clone();
-
-    v_flex()
-      .gap_2()
-      .pt_2()
-      .pb_32()
-      .child(
-        div()
-          .id("pr-overview-issue-comment-drop-zone")
-          .w_full()
-          .rounded(theme.radius)
-          .drag_over::<ExternalPaths>(|this, _, _, cx| this.bg(cx.theme().drop_target))
-          .on_drop(cx.listener(|this, paths: &ExternalPaths, window, cx| {
-            this.handle_overview_issue_comment_drop(paths, window, cx);
-          }))
-          .child(
-            MarkdownComposer::new(&self.overview_issue_comment_input)
-              .h(px(OVERVIEW_COMMENT_INPUT_HEIGHT_PX))
-              .preview_open(preview_open)
-              .on_toggle_preview(move |_, cx| {
-                page_for_toggle.update(cx, |this, cx| {
-                  this.overview_issue_comment_preview_open =
-                    !this.overview_issue_comment_preview_open;
-                  cx.notify();
-                });
-              })
-              .preview(move |text, _, cx| render_markdown(text, &markdown_options, cx)),
-          ),
-      )
-      .when_some(self.overview_issue_comment_error.clone(), |this, error| {
-        this.child(div().text_xs().text_color(theme.status_red()).child(error))
-      })
-      .child(
-        h_flex().items_center().justify_end().gap_2().child(
-          Button::new("pr-overview-issue-comment-save")
-            .xsmall()
-            .compact()
-            .label("Comment")
-            .disabled(
-              self.overview_issue_comment_submitting
-                || self.overview_comment_submission_in_flight()
-                || github_shared::normalize_non_empty_text(
-                  self.overview_issue_comment_input.read(cx).value().as_str(),
-                )
-                .is_none(),
-            )
-            .on_click({
-              let page = cx.entity().clone();
-              move |_, window, cx| {
-                page.update(cx, |this, cx| {
-                  this.submit_overview_issue_comment_create(window, cx);
-                });
-              }
-            }),
-        ),
-      )
-      .into_any_element()
-  }
-
-  fn render_reaction_bar(
-    &self,
-    subject_id: &str,
-    reactions: &[GithubReactionGroup],
-    id_prefix: String,
-    cx: &mut Context<Self>,
-  ) -> AnyElement {
-    let reaction_loading = self.reaction_task.is_some();
-    let page = cx.entity().clone();
-    let subject_id = subject_id.to_string();
-    let error = self
-      .reaction_error
-      .as_ref()
-      .filter(|(error_subject_id, _)| error_subject_id == &subject_id)
-      .map(|(_, error)| error.clone());
-
-    ReactionBar::new(format!("{id_prefix}-reactions"))
-      .subject_id(subject_id)
-      .options(github_shared::github_reaction_options())
-      .reactions(github_shared::github_reaction_groups(reactions))
-      .loading(reaction_loading)
-      .error(error)
-      .on_toggle(move |toggle, _, cx| {
-        let page = page.clone();
-        page.update(cx, |this, cx| {
-          this.submit_pull_request_reaction_toggle(
-            toggle.subject_id.to_string(),
-            toggle.value,
-            toggle.viewer_has_reacted,
-            cx,
-          );
-        });
-      })
-      .into_any_element()
-  }
-
-  fn render_overview_comment_actions_menu(
-    target: OverviewCommentTarget,
-    button_id: String,
-    page: Entity<Self>,
-    include_edit_delete: bool,
-  ) -> Option<AnyElement> {
-    let page_quote = page.clone();
-    let on_quote_reply: github_shared::CommentMenuAction = Arc::new(move |_, window, cx| {
-      page_quote.update(cx, |this, cx| {
-        this.start_overview_quote_reply(target, window, cx);
-      });
-    });
-    let mut actions = github_shared::CommentActionsMenu {
-      on_quote_reply: Some(on_quote_reply),
-      ..Default::default()
-    };
-    if include_edit_delete {
-      let page_edit = page.clone();
-      let page_delete = page;
-      actions.on_edit = Some(Arc::new(move |_, window, cx| {
-        page_edit.update(cx, |this, cx| {
-          this.start_overview_comment_edit(target, window, cx);
-        });
-      }));
-      actions.on_delete = Some(Arc::new(move |_, window, cx| {
-        page_delete.update(cx, |this, cx| {
-          this.confirm_overview_comment_delete(target, window, cx);
-        });
-      }));
-    }
-    github_shared::render_comment_actions_menu(button_id, actions)
-  }
-
-  fn render_outdated_review_comment_tag(
-    &self,
-    theme: &gpui_component::Theme,
-    is_resolved: bool,
-  ) -> AnyElement {
-    let color = if is_resolved {
-      theme.status_gray()
-    } else {
-      theme.status_yellow()
-    };
-    StatusTag::new(color)
-      .outline()
-      .child("Outdated")
-      .into_any_element()
   }
 
   fn suggested_change_commit_action_renderer(
@@ -13160,954 +10656,6 @@ impl GithubPrDetailsPage {
         })
         .into_any_element()
     })
-  }
-
-  fn render_overview_conversation_item(
-    &self,
-    item: &GithubPrOverviewConversationItem,
-    pr_number: u64,
-    pr_owner: SharedString,
-    pr_repo: SharedString,
-    cx: &mut Context<Self>,
-  ) -> AnyElement {
-    let theme = cx.theme().clone();
-    let timestamp = format_relative_time(&item.timestamp);
-    let scope_id = overview_conversation_scope_id(pr_number, item.kind, item.id);
-    let editable_issue_comment_ids = self.editable_issue_comment_ids(cx);
-    let editable_review_comment_ids = self.editable_review_comment_ids(cx);
-    let overview_submission_in_flight = self.overview_comment_submission_in_flight();
-    let editing_target = self.overview_edit_target;
-    let replying_target = self.overview_reply_target_comment_id;
-
-    let pr_page = cx.entity().clone();
-    let pr_page_for_links = pr_page.clone();
-    let link_handler = Arc::new(move |url: &str, window: &mut Window, cx: &mut App| {
-      let handled = pr_page_for_links.update(cx, |this, cx| this.handle_gfm_link(url, window, cx));
-      if handled {
-        LinkAction::Handled
-      } else {
-        LinkAction::Open
-      }
-    });
-
-    let review_comment_preview = if item.kind == GithubPrOverviewConversationItemKind::ReviewComment
-    {
-      self.overview_root_review_comment_preview(item.id)
-    } else {
-      None
-    };
-
-    let mut markdown_options = MarkdownRenderOptions::with_on_link(link_handler.clone())
-      .with_state(self.description_markdown_state.clone())
-      .with_syntax_cache(self.syntax_highlight_cache.clone())
-      .with_asset_url_resolver(github_shared::make_asset_url_resolver(&self.api))
-      .with_github_issue_reference_context(pr_owner.as_ref(), pr_repo.as_ref())
-      .with_scope_id(scope_id)
-      .with_hardbreaks();
-    if item.kind == GithubPrOverviewConversationItemKind::ReviewComment
-      && let Some(ctx) = build_suggestion_context(&self.review_comments, item.id).or_else(|| {
-        review_comment_preview
-          .as_ref()
-          .and_then(suggestion_context_from_review_comment_preview)
-      })
-    {
-      let action = self.suggested_change_commit_action_renderer(
-        cx.entity().clone(),
-        item.id,
-        Arc::from(item.author_login.as_str()),
-        item.is_outdated,
-        cx,
-      );
-      markdown_options = markdown_options
-        .with_suggestion_context(ctx)
-        .with_suggestion_action(action);
-    }
-
-    // Determine root comment target and editability
-    let root_target = match item.kind {
-      GithubPrOverviewConversationItemKind::IssueComment => Some(OverviewCommentTarget {
-        kind: OverviewCommentKind::Issue,
-        id: item.id,
-      }),
-      GithubPrOverviewConversationItemKind::ReviewComment => Some(OverviewCommentTarget {
-        kind: OverviewCommentKind::Review,
-        id: item.id,
-      }),
-      GithubPrOverviewConversationItemKind::Review => None,
-    };
-    let root_is_editable = root_target.is_some_and(|target| match target.kind {
-      OverviewCommentKind::Issue => editable_issue_comment_ids.contains(&target.id),
-      OverviewCommentKind::Review => editable_review_comment_ids.contains(&target.id),
-    });
-    let root_is_editing = overview_root_is_editing(editing_target, root_target);
-    let root_is_last_review_message =
-      allows_overview_review_reply_action(item.kind, &item.thread_comment_ids, item.id);
-    let root_is_outdated = item.kind == GithubPrOverviewConversationItemKind::ReviewComment
-      && self.review_comment_is_outdated_for_ui(item.id, item.is_outdated);
-    let resolvable_thread_id = if item.kind == GithubPrOverviewConversationItemKind::ReviewComment {
-      item.thread_id.clone()
-    } else {
-      None
-    };
-    let thread_is_resolved = resolvable_thread_id.is_some() && item.is_resolved;
-    let resolve_in_flight = resolvable_thread_id
-      .as_ref()
-      .is_some_and(|id| self.resolve_thread_in_flight.contains(id));
-    let can_toggle_resolution = resolvable_thread_id.is_some()
-      && !resolve_in_flight
-      && if item.is_resolved {
-        item.viewer_can_unresolve
-      } else {
-        item.viewer_can_resolve
-      };
-    let resolve_error = resolvable_thread_id
-      .as_ref()
-      .and_then(|id| self.resolve_thread_errors.get(id))
-      .cloned();
-    let thread_expanded = self.expanded_resolved_threads.contains(&item.id);
-    let thread_collapsed = thread_is_resolved && !thread_expanded;
-
-    // Root actions menu (Quote reply always, Edit/Delete when editable)
-    let root_actions_menu = if !overview_submission_in_flight {
-      root_target.and_then(|target| {
-        Self::render_overview_comment_actions_menu(
-          target,
-          format!("pr-overview-comment-actions-{}", target.id),
-          pr_page.clone(),
-          root_is_editable,
-        )
-      })
-    } else {
-      None
-    };
-
-    // Root reply button (toggle)
-    let root_reply_button = if root_is_last_review_message {
-      let page = pr_page.clone();
-      let item_id = item.id;
-      let is_replying = replying_target == Some(item_id);
-      let disabled_reason = if overview_submission_in_flight {
-        Some("A comment submission is in progress.")
-      } else if replying_target.is_some() && !is_replying {
-        Some("Finish or cancel the open reply first.")
-      } else {
-        None
-      };
-      let disabled = disabled_reason.is_some();
-      Some(
-        div()
-          .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-          .child({
-            let button = Button::new(format!("pr-overview-comment-reply-{}", item_id))
-              .ghost()
-              .xsmall()
-              .compact()
-              .icon(UiIconName::MessageCircleReply)
-              .label("Reply")
-              .selected(is_replying)
-              .disabled(disabled)
-              .on_click(move |_, window, cx| {
-                cx.stop_propagation();
-                page.update(cx, |this, cx| {
-                  if is_replying {
-                    this.cancel_overview_review_comment_reply(cx);
-                  } else {
-                    this.start_overview_review_comment_reply(item_id, window, cx);
-                  }
-                });
-              });
-            if let Some(reason) = disabled_reason {
-              button.tooltip(reason)
-            } else {
-              button
-            }
-          })
-          .into_any_element(),
-      )
-    } else {
-      None
-    };
-
-    // Root body (edit mode or markdown)
-    let root_body: Option<AnyElement> = if root_is_editing {
-      if let Some(input_state) = self.overview_edit_input.clone() {
-        let can_save = self
-          .overview_edit_initial_body
-          .as_deref()
-          .and_then(|initial| {
-            let raw_value = input_state.read(cx).value().to_string();
-            next_overview_comment_body(raw_value.as_str(), initial)
-          })
-          .is_some();
-        let page_for_cancel = pr_page.clone();
-        let page_for_save = pr_page.clone();
-        let page_for_toggle = pr_page.clone();
-        let input_for_drop = input_state.clone();
-        let edit_preview_open = self.overview_edit_preview_open;
-        let edit_markdown_options = self.build_overview_composer_markdown_options(8_888, cx);
-        let edit_submitting = self.overview_edit_submitting;
-        let content = v_flex()
-          .gap_2()
-          .child(
-            div()
-              .id(format!("pr-overview-edit-drop-zone-{}", item.id))
-              .w_full()
-              .rounded(theme.radius)
-              .drag_over::<ExternalPaths>(|this, _, _, cx| this.bg(cx.theme().drop_target))
-              .on_drop(cx.listener({
-                let input = input_for_drop.clone();
-                move |this, paths: &ExternalPaths, window, cx| {
-                  this.handle_overview_edit_drop(paths, input.clone(), window, cx);
-                }
-              }))
-              .child(
-                MarkdownComposer::new(&input_state)
-                  .disabled(edit_submitting)
-                  .h(px(OVERVIEW_COMMENT_INPUT_HEIGHT_PX))
-                  .preview_open(edit_preview_open)
-                  .on_toggle_preview(move |_, cx| {
-                    page_for_toggle.update(cx, |this, cx| {
-                      this.overview_edit_preview_open = !this.overview_edit_preview_open;
-                      cx.notify();
-                    });
-                  })
-                  .preview(move |text, _, cx| render_markdown(text, &edit_markdown_options, cx)),
-              ),
-          )
-          .when_some(self.overview_edit_error.clone(), |this, error| {
-            this.child(div().text_xs().text_color(theme.status_red()).child(error))
-          })
-          .child(
-            h_flex()
-              .items_center()
-              .justify_end()
-              .gap_2()
-              .child(
-                Button::new(format!("pr-overview-edit-cancel-{}", item.id))
-                  .ghost()
-                  .xsmall()
-                  .compact()
-                  .label("Cancel")
-                  .on_click(move |_, _, cx| {
-                    page_for_cancel.update(cx, |this, cx| {
-                      this.cancel_overview_comment_edit(cx);
-                    });
-                  }),
-              )
-              .child(
-                Button::new(format!("pr-overview-edit-save-{}", item.id))
-                  .xsmall()
-                  .compact()
-                  .label("Save")
-                  .disabled(!can_save || overview_submission_in_flight)
-                  .on_click(move |_, _, cx| {
-                    page_for_save.update(cx, |this, cx| {
-                      this.submit_overview_comment_edit(cx);
-                    });
-                  }),
-              ),
-          )
-          .into_any_element();
-
-        Some(content)
-      } else {
-        Some(div().into_any_element())
-      }
-    } else {
-      item.body.as_ref().map(|body| {
-        div()
-          .w_full()
-          .min_w_0()
-          .child(render_markdown(body.as_str(), &markdown_options, cx))
-          .into_any_element()
-      })
-    };
-
-    // Reply composer for root
-    let root_reply_composer = if replying_target == Some(item.id) {
-      if self.overview_reply_submitting {
-        Some(
-          v_flex()
-            .gap_2()
-            .pt_2()
-            .pb(px(REVIEW_COMMENT_VERTICAL_PADDING_PX))
-            .border_t_1()
-            .border_color(theme.border)
-            .child(Spinner::new().small())
-            .child(
-              div()
-                .text_xs()
-                .text_color(theme.muted_foreground)
-                .child("Replying..."),
-            )
-            .into_any_element(),
-        )
-      } else if let Some(input_state) = self.overview_reply_input.clone() {
-        let can_save =
-          github_shared::normalize_non_empty_text(input_state.read(cx).value().as_str()).is_some();
-        let page_for_cancel = pr_page.clone();
-        let page_for_save = pr_page.clone();
-        let page_for_toggle = pr_page.clone();
-        let input_for_drop = input_state.clone();
-        let reply_preview_open = self.overview_reply_preview_open;
-        let reply_markdown_options = self.build_overview_composer_markdown_options(9_999, cx);
-        Some(
-          v_flex()
-            .gap_2()
-            .pt_2()
-            .pb(px(REVIEW_COMMENT_VERTICAL_PADDING_PX))
-            .border_t_1()
-            .border_color(theme.border)
-            .child(
-              div()
-                .id(format!("pr-overview-reply-drop-zone-{}", item.id))
-                .w_full()
-                .rounded(theme.radius)
-                .drag_over::<ExternalPaths>(|this, _, _, cx| this.bg(cx.theme().drop_target))
-                .on_drop(cx.listener({
-                  let input = input_for_drop.clone();
-                  move |this, paths: &ExternalPaths, window, cx| {
-                    this.handle_overview_reply_drop(paths, input.clone(), window, cx);
-                  }
-                }))
-                .child(
-                  MarkdownComposer::new(&input_state)
-                    .h(px(OVERVIEW_COMMENT_INPUT_HEIGHT_PX))
-                    .preview_open(reply_preview_open)
-                    .on_toggle_preview(move |_, cx| {
-                      page_for_toggle.update(cx, |this, cx| {
-                        this.overview_reply_preview_open = !this.overview_reply_preview_open;
-                        cx.notify();
-                      });
-                    })
-                    .preview(move |text, _, cx| render_markdown(text, &reply_markdown_options, cx)),
-                ),
-            )
-            .when_some(self.overview_reply_error.clone(), |this, error| {
-              this.child(div().text_xs().text_color(theme.status_red()).child(error))
-            })
-            .child(
-              h_flex()
-                .items_center()
-                .justify_end()
-                .gap_2()
-                .child(
-                  Button::new(format!("pr-overview-reply-cancel-{}", item.id))
-                    .ghost()
-                    .xsmall()
-                    .compact()
-                    .label("Cancel")
-                    .on_click(move |_, _, cx| {
-                      page_for_cancel.update(cx, |this, cx| {
-                        this.cancel_overview_review_comment_reply(cx);
-                      });
-                    }),
-                )
-                .child(
-                  Button::new(format!("pr-overview-reply-save-{}", item.id))
-                    .xsmall()
-                    .compact()
-                    .label("Save")
-                    .disabled(!can_save || overview_submission_in_flight)
-                    .on_click(move |_, _, cx| {
-                      page_for_save.update(cx, |this, cx| {
-                        this.submit_overview_review_comment_reply(cx);
-                      });
-                    }),
-                ),
-            )
-            .into_any_element(),
-        )
-      } else {
-        None
-      }
-    } else {
-      None
-    };
-
-    let replies = &item.replies;
-    let thread_comment_ids = item.thread_comment_ids.clone();
-    let root_reaction_needs_bottom_padding = root_reply_composer.is_none() && replies.is_empty();
-
-    v_flex()
-      .id(format!(
-        "pr-overview-conversation-{}-{}",
-        conversation_source_priority(item.kind),
-        item.id
-      ))
-      .border_1()
-      .border_color(theme.border)
-      .rounded(theme.radius)
-      .when_some(review_comment_preview, |this, preview| {
-        let preview_card = if preview.diff_lines.is_empty() {
-          render_github_code_reference_preview_card(&preview.code, cx)
-        } else {
-          render_github_diff_code_reference_preview_card(&preview.code, &preview.diff_lines, cx)
-        };
-        this.child(
-          preview_card
-            .my_0()
-            .border_b_1()
-            .border_t_0()
-            .border_x_0()
-            .rounded_none(),
-        )
-      })
-      .child(
-        v_flex()
-          .gap(px(REVIEW_COMMENT_CARD_CONTENT_GAP_PX))
-          .px(px(REVIEW_COMMENT_CARD_PADDING_X_PX))
-          .pt(px(REVIEW_COMMENT_VERTICAL_PADDING_PX))
-          .child(
-            v_flex()
-              .gap(px(REVIEW_COMMENT_HEADER_BODY_GAP_PX))
-              .child(
-                h_flex()
-                  .items_center()
-                  .justify_between()
-                  .gap_2()
-                  .child(
-                    h_flex()
-                      .items_center()
-                      .gap(px(OVERVIEW_CONVERSATION_META_GAP_PX))
-                      .flex_wrap()
-                      .child(
-                        Avatar::new()
-                          .name(item.author_login.clone())
-                          .when_some(item.author_avatar_url.clone(), |this, url| this.src(url))
-                          .small(),
-                      )
-                      .child(
-                        div()
-                          .text_sm()
-                          .text_color(theme.foreground)
-                          .child(item.author_login.clone()),
-                      )
-                      .when_some(
-                        review_state_inline_label(item.review_state),
-                        |this, label| {
-                          this.child(
-                            div()
-                              .text_sm()
-                              .text_color(theme.muted_foreground)
-                              .child(label),
-                          )
-                        },
-                      )
-                      .child(
-                        div()
-                          .text_xs()
-                          .text_color(theme.muted_foreground)
-                          .child(timestamp),
-                      )
-                      .when(root_is_outdated, |this| {
-                        this.child(
-                          self.render_outdated_review_comment_tag(&theme, thread_is_resolved),
-                        )
-                      }),
-                  )
-                  .child(
-                    h_flex()
-                      .items_center()
-                      .gap_1()
-                      .when_some(
-                        resolvable_thread_id.clone().map(|thread_id| {
-                          (
-                            thread_id,
-                            item.id,
-                            item.is_resolved,
-                            can_toggle_resolution,
-                            resolve_in_flight,
-                          )
-                        }),
-                        |this, (thread_id, root_comment_id, is_resolved, can_toggle, in_flight)| {
-                          let page = pr_page.clone();
-                          let label = if in_flight {
-                            if is_resolved {
-                              "Unresolving..."
-                            } else {
-                              "Resolving..."
-                            }
-                          } else if is_resolved {
-                            "Unresolve conversation"
-                          } else {
-                            "Resolve conversation"
-                          };
-                          this.child(
-                            Button::new(format!("pr-overview-resolve-thread-{}", root_comment_id))
-                              .ghost()
-                              .xsmall()
-                              .compact()
-                              .label(label)
-                              .disabled(!can_toggle)
-                              .on_click(move |_, _, cx| {
-                                cx.stop_propagation();
-                                let thread_id = thread_id.clone();
-                                page.update(cx, |this, cx| {
-                                  this.toggle_review_thread_resolution(
-                                    thread_id,
-                                    root_comment_id,
-                                    is_resolved,
-                                    cx,
-                                  );
-                                });
-                              }),
-                          )
-                        },
-                      )
-                      .when_some(
-                        resolvable_thread_id
-                          .clone()
-                          .filter(|_| thread_is_resolved)
-                          .map(|_| (item.id, thread_expanded)),
-                        |this, (root_comment_id, expanded)| {
-                          let page = pr_page.clone();
-                          let label = if expanded { "Hide" } else { "Show" };
-                          let icon = if expanded {
-                            UiIconName::FoldVertical
-                          } else {
-                            UiIconName::UnfoldVertical
-                          };
-                          this.child(
-                            Button::new(format!("pr-overview-resolve-toggle-{}", root_comment_id))
-                              .ghost()
-                              .xsmall()
-                              .compact()
-                              .icon(icon)
-                              .label(label)
-                              .on_click(move |_, _, cx| {
-                                cx.stop_propagation();
-                                page.update(cx, |this, cx| {
-                                  if expanded {
-                                    this.expanded_resolved_threads.remove(&root_comment_id);
-                                  } else {
-                                    this.expanded_resolved_threads.insert(root_comment_id);
-                                  }
-                                  cx.notify();
-                                });
-                              }),
-                          )
-                        },
-                      )
-                      .when_some(root_reply_button, |this, button| this.child(button))
-                      .when_some(root_actions_menu, |this, menu| this.child(menu)),
-                  ),
-              )
-              .when_else(
-                root_body.is_some() && !thread_collapsed,
-                |this| {
-                  this.child(
-                    v_flex()
-                      .pb(px(REVIEW_COMMENT_VERTICAL_PADDING_PX))
-                      .child(root_body.unwrap()),
-                  )
-                },
-                |this| this.pb(px(REVIEW_COMMENT_VERTICAL_PADDING_PX)),
-              )
-              .when_some(resolve_error.clone(), |this, error| {
-                this.child(
-                  div()
-                    .pb(px(REVIEW_COMMENT_VERTICAL_PADDING_PX))
-                    .text_xs()
-                    .text_color(theme.status_red())
-                    .child(error),
-                )
-              }),
-          )
-          .when(!root_is_editing && !thread_collapsed, |this| {
-            this.child(
-              div()
-                .when(root_reaction_needs_bottom_padding, |this| {
-                  this.pb(px(REVIEW_COMMENT_VERTICAL_PADDING_PX))
-                })
-                .child(self.render_reaction_bar(
-                  item.reaction_subject_id.as_str(),
-                  &item.reactions,
-                  format!(
-                    "pr-overview-root-reaction-{}-{}",
-                    conversation_source_priority(item.kind),
-                    item.id
-                  ),
-                  cx,
-                )),
-            )
-          })
-          .when_some(
-            root_reply_composer.filter(|_| !thread_collapsed),
-            |this, composer| this.child(composer),
-          )
-          .when(!replies.is_empty() && !thread_collapsed, |this| {
-            this.child(v_flex().children(replies.iter().map(|reply| {
-              let reply_timestamp = format_relative_time(&reply.timestamp);
-              let reply_scope_id = scope_id
-                .wrapping_mul(1_000_003)
-                .wrapping_add(reply.id as usize);
-              let reply_markdown_options = {
-                let mut opts = MarkdownRenderOptions::with_on_link(link_handler.clone())
-                  .with_state(self.description_markdown_state.clone())
-                  .with_syntax_cache(self.syntax_highlight_cache.clone())
-                  .with_asset_url_resolver(github_shared::make_asset_url_resolver(&self.api))
-                  .with_github_issue_reference_context(pr_owner.as_ref(), pr_repo.as_ref())
-                  .with_scope_id(reply_scope_id)
-                  .with_hardbreaks();
-                if let Some(ctx) = build_suggestion_context(&self.review_comments, reply.id) {
-                  let action = self.suggested_change_commit_action_renderer(
-                    cx.entity().clone(),
-                    reply.id,
-                    Arc::from(reply.author_login.as_str()),
-                    reply.is_outdated,
-                    cx,
-                  );
-                  opts = opts
-                    .with_suggestion_context(ctx)
-                    .with_suggestion_action(action);
-                }
-                opts
-              };
-
-              let reply_target = OverviewCommentTarget {
-                kind: OverviewCommentKind::Review,
-                id: reply.id,
-              };
-              let reply_is_editable = editable_review_comment_ids.contains(&reply.id);
-              let reply_is_last_message =
-                allows_overview_review_reply_action(item.kind, &thread_comment_ids, reply.id);
-              let reply_is_outdated =
-                self.review_comment_is_outdated_for_ui(reply.id, reply.is_outdated);
-
-              // Reply actions menu (Quote reply always, Edit/Delete when editable)
-              let reply_actions_menu = if !overview_submission_in_flight {
-                Self::render_overview_comment_actions_menu(
-                  reply_target,
-                  format!("pr-overview-reply-actions-{}", reply.id),
-                  pr_page.clone(),
-                  reply_is_editable,
-                )
-              } else {
-                None
-              };
-
-              let reply_reply_button = if reply_is_last_message {
-                let page = pr_page.clone();
-                let reply_id = reply.id;
-                let is_replying = replying_target == Some(reply_id);
-                let disabled_reason = if overview_submission_in_flight {
-                  Some("A comment submission is in progress.")
-                } else if replying_target.is_some() && !is_replying {
-                  Some("Finish or cancel the open reply first.")
-                } else {
-                  None
-                };
-                let disabled = disabled_reason.is_some();
-                Some(
-                  div()
-                    .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-                    .child({
-                      let button = Button::new(format!("pr-overview-reply-action-{}", reply_id))
-                        .ghost()
-                        .xsmall()
-                        .compact()
-                        .icon(UiIconName::MessageCircleReply)
-                        .label("Reply")
-                        .selected(is_replying)
-                        .disabled(disabled)
-                        .on_click(move |_, window, cx| {
-                          cx.stop_propagation();
-                          page.update(cx, |this, cx| {
-                            if is_replying {
-                              this.cancel_overview_review_comment_reply(cx);
-                            } else {
-                              this.start_overview_review_comment_reply(reply_id, window, cx);
-                            }
-                          });
-                        });
-                      if let Some(reason) = disabled_reason {
-                        button.tooltip(reason)
-                      } else {
-                        button
-                      }
-                    })
-                    .into_any_element(),
-                )
-              } else {
-                None
-              };
-
-              // Reply body (edit mode or markdown)
-              let reply_is_editing = editing_target == Some(reply_target);
-              let reply_body = if reply_is_editing {
-                if let Some(input_state) = self.overview_edit_input.clone() {
-                  let can_save = self
-                    .overview_edit_initial_body
-                    .as_deref()
-                    .and_then(|initial| {
-                      let raw_value = input_state.read(cx).value().to_string();
-                      next_overview_comment_body(raw_value.as_str(), initial)
-                    })
-                    .is_some();
-                  let page_for_cancel = pr_page.clone();
-                  let page_for_save = pr_page.clone();
-                  let page_for_toggle = pr_page.clone();
-                  let input_for_drop = input_state.clone();
-                  let edit_preview_open = self.overview_edit_preview_open;
-                  let edit_markdown_options = reply_markdown_options
-                    .clone()
-                    .with_scope_id(reply_scope_id.wrapping_add(8_888));
-                  v_flex()
-                    .gap_2()
-                    .child(
-                      div()
-                        .id(format!("pr-overview-reply-edit-drop-zone-{}", reply.id))
-                        .w_full()
-                        .rounded(theme.radius)
-                        .drag_over::<ExternalPaths>(|this, _, _, cx| {
-                          this.bg(cx.theme().drop_target)
-                        })
-                        .on_drop(cx.listener({
-                          let input = input_for_drop.clone();
-                          move |this, paths: &ExternalPaths, window, cx| {
-                            this.handle_overview_edit_drop(paths, input.clone(), window, cx);
-                          }
-                        }))
-                        .child(
-                          MarkdownComposer::new(&input_state)
-                            .h(px(OVERVIEW_COMMENT_INPUT_HEIGHT_PX))
-                            .preview_open(edit_preview_open)
-                            .on_toggle_preview(move |_, cx| {
-                              page_for_toggle.update(cx, |this, cx| {
-                                this.overview_edit_preview_open = !this.overview_edit_preview_open;
-                                cx.notify();
-                              });
-                            })
-                            .preview(move |text, _, cx| {
-                              render_markdown(text, &edit_markdown_options, cx)
-                            }),
-                        ),
-                    )
-                    .when_some(self.overview_edit_error.clone(), |this, error| {
-                      this.child(div().text_xs().text_color(theme.status_red()).child(error))
-                    })
-                    .child(
-                      h_flex()
-                        .items_center()
-                        .justify_end()
-                        .gap_2()
-                        .child(
-                          Button::new(format!("pr-overview-reply-edit-cancel-{}", reply.id))
-                            .ghost()
-                            .xsmall()
-                            .compact()
-                            .label("Cancel")
-                            .on_click(move |_, _, cx| {
-                              page_for_cancel.update(cx, |this, cx| {
-                                this.cancel_overview_comment_edit(cx);
-                              });
-                            }),
-                        )
-                        .child(
-                          Button::new(format!("pr-overview-reply-edit-save-{}", reply.id))
-                            .xsmall()
-                            .compact()
-                            .label("Save")
-                            .disabled(!can_save || overview_submission_in_flight)
-                            .on_click(move |_, _, cx| {
-                              page_for_save.update(cx, |this, cx| {
-                                this.submit_overview_comment_edit(cx);
-                              });
-                            }),
-                        ),
-                    )
-                    .into_any_element()
-                } else {
-                  div().into_any_element()
-                }
-              } else {
-                div()
-                  .w_full()
-                  .min_w_0()
-                  .child(render_markdown(
-                    reply.body.as_str(),
-                    &reply_markdown_options,
-                    cx,
-                  ))
-                  .into_any_element()
-              };
-
-              // Reply reply composer
-              let reply_reply_composer = if replying_target == Some(reply.id) {
-                if self.overview_reply_submitting {
-                  Some(
-                    v_flex()
-                      .gap_2()
-                      .pt_2()
-                      .border_t_1()
-                      .border_color(theme.border)
-                      .child(Spinner::new().small())
-                      .child(
-                        div()
-                          .text_xs()
-                          .text_color(theme.muted_foreground)
-                          .child("Replying..."),
-                      )
-                      .into_any_element(),
-                  )
-                } else if let Some(input_state) = self.overview_reply_input.clone() {
-                  let can_save =
-                    github_shared::normalize_non_empty_text(input_state.read(cx).value().as_str())
-                      .is_some();
-                  let page_for_cancel = pr_page.clone();
-                  let page_for_save = pr_page.clone();
-                  let page_for_toggle = pr_page.clone();
-                  let input_for_drop = input_state.clone();
-                  let reply_preview_open = self.overview_reply_preview_open;
-                  let reply_composer_markdown_options = reply_markdown_options
-                    .clone()
-                    .with_scope_id(reply_scope_id.wrapping_add(9_999));
-                  Some(
-                    v_flex()
-                      .gap_2()
-                      .pt_2()
-                      .border_t_1()
-                      .border_color(theme.border)
-                      .child(
-                        div()
-                          .id(format!("pr-overview-reply-composer-drop-zone-{}", reply.id))
-                          .w_full()
-                          .rounded(theme.radius)
-                          .drag_over::<ExternalPaths>(|this, _, _, cx| {
-                            this.bg(cx.theme().drop_target)
-                          })
-                          .on_drop(cx.listener({
-                            let input = input_for_drop.clone();
-                            move |this, paths: &ExternalPaths, window, cx| {
-                              this.handle_overview_reply_drop(paths, input.clone(), window, cx);
-                            }
-                          }))
-                          .child(
-                            MarkdownComposer::new(&input_state)
-                              .h(px(OVERVIEW_COMMENT_INPUT_HEIGHT_PX))
-                              .preview_open(reply_preview_open)
-                              .on_toggle_preview(move |_, cx| {
-                                page_for_toggle.update(cx, |this, cx| {
-                                  this.overview_reply_preview_open =
-                                    !this.overview_reply_preview_open;
-                                  cx.notify();
-                                });
-                              })
-                              .preview(move |text, _, cx| {
-                                render_markdown(text, &reply_composer_markdown_options, cx)
-                              }),
-                          ),
-                      )
-                      .when_some(self.overview_reply_error.clone(), |this, error| {
-                        this.child(div().text_xs().text_color(theme.status_red()).child(error))
-                      })
-                      .child(
-                        h_flex()
-                          .items_center()
-                          .justify_end()
-                          .gap_2()
-                          .child(
-                            Button::new(format!("pr-overview-reply-composer-cancel-{}", reply.id))
-                              .ghost()
-                              .xsmall()
-                              .compact()
-                              .label("Cancel")
-                              .on_click(move |_, _, cx| {
-                                page_for_cancel.update(cx, |this, cx| {
-                                  this.cancel_overview_review_comment_reply(cx);
-                                });
-                              }),
-                          )
-                          .child(
-                            Button::new(format!("pr-overview-reply-composer-save-{}", reply.id))
-                              .xsmall()
-                              .compact()
-                              .label("Save")
-                              .disabled(!can_save || overview_submission_in_flight)
-                              .on_click(move |_, _, cx| {
-                                page_for_save.update(cx, |this, cx| {
-                                  this.submit_overview_review_comment_reply(cx);
-                                });
-                              }),
-                          ),
-                      )
-                      .into_any_element(),
-                  )
-                } else {
-                  None
-                }
-              } else {
-                None
-              };
-
-              v_flex()
-                .id(format!(
-                  "pr-overview-conversation-reply-{}-{}",
-                  item.id, reply.id
-                ))
-                .pt(px(REVIEW_COMMENT_VERTICAL_PADDING_PX))
-                .pb(px(REVIEW_COMMENT_VERTICAL_PADDING_PX))
-                .gap(px(REVIEW_COMMENT_HEADER_BODY_GAP_PX))
-                .border_t_1()
-                .border_color(theme.border)
-                .child(
-                  h_flex()
-                    .items_center()
-                    .justify_between()
-                    .gap_2()
-                    .child(
-                      h_flex()
-                        .items_center()
-                        .gap(px(OVERVIEW_CONVERSATION_META_GAP_PX))
-                        .flex_wrap()
-                        .child(
-                          Avatar::new()
-                            .name(reply.author_login.clone())
-                            .when_some(reply.author_avatar_url.clone(), |this, url| this.src(url))
-                            .small(),
-                        )
-                        .child(
-                          div()
-                            .text_sm()
-                            .text_color(theme.foreground)
-                            .child(reply.author_login.clone()),
-                        )
-                        .child(
-                          div()
-                            .text_xs()
-                            .text_color(theme.muted_foreground)
-                            .child(reply_timestamp),
-                        )
-                        .when(reply_is_outdated, |this| {
-                          this.child(
-                            self.render_outdated_review_comment_tag(&theme, thread_is_resolved),
-                          )
-                        }),
-                    )
-                    .child(
-                      h_flex()
-                        .items_center()
-                        .gap_1()
-                        .when_some(reply_reply_button, |this, button| this.child(button))
-                        .when_some(reply_actions_menu, |this, menu| this.child(menu)),
-                    ),
-                )
-                .child(reply_body)
-                .when(!reply_is_editing, |this| {
-                  this.child(self.render_reaction_bar(
-                    reply.reaction_subject_id.as_str(),
-                    &reply.reactions,
-                    format!("pr-overview-reply-reaction-{}-{}", item.id, reply.id),
-                    cx,
-                  ))
-                })
-                .when_some(reply_reply_composer, |this, composer| this.child(composer))
-                .into_any_element()
-            })))
-          }),
-      )
-      .into_any_element()
   }
 
   fn render_overview_skeleton(&self, theme: &gpui_component::Theme) -> AnyElement {
@@ -14429,25 +10977,7 @@ impl GithubPrDetailsPage {
     let created_at = format_relative_time(&pr.created_at);
     let merged_at = pr.merged_at.as_deref().map(format_relative_time);
 
-    let body = pr
-      .body
-      .clone()
-      .filter(|value| !value.trim().is_empty())
-      .unwrap_or_else(|| "No description provided.".to_string());
-
     let pr_page = cx.entity().clone();
-    let pr_page_for_links = pr_page.clone();
-    let description_link_handler = Arc::new(move |url: &str, window: &mut Window, cx: &mut App| {
-      let handled = pr_page_for_links.update(cx, |this, cx| this.handle_gfm_link(url, window, cx));
-      if handled {
-        LinkAction::Handled
-      } else {
-        LinkAction::Open
-      }
-    });
-    let description_previews = self.cached_github_code_reference_previews_for_requests(
-      &self.description_code_reference_requests,
-    );
     let can_edit_people = self.can_edit_people(pr);
     let can_edit_labels = self.can_edit_labels(pr);
     let author_login = pr.author.login.clone();
@@ -14470,236 +11000,234 @@ impl GithubPrDetailsPage {
       matching_label_options(&self.label_options, &self.label_query(cx), &pr.labels);
     let can_edit_target_branch = self.can_edit_target_branch(pr);
 
-    let content = v_flex()
-      .w_full()
-      .gap_4()
-      .child({
-        let author_row = h_flex()
-          .gap_2()
-          .items_center()
-          .text_sm()
-          .text_color(theme.muted_foreground)
-          .child(
-            h_flex()
-              .items_center()
-              .gap_2()
-              .child(
-                Avatar::new()
-                  .name(pr.author.login.clone())
-                  .when_some(pr.author.avatar_url.clone(), |this, url| this.src(url))
-                  .small(),
-              )
-              .child(
-                div()
-                  .text_sm()
-                  .text_color(theme.foreground)
-                  .child(pr.author.login.clone()),
-              ),
-          )
-          .child(
-            Button::new("open-pr-repo-details")
-              .ghost()
-              .small()
-              .compact()
-              .label(repo_label)
-              .on_click(move |_, _, cx| {
-                open_repo_target(repo_owner.clone(), repo_name.clone(), None, None, None, cx);
-              }),
-          );
+    let content =
+      v_flex()
+        .w_full()
+        .gap_4()
+        .child({
+          let author_row = h_flex()
+            .gap_2()
+            .items_center()
+            .text_sm()
+            .text_color(theme.muted_foreground)
+            .child(
+              h_flex()
+                .items_center()
+                .gap_2()
+                .child(
+                  Avatar::new()
+                    .name(pr.author.login.clone())
+                    .when_some(pr.author.avatar_url.clone(), |this, url| this.src(url))
+                    .small(),
+                )
+                .child(
+                  div()
+                    .text_sm()
+                    .text_color(theme.foreground)
+                    .child(pr.author.login.clone()),
+                ),
+            )
+            .child(
+              Button::new("open-pr-repo-details")
+                .ghost()
+                .small()
+                .compact()
+                .label(repo_label)
+                .on_click(move |_, _, cx| {
+                  open_repo_target(repo_owner.clone(), repo_name.clone(), None, None, None, cx);
+                }),
+            );
 
-        let created_updated = h_flex()
-          .gap_2()
-          .flex_wrap()
-          .items_center()
-          .child(
-            h_flex()
-              .items_center()
-              .gap_2()
-              .child(
-                div()
-                  .text_xs()
-                  .text_color(theme.muted_foreground)
-                  .child("Created"),
-              )
-              .child(
-                div()
-                  .text_sm()
-                  .text_color(theme.foreground)
-                  .child(created_at),
-              ),
-          )
-          .child(
-            div()
-              .debug_selector(|| "github-pr-overview-created-updated-separator".to_string())
-              .text_sm()
-              .text_color(theme.muted_foreground)
-              .child("•"),
-          )
-          .child(
-            h_flex()
-              .items_center()
-              .gap_2()
-              .child(
-                div()
-                  .text_xs()
-                  .text_color(theme.muted_foreground)
-                  .child("Updated"),
-              )
-              .child(
-                div()
-                  .text_sm()
-                  .text_color(theme.foreground)
-                  .child(updated_at),
-              )
-              .child(
-                div()
-                  .debug_selector(|| {
-                    "github-pr-overview-updated-change-stats-separator".to_string()
-                  })
-                  .text_sm()
-                  .text_color(theme.muted_foreground)
-                  .child("•"),
-              )
-              .child(
-                h_flex()
-                  .debug_selector(|| "github-pr-overview-updated-change-stats".to_string())
-                  .items_center()
-                  .gap_2()
-                  .children(overview_change_stats(pr, &theme)),
-              ),
-          )
-          .when_some(merged_at.clone(), |this, merged| {
-            this.child(
+          let created_updated = h_flex()
+            .gap_2()
+            .flex_wrap()
+            .items_center()
+            .child(
               h_flex()
                 .items_center()
                 .gap_2()
                 .child(
                   div()
-                    .text_sm()
+                    .text_xs()
                     .text_color(theme.muted_foreground)
-                    .child("Merged"),
+                    .child("Created"),
                 )
                 .child(
                   div()
                     .text_sm()
                     .text_color(theme.foreground)
-                    .child(merged.to_string()),
+                    .child(created_at),
                 ),
             )
-          });
-
-        let target_branch_select = v_flex()
-          .gap_1()
-          .child(
-            Select::new(&self.target_branch_select)
-              .placeholder(pr.base_ref_name.clone())
-              .search_placeholder("Search branches...")
-              .xsmall()
-              .w(px(220.0))
-              .menu_width(px(280.0))
-              .disabled(!can_edit_target_branch),
-          )
-          .when_some(self.target_branch_error.clone(), |this, error| {
-            this.child(div().text_xs().text_color(theme.status_red()).child(error))
-          })
-          .when_some(self.target_branch_update_error.clone(), |this, error| {
-            this.child(div().text_xs().text_color(theme.status_red()).child(error))
-          });
-
-        let source_target = h_flex().items_center().gap_2().child(
-          h_flex()
-            .items_center()
-            .gap_2()
+            .child(
+              div()
+                .debug_selector(|| "github-pr-overview-created-updated-separator".to_string())
+                .text_sm()
+                .text_color(theme.muted_foreground)
+                .child("•"),
+            )
             .child(
               h_flex()
                 .items_center()
-                .gap_1()
+                .gap_2()
                 .child(
                   div()
                     .text_xs()
                     .text_color(theme.muted_foreground)
-                    .child("Source"),
+                    .child("Updated"),
                 )
                 .child(
                   div()
                     .text_sm()
                     .text_color(theme.foreground)
-                    .child(pr.head_ref_name.clone()),
+                    .child(updated_at),
                 )
-                .child(Clipboard::new("copy-pr-branch-source").value(pr.head_ref_name.clone())),
-            )
-            .child(
-              Icon::new(IconName::ArrowRight)
-                .size_3()
-                .text_color(theme.muted_foreground),
-            )
-            .child(
-              h_flex()
-                .items_center()
-                .gap_1()
                 .child(
                   div()
-                    .text_xs()
+                    .debug_selector(|| {
+                      "github-pr-overview-updated-change-stats-separator".to_string()
+                    })
+                    .text_sm()
                     .text_color(theme.muted_foreground)
-                    .child("Target"),
+                    .child("•"),
                 )
-                .child(target_branch_select),
-            ),
-        );
-
-        let labels_popover =
-          |trigger| {
-            Popover::new("pr-labels-popover")
-              .anchor(Anchor::TopRight)
-              .open(self.label_popover_open)
-              .on_open_change(cx.listener(|this, open, _window, cx| {
-                this.label_popover_open = *open;
-                if *open {
-                  this.label_mutation_error = None;
-                }
-                cx.notify();
-              }))
-              .trigger(trigger)
-              .child(
-                v_flex()
-                  .w(px(260.0))
+                .child(
+                  h_flex()
+                    .debug_selector(|| "github-pr-overview-updated-change-stats".to_string())
+                    .items_center()
+                    .gap_2()
+                    .children(overview_change_stats(pr, &theme)),
+                ),
+            )
+            .when_some(merged_at.clone(), |this, merged| {
+              this.child(
+                h_flex()
+                  .items_center()
                   .gap_2()
-                  .when(!pr.labels.is_empty(), |this| {
-                    this.child(h_flex().gap_1().flex_wrap().children(pr.labels.iter().map(
-                      |label| {
-                        let page = pr_page.clone();
-                        let label_name = label.name.clone();
-                        h_flex()
-                          .items_center()
-                          .gap_1()
-                          .child(github_shared::github_label_tag(label, &theme))
-                          .child(
-                            Button::new(format!("pr-label-remove-{}", label_name))
-                              .ghost()
-                              .xsmall()
-                              .compact()
-                              .icon(IconName::Close)
-                              .disabled(!can_edit_labels)
-                              .on_click(move |_, _, cx| {
-                                page.update(cx, |this, cx| {
-                                  this.remove_label(&label_name, cx);
-                                });
-                              }),
-                          )
-                      },
-                    )))
-                  })
                   .child(
-                    Input::new(&self.label_input)
-                      .w_full()
-                      .disabled(!can_edit_labels || self.label_options_loading),
+                    div()
+                      .text_sm()
+                      .text_color(theme.muted_foreground)
+                      .child("Merged"),
                   )
-                  .when(!label_suggestions.is_empty(), |this| {
-                    this.child(
-                      h_flex()
-                        .gap_1()
-                        .flex_wrap()
-                        .children(label_suggestions.iter().map(|label| {
+                  .child(
+                    div()
+                      .text_sm()
+                      .text_color(theme.foreground)
+                      .child(merged.to_string()),
+                  ),
+              )
+            });
+
+          let target_branch_select = v_flex()
+            .gap_1()
+            .child(
+              Select::new(&self.target_branch_select)
+                .placeholder(pr.base_ref_name.clone())
+                .search_placeholder("Search branches...")
+                .xsmall()
+                .w(px(220.0))
+                .menu_width(px(280.0))
+                .disabled(!can_edit_target_branch),
+            )
+            .when_some(self.target_branch_error.clone(), |this, error| {
+              this.child(div().text_xs().text_color(theme.status_red()).child(error))
+            })
+            .when_some(self.target_branch_update_error.clone(), |this, error| {
+              this.child(div().text_xs().text_color(theme.status_red()).child(error))
+            });
+
+          let source_target = h_flex().items_center().gap_2().child(
+            h_flex()
+              .items_center()
+              .gap_2()
+              .child(
+                h_flex()
+                  .items_center()
+                  .gap_1()
+                  .child(
+                    div()
+                      .text_xs()
+                      .text_color(theme.muted_foreground)
+                      .child("Source"),
+                  )
+                  .child(
+                    div()
+                      .text_sm()
+                      .text_color(theme.foreground)
+                      .child(pr.head_ref_name.clone()),
+                  )
+                  .child(Clipboard::new("copy-pr-branch-source").value(pr.head_ref_name.clone())),
+              )
+              .child(
+                Icon::new(IconName::ArrowRight)
+                  .size_3()
+                  .text_color(theme.muted_foreground),
+              )
+              .child(
+                h_flex()
+                  .items_center()
+                  .gap_1()
+                  .child(
+                    div()
+                      .text_xs()
+                      .text_color(theme.muted_foreground)
+                      .child("Target"),
+                  )
+                  .child(target_branch_select),
+              ),
+          );
+
+          let labels_popover =
+            |trigger| {
+              Popover::new("pr-labels-popover")
+                .anchor(Anchor::TopRight)
+                .open(self.label_popover_open)
+                .on_open_change(cx.listener(|this, open, _window, cx| {
+                  this.label_popover_open = *open;
+                  if *open {
+                    this.label_mutation_error = None;
+                  }
+                  cx.notify();
+                }))
+                .trigger(trigger)
+                .child(
+                  v_flex()
+                    .w(px(260.0))
+                    .gap_2()
+                    .when(!pr.labels.is_empty(), |this| {
+                      this.child(h_flex().gap_1().flex_wrap().children(pr.labels.iter().map(
+                        |label| {
+                          let page = pr_page.clone();
+                          let label_name = label.name.clone();
+                          h_flex()
+                            .items_center()
+                            .gap_1()
+                            .child(github_shared::github_label_tag(label, &theme))
+                            .child(
+                              Button::new(format!("pr-label-remove-{}", label_name))
+                                .ghost()
+                                .xsmall()
+                                .compact()
+                                .icon(IconName::Close)
+                                .disabled(!can_edit_labels)
+                                .on_click(move |_, _, cx| {
+                                  page.update(cx, |this, cx| {
+                                    this.remove_label(&label_name, cx);
+                                  });
+                                }),
+                            )
+                        },
+                      )))
+                    })
+                    .child(
+                      Input::new(&self.label_input)
+                        .w_full()
+                        .disabled(!can_edit_labels || self.label_options_loading),
+                    )
+                    .when(!label_suggestions.is_empty(), |this| {
+                      this.child(h_flex().gap_1().flex_wrap().children(
+                        label_suggestions.iter().map(|label| {
                           let page = pr_page.clone();
                           let label_name = label.name.clone();
                           Button::new(format!("pr-label-suggestion-{}", label.name))
@@ -14711,180 +11239,97 @@ impl GithubPrDetailsPage {
                                 this.add_label_value(&label_name, window, cx);
                               });
                             })
-                        })),
-                    )
-                  }),
-              )
-          };
+                        }),
+                      ))
+                    }),
+                )
+            };
 
-        let label_block = v_flex()
-          .pt_2()
-          .gap_1()
-          .when(self.label_options_loading, |this| {
-            this.child(Self::render_label_skeleton_row(3))
-          })
-          .when(
-            !self.label_options_loading && !pr.labels.is_empty(),
-            |this| {
-              this.child(
-                h_flex()
-                  .debug_selector(|| "github-pr-overview-labels".to_string())
-                  .gap_1()
-                  .flex_wrap()
-                  .children(
-                    pr.labels
-                      .iter()
-                      .map(|label| github_shared::github_label_tag(label, &theme)),
-                  )
-                  .child(labels_popover(
-                    Button::new("pr-labels-edit-inline")
-                      .label("Edit labels")
+          let label_block = v_flex()
+            .pt_2()
+            .gap_1()
+            .when(self.label_options_loading, |this| {
+              this.child(Self::render_label_skeleton_row(3))
+            })
+            .when(
+              !self.label_options_loading && !pr.labels.is_empty(),
+              |this| {
+                this.child(
+                  h_flex()
+                    .debug_selector(|| "github-pr-overview-labels".to_string())
+                    .gap_1()
+                    .flex_wrap()
+                    .children(
+                      pr.labels
+                        .iter()
+                        .map(|label| github_shared::github_label_tag(label, &theme)),
+                    )
+                    .child(labels_popover(
+                      Button::new("pr-labels-edit-inline")
+                        .label("Edit labels")
+                        .xsmall()
+                        .outline()
+                        .icon(UiIconName::SquarePen)
+                        .disabled(!can_edit_labels),
+                    )),
+                )
+              },
+            )
+            .when(
+              !self.label_options_loading && pr.labels.is_empty(),
+              |this| {
+                this.child(
+                  div().flex().child(labels_popover(
+                    Button::new("pr-labels-edit-inline-empty")
+                      .label("Add labels")
                       .xsmall()
                       .outline()
                       .icon(UiIconName::SquarePen)
                       .disabled(!can_edit_labels),
                   )),
-              )
-            },
-          )
-          .when(
-            !self.label_options_loading && pr.labels.is_empty(),
-            |this| {
-              this.child(
-                div().flex().child(labels_popover(
-                  Button::new("pr-labels-edit-inline-empty")
-                    .label("Add labels")
-                    .xsmall()
-                    .outline()
-                    .icon(UiIconName::SquarePen)
-                    .disabled(!can_edit_labels),
-                )),
-              )
-            },
-          )
-          .when_some(self.label_mutation_error.clone(), |this, error| {
-            this.child(div().text_xs().text_color(theme.status_red()).child(error))
-          });
-        let label_block = label_block.when_some(self.label_options_error.clone(), |this, error| {
-          this.child(div().text_xs().text_color(theme.status_red()).child(error))
-        });
+                )
+              },
+            )
+            .when_some(self.label_mutation_error.clone(), |this, error| {
+              this.child(div().text_xs().text_color(theme.status_red()).child(error))
+            });
+          let label_block = label_block
+            .when_some(self.label_options_error.clone(), |this, error| {
+              this.child(div().text_xs().text_color(theme.status_red()).child(error))
+            });
 
-        let left_meta = v_flex()
-          .gap_2()
-          .child(author_row)
-          .child(created_updated)
-          .child(source_target)
-          .child(label_block);
+          let left_meta = v_flex()
+            .gap_2()
+            .child(author_row)
+            .child(created_updated)
+            .child(source_target)
+            .child(label_block);
 
-        let reviewers_popover = Popover::new("pr-reviewers-popover")
-          .anchor(Anchor::TopRight)
-          .open(self.reviewer_popover_open)
-          .on_open_change(cx.listener(|this, open, _window, cx| {
-            this.reviewer_popover_open = *open;
-            if *open {
-              this.people_mutation_error = None;
-            }
-            cx.notify();
-          }))
-          .trigger(
-            Button::new("pr-reviewers-edit")
-              .ghost()
-              .xsmall()
-              .compact()
-              .icon(UiIconName::SquarePen)
-              .disabled(!can_edit_people),
-          )
-          .child(
-            v_flex()
-              .w(px(260.0))
-              .gap_2()
-              .when(!pr.requested_reviewers.is_empty(), |this| {
-                this.child(h_flex().gap_1().flex_wrap().children(
-                  pr.requested_reviewers.iter().map(|user| {
-                    let page = pr_page.clone();
-                    let login = user.login.clone();
-                    h_flex()
-                      .items_center()
-                      .gap_1()
-                      .px_2()
-                      .py_1()
-                      .rounded_full()
-                      .child(
-                        Avatar::new()
-                          .name(login.clone())
-                          .when_some(user.avatar_url.clone(), |this, url| this.src(url))
-                          .xsmall(),
-                      )
-                      .child(div().text_sm().child(login.clone()))
-                      .child(
-                        Button::new(format!("pr-reviewer-remove-{}", login))
-                          .ghost()
-                          .xsmall()
-                          .compact()
-                          .icon(IconName::Close)
-                          .on_click(move |_, _, cx| {
-                            page.update(cx, |this, cx| {
-                              this.remove_requested_reviewer(&login, cx);
-                            });
-                          }),
-                      )
-                  }),
-                ))
-              })
-              .child(
-                Input::new(&self.requested_reviewer_input)
-                  .w_full()
-                  .disabled(!can_edit_people || self.review_people_options_loading),
-              )
-              .when(!reviewer_suggestions.is_empty(), |this| {
-                this.child(h_flex().gap_1().flex_wrap().children(
-                  reviewer_suggestions.into_iter().map(|reviewer| {
-                    Button::new(format!("pr-reviewer-suggestion-{}", reviewer.login))
-                      .label(reviewer.login.clone())
-                      .xsmall()
-                      .outline()
-                      .on_click({
-                        let page = pr_page.clone();
-                        let login = reviewer.login.clone();
-                        move |_, window, cx| {
-                          page.update(cx, |this, cx| {
-                            this.add_requested_reviewer_value(&login, window, cx);
-                          });
-                        }
-                      })
-                  }),
-                ))
-              }),
-          );
-
-        let assignees_popover = Popover::new("pr-assignees-popover")
-          .anchor(Anchor::TopRight)
-          .open(self.assignee_popover_open)
-          .on_open_change(cx.listener(|this, open, _window, cx| {
-            this.assignee_popover_open = *open;
-            if *open {
-              this.people_mutation_error = None;
-            }
-            cx.notify();
-          }))
-          .trigger(
-            Button::new("pr-assignees-edit")
-              .ghost()
-              .xsmall()
-              .compact()
-              .icon(UiIconName::SquarePen)
-              .disabled(!can_edit_people),
-          )
-          .child(
-            v_flex()
-              .w(px(260.0))
-              .gap_2()
-              .when(!pr.assignees.is_empty(), |this| {
-                this.child(
-                  h_flex()
-                    .gap_1()
-                    .flex_wrap()
-                    .children(pr.assignees.iter().map(|user| {
+          let reviewers_popover = Popover::new("pr-reviewers-popover")
+            .anchor(Anchor::TopRight)
+            .open(self.reviewer_popover_open)
+            .on_open_change(cx.listener(|this, open, _window, cx| {
+              this.reviewer_popover_open = *open;
+              if *open {
+                this.people_mutation_error = None;
+              }
+              cx.notify();
+            }))
+            .trigger(
+              Button::new("pr-reviewers-edit")
+                .ghost()
+                .xsmall()
+                .compact()
+                .icon(UiIconName::SquarePen)
+                .disabled(!can_edit_people),
+            )
+            .child(
+              v_flex()
+                .w(px(260.0))
+                .gap_2()
+                .when(!pr.requested_reviewers.is_empty(), |this| {
+                  this.child(h_flex().gap_1().flex_wrap().children(
+                    pr.requested_reviewers.iter().map(|user| {
                       let page = pr_page.clone();
                       let login = user.login.clone();
                       h_flex()
@@ -14901,480 +11346,276 @@ impl GithubPrDetailsPage {
                         )
                         .child(div().text_sm().child(login.clone()))
                         .child(
-                          Button::new(format!("pr-assignee-remove-{}", login))
+                          Button::new(format!("pr-reviewer-remove-{}", login))
                             .ghost()
                             .xsmall()
                             .compact()
                             .icon(IconName::Close)
                             .on_click(move |_, _, cx| {
                               page.update(cx, |this, cx| {
-                                this.remove_assignee(&login, cx);
+                                this.remove_requested_reviewer(&login, cx);
                               });
                             }),
                         )
-                    })),
-                )
-              })
-              .child(
-                Input::new(&self.assignee_input)
-                  .w_full()
-                  .disabled(!can_edit_people || self.review_people_options_loading),
-              )
-              .when(!assignee_suggestions.is_empty(), |this| {
-                this.child(h_flex().gap_1().flex_wrap().children(
-                  assignee_suggestions.into_iter().map(|assignee| {
-                    Button::new(format!("pr-assignee-suggestion-{}", assignee.login))
-                      .label(assignee.login.clone())
-                      .xsmall()
-                      .outline()
-                      .on_click({
-                        let page = pr_page.clone();
-                        let login = assignee.login.clone();
-                        move |_, window, cx| {
-                          page.update(cx, |this, cx| {
-                            this.add_assignee_value(&login, window, cx);
-                          });
-                        }
-                      })
-                  }),
-                ))
-              }),
-          );
-
-        let merged_reviewers = merged_reviewers(
-          &pr.requested_reviewers,
-          &self.reviews,
-          author_login.as_str(),
-        );
-        let reviewer_block = v_flex()
-          .gap_1()
-          .child(
-            h_flex()
-              .items_center()
-              .gap_1()
-              .justify_between()
-              .child(div().text_sm().child("Reviewers"))
-              .child(reviewers_popover),
-          )
-          .when(self.review_people_options_loading, |this| {
-            this.child(Self::render_people_skeleton_row(3))
-          })
-          .when(
-            !self.review_people_options_loading && !merged_reviewers.is_empty(),
-            |this| {
-              this.child(Self::render_requested_reviewer_row(
-                &merged_reviewers,
-                &self.reviews,
-                self
-                  .pull_request
-                  .as_ref()
-                  .map(|pr| pr.requested_reviewers.as_slice())
-                  .unwrap_or(&[]),
-                &theme,
-              ))
-            },
-          )
-          .when(
-            !self.review_people_options_loading && merged_reviewers.is_empty(),
-            |this| {
-              this.child(
-                div()
-                  .text_xs()
-                  .text_color(theme.muted_foreground)
-                  .child("No reviewers"),
-              )
-            },
-          );
-
-        let assignee_block = v_flex()
-          .gap_1()
-          .child(
-            h_flex()
-              .items_center()
-              .gap_1()
-              .justify_between()
-              .child(div().text_sm().child("Assignees"))
-              .child(assignees_popover),
-          )
-          .when(self.review_people_options_loading, |this| {
-            this.child(Self::render_people_skeleton_row(3))
-          })
-          .when(
-            !self.review_people_options_loading && !pr.assignees.is_empty(),
-            |this| {
-              this.child(Self::render_people_token_row(
-                "github-pr-assignee",
-                &pr.assignees,
-                false,
-                |_login, _, _| {},
-              ))
-            },
-          )
-          .when(
-            !self.review_people_options_loading && pr.assignees.is_empty(),
-            |this| {
-              this.child(
-                div()
-                  .text_xs()
-                  .text_color(theme.muted_foreground)
-                  .child("No assignees"),
-              )
-            },
-          );
-
-        let right_people = v_flex()
-          .gap_3()
-          .items_end()
-          .child(reviewer_block)
-          .child(assignee_block)
-          .when_some(self.review_people_options_error.clone(), |this, error| {
-            this.child(div().text_xs().text_color(theme.status_red()).child(error))
-          })
-          .when_some(self.people_mutation_error.clone(), |this, error| {
-            this.child(div().text_xs().text_color(theme.status_red()).child(error))
-          });
-
-        div()
-          .flex()
-          .justify_between()
-          .gap_6()
-          .child(left_meta)
-          .child(right_people)
-      })
-      .child(
-        v_flex()
-          .gap_2()
-          .child(
-            h_flex()
-              .items_center()
-              .gap_1()
-              .child(
-                div()
-                  .text_sm()
-                  .font_medium()
-                  .text_color(theme.foreground)
-                  .child("Description"),
-              )
-              .child(
-                Button::new(format!("pr-description-edit-{}", pr.number))
-                  .ghost()
-                  .xsmall()
-                  .compact()
-                  .icon(UiIconName::SquarePen)
-                  .disabled(
-                    self.pr_description_editing || self.overview_comment_submission_in_flight(),
-                  )
-                  .on_click({
-                    let page = pr_page.clone();
-                    move |_, window, cx| {
-                      page.update(cx, |this, cx| {
-                        this.start_pr_description_edit(window, cx);
-                      });
-                    }
-                  }),
-              ),
-          )
-          .child(if self.pr_description_editing {
-            if let Some(input_state) = self.pr_description_edit_input.clone() {
-              let can_save = self
-                .pr_description_initial_body
-                .as_deref()
-                .and_then(|initial| {
-                  let raw_value = input_state.read(cx).value().to_string();
-                  next_pr_description_body(raw_value.as_str(), initial)
+                    }),
+                  ))
                 })
-                .is_some();
-              let page_for_cancel = pr_page.clone();
-              let page_for_save = pr_page.clone();
-              let page_for_toggle = pr_page.clone();
-              let input_for_drop = input_state.clone();
-              let pr_description_preview_open = self.pr_description_preview_open;
-              let pr_description_submitting = self.pr_description_submitting;
-              let pr_description_markdown_options = self.build_overview_composer_markdown_options(
-                pr_description_scope_id(pr.number).wrapping_add(1),
-                cx,
-              );
-              v_flex()
-                .gap_2()
                 .child(
-                  div()
-                    .id("pr-description-edit-drop-zone")
+                  Input::new(&self.requested_reviewer_input)
                     .w_full()
-                    .rounded(theme.radius)
-                    .drag_over::<ExternalPaths>(|this, _, _, cx| this.bg(cx.theme().drop_target))
-                    .on_drop(cx.listener({
-                      let input = input_for_drop.clone();
-                      move |this, paths: &ExternalPaths, window, cx| {
-                        this.handle_pr_description_edit_drop(paths, input.clone(), window, cx);
-                      }
-                    }))
-                    .child(
-                      MarkdownComposer::new(&input_state)
-                        .disabled(pr_description_submitting)
-                        .h(px(OVERVIEW_DESCRIPTION_INPUT_HEIGHT_PX))
-                        .preview_open(pr_description_preview_open)
-                        .on_toggle_preview(move |_, cx| {
-                          page_for_toggle.update(cx, |this, cx| {
-                            this.pr_description_preview_open = !this.pr_description_preview_open;
-                            cx.notify();
-                          });
-                        })
-                        .preview(move |text, _, cx| {
-                          render_markdown(text, &pr_description_markdown_options, cx)
-                        }),
-                    ),
+                    .disabled(!can_edit_people || self.review_people_options_loading),
                 )
-                .when_some(self.pr_description_error.clone(), |this, error| {
-                  this.child(div().text_xs().text_color(theme.status_red()).child(error))
+                .when(!reviewer_suggestions.is_empty(), |this| {
+                  this.child(h_flex().gap_1().flex_wrap().children(
+                    reviewer_suggestions.into_iter().map(|reviewer| {
+                      Button::new(format!("pr-reviewer-suggestion-{}", reviewer.login))
+                        .label(reviewer.login.clone())
+                        .xsmall()
+                        .outline()
+                        .on_click({
+                          let page = pr_page.clone();
+                          let login = reviewer.login.clone();
+                          move |_, window, cx| {
+                            page.update(cx, |this, cx| {
+                              this.add_requested_reviewer_value(&login, window, cx);
+                            });
+                          }
+                        })
+                    }),
+                  ))
+                }),
+            );
+
+          let assignees_popover = Popover::new("pr-assignees-popover")
+            .anchor(Anchor::TopRight)
+            .open(self.assignee_popover_open)
+            .on_open_change(cx.listener(|this, open, _window, cx| {
+              this.assignee_popover_open = *open;
+              if *open {
+                this.people_mutation_error = None;
+              }
+              cx.notify();
+            }))
+            .trigger(
+              Button::new("pr-assignees-edit")
+                .ghost()
+                .xsmall()
+                .compact()
+                .icon(UiIconName::SquarePen)
+                .disabled(!can_edit_people),
+            )
+            .child(
+              v_flex()
+                .w(px(260.0))
+                .gap_2()
+                .when(!pr.assignees.is_empty(), |this| {
+                  this.child(
+                    h_flex()
+                      .gap_1()
+                      .flex_wrap()
+                      .children(pr.assignees.iter().map(|user| {
+                        let page = pr_page.clone();
+                        let login = user.login.clone();
+                        h_flex()
+                          .items_center()
+                          .gap_1()
+                          .px_2()
+                          .py_1()
+                          .rounded_full()
+                          .child(
+                            Avatar::new()
+                              .name(login.clone())
+                              .when_some(user.avatar_url.clone(), |this, url| this.src(url))
+                              .xsmall(),
+                          )
+                          .child(div().text_sm().child(login.clone()))
+                          .child(
+                            Button::new(format!("pr-assignee-remove-{}", login))
+                              .ghost()
+                              .xsmall()
+                              .compact()
+                              .icon(IconName::Close)
+                              .on_click(move |_, _, cx| {
+                                page.update(cx, |this, cx| {
+                                  this.remove_assignee(&login, cx);
+                                });
+                              }),
+                          )
+                      })),
+                  )
                 })
                 .child(
-                  h_flex()
-                    .items_center()
-                    .justify_end()
-                    .gap_2()
-                    .child(
-                      Button::new(format!("pr-description-edit-cancel-{}", pr.number))
-                        .ghost()
-                        .xsmall()
-                        .compact()
-                        .label("Cancel")
-                        .disabled(self.pr_description_submitting)
-                        .on_click(move |_, _, cx| {
-                          page_for_cancel.update(cx, |this, cx| {
-                            this.cancel_pr_description_edit(cx);
-                          });
-                        }),
-                    )
-                    .child(
-                      Button::new(format!("pr-description-edit-save-{}", pr.number))
-                        .xsmall()
-                        .compact()
-                        .label("Save")
-                        .disabled(!can_save || self.overview_comment_submission_in_flight())
-                        .on_click(move |_, _, cx| {
-                          page_for_save.update(cx, |this, cx| {
-                            this.submit_pr_description_edit(cx);
-                          });
-                        }),
-                    ),
+                  Input::new(&self.assignee_input)
+                    .w_full()
+                    .disabled(!can_edit_people || self.review_people_options_loading),
                 )
-                .into_any_element()
-            } else {
-              div().into_any_element()
-            }
-          } else {
-            div()
-              .border_1()
-              .border_color(theme.border)
-              .rounded(theme.radius)
-              .p_3()
-              .child(
-                v_flex()
-                  .gap_2()
-                  .child({
-                    let mut options = MarkdownRenderOptions::with_on_link(description_link_handler)
-                      .with_state(self.description_markdown_state.clone())
-                      .with_syntax_cache(self.syntax_highlight_cache.clone())
-                      .with_asset_url_resolver(github_shared::make_asset_url_resolver(&self.api))
-                      .with_github_issue_reference_context(
-                        pr.repository.owner.as_str(),
-                        pr.repository.repo.as_str(),
-                      )
-                      .with_scope_id(pr_description_scope_id(pr.number))
-                      .with_hardbreaks();
-                    if let Some(previews) = description_previews.clone() {
-                      options = options.with_github_code_reference_previews(previews);
-                    }
-                    render_markdown(body.as_str(), &options, cx)
-                  })
-                  .child(self.render_reaction_bar(
-                    pr.node_id.as_str(),
-                    &pr.reactions,
-                    format!("pr-overview-description-reaction-{}", pr.number),
-                    cx,
-                  )),
-              )
-              .into_any_element()
-          }),
-      )
-      .when_some(self.render_review_requested_alert(cx), |this, alert| {
-        this.child(alert)
-      })
-      .child(self.render_ai_pr_brief_section(cx))
-      .child(self.render_overview_status_section(cx));
+                .when(!assignee_suggestions.is_empty(), |this| {
+                  this.child(h_flex().gap_1().flex_wrap().children(
+                    assignee_suggestions.into_iter().map(|assignee| {
+                      Button::new(format!("pr-assignee-suggestion-{}", assignee.login))
+                        .label(assignee.login.clone())
+                        .xsmall()
+                        .outline()
+                        .on_click({
+                          let page = pr_page.clone();
+                          let login = assignee.login.clone();
+                          move |_, window, cx| {
+                            page.update(cx, |this, cx| {
+                              this.add_assignee_value(&login, window, cx);
+                            });
+                          }
+                        })
+                    }),
+                  ))
+                }),
+            );
 
-    let timeline_items = build_overview_timeline_items(
-      &self.commits,
-      &self.issue_comments,
-      &self.reviews,
-      &self.review_comments,
-    );
-    self.overview_timeline_items = timeline_items;
-    if let Some(active_id) = self.active_overview_conversation_id
-      && !self.overview_timeline_items.iter().any(|item| {
-        matches!(
-          item,
-          GithubPrOverviewTimelineItem::Conversation(conversation)
-            if conversation.id == active_id
-        )
-      })
-    {
-      self.active_overview_conversation_id = None;
-    }
+          let merged_reviewers = merged_reviewers(
+            &pr.requested_reviewers,
+            &self.reviews,
+            author_login.as_str(),
+          );
+          let reviewer_block = v_flex()
+            .gap_1()
+            .child(
+              h_flex()
+                .items_center()
+                .gap_1()
+                .justify_between()
+                .child(div().text_sm().child("Reviewers"))
+                .child(reviewers_popover),
+            )
+            .when(self.review_people_options_loading, |this| {
+              this.child(Self::render_people_skeleton_row(3))
+            })
+            .when(
+              !self.review_people_options_loading && !merged_reviewers.is_empty(),
+              |this| {
+                this.child(Self::render_requested_reviewer_row(
+                  &merged_reviewers,
+                  &self.reviews,
+                  self
+                    .pull_request
+                    .as_ref()
+                    .map(|pr| pr.requested_reviewers.as_slice())
+                    .unwrap_or(&[]),
+                  &theme,
+                ))
+              },
+            )
+            .when(
+              !self.review_people_options_loading && merged_reviewers.is_empty(),
+              |this| {
+                this.child(
+                  div()
+                    .text_xs()
+                    .text_color(theme.muted_foreground)
+                    .child("No reviewers"),
+                )
+              },
+            );
 
-    let is_timeline_loading = self.commits_loading
-      || self.issue_comments_loading
-      || self.reviews_loading
-      || self.review_comments_loading;
-    let has_timeline_errors = self.commits_error.is_some()
-      || self.issue_comments_error.is_some()
-      || self.reviews_error.is_some()
-      || self.review_comments_error.is_some();
-    let timeline_errors = v_flex()
-      .gap_1()
-      .when_some(self.commits_error.clone(), |this, error| {
-        this.child(
+          let assignee_block = v_flex()
+            .gap_1()
+            .child(
+              h_flex()
+                .items_center()
+                .gap_1()
+                .justify_between()
+                .child(div().text_sm().child("Assignees"))
+                .child(assignees_popover),
+            )
+            .when(self.review_people_options_loading, |this| {
+              this.child(Self::render_people_skeleton_row(3))
+            })
+            .when(
+              !self.review_people_options_loading && !pr.assignees.is_empty(),
+              |this| {
+                this.child(Self::render_people_token_row(
+                  "github-pr-assignee",
+                  &pr.assignees,
+                  false,
+                  |_login, _, _| {},
+                ))
+              },
+            )
+            .when(
+              !self.review_people_options_loading && pr.assignees.is_empty(),
+              |this| {
+                this.child(
+                  div()
+                    .text_xs()
+                    .text_color(theme.muted_foreground)
+                    .child("No assignees"),
+                )
+              },
+            );
+
+          let right_people = v_flex()
+            .gap_3()
+            .items_end()
+            .child(reviewer_block)
+            .child(assignee_block)
+            .when_some(self.review_people_options_error.clone(), |this, error| {
+              this.child(div().text_xs().text_color(theme.status_red()).child(error))
+            })
+            .when_some(self.people_mutation_error.clone(), |this, error| {
+              this.child(div().text_xs().text_color(theme.status_red()).child(error))
+            });
+
           div()
-            .text_xs()
-            .text_color(theme.status_red())
-            .child(format!("Commits: {error}")),
+            .flex()
+            .justify_between()
+            .gap_6()
+            .child(left_meta)
+            .child(right_people)
+        })
+        .child(
+          h_flex()
+            .items_center()
+            .justify_between()
+            .gap_2()
+            .p_3()
+            .rounded(theme.radius)
+            .border_1()
+            .border_color(theme.border)
+            .child(
+              div()
+                .text_sm()
+                .text_color(theme.muted_foreground)
+                .child("Description and conversation live on GitHub."),
+            )
+            .child(
+              Button::new("github-pr-overview-open-on-github")
+                .debug_selector(|| "github-pr-overview-open-on-github".to_string())
+                .with_variant(ButtonVariant::Secondary)
+                .outline()
+                .small()
+                .icon(IconName::ExternalLink)
+                .label("Open on GitHub")
+                .on_click({
+                  let url =
+                    github_shared::pr_url(&pr.repository.owner, &pr.repository.repo, pr.number);
+                  move |_, _, cx| {
+                    cx.open_url(&url);
+                  }
+                }),
+            ),
         )
-      })
-      .when_some(self.issue_comments_error.clone(), |this, error| {
-        this.child(
-          div()
-            .text_xs()
-            .text_color(theme.status_red())
-            .child(format!("Issue comments: {error}")),
-        )
-      })
-      .when_some(self.reviews_error.clone(), |this, error| {
-        this.child(
-          div()
-            .text_xs()
-            .text_color(theme.status_red())
-            .child(format!("Reviews: {error}")),
-        )
-      })
-      .when_some(self.review_comments_error.clone(), |this, error| {
-        this.child(
-          div()
-            .text_xs()
-            .text_color(theme.status_red())
-            .child(format!("Review comments: {error}")),
-        )
-      });
+        .when_some(self.render_review_requested_alert(cx), |this, alert| {
+          this.child(alert)
+        })
+        .child(self.render_ai_pr_brief_section(cx))
+        .child(self.render_overview_status_section(cx));
 
-    let timeline_state = v_flex()
-      .w_full()
-      .gap_2()
-      .when(has_timeline_errors, |this| this.child(timeline_errors))
-      .when(
-        self.overview_timeline_items.is_empty() && is_timeline_loading,
-        |this| {
-          this.child(
-            v_flex()
-              .w_full()
-              .items_center()
-              .justify_center()
-              .gap_2()
-              .py_6()
-              .child(Spinner::new().small())
-              .child(
-                div()
-                  .text_sm()
-                  .text_color(theme.muted_foreground)
-                  .child("Loading timeline..."),
-              ),
-          )
-        },
-      )
-      .when(
-        self.overview_timeline_items.is_empty() && !is_timeline_loading,
-        |this| {
-          this.child(
-            v_flex()
-              .w_full()
-              .items_center()
-              .justify_center()
-              .py_6()
-              .child(
-                div()
-                  .text_sm()
-                  .text_color(theme.muted_foreground)
-                  .child("No timeline activity yet"),
-              ),
-          )
-        },
-      );
-
-    let header_el = content
-      .when(
-        has_timeline_errors || self.overview_timeline_items.is_empty(),
-        |this| this.child(timeline_state),
-      )
-      .into_any_element();
-
-    let timeline_count = self.overview_timeline_items.len();
-    let add_comment_ix = 1 + timeline_count;
-    let total_items = add_comment_ix + 1;
-    // Only reset when item count changes to preserve cached heights
-    if self.overview_list_count != total_items {
-      self.overview_list_count = total_items;
-      self.overview_list.reset(total_items);
-    }
-
-    let pr_number = pr.number;
-    let pr_owner: SharedString = pr.repository.owner.clone().into();
-    let pr_repo: SharedString = pr.repository.repo.clone().into();
-    let entity = cx.entity().clone();
-    let max_w = px(1100.);
-    let header = std::cell::RefCell::new(Some(header_el));
-
-    list(self.overview_list.clone(), move |ix, _window, cx| {
-      entity.update(cx, |this, cx| {
-        let theme = cx.theme().clone();
-        let el = if ix == 0 {
-          // Header + description + timeline state.
-          header
-            .borrow_mut()
-            .take()
-            .unwrap_or_else(|| div().into_any_element())
-        } else if ix <= timeline_count {
-          let timeline_ix = ix - 1;
-          let item = this.overview_timeline_items.get(timeline_ix).cloned();
-          item.map_or_else(
-            || div().into_any_element(),
-            |item| {
-              this.render_overview_timeline_item(
-                &item,
-                timeline_ix == 0,
-                timeline_ix + 1 == timeline_count,
-                pr_number,
-                pr_owner.clone(),
-                pr_repo.clone(),
-                cx,
-              )
-            },
-          )
-        } else {
-          this.render_overview_add_comment_section(&theme, cx)
-        };
-
-        div()
-          .px_10()
-          .when(ix == 0 || ix > timeline_count, |this| this.pb_4())
-          .child(
-            div()
-              .mx_auto()
-              .max_w(max_w)
-              .pt(if ix == 0 { px(30.) } else { px(0.) })
-              .child(el),
-          )
-          .into_any_element()
-      })
-    })
-    .size_full()
+    div()
+      .id("github-pr-overview-scroll")
+      .size_full()
+      .overflow_y_scroll()
+      .px_10()
+      .py_8()
+      .child(div().mx_auto().max_w(px(1100.)).child(content))
+      .into_any_element()
   }
 
   fn render_files_sidebar(
@@ -16131,15 +12372,10 @@ impl GithubPrDetailsPage {
     _window: &mut Window,
     cx: &mut Context<Self>,
   ) {
-    match self.active_tab_ix {
-      PR_TAB_CHANGES_IX => {
-        self.navigate_review_comment(ReviewCommentNavigationDirection::Previous, cx);
-      }
-      PR_TAB_OVERVIEW_IX => {
-        self.navigate_overview_conversation(ReviewCommentNavigationDirection::Previous, cx);
-      }
-      _ => return,
+    if self.active_tab_ix != PR_TAB_CHANGES_IX {
+      return;
     }
+    self.navigate_review_comment(ReviewCommentNavigationDirection::Previous, cx);
     cx.stop_propagation();
   }
 
@@ -16149,15 +12385,10 @@ impl GithubPrDetailsPage {
     _window: &mut Window,
     cx: &mut Context<Self>,
   ) {
-    match self.active_tab_ix {
-      PR_TAB_CHANGES_IX => {
-        self.navigate_review_comment(ReviewCommentNavigationDirection::Next, cx);
-      }
-      PR_TAB_OVERVIEW_IX => {
-        self.navigate_overview_conversation(ReviewCommentNavigationDirection::Next, cx);
-      }
-      _ => return,
+    if self.active_tab_ix != PR_TAB_CHANGES_IX {
+      return;
     }
+    self.navigate_review_comment(ReviewCommentNavigationDirection::Next, cx);
     cx.stop_propagation();
   }
 
@@ -16842,15 +13073,11 @@ impl Render for GithubPrDetailsPage {
       self.render_overview_skeleton(&theme)
     };
 
-    let overview_counter = self.render_overview_conversation_counter(cx);
     let overview_content = div()
       .id("overview-tab")
-      .relative()
       .flex_1()
       .min_h_0()
       .child(overview_inner)
-      .vertical_scrollbar(&self.overview_list)
-      .when_some(overview_counter, |this, counter| this.child(counter))
       .into_any_element();
 
     let changes_content = div()
@@ -16913,14 +13140,12 @@ mod tests {
   use super::*;
   use crate::api::{
     GithubPullRequestCheckRun, GithubPullRequestChecksRollupState, GithubPullRequestChecksSummary,
-    GithubPullRequestCommit, GithubPullRequestCommitUser, GithubPullRequestDescriptionUpdate,
-    GithubPullRequestDetails, GithubPullRequestFile, GithubPullRequestIssueComment,
-    GithubPullRequestIssueCommentUser, GithubPullRequestLegacyStatus, GithubPullRequestMergeMethod,
-    GithubPullRequestMergeReadiness, GithubPullRequestMergeReadinessStatus,
-    GithubPullRequestReview, GithubPullRequestReviewComment, GithubPullRequestReviewCommentUser,
-    GithubPullRequestReviewEvent, GithubPullRequestReviewState, GithubPullRequestReviewUser,
-    GithubPullRequestState, GithubPullRequestWorkflowJob, GithubPullRequestWorkflowRun,
-    GithubRepository,
+    GithubPullRequestCommit, GithubPullRequestDetails, GithubPullRequestFile,
+    GithubPullRequestLegacyStatus, GithubPullRequestMergeMethod, GithubPullRequestMergeReadiness,
+    GithubPullRequestMergeReadinessStatus, GithubPullRequestReview, GithubPullRequestReviewComment,
+    GithubPullRequestReviewCommentUser, GithubPullRequestReviewEvent, GithubPullRequestReviewState,
+    GithubPullRequestReviewUser, GithubPullRequestState, GithubPullRequestWorkflowJob,
+    GithubPullRequestWorkflowRun, GithubRepository,
   };
   use crate::workspace::WorkspaceApi;
   use git::{BranchKind, BranchRef, merge_branch};
@@ -16929,7 +13154,6 @@ mod tests {
   use std::{
     io::{Read, Write},
     net::TcpListener,
-    sync::Arc,
     sync::atomic::{AtomicU64, Ordering},
     thread,
     time::{SystemTime, UNIX_EPOCH},
@@ -17141,15 +13365,6 @@ mod tests {
       authored_at: committed_at.map(str::to_string),
       committed_at: committed_at.map(str::to_string),
       parent_sha: parent_sha.map(str::to_string),
-      author: Some(GithubPullRequestCommitUser {
-        login: "octocat".to_string(),
-        avatar_url: None,
-      }),
-      committer: Some(GithubPullRequestCommitUser {
-        login: "octocat".to_string(),
-        avatar_url: None,
-      }),
-      authors: vec![],
     }
   }
 
@@ -17186,10 +13401,6 @@ mod tests {
       viewer_can_merge: true,
       mergeable_state: Some("clean".to_string()),
       rebaseable: Some(true),
-      auto_merge_enabled: false,
-      auto_merge: None,
-      viewer_can_enable_auto_merge: false,
-      viewer_can_disable_auto_merge: false,
       available_methods: methods,
     }
   }
@@ -17407,28 +13618,6 @@ mod tests {
     );
   }
 
-  #[gpui::test]
-  fn overview_checks_toggle_preserves_overview_scroll_position(cx: &mut TestAppContext) {
-    init_gpui_test(cx);
-    let (page, cx) = cx.add_window_view(|window, cx| GithubPrDetailsPage::new(window, cx));
-
-    page.update_in(cx, |this, _window, cx| {
-      this.overview_list_count = 3;
-      this.overview_list.reset(3);
-      this.overview_list.scroll_to(gpui::ListOffset {
-        item_ix: 2,
-        offset_in_item: px(24.0),
-      });
-
-      let scroll_before = this.overview_list.logical_scroll_top();
-      this.toggle_overview_checks(cx);
-      let scroll_after = this.overview_list.logical_scroll_top();
-
-      assert_eq!(scroll_after.item_ix, scroll_before.item_ix);
-      assert_eq!(scroll_after.offset_in_item, scroll_before.offset_in_item);
-    });
-  }
-
   #[test]
   fn overview_conflicts_info_returns_conflicts_for_dirty_mergeable_state() {
     let readiness = make_merge_readiness_with_state(
@@ -17536,7 +13725,6 @@ mod tests {
     );
     let reviews = vec![GithubPullRequestReview {
       node_id: "PRR_1".to_string(),
-      reactions: Vec::new(),
       id: 1,
       body: None,
       state: GithubPullRequestReviewState::Approved,
@@ -17562,7 +13750,6 @@ mod tests {
     );
     let reviews = vec![GithubPullRequestReview {
       node_id: "PRR_1".to_string(),
-      reactions: Vec::new(),
       id: 1,
       body: None,
       state: GithubPullRequestReviewState::RequestChanges,
@@ -17589,7 +13776,6 @@ mod tests {
     let reviews = vec![
       GithubPullRequestReview {
         node_id: "PRR_1".to_string(),
-        reactions: Vec::new(),
         id: 1,
         body: None,
         state: GithubPullRequestReviewState::Approved,
@@ -17603,7 +13789,6 @@ mod tests {
       },
       GithubPullRequestReview {
         node_id: "PRR_2".to_string(),
-        reactions: Vec::new(),
         id: 2,
         body: None,
         state: GithubPullRequestReviewState::Commented,
@@ -17631,7 +13816,6 @@ mod tests {
     let reviews = vec![
       GithubPullRequestReview {
         node_id: "PRR_1".to_string(),
-        reactions: Vec::new(),
         id: 1,
         body: None,
         state: GithubPullRequestReviewState::Approved,
@@ -17645,7 +13829,6 @@ mod tests {
       },
       GithubPullRequestReview {
         node_id: "PRR_2".to_string(),
-        reactions: Vec::new(),
         id: 2,
         body: None,
         state: GithubPullRequestReviewState::RequestChanges,
@@ -18052,6 +14235,25 @@ mod tests {
     assert!(separator_bounds.height > gpui::px(0.0));
     assert!(stats_bounds.width > gpui::px(0.0));
     assert!(stats_bounds.height > gpui::px(0.0));
+  }
+
+  #[gpui::test]
+  fn overview_offers_github_instead_of_the_conversation(cx: &mut TestAppContext) {
+    init_gpui_test(cx);
+    let (page, cx) = cx.add_window_view(|window, cx| GithubPrDetailsPage::new(window, cx));
+
+    page.update_in(cx, |this, _window, cx| {
+      this.pull_request = Some(make_pr_details_for_stats());
+      cx.notify();
+    });
+
+    cx.run_until_parked();
+
+    assert!(
+      cx.debug_bounds("github-pr-overview-open-on-github")
+        .is_some(),
+      "overview should link out to GitHub"
+    );
   }
 
   #[test]
@@ -19614,43 +15816,6 @@ mod tests {
     assert_eq!(selected_commit_sha.as_deref(), Some(target_sha));
   }
 
-  fn make_issue_comment(id: u64, created_at: &str, body: &str) -> GithubPullRequestIssueComment {
-    GithubPullRequestIssueComment {
-      node_id: format!("IC_{id}"),
-      reactions: Vec::new(),
-      id,
-      body: body.to_string(),
-      created_at: created_at.to_string(),
-      updated_at: created_at.to_string(),
-      user: Some(GithubPullRequestIssueCommentUser {
-        login: "octocat".to_string(),
-        avatar_url: None,
-      }),
-    }
-  }
-
-  fn make_review(
-    id: u64,
-    submitted_at: Option<&str>,
-    state: GithubPullRequestReviewState,
-    body: Option<&str>,
-  ) -> GithubPullRequestReview {
-    GithubPullRequestReview {
-      node_id: format!("PRR_{id}"),
-      reactions: Vec::new(),
-      id,
-      body: body.map(str::to_string),
-      state: state,
-      submitted_at: submitted_at.map(str::to_string),
-      commit_id: Some("1111111111111111111111111111111111111111".to_string()),
-      html_url: "https://github.com/acme/widget/pull/42#pullrequestreview-1".to_string(),
-      user: Some(crate::api::GithubPullRequestReviewUser {
-        login: "reviewer".to_string(),
-        avatar_url: None,
-      }),
-    }
-  }
-
   fn make_review_comment(
     id: u64,
     created_at: &str,
@@ -19658,7 +15823,6 @@ mod tests {
   ) -> GithubPullRequestReviewComment {
     GithubPullRequestReviewComment {
       node_id: format!("PRRC_{id}"),
-      reactions: Vec::new(),
       is_outdated: false,
       thread_id: String::new(),
       is_resolved: false,
@@ -19689,21 +15853,6 @@ mod tests {
       side: Some("RIGHT".to_string()),
       is_pending: false,
       pull_request_review_node_id: None,
-    }
-  }
-
-  #[test]
-  fn overview_comment_update_result_review_preserves_comment() {
-    let comment = make_review_comment(42, "2026-02-28T10:00:00Z", None);
-
-    let result = OverviewCommentUpdateResult::review(comment);
-
-    match result {
-      OverviewCommentUpdateResult::Review(review) => {
-        assert_eq!(review.id, 42);
-        assert_eq!(review.path, "src/main.rs");
-      }
-      OverviewCommentUpdateResult::Issue(_) => panic!("expected review variant"),
     }
   }
 
@@ -19760,29 +15909,6 @@ mod tests {
   }
 
   #[test]
-  fn suggestion_context_from_review_comment_preview_uses_preview_snippets() {
-    let preview = GithubPrReviewCommentPreview {
-      code: GithubCodeReferencePreview {
-        url: Arc::from("https://github.com/acme/widget/blob/head/src/main.rs#L12"),
-        repo: Arc::from("acme/widget"),
-        path: Arc::from("src/main.rs"),
-        reference: Arc::from("head"),
-        start_line: 12,
-        end_line: 12,
-        snippets: vec![Arc::from("let current = true;")],
-        full_content: None,
-      },
-      diff_lines: Vec::new(),
-    };
-
-    let ctx = suggestion_context_from_review_comment_preview(&preview).expect("context");
-
-    assert_eq!(ctx.original_start_line, Some(12));
-    assert_eq!(ctx.suggested_start_line, Some(12));
-    assert_eq!(ctx.original_lines, vec!["let current = true;".to_string()]);
-  }
-
-  #[test]
   fn suggested_change_original_lines_detects_stale_head_content() {
     let file_contents = HashMap::from([(
       "src/main.rs".to_string(),
@@ -19823,63 +15949,6 @@ mod tests {
         &original_lines,
       ),
       Some(true)
-    );
-  }
-
-  #[test]
-  fn gfm_diff_lines_from_hunk_for_range_limits_large_added_hunks() {
-    let hunk = "@@ -0,0 +1,5 @@\n+one\n+two\n+three\n+four\n+five";
-    let lines = gfm_diff_lines_from_hunk_for_range(hunk, ReviewCommentPreviewSide::Right, 3, 4);
-
-    assert_eq!(lines.len(), 2);
-    assert_eq!(lines[0].new_line, Some(3));
-    assert_eq!(lines[0].content.as_ref(), "three");
-    assert_eq!(lines[1].new_line, Some(4));
-    assert_eq!(lines[1].content.as_ref(), "four");
-  }
-
-  #[test]
-  fn gfm_diff_lines_from_hunk_for_range_keeps_modified_pairs() {
-    let hunk = "@@ -10,2 +10,2 @@\n unchanged\n-old value\n+new value";
-    let lines = gfm_diff_lines_from_hunk_for_range(hunk, ReviewCommentPreviewSide::Right, 11, 11);
-
-    assert_eq!(lines.len(), 2);
-    assert_eq!(lines[0].kind, GithubDiffLineKind::Removed);
-    assert_eq!(lines[0].old_line, Some(11));
-    assert_eq!(lines[0].content.as_ref(), "old value");
-    assert_eq!(lines[1].kind, GithubDiffLineKind::Added);
-    assert_eq!(lines[1].new_line, Some(11));
-    assert_eq!(lines[1].content.as_ref(), "new value");
-  }
-
-  #[test]
-  fn review_comment_preview_side_explicit_left_maps_to_left() {
-    let mut comment = make_review_comment(1, "2026-02-28T10:00:00Z", None);
-    comment.side = Some("LEFT".to_string());
-    assert_eq!(
-      review_comment_preview_side(&comment),
-      ReviewCommentPreviewSide::Left
-    );
-  }
-
-  #[test]
-  fn review_comment_preview_side_unknown_value_defaults_to_right() {
-    let mut comment = make_review_comment(1, "2026-02-28T10:00:00Z", None);
-    comment.side = Some("DIAGONAL".to_string());
-    assert_eq!(
-      review_comment_preview_side(&comment),
-      ReviewCommentPreviewSide::Right
-    );
-  }
-
-  #[test]
-  fn review_comment_preview_side_missing_value_defaults_to_right() {
-    let mut comment = make_review_comment(1, "2026-02-28T10:00:00Z", None);
-    comment.side = None;
-    comment.start_side = None;
-    assert_eq!(
-      review_comment_preview_side(&comment),
-      ReviewCommentPreviewSide::Right
     );
   }
 
@@ -19946,57 +16015,6 @@ mod tests {
   }
 
   #[test]
-  fn issue_comment_owned_by_login_requires_user_and_matches_case_insensitively() {
-    let mut comment = make_issue_comment(1, "2026-02-28T10:00:00Z", "Body");
-    assert!(issue_comment_owned_by_login(&comment, "OCTOCAT"));
-    comment.user = None;
-    assert!(!issue_comment_owned_by_login(&comment, "octocat"));
-  }
-
-  #[test]
-  fn next_pr_description_body_returns_none_when_value_is_unchanged_after_trim() {
-    assert_eq!(
-      next_pr_description_body("  Existing description  ", "Existing description"),
-      None
-    );
-  }
-
-  #[test]
-  fn apply_pull_request_description_update_local_updates_body_and_updated_at() {
-    let mut pull_request = make_pr_details_for_stats();
-    let update = GithubPullRequestDescriptionUpdate {
-      number: pull_request.number,
-      body: Some("Updated description".to_string()),
-      updated_at: "2026-03-01T11:10:00Z".to_string(),
-    };
-
-    apply_pull_request_description_update_local(&mut pull_request, update);
-    assert_eq!(pull_request.body.as_deref(), Some("Updated description"));
-    assert_eq!(pull_request.updated_at, "2026-03-01T11:10:00Z");
-  }
-
-  #[test]
-  fn description_code_reference_requests_for_pull_request_recomputes_after_description_update() {
-    let mut pull_request = make_pr_details_for_stats();
-    pull_request.body =
-      Some("[old](https://github.com/acme/widget/blob/main/src/old.rs#L2-L3)".to_string());
-    let update = GithubPullRequestDescriptionUpdate {
-      number: pull_request.number,
-      body: Some("[new](https://github.com/acme/widget/blob/main/src/new.rs#L8-L9)".to_string()),
-      updated_at: "2026-03-01T11:30:00Z".to_string(),
-    };
-
-    apply_pull_request_description_update_local(&mut pull_request, update);
-    let requests =
-      GithubPrDetailsPage::description_code_reference_requests_for_pull_request(&pull_request);
-
-    assert_eq!(requests.len(), 1);
-    assert_eq!(requests[0].path, "src/new.rs");
-    assert_eq!(requests[0].start_line, 8);
-    assert_eq!(requests[0].end_line, 9);
-  }
-
-  #[test]
   fn overview_root_review_comment_ids_collapses_threads_to_root_only() {
     let review_comments = vec![
       make_review_comment(1, "2026-02-28T10:00:00Z", None),
@@ -20030,158 +16048,9 @@ mod tests {
     assert_eq!(roots, vec![7]);
   }
 
-  #[test]
-  fn allows_overview_review_reply_action_requires_review_kind_and_last_message() {
-    let thread_ids = vec![10, 11, 12];
-    assert!(allows_overview_review_reply_action(
-      GithubPrOverviewConversationItemKind::ReviewComment,
-      &thread_ids,
-      12
-    ));
-    assert!(!allows_overview_review_reply_action(
-      GithubPrOverviewConversationItemKind::ReviewComment,
-      &thread_ids,
-      11
-    ));
-    assert!(!allows_overview_review_reply_action(
-      GithubPrOverviewConversationItemKind::IssueComment,
-      &thread_ids,
-      12
-    ));
-  }
-
-  #[test]
-  fn overview_root_is_editing_requires_a_real_root_target() {
-    assert!(!overview_root_is_editing(None, None));
-    assert!(!overview_root_is_editing(
-      Some(OverviewCommentTarget {
-        kind: OverviewCommentKind::Issue,
-        id: 1,
-      }),
-      None,
-    ));
-    assert!(overview_root_is_editing(
-      Some(OverviewCommentTarget {
-        kind: OverviewCommentKind::Issue,
-        id: 1,
-      }),
-      Some(OverviewCommentTarget {
-        kind: OverviewCommentKind::Issue,
-        id: 1,
-      }),
-    ));
-  }
-
-  #[test]
-  fn upsert_issue_comment_local_updates_existing_and_appends_missing() {
-    let mut comments = vec![make_issue_comment(1, "2026-02-28T10:00:00Z", "Initial")];
-    comments[0].reactions = vec![GithubReactionGroup {
-      content: GithubReactionContent::Heart,
-      count: 1,
-      viewer_has_reacted: true,
-    }];
-    let mut updated = make_issue_comment(1, "2026-02-28T10:01:00Z", "Updated");
-    updated.node_id.clear();
-    updated.updated_at = "2026-02-28T10:05:00Z".to_string();
-    upsert_issue_comment_local(&mut comments, updated.clone());
-    assert_eq!(comments.len(), 1);
-    assert_eq!(comments[0].body, updated.body);
-    assert_eq!(comments[0].node_id, "IC_1");
-    assert_eq!(
-      comments[0].reactions[0].content,
-      GithubReactionContent::Heart
-    );
-
-    upsert_issue_comment_local(
-      &mut comments,
-      make_issue_comment(2, "2026-02-28T10:02:00Z", "Another"),
-    );
-    assert_eq!(comments.len(), 2);
-    assert_eq!(comments[1].id, 2);
-  }
-
-  #[test]
-  fn upsert_review_comment_local_updates_existing_and_appends_missing() {
-    let mut comments = vec![make_review_comment(1, "2026-02-28T10:00:00Z", None)];
-    comments[0].reactions = vec![GithubReactionGroup {
-      content: GithubReactionContent::Rocket,
-      count: 1,
-      viewer_has_reacted: false,
-    }];
-    let mut updated = make_review_comment(1, "2026-02-28T10:01:00Z", None);
-    updated.node_id.clear();
-    updated.body = "Updated review comment".to_string();
-    upsert_review_comment_local(&mut comments, updated.clone());
-    assert_eq!(comments.len(), 1);
-    assert_eq!(comments[0].body, updated.body);
-    assert_eq!(comments[0].node_id, "PRRC_1");
-    assert_eq!(
-      comments[0].reactions[0].content,
-      GithubReactionContent::Rocket
-    );
-
-    upsert_review_comment_local(
-      &mut comments,
-      make_review_comment(2, "2026-02-28T10:02:00Z", Some(1)),
-    );
-    assert_eq!(comments.len(), 2);
-    assert_eq!(comments[1].id, 2);
-  }
-
-  #[test]
-  fn remove_and_restore_issue_comment_local_supports_delete_rollback() {
-    let mut comments = vec![
-      make_issue_comment(1, "2026-02-28T10:00:00Z", "First"),
-      make_issue_comment(2, "2026-02-28T10:01:00Z", "Second"),
-    ];
-    let (index, removed) = remove_issue_comment_local(&mut comments, 1).expect("removed");
-    assert_eq!(index, 0);
-    assert_eq!(comments.len(), 1);
-    assert_eq!(comments[0].id, 2);
-
-    restore_issue_comment_local(&mut comments, index, removed);
-    assert_eq!(comments.len(), 2);
-    assert_eq!(comments[0].id, 1);
-    assert_eq!(comments[1].id, 2);
-  }
-
-  #[test]
-  fn remove_and_restore_review_comment_local_supports_delete_rollback() {
-    let mut comments = vec![
-      make_review_comment(1, "2026-02-28T10:00:00Z", None),
-      make_review_comment(2, "2026-02-28T10:01:00Z", Some(1)),
-    ];
-    let (index, removed) = remove_review_comment_local(&mut comments, 1).expect("removed");
-    assert_eq!(index, 0);
-    assert_eq!(comments.len(), 1);
-    assert_eq!(comments[0].id, 2);
-
-    restore_review_comment_local(&mut comments, index, removed);
-    assert_eq!(comments.len(), 2);
-    assert_eq!(comments[0].id, 1);
-    assert_eq!(comments[1].id, 2);
-  }
-
-  #[test]
-  fn github_blob_url_formats_single_line_anchor() {
-    assert_eq!(
-      github_blob_url("acme", "widget", "main", "src/main.rs", 7, 7),
-      "https://github.com/acme/widget/blob/main/src/main.rs#L7"
-    );
-  }
-
-  #[test]
-  fn github_blob_url_formats_multi_line_anchor() {
-    assert_eq!(
-      github_blob_url("acme", "widget", "main", "src/main.rs", 7, 9),
-      "https://github.com/acme/widget/blob/main/src/main.rs#L7-L9"
-    );
-  }
-
   fn make_pr_details_for_stats() -> GithubPullRequestDetails {
     GithubPullRequestDetails {
       node_id: "PR_kwDOExample".to_string(),
-      reactions: Vec::new(),
       number: 42,
       title: "Example PR".to_string(),
       state: GithubPullRequestState::Open,
@@ -20356,156 +16225,6 @@ mod tests {
     let names = sorted_branch_names_for_target_selector(branches, "main", "feature");
 
     assert_eq!(names, vec!["main", "release/next"]);
-  }
-
-  #[test]
-  fn build_overview_conversation_items_hides_state_label_for_commented_reviews() {
-    let reviews = vec![make_review(
-      2,
-      Some("2026-02-28T10:00:00Z"),
-      GithubPullRequestReviewState::Commented,
-      Some("Looks good to me"),
-    )];
-
-    let items = build_overview_conversation_items(&[], &reviews, &[]);
-    assert_eq!(items.len(), 1);
-    assert_eq!(items[0].body.as_deref(), Some("Looks good to me"));
-    assert_eq!(items[0].review_state, None);
-  }
-
-  #[test]
-  fn build_overview_conversation_items_orders_oldest_to_newest_across_sources() {
-    let issue_comments = vec![make_issue_comment(
-      1,
-      "2026-02-28T11:00:00Z",
-      "Issue comment",
-    )];
-    let reviews = vec![make_review(
-      2,
-      Some("2026-02-28T10:00:00Z"),
-      GithubPullRequestReviewState::Approved,
-      Some("Approved"),
-    )];
-    let review_comments = vec![make_review_comment(3, "2026-02-28T12:00:00Z", None)];
-
-    let items = build_overview_conversation_items(&issue_comments, &reviews, &review_comments);
-    assert_eq!(items.len(), 3);
-    assert_eq!(items[0].kind, GithubPrOverviewConversationItemKind::Review);
-    assert_eq!(
-      items[1].kind,
-      GithubPrOverviewConversationItemKind::IssueComment
-    );
-    assert_eq!(
-      items[2].kind,
-      GithubPrOverviewConversationItemKind::ReviewComment
-    );
-  }
-
-  #[test]
-  fn build_overview_conversation_items_excludes_reviews_without_submitted_at() {
-    let reviews = vec![
-      make_review(
-        2,
-        Some("2026-02-28T10:00:00Z"),
-        GithubPullRequestReviewState::Approved,
-        Some("Posted"),
-      ),
-      make_review(
-        3,
-        None,
-        GithubPullRequestReviewState::RequestChanges,
-        Some("Waiting"),
-      ),
-    ];
-
-    let items = build_overview_conversation_items(&[], &reviews, &[]);
-    assert_eq!(items.len(), 1);
-    assert_eq!(items[0].id, 2);
-    assert_eq!(items[0].kind, GithubPrOverviewConversationItemKind::Review);
-  }
-
-  #[test]
-  fn build_overview_conversation_items_keeps_review_comment_replies() {
-    let review_comments = vec![
-      make_review_comment(1, "2026-02-28T10:00:00Z", None),
-      make_review_comment(2, "2026-02-28T10:01:00Z", Some(1)),
-    ];
-
-    let items = build_overview_conversation_items(&[], &[], &review_comments);
-    assert_eq!(items.len(), 1);
-    assert_eq!(items[0].id, 1);
-    assert_eq!(items[0].replies.len(), 1);
-    assert_eq!(items[0].replies[0].id, 2);
-  }
-
-  #[test]
-  fn build_overview_conversation_items_keeps_reaction_subjects_and_groups() {
-    let mut issue_comment = make_issue_comment(1, "2026-02-28T10:00:00Z", "Issue comment");
-    issue_comment.reactions = vec![GithubReactionGroup {
-      content: GithubReactionContent::ThumbsUp,
-      count: 2,
-      viewer_has_reacted: true,
-    }];
-    let mut root_comment = make_review_comment(2, "2026-02-28T10:01:00Z", None);
-    root_comment.reactions = vec![GithubReactionGroup {
-      content: GithubReactionContent::Heart,
-      count: 1,
-      viewer_has_reacted: false,
-    }];
-    let mut reply = make_review_comment(3, "2026-02-28T10:02:00Z", Some(2));
-    reply.reactions = vec![GithubReactionGroup {
-      content: GithubReactionContent::Eyes,
-      count: 1,
-      viewer_has_reacted: true,
-    }];
-
-    let items = build_overview_conversation_items(&[issue_comment], &[], &[root_comment, reply]);
-
-    assert_eq!(items[0].reaction_subject_id, "IC_1");
-    assert_eq!(
-      items[0].reactions[0].content,
-      GithubReactionContent::ThumbsUp
-    );
-    assert_eq!(items[1].reaction_subject_id, "PRRC_2");
-    assert_eq!(items[1].reactions[0].content, GithubReactionContent::Heart);
-    assert_eq!(items[1].replies[0].reaction_subject_id, "PRRC_3");
-    assert_eq!(
-      items[1].replies[0].reactions[0].content,
-      GithubReactionContent::Eyes
-    );
-  }
-
-  #[test]
-  fn build_overview_conversation_items_groups_nested_reply_chains_on_root_comment() {
-    let review_comments = vec![
-      make_review_comment(1, "2026-02-28T10:00:00Z", None),
-      make_review_comment(2, "2026-02-28T10:01:00Z", Some(1)),
-      make_review_comment(3, "2026-02-28T10:02:00Z", Some(2)),
-    ];
-
-    let items = build_overview_conversation_items(&[], &[], &review_comments);
-    assert_eq!(items.len(), 1);
-    assert_eq!(items[0].id, 1);
-    let reply_ids = items[0]
-      .replies
-      .iter()
-      .map(|reply| reply.id)
-      .collect::<Vec<_>>();
-    assert_eq!(reply_ids, vec![2, 3]);
-  }
-
-  #[test]
-  fn build_overview_conversation_items_does_not_render_review_body_when_missing() {
-    let reviews = vec![make_review(
-      1,
-      Some("2026-02-28T10:00:00Z"),
-      GithubPullRequestReviewState::RequestChanges,
-      None,
-    )];
-
-    let items = build_overview_conversation_items(&[], &reviews, &[]);
-    assert_eq!(items.len(), 1);
-    assert!(items[0].body.is_none());
   }
 
   #[test]
@@ -20823,29 +16542,6 @@ mod tests {
     assert_eq!(references.len(), 1);
     assert_eq!(references[0].owner, "acme");
     assert_eq!(references[0].repo, "widget");
-  }
-
-  #[test]
-  fn gfm_preview_from_review_preview_preserves_fields() {
-    let preview = ReviewCommentCodeReferencePreview {
-      url: Arc::from("https://github.com/acme/widget/blob/main/src/lib.rs#L1-L2"),
-      repo: Arc::from("acme/widget"),
-      path: Arc::from("src/lib.rs"),
-      reference: Arc::from("main"),
-      start_line: 1,
-      end_line: 2,
-      snippets: vec![Arc::from("fn main() {}")],
-      full_content: None,
-    };
-
-    let converted = gfm_preview_from_review_preview(&preview);
-    assert_eq!(converted.url, preview.url);
-    assert_eq!(converted.repo, preview.repo);
-    assert_eq!(converted.path, preview.path);
-    assert_eq!(converted.reference, preview.reference);
-    assert_eq!(converted.start_line, preview.start_line);
-    assert_eq!(converted.end_line, preview.end_line);
-    assert_eq!(converted.snippets, preview.snippets);
   }
 
   #[test]
