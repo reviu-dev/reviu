@@ -74,6 +74,45 @@ struct ChatMessage {
   text: String,
 }
 
+/// Seeded per conversation so two sessions never show the same word at once.
+const WORKING_WORDS: [&str; 20] = [
+  "Thinking",
+  "Working",
+  "Digging",
+  "Reading",
+  "Tracing",
+  "Weighing",
+  "Drafting",
+  "Wiring",
+  "Shaping",
+  "Threading",
+  "Piecing",
+  "Combing",
+  "Chewing",
+  "Wrangling",
+  "Mulling",
+  "Parsing",
+  "Charting",
+  "Hunting",
+  "Stitching",
+  "Rummaging",
+];
+const WORKING_WORD_ROTATE_SECS: u64 = 7;
+
+fn working_word(seed: u64, elapsed_secs: u64) -> &'static str {
+  let step = elapsed_secs / WORKING_WORD_ROTATE_SECS;
+  WORKING_WORDS[(seed.wrapping_add(step) % WORKING_WORDS.len() as u64) as usize]
+}
+
+fn working_word_seed(conversation_id: &str) -> u64 {
+  let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
+  for byte in conversation_id.as_bytes() {
+    hash ^= u64::from(*byte);
+    hash = hash.wrapping_mul(0x1000_0000_01b3);
+  }
+  hash
+}
+
 /// The marker goes right before the prompt that triggered it (the last user-authored
 /// message), so a rollback lands on the state that preceded that prompt.
 fn checkpoint_insert_index(items: &[ChatItem]) -> usize {
@@ -794,10 +833,9 @@ impl AgentChatPanel {
     };
     let verb: SharedString = if connecting {
       format!("Connecting to {}...", self.backend.label).into()
-    } else if !self.pending_agent.is_empty() {
-      format!("{} is typing...", self.backend.label).into()
     } else {
-      format!("{} is thinking...", self.backend.label).into()
+      let seed = working_word_seed(&self.current_conv.id);
+      format!("{}...", working_word(seed, elapsed)).into()
     };
     let elapsed_label: Option<SharedString> =
       (!connecting && elapsed >= 2).then(|| format!("{elapsed}s").into());
@@ -4425,6 +4463,34 @@ mod tests {
     )]);
 
     assert!(!config_customized(&selectors, &HashMap::new()));
+  }
+
+  #[test]
+  fn working_word_holds_for_seven_seconds_then_moves_on() {
+    let seed = working_word_seed("conv-1");
+
+    assert_eq!(working_word(seed, 0), working_word(seed, 6));
+    assert_ne!(working_word(seed, 6), working_word(seed, 7));
+    assert_eq!(working_word(seed, 7), working_word(seed, 13));
+  }
+
+  #[test]
+  fn working_word_differs_between_conversations_at_the_same_moment() {
+    let words: std::collections::HashSet<&str> = (0..8)
+      .map(|ix| working_word(working_word_seed(&format!("conv-{ix}")), 0))
+      .collect();
+
+    assert!(words.len() > 1, "seeds must spread across the vocabulary");
+  }
+
+  #[test]
+  fn working_word_cycles_through_the_whole_vocabulary() {
+    let seed = working_word_seed("conv-1");
+    let cycle: std::collections::HashSet<&str> = (0..WORKING_WORDS.len() as u64)
+      .map(|step| working_word(seed, step * WORKING_WORD_ROTATE_SECS))
+      .collect();
+
+    assert_eq!(cycle.len(), WORKING_WORDS.len());
   }
 
   #[test]
