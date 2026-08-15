@@ -134,6 +134,12 @@ fn refresh_label_for_workspace_page(page: WorkspacePage) -> Option<&'static str>
   }
 }
 
+/// The shell connects its agent when the workspace routes to it, never while
+/// painting: entering the page is the only signal.
+fn should_activate_session_page(previous: Option<WorkspacePage>, next: WorkspacePage) -> bool {
+  next == WorkspacePage::Session && previous != Some(WorkspacePage::Session)
+}
+
 fn refresh_in_progress_for_workspace_page(page: WorkspacePage, cx: &App) -> bool {
   match page {
     WorkspacePage::Session => false,
@@ -1081,7 +1087,7 @@ impl Render for WorkspaceView {
       }
       let focus_handle = self.focus_handle(cx);
       window.focus(&focus_handle, cx);
-      if page == WorkspacePage::Session {
+      if should_activate_session_page(previous_page, page) {
         self
           .session_page
           .update(cx, |session_page, cx| session_page.activate(window, cx));
@@ -1182,8 +1188,8 @@ mod tests {
   use super::{
     WorkspacePage, WorkspaceView, build_app_menus, page_has_file_search, page_supports_refresh,
     primary_navigation_selected_index, refresh_label_for_workspace_page,
-    should_run_scheduled_update_check, user_menu_page_for_workspace_page,
-    workspace_page_from_pathname,
+    should_activate_session_page, should_run_scheduled_update_check,
+    user_menu_page_for_workspace_page, workspace_page_from_pathname,
   };
   use crate::app_update::{
     AppUpdateState, AvailableAppUpdate, ReadyToInstallAppUpdate, UpdateArtifact,
@@ -1414,6 +1420,31 @@ mod tests {
     assert!(!page_supports_refresh(WorkspacePage::GitConfig));
     assert!(!page_supports_refresh(WorkspacePage::Settings));
     assert!(!page_supports_refresh(WorkspacePage::About));
+  }
+
+  #[test]
+  fn the_shell_activates_when_the_workspace_routes_to_it() {
+    // Startup on the shell, and every navigation back to it.
+    assert!(should_activate_session_page(None, WorkspacePage::Session));
+    assert!(should_activate_session_page(
+      Some(WorkspacePage::Git),
+      WorkspacePage::Session
+    ));
+    assert!(should_activate_session_page(
+      Some(WorkspacePage::GithubPrDetails),
+      WorkspacePage::Session
+    ));
+
+    // Never for another page, and never twice for the same one.
+    assert!(!should_activate_session_page(None, WorkspacePage::Git));
+    assert!(!should_activate_session_page(
+      Some(WorkspacePage::Session),
+      WorkspacePage::Git
+    ));
+    assert!(!should_activate_session_page(
+      Some(WorkspacePage::Session),
+      WorkspacePage::Session
+    ));
   }
 
   #[test]
