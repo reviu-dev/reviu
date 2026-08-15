@@ -7,7 +7,6 @@ use crate::github_navigation::{
   open_commit_target, open_pr_target, open_profile_target, open_repo_target,
 };
 use crate::navigation::NavigationHistory;
-use crate::workspace::WorkspaceApi;
 
 /// Handles the navigation, GitHub link and dialog actions shared by every page.
 /// Pages match their own actions first and route the rest here.
@@ -71,16 +70,6 @@ pub(crate) fn handle_global_command_palette_action(
     }
     CommandPaletteAction::SendFeedback => {
       crate::feedback_dialog::open_feedback_dialog(window, cx);
-      Ok(())
-    }
-    CommandPaletteAction::SearchGithubRepository => {
-      let api = WorkspaceApi::global(cx).api.clone();
-      crate::github_search_dialog::open_github_search_dialog(api, window, cx);
-      Ok(())
-    }
-    CommandPaletteAction::CreateGithubRepository => {
-      let api = WorkspaceApi::global(cx).api.clone();
-      crate::github_create_repository_dialog::open_create_repository_dialog(api, window, cx);
       Ok(())
     }
     _ => Err("Command not available.".into()),

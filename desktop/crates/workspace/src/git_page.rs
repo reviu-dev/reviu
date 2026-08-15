@@ -5021,18 +5021,6 @@ impl GitPage {
         crate::feedback_dialog::open_feedback_dialog(window, cx);
         Ok(())
       }
-      CommandPaletteAction::CreateGithubRepository => {
-        should_post_action_refresh = false;
-        let api = WorkspaceApi::global(cx).api.clone();
-        crate::github_create_repository_dialog::open_create_repository_dialog(api, window, cx);
-        Ok(())
-      }
-      CommandPaletteAction::SearchGithubRepository => {
-        should_post_action_refresh = false;
-        let api = WorkspaceApi::global(cx).api.clone();
-        crate::github_search_dialog::open_github_search_dialog(api, window, cx);
-        Ok(())
-      }
       CommandPaletteAction::CheckoutDetached { target } => {
         let Some(root_path) = self.selected_repo.clone() else {
           return Err("No repository selected.".into());

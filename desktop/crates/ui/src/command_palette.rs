@@ -1,6 +1,6 @@
 use std::{collections::BTreeMap, rc::Rc, sync::Arc};
 
-use crate::github_url::parse_github_url_action;
+use crate::github_url::parse_github_pull_request_url_action;
 use crate::palette::{
   palette_empty, palette_footer, palette_list_item, palette_search_list, palette_section_header,
   update_selected_index,
@@ -209,8 +209,6 @@ pub enum CommandPaletteAction {
   ApplyStash(CommandPaletteStash),
   DropStash(CommandPaletteStash),
   PopStash(CommandPaletteStash),
-  CreateGithubRepository,
-  SearchGithubRepository,
   OpenRepository,
   OpenSessionPage,
   OpenGitPage,
@@ -800,8 +798,6 @@ pub enum CommandPaletteCommandId {
   ApplyStash,
   DropStash,
   PopStash,
-  CreateGithubRepository,
-  SearchGithubRepository,
   OpenRepository,
   OpenSessionPage,
   OpenGitPage,
@@ -860,8 +856,6 @@ impl CommandPaletteCommandId {
       Self::ApplyStash => "apply_stash",
       Self::DropStash => "drop_stash",
       Self::PopStash => "pop_stash",
-      Self::CreateGithubRepository => "create_github_repository",
-      Self::SearchGithubRepository => "search_github_repository",
       Self::OpenRepository => "open_repository",
       Self::OpenSessionPage => "open_session_page",
       Self::OpenGitPage => "open_git_page",
@@ -920,8 +914,6 @@ impl CommandPaletteCommandId {
       "apply_stash" => Some(Self::ApplyStash),
       "drop_stash" => Some(Self::DropStash),
       "pop_stash" => Some(Self::PopStash),
-      "create_github_repository" => Some(Self::CreateGithubRepository),
-      "search_github_repository" => Some(Self::SearchGithubRepository),
       "open_repository" => Some(Self::OpenRepository),
       "open_session_page" => Some(Self::OpenSessionPage),
       "open_git_page" => Some(Self::OpenGitPage),
@@ -1330,22 +1322,6 @@ impl CommandPaletteCommand {
     )
   }
 
-  pub fn create_github_repository() -> Self {
-    Self::new(
-      CommandPaletteCommandId::CreateGithubRepository,
-      "Create GitHub repository",
-      "Create a new repository under your account or an organization",
-    )
-  }
-
-  pub fn search_github_repository() -> Self {
-    Self::new(
-      CommandPaletteCommandId::SearchGithubRepository,
-      "Search GitHub repository",
-      "Find a repository on GitHub by name or owner",
-    )
-  }
-
   pub fn open_session_page() -> Self {
     Self::new(
       CommandPaletteCommandId::OpenSessionPage,
@@ -1365,8 +1341,8 @@ impl CommandPaletteCommand {
   pub fn open_github_from_url() -> Self {
     Self::new(
       CommandPaletteCommandId::OpenGithubFromUrl,
-      "Open from GitHub URL",
-      "Open a pull request from its URL, anything else in the browser",
+      "Open pull request from URL",
+      "Open a GitHub pull request in Reviu from its URL",
     )
   }
 
@@ -1490,8 +1466,6 @@ impl CommandPaletteCommand {
 
     if include_github {
       commands.push(Self::open_github_from_url());
-      commands.push(Self::search_github_repository());
-      commands.push(Self::create_github_repository());
     }
 
     if current_page != CommandPalettePage::GitConfig {
@@ -1569,9 +1543,7 @@ impl CommandPaletteCommand {
       | CommandPaletteCommandId::ForgetRepository
       | CommandPaletteCommandId::OpenRepository => CommandPaletteGroup::Repository,
 
-      CommandPaletteCommandId::SearchGithubRepository
-      | CommandPaletteCommandId::CreateGithubRepository
-      | CommandPaletteCommandId::OpenGithubFromUrl => CommandPaletteGroup::Github,
+      CommandPaletteCommandId::OpenGithubFromUrl => CommandPaletteGroup::Github,
 
       CommandPaletteCommandId::OpenSessionPage
       | CommandPaletteCommandId::OpenGitPage
@@ -1622,8 +1594,6 @@ impl CommandPaletteCommand {
       }
       CommandPaletteCommandId::DropStash => Icon::new(UiIconName::Trash),
       CommandPaletteCommandId::DeleteBranch => Icon::new(UiIconName::Trash),
-      CommandPaletteCommandId::CreateGithubRepository => Icon::new(IconName::Plus),
-      CommandPaletteCommandId::SearchGithubRepository => Icon::new(IconName::Search),
       CommandPaletteCommandId::OpenRepository => Icon::new(IconName::FolderOpen),
       CommandPaletteCommandId::CreateBranch | CommandPaletteCommandId::CreateBranchFrom => {
         Icon::new(IconName::Plus)
@@ -1650,7 +1620,7 @@ impl CommandPaletteCommand {
 
   fn matches(&self, query: &str) -> bool {
     if self.id == CommandPaletteCommandId::OpenGithubFromUrl
-      && parse_github_url_action(query).is_some()
+      && parse_github_pull_request_url_action(query).is_some()
     {
       return true;
     }
@@ -1876,7 +1846,7 @@ impl CommandPalette {
     let stash_input =
       cx.new(|cx| InputState::new(window, cx).placeholder("Enter stash message..."));
     let open_github_url_input =
-      cx.new(|cx| InputState::new(window, cx).placeholder("Paste GitHub URL..."));
+      cx.new(|cx| InputState::new(window, cx).placeholder("Paste a pull request URL..."));
     let default_stash_message = config.default_stash_message.clone().unwrap_or_default();
 
     let default_repositories: Vec<Rc<CommandPaletteRepository>> =
@@ -2336,8 +2306,8 @@ impl CommandPalette {
       return;
     }
 
-    let Some(action) = parse_github_url_action(&url) else {
-      window.push_notification(Notification::error("Invalid GitHub URL"), cx);
+    let Some(action) = parse_github_pull_request_url_action(&url) else {
+      window.push_notification(Notification::error("Invalid pull request URL"), cx);
       return;
     };
 
@@ -2753,25 +2723,9 @@ impl CommandPalette {
       CommandPaletteCommandId::OpenGitPage => {
         self.trigger_action(command, CommandPaletteAction::OpenGitPage, window, cx);
       }
-      CommandPaletteCommandId::CreateGithubRepository => {
-        self.trigger_action(
-          command,
-          CommandPaletteAction::CreateGithubRepository,
-          window,
-          cx,
-        );
-      }
-      CommandPaletteCommandId::SearchGithubRepository => {
-        self.trigger_action(
-          command,
-          CommandPaletteAction::SearchGithubRepository,
-          window,
-          cx,
-        );
-      }
       CommandPaletteCommandId::OpenGithubFromUrl => {
         let query = self.commands_list.read(cx).delegate().query.to_string();
-        if let Some(action) = parse_github_url_action(&query) {
+        if let Some(action) = parse_github_pull_request_url_action(&query) {
           self.trigger_action(command, action, window, cx);
         } else {
           self.open_github_url_input.update(cx, |input, cx| {
@@ -3195,14 +3149,13 @@ mod tests {
   }
 
   #[test]
-  fn open_github_from_url_command_matches_pull_and_repo_urls() {
+  fn open_github_from_url_command_matches_pull_request_urls_only() {
     let command = CommandPaletteCommand::open_github_from_url();
 
-    assert!(command.matches("https://github.com/joris-gallot/guit"));
     assert!(command.matches("https://github.com/joris-gallot/guit/pull/4"));
-    assert!(command.matches("https://github.com/joris-gallot/guit/pulls?q=is%3Apr"));
-    assert!(command.matches("https://github.com/joris-gallot/guit/issues?q=is%3Aissue"));
-    assert!(command.matches("https://github.com/joris-gallot/guit/issues/23"));
+    assert!(!command.matches("https://github.com/joris-gallot/guit"));
+    assert!(!command.matches("https://github.com/joris-gallot/guit/pulls?q=is%3Apr"));
+    assert!(!command.matches("https://github.com/joris-gallot/guit/issues/23"));
     assert!(!command.matches("https://gitlab.com/acme/widget"));
   }
 
@@ -3355,15 +3308,6 @@ mod tests {
   }
 
   #[test]
-  fn search_github_repository_command_is_available_with_expected_metadata() {
-    let command = CommandPaletteCommand::search_github_repository();
-    assert_eq!(command.id, CommandPaletteCommandId::SearchGithubRepository);
-    assert_eq!(command.name.as_ref(), "Search GitHub repository");
-    assert!(command.matches("search github"));
-    assert!(command.matches("repository on github"));
-  }
-
-  #[test]
   fn commands_are_bucketed_into_the_expected_groups() {
     use super::CommandPaletteGroup;
 
@@ -3400,7 +3344,7 @@ mod tests {
       CommandPaletteGroup::Repository
     );
     assert_eq!(
-      CommandPaletteCommand::search_github_repository().group(),
+      CommandPaletteCommand::open_github_from_url().group(),
       CommandPaletteGroup::Github
     );
     assert_eq!(
@@ -3448,7 +3392,7 @@ mod tests {
   }
 
   #[test]
-  fn default_global_commands_include_search_github_repository_when_github_is_enabled() {
+  fn default_global_commands_include_github_commands_when_github_is_enabled() {
     let commands = CommandPaletteCommand::default_global_commands(
       super::CommandPalettePage::Git,
       /* include_github */ true,
@@ -3456,12 +3400,12 @@ mod tests {
     assert!(
       commands
         .iter()
-        .any(|c| c.id == CommandPaletteCommandId::SearchGithubRepository)
+        .any(|c| c.id == CommandPaletteCommandId::OpenGithubFromUrl)
     );
   }
 
   #[test]
-  fn default_global_commands_omit_search_github_repository_when_github_is_disabled() {
+  fn default_global_commands_omit_github_commands_when_github_is_disabled() {
     let commands = CommandPaletteCommand::default_global_commands(
       super::CommandPalettePage::Git,
       /* include_github */ false,
@@ -3469,7 +3413,7 @@ mod tests {
     assert!(
       !commands
         .iter()
-        .any(|c| c.id == CommandPaletteCommandId::SearchGithubRepository)
+        .any(|c| c.id == CommandPaletteCommandId::OpenGithubFromUrl)
     );
   }
 
@@ -3735,8 +3679,6 @@ mod tests {
       CommandPaletteCommandId::ApplyStash,
       CommandPaletteCommandId::DropStash,
       CommandPaletteCommandId::PopStash,
-      CommandPaletteCommandId::CreateGithubRepository,
-      CommandPaletteCommandId::SearchGithubRepository,
       CommandPaletteCommandId::OpenRepository,
       CommandPaletteCommandId::OpenSessionPage,
       CommandPaletteCommandId::OpenGitPage,

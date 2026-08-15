@@ -30,6 +30,15 @@ pub fn parse_github_url_action(url: &str) -> Option<CommandPaletteAction> {
   parse_github_url_target(url).map(github_url_target_to_action)
 }
 
+/// Pull request URLs only: every other GitHub URL leaves the app, so the palette
+/// does not offer to handle them.
+pub fn parse_github_pull_request_url_action(url: &str) -> Option<CommandPaletteAction> {
+  match parse_github_url_target(url)? {
+    target @ GithubUrlTarget::PullRequest { .. } => Some(github_url_target_to_action(target)),
+    _ => None,
+  }
+}
+
 fn github_url_target_to_action(target: GithubUrlTarget) -> CommandPaletteAction {
   match target {
     GithubUrlTarget::Profile { login } => CommandPaletteAction::OpenGithubProfile { login },
