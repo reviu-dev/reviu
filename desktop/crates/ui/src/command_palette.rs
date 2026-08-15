@@ -756,6 +756,7 @@ pub type CommandPaletteHandler = Arc<
 pub enum CommandPaletteInitialScreen {
   Root,
   SwitchBranch,
+  SwitchRepository,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -1740,6 +1741,7 @@ impl From<CommandPaletteInitialScreen> for CommandPaletteScreen {
     match value {
       CommandPaletteInitialScreen::Root => CommandPaletteScreen::Root,
       CommandPaletteInitialScreen::SwitchBranch => CommandPaletteScreen::SwitchBranch,
+      CommandPaletteInitialScreen::SwitchRepository => CommandPaletteScreen::SwitchRepository,
     }
   }
 }

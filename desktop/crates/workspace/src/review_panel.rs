@@ -1,5 +1,7 @@
 //! Session review panel: working-tree changeset and commit actions.
 
+#[cfg(test)]
+use std::path::Path;
 use std::path::PathBuf;
 
 use git::{
@@ -302,8 +304,14 @@ impl ReviewPanel {
   }
 
   #[cfg(test)]
+  pub(crate) fn repo_root(&self) -> Option<&Path> {
+    self.repo_root.as_deref()
+  }
+
   pub(crate) fn set_repo_root(&mut self, repo_root: Option<PathBuf>) {
     self.repo_root = repo_root;
+    self.status_entries.clear();
+    self.last_error = None;
   }
 
   fn has_staged_changes(&self) -> bool {

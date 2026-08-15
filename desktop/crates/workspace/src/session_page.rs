@@ -11,8 +11,8 @@ use editor::{
 };
 use gpui::AnimationExt as _;
 use gpui::{
-  AnyElement, AnyWindowHandle, App, Context, Entity, FocusHandle, Focusable, Render, SharedString,
-  Task, Window, div, prelude::*, px,
+  AnyElement, AnyWindowHandle, App, Context, Entity, FocusHandle, Focusable, PathPromptOptions,
+  Render, SharedString, Task, Window, div, prelude::*, px,
 };
 use gpui_component::{
   ActiveTheme as _, Disableable as _, Icon, Sizable as _, h_flex, notification::Notification,
@@ -42,8 +42,8 @@ use crate::{
 };
 use ui::{
   Button, ButtonVariants as _, CommandPalette, CommandPaletteAction, CommandPaletteCommand,
-  CommandPaletteConfig, CommandPaletteHandler, CommandPalettePage, SearchFileEntry,
-  SearchFileHandler, UiIconName, WindowExt as _,
+  CommandPaletteConfig, CommandPaletteHandler, CommandPaletteInitialScreen, CommandPalettePage,
+  CommandPaletteRepository, SearchFileEntry, SearchFileHandler, UiIconName, WindowExt as _,
 };
 
 const SESSIONS_SIDEBAR_DEFAULT_WIDTH: f32 = 250.0;
@@ -885,9 +885,157 @@ impl SessionPage {
     Ok(())
   }
 
+  fn palette_repositories(&self) -> Vec<CommandPaletteRepository> {
+    let mut repositories = ConfigStore::load_recent_repositories()
+      .into_iter()
+      .map(|repo| CommandPaletteRepository {
+        path: repo.path.to_string_lossy().replace(['\n', '\r'], "").into(),
+      })
+      .collect::<Vec<_>>();
+
+    if let Some(selected_repo) = self.selected_repo.as_ref() {
+      let selected = selected_repo.to_string_lossy().replace(['\n', '\r'], "");
+      if !repositories
+        .iter()
+        .any(|repo| repo.path.as_ref() == selected)
+      {
+        repositories.insert(
+          0,
+          CommandPaletteRepository {
+            path: selected.into(),
+          },
+        );
+      }
+    }
+
+    repositories
+  }
+
+  /// A session belongs to a repository: switching swaps the conversation set,
+  /// the changes panel and the branch, so the agent is respawned on the new cwd.
+  fn set_selected_repo(
+    &mut self,
+    repo_root: PathBuf,
+    window: &mut Window,
+    cx: &mut Context<Self>,
+  ) -> Result<(), SharedString> {
+    if self.selected_repo.as_deref() == Some(repo_root.as_path()) {
+      return Ok(());
+    }
+    if self.agent_turn_in_flight(cx) {
+      return Err("Wait for the agent to finish before switching repository.".into());
+    }
+
+    ConfigStore::persist_recent_repository(&repo_root);
+    self.apply_selected_repo(Some(repo_root), window, cx);
+    Ok(())
+  }
+
+  fn apply_selected_repo(
+    &mut self,
+    repo_root: Option<PathBuf>,
+    window: &mut Window,
+    cx: &mut Context<Self>,
+  ) {
+    self.selected_repo = repo_root.clone();
+    self.close_diff(window, cx);
+    self.center = CenterView::Conversation;
+    self.editor = None;
+    self.binary_preview = None;
+    self.selected_file = None;
+    self.open_file_task = None;
+    self.open_file_generation = self.open_file_generation.wrapping_add(1);
+    self.agent_review.clear();
+    self.pending_review_export = None;
+    self.current_branch = None;
+    // Conversations are stored per repository, so the panel is rebuilt on the
+    // next render with the new cwd and state directory.
+    self.agent_chat_view = None;
+    self.review_panel.update(cx, |panel, cx| {
+      panel.set_repo_root(repo_root);
+      panel.refresh(cx);
+    });
+    self.refresh_branch(cx);
+    cx.notify();
+  }
+
+  fn agent_turn_in_flight(&self, cx: &App) -> bool {
+    self
+      .agent_chat_view
+      .as_ref()
+      .is_some_and(|panel| panel.read(cx).is_turn_in_flight())
+  }
+
+  fn forget_repository(
+    &mut self,
+    repo_root: PathBuf,
+    window: &mut Window,
+    cx: &mut Context<Self>,
+  ) -> Result<(), SharedString> {
+    let forgetting_selected = self.selected_repo.as_deref() == Some(repo_root.as_path());
+    if forgetting_selected && self.agent_turn_in_flight(cx) {
+      return Err("Wait for the agent to finish before forgetting this repository.".into());
+    }
+
+    ConfigStore::forget_recent_repository(&repo_root);
+    if !forgetting_selected {
+      cx.notify();
+      return Ok(());
+    }
+
+    let next_repo = ConfigStore::load_recent_repositories()
+      .into_iter()
+      .map(|repo| repo.path)
+      .find(|path| path != &repo_root);
+    self.apply_selected_repo(next_repo, window, cx);
+    Ok(())
+  }
+
+  fn start_open_repository(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    let receiver = cx.prompt_for_paths(PathPromptOptions {
+      files: false,
+      directories: true,
+      multiple: false,
+      prompt: Some("Select a repository".into()),
+    });
+
+    cx.spawn_in(window, async move |this, cx| {
+      let Ok(Ok(Some(paths))) = receiver.await else {
+        return;
+      };
+      let Some(path) = paths.into_iter().next() else {
+        return;
+      };
+
+      let _ = this.update_in(cx, |this, window, cx| {
+        if let Err(error) = this.set_selected_repo(path, window, cx) {
+          window.push_notification(Notification::warning(error), cx);
+        }
+      });
+    })
+    .detach();
+  }
+
   fn open_command_palette(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    self.open_command_palette_with_screen(None, window, cx);
+  }
+
+  fn open_command_palette_with_screen(
+    &mut self,
+    initial_screen: Option<CommandPaletteInitialScreen>,
+    window: &mut Window,
+    cx: &mut Context<Self>,
+  ) {
     let include_github = AuthStateStore::has_github_access(cx);
+    let repositories = self.palette_repositories();
     let mut commands = Vec::new();
+    if repositories.len() > 1 {
+      commands.push(CommandPaletteCommand::switch_repository());
+    }
+    commands.push(CommandPaletteCommand::open_repository());
+    if !repositories.is_empty() {
+      commands.push(CommandPaletteCommand::forget_repository());
+    }
     if self.selected_repo.is_some() {
       commands.push(CommandPaletteCommand::commit());
       commands.push(CommandPaletteCommand::stage_all());
@@ -908,7 +1056,11 @@ impl SessionPage {
       })
     });
 
-    let config = CommandPaletteConfig::new(Vec::new(), commands, handler);
+    let mut config =
+      CommandPaletteConfig::new(Vec::new(), commands, handler).with_repositories(repositories);
+    if let Some(initial_screen) = initial_screen {
+      config = config.with_initial_screen(initial_screen);
+    }
     let palette = cx.new(|cx| CommandPalette::new(window, cx, config));
     ui::open_palette_dialog(palette, window, cx);
   }
@@ -934,6 +1086,20 @@ impl SessionPage {
       CommandPaletteAction::Push => self.run_repo_command(RepoCommand::Push, window, cx),
       CommandPaletteAction::Pull => self.run_repo_command(RepoCommand::Pull, window, cx),
       CommandPaletteAction::Fetch => self.run_repo_command(RepoCommand::Fetch, window, cx),
+      CommandPaletteAction::OpenRepository => {
+        self.start_open_repository(window, cx);
+        Ok(())
+      }
+      CommandPaletteAction::SwitchRepository(repository) => {
+        let repo_root = PathBuf::from(repository.path.as_ref());
+        if !repo_root.is_dir() {
+          return Err(format!("Repository not found: {}", repo_root.display()).into());
+        }
+        self.set_selected_repo(repo_root, window, cx)
+      }
+      CommandPaletteAction::ForgetRepository(repository) => {
+        self.forget_repository(PathBuf::from(repository.path.as_ref()), window, cx)
+      }
       other => crate::palette_actions::handle_global_command_palette_action(other, window, cx),
     }
   }
@@ -1050,12 +1216,25 @@ impl SessionPage {
 
     let repo_context = repo_name.map(|name| {
       h_flex()
+        .id("session-repo-context")
         .items_center()
         .gap_2()
         .px_3()
         .py_2()
         .border_t_1()
         .border_color(theme.border)
+        .cursor_pointer()
+        .hover(|this| this.bg(theme.secondary_hover))
+        .tooltip(|window, cx| {
+          gpui_component::tooltip::Tooltip::new("Switch repository").build(window, cx)
+        })
+        .on_click(cx.listener(|this, _, window, cx| {
+          this.open_command_palette_with_screen(
+            Some(CommandPaletteInitialScreen::SwitchRepository),
+            window,
+            cx,
+          );
+        }))
         .child(
           div()
             .text_xs()
@@ -1789,5 +1968,105 @@ mod tests {
       );
       assert_eq!(page.center, CenterView::Diff);
     });
+  }
+
+  #[gpui::test]
+  async fn switching_repository_resets_the_shell_state(cx: &mut TestAppContext) {
+    let repo = TempRepo::init("session-page-switch-from");
+    commit_text_file(&repo.path, Path::new("README.md"), "v1\n", "initial");
+    std::fs::write(repo.path.join("README.md"), "v2\n").expect("update file");
+    let other = TempRepo::init("session-page-switch-to");
+    commit_text_file(&other.path, Path::new("README.md"), "other\n", "initial");
+
+    let (page, cx) = add_session_page_window(repo.path.clone(), cx);
+    cx.executor().allow_parking();
+    cx.run_until_parked();
+
+    page.update_in(cx, |page, window, cx| {
+      page.open_diff(PathBuf::from("README.md"), None, window, cx);
+    });
+    await_open_file(&page, cx).await;
+    page.update_in(cx, |page, _window, cx| {
+      page.create_agent_review_comment(create_request(0, "keep this"), cx);
+    });
+
+    page.update_in(cx, |page, window, cx| {
+      page
+        .set_selected_repo(other.path.clone(), window, cx)
+        .expect("switch repository");
+    });
+
+    page.read_with(cx, |page, cx| {
+      assert_eq!(page.selected_repo.as_deref(), Some(other.path.as_path()));
+      // The open diff and its draft comments belong to the previous repository.
+      assert_eq!(page.center, CenterView::Conversation);
+      assert!(page.editor.is_none());
+      assert!(page.selected_file.is_none());
+      assert!(page.agent_review.is_empty());
+      // Conversations are stored per repository, so the panel is rebuilt.
+      assert!(page.agent_chat_view.is_none());
+      assert_eq!(
+        page.review_panel.read(cx).repo_root(),
+        Some(other.path.as_path())
+      );
+    });
+  }
+
+  #[gpui::test]
+  async fn switching_to_the_same_repository_is_a_noop(cx: &mut TestAppContext) {
+    let repo = TempRepo::init("session-page-switch-same");
+    commit_text_file(&repo.path, Path::new("README.md"), "v1\n", "initial");
+    std::fs::write(repo.path.join("README.md"), "v2\n").expect("update file");
+
+    let (page, cx) = add_session_page_window(repo.path.clone(), cx);
+    cx.executor().allow_parking();
+    cx.run_until_parked();
+
+    page.update_in(cx, |page, window, cx| {
+      page.open_diff(PathBuf::from("README.md"), None, window, cx);
+    });
+    await_open_file(&page, cx).await;
+
+    page.update_in(cx, |page, window, cx| {
+      page
+        .set_selected_repo(repo.path.clone(), window, cx)
+        .expect("same repository");
+    });
+
+    page.read_with(cx, |page, _| {
+      assert_eq!(page.center, CenterView::Diff);
+      assert!(page.editor.is_some());
+    });
+  }
+
+  #[gpui::test]
+  async fn forgetting_the_selected_repository_falls_back_to_the_next_recent_one(
+    cx: &mut TestAppContext,
+  ) {
+    let repo = TempRepo::init("session-page-forget-selected");
+    commit_text_file(&repo.path, Path::new("README.md"), "v1\n", "initial");
+    let other = TempRepo::init("session-page-forget-fallback");
+    commit_text_file(&other.path, Path::new("README.md"), "other\n", "initial");
+
+    let (page, cx) = add_session_page_window(repo.path.clone(), cx);
+    cx.executor().allow_parking();
+    cx.run_until_parked();
+    ConfigStore::persist_recent_repository(&other.path);
+    ConfigStore::persist_recent_repository(&repo.path);
+
+    page.update_in(cx, |page, window, cx| {
+      page
+        .forget_repository(repo.path.clone(), window, cx)
+        .expect("forget repository");
+    });
+
+    page.read_with(cx, |page, _| {
+      assert_eq!(page.selected_repo.as_deref(), Some(other.path.as_path()));
+    });
+    assert!(
+      !ConfigStore::load_recent_repositories()
+        .iter()
+        .any(|recent| recent.path == repo.path)
+    );
   }
 }
