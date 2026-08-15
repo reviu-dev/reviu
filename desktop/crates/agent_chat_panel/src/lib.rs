@@ -401,7 +401,11 @@ impl AgentChatPanel {
       in_flight: false,
       turn_started_at: None,
       _tick_task: None,
-      messages_list: gpui::ListState::new(0, gpui::ListAlignment::Top, px(300.)),
+      messages_list: {
+        let list = gpui::ListState::new(0, gpui::ListAlignment::Top, px(300.));
+        list.set_follow_mode(gpui::FollowMode::Tail);
+        list
+      },
       usage: None,
       agent_version: None,
       auth_methods: Vec::new(),
@@ -556,7 +560,6 @@ impl AgentChatPanel {
           panel.on_event(event);
           panel.persist_state();
           panel.sync_list_count();
-          panel.messages_list.scroll_to_end();
           cx.notify();
         });
       }
@@ -1121,7 +1124,6 @@ impl AgentChatPanel {
             resolved: None,
           }));
           panel.sync_list_count();
-          panel.messages_list.scroll_to_end();
           cx.notify();
         });
       }
@@ -1699,7 +1701,7 @@ impl AgentChatPanel {
     self.start_turn(cx);
     self.persist_state();
     self.sync_list_count();
-    self.messages_list.scroll_to_end();
+    self.messages_list.set_follow_mode(gpui::FollowMode::Tail);
     cx.notify();
 
     let cwd = self.cwd.clone();
@@ -1749,7 +1751,6 @@ impl AgentChatPanel {
         panel.end_turn();
         panel.persist_state();
         panel.sync_list_count();
-        panel.messages_list.scroll_to_end();
         cx.emit(AgentChatPanelEvent::TurnFinished);
         cx.notify();
       });
