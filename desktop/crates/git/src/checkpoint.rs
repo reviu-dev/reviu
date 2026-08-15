@@ -241,7 +241,14 @@ mod tests {
     let parent = repo.head().ok().and_then(|head| head.peel_to_commit().ok());
     let parents: Vec<_> = parent.iter().collect();
     repo
-      .commit(Some("HEAD"), &signature, &signature, message, &tree, &parents)
+      .commit(
+        Some("HEAD"),
+        &signature,
+        &signature,
+        message,
+        &tree,
+        &parents,
+      )
       .expect("commit");
   }
 
@@ -323,7 +330,10 @@ mod tests {
 
     let listed = list_checkpoints(&repo.path, "session-d").expect("list");
     assert_eq!(
-      listed.iter().map(|c| c.ref_name.clone()).collect::<Vec<_>>(),
+      listed
+        .iter()
+        .map(|c| c.ref_name.clone())
+        .collect::<Vec<_>>(),
       vec![
         first.ref_name.clone(),
         second.ref_name.clone(),
@@ -381,9 +391,18 @@ mod tests {
     create_checkpoint(&repo.path, "session-x").expect("x");
     create_checkpoint(&repo.path, "session-y").expect("y");
 
-    assert_eq!(list_checkpoints(&repo.path, "session-x").expect("x").len(), 1);
-    assert_eq!(list_checkpoints(&repo.path, "session-y").expect("y").len(), 1);
+    assert_eq!(
+      list_checkpoints(&repo.path, "session-x").expect("x").len(),
+      1
+    );
+    assert_eq!(
+      list_checkpoints(&repo.path, "session-y").expect("y").len(),
+      1
+    );
     delete_session_checkpoints(&repo.path, "session-x").expect("delete x");
-    assert_eq!(list_checkpoints(&repo.path, "session-y").expect("y").len(), 1);
+    assert_eq!(
+      list_checkpoints(&repo.path, "session-y").expect("y").len(),
+      1
+    );
   }
 }

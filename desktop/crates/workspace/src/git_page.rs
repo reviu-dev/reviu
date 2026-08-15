@@ -34,8 +34,8 @@ use git::{
 };
 use gpui::{
   Anchor, AnyElement, AnyWindowHandle, App, Context, Entity, FocusHandle, Focusable, Global,
-  InteractiveElement, ParentElement, PathPromptOptions, Pixels, Render, RenderImage,
-  SharedString, Styled, Subscription, Task, WeakEntity, Window, actions, div, img, prelude::*, px,
+  InteractiveElement, ParentElement, PathPromptOptions, Pixels, Render, RenderImage, SharedString,
+  Styled, Subscription, Task, WeakEntity, Window, actions, div, img, prelude::*, px,
 };
 use gpui_component::{
   ActiveTheme as _, Disableable, Icon, IconName, IndexPath, Selectable, Sizable, StyledExt,
@@ -104,13 +104,11 @@ use crate::{
   active_local_repo::{ActiveLocalRepo, ActiveLocalRepoStore},
   api::{ApiClient, GithubPullRequest},
   auth_state::{AuthState, AuthStateStore},
-  file_view::{BinaryPreview, build_binary_preview, render_binary_preview},
   config::{AppSettings, ConfigStore, RecentRepository},
   dock_badge::set_dock_badge,
-  file_preview::{
-    is_markdown_path, is_previewable_path, is_svg_path,
-  },
+  file_preview::{is_markdown_path, is_previewable_path, is_svg_path},
   file_search_palette::open_file_search_palette as open_shared_file_search_palette,
+  file_view::{BinaryPreview, build_binary_preview, render_binary_preview},
   github_commit_details_page::GithubCommitDetailsPageHandle,
   github_navigation::should_open_externally,
   github_page::GithubPageHandle,
@@ -176,7 +174,6 @@ fn interactive_rebase_success_message(target: &InteractiveRebaseTarget) -> Strin
     }
   }
 }
-
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum FileStageButtonAction {
@@ -7487,7 +7484,6 @@ impl GitPage {
     cx.stop_propagation();
   }
 
-
   fn ensure_page_shortcut_focus(&self, cx: &mut Context<Self>) {
     let focus_handle = self.focus_handle.clone();
     let window_handle = self.window_handle;
@@ -14100,7 +14096,6 @@ mod tests {
     );
   }
 
-  #[cfg(not(target_os = "linux"))]
   #[gpui::test]
   async fn command_palette_commit_stages_all_when_needed(cx: &mut TestAppContext) {
     init_gpui_test(cx);
@@ -14329,7 +14324,6 @@ mod tests {
     assert_eq!(head_oid(&repo.path), head_before);
   }
 
-  #[cfg(not(target_os = "linux"))]
   #[gpui::test]
   async fn command_palette_amend_updates_head_message_when_allowed(cx: &mut TestAppContext) {
     init_gpui_test(cx);
@@ -14811,7 +14805,6 @@ mod tests {
     );
   }
 
-  #[cfg(not(target_os = "linux"))]
   #[gpui::test]
   async fn command_palette_rebase_branch_fast_forwards_current_branch(cx: &mut TestAppContext) {
     init_gpui_test(cx);
@@ -14881,7 +14874,6 @@ mod tests {
     );
   }
 
-  #[cfg(not(target_os = "linux"))]
   #[gpui::test]
   async fn command_palette_rebase_branch_with_dirty_worktree_shows_notification_only(
     cx: &mut TestAppContext,
@@ -14946,7 +14938,6 @@ mod tests {
     );
   }
 
-  #[cfg(not(target_os = "linux"))]
   #[gpui::test]
   async fn command_palette_cherry_pick_applies_multiple_commits(cx: &mut TestAppContext) {
     init_gpui_test(cx);
@@ -15924,7 +15915,6 @@ mod tests {
     );
   }
 
-  #[cfg(not(target_os = "linux"))]
   #[gpui::test]
   async fn commit_action_completes_merge_after_conflict_resolution(cx: &mut TestAppContext) {
     init_gpui_test(cx);
@@ -16029,7 +16019,6 @@ mod tests {
     );
   }
 
-  #[cfg(not(target_os = "linux"))]
   #[gpui::test]
   async fn abort_rebase_action_clears_rebase_state(cx: &mut TestAppContext) {
     init_gpui_test(cx);
@@ -16133,7 +16122,6 @@ mod tests {
     );
   }
 
-  #[cfg(not(target_os = "linux"))]
   #[gpui::test]
   async fn command_palette_abort_rebase_clears_rebase_state(cx: &mut TestAppContext) {
     init_gpui_test(cx);
@@ -16239,7 +16227,6 @@ mod tests {
     );
   }
 
-  #[cfg(not(target_os = "linux"))]
   #[gpui::test]
   async fn continue_rebase_action_completes_rebase_after_conflict_resolution(
     cx: &mut TestAppContext,
@@ -16348,7 +16335,6 @@ mod tests {
     );
   }
 
-  #[cfg(not(target_os = "linux"))]
   #[gpui::test]
   async fn command_palette_continue_rebase_completes_rebase_after_conflict_resolution(
     cx: &mut TestAppContext,
@@ -16431,7 +16417,6 @@ mod tests {
     assert!(!git_page.read_with(cx, |this, _| this.rebase_in_progress));
   }
 
-  #[cfg(not(target_os = "linux"))]
   #[gpui::test]
   async fn command_palette_skip_rebase_skips_conflicted_commit(cx: &mut TestAppContext) {
     init_gpui_test(cx);
@@ -16512,7 +16497,6 @@ mod tests {
     );
   }
 
-  #[cfg(not(target_os = "linux"))]
   #[gpui::test]
   async fn continue_rebase_action_opens_first_conflicted_file_for_next_conflict(
     cx: &mut TestAppContext,
@@ -16622,7 +16606,6 @@ mod tests {
     );
   }
 
-  #[cfg(not(target_os = "linux"))]
   #[gpui::test]
   async fn command_palette_rebase_branch_opens_first_conflicted_file(cx: &mut TestAppContext) {
     init_gpui_test(cx);
@@ -17019,10 +17002,7 @@ mod tests {
     await_git_page_background_tasks(git_page.clone(), cx).await;
 
     let is_placeholder = git_page.read_with(cx, |this, _cx| {
-      matches!(
-        this.binary_preview,
-        Some(BinaryPreview::UnsupportedBinary)
-      )
+      matches!(this.binary_preview, Some(BinaryPreview::UnsupportedBinary))
     });
     let preview_bounds = cx
       .debug_bounds(crate::file_view::BINARY_PREVIEW_DEBUG_SELECTOR)
@@ -18319,7 +18299,6 @@ mod tests {
     );
   }
 
-  #[cfg(not(target_os = "linux"))]
   #[gpui::test]
   async fn commit_changes_inner_stages_and_commits_when_ready(cx: &mut TestAppContext) {
     init_gpui_test(cx);
@@ -18368,7 +18347,6 @@ mod tests {
     assert!(input_value.is_empty());
   }
 
-  #[cfg(not(target_os = "linux"))]
   #[gpui::test]
   async fn commit_input_secondary_enter_stages_and_commits_when_ready(cx: &mut TestAppContext) {
     init_gpui_test(cx);
@@ -18401,13 +18379,15 @@ mod tests {
     cx.cx.run_until_parked();
     cx.run_until_parked();
 
-    let commit_task = git_page.update_in(cx, |this, _window, _cx| {
-      this.status_task.take().expect("commit task")
-    });
-    commit_task.await;
-
-    if let Some(reload_task) = git_page.update_in(cx, |this, _window, _| this.status_task.take()) {
-      reload_task.await;
+    // The commit (and the status reload it triggers) may already be done by now on
+    // fast machines; drain whatever is still scheduled instead of assuming a state.
+    for _ in 0..4 {
+      let task = git_page.update_in(cx, |this, _window, _| this.status_task.take());
+      let Some(task) = task else {
+        break;
+      };
+      task.await;
+      cx.run_until_parked();
     }
 
     let repo_handle = Repository::open(&repo.path).expect("open repo");

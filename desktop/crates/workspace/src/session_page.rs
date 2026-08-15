@@ -28,6 +28,10 @@ use crate::agent_review::{
 use crate::agent_settings::AgentSettings;
 use crate::auth_state::AuthStateStore;
 use crate::config::ConfigStore;
+use crate::file_search_palette::open_file_search_palette;
+use crate::file_view::{
+  BinaryPreview, build_binary_preview, render_binary_preview, render_file_title,
+};
 use crate::git_page::{
   agent_chat_state_dir, agent_path_to_repo_relative, prune_agent_chat_state_once,
 };
@@ -38,8 +42,6 @@ use crate::navigation::NavigationHistory;
 use crate::notification_count::NotificationCountStore;
 use crate::review_panel::{ReviewPanel, ReviewPanelEvent};
 use crate::workspace::WorkspaceApi;
-use crate::file_search_palette::open_file_search_palette;
-use crate::file_view::{BinaryPreview, build_binary_preview, render_binary_preview, render_file_title};
 use crate::{
   CloseWorkspacePage, CommentHunk, SendReviewCommentsToAgent, ShowCommandPalette, ShowFileSearch,
 };
@@ -103,7 +105,10 @@ impl SessionPageHandle {
     });
   }
 
-  fn with_page(cx: &mut App, f: impl FnOnce(&mut SessionPage, &mut Window, &mut Context<SessionPage>)) {
+  fn with_page(
+    cx: &mut App,
+    f: impl FnOnce(&mut SessionPage, &mut Window, &mut Context<SessionPage>),
+  ) {
     let Some(page) = cx
       .try_global::<Self>()
       .and_then(|handle| handle.page.clone())
@@ -274,7 +279,9 @@ impl SessionPage {
     let backend = AgentSettings::load();
     let view = cx.new(|cx| AgentChatPanel::new(backend, cwd, state_dir, window, cx));
     // The sessions sidebar owns the conversation list; hide the panel's own controls.
-    view.update(cx, |panel, _| panel.set_conversation_controls_visible(false));
+    view.update(cx, |panel, _| {
+      panel.set_conversation_controls_visible(false)
+    });
     // Sidebar reads conversation state from the panel; re-render when it changes.
     // Also the flush point for a review export queued while the agent was connecting.
     cx.observe(&view, |this, _, cx| {
@@ -382,10 +389,8 @@ impl SessionPage {
           }
           Err(error) => {
             let _ = cx.update_window(this.window_handle, |_, window, cx| {
-              window.push_notification(
-                Notification::error(format!("Rollback failed: {error}")),
-                cx,
-              );
+              window
+                .push_notification(Notification::error(format!("Rollback failed: {error}")), cx);
             });
           }
         }
@@ -444,8 +449,7 @@ impl SessionPage {
         if this.selected_file.as_ref() != Some(&rel_path) {
           return;
         }
-        let binary_preview =
-          build_binary_preview(rel_path.as_path(), loaded.binary_bytes.clone());
+        let binary_preview = build_binary_preview(rel_path.as_path(), loaded.binary_bytes.clone());
         let editor =
           cx.new(move |cx| Editor::new_with_loaded_file(repo_root, file_path, loaded, cx));
         editor.update(cx, |editor, cx| {
@@ -467,11 +471,14 @@ impl SessionPage {
         }
         this.install_agent_review_handlers_for_editor(&editor, cx);
         this.sync_agent_review_comments_to_editor(cx);
-        cx.subscribe(&editor, |this, _editor, event: &EditorEvent, cx| match event {
-          EditorEvent::Saved => {
-            this.review_panel.update(cx, |panel, cx| panel.refresh(cx));
-          }
-        })
+        cx.subscribe(
+          &editor,
+          |this, _editor, event: &EditorEvent, cx| match event {
+            EditorEvent::Saved => {
+              this.review_panel.update(cx, |panel, cx| panel.refresh(cx));
+            }
+          },
+        )
         .detach();
         cx.notify();
       });
@@ -641,7 +648,12 @@ impl SessionPage {
     }
   }
 
-  fn update_agent_review_comment(&mut self, comment_id: u64, body: Arc<str>, cx: &mut Context<Self>) {
+  fn update_agent_review_comment(
+    &mut self,
+    comment_id: u64,
+    body: Arc<str>,
+    cx: &mut Context<Self>,
+  ) {
     if let Some(comment) = self
       .agent_review_comments
       .iter_mut()
@@ -952,9 +964,9 @@ impl SessionPage {
     }
 
     let file_label = |path: &PathBuf| path.to_string_lossy().replace(['\n', '\r'], "");
-    let changed = status_entries
-      .iter()
-      .map(|entry| SearchFileEntry::new(entry.path.clone(), file_label(&entry.path)).grouped("Changed"));
+    let changed = status_entries.iter().map(|entry| {
+      SearchFileEntry::new(entry.path.clone(), file_label(&entry.path)).grouped("Changed")
+    });
     let unchanged = git::list_repo_head_files(&repo_root)
       .unwrap_or_default()
       .into_iter()
@@ -1111,63 +1123,66 @@ impl SessionPage {
           .on_click(cx.listener(|this, _, window, cx| this.new_session(window, cx))),
       );
 
-    let rows: Vec<_> = conversations.into_iter().enumerate().map(|(ix, meta)| {
-      let is_current = meta.id == current_id;
-      let id = meta.id.clone();
-      let delete_id = meta.id.clone();
-      let title = session_row_title(&meta);
-      let time = format_relative_secs(meta.updated_at_secs, now);
-      let group_name = SharedString::from(format!("session-row-{}", meta.id));
+    let rows: Vec<_> = conversations
+      .into_iter()
+      .enumerate()
+      .map(|(ix, meta)| {
+        let is_current = meta.id == current_id;
+        let id = meta.id.clone();
+        let delete_id = meta.id.clone();
+        let title = session_row_title(&meta);
+        let time = format_relative_secs(meta.updated_at_secs, now);
+        let group_name = SharedString::from(format!("session-row-{}", meta.id));
 
-      div()
-        .id(("session-page-session-row", ix))
-        .group(group_name.clone())
-        .mx_2()
-        .px_2()
-        .py_1p5()
-        .rounded(px(6.0))
-        .cursor_pointer()
-        .when(is_current, |this| this.bg(theme.secondary_active))
-        .hover(|s| s.bg(theme.secondary_hover))
-        .on_click(cx.listener(move |this, _, window, cx| {
-          this.select_session(&id, window, cx);
-        }))
-        .child(
-          h_flex()
-            .items_center()
-            .gap_2()
-            .child(
-              div()
-                .flex_1()
-                .min_w(px(0.0))
-                .text_sm()
-                .truncate()
-                .text_color(theme.foreground)
-                .child(title),
-            )
-            .child(
-              div()
-                .text_xs()
-                .text_color(theme.muted_foreground)
-                .group_hover(group_name.clone(), |this| this.opacity(0.0))
-                .child(time),
-            )
-            .child(
-              Button::new(("session-page-session-delete", ix))
-                .icon(UiIconName::Trash)
-                .xsmall()
-                .ghost()
-                .opacity(0.0)
-                .group_hover(group_name.clone(), |this| this.opacity(1.0))
-                .tooltip("Delete session")
-                .on_click(cx.listener(move |this, _, _, cx| {
-                  cx.stop_propagation();
-                  this.delete_session(&delete_id, cx);
-                })),
-            ),
-        )
-    })
-    .collect();
+        div()
+          .id(("session-page-session-row", ix))
+          .group(group_name.clone())
+          .mx_2()
+          .px_2()
+          .py_1p5()
+          .rounded(px(6.0))
+          .cursor_pointer()
+          .when(is_current, |this| this.bg(theme.secondary_active))
+          .hover(|s| s.bg(theme.secondary_hover))
+          .on_click(cx.listener(move |this, _, window, cx| {
+            this.select_session(&id, window, cx);
+          }))
+          .child(
+            h_flex()
+              .items_center()
+              .gap_2()
+              .child(
+                div()
+                  .flex_1()
+                  .min_w(px(0.0))
+                  .text_sm()
+                  .truncate()
+                  .text_color(theme.foreground)
+                  .child(title),
+              )
+              .child(
+                div()
+                  .text_xs()
+                  .text_color(theme.muted_foreground)
+                  .group_hover(group_name.clone(), |this| this.opacity(0.0))
+                  .child(time),
+              )
+              .child(
+                Button::new(("session-page-session-delete", ix))
+                  .icon(UiIconName::Trash)
+                  .xsmall()
+                  .ghost()
+                  .opacity(0.0)
+                  .group_hover(group_name.clone(), |this| this.opacity(1.0))
+                  .tooltip("Delete session")
+                  .on_click(cx.listener(move |this, _, _, cx| {
+                    cx.stop_propagation();
+                    this.delete_session(&delete_id, cx);
+                  })),
+              ),
+          )
+      })
+      .collect();
 
     let github_section = AuthStateStore::has_github_access(cx).then(|| {
       let notification_count = NotificationCountStore::get(cx);
@@ -1192,11 +1207,7 @@ impl SessionPage {
             h_flex()
               .items_center()
               .gap_2()
-              .child(
-                Icon::new(icon)
-                  .size_3()
-                  .text_color(theme.muted_foreground),
-              )
+              .child(Icon::new(icon).size_3().text_color(theme.muted_foreground))
               .child(
                 div()
                   .flex_1()
@@ -1344,7 +1355,11 @@ impl SessionPage {
 
   fn render_conversation(&mut self, cx: &mut Context<Self>) -> AnyElement {
     let theme = cx.theme().clone();
-    let mut container = div().size_full().min_w(px(0.0)).min_h_0().bg(theme.background);
+    let mut container = div()
+      .size_full()
+      .min_w(px(0.0))
+      .min_h_0()
+      .bg(theme.background);
     if let Some(view) = self.agent_chat_view.clone() {
       container = container.child(view);
     }
@@ -1558,7 +1573,10 @@ mod tests {
   fn session_row_title_falls_back_when_empty() {
     assert_eq!(session_row_title(&meta_with_title("")), "New session");
     assert_eq!(session_row_title(&meta_with_title("   ")), "New session");
-    assert_eq!(session_row_title(&meta_with_title("Fix scroll")), "Fix scroll");
+    assert_eq!(
+      session_row_title(&meta_with_title("Fix scroll")),
+      "Fix scroll"
+    );
   }
 
   struct TempRepo {
@@ -1634,8 +1652,9 @@ mod tests {
     repo_root: PathBuf,
     cx: &mut TestAppContext,
   ) -> (Entity<SessionPage>, &mut gpui::VisualTestContext) {
+    // The recent-repository store is process-global, so parallel tests would race
+    // over it; the repo is set on the page explicitly below instead.
     isolate_config_store_for_test();
-    ConfigStore::persist_recent_repository(&repo_root);
     cx.update(|cx| {
       gpui_component::init(cx);
       if !cx.has_global::<crate::config::AppSettings>() {
@@ -1656,7 +1675,14 @@ mod tests {
       let empty = cx.new(|_| EmptyTestView);
       gpui_component::Root::new(empty, window, cx)
     });
-    (mounted.expect("session page"), cx)
+    let page = mounted.expect("session page");
+    page.update(cx, |page, cx| {
+      page.selected_repo = Some(repo_root.clone());
+      page
+        .review_panel
+        .update(cx, |panel, _| panel.set_repo_root(Some(repo_root.clone())));
+    });
+    (page, cx)
   }
 
   async fn await_open_file(page: &Entity<SessionPage>, cx: &mut gpui::VisualTestContext) {

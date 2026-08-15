@@ -7,8 +7,8 @@ use gpui::{AnyElement, Image, ObjectFit, SharedString, div, img, prelude::*, px}
 use gpui_component::{ActiveTheme as _, Icon, IconName, h_flex, v_flex};
 
 use crate::file_preview::{
-  file_preview_kind, raster_image_from_bytes, should_show_unsupported_binary_placeholder,
-  FilePreviewKind,
+  FilePreviewKind, file_preview_kind, raster_image_from_bytes,
+  should_show_unsupported_binary_placeholder,
 };
 use ui::{FILE_ICON_SIZE_PX, StatusThemeExt as _, file_icon_path_for_path_with_theme};
 
@@ -210,7 +210,10 @@ mod tests {
 
   #[test]
   fn file_name_label_uses_file_name_and_strips_newlines() {
-    assert_eq!(file_name_label(Path::new("src/main.rs")).as_ref(), "main.rs");
+    assert_eq!(
+      file_name_label(Path::new("src/main.rs")).as_ref(),
+      "main.rs"
+    );
     assert_eq!(file_name_label(Path::new("a/b\nc.rs")).as_ref(), "bc.rs");
     assert_eq!(file_name_label(Path::new("")).as_ref(), "Untitled");
   }

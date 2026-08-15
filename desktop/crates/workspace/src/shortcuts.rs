@@ -22,8 +22,8 @@ use crate::{
   OpenGithubPage, OpenRepository, OpenSettingsPage, PreviousAnnotation, PreviousPageTab,
   PreviousPrCommit, PreviousReviewComment, PullChanges, PushChanges, RefreshCurrentPage,
   RestoreFile, RestoreHunk, SendReviewCommentsToAgent, ShowBranchSwitcher, ShowCommandPalette,
-  ShowFileSearch, SwitchToPrBranch, ToggleCommitByCommit, ToggleDiffView,
-  ToggleFileStage, ToggleHideWhitespace, ToggleHunkStage, ToggleTerminalSidebar,
+  ShowFileSearch, SwitchToPrBranch, ToggleCommitByCommit, ToggleDiffView, ToggleFileStage,
+  ToggleHideWhitespace, ToggleHunkStage, ToggleTerminalSidebar,
 };
 
 pub const SHOW_COMMAND_PALETTE_SHORTCUT: &str = "cmd-k";

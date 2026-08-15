@@ -14,11 +14,12 @@ pub use cursor_blink::CursorBlink;
 pub use document::Document;
 pub use editor::{
   ConflictNavigationDirection, ConflictNavigationState, ConflictResolution, DiffViewMode, Editor,
-  EditorEvent, HunkAction, HunkNavigationDirection, HunkNavigationState, ReviewCommentCancelHandler,
-  ReviewCommentCodeReferencePreview, ReviewCommentCreateHandler, ReviewCommentCreateRequest,
-  ReviewCommentDeleteHandler, ReviewCommentDisplayMode, ReviewCommentEditHandler,
-  ReviewCommentImageUploadHandler, ReviewCommentLinkHandler, ReviewCommentMode,
-  ReviewCommentPreviewRenderer, ReviewCommentResolveHandler, ReviewCommentSuggestionActionFactory,
+  EditorEvent, HunkAction, HunkNavigationDirection, HunkNavigationState,
+  ReviewCommentCancelHandler, ReviewCommentCodeReferencePreview, ReviewCommentCreateHandler,
+  ReviewCommentCreateRequest, ReviewCommentDeleteHandler, ReviewCommentDisplayMode,
+  ReviewCommentEditHandler, ReviewCommentImageUploadHandler, ReviewCommentLinkHandler,
+  ReviewCommentMode, ReviewCommentPreviewRenderer, ReviewCommentResolveHandler,
+  ReviewCommentSuggestionActionFactory,
 };
 pub use editor_element::{EditorElement, PositionMap, benchmark_word_diff_ranges};
 pub use gutter_element::GutterElement;

@@ -17776,6 +17776,7 @@ mod tests {
       cx.notify();
     });
 
+    cx.run_until_parked();
     let editor_bounds = cx
       .debug_bounds(GITHUB_PR_MARKDOWN_PREVIEW_EDITOR_DEBUG_SELECTOR)
       .expect("pr preview editor pane bounds")
@@ -17829,6 +17830,7 @@ mod tests {
         Some(GithubPrBinaryPreview::RasterImage(_))
       )
     });
+    cx.run_until_parked();
     let preview_bounds = cx
       .debug_bounds(GITHUB_PR_BINARY_PREVIEW_RENDER_DEBUG_SELECTOR)
       .expect("binary preview render pane bounds")
@@ -17897,6 +17899,7 @@ mod tests {
         Some(GithubPrBinaryPreview::RasterImage(_))
       )
     });
+    cx.run_until_parked();
     let preview_bounds = cx
       .debug_bounds(GITHUB_PR_BINARY_PREVIEW_RENDER_DEBUG_SELECTOR)
       .expect("binary preview render pane bounds")
@@ -17933,6 +17936,7 @@ mod tests {
         Some(GithubPrBinaryPreview::UnsupportedBinary)
       )
     });
+    cx.run_until_parked();
     let preview_bounds = cx
       .debug_bounds(GITHUB_PR_BINARY_PREVIEW_RENDER_DEBUG_SELECTOR)
       .expect("binary preview placeholder bounds")
@@ -17958,6 +17962,7 @@ mod tests {
       cx.notify();
     });
 
+    cx.run_until_parked();
     let button_bounds = cx
       .debug_bounds("github-pr-merge-button")
       .expect("merge button bounds")
@@ -17976,6 +17981,7 @@ mod tests {
       cx.notify();
     });
 
+    cx.run_until_parked();
     let count_bounds = cx
       .debug_bounds("github-pr-changes-tab-count")
       .expect("changes tab count bounds")
@@ -18042,6 +18048,7 @@ mod tests {
       cx.notify();
     });
 
+    cx.run_until_parked();
     let created_updated_separator_bounds = cx
       .debug_bounds("github-pr-overview-created-updated-separator")
       .expect("created and updated separator bounds")
@@ -18198,6 +18205,7 @@ mod tests {
       ));
       cx.notify();
     });
+    cx.run_until_parked();
 
     assert!(cx.debug_bounds("github-pr-status-action-button").is_none());
     assert!(cx.debug_bounds("github-pr-merge-button").is_none());
@@ -18219,6 +18227,7 @@ mod tests {
       ));
       cx.notify();
     });
+    cx.run_until_parked();
 
     assert!(cx.debug_bounds("github-pr-merge-button").is_none());
     assert!(cx.debug_bounds("github-pr-review-button").is_some());
@@ -19002,7 +19011,9 @@ mod tests {
     // The deferred command has run by now; the switch it started may still be in
     // flight (fast machines finish it inside run_until_parked), so only await when
     // the task is still around.
-    let switch_task = page.update_in(cx, |this, _window, _cx| this.local_branch_switch_task.take());
+    let switch_task = page.update_in(cx, |this, _window, _cx| {
+      this.local_branch_switch_task.take()
+    });
     if let Some(switch_task) = switch_task {
       switch_task.await;
     }
