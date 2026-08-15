@@ -3412,8 +3412,7 @@ impl Render for AgentChatPanel {
                   )
                   .child(if self.in_flight {
                     Button::new("agent-chat-stop")
-                      .icon(UiIconName::Square)
-                      .tooltip("Stop")
+                      .icon(UiIconName::Stop)
                       .small()
                       .rounded(px(999.))
                       .danger()
@@ -3421,7 +3420,6 @@ impl Render for AgentChatPanel {
                   } else {
                     Button::new("agent-chat-send")
                       .icon(UiIconName::ArrowUp)
-                      .tooltip("Send")
                       .small()
                       .rounded(px(999.))
                       .primary()
