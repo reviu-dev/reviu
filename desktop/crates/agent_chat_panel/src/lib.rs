@@ -59,6 +59,15 @@ enum ChatRole {
   ReviewExport,
 }
 
+/// A session config select flattened for the composer trigger.
+struct ConfigSelector {
+  id: SessionConfigId,
+  name: SharedString,
+  current_value: SessionConfigValueId,
+  current_label: String,
+  values: Vec<(SessionConfigValueId, String, Option<String>)>,
+}
+
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 struct ChatMessage {
   role: ChatRole,
@@ -234,6 +243,8 @@ enum Status {
 
 const MENTION_MENU_MAX_ITEMS: usize = 10;
 const MAX_REPO_FILES: usize = 20_000;
+/// Caps the conversation and the composer to a readable measure on wide windows.
+const CONVERSATION_COLUMN_MAX_WIDTH_PX: f32 = 720.0;
 
 /// Code selected in the Git diff view, pushed in to attach as `@selection` context.
 #[derive(Clone, Debug)]
@@ -290,6 +301,9 @@ pub struct AgentChatPanel {
   available_models: Vec<ModelInfo>,
   current_model_id: Option<ModelId>,
   config_options: Vec<SessionConfigOption>,
+  /// First value each option was advertised with; the composer trigger stays
+  /// muted while every option still sits on it.
+  config_defaults: HashMap<SessionConfigId, SessionConfigValueId>,
   _connect_task: Option<Task<()>>,
   _events_task: Option<Task<()>>,
   _permission_task: Option<Task<()>>,
@@ -363,6 +377,7 @@ impl AgentChatPanel {
       available_models: Vec::new(),
       current_model_id: None,
       config_options: Vec::new(),
+      config_defaults: HashMap::new(),
       _connect_task: None,
       _events_task: None,
       _permission_task: None,
@@ -421,7 +436,7 @@ impl AgentChatPanel {
             panel.current_mode_id = info.current_mode_id;
             panel.available_models = info.available_models;
             panel.current_model_id = info.current_model_id;
-            panel.config_options = info.config_options;
+            panel.set_config_options(info.config_options);
             panel.apply_saved_model_choice(cx);
             if let Some(sid) = info.session_id {
               panel.current_conv.session_id = Some(sid);
@@ -629,6 +644,17 @@ impl AgentChatPanel {
         div().into_any_element()
       }
     };
+    let element = div()
+      .w_full()
+      .flex()
+      .justify_center()
+      .child(
+        div()
+          .w_full()
+          .max_w(px(CONVERSATION_COLUMN_MAX_WIDTH_PX))
+          .child(element),
+      )
+      .into_any_element();
     if list_ix == 0 {
       div().pt_3().child(element).into_any_element()
     } else {
@@ -1131,7 +1157,7 @@ impl AgentChatPanel {
         self.current_mode_id = Some(u.current_mode_id);
       }
       AgentEvent::ConfigOptionUpdate(u) => {
-        self.config_options = u.config_options;
+        self.set_config_options(u.config_options);
       }
       AgentEvent::Plan(plan) => {
         self.apply_plan(plan);
@@ -1284,6 +1310,19 @@ impl AgentChatPanel {
       return;
     };
     self.set_model(model.model_id.clone(), cx);
+  }
+
+  fn set_config_options(&mut self, options: Vec<SessionConfigOption>) {
+    for option in &options {
+      let SessionConfigKind::Select(sel) = &option.kind else {
+        continue;
+      };
+      self
+        .config_defaults
+        .entry(option.id.clone())
+        .or_insert_with(|| sel.current_value.clone());
+    }
+    self.config_options = options;
   }
 
   fn set_config_option(
@@ -1771,6 +1810,7 @@ impl AgentChatPanel {
     self.available_models.clear();
     self.current_model_id = None;
     self.config_options.clear();
+    self.config_defaults.clear();
     self.status = Status::Connecting;
     if let BackendAvailability::MissingBinary {
       command,
@@ -1811,7 +1851,7 @@ impl AgentChatPanel {
             panel.current_mode_id = info.current_mode_id;
             panel.available_models = info.available_models;
             panel.current_model_id = info.current_model_id;
-            panel.config_options = info.config_options;
+            panel.set_config_options(info.config_options);
             panel.apply_saved_model_choice(cx);
             if let Some(sid) = info.session_id {
               panel.current_conv.session_id = Some(sid);
@@ -2979,9 +3019,11 @@ impl AgentChatPanel {
 }
 
 impl Render for AgentChatPanel {
-  fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+  fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
     let theme = cx.theme().clone();
     let theme = &theme;
+    // The composer box owns the focus ring now that the textarea is bare.
+    let composer_focused = self.input.focus_handle(cx).is_focused(window);
 
     let _ = SharedString::from("");
 
@@ -3256,60 +3298,76 @@ impl Render for AgentChatPanel {
         }
       })
       .child(
-        v_flex()
+        div()
           .flex_shrink_0()
-          .p_2()
-          .gap_2()
+          .w_full()
+          .flex()
+          .justify_center()
+          .p_3()
           .bg(theme.sidebar)
-          .border_t_1()
-          .border_color(theme.border)
           .child(
-            div()
-              .id("agent-mention-input")
-              .relative()
+            v_flex()
               .w_full()
-              .capture_action(cx.listener(|panel, action: &input::Enter, window, cx| {
-                panel.mention_on_enter(action, window, cx);
-              }))
-              .capture_action(cx.listener(|panel, _: &input::MoveUp, _, cx| {
-                panel.mention_on_move(-1, cx);
-              }))
-              .capture_action(cx.listener(|panel, _: &input::MoveDown, _, cx| {
-                panel.mention_on_move(1, cx);
-              }))
-              .capture_action(cx.listener(|panel, _: &input::Escape, _, cx| {
-                panel.mention_on_escape(cx);
-              }))
-              .child(Textarea::new(&self.input).w_full())
-              .child(self.render_mention_overlay(cx)),
-          )
-          .child(
-            h_flex()
-              .items_center()
-              .justify_between()
-              .gap_2()
+              .max_w(px(CONVERSATION_COLUMN_MAX_WIDTH_PX))
+              .px_2()
+              .py_1p5()
+              .gap_1()
+              .rounded(theme.radius_lg)
+              .border_1()
+              .border_color(if composer_focused {
+                theme.ring
+              } else {
+                theme.border
+              })
+              .bg(theme.background)
+              .child(
+                div()
+                  .id("agent-mention-input")
+                  .relative()
+                  .w_full()
+                  .capture_action(cx.listener(|panel, action: &input::Enter, window, cx| {
+                    panel.mention_on_enter(action, window, cx);
+                  }))
+                  .capture_action(cx.listener(|panel, _: &input::MoveUp, _, cx| {
+                    panel.mention_on_move(-1, cx);
+                  }))
+                  .capture_action(cx.listener(|panel, _: &input::MoveDown, _, cx| {
+                    panel.mention_on_move(1, cx);
+                  }))
+                  .capture_action(cx.listener(|panel, _: &input::Escape, _, cx| {
+                    panel.mention_on_escape(cx);
+                  }))
+                  .child(Textarea::new(&self.input).appearance(false).w_full())
+                  .child(self.render_mention_overlay(cx)),
+              )
               .child(
                 h_flex()
-                  .gap_1()
-                  .flex_wrap()
-                  .child(self.render_model_selector(cx))
-                  .child(self.render_mode_selector(cx))
-                  .children(self.render_config_option_selectors(cx)),
-              )
-              .child(if self.in_flight {
-                Button::new("agent-chat-stop")
-                  .label("Stop")
-                  .small()
-                  .danger()
-                  .on_click(cx.listener(|panel, _, _, cx| panel.cancel(cx)))
-              } else {
-                Button::new("agent-chat-send")
-                  .label("Send")
-                  .small()
-                  .primary()
-                  .disabled(!matches!(self.status, Status::Ready))
-                  .on_click(cx.listener(|panel, _, window, cx| panel.submit(window, cx)))
-              }),
+                  .items_center()
+                  .justify_between()
+                  .gap_2()
+                  .child(
+                    h_flex()
+                      .gap_1()
+                      .flex_wrap()
+                      .child(self.render_model_selector(cx))
+                      .child(self.render_mode_selector(cx))
+                      .children(self.render_config_selector(cx)),
+                  )
+                  .child(if self.in_flight {
+                    Button::new("agent-chat-stop")
+                      .label("Stop")
+                      .small()
+                      .danger()
+                      .on_click(cx.listener(|panel, _, _, cx| panel.cancel(cx)))
+                  } else {
+                    Button::new("agent-chat-send")
+                      .label("Send")
+                      .small()
+                      .primary()
+                      .disabled(!matches!(self.status, Status::Ready))
+                      .on_click(cx.listener(|panel, _, window, cx| panel.submit(window, cx)))
+                  }),
+              ),
           ),
       )
   }
@@ -3395,21 +3453,82 @@ impl AgentChatPanel {
       .into_any_element()
   }
 
-  fn render_config_option_selectors(&self, cx: &mut Context<Self>) -> Vec<gpui::AnyElement> {
-    let mut out: Vec<gpui::AnyElement> = Vec::new();
-    for opt in &self.config_options {
-      if matches!(
+  /// Every non-model, non-mode select option collapses into one trigger showing
+  /// the effective values, so the composer keeps two named controls instead of a
+  /// row of bare dropdowns.
+  fn render_config_selector(&self, cx: &mut Context<Self>) -> Option<gpui::AnyElement> {
+    let options = self.selectable_config_options();
+    if options.is_empty() {
+      return None;
+    }
+
+    let summary: SharedString = config_summary(&options).into();
+    let customized = config_customized(&options, &self.config_defaults);
+    let entity = cx.entity().downgrade();
+
+    Some(
+      Button::new("agent-chat-config")
+        .label(summary)
+        .icon(IconName::ChevronDown)
+        .xsmall()
+        .ghost()
+        .when(!customized, |this| {
+          this.text_color(cx.theme().muted_foreground)
+        })
+        .dropdown_menu_with_anchor(Anchor::BottomLeft, move |menu, _, _| {
+          let mut menu = menu.max_h(px(420.)).scrollable(true);
+          for (ix, option) in options.iter().enumerate() {
+            if ix > 0 {
+              menu = menu.separator();
+            }
+            menu = menu.label(option.name.clone());
+            for (value_id, name, description) in option.values.iter() {
+              let value_id = value_id.clone();
+              let name: SharedString = name.clone().into();
+              let description: Option<SharedString> = description.clone().map(Into::into);
+              let entity = entity.clone();
+              let config_id = option.id.clone();
+              let is_current = value_id == option.current_value;
+              menu = menu.item(
+                PopupMenuItem::element(move |_, cx| {
+                  render_selector_item(name.clone(), description.clone(), is_current, cx)
+                })
+                .on_click(move |_, _, cx| {
+                  let value_id = value_id.clone();
+                  let config_id = config_id.clone();
+                  let _ = entity.update(cx, |panel, cx| {
+                    panel.set_config_option(config_id, value_id, cx)
+                  });
+                }),
+              );
+            }
+          }
+          menu
+        })
+        .into_any_element(),
+    )
+  }
+
+  fn selectable_config_options(&self) -> Vec<ConfigSelector> {
+    selectable_config_options(&self.config_options)
+  }
+}
+
+/// The non-model, non-mode selects the composer collapses behind one trigger.
+fn selectable_config_options(options: &[SessionConfigOption]) -> Vec<ConfigSelector> {
+  options
+    .iter()
+    .filter(|opt| {
+      !matches!(
         opt.category,
         Some(SessionConfigOptionCategory::Model) | Some(SessionConfigOptionCategory::Mode)
-      ) {
-        continue;
-      }
+      )
+    })
+    .filter_map(|opt| {
       let SessionConfigKind::Select(sel) = &opt.kind else {
-        continue;
+        return None;
       };
-      let config_id = opt.id.clone();
-      let current_value = sel.current_value.clone();
-      let flat_options: Vec<(SessionConfigValueId, String, Option<String>)> = match &sel.options {
+      let values: Vec<(SessionConfigValueId, String, Option<String>)> = match &sel.options {
         SessionConfigSelectOptions::Ungrouped(opts) => opts
           .iter()
           .map(|o| (o.value.clone(), o.name.clone(), o.description.clone()))
@@ -3424,49 +3543,44 @@ impl AgentChatPanel {
           .collect(),
         _ => Vec::new(),
       };
-      let current_label: SharedString = flat_options
+      if values.is_empty() {
+        return None;
+      }
+      let current_label = values
         .iter()
-        .find(|(v, _, _)| v == &current_value)
-        .map(|(_, n, _)| n.clone().into())
-        .unwrap_or_else(|| opt.name.clone().into());
-      let button_id = SharedString::from(format!("agent-chat-cfg-{}", opt.id.0));
-      let opt_label: SharedString = format!("Select {}", opt.name.to_lowercase()).into();
-      let entity = cx.entity().downgrade();
-      let is_empty = flat_options.is_empty();
-      let button = Button::new(button_id)
-        .label(current_label)
-        .icon(IconName::ChevronDown)
-        .xsmall()
-        .ghost()
-        .disabled(is_empty)
-        .dropdown_menu_with_anchor(Anchor::BottomLeft, move |menu, _, _| {
-          let mut menu = menu.label(opt_label.clone());
-          for (value_id, name, description) in flat_options.iter() {
-            let value_id = value_id.clone();
-            let name: SharedString = name.clone().into();
-            let description: Option<SharedString> = description.clone().map(Into::into);
-            let entity = entity.clone();
-            let config_id = config_id.clone();
-            let is_current = value_id == current_value;
-            menu = menu.item(
-              PopupMenuItem::element(move |_, cx| {
-                render_selector_item(name.clone(), description.clone(), is_current, cx)
-              })
-              .on_click(move |_, _, cx| {
-                let value_id = value_id.clone();
-                let config_id = config_id.clone();
-                let _ = entity.update(cx, |panel, cx| {
-                  panel.set_config_option(config_id, value_id, cx)
-                });
-              }),
-            );
-          }
-          menu
-        });
-      out.push(button.into_any_element());
-    }
-    out
-  }
+        .find(|(value, _, _)| *value == sel.current_value)
+        .map(|(_, name, _)| name.clone())
+        .unwrap_or_else(|| opt.name.clone());
+      Some(ConfigSelector {
+        id: opt.id.clone(),
+        name: opt.name.clone().into(),
+        current_value: sel.current_value.clone(),
+        current_label,
+        values,
+      })
+    })
+    .collect()
+}
+
+/// The composer trigger label: every option's effective value, joined.
+fn config_summary(selectors: &[ConfigSelector]) -> String {
+  selectors
+    .iter()
+    .map(|selector| selector.current_label.as_str())
+    .collect::<Vec<_>>()
+    .join(" · ")
+}
+
+/// True once any option moved off the value the agent first advertised.
+fn config_customized(
+  selectors: &[ConfigSelector],
+  defaults: &HashMap<SessionConfigId, SessionConfigValueId>,
+) -> bool {
+  selectors.iter().any(|selector| {
+    defaults
+      .get(&selector.id)
+      .is_some_and(|default| *default != selector.current_value)
+  })
 }
 
 fn mention_labels(candidate: &MentionCandidate) -> (String, String) {
@@ -3605,7 +3719,9 @@ fn diff_text(diff: anyhow::Result<String>) -> String {
 #[cfg(test)]
 mod tests {
   use super::*;
-  use agent_client_protocol::schema::{ToolCallLocation, ToolCallUpdateFields};
+  use agent_client_protocol::schema::{
+    SessionConfigSelect, SessionConfigSelectOption, ToolCallLocation, ToolCallUpdateFields,
+  };
 
   fn call(id: &str, title: &str, kind: ToolKind) -> ToolCall {
     let arc: std::sync::Arc<str> = std::sync::Arc::from(id);
@@ -4190,6 +4306,129 @@ mod tests {
       ),
       "GPT-5.5"
     );
+  }
+
+  fn select_option(
+    id: &str,
+    name: &str,
+    current: &str,
+    values: &[&str],
+    category: Option<SessionConfigOptionCategory>,
+  ) -> SessionConfigOption {
+    let mut option = SessionConfigOption::new(
+      SessionConfigId::new(std::sync::Arc::from(id)),
+      name.to_string(),
+      SessionConfigKind::Select(SessionConfigSelect::new(
+        SessionConfigValueId::new(std::sync::Arc::from(current)),
+        values
+          .iter()
+          .map(|value| {
+            SessionConfigSelectOption::new(
+              SessionConfigValueId::new(std::sync::Arc::from(*value)),
+              value.to_string(),
+            )
+          })
+          .collect::<Vec<_>>(),
+      )),
+    );
+    option.category = category;
+    option
+  }
+
+  #[test]
+  fn selectable_config_options_skips_model_and_mode_categories() {
+    let options = vec![
+      select_option(
+        "model",
+        "Model",
+        "gpt-5.5",
+        &["gpt-5.5"],
+        Some(SessionConfigOptionCategory::Model),
+      ),
+      select_option(
+        "mode",
+        "Mode",
+        "agent",
+        &["agent"],
+        Some(SessionConfigOptionCategory::Mode),
+      ),
+      select_option("effort", "Reasoning effort", "low", &["low", "high"], None),
+    ];
+
+    let selectors = selectable_config_options(&options);
+
+    assert_eq!(selectors.len(), 1);
+    assert_eq!(selectors[0].name.as_ref(), "Reasoning effort");
+    assert_eq!(selectors[0].current_label, "low");
+  }
+
+  #[test]
+  fn selectable_config_options_falls_back_to_the_option_name_for_unknown_values() {
+    let options = vec![select_option(
+      "sandbox",
+      "Sandbox",
+      "gone",
+      &["off", "on"],
+      None,
+    )];
+
+    let selectors = selectable_config_options(&options);
+
+    assert_eq!(selectors[0].current_label, "Sandbox");
+  }
+
+  #[test]
+  fn config_summary_joins_effective_values() {
+    let options = vec![
+      select_option("effort", "Effort", "high", &["low", "high"], None),
+      select_option("sandbox", "Sandbox", "off", &["off", "on"], None),
+    ];
+
+    let selectors = selectable_config_options(&options);
+
+    assert_eq!(config_summary(&selectors), "high · off");
+    assert_eq!(config_summary(&[]), "");
+  }
+
+  #[test]
+  fn config_customized_only_when_a_value_left_its_advertised_default() {
+    let options = vec![select_option(
+      "effort",
+      "Effort",
+      "low",
+      &["low", "high"],
+      None,
+    )];
+    let selectors = selectable_config_options(&options);
+    let mut defaults = HashMap::new();
+    defaults.insert(
+      selectors[0].id.clone(),
+      SessionConfigValueId::new(std::sync::Arc::from("low")),
+    );
+
+    assert!(!config_customized(&selectors, &defaults));
+
+    let changed = selectable_config_options(&[select_option(
+      "effort",
+      "Effort",
+      "high",
+      &["low", "high"],
+      None,
+    )]);
+    assert!(config_customized(&changed, &defaults));
+  }
+
+  #[test]
+  fn config_customized_is_false_without_a_recorded_default() {
+    let selectors = selectable_config_options(&[select_option(
+      "effort",
+      "Effort",
+      "high",
+      &["low", "high"],
+      None,
+    )]);
+
+    assert!(!config_customized(&selectors, &HashMap::new()));
   }
 
   #[test]

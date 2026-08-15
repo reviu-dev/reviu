@@ -52,6 +52,10 @@ The pull request Overview is now a summary, not a second GitHub. It keeps what y
 
 Reviu no longer asks for an OpenAI or Anthropic API key, and the AI settings are gone: nothing to configure, no key to hand over. The two features that used it go with it, the AI pull request brief and the generate-commit-message button. Your agent already reads the repository and the diff in the session, so a summary or a commit message is one prompt away, with the model you already pay for.
 
+### A Calmer Conversation And Composer
+
+The agent conversation now reads in a centered column instead of stretching across the whole window, so long answers stay readable however wide you work. The composer is one box again: the message field and its controls share a single frame that lights up when you type in it. The agent's extra settings (reasoning effort, sandbox, approvals) collapse from a row of unlabeled dropdowns into one control that shows what is actually in effect, like `high · off`, and only stands out once you change something.
+
 ## 0.18.0
 
 ### No More Failed Single Comments During A Review
