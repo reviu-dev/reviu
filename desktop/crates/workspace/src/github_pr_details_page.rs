@@ -79,6 +79,7 @@ use crate::{
     GithubIssueReferenceTargetKind, GithubPullRequestChecksRollupState,
     GithubPullRequestChecksSummary, GithubPullRequestCommit, GithubPullRequestConversation,
     GithubPullRequestDescriptionUpdate, GithubPullRequestDetails, GithubPullRequestFile,
+    GithubPullRequestFilterOptionLabel, GithubPullRequestFilterOptionUser,
     GithubPullRequestIssueComment, GithubPullRequestIssueCommentUser, GithubPullRequestLabel,
     GithubPullRequestMergeMethod, GithubPullRequestMergeReadiness,
     GithubPullRequestMergeReadinessStatus, GithubPullRequestMergeResult, GithubPullRequestReview,
@@ -95,13 +96,10 @@ use crate::{
   },
   file_search_palette::open_file_search_palette as open_shared_file_search_palette,
   git_page::GitPageHandle,
-  github_home_tabs::{GithubPullRequestFilterOptionLabel, GithubPullRequestFilterOptionUser},
   github_navigation::{
     SamePrGfmNavigation, open_commit_target, open_pr_target, open_profile_target, open_repo_target,
     same_pr_gfm_navigation, should_open_externally,
   },
-  github_page::GithubPageHandle,
-  github_repo_page::GithubRepoPageHandle,
   github_shared,
   navigation::NavigationHistory,
   sentry_context,
@@ -3097,10 +3095,6 @@ impl GithubPrDetailsPageHandle {
     });
   }
 
-  pub fn show(owner: SharedString, repo: SharedString, number: u64, cx: &mut App) {
-    Self::show_with_open_target_inner(owner, repo, number, GithubPrOpenTarget::default(), cx);
-  }
-
   pub fn show_with_open_target(
     owner: SharedString,
     repo: SharedString,
@@ -5251,9 +5245,6 @@ impl GithubPrDetailsPage {
             this.refocus_page_shortcuts(window, cx);
             this.add_pr_breadcrumb("Merge pull request succeeded", Map::new());
             this.reload_current_pull_request(cx);
-            if AuthStateStore::has_github_access(cx) {
-              GithubPageHandle::refresh(cx);
-            }
             cx.refresh_windows();
           }
           Ok(result) => {
@@ -7188,9 +7179,6 @@ impl GithubPrDetailsPage {
             this.add_pr_breadcrumb("Commit suggested change succeeded", Map::new());
             this.file_contents.remove(modified_path.as_ref());
             this.refresh_current_page(cx);
-            if AuthStateStore::has_github_access(cx) {
-              GithubPageHandle::refresh(cx);
-            }
             cx.refresh_windows();
           }
           Err(error) => {
@@ -7363,9 +7351,6 @@ impl GithubPrDetailsPage {
             }
             this.refresh_pull_request_conversation_for_current_pull_request(false, cx);
             this.add_pr_breadcrumb("Submit PR review succeeded", Map::new());
-            if AuthStateStore::has_github_access(cx) {
-              GithubPageHandle::refresh(cx);
-            }
             cx.refresh_windows();
           }
           Err(error) => {
@@ -14518,7 +14503,7 @@ impl GithubPrDetailsPage {
               .compact()
               .label(repo_label)
               .on_click(move |_, _, cx| {
-                GithubRepoPageHandle::show(repo_owner.clone().into(), repo_name.clone().into(), cx);
+                open_repo_target(repo_owner.clone(), repo_name.clone(), None, None, None, cx);
               }),
           );
 
@@ -16372,13 +16357,12 @@ impl GithubPrDetailsPage {
         );
         Ok(())
       }
-      CommandPaletteAction::OpenGitPage => {
-        NavigationHistory::navigate("/git", cx);
+      CommandPaletteAction::OpenSessionPage => {
+        NavigationHistory::navigate("/session", cx);
         Ok(())
       }
-      CommandPaletteAction::OpenGithubPage => {
-        GithubPageHandle::refresh(cx);
-        NavigationHistory::navigate("/github", cx);
+      CommandPaletteAction::OpenGitPage => {
+        NavigationHistory::navigate("/git", cx);
         Ok(())
       }
       CommandPaletteAction::OpenGithubPrDetails {
@@ -20214,7 +20198,6 @@ mod tests {
       author: crate::api::GithubPullRequestAuthor {
         login: "author".to_string(),
         avatar_url: None,
-        is_bot: false,
       },
       assignees: Vec::new(),
       requested_reviewers: Vec::new(),

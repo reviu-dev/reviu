@@ -8,10 +8,6 @@ use std::sync::{Arc, Mutex};
 
 use crate::AppProfile;
 use crate::crash_report::StartupCrashReport;
-use crate::github_home_tabs::{
-  GithubIssueSearchFilters, GithubIssueSearchSort, GithubPullRequestFilterOptionUser,
-  GithubPullRequestFilterOptions, GithubPullRequestSearchFilters, GithubPullRequestSearchSort,
-};
 use crate::sentry_context;
 
 const DEFAULT_API_BASE_URL: &str = "http://localhost:3001";
@@ -393,20 +389,6 @@ pub struct GithubRepository {
 }
 
 #[derive(Clone, Debug, Deserialize)]
-pub struct GithubUserRepository {
-  pub owner: String,
-  pub repo: String,
-  #[serde(rename = "full_name")]
-  pub full_name: String,
-  pub description: Option<String>,
-  pub private: bool,
-  #[serde(default, rename = "owner_avatar_url")]
-  pub owner_avatar_url: Option<String>,
-  #[serde(rename = "updated_at")]
-  pub updated_at: String,
-}
-
-#[derive(Clone, Debug, Deserialize)]
 pub struct GithubRepositorySearchItem {
   pub owner: String,
   pub name: String,
@@ -459,7 +441,6 @@ pub enum GithubIssueStateReason {
 #[derive(Clone, Debug, Deserialize)]
 pub struct GithubIssueUser {
   pub login: String,
-  pub name: Option<String>,
   #[serde(rename = "avatar_url")]
   pub avatar_url: Option<String>,
 }
@@ -549,112 +530,9 @@ pub struct GithubIssueDescriptionUpdate {
 }
 
 #[derive(Clone, Debug, Deserialize)]
-pub struct GithubRepositoryDetailsOwner {
-  pub login: String,
-  #[serde(rename = "avatar_url")]
-  pub avatar_url: Option<String>,
-}
-
-#[derive(Clone, Debug, Deserialize)]
-#[allow(dead_code)]
-pub struct GithubRepositoryLicense {
-  pub key: String,
-  pub name: String,
-  #[serde(rename = "spdx_id")]
-  pub spdx_id: Option<String>,
-}
-
-#[derive(Clone, Debug, Deserialize)]
-#[allow(dead_code)]
 pub struct GithubRepositoryDetails {
-  #[serde(rename = "node_id", default)]
-  pub node_id: String,
-  pub name: String,
-  #[serde(rename = "full_name")]
-  pub full_name: String,
-  #[serde(rename = "viewer_has_starred", default)]
-  pub viewer_has_starred: bool,
-  pub description: Option<String>,
-  pub homepage: Option<String>,
-  pub language: Option<String>,
   #[serde(rename = "default_branch")]
   pub default_branch: String,
-  #[serde(rename = "stargazers_count")]
-  pub stargazers_count: u64,
-  #[serde(rename = "forks_count")]
-  pub forks_count: u64,
-  #[serde(rename = "subscribers_count")]
-  pub subscribers_count: u64,
-  #[serde(rename = "viewer_subscription_mode", default)]
-  pub viewer_subscription_mode: RepoSubscriptionMode,
-  pub size: u64,
-  #[serde(rename = "pushed_at")]
-  pub pushed_at: Option<String>,
-  #[serde(rename = "html_url")]
-  pub html_url: String,
-  pub owner: GithubRepositoryDetailsOwner,
-  pub license: Option<GithubRepositoryLicense>,
-  #[serde(default)]
-  pub languages: Vec<GithubRepositoryLanguage>,
-  #[serde(rename = "recent_commits", default)]
-  pub recent_commits: Vec<GithubRepositoryCommit>,
-  #[serde(default)]
-  pub contributors: Vec<GithubRepositoryContributor>,
-  #[serde(rename = "contributors_count", default)]
-  pub contributors_count: u64,
-}
-
-#[derive(Clone, Debug, Deserialize)]
-pub struct GithubRepositoryCommit {
-  pub sha: String,
-  pub message: String,
-  #[serde(rename = "committed_at")]
-  pub committed_at: String,
-  #[serde(rename = "author_login")]
-  pub author_login: Option<String>,
-  #[serde(rename = "author_avatar_url")]
-  pub author_avatar_url: Option<String>,
-  #[serde(default)]
-  pub authors: Vec<GithubCommitAuthorIdentity>,
-}
-
-#[derive(Clone, Debug, Deserialize)]
-pub struct GithubRepositoryContributor {
-  pub login: String,
-  #[serde(rename = "avatar_url")]
-  pub avatar_url: String,
-}
-
-#[derive(Clone, Debug, Deserialize)]
-pub struct GithubStarResult {
-  #[serde(rename = "viewer_has_starred")]
-  pub viewer_has_starred: bool,
-  #[serde(rename = "stargazers_count")]
-  pub stargazers_count: u64,
-}
-
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum RepoSubscriptionMode {
-  #[default]
-  Default,
-  All,
-  Ignore,
-}
-
-impl RepoSubscriptionMode {
-  pub fn as_str(self) -> &'static str {
-    match self {
-      Self::Default => "default",
-      Self::All => "all",
-      Self::Ignore => "ignore",
-    }
-  }
-}
-
-#[derive(Clone, Debug, Deserialize)]
-struct RepoSubscriptionStateResponse {
-  mode: RepoSubscriptionMode,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -775,25 +653,38 @@ pub struct GithubRepositoryReadme {
   pub path: Option<String>,
 }
 
+#[derive(Clone, Debug, Default, PartialEq, Eq, Deserialize)]
+pub struct GithubPullRequestFilterOptionLabel {
+  pub name: String,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq, Deserialize)]
+pub struct GithubPullRequestFilterOptionUser {
+  pub login: String,
+  #[serde(rename = "avatar_url")]
+  pub avatar_url: Option<String>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq, Deserialize)]
+pub struct GithubPullRequestFilterOptions {
+  #[serde(default)]
+  pub labels: Vec<GithubPullRequestFilterOptionLabel>,
+  #[serde(default)]
+  pub authors: Vec<GithubPullRequestFilterOptionUser>,
+  #[serde(default)]
+  pub assignees: Vec<GithubPullRequestFilterOptionUser>,
+}
+
 #[derive(Clone, Debug, Deserialize)]
 pub struct GithubPullRequest {
   pub number: u64,
   pub title: String,
   pub state: GithubPullRequestState,
-  #[serde(rename = "created_at", default)]
-  pub created_at: String,
-  #[serde(rename = "closed_at")]
-  pub closed_at: Option<String>,
   #[serde(rename = "merged_at")]
   pub merged_at: Option<String>,
   pub draft: bool,
-  #[serde(rename = "updated_at")]
-  pub updated_at: String,
   #[serde(rename = "comments_count", default)]
   pub comments_count: u64,
-  #[serde(default)]
-  pub author: GithubPullRequestAuthor,
-  pub labels: Vec<GithubPullRequestLabel>,
   pub repository: GithubRepository,
 }
 
@@ -813,8 +704,6 @@ pub struct GithubPullRequestAuthor {
   pub login: String,
   #[serde(rename = "avatar_url")]
   pub avatar_url: Option<String>,
-  #[serde(rename = "is_bot", default)]
-  pub is_bot: bool,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -851,21 +740,6 @@ pub struct GithubPullRequestCommit {
 }
 
 #[derive(Clone, Debug, Deserialize)]
-pub struct GithubCommitUser {
-  pub login: String,
-  #[serde(rename = "avatar_url")]
-  pub avatar_url: Option<String>,
-}
-
-#[derive(Clone, Debug, Deserialize)]
-pub struct GithubCommitStats {
-  pub additions: u64,
-  pub deletions: u64,
-  #[allow(dead_code)]
-  pub total: u64,
-}
-
-#[derive(Clone, Debug, Deserialize)]
 #[allow(dead_code)]
 pub struct GithubCommitAssociatedPullRequest {
   pub number: u64,
@@ -876,28 +750,6 @@ pub struct GithubCommitAssociatedPullRequest {
   #[serde(rename = "html_url")]
   #[allow(dead_code)]
   pub html_url: String,
-}
-
-#[derive(Clone, Debug, Deserialize)]
-pub struct GithubCommitDetails {
-  pub sha: String,
-  pub message: String,
-  #[serde(rename = "html_url")]
-  pub html_url: String,
-  #[serde(rename = "authored_at")]
-  pub authored_at: Option<String>,
-  #[serde(rename = "committed_at")]
-  pub committed_at: Option<String>,
-  #[serde(rename = "parent_sha")]
-  pub parent_sha: Option<String>,
-  pub author: Option<GithubCommitUser>,
-  pub committer: Option<GithubCommitUser>,
-  #[serde(default)]
-  pub authors: Vec<GithubCommitAuthorIdentity>,
-  pub stats: Option<GithubCommitStats>,
-  pub files: Vec<GithubPullRequestFile>,
-  #[serde(rename = "associated_pull_request", default)]
-  pub associated_pull_request: Option<GithubCommitAssociatedPullRequest>,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -1481,54 +1333,6 @@ struct SubmitFeedbackRequest<'a> {
 }
 
 #[derive(Debug, Deserialize)]
-struct GithubPullRequestsResponse {
-  #[serde(rename = "pullRequests")]
-  pull_requests: Vec<GithubPullRequest>,
-}
-
-#[derive(Debug, Deserialize)]
-#[allow(dead_code)]
-pub struct GithubRepositoryPullRequestsResponse {
-  #[serde(rename = "pullRequests")]
-  pub pull_requests: Vec<GithubPullRequest>,
-  #[serde(rename = "pullRequestCount")]
-  pub pull_request_count: u64,
-  #[serde(default = "default_page")]
-  pub page: u64,
-  #[serde(rename = "perPage", default = "default_per_page")]
-  pub per_page: u64,
-  #[serde(rename = "totalPages", default = "default_page")]
-  pub total_pages: u64,
-}
-
-fn default_page() -> u64 {
-  1
-}
-
-fn default_per_page() -> u64 {
-  30
-}
-
-#[derive(Debug, Serialize)]
-struct GithubPullRequestSearchRequest<'a> {
-  filters: &'a GithubPullRequestSearchFilters,
-}
-
-#[derive(Debug, Deserialize)]
-#[allow(dead_code)]
-pub struct GithubRepositoryIssuesResponse {
-  pub issues: Vec<GithubIssue>,
-  #[serde(rename = "issueCount")]
-  pub issue_count: u64,
-  #[serde(default = "default_page")]
-  pub page: u64,
-  #[serde(rename = "perPage", default = "default_per_page")]
-  pub per_page: u64,
-  #[serde(rename = "totalPages", default = "default_page")]
-  pub total_pages: u64,
-}
-
-#[derive(Debug, Deserialize)]
 struct GithubPullRequestFilterOptionsResponse {
   options: GithubPullRequestFilterOptions,
 }
@@ -1536,107 +1340,6 @@ struct GithubPullRequestFilterOptionsResponse {
 #[derive(Debug, Serialize)]
 struct GithubPullRequestFilterOptionsRequest<'a> {
   repos: &'a [String],
-}
-
-fn github_pull_request_search_sort_query(sort: GithubPullRequestSearchSort) -> &'static str {
-  match sort {
-    GithubPullRequestSearchSort::UpdatedDesc => "updated_desc",
-    GithubPullRequestSearchSort::CreatedDesc => "created_desc",
-    GithubPullRequestSearchSort::CreatedAsc => "created_asc",
-    GithubPullRequestSearchSort::CommentsDesc => "comments_desc",
-  }
-}
-
-fn github_pull_request_review_status_query(
-  status: crate::github_home_tabs::GithubPullRequestReviewStatus,
-) -> &'static str {
-  match status {
-    crate::github_home_tabs::GithubPullRequestReviewStatus::Any => "any",
-    crate::github_home_tabs::GithubPullRequestReviewStatus::None => "none",
-    crate::github_home_tabs::GithubPullRequestReviewStatus::Required => "required",
-    crate::github_home_tabs::GithubPullRequestReviewStatus::Approved => "approved",
-    crate::github_home_tabs::GithubPullRequestReviewStatus::ChangesRequested => "changes_requested",
-  }
-}
-
-fn github_repository_pull_request_filter_query(
-  filters: &GithubPullRequestSearchFilters,
-) -> Vec<(String, String)> {
-  let mut query = Vec::new();
-
-  for label in &filters.labels {
-    query.push(("label".to_string(), label.clone()));
-  }
-  for label in &filters.excluded_labels {
-    query.push(("exclude_label".to_string(), label.clone()));
-  }
-  for author in &filters.authors {
-    query.push(("author".to_string(), author.clone()));
-  }
-  for assignee in &filters.assignees {
-    query.push(("assignee".to_string(), assignee.clone()));
-  }
-  for reviewer in &filters.requested_reviewers {
-    query.push(("requested_reviewer".to_string(), reviewer.clone()));
-  }
-
-  if filters.review_status != crate::github_home_tabs::GithubPullRequestReviewStatus::Any {
-    query.push((
-      "review_status".to_string(),
-      github_pull_request_review_status_query(filters.review_status).to_string(),
-    ));
-  }
-
-  if !filters.include_drafts {
-    query.push(("include_drafts".to_string(), "false".to_string()));
-  }
-
-  if let Some(base) = filters.base.as_ref().filter(|base| !base.trim().is_empty()) {
-    query.push(("base".to_string(), base.trim().to_string()));
-  }
-
-  if filters.sort != GithubPullRequestSearchSort::UpdatedDesc {
-    query.push((
-      "sort".to_string(),
-      github_pull_request_search_sort_query(filters.sort).to_string(),
-    ));
-  }
-
-  query
-}
-
-fn github_issue_search_sort_query(sort: GithubIssueSearchSort) -> &'static str {
-  match sort {
-    GithubIssueSearchSort::UpdatedDesc => "updated_desc",
-    GithubIssueSearchSort::CreatedDesc => "created_desc",
-    GithubIssueSearchSort::CreatedAsc => "created_asc",
-    GithubIssueSearchSort::CommentsDesc => "comments_desc",
-  }
-}
-
-fn github_repository_issue_filter_query(
-  filters: &GithubIssueSearchFilters,
-) -> Vec<(String, String)> {
-  let mut query = Vec::new();
-
-  for label in &filters.labels {
-    query.push(("label".to_string(), label.clone()));
-  }
-  for author in &filters.authors {
-    query.push(("author".to_string(), author.clone()));
-  }
-  for assignee in &filters.assignees {
-    query.push(("assignee".to_string(), assignee.clone()));
-  }
-
-  if filters.sort != GithubIssueSearchSort::UpdatedDesc {
-    query.push((
-      "sort".to_string(),
-      github_issue_search_sort_query(filters.sort).to_string(),
-    ));
-  }
-
-  query
 }
 
 #[derive(Debug, Deserialize)]
@@ -1672,11 +1375,6 @@ struct GithubPullRequestLabelsMutationRequest<'a> {
 }
 
 #[derive(Debug, Deserialize)]
-struct GithubUserRepositoriesResponse {
-  repositories: Vec<GithubUserRepository>,
-}
-
-#[derive(Debug, Deserialize)]
 struct GithubRepositorySearchResponse {
   repositories: Vec<GithubRepositorySearchItem>,
 }
@@ -1699,21 +1397,6 @@ struct CreateRepositoryRequest<'a> {
   private: bool,
 }
 
-#[derive(Debug, Serialize)]
-struct ForkRepositoryRequest<'a> {
-  #[serde(skip_serializing_if = "Option::is_none")]
-  organization: Option<&'a str>,
-  #[serde(skip_serializing_if = "Option::is_none")]
-  name: Option<&'a str>,
-  #[serde(rename = "defaultBranchOnly")]
-  default_branch_only: bool,
-}
-
-#[derive(Debug, Deserialize)]
-struct GithubIssueDetailsResponse {
-  issue: GithubIssueDetails,
-}
-
 #[derive(Debug, Deserialize)]
 struct GithubIssueReferenceTargetResponse {
   target: GithubIssueReferenceTarget,
@@ -1722,11 +1405,6 @@ struct GithubIssueReferenceTargetResponse {
 #[derive(Debug, Deserialize)]
 struct GithubIssueCommentResponse {
   comment: GithubIssueDetailsComment,
-}
-
-#[derive(Debug, Deserialize)]
-struct GithubIssueDescriptionUpdateResponse {
-  issue: GithubIssueDescriptionUpdate,
 }
 
 #[derive(Debug, Deserialize)]
@@ -1796,11 +1474,6 @@ struct GithubPullRequestFilesResponse {
 #[derive(Debug, Deserialize)]
 struct GithubPullRequestCommitsResponse {
   commits: Vec<GithubPullRequestCommit>,
-}
-
-#[derive(Debug, Deserialize)]
-struct GithubCommitDetailsResponse {
-  commit: GithubCommitDetails,
 }
 
 #[derive(Debug, Deserialize, Default)]
@@ -1994,15 +1667,6 @@ struct EnableGithubPullRequestAutoMergeRequest<'a> {
 #[derive(Debug, Deserialize)]
 struct GithubFileContentResponse {
   content: Option<String>,
-}
-
-#[derive(Clone, Debug, Deserialize)]
-pub struct GithubFileCommit {
-  pub message: Option<String>,
-  #[allow(dead_code)]
-  pub sha: Option<String>,
-  #[allow(dead_code)]
-  pub html_url: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -2399,26 +2063,6 @@ impl ApiClient {
     Ok(payload.message)
   }
 
-  pub fn fetch_github_pull_requests(
-    &self,
-    filters: &GithubPullRequestSearchFilters,
-  ) -> Result<Vec<GithubPullRequest>> {
-    let response = self
-      .authed_request(Method::POST, "/github/pr/search")
-      .json(&GithubPullRequestSearchRequest { filters })
-      .send()?;
-    let status = response.status();
-    Self::record_http_status("POST", "/github/pr/search", status);
-    if status == StatusCode::UNAUTHORIZED {
-      anyhow::bail!("unauthorized")
-    }
-    if !status.is_success() {
-      anyhow::bail!("unexpected status: {}", status);
-    }
-    let payload = response.json::<GithubPullRequestsResponse>()?;
-    Ok(payload.pull_requests)
-  }
-
   pub fn fetch_github_pull_request_filter_options(
     &self,
     repos: &[String],
@@ -2437,36 +2081,6 @@ impl ApiClient {
     }
     let payload = response.json::<GithubPullRequestFilterOptionsResponse>()?;
     Ok(payload.options)
-  }
-
-  pub fn fetch_github_user_repositories(&self) -> Result<Vec<GithubUserRepository>> {
-    let response = self
-      .authed_request(Method::GET, "/github/repos/me")
-      .send()?;
-    let status = response.status();
-    Self::record_http_status("GET", "/github/repos/me", status);
-    if status == StatusCode::UNAUTHORIZED {
-      anyhow::bail!("unauthorized")
-    }
-    if !status.is_success() {
-      anyhow::bail!("unexpected status: {}", status);
-    }
-    let payload = response.json::<GithubUserRepositoriesResponse>()?;
-    Ok(payload.repositories)
-  }
-
-  pub fn fetch_github_user_profile(&self, login: &str) -> Result<GithubUserProfile> {
-    let route = format!("/github/users/{login}");
-    let response = self.authed_request(Method::GET, route.as_str()).send()?;
-    let status = response.status();
-    Self::record_http_status("GET", route.as_str(), status);
-    if status == StatusCode::UNAUTHORIZED {
-      anyhow::bail!("unauthorized")
-    }
-    if !status.is_success() {
-      return Err(Self::api_error_from_response(response));
-    }
-    response.json::<GithubUserProfile>().map_err(Into::into)
   }
 
   pub fn search_github_repositories(&self, query: &str) -> Result<Vec<GithubRepositorySearchItem>> {
@@ -2534,40 +2148,6 @@ impl ApiClient {
     Ok(payload.repository)
   }
 
-  pub fn fork_github_repository(
-    &self,
-    source_owner: &str,
-    source_repo: &str,
-    target_owner: &CreateRepositoryOwner,
-    name: Option<&str>,
-    default_branch_only: bool,
-  ) -> Result<GithubCreatedRepository> {
-    let route = format!("/github/repos/{source_owner}/{source_repo}/forks");
-    let organization = match target_owner {
-      CreateRepositoryOwner::Viewer => None,
-      CreateRepositoryOwner::Organization(org) => Some(org.as_str()),
-    };
-    let trimmed_name = name.map(str::trim).filter(|v| !v.is_empty());
-    let response = self
-      .authed_request(Method::POST, route.as_str())
-      .json(&ForkRepositoryRequest {
-        organization,
-        name: trimmed_name,
-        default_branch_only,
-      })
-      .send()?;
-    let status = response.status();
-    Self::record_http_status("POST", route.as_str(), status);
-    if status == StatusCode::UNAUTHORIZED {
-      anyhow::bail!("unauthorized")
-    }
-    if !status.is_success() {
-      return Err(Self::api_error_from_response(response));
-    }
-    let payload = response.json::<GithubCreatedRepositoryResponse>()?;
-    Ok(payload.repository)
-  }
-
   pub fn fetch_github_repository_details(
     &self,
     owner: &str,
@@ -2585,97 +2165,6 @@ impl ApiClient {
     }
     let payload = response.json::<GithubRepositoryDetails>()?;
     Ok(payload)
-  }
-
-  pub fn fetch_github_commit(
-    &self,
-    owner: &str,
-    repo: &str,
-    sha: &str,
-  ) -> Result<GithubCommitDetails> {
-    let response = self
-      .authed_request(Method::GET, "/github/commit")
-      .query(&[("org", owner), ("repo", repo), ("sha", sha)])
-      .send()?;
-    let status = response.status();
-    Self::record_http_status("GET", "/github/commit", status);
-    if status == StatusCode::UNAUTHORIZED {
-      anyhow::bail!("unauthorized")
-    }
-    if !status.is_success() {
-      anyhow::bail!("unexpected status: {}", status);
-    }
-    let payload = response.json::<GithubCommitDetailsResponse>()?;
-    Ok(payload.commit)
-  }
-
-  pub fn star_github_repository(
-    &self,
-    owner: &str,
-    repo: &str,
-    node_id: &str,
-  ) -> Result<GithubStarResult> {
-    let route = format!("/github/repos/{owner}/{repo}/star");
-    let response = self
-      .authed_request(Method::PUT, route.as_str())
-      .query(&[("node_id", node_id)])
-      .send()?;
-    let status = response.status();
-    Self::record_http_status("PUT", route.as_str(), status);
-    if status == StatusCode::UNAUTHORIZED {
-      anyhow::bail!("unauthorized")
-    }
-    if !status.is_success() {
-      anyhow::bail!("unexpected status: {}", status);
-    }
-    let payload = response.json::<GithubStarResult>()?;
-    Ok(payload)
-  }
-
-  pub fn unstar_github_repository(
-    &self,
-    owner: &str,
-    repo: &str,
-    node_id: &str,
-  ) -> Result<GithubStarResult> {
-    let route = format!("/github/repos/{owner}/{repo}/star");
-    let response = self
-      .authed_request(Method::DELETE, route.as_str())
-      .query(&[("node_id", node_id)])
-      .send()?;
-    let status = response.status();
-    Self::record_http_status("DELETE", route.as_str(), status);
-    if status == StatusCode::UNAUTHORIZED {
-      anyhow::bail!("unauthorized")
-    }
-    if !status.is_success() {
-      anyhow::bail!("unexpected status: {}", status);
-    }
-    let payload = response.json::<GithubStarResult>()?;
-    Ok(payload)
-  }
-
-  pub fn set_github_repository_subscription(
-    &self,
-    owner: &str,
-    repo: &str,
-    mode: RepoSubscriptionMode,
-  ) -> Result<RepoSubscriptionMode> {
-    let route = format!("/github/repos/{owner}/{repo}/subscription");
-    let response = self
-      .authed_request(Method::PUT, route.as_str())
-      .json(&serde_json::json!({ "mode": mode.as_str() }))
-      .send()?;
-    let status = response.status();
-    Self::record_http_status("PUT", route.as_str(), status);
-    if status == StatusCode::UNAUTHORIZED {
-      anyhow::bail!("unauthorized")
-    }
-    if !status.is_success() {
-      return Err(Self::api_error_from_response(response));
-    }
-    let payload = response.json::<RepoSubscriptionStateResponse>()?;
-    Ok(payload.mode)
   }
 
   pub fn fetch_github_repository_tree(
@@ -2718,94 +2207,6 @@ impl ApiClient {
     }
     let payload = response.json::<Vec<GithubRepositoryBranch>>()?;
     Ok(payload)
-  }
-
-  pub fn fetch_github_repository_readme(
-    &self,
-    owner: &str,
-    repo: &str,
-    reference: Option<&str>,
-  ) -> Result<Option<GithubRepositoryReadme>> {
-    let route = format!("/github/repos/{owner}/{repo}/readme");
-    let request = self.authed_request(Method::GET, route.as_str());
-    let request =
-      if let Some(reference) = reference.map(str::trim).filter(|value| !value.is_empty()) {
-        request.query(&[("ref", reference)])
-      } else {
-        request
-      };
-    let response = request.send()?;
-    let status = response.status();
-    Self::record_http_status("GET", route.as_str(), status);
-    if status == StatusCode::UNAUTHORIZED {
-      anyhow::bail!("unauthorized")
-    }
-    if status == StatusCode::NOT_FOUND {
-      return Ok(None);
-    }
-    if !status.is_success() {
-      anyhow::bail!("unexpected status: {}", status);
-    }
-    let payload = response.json::<GithubRepositoryReadme>()?;
-    Ok(Some(payload))
-  }
-
-  pub fn fetch_github_repository_pull_requests(
-    &self,
-    owner: &str,
-    repo: &str,
-    filters: &GithubPullRequestSearchFilters,
-    state: &str,
-    page: u64,
-  ) -> Result<GithubRepositoryPullRequestsResponse> {
-    let route = format!("/github/repos/{owner}/{repo}/pr");
-    let mut query = github_repository_pull_request_filter_query(filters);
-    query.push(("state".to_string(), state.to_string()));
-    query.push(("page".to_string(), page.to_string()));
-    let response = self
-      .authed_request(Method::GET, route.as_str())
-      .query(&query)
-      .send()?;
-    let status = response.status();
-    Self::record_http_status("GET", route.as_str(), status);
-    if status == StatusCode::UNAUTHORIZED {
-      anyhow::bail!("unauthorized")
-    }
-    if !status.is_success() {
-      anyhow::bail!("unexpected status: {}", status);
-    }
-    response
-      .json::<GithubRepositoryPullRequestsResponse>()
-      .map_err(Into::into)
-  }
-
-  pub fn fetch_github_repository_issues(
-    &self,
-    owner: &str,
-    repo: &str,
-    state: &str,
-    filters: &GithubIssueSearchFilters,
-    page: u64,
-  ) -> Result<GithubRepositoryIssuesResponse> {
-    let route = format!("/github/repos/{owner}/{repo}/issues");
-    let mut query = github_repository_issue_filter_query(filters);
-    query.push(("state".to_string(), state.to_string()));
-    query.push(("page".to_string(), page.to_string()));
-    let response = self
-      .authed_request(Method::GET, route.as_str())
-      .query(&query)
-      .send()?;
-    let status = response.status();
-    Self::record_http_status("GET", route.as_str(), status);
-    if status == StatusCode::UNAUTHORIZED {
-      anyhow::bail!("unauthorized")
-    }
-    if !status.is_success() {
-      anyhow::bail!("unexpected status: {}", status);
-    }
-    response
-      .json::<GithubRepositoryIssuesResponse>()
-      .map_err(Into::into)
   }
 
   pub fn fetch_pull_request_for_branch(
@@ -2867,26 +2268,6 @@ impl ApiClient {
       .ok_or_else(|| anyhow::anyhow!("Missing pull request in response"))
   }
 
-  pub fn fetch_github_repository_issue_details(
-    &self,
-    owner: &str,
-    repo: &str,
-    number: u64,
-  ) -> Result<GithubIssueDetails> {
-    let route = format!("/github/repos/{owner}/{repo}/issues/{number}");
-    let response = self.authed_request(Method::GET, route.as_str()).send()?;
-    let status = response.status();
-    Self::record_http_status("GET", route.as_str(), status);
-    if status == StatusCode::UNAUTHORIZED {
-      anyhow::bail!("unauthorized")
-    }
-    if !status.is_success() {
-      anyhow::bail!("unexpected status: {}", status);
-    }
-    let payload = response.json::<GithubIssueDetailsResponse>()?;
-    Ok(payload.issue)
-  }
-
   pub fn resolve_github_issue_reference_target(
     &self,
     owner: &str,
@@ -2905,30 +2286,6 @@ impl ApiClient {
     }
     let payload = response.json::<GithubIssueReferenceTargetResponse>()?;
     Ok(payload.target)
-  }
-
-  pub fn update_issue_description(
-    &self,
-    owner: &str,
-    repo: &str,
-    issue_number: u64,
-    body: &str,
-  ) -> Result<GithubIssueDescriptionUpdate> {
-    let route = format!("/github/repos/{owner}/{repo}/issues/{issue_number}");
-    let response = self
-      .authed_request(Method::PATCH, route.as_str())
-      .json(&UpdateGithubDescriptionRequest { body })
-      .send()?;
-    let status = response.status();
-    Self::record_http_status("PATCH", route.as_str(), status);
-    if status == StatusCode::UNAUTHORIZED {
-      anyhow::bail!("unauthorized")
-    }
-    if !status.is_success() {
-      anyhow::bail!("unexpected status: {}", status);
-    }
-    let payload = response.json::<GithubIssueDescriptionUpdateResponse>()?;
-    Ok(payload.issue)
   }
 
   pub fn create_issue_comment(
@@ -3610,62 +2967,6 @@ impl ApiClient {
     Ok(payload.reactions)
   }
 
-  pub fn add_issue_reaction(
-    &self,
-    owner: &str,
-    repo: &str,
-    issue_number: u64,
-    subject_id: &str,
-    content: GithubReactionContent,
-  ) -> Result<Vec<GithubReactionGroup>> {
-    let route = format!("/github/repos/{owner}/{repo}/issues/{issue_number}/reactions");
-    let response = self
-      .authed_request(Method::POST, route.as_str())
-      .json(&GithubReactionMutationRequest {
-        subject_id,
-        content,
-      })
-      .send()?;
-    let status = response.status();
-    Self::record_http_status("POST", route.as_str(), status);
-    if status == StatusCode::UNAUTHORIZED {
-      anyhow::bail!("unauthorized")
-    }
-    if !status.is_success() {
-      return Err(Self::api_error_from_response(response));
-    }
-    let payload = response.json::<GithubReactionGroupsResponse>()?;
-    Ok(payload.reactions)
-  }
-
-  pub fn remove_issue_reaction(
-    &self,
-    owner: &str,
-    repo: &str,
-    issue_number: u64,
-    subject_id: &str,
-    content: GithubReactionContent,
-  ) -> Result<Vec<GithubReactionGroup>> {
-    let route = format!("/github/repos/{owner}/{repo}/issues/{issue_number}/reactions");
-    let response = self
-      .authed_request(Method::DELETE, route.as_str())
-      .json(&GithubReactionMutationRequest {
-        subject_id,
-        content,
-      })
-      .send()?;
-    let status = response.status();
-    Self::record_http_status("DELETE", route.as_str(), status);
-    if status == StatusCode::UNAUTHORIZED {
-      anyhow::bail!("unauthorized")
-    }
-    if !status.is_success() {
-      return Err(Self::api_error_from_response(response));
-    }
-    let payload = response.json::<GithubReactionGroupsResponse>()?;
-    Ok(payload.reactions)
-  }
-
   pub fn update_pull_request_review_comment(
     &self,
     owner: &str,
@@ -4149,33 +3450,6 @@ impl ApiClient {
     Ok(payload.content)
   }
 
-  pub fn fetch_github_file_commit(
-    &self,
-    owner: &str,
-    repo: &str,
-    path: &str,
-    reference: &str,
-  ) -> Result<GithubFileCommit> {
-    let response = self
-      .authed_request(Method::GET, "/github/file/commit")
-      .query(&[
-        ("org", owner),
-        ("repo", repo),
-        ("path", path),
-        ("ref", reference),
-      ])
-      .send()?;
-    let status = response.status();
-    Self::record_http_status("GET", "/github/file/commit", status);
-    if status == StatusCode::UNAUTHORIZED {
-      anyhow::bail!("unauthorized")
-    }
-    if !status.is_success() {
-      anyhow::bail!("unexpected status: {}", status);
-    }
-    Ok(response.json::<GithubFileCommit>()?)
-  }
-
   pub fn fetch_github_file_asset(
     &self,
     owner: &str,
@@ -4417,21 +3691,9 @@ mod tests {
       number: 42,
       title: "Test PR".to_string(),
       state,
-      created_at: "2026-02-10T09:00:00Z".to_string(),
-      closed_at: None,
       merged_at: merged_at.map(str::to_string),
       draft,
-      updated_at: "2026-02-15T12:00:00Z".to_string(),
       comments_count: 0,
-      author: GithubPullRequestAuthor {
-        login: "octocat".to_string(),
-        avatar_url: None,
-        is_bot: false,
-      },
-      labels: vec![GithubPullRequestLabel {
-        name: "bug".to_string(),
-        color: Some("f29513".to_string()),
-      }],
       repository: GithubRepository {
         owner: "acme".to_string(),
         repo: "widget".to_string(),
@@ -4463,7 +3725,6 @@ mod tests {
       author: GithubPullRequestAuthor {
         login: "octocat".to_string(),
         avatar_url: None,
-        is_bot: false,
       },
       assignees: Vec::new(),
       requested_reviewers: Vec::new(),
@@ -4619,121 +3880,6 @@ mod tests {
   }
 
   #[test]
-  fn fetch_github_pull_requests_parses_success_payload() {
-    let body = r#"{
-      "pullRequests": [
-        {
-          "number": 7,
-          "title": "Fix login issue",
-          "state": "open",
-          "created_at": "2026-02-12T09:30:00Z",
-          "closed_at": null,
-          "merged_at": null,
-          "draft": false,
-          "updated_at": "2026-02-15T12:00:00Z",
-          "comments_count": 5,
-          "author": {
-            "login": "octocat",
-            "avatar_url": "https://example.com/octocat.png",
-            "is_bot": false
-          },
-          "labels": [{ "name": "bug", "color": "f29513" }],
-          "repository": { "owner": "acme", "repo": "widget" }
-        }
-      ]
-    }"#;
-    let (base_url, handle) = start_single_response_server("200 OK", body);
-    let api = make_test_api_client(base_url);
-    let filters = crate::github_home_tabs::GithubPullRequestSearchFilters {
-      authors: vec!["@me".to_string()],
-      ..crate::github_home_tabs::GithubPullRequestSearchFilters::default()
-    };
-
-    let prs = api
-      .fetch_github_pull_requests(&filters)
-      .expect("fetch pull requests");
-    assert_eq!(prs.len(), 1);
-    assert_eq!(prs[0].number, 7);
-    assert_eq!(prs[0].title, "Fix login issue");
-    assert!(matches!(prs[0].state, GithubPullRequestState::Open));
-    assert_eq!(prs[0].created_at, "2026-02-12T09:30:00Z");
-    assert_eq!(prs[0].comments_count, 5);
-    assert_eq!(prs[0].author.login, "octocat");
-    assert_eq!(
-      prs[0].author.avatar_url.as_deref(),
-      Some("https://example.com/octocat.png")
-    );
-    assert!(!prs[0].author.is_bot);
-    assert_eq!(prs[0].labels[0].color.as_deref(), Some("f29513"));
-    assert_eq!(prs[0].repository.owner, "acme");
-    assert_eq!(prs[0].repository.repo, "widget");
-    handle.join().expect("join server thread");
-  }
-
-  #[test]
-  fn fetch_github_pull_requests_posts_expected_route_and_payload() {
-    let body = r#"{"pullRequests":[]}"#;
-    let (base_url, request, handle) = start_single_response_server_with_request("200 OK", body);
-    let api = make_test_api_client(base_url);
-    let filters = crate::github_home_tabs::GithubPullRequestSearchFilters {
-      repos: vec!["acme/reviu".to_string()],
-      labels: vec!["bug".to_string()],
-      excluded_labels: vec!["team/reveal".to_string()],
-      authors: vec!["@me".to_string()],
-      assignees: vec!["alice".to_string()],
-      requested_reviewers: vec!["@me".to_string()],
-      review_status: crate::github_home_tabs::GithubPullRequestReviewStatus::Required,
-      include_drafts: false,
-      base: Some("main".to_string()),
-      sort: crate::github_home_tabs::GithubPullRequestSearchSort::CommentsDesc,
-    };
-
-    let _ = api
-      .fetch_github_pull_requests(&filters)
-      .expect("fetch pull requests");
-
-    handle.join().expect("join server thread");
-    let request = request
-      .lock()
-      .expect("lock request")
-      .clone()
-      .unwrap_or_default();
-    assert!(
-      request.contains("POST /github/pr/search "),
-      "request: {request}"
-    );
-    assert!(
-      request.contains("\"repos\":[\"acme/reviu\"]"),
-      "request: {request}"
-    );
-    assert!(
-      request.contains("\"labels\":[\"bug\"]"),
-      "request: {request}"
-    );
-    assert!(
-      request.contains("\"excluded_labels\":[\"team/reveal\"]"),
-      "request: {request}"
-    );
-    assert!(
-      request.contains("\"authors\":[\"@me\"]"),
-      "request: {request}"
-    );
-    assert!(
-      request.contains("\"review_status\":\"required\""),
-      "request: {request}"
-    );
-    assert!(
-      request.contains("\"include_drafts\":false"),
-      "request: {request}"
-    );
-    assert!(request.contains("\"base\":\"main\""), "request: {request}");
-    assert!(
-      request.contains("\"sort\":\"comments_desc\""),
-      "request: {request}"
-    );
-  }
-
-  #[test]
   fn fetch_github_pull_request_filter_options_parses_success_payload() {
     let body = r#"{
       "options": {
@@ -4791,215 +3937,12 @@ mod tests {
   }
 
   #[test]
-  fn fetch_github_user_repositories_parses_success_payload() {
-    let body = r#"{
-      "repositories": [
-        {
-          "owner": "acme",
-          "repo": "portal",
-          "full_name": "acme/portal",
-          "description": "Main app",
-          "private": true,
-          "owner_avatar_url": "https://example.com/acme.png",
-          "updated_at": "2026-02-20T14:12:00Z"
-        }
-      ]
-    }"#;
-    let (base_url, handle) = start_single_response_server("200 OK", body);
-    let api = make_test_api_client(base_url);
-
-    let repositories = api
-      .fetch_github_user_repositories()
-      .expect("fetch github user repositories");
-    assert_eq!(repositories.len(), 1);
-    assert_eq!(repositories[0].owner, "acme");
-    assert_eq!(repositories[0].repo, "portal");
-    assert_eq!(repositories[0].full_name, "acme/portal");
-    assert_eq!(repositories[0].description.as_deref(), Some("Main app"));
-    assert!(repositories[0].private);
-    assert_eq!(
-      repositories[0].owner_avatar_url.as_deref(),
-      Some("https://example.com/acme.png")
-    );
-    assert_eq!(repositories[0].updated_at, "2026-02-20T14:12:00Z");
-    handle.join().expect("join server thread");
-  }
-
-  #[test]
-  fn fetch_github_user_repositories_calls_expected_route_without_query_params() {
-    let body = r#"{"repositories":[]}"#;
-    let (base_url, request_line, handle) =
-      start_single_response_server_with_request_line("200 OK", body);
-    let api = make_test_api_client(base_url);
-
-    let _ = api
-      .fetch_github_user_repositories()
-      .expect("fetch github user repositories");
-
-    handle.join().expect("join server thread");
-    let request_line = request_line
-      .lock()
-      .expect("lock request line")
-      .clone()
-      .unwrap_or_default();
-    assert_eq!(request_line, "GET /github/repos/me HTTP/1.1");
-  }
-
-  #[test]
-  fn fetch_github_user_profile_parses_success_payload() {
-    let body = r##"{
-      "login": "octocat",
-      "name": "The Octocat",
-      "avatar_url": "https://avatars.githubusercontent.com/u/583231?v=4",
-      "bio": "GitHub mascot",
-      "company": "@github",
-      "location": "San Francisco",
-      "website_url": "https://github.blog",
-      "twitter_username": "octocat",
-      "html_url": "https://github.com/octocat",
-      "created_at": "2011-01-25T18:44:36Z",
-      "followers_count": 99,
-      "following_count": 5,
-      "repositories_count": 2,
-      "repositories_indexed_count": 2,
-      "repositories_truncated": false,
-      "stargazers_count": 20,
-      "forks_count": 4,
-      "languages": [
-        { "name": "TypeScript", "color": "#3178c6", "size": 1000, "percentage": 50.0 }
-      ],
-      "repositories": [
-        {
-          "owner": "octocat",
-          "repo": "hello-world",
-          "full_name": "octocat/hello-world",
-          "description": "Example repo",
-          "private": false,
-          "fork": false,
-          "archived": false,
-          "html_url": "https://github.com/octocat/hello-world",
-          "language": "TypeScript",
-          "language_color": "#3178c6",
-          "stargazers_count": 12,
-          "forks_count": 3,
-          "updated_at": "2026-04-10T10:00:00Z",
-          "pushed_at": "2026-04-10T09:00:00Z",
-          "languages": [
-            { "name": "TypeScript", "color": "#3178c6", "size": 700, "percentage": 70.0 }
-          ]
-        }
-      ]
-    }"##;
-    let (base_url, handle) = start_single_response_server("200 OK", body);
-    let api = make_test_api_client(base_url);
-
-    let profile = api
-      .fetch_github_user_profile("octocat")
-      .expect("fetch github user profile");
-
-    assert_eq!(profile.login, "octocat");
-    assert_eq!(profile.name.as_deref(), Some("The Octocat"));
-    assert_eq!(profile.followers_count, 99);
-    assert_eq!(profile.stargazers_count, 20);
-    assert_eq!(profile.languages.len(), 1);
-    assert_eq!(profile.languages[0].name, "TypeScript");
-    assert_eq!(profile.repositories.len(), 1);
-    assert_eq!(profile.repositories[0].full_name, "octocat/hello-world");
-    assert_eq!(
-      profile.repositories[0].language.as_deref(),
-      Some("TypeScript")
-    );
-    handle.join().expect("join server thread");
-  }
-
-  #[test]
-  fn fetch_github_user_profile_calls_expected_route() {
-    let body = r#"{
-      "login": "octocat",
-      "name": null,
-      "avatar_url": null,
-      "bio": null,
-      "company": null,
-      "location": null,
-      "website_url": null,
-      "twitter_username": null,
-      "html_url": "https://github.com/octocat",
-      "created_at": "2011-01-25T18:44:36Z",
-      "followers_count": 0,
-      "following_count": 0,
-      "repositories_count": 0,
-      "repositories_indexed_count": 0,
-      "repositories_truncated": false,
-      "stargazers_count": 0,
-      "forks_count": 0,
-      "languages": [],
-      "repositories": []
-    }"#;
-    let (base_url, request_line, handle) =
-      start_single_response_server_with_request_line("200 OK", body);
-    let api = make_test_api_client(base_url);
-
-    let _ = api
-      .fetch_github_user_profile("octocat")
-      .expect("fetch github user profile");
-
-    handle.join().expect("join server thread");
-    let request_line = request_line
-      .lock()
-      .expect("lock request line")
-      .clone()
-      .unwrap_or_default();
-    assert_eq!(request_line, "GET /github/users/octocat HTTP/1.1");
-  }
-
-  #[test]
-  fn fetch_github_repository_details_parses_success_payload() {
+  fn fetch_github_repository_details_parses_default_branch() {
     let body = r#"{
       "name": "widget",
       "full_name": "acme/widget",
-      "description": "A sample repository",
-      "homepage": "https://acme.dev/widget",
-      "language": "Rust",
       "default_branch": "main",
-      "stargazers_count": 123,
-      "forks_count": 45,
-      "subscribers_count": 6,
-      "open_issues_count": 7,
-      "size": 2048,
-      "pushed_at": "2026-02-20T12:00:00Z",
-      "html_url": "https://github.com/acme/widget",
-      "owner": {
-        "login": "acme",
-        "avatar_url": "https://example.com/avatar.png"
-      },
-      "recent_commits": [
-        {
-          "sha": "abc123",
-          "message": "feat: add overview authors",
-          "committed_at": "2026-04-20T12:00:00Z",
-          "author_login": "octocat",
-          "author_avatar_url": "https://example.com/octocat.png",
-          "authors": [
-            {
-              "name": "Octo Cat",
-              "email": "octocat@example.com",
-              "login": "octocat",
-              "avatar_url": "https://example.com/octocat.png"
-            },
-            {
-              "name": "Co Author",
-              "email": "coauthor@example.com",
-              "login": null,
-              "avatar_url": null
-            }
-          ]
-        }
-      ],
-      "license": {
-        "key": "mit",
-        "name": "MIT License",
-        "spdx_id": "MIT"
-      }
+      "html_url": "https://github.com/acme/widget"
     }"#;
     let (base_url, handle) = start_single_response_server("200 OK", body);
     let api = make_test_api_client(base_url);
@@ -5007,410 +3950,7 @@ mod tests {
     let details = api
       .fetch_github_repository_details("acme", "widget")
       .expect("fetch repository details");
-    assert_eq!(details.full_name, "acme/widget");
-    assert_eq!(details.owner.login, "acme");
     assert_eq!(details.default_branch, "main");
-    assert_eq!(details.stargazers_count, 123);
-    assert_eq!(details.recent_commits.len(), 1);
-    assert_eq!(details.recent_commits[0].authors.len(), 2);
-    assert_eq!(
-      details.recent_commits[0].authors[1].email.as_deref(),
-      Some("coauthor@example.com")
-    );
-    assert_eq!(
-      details
-        .license
-        .as_ref()
-        .map(|license| license.name.as_str()),
-      Some("MIT License")
-    );
-    handle.join().expect("join server thread");
-  }
-
-  #[test]
-  fn fetch_github_commit_parses_success_payload() {
-    let body = r#"{
-      "commit": {
-        "sha": "abc123",
-        "message": "feat: add commit page\n\nOpen commits in Reviu.",
-        "html_url": "https://github.com/acme/widget/commit/abc123",
-        "authored_at": "2026-03-01T10:00:00Z",
-        "committed_at": "2026-03-01T10:05:00Z",
-        "parent_sha": "parent123",
-        "author": { "login": "alice", "avatar_url": "https://example.com/alice.png" },
-        "committer": null,
-        "stats": { "additions": 12, "deletions": 3, "total": 15 },
-        "files": [
-          {
-            "filename": "src/lib.rs",
-            "status": "modified",
-            "patch": "@@ -1 +1 @@",
-            "previous_filename": null
-          }
-        ]
-      }
-    }"#;
-    let (base_url, handle) = start_single_response_server("200 OK", body);
-    let api = make_test_api_client(base_url);
-
-    let commit = api
-      .fetch_github_commit("acme", "widget", "abc123")
-      .expect("fetch commit");
-
-    assert_eq!(commit.sha, "abc123");
-    assert_eq!(commit.parent_sha.as_deref(), Some("parent123"));
-    assert_eq!(
-      commit.author.as_ref().map(|user| user.login.as_str()),
-      Some("alice")
-    );
-    assert_eq!(commit.stats.as_ref().map(|stats| stats.total), Some(15));
-    assert_eq!(commit.files.len(), 1);
-    assert_eq!(commit.files[0].filename, "src/lib.rs");
-    handle.join().expect("join server thread");
-  }
-
-  #[test]
-  fn fetch_github_commit_calls_expected_route_with_query_params() {
-    let body = r#"{
-      "commit": {
-        "sha": "abc123",
-        "message": "feat: add commit page",
-        "html_url": "https://github.com/acme/widget/commit/abc123",
-        "authored_at": null,
-        "committed_at": null,
-        "parent_sha": null,
-        "author": null,
-        "committer": null,
-        "stats": null,
-        "files": []
-      }
-    }"#;
-    let (base_url, request_line, handle) =
-      start_single_response_server_with_request_line("200 OK", body);
-    let api = make_test_api_client(base_url);
-
-    let _ = api
-      .fetch_github_commit("acme", "widget", "abc123")
-      .expect("fetch commit");
-
-    handle.join().expect("join server thread");
-    let request_line = request_line
-      .lock()
-      .expect("lock request line")
-      .clone()
-      .unwrap_or_default();
-    assert_eq!(
-      request_line,
-      "GET /github/commit?org=acme&repo=widget&sha=abc123 HTTP/1.1"
-    );
-  }
-
-  #[test]
-  fn fetch_github_repository_details_parses_languages() {
-    let body = r##"{
-      "name": "widget",
-      "full_name": "acme/widget",
-      "description": "A sample repository",
-      "homepage": null,
-      "language": "TypeScript",
-      "default_branch": "main",
-      "stargazers_count": 100,
-      "forks_count": 10,
-      "subscribers_count": 5,
-      "open_issues_count": 3,
-      "size": 1024,
-      "pushed_at": "2026-02-20T12:00:00Z",
-      "html_url": "https://github.com/acme/widget",
-      "owner": {
-        "login": "acme",
-        "avatar_url": "https://example.com/avatar.png"
-      },
-      "license": null,
-      "languages": [
-        { "name": "TypeScript", "color": "#3178c6", "size": 45230, "percentage": 78.5 },
-        { "name": "Rust", "color": "#dea584", "size": 12400, "percentage": 21.5 }
-      ]
-    }"##;
-    let (base_url, handle) = start_single_response_server("200 OK", body);
-    let api = make_test_api_client(base_url);
-
-    let details = api
-      .fetch_github_repository_details("acme", "widget")
-      .expect("fetch repository details");
-    assert_eq!(details.languages.len(), 2);
-    assert_eq!(details.languages[0].name, "TypeScript");
-    assert_eq!(details.languages[0].color.as_deref(), Some(r"#3178c6"));
-    assert_eq!(details.languages[0].percentage, 78.5);
-    assert_eq!(details.languages[1].name, "Rust");
-    handle.join().expect("join server thread");
-  }
-
-  #[test]
-  fn fetch_github_repository_details_defaults_empty_languages() {
-    let body = r#"{
-      "name": "widget",
-      "full_name": "acme/widget",
-      "description": null,
-      "homepage": null,
-      "language": null,
-      "default_branch": "main",
-      "stargazers_count": 0,
-      "forks_count": 0,
-      "subscribers_count": 0,
-      "open_issues_count": 0,
-      "size": 0,
-      "pushed_at": null,
-      "html_url": "https://github.com/acme/widget",
-      "owner": { "login": "acme", "avatar_url": null },
-      "license": null
-    }"#;
-    let (base_url, handle) = start_single_response_server("200 OK", body);
-    let api = make_test_api_client(base_url);
-
-    let details = api
-      .fetch_github_repository_details("acme", "widget")
-      .expect("fetch repository details");
-    assert!(details.languages.is_empty());
-    handle.join().expect("join server thread");
-  }
-
-  #[test]
-  fn fetch_github_repository_pull_requests_parses_success_payload() {
-    let body = r#"{
-      "pullRequests": [
-        {
-          "number": 11,
-          "title": "Improve docs",
-          "state": "open",
-          "created_at": "2026-02-11T08:00:00Z",
-          "closed_at": null,
-          "merged_at": null,
-          "draft": false,
-          "updated_at": "2026-02-15T12:00:00Z",
-          "comments_count": 7,
-          "author": {
-            "login": "docs-bot[bot]",
-            "avatar_url": null,
-            "is_bot": true
-          },
-          "labels": [{ "name": "docs", "color": "0075ca" }],
-          "repository": { "owner": "acme", "repo": "widget" }
-        }
-      ],
-      "pullRequestCount": 42
-    }"#;
-    let (base_url, handle) = start_single_response_server("200 OK", body);
-    let api = make_test_api_client(base_url);
-    let filters = GithubPullRequestSearchFilters::default();
-
-    let response = api
-      .fetch_github_repository_pull_requests("acme", "widget", &filters, "open", 1)
-      .expect("fetch repository pull requests");
-    assert_eq!(response.pull_request_count, 42);
-    assert_eq!(response.pull_requests.len(), 1);
-    assert_eq!(response.pull_requests[0].number, 11);
-    assert_eq!(response.pull_requests[0].title, "Improve docs");
-    assert_eq!(response.pull_requests[0].created_at, "2026-02-11T08:00:00Z");
-    assert_eq!(response.pull_requests[0].comments_count, 7);
-    assert_eq!(response.pull_requests[0].author.login, "docs-bot[bot]");
-    assert!(response.pull_requests[0].author.is_bot);
-    assert_eq!(
-      response.pull_requests[0].labels[0].color.as_deref(),
-      Some("0075ca")
-    );
-    assert_eq!(response.pull_requests[0].repository.owner, "acme");
-    assert_eq!(response.pull_requests[0].repository.repo, "widget");
-    handle.join().expect("join server thread");
-  }
-
-  #[test]
-  fn fetch_github_repository_pull_requests_uses_filter_query_params() {
-    let body = r#"{"pullRequests":[],"pullRequestCount":0}"#;
-    let (base_url, request_line, handle) =
-      start_single_response_server_with_request_line("200 OK", body);
-    let api = make_test_api_client(base_url);
-    let filters = GithubPullRequestSearchFilters {
-      labels: vec!["needs design".to_string()],
-      excluded_labels: vec!["team/reveal".to_string()],
-      authors: vec!["@me".to_string()],
-      assignees: vec!["alice".to_string()],
-      requested_reviewers: vec!["bob".to_string()],
-      review_status: crate::github_home_tabs::GithubPullRequestReviewStatus::ChangesRequested,
-      include_drafts: false,
-      base: Some("feature/ui".to_string()),
-      sort: GithubPullRequestSearchSort::CommentsDesc,
-      ..GithubPullRequestSearchFilters::default()
-    };
-
-    let _ = api
-      .fetch_github_repository_pull_requests("acme", "widget", &filters, "open", 1)
-      .expect("fetch repository pull requests");
-
-    handle.join().expect("join server thread");
-    let request_line = request_line
-      .lock()
-      .expect("lock request line")
-      .clone()
-      .unwrap_or_default();
-    assert!(
-      request_line.starts_with("GET /github/repos/acme/widget/pr?"),
-      "request_line: {request_line}"
-    );
-    assert!(
-      request_line.contains("label=needs+design"),
-      "request_line: {request_line}"
-    );
-    assert!(
-      request_line.contains("exclude_label=team%2Freveal"),
-      "request_line: {request_line}"
-    );
-    assert!(
-      request_line.contains("author=%40me"),
-      "request_line: {request_line}"
-    );
-    assert!(
-      request_line.contains("assignee=alice"),
-      "request_line: {request_line}"
-    );
-    assert!(
-      request_line.contains("requested_reviewer=bob"),
-      "request_line: {request_line}"
-    );
-    assert!(
-      request_line.contains("review_status=changes_requested"),
-      "request_line: {request_line}"
-    );
-    assert!(
-      request_line.contains("include_drafts=false"),
-      "request_line: {request_line}"
-    );
-    assert!(
-      request_line.contains("base=feature%2Fui"),
-      "request_line: {request_line}"
-    );
-    assert!(
-      request_line.contains("sort=comments_desc"),
-      "request_line: {request_line}"
-    );
-    assert!(
-      request_line.contains("state=open"),
-      "request_line: {request_line}"
-    );
-  }
-
-  #[test]
-  fn fetch_github_repository_issues_parses_success_payload() {
-    let body = r#"{
-      "issues": [
-        {
-          "id": 1,
-          "number": 42,
-          "title": "Fix login bug",
-          "state": "open",
-          "state_reason": null,
-          "created_at": "2026-03-01T10:00:00Z",
-          "updated_at": "2026-03-05T14:00:00Z",
-          "closed_at": null,
-          "labels": [{ "name": "bug", "color": "d73a4a" }],
-          "comments_count": 3,
-          "user": {
-            "login": "alice",
-            "avatar_url": "https://example.com/alice.png"
-          },
-          "repository": { "owner": "acme", "repo": "widget" }
-        }
-      ],
-      "issueCount": 15
-    }"#;
-    let (base_url, handle) = start_single_response_server("200 OK", body);
-    let api = make_test_api_client(base_url);
-
-    let response = api
-      .fetch_github_repository_issues(
-        "acme",
-        "widget",
-        "open",
-        &GithubIssueSearchFilters::default(),
-        1,
-      )
-      .expect("fetch repository issues");
-    assert_eq!(response.issue_count, 15);
-    assert_eq!(response.issues.len(), 1);
-    assert_eq!(response.issues[0].number, 42);
-    assert_eq!(response.issues[0].title, "Fix login bug");
-    assert_eq!(
-      response.issues[0].labels[0].color.as_deref(),
-      Some("d73a4a")
-    );
-    assert_eq!(response.issues[0].repository.owner, "acme");
-    handle.join().expect("join server thread");
-  }
-
-  #[test]
-  fn fetch_github_repository_issues_sends_state_query_param() {
-    let body = r#"{"issues":[],"issueCount":0}"#;
-    let (base_url, request_line, handle) =
-      start_single_response_server_with_request_line("200 OK", body);
-    let api = make_test_api_client(base_url);
-
-    let _ = api
-      .fetch_github_repository_issues(
-        "acme",
-        "widget",
-        "closed",
-        &GithubIssueSearchFilters::default(),
-        1,
-      )
-      .expect("fetch repository issues");
-
-    handle.join().expect("join server thread");
-    let request_line = request_line
-      .lock()
-      .expect("lock request line")
-      .clone()
-      .unwrap_or_default();
-    assert!(
-      request_line.starts_with("GET /github/repos/acme/widget/issues?"),
-      "request_line: {request_line}"
-    );
-    assert!(
-      request_line.contains("state=closed"),
-      "request_line: {request_line}"
-    );
-  }
-
-  #[test]
-  fn fetch_pull_request_for_branch_parses_success_payload() {
-    let body = r#"{
-      "pullRequest": {
-        "number": 11,
-        "title": "Improve docs",
-        "state": "open",
-        "created_at": "2026-02-11T08:00:00Z",
-        "closed_at": null,
-        "merged_at": null,
-        "draft": false,
-        "updated_at": "2026-02-15T12:00:00Z",
-        "comments_count": 7,
-        "author": {
-          "login": "docs-bot[bot]",
-          "avatar_url": null,
-          "is_bot": true
-        },
-        "labels": [{ "name": "docs" }],
-        "repository": { "owner": "acme", "repo": "widget" }
-      }
-    }"#;
-    let (base_url, handle) = start_single_response_server("200 OK", body);
-    let api = make_test_api_client(base_url);
-
-    let pull_request = api
-      .fetch_pull_request_for_branch("acme", "widget", "feature/parser")
-      .expect("fetch branch pull request")
-      .expect("pull request payload");
-    assert_eq!(pull_request.number, 11);
-    assert_eq!(pull_request.title, "Improve docs");
-    assert_eq!(pull_request.repository.owner, "acme");
     handle.join().expect("join server thread");
   }
 
@@ -5450,87 +3990,6 @@ mod tests {
       request_line,
       "GET /github/repos/acme/widget/pr/branch?branch=feature%2Fparser HTTP/1.1"
     );
-  }
-
-  #[test]
-  fn create_pull_request_parses_success_payload() {
-    let body = r#"{
-      "pullRequest": {
-        "number": 11,
-        "title": "Improve docs",
-        "state": "open",
-        "created_at": "2026-02-11T08:00:00Z",
-        "closed_at": null,
-        "merged_at": null,
-        "draft": true,
-        "updated_at": "2026-02-15T12:00:00Z",
-        "comments_count": 7,
-        "author": {
-          "login": "docs-bot[bot]",
-          "avatar_url": null,
-          "is_bot": true
-        },
-        "labels": [{ "name": "docs" }],
-        "repository": { "owner": "acme", "repo": "widget" }
-      }
-    }"#;
-    let (base_url, handle) = start_single_response_server("201 Created", body);
-    let api = make_test_api_client(base_url);
-
-    let pull_request = api
-      .create_pull_request(
-        "acme",
-        "widget",
-        "feature/parser",
-        "Improve docs",
-        "main",
-        Some("Ready to review"),
-        true,
-      )
-      .expect("create pull request");
-    assert_eq!(pull_request.number, 11);
-    assert_eq!(pull_request.title, "Improve docs");
-    assert!(pull_request.draft);
-    handle.join().expect("join server thread");
-  }
-
-  #[test]
-  fn create_pull_request_uses_expected_route_and_payload() {
-    let body = r#"{"pullRequest":{"number":11,"title":"Improve docs","state":"open","created_at":"2026-02-11T08:00:00Z","closed_at":null,"merged_at":null,"draft":false,"updated_at":"2026-02-15T12:00:00Z","comments_count":0,"author":{"login":"octocat","avatar_url":null,"is_bot":false},"labels":[],"repository":{"owner":"acme","repo":"widget"}}}"#;
-    let (base_url, request, handle) =
-      start_single_response_server_with_request("201 Created", body);
-    let api = make_test_api_client(base_url);
-
-    let _ = api
-      .create_pull_request(
-        "acme",
-        "widget",
-        "feature/parser",
-        "  Improve docs  ",
-        "  main  ",
-        Some("  Ready to review  "),
-        true,
-      )
-      .expect("create pull request");
-
-    handle.join().expect("join server thread");
-    let request = request
-      .lock()
-      .expect("lock request")
-      .clone()
-      .unwrap_or_default();
-    assert!(
-      request.starts_with("POST /github/repos/acme/widget/pr?branch=feature%2Fparser HTTP/1.1")
-    );
-    assert!(
-      request
-        .to_lowercase()
-        .contains("\r\ncontent-type: application/json")
-    );
-    assert!(request.contains(r#""title":"Improve docs""#));
-    assert!(request.contains(r#""base":"main""#));
-    assert!(request.contains(r#""body":"Ready to review""#));
-    assert!(request.contains(r#""draft":true"#));
   }
 
   #[test]
@@ -5663,145 +4122,6 @@ mod tests {
   }
 
   #[test]
-  fn fetch_github_repository_readme_parses_success_payload() {
-    let body = r##"{"content":"# Widget\n\nHello README","path":"docs/README.md"}"##;
-    let (base_url, handle) = start_single_response_server("200 OK", body);
-    let api = make_test_api_client(base_url);
-
-    let readme = api
-      .fetch_github_repository_readme("acme", "widget", Some("main"))
-      .expect("fetch repository readme");
-    let readme = readme.expect("readme payload");
-    assert_eq!(readme.content.as_deref(), Some("# Widget\n\nHello README"));
-    assert_eq!(readme.path.as_deref(), Some("docs/README.md"));
-    handle.join().expect("join server thread");
-  }
-
-  #[test]
-  fn fetch_github_repository_readme_uses_ref_query_when_provided() {
-    let body = r##"{"content":"# Widget"}"##;
-    let (base_url, request_line, handle) =
-      start_single_response_server_with_request_line("200 OK", body);
-    let api = make_test_api_client(base_url);
-
-    let _ = api
-      .fetch_github_repository_readme("acme", "widget", Some("main"))
-      .expect("fetch repository readme");
-
-    handle.join().expect("join server thread");
-    let request_line = request_line
-      .lock()
-      .expect("lock request line")
-      .clone()
-      .unwrap_or_default();
-    assert_eq!(
-      request_line,
-      "GET /github/repos/acme/widget/readme?ref=main HTTP/1.1"
-    );
-  }
-
-  #[test]
-  fn fetch_github_repository_readme_returns_none_on_not_found() {
-    let body = r#"{"error":"Repository not found"}"#;
-    let (base_url, handle) = start_single_response_server("404 Not Found", body);
-    let api = make_test_api_client(base_url);
-
-    let readme = api
-      .fetch_github_repository_readme("acme", "widget", Some("main"))
-      .expect("fetch repository readme");
-    assert!(readme.is_none());
-    handle.join().expect("join server thread");
-  }
-
-  #[test]
-  fn fetch_github_repository_issue_details_parses_success_payload() {
-    let body = r#"{
-      "issue": {
-        "node_id": "I_kwDOExample",
-        "reactions": [
-          { "content": "THUMBS_UP", "count": 2, "viewer_has_reacted": true }
-        ],
-        "id": 501,
-        "number": 77,
-        "title": "Fix auth race condition",
-        "body": "Issue body",
-        "state": "closed",
-        "state_reason": "completed",
-        "created_at": "2026-02-20T08:00:00Z",
-        "updated_at": "2026-02-21T09:30:00Z",
-        "closed_at": "2026-02-21T09:30:00Z",
-        "labels": [{ "name": "bug", "color": "f29513" }],
-        "comments": [
-          {
-            "node_id": "IC_kwDOIssue",
-            "reactions": [
-              { "content": "HEART", "count": 1, "viewer_has_reacted": false }
-            ],
-            "id": 9001,
-            "body": "Looks good",
-            "created_at": "2026-02-20T10:00:00Z",
-            "updated_at": "2026-02-20T10:05:00Z",
-            "user": {
-              "login": "octocat",
-              "name": "The Octocat",
-              "avatar_url": "https://example.com/octocat.png"
-            }
-          }
-        ],
-        "user": {
-          "login": "octocat",
-          "name": "The Octocat",
-          "avatar_url": "https://example.com/octocat.png"
-        },
-        "repository": { "owner": "acme", "repo": "widget" }
-      }
-    }"#;
-    let (base_url, request_line, handle) =
-      start_single_response_server_with_request_line("200 OK", body);
-    let api = make_test_api_client(base_url);
-
-    let issue = api
-      .fetch_github_repository_issue_details("acme", "widget", 77)
-      .expect("fetch repository issue details");
-
-    assert_eq!(issue.number, 77);
-    assert_eq!(issue.node_id, "I_kwDOExample");
-    assert_eq!(issue.reactions[0].content, GithubReactionContent::ThumbsUp);
-    assert_eq!(issue.title, "Fix auth race condition");
-    assert_eq!(issue.state, "closed");
-    assert_eq!(issue.state_reason, Some(GithubIssueStateReason::Completed));
-    assert_eq!(issue.labels[0].color.as_deref(), Some("f29513"));
-    assert_eq!(issue.comments.len(), 1);
-    assert_eq!(issue.comments[0].id, 9001);
-    assert_eq!(issue.comments[0].node_id, "IC_kwDOIssue");
-    assert_eq!(
-      issue.comments[0].reactions[0].content,
-      GithubReactionContent::Heart
-    );
-    assert_eq!(issue.comments[0].body.as_deref(), Some("Looks good"));
-    assert_eq!(
-      issue.comments[0]
-        .user
-        .as_ref()
-        .map(|user| user.login.as_str()),
-      Some("octocat")
-    );
-    assert_eq!(issue.repository.owner, "acme");
-    assert_eq!(issue.repository.repo, "widget");
-
-    handle.join().expect("join server thread");
-    let request_line = request_line
-      .lock()
-      .expect("lock request line")
-      .clone()
-      .unwrap_or_default();
-    assert_eq!(
-      request_line,
-      "GET /github/repos/acme/widget/issues/77 HTTP/1.1"
-    );
-  }
-
-  #[test]
   fn resolve_github_issue_reference_target_parses_pull_request_target() {
     let body = r#"{
       "target": {
@@ -5829,58 +4149,6 @@ mod tests {
     assert_eq!(
       request_line,
       "GET /github/repos/acme/widget/issues/24877/target HTTP/1.1"
-    );
-  }
-
-  #[test]
-  fn update_issue_description_parses_success_payload() {
-    let body = r#"{
-      "issue": {
-        "id": 501,
-        "number": 77,
-        "body": "Updated issue description",
-        "updated_at": "2026-02-22T09:30:00Z"
-      }
-    }"#;
-    let (base_url, handle) = start_single_response_server("200 OK", body);
-    let api = make_test_api_client(base_url);
-
-    let issue = api
-      .update_issue_description("acme", "widget", 77, "Updated issue description")
-      .expect("update issue description");
-    assert_eq!(issue.id, 501);
-    assert_eq!(issue.number, 77);
-    assert_eq!(issue.body.as_deref(), Some("Updated issue description"));
-    handle.join().expect("join server thread");
-  }
-
-  #[test]
-  fn update_issue_description_uses_expected_route() {
-    let body = r#"{
-      "issue": {
-        "id": 501,
-        "number": 77,
-        "body": "",
-        "updated_at": "2026-02-22T09:30:00Z"
-      }
-    }"#;
-    let (base_url, request_line, handle) =
-      start_single_response_server_with_request_line("200 OK", body);
-    let api = make_test_api_client(base_url);
-
-    let _ = api
-      .update_issue_description("acme", "widget", 77, "")
-      .expect("update issue description");
-
-    handle.join().expect("join server thread");
-    let request_line = request_line
-      .lock()
-      .expect("lock request line")
-      .clone()
-      .unwrap_or_default();
-    assert_eq!(
-      request_line,
-      "PATCH /github/repos/acme/widget/issues/77 HTTP/1.1"
     );
   }
 
@@ -6033,66 +4301,6 @@ mod tests {
       request_line,
       "DELETE /github/repos/acme/widget/issues/77/comments/9002 HTTP/1.1"
     );
-  }
-
-  #[test]
-  fn fetch_pull_request_details_parses_success_payload() {
-    let body = r#"{
-      "pullRequest": {
-        "node_id": "PR_kwDOExample",
-        "number": 42,
-        "title": "Improve parser",
-        "state": "open",
-        "draft": false,
-        "created_at": "2026-02-10T09:00:00Z",
-        "updated_at": "2026-02-15T12:00:00Z",
-        "merged_at": null,
-        "merge_base_sha": "abc123",
-        "base_sha": "base123",
-        "head_sha": "head123",
-        "base_ref_name": "main",
-        "head_ref_name": "feature/parser",
-        "body": "PR body",
-        "author": { "login": "octocat", "avatar_url": null, "is_bot": false },
-        "assignees": [{ "login": "alice", "avatar_url": "https://example.com/alice.png" }],
-        "requested_reviewers": [{ "login": "bob", "avatar_url": null }],
-        "comments": 2,
-        "review_comments": 3,
-        "commits": 4,
-        "additions": 10,
-        "deletions": 5,
-        "changed_files": 2,
-        "labels": [{ "name": "enhancement", "color": "a2eeef" }],
-        "repository": { "owner": "acme", "repo": "widget" },
-        "head_repository": { "owner": "acme", "repo": "widget-fork" }
-      }
-    }"#;
-    let (base_url, handle) = start_single_response_server("200 OK", body);
-    let api = make_test_api_client(base_url);
-
-    let details = api
-      .fetch_pull_request_details("acme", "widget", 42)
-      .expect("fetch pull request details");
-    assert_eq!(details.node_id, "PR_kwDOExample");
-    assert_eq!(details.number, 42);
-    assert_eq!(details.head_ref_name, "feature/parser");
-    assert_eq!(details.author.login, "octocat");
-    assert!(!details.author.is_bot);
-    assert_eq!(details.assignees[0].login, "alice");
-    assert_eq!(details.requested_reviewers[0].login, "bob");
-    assert_eq!(details.comments, 2);
-    assert_eq!(details.review_comments, 3);
-    assert_eq!(details.labels[0].color.as_deref(), Some("a2eeef"));
-    assert_eq!(
-      details
-        .head_repository
-        .as_ref()
-        .expect("head repo")
-        .repo
-        .as_str(),
-      "widget-fork"
-    );
-    handle.join().expect("join server thread");
   }
 
   #[test]
@@ -7105,95 +5313,6 @@ mod tests {
   }
 
   #[test]
-  fn add_issue_reaction_serializes_subject_and_content() {
-    let body = r#"{
-      "reactions": [
-        { "content": "THUMBS_UP", "count": 3, "viewer_has_reacted": true }
-      ]
-    }"#;
-    let (base_url, request, handle) = start_single_response_server_with_request("200 OK", body);
-    let api = make_test_api_client(base_url);
-
-    let reactions = api
-      .add_issue_reaction(
-        "acme",
-        "widget",
-        77,
-        "IC_kwDOIssue",
-        GithubReactionContent::ThumbsUp,
-      )
-      .expect("add issue reaction");
-
-    assert_eq!(reactions.len(), 1);
-    assert_eq!(reactions[0].content, GithubReactionContent::ThumbsUp);
-    assert!(reactions[0].viewer_has_reacted);
-    handle.join().expect("join server thread");
-    let request = request
-      .lock()
-      .expect("lock request")
-      .clone()
-      .unwrap_or_default();
-    assert!(request.starts_with("POST /github/repos/acme/widget/issues/77/reactions HTTP/1.1"));
-    assert!(request.contains("\"subjectId\":\"IC_kwDOIssue\""));
-    assert!(request.contains("\"content\":\"THUMBS_UP\""));
-  }
-
-  #[test]
-  fn add_issue_reaction_surfaces_backend_error_message() {
-    let body = r#"{"error":"The openai organization restricts OAuth app access. Ask an organization owner to approve Reviu, then try again."}"#;
-    let (base_url, handle) = start_single_response_server("403 FORBIDDEN", body);
-    let api = make_test_api_client(base_url);
-
-    let err = api
-      .add_issue_reaction(
-        "openai",
-        "reviu",
-        77,
-        "I_kwDOExample",
-        GithubReactionContent::Heart,
-      )
-      .expect_err("add issue reaction should fail");
-
-    assert_eq!(
-      err.to_string(),
-      "The openai organization restricts OAuth app access. Ask an organization owner to approve Reviu, then try again."
-    );
-    let api_error = err.downcast_ref::<ApiError>().expect("api error");
-    assert_eq!(api_error.status_code_u16(), Some(403));
-    handle.join().expect("join server thread");
-  }
-
-  #[test]
-  fn remove_issue_reaction_uses_delete_reactions_route() {
-    let body = r#"{"reactions":[]}"#;
-    let (base_url, request_line, handle) =
-      start_single_response_server_with_request_line("200 OK", body);
-    let api = make_test_api_client(base_url);
-
-    let reactions = api
-      .remove_issue_reaction(
-        "acme",
-        "widget",
-        77,
-        "I_kwDOExample",
-        GithubReactionContent::Heart,
-      )
-      .expect("remove issue reaction");
-
-    assert!(reactions.is_empty());
-    handle.join().expect("join server thread");
-    let request_line = request_line
-      .lock()
-      .expect("lock request line")
-      .clone()
-      .unwrap_or_default();
-    assert_eq!(
-      request_line,
-      "DELETE /github/repos/acme/widget/issues/77/reactions HTTP/1.1"
-    );
-  }
-
-  #[test]
   fn update_pull_request_review_comment_parses_success_payload() {
     let body = r#"{
       "comment": {
@@ -8126,18 +6245,6 @@ mod tests {
   }
 
   #[test]
-  fn fetch_github_pull_requests_returns_unauthorized_error() {
-    let (base_url, handle) = start_single_response_server("401 Unauthorized", "");
-    let api = make_test_api_client(base_url);
-    let filters = crate::github_home_tabs::GithubPullRequestSearchFilters::default();
-
-    let err = api.fetch_github_pull_requests(&filters).err();
-    assert!(err.is_some());
-    assert!(err.expect("error").to_string().contains("unauthorized"));
-    handle.join().expect("join server thread");
-  }
-
-  #[test]
   fn fetch_github_pull_request_filter_options_returns_unauthorized_error() {
     let (base_url, handle) = start_single_response_server("401 Unauthorized", "");
     let api = make_test_api_client(base_url);
@@ -8151,47 +6258,11 @@ mod tests {
   }
 
   #[test]
-  fn fetch_github_user_repositories_returns_unauthorized_error() {
-    let (base_url, handle) = start_single_response_server("401 Unauthorized", "");
-    let api = make_test_api_client(base_url);
-
-    let err = api.fetch_github_user_repositories().err();
-    assert!(err.is_some());
-    assert!(err.expect("error").to_string().contains("unauthorized"));
-    handle.join().expect("join server thread");
-  }
-
-  #[test]
-  fn fetch_github_user_profile_returns_unauthorized_error() {
-    let (base_url, handle) = start_single_response_server("401 Unauthorized", "");
-    let api = make_test_api_client(base_url);
-
-    let err = api.fetch_github_user_profile("octocat").err();
-    assert!(err.is_some());
-    assert!(err.expect("error").to_string().contains("unauthorized"));
-    handle.join().expect("join server thread");
-  }
-
-  #[test]
   fn fetch_github_repository_details_returns_unauthorized_error() {
     let (base_url, handle) = start_single_response_server("401 Unauthorized", "");
     let api = make_test_api_client(base_url);
 
     let err = api.fetch_github_repository_details("acme", "widget").err();
-    assert!(err.is_some());
-    assert!(err.expect("error").to_string().contains("unauthorized"));
-    handle.join().expect("join server thread");
-  }
-
-  #[test]
-  fn fetch_github_repository_pull_requests_returns_unauthorized_error() {
-    let (base_url, handle) = start_single_response_server("401 Unauthorized", "");
-    let api = make_test_api_client(base_url);
-    let filters = GithubPullRequestSearchFilters::default();
-
-    let err = api
-      .fetch_github_repository_pull_requests("acme", "widget", &filters, "open", 1)
-      .err();
     assert!(err.is_some());
     assert!(err.expect("error").to_string().contains("unauthorized"));
     handle.join().expect("join server thread");
@@ -8275,45 +6346,6 @@ mod tests {
     let api = make_test_api_client(base_url);
 
     let err = api.fetch_github_repository_branches("acme", "widget").err();
-    assert!(err.is_some());
-    assert!(err.expect("error").to_string().contains("unauthorized"));
-    handle.join().expect("join server thread");
-  }
-
-  #[test]
-  fn fetch_github_repository_readme_returns_unauthorized_error() {
-    let (base_url, handle) = start_single_response_server("401 Unauthorized", "{}");
-    let api = make_test_api_client(base_url);
-
-    let err = api
-      .fetch_github_repository_readme("acme", "widget", Some("main"))
-      .err();
-    assert!(err.is_some());
-    assert!(err.expect("error").to_string().contains("unauthorized"));
-    handle.join().expect("join server thread");
-  }
-
-  #[test]
-  fn fetch_github_repository_issue_details_returns_unauthorized_error() {
-    let (base_url, handle) = start_single_response_server("401 Unauthorized", "");
-    let api = make_test_api_client(base_url);
-
-    let err = api
-      .fetch_github_repository_issue_details("acme", "widget", 77)
-      .err();
-    assert!(err.is_some());
-    assert!(err.expect("error").to_string().contains("unauthorized"));
-    handle.join().expect("join server thread");
-  }
-
-  #[test]
-  fn update_issue_description_returns_unauthorized_error() {
-    let (base_url, handle) = start_single_response_server("401 Unauthorized", "");
-    let api = make_test_api_client(base_url);
-
-    let err = api
-      .update_issue_description("acme", "widget", 77, "Body")
-      .err();
     assert!(err.is_some());
     assert!(err.expect("error").to_string().contains("unauthorized"));
     handle.join().expect("join server thread");

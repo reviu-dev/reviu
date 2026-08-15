@@ -105,32 +105,29 @@ use crate::{
   api::{ApiClient, GithubPullRequest},
   auth_state::{AuthState, AuthStateStore},
   config::{AppSettings, ConfigStore, RecentRepository},
-  dock_badge::set_dock_badge,
   file_preview::{is_markdown_path, is_previewable_path, is_svg_path},
   file_search_palette::open_file_search_palette as open_shared_file_search_palette,
   file_view::{BinaryPreview, build_binary_preview, render_binary_preview},
-  github_commit_details_page::GithubCommitDetailsPageHandle,
-  github_navigation::should_open_externally,
-  github_page::GithubPageHandle,
+  github_navigation::{
+    open_commit_target, open_profile_target, open_repo_target, should_open_externally,
+  },
+  github_notifications::GithubNotificationsStore,
   github_pr_details_page::GithubPrDetailsPageHandle,
-  github_profile_page::GithubProfilePageHandle,
-  github_repo_page::GithubRepoPageHandle,
   github_shared,
   interactive_rebase_todo_view::{
     InteractiveRebaseTodoView, InteractiveRebaseTodoViewCancelHandler,
     InteractiveRebaseTodoViewConfig, InteractiveRebaseTodoViewHandler,
   },
   navigation::NavigationHistory,
-  notification_count::NotificationCountStore,
   sentry_context,
   shortcuts::{self, ShortcutId},
   workspace::WorkspaceApi,
 };
 use ui::{
   CommandPalette, CommandPaletteAction, CommandPaletteBranch, CommandPaletteBranchKind,
-  CommandPaletteCommand, CommandPaletteConfig, CommandPaletteGithubRepoTab, CommandPaletteHandler,
-  CommandPaletteInitialScreen, CommandPalettePage, CommandPaletteRepository, CommandPaletteStash,
-  ConfirmDialog, DropdownSelectConfig, DropdownSelectItem, FILE_ICON_SIZE_PX, Input, InputState,
+  CommandPaletteCommand, CommandPaletteConfig, CommandPaletteHandler, CommandPaletteInitialScreen,
+  CommandPalettePage, CommandPaletteRepository, CommandPaletteStash, ConfirmDialog,
+  DropdownSelectConfig, DropdownSelectItem, FILE_ICON_SIZE_PX, Input, InputState,
   PAGE_HEADER_HEIGHT, SearchFileEntry, SearchFileHandler, SelectableRowStyle, StatusAlert,
   StatusThemeExt, Textarea, TextareaState, UiIconName, WindowExt, dropdown_select,
   file_icon_path_for_path_with_theme, selectable_list_item,
@@ -340,22 +337,6 @@ impl GitPageHandle {
         GitPageOpenAction::MergeBaseBranch { base_branch_name },
         cx,
       );
-    });
-  }
-
-  pub fn show_repository(repo_root: PathBuf, cx: &mut App) {
-    NavigationHistory::navigate("/git", cx);
-
-    let Some(weak) = cx
-      .try_global::<Self>()
-      .and_then(|handle| handle.git_page.clone())
-    else {
-      ConfigStore::persist_recent_repository(&repo_root);
-      return;
-    };
-
-    let _ = weak.update(cx, |this, cx| {
-      this.set_selected_repo(repo_root, cx);
     });
   }
 }
@@ -2931,9 +2912,7 @@ impl GitPage {
       let result = unblock(move || api.fetch_github_notifications()).await;
       cx.update(|cx| {
         if let Ok(notifications) = result {
-          let unread = notifications.iter().filter(|n| n.unread).count();
-          NotificationCountStore::set(cx, unread);
-          set_dock_badge(unread);
+          GithubNotificationsStore::set(cx, notifications);
           cx.refresh_windows();
         }
       });
@@ -3441,7 +3420,7 @@ impl GitPage {
                       "pro_teaser_clicked",
                       Some(serde_json::json!({ "source": "post_push_notification" })),
                     );
-                    NavigationHistory::navigate("/github", cx);
+                    NavigationHistory::navigate("/billing", cx);
                     window.on_next_frame(|window, cx| {
                       window.remove_notification::<GitProPushHintNotificationId>(cx);
                     });
@@ -4990,13 +4969,12 @@ impl GitPage {
         self.start_open_repository(window, cx);
         Ok(())
       }
-      CommandPaletteAction::OpenGitPage => {
-        NavigationHistory::navigate("/git", cx);
+      CommandPaletteAction::OpenSessionPage => {
+        NavigationHistory::navigate("/session", cx);
         Ok(())
       }
-      CommandPaletteAction::OpenGithubPage => {
-        GithubPageHandle::refresh(cx);
-        NavigationHistory::navigate("/github", cx);
+      CommandPaletteAction::OpenGitPage => {
+        NavigationHistory::navigate("/git", cx);
         Ok(())
       }
       CommandPaletteAction::OpenGithubPrDetails {
@@ -5023,31 +5001,15 @@ impl GitPage {
         issue_number,
         issue_comment_id,
       } => {
-        match tab {
-          Some(CommandPaletteGithubRepoTab::PullRequests) => {
-            GithubRepoPageHandle::show_pull_requests(owner.into(), repo.into(), cx);
-          }
-          Some(CommandPaletteGithubRepoTab::Issues) => {
-            GithubRepoPageHandle::show_issues(
-              owner.into(),
-              repo.into(),
-              issue_number,
-              issue_comment_id,
-              cx,
-            );
-          }
-          Some(CommandPaletteGithubRepoTab::Overview) | None => {
-            GithubRepoPageHandle::show(owner.into(), repo.into(), cx);
-          }
-        }
+        open_repo_target(owner, repo, tab, issue_number, issue_comment_id, cx);
         Ok(())
       }
       CommandPaletteAction::OpenGithubCommitDetails { owner, repo, sha } => {
-        GithubCommitDetailsPageHandle::show(owner.into(), repo.into(), sha.into(), cx);
+        open_commit_target(owner, repo, sha, cx);
         Ok(())
       }
       CommandPaletteAction::OpenGithubProfile { login } => {
-        GithubProfilePageHandle::show(login.into(), cx);
+        open_profile_target(login, cx);
         Ok(())
       }
       CommandPaletteAction::SwitchToPrBranch
@@ -8972,7 +8934,7 @@ impl GitPage {
               "pro_teaser_clicked",
               Some(serde_json::json!({ "source": "branch_pr_button" })),
             );
-            NavigationHistory::navigate("/github", cx);
+            NavigationHistory::navigate("/billing", cx);
           }),
       ),
       GitBranchPullRequestButtonState::Checking => Some(
@@ -10889,18 +10851,9 @@ mod tests {
       number,
       title: format!("Pull request {number}"),
       state: crate::api::GithubPullRequestState::Open,
-      created_at: "2026-03-20T09:00:00Z".to_string(),
-      closed_at: None,
       merged_at: None,
       draft: false,
-      updated_at: "2026-03-21T10:00:00Z".to_string(),
       comments_count: 0,
-      author: crate::api::GithubPullRequestAuthor {
-        login: "octocat".to_string(),
-        avatar_url: None,
-        is_bot: false,
-      },
-      labels: Vec::new(),
       repository: crate::api::GithubRepository {
         owner: "acme".to_string(),
         repo: "widget".to_string(),
@@ -15578,8 +15531,8 @@ mod tests {
       matches!(
         id,
         CommandPaletteCommandId::OpenRepository
+          | CommandPaletteCommandId::OpenSessionPage
           | CommandPaletteCommandId::OpenGitPage
-          | CommandPaletteCommandId::OpenGithubPage
           | CommandPaletteCommandId::OpenGithubFromUrl
           | CommandPaletteCommandId::OpenGitConfigPage
           | CommandPaletteCommandId::OpenSettingsPage

@@ -1,11 +1,7 @@
 use gpui::{App, Window};
 use ui::CommandPaletteGithubRepoTab;
 
-use crate::{
-  github_commit_details_page::GithubCommitDetailsPageHandle,
-  github_pr_details_page::GithubPrDetailsPageHandle, github_profile_page::GithubProfilePageHandle,
-  github_repo_page::GithubRepoPageHandle,
-};
+use crate::github_pr_details_page::GithubPrDetailsPageHandle;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum SamePrGfmNavigation {
@@ -28,39 +24,37 @@ pub(crate) fn same_pr_gfm_navigation(
   }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum SameRepoIssueLinkNavigation {
-  Noop,
-  ScrollComment {
-    comment_id: u64,
-  },
-  ReloadIssue {
-    issue_number: u64,
-    issue_comment_id: Option<u64>,
-  },
+pub(crate) fn should_open_externally(window: &Window) -> bool {
+  window.modifiers().secondary()
 }
 
-pub(crate) fn same_repo_issue_link_navigation(
-  current_issue_number: u64,
-  issue_number: u64,
+pub(crate) fn github_repo_url(
+  owner: &str,
+  repo: &str,
+  tab: Option<CommandPaletteGithubRepoTab>,
+  issue_number: Option<u64>,
   issue_comment_id: Option<u64>,
-) -> SameRepoIssueLinkNavigation {
-  if current_issue_number == issue_number {
-    if let Some(comment_id) = issue_comment_id {
-      SameRepoIssueLinkNavigation::ScrollComment { comment_id }
-    } else {
-      SameRepoIssueLinkNavigation::Noop
-    }
-  } else {
-    SameRepoIssueLinkNavigation::ReloadIssue {
-      issue_number,
-      issue_comment_id,
-    }
+) -> String {
+  let base = format!("https://github.com/{owner}/{repo}");
+  match tab {
+    Some(CommandPaletteGithubRepoTab::PullRequests) => format!("{base}/pulls"),
+    Some(CommandPaletteGithubRepoTab::Issues) => match (issue_number, issue_comment_id) {
+      (Some(number), Some(comment_id)) => {
+        format!("{base}/issues/{number}#issuecomment-{comment_id}")
+      }
+      (Some(number), None) => format!("{base}/issues/{number}"),
+      (None, _) => format!("{base}/issues"),
+    },
+    Some(CommandPaletteGithubRepoTab::Overview) | None => base,
   }
 }
 
-pub(crate) fn should_open_externally(window: &Window) -> bool {
-  window.modifiers().secondary()
+pub(crate) fn github_profile_url(login: &str) -> String {
+  format!("https://github.com/{login}")
+}
+
+pub(crate) fn github_commit_url(owner: &str, repo: &str, sha: &str) -> String {
+  format!("https://github.com/{owner}/{repo}/commit/{sha}")
 }
 
 pub fn open_repo_target(
@@ -71,27 +65,17 @@ pub fn open_repo_target(
   issue_comment_id: Option<u64>,
   cx: &mut App,
 ) {
-  match tab {
-    Some(CommandPaletteGithubRepoTab::PullRequests) => {
-      GithubRepoPageHandle::show_pull_requests(owner.into(), repo.into(), cx);
-    }
-    Some(CommandPaletteGithubRepoTab::Issues) => {
-      GithubRepoPageHandle::show_issues(
-        owner.into(),
-        repo.into(),
-        issue_number,
-        issue_comment_id,
-        cx,
-      );
-    }
-    Some(CommandPaletteGithubRepoTab::Overview) | None => {
-      GithubRepoPageHandle::show(owner.into(), repo.into(), cx);
-    }
-  }
+  cx.open_url(&github_repo_url(
+    &owner,
+    &repo,
+    tab,
+    issue_number,
+    issue_comment_id,
+  ));
 }
 
 pub fn open_profile_target(login: String, cx: &mut App) {
-  GithubProfilePageHandle::show(login.into(), cx);
+  cx.open_url(&github_profile_url(&login));
 }
 
 pub fn open_pr_target(
@@ -113,14 +97,14 @@ pub fn open_pr_target(
 }
 
 pub fn open_commit_target(owner: String, repo: String, sha: String, cx: &mut App) {
-  GithubCommitDetailsPageHandle::show(owner.into(), repo.into(), sha.into(), cx);
+  cx.open_url(&github_commit_url(&owner, &repo, &sha));
 }
 
 #[cfg(test)]
 mod tests {
   use super::{
-    SamePrGfmNavigation, SameRepoIssueLinkNavigation, same_pr_gfm_navigation,
-    same_repo_issue_link_navigation,
+    CommandPaletteGithubRepoTab, SamePrGfmNavigation, github_commit_url, github_profile_url,
+    github_repo_url, same_pr_gfm_navigation,
   };
 
   #[test]
@@ -154,29 +138,80 @@ mod tests {
   }
 
   #[test]
-  fn same_repo_issue_link_navigation_noops_for_same_issue_without_fragment() {
-    let navigation = same_repo_issue_link_navigation(42, 42, None);
-    assert_eq!(navigation, SameRepoIssueLinkNavigation::Noop);
-  }
-
-  #[test]
-  fn same_repo_issue_link_navigation_scrolls_for_same_issue_comment_fragment() {
-    let navigation = same_repo_issue_link_navigation(42, 42, Some(99));
+  fn github_repo_url_targets_repository_home_without_tab() {
     assert_eq!(
-      navigation,
-      SameRepoIssueLinkNavigation::ScrollComment { comment_id: 99 }
+      github_repo_url("acme", "reviu", None, None, None),
+      "https://github.com/acme/reviu"
+    );
+    assert_eq!(
+      github_repo_url(
+        "acme",
+        "reviu",
+        Some(CommandPaletteGithubRepoTab::Overview),
+        None,
+        None
+      ),
+      "https://github.com/acme/reviu"
     );
   }
 
   #[test]
-  fn same_repo_issue_link_navigation_reloads_for_other_issue() {
-    let navigation = same_repo_issue_link_navigation(42, 77, Some(101));
+  fn github_repo_url_targets_pull_requests_and_issues_lists() {
     assert_eq!(
-      navigation,
-      SameRepoIssueLinkNavigation::ReloadIssue {
-        issue_number: 77,
-        issue_comment_id: Some(101),
-      }
+      github_repo_url(
+        "acme",
+        "reviu",
+        Some(CommandPaletteGithubRepoTab::PullRequests),
+        None,
+        None
+      ),
+      "https://github.com/acme/reviu/pulls"
+    );
+    assert_eq!(
+      github_repo_url(
+        "acme",
+        "reviu",
+        Some(CommandPaletteGithubRepoTab::Issues),
+        None,
+        None
+      ),
+      "https://github.com/acme/reviu/issues"
+    );
+  }
+
+  #[test]
+  fn github_repo_url_targets_issue_and_issue_comment() {
+    assert_eq!(
+      github_repo_url(
+        "acme",
+        "reviu",
+        Some(CommandPaletteGithubRepoTab::Issues),
+        Some(42),
+        None
+      ),
+      "https://github.com/acme/reviu/issues/42"
+    );
+    assert_eq!(
+      github_repo_url(
+        "acme",
+        "reviu",
+        Some(CommandPaletteGithubRepoTab::Issues),
+        Some(42),
+        Some(99)
+      ),
+      "https://github.com/acme/reviu/issues/42#issuecomment-99"
+    );
+  }
+
+  #[test]
+  fn github_profile_and_commit_urls_target_github_com() {
+    assert_eq!(
+      github_profile_url("joris-gallot"),
+      "https://github.com/joris-gallot"
+    );
+    assert_eq!(
+      github_commit_url("acme", "reviu", "abc123"),
+      "https://github.com/acme/reviu/commit/abc123"
     );
   }
 }

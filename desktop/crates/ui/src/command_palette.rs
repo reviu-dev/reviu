@@ -84,9 +84,8 @@ pub struct CommandPaletteCommand {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum CommandPalettePage {
+  Session,
   Git,
-  Github,
-  GithubRepo,
   GithubPrDetails,
   GitConfig,
   Settings,
@@ -213,8 +212,8 @@ pub enum CommandPaletteAction {
   CreateGithubRepository,
   SearchGithubRepository,
   OpenRepository,
+  OpenSessionPage,
   OpenGitPage,
-  OpenGithubPage,
   OpenGithubRepoDetails {
     owner: String,
     repo: String,
@@ -804,8 +803,8 @@ pub enum CommandPaletteCommandId {
   CreateGithubRepository,
   SearchGithubRepository,
   OpenRepository,
+  OpenSessionPage,
   OpenGitPage,
-  OpenGithubPage,
   OpenGithubFromUrl,
   SwitchToPrBranch,
   CopyPrBranch,
@@ -864,8 +863,8 @@ impl CommandPaletteCommandId {
       Self::CreateGithubRepository => "create_github_repository",
       Self::SearchGithubRepository => "search_github_repository",
       Self::OpenRepository => "open_repository",
+      Self::OpenSessionPage => "open_session_page",
       Self::OpenGitPage => "open_git_page",
-      Self::OpenGithubPage => "open_github_page",
       Self::OpenGithubFromUrl => "open_github_from_url",
       Self::SwitchToPrBranch => "switch_to_pr_branch",
       Self::CopyPrBranch => "copy_pr_branch",
@@ -924,8 +923,8 @@ impl CommandPaletteCommandId {
       "create_github_repository" => Some(Self::CreateGithubRepository),
       "search_github_repository" => Some(Self::SearchGithubRepository),
       "open_repository" => Some(Self::OpenRepository),
+      "open_session_page" => Some(Self::OpenSessionPage),
       "open_git_page" => Some(Self::OpenGitPage),
-      "open_github_page" => Some(Self::OpenGithubPage),
       "open_github_from_url" => Some(Self::OpenGithubFromUrl),
       "switch_to_pr_branch" => Some(Self::SwitchToPrBranch),
       "copy_pr_branch" => Some(Self::CopyPrBranch),
@@ -1331,22 +1330,6 @@ impl CommandPaletteCommand {
     )
   }
 
-  pub fn open_github_page() -> Self {
-    Self::new(
-      CommandPaletteCommandId::OpenGithubPage,
-      "Go to GitHub",
-      "Navigate to the GitHub page",
-    )
-  }
-
-  pub fn open_github_page_locked() -> Self {
-    Self::new(
-      CommandPaletteCommandId::OpenGithubPage,
-      "Go to GitHub",
-      "Requires Reviu Pro. 14-day free trial",
-    )
-  }
-
   pub fn create_github_repository() -> Self {
     Self::new(
       CommandPaletteCommandId::CreateGithubRepository,
@@ -1360,6 +1343,14 @@ impl CommandPaletteCommand {
       CommandPaletteCommandId::SearchGithubRepository,
       "Search GitHub repository",
       "Find a repository on GitHub by name or owner",
+    )
+  }
+
+  pub fn open_session_page() -> Self {
+    Self::new(
+      CommandPaletteCommandId::OpenSessionPage,
+      "Go to Sessions",
+      "Navigate to the sessions workspace",
     )
   }
 
@@ -1489,16 +1480,12 @@ impl CommandPaletteCommand {
   ) -> Vec<Self> {
     let mut commands = Vec::new();
 
-    if current_page != CommandPalettePage::Git {
-      commands.push(Self::open_git_page());
+    if current_page != CommandPalettePage::Session {
+      commands.push(Self::open_session_page());
     }
 
-    if current_page != CommandPalettePage::Github {
-      commands.push(if include_github {
-        Self::open_github_page()
-      } else {
-        Self::open_github_page_locked()
-      });
+    if current_page != CommandPalettePage::Git {
+      commands.push(Self::open_git_page());
     }
 
     if include_github {
@@ -1584,10 +1571,10 @@ impl CommandPaletteCommand {
 
       CommandPaletteCommandId::SearchGithubRepository
       | CommandPaletteCommandId::CreateGithubRepository
-      | CommandPaletteCommandId::OpenGithubFromUrl
-      | CommandPaletteCommandId::OpenGithubPage => CommandPaletteGroup::Github,
+      | CommandPaletteCommandId::OpenGithubFromUrl => CommandPaletteGroup::Github,
 
-      CommandPaletteCommandId::OpenGitPage
+      CommandPaletteCommandId::OpenSessionPage
+      | CommandPaletteCommandId::OpenGitPage
       | CommandPaletteCommandId::OpenGitConfigPage
       | CommandPaletteCommandId::OpenSettingsPage
       | CommandPaletteCommandId::OpenBillingPage
@@ -1644,8 +1631,8 @@ impl CommandPaletteCommand {
       CommandPaletteCommandId::CreatePullRequest | CommandPaletteCommandId::OpenPullRequest => {
         Icon::new(UiIconName::GitPullRequestArrow)
       }
+      CommandPaletteCommandId::OpenSessionPage => Icon::new(UiIconName::MessageCircle),
       CommandPaletteCommandId::OpenGitPage => Icon::new(UiIconName::GitBranch),
-      CommandPaletteCommandId::OpenGithubPage => Icon::new(IconName::Github),
       CommandPaletteCommandId::OpenGithubFromUrl => Icon::new(IconName::Github),
       CommandPaletteCommandId::SwitchToPrBranch => Icon::new(UiIconName::GitBranch),
       CommandPaletteCommandId::CopyPrBranch => Icon::new(IconName::Copy),
@@ -2760,11 +2747,11 @@ impl CommandPalette {
       CommandPaletteCommandId::OpenRepository => {
         self.trigger_action(command, CommandPaletteAction::OpenRepository, window, cx);
       }
+      CommandPaletteCommandId::OpenSessionPage => {
+        self.trigger_action(command, CommandPaletteAction::OpenSessionPage, window, cx);
+      }
       CommandPaletteCommandId::OpenGitPage => {
         self.trigger_action(command, CommandPaletteAction::OpenGitPage, window, cx);
-      }
-      CommandPaletteCommandId::OpenGithubPage => {
-        self.trigger_action(command, CommandPaletteAction::OpenGithubPage, window, cx);
       }
       CommandPaletteCommandId::CreateGithubRepository => {
         self.trigger_action(
@@ -3487,24 +3474,6 @@ mod tests {
   }
 
   #[test]
-  fn default_global_commands_show_locked_go_to_github_when_github_is_disabled() {
-    let commands = CommandPaletteCommand::default_global_commands(
-      super::CommandPalettePage::Git,
-      /* include_github */ false,
-    );
-    let github = commands
-      .iter()
-      .find(|c| c.id == CommandPaletteCommandId::OpenGithubPage)
-      .expect("go to github should stay visible without github access");
-    assert!(
-      github
-        .description
-        .as_ref()
-        .is_some_and(|description| description.contains("Reviu Pro"))
-    );
-  }
-
-  #[test]
   fn switch_to_pr_branch_command_is_available_with_expected_metadata() {
     let command = CommandPaletteCommand::switch_to_pr_branch();
     assert_eq!(command.id, CommandPaletteCommandId::SwitchToPrBranch);
@@ -3769,8 +3738,8 @@ mod tests {
       CommandPaletteCommandId::CreateGithubRepository,
       CommandPaletteCommandId::SearchGithubRepository,
       CommandPaletteCommandId::OpenRepository,
+      CommandPaletteCommandId::OpenSessionPage,
       CommandPaletteCommandId::OpenGitPage,
-      CommandPaletteCommandId::OpenGithubPage,
       CommandPaletteCommandId::OpenGithubFromUrl,
       CommandPaletteCommandId::SwitchToPrBranch,
       CommandPaletteCommandId::CopyPrBranch,

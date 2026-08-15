@@ -27,7 +27,6 @@ use crate::{
   CloseWorkspacePage, ShowCommandPalette,
   auth_state::AuthStateStore,
   github_navigation::{open_commit_target, open_pr_target, open_profile_target, open_repo_target},
-  github_page::GithubPageHandle,
   navigation::NavigationHistory,
   workspace::WorkspaceApi,
 };
@@ -138,13 +137,12 @@ impl GitConfigPage {
     cx: &mut Context<Self>,
   ) -> Result<(), SharedString> {
     match action {
-      CommandPaletteAction::OpenGitPage => {
-        NavigationHistory::navigate("/git", cx);
+      CommandPaletteAction::OpenSessionPage => {
+        NavigationHistory::navigate("/session", cx);
         Ok(())
       }
-      CommandPaletteAction::OpenGithubPage => {
-        GithubPageHandle::refresh(cx);
-        NavigationHistory::navigate("/github", cx);
+      CommandPaletteAction::OpenGitPage => {
+        NavigationHistory::navigate("/git", cx);
         Ok(())
       }
       CommandPaletteAction::OpenGithubPrDetails {

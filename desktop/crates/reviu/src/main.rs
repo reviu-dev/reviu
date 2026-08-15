@@ -17,9 +17,8 @@ use ui::PAGE_HEADER_HEIGHT;
 use ui::{AppAssets, parse_github_url_action};
 use workspace::{
   AppProfile, AuthCallbackTarget, AuthStateStore, WorkspaceView, build_app_menus,
-  github_navigation::{open_commit_target, open_pr_target, open_repo_target},
-  install_app_key_bindings, install_crash_reporter, show_startup_crash_report_notification,
-  take_pending_startup_crash_report,
+  github_navigation::open_pr_target, install_app_key_bindings, install_crash_reporter,
+  show_startup_crash_report_notification, take_pending_startup_crash_report,
 };
 
 #[cfg(target_os = "linux")]
@@ -595,34 +594,20 @@ fn extract_open_url_for_scheme(url: &str, scheme: &str) -> Option<String> {
 fn handle_open_github_url(url: &str, cx: &mut App) {
   use ui::CommandPaletteAction;
 
-  let Some(action) = parse_github_url_action(url) else {
+  // Only pull requests have a page in Reviu; other GitHub links would bounce
+  // straight back to the browser they came from.
+  let Some(CommandPaletteAction::OpenGithubPrDetails {
+    owner,
+    repo,
+    number,
+    open_changes_tab,
+    review_comment_id,
+  }) = parse_github_url_action(url)
+  else {
     return;
   };
   cx.activate(true);
-  match action {
-    CommandPaletteAction::OpenGithubPrDetails {
-      owner,
-      repo,
-      number,
-      open_changes_tab,
-      review_comment_id,
-    } => {
-      open_pr_target(owner, repo, number, open_changes_tab, review_comment_id, cx);
-    }
-    CommandPaletteAction::OpenGithubRepoDetails {
-      owner,
-      repo,
-      tab,
-      issue_number,
-      issue_comment_id,
-    } => {
-      open_repo_target(owner, repo, tab, issue_number, issue_comment_id, cx);
-    }
-    CommandPaletteAction::OpenGithubCommitDetails { owner, repo, sha } => {
-      open_commit_target(owner, repo, sha, cx);
-    }
-    _ => {}
-  }
+  open_pr_target(owner, repo, number, open_changes_tab, review_comment_id, cx);
 }
 
 #[cfg(test)]

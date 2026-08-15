@@ -5,7 +5,6 @@ use gpui::{AnyElement, App, IntoElement, ParentElement, SharedString, Styled, Wi
 use gpui_component::{
   Icon, IconName, Sizable as _,
   avatar::Avatar,
-  badge::Badge,
   button::{Button, ButtonVariants as _},
   menu::{DropdownMenu, PopupMenu, PopupMenuItem},
 };
@@ -23,8 +22,8 @@ fn git_config_icon() -> Icon {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum UserMenuPage {
+  Session,
   Git,
-  Github,
   GithubPrDetails,
   Billing,
   GitConfig,
@@ -50,9 +49,7 @@ pub struct UserMenuConfig {
   pub id: SharedString,
   pub state: UserMenuState,
   pub current_page: UserMenuPage,
-  pub notification_count: usize,
   pub on_open_git: Option<UserMenuHandler>,
-  pub on_open_github: Option<UserMenuHandler>,
   pub on_open_billing: Option<UserMenuHandler>,
   pub on_open_git_config: Option<UserMenuHandler>,
   pub on_open_settings: Option<UserMenuHandler>,
@@ -138,7 +135,6 @@ pub fn user_menu(config: UserMenuConfig) -> Option<AnyElement> {
       )
     }
     UserMenuState::Authenticated(user) => {
-      let notification_count = config.notification_count;
       let avatar = Avatar::new()
         .name(user.name.clone())
         .when_some(user.image.clone(), |this, image| this.src(image))
@@ -146,7 +142,6 @@ pub fn user_menu(config: UserMenuConfig) -> Option<AnyElement> {
       let user_email = user.email.clone();
       let current_page = config.current_page;
       let on_open_git = config.on_open_git.clone();
-      let on_open_github = config.on_open_github.clone();
       let on_open_billing = config.on_open_billing.clone();
       let on_open_git_config = config.on_open_git_config.clone();
       let on_open_settings = config.on_open_settings.clone();
@@ -176,23 +171,6 @@ pub fn user_menu(config: UserMenuConfig) -> Option<AnyElement> {
                   .on_click(move |_, window, cx| {
                     handler(window, cx);
                   }),
-              );
-            }
-
-            if current_page != UserMenuPage::Github
-              && let Some(handler) = on_open_github.clone()
-            {
-              menu = menu.item(
-                PopupMenuItem::element(move |_, _| {
-                  Badge::new()
-                    .count(notification_count)
-                    .small()
-                    .child("GitHub")
-                })
-                .icon(IconName::Github)
-                .on_click(move |_, window, cx| {
-                  handler(window, cx);
-                }),
               );
             }
 

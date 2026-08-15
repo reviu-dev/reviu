@@ -36,6 +36,14 @@ Every prompt now snapshots your working tree (including untracked files) before 
 
 Click a changed file in the Sessions workspace (or a file location in the agent's tool calls) to open its diff right where the conversation was; Escape brings the conversation back. Comment on diff lines like a pull request review, then send all your comments to the agent in one batch: they arrive as a structured prompt with file, lines, and side, and each comment tracks whether the agent addressed it or whether the code moved on (outdated). Sending the batch returns you to the conversation to watch the agent work.
 
+### Lighter GitHub: Repositories, Profiles, And Commits Open On GitHub
+
+Reviu no longer carries its own repository browser (Overview, Readme, Code, Issues), profile page, and commit page. Links to a repository, a person, an issue, or a commit now open on github.com, where they are always up to date. What stays in Reviu is the part you came for: the pull request, its diff, and the review loop with the agent.
+
+### The GitHub Inbox Moves Into The Sessions Sidebar
+
+The GitHub home page is gone. Your notifications now live directly in the Sessions sidebar: unread count, one click to open (pull requests open in Reviu, everything else on github.com), and a check button to mark a notification as done without leaving your session. The top navigation is down to two tabs, Sessions and Git, on `cmd-1` and `cmd-2`. Without Reviu Pro, GitHub links land on the billing page.
+
 ## 0.18.0
 
 ### No More Failed Single Comments During A Review
