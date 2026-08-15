@@ -315,9 +315,11 @@ impl WorkspaceView {
   }
 
   pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
+    let settings = ConfigStore::load_app_settings();
+
     gpui_router::init(cx);
     NavigationHistory::init(cx);
-    NavigationHistory::navigate_replace("/session", cx);
+    NavigationHistory::navigate_replace(settings.home_page.pathname(), cx);
 
     cx.set_global(WorkspaceRoute::default());
     cx.set_global(WorkspaceApi::new());
@@ -326,7 +328,6 @@ impl WorkspaceView {
     cx.set_global(AppUpdateStore::default());
     cx.set_global(GithubNotificationsStore::default());
 
-    let settings = ConfigStore::load_app_settings();
     cx.set_global(settings);
     cx.set_global(shortcuts::load_shortcut_overrides());
     cx.set_global(crate::command_usage::CommandUsageStore::load());
