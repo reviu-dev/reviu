@@ -25,16 +25,12 @@ fn failed_session_load_falls_back_to_a_fresh_session() {
     let cwd = std::env::current_dir().expect("cwd");
     // The stub advertises load_session but errors on session/load: the spawn must
     // still succeed with a brand-new session instead of failing the connection.
-    let mut session = AgentSession::spawn_with_load(
-      stub_backend(),
-      cwd,
-      "stale-session-id".to_string(),
-      |fut| {
+    let mut session =
+      AgentSession::spawn_with_load(stub_backend(), cwd, "stale-session-id".to_string(), |fut| {
         smol::spawn(fut).detach();
-      },
-    )
-    .await
-    .expect("spawn with stale session id");
+      })
+      .await
+      .expect("spawn with stale session id");
 
     let info = session.init_info().clone();
     assert_eq!(info.session_id.as_deref(), Some("stub-session"));

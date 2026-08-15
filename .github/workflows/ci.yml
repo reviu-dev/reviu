@@ -66,12 +66,11 @@ jobs:
         if: runner.os != 'Windows'
         uses: taiki-e/install-action@314b6e93a9b2f40a64f401a23fed55603083dc69 # nextest
 
-      # Tests assume Unix-style paths; skip Windows. Retries absorb flaky gpui async
-      # tests (allow_parking + real git I/O makes the test scheduler non-deterministic).
+      # Tests assume Unix-style paths; skip Windows.
       - name: Cargo test
         if: runner.os != 'Windows'
         working-directory: desktop
-        run: cargo nextest run --retries 2
+        run: cargo nextest run
 
   landing:
     name: Landing

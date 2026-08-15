@@ -3146,78 +3146,80 @@ impl Render for AgentChatPanel {
               .when_some(usage_text, |this, t| {
                 this.child(div().text_xs().text_color(theme.muted_foreground).child(t))
               })
-              .when(self.show_conversation_controls, |this| this.child({
-                let entity = cx.entity().downgrade();
-                let conversations = self.list_conversations();
-                let current_id = self.current_conv.id.clone();
-                Button::new("agent-chat-history")
-                  .icon(UiIconName::History)
-                  .small()
-                  .ghost()
-                  .disabled(conversations.is_empty())
-                  .dropdown_menu_with_anchor(Anchor::TopRight, move |menu, _, _| {
-                    let mut menu = menu;
-                    for meta in &conversations {
-                      let id = meta.id.clone();
-                      let id_load = meta.id.clone();
-                      let id_delete = meta.id.clone();
-                      let entity_load = entity.clone();
-                      let entity_delete = entity.clone();
-                      let title: SharedString = if meta.title.is_empty() {
-                        format!("Conversation {}", meta.id).into()
-                      } else {
-                        meta.title.clone().into()
-                      };
-                      let group_name = SharedString::from(format!("hist-row-{}", meta.id));
-                      let group_for_render = group_name.clone();
-                      let button_id = SharedString::from(format!("hist-delete-{}", meta.id));
-                      let title_for_render = title.clone();
-                      let is_current = id == current_id;
-                      menu = menu.item(
-                        PopupMenuItem::element(move |_, _| {
-                          let entity_delete = entity_delete.clone();
-                          let id_delete = id_delete.clone();
-                          h_flex()
-                            .group(group_for_render.clone())
-                            .w_full()
-                            .max_w(px(280.))
-                            .gap_2()
-                            .items_center()
-                            .child(
-                              div()
-                                .flex_1()
-                                .min_w_0()
-                                .text_sm()
-                                .truncate()
-                                .when(is_current, |this| this.font_weight(gpui::FontWeight::BOLD))
-                                .child(title_for_render.clone()),
-                            )
-                            .child(
-                              Button::new(button_id.clone())
-                                .icon(UiIconName::Trash)
-                                .xsmall()
-                                .ghost()
-                                .opacity(0.0)
-                                .group_hover(group_for_render.clone(), |this| this.opacity(1.0))
-                                .on_click(move |_, _, cx| {
-                                  let _ = entity_delete.update(cx, |panel, cx| {
-                                    panel.delete_conversation(&id_delete, cx)
-                                  });
-                                }),
-                            )
-                            .into_any_element()
-                        })
-                        .on_click(move |_, _, cx| {
-                          let id = id_load.clone();
-                          let _ =
-                            entity_load.update(cx, |panel, cx| panel.load_conversation(&id, cx));
-                        }),
-                      );
-                      let _ = id;
-                    }
-                    menu
-                  })
-              }))
+              .when(self.show_conversation_controls, |this| {
+                this.child({
+                  let entity = cx.entity().downgrade();
+                  let conversations = self.list_conversations();
+                  let current_id = self.current_conv.id.clone();
+                  Button::new("agent-chat-history")
+                    .icon(UiIconName::History)
+                    .small()
+                    .ghost()
+                    .disabled(conversations.is_empty())
+                    .dropdown_menu_with_anchor(Anchor::TopRight, move |menu, _, _| {
+                      let mut menu = menu;
+                      for meta in &conversations {
+                        let id = meta.id.clone();
+                        let id_load = meta.id.clone();
+                        let id_delete = meta.id.clone();
+                        let entity_load = entity.clone();
+                        let entity_delete = entity.clone();
+                        let title: SharedString = if meta.title.is_empty() {
+                          format!("Conversation {}", meta.id).into()
+                        } else {
+                          meta.title.clone().into()
+                        };
+                        let group_name = SharedString::from(format!("hist-row-{}", meta.id));
+                        let group_for_render = group_name.clone();
+                        let button_id = SharedString::from(format!("hist-delete-{}", meta.id));
+                        let title_for_render = title.clone();
+                        let is_current = id == current_id;
+                        menu = menu.item(
+                          PopupMenuItem::element(move |_, _| {
+                            let entity_delete = entity_delete.clone();
+                            let id_delete = id_delete.clone();
+                            h_flex()
+                              .group(group_for_render.clone())
+                              .w_full()
+                              .max_w(px(280.))
+                              .gap_2()
+                              .items_center()
+                              .child(
+                                div()
+                                  .flex_1()
+                                  .min_w_0()
+                                  .text_sm()
+                                  .truncate()
+                                  .when(is_current, |this| this.font_weight(gpui::FontWeight::BOLD))
+                                  .child(title_for_render.clone()),
+                              )
+                              .child(
+                                Button::new(button_id.clone())
+                                  .icon(UiIconName::Trash)
+                                  .xsmall()
+                                  .ghost()
+                                  .opacity(0.0)
+                                  .group_hover(group_for_render.clone(), |this| this.opacity(1.0))
+                                  .on_click(move |_, _, cx| {
+                                    let _ = entity_delete.update(cx, |panel, cx| {
+                                      panel.delete_conversation(&id_delete, cx)
+                                    });
+                                  }),
+                              )
+                              .into_any_element()
+                          })
+                          .on_click(move |_, _, cx| {
+                            let id = id_load.clone();
+                            let _ =
+                              entity_load.update(cx, |panel, cx| panel.load_conversation(&id, cx));
+                          }),
+                        );
+                        let _ = id;
+                      }
+                      menu
+                    })
+                })
+              })
               .when(self.show_conversation_controls, |this| {
                 this.child(
                   Button::new("agent-chat-new")
@@ -3700,7 +3702,10 @@ mod tests {
     ];
 
     // Marker inserted before the prompt shifts every tool index by one.
-    items.insert(checkpoint_insert_index(&items), checkpoint_marker("refs/reviu/checkpoints/s/1"));
+    items.insert(
+      checkpoint_insert_index(&items),
+      checkpoint_marker("refs/reviu/checkpoints/s/1"),
+    );
     let index = tool_index_for_items(&items);
     let tool_1: std::sync::Arc<str> = std::sync::Arc::from("tool-1");
     let tool_2: std::sync::Arc<str> = std::sync::Arc::from("tool-2");
@@ -3773,8 +3778,8 @@ mod tests {
       ref_name: "refs/reviu/checkpoints/s/1".to_string(),
       created_at_secs: 42,
     };
-    let json = serde_json::to_string(&PersistedChatItem::Checkpoint(marker.clone()))
-      .expect("serialize");
+    let json =
+      serde_json::to_string(&PersistedChatItem::Checkpoint(marker.clone())).expect("serialize");
     let restored: PersistedChatItem = serde_json::from_str(&json).expect("deserialize");
     match restored {
       PersistedChatItem::Checkpoint(restored) => assert_eq!(restored, marker),

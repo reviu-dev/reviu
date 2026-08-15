@@ -162,7 +162,12 @@ pub(crate) fn format_agent_review_export(comments: &[LocalAgentReviewComment]) -
 mod tests {
   use super::*;
 
-  fn comment(id: u64, line: usize, body: &str, state: LocalAgentReviewCommentState) -> LocalAgentReviewComment {
+  fn comment(
+    id: u64,
+    line: usize,
+    body: &str,
+    state: LocalAgentReviewCommentState,
+  ) -> LocalAgentReviewComment {
     LocalAgentReviewComment {
       id,
       in_reply_to_id: None,
@@ -183,7 +188,12 @@ mod tests {
     let comment = LocalAgentReviewComment {
       start_line: Some(10),
       start_side: Some(ReviewCommentSide::Right),
-      ..comment(1, 12, "Please simplify this.", LocalAgentReviewCommentState::Draft)
+      ..comment(
+        1,
+        12,
+        "Please simplify this.",
+        LocalAgentReviewCommentState::Draft,
+      )
     };
 
     assert_eq!(agent_review_line_label(&comment), "L11-L13");
@@ -194,7 +204,12 @@ mod tests {
     let comments = vec![
       LocalAgentReviewComment {
         path: PathBuf::from("src/lib.rs"),
-        ..comment(2, 4, "Use the shared helper.", LocalAgentReviewCommentState::Draft)
+        ..comment(
+          2,
+          4,
+          "Use the shared helper.",
+          LocalAgentReviewCommentState::Draft,
+        )
       },
       comment(
         1,
@@ -234,7 +249,12 @@ mod tests {
 
   #[test]
   fn next_agent_review_comment_state_marks_copied_mismatch_as_outdated() {
-    let comment = comment(1, 1, "Please simplify this.", LocalAgentReviewCommentState::Copied);
+    let comment = comment(
+      1,
+      1,
+      "Please simplify this.",
+      LocalAgentReviewCommentState::Copied,
+    );
     let current_lines = vec![
       "fn main() {".to_string(),
       "let value = changed();".to_string(),
@@ -251,7 +271,12 @@ mod tests {
   fn format_agent_review_export_skips_addressed_and_outdated_comments() {
     let comments = vec![
       comment(1, 1, "Still active.", LocalAgentReviewCommentState::Copied),
-      comment(2, 3, "Already fixed.", LocalAgentReviewCommentState::Addressed),
+      comment(
+        2,
+        3,
+        "Already fixed.",
+        LocalAgentReviewCommentState::Addressed,
+      ),
       comment(3, 5, "Stale.", LocalAgentReviewCommentState::Outdated),
     ];
 

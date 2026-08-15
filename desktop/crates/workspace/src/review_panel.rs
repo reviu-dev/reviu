@@ -15,22 +15,19 @@ use gpui_component::{
   tree::{TreeItem, TreeState, tree},
   v_flex,
 };
-use std::collections::BTreeMap;
 use smol::unblock;
+use std::collections::BTreeMap;
 use std::rc::Rc;
 
 use crate::api::GithubPullRequest;
 use crate::auth_state::AuthStateStore;
 use crate::git_page::{
-  GithubBranchContext, PullRequestCreatedHandler, open_create_pull_request_dialog,
-  read_commit_diff,
+  GithubBranchContext, PullRequestCreatedHandler, open_create_pull_request_dialog, read_commit_diff,
 };
 use crate::github_navigation::open_pr_target;
 use crate::github_shared::{pull_request_status_color, pull_request_status_label};
 use crate::workspace::WorkspaceApi;
-use ui::{
-  Button, ButtonVariants as _, StatusThemeExt as _, Textarea, TextareaState, UiIconName,
-};
+use ui::{Button, ButtonVariants as _, StatusThemeExt as _, Textarea, TextareaState, UiIconName};
 
 fn status_color(kind: RepoStatusKind, theme: &gpui_component::Theme) -> gpui::Hsla {
   match kind {
@@ -101,8 +98,7 @@ pub(crate) fn build_worktree_tree_items(files: &[PathBuf]) -> Vec<TreeItem> {
     for (name, child) in &node.dirs {
       let child_prefix = format!("{prefix}{name}/");
       items.push(
-        TreeItem::new(child_prefix.clone(), name.clone())
-          .children(items_for(child, &child_prefix)),
+        TreeItem::new(child_prefix.clone(), name.clone()).children(items_for(child, &child_prefix)),
       );
     }
     let mut files = node.files.clone();
@@ -285,7 +281,9 @@ impl ReviewPanel {
       let state = unblock(move || {
         branch_pr_state_for_lookup(
           current_github_remote_repo(&repo_root).ok().flatten(),
-          current_branch_status(&repo_root).ok().map(|status| status.name),
+          current_branch_status(&repo_root)
+            .ok()
+            .map(|status| status.name),
           |context| {
             api.fetch_pull_request_for_branch(&context.owner, &context.repo, &context.branch)
           },
@@ -303,6 +301,11 @@ impl ReviewPanel {
 
   pub(crate) fn status_entries(&self) -> &[RepoStatusEntry] {
     &self.status_entries
+  }
+
+  #[cfg(test)]
+  pub(crate) fn set_repo_root(&mut self, repo_root: Option<PathBuf>) {
+    self.repo_root = repo_root;
   }
 
   fn has_staged_changes(&self) -> bool {
@@ -470,12 +473,7 @@ impl ReviewPanel {
       .border_t_1()
       .border_color(theme.border)
       .when_some(self.last_error.clone(), |this, error| {
-        this.child(
-          div()
-            .text_xs()
-            .text_color(theme.status_red())
-            .child(error),
-        )
+        this.child(div().text_xs().text_color(theme.status_red()).child(error))
       })
       .child(div().w_full().min_w_0().key_context("CommitInput").child({
         let commit_box = Textarea::new(&self.commit_input).w_full();
@@ -527,9 +525,7 @@ impl ReviewPanel {
         .text_xs()
         .cursor_pointer()
         .when(active, |this| {
-          this
-            .bg(theme.secondary_active)
-            .text_color(theme.foreground)
+          this.bg(theme.secondary_active).text_color(theme.foreground)
         })
         .when(!active, |this| {
           this
@@ -714,9 +710,10 @@ impl ReviewPanel {
   fn render_pr_tab(&self, cx: &mut Context<Self>) -> AnyElement {
     let theme = cx.theme().clone();
     match &self.branch_pr {
-      BranchPrState::NoAccess => {
-        self.render_pr_message("Sign in with GitHub to link this branch to a pull request", cx)
-      }
+      BranchPrState::NoAccess => self.render_pr_message(
+        "Sign in with GitHub to link this branch to a pull request",
+        cx,
+      ),
       BranchPrState::NoRemote => self.render_pr_message("No GitHub remote on this repository", cx),
       BranchPrState::Loading => self.render_pr_message("Loading pull request...", cx),
       BranchPrState::Missing(context) => {
@@ -825,16 +822,13 @@ impl ReviewPanel {
           .size_4()
           .text_color(theme.muted_foreground),
       )
-      .child(
-        div()
-          .text_sm()
-          .text_color(theme.muted_foreground)
-          .child(if self.repo_root.is_some() {
-            "No changes"
-          } else {
-            "No repository"
-          }),
-      )
+      .child(div().text_sm().text_color(theme.muted_foreground).child(
+        if self.repo_root.is_some() {
+          "No changes"
+        } else {
+          "No repository"
+        },
+      ))
       .into_any_element()
   }
 }
@@ -941,7 +935,10 @@ mod tests {
   fn split_path_label_separates_dir_and_file() {
     assert_eq!(
       split_path_label(Path::new("crates/workspace/src/git_page.rs")),
-      ("crates/workspace/src/".to_string(), "git_page.rs".to_string())
+      (
+        "crates/workspace/src/".to_string(),
+        "git_page.rs".to_string()
+      )
     );
   }
 
@@ -1072,7 +1069,10 @@ mod tests {
 
     // Top level: dirs first (src/), then files alphabetically.
     assert_eq!(
-      items.iter().map(|item| item.id.to_string()).collect::<Vec<_>>(),
+      items
+        .iter()
+        .map(|item| item.id.to_string())
+        .collect::<Vec<_>>(),
       vec!["src/", "Cargo.toml", "README.md"]
     );
     // Depth-first: directory ids end with '/', file ids are the relative path.
@@ -1130,19 +1130,17 @@ mod tests {
       other => panic!("expected Found, got {other:?}"),
     }
 
-    let missing = branch_pr_state_for_lookup(
-      Some(test_remote()),
-      Some("feature/x".to_string()),
-      |_| Ok(None),
-    );
+    let missing =
+      branch_pr_state_for_lookup(Some(test_remote()), Some("feature/x".to_string()), |_| {
+        Ok(None)
+      });
     assert!(matches!(missing, BranchPrState::Missing(_)));
 
     // API errors degrade to Missing so the tab still offers Create against the context.
-    let errored = branch_pr_state_for_lookup(
-      Some(test_remote()),
-      Some("feature/x".to_string()),
-      |_| Err(anyhow::anyhow!("network down")),
-    );
+    let errored =
+      branch_pr_state_for_lookup(Some(test_remote()), Some("feature/x".to_string()), |_| {
+        Err(anyhow::anyhow!("network down"))
+      });
     match errored {
       BranchPrState::Missing(context) => assert_eq!(context.branch, "feature/x"),
       other => panic!("expected Missing, got {other:?}"),
@@ -1195,13 +1193,15 @@ mod tests {
     await_refresh(&panel, cx).await;
 
     panel.update_in(cx, |panel, window, cx| {
-      panel
-        .commit_input
-        .update(cx, |input, cx| input.set_value("feat: update readme", window, cx));
+      panel.commit_input.update(cx, |input, cx| {
+        input.set_value("feat: update readme", window, cx)
+      });
     });
     panel.update(cx, |panel, cx| panel.commit(cx));
 
-    let commit_task = panel.update(cx, |panel, _| panel._commit_task.take().expect("commit task"));
+    let commit_task = panel.update(cx, |panel, _| {
+      panel._commit_task.take().expect("commit task")
+    });
     commit_task.await;
     await_refresh(&panel, cx).await;
 
