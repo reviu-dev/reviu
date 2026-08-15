@@ -28,9 +28,6 @@ use agent_client_protocol::schema::{
   SessionConfigValueId, SessionMode, SessionModeId,
 };
 use futures::future::BoxFuture;
-use gfm_markdown_viewer::{
-  LinkAction, MarkdownRenderOptions, SyntaxHighlightCache, render_markdown,
-};
 use gpui::Anchor;
 use gpui::AnimationExt as _;
 use gpui::{
@@ -45,6 +42,7 @@ use gpui_component::{
   input::{self, InputEvent, Textarea, TextareaState},
   menu::{DropdownMenu as _, PopupMenuItem},
   scroll::ScrollableElement as _,
+  text::{TextView, TextViewStyle},
   v_flex,
 };
 use syntax::{HighlightSpan, SyntaxHighlighter, SyntaxTheme, highlights_to_text_runs, languages};
@@ -333,8 +331,6 @@ pub struct AgentChatPanel {
   auth_required: bool,
   state_dir: Option<PathBuf>,
   current_conv: ConversationMeta,
-  syntax_cache: Arc<SyntaxHighlightCache>,
-  markdown_state: gfm_markdown_viewer::MarkdownRenderState,
   selection_registry: selectable_text::SelectionRegistry,
   available_modes: Vec<SessionMode>,
   current_mode_id: Option<SessionModeId>,
@@ -380,8 +376,6 @@ impl AgentChatPanel {
       .unwrap_or_else(|| (new_conversation_meta(), Vec::new(), HashMap::new()));
 
     let selection_registry = selectable_text::SelectionRegistry::new();
-    let markdown_state =
-      gfm_markdown_viewer::MarkdownRenderState::with_selection_registry(selection_registry.clone());
 
     let mut panel = Self {
       backend_kind,
@@ -412,8 +406,6 @@ impl AgentChatPanel {
       auth_required: false,
       state_dir,
       current_conv,
-      syntax_cache: Arc::new(SyntaxHighlightCache::new()),
-      markdown_state,
       selection_registry,
       available_modes: Vec::new(),
       current_mode_id: None,
@@ -675,11 +667,7 @@ impl AgentChatPanel {
     } else {
       let item_ix = list_ix - extras_before.len();
       if item_ix < self.items.len() {
-        let md_options =
-          MarkdownRenderOptions::with_on_link(Arc::new(|_url, _window, _cx| LinkAction::Open))
-            .with_syntax_cache(self.syntax_cache.clone())
-            .with_state(self.markdown_state.clone());
-        self.render_item_at(item_ix, theme, &md_options, cx)
+        self.render_item_at(item_ix, theme, cx)
       } else if let Some(kind) = self.extras_after_kind() {
         self.render_extra_after(kind, theme, cx)
       } else {
@@ -876,10 +864,11 @@ impl AgentChatPanel {
 
     let mut container = v_flex().px_3().pb_3().gap_1().child(row);
     if !self.pending_agent.is_empty() {
-      let md_options =
-        MarkdownRenderOptions::with_on_link(Arc::new(|_url, _window, _cx| LinkAction::Open))
-          .with_syntax_cache(self.syntax_cache.clone());
-      container = container.child(render_markdown(&self.pending_agent, &md_options, cx));
+      container = container.child(markdown_view(
+        "agent-chat-md-pending",
+        &self.pending_agent,
+        cx,
+      ));
     }
     container.into_any_element()
   }
@@ -911,7 +900,6 @@ impl AgentChatPanel {
     &mut self,
     idx: usize,
     theme: &gpui_component::Theme,
-    md_options: &MarkdownRenderOptions,
     cx: &mut Context<Self>,
   ) -> gpui::AnyElement {
     let has_continuation_trailer =
@@ -961,9 +949,11 @@ impl AgentChatPanel {
             registry.clone(),
           ))
           .into_any_element(),
-        ChatRole::Agent => {
-          timeline_row(render_markdown(&m.text, md_options, cx), theme, is_last_row)
-        }
+        ChatRole::Agent => timeline_row(
+          markdown_view(("agent-chat-md", idx), &m.text, cx),
+          theme,
+          is_last_row,
+        ),
         ChatRole::System => timeline_row(
           div()
             .text_xs()
@@ -1008,13 +998,11 @@ impl AgentChatPanel {
                     .child(label),
                 ),
             )
-            .child(
-              div()
-                .px_3()
-                .py_2()
-                .text_sm()
-                .child(render_markdown(&m.text, md_options, cx)),
-            )
+            .child(div().px_3().py_2().text_sm().child(markdown_view(
+              ("agent-chat-review-md", idx),
+              &m.text,
+              cx,
+            )))
             .into_any_element()
         }
       },
@@ -2391,6 +2379,18 @@ fn render_selector_item(
     .into_any_element()
 }
 
+fn markdown_view(id: impl Into<gpui::ElementId>, source: &str, cx: &App) -> gpui::AnyElement {
+  let theme = cx.theme();
+  let mut style = TextViewStyle::default().paragraph_gap(gpui::rems(0.5));
+  style.highlight_theme = theme.highlight_theme.clone();
+  style.is_dark = theme.mode.is_dark();
+
+  TextView::markdown(id, SharedString::from(source.to_string()))
+    .style(style)
+    .selectable(true)
+    .into_any_element()
+}
+
 fn timeline_row(
   content: gpui::AnyElement,
   theme: &gpui_component::Theme,
@@ -2708,14 +2708,16 @@ fn render_thought(
         .into_any_element(),
     )
     .when(!collapsed && !body_text.is_empty(), |this| {
-      let md_options =
-        MarkdownRenderOptions::with_on_link(Arc::new(|_url, _window, _cx| LinkAction::Open));
       this.child(
         div()
           .pl_4()
           .text_xs()
           .text_color(theme.muted_foreground)
-          .child(render_markdown(&body_text, &md_options, cx)),
+          .child(markdown_view(
+            ("agent-chat-thought-md", idx),
+            &body_text,
+            cx,
+          )),
       )
     })
     .into_any_element()

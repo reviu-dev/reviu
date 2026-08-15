@@ -371,7 +371,6 @@ dependencies = [
  "blake3",
  "dirs 5.0.1",
  "futures",
- "gfm_markdown_viewer",
  "gpui",
  "gpui-component",
  "imara-diff",

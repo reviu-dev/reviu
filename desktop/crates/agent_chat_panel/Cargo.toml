@@ -14,7 +14,6 @@ blake3 = { workspace = true }
 dirs = { workspace = true }
 imara-diff = { workspace = true }
 futures = { workspace = true }
-gfm_markdown_viewer = { workspace = true }
 gpui = { workspace = true }
 gpui-component = { workspace = true }
 selectable_text = { workspace = true }
