@@ -2069,4 +2069,113 @@ mod tests {
         .any(|recent| recent.path == repo.path)
     );
   }
+
+  #[gpui::test]
+  async fn palette_repositories_put_the_open_repository_first(cx: &mut TestAppContext) {
+    let repo = TempRepo::init("session-page-palette-repos");
+    commit_text_file(&repo.path, Path::new("README.md"), "v1\n", "initial");
+    let other = TempRepo::init("session-page-palette-repos-other");
+    commit_text_file(&other.path, Path::new("README.md"), "other\n", "initial");
+
+    let (page, cx) = add_session_page_window(repo.path.clone(), cx);
+    ConfigStore::persist_recent_repository(&other.path);
+
+    page.read_with(cx, |page, _| {
+      let repositories = page.palette_repositories();
+      // The open repository is not in the recents yet, it still leads the list.
+      assert_eq!(
+        repositories.first().map(|repo| repo.path.to_string()),
+        Some(repo.path.to_string_lossy().to_string())
+      );
+      assert_eq!(repositories.len(), 2);
+    });
+
+    // Once it is a recent too, it must not be listed twice. Order is left to the
+    // recents, whose timestamps have a one-second granularity.
+    ConfigStore::persist_recent_repository(&repo.path);
+    page.read_with(cx, |page, _| {
+      let repositories = page.palette_repositories();
+      assert_eq!(repositories.len(), 2);
+      assert_eq!(
+        repositories
+          .iter()
+          .filter(|entry| entry.path.as_ref() == repo.path.to_string_lossy())
+          .count(),
+        1
+      );
+    });
+  }
+
+  #[gpui::test]
+  async fn switching_to_a_repository_that_moved_reports_an_error(cx: &mut TestAppContext) {
+    let repo = TempRepo::init("session-page-switch-missing");
+    commit_text_file(&repo.path, Path::new("README.md"), "v1\n", "initial");
+
+    let (page, cx) = add_session_page_window(repo.path.clone(), cx);
+    let missing = std::env::temp_dir().join("reviu-session-page-not-a-repo");
+    let _ = std::fs::remove_dir_all(&missing);
+
+    let error = page.update_in(cx, |page, window, cx| {
+      page
+        .handle_command_palette_action(
+          CommandPaletteAction::SwitchRepository(ui::CommandPaletteRepository {
+            path: missing.to_string_lossy().to_string().into(),
+          }),
+          window,
+          cx,
+        )
+        .expect_err("missing repository")
+    });
+
+    assert!(error.contains("Repository not found"), "{error}");
+    page.read_with(cx, |page, _| {
+      assert_eq!(page.selected_repo.as_deref(), Some(repo.path.as_path()));
+    });
+  }
+
+  #[gpui::test]
+  async fn forgetting_another_repository_keeps_the_open_one(cx: &mut TestAppContext) {
+    let repo = TempRepo::init("session-page-forget-other");
+    commit_text_file(&repo.path, Path::new("README.md"), "v1\n", "initial");
+    let other = TempRepo::init("session-page-forget-other-recent");
+    commit_text_file(&other.path, Path::new("README.md"), "other\n", "initial");
+
+    let (page, cx) = add_session_page_window(repo.path.clone(), cx);
+    ConfigStore::persist_recent_repository(&repo.path);
+    ConfigStore::persist_recent_repository(&other.path);
+
+    page.update_in(cx, |page, window, cx| {
+      page
+        .forget_repository(other.path.clone(), window, cx)
+        .expect("forget repository");
+    });
+
+    page.read_with(cx, |page, _| {
+      assert_eq!(page.selected_repo.as_deref(), Some(repo.path.as_path()));
+    });
+    let recents = ConfigStore::load_recent_repositories();
+    assert!(recents.iter().any(|recent| recent.path == repo.path));
+    assert!(!recents.iter().any(|recent| recent.path == other.path));
+  }
+
+  #[gpui::test]
+  async fn forgetting_the_last_repository_clears_the_selection(cx: &mut TestAppContext) {
+    let repo = TempRepo::init("session-page-forget-last");
+    commit_text_file(&repo.path, Path::new("README.md"), "v1\n", "initial");
+
+    let (page, cx) = add_session_page_window(repo.path.clone(), cx);
+    ConfigStore::persist_recent_repository(&repo.path);
+
+    page.update_in(cx, |page, window, cx| {
+      page
+        .forget_repository(repo.path.clone(), window, cx)
+        .expect("forget repository");
+    });
+
+    page.read_with(cx, |page, cx| {
+      assert!(page.selected_repo.is_none());
+      assert!(page.review_panel.read(cx).repo_root().is_none());
+      assert!(page.current_branch.is_none());
+    });
+  }
 }
