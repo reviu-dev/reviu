@@ -58,7 +58,11 @@ pub(crate) fn split_path_label(path: &std::path::Path) -> (String, String) {
 
 #[derive(Clone, Debug)]
 pub enum ReviewPanelEvent {
-  OpenFile { path: PathBuf },
+  OpenFile {
+    path: PathBuf,
+  },
+  /// A commit landed: whoever shows the branch state has to refresh it.
+  Committed,
 }
 
 impl gpui::EventEmitter<ReviewPanelEvent> for ReviewPanel {}
@@ -356,6 +360,7 @@ impl ReviewPanel {
             let _ = cx.update_window(window_handle, |_, window, cx| {
               commit_input.update(cx, |input, cx| input.set_value("", window, cx));
             });
+            cx.emit(ReviewPanelEvent::Committed);
           }
           Err(error) => this.last_error = Some(format!("{error}").into()),
         }
@@ -873,6 +878,8 @@ mod tests {
   use git2::{Repository, Signature};
   use gpui::TestAppContext;
   use std::path::Path;
+  use std::sync::Arc;
+  use std::sync::atomic::{AtomicBool, Ordering};
   use std::time::{SystemTime, UNIX_EPOCH};
 
   #[test]
@@ -1141,6 +1148,19 @@ mod tests {
         input.set_value("feat: update readme", window, cx)
       });
     });
+    // The shell refreshes its branch counters on this event.
+    let committed = Arc::new(AtomicBool::new(false));
+    let observer = {
+      let committed = committed.clone();
+      cx.update(|_, cx| {
+        cx.subscribe(&panel, move |_, event: &ReviewPanelEvent, _| {
+          if matches!(event, ReviewPanelEvent::Committed) {
+            committed.store(true, Ordering::Relaxed);
+          }
+        })
+      })
+    };
+
     panel.update(cx, |panel, cx| panel.commit(cx));
 
     let commit_task = panel.update(cx, |panel, _| {
@@ -1148,6 +1168,11 @@ mod tests {
     });
     commit_task.await;
     await_refresh(&panel, cx).await;
+    drop(observer);
+    assert!(
+      committed.load(Ordering::Relaxed),
+      "expected a Committed event"
+    );
 
     let repo_handle = Repository::open(&repo.path).expect("open repo");
     let head = repo_handle

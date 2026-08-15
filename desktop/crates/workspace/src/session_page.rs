@@ -43,7 +43,8 @@ use crate::{
 use ui::{
   Button, ButtonVariants as _, CommandPalette, CommandPaletteAction, CommandPaletteCommand,
   CommandPaletteConfig, CommandPaletteHandler, CommandPaletteInitialScreen, CommandPalettePage,
-  CommandPaletteRepository, SearchFileEntry, SearchFileHandler, UiIconName, WindowExt as _,
+  CommandPaletteRepository, SearchFileEntry, SearchFileHandler, StatusThemeExt as _, UiIconName,
+  WindowExt as _,
 };
 
 const SESSIONS_SIDEBAR_DEFAULT_WIDTH: f32 = 250.0;
@@ -174,7 +175,7 @@ pub struct SessionPage {
   open_file_generation: u64,
   open_file_task: Option<Task<()>>,
   agent_review: AgentReviewComments,
-  current_branch: Option<SharedString>,
+  branch_status: Option<git::BranchStatus>,
   // Review export waiting for the agent connection to become ready.
   pending_review_export: Option<String>,
   repo_command_in_flight: bool,
@@ -194,6 +195,9 @@ impl SessionPage {
         ReviewPanelEvent::OpenFile { path } => {
           this.open_diff(path.clone(), None, window, cx);
         }
+        ReviewPanelEvent::Committed => {
+          this.refresh_branch(cx);
+        }
       },
     )
     .detach();
@@ -211,7 +215,7 @@ impl SessionPage {
       open_file_generation: 0,
       open_file_task: None,
       agent_review: AgentReviewComments::new(),
-      current_branch: None,
+      branch_status: None,
       pending_review_export: None,
       repo_command_in_flight: false,
       _branch_task: None,
@@ -275,7 +279,7 @@ impl SessionPage {
     let task = cx.spawn(async move |this, cx| {
       let status = unblock(move || git::current_branch_status(&repo_root)).await;
       let _ = this.update(cx, |this, cx| {
-        this.current_branch = status.ok().map(|status| status.name.into());
+        this.branch_status = status.ok();
         cx.notify();
       });
     });
@@ -947,7 +951,7 @@ impl SessionPage {
     self.open_file_generation = self.open_file_generation.wrapping_add(1);
     self.agent_review.clear();
     self.pending_review_export = None;
-    self.current_branch = None;
+    self.branch_status = None;
     // Conversations are stored per repository, so the panel is rebuilt on the
     // next render with the new cwd and state directory.
     self.agent_chat_view = None;
@@ -1104,6 +1108,48 @@ impl SessionPage {
     }
   }
 
+  /// Ahead/behind counter that runs the matching sync command when clicked.
+  fn render_sync_counter(
+    &self,
+    id: &'static str,
+    icon: gpui_component::IconName,
+    count: usize,
+    color: gpui::Hsla,
+    tooltip: &'static str,
+    in_flight: bool,
+    command: RepoCommand,
+    cx: &mut Context<Self>,
+  ) -> AnyElement {
+    let color = if in_flight {
+      cx.theme().muted_foreground
+    } else {
+      color
+    };
+
+    h_flex()
+      .id(id)
+      .items_center()
+      .gap_1()
+      .flex_shrink_0()
+      .when(!in_flight, |this| {
+        this
+          .cursor_pointer()
+          .tooltip(move |window, cx| {
+            gpui_component::tooltip::Tooltip::new(tooltip).build(window, cx)
+          })
+          .on_click(cx.listener(move |this, _, window, cx| {
+            // The row switches repository; the counter runs its command instead.
+            cx.stop_propagation();
+            if let Err(error) = this.run_repo_command(command, window, cx) {
+              window.push_notification(Notification::warning(error), cx);
+            }
+          }))
+      })
+      .child(gpui_component::Icon::new(icon).size_3().text_color(color))
+      .child(div().text_xs().text_color(color).child(count.to_string()))
+      .into_any_element()
+  }
+
   fn render_sessions_sidebar(&mut self, cx: &mut Context<Self>) -> AnyElement {
     let theme = cx.theme().clone();
     let (conversations, current_id) = match self.agent_chat_view.as_ref() {
@@ -1214,6 +1260,9 @@ impl SessionPage {
       .and_then(|path| path.file_name())
       .map(|name| name.to_string_lossy().into_owned());
 
+    let branch_status = self.branch_status.clone();
+    let sync_in_flight = self.repo_command_in_flight;
+
     let repo_context = repo_name.map(|name| {
       h_flex()
         .id("session-repo-context")
@@ -1242,12 +1291,13 @@ impl SessionPage {
             .truncate()
             .child(name),
         )
-        .when_some(self.current_branch.clone(), |this, branch| {
+        .when_some(branch_status.clone(), |this, status| {
           this.child(
             h_flex()
               .items_center()
               .gap_1()
               .min_w(px(0.0))
+              .flex_1()
               .child(
                 gpui_component::Icon::new(UiIconName::GitBranch)
                   .size_3()
@@ -1258,9 +1308,36 @@ impl SessionPage {
                   .text_xs()
                   .text_color(theme.muted_foreground)
                   .truncate()
-                  .child(branch),
+                  .child(SharedString::from(status.name)),
               ),
           )
+        })
+        .when_some(branch_status, |this, status| {
+          this
+            .when(status.behind > 0, |this| {
+              this.child(self.render_sync_counter(
+                "session-repo-behind",
+                gpui_component::IconName::ArrowDown,
+                status.behind,
+                theme.status_red(),
+                "Pull",
+                sync_in_flight,
+                RepoCommand::Pull,
+                cx,
+              ))
+            })
+            .when(status.ahead > 0, |this| {
+              this.child(self.render_sync_counter(
+                "session-repo-ahead",
+                gpui_component::IconName::ArrowUp,
+                status.ahead,
+                theme.status_green(),
+                "Push",
+                sync_in_flight,
+                RepoCommand::Push,
+                cx,
+              ))
+            })
         })
     });
 
@@ -2175,7 +2252,91 @@ mod tests {
     page.read_with(cx, |page, cx| {
       assert!(page.selected_repo.is_none());
       assert!(page.review_panel.read(cx).repo_root().is_none());
-      assert!(page.current_branch.is_none());
+      assert!(page.branch_status.is_none());
+    });
+  }
+
+  fn init_bare_repo(prefix: &str) -> PathBuf {
+    let mut path = std::env::temp_dir();
+    let nanos = SystemTime::now()
+      .duration_since(UNIX_EPOCH)
+      .expect("system clock before unix epoch")
+      .as_nanos();
+    path.push(format!(
+      "reviu-{prefix}-bare-{}-{nanos}",
+      std::process::id()
+    ));
+    std::fs::create_dir_all(&path).expect("create temp dir");
+    git2::Repository::init_bare(&path).expect("init bare repository");
+    path
+  }
+
+  /// Publishes the current branch to a fresh bare remote and tracks it, so the
+  /// ahead/behind counters have something to count.
+  fn publish_to_new_remote(repo_root: &Path, prefix: &str) -> PathBuf {
+    let remote_root = init_bare_repo(prefix);
+    let repo = git2::Repository::open(repo_root).expect("open repo");
+    repo
+      .remote("origin", &remote_root.to_string_lossy())
+      .expect("add remote");
+
+    let head = repo.head().expect("head");
+    let branch = head.shorthand().expect("branch name").to_string();
+    let mut remote = repo.find_remote("origin").expect("find remote");
+    let mut callbacks = git2::RemoteCallbacks::new();
+    callbacks.credentials(|_, _, _| git2::Cred::default());
+    let mut options = git2::PushOptions::new();
+    options.remote_callbacks(callbacks);
+    remote
+      .push(
+        &[format!("refs/heads/{branch}:refs/heads/{branch}")],
+        Some(&mut options),
+      )
+      .expect("push branch");
+
+    repo
+      .find_branch(&branch, git2::BranchType::Local)
+      .expect("find local branch")
+      .set_upstream(Some(&format!("origin/{branch}")))
+      .expect("set upstream");
+
+    remote_root
+  }
+
+  async fn await_branch_refresh(page: &Entity<SessionPage>, cx: &mut gpui::VisualTestContext) {
+    let task = page.update(cx, |page, _| page._branch_task.take());
+    if let Some(task) = task {
+      task.await;
+    }
+    cx.run_until_parked();
+  }
+
+  #[gpui::test]
+  async fn committing_in_the_shell_updates_the_ahead_counter(cx: &mut TestAppContext) {
+    let repo = TempRepo::init("session-page-ahead-counter");
+    commit_text_file(&repo.path, Path::new("README.md"), "v1\n", "initial");
+    let _remote = publish_to_new_remote(&repo.path, "session-page-ahead-counter");
+
+    let (page, cx) = add_session_page_window(repo.path.clone(), cx);
+    cx.executor().allow_parking();
+    cx.run_until_parked();
+
+    page.update(cx, |page, cx| page.refresh_branch(cx));
+    await_branch_refresh(&page, cx).await;
+    page.read_with(cx, |page, _| {
+      let status = page.branch_status.as_ref().expect("branch status");
+      assert_eq!(status.ahead, 0);
+      assert_eq!(status.behind, 0);
+      assert!(status.has_upstream);
+    });
+
+    // A commit made from the shell must show up as something to push.
+    commit_text_file(&repo.path, Path::new("README.md"), "v2\n", "second");
+    page.update(cx, |page, cx| page.refresh_branch(cx));
+    await_branch_refresh(&page, cx).await;
+
+    page.read_with(cx, |page, _| {
+      assert_eq!(page.branch_status.as_ref().expect("status").ahead, 1);
     });
   }
 }
