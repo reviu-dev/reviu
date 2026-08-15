@@ -8,7 +8,6 @@ mod github_url;
 mod icons;
 mod markdown_composer;
 mod palette;
-mod reaction_bar;
 mod scroll_routing;
 mod search_file_palette;
 mod selectable_row;
@@ -67,7 +66,6 @@ pub use markdown_composer::{
   MARKDOWN_COMPOSER_TAB_BAR_HEIGHT_PX, MarkdownComposer,
 };
 pub use palette::open_palette_dialog;
-pub use reaction_bar::{ReactionBar, ReactionGroup, ReactionOption, ReactionToggle};
 pub use scroll_routing::{
   ScrollAxes, ScrollDispatcher, ScrollableNode, restrict_scroll_to_wheel_axis, scroll_dispatcher,
   scrollable_node,
