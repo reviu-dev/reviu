@@ -313,7 +313,7 @@ impl ReviewPanel {
       .any(|entry| !matches!(entry.stage, RepoStage::Unstaged))
   }
 
-  fn commit(&mut self, cx: &mut Context<Self>) {
+  pub(crate) fn commit(&mut self, cx: &mut Context<Self>) {
     if self.committing {
       return;
     }

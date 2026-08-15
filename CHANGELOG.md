@@ -60,6 +60,10 @@ The agent conversation now reads in a centered column instead of stretching acro
 
 Settings gains a Home Page choice: Sessions, the default, or Git for those who come to Reviu for the Git client first. Reviu opens there on every launch.
 
+### Git Commands Where You Work
+
+The command palette in the Sessions workspace was navigation only, even though the workspace shows your changes and commits them. It now carries the commands that match what is on screen: commit, stage all, unstage all, push, pull and fetch, on the repository the session is working in. Each one reports what happened and refreshes the changes panel.
+
 ## 0.18.0
 
 ### No More Failed Single Comments During A Review

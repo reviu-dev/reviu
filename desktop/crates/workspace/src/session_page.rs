@@ -1,7 +1,7 @@
 //! Agent-first shell: sessions sidebar, conversation center, review panel.
 
 use std::collections::HashSet;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use agent_chat_panel::{AgentChatPanel, AgentChatPanelEvent, ConversationMeta};
@@ -88,6 +88,31 @@ pub(crate) fn session_row_title(meta: &ConversationMeta) -> SharedString {
   }
 }
 
+/// The repo-wide git commands the sessions palette runs off the main thread.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum RepoCommand {
+  StageAll,
+  UnstageAll,
+  Push,
+  Pull,
+  Fetch,
+}
+
+impl RepoCommand {
+  fn run(self, repo_root: &Path) -> anyhow::Result<SharedString> {
+    match self {
+      Self::StageAll => git::stage_all(repo_root).map(|()| "Staged all changes".into()),
+      Self::UnstageAll => git::unstage_all(repo_root).map(|()| "Unstaged all changes".into()),
+      Self::Push => git::push(repo_root, false).map(|()| "Pushed to the remote branch".into()),
+      Self::Pull => git::pull(repo_root).map(|outcome| match outcome {
+        git::PullOutcome::AlreadyUpToDate => "Already up to date".into(),
+        git::PullOutcome::Pulled => "Pulled from the remote branch".into(),
+      }),
+      Self::Fetch => git::fetch(repo_root).map(|()| "Fetched from remotes".into()),
+    }
+  }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum CenterView {
   Conversation,
@@ -160,6 +185,7 @@ pub struct SessionPage {
   current_branch: Option<SharedString>,
   // Review export waiting for the agent connection to become ready.
   pending_review_export: Option<String>,
+  repo_command_in_flight: bool,
   _branch_task: Option<Task<()>>,
 }
 
@@ -196,6 +222,7 @@ impl SessionPage {
       next_agent_review_comment_id: 1,
       current_branch: None,
       pending_review_export: None,
+      repo_command_in_flight: false,
       _branch_task: None,
     };
     SessionPageHandle::register(cx);
@@ -991,10 +1018,61 @@ impl SessionPage {
     open_file_search_palette(window, cx, entries, handler, false);
   }
 
+  /// Runs a repo command in the background, then refreshes the changes panel.
+  fn run_repo_command(
+    &mut self,
+    command: RepoCommand,
+    _window: &mut Window,
+    cx: &mut Context<Self>,
+  ) -> Result<(), SharedString> {
+    let Some(repo_root) = self.selected_repo.clone() else {
+      return Err("No repository selected.".into());
+    };
+    if self.repo_command_in_flight {
+      return Err("Another git command is still running.".into());
+    }
+
+    self.repo_command_in_flight = true;
+    let window_handle = self.window_handle;
+    cx.spawn(async move |this, cx| {
+      let result = unblock(move || command.run(&repo_root)).await;
+      let _ = cx.update_window(window_handle, |_, window, cx| {
+        let _ = this.update(cx, |this, cx| {
+          this.repo_command_in_flight = false;
+          match result {
+            Ok(message) => {
+              window.push_notification(Notification::success(message), cx);
+              this.review_panel.update(cx, |panel, cx| panel.refresh(cx));
+              this.refresh_branch(cx);
+            }
+            Err(error) => {
+              window.push_notification(Notification::error(error.to_string()), cx);
+            }
+          }
+          cx.notify();
+        });
+      });
+    })
+    .detach();
+
+    Ok(())
+  }
+
   fn open_command_palette(&mut self, window: &mut Window, cx: &mut Context<Self>) {
     let include_github = AuthStateStore::has_github_access(cx);
-    let commands =
-      CommandPaletteCommand::default_global_commands(CommandPalettePage::Session, include_github);
+    let mut commands = Vec::new();
+    if self.selected_repo.is_some() {
+      commands.push(CommandPaletteCommand::commit());
+      commands.push(CommandPaletteCommand::stage_all());
+      commands.push(CommandPaletteCommand::unstage_all());
+      commands.push(CommandPaletteCommand::push("Push"));
+      commands.push(CommandPaletteCommand::pull());
+      commands.push(CommandPaletteCommand::fetch());
+    }
+    commands.extend(CommandPaletteCommand::default_global_commands(
+      CommandPalettePage::Session,
+      include_github,
+    ));
 
     let view = cx.entity();
     let handler: CommandPaletteHandler = Arc::new(move |action, window, cx| {
@@ -1015,6 +1093,20 @@ impl SessionPage {
     cx: &mut Context<Self>,
   ) -> Result<(), SharedString> {
     match action {
+      CommandPaletteAction::Commit => {
+        if self.selected_repo.is_none() {
+          return Err("No repository selected.".into());
+        }
+        self.review_panel.update(cx, |panel, cx| panel.commit(cx));
+        Ok(())
+      }
+      CommandPaletteAction::StageAll => self.run_repo_command(RepoCommand::StageAll, window, cx),
+      CommandPaletteAction::UnstageAll => {
+        self.run_repo_command(RepoCommand::UnstageAll, window, cx)
+      }
+      CommandPaletteAction::Push => self.run_repo_command(RepoCommand::Push, window, cx),
+      CommandPaletteAction::Pull => self.run_repo_command(RepoCommand::Pull, window, cx),
+      CommandPaletteAction::Fetch => self.run_repo_command(RepoCommand::Fetch, window, cx),
       CommandPaletteAction::OpenGitPage => {
         NavigationHistory::navigate("/git", cx);
         Ok(())
@@ -1637,6 +1729,43 @@ mod tests {
       message_count: 0,
       session_id: None,
     }
+  }
+
+  #[test]
+  fn repo_command_stage_and_unstage_move_the_whole_worktree() {
+    let repo = TempRepo::init("session-page-stage-all");
+    commit_text_file(&repo.path, Path::new("README.md"), "v1\n", "initial");
+    std::fs::write(repo.path.join("README.md"), "v2\n").expect("update file");
+
+    let message = RepoCommand::StageAll.run(&repo.path).expect("stage all");
+    assert_eq!(message.as_ref(), "Staged all changes");
+    let staged = git::list_repo_status(&repo.path)
+      .expect("status")
+      .into_iter()
+      .filter(|entry| !matches!(entry.stage, git::RepoStage::Unstaged))
+      .count();
+    assert_eq!(staged, 1);
+
+    let message = RepoCommand::UnstageAll
+      .run(&repo.path)
+      .expect("unstage all");
+    assert_eq!(message.as_ref(), "Unstaged all changes");
+    let staged = git::list_repo_status(&repo.path)
+      .expect("status")
+      .into_iter()
+      .filter(|entry| !matches!(entry.stage, git::RepoStage::Unstaged))
+      .count();
+    assert_eq!(staged, 0);
+  }
+
+  #[test]
+  fn repo_command_surfaces_the_git_error_instead_of_a_message() {
+    let missing = std::env::temp_dir().join("reviu-session-page-not-a-repo");
+    let _ = std::fs::create_dir_all(&missing);
+
+    let error = RepoCommand::StageAll.run(&missing).expect_err("not a repo");
+
+    assert!(!error.to_string().is_empty());
   }
 
   #[test]
