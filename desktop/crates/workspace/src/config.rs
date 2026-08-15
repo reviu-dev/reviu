@@ -129,9 +129,8 @@ fn ensure_default_rows(conn: &Connection) -> rusqlite::Result<()> {
   Ok(())
 }
 
-/// The columns v1 back-fills onto a pre-versioning `settings` table. FROZEN: this
-/// list is the schema as of the day versioning shipped and only runs for databases
-/// below v1. A new setting needs a new migration, never an entry here.
+/// FROZEN: only runs below v1. A new setting needs its own migration, never an
+/// entry here.
 fn ensure_settings_columns(conn: &Connection) -> rusqlite::Result<()> {
   const COLUMNS: &[(&str, &str)] = &[
     ("indent_rainbow", "INTEGER NOT NULL DEFAULT 0"),
@@ -157,8 +156,7 @@ fn settings_column_names(conn: &Connection) -> rusqlite::Result<HashSet<String>>
   rows.collect()
 }
 
-/// `ALTER TABLE ADD COLUMN` guarded on the column being absent, so a migration
-/// re-run over a database that already has it is a no-op instead of an error.
+/// Guarded so re-running a migration is a no-op instead of an error.
 fn add_settings_column_if_missing(
   conn: &Connection,
   column: &str,
@@ -1066,9 +1064,7 @@ mod tests {
     ConfigStore::set_test_db_path(None);
   }
 
-  /// The regression guard for the `home_page` incident: a database already stamped
-  /// at v1 skips the baseline, so a column added there never lands. Every new
-  /// setting must arrive through its own migration.
+  /// A database stamped at v1 skips the baseline, so a column added there never lands.
   #[test]
   fn migrations_upgrade_an_already_versioned_db() {
     let db_path = unique_test_db_path("migrate-versioned");

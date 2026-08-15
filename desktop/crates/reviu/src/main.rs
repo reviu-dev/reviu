@@ -66,7 +66,7 @@ mod linux_single_instance {
           std::fs::remove_file(&path).ok();
         }
       } else {
-        // Another instance is already listening — should not happen since
+        // Another instance is already listening, should not happen since
         // try_forward_url would have caught this, but be safe.
         return;
       }

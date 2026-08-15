@@ -3514,7 +3514,7 @@ mod tests {
       "conflict",
     );
 
-    // Apply stash — should succeed even though there are conflicts
+    // Apply stash, should succeed even though there are conflicts
     let result = apply_stash(&repo.path, 0);
     assert!(
       result.is_ok(),
@@ -3552,7 +3552,7 @@ mod tests {
       "conflict",
     );
 
-    // Pop stash — should succeed even though there are conflicts
+    // Pop stash, should succeed even though there are conflicts
     let result = pop_stash(&repo.path, 0);
     assert!(
       result.is_ok(),

@@ -214,7 +214,7 @@ mod tests {
       NavigationHistory::navigate_replace("/git", cx);
       NavigationHistory::navigate("/git", cx);
 
-      // Stack should be empty — no duplicate push
+      // Stack should be empty, no duplicate push
       assert_eq!(cx.global::<NavigationHistory>().stack.len(), 0);
     });
   }
@@ -227,7 +227,7 @@ mod tests {
       NavigationHistory::navigate_replace("/git", cx);
       NavigationHistory::navigate_replace("/settings", cx);
 
-      // Stack should be empty — replace doesn't push
+      // Stack should be empty, replace doesn't push
       assert_eq!(cx.global::<NavigationHistory>().stack.len(), 0);
       assert_eq!(
         NavigationHistory::current_pathname(cx).as_ref(),

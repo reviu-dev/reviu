@@ -2652,7 +2652,7 @@ fn build_code_block_spans(
   code: &CodeBlock,
   syntax_cache: Option<&Arc<crate::syntax_cache::SyntaxHighlightCache>>,
 ) -> (SharedString, Vec<InlineSpan>, Vec<LinkRange>) {
-  // Check cache first — returns highlighted spans if previously computed
+  // Check cache first, returns highlighted spans if previously computed
   if let Some(cache) = syntax_cache
     && let Some(cached) = cache.get(code)
   {
@@ -2676,7 +2676,7 @@ fn build_code_block_spans(
     && code_block_language_config(code.lang.as_deref()).is_some()
   {
     cache.schedule_highlight(code, &display_value);
-    // Return plain (uncolored) spans — will be replaced on next render after background completes
+    // Return plain (uncolored) spans, will be replaced on next render after background completes
     let plain_spans = vec![InlineSpan {
       range: 0..text_len,
       style: base_style,
@@ -2687,7 +2687,7 @@ fn build_code_block_spans(
     return (text, plain_spans, Vec::new());
   }
 
-  // No cache — synchronous highlight (fallback for preview cards etc.)
+  // No cache, synchronous highlight (fallback for preview cards etc.)
   let spans = code_block_language_config(code.lang.as_deref())
     .and_then(|config| {
       let mut highlighter = SyntaxHighlighter::new(config);
