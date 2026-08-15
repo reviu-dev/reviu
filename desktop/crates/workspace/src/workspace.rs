@@ -1081,6 +1081,11 @@ impl Render for WorkspaceView {
       }
       let focus_handle = self.focus_handle(cx);
       window.focus(&focus_handle, cx);
+      if page == WorkspacePage::Session {
+        self
+          .session_page
+          .update(cx, |session_page, cx| session_page.activate(window, cx));
+      }
     }
 
     let session_page = self.session_page.clone();

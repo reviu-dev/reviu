@@ -47,6 +47,10 @@ use ui::{
   WindowExt as _,
 };
 
+const REPO_CONTEXT_DEBUG_SELECTOR: &str = "session-repo-context";
+const REPO_AHEAD_DEBUG_SELECTOR: &str = "session-repo-ahead";
+const REPO_BEHIND_DEBUG_SELECTOR: &str = "session-repo-behind";
+
 const SESSIONS_SIDEBAR_DEFAULT_WIDTH: f32 = 250.0;
 const SESSIONS_SIDEBAR_MIN_WIDTH: f32 = 200.0;
 const SESSIONS_SIDEBAR_MAX_WIDTH: f32 = 420.0;
@@ -225,6 +229,16 @@ impl SessionPage {
     SessionPageHandle::register(cx);
     page.refresh_branch(cx);
     page
+  }
+
+  /// Connects the agent. Called when the workspace routes to the shell, never
+  /// from `render`: spawning a process while painting respawned it in a loop.
+  pub fn activate(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    if self.agent_chat_view.is_some() {
+      return;
+    }
+    self.ensure_agent_chat_view(window, cx);
+    cx.notify();
   }
 
   fn deliver_review_export(&mut self, text: String, window: &mut Window, cx: &mut Context<Self>) {
@@ -1130,6 +1144,7 @@ impl SessionPage {
 
     h_flex()
       .id(id)
+      .debug_selector(move || id.to_string())
       .items_center()
       .gap_1()
       .flex_shrink_0()
@@ -1268,6 +1283,7 @@ impl SessionPage {
     let repo_context = repo_name.map(|name| {
       h_flex()
         .id("session-repo-context")
+        .debug_selector(|| REPO_CONTEXT_DEBUG_SELECTOR.to_string())
         .items_center()
         .gap_2()
         .px_3()
@@ -1318,7 +1334,7 @@ impl SessionPage {
           this
             .when(status.behind > 0, |this| {
               this.child(self.render_sync_counter(
-                "session-repo-behind",
+                REPO_BEHIND_DEBUG_SELECTOR,
                 gpui_component::IconName::ArrowDown,
                 status.behind,
                 theme.status_red(),
@@ -1330,7 +1346,7 @@ impl SessionPage {
             })
             .when(status.ahead > 0, |this| {
               this.child(self.render_sync_counter(
-                "session-repo-ahead",
+                REPO_AHEAD_DEBUG_SELECTOR,
                 gpui_component::IconName::ArrowUp,
                 status.ahead,
                 theme.status_green(),
@@ -1681,15 +1697,7 @@ impl SessionPage {
 }
 
 impl Render for SessionPage {
-  fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-    // Create-only here: ensure_agent_chat_view drops a panel in error state to
-    // reconnect it, and doing that every frame respawns the agent in a loop
-    // (scroll resets, focus stolen, npx spawned repeatedly). Reconnection happens
-    // on explicit user actions instead.
-    if self.agent_chat_view.is_none() {
-      self.ensure_agent_chat_view(window, cx);
-    }
-
+  fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
     div()
       .size_full()
       .min_h_0()
@@ -1878,16 +1886,8 @@ mod tests {
     ConfigStore::set_test_db_path(Some(db_path));
   }
 
-  struct EmptyTestView;
-
-  impl Render for EmptyTestView {
-    fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
-      div()
-    }
-  }
-
-  // The page is created but never mounted: rendering would spawn a real agent process
-  // via ensure_agent_chat_view.
+  /// Mounts the page for real. The agent is only connected by `activate`, which
+  /// the workspace calls when it routes here, so rendering spawns no process.
   fn add_session_page_window(
     repo_root: PathBuf,
     cx: &mut TestAppContext,
@@ -1912,8 +1912,7 @@ mod tests {
     let (_root, cx) = cx.add_window_view(|window, cx| {
       let page = cx.new(|cx| SessionPage::new(window, cx));
       mounted = Some(page.clone());
-      let empty = cx.new(|_| EmptyTestView);
-      gpui_component::Root::new(empty, window, cx)
+      gpui_component::Root::new(page, window, cx)
     });
     let page = mounted.expect("session page");
     page.update(cx, |page, cx| {
@@ -2401,5 +2400,99 @@ mod tests {
     });
 
     assert!(error.contains("still running"), "{error}");
+  }
+
+  #[gpui::test]
+  async fn the_repo_line_is_painted_without_connecting_an_agent(cx: &mut TestAppContext) {
+    let repo = TempRepo::init("session-page-repo-line");
+    commit_text_file(&repo.path, Path::new("README.md"), "v1\n", "initial");
+
+    let (page, cx) = add_session_page_window(repo.path.clone(), cx);
+    cx.executor().allow_parking();
+    page.update(cx, |_, cx| cx.notify());
+    cx.run_until_parked();
+
+    assert!(
+      cx.debug_bounds(REPO_CONTEXT_DEBUG_SELECTOR).is_some(),
+      "the repository line should be painted"
+    );
+    page.read_with(cx, |page, _| {
+      // Rendering must not spawn the agent; the workspace calls activate.
+      assert!(page.agent_chat_view.is_none());
+    });
+  }
+
+  #[gpui::test]
+  async fn sync_counters_are_painted_only_when_there_is_something_to_sync(cx: &mut TestAppContext) {
+    let repo = TempRepo::init("session-page-counter-paint");
+    commit_text_file(&repo.path, Path::new("README.md"), "v1\n", "initial");
+    let _remote = publish_to_new_remote(&repo.path, "session-page-counter-paint");
+
+    let (page, cx) = add_session_page_window(repo.path.clone(), cx);
+    cx.executor().allow_parking();
+    cx.run_until_parked();
+
+    page.update(cx, |page, cx| page.refresh_branch(cx));
+    await_branch_refresh(&page, cx).await;
+    page.update(cx, |_, cx| cx.notify());
+    cx.run_until_parked();
+
+    assert!(
+      cx.debug_bounds(REPO_AHEAD_DEBUG_SELECTOR).is_none(),
+      "nothing to push, no counter"
+    );
+    assert!(cx.debug_bounds(REPO_BEHIND_DEBUG_SELECTOR).is_none());
+
+    commit_text_file(&repo.path, Path::new("README.md"), "v2\n", "second");
+    page.update(cx, |page, cx| page.refresh_branch(cx));
+    await_branch_refresh(&page, cx).await;
+    page.update(cx, |_, cx| cx.notify());
+    cx.run_until_parked();
+
+    assert!(
+      cx.debug_bounds(REPO_AHEAD_DEBUG_SELECTOR).is_some(),
+      "one commit to push, the counter shows up"
+    );
+    assert!(cx.debug_bounds(REPO_BEHIND_DEBUG_SELECTOR).is_none());
+  }
+
+  #[gpui::test]
+  async fn clicking_the_ahead_counter_pushes_instead_of_switching_repository(
+    cx: &mut TestAppContext,
+  ) {
+    let repo = TempRepo::init("session-page-counter-click");
+    commit_text_file(&repo.path, Path::new("README.md"), "v1\n", "initial");
+    let remote = publish_to_new_remote(&repo.path, "session-page-counter-click");
+    commit_text_file(&repo.path, Path::new("README.md"), "v2\n", "second");
+
+    let (page, cx) = add_session_page_window(repo.path.clone(), cx);
+    cx.executor().allow_parking();
+    page.update(cx, |page, cx| page.refresh_branch(cx));
+    await_branch_refresh(&page, cx).await;
+    page.update(cx, |_, cx| cx.notify());
+    cx.run_until_parked();
+
+    let counter = cx
+      .debug_bounds(REPO_AHEAD_DEBUG_SELECTOR)
+      .expect("ahead counter bounds");
+    cx.simulate_click(counter.center(), gpui::Modifiers::default());
+
+    let command_task = page.update(cx, |page, _| {
+      page._repo_command_task.take().expect("push task")
+    });
+    command_task.await;
+    cx.run_until_parked();
+
+    // The click ran the push and did not open the repository switcher.
+    let remote_repo = git2::Repository::open(&remote).expect("open remote");
+    let head = remote_repo
+      .head()
+      .and_then(|head| head.peel_to_commit())
+      .expect("remote head");
+    assert_eq!(head.summary(), Some("second"));
+
+    // The row under the counter opens the repository switcher: it must not fire.
+    let switcher_open = cx.update(|window, cx| window.has_active_dialog(cx));
+    assert!(!switcher_open, "the repository switcher should stay closed");
   }
 }
