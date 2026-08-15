@@ -180,10 +180,11 @@ pub(crate) fn mark_notification_done(thread_id: String, cx: &mut App) {
 #[cfg(test)]
 mod tests {
   use super::{
-    extract_number_from_api_url, github_html_url_from_notification, notification_owner_repo,
-    unread_count,
+    GithubNotificationsStore, extract_number_from_api_url, github_html_url_from_notification,
+    notification_owner_repo, unread_count,
   };
   use crate::api::{GithubNotification, GithubNotificationRepository, GithubNotificationSubject};
+  use gpui::TestAppContext;
 
   fn make_notification(id: &str, full_name: &str, unread: bool) -> GithubNotification {
     GithubNotification {
@@ -236,6 +237,62 @@ mod tests {
       notification_owner_repo(&ownerless),
       ("widget".to_string(), String::new())
     );
+  }
+
+  #[gpui::test]
+  async fn store_marks_a_notification_read_without_dropping_it(cx: &mut TestAppContext) {
+    cx.update(|cx| {
+      cx.set_global(GithubNotificationsStore::default());
+      GithubNotificationsStore::set(
+        cx,
+        vec![
+          make_notification("1", "acme/widget", true),
+          make_notification("2", "acme/portal", true),
+        ],
+      );
+
+      GithubNotificationsStore::mark_read(cx, "1");
+
+      let notifications = GithubNotificationsStore::list(cx);
+      assert_eq!(notifications.len(), 2);
+      assert!(!notifications[0].unread);
+      assert!(notifications[1].unread);
+      assert_eq!(GithubNotificationsStore::unread_count(cx), 1);
+    });
+  }
+
+  #[gpui::test]
+  async fn store_removes_a_notification_marked_done(cx: &mut TestAppContext) {
+    cx.update(|cx| {
+      cx.set_global(GithubNotificationsStore::default());
+      GithubNotificationsStore::set(
+        cx,
+        vec![
+          make_notification("1", "acme/widget", true),
+          make_notification("2", "acme/portal", false),
+        ],
+      );
+
+      GithubNotificationsStore::remove(cx, "1");
+
+      let notifications = GithubNotificationsStore::list(cx);
+      assert_eq!(notifications.len(), 1);
+      assert_eq!(notifications[0].id, "2");
+      assert_eq!(GithubNotificationsStore::unread_count(cx), 0);
+    });
+  }
+
+  #[gpui::test]
+  async fn store_clears_on_sign_out(cx: &mut TestAppContext) {
+    cx.update(|cx| {
+      cx.set_global(GithubNotificationsStore::default());
+      GithubNotificationsStore::set(cx, vec![make_notification("1", "acme/widget", true)]);
+
+      GithubNotificationsStore::clear(cx);
+
+      assert!(GithubNotificationsStore::list(cx).is_empty());
+      assert_eq!(GithubNotificationsStore::unread_count(cx), 0);
+    });
   }
 
   #[test]

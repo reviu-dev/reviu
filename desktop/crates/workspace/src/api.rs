@@ -3955,6 +3955,34 @@ mod tests {
   }
 
   #[test]
+  fn fetch_pull_request_for_branch_parses_success_payload() {
+    let body = r#"{
+      "pullRequest": {
+        "number": 11,
+        "title": "Improve docs",
+        "state": "open",
+        "merged_at": null,
+        "draft": false,
+        "comments_count": 7,
+        "repository": { "owner": "acme", "repo": "widget" }
+      }
+    }"#;
+    let (base_url, handle) = start_single_response_server("200 OK", body);
+    let api = make_test_api_client(base_url);
+
+    let pull_request = api
+      .fetch_pull_request_for_branch("acme", "widget", "feature/parser")
+      .expect("fetch branch pull request")
+      .expect("pull request payload");
+    assert_eq!(pull_request.number, 11);
+    assert_eq!(pull_request.title, "Improve docs");
+    assert_eq!(pull_request.comments_count, 7);
+    assert!(!pull_request.draft);
+    assert_eq!(pull_request.repository.owner, "acme");
+    handle.join().expect("join server thread");
+  }
+
+  #[test]
   fn fetch_pull_request_for_branch_returns_none_when_branch_has_no_open_pull_request() {
     let body = r#"{
       "pullRequest": null
@@ -3990,6 +4018,78 @@ mod tests {
       request_line,
       "GET /github/repos/acme/widget/pr/branch?branch=feature%2Fparser HTTP/1.1"
     );
+  }
+
+  #[test]
+  fn create_pull_request_parses_success_payload() {
+    let body = r#"{
+      "pullRequest": {
+        "number": 11,
+        "title": "Improve docs",
+        "state": "open",
+        "merged_at": null,
+        "draft": true,
+        "comments_count": 7,
+        "repository": { "owner": "acme", "repo": "widget" }
+      }
+    }"#;
+    let (base_url, handle) = start_single_response_server("201 Created", body);
+    let api = make_test_api_client(base_url);
+
+    let pull_request = api
+      .create_pull_request(
+        "acme",
+        "widget",
+        "feature/parser",
+        "Improve docs",
+        "main",
+        Some("Ready to review"),
+        true,
+      )
+      .expect("create pull request");
+    assert_eq!(pull_request.number, 11);
+    assert_eq!(pull_request.title, "Improve docs");
+    assert!(pull_request.draft);
+    handle.join().expect("join server thread");
+  }
+
+  #[test]
+  fn create_pull_request_uses_expected_route_and_payload() {
+    let body = r#"{"pullRequest":{"number":11,"title":"Improve docs","state":"open","merged_at":null,"draft":false,"comments_count":0,"repository":{"owner":"acme","repo":"widget"}}}"#;
+    let (base_url, request, handle) =
+      start_single_response_server_with_request("201 Created", body);
+    let api = make_test_api_client(base_url);
+
+    let _ = api
+      .create_pull_request(
+        "acme",
+        "widget",
+        "feature/parser",
+        "  Improve docs  ",
+        "  main  ",
+        Some("  Ready to review  "),
+        true,
+      )
+      .expect("create pull request");
+
+    handle.join().expect("join server thread");
+    let request = request
+      .lock()
+      .expect("lock request")
+      .clone()
+      .unwrap_or_default();
+    assert!(
+      request.starts_with("POST /github/repos/acme/widget/pr?branch=feature%2Fparser HTTP/1.1")
+    );
+    assert!(
+      request
+        .to_lowercase()
+        .contains("\r\ncontent-type: application/json")
+    );
+    assert!(request.contains(r#""title":"Improve docs""#));
+    assert!(request.contains(r#""base":"main""#));
+    assert!(request.contains(r#""body":"Ready to review""#));
+    assert!(request.contains(r#""draft":true"#));
   }
 
   #[test]
@@ -4301,6 +4401,65 @@ mod tests {
       request_line,
       "DELETE /github/repos/acme/widget/issues/77/comments/9002 HTTP/1.1"
     );
+  }
+
+  #[test]
+  fn fetch_pull_request_details_parses_success_payload() {
+    let body = r#"{
+      "pullRequest": {
+        "node_id": "PR_kwDOExample",
+        "number": 42,
+        "title": "Improve parser",
+        "state": "open",
+        "draft": false,
+        "created_at": "2026-02-10T09:00:00Z",
+        "updated_at": "2026-02-15T12:00:00Z",
+        "merged_at": null,
+        "merge_base_sha": "abc123",
+        "base_sha": "base123",
+        "head_sha": "head123",
+        "base_ref_name": "main",
+        "head_ref_name": "feature/parser",
+        "body": "PR body",
+        "author": { "login": "octocat", "avatar_url": null },
+        "assignees": [{ "login": "alice", "avatar_url": "https://example.com/alice.png" }],
+        "requested_reviewers": [{ "login": "bob", "avatar_url": null }],
+        "comments": 2,
+        "review_comments": 3,
+        "commits": 4,
+        "additions": 10,
+        "deletions": 5,
+        "changed_files": 2,
+        "labels": [{ "name": "enhancement", "color": "a2eeef" }],
+        "repository": { "owner": "acme", "repo": "widget" },
+        "head_repository": { "owner": "acme", "repo": "widget-fork" }
+      }
+    }"#;
+    let (base_url, handle) = start_single_response_server("200 OK", body);
+    let api = make_test_api_client(base_url);
+
+    let details = api
+      .fetch_pull_request_details("acme", "widget", 42)
+      .expect("fetch pull request details");
+    assert_eq!(details.node_id, "PR_kwDOExample");
+    assert_eq!(details.number, 42);
+    assert_eq!(details.head_ref_name, "feature/parser");
+    assert_eq!(details.author.login, "octocat");
+    assert_eq!(details.assignees[0].login, "alice");
+    assert_eq!(details.requested_reviewers[0].login, "bob");
+    assert_eq!(details.comments, 2);
+    assert_eq!(details.review_comments, 3);
+    assert_eq!(details.labels[0].color.as_deref(), Some("a2eeef"));
+    assert_eq!(
+      details
+        .head_repository
+        .as_ref()
+        .expect("head repo")
+        .repo
+        .as_str(),
+      "widget-fork"
+    );
+    handle.join().expect("join server thread");
   }
 
   #[test]

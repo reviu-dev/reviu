@@ -591,23 +591,48 @@ fn extract_open_url_for_scheme(url: &str, scheme: &str) -> Option<String> {
   None
 }
 
-fn handle_open_github_url(url: &str, cx: &mut App) {
-  use ui::CommandPaletteAction;
+struct PrDeepLink {
+  owner: String,
+  repo: String,
+  number: u64,
+  open_changes_tab: bool,
+  review_comment_id: Option<u64>,
+}
 
-  // Only pull requests have a page in Reviu; other GitHub links would bounce
-  // straight back to the browser they came from.
-  let Some(CommandPaletteAction::OpenGithubPrDetails {
-    owner,
-    repo,
-    number,
-    open_changes_tab,
-    review_comment_id,
-  }) = parse_github_url_action(url)
-  else {
+/// Only pull requests have a page in Reviu; other GitHub links would bounce
+/// straight back to the browser they came from.
+fn pr_deep_link(url: &str) -> Option<PrDeepLink> {
+  match parse_github_url_action(url)? {
+    ui::CommandPaletteAction::OpenGithubPrDetails {
+      owner,
+      repo,
+      number,
+      open_changes_tab,
+      review_comment_id,
+    } => Some(PrDeepLink {
+      owner,
+      repo,
+      number,
+      open_changes_tab,
+      review_comment_id,
+    }),
+    _ => None,
+  }
+}
+
+fn handle_open_github_url(url: &str, cx: &mut App) {
+  let Some(target) = pr_deep_link(url) else {
     return;
   };
   cx.activate(true);
-  open_pr_target(owner, repo, number, open_changes_tab, review_comment_id, cx);
+  open_pr_target(
+    target.owner,
+    target.repo,
+    target.number,
+    target.open_changes_tab,
+    target.review_comment_id,
+    cx,
+  );
 }
 
 #[cfg(test)]
@@ -615,11 +640,41 @@ mod tests {
   use super::{
     contains_sensitive_fragment, extract_auth_code_for_scheme, extract_open_url_for_scheme,
     is_sensitive_header, is_sensitive_key, is_subscription_callback_for_scheme,
-    is_truthy_env_value, redact_sensitive_event_data, resolved_sentry_release_from,
+    is_truthy_env_value, pr_deep_link, redact_sensitive_event_data, resolved_sentry_release_from,
     sentry_enabled_for, startup_deeplink_url_from_args,
   };
   use sentry::protocol::{Event, Request, Value};
   use std::borrow::Cow;
+
+  #[test]
+  fn pr_deep_link_accepts_pull_request_urls() {
+    let target = pr_deep_link("https://github.com/acme/widget/pull/42").expect("pr deep link");
+    assert_eq!(target.owner, "acme");
+    assert_eq!(target.repo, "widget");
+    assert_eq!(target.number, 42);
+
+    let with_comment =
+      pr_deep_link("https://github.com/acme/widget/pull/42#discussion_r123").expect("pr deep link");
+    assert_eq!(with_comment.review_comment_id, Some(123));
+  }
+
+  #[test]
+  fn pr_deep_link_ignores_links_without_a_reviu_page() {
+    for url in [
+      "https://github.com/acme/widget",
+      "https://github.com/acme/widget/issues/42",
+      "https://github.com/acme/widget/issues",
+      "https://github.com/acme/widget/pulls",
+      "https://github.com/acme/widget/commit/abc123",
+      "https://github.com/acme",
+      "https://example.com/acme/widget/pull/42",
+    ] {
+      assert!(
+        pr_deep_link(url).is_none(),
+        "{url} should not open a Reviu page"
+      );
+    }
+  }
 
   #[test]
   fn is_truthy_env_value_accepts_supported_values() {
