@@ -7,24 +7,23 @@ use std::{
 use editor::Editor;
 use git::find_global_config_path;
 use gpui::{
-  AnyElement, App, Context, Entity, FocusHandle, Focusable, Render, SharedString, Window, div, img,
+  AnyElement, App, Context, Entity, FocusHandle, Focusable, Render, SharedString, Window, div,
   prelude::*, px,
 };
 use gpui_component::{
-  ActiveTheme as _, Disableable, Icon, IconName, Sizable as _,
+  ActiveTheme as _, Disableable, IconName, Sizable as _,
   button::{Button, ButtonVariants},
   h_flex,
-  label::Label,
 };
 
 use ui::{
   CommandPalette, CommandPaletteAction, CommandPaletteCommand, CommandPaletteConfig,
-  CommandPaletteHandler, CommandPalettePage, FILE_ICON_SIZE_PX, PAGE_HEADER_HEIGHT, StatusThemeExt,
-  file_icon_path_for_path_with_theme,
+  CommandPaletteHandler, CommandPalettePage, PAGE_HEADER_HEIGHT, StatusThemeExt,
 };
 
 use crate::{
-  CloseWorkspacePage, ShowCommandPalette, auth_state::AuthStateStore, navigation::NavigationHistory,
+  CloseWorkspacePage, ShowCommandPalette, auth_state::AuthStateStore, file_view::render_file_title,
+  navigation::NavigationHistory,
 };
 
 pub struct GitConfigPage {
@@ -138,18 +137,7 @@ impl GitConfigPage {
   fn render_editor_header(&self, editor: &Entity<Editor>, cx: &mut Context<Self>) -> AnyElement {
     let theme = cx.theme().clone();
     let editor_state = editor.read(cx);
-    let file_name = editor_state
-      .workdir_path
-      .file_name()
-      .and_then(|name| name.to_str())
-      .unwrap_or(".gitconfig")
-      .to_string();
-    let dir_path = editor_state
-      .workdir_path
-      .parent()
-      .and_then(|parent| parent.to_str())
-      .unwrap_or("")
-      .to_string();
+    let file_path = editor_state.workdir_path.clone();
     let file_dirty = editor_state.is_dirty;
 
     let editor_entity = editor.clone();
@@ -181,57 +169,7 @@ impl GitConfigPage {
       .bg(theme.sidebar)
       .border_b_1()
       .border_color(theme.title_bar_border)
-      .child(
-        h_flex()
-          .items_center()
-          .gap_2()
-          .min_w_0()
-          .flex_1()
-          .child(
-            file_icon_path_for_path_with_theme(&editor_state.workdir_path, &theme)
-              .map(|path| img(path).size(px(FILE_ICON_SIZE_PX)).into_any_element())
-              .unwrap_or_else(|| {
-                Icon::new(IconName::File)
-                  .size_3()
-                  .text_color(theme.foreground)
-                  .into_any_element()
-              }),
-          )
-          .child(
-            h_flex()
-              .min_w_0()
-              .flex_1()
-              .items_center()
-              .gap_2()
-              .child(
-                h_flex()
-                  .min_w_0()
-                  .items_center()
-                  .gap_2()
-                  .child(div().min_w_0().child(Label::new(file_name).truncate()))
-                  .when(file_dirty, |this| {
-                    this.child(
-                      div()
-                        .size_2()
-                        .rounded_full()
-                        .bg(theme.foreground)
-                        .flex_shrink_0(),
-                    )
-                  }),
-              )
-              .when(!dir_path.is_empty(), |this| {
-                this.child(
-                  div()
-                    .min_w_0()
-                    .flex_1()
-                    .overflow_hidden()
-                    .text_ellipsis_start()
-                    .text_color(theme.muted_foreground)
-                    .child(format!("- {}", dir_path)),
-                )
-              }),
-          ),
-      )
+      .child(render_file_title(&file_path, file_dirty, cx))
       .child(
         h_flex()
           .items_center()
