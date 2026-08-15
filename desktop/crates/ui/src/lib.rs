@@ -3,7 +3,6 @@ mod command_palette;
 mod confirm_dialog;
 mod dropdown_select;
 mod github_emoji_completion;
-mod github_search_palette;
 mod github_url;
 mod icons;
 mod markdown_composer;
@@ -37,10 +36,6 @@ pub use dropdown_select::{
   DropdownSelectConfig, DropdownSelectItem, DropdownSelectOption, dropdown_select,
 };
 pub use github_emoji_completion::GithubEmojiInput;
-pub use github_search_palette::{
-  GithubRepoSearchFn, GithubRepoSelectFn, GithubSearchPalette, GithubSearchPaletteConfig,
-  GithubSearchRepoEntry,
-};
 pub use github_url::parse_github_url_action;
 pub use gpui::Anchor;
 pub use gpui_component::Disableable;
