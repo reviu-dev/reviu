@@ -75,6 +75,7 @@ mod github_search_dialog;
 mod github_shared;
 mod interactive_rebase_todo_view;
 pub mod navigation;
+mod palette_actions;
 mod pricing_copy;
 mod review_panel;
 mod sentry_context;

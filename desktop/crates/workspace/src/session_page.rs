@@ -37,13 +37,9 @@ use crate::file_view::{
 use crate::git_page::{
   agent_chat_state_dir, agent_path_to_repo_relative, prune_agent_chat_state_once,
 };
-use crate::github_navigation::{
-  open_commit_target, open_pr_target, open_profile_target, open_repo_target,
-};
 use crate::github_notifications::{self, GithubNotificationsStore};
 use crate::navigation::NavigationHistory;
 use crate::review_panel::{ReviewPanel, ReviewPanelEvent};
-use crate::workspace::WorkspaceApi;
 use crate::{
   CloseWorkspacePage, CommentHunk, SendReviewCommentsToAgent, ShowCommandPalette, ShowFileSearch,
 };
@@ -1107,69 +1103,7 @@ impl SessionPage {
       CommandPaletteAction::Push => self.run_repo_command(RepoCommand::Push, window, cx),
       CommandPaletteAction::Pull => self.run_repo_command(RepoCommand::Pull, window, cx),
       CommandPaletteAction::Fetch => self.run_repo_command(RepoCommand::Fetch, window, cx),
-      CommandPaletteAction::OpenGitPage => {
-        NavigationHistory::navigate("/git", cx);
-        Ok(())
-      }
-      CommandPaletteAction::OpenGithubPrDetails {
-        owner,
-        repo,
-        number,
-        open_changes_tab,
-        review_comment_id,
-      } => {
-        open_pr_target(owner, repo, number, open_changes_tab, review_comment_id, cx);
-        Ok(())
-      }
-      CommandPaletteAction::OpenGithubRepoDetails {
-        owner,
-        repo,
-        tab,
-        issue_number,
-        issue_comment_id,
-      } => {
-        open_repo_target(owner, repo, tab, issue_number, issue_comment_id, cx);
-        Ok(())
-      }
-      CommandPaletteAction::OpenGithubCommitDetails { owner, repo, sha } => {
-        open_commit_target(owner, repo, sha, cx);
-        Ok(())
-      }
-      CommandPaletteAction::OpenGithubProfile { login } => {
-        open_profile_target(login, cx);
-        Ok(())
-      }
-      CommandPaletteAction::OpenSettingsPage => {
-        NavigationHistory::navigate("/settings", cx);
-        Ok(())
-      }
-      CommandPaletteAction::OpenBillingPage => {
-        NavigationHistory::navigate("/billing", cx);
-        Ok(())
-      }
-      CommandPaletteAction::OpenAboutPage => {
-        NavigationHistory::navigate("/about", cx);
-        Ok(())
-      }
-      CommandPaletteAction::OpenGitConfigPage => {
-        NavigationHistory::navigate("/git-config", cx);
-        Ok(())
-      }
-      CommandPaletteAction::SendFeedback => {
-        crate::feedback_dialog::open_feedback_dialog(window, cx);
-        Ok(())
-      }
-      CommandPaletteAction::SearchGithubRepository => {
-        let api = WorkspaceApi::global(cx).api.clone();
-        crate::github_search_dialog::open_github_search_dialog(api, window, cx);
-        Ok(())
-      }
-      CommandPaletteAction::CreateGithubRepository => {
-        let api = WorkspaceApi::global(cx).api.clone();
-        crate::github_create_repository_dialog::open_create_repository_dialog(api, window, cx);
-        Ok(())
-      }
-      _ => Err("Command not available.".into()),
+      other => crate::palette_actions::handle_global_command_palette_action(other, window, cx),
     }
   }
 
@@ -1713,6 +1647,7 @@ impl Focusable for SessionPage {
 #[cfg(test)]
 mod tests {
   use super::*;
+  use crate::workspace::WorkspaceApi;
   use editor::ReviewCommentMode;
   use git2::{Repository, Signature};
   use gpui::TestAppContext;

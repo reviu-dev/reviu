@@ -22,13 +22,11 @@ use crate::{
   CloseWorkspacePage, ShowCommandPalette,
   auth_state::AuthStateStore,
   config::{AppSettings as PersistedSettings, CloneProtocol, HomePage},
-  github_navigation::{open_commit_target, open_pr_target, open_profile_target, open_repo_target},
   navigation::NavigationHistory,
   shortcuts::{
     self, ShortcutCategory, ShortcutDefinition, ShortcutId, ShortcutOverrides,
     resolved_display_shortcut_keystroke_in, shortcut_definitions,
   },
-  workspace::WorkspaceApi,
 };
 
 #[derive(Clone)]
@@ -692,72 +690,7 @@ impl SettingsPage {
     window: &mut Window,
     cx: &mut Context<Self>,
   ) -> Result<(), SharedString> {
-    match action {
-      CommandPaletteAction::OpenSessionPage => {
-        NavigationHistory::navigate("/session", cx);
-        Ok(())
-      }
-      CommandPaletteAction::OpenGitPage => {
-        NavigationHistory::navigate("/git", cx);
-        Ok(())
-      }
-      CommandPaletteAction::OpenGithubPrDetails {
-        owner,
-        repo,
-        number,
-        open_changes_tab,
-        review_comment_id,
-      } => {
-        open_pr_target(owner, repo, number, open_changes_tab, review_comment_id, cx);
-        Ok(())
-      }
-      CommandPaletteAction::OpenGithubRepoDetails {
-        owner,
-        repo,
-        tab,
-        issue_number,
-        issue_comment_id,
-      } => {
-        open_repo_target(owner, repo, tab, issue_number, issue_comment_id, cx);
-        Ok(())
-      }
-      CommandPaletteAction::OpenGithubCommitDetails { owner, repo, sha } => {
-        open_commit_target(owner, repo, sha, cx);
-        Ok(())
-      }
-      CommandPaletteAction::OpenGithubProfile { login } => {
-        open_profile_target(login, cx);
-        Ok(())
-      }
-      CommandPaletteAction::OpenSettingsPage => Ok(()),
-      CommandPaletteAction::OpenBillingPage => {
-        NavigationHistory::navigate("/billing", cx);
-        Ok(())
-      }
-      CommandPaletteAction::OpenAboutPage => {
-        NavigationHistory::navigate("/about", cx);
-        Ok(())
-      }
-      CommandPaletteAction::OpenGitConfigPage => {
-        NavigationHistory::navigate("/git-config", cx);
-        Ok(())
-      }
-      CommandPaletteAction::SendFeedback => {
-        crate::feedback_dialog::open_feedback_dialog(window, cx);
-        Ok(())
-      }
-      CommandPaletteAction::SearchGithubRepository => {
-        let api = WorkspaceApi::global(cx).api.clone();
-        crate::github_search_dialog::open_github_search_dialog(api, window, cx);
-        Ok(())
-      }
-      CommandPaletteAction::CreateGithubRepository => {
-        let api = WorkspaceApi::global(cx).api.clone();
-        crate::github_create_repository_dialog::open_create_repository_dialog(api, window, cx);
-        Ok(())
-      }
-      _ => Err("Command not available.".into()),
-    }
+    crate::palette_actions::handle_global_command_palette_action(action, window, cx)
   }
 }
 

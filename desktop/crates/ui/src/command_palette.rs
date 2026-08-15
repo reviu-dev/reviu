@@ -1366,7 +1366,7 @@ impl CommandPaletteCommand {
     Self::new(
       CommandPaletteCommandId::OpenGithubFromUrl,
       "Open from GitHub URL",
-      "Open a supported GitHub page from a GitHub URL",
+      "Open a pull request from its URL, anything else in the browser",
     )
   }
 
