@@ -59,7 +59,6 @@ Reviu supports macOS on Apple Silicon and Intel, Windows on ARM64 and x64, and L
 - Pull request labels, assignees, reviewers, draft state, checks, merge readiness, merge actions, and auto-merge.
 - Issue browsing, issue details, issue description editing, issue comments, and issue reactions.
 - Links from the local Git page to the current branch pull request, plus pull request creation from local branches.
-- AI pull request briefs that use a user-provided OpenAI or Anthropic key to summarize the PR, list files to review first by priority, surface risks, and flag blockers, with file links that jump into the diff.
 
 ## Site Links
 
@@ -88,8 +87,7 @@ Avoid these claims:
 
 - Do not call Reviu "open source" without qualification. It is source-available under FSL-1.1; the GitHub-integration backend is closed-source.
 
-- Do not claim Reviu has AI review, AI code generation, AI suggested changes, or automated code-fix features.
-- The AI pull request brief is allowed: it summarizes a PR and points to files to review first, risks, and blockers, using the user's own OpenAI or Anthropic API key.
+- Do not claim Reviu has AI review, AI code generation, AI pull request briefs, AI commit messages, AI suggested changes, or automated code-fix features.
 - Do not claim Reviu supports self-hosted Git providers.
 - Do not claim GitHub workflows are free.
 - Do not claim team, enterprise, or organization administration features.

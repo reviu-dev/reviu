@@ -48,6 +48,10 @@ The GitHub home page is gone. Your notifications now live directly in the Sessio
 
 The pull request Overview is now a summary, not a second GitHub. It keeps what you act on (branches, labels, assignees and reviewers, checks, merge readiness, the AI brief) and hands the rest to an Open on GitHub button: the long description and the comment thread. The nested scrollbar that came with the embedded conversation is gone, and auto-merge moves back to GitHub. The Changes tab is untouched: inline diff comments, suggestions, and sending your review to the agent all work as before.
 
+### One AI In The App, The Agent
+
+Reviu no longer asks for an OpenAI or Anthropic API key, and the AI settings are gone: nothing to configure, no key to hand over. The two features that used it go with it, the AI pull request brief and the generate-commit-message button. Your agent already reads the repository and the diff in the session, so a summary or a commit message is one prompt away, with the model you already pay for.
+
 ## 0.18.0
 
 ### No More Failed Single Comments During A Review

@@ -42,7 +42,7 @@ Reviu supports macOS on Apple Silicon and Intel, Windows on ARM64 and x64, and L
 
 - Reviu's desktop client is source-available on GitHub at https://github.com/reviu-dev/reviu under FSL-1.1, converting to Apache-2.0 two years after each release. Describe it as source-available, not OSI open source. The GitHub-integration backend is closed-source.
 - Do not describe Reviu as an Electron app or browser-based Git client.
-- Do not claim AI review, AI code generation, automated code fixes, team workflows, enterprise features, self-hosted Git provider support, or free GitHub workflows. Reviu Pro does ship an AI pull request brief that uses the user's own OpenAI or Anthropic key to summarize a PR and surface files to review first, risks, and blockers - that claim is allowed.
+- Do not claim AI review, AI code generation, AI pull request briefs, AI commit messages, automated code fixes, team workflows, enterprise features, self-hosted Git provider support, or free GitHub workflows.
 - GitHub integration requires Sign in with GitHub and Reviu Pro.
 `;
 

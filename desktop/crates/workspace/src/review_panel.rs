@@ -22,7 +22,7 @@ use std::rc::Rc;
 use crate::api::GithubPullRequest;
 use crate::auth_state::AuthStateStore;
 use crate::git_page::{
-  GithubBranchContext, PullRequestCreatedHandler, open_create_pull_request_dialog, read_commit_diff,
+  GithubBranchContext, PullRequestCreatedHandler, open_create_pull_request_dialog,
 };
 use crate::github_navigation::open_pr_target;
 use crate::github_shared::{pull_request_status_color, pull_request_status_label};
@@ -152,7 +152,6 @@ pub struct ReviewPanel {
   status_entries: Vec<RepoStatusEntry>,
   commit_input: Entity<TextareaState>,
   committing: bool,
-  generating_message: bool,
   last_error: Option<SharedString>,
   active_tab: ReviewPanelTab,
   branch_pr: BranchPrState,
@@ -195,7 +194,6 @@ impl ReviewPanel {
       status_entries: Vec::new(),
       commit_input,
       committing: false,
-      generating_message: false,
       last_error: None,
       active_tab: ReviewPanelTab::Changes,
       branch_pr: BranchPrState::Loading,
@@ -359,47 +357,6 @@ impl ReviewPanel {
     self._commit_task = Some(task);
   }
 
-  fn generate_commit_message(&mut self, cx: &mut Context<Self>) {
-    if self.generating_message {
-      return;
-    }
-    let Some(repo_root) = self.repo_root.clone() else {
-      return;
-    };
-    let staged = self.has_staged_changes();
-    let api = WorkspaceApi::global(cx).api.clone();
-    self.generating_message = true;
-    self.last_error = None;
-    cx.notify();
-
-    let window_handle = self.window_handle;
-    let commit_input = self.commit_input.clone();
-    cx.spawn(async move |this, cx| {
-      let result = unblock(move || {
-        let diff = read_commit_diff(&repo_root, staged)?;
-        if diff.trim().is_empty() {
-          anyhow::bail!("No changes to summarize");
-        }
-        api.generate_commit_message(&diff)
-      })
-      .await;
-
-      let _ = this.update(cx, |this, cx| {
-        this.generating_message = false;
-        match result {
-          Ok(message) => {
-            let _ = cx.update_window(window_handle, |_, window, cx| {
-              commit_input.update(cx, |input, cx| input.set_value(&message, window, cx));
-            });
-          }
-          Err(error) => this.last_error = Some(format!("{error}").into()),
-        }
-        cx.notify();
-      });
-    })
-    .detach();
-  }
-
   fn render_file_row(
     &self,
     ix: usize,
@@ -460,7 +417,6 @@ impl ReviewPanel {
     let can_commit = !self.committing
       && !self.status_entries.is_empty()
       && !self.commit_input.read(cx).value().trim().is_empty();
-    let show_generate = AuthStateStore::get(cx).has_pro_access();
     let commit_shortcut = crate::shortcuts::resolved_display_shortcut_keystroke_in(
       cx,
       window,
@@ -477,27 +433,7 @@ impl ReviewPanel {
       })
       .child(div().w_full().min_w_0().key_context("CommitInput").child({
         let commit_box = Textarea::new(&self.commit_input).w_full();
-        if show_generate {
-          div()
-            .relative()
-            .w_full()
-            .child(commit_box)
-            .child(
-              div().absolute().top_1().right_1().child(
-                Button::new("review-panel-generate-message")
-                  .icon(UiIconName::Sparkles)
-                  .ghost()
-                  .small()
-                  .loading(self.generating_message)
-                  .disabled(self.generating_message || self.status_entries.is_empty())
-                  .tooltip("Generate commit message")
-                  .on_click(cx.listener(|this, _, _, cx| this.generate_commit_message(cx))),
-              ),
-            )
-            .into_any_element()
-        } else {
-          commit_box.into_any_element()
-        }
+        commit_box.into_any_element()
       }))
       .child(
         Button::new("review-panel-commit")

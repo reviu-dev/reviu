@@ -2,33 +2,27 @@ use std::sync::Arc;
 
 use editor::set_indent_rainbow_enabled;
 use gpui::{
-  AnyWindowHandle, App, Context, FocusHandle, Focusable, Keystroke, KeystrokeEvent, Render,
-  SharedString, Subscription, Task, Window, div, prelude::*, px,
+  App, Context, FocusHandle, Focusable, Keystroke, KeystrokeEvent, Render, SharedString,
+  Subscription, Window, div, prelude::*, px,
 };
 
 use gpui_component::{
-  ActiveTheme as _, Disableable, IconName, IndexPath, Selectable, Sizable, Size, Theme, ThemeMode,
+  ActiveTheme as _, IconName, Sizable, Size, Theme, ThemeMode,
   button::{Button, ButtonVariants},
-  h_flex,
   kbd::Kbd,
-  select::{Select, SelectState},
   setting::{NumberFieldOptions, SettingField, SettingGroup, SettingItem, SettingPage, Settings},
-  v_flex,
 };
-use smol::unblock;
 
 use ui::{
   CommandPalette, CommandPaletteAction, CommandPaletteCommand, CommandPaletteConfig,
-  CommandPaletteHandler, CommandPalettePage, Input, InputState, PAGE_HEADER_HEIGHT, StatusThemeExt,
+  CommandPaletteHandler, CommandPalettePage, PAGE_HEADER_HEIGHT, StatusThemeExt,
 };
 
 use crate::{
   CloseWorkspacePage, ShowCommandPalette,
-  api::{AiProvider, AiSettings, ApiClient},
-  auth_state::{AuthState, AuthStateStore},
+  auth_state::AuthStateStore,
   config::{AppSettings as PersistedSettings, CloneProtocol},
   github_navigation::{open_commit_target, open_pr_target, open_profile_target, open_repo_target},
-  github_shared,
   navigation::NavigationHistory,
   shortcuts::{
     self, ShortcutCategory, ShortcutDefinition, ShortcutId, ShortcutOverrides,
@@ -45,7 +39,6 @@ struct ShortcutCaptureError {
 
 pub struct SettingsPage {
   focus_handle: FocusHandle,
-  window_handle: AnyWindowHandle,
   auto_switch_theme: bool,
   indent_rainbow: bool,
   git_unified_file_view: bool,
@@ -56,52 +49,20 @@ pub struct SettingsPage {
   analytics_enabled: bool,
   shortcut_recording: Option<ShortcutId>,
   shortcut_error: Option<ShortcutCaptureError>,
-  api: ApiClient,
-  ai_provider: AiProvider,
-  ai_model_select: gpui::Entity<SelectState<Vec<SharedString>>>,
-  ai_api_key_input: gpui::Entity<InputState>,
-  ai_configured: bool,
-  ai_api_key_hint: Option<SharedString>,
-  ai_settings_loading: bool,
-  ai_settings_saving: bool,
-  ai_settings_deleting: bool,
-  ai_settings_error: Option<SharedString>,
-  ai_settings_notice: Option<SharedString>,
-  ai_settings_task: Option<Task<()>>,
-  ai_settings_loaded: bool,
-  ai_models_loading: bool,
-  ai_models_error: Option<SharedString>,
-  ai_models_task: Option<Task<()>>,
   size: Size,
   _subscriptions: Vec<Subscription>,
 }
 
 impl SettingsPage {
-  pub fn new(window: &mut Window, cx: &mut Context<Self>, settings: PersistedSettings) -> Self {
+  pub fn new(_window: &mut Window, cx: &mut Context<Self>, settings: PersistedSettings) -> Self {
     let view = cx.entity();
     let shortcut_capture_subscription = cx.intercept_keystrokes(move |event, window, cx| {
       view.update(cx, |view, cx| {
         view.handle_shortcut_capture(event, window, cx);
       });
     });
-    let initial_provider = AiProvider::Openai;
-    let ai_model_select = cx.new(|cx| {
-      SelectState::new(
-        vec![SharedString::from(initial_provider.default_model())],
-        Some(IndexPath::default()),
-        window,
-        cx,
-      )
-    });
-    let ai_api_key_input = cx.new(|cx| {
-      InputState::new(window, cx)
-        .placeholder("API key")
-        .masked(true)
-    });
-
-    let mut this = Self {
+    Self {
       focus_handle: cx.focus_handle(),
-      window_handle: window.window_handle(),
       auto_switch_theme: settings.auto_switch_theme,
       indent_rainbow: settings.indent_rainbow,
       git_unified_file_view: settings.git_unified_file_view,
@@ -112,254 +73,13 @@ impl SettingsPage {
       analytics_enabled: settings.analytics_enabled,
       shortcut_recording: None,
       shortcut_error: None,
-      api: WorkspaceApi::global(cx).api.clone(),
-      ai_provider: initial_provider,
-      ai_model_select,
-      ai_api_key_input,
-      ai_configured: false,
-      ai_api_key_hint: None,
-      ai_settings_loading: false,
-      ai_settings_saving: false,
-      ai_settings_deleting: false,
-      ai_settings_error: None,
-      ai_settings_notice: None,
-      ai_settings_task: None,
-      ai_settings_loaded: false,
-      ai_models_loading: false,
-      ai_models_error: None,
-      ai_models_task: None,
       size: Size::default(),
       _subscriptions: vec![shortcut_capture_subscription],
-    };
-    let auth_subscription = cx.observe_global::<AuthStateStore>(|this, cx| {
-      this.load_ai_settings_if_authenticated(cx);
-    });
-    this._subscriptions.push(auth_subscription);
-    this.load_ai_settings_if_authenticated(cx);
-    this
+    }
   }
 
   pub(crate) fn auto_switch_theme_enabled(&self) -> bool {
     self.auto_switch_theme
-  }
-
-  fn apply_ai_settings(&mut self, settings: AiSettings, window: &mut Window, cx: &mut App) {
-    self.ai_configured = settings.configured;
-    if let Some(provider) = settings.provider {
-      self.ai_provider = provider;
-    }
-    let model: SharedString = settings
-      .model
-      .unwrap_or_else(|| self.ai_provider.default_model().to_string())
-      .into();
-    self.ai_model_select.update(cx, |select, cx| {
-      select.set_items(vec![model.clone()], window, cx);
-      select.set_selected_value(&model, window, cx);
-    });
-    self
-      .ai_api_key_input
-      .update(cx, |input, cx| input.set_value("", window, cx));
-    self.ai_api_key_hint = settings.api_key_hint.map(Into::into);
-  }
-
-  fn load_ai_settings_if_authenticated(&mut self, cx: &mut Context<Self>) {
-    if self.ai_settings_loaded || self.ai_settings_loading {
-      return;
-    }
-    if !matches!(AuthStateStore::get(cx), AuthState::Authenticated(_)) {
-      return;
-    }
-    self.load_ai_settings(cx);
-  }
-
-  fn load_ai_settings(&mut self, cx: &mut Context<Self>) {
-    if self.ai_settings_loading {
-      return;
-    }
-
-    self.ai_settings_loading = true;
-    self.ai_settings_error = None;
-    let api = self.api.clone();
-    let task = cx.spawn(async move |this, cx| {
-      let result = unblock(move || api.fetch_ai_settings()).await;
-      let _ = this.update(cx, |this, cx| {
-        this.ai_settings_loading = false;
-        match result {
-          Ok(settings) => {
-            this.ai_settings_loaded = true;
-            let window_handle = this.window_handle;
-            let _ = cx.update_window(window_handle, |_, window, cx| {
-              this.apply_ai_settings(settings, window, cx);
-            });
-            if this.ai_configured {
-              this.refresh_ai_models(cx);
-            }
-          }
-          Err(error) => {
-            let message = error.to_string();
-            if !github_shared::is_unauthorized_error_message(message.as_str()) {
-              this.ai_settings_error = Some(message.into());
-            }
-          }
-        }
-        cx.notify();
-      });
-    });
-    self.ai_settings_task = Some(task);
-  }
-
-  fn refresh_ai_models(&mut self, cx: &mut Context<Self>) {
-    if self.ai_models_loading {
-      return;
-    }
-
-    let api_key = self.ai_api_key_input.read(cx).value().trim().to_string();
-    let key = (!api_key.is_empty()).then_some(api_key);
-    self.ai_models_loading = true;
-    self.ai_models_error = None;
-    let api = self.api.clone();
-    let provider = self.ai_provider;
-    let task = cx.spawn(async move |this, cx| {
-      let result = unblock(move || api.list_ai_models(provider, key.as_deref())).await;
-      let _ = this.update(cx, |this, cx| {
-        this.ai_models_loading = false;
-        match result {
-          Ok(response) => {
-            let window_handle = this.window_handle;
-            let _ = cx.update_window(window_handle, |_, window, cx| {
-              let items: Vec<SharedString> = response
-                .models
-                .iter()
-                .map(|model| SharedString::from(model.id.clone()))
-                .collect();
-              if items.is_empty() {
-                return;
-              }
-              let current = this
-                .ai_model_select
-                .read(cx)
-                .selected_value()
-                .map(|value| value.to_string());
-              let keep = current
-                .as_deref()
-                .is_some_and(|value| items.iter().any(|item| item.as_ref() == value));
-              let target = if keep {
-                SharedString::from(current.unwrap())
-              } else {
-                SharedString::from(response.default_model.clone())
-              };
-              this.ai_model_select.update(cx, |select, cx| {
-                select.set_items(items, window, cx);
-                select.set_selected_value(&target, window, cx);
-              });
-            });
-          }
-          Err(error) => {
-            this.ai_models_error = Some(error.to_string().into());
-          }
-        }
-        cx.notify();
-      });
-    });
-    self.ai_models_task = Some(task);
-  }
-
-  fn set_ai_provider(&mut self, provider: AiProvider, window: &mut Window, cx: &mut Context<Self>) {
-    if self.ai_provider == provider {
-      return;
-    }
-
-    self.ai_provider = provider;
-    let model = SharedString::from(provider.default_model());
-    self.ai_model_select.update(cx, |select, cx| {
-      select.set_items(vec![model.clone()], window, cx);
-      select.set_selected_value(&model, window, cx);
-    });
-    self.ai_settings_notice = None;
-    self.ai_models_error = None;
-    if !self.ai_api_key_input.read(cx).value().trim().is_empty() {
-      self.refresh_ai_models(cx);
-    }
-    cx.notify();
-  }
-
-  fn save_ai_settings(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
-    if self.ai_settings_saving {
-      return;
-    }
-
-    let api_key = self.ai_api_key_input.read(cx).value().trim().to_string();
-    if api_key.is_empty() {
-      self.ai_settings_error = Some("Enter an API key before saving.".into());
-      self.ai_settings_notice = None;
-      cx.notify();
-      return;
-    }
-
-    let model = self
-      .ai_model_select
-      .read(cx)
-      .selected_value()
-      .map(|value| value.to_string())
-      .unwrap_or_else(|| self.ai_provider.default_model().to_string());
-
-    self.ai_settings_saving = true;
-    self.ai_settings_error = None;
-    self.ai_settings_notice = None;
-    let api = self.api.clone();
-    let provider = self.ai_provider;
-    let task = cx.spawn(async move |this, cx| {
-      let result =
-        unblock(move || api.save_ai_settings(provider, Some(model.as_str()), api_key.as_str()))
-          .await;
-      let _ = this.update(cx, |this, cx| {
-        this.ai_settings_saving = false;
-        match result {
-          Ok(settings) => {
-            let window_handle = this.window_handle;
-            let _ = cx.update_window(window_handle, |_, window, cx| {
-              this.apply_ai_settings(settings, window, cx);
-            });
-            this.ai_settings_notice = Some("AI settings saved.".into());
-            this.refresh_ai_models(cx);
-          }
-          Err(error) => {
-            this.ai_settings_error = Some(error.to_string().into());
-          }
-        }
-        cx.notify();
-      });
-    });
-    self.ai_settings_task = Some(task);
-  }
-
-  fn delete_ai_settings(&mut self, cx: &mut Context<Self>) {
-    if self.ai_settings_deleting {
-      return;
-    }
-
-    self.ai_settings_deleting = true;
-    self.ai_settings_error = None;
-    self.ai_settings_notice = None;
-    let api = self.api.clone();
-    let task = cx.spawn(async move |this, cx| {
-      let result = unblock(move || api.delete_ai_settings()).await;
-      let _ = this.update(cx, |this, cx| {
-        this.ai_settings_deleting = false;
-        match result {
-          Ok(()) => {
-            this.ai_configured = false;
-            this.ai_api_key_hint = None;
-            this.ai_settings_notice = Some("AI key removed.".into());
-          }
-          Err(error) => {
-            this.ai_settings_error = Some(error.to_string().into());
-          }
-        }
-        cx.notify();
-      });
-    });
-    self.ai_settings_task = Some(task);
   }
 
   fn setting_pages(&self, window: &mut Window, cx: &mut Context<Self>) -> Vec<SettingPage> {
@@ -586,212 +306,8 @@ impl SettingsPage {
           ),
         ]),
       ].into_iter().chain(self.menu_bar_settings_groups(view.clone(), default_menu_bar_icon))),
-      Self::ai_settings_page(view.clone()),
       Self::keyboard_shortcuts_page(view.clone(), window, cx),
     ]
-  }
-
-  fn ai_settings_page(view: gpui::Entity<Self>) -> SettingPage {
-    SettingPage::new("AI").default_open(true).groups(vec![
-      SettingGroup::new().title("Bring Your Own Key").items(vec![
-        SettingItem::new(
-          "Provider",
-          SettingField::render({
-            let view = view.clone();
-            move |_, _, cx| {
-              let provider = view.read(cx).ai_provider;
-              h_flex()
-                .items_center()
-                .justify_end()
-                .gap_2()
-                .child(Self::render_ai_provider_button(
-                  "settings-ai-provider-openai",
-                  AiProvider::Openai,
-                  provider,
-                  view.clone(),
-                ))
-                .child(Self::render_ai_provider_button(
-                  "settings-ai-provider-anthropic",
-                  AiProvider::Anthropic,
-                  provider,
-                  view.clone(),
-                ))
-                .into_any_element()
-            }
-          }),
-        )
-        .description("Choose which provider Reviu should call for AI features."),
-        SettingItem::new(
-          "Model",
-          SettingField::render({
-            let view = view.clone();
-            move |_, _, cx| {
-              let state = view.read(cx);
-              let select = state.ai_model_select.clone();
-              let loading = state.ai_models_loading;
-              let error = state.ai_models_error.clone();
-              div()
-                .w(px(280.0))
-                .flex()
-                .flex_col()
-                .items_start()
-                .gap_1()
-                .child(Select::new(&select).w_full())
-                .child(
-                  Button::new("settings-ai-refresh-models")
-                    .small()
-                    .ghost()
-                    .label(if loading { "Refreshing..." } else { "Refresh models" })
-                    .disabled(loading)
-                    .on_click({
-                      let view = view.clone();
-                      move |_, _, cx| {
-                        view.update(cx, |view, cx| {
-                          view.refresh_ai_models(cx);
-                        });
-                      }
-                    }),
-                )
-                .when_some(error, |this, error| {
-                  this.child(
-                    div()
-                      .text_xs()
-                      .text_color(cx.theme().status_red())
-                      .child(error),
-                  )
-                })
-                .into_any_element()
-            }
-          }),
-        )
-        .description(
-          "Pick which model Reviu calls for AI features. Refresh to pull the current list from your provider.",
-        ),
-        SettingItem::new(
-          "API Key",
-          SettingField::render({
-            let view = view.clone();
-            move |_, _, cx| {
-              let state = view.read(cx);
-              let input = state.ai_api_key_input.clone();
-              let hint = state.ai_api_key_hint.clone();
-              div()
-                .w(px(280.0))
-                .flex()
-                .flex_col()
-                .items_start()
-                .gap_1()
-                .child(Input::new(&input).w_full().mask_toggle())
-                .when_some(hint, |this, hint| {
-                  this.child(
-                    div()
-                      .text_xs()
-                      .text_color(cx.theme().muted_foreground)
-                      .child(format!("Saved key: {hint}")),
-                  )
-                })
-                .into_any_element()
-            }
-          }),
-        )
-        .description(
-          "Stored encrypted by the Reviu backend. The desktop app does not keep the key.",
-        ),
-        SettingItem::new(
-          "Credentials",
-          SettingField::render(move |_, _, cx| {
-            let state = view.read(cx);
-            let is_busy =
-              state.ai_settings_loading || state.ai_settings_saving || state.ai_settings_deleting;
-            let configured = state.ai_configured;
-            let error = state.ai_settings_error.clone();
-            let notice = state.ai_settings_notice.clone();
-
-            v_flex()
-              .items_end()
-              .gap_2()
-              .child(
-                h_flex()
-                  .items_center()
-                  .justify_end()
-                  .gap_2()
-                  .when(configured, |this| {
-                    this.child(
-                      Button::new("settings-ai-delete")
-                        .small()
-                        .ghost()
-                        .label("Remove")
-                        .disabled(is_busy)
-                        .on_click({
-                          let view = view.clone();
-                          move |_, _, cx| {
-                            view.update(cx, |view, cx| {
-                              view.delete_ai_settings(cx);
-                            });
-                          }
-                        }),
-                    )
-                  })
-                  .child(
-                    Button::new("settings-ai-save")
-                      .small()
-                      .primary()
-                      .label(if state.ai_settings_saving {
-                        "Saving..."
-                      } else {
-                        "Save"
-                      })
-                      .disabled(is_busy)
-                      .on_click({
-                        let view = view.clone();
-                        move |_, window, cx| {
-                          view.update(cx, |view, cx| {
-                            view.save_ai_settings(window, cx);
-                          });
-                        }
-                      }),
-                  ),
-              )
-              .when_some(notice, |this, notice| {
-                this.child(
-                  div()
-                    .text_xs()
-                    .text_color(cx.theme().status_green())
-                    .child(notice),
-                )
-              })
-              .when_some(error, |this, error| {
-                this.child(
-                  div()
-                    .text_xs()
-                    .text_color(cx.theme().status_red())
-                    .child(error),
-                )
-              })
-              .into_any_element()
-          }),
-        )
-        .description("Required for BYOK AI features in Reviu Pro."),
-      ]),
-    ])
-  }
-
-  fn render_ai_provider_button(
-    id: &'static str,
-    provider: AiProvider,
-    selected_provider: AiProvider,
-    view: gpui::Entity<Self>,
-  ) -> Button {
-    Button::new(id)
-      .small()
-      .outline()
-      .label(provider.label())
-      .selected(provider == selected_provider)
-      .on_click(move |_, window, cx| {
-        view.update(cx, |view, cx| {
-          view.set_ai_provider(provider, window, cx);
-        });
-      })
   }
 
   fn menu_bar_settings_groups(
