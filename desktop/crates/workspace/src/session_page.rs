@@ -1406,10 +1406,23 @@ impl SessionPage {
   }
 
   fn render_center(&mut self, cx: &mut Context<Self>) -> AnyElement {
-    // Keyed on the view so swapping conversation and diff remounts and replays.
+    // Keyed on what is shown, so every swap remounts and replays the fade.
     let (id, view) = match self.center {
-      CenterView::Conversation => ("session-center-conversation", self.render_conversation(cx)),
-      CenterView::Diff => ("session-center-diff", self.render_diff_view(cx)),
+      CenterView::Conversation => (
+        SharedString::from("session-center-conversation"),
+        self.render_conversation(cx),
+      ),
+      CenterView::Diff => {
+        let file = self
+          .selected_file
+          .as_deref()
+          .map(|path| path.to_string_lossy().into_owned())
+          .unwrap_or_default();
+        (
+          SharedString::from(format!("session-center-diff-{file}")),
+          self.render_diff_view(cx),
+        )
+      }
     };
     div()
       .size_full()
