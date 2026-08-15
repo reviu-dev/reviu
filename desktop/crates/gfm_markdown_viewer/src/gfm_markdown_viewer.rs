@@ -16,7 +16,6 @@ use crate::parse_html::*;
 use crate::parsed_cache::parse_markdown_for_render;
 #[cfg(test)]
 use crate::parsed_cache::{PARSED_MARKDOWN_CACHE_MAX_ENTRIES, ParsedMarkdownCache};
-use crate::preview_segments::{MarkdownRenderSegment, split_markdown_preview_segments};
 use crate::selection::*;
 use crate::types::*;
 pub use crate::types::{
@@ -37,29 +36,11 @@ use syntax::{HighlightSpan, SyntaxHighlighter, languages};
 use ui::{ScrollAxes, restrict_scroll_to_wheel_axis, scrollable_node};
 use unicode_segmentation::UnicodeSegmentation;
 
-type BlockRenderFn = dyn Fn(AnyElement, &App) -> AnyElement + Send + Sync;
-type HeadingRenderFn = dyn Fn(u8, AnyElement, &App) -> AnyElement + Send + Sync;
-type CodeBlockRenderFn = dyn Fn(&CodeBlock, &App) -> AnyElement + Send + Sync;
-type ListItemRenderFn = dyn Fn(ListItemView, &App) -> AnyElement + Send + Sync;
-type ThematicBreakRenderFn = dyn Fn(&App) -> AnyElement + Send + Sync;
-type TableRenderFn = dyn Fn(&Table, &App) -> AnyElement + Send + Sync;
 type SuggestionActionRenderFn = dyn Fn(SuggestionActionContext, &App) -> AnyElement + Send + Sync;
 pub(crate) type LinkHandlerFn = dyn Fn(&str, &mut Window, &mut App) -> LinkAction + Send + Sync;
 const WORD_DIFF_MAX_COMBINED_BYTES: usize = 2_048;
 
 // Data types imported from crate::types
-
-#[derive(Clone, Default)]
-pub struct RenderOverrides {
-  pub paragraph: Option<Arc<BlockRenderFn>>,
-  pub heading: Option<Arc<HeadingRenderFn>>,
-  pub code_block: Option<Arc<CodeBlockRenderFn>>,
-  pub list: Option<Arc<BlockRenderFn>>,
-  pub list_item: Option<Arc<ListItemRenderFn>>,
-  pub block_quote: Option<Arc<BlockRenderFn>>,
-  pub thematic_break: Option<Arc<ThematicBreakRenderFn>>,
-  pub table: Option<Arc<TableRenderFn>>,
-}
 
 // MarkdownRenderState, SelectionRange, SelectionState, ActiveSelection, clamp_to_char_boundary
 // imported from crate::types
@@ -67,14 +48,10 @@ pub struct RenderOverrides {
 #[derive(Clone, Default)]
 pub struct MarkdownRenderOptions {
   pub on_link: Option<Arc<LinkHandlerFn>>,
-  pub overrides: RenderOverrides,
   pub state: MarkdownRenderState,
   pub scope_id: Option<usize>,
-  pub github_code_reference_previews: Option<Arc<HashMap<Arc<str>, GithubCodeReferencePreview>>>,
   pub github_issue_reference_context: Option<GithubIssueReferenceContext>,
-  pub expand_code_blocks: bool,
   pub hardbreaks: bool,
-  pub image_base_url: Option<SharedString>,
   pub syntax_cache: Option<Arc<crate::syntax_cache::SyntaxHighlightCache>>,
   pub asset_url_resolver: Option<Arc<dyn Fn(&str) -> Option<String> + Send + Sync>>,
   pub suggestion_context: Option<SuggestionContext>,
@@ -89,11 +66,6 @@ impl MarkdownRenderOptions {
     }
   }
 
-  pub fn overrides(mut self, overrides: RenderOverrides) -> Self {
-    self.overrides = overrides;
-    self
-  }
-
   pub fn with_state(mut self, state: MarkdownRenderState) -> Self {
     self.state = state;
     self
@@ -101,14 +73,6 @@ impl MarkdownRenderOptions {
 
   pub fn with_scope_id(mut self, scope_id: usize) -> Self {
     self.scope_id = Some(scope_id);
-    self
-  }
-
-  pub fn with_github_code_reference_previews(
-    mut self,
-    previews: Arc<HashMap<Arc<str>, GithubCodeReferencePreview>>,
-  ) -> Self {
-    self.github_code_reference_previews = Some(previews);
     self
   }
 
@@ -128,16 +92,6 @@ impl MarkdownRenderOptions {
       owner: Arc::from(owner.to_string()),
       repo: Arc::from(repo.to_string()),
     });
-    self
-  }
-
-  pub fn with_expanded_code_blocks(mut self) -> Self {
-    self.expand_code_blocks = true;
-    self
-  }
-
-  pub fn with_image_base_url(mut self, image_base_url: impl Into<SharedString>) -> Self {
-    self.image_base_url = Some(image_base_url.into());
     self
   }
 
@@ -173,12 +127,6 @@ impl MarkdownRenderOptions {
   }
 }
 
-pub struct ListItemView {
-  pub bullet: String,
-  pub checked: Option<bool>,
-  pub content: AnyElement,
-}
-
 // Constants imported from crate::constants
 // BadgeImageSource, BadgeResolveState, Segment, ParsedMarkdown imported from crate::types
 
@@ -190,12 +138,6 @@ pub fn render_parsed_markdown(
   let scope_id = resolve_scope_id_for_parsed(parsed, options);
   let mut ctx = RenderContext::new(scope_id);
   render_blocks(&parsed.blocks, options, 0, cx, &mut ctx).into_any_element()
-}
-
-fn markdown_source_scope_id(source: &str, state: &MarkdownRenderState) -> usize {
-  let mut hasher = DefaultHasher::new();
-  source.hash(&mut hasher);
-  scoped_id_for_state(hasher.finish() as usize, state)
 }
 
 fn short_github_reference(reference: &str) -> String {
@@ -619,122 +561,6 @@ fn render_github_diff_lines(
   }
 
   rows
-}
-
-pub fn render_github_diff_code_reference_preview_card(
-  preview: &GithubCodeReferencePreview,
-  diff_lines: &[GithubDiffLine],
-  cx: &App,
-) -> Div {
-  let theme = cx.theme();
-  let link_color = github_link_color(theme.background);
-  let mut preview_id_hasher = DefaultHasher::new();
-  preview.url.hash(&mut preview_id_hasher);
-  preview.start_line.hash(&mut preview_id_hasher);
-  preview.end_line.hash(&mut preview_id_hasher);
-  diff_lines.len().hash(&mut preview_id_hasher);
-  let preview_hash = preview_id_hasher.finish();
-  let preview_scroll_id: SharedString = format!(
-    "markdown-diff-code-reference-preview-scroll-{}",
-    preview_hash
-  )
-  .into();
-  let snippet_text_seed = preview_hash as usize;
-  let min_preview_content_width_px =
-    (estimate_code_reference_preview_min_content_width_px(preview) + 110.0).max(
-      diff_lines
-        .iter()
-        .map(|line| estimate_code_block_min_content_width_px(line.content.as_ref()))
-        .fold(0.0, f32::max)
-        + 110.0,
-    );
-  let url = preview.url.clone();
-  let file_label = format!("{}/{}", preview.repo.as_ref(), preview.path.as_ref());
-  let line_label = if preview.start_line == preview.end_line {
-    format!(
-      "Line {} in {}",
-      preview.start_line,
-      short_github_reference(preview.reference.as_ref())
-    )
-  } else {
-    format!(
-      "Lines {}-{} in {}",
-      preview.start_line,
-      preview.end_line,
-      short_github_reference(preview.reference.as_ref())
-    )
-  };
-
-  let preview_scroll_key = preview_card_scroll_key(preview_hash);
-  let preview_scroll_handle = scrollable_handle(preview_scroll_key);
-  let preview_content = restrict_scroll_to_wheel_axis(
-    div()
-      .id(preview_scroll_id)
-      .w_full()
-      .min_w_0()
-      .max_h(px(MARKDOWN_CODE_BLOCK_MAX_HEIGHT_PX))
-      .overflow_scroll(),
-  )
-  .track_scroll(&preview_scroll_handle)
-  .child(render_github_diff_lines(
-    diff_lines,
-    preview.path.as_ref(),
-    snippet_text_seed,
-    MarkdownRenderState::new(),
-    min_preview_content_width_px,
-    cx,
-  ));
-  let preview_scrolled = scrollable_node(
-    preview_content,
-    &preview_scroll_handle,
-    ScrollAxes::both(),
-    preview_scroll_key,
-  )
-  .into_any_element();
-
-  div()
-    .flex()
-    .flex_col()
-    .relative()
-    .my(px(MARKDOWN_CODE_REFERENCE_CARD_MARGIN_Y_PX))
-    .border_1()
-    .border_color(theme.border)
-    .rounded_md()
-    .overflow_hidden()
-    .child(
-      div()
-        .bg(theme.sidebar)
-        .border_b_1()
-        .border_color(theme.border)
-        .px(px(MARKDOWN_CODE_REFERENCE_CARD_PADDING_X_PX))
-        .py(px(MARKDOWN_CODE_REFERENCE_CARD_PADDING_Y_PX))
-        .cursor(CursorStyle::PointingHand)
-        .on_mouse_down(MouseButton::Left, move |_, _, cx| {
-          cx.stop_propagation();
-          cx.open_url(url.as_ref());
-        })
-        .child(
-          div()
-            .flex()
-            .flex_col()
-            .child(
-              div()
-                .text_sm()
-                .font_medium()
-                .text_color(link_color)
-                .child(file_label),
-            )
-            .child(
-              div()
-                .text_xs()
-                .text_color(theme.muted_foreground)
-                .child(line_label),
-            ),
-        ),
-    )
-    .child(preview_scrolled)
-    .horizontal_scrollbar(&preview_scroll_handle)
-    .vertical_scrollbar(&preview_scroll_handle)
 }
 
 pub fn render_github_code_reference_preview_card(
@@ -1161,55 +987,7 @@ fn split_spans_per_line(
     .collect()
 }
 
-fn render_markdown_with_preview_segments(
-  source: &str,
-  options: &MarkdownRenderOptions,
-  previews: &HashMap<Arc<str>, GithubCodeReferencePreview>,
-  cx: &App,
-) -> AnyElement {
-  let segments = split_markdown_preview_segments(source, previews);
-  let has_previews = segments
-    .iter()
-    .any(|segment| matches!(segment, MarkdownRenderSegment::Preview(_)));
-  if !has_previews {
-    let parsed = parse_markdown_for_render(source);
-    return render_parsed_markdown(&parsed, options, cx);
-  }
-
-  let base_scope_id = options.scope_id.map_or_else(
-    || markdown_source_scope_id(source, &options.state),
-    |scope_id| scoped_id_for_state(scope_id, &options.state),
-  );
-
-  let mut rendered = div().flex().flex_col();
-  for (segment_index, segment) in segments.into_iter().enumerate() {
-    match segment {
-      MarkdownRenderSegment::Markdown(markdown) => {
-        if markdown.is_empty() {
-          continue;
-        }
-        let parsed = parse_markdown_for_render(markdown.as_str());
-        let scoped_options = options
-          .clone()
-          .with_scope_id(compose_text_id(base_scope_id, segment_index + 1));
-        rendered = rendered.child(render_parsed_markdown(&parsed, &scoped_options, cx));
-      }
-      MarkdownRenderSegment::Preview(preview) => {
-        rendered = rendered.child(render_github_code_reference_preview_card(&preview, cx));
-      }
-    }
-  }
-
-  rendered.into_any_element()
-}
-
 pub fn render_markdown(source: &str, options: &MarkdownRenderOptions, cx: &App) -> AnyElement {
-  if let Some(previews) = options.github_code_reference_previews.as_ref()
-    && !previews.is_empty()
-  {
-    return render_markdown_with_preview_segments(source, options, previews.as_ref(), cx);
-  }
-
   let parsed = parse_markdown_for_render(source);
   render_parsed_markdown(&parsed, options, cx)
 }
@@ -1339,32 +1117,17 @@ fn render_block(
   match block {
     Block::Paragraph(inlines) => {
       let theme = cx.theme();
-      let content = div()
+      div()
         .whitespace_normal()
         .overflow_hidden()
         .text_sm()
         .text_color(theme.foreground)
         .child(render_inline_text(inlines, options, cx, ctx))
-        .into_any_element();
-      if let Some(override_fn) = options.overrides.paragraph.as_ref() {
-        override_fn(content, cx)
-      } else {
-        content
-      }
+        .into_any_element()
     }
-    Block::Heading { level, content } => {
-      let content = render_heading_text(*level, content, options, cx, ctx);
-      if let Some(override_fn) = options.overrides.heading.as_ref() {
-        override_fn(*level, content, cx)
-      } else {
-        content
-      }
-    }
+    Block::Heading { level, content } => render_heading_text(*level, content, options, cx, ctx),
     Block::List(list) => render_list(list, options, indent, cx, ctx),
     Block::CodeBlock(code) => {
-      if let Some(override_fn) = options.overrides.code_block.as_ref() {
-        return override_fn(code, cx);
-      }
       if code.lang.as_deref() == Some("suggestion") {
         if let Some(suggestion_ctx) = options.suggestion_context.as_ref() {
           return render_suggestion_block(code, suggestion_ctx, options, cx, ctx);
@@ -1447,29 +1210,19 @@ fn render_block(
         render_blocks(children, options, indent + 1, cx, ctx)
       };
 
-      let content = div()
+      div()
         .border_l_2()
         .border_color(border_color)
         .pl(px(8.0))
         .when_some(alert_header, |this, header| this.child(header))
         .child(rendered_children)
-        .into_any_element();
-      if let Some(override_fn) = options.overrides.block_quote.as_ref() {
-        override_fn(content, cx)
-      } else {
-        content
-      }
-    }
-    Block::ThematicBreak => {
-      if let Some(override_fn) = options.overrides.thematic_break.as_ref() {
-        return override_fn(cx);
-      }
-      div()
-        .h(px(1.0))
-        .bg(cx.theme().border)
-        .rounded_md()
         .into_any_element()
     }
+    Block::ThematicBreak => div()
+      .h(px(1.0))
+      .bg(cx.theme().border)
+      .rounded_md()
+      .into_any_element(),
     Block::Table(table) => render_table(table, options, cx, ctx),
     Block::Details(details) => render_details(details, options, indent, cx, ctx),
     Block::Aligned { center, blocks } => {
@@ -1522,15 +1275,7 @@ fn render_list(
     };
 
     let content = render_list_item_blocks(&item.blocks, options, cx, ctx);
-    let row = ListItemView {
-      bullet: bullet.clone(),
-      checked: item.checked,
-      content,
-    };
-
-    let element = if let Some(override_fn) = options.overrides.list_item.as_ref() {
-      override_fn(row, cx)
-    } else {
+    container = container.child(
       h_flex()
         .items_start()
         .w_full()
@@ -1543,18 +1288,12 @@ fn render_list(
             .pr(px(LIST_MARKER_GAP_PX))
             .child(bullet),
         )
-        .child(div().min_w_0().flex_1().child(row.content))
-        .into_any_element()
-    };
-    container = container.child(element);
+        .child(div().min_w_0().flex_1().child(content))
+        .into_any_element(),
+    );
   }
 
-  let container = container.into_any_element();
-  if let Some(override_fn) = options.overrides.list.as_ref() {
-    override_fn(container, cx)
-  } else {
-    container
-  }
+  container.into_any_element()
 }
 
 fn render_list_item_blocks(
@@ -1576,10 +1315,6 @@ fn render_table(
   cx: &App,
   ctx: &mut RenderContext,
 ) -> AnyElement {
-  if let Some(override_fn) = options.overrides.table.as_ref() {
-    return override_fn(table, cx);
-  }
-
   let theme = cx.theme();
   let column_count = table
     .rows
@@ -2050,7 +1785,6 @@ fn render_inline_with_images(
     on_link: options.on_link.clone(),
     interactive,
     is_dark_mode,
-    image_base_url: options.image_base_url.as_ref().map(SharedString::as_ref),
     asset_url_resolver: options.asset_url_resolver.as_ref(),
   };
   if let Some(image_data) = single_inline_image_data(inlines) {
@@ -2258,35 +1992,21 @@ fn render_code_block(
 
   let scroll_key = code_block_scroll_key(options.state.instance_id, text_id);
   let scroll_handle = scrollable_handle(scroll_key);
-  let expanded = options.expand_code_blocks;
-  let scroll_container = if expanded {
-    let scroll_content = scroll_content
-      .overflow_x_scroll()
-      .track_scroll(&scroll_handle);
-    scrollable_node(
-      scroll_content,
-      &scroll_handle,
-      ScrollAxes::horizontal(),
-      scroll_key,
-    )
-    .into_any_element()
-  } else {
-    let scroll_content = scroll_content
-      .max_h(px(MARKDOWN_CODE_BLOCK_MAX_HEIGHT_PX))
-      .overflow_scroll()
-      .track_scroll(&scroll_handle);
-    scrollable_node(
-      scroll_content,
-      &scroll_handle,
-      ScrollAxes::both(),
-      scroll_key,
-    )
-    .into_any_element()
-  };
+  let scroll_content = scroll_content
+    .max_h(px(MARKDOWN_CODE_BLOCK_MAX_HEIGHT_PX))
+    .overflow_scroll()
+    .track_scroll(&scroll_handle);
+  let scroll_container = scrollable_node(
+    scroll_content,
+    &scroll_handle,
+    ScrollAxes::both(),
+    scroll_key,
+  )
+  .into_any_element();
   let copy_value = code_block_copy_value(code);
   let hover_group_id = code_block_hover_group_id(text_id);
 
-  let mut wrapper: Div = div()
+  div()
     .w_full()
     .min_w_0()
     .relative()
@@ -2295,11 +2015,8 @@ fn render_code_block(
     .rounded_md()
     .overflow_hidden()
     .child(scroll_container)
-    .horizontal_scrollbar(&scroll_handle);
-  if !expanded {
-    wrapper = wrapper.vertical_scrollbar(&scroll_handle);
-  }
-  wrapper
+    .horizontal_scrollbar(&scroll_handle)
+    .vertical_scrollbar(&scroll_handle)
     .child(
       div()
         .absolute()
@@ -3090,19 +2807,6 @@ mod tests {
     }
   }
 
-  fn test_preview_map(url: &str) -> HashMap<Arc<str>, GithubCodeReferencePreview> {
-    HashMap::from([(Arc::from(url), test_preview_for_url(url))])
-  }
-
-  #[test]
-  fn markdown_render_options_expanded_code_blocks_flag_is_opt_in() {
-    let defaults = MarkdownRenderOptions::default();
-    assert!(!defaults.expand_code_blocks);
-
-    let expanded = MarkdownRenderOptions::default().with_expanded_code_blocks();
-    assert!(expanded.expand_code_blocks);
-  }
-
   #[test]
   fn should_resolve_svg_embedded_image_allows_simple_image_wrapper() {
     let svg = r#"<svg width="16" height="16" xmlns="http://www.w3.org/2000/svg">
@@ -3171,37 +2875,11 @@ mod tests {
   }
 
   #[test]
-  fn resolve_markdown_image_url_joins_relative_path_with_base_url() {
-    let resolved = resolve_markdown_image_url(
-      "./assets/hero.gif",
-      Some("https://raw.githubusercontent.com/acme/widget/main/docs/"),
-    );
-
-    assert_eq!(
-      resolved,
-      "https://raw.githubusercontent.com/acme/widget/main/docs/assets/hero.gif"
-    );
-  }
-
-  #[test]
-  fn resolve_markdown_image_url_treats_leading_slash_as_repo_root() {
-    let resolved = resolve_markdown_image_url(
-      "/assets/hero.gif",
-      Some("https://raw.githubusercontent.com/acme/widget/main/docs/"),
-    );
-
-    assert_eq!(
-      resolved,
-      "https://raw.githubusercontent.com/acme/widget/main/assets/hero.gif"
-    );
-  }
-
-  #[test]
   fn resolve_markdown_image_url_keeps_absolute_urls() {
     let absolute = "https://images.example.com/hero.gif";
-    assert_eq!(resolve_markdown_image_url(absolute, None), absolute);
+    assert_eq!(resolve_markdown_image_url(absolute), absolute);
     assert_eq!(
-      resolve_markdown_image_url("//images.example.com/hero.gif", None),
+      resolve_markdown_image_url("//images.example.com/hero.gif"),
       "https://images.example.com/hero.gif"
     );
   }
@@ -3883,48 +3561,6 @@ by <a href="https://x.com/colinhacks">@colinhacks</a>
   }
 
   #[test]
-  fn split_markdown_preview_segments_replaces_standalone_raw_url_line() {
-    let url = "https://github.com/acme/widget/blob/main/docker-compose.yml#L7-L9";
-    let source = format!("Before\n{url}\nAfter");
-    let previews = test_preview_map(url);
-
-    let segments = split_markdown_preview_segments(&source, &previews);
-    assert_eq!(segments.len(), 3);
-    assert!(
-      matches!(&segments[0], MarkdownRenderSegment::Markdown(markdown) if markdown == "Before\n")
-    );
-    assert!(
-      matches!(&segments[1], MarkdownRenderSegment::Preview(preview) if preview.url.as_ref() == url)
-    );
-    assert!(
-      matches!(&segments[2], MarkdownRenderSegment::Markdown(markdown) if markdown == "After")
-    );
-  }
-
-  #[test]
-  fn split_markdown_preview_segments_replaces_standalone_markdown_link_line() {
-    let url = "https://github.com/acme/widget/blob/main/docker-compose.yml#L7-L9";
-    let source = format!("Before\n[compose]({url})\nAfter");
-    let previews = test_preview_map(url);
-
-    let segments = split_markdown_preview_segments(&source, &previews);
-    assert_eq!(segments.len(), 3);
-    assert!(
-      matches!(&segments[1], MarkdownRenderSegment::Preview(preview) if preview.url.as_ref() == url)
-    );
-  }
-
-  #[test]
-  fn split_markdown_preview_segments_keeps_inline_link_as_markdown() {
-    let url = "https://github.com/acme/widget/blob/main/docker-compose.yml#L7-L9";
-    let source = format!("Inline link {url} should stay markdown");
-    let previews = test_preview_map(url);
-
-    let segments = split_markdown_preview_segments(&source, &previews);
-    assert_eq!(segments, vec![MarkdownRenderSegment::Markdown(source)]);
-  }
-
-  #[test]
   fn parses_lists() {
     let blocks = parse_gfm("- a\n- b");
     assert_eq!(blocks.len(), 1);
@@ -4423,16 +4059,16 @@ Apres"#,
   fn estimates_markdown_height_grows_with_longer_content() {
     let short = "Short paragraph.";
     let long = "Short paragraph. ".repeat(40);
-    let short_height = estimate_markdown_height_px(short, 72, 20.0);
-    let long_height = estimate_markdown_height_px(&long, 72, 20.0);
+    let short_height = estimate_markdown_height_px_with_suggestion_context(short, 72, 20.0, None);
+    let long_height = estimate_markdown_height_px_with_suggestion_context(&long, 72, 20.0, None);
     assert!(long_height > short_height);
   }
 
   #[test]
   fn estimates_markdown_height_respects_wrap_columns() {
     let source = "This is a long markdown line that should wrap to more visual lines when the available width is smaller.";
-    let wide = estimate_markdown_height_px(source, 96, 20.0);
-    let narrow = estimate_markdown_height_px(source, 32, 20.0);
+    let wide = estimate_markdown_height_px_with_suggestion_context(source, 96, 20.0, None);
+    let narrow = estimate_markdown_height_px_with_suggestion_context(source, 32, 20.0, None);
     assert!(narrow > wide);
   }
 

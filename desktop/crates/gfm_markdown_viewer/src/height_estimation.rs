@@ -7,11 +7,6 @@ use crate::parse::inline_to_plain_text;
 use crate::parsed_cache::parse_markdown_for_render;
 use crate::types::*;
 
-pub fn estimate_markdown_height_px(source: &str, wrap_columns: usize, line_height_px: f32) -> f32 {
-  let parsed = parse_markdown_for_render(source);
-  estimate_parsed_markdown_height_px(&parsed, wrap_columns, line_height_px)
-}
-
 pub fn estimate_markdown_height_px_with_suggestion_context(
   source: &str,
   wrap_columns: usize,
@@ -24,19 +19,6 @@ pub fn estimate_markdown_height_px_with_suggestion_context(
     wrap_columns,
     line_height_px,
     suggestion_context,
-  )
-}
-
-pub fn estimate_parsed_markdown_height_px(
-  parsed: &ParsedMarkdown,
-  wrap_columns: usize,
-  line_height_px: f32,
-) -> f32 {
-  estimate_parsed_markdown_height_px_with_suggestion_context(
-    parsed,
-    wrap_columns,
-    line_height_px,
-    None,
   )
 }
 
@@ -480,9 +462,7 @@ pub(crate) fn estimate_code_reference_preview_min_content_width_px(
 
 #[cfg(test)]
 mod tests {
-  use super::{
-    estimate_parsed_markdown_height_px, estimate_parsed_markdown_height_px_with_suggestion_context,
-  };
+  use super::estimate_parsed_markdown_height_px_with_suggestion_context;
   use crate::parsed_cache::parse_markdown_for_render;
   use crate::types::SuggestionContext;
   use std::sync::Arc;
@@ -493,7 +473,8 @@ mod tests {
       r#"<img width="1159" height="272" alt="Image" src="https://github.com/user-attachments/assets/525e1fe3-1159-47ea-a1ac-8926a03c9cd1" />"#,
     );
 
-    let height = estimate_parsed_markdown_height_px(&parsed, 72, 20.0);
+    let height =
+      estimate_parsed_markdown_height_px_with_suggestion_context(&parsed, 72, 20.0, None);
 
     assert!(
       height > 100.0,
@@ -507,7 +488,8 @@ mod tests {
       "https://github.com/user-attachments/assets/4aa12d28-968a-490d-81ee-32bbbb595fc4",
     );
 
-    let height = estimate_parsed_markdown_height_px(&parsed, 72, 20.0);
+    let height =
+      estimate_parsed_markdown_height_px_with_suggestion_context(&parsed, 72, 20.0, None);
 
     assert!(
       height > 100.0,
@@ -522,7 +504,8 @@ mod tests {
 new line
 ```"#,
     );
-    let default_height = estimate_parsed_markdown_height_px(&parsed, 72, 20.0);
+    let default_height =
+      estimate_parsed_markdown_height_px_with_suggestion_context(&parsed, 72, 20.0, None);
     let context = SuggestionContext {
       original_start_line: Some(10),
       suggested_start_line: Some(10),

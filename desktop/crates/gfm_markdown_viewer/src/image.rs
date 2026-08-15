@@ -220,58 +220,10 @@ pub(crate) fn resolve_badge_href(base_url: &str, href: &str) -> Option<BadgeImag
   None
 }
 
-pub(crate) fn markdown_image_repo_root_url(base: &reqwest::Url) -> Option<reqwest::Url> {
-  let root_segments = base
-    .path_segments()
-    .map(|segments| {
-      segments
-        .filter(|segment| !segment.is_empty())
-        .take(3)
-        .collect::<Vec<_>>()
-    })
-    .unwrap_or_default();
-  if root_segments.len() < 3 {
-    return None;
-  }
-  let mut root = base.clone();
-  let root_path = format!("/{}/", root_segments.join("/"));
-  root.set_path(root_path.as_str());
-  Some(root)
-}
-
-pub(crate) fn resolve_markdown_image_url(url: &str, image_base_url: Option<&str>) -> String {
+pub(crate) fn resolve_markdown_image_url(url: &str) -> String {
   let trimmed = url.trim();
-  if trimmed.is_empty() {
-    return String::new();
-  }
-
-  if trimmed.starts_with("data:")
-    || trimmed.starts_with("http://")
-    || trimmed.starts_with("https://")
-  {
-    return trimmed.to_string();
-  }
-
   if trimmed.starts_with("//") {
     return format!("https:{trimmed}");
-  }
-
-  let Some(base_url) = image_base_url else {
-    return trimmed.to_string();
-  };
-  let Ok(base) = reqwest::Url::parse(base_url) else {
-    return trimmed.to_string();
-  };
-
-  if trimmed.starts_with('/')
-    && let Some(repo_root) = markdown_image_repo_root_url(&base)
-    && let Ok(joined) = repo_root.join(trimmed.trim_start_matches('/'))
-  {
-    return joined.to_string();
-  }
-
-  if let Ok(joined) = base.join(trimmed) {
-    return joined.to_string();
   }
 
   trimmed.to_string()
@@ -479,10 +431,7 @@ pub(crate) fn render_table_cell_inlines(
         image_data.alt.clone()
       };
       let themed_url = image_data.themed_url(is_dark_mode);
-      let badge_url = resolve_markdown_image_url(
-        &themed_url,
-        options.image_base_url.as_ref().map(SharedString::as_ref),
-      );
+      let badge_url = resolve_markdown_image_url(&themed_url);
       row = row.child(
         img(move |window: &mut Window, cx: &mut App| {
           if let Some(source) = resolve_badge_image_source_async(&badge_url) {
@@ -551,16 +500,12 @@ pub(crate) struct MarkdownImageRenderContext<'a> {
   pub(crate) on_link: Option<Arc<LinkHandlerFn>>,
   pub(crate) interactive: bool,
   pub(crate) is_dark_mode: bool,
-  pub(crate) image_base_url: Option<&'a str>,
   pub(crate) asset_url_resolver: Option<&'a Arc<dyn Fn(&str) -> Option<String> + Send + Sync>>,
 }
 
 impl MarkdownImageRenderContext<'_> {
   pub(crate) fn resolve_url(&self, image_data: &InlineImageData) -> String {
-    let url = resolve_markdown_image_url(
-      &image_data.themed_url(self.is_dark_mode),
-      self.image_base_url,
-    );
+    let url = resolve_markdown_image_url(&image_data.themed_url(self.is_dark_mode));
     if is_github_user_attachment_url(&url)
       && let Some(resolver) = self.asset_url_resolver
       && let Some(resolved) = resolve_github_asset_url_async(&url, resolver)
