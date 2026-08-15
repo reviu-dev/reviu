@@ -6,7 +6,6 @@ actions!(
     NavigateBack,
     CloseWorkspacePage,
     OpenGitPage,
-    OpenGithubPage,
     OpenSessionPage,
     RefreshCurrentPage,
     ToggleTerminalSidebar,
@@ -35,7 +34,6 @@ actions!(
     ToggleFileStage,
     RestoreFile,
     AcceptBothConflict,
-    MarkNotificationDone,
     PreviousPageTab,
     NextPageTab,
     OpenBillingPage,
@@ -69,21 +67,14 @@ mod file_search_palette;
 mod file_view;
 mod git_config_page;
 mod git_page;
-mod github_commit_details_page;
 mod github_create_repository_dialog;
-mod github_fork_repository_dialog;
-mod github_home_tabs;
 pub mod github_navigation;
-mod github_page;
+mod github_notifications;
 mod github_pr_details_page;
-mod github_profile_page;
-mod github_repo_page;
 mod github_search_dialog;
 mod github_shared;
 mod interactive_rebase_todo_view;
 pub mod navigation;
-mod notification_count;
-mod number_format;
 mod pricing_copy;
 mod review_panel;
 mod sentry_context;

@@ -43,41 +43,6 @@ const PAGE_CONFIGS = [
     position: "prepend",
     className: "prc-Button-ButtonBase-9n-Xk",
   },
-  {
-    name: "issue-details",
-    pattern: /^https:\/\/github\.com\/[^/]+\/[^/]+\/issues\/\d+/,
-    selector:
-      "[data-component='PH_Actions'] [class*='HeaderMenu-module__menuActionsContainer']",
-    position: "prepend",
-    className: "prc-Button-ButtonBase-9n-Xk",
-  },
-  {
-    name: "commit-details",
-    pattern: /^https:\/\/github\.com\/[^/]+\/[^/]+\/commit\/[0-9a-f]+/i,
-    selector: "[data-component='PH_Actions'] > div.d-flex",
-    position: "prepend",
-    className:
-      "prc-Button-ButtonBase-9n-Xk CommitHeader-module__browseFilesButton__nELIN prc-Link-Link-9ZwDx",
-  },
-  {
-    name: "pull-list",
-    pattern: /^https:\/\/github\.com\/[^/]+\/[^/]+\/pulls\/?/,
-    selector: null,
-  },
-  {
-    name: "issue-list",
-    pattern: /^https:\/\/github\.com\/[^/]+\/[^/]+\/issues\/?/,
-    selector: null,
-  },
-  {
-    name: "repo",
-    pattern: /^https:\/\/github\.com\/[^/]+\/[^/]+\/?$/,
-    selector: ".gh-header-actions, .pagehead-actions",
-    wrap: "li",
-    className:
-      "prc-Button-ButtonBase-9n-Xk NotificationsSubscriptionsMenu-module__ActionMenuButton__FVE3w",
-    dataSize: "small",
-  },
 ];
 
 const IGNORED_OWNERS = new Set([

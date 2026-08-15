@@ -28,6 +28,7 @@ use crate::agent_review::{
 use crate::agent_settings::AgentSettings;
 use crate::auth_state::AuthStateStore;
 use crate::config::ConfigStore;
+use crate::date_format::format_relative_time;
 use crate::file_search_palette::open_file_search_palette;
 use crate::file_view::{
   BinaryPreview, build_binary_preview, render_binary_preview, render_file_title,
@@ -38,8 +39,8 @@ use crate::git_page::{
 use crate::github_navigation::{
   open_commit_target, open_pr_target, open_profile_target, open_repo_target,
 };
+use crate::github_notifications::{self, GithubNotificationsStore};
 use crate::navigation::NavigationHistory;
-use crate::notification_count::NotificationCountStore;
 use crate::review_panel::{ReviewPanel, ReviewPanelEvent};
 use crate::workspace::WorkspaceApi;
 use crate::{
@@ -54,6 +55,7 @@ use ui::{
 const SESSIONS_SIDEBAR_DEFAULT_WIDTH: f32 = 250.0;
 const SESSIONS_SIDEBAR_MIN_WIDTH: f32 = 200.0;
 const SESSIONS_SIDEBAR_MAX_WIDTH: f32 = 420.0;
+const INBOX_MAX_HEIGHT: f32 = 220.0;
 const REVIEW_PANEL_DEFAULT_WIDTH: f32 = 320.0;
 const REVIEW_PANEL_MIN_WIDTH: f32 = 240.0;
 const REVIEW_PANEL_MAX_WIDTH: f32 = 560.0;
@@ -990,7 +992,7 @@ impl SessionPage {
   fn open_command_palette(&mut self, window: &mut Window, cx: &mut Context<Self>) {
     let include_github = AuthStateStore::has_github_access(cx);
     let commands =
-      CommandPaletteCommand::default_global_commands(CommandPalettePage::Git, include_github);
+      CommandPaletteCommand::default_global_commands(CommandPalettePage::Session, include_github);
 
     let view = cx.entity();
     let handler: CommandPaletteHandler = Arc::new(move |action, window, cx| {
@@ -1013,11 +1015,6 @@ impl SessionPage {
     match action {
       CommandPaletteAction::OpenGitPage => {
         NavigationHistory::navigate("/git", cx);
-        Ok(())
-      }
-      CommandPaletteAction::OpenGithubPage => {
-        crate::github_page::GithubPageHandle::refresh(cx);
-        NavigationHistory::navigate("/github", cx);
         Ok(())
       }
       CommandPaletteAction::OpenGithubPrDetails {
@@ -1184,76 +1181,7 @@ impl SessionPage {
       })
       .collect();
 
-    let github_section = AuthStateStore::has_github_access(cx).then(|| {
-      let notification_count = NotificationCountStore::get(cx);
-      let row = |id: &'static str,
-                 icon: UiIconName,
-                 label: &'static str,
-                 count: Option<usize>,
-                 cx: &mut Context<Self>| {
-        div()
-          .id(id)
-          .mx_2()
-          .px_2()
-          .py_1()
-          .rounded(px(5.0))
-          .cursor_pointer()
-          .hover(|s| s.bg(theme.secondary_hover))
-          .on_click(cx.listener(|_, _, _, cx| {
-            crate::github_page::GithubPageHandle::refresh(cx);
-            NavigationHistory::navigate("/github", cx);
-          }))
-          .child(
-            h_flex()
-              .items_center()
-              .gap_2()
-              .child(Icon::new(icon).size_3().text_color(theme.muted_foreground))
-              .child(
-                div()
-                  .flex_1()
-                  .text_sm()
-                  .text_color(theme.foreground)
-                  .child(label),
-              )
-              .when_some(count.filter(|count| *count > 0), |this, count| {
-                this.child(
-                  div()
-                    .text_xs()
-                    .text_color(theme.muted_foreground)
-                    .child(count.to_string()),
-                )
-              }),
-          )
-      };
-
-      v_flex()
-        .py_1()
-        .border_t_1()
-        .border_color(theme.border)
-        .child(
-          div()
-            .px_3()
-            .py_1()
-            .text_xs()
-            .font_weight(gpui::FontWeight::SEMIBOLD)
-            .text_color(theme.muted_foreground)
-            .child("GitHub"),
-        )
-        .child(row(
-          "session-page-github-inbox",
-          UiIconName::CircleDot,
-          "Inbox",
-          Some(notification_count),
-          cx,
-        ))
-        .child(row(
-          "session-page-github-prs",
-          UiIconName::GitPullRequest,
-          "Pull requests",
-          None,
-          cx,
-        ))
-    });
+    let github_section = AuthStateStore::has_github_access(cx).then(|| self.render_inbox(cx));
 
     let repo_name = self
       .selected_repo
@@ -1343,6 +1271,135 @@ impl SessionPage {
       })
       .children(github_section)
       .children(repo_context)
+      .into_any_element()
+  }
+
+  fn render_inbox(&mut self, cx: &mut Context<Self>) -> AnyElement {
+    let theme = cx.theme().clone();
+    let notifications = GithubNotificationsStore::list(cx);
+    let unread = GithubNotificationsStore::unread_count(cx);
+
+    let header = h_flex()
+      .items_center()
+      .gap_2()
+      .px_3()
+      .py_1()
+      .child(
+        div()
+          .flex_1()
+          .text_xs()
+          .font_weight(gpui::FontWeight::SEMIBOLD)
+          .text_color(theme.muted_foreground)
+          .child("GitHub inbox"),
+      )
+      .when(unread > 0, |this| {
+        this.child(
+          div()
+            .text_xs()
+            .text_color(theme.muted_foreground)
+            .child(unread.to_string()),
+        )
+      });
+
+    let rows: Vec<_> = notifications
+      .into_iter()
+      .enumerate()
+      .map(|(ix, notification)| {
+        let group_name = SharedString::from(format!("inbox-row-{}", notification.id));
+        let done_id = notification.id.clone();
+        let time = format_relative_time(&notification.updated_at);
+        let repo = notification.repository.full_name.clone();
+        let title = notification.subject.title.clone();
+        let is_unread = notification.unread;
+
+        div()
+          .id(("session-page-inbox-row", ix))
+          .group(group_name.clone())
+          .mx_2()
+          .px_2()
+          .py_1p5()
+          .rounded(px(6.0))
+          .cursor_pointer()
+          .hover(|s| s.bg(theme.secondary_hover))
+          .on_click(cx.listener(move |_, _, _, cx| {
+            github_notifications::open_notification(&notification, cx);
+          }))
+          .child(
+            v_flex()
+              .gap_0p5()
+              .child(
+                h_flex()
+                  .items_center()
+                  .gap_2()
+                  .when(is_unread, |this| {
+                    this.child(
+                      div()
+                        .flex_shrink_0()
+                        .size(px(6.0))
+                        .rounded_full()
+                        .bg(theme.primary),
+                    )
+                  })
+                  .child(
+                    div()
+                      .flex_1()
+                      .min_w(px(0.0))
+                      .text_sm()
+                      .truncate()
+                      .text_color(theme.foreground)
+                      .child(title),
+                  )
+                  .child(
+                    Button::new(("session-page-inbox-done", ix))
+                      .icon(UiIconName::Check)
+                      .xsmall()
+                      .ghost()
+                      .opacity(0.0)
+                      .group_hover(group_name.clone(), |this| this.opacity(1.0))
+                      .tooltip("Mark as done")
+                      .on_click(cx.listener(move |_, _, _, cx| {
+                        cx.stop_propagation();
+                        github_notifications::mark_notification_done(done_id.clone(), cx);
+                      })),
+                  ),
+              )
+              .child(
+                h_flex()
+                  .items_center()
+                  .gap_2()
+                  .text_xs()
+                  .text_color(theme.muted_foreground)
+                  .child(div().flex_1().min_w(px(0.0)).truncate().child(repo))
+                  .child(div().child(time)),
+              ),
+          )
+      })
+      .collect();
+
+    let body = if rows.is_empty() {
+      div()
+        .px_3()
+        .py_2()
+        .text_xs()
+        .text_color(theme.muted_foreground)
+        .child("No notifications")
+        .into_any_element()
+    } else {
+      div()
+        .id("session-page-inbox-list")
+        .max_h(px(INBOX_MAX_HEIGHT))
+        .overflow_y_scroll()
+        .pb_1()
+        .children(rows)
+        .into_any_element()
+    };
+
+    v_flex()
+      .py_1()
+      .border_t_1()
+      .border_color(theme.border)
+      .child(header)
+      .child(body)
       .into_any_element()
   }
 

@@ -24,7 +24,6 @@ use crate::{
   auth_state::{AuthState, AuthStateStore},
   date_format::{format_long_date_opt, parse_rfc3339},
   github_navigation::{open_commit_target, open_pr_target, open_profile_target, open_repo_target},
-  github_page::GithubPageHandle,
   navigation::NavigationHistory,
   pricing_copy::{
     PRO_ANNUAL_PERIOD, PRO_ANNUAL_PRICE, PRO_ANNUAL_SAVE_PERCENT, PRO_ANNUAL_SLUG,
@@ -305,13 +304,12 @@ impl BillingPage {
     cx: &mut Context<Self>,
   ) -> Result<(), SharedString> {
     match action {
-      CommandPaletteAction::OpenGitPage => {
-        NavigationHistory::navigate("/git", cx);
+      CommandPaletteAction::OpenSessionPage => {
+        NavigationHistory::navigate("/session", cx);
         Ok(())
       }
-      CommandPaletteAction::OpenGithubPage => {
-        GithubPageHandle::refresh(cx);
-        NavigationHistory::navigate("/github", cx);
+      CommandPaletteAction::OpenGitPage => {
+        NavigationHistory::navigate("/git", cx);
         Ok(())
       }
       CommandPaletteAction::OpenGithubPrDetails {

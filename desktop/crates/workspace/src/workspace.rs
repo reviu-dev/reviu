@@ -32,24 +32,19 @@ use crate::app_update::{
 use crate::auth_state::{AuthState, AuthStateStore};
 use crate::billing_page::BillingPage;
 use crate::config::{AppSettings as PersistedSettings, ConfigStore};
-use crate::dock_badge::set_dock_badge;
 use crate::git_config_page::GitConfigPage;
 use crate::git_page::{GitPage, GitPageHandle};
-use crate::github_commit_details_page::{GithubCommitDetailsPage, GithubCommitDetailsPageHandle};
-use crate::github_page::{GithubPage, GithubPageHandle};
+use crate::github_notifications::{self, GithubNotificationsStore};
 use crate::github_pr_details_page::{GithubPrDetailsPage, GithubPrDetailsPageHandle};
-use crate::github_profile_page::{GithubProfilePage, GithubProfilePageHandle};
-use crate::github_repo_page::{GithubRepoPage, GithubRepoPageHandle};
 use crate::navigation::NavigationHistory;
-use crate::notification_count::NotificationCountStore;
 use crate::sentry_context;
 use crate::session_page::SessionPage;
 use crate::settings_page::SettingsPage;
 use crate::shortcuts::{self, ShortcutId};
 use crate::{ShowCommandPalette, ShowFileSearch};
 use ui::{
-  Button, ButtonVariants as _, GLOBAL_BAR_HEIGHT, StatusTag, StatusThemeExt, UiIconName,
-  UserMenuConfig, UserMenuPage, UserMenuState, UserMenuUser, WindowExt, user_menu,
+  Button, ButtonVariants as _, GLOBAL_BAR_HEIGHT, UiIconName, UserMenuConfig, UserMenuPage,
+  UserMenuState, UserMenuUser, WindowExt, user_menu,
 };
 
 const UPDATE_CHECK_INTERVAL: Duration = Duration::from_secs(12 * 60 * 60);
@@ -61,11 +56,7 @@ pub const STATUS_BAR_ICON_PNG: &[u8] =
 pub enum WorkspacePage {
   Session,
   Git,
-  Github,
-  GithubProfile,
-  GithubRepo,
   GithubPrDetails,
-  GithubCommitDetails,
   Billing,
   GitConfig,
   Settings,
@@ -79,23 +70,10 @@ pub(crate) fn workspace_page_from_pathname(pathname: &str) -> WorkspacePage {
     if segments.len() >= 5 && segments[3] == "pull" {
       return WorkspacePage::GithubPrDetails;
     }
-    // Commit details: /github/{owner}/{repo}/commit/{sha}
-    if segments.len() >= 5 && segments[3] == "commit" {
-      return WorkspacePage::GithubCommitDetails;
-    }
-    // Profile page: /github/{login}
-    if segments.len() == 2 {
-      return WorkspacePage::GithubProfile;
-    }
-    // Repo page: /github/{owner}/{repo}[/{tab}]
-    if segments.len() >= 3 {
-      return WorkspacePage::GithubRepo;
-    }
   }
   match pathname {
     "/session" => WorkspacePage::Session,
     "/git" => WorkspacePage::Git,
-    "/github" => WorkspacePage::Github,
     "/billing" => WorkspacePage::Billing,
     "/settings" => WorkspacePage::Settings,
     "/git-config" => WorkspacePage::GitConfig,
@@ -105,7 +83,7 @@ pub(crate) fn workspace_page_from_pathname(pathname: &str) -> WorkspacePage {
 }
 
 /// Returns true when the current path supports file search.
-/// Git page always does; repo page on /code tab; PR details on /changes tab.
+/// Git page always does; PR details on /changes tab.
 fn page_has_file_search(pathname: &str) -> bool {
   if pathname == "/git" || pathname == "/session" {
     return true;
@@ -116,22 +94,14 @@ fn page_has_file_search(pathname: &str) -> bool {
     if segments.len() >= 6 && segments[3] == "pull" && segments[5] == "changes" {
       return true;
     }
-    // Repo: /github/{owner}/{repo}/code
-    if segments.len() >= 4 && segments[3] == "code" && !segments.contains(&"pull") {
-      return true;
-    }
   }
   false
 }
 
 fn user_menu_page_for_workspace_page(page: WorkspacePage) -> UserMenuPage {
   match page {
-    // TODO(v1): dedicated UserMenuPage::Session once the old pages are removed (P6).
-    WorkspacePage::Session | WorkspacePage::Git => UserMenuPage::Git,
-    WorkspacePage::Github
-    | WorkspacePage::GithubProfile
-    | WorkspacePage::GithubRepo
-    | WorkspacePage::GithubCommitDetails => UserMenuPage::Github,
+    WorkspacePage::Session => UserMenuPage::Session,
+    WorkspacePage::Git => UserMenuPage::Git,
     WorkspacePage::GithubPrDetails => UserMenuPage::GithubPrDetails,
     WorkspacePage::Billing => UserMenuPage::Billing,
     WorkspacePage::GitConfig => UserMenuPage::GitConfig,
@@ -144,11 +114,7 @@ fn primary_navigation_selected_index(page: WorkspacePage) -> Option<usize> {
   match page {
     WorkspacePage::Session => Some(0),
     WorkspacePage::Git => Some(1),
-    WorkspacePage::Github
-    | WorkspacePage::GithubProfile
-    | WorkspacePage::GithubRepo
-    | WorkspacePage::GithubPrDetails
-    | WorkspacePage::GithubCommitDetails => Some(2),
+    WorkspacePage::GithubPrDetails => None,
     WorkspacePage::Billing
     | WorkspacePage::GitConfig
     | WorkspacePage::Settings
@@ -160,11 +126,7 @@ fn refresh_label_for_workspace_page(page: WorkspacePage) -> Option<&'static str>
   match page {
     WorkspacePage::Session => None,
     WorkspacePage::Git => Some("Refresh Git"),
-    WorkspacePage::Github => Some("Refresh GitHub"),
-    WorkspacePage::GithubProfile => Some("Refresh Profile"),
-    WorkspacePage::GithubRepo => Some("Refresh Repo"),
     WorkspacePage::GithubPrDetails => Some("Refresh PR"),
-    WorkspacePage::GithubCommitDetails => Some("Refresh Commit"),
     WorkspacePage::Billing
     | WorkspacePage::GitConfig
     | WorkspacePage::Settings
@@ -176,11 +138,7 @@ fn refresh_in_progress_for_workspace_page(page: WorkspacePage, cx: &App) -> bool
   match page {
     WorkspacePage::Session => false,
     WorkspacePage::Git => GitPageHandle::is_refreshing(cx),
-    WorkspacePage::Github => GithubPageHandle::is_refreshing(cx),
-    WorkspacePage::GithubProfile => GithubProfilePageHandle::is_refreshing(cx),
-    WorkspacePage::GithubRepo => GithubRepoPageHandle::is_refreshing(cx),
     WorkspacePage::GithubPrDetails => GithubPrDetailsPageHandle::is_refreshing(cx),
-    WorkspacePage::GithubCommitDetails => GithubCommitDetailsPageHandle::is_refreshing(cx),
     WorkspacePage::Billing
     | WorkspacePage::GitConfig
     | WorkspacePage::Settings
@@ -190,10 +148,6 @@ fn refresh_in_progress_for_workspace_page(page: WorkspacePage, cx: &App) -> bool
 
 fn page_supports_refresh(page: WorkspacePage) -> bool {
   refresh_label_for_workspace_page(page).is_some()
-}
-
-fn github_primary_navigation_count_label(notification_count: usize) -> Option<String> {
-  (notification_count > 0).then(|| notification_count.to_string())
 }
 
 fn should_run_scheduled_update_check(state: Option<AppUpdateState>) -> bool {
@@ -215,7 +169,6 @@ pub fn build_app_menus(show_billing_entry: bool) -> Vec<Menu> {
     MenuItem::separator(),
     MenuItem::action("Sessions", crate::OpenSessionPage),
     MenuItem::action("Git", crate::OpenGitPage),
-    MenuItem::action("GitHub", crate::OpenGithubPage),
     MenuItem::separator(),
     MenuItem::action("Git Config", crate::OpenGitConfigPage),
   ];
@@ -305,11 +258,7 @@ pub struct WorkspaceView {
   session_page: Entity<SessionPage>,
   git_page: Entity<GitPage>,
   git_config_page: Entity<GitConfigPage>,
-  github_page: Entity<GithubPage>,
-  github_profile_page: Entity<GithubProfilePage>,
-  github_repo_page: Entity<GithubRepoPage>,
   github_pr_details_page: Entity<GithubPrDetailsPage>,
-  github_commit_details_page: Entity<GithubCommitDetailsPage>,
   billing_page: Entity<BillingPage>,
   settings_page: Entity<SettingsPage>,
   about_page: Entity<AboutPage>,
@@ -375,7 +324,7 @@ impl WorkspaceView {
     cx.set_global(AuthStateStore::default());
     cx.set_global(ActiveLocalRepoStore::default());
     cx.set_global(AppUpdateStore::default());
-    cx.set_global(NotificationCountStore::default());
+    cx.set_global(GithubNotificationsStore::default());
 
     let settings = ConfigStore::load_app_settings();
     cx.set_global(settings);
@@ -401,11 +350,7 @@ impl WorkspaceView {
     let session_page = cx.new(|cx| SessionPage::new(window, cx));
     let git_page = cx.new(|cx| GitPage::new(window, cx));
     let git_config_page = cx.new(|cx| GitConfigPage::new(window, cx));
-    let github_page = cx.new(|cx| GithubPage::new(window, cx));
-    let github_profile_page = cx.new(|cx| GithubProfilePage::new(window, cx));
-    let github_repo_page = cx.new(|cx| GithubRepoPage::new(window, cx));
     let github_pr_details_page = cx.new(|cx| GithubPrDetailsPage::new(window, cx));
-    let github_commit_details_page = cx.new(|cx| GithubCommitDetailsPage::new(window, cx));
     let billing_page = cx.new(|cx| BillingPage::new(window, cx));
     let settings_page = cx.new(|cx| SettingsPage::new(window, cx, settings));
     let about_page = cx.new(|cx| AboutPage::new(window, cx));
@@ -414,11 +359,7 @@ impl WorkspaceView {
       session_page,
       git_page,
       git_config_page,
-      github_page,
-      github_profile_page,
-      github_repo_page,
       github_pr_details_page,
-      github_commit_details_page,
       billing_page,
       settings_page,
       about_page,
@@ -482,73 +423,7 @@ impl WorkspaceView {
     };
 
     cx.activate(true);
-
-    if notification.unread {
-      let api = WorkspaceApi::global(cx).api.clone();
-      let thread_id = notification.id.clone();
-
-      let count = NotificationCountStore::get(cx).saturating_sub(1);
-      NotificationCountStore::set(cx, count);
-      set_dock_badge(count);
-
-      cx.background_spawn(async move {
-        let _ = unblock(move || api.mark_notification_read(&thread_id)).await;
-      })
-      .detach();
-    }
-
-    let full_name = &notification.repository.full_name;
-    let (owner, repo) = full_name.split_once('/').unwrap_or((full_name, ""));
-
-    match notification.subject.subject_type.as_str() {
-      "PullRequest" => {
-        if let Some(number) = notification
-          .subject
-          .url
-          .as_deref()
-          .and_then(|url| url.rsplit('/').next()?.parse::<u64>().ok())
-        {
-          crate::github_navigation::open_pr_target(
-            owner.to_string(),
-            repo.to_string(),
-            number,
-            false,
-            None,
-            cx,
-          );
-        }
-      }
-      "Issue" => {
-        let issue_number = notification
-          .subject
-          .url
-          .as_deref()
-          .and_then(|url| url.rsplit('/').next()?.parse::<u64>().ok());
-        crate::github_navigation::open_repo_target(
-          owner.to_string(),
-          repo.to_string(),
-          Some(ui::CommandPaletteGithubRepoTab::Issues),
-          issue_number,
-          None,
-          cx,
-        );
-      }
-      _ => {
-        let url = notification
-          .subject
-          .url
-          .as_deref()
-          .map(
-            |_api_url| match notification.subject.subject_type.as_str() {
-              "Release" => format!("https://github.com/{full_name}/releases"),
-              "Discussion" => format!("https://github.com/{full_name}/discussions"),
-              _ => format!("https://github.com/{full_name}"),
-            },
-          )
-          .unwrap_or_else(|| format!("https://github.com/{full_name}"));
-        cx.open_url(&url);
-      }
-    }
+    github_notifications::open_notification(&notification, cx);
   }
 
   fn check_for_updates(&mut self, cx: &mut Context<Self>) {
@@ -636,11 +511,10 @@ impl WorkspaceView {
         let _ = this.update(cx, |_, cx| {
           if let Ok(notifications) = result {
             let unread = notifications.iter().filter(|n| n.unread).count();
-            NotificationCountStore::set(cx, unread);
-            set_dock_badge(unread);
             if PersistedSettings::get(cx).menu_bar_icon {
               crate::status_bar::update_status_bar(unread, &notifications);
             }
+            GithubNotificationsStore::set(cx, notifications);
             cx.refresh_windows();
           }
         });
@@ -813,14 +687,6 @@ impl WorkspaceView {
     });
   }
 
-  fn open_github_home(cx: &mut App) {
-    if AuthStateStore::has_github_access(cx) {
-      GithubPageHandle::refresh(cx);
-      crate::analytics::track(cx, "github_home_viewed");
-    }
-    NavigationHistory::navigate("/github", cx);
-  }
-
   fn refresh_current_page_action(
     &mut self,
     _: &crate::RefreshCurrentPage,
@@ -834,11 +700,7 @@ impl WorkspaceView {
 
     match page {
       WorkspacePage::Git => GitPageHandle::refresh_page(cx),
-      WorkspacePage::Github => GithubPageHandle::refresh(cx),
-      WorkspacePage::GithubProfile => GithubProfilePageHandle::refresh(cx),
-      WorkspacePage::GithubRepo => GithubRepoPageHandle::refresh(cx),
       WorkspacePage::GithubPrDetails => GithubPrDetailsPageHandle::refresh(cx),
-      WorkspacePage::GithubCommitDetails => GithubCommitDetailsPageHandle::refresh(cx),
       WorkspacePage::Session
       | WorkspacePage::Billing
       | WorkspacePage::GitConfig
@@ -945,7 +807,6 @@ impl WorkspaceView {
     let current_page = user_menu_page_for_workspace_page(page);
     let auth_state = AuthStateStore::get(cx);
     let is_unauthenticated = matches!(auth_state, AuthState::Unauthenticated);
-    let has_github_access = AuthStateStore::has_github_access(cx);
     let show_billing_entry = AuthStateStore::should_show_billing_entry(cx);
 
     let open_billing: Rc<dyn Fn(&mut Window, &mut App)> =
@@ -969,8 +830,7 @@ impl WorkspaceView {
     });
     let sign_out = Rc::new(|_window: &mut Window, cx: &mut App| {
       AuthCallbackTarget::sign_out(cx);
-      NotificationCountStore::set(cx, 0);
-      set_dock_badge(0);
+      GithubNotificationsStore::clear(cx);
     });
 
     let auth_control = match auth_state {
@@ -990,9 +850,7 @@ impl WorkspaceView {
             image: user.image.map(Into::into),
           }),
           current_page,
-          notification_count: NotificationCountStore::get(cx),
           on_open_git: None,
-          on_open_github: None,
           on_open_billing,
           on_open_git_config: Some(open_git_config),
           on_open_settings: Some(open_settings),
@@ -1006,9 +864,7 @@ impl WorkspaceView {
         id: "workspace-auth-menu".into(),
         state: UserMenuState::Unauthenticated,
         current_page,
-        notification_count: 0,
         on_open_git: None,
-        on_open_github: None,
         on_open_billing: None,
         on_open_git_config: Some(open_git_config),
         on_open_settings: Some(open_settings),
@@ -1079,32 +935,16 @@ impl WorkspaceView {
         window.dispatch_action(Box::new(ShowCommandPalette), cx);
       });
 
-    let github_notification_count = NotificationCountStore::get(cx);
-    let github_notification_label = has_github_access
-      .then(|| github_primary_navigation_count_label(github_notification_count))
-      .flatten();
     let primary_navigation = TabBar::new("workspace-primary-navigation")
       .segmented()
       .small()
       .on_click(|ix, _, cx| match ix {
         0 => NavigationHistory::navigate("/session", cx),
         1 => NavigationHistory::navigate("/git", cx),
-        2 => Self::open_github_home(cx),
         _ => {}
       })
       .child(Tab::new().label("Sessions"))
-      .child(Tab::new().label("Git"))
-      .child(
-        Tab::new().child(
-          h_flex()
-            .items_center()
-            .gap_2()
-            .child("GitHub")
-            .when_some(github_notification_label, |this, label| {
-              this.child(StatusTag::new(theme.status_red()).xsmall().child(label))
-            }),
-        ),
-      );
+      .child(Tab::new().label("Git"));
     let primary_navigation = if let Some(selected_index) = primary_navigation_selected_index(page) {
       primary_navigation.selected_index(selected_index)
     } else {
@@ -1244,11 +1084,7 @@ impl Render for WorkspaceView {
 
     let session_page = self.session_page.clone();
     let git_page = self.git_page.clone();
-    let github_page = self.github_page.clone();
-    let github_profile_page = self.github_profile_page.clone();
-    let github_repo_page = self.github_repo_page.clone();
     let github_pr_details_page = self.github_pr_details_page.clone();
-    let github_commit_details_page = self.github_commit_details_page.clone();
     let billing_page = self.billing_page.clone();
     let git_config_page = self.git_config_page.clone();
     let settings_page = self.settings_page.clone();
@@ -1265,30 +1101,6 @@ impl Render for WorkspaceView {
           .path("git")
           .element(move |_w, _cx| git_page.clone()),
       )
-      .child(Route::new().path("github").element({
-        let github_page = github_page.clone();
-        move |_w, _cx| github_page.clone()
-      }))
-      .child(Route::new().path("github/{login}").element({
-        let github_profile_page = github_profile_page.clone();
-        move |_w, _cx| github_profile_page.clone()
-      }))
-      .child(Route::new().path("github/{owner}/{repo}").element({
-        let github_repo_page = github_repo_page.clone();
-        move |_w, _cx| github_repo_page.clone()
-      }))
-      .child(
-        Route::new()
-          .path("github/{owner}/{repo}/commit/{sha}")
-          .element({
-            let github_commit_details_page = github_commit_details_page.clone();
-            move |_w, _cx| github_commit_details_page.clone()
-          }),
-      )
-      .child(Route::new().path("github/{owner}/{repo}/{tab}").element({
-        let github_repo_page = github_repo_page.clone();
-        move |_w, _cx| github_repo_page.clone()
-      }))
       .child(
         Route::new()
           .path("github/{owner}/{repo}/pull/{number}")
@@ -1336,9 +1148,6 @@ impl Render for WorkspaceView {
       .on_action(cx.listener(|_, _: &crate::OpenGitPage, _window, cx| {
         NavigationHistory::navigate("/git", cx);
       }))
-      .on_action(cx.listener(|_, _: &crate::OpenGithubPage, _window, cx| {
-        Self::open_github_home(cx);
-      }))
       .on_action(cx.listener(Self::navigate_back_action))
       .on_action(cx.listener(Self::refresh_current_page_action))
       .on_action(cx.listener(|_, _: &crate::OpenBillingPage, _window, cx| {
@@ -1365,10 +1174,10 @@ impl Render for WorkspaceView {
 #[cfg(test)]
 mod tests {
   use super::{
-    WorkspacePage, WorkspaceView, build_app_menus, github_primary_navigation_count_label,
-    page_has_file_search, page_supports_refresh, primary_navigation_selected_index,
-    refresh_label_for_workspace_page, should_run_scheduled_update_check,
-    user_menu_page_for_workspace_page, workspace_page_from_pathname,
+    WorkspacePage, WorkspaceView, build_app_menus, page_has_file_search, page_supports_refresh,
+    primary_navigation_selected_index, refresh_label_for_workspace_page,
+    should_run_scheduled_update_check, user_menu_page_for_workspace_page,
+    workspace_page_from_pathname,
   };
   use crate::app_update::{
     AppUpdateState, AvailableAppUpdate, ReadyToInstallAppUpdate, UpdateArtifact,
@@ -1412,10 +1221,6 @@ mod tests {
     );
     assert_eq!(workspace_page_from_pathname("/git"), WorkspacePage::Git);
     assert_eq!(
-      workspace_page_from_pathname("/github"),
-      WorkspacePage::Github
-    );
-    assert_eq!(
       workspace_page_from_pathname("/billing"),
       WorkspacePage::Billing
     );
@@ -1440,7 +1245,7 @@ mod tests {
 
     assert_eq!(
       action_menu_item_names(navigate_menu),
-      vec!["Back", "Sessions", "Git", "GitHub", "Git Config"]
+      vec!["Back", "Sessions", "Git", "Git Config"]
     );
   }
 
@@ -1454,7 +1259,7 @@ mod tests {
 
     assert_eq!(
       action_menu_item_names(navigate_menu),
-      vec!["Back", "Sessions", "Git", "GitHub", "Git Config", "Billing"]
+      vec!["Back", "Sessions", "Git", "Git Config", "Billing"]
     );
   }
 
@@ -1496,23 +1301,20 @@ mod tests {
   }
 
   #[test]
-  fn workspace_page_from_pathname_maps_github_repo() {
-    assert_eq!(
-      workspace_page_from_pathname("/github/octocat"),
-      WorkspacePage::GithubProfile
-    );
-    assert_eq!(
-      workspace_page_from_pathname("/github/owner/repo"),
-      WorkspacePage::GithubRepo
-    );
-    assert_eq!(
-      workspace_page_from_pathname("/github/owner/repo/code"),
-      WorkspacePage::GithubRepo
-    );
-    assert_eq!(
-      workspace_page_from_pathname("/github/owner/repo/issues"),
-      WorkspacePage::GithubRepo
-    );
+  fn workspace_page_from_pathname_falls_back_for_removed_github_pages() {
+    for pathname in [
+      "/github/octocat",
+      "/github/owner/repo",
+      "/github/owner/repo/code",
+      "/github/owner/repo/issues",
+      "/github/owner/repo/commit/abc123",
+    ] {
+      assert_eq!(
+        workspace_page_from_pathname(pathname),
+        WorkspacePage::Session,
+        "{pathname} should no longer resolve to a page"
+      );
+    }
   }
 
   #[test]
@@ -1532,22 +1334,13 @@ mod tests {
   }
 
   #[test]
-  fn workspace_page_from_pathname_maps_github_commit_details() {
-    assert_eq!(
-      workspace_page_from_pathname("/github/owner/repo/commit/abc123"),
-      WorkspacePage::GithubCommitDetails
-    );
-  }
-
-  #[test]
   fn page_has_file_search_matches_correct_paths() {
     assert!(page_has_file_search("/git"));
     assert!(page_has_file_search("/session"));
-    assert!(page_has_file_search("/github/owner/repo/code"));
     assert!(page_has_file_search("/github/owner/repo/pull/123/changes"));
     assert!(!page_has_file_search("/github"));
     assert!(!page_has_file_search("/github/owner/repo"));
-    assert!(!page_has_file_search("/github/owner/repo/commit/abc123"));
+    assert!(!page_has_file_search("/github/owner/repo/code"));
     assert!(!page_has_file_search("/github/owner/repo/pull/123"));
     assert!(!page_has_file_search("/github/owner/repo/pulls"));
     assert!(!page_has_file_search("/settings"));
@@ -1563,30 +1356,14 @@ mod tests {
   }
 
   #[test]
-  fn user_menu_page_for_workspace_maps_session_to_git() {
+  fn user_menu_page_for_workspace_maps_github_surfaces() {
     assert_eq!(
       user_menu_page_for_workspace_page(WorkspacePage::Session),
-      UserMenuPage::Git
-    );
-  }
-
-  #[test]
-  fn user_menu_page_for_workspace_maps_repo_to_github() {
-    assert_eq!(
-      user_menu_page_for_workspace_page(WorkspacePage::GithubRepo),
-      UserMenuPage::Github
-    );
-    assert_eq!(
-      user_menu_page_for_workspace_page(WorkspacePage::GithubProfile),
-      UserMenuPage::Github
+      UserMenuPage::Session
     );
     assert_eq!(
       user_menu_page_for_workspace_page(WorkspacePage::GithubPrDetails),
       UserMenuPage::GithubPrDetails
-    );
-    assert_eq!(
-      user_menu_page_for_workspace_page(WorkspacePage::GithubCommitDetails),
-      UserMenuPage::Github
     );
   }
 
@@ -1601,24 +1378,8 @@ mod tests {
       Some(1)
     );
     assert_eq!(
-      primary_navigation_selected_index(WorkspacePage::Github),
-      Some(2)
-    );
-    assert_eq!(
-      primary_navigation_selected_index(WorkspacePage::GithubProfile),
-      Some(2)
-    );
-    assert_eq!(
-      primary_navigation_selected_index(WorkspacePage::GithubRepo),
-      Some(2)
-    );
-    assert_eq!(
       primary_navigation_selected_index(WorkspacePage::GithubPrDetails),
-      Some(2)
-    );
-    assert_eq!(
-      primary_navigation_selected_index(WorkspacePage::GithubCommitDetails),
-      Some(2)
+      None
     );
     assert_eq!(
       primary_navigation_selected_index(WorkspacePage::Billing),
@@ -1642,11 +1403,7 @@ mod tests {
   fn workspace_refresh_support_matches_git_and_github_surfaces() {
     assert!(!page_supports_refresh(WorkspacePage::Session));
     assert!(page_supports_refresh(WorkspacePage::Git));
-    assert!(page_supports_refresh(WorkspacePage::Github));
-    assert!(page_supports_refresh(WorkspacePage::GithubProfile));
-    assert!(page_supports_refresh(WorkspacePage::GithubRepo));
     assert!(page_supports_refresh(WorkspacePage::GithubPrDetails));
-    assert!(page_supports_refresh(WorkspacePage::GithubCommitDetails));
     assert!(!page_supports_refresh(WorkspacePage::Billing));
     assert!(!page_supports_refresh(WorkspacePage::GitConfig));
     assert!(!page_supports_refresh(WorkspacePage::Settings));
@@ -1668,37 +1425,12 @@ mod tests {
       Some("Refresh Git")
     );
     assert_eq!(
-      refresh_label_for_workspace_page(WorkspacePage::Github),
-      Some("Refresh GitHub")
-    );
-    assert_eq!(
-      refresh_label_for_workspace_page(WorkspacePage::GithubProfile),
-      Some("Refresh Profile")
-    );
-    assert_eq!(
-      refresh_label_for_workspace_page(WorkspacePage::GithubRepo),
-      Some("Refresh Repo")
-    );
-    assert_eq!(
       refresh_label_for_workspace_page(WorkspacePage::GithubPrDetails),
       Some("Refresh PR")
     );
     assert_eq!(
-      refresh_label_for_workspace_page(WorkspacePage::GithubCommitDetails),
-      Some("Refresh Commit")
-    );
-    assert_eq!(
       refresh_label_for_workspace_page(WorkspacePage::Billing),
       None
-    );
-  }
-
-  #[test]
-  fn github_primary_navigation_count_label_hides_zero_count() {
-    assert_eq!(github_primary_navigation_count_label(0), None);
-    assert_eq!(
-      github_primary_navigation_count_label(7),
-      Some("7".to_string())
     );
   }
 
@@ -1754,13 +1486,7 @@ impl Focusable for WorkspaceView {
     match WorkspaceRoute::global(cx).page {
       WorkspacePage::Session => self.session_page.read(cx).focus_handle(cx),
       WorkspacePage::Git => self.git_page.read(cx).focus_handle(cx),
-      WorkspacePage::Github => self.github_page.read(cx).focus_handle(cx),
-      WorkspacePage::GithubProfile => self.github_profile_page.read(cx).focus_handle(cx),
-      WorkspacePage::GithubRepo => self.github_repo_page.read(cx).focus_handle(cx),
       WorkspacePage::GithubPrDetails => self.github_pr_details_page.read(cx).focus_handle(cx),
-      WorkspacePage::GithubCommitDetails => {
-        self.github_commit_details_page.read(cx).focus_handle(cx)
-      }
       WorkspacePage::Billing => self.billing_page.read(cx).focus_handle(cx),
       WorkspacePage::GitConfig => self.git_config_page.read(cx).focus_handle(cx),
       WorkspacePage::Settings => self.settings_page.read(cx).focus_handle(cx),

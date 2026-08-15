@@ -3,24 +3,21 @@ use std::sync::Arc;
 
 use gpui::{
   Anchor, AnyElement, App, Context, Entity, ExternalPaths, Hsla, IntoElement, MouseButton,
-  ParentElement as _, SharedString, Styled, Window, div, prelude::*,
+  ParentElement as _, Styled, Window, div, prelude::*,
 };
 use gpui_component::{
-  ActiveTheme as _, Colorize, Icon, IconName, Sizable as _, StyledExt as _,
+  Colorize, Icon, IconName, Sizable as _,
   avatar::Avatar,
   button::{Button, ButtonVariants as _},
   clipboard::Clipboard,
   h_flex,
   input::TextareaState,
-  label::Label,
   menu::{DropdownMenu as _, PopupMenuItem},
-  skeleton::Skeleton,
   tag::Tag,
   tooltip::Tooltip,
   v_flex,
 };
 use smol::unblock;
-use time::OffsetDateTime;
 use ui::{
   ReactionGroup as UiReactionGroup, ReactionOption as UiReactionOption, StatusTag,
   StatusThemeExt as _, UiIconName,
@@ -28,14 +25,11 @@ use ui::{
 
 use crate::{
   api::{
-    ApiClient, GithubCommitAuthorIdentity, GithubPullRequest, GithubPullRequestAuthor,
-    GithubPullRequestLabel, GithubPullRequestState, GithubPullRequestStatus, GithubReactionContent,
-    GithubReactionGroup, GithubRepositoryLanguage,
+    ApiClient, GithubCommitAuthorIdentity, GithubPullRequestLabel, GithubPullRequestState,
+    GithubPullRequestStatus, GithubReactionContent, GithubReactionGroup,
   },
-  date_format::{format_relative_time, format_relative_time_at},
+  date_format::format_relative_time,
 };
-pub(crate) const PULL_REQUEST_ROW_HEIGHT_PX: f32 = 56.0;
-pub(crate) const PULL_REQUEST_ROW_WITH_LABELS_HEIGHT_PX: f32 = 80.0;
 
 pub(crate) fn github_reaction_options() -> Vec<UiReactionOption<GithubReactionContent>> {
   GithubReactionContent::ALL
@@ -59,66 +53,6 @@ pub(crate) fn github_reaction_groups(
       )
     })
     .collect()
-}
-
-fn list_loading_skeleton(row_height: f32, cx: &App) -> impl IntoElement {
-  let theme = cx.theme();
-
-  v_flex().w_full().p_2().children((0..6).map(|_| {
-    v_flex()
-      .w_full()
-      .gap_1()
-      .px_2()
-      .h(gpui::px(row_height))
-      .justify_center()
-      .child(
-        h_flex()
-          .items_center()
-          .justify_between()
-          .gap_2()
-          .child(
-            Skeleton::new()
-              .w(gpui::px(220.0))
-              .h(gpui::px(14.0))
-              .rounded(theme.radius),
-          )
-          .child(
-            Skeleton::new()
-              .w(gpui::px(50.0))
-              .h(gpui::px(18.0))
-              .rounded_full(),
-          ),
-      )
-      .child(
-        h_flex()
-          .items_center()
-          .gap_1()
-          .child(
-            Skeleton::new()
-              .w(gpui::px(200.0))
-              .h(gpui::px(12.0))
-              .rounded(theme.radius),
-          )
-          .child(
-            Skeleton::new()
-              .w(gpui::px(60.0))
-              .h(gpui::px(12.0))
-              .rounded(theme.radius),
-          ),
-      )
-  }))
-}
-
-pub(crate) fn pull_request_list_loading_skeleton(cx: &App) -> impl IntoElement {
-  list_loading_skeleton(PULL_REQUEST_ROW_HEIGHT_PX, cx)
-}
-
-pub(crate) fn issue_list_loading_skeleton(row_height: f32, cx: &App) -> impl IntoElement {
-  list_loading_skeleton(row_height, cx)
-}
-
-pub(crate) fn notification_list_loading_skeleton(row_height: f32, cx: &App) -> impl IntoElement {
-  list_loading_skeleton(row_height, cx)
 }
 
 pub(crate) fn make_asset_url_resolver(
@@ -335,32 +269,6 @@ pub(crate) fn upload_dropped_images<V: 'static>(
     })
     .detach();
   }
-}
-
-pub(crate) fn repo_section_header(
-  label: SharedString,
-  collapsed: bool,
-  cx: &App,
-) -> impl IntoElement {
-  let theme = cx.theme();
-  let chevron = if collapsed {
-    IconName::ChevronRight
-  } else {
-    IconName::ChevronDown
-  };
-
-  h_flex()
-    .items_center()
-    .h_6()
-    .px_2()
-    .gap_2()
-    .rounded(theme.radius)
-    .text_sm()
-    .bg(theme.sidebar_accent.opacity(0.5))
-    .text_color(theme.muted_foreground)
-    .child(Icon::new(chevron).size_3())
-    .child(Icon::new(IconName::Folder).size_3())
-    .child(div().min_w_0().flex_1().child(Label::new(label).truncate()))
 }
 
 pub(crate) fn short_sha(sha: &str) -> String {
@@ -680,108 +588,6 @@ pub(crate) fn repo_label(owner: &str, repo: &str) -> String {
   format!("{owner}/{repo}")
 }
 
-pub(crate) fn parse_language_color(color: Option<&str>) -> Option<Hsla> {
-  let color = color?.trim();
-  if color.is_empty() {
-    return None;
-  }
-  let hex = if color.starts_with('#') {
-    color.to_string()
-  } else {
-    format!("#{color}")
-  };
-  <Hsla as Colorize>::parse_hex(&hex).ok()
-}
-
-const LANGUAGES_MAX_VISIBLE: usize = 5;
-
-struct LanguageEntry {
-  name: String,
-  color: Option<Hsla>,
-  percentage: f64,
-}
-
-fn build_language_entries(
-  languages: &[GithubRepositoryLanguage],
-  theme: &gpui_component::Theme,
-) -> Vec<LanguageEntry> {
-  let top = &languages[..languages.len().min(LANGUAGES_MAX_VISIBLE)];
-  let rest = &languages[languages.len().min(LANGUAGES_MAX_VISIBLE)..];
-
-  let mut entries: Vec<LanguageEntry> = top
-    .iter()
-    .map(|lang| LanguageEntry {
-      name: lang.name.clone(),
-      color: parse_language_color(lang.color.as_deref()),
-      percentage: lang.percentage,
-    })
-    .collect();
-
-  if !rest.is_empty() {
-    let others_pct: f64 = rest.iter().map(|l| l.percentage).sum();
-    entries.push(LanguageEntry {
-      name: "Other".to_string(),
-      color: Some(theme.muted_foreground),
-      percentage: others_pct,
-    });
-  }
-
-  entries
-}
-
-pub(crate) fn render_languages_section(
-  languages: &[GithubRepositoryLanguage],
-  theme: &gpui_component::Theme,
-) -> impl IntoElement {
-  let entries = build_language_entries(languages, theme);
-
-  let bar = h_flex()
-    .w_full()
-    .h(gpui::px(8.0))
-    .rounded(theme.radius_lg)
-    .overflow_hidden()
-    .children(entries.iter().map(|entry| {
-      let fraction = entry.percentage as f32 / 100.0;
-      let color = entry.color.unwrap_or(theme.muted_foreground);
-      div()
-        .h_full()
-        .flex_basis(gpui::relative(fraction))
-        .bg(color)
-    }));
-
-  let legend = v_flex().gap_1().children(entries.iter().map(|entry| {
-    let color = entry.color.unwrap_or(theme.muted_foreground);
-    h_flex()
-      .w_full()
-      .gap_1p5()
-      .items_center()
-      .justify_between()
-      .child(
-        h_flex()
-          .gap_1p5()
-          .items_center()
-          .child(div().size(gpui::px(8.0)).rounded(gpui::px(4.0)).bg(color))
-          .child(div().text_xs().child(entry.name.clone())),
-      )
-      .child(
-        div()
-          .text_xs()
-          .text_color(theme.muted_foreground)
-          .child(format!("{:.1}%", entry.percentage)),
-      )
-  }));
-
-  v_flex()
-    .gap_2()
-    .child(div().text_sm().font_semibold().child("Languages"))
-    .child(bar)
-    .child(legend)
-}
-
-pub(crate) fn issue_url(owner: &str, repo: &str, issue_number: u64) -> String {
-  format!("https://github.com/{owner}/{repo}/issues/{issue_number}")
-}
-
 pub(crate) fn pr_url(owner: &str, repo: &str, pr_number: u64) -> String {
   format!("https://github.com/{owner}/{repo}/pull/{pr_number}")
 }
@@ -878,270 +684,6 @@ pub(crate) fn pull_request_status_tag(
     .child(pull_request_status_label(status))
 }
 
-fn pull_request_status_icon_name(status: GithubPullRequestStatus) -> UiIconName {
-  match status {
-    GithubPullRequestStatus::Open => UiIconName::GitPullRequest,
-    GithubPullRequestStatus::Closed => UiIconName::GitPullRequestClosed,
-    GithubPullRequestStatus::Merged => UiIconName::GitMerge,
-    GithubPullRequestStatus::Draft => UiIconName::GitPullRequestDraft,
-  }
-}
-
-fn pull_request_status_icon(
-  status: GithubPullRequestStatus,
-  theme: &gpui_component::Theme,
-) -> Icon {
-  Icon::new(pull_request_status_icon_name(status))
-    .size_3()
-    .text_color(pull_request_status_color(status, theme))
-}
-
-pub(crate) fn pull_request_label_row(labels: impl IntoIterator<Item = Tag>) -> impl IntoElement {
-  h_flex()
-    .h_6()
-    .items_center()
-    .min_w_0()
-    .overflow_hidden()
-    .gap_1()
-    .children(labels)
-}
-
-pub(crate) fn pull_request_author_is_bot(author: &GithubPullRequestAuthor) -> bool {
-  author.is_bot || author.login.trim().to_ascii_lowercase().ends_with("[bot]")
-}
-
-pub(crate) fn pull_request_author_display_name(author: &GithubPullRequestAuthor) -> String {
-  let login = author.login.trim();
-  let display_name = login
-    .strip_suffix("[bot]")
-    .unwrap_or(login)
-    .trim_end_matches(['-', '_', ' ']);
-
-  if display_name.is_empty() {
-    if login.is_empty() {
-      "unknown".to_string()
-    } else {
-      login.to_string()
-    }
-  } else {
-    display_name.to_string()
-  }
-}
-
-fn pull_request_opened_at(pr: &GithubPullRequest) -> &str {
-  let created_at = pr.created_at.trim();
-  if created_at.is_empty() {
-    pr.updated_at.as_str()
-  } else {
-    pr.created_at.as_str()
-  }
-}
-
-fn pull_request_closed_at(pr: &GithubPullRequest) -> &str {
-  pr.closed_at
-    .as_deref()
-    .filter(|value| !value.trim().is_empty())
-    .unwrap_or(pr.updated_at.as_str())
-}
-
-fn pull_request_merged_at(pr: &GithubPullRequest) -> &str {
-  pr.merged_at
-    .as_deref()
-    .filter(|value| !value.trim().is_empty())
-    .unwrap_or(pr.updated_at.as_str())
-}
-
-fn pull_request_activity_text_at(pr: &GithubPullRequest, now: OffsetDateTime) -> SharedString {
-  match pr.status() {
-    GithubPullRequestStatus::Open | GithubPullRequestStatus::Draft => format!(
-      "opened {}",
-      format_relative_time_at(pull_request_opened_at(pr), now)
-    )
-    .into(),
-    GithubPullRequestStatus::Merged => format!(
-      "was merged {}",
-      format_relative_time_at(pull_request_merged_at(pr), now)
-    )
-    .into(),
-    GithubPullRequestStatus::Closed => format!(
-      "was closed {}",
-      format_relative_time_at(pull_request_closed_at(pr), now)
-    )
-    .into(),
-  }
-}
-
-pub(crate) fn pull_request_activity_text(pr: &GithubPullRequest) -> SharedString {
-  pull_request_activity_text_at(pr, OffsetDateTime::now_utc())
-}
-
-fn pull_request_updated_text_at(pr: &GithubPullRequest, now: OffsetDateTime) -> SharedString {
-  format!("updated {}", format_relative_time_at(&pr.updated_at, now)).into()
-}
-
-pub(crate) fn pull_request_updated_text(pr: &GithubPullRequest) -> SharedString {
-  pull_request_updated_text_at(pr, OffsetDateTime::now_utc())
-}
-
-pub(crate) fn pull_request_row_height_px(pr: &GithubPullRequest) -> f32 {
-  if pr.labels.is_empty() {
-    PULL_REQUEST_ROW_HEIGHT_PX
-  } else {
-    PULL_REQUEST_ROW_WITH_LABELS_HEIGHT_PX
-  }
-}
-
-fn pull_request_comments_count_text(pr: &GithubPullRequest) -> Option<SharedString> {
-  (pr.comments_count > 0).then(|| pr.comments_count.to_string().into())
-}
-
-fn pull_request_author_inline(
-  author: &GithubPullRequestAuthor,
-  theme: &gpui_component::Theme,
-) -> impl IntoElement {
-  let display_name = pull_request_author_display_name(author);
-
-  if pull_request_author_is_bot(author) {
-    h_flex()
-      .items_center()
-      .gap_1()
-      .child(div().text_color(theme.foreground).child(display_name))
-      .child(Tag::secondary().small().rounded_full().child("bot"))
-  } else {
-    h_flex()
-      .items_center()
-      .gap_1()
-      .child(
-        Avatar::new()
-          .name(display_name.clone())
-          .when_some(author.avatar_url.clone(), |this, url| this.src(url))
-          .xsmall(),
-      )
-      .child(div().text_color(theme.foreground).child(display_name))
-  }
-}
-
-pub(crate) fn pull_request_list_row_body(
-  pr: &GithubPullRequest,
-  theme: &gpui_component::Theme,
-  show_repository: bool,
-  show_author: bool,
-) -> impl IntoElement {
-  let status = pr.status();
-  let status_tag = pull_request_status_tag(status, theme);
-  let comments_count_text = pull_request_comments_count_text(pr);
-  let repo_name = show_repository.then(|| repo_label(&pr.repository.owner, &pr.repository.repo));
-  let activity_text = pull_request_activity_text(pr);
-  let updated_text = pull_request_updated_text(pr);
-
-  let label_tags = pr
-    .labels
-    .iter()
-    .take(4)
-    .map(|label| github_label_tag(label, theme));
-
-  let row = v_flex()
-    .gap_1()
-    .child(
-      h_flex()
-        .items_center()
-        .gap_2()
-        .child(
-          h_flex()
-            .items_center()
-            .gap_2()
-            .min_w_0()
-            .flex_1()
-            .child(pull_request_status_icon(status, theme))
-            .child(
-              div()
-                .min_w_0()
-                .flex_1()
-                .child(Label::new(pr.title.clone()).truncate()),
-            ),
-        )
-        .when_some(comments_count_text, |this, comments_count_text| {
-          this.child(
-            h_flex()
-              .items_center()
-              .gap_1()
-              .text_xs()
-              .text_color(theme.muted_foreground)
-              .child(
-                Icon::new(UiIconName::MessageCircle)
-                  .size_3()
-                  .text_color(theme.muted_foreground),
-              )
-              .child(comments_count_text),
-          )
-        })
-        .child(status_tag),
-    )
-    .child(
-      h_flex()
-        .gap_1()
-        .items_center()
-        .min_w_0()
-        .overflow_hidden()
-        .text_xs()
-        .text_color(theme.muted_foreground)
-        .child(format!("#{}", pr.number))
-        .when_some(repo_name, |this, repo_name| this.child(repo_name))
-        .when(
-          show_author
-            && matches!(
-              pr.status(),
-              GithubPullRequestStatus::Open | GithubPullRequestStatus::Draft
-            ),
-          |this| {
-            this
-              .child(activity_text.clone())
-              .child("by")
-              .child(pull_request_author_inline(&pr.author, theme))
-          },
-        )
-        .when(
-          !show_author
-            && matches!(
-              pr.status(),
-              GithubPullRequestStatus::Open | GithubPullRequestStatus::Draft
-            ),
-          |this| this.child(activity_text.clone()),
-        )
-        .when(
-          show_author
-            && matches!(
-              pr.status(),
-              GithubPullRequestStatus::Closed | GithubPullRequestStatus::Merged
-            ),
-          |this| {
-            this
-              .child("by")
-              .child(pull_request_author_inline(&pr.author, theme))
-              .child(activity_text.clone())
-          },
-        )
-        .when(
-          !show_author
-            && matches!(
-              pr.status(),
-              GithubPullRequestStatus::Closed | GithubPullRequestStatus::Merged
-            ),
-          |this| this.child(activity_text),
-        )
-        .child("•")
-        .child(updated_text),
-    );
-
-  if pr.labels.is_empty() {
-    row.into_any_element()
-  } else {
-    row
-      .child(pull_request_label_row(label_tags))
-      .into_any_element()
-  }
-}
-
 pub(crate) fn line_snippets_from_content(
   content: &str,
   start_line: usize,
@@ -1203,105 +745,19 @@ pub(crate) fn next_trimmed_text_update(raw_value: &str, initial_value: &str) -> 
 #[cfg(test)]
 mod tests {
   use super::{
-    DiffHunkLineKind, PULL_REQUEST_ROW_HEIGHT_PX, PULL_REQUEST_ROW_WITH_LABELS_HEIGHT_PX,
-    commit_authors_label, extract_original_line_range_from_diff_hunk,
+    DiffHunkLineKind, commit_authors_label, extract_original_line_range_from_diff_hunk,
     extract_original_lines_from_diff_hunk, github_label_color, is_unauthorized_error_message,
-    issue_url, line_snippets_from_content, logins_match_case_insensitive, next_trimmed_text_update,
-    normalize_non_empty_text, parse_diff_hunk_lines, parse_language_color, pr_url,
-    pull_request_activity_text_at, pull_request_author_display_name, pull_request_author_is_bot,
-    pull_request_comments_count_text, pull_request_list_row_body, pull_request_row_height_px,
-    pull_request_status_color, pull_request_status_icon_name, pull_request_status_label,
-    pull_request_updated_text_at, repo_label, short_sha,
+    line_snippets_from_content, logins_match_case_insensitive, next_trimmed_text_update,
+    normalize_non_empty_text, parse_diff_hunk_lines, pr_url, pull_request_status_color,
+    pull_request_status_label, repo_label, short_sha,
   };
-  use crate::api::{
-    GithubCommitAuthorIdentity, GithubPullRequest, GithubPullRequestAuthor, GithubPullRequestLabel,
-    GithubPullRequestState, GithubPullRequestStatus, GithubRepository,
-  };
-  use crate::date_format::format_relative_time_at;
-  use gpui::{
-    Context, InteractiveElement, IntoElement, ParentElement, Render, Styled, TestAppContext,
-    Window, div,
-  };
-  use gpui_component::{ActiveTheme as _, Colorize as _, v_flex};
-  use time::{OffsetDateTime, format_description::well_known::Rfc3339};
-  use ui::{StatusThemeExt as _, UiIconName};
-
-  fn make_pull_request(labels: &[&str]) -> GithubPullRequest {
-    make_pull_request_with_author(
-      labels,
-      GithubPullRequestAuthor {
-        login: "octocat".to_string(),
-        avatar_url: None,
-        is_bot: false,
-      },
-    )
-  }
-
-  fn make_pull_request_with_author(
-    labels: &[&str],
-    author: GithubPullRequestAuthor,
-  ) -> GithubPullRequest {
-    GithubPullRequest {
-      number: 7,
-      title: "Example PR".to_string(),
-      state: GithubPullRequestState::Open,
-      created_at: "2026-02-12T12:00:00Z".to_string(),
-      closed_at: None,
-      merged_at: None,
-      draft: false,
-      updated_at: "2026-02-14T12:00:00Z".to_string(),
-      comments_count: 0,
-      author,
-      labels: labels
-        .iter()
-        .map(|label| GithubPullRequestLabel {
-          name: (*label).to_string(),
-          color: Some("f29513".to_string()),
-        })
-        .collect(),
-      repository: GithubRepository {
-        owner: "acme".to_string(),
-        repo: "portal".to_string(),
-      },
-    }
-  }
+  use crate::api::{GithubCommitAuthorIdentity, GithubPullRequestLabel, GithubPullRequestStatus};
+  use gpui::TestAppContext;
+  use gpui_component::{ActiveTheme as _, Colorize as _};
+  use ui::StatusThemeExt as _;
 
   fn init_gpui_test(cx: &mut TestAppContext) {
     cx.update(gpui_component::init);
-  }
-
-  struct PullRequestRowProbeView {
-    labeled: GithubPullRequest,
-    unlabeled: GithubPullRequest,
-  }
-
-  impl Render for PullRequestRowProbeView {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-      let theme = cx.theme().clone();
-
-      v_flex()
-        .gap_2()
-        .child(
-          div()
-            .debug_selector(|| "labeled".to_string())
-            .child(pull_request_list_row_body(
-              &self.labeled,
-              &theme,
-              true,
-              true,
-            )),
-        )
-        .child(
-          div()
-            .debug_selector(|| "unlabeled".to_string())
-            .child(pull_request_list_row_body(
-              &self.unlabeled,
-              &theme,
-              true,
-              true,
-            )),
-        )
-    }
   }
 
   #[test]
@@ -1343,11 +799,7 @@ mod tests {
   }
 
   #[test]
-  fn issue_and_pr_url_format_expected_paths() {
-    assert_eq!(
-      issue_url("acme", "widget", 42),
-      "https://github.com/acme/widget/issues/42"
-    );
+  fn pr_url_formats_expected_path() {
     assert_eq!(
       pr_url("acme", "widget", 7),
       "https://github.com/acme/widget/pull/7"
@@ -1371,26 +823,6 @@ mod tests {
     assert_eq!(
       pull_request_status_label(GithubPullRequestStatus::Draft),
       "Draft"
-    );
-  }
-
-  #[test]
-  fn pull_request_status_icon_name_covers_all_variants() {
-    assert_eq!(
-      pull_request_status_icon_name(GithubPullRequestStatus::Open),
-      UiIconName::GitPullRequest
-    );
-    assert_eq!(
-      pull_request_status_icon_name(GithubPullRequestStatus::Closed),
-      UiIconName::GitPullRequestClosed
-    );
-    assert_eq!(
-      pull_request_status_icon_name(GithubPullRequestStatus::Merged),
-      UiIconName::GitMerge
-    );
-    assert_eq!(
-      pull_request_status_icon_name(GithubPullRequestStatus::Draft),
-      UiIconName::GitPullRequestDraft
     );
   }
 
@@ -1484,103 +916,6 @@ mod tests {
   }
 
   #[test]
-  fn pull_request_author_helpers_normalize_bot_login() {
-    let author = GithubPullRequestAuthor {
-      login: "renovate[bot]".to_string(),
-      avatar_url: None,
-      is_bot: false,
-    };
-
-    assert!(pull_request_author_is_bot(&author));
-    assert_eq!(pull_request_author_display_name(&author), "renovate");
-  }
-
-  #[test]
-  fn pull_request_activity_and_updated_text_follow_status_timestamps() {
-    let now = OffsetDateTime::parse("2026-02-15T18:00:00Z", &Rfc3339).expect("parse now");
-    assert_eq!(
-      format_relative_time_at("2026-02-12T12:00:00Z", now).as_ref(),
-      "3 days ago"
-    );
-    assert_eq!(
-      format_relative_time_at("2026-02-14T12:00:00Z", now).as_ref(),
-      "yesterday"
-    );
-
-    let open = make_pull_request(&[]);
-    assert_eq!(
-      pull_request_activity_text_at(&open, now).as_ref(),
-      "opened 3 days ago"
-    );
-    assert_eq!(
-      pull_request_updated_text_at(&open, now).as_ref(),
-      "updated yesterday"
-    );
-
-    let merged = GithubPullRequest {
-      merged_at: Some("2026-02-12T12:00:00Z".to_string()),
-      state: GithubPullRequestState::Closed,
-      updated_at: "2026-02-12T12:00:00Z".to_string(),
-      ..make_pull_request(&[])
-    };
-    assert_eq!(
-      pull_request_activity_text_at(&merged, now).as_ref(),
-      "was merged 3 days ago"
-    );
-    assert_eq!(
-      pull_request_updated_text_at(&merged, now).as_ref(),
-      "updated 3 days ago"
-    );
-
-    let closed = GithubPullRequest {
-      closed_at: Some("2026-02-11T12:00:00Z".to_string()),
-      state: GithubPullRequestState::Closed,
-      updated_at: "2026-02-11T12:00:00Z".to_string(),
-      ..make_pull_request(&[])
-    };
-    assert_eq!(
-      pull_request_activity_text_at(&closed, now).as_ref(),
-      "was closed 4 days ago"
-    );
-    assert_eq!(
-      pull_request_updated_text_at(&closed, now).as_ref(),
-      "updated 4 days ago"
-    );
-  }
-
-  #[test]
-  fn pull_request_comments_count_text_hides_zero_and_formats_positive_values() {
-    assert_eq!(
-      pull_request_comments_count_text(&make_pull_request(&[])),
-      None
-    );
-
-    let with_comments = GithubPullRequest {
-      comments_count: 12,
-      ..make_pull_request(&[])
-    };
-
-    assert_eq!(
-      pull_request_comments_count_text(&with_comments)
-        .as_ref()
-        .map(ToString::to_string),
-      Some("12".to_string())
-    );
-  }
-
-  #[test]
-  fn pull_request_row_height_matches_label_presence() {
-    assert_eq!(
-      pull_request_row_height_px(&make_pull_request(&[])),
-      PULL_REQUEST_ROW_HEIGHT_PX
-    );
-    assert_eq!(
-      pull_request_row_height_px(&make_pull_request(&["bug"])),
-      PULL_REQUEST_ROW_WITH_LABELS_HEIGHT_PX
-    );
-  }
-
-  #[test]
   fn commit_authors_label_formats_single_and_multiple_authors() {
     let author = |login: Option<&str>, name: Option<&str>| GithubCommitAuthorIdentity {
       name: name.map(str::to_string),
@@ -1618,36 +953,6 @@ mod tests {
       ]),
       "octocat, Co Author, and 2 others"
     );
-  }
-
-  #[test]
-  fn parse_language_color_handles_hex_variants() {
-    assert!(parse_language_color(Some("#3178c6")).is_some());
-    assert!(parse_language_color(Some("3178c6")).is_some());
-    assert!(parse_language_color(None).is_none());
-    assert!(parse_language_color(Some("")).is_none());
-    assert!(parse_language_color(Some("  ")).is_none());
-  }
-
-  #[gpui::test]
-  fn pull_request_list_row_body_uses_less_height_without_labels(cx: &mut TestAppContext) {
-    init_gpui_test(cx);
-    let labeled = make_pull_request(&["bug"]);
-    let unlabeled = make_pull_request(&[]);
-    let (_view, cx) = cx.add_window_view(|_, _| PullRequestRowProbeView { labeled, unlabeled });
-
-    let labeled_height = cx
-      .debug_bounds("labeled")
-      .expect("labeled bounds")
-      .size
-      .height;
-    let unlabeled_height = cx
-      .debug_bounds("unlabeled")
-      .expect("unlabeled bounds")
-      .size
-      .height;
-
-    assert!(labeled_height > unlabeled_height);
   }
 
   #[test]

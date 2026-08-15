@@ -1,12 +1,6 @@
 const api = globalThis.browser ?? globalThis.chrome;
 
-const SUPPORTED_PATTERNS = [
-  /^https:\/\/github\.com\/[^/]+\/[^/]+\/pull\/\d+/,
-  /^https:\/\/github\.com\/[^/]+\/[^/]+\/issues\/\d+/,
-  /^https:\/\/github\.com\/[^/]+\/[^/]+\/pulls\/?/,
-  /^https:\/\/github\.com\/[^/]+\/[^/]+\/issues\/?/,
-  /^https:\/\/github\.com\/[^/]+\/[^/]+\/?$/,
-];
+const SUPPORTED_PATTERNS = [/^https:\/\/github\.com\/[^/]+\/[^/]+\/pull\/\d+/];
 
 const IGNORED_OWNERS = new Set([
   "apps",

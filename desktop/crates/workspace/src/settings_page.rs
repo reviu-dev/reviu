@@ -28,7 +28,6 @@ use crate::{
   auth_state::{AuthState, AuthStateStore},
   config::{AppSettings as PersistedSettings, CloneProtocol},
   github_navigation::{open_commit_target, open_pr_target, open_profile_target, open_repo_target},
-  github_page::GithubPageHandle,
   github_shared,
   navigation::NavigationHistory,
   shortcuts::{
@@ -1149,13 +1148,12 @@ impl SettingsPage {
     cx: &mut Context<Self>,
   ) -> Result<(), SharedString> {
     match action {
-      CommandPaletteAction::OpenGitPage => {
-        NavigationHistory::navigate("/git", cx);
+      CommandPaletteAction::OpenSessionPage => {
+        NavigationHistory::navigate("/session", cx);
         Ok(())
       }
-      CommandPaletteAction::OpenGithubPage => {
-        GithubPageHandle::refresh(cx);
-        NavigationHistory::navigate("/github", cx);
+      CommandPaletteAction::OpenGitPage => {
+        NavigationHistory::navigate("/git", cx);
         Ok(())
       }
       CommandPaletteAction::OpenGithubPrDetails {
@@ -1291,6 +1289,6 @@ mod tests {
 
     assert!(description.contains("Open file search"));
     assert!(description.contains("Shortcut: cmd-p."));
-    assert!(description.contains("Git, Repo Code, and PR Changes pages"));
+    assert!(description.contains("Git and PR Changes pages"));
   }
 }

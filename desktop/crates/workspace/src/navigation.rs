@@ -4,6 +4,7 @@ use gpui_router::use_navigate;
 use crate::auth_state::AuthStateStore;
 
 const NAVIGATION_HISTORY_MAX_ENTRIES: usize = 100;
+const GITHUB_ACCESS_FALLBACK_PATH: &str = "/billing";
 
 pub struct NavigationHistory {
   stack: Vec<SharedString>,
@@ -26,8 +27,8 @@ impl NavigationHistory {
   }
 
   /// Navigate to `path`, pushing the current location onto the history stack.
-  /// Deep GitHub paths are gated behind GitHub access. `/github` itself always
-  /// stays accessible as the GitHub home / access page.
+  /// GitHub paths are gated behind GitHub access and fall back to billing, which
+  /// carries the Reviu Pro pitch.
   pub fn navigate(path: impl Into<SharedString>, cx: &mut App) {
     let path = path.into();
 
@@ -36,12 +37,11 @@ impl NavigationHistory {
       return;
     }
 
-    // GitHub access gating: redirect protected GitHub routes to /github when no access.
     if requires_github_access(&path) && !AuthStateStore::has_github_access(cx) {
-      if current != "/github" {
+      if current != GITHUB_ACCESS_FALLBACK_PATH {
         cx.global_mut::<Self>().push_entry(current);
       }
-      Self::set_pathname("/github", cx);
+      Self::set_pathname(GITHUB_ACCESS_FALLBACK_PATH, cx);
       return;
     }
 
@@ -57,9 +57,8 @@ impl NavigationHistory {
       .pop()
       .unwrap_or_else(|| "/git".into());
 
-    // If back target requires GitHub access and user lost access, fall back to /github.
     let target = if requires_github_access(&target) && !AuthStateStore::has_github_access(cx) {
-      "/github".into()
+      GITHUB_ACCESS_FALLBACK_PATH.into()
     } else {
       target
     };
@@ -95,26 +94,6 @@ pub fn build_pr_tab_path(owner: &str, repo: &str, number: u64, tab: &str) -> Sha
   format!("/github/{owner}/{repo}/pull/{number}/{tab}").into()
 }
 
-/// Build path: `/github/{owner}/{repo}`
-pub fn build_repo_path(owner: &str, repo: &str) -> SharedString {
-  format!("/github/{owner}/{repo}").into()
-}
-
-/// Build path: `/github/{login}`
-pub fn build_github_profile_path(login: &str) -> SharedString {
-  format!("/github/{login}").into()
-}
-
-/// Build path: `/github/{owner}/{repo}/commit/{sha}`
-pub fn build_commit_path(owner: &str, repo: &str, sha: &str) -> SharedString {
-  format!("/github/{owner}/{repo}/commit/{sha}").into()
-}
-
-/// Build path with tab suffix: `/github/{owner}/{repo}/{tab}`
-pub fn build_repo_tab_path(owner: &str, repo: &str, tab: &str) -> SharedString {
-  format!("/github/{owner}/{repo}/{tab}").into()
-}
-
 /// Returns the last segment of the current pathname (the tab), or empty string.
 pub fn current_tab_segment(cx: &gpui::App) -> &str {
   let pathname = &gpui_router::use_location(cx).pathname;
@@ -122,7 +101,7 @@ pub fn current_tab_segment(cx: &gpui::App) -> &str {
 }
 
 fn requires_github_access(path: &str) -> bool {
-  path.starts_with("/github/")
+  path.starts_with("/github")
 }
 
 #[cfg(test)]
@@ -258,30 +237,28 @@ mod tests {
   }
 
   #[gpui::test]
-  async fn test_navigate_allows_github_home_without_access(cx: &mut TestAppContext) {
+  async fn test_navigate_sends_github_paths_to_billing_without_access(cx: &mut TestAppContext) {
     cx.update(|cx| {
       init_navigation_test(cx);
       AuthStateStore::set(cx, AuthState::Unauthenticated);
 
       NavigationHistory::navigate_replace("/git", cx);
-      NavigationHistory::navigate("/github", cx);
+      NavigationHistory::navigate("/github/owner/repo/pull/42", cx);
 
-      assert_eq!(NavigationHistory::current_pathname(cx).as_ref(), "/github");
+      assert_eq!(NavigationHistory::current_pathname(cx).as_ref(), "/billing");
     });
   }
 
   #[gpui::test]
-  async fn test_navigate_redirects_protected_github_route_to_home_without_access(
-    cx: &mut TestAppContext,
-  ) {
+  async fn test_navigate_keeps_history_when_redirecting_to_billing(cx: &mut TestAppContext) {
     cx.update(|cx| {
       init_navigation_test(cx);
       AuthStateStore::set(cx, AuthState::Unauthenticated);
 
       NavigationHistory::navigate_replace("/git", cx);
-      NavigationHistory::navigate("/github/owner/repo", cx);
+      NavigationHistory::navigate("/github/owner/repo/pull/42", cx);
 
-      assert_eq!(NavigationHistory::current_pathname(cx).as_ref(), "/github");
+      assert_eq!(NavigationHistory::current_pathname(cx).as_ref(), "/billing");
       assert_eq!(cx.global::<NavigationHistory>().stack.len(), 1);
       assert_eq!(cx.global::<NavigationHistory>().stack[0].as_ref(), "/git");
     });
@@ -322,9 +299,7 @@ mod tests {
   }
 
   #[gpui::test]
-  async fn test_navigate_back_falls_back_to_github_home_when_access_is_lost(
-    cx: &mut TestAppContext,
-  ) {
+  async fn test_navigate_back_falls_back_to_billing_when_access_is_lost(cx: &mut TestAppContext) {
     cx.update(|cx| {
       init_navigation_test(cx);
       AuthStateStore::set(
@@ -335,11 +310,11 @@ mod tests {
       NavigationHistory::navigate_replace("/settings", cx);
       cx.global_mut::<NavigationHistory>()
         .stack
-        .push("/github/owner/repo".into());
+        .push("/github/owner/repo/pull/42".into());
       AuthStateStore::set(cx, AuthState::Unauthenticated);
       NavigationHistory::navigate_back(cx);
 
-      assert_eq!(NavigationHistory::current_pathname(cx).as_ref(), "/github");
+      assert_eq!(NavigationHistory::current_pathname(cx).as_ref(), "/billing");
     });
   }
 }
