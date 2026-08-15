@@ -172,11 +172,9 @@ pub(crate) fn capture_unexpected_error(
   );
 }
 
-// 403 on /ai is the Reviu Pro gate for non-subscribers, not a bug worth a Sentry event.
-fn expected_http_reason(route: &str, status: u16) -> Option<&'static str> {
+fn expected_http_reason(status: u16) -> Option<&'static str> {
   match status {
     401 => Some("unauthorized"),
-    403 if route.starts_with("/ai") => Some("forbidden"),
     _ => None,
   }
 }
@@ -187,7 +185,7 @@ pub(crate) fn record_http_status(method: &str, route: &str, status: u16) {
   data.insert("route".into(), route.to_string().into());
   data.insert("status".into(), status.into());
 
-  if let Some(reason) = expected_http_reason(route, status) {
+  if let Some(reason) = expected_http_reason(status) {
     record_expected_error("api.http", reason, data);
     return;
   }
@@ -453,19 +451,10 @@ mod tests {
   }
 
   #[test]
-  fn expected_http_reason_flags_pro_gate_and_auth() {
-    assert_eq!(
-      expected_http_reason("/ai/settings", 401),
-      Some("unauthorized")
-    );
-    assert_eq!(expected_http_reason("/ai/models", 403), Some("forbidden"));
-    assert_eq!(
-      expected_http_reason("/ai/github/pr/brief", 403),
-      Some("forbidden")
-    );
-    // 403 outside /ai stays an unexpected error worth capturing.
-    assert_eq!(expected_http_reason("/github/repos", 403), None);
-    assert_eq!(expected_http_reason("/ai/models", 500), None);
+  fn expected_http_reason_flags_unauthorized_only() {
+    assert_eq!(expected_http_reason(401), Some("unauthorized"));
+    assert_eq!(expected_http_reason(403), None);
+    assert_eq!(expected_http_reason(500), None);
   }
 
   #[test]
