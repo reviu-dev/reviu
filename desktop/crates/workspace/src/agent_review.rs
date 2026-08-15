@@ -699,4 +699,103 @@ mod tests {
     // Copied comments stay copyable until the agent addresses them.
     assert_eq!(comments.copyable_count(), 1);
   }
+
+  #[test]
+  fn update_reports_whether_the_comment_exists() {
+    let mut comments = AgentReviewComments::new();
+    let id = comments
+      .create(
+        &create_request(3, "extract this"),
+        Some(Path::new("src/main.rs")),
+        (None, Vec::new()),
+      )
+      .expect("create comment");
+
+    assert!(comments.update(id, Arc::from("extract this helper")));
+    assert!(!comments.update(id + 100, Arc::from("ghost")));
+    assert_eq!(comments.all()[0].body.as_ref(), "extract this helper");
+  }
+
+  #[test]
+  fn deleting_a_reply_keeps_its_thread_root() {
+    let mut comments = AgentReviewComments::new();
+    let root = comments
+      .create(
+        &create_request(3, "extract this"),
+        Some(Path::new("src/main.rs")),
+        (None, Vec::new()),
+      )
+      .expect("create root");
+    let mut reply = create_request(3, "agreed");
+    reply.in_reply_to_id = Some(root);
+    let reply_id = comments
+      .create(&reply, Some(Path::new("src/main.rs")), (None, Vec::new()))
+      .expect("create reply");
+
+    comments.delete(reply_id);
+
+    let stored = comments.all();
+    assert_eq!(stored.len(), 1);
+    assert_eq!(stored[0].id, root);
+  }
+
+  #[test]
+  fn editor_comments_keep_only_the_pending_ones_of_the_open_file() {
+    let mut comments = AgentReviewComments::new();
+    comments
+      .create(
+        &create_request(0, "extract this"),
+        Some(Path::new("src/main.rs")),
+        (Some(1), vec!["let value = custom();".to_string()]),
+      )
+      .expect("create comment");
+    comments
+      .create(
+        &create_request(0, "other file"),
+        Some(Path::new("src/other.rs")),
+        (None, Vec::new()),
+      )
+      .expect("create comment");
+
+    let rendered = comments.editor_comments(Path::new("src/main.rs"));
+    assert_eq!(rendered.len(), 1);
+    assert_eq!(rendered[0].body.as_ref(), "extract this");
+    // The snapshot travels as a suggestion context so the diff can render it.
+    let suggestion = rendered[0]
+      .suggestion_context
+      .as_ref()
+      .expect("suggestion context");
+    assert_eq!(suggestion.original_start_line, Some(1));
+    assert_eq!(suggestion.original_lines, vec!["let value = custom();"]);
+  }
+
+  #[test]
+  fn an_addressed_suggestion_leaves_the_diff() {
+    let mut comments = AgentReviewComments::new();
+    comments
+      .create(
+        &create_request(0, "rename it\n\n```suggestion\nlet total = custom();\n```"),
+        Some(Path::new("src/main.rs")),
+        (Some(1), vec!["let value = custom();".to_string()]),
+      )
+      .expect("create comment");
+    comments.mark_copyable_as_copied();
+
+    // The agent applied the suggestion.
+    comments.refresh_states(
+      Path::new("src/main.rs"),
+      &["let total = custom();".to_string()],
+    );
+
+    assert_eq!(
+      comments.all()[0].state,
+      LocalAgentReviewCommentState::Addressed
+    );
+    assert!(
+      comments
+        .editor_comments(Path::new("src/main.rs"))
+        .is_empty()
+    );
+    assert_eq!(comments.copyable_count(), 0);
+  }
 }

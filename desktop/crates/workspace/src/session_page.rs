@@ -1742,6 +1742,10 @@ mod tests {
       let comment = &page.agent_review.all()[0];
       assert_eq!(comment.state, LocalAgentReviewCommentState::Draft);
       assert_eq!(comment.path, PathBuf::from("README.md"));
+      // The snapshot of the commented line is what later tells whether the
+      // agent addressed the comment.
+      assert_eq!(comment.original_start_line, Some(1));
+      assert_eq!(comment.original_lines, vec!["v2".to_string()]);
       assert_eq!(page.copyable_review_comment_count(), 1);
       comment.id
     });

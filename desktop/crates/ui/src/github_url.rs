@@ -282,8 +282,8 @@ fn parse_github_url_target(url: &str) -> Option<GithubUrlTarget> {
 mod tests {
   use super::{
     GithubUrlTarget, parse_github_commit_url, parse_github_issue_url, parse_github_profile_url,
-    parse_github_pull_request_url, parse_github_repository_url, parse_github_url_action,
-    parse_github_url_target,
+    parse_github_pull_request_url, parse_github_pull_request_url_action,
+    parse_github_repository_url, parse_github_url_action, parse_github_url_target,
   };
   use crate::CommandPaletteAction;
   use crate::command_palette::CommandPaletteGithubRepoTab;
@@ -568,5 +568,28 @@ mod tests {
         sha,
       }) if owner == "colinhacks" && repo == "zod" && sha == "abc123"
     ));
+  }
+
+  #[test]
+  fn parse_github_pull_request_url_action_only_accepts_pull_request_urls() {
+    assert!(matches!(
+      parse_github_pull_request_url_action("https://github.com/acme/widget/pull/42"),
+      Some(CommandPaletteAction::OpenGithubPrDetails { number: 42, .. })
+    ));
+
+    // Everything else leaves the app, so the palette does not claim it.
+    for url in [
+      "https://github.com/acme/widget",
+      "https://github.com/acme/widget/pulls?q=is%3Apr",
+      "https://github.com/acme/widget/issues/23",
+      "https://github.com/acme/widget/commit/abc123",
+      "https://github.com/acme",
+      "https://gitlab.com/acme/widget/pull/1",
+    ] {
+      assert!(
+        parse_github_pull_request_url_action(url).is_none(),
+        "expected no action for {url}"
+      );
+    }
   }
 }
