@@ -694,11 +694,16 @@ impl AgentChatPanel {
           .child(element),
       )
       .into_any_element();
-    if list_ix == 0 {
-      div().pt_3().child(element).into_any_element()
-    } else {
-      element
-    }
+    // The last item clears the bottom fade so a fully scrolled transcript is not
+    // read through it.
+    let is_last = list_ix + 1 == self.total_list_items();
+    div()
+      .when(list_ix == 0, |this| this.pt_3())
+      .when(is_last, |this| {
+        this.pb(px(CONVERSATION_BOTTOM_FADE_PX + 8.0))
+      })
+      .child(element)
+      .into_any_element()
   }
 
   fn render_extra_before(
