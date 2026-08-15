@@ -25,8 +25,8 @@ use git::{
 use gpui::{
   Anchor, AnyElement, AnyWindowHandle, App, ClipboardItem, Context, Entity, ExternalPaths,
   FocusHandle, Focusable, Hsla, Image, InteractiveElement, Keystroke, MouseButton, ObjectFit,
-  ParentElement, PathBuilder, Render, RenderImage, SharedString, Styled, Task, Window, canvas,
-  deferred, div, img, point, prelude::*, px, white,
+  ParentElement, PathBuilder, Render, SharedString, Styled, Task, Window, canvas, deferred, div,
+  img, point, prelude::*, px, white,
 };
 use gpui_component::{
   ActiveTheme as _, Disableable, Icon, IconName, Selectable, Sizable as _, StyledExt,
@@ -65,6 +65,8 @@ use ui::{
   restrict_scroll_to_wheel_axis, scrollable_node, selectable_list_item,
 };
 
+use crate::diff_view_policy::{DiffViewInputs, effective_diff_view};
+use crate::svg_preview::SvgPreview;
 use crate::{
   ShowCommandPalette, ShowFileSearch,
   active_local_repo::{ActiveLocalRepo, ActiveLocalRepoStore},
@@ -2239,9 +2241,7 @@ pub struct GithubPrDetailsPage {
   syntax_highlight_cache: Arc<gfm_markdown_viewer::SyntaxHighlightCache>,
   overview_checks_open: bool,
   overview_checks_scroll_handle: gpui::ScrollHandle,
-  svg_preview: Option<Result<Arc<RenderImage>, SharedString>>,
-  svg_preview_source: Option<SharedString>,
-  svg_preview_task: Option<Task<()>>,
+  svg_preview: Entity<SvgPreview>,
   active_tab_ix: usize,
   current_pr_context: Option<CurrentPrContext>,
   pull_request: Option<GithubPullRequestDetails>,
@@ -2792,9 +2792,7 @@ impl GithubPrDetailsPage {
       syntax_highlight_cache: Arc::new(gfm_markdown_viewer::SyntaxHighlightCache::new()),
       overview_checks_open: false,
       overview_checks_scroll_handle: gpui::ScrollHandle::new(),
-      svg_preview: None,
-      svg_preview_source: None,
-      svg_preview_task: None,
+      svg_preview: cx.new(|_| SvgPreview::new()),
       active_tab_ix: 0,
       current_pr_context: None,
       pull_request: None,
@@ -2802,6 +2800,7 @@ impl GithubPrDetailsPage {
     };
     this.install_diff_editor_review_comment_handlers(cx);
     this.subscribe_to_tree_search_input(window, cx);
+    this.subscribe_to_svg_preview(cx);
     this.subscribe_to_assignee_input(window, cx);
     this.subscribe_to_requested_reviewer_input(window, cx);
     this.subscribe_to_label_input(window, cx);
@@ -3288,8 +3287,7 @@ impl GithubPrDetailsPage {
       self.show_markdown_preview = false;
     }
     self.binary_preview = None;
-    self.svg_preview = None;
-    self.svg_preview_source = None;
+    self.svg_preview.update(cx, |preview, _| preview.clear());
     self.file_error = None;
     self.local_project_open_file_generation =
       self.local_project_open_file_generation.wrapping_add(1);
@@ -4798,6 +4796,12 @@ impl GithubPrDetailsPage {
       .filter(|comment| review_comment_owned_by_login(comment, &login))
       .map(|comment| comment.id)
       .collect()
+  }
+
+  /// The preview renders on a background task; repaint the page when it lands.
+  fn subscribe_to_svg_preview(&mut self, cx: &mut Context<Self>) {
+    cx.observe(&self.svg_preview, |_, _, cx| cx.notify())
+      .detach();
   }
 
   fn subscribe_to_tree_search_input(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -7050,8 +7054,7 @@ impl GithubPrDetailsPage {
       self.show_markdown_preview = false;
     }
     self.binary_preview = None;
-    self.svg_preview = None;
-    self.svg_preview_source = None;
+    self.svg_preview.update(cx, |preview, _| preview.clear());
 
     if let Some(file) = selected {
       self.ensure_diff_editor_for_path(file.path.as_ref(), cx);
@@ -7491,17 +7494,13 @@ impl GithubPrDetailsPage {
   }
 
   fn effective_diff_view(&self) -> DiffViewMode {
-    if self.show_markdown_preview
-      && (self.selected_file_is_markdown() || self.selected_file_is_svg())
-    {
-      return DiffViewMode::Inline;
-    }
-
-    if self.split_disabled_for_selected_file() {
-      return DiffViewMode::Inline;
-    }
-
-    self.diff_view
+    effective_diff_view(DiffViewInputs {
+      preferred: self.diff_view,
+      binary_preview: self.binary_preview.is_some(),
+      previewing: self.show_markdown_preview
+        && (self.selected_file_is_markdown() || self.selected_file_is_svg()),
+      whole_file_change: self.split_disabled_for_selected_file(),
+    })
   }
 
   fn sync_diff_view(&mut self, cx: &mut Context<Self>) {
@@ -7575,39 +7574,6 @@ impl GithubPrDetailsPage {
     self.show_markdown_preview = !self.show_markdown_preview;
     self.sync_diff_view(cx);
     cx.notify();
-  }
-
-  fn update_svg_preview(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-    if !self.show_markdown_preview || !self.selected_file_is_svg() {
-      return;
-    }
-
-    let document = self.diff_editor.read(cx).document().read(cx);
-    let svg_source = document.slice_to_string(0..document.len());
-    let svg_source: SharedString = svg_source.into();
-
-    if self.svg_preview_source.as_ref() == Some(&svg_source) {
-      return;
-    }
-
-    self.svg_preview_source = Some(svg_source.clone());
-    let renderer = cx.svg_renderer();
-    let svg_bytes = svg_source.as_ref().as_bytes().to_vec();
-    let background =
-      cx.background_spawn(async move { renderer.render_single_frame(svg_bytes.as_slice(), 1.0) });
-
-    let task = cx.spawn_in(window, async move |this, cx| {
-      let result = background.await;
-      let _ = this.update_in(cx, |this, window, cx| {
-        if let Some(Ok(image)) = this.svg_preview.take() {
-          let _ = window.drop_image(image);
-        }
-        this.svg_preview = Some(result.map_err(|err| err.to_string().into()));
-        cx.notify();
-      });
-    });
-
-    self.svg_preview_task = Some(task);
   }
 
   fn apply_full_diff(
@@ -8133,8 +8099,7 @@ impl GithubPrDetailsPage {
     self.diff_view = DiffViewMode::Inline;
     self.show_markdown_preview = false;
     self.binary_preview = None;
-    self.svg_preview = None;
-    self.svg_preview_source = None;
+    self.svg_preview.update(cx, |preview, _| preview.clear());
     self.diff_editor.update(cx, |editor, cx| {
       editor.document().update(cx, |doc, cx| {
         doc.replace_all("", cx);
@@ -11762,36 +11727,11 @@ impl GithubPrDetailsPage {
 
     if preview_active {
       let preview_panel = if is_svg {
-        self.update_svg_preview(window, cx);
-        let preview = match self.svg_preview.clone() {
-          Some(Ok(image)) => img(image).max_w_full().max_h_full().into_any_element(),
-          Some(Err(error)) => div()
-            .text_sm()
-            .text_color(theme.status_red())
-            .child(error)
-            .into_any_element(),
-          None => div()
-            .text_sm()
-            .text_color(theme.muted_foreground)
-            .child("Rendering SVG preview...")
-            .into_any_element(),
-        };
-        div()
-          .flex_1()
-          .min_h_0()
-          .min_w(px(0.0))
-          .bg(theme.background)
-          .child(
-            div()
-              .flex_1()
-              .min_h_0()
-              .min_w(px(0.0))
-              .p_4()
-              .items_center()
-              .justify_center()
-              .child(preview),
-          )
-          .into_any_element()
+        let editor = self.diff_editor.clone();
+        self.svg_preview.update(cx, |preview, cx| {
+          preview.refresh_from_editor(&editor, window, cx);
+        });
+        self.svg_preview.read(cx).render(cx)
       } else {
         let markdown = self.diff_editor.read(cx).document().read(cx);
         let markdown = markdown.slice_to_string(0..markdown.len());

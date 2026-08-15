@@ -1550,37 +1550,11 @@ impl GitPage {
         && (self.selected_file_is_markdown() || self.selected_file_is_svg())
       {
         let preview_content = if self.selected_file_is_svg() {
-          self.update_svg_preview(window, cx);
-          let preview = match self.svg_preview.clone() {
-            Some(Ok(image)) => img(image).max_w_full().max_h_full().into_any_element(),
-            Some(Err(error)) => div()
-              .text_sm()
-              .text_color(theme.status_red())
-              .child(error)
-              .into_any_element(),
-            None => div()
-              .text_sm()
-              .text_color(theme.muted_foreground)
-              .child("Rendering SVG preview...")
-              .into_any_element(),
-          };
-          div()
-            .flex_1()
-            .min_h_0()
-            .min_w(px(0.0))
-            .bg(theme.background)
-            .occlude()
-            .child(
-              div()
-                .flex_1()
-                .min_h_0()
-                .min_w(px(0.0))
-                .p_4()
-                .items_center()
-                .justify_center()
-                .child(preview),
-            )
-            .into_any_element()
+          let editor = editor.clone();
+          self.svg_preview.update(cx, |preview, cx| {
+            preview.refresh_from_editor(&editor, window, cx);
+          });
+          self.svg_preview.read(cx).render(cx)
         } else {
           let markdown = editor.read(cx).document().read(cx);
           let markdown = markdown.slice_to_string(0..markdown.len());

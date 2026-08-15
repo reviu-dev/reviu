@@ -376,8 +376,7 @@ impl GitPage {
         this.selected_file_source = None;
         this.history_opened_commit_file = Some((commit_oid.clone(), rel_path.clone()));
         this.sync_sentry_git_context();
-        this.svg_preview = None;
-        this.svg_preview_source = None;
+        this.svg_preview.update(cx, |preview, _| preview.clear());
         this.refresh_history_list(cx);
         cx.notify();
       });

@@ -61,6 +61,7 @@ mod dock_badge;
 mod config;
 mod crash_report;
 mod date_format;
+mod diff_view_policy;
 mod feedback_dialog;
 mod file_preview;
 mod file_search_palette;
@@ -81,6 +82,7 @@ mod session_page;
 mod settings_page;
 mod shortcuts;
 pub mod status_bar;
+mod svg_preview;
 mod workspace;
 
 pub use app_profile::{AppProfile, URL_SCHEME_PROD};

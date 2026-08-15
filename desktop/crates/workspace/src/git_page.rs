@@ -32,8 +32,8 @@ use git::{
 };
 use gpui::{
   Anchor, AnyElement, AnyWindowHandle, App, Context, Entity, FocusHandle, Focusable, Global,
-  InteractiveElement, ParentElement, PathPromptOptions, Pixels, Render, RenderImage, SharedString,
-  Styled, Subscription, Task, WeakEntity, Window, actions, div, img, prelude::*, px,
+  InteractiveElement, ParentElement, PathPromptOptions, Pixels, Render, SharedString, Styled,
+  Subscription, Task, WeakEntity, Window, actions, div, img, prelude::*, px,
 };
 use gpui_component::{
   ActiveTheme as _, Disableable, Icon, IconName, IndexPath, Selectable, Sizable, StyledExt,
@@ -645,9 +645,7 @@ pub struct GitPage {
   show_terminal_sidebar: bool,
   agent_review: AgentReviewComments,
   binary_preview: Option<BinaryPreview>,
-  svg_preview: Option<Result<Arc<RenderImage>, SharedString>>,
-  svg_preview_source: Option<SharedString>,
-  svg_preview_task: Option<Task<()>>,
+  svg_preview: Entity<SvgPreview>,
   branch_pr_lookup_context: Option<GithubBranchContext>,
   branch_pr_lookup_result: Option<GithubPullRequest>,
   branch_pr_lookup_loading: bool,
@@ -697,6 +695,8 @@ struct UnpublishedBranchCheckKey {
 }
 
 use crate::agent_review::AgentReviewComments;
+use crate::diff_view_policy::{DiffViewInputs, effective_diff_view};
+use crate::svg_preview::SvgPreview;
 
 impl GitPage {
   fn sidebar_mode_tag(mode: GitSidebarMode) -> &'static str {
@@ -1431,19 +1431,12 @@ impl GitPage {
   }
 
   fn effective_diff_view_for_path(&self, path: &Path) -> DiffViewMode {
-    if self.selected_file.as_deref() == Some(path) && self.binary_preview.is_some() {
-      return DiffViewMode::Inline;
-    }
-
-    if self.show_markdown_preview && is_previewable_path(path) {
-      return DiffViewMode::Inline;
-    }
-
-    if self.split_disabled_for_path(path) {
-      return DiffViewMode::Inline;
-    }
-
-    self.diff_view
+    effective_diff_view(DiffViewInputs {
+      preferred: self.diff_view,
+      binary_preview: self.selected_file.as_deref() == Some(path) && self.binary_preview.is_some(),
+      previewing: self.show_markdown_preview && is_previewable_path(path),
+      whole_file_change: self.split_disabled_for_path(path),
+    })
   }
 
   fn sync_diff_view(&mut self, cx: &mut Context<Self>) {
@@ -1715,9 +1708,7 @@ impl GitPage {
       show_terminal_sidebar: false,
       agent_review: AgentReviewComments::new(),
       binary_preview: None,
-      svg_preview: None,
-      svg_preview_source: None,
-      svg_preview_task: None,
+      svg_preview: cx.new(|_| SvgPreview::new()),
       branch_pr_lookup_context: None,
       branch_pr_lookup_result: None,
       branch_pr_lookup_loading: false,
@@ -1748,6 +1739,7 @@ impl GitPage {
     view.subscribe_to_commit_input(window, cx);
     view.subscribe_to_history_tree_focus(window, cx);
     view.subscribe_to_window_activation(window, cx);
+    view.subscribe_to_svg_preview(cx);
     view.reload_status(cx);
     view.refresh_branches(cx);
     view.start_polling(cx);
@@ -1824,9 +1816,7 @@ impl GitPage {
       show_terminal_sidebar: false,
       agent_review: AgentReviewComments::new(),
       binary_preview: None,
-      svg_preview: None,
-      svg_preview_source: None,
-      svg_preview_task: None,
+      svg_preview: cx.new(|_| SvgPreview::new()),
       branch_pr_lookup_context: None,
       branch_pr_lookup_result: None,
       branch_pr_lookup_loading: false,
@@ -1857,6 +1847,7 @@ impl GitPage {
     view.subscribe_to_commit_input(window, cx);
     view.subscribe_to_history_tree_focus(window, cx);
     view.subscribe_to_window_activation(window, cx);
+    view.subscribe_to_svg_preview(cx);
     GitPageHandle::register(cx);
     view
   }
@@ -2006,6 +1997,12 @@ impl GitPage {
       },
     )
     .detach();
+  }
+
+  /// The preview renders on a background task; repaint the page when it lands.
+  fn subscribe_to_svg_preview(&mut self, cx: &mut Context<Self>) {
+    cx.observe(&self.svg_preview, |_, _, cx| cx.notify())
+      .detach();
   }
 
   fn subscribe_to_window_activation(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -3044,8 +3041,7 @@ impl GitPage {
     self.add_git_breadcrumb("Opened file in git page", data);
     self.editor = None;
     self.binary_preview = None;
-    self.svg_preview = None;
-    self.svg_preview_source = None;
+    self.svg_preview.update(cx, |preview, _| preview.clear());
     self.force_list_selection = true;
     let opened_path = self.selected_file.clone();
     self.file_list.update(cx, |state, cx| {
@@ -3176,43 +3172,6 @@ impl GitPage {
     data.insert("enabled".into(), self.show_markdown_preview.into());
     self.add_git_breadcrumb("Toggled markdown preview", data);
     cx.notify();
-  }
-
-  fn update_svg_preview(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-    if !self.show_markdown_preview || !self.selected_file_is_svg() {
-      return;
-    }
-
-    let Some(editor) = self.editor.clone() else {
-      return;
-    };
-
-    let document = editor.read(cx).document().read(cx);
-    let svg_source = document.slice_to_string(0..document.len());
-    let svg_source: SharedString = svg_source.into();
-
-    if self.svg_preview_source.as_ref() == Some(&svg_source) {
-      return;
-    }
-
-    self.svg_preview_source = Some(svg_source.clone());
-    let renderer = cx.svg_renderer();
-    let svg_bytes = svg_source.as_ref().as_bytes().to_vec();
-    let background =
-      cx.background_spawn(async move { renderer.render_single_frame(svg_bytes.as_slice(), 1.0) });
-
-    let task = cx.spawn_in(window, async move |this, cx| {
-      let result = background.await;
-      let _ = this.update_in(cx, |this, window, cx| {
-        if let Some(Ok(image)) = this.svg_preview.take() {
-          let _ = window.drop_image(image);
-        }
-        this.svg_preview = Some(result.map_err(|err| err.to_string().into()));
-        cx.notify();
-      });
-    });
-
-    self.svg_preview_task = Some(task);
   }
 
   fn toggle_sidebar_mode_action(
