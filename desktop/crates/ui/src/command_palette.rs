@@ -3416,7 +3416,7 @@ mod tests {
   #[test]
   fn command_palette_group_order_is_stable_and_total() {
     use super::CommandPaletteGroup;
-    // Ord is derived from declaration order — make the contract explicit.
+    // Ord is derived from declaration order, make the contract explicit.
     let mut groups = [
       CommandPaletteGroup::Feedback,
       CommandPaletteGroup::Navigation,

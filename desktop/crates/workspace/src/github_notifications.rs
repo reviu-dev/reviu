@@ -8,8 +8,7 @@ use crate::dock_badge::set_dock_badge;
 use crate::github_navigation::{open_pr_target, open_repo_target};
 use crate::workspace::WorkspaceApi;
 
-/// Notifications last fetched from GitHub, shared by the sessions sidebar inbox,
-/// the navigation badge, the dock badge and the menu bar icon.
+/// Notifications last fetched from GitHub.
 #[derive(Clone, Default)]
 pub struct GithubNotificationsStore {
   notifications: Arc<Mutex<Vec<GithubNotification>>>,

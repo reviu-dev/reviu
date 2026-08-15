@@ -12,7 +12,7 @@ const EDGE_TOLERANCE_PX: f32 = 0.5;
 /// How long a wheel gesture stays latched on its target. Continuous bursts
 /// arrive much faster than this; the latch only releases when the user
 /// actually pauses, at which point the next event re-hit-tests under the
-/// cursor — same as how a browser routes scrolls.
+/// cursor, same as how a browser routes scrolls.
 const GESTURE_TIMEOUT: Duration = Duration::from_millis(250);
 
 #[derive(Clone, Copy)]
@@ -334,7 +334,7 @@ impl Element for ScrollableNode {
 }
 
 /// Marker element that owns the centralized scroll dispatcher. Mount it once
-/// near the root of the window — it must paint **before** any
+/// near the root of the window, it must paint **before** any
 /// [`scrollable_node`] so the registry is empty when nodes start to
 /// register themselves.
 ///
@@ -447,14 +447,14 @@ impl Element for ScrollDispatcher {
           // Mid-gesture containment: keep swallowing the wheel even when the
           // inner scroller has hit its edge, so a single swipe's inertia
           // doesn't leak to the parent. The 250ms gesture timeout takes care
-          // of releasing the latch — the next gesture started while still at
+          // of releasing the latch, the next gesture started while still at
           // the edge will re-hit-test, get rejected, and chain to the page.
           apply_to_node(&node, axis, delta);
           cx.notify(current_view);
           cx.stop_propagation();
         }
         Some(LatchResolution::Outer) | None => {
-          // Don't claim — let GPUI's native overflow_*_scroll on the ancestor
+          // Don't claim, let GPUI's native overflow_*_scroll on the ancestor
           // pick up the wheel event normally.
         }
       }
@@ -502,7 +502,7 @@ mod tests {
 
   #[test]
   fn can_scroll_axis_with_no_overflow_always_returns_false() {
-    // Content fits the viewport (max_offset is essentially zero) — there's
+    // Content fits the viewport (max_offset is essentially zero), there's
     // nothing to scroll, in either direction.
     assert!(!can_scroll_axis(px(0.0), px(0.0), px(-10.0)));
     assert!(!can_scroll_axis(px(0.0), px(0.0), px(10.0)));
@@ -517,7 +517,7 @@ mod tests {
 
   #[test]
   fn can_scroll_axis_respects_edge_tolerance() {
-    // Within the 0.5px tolerance of the bottom — treated as already at the
+    // Within the 0.5px tolerance of the bottom, treated as already at the
     // edge so we don't keep dispatching tiny deltas that don't move anything.
     let max = px(200.0);
     assert!(!can_scroll_axis(px(-199.9), max, px(-10.0)));
@@ -600,7 +600,7 @@ mod tests {
   #[test]
   fn pick_axis_restrict_to_wheel_axis_blocks_cross_axis_fallback() {
     // restrict_to_wheel_axis = true means we don't repurpose a Y wheel
-    // delta as horizontal scroll on a horizontal-only scroller — the user
+    // delta as horizontal scroll on a horizontal-only scroller, the user
     // didn't actually scroll horizontally.
     let axes = ScrollAxes::horizontal();
     assert!(pick_axis(point(px(0.0), px(-20.0)), axes).is_none());

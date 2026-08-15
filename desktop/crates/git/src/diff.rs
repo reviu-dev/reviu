@@ -234,7 +234,7 @@ pub fn apply_hunk_to_text(base_text: &str, hunk: &DiffHunk, reverse: bool) -> Re
         old_idx += 1;
       }
       DiffLineKind::Remove => {
-        // An empty Remove represents stripping the trailing newline — it doesn't
+        // An empty Remove represents stripping the trailing newline, it doesn't
         // correspond to an actual line in base_lines, just the trailing_newline flag.
         if line.content.is_empty() && old_idx >= base_lines.len() {
           trailing_newline = false;
@@ -1348,7 +1348,7 @@ index 1111111..0000000
     // Apply forward first
     let staged = apply_hunk_to_text(base, &diff.hunks[0], false).expect("apply forward");
     assert_eq!(staged, buffer);
-    // Now reverse (unstage) — should get back to base
+    // Now reverse (unstage), should get back to base
     let unstaged = apply_hunk_to_text(&staged, &diff.hunks[0], true).expect("apply reverse");
     assert_eq!(unstaged, base);
   }
@@ -1436,7 +1436,7 @@ index 1111111..0000000
   #[test]
   fn ignore_whitespace_hunks_are_display_only() {
     // With ignore_whitespace, Context lines have base content (original indentation).
-    // These hunks are for display — staging should use the non-ignore_whitespace diff.
+    // These hunks are for display, staging should use the non-ignore_whitespace diff.
     let base = "  <Wrapper>\n    <Inner />\n  </Wrapper>\n";
     let buffer = "<Inner />\n";
     let diff_display = compute_buffer_diff(

@@ -23,7 +23,7 @@ pub(crate) fn try_open_github_asset_url(url: &str, api: &ApiClient, cx: &mut gpu
   if !gfm_markdown_viewer::is_github_user_attachment_url(url) {
     return false;
   }
-  // Try a quick blocking resolve — the asset URL resolver cache should already
+  // Try a quick blocking resolve, the asset URL resolver cache should already
   // have the signed URL if the image was rendered. If not, this will block briefly
   // (single HTTP request to our backend) which is acceptable for a click action.
   match api.resolve_github_asset_url(url) {

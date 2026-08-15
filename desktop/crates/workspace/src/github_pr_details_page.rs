@@ -6931,10 +6931,7 @@ impl GithubPrDetailsPage {
     github_shared::upload_dropped_images(paths, input, self.api.clone(), on_error, window, cx);
   }
 
-  // Handles drops inside any of the diff-editor review-comment composers
-  // (inline edit, create, reply). We don't have a per-composer error field
-  // on the page side — the upload runs fire-and-forget and surfaces errors
-  // via breadcrumbs for now.
+  // Uploads run fire-and-forget: no per-composer error field to surface into.
   fn handle_diff_editor_review_comment_drop(
     &mut self,
     paths: &ExternalPaths,
@@ -12596,11 +12593,11 @@ impl Render for GithubPrDetailsPage {
     self.sync_route(window, cx);
     self.maybe_refresh_resolved_local_repo_match(window, cx);
 
-    // Poll syntax highlight cache — if background highlights completed, schedule re-render
+    // Poll syntax highlight cache, if background highlights completed, schedule re-render
     if self.syntax_highlight_cache.take_new_highlights() {
       cx.notify();
     } else if self.syntax_highlight_cache.has_pending() {
-      // Background highlights still in progress — check again next frame
+      // Background highlights still in progress, check again next frame
       cx.on_next_frame(window, |this, _window, cx| {
         if this.syntax_highlight_cache.take_new_highlights() {
           cx.notify();

@@ -301,8 +301,7 @@ pub struct AgentChatPanel {
   available_models: Vec<ModelInfo>,
   current_model_id: Option<ModelId>,
   config_options: Vec<SessionConfigOption>,
-  /// First value each option was advertised with; the composer trigger stays
-  /// muted while every option still sits on it.
+  /// Baseline for the composer trigger's muted state.
   config_defaults: HashMap<SessionConfigId, SessionConfigValueId>,
   _connect_task: Option<Task<()>>,
   _events_task: Option<Task<()>>,
@@ -3453,9 +3452,7 @@ impl AgentChatPanel {
       .into_any_element()
   }
 
-  /// Every non-model, non-mode select option collapses into one trigger showing
-  /// the effective values, so the composer keeps two named controls instead of a
-  /// row of bare dropdowns.
+  /// One trigger instead of a row of bare dropdowns.
   fn render_config_selector(&self, cx: &mut Context<Self>) -> Option<gpui::AnyElement> {
     let options = self.selectable_config_options();
     if options.is_empty() {
@@ -3562,7 +3559,6 @@ fn selectable_config_options(options: &[SessionConfigOption]) -> Vec<ConfigSelec
     .collect()
 }
 
-/// The composer trigger label: every option's effective value, joined.
 fn config_summary(selectors: &[ConfigSelector]) -> String {
   selectors
     .iter()
@@ -3571,7 +3567,7 @@ fn config_summary(selectors: &[ConfigSelector]) -> String {
     .join(" · ")
 }
 
-/// True once any option moved off the value the agent first advertised.
+/// True once any option left the value the agent first advertised.
 fn config_customized(
   selectors: &[ConfigSelector],
   defaults: &HashMap<SessionConfigId, SessionConfigValueId>,
