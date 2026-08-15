@@ -180,6 +180,7 @@ pub struct SessionPage {
   pending_review_export: Option<String>,
   repo_command_in_flight: bool,
   _branch_task: Option<Task<()>>,
+  _repo_command_task: Option<Task<()>>,
 }
 
 impl SessionPage {
@@ -219,6 +220,7 @@ impl SessionPage {
       pending_review_export: None,
       repo_command_in_flight: false,
       _branch_task: None,
+      _repo_command_task: None,
     };
     SessionPageHandle::register(cx);
     page.refresh_branch(cx);
@@ -865,7 +867,7 @@ impl SessionPage {
 
     self.repo_command_in_flight = true;
     let window_handle = self.window_handle;
-    cx.spawn(async move |this, cx| {
+    let task = cx.spawn(async move |this, cx| {
       let result = unblock(move || command.run(&repo_root)).await;
       let _ = cx.update_window(window_handle, |_, window, cx| {
         let _ = this.update(cx, |this, cx| {
@@ -883,8 +885,8 @@ impl SessionPage {
           cx.notify();
         });
       });
-    })
-    .detach();
+    });
+    self._repo_command_task = Some(task);
 
     Ok(())
   }
@@ -2338,5 +2340,66 @@ mod tests {
     page.read_with(cx, |page, _| {
       assert_eq!(page.branch_status.as_ref().expect("status").ahead, 1);
     });
+  }
+
+  #[gpui::test]
+  async fn pushing_from_the_counter_clears_it(cx: &mut TestAppContext) {
+    let repo = TempRepo::init("session-page-push-counter");
+    commit_text_file(&repo.path, Path::new("README.md"), "v1\n", "initial");
+    let remote = publish_to_new_remote(&repo.path, "session-page-push-counter");
+    commit_text_file(&repo.path, Path::new("README.md"), "v2\n", "second");
+
+    let (page, cx) = add_session_page_window(repo.path.clone(), cx);
+    cx.executor().allow_parking();
+    cx.run_until_parked();
+
+    page.update(cx, |page, cx| page.refresh_branch(cx));
+    await_branch_refresh(&page, cx).await;
+    page.read_with(cx, |page, _| {
+      assert_eq!(page.branch_status.as_ref().expect("status").ahead, 1);
+    });
+
+    // What the ahead counter runs when clicked.
+    page.update_in(cx, |page, window, cx| {
+      page
+        .run_repo_command(RepoCommand::Push, window, cx)
+        .expect("push");
+    });
+    let command_task = page.update(cx, |page, _| {
+      page._repo_command_task.take().expect("command task")
+    });
+    command_task.await;
+    cx.run_until_parked();
+    await_branch_refresh(&page, cx).await;
+
+    let remote_repo = git2::Repository::open(&remote).expect("open remote");
+    let head = remote_repo
+      .head()
+      .and_then(|head| head.peel_to_commit())
+      .expect("remote head");
+    assert_eq!(head.summary(), Some("second"));
+
+    page.read_with(cx, |page, _| {
+      assert_eq!(page.branch_status.as_ref().expect("status").ahead, 0);
+    });
+  }
+
+  #[gpui::test]
+  async fn a_second_git_command_is_refused_while_one_runs(cx: &mut TestAppContext) {
+    let repo = TempRepo::init("session-page-command-in-flight");
+    commit_text_file(&repo.path, Path::new("README.md"), "v1\n", "initial");
+
+    let (page, cx) = add_session_page_window(repo.path.clone(), cx);
+    cx.executor().allow_parking();
+    cx.run_until_parked();
+
+    let error = page.update_in(cx, |page, window, cx| {
+      page.repo_command_in_flight = true;
+      page
+        .run_repo_command(RepoCommand::Fetch, window, cx)
+        .expect_err("refused while busy")
+    });
+
+    assert!(error.contains("still running"), "{error}");
   }
 }
