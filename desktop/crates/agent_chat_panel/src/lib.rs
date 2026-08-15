@@ -284,6 +284,7 @@ const MENTION_MENU_MAX_ITEMS: usize = 10;
 const MAX_REPO_FILES: usize = 20_000;
 /// Caps the conversation and the composer to a readable measure on wide windows.
 const CONVERSATION_COLUMN_MAX_WIDTH_PX: f32 = 720.0;
+const CONVERSATION_BOTTOM_FADE_PX: f32 = 48.0;
 
 /// Code selected in the Git diff view, pushed in to attach as `@selection` context.
 #[derive(Clone, Debug)]
@@ -3329,6 +3330,19 @@ impl Render for AgentChatPanel {
                   })
                 })
                 .size_full(),
+              )
+              .child(
+                div()
+                  .absolute()
+                  .bottom_0()
+                  .left_0()
+                  .right_0()
+                  .h(px(CONVERSATION_BOTTOM_FADE_PX))
+                  .bg(gpui::linear_gradient(
+                    180.,
+                    gpui::linear_color_stop(theme.sidebar.opacity(0.), 0.),
+                    gpui::linear_color_stop(theme.sidebar, 1.),
+                  )),
               )
               .vertical_scrollbar(&self.messages_list),
           )
