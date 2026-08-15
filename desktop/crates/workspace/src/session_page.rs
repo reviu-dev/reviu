@@ -11,6 +11,7 @@ use editor::{
   ReviewCommentEditHandler, ReviewCommentSide,
 };
 use gfm_markdown_viewer::SuggestionContext;
+use gpui::AnimationExt as _;
 use gpui::{
   AnyElement, AnyWindowHandle, App, Context, Entity, FocusHandle, Focusable, Render, SharedString,
   Task, Window, div, prelude::*, px,
@@ -56,6 +57,7 @@ const SESSIONS_SIDEBAR_DEFAULT_WIDTH: f32 = 250.0;
 const SESSIONS_SIDEBAR_MIN_WIDTH: f32 = 200.0;
 const SESSIONS_SIDEBAR_MAX_WIDTH: f32 = 420.0;
 const INBOX_MAX_HEIGHT: f32 = 220.0;
+const CENTER_SWAP_FADE_MS: u64 = 180;
 const REVIEW_PANEL_DEFAULT_WIDTH: f32 = 320.0;
 const REVIEW_PANEL_MIN_WIDTH: f32 = 240.0;
 const REVIEW_PANEL_MAX_WIDTH: f32 = 560.0;
@@ -1404,10 +1406,23 @@ impl SessionPage {
   }
 
   fn render_center(&mut self, cx: &mut Context<Self>) -> AnyElement {
-    match self.center {
-      CenterView::Conversation => self.render_conversation(cx),
-      CenterView::Diff => self.render_diff_view(cx),
-    }
+    // Keyed on the view so swapping conversation and diff remounts and replays.
+    let (id, view) = match self.center {
+      CenterView::Conversation => ("session-center-conversation", self.render_conversation(cx)),
+      CenterView::Diff => ("session-center-diff", self.render_diff_view(cx)),
+    };
+    div()
+      .size_full()
+      .min_w(px(0.0))
+      .min_h_0()
+      .child(view)
+      .with_animation(
+        id,
+        gpui::Animation::new(std::time::Duration::from_millis(CENTER_SWAP_FADE_MS))
+          .with_easing(gpui::ease_out_quint()),
+        |view, delta| view.opacity(delta),
+      )
+      .into_any_element()
   }
 
   fn render_conversation(&mut self, cx: &mut Context<Self>) -> AnyElement {
