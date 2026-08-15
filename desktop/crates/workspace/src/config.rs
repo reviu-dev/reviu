@@ -2,7 +2,7 @@ use gpui::{App, Global};
 #[cfg(test)]
 use std::cell::RefCell;
 use std::{
-  collections::HashMap,
+  collections::{HashMap, HashSet},
   fs,
   path::{Path, PathBuf},
   time::{SystemTime, UNIX_EPOCH},
@@ -65,7 +65,7 @@ type Migration = fn(&Connection) -> rusqlite::Result<()>;
 /// Ordered config-database migrations. The vector index + 1 is the migration's `user_version`.
 /// Only append; never reorder or edit a shipped migration. v1 is an idempotent baseline so any
 /// pre-existing database (which has `user_version` 0) converges to the current schema.
-const MIGRATIONS: &[Migration] = &[migrate_v1_baseline];
+const MIGRATIONS: &[Migration] = &[migrate_v1_baseline, migrate_v2_home_page];
 
 fn schema_version(conn: &Connection) -> rusqlite::Result<i64> {
   conn.query_row("PRAGMA user_version", [], |row| row.get(0))
@@ -106,6 +106,10 @@ fn migrate_v1_baseline(conn: &Connection) -> rusqlite::Result<()> {
   Ok(())
 }
 
+fn migrate_v2_home_page(conn: &Connection) -> rusqlite::Result<()> {
+  add_settings_column_if_missing(conn, "home_page", "TEXT NOT NULL DEFAULT 'session'")
+}
+
 fn create_baseline_tables(conn: &Connection) -> rusqlite::Result<()> {
   for table in CONFIG_TABLES {
     conn.execute(table.create_sql, [])?;
@@ -125,8 +129,9 @@ fn ensure_default_rows(conn: &Connection) -> rusqlite::Result<()> {
   Ok(())
 }
 
-/// Add any settings columns missing from an older `settings` table. Guarded per column so the
-/// baseline stays idempotent across every database age.
+/// The columns v1 back-fills onto a pre-versioning `settings` table. FROZEN: this
+/// list is the schema as of the day versioning shipped and only runs for databases
+/// below v1. A new setting needs a new migration, never an entry here.
 fn ensure_settings_columns(conn: &Connection) -> rusqlite::Result<()> {
   const COLUMNS: &[(&str, &str)] = &[
     ("indent_rainbow", "INTEGER NOT NULL DEFAULT 0"),
@@ -137,28 +142,38 @@ fn ensure_settings_columns(conn: &Connection) -> rusqlite::Result<()> {
     ("clone_protocol", "TEXT NOT NULL DEFAULT 'https'"),
     ("menu_bar_icon", "INTEGER NOT NULL DEFAULT 1"),
     ("analytics_enabled", "INTEGER NOT NULL DEFAULT 1"),
-    ("home_page", "TEXT NOT NULL DEFAULT 'session'"),
   ];
 
-  let mut existing = std::collections::HashSet::new();
+  for (column, definition) in COLUMNS {
+    add_settings_column_if_missing(conn, column, definition)?;
+  }
+
+  Ok(())
+}
+
+fn settings_column_names(conn: &Connection) -> rusqlite::Result<HashSet<String>> {
   let mut stmt = conn.prepare(&format!("PRAGMA table_info({})", SETTINGS_TABLE.name))?;
   let rows = stmt.query_map([], |row| row.get::<_, String>(1))?;
-  for row in rows {
-    existing.insert(row?);
-  }
+  rows.collect()
+}
 
-  for (column, definition) in COLUMNS {
-    if !existing.contains(*column) {
-      conn.execute(
-        &format!(
-          "ALTER TABLE {} ADD COLUMN {column} {definition}",
-          SETTINGS_TABLE.name
-        ),
-        [],
-      )?;
-    }
+/// `ALTER TABLE ADD COLUMN` guarded on the column being absent, so a migration
+/// re-run over a database that already has it is a no-op instead of an error.
+fn add_settings_column_if_missing(
+  conn: &Connection,
+  column: &str,
+  definition: &str,
+) -> rusqlite::Result<()> {
+  if settings_column_names(conn)?.contains(column) {
+    return Ok(());
   }
-
+  conn.execute(
+    &format!(
+      "ALTER TABLE {} ADD COLUMN {column} {definition}",
+      SETTINGS_TABLE.name
+    ),
+    [],
+  )?;
   Ok(())
 }
 
@@ -1011,6 +1026,7 @@ mod tests {
     "clone_protocol",
     "menu_bar_icon",
     "analytics_enabled",
+    "home_page",
   ];
 
   #[test]
@@ -1022,7 +1038,7 @@ mod tests {
     // Triggers open_with_tables -> run_migrations on an empty database.
     let _ = ConfigStore::load_app_settings();
 
-    assert_eq!(db_user_version(&db_path), 1);
+    assert_eq!(db_user_version(&db_path), MIGRATIONS.len() as i64);
     let columns = settings_columns(&db_path);
     for column in ALL_SETTINGS_COLUMNS {
       assert!(columns.contains(*column), "missing column {column}");
@@ -1044,8 +1060,40 @@ mod tests {
     // Second open must not re-run v1 or disturb stored data.
     let reloaded = ConfigStore::load_app_settings();
 
-    assert_eq!(db_user_version(&db_path), 1);
+    assert_eq!(db_user_version(&db_path), MIGRATIONS.len() as i64);
     assert!(reloaded.dark_mode);
+
+    ConfigStore::set_test_db_path(None);
+  }
+
+  /// The regression guard for the `home_page` incident: a database already stamped
+  /// at v1 skips the baseline, so a column added there never lands. Every new
+  /// setting must arrive through its own migration.
+  #[test]
+  fn migrations_upgrade_an_already_versioned_db() {
+    let db_path = unique_test_db_path("migrate-versioned");
+    let _ = fs::remove_file(&db_path);
+
+    // Simulate an install that already ran the v1 baseline and stopped there.
+    {
+      let conn = Connection::open(&db_path).expect("open db");
+      conn.execute(SETTINGS_TABLE.create_sql, []).expect("create");
+      ensure_default_rows(&conn).expect("default row");
+      ensure_settings_columns(&conn).expect("v1 columns");
+      set_schema_version(&conn, 1).expect("stamp v1");
+      conn
+        .execute("UPDATE settings SET dark_mode = 1 WHERE id = 1", [])
+        .expect("seed value");
+      assert!(!settings_columns(&db_path).contains("home_page"));
+    }
+
+    ConfigStore::set_test_db_path(Some(db_path.clone()));
+    let settings = ConfigStore::load_app_settings();
+
+    assert!(settings.dark_mode, "stored value must survive the upgrade");
+    assert_eq!(settings.home_page, HomePage::Session);
+    assert_eq!(db_user_version(&db_path), MIGRATIONS.len() as i64);
+    assert!(settings_columns(&db_path).contains("home_page"));
 
     ConfigStore::set_test_db_path(None);
   }
@@ -1074,7 +1122,7 @@ mod tests {
 
     // Pre-existing value preserved, schema brought up to date, version stamped.
     assert!(settings.dark_mode, "legacy value must survive migration");
-    assert_eq!(db_user_version(&db_path), 1);
+    assert_eq!(db_user_version(&db_path), MIGRATIONS.len() as i64);
     let columns = settings_columns(&db_path);
     for column in ALL_SETTINGS_COLUMNS {
       assert!(columns.contains(*column), "missing column {column}");
