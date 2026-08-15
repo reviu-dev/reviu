@@ -1622,6 +1622,18 @@ mod tests {
   }
 
   #[test]
+  fn primary_navigation_shortcuts_open_sessions_then_git() {
+    assert_eq!(
+      shortcut_keystroke(ShortcutId::OpenSessionPage),
+      Keystroke::parse("cmd-1").expect("cmd-1 keystroke")
+    );
+    assert_eq!(
+      shortcut_keystroke(ShortcutId::OpenGitPage),
+      Keystroke::parse("cmd-2").expect("cmd-2 keystroke")
+    );
+  }
+
+  #[test]
   fn core_navigation_shortcuts_are_available_across_workspace_pages() {
     for pathname in ["/git", "/github", "/github/owner/repo/pull/42", "/settings"] {
       assert!(has_binding(pathname, "cmd-["));
