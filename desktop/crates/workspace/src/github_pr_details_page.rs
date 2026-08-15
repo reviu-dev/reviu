@@ -18999,17 +18999,14 @@ mod tests {
 
     cx.run_until_parked();
 
-    let switch_task = page.update_in(cx, |this, _window, _cx| {
-      assert!(
-        this.local_branch_switch_loading,
-        "branch switch should start after deferred command runs"
-      );
-      this
-        .local_branch_switch_task
-        .take()
-        .expect("branch switch task should be present after deferred command runs")
-    });
-    switch_task.await;
+    // The deferred command has run by now; the switch it started may still be in
+    // flight (fast machines finish it inside run_until_parked), so only await when
+    // the task is still around.
+    let switch_task = page.update_in(cx, |this, _window, _cx| this.local_branch_switch_task.take());
+    if let Some(switch_task) = switch_task {
+      switch_task.await;
+    }
+    cx.run_until_parked();
 
     let switched_branch = Repository::open(&repo_root)
       .expect("reopen repo")
