@@ -3411,14 +3411,18 @@ impl Render for AgentChatPanel {
                   )
                   .child(if self.in_flight {
                     Button::new("agent-chat-stop")
-                      .label("Stop")
+                      .icon(UiIconName::Square)
+                      .tooltip("Stop")
                       .small()
+                      .rounded(px(999.))
                       .danger()
                       .on_click(cx.listener(|panel, _, _, cx| panel.cancel(cx)))
                   } else {
                     Button::new("agent-chat-send")
-                      .label("Send")
+                      .icon(UiIconName::ArrowUp)
+                      .tooltip("Send")
                       .small()
+                      .rounded(px(999.))
                       .primary()
                       .disabled(!matches!(self.status, Status::Ready))
                       .on_click(cx.listener(|panel, _, window, cx| panel.submit(window, cx)))
@@ -3439,9 +3443,12 @@ impl AgentChatPanel {
       .map(|m| short_model_label(&m.name, m.description.as_deref()).into())
       .unwrap_or_else(|| "Model".into());
     let entity = cx.entity().downgrade();
+    let brand_icon = match self.backend_kind {
+      BackendKind::Claude => UiIconName::Claude,
+      BackendKind::Codex => UiIconName::OpenAi,
+    };
     Button::new("agent-chat-model")
-      .label(current_label)
-      .icon(IconName::ChevronDown)
+      .child(selector_trigger(Some(brand_icon), current_label))
       .xsmall()
       .ghost()
       .disabled(models.is_empty())
@@ -3481,8 +3488,7 @@ impl AgentChatPanel {
       .unwrap_or_else(|| "Mode".into());
     let entity = cx.entity().downgrade();
     Button::new("agent-chat-mode")
-      .label(current_label)
-      .icon(IconName::ChevronDown)
+      .child(selector_trigger(None, current_label))
       .xsmall()
       .ghost()
       .disabled(modes.is_empty())
@@ -3522,8 +3528,7 @@ impl AgentChatPanel {
 
     Some(
       Button::new("agent-chat-config")
-        .label(summary)
-        .icon(IconName::ChevronDown)
+        .child(selector_trigger(None, summary))
         .xsmall()
         .ghost()
         .when(!customized, |this| {
@@ -3634,6 +3639,18 @@ fn config_customized(
       .get(&selector.id)
       .is_some_and(|default| *default != selector.current_value)
   })
+}
+
+/// Composer selector trigger: optional leading icon, label, trailing chevron.
+fn selector_trigger(icon: Option<UiIconName>, label: SharedString) -> impl IntoElement {
+  h_flex()
+    .items_center()
+    .gap_1()
+    .when_some(icon, |this, icon| {
+      this.child(gpui_component::Icon::new(icon).xsmall())
+    })
+    .child(label)
+    .child(gpui_component::Icon::new(IconName::ChevronDown).xsmall())
 }
 
 fn mention_labels(candidate: &MentionCandidate) -> (String, String) {
