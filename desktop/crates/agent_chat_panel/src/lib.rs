@@ -3359,7 +3359,8 @@ impl Render for AgentChatPanel {
           .w_full()
           .flex()
           .justify_center()
-          .p_3()
+          .px_3()
+          .pb_3()
           .bg(theme.sidebar)
           .child(
             v_flex()
