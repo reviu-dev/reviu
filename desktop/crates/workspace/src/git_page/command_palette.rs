@@ -724,14 +724,15 @@ impl GitPage {
         let has_unresolved_conflict_markers = self.editor.as_ref().is_none_or(|editor| {
           editor.read_with(cx, |editor, cx| editor.has_unresolved_conflict_markers(cx))
         });
-        if Self::should_confirm_stage_for_status(
-          Some(selected_entry.status),
-          has_unresolved_conflict_markers,
-        ) {
-          self.confirm_stage_conflicted_file_action(window, selected_entry.path.clone(), cx);
-        } else {
-          self.stage_file_action(selected_entry.path.clone(), cx);
-        }
+        self.changes_list.update(cx, |list, cx| {
+          list.set_open_file_has_conflict_markers(has_unresolved_conflict_markers);
+          list.stage_file_with_confirmation(
+            selected_entry.path.clone(),
+            selected_entry.status,
+            window,
+            cx,
+          );
+        });
         Ok(())
       }
       CommandPaletteAction::UnstageSelectedFile => {
@@ -745,7 +746,9 @@ impl GitPage {
           return Err("Unstage file command is currently disabled.".into());
         };
         should_post_action_refresh = false;
-        self.unstage_file_action(selected_entry.path.clone(), cx);
+        self.changes_list.update(cx, |list, cx| {
+          list.unstage_file(selected_entry.path.clone(), window, cx)
+        });
         Ok(())
       }
       CommandPaletteAction::AcceptAllCurrentConflicts => {
@@ -1023,11 +1026,7 @@ impl GitPage {
           return Err("No repository selected.".into());
         }
         should_post_action_refresh = false;
-        if Self::should_confirm_stage_all(self.selected_repo.as_ref(), &self.status_entries) {
-          self.confirm_stage_all_conflicted_action(window, cx);
-        } else {
-          self.stage_all_action(cx);
-        }
+        self.stage_all_action(window, cx);
         Ok(())
       }
       CommandPaletteAction::UnstageAll => {
@@ -1035,7 +1034,7 @@ impl GitPage {
           return Err("No repository selected.".into());
         }
         should_post_action_refresh = false;
-        self.unstage_all_action(cx);
+        self.unstage_all_action(window, cx);
         Ok(())
       }
       CommandPaletteAction::Pull => {
@@ -1218,7 +1217,7 @@ impl GitPage {
     self.selected_repo.is_some()
       && self
         .selected_file_entry()
-        .is_some_and(|entry| Self::selected_file_can_stage(entry.stage))
+        .is_some_and(|entry| crate::changes_list::can_stage(entry.stage))
   }
 
   pub(super) fn should_show_unstage_selected_file_palette_command(&self) -> bool {
@@ -2827,15 +2826,21 @@ mod tests {
       this.selected_repo = Some(repo.path.clone());
       this.status_entries = list_repo_status(&repo.path).expect("list status");
       this.selected_file = Some(first.to_path_buf());
+      this.changes_list.update(cx, |list, cx| {
+        list.set_repo_root(Some(repo.path.clone()), cx);
+        list.set_entries(this.status_entries.clone(), cx);
+      });
       this.handle_command_palette_action(CommandPaletteAction::StageSelectedFile, window, cx)
     });
     assert!(result.is_ok());
 
-    let stage_task = git_page.update_in(cx, |this, _window, _| this.status_task.take());
+    let stage_task = git_page.update(cx, |this, cx| {
+      this
+        .changes_list
+        .update(cx, |list, _| list._action_task.take())
+    });
     stage_task.expect("stage selected file task").await;
-    if let Some(reload_task) = git_page.update_in(cx, |this, _window, _| this.status_task.take()) {
-      reload_task.await;
-    }
+    cx.run_until_parked();
 
     let entries = list_repo_status(&repo.path).expect("list status after stage selected file");
     let first_entry = entries
@@ -2866,15 +2871,21 @@ mod tests {
       this.selected_repo = Some(repo.path.clone());
       this.status_entries = list_repo_status(&repo.path).expect("list status");
       this.selected_file = Some(rel_path.to_path_buf());
+      this.changes_list.update(cx, |list, cx| {
+        list.set_repo_root(Some(repo.path.clone()), cx);
+        list.set_entries(this.status_entries.clone(), cx);
+      });
       this.handle_command_palette_action(CommandPaletteAction::UnstageSelectedFile, window, cx)
     });
     assert!(result.is_ok());
 
-    let unstage_task = git_page.update_in(cx, |this, _window, _| this.status_task.take());
+    let unstage_task = git_page.update(cx, |this, cx| {
+      this
+        .changes_list
+        .update(cx, |list, _| list._action_task.take())
+    });
     unstage_task.expect("unstage selected file task").await;
-    if let Some(reload_task) = git_page.update_in(cx, |this, _window, _| this.status_task.take()) {
-      reload_task.await;
-    }
+    cx.run_until_parked();
 
     let entries = list_repo_status(&repo.path).expect("list status after unstage selected file");
     assert_eq!(entries.len(), 1);

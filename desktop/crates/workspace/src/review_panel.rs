@@ -190,7 +190,7 @@ impl ReviewPanel {
         ChangesListEvent::OpenFile { path } => {
           cx.emit(ReviewPanelEvent::OpenFile { path: path.clone() });
         }
-        ChangesListEvent::Changed => this.refresh(cx),
+        ChangesListEvent::Changed { .. } => this.refresh(cx),
       },
     )
     .detach();

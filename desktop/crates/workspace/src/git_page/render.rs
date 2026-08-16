@@ -1471,7 +1471,7 @@ impl GitPage {
         .into_any_element();
     }
 
-    let file_list_focused = self.file_list.read(cx).focus_handle(cx).is_focused(window);
+    let file_list_focused = self.changes_list.read(cx).is_focused(window, cx);
     let list_container = div()
       .id("git-sidebar-file-list-container")
       .relative()
@@ -1479,11 +1479,12 @@ impl GitPage {
       .min_h_0()
       .overflow_hidden()
       .child(
-        List::new(&self.file_list)
+        div()
           .flex_1()
           .w_full()
           .min_h_0()
-          .p(px(6.)),
+          .p(px(6.))
+          .child(self.changes_list.clone()),
       )
       .when(file_list_focused, |this| {
         this.child(

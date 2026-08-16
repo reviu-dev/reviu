@@ -35,6 +35,10 @@ pub(crate) fn restore_uses_delete(status: RepoStatusKind) -> bool {
   status == RepoStatusKind::Untracked
 }
 
+pub(crate) fn can_stage(stage: RepoStage) -> bool {
+  stage == RepoStage::Unstaged
+}
+
 pub(crate) fn can_unstage(stage: RepoStage) -> bool {
   matches!(stage, RepoStage::Staged | RepoStage::PartiallyStaged)
 }
@@ -50,6 +54,10 @@ pub(crate) fn should_confirm_stage(
   has_unresolved_conflict_markers: bool,
 ) -> bool {
   stage_requires_confirmation(status) && has_unresolved_conflict_markers
+}
+
+pub(crate) fn all_entries_staged(entries: &[RepoStatusEntry]) -> bool {
+  !entries.is_empty() && entries.iter().all(|entry| entry.stage == RepoStage::Staged)
 }
 
 pub(crate) fn has_conflicted_entries(entries: &[RepoStatusEntry]) -> bool {
@@ -135,8 +143,11 @@ pub(crate) enum ChangesListEvent {
   OpenFile {
     path: PathBuf,
   },
-  /// A staging action landed: the worktree and the diff moved.
-  Changed,
+  /// A staging action landed: the worktree and the diff moved. `label` names
+  /// the action for the consumer's telemetry.
+  Changed {
+    label: &'static str,
+  },
 }
 
 struct ChangesSection {
@@ -210,6 +221,21 @@ impl ChangesRowsDelegate {
       });
     }
     self.sections = sections;
+  }
+
+  fn index_for_path(&self, path: &Path) -> Option<IndexPath> {
+    for (section_ix, section) in self.sections.iter().enumerate() {
+      for (row_ix, row) in section.rows.iter().enumerate() {
+        if row.path == path {
+          return Some(IndexPath {
+            section: section_ix,
+            row: row_ix,
+            column: 0,
+          });
+        }
+      }
+    }
+    None
   }
 
   fn row_at(&self, ix: IndexPath) -> Option<Rc<RepoStatusEntry>> {
@@ -492,7 +518,6 @@ impl ChangesList {
     }
   }
 
-  #[allow(dead_code)] // set by the Git page, which shows the conflicted file
   pub(crate) fn set_open_file_has_conflict_markers(&mut self, has_markers: bool) {
     self.open_file_has_conflict_markers = has_markers;
   }
@@ -511,12 +536,11 @@ impl ChangesList {
     });
   }
 
-  #[allow(dead_code)] // read by the panel tests, and by the Git page next
+  #[allow(dead_code)] // read by the panel and list tests
   pub(crate) fn entries(&self) -> &[RepoStatusEntry] {
     &self.entries
   }
 
-  #[allow(dead_code)] // consumed when the Git page adopts this list
   pub(crate) fn set_split_sections(&mut self, split_sections: bool, cx: &mut Context<Self>) {
     self.list.update(cx, |state, cx| {
       let delegate = state.delegate_mut();
@@ -533,7 +557,6 @@ impl ChangesList {
     });
   }
 
-  #[allow(dead_code)] // consumed when the Git page adopts this list
   pub(crate) fn focus(&self, window: &mut Window, cx: &mut Context<Self>) {
     let handle = self.list.read(cx).focus_handle(cx);
     window.focus(&handle, cx);
@@ -558,7 +581,7 @@ impl ChangesList {
         let _ = this.update(cx, |this, cx| {
           this.action_in_flight = false;
           match result {
-            Ok(()) => cx.emit(ChangesListEvent::Changed),
+            Ok(()) => cx.emit(ChangesListEvent::Changed { label }),
             Err(error) => {
               window.push_notification(Notification::error(format!("{label} failed: {error}")), cx)
             }
@@ -694,7 +717,6 @@ impl ChangesList {
   }
 
   /// Discards every change in the worktree, so it always asks first.
-  #[allow(dead_code)] // consumed when the Git page adopts this list
   pub(crate) fn confirm_restore_all(&mut self, window: &mut Window, cx: &mut Context<Self>) {
     if self.repo_root.is_none() || self.entries.is_empty() {
       return;
@@ -722,7 +744,6 @@ impl ChangesList {
     });
   }
 
-  #[allow(dead_code)] // consumed when the Git page adopts this list
   pub(crate) fn restore_all(&mut self, window: &mut Window, cx: &mut Context<Self>) {
     let entries = self.entries.clone();
     self.run(
@@ -753,7 +774,6 @@ impl ChangesList {
   }
 
   /// Staging everything while a conflict is unresolved asks first.
-  #[allow(dead_code)] // consumed when the Git page adopts this list
   pub(crate) fn stage_all_with_confirmation(
     &mut self,
     window: &mut Window,
@@ -782,12 +802,46 @@ impl ChangesList {
     });
   }
 
-  #[allow(dead_code)] // consumed when the Git page adopts this list
+  /// The sidebar's single toggle: stage everything, or unstage it all when it
+  /// already is.
+  pub(crate) fn toggle_stage_all(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    if all_entries_staged(&self.entries) {
+      self.unstage_all(window, cx);
+    } else {
+      self.stage_all_with_confirmation(window, cx);
+    }
+  }
+
+  /// Keeps the highlight on the file being shown, or on the first row when the
+  /// previous selection is gone.
+  pub(crate) fn select_path(&mut self, path: Option<&Path>, cx: &mut Context<Self>) {
+    let index = path.and_then(|path| self.list.read(cx).delegate().index_for_path(path));
+    self.list.update(cx, |state, cx| {
+      state.delegate_mut().selected_index = index;
+      cx.notify();
+    });
+  }
+
+  pub(crate) fn has_selection(&self, cx: &App) -> bool {
+    self.list.read(cx).delegate().selected_index.is_some()
+  }
+
+  pub(crate) fn is_focused(&self, window: &Window, cx: &App) -> bool {
+    self.list.read(cx).focus_handle(cx).is_focused(window)
+  }
+
+  pub(crate) fn select_first(&mut self, cx: &mut Context<Self>) {
+    let index = (!self.entries.is_empty()).then(IndexPath::default);
+    self.list.update(cx, |state, cx| {
+      state.delegate_mut().selected_index = index;
+      cx.notify();
+    });
+  }
+
   pub(crate) fn stage_all(&mut self, window: &mut Window, cx: &mut Context<Self>) {
     self.run("Stage all", stage_all, window, cx);
   }
 
-  #[allow(dead_code)] // consumed when the Git page adopts this list
   pub(crate) fn unstage_all(&mut self, window: &mut Window, cx: &mut Context<Self>) {
     self.run("Unstage all", unstage_all, window, cx);
   }
@@ -941,7 +995,7 @@ mod tests {
       let changed = changed.clone();
       cx.update(|_, cx| {
         cx.subscribe(&list, move |_, event: &ChangesListEvent, _| {
-          if matches!(event, ChangesListEvent::Changed) {
+          if matches!(event, ChangesListEvent::Changed { .. }) {
             changed.store(true, std::sync::atomic::Ordering::Relaxed);
           }
         })

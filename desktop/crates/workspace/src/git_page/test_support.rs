@@ -2,6 +2,8 @@
 
 use super::*;
 
+pub(super) use git::{restore_file, stage_file};
+
 use git2::build::CheckoutBuilder;
 use git2::{BranchType, Cred, PushOptions, RemoteCallbacks, Repository, Signature};
 use gpui::TestAppContext;

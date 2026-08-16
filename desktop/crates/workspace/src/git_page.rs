@@ -22,13 +22,12 @@ use git::{
   create_branch_from, create_stash, current_branch_status, current_branch_upstream,
   current_github_remote_repo, current_head_sha, current_history_revision,
   current_rebase_commit_message, default_remote_branch, default_stash_message, delete_branch,
-  delete_untracked_file, detached_head_label, diff_set_from_patch, drop_stash, fetch,
-  head_commit_status, is_merge_in_progress, is_rebase_in_progress, list_branches,
-  list_commit_changed_files, list_commit_history, list_interactive_rebase_commits,
-  list_repo_head_files, list_repo_status, list_stashes, load_commit_file_diff, merge_branch,
-  pop_stash, pull, push, rebase_branch, resolve_branch_ref, restore_file, restore_renamed_file,
-  skip_rebase, stage_all, stage_file, start_interactive_rebase, switch_branch, undo_last_commit,
-  unstage_all, unstage_file,
+  detached_head_label, diff_set_from_patch, drop_stash, fetch, head_commit_status,
+  is_merge_in_progress, is_rebase_in_progress, list_branches, list_commit_changed_files,
+  list_commit_history, list_interactive_rebase_commits, list_repo_head_files, list_repo_status,
+  list_stashes, load_commit_file_diff, merge_branch, pop_stash, pull, push, rebase_branch,
+  resolve_branch_ref, skip_rebase, stage_all, start_interactive_rebase, switch_branch,
+  undo_last_commit,
 };
 use gpui::{
   Anchor, AnyElement, AnyWindowHandle, App, Context, Entity, FocusHandle, Focusable, Global,
@@ -36,14 +35,13 @@ use gpui::{
   Subscription, Task, WeakEntity, Window, actions, div, img, prelude::*, px,
 };
 use gpui_component::{
-  ActiveTheme as _, Disableable, Icon, IconName, IndexPath, Selectable, Sizable, StyledExt,
+  ActiveTheme as _, Disableable, Icon, IconName, Selectable, Sizable, StyledExt,
   button::{Button, ButtonGroup, ButtonVariant, ButtonVariants as _},
   checkbox::Checkbox,
   dialog::{DialogDescription, DialogFooter, DialogHeader, DialogTitle},
   h_flex,
   input::InputEvent,
   kbd::Kbd,
-  list::{List, ListDelegate, ListEvent, ListItem, ListState},
   menu::{DropdownMenu, PopupMenuItem},
   notification::Notification,
   select::{Select, SelectEvent, SelectState},
@@ -129,7 +127,7 @@ mod test_support;
 
 pub(crate) use pull_request_dialog::open_create_pull_request_dialog;
 
-use file_list::{GitFileListDelegate, format_git_file_name_label, render_repo_status_label};
+use file_list::{format_git_file_name_label, render_repo_status_label};
 use history::{HistoryCommitFileRow, HistoryRenderRow, HistoryTreeNode};
 
 const SIDEBAR_DEFAULT_WIDTH: f32 = 400.0;
@@ -155,12 +153,6 @@ const TERMINAL_SIDEBAR_MIN_WIDTH: f32 = 320.0;
 const TERMINAL_SIDEBAR_MAX_WIDTH: f32 = 1200.0;
 type RepoSelectHandler = Rc<dyn Fn(PathBuf, &mut Window, &mut App)>;
 type BranchSelectHandler = Rc<dyn Fn(BranchRef, &mut Window, &mut App)>;
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum FileStageButtonAction {
-  Stage,
-  Unstage,
-}
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct GithubBranchContext {
@@ -598,7 +590,7 @@ pub struct GitPage {
   api: ApiClient,
   repo_dropdown_items: Vec<RecentRepoItem>,
   branch_dropdown_items: Vec<BranchSelectItem>,
-  file_list: Entity<ListState<GitFileListDelegate>>,
+  changes_list: Entity<ChangesList>,
   history_tree: Entity<TreeState>,
   window_handle: AnyWindowHandle,
   selected_repo: Option<PathBuf>,
@@ -632,7 +624,6 @@ pub struct GitPage {
   history_tree_nodes: HashMap<String, HistoryTreeNode>,
   selected_file: Option<PathBuf>,
   selected_file_source: Option<SelectedFileSource>,
-  selected_file_index_hint: Option<IndexPath>,
   select_first_file_after_restore: bool,
   force_list_selection: bool,
   editor: Option<Entity<Editor>>,
@@ -695,6 +686,7 @@ struct UnpublishedBranchCheckKey {
 }
 
 use crate::agent_review::AgentReviewComments;
+use crate::changes_list::{ChangesList, ChangesListEvent};
 use crate::diff_view_policy::{DiffViewInputs, effective_diff_view};
 use crate::svg_preview::SvgPreview;
 
@@ -1285,10 +1277,6 @@ impl GitPage {
     Some((has_unpublished_branch_commits, Some(next_key), true))
   }
 
-  fn should_refresh_editor_for_path(selected_file: Option<&Path>, rel_path: &Path) -> bool {
-    selected_file == Some(rel_path)
-  }
-
   fn first_conflicted_path(repo_root: &Path) -> Option<PathBuf> {
     list_repo_status(repo_root)
       .ok()?
@@ -1455,47 +1443,24 @@ impl GitPage {
     });
   }
 
-  fn selected_file_index(&self, cx: &Context<Self>) -> Option<IndexPath> {
-    let selected = self.selected_file.as_ref()?;
-    let delegate = self.file_list.read(cx).delegate();
-    if let Some(hint) = self.selected_file_index_hint
-      && let Some(row) = delegate.row_at(hint)
-      && row.entry.path == *selected
-    {
-      return Some(hint);
-    }
-    delegate.find_index_for_path(selected)
-  }
-
-  fn set_file_list_selected_index(&self, index: Option<IndexPath>, cx: &mut Context<Self>) {
-    let file_list = self.file_list.clone();
-    let window_handle = self.window_handle;
-    let _ = cx.update_window(window_handle, move |_, window, cx| {
-      file_list.update(cx, |state, cx| {
-        state.set_selected_index(index, window, cx);
-      });
-    });
-  }
-
   fn refresh_file_list(&mut self, cx: &mut Context<Self>) {
     self.git_unified_file_view = crate::config::AppSettings::get(cx).git_unified_file_view;
     let rows = self.status_entries.clone();
     let split_sections = !self.git_unified_file_view;
     let opened_path = self.selected_file.clone();
-    self.file_list.update(cx, |state, cx| {
-      state.delegate_mut().set_rows(rows.clone(), split_sections);
-      state.delegate_mut().set_opened_path(opened_path);
-      cx.notify();
-    });
+    let select_first = std::mem::take(&mut self.select_first_file_after_restore);
+    self.force_list_selection = false;
 
-    let selected_index = if self.force_list_selection {
-      self.force_list_selection = false;
-      self.selected_file_index(cx)
-    } else {
-      // Try to preserve the selected file by path rather than raw index
-      self.selected_file_index(cx)
-    };
-    self.set_file_list_selected_index(selected_index, cx);
+    self.changes_list.update(cx, |list, cx| {
+      list.set_split_sections(split_sections, cx);
+      list.set_entries(rows, cx);
+      list.set_opened_path(opened_path.clone(), cx);
+      if select_first {
+        list.select_first(cx);
+      } else {
+        list.select_path(opened_path.as_deref(), cx);
+      }
+    });
   }
 
   fn handle_auth_code(&mut self, code: String, cx: &mut Context<Self>) {
@@ -1637,10 +1602,9 @@ impl GitPage {
       .iter()
       .map(|repo| RecentRepoItem::new(repo, selected_repo.as_deref()))
       .collect();
-    let git_page_weak = cx.entity().downgrade();
-    let file_list =
-      cx.new(|cx| ListState::new(GitFileListDelegate::new(git_page_weak), window, cx));
-    let _ = file_list.read(cx).focus_handle(cx).tab_stop(true);
+    let split_sections = !crate::config::AppSettings::get(cx).git_unified_file_view;
+    let changes_list =
+      cx.new(|cx| ChangesList::new(selected_repo.clone(), split_sections, window, cx));
     let history_tree = cx.new(|cx| TreeState::new(cx));
 
     let commit_input = cx.new(|cx| {
@@ -1657,7 +1621,7 @@ impl GitPage {
       api: WorkspaceApi::global(cx).api.clone(),
       repo_dropdown_items,
       branch_dropdown_items: Vec::new(),
-      file_list,
+      changes_list,
       history_tree,
       window_handle: window.window_handle(),
       selected_repo,
@@ -1691,7 +1655,6 @@ impl GitPage {
       history_tree_nodes: HashMap::new(),
       selected_file: None,
       selected_file_source: None,
-      selected_file_index_hint: None,
       select_first_file_after_restore: false,
       force_list_selection: false,
       editor: None,
@@ -1752,10 +1715,8 @@ impl GitPage {
 
   #[cfg(test)]
   fn new_for_test(window: &mut Window, cx: &mut Context<Self>) -> Self {
-    let git_page_weak = cx.entity().downgrade();
-    let file_list =
-      cx.new(|cx| ListState::new(GitFileListDelegate::new(git_page_weak), window, cx));
-    let _ = file_list.read(cx).focus_handle(cx).tab_stop(true);
+    let split_sections = !crate::config::AppSettings::get(cx).git_unified_file_view;
+    let changes_list = cx.new(|cx| ChangesList::new(None, split_sections, window, cx));
     let history_tree = cx.new(|cx| TreeState::new(cx));
     let commit_input = cx.new(|cx| {
       TextareaState::new(window, cx)
@@ -1769,7 +1730,7 @@ impl GitPage {
       api: ApiClient::new(),
       repo_dropdown_items: Vec::new(),
       branch_dropdown_items: Vec::new(),
-      file_list,
+      changes_list,
       history_tree,
       window_handle: window.window_handle(),
       selected_repo: None,
@@ -1803,7 +1764,6 @@ impl GitPage {
       history_tree_nodes: HashMap::new(),
       selected_file: None,
       selected_file_source: None,
-      selected_file_index_hint: None,
       select_first_file_after_restore: false,
       force_list_selection: false,
       editor: None,
@@ -1971,16 +1931,18 @@ impl GitPage {
 
   fn subscribe_to_file_list(&mut self, cx: &mut Context<Self>) {
     cx.subscribe(
-      &self.file_list,
-      move |this, state, event: &ListEvent, cx| match event {
-        ListEvent::Select(ix) | ListEvent::Confirm(ix) => {
-          let row = state.read(cx).delegate().row_at(*ix);
-          if let Some(row) = row {
-            this.selected_file_index_hint = Some(*ix);
-            this.open_status_file(row.entry.path.clone(), cx);
+      &self.changes_list,
+      move |this, _list, event: &ChangesListEvent, cx| match event {
+        ChangesListEvent::OpenFile { path } => this.open_status_file(path.clone(), cx),
+        ChangesListEvent::Changed { label } => {
+          let mut data = Map::new();
+          data.insert("action".into(), (*label).into());
+          this.add_git_breadcrumb("Staging action succeeded", data);
+          this.reload_status(cx);
+          if let Some(editor) = this.editor.clone() {
+            editor.update(cx, |editor, cx| editor.refresh_git_state(cx));
           }
         }
-        ListEvent::Cancel => {}
       },
     )
     .detach();
@@ -3042,14 +3004,11 @@ impl GitPage {
     self.editor = None;
     self.binary_preview = None;
     self.svg_preview.update(cx, |preview, _| preview.clear());
-    self.force_list_selection = true;
     let opened_path = self.selected_file.clone();
-    self.file_list.update(cx, |state, cx| {
-      state.delegate_mut().set_opened_path(opened_path);
-      cx.notify();
+    self.changes_list.update(cx, |list, cx| {
+      list.set_opened_path(opened_path.clone(), cx);
+      list.select_path(opened_path.as_deref(), cx);
     });
-    let selected_index = self.selected_file_index(cx);
-    self.set_file_list_selected_index(selected_index, cx);
     if had_history_file_selection {
       self.refresh_history_list(cx);
     }
@@ -3188,14 +3147,11 @@ impl GitPage {
   }
 
   fn focus_changes_sidebar_list(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-    if self.file_list.read(cx).selected_index().is_none() && !self.status_entries.is_empty() {
-      self.file_list.update(cx, |state, cx| {
-        state.set_selected_index(Some(IndexPath::new(0)), window, cx);
-      });
-    }
-
-    self.file_list.update(cx, |state, cx| {
-      state.focus(window, cx);
+    self.changes_list.update(cx, |list, cx| {
+      if !list.has_selection(cx) {
+        list.select_first(cx);
+      }
+      list.focus(window, cx);
     });
   }
 
@@ -3333,18 +3289,6 @@ impl GitPage {
       RepoStatusKind::TypeChange => theme.status_blue(),
       RepoStatusKind::Untracked => theme.status_green(),
       RepoStatusKind::Conflicted => theme.status_red(),
-    }
-  }
-
-  fn status_tooltip(kind: RepoStatusKind) -> SharedString {
-    match kind {
-      RepoStatusKind::Modified => "Modified".into(),
-      RepoStatusKind::Added => "Added".into(),
-      RepoStatusKind::Deleted => "Deleted".into(),
-      RepoStatusKind::Renamed => "Renamed".into(),
-      RepoStatusKind::TypeChange => "Type changed".into(),
-      RepoStatusKind::Untracked => "Untracked".into(),
-      RepoStatusKind::Conflicted => "Conflicted".into(),
     }
   }
 
@@ -3487,11 +3431,11 @@ impl GitPage {
   }
 
   fn should_show_stage_all_command(entries: &[RepoStatusEntry]) -> bool {
-    Self::changed_files_count(entries) > 0 && !Self::all_entries_staged(entries)
+    Self::changed_files_count(entries) > 0 && !crate::changes_list::all_entries_staged(entries)
   }
 
   fn should_show_unstage_all_command(entries: &[RepoStatusEntry]) -> bool {
-    Self::all_entries_staged(entries)
+    crate::changes_list::all_entries_staged(entries)
   }
 
   fn build_history_rows(commits: &[HistoryCommitNode]) -> Vec<HistoryRenderRow> {
@@ -4194,13 +4138,10 @@ mod tests {
         make_status_entry("src/lib.rs", RepoStage::Unstaged),
       ];
       this.refresh_file_list(cx);
-      assert_eq!(this.file_list.read(cx).selected_index(), None);
+      assert!(!this.changes_list.read(cx).has_selection(cx));
 
       this.focus_changes_sidebar_list(window, cx);
-      assert_eq!(
-        this.file_list.read(cx).selected_index(),
-        Some(IndexPath::new(0))
-      );
+      assert!(this.changes_list.read(cx).has_selection(cx));
     });
   }
 
@@ -5379,21 +5320,5 @@ mod tests {
         .iter()
         .any(|item| item.branch.name == "alpha" && item.is_current)
     );
-  }
-
-  #[test]
-  fn should_refresh_editor_for_path_only_when_selected_matches() {
-    let selected = Path::new("src/main.rs");
-    let other = Path::new("src/lib.rs");
-
-    assert!(GitPage::should_refresh_editor_for_path(
-      Some(selected),
-      selected
-    ));
-    assert!(!GitPage::should_refresh_editor_for_path(
-      Some(selected),
-      other
-    ));
-    assert!(!GitPage::should_refresh_editor_for_path(None, selected));
   }
 }
