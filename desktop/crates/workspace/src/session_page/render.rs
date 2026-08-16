@@ -782,6 +782,7 @@ mod tests {
   use crate::test_support::{TempRepo, commit_text_file};
   use gpui::TestAppContext;
   use std::path::Path;
+  use ui::CommandPaletteCommandId;
   #[gpui::test]
   async fn the_repo_line_is_painted_without_connecting_an_agent(cx: &mut TestAppContext) {
     let repo = TempRepo::init("session-page-repo-line");
@@ -1546,6 +1547,16 @@ mod tests {
         "nothing left to accept once the markers are gone"
       );
     });
+    page.update(cx, |_, cx| cx.notify());
+    cx.run_until_parked();
+    assert!(
+      cx.debug_bounds(ACCEPT_ALL_CURRENT_DEBUG_SELECTOR).is_none(),
+      "a resolved file carries no accept-all controls"
+    );
+    assert!(
+      cx.debug_bounds(ACCEPT_ALL_INCOMING_DEBUG_SELECTOR)
+        .is_none()
+    );
     // Current side of a merge is what HEAD held.
     page.read_with(cx, |page, cx| {
       let first_line = page
@@ -1559,6 +1570,124 @@ mod tests {
         .expect("first line")
         .to_string();
       assert_eq!(first_line.trim_end(), "line 1");
+    });
+  }
+
+  #[gpui::test]
+  async fn the_palette_accepts_the_incoming_side(cx: &mut TestAppContext) {
+    let repo = TempRepo::init("session-render-accept-incoming");
+    commit_text_file(&repo.path, Path::new("a.txt"), "base\n", "initial");
+    let base = git::BranchRef {
+      name: git::current_branch_status(&repo.path)
+        .expect("branch status")
+        .name,
+      kind: git::BranchKind::Local,
+    };
+    let feature = git::BranchRef {
+      name: "feature".to_string(),
+      kind: git::BranchKind::Local,
+    };
+    git::create_branch(&repo.path, &feature.name).expect("create branch");
+    git::switch_branch(&repo.path, &feature).expect("switch to feature");
+    commit_text_file(&repo.path, Path::new("a.txt"), "feature\n", "feature work");
+    git::switch_branch(&repo.path, &base).expect("switch back");
+    commit_text_file(&repo.path, Path::new("a.txt"), "main\n", "main work");
+    let _ = git::merge_branch(&repo.path, &feature);
+
+    let (page, cx) = add_session_page_window(repo.path.clone(), cx);
+    cx.executor().allow_parking();
+    let refresh = page.update(cx, |page, cx| {
+      page.dock_panel.update(cx, |panel, cx| {
+        panel.refresh(cx);
+        panel._refresh_task.take().expect("refresh task")
+      })
+    });
+    refresh.await;
+    cx.run_until_parked();
+
+    page.update_in(cx, |page, window, cx| {
+      page.open_diff(PathBuf::from("a.txt"), None, window, cx);
+    });
+    await_open_file(&page, cx).await;
+
+    page.read_with(cx, |page, cx| {
+      let ids = page
+        .palette_commands(1, cx)
+        .into_iter()
+        .map(|command| command.id)
+        .collect::<Vec<_>>();
+      assert!(ids.contains(&CommandPaletteCommandId::AcceptAllCurrentConflicts));
+      assert!(ids.contains(&CommandPaletteCommandId::AcceptAllIncomingConflicts));
+    });
+
+    page.update_in(cx, |page, window, cx| {
+      page
+        .handle_command_palette_action(CommandPaletteAction::AcceptAllIncomingConflicts, window, cx)
+        .expect("accept the incoming side")
+    });
+    cx.run_until_parked();
+
+    // Incoming is what the merged branch held.
+    page.read_with(cx, |page, cx| {
+      let editor = page.editor.as_ref().expect("editor").read(cx);
+      assert!(!editor.has_unresolved_conflict_markers(cx));
+      let first_line = editor
+        .document()
+        .read(cx)
+        .line_content(0)
+        .expect("first line")
+        .to_string();
+      assert_eq!(first_line.trim_end(), "feature");
+    });
+  }
+
+  #[gpui::test]
+  async fn accepting_a_side_does_nothing_without_a_conflict(cx: &mut TestAppContext) {
+    let repo = TempRepo::init("session-render-accept-guard");
+    commit_text_file(&repo.path, Path::new("a.txt"), "v1\n", "initial");
+    std::fs::write(repo.path.join("a.txt"), "v2\n").expect("update file");
+
+    let (page, cx) = add_session_page_window(repo.path.clone(), cx);
+    cx.executor().allow_parking();
+    let refresh = page.update(cx, |page, cx| {
+      page.dock_panel.update(cx, |panel, cx| {
+        panel.refresh(cx);
+        panel._refresh_task.take().expect("refresh task")
+      })
+    });
+    refresh.await;
+    cx.run_until_parked();
+
+    page.update_in(cx, |page, window, cx| {
+      page.open_diff(PathBuf::from("a.txt"), None, window, cx);
+    });
+    await_open_file(&page, cx).await;
+    page.update(cx, |_, cx| cx.notify());
+    cx.run_until_parked();
+
+    assert!(
+      cx.debug_bounds(ACCEPT_ALL_CURRENT_DEBUG_SELECTOR).is_none(),
+      "a plain modified file has no side to accept"
+    );
+
+    // Dispatched anyway: the file must stay as it is.
+    page.update_in(cx, |page, window, cx| {
+      page
+        .handle_command_palette_action(CommandPaletteAction::AcceptAllCurrentConflicts, window, cx)
+        .expect("the action is a no-op")
+    });
+    cx.run_until_parked();
+
+    page.read_with(cx, |page, cx| {
+      let editor = page.editor.as_ref().expect("editor").read(cx);
+      assert!(!editor.is_dirty, "nothing was rewritten");
+      let first_line = editor
+        .document()
+        .read(cx)
+        .line_content(0)
+        .expect("first line")
+        .to_string();
+      assert_eq!(first_line.trim_end(), "v2");
     });
   }
 

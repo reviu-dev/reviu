@@ -1870,6 +1870,8 @@ mod tests {
       assert_eq!(page.center, CenterView::Diff);
       assert_eq!(page.opened_commit.as_deref(), Some(first.as_str()));
       let editor = page.editor.as_ref().expect("editor").read(cx);
+      // A snapshot has no working-tree status, so it is walked change by change.
+      assert!(page.selected_file_status(cx).is_none());
       // The commit content, not what the worktree holds now.
       let first_line = editor
         .document()
