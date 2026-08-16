@@ -1,4 +1,4 @@
-//! Agent-first shell: sessions sidebar, conversation center, review panel.
+//! Agent-first shell: sessions sidebar, conversation center, right dock.
 
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
@@ -29,6 +29,7 @@ use crate::auth_state::AuthStateStore;
 use crate::config::ConfigStore;
 use crate::date_format::format_relative_time;
 use crate::diff_view_policy::{DiffViewInputs, effective_diff_view};
+use crate::dock_panel::{DockPanel, DockPanelEvent};
 use crate::file_search_palette::open_file_search_palette;
 use crate::file_view::{
   BinaryPreview, build_binary_preview, render_binary_preview, render_file_title,
@@ -40,7 +41,6 @@ use crate::github_notifications::{self, GithubNotificationsStore};
 use crate::navigation::NavigationHistory;
 use crate::repo_command::{RepoCommand, RepoCommandOutcome};
 use crate::repo_state::{PaletteCommand, RepoState, push_flags};
-use crate::review_panel::{ReviewPanel, ReviewPanelEvent};
 use crate::svg_preview::SvgPreview;
 use crate::{
   CloseWorkspacePage, CommentHunk, SendReviewCommentsToAgent, ShowCommandPalette, ShowFileSearch,
@@ -65,9 +65,9 @@ const SESSIONS_SIDEBAR_MIN_WIDTH: f32 = 200.0;
 const SESSIONS_SIDEBAR_MAX_WIDTH: f32 = 420.0;
 const INBOX_MAX_HEIGHT: f32 = 220.0;
 const CENTER_SWAP_FADE_MS: u64 = 180;
-const REVIEW_PANEL_DEFAULT_WIDTH: f32 = 320.0;
-const REVIEW_PANEL_MIN_WIDTH: f32 = 240.0;
-const REVIEW_PANEL_MAX_WIDTH: f32 = 560.0;
+const DOCK_PANEL_DEFAULT_WIDTH: f32 = 320.0;
+const DOCK_PANEL_MIN_WIDTH: f32 = 240.0;
+const DOCK_PANEL_MAX_WIDTH: f32 = 560.0;
 
 pub(crate) fn format_relative_secs(updated_at_secs: u64, now_secs: u64) -> String {
   let delta = now_secs.saturating_sub(updated_at_secs);
@@ -154,7 +154,7 @@ pub struct SessionPage {
   focus_handle: FocusHandle,
   window_handle: AnyWindowHandle,
   agent_chat_view: Option<Entity<AgentChatPanel>>,
-  review_panel: Entity<ReviewPanel>,
+  dock_panel: Entity<DockPanel>,
   selected_repo: Option<PathBuf>,
   center: CenterView,
   editor: Option<Entity<Editor>>,
@@ -162,6 +162,9 @@ pub struct SessionPage {
   selected_file: Option<PathBuf>,
   /// Set while the center shows a file as it was in a commit.
   opened_commit: Option<String>,
+  /// Mounting a real agent panel in a test would spawn an agent process.
+  #[cfg(test)]
+  pretend_agent_turn_in_flight: bool,
   open_file_generation: u64,
   open_file_task: Option<Task<()>>,
   agent_review: AgentReviewComments,
@@ -187,21 +190,21 @@ impl SessionPage {
     let selected_repo = ConfigStore::load_recent_repositories()
       .first()
       .map(|repo| repo.path.clone());
-    let review_panel = cx.new(|cx| ReviewPanel::new(selected_repo.clone(), window, cx));
+    let dock_panel = cx.new(|cx| DockPanel::new(selected_repo.clone(), window, cx));
     let svg_preview = cx.new(|_| SvgPreview::new());
     // The SVG renders on a background task; repaint when it lands.
     cx.observe(&svg_preview, |_, _, cx| cx.notify()).detach();
     cx.subscribe_in(
-      &review_panel,
+      &dock_panel,
       window,
-      |this, _panel, event: &ReviewPanelEvent, window, cx| match event {
-        ReviewPanelEvent::OpenFile { path } => {
+      |this, _panel, event: &DockPanelEvent, window, cx| match event {
+        DockPanelEvent::OpenFile { path } => {
           this.open_diff(path.clone(), None, window, cx);
         }
-        ReviewPanelEvent::OpenCommitFile { commit_oid, path } => {
+        DockPanelEvent::OpenCommitFile { commit_oid, path } => {
           this.open_commit_file(commit_oid.clone(), path.clone(), window, cx);
         }
-        ReviewPanelEvent::Committed => {
+        DockPanelEvent::Committed => {
           this.refresh_branch(cx);
         }
       },
@@ -212,13 +215,15 @@ impl SessionPage {
       focus_handle: cx.focus_handle(),
       window_handle: window.window_handle(),
       agent_chat_view: None,
-      review_panel,
+      dock_panel,
       selected_repo,
       center: CenterView::Conversation,
       editor: None,
       binary_preview: None,
       selected_file: None,
       opened_commit: None,
+      #[cfg(test)]
+      pretend_agent_turn_in_flight: false,
       open_file_generation: 0,
       open_file_task: None,
       agent_review: AgentReviewComments::new(),
@@ -346,7 +351,7 @@ impl SessionPage {
           &editor,
           |this, _editor, event: &EditorEvent, cx| match event {
             EditorEvent::Saved => {
-              this.review_panel.update(cx, |panel, cx| panel.refresh(cx));
+              this.dock_panel.update(cx, |panel, cx| panel.refresh(cx));
             }
           },
         )
@@ -428,7 +433,7 @@ impl SessionPage {
     if self.opened_commit.take().is_none() {
       return false;
     }
-    let history = self.review_panel.read(cx).history_list.clone();
+    let history = self.dock_panel.read(cx).history_list.clone();
     history.update(cx, |list, cx| list.set_opened(None, cx));
     true
   }
@@ -453,7 +458,7 @@ impl SessionPage {
       return false;
     };
     self
-      .review_panel
+      .dock_panel
       .read(cx)
       .status_entries()
       .iter()
@@ -498,7 +503,7 @@ impl SessionPage {
 
   fn whole_file_change(&self, path: &Path, cx: &App) -> bool {
     self
-      .review_panel
+      .dock_panel
       .read(cx)
       .status_entries()
       .iter()
@@ -685,7 +690,7 @@ impl SessionPage {
     };
 
     let status_entries: Vec<git::RepoStatusEntry> =
-      self.review_panel.read(cx).status_entries().to_vec();
+      self.dock_panel.read(cx).status_entries().to_vec();
     let mut changed_paths = HashSet::new();
     for entry in &status_entries {
       changed_paths.insert(entry.path.clone());
@@ -723,7 +728,7 @@ impl SessionPage {
   fn repo_state<'a>(&'a self, commit_message: &'a str, cx: &'a App) -> RepoState<'a> {
     let branch_status = self.branch_status.as_ref();
     let (can_push, can_force_push) = push_flags(branch_status, branch_status.is_some(), false);
-    let status_entries = self.review_panel.read(cx).status_entries();
+    let status_entries = self.dock_panel.read(cx).status_entries();
     RepoState {
       has_repo: self.selected_repo.is_some(),
       merge_in_progress: false,
@@ -779,7 +784,7 @@ impl SessionPage {
                   this.open_diff(path, None, window, cx);
                 }
               }
-              this.review_panel.update(cx, |panel, cx| panel.refresh(cx));
+              this.dock_panel.update(cx, |panel, cx| panel.refresh(cx));
               this.refresh_branch(cx);
             }
             Err(error) => {
@@ -861,7 +866,7 @@ impl SessionPage {
     // Conversations are stored per repository, so the panel is rebuilt on the
     // next render with the new cwd and state directory.
     self.agent_chat_view = None;
-    self.review_panel.update(cx, |panel, cx| {
+    self.dock_panel.update(cx, |panel, cx| {
       panel.set_repo_root(repo_root, cx);
       panel.refresh(cx);
     });
@@ -930,7 +935,7 @@ impl SessionPage {
     }
 
     if self.selected_repo.is_some() {
-      let commit_message = self.review_panel.read(cx).commit_message(cx);
+      let commit_message = self.dock_panel.read(cx).commit_message(cx);
       let state = self.repo_state(&commit_message, cx);
       if state.allows(PaletteCommand::Commit) {
         commands.push(CommandPaletteCommand::commit());
@@ -997,7 +1002,7 @@ impl SessionPage {
         if self.selected_repo.is_none() {
           return Err("No repository selected.".into());
         }
-        self.review_panel.update(cx, |panel, cx| panel.commit(cx));
+        self.dock_panel.update(cx, |panel, cx| panel.commit(cx));
         Ok(())
       }
       CommandPaletteAction::StageAll => self.run_repo_command(RepoCommand::StageAll, window, cx),
@@ -1152,9 +1157,63 @@ mod tests {
       // Conversations are stored per repository, so the panel is rebuilt.
       assert!(page.agent_chat_view.is_none());
       assert_eq!(
-        page.review_panel.read(cx).repo_root(),
+        page.dock_panel.read(cx).repo_root(),
         Some(other.path.as_path())
       );
+    });
+  }
+
+  #[gpui::test]
+  async fn a_repository_cannot_move_under_a_running_agent(cx: &mut TestAppContext) {
+    let repo = TempRepo::init("session-page-turn-guard-from");
+    commit_text_file(&repo.path, Path::new("README.md"), "v1\n", "initial");
+    let other = TempRepo::init("session-page-turn-guard-to");
+    commit_text_file(&other.path, Path::new("README.md"), "other\n", "initial");
+
+    let (page, cx) = add_session_page_window(repo.path.clone(), cx);
+    cx.executor().allow_parking();
+    cx.run_until_parked();
+    ConfigStore::persist_recent_repository(&repo.path);
+    page.update(cx, |page, _| page.pretend_agent_turn_in_flight = true);
+
+    let switch = page.update_in(cx, |page, window, cx| {
+      page.set_selected_repo(other.path.clone(), window, cx)
+    });
+    assert_eq!(
+      switch.expect_err("switching is refused mid-turn").as_ref(),
+      "Wait for the agent to finish before switching repository."
+    );
+
+    let forget = page.update_in(cx, |page, window, cx| {
+      page.forget_repository(repo.path.clone(), window, cx)
+    });
+    assert_eq!(
+      forget
+        .expect_err("forgetting the open repository is refused mid-turn")
+        .as_ref(),
+      "Wait for the agent to finish before forgetting this repository."
+    );
+
+    // The shell stayed where it was.
+    page.read_with(cx, |page, _| {
+      assert_eq!(page.selected_repo.as_deref(), Some(repo.path.as_path()));
+    });
+    assert!(
+      ConfigStore::load_recent_repositories()
+        .iter()
+        .any(|recent| recent.path == repo.path),
+      "a refused forget must not drop the repository from the list"
+    );
+
+    // The turn ends: the switch goes through.
+    page.update(cx, |page, _| page.pretend_agent_turn_in_flight = false);
+    page.update_in(cx, |page, window, cx| {
+      page
+        .set_selected_repo(other.path.clone(), window, cx)
+        .expect("switching once the agent is idle")
+    });
+    page.read_with(cx, |page, _| {
+      assert_eq!(page.selected_repo.as_deref(), Some(other.path.as_path()));
     });
   }
 
@@ -1320,7 +1379,7 @@ mod tests {
 
     page.read_with(cx, |page, cx| {
       assert!(page.selected_repo.is_none());
-      assert!(page.review_panel.read(cx).repo_root().is_none());
+      assert!(page.dock_panel.read(cx).repo_root().is_none());
       assert!(page.branch_status.is_none());
     });
   }
@@ -1423,7 +1482,7 @@ mod tests {
     let (page, cx) = add_session_page_window(repo.path.clone(), cx);
     cx.executor().allow_parking();
     page.update(cx, |page, cx| {
-      page.review_panel.update(cx, |panel, cx| panel.refresh(cx));
+      page.dock_panel.update(cx, |panel, cx| panel.refresh(cx));
       page.refresh_branch(cx);
     });
     await_branch_refresh(&page, cx).await;
@@ -1452,7 +1511,7 @@ mod tests {
     // A change and a message: committing and staging show up.
     std::fs::write(repo.path.join("a.txt"), "v2\n").expect("update file");
     let refresh = page.update(cx, |page, cx| {
-      page.review_panel.update(cx, |panel, cx| {
+      page.dock_panel.update(cx, |panel, cx| {
         panel.refresh(cx);
         panel._refresh_task.take().expect("refresh task")
       })
@@ -1460,7 +1519,7 @@ mod tests {
     refresh.await;
     cx.run_until_parked();
     page.update_in(cx, |page, window, cx| {
-      page.review_panel.update(cx, |panel, cx| {
+      page.dock_panel.update(cx, |panel, cx| {
         panel.set_commit_message_for_test("a message", window, cx)
       });
     });
@@ -1528,13 +1587,11 @@ mod tests {
     let (page, cx) = add_session_page_window(repo.path.clone(), cx);
     cx.executor().allow_parking();
     page.update(cx, |page, cx| {
-      page.review_panel.update(cx, |panel, cx| panel.refresh(cx))
+      page.dock_panel.update(cx, |panel, cx| panel.refresh(cx))
     });
     cx.run_until_parked();
 
-    let history = page.read_with(cx, |page, cx| {
-      page.review_panel.read(cx).history_list.clone()
-    });
+    let history = page.read_with(cx, |page, cx| page.dock_panel.read(cx).history_list.clone());
     history.update(cx, |list, cx| {
       list.open_commit_file(first.clone(), PathBuf::from("a.txt"), cx)
     });
@@ -1598,7 +1655,7 @@ mod tests {
     let (page, cx) = add_session_page_window(repo.path.clone(), cx);
     cx.executor().allow_parking();
     page.update(cx, |page, cx| {
-      page.review_panel.update(cx, |panel, cx| panel.refresh(cx))
+      page.dock_panel.update(cx, |panel, cx| panel.refresh(cx))
     });
     cx.run_until_parked();
 

@@ -96,7 +96,7 @@ impl SessionPage {
           this.create_turn_checkpoint(cx);
         }
         AgentChatPanelEvent::TurnFinished => {
-          this.review_panel.update(cx, |panel, cx| panel.refresh(cx));
+          this.dock_panel.update(cx, |panel, cx| panel.refresh(cx));
           if let Some(editor) = this.editor.clone() {
             editor.update(cx, |editor, cx| editor.refresh_git_state(cx));
           }
@@ -176,7 +176,7 @@ impl SessionPage {
                 panel.truncate_at_checkpoint(&ref_name, cx);
               });
             }
-            this.review_panel.update(cx, |panel, cx| panel.refresh(cx));
+            this.dock_panel.update(cx, |panel, cx| panel.refresh(cx));
             if let Some(editor) = this.editor.clone() {
               editor.update(cx, |editor, cx| editor.refresh_git_state(cx));
             }
@@ -437,6 +437,10 @@ impl SessionPage {
   }
 
   pub(super) fn agent_turn_in_flight(&self, cx: &App) -> bool {
+    #[cfg(test)]
+    if self.pretend_agent_turn_in_flight {
+      return true;
+    }
     self
       .agent_chat_view
       .as_ref()

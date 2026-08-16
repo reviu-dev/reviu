@@ -49,7 +49,7 @@ pub(super) fn add_session_page_window(
   let page = mounted.expect("session page");
   page.update(cx, |page, cx| {
     page.selected_repo = Some(repo_root.clone());
-    page.review_panel.update(cx, |panel, cx| {
+    page.dock_panel.update(cx, |panel, cx| {
       panel.set_repo_root(Some(repo_root.clone()), cx)
     });
   });

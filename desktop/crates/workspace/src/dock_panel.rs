@@ -1,4 +1,4 @@
-//! Session review panel: working-tree changeset and commit actions.
+//! The right dock of the shell: changes, files, history, pull request, terminal.
 
 #[cfg(test)]
 use std::path::Path;
@@ -23,13 +23,13 @@ use terminal::TerminalView;
 use crate::changes_list::{ChangesList, ChangesListEvent};
 use crate::history_list::{HistoryList, HistoryListEvent};
 
-const REVIEW_PANEL_TERMINAL_DEBUG_SELECTOR: &str = "review-panel-terminal";
-pub(crate) const REVIEW_PANEL_HISTORY_DEBUG_SELECTOR: &str = "review-panel-history";
+const DOCK_PANEL_TERMINAL_DEBUG_SELECTOR: &str = "dock-panel-terminal";
+pub(crate) const DOCK_PANEL_HISTORY_DEBUG_SELECTOR: &str = "dock-panel-history";
 #[cfg(test)]
-const REVIEW_PANEL_TERMINAL_TAB_DEBUG_SELECTOR: &str = "review-panel-tab-terminal";
+const DOCK_PANEL_TERMINAL_TAB_DEBUG_SELECTOR: &str = "dock-panel-tab-terminal";
 #[cfg(test)]
-const REVIEW_PANEL_HISTORY_TAB_DEBUG_SELECTOR: &str = "review-panel-tab-history";
-const REVIEW_PANEL_REFRESH_DEBUG_SELECTOR: &str = "review-panel-refresh";
+const DOCK_PANEL_HISTORY_TAB_DEBUG_SELECTOR: &str = "dock-panel-tab-history";
+const DOCK_PANEL_REFRESH_DEBUG_SELECTOR: &str = "dock-panel-refresh";
 use std::collections::BTreeMap;
 use std::rc::Rc;
 
@@ -44,7 +44,7 @@ use crate::workspace::WorkspaceApi;
 use ui::{Button, ButtonVariants as _, StatusThemeExt as _, Textarea, TextareaState, UiIconName};
 
 #[derive(Clone, Debug)]
-pub enum ReviewPanelEvent {
+pub enum DockPanelEvent {
   OpenFile {
     path: PathBuf,
   },
@@ -57,10 +57,10 @@ pub enum ReviewPanelEvent {
   Committed,
 }
 
-impl gpui::EventEmitter<ReviewPanelEvent> for ReviewPanel {}
+impl gpui::EventEmitter<DockPanelEvent> for DockPanel {}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum ReviewPanelTab {
+enum DockPanelTab {
   Changes,
   Files,
   History,
@@ -145,7 +145,7 @@ fn branch_pr_state_for_lookup(
   }
 }
 
-pub struct ReviewPanel {
+pub struct DockPanel {
   focus_handle: FocusHandle,
   window_handle: AnyWindowHandle,
   repo_root: Option<PathBuf>,
@@ -153,7 +153,7 @@ pub struct ReviewPanel {
   commit_input: Entity<TextareaState>,
   committing: bool,
   last_error: Option<SharedString>,
-  active_tab: ReviewPanelTab,
+  active_tab: DockPanelTab,
   changes_list: Entity<ChangesList>,
   pub(crate) history_list: Entity<HistoryList>,
   /// Spawned on the first visit to the tab: a shell per session is too much
@@ -170,7 +170,7 @@ pub struct ReviewPanel {
   _files_task: Option<Task<()>>,
 }
 
-impl ReviewPanel {
+impl DockPanel {
   pub fn new(repo_root: Option<PathBuf>, window: &mut Window, cx: &mut Context<Self>) -> Self {
     let commit_input = cx.new(|cx| {
       TextareaState::new(window, cx)
@@ -199,7 +199,7 @@ impl ReviewPanel {
       window,
       |this, _list, event: &ChangesListEvent, _window, cx| match event {
         ChangesListEvent::OpenFile { path } => {
-          cx.emit(ReviewPanelEvent::OpenFile { path: path.clone() });
+          cx.emit(DockPanelEvent::OpenFile { path: path.clone() });
         }
         ChangesListEvent::Changed { .. } => this.refresh(cx),
       },
@@ -211,7 +211,7 @@ impl ReviewPanel {
       &history_list,
       |_this, _list, event: &HistoryListEvent, cx| match event {
         HistoryListEvent::OpenCommitFile { commit_oid, path } => {
-          cx.emit(ReviewPanelEvent::OpenCommitFile {
+          cx.emit(DockPanelEvent::OpenCommitFile {
             commit_oid: commit_oid.clone(),
             path: path.clone(),
           });
@@ -228,7 +228,7 @@ impl ReviewPanel {
       commit_input,
       committing: false,
       last_error: None,
-      active_tab: ReviewPanelTab::Changes,
+      active_tab: DockPanelTab::Changes,
       changes_list,
       history_list,
       terminal_view: None,
@@ -391,8 +391,8 @@ impl ReviewPanel {
 
   fn render_history_tab(&self) -> AnyElement {
     div()
-      .id("review-panel-history")
-      .debug_selector(|| REVIEW_PANEL_HISTORY_DEBUG_SELECTOR.to_string())
+      .id("dock-panel-history")
+      .debug_selector(|| DOCK_PANEL_HISTORY_DEBUG_SELECTOR.to_string())
       .flex_1()
       .min_h_0()
       .min_w(px(0.0))
@@ -416,8 +416,8 @@ impl ReviewPanel {
     };
 
     div()
-      .id("review-panel-terminal")
-      .debug_selector(|| REVIEW_PANEL_TERMINAL_DEBUG_SELECTOR.to_string())
+      .id("dock-panel-terminal")
+      .debug_selector(|| DOCK_PANEL_TERMINAL_DEBUG_SELECTOR.to_string())
       .flex_1()
       .min_h_0()
       .min_w(px(0.0))
@@ -467,7 +467,7 @@ impl ReviewPanel {
             let _ = cx.update_window(window_handle, |_, window, cx| {
               commit_input.update(cx, |input, cx| input.set_value("", window, cx));
             });
-            cx.emit(ReviewPanelEvent::Committed);
+            cx.emit(DockPanelEvent::Committed);
           }
           Err(error) => this.last_error = Some(format!("{error}").into()),
         }
@@ -501,7 +501,7 @@ impl ReviewPanel {
         commit_box.into_any_element()
       }))
       .child(
-        Button::new("review-panel-commit")
+        Button::new("dock-panel-commit")
           .label("Commit")
           .with_variant(gpui_component::button::ButtonVariant::Secondary)
           .outline()
@@ -517,7 +517,7 @@ impl ReviewPanel {
 
   fn render_tabs(&self, cx: &mut Context<Self>) -> AnyElement {
     let theme = cx.theme().clone();
-    let tab = |id: &'static str, label: &'static str, target: ReviewPanelTab, active: bool| {
+    let tab = |id: &'static str, label: &'static str, target: DockPanelTab, active: bool| {
       div()
         .id(id)
         .debug_selector(move || id.to_string())
@@ -539,10 +539,10 @@ impl ReviewPanel {
           if this.active_tab != target {
             this.active_tab = target;
             match target {
-              ReviewPanelTab::PullRequest => this.refresh_branch_pull_request(cx),
-              ReviewPanelTab::Terminal => this.ensure_terminal(cx),
-              ReviewPanelTab::History => this.refresh_history(cx),
-              ReviewPanelTab::Changes | ReviewPanelTab::Files => {}
+              DockPanelTab::PullRequest => this.refresh_branch_pull_request(cx),
+              DockPanelTab::Terminal => this.ensure_terminal(cx),
+              DockPanelTab::History => this.refresh_history(cx),
+              DockPanelTab::Changes | DockPanelTab::Files => {}
             }
             cx.notify();
           }
@@ -553,34 +553,34 @@ impl ReviewPanel {
       .items_center()
       .gap_1()
       .child(tab(
-        "review-panel-tab-changes",
+        "dock-panel-tab-changes",
         "Changes",
-        ReviewPanelTab::Changes,
-        self.active_tab == ReviewPanelTab::Changes,
+        DockPanelTab::Changes,
+        self.active_tab == DockPanelTab::Changes,
       ))
       .child(tab(
-        "review-panel-tab-files",
+        "dock-panel-tab-files",
         "Files",
-        ReviewPanelTab::Files,
-        self.active_tab == ReviewPanelTab::Files,
+        DockPanelTab::Files,
+        self.active_tab == DockPanelTab::Files,
       ))
       .child(tab(
-        "review-panel-tab-history",
+        "dock-panel-tab-history",
         "History",
-        ReviewPanelTab::History,
-        self.active_tab == ReviewPanelTab::History,
+        DockPanelTab::History,
+        self.active_tab == DockPanelTab::History,
       ))
       .child(tab(
-        "review-panel-tab-pr",
+        "dock-panel-tab-pr",
         "Pull request",
-        ReviewPanelTab::PullRequest,
-        self.active_tab == ReviewPanelTab::PullRequest,
+        DockPanelTab::PullRequest,
+        self.active_tab == DockPanelTab::PullRequest,
       ))
       .child(tab(
-        "review-panel-tab-terminal",
+        "dock-panel-tab-terminal",
         "Terminal",
-        ReviewPanelTab::Terminal,
-        self.active_tab == ReviewPanelTab::Terminal,
+        DockPanelTab::Terminal,
+        self.active_tab == DockPanelTab::Terminal,
       ))
       .into_any_element()
   }
@@ -600,7 +600,7 @@ impl ReviewPanel {
       if !selected_id.ends_with('/') {
         let path = PathBuf::from(selected_id);
         cx.on_next_frame(window, move |_, _, cx| {
-          cx.emit(ReviewPanelEvent::OpenFile { path });
+          cx.emit(DockPanelEvent::OpenFile { path });
         });
       }
     }
@@ -754,7 +754,7 @@ impl ReviewPanel {
               .child(format!("No pull request for {}", context.branch)),
           )
           .child(
-            Button::new("review-panel-create-pr")
+            Button::new("dock-panel-create-pr")
               .primary()
               .small()
               .label("Create pull request")
@@ -814,7 +814,7 @@ impl ReviewPanel {
               )),
           )
           .child(
-            Button::new("review-panel-open-pr")
+            Button::new("dock-panel-open-pr")
               .small()
               .w_full()
               .label("Open pull request")
@@ -850,7 +850,7 @@ impl ReviewPanel {
   }
 }
 
-impl Render for ReviewPanel {
+impl Render for DockPanel {
   fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
     let theme = cx.theme().clone();
     let entry_count = self.status_entries.len();
@@ -871,7 +871,7 @@ impl Render for ReviewPanel {
           .items_center()
           .gap_1()
           .when(
-            self.active_tab == ReviewPanelTab::Changes && entry_count > 0,
+            self.active_tab == DockPanelTab::Changes && entry_count > 0,
             |this| {
               this.child(
                 div()
@@ -881,10 +881,10 @@ impl Render for ReviewPanel {
               )
             },
           )
-          .when(self.active_tab != ReviewPanelTab::Terminal, |this| {
+          .when(self.active_tab != DockPanelTab::Terminal, |this| {
             this.child(
-              Button::new("review-panel-refresh")
-                .debug_selector(|| REVIEW_PANEL_REFRESH_DEBUG_SELECTOR.to_string())
+              Button::new("dock-panel-refresh")
+                .debug_selector(|| DOCK_PANEL_REFRESH_DEBUG_SELECTOR.to_string())
                 .icon(UiIconName::RefreshCw)
                 .ghost()
                 .compact()
@@ -896,13 +896,13 @@ impl Render for ReviewPanel {
       );
 
     let body = match self.active_tab {
-      ReviewPanelTab::Files => self.render_files_tab(_window, cx),
-      ReviewPanelTab::Changes => {
+      DockPanelTab::Files => self.render_files_tab(_window, cx),
+      DockPanelTab::Changes => {
         if self.status_entries.is_empty() {
           self.render_empty_state(cx)
         } else {
           div()
-            .id("review-panel-file-list")
+            .id("dock-panel-file-list")
             .flex_1()
             .min_h_0()
             .overflow_y_scroll()
@@ -911,9 +911,9 @@ impl Render for ReviewPanel {
             .into_any_element()
         }
       }
-      ReviewPanelTab::PullRequest => self.render_pr_tab(cx),
-      ReviewPanelTab::History => self.render_history_tab(),
-      ReviewPanelTab::Terminal => self.render_terminal_tab(),
+      DockPanelTab::PullRequest => self.render_pr_tab(cx),
+      DockPanelTab::History => self.render_history_tab(),
+      DockPanelTab::Terminal => self.render_terminal_tab(),
     };
 
     let mut panel = v_flex()
@@ -925,14 +925,14 @@ impl Render for ReviewPanel {
       .on_action(cx.listener(|this, _: &crate::CommitChanges, _, cx| this.commit(cx)))
       .child(header)
       .child(body);
-    if self.active_tab == ReviewPanelTab::Changes {
+    if self.active_tab == DockPanelTab::Changes {
       panel = panel.child(self.render_commit_zone(_window, cx));
     }
     panel
   }
 }
 
-impl Focusable for ReviewPanel {
+impl Focusable for DockPanel {
   fn focus_handle(&self, _cx: &App) -> FocusHandle {
     self.focus_handle.clone()
   }
@@ -949,7 +949,7 @@ mod tests {
   use std::sync::Arc;
   use std::sync::atomic::{AtomicBool, Ordering};
 
-  async fn await_refresh(panel: &Entity<ReviewPanel>, cx: &mut gpui::VisualTestContext) {
+  async fn await_refresh(panel: &Entity<DockPanel>, cx: &mut gpui::VisualTestContext) {
     let task = panel.update(cx, |panel, _| panel._refresh_task.take());
     if let Some(task) = task {
       task.await;
@@ -957,10 +957,10 @@ mod tests {
     cx.run_until_parked();
   }
 
-  fn add_review_panel_window(
+  fn add_dock_panel_window(
     repo_root: Option<PathBuf>,
     cx: &mut TestAppContext,
-  ) -> (Entity<ReviewPanel>, &mut gpui::VisualTestContext) {
+  ) -> (Entity<DockPanel>, &mut gpui::VisualTestContext) {
     cx.update(|cx| {
       if !cx.has_global::<crate::config::AppSettings>() {
         cx.set_global(crate::config::AppSettings::default());
@@ -972,13 +972,13 @@ mod tests {
         cx.set_global(WorkspaceApi::new());
       }
     });
-    let mut mounted: Option<Entity<ReviewPanel>> = None;
+    let mut mounted: Option<Entity<DockPanel>> = None;
     let (_root, cx) = cx.add_window_view(|window, cx| {
-      let panel = cx.new(|cx| ReviewPanel::new(repo_root.clone(), window, cx));
+      let panel = cx.new(|cx| DockPanel::new(repo_root.clone(), window, cx));
       mounted = Some(panel.clone());
       gpui_component::Root::new(panel, window, cx)
     });
-    (mounted.expect("review panel"), cx)
+    (mounted.expect("dock panel"), cx)
   }
 
   fn test_remote() -> git::GithubRemoteRepo {
@@ -1104,10 +1104,10 @@ mod tests {
   #[gpui::test]
   async fn branch_pr_requires_github_access(cx: &mut TestAppContext) {
     cx.update(|cx| gpui_component::init(cx));
-    let repo = TempRepo::init("review-panel-pr-gate");
+    let repo = TempRepo::init("dock-panel-pr-gate");
     commit_text_file(&repo.path, Path::new("README.md"), "v1\n", "initial");
 
-    let (panel, cx) = add_review_panel_window(Some(repo.path.clone()), cx);
+    let (panel, cx) = add_dock_panel_window(Some(repo.path.clone()), cx);
     cx.executor().allow_parking();
     cx.run_until_parked();
 
@@ -1120,11 +1120,11 @@ mod tests {
   #[gpui::test]
   async fn refresh_lists_working_tree_changes(cx: &mut TestAppContext) {
     cx.update(|cx| gpui_component::init(cx));
-    let repo = TempRepo::init("review-panel-refresh");
+    let repo = TempRepo::init("dock-panel-refresh");
     commit_text_file(&repo.path, Path::new("README.md"), "v1\n", "initial");
     std::fs::write(repo.path.join("README.md"), "v2\n").expect("update file");
 
-    let (panel, cx) = add_review_panel_window(Some(repo.path.clone()), cx);
+    let (panel, cx) = add_dock_panel_window(Some(repo.path.clone()), cx);
     cx.executor().allow_parking();
     await_refresh(&panel, cx).await;
 
@@ -1138,11 +1138,11 @@ mod tests {
   #[gpui::test]
   async fn commit_stages_and_commits_all_changes(cx: &mut TestAppContext) {
     cx.update(|cx| gpui_component::init(cx));
-    let repo = TempRepo::init("review-panel-commit");
+    let repo = TempRepo::init("dock-panel-commit");
     commit_text_file(&repo.path, Path::new("README.md"), "v1\n", "initial");
     std::fs::write(repo.path.join("README.md"), "v2\n").expect("update file");
 
-    let (panel, cx) = add_review_panel_window(Some(repo.path.clone()), cx);
+    let (panel, cx) = add_dock_panel_window(Some(repo.path.clone()), cx);
     cx.executor().allow_parking();
     await_refresh(&panel, cx).await;
 
@@ -1156,8 +1156,8 @@ mod tests {
     let observer = {
       let committed = committed.clone();
       cx.update(|_, cx| {
-        cx.subscribe(&panel, move |_, event: &ReviewPanelEvent, _| {
-          if matches!(event, ReviewPanelEvent::Committed) {
+        cx.subscribe(&panel, move |_, event: &DockPanelEvent, _| {
+          if matches!(event, DockPanelEvent::Committed) {
             committed.store(true, Ordering::Relaxed);
           }
         })
@@ -1192,10 +1192,10 @@ mod tests {
   #[gpui::test]
   async fn commit_requires_message_and_changes(cx: &mut TestAppContext) {
     cx.update(|cx| gpui_component::init(cx));
-    let repo = TempRepo::init("review-panel-commit-guards");
+    let repo = TempRepo::init("dock-panel-commit-guards");
     commit_text_file(&repo.path, Path::new("README.md"), "v1\n", "initial");
 
-    let (panel, cx) = add_review_panel_window(Some(repo.path.clone()), cx);
+    let (panel, cx) = add_dock_panel_window(Some(repo.path.clone()), cx);
     cx.executor().allow_parking();
     await_refresh(&panel, cx).await;
 
@@ -1224,21 +1224,21 @@ mod tests {
   #[gpui::test]
   async fn the_terminal_starts_only_when_its_tab_is_opened(cx: &mut TestAppContext) {
     cx.update(|cx| gpui_component::init(cx));
-    let repo = TempRepo::init("review-panel-terminal-lazy");
+    let repo = TempRepo::init("dock-panel-terminal-lazy");
     commit_text_file(&repo.path, Path::new("README.md"), "v1\n", "initial");
 
-    let (panel, cx) = add_review_panel_window(Some(repo.path.clone()), cx);
+    let (panel, cx) = add_dock_panel_window(Some(repo.path.clone()), cx);
     cx.executor().allow_parking();
     await_refresh(&panel, cx).await;
 
     panel.read_with(cx, |panel, _| {
       // No shell for someone who never opens the tab.
       assert!(panel.terminal_view.is_none());
-      assert!(panel.active_tab != ReviewPanelTab::Terminal);
+      assert!(panel.active_tab != DockPanelTab::Terminal);
     });
 
     panel.update(cx, |panel, cx| {
-      panel.active_tab = ReviewPanelTab::Terminal;
+      panel.active_tab = DockPanelTab::Terminal;
       panel.ensure_terminal(cx);
       cx.notify();
     });
@@ -1252,7 +1252,7 @@ mod tests {
       );
     });
     assert!(
-      cx.debug_bounds(REVIEW_PANEL_TERMINAL_DEBUG_SELECTOR)
+      cx.debug_bounds(DOCK_PANEL_TERMINAL_DEBUG_SELECTOR)
         .is_some(),
       "the terminal tab should be painted"
     );
@@ -1261,12 +1261,12 @@ mod tests {
   #[gpui::test]
   async fn switching_repository_moves_a_running_terminal(cx: &mut TestAppContext) {
     cx.update(|cx| gpui_component::init(cx));
-    let repo = TempRepo::init("review-panel-terminal-switch");
+    let repo = TempRepo::init("dock-panel-terminal-switch");
     commit_text_file(&repo.path, Path::new("README.md"), "v1\n", "initial");
-    let other = TempRepo::init("review-panel-terminal-switch-other");
+    let other = TempRepo::init("dock-panel-terminal-switch-other");
     commit_text_file(&other.path, Path::new("README.md"), "other\n", "initial");
 
-    let (panel, cx) = add_review_panel_window(Some(repo.path.clone()), cx);
+    let (panel, cx) = add_dock_panel_window(Some(repo.path.clone()), cx);
     cx.executor().allow_parking();
     await_refresh(&panel, cx).await;
 
@@ -1288,18 +1288,18 @@ mod tests {
   #[gpui::test]
   async fn the_history_tab_lists_the_commits_and_opens_one_of_their_files(cx: &mut TestAppContext) {
     cx.update(|cx| gpui_component::init(cx));
-    let repo = TempRepo::init("review-panel-history-tab");
+    let repo = TempRepo::init("dock-panel-history-tab");
     commit_text_file(&repo.path, Path::new("README.md"), "v1\n", "initial");
     commit_text_file(&repo.path, Path::new("README.md"), "v2\n", "second");
 
-    let (panel, cx) = add_review_panel_window(Some(repo.path.clone()), cx);
+    let (panel, cx) = add_dock_panel_window(Some(repo.path.clone()), cx);
     cx.executor().allow_parking();
     await_refresh(&panel, cx).await;
     panel.update(cx, |_, cx| cx.notify());
     cx.run_until_parked();
 
     let tab = cx
-      .debug_bounds(REVIEW_PANEL_HISTORY_TAB_DEBUG_SELECTOR)
+      .debug_bounds(DOCK_PANEL_HISTORY_TAB_DEBUG_SELECTOR)
       .expect("history tab bounds");
     cx.simulate_click(tab.center(), gpui::Modifiers::default());
     let history = panel.read_with(cx, |panel, _| panel.history_list.clone());
@@ -1310,7 +1310,7 @@ mod tests {
     cx.run_until_parked();
 
     panel.read_with(cx, |panel, _| {
-      assert_eq!(panel.active_tab, ReviewPanelTab::History);
+      assert_eq!(panel.active_tab, DockPanelTab::History);
     });
     assert!(
       cx.debug_bounds(crate::history_list::HISTORY_LIST_DEBUG_SELECTOR)
@@ -1322,8 +1322,8 @@ mod tests {
     let opened = Rc::new(std::cell::RefCell::new(Vec::new()));
     let seen = opened.clone();
     cx.update(|_, cx| {
-      cx.subscribe(&panel, move |_panel, event: &ReviewPanelEvent, _cx| {
-        if let ReviewPanelEvent::OpenCommitFile { commit_oid, path } = event {
+      cx.subscribe(&panel, move |_panel, event: &DockPanelEvent, _cx| {
+        if let DockPanelEvent::OpenCommitFile { commit_oid, path } = event {
           seen.borrow_mut().push((commit_oid.clone(), path.clone()));
         }
       })
@@ -1347,38 +1347,36 @@ mod tests {
   #[gpui::test]
   async fn clicking_the_terminal_tab_opens_a_shell(cx: &mut TestAppContext) {
     cx.update(|cx| gpui_component::init(cx));
-    let repo = TempRepo::init("review-panel-terminal-click");
+    let repo = TempRepo::init("dock-panel-terminal-click");
     commit_text_file(&repo.path, Path::new("README.md"), "v1\n", "initial");
 
-    let (panel, cx) = add_review_panel_window(Some(repo.path.clone()), cx);
+    let (panel, cx) = add_dock_panel_window(Some(repo.path.clone()), cx);
     cx.executor().allow_parking();
     await_refresh(&panel, cx).await;
     panel.update(cx, |_, cx| cx.notify());
     cx.run_until_parked();
 
     assert!(
-      cx.debug_bounds(REVIEW_PANEL_REFRESH_DEBUG_SELECTOR)
-        .is_some(),
+      cx.debug_bounds(DOCK_PANEL_REFRESH_DEBUG_SELECTOR).is_some(),
       "the refresh button belongs to the review tabs"
     );
 
     let tab = cx
-      .debug_bounds(REVIEW_PANEL_TERMINAL_TAB_DEBUG_SELECTOR)
+      .debug_bounds(DOCK_PANEL_TERMINAL_TAB_DEBUG_SELECTOR)
       .expect("terminal tab bounds");
     cx.simulate_click(tab.center(), gpui::Modifiers::default());
     cx.run_until_parked();
 
     panel.read_with(cx, |panel, _| {
-      assert_eq!(panel.active_tab, ReviewPanelTab::Terminal);
+      assert_eq!(panel.active_tab, DockPanelTab::Terminal);
       assert!(panel.terminal_view.is_some());
     });
     assert!(
-      cx.debug_bounds(REVIEW_PANEL_TERMINAL_DEBUG_SELECTOR)
+      cx.debug_bounds(DOCK_PANEL_TERMINAL_DEBUG_SELECTOR)
         .is_some()
     );
     assert!(
-      cx.debug_bounds(REVIEW_PANEL_REFRESH_DEBUG_SELECTOR)
-        .is_none(),
+      cx.debug_bounds(DOCK_PANEL_REFRESH_DEBUG_SELECTOR).is_none(),
       "nothing to refresh on the terminal tab"
     );
   }
@@ -1386,10 +1384,10 @@ mod tests {
   #[gpui::test]
   async fn reopening_the_terminal_tab_keeps_the_same_shell(cx: &mut TestAppContext) {
     cx.update(|cx| gpui_component::init(cx));
-    let repo = TempRepo::init("review-panel-terminal-reuse");
+    let repo = TempRepo::init("dock-panel-terminal-reuse");
     commit_text_file(&repo.path, Path::new("README.md"), "v1\n", "initial");
 
-    let (panel, cx) = add_review_panel_window(Some(repo.path.clone()), cx);
+    let (panel, cx) = add_dock_panel_window(Some(repo.path.clone()), cx);
     cx.executor().allow_parking();
     await_refresh(&panel, cx).await;
 
@@ -1409,11 +1407,11 @@ mod tests {
   #[gpui::test]
   async fn staging_from_the_changes_list_refreshes_the_panel(cx: &mut TestAppContext) {
     cx.update(|cx| gpui_component::init(cx));
-    let repo = TempRepo::init("review-panel-changes-list");
+    let repo = TempRepo::init("dock-panel-changes-list");
     commit_text_file(&repo.path, Path::new("README.md"), "v1\n", "initial");
     std::fs::write(repo.path.join("README.md"), "v2\n").expect("update file");
 
-    let (panel, cx) = add_review_panel_window(Some(repo.path.clone()), cx);
+    let (panel, cx) = add_dock_panel_window(Some(repo.path.clone()), cx);
     cx.executor().allow_parking();
     await_refresh(&panel, cx).await;
     panel.update(cx, |_, cx| cx.notify());

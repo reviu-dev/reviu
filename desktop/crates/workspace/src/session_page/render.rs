@@ -667,12 +667,12 @@ impl SessionPage {
       .into_any_element()
   }
 
-  pub(super) fn render_review_panel(&mut self, _cx: &mut Context<Self>) -> AnyElement {
+  pub(super) fn render_dock_panel(&mut self, _cx: &mut Context<Self>) -> AnyElement {
     div()
       .size_full()
       .min_w(px(0.0))
       .min_h_0()
-      .child(self.review_panel.clone())
+      .child(self.dock_panel.clone())
       .into_any_element()
   }
 }
@@ -704,9 +704,9 @@ impl Render for SessionPage {
           .child(ui::resizable_panel().child(self.render_center(window, cx)))
           .child(
             ui::resizable_panel()
-              .size(px(REVIEW_PANEL_DEFAULT_WIDTH))
-              .size_range(px(REVIEW_PANEL_MIN_WIDTH)..px(REVIEW_PANEL_MAX_WIDTH))
-              .child(self.render_review_panel(cx)),
+              .size(px(DOCK_PANEL_DEFAULT_WIDTH))
+              .size_range(px(DOCK_PANEL_MIN_WIDTH)..px(DOCK_PANEL_MAX_WIDTH))
+              .child(self.render_dock_panel(cx)),
           ),
       )
   }
@@ -822,7 +822,7 @@ mod tests {
     let (page, cx) = add_session_page_window(repo.path.clone(), cx);
     cx.executor().allow_parking();
     page.update(cx, |page, cx| {
-      page.review_panel.update(cx, |panel, cx| panel.refresh(cx))
+      page.dock_panel.update(cx, |panel, cx| panel.refresh(cx))
     });
     cx.run_until_parked();
 
@@ -875,7 +875,7 @@ mod tests {
     let (page, cx) = add_session_page_window(repo.path.clone(), cx);
     cx.executor().allow_parking();
     page.update(cx, |page, cx| {
-      page.review_panel.update(cx, |panel, cx| panel.refresh(cx))
+      page.dock_panel.update(cx, |panel, cx| panel.refresh(cx))
     });
     cx.run_until_parked();
 
@@ -921,7 +921,7 @@ mod tests {
     let (page, cx) = add_session_page_window(repo.path.clone(), cx);
     cx.executor().allow_parking();
     page.update(cx, |page, cx| {
-      page.review_panel.update(cx, |panel, cx| panel.refresh(cx))
+      page.dock_panel.update(cx, |panel, cx| panel.refresh(cx))
     });
     cx.run_until_parked();
 
@@ -1031,7 +1031,7 @@ mod tests {
     let (page, cx) = add_session_page_window(repo.path.clone(), cx);
     cx.executor().allow_parking();
     page.update(cx, |page, cx| {
-      page.review_panel.update(cx, |panel, cx| panel.refresh(cx))
+      page.dock_panel.update(cx, |panel, cx| panel.refresh(cx))
     });
     cx.run_until_parked();
 
@@ -1220,7 +1220,7 @@ mod tests {
     let (page, cx) = add_session_page_window(repo.path.clone(), cx);
     cx.executor().allow_parking();
     page.update(cx, |page, cx| {
-      page.review_panel.update(cx, |panel, cx| panel.refresh(cx))
+      page.dock_panel.update(cx, |panel, cx| panel.refresh(cx))
     });
     cx.run_until_parked();
 
@@ -1290,7 +1290,7 @@ mod tests {
     cx.executor().allow_parking();
     page.update(cx, |page, cx| {
       crate::config::AppSettings::update(cx, |settings| settings.hide_whitespace = true);
-      page.review_panel.update(cx, |panel, cx| panel.refresh(cx))
+      page.dock_panel.update(cx, |panel, cx| panel.refresh(cx))
     });
     cx.run_until_parked();
 
@@ -1327,7 +1327,7 @@ mod tests {
     let (page, cx) = add_session_page_window(repo.path.clone(), cx);
     cx.executor().allow_parking();
     page.update(cx, |page, cx| {
-      page.review_panel.update(cx, |panel, cx| panel.refresh(cx))
+      page.dock_panel.update(cx, |panel, cx| panel.refresh(cx))
     });
     cx.run_until_parked();
 
