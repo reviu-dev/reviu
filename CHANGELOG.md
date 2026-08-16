@@ -80,6 +80,10 @@ The right panel gains a Terminal tab, running in the repository the session is w
 
 The Changes panel listed your modified files but could do nothing with them. It now groups them into Staged and Changes like the Git page, and each row carries the same actions on hover: stage, unstage, and discard. Files partially staged appear in both groups, discarding asks before destroying work, and the list refreshes itself after every action. The list is keyboard-navigable too: move through it with the arrow keys and the highlighted file opens as you go.
 
+### Inline Or Split, In The Sessions Workspace Too
+
+The diff in the Sessions workspace was stuck on whatever the settings said. It now carries the same toggle as the Git page, in the diff header or with `cmd-/`, and the preference is shared between the two. Files with a single side, an untracked or deleted file, or a binary preview, stay inline: there is nothing to put on the other half.
+
 ## 0.18.0
 
 ### No More Failed Single Comments During A Review

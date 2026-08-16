@@ -63,7 +63,8 @@ const SHOW_BRANCH_SWITCHER_CONTEXT: &str = "WorkspaceGit";
 const OPEN_GIT_HISTORY_SIDEBAR_CONTEXT: &str = "WorkspaceGit";
 const OPEN_GIT_CHANGES_SIDEBAR_CONTEXT: &str = "WorkspaceGit";
 const FOCUS_FILE_TREE_CONTEXT: &str = "WorkspaceGithubPr";
-const TOGGLE_DIFF_VIEW_CONTEXT: &str = "WorkspaceGit || WorkspaceGithubPrChanges";
+const TOGGLE_DIFF_VIEW_CONTEXT: &str =
+  "WorkspaceGit || WorkspaceGithubPrChanges || WorkspaceSession";
 const SWITCH_TO_PR_BRANCH_CONTEXT: &str = "WorkspaceGithubPr || WorkspaceGithubPrChanges";
 const REVIEW_ANNOTATION_CONTEXT: &str = "WorkspaceGit || WorkspaceGithubPrChanges";
 const REVIEW_COMMENT_CONTEXT: &str = "WorkspaceGithubPr";
@@ -119,6 +120,7 @@ const PR_PAGE_ACTIVE_CONTEXTS: [&str; 2] = [
 
 const PR_CHANGES_ONLY_ACTIVE_CONTEXTS: [&str; 1] = [WORKSPACE_GITHUB_PR_CHANGES_CONTEXT];
 
+/// The Git page, the PR Changes tab and the Sessions shell: the three diff surfaces.
 const COMMENT_HUNK_ACTIVE_CONTEXTS: [&str; 3] = [
   WORKSPACE_GIT_CONTEXT,
   WORKSPACE_GITHUB_PR_CHANGES_CONTEXT,
@@ -545,12 +547,12 @@ const SHORTCUT_DEFINITIONS: [ShortcutDefinition; 38] = [
     id: ShortcutId::ToggleDiffView,
     title: "Toggle Diff View",
     description: "Switch between inline and split diff view.",
-    scope_label: "Git page and PR Changes",
+    scope_label: "Git page, PR Changes and Sessions",
     category: ShortcutCategory::Review,
     keystroke: "cmd-/",
     context: TOGGLE_DIFF_VIEW_CONTEXT,
     display_context: WORKSPACE_GIT_CONTEXT,
-    active_contexts: &GIT_AND_PR_CHANGES_ACTIVE_CONTEXTS,
+    active_contexts: &COMMENT_HUNK_ACTIVE_CONTEXTS,
   },
   ShortcutDefinition {
     id: ShortcutId::ToggleHideWhitespace,

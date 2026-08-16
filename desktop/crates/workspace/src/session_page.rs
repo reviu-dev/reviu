@@ -27,6 +27,7 @@ use crate::agent_settings::AgentSettings;
 use crate::auth_state::AuthStateStore;
 use crate::config::ConfigStore;
 use crate::date_format::format_relative_time;
+use crate::diff_view_policy::{DiffViewInputs, effective_diff_view};
 use crate::file_search_palette::open_file_search_palette;
 use crate::file_view::{
   BinaryPreview, build_binary_preview, render_binary_preview, render_file_title,
@@ -47,6 +48,7 @@ use ui::{
   WindowExt as _,
 };
 
+const DIFF_VIEW_TOGGLE_DEBUG_SELECTOR: &str = "session-diff-view-toggle";
 const REPO_CONTEXT_DEBUG_SELECTOR: &str = "session-repo-context";
 const REPO_AHEAD_DEBUG_SELECTOR: &str = "session-repo-ahead";
 const REPO_BEHIND_DEBUG_SELECTOR: &str = "session-repo-behind";
@@ -180,6 +182,7 @@ pub struct SessionPage {
   open_file_task: Option<Task<()>>,
   agent_review: AgentReviewComments,
   branch_status: Option<git::BranchStatus>,
+  diff_view: DiffViewMode,
   // Review export waiting for the agent connection to become ready.
   pending_review_export: Option<String>,
   repo_command_in_flight: bool,
@@ -221,6 +224,7 @@ impl SessionPage {
       open_file_task: None,
       agent_review: AgentReviewComments::new(),
       branch_status: None,
+      diff_view: DiffViewMode::Inline,
       pending_review_export: None,
       repo_command_in_flight: false,
       _branch_task: None,
@@ -453,11 +457,12 @@ impl SessionPage {
       return;
     };
     let app_settings = crate::config::AppSettings::get(cx);
-    let diff_view = if app_settings.split_diff_view {
+    self.diff_view = if app_settings.split_diff_view {
       DiffViewMode::Split
     } else {
       DiffViewMode::Inline
     };
+    let diff_view = self.effective_diff_view(&rel_path, cx);
     let hide_whitespace = app_settings.hide_whitespace;
     // Agent line numbers are 1-based; the editor reveals by 0-based doc line.
     let reveal_doc_line = reveal_line.map(|line| line.saturating_sub(1) as usize);
@@ -528,6 +533,79 @@ impl SessionPage {
     self.open_file_task = Some(task);
     self.focus_editor_on_next_frame(window, cx);
     cx.notify();
+  }
+
+  /// Split needs two sides to compare: a whole-file change or a binary preview
+  /// falls back to inline.
+  fn effective_diff_view(&self, path: &Path, cx: &App) -> DiffViewMode {
+    effective_diff_view(DiffViewInputs {
+      preferred: self.diff_view,
+      binary_preview: self.binary_preview.is_some(),
+      previewing: false,
+      whole_file_change: self.whole_file_change(path, cx),
+    })
+  }
+
+  fn split_disabled(&self, cx: &App) -> bool {
+    let Some(path) = self.selected_file.as_deref() else {
+      return true;
+    };
+    self.binary_preview.is_some() || self.whole_file_change(path, cx)
+  }
+
+  fn whole_file_change(&self, path: &Path, cx: &App) -> bool {
+    self
+      .review_panel
+      .read(cx)
+      .status_entries()
+      .iter()
+      .any(|entry| {
+        entry.path == path
+          && matches!(
+            entry.status,
+            git::RepoStatusKind::Untracked
+              | git::RepoStatusKind::Added
+              | git::RepoStatusKind::Deleted
+          )
+      })
+  }
+
+  fn toggle_diff_view_action(
+    &mut self,
+    _: &crate::ToggleDiffView,
+    _window: &mut Window,
+    cx: &mut Context<Self>,
+  ) {
+    self.toggle_diff_view(cx);
+    cx.stop_propagation();
+  }
+
+  fn toggle_diff_view(&mut self, cx: &mut Context<Self>) {
+    if self.center != CenterView::Diff || self.split_disabled(cx) {
+      return;
+    }
+
+    self.diff_view = match self.diff_view {
+      DiffViewMode::Inline => DiffViewMode::Split,
+      DiffViewMode::Split => DiffViewMode::Inline,
+    };
+    // Shared with the Git page: one preference for every diff surface.
+    crate::config::AppSettings::update(cx, |settings| {
+      settings.split_diff_view = self.diff_view == DiffViewMode::Split
+    });
+    self.sync_diff_view(cx);
+    cx.notify();
+  }
+
+  fn sync_diff_view(&mut self, cx: &mut Context<Self>) {
+    let Some(editor) = self.editor.clone() else {
+      return;
+    };
+    let Some(path) = self.selected_file.clone() else {
+      return;
+    };
+    let diff_view = self.effective_diff_view(&path, cx);
+    editor.update(cx, |editor, cx| editor.set_diff_view_mode(diff_view, cx));
   }
 
   fn close_diff(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -1616,6 +1694,25 @@ impl SessionPage {
           .on_click(cx.listener(|this, _, window, cx| this.close_diff(window, cx))),
       )
       .children(file_title)
+      .when(self.editor.is_some(), |this| {
+        let split_disabled = self.split_disabled(cx);
+        let (label, icon) = if split_disabled || self.diff_view == DiffViewMode::Inline {
+          ("Split", gpui_component::IconName::PanelLeft)
+        } else {
+          ("Inline", gpui_component::IconName::PanelLeftClose)
+        };
+        this.child(
+          Button::new("session-page-diff-view-toggle")
+            .debug_selector(|| DIFF_VIEW_TOGGLE_DEBUG_SELECTOR.to_string())
+            .label(label)
+            .icon(icon)
+            .xsmall()
+            .ghost()
+            .disabled(split_disabled)
+            .tooltip("Toggle inline and split diff (cmd-/)")
+            .on_click(cx.listener(|this, _, _, cx| this.toggle_diff_view(cx))),
+        )
+      })
       .when(save_editor.is_some(), |this| {
         let save_editor = save_editor.clone();
         this.child(
@@ -1708,6 +1805,7 @@ impl Render for SessionPage {
       .on_action(cx.listener(Self::show_file_search_action))
       .on_action(cx.listener(Self::send_review_comments_to_agent_action))
       .on_action(cx.listener(Self::comment_hunk_action))
+      .on_action(cx.listener(Self::toggle_diff_view_action))
       .child(
         ui::h_resizable("session-page-shell")
           .child(
@@ -2494,5 +2592,73 @@ mod tests {
     // The row under the counter opens the repository switcher: it must not fire.
     let switcher_open = cx.update(|window, cx| window.has_active_dialog(cx));
     assert!(!switcher_open, "the repository switcher should stay closed");
+  }
+
+  #[gpui::test]
+  async fn the_diff_view_toggle_flips_the_mode_and_persists_it(cx: &mut TestAppContext) {
+    let repo = TempRepo::init("session-page-diff-toggle");
+    commit_text_file(&repo.path, Path::new("README.md"), "v1\n", "initial");
+    std::fs::write(repo.path.join("README.md"), "v2\n").expect("update file");
+
+    let (page, cx) = add_session_page_window(repo.path.clone(), cx);
+    cx.executor().allow_parking();
+    cx.run_until_parked();
+
+    page.update_in(cx, |page, window, cx| {
+      page.open_diff(PathBuf::from("README.md"), None, window, cx);
+    });
+    await_open_file(&page, cx).await;
+
+    page.read_with(cx, |page, _| {
+      assert_eq!(page.diff_view, DiffViewMode::Inline);
+    });
+
+    page.update(cx, |page, cx| page.toggle_diff_view(cx));
+    page.read_with(cx, |page, cx| {
+      assert_eq!(page.diff_view, DiffViewMode::Split);
+      // The Git page reads the same preference.
+      assert!(crate::config::AppSettings::get(cx).split_diff_view);
+      assert_eq!(
+        page
+          .editor
+          .as_ref()
+          .expect("editor")
+          .read(cx)
+          .diff_view_mode(),
+        DiffViewMode::Split
+      );
+    });
+
+    page.update(cx, |page, cx| page.toggle_diff_view(cx));
+    page.read_with(cx, |page, cx| {
+      assert_eq!(page.diff_view, DiffViewMode::Inline);
+      assert!(!crate::config::AppSettings::get(cx).split_diff_view);
+    });
+  }
+
+  #[gpui::test]
+  async fn a_file_with_only_one_side_stays_inline(cx: &mut TestAppContext) {
+    let repo = TempRepo::init("session-page-diff-toggle-untracked");
+    commit_text_file(&repo.path, Path::new("README.md"), "v1\n", "initial");
+    std::fs::write(repo.path.join("new.txt"), "brand new\n").expect("write untracked file");
+
+    let (page, cx) = add_session_page_window(repo.path.clone(), cx);
+    cx.executor().allow_parking();
+    page.update(cx, |page, cx| {
+      page.review_panel.update(cx, |panel, cx| panel.refresh(cx))
+    });
+    cx.run_until_parked();
+
+    page.update_in(cx, |page, window, cx| {
+      page.open_diff(PathBuf::from("new.txt"), None, window, cx);
+    });
+    await_open_file(&page, cx).await;
+
+    page.update(cx, |page, cx| {
+      // An untracked file has nothing to show on the left.
+      assert!(page.split_disabled(cx));
+      page.toggle_diff_view(cx);
+      assert_eq!(page.diff_view, DiffViewMode::Inline);
+    });
   }
 }
