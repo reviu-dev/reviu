@@ -1,8 +1,9 @@
 //! Shared fixtures for the git page tests.
 
 use super::*;
-use git::{CommitChangedFile, CommitFileChangeKind, RepoStage};
+use git::RepoStage;
 
+pub(super) use crate::history_list::test_support::{make_commit, make_history_file};
 pub(super) use crate::test_support::{
   TempBareRepo, TempRepo, commit_text_file, force_checkout_head, head_oid, push_branch_to_remote,
   remote_branch_oid, set_remote_head, set_upstream,
@@ -37,33 +38,6 @@ impl TempDir {
 impl Drop for TempDir {
   fn drop(&mut self) {
     let _ = std::fs::remove_dir_all(&self.path);
-  }
-}
-
-pub(super) fn make_commit(oid: &str, parents: &[&str]) -> HistoryCommitNode {
-  HistoryCommitNode {
-    oid: oid.to_string(),
-    short_oid: oid.chars().take(7).collect(),
-    summary: format!("commit-{oid}"),
-    author: "author".to_string(),
-    parent_oids: parents.iter().map(|parent| parent.to_string()).collect(),
-    refs: Vec::new(),
-  }
-}
-
-pub(super) fn make_history_file(path: &str, kind: CommitFileChangeKind) -> HistoryCommitFileRow {
-  HistoryCommitFileRow::from_commit_file(CommitChangedFile {
-    path: PathBuf::from(path),
-    old_path: None,
-    kind,
-  })
-}
-
-pub(super) fn make_history_revision(tag: &str) -> HistoryRevision {
-  HistoryRevision {
-    head_oid: Some(format!("head-{tag}")),
-    head_label: Some(format!("HEAD -> {tag}")),
-    refs: vec![format!("{tag}@oid-{tag}")],
   }
 }
 

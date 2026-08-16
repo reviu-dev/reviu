@@ -630,3 +630,437 @@ pub(crate) fn build_history_tree_items(
 
   (items, nodes)
 }
+
+#[cfg(test)]
+pub(crate) mod test_support {
+  use super::*;
+
+  pub(crate) fn make_commit(oid: &str, parents: &[&str]) -> HistoryCommitNode {
+    HistoryCommitNode {
+      oid: oid.to_string(),
+      short_oid: oid.chars().take(7).collect(),
+      summary: format!("commit-{oid}"),
+      author: "author".to_string(),
+      parent_oids: parents.iter().map(|parent| parent.to_string()).collect(),
+      refs: Vec::new(),
+    }
+  }
+
+  pub(crate) fn make_history_file(path: &str, kind: CommitFileChangeKind) -> HistoryCommitFileRow {
+    HistoryCommitFileRow::from_commit_file(CommitChangedFile {
+      path: PathBuf::from(path),
+      old_path: None,
+      kind,
+    })
+  }
+
+  pub(crate) fn make_history_revision(tag: &str) -> HistoryRevision {
+    HistoryRevision {
+      head_oid: Some(format!("head-{tag}")),
+      head_label: Some(format!("HEAD -> {tag}")),
+      refs: vec![format!("{tag}@oid-{tag}")],
+    }
+  }
+}
+
+#[cfg(test)]
+mod tests {
+  use super::test_support::*;
+  use super::*;
+  use crate::test_support::{TempRepo, commit_text_file};
+  use gpui::TestAppContext;
+  use std::path::Path;
+
+  fn add_history_list_window(
+    repo_root: Option<PathBuf>,
+    cx: &mut TestAppContext,
+  ) -> (Entity<HistoryList>, &mut gpui::VisualTestContext) {
+    cx.update(|cx| gpui_component::init(cx));
+    let mut mounted = None;
+    let (_root, cx) = cx.add_window_view(|window, cx| {
+      let list = cx.new(HistoryList::new);
+      mounted = Some(list.clone());
+      gpui_component::Root::new(list, window, cx)
+    });
+    let list = mounted.expect("history list");
+    if let Some(repo_root) = repo_root {
+      list.update(cx, |list, cx| list.set_repo_root(Some(repo_root), cx));
+    }
+    (list, cx)
+  }
+
+  async fn await_history(list: &Entity<HistoryList>, cx: &mut gpui::VisualTestContext) {
+    loop {
+      let (history, files) = list.update(cx, |list, _| {
+        (list._history_task.take(), list._files_task.take())
+      });
+      let mut had_task = false;
+      if let Some(task) = history {
+        had_task = true;
+        task.await;
+      }
+      if let Some(task) = files {
+        had_task = true;
+        task.await;
+      }
+      cx.run_until_parked();
+      if !had_task {
+        return;
+      }
+    }
+  }
+
+  #[gpui::test]
+  async fn refreshing_lists_the_commits_newest_first(cx: &mut TestAppContext) {
+    let repo = TempRepo::init("history-list-refresh");
+    commit_text_file(&repo.path, Path::new("a.txt"), "v1\n", "first");
+    commit_text_file(&repo.path, Path::new("a.txt"), "v2\n", "second");
+
+    let (list, cx) = add_history_list_window(Some(repo.path.clone()), cx);
+    cx.executor().allow_parking();
+    await_history(&list, cx).await;
+
+    list.read_with(cx, |list, _| {
+      assert_eq!(list.commits.len(), 2);
+      assert_eq!(list.commits[0].summary, "second");
+      assert!(!list.is_empty());
+      assert!(list.revision.is_some());
+    });
+  }
+
+  #[gpui::test]
+  async fn a_commit_loads_its_files_once(cx: &mut TestAppContext) {
+    let repo = TempRepo::init("history-list-files");
+    commit_text_file(&repo.path, Path::new("a.txt"), "v1\n", "first");
+    commit_text_file(&repo.path, Path::new("b.txt"), "v1\n", "second");
+
+    let (list, cx) = add_history_list_window(Some(repo.path.clone()), cx);
+    cx.executor().allow_parking();
+    await_history(&list, cx).await;
+
+    let head = list.read_with(cx, |list, _| list.commits[0].oid.clone());
+    list.update(cx, |list, cx| list.load_commit_files(head.clone(), cx));
+    await_history(&list, cx).await;
+
+    list.read_with(cx, |list, _| {
+      let files = list
+        .files_by_commit
+        .get(&head)
+        .expect("files of the commit");
+      assert_eq!(files.len(), 1);
+      assert_eq!(files[0].path, PathBuf::from("b.txt"));
+      assert!(list.loading_commits.is_empty());
+    });
+
+    // Already loaded: asking again starts nothing.
+    list.update(cx, |list, cx| {
+      list.load_commit_files(head.clone(), cx);
+      assert!(list._files_task.is_some());
+    });
+    await_history(&list, cx).await;
+    list.read_with(cx, |list, _| {
+      assert_eq!(
+        list.files_by_commit.get(&head).expect("files").len(),
+        1,
+        "reloading a commit does not duplicate its files"
+      );
+    });
+  }
+
+  #[gpui::test]
+  async fn opening_a_file_reports_it_and_marks_the_row(cx: &mut TestAppContext) {
+    let repo = TempRepo::init("history-list-open");
+    commit_text_file(&repo.path, Path::new("a.txt"), "v1\n", "first");
+
+    let (list, cx) = add_history_list_window(Some(repo.path.clone()), cx);
+    cx.executor().allow_parking();
+    await_history(&list, cx).await;
+    let head = list.read_with(cx, |list, _| list.commits[0].oid.clone());
+
+    let opened = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+    let seen = opened.clone();
+    cx.update(|_, cx| {
+      cx.subscribe(&list, move |_list, event: &HistoryListEvent, _cx| {
+        let HistoryListEvent::OpenCommitFile { commit_oid, path } = event;
+        seen.borrow_mut().push((commit_oid.clone(), path.clone()));
+      })
+      .detach();
+    });
+
+    list.update(cx, |list, cx| {
+      list.open_commit_file(head.clone(), PathBuf::from("a.txt"), cx)
+    });
+    cx.run_until_parked();
+
+    assert_eq!(
+      opened.borrow().as_slice(),
+      &[(head.clone(), PathBuf::from("a.txt"))]
+    );
+    list.read_with(cx, |list, _| {
+      assert_eq!(list.opened, Some((head, PathBuf::from("a.txt"))));
+    });
+
+    // The consumer moved on: the row is no longer the open one.
+    list.update(cx, |list, cx| list.set_opened(None, cx));
+    list.read_with(cx, |list, _| assert!(list.opened.is_none()));
+  }
+
+  #[gpui::test]
+  async fn switching_repository_drops_the_previous_history(cx: &mut TestAppContext) {
+    let repo = TempRepo::init("history-list-switch-from");
+    commit_text_file(&repo.path, Path::new("a.txt"), "v1\n", "from");
+    let other = TempRepo::init("history-list-switch-to");
+    commit_text_file(&other.path, Path::new("b.txt"), "v1\n", "to");
+
+    let (list, cx) = add_history_list_window(Some(repo.path.clone()), cx);
+    cx.executor().allow_parking();
+    await_history(&list, cx).await;
+    let head = list.read_with(cx, |list, _| list.commits[0].oid.clone());
+    list.update(cx, |list, cx| list.load_commit_files(head.clone(), cx));
+    await_history(&list, cx).await;
+    list.update(cx, |list, cx| {
+      list.set_opened(Some((head.clone(), PathBuf::from("a.txt"))), cx)
+    });
+
+    list.update(cx, |list, cx| {
+      list.set_repo_root(Some(other.path.clone()), cx)
+    });
+    await_history(&list, cx).await;
+
+    list.read_with(cx, |list, _| {
+      assert_eq!(list.commits.len(), 1);
+      assert_eq!(list.commits[0].summary, "to");
+      assert!(list.files_by_commit.is_empty());
+      assert!(list.opened.is_none());
+    });
+  }
+
+  #[gpui::test]
+  async fn a_commit_that_is_gone_takes_its_cache_with_it(cx: &mut TestAppContext) {
+    let repo = TempRepo::init("history-list-amend");
+    commit_text_file(&repo.path, Path::new("a.txt"), "v1\n", "first");
+    commit_text_file(&repo.path, Path::new("b.txt"), "v1\n", "second");
+
+    let (list, cx) = add_history_list_window(Some(repo.path.clone()), cx);
+    cx.executor().allow_parking();
+    await_history(&list, cx).await;
+    let head = list.read_with(cx, |list, _| list.commits[0].oid.clone());
+    list.update(cx, |list, cx| list.load_commit_files(head.clone(), cx));
+    await_history(&list, cx).await;
+    list.update(cx, |list, cx| {
+      list.set_opened(Some((head.clone(), PathBuf::from("b.txt"))), cx)
+    });
+
+    // The commit the cache points at no longer exists after an undo.
+    git::undo_last_commit(&repo.path).expect("undo the last commit");
+    list.update(cx, |list, cx| list.refresh(cx));
+    await_history(&list, cx).await;
+
+    list.read_with(cx, |list, _| {
+      assert_eq!(list.commits.len(), 1);
+      assert!(!list.files_by_commit.contains_key(&head));
+      assert!(list.opened.is_none(), "the open file left with its commit");
+    });
+  }
+
+  #[test]
+  fn build_history_tree_items_marks_selected_commit_expanded() {
+    let commits = vec![
+      make_commit("c3", &["c2"]),
+      make_commit("c2", &["c1"]),
+      make_commit("c1", &[]),
+    ];
+    let rows = commits
+      .iter()
+      .cloned()
+      .map(HistoryRenderRow::from_commit)
+      .collect::<Vec<_>>();
+
+    let mut files_by_commit = HashMap::new();
+    files_by_commit.insert(
+      "c2".to_string(),
+      vec![make_history_file(
+        "src/c2.rs",
+        CommitFileChangeKind::Modified,
+      )],
+    );
+    files_by_commit.insert(
+      "c1".to_string(),
+      vec![make_history_file("src/c1.rs", CommitFileChangeKind::Added)],
+    );
+
+    let loading = HashSet::new();
+    let expanded = HashSet::from(["c2".to_string()]);
+    let (items, _) = build_history_tree_items(&rows, &files_by_commit, &loading, &expanded);
+
+    assert!(!items[0].is_expanded());
+    assert!(items[1].is_expanded());
+    assert!(!items[2].is_expanded());
+  }
+
+  #[test]
+  fn build_history_tree_items_supports_multiple_expanded_commits() {
+    let commits = vec![
+      make_commit("c3", &["c2"]),
+      make_commit("c2", &["c1"]),
+      make_commit("c1", &[]),
+    ];
+    let rows = commits
+      .iter()
+      .cloned()
+      .map(HistoryRenderRow::from_commit)
+      .collect::<Vec<_>>();
+    let files_by_commit = HashMap::new();
+    let loading = HashSet::new();
+    let expanded = HashSet::from(["c3".to_string(), "c1".to_string()]);
+
+    let (items, _) = build_history_tree_items(&rows, &files_by_commit, &loading, &expanded);
+
+    assert!(items[0].is_expanded());
+    assert!(!items[1].is_expanded());
+    assert!(items[2].is_expanded());
+  }
+
+  #[test]
+  fn build_history_tree_items_includes_commit_and_file_nodes() {
+    let commits = vec![make_commit("c2", &["c1"]), make_commit("c1", &[])];
+    let rows = commits
+      .iter()
+      .cloned()
+      .map(HistoryRenderRow::from_commit)
+      .collect::<Vec<_>>();
+    let mut files_by_commit = HashMap::new();
+    files_by_commit.insert(
+      "c2".to_string(),
+      vec![make_history_file(
+        "src/main.rs",
+        CommitFileChangeKind::Modified,
+      )],
+    );
+    let loading = HashSet::new();
+    let expanded = HashSet::from(["c2".to_string()]);
+
+    let (items, nodes) = build_history_tree_items(&rows, &files_by_commit, &loading, &expanded);
+    assert_eq!(items.len(), 2);
+    assert_eq!(items[0].children.len(), 1);
+    assert_eq!(items[0].children[0].label.as_ref(), "src/main.rs");
+
+    let commit_id = format!("history-commit:{}", rows[0].commit.oid);
+    assert!(matches!(
+      nodes.get(&commit_id),
+      Some(HistoryTreeNode::Commit { oid }) if oid == "c2"
+    ));
+
+    let file_id = format!("history-file:{}:{}", rows[0].commit.oid, 0);
+    assert!(matches!(
+      nodes.get(&file_id),
+      Some(HistoryTreeNode::File { commit_oid, .. }) if commit_oid == "c2"
+    ));
+  }
+
+  #[test]
+  fn build_history_tree_items_uses_loading_placeholder() {
+    let commits = vec![make_commit("c1", &[])];
+    let rows = commits
+      .iter()
+      .cloned()
+      .map(HistoryRenderRow::from_commit)
+      .collect::<Vec<_>>();
+    let files_by_commit = HashMap::new();
+    let loading = HashSet::from(["c1".to_string()]);
+    let expanded = HashSet::from(["c1".to_string()]);
+
+    let (items, nodes) = build_history_tree_items(&rows, &files_by_commit, &loading, &expanded);
+    assert_eq!(items[0].children.len(), 1);
+    assert_eq!(items[0].children[0].label.as_ref(), "Loading files...");
+    assert!(matches!(
+      nodes.get("history-loading:c1"),
+      Some(HistoryTreeNode::Placeholder)
+    ));
+  }
+
+  #[test]
+  fn should_refresh_history_for_poll_when_history_empty() {
+    assert!(should_refresh_history_for_poll(
+      true,
+      true,
+      Some(&make_history_revision("a")),
+      Some(&make_history_revision("a"))
+    ));
+  }
+
+  #[test]
+  fn should_not_refresh_history_for_poll_when_revision_unchanged() {
+    let revision = make_history_revision("a");
+    assert!(!should_refresh_history_for_poll(
+      true,
+      false,
+      Some(&revision),
+      Some(&revision)
+    ));
+  }
+
+  #[test]
+  fn should_refresh_history_for_poll_when_revision_changed() {
+    let cached = make_history_revision("a");
+    let current = make_history_revision("b");
+    assert!(should_refresh_history_for_poll(
+      true,
+      false,
+      Some(&cached),
+      Some(&current)
+    ));
+  }
+
+  #[test]
+  fn should_not_refresh_history_for_poll_when_history_not_included() {
+    assert!(!should_refresh_history_for_poll(
+      false,
+      true,
+      Some(&make_history_revision("a")),
+      Some(&make_history_revision("b"))
+    ));
+  }
+
+  #[test]
+  fn should_not_refresh_history_for_poll_when_revision_unavailable() {
+    assert!(!should_refresh_history_for_poll(
+      true,
+      false,
+      Some(&make_history_revision("a")),
+      None
+    ));
+  }
+
+  #[test]
+  fn history_change_kind_mapping_covers_all_variants() {
+    assert_eq!(
+      history_change_kind_to_repo_status(CommitFileChangeKind::Added),
+      RepoStatusKind::Added
+    );
+    assert_eq!(
+      history_change_kind_to_repo_status(CommitFileChangeKind::Deleted),
+      RepoStatusKind::Deleted
+    );
+    assert_eq!(
+      history_change_kind_to_repo_status(CommitFileChangeKind::Modified),
+      RepoStatusKind::Modified
+    );
+    assert_eq!(
+      history_change_kind_to_repo_status(CommitFileChangeKind::Renamed),
+      RepoStatusKind::Renamed
+    );
+    assert_eq!(
+      history_change_kind_to_repo_status(CommitFileChangeKind::Copied),
+      RepoStatusKind::Renamed
+    );
+    assert_eq!(
+      history_change_kind_to_repo_status(CommitFileChangeKind::Typechange),
+      RepoStatusKind::TypeChange
+    );
+    assert_eq!(
+      history_change_kind_to_repo_status(CommitFileChangeKind::Conflicted),
+      RepoStatusKind::Conflicted
+    );
+  }
+}
