@@ -839,20 +839,26 @@ impl SessionPage {
     cx: &mut Context<Self>,
   ) {
     cx.stop_propagation();
+    match self.selection_context(cx) {
+      Ok((path, text)) => self.deliver_selection_context(path, text, window, cx),
+      Err(reason) => window.push_notification(Notification::info(reason), cx),
+    }
+  }
+
+  /// What `cmd-shift-l` would send, or why it cannot.
+  fn selection_context(&self, cx: &App) -> Result<(String, String), &'static str> {
     let Some(editor) = self.diff_editor() else {
-      window.push_notification(Notification::info("Open a file diff first"), cx);
-      return;
+      return Err("Open a file diff first");
     };
     let Some(text) = editor.read(cx).selected_text_for_copy(cx) else {
-      window.push_notification(Notification::info("Select code in the diff first"), cx);
-      return;
+      return Err("Select code in the diff first");
     };
     let path = self
       .selected_file
       .as_ref()
       .map(|path| path.to_string_lossy().to_string())
       .unwrap_or_else(|| "selection".to_string());
-    self.deliver_selection_context(path, text, window, cx);
+    Ok((path, text))
   }
 
   /// Escape is bound to the editor's CloseFind; it bubbles up here when there was

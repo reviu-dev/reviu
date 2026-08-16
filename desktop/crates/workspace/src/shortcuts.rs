@@ -1739,6 +1739,38 @@ mod tests {
   }
 
   #[test]
+  fn local_git_shortcuts_reach_the_shell_as_they_move_there() {
+    // Hunk actions and the selection hand-off now work on both surfaces.
+    let bound_in = |pathname: &str, keystroke: &str| {
+      has_binding_with_bindings_in_contexts(
+        pathname,
+        &["Editor"],
+        keystroke,
+        workspace_key_bindings(),
+      )
+    };
+    for keystroke in [
+      "shift-enter",
+      "shift-backspace",
+      "cmd-shift-enter",
+      "cmd-shift-l",
+    ] {
+      assert!(bound_in("/git", keystroke), "{keystroke} on the git page");
+      assert!(bound_in("/session", keystroke), "{keystroke} in the shell");
+      assert!(
+        !bound_in("/github/owner/repo/pull/42/changes", keystroke),
+        "{keystroke} has no business on a pull request"
+      );
+    }
+
+    // Still git-page only, until they move with their surface.
+    for keystroke in ["cmd-o", "cmd-u", "cmd-y", "cmd-shift-y", "cmd-j"] {
+      assert!(has_binding("/git", keystroke));
+      assert!(!has_binding("/session", keystroke));
+    }
+  }
+
+  #[test]
   fn page_tab_shortcuts_are_scoped_to_pr_pages() {
     for keystroke in ["cmd-alt-left", "cmd-alt-right"] {
       assert!(!has_binding("/git", keystroke));

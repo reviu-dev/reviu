@@ -1586,16 +1586,24 @@ mod tests {
     });
     cx.run_until_parked();
     page.read_with(cx, |page, cx| {
-      assert!(
-        page
-          .editor
-          .as_ref()
-          .expect("editor")
-          .read(cx)
-          .selected_text_for_copy(cx)
-          .is_none()
+      assert_eq!(
+        page.selection_context(cx),
+        Err("Select code in the diff first")
       );
       assert!(page.agent_chat_view.is_none());
+    });
+
+    // With a selection, the file and its text are what travels to the agent.
+    page.update_in(cx, |page, window, cx| {
+      let editor = page.editor.clone().expect("editor");
+      editor.update(cx, |editor, cx| {
+        editor::select_all(editor, &editor::SelectAll, window, cx)
+      });
+    });
+    page.read_with(cx, |page, cx| {
+      let (path, text) = page.selection_context(cx).expect("a selection to send");
+      assert_eq!(path, "a.txt");
+      assert!(text.contains("v2"), "the selected lines travel as text");
     });
   }
 
