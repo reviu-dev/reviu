@@ -624,8 +624,8 @@ pub struct GitPage {
   history_tree_nodes: HashMap<String, HistoryTreeNode>,
   selected_file: Option<PathBuf>,
   selected_file_source: Option<SelectedFileSource>,
-  select_first_file_after_restore: bool,
   force_list_selection: bool,
+  select_first_file_after_restore: bool,
   editor: Option<Entity<Editor>>,
   terminal_view: Entity<TerminalView>,
   interactive_rebase_todo_view: Option<Entity<InteractiveRebaseTodoView>>,
@@ -1366,11 +1366,10 @@ impl GitPage {
 
     self.sync_editor_unmerged_state(cx);
 
-    if self.select_first_file_after_restore {
-      self.select_first_file_after_restore = false;
-      if let Some(first_path) = self.status_entries.first().map(|entry| entry.path.clone()) {
-        self.open_status_file(first_path, cx);
-      }
+    if std::mem::take(&mut self.select_first_file_after_restore)
+      && let Some(first_path) = self.status_entries.first().map(|entry| entry.path.clone())
+    {
+      self.open_status_file(first_path, cx);
     }
 
     self.sync_sentry_git_context();
@@ -1448,18 +1447,13 @@ impl GitPage {
     let rows = self.status_entries.clone();
     let split_sections = !self.git_unified_file_view;
     let opened_path = self.selected_file.clone();
-    let select_first = std::mem::take(&mut self.select_first_file_after_restore);
     self.force_list_selection = false;
 
     self.changes_list.update(cx, |list, cx| {
       list.set_split_sections(split_sections, cx);
       list.set_entries(rows, cx);
       list.set_opened_path(opened_path.clone(), cx);
-      if select_first {
-        list.select_first(cx);
-      } else {
-        list.select_path(opened_path.as_deref(), cx);
-      }
+      list.select_path(opened_path.as_deref(), cx);
     });
   }
 
@@ -1655,8 +1649,8 @@ impl GitPage {
       history_tree_nodes: HashMap::new(),
       selected_file: None,
       selected_file_source: None,
-      select_first_file_after_restore: false,
       force_list_selection: false,
+      select_first_file_after_restore: false,
       editor: None,
       terminal_view: cx.new(|cx| TerminalView::new(terminal_working_directory.clone(), cx)),
       interactive_rebase_todo_view: None,
@@ -1764,8 +1758,8 @@ impl GitPage {
       history_tree_nodes: HashMap::new(),
       selected_file: None,
       selected_file_source: None,
-      select_first_file_after_restore: false,
       force_list_selection: false,
+      select_first_file_after_restore: false,
       editor: None,
       terminal_view: cx.new(|cx| TerminalView::new(None, cx)),
       interactive_rebase_todo_view: None,
@@ -1934,10 +1928,12 @@ impl GitPage {
       &self.changes_list,
       move |this, _list, event: &ChangesListEvent, cx| match event {
         ChangesListEvent::OpenFile { path } => this.open_status_file(path.clone(), cx),
-        ChangesListEvent::Changed { label } => {
+        ChangesListEvent::Changed { label, destructive } => {
           let mut data = Map::new();
           data.insert("action".into(), (*label).into());
           this.add_git_breadcrumb("Staging action succeeded", data);
+          // The open file may have just been discarded; fall back to the first one.
+          this.select_first_file_after_restore = *destructive;
           this.reload_status(cx);
           if let Some(editor) = this.editor.clone() {
             editor.update(cx, |editor, cx| editor.refresh_git_state(cx));
@@ -1992,7 +1988,6 @@ impl GitPage {
     self.invalidate_open_file_task();
     self.selected_file = None;
     self.selected_file_source = None;
-    self.select_first_file_after_restore = false;
     self.operation_error = None;
     self.editor = None;
     self.agent_review.clear();
@@ -2041,7 +2036,6 @@ impl GitPage {
     self.invalidate_open_file_task();
     self.selected_file = None;
     self.selected_file_source = None;
-    self.select_first_file_after_restore = false;
     self.operation_error = None;
     self.editor = None;
     self.agent_review.clear();
@@ -2168,7 +2162,6 @@ impl GitPage {
     let Some(repo_root) = self.selected_repo.clone() else {
       self.invalidate_open_file_task();
       self.status_entries.clear();
-      self.select_first_file_after_restore = false;
       if Self::should_refresh_file_list(self.sidebar_mode) {
         self.refresh_file_list(cx);
       }
@@ -2273,7 +2266,6 @@ impl GitPage {
           this.status_task = None;
           this.invalidate_open_file_task();
           this.status_entries.clear();
-          this.select_first_file_after_restore = false;
           this.branch_status = None;
           this.has_head_commit = false;
           this.can_undo_last_commit = false;

@@ -311,4 +311,50 @@ mod tests {
     });
     assert!(input_value.is_empty());
   }
+
+  #[gpui::test]
+  async fn discarding_the_open_file_falls_back_to_the_first_remaining_one(cx: &mut TestAppContext) {
+    init_gpui_test(cx);
+    let repo = TempRepo::init("git-page-discard-open-file");
+    commit_text_file(&repo.path, Path::new("a.txt"), "a1\n", "initial");
+    std::fs::write(repo.path.join("a.txt"), "a2\n").expect("modify first file");
+    std::fs::write(repo.path.join("b.txt"), "b\n").expect("write second file");
+
+    let (git_page, cx) = add_git_page_window_with_root(cx);
+    cx.executor().allow_parking();
+
+    git_page.update_in(cx, |this, _window, cx| {
+      this.selected_repo = Some(repo.path.clone());
+      this.status_entries = git::list_repo_status(&repo.path).expect("status");
+      this.selected_file = Some(PathBuf::from("b.txt"));
+      this.changes_list.update(cx, |list, cx| {
+        list.set_repo_root(Some(repo.path.clone()), cx);
+        list.set_entries(this.status_entries.clone(), cx);
+      });
+    });
+
+    // Discard the file the editor is showing.
+    let task = git_page.update_in(cx, |this, window, cx| {
+      this.changes_list.update(cx, |list, cx| {
+        list.restore_file(
+          PathBuf::from("b.txt"),
+          RepoStatusKind::Untracked,
+          window,
+          cx,
+        );
+        list._action_task.take().expect("discard task")
+      })
+    });
+    task.await;
+    cx.run_until_parked();
+    await_git_page_background_tasks(git_page.clone(), cx).await;
+
+    git_page.read_with(cx, |this, _| {
+      assert_eq!(
+        this.selected_file.as_deref(),
+        Some(Path::new("a.txt")),
+        "the editor should move to the file that is still there"
+      );
+    });
+  }
 }

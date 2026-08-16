@@ -147,6 +147,8 @@ pub(crate) enum ChangesListEvent {
   /// the action for the consumer's telemetry.
   Changed {
     label: &'static str,
+    /// The action removed rows: whoever shows a file may be showing a ghost.
+    destructive: bool,
   },
 }
 
@@ -566,6 +568,21 @@ impl ChangesList {
   where
     F: FnOnce(&Path) -> anyhow::Result<()> + Send + 'static,
   {
+    self.run_action(label, false, job, window, cx);
+  }
+
+  /// `destructive` actions delete the selected row, so the highlight moves to
+  /// the top instead of pointing at nothing.
+  fn run_action<F>(
+    &mut self,
+    label: &'static str,
+    destructive: bool,
+    job: F,
+    window: &mut Window,
+    cx: &mut Context<Self>,
+  ) where
+    F: FnOnce(&Path) -> anyhow::Result<()> + Send + 'static,
+  {
     let Some(repo_root) = self.repo_root.clone() else {
       return;
     };
@@ -581,7 +598,12 @@ impl ChangesList {
         let _ = this.update(cx, |this, cx| {
           this.action_in_flight = false;
           match result {
-            Ok(()) => cx.emit(ChangesListEvent::Changed { label }),
+            Ok(()) => {
+              if destructive {
+                this.select_first(cx);
+              }
+              cx.emit(ChangesListEvent::Changed { label, destructive });
+            }
             Err(error) => {
               window.push_notification(Notification::error(format!("{label} failed: {error}")), cx)
             }
@@ -708,8 +730,9 @@ impl ChangesList {
       .iter()
       .find(|entry| entry.path == path)
       .and_then(|entry| entry.old_path.clone());
-    self.run(
+    self.run_action(
       "Discard changes",
+      true,
       move |repo_root| restore_entry(repo_root, &path, old_path.as_deref(), status),
       window,
       cx,
@@ -746,8 +769,9 @@ impl ChangesList {
 
   pub(crate) fn restore_all(&mut self, window: &mut Window, cx: &mut Context<Self>) {
     let entries = self.entries.clone();
-    self.run(
+    self.run_action(
       "Restore all",
+      true,
       move |repo_root| {
         let mut first_error = None;
         for entry in entries {
@@ -1539,6 +1563,156 @@ mod tests {
 
     assert!(cx.update(|window, cx| window.has_active_dialog(cx)));
     list.read_with(cx, |list, _| assert!(list._action_task.is_none()));
+
+    let _ = std::fs::remove_dir_all(&repo_root);
+  }
+
+  #[gpui::test]
+  async fn nothing_runs_without_a_repository(cx: &mut gpui::TestAppContext) {
+    let (list, cx) = add_changes_list_window(std::env::temp_dir(), cx);
+    cx.executor().allow_parking();
+    list.update(cx, |list, cx| list.set_repo_root(None, cx));
+
+    list.update_in(cx, |list, window, cx| {
+      list.stage_file(PathBuf::from("README.md"), window, cx);
+      list.unstage_all(window, cx);
+      list.restore_file(
+        PathBuf::from("README.md"),
+        RepoStatusKind::Modified,
+        window,
+        cx,
+      );
+    });
+
+    list.read_with(cx, |list, _| assert!(list._action_task.is_none()));
+  }
+
+  #[gpui::test]
+  async fn toggle_stage_all_flips_between_staging_and_unstaging(cx: &mut gpui::TestAppContext) {
+    let repo_root = temp_repo("changes-list-toggle-all");
+
+    let (list, cx) = add_changes_list_window(repo_root.clone(), cx);
+    cx.executor().allow_parking();
+    set_entries_from_disk(&list, cx, &repo_root);
+
+    // Something unstaged: the toggle stages everything.
+    let task = list.update_in(cx, |list, window, cx| {
+      list.toggle_stage_all(window, cx);
+      list._action_task.take().expect("stage all task")
+    });
+    task.await;
+    cx.run_until_parked();
+    assert!(
+      list_repo_status(&repo_root)
+        .expect("status")
+        .iter()
+        .all(|entry| entry.stage == RepoStage::Staged)
+    );
+
+    // Everything staged: the same toggle unstages.
+    set_entries_from_disk(&list, cx, &repo_root);
+    let task = list.update_in(cx, |list, window, cx| {
+      list.toggle_stage_all(window, cx);
+      list._action_task.take().expect("unstage all task")
+    });
+    task.await;
+    cx.run_until_parked();
+    assert!(
+      list_repo_status(&repo_root)
+        .expect("status")
+        .iter()
+        .all(|entry| entry.stage == RepoStage::Unstaged)
+    );
+
+    let _ = std::fs::remove_dir_all(&repo_root);
+  }
+
+  #[gpui::test]
+  async fn discarding_moves_the_selection_off_the_deleted_row(cx: &mut gpui::TestAppContext) {
+    let repo_root = temp_repo("changes-list-selection-after-discard");
+    std::fs::write(repo_root.join("other.txt"), "new\n").expect("write second file");
+
+    let (list, cx) = add_changes_list_window(repo_root.clone(), cx);
+    cx.executor().allow_parking();
+    set_entries_from_disk(&list, cx, &repo_root);
+
+    list.update(cx, |list, cx| {
+      list.select_path(Some(Path::new("other.txt")), cx)
+    });
+    let task = list.update_in(cx, |list, window, cx| {
+      list.restore_file(
+        PathBuf::from("other.txt"),
+        RepoStatusKind::Untracked,
+        window,
+        cx,
+      );
+      list._action_task.take().expect("discard task")
+    });
+    task.await;
+    cx.run_until_parked();
+
+    // The selected row is gone: the highlight must not point at nothing.
+    list.read_with(cx, |list, cx| assert!(list.has_selection(cx)));
+
+    let _ = std::fs::remove_dir_all(&repo_root);
+  }
+
+  #[gpui::test]
+  async fn discarding_a_deleted_file_brings_it_back(cx: &mut gpui::TestAppContext) {
+    let repo_root = temp_repo("changes-list-restore-deleted");
+    std::fs::remove_file(repo_root.join("README.md")).expect("delete tracked file");
+
+    let (list, cx) = add_changes_list_window(repo_root.clone(), cx);
+    cx.executor().allow_parking();
+    set_entries_from_disk(&list, cx, &repo_root);
+
+    let entry = list.read_with(cx, |list, _| list.entries()[0].clone());
+    assert_eq!(entry.status, RepoStatusKind::Deleted);
+
+    let task = list.update_in(cx, |list, window, cx| {
+      list.restore_file(entry.path.clone(), entry.status, window, cx);
+      list._action_task.take().expect("restore task")
+    });
+    task.await;
+    cx.run_until_parked();
+
+    assert_eq!(
+      std::fs::read_to_string(repo_root.join("README.md")).expect("read restored file"),
+      "v1\n"
+    );
+
+    let _ = std::fs::remove_dir_all(&repo_root);
+  }
+
+  #[gpui::test]
+  async fn a_failing_action_tells_the_user(cx: &mut gpui::TestAppContext) {
+    let repo_root = temp_repo("changes-list-action-error");
+
+    let (list, cx) = add_changes_list_window(repo_root.clone(), cx);
+    cx.executor().allow_parking();
+    set_entries_from_disk(&list, cx, &repo_root);
+
+    // Nothing to delete under this name: the job fails.
+    let task = list.update_in(cx, |list, window, cx| {
+      list.restore_file(
+        PathBuf::from("ghost.txt"),
+        RepoStatusKind::Untracked,
+        window,
+        cx,
+      );
+      list._action_task.take().expect("restore task")
+    });
+    task.await;
+    cx.run_until_parked();
+
+    let reported = cx.update(|window, cx| {
+      !gpui_component::Root::read(window, cx)
+        .notification
+        .read(cx)
+        .notifications()
+        .is_empty()
+    });
+    assert!(reported, "a failed git action must be reported");
 
     let _ = std::fs::remove_dir_all(&repo_root);
   }
