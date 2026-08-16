@@ -90,13 +90,14 @@ impl GitPage {
     let editor = self.editor.clone();
 
     let task = cx.spawn(async move |this, cx| {
-      let result = unblock(move || {
-        if stage_all_needed {
-          stage_all(&repo_root)?;
-        }
-        commit_changes(&repo_root, &message)
-      })
-      .await;
+      let result = cx
+        .background_spawn(async move {
+          if stage_all_needed {
+            stage_all(&repo_root)?;
+          }
+          commit_changes(&repo_root, &message)
+        })
+        .await;
       let _ = this.update(cx, |this, cx| {
         match result {
           Ok(()) => {
@@ -148,7 +149,9 @@ impl GitPage {
     let editor = self.editor.clone();
 
     let task = cx.spawn(async move |this, cx| {
-      let result = unblock(move || amend_commit(&repo_root, message_opt.as_deref())).await;
+      let result = cx
+        .background_spawn(async move { amend_commit(&repo_root, message_opt.as_deref()) })
+        .await;
       let _ = this.update(cx, |this, cx| {
         match result {
           Ok(()) => {
@@ -180,7 +183,9 @@ impl GitPage {
 
     let editor = self.editor.clone();
     let task = cx.spawn(async move |this, cx| {
-      let result = unblock(move || RepoCommand::UndoLastCommit.run(&repo_root)).await;
+      let result = cx
+        .background_spawn(async move { RepoCommand::UndoLastCommit.run(&repo_root) })
+        .await;
       let _ = this.update(cx, |this, cx| {
         match result {
           Ok(_) => {
@@ -273,7 +278,6 @@ mod tests {
       gpui_component::Root::new(git_page, window, cx)
     });
     let git_page = mounted_git_page.expect("git page");
-    cx.executor().allow_parking();
 
     let initial_notification_count = root.read_with(cx, |root, cx| {
       root.notification.read(cx).notifications().len()
@@ -374,7 +378,6 @@ mod tests {
       .id();
 
     let (git_page, cx) = add_git_page_window_with_root(cx);
-    cx.executor().allow_parking();
 
     let undo_task = git_page.update_in(cx, |this, _window, cx| {
       this.selected_repo = Some(repo.path.clone());

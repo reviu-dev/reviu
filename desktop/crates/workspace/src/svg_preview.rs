@@ -143,7 +143,6 @@ mod tests {
   #[gpui::test]
   async fn the_preview_renders_the_editor_content_and_follows_its_changes(cx: &mut TestAppContext) {
     let (preview, editor, repo, cx) = add_preview_window(SQUARE, cx);
-    cx.executor().allow_parking();
 
     preview.update_in(cx, |preview, window, cx| {
       preview.refresh_from_editor(&editor, window, cx)
@@ -183,7 +182,6 @@ mod tests {
   #[gpui::test]
   async fn clearing_drops_the_image_and_the_render_in_flight(cx: &mut TestAppContext) {
     let (preview, editor, repo, cx) = add_preview_window(SQUARE, cx);
-    cx.executor().allow_parking();
 
     preview.update_in(cx, |preview, window, cx| {
       preview.refresh_from_editor(&editor, window, cx);

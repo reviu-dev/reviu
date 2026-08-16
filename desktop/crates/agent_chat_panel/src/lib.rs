@@ -3796,6 +3796,24 @@ mod tests {
   use agent_client_protocol::schema::{
     SessionConfigSelect, SessionConfigSelectOption, ToolCallLocation, ToolCallUpdateFields,
   };
+  use std::sync::atomic::{AtomicU64, Ordering};
+
+  /// Two fixtures created in the same clock tick would otherwise share a directory.
+  static TEMP_DIR_COUNTER: AtomicU64 = AtomicU64::new(0);
+
+  fn temp_dir(prefix: &str) -> std::path::PathBuf {
+    let nanos = std::time::SystemTime::now()
+      .duration_since(std::time::UNIX_EPOCH)
+      .expect("system clock before unix epoch")
+      .as_nanos();
+    let unique = TEMP_DIR_COUNTER.fetch_add(1, Ordering::Relaxed);
+    let dir = std::env::temp_dir().join(format!(
+      "reviu-{prefix}-{}-{nanos}-{unique}",
+      std::process::id()
+    ));
+    std::fs::create_dir_all(&dir).expect("create temp dir");
+    dir
+  }
 
   fn call(id: &str, title: &str, kind: ToolKind) -> ToolCall {
     let arc: std::sync::Arc<str> = std::sync::Arc::from(id);
@@ -4258,14 +4276,7 @@ mod tests {
 
   #[test]
   fn prune_old_state_deletes_files_older_than_threshold() {
-    let dir = std::env::temp_dir().join(format!(
-      "reviu-agent-prune-{}",
-      std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap()
-        .as_nanos()
-    ));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = temp_dir("agent-prune");
     std::fs::write(dir.join("a.json"), "[]").unwrap();
     std::fs::write(dir.join("b.json"), "[]").unwrap();
     // sleep a hair so files have age > 0
@@ -4279,14 +4290,7 @@ mod tests {
 
   #[test]
   fn prune_old_state_keeps_recent_files() {
-    let dir = std::env::temp_dir().join(format!(
-      "reviu-agent-prune-keep-{}",
-      std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap()
-        .as_nanos()
-    ));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = temp_dir("agent-prune-keep");
     std::fs::write(dir.join("fresh.json"), "[]").unwrap();
     let pruned = AgentChatPanel::prune_old_state(&dir, std::time::Duration::from_secs(60));
     assert_eq!(pruned, 0);
@@ -4296,14 +4300,7 @@ mod tests {
 
   #[test]
   fn list_conversations_sorted_by_updated_at_desc() {
-    let dir = std::env::temp_dir().join(format!(
-      "reviu-agent-sort-{}",
-      std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap()
-        .as_nanos()
-    ));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = temp_dir("agent-sort");
     let mk = |id: &str, started: u64, updated: u64| {
       let conv = PersistedConversation {
         meta: ConversationMeta {

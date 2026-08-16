@@ -10,7 +10,6 @@ use gpui_component::{
   spinner::Spinner,
   v_flex,
 };
-use smol::unblock;
 use time::OffsetDateTime;
 use ui::{
   CommandPalette, CommandPaletteAction, CommandPaletteCommand, CommandPaletteConfig,
@@ -199,7 +198,8 @@ impl BillingPage {
 
     let api = self.api.clone();
     let task = cx.spawn(async move |this, cx| {
-      let result = unblock(move || api.fetch_me())
+      let result = cx
+        .background_spawn(async move { api.fetch_me() })
         .await
         .map_err(|error| error.to_string());
 
@@ -235,7 +235,8 @@ impl BillingPage {
 
     let api = self.api.clone();
     let task = cx.spawn(async move |this, cx| {
-      let result = unblock(move || api.checkout_subscription(slug))
+      let result = cx
+        .background_spawn(async move { api.checkout_subscription(slug) })
         .await
         .map_err(|error| error.to_string());
 

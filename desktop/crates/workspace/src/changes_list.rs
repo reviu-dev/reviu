@@ -19,7 +19,6 @@ use gpui_component::{
   notification::Notification,
   tooltip::Tooltip,
 };
-use smol::unblock;
 use ui::{
   ConfirmDialog, FILE_ICON_SIZE_PX, SelectableRowStyle, StatusThemeExt as _, WindowExt as _,
   file_icon_path_for_path_with_theme, selectable_list_item,
@@ -593,7 +592,7 @@ impl ChangesList {
     self.action_in_flight = true;
     let window_handle = window.window_handle();
     self._action_task = Some(cx.spawn(async move |this, cx| {
-      let result = unblock(move || job(&repo_root)).await;
+      let result = cx.background_spawn(async move { job(&repo_root) }).await;
       let _ = cx.update_window(window_handle, |_, window, cx| {
         let _ = this.update(cx, |this, cx| {
           this.action_in_flight = false;
@@ -966,11 +965,7 @@ mod tests {
   }
 
   fn temp_repo(prefix: &str) -> PathBuf {
-    let nanos = std::time::SystemTime::now()
-      .duration_since(std::time::UNIX_EPOCH)
-      .expect("system clock before unix epoch")
-      .as_nanos();
-    let path = std::env::temp_dir().join(format!("reviu-{prefix}-{}-{nanos}", std::process::id()));
+    let path = crate::test_support::temp_path(prefix);
     std::fs::create_dir_all(&path).expect("create temp dir");
     let repo = git2::Repository::init(&path).expect("init repo");
     std::fs::write(path.join("README.md"), "v1\n").expect("write file");
@@ -1006,7 +1001,6 @@ mod tests {
   async fn staging_a_file_from_the_row_button_stages_it_in_git(cx: &mut gpui::TestAppContext) {
     let repo_root = temp_repo("changes-list-stage");
     let (list, cx) = add_changes_list_window(repo_root.clone(), cx);
-    cx.executor().allow_parking();
 
     let entries = list_repo_status(&repo_root).expect("status");
     assert_eq!(entries.len(), 1);
@@ -1050,7 +1044,6 @@ mod tests {
   async fn a_row_click_asks_to_open_the_file(cx: &mut gpui::TestAppContext) {
     let repo_root = temp_repo("changes-list-open");
     let (list, cx) = add_changes_list_window(repo_root.clone(), cx);
-    cx.executor().allow_parking();
 
     list.update(cx, |list, cx| {
       list.set_entries(list_repo_status(&repo_root).expect("status"), cx)
@@ -1110,7 +1103,6 @@ mod tests {
     stage_all(&repo_root).expect("stage all");
 
     let (list, cx) = add_changes_list_window(repo_root.clone(), cx);
-    cx.executor().allow_parking();
     set_entries_from_disk(&list, cx, &repo_root);
 
     run_action(&list, cx, "changes-stage-0-0").await;
@@ -1127,7 +1119,6 @@ mod tests {
     let repo_root = temp_repo("changes-list-discard-confirm");
 
     let (list, cx) = add_changes_list_window(repo_root.clone(), cx);
-    cx.executor().allow_parking();
     set_entries_from_disk(&list, cx, &repo_root);
 
     let button = cx
@@ -1155,7 +1146,6 @@ mod tests {
     let repo_root = temp_repo("changes-list-discard-modified");
 
     let (list, cx) = add_changes_list_window(repo_root.clone(), cx);
-    cx.executor().allow_parking();
     set_entries_from_disk(&list, cx, &repo_root);
 
     // What the confirmation dialog runs.
@@ -1188,7 +1178,6 @@ mod tests {
     std::fs::write(repo_root.join("scratch.txt"), "temp\n").expect("write untracked file");
 
     let (list, cx) = add_changes_list_window(repo_root.clone(), cx);
-    cx.executor().allow_parking();
     set_entries_from_disk(&list, cx, &repo_root);
 
     let task = list.update_in(cx, |list, window, cx| {
@@ -1219,7 +1208,6 @@ mod tests {
     std::fs::write(repo_root.join("README.md"), "v3\n").expect("update file");
 
     let (list, cx) = add_changes_list_window(repo_root.clone(), cx);
-    cx.executor().allow_parking();
     set_entries_from_disk(&list, cx, &repo_root);
 
     list.read_with(cx, |list, _| {
@@ -1242,7 +1230,6 @@ mod tests {
     std::fs::write(repo_root.join("other.txt"), "new\n").expect("write second file");
 
     let (list, cx) = add_changes_list_window(repo_root.clone(), cx);
-    cx.executor().allow_parking();
     set_entries_from_disk(&list, cx, &repo_root);
 
     let opened = std::sync::Arc::new(std::sync::Mutex::new(Vec::<PathBuf>::new()));
@@ -1278,7 +1265,6 @@ mod tests {
     let repo_root = temp_repo("changes-list-enter");
 
     let (list, cx) = add_changes_list_window(repo_root.clone(), cx);
-    cx.executor().allow_parking();
     set_entries_from_disk(&list, cx, &repo_root);
 
     let opened = std::sync::Arc::new(std::sync::Mutex::new(Vec::<PathBuf>::new()));
@@ -1319,7 +1305,6 @@ mod tests {
     stage_file(&repo_root, Path::new("other.txt")).expect("stage second file");
 
     let (list, cx) = add_changes_list_window(repo_root.clone(), cx);
-    cx.executor().allow_parking();
     set_entries_from_disk(&list, cx, &repo_root);
 
     list.read_with(cx, |list, _| assert_eq!(list.entries().len(), 2));
@@ -1338,7 +1323,6 @@ mod tests {
     let other_root = temp_repo("changes-list-switch-to");
 
     let (list, cx) = add_changes_list_window(repo_root.clone(), cx);
-    cx.executor().allow_parking();
     set_entries_from_disk(&list, cx, &repo_root);
     assert!(cx.debug_bounds("changes-row-0-0").is_some());
 
@@ -1372,7 +1356,6 @@ mod tests {
     let repo_root = temp_repo("changes-list-conflict-stage");
 
     let (list, cx) = add_changes_list_window(repo_root.clone(), cx);
-    cx.executor().allow_parking();
     // A conflicted entry with the markers still in the open file.
     list.update(cx, |list, cx| {
       list.set_open_file_has_conflict_markers(true);
@@ -1412,7 +1395,6 @@ mod tests {
     stage_all(&repo_root).expect("stage the rename");
 
     let (list, cx) = add_changes_list_window(repo_root.clone(), cx);
-    cx.executor().allow_parking();
     set_entries_from_disk(&list, cx, &repo_root);
 
     let entry = list.read_with(cx, |list, _| list.entries()[0].clone());
@@ -1470,7 +1452,6 @@ mod tests {
     stage_all(&repo_root).expect("stage everything");
 
     let (list, cx) = add_changes_list_window(repo_root.clone(), cx);
-    cx.executor().allow_parking();
     set_entries_from_disk(&list, cx, &repo_root);
 
     let task = list.update_in(cx, |list, window, cx| {
@@ -1502,7 +1483,6 @@ mod tests {
     let repo_root = temp_repo("changes-list-restore-all-confirm");
 
     let (list, cx) = add_changes_list_window(repo_root.clone(), cx);
-    cx.executor().allow_parking();
     set_entries_from_disk(&list, cx, &repo_root);
 
     list.update_in(cx, |list, window, cx| list.confirm_restore_all(window, cx));
@@ -1526,7 +1506,6 @@ mod tests {
     let repo_root = temp_repo("changes-list-stage-all");
 
     let (list, cx) = add_changes_list_window(repo_root.clone(), cx);
-    cx.executor().allow_parking();
     set_entries_from_disk(&list, cx, &repo_root);
 
     // No conflict: it just stages.
@@ -1570,7 +1549,6 @@ mod tests {
   #[gpui::test]
   async fn nothing_runs_without_a_repository(cx: &mut gpui::TestAppContext) {
     let (list, cx) = add_changes_list_window(std::env::temp_dir(), cx);
-    cx.executor().allow_parking();
     list.update(cx, |list, cx| list.set_repo_root(None, cx));
 
     list.update_in(cx, |list, window, cx| {
@@ -1592,7 +1570,6 @@ mod tests {
     let repo_root = temp_repo("changes-list-toggle-all");
 
     let (list, cx) = add_changes_list_window(repo_root.clone(), cx);
-    cx.executor().allow_parking();
     set_entries_from_disk(&list, cx, &repo_root);
 
     // Something unstaged: the toggle stages everything.
@@ -1633,7 +1610,6 @@ mod tests {
     std::fs::write(repo_root.join("other.txt"), "new\n").expect("write second file");
 
     let (list, cx) = add_changes_list_window(repo_root.clone(), cx);
-    cx.executor().allow_parking();
     set_entries_from_disk(&list, cx, &repo_root);
 
     list.update(cx, |list, cx| {
@@ -1663,7 +1639,6 @@ mod tests {
     std::fs::remove_file(repo_root.join("README.md")).expect("delete tracked file");
 
     let (list, cx) = add_changes_list_window(repo_root.clone(), cx);
-    cx.executor().allow_parking();
     set_entries_from_disk(&list, cx, &repo_root);
 
     let entry = list.read_with(cx, |list, _| list.entries()[0].clone());
@@ -1689,7 +1664,6 @@ mod tests {
     let repo_root = temp_repo("changes-list-action-error");
 
     let (list, cx) = add_changes_list_window(repo_root.clone(), cx);
-    cx.executor().allow_parking();
     set_entries_from_disk(&list, cx, &repo_root);
 
     // Nothing to delete under this name: the job fails.

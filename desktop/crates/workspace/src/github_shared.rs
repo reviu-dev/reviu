@@ -1,9 +1,8 @@
 use std::path::Path;
 use std::sync::Arc;
 
-use gpui::{Context, Entity, ExternalPaths, Hsla, ParentElement as _, Window};
+use gpui::{AppContext as _, Context, Entity, ExternalPaths, Hsla, ParentElement as _, Window};
 use gpui_component::{Colorize, Sizable as _, input::TextareaState, tag::Tag};
-use smol::unblock;
 use ui::{StatusTag, StatusThemeExt as _};
 
 use crate::api::{
@@ -111,11 +110,12 @@ pub(crate) fn upload_dropped_images<V: 'static>(
     let window_handle = window.window_handle();
     let on_error = on_error.clone();
     cx.spawn(async move |this, cx| {
-      let upload = unblock(move || {
-        let bytes = std::fs::read(&path).map_err(anyhow::Error::from)?;
-        api.upload_asset(bytes, &content_type, &file_name)
-      })
-      .await;
+      let upload = cx
+        .background_spawn(async move {
+          let bytes = std::fs::read(&path).map_err(anyhow::Error::from)?;
+          api.upload_asset(bytes, &content_type, &file_name)
+        })
+        .await;
       let _ = this.update(cx, |this, cx| match upload {
         Ok(url) => {
           let markdown = format!("![image]({url})\n");

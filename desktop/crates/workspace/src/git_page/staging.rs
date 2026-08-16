@@ -158,7 +158,6 @@ mod tests {
     assert!(!entries.is_empty());
 
     let (git_page, cx) = add_git_page_window_with_root(cx);
-    cx.executor().allow_parking();
 
     let commit_task = git_page.update_in(cx, |this, window, cx| {
       this.selected_repo = Some(repo.path.clone());
@@ -206,7 +205,6 @@ mod tests {
     assert!(!entries.is_empty());
 
     let (git_page, cx) = add_git_page_window_with_root(cx);
-    cx.executor().allow_parking();
 
     git_page.update_in(cx, |this, window, cx| {
       this.selected_repo = Some(repo.path.clone());
@@ -265,7 +263,6 @@ mod tests {
     std::fs::write(repo.path.join("b.txt"), "b\n").expect("write second file");
 
     let (git_page, cx) = add_git_page_window_with_root(cx);
-    cx.executor().allow_parking();
 
     git_page.update_in(cx, |this, _window, cx| {
       this.selected_repo = Some(repo.path.clone());

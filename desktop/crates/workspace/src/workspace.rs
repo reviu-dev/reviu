@@ -17,7 +17,6 @@ use gpui_component::{
   tag::Tag,
 };
 use gpui_router::{Route, Routes};
-use smol::unblock;
 
 use crate::AppProfile;
 use crate::AuthCallbackTarget;
@@ -439,8 +438,11 @@ impl WorkspaceView {
     let platform = current_platform().to_string();
     let arch = current_arch().to_string();
     let task = cx.spawn(async move |this, cx| {
-      let result =
-        unblock(move || api.check_desktop_update(&current_version, &platform, &arch)).await;
+      let result = cx
+        .background_spawn(
+          async move { api.check_desktop_update(&current_version, &platform, &arch) },
+        )
+        .await;
       let _ = this.update(cx, |this, cx| match result {
         Ok(payload) if payload.update_available => {
           let Some(artifact) = payload.artifact else {
@@ -513,7 +515,9 @@ impl WorkspaceView {
         }
 
         let api = api.clone();
-        let result = unblock(move || api.fetch_github_notifications()).await;
+        let result = cx
+          .background_spawn(async move { api.fetch_github_notifications() })
+          .await;
 
         let _ = this.update(cx, |_, cx| {
           if let Ok(notifications) = result {
@@ -583,11 +587,12 @@ impl WorkspaceView {
 
     AppUpdateStore::set_downloading(cx, update.clone());
     let task = cx.spawn(async move |this, cx| {
-      let download_result = unblock({
-        let update = update.clone();
-        move || download_update_artifact(&update)
-      })
-      .await;
+      let download_result = cx
+        .background_spawn({
+          let update = update.clone();
+          async move { download_update_artifact(&update) }
+        })
+        .await;
 
       match download_result {
         Ok(ready) => {
@@ -599,7 +604,9 @@ impl WorkspaceView {
           }
 
           let install_ready = ready.clone();
-          let install_result = unblock(move || install_update_artifact(&install_ready)).await;
+          let install_result = cx
+            .background_spawn(async move { install_update_artifact(&install_ready) })
+            .await;
           let _ = this.update(cx, |_, cx| match install_result {
             Ok(()) => {
               AppUpdateStore::set_ready_to_install(cx, ready.clone());

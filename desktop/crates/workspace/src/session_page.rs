@@ -19,7 +19,6 @@ use gpui_component::{
   ActiveTheme as _, Disableable as _, Icon, Sizable as _, h_flex, notification::Notification,
   v_flex,
 };
-use smol::unblock;
 
 use crate::agent_chat_state::{
   agent_chat_state_dir, agent_path_to_repo_relative, prune_agent_chat_state_once,
@@ -319,8 +318,8 @@ impl SessionPage {
       return;
     };
     let task = cx.spawn(async move |this, cx| {
-      let (status, branches, upstream, default_branch, stashes, default_stash_message) =
-        unblock(move || {
+      let (status, branches, upstream, default_branch, stashes, default_stash_message) = cx
+        .background_spawn(async move {
           (
             git::current_branch_status(&repo_root),
             git::list_branches(&repo_root),
@@ -398,8 +397,11 @@ impl SessionPage {
     let load_repo_root = repo_root.clone();
     let load_file_path = file_path.clone();
     let task = cx.spawn(async move |this, cx| {
-      let loaded =
-        unblock(move || Editor::load_file_for_editor(&load_repo_root, &load_file_path)).await;
+      let loaded = cx
+        .background_spawn(
+          async move { Editor::load_file_for_editor(&load_repo_root, &load_file_path) },
+        )
+        .await;
       let _ = this.update(cx, move |this, cx| {
         if this.open_file_generation != generation {
           return;
@@ -474,10 +476,11 @@ impl SessionPage {
       let load_repo_root = repo_root.clone();
       let load_commit_oid = commit_oid.clone();
       let load_rel_path = rel_path.clone();
-      let commit_file = unblock(move || {
-        git::load_commit_file_diff(&load_repo_root, &load_commit_oid, &load_rel_path)
-      })
-      .await;
+      let commit_file = cx
+        .background_spawn(async move {
+          git::load_commit_file_diff(&load_repo_root, &load_commit_oid, &load_rel_path)
+        })
+        .await;
       let _ = this.update(cx, move |this, cx| {
         if this.open_file_generation != generation {
           return;
@@ -1238,9 +1241,11 @@ impl SessionPage {
     let window_handle = self.window_handle;
     let task = cx.spawn(async move |this, cx| {
       let run_repo_root = repo_root.clone();
-      let result =
-        unblock(move || git::start_interactive_rebase(&run_repo_root, &target, &todo_entries))
-          .await;
+      let result = cx
+        .background_spawn(async move {
+          git::start_interactive_rebase(&run_repo_root, &target, &todo_entries)
+        })
+        .await;
       let stopped_on_conflict = git::is_rebase_in_progress(&repo_root).unwrap_or(false);
       let conflicted_path = crate::repo_command::first_conflicted_path(&repo_root);
       let rebase_message = stopped_on_conflict
@@ -1407,13 +1412,14 @@ impl SessionPage {
     let task = cx.spawn(async move |this, cx| {
       let fetch_root = repo_root.clone();
       let branch_name = base_branch_name.clone();
-      let resolved = unblock(move || {
-        git::fetch(&fetch_root)?;
-        git::resolve_branch_ref(&fetch_root, &branch_name)?.ok_or_else(|| {
-          anyhow::anyhow!("branch {branch_name:?} was not found locally or on any remote")
+      let resolved = cx
+        .background_spawn(async move {
+          git::fetch(&fetch_root)?;
+          git::resolve_branch_ref(&fetch_root, &branch_name)?.ok_or_else(|| {
+            anyhow::anyhow!("branch {branch_name:?} was not found locally or on any remote")
+          })
         })
-      })
-      .await;
+        .await;
 
       let _ = cx.update_window(window_handle, |_, window, cx| {
         let _ = this.update(cx, |this, cx| match resolved {
@@ -1448,7 +1454,9 @@ impl SessionPage {
     self.repo_command_in_flight = true;
     let window_handle = self.window_handle;
     let task = cx.spawn(async move |this, cx| {
-      let result = unblock(move || command.run(&repo_root)).await;
+      let result = cx
+        .background_spawn(async move { command.run(&repo_root) })
+        .await;
       let _ = cx.update_window(window_handle, |_, window, cx| {
         let _ = this.update(cx, |this, cx| {
           this.repo_command_in_flight = false;
@@ -1994,7 +2002,6 @@ mod tests {
     std::fs::write(repo.path.join("README.md"), "v2\n").expect("update file");
 
     let (page, cx) = add_session_page_window(repo.path.clone(), cx);
-    cx.executor().allow_parking();
     cx.run_until_parked();
 
     page.update_in(cx, |page, window, cx| {
@@ -2027,7 +2034,6 @@ mod tests {
     commit_text_file(&other.path, Path::new("README.md"), "other\n", "initial");
 
     let (page, cx) = add_session_page_window(repo.path.clone(), cx);
-    cx.executor().allow_parking();
     cx.run_until_parked();
 
     page.update_in(cx, |page, window, cx| {
@@ -2067,7 +2073,6 @@ mod tests {
     commit_text_file(&repo.path, Path::new("b.txt"), "v1\n", "second");
 
     let (page, cx) = add_session_page_window(repo.path.clone(), cx);
-    cx.executor().allow_parking();
     let refresh = page.update(cx, |page, cx| {
       page.refresh_branch(cx);
       page.dock_panel.update(cx, |panel, cx| {
@@ -2150,7 +2155,6 @@ mod tests {
     git::create_stash(&repo.path, false, Some("wip")).expect("stash");
 
     let (page, cx) = add_session_page_window(repo.path.clone(), cx);
-    cx.executor().allow_parking();
     let refresh = page.update(cx, |page, cx| {
       page.refresh_branch(cx);
       page.dock_panel.update(cx, |panel, cx| {
@@ -2225,7 +2229,6 @@ mod tests {
       .name;
 
     let (page, cx) = add_session_page_window(repo.path.clone(), cx);
-    cx.executor().allow_parking();
     let refresh = page.update(cx, |page, cx| {
       page.refresh_branch(cx);
       page.dock_panel.update(cx, |panel, cx| {
@@ -2394,7 +2397,6 @@ mod tests {
     git::create_branch(&repo.path, "feature").expect("create branch");
 
     let (page, cx) = add_session_page_window(repo.path.clone(), cx);
-    cx.executor().allow_parking();
     cx.run_until_parked();
     page.update(cx, |page, _| page.pretend_agent_turn_in_flight = true);
 
@@ -2476,7 +2478,6 @@ mod tests {
     commit_text_file(&repo.path, Path::new("b.txt"), "v1\n", "second");
 
     let (page, cx) = add_session_page_window(repo.path.clone(), cx);
-    cx.executor().allow_parking();
     let refresh = page.update(cx, |page, cx| {
       page.refresh_branch(cx);
       page.dock_panel.update(cx, |panel, cx| {
@@ -2533,7 +2534,6 @@ mod tests {
     std::fs::write(repo.path.join("a.txt"), "v2\n").expect("update file");
 
     let (page, cx) = add_session_page_window(repo.path.clone(), cx);
-    cx.executor().allow_parking();
     let refresh = page.update(cx, |page, cx| {
       page.dock_panel.update(cx, |panel, cx| {
         panel.refresh(cx);
@@ -2608,7 +2608,6 @@ mod tests {
     commit_text_file(&repo.path, Path::new("c.txt"), "v1\n", "third");
 
     let (page, cx) = add_session_page_window(repo.path.clone(), cx);
-    cx.executor().allow_parking();
     let refresh = page.update(cx, |page, cx| {
       page.refresh_branch(cx);
       page.dock_panel.update(cx, |panel, cx| {
@@ -2690,7 +2689,6 @@ mod tests {
     let base = start_conflicting_rebase_setup(&repo.path);
 
     let (page, cx) = add_session_page_window(repo.path.clone(), cx);
-    cx.executor().allow_parking();
     let refresh = page.update(cx, |page, cx| {
       page.refresh_branch(cx);
       page.dock_panel.update(cx, |panel, cx| {
@@ -2793,7 +2791,6 @@ mod tests {
     commit_text_file(&repo.path, Path::new("a.txt"), "v3\n", "third");
 
     let (page, cx) = add_session_page_window(repo.path.clone(), cx);
-    cx.executor().allow_parking();
     let refresh = page.update(cx, |page, cx| {
       page.refresh_branch(cx);
       page.dock_panel.update(cx, |panel, cx| {
@@ -2839,7 +2836,6 @@ mod tests {
     std::fs::write(repo.path.join("a.txt"), "v3 working\n").expect("dirty the worktree");
 
     let (page, cx) = add_session_page_window(repo.path.clone(), cx);
-    cx.executor().allow_parking();
     let refresh = page.update(cx, |page, cx| {
       page.refresh_branch(cx);
       page.dock_panel.update(cx, |panel, cx| {
@@ -2883,7 +2879,6 @@ mod tests {
     commit_text_file(&other.path, Path::new("README.md"), "other\n", "initial");
 
     let (page, cx) = add_session_page_window(repo.path.clone(), cx);
-    cx.executor().allow_parking();
     cx.run_until_parked();
     ConfigStore::persist_recent_repository(&repo.path);
     page.update(cx, |page, _| page.pretend_agent_turn_in_flight = true);
@@ -2936,7 +2931,6 @@ mod tests {
     std::fs::write(repo.path.join("README.md"), "v2\n").expect("update file");
 
     let (page, cx) = add_session_page_window(repo.path.clone(), cx);
-    cx.executor().allow_parking();
     cx.run_until_parked();
 
     page.update_in(cx, |page, window, cx| {
@@ -2966,7 +2960,6 @@ mod tests {
     commit_text_file(&other.path, Path::new("README.md"), "other\n", "initial");
 
     let (page, cx) = add_session_page_window(repo.path.clone(), cx);
-    cx.executor().allow_parking();
     cx.run_until_parked();
     ConfigStore::persist_recent_repository(&other.path);
     ConfigStore::persist_recent_repository(&repo.path);
@@ -3103,7 +3096,6 @@ mod tests {
     let _remote = publish_to_new_remote(&repo.path, "session-page-ahead-counter");
 
     let (page, cx) = add_session_page_window(repo.path.clone(), cx);
-    cx.executor().allow_parking();
     cx.run_until_parked();
 
     page.update(cx, |page, cx| page.refresh_branch(cx));
@@ -3133,7 +3125,6 @@ mod tests {
     commit_text_file(&repo.path, Path::new("README.md"), "v2\n", "second");
 
     let (page, cx) = add_session_page_window(repo.path.clone(), cx);
-    cx.executor().allow_parking();
     cx.run_until_parked();
 
     page.update(cx, |page, cx| page.refresh_branch(cx));
@@ -3173,7 +3164,6 @@ mod tests {
     commit_text_file(&repo.path, Path::new("README.md"), "v1\n", "initial");
 
     let (page, cx) = add_session_page_window(repo.path.clone(), cx);
-    cx.executor().allow_parking();
     cx.run_until_parked();
 
     let error = page.update_in(cx, |page, window, cx| {
@@ -3192,7 +3182,6 @@ mod tests {
     commit_text_file(&repo.path, Path::new("a.txt"), "v1\n", "initial");
 
     let (page, cx) = add_session_page_window(repo.path.clone(), cx);
-    cx.executor().allow_parking();
     page.update(cx, |page, cx| {
       page.dock_panel.update(cx, |panel, cx| panel.refresh(cx));
       page.refresh_branch(cx);
@@ -3265,7 +3254,6 @@ mod tests {
     );
 
     let (page, cx) = add_session_page_window(repo.path.clone(), cx);
-    cx.executor().allow_parking();
     page.update(cx, |page, cx| page.refresh_branch(cx));
     await_branch_refresh(&page, cx).await;
 
@@ -3369,7 +3357,6 @@ mod tests {
     start_conflicting_rebase(&repo.path);
 
     let (page, cx) = add_session_page_window(repo.path.clone(), cx);
-    cx.executor().allow_parking();
     let refresh = page.update(cx, |page, cx| {
       page.dock_panel.update(cx, |panel, cx| {
         panel.refresh(cx);
@@ -3441,7 +3428,6 @@ mod tests {
     start_conflicting_rebase(&repo.path);
 
     let (page, cx) = add_session_page_window(repo.path.clone(), cx);
-    cx.executor().allow_parking();
     cx.run_until_parked();
 
     page.update_in(cx, |page, window, cx| {
@@ -3469,7 +3455,6 @@ mod tests {
     start_conflicting_rebase(&repo.path);
 
     let (page, cx) = add_session_page_window(repo.path.clone(), cx);
-    cx.executor().allow_parking();
     cx.run_until_parked();
 
     page.update_in(cx, |page, window, cx| {
@@ -3502,7 +3487,6 @@ mod tests {
     std::fs::write(repo.path.join("a.txt"), "v3 working\n").expect("update worktree");
 
     let (page, cx) = add_session_page_window(repo.path.clone(), cx);
-    cx.executor().allow_parking();
     page.update(cx, |page, cx| {
       page.dock_panel.update(cx, |panel, cx| panel.refresh(cx))
     });
@@ -3557,7 +3541,6 @@ mod tests {
     let base = start_conflicting_rebase_setup(&repo.path);
 
     let (page, cx) = add_session_page_window(repo.path.clone(), cx);
-    cx.executor().allow_parking();
     cx.run_until_parked();
 
     // Comes from a pull request: fetch, then merge its base branch here.
@@ -3621,7 +3604,6 @@ mod tests {
     commit_text_file(&repo.path, Path::new("a.txt"), "main\n", "main work");
 
     let (page, cx) = add_session_page_window(repo.path.clone(), cx);
-    cx.executor().allow_parking();
     page.update(cx, |page, cx| {
       page.dock_panel.update(cx, |panel, cx| panel.refresh(cx))
     });

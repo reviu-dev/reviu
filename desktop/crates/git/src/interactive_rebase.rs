@@ -3,6 +3,7 @@ use std::{
   fs,
   path::{Path, PathBuf},
   process::Command,
+  sync::atomic::{AtomicU64, Ordering},
   time::{SystemTime, UNIX_EPOCH},
 };
 
@@ -332,14 +333,19 @@ impl Drop for TempPath {
   }
 }
 
+/// Two rebases started in the same clock tick would otherwise write the same
+/// todo script.
+static TEMP_FILE_COUNTER: AtomicU64 = AtomicU64::new(0);
+
 fn write_temp_file(prefix: &str, suffix: &str, contents: &str) -> Result<TempPath> {
   let mut path = std::env::temp_dir();
   let nanos = SystemTime::now()
     .duration_since(UNIX_EPOCH)
     .context("system clock before unix epoch")?
     .as_nanos();
+  let unique = TEMP_FILE_COUNTER.fetch_add(1, Ordering::Relaxed);
   path.push(format!(
-    "reviu-{prefix}-{}-{nanos}{suffix}",
+    "reviu-{prefix}-{}-{nanos}-{unique}{suffix}",
     std::process::id()
   ));
   fs::write(&path, contents).with_context(|| format!("write temporary file {:?}", path))?;
@@ -366,67 +372,8 @@ fn make_script_executable_if_supported(_path: &Path) -> Result<()> {
 #[cfg(test)]
 mod tests {
   use super::*;
+  use crate::test_support::{TempRepo, commit_text_file};
   use git2::{Repository, Signature, build::CheckoutBuilder};
-
-  struct TempRepo {
-    path: PathBuf,
-  }
-
-  impl TempRepo {
-    fn init(prefix: &str) -> Self {
-      let mut path = std::env::temp_dir();
-      let nanos = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .expect("system clock before unix epoch")
-        .as_nanos();
-      path.push(format!("reviu-{prefix}-{}-{nanos}", std::process::id()));
-      std::fs::create_dir_all(&path).expect("create temp dir");
-      let repo = Repository::init(&path).expect("init git repository");
-      let mut config = repo.config().expect("open git config");
-      config
-        .set_str("user.name", "Reviu Tests")
-        .expect("set git user.name");
-      config
-        .set_str("user.email", "tests@reviu.local")
-        .expect("set git user.email");
-      Self { path }
-    }
-  }
-
-  impl Drop for TempRepo {
-    fn drop(&mut self) {
-      let _ = std::fs::remove_dir_all(&self.path);
-    }
-  }
-
-  fn commit_text_file(repo_root: &Path, rel_path: &Path, contents: &str, message: &str) -> Oid {
-    let repo = Repository::open(repo_root).expect("open repo");
-    std::fs::write(repo_root.join(rel_path), contents).expect("write worktree file");
-
-    let mut index = repo.index().expect("open index");
-    index.add_path(rel_path).expect("stage file");
-    index.write().expect("write index");
-    let tree_id = index.write_tree().expect("write tree");
-    let tree = repo.find_tree(tree_id).expect("find tree");
-    let signature = Signature::now("Reviu Tests", "tests@reviu.local").expect("signature");
-    let parent = repo.head().ok().and_then(|head| head.peel_to_commit().ok());
-
-    match parent {
-      Some(parent) => repo
-        .commit(
-          Some("HEAD"),
-          &signature,
-          &signature,
-          message,
-          &tree,
-          &[&parent],
-        )
-        .expect("commit with parent"),
-      None => repo
-        .commit(Some("HEAD"), &signature, &signature, message, &tree, &[])
-        .expect("initial commit"),
-    }
-  }
 
   fn switch_to_branch(repo_root: &Path, branch_name: &str) {
     let repo = Repository::open(repo_root).expect("open repo");

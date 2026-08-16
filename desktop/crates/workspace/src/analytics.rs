@@ -1,9 +1,8 @@
 use std::time::Duration;
 
-use gpui::{App, Global};
+use gpui::{App, AppContext as _, Global};
 use reqwest::blocking::Client;
 use serde_json::{Value, json};
-use smol::unblock;
 
 use crate::AppProfile;
 use crate::config::{AppSettings, ConfigStore};
@@ -65,8 +64,8 @@ pub fn track_with(cx: &mut App, name: &'static str, data: Option<Value>) {
   };
   let payload = build_payload(&analytics.device_id, name, data);
 
-  cx.spawn(async move |_| {
-    let _ = unblock(move || analytics.client.post(UMAMI_ENDPOINT).json(&payload).send()).await;
+  cx.background_spawn(async move {
+    let _ = analytics.client.post(UMAMI_ENDPOINT).json(&payload).send();
   })
   .detach();
 }

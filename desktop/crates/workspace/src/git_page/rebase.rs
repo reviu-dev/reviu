@@ -102,7 +102,9 @@ impl GitPage {
     let editor = self.editor.clone();
     let task = cx.spawn(async move |this, cx| {
       let repo_root_for_continue = repo_root.clone();
-      let result = unblock(move || RepoCommand::ContinueRebase.run(&repo_root_for_continue)).await;
+      let result = cx
+        .background_spawn(async move { RepoCommand::ContinueRebase.run(&repo_root_for_continue) })
+        .await;
       let (success, conflicted_path, error_message, failure_message, expected_conflict) =
         match result {
           Ok(RepoCommandOutcome::Conflicted { path, error, .. }) => {
@@ -321,9 +323,11 @@ impl GitPage {
     let success_message = interactive_rebase_success_message(&target);
     let task = cx.spawn(async move |this, cx| {
       let repo_root_for_rebase = repo_root.clone();
-      let result =
-        unblock(move || start_interactive_rebase(&repo_root_for_rebase, &target, &todo_entries))
-          .await;
+      let result = cx
+        .background_spawn(async move {
+          start_interactive_rebase(&repo_root_for_rebase, &target, &todo_entries)
+        })
+        .await;
 
       let rebase_in_progress = is_rebase_in_progress(&repo_root).unwrap_or(false);
       let conflicted_path = crate::repo_command::first_conflicted_path(&repo_root);
@@ -394,7 +398,9 @@ impl GitPage {
     let commit_input = self.commit_input.clone();
     let window_handle = self.window_handle;
     let task = cx.spawn(async move |this, cx| {
-      let result = unblock(move || abort_merge(&repo_root)).await;
+      let result = cx
+        .background_spawn(async move { abort_merge(&repo_root) })
+        .await;
       let _ = this.update(cx, |this, cx| {
         match result {
           Ok(()) => {
@@ -436,7 +442,9 @@ impl GitPage {
     let commit_input = self.commit_input.clone();
     let window_handle = self.window_handle;
     let task = cx.spawn(async move |this, cx| {
-      let result = unblock(move || abort_rebase(&repo_root)).await;
+      let result = cx
+        .background_spawn(async move { abort_rebase(&repo_root) })
+        .await;
       let _ = this.update(cx, |this, cx| {
         match result {
           Ok(()) => {
@@ -619,7 +627,6 @@ mod tests {
     std::fs::write(repo.path.join(rel_path), conflict_text).expect("write conflict markers");
 
     let (git_page, cx) = add_git_page_window_with_root(cx);
-    cx.executor().allow_parking();
 
     git_page.update_in(cx, |this, _window, cx| {
       this.selected_repo = Some(repo.path.clone());
@@ -680,7 +687,6 @@ mod tests {
     std::fs::write(repo.path.join(rel_path), modified_contents).expect("write modified file");
 
     let (git_page, cx) = add_git_page_window_with_root(cx);
-    cx.executor().allow_parking();
 
     git_page.update_in(cx, |this, _window, cx| {
       this.selected_repo = Some(repo.path.clone());
@@ -770,7 +776,6 @@ mod tests {
     );
 
     let (git_page, cx) = add_git_page_window_with_root(cx);
-    cx.executor().allow_parking();
 
     let reload_task = git_page.update_in(cx, |this, _window, cx| {
       this.selected_repo = Some(repo.path.clone());
@@ -867,7 +872,6 @@ mod tests {
     stage_file(&repo.path, rel_path).expect("stage resolved file");
 
     let (git_page, cx) = add_git_page_window_with_root(cx);
-    cx.executor().allow_parking();
 
     let reload_task = git_page.update_in(cx, |this, _window, cx| {
       this.selected_repo = Some(repo.path.clone());
@@ -977,7 +981,6 @@ mod tests {
     );
 
     let (git_page, cx) = add_git_page_window_with_root(cx);
-    cx.executor().allow_parking();
 
     let reload_task = git_page.update_in(cx, |this, _window, cx| {
       this.selected_repo = Some(repo.path.clone());
@@ -1076,7 +1079,6 @@ mod tests {
     stage_file(&repo.path, rel_path).expect("stage resolved file");
 
     let (git_page, cx) = add_git_page_window_with_root(cx);
-    cx.executor().allow_parking();
 
     let reload_task = git_page.update_in(cx, |this, _window, cx| {
       this.selected_repo = Some(repo.path.clone());
@@ -1209,7 +1211,6 @@ mod tests {
     stage_file(&repo.path, readme_path).expect("stage resolved first conflict");
 
     let (git_page, cx) = add_git_page_window_with_root(cx);
-    cx.executor().allow_parking();
 
     let reload_task = git_page.update_in(cx, |this, _window, cx| {
       this.selected_repo = Some(repo.path.clone());

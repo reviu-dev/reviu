@@ -850,7 +850,6 @@ mod tests {
     commit_text_file(&repo.path, Path::new("README.md"), "v1\n", "initial");
 
     let (page, cx) = add_session_page_window(repo.path.clone(), cx);
-    cx.executor().allow_parking();
     page.update(cx, |_, cx| cx.notify());
     cx.run_until_parked();
 
@@ -871,7 +870,6 @@ mod tests {
     let _remote = publish_to_new_remote(&repo.path, "session-page-counter-paint");
 
     let (page, cx) = add_session_page_window(repo.path.clone(), cx);
-    cx.executor().allow_parking();
     cx.run_until_parked();
 
     page.update(cx, |page, cx| page.refresh_branch(cx));
@@ -908,7 +906,6 @@ mod tests {
     commit_text_file(&repo.path, Path::new("README.md"), "v2\n", "second");
 
     let (page, cx) = add_session_page_window(repo.path.clone(), cx);
-    cx.executor().allow_parking();
     page.update(cx, |page, cx| page.refresh_branch(cx));
     await_branch_refresh(&page, cx).await;
     page.update(cx, |_, cx| cx.notify());
@@ -945,7 +942,6 @@ mod tests {
     std::fs::write(repo.path.join("README.md"), "v2\n").expect("update file");
 
     let (page, cx) = add_session_page_window(repo.path.clone(), cx);
-    cx.executor().allow_parking();
     page.update(cx, |page, cx| {
       page.dock_panel.update(cx, |panel, cx| panel.refresh(cx))
     });
@@ -998,7 +994,6 @@ mod tests {
     std::fs::write(repo.path.join("new.txt"), "brand new\n").expect("write untracked file");
 
     let (page, cx) = add_session_page_window(repo.path.clone(), cx);
-    cx.executor().allow_parking();
     page.update(cx, |page, cx| {
       page.dock_panel.update(cx, |panel, cx| panel.refresh(cx))
     });
@@ -1044,7 +1039,6 @@ mod tests {
     commit_text_file(&repo.path, Path::new("README.md"), "v1\n", "initial");
 
     let (page, cx) = add_session_page_window(repo.path.clone(), cx);
-    cx.executor().allow_parking();
     page.update(cx, |page, cx| {
       page.dock_panel.update(cx, |panel, cx| panel.refresh(cx))
     });
@@ -1082,7 +1076,6 @@ mod tests {
     std::fs::write(repo.path.join("README.md"), "# Title\n\nBody\n").expect("update file");
 
     let (page, cx) = add_session_page_window(repo.path.clone(), cx);
-    cx.executor().allow_parking();
     cx.run_until_parked();
 
     page.update_in(cx, |page, window, cx| {
@@ -1133,7 +1126,6 @@ mod tests {
     std::fs::write(repo.path.join("main.rs"), "fn main() { }\n").expect("update file");
 
     let (page, cx) = add_session_page_window(repo.path.clone(), cx);
-    cx.executor().allow_parking();
     cx.run_until_parked();
 
     page.update_in(cx, |page, window, cx| {
@@ -1154,7 +1146,6 @@ mod tests {
     std::fs::write(repo.path.join("README.md"), "# Title\n\nBody\n").expect("update file");
 
     let (page, cx) = add_session_page_window(repo.path.clone(), cx);
-    cx.executor().allow_parking();
     page.update(cx, |page, cx| {
       page.dock_panel.update(cx, |panel, cx| panel.refresh(cx))
     });
@@ -1210,7 +1201,6 @@ mod tests {
     .expect("update file");
 
     let (page, cx) = add_session_page_window(repo.path.clone(), cx);
-    cx.executor().allow_parking();
     cx.run_until_parked();
 
     page.update_in(cx, |page, window, cx| {
@@ -1243,7 +1233,6 @@ mod tests {
     std::fs::write(repo.path.join("main.rs"), "fn main() { }\n").expect("update rs");
 
     let (page, cx) = add_session_page_window(repo.path.clone(), cx);
-    cx.executor().allow_parking();
     cx.run_until_parked();
 
     page.update_in(cx, |page, window, cx| {
@@ -1276,7 +1265,6 @@ mod tests {
     std::fs::write(repo.path.join("GUIDE.md"), "# Guide\n\nSteps\n").expect("update guide");
 
     let (page, cx) = add_session_page_window(repo.path.clone(), cx);
-    cx.executor().allow_parking();
     cx.run_until_parked();
 
     page.update_in(cx, |page, window, cx| {
@@ -1310,7 +1298,6 @@ mod tests {
     std::fs::write(repo.path.join("README.md"), "# Title\n\nBody\n").expect("update file");
 
     let (page, cx) = add_session_page_window(repo.path.clone(), cx);
-    cx.executor().allow_parking();
     cx.run_until_parked();
 
     page.update_in(cx, |page, window, cx| {
@@ -1343,7 +1330,6 @@ mod tests {
     std::fs::write(repo.path.join("b.rs"), "fn other() { }\n").expect("update b");
 
     let (page, cx) = add_session_page_window(repo.path.clone(), cx);
-    cx.executor().allow_parking();
     page.update(cx, |page, cx| {
       page.dock_panel.update(cx, |panel, cx| panel.refresh(cx))
     });
@@ -1412,7 +1398,6 @@ mod tests {
     std::fs::write(repo.path.join("a.rs"), "fn main() { }\n").expect("update a");
 
     let (page, cx) = add_session_page_window(repo.path.clone(), cx);
-    cx.executor().allow_parking();
     page.update(cx, |page, cx| {
       crate::config::AppSettings::update(cx, |settings| settings.hide_whitespace = true);
       page.dock_panel.update(cx, |panel, cx| panel.refresh(cx))
@@ -1450,7 +1435,6 @@ mod tests {
     std::fs::write(repo.path.join("a.rs"), modified).expect("update file");
 
     let (page, cx) = add_session_page_window(repo.path.clone(), cx);
-    cx.executor().allow_parking();
     page.update(cx, |page, cx| {
       page.dock_panel.update(cx, |panel, cx| panel.refresh(cx))
     });
@@ -1516,7 +1500,6 @@ mod tests {
     commit_text_file(&repo.path, Path::new("a.txt"), "v1\n", "initial");
 
     let (page, cx) = add_session_page_window(repo.path.clone(), cx);
-    cx.executor().allow_parking();
     cx.run_until_parked();
 
     page.update_in(cx, |page, window, cx| {
@@ -1579,7 +1562,6 @@ mod tests {
     };
 
     let (page, cx) = add_session_page_window(repo.path.clone(), cx);
-    cx.executor().allow_parking();
     page.update(cx, |page, cx| page.refresh_branch(cx));
     await_branch_refresh(&page, cx).await;
 
@@ -1619,7 +1601,6 @@ mod tests {
     commit_text_file(&repo.path, Path::new("a.txt"), "v1\n", "initial");
 
     let (page, cx) = add_session_page_window(repo.path.clone(), cx);
-    cx.executor().allow_parking();
     cx.run_until_parked();
 
     // Branches are not loaded yet: the shortcut opens nothing.
@@ -1648,7 +1629,6 @@ mod tests {
     std::fs::write(repo.path.join("a.txt"), "v2\n").expect("update file");
 
     let (page, cx) = add_session_page_window(repo.path.clone(), cx);
-    cx.executor().allow_parking();
     let refresh = page.update(cx, |page, cx| {
       page.dock_panel.update(cx, |panel, cx| {
         panel.refresh(cx);
@@ -1727,7 +1707,6 @@ mod tests {
     std::fs::write(repo.path.join("a.txt"), "v2\n").expect("update file");
 
     let (page, cx) = add_session_page_window(repo.path.clone(), cx);
-    cx.executor().allow_parking();
     cx.run_until_parked();
 
     page.update_in(cx, |page, window, cx| {
@@ -1783,7 +1762,6 @@ mod tests {
     std::fs::write(repo.path.join("a.txt"), "v2\n").expect("update file");
 
     let (page, cx) = add_session_page_window(repo.path.clone(), cx);
-    cx.executor().allow_parking();
     cx.run_until_parked();
 
     // No diff on screen: the shell says so instead of spawning an agent.
@@ -1841,7 +1819,6 @@ mod tests {
     std::fs::write(repo.path.join("a.txt"), modified).expect("update file");
 
     let (page, cx) = add_session_page_window(repo.path.clone(), cx);
-    cx.executor().allow_parking();
     let refresh = page.update(cx, |page, cx| {
       page.dock_panel.update(cx, |panel, cx| {
         panel.refresh(cx);
@@ -1955,7 +1932,6 @@ mod tests {
     std::fs::write(repo.path.join("new.txt"), new_file).expect("write untracked file");
 
     let (page, cx) = add_session_page_window(repo.path.clone(), cx);
-    cx.executor().allow_parking();
     let refresh = page.update(cx, |page, cx| {
       page.dock_panel.update(cx, |panel, cx| {
         panel.refresh(cx);
@@ -2011,7 +1987,6 @@ mod tests {
       .expect("head sha");
 
     let (page, cx) = add_session_page_window(repo.path.clone(), cx);
-    cx.executor().allow_parking();
     cx.run_until_parked();
 
     let history = page.read_with(cx, |page, cx| page.dock_panel.read(cx).history_list.clone());
@@ -2056,7 +2031,6 @@ mod tests {
     std::fs::write(repo.path.join("a.txt"), modified).expect("update file");
 
     let (page, cx) = add_session_page_window(repo.path.clone(), cx);
-    cx.executor().allow_parking();
     let refresh = page.update(cx, |page, cx| {
       page.dock_panel.update(cx, |panel, cx| {
         panel.refresh(cx);
@@ -2125,7 +2099,6 @@ mod tests {
     let _ = git::merge_branch(&repo.path, &feature);
 
     let (page, cx) = add_session_page_window(repo.path.clone(), cx);
-    cx.executor().allow_parking();
     let refresh = page.update(cx, |page, cx| {
       page.dock_panel.update(cx, |panel, cx| {
         panel.refresh(cx);
@@ -2245,7 +2218,6 @@ mod tests {
     let _ = git::merge_branch(&repo.path, &feature);
 
     let (page, cx) = add_session_page_window(repo.path.clone(), cx);
-    cx.executor().allow_parking();
     let refresh = page.update(cx, |page, cx| {
       page.dock_panel.update(cx, |panel, cx| {
         panel.refresh(cx);
@@ -2354,7 +2326,6 @@ mod tests {
     let _ = git::merge_branch(&repo.path, &feature);
 
     let (page, cx) = add_session_page_window(repo.path.clone(), cx);
-    cx.executor().allow_parking();
     let refresh = page.update(cx, |page, cx| {
       page.dock_panel.update(cx, |panel, cx| {
         panel.refresh(cx);
@@ -2407,7 +2378,6 @@ mod tests {
     std::fs::write(repo.path.join("a.txt"), "v2\n").expect("update file");
 
     let (page, cx) = add_session_page_window(repo.path.clone(), cx);
-    cx.executor().allow_parking();
     let refresh = page.update(cx, |page, cx| {
       page.dock_panel.update(cx, |panel, cx| {
         panel.refresh(cx);
@@ -2464,7 +2434,6 @@ mod tests {
     std::fs::write(repo.path.join("README.md"), modified).expect("update file");
 
     let (page, cx) = add_session_page_window(repo.path.clone(), cx);
-    cx.executor().allow_parking();
     cx.run_until_parked();
 
     page.update_in(cx, |page, window, cx| {

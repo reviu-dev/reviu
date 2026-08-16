@@ -36,7 +36,6 @@ use gpui_component::{
   v_flex,
 };
 use parking_lot::RwLock;
-use smol::unblock;
 use syntax::languages;
 use ui::{
   MARKDOWN_COMPOSER_CHROME_HEIGHT_PX, MarkdownComposer, StatusThemeExt as _, Theme, UiIconName,
@@ -5148,7 +5147,9 @@ impl Editor {
     let staged_diff_rel_path = rel_path.clone();
 
     self.bases_task = Some(cx.spawn(async move |this, cx| {
-      let bases = unblock(move || git_store.load_bases(&rel_path)).await;
+      let bases = cx
+        .background_spawn(async move { git_store.load_bases(&rel_path) })
+        .await;
       let Ok(bases) = bases else {
         return;
       };
@@ -5221,7 +5222,8 @@ impl Editor {
       }
 
       let diffs = if use_workdir_diff {
-        unblock(move || git::compute_file_diffs(&repo_file_for_diff)).await
+        cx.background_spawn(async move { git::compute_file_diffs(&repo_file_for_diff) })
+          .await
       } else {
         let Ok(buffer_snapshot) = this.update(cx, |editor, cx| {
           let document = editor.document.read(cx);
@@ -5229,7 +5231,7 @@ impl Editor {
         }) else {
           return;
         };
-        unblock(move || {
+        cx.background_spawn(async move {
           let buffer_text = buffer_snapshot.slice_to_string(0..buffer_snapshot.len());
           let head = git_bases.head.as_deref();
           let index = git_bases.index.as_deref();
@@ -5576,23 +5578,25 @@ impl Editor {
     let needs_index_write = self.git_state.index_dirty;
 
     self.save_task = Some(cx.spawn(async move |this, cx| {
-      let result = unblock(move || {
-        std::fs::write(&workdir_path, contents)?;
-        let file_mtime = std::fs::metadata(&workdir_path)
-          .and_then(|meta| meta.modified())
-          .ok();
-        let mut index_mtime = None;
-        if needs_index_write && let (Some(repo_file), Some(index_text)) = (repo_file, index_text) {
-          if let Err(err) = git::write_index_content(&repo_file, &index_text) {
-            return Err(std::io::Error::other(err));
-          }
-          index_mtime = std::fs::metadata(repo_file.repo_root.join(".git/index"))
+      let result = cx
+        .background_spawn(async move {
+          std::fs::write(&workdir_path, contents)?;
+          let file_mtime = std::fs::metadata(&workdir_path)
             .and_then(|meta| meta.modified())
             .ok();
-        }
-        Ok::<_, std::io::Error>((file_mtime, index_mtime))
-      })
-      .await;
+          let mut index_mtime = None;
+          if needs_index_write && let (Some(repo_file), Some(index_text)) = (repo_file, index_text)
+          {
+            if let Err(err) = git::write_index_content(&repo_file, &index_text) {
+              return Err(std::io::Error::other(err));
+            }
+            index_mtime = std::fs::metadata(repo_file.repo_root.join(".git/index"))
+              .and_then(|meta| meta.modified())
+              .ok();
+          }
+          Ok::<_, std::io::Error>((file_mtime, index_mtime))
+        })
+        .await;
 
       let _ = this.update(cx, |editor, cx| match result {
         Ok((file_mtime, index_mtime)) => {
@@ -5819,7 +5823,8 @@ impl Editor {
     self.git_task = Some(cx.spawn(async move |this, cx| {
       let index_result = if needs_index {
         if let Some(text) = index_text_for_write.clone() {
-          unblock(move || git::write_index_content(&repo_for_index, &text)).await
+          cx.background_spawn(async move { git::write_index_content(&repo_for_index, &text) })
+            .await
         } else {
           Ok(())
         }
@@ -5836,15 +5841,17 @@ impl Editor {
       }
 
       let workdir_result = if needs_workdir {
-        unblock(move || git::apply_hunk(&repo_for_apply, &hunk, reverse, ApplyLocation::WorkDir))
-          .await
+        cx.background_spawn(async move {
+          git::apply_hunk(&repo_for_apply, &hunk, reverse, ApplyLocation::WorkDir)
+        })
+        .await
       } else {
         Ok(())
       };
 
       if let Err(_err) = workdir_result {
         let fallback_result = if needs_workdir {
-          unblock(move || {
+          cx.background_spawn(async move {
             let text = std::fs::read_to_string(&workdir_path_for_fallback)?;
             let updated = git::apply_hunk_to_text(&text, &hunk_for_fallback, reverse_for_fallback)
               .map_err(std::io::Error::other)?;
@@ -5869,21 +5876,22 @@ impl Editor {
         Option<String>,
         Option<SystemTime>,
         Option<SystemTime>,
-      ) = unblock(move || {
-        let contents = if needs_workdir {
-          std::fs::read_to_string(&workdir_path).ok()
-        } else {
-          None
-        };
-        let file_mtime = std::fs::metadata(&workdir_path)
-          .and_then(|meta| meta.modified())
-          .ok();
-        let index_mtime = std::fs::metadata(repo_for_meta.repo_root.join(".git/index"))
-          .and_then(|meta| meta.modified())
-          .ok();
-        (contents, file_mtime, index_mtime)
-      })
-      .await;
+      ) = cx
+        .background_spawn(async move {
+          let contents = if needs_workdir {
+            std::fs::read_to_string(&workdir_path).ok()
+          } else {
+            None
+          };
+          let file_mtime = std::fs::metadata(&workdir_path)
+            .and_then(|meta| meta.modified())
+            .ok();
+          let index_mtime = std::fs::metadata(repo_for_meta.repo_root.join(".git/index"))
+            .and_then(|meta| meta.modified())
+            .ok();
+          (contents, file_mtime, index_mtime)
+        })
+        .await;
 
       let _ = this.update(cx, |editor, cx| {
         if let Some(contents) = contents {
@@ -5932,8 +5940,8 @@ impl Editor {
         };
 
         let workdir_path_for_meta = workdir_path.clone();
-        let (file_mtime, index_mtime): (Option<SystemTime>, Option<SystemTime>) =
-          unblock(move || {
+        let (file_mtime, index_mtime): (Option<SystemTime>, Option<SystemTime>) = cx
+          .background_spawn(async move {
             let file_mtime = std::fs::metadata(&workdir_path_for_meta)
               .and_then(|meta| meta.modified())
               .ok();
@@ -5949,7 +5957,7 @@ impl Editor {
 
         let new_contents = if file_changed {
           let workdir_path = workdir_path.clone();
-          unblock(move || std::fs::read_to_string(&workdir_path))
+          cx.background_spawn(async move { std::fs::read_to_string(&workdir_path) })
             .await
             .ok()
         } else {
@@ -8888,7 +8896,23 @@ pub mod tests {
   use super::*;
   use gpui::TestAppContext;
   use std::path::Path;
+  use std::sync::atomic::{AtomicU64, Ordering};
   use std::sync::{Arc as StdArc, Mutex};
+
+  /// Two fixtures created in the same clock tick would otherwise share a path.
+  static TEMP_PATH_COUNTER: AtomicU64 = AtomicU64::new(0);
+
+  fn temp_path(prefix: &str) -> PathBuf {
+    let nanos = SystemTime::now()
+      .duration_since(std::time::UNIX_EPOCH)
+      .expect("system time before unix epoch")
+      .as_nanos();
+    let unique = TEMP_PATH_COUNTER.fetch_add(1, Ordering::Relaxed);
+    std::env::temp_dir().join(format!(
+      "reviu-{prefix}-{}-{nanos}-{unique}",
+      std::process::id()
+    ))
+  }
 
   #[test]
   fn submit_mode_joins_pending_review_when_one_exists() {
@@ -9236,14 +9260,7 @@ pub mod tests {
 
   #[test]
   fn load_file_for_editor_preserves_binary_bytes_for_raster_images() {
-    let unique = SystemTime::now()
-      .duration_since(std::time::UNIX_EPOCH)
-      .expect("system time before unix epoch")
-      .as_nanos();
-    let repo_root = std::env::temp_dir().join(format!(
-      "reviu-editor-load-binary-{}-{unique}",
-      std::process::id()
-    ));
+    let repo_root = temp_path("editor-load-binary");
     let workdir_path = repo_root.join("fixtures/image.png");
     std::fs::create_dir_all(
       workdir_path
@@ -11977,7 +11994,6 @@ pub mod tests {
       );
     });
 
-    ctx.cx.executor().allow_parking();
     ctx.cx.run_until_parked();
 
     ctx.editor.read_with(&ctx.cx, |editor, cx| {
@@ -12341,15 +12357,7 @@ pub mod tests {
 
   #[gpui::test]
   fn test_syntax_highlights_cached(cx: &mut TestAppContext) {
-    let mut file_path = std::env::temp_dir();
-    let nanos = SystemTime::now()
-      .duration_since(std::time::UNIX_EPOCH)
-      .expect("system time before unix epoch")
-      .as_nanos();
-    file_path.push(format!(
-      "reviu-editor-syntax-{}-{nanos}.ts",
-      std::process::id()
-    ));
+    let file_path = temp_path("editor-syntax").with_extension("ts");
     std::fs::write(&file_path, "const value = 1;\n").expect("write temp editor file");
     let repo_root = file_path.parent().expect("temp file parent").to_path_buf();
     let editor = cx.new(|cx| Editor::new_with_paths(repo_root, file_path.clone(), cx));

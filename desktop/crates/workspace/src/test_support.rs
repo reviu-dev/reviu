@@ -1,6 +1,7 @@
 //! Git fixtures shared by the tests of every page and component.
 
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use git2::build::CheckoutBuilder;
@@ -25,13 +26,22 @@ impl Drop for TempRepo {
   }
 }
 
+/// Two tests started in the same clock tick would otherwise share a repository
+/// and fight over its `.lock` files.
+static TEMP_PATH_COUNTER: AtomicU64 = AtomicU64::new(0);
+
+fn temp_dir_name(prefix: &str, process_id: u32, nanos: u128, unique: u64) -> String {
+  format!("reviu-{prefix}-{process_id}-{nanos}-{unique}")
+}
+
 pub(crate) fn temp_path(prefix: &str) -> PathBuf {
-  let mut path = std::env::temp_dir();
   let nanos = SystemTime::now()
     .duration_since(UNIX_EPOCH)
     .expect("system clock before unix epoch")
     .as_nanos();
-  path.push(format!("reviu-{prefix}-{}-{nanos}", std::process::id()));
+  let unique = TEMP_PATH_COUNTER.fetch_add(1, Ordering::Relaxed);
+  let mut path = std::env::temp_dir();
+  path.push(temp_dir_name(prefix, std::process::id(), nanos, unique));
   path
 }
 
@@ -74,15 +84,7 @@ pub(crate) struct TempBareRepo {
 
 impl TempBareRepo {
   pub(crate) fn init(prefix: &str) -> Self {
-    let mut path = std::env::temp_dir();
-    let nanos = SystemTime::now()
-      .duration_since(UNIX_EPOCH)
-      .expect("system clock before unix epoch")
-      .as_nanos();
-    path.push(format!(
-      "reviu-{prefix}-bare-{}-{nanos}",
-      std::process::id()
-    ));
+    let path = temp_path(&format!("{prefix}-bare"));
     std::fs::create_dir_all(&path).expect("create temp dir");
     Repository::init_bare(&path).expect("init bare git repository");
     Self { path }
@@ -150,4 +152,26 @@ pub(crate) fn force_checkout_head(repo_root: &Path) {
   repo
     .checkout_head(Some(&mut checkout))
     .expect("force checkout HEAD");
+}
+
+#[cfg(test)]
+mod tests {
+  use super::{TempRepo, temp_dir_name, temp_path};
+
+  #[test]
+  fn two_fixtures_never_land_in_the_same_directory() {
+    assert_ne!(
+      temp_dir_name("shell", 42, 1_000, 0),
+      temp_dir_name("shell", 42, 1_000, 1),
+      "the same clock tick still gives each fixture its own directory"
+    );
+
+    let first = temp_path("shell");
+    let second = temp_path("shell");
+    assert_ne!(first, second);
+
+    let repo = TempRepo::init("shell");
+    let other = TempRepo::init("shell");
+    assert_ne!(repo.path, other.path);
+  }
 }

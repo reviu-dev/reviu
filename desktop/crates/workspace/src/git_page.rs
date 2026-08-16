@@ -43,7 +43,6 @@ use gpui_component::{
   tree::{TreeItem, TreeState, tree},
 };
 use sentry::protocol::{Map, Value};
-use smol::unblock;
 
 use terminal::TerminalView;
 
@@ -771,7 +770,9 @@ impl GitPage {
     self.publish_branch_and_create_pr_in_progress = true;
 
     let task = cx.spawn(async move |this, cx| {
-      let result = unblock(move || push(&repo_root, false)).await;
+      let result = cx
+        .background_spawn(async move { push(&repo_root, false) })
+        .await;
       let _ = this.update(cx, |this, cx| {
         this.push_pull_in_progress = false;
         this.publish_branch_and_create_pr_in_progress = false;
@@ -939,14 +940,15 @@ impl GitPage {
     let api = self.api.clone();
     let task = cx.spawn(async move |this, cx| {
       let context_for_fetch = context.clone();
-      let result = unblock(move || {
-        api.fetch_pull_request_for_branch(
-          context_for_fetch.owner.as_str(),
-          context_for_fetch.repo.as_str(),
-          context_for_fetch.branch.as_str(),
-        )
-      })
-      .await;
+      let result = cx
+        .background_spawn(async move {
+          api.fetch_pull_request_for_branch(
+            context_for_fetch.owner.as_str(),
+            context_for_fetch.repo.as_str(),
+            context_for_fetch.branch.as_str(),
+          )
+        })
+        .await;
 
       let _ = this.update(cx, |this, cx| {
         if this.branch_pr_lookup_generation != generation
@@ -1332,7 +1334,9 @@ impl GitPage {
     let service = self.api.keychain_service().to_string();
     let username = self.api.keychain_username().to_string();
     let task = cx.spawn(async move |this, cx| {
-      let result = unblock(move || api.exchange_code_for_token(&code)).await;
+      let result = cx
+        .background_spawn(async move { api.exchange_code_for_token(&code) })
+        .await;
       match result {
         Ok(token) => {
           let secret = token.clone().into_bytes();
@@ -1366,7 +1370,7 @@ impl GitPage {
     let api = self.api.clone();
     let service = self.api.keychain_service().to_string();
     let task = cx.spawn(async move |this, cx| {
-      let _ = unblock(move || api.sign_out()).await;
+      let _ = cx.background_spawn(async move { api.sign_out() }).await;
       let delete_task = cx.update(|cx| cx.delete_credentials(&service));
       let _ = delete_task.await;
       let _ = this.update(cx, |this, cx| {
@@ -1399,7 +1403,7 @@ impl GitPage {
   fn refresh_auth_state(&mut self, cx: &mut Context<Self>) {
     let api = self.api.clone();
     let task = cx.spawn(async move |this, cx| {
-      let result = unblock(move || api.fetch_me()).await;
+      let result = cx.background_spawn(async move { api.fetch_me() }).await;
       let _ = this.update(cx, |this, cx| {
         let state = match result {
           Ok(Some(user)) => AuthState::Authenticated(Box::new(user)),
@@ -1421,7 +1425,9 @@ impl GitPage {
     );
     let api = self.api.clone();
     let task = cx.spawn(async move |_, cx| {
-      let result = unblock(move || api.sign_in_with_github()).await;
+      let result = cx
+        .background_spawn(async move { api.sign_in_with_github() })
+        .await;
       if let Ok(Some(url)) = result {
         cx.update(|cx| cx.open_url(&url));
       }
@@ -1447,7 +1453,9 @@ impl GitPage {
   fn fetch_initial_notifications(&mut self, cx: &mut Context<Self>) {
     let api = self.api.clone();
     cx.spawn(async move |_, cx| {
-      let result = unblock(move || api.fetch_github_notifications()).await;
+      let result = cx
+        .background_spawn(async move { api.fetch_github_notifications() })
+        .await;
       cx.update(|cx| {
         if let Ok(notifications) = result {
           GithubNotificationsStore::set(cx, notifications);
@@ -1720,7 +1728,9 @@ impl GitPage {
     let branch_name = branch.name.clone();
 
     let task = cx.spawn(async move |this, cx| {
-      let result = unblock(move || switch_branch(&repo_root, &branch)).await;
+      let result = cx
+        .background_spawn(async move { switch_branch(&repo_root, &branch) })
+        .await;
       let _ = this.update(cx, |this, cx| match result {
         Ok(()) => {
           this.reload_status(cx);
@@ -1943,17 +1953,18 @@ impl GitPage {
     let refresh_generation = self.branch_refresh_generation;
     let requested_repo = repo_root.clone();
     let task = cx.spawn(async move |this, cx| {
-      let result = unblock(move || {
-        let branches = list_branches(&repo_root).ok()?;
-        let current = current_branch_status(&repo_root).ok();
-        let detached_label = if crate::repo_state::is_detached_head(current.as_ref()) {
-          detached_head_label(&repo_root).ok()
-        } else {
-          None
-        };
-        Some((branches, current, detached_label))
-      })
-      .await;
+      let result = cx
+        .background_spawn(async move {
+          let branches = list_branches(&repo_root).ok()?;
+          let current = current_branch_status(&repo_root).ok();
+          let detached_label = if crate::repo_state::is_detached_head(current.as_ref()) {
+            detached_head_label(&repo_root).ok()
+          } else {
+            None
+          };
+          Some((branches, current, detached_label))
+        })
+        .await;
       let _ = this.update(cx, |this, cx| {
         if !Self::should_apply_branch_refresh(
           this.selected_repo.as_deref(),
@@ -2031,41 +2042,42 @@ impl GitPage {
 
     let task = cx.spawn(async move |this, cx| {
       let requested_repo = repo_root.clone();
-      let status = unblock(move || {
-        let entries = list_repo_status(&repo_root).ok()?;
-        let branch = current_branch_status(&repo_root).ok();
-        let head_status = head_commit_status(&repo_root).ok();
-        let unpublished_branch_commits = branch_has_unpublished_commits(&repo_root).ok()?;
-        let merge_in_progress = is_merge_in_progress(&repo_root).unwrap_or(false);
-        let rebase_in_progress = is_rebase_in_progress(&repo_root).unwrap_or(false);
-        let rebase_commit_message = if rebase_in_progress {
-          current_rebase_commit_message(&repo_root).ok().flatten()
-        } else {
-          None
-        };
-        let history = if include_history {
-          list_commit_history(&repo_root, HISTORY_MAX_COMMITS).ok()
-        } else {
-          None
-        };
-        let history_revision = if include_history {
-          current_history_revision(&repo_root).ok()
-        } else {
-          None
-        };
-        Some((
-          entries,
-          branch,
-          head_status,
-          unpublished_branch_commits,
-          merge_in_progress,
-          rebase_in_progress,
-          rebase_commit_message,
-          history,
-          history_revision,
-        ))
-      })
-      .await;
+      let status = cx
+        .background_spawn(async move {
+          let entries = list_repo_status(&repo_root).ok()?;
+          let branch = current_branch_status(&repo_root).ok();
+          let head_status = head_commit_status(&repo_root).ok();
+          let unpublished_branch_commits = branch_has_unpublished_commits(&repo_root).ok()?;
+          let merge_in_progress = is_merge_in_progress(&repo_root).unwrap_or(false);
+          let rebase_in_progress = is_rebase_in_progress(&repo_root).unwrap_or(false);
+          let rebase_commit_message = if rebase_in_progress {
+            current_rebase_commit_message(&repo_root).ok().flatten()
+          } else {
+            None
+          };
+          let history = if include_history {
+            list_commit_history(&repo_root, HISTORY_MAX_COMMITS).ok()
+          } else {
+            None
+          };
+          let history_revision = if include_history {
+            current_history_revision(&repo_root).ok()
+          } else {
+            None
+          };
+          Some((
+            entries,
+            branch,
+            head_status,
+            unpublished_branch_commits,
+            merge_in_progress,
+            rebase_in_progress,
+            rebase_commit_message,
+            history,
+            history_revision,
+          ))
+        })
+        .await;
       let Some((
         entries,
         branch_status,
@@ -2257,60 +2269,61 @@ impl GitPage {
         ) = poll_state;
         let requested_repo = repo_root.clone();
 
-        let status = unblock(move || {
-          let entries = list_repo_status(&repo_root).ok()?;
-          let branch = current_branch_status(&repo_root).ok();
-          let head_status = head_commit_status(&repo_root).ok();
-          let (
-            unpublished_branch_commits,
-            unpublished_branch_check_key,
-            unpublished_branch_checked,
-          ) = Self::resolve_polled_unpublished_branch_commits(
-            &repo_root,
-            branch.as_ref(),
-            cached_unpublished_branch_key.as_ref(),
-            cached_unpublished_branch_commits,
-            force_unpublished_branch_recheck,
-          )?;
-          let merge_in_progress = is_merge_in_progress(&repo_root).unwrap_or(false);
-          let rebase_in_progress = is_rebase_in_progress(&repo_root).unwrap_or(false);
-          let rebase_commit_message = if rebase_in_progress {
-            current_rebase_commit_message(&repo_root).ok().flatten()
-          } else {
-            None
-          };
-          let polled_history_revision = if include_history {
-            current_history_revision(&repo_root).ok()
-          } else {
-            None
-          };
-          let should_refresh_history = should_refresh_history_for_poll(
-            include_history,
-            history_empty,
-            cached_history_revision.as_ref(),
-            polled_history_revision.as_ref(),
-          );
-          let history = if should_refresh_history {
-            list_commit_history(&repo_root, HISTORY_MAX_COMMITS).ok()
-          } else {
-            None
-          };
-          Some((
-            entries,
-            branch,
-            head_status,
-            unpublished_branch_commits,
-            merge_in_progress,
-            rebase_in_progress,
-            rebase_commit_message,
-            polled_history_revision,
-            should_refresh_history,
-            history,
-            unpublished_branch_check_key,
-            unpublished_branch_checked,
-          ))
-        })
-        .await;
+        let status = cx
+          .background_spawn(async move {
+            let entries = list_repo_status(&repo_root).ok()?;
+            let branch = current_branch_status(&repo_root).ok();
+            let head_status = head_commit_status(&repo_root).ok();
+            let (
+              unpublished_branch_commits,
+              unpublished_branch_check_key,
+              unpublished_branch_checked,
+            ) = Self::resolve_polled_unpublished_branch_commits(
+              &repo_root,
+              branch.as_ref(),
+              cached_unpublished_branch_key.as_ref(),
+              cached_unpublished_branch_commits,
+              force_unpublished_branch_recheck,
+            )?;
+            let merge_in_progress = is_merge_in_progress(&repo_root).unwrap_or(false);
+            let rebase_in_progress = is_rebase_in_progress(&repo_root).unwrap_or(false);
+            let rebase_commit_message = if rebase_in_progress {
+              current_rebase_commit_message(&repo_root).ok().flatten()
+            } else {
+              None
+            };
+            let polled_history_revision = if include_history {
+              current_history_revision(&repo_root).ok()
+            } else {
+              None
+            };
+            let should_refresh_history = should_refresh_history_for_poll(
+              include_history,
+              history_empty,
+              cached_history_revision.as_ref(),
+              polled_history_revision.as_ref(),
+            );
+            let history = if should_refresh_history {
+              list_commit_history(&repo_root, HISTORY_MAX_COMMITS).ok()
+            } else {
+              None
+            };
+            Some((
+              entries,
+              branch,
+              head_status,
+              unpublished_branch_commits,
+              merge_in_progress,
+              rebase_in_progress,
+              rebase_commit_message,
+              polled_history_revision,
+              should_refresh_history,
+              history,
+              unpublished_branch_check_key,
+              unpublished_branch_checked,
+            ))
+          })
+          .await;
         let Some((
           entries,
           branch_status,
@@ -2405,57 +2418,61 @@ impl GitPage {
           >= UNPUBLISHED_BRANCH_RECHECK_INTERVAL
       });
     let task = cx.spawn(async move |this, cx| {
-      let status = unblock(move || {
-        let entries = list_repo_status(&repo_root).ok()?;
-        let branch = current_branch_status(&repo_root).ok();
-        let head_status = head_commit_status(&repo_root).ok();
-        let (unpublished_branch_commits, unpublished_branch_check_key, unpublished_branch_checked) =
-          Self::resolve_polled_unpublished_branch_commits(
+      let status = cx
+        .background_spawn(async move {
+          let entries = list_repo_status(&repo_root).ok()?;
+          let branch = current_branch_status(&repo_root).ok();
+          let head_status = head_commit_status(&repo_root).ok();
+          let (
+            unpublished_branch_commits,
+            unpublished_branch_check_key,
+            unpublished_branch_checked,
+          ) = Self::resolve_polled_unpublished_branch_commits(
             &repo_root,
             branch.as_ref(),
             cached_unpublished_branch_key.as_ref(),
             cached_unpublished_branch_commits,
             force_unpublished_branch_recheck,
           )?;
-        let merge_in_progress = is_merge_in_progress(&repo_root).unwrap_or(false);
-        let rebase_in_progress = is_rebase_in_progress(&repo_root).unwrap_or(false);
-        let rebase_commit_message = if rebase_in_progress {
-          current_rebase_commit_message(&repo_root).ok().flatten()
-        } else {
-          None
-        };
-        let polled_history_revision = if include_history {
-          current_history_revision(&repo_root).ok()
-        } else {
-          None
-        };
-        let should_refresh_history = should_refresh_history_for_poll(
-          include_history,
-          history_empty,
-          cached_history_revision.as_ref(),
-          polled_history_revision.as_ref(),
-        );
-        let history = if should_refresh_history {
-          list_commit_history(&repo_root, HISTORY_MAX_COMMITS).ok()
-        } else {
-          None
-        };
-        Some((
-          entries,
-          branch,
-          head_status,
-          unpublished_branch_commits,
-          merge_in_progress,
-          rebase_in_progress,
-          rebase_commit_message,
-          polled_history_revision,
-          should_refresh_history,
-          history,
-          unpublished_branch_check_key,
-          unpublished_branch_checked,
-        ))
-      })
-      .await;
+          let merge_in_progress = is_merge_in_progress(&repo_root).unwrap_or(false);
+          let rebase_in_progress = is_rebase_in_progress(&repo_root).unwrap_or(false);
+          let rebase_commit_message = if rebase_in_progress {
+            current_rebase_commit_message(&repo_root).ok().flatten()
+          } else {
+            None
+          };
+          let polled_history_revision = if include_history {
+            current_history_revision(&repo_root).ok()
+          } else {
+            None
+          };
+          let should_refresh_history = should_refresh_history_for_poll(
+            include_history,
+            history_empty,
+            cached_history_revision.as_ref(),
+            polled_history_revision.as_ref(),
+          );
+          let history = if should_refresh_history {
+            list_commit_history(&repo_root, HISTORY_MAX_COMMITS).ok()
+          } else {
+            None
+          };
+          Some((
+            entries,
+            branch,
+            head_status,
+            unpublished_branch_commits,
+            merge_in_progress,
+            rebase_in_progress,
+            rebase_commit_message,
+            polled_history_revision,
+            should_refresh_history,
+            history,
+            unpublished_branch_check_key,
+            unpublished_branch_checked,
+          ))
+        })
+        .await;
 
       let Some((
         entries,
@@ -2827,8 +2844,11 @@ impl GitPage {
     let load_repo_root = requested_repo.clone();
     let load_file_path = file_path.clone();
     let task = cx.spawn(async move |this, cx| {
-      let loaded =
-        unblock(move || Editor::load_file_for_editor(&load_repo_root, &load_file_path)).await;
+      let loaded = cx
+        .background_spawn(
+          async move { Editor::load_file_for_editor(&load_repo_root, &load_file_path) },
+        )
+        .await;
       let _ = this.update(cx, move |this, cx| {
         if this.open_file_generation != generation {
           return;
@@ -3781,7 +3801,6 @@ mod tests {
     let _ = commit_text_file(&repo_b.path, Path::new("README.md"), "b1\n", "initial");
 
     let (git_page, cx) = add_git_page_window_with_root(cx);
-    cx.executor().allow_parking();
 
     git_page.update_in(cx, |this, window, cx| {
       this.selected_repo = Some(repo_a.path.clone());
@@ -3843,7 +3862,6 @@ mod tests {
     std::fs::write(repo.path.join(rel_path), "v2\n").expect("modify file");
 
     let (git_page, cx) = add_git_page_window_with_root(cx);
-    cx.executor().allow_parking();
 
     git_page.update_in(cx, |this, window, cx| {
       this.selected_repo = Some(repo.path.clone());
@@ -4026,7 +4044,6 @@ mod tests {
     std::fs::write(repo.path.join(rel_path), "v2\n").expect("update worktree file");
 
     let (git_page, cx) = add_git_page_window_with_root(cx);
-    cx.executor().allow_parking();
 
     git_page.update_in(cx, |this, _window, cx| {
       this.selected_repo = Some(repo.path.clone());
@@ -4068,7 +4085,6 @@ mod tests {
     let _ = commit_text_file(&repo.path, rel_path, "fn main() {}\n", "initial");
 
     let (git_page, cx) = add_git_page_window_with_root(cx);
-    cx.executor().allow_parking();
 
     git_page.update_in(cx, |this, _window, cx| {
       this.selected_repo = Some(repo.path.clone());
@@ -4103,7 +4119,6 @@ mod tests {
     let _ = commit_text_file(&repo.path, rel_path, "fn main() {}\n", "initial");
 
     let (git_page, cx) = add_git_page_window_with_root(cx);
-    cx.executor().allow_parking();
 
     git_page.update_in(cx, |this, _window, cx| {
       this.selected_repo = Some(repo.path.clone());
@@ -4210,7 +4225,6 @@ mod tests {
     cx: &mut TestAppContext,
   ) {
     init_gpui_test(cx);
-    cx.executor().allow_parking();
     cx.update(|cx| {
       AuthStateStore::set(
         cx,
@@ -4328,7 +4342,6 @@ mod tests {
     create_branch(&repo.path, "feature").expect("create feature branch");
 
     let (git_page, cx) = add_git_page_window_with_root(cx);
-    cx.executor().allow_parking();
     git_page.update_in(cx, |this, _window, cx| {
       seed_repo_branch_state(this, &repo.path, cx);
     });
@@ -4369,7 +4382,6 @@ mod tests {
     commit_text_file(&repo.path, Path::new("README.md"), "v1\n", "initial");
 
     let (git_page, cx) = add_git_page_window_with_root(cx);
-    cx.executor().allow_parking();
 
     let reload_task = git_page.update_in(cx, |this, _window, cx| {
       this.selected_repo = Some(repo.path.clone());
@@ -4425,7 +4437,6 @@ mod tests {
     .expect("switch back to base branch");
 
     let (git_page, cx) = add_git_page_window_with_root(cx);
-    cx.executor().allow_parking();
 
     let initial_reload = git_page.update_in(cx, |this, _window, cx| {
       this.selected_repo = Some(repo.path.clone());
@@ -4513,7 +4524,6 @@ mod tests {
       gpui_component::Root::new(git_page, window, cx)
     });
     let git_page = mounted_git_page.expect("git page");
-    cx.executor().allow_parking();
 
     let initial_reload = git_page.update_in(cx, |this, _window, cx| {
       this.selected_repo = Some(repo.path.clone());
@@ -4592,7 +4602,6 @@ mod tests {
     let oid = commit_text_file(&repo.path, Path::new("README.md"), "v1\n", "initial");
 
     let (git_page, cx) = add_git_page_window_with_root(cx);
-    cx.executor().allow_parking();
     git_page.update_in(cx, |this, _window, cx| {
       seed_repo_branch_state(this, &repo.path, cx);
     });
@@ -4637,7 +4646,6 @@ mod tests {
     create_branch(&repo.path, "feature").expect("create feature branch");
 
     let (git_page, cx) = add_git_page_window_with_root(cx);
-    cx.executor().allow_parking();
     git_page.update_in(cx, |this, _window, cx| {
       seed_repo_branch_state(this, &repo.path, cx);
     });
@@ -4684,7 +4692,6 @@ mod tests {
     create_branch(&repo.path, "feature").expect("create feature branch");
 
     let (git_page, cx) = add_git_page_window_with_root(cx);
-    cx.executor().allow_parking();
     git_page.update_in(cx, |this, _window, cx| {
       this.selected_repo = Some(repo.path.clone());
       seed_repo_branch_state(this, &repo.path, cx);

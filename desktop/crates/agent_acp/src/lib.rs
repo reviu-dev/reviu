@@ -677,13 +677,18 @@ mod tests {
     assert!(err.is_err());
   }
 
+  /// Two fixtures created in the same clock tick would otherwise share a directory.
+  static TEMP_DIR_COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
   fn tempdir() -> PathBuf {
+    let nanos = std::time::SystemTime::now()
+      .duration_since(std::time::UNIX_EPOCH)
+      .expect("system clock before unix epoch")
+      .as_nanos();
+    let unique = TEMP_DIR_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     let dir = std::env::temp_dir().join(format!(
-      "reviu-agent-acp-test-{}",
-      std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap()
-        .as_nanos()
+      "reviu-agent-acp-test-{}-{nanos}-{unique}",
+      std::process::id()
     ));
     std::fs::create_dir_all(&dir).unwrap();
     dir

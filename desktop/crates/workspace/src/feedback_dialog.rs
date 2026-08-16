@@ -2,7 +2,6 @@ use gpui::{AnyWindowHandle, App, Window, div, prelude::*};
 use gpui_component::IndexPath;
 use gpui_component::notification::Notification;
 use gpui_component::select::{Select, SelectState};
-use smol::unblock;
 use ui::{ConfirmDialog, Input, InputState, Textarea, TextareaState, WindowExt};
 
 use crate::{api::ApiClient, workspace::WorkspaceApi};
@@ -100,7 +99,9 @@ fn submit_feedback(
   cx: &mut App,
 ) {
   cx.spawn(async move |cx| {
-    let result = unblock(move || api.submit_feedback(&feedback_type, &title, &description)).await;
+    let result = cx
+      .background_spawn(async move { api.submit_feedback(&feedback_type, &title, &description) })
+      .await;
 
     let _ = cx.update_window(window_handle, |_, window, cx| match result {
       Ok(()) => {

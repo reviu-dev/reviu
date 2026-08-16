@@ -174,7 +174,9 @@ impl GitPage {
     self.fetch_in_progress = true;
     let editor = self.editor.clone();
     let task = cx.spawn(async move |this, cx| {
-      let result = unblock(move || RepoCommand::Fetch.run(&repo_root)).await;
+      let result = cx
+        .background_spawn(async move { RepoCommand::Fetch.run(&repo_root) })
+        .await;
       let _ = this.update(cx, |this, cx| {
         this.fetch_in_progress = false;
         match result {
@@ -213,7 +215,9 @@ impl GitPage {
     self.push_pull_in_progress = true;
     let editor = self.editor.clone();
     let task = cx.spawn(async move |this, cx| {
-      let result = unblock(move || RepoCommand::Pull.run(&repo_root)).await;
+      let result = cx
+        .background_spawn(async move { RepoCommand::Pull.run(&repo_root) })
+        .await;
       let _ = this.update(cx, |this, cx| {
         this.push_pull_in_progress = false;
         match result {
@@ -257,7 +261,9 @@ impl GitPage {
     crate::analytics::track(cx, "push_done");
     self.push_pull_in_progress = true;
     let task = cx.spawn(async move |this, cx| {
-      let result = unblock(move || RepoCommand::Push.run(&repo_root)).await;
+      let result = cx
+        .background_spawn(async move { RepoCommand::Push.run(&repo_root) })
+        .await;
       let _ = this.update(cx, |this, cx| {
         this.push_pull_in_progress = false;
         match result {
@@ -295,7 +301,9 @@ impl GitPage {
     crate::analytics::track(cx, "force_push_done");
     self.push_pull_in_progress = true;
     let task = cx.spawn(async move |this, cx| {
-      let result = unblock(move || RepoCommand::ForcePush.run(&repo_root)).await;
+      let result = cx
+        .background_spawn(async move { RepoCommand::ForcePush.run(&repo_root) })
+        .await;
       let _ = this.update(cx, |this, cx| {
         this.push_pull_in_progress = false;
         match result {
@@ -391,8 +399,6 @@ mod tests {
       gpui_component::Root::new(git_page, window, cx)
     });
     let git_page = mounted_git_page.expect("git page");
-    cx.executor().allow_parking();
-    cx.executor().allow_parking();
 
     let initial_notification_count = root.read_with(cx, |root, cx| {
       root.notification.read(cx).notifications().len()
@@ -505,7 +511,6 @@ mod tests {
     );
 
     let (git_page, cx) = add_git_page_window_with_root(cx);
-    cx.executor().allow_parking();
 
     let push_task = git_page.update_in(cx, |this, _window, cx| {
       this.selected_repo = Some(source.path.clone());
@@ -561,7 +566,6 @@ mod tests {
     assert!(non_force.is_some(), "non-force push should fail");
 
     let (git_page, cx) = add_git_page_window_with_root(cx);
-    cx.executor().allow_parking();
 
     let force_task = git_page.update_in(cx, |this, _window, cx| {
       this.selected_repo = Some(source.path.clone());

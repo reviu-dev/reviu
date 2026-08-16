@@ -12,7 +12,6 @@ use dirs::config_dir;
 use gpui::{AnyWindowHandle, App, ClickEvent, Window, div, prelude::*};
 use gpui_component::{Disableable as _, Sizable as _, notification::Notification};
 use serde::{Deserialize, Serialize};
-use smol::unblock;
 use time::{OffsetDateTime, format_description::well_known::Rfc3339};
 use ui::{Button, ButtonVariants as _, WindowExt};
 
@@ -294,7 +293,9 @@ fn submit_startup_crash_report(
   let report_for_submission = report.clone();
   let api = WorkspaceApi::global(cx).api.clone();
   cx.spawn(async move |cx| {
-    let result = unblock(move || api.submit_crash_report(&report_for_submission)).await;
+    let result = cx
+      .background_spawn(async move { api.submit_crash_report(&report_for_submission) })
+      .await;
 
     let _ = cx.update_window(window_handle, |_, window, cx| match result {
       Ok(()) => {
@@ -467,14 +468,9 @@ mod tests {
   use crate::sentry_context::CrashGitContext;
   use std::fs;
   use std::path::PathBuf;
-  use std::time::{SystemTime, UNIX_EPOCH};
 
   fn unique_test_dir() -> PathBuf {
-    let suffix = SystemTime::now()
-      .duration_since(UNIX_EPOCH)
-      .map(|duration| duration.as_nanos())
-      .unwrap_or_default();
-    std::env::temp_dir().join(format!("reviu-crash-report-tests-{suffix}"))
+    crate::test_support::temp_path("crash-report-tests")
   }
 
   fn sample_report() -> StartupCrashReport {

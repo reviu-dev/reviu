@@ -17,7 +17,6 @@ use gpui_component::{
   spinner::Spinner,
   v_flex,
 };
-use smol::unblock;
 use ui::{
   Button, ButtonVariants as _, StatusThemeExt as _, Textarea, TextareaState, UiIconName,
   WindowExt as _,
@@ -184,41 +183,42 @@ impl CreatePullRequestDialog {
     let window_handle = self.window_handle;
 
     let task = cx.spawn(async move |this, cx| {
-      let result = unblock(move || {
-        let details = api.fetch_github_repository_details(&owner, &repo).ok();
-        let default_branch = details
-          .as_ref()
-          .map(|details| details.default_branch.trim().to_string())
-          .filter(|value| !value.is_empty());
+      let result = cx
+        .background_spawn(async move {
+          let details = api.fetch_github_repository_details(&owner, &repo).ok();
+          let default_branch = details
+            .as_ref()
+            .map(|details| details.default_branch.trim().to_string())
+            .filter(|value| !value.is_empty());
 
-        let template_paths = default_branch
-          .as_ref()
-          .and_then(|default_branch| {
-            api
-              .fetch_github_repository_tree(&owner, &repo, default_branch)
-              .ok()
-              .map(|tree| resolve_pull_request_template_paths(&tree.tree))
-          })
-          .unwrap_or_default();
+          let template_paths = default_branch
+            .as_ref()
+            .and_then(|default_branch| {
+              api
+                .fetch_github_repository_tree(&owner, &repo, default_branch)
+                .ok()
+                .map(|tree| resolve_pull_request_template_paths(&tree.tree))
+            })
+            .unwrap_or_default();
 
-        let template_body = if template_paths.len() == 1 {
-          default_branch.as_ref().and_then(|default_branch| {
-            api
-              .fetch_github_file_content(&owner, &repo, &template_paths[0], default_branch)
-              .ok()
-              .flatten()
-          })
-        } else {
-          None
-        };
+          let template_body = if template_paths.len() == 1 {
+            default_branch.as_ref().and_then(|default_branch| {
+              api
+                .fetch_github_file_content(&owner, &repo, &template_paths[0], default_branch)
+                .ok()
+                .flatten()
+            })
+          } else {
+            None
+          };
 
-        PullRequestTemplateLoadResult {
-          default_branch,
-          template_paths,
-          template_body,
-        }
-      })
-      .await;
+          PullRequestTemplateLoadResult {
+            default_branch,
+            template_paths,
+            template_body,
+          }
+        })
+        .await;
 
       let _ = cx.update_window(window_handle, |_, window, cx| {
         let _ = this.update(cx, |this, cx| {
@@ -273,9 +273,11 @@ impl CreatePullRequestDialog {
     let window_handle = self.window_handle;
 
     let task = cx.spawn(async move |this, cx| {
-      let result =
-        unblock(move || api.fetch_github_file_content(&owner, &repo, &template_path, &base_branch))
-          .await;
+      let result = cx
+        .background_spawn(async move {
+          api.fetch_github_file_content(&owner, &repo, &template_path, &base_branch)
+        })
+        .await;
 
       let _ = cx.update_window(window_handle, |_, window, cx| {
         let _ = this.update(cx, |this, cx| {
@@ -330,18 +332,19 @@ impl CreatePullRequestDialog {
     let window_handle = self.window_handle;
 
     let task = cx.spawn(async move |this, cx| {
-      let result = unblock(move || {
-        api.create_pull_request(
-          &owner,
-          &repo,
-          &branch,
-          &title,
-          &base,
-          Some(body.as_str()),
-          draft,
-        )
-      })
-      .await;
+      let result = cx
+        .background_spawn(async move {
+          api.create_pull_request(
+            &owner,
+            &repo,
+            &branch,
+            &title,
+            &base,
+            Some(body.as_str()),
+            draft,
+          )
+        })
+        .await;
 
       let _ = cx.update_window(window_handle, |_, window, cx| {
         let _ = this.update(cx, |this, cx| {

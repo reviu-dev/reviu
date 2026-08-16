@@ -16,7 +16,6 @@ use gpui_component::{
   spinner::Spinner,
   tree::{TreeItem, TreeState, tree},
 };
-use smol::unblock;
 use ui::{
   FILE_ICON_SIZE_PX, SelectableRowStyle, file_icon_path_for_path_with_theme, selectable_list_item,
 };
@@ -169,13 +168,14 @@ impl HistoryList {
 
     let task = cx.spawn(async move |this, cx| {
       let requested = repo_root.clone();
-      let (history, revision) = unblock(move || {
-        (
-          list_commit_history(&repo_root, HISTORY_MAX_COMMITS),
-          current_history_revision(&repo_root).ok(),
-        )
-      })
-      .await;
+      let (history, revision) = cx
+        .background_spawn(async move {
+          (
+            list_commit_history(&repo_root, HISTORY_MAX_COMMITS),
+            current_history_revision(&repo_root).ok(),
+          )
+        })
+        .await;
       let _ = this.update(cx, |this, cx| {
         if this.repo_root.as_ref() != Some(&requested) {
           return;
@@ -275,8 +275,11 @@ impl HistoryList {
     let task = cx.spawn(async move |this, cx| {
       let load_repo_root = repo_root.clone();
       let load_commit_oid = commit_oid.clone();
-      let files =
-        unblock(move || list_commit_changed_files(&load_repo_root, &load_commit_oid)).await;
+      let files = cx
+        .background_spawn(
+          async move { list_commit_changed_files(&load_repo_root, &load_commit_oid) },
+        )
+        .await;
       let _ = this.update(cx, |this, cx| {
         if this.repo_root.as_ref() != Some(&repo_root) {
           return;
@@ -717,7 +720,6 @@ mod tests {
     commit_text_file(&repo.path, Path::new("a.txt"), "v2\n", "second");
 
     let (list, cx) = add_history_list_window(Some(repo.path.clone()), cx);
-    cx.executor().allow_parking();
     await_history(&list, cx).await;
 
     list.read_with(cx, |list, _| {
@@ -735,7 +737,6 @@ mod tests {
     commit_text_file(&repo.path, Path::new("b.txt"), "v1\n", "second");
 
     let (list, cx) = add_history_list_window(Some(repo.path.clone()), cx);
-    cx.executor().allow_parking();
     await_history(&list, cx).await;
 
     let head = list.read_with(cx, |list, _| list.commits[0].oid.clone());
@@ -773,7 +774,6 @@ mod tests {
     commit_text_file(&repo.path, Path::new("a.txt"), "v1\n", "first");
 
     let (list, cx) = add_history_list_window(Some(repo.path.clone()), cx);
-    cx.executor().allow_parking();
     await_history(&list, cx).await;
     let head = list.read_with(cx, |list, _| list.commits[0].oid.clone());
 
@@ -813,7 +813,6 @@ mod tests {
     commit_text_file(&other.path, Path::new("b.txt"), "v1\n", "to");
 
     let (list, cx) = add_history_list_window(Some(repo.path.clone()), cx);
-    cx.executor().allow_parking();
     await_history(&list, cx).await;
     let head = list.read_with(cx, |list, _| list.commits[0].oid.clone());
     list.update(cx, |list, cx| list.load_commit_files(head.clone(), cx));
@@ -842,7 +841,6 @@ mod tests {
     commit_text_file(&repo.path, Path::new("b.txt"), "v1\n", "second");
 
     let (list, cx) = add_history_list_window(Some(repo.path.clone()), cx);
-    cx.executor().allow_parking();
     await_history(&list, cx).await;
     let head = list.read_with(cx, |list, _| list.commits[0].oid.clone());
     list.update(cx, |list, cx| list.load_commit_files(head.clone(), cx));

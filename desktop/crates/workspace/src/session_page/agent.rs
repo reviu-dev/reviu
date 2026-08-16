@@ -122,7 +122,9 @@ impl SessionPage {
     let session_id = panel.read(cx).current_conversation().id.clone();
 
     cx.spawn(async move |this, cx| {
-      let result = unblock(move || git::create_checkpoint(&repo_root, &session_id)).await;
+      let result = cx
+        .background_spawn(async move { git::create_checkpoint(&repo_root, &session_id) })
+        .await;
       let Ok(checkpoint) = result else {
         return;
       };
@@ -161,12 +163,13 @@ impl SessionPage {
     cx.spawn(async move |this, cx| {
       let restore_repo_root = repo_root.clone();
       let restore_ref = ref_name.clone();
-      let result = unblock(move || {
-        // Safety net: snapshot the current state so the rollback itself is undoable.
-        git::create_checkpoint(&restore_repo_root, &session_id)?;
-        git::restore_checkpoint(&restore_repo_root, &restore_ref)
-      })
-      .await;
+      let result = cx
+        .background_spawn(async move {
+          // Safety net: snapshot the current state so the rollback itself is undoable.
+          git::create_checkpoint(&restore_repo_root, &session_id)?;
+          git::restore_checkpoint(&restore_repo_root, &restore_ref)
+        })
+        .await;
 
       let _ = this.update(cx, |this, cx| {
         match result {
@@ -463,7 +466,6 @@ mod tests {
     std::fs::write(repo.path.join("README.md"), "v2\n").expect("update file");
 
     let (page, cx) = add_session_page_window(repo.path.clone(), cx);
-    cx.executor().allow_parking();
     cx.run_until_parked();
 
     page.update_in(cx, |page, window, cx| {
@@ -504,7 +506,6 @@ mod tests {
     std::fs::write(repo.path.join("README.md"), "v2\n").expect("update file");
 
     let (page, cx) = add_session_page_window(repo.path.clone(), cx);
-    cx.executor().allow_parking();
     cx.run_until_parked();
 
     page.update_in(cx, |page, window, cx| {

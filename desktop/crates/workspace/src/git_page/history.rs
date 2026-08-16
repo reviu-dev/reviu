@@ -91,13 +91,14 @@ impl GitPage {
 
     let task = cx.spawn(async move |this, cx| {
       let requested_repo = repo_root.clone();
-      let (history, revision) = unblock(move || {
-        (
-          list_commit_history(&repo_root, HISTORY_MAX_COMMITS),
-          current_history_revision(&repo_root).ok(),
-        )
-      })
-      .await;
+      let (history, revision) = cx
+        .background_spawn(async move {
+          (
+            list_commit_history(&repo_root, HISTORY_MAX_COMMITS),
+            current_history_revision(&repo_root).ok(),
+          )
+        })
+        .await;
       let _ = this.update(cx, |this, cx| {
         if this.selected_repo.as_ref() != Some(&requested_repo) {
           return;
@@ -154,8 +155,11 @@ impl GitPage {
     let task = cx.spawn(async move |this, cx| {
       let load_repo_root = repo_root.clone();
       let load_commit_oid = commit_oid.clone();
-      let files =
-        unblock(move || list_commit_changed_files(&load_repo_root, &load_commit_oid)).await;
+      let files = cx
+        .background_spawn(
+          async move { list_commit_changed_files(&load_repo_root, &load_commit_oid) },
+        )
+        .await;
       let _ = this.update(cx, |this, cx| {
         if this.selected_repo.as_ref() != Some(&repo_root) {
           return;
@@ -208,9 +212,11 @@ impl GitPage {
       let load_repo_root = repo_root.clone();
       let load_commit_oid = commit_oid.clone();
       let load_rel_path = rel_path.clone();
-      let commit_file =
-        unblock(move || load_commit_file_diff(&load_repo_root, &load_commit_oid, &load_rel_path))
-          .await;
+      let commit_file = cx
+        .background_spawn(async move {
+          load_commit_file_diff(&load_repo_root, &load_commit_oid, &load_rel_path)
+        })
+        .await;
       let _ = this.update(cx, |this, cx| {
         if this.selected_repo.as_ref() != Some(&repo_root) {
           return;
@@ -574,7 +580,6 @@ mod tests {
   #[gpui::test]
   async fn set_sidebar_mode_history_focuses_history_tree(cx: &mut TestAppContext) {
     init_gpui_test(cx);
-    cx.executor().allow_parking();
     let repo = TempRepo::init("git-page-history-sidebar-focus");
     let _ = commit_text_file(&repo.path, Path::new("README.md"), "v1\n", "initial");
     let (git_page, cx) = add_git_page_window_with_root(cx);
@@ -610,7 +615,6 @@ mod tests {
     let commit_oid = commit_text_file(&repo.path, rel_path, "v2\n", "update").to_string();
 
     let (git_page, cx) = add_git_page_window_with_root(cx);
-    cx.executor().allow_parking();
 
     let task = git_page.update_in(cx, |this, _window, cx| {
       this.selected_repo = Some(repo.path.clone());
@@ -647,7 +651,6 @@ mod tests {
     let _ = commit_text_file(&repo.path, rel_path, "v2\n", "update");
 
     let (git_page, cx) = add_git_page_window_with_root(cx);
-    cx.executor().allow_parking();
 
     let task = git_page.update_in(cx, |this, _window, cx| {
       this.selected_repo = Some(repo.path.clone());
@@ -692,7 +695,6 @@ mod tests {
     let _ = commit_text_file(&repo.path, rel_path, "v2\n", "update");
 
     let (git_page, cx) = add_git_page_window_with_root(cx);
-    cx.executor().allow_parking();
 
     let open_task = git_page.update_in(cx, |this, _window, cx| {
       this.selected_repo = Some(repo.path.clone());
@@ -733,7 +735,6 @@ mod tests {
     let _ = commit_text_file(&repo.path, rel_path, "v2\n", "update");
 
     let (git_page, cx) = add_git_page_window_with_root(cx);
-    cx.executor().allow_parking();
 
     let history_task = git_page.update_in(cx, |this, _window, cx| {
       this.selected_repo = Some(repo.path.clone());
@@ -840,7 +841,6 @@ mod tests {
     let invalid_oid = "0123456789012345678901234567890123456789".to_string();
 
     let (git_page, cx) = add_git_page_window_with_root(cx);
-    cx.executor().allow_parking();
 
     let task = git_page.update_in(cx, |this, _window, cx| {
       this.selected_repo = Some(repo.path.clone());

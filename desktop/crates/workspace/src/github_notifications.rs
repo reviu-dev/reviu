@@ -1,7 +1,6 @@
 use std::sync::{Arc, Mutex};
 
-use gpui::{App, Global};
-use smol::unblock;
+use gpui::{App, AppContext as _, Global};
 
 use crate::api::GithubNotification;
 use crate::dock_badge::set_dock_badge;
@@ -159,21 +158,19 @@ pub(crate) fn open_notification(notification: &GithubNotification, cx: &mut App)
 pub(crate) fn mark_notification_read(thread_id: String, cx: &mut App) {
   GithubNotificationsStore::mark_read(cx, &thread_id);
   let api = WorkspaceApi::global(cx).api.clone();
-  cx.background_executor()
-    .spawn(async move {
-      let _ = unblock(move || api.mark_notification_read(&thread_id)).await;
-    })
-    .detach();
+  cx.background_spawn(async move {
+    let _ = api.mark_notification_read(&thread_id);
+  })
+  .detach();
 }
 
 pub(crate) fn mark_notification_done(thread_id: String, cx: &mut App) {
   GithubNotificationsStore::remove(cx, &thread_id);
   let api = WorkspaceApi::global(cx).api.clone();
-  cx.background_executor()
-    .spawn(async move {
-      let _ = unblock(move || api.mark_notification_done(&thread_id)).await;
-    })
-    .detach();
+  cx.background_spawn(async move {
+    let _ = api.mark_notification_done(&thread_id);
+  })
+  .detach();
 }
 
 #[cfg(test)]

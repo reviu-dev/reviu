@@ -54,7 +54,6 @@ use gpui_component::{
   v_flex,
 };
 use sentry::protocol::{Map, Value};
-use smol::unblock;
 
 use ui::{
   CommandPalette, CommandPaletteAction, CommandPaletteCommand, CommandPaletteConfig,
@@ -2924,13 +2923,14 @@ impl GithubPrDetailsPage {
     let task = cx.spawn(async move |this, cx| {
       let pull_request_for_scan = pull_request.clone();
       let excluded_repo_root_for_scan = excluded_repo_root.clone();
-      let snapshot = unblock(move || {
-        find_matching_recent_local_repo(
-          &pull_request_for_scan,
-          excluded_repo_root_for_scan.as_deref(),
-        )
-      })
-      .await;
+      let snapshot = cx
+        .background_spawn(async move {
+          find_matching_recent_local_repo(
+            &pull_request_for_scan,
+            excluded_repo_root_for_scan.as_deref(),
+          )
+        })
+        .await;
 
       let _ = this.update(cx, |this, cx| {
         if this.resolved_local_repo_generation != generation {
@@ -3187,7 +3187,9 @@ impl GithubPrDetailsPage {
     let requested_repo_root = repo_root.clone();
     let task = cx.spawn(async move |this, cx| {
       let repo_root_for_load = requested_repo_root.clone();
-      let result = unblock(move || list_repo_head_files(&repo_root_for_load)).await;
+      let result = cx
+        .background_spawn(async move { list_repo_head_files(&repo_root_for_load) })
+        .await;
 
       let _ = this.update(cx, |this, cx| {
         if this.local_project_loaded_repo_root.as_ref() != Some(&requested_repo_root) {
@@ -3325,23 +3327,24 @@ impl GithubPrDetailsPage {
       let repo_root_for_load = requested_repo_root.clone();
       let absolute_path_for_load = requested_absolute_path.clone();
       let rel_path_for_load = requested_rel_path.clone();
-      let (snapshot_contents, binary_bytes) = unblock(move || {
-        let loaded = Editor::load_file_for_editor(&repo_root_for_load, &absolute_path_for_load);
-        let git_store = GitStore::new(repo_root_for_load.clone());
-        let head_contents = git_store
-          .load_bases(rel_path_for_load.as_path())
-          .ok()
-          .and_then(|bases| bases.head);
-        let head_binary_bytes = git_store
-          .load_binary_bases(rel_path_for_load.as_path())
-          .ok()
-          .and_then(|bases| bases.head);
-        (
-          head_contents.unwrap_or(loaded.content),
-          head_binary_bytes.or(loaded.binary_bytes),
-        )
-      })
-      .await;
+      let (snapshot_contents, binary_bytes) = cx
+        .background_spawn(async move {
+          let loaded = Editor::load_file_for_editor(&repo_root_for_load, &absolute_path_for_load);
+          let git_store = GitStore::new(repo_root_for_load.clone());
+          let head_contents = git_store
+            .load_bases(rel_path_for_load.as_path())
+            .ok()
+            .and_then(|bases| bases.head);
+          let head_binary_bytes = git_store
+            .load_binary_bases(rel_path_for_load.as_path())
+            .ok()
+            .and_then(|bases| bases.head);
+          (
+            head_contents.unwrap_or(loaded.content),
+            head_binary_bytes.or(loaded.binary_bytes),
+          )
+        })
+        .await;
 
       let _ = this.update(cx, move |this, cx| {
         if this.local_project_open_file_generation != generation {
@@ -3573,18 +3576,19 @@ impl GithubPrDetailsPage {
     let task = cx.spawn(async move |this, cx| {
       let repo_root_for_action = repo_root.clone();
       let branch_name_for_action = branch_name.clone();
-      let result = unblock(move || {
-        if stash_before_switch {
-          let stash_message = default_stash_message(&repo_root_for_action).ok();
-          create_stash(&repo_root_for_action, true, stash_message.as_deref())?;
-        }
-        switch_to_branch_name(&repo_root_for_action, &branch_name_for_action)?;
-        Ok::<_, anyhow::Error>(local_repo_snapshot(
-          &repo_root_for_action,
-          Some(branch_name_for_action.as_str()),
-        ))
-      })
-      .await;
+      let result = cx
+        .background_spawn(async move {
+          if stash_before_switch {
+            let stash_message = default_stash_message(&repo_root_for_action).ok();
+            create_stash(&repo_root_for_action, true, stash_message.as_deref())?;
+          }
+          switch_to_branch_name(&repo_root_for_action, &branch_name_for_action)?;
+          Ok::<_, anyhow::Error>(local_repo_snapshot(
+            &repo_root_for_action,
+            Some(branch_name_for_action.as_str()),
+          ))
+        })
+        .await;
 
       let _ = this.update(cx, |this, cx| {
         this.local_branch_switch_task = None;
@@ -3655,22 +3659,23 @@ impl GithubPrDetailsPage {
       let repo_root_for_update = repo_root.clone();
       let branch_name_for_update = branch_name.clone();
       let target_head_sha_for_update = target_head_sha.clone();
-      let result = unblock(move || {
-        if stash_before_update {
-          let stash_message = default_stash_message(&repo_root_for_update).ok();
-          create_stash(&repo_root_for_update, true, stash_message.as_deref())?;
-        }
-        sync_current_branch_to_head(
-          &repo_root_for_update,
-          &branch_name_for_update,
-          &target_head_sha_for_update,
-        )?;
-        Ok::<_, anyhow::Error>(local_repo_snapshot(
-          &repo_root_for_update,
-          Some(branch_name_for_update.as_str()),
-        ))
-      })
-      .await;
+      let result = cx
+        .background_spawn(async move {
+          if stash_before_update {
+            let stash_message = default_stash_message(&repo_root_for_update).ok();
+            create_stash(&repo_root_for_update, true, stash_message.as_deref())?;
+          }
+          sync_current_branch_to_head(
+            &repo_root_for_update,
+            &branch_name_for_update,
+            &target_head_sha_for_update,
+          )?;
+          Ok::<_, anyhow::Error>(local_repo_snapshot(
+            &repo_root_for_update,
+            Some(branch_name_for_update.as_str()),
+          ))
+        })
+        .await;
 
       let _ = this.update(cx, |this, cx| {
         this.local_project_update_task = None;
@@ -4041,10 +4046,11 @@ impl GithubPrDetailsPage {
     let details_repo = context.repo.clone();
     let number = context.number;
     let task = cx.spawn(async move |this, cx| {
-      let result = unblock(move || {
-        details_api.fetch_pull_request_details(&details_owner, &details_repo, number)
-      })
-      .await;
+      let result = cx
+        .background_spawn(async move {
+          details_api.fetch_pull_request_details(&details_owner, &details_repo, number)
+        })
+        .await;
 
       let _ = this.update(cx, |this, cx| {
         match result {
@@ -4157,8 +4163,9 @@ impl GithubPrDetailsPage {
 
     let api = self.api.clone();
     let task = cx.spawn(async move |this, cx| {
-      let result =
-        unblock(move || api.fetch_pull_request_conversation(&owner, &repo, number)).await;
+      let result = cx
+        .background_spawn(async move { api.fetch_pull_request_conversation(&owner, &repo, number) })
+        .await;
 
       let _ = this.update(cx, |this, cx| {
         match result {
@@ -4214,7 +4221,9 @@ impl GithubPrDetailsPage {
     let repo = context.repo;
     let number = context.number;
     let task = cx.spawn(async move |this, cx| {
-      let result = unblock(move || api.fetch_pull_request_commits(&owner, &repo, number)).await;
+      let result = cx
+        .background_spawn(async move { api.fetch_pull_request_commits(&owner, &repo, number) })
+        .await;
 
       let _ = this.update(cx, |this, cx| {
         match result {
@@ -4276,7 +4285,9 @@ impl GithubPrDetailsPage {
     let repo = context.repo;
     let number = context.number;
     let task = cx.spawn(async move |this, cx| {
-      let result = unblock(move || api.fetch_pull_request_checks(&owner, &repo, number)).await;
+      let result = cx
+        .background_spawn(async move { api.fetch_pull_request_checks(&owner, &repo, number) })
+        .await;
 
       let _ = this.update(cx, |this, cx| {
         match result {
@@ -4319,8 +4330,11 @@ impl GithubPrDetailsPage {
     self.merge_readiness = None;
     let merge_api = self.api.clone();
     let task = cx.spawn(async move |this, cx| {
-      let result =
-        unblock(move || merge_api.fetch_pull_request_merge_readiness(&owner, &repo, number)).await;
+      let result = cx
+        .background_spawn(async move {
+          merge_api.fetch_pull_request_merge_readiness(&owner, &repo, number)
+        })
+        .await;
 
       let _ = this.update(cx, |this, cx| {
         match result {
@@ -4387,18 +4401,19 @@ impl GithubPrDetailsPage {
     self.merge_submit_error = None;
 
     let task = cx.spawn_in(window, async move |this, cx| {
-      let result = unblock(move || {
-        api.merge_pull_request(
-          &owner,
-          &repo,
-          number,
-          method,
-          &expected_head_sha,
-          Some(commit_title.as_str()),
-          Some(commit_message.as_str()),
-        )
-      })
-      .await;
+      let result = cx
+        .background_spawn(async move {
+          api.merge_pull_request(
+            &owner,
+            &repo,
+            number,
+            method,
+            &expected_head_sha,
+            Some(commit_title.as_str()),
+            Some(commit_message.as_str()),
+          )
+        })
+        .await;
 
       let _ = this.update_in(cx, |this, window, cx| {
         this.merge_submit_loading = false;
@@ -4548,15 +4563,18 @@ impl GithubPrDetailsPage {
     self.status_action_loading = true;
 
     let task = cx.spawn(async move |this, cx| {
-      let result = unblock(move || match action {
-        GithubPrStatusAction::ReadyForReview => {
-          api.mark_pull_request_ready_for_review(&owner, &repo, number, &pull_request_id)
-        }
-        GithubPrStatusAction::ConvertToDraft => {
-          api.convert_pull_request_to_draft(&owner, &repo, number, &pull_request_id)
-        }
-      })
-      .await;
+      let result = cx
+        .background_spawn(async move {
+          match action {
+            GithubPrStatusAction::ReadyForReview => {
+              api.mark_pull_request_ready_for_review(&owner, &repo, number, &pull_request_id)
+            }
+            GithubPrStatusAction::ConvertToDraft => {
+              api.convert_pull_request_to_draft(&owner, &repo, number, &pull_request_id)
+            }
+          }
+        })
+        .await;
 
       let _ = this.update(cx, |this, cx| {
         this.status_action_loading = false;
@@ -4607,7 +4625,9 @@ impl GithubPrDetailsPage {
     self.update_branch_loading = true;
 
     let task = cx.spawn(async move |this, cx| {
-      let result = unblock(move || api.update_pull_request_branch(&owner, &repo, number)).await;
+      let result = cx
+        .background_spawn(async move { api.update_pull_request_branch(&owner, &repo, number) })
+        .await;
 
       let _ = this.update(cx, |this, cx| {
         this.update_branch_loading = false;
@@ -4665,7 +4685,9 @@ impl GithubPrDetailsPage {
     let api = self.api.clone();
 
     let task = cx.spawn(async move |this, cx| {
-      let result = unblock(move || api.fetch_github_repository_branches(&owner, &repo)).await;
+      let result = cx
+        .background_spawn(async move { api.fetch_github_repository_branches(&owner, &repo) })
+        .await;
 
       let _ = this.update(cx, |this, cx| {
         if request_generation != this.target_branch_request_generation {
@@ -4739,9 +4761,11 @@ impl GithubPrDetailsPage {
 
     let task = cx.spawn(async move |this, cx| {
       let branch_for_request = branch.clone();
-      let result =
-        unblock(move || api.update_pull_request_base(&owner, &repo, number, &branch_for_request))
-          .await;
+      let result = cx
+        .background_spawn(async move {
+          api.update_pull_request_base(&owner, &repo, number, &branch_for_request)
+        })
+        .await;
 
       let _ = this.update(cx, |this, cx| {
         this.target_branch_update_loading = false;
@@ -5039,8 +5063,9 @@ impl GithubPrDetailsPage {
     let window_handle = self.window_handle;
 
     let task = cx.spawn(async move |this, cx| {
-      let result =
-        unblock(move || api.fetch_github_pull_request_filter_options(&[full_name])).await;
+      let result = cx
+        .background_spawn(async move { api.fetch_github_pull_request_filter_options(&[full_name]) })
+        .await;
 
       let _ = cx.update_window(window_handle, |_, _, cx| {
         let _ = this.update(cx, |this, cx| {
@@ -5103,8 +5128,11 @@ impl GithubPrDetailsPage {
     let window_handle = self.window_handle;
 
     let task = cx.spawn(async move |this, cx| {
-      let result =
-        unblock(move || api.add_pull_request_assignee(&owner, &repo, number, &login_string)).await;
+      let result = cx
+        .background_spawn(async move {
+          api.add_pull_request_assignee(&owner, &repo, number, &login_string)
+        })
+        .await;
       let _ = cx.update_window(window_handle, |_, window, cx| {
         let _ = this.update(cx, |this, cx| {
           match result {
@@ -5152,10 +5180,11 @@ impl GithubPrDetailsPage {
     let login_for_request = login_string.clone();
 
     let task = cx.spawn(async move |this, cx| {
-      let result = unblock(move || {
-        api.remove_pull_request_assignee(&owner, &repo, number, &login_for_request)
-      })
-      .await;
+      let result = cx
+        .background_spawn(async move {
+          api.remove_pull_request_assignee(&owner, &repo, number, &login_for_request)
+        })
+        .await;
       let _ = this.update(cx, |this, cx| {
         match result {
           Ok(()) => {
@@ -5219,9 +5248,11 @@ impl GithubPrDetailsPage {
     let window_handle = self.window_handle;
 
     let task = cx.spawn(async move |this, cx| {
-      let result =
-        unblock(move || api.request_pull_request_reviewer(&owner, &repo, number, &login_string))
-          .await;
+      let result = cx
+        .background_spawn(async move {
+          api.request_pull_request_reviewer(&owner, &repo, number, &login_string)
+        })
+        .await;
       let _ = cx.update_window(window_handle, |_, window, cx| {
         let _ = this.update(cx, |this, cx| {
           match result {
@@ -5269,10 +5300,11 @@ impl GithubPrDetailsPage {
     let login_for_request = login_string.clone();
 
     let task = cx.spawn(async move |this, cx| {
-      let result = unblock(move || {
-        api.remove_pull_request_reviewer(&owner, &repo, number, &login_for_request)
-      })
-      .await;
+      let result = cx
+        .background_spawn(async move {
+          api.remove_pull_request_reviewer(&owner, &repo, number, &login_for_request)
+        })
+        .await;
       let _ = this.update(cx, |this, cx| {
         match result {
           Ok(()) => {
@@ -5322,9 +5354,11 @@ impl GithubPrDetailsPage {
     let window_handle = self.window_handle;
 
     let task = cx.spawn(async move |this, cx| {
-      let result =
-        unblock(move || api.add_pull_request_label(&owner, &repo, number, &label_for_request))
-          .await;
+      let result = cx
+        .background_spawn(async move {
+          api.add_pull_request_label(&owner, &repo, number, &label_for_request)
+        })
+        .await;
       let _ = cx.update_window(window_handle, |_, window, cx| {
         let _ = this.update(cx, |this, cx| {
           match result {
@@ -5380,9 +5414,11 @@ impl GithubPrDetailsPage {
     let window_handle = self.window_handle;
 
     let task = cx.spawn(async move |this, cx| {
-      let result =
-        unblock(move || api.remove_pull_request_label(&owner, &repo, number, &name_for_request))
-          .await;
+      let result = cx
+        .background_spawn(async move {
+          api.remove_pull_request_label(&owner, &repo, number, &name_for_request)
+        })
+        .await;
       let _ = cx.update_window(window_handle, |_, _, cx| {
         let _ = this.update(cx, |this, cx| {
           match result {
@@ -5456,18 +5492,19 @@ impl GithubPrDetailsPage {
     cx.notify();
 
     let task = cx.spawn(async move |this, cx| {
-      let result = unblock(move || {
-        perform_tree_text_search(
-          &query,
-          &scope_paths,
-          &pr_files,
-          &cached_file_contents,
-          diff_refs.as_ref(),
-          &api,
-          local_repo_root.as_deref(),
-        )
-      })
-      .await;
+      let result = cx
+        .background_spawn(async move {
+          perform_tree_text_search(
+            &query,
+            &scope_paths,
+            &pr_files,
+            &cached_file_contents,
+            diff_refs.as_ref(),
+            &api,
+            local_repo_root.as_deref(),
+          )
+        })
+        .await;
 
       let _ = this.update(cx, |this, cx| {
         if generation != this.tree_search_generation {
@@ -5779,24 +5816,25 @@ impl GithubPrDetailsPage {
     cx.notify();
 
     let task = cx.spawn(async move |this, cx| {
-      let result = unblock(move || {
-        api.apply_pull_request_suggested_change(
-          &owner,
-          &repo,
-          number,
-          target.comment_id,
-          &commit_title,
-          Some(commit_message.as_str()),
-          &expected_head_sha,
-          target.path.as_ref(),
-          target.original_start_line,
-          &target.original_lines,
-          &target.suggested_lines,
-          include_co_author,
-          Some(target.author_login.as_ref()),
-        )
-      })
-      .await;
+      let result = cx
+        .background_spawn(async move {
+          api.apply_pull_request_suggested_change(
+            &owner,
+            &repo,
+            number,
+            target.comment_id,
+            &commit_title,
+            Some(commit_message.as_str()),
+            &expected_head_sha,
+            target.path.as_ref(),
+            target.original_start_line,
+            &target.original_lines,
+            &target.suggested_lines,
+            include_co_author,
+            Some(target.author_login.as_ref()),
+          )
+        })
+        .await;
 
       let _ = this.update(cx, |this, cx| {
         this.suggested_change_commit_loading = false;
@@ -5859,14 +5897,15 @@ impl GithubPrDetailsPage {
 
     let thread_id_for_result = thread_id.clone();
     let task = cx.spawn(async move |this, cx| {
-      let result = unblock(move || {
-        if currently_resolved {
-          api.unresolve_pull_request_review_thread(&owner, &repo, number, target.as_str())
-        } else {
-          api.resolve_pull_request_review_thread(&owner, &repo, number, target.as_str())
-        }
-      })
-      .await;
+      let result = cx
+        .background_spawn(async move {
+          if currently_resolved {
+            api.unresolve_pull_request_review_thread(&owner, &repo, number, target.as_str())
+          } else {
+            api.resolve_pull_request_review_thread(&owner, &repo, number, target.as_str())
+          }
+        })
+        .await;
 
       let _ = this.update(cx, |this, cx| {
         this.resolve_thread_in_flight.remove(&thread_id_for_result);
@@ -5952,14 +5991,15 @@ impl GithubPrDetailsPage {
     cx.notify();
 
     let task = cx.spawn_in(window, async move |this, cx| {
-      let result = unblock(move || {
-        if let Some(review_id) = pending_review_id {
-          api.submit_pending_review(&owner, &repo, number, &review_id, event, &body)
-        } else {
-          api.submit_pull_request_review(&owner, &repo, number, event, &body)
-        }
-      })
-      .await;
+      let result = cx
+        .background_spawn(async move {
+          if let Some(review_id) = pending_review_id {
+            api.submit_pending_review(&owner, &repo, number, &review_id, event, &body)
+          } else {
+            api.submit_pull_request_review(&owner, &repo, number, event, &body)
+          }
+        })
+        .await;
 
       let _ = this.update_in(cx, |this, window, cx| {
         this.submit_review_loading = false;
@@ -6285,9 +6325,11 @@ impl GithubPrDetailsPage {
     let fallback_owner = owner.clone();
     let fallback_repo = repo.clone();
     cx.spawn(async move |_, cx| {
-      let result =
-        unblock(move || api.resolve_github_issue_reference_target(&owner, &repo, issue_number))
-          .await;
+      let result = cx
+        .background_spawn(async move {
+          api.resolve_github_issue_reference_target(&owner, &repo, issue_number)
+        })
+        .await;
 
       cx.update(|cx| match result {
         Ok(target) if target.kind == GithubIssueReferenceTargetKind::PullRequest => {
@@ -6460,17 +6502,18 @@ impl GithubPrDetailsPage {
     let api = self.api.clone();
     let body_for_api = body.clone();
     let task = cx.spawn(async move |this, cx| {
-      let result = unblock(move || {
-        if let Some(node_id) = pending_comment_node_id {
-          api.update_pending_review_comment(&owner, &repo, number, &node_id, &body_for_api)?;
-          Ok::<_, anyhow::Error>(None)
-        } else {
-          api
-            .update_pull_request_review_comment(&owner, &repo, number, comment_id, &body_for_api)
-            .map(Some)
-        }
-      })
-      .await;
+      let result = cx
+        .background_spawn(async move {
+          if let Some(node_id) = pending_comment_node_id {
+            api.update_pending_review_comment(&owner, &repo, number, &node_id, &body_for_api)?;
+            Ok::<_, anyhow::Error>(None)
+          } else {
+            api
+              .update_pull_request_review_comment(&owner, &repo, number, comment_id, &body_for_api)
+              .map(Some)
+          }
+        })
+        .await;
 
       let _ = this.update(cx, |this, cx| {
         let mut error_message: Option<Arc<str>> = None;
@@ -6602,32 +6645,33 @@ impl GithubPrDetailsPage {
         .unwrap_or(pull_request_node_id);
       let existing_review_id = self.pending_review_id.clone();
       let task = cx.spawn(async move |this, cx| {
-        let result = unblock(move || {
-          let review_id = match existing_review_id {
-            Some(id) => id,
-            None => {
-              api
-                .start_pending_review(&owner, &repo, number, &pull_request_id)?
-                .node_id
-            }
-          };
-          let comment = api.add_pending_review_thread(
-            &owner,
-            &repo,
-            number,
-            &pull_request_id,
-            &review_id,
-            &path,
-            &body,
-            "LINE",
-            Some(line),
-            Some(side.as_str()),
-            start_line,
-            start_side.as_deref(),
-          )?;
-          Ok::<_, anyhow::Error>((review_id, pull_request_id, comment))
-        })
-        .await;
+        let result = cx
+          .background_spawn(async move {
+            let review_id = match existing_review_id {
+              Some(id) => id,
+              None => {
+                api
+                  .start_pending_review(&owner, &repo, number, &pull_request_id)?
+                  .node_id
+              }
+            };
+            let comment = api.add_pending_review_thread(
+              &owner,
+              &repo,
+              number,
+              &pull_request_id,
+              &review_id,
+              &path,
+              &body,
+              "LINE",
+              Some(line),
+              Some(side.as_str()),
+              start_line,
+              start_side.as_deref(),
+            )?;
+            Ok::<_, anyhow::Error>((review_id, pull_request_id, comment))
+          })
+          .await;
 
         let _ = this.update(cx, |this, cx| {
           let mut error_message: Option<Arc<str>> = None;
@@ -6685,10 +6729,18 @@ impl GithubPrDetailsPage {
         .filter(|thread_id| !thread_id.is_empty())
     {
       let task = cx.spawn(async move |this, cx| {
-        let result = unblock(move || {
-          api.reply_pending_review_thread(&owner, &repo, number, &review_id, &thread_node_id, &body)
-        })
-        .await;
+        let result = cx
+          .background_spawn(async move {
+            api.reply_pending_review_thread(
+              &owner,
+              &repo,
+              number,
+              &review_id,
+              &thread_node_id,
+              &body,
+            )
+          })
+          .await;
 
         let _ = this.update(cx, |this, cx| {
           let mut error_message: Option<Arc<str>> = None;
@@ -6725,27 +6777,28 @@ impl GithubPrDetailsPage {
     }
 
     let task = cx.spawn(async move |this, cx| {
-      let result = unblock(move || {
-        if let Some(in_reply_to_id) = in_reply_to_id {
-          api.reply_pull_request_review_comment(&owner, &repo, number, in_reply_to_id, &body)
-        } else {
-          let (path, commit_id, line, side, start_line, start_side) = line_comment_payload
-            .expect("line comment payload should exist when creating a top-level comment");
-          api.create_pull_request_review_comment(
-            &owner,
-            &repo,
-            number,
-            &path,
-            &commit_id,
-            line,
-            &side,
-            start_line,
-            start_side.as_deref(),
-            &body,
-          )
-        }
-      })
-      .await;
+      let result = cx
+        .background_spawn(async move {
+          if let Some(in_reply_to_id) = in_reply_to_id {
+            api.reply_pull_request_review_comment(&owner, &repo, number, in_reply_to_id, &body)
+          } else {
+            let (path, commit_id, line, side, start_line, start_side) = line_comment_payload
+              .expect("line comment payload should exist when creating a top-level comment");
+            api.create_pull_request_review_comment(
+              &owner,
+              &repo,
+              number,
+              &path,
+              &commit_id,
+              line,
+              &side,
+              start_line,
+              start_side.as_deref(),
+              &body,
+            )
+          }
+        })
+        .await;
 
       let _ = this.update(cx, |this, cx| {
         let mut error_message: Option<Arc<str>> = None;
@@ -6881,14 +6934,15 @@ impl GithubPrDetailsPage {
     let api = self.api.clone();
 
     let task = cx.spawn(async move |this, cx| {
-      let result = unblock(move || {
-        if let Some(node_id) = pending_node_id {
-          api.delete_pending_review_comment(&owner, &repo, number, &node_id)
-        } else {
-          api.delete_pull_request_review_comment(&owner, &repo, number, comment_id)
-        }
-      })
-      .await;
+      let result = cx
+        .background_spawn(async move {
+          if let Some(node_id) = pending_node_id {
+            api.delete_pending_review_comment(&owner, &repo, number, &node_id)
+          } else {
+            api.delete_pull_request_review_comment(&owner, &repo, number, comment_id)
+          }
+        })
+        .await;
 
       let _ = this.update(cx, |this, cx| {
         if let Err(error) = result {
@@ -7412,8 +7466,11 @@ impl GithubPrDetailsPage {
       let repo_arc = Arc::<str>::from(repo_label.as_str());
 
       let task = cx.spawn(async move |this, cx| {
-        let result =
-          unblock(move || api.fetch_github_file_content(&owner, &repo, &path, &revision)).await;
+        let result = cx
+          .background_spawn(async move {
+            api.fetch_github_file_content(&owner, &repo, &path, &revision)
+          })
+          .await;
 
         let preview = match result {
           Ok(Some(content)) => github_shared::line_snippets_from_content(
@@ -7728,10 +7785,11 @@ impl GithubPrDetailsPage {
     let files_api = self.api.clone();
     let commit_sha = self.selected_commit_sha.clone();
     let task = cx.spawn(async move |this, cx| {
-      let result = unblock(move || {
-        files_api.fetch_pull_request_files(&owner, &repo, number, commit_sha.as_deref())
-      })
-      .await;
+      let result = cx
+        .background_spawn(async move {
+          files_api.fetch_pull_request_files(&owner, &repo, number, commit_sha.as_deref())
+        })
+        .await;
 
       let _ = this.update(cx, |this, cx| {
         if generation != this.files_request_generation {
@@ -7808,10 +7866,11 @@ impl GithubPrDetailsPage {
     let api = self.api.clone();
     let preview_path_for_request = preview_path.clone();
     let task = cx.spawn(async move |this, cx| {
-      let asset_result = unblock(move || {
-        api.fetch_github_file_asset(&owner, &repo, &preview_path_for_request, &reference)
-      })
-      .await;
+      let asset_result = cx
+        .background_spawn(async move {
+          api.fetch_github_file_asset(&owner, &repo, &preview_path_for_request, &reference)
+        })
+        .await;
 
       let _ = this.update(cx, |this, cx| {
         this.file_asset_tasks.remove(&key_for_task);
@@ -7900,7 +7959,10 @@ impl GithubPrDetailsPage {
         let owner = base_owner.clone();
         let repo = base_repo.clone();
         let base_sha = base_sha.clone();
-        unblock(move || api.fetch_github_file_content(&owner, &repo, &path, &base_sha)).await
+        cx.background_spawn(async move {
+          api.fetch_github_file_content(&owner, &repo, &path, &base_sha)
+        })
+        .await
       } else {
         Ok(None)
       };
@@ -7910,7 +7972,10 @@ impl GithubPrDetailsPage {
         let owner = head_owner.clone();
         let repo = head_repo.clone();
         let head_sha = head_sha.clone();
-        unblock(move || api.fetch_github_file_content(&owner, &repo, &path, &head_sha)).await
+        cx.background_spawn(async move {
+          api.fetch_github_file_content(&owner, &repo, &path, &head_sha)
+        })
+        .await
       } else {
         Ok(None)
       };
@@ -8123,10 +8188,11 @@ impl GithubPrDetailsPage {
     let details_owner = owner.clone();
     let details_repo = repo.clone();
     let details_task = cx.spawn(async move |this, cx| {
-      let result = unblock(move || {
-        details_api.fetch_pull_request_details(&details_owner, &details_repo, number)
-      })
-      .await;
+      let result = cx
+        .background_spawn(async move {
+          details_api.fetch_pull_request_details(&details_owner, &details_repo, number)
+        })
+        .await;
 
       let _ = this.update(cx, |this, cx| {
         match result {
@@ -8178,10 +8244,11 @@ impl GithubPrDetailsPage {
     let commits_owner = owner.clone();
     let commits_repo = repo.clone();
     let commits_task = cx.spawn(async move |this, cx| {
-      let result = unblock(move || {
-        commits_api.fetch_pull_request_commits(&commits_owner, &commits_repo, number)
-      })
-      .await;
+      let result = cx
+        .background_spawn(async move {
+          commits_api.fetch_pull_request_commits(&commits_owner, &commits_repo, number)
+        })
+        .await;
 
       let _ = this.update(cx, |this, cx| {
         match result {
@@ -8220,9 +8287,11 @@ impl GithubPrDetailsPage {
     let checks_owner = owner.clone();
     let checks_repo = repo.clone();
     let checks_task = cx.spawn(async move |this, cx| {
-      let result =
-        unblock(move || checks_api.fetch_pull_request_checks(&checks_owner, &checks_repo, number))
-          .await;
+      let result = cx
+        .background_spawn(async move {
+          checks_api.fetch_pull_request_checks(&checks_owner, &checks_repo, number)
+        })
+        .await;
 
       let _ = this.update(cx, |this, cx| {
         match result {
@@ -12634,7 +12703,6 @@ mod tests {
     net::TcpListener,
     sync::atomic::{AtomicU64, Ordering},
     thread,
-    time::{SystemTime, UNIX_EPOCH},
   };
 
   fn init_gpui_test(cx: &mut TestAppContext) {
@@ -12756,14 +12824,7 @@ mod tests {
     current_branch: &str,
     additional_branches: &[&str],
   ) -> (PathBuf, ActiveLocalRepo) {
-    let unique = SystemTime::now()
-      .duration_since(UNIX_EPOCH)
-      .expect("system time after unix epoch")
-      .as_nanos();
-    let repo_root = std::env::temp_dir().join(format!(
-      "reviu-pr-details-local-repo-{}-{unique}",
-      std::process::id()
-    ));
+    let repo_root = crate::test_support::temp_path("pr-details-local-repo");
 
     std::fs::create_dir_all(repo_root.join("src")).expect("create repo directories");
     Repository::init(&repo_root).expect("init local repo");
@@ -13441,7 +13502,6 @@ mod tests {
   #[gpui::test]
   async fn changes_raster_image_preview_renders_without_source_editor(cx: &mut TestAppContext) {
     init_gpui_test(cx);
-    cx.executor().allow_parking();
     let (base_url, handle) = start_single_response_server(
       "200 OK",
       r#"{"contentBase64":"iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aP0cAAAAASUVORK5CYII="}"#,
@@ -13500,7 +13560,6 @@ mod tests {
     cx: &mut TestAppContext,
   ) {
     init_gpui_test(cx);
-    cx.executor().allow_parking();
     let (base_url, handle) = start_single_response_server(
       "200 OK",
       r#"{"contentBase64":"iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aP0cAAAAASUVORK5CYII="}"#,
@@ -13900,7 +13959,6 @@ mod tests {
   #[gpui::test]
   async fn draft_status_action_failure_shows_error_notification(cx: &mut TestAppContext) {
     init_gpui_test(cx);
-    cx.executor().allow_parking();
     let (base_url, handle) = start_single_response_server(
       "403 FORBIDDEN",
       r#"{"error":"You cannot change this pull request status."}"#,
@@ -13950,7 +14008,6 @@ mod tests {
     cx: &mut TestAppContext,
   ) {
     init_gpui_test(cx);
-    cx.executor().allow_parking();
     let (base_url, handle) = start_single_response_server("204 NO CONTENT", "");
     let (page, cx) = cx.add_window_view(|window, cx| GithubPrDetailsPage::new(window, cx));
 
@@ -14004,7 +14061,6 @@ mod tests {
   #[gpui::test]
   async fn ready_for_review_success_only_reloads_merge_readiness(cx: &mut TestAppContext) {
     init_gpui_test(cx);
-    cx.executor().allow_parking();
     let merge_readiness_body = r#"{
       "mergeReadiness": {
         "status": "ready",
@@ -14294,7 +14350,6 @@ mod tests {
   #[gpui::test]
   async fn refresh_current_page_starts_commits_and_checks_for_all_tabs(cx: &mut TestAppContext) {
     init_gpui_test(cx);
-    cx.executor().allow_parking();
     assert_refresh_current_page_starts_commits_and_checks_for_tab(PR_TAB_OVERVIEW_IX, cx).await;
     assert_refresh_current_page_starts_commits_and_checks_for_tab(PR_TAB_CHANGES_IX, cx).await;
   }
@@ -14606,13 +14661,8 @@ mod tests {
     cx: &mut TestAppContext,
   ) {
     init_gpui_test(cx);
-    cx.executor().allow_parking();
 
-    let unique = SystemTime::now()
-      .duration_since(UNIX_EPOCH)
-      .expect("system time after unix epoch")
-      .as_nanos();
-    let repo_root = std::env::temp_dir().join(format!("reviu-pr-switch-palette-{unique}"));
+    let repo_root = crate::test_support::temp_path("pr-switch-palette");
     std::fs::create_dir_all(repo_root.join("src")).expect("create repo directories");
     Repository::init(&repo_root).expect("init repo");
     commit_local_project_file(
@@ -14926,7 +14976,6 @@ mod tests {
     cx: &mut TestAppContext,
   ) {
     init_gpui_test(cx);
-    cx.executor().allow_parking();
     let (page, cx) = cx.add_window_view(|window, cx| GithubPrDetailsPage::new(window, cx));
 
     page.update_in(cx, |this, _window, cx| {
@@ -15018,11 +15067,7 @@ mod tests {
 
   #[test]
   fn perform_tree_text_search_matches_local_head_contents_and_skips_untracked() {
-    let unique = SystemTime::now()
-      .duration_since(UNIX_EPOCH)
-      .expect("system time after unix epoch")
-      .as_nanos();
-    let repo_root = std::env::temp_dir().join(format!("reviu-pr-search-local-{unique}"));
+    let repo_root = crate::test_support::temp_path("pr-search-local");
     Repository::init(&repo_root).expect("init local project git repo");
     commit_local_project_file(
       &repo_root,
@@ -15109,7 +15154,6 @@ mod tests {
   #[gpui::test]
   async fn loading_local_project_files_keeps_selected_pr_diff_visible(cx: &mut TestAppContext) {
     init_gpui_test(cx);
-    cx.executor().allow_parking();
     let (page, cx) = cx.add_window_view(|window, cx| GithubPrDetailsPage::new(window, cx));
 
     page.update_in(cx, |this, _window, cx| {
@@ -15149,13 +15193,8 @@ mod tests {
   #[gpui::test]
   async fn selecting_local_project_file_uses_detached_readonly_snapshot(cx: &mut TestAppContext) {
     init_gpui_test(cx);
-    cx.executor().allow_parking();
 
-    let unique = SystemTime::now()
-      .duration_since(UNIX_EPOCH)
-      .expect("system time after unix epoch")
-      .as_nanos();
-    let repo_root = std::env::temp_dir().join(format!("reviu-pr-local-project-{unique}"));
+    let repo_root = crate::test_support::temp_path("pr-local-project");
     let file_path = repo_root.join("src/local.rs");
     std::fs::create_dir_all(
       file_path
@@ -15253,7 +15292,6 @@ mod tests {
   #[gpui::test]
   async fn same_pr_commit_links_switch_to_changes_and_select_the_commit(cx: &mut TestAppContext) {
     init_gpui_test(cx);
-    cx.executor().allow_parking();
     cx.update(|cx| {
       gpui_router::init(cx);
       NavigationHistory::init(cx);

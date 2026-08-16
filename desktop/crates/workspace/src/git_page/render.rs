@@ -1437,7 +1437,6 @@ mod tests {
     std::fs::write(&absolute_path, tiny_png_bytes()).expect("write png image");
 
     let (git_page, cx) = add_git_page_window_with_root(cx);
-    cx.executor().allow_parking();
 
     git_page.update_in(cx, |this, _window, cx| {
       this.selected_repo = Some(repo.path.clone());
@@ -1483,7 +1482,6 @@ mod tests {
     std::fs::write(&absolute_path, b"%PDF-1.7\n").expect("write pdf file");
 
     let (git_page, cx) = add_git_page_window_with_root(cx);
-    cx.executor().allow_parking();
 
     git_page.update_in(cx, |this, _window, cx| {
       this.selected_repo = Some(repo.path.clone());

@@ -17,7 +17,6 @@ ui = { workspace = true }
 dirs = { workspace = true }
 rusqlite = { workspace = true }
 syntax = { workspace = true }
-smol = { workspace = true }
 anyhow = { workspace = true }
 base64 = { workspace = true }
 reqwest = { workspace = true }

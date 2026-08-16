@@ -11,7 +11,6 @@ use gpui_component::{
   notification::Notification,
   v_flex,
 };
-use smol::unblock;
 
 use ui::{
   CommandPalette, CommandPaletteAction, CommandPaletteCommand, CommandPaletteConfig,
@@ -131,8 +130,11 @@ impl AboutPage {
     let arch = current_arch().to_string();
 
     let task = cx.spawn(async move |this, cx| {
-      let result =
-        unblock(move || api.check_desktop_update(&current_version, &platform, &arch)).await;
+      let result = cx
+        .background_spawn(
+          async move { api.check_desktop_update(&current_version, &platform, &arch) },
+        )
+        .await;
       let _ = this.update(cx, |this, cx| {
         this.check_in_progress = false;
 
@@ -218,11 +220,12 @@ impl AboutPage {
     cx.notify();
 
     let task = cx.spawn(async move |this, cx| {
-      let download_result = unblock({
-        let update = update.clone();
-        move || download_update_artifact(&update)
-      })
-      .await;
+      let download_result = cx
+        .background_spawn({
+          let update = update.clone();
+          async move { download_update_artifact(&update) }
+        })
+        .await;
 
       match download_result {
         Ok(ready) => {
@@ -236,7 +239,9 @@ impl AboutPage {
           }
 
           let install_ready = ready.clone();
-          let install_result = unblock(move || install_update_artifact(&install_ready)).await;
+          let install_result = cx
+            .background_spawn(async move { install_update_artifact(&install_ready) })
+            .await;
           let _ = this.update(cx, |this, cx| {
             match install_result {
               Ok(()) => {

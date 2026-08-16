@@ -19,7 +19,6 @@ use gpui_component::{
   tree::{TreeItem, TreeState, tree},
   v_flex,
 };
-use smol::unblock;
 use terminal::TerminalView;
 
 use crate::changes_list::{ChangesList, ChangesListEvent};
@@ -313,7 +312,9 @@ impl DockPanel {
     self.files_loading = true;
 
     let task = cx.spawn(async move |this, cx| {
-      let files = unblock(move || list_repo_worktree_files(&repo_root)).await;
+      let files = cx
+        .background_spawn(async move { list_repo_worktree_files(&repo_root) })
+        .await;
       let _ = this.update(cx, |this, cx| {
         this.files_loading = false;
         if let Ok(files) = files {
@@ -337,15 +338,16 @@ impl DockPanel {
     };
 
     let task = cx.spawn(async move |this, cx| {
-      let (result, merge_in_progress, rebase_in_progress, head_status) = unblock(move || {
-        (
-          list_repo_status(&repo_root),
-          is_merge_in_progress(&repo_root).unwrap_or(false),
-          is_rebase_in_progress(&repo_root).unwrap_or(false),
-          head_commit_status(&repo_root).unwrap_or_default(),
-        )
-      })
-      .await;
+      let (result, merge_in_progress, rebase_in_progress, head_status) = cx
+        .background_spawn(async move {
+          (
+            list_repo_status(&repo_root),
+            is_merge_in_progress(&repo_root).unwrap_or(false),
+            is_rebase_in_progress(&repo_root).unwrap_or(false),
+            head_commit_status(&repo_root).unwrap_or_default(),
+          )
+        })
+        .await;
       let _ = this.update(cx, |this, cx| {
         this.merge_in_progress = merge_in_progress;
         this.rebase_in_progress = rebase_in_progress;
@@ -383,18 +385,19 @@ impl DockPanel {
     self.branch_pr = BranchPrState::Loading;
     let api = WorkspaceApi::global(cx).api.clone();
     let task = cx.spawn(async move |this, cx| {
-      let state = unblock(move || {
-        branch_pr_state_for_lookup(
-          current_github_remote_repo(&repo_root).ok().flatten(),
-          current_branch_status(&repo_root)
-            .ok()
-            .map(|status| status.name),
-          |context| {
-            api.fetch_pull_request_for_branch(&context.owner, &context.repo, &context.branch)
-          },
-        )
-      })
-      .await;
+      let state = cx
+        .background_spawn(async move {
+          branch_pr_state_for_lookup(
+            current_github_remote_repo(&repo_root).ok().flatten(),
+            current_branch_status(&repo_root)
+              .ok()
+              .map(|status| status.name),
+            |context| {
+              api.fetch_pull_request_for_branch(&context.owner, &context.repo, &context.branch)
+            },
+          )
+        })
+        .await;
 
       let _ = this.update(cx, |this, cx| {
         this.branch_pr = state;
@@ -565,13 +568,14 @@ impl DockPanel {
     let window_handle = self.window_handle;
     let commit_input = self.commit_input.clone();
     let task = cx.spawn(async move |this, cx| {
-      let result = unblock(move || {
-        if stage_all_needed {
-          stage_all(&repo_root)?;
-        }
-        commit_changes(&repo_root, &message)
-      })
-      .await;
+      let result = cx
+        .background_spawn(async move {
+          if stage_all_needed {
+            stage_all(&repo_root)?;
+          }
+          commit_changes(&repo_root, &message)
+        })
+        .await;
 
       let _ = this.update(cx, |this, cx| {
         this.committing = false;
@@ -1362,7 +1366,6 @@ mod tests {
     commit_text_file(&repo.path, Path::new("README.md"), "v1\n", "initial");
 
     let (panel, cx) = add_dock_panel_window(Some(repo.path.clone()), cx);
-    cx.executor().allow_parking();
     cx.run_until_parked();
 
     // Default auth state is Unknown: no GitHub access, no lookup attempted.
@@ -1379,7 +1382,6 @@ mod tests {
     std::fs::write(repo.path.join("README.md"), "v2\n").expect("update file");
 
     let (panel, cx) = add_dock_panel_window(Some(repo.path.clone()), cx);
-    cx.executor().allow_parking();
     await_refresh(&panel, cx).await;
 
     panel.read_with(cx, |panel, _| {
@@ -1413,7 +1415,6 @@ mod tests {
     std::fs::write(repo.path.join("a.txt"), "resolved\n").expect("resolve conflict");
 
     let (panel, cx) = add_dock_panel_window(Some(repo.path.clone()), cx);
-    cx.executor().allow_parking();
     await_refresh(&panel, cx).await;
     panel.update(cx, |_, cx| cx.notify());
     cx.run_until_parked();
@@ -1452,7 +1453,6 @@ mod tests {
     commit_text_file(&repo.path, Path::new("a.txt"), "v1\n", "initial");
 
     let (panel, cx) = add_dock_panel_window(Some(repo.path.clone()), cx);
-    cx.executor().allow_parking();
     await_refresh(&panel, cx).await;
 
     panel.update(cx, |panel, cx| {
@@ -1497,7 +1497,6 @@ mod tests {
     commit_text_file(&repo.path, Path::new("b.txt"), "v1\n", "second");
 
     let (panel, cx) = add_dock_panel_window(Some(repo.path.clone()), cx);
-    cx.executor().allow_parking();
     await_refresh(&panel, cx).await;
     panel.update(cx, |_, cx| cx.notify());
     cx.run_until_parked();
@@ -1582,7 +1581,6 @@ mod tests {
     let _ = git::rebase_branch(&repo.path, &base);
 
     let (panel, cx) = add_dock_panel_window(Some(repo.path.clone()), cx);
-    cx.executor().allow_parking();
     await_refresh(&panel, cx).await;
     panel.update(cx, |_, cx| cx.notify());
     cx.run_until_parked();
@@ -1643,7 +1641,6 @@ mod tests {
     std::fs::write(repo.path.join("README.md"), "v2\n").expect("update file");
 
     let (panel, cx) = add_dock_panel_window(Some(repo.path.clone()), cx);
-    cx.executor().allow_parking();
     await_refresh(&panel, cx).await;
 
     panel.update_in(cx, |panel, window, cx| {
@@ -1696,7 +1693,6 @@ mod tests {
     commit_text_file(&repo.path, Path::new("README.md"), "v1\n", "initial");
 
     let (panel, cx) = add_dock_panel_window(Some(repo.path.clone()), cx);
-    cx.executor().allow_parking();
     await_refresh(&panel, cx).await;
 
     // Clean tree: commit is a no-op even with a message.
@@ -1728,7 +1724,6 @@ mod tests {
     commit_text_file(&repo.path, Path::new("README.md"), "v1\n", "initial");
 
     let (panel, cx) = add_dock_panel_window(Some(repo.path.clone()), cx);
-    cx.executor().allow_parking();
     await_refresh(&panel, cx).await;
 
     panel.read_with(cx, |panel, _| {
@@ -1767,7 +1762,6 @@ mod tests {
     commit_text_file(&other.path, Path::new("README.md"), "other\n", "initial");
 
     let (panel, cx) = add_dock_panel_window(Some(repo.path.clone()), cx);
-    cx.executor().allow_parking();
     await_refresh(&panel, cx).await;
 
     panel.update(cx, |panel, cx| panel.ensure_terminal(cx));
@@ -1793,7 +1787,6 @@ mod tests {
     commit_text_file(&repo.path, Path::new("README.md"), "v2\n", "second");
 
     let (panel, cx) = add_dock_panel_window(Some(repo.path.clone()), cx);
-    cx.executor().allow_parking();
     await_refresh(&panel, cx).await;
     panel.update(cx, |_, cx| cx.notify());
     cx.run_until_parked();
@@ -1851,7 +1844,6 @@ mod tests {
     commit_text_file(&repo.path, Path::new("README.md"), "v1\n", "initial");
 
     let (panel, cx) = add_dock_panel_window(Some(repo.path.clone()), cx);
-    cx.executor().allow_parking();
     await_refresh(&panel, cx).await;
     panel.update(cx, |_, cx| cx.notify());
     cx.run_until_parked();
@@ -1888,7 +1880,6 @@ mod tests {
     commit_text_file(&repo.path, Path::new("README.md"), "v1\n", "initial");
 
     let (panel, cx) = add_dock_panel_window(Some(repo.path.clone()), cx);
-    cx.executor().allow_parking();
     await_refresh(&panel, cx).await;
 
     let first = panel.update(cx, |panel, cx| {
@@ -1912,7 +1903,6 @@ mod tests {
     std::fs::write(repo.path.join("README.md"), "v2\n").expect("update file");
 
     let (panel, cx) = add_dock_panel_window(Some(repo.path.clone()), cx);
-    cx.executor().allow_parking();
     await_refresh(&panel, cx).await;
     panel.update(cx, |_, cx| cx.notify());
     cx.run_until_parked();
