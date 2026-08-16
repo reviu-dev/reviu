@@ -3,8 +3,8 @@
 use std::path::{Path, PathBuf};
 
 use git::{
-  RepoStage, RepoStatusEntry, RepoStatusKind, list_repo_status, restore_file, stage_all,
-  stage_file, unstage_all, unstage_file,
+  RepoStage, RepoStatusEntry, RepoStatusKind, delete_untracked_file, list_repo_status,
+  restore_file, stage_all, stage_file, unstage_all, unstage_file,
 };
 use gpui::{
   AnyElement, Context, EventEmitter, IntoElement, ParentElement, SharedString, Styled, Task,
@@ -134,7 +134,7 @@ pub(crate) struct ChangesList {
   split_sections: bool,
   opened_path: Option<PathBuf>,
   action_in_flight: bool,
-  _action_task: Option<Task<()>>,
+  pub(crate) _action_task: Option<Task<()>>,
 }
 
 impl EventEmitter<ChangesListEvent> for ChangesList {}
@@ -241,7 +241,7 @@ impl ChangesList {
       "Discard changes",
       move |repo_root| {
         if delete {
-          std::fs::remove_file(repo_root.join(&path)).map_err(anyhow::Error::from)
+          delete_untracked_file(repo_root, &path)
         } else {
           restore_file(repo_root, &path)
         }
@@ -705,6 +705,114 @@ mod tests {
     assert_eq!(
       opened.lock().unwrap().clone(),
       Some(PathBuf::from("README.md"))
+    );
+
+    let _ = std::fs::remove_dir_all(&repo_root);
+  }
+
+  async fn run_action(
+    list: &gpui::Entity<ChangesList>,
+    cx: &mut gpui::VisualTestContext,
+    selector: &'static str,
+  ) {
+    let button = cx.debug_bounds(selector).expect("button bounds");
+    cx.simulate_click(button.center(), gpui::Modifiers::default());
+    let task = list.update(cx, |list, _| list._action_task.take().expect("action task"));
+    task.await;
+    cx.run_until_parked();
+  }
+
+  fn set_entries_from_disk(
+    list: &gpui::Entity<ChangesList>,
+    cx: &mut gpui::VisualTestContext,
+    repo_root: &Path,
+  ) {
+    let entries = list_repo_status(repo_root).expect("status");
+    list.update(cx, |list, cx| {
+      list.set_entries(entries);
+      cx.notify();
+    });
+    cx.run_until_parked();
+  }
+
+  #[gpui::test]
+  async fn unstaging_a_file_from_the_row_button_unstages_it(cx: &mut gpui::TestAppContext) {
+    let repo_root = temp_repo("changes-list-unstage");
+    stage_all(&repo_root).expect("stage all");
+
+    let (list, cx) = add_changes_list_window(repo_root.clone(), cx);
+    cx.executor().allow_parking();
+    set_entries_from_disk(&list, cx, &repo_root);
+
+    run_action(&list, cx, "changes-stage-0").await;
+
+    let entries = list_repo_status(&repo_root).expect("status");
+    assert_eq!(entries.len(), 1);
+    assert_eq!(entries[0].stage, RepoStage::Unstaged);
+
+    let _ = std::fs::remove_dir_all(&repo_root);
+  }
+
+  #[gpui::test]
+  async fn discarding_a_modified_file_restores_its_content(cx: &mut gpui::TestAppContext) {
+    let repo_root = temp_repo("changes-list-discard-modified");
+
+    let (list, cx) = add_changes_list_window(repo_root.clone(), cx);
+    cx.executor().allow_parking();
+    set_entries_from_disk(&list, cx, &repo_root);
+
+    run_action(&list, cx, "changes-restore-0").await;
+
+    assert_eq!(
+      std::fs::read_to_string(repo_root.join("README.md")).expect("read file"),
+      "v1\n",
+      "the committed content should be back"
+    );
+    assert!(list_repo_status(&repo_root).expect("status").is_empty());
+
+    let _ = std::fs::remove_dir_all(&repo_root);
+  }
+
+  #[gpui::test]
+  async fn discarding_an_untracked_file_deletes_it(cx: &mut gpui::TestAppContext) {
+    let repo_root = temp_repo("changes-list-discard-untracked");
+    std::fs::write(repo_root.join("README.md"), "v1\n").expect("reset tracked file");
+    std::fs::write(repo_root.join("scratch.txt"), "temp\n").expect("write untracked file");
+
+    let (list, cx) = add_changes_list_window(repo_root.clone(), cx);
+    cx.executor().allow_parking();
+    set_entries_from_disk(&list, cx, &repo_root);
+
+    run_action(&list, cx, "changes-restore-0").await;
+
+    assert!(
+      !repo_root.join("scratch.txt").exists(),
+      "an untracked file is discarded by deleting it"
+    );
+
+    let _ = std::fs::remove_dir_all(&repo_root);
+  }
+
+  #[gpui::test]
+  async fn a_partially_staged_file_is_painted_in_both_sections(cx: &mut gpui::TestAppContext) {
+    let repo_root = temp_repo("changes-list-partial");
+    // Stage the current content, then modify it again: staged and unstaged at once.
+    stage_all(&repo_root).expect("stage all");
+    std::fs::write(repo_root.join("README.md"), "v3\n").expect("update file");
+
+    let (list, cx) = add_changes_list_window(repo_root.clone(), cx);
+    cx.executor().allow_parking();
+    set_entries_from_disk(&list, cx, &repo_root);
+
+    list.read_with(cx, |list, _| {
+      assert_eq!(list.entries().len(), 1);
+      assert_eq!(list.entries()[0].stage, RepoStage::PartiallyStaged);
+    });
+
+    assert!(cx.debug_bounds("changes-row-0").is_some());
+    assert!(
+      cx.debug_bounds("changes-row-1").is_some(),
+      "the same file should be painted in the staged and the unstaged section"
     );
 
     let _ = std::fs::remove_dir_all(&repo_root);

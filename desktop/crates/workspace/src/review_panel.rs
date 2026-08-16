@@ -1321,4 +1321,48 @@ mod tests {
     // A second shell would leak a process on every visit to the tab.
     assert_eq!(first.entity_id(), second.entity_id());
   }
+
+  #[gpui::test]
+  async fn staging_from_the_changes_list_refreshes_the_panel(cx: &mut TestAppContext) {
+    cx.update(|cx| gpui_component::init(cx));
+    let repo = TempRepo::init("review-panel-changes-list");
+    commit_text_file(&repo.path, Path::new("README.md"), "v1\n", "initial");
+    std::fs::write(repo.path.join("README.md"), "v2\n").expect("update file");
+
+    let (panel, cx) = add_review_panel_window(Some(repo.path.clone()), cx);
+    cx.executor().allow_parking();
+    await_refresh(&panel, cx).await;
+    panel.update(cx, |_, cx| cx.notify());
+    cx.run_until_parked();
+
+    panel.read_with(cx, |panel, cx| {
+      assert_eq!(panel.status_entries.len(), 1);
+      assert_eq!(panel.status_entries[0].stage, RepoStage::Unstaged);
+      // The panel feeds the shared list.
+      assert_eq!(panel.changes_list.read(cx).entries().len(), 1);
+    });
+
+    let button = cx
+      .debug_bounds("changes-stage-0")
+      .expect("stage button bounds");
+    cx.simulate_click(button.center(), gpui::Modifiers::default());
+    let action = panel.update(cx, |panel, cx| {
+      panel
+        .changes_list
+        .update(cx, |list, _| list._action_task.take().expect("stage task"))
+    });
+    action.await;
+    cx.run_until_parked();
+    await_refresh(&panel, cx).await;
+
+    panel.read_with(cx, |panel, _| {
+      assert!(
+        panel
+          .status_entries
+          .iter()
+          .all(|entry| entry.stage != RepoStage::Unstaged),
+        "the panel should have refreshed after the staging action"
+      );
+    });
+  }
 }
