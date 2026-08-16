@@ -153,7 +153,7 @@ pub struct ReviewPanel {
   files_loaded: bool,
   files_loading: bool,
   selected_tree_id: Option<String>,
-  _refresh_task: Option<Task<()>>,
+  pub(crate) _refresh_task: Option<Task<()>>,
   _commit_task: Option<Task<()>>,
   _pr_task: Option<Task<()>>,
   _files_task: Option<Task<()>>,
@@ -308,6 +308,22 @@ impl ReviewPanel {
       });
     });
     self._pr_task = Some(task);
+  }
+
+  #[cfg(test)]
+  pub(crate) fn set_commit_message_for_test(
+    &mut self,
+    message: &str,
+    window: &mut Window,
+    cx: &mut Context<Self>,
+  ) {
+    self
+      .commit_input
+      .update(cx, |input, cx| input.set_value(message, window, cx));
+  }
+
+  pub(crate) fn commit_message(&self, cx: &App) -> String {
+    self.commit_input.read(cx).value().to_string()
   }
 
   pub(crate) fn status_entries(&self) -> &[RepoStatusEntry] {

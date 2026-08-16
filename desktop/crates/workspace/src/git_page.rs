@@ -16,7 +16,7 @@ use editor::{
 use git::{
   BranchKind, BranchRef, BranchStatus, CommitChangedFile, CommitFileChangeKind, HeadCommitStatus,
   HistoryCommitNode, HistoryRevision, InteractiveRebaseTarget, InteractiveRebaseTodoEntry,
-  RepoStage, RepoStatusEntry, RepoStatusKind, abort_merge, abort_rebase, amend_commit,
+  RepoStatusEntry, RepoStatusKind, abort_merge, abort_rebase, amend_commit,
   branch_has_unpublished_commits, commit_changes, current_branch_status, current_branch_upstream,
   current_github_remote_repo, current_head_sha, current_history_revision,
   current_rebase_commit_message, default_remote_branch, default_stash_message, detached_head_label,
@@ -684,6 +684,9 @@ use crate::agent_review::AgentReviewComments;
 use crate::changes_list::{ChangesList, ChangesListEvent};
 use crate::diff_view_policy::{DiffViewInputs, effective_diff_view};
 use crate::repo_command::{RepoCommand, RepoCommandOutcome, branch_ref_from_palette};
+use crate::repo_state::{
+  PaletteCommand, RepoState, can_accept_all_conflicts, push_flags, should_publish_branch,
+};
 use crate::svg_preview::SvgPreview;
 
 impl GitPage {
@@ -741,7 +744,7 @@ impl GitPage {
   fn branch_has_github_upstream(branch_status: Option<&BranchStatus>) -> bool {
     matches!(
       branch_status,
-      Some(status) if status.has_upstream && !Self::is_detached_head(Some(status))
+      Some(status) if status.has_upstream && !crate::repo_state::is_detached_head(Some(status))
     )
   }
 
@@ -1082,12 +1085,6 @@ impl GitPage {
     previous.map(|status| status.name.as_str()) != next.map(|status| status.name.as_str())
   }
 
-  fn has_staged_changes(entries: &[RepoStatusEntry]) -> bool {
-    entries
-      .iter()
-      .any(|entry| matches!(entry.stage, RepoStage::Staged | RepoStage::PartiallyStaged))
-  }
-
   fn selected_file_update(
     selected_file: Option<&Path>,
     selected_file_source: Option<SelectedFileSource>,
@@ -1128,7 +1125,7 @@ impl GitPage {
 
   fn selected_branch_from_status(current: Option<&BranchStatus>) -> Option<BranchRef> {
     current.map(|status| {
-      if Self::is_detached_head(Some(status)) {
+      if crate::repo_state::is_detached_head(Some(status)) {
         Self::detached_branch_select_value()
       } else {
         BranchRef {
@@ -1137,10 +1134,6 @@ impl GitPage {
         }
       }
     })
-  }
-
-  fn is_detached_head(branch_status: Option<&BranchStatus>) -> bool {
-    branch_status.is_some_and(|status| status.name == "HEAD")
   }
 
   fn detached_branch_select_value() -> BranchRef {
@@ -1254,7 +1247,7 @@ impl GitPage {
       return Some((false, None, true));
     };
 
-    if Self::is_detached_head(Some(branch_status)) {
+    if crate::repo_state::is_detached_head(Some(branch_status)) {
       return Some((false, None, true));
     }
 
@@ -1316,7 +1309,7 @@ impl GitPage {
       rebase_commit_message,
       cx,
     );
-    self.has_staged_changes = Self::has_staged_changes(&self.status_entries);
+    self.has_staged_changes = crate::repo_state::has_staged_entries(&self.status_entries);
     let head_status = head_status.unwrap_or(HeadCommitStatus {
       has_head_commit: false,
       can_undo_last_commit: false,
@@ -1324,7 +1317,7 @@ impl GitPage {
     self.has_head_commit = head_status.has_head_commit;
     self.can_undo_last_commit = head_status.can_undo_last_commit;
     self.has_unpublished_branch_commits = has_unpublished_branch_commits;
-    let (can_push, can_force_push) = Self::push_flags(
+    let (can_push, can_force_push) = push_flags(
       self.branch_status.as_ref(),
       self.has_head_commit,
       self.force_push_after_rebase,
@@ -2109,7 +2102,7 @@ impl GitPage {
       let result = unblock(move || {
         let branches = list_branches(&repo_root).ok()?;
         let current = current_branch_status(&repo_root).ok();
-        let detached_label = if Self::is_detached_head(current.as_ref()) {
+        let detached_label = if crate::repo_state::is_detached_head(current.as_ref()) {
           detached_head_label(&repo_root).ok()
         } else {
           None
@@ -3385,37 +3378,11 @@ impl GitPage {
   }
 
   fn all_changes_staged(&self) -> bool {
-    Self::should_show_unstage_all_command(&self.status_entries)
+    crate::changes_list::all_entries_staged(&self.status_entries)
   }
 
   fn changed_files_count(entries: &[RepoStatusEntry]) -> usize {
     entries.len()
-  }
-
-  fn has_conflicted_entries(entries: &[RepoStatusEntry]) -> bool {
-    entries
-      .iter()
-      .any(|entry| entry.status == RepoStatusKind::Conflicted)
-  }
-
-  fn has_untracked_entries(entries: &[RepoStatusEntry]) -> bool {
-    entries
-      .iter()
-      .any(|entry| entry.status == RepoStatusKind::Untracked)
-  }
-
-  fn has_tracked_entries(entries: &[RepoStatusEntry]) -> bool {
-    entries
-      .iter()
-      .any(|entry| entry.status != RepoStatusKind::Untracked)
-  }
-
-  fn should_show_stage_all_command(entries: &[RepoStatusEntry]) -> bool {
-    Self::changed_files_count(entries) > 0 && !crate::changes_list::all_entries_staged(entries)
-  }
-
-  fn should_show_unstage_all_command(entries: &[RepoStatusEntry]) -> bool {
-    crate::changes_list::all_entries_staged(entries)
   }
 
   fn build_history_rows(commits: &[HistoryCommitNode]) -> Vec<HistoryRenderRow> {
@@ -3450,6 +3417,7 @@ impl Focusable for GitPage {
 mod tests {
   use super::test_support::*;
   use super::*;
+  use git::RepoStage;
   use git::create_branch;
   use git2::Repository;
   use gpui::TestAppContext;
@@ -4066,46 +4034,6 @@ mod tests {
       make_status_entry("src/c.rs", RepoStage::PartiallyStaged),
     ];
     assert_eq!(GitPage::changed_files_count(&entries), 3);
-  }
-
-  #[test]
-  fn has_tracked_entries_excludes_untracked_only_state() {
-    let untracked_entries = vec![RepoStatusEntry {
-      path: PathBuf::from("notes.txt"),
-      old_path: None,
-      status: RepoStatusKind::Untracked,
-      stage: RepoStage::Unstaged,
-    }];
-    let tracked_entries = vec![
-      RepoStatusEntry {
-        path: PathBuf::from("notes.txt"),
-        old_path: None,
-        status: RepoStatusKind::Untracked,
-        stage: RepoStage::Unstaged,
-      },
-      make_status_entry("src/main.rs", RepoStage::Unstaged),
-    ];
-
-    assert!(!GitPage::has_tracked_entries(&untracked_entries));
-    assert!(GitPage::has_tracked_entries(&tracked_entries));
-  }
-
-  #[test]
-  fn stash_command_flags_follow_untracked_only_rule() {
-    let untracked_entries = vec![RepoStatusEntry {
-      path: PathBuf::from("notes.txt"),
-      old_path: None,
-      status: RepoStatusKind::Untracked,
-      stage: RepoStage::Unstaged,
-    }];
-    let tracked_entries = vec![make_status_entry("src/main.rs", RepoStage::Unstaged)];
-
-    assert_eq!(GitPage::stash_command_flags(&[]), (false, false));
-    assert_eq!(
-      GitPage::stash_command_flags(&untracked_entries),
-      (false, true)
-    );
-    assert_eq!(GitPage::stash_command_flags(&tracked_entries), (true, true));
   }
 
   #[gpui::test]

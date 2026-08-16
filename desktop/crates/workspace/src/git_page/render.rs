@@ -1123,7 +1123,7 @@ impl GitPage {
     let commit_message = self.commit_input.read(cx).value().to_string();
     let commit_enabled = self.commit_primary_action_enabled(&commit_message);
     let can_publish_branch =
-      Self::should_publish_branch(self.branch_status.as_ref(), self.has_head_commit);
+      should_publish_branch(self.branch_status.as_ref(), self.has_head_commit);
     let commit_primary_button_state = Self::commit_primary_button_state(
       self.rebase_in_progress,
       !self.status_entries.is_empty(),
@@ -1258,8 +1258,8 @@ impl GitPage {
   ) -> impl IntoElement {
     let theme = cx.theme().clone();
     let input = self.commit_input.clone();
-    let has_conflicts = Self::has_conflicted_entries(&self.status_entries);
-    let detached_head = Self::is_detached_head(self.branch_status.as_ref());
+    let has_conflicts = crate::changes_list::has_conflicted_entries(&self.status_entries);
+    let detached_head = crate::repo_state::is_detached_head(self.branch_status.as_ref());
     let operation_error = self.operation_error.clone();
 
     div()

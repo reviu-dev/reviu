@@ -1,6 +1,7 @@
 //! Shared fixtures for the git page tests.
 
 use super::*;
+use git::RepoStage;
 
 pub(super) use crate::test_support::{
   TempBareRepo, TempRepo, commit_text_file, force_checkout_head, head_oid, push_branch_to_remote,
@@ -299,7 +300,7 @@ pub(super) fn seed_repo_branch_state(
   this.selected_repo = Some(repo_root.to_path_buf());
   let branch_status = current_branch_status(repo_root).expect("read initial branch status");
   let selected = GitPage::selected_branch_from_status(Some(&branch_status));
-  let detached_label = if GitPage::is_detached_head(Some(&branch_status)) {
+  let detached_label = if crate::repo_state::is_detached_head(Some(&branch_status)) {
     detached_head_label(repo_root).ok()
   } else {
     None

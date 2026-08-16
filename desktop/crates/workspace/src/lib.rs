@@ -78,6 +78,7 @@ pub mod navigation;
 mod palette_actions;
 mod pricing_copy;
 mod repo_command;
+mod repo_state;
 mod review_panel;
 mod sentry_context;
 mod session_page;

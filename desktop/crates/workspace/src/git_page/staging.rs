@@ -5,10 +5,6 @@ use super::*;
 use crate::changes_list::{can_restore, can_unstage};
 
 impl GitPage {
-  pub(super) fn selected_file_can_unstage(stage: RepoStage) -> bool {
-    can_unstage(stage)
-  }
-
   #[allow(clippy::too_many_arguments)]
   pub(super) fn toggle_hunk_stage_action(
     &mut self,
@@ -144,48 +140,24 @@ impl GitPage {
 mod tests {
   use super::super::test_support::*;
   use super::*;
+  use git::RepoStage;
   use git2::Repository;
   use gpui::TestAppContext;
 
   #[test]
   fn has_staged_changes_detects_staged_and_partial_entries() {
-    assert!(!GitPage::has_staged_changes(&[
+    assert!(!crate::repo_state::has_staged_entries(&[
       make_status_entry("src/a.rs", RepoStage::Unstaged),
       make_status_entry("src/b.rs", RepoStage::Unstaged),
     ]));
-    assert!(GitPage::has_staged_changes(&[
+    assert!(crate::repo_state::has_staged_entries(&[
       make_status_entry("src/a.rs", RepoStage::Staged),
       make_status_entry("src/b.rs", RepoStage::Unstaged),
     ]));
-    assert!(GitPage::has_staged_changes(&[make_status_entry(
+    assert!(crate::repo_state::has_staged_entries(&[make_status_entry(
       "src/a.rs",
       RepoStage::PartiallyStaged
     )]));
-  }
-
-  #[test]
-  fn stage_all_command_visibility_requires_at_least_one_entry() {
-    let entries = vec![make_status_entry("src/main.rs", RepoStage::Unstaged)];
-    let all_staged_entries = vec![make_status_entry("src/lib.rs", RepoStage::Staged)];
-
-    assert!(!GitPage::should_show_stage_all_command(&[]));
-    assert!(GitPage::should_show_stage_all_command(&entries));
-    assert!(!GitPage::should_show_stage_all_command(&all_staged_entries));
-  }
-
-  #[test]
-  fn unstage_all_command_visibility_requires_all_entries_staged() {
-    let mixed_entries = vec![
-      make_status_entry("src/main.rs", RepoStage::Staged),
-      make_status_entry("src/lib.rs", RepoStage::Unstaged),
-    ];
-    let all_staged_entries = vec![make_status_entry("src/editor.rs", RepoStage::Staged)];
-
-    assert!(!GitPage::should_show_unstage_all_command(&[]));
-    assert!(!GitPage::should_show_unstage_all_command(&mixed_entries));
-    assert!(GitPage::should_show_unstage_all_command(
-      &all_staged_entries
-    ));
   }
 
   #[gpui::test]

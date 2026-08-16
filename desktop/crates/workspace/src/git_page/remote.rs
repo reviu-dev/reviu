@@ -320,55 +320,22 @@ impl GitPage {
     self.status_task = Some(task);
   }
 
-  pub(super) fn should_publish_branch(
-    branch_status: Option<&BranchStatus>,
-    has_head_commit: bool,
-  ) -> bool {
-    has_head_commit
-      && matches!(
-        branch_status,
-        Some(status) if !status.has_upstream && !Self::is_detached_head(Some(status))
-      )
-  }
-
   pub(super) fn should_publish_branch_and_create_pull_request(
     branch_status: Option<&BranchStatus>,
     has_unpublished_branch_commits: bool,
   ) -> bool {
-    Self::should_publish_branch(branch_status, true) && has_unpublished_branch_commits
+    should_publish_branch(branch_status, true) && has_unpublished_branch_commits
   }
 
   pub(super) fn push_action_label(
     branch_status: Option<&BranchStatus>,
     has_head_commit: bool,
   ) -> &'static str {
-    if Self::should_publish_branch(branch_status, has_head_commit) {
+    if should_publish_branch(branch_status, has_head_commit) {
       "Push (Publish branch)"
     } else {
       "Push"
     }
-  }
-
-  pub(super) fn push_flags(
-    branch_status: Option<&BranchStatus>,
-    has_head_commit: bool,
-    force_push_after_rebase: bool,
-  ) -> (bool, bool) {
-    let Some(status) = branch_status else {
-      return (false, false);
-    };
-    if Self::should_publish_branch(Some(status), has_head_commit) {
-      return (true, false);
-    }
-    if !status.has_upstream {
-      return (false, false);
-    }
-    if force_push_after_rebase && status.ahead > 0 {
-      return (false, true);
-    }
-    let can_push = status.ahead > 0 && status.behind == 0;
-    let can_force_push = status.ahead > 0 && status.behind > 0;
-    (can_push, can_force_push)
   }
 }
 
@@ -390,32 +357,17 @@ mod tests {
   #[test]
   fn push_flags_respect_upstream_and_divergence() {
     let no_upstream = make_branch_status("main", 3, 0, false);
-    assert_eq!(
-      GitPage::push_flags(Some(&no_upstream), false, false),
-      (false, false)
-    );
-    assert_eq!(
-      GitPage::push_flags(Some(&no_upstream), true, false),
-      (true, false)
-    );
+    assert_eq!(push_flags(Some(&no_upstream), false, false), (false, false));
+    assert_eq!(push_flags(Some(&no_upstream), true, false), (true, false));
 
     let clean_ahead = make_branch_status("main", 2, 0, true);
-    assert_eq!(
-      GitPage::push_flags(Some(&clean_ahead), true, false),
-      (true, false)
-    );
+    assert_eq!(push_flags(Some(&clean_ahead), true, false), (true, false));
 
     let diverged = make_branch_status("main", 1, 2, true);
-    assert_eq!(
-      GitPage::push_flags(Some(&diverged), true, false),
-      (false, true)
-    );
+    assert_eq!(push_flags(Some(&diverged), true, false), (false, true));
 
     let behind_only = make_branch_status("main", 0, 2, true);
-    assert_eq!(
-      GitPage::push_flags(Some(&behind_only), true, false),
-      (false, false)
-    );
+    assert_eq!(push_flags(Some(&behind_only), true, false), (false, false));
   }
 
   #[test]

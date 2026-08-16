@@ -211,7 +211,7 @@ impl GitPage {
       self.selected_repo.is_some()
         && !commit_message.trim().is_empty()
         && !self.status_entries.is_empty()
-        && !Self::has_conflicted_entries(&self.status_entries)
+        && !crate::changes_list::has_conflicted_entries(&self.status_entries)
     }
   }
 
@@ -234,6 +234,7 @@ impl GitPage {
 mod tests {
   use super::super::test_support::*;
   use super::*;
+  use git::RepoStage;
   use git2::Repository;
   use gpui::TestAppContext;
 

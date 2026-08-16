@@ -92,6 +92,10 @@ Opening a `.md` or `.svg` in the Sessions workspace showed raw text. A Preview b
 
 The Sessions workspace applied the whitespace setting when opening a file but gave you no way to change your mind. The diff header now carries the same Whitespace button as the Git page, with `cmd-alt-/`, and the choice holds for the rest of the session instead of resetting on every file. A file with no pending change, or a file being previewed, has no diff on screen: the button steps aside there, like the inline/split control.
 
+### A Command Palette That Only Offers What Works
+
+The Sessions workspace listed Commit, Stage all, Unstage all, Push and Pull whether or not they could run: committing with nothing staged and no message, pushing a branch with nothing ahead. The palette now follows the same rules as the Git page, so a command is there when it does something.
+
 ### Conflicts Stop You On The File, Not On An Error
 
 Git commands that stop on conflicts (merge, rebase, skip, pull) now say which file is waiting and put it on screen, in the Git page as before and in the Sessions workspace too. Every git command in the app now shares one implementation, so the same command reports the same thing wherever you run it.

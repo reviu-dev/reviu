@@ -39,6 +39,7 @@ use crate::git_page::{
 use crate::github_notifications::{self, GithubNotificationsStore};
 use crate::navigation::NavigationHistory;
 use crate::repo_command::{RepoCommand, RepoCommandOutcome};
+use crate::repo_state::{PaletteCommand, RepoState, push_flags};
 use crate::review_panel::{ReviewPanel, ReviewPanelEvent};
 use crate::svg_preview::SvgPreview;
 use crate::{
@@ -1043,6 +1044,29 @@ impl SessionPage {
   }
 
   /// Runs a repo command in the background, then refreshes the changes panel.
+  /// The shell tracks no operation in progress: it never starts a merge or a rebase.
+  fn repo_state<'a>(&'a self, commit_message: &'a str, cx: &'a App) -> RepoState<'a> {
+    let branch_status = self.branch_status.as_ref();
+    let (can_push, can_force_push) = push_flags(branch_status, branch_status.is_some(), false);
+    let status_entries = self.review_panel.read(cx).status_entries();
+    RepoState {
+      has_repo: self.selected_repo.is_some(),
+      merge_in_progress: false,
+      rebase_in_progress: false,
+      has_head_commit: branch_status.is_some(),
+      can_push,
+      can_force_push,
+      can_undo_last_commit: false,
+      branch_status,
+      status_entries,
+      selected_entry: self
+        .selected_file
+        .as_deref()
+        .and_then(|path| status_entries.iter().find(|entry| entry.path == path)),
+      commit_message,
+    }
+  }
+
   fn run_repo_command(
     &mut self,
     command: RepoCommand,
@@ -1227,6 +1251,44 @@ impl SessionPage {
     .detach();
   }
 
+  fn palette_commands(&self, repositories_len: usize, cx: &App) -> Vec<CommandPaletteCommand> {
+    let mut commands = Vec::new();
+    if repositories_len > 1 {
+      commands.push(CommandPaletteCommand::switch_repository());
+    }
+    commands.push(CommandPaletteCommand::open_repository());
+    if repositories_len > 0 {
+      commands.push(CommandPaletteCommand::forget_repository());
+    }
+
+    if self.selected_repo.is_some() {
+      let commit_message = self.review_panel.read(cx).commit_message(cx);
+      let state = self.repo_state(&commit_message, cx);
+      if state.allows(PaletteCommand::Commit) {
+        commands.push(CommandPaletteCommand::commit());
+      }
+      if state.allows(PaletteCommand::StageAll) {
+        commands.push(CommandPaletteCommand::stage_all());
+      }
+      if state.allows(PaletteCommand::UnstageAll) {
+        commands.push(CommandPaletteCommand::unstage_all());
+      }
+      if state.allows(PaletteCommand::Push) {
+        commands.push(CommandPaletteCommand::push("Push"));
+      }
+      if state.allows(PaletteCommand::Pull) {
+        commands.push(CommandPaletteCommand::pull());
+      }
+      commands.push(CommandPaletteCommand::fetch());
+    }
+
+    commands.extend(CommandPaletteCommand::default_global_commands(
+      CommandPalettePage::Session,
+      AuthStateStore::has_github_access(cx),
+    ));
+    commands
+  }
+
   fn open_command_palette(&mut self, window: &mut Window, cx: &mut Context<Self>) {
     self.open_command_palette_with_screen(None, window, cx);
   }
@@ -1237,28 +1299,8 @@ impl SessionPage {
     window: &mut Window,
     cx: &mut Context<Self>,
   ) {
-    let include_github = AuthStateStore::has_github_access(cx);
     let repositories = self.palette_repositories();
-    let mut commands = Vec::new();
-    if repositories.len() > 1 {
-      commands.push(CommandPaletteCommand::switch_repository());
-    }
-    commands.push(CommandPaletteCommand::open_repository());
-    if !repositories.is_empty() {
-      commands.push(CommandPaletteCommand::forget_repository());
-    }
-    if self.selected_repo.is_some() {
-      commands.push(CommandPaletteCommand::commit());
-      commands.push(CommandPaletteCommand::stage_all());
-      commands.push(CommandPaletteCommand::unstage_all());
-      commands.push(CommandPaletteCommand::push("Push"));
-      commands.push(CommandPaletteCommand::pull());
-      commands.push(CommandPaletteCommand::fetch());
-    }
-    commands.extend(CommandPaletteCommand::default_global_commands(
-      CommandPalettePage::Session,
-      include_github,
-    ));
+    let commands = self.palette_commands(repositories.len(), cx);
 
     let view = cx.entity();
     let handler: CommandPaletteHandler = Arc::new(move |action, window, cx| {
@@ -2042,6 +2084,7 @@ mod tests {
   use std::path::Path;
   use std::sync::atomic::{AtomicU64, Ordering};
   use std::time::{SystemTime, UNIX_EPOCH};
+  use ui::CommandPaletteCommandId;
 
   fn meta_with_title(title: &str) -> ConversationMeta {
     ConversationMeta {
@@ -3294,6 +3337,63 @@ mod tests {
     cx.run_until_parked();
     page.read_with(cx, |page, _| {
       assert_eq!(page.diff_view, DiffViewMode::Split);
+    });
+  }
+
+  #[gpui::test]
+  async fn the_palette_only_offers_what_the_repository_allows(cx: &mut TestAppContext) {
+    let repo = TempRepo::init("session-page-palette-rules");
+    commit_text_file(&repo.path, Path::new("a.txt"), "v1\n", "initial");
+
+    let (page, cx) = add_session_page_window(repo.path.clone(), cx);
+    cx.executor().allow_parking();
+    page.update(cx, |page, cx| {
+      page.review_panel.update(cx, |panel, cx| panel.refresh(cx));
+      page.refresh_branch(cx);
+    });
+    await_branch_refresh(&page, cx).await;
+
+    let ids = |page: &SessionPage, cx: &App| {
+      page
+        .palette_commands(1, cx)
+        .into_iter()
+        .map(|command| command.id)
+        .collect::<Vec<_>>()
+    };
+
+    // Clean worktree, no upstream: nothing to commit, stage or sync.
+    page.read_with(cx, |page, cx| {
+      let ids = ids(page, cx);
+      assert!(!ids.contains(&CommandPaletteCommandId::Commit));
+      assert!(!ids.contains(&CommandPaletteCommandId::StageAll));
+      assert!(!ids.contains(&CommandPaletteCommandId::UnstageAll));
+      assert!(!ids.contains(&CommandPaletteCommandId::Pull));
+      assert!(
+        ids.contains(&CommandPaletteCommandId::Fetch),
+        "fetching is always available"
+      );
+    });
+
+    // A change and a message: committing and staging show up.
+    std::fs::write(repo.path.join("a.txt"), "v2\n").expect("update file");
+    let refresh = page.update(cx, |page, cx| {
+      page.review_panel.update(cx, |panel, cx| {
+        panel.refresh(cx);
+        panel._refresh_task.take().expect("refresh task")
+      })
+    });
+    refresh.await;
+    cx.run_until_parked();
+    page.update_in(cx, |page, window, cx| {
+      page.review_panel.update(cx, |panel, cx| {
+        panel.set_commit_message_for_test("a message", window, cx)
+      });
+    });
+
+    page.read_with(cx, |page, cx| {
+      let ids = ids(page, cx);
+      assert!(ids.contains(&CommandPaletteCommandId::Commit));
+      assert!(ids.contains(&CommandPaletteCommandId::StageAll));
     });
   }
 

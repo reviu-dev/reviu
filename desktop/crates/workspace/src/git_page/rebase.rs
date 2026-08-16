@@ -164,7 +164,7 @@ impl GitPage {
       return;
     }
     self.operation_error = None;
-    if Self::has_conflicted_entries(&self.status_entries) {
+    if crate::changes_list::has_conflicted_entries(&self.status_entries) {
       self.operation_error = Some("Resolve all conflicts before continuing the rebase.".into());
       let mut data = Map::new();
       data.insert("reason".into(), "conflicts_present".into());
@@ -551,7 +551,7 @@ impl GitPage {
   pub(super) fn can_continue_rebase_command(&self) -> bool {
     self.selected_repo.is_some()
       && self.rebase_in_progress
-      && !Self::has_conflicted_entries(&self.status_entries)
+      && !crate::changes_list::has_conflicted_entries(&self.status_entries)
   }
 
   pub(super) fn continue_rebase_disabled_reason(&self) -> Option<&'static str> {
@@ -582,7 +582,7 @@ impl GitPage {
     if !self.status_entries.is_empty() {
       return Some("Commit or stash worktree changes first");
     }
-    if Self::is_detached_head(self.branch_status.as_ref()) {
+    if crate::repo_state::is_detached_head(self.branch_status.as_ref()) {
       return Some("Checkout a branch first");
     }
     None
@@ -631,6 +631,7 @@ impl GitPage {
 mod tests {
   use super::super::test_support::*;
   use super::*;
+  use git::RepoStage;
   use git::{create_branch, merge_branch, rebase_branch};
   use git2::Repository;
   use gpui::TestAppContext;
@@ -972,20 +973,11 @@ mod tests {
   #[test]
   fn push_flags_require_force_push_after_rebase_for_tracked_branch() {
     let clean_ahead = make_branch_status("main", 2, 0, true);
-    assert_eq!(
-      GitPage::push_flags(Some(&clean_ahead), true, true),
-      (false, true)
-    );
-    assert_eq!(
-      GitPage::push_flags(Some(&clean_ahead), true, false),
-      (true, false)
-    );
+    assert_eq!(push_flags(Some(&clean_ahead), true, true), (false, true));
+    assert_eq!(push_flags(Some(&clean_ahead), true, false), (true, false));
 
     let no_ahead = make_branch_status("main", 0, 0, true);
-    assert_eq!(
-      GitPage::push_flags(Some(&no_ahead), true, true),
-      (false, false)
-    );
+    assert_eq!(push_flags(Some(&no_ahead), true, true), (false, false));
   }
 
   #[test]
@@ -1019,7 +1011,7 @@ mod tests {
       make_status_entry("src/a.rs", RepoStage::Unstaged),
       make_status_entry("src/b.rs", RepoStage::Staged),
     ];
-    assert!(!GitPage::has_conflicted_entries(&clean_entries));
+    assert!(!crate::changes_list::has_conflicted_entries(&clean_entries));
 
     let mut conflicted_entries = clean_entries;
     conflicted_entries.push(RepoStatusEntry {
@@ -1028,7 +1020,9 @@ mod tests {
       status: RepoStatusKind::Conflicted,
       stage: RepoStage::Unstaged,
     });
-    assert!(GitPage::has_conflicted_entries(&conflicted_entries));
+    assert!(crate::changes_list::has_conflicted_entries(
+      &conflicted_entries
+    ));
   }
 
   #[gpui::test]
@@ -1331,7 +1325,7 @@ mod tests {
 
     assert!(git_page.read_with(cx, |this, _| this.merge_in_progress));
     assert!(
-      !git_page.read_with(cx, |this, _| GitPage::has_conflicted_entries(
+      !git_page.read_with(cx, |this, _| crate::changes_list::has_conflicted_entries(
         &this.status_entries
       )),
       "conflicts should be resolved before commit"
@@ -1541,7 +1535,7 @@ mod tests {
     assert!(git_page.read_with(cx, |this, _| this.rebase_in_progress));
     assert!(
       !git_page.read_with(cx, |this, _| {
-        GitPage::has_conflicted_entries(&this.status_entries)
+        crate::changes_list::has_conflicted_entries(&this.status_entries)
       }),
       "conflicts should be resolved before continue"
     );
@@ -1685,7 +1679,7 @@ mod tests {
     assert!(git_page.read_with(cx, |this, _| this.rebase_in_progress));
     assert!(
       git_page.read_with(cx, |this, _| {
-        GitPage::has_conflicted_entries(&this.status_entries)
+        crate::changes_list::has_conflicted_entries(&this.status_entries)
       }),
       "expected conflicted entries after next conflict"
     );

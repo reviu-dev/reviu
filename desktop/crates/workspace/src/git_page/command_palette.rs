@@ -239,10 +239,10 @@ impl GitPage {
         commands.push(CommandPaletteCommand::checkout_detached());
       }
 
-      if Self::should_show_stage_all_command(&self.status_entries) {
+      if self.allows(PaletteCommand::StageAll) {
         commands.push(CommandPaletteCommand::stage_all());
       }
-      if Self::should_show_unstage_all_palette_command(&self.status_entries) {
+      if self.allows(PaletteCommand::UnstageAll) {
         commands.push(CommandPaletteCommand::unstage_all());
       }
       if self.should_show_unstage_selected_file_palette_command() {
@@ -274,7 +274,8 @@ impl GitPage {
         commands.push(CommandPaletteCommand::cherry_pick().disabled(reason));
       }
 
-      let (show_stash, show_stash_with_untracked) = Self::stash_command_flags(&self.status_entries);
+      let show_stash = self.allows(PaletteCommand::Stash);
+      let show_stash_with_untracked = self.allows(PaletteCommand::StashWithUntracked);
 
       if show_stash {
         commands.push(CommandPaletteCommand::stash());
@@ -1150,93 +1151,93 @@ impl GitPage {
     }
   }
 
+  pub(super) fn repo_state<'a>(&'a self, commit_message: &'a str) -> RepoState<'a> {
+    RepoState {
+      has_repo: self.selected_repo.is_some(),
+      merge_in_progress: self.merge_in_progress,
+      rebase_in_progress: self.rebase_in_progress,
+      has_head_commit: self.has_head_commit,
+      can_push: self.can_push,
+      can_force_push: self.can_force_push,
+      can_undo_last_commit: self.can_undo_last_commit,
+      branch_status: self.branch_status.as_ref(),
+      status_entries: &self.status_entries,
+      selected_entry: self.selected_file_entry(),
+      commit_message,
+    }
+  }
+
+  pub(super) fn allows(&self, command: PaletteCommand) -> bool {
+    self.repo_state("").allows(command)
+  }
+
   pub(super) fn should_show_commit_palette_command(&self, commit_message: &str) -> bool {
-    !self.rebase_in_progress && self.commit_primary_action_enabled(commit_message)
+    self
+      .repo_state(commit_message)
+      .allows(PaletteCommand::Commit)
   }
 
   pub(super) fn should_show_continue_rebase_palette_command(&self) -> bool {
-    self.rebase_in_progress && self.can_continue_rebase_command()
+    self.allows(PaletteCommand::ContinueRebase)
   }
 
   pub(super) fn should_show_skip_rebase_palette_command(&self) -> bool {
-    self.rebase_in_progress && self.selected_repo.is_some()
+    self.allows(PaletteCommand::SkipRebase)
   }
 
   pub(super) fn should_show_push_palette_command(&self) -> bool {
-    !self.rebase_in_progress && self.selected_repo.is_some() && self.can_push
+    self.allows(PaletteCommand::Push)
   }
 
   pub(super) fn should_show_force_push_palette_command(&self) -> bool {
-    !self.rebase_in_progress && self.selected_repo.is_some() && self.can_force_push
+    self.allows(PaletteCommand::ForcePush)
   }
 
   pub(super) fn should_show_undo_last_commit_palette_command(&self) -> bool {
-    !self.rebase_in_progress && self.selected_repo.is_some() && self.can_undo_last_commit
+    self.allows(PaletteCommand::UndoLastCommit)
   }
 
   pub(super) fn should_show_amend_palette_command(&self) -> bool {
-    !self.rebase_in_progress && self.selected_repo.is_some() && self.has_head_commit
+    self.allows(PaletteCommand::Amend)
   }
 
   pub(super) fn should_show_checkout_detached_palette_command(&self) -> bool {
-    self.selected_repo.is_some()
-      && self.has_head_commit
-      && !self.merge_in_progress
-      && !self.rebase_in_progress
-      && self.branch_status.is_some()
-      && !Self::is_detached_head(self.branch_status.as_ref())
+    self.allows(PaletteCommand::CheckoutDetached)
   }
 
   pub(super) fn should_show_interactive_rebase_palette_command(&self) -> bool {
-    !self.rebase_in_progress
-      && !self.merge_in_progress
-      && self.selected_repo.is_some()
-      && self.has_head_commit
-      && self.status_entries.is_empty()
-      && !Self::is_detached_head(self.branch_status.as_ref())
+    self.allows(PaletteCommand::InteractiveRebase)
   }
 
   pub(super) fn should_show_pull_palette_command(&self) -> bool {
-    !self.rebase_in_progress
-      && !self.merge_in_progress
-      && self.selected_repo.is_some()
-      && self
-        .branch_status
-        .as_ref()
-        .is_some_and(|status| status.has_upstream)
+    self.allows(PaletteCommand::Pull)
   }
 
   pub(super) fn should_show_merge_branch_palette_command(&self) -> bool {
-    !self.rebase_in_progress && !self.merge_in_progress && self.selected_repo.is_some()
+    self.allows(PaletteCommand::MergeBranch)
   }
 
   pub(super) fn should_show_rebase_branch_palette_command(&self) -> bool {
-    !self.rebase_in_progress && !self.merge_in_progress && self.selected_repo.is_some()
+    self.allows(PaletteCommand::RebaseBranch)
   }
 
   pub(super) fn should_show_cherry_pick_palette_command(&self) -> bool {
-    !self.rebase_in_progress && !self.merge_in_progress && self.selected_repo.is_some()
+    self.allows(PaletteCommand::CherryPick)
   }
 
   pub(super) fn should_show_stage_selected_file_palette_command(&self) -> bool {
-    self.selected_repo.is_some()
-      && self
-        .selected_file_entry()
-        .is_some_and(|entry| crate::changes_list::can_stage(entry.stage))
+    self.allows(PaletteCommand::StageSelectedFile)
   }
 
   pub(super) fn should_show_unstage_selected_file_palette_command(&self) -> bool {
-    self.selected_repo.is_some()
-      && self
-        .selected_file_entry()
-        .is_some_and(|entry| Self::selected_file_can_unstage(entry.stage))
+    self.allows(PaletteCommand::UnstageSelectedFile)
   }
 
   pub(super) fn should_show_accept_all_conflicts_palette_commands(&self, cx: &App) -> bool {
     let selected_status = self.selected_file_status();
     self.editor.as_ref().is_some_and(|editor| {
       editor.read_with(cx, |editor, cx| {
-        Self::can_accept_all_conflicts(
+        can_accept_all_conflicts(
           selected_status,
           editor.is_read_only,
           editor.has_unresolved_conflict_markers(cx),
@@ -1244,22 +1245,13 @@ impl GitPage {
       })
     })
   }
-
-  pub(super) fn stash_command_flags(entries: &[RepoStatusEntry]) -> (bool, bool) {
-    let show_stash = Self::has_tracked_entries(entries);
-    let show_stash_with_untracked = show_stash || Self::has_untracked_entries(entries);
-    (show_stash, show_stash_with_untracked)
-  }
-
-  pub(super) fn should_show_unstage_all_palette_command(entries: &[RepoStatusEntry]) -> bool {
-    Self::has_staged_changes(entries)
-  }
 }
 
 #[cfg(test)]
 mod tests {
   use super::super::test_support::*;
   use super::*;
+  use git::RepoStage;
   use git::{create_branch, merge_branch, rebase_branch};
   use git2::{BranchType, Repository};
   use gpui::TestAppContext;
@@ -1416,30 +1408,6 @@ mod tests {
         .map(|reason| reason.as_ref()),
       Some("Resolve and stage conflicts first")
     );
-  }
-
-  #[test]
-  fn unstage_all_palette_command_visibility_requires_any_staged_entry() {
-    let unstaged_only_entries = vec![make_status_entry("src/main.rs", RepoStage::Unstaged)];
-    let mixed_entries = vec![
-      make_status_entry("src/main.rs", RepoStage::Staged),
-      make_status_entry("src/lib.rs", RepoStage::Unstaged),
-    ];
-    let partial_entries = vec![make_status_entry(
-      "src/editor.rs",
-      RepoStage::PartiallyStaged,
-    )];
-
-    assert!(!GitPage::should_show_unstage_all_palette_command(&[]));
-    assert!(!GitPage::should_show_unstage_all_palette_command(
-      &unstaged_only_entries
-    ));
-    assert!(GitPage::should_show_unstage_all_palette_command(
-      &mixed_entries
-    ));
-    assert!(GitPage::should_show_unstage_all_palette_command(
-      &partial_entries
-    ));
   }
 
   #[gpui::test]
