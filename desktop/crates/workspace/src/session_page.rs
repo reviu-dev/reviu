@@ -546,6 +546,20 @@ impl SessionPage {
     })
   }
 
+  /// A file opened from the Files tab with no pending change has nothing to
+  /// compare: the toggle would show the same content twice.
+  fn selected_file_has_changes(&self, cx: &App) -> bool {
+    let Some(path) = self.selected_file.as_deref() else {
+      return false;
+    };
+    self
+      .review_panel
+      .read(cx)
+      .status_entries()
+      .iter()
+      .any(|entry| entry.path == path)
+  }
+
   fn split_disabled(&self, cx: &App) -> bool {
     let Some(path) = self.selected_file.as_deref() else {
       return true;
@@ -1694,25 +1708,28 @@ impl SessionPage {
           .on_click(cx.listener(|this, _, window, cx| this.close_diff(window, cx))),
       )
       .children(file_title)
-      .when(self.editor.is_some(), |this| {
-        let split_disabled = self.split_disabled(cx);
-        let (label, icon) = if split_disabled || self.diff_view == DiffViewMode::Inline {
-          ("Split", gpui_component::IconName::PanelLeft)
-        } else {
-          ("Inline", gpui_component::IconName::PanelLeftClose)
-        };
-        this.child(
-          Button::new("session-page-diff-view-toggle")
-            .debug_selector(|| DIFF_VIEW_TOGGLE_DEBUG_SELECTOR.to_string())
-            .label(label)
-            .icon(icon)
-            .xsmall()
-            .ghost()
-            .disabled(split_disabled)
-            .tooltip("Toggle inline and split diff (cmd-/)")
-            .on_click(cx.listener(|this, _, _, cx| this.toggle_diff_view(cx))),
-        )
-      })
+      .when(
+        self.editor.is_some() && self.selected_file_has_changes(cx),
+        |this| {
+          let split_disabled = self.split_disabled(cx);
+          let (label, icon) = if split_disabled || self.diff_view == DiffViewMode::Inline {
+            ("Split", gpui_component::IconName::PanelLeft)
+          } else {
+            ("Inline", gpui_component::IconName::PanelLeftClose)
+          };
+          this.child(
+            Button::new("session-page-diff-view-toggle")
+              .debug_selector(|| DIFF_VIEW_TOGGLE_DEBUG_SELECTOR.to_string())
+              .label(label)
+              .icon(icon)
+              .xsmall()
+              .ghost()
+              .disabled(split_disabled)
+              .tooltip("Toggle inline and split diff (cmd-/)")
+              .on_click(cx.listener(|this, _, _, cx| this.toggle_diff_view(cx))),
+          )
+        },
+      )
       .when(save_editor.is_some(), |this| {
         let save_editor = save_editor.clone();
         this.child(
@@ -2602,6 +2619,9 @@ mod tests {
 
     let (page, cx) = add_session_page_window(repo.path.clone(), cx);
     cx.executor().allow_parking();
+    page.update(cx, |page, cx| {
+      page.review_panel.update(cx, |panel, cx| panel.refresh(cx))
+    });
     cx.run_until_parked();
 
     page.update_in(cx, |page, window, cx| {
@@ -2613,7 +2633,15 @@ mod tests {
       assert_eq!(page.diff_view, DiffViewMode::Inline);
     });
 
-    page.update(cx, |page, cx| page.toggle_diff_view(cx));
+    // The user's path: the button in the diff header.
+    page.update(cx, |_, cx| cx.notify());
+    cx.run_until_parked();
+    let toggle = cx
+      .debug_bounds(DIFF_VIEW_TOGGLE_DEBUG_SELECTOR)
+      .expect("diff view toggle bounds");
+    cx.simulate_click(toggle.center(), gpui::Modifiers::default());
+    cx.run_until_parked();
+
     page.read_with(cx, |page, cx| {
       assert_eq!(page.diff_view, DiffViewMode::Split);
       // The Git page reads the same preference.
@@ -2654,11 +2682,59 @@ mod tests {
     });
     await_open_file(&page, cx).await;
 
-    page.update(cx, |page, cx| {
+    page.read_with(cx, |page, cx| {
       // An untracked file has nothing to show on the left.
       assert!(page.split_disabled(cx));
-      page.toggle_diff_view(cx);
+      assert_eq!(
+        page
+          .editor
+          .as_ref()
+          .expect("editor")
+          .read(cx)
+          .diff_view_mode(),
+        DiffViewMode::Inline,
+        "it should open inline whatever the preference says"
+      );
+    });
+
+    // The button is painted but inert.
+    page.update(cx, |_, cx| cx.notify());
+    cx.run_until_parked();
+    let toggle = cx
+      .debug_bounds(DIFF_VIEW_TOGGLE_DEBUG_SELECTOR)
+      .expect("diff view toggle bounds");
+    cx.simulate_click(toggle.center(), gpui::Modifiers::default());
+    cx.run_until_parked();
+
+    page.read_with(cx, |page, _| {
       assert_eq!(page.diff_view, DiffViewMode::Inline);
     });
+  }
+
+  #[gpui::test]
+  async fn a_file_without_changes_has_no_diff_toggle(cx: &mut TestAppContext) {
+    let repo = TempRepo::init("session-page-diff-toggle-clean");
+    commit_text_file(&repo.path, Path::new("README.md"), "v1\n", "initial");
+
+    let (page, cx) = add_session_page_window(repo.path.clone(), cx);
+    cx.executor().allow_parking();
+    page.update(cx, |page, cx| {
+      page.review_panel.update(cx, |panel, cx| panel.refresh(cx))
+    });
+    cx.run_until_parked();
+
+    // Opened from the Files tab: committed content, nothing to compare.
+    page.update_in(cx, |page, window, cx| {
+      page.open_diff(PathBuf::from("README.md"), None, window, cx);
+    });
+    await_open_file(&page, cx).await;
+    page.update(cx, |_, cx| cx.notify());
+    cx.run_until_parked();
+
+    page.read_with(cx, |page, cx| assert!(!page.selected_file_has_changes(cx)));
+    assert!(
+      cx.debug_bounds(DIFF_VIEW_TOGGLE_DEBUG_SELECTOR).is_none(),
+      "showing a split of a file against itself helps nobody"
+    );
   }
 }

@@ -82,7 +82,7 @@ The Changes panel listed your modified files but could do nothing with them. It 
 
 ### Inline Or Split, In The Sessions Workspace Too
 
-The diff in the Sessions workspace was stuck on whatever the settings said. It now carries the same toggle as the Git page, in the diff header or with `cmd-/`, and the preference is shared between the two. Files with a single side, an untracked or deleted file, or a binary preview, stay inline: there is nothing to put on the other half.
+The diff in the Sessions workspace was stuck on whatever the settings said. It now carries the same toggle as the Git page, in the diff header or with `cmd-/`, and the preference is shared between the two. Files with a single side, an untracked or deleted file, or a binary preview, stay inline: there is nothing to put on the other half. A file opened without any pending change gets no toggle at all.
 
 ## 0.18.0
 

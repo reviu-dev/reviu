@@ -1711,8 +1711,10 @@ mod tests {
 
   #[test]
   fn review_shortcuts_are_scoped_to_pr_pages_and_changes() {
+    // The three diff surfaces: Git page, PR Changes and the Sessions shell.
     assert!(has_binding("/git", "cmd-/"));
     assert!(has_binding("/github/owner/repo/pull/42/changes", "cmd-/"));
+    assert!(has_binding("/session", "cmd-/"));
     assert!(!has_binding("/github/owner/repo/pull/42", "cmd-/"));
 
     assert!(has_binding("/github/owner/repo/pull/42", "cmd-."));
