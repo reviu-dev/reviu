@@ -1,26 +1,28 @@
 //! Working-tree changes with staging, shared by the Git page and the shell.
 
 use std::path::{Path, PathBuf};
+use std::rc::Rc;
 
 use git::{
-  RepoStage, RepoStatusEntry, RepoStatusKind, delete_untracked_file, list_repo_status,
-  restore_file, stage_all, stage_file, unstage_all, unstage_file,
+  RepoStage, RepoStatusEntry, RepoStatusKind, delete_untracked_file, restore_file, stage_all,
+  stage_file, unstage_all, unstage_file,
 };
 use gpui::{
-  AnyElement, Context, EventEmitter, IntoElement, ParentElement, SharedString, Styled, Task,
-  Window, div, img, prelude::*, px,
+  AnyElement, App, Context, Entity, EventEmitter, Focusable as _, IntoElement, ParentElement,
+  SharedString, Styled, Task, WeakEntity, Window, div, img, prelude::*, px,
 };
 use gpui_component::{
-  ActiveTheme as _, Icon, IconName, Sizable as _,
+  ActiveTheme as _, Icon, IconName, IndexPath, Sizable as _,
   button::{Button, ButtonGroup},
   h_flex,
+  list::{List, ListDelegate, ListEvent, ListItem, ListState},
   notification::Notification,
   tooltip::Tooltip,
 };
 use smol::unblock;
 use ui::{
-  ConfirmDialog, FILE_ICON_SIZE_PX, StatusThemeExt as _, WindowExt as _,
-  file_icon_path_for_path_with_theme,
+  ConfirmDialog, FILE_ICON_SIZE_PX, SelectableRowStyle, StatusThemeExt as _, WindowExt as _,
+  file_icon_path_for_path_with_theme, selectable_list_item,
 };
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -104,23 +106,6 @@ pub(crate) fn stage_style(
   }
 }
 
-/// A staged and an unstaged group; a partially staged file belongs to both.
-pub(crate) fn split_entries(
-  entries: &[RepoStatusEntry],
-) -> (Vec<RepoStatusEntry>, Vec<RepoStatusEntry>) {
-  let staged = entries
-    .iter()
-    .filter(|entry| can_unstage(entry.stage))
-    .cloned()
-    .collect();
-  let unstaged = entries
-    .iter()
-    .filter(|entry| entry.stage != RepoStage::Staged)
-    .cloned()
-    .collect();
-  (staged, unstaged)
-}
-
 pub(crate) enum ChangesListEvent {
   OpenFile {
     path: PathBuf,
@@ -129,11 +114,313 @@ pub(crate) enum ChangesListEvent {
   Changed,
 }
 
+struct ChangesSection {
+  label: SharedString,
+  is_staged: bool,
+  rows: Vec<Rc<RepoStatusEntry>>,
+}
+
+pub(crate) struct ChangesRowsDelegate {
+  rows: Vec<Rc<RepoStatusEntry>>,
+  sections: Vec<ChangesSection>,
+  split_sections: bool,
+  selected_index: Option<IndexPath>,
+  opened_path: Option<PathBuf>,
+  list: WeakEntity<ChangesList>,
+}
+
+impl ChangesRowsDelegate {
+  fn new(list: WeakEntity<ChangesList>, split_sections: bool) -> Self {
+    Self {
+      rows: Vec::new(),
+      sections: Vec::new(),
+      split_sections,
+      selected_index: None,
+      opened_path: None,
+      list,
+    }
+  }
+
+  fn set_rows(&mut self, entries: Vec<RepoStatusEntry>) {
+    self.rows = entries.into_iter().map(Rc::new).collect();
+    self.rebuild_sections();
+  }
+
+  fn rebuild_sections(&mut self) {
+    if !self.split_sections {
+      self.sections = vec![ChangesSection {
+        label: "".into(),
+        is_staged: false,
+        rows: self.rows.clone(),
+      }];
+      return;
+    }
+
+    let mut staged = Vec::new();
+    let mut unstaged = Vec::new();
+    for row in &self.rows {
+      match row.stage {
+        RepoStage::Staged => staged.push(row.clone()),
+        RepoStage::Unstaged => unstaged.push(row.clone()),
+        RepoStage::PartiallyStaged => {
+          staged.push(row.clone());
+          unstaged.push(row.clone());
+        }
+      }
+    }
+
+    let mut sections = Vec::new();
+    if !staged.is_empty() {
+      sections.push(ChangesSection {
+        label: format!("Staged Changes ({})", staged.len()).into(),
+        is_staged: true,
+        rows: staged,
+      });
+    }
+    if !unstaged.is_empty() {
+      sections.push(ChangesSection {
+        label: format!("Changes ({})", unstaged.len()).into(),
+        is_staged: false,
+        rows: unstaged,
+      });
+    }
+    self.sections = sections;
+  }
+
+  fn row_at(&self, ix: IndexPath) -> Option<Rc<RepoStatusEntry>> {
+    self
+      .sections
+      .get(ix.section)
+      .and_then(|section| section.rows.get(ix.row).cloned())
+  }
+}
+
+impl ListDelegate for ChangesRowsDelegate {
+  type Item = ListItem;
+
+  fn sections_count(&self, _cx: &App) -> usize {
+    self.sections.len()
+  }
+
+  fn items_count(&self, section: usize, _cx: &App) -> usize {
+    self.sections.get(section).map_or(0, |s| s.rows.len())
+  }
+
+  fn render_section_header(
+    &mut self,
+    section: usize,
+    _window: &mut Window,
+    cx: &mut Context<ListState<Self>>,
+  ) -> Option<impl IntoElement> {
+    if !self.split_sections {
+      return None;
+    }
+    let section = self.sections.get(section)?;
+    let theme = cx.theme();
+    let (icon, icon_color) = if section.is_staged {
+      (IconName::CircleCheck, theme.status_green())
+    } else {
+      (IconName::Minus, theme.muted_foreground)
+    };
+
+    Some(
+      h_flex()
+        .items_center()
+        .py_1()
+        .px_2()
+        .gap_2()
+        .text_xs()
+        .text_color(theme.muted_foreground)
+        .child(Icon::new(icon).size_3().text_color(icon_color))
+        .child(div().min_w_0().flex_1().child(section.label.clone())),
+    )
+  }
+
+  fn render_item(
+    &mut self,
+    ix: IndexPath,
+    _window: &mut Window,
+    cx: &mut Context<ListState<Self>>,
+  ) -> Option<Self::Item> {
+    let theme = cx.theme().clone();
+    let entry = self.row_at(ix)?;
+    let mut base = selectable_list_item(
+      ix,
+      self
+        .selected_index
+        .map(|selected| selected.eq_row(ix))
+        .unwrap_or(false),
+      SelectableRowStyle::Inset,
+      &theme,
+    );
+    if self.opened_path.as_deref() == Some(entry.path.as_path()) {
+      base = base.bg(theme.sidebar_accent.opacity(0.35));
+    }
+    // A partially staged file is painted twice, so the section is part of the id.
+    base = base.debug_selector(move || format!("changes-row-{}-{}", ix.section, ix.row));
+
+    let status_kind = entry.status;
+    let path = entry.path.clone();
+    let (stage_icon, stage_color, stage_tooltip) = stage_style(entry.stage, &theme);
+    let stage_element: AnyElement = {
+      let icon = Icon::new(stage_icon).size_3().text_color(stage_color);
+      match stage_tooltip {
+        Some(tooltip) => div()
+          .id(("changes-stage-icon", ix.row))
+          .tooltip(move |window, cx| Tooltip::new(tooltip.clone()).build(window, cx))
+          .child(icon)
+          .into_any_element(),
+        None => div().child(icon).into_any_element(),
+      }
+    };
+
+    let file_icon = file_icon_path_for_path_with_theme(&path, &theme)
+      .map(|icon| {
+        img(icon)
+          .size(px(FILE_ICON_SIZE_PX))
+          .min_size(px(FILE_ICON_SIZE_PX))
+          .into_any_element()
+      })
+      .unwrap_or_else(|| {
+        Icon::new(IconName::File)
+          .size_3()
+          .text_color(theme.sidebar_foreground)
+          .into_any_element()
+      });
+
+    let (dir, file) = split_path_label(&path);
+    let is_staged_section = self
+      .sections
+      .get(ix.section)
+      .map(|section| section.is_staged)
+      .unwrap_or(false);
+    let toggle = toggle_stage_action(entry.stage, self.split_sections, is_staged_section);
+    let (toggle_icon, toggle_tooltip) = match toggle {
+      FileStageButtonAction::Stage => (IconName::Plus, "Stage file"),
+      FileStageButtonAction::Unstage => (IconName::Minus, "Unstage file"),
+    };
+    let restorable = can_restore(entry.stage);
+    let status_tip = status_tooltip(status_kind);
+    let list = self.list.clone();
+
+    Some(
+      base.px_2().py_1().child(
+        h_flex()
+          .group("changes-row")
+          .size_full()
+          .items_center()
+          .relative()
+          .gap_2()
+          .child(
+            h_flex()
+              .items_center()
+              .min_w_0()
+              .gap_2()
+              .child(
+                div()
+                  .id(("changes-status-letter", ix.row))
+                  .w(px(15.))
+                  .min_w(px(15.))
+                  .text_xs()
+                  .text_color(status_color(status_kind, &theme))
+                  .tooltip(move |window, cx| Tooltip::new(status_tip.clone()).build(window, cx))
+                  .child(status_kind.short_code()),
+              )
+              .child(stage_element)
+              .child(file_icon)
+              .child(
+                h_flex()
+                  .flex_1()
+                  .min_w(px(0.0))
+                  .overflow_hidden()
+                  .text_sm()
+                  .whitespace_nowrap()
+                  .when(!dir.is_empty(), |this| {
+                    this.child(
+                      div()
+                        .text_color(theme.muted_foreground)
+                        .truncate()
+                        .child(dir),
+                    )
+                  })
+                  .child(div().text_color(theme.foreground).child(file)),
+              ),
+          )
+          .child(
+            div()
+              .absolute()
+              .right_0()
+              .opacity(0.0)
+              .group_hover("changes-row", |this| this.opacity(1.0))
+              .bg(theme.sidebar)
+              .rounded(theme.radius)
+              .child(
+                ButtonGroup::new(("changes-row-actions", ix.row))
+                  .outline()
+                  .child(
+                    Button::new(("changes-stage", ix.row))
+                      .debug_selector(move || format!("changes-stage-{}-{}", ix.section, ix.row))
+                      .icon(toggle_icon)
+                      .xsmall()
+                      .tab_stop(false)
+                      .tooltip(toggle_tooltip)
+                      .on_click({
+                        let list = list.clone();
+                        let path = path.clone();
+                        move |_, window, cx| {
+                          let _ = list.update(cx, |list, cx| match toggle {
+                            FileStageButtonAction::Stage => {
+                              list.stage_file(path.clone(), window, cx)
+                            }
+                            FileStageButtonAction::Unstage => {
+                              list.unstage_file(path.clone(), window, cx)
+                            }
+                          });
+                        }
+                      }),
+                  )
+                  .when(restorable, |this| {
+                    this.child(
+                      Button::new(("changes-restore", ix.row))
+                        .debug_selector(move || {
+                          format!("changes-restore-{}-{}", ix.section, ix.row)
+                        })
+                        .icon(IconName::Undo)
+                        .xsmall()
+                        .tab_stop(false)
+                        .tooltip("Discard changes")
+                        .on_click({
+                          let list = list.clone();
+                          let path = path.clone();
+                          move |_, window, cx| {
+                            let _ = list.update(cx, |list, cx| {
+                              list.confirm_restore_file(path.clone(), status_kind, window, cx);
+                            });
+                          }
+                        }),
+                    )
+                  }),
+              ),
+          ),
+      ),
+    )
+  }
+
+  fn set_selected_index(
+    &mut self,
+    ix: Option<IndexPath>,
+    _window: &mut Window,
+    cx: &mut Context<ListState<Self>>,
+  ) {
+    self.selected_index = ix;
+    cx.notify();
+  }
+}
+
 pub(crate) struct ChangesList {
   repo_root: Option<PathBuf>,
   entries: Vec<RepoStatusEntry>,
-  split_sections: bool,
-  opened_path: Option<PathBuf>,
+  list: Entity<ListState<ChangesRowsDelegate>>,
   action_in_flight: bool,
   pub(crate) _action_task: Option<Task<()>>,
 }
@@ -141,40 +428,78 @@ pub(crate) struct ChangesList {
 impl EventEmitter<ChangesListEvent> for ChangesList {}
 
 impl ChangesList {
-  pub(crate) fn new(repo_root: Option<PathBuf>, split_sections: bool) -> Self {
+  pub(crate) fn new(
+    repo_root: Option<PathBuf>,
+    split_sections: bool,
+    window: &mut Window,
+    cx: &mut Context<Self>,
+  ) -> Self {
+    let weak = cx.entity().downgrade();
+    let list =
+      cx.new(|cx| ListState::new(ChangesRowsDelegate::new(weak, split_sections), window, cx));
+
+    // Selecting with the keyboard or the mouse opens the file, like the Git page.
+    cx.subscribe(&list, |_, state, event: &ListEvent, cx| match event {
+      ListEvent::Select(ix) | ListEvent::Confirm(ix) => {
+        if let Some(entry) = state.read(cx).delegate().row_at(*ix) {
+          cx.emit(ChangesListEvent::OpenFile {
+            path: entry.path.clone(),
+          });
+        }
+      }
+      ListEvent::Cancel => {}
+    })
+    .detach();
+
     Self {
       repo_root,
       entries: Vec::new(),
-      split_sections,
-      opened_path: None,
+      list,
       action_in_flight: false,
       _action_task: None,
     }
   }
 
-  pub(crate) fn set_repo_root(&mut self, repo_root: Option<PathBuf>) {
+  pub(crate) fn set_repo_root(&mut self, repo_root: Option<PathBuf>, cx: &mut Context<Self>) {
     self.repo_root = repo_root;
-    self.entries.clear();
-    self.opened_path = None;
+    self.set_entries(Vec::new(), cx);
+    self.set_opened_path(None, cx);
   }
 
-  pub(crate) fn set_entries(&mut self, entries: Vec<RepoStatusEntry>) {
-    self.entries = entries;
+  pub(crate) fn set_entries(&mut self, entries: Vec<RepoStatusEntry>, cx: &mut Context<Self>) {
+    self.entries = entries.clone();
+    self.list.update(cx, |state, cx| {
+      state.delegate_mut().set_rows(entries);
+      cx.notify();
+    });
   }
 
-  #[allow(dead_code)] // consumed when the Git page adopts this list
+  #[allow(dead_code)] // read by the panel tests, and by the Git page next
   pub(crate) fn entries(&self) -> &[RepoStatusEntry] {
     &self.entries
   }
 
   #[allow(dead_code)] // consumed when the Git page adopts this list
-  pub(crate) fn set_split_sections(&mut self, split_sections: bool) {
-    self.split_sections = split_sections;
+  pub(crate) fn set_split_sections(&mut self, split_sections: bool, cx: &mut Context<Self>) {
+    self.list.update(cx, |state, cx| {
+      let delegate = state.delegate_mut();
+      delegate.split_sections = split_sections;
+      delegate.rebuild_sections();
+      cx.notify();
+    });
+  }
+
+  pub(crate) fn set_opened_path(&mut self, path: Option<PathBuf>, cx: &mut Context<Self>) {
+    self.list.update(cx, |state, cx| {
+      state.delegate_mut().opened_path = path;
+      cx.notify();
+    });
   }
 
   #[allow(dead_code)] // consumed when the Git page adopts this list
-  pub(crate) fn set_opened_path(&mut self, path: Option<PathBuf>) {
-    self.opened_path = path;
+  pub(crate) fn focus(&self, window: &mut Window, cx: &mut Context<Self>) {
+    let handle = self.list.read(cx).focus_handle(cx);
+    window.focus(&handle, cx);
   }
 
   fn run<F>(&mut self, label: &'static str, job: F, window: &mut Window, cx: &mut Context<Self>)
@@ -307,237 +632,11 @@ impl ChangesList {
   pub(crate) fn unstage_all(&mut self, window: &mut Window, cx: &mut Context<Self>) {
     self.run("Unstage all", unstage_all, window, cx);
   }
-
-  /// Reloads the worktree status and repaints.
-  #[allow(dead_code)] // consumed when the Git page adopts this list
-  pub(crate) fn refresh(&mut self, cx: &mut Context<Self>) -> Option<Task<()>> {
-    let repo_root = self.repo_root.clone()?;
-    Some(cx.spawn(async move |this, cx| {
-      let entries = unblock(move || list_repo_status(&repo_root)).await;
-      let _ = this.update(cx, |this, cx| {
-        if let Ok(entries) = entries {
-          this.entries = entries;
-        }
-        cx.notify();
-      });
-    }))
-  }
-
-  fn render_list(&self, cx: &mut Context<Self>) -> AnyElement {
-    if self.entries.is_empty() {
-      return div().into_any_element();
-    }
-
-    let mut container = div().flex().flex_col().w_full().min_w_0();
-    if !self.split_sections {
-      let entries = self.entries.clone();
-      for (ix, entry) in entries.iter().enumerate() {
-        container = container.child(self.render_row(ix, entry, false, cx));
-      }
-      return container.into_any_element();
-    }
-
-    let (staged, unstaged) = split_entries(&self.entries);
-    if !staged.is_empty() {
-      container = container.child(self.render_section_header("Staged", true, cx));
-      for (ix, entry) in staged.iter().enumerate() {
-        container = container.child(self.render_row(ix, entry, true, cx));
-      }
-    }
-    if !unstaged.is_empty() {
-      container = container.child(self.render_section_header("Changes", false, cx));
-      for (ix, entry) in unstaged.iter().enumerate() {
-        container = container.child(self.render_row(staged.len() + ix, entry, false, cx));
-      }
-    }
-    container.into_any_element()
-  }
-
-  fn render_section_header(
-    &self,
-    label: &'static str,
-    is_staged: bool,
-    cx: &mut Context<Self>,
-  ) -> AnyElement {
-    let theme = cx.theme();
-    let (icon, icon_color) = if is_staged {
-      (IconName::CircleCheck, theme.status_green())
-    } else {
-      (IconName::Minus, theme.muted_foreground)
-    };
-
-    h_flex()
-      .items_center()
-      .py_1()
-      .px_2()
-      .gap_2()
-      .text_xs()
-      .text_color(theme.muted_foreground)
-      .child(Icon::new(icon).size_3().text_color(icon_color))
-      .child(div().min_w_0().flex_1().child(label))
-      .into_any_element()
-  }
-
-  fn render_row(
-    &self,
-    ix: usize,
-    entry: &RepoStatusEntry,
-    is_staged_section: bool,
-    cx: &mut Context<Self>,
-  ) -> AnyElement {
-    let theme = cx.theme().clone();
-    let status_kind = entry.status;
-    let path = entry.path.clone();
-    let is_opened = self.opened_path.as_deref() == Some(path.as_path());
-
-    let (stage_icon, stage_color, stage_tooltip) = stage_style(entry.stage, &theme);
-    let stage_element: AnyElement = {
-      let icon = Icon::new(stage_icon).size_3().text_color(stage_color);
-      match stage_tooltip {
-        Some(tooltip) => div()
-          .id(("changes-stage-icon", ix))
-          .tooltip(move |window, cx| Tooltip::new(tooltip.clone()).build(window, cx))
-          .child(icon)
-          .into_any_element(),
-        None => div().child(icon).into_any_element(),
-      }
-    };
-
-    let file_icon = file_icon_path_for_path_with_theme(&path, &theme)
-      .map(|icon| {
-        img(icon)
-          .size(px(FILE_ICON_SIZE_PX))
-          .min_size(px(FILE_ICON_SIZE_PX))
-          .into_any_element()
-      })
-      .unwrap_or_else(|| {
-        Icon::new(IconName::File)
-          .size_3()
-          .text_color(theme.sidebar_foreground)
-          .into_any_element()
-      });
-
-    let (dir, file) = split_path_label(&path);
-    let toggle = toggle_stage_action(entry.stage, self.split_sections, is_staged_section);
-    let (toggle_icon, toggle_tooltip) = match toggle {
-      FileStageButtonAction::Stage => (IconName::Plus, "Stage file"),
-      FileStageButtonAction::Unstage => (IconName::Minus, "Unstage file"),
-    };
-    let restorable = can_restore(entry.stage);
-    let status_tip = status_tooltip(status_kind);
-
-    div()
-      .id(("changes-row", ix))
-      .debug_selector(move || format!("changes-row-{ix}"))
-      .group("changes-row")
-      .relative()
-      .mx_1()
-      .px_1()
-      .py_1()
-      .rounded(px(5.0))
-      .cursor_pointer()
-      .when(is_opened, |this| {
-        this.bg(theme.sidebar_accent.opacity(0.35))
-      })
-      .hover(|this| this.bg(theme.secondary_hover))
-      .on_click(cx.listener({
-        let path = path.clone();
-        move |_, _, _, cx| {
-          cx.emit(ChangesListEvent::OpenFile { path: path.clone() });
-        }
-      }))
-      .child(
-        h_flex()
-          .items_center()
-          .gap_2()
-          .child(
-            div()
-              .id(("changes-status-letter", ix))
-              .w(px(15.))
-              .min_w(px(15.))
-              .text_xs()
-              .text_color(status_color(status_kind, &theme))
-              .tooltip(move |window, cx| Tooltip::new(status_tip.clone()).build(window, cx))
-              .child(status_kind.short_code()),
-          )
-          .child(stage_element)
-          .child(file_icon)
-          .child(
-            h_flex()
-              .flex_1()
-              .min_w(px(0.0))
-              .overflow_hidden()
-              .text_sm()
-              .whitespace_nowrap()
-              .when(!dir.is_empty(), |this| {
-                this.child(
-                  div()
-                    .text_color(theme.muted_foreground)
-                    .truncate()
-                    .child(dir),
-                )
-              })
-              .child(div().text_color(theme.foreground).child(file)),
-          ),
-      )
-      .child(
-        div()
-          .absolute()
-          .right_0()
-          .top_1()
-          .opacity(0.0)
-          .group_hover("changes-row", |this| this.opacity(1.0))
-          .bg(theme.sidebar)
-          .rounded(theme.radius)
-          .child(
-            ButtonGroup::new(("changes-row-actions", ix))
-              .outline()
-              .child(
-                Button::new(("changes-stage", ix))
-                  .debug_selector(move || format!("changes-stage-{ix}"))
-                  .icon(toggle_icon)
-                  .xsmall()
-                  .tab_stop(false)
-                  .tooltip(toggle_tooltip)
-                  .on_click(cx.listener({
-                    let path = path.clone();
-                    move |this, _, window, cx| {
-                      cx.stop_propagation();
-                      match toggle {
-                        FileStageButtonAction::Stage => this.stage_file(path.clone(), window, cx),
-                        FileStageButtonAction::Unstage => {
-                          this.unstage_file(path.clone(), window, cx)
-                        }
-                      }
-                    }
-                  })),
-              )
-              .when(restorable, |this| {
-                this.child(
-                  Button::new(("changes-restore", ix))
-                    .debug_selector(move || format!("changes-restore-{ix}"))
-                    .icon(IconName::Undo)
-                    .xsmall()
-                    .tab_stop(false)
-                    .tooltip("Discard changes")
-                    .on_click(cx.listener({
-                      let path = path.clone();
-                      move |this, _, window, cx| {
-                        cx.stop_propagation();
-                        this.confirm_restore_file(path.clone(), status_kind, window, cx);
-                      }
-                    })),
-                )
-              }),
-          ),
-      )
-      .into_any_element()
-  }
 }
 
 impl gpui::Render for ChangesList {
-  fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-    self.render_list(cx)
+  fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+    List::new(&self.list).w_full().min_h_0()
   }
 }
 
@@ -558,31 +657,7 @@ pub(crate) fn split_path_label(path: &Path) -> (String, String) {
 #[cfg(test)]
 mod tests {
   use super::*;
-
-  fn entry(path: &str, stage: RepoStage) -> RepoStatusEntry {
-    RepoStatusEntry {
-      path: PathBuf::from(path),
-      old_path: None,
-      status: RepoStatusKind::Modified,
-      stage,
-    }
-  }
-
-  #[test]
-  fn a_partially_staged_file_shows_up_in_both_sections() {
-    let entries = vec![
-      entry("staged.rs", RepoStage::Staged),
-      entry("partial.rs", RepoStage::PartiallyStaged),
-      entry("unstaged.rs", RepoStage::Unstaged),
-    ];
-
-    let (staged, unstaged) = split_entries(&entries);
-
-    assert_eq!(staged.len(), 2);
-    assert_eq!(unstaged.len(), 2);
-    assert!(staged.iter().any(|e| e.path.ends_with("partial.rs")));
-    assert!(unstaged.iter().any(|e| e.path.ends_with("partial.rs")));
-  }
+  use git::list_repo_status;
 
   #[test]
   fn the_stage_button_follows_the_section_when_sections_are_split() {
@@ -666,7 +741,7 @@ mod tests {
     cx.update(|cx| gpui_component::init(cx));
     let mut mounted = None;
     let (_root, cx) = cx.add_window_view(|window, cx| {
-      let list = cx.new(|_| ChangesList::new(Some(repo_root.clone()), true));
+      let list = cx.new(|cx| ChangesList::new(Some(repo_root.clone()), true, window, cx));
       mounted = Some(list.clone());
       gpui_component::Root::new(list, window, cx)
     });
@@ -682,10 +757,7 @@ mod tests {
     let entries = list_repo_status(&repo_root).expect("status");
     assert_eq!(entries.len(), 1);
     assert_eq!(entries[0].stage, RepoStage::Unstaged);
-    list.update(cx, |list, cx| {
-      list.set_entries(entries);
-      cx.notify();
-    });
+    list.update(cx, |list, cx| list.set_entries(entries, cx));
     cx.run_until_parked();
 
     let changed = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
@@ -701,7 +773,7 @@ mod tests {
     };
 
     let button = cx
-      .debug_bounds("changes-stage-0")
+      .debug_bounds("changes-stage-0-0")
       .expect("stage button bounds");
     cx.simulate_click(button.center(), gpui::Modifiers::default());
     let task = list.update(cx, |list, _| list._action_task.take().expect("stage task"));
@@ -727,8 +799,7 @@ mod tests {
     cx.executor().allow_parking();
 
     list.update(cx, |list, cx| {
-      list.set_entries(list_repo_status(&repo_root).expect("status"));
-      cx.notify();
+      list.set_entries(list_repo_status(&repo_root).expect("status"), cx)
     });
     cx.run_until_parked();
 
@@ -744,7 +815,7 @@ mod tests {
       })
     };
 
-    let row = cx.debug_bounds("changes-row-0").expect("row bounds");
+    let row = cx.debug_bounds("changes-row-0-0").expect("row bounds");
     cx.simulate_click(row.center(), gpui::Modifiers::default());
     cx.run_until_parked();
     drop(observer);
@@ -775,10 +846,7 @@ mod tests {
     repo_root: &Path,
   ) {
     let entries = list_repo_status(repo_root).expect("status");
-    list.update(cx, |list, cx| {
-      list.set_entries(entries);
-      cx.notify();
-    });
+    list.update(cx, |list, cx| list.set_entries(entries, cx));
     cx.run_until_parked();
   }
 
@@ -791,7 +859,7 @@ mod tests {
     cx.executor().allow_parking();
     set_entries_from_disk(&list, cx, &repo_root);
 
-    run_action(&list, cx, "changes-stage-0").await;
+    run_action(&list, cx, "changes-stage-0-0").await;
 
     let entries = list_repo_status(&repo_root).expect("status");
     assert_eq!(entries.len(), 1);
@@ -809,7 +877,7 @@ mod tests {
     set_entries_from_disk(&list, cx, &repo_root);
 
     let button = cx
-      .debug_bounds("changes-restore-0")
+      .debug_bounds("changes-restore-0-0")
       .expect("discard button bounds");
     cx.simulate_click(button.center(), gpui::Modifiers::default());
     cx.run_until_parked();
@@ -905,10 +973,47 @@ mod tests {
       assert_eq!(list.entries()[0].stage, RepoStage::PartiallyStaged);
     });
 
-    assert!(cx.debug_bounds("changes-row-0").is_some());
+    assert!(cx.debug_bounds("changes-row-0-0").is_some());
     assert!(
-      cx.debug_bounds("changes-row-1").is_some(),
+      cx.debug_bounds("changes-row-1-0").is_some(),
       "the same file should be painted in the staged and the unstaged section"
+    );
+
+    let _ = std::fs::remove_dir_all(&repo_root);
+  }
+
+  #[gpui::test]
+  async fn the_keyboard_walks_the_list_and_opens_a_file(cx: &mut gpui::TestAppContext) {
+    let repo_root = temp_repo("changes-list-keyboard");
+    std::fs::write(repo_root.join("other.txt"), "new\n").expect("write second file");
+
+    let (list, cx) = add_changes_list_window(repo_root.clone(), cx);
+    cx.executor().allow_parking();
+    set_entries_from_disk(&list, cx, &repo_root);
+
+    let opened = std::sync::Arc::new(std::sync::Mutex::new(Vec::<PathBuf>::new()));
+    let observer = {
+      let opened = opened.clone();
+      cx.update(|_, cx| {
+        cx.subscribe(&list, move |_, event: &ChangesListEvent, _| {
+          if let ChangesListEvent::OpenFile { path } = event {
+            opened.lock().unwrap().push(path.clone());
+          }
+        })
+      })
+    };
+
+    list.update_in(cx, |list, window, cx| list.focus(window, cx));
+    cx.run_until_parked();
+    cx.simulate_keystrokes("down");
+    cx.run_until_parked();
+    drop(observer);
+
+    // Walking with the keyboard selects a row, which opens it like a click does.
+    assert_eq!(
+      opened.lock().unwrap().len(),
+      1,
+      "moving the selection should open the highlighted file"
     );
 
     let _ = std::fs::remove_dir_all(&repo_root);

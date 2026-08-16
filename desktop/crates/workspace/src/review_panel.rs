@@ -182,7 +182,7 @@ impl ReviewPanel {
     .detach();
 
     let split_sections = !crate::config::AppSettings::get(cx).git_unified_file_view;
-    let changes_list = cx.new(|_| ChangesList::new(repo_root.clone(), split_sections));
+    let changes_list = cx.new(|cx| ChangesList::new(repo_root.clone(), split_sections, window, cx));
     cx.subscribe_in(
       &changes_list,
       window,
@@ -259,8 +259,7 @@ impl ReviewPanel {
         match result {
           Ok(entries) => {
             this.changes_list.update(cx, |list, cx| {
-              list.set_entries(entries.clone());
-              cx.notify();
+              list.set_entries(entries.clone(), cx);
             });
             this.status_entries = entries;
             this.last_error = None;
@@ -325,8 +324,7 @@ impl ReviewPanel {
     self.status_entries.clear();
     self.last_error = None;
     self.changes_list.update(cx, |list, cx| {
-      list.set_repo_root(repo_root.clone());
-      cx.notify();
+      list.set_repo_root(repo_root.clone(), cx);
     });
     if let Some(terminal) = self.terminal_view.clone() {
       terminal.update(cx, |terminal, cx| {
@@ -1343,7 +1341,7 @@ mod tests {
     });
 
     let button = cx
-      .debug_bounds("changes-stage-0")
+      .debug_bounds("changes-stage-0-0")
       .expect("stage button bounds");
     cx.simulate_click(button.center(), gpui::Modifiers::default());
     let action = panel.update(cx, |panel, cx| {

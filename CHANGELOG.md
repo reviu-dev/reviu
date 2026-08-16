@@ -78,7 +78,7 @@ The right panel gains a Terminal tab, running in the repository the session is w
 
 ### Stage And Discard From The Sessions Workspace
 
-The Changes panel listed your modified files but could do nothing with them. It now groups them into Staged and Changes like the Git page, and each row carries the same actions on hover: stage, unstage, and discard. Files partially staged appear in both groups, and the list refreshes itself after every action.
+The Changes panel listed your modified files but could do nothing with them. It now groups them into Staged and Changes like the Git page, and each row carries the same actions on hover: stage, unstage, and discard. Files partially staged appear in both groups, discarding asks before destroying work, and the list refreshes itself after every action. The list is keyboard-navigable too: move through it with the arrow keys and the highlighted file opens as you go.
 
 ## 0.18.0
 
