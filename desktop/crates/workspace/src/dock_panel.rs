@@ -6,7 +6,8 @@ use std::path::PathBuf;
 
 use git::{
   RepoStage, RepoStatusEntry, commit_changes, current_branch_status, current_github_remote_repo,
-  list_repo_status, list_repo_worktree_files, stage_all,
+  is_merge_in_progress, is_rebase_in_progress, list_repo_status, list_repo_worktree_files,
+  stage_all,
 };
 use gpui::{
   AnyElement, AnyWindowHandle, App, Context, Entity, FocusHandle, Focusable, Render, SharedString,
@@ -25,6 +26,8 @@ use crate::history_list::{HistoryList, HistoryListEvent};
 
 const DOCK_PANEL_TERMINAL_DEBUG_SELECTOR: &str = "dock-panel-terminal";
 pub(crate) const DOCK_PANEL_HISTORY_DEBUG_SELECTOR: &str = "dock-panel-history";
+const DOCK_PANEL_COMMIT_DEBUG_SELECTOR: &str = "dock-panel-commit";
+const DOCK_PANEL_OPERATION_DEBUG_SELECTOR: &str = "dock-panel-operation";
 #[cfg(test)]
 const DOCK_PANEL_TERMINAL_TAB_DEBUG_SELECTOR: &str = "dock-panel-tab-terminal";
 #[cfg(test)]
@@ -55,6 +58,8 @@ pub enum DockPanelEvent {
   },
   /// A commit landed: whoever shows the branch state has to refresh it.
   Committed,
+  /// The rebase can move on: the host runs it, it owns the conflict flow.
+  ContinueRebase,
 }
 
 impl gpui::EventEmitter<DockPanelEvent> for DockPanel {}
@@ -150,6 +155,8 @@ pub struct DockPanel {
   window_handle: AnyWindowHandle,
   repo_root: Option<PathBuf>,
   status_entries: Vec<RepoStatusEntry>,
+  merge_in_progress: bool,
+  rebase_in_progress: bool,
   commit_input: Entity<TextareaState>,
   committing: bool,
   last_error: Option<SharedString>,
@@ -225,6 +232,8 @@ impl DockPanel {
       window_handle: window.window_handle(),
       repo_root,
       status_entries: Vec::new(),
+      merge_in_progress: false,
+      rebase_in_progress: false,
       commit_input,
       committing: false,
       last_error: None,
@@ -280,8 +289,17 @@ impl DockPanel {
     };
 
     let task = cx.spawn(async move |this, cx| {
-      let result = unblock(move || list_repo_status(&repo_root)).await;
+      let (result, merge_in_progress, rebase_in_progress) = unblock(move || {
+        (
+          list_repo_status(&repo_root),
+          is_merge_in_progress(&repo_root).unwrap_or(false),
+          is_rebase_in_progress(&repo_root).unwrap_or(false),
+        )
+      })
+      .await;
       let _ = this.update(cx, |this, cx| {
+        this.merge_in_progress = merge_in_progress;
+        this.rebase_in_progress = rebase_in_progress;
         match result {
           Ok(entries) => {
             this.changes_list.update(cx, |list, cx| {
@@ -336,8 +354,8 @@ impl DockPanel {
     self._pr_task = Some(task);
   }
 
-  #[cfg(test)]
-  pub(crate) fn set_commit_message_for_test(
+  /// Git prepared a message for the operation in progress (merge, rebase).
+  pub(crate) fn set_commit_message(
     &mut self,
     message: &str,
     window: &mut Window,
@@ -350,6 +368,14 @@ impl DockPanel {
 
   pub(crate) fn commit_message(&self, cx: &App) -> String {
     self.commit_input.read(cx).value().to_string()
+  }
+
+  pub(crate) fn merge_in_progress(&self) -> bool {
+    self.merge_in_progress
+  }
+
+  pub(crate) fn rebase_in_progress(&self) -> bool {
+    self.rebase_in_progress
   }
 
   pub(crate) fn status_entries(&self) -> &[RepoStatusEntry] {
@@ -479,9 +505,15 @@ impl DockPanel {
 
   fn render_commit_zone(&self, window: &Window, cx: &mut Context<Self>) -> AnyElement {
     let theme = cx.theme().clone();
-    let can_commit = !self.committing
-      && !self.status_entries.is_empty()
-      && !self.commit_input.read(cx).value().trim().is_empty();
+    // A rebase ends by continuing it, not by writing another commit message.
+    let continuing_rebase = self.rebase_in_progress;
+    let can_commit = if continuing_rebase {
+      !crate::changes_list::has_conflicted_entries(&self.status_entries)
+    } else {
+      !self.committing
+        && !self.status_entries.is_empty()
+        && !self.commit_input.read(cx).value().trim().is_empty()
+    };
     let commit_shortcut = crate::shortcuts::resolved_display_shortcut_keystroke_in(
       cx,
       window,
@@ -500,9 +532,28 @@ impl DockPanel {
         let commit_box = Textarea::new(&self.commit_input).w_full();
         commit_box.into_any_element()
       }))
+      .when(self.merge_in_progress || continuing_rebase, |this| {
+        let label = if continuing_rebase {
+          "Rebase in progress"
+        } else {
+          "Merge in progress"
+        };
+        this.child(
+          div()
+            .debug_selector(|| DOCK_PANEL_OPERATION_DEBUG_SELECTOR.to_string())
+            .text_xs()
+            .text_color(theme.status_orange())
+            .child(label),
+        )
+      })
       .child(
         Button::new("dock-panel-commit")
-          .label("Commit")
+          .label(if continuing_rebase {
+            "Continue rebase"
+          } else {
+            "Commit"
+          })
+          .debug_selector(|| DOCK_PANEL_COMMIT_DEBUG_SELECTOR.to_string())
           .with_variant(gpui_component::button::ButtonVariant::Secondary)
           .outline()
           .small()
@@ -510,7 +561,13 @@ impl DockPanel {
           .child(gpui_component::kbd::Kbd::new(commit_shortcut).ml_1())
           .loading(self.committing)
           .disabled(!can_commit)
-          .on_click(cx.listener(|this, _, _, cx| this.commit(cx))),
+          .on_click(cx.listener(|this, _, _, cx| {
+            if this.rebase_in_progress {
+              cx.emit(DockPanelEvent::ContinueRebase);
+              return;
+            }
+            this.commit(cx)
+          })),
       )
       .into_any_element()
   }
@@ -1133,6 +1190,83 @@ mod tests {
       assert_eq!(panel.status_entries[0].path, PathBuf::from("README.md"));
       assert_eq!(panel.status_entries[0].status, RepoStatusKind::Modified);
     });
+  }
+
+  #[gpui::test]
+  async fn a_rebase_in_progress_replaces_the_commit_button(cx: &mut TestAppContext) {
+    cx.update(|cx| gpui_component::init(cx));
+    let repo = TempRepo::init("dock-panel-rebase");
+    commit_text_file(&repo.path, Path::new("a.txt"), "base\n", "initial");
+    let base = git::BranchRef {
+      name: git::current_branch_status(&repo.path)
+        .expect("branch status")
+        .name,
+      kind: git::BranchKind::Local,
+    };
+    let feature = git::BranchRef {
+      name: "feature".to_string(),
+      kind: git::BranchKind::Local,
+    };
+    git::create_branch(&repo.path, &feature.name).expect("create branch");
+    git::switch_branch(&repo.path, &feature).expect("switch to feature");
+    commit_text_file(&repo.path, Path::new("a.txt"), "feature\n", "feature work");
+    git::switch_branch(&repo.path, &base).expect("switch back");
+    commit_text_file(&repo.path, Path::new("a.txt"), "main\n", "main work");
+    git::switch_branch(&repo.path, &feature).expect("switch to feature");
+    let _ = git::rebase_branch(&repo.path, &base);
+
+    let (panel, cx) = add_dock_panel_window(Some(repo.path.clone()), cx);
+    cx.executor().allow_parking();
+    await_refresh(&panel, cx).await;
+    panel.update(cx, |_, cx| cx.notify());
+    cx.run_until_parked();
+
+    panel.read_with(cx, |panel, _| assert!(panel.rebase_in_progress()));
+    assert!(
+      cx.debug_bounds(DOCK_PANEL_OPERATION_DEBUG_SELECTOR)
+        .is_some(),
+      "the panel says a rebase is running"
+    );
+
+    // The button now continues the rebase; the host runs it.
+    let asked = Arc::new(AtomicBool::new(false));
+    let observer = {
+      let asked = asked.clone();
+      cx.update(|_, cx| {
+        cx.subscribe(&panel, move |_panel, event: &DockPanelEvent, _cx| {
+          if matches!(event, DockPanelEvent::ContinueRebase) {
+            asked.store(true, Ordering::SeqCst);
+          }
+        })
+      })
+    };
+
+    // Conflicted: the button is there but does nothing yet.
+    let button = cx
+      .debug_bounds(DOCK_PANEL_COMMIT_DEBUG_SELECTOR)
+      .expect("commit button bounds");
+    cx.simulate_click(button.center(), gpui::Modifiers::default());
+    cx.run_until_parked();
+    assert!(!asked.load(Ordering::SeqCst));
+
+    // Resolved and staged: the same button asks to continue.
+    std::fs::write(repo.path.join("a.txt"), "resolved\n").expect("resolve conflict");
+    git::stage_all(&repo.path).expect("stage the resolution");
+    await_refresh(&panel, cx).await;
+    panel.update(cx, |panel, cx| {
+      panel.refresh(cx);
+    });
+    await_refresh(&panel, cx).await;
+    let button = cx
+      .debug_bounds(DOCK_PANEL_COMMIT_DEBUG_SELECTOR)
+      .expect("commit button bounds");
+    cx.simulate_click(button.center(), gpui::Modifiers::default());
+    cx.run_until_parked();
+    assert!(asked.load(Ordering::SeqCst));
+
+    // Nothing was committed behind our back.
+    assert!(git::is_rebase_in_progress(&repo.path).expect("rebase state"));
+    drop(observer);
   }
 
   #[gpui::test]

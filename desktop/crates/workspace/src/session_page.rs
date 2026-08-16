@@ -207,6 +207,11 @@ impl SessionPage {
         DockPanelEvent::Committed => {
           this.refresh_branch(cx);
         }
+        DockPanelEvent::ContinueRebase => {
+          if let Err(error) = this.run_repo_command(RepoCommand::ContinueRebase, window, cx) {
+            window.push_notification(Notification::warning(error), cx);
+          }
+        }
       },
     )
     .detach();
@@ -728,11 +733,12 @@ impl SessionPage {
   fn repo_state<'a>(&'a self, commit_message: &'a str, cx: &'a App) -> RepoState<'a> {
     let branch_status = self.branch_status.as_ref();
     let (can_push, can_force_push) = push_flags(branch_status, branch_status.is_some(), false);
-    let status_entries = self.dock_panel.read(cx).status_entries();
+    let panel = self.dock_panel.read(cx);
+    let status_entries = panel.status_entries();
     RepoState {
       has_repo: self.selected_repo.is_some(),
-      merge_in_progress: false,
-      rebase_in_progress: false,
+      merge_in_progress: panel.merge_in_progress(),
+      rebase_in_progress: panel.rebase_in_progress(),
       has_head_commit: branch_status.is_some(),
       can_push,
       can_force_push,
@@ -776,11 +782,20 @@ impl SessionPage {
                 RepoCommandOutcome::UpToDate { message } => {
                   window.push_notification(Notification::info(message), cx);
                 }
-                RepoCommandOutcome::Conflicted { path, .. } => {
+                RepoCommandOutcome::Conflicted {
+                  path,
+                  commit_message,
+                  ..
+                } => {
                   window.push_notification(
                     Notification::warning(format!("Resolve the conflicts in {}", path.display())),
                     cx,
                   );
+                  if let Some(message) = commit_message {
+                    this.dock_panel.update(cx, |panel, cx| {
+                      panel.set_commit_message(&message, window, cx)
+                    });
+                  }
                   this.open_diff(path, None, window, cx);
                 }
               }
@@ -940,6 +955,18 @@ impl SessionPage {
       if state.allows(PaletteCommand::Commit) {
         commands.push(CommandPaletteCommand::commit());
       }
+      if state.allows(PaletteCommand::ContinueRebase) {
+        commands.push(CommandPaletteCommand::continue_rebase());
+      }
+      if state.allows(PaletteCommand::SkipRebase) {
+        commands.push(CommandPaletteCommand::skip_rebase());
+      }
+      if state.rebase_in_progress {
+        commands.push(CommandPaletteCommand::abort_rebase());
+      }
+      if state.merge_in_progress {
+        commands.push(CommandPaletteCommand::abort_merge());
+      }
       if state.allows(PaletteCommand::StageAll) {
         commands.push(CommandPaletteCommand::stage_all());
       }
@@ -1004,6 +1031,18 @@ impl SessionPage {
         }
         self.dock_panel.update(cx, |panel, cx| panel.commit(cx));
         Ok(())
+      }
+      CommandPaletteAction::ContinueRebase => {
+        self.run_repo_command(RepoCommand::ContinueRebase, window, cx)
+      }
+      CommandPaletteAction::SkipRebase => {
+        self.run_repo_command(RepoCommand::SkipRebase, window, cx)
+      }
+      CommandPaletteAction::AbortRebase => {
+        self.run_repo_command(RepoCommand::AbortRebase, window, cx)
+      }
+      CommandPaletteAction::AbortMerge => {
+        self.run_repo_command(RepoCommand::AbortMerge, window, cx)
       }
       CommandPaletteAction::StageAll => self.run_repo_command(RepoCommand::StageAll, window, cx),
       CommandPaletteAction::UnstageAll => {
@@ -1520,7 +1559,7 @@ mod tests {
     cx.run_until_parked();
     page.update_in(cx, |page, window, cx| {
       page.dock_panel.update(cx, |panel, cx| {
-        panel.set_commit_message_for_test("a message", window, cx)
+        panel.set_commit_message("a message", window, cx)
       });
     });
 
@@ -1572,6 +1611,134 @@ mod tests {
         "a tracked branch can be pulled"
       );
     });
+  }
+
+  /// Leaves the repository mid-rebase, stopped on a conflicted file.
+  fn start_conflicting_rebase(repo_root: &Path) -> String {
+    commit_text_file(repo_root, Path::new("a.txt"), "base\n", "initial");
+    let base = git::current_branch_status(repo_root)
+      .expect("branch status")
+      .name;
+    let feature = git::BranchRef {
+      name: "feature".to_string(),
+      kind: git::BranchKind::Local,
+    };
+    git::create_branch(repo_root, &feature.name).expect("create branch");
+    git::switch_branch(repo_root, &feature).expect("switch to feature");
+    commit_text_file(repo_root, Path::new("a.txt"), "feature\n", "feature work");
+    let base_ref = git::BranchRef {
+      name: base.clone(),
+      kind: git::BranchKind::Local,
+    };
+    git::switch_branch(repo_root, &base_ref).expect("switch back");
+    commit_text_file(repo_root, Path::new("a.txt"), "main\n", "main work");
+    git::switch_branch(repo_root, &feature).expect("switch to feature");
+    let _ = git::rebase_branch(repo_root, &base_ref);
+    assert!(
+      git::is_rebase_in_progress(repo_root).expect("rebase state"),
+      "the rebase must be waiting on the conflict"
+    );
+    base
+  }
+
+  #[gpui::test]
+  async fn a_rebase_in_progress_turns_the_commit_button_into_continue(cx: &mut TestAppContext) {
+    let repo = TempRepo::init("session-page-rebase-continue");
+    start_conflicting_rebase(&repo.path);
+
+    let (page, cx) = add_session_page_window(repo.path.clone(), cx);
+    cx.executor().allow_parking();
+    let refresh = page.update(cx, |page, cx| {
+      page.dock_panel.update(cx, |panel, cx| {
+        panel.refresh(cx);
+        panel._refresh_task.take().expect("refresh task")
+      })
+    });
+    refresh.await;
+    cx.run_until_parked();
+
+    page.read_with(cx, |page, cx| {
+      let panel = page.dock_panel.read(cx);
+      assert!(panel.rebase_in_progress());
+      assert!(!panel.merge_in_progress());
+
+      // The palette follows: no commit, but the rebase can be continued or dropped.
+      let ids = page
+        .palette_commands(1, cx)
+        .into_iter()
+        .map(|command| command.id)
+        .collect::<Vec<_>>();
+      assert!(!ids.contains(&CommandPaletteCommandId::Commit));
+      assert!(ids.contains(&CommandPaletteCommandId::SkipRebase));
+      assert!(ids.contains(&CommandPaletteCommandId::AbortRebase));
+      assert!(
+        !ids.contains(&CommandPaletteCommandId::ContinueRebase),
+        "the conflict is still there"
+      );
+    });
+
+    // Resolve and stage: continuing becomes possible.
+    std::fs::write(repo.path.join("a.txt"), "resolved\n").expect("resolve conflict");
+    git::stage_all(&repo.path).expect("stage the resolution");
+    let refresh = page.update(cx, |page, cx| {
+      page.dock_panel.update(cx, |panel, cx| {
+        panel.refresh(cx);
+        panel._refresh_task.take().expect("refresh task")
+      })
+    });
+    refresh.await;
+    cx.run_until_parked();
+
+    page.read_with(cx, |page, cx| {
+      let ids = page
+        .palette_commands(1, cx)
+        .into_iter()
+        .map(|command| command.id)
+        .collect::<Vec<_>>();
+      assert!(ids.contains(&CommandPaletteCommandId::ContinueRebase));
+    });
+
+    // The dock button runs it, and the rebase lands.
+    page.update_in(cx, |page, window, cx| {
+      page
+        .run_repo_command(RepoCommand::ContinueRebase, window, cx)
+        .expect("continue the rebase")
+    });
+    let command = page.update(cx, |page, _| {
+      page._repo_command_task.take().expect("command task")
+    });
+    command.await;
+    cx.run_until_parked();
+
+    assert!(!git::is_rebase_in_progress(&repo.path).expect("rebase state"));
+  }
+
+  #[gpui::test]
+  async fn aborting_a_rebase_from_the_palette_puts_the_branch_back(cx: &mut TestAppContext) {
+    let repo = TempRepo::init("session-page-rebase-abort");
+    start_conflicting_rebase(&repo.path);
+
+    let (page, cx) = add_session_page_window(repo.path.clone(), cx);
+    cx.executor().allow_parking();
+    cx.run_until_parked();
+
+    page.update_in(cx, |page, window, cx| {
+      page
+        .handle_command_palette_action(CommandPaletteAction::AbortRebase, window, cx)
+        .expect("abort the rebase")
+    });
+    let command = page.update(cx, |page, _| {
+      page._repo_command_task.take().expect("command task")
+    });
+    command.await;
+    cx.run_until_parked();
+
+    assert!(!git::is_rebase_in_progress(&repo.path).expect("rebase state"));
+    assert_eq!(
+      std::fs::read_to_string(repo.path.join("a.txt")).expect("read file"),
+      "feature\n",
+      "the branch is back where it was"
+    );
   }
 
   #[gpui::test]

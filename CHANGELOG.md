@@ -92,6 +92,10 @@ Opening a `.md` or `.svg` in the Sessions workspace showed raw text. A Preview b
 
 The Sessions workspace applied the whitespace setting when opening a file but gave you no way to change your mind. The diff header now carries the same Whitespace button as the Git page, with `cmd-alt-/`, and the choice holds for the rest of the session instead of resetting on every file. A file with no pending change, or a file being previewed, has no diff on screen: the button steps aside there, like the inline/split control.
 
+### Finish A Rebase Or A Merge From The Sessions Workspace
+
+A rebase stopped on a conflict used to leave the Sessions workspace with a Commit button that could not help. The right panel now says which operation is running, and Commit becomes Continue rebase, enabled once the conflicts are resolved and staged. The palette follows: Rebase continue, Rebase skip, Abort rebase and Abort merge appear only while there is something to continue or abort, and the commit message git prepared for the merge lands in the box on its own.
+
 ### A Comment The Code Moved Under Says So Instead Of Vanishing
 
 When the agent rewrote the lines a review comment was anchored to, the comment disappeared from the diff without a word. It stays now, tagged Outdated, so you can see what you asked for and decide. It is left out of the batch sent to the agent: the code it talks about is gone.
