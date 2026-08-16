@@ -92,6 +92,10 @@ Opening a `.md` or `.svg` in the Sessions workspace showed raw text. A Preview b
 
 The Sessions workspace applied the whitespace setting when opening a file but gave you no way to change your mind. The diff header now carries the same Whitespace button as the Git page, with `cmd-alt-/`, and the choice holds for the rest of the session instead of resetting on every file. A file with no pending change, or a file being previewed, has no diff on screen: the button steps aside there, like the inline/split control.
 
+### Browse The History From The Sessions Workspace
+
+The right panel gains a History tab: your commits, expandable to the files each one touched. Click a file to read it as it was in that commit, right where the diff shows up, read-only so a snapshot can never overwrite your work. Opening the same file from the Changes tab brings the working-tree version back. The history loads the first time you open the tab, not before.
+
 ### A Command Palette That Only Offers What Works
 
 The Sessions workspace listed Commit, Stage all, Unstage all, Push and Pull whether or not they could run: committing with nothing staged and no message, pushing a branch with nothing ahead. The palette now follows the same rules as the Git page, so a command is there when it does something.

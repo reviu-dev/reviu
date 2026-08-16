@@ -21,10 +21,14 @@ use smol::unblock;
 use terminal::TerminalView;
 
 use crate::changes_list::{ChangesList, ChangesListEvent};
+use crate::history_list::{HistoryList, HistoryListEvent};
 
 const REVIEW_PANEL_TERMINAL_DEBUG_SELECTOR: &str = "review-panel-terminal";
+pub(crate) const REVIEW_PANEL_HISTORY_DEBUG_SELECTOR: &str = "review-panel-history";
 #[cfg(test)]
 const REVIEW_PANEL_TERMINAL_TAB_DEBUG_SELECTOR: &str = "review-panel-tab-terminal";
+#[cfg(test)]
+const REVIEW_PANEL_HISTORY_TAB_DEBUG_SELECTOR: &str = "review-panel-tab-history";
 const REVIEW_PANEL_REFRESH_DEBUG_SELECTOR: &str = "review-panel-refresh";
 use std::collections::BTreeMap;
 use std::rc::Rc;
@@ -44,6 +48,11 @@ pub enum ReviewPanelEvent {
   OpenFile {
     path: PathBuf,
   },
+  /// A file as it was in a commit, read-only.
+  OpenCommitFile {
+    commit_oid: String,
+    path: PathBuf,
+  },
   /// A commit landed: whoever shows the branch state has to refresh it.
   Committed,
 }
@@ -54,6 +63,7 @@ impl gpui::EventEmitter<ReviewPanelEvent> for ReviewPanel {}
 enum ReviewPanelTab {
   Changes,
   Files,
+  History,
   PullRequest,
   Terminal,
 }
@@ -145,6 +155,7 @@ pub struct ReviewPanel {
   last_error: Option<SharedString>,
   active_tab: ReviewPanelTab,
   changes_list: Entity<ChangesList>,
+  pub(crate) history_list: Entity<HistoryList>,
   /// Spawned on the first visit to the tab: a shell per session is too much
   /// for someone who never opens it.
   terminal_view: Option<Entity<TerminalView>>,
@@ -195,6 +206,20 @@ impl ReviewPanel {
     )
     .detach();
 
+    let history_list = cx.new(HistoryList::new);
+    cx.subscribe(
+      &history_list,
+      |_this, _list, event: &HistoryListEvent, cx| match event {
+        HistoryListEvent::OpenCommitFile { commit_oid, path } => {
+          cx.emit(ReviewPanelEvent::OpenCommitFile {
+            commit_oid: commit_oid.clone(),
+            path: path.clone(),
+          });
+        }
+      },
+    )
+    .detach();
+
     let mut panel = Self {
       focus_handle: cx.focus_handle(),
       window_handle: window.window_handle(),
@@ -205,6 +230,7 @@ impl ReviewPanel {
       last_error: None,
       active_tab: ReviewPanelTab::Changes,
       changes_list,
+      history_list,
       terminal_view: None,
       branch_pr: BranchPrState::Loading,
       files_tree_state: cx.new(|cx| TreeState::new(cx)),
@@ -342,11 +368,36 @@ impl ReviewPanel {
     self.changes_list.update(cx, |list, cx| {
       list.set_repo_root(repo_root.clone(), cx);
     });
+    self.history_list.update(cx, |list, cx| {
+      list.set_repo_root(repo_root.clone(), cx);
+    });
     if let Some(terminal) = self.terminal_view.clone() {
       terminal.update(cx, |terminal, cx| {
         terminal.set_working_directory(repo_root, cx);
       });
     }
+  }
+
+  /// The history is only worth loading once its tab is opened.
+  fn refresh_history(&mut self, cx: &mut Context<Self>) {
+    let repo_root = self.repo_root.clone();
+    self.history_list.update(cx, |list, cx| {
+      list.set_repo_root(repo_root, cx);
+      if list.is_empty() {
+        list.refresh(cx);
+      }
+    });
+  }
+
+  fn render_history_tab(&self) -> AnyElement {
+    div()
+      .id("review-panel-history")
+      .debug_selector(|| REVIEW_PANEL_HISTORY_DEBUG_SELECTOR.to_string())
+      .flex_1()
+      .min_h_0()
+      .min_w(px(0.0))
+      .child(self.history_list.clone())
+      .into_any_element()
   }
 
   fn ensure_terminal(&mut self, cx: &mut Context<Self>) {
@@ -490,6 +541,7 @@ impl ReviewPanel {
             match target {
               ReviewPanelTab::PullRequest => this.refresh_branch_pull_request(cx),
               ReviewPanelTab::Terminal => this.ensure_terminal(cx),
+              ReviewPanelTab::History => this.refresh_history(cx),
               ReviewPanelTab::Changes | ReviewPanelTab::Files => {}
             }
             cx.notify();
@@ -511,6 +563,12 @@ impl ReviewPanel {
         "Files",
         ReviewPanelTab::Files,
         self.active_tab == ReviewPanelTab::Files,
+      ))
+      .child(tab(
+        "review-panel-tab-history",
+        "History",
+        ReviewPanelTab::History,
+        self.active_tab == ReviewPanelTab::History,
       ))
       .child(tab(
         "review-panel-tab-pr",
@@ -854,6 +912,7 @@ impl Render for ReviewPanel {
         }
       }
       ReviewPanelTab::PullRequest => self.render_pr_tab(cx),
+      ReviewPanelTab::History => self.render_history_tab(),
       ReviewPanelTab::Terminal => self.render_terminal_tab(),
     };
 
@@ -1224,6 +1283,65 @@ mod tests {
         Some(other.path.as_path())
       );
     });
+  }
+
+  #[gpui::test]
+  async fn the_history_tab_lists_the_commits_and_opens_one_of_their_files(cx: &mut TestAppContext) {
+    cx.update(|cx| gpui_component::init(cx));
+    let repo = TempRepo::init("review-panel-history-tab");
+    commit_text_file(&repo.path, Path::new("README.md"), "v1\n", "initial");
+    commit_text_file(&repo.path, Path::new("README.md"), "v2\n", "second");
+
+    let (panel, cx) = add_review_panel_window(Some(repo.path.clone()), cx);
+    cx.executor().allow_parking();
+    await_refresh(&panel, cx).await;
+    panel.update(cx, |_, cx| cx.notify());
+    cx.run_until_parked();
+
+    let tab = cx
+      .debug_bounds(REVIEW_PANEL_HISTORY_TAB_DEBUG_SELECTOR)
+      .expect("history tab bounds");
+    cx.simulate_click(tab.center(), gpui::Modifiers::default());
+    let history = panel.read_with(cx, |panel, _| panel.history_list.clone());
+    let load = history.update(cx, |list, _| list._history_task.take());
+    if let Some(task) = load {
+      task.await;
+    }
+    cx.run_until_parked();
+
+    panel.read_with(cx, |panel, _| {
+      assert_eq!(panel.active_tab, ReviewPanelTab::History);
+    });
+    assert!(
+      cx.debug_bounds(crate::history_list::HISTORY_LIST_DEBUG_SELECTOR)
+        .is_some(),
+      "the history tab shows the commit tree"
+    );
+
+    // The panel forwards the file of a commit to whoever hosts it.
+    let opened = Rc::new(std::cell::RefCell::new(Vec::new()));
+    let seen = opened.clone();
+    cx.update(|_, cx| {
+      cx.subscribe(&panel, move |_panel, event: &ReviewPanelEvent, _cx| {
+        if let ReviewPanelEvent::OpenCommitFile { commit_oid, path } = event {
+          seen.borrow_mut().push((commit_oid.clone(), path.clone()));
+        }
+      })
+      .detach();
+    });
+
+    let head = git::current_head_sha(&repo.path)
+      .expect("head sha")
+      .expect("head sha");
+    history.update(cx, |list, cx| {
+      list.open_commit_file(head.clone(), PathBuf::from("README.md"), cx)
+    });
+    cx.run_until_parked();
+
+    assert_eq!(
+      opened.borrow().as_slice(),
+      &[(head, PathBuf::from("README.md"))]
+    );
   }
 
   #[gpui::test]

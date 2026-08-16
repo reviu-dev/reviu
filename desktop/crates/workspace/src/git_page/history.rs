@@ -2,78 +2,7 @@
 
 use super::*;
 
-#[derive(Clone, Debug)]
-pub(super) struct HistoryCommitFileRow {
-  pub(super) path: PathBuf,
-  pub(super) kind: CommitFileChangeKind,
-  pub(super) label: SharedString,
-}
-
-impl HistoryCommitFileRow {
-  pub(super) fn from_commit_file(file: CommitChangedFile) -> Self {
-    let path_label = file.path.to_string_lossy().replace(['\n', '\r'], "");
-    let label = file
-      .old_path
-      .as_ref()
-      .map(|old_path| {
-        let old_label = old_path.to_string_lossy().replace(['\n', '\r'], "");
-        format!("{old_label} -> {path_label}")
-      })
-      .unwrap_or(path_label);
-    Self {
-      path: file.path,
-      kind: file.kind,
-      label: label.into(),
-    }
-  }
-}
-
-#[derive(Clone, Debug)]
-pub(super) struct HistoryRenderRow {
-  pub(super) commit: HistoryCommitNode,
-}
-
-impl HistoryRenderRow {
-  pub(super) fn from_commit(commit: HistoryCommitNode) -> Self {
-    Self { commit }
-  }
-}
-
-#[derive(Clone, Debug)]
-pub(super) enum HistoryTreeNode {
-  Commit {
-    oid: String,
-  },
-  File {
-    commit_oid: String,
-    file: HistoryCommitFileRow,
-  },
-  LoadHint {
-    oid: String,
-  },
-  Placeholder,
-}
-
 impl GitPage {
-  pub(super) fn should_refresh_history_for_poll(
-    include_history: bool,
-    history_empty: bool,
-    cached_revision: Option<&HistoryRevision>,
-    polled_revision: Option<&HistoryRevision>,
-  ) -> bool {
-    if !include_history {
-      return false;
-    }
-    if history_empty {
-      return true;
-    }
-
-    match polled_revision {
-      Some(polled_revision) => Some(polled_revision) != cached_revision,
-      None => false,
-    }
-  }
-
   pub(super) fn history_file_status_kind(
     &self,
     commit_oid: &str,
@@ -83,7 +12,7 @@ impl GitPage {
       .history_commit_files
       .get(commit_oid)
       .and_then(|files| files.iter().find(|file| file.path == rel_path))
-      .map(|file| Self::history_change_kind_to_repo_status(file.kind))
+      .map(|file| history_change_kind_to_repo_status(file.kind))
   }
 
   pub(super) fn refresh_history_list(&mut self, cx: &mut Context<Self>) {
@@ -97,7 +26,7 @@ impl GitPage {
       .read(cx)
       .selected_entry()
       .map(|entry| entry.item().id.to_string());
-    let (items, nodes) = Self::build_history_tree_items(
+    let (items, nodes) = build_history_tree_items(
       &self.history_rows_cache,
       &self.history_commit_files,
       &self.history_commit_files_loading,
@@ -112,68 +41,6 @@ impl GitPage {
       }
     });
     cx.notify();
-  }
-
-  pub(super) fn build_history_tree_items(
-    rows: &[HistoryRenderRow],
-    files_by_commit: &HashMap<String, Vec<HistoryCommitFileRow>>,
-    loading_commits: &HashSet<String>,
-    expanded_commits: &HashSet<String>,
-  ) -> (Vec<TreeItem>, HashMap<String, HistoryTreeNode>) {
-    let mut items = Vec::with_capacity(rows.len());
-    let mut nodes = HashMap::new();
-
-    for row in rows {
-      let commit_id = format!("history-commit:{}", row.commit.oid);
-      nodes.insert(
-        commit_id.clone(),
-        HistoryTreeNode::Commit {
-          oid: row.commit.oid.clone(),
-        },
-      );
-      let mut children = Vec::new();
-      if loading_commits.contains(row.commit.oid.as_str()) {
-        let loading_id = format!("history-loading:{}", row.commit.oid);
-        nodes.insert(loading_id.clone(), HistoryTreeNode::Placeholder);
-        children.push(TreeItem::new(loading_id, "Loading files..."));
-      } else if let Some(files) = files_by_commit.get(row.commit.oid.as_str()) {
-        if files.is_empty() {
-          let empty_id = format!("history-empty:{}", row.commit.oid);
-          nodes.insert(empty_id.clone(), HistoryTreeNode::Placeholder);
-          children.push(TreeItem::new(empty_id, "No files changed"));
-        } else {
-          for (file_index, file) in files.iter().enumerate() {
-            let file_id = format!("history-file:{}:{}", row.commit.oid, file_index);
-            nodes.insert(
-              file_id.clone(),
-              HistoryTreeNode::File {
-                commit_oid: row.commit.oid.clone(),
-                file: file.clone(),
-              },
-            );
-            children.push(TreeItem::new(file_id, file.label.clone()));
-          }
-        }
-      } else {
-        let hint_id = format!("history-hint:{}", row.commit.oid);
-        nodes.insert(
-          hint_id.clone(),
-          HistoryTreeNode::LoadHint {
-            oid: row.commit.oid.clone(),
-          },
-        );
-        children.push(TreeItem::new(hint_id, "Load files..."));
-      }
-
-      let is_expanded = expanded_commits.contains(row.commit.oid.as_str());
-      items.push(
-        TreeItem::new(commit_id, row.commit.summary.clone())
-          .children(children)
-          .expanded(is_expanded),
-      );
-    }
-
-    (items, nodes)
   }
 
   pub(super) fn sync_history_cache_with_commits(&mut self) {
@@ -559,7 +426,7 @@ impl GitPage {
                 )
             }
             Some(HistoryTreeNode::File { commit_oid, file }) => {
-              let status_kind = Self::history_change_kind_to_repo_status(file.kind);
+              let status_kind = history_change_kind_to_repo_status(file.kind);
               let status_color = Self::status_color(status_kind, &theme);
               let file_icon = file_icon_path_for_path_with_theme(&file.path, &theme)
                 .map(|path| img(path).size(px(FILE_ICON_SIZE_PX)).into_any_element())
@@ -670,6 +537,7 @@ impl GitPage {
 mod tests {
   use super::super::test_support::*;
   use super::*;
+  use git::CommitFileChangeKind;
 
   use gpui::TestAppContext;
 
@@ -697,8 +565,7 @@ mod tests {
 
     let loading = HashSet::new();
     let expanded = HashSet::from(["c2".to_string()]);
-    let (items, _) =
-      GitPage::build_history_tree_items(&rows, &files_by_commit, &loading, &expanded);
+    let (items, _) = build_history_tree_items(&rows, &files_by_commit, &loading, &expanded);
 
     assert!(!items[0].is_expanded());
     assert!(items[1].is_expanded());
@@ -717,8 +584,7 @@ mod tests {
     let loading = HashSet::new();
     let expanded = HashSet::from(["c3".to_string(), "c1".to_string()]);
 
-    let (items, _) =
-      GitPage::build_history_tree_items(&rows, &files_by_commit, &loading, &expanded);
+    let (items, _) = build_history_tree_items(&rows, &files_by_commit, &loading, &expanded);
 
     assert!(items[0].is_expanded());
     assert!(!items[1].is_expanded());
@@ -740,8 +606,7 @@ mod tests {
     let loading = HashSet::new();
     let expanded = HashSet::from(["c2".to_string()]);
 
-    let (items, nodes) =
-      GitPage::build_history_tree_items(&rows, &files_by_commit, &loading, &expanded);
+    let (items, nodes) = build_history_tree_items(&rows, &files_by_commit, &loading, &expanded);
     assert_eq!(items.len(), 2);
     assert_eq!(items[0].children.len(), 1);
     assert_eq!(items[0].children[0].label.as_ref(), "src/main.rs");
@@ -767,8 +632,7 @@ mod tests {
     let loading = HashSet::from(["c1".to_string()]);
     let expanded = HashSet::from(["c1".to_string()]);
 
-    let (items, nodes) =
-      GitPage::build_history_tree_items(&rows, &files_by_commit, &loading, &expanded);
+    let (items, nodes) = build_history_tree_items(&rows, &files_by_commit, &loading, &expanded);
     assert_eq!(items[0].children.len(), 1);
     assert_eq!(items[0].children[0].label.as_ref(), "Loading files...");
     assert!(matches!(
@@ -779,7 +643,7 @@ mod tests {
 
   #[test]
   fn should_refresh_history_for_poll_when_history_empty() {
-    assert!(GitPage::should_refresh_history_for_poll(
+    assert!(should_refresh_history_for_poll(
       true,
       true,
       Some(&make_history_revision("a")),
@@ -790,7 +654,7 @@ mod tests {
   #[test]
   fn should_not_refresh_history_for_poll_when_revision_unchanged() {
     let revision = make_history_revision("a");
-    assert!(!GitPage::should_refresh_history_for_poll(
+    assert!(!should_refresh_history_for_poll(
       true,
       false,
       Some(&revision),
@@ -802,7 +666,7 @@ mod tests {
   fn should_refresh_history_for_poll_when_revision_changed() {
     let cached = make_history_revision("a");
     let current = make_history_revision("b");
-    assert!(GitPage::should_refresh_history_for_poll(
+    assert!(should_refresh_history_for_poll(
       true,
       false,
       Some(&cached),
@@ -812,7 +676,7 @@ mod tests {
 
   #[test]
   fn should_not_refresh_history_for_poll_when_history_not_included() {
-    assert!(!GitPage::should_refresh_history_for_poll(
+    assert!(!should_refresh_history_for_poll(
       false,
       true,
       Some(&make_history_revision("a")),
@@ -822,7 +686,7 @@ mod tests {
 
   #[test]
   fn should_not_refresh_history_for_poll_when_revision_unavailable() {
-    assert!(!GitPage::should_refresh_history_for_poll(
+    assert!(!should_refresh_history_for_poll(
       true,
       false,
       Some(&make_history_revision("a")),
@@ -1164,31 +1028,31 @@ mod tests {
   #[test]
   fn history_change_kind_mapping_covers_all_variants() {
     assert_eq!(
-      GitPage::history_change_kind_to_repo_status(CommitFileChangeKind::Added),
+      history_change_kind_to_repo_status(CommitFileChangeKind::Added),
       RepoStatusKind::Added
     );
     assert_eq!(
-      GitPage::history_change_kind_to_repo_status(CommitFileChangeKind::Deleted),
+      history_change_kind_to_repo_status(CommitFileChangeKind::Deleted),
       RepoStatusKind::Deleted
     );
     assert_eq!(
-      GitPage::history_change_kind_to_repo_status(CommitFileChangeKind::Modified),
+      history_change_kind_to_repo_status(CommitFileChangeKind::Modified),
       RepoStatusKind::Modified
     );
     assert_eq!(
-      GitPage::history_change_kind_to_repo_status(CommitFileChangeKind::Renamed),
+      history_change_kind_to_repo_status(CommitFileChangeKind::Renamed),
       RepoStatusKind::Renamed
     );
     assert_eq!(
-      GitPage::history_change_kind_to_repo_status(CommitFileChangeKind::Copied),
+      history_change_kind_to_repo_status(CommitFileChangeKind::Copied),
       RepoStatusKind::Renamed
     );
     assert_eq!(
-      GitPage::history_change_kind_to_repo_status(CommitFileChangeKind::Typechange),
+      history_change_kind_to_repo_status(CommitFileChangeKind::Typechange),
       RepoStatusKind::TypeChange
     );
     assert_eq!(
-      GitPage::history_change_kind_to_repo_status(CommitFileChangeKind::Conflicted),
+      history_change_kind_to_repo_status(CommitFileChangeKind::Conflicted),
       RepoStatusKind::Conflicted
     );
   }

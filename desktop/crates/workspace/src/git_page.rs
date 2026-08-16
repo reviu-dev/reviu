@@ -14,16 +14,16 @@ use editor::{
   ReviewCommentDeleteHandler, ReviewCommentDisplayMode, ReviewCommentEditHandler,
 };
 use git::{
-  BranchKind, BranchRef, BranchStatus, CommitChangedFile, CommitFileChangeKind, HeadCommitStatus,
-  HistoryCommitNode, HistoryRevision, InteractiveRebaseTarget, InteractiveRebaseTodoEntry,
-  RepoStatusEntry, RepoStatusKind, abort_merge, abort_rebase, amend_commit,
-  branch_has_unpublished_commits, commit_changes, current_branch_status, current_branch_upstream,
-  current_github_remote_repo, current_head_sha, current_history_revision,
-  current_rebase_commit_message, default_remote_branch, default_stash_message, detached_head_label,
-  diff_set_from_patch, fetch, head_commit_status, is_merge_in_progress, is_rebase_in_progress,
-  list_branches, list_commit_changed_files, list_commit_history, list_interactive_rebase_commits,
-  list_repo_head_files, list_repo_status, list_stashes, load_commit_file_diff, push,
-  resolve_branch_ref, stage_all, start_interactive_rebase, switch_branch,
+  BranchKind, BranchRef, BranchStatus, HeadCommitStatus, HistoryCommitNode, HistoryRevision,
+  InteractiveRebaseTarget, InteractiveRebaseTodoEntry, RepoStatusEntry, RepoStatusKind,
+  abort_merge, abort_rebase, amend_commit, branch_has_unpublished_commits, commit_changes,
+  current_branch_status, current_branch_upstream, current_github_remote_repo, current_head_sha,
+  current_history_revision, current_rebase_commit_message, default_remote_branch,
+  default_stash_message, detached_head_label, diff_set_from_patch, fetch, head_commit_status,
+  is_merge_in_progress, is_rebase_in_progress, list_branches, list_commit_changed_files,
+  list_commit_history, list_interactive_rebase_commits, list_repo_head_files, list_repo_status,
+  list_stashes, load_commit_file_diff, push, resolve_branch_ref, stage_all,
+  start_interactive_rebase, switch_branch,
 };
 use gpui::{
   Anchor, AnyElement, AnyWindowHandle, App, Context, Entity, FocusHandle, Focusable, Global,
@@ -123,7 +123,6 @@ mod test_support;
 pub(crate) use pull_request_dialog::open_create_pull_request_dialog;
 
 use file_list::{format_git_file_name_label, render_repo_status_label};
-use history::{HistoryCommitFileRow, HistoryRenderRow, HistoryTreeNode};
 
 const SIDEBAR_DEFAULT_WIDTH: f32 = 400.0;
 const SIDEBAR_MIN_WIDTH: f32 = 250.0;
@@ -132,7 +131,6 @@ const STATUS_POLL_INTERVAL_MS: u64 = 3_000;
 const INACTIVE_STATUS_POLL_INTERVAL: Duration = Duration::from_secs(60);
 const UNPUBLISHED_BRANCH_RECHECK_INTERVAL: Duration = Duration::from_secs(30);
 const EDITOR_HEADER_HEIGHT: f32 = 40.0;
-const HISTORY_MAX_COMMITS: usize = 200;
 const HISTORY_AUTHOR_MAX_WIDTH: f32 = 180.0;
 const DETACHED_BRANCH_SELECT_SENTINEL: &str = "__reviu_detached_head__";
 const TRIGGER_DROPDOWN_SELECT_WIDTH: f32 = 350.0;
@@ -683,6 +681,10 @@ struct UnpublishedBranchCheckKey {
 use crate::agent_review::AgentReviewComments;
 use crate::changes_list::{ChangesList, ChangesListEvent};
 use crate::diff_view_policy::{DiffViewInputs, effective_diff_view};
+use crate::history_list::{
+  HISTORY_MAX_COMMITS, HistoryCommitFileRow, HistoryRenderRow, HistoryTreeNode,
+  build_history_tree_items, history_change_kind_to_repo_status, should_refresh_history_for_poll,
+};
 use crate::repo_command::{RepoCommand, RepoCommandOutcome, branch_ref_from_palette};
 use crate::repo_state::{
   PaletteCommand, RepoState, can_accept_all_conflicts, push_flags, should_publish_branch,
@@ -2440,7 +2442,7 @@ impl GitPage {
           } else {
             None
           };
-          let should_refresh_history = Self::should_refresh_history_for_poll(
+          let should_refresh_history = should_refresh_history_for_poll(
             include_history,
             history_empty,
             cached_history_revision.as_ref(),
@@ -2585,7 +2587,7 @@ impl GitPage {
         } else {
           None
         };
-        let should_refresh_history = Self::should_refresh_history_for_poll(
+        let should_refresh_history = should_refresh_history_for_poll(
           include_history,
           history_empty,
           cached_history_revision.as_ref(),
@@ -3391,19 +3393,6 @@ impl GitPage {
       .cloned()
       .map(HistoryRenderRow::from_commit)
       .collect()
-  }
-
-  fn history_change_kind_to_repo_status(kind: CommitFileChangeKind) -> RepoStatusKind {
-    match kind {
-      CommitFileChangeKind::Added => RepoStatusKind::Added,
-      CommitFileChangeKind::Deleted => RepoStatusKind::Deleted,
-      CommitFileChangeKind::Modified => RepoStatusKind::Modified,
-      CommitFileChangeKind::Renamed => RepoStatusKind::Renamed,
-      // RepoStatusKind does not have "Copied", closest visual semantics is renamed.
-      CommitFileChangeKind::Copied => RepoStatusKind::Renamed,
-      CommitFileChangeKind::Typechange => RepoStatusKind::TypeChange,
-      CommitFileChangeKind::Conflicted => RepoStatusKind::Conflicted,
-    }
   }
 }
 

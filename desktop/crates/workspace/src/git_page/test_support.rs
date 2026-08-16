@@ -1,7 +1,7 @@
 //! Shared fixtures for the git page tests.
 
 use super::*;
-use git::RepoStage;
+use git::{CommitChangedFile, CommitFileChangeKind, RepoStage};
 
 pub(super) use crate::test_support::{
   TempBareRepo, TempRepo, commit_text_file, force_checkout_head, head_oid, push_branch_to_remote,

@@ -160,6 +160,8 @@ pub struct SessionPage {
   editor: Option<Entity<Editor>>,
   binary_preview: Option<BinaryPreview>,
   selected_file: Option<PathBuf>,
+  /// Set while the center shows a file as it was in a commit.
+  opened_commit: Option<String>,
   open_file_generation: u64,
   open_file_task: Option<Task<()>>,
   agent_review: AgentReviewComments,
@@ -196,6 +198,9 @@ impl SessionPage {
         ReviewPanelEvent::OpenFile { path } => {
           this.open_diff(path.clone(), None, window, cx);
         }
+        ReviewPanelEvent::OpenCommitFile { commit_oid, path } => {
+          this.open_commit_file(commit_oid.clone(), path.clone(), window, cx);
+        }
         ReviewPanelEvent::Committed => {
           this.refresh_branch(cx);
         }
@@ -213,6 +218,7 @@ impl SessionPage {
       editor: None,
       binary_preview: None,
       selected_file: None,
+      opened_commit: None,
       open_file_generation: 0,
       open_file_task: None,
       agent_review: AgentReviewComments::new(),
@@ -267,6 +273,7 @@ impl SessionPage {
     };
     // Previewing is a detour, not a mode: opening a file always shows its code.
     self.show_preview = false;
+    let left_commit_file = self.leave_commit_file(cx);
     let app_settings = crate::config::AppSettings::get(cx);
     self.diff_view = if app_settings.split_diff_view {
       DiffViewMode::Split
@@ -283,7 +290,9 @@ impl SessionPage {
     let reveal_doc_line = reveal_line.map(|line| line.saturating_sub(1) as usize);
 
     self.center = CenterView::Diff;
-    if self.selected_file.as_ref() == Some(&rel_path) && self.editor.is_some() {
+    // Same path, but the snapshot of a commit is not the working-tree file.
+    if !left_commit_file && self.selected_file.as_ref() == Some(&rel_path) && self.editor.is_some()
+    {
       if let (Some(doc_line), Some(editor)) = (reveal_doc_line, self.editor.clone()) {
         editor.update(cx, |editor, cx| editor.reveal_source_line(doc_line, cx));
       }
@@ -352,6 +361,78 @@ impl SessionPage {
 
   /// Split needs two sides to compare: a whole-file change or a binary preview
   /// falls back to inline.
+  /// A file as it was in a commit: a read-only snapshot with its own patch.
+  fn open_commit_file(
+    &mut self,
+    commit_oid: String,
+    rel_path: PathBuf,
+    window: &mut Window,
+    cx: &mut Context<Self>,
+  ) {
+    let Some(repo_root) = self.selected_repo.clone() else {
+      return;
+    };
+    self.show_preview = false;
+    self.center = CenterView::Diff;
+    self.open_file_generation = self.open_file_generation.wrapping_add(1);
+    let generation = self.open_file_generation;
+    self.selected_file = Some(rel_path.clone());
+    self.opened_commit = Some(commit_oid.clone());
+    self.editor = None;
+    self.binary_preview = None;
+    let hide_whitespace = self.hide_whitespace;
+    let diff_view = self.effective_diff_view(&rel_path, cx);
+
+    let task = cx.spawn(async move |this, cx| {
+      let load_repo_root = repo_root.clone();
+      let load_commit_oid = commit_oid.clone();
+      let load_rel_path = rel_path.clone();
+      let commit_file = unblock(move || {
+        git::load_commit_file_diff(&load_repo_root, &load_commit_oid, &load_rel_path)
+      })
+      .await;
+      let _ = this.update(cx, move |this, cx| {
+        if this.open_file_generation != generation {
+          return;
+        }
+        let Ok(commit_file) = commit_file else {
+          return;
+        };
+
+        let file_path = repo_root.join(&rel_path);
+        let editor = cx.new(|cx| Editor::new_with_paths(repo_root.clone(), file_path, cx));
+        let diff_set = if commit_file.patch.trim().is_empty() {
+          None
+        } else {
+          git::diff_set_from_patch(&commit_file.patch).ok()
+        };
+        editor.update(cx, |editor, cx| {
+          editor.load_readonly_snapshot(commit_file.content, diff_set, cx);
+          editor.set_diff_view_mode(diff_view, cx);
+          editor.set_ignore_whitespace(hide_whitespace, cx);
+        });
+        this.binary_preview =
+          build_binary_preview(rel_path.as_path(), commit_file.binary_bytes.clone());
+        this.editor = Some(editor);
+        this.svg_preview.update(cx, |preview, _| preview.clear());
+        cx.notify();
+      });
+    });
+    self.open_file_task = Some(task);
+    self.focus_editor_on_next_frame(window, cx);
+    cx.notify();
+  }
+
+  /// Back to the working tree: the history row stops being the open one.
+  fn leave_commit_file(&mut self, cx: &mut Context<Self>) -> bool {
+    if self.opened_commit.take().is_none() {
+      return false;
+    }
+    let history = self.review_panel.read(cx).history_list.clone();
+    history.update(cx, |list, cx| list.set_opened(None, cx));
+    true
+  }
+
   fn effective_diff_view(&self, path: &Path, cx: &App) -> DiffViewMode {
     effective_diff_view(DiffViewInputs {
       preferred: self.diff_view,
@@ -364,6 +445,10 @@ impl SessionPage {
   /// A file opened from the Files tab with no pending change has nothing to
   /// compare: the toggle would show the same content twice.
   fn selected_file_has_changes(&self, cx: &App) -> bool {
+    // A commit snapshot always carries its own patch.
+    if self.opened_commit.is_some() {
+      return true;
+    }
     let Some(path) = self.selected_file.as_deref() else {
       return false;
     };
@@ -1427,6 +1512,66 @@ mod tests {
         ids.contains(&CommandPaletteCommandId::Pull),
         "a tracked branch can be pulled"
       );
+    });
+  }
+
+  #[gpui::test]
+  async fn a_file_from_the_history_opens_read_only_in_the_center(cx: &mut TestAppContext) {
+    let repo = TempRepo::init("session-page-history-file");
+    commit_text_file(&repo.path, Path::new("a.txt"), "v1\n", "initial");
+    let first = git::current_head_sha(&repo.path)
+      .expect("head sha")
+      .expect("head sha");
+    commit_text_file(&repo.path, Path::new("a.txt"), "v2\n", "second");
+    std::fs::write(repo.path.join("a.txt"), "v3 working\n").expect("update worktree");
+
+    let (page, cx) = add_session_page_window(repo.path.clone(), cx);
+    cx.executor().allow_parking();
+    page.update(cx, |page, cx| {
+      page.review_panel.update(cx, |panel, cx| panel.refresh(cx))
+    });
+    cx.run_until_parked();
+
+    let history = page.read_with(cx, |page, cx| {
+      page.review_panel.read(cx).history_list.clone()
+    });
+    history.update(cx, |list, cx| {
+      list.open_commit_file(first.clone(), PathBuf::from("a.txt"), cx)
+    });
+    await_open_file(&page, cx).await;
+
+    page.read_with(cx, |page, cx| {
+      assert_eq!(page.center, CenterView::Diff);
+      assert_eq!(page.opened_commit.as_deref(), Some(first.as_str()));
+      let editor = page.editor.as_ref().expect("editor").read(cx);
+      // The commit content, not what the worktree holds now.
+      let first_line = editor
+        .document()
+        .read(cx)
+        .line_content(0)
+        .expect("first line")
+        .to_string();
+      assert_eq!(first_line.trim_end(), "v1");
+      assert!(editor.is_read_only, "a commit snapshot cannot be edited");
+    });
+
+    // Back to the working tree: the history row stops being the open one.
+    page.update_in(cx, |page, window, cx| {
+      page.open_diff(PathBuf::from("a.txt"), None, window, cx);
+    });
+    await_open_file(&page, cx).await;
+
+    page.read_with(cx, |page, cx| {
+      assert!(page.opened_commit.is_none());
+      let editor = page.editor.as_ref().expect("editor").read(cx);
+      let first_line = editor
+        .document()
+        .read(cx)
+        .line_content(0)
+        .expect("first line")
+        .to_string();
+      assert_eq!(first_line.trim_end(), "v3 working");
+      assert!(!editor.is_read_only);
     });
   }
 
