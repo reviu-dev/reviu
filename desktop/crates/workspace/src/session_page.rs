@@ -1966,6 +1966,162 @@ mod tests {
   }
 
   #[gpui::test]
+  async fn the_branch_and_stash_commands_do_what_they_say(cx: &mut TestAppContext) {
+    let repo = TempRepo::init("session-page-branch-commands");
+    commit_text_file(&repo.path, Path::new("a.txt"), "v1\n", "initial");
+    let base = git::current_branch_status(&repo.path)
+      .expect("branch status")
+      .name;
+
+    let (page, cx) = add_session_page_window(repo.path.clone(), cx);
+    cx.executor().allow_parking();
+    let refresh = page.update(cx, |page, cx| {
+      page.refresh_branch(cx);
+      page.dock_panel.update(cx, |panel, cx| {
+        panel.refresh(cx);
+        panel._refresh_task.take().expect("refresh task")
+      })
+    });
+    refresh.await;
+    await_branch_refresh(&page, cx).await;
+
+    // Git prepares a stash message from HEAD; the palette offers it.
+    page.read_with(cx, |page, _| {
+      assert!(
+        page.default_stash_message.is_some(),
+        "the stash screen starts with a message"
+      );
+    });
+
+    let run = |page: &Entity<SessionPage>,
+               cx: &mut gpui::VisualTestContext,
+               action: CommandPaletteAction| {
+      page.update_in(cx, |page, window, cx| {
+        page
+          .handle_command_palette_action(action, window, cx)
+          .expect("the command runs")
+      });
+      page.update(cx, |page, _| page._repo_command_task.take())
+    };
+
+    // Creating a branch switches to it.
+    let task = run(
+      &page,
+      cx,
+      CommandPaletteAction::CreateBranch {
+        name: "feature".to_string(),
+      },
+    );
+    task.expect("command task").await;
+    cx.run_until_parked();
+    assert_eq!(
+      git::current_branch_status(&repo.path)
+        .expect("branch status")
+        .name,
+      "feature"
+    );
+
+    // A commit only on this branch, so the base actually matters below.
+    commit_text_file(
+      &repo.path,
+      Path::new("only-feature.txt"),
+      "x\n",
+      "feature only",
+    );
+
+    // Creating from a base starts there, whatever branch we are on.
+    let task = run(
+      &page,
+      cx,
+      CommandPaletteAction::CreateBranchFrom {
+        name: "from-base".to_string(),
+        base: ui::CommandPaletteBranch {
+          name: base.clone().into(),
+          kind: ui::CommandPaletteBranchKind::Local,
+        },
+      },
+    );
+    task.expect("command task").await;
+    cx.run_until_parked();
+    assert_eq!(
+      git::current_branch_status(&repo.path)
+        .expect("branch status")
+        .name,
+      "from-base"
+    );
+    assert!(
+      !repo.path.join("only-feature.txt").exists(),
+      "the new branch starts at the base, not at the branch we were on"
+    );
+
+    // Deleting the branch we left behind.
+    let task = run(
+      &page,
+      cx,
+      CommandPaletteAction::DeleteBranch(ui::CommandPaletteBranch {
+        name: "feature".into(),
+        kind: ui::CommandPaletteBranchKind::Local,
+      }),
+    );
+    task.expect("command task").await;
+    cx.run_until_parked();
+    assert!(
+      !git::list_branches(&repo.path)
+        .expect("branches")
+        .iter()
+        .any(|branch| branch.name == "feature")
+    );
+
+    // Stashing from the palette puts the change aside.
+    std::fs::write(repo.path.join("a.txt"), "v2\n").expect("update file");
+    let task = run(
+      &page,
+      cx,
+      CommandPaletteAction::Stash {
+        include_untracked: false,
+        message: Some("from the palette".to_string()),
+      },
+    );
+    task.expect("command task").await;
+    cx.run_until_parked();
+    assert_eq!(
+      std::fs::read_to_string(repo.path.join("a.txt")).expect("read file"),
+      "v1\n"
+    );
+    assert_eq!(git::list_stashes(&repo.path).expect("stashes").len(), 1);
+
+    // Cherry-picking a commit from the base branch.
+    let base_ref = git::BranchRef {
+      name: base.clone(),
+      kind: git::BranchKind::Local,
+    };
+    git::switch_branch(&repo.path, &base_ref).expect("switch to base");
+    commit_text_file(&repo.path, Path::new("b.txt"), "picked\n", "pick me");
+    let picked = git::current_head_sha(&repo.path)
+      .expect("head sha")
+      .expect("head sha");
+    git::switch_branch(
+      &repo.path,
+      &git::BranchRef {
+        name: "from-base".to_string(),
+        kind: git::BranchKind::Local,
+      },
+    )
+    .expect("switch back");
+
+    let task = run(
+      &page,
+      cx,
+      CommandPaletteAction::CherryPick {
+        commit_hashes: vec![picked],
+      },
+    );
+    task.expect("command task").await;
+    cx.run_until_parked();
+    assert!(repo.path.join("b.txt").exists());
+  }
+
+  #[gpui::test]
   async fn a_branch_switch_waits_for_the_agent(cx: &mut TestAppContext) {
     let repo = TempRepo::init("session-page-branch-switch-guard");
     commit_text_file(&repo.path, Path::new("a.txt"), "v1\n", "initial");
@@ -1992,6 +2148,27 @@ mod tests {
     assert_eq!(
       refused.expect_err("refused mid-turn").as_ref(),
       "Wait for the agent to finish before switching branch."
+    );
+
+    // Creating a branch switches to it, so it waits too.
+    let refused = page.update_in(cx, |page, window, cx| {
+      page.handle_command_palette_action(
+        CommandPaletteAction::CreateBranch {
+          name: "another".to_string(),
+        },
+        window,
+        cx,
+      )
+    });
+    assert_eq!(
+      refused.expect_err("refused mid-turn").as_ref(),
+      "Wait for the agent to finish before switching branch."
+    );
+    assert!(
+      !git::list_branches(&repo.path)
+        .expect("branches")
+        .iter()
+        .any(|branch| branch.name == "another")
     );
     assert_eq!(
       git::current_branch_status(&repo.path)
