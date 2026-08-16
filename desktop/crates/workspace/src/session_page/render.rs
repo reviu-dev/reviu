@@ -416,6 +416,36 @@ impl SessionPage {
       .into_any_element()
   }
 
+  /// The todo of an interactive rebase takes the whole center: it is a table to
+  /// edit, not a side panel.
+  pub(super) fn render_interactive_rebase(&mut self, cx: &mut Context<Self>) -> AnyElement {
+    let theme = cx.theme().clone();
+    let Some(todo_view) = self.interactive_rebase_todo_view.clone() else {
+      return div().into_any_element();
+    };
+
+    v_flex()
+      .size_full()
+      .min_h_0()
+      .min_w(px(0.0))
+      .debug_selector(|| INTERACTIVE_REBASE_DEBUG_SELECTOR.to_string())
+      .child(
+        h_flex()
+          .h(px(40.))
+          .min_h(px(40.))
+          .flex_shrink_0()
+          .items_center()
+          .gap_2()
+          .px_3()
+          .border_b_1()
+          .border_color(theme.border)
+          .child(gpui_component::Icon::new(UiIconName::GitMerge).size_3())
+          .child(div().text_sm().child("Interactive rebase")),
+      )
+      .child(div().flex_1().min_h_0().child(todo_view))
+      .into_any_element()
+  }
+
   pub(super) fn render_center(
     &mut self,
     window: &mut Window,
@@ -426,6 +456,10 @@ impl SessionPage {
       CenterView::Conversation => (
         SharedString::from("session-center-conversation"),
         self.render_conversation(cx),
+      ),
+      CenterView::InteractiveRebase => (
+        SharedString::from("session-center-interactive-rebase"),
+        self.render_interactive_rebase(cx),
       ),
       CenterView::Diff => {
         let file = self

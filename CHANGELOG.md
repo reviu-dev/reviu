@@ -92,6 +92,10 @@ Opening a `.md` or `.svg` in the Sessions workspace showed raw text. A Preview b
 
 The Sessions workspace applied the whitespace setting when opening a file but gave you no way to change your mind. The diff header now carries the same Whitespace button as the Git page, with `cmd-alt-/`, and the choice holds for the rest of the session instead of resetting on every file. A file with no pending change, or a file being previewed, has no diff on screen: the button steps aside there, like the inline/split control.
 
+### Rewrite History From The Sessions Workspace
+
+Interactive rebase is available in the Sessions workspace: pick it from the palette on a branch or on the last N commits, and the todo takes the whole center, where a table of commits belongs. Reorder, squash, fixup or drop, then apply; a rebase that stops on a conflict opens the file with the message git prepared. It is offered only with a clean working tree, and Force push joins the palette next to Push for the branch you just rewrote.
+
 ### Resolve Conflicts In The Sessions Workspace
 
 A conflicted file opened in the Sessions workspace now carries the same tools as the Git page: Accept All Current and Accept All Incoming in the diff header, and the same two commands in the palette. The arrows next to them, and `cmd-alt-up` / `cmd-alt-down`, walk conflict by conflict on a conflicted file and change by change everywhere else, with a counter saying where you are.

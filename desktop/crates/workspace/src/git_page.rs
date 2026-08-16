@@ -657,6 +657,7 @@ use crate::history_list::{
   HISTORY_MAX_COMMITS, HistoryCommitFileRow, HistoryRenderRow, HistoryTreeNode,
   build_history_tree_items, history_change_kind_to_repo_status, should_refresh_history_for_poll,
 };
+use crate::palette_branches::{palette_branch, rebase_branch_candidates};
 use crate::repo_command::{RepoCommand, RepoCommandOutcome, branch_ref_from_palette};
 use crate::repo_state::{
   PaletteCommand, RepoState, can_accept_all_conflicts, push_flags, should_publish_branch,

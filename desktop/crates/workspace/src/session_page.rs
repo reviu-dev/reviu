@@ -39,13 +39,20 @@ use crate::git_page::{
 };
 use crate::github_notifications::{self, GithubNotificationsStore};
 use crate::navigation::NavigationHistory;
-use git::RepoStatusKind;
+use git::{InteractiveRebaseTarget, RepoStatusKind};
+
+use crate::interactive_rebase;
+use crate::interactive_rebase_todo_view::{
+  InteractiveRebaseTodoView, InteractiveRebaseTodoViewCancelHandler,
+  InteractiveRebaseTodoViewConfig, InteractiveRebaseTodoViewHandler,
+};
 
 use crate::annotations::{
   AnnotationDirection, AnnotationNavigationState, annotation_navigation_state_for,
   can_navigate_annotations, navigate_annotation,
 };
-use crate::repo_command::{RepoCommand, RepoCommandOutcome};
+use crate::palette_branches::rebase_branch_candidates;
+use crate::repo_command::{RepoCommand, RepoCommandOutcome, branch_ref_from_palette};
 use crate::repo_state::{PaletteCommand, RepoState, can_accept_all_conflicts, push_flags};
 use crate::svg_preview::SvgPreview;
 use crate::{
@@ -54,8 +61,8 @@ use crate::{
 use ui::{
   Button, ButtonVariants as _, CommandPalette, CommandPaletteAction, CommandPaletteCommand,
   CommandPaletteConfig, CommandPaletteHandler, CommandPaletteInitialScreen, CommandPalettePage,
-  CommandPaletteRepository, SearchFileEntry, SearchFileHandler, StatusThemeExt as _, UiIconName,
-  WindowExt as _,
+  CommandPaletteRepository, ConfirmDialog, SearchFileEntry, SearchFileHandler, StatusThemeExt as _,
+  UiIconName, WindowExt as _,
 };
 
 const DIFF_VIEW_TOGGLE_DEBUG_SELECTOR: &str = "session-diff-view-toggle";
@@ -64,6 +71,7 @@ const WHITESPACE_TOGGLE_DEBUG_SELECTOR: &str = "session-whitespace-toggle";
 const ACCEPT_ALL_CURRENT_DEBUG_SELECTOR: &str = "session-accept-all-current";
 const ACCEPT_ALL_INCOMING_DEBUG_SELECTOR: &str = "session-accept-all-incoming";
 const ANNOTATION_COUNTER_DEBUG_SELECTOR: &str = "session-annotation-counter";
+const INTERACTIVE_REBASE_DEBUG_SELECTOR: &str = "session-interactive-rebase";
 const PREVIEW_PANE_DEBUG_SELECTOR: &str = "session-preview-pane";
 const REPO_CONTEXT_DEBUG_SELECTOR: &str = "session-repo-context";
 const REPO_AHEAD_DEBUG_SELECTOR: &str = "session-repo-ahead";
@@ -108,6 +116,8 @@ pub(crate) fn session_row_title(meta: &ConversationMeta) -> SharedString {
 enum CenterView {
   Conversation,
   Diff,
+  /// The todo of an interactive rebase, waiting to be applied.
+  InteractiveRebase,
 }
 
 /// Global entry point so other pages (git page review comments, selections)
@@ -171,6 +181,8 @@ pub struct SessionPage {
   selected_file: Option<PathBuf>,
   /// Set while the center shows a file as it was in a commit.
   opened_commit: Option<String>,
+  interactive_rebase_todo_view: Option<Entity<InteractiveRebaseTodoView>>,
+  _interactive_rebase_task: Option<Task<()>>,
   /// Mounting a real agent panel in a test would spawn an agent process.
   #[cfg(test)]
   pretend_agent_turn_in_flight: bool,
@@ -178,6 +190,9 @@ pub struct SessionPage {
   open_file_task: Option<Task<()>>,
   agent_review: AgentReviewComments,
   branch_status: Option<git::BranchStatus>,
+  branches: Vec<git::BranchRef>,
+  upstream_branch: Option<git::BranchRef>,
+  default_branch: Option<git::BranchRef>,
   diff_view: DiffViewMode,
   hide_whitespace: bool,
   show_preview: bool,
@@ -236,12 +251,17 @@ impl SessionPage {
       binary_preview: None,
       selected_file: None,
       opened_commit: None,
+      interactive_rebase_todo_view: None,
+      _interactive_rebase_task: None,
       #[cfg(test)]
       pretend_agent_turn_in_flight: false,
       open_file_generation: 0,
       open_file_task: None,
       agent_review: AgentReviewComments::new(),
       branch_status: None,
+      branches: Vec::new(),
+      upstream_branch: None,
+      default_branch: None,
       diff_view: DiffViewMode::Inline,
       hide_whitespace: false,
       show_preview: false,
@@ -271,9 +291,20 @@ impl SessionPage {
       return;
     };
     let task = cx.spawn(async move |this, cx| {
-      let status = unblock(move || git::current_branch_status(&repo_root)).await;
+      let (status, branches, upstream, default_branch) = unblock(move || {
+        (
+          git::current_branch_status(&repo_root),
+          git::list_branches(&repo_root),
+          git::current_branch_upstream(&repo_root),
+          git::default_remote_branch(&repo_root),
+        )
+      })
+      .await;
       let _ = this.update(cx, |this, cx| {
         this.branch_status = status.ok();
+        this.branches = branches.unwrap_or_default();
+        this.upstream_branch = upstream.ok().flatten();
+        this.default_branch = default_branch.ok().flatten();
         cx.notify();
       });
     });
@@ -815,6 +846,172 @@ impl SessionPage {
     }
   }
 
+  fn start_interactive_rebase(
+    &mut self,
+    target: InteractiveRebaseTarget,
+    window: &mut Window,
+    cx: &mut Context<Self>,
+  ) -> Result<(), SharedString> {
+    let Some(repo_root) = self.selected_repo.clone() else {
+      return Err("No repository selected.".into());
+    };
+    if !self
+      .repo_state("", cx)
+      .allows(PaletteCommand::InteractiveRebase)
+    {
+      return Err("Interactive rebase is currently disabled.".into());
+    }
+
+    let preview = interactive_rebase::prepare_commits(&repo_root, &target)?;
+    let commits = preview.commits;
+    let Some(dropped) = interactive_rebase::dropped_merges_message(preview.dropped_merge_count)
+    else {
+      self.open_interactive_rebase_todo(target, commits, window, cx);
+      return Ok(());
+    };
+
+    // Losing merge commits is the user's call, not ours.
+    let view = cx.entity();
+    window.on_next_frame(move |window, cx| {
+      let view = view.clone();
+      let target = target.clone();
+      let commits = commits.clone();
+      let dropped = dropped.clone();
+      window.open_alert_dialog(cx, move |alert, _, _| {
+        let view = view.clone();
+        let target = target.clone();
+        let commits = commits.clone();
+        ConfirmDialog::new(
+          SharedString::from("Drop merge commits?"),
+          div().child(dropped.clone()),
+        )
+        .confirm_text("Continue")
+        .cancel_text("Cancel")
+        .on_confirm(move |_, window, cx| {
+          let target = target.clone();
+          let commits = commits.clone();
+          view.update(cx, move |view, cx| {
+            view.open_interactive_rebase_todo(target, commits, window, cx);
+          });
+          true
+        })
+        .build(alert)
+      });
+    });
+    Ok(())
+  }
+
+  fn open_interactive_rebase_todo(
+    &mut self,
+    target: InteractiveRebaseTarget,
+    commits: Vec<git::InteractiveRebaseCommit>,
+    window: &mut Window,
+    cx: &mut Context<Self>,
+  ) {
+    let view_for_submit = cx.entity();
+    let on_submit: InteractiveRebaseTodoViewHandler =
+      Arc::new(move |target, todo_entries, window, cx| {
+        view_for_submit.update(cx, |view, cx| {
+          view.apply_interactive_rebase(target, todo_entries, window, cx)
+        })
+      });
+    let view_for_cancel = cx.entity();
+    let on_cancel: InteractiveRebaseTodoViewCancelHandler = Arc::new(move |window, cx| {
+      view_for_cancel.update(cx, |view, cx| {
+        view.close_interactive_rebase_todo(window, cx);
+      });
+    });
+
+    let config = InteractiveRebaseTodoViewConfig::new(target, commits, on_submit, on_cancel);
+    let todo_view = cx.new(|cx| InteractiveRebaseTodoView::new(window, cx, config));
+    self.interactive_rebase_todo_view = Some(todo_view.clone());
+    self.center = CenterView::InteractiveRebase;
+    cx.on_next_frame(window, move |_, window, cx| {
+      todo_view.update(cx, |view, cx| view.focus_rows_list(window, cx));
+    });
+    cx.notify();
+  }
+
+  pub(super) fn close_interactive_rebase_todo(
+    &mut self,
+    window: &mut Window,
+    cx: &mut Context<Self>,
+  ) {
+    self.interactive_rebase_todo_view = None;
+    self.center = if self.editor.is_some() {
+      CenterView::Diff
+    } else {
+      CenterView::Conversation
+    };
+    self.focus_editor_on_next_frame(window, cx);
+    cx.notify();
+  }
+
+  fn apply_interactive_rebase(
+    &mut self,
+    target: InteractiveRebaseTarget,
+    todo_entries: Vec<git::InteractiveRebaseTodoEntry>,
+    window: &mut Window,
+    cx: &mut Context<Self>,
+  ) -> Result<(), SharedString> {
+    let Some(repo_root) = self.selected_repo.clone() else {
+      return Err("No repository selected.".into());
+    };
+    self.close_interactive_rebase_todo(window, cx);
+
+    let success_message = interactive_rebase::success_message(&target);
+    let window_handle = self.window_handle;
+    let task = cx.spawn(async move |this, cx| {
+      let run_repo_root = repo_root.clone();
+      let result =
+        unblock(move || git::start_interactive_rebase(&run_repo_root, &target, &todo_entries))
+          .await;
+      let stopped_on_conflict = git::is_rebase_in_progress(&repo_root).unwrap_or(false);
+      let conflicted_path = crate::repo_command::first_conflicted_path(&repo_root);
+      let rebase_message = stopped_on_conflict
+        .then(|| {
+          git::current_rebase_commit_message(&repo_root)
+            .ok()
+            .flatten()
+        })
+        .flatten();
+
+      let _ = cx.update_window(window_handle, |_, window, cx| {
+        let _ = this.update(cx, |this, cx| {
+          match (&result, stopped_on_conflict) {
+            (Ok(()), false) => {
+              window.push_notification(Notification::success(success_message.clone()), cx);
+              this
+                .dock_panel
+                .update(cx, |panel, cx| panel.set_commit_message("", window, cx));
+            }
+            // A rebase that stopped on a conflict is not a failure.
+            (Err(error), false) => {
+              window.push_notification(
+                Notification::error(format!("Interactive rebase failed: {error}")),
+                cx,
+              );
+            }
+            _ => {}
+          }
+          if let Some(message) = rebase_message {
+            this.dock_panel.update(cx, |panel, cx| {
+              panel.set_commit_message(&message, window, cx)
+            });
+          }
+          this.dock_panel.update(cx, |panel, cx| panel.refresh(cx));
+          this.refresh_branch(cx);
+          if let Some(path) = conflicted_path {
+            this.open_diff(path, None, window, cx);
+          }
+          cx.notify();
+        });
+      });
+    });
+    self._interactive_rebase_task = Some(task);
+    Ok(())
+  }
+
   fn run_repo_command(
     &mut self,
     command: RepoCommand,
@@ -1042,6 +1239,12 @@ impl SessionPage {
       if state.allows(PaletteCommand::Push) {
         commands.push(CommandPaletteCommand::push("Push"));
       }
+      if state.allows(PaletteCommand::ForcePush) {
+        commands.push(CommandPaletteCommand::force_push());
+      }
+      if state.allows(PaletteCommand::InteractiveRebase) {
+        commands.push(CommandPaletteCommand::interactive_rebase());
+      }
       if state.allows(PaletteCommand::Pull) {
         commands.push(CommandPaletteCommand::pull());
       }
@@ -1075,8 +1278,18 @@ impl SessionPage {
       })
     });
 
-    let mut config =
-      CommandPaletteConfig::new(Vec::new(), commands, handler).with_repositories(repositories);
+    let rebase_branches = rebase_branch_candidates(
+      &self.branches,
+      self
+        .branch_status
+        .as_ref()
+        .map(|status| status.name.as_str()),
+      self.upstream_branch.as_ref(),
+      self.default_branch.as_ref(),
+    );
+    let mut config = CommandPaletteConfig::new(Vec::new(), commands, handler)
+      .with_repositories(repositories)
+      .with_rebase_branches(rebase_branches);
     if let Some(initial_screen) = initial_screen {
       config = config.with_initial_screen(initial_screen);
     }
@@ -1123,6 +1336,21 @@ impl SessionPage {
         self.run_repo_command(RepoCommand::UnstageAll, window, cx)
       }
       CommandPaletteAction::Push => self.run_repo_command(RepoCommand::Push, window, cx),
+      CommandPaletteAction::ForcePush => self.run_repo_command(RepoCommand::ForcePush, window, cx),
+      CommandPaletteAction::InteractiveRebaseBranch { ref name } => self.start_interactive_rebase(
+        InteractiveRebaseTarget::Branch(branch_ref_from_palette(name)),
+        window,
+        cx,
+      ),
+      CommandPaletteAction::InteractiveRebaseEditBranch { ref name } => self
+        .start_interactive_rebase(
+          InteractiveRebaseTarget::BranchInPlace(branch_ref_from_palette(name)),
+          window,
+          cx,
+        ),
+      CommandPaletteAction::InteractiveRebaseHeadCount { count } => {
+        self.start_interactive_rebase(InteractiveRebaseTarget::HeadCount(count), window, cx)
+      }
       CommandPaletteAction::Pull => self.run_repo_command(RepoCommand::Pull, window, cx),
       CommandPaletteAction::Fetch => self.run_repo_command(RepoCommand::Fetch, window, cx),
       CommandPaletteAction::OpenRepository => {
@@ -1273,6 +1501,134 @@ mod tests {
         page.dock_panel.read(cx).repo_root(),
         Some(other.path.as_path())
       );
+    });
+  }
+
+  #[gpui::test]
+  async fn an_interactive_rebase_runs_from_the_center(cx: &mut TestAppContext) {
+    let repo = TempRepo::init("session-page-interactive-rebase");
+    commit_text_file(&repo.path, Path::new("a.txt"), "v1\n", "first");
+    commit_text_file(&repo.path, Path::new("b.txt"), "v1\n", "second");
+    commit_text_file(&repo.path, Path::new("c.txt"), "v1\n", "third");
+
+    let (page, cx) = add_session_page_window(repo.path.clone(), cx);
+    cx.executor().allow_parking();
+    let refresh = page.update(cx, |page, cx| {
+      page.refresh_branch(cx);
+      page.dock_panel.update(cx, |panel, cx| {
+        panel.refresh(cx);
+        panel._refresh_task.take().expect("refresh task")
+      })
+    });
+    refresh.await;
+    await_branch_refresh(&page, cx).await;
+
+    page.read_with(cx, |page, cx| {
+      let ids = page
+        .palette_commands(1, cx)
+        .into_iter()
+        .map(|command| command.id)
+        .collect::<Vec<_>>();
+      assert!(ids.contains(&CommandPaletteCommandId::InteractiveRebase));
+    });
+
+    page.update_in(cx, |page, window, cx| {
+      page
+        .handle_command_palette_action(
+          CommandPaletteAction::InteractiveRebaseHeadCount { count: 2 },
+          window,
+          cx,
+        )
+        .expect("the todo opens")
+    });
+    cx.run_until_parked();
+
+    let commits = page.read_with(cx, |page, _| {
+      assert_eq!(page.center, CenterView::InteractiveRebase);
+      assert!(page.interactive_rebase_todo_view.is_some());
+      git::list_interactive_rebase_commits(&repo.path, &InteractiveRebaseTarget::HeadCount(2))
+        .expect("preview")
+        .commits
+    });
+    assert_eq!(commits.len(), 2);
+
+    // Drop the last commit, keep the other.
+    let todo = vec![
+      git::InteractiveRebaseTodoEntry {
+        oid: commits[0].oid.clone(),
+        action: git::InteractiveRebaseAction::Pick,
+      },
+      git::InteractiveRebaseTodoEntry {
+        oid: commits[1].oid.clone(),
+        action: git::InteractiveRebaseAction::Drop,
+      },
+    ];
+    page.update_in(cx, |page, window, cx| {
+      page
+        .apply_interactive_rebase(InteractiveRebaseTarget::HeadCount(2), todo, window, cx)
+        .expect("the rebase starts")
+    });
+    let task = page.update(cx, |page, _| {
+      page._interactive_rebase_task.take().expect("rebase task")
+    });
+    task.await;
+    cx.run_until_parked();
+
+    // The todo left the center, and the dropped commit is gone.
+    page.read_with(cx, |page, _| {
+      assert!(page.interactive_rebase_todo_view.is_none());
+      assert_ne!(page.center, CenterView::InteractiveRebase);
+    });
+    let summaries = git::list_commit_history(&repo.path, 10)
+      .expect("history")
+      .into_iter()
+      .map(|commit| commit.summary)
+      .collect::<Vec<_>>();
+    assert!(!summaries.contains(&"third".to_string()));
+    assert!(summaries.contains(&"second".to_string()));
+  }
+
+  #[gpui::test]
+  async fn an_interactive_rebase_is_refused_with_uncommitted_changes(cx: &mut TestAppContext) {
+    let repo = TempRepo::init("session-page-interactive-rebase-dirty");
+    commit_text_file(&repo.path, Path::new("a.txt"), "v1\n", "first");
+    commit_text_file(&repo.path, Path::new("a.txt"), "v2\n", "second");
+    std::fs::write(repo.path.join("a.txt"), "v3 working\n").expect("dirty the worktree");
+
+    let (page, cx) = add_session_page_window(repo.path.clone(), cx);
+    cx.executor().allow_parking();
+    let refresh = page.update(cx, |page, cx| {
+      page.refresh_branch(cx);
+      page.dock_panel.update(cx, |panel, cx| {
+        panel.refresh(cx);
+        panel._refresh_task.take().expect("refresh task")
+      })
+    });
+    refresh.await;
+    await_branch_refresh(&page, cx).await;
+
+    page.read_with(cx, |page, cx| {
+      let ids = page
+        .palette_commands(1, cx)
+        .into_iter()
+        .map(|command| command.id)
+        .collect::<Vec<_>>();
+      assert!(
+        !ids.contains(&CommandPaletteCommandId::InteractiveRebase),
+        "rewriting history under uncommitted changes is refused"
+      );
+    });
+
+    let refused = page.update_in(cx, |page, window, cx| {
+      page.start_interactive_rebase(InteractiveRebaseTarget::HeadCount(2), window, cx)
+    });
+    assert_eq!(
+      refused.expect_err("refused").as_ref(),
+      "Interactive rebase is currently disabled."
+    );
+    page.read_with(cx, |page, _| {
+      assert_eq!(page.center, CenterView::Conversation);
+      assert!(page.interactive_rebase_todo_view.is_none());
     });
   }
 

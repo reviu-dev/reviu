@@ -134,68 +134,6 @@ impl GitPage {
     ui::open_palette_dialog(palette, window, cx);
   }
 
-  pub(super) fn command_palette_branch(branch: &BranchRef) -> CommandPaletteBranch {
-    CommandPaletteBranch {
-      name: branch.name.clone().into(),
-      kind: match branch.kind {
-        BranchKind::Local => CommandPaletteBranchKind::Local,
-        BranchKind::Remote => CommandPaletteBranchKind::Remote,
-      },
-    }
-  }
-
-  pub(super) fn command_palette_rebase_branches(
-    branches: &[BranchRef],
-    current_branch_name: Option<&str>,
-    upstream_branch: Option<&BranchRef>,
-    default_branch: Option<&BranchRef>,
-  ) -> Vec<CommandPaletteBranch> {
-    let mut candidates = branches
-      .iter()
-      .enumerate()
-      .filter(|(_, branch)| {
-        !matches!(
-          (branch.kind, current_branch_name),
-          (BranchKind::Local, Some(current_branch_name)) if branch.name == current_branch_name
-        )
-      })
-      .map(|(index, branch)| {
-        (
-          index,
-          Self::rebase_branch_priority(branch, upstream_branch, default_branch),
-          branch,
-        )
-      })
-      .collect::<Vec<_>>();
-
-    candidates.sort_by(|a, b| a.1.cmp(&b.1).then_with(|| a.0.cmp(&b.0)));
-    candidates
-      .into_iter()
-      .map(|(_, _, branch)| Self::command_palette_branch(branch))
-      .collect()
-  }
-
-  pub(super) fn rebase_branch_priority(
-    branch: &BranchRef,
-    upstream_branch: Option<&BranchRef>,
-    default_branch: Option<&BranchRef>,
-  ) -> usize {
-    if upstream_branch.is_some_and(|upstream| upstream == branch) {
-      return 0;
-    }
-    if default_branch.is_some_and(|default| default == branch) {
-      return 1;
-    }
-    match (branch.kind, branch.name.as_str()) {
-      (BranchKind::Local, "main" | "master") => 2,
-      (
-        BranchKind::Remote,
-        "origin/main" | "origin/master" | "upstream/main" | "upstream/master",
-      ) => 2,
-      _ => 3,
-    }
-  }
-
   pub(super) fn build_command_palette_contents(
     &self,
     palette_repositories_len: usize,
@@ -331,16 +269,13 @@ impl GitPage {
           .collect::<Vec<_>>();
         let upstream_branch = current_branch_upstream(&root_path).ok().flatten();
         let default_branch = default_remote_branch(&root_path).ok().flatten();
-        rebase_branches = Self::command_palette_rebase_branches(
+        rebase_branches = rebase_branch_candidates(
           &repo_branches,
           current_branch_name.as_deref(),
           upstream_branch.as_ref(),
           default_branch.as_ref(),
         );
-        branches = repo_branches
-          .iter()
-          .map(Self::command_palette_branch)
-          .collect::<Vec<_>>();
+        branches = repo_branches.iter().map(palette_branch).collect::<Vec<_>>();
         commands.push(CommandPaletteCommand::switch_branch());
         if !delete_branches.is_empty() {
           commands.push(CommandPaletteCommand::delete_branch());
@@ -3610,7 +3545,7 @@ mod tests {
       },
     ];
 
-    let rebase_branches = GitPage::command_palette_rebase_branches(
+    let rebase_branches = rebase_branch_candidates(
       &branches,
       Some("feature"),
       Some(&BranchRef {
