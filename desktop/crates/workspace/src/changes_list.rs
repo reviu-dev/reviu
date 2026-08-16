@@ -1355,4 +1355,137 @@ mod tests {
 
     let _ = std::fs::remove_dir_all(&repo_root);
   }
+
+  #[gpui::test]
+  async fn restore_all_handles_modified_untracked_and_renamed_files(cx: &mut gpui::TestAppContext) {
+    let repo_root = temp_repo("changes-list-restore-all");
+    // A second tracked file to rename, on top of the modified README.
+    std::fs::write(repo_root.join("keep.txt"), "kept\n").expect("write file");
+    stage_file(&repo_root, Path::new("keep.txt")).expect("stage");
+    {
+      let repo = git2::Repository::open(&repo_root).expect("open repo");
+      let mut index = repo.index().expect("index");
+      index.add_path(Path::new("keep.txt")).expect("add");
+      index.write().expect("write index");
+      let tree = repo
+        .find_tree(index.write_tree().expect("write tree"))
+        .expect("tree");
+      let parent = repo
+        .head()
+        .and_then(|head| head.peel_to_commit())
+        .expect("head");
+      let signature = git2::Signature::now("Test", "test@example.com").expect("signature");
+      repo
+        .commit(
+          Some("HEAD"),
+          &signature,
+          &signature,
+          "second",
+          &tree,
+          &[&parent],
+        )
+        .expect("commit");
+    }
+
+    std::fs::rename(repo_root.join("keep.txt"), repo_root.join("moved.txt")).expect("rename");
+    std::fs::write(repo_root.join("scratch.txt"), "temp\n").expect("write untracked");
+    stage_all(&repo_root).expect("stage everything");
+
+    let (list, cx) = add_changes_list_window(repo_root.clone(), cx);
+    cx.executor().allow_parking();
+    set_entries_from_disk(&list, cx, &repo_root);
+
+    let task = list.update_in(cx, |list, window, cx| {
+      list.restore_all(window, cx);
+      list._action_task.take().expect("restore all task")
+    });
+    task.await;
+    cx.run_until_parked();
+
+    assert_eq!(
+      std::fs::read_to_string(repo_root.join("README.md")).expect("read modified file"),
+      "v1\n",
+      "a modified file goes back to its committed content"
+    );
+    assert!(
+      repo_root.join("keep.txt").exists() && !repo_root.join("moved.txt").exists(),
+      "a rename is undone"
+    );
+    assert!(
+      !repo_root.join("scratch.txt").exists(),
+      "an untracked file is deleted"
+    );
+
+    let _ = std::fs::remove_dir_all(&repo_root);
+  }
+
+  #[gpui::test]
+  async fn restore_all_asks_before_discarding_everything(cx: &mut gpui::TestAppContext) {
+    let repo_root = temp_repo("changes-list-restore-all-confirm");
+
+    let (list, cx) = add_changes_list_window(repo_root.clone(), cx);
+    cx.executor().allow_parking();
+    set_entries_from_disk(&list, cx, &repo_root);
+
+    list.update_in(cx, |list, window, cx| list.confirm_restore_all(window, cx));
+    cx.run_until_parked();
+
+    assert!(cx.update(|window, cx| window.has_active_dialog(cx)));
+    list.read_with(cx, |list, _| assert!(list._action_task.is_none()));
+    assert_eq!(
+      std::fs::read_to_string(repo_root.join("README.md")).expect("read file"),
+      "v2\n",
+      "nothing is discarded until the dialog is confirmed"
+    );
+
+    let _ = std::fs::remove_dir_all(&repo_root);
+  }
+
+  #[gpui::test]
+  async fn staging_everything_only_asks_when_a_conflict_is_in_the_way(
+    cx: &mut gpui::TestAppContext,
+  ) {
+    let repo_root = temp_repo("changes-list-stage-all");
+
+    let (list, cx) = add_changes_list_window(repo_root.clone(), cx);
+    cx.executor().allow_parking();
+    set_entries_from_disk(&list, cx, &repo_root);
+
+    // No conflict: it just stages.
+    let task = list.update_in(cx, |list, window, cx| {
+      list.stage_all_with_confirmation(window, cx);
+      list._action_task.take().expect("stage all task")
+    });
+    task.await;
+    cx.run_until_parked();
+    assert!(!cx.update(|window, cx| window.has_active_dialog(cx)));
+    assert!(
+      list_repo_status(&repo_root)
+        .expect("status")
+        .iter()
+        .all(|entry| entry.stage != RepoStage::Unstaged)
+    );
+
+    // With a conflict in the list, it asks first.
+    list.update(cx, |list, cx| {
+      list.set_entries(
+        vec![RepoStatusEntry {
+          path: PathBuf::from("README.md"),
+          old_path: None,
+          status: RepoStatusKind::Conflicted,
+          stage: RepoStage::Unstaged,
+        }],
+        cx,
+      );
+    });
+    list.update_in(cx, |list, window, cx| {
+      list.stage_all_with_confirmation(window, cx)
+    });
+    cx.run_until_parked();
+
+    assert!(cx.update(|window, cx| window.has_active_dialog(cx)));
+    list.read_with(cx, |list, _| assert!(list._action_task.is_none()));
+
+    let _ = std::fs::remove_dir_all(&repo_root);
+  }
 }
