@@ -38,6 +38,7 @@ use crate::git_page::{
 use crate::github_notifications::{self, GithubNotificationsStore};
 use crate::navigation::NavigationHistory;
 use crate::review_panel::{ReviewPanel, ReviewPanelEvent};
+use crate::svg_preview::SvgPreview;
 use crate::{
   CloseWorkspacePage, CommentHunk, SendReviewCommentsToAgent, ShowCommandPalette, ShowFileSearch,
 };
@@ -49,6 +50,8 @@ use ui::{
 };
 
 const DIFF_VIEW_TOGGLE_DEBUG_SELECTOR: &str = "session-diff-view-toggle";
+const PREVIEW_TOGGLE_DEBUG_SELECTOR: &str = "session-preview-toggle";
+const PREVIEW_PANE_DEBUG_SELECTOR: &str = "session-preview-pane";
 const REPO_CONTEXT_DEBUG_SELECTOR: &str = "session-repo-context";
 const REPO_AHEAD_DEBUG_SELECTOR: &str = "session-repo-ahead";
 const REPO_BEHIND_DEBUG_SELECTOR: &str = "session-repo-behind";
@@ -183,6 +186,8 @@ pub struct SessionPage {
   agent_review: AgentReviewComments,
   branch_status: Option<git::BranchStatus>,
   diff_view: DiffViewMode,
+  show_preview: bool,
+  svg_preview: Entity<SvgPreview>,
   // Review export waiting for the agent connection to become ready.
   pending_review_export: Option<String>,
   repo_command_in_flight: bool,
@@ -196,6 +201,9 @@ impl SessionPage {
       .first()
       .map(|repo| repo.path.clone());
     let review_panel = cx.new(|cx| ReviewPanel::new(selected_repo.clone(), window, cx));
+    let svg_preview = cx.new(|_| SvgPreview::new());
+    // The SVG renders on a background task; repaint when it lands.
+    cx.observe(&svg_preview, |_, _, cx| cx.notify()).detach();
     cx.subscribe_in(
       &review_panel,
       window,
@@ -225,6 +233,8 @@ impl SessionPage {
       agent_review: AgentReviewComments::new(),
       branch_status: None,
       diff_view: DiffViewMode::Inline,
+      show_preview: false,
+      svg_preview,
       pending_review_export: None,
       repo_command_in_flight: false,
       _branch_task: None,
@@ -541,7 +551,7 @@ impl SessionPage {
     effective_diff_view(DiffViewInputs {
       preferred: self.diff_view,
       binary_preview: self.binary_preview.is_some(),
-      previewing: false,
+      previewing: self.show_preview && self.previewable(),
       whole_file_change: self.whole_file_change(path, cx),
     })
   }
@@ -560,10 +570,39 @@ impl SessionPage {
       .any(|entry| entry.path == path)
   }
 
+  fn selected_file_is_markdown(&self) -> bool {
+    self
+      .selected_file
+      .as_deref()
+      .is_some_and(crate::file_preview::is_markdown_path)
+  }
+
+  fn selected_file_is_svg(&self) -> bool {
+    self
+      .selected_file
+      .as_deref()
+      .is_some_and(crate::file_preview::is_svg_path)
+  }
+
+  fn previewable(&self) -> bool {
+    self.selected_file_is_markdown() || self.selected_file_is_svg()
+  }
+
+  fn toggle_preview(&mut self, cx: &mut Context<Self>) {
+    if !self.previewable() {
+      self.show_preview = false;
+      return;
+    }
+    self.show_preview = !self.show_preview;
+    self.sync_diff_view(cx);
+    cx.notify();
+  }
+
   fn split_disabled(&self, cx: &App) -> bool {
     let Some(path) = self.selected_file.as_deref() else {
       return true;
     };
+    // The preview is not a reason to refuse: asking for split closes it.
     self.binary_preview.is_some() || self.whole_file_change(path, cx)
   }
 
@@ -599,6 +638,7 @@ impl SessionPage {
       return;
     }
 
+    self.show_preview = false;
     self.diff_view = match self.diff_view {
       DiffViewMode::Inline => DiffViewMode::Split,
       DiffViewMode::Split => DiffViewMode::Inline,
@@ -1628,7 +1668,7 @@ impl SessionPage {
       .into_any_element()
   }
 
-  fn render_center(&mut self, cx: &mut Context<Self>) -> AnyElement {
+  fn render_center(&mut self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
     // Keyed on what is shown, so every swap remounts and replays the fade.
     let (id, view) = match self.center {
       CenterView::Conversation => (
@@ -1643,7 +1683,7 @@ impl SessionPage {
           .unwrap_or_default();
         (
           SharedString::from(format!("session-center-diff-{file}")),
-          self.render_diff_view(cx),
+          self.render_diff_view(window, cx),
         )
       }
     };
@@ -1708,6 +1748,23 @@ impl SessionPage {
           .on_click(cx.listener(|this, _, window, cx| this.close_diff(window, cx))),
       )
       .children(file_title)
+      .when(self.editor.is_some() && self.previewable(), |this| {
+        let (label, icon) = if self.show_preview {
+          ("Code", UiIconName::FileCode)
+        } else {
+          ("Preview", UiIconName::Eye)
+        };
+        this.child(
+          Button::new("session-page-preview-toggle")
+            .debug_selector(|| PREVIEW_TOGGLE_DEBUG_SELECTOR.to_string())
+            .label(label)
+            .icon(icon)
+            .xsmall()
+            .ghost()
+            .tooltip("Show the rendered file")
+            .on_click(cx.listener(|this, _, _, cx| this.toggle_preview(cx))),
+        )
+      })
       .when(
         self.editor.is_some() && self.selected_file_has_changes(cx),
         |this| {
@@ -1765,17 +1822,57 @@ impl SessionPage {
       .into_any_element()
   }
 
-  fn render_diff_view(&mut self, cx: &mut Context<Self>) -> AnyElement {
+  fn render_diff_view(&mut self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
     let theme = cx.theme().clone();
     let body: AnyElement = if let Some(preview) = self.binary_preview.as_ref() {
       render_binary_preview(preview, cx)
     } else if let Some(editor) = self.editor.clone() {
-      div()
+      let editor_pane = div()
         .flex_1()
         .min_h_0()
         .min_w(px(0.0))
-        .child(editor)
-        .into_any_element()
+        .child(editor.clone())
+        .into_any_element();
+
+      if self.show_preview && self.previewable() {
+        let is_svg = self.selected_file_is_svg();
+        let preview_pane = crate::file_preview::render_preview_pane(
+          "session-preview-text",
+          &editor,
+          &self.svg_preview,
+          is_svg,
+          window,
+          cx,
+        );
+        div()
+          .flex_1()
+          .min_h_0()
+          .child(
+            ui::h_resizable("session-page-preview-split")
+              .child(
+                ui::resizable_panel().child(
+                  div()
+                    .size_full()
+                    .min_w(px(0.0))
+                    .min_h_0()
+                    .child(editor_pane),
+                ),
+              )
+              .child(
+                ui::resizable_panel().child(
+                  div()
+                    .size_full()
+                    .min_w(px(0.0))
+                    .min_h_0()
+                    .debug_selector(|| PREVIEW_PANE_DEBUG_SELECTOR.to_string())
+                    .child(preview_pane),
+                ),
+              ),
+          )
+          .into_any_element()
+      } else {
+        editor_pane
+      }
     } else {
       v_flex()
         .flex_1()
@@ -1811,7 +1908,7 @@ impl SessionPage {
 }
 
 impl Render for SessionPage {
-  fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+  fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
     div()
       .size_full()
       .min_h_0()
@@ -1831,7 +1928,7 @@ impl Render for SessionPage {
               .size_range(px(SESSIONS_SIDEBAR_MIN_WIDTH)..px(SESSIONS_SIDEBAR_MAX_WIDTH))
               .child(self.render_sessions_sidebar(cx)),
           )
-          .child(ui::resizable_panel().child(self.render_center(cx)))
+          .child(ui::resizable_panel().child(self.render_center(window, cx)))
           .child(
             ui::resizable_panel()
               .size(px(REVIEW_PANEL_DEFAULT_WIDTH))
@@ -2736,5 +2833,98 @@ mod tests {
       cx.debug_bounds(DIFF_VIEW_TOGGLE_DEBUG_SELECTOR).is_none(),
       "showing a split of a file against itself helps nobody"
     );
+  }
+
+  #[gpui::test]
+  async fn a_markdown_file_can_be_read_rendered(cx: &mut TestAppContext) {
+    let repo = TempRepo::init("session-page-md-preview");
+    commit_text_file(&repo.path, Path::new("README.md"), "# Title\n", "initial");
+    std::fs::write(repo.path.join("README.md"), "# Title\n\nBody\n").expect("update file");
+
+    let (page, cx) = add_session_page_window(repo.path.clone(), cx);
+    cx.executor().allow_parking();
+    cx.run_until_parked();
+
+    page.update_in(cx, |page, window, cx| {
+      page.open_diff(PathBuf::from("README.md"), None, window, cx);
+    });
+    await_open_file(&page, cx).await;
+    page.update(cx, |_, cx| cx.notify());
+    cx.run_until_parked();
+
+    assert!(
+      cx.debug_bounds(PREVIEW_PANE_DEBUG_SELECTOR).is_none(),
+      "the file opens as text"
+    );
+
+    let toggle = cx
+      .debug_bounds(PREVIEW_TOGGLE_DEBUG_SELECTOR)
+      .expect("preview toggle bounds");
+    cx.simulate_click(toggle.center(), gpui::Modifiers::default());
+    cx.run_until_parked();
+
+    page.read_with(cx, |page, _| assert!(page.show_preview));
+    assert!(cx.debug_bounds(PREVIEW_PANE_DEBUG_SELECTOR).is_some());
+  }
+
+  #[gpui::test]
+  async fn a_plain_file_has_no_preview_toggle(cx: &mut TestAppContext) {
+    let repo = TempRepo::init("session-page-no-preview");
+    commit_text_file(
+      &repo.path,
+      Path::new("main.rs"),
+      "fn main() {}\n",
+      "initial",
+    );
+    std::fs::write(repo.path.join("main.rs"), "fn main() { }\n").expect("update file");
+
+    let (page, cx) = add_session_page_window(repo.path.clone(), cx);
+    cx.executor().allow_parking();
+    cx.run_until_parked();
+
+    page.update_in(cx, |page, window, cx| {
+      page.open_diff(PathBuf::from("main.rs"), None, window, cx);
+    });
+    await_open_file(&page, cx).await;
+    page.update(cx, |_, cx| cx.notify());
+    cx.run_until_parked();
+
+    page.read_with(cx, |page, _| assert!(!page.previewable()));
+    assert!(cx.debug_bounds(PREVIEW_TOGGLE_DEBUG_SELECTOR).is_none());
+  }
+
+  #[gpui::test]
+  async fn switching_to_split_closes_the_preview(cx: &mut TestAppContext) {
+    let repo = TempRepo::init("session-page-preview-vs-split");
+    commit_text_file(&repo.path, Path::new("README.md"), "# Title\n", "initial");
+    std::fs::write(repo.path.join("README.md"), "# Title\n\nBody\n").expect("update file");
+
+    let (page, cx) = add_session_page_window(repo.path.clone(), cx);
+    cx.executor().allow_parking();
+    page.update(cx, |page, cx| {
+      page.review_panel.update(cx, |panel, cx| panel.refresh(cx))
+    });
+    cx.run_until_parked();
+
+    page.update_in(cx, |page, window, cx| {
+      page.open_diff(PathBuf::from("README.md"), None, window, cx);
+    });
+    await_open_file(&page, cx).await;
+
+    page.update(cx, |page, cx| {
+      page.toggle_preview(cx);
+      assert!(page.show_preview);
+      // While previewing, the editor half stays inline.
+      assert_eq!(
+        page.effective_diff_view(Path::new("README.md"), cx),
+        DiffViewMode::Inline
+      );
+
+      // The pane cannot hold a split diff and a rendered file at once: asking
+      // for split closes the preview.
+      page.toggle_diff_view(cx);
+      assert!(!page.show_preview);
+      assert_eq!(page.diff_view, DiffViewMode::Split);
+    });
   }
 }

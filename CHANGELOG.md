@@ -84,6 +84,10 @@ The Changes panel listed your modified files but could do nothing with them. It 
 
 The diff in the Sessions workspace was stuck on whatever the settings said. It now carries the same toggle as the Git page, in the diff header or with `cmd-/`, and the preference is shared between the two. Files with a single side, an untracked or deleted file, or a binary preview, stay inline: there is nothing to put on the other half. A file opened without any pending change gets no toggle at all.
 
+### Read Markdown And SVG Files In The Sessions Workspace
+
+Opening a `.md` or `.svg` in the Sessions workspace showed raw text. A Preview button in the diff header now splits the pane: the file on the left, the rendered result on the right, the same as the Git page. Switching to a split diff closes the preview, since the pane cannot hold both.
+
 ## 0.18.0
 
 ### No More Failed Single Comments During A Review

@@ -1533,7 +1533,6 @@ impl GitPage {
         .into_any_element();
     }
 
-    let theme = cx.theme().clone();
     if let Some(editor) = self.editor.clone() {
       let editor_view = self.render_editor_with_overlay(editor.clone(), window, cx);
       if let Some(binary_preview) = self.binary_preview.as_ref() {
@@ -1550,31 +1549,14 @@ impl GitPage {
       if self.show_markdown_preview
         && (self.selected_file_is_markdown() || self.selected_file_is_svg())
       {
-        let preview_content = if self.selected_file_is_svg() {
-          let editor = editor.clone();
-          self.svg_preview.update(cx, |preview, cx| {
-            preview.refresh_from_editor(&editor, window, cx);
-          });
-          self.svg_preview.read(cx).render(cx)
-        } else {
-          let markdown = editor.read(cx).document().read(cx);
-          let markdown = markdown.slice_to_string(0..markdown.len());
-          div()
-            .flex_1()
-            .min_h_0()
-            .min_w(px(0.0))
-            .bg(theme.background)
-            .occlude()
-            .child(
-              div().size_full().pb_4().px_4().child(
-                TextView::markdown("git-markdown-preview-text", markdown)
-                  .size_full()
-                  .selectable(true)
-                  .scrollable(true),
-              ),
-            )
-            .into_any_element()
-        };
+        let preview_content = crate::file_preview::render_preview_pane(
+          "git-markdown-preview-text",
+          &editor,
+          &self.svg_preview,
+          self.selected_file_is_svg(),
+          window,
+          cx,
+        );
 
         return div()
           .size_full()

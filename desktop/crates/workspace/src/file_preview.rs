@@ -10,6 +10,48 @@ pub enum FilePreviewKind {
   UnsupportedBinary,
 }
 
+/// The right-hand pane of a preview: the rendered SVG, or the markdown.
+pub(crate) fn render_preview_pane(
+  id: &'static str,
+  editor: &gpui::Entity<editor::Editor>,
+  svg_preview: &gpui::Entity<crate::svg_preview::SvgPreview>,
+  is_svg: bool,
+  window: &mut gpui::Window,
+  cx: &mut gpui::App,
+) -> gpui::AnyElement {
+  use gpui::{InteractiveElement as _, IntoElement as _, ParentElement as _, Styled as _};
+  use gpui_component::ActiveTheme as _;
+
+  if is_svg {
+    let editor = editor.clone();
+    svg_preview.update(cx, |preview, cx| {
+      preview.refresh_from_editor(&editor, window, cx);
+    });
+    return svg_preview.read(cx).render(cx);
+  }
+
+  let markdown = {
+    let document = editor.read(cx).document().read(cx);
+    document.slice_to_string(0..document.len())
+  };
+
+  gpui::div()
+    .flex_1()
+    .min_h_0()
+    .min_w(gpui::px(0.0))
+    .bg(cx.theme().background)
+    .occlude()
+    .child(
+      gpui::div().size_full().pb_4().px_4().child(
+        gpui_component::text::TextView::markdown(id, markdown)
+          .size_full()
+          .selectable(true)
+          .scrollable(true),
+      ),
+    )
+    .into_any_element()
+}
+
 pub fn is_markdown_path(path: &Path) -> bool {
   matches!(
     path

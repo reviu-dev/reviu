@@ -47,7 +47,6 @@ use gpui_component::{
   select::{Select, SelectEvent, SelectState},
   spinner::Spinner,
   tag::Tag,
-  text::TextView,
   tooltip::Tooltip,
   tree::{TreeItem, TreeState, tree},
   v_flex,
