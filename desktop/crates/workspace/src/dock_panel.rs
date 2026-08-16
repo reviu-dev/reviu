@@ -64,10 +64,47 @@ pub enum DockPanelEvent {
   /// The rebase can move on: the host runs it, it owns the conflict flow.
   ContinueRebase,
   /// A command picked in the commit menu; the host owns running it.
-  RunCommand(PaletteCommand),
+  RunCommand(CommitMenuCommand),
 }
 
 impl gpui::EventEmitter<DockPanelEvent> for DockPanel {}
+
+/// What the menu next to the commit button offers.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CommitMenuCommand {
+  Amend,
+  UndoLastCommit,
+  Push,
+  ForcePush,
+}
+
+impl CommitMenuCommand {
+  fn label(self) -> &'static str {
+    match self {
+      Self::Amend => "Amend",
+      Self::UndoLastCommit => "Undo last commit",
+      Self::Push => "Push",
+      Self::ForcePush => "Force push (with lease)",
+    }
+  }
+
+  fn icon(self) -> IconName {
+    match self {
+      Self::Amend => IconName::Replace,
+      Self::UndoLastCommit => IconName::Undo,
+      Self::Push | Self::ForcePush => IconName::ArrowUp,
+    }
+  }
+
+  fn rule(self) -> PaletteCommand {
+    match self {
+      Self::Amend => PaletteCommand::Amend,
+      Self::UndoLastCommit => PaletteCommand::UndoLastCommit,
+      Self::Push => PaletteCommand::Push,
+      Self::ForcePush => PaletteCommand::ForcePush,
+    }
+  }
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum DockPanelTab {
@@ -615,21 +652,13 @@ impl DockPanel {
     let commit_message = self.commit_input.read(cx).value().to_string();
     let state = self.repo_state(&commit_message);
     let menu_items = [
-      (PaletteCommand::Amend, "Amend", IconName::Replace),
-      (
-        PaletteCommand::UndoLastCommit,
-        "Undo last commit",
-        IconName::Undo,
-      ),
-      (PaletteCommand::Push, "Push", IconName::ArrowUp),
-      (
-        PaletteCommand::ForcePush,
-        "Force push (with lease)",
-        IconName::ArrowUp,
-      ),
+      CommitMenuCommand::Amend,
+      CommitMenuCommand::UndoLastCommit,
+      CommitMenuCommand::Push,
+      CommitMenuCommand::ForcePush,
     ]
-    .map(|(command, label, icon)| (command, label, icon, state.allows(command)));
-    let menu_enabled = menu_items.iter().any(|(_, _, _, allowed)| *allowed);
+    .map(|command| (command, state.allows(command.rule())));
+    let menu_enabled = menu_items.iter().any(|(_, allowed)| *allowed);
     let view = cx.entity();
 
     h_flex()
@@ -670,20 +699,18 @@ impl DockPanel {
           .debug_selector(|| DOCK_PANEL_COMMIT_MENU_DEBUG_SELECTOR.to_string())
           .disabled(!menu_enabled)
           .dropdown_menu_with_anchor(Anchor::BottomRight, move |menu, _, _| {
-            menu_items
-              .iter()
-              .fold(menu, |menu, (command, label, icon, allowed)| {
-                let view = view.clone();
-                let command = *command;
-                menu.item(
-                  PopupMenuItem::new(*label)
-                    .icon(icon.clone())
-                    .disabled(!allowed)
-                    .on_click(move |_, _, cx| {
-                      view.update(cx, |_, cx| cx.emit(DockPanelEvent::RunCommand(command)));
-                    }),
-                )
-              })
+            menu_items.iter().fold(menu, |menu, (command, allowed)| {
+              let view = view.clone();
+              let command = *command;
+              menu.item(
+                PopupMenuItem::new(command.label())
+                  .icon(command.icon())
+                  .disabled(!allowed)
+                  .on_click(move |_, _, cx| {
+                    view.update(cx, |_, cx| cx.emit(DockPanelEvent::RunCommand(command)));
+                  }),
+              )
+            })
           }),
       )
       .into_any_element()
@@ -1420,14 +1447,14 @@ mod tests {
       let asked = asked.clone();
       cx.update(|_, cx| {
         cx.subscribe(&panel, move |_panel, event: &DockPanelEvent, _cx| {
-          if matches!(event, DockPanelEvent::RunCommand(PaletteCommand::Amend)) {
+          if matches!(event, DockPanelEvent::RunCommand(CommitMenuCommand::Amend)) {
             asked.store(true, Ordering::SeqCst);
           }
         })
       })
     };
     panel.update(cx, |_, cx| {
-      cx.emit(DockPanelEvent::RunCommand(PaletteCommand::Amend))
+      cx.emit(DockPanelEvent::RunCommand(CommitMenuCommand::Amend))
     });
     cx.run_until_parked();
     assert!(asked.load(Ordering::SeqCst));

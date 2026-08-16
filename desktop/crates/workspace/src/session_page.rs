@@ -29,7 +29,7 @@ use crate::auth_state::AuthStateStore;
 use crate::config::ConfigStore;
 use crate::date_format::format_relative_time;
 use crate::diff_view_policy::{DiffViewInputs, effective_diff_view};
-use crate::dock_panel::{DockPanel, DockPanelEvent};
+use crate::dock_panel::{CommitMenuCommand, DockPanel, DockPanelEvent};
 use crate::file_search_palette::open_file_search_palette;
 use crate::file_view::{
   BinaryPreview, build_binary_preview, render_binary_preview, render_file_title,
@@ -239,17 +239,7 @@ impl SessionPage {
           }
         }
         DockPanelEvent::RunCommand(command) => {
-          let outcome = match command {
-            PaletteCommand::Amend => this.amend_last_commit(window, cx),
-            PaletteCommand::UndoLastCommit => {
-              this.run_repo_command(RepoCommand::UndoLastCommit, window, cx)
-            }
-            PaletteCommand::Push => this.run_repo_command(RepoCommand::Push, window, cx),
-            PaletteCommand::ForcePush => this.run_repo_command(RepoCommand::ForcePush, window, cx),
-            // The menu only carries the four above.
-            _ => Ok(()),
-          };
-          if let Err(error) = outcome {
+          if let Err(error) = this.run_commit_menu_command(*command, window, cx) {
             window.push_notification(Notification::warning(error), cx);
           }
         }
@@ -1084,6 +1074,22 @@ impl SessionPage {
     Ok(())
   }
 
+  fn run_commit_menu_command(
+    &mut self,
+    command: CommitMenuCommand,
+    window: &mut Window,
+    cx: &mut Context<Self>,
+  ) -> Result<(), SharedString> {
+    match command {
+      CommitMenuCommand::Amend => self.amend_last_commit(window, cx),
+      CommitMenuCommand::UndoLastCommit => {
+        self.run_repo_command(RepoCommand::UndoLastCommit, window, cx)
+      }
+      CommitMenuCommand::Push => self.run_repo_command(RepoCommand::Push, window, cx),
+      CommitMenuCommand::ForcePush => self.run_repo_command(RepoCommand::ForcePush, window, cx),
+    }
+  }
+
   /// Amending takes the message in the commit box, or keeps the old one when
   /// the box is empty.
   fn amend_last_commit(
@@ -1743,6 +1749,63 @@ mod tests {
       1
     );
     assert!(repo.path.join("b.txt").exists());
+  }
+
+  #[gpui::test]
+  async fn the_commit_menu_runs_what_it_names(cx: &mut TestAppContext) {
+    let repo = TempRepo::init("session-page-commit-menu");
+    commit_text_file(&repo.path, Path::new("a.txt"), "v1\n", "first");
+    commit_text_file(&repo.path, Path::new("b.txt"), "v1\n", "second");
+
+    let (page, cx) = add_session_page_window(repo.path.clone(), cx);
+    cx.executor().allow_parking();
+    let refresh = page.update(cx, |page, cx| {
+      page.refresh_branch(cx);
+      page.dock_panel.update(cx, |panel, cx| {
+        panel.refresh(cx);
+        panel._refresh_task.take().expect("refresh task")
+      })
+    });
+    refresh.await;
+    await_branch_refresh(&page, cx).await;
+
+    // An empty box keeps the message of the commit being amended.
+    page.update_in(cx, |page, window, cx| {
+      page
+        .run_commit_menu_command(CommitMenuCommand::Amend, window, cx)
+        .expect("amend runs")
+    });
+    let command = page.update(cx, |page, _| {
+      page._repo_command_task.take().expect("command task")
+    });
+    command.await;
+    cx.run_until_parked();
+
+    let history = git::list_commit_history(&repo.path, 10).expect("history");
+    assert_eq!(history.len(), 2);
+    assert_eq!(
+      history[0].summary, "second",
+      "an empty box keeps the old message"
+    );
+
+    // The Undo entry undoes, it does not push.
+    page.update_in(cx, |page, window, cx| {
+      page
+        .run_commit_menu_command(CommitMenuCommand::UndoLastCommit, window, cx)
+        .expect("undo runs")
+    });
+    let command = page.update(cx, |page, _| {
+      page._repo_command_task.take().expect("command task")
+    });
+    command.await;
+    cx.run_until_parked();
+
+    assert_eq!(
+      git::list_commit_history(&repo.path, 10)
+        .expect("history")
+        .len(),
+      1
+    );
   }
 
   #[gpui::test]
