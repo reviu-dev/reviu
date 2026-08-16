@@ -2927,4 +2927,70 @@ mod tests {
       assert_eq!(page.diff_view, DiffViewMode::Split);
     });
   }
+
+  #[gpui::test]
+  async fn an_svg_file_renders_as_an_image(cx: &mut TestAppContext) {
+    let repo = TempRepo::init("session-page-svg-preview");
+    let svg = "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"8\" height=\"8\"></svg>\n";
+    commit_text_file(&repo.path, Path::new("logo.svg"), svg, "initial");
+    std::fs::write(
+      repo.path.join("logo.svg"),
+      svg.replace("width=\"8\"", "width=\"16\""),
+    )
+    .expect("update file");
+
+    let (page, cx) = add_session_page_window(repo.path.clone(), cx);
+    cx.executor().allow_parking();
+    cx.run_until_parked();
+
+    page.update_in(cx, |page, window, cx| {
+      page.open_diff(PathBuf::from("logo.svg"), None, window, cx);
+    });
+    await_open_file(&page, cx).await;
+    page.update(cx, |_, cx| cx.notify());
+    cx.run_until_parked();
+
+    page.read_with(cx, |page, _| assert!(page.selected_file_is_svg()));
+
+    let toggle = cx
+      .debug_bounds(PREVIEW_TOGGLE_DEBUG_SELECTOR)
+      .expect("preview toggle bounds");
+    cx.simulate_click(toggle.center(), gpui::Modifiers::default());
+    cx.run_until_parked();
+
+    assert!(cx.debug_bounds(PREVIEW_PANE_DEBUG_SELECTOR).is_some());
+  }
+
+  #[gpui::test]
+  async fn the_preview_does_not_follow_onto_a_plain_file(cx: &mut TestAppContext) {
+    let repo = TempRepo::init("session-page-preview-then-code");
+    commit_text_file(&repo.path, Path::new("README.md"), "# Title\n", "initial");
+    commit_text_file(&repo.path, Path::new("main.rs"), "fn main() {}\n", "code");
+    std::fs::write(repo.path.join("README.md"), "# Title\n\nBody\n").expect("update md");
+    std::fs::write(repo.path.join("main.rs"), "fn main() { }\n").expect("update rs");
+
+    let (page, cx) = add_session_page_window(repo.path.clone(), cx);
+    cx.executor().allow_parking();
+    cx.run_until_parked();
+
+    page.update_in(cx, |page, window, cx| {
+      page.open_diff(PathBuf::from("README.md"), None, window, cx);
+    });
+    await_open_file(&page, cx).await;
+    page.update(cx, |page, cx| page.toggle_preview(cx));
+    cx.run_until_parked();
+    assert!(cx.debug_bounds(PREVIEW_PANE_DEBUG_SELECTOR).is_some());
+
+    page.update_in(cx, |page, window, cx| {
+      page.open_diff(PathBuf::from("main.rs"), None, window, cx);
+    });
+    await_open_file(&page, cx).await;
+    page.update(cx, |_, cx| cx.notify());
+    cx.run_until_parked();
+
+    // Nothing to render for a .rs: no pane, no button, even though the preview
+    // was left on.
+    assert!(cx.debug_bounds(PREVIEW_PANE_DEBUG_SELECTOR).is_none());
+    assert!(cx.debug_bounds(PREVIEW_TOGGLE_DEBUG_SELECTOR).is_none());
+  }
 }
