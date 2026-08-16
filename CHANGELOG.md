@@ -92,6 +92,10 @@ Opening a `.md` or `.svg` in the Sessions workspace showed raw text. A Preview b
 
 The Sessions workspace applied the whitespace setting when opening a file but gave you no way to change your mind. The diff header now carries the same Whitespace button as the Git page, with `cmd-alt-/`, and the choice holds for the rest of the session instead of resetting on every file.
 
+### Jump Between Changes In The Sessions Workspace
+
+Reviewing a long file in the Sessions workspace meant scrolling to hunt for the next change. `cmd-alt-down` and `cmd-alt-up` now walk the diff change by change, as on the Git page and the pull request diff, and wrap around at the ends. While a Markdown or SVG file is previewed there is no diff to walk, so the shortcuts stay out of the way.
+
 ## 0.18.0
 
 ### No More Failed Single Comments During A Review

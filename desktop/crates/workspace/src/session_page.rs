@@ -6,8 +6,9 @@ use std::sync::Arc;
 
 use agent_chat_panel::{AgentChatPanel, AgentChatPanelEvent, ConversationMeta};
 use editor::{
-  DiffViewMode, Editor, EditorEvent, ReviewCommentCreateHandler, ReviewCommentCreateRequest,
-  ReviewCommentDeleteHandler, ReviewCommentDisplayMode, ReviewCommentEditHandler,
+  DiffViewMode, Editor, EditorEvent, HunkNavigationDirection, ReviewCommentCreateHandler,
+  ReviewCommentCreateRequest, ReviewCommentDeleteHandler, ReviewCommentDisplayMode,
+  ReviewCommentEditHandler,
 };
 use gpui::AnimationExt as _;
 use gpui::{
@@ -639,6 +640,36 @@ impl SessionPage {
     cx: &mut Context<Self>,
   ) {
     self.toggle_diff_view(cx);
+    cx.stop_propagation();
+  }
+
+  fn previous_annotation_action(
+    &mut self,
+    _: &crate::PreviousAnnotation,
+    _window: &mut Window,
+    cx: &mut Context<Self>,
+  ) {
+    self.navigate_change(HunkNavigationDirection::Previous, cx);
+  }
+
+  fn next_annotation_action(
+    &mut self,
+    _: &crate::NextAnnotation,
+    _window: &mut Window,
+    cx: &mut Context<Self>,
+  ) {
+    self.navigate_change(HunkNavigationDirection::Next, cx);
+  }
+
+  fn navigate_change(&mut self, direction: HunkNavigationDirection, cx: &mut Context<Self>) {
+    // A rendered file has no hunks to walk.
+    if self.center != CenterView::Diff || (self.show_preview && self.previewable()) {
+      return;
+    }
+    let Some(editor) = self.editor.clone() else {
+      return;
+    };
+    editor.update(cx, |editor, cx| editor.navigate_hunk(direction, cx));
     cx.stop_propagation();
   }
 
@@ -1969,6 +2000,8 @@ impl Render for SessionPage {
       .on_action(cx.listener(Self::comment_hunk_action))
       .on_action(cx.listener(Self::toggle_diff_view_action))
       .on_action(cx.listener(Self::toggle_hide_whitespace_action))
+      .on_action(cx.listener(Self::previous_annotation_action))
+      .on_action(cx.listener(Self::next_annotation_action))
       .child(
         ui::h_resizable("session-page-shell")
           .child(
@@ -2191,6 +2224,31 @@ mod tests {
       task.await;
     }
     cx.run_until_parked();
+  }
+
+  /// The diff lands after the file load: bases, then diff, then projection.
+  async fn await_editor_diff(page: &Entity<SessionPage>, cx: &mut gpui::VisualTestContext) {
+    loop {
+      let Some(editor) = page.read_with(cx, |page, _| page.editor.clone()) else {
+        return;
+      };
+      let (bases_task, diff_task) = editor.update(cx, |editor, _| {
+        (editor.bases_task.take(), editor.diff_task.take())
+      });
+      let mut had_task = false;
+      if let Some(task) = bases_task {
+        had_task = true;
+        task.await;
+      }
+      if let Some(task) = diff_task {
+        had_task = true;
+        task.await;
+      }
+      cx.run_until_parked();
+      if !had_task {
+        return;
+      }
+    }
   }
 
   fn create_request(line: usize, body: &str) -> ReviewCommentCreateRequest {
@@ -3201,6 +3259,63 @@ mod tests {
           .read(cx)
           .ignore_whitespace()
       );
+    });
+  }
+
+  #[gpui::test]
+  async fn walking_the_changes_moves_through_the_hunks(cx: &mut TestAppContext) {
+    let repo = TempRepo::init("session-page-walk-changes");
+    let original = (1..=60)
+      .map(|line| format!("line {line}\n"))
+      .collect::<String>();
+    commit_text_file(&repo.path, Path::new("README.md"), &original, "initial");
+    // Two changes far apart, so navigating has somewhere to go.
+    let modified = original
+      .replace("line 5\n", "line 5 changed\n")
+      .replace("line 50\n", "line 50 changed\n");
+    std::fs::write(repo.path.join("README.md"), modified).expect("update file");
+
+    let (page, cx) = add_session_page_window(repo.path.clone(), cx);
+    cx.executor().allow_parking();
+    cx.run_until_parked();
+
+    page.update_in(cx, |page, window, cx| {
+      page.open_diff(PathBuf::from("README.md"), None, window, cx);
+    });
+    await_open_file(&page, cx).await;
+    await_editor_diff(&page, cx).await;
+
+    let hunk_state = |page: &SessionPage, cx: &App| {
+      page
+        .editor
+        .as_ref()
+        .expect("editor")
+        .read(cx)
+        .hunk_navigation_state(cx)
+        .expect("hunk navigation state")
+    };
+
+    page.read_with(cx, |page, cx| {
+      let state = hunk_state(page, cx);
+      assert_eq!(state.total, 2);
+      assert_eq!(state.active_index, 0);
+    });
+
+    page.update(cx, |page, cx| {
+      page.navigate_change(HunkNavigationDirection::Next, cx);
+      assert_eq!(hunk_state(page, cx).active_index, 1);
+
+      // Walking past the last change comes back to the first.
+      page.navigate_change(HunkNavigationDirection::Next, cx);
+      assert_eq!(hunk_state(page, cx).active_index, 0);
+
+      page.navigate_change(HunkNavigationDirection::Previous, cx);
+      assert_eq!(hunk_state(page, cx).active_index, 1);
+
+      // A rendered file has no changes to walk.
+      page.toggle_preview(cx);
+      page.navigate_change(HunkNavigationDirection::Next, cx);
+      assert_eq!(hunk_state(page, cx).active_index, 1);
     });
   }
 }

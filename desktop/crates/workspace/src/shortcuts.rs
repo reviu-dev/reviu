@@ -66,7 +66,8 @@ const FOCUS_FILE_TREE_CONTEXT: &str = "WorkspaceGithubPr";
 const TOGGLE_DIFF_VIEW_CONTEXT: &str =
   "WorkspaceGit || WorkspaceGithubPrChanges || WorkspaceSession";
 const SWITCH_TO_PR_BRANCH_CONTEXT: &str = "WorkspaceGithubPr || WorkspaceGithubPrChanges";
-const REVIEW_ANNOTATION_CONTEXT: &str = "WorkspaceGit || WorkspaceGithubPrChanges";
+const REVIEW_ANNOTATION_CONTEXT: &str =
+  "WorkspaceGit || WorkspaceGithubPrChanges || WorkspaceSession";
 const REVIEW_COMMENT_CONTEXT: &str = "WorkspaceGithubPr";
 const HUNK_ACTION_CONTEXT: &str = "WorkspaceGit";
 const HUNK_ACTION_DESCENDANT_FOCUS: &str = "List || Editor";
@@ -109,9 +110,6 @@ const SECONDARY_PAGE_ACTIVE_CONTEXTS: [&str; 4] = [
   WORKSPACE_SETTINGS_CONTEXT,
   WORKSPACE_ABOUT_CONTEXT,
 ];
-
-const GIT_AND_PR_CHANGES_ACTIVE_CONTEXTS: [&str; 2] =
-  [WORKSPACE_GIT_CONTEXT, WORKSPACE_GITHUB_PR_CHANGES_CONTEXT];
 
 const PR_PAGE_ACTIVE_CONTEXTS: [&str; 2] = [
   WORKSPACE_GITHUB_PR_CONTEXT,
@@ -360,23 +358,23 @@ const SHORTCUT_DEFINITIONS: [ShortcutDefinition; 38] = [
     id: ShortcutId::PreviousAnnotation,
     title: "Previous Change",
     description: "Jump to the previous conflict or change in the diff.",
-    scope_label: "Git conflicts and changes, PR Changes",
+    scope_label: "Git conflicts and changes, PR Changes, Sessions",
     category: ShortcutCategory::Review,
     keystroke: "cmd-alt-up",
     context: REVIEW_ANNOTATION_CONTEXT,
     display_context: WORKSPACE_GIT_CONTEXT,
-    active_contexts: &GIT_AND_PR_CHANGES_ACTIVE_CONTEXTS,
+    active_contexts: &COMMENT_HUNK_ACTIVE_CONTEXTS,
   },
   ShortcutDefinition {
     id: ShortcutId::NextAnnotation,
     title: "Next Change",
     description: "Jump to the next conflict or change in the diff.",
-    scope_label: "Git conflicts and changes, PR Changes",
+    scope_label: "Git conflicts and changes, PR Changes, Sessions",
     category: ShortcutCategory::Review,
     keystroke: "cmd-alt-down",
     context: REVIEW_ANNOTATION_CONTEXT,
     display_context: WORKSPACE_GIT_CONTEXT,
-    active_contexts: &GIT_AND_PR_CHANGES_ACTIVE_CONTEXTS,
+    active_contexts: &COMMENT_HUNK_ACTIVE_CONTEXTS,
   },
   ShortcutDefinition {
     id: ShortcutId::PreviousReviewComment,
@@ -1724,13 +1722,15 @@ mod tests {
   }
 
   #[test]
-  fn annotation_shortcuts_are_scoped_to_git_and_pr_changes() {
+  fn annotation_shortcuts_are_scoped_to_the_diff_surfaces() {
     for keystroke in ["cmd-alt-up", "cmd-alt-down"] {
       assert!(has_binding("/git", keystroke));
       assert!(has_binding("/github/owner/repo/pull/42/changes", keystroke));
-      assert!(!has_binding("/github", keystroke));
-      assert!(!has_binding("/github/owner/repo", keystroke));
+      assert!(has_binding("/session", keystroke));
+      // The PR Overview tab has no diff to walk. Unknown paths fall back to the
+      // shell since P6, so they are not a meaningful negative any more.
       assert!(!has_binding("/github/owner/repo/pull/42", keystroke));
+      assert!(!has_binding("/settings", keystroke));
     }
   }
 
