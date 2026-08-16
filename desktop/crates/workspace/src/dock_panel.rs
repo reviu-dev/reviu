@@ -1193,6 +1193,62 @@ mod tests {
   }
 
   #[gpui::test]
+  async fn a_merge_in_progress_still_ends_with_a_commit(cx: &mut TestAppContext) {
+    cx.update(|cx| gpui_component::init(cx));
+    let repo = TempRepo::init("dock-panel-merge");
+    commit_text_file(&repo.path, Path::new("a.txt"), "base\n", "initial");
+    let base = git::BranchRef {
+      name: git::current_branch_status(&repo.path)
+        .expect("branch status")
+        .name,
+      kind: git::BranchKind::Local,
+    };
+    let feature = git::BranchRef {
+      name: "feature".to_string(),
+      kind: git::BranchKind::Local,
+    };
+    git::create_branch(&repo.path, &feature.name).expect("create branch");
+    git::switch_branch(&repo.path, &feature).expect("switch to feature");
+    commit_text_file(&repo.path, Path::new("a.txt"), "feature\n", "feature work");
+    git::switch_branch(&repo.path, &base).expect("switch back");
+    commit_text_file(&repo.path, Path::new("a.txt"), "main\n", "main work");
+    let _ = git::merge_branch(&repo.path, &feature);
+    std::fs::write(repo.path.join("a.txt"), "resolved\n").expect("resolve conflict");
+
+    let (panel, cx) = add_dock_panel_window(Some(repo.path.clone()), cx);
+    cx.executor().allow_parking();
+    await_refresh(&panel, cx).await;
+    panel.update(cx, |_, cx| cx.notify());
+    cx.run_until_parked();
+
+    panel.read_with(cx, |panel, _| {
+      assert!(panel.merge_in_progress());
+      assert!(!panel.rebase_in_progress(), "a merge is not a rebase");
+    });
+    assert!(
+      cx.debug_bounds(DOCK_PANEL_OPERATION_DEBUG_SELECTOR)
+        .is_some(),
+      "the panel says a merge is running"
+    );
+
+    // Unlike a rebase, the button still commits: that is how a merge ends.
+    panel.update_in(cx, |panel, window, cx| {
+      panel.set_commit_message("Merge branch 'feature'", window, cx)
+    });
+    let button = cx
+      .debug_bounds(DOCK_PANEL_COMMIT_DEBUG_SELECTOR)
+      .expect("commit button bounds");
+    cx.simulate_click(button.center(), gpui::Modifiers::default());
+    let commit = panel.update(cx, |panel, _| panel._commit_task.take());
+    if let Some(task) = commit {
+      task.await;
+    }
+    cx.run_until_parked();
+
+    assert!(!git::is_merge_in_progress(&repo.path).expect("merge state"));
+  }
+
+  #[gpui::test]
   async fn a_rebase_in_progress_replaces_the_commit_button(cx: &mut TestAppContext) {
     cx.update(|cx| gpui_component::init(cx));
     let repo = TempRepo::init("dock-panel-rebase");

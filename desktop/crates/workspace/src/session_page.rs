@@ -1742,6 +1742,34 @@ mod tests {
   }
 
   #[gpui::test]
+  async fn skipping_from_the_palette_drops_the_conflicting_commit(cx: &mut TestAppContext) {
+    let repo = TempRepo::init("session-page-rebase-skip");
+    start_conflicting_rebase(&repo.path);
+
+    let (page, cx) = add_session_page_window(repo.path.clone(), cx);
+    cx.executor().allow_parking();
+    cx.run_until_parked();
+
+    page.update_in(cx, |page, window, cx| {
+      page
+        .handle_command_palette_action(CommandPaletteAction::SkipRebase, window, cx)
+        .expect("skip the conflicting commit")
+    });
+    let command = page.update(cx, |page, _| {
+      page._repo_command_task.take().expect("command task")
+    });
+    command.await;
+    cx.run_until_parked();
+
+    assert!(!git::is_rebase_in_progress(&repo.path).expect("rebase state"));
+    assert_eq!(
+      std::fs::read_to_string(repo.path.join("a.txt")).expect("read file"),
+      "main\n",
+      "the skipped commit left nothing behind"
+    );
+  }
+
+  #[gpui::test]
   async fn a_file_from_the_history_opens_read_only_in_the_center(cx: &mut TestAppContext) {
     let repo = TempRepo::init("session-page-history-file");
     commit_text_file(&repo.path, Path::new("a.txt"), "v1\n", "initial");
@@ -1838,9 +1866,58 @@ mod tests {
     cx.run_until_parked();
 
     // The conflict is a stop to resolve, not an error: the file is on screen.
-    page.read_with(cx, |page, _| {
+    page.read_with(cx, |page, cx| {
       assert_eq!(page.selected_file.as_deref(), Some(Path::new("a.txt")));
       assert_eq!(page.center, CenterView::Diff);
+      // Git prepared the merge message; the box carries it.
+      assert_eq!(
+        page.dock_panel.read(cx).commit_message(cx),
+        crate::repo_command::merge_commit_message("feature", &base.name)
+      );
+    });
+
+    let refresh = page.update(cx, |page, cx| {
+      page.dock_panel.update(cx, |panel, cx| {
+        panel.refresh(cx);
+        panel._refresh_task.take().expect("refresh task")
+      })
+    });
+    refresh.await;
+    cx.run_until_parked();
+
+    // Mid-merge: aborting is offered, committing waits for the conflict to go.
+    page.read_with(cx, |page, cx| {
+      assert!(page.dock_panel.read(cx).merge_in_progress());
+      let ids = page
+        .palette_commands(1, cx)
+        .into_iter()
+        .map(|command| command.id)
+        .collect::<Vec<_>>();
+      assert!(ids.contains(&CommandPaletteCommandId::AbortMerge));
+      assert!(!ids.contains(&CommandPaletteCommandId::Commit));
+      assert!(!ids.contains(&CommandPaletteCommandId::AbortRebase));
+    });
+
+    // Resolved and staged: a merge ends with a commit.
+    std::fs::write(repo.path.join("a.txt"), "resolved\n").expect("resolve conflict");
+    git::stage_all(&repo.path).expect("stage the resolution");
+    let refresh = page.update(cx, |page, cx| {
+      page.dock_panel.update(cx, |panel, cx| {
+        panel.refresh(cx);
+        panel._refresh_task.take().expect("refresh task")
+      })
+    });
+    refresh.await;
+    cx.run_until_parked();
+
+    page.read_with(cx, |page, cx| {
+      let ids = page
+        .palette_commands(1, cx)
+        .into_iter()
+        .map(|command| command.id)
+        .collect::<Vec<_>>();
+      assert!(ids.contains(&CommandPaletteCommandId::Commit));
+      assert!(!ids.contains(&CommandPaletteCommandId::ContinueRebase));
     });
   }
 }
