@@ -1589,6 +1589,153 @@ mod tests {
   }
 
   #[gpui::test]
+  async fn rebasing_onto_a_branch_stops_on_the_conflict(cx: &mut TestAppContext) {
+    let repo = TempRepo::init("session-page-interactive-rebase-branch");
+    let base = start_conflicting_rebase_setup(&repo.path);
+
+    let (page, cx) = add_session_page_window(repo.path.clone(), cx);
+    cx.executor().allow_parking();
+    let refresh = page.update(cx, |page, cx| {
+      page.refresh_branch(cx);
+      page.dock_panel.update(cx, |panel, cx| {
+        panel.refresh(cx);
+        panel._refresh_task.take().expect("refresh task")
+      })
+    });
+    refresh.await;
+    await_branch_refresh(&page, cx).await;
+
+    // The palette offers the other branches, never the one we are on.
+    page.read_with(cx, |page, _| {
+      let targets = rebase_branch_candidates(
+        &page.branches,
+        page
+          .branch_status
+          .as_ref()
+          .map(|status| status.name.as_str()),
+        page.upstream_branch.as_ref(),
+        page.default_branch.as_ref(),
+      );
+      assert!(targets.iter().any(|branch| branch.name.as_ref() == base));
+      assert!(
+        !targets
+          .iter()
+          .any(|branch| branch.name.as_ref() == "feature")
+      );
+    });
+
+    page.update_in(cx, |page, window, cx| {
+      page
+        .handle_command_palette_action(
+          CommandPaletteAction::InteractiveRebaseBranch {
+            name: ui::CommandPaletteBranch {
+              name: base.clone().into(),
+              kind: ui::CommandPaletteBranchKind::Local,
+            },
+          },
+          window,
+          cx,
+        )
+        .expect("the todo opens")
+    });
+    cx.run_until_parked();
+
+    let commits = page.read_with(cx, |page, _| {
+      assert_eq!(page.center, CenterView::InteractiveRebase);
+      git::list_interactive_rebase_commits(
+        &repo.path,
+        &InteractiveRebaseTarget::Branch(git::BranchRef {
+          name: base.clone(),
+          kind: git::BranchKind::Local,
+        }),
+      )
+      .expect("preview")
+      .commits
+    });
+
+    let todo = commits
+      .iter()
+      .map(|commit| git::InteractiveRebaseTodoEntry {
+        oid: commit.oid.clone(),
+        action: git::InteractiveRebaseAction::Pick,
+      })
+      .collect::<Vec<_>>();
+    page.update_in(cx, |page, window, cx| {
+      page
+        .apply_interactive_rebase(
+          InteractiveRebaseTarget::Branch(git::BranchRef {
+            name: base.clone(),
+            kind: git::BranchKind::Local,
+          }),
+          todo,
+          window,
+          cx,
+        )
+        .expect("the rebase starts")
+    });
+    let task = page.update(cx, |page, _| {
+      page._interactive_rebase_task.take().expect("rebase task")
+    });
+    task.await;
+    cx.run_until_parked();
+
+    // Stopped on the conflict: the file is on screen with the prepared message.
+    assert!(git::is_rebase_in_progress(&repo.path).expect("rebase state"));
+    page.read_with(cx, |page, cx| {
+      assert_eq!(page.center, CenterView::Diff);
+      assert_eq!(page.selected_file.as_deref(), Some(Path::new("a.txt")));
+      assert!(page.interactive_rebase_todo_view.is_none());
+      assert_eq!(page.dock_panel.read(cx).commit_message(cx), "feature work");
+    });
+  }
+
+  #[gpui::test]
+  async fn cancelling_the_todo_leaves_the_center_as_it_was(cx: &mut TestAppContext) {
+    let repo = TempRepo::init("session-page-interactive-rebase-cancel");
+    commit_text_file(&repo.path, Path::new("a.txt"), "v1\n", "first");
+    commit_text_file(&repo.path, Path::new("a.txt"), "v2\n", "second");
+    commit_text_file(&repo.path, Path::new("a.txt"), "v3\n", "third");
+
+    let (page, cx) = add_session_page_window(repo.path.clone(), cx);
+    cx.executor().allow_parking();
+    let refresh = page.update(cx, |page, cx| {
+      page.refresh_branch(cx);
+      page.dock_panel.update(cx, |panel, cx| {
+        panel.refresh(cx);
+        panel._refresh_task.take().expect("refresh task")
+      })
+    });
+    refresh.await;
+    await_branch_refresh(&page, cx).await;
+
+    page.update_in(cx, |page, window, cx| {
+      page
+        .start_interactive_rebase(InteractiveRebaseTarget::HeadCount(2), window, cx)
+        .expect("the todo opens")
+    });
+    cx.run_until_parked();
+    page.read_with(cx, |page, _| {
+      assert_eq!(page.center, CenterView::InteractiveRebase)
+    });
+
+    page.update_in(cx, |page, window, cx| {
+      page.close_interactive_rebase_todo(window, cx)
+    });
+
+    page.read_with(cx, |page, _| {
+      assert_eq!(page.center, CenterView::Conversation);
+      assert!(page.interactive_rebase_todo_view.is_none());
+    });
+    // Nothing was rewritten.
+    let summaries = git::list_commit_history(&repo.path, 10)
+      .expect("history")
+      .into_iter()
+      .map(|commit| commit.summary)
+      .collect::<Vec<_>>();
+    assert_eq!(summaries, vec!["third", "second", "first"]);
+  }
+
+  #[gpui::test]
   async fn an_interactive_rebase_is_refused_with_uncommitted_changes(cx: &mut TestAppContext) {
     let repo = TempRepo::init("session-page-interactive-rebase-dirty");
     commit_text_file(&repo.path, Path::new("a.txt"), "v1\n", "first");
@@ -2040,7 +2187,56 @@ mod tests {
         ids.contains(&CommandPaletteCommandId::Pull),
         "a tracked branch can be pulled"
       );
+      assert!(
+        !ids.contains(&CommandPaletteCommandId::ForcePush),
+        "nothing forces a push on a branch that only moved forward"
+      );
     });
+
+    // Rewriting a commit the remote already has diverges the branch.
+    git::push(&repo.path, false).expect("push the commit first");
+    git::undo_last_commit(&repo.path).expect("undo the last commit");
+    commit_text_file(
+      &repo.path,
+      Path::new("a.txt"),
+      "v2 rewritten\n",
+      "rewritten",
+    );
+    page.update(cx, |page, cx| page.refresh_branch(cx));
+    await_branch_refresh(&page, cx).await;
+
+    page.read_with(cx, |page, cx| {
+      let ids = page
+        .palette_commands(1, cx)
+        .into_iter()
+        .map(|command| command.id)
+        .collect::<Vec<_>>();
+      assert!(ids.contains(&CommandPaletteCommandId::ForcePush));
+      assert!(!ids.contains(&CommandPaletteCommandId::Push));
+    });
+  }
+
+  /// Leaves `feature` checked out with a commit that conflicts with the base branch.
+  fn start_conflicting_rebase_setup(repo_root: &Path) -> String {
+    commit_text_file(repo_root, Path::new("a.txt"), "base\n", "initial");
+    let base = git::current_branch_status(repo_root)
+      .expect("branch status")
+      .name;
+    let feature = git::BranchRef {
+      name: "feature".to_string(),
+      kind: git::BranchKind::Local,
+    };
+    git::create_branch(repo_root, &feature.name).expect("create branch");
+    git::switch_branch(repo_root, &feature).expect("switch to feature");
+    commit_text_file(repo_root, Path::new("a.txt"), "feature\n", "feature work");
+    let base_ref = git::BranchRef {
+      name: base.clone(),
+      kind: git::BranchKind::Local,
+    };
+    git::switch_branch(repo_root, &base_ref).expect("switch back");
+    commit_text_file(repo_root, Path::new("a.txt"), "main\n", "main work");
+    git::switch_branch(repo_root, &feature).expect("switch to feature");
+    base
   }
 
   /// Leaves the repository mid-rebase, stopped on a conflicted file.

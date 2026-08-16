@@ -3520,67 +3520,6 @@ mod tests {
     );
   }
 
-  #[test]
-  fn command_palette_rebase_branches_exclude_current_branch_and_prioritize_base_branches() {
-    let branches = vec![
-      BranchRef {
-        name: "feature".into(),
-        kind: BranchKind::Local,
-      },
-      BranchRef {
-        name: "topic".into(),
-        kind: BranchKind::Local,
-      },
-      BranchRef {
-        name: "main".into(),
-        kind: BranchKind::Local,
-      },
-      BranchRef {
-        name: "origin/main".into(),
-        kind: BranchKind::Remote,
-      },
-      BranchRef {
-        name: "origin/feature".into(),
-        kind: BranchKind::Remote,
-      },
-    ];
-
-    let rebase_branches = rebase_branch_candidates(
-      &branches,
-      Some("feature"),
-      Some(&BranchRef {
-        name: "origin/feature".into(),
-        kind: BranchKind::Remote,
-      }),
-      Some(&BranchRef {
-        name: "origin/main".into(),
-        kind: BranchKind::Remote,
-      }),
-    );
-
-    assert_eq!(
-      rebase_branches,
-      vec![
-        CommandPaletteBranch {
-          name: "origin/feature".into(),
-          kind: CommandPaletteBranchKind::Remote,
-        },
-        CommandPaletteBranch {
-          name: "origin/main".into(),
-          kind: CommandPaletteBranchKind::Remote,
-        },
-        CommandPaletteBranch {
-          name: "main".into(),
-          kind: CommandPaletteBranchKind::Local,
-        },
-        CommandPaletteBranch {
-          name: "topic".into(),
-          kind: CommandPaletteBranchKind::Local,
-        },
-      ]
-    );
-  }
-
   #[gpui::test]
   fn command_palette_rebase_targets_do_not_include_current_local_branch(cx: &mut TestAppContext) {
     init_gpui_test(cx);

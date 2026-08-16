@@ -916,6 +916,14 @@ pub fn is_rebase_in_progress(repo_root: &Path) -> Result<bool> {
   ))
 }
 
+fn rebase_merge_message(repo_root: &Path) -> Option<String> {
+  let message = std::fs::read_to_string(repo_root.join(".git/rebase-merge/message"))
+    .or_else(|_| std::fs::read_to_string(repo_root.join(".git/rebase-apply/msg-clean")))
+    .ok()?;
+  let summary = message.lines().next()?.trim();
+  (!summary.is_empty()).then(|| summary.to_string())
+}
+
 pub fn current_rebase_commit_message(repo_root: &Path) -> Result<Option<String>> {
   let repo =
     Repository::open(repo_root).with_context(|| format!("open repo at {:?}", repo_root))?;
@@ -926,9 +934,12 @@ pub fn current_rebase_commit_message(repo_root: &Path) -> Result<Option<String>>
     return Ok(None);
   }
 
-  let mut rebase = repo.open_rebase(None).context("open in-progress rebase")?;
+  // `git rebase -i` leaves a state git2 cannot open; it writes the message itself.
+  let Ok(mut rebase) = repo.open_rebase(None) else {
+    return Ok(rebase_merge_message(repo_root));
+  };
   let Some(current_index) = rebase.operation_current() else {
-    return Ok(None);
+    return Ok(rebase_merge_message(repo_root));
   };
   let Some(operation) = rebase.nth(current_index) else {
     return Ok(None);
@@ -2682,6 +2693,12 @@ mod tests {
     assert!(
       is_rebase_in_progress(&repo.path).expect("read rebase state"),
       "rebase state should be active after interactive rebase conflict"
+    );
+    // git2 cannot open the state the CLI left: the message comes from the file.
+    assert_eq!(
+      current_rebase_commit_message(&repo.path).expect("read rebase message"),
+      Some("main change".to_string()),
+      "the commit being replayed names itself"
     );
 
     std::fs::write(repo.path.join(rel_path), "resolved\n").expect("write resolved contents");
