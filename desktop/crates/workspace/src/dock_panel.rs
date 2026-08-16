@@ -41,11 +41,11 @@ use std::rc::Rc;
 
 use crate::api::GithubPullRequest;
 use crate::auth_state::AuthStateStore;
-use crate::git_page::{
-  GithubBranchContext, PullRequestCreatedHandler, open_create_pull_request_dialog,
-};
 use crate::github_navigation::open_pr_target;
 use crate::github_shared::{pull_request_status_color, pull_request_status_label};
+use crate::pull_request_dialog::{
+  GithubBranchContext, PullRequestCreatedHandler, open_create_pull_request_dialog,
+};
 use crate::workspace::WorkspaceApi;
 use ui::{Button, ButtonVariants as _, StatusThemeExt as _, Textarea, TextareaState, UiIconName};
 

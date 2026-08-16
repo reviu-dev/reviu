@@ -6,7 +6,6 @@ use std::{
   time::{Duration, Instant},
 };
 
-use agent_chat_panel::AgentChatPanel;
 #[cfg(test)]
 use editor::ConflictNavigationState;
 use editor::{
@@ -20,59 +19,32 @@ use git::{
   abort_merge, abort_rebase, amend_commit, branch_has_unpublished_commits, commit_changes,
   current_branch_status, current_branch_upstream, current_github_remote_repo, current_head_sha,
   current_history_revision, current_rebase_commit_message, default_remote_branch,
-  default_stash_message, detached_head_label, diff_set_from_patch, fetch, head_commit_status,
+  default_stash_message, detached_head_label, diff_set_from_patch, head_commit_status,
   is_merge_in_progress, is_rebase_in_progress, list_branches, list_commit_changed_files,
   list_commit_history, list_interactive_rebase_commits, list_repo_head_files, list_repo_status,
-  list_stashes, load_commit_file_diff, push, resolve_branch_ref, stage_all,
-  start_interactive_rebase, switch_branch,
+  list_stashes, load_commit_file_diff, push, stage_all, start_interactive_rebase, switch_branch,
 };
 use gpui::{
   Anchor, AnyElement, AnyWindowHandle, App, Context, Entity, FocusHandle, Focusable, Global,
-  InteractiveElement, ParentElement, PathPromptOptions, Render, SharedString, Styled, Subscription,
-  Task, WeakEntity, Window, actions, div, img, prelude::*, px,
+  InteractiveElement, ParentElement, PathPromptOptions, Render, SharedString, Styled, Task,
+  WeakEntity, Window, div, img, prelude::*, px,
 };
 use gpui_component::{
   ActiveTheme as _, Disableable, Icon, IconName, Selectable, Sizable, StyledExt,
   button::{Button, ButtonGroup, ButtonVariant, ButtonVariants as _},
-  checkbox::Checkbox,
-  dialog::{DialogDescription, DialogFooter, DialogHeader, DialogTitle},
   h_flex,
   input::InputEvent,
   kbd::Kbd,
   menu::{DropdownMenu, PopupMenuItem},
   notification::Notification,
-  select::{Select, SelectEvent, SelectState},
   spinner::Spinner,
   tag::Tag,
   tooltip::Tooltip,
   tree::{TreeItem, TreeState, tree},
-  v_flex,
 };
 use sentry::protocol::{Map, Value};
 use smol::unblock;
 
-pub(crate) fn agent_chat_state_dir() -> Option<std::path::PathBuf> {
-  Some(dirs::config_dir()?.join("reviu").join("agent-chats"))
-}
-
-/// Agent tool-call locations are absolute; the diff view opens by repo-relative path.
-pub(crate) fn agent_path_to_repo_relative(path: PathBuf, repo_root: Option<&Path>) -> PathBuf {
-  repo_root
-    .and_then(|root| path.strip_prefix(root).ok())
-    .map(Path::to_path_buf)
-    .unwrap_or(path)
-}
-
-pub(crate) fn prune_agent_chat_state_once() {
-  use std::sync::OnceLock;
-  static PRUNED: OnceLock<()> = OnceLock::new();
-  PRUNED.get_or_init(|| {
-    if let Some(dir) = agent_chat_state_dir() {
-      let _ =
-        AgentChatPanel::prune_old_state(&dir, std::time::Duration::from_secs(60 * 60 * 24 * 30));
-    }
-  });
-}
 use terminal::TerminalView;
 
 use crate::{
@@ -102,17 +74,15 @@ use ui::{
   CommandPalette, CommandPaletteAction, CommandPaletteBranch, CommandPaletteBranchKind,
   CommandPaletteCommand, CommandPaletteConfig, CommandPaletteHandler, CommandPaletteInitialScreen,
   CommandPalettePage, CommandPaletteRepository, CommandPaletteStash, ConfirmDialog,
-  DropdownSelectConfig, DropdownSelectItem, FILE_ICON_SIZE_PX, Input, InputState,
-  PAGE_HEADER_HEIGHT, SearchFileEntry, SearchFileHandler, SelectableRowStyle, StatusAlert,
-  StatusThemeExt, Textarea, TextareaState, UiIconName, WindowExt, dropdown_select,
-  file_icon_path_for_path_with_theme, selectable_list_item,
+  DropdownSelectConfig, DropdownSelectItem, FILE_ICON_SIZE_PX, PAGE_HEADER_HEIGHT, SearchFileEntry,
+  SearchFileHandler, SelectableRowStyle, StatusAlert, StatusThemeExt, Textarea, TextareaState,
+  UiIconName, WindowExt, dropdown_select, file_icon_path_for_path_with_theme, selectable_list_item,
 };
 
 mod command_palette;
 mod commit;
 mod file_list;
 mod history;
-mod pull_request_dialog;
 mod rebase;
 mod remote;
 mod render;
@@ -120,8 +90,6 @@ mod review_comments;
 mod staging;
 #[cfg(test)]
 mod test_support;
-
-pub(crate) use pull_request_dialog::open_create_pull_request_dialog;
 
 use file_list::{format_git_file_name_label, render_repo_status_label};
 
@@ -148,17 +116,6 @@ const TERMINAL_SIDEBAR_MAX_WIDTH: f32 = 1200.0;
 type RepoSelectHandler = Rc<dyn Fn(PathBuf, &mut Window, &mut App)>;
 type BranchSelectHandler = Rc<dyn Fn(BranchRef, &mut Window, &mut App)>;
 
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct GithubBranchContext {
-  pub owner: String,
-  pub repo: String,
-  pub branch: String,
-}
-
-/// Invoked after the dialog successfully creates a pull request.
-pub(crate) type PullRequestCreatedHandler =
-  Rc<dyn Fn(&GithubBranchContext, &GithubPullRequest, &mut gpui::App)>;
-
 fn git_page_created_handler(git_page: WeakEntity<GitPage>) -> PullRequestCreatedHandler {
   Rc::new(move |context, pull_request, cx| {
     let _ = git_page.update(cx, |git_page, cx| {
@@ -184,23 +141,6 @@ enum GitBranchPullRequestButtonState {
 struct GitBranchSwitchNotificationId;
 struct GitActionErrorNotificationId;
 struct GitProPushHintNotificationId;
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-enum GitPageOpenAction {
-  MergeBaseBranch { base_branch_name: String },
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-struct ActiveConflictResolutionSnapshot {
-  merge_in_progress: bool,
-  rebase_in_progress: bool,
-  conflicted_path: Option<PathBuf>,
-}
-
-enum GitPageOpenActionResult {
-  ResumeActiveConflict(ActiveConflictResolutionSnapshot),
-  MergeBaseBranchReady(BranchRef),
-}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum GitCommitPrimaryButtonState {
@@ -251,29 +191,6 @@ impl GitPageHandle {
     };
     let _ = weak.update(cx, |this, cx| this.refresh_current_page(cx));
   }
-
-  pub fn show_repository_and_merge_base(
-    repo_root: PathBuf,
-    base_branch_name: String,
-    cx: &mut App,
-  ) {
-    NavigationHistory::navigate("/git", cx);
-
-    let Some(weak) = cx
-      .try_global::<Self>()
-      .and_then(|handle| handle.git_page.clone())
-    else {
-      return;
-    };
-
-    let _ = weak.update(cx, |this, cx| {
-      this.open_repository_with_action(
-        repo_root,
-        GitPageOpenAction::MergeBaseBranch { base_branch_name },
-        cx,
-      );
-    });
-  }
 }
 
 struct GitCommandPaletteContents {
@@ -284,17 +201,6 @@ struct GitCommandPaletteContents {
   stashes: Vec<CommandPaletteStash>,
   default_stash_message: Option<SharedString>,
 }
-
-actions!(
-  workspace,
-  [
-    OpenRepository,
-    SaveFile,
-    ShowCommandPalette,
-    ShowFileSearch,
-    CommitChanges
-  ]
-);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum GitSidebarMode {
@@ -599,7 +505,6 @@ pub struct GitPage {
   branch_pr_lookup_context: Option<GithubBranchContext>,
   branch_pr_lookup_result: Option<GithubPullRequest>,
   branch_pr_lookup_loading: bool,
-  pending_open_action: Option<GitPageOpenAction>,
   pending_conflict_reveal_path: Option<PathBuf>,
   auth_state: AuthState,
   auth_task: Option<Task<()>>,
@@ -644,6 +549,7 @@ struct UnpublishedBranchCheckKey {
   head_sha: Option<String>,
 }
 
+use crate::actions::{CommitChanges, OpenRepository, ShowCommandPalette, ShowFileSearch};
 use crate::agent_review::AgentReviewComments;
 use crate::annotations::{
   AnnotationDirection, AnnotationKind, annotation_navigation_state_for, can_navigate_annotations,
@@ -663,6 +569,9 @@ use crate::hunk_actions::{
   render_hunk_actions, resolve_active_conflict, restore_hunk, toggle_hunk_stage,
 };
 use crate::palette_branches::{palette_branch, rebase_branch_candidates};
+use crate::pull_request_dialog::{
+  GithubBranchContext, PullRequestCreatedHandler, open_create_pull_request_dialog,
+};
 use crate::repo_command::{RepoCommand, RepoCommandOutcome, branch_ref_from_palette};
 use crate::repo_state::{
   PaletteCommand, RepoState, can_accept_all_conflicts, push_flags, should_publish_branch,
@@ -1630,7 +1539,6 @@ impl GitPage {
       branch_pr_lookup_context: None,
       branch_pr_lookup_result: None,
       branch_pr_lookup_loading: false,
-      pending_open_action: None,
       pending_conflict_reveal_path: None,
       auth_state: AuthState::Unknown,
       auth_task: None,
@@ -1735,7 +1643,6 @@ impl GitPage {
       branch_pr_lookup_context: None,
       branch_pr_lookup_result: None,
       branch_pr_lookup_loading: false,
-      pending_open_action: None,
       pending_conflict_reveal_path: None,
       auth_state: AuthState::Unknown,
       auth_task: None,
@@ -1770,49 +1677,6 @@ impl GitPage {
   fn handle_repo_select_confirm(&mut self, repo_root: PathBuf, cx: &mut Context<Self>) {
     self.set_selected_repo(repo_root, cx);
     self.ensure_page_shortcut_focus(cx);
-  }
-
-  fn open_repository_with_action(
-    &mut self,
-    repo_root: PathBuf,
-    action: GitPageOpenAction,
-    cx: &mut Context<Self>,
-  ) {
-    let conflict_resolution = Self::active_conflict_resolution_snapshot(&repo_root);
-    self.set_selected_repo(repo_root.clone(), cx);
-    self.pending_open_action = Some(action.clone());
-    if let Some(conflict_resolution) = conflict_resolution {
-      self.merge_in_progress = conflict_resolution.merge_in_progress;
-      self.rebase_in_progress = conflict_resolution.rebase_in_progress;
-    }
-
-    match action {
-      GitPageOpenAction::MergeBaseBranch { base_branch_name } => {
-        self.start_merge_base_branch_action(repo_root, base_branch_name, cx);
-      }
-    }
-  }
-
-  fn active_conflict_resolution_snapshot(
-    repo_root: &Path,
-  ) -> Option<ActiveConflictResolutionSnapshot> {
-    let merge_in_progress = is_merge_in_progress(repo_root).unwrap_or(false);
-    let rebase_in_progress = is_rebase_in_progress(repo_root).unwrap_or(false);
-    let conflicted_path = crate::repo_command::first_conflicted_path(repo_root);
-
-    (merge_in_progress || rebase_in_progress || conflicted_path.is_some()).then_some(
-      ActiveConflictResolutionSnapshot {
-        merge_in_progress,
-        rebase_in_progress,
-        conflicted_path,
-      },
-    )
-  }
-
-  fn open_action_loading_message(action: &GitPageOpenAction) -> &'static str {
-    match action {
-      GitPageOpenAction::MergeBaseBranch { .. } => "Opening conflict resolution...",
-    }
   }
 
   fn refocus_page_shortcuts_after_dropdown_select(
@@ -3330,32 +3194,6 @@ mod tests {
   use ui::CommandPaletteCommandId;
 
   use crate::api::UserRole;
-
-  #[test]
-  fn agent_path_strips_repo_root_when_absolute() {
-    let root = Path::new("/home/u/proj");
-    assert_eq!(
-      agent_path_to_repo_relative(PathBuf::from("/home/u/proj/src/lib.rs"), Some(root)),
-      PathBuf::from("src/lib.rs")
-    );
-  }
-
-  #[test]
-  fn agent_path_kept_when_outside_root_or_already_relative() {
-    let root = Path::new("/home/u/proj");
-    assert_eq!(
-      agent_path_to_repo_relative(PathBuf::from("src/lib.rs"), Some(root)),
-      PathBuf::from("src/lib.rs")
-    );
-    assert_eq!(
-      agent_path_to_repo_relative(PathBuf::from("/other/x.rs"), Some(root)),
-      PathBuf::from("/other/x.rs")
-    );
-    assert_eq!(
-      agent_path_to_repo_relative(PathBuf::from("/abs/x.rs"), None),
-      PathBuf::from("/abs/x.rs")
-    );
-  }
 
   #[test]
   fn open_action_repo_item_is_sentinel() {

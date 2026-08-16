@@ -88,7 +88,6 @@ use crate::{
     should_show_unsupported_binary_placeholder,
   },
   file_search_palette::open_file_search_palette as open_shared_file_search_palette,
-  git_page::GitPageHandle,
   github_navigation::{
     SamePrGfmNavigation, open_commit_target, open_pr_target, open_profile_target, open_repo_target,
     same_pr_gfm_navigation, should_open_externally,
@@ -96,6 +95,7 @@ use crate::{
   github_shared,
   navigation::NavigationHistory,
   sentry_context,
+  session_page::SessionPageHandle,
   workspace::WorkspaceApi,
 };
 
@@ -3509,7 +3509,7 @@ impl GithubPrDetailsPage {
         let pr_head = self.pull_request.as_ref().map(|pr| pr.head_sha.as_str());
 
         if current_head.as_deref() == pr_head {
-          GitPageHandle::show_repository_and_merge_base(repo_root, base_branch_name, cx);
+          SessionPageHandle::show_repository_and_merge_base(repo_root, base_branch_name, cx);
         } else {
           self.start_sync_local_branch_to_pr_head(
             repo_root,
@@ -3520,7 +3520,7 @@ impl GithubPrDetailsPage {
         }
       }
       GithubPrLocalProjectPostAction::OpenGitPageMergeBase { base_branch_name } => {
-        GitPageHandle::show_repository_and_merge_base(repo_root, base_branch_name, cx);
+        SessionPageHandle::show_repository_and_merge_base(repo_root, base_branch_name, cx);
       }
     }
   }
@@ -3808,7 +3808,7 @@ impl GithubPrDetailsPage {
     })
   }
 
-  fn open_overview_pr_alert_in_git_page(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+  fn open_overview_pr_alert_in_shell(&mut self, window: &mut Window, cx: &mut Context<Self>) {
     let Some(kind) = overview_pr_alert_kind(self.merge_readiness.as_ref(), self.checks.as_ref())
     else {
       return;
@@ -9405,7 +9405,7 @@ impl GithubPrDetailsPage {
             .disabled(self.local_branch_switch_loading || self.local_project_update_loading)
             .on_click(move |_, window, cx| {
               view.update(cx, |this, cx| {
-                this.open_overview_pr_alert_in_git_page(window, cx);
+                this.open_overview_pr_alert_in_shell(window, cx);
               });
             }),
         )
@@ -14710,7 +14710,7 @@ mod tests {
   }
 
   #[gpui::test]
-  fn overview_conflicts_action_returns_to_git_page_when_conflict_resolution_is_already_active(
+  fn overview_conflicts_action_lands_in_the_shell_when_conflict_resolution_is_already_active(
     cx: &mut TestAppContext,
   ) {
     init_gpui_test(cx);
@@ -14771,11 +14771,11 @@ mod tests {
     });
 
     page.update_in(cx, |this, window, cx| {
-      this.open_overview_pr_alert_in_git_page(window, cx);
+      this.open_overview_pr_alert_in_shell(window, cx);
     });
 
     cx.update(|_, cx| {
-      assert_eq!(NavigationHistory::current_pathname(cx).as_ref(), "/git");
+      assert_eq!(NavigationHistory::current_pathname(cx).as_ref(), "/session");
     });
 
     std::fs::remove_dir_all(&repo_root).ok();

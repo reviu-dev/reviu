@@ -21,6 +21,9 @@ use gpui_component::{
 };
 use smol::unblock;
 
+use crate::agent_chat_state::{
+  agent_chat_state_dir, agent_path_to_repo_relative, prune_agent_chat_state_once,
+};
 use crate::agent_review::{
   AgentReviewComments, original_lines_for_request, sync_comments_to_editor,
 };
@@ -33,9 +36,6 @@ use crate::dock_panel::{CommitMenuCommand, DockPanel, DockPanelEvent, DockPanelT
 use crate::file_search_palette::open_file_search_palette;
 use crate::file_view::{
   BinaryPreview, build_binary_preview, render_binary_preview, render_file_title,
-};
-use crate::git_page::{
-  agent_chat_state_dir, agent_path_to_repo_relative, prune_agent_chat_state_once,
 };
 use crate::github_notifications::{self, GithubNotificationsStore};
 use crate::navigation::NavigationHistory;
@@ -165,6 +165,19 @@ impl SessionPageHandle {
   }
 
   /// Navigate to the sessions shell and attach a code selection as agent context.
+  /// Entry point from a pull request: land in the repository, fetch, and merge
+  /// its base branch so the conflicts can be resolved here.
+  pub fn show_repository_and_merge_base(
+    repo_root: PathBuf,
+    base_branch_name: String,
+    cx: &mut App,
+  ) {
+    NavigationHistory::navigate("/session", cx);
+    Self::with_page(cx, move |page, window, cx| {
+      page.start_merge_base_branch(repo_root.clone(), base_branch_name.clone(), window, cx);
+    });
+  }
+
   pub fn add_selection(path: String, text: String, cx: &mut App) {
     NavigationHistory::navigate("/session", cx);
     Self::with_page(cx, move |page, window, cx| {
@@ -187,6 +200,7 @@ pub struct SessionPage {
   opened_commit: Option<String>,
   interactive_rebase_todo_view: Option<Entity<InteractiveRebaseTodoView>>,
   _interactive_rebase_task: Option<Task<()>>,
+  pub(crate) _merge_base_task: Option<Task<()>>,
   /// Mounting a real agent panel in a test would spawn an agent process.
   #[cfg(test)]
   pretend_agent_turn_in_flight: bool,
@@ -264,6 +278,7 @@ impl SessionPage {
       opened_commit: None,
       interactive_rebase_todo_view: None,
       _interactive_rebase_task: None,
+      _merge_base_task: None,
       #[cfg(test)]
       pretend_agent_turn_in_flight: false,
       open_file_generation: 0,
@@ -1368,6 +1383,55 @@ impl SessionPage {
     Ok(())
   }
 
+  fn start_merge_base_branch(
+    &mut self,
+    repo_root: PathBuf,
+    base_branch_name: String,
+    window: &mut Window,
+    cx: &mut Context<Self>,
+  ) {
+    if self.selected_repo.as_deref() != Some(repo_root.as_path())
+      && let Err(error) = self.set_selected_repo(repo_root.clone(), window, cx)
+    {
+      window.push_notification(Notification::warning(error), cx);
+      return;
+    }
+
+    // A conflict is already waiting: resume it instead of starting another merge.
+    if let Some(path) = crate::repo_command::first_conflicted_path(&repo_root) {
+      self.open_diff(path, None, window, cx);
+      return;
+    }
+
+    let window_handle = self.window_handle;
+    let task = cx.spawn(async move |this, cx| {
+      let fetch_root = repo_root.clone();
+      let branch_name = base_branch_name.clone();
+      let resolved = unblock(move || {
+        git::fetch(&fetch_root)?;
+        git::resolve_branch_ref(&fetch_root, &branch_name)?.ok_or_else(|| {
+          anyhow::anyhow!("branch {branch_name:?} was not found locally or on any remote")
+        })
+      })
+      .await;
+
+      let _ = cx.update_window(window_handle, |_, window, cx| {
+        let _ = this.update(cx, |this, cx| match resolved {
+          Ok(branch) => {
+            if let Err(error) = this.run_repo_command(RepoCommand::MergeBranch(branch), window, cx)
+            {
+              window.push_notification(Notification::warning(error), cx);
+            }
+          }
+          Err(error) => {
+            window.push_notification(Notification::error(error.to_string()), cx);
+          }
+        });
+      });
+    });
+    self._merge_base_task = Some(task);
+  }
+
   fn run_repo_command(
     &mut self,
     command: RepoCommand,
@@ -2276,6 +2340,18 @@ mod tests {
       "v1\n"
     );
     assert_eq!(git::list_stashes(&repo.path).expect("stashes").len(), 1);
+
+    // The command triggered a status refresh; let it finish before touching git
+    // again, or the index lock and the test race.
+    let refresh = page.update(cx, |page, cx| {
+      page
+        .dock_panel
+        .update(cx, |panel, _| panel._refresh_task.take())
+    });
+    if let Some(refresh) = refresh {
+      refresh.await;
+    }
+    cx.run_until_parked();
 
     // Cherry-picking a commit from the base branch.
     let base_ref = git::BranchRef {
@@ -3472,6 +3548,55 @@ mod tests {
         .to_string();
       assert_eq!(first_line.trim_end(), "v3 working");
       assert!(!editor.is_read_only);
+    });
+  }
+
+  #[gpui::test]
+  async fn merging_the_base_branch_lands_on_the_conflict(cx: &mut TestAppContext) {
+    let repo = TempRepo::init("session-page-merge-base");
+    let base = start_conflicting_rebase_setup(&repo.path);
+
+    let (page, cx) = add_session_page_window(repo.path.clone(), cx);
+    cx.executor().allow_parking();
+    cx.run_until_parked();
+
+    // Comes from a pull request: fetch, then merge its base branch here.
+    page.update_in(cx, |page, window, cx| {
+      page.start_merge_base_branch(repo.path.clone(), base.clone(), window, cx)
+    });
+    let merge_base = page.update(cx, |page, _| {
+      page._merge_base_task.take().expect("merge base task")
+    });
+    merge_base.await;
+    cx.run_until_parked();
+    let command = page.update(cx, |page, _| page._repo_command_task.take());
+    if let Some(command) = command {
+      command.await;
+    }
+    cx.run_until_parked();
+
+    assert!(git::is_merge_in_progress(&repo.path).expect("merge state"));
+    page.read_with(cx, |page, cx| {
+      assert_eq!(page.center, CenterView::Diff);
+      assert_eq!(page.selected_file.as_deref(), Some(Path::new("a.txt")));
+      assert_eq!(
+        page.dock_panel.read(cx).commit_message(cx),
+        crate::repo_command::merge_commit_message(&base, "feature")
+      );
+    });
+
+    // Asked again mid-merge: it resumes the conflict instead of merging twice.
+    page.update_in(cx, |page, window, cx| {
+      page.close_diff(window, cx);
+      page.start_merge_base_branch(repo.path.clone(), base.clone(), window, cx)
+    });
+    cx.run_until_parked();
+    page.read_with(cx, |page, _| {
+      assert!(
+        page._merge_base_task.is_none(),
+        "no fetch and no second merge"
+      );
+      assert_eq!(page.center, CenterView::Diff);
     });
   }
 

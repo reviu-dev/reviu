@@ -44,7 +44,9 @@ actions!(
 );
 
 mod about_page;
+mod actions;
 mod active_local_repo;
+mod agent_chat_state;
 mod agent_review;
 mod agent_settings;
 mod analytics;
@@ -83,6 +85,7 @@ pub mod navigation;
 mod palette_actions;
 mod palette_branches;
 mod pricing_copy;
+mod pull_request_dialog;
 mod repo_command;
 mod repo_state;
 mod sentry_context;
@@ -95,14 +98,13 @@ mod svg_preview;
 mod test_support;
 mod workspace;
 
+pub use actions::{CommitChanges, OpenRepository, SaveFile, ShowCommandPalette, ShowFileSearch};
 pub use app_profile::{AppProfile, URL_SCHEME_PROD};
 pub use auth_state::AuthStateStore;
 pub use crash_report::{
   StartupCrashReport, install_crash_reporter, show_startup_crash_report_notification,
   take_pending_startup_crash_report,
 };
-pub use git_page::{
-  AuthCallbackTarget, CommitChanges, OpenRepository, SaveFile, ShowCommandPalette, ShowFileSearch,
-};
+pub use git_page::AuthCallbackTarget;
 pub use shortcuts::{SHOW_COMMAND_PALETTE_SHORTCUT, install_app_key_bindings};
 pub use workspace::{WorkspaceView, build_app_menus};

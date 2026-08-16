@@ -1,6 +1,45 @@
 //! Create-pull-request dialog and its template lookup.
 
-use super::*;
+use std::rc::Rc;
+
+use gpui::{
+  AnyWindowHandle, App, Context, Entity, FocusHandle, Focusable, IntoElement, ParentElement,
+  Render, SharedString, Styled, Subscription, Task, Window, div, prelude::*, px,
+};
+use gpui_component::{
+  ActiveTheme as _, Disableable as _, Sizable as _,
+  checkbox::Checkbox,
+  dialog::{DialogDescription, DialogFooter, DialogHeader, DialogTitle},
+  h_flex,
+  input::{Input, InputState},
+  notification::Notification,
+  select::{Select, SelectEvent, SelectState},
+  spinner::Spinner,
+  v_flex,
+};
+use smol::unblock;
+use ui::{
+  Button, ButtonVariants as _, StatusThemeExt as _, Textarea, TextareaState, UiIconName,
+  WindowExt as _,
+};
+
+use crate::api::{ApiClient, GithubPullRequest};
+use crate::github_pr_details_page::GithubPrDetailsPageHandle;
+use crate::github_shared;
+
+/// Errors of a git action share one notification slot, so they replace each other.
+struct GitActionErrorNotificationId;
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct GithubBranchContext {
+  pub owner: String,
+  pub repo: String,
+  pub branch: String,
+}
+
+/// Invoked after the dialog successfully creates a pull request.
+pub(crate) type PullRequestCreatedHandler =
+  Rc<dyn Fn(&GithubBranchContext, &GithubPullRequest, &mut gpui::App)>;
 
 struct CreatePullRequestDialog {
   api: ApiClient,

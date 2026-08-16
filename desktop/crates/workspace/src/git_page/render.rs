@@ -482,14 +482,6 @@ impl GitPage {
     selected_file.is_some() && !has_editor
   }
 
-  pub(super) fn should_show_open_action_loading_state(
-    pending_open_action: Option<&GitPageOpenAction>,
-    selected_file: Option<&Path>,
-    has_editor: bool,
-  ) -> bool {
-    pending_open_action.is_some() && selected_file.is_none() && !has_editor
-  }
-
   pub(super) fn render_editor_header(
     &self,
     editor: &Entity<Editor>,
@@ -1377,15 +1369,6 @@ impl GitPage {
       return self.render_loading_state("Loading file...", cx);
     }
 
-    if Self::should_show_open_action_loading_state(
-      self.pending_open_action.as_ref(),
-      self.selected_file.as_deref(),
-      self.editor.is_some(),
-    ) && let Some(action) = self.pending_open_action.as_ref()
-    {
-      return self.render_loading_state(Self::open_action_loading_message(action), cx);
-    }
-
     self.render_empty_state("Select a file to view diff", cx)
   }
 
@@ -1632,33 +1615,6 @@ mod tests {
       true
     ));
     assert!(!GitPage::should_show_editor_loading_state(None, false));
-  }
-
-  #[test]
-  fn should_show_open_action_loading_state_only_for_pending_repo_open_actions() {
-    let action = GitPageOpenAction::MergeBaseBranch {
-      base_branch_name: "main".to_string(),
-    };
-    let selected = Path::new("src/main.rs");
-
-    assert!(GitPage::should_show_open_action_loading_state(
-      Some(&action),
-      None,
-      false,
-    ));
-    assert!(!GitPage::should_show_open_action_loading_state(
-      Some(&action),
-      Some(selected),
-      false,
-    ));
-    assert!(!GitPage::should_show_open_action_loading_state(
-      Some(&action),
-      None,
-      true,
-    ));
-    assert!(!GitPage::should_show_open_action_loading_state(
-      None, None, false,
-    ));
   }
 
   #[test]
