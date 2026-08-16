@@ -1018,4 +1018,88 @@ mod tests {
 
     let _ = std::fs::remove_dir_all(&repo_root);
   }
+
+  #[gpui::test]
+  async fn pressing_enter_opens_the_selected_file(cx: &mut gpui::TestAppContext) {
+    let repo_root = temp_repo("changes-list-enter");
+
+    let (list, cx) = add_changes_list_window(repo_root.clone(), cx);
+    cx.executor().allow_parking();
+    set_entries_from_disk(&list, cx, &repo_root);
+
+    let opened = std::sync::Arc::new(std::sync::Mutex::new(Vec::<PathBuf>::new()));
+    let observer = {
+      let opened = opened.clone();
+      cx.update(|_, cx| {
+        cx.subscribe(&list, move |_, event: &ChangesListEvent, _| {
+          if let ChangesListEvent::OpenFile { path } = event {
+            opened.lock().unwrap().push(path.clone());
+          }
+        })
+      })
+    };
+
+    list.update_in(cx, |list, window, cx| list.focus(window, cx));
+    cx.run_until_parked();
+    cx.simulate_keystrokes("down");
+    cx.run_until_parked();
+    opened.lock().unwrap().clear();
+
+    cx.simulate_keystrokes("enter");
+    cx.run_until_parked();
+    drop(observer);
+
+    assert_eq!(
+      opened.lock().unwrap().clone(),
+      vec![PathBuf::from("README.md")],
+      "enter should confirm the selected row"
+    );
+
+    let _ = std::fs::remove_dir_all(&repo_root);
+  }
+
+  #[gpui::test]
+  async fn staged_and_unstaged_files_land_in_their_own_section(cx: &mut gpui::TestAppContext) {
+    let repo_root = temp_repo("changes-list-two-sections");
+    std::fs::write(repo_root.join("other.txt"), "new\n").expect("write second file");
+    stage_file(&repo_root, Path::new("other.txt")).expect("stage second file");
+
+    let (list, cx) = add_changes_list_window(repo_root.clone(), cx);
+    cx.executor().allow_parking();
+    set_entries_from_disk(&list, cx, &repo_root);
+
+    list.read_with(cx, |list, _| assert_eq!(list.entries().len(), 2));
+    // One row per section, and nothing beyond.
+    assert!(cx.debug_bounds("changes-row-0-0").is_some());
+    assert!(cx.debug_bounds("changes-row-1-0").is_some());
+    assert!(cx.debug_bounds("changes-row-0-1").is_none());
+    assert!(cx.debug_bounds("changes-row-1-1").is_none());
+
+    let _ = std::fs::remove_dir_all(&repo_root);
+  }
+
+  #[gpui::test]
+  async fn switching_repository_drops_the_previous_rows(cx: &mut gpui::TestAppContext) {
+    let repo_root = temp_repo("changes-list-switch-from");
+    let other_root = temp_repo("changes-list-switch-to");
+
+    let (list, cx) = add_changes_list_window(repo_root.clone(), cx);
+    cx.executor().allow_parking();
+    set_entries_from_disk(&list, cx, &repo_root);
+    assert!(cx.debug_bounds("changes-row-0-0").is_some());
+
+    list.update(cx, |list, cx| {
+      list.set_repo_root(Some(other_root.clone()), cx)
+    });
+    cx.run_until_parked();
+
+    list.read_with(cx, |list, _| assert!(list.entries().is_empty()));
+    assert!(
+      cx.debug_bounds("changes-row-0-0").is_none(),
+      "the previous repository's files must not stay on screen"
+    );
+
+    let _ = std::fs::remove_dir_all(&repo_root);
+    let _ = std::fs::remove_dir_all(&other_root);
+  }
 }
