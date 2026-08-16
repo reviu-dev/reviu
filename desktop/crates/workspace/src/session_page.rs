@@ -52,7 +52,9 @@ use crate::annotations::{
   AnnotationDirection, AnnotationNavigationState, annotation_navigation_state_for,
   can_navigate_annotations, navigate_annotation,
 };
-use crate::palette_branches::rebase_branch_candidates;
+use crate::palette_branches::{
+  delete_branch_candidates, palette_branch, palette_stashes, rebase_branch_candidates,
+};
 use crate::repo_command::{RepoCommand, RepoCommandOutcome, branch_ref_from_palette};
 use crate::repo_state::{PaletteCommand, RepoState, can_accept_all_conflicts, push_flags};
 use crate::svg_preview::SvgPreview;
@@ -195,6 +197,8 @@ pub struct SessionPage {
   branches: Vec<git::BranchRef>,
   upstream_branch: Option<git::BranchRef>,
   default_branch: Option<git::BranchRef>,
+  stashes: Vec<git::StashEntry>,
+  default_stash_message: Option<SharedString>,
   diff_view: DiffViewMode,
   hide_whitespace: bool,
   show_preview: bool,
@@ -269,6 +273,8 @@ impl SessionPage {
       branches: Vec::new(),
       upstream_branch: None,
       default_branch: None,
+      stashes: Vec::new(),
+      default_stash_message: None,
       diff_view: DiffViewMode::Inline,
       hide_whitespace: false,
       show_preview: false,
@@ -298,15 +304,18 @@ impl SessionPage {
       return;
     };
     let task = cx.spawn(async move |this, cx| {
-      let (status, branches, upstream, default_branch) = unblock(move || {
-        (
-          git::current_branch_status(&repo_root),
-          git::list_branches(&repo_root),
-          git::current_branch_upstream(&repo_root),
-          git::default_remote_branch(&repo_root),
-        )
-      })
-      .await;
+      let (status, branches, upstream, default_branch, stashes, default_stash_message) =
+        unblock(move || {
+          (
+            git::current_branch_status(&repo_root),
+            git::list_branches(&repo_root),
+            git::current_branch_upstream(&repo_root),
+            git::default_remote_branch(&repo_root),
+            git::list_stashes(&repo_root),
+            git::default_stash_message(&repo_root),
+          )
+        })
+        .await;
       let _ = this.update(cx, |this, cx| {
         this.branch_status = status.ok();
         let branch_status = this.branch_status.clone();
@@ -316,6 +325,8 @@ impl SessionPage {
         this.branches = branches.unwrap_or_default();
         this.upstream_branch = upstream.ok().flatten();
         this.default_branch = default_branch.ok().flatten();
+        this.stashes = stashes.unwrap_or_default();
+        this.default_stash_message = default_stash_message.ok().map(Into::into);
         cx.notify();
       });
     });
@@ -1111,6 +1122,19 @@ impl SessionPage {
     started
   }
 
+  /// Moving HEAD under a running agent breaks its turn: the branch waits.
+  fn run_branch_command(
+    &mut self,
+    command: RepoCommand,
+    window: &mut Window,
+    cx: &mut Context<Self>,
+  ) -> Result<(), SharedString> {
+    if self.agent_turn_in_flight(cx) {
+      return Err("Wait for the agent to finish before switching branch.".into());
+    }
+    self.run_repo_command(command, window, cx)
+  }
+
   fn selected_status_entry(&self, cx: &App) -> Option<git::RepoStatusEntry> {
     let path = self.selected_file.as_deref()?;
     self
@@ -1405,6 +1429,32 @@ impl SessionPage {
       if state.allows(PaletteCommand::InteractiveRebase) {
         commands.push(CommandPaletteCommand::interactive_rebase());
       }
+      if !self.branches.is_empty() {
+        commands.push(CommandPaletteCommand::switch_branch());
+        if !self.delete_branch_targets().is_empty() {
+          commands.push(CommandPaletteCommand::delete_branch());
+        }
+      }
+      if state.allows(PaletteCommand::MergeBranch) && !self.branches.is_empty() {
+        commands.push(CommandPaletteCommand::merge_branch());
+      }
+      if state.allows(PaletteCommand::RebaseBranch) && !self.rebase_branch_targets().is_empty() {
+        commands.push(CommandPaletteCommand::rebase_branch());
+      }
+      if state.allows(PaletteCommand::CherryPick) {
+        commands.push(CommandPaletteCommand::cherry_pick());
+      }
+      if state.allows(PaletteCommand::Stash) {
+        commands.push(CommandPaletteCommand::stash());
+      }
+      if state.allows(PaletteCommand::StashWithUntracked) {
+        commands.push(CommandPaletteCommand::stash_with_untracked());
+      }
+      if !self.stashes.is_empty() {
+        commands.push(CommandPaletteCommand::apply_stash());
+        commands.push(CommandPaletteCommand::pop_stash());
+        commands.push(CommandPaletteCommand::drop_stash());
+      }
       if state.allows(PaletteCommand::Pull) {
         commands.push(CommandPaletteCommand::pull());
       }
@@ -1416,6 +1466,26 @@ impl SessionPage {
       AuthStateStore::has_github_access(cx),
     ));
     commands
+  }
+
+  fn current_branch_name(&self) -> Option<&str> {
+    self
+      .branch_status
+      .as_ref()
+      .map(|status| status.name.as_str())
+  }
+
+  fn rebase_branch_targets(&self) -> Vec<ui::CommandPaletteBranch> {
+    rebase_branch_candidates(
+      &self.branches,
+      self.current_branch_name(),
+      self.upstream_branch.as_ref(),
+      self.default_branch.as_ref(),
+    )
+  }
+
+  fn delete_branch_targets(&self) -> Vec<ui::CommandPaletteBranch> {
+    delete_branch_candidates(&self.branches, self.current_branch_name())
   }
 
   fn open_command_palette(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -1438,18 +1508,15 @@ impl SessionPage {
       })
     });
 
-    let rebase_branches = rebase_branch_candidates(
-      &self.branches,
-      self
-        .branch_status
-        .as_ref()
-        .map(|status| status.name.as_str()),
-      self.upstream_branch.as_ref(),
-      self.default_branch.as_ref(),
-    );
-    let mut config = CommandPaletteConfig::new(Vec::new(), commands, handler)
+    let branches = self.branches.iter().map(palette_branch).collect::<Vec<_>>();
+    let mut config = CommandPaletteConfig::new(branches, commands, handler)
       .with_repositories(repositories)
-      .with_rebase_branches(rebase_branches);
+      .with_rebase_branches(self.rebase_branch_targets())
+      .with_delete_branches(self.delete_branch_targets())
+      .with_stashes(palette_stashes(&self.stashes));
+    if let Some(message) = self.default_stash_message.clone() {
+      config = config.with_default_stash_message(message);
+    }
     if let Some(initial_screen) = initial_screen {
       config = config.with_initial_screen(initial_screen);
     }
@@ -1504,6 +1571,75 @@ impl SessionPage {
       CommandPaletteAction::CheckoutDetached { target } => {
         self.run_repo_command(RepoCommand::CheckoutDetached { target }, window, cx)
       }
+      CommandPaletteAction::SwitchBranch(branch) => self.run_branch_command(
+        RepoCommand::SwitchBranch(branch_ref_from_palette(&branch)),
+        window,
+        cx,
+      ),
+      CommandPaletteAction::CreateBranch { name } => {
+        self.run_branch_command(RepoCommand::CreateBranch { name }, window, cx)
+      }
+      CommandPaletteAction::CreateBranchFrom { name, base } => self.run_branch_command(
+        RepoCommand::CreateBranchFrom {
+          name,
+          base: branch_ref_from_palette(&base),
+        },
+        window,
+        cx,
+      ),
+      CommandPaletteAction::DeleteBranch(branch) => self.run_repo_command(
+        RepoCommand::DeleteBranch(branch_ref_from_palette(&branch)),
+        window,
+        cx,
+      ),
+      CommandPaletteAction::MergeBranch { name } => self.run_repo_command(
+        RepoCommand::MergeBranch(branch_ref_from_palette(&name)),
+        window,
+        cx,
+      ),
+      CommandPaletteAction::RebaseBranch { name } => self.run_repo_command(
+        RepoCommand::RebaseBranch(branch_ref_from_palette(&name)),
+        window,
+        cx,
+      ),
+      CommandPaletteAction::CherryPick { commit_hashes } => {
+        self.run_repo_command(RepoCommand::CherryPick { commit_hashes }, window, cx)
+      }
+      CommandPaletteAction::Stash {
+        include_untracked,
+        message,
+      } => self.run_repo_command(
+        RepoCommand::Stash {
+          include_untracked,
+          message,
+        },
+        window,
+        cx,
+      ),
+      CommandPaletteAction::ApplyStash(stash) => self.run_repo_command(
+        RepoCommand::ApplyStash {
+          index: stash.index,
+          name: stash.name.to_string(),
+        },
+        window,
+        cx,
+      ),
+      CommandPaletteAction::PopStash(stash) => self.run_repo_command(
+        RepoCommand::PopStash {
+          index: stash.index,
+          name: stash.name.to_string(),
+        },
+        window,
+        cx,
+      ),
+      CommandPaletteAction::DropStash(stash) => self.run_repo_command(
+        RepoCommand::DropStash {
+          index: stash.index,
+          name: stash.name.to_string(),
+        },
+        window,
+        cx,
+      ),
       CommandPaletteAction::StageSelectedFile => self.stage_selected_file(window, cx),
       CommandPaletteAction::UnstageSelectedFile => self.unstage_selected_file(window, cx),
       CommandPaletteAction::InteractiveRebaseBranch { ref name } => self.start_interactive_rebase(
@@ -1749,6 +1885,148 @@ mod tests {
       1
     );
     assert!(repo.path.join("b.txt").exists());
+  }
+
+  #[gpui::test]
+  async fn branches_and_stashes_reach_the_palette(cx: &mut TestAppContext) {
+    let repo = TempRepo::init("session-page-branches-stashes");
+    commit_text_file(&repo.path, Path::new("a.txt"), "v1\n", "initial");
+    let base = git::current_branch_status(&repo.path)
+      .expect("branch status")
+      .name;
+    git::create_branch(&repo.path, "feature").expect("create branch");
+    std::fs::write(repo.path.join("a.txt"), "v2\n").expect("update file");
+    git::create_stash(&repo.path, false, Some("wip")).expect("stash");
+
+    let (page, cx) = add_session_page_window(repo.path.clone(), cx);
+    cx.executor().allow_parking();
+    let refresh = page.update(cx, |page, cx| {
+      page.refresh_branch(cx);
+      page.dock_panel.update(cx, |panel, cx| {
+        panel.refresh(cx);
+        panel._refresh_task.take().expect("refresh task")
+      })
+    });
+    refresh.await;
+    await_branch_refresh(&page, cx).await;
+
+    page.read_with(cx, |page, cx| {
+      assert_eq!(page.stashes.len(), 1, "the stash was loaded");
+      let ids = page
+        .palette_commands(1, cx)
+        .into_iter()
+        .map(|command| command.id)
+        .collect::<Vec<_>>();
+      assert!(ids.contains(&CommandPaletteCommandId::SwitchBranch));
+      assert!(ids.contains(&CommandPaletteCommandId::DeleteBranch));
+      assert!(ids.contains(&CommandPaletteCommandId::MergeBranch));
+      assert!(ids.contains(&CommandPaletteCommandId::CherryPick));
+      assert!(ids.contains(&CommandPaletteCommandId::ApplyStash));
+      assert!(ids.contains(&CommandPaletteCommandId::PopStash));
+      assert!(ids.contains(&CommandPaletteCommandId::DropStash));
+      assert!(
+        !ids.contains(&CommandPaletteCommandId::Stash),
+        "the worktree is clean once stashed"
+      );
+
+      // The lists behind the screens: never the branch we are on.
+      let targets = page.delete_branch_targets();
+      assert!(
+        targets
+          .iter()
+          .any(|branch| branch.name.as_ref() == "feature")
+      );
+      assert!(!targets.iter().any(|branch| branch.name.as_ref() == base));
+    });
+
+    // Applying the stash brings the change back.
+    page.update_in(cx, |page, window, cx| {
+      page
+        .handle_command_palette_action(
+          CommandPaletteAction::PopStash(ui::CommandPaletteStash {
+            index: 0,
+            name: "wip".into(),
+            oid: "".into(),
+          }),
+          window,
+          cx,
+        )
+        .expect("pop the stash")
+    });
+    let command = page.update(cx, |page, _| {
+      page._repo_command_task.take().expect("command task")
+    });
+    command.await;
+    cx.run_until_parked();
+
+    assert_eq!(
+      std::fs::read_to_string(repo.path.join("a.txt")).expect("read file"),
+      "v2\n"
+    );
+  }
+
+  #[gpui::test]
+  async fn a_branch_switch_waits_for_the_agent(cx: &mut TestAppContext) {
+    let repo = TempRepo::init("session-page-branch-switch-guard");
+    commit_text_file(&repo.path, Path::new("a.txt"), "v1\n", "initial");
+    let base = git::current_branch_status(&repo.path)
+      .expect("branch status")
+      .name;
+    git::create_branch(&repo.path, "feature").expect("create branch");
+
+    let (page, cx) = add_session_page_window(repo.path.clone(), cx);
+    cx.executor().allow_parking();
+    cx.run_until_parked();
+    page.update(cx, |page, _| page.pretend_agent_turn_in_flight = true);
+
+    let refused = page.update_in(cx, |page, window, cx| {
+      page.handle_command_palette_action(
+        CommandPaletteAction::SwitchBranch(ui::CommandPaletteBranch {
+          name: "feature".into(),
+          kind: ui::CommandPaletteBranchKind::Local,
+        }),
+        window,
+        cx,
+      )
+    });
+    assert_eq!(
+      refused.expect_err("refused mid-turn").as_ref(),
+      "Wait for the agent to finish before switching branch."
+    );
+    assert_eq!(
+      git::current_branch_status(&repo.path)
+        .expect("branch status")
+        .name,
+      base,
+      "the branch did not move under the agent"
+    );
+
+    // Turn over: the switch goes through.
+    page.update(cx, |page, _| page.pretend_agent_turn_in_flight = false);
+    page.update_in(cx, |page, window, cx| {
+      page
+        .handle_command_palette_action(
+          CommandPaletteAction::SwitchBranch(ui::CommandPaletteBranch {
+            name: "feature".into(),
+            kind: ui::CommandPaletteBranchKind::Local,
+          }),
+          window,
+          cx,
+        )
+        .expect("switch runs")
+    });
+    let command = page.update(cx, |page, _| {
+      page._repo_command_task.take().expect("command task")
+    });
+    command.await;
+    cx.run_until_parked();
+
+    assert_eq!(
+      git::current_branch_status(&repo.path)
+        .expect("branch status")
+        .name,
+      "feature"
+    );
   }
 
   #[gpui::test]

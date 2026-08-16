@@ -92,6 +92,10 @@ Opening a `.md` or `.svg` in the Sessions workspace showed raw text. A Preview b
 
 The Sessions workspace applied the whitespace setting when opening a file but gave you no way to change your mind. The diff header now carries the same Whitespace button as the Git page, with `cmd-alt-/`, and the choice holds for the rest of the session instead of resetting on every file. A file with no pending change, or a file being previewed, has no diff on screen: the button steps aside there, like the inline/split control.
 
+### Branches, Stashes And Cherry-Pick In The Sessions Workspace
+
+The palette of the Sessions workspace now carries the commands that need a list: switch, create and delete a branch, merge or rebase onto one, cherry-pick commits, stash (with or without untracked files), then apply, pop or drop a stash. Switching branch is refused while the agent is mid-turn, for the same reason switching repository is: the ground cannot move under a running turn.
+
 ### Amend, Undo And Stage The Open File From The Sessions Workspace
 
 The commit button in the right panel gains the menu the Git page has: Amend, Undo last commit, Push and Force push (with lease), greyed out when they cannot run. The same commands join the palette, along with Checkout detached and Stage / Unstage the file you have open. Amending takes whatever is in the commit box, or keeps the previous message when the box is empty.
