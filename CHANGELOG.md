@@ -92,6 +92,10 @@ Opening a `.md` or `.svg` in the Sessions workspace showed raw text. A Preview b
 
 The Sessions workspace applied the whitespace setting when opening a file but gave you no way to change your mind. The diff header now carries the same Whitespace button as the Git page, with `cmd-alt-/`, and the choice holds for the rest of the session instead of resetting on every file. A file with no pending change, or a file being previewed, has no diff on screen: the button steps aside there, like the inline/split control.
 
+### The Git Keyboard Shortcuts Work In The Sessions Workspace
+
+Every local-git shortcut now works where the work happens: `cmd-o` open a repository, `cmd-u` pull, `cmd-y` push, `cmd-shift-y` force push, `cmd-shift-b` switch branch, `cmd-j` terminal, `cmd-shift-h` history, `cmd-shift-e` changes, `cmd-enter` stage or unstage the open file, `cmd-backspace` discard it. The tab shortcuts open their tab in the right panel and put the focus there, so the keyboard keeps going. A shortcut whose command cannot run right now does nothing rather than failing.
+
 ### Send A Selection To The Agent From The Sessions Workspace
 
 Selecting lines in the diff and pressing `cmd-shift-l` attaches them to your next message, without leaving the workspace: the agent is right there. `cmd-f` searches the open file from anywhere in the workspace, not only when the editor already has focus, and Escape closes the search before it closes the file.

@@ -29,7 +29,7 @@ use crate::auth_state::AuthStateStore;
 use crate::config::ConfigStore;
 use crate::date_format::format_relative_time;
 use crate::diff_view_policy::{DiffViewInputs, effective_diff_view};
-use crate::dock_panel::{CommitMenuCommand, DockPanel, DockPanelEvent};
+use crate::dock_panel::{CommitMenuCommand, DockPanel, DockPanelEvent, DockPanelTab};
 use crate::file_search_palette::open_file_search_palette;
 use crate::file_view::{
   BinaryPreview, build_binary_preview, render_binary_preview, render_file_title,
@@ -874,6 +874,153 @@ impl SessionPage {
     }
     self.close_diff(window, cx);
     cx.stop_propagation();
+  }
+
+  fn open_repository_action(
+    &mut self,
+    _: &crate::OpenRepository,
+    window: &mut Window,
+    cx: &mut Context<Self>,
+  ) {
+    self.start_open_repository(window, cx);
+    cx.stop_propagation();
+  }
+
+  fn pull_changes_action(
+    &mut self,
+    _: &crate::PullChanges,
+    window: &mut Window,
+    cx: &mut Context<Self>,
+  ) {
+    self.run_shortcut_command(PaletteCommand::Pull, RepoCommand::Pull, window, cx);
+  }
+
+  fn push_changes_action(
+    &mut self,
+    _: &crate::PushChanges,
+    window: &mut Window,
+    cx: &mut Context<Self>,
+  ) {
+    self.run_shortcut_command(PaletteCommand::Push, RepoCommand::Push, window, cx);
+  }
+
+  fn force_push_changes_action(
+    &mut self,
+    _: &crate::ForcePushChanges,
+    window: &mut Window,
+    cx: &mut Context<Self>,
+  ) {
+    self.run_shortcut_command(
+      PaletteCommand::ForcePush,
+      RepoCommand::ForcePush,
+      window,
+      cx,
+    );
+  }
+
+  /// A shortcut runs its command only when the palette would have offered it.
+  fn run_shortcut_command(
+    &mut self,
+    rule: PaletteCommand,
+    command: RepoCommand,
+    window: &mut Window,
+    cx: &mut Context<Self>,
+  ) {
+    cx.stop_propagation();
+    if !self.repo_state("", cx).allows(rule) {
+      return;
+    }
+    if let Err(error) = self.run_repo_command(command, window, cx) {
+      window.push_notification(Notification::warning(error), cx);
+    }
+  }
+
+  fn show_branch_switcher_action(
+    &mut self,
+    _: &crate::ShowBranchSwitcher,
+    window: &mut Window,
+    cx: &mut Context<Self>,
+  ) {
+    cx.stop_propagation();
+    if self.branches.is_empty() {
+      return;
+    }
+    self.open_command_palette_with_screen(
+      Some(CommandPaletteInitialScreen::SwitchBranch),
+      window,
+      cx,
+    );
+  }
+
+  fn toggle_terminal_action(
+    &mut self,
+    _: &crate::ToggleTerminalSidebar,
+    window: &mut Window,
+    cx: &mut Context<Self>,
+  ) {
+    self.open_dock_tab(DockPanelTab::Terminal, window, cx);
+  }
+
+  fn open_history_action(
+    &mut self,
+    _: &crate::OpenGitHistorySidebar,
+    window: &mut Window,
+    cx: &mut Context<Self>,
+  ) {
+    self.open_dock_tab(DockPanelTab::History, window, cx);
+  }
+
+  fn open_changes_action(
+    &mut self,
+    _: &crate::OpenGitChangesSidebar,
+    window: &mut Window,
+    cx: &mut Context<Self>,
+  ) {
+    self.open_dock_tab(DockPanelTab::Changes, window, cx);
+  }
+
+  fn open_dock_tab(&mut self, tab: DockPanelTab, window: &mut Window, cx: &mut Context<Self>) {
+    self
+      .dock_panel
+      .update(cx, |panel, cx| panel.open_tab(tab, window, cx));
+    cx.stop_propagation();
+  }
+
+  fn toggle_file_stage_action(
+    &mut self,
+    _: &crate::ToggleFileStage,
+    window: &mut Window,
+    cx: &mut Context<Self>,
+  ) {
+    cx.stop_propagation();
+    let Some(entry) = self.selected_status_entry(cx) else {
+      return;
+    };
+    let staged = crate::changes_list::can_unstage(entry.stage);
+    let outcome = if staged {
+      self.unstage_selected_file(window, cx)
+    } else {
+      self.stage_selected_file(window, cx)
+    };
+    if let Err(error) = outcome {
+      window.push_notification(Notification::warning(error), cx);
+    }
+  }
+
+  fn restore_file_action(
+    &mut self,
+    _: &crate::RestoreFile,
+    window: &mut Window,
+    cx: &mut Context<Self>,
+  ) {
+    cx.stop_propagation();
+    let Some(entry) = self.selected_status_entry(cx) else {
+      return;
+    };
+    let changes_list = self.dock_panel.read(cx).changes_list();
+    changes_list.update(cx, |list, cx| {
+      list.restore_file(entry.path.clone(), entry.status, window, cx)
+    });
   }
 
   fn show_command_palette_action(

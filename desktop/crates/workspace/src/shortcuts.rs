@@ -44,12 +44,12 @@ pub const WORKSPACE_SETTINGS_CONTEXT: &str = "Workspace WorkspaceSettings";
 pub const WORKSPACE_ABOUT_CONTEXT: &str = "Workspace WorkspaceAbout";
 
 const FILE_SEARCH_CONTEXT: &str = "WorkspaceGit || WorkspaceGithubPrChanges || WorkspaceSession";
-const OPEN_REPOSITORY_CONTEXT: &str = "WorkspaceGit";
+const OPEN_REPOSITORY_CONTEXT: &str = "WorkspaceGit || WorkspaceSession";
 const COMMIT_CHANGES_CONTEXT: &str = "WorkspaceGit || WorkspaceSession";
 const COMMIT_CHANGES_DESCENDANT_FOCUS: &str = "CommitInput";
-const PULL_CHANGES_CONTEXT: &str = "WorkspaceGit";
-const PUSH_CHANGES_CONTEXT: &str = "WorkspaceGit";
-const FORCE_PUSH_CHANGES_CONTEXT: &str = "WorkspaceGit";
+const PULL_CHANGES_CONTEXT: &str = "WorkspaceGit || WorkspaceSession";
+const PUSH_CHANGES_CONTEXT: &str = "WorkspaceGit || WorkspaceSession";
+const FORCE_PUSH_CHANGES_CONTEXT: &str = "WorkspaceGit || WorkspaceSession";
 const CLOSE_WORKSPACE_PAGE_CONTEXT: &str =
   "WorkspaceBilling || WorkspaceGitConfig || WorkspaceSettings || WorkspaceAbout";
 const OPEN_SETTINGS_CONTEXT: &str = "Workspace";
@@ -58,10 +58,10 @@ const OPEN_GIT_PAGE_CONTEXT: &str = "Workspace";
 const OPEN_SESSION_PAGE_CONTEXT: &str = "Workspace";
 const REFRESH_CURRENT_PAGE_CONTEXT: &str =
   "WorkspaceGit || WorkspaceGithubPr || WorkspaceGithubPrChanges";
-const TOGGLE_TERMINAL_CONTEXT: &str = "WorkspaceGit";
-const SHOW_BRANCH_SWITCHER_CONTEXT: &str = "WorkspaceGit";
-const OPEN_GIT_HISTORY_SIDEBAR_CONTEXT: &str = "WorkspaceGit";
-const OPEN_GIT_CHANGES_SIDEBAR_CONTEXT: &str = "WorkspaceGit";
+const TOGGLE_TERMINAL_CONTEXT: &str = "WorkspaceGit || WorkspaceSession";
+const SHOW_BRANCH_SWITCHER_CONTEXT: &str = "WorkspaceGit || WorkspaceSession";
+const OPEN_GIT_HISTORY_SIDEBAR_CONTEXT: &str = "WorkspaceGit || WorkspaceSession";
+const OPEN_GIT_CHANGES_SIDEBAR_CONTEXT: &str = "WorkspaceGit || WorkspaceSession";
 const FOCUS_FILE_TREE_CONTEXT: &str = "WorkspaceGithubPr";
 const TOGGLE_DIFF_VIEW_CONTEXT: &str =
   "WorkspaceGit || WorkspaceGithubPrChanges || WorkspaceSession";
@@ -69,7 +69,7 @@ const SWITCH_TO_PR_BRANCH_CONTEXT: &str = "WorkspaceGithubPr || WorkspaceGithubP
 const REVIEW_ANNOTATION_CONTEXT: &str =
   "WorkspaceGit || WorkspaceGithubPrChanges || WorkspaceSession";
 const REVIEW_COMMENT_CONTEXT: &str = "WorkspaceGithubPr";
-const HUNK_ACTION_CONTEXT: &str = "WorkspaceGit";
+const HUNK_ACTION_CONTEXT: &str = "WorkspaceGit || WorkspaceSession";
 /// Acting on a hunk works on the Git page and in the Sessions shell.
 const HUNK_ACTION_SESSION_CONTEXT: &str = "WorkspaceGit || WorkspaceSession";
 const HUNK_ACTION_DESCENDANT_FOCUS: &str = "List || Editor";
@@ -100,8 +100,6 @@ const REFRESHABLE_PAGE_ACTIVE_CONTEXTS: [&str; 3] = [
   WORKSPACE_GITHUB_PR_CONTEXT,
   WORKSPACE_GITHUB_PR_CHANGES_CONTEXT,
 ];
-
-const GIT_ONLY_ACTIVE_CONTEXTS: [&str; 1] = [WORKSPACE_GIT_CONTEXT];
 
 const GIT_AND_SESSION_ACTIVE_CONTEXTS: [&str; 2] =
   [WORKSPACE_GIT_CONTEXT, WORKSPACE_SESSION_CONTEXT];
@@ -492,23 +490,23 @@ const SHORTCUT_DEFINITIONS: [ShortcutDefinition; 38] = [
     id: ShortcutId::ToggleFileStage,
     title: "Stage / Unstage File",
     description: "Stage the selected file, or unstage it if already staged.",
-    scope_label: "Git page",
+    scope_label: "Git page and Sessions",
     category: ShortcutCategory::LocalGit,
     keystroke: "cmd-enter",
     context: HUNK_ACTION_CONTEXT,
     display_context: WORKSPACE_GIT_CONTEXT,
-    active_contexts: &GIT_ONLY_ACTIVE_CONTEXTS,
+    active_contexts: &GIT_AND_SESSION_ACTIVE_CONTEXTS,
   },
   ShortcutDefinition {
     id: ShortcutId::RestoreFile,
     title: "Restore File",
     description: "Discard all changes in the selected file.",
-    scope_label: "Git page",
+    scope_label: "Git page and Sessions",
     category: ShortcutCategory::LocalGit,
     keystroke: "cmd-backspace",
     context: HUNK_ACTION_CONTEXT,
     display_context: WORKSPACE_GIT_CONTEXT,
-    active_contexts: &GIT_ONLY_ACTIVE_CONTEXTS,
+    active_contexts: &GIT_AND_SESSION_ACTIVE_CONTEXTS,
   },
   ShortcutDefinition {
     id: ShortcutId::AcceptBothConflict,
@@ -580,12 +578,12 @@ const SHORTCUT_DEFINITIONS: [ShortcutDefinition; 38] = [
     id: ShortcutId::OpenRepository,
     title: "Open Repository",
     description: "Open a local repository from the Git page.",
-    scope_label: "Git page",
+    scope_label: "Git page and Sessions",
     category: ShortcutCategory::LocalGit,
     keystroke: "cmd-o",
     context: OPEN_REPOSITORY_CONTEXT,
     display_context: WORKSPACE_GIT_CONTEXT,
-    active_contexts: &GIT_ONLY_ACTIVE_CONTEXTS,
+    active_contexts: &GIT_AND_SESSION_ACTIVE_CONTEXTS,
   },
   ShortcutDefinition {
     id: ShortcutId::CommitChanges,
@@ -602,78 +600,78 @@ const SHORTCUT_DEFINITIONS: [ShortcutDefinition; 38] = [
     id: ShortcutId::PullChanges,
     title: "Pull Changes",
     description: "Pull the current branch from its upstream remote.",
-    scope_label: "Git page",
+    scope_label: "Git page and Sessions",
     category: ShortcutCategory::LocalGit,
     keystroke: "cmd-u",
     context: PULL_CHANGES_CONTEXT,
     display_context: WORKSPACE_GIT_CONTEXT,
-    active_contexts: &GIT_ONLY_ACTIVE_CONTEXTS,
+    active_contexts: &GIT_AND_SESSION_ACTIVE_CONTEXTS,
   },
   ShortcutDefinition {
     id: ShortcutId::PushChanges,
     title: "Push Changes",
     description: "Push the current branch to its upstream remote.",
-    scope_label: "Git page",
+    scope_label: "Git page and Sessions",
     category: ShortcutCategory::LocalGit,
     keystroke: "cmd-y",
     context: PUSH_CHANGES_CONTEXT,
     display_context: WORKSPACE_GIT_CONTEXT,
-    active_contexts: &GIT_ONLY_ACTIVE_CONTEXTS,
+    active_contexts: &GIT_AND_SESSION_ACTIVE_CONTEXTS,
   },
   ShortcutDefinition {
     id: ShortcutId::ForcePushChanges,
     title: "Force Push Changes",
     description: "Force push the current branch to its upstream remote.",
-    scope_label: "Git page",
+    scope_label: "Git page and Sessions",
     category: ShortcutCategory::LocalGit,
     keystroke: "cmd-shift-y",
     context: FORCE_PUSH_CHANGES_CONTEXT,
     display_context: WORKSPACE_GIT_CONTEXT,
-    active_contexts: &GIT_ONLY_ACTIVE_CONTEXTS,
+    active_contexts: &GIT_AND_SESSION_ACTIVE_CONTEXTS,
   },
   ShortcutDefinition {
     id: ShortcutId::ToggleTerminalSidebar,
     title: "Toggle Terminal",
     description: "Show or hide the terminal sidebar on the Git page.",
-    scope_label: "Git page",
+    scope_label: "Git page and Sessions",
     category: ShortcutCategory::LocalGit,
     keystroke: "cmd-j",
     context: TOGGLE_TERMINAL_CONTEXT,
     display_context: WORKSPACE_GIT_CONTEXT,
-    active_contexts: &GIT_ONLY_ACTIVE_CONTEXTS,
+    active_contexts: &GIT_AND_SESSION_ACTIVE_CONTEXTS,
   },
   ShortcutDefinition {
     id: ShortcutId::ShowBranchSwitcher,
     title: "Switch Branch",
     description: "Open branch switching on the Git page.",
-    scope_label: "Git page",
+    scope_label: "Git page and Sessions",
     category: ShortcutCategory::LocalGit,
     keystroke: "cmd-shift-b",
     context: SHOW_BRANCH_SWITCHER_CONTEXT,
     display_context: WORKSPACE_GIT_CONTEXT,
-    active_contexts: &GIT_ONLY_ACTIVE_CONTEXTS,
+    active_contexts: &GIT_AND_SESSION_ACTIVE_CONTEXTS,
   },
   ShortcutDefinition {
     id: ShortcutId::OpenGitHistorySidebar,
     title: "Focus History Tree",
     description: "Switch the Git sidebar to History and focus the commit tree.",
-    scope_label: "Git page",
+    scope_label: "Git page and Sessions",
     category: ShortcutCategory::LocalGit,
     keystroke: "cmd-shift-h",
     context: OPEN_GIT_HISTORY_SIDEBAR_CONTEXT,
     display_context: WORKSPACE_GIT_CONTEXT,
-    active_contexts: &GIT_ONLY_ACTIVE_CONTEXTS,
+    active_contexts: &GIT_AND_SESSION_ACTIVE_CONTEXTS,
   },
   ShortcutDefinition {
     id: ShortcutId::OpenGitChangesSidebar,
     title: "Focus Changes List",
     description: "Switch the Git sidebar to Changes and focus the file list.",
-    scope_label: "Git page",
+    scope_label: "Git page and Sessions",
     category: ShortcutCategory::LocalGit,
     keystroke: "cmd-shift-e",
     context: OPEN_GIT_CHANGES_SIDEBAR_CONTEXT,
     display_context: WORKSPACE_GIT_CONTEXT,
-    active_contexts: &GIT_ONLY_ACTIVE_CONTEXTS,
+    active_contexts: &GIT_AND_SESSION_ACTIVE_CONTEXTS,
   },
   ShortcutDefinition {
     id: ShortcutId::FocusFileTree,
@@ -1588,16 +1586,16 @@ mod tests {
     assert!(has_binding("/git", "cmd-u"));
     assert!(has_binding("/git", "cmd-y"));
     assert!(has_binding("/git", "cmd-shift-y"));
-    assert!(!has_binding("/github", "cmd-o"));
+    assert!(!has_binding("/settings", "cmd-o"));
     assert!(!has_binding_with_bindings_in_contexts(
-      "/github/owner/repo/code",
+      "/settings",
       &["List"],
       "cmd-enter",
       workspace_key_bindings(),
     ));
-    assert!(!has_binding("/github", "cmd-u"));
-    assert!(!has_binding("/github", "cmd-y"));
-    assert!(!has_binding("/github", "cmd-shift-y"));
+    assert!(!has_binding("/settings", "cmd-u"));
+    assert!(!has_binding("/settings", "cmd-y"));
+    assert!(!has_binding("/settings", "cmd-shift-y"));
     assert!(!has_binding("/settings", "cmd-o"));
     assert!(!has_binding("/settings", "cmd-u"));
     assert!(!has_binding("/settings", "cmd-y"));
@@ -1659,8 +1657,8 @@ mod tests {
         "{keystroke} should be active on /git"
       );
       assert!(
-        !has_binding("/github", keystroke),
-        "{keystroke} should not be active on /github"
+        !has_binding("/settings", keystroke),
+        "{keystroke} should not be active outside the git surfaces"
       );
       assert!(
         !has_binding("/github/owner/repo/pull/42/changes", keystroke),
@@ -1677,8 +1675,8 @@ mod tests {
       "{keystroke} should remain active on /git for the changes sidebar"
     );
     assert!(
-      !has_binding("/github", keystroke),
-      "{keystroke} should not be active on /github home"
+      !has_binding("/settings", keystroke),
+      "{keystroke} should not be active outside the diff surfaces"
     );
     for pathname in [
       "/github/owner/repo/pull/42",
@@ -1763,10 +1761,35 @@ mod tests {
       );
     }
 
-    // Still git-page only, until they move with their surface.
-    for keystroke in ["cmd-o", "cmd-u", "cmd-y", "cmd-shift-y", "cmd-j"] {
-      assert!(has_binding("/git", keystroke));
-      assert!(!has_binding("/session", keystroke));
+    // The repository and sync shortcuts followed their commands into the shell.
+    for keystroke in [
+      "cmd-o",
+      "cmd-u",
+      "cmd-y",
+      "cmd-shift-y",
+      "cmd-j",
+      "cmd-shift-b",
+      "cmd-shift-h",
+      "cmd-shift-e",
+    ] {
+      assert!(
+        has_binding("/git", keystroke),
+        "{keystroke} on the git page"
+      );
+      assert!(
+        has_binding("/session", keystroke),
+        "{keystroke} in the shell"
+      );
+      assert!(
+        !has_binding("/settings", keystroke),
+        "{keystroke} stays on the git surfaces"
+      );
+    }
+
+    // Staging a file needs the list or the editor focused, on both surfaces.
+    for keystroke in ["cmd-enter", "cmd-backspace"] {
+      assert!(bound_in("/git", keystroke));
+      assert!(bound_in("/session", keystroke));
     }
   }
 

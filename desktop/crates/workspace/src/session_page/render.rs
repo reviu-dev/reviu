@@ -807,6 +807,16 @@ impl Render for SessionPage {
       .on_action(cx.listener(Self::toggle_hunk_stage_action))
       .on_action(cx.listener(Self::restore_hunk_action))
       .on_action(cx.listener(Self::accept_both_conflict_action))
+      .on_action(cx.listener(Self::open_repository_action))
+      .on_action(cx.listener(Self::pull_changes_action))
+      .on_action(cx.listener(Self::push_changes_action))
+      .on_action(cx.listener(Self::force_push_changes_action))
+      .on_action(cx.listener(Self::show_branch_switcher_action))
+      .on_action(cx.listener(Self::toggle_terminal_action))
+      .on_action(cx.listener(Self::open_history_action))
+      .on_action(cx.listener(Self::open_changes_action))
+      .on_action(cx.listener(Self::toggle_file_stage_action))
+      .on_action(cx.listener(Self::restore_file_action))
       .child(
         ui::h_resizable("session-page-shell")
           .child(
@@ -1498,6 +1508,133 @@ mod tests {
     page.read_with(cx, |page, _| {
       assert_eq!(page.diff_view, DiffViewMode::Split);
     });
+  }
+
+  #[gpui::test]
+  async fn the_dock_shortcuts_open_their_tab(cx: &mut TestAppContext) {
+    let repo = TempRepo::init("session-render-dock-shortcuts");
+    commit_text_file(&repo.path, Path::new("a.txt"), "v1\n", "initial");
+
+    let (page, cx) = add_session_page_window(repo.path.clone(), cx);
+    cx.executor().allow_parking();
+    cx.run_until_parked();
+
+    page.update_in(cx, |page, window, cx| {
+      page.open_history_action(&crate::OpenGitHistorySidebar, window, cx)
+    });
+    cx.run_until_parked();
+    page.read_with(cx, |page, cx| {
+      assert_eq!(
+        page.dock_panel.read(cx).active_tab(),
+        crate::dock_panel::DockPanelTab::History
+      );
+    });
+
+    page.update_in(cx, |page, window, cx| {
+      page.toggle_terminal_action(&crate::ToggleTerminalSidebar, window, cx)
+    });
+    cx.run_until_parked();
+    page.read_with(cx, |page, cx| {
+      let panel = page.dock_panel.read(cx);
+      assert_eq!(
+        panel.active_tab(),
+        crate::dock_panel::DockPanelTab::Terminal
+      );
+      assert!(
+        panel.has_terminal(),
+        "opening the tab starts the shell, as clicking it does"
+      );
+    });
+
+    page.update_in(cx, |page, window, cx| {
+      page.open_changes_action(&crate::OpenGitChangesSidebar, window, cx)
+    });
+    cx.run_until_parked();
+    page.read_with(cx, |page, cx| {
+      assert_eq!(
+        page.dock_panel.read(cx).active_tab(),
+        crate::dock_panel::DockPanelTab::Changes
+      );
+    });
+  }
+
+  #[gpui::test]
+  async fn the_file_shortcuts_stage_and_restore_what_is_open(cx: &mut TestAppContext) {
+    let repo = TempRepo::init("session-render-file-shortcuts");
+    commit_text_file(&repo.path, Path::new("a.txt"), "v1\n", "initial");
+    std::fs::write(repo.path.join("a.txt"), "v2\n").expect("update file");
+
+    let (page, cx) = add_session_page_window(repo.path.clone(), cx);
+    cx.executor().allow_parking();
+    let refresh = page.update(cx, |page, cx| {
+      page.dock_panel.update(cx, |panel, cx| {
+        panel.refresh(cx);
+        panel._refresh_task.take().expect("refresh task")
+      })
+    });
+    refresh.await;
+    cx.run_until_parked();
+
+    page.update_in(cx, |page, window, cx| {
+      page.open_diff(PathBuf::from("a.txt"), None, window, cx);
+    });
+    await_open_file(&page, cx).await;
+
+    let changes_task = |page: &Entity<SessionPage>, cx: &mut gpui::VisualTestContext| {
+      page.update(cx, |page, cx| {
+        page
+          .dock_panel
+          .read(cx)
+          .changes_list()
+          .update(cx, |list, _| list._action_task.take())
+      })
+    };
+
+    // `cmd-enter` stages the open file, and stages it back off.
+    page.update_in(cx, |page, window, cx| {
+      page.toggle_file_stage_action(&crate::ToggleFileStage, window, cx)
+    });
+    changes_task(&page, cx).expect("staging task").await;
+    cx.run_until_parked();
+    assert_eq!(
+      git::list_repo_status(&repo.path).expect("status")[0].stage,
+      git::RepoStage::Staged
+    );
+
+    let refresh = page.update(cx, |page, cx| {
+      page.dock_panel.update(cx, |panel, cx| {
+        panel.refresh(cx);
+        panel._refresh_task.take().expect("refresh task")
+      })
+    });
+    refresh.await;
+    page.update_in(cx, |page, window, cx| {
+      page.toggle_file_stage_action(&crate::ToggleFileStage, window, cx)
+    });
+    changes_task(&page, cx).expect("unstaging task").await;
+    cx.run_until_parked();
+    assert_eq!(
+      git::list_repo_status(&repo.path).expect("status")[0].stage,
+      git::RepoStage::Unstaged
+    );
+
+    // `cmd-backspace` throws the change away.
+    let refresh = page.update(cx, |page, cx| {
+      page.dock_panel.update(cx, |panel, cx| {
+        panel.refresh(cx);
+        panel._refresh_task.take().expect("refresh task")
+      })
+    });
+    refresh.await;
+    page.update_in(cx, |page, window, cx| {
+      page.restore_file_action(&crate::RestoreFile, window, cx)
+    });
+    changes_task(&page, cx).expect("restore task").await;
+    cx.run_until_parked();
+    assert_eq!(
+      std::fs::read_to_string(repo.path.join("a.txt")).expect("read file"),
+      "v1\n"
+    );
   }
 
   #[gpui::test]

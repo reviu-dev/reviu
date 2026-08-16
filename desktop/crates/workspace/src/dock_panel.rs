@@ -107,7 +107,7 @@ impl CommitMenuCommand {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum DockPanelTab {
+pub enum DockPanelTab {
   Changes,
   Files,
   History,
@@ -716,6 +716,46 @@ impl DockPanel {
       .into_any_element()
   }
 
+  /// Opens a tab and gives it focus, loading what that tab needs the first time.
+  pub(crate) fn open_tab(
+    &mut self,
+    target: DockPanelTab,
+    window: &mut Window,
+    cx: &mut Context<Self>,
+  ) {
+    if self.active_tab != target {
+      self.active_tab = target;
+      match target {
+        DockPanelTab::PullRequest => self.refresh_branch_pull_request(cx),
+        DockPanelTab::Terminal => self.ensure_terminal(cx),
+        DockPanelTab::History => self.refresh_history(cx),
+        DockPanelTab::Changes | DockPanelTab::Files => {}
+      }
+    }
+    match target {
+      DockPanelTab::Changes => {
+        let list = self.changes_list.clone();
+        list.update(cx, |list, cx| list.focus(window, cx));
+      }
+      DockPanelTab::History => {
+        let history = self.history_list.clone();
+        window.focus(&history.read(cx).focus_handle(cx), cx);
+      }
+      _ => window.focus(&self.focus_handle, cx),
+    }
+    cx.notify();
+  }
+
+  #[cfg(test)]
+  pub(crate) fn has_terminal(&self) -> bool {
+    self.terminal_view.is_some()
+  }
+
+  #[cfg(test)]
+  pub(crate) fn active_tab(&self) -> DockPanelTab {
+    self.active_tab
+  }
+
   fn render_tabs(&self, cx: &mut Context<Self>) -> AnyElement {
     let theme = cx.theme().clone();
     let tab = |id: &'static str, label: &'static str, target: DockPanelTab, active: bool| {
@@ -736,17 +776,8 @@ impl DockPanel {
             .hover(|s| s.bg(theme.secondary_hover))
         })
         .child(label)
-        .on_click(cx.listener(move |this, _, _, cx| {
-          if this.active_tab != target {
-            this.active_tab = target;
-            match target {
-              DockPanelTab::PullRequest => this.refresh_branch_pull_request(cx),
-              DockPanelTab::Terminal => this.ensure_terminal(cx),
-              DockPanelTab::History => this.refresh_history(cx),
-              DockPanelTab::Changes | DockPanelTab::Files => {}
-            }
-            cx.notify();
-          }
+        .on_click(cx.listener(move |this, _, window, cx| {
+          this.open_tab(target, window, cx);
         }))
     };
 
