@@ -238,6 +238,21 @@ impl SessionPage {
             window.push_notification(Notification::warning(error), cx);
           }
         }
+        DockPanelEvent::RunCommand(command) => {
+          let outcome = match command {
+            PaletteCommand::Amend => this.amend_last_commit(window, cx),
+            PaletteCommand::UndoLastCommit => {
+              this.run_repo_command(RepoCommand::UndoLastCommit, window, cx)
+            }
+            PaletteCommand::Push => this.run_repo_command(RepoCommand::Push, window, cx),
+            PaletteCommand::ForcePush => this.run_repo_command(RepoCommand::ForcePush, window, cx),
+            // The menu only carries the four above.
+            _ => Ok(()),
+          };
+          if let Err(error) = outcome {
+            window.push_notification(Notification::warning(error), cx);
+          }
+        }
       },
     )
     .detach();
@@ -304,6 +319,10 @@ impl SessionPage {
       .await;
       let _ = this.update(cx, |this, cx| {
         this.branch_status = status.ok();
+        let branch_status = this.branch_status.clone();
+        this
+          .dock_panel
+          .update(cx, |panel, cx| panel.set_branch_status(branch_status, cx));
         this.branches = branches.unwrap_or_default();
         this.upstream_branch = upstream.ok().flatten();
         this.default_branch = default_branch.ok().flatten();
@@ -885,10 +904,10 @@ impl SessionPage {
       has_repo: self.selected_repo.is_some(),
       merge_in_progress: panel.merge_in_progress(),
       rebase_in_progress: panel.rebase_in_progress(),
-      has_head_commit: branch_status.is_some(),
+      has_head_commit: panel.head_status().has_head_commit,
       can_push,
       can_force_push,
-      can_undo_last_commit: false,
+      can_undo_last_commit: panel.head_status().can_undo_last_commit,
       branch_status,
       status_entries,
       selected_entry: self
@@ -1062,6 +1081,73 @@ impl SessionPage {
       });
     });
     self._interactive_rebase_task = Some(task);
+    Ok(())
+  }
+
+  /// Amending takes the message in the commit box, or keeps the old one when
+  /// the box is empty.
+  fn amend_last_commit(
+    &mut self,
+    window: &mut Window,
+    cx: &mut Context<Self>,
+  ) -> Result<(), SharedString> {
+    let message = self.dock_panel.read(cx).commit_message(cx);
+    let message = message.trim().to_string();
+    let command = RepoCommand::Amend {
+      message: (!message.is_empty()).then_some(message),
+    };
+    let started = self.run_repo_command(command, window, cx);
+    if started.is_ok() {
+      self
+        .dock_panel
+        .update(cx, |panel, cx| panel.set_commit_message("", window, cx));
+    }
+    started
+  }
+
+  fn selected_status_entry(&self, cx: &App) -> Option<git::RepoStatusEntry> {
+    let path = self.selected_file.as_deref()?;
+    self
+      .dock_panel
+      .read(cx)
+      .status_entries()
+      .iter()
+      .find(|entry| entry.path == path)
+      .cloned()
+  }
+
+  fn stage_selected_file(
+    &mut self,
+    window: &mut Window,
+    cx: &mut Context<Self>,
+  ) -> Result<(), SharedString> {
+    let Some(entry) = self.selected_status_entry(cx) else {
+      return Err("No file selected.".into());
+    };
+    // A conflicted file with markers left asks before being marked resolved.
+    let has_markers = self.editor.as_ref().is_none_or(|editor| {
+      editor.read_with(cx, |editor, cx| editor.has_unresolved_conflict_markers(cx))
+    });
+    let changes_list = self.dock_panel.read(cx).changes_list();
+    changes_list.update(cx, |list, cx| {
+      list.set_open_file_has_conflict_markers(has_markers);
+      list.stage_file_with_confirmation(entry.path.clone(), entry.status, window, cx);
+    });
+    Ok(())
+  }
+
+  fn unstage_selected_file(
+    &mut self,
+    window: &mut Window,
+    cx: &mut Context<Self>,
+  ) -> Result<(), SharedString> {
+    let Some(entry) = self.selected_status_entry(cx) else {
+      return Err("No file selected.".into());
+    };
+    let changes_list = self.dock_panel.read(cx).changes_list();
+    changes_list.update(cx, |list, cx| {
+      list.unstage_file(entry.path.clone(), window, cx)
+    });
     Ok(())
   }
 
@@ -1295,6 +1381,21 @@ impl SessionPage {
       if state.allows(PaletteCommand::ForcePush) {
         commands.push(CommandPaletteCommand::force_push());
       }
+      if state.allows(PaletteCommand::Amend) {
+        commands.push(CommandPaletteCommand::amend());
+      }
+      if state.allows(PaletteCommand::UndoLastCommit) {
+        commands.push(CommandPaletteCommand::undo_last_commit());
+      }
+      if state.allows(PaletteCommand::CheckoutDetached) {
+        commands.push(CommandPaletteCommand::checkout_detached());
+      }
+      if state.allows(PaletteCommand::StageSelectedFile) {
+        commands.push(CommandPaletteCommand::stage_selected_file());
+      }
+      if state.allows(PaletteCommand::UnstageSelectedFile) {
+        commands.push(CommandPaletteCommand::unstage_selected_file());
+      }
       if state.allows(PaletteCommand::InteractiveRebase) {
         commands.push(CommandPaletteCommand::interactive_rebase());
       }
@@ -1390,6 +1491,15 @@ impl SessionPage {
       }
       CommandPaletteAction::Push => self.run_repo_command(RepoCommand::Push, window, cx),
       CommandPaletteAction::ForcePush => self.run_repo_command(RepoCommand::ForcePush, window, cx),
+      CommandPaletteAction::Amend => self.amend_last_commit(window, cx),
+      CommandPaletteAction::UndoLastCommit => {
+        self.run_repo_command(RepoCommand::UndoLastCommit, window, cx)
+      }
+      CommandPaletteAction::CheckoutDetached { target } => {
+        self.run_repo_command(RepoCommand::CheckoutDetached { target }, window, cx)
+      }
+      CommandPaletteAction::StageSelectedFile => self.stage_selected_file(window, cx),
+      CommandPaletteAction::UnstageSelectedFile => self.unstage_selected_file(window, cx),
       CommandPaletteAction::InteractiveRebaseBranch { ref name } => self.start_interactive_rebase(
         InteractiveRebaseTarget::Branch(branch_ref_from_palette(name)),
         window,
@@ -1555,6 +1665,158 @@ mod tests {
         Some(other.path.as_path())
       );
     });
+  }
+
+  #[gpui::test]
+  async fn amending_and_undoing_reach_the_last_commit(cx: &mut TestAppContext) {
+    let repo = TempRepo::init("session-page-amend");
+    commit_text_file(&repo.path, Path::new("a.txt"), "v1\n", "first");
+    commit_text_file(&repo.path, Path::new("b.txt"), "v1\n", "second");
+
+    let (page, cx) = add_session_page_window(repo.path.clone(), cx);
+    cx.executor().allow_parking();
+    let refresh = page.update(cx, |page, cx| {
+      page.refresh_branch(cx);
+      page.dock_panel.update(cx, |panel, cx| {
+        panel.refresh(cx);
+        panel._refresh_task.take().expect("refresh task")
+      })
+    });
+    refresh.await;
+    await_branch_refresh(&page, cx).await;
+
+    page.read_with(cx, |page, cx| {
+      // The head status travels from the dock into the rules.
+      assert!(page.dock_panel.read(cx).head_status().has_head_commit);
+      let ids = page
+        .palette_commands(1, cx)
+        .into_iter()
+        .map(|command| command.id)
+        .collect::<Vec<_>>();
+      assert!(ids.contains(&CommandPaletteCommandId::Amend));
+      assert!(ids.contains(&CommandPaletteCommandId::UndoLastCommit));
+      assert!(ids.contains(&CommandPaletteCommandId::CheckoutDetached));
+    });
+
+    // Amend takes the message in the box and rewords the last commit.
+    page.update_in(cx, |page, window, cx| {
+      page.dock_panel.update(cx, |panel, cx| {
+        panel.set_commit_message("second, reworded", window, cx)
+      });
+      page
+        .handle_command_palette_action(CommandPaletteAction::Amend, window, cx)
+        .expect("amend runs")
+    });
+    let command = page.update(cx, |page, _| {
+      page._repo_command_task.take().expect("command task")
+    });
+    command.await;
+    cx.run_until_parked();
+
+    let history = git::list_commit_history(&repo.path, 10).expect("history");
+    assert_eq!(history.len(), 2, "the commit was rewritten, not added to");
+    assert_eq!(history[0].summary, "second, reworded");
+    page.read_with(cx, |page, cx| {
+      assert_eq!(
+        page.dock_panel.read(cx).commit_message(cx),
+        "",
+        "the box is cleared once the message landed in the commit"
+      );
+    });
+
+    // Undo puts the work back in the worktree.
+    page.update_in(cx, |page, window, cx| {
+      page
+        .handle_command_palette_action(CommandPaletteAction::UndoLastCommit, window, cx)
+        .expect("undo runs")
+    });
+    let command = page.update(cx, |page, _| {
+      page._repo_command_task.take().expect("command task")
+    });
+    command.await;
+    cx.run_until_parked();
+
+    assert_eq!(
+      git::list_commit_history(&repo.path, 10)
+        .expect("history")
+        .len(),
+      1
+    );
+    assert!(repo.path.join("b.txt").exists());
+  }
+
+  #[gpui::test]
+  async fn the_selected_file_is_staged_and_unstaged_from_the_palette(cx: &mut TestAppContext) {
+    let repo = TempRepo::init("session-page-selected-file-stage");
+    commit_text_file(&repo.path, Path::new("a.txt"), "v1\n", "initial");
+    std::fs::write(repo.path.join("a.txt"), "v2\n").expect("update file");
+
+    let (page, cx) = add_session_page_window(repo.path.clone(), cx);
+    cx.executor().allow_parking();
+    let refresh = page.update(cx, |page, cx| {
+      page.dock_panel.update(cx, |panel, cx| {
+        panel.refresh(cx);
+        panel._refresh_task.take().expect("refresh task")
+      })
+    });
+    refresh.await;
+    cx.run_until_parked();
+
+    // Nothing selected: the commands stay out of the palette.
+    page.read_with(cx, |page, cx| {
+      let ids = page
+        .palette_commands(1, cx)
+        .into_iter()
+        .map(|command| command.id)
+        .collect::<Vec<_>>();
+      assert!(!ids.contains(&CommandPaletteCommandId::StageSelectedFile));
+      assert!(!ids.contains(&CommandPaletteCommandId::UnstageSelectedFile));
+    });
+
+    page.update_in(cx, |page, window, cx| {
+      page.open_diff(PathBuf::from("a.txt"), None, window, cx);
+    });
+    await_open_file(&page, cx).await;
+
+    page.read_with(cx, |page, cx| {
+      let ids = page
+        .palette_commands(1, cx)
+        .into_iter()
+        .map(|command| command.id)
+        .collect::<Vec<_>>();
+      assert!(ids.contains(&CommandPaletteCommandId::StageSelectedFile));
+      assert!(!ids.contains(&CommandPaletteCommandId::UnstageSelectedFile));
+    });
+
+    let stage = page.update_in(cx, |page, window, cx| {
+      page
+        .handle_command_palette_action(CommandPaletteAction::StageSelectedFile, window, cx)
+        .expect("stage the selected file");
+      page
+        .dock_panel
+        .read(cx)
+        .changes_list()
+        .update(cx, |list, _| list._action_task.take())
+    });
+    stage.expect("staging task").await;
+    cx.run_until_parked();
+    let entries = git::list_repo_status(&repo.path).expect("status");
+    assert_eq!(entries[0].stage, git::RepoStage::Staged);
+
+    let unstage = page.update_in(cx, |page, window, cx| {
+      page
+        .handle_command_palette_action(CommandPaletteAction::UnstageSelectedFile, window, cx)
+        .expect("unstage the selected file");
+      page
+        .dock_panel
+        .read(cx)
+        .changes_list()
+        .update(cx, |list, _| list._action_task.take())
+    });
+    unstage.expect("unstaging task").await;
+    cx.run_until_parked();
+    let entries = git::list_repo_status(&repo.path).expect("status");
+    assert_eq!(entries[0].stage, git::RepoStage::Unstaged);
   }
 
   #[gpui::test]

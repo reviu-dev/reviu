@@ -4,11 +4,11 @@ use std::path::{Path, PathBuf};
 
 use git::{
   BranchKind, BranchRef, MergeBranchOutcome, PullOutcome, RebaseBranchOutcome, RepoStatusKind,
-  abort_merge, abort_rebase, apply_stash, checkout_detached_target, cherry_pick_commits,
-  continue_rebase, create_branch, create_branch_from, create_stash, current_branch_status,
-  current_rebase_commit_message, delete_branch, drop_stash, fetch, list_repo_status, merge_branch,
-  pop_stash, pull, push, rebase_branch, skip_rebase, stage_all, switch_branch, undo_last_commit,
-  unstage_all,
+  abort_merge, abort_rebase, amend_commit, apply_stash, checkout_detached_target,
+  cherry_pick_commits, continue_rebase, create_branch, create_branch_from, create_stash,
+  current_branch_status, current_rebase_commit_message, delete_branch, drop_stash, fetch,
+  list_repo_status, merge_branch, pop_stash, pull, push, rebase_branch, skip_rebase, stage_all,
+  switch_branch, undo_last_commit, unstage_all,
 };
 use gpui::SharedString;
 use ui::{CommandPaletteBranch, CommandPaletteBranchKind};
@@ -22,6 +22,10 @@ pub(crate) enum RepoCommand {
   Pull,
   Fetch,
   UndoLastCommit,
+  /// Rewrites the last commit, with a new message when one is given.
+  Amend {
+    message: Option<String>,
+  },
   CheckoutDetached {
     target: String,
   },
@@ -113,6 +117,8 @@ impl RepoCommand {
       Self::UndoLastCommit => {
         undo_last_commit(repo_root).map(|()| RepoCommandOutcome::done("Undid the last commit"))
       }
+      Self::Amend { message } => amend_commit(repo_root, message.as_deref())
+        .map(|()| RepoCommandOutcome::done("Amended the last commit")),
       Self::CheckoutDetached { target } => checkout_detached_target(repo_root, target)
         .map(|()| RepoCommandOutcome::done(format!("Checked out {target}"))),
       Self::SwitchBranch(branch) => switch_branch(repo_root, branch)
@@ -203,6 +209,7 @@ impl RepoCommand {
       Self::Pull => "git.pull",
       Self::Fetch => "git.fetch",
       Self::UndoLastCommit => "git.undo_last_commit",
+      Self::Amend { .. } => "git.amend",
       Self::CheckoutDetached { .. } => "git.checkout_detached",
       Self::SwitchBranch(_) => "git.switch_branch",
       Self::CreateBranch { .. } | Self::CreateBranchFrom { .. } => "git.create_branch",
@@ -231,6 +238,7 @@ impl RepoCommand {
       Self::Pull => "Pull",
       Self::Fetch => "Fetch",
       Self::UndoLastCommit => "Undo last commit",
+      Self::Amend { .. } => "Amend",
       Self::CheckoutDetached { .. } => "Checkout detached",
       Self::SwitchBranch(_) => "Switch branch",
       Self::CreateBranch { .. } | Self::CreateBranchFrom { .. } => "Create branch",
@@ -261,6 +269,7 @@ impl RepoCommand {
       | Self::UnstageAll
       | Self::Pull
       | Self::UndoLastCommit
+      | Self::Amend { .. }
       | Self::CheckoutDetached { .. }
       | Self::SwitchBranch(_)
       | Self::CreateBranch { .. }
@@ -604,6 +613,43 @@ mod tests {
     );
     assert_eq!(outcome, RepoCommandOutcome::done("Cherry-picked 1 commit"));
     assert!(repo.path.join("b.txt").exists());
+  }
+
+  #[test]
+  fn amending_rewrites_the_last_commit_and_can_reword_it() {
+    let repo = TempRepo::init("repo-command-amend");
+    commit_text_file(&repo.path, Path::new("a.txt"), "v1\n", "first");
+    commit_text_file(&repo.path, Path::new("b.txt"), "v1\n", "second");
+    let before = git::current_head_sha(&repo.path)
+      .expect("head sha")
+      .expect("head sha");
+
+    // Staged work joins the last commit, and the message stays.
+    fs::write(repo.path.join("b.txt"), "v2\n").expect("update file");
+    run(&repo.path, RepoCommand::StageAll);
+    let outcome = run(&repo.path, RepoCommand::Amend { message: None });
+    assert_eq!(outcome, RepoCommandOutcome::done("Amended the last commit"));
+
+    let history = git::list_commit_history(&repo.path, 10).expect("history");
+    assert_eq!(history.len(), 2, "the commit was rewritten, not added to");
+    assert_eq!(history[0].summary, "second");
+    assert_ne!(
+      git::current_head_sha(&repo.path)
+        .expect("head sha")
+        .expect("head sha"),
+      before
+    );
+
+    // A message rewords it.
+    run(
+      &repo.path,
+      RepoCommand::Amend {
+        message: Some("second, reworded".to_string()),
+      },
+    );
+    let history = git::list_commit_history(&repo.path, 10).expect("history");
+    assert_eq!(history[0].summary, "second, reworded");
+    assert_eq!(history.len(), 2);
   }
 
   #[test]

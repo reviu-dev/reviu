@@ -5,7 +5,7 @@ use git2::{
   BranchType, Cred, PushOptions, RemoteCallbacks, Repository, RepositoryState, ResetType, Signature,
 };
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct HeadCommitStatus {
   pub has_head_commit: bool,
   pub can_undo_last_commit: bool,

@@ -92,6 +92,10 @@ Opening a `.md` or `.svg` in the Sessions workspace showed raw text. A Preview b
 
 The Sessions workspace applied the whitespace setting when opening a file but gave you no way to change your mind. The diff header now carries the same Whitespace button as the Git page, with `cmd-alt-/`, and the choice holds for the rest of the session instead of resetting on every file. A file with no pending change, or a file being previewed, has no diff on screen: the button steps aside there, like the inline/split control.
 
+### Amend, Undo And Stage The Open File From The Sessions Workspace
+
+The commit button in the right panel gains the menu the Git page has: Amend, Undo last commit, Push and Force push (with lease), greyed out when they cannot run. The same commands join the palette, along with Checkout detached and Stage / Unstage the file you have open. Amending takes whatever is in the commit box, or keeps the previous message when the box is empty.
+
 ### Stage One Hunk At A Time In The Sessions Workspace
 
 The Sessions workspace could only stage a whole file. Hovering a change in the diff now brings up Stage, Unstage and Restore for that hunk alone, exactly like the Git page, and `shift-enter` / `shift-backspace` do the same from the keyboard. On a conflicted file the same spot offers Accept Current, Accept Incoming and Accept Both per conflict block, with `cmd-shift-enter` for both sides. The Changes tab follows each of these without waiting for anything else to refresh it.

@@ -5,16 +5,17 @@ use std::path::Path;
 use std::path::PathBuf;
 
 use git::{
-  RepoStage, RepoStatusEntry, commit_changes, current_branch_status, current_github_remote_repo,
-  is_merge_in_progress, is_rebase_in_progress, list_repo_status, list_repo_worktree_files,
-  stage_all,
+  HeadCommitStatus, RepoStage, RepoStatusEntry, commit_changes, current_branch_status,
+  current_github_remote_repo, head_commit_status, is_merge_in_progress, is_rebase_in_progress,
+  list_repo_status, list_repo_worktree_files, stage_all,
 };
 use gpui::{
-  AnyElement, AnyWindowHandle, App, Context, Entity, FocusHandle, Focusable, Render, SharedString,
-  Task, Window, div, img, prelude::*, px,
+  Anchor, AnyElement, AnyWindowHandle, App, Context, Entity, FocusHandle, Focusable, Render,
+  SharedString, Task, Window, div, img, prelude::*, px,
 };
 use gpui_component::{
   ActiveTheme as _, Disableable as _, Icon, IconName, Sizable as _, h_flex,
+  menu::{DropdownMenu as _, PopupMenuItem},
   tree::{TreeItem, TreeState, tree},
   v_flex,
 };
@@ -23,10 +24,12 @@ use terminal::TerminalView;
 
 use crate::changes_list::{ChangesList, ChangesListEvent};
 use crate::history_list::{HistoryList, HistoryListEvent};
+use crate::repo_state::{PaletteCommand, RepoState, push_flags};
 
 const DOCK_PANEL_TERMINAL_DEBUG_SELECTOR: &str = "dock-panel-terminal";
 pub(crate) const DOCK_PANEL_HISTORY_DEBUG_SELECTOR: &str = "dock-panel-history";
 const DOCK_PANEL_COMMIT_DEBUG_SELECTOR: &str = "dock-panel-commit";
+const DOCK_PANEL_COMMIT_MENU_DEBUG_SELECTOR: &str = "dock-panel-commit-menu";
 const DOCK_PANEL_OPERATION_DEBUG_SELECTOR: &str = "dock-panel-operation";
 #[cfg(test)]
 const DOCK_PANEL_TERMINAL_TAB_DEBUG_SELECTOR: &str = "dock-panel-tab-terminal";
@@ -60,6 +63,8 @@ pub enum DockPanelEvent {
   Committed,
   /// The rebase can move on: the host runs it, it owns the conflict flow.
   ContinueRebase,
+  /// A command picked in the commit menu; the host owns running it.
+  RunCommand(PaletteCommand),
 }
 
 impl gpui::EventEmitter<DockPanelEvent> for DockPanel {}
@@ -157,6 +162,8 @@ pub struct DockPanel {
   status_entries: Vec<RepoStatusEntry>,
   merge_in_progress: bool,
   rebase_in_progress: bool,
+  head_status: HeadCommitStatus,
+  branch_status: Option<git::BranchStatus>,
   commit_input: Entity<TextareaState>,
   committing: bool,
   last_error: Option<SharedString>,
@@ -234,6 +241,8 @@ impl DockPanel {
       status_entries: Vec::new(),
       merge_in_progress: false,
       rebase_in_progress: false,
+      head_status: HeadCommitStatus::default(),
+      branch_status: None,
       commit_input,
       committing: false,
       last_error: None,
@@ -289,17 +298,19 @@ impl DockPanel {
     };
 
     let task = cx.spawn(async move |this, cx| {
-      let (result, merge_in_progress, rebase_in_progress) = unblock(move || {
+      let (result, merge_in_progress, rebase_in_progress, head_status) = unblock(move || {
         (
           list_repo_status(&repo_root),
           is_merge_in_progress(&repo_root).unwrap_or(false),
           is_rebase_in_progress(&repo_root).unwrap_or(false),
+          head_commit_status(&repo_root).unwrap_or_default(),
         )
       })
       .await;
       let _ = this.update(cx, |this, cx| {
         this.merge_in_progress = merge_in_progress;
         this.rebase_in_progress = rebase_in_progress;
+        this.head_status = head_status;
         match result {
           Ok(entries) => {
             this.changes_list.update(cx, |list, cx| {
@@ -368,6 +379,43 @@ impl DockPanel {
 
   pub(crate) fn commit_message(&self, cx: &App) -> String {
     self.commit_input.read(cx).value().to_string()
+  }
+
+  /// The host owns the branch; the panel needs it to know what its menu allows.
+  pub(crate) fn set_branch_status(
+    &mut self,
+    branch_status: Option<git::BranchStatus>,
+    cx: &mut Context<Self>,
+  ) {
+    self.branch_status = branch_status;
+    cx.notify();
+  }
+
+  fn repo_state<'a>(&'a self, commit_message: &'a str) -> RepoState<'a> {
+    let branch_status = self.branch_status.as_ref();
+    let (can_push, can_force_push) =
+      push_flags(branch_status, self.head_status.has_head_commit, false);
+    RepoState {
+      has_repo: self.repo_root.is_some(),
+      merge_in_progress: self.merge_in_progress,
+      rebase_in_progress: self.rebase_in_progress,
+      has_head_commit: self.head_status.has_head_commit,
+      can_push,
+      can_force_push,
+      can_undo_last_commit: self.head_status.can_undo_last_commit,
+      branch_status,
+      status_entries: &self.status_entries,
+      selected_entry: None,
+      commit_message,
+    }
+  }
+
+  pub(crate) fn changes_list(&self) -> Entity<ChangesList> {
+    self.changes_list.clone()
+  }
+
+  pub(crate) fn head_status(&self) -> HeadCommitStatus {
+    self.head_status
   }
 
   pub(crate) fn merge_in_progress(&self) -> bool {
@@ -546,6 +594,46 @@ impl DockPanel {
             .child(label),
         )
       })
+      .child(h_flex().w_full().child(self.render_commit_button(
+        continuing_rebase,
+        can_commit,
+        commit_shortcut,
+        cx,
+      )))
+      .into_any_element()
+  }
+
+  /// The primary action, plus the menu of what else can be done to the last
+  /// commit or the branch.
+  fn render_commit_button(
+    &self,
+    continuing_rebase: bool,
+    can_commit: bool,
+    commit_shortcut: gpui::Keystroke,
+    cx: &mut Context<Self>,
+  ) -> AnyElement {
+    let commit_message = self.commit_input.read(cx).value().to_string();
+    let state = self.repo_state(&commit_message);
+    let menu_items = [
+      (PaletteCommand::Amend, "Amend", IconName::Replace),
+      (
+        PaletteCommand::UndoLastCommit,
+        "Undo last commit",
+        IconName::Undo,
+      ),
+      (PaletteCommand::Push, "Push", IconName::ArrowUp),
+      (
+        PaletteCommand::ForcePush,
+        "Force push (with lease)",
+        IconName::ArrowUp,
+      ),
+    ]
+    .map(|(command, label, icon)| (command, label, icon, state.allows(command)));
+    let menu_enabled = menu_items.iter().any(|(_, _, _, allowed)| *allowed);
+    let view = cx.entity();
+
+    h_flex()
+      .w_full()
       .child(
         Button::new("dock-panel-commit")
           .label(if continuing_rebase {
@@ -567,7 +655,36 @@ impl DockPanel {
               return;
             }
             this.commit(cx)
-          })),
+          }))
+          .flex_1()
+          .rounded_r_none(),
+      )
+      .child(
+        Button::new("dock-panel-commit-menu")
+          .icon(IconName::ChevronDown)
+          .with_variant(gpui_component::button::ButtonVariant::Secondary)
+          .outline()
+          .small()
+          .rounded_l_none()
+          .border_l_0()
+          .debug_selector(|| DOCK_PANEL_COMMIT_MENU_DEBUG_SELECTOR.to_string())
+          .disabled(!menu_enabled)
+          .dropdown_menu_with_anchor(Anchor::BottomRight, move |menu, _, _| {
+            menu_items
+              .iter()
+              .fold(menu, |menu, (command, label, icon, allowed)| {
+                let view = view.clone();
+                let command = *command;
+                menu.item(
+                  PopupMenuItem::new(*label)
+                    .icon(icon.clone())
+                    .disabled(!allowed)
+                    .on_click(move |_, _, cx| {
+                      view.update(cx, |_, cx| cx.emit(DockPanelEvent::RunCommand(command)));
+                    }),
+                )
+              })
+          }),
       )
       .into_any_element()
   }
@@ -1246,6 +1363,75 @@ mod tests {
     cx.run_until_parked();
 
     assert!(!git::is_merge_in_progress(&repo.path).expect("merge state"));
+  }
+
+  #[gpui::test]
+  async fn the_commit_menu_offers_what_the_repository_allows(cx: &mut TestAppContext) {
+    cx.update(|cx| gpui_component::init(cx));
+    let repo = TempRepo::init("dock-panel-commit-menu");
+    commit_text_file(&repo.path, Path::new("a.txt"), "v1\n", "initial");
+    commit_text_file(&repo.path, Path::new("b.txt"), "v1\n", "second");
+
+    let (panel, cx) = add_dock_panel_window(Some(repo.path.clone()), cx);
+    cx.executor().allow_parking();
+    await_refresh(&panel, cx).await;
+    panel.update(cx, |_, cx| cx.notify());
+    cx.run_until_parked();
+
+    assert!(
+      cx.debug_bounds(DOCK_PANEL_COMMIT_MENU_DEBUG_SELECTOR)
+        .is_some(),
+      "the commit button carries its menu"
+    );
+
+    // Two commits and no branch handed over yet: amend and undo, no push.
+    panel.read_with(cx, |panel, _| {
+      let state = panel.repo_state("");
+      assert!(state.allows(PaletteCommand::Amend));
+      assert!(state.allows(PaletteCommand::UndoLastCommit));
+      assert!(
+        !state.allows(PaletteCommand::Push),
+        "the panel knows no branch yet"
+      );
+    });
+
+    // The host hands the branch over: publishing becomes possible.
+    panel.update(cx, |panel, cx| {
+      panel.set_branch_status(
+        Some(git::BranchStatus {
+          name: "main".to_string(),
+          ahead: 0,
+          behind: 0,
+          has_upstream: false,
+        }),
+        cx,
+      )
+    });
+    panel.read_with(cx, |panel, _| {
+      assert!(
+        panel.repo_state("").allows(PaletteCommand::Push),
+        "an unpublished branch is pushed to publish it"
+      );
+    });
+
+    // The menu asks the host to run, it never runs the command itself.
+    let asked = Arc::new(AtomicBool::new(false));
+    let observer = {
+      let asked = asked.clone();
+      cx.update(|_, cx| {
+        cx.subscribe(&panel, move |_panel, event: &DockPanelEvent, _cx| {
+          if matches!(event, DockPanelEvent::RunCommand(PaletteCommand::Amend)) {
+            asked.store(true, Ordering::SeqCst);
+          }
+        })
+      })
+    };
+    panel.update(cx, |_, cx| {
+      cx.emit(DockPanelEvent::RunCommand(PaletteCommand::Amend))
+    });
+    cx.run_until_parked();
+    assert!(asked.load(Ordering::SeqCst));
+    drop(observer);
   }
 
   #[gpui::test]
