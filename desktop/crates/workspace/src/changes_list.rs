@@ -19,7 +19,8 @@ use gpui_component::{
 };
 use smol::unblock;
 use ui::{
-  FILE_ICON_SIZE_PX, StatusThemeExt as _, WindowExt as _, file_icon_path_for_path_with_theme,
+  ConfirmDialog, FILE_ICON_SIZE_PX, StatusThemeExt as _, WindowExt as _,
+  file_icon_path_for_path_with_theme,
 };
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -227,6 +228,52 @@ impl ChangesList {
       window,
       cx,
     );
+  }
+
+  /// Discarding destroys work, so it always asks first.
+  pub(crate) fn confirm_restore_file(
+    &mut self,
+    path: PathBuf,
+    status: RepoStatusKind,
+    window: &mut Window,
+    cx: &mut Context<Self>,
+  ) {
+    let file_label = path.to_string_lossy().replace(['\n', '\r'], "");
+    let (title, message, confirm_text) = if status == RepoStatusKind::Untracked {
+      (
+        "Delete file?",
+        format!("Delete {file_label} from disk?"),
+        "Delete",
+      )
+    } else {
+      (
+        "Restore file?",
+        format!("Discard changes in {file_label}?"),
+        "Restore",
+      )
+    };
+
+    let title: SharedString = title.into();
+    let message: SharedString = message.into();
+    let confirm_text: SharedString = confirm_text.into();
+    let view = cx.entity();
+
+    window.open_alert_dialog(cx, move |alert, _, _| {
+      let view = view.clone();
+      let path = path.clone();
+      ConfirmDialog::new(title.clone(), div().child(message.clone()))
+        .confirm_text(confirm_text.clone())
+        .cancel_text("Cancel")
+        .destructive()
+        .on_confirm(move |_, window, cx| {
+          let path = path.clone();
+          view.update(cx, |view, cx| {
+            view.restore_file(path, status, window, cx);
+          });
+          true
+        })
+        .build(alert)
+    });
   }
 
   pub(crate) fn restore_file(
@@ -477,7 +524,7 @@ impl ChangesList {
                       let path = path.clone();
                       move |this, _, window, cx| {
                         cx.stop_propagation();
-                        this.restore_file(path.clone(), status_kind, window, cx);
+                        this.confirm_restore_file(path.clone(), status_kind, window, cx);
                       }
                     })),
                 )
@@ -754,6 +801,34 @@ mod tests {
   }
 
   #[gpui::test]
+  async fn discarding_asks_before_touching_the_file(cx: &mut gpui::TestAppContext) {
+    let repo_root = temp_repo("changes-list-discard-confirm");
+
+    let (list, cx) = add_changes_list_window(repo_root.clone(), cx);
+    cx.executor().allow_parking();
+    set_entries_from_disk(&list, cx, &repo_root);
+
+    let button = cx
+      .debug_bounds("changes-restore-0")
+      .expect("discard button bounds");
+    cx.simulate_click(button.center(), gpui::Modifiers::default());
+    cx.run_until_parked();
+
+    assert!(
+      cx.update(|window, cx| window.has_active_dialog(cx)),
+      "discarding must ask first"
+    );
+    list.read_with(cx, |list, _| assert!(list._action_task.is_none()));
+    assert_eq!(
+      std::fs::read_to_string(repo_root.join("README.md")).expect("read file"),
+      "v2\n",
+      "nothing should change until the dialog is confirmed"
+    );
+
+    let _ = std::fs::remove_dir_all(&repo_root);
+  }
+
+  #[gpui::test]
   async fn discarding_a_modified_file_restores_its_content(cx: &mut gpui::TestAppContext) {
     let repo_root = temp_repo("changes-list-discard-modified");
 
@@ -761,7 +836,18 @@ mod tests {
     cx.executor().allow_parking();
     set_entries_from_disk(&list, cx, &repo_root);
 
-    run_action(&list, cx, "changes-restore-0").await;
+    // What the confirmation dialog runs.
+    let task = list.update_in(cx, |list, window, cx| {
+      list.restore_file(
+        PathBuf::from("README.md"),
+        RepoStatusKind::Modified,
+        window,
+        cx,
+      );
+      list._action_task.take().expect("restore task")
+    });
+    task.await;
+    cx.run_until_parked();
 
     assert_eq!(
       std::fs::read_to_string(repo_root.join("README.md")).expect("read file"),
@@ -783,7 +869,17 @@ mod tests {
     cx.executor().allow_parking();
     set_entries_from_disk(&list, cx, &repo_root);
 
-    run_action(&list, cx, "changes-restore-0").await;
+    let task = list.update_in(cx, |list, window, cx| {
+      list.restore_file(
+        PathBuf::from("scratch.txt"),
+        RepoStatusKind::Untracked,
+        window,
+        cx,
+      );
+      list._action_task.take().expect("restore task")
+    });
+    task.await;
+    cx.run_until_parked();
 
     assert!(
       !repo_root.join("scratch.txt").exists(),
