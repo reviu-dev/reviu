@@ -2,11 +2,12 @@
 
 use super::*;
 
-pub(super) use crate::test_support::{TempRepo, commit_text_file};
+pub(super) use crate::test_support::{
+  TempBareRepo, TempRepo, commit_text_file, force_checkout_head, head_oid, push_branch_to_remote,
+  remote_branch_oid, set_remote_head, set_upstream,
+};
 pub(super) use git::{restore_file, stage_file};
 
-use git2::build::CheckoutBuilder;
-use git2::{BranchType, Cred, PushOptions, RemoteCallbacks, Repository};
 use gpui::TestAppContext;
 use std::io::{Read, Write};
 use std::net::TcpListener;
@@ -14,33 +15,6 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::api::{ApiClient, User, UserRole, UserSubscription};
-
-pub(super) struct TempBareRepo {
-  pub(super) path: PathBuf,
-}
-
-impl TempBareRepo {
-  pub(super) fn init(prefix: &str) -> Self {
-    let mut path = std::env::temp_dir();
-    let nanos = SystemTime::now()
-      .duration_since(UNIX_EPOCH)
-      .expect("system clock before unix epoch")
-      .as_nanos();
-    path.push(format!(
-      "reviu-{prefix}-bare-{}-{nanos}",
-      std::process::id()
-    ));
-    std::fs::create_dir_all(&path).expect("create temp dir");
-    Repository::init_bare(&path).expect("init bare git repository");
-    Self { path }
-  }
-}
-
-impl Drop for TempBareRepo {
-  fn drop(&mut self) {
-    let _ = std::fs::remove_dir_all(&self.path);
-  }
-}
 
 pub(super) struct TempDir {
   pub(super) path: PathBuf,
@@ -63,63 +37,6 @@ impl Drop for TempDir {
   fn drop(&mut self) {
     let _ = std::fs::remove_dir_all(&self.path);
   }
-}
-
-pub(super) fn push_branch_to_remote(repo_root: &Path, branch_name: &str, remote_name: &str) {
-  let repo = Repository::open(repo_root).expect("open repo");
-  let mut remote = repo.find_remote(remote_name).expect("find remote");
-  let refspec = format!("refs/heads/{branch_name}:refs/heads/{branch_name}");
-  let mut callbacks = RemoteCallbacks::new();
-  callbacks.credentials(|_, _, _| Cred::default());
-  let mut options = PushOptions::new();
-  options.remote_callbacks(callbacks);
-  remote
-    .push(&[refspec], Some(&mut options))
-    .expect("push branch");
-}
-
-pub(super) fn set_upstream(repo_root: &Path, local_branch: &str, upstream_branch: &str) {
-  let repo = Repository::open(repo_root).expect("open repo");
-  let mut branch = repo
-    .find_branch(local_branch, BranchType::Local)
-    .expect("find local branch");
-  branch
-    .set_upstream(Some(upstream_branch))
-    .expect("set upstream");
-}
-
-pub(super) fn set_remote_head(remote_root: &Path, branch_name: &str) {
-  let refname = format!("refs/heads/{branch_name}");
-  Repository::open(remote_root)
-    .expect("open remote")
-    .set_head(&refname)
-    .expect("set remote HEAD");
-}
-
-pub(super) fn head_oid(repo_root: &Path) -> git2::Oid {
-  Repository::open(repo_root)
-    .expect("open repo")
-    .head()
-    .and_then(|head| head.peel_to_commit())
-    .expect("read head")
-    .id()
-}
-
-pub(super) fn remote_branch_oid(remote_root: &Path, branch_name: &str) -> git2::Oid {
-  let refname = format!("refs/heads/{branch_name}");
-  Repository::open(remote_root)
-    .expect("open remote")
-    .refname_to_id(&refname)
-    .expect("read remote branch oid")
-}
-
-pub(super) fn force_checkout_head(repo_root: &Path) {
-  let repo = Repository::open(repo_root).expect("open repo");
-  let mut checkout = CheckoutBuilder::new();
-  checkout.force();
-  repo
-    .checkout_head(Some(&mut checkout))
-    .expect("force checkout HEAD");
 }
 
 pub(super) fn make_commit(oid: &str, parents: &[&str]) -> HistoryCommitNode {

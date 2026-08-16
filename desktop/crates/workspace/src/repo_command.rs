@@ -252,10 +252,28 @@ impl RepoCommand {
   pub(crate) fn analytics_event(&self) -> Option<&'static str> {
     match self {
       Self::Fetch => Some("fetch_done"),
+      Self::Push => Some("push_done"),
+      Self::ForcePush => Some("force_push_done"),
       Self::RebaseBranch(_) => Some("rebase_done"),
       Self::Stash { .. } => Some("stash_created"),
       Self::CherryPick { .. } => Some("cherry_pick_done"),
-      _ => None,
+      Self::StageAll
+      | Self::UnstageAll
+      | Self::Pull
+      | Self::UndoLastCommit
+      | Self::CheckoutDetached { .. }
+      | Self::SwitchBranch(_)
+      | Self::CreateBranch { .. }
+      | Self::CreateBranchFrom { .. }
+      | Self::DeleteBranch(_)
+      | Self::MergeBranch(_)
+      | Self::AbortMerge
+      | Self::ContinueRebase
+      | Self::SkipRebase
+      | Self::AbortRebase
+      | Self::ApplyStash { .. }
+      | Self::PopStash { .. }
+      | Self::DropStash { .. } => None,
     }
   }
 }
@@ -316,7 +334,10 @@ mod tests {
   use git::{RepoStage, list_repo_status};
   use std::fs;
 
-  use crate::test_support::{TempRepo, commit_text_file};
+  use crate::test_support::{
+    TempBareRepo, TempRepo, commit_text_file, head_oid, push_branch_to_remote, remote_branch_oid,
+    set_remote_head, set_upstream,
+  };
 
   fn local(name: &str) -> BranchRef {
     BranchRef {
@@ -618,6 +639,227 @@ mod tests {
         .name,
       "HEAD"
     );
+  }
+
+  /// A repo with an `origin` bare remote, its branch pushed and tracked.
+  fn repo_with_remote(prefix: &str) -> (TempRepo, TempBareRepo, String) {
+    let repo = TempRepo::init(&format!("{prefix}-source"));
+    let remote = TempBareRepo::init(&format!("{prefix}-remote"));
+    commit_text_file(&repo.path, Path::new("a.txt"), "v1\n", "initial");
+
+    git2::Repository::open(&repo.path)
+      .expect("open repo")
+      .remote("origin", remote.path.to_str().expect("remote path utf8"))
+      .expect("add origin");
+    let branch = current_branch_status(&repo.path)
+      .expect("branch status")
+      .name;
+    push_branch_to_remote(&repo.path, &branch, "origin");
+    set_upstream(&repo.path, &branch, &format!("origin/{branch}"));
+    set_remote_head(&remote.path, &branch);
+
+    (repo, remote, branch)
+  }
+
+  #[test]
+  fn pushing_moves_the_remote_branch_and_force_pushing_rewrites_it() {
+    let (repo, remote, branch) = repo_with_remote("repo-command-push");
+    commit_text_file(&repo.path, Path::new("a.txt"), "v2\n", "second");
+
+    let pushed = run(&repo.path, RepoCommand::Push);
+    assert_eq!(
+      pushed,
+      RepoCommandOutcome::done("Pushed to the remote branch")
+    );
+    assert_eq!(
+      remote_branch_oid(&remote.path, &branch),
+      head_oid(&repo.path)
+    );
+
+    // Rewrite history, so only a force push can land it.
+    run(&repo.path, RepoCommand::UndoLastCommit);
+    commit_text_file(
+      &repo.path,
+      Path::new("a.txt"),
+      "v2-rewritten\n",
+      "rewritten",
+    );
+    assert!(
+      RepoCommand::Push.run(&repo.path).is_err(),
+      "a diverged branch is refused"
+    );
+
+    run(&repo.path, RepoCommand::ForcePush);
+    assert_eq!(
+      remote_branch_oid(&remote.path, &branch),
+      head_oid(&repo.path)
+    );
+  }
+
+  #[test]
+  fn pulling_brings_the_remote_commit_in_and_then_reports_up_to_date() {
+    let (repo, remote, branch) = repo_with_remote("repo-command-pull");
+
+    // A second clone pushes ahead of us.
+    let other = TempRepo::init("repo-command-pull-other");
+    std::fs::remove_dir_all(&other.path).expect("clear clone target");
+    git2::Repository::clone(remote.path.to_str().expect("remote path utf8"), &other.path)
+      .expect("clone remote");
+    commit_text_file(
+      &other.path,
+      Path::new("b.txt"),
+      "from the remote\n",
+      "remote work",
+    );
+    push_branch_to_remote(&other.path, &branch, "origin");
+
+    run(&repo.path, RepoCommand::Fetch);
+    let pulled = run(&repo.path, RepoCommand::Pull);
+    assert_eq!(
+      pulled,
+      RepoCommandOutcome::done("Pulled from the remote branch")
+    );
+    assert!(repo.path.join("b.txt").exists());
+
+    assert_eq!(
+      run(&repo.path, RepoCommand::Pull),
+      RepoCommandOutcome::UpToDate {
+        message: "Already up to date".into()
+      }
+    );
+  }
+
+  #[test]
+  fn continuing_a_rebase_stops_again_on_the_next_conflict_then_finishes() {
+    let repo = TempRepo::init("repo-command-continue-rebase");
+    commit_text_file(&repo.path, Path::new("a.txt"), "base\n", "initial");
+    let base = current_branch_status(&repo.path)
+      .expect("branch status")
+      .name;
+    run(
+      &repo.path,
+      RepoCommand::CreateBranch {
+        name: "feature".to_string(),
+      },
+    );
+    commit_text_file(&repo.path, Path::new("a.txt"), "feature\n", "feature work");
+    run(&repo.path, RepoCommand::SwitchBranch(local(&base)));
+    commit_text_file(&repo.path, Path::new("a.txt"), "main\n", "main work");
+    run(&repo.path, RepoCommand::SwitchBranch(local("feature")));
+
+    let stopped = run(&repo.path, RepoCommand::RebaseBranch(local(&base)));
+    assert!(matches!(stopped, RepoCommandOutcome::Conflicted { .. }));
+
+    // Continuing without resolving stops on the same file.
+    let still_conflicted = RepoCommand::ContinueRebase.run(&repo.path);
+    assert!(
+      matches!(
+        still_conflicted,
+        Ok(RepoCommandOutcome::Conflicted { .. }) | Err(_)
+      ),
+      "an unresolved conflict cannot be continued"
+    );
+
+    // Resolve, stage, continue: the rebase lands.
+    fs::write(repo.path.join("a.txt"), "resolved\n").expect("resolve conflict");
+    run(&repo.path, RepoCommand::StageAll);
+    let done = run(&repo.path, RepoCommand::ContinueRebase);
+    assert_eq!(done, RepoCommandOutcome::done("Continued the rebase"));
+    assert!(!git::is_rebase_in_progress(&repo.path).expect("rebase state"));
+  }
+
+  #[test]
+  fn skipping_drops_the_conflicting_commit() {
+    let repo = TempRepo::init("repo-command-skip-rebase");
+    commit_text_file(&repo.path, Path::new("a.txt"), "base\n", "initial");
+    let base = current_branch_status(&repo.path)
+      .expect("branch status")
+      .name;
+    run(
+      &repo.path,
+      RepoCommand::CreateBranch {
+        name: "feature".to_string(),
+      },
+    );
+    commit_text_file(&repo.path, Path::new("a.txt"), "feature\n", "feature work");
+    run(&repo.path, RepoCommand::SwitchBranch(local(&base)));
+    commit_text_file(&repo.path, Path::new("a.txt"), "main\n", "main work");
+    run(&repo.path, RepoCommand::SwitchBranch(local("feature")));
+    run(&repo.path, RepoCommand::RebaseBranch(local(&base)));
+
+    let skipped = run(&repo.path, RepoCommand::SkipRebase);
+    assert_eq!(skipped, RepoCommandOutcome::done("Skipped the commit"));
+    assert!(!git::is_rebase_in_progress(&repo.path).expect("rebase state"));
+    assert_eq!(
+      fs::read_to_string(repo.path.join("a.txt")).expect("read file"),
+      "main\n",
+      "the skipped commit left nothing behind"
+    );
+  }
+
+  #[test]
+  fn aborting_a_merge_puts_the_worktree_back() {
+    let repo = TempRepo::init("repo-command-abort-merge");
+    commit_text_file(&repo.path, Path::new("a.txt"), "base\n", "initial");
+    let base = current_branch_status(&repo.path)
+      .expect("branch status")
+      .name;
+    run(
+      &repo.path,
+      RepoCommand::CreateBranch {
+        name: "feature".to_string(),
+      },
+    );
+    commit_text_file(&repo.path, Path::new("a.txt"), "feature\n", "feature work");
+    run(&repo.path, RepoCommand::SwitchBranch(local(&base)));
+    commit_text_file(&repo.path, Path::new("a.txt"), "main\n", "main work");
+    run(&repo.path, RepoCommand::MergeBranch(local("feature")));
+
+    let aborted = run(&repo.path, RepoCommand::AbortMerge);
+    assert_eq!(aborted, RepoCommandOutcome::done("Aborted merge"));
+    assert!(first_conflicted_path(&repo.path).is_none());
+    assert_eq!(
+      fs::read_to_string(repo.path.join("a.txt")).expect("read file"),
+      "main\n"
+    );
+  }
+
+  #[test]
+  fn a_stash_can_be_applied_then_dropped() {
+    let repo = TempRepo::init("repo-command-apply-drop-stash");
+    commit_text_file(&repo.path, Path::new("a.txt"), "v1\n", "initial");
+    fs::write(repo.path.join("a.txt"), "v2\n").expect("update file");
+    run(
+      &repo.path,
+      RepoCommand::Stash {
+        include_untracked: false,
+        message: Some("wip".to_string()),
+      },
+    );
+
+    let applied = run(
+      &repo.path,
+      RepoCommand::ApplyStash {
+        index: 0,
+        name: "wip".to_string(),
+      },
+    );
+    assert_eq!(applied, RepoCommandOutcome::done("Applied stash wip"));
+    assert_eq!(
+      fs::read_to_string(repo.path.join("a.txt")).expect("read file"),
+      "v2\n"
+    );
+    assert_eq!(git::list_stashes(&repo.path).expect("stashes").len(), 1);
+
+    let dropped = run(
+      &repo.path,
+      RepoCommand::DropStash {
+        index: 0,
+        name: "wip".to_string(),
+      },
+    );
+    assert_eq!(dropped, RepoCommandOutcome::done("Dropped stash wip"));
+    assert!(git::list_stashes(&repo.path).expect("stashes").is_empty());
   }
 
   #[test]
