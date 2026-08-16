@@ -9,6 +9,9 @@ use gpui_component::{ActiveTheme as _, Disableable as _, IconName, Sizable as _,
 use ui::Button;
 
 pub(crate) const HUNK_ACTIONS_DEBUG_SELECTOR: &str = "hunk-actions";
+pub(crate) const STAGE_HUNK_DEBUG_SELECTOR: &str = "stage-hunk";
+pub(crate) const UNSTAGE_HUNK_DEBUG_SELECTOR: &str = "unstage-hunk";
+pub(crate) const RESTORE_HUNK_DEBUG_SELECTOR: &str = "restore-hunk";
 pub(crate) const CONFLICT_ACTIONS_DEBUG_SELECTOR: &str = "conflict-actions";
 
 /// Where the floating actions sit: on the first line of the block, scrolled.
@@ -67,6 +70,7 @@ pub(crate) fn render_hunk_actions(
       let group_id = group_id.clone();
       actions = actions.child(
         Button::new("stage-hunk")
+          .debug_selector(|| STAGE_HUNK_DEBUG_SELECTOR.to_string())
           .icon(IconName::Plus)
           .label("Stage")
           .small()
@@ -92,6 +96,7 @@ pub(crate) fn render_hunk_actions(
       let group_id = group_id.clone();
       actions = actions.child(
         Button::new("unstage-hunk")
+          .debug_selector(|| UNSTAGE_HUNK_DEBUG_SELECTOR.to_string())
           .icon(IconName::Minus)
           .label("Unstage")
           .small()
@@ -117,6 +122,7 @@ pub(crate) fn render_hunk_actions(
     let editor = editor.clone();
     actions = actions.child(
       Button::new("restore-hunk")
+        .debug_selector(|| RESTORE_HUNK_DEBUG_SELECTOR.to_string())
         .icon(IconName::Undo)
         .label("Restore")
         .small()

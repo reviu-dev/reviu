@@ -1574,10 +1574,11 @@ mod tests {
       "the hovered hunk carries its own actions"
     );
 
-    // The cursor starts on the first hunk: stage it.
-    page.update_in(cx, |page, window, cx| {
-      page.toggle_hunk_stage_action(&crate::ToggleHunkStage, window, cx)
-    });
+    // The button of the hovered hunk stages that hunk.
+    let stage = cx
+      .debug_bounds(crate::hunk_actions::STAGE_HUNK_DEBUG_SELECTOR)
+      .expect("stage hunk button bounds");
+    cx.simulate_click(stage.center(), gpui::Modifiers::default());
     await_editor_diff(&page, cx).await;
 
     let staged_lines = |repo_root: &Path| {
@@ -1593,12 +1594,124 @@ mod tests {
       "one hunk staged, the other not"
     );
 
-    // Same key on the same hunk puts it back.
+    // The dock heard about it: the file shows up as staged there too.
+    cx.run_until_parked();
+    page.read_with(cx, |page, cx| {
+      let entry = page
+        .dock_panel
+        .read(cx)
+        .status_entries()
+        .iter()
+        .find(|entry| entry.path == PathBuf::from("a.txt"))
+        .cloned()
+        .expect("the file is still in the changes list");
+      assert_eq!(entry.stage, git::RepoStage::PartiallyStaged);
+    });
+
+    // The keyboard on the same hunk puts it back.
     page.update_in(cx, |page, window, cx| {
       page.toggle_hunk_stage_action(&crate::ToggleHunkStage, window, cx)
     });
     await_editor_diff(&page, cx).await;
     assert_eq!(staged_lines(&repo.path), Some(git::RepoStage::Unstaged));
+  }
+
+  #[gpui::test]
+  async fn an_untracked_file_has_no_hunk_actions(cx: &mut TestAppContext) {
+    let repo = TempRepo::init("session-render-hunk-untracked");
+    commit_text_file(&repo.path, Path::new("a.txt"), "v1\n", "initial");
+    let new_file = (1..=20)
+      .map(|line| format!("line {line}\n"))
+      .collect::<String>();
+    std::fs::write(repo.path.join("new.txt"), new_file).expect("write untracked file");
+
+    let (page, cx) = add_session_page_window(repo.path.clone(), cx);
+    cx.executor().allow_parking();
+    let refresh = page.update(cx, |page, cx| {
+      page.dock_panel.update(cx, |panel, cx| {
+        panel.refresh(cx);
+        panel._refresh_task.take().expect("refresh task")
+      })
+    });
+    refresh.await;
+    cx.run_until_parked();
+
+    page.update_in(cx, |page, window, cx| {
+      page.open_diff(PathBuf::from("new.txt"), None, window, cx);
+    });
+    await_open_file(&page, cx).await;
+    await_editor_diff(&page, cx).await;
+    page.update(cx, |_, cx| cx.notify());
+    cx.run_until_parked();
+
+    let editor_bounds = cx
+      .debug_bounds(DIFF_EDITOR_DEBUG_SELECTOR)
+      .expect("editor pane bounds");
+    cx.simulate_mouse_move(
+      gpui::point(
+        editor_bounds.origin.x + gpui::px(200.0),
+        editor_bounds.origin.y + gpui::px(30.0),
+      ),
+      None,
+      gpui::Modifiers::default(),
+    );
+    cx.run_until_parked();
+
+    assert!(
+      cx.debug_bounds(crate::hunk_actions::HUNK_ACTIONS_DEBUG_SELECTOR)
+        .is_none(),
+      "a file git does not track yet has nothing to stage hunk by hunk"
+    );
+  }
+
+  #[gpui::test]
+  async fn a_commit_snapshot_has_no_hunk_actions(cx: &mut TestAppContext) {
+    let repo = TempRepo::init("session-render-hunk-snapshot");
+    let original = (1..=20)
+      .map(|line| format!("line {line}\n"))
+      .collect::<String>();
+    commit_text_file(&repo.path, Path::new("a.txt"), &original, "initial");
+    commit_text_file(
+      &repo.path,
+      Path::new("a.txt"),
+      &original.replace("line 3\n", "line 3 changed\n"),
+      "second",
+    );
+    let head = git::current_head_sha(&repo.path)
+      .expect("head sha")
+      .expect("head sha");
+
+    let (page, cx) = add_session_page_window(repo.path.clone(), cx);
+    cx.executor().allow_parking();
+    cx.run_until_parked();
+
+    let history = page.read_with(cx, |page, cx| page.dock_panel.read(cx).history_list.clone());
+    history.update(cx, |list, cx| {
+      list.open_commit_file(head, PathBuf::from("a.txt"), cx)
+    });
+    await_open_file(&page, cx).await;
+    await_editor_diff(&page, cx).await;
+    page.update(cx, |_, cx| cx.notify());
+    cx.run_until_parked();
+
+    let editor_bounds = cx
+      .debug_bounds(DIFF_EDITOR_DEBUG_SELECTOR)
+      .expect("editor pane bounds");
+    cx.simulate_mouse_move(
+      gpui::point(
+        editor_bounds.origin.x + gpui::px(200.0),
+        editor_bounds.origin.y + gpui::px(30.0),
+      ),
+      None,
+      gpui::Modifiers::default(),
+    );
+    cx.run_until_parked();
+
+    assert!(
+      cx.debug_bounds(crate::hunk_actions::HUNK_ACTIONS_DEBUG_SELECTOR)
+        .is_none(),
+      "a commit snapshot is read-only: nothing to stage"
+    );
   }
 
   #[gpui::test]
@@ -1698,6 +1811,45 @@ mod tests {
     });
     await_open_file(&page, cx).await;
     await_editor_diff(&page, cx).await;
+
+    // Hovering a conflict block brings up its three sides.
+    page.update(cx, |_, cx| cx.notify());
+    cx.run_until_parked();
+    let conflict_line = page.read_with(cx, |page, cx| {
+      page
+        .editor
+        .as_ref()
+        .expect("editor")
+        .read(cx)
+        .conflict_navigation_state(cx)
+        .expect("conflict navigation state")
+        .active_start_line
+    });
+    let line_height = page.read_with(cx, |page, cx| {
+      page
+        .editor
+        .as_ref()
+        .expect("editor")
+        .read(cx)
+        .measured_editor_line_height()
+    });
+    let editor_bounds = cx
+      .debug_bounds(DIFF_EDITOR_DEBUG_SELECTOR)
+      .expect("editor pane bounds");
+    cx.simulate_mouse_move(
+      gpui::point(
+        editor_bounds.origin.x + gpui::px(200.0),
+        editor_bounds.origin.y + line_height * (conflict_line as f32 + 0.5),
+      ),
+      None,
+      gpui::Modifiers::default(),
+    );
+    cx.run_until_parked();
+    assert!(
+      cx.debug_bounds(crate::hunk_actions::CONFLICT_ACTIONS_DEBUG_SELECTOR)
+        .is_some(),
+      "the hovered conflict offers current, incoming and both"
+    );
 
     // `shift-enter` on the first conflict keeps the current side, and only it.
     page.update_in(cx, |page, window, cx| {
