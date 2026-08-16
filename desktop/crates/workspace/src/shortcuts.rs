@@ -70,6 +70,8 @@ const REVIEW_ANNOTATION_CONTEXT: &str =
   "WorkspaceGit || WorkspaceGithubPrChanges || WorkspaceSession";
 const REVIEW_COMMENT_CONTEXT: &str = "WorkspaceGithubPr";
 const HUNK_ACTION_CONTEXT: &str = "WorkspaceGit";
+/// Acting on a hunk works on the Git page and in the Sessions shell.
+const HUNK_ACTION_SESSION_CONTEXT: &str = "WorkspaceGit || WorkspaceSession";
 const HUNK_ACTION_DESCENDANT_FOCUS: &str = "List || Editor";
 const COMMENT_HUNK_CONTEXT: &str = "WorkspaceGit || WorkspaceGithubPrChanges || WorkspaceSession";
 const COMMENT_HUNK_DESCENDANT_FOCUS: &str = "List || Editor || Tree";
@@ -468,23 +470,23 @@ const SHORTCUT_DEFINITIONS: [ShortcutDefinition; 38] = [
     id: ShortcutId::ToggleHunkStage,
     title: "Stage / Unstage Hunk · Accept Current",
     description: "Stage the focused hunk (or unstage it if staged). On a file with unresolved conflicts, accept the active conflict's current change instead.",
-    scope_label: "Git page",
+    scope_label: "Git page and Sessions",
     category: ShortcutCategory::LocalGit,
     keystroke: "shift-enter",
-    context: HUNK_ACTION_CONTEXT,
+    context: HUNK_ACTION_SESSION_CONTEXT,
     display_context: WORKSPACE_GIT_CONTEXT,
-    active_contexts: &GIT_ONLY_ACTIVE_CONTEXTS,
+    active_contexts: &GIT_AND_SESSION_ACTIVE_CONTEXTS,
   },
   ShortcutDefinition {
     id: ShortcutId::RestoreHunk,
     title: "Restore Hunk · Accept Incoming",
     description: "Discard the focused hunk and restore the file. On a file with unresolved conflicts, accept the active conflict's incoming change instead.",
-    scope_label: "Git page",
+    scope_label: "Git page and Sessions",
     category: ShortcutCategory::LocalGit,
     keystroke: "shift-backspace",
-    context: HUNK_ACTION_CONTEXT,
+    context: HUNK_ACTION_SESSION_CONTEXT,
     display_context: WORKSPACE_GIT_CONTEXT,
-    active_contexts: &GIT_ONLY_ACTIVE_CONTEXTS,
+    active_contexts: &GIT_AND_SESSION_ACTIVE_CONTEXTS,
   },
   ShortcutDefinition {
     id: ShortcutId::ToggleFileStage,
@@ -512,12 +514,12 @@ const SHORTCUT_DEFINITIONS: [ShortcutDefinition; 38] = [
     id: ShortcutId::AcceptBothConflict,
     title: "Accept Both Conflict Changes",
     description: "Keep the current and incoming changes in the active conflict.",
-    scope_label: "Git page",
+    scope_label: "Git page and Sessions",
     category: ShortcutCategory::LocalGit,
     keystroke: "cmd-shift-enter",
-    context: HUNK_ACTION_CONTEXT,
+    context: HUNK_ACTION_SESSION_CONTEXT,
     display_context: WORKSPACE_GIT_CONTEXT,
-    active_contexts: &GIT_ONLY_ACTIVE_CONTEXTS,
+    active_contexts: &GIT_AND_SESSION_ACTIVE_CONTEXTS,
   },
   ShortcutDefinition {
     id: ShortcutId::PreviousPageTab,

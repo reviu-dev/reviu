@@ -868,7 +868,7 @@ mod tests {
         (
           this.selected_file.clone(),
           conflict_navigation,
-          GitPage::hunk_action_top(
+          hunk_action_top(
             editor.measured_editor_line_height(),
             display_line,
             editor.scroll_offset_y,
@@ -950,7 +950,7 @@ mod tests {
 
         (
           this.selected_file.clone(),
-          GitPage::hunk_action_top(
+          hunk_action_top(
             editor.measured_editor_line_height(),
             first_display_line,
             editor.scroll_offset_y,

@@ -10,9 +10,9 @@ use agent_chat_panel::AgentChatPanel;
 #[cfg(test)]
 use editor::ConflictNavigationState;
 use editor::{
-  CloseFind, ConflictResolution, DiffViewMode, Editor, Find, HunkAction, HunkState,
-  ReviewCommentCancelHandler, ReviewCommentCreateHandler, ReviewCommentCreateRequest,
-  ReviewCommentDeleteHandler, ReviewCommentDisplayMode, ReviewCommentEditHandler,
+  CloseFind, ConflictResolution, DiffViewMode, Editor, Find, ReviewCommentCancelHandler,
+  ReviewCommentCreateHandler, ReviewCommentCreateRequest, ReviewCommentDeleteHandler,
+  ReviewCommentDisplayMode, ReviewCommentEditHandler,
 };
 use git::{
   BranchKind, BranchRef, BranchStatus, HeadCommitStatus, HistoryCommitNode, HistoryRevision,
@@ -28,8 +28,8 @@ use git::{
 };
 use gpui::{
   Anchor, AnyElement, AnyWindowHandle, App, Context, Entity, FocusHandle, Focusable, Global,
-  InteractiveElement, ParentElement, PathPromptOptions, Pixels, Render, SharedString, Styled,
-  Subscription, Task, WeakEntity, Window, actions, div, img, prelude::*, px,
+  InteractiveElement, ParentElement, PathPromptOptions, Render, SharedString, Styled, Subscription,
+  Task, WeakEntity, Window, actions, div, img, prelude::*, px,
 };
 use gpui_component::{
   ActiveTheme as _, Disableable, Icon, IconName, Selectable, Sizable, StyledExt,
@@ -656,6 +656,11 @@ use crate::diff_view_policy::{DiffViewInputs, effective_diff_view};
 use crate::history_list::{
   HISTORY_MAX_COMMITS, HistoryCommitFileRow, HistoryRenderRow, HistoryTreeNode,
   build_history_tree_items, history_change_kind_to_repo_status, should_refresh_history_for_poll,
+};
+#[cfg(test)]
+use crate::hunk_actions::hunk_action_top;
+use crate::hunk_actions::{
+  render_hunk_actions, resolve_active_conflict, restore_hunk, toggle_hunk_stage,
 };
 use crate::palette_branches::{palette_branch, rebase_branch_candidates};
 use crate::repo_command::{RepoCommand, RepoCommandOutcome, branch_ref_from_palette};
@@ -2821,31 +2826,21 @@ impl GitPage {
     editor.update(cx, |editor, cx| editor.set_is_unmerged(is_unmerged, cx));
   }
 
+  /// A file opened from the history has no working-tree status, so no conflict.
+  fn conflict_file_status(&self) -> Option<RepoStatusKind> {
+    if self.history_opened_commit_file.is_some() {
+      return None;
+    }
+    self.selected_file_entry().map(|entry| entry.status)
+  }
+
   fn resolve_active_conflict_in_editor(
     &self,
     editor: &Entity<Editor>,
     resolution: ConflictResolution,
     cx: &mut Context<Self>,
   ) -> bool {
-    let file_status = if self.history_opened_commit_file.is_some() {
-      None
-    } else {
-      self.selected_file_entry().map(|entry| entry.status)
-    };
-    if !matches!(file_status, Some(RepoStatusKind::Conflicted)) {
-      return false;
-    }
-    editor.update(cx, |editor, cx| {
-      let Some(state) = editor.conflict_navigation_state(cx) else {
-        return false;
-      };
-      editor.resolve_conflict_region(state.active_start_line, resolution, cx);
-      editor.save(cx);
-      if let Some(next_state) = editor.conflict_navigation_state(cx) {
-        editor.reveal_conflict_start_line(next_state.active_start_line, cx);
-      }
-      true
-    })
+    resolve_active_conflict(editor, self.conflict_file_status(), resolution, cx)
   }
 
   fn resolve_all_conflicts_in_editor(

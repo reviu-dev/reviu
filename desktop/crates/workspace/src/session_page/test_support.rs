@@ -73,8 +73,12 @@ pub(super) async fn await_editor_diff(
     let Some(editor) = page.read_with(cx, |page, _| page.editor.clone()) else {
       return;
     };
-    let (bases_task, diff_task) = editor.update(cx, |editor, _| {
-      (editor.bases_task.take(), editor.diff_task.take())
+    let (bases_task, diff_task, git_task) = editor.update(cx, |editor, _| {
+      (
+        editor.bases_task.take(),
+        editor.diff_task.take(),
+        editor.git_task.take(),
+      )
     });
     let mut had_task = false;
     if let Some(task) = bases_task {
@@ -82,6 +86,10 @@ pub(super) async fn await_editor_diff(
       task.await;
     }
     if let Some(task) = diff_task {
+      had_task = true;
+      task.await;
+    }
+    if let Some(task) = git_task {
       had_task = true;
       task.await;
     }

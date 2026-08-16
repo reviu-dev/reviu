@@ -2,6 +2,7 @@
 
 use super::*;
 use crate::annotations::AnnotationKind;
+use crate::hunk_actions::render_hunk_actions;
 
 impl SessionPage {
   /// Ahead/behind counter that runs the matching sync command when clicked.
@@ -708,13 +709,24 @@ impl SessionPage {
     let body: AnyElement = if let Some(preview) = self.binary_preview.as_ref() {
       render_binary_preview(preview, cx)
     } else if let Some(editor) = self.editor.clone() {
+      // Actions of the hovered hunk or conflict float over the editor.
+      let hunk_actions = (self.opened_commit.is_none())
+        .then(|| {
+          let file_status = self.selected_file_status(cx);
+          render_hunk_actions(&editor, file_status, cx)
+        })
+        .flatten();
       let editor_pane = div()
         .flex_1()
         .min_h_0()
         .min_w(px(0.0))
         .flex()
         .flex_col()
+        .relative()
+        .overflow_hidden()
+        .debug_selector(|| DIFF_EDITOR_DEBUG_SELECTOR.to_string())
         .child(editor.clone())
+        .children(hunk_actions)
         .into_any_element();
 
       if self.show_preview && self.previewable() {
@@ -790,6 +802,9 @@ impl Render for SessionPage {
       .on_action(cx.listener(Self::toggle_hide_whitespace_action))
       .on_action(cx.listener(Self::previous_annotation_action))
       .on_action(cx.listener(Self::next_annotation_action))
+      .on_action(cx.listener(Self::toggle_hunk_stage_action))
+      .on_action(cx.listener(Self::restore_hunk_action))
+      .on_action(cx.listener(Self::accept_both_conflict_action))
       .child(
         ui::h_resizable("session-page-shell")
           .child(
@@ -1481,6 +1496,235 @@ mod tests {
     page.read_with(cx, |page, _| {
       assert_eq!(page.diff_view, DiffViewMode::Split);
     });
+  }
+
+  #[gpui::test]
+  async fn a_hunk_is_staged_and_unstaged_from_the_diff(cx: &mut TestAppContext) {
+    let repo = TempRepo::init("session-render-hunk-staging");
+    let original = (1..=40)
+      .map(|line| format!("line {line}\n"))
+      .collect::<String>();
+    commit_text_file(&repo.path, Path::new("a.txt"), &original, "initial");
+    // Two hunks far apart: staging one must leave the other alone.
+    let modified = original
+      .replace("line 3\n", "line 3 changed\n")
+      .replace("line 30\n", "line 30 changed\n");
+    std::fs::write(repo.path.join("a.txt"), modified).expect("update file");
+
+    let (page, cx) = add_session_page_window(repo.path.clone(), cx);
+    cx.executor().allow_parking();
+    let refresh = page.update(cx, |page, cx| {
+      page.dock_panel.update(cx, |panel, cx| {
+        panel.refresh(cx);
+        panel._refresh_task.take().expect("refresh task")
+      })
+    });
+    refresh.await;
+    cx.run_until_parked();
+
+    page.update_in(cx, |page, window, cx| {
+      page.open_diff(PathBuf::from("a.txt"), None, window, cx);
+    });
+    await_open_file(&page, cx).await;
+    await_editor_diff(&page, cx).await;
+
+    // Hovering a hunk brings up its actions.
+    page.update(cx, |_, cx| cx.notify());
+    cx.run_until_parked();
+    let editor_bounds = cx
+      .debug_bounds(crate::hunk_actions::HUNK_ACTIONS_DEBUG_SELECTOR)
+      .is_some();
+    assert!(
+      !editor_bounds,
+      "nothing floats over the diff until a hunk is hovered"
+    );
+    let hunk_line = page.read_with(cx, |page, cx| {
+      page
+        .editor
+        .as_ref()
+        .expect("editor")
+        .read(cx)
+        .hunk_navigation_state(cx)
+        .expect("hunk navigation state")
+        .active_display_line
+    });
+    let line_height = page.read_with(cx, |page, cx| {
+      page
+        .editor
+        .as_ref()
+        .expect("editor")
+        .read(cx)
+        .measured_editor_line_height()
+    });
+    let editor_bounds = cx
+      .debug_bounds(DIFF_EDITOR_DEBUG_SELECTOR)
+      .expect("editor pane bounds");
+    cx.simulate_mouse_move(
+      gpui::point(
+        editor_bounds.origin.x + gpui::px(200.0),
+        editor_bounds.origin.y + line_height * (hunk_line as f32 + 0.5),
+      ),
+      None,
+      gpui::Modifiers::default(),
+    );
+    cx.run_until_parked();
+    assert!(
+      cx.debug_bounds(crate::hunk_actions::HUNK_ACTIONS_DEBUG_SELECTOR)
+        .is_some(),
+      "the hovered hunk carries its own actions"
+    );
+
+    // The cursor starts on the first hunk: stage it.
+    page.update_in(cx, |page, window, cx| {
+      page.toggle_hunk_stage_action(&crate::ToggleHunkStage, window, cx)
+    });
+    await_editor_diff(&page, cx).await;
+
+    let staged_lines = |repo_root: &Path| {
+      let entries = git::list_repo_status(repo_root).expect("status");
+      entries
+        .iter()
+        .find(|entry| entry.path == PathBuf::from("a.txt"))
+        .map(|entry| entry.stage)
+    };
+    assert_eq!(
+      staged_lines(&repo.path),
+      Some(git::RepoStage::PartiallyStaged),
+      "one hunk staged, the other not"
+    );
+
+    // Same key on the same hunk puts it back.
+    page.update_in(cx, |page, window, cx| {
+      page.toggle_hunk_stage_action(&crate::ToggleHunkStage, window, cx)
+    });
+    await_editor_diff(&page, cx).await;
+    assert_eq!(staged_lines(&repo.path), Some(git::RepoStage::Unstaged));
+  }
+
+  #[gpui::test]
+  async fn restoring_a_hunk_puts_its_lines_back(cx: &mut TestAppContext) {
+    let repo = TempRepo::init("session-render-hunk-restore");
+    let original = (1..=40)
+      .map(|line| format!("line {line}\n"))
+      .collect::<String>();
+    commit_text_file(&repo.path, Path::new("a.txt"), &original, "initial");
+    let modified = original
+      .replace("line 3\n", "line 3 changed\n")
+      .replace("line 30\n", "line 30 changed\n");
+    std::fs::write(repo.path.join("a.txt"), modified).expect("update file");
+
+    let (page, cx) = add_session_page_window(repo.path.clone(), cx);
+    cx.executor().allow_parking();
+    let refresh = page.update(cx, |page, cx| {
+      page.dock_panel.update(cx, |panel, cx| {
+        panel.refresh(cx);
+        panel._refresh_task.take().expect("refresh task")
+      })
+    });
+    refresh.await;
+    cx.run_until_parked();
+
+    page.update_in(cx, |page, window, cx| {
+      page.open_diff(PathBuf::from("a.txt"), None, window, cx);
+    });
+    await_open_file(&page, cx).await;
+    await_editor_diff(&page, cx).await;
+
+    page.update_in(cx, |page, window, cx| {
+      page.restore_hunk_action(&crate::RestoreHunk, window, cx)
+    });
+    await_editor_diff(&page, cx).await;
+    cx.run_until_parked();
+
+    let contents = std::fs::read_to_string(repo.path.join("a.txt")).expect("read file");
+    assert!(
+      contents.contains("line 3\n"),
+      "the restored hunk is back to its committed lines"
+    );
+    assert!(
+      contents.contains("line 30 changed\n"),
+      "the other hunk is untouched"
+    );
+  }
+
+  #[gpui::test]
+  async fn accepting_one_conflict_block_leaves_the_others(cx: &mut TestAppContext) {
+    let repo = TempRepo::init("session-render-conflict-block");
+    let base_contents = (1..=12)
+      .map(|line| format!("line {line}\n"))
+      .collect::<String>();
+    commit_text_file(&repo.path, Path::new("a.txt"), &base_contents, "initial");
+    let base = git::BranchRef {
+      name: git::current_branch_status(&repo.path)
+        .expect("branch status")
+        .name,
+      kind: git::BranchKind::Local,
+    };
+    let feature = git::BranchRef {
+      name: "feature".to_string(),
+      kind: git::BranchKind::Local,
+    };
+    git::create_branch(&repo.path, &feature.name).expect("create branch");
+    git::switch_branch(&repo.path, &feature).expect("switch to feature");
+    let feature_contents = base_contents
+      .replace("line 2\n", "line 2 feature\n")
+      .replace("line 11\n", "line 11 feature\n");
+    commit_text_file(
+      &repo.path,
+      Path::new("a.txt"),
+      &feature_contents,
+      "feature work",
+    );
+    git::switch_branch(&repo.path, &base).expect("switch back");
+    let main_contents = base_contents
+      .replace("line 2\n", "line 2 main\n")
+      .replace("line 11\n", "line 11 main\n");
+    commit_text_file(&repo.path, Path::new("a.txt"), &main_contents, "main work");
+    let _ = git::merge_branch(&repo.path, &feature);
+
+    let (page, cx) = add_session_page_window(repo.path.clone(), cx);
+    cx.executor().allow_parking();
+    let refresh = page.update(cx, |page, cx| {
+      page.dock_panel.update(cx, |panel, cx| {
+        panel.refresh(cx);
+        panel._refresh_task.take().expect("refresh task")
+      })
+    });
+    refresh.await;
+    cx.run_until_parked();
+
+    page.update_in(cx, |page, window, cx| {
+      page.open_diff(PathBuf::from("a.txt"), None, window, cx);
+    });
+    await_open_file(&page, cx).await;
+    await_editor_diff(&page, cx).await;
+
+    // `shift-enter` on the first conflict keeps the current side, and only it.
+    page.update_in(cx, |page, window, cx| {
+      page.toggle_hunk_stage_action(&crate::ToggleHunkStage, window, cx)
+    });
+    await_editor_diff(&page, cx).await;
+
+    page.read_with(cx, |page, cx| {
+      let editor = page.editor.as_ref().expect("editor").read(cx);
+      assert!(
+        editor.has_unresolved_conflict_markers(cx),
+        "the second conflict is still waiting"
+      );
+      let navigation = page.annotation_navigation(cx).expect("navigation state");
+      assert_eq!(navigation.total, 1);
+    });
+
+    // `cmd-shift-enter` on the one left keeps both sides.
+    page.update_in(cx, |page, window, cx| {
+      page.accept_both_conflict_action(&crate::AcceptBothConflict, window, cx)
+    });
+    await_editor_diff(&page, cx).await;
+
+    let contents = std::fs::read_to_string(repo.path.join("a.txt")).expect("read file");
+    assert!(!contents.contains("<<<<<<<"), "no conflict marker is left");
+    assert!(contents.contains("line 2 main\n"), "current side kept");
+    assert!(contents.contains("line 11 main\n") && contents.contains("line 11 feature\n"));
   }
 
   #[gpui::test]

@@ -41,6 +41,7 @@ use crate::github_notifications::{self, GithubNotificationsStore};
 use crate::navigation::NavigationHistory;
 use git::{InteractiveRebaseTarget, RepoStatusKind};
 
+use crate::hunk_actions::{resolve_active_conflict, restore_hunk, toggle_hunk_stage};
 use crate::interactive_rebase;
 use crate::interactive_rebase_todo_view::{
   InteractiveRebaseTodoView, InteractiveRebaseTodoViewCancelHandler,
@@ -72,6 +73,7 @@ const ACCEPT_ALL_CURRENT_DEBUG_SELECTOR: &str = "session-accept-all-current";
 const ACCEPT_ALL_INCOMING_DEBUG_SELECTOR: &str = "session-accept-all-incoming";
 const ANNOTATION_COUNTER_DEBUG_SELECTOR: &str = "session-annotation-counter";
 const INTERACTIVE_REBASE_DEBUG_SELECTOR: &str = "session-interactive-rebase";
+const DIFF_EDITOR_DEBUG_SELECTOR: &str = "session-diff-editor";
 const PREVIEW_PANE_DEBUG_SELECTOR: &str = "session-preview-pane";
 const REPO_CONTEXT_DEBUG_SELECTOR: &str = "session-repo-context";
 const REPO_AHEAD_DEBUG_SELECTOR: &str = "session-repo-ahead";
@@ -395,7 +397,7 @@ impl SessionPage {
         cx.subscribe(
           &editor,
           |this, _editor, event: &EditorEvent, cx| match event {
-            EditorEvent::Saved => {
+            EditorEvent::Saved | EditorEvent::HunkStagingChanged => {
               this.dock_panel.update(cx, |panel, cx| panel.refresh(cx));
             }
           },
@@ -654,6 +656,57 @@ impl SessionPage {
       editor.resolve_all_conflicts(resolution, cx)
     });
     self.dock_panel.update(cx, |panel, cx| panel.refresh(cx));
+  }
+
+  fn toggle_hunk_stage_action(
+    &mut self,
+    _: &crate::ToggleHunkStage,
+    _window: &mut Window,
+    cx: &mut Context<Self>,
+  ) {
+    let Some(editor) = self.diff_editor() else {
+      return;
+    };
+    let file_status = self.selected_file_status(cx);
+    toggle_hunk_stage(&editor, file_status, cx);
+    cx.stop_propagation();
+  }
+
+  fn restore_hunk_action(
+    &mut self,
+    _: &crate::RestoreHunk,
+    _window: &mut Window,
+    cx: &mut Context<Self>,
+  ) {
+    let Some(editor) = self.diff_editor() else {
+      return;
+    };
+    let file_status = self.selected_file_status(cx);
+    restore_hunk(&editor, file_status, cx);
+    cx.stop_propagation();
+  }
+
+  fn accept_both_conflict_action(
+    &mut self,
+    _: &crate::AcceptBothConflict,
+    _window: &mut Window,
+    cx: &mut Context<Self>,
+  ) {
+    let Some(editor) = self.diff_editor() else {
+      return;
+    };
+    let file_status = self.selected_file_status(cx);
+    resolve_active_conflict(&editor, file_status, ConflictResolution::Both, cx);
+    cx.stop_propagation();
+  }
+
+  /// The editor of the open file, unless the center shows something else or a
+  /// rendered file hides the diff.
+  fn diff_editor(&self) -> Option<Entity<Editor>> {
+    if self.center != CenterView::Diff || (self.show_preview && self.previewable()) {
+      return None;
+    }
+    self.editor.clone()
   }
 
   fn toggle_hide_whitespace_action(

@@ -5,7 +5,6 @@ use super::*;
 use crate::changes_list::{can_restore, can_unstage};
 
 impl GitPage {
-  #[allow(clippy::too_many_arguments)]
   pub(super) fn toggle_hunk_stage_action(
     &mut self,
     _: &crate::ToggleHunkStage,
@@ -15,27 +14,8 @@ impl GitPage {
     let Some(editor) = self.editor.clone() else {
       return;
     };
-    if self.resolve_active_conflict_in_editor(&editor, ConflictResolution::Current, cx) {
-      cx.stop_propagation();
-      return;
-    }
-    editor.update(cx, |editor, cx| {
-      let Some(group_id) = editor.active_hunk_group_id(cx) else {
-        return;
-      };
-      let Some(state) = editor
-        .projection()
-        .and_then(|p| p.groups.get(&group_id))
-        .map(|g| g.state)
-      else {
-        return;
-      };
-      let action = match state {
-        HunkState::Unstaged => HunkAction::Stage,
-        HunkState::Staged => HunkAction::Unstage,
-      };
-      editor.enqueue_group_action(group_id, action, cx);
-    });
+    let file_status = self.conflict_file_status();
+    toggle_hunk_stage(&editor, file_status, cx);
     cx.stop_propagation();
   }
 
@@ -48,16 +28,8 @@ impl GitPage {
     let Some(editor) = self.editor.clone() else {
       return;
     };
-    if self.resolve_active_conflict_in_editor(&editor, ConflictResolution::Incoming, cx) {
-      cx.stop_propagation();
-      return;
-    }
-    editor.update(cx, |editor, cx| {
-      let Some(group_id) = editor.active_hunk_group_id(cx) else {
-        return;
-      };
-      editor.enqueue_group_action(group_id, HunkAction::Restore, cx);
-    });
+    let file_status = self.conflict_file_status();
+    restore_hunk(&editor, file_status, cx);
     cx.stop_propagation();
   }
 

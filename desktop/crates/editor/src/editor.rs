@@ -508,6 +508,8 @@ struct ReviewCommentCreateDraft {
 pub enum EditorEvent {
   /// The buffer was written to disk.
   Saved,
+  /// A hunk was staged, unstaged or restored: the index moved under the host.
+  HunkStagingChanged,
 }
 
 impl gpui::EventEmitter<EditorEvent> for Editor {}
@@ -5165,6 +5167,7 @@ impl Editor {
         if editor.pending_git_after_bases {
           editor.pending_git_after_bases = false;
           editor.git_op_in_flight = false;
+          cx.emit(EditorEvent::HunkStagingChanged);
           editor.maybe_start_next_git_job(cx);
         }
         editor.schedule_diff_recompute(cx);
