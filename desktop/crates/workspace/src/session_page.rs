@@ -3048,4 +3048,33 @@ mod tests {
       "the button is still offered, it just starts off"
     );
   }
+
+  #[gpui::test]
+  async fn revealing_a_line_in_the_previewed_file_shows_the_code(cx: &mut TestAppContext) {
+    let repo = TempRepo::init("session-page-preview-reveal");
+    commit_text_file(&repo.path, Path::new("README.md"), "# Title\n", "initial");
+    std::fs::write(repo.path.join("README.md"), "# Title\n\nBody\n").expect("update file");
+
+    let (page, cx) = add_session_page_window(repo.path.clone(), cx);
+    cx.executor().allow_parking();
+    cx.run_until_parked();
+
+    page.update_in(cx, |page, window, cx| {
+      page.open_diff(PathBuf::from("README.md"), None, window, cx);
+    });
+    await_open_file(&page, cx).await;
+    page.update(cx, |page, cx| page.toggle_preview(cx));
+    cx.run_until_parked();
+    assert!(cx.debug_bounds(PREVIEW_PANE_DEBUG_SELECTOR).is_some());
+
+    // The agent points at a line of the file already on screen: a rendered
+    // document has no line to jump to.
+    page.update_in(cx, |page, window, cx| {
+      page.open_diff(PathBuf::from("README.md"), Some(3), window, cx);
+    });
+    cx.run_until_parked();
+
+    page.read_with(cx, |page, _| assert!(!page.show_preview));
+    assert!(cx.debug_bounds(PREVIEW_PANE_DEBUG_SELECTOR).is_none());
+  }
 }
