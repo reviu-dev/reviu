@@ -77,6 +77,7 @@ mod interactive_rebase_todo_view;
 pub mod navigation;
 mod palette_actions;
 mod pricing_copy;
+mod repo_command;
 mod review_panel;
 mod sentry_context;
 mod session_page;
@@ -84,6 +85,8 @@ mod settings_page;
 mod shortcuts;
 pub mod status_bar;
 mod svg_preview;
+#[cfg(test)]
+mod test_support;
 mod workspace;
 
 pub use app_profile::{AppProfile, URL_SCHEME_PROD};

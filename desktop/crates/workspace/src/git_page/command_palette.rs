@@ -595,7 +595,9 @@ impl GitPage {
           return Err("Checkout detached is currently disabled.".into());
         }
         self.advance_status_refresh_generation();
-        checkout_detached_target(&root_path, &target)
+        RepoCommand::CheckoutDetached { target }
+          .run(&root_path)
+          .map(|_| ())
       }
       CommandPaletteAction::Commit => {
         if self.selected_repo.is_none() {
@@ -628,8 +630,24 @@ impl GitPage {
           return Err("No rebase in progress.".into());
         }
         self.add_git_breadcrumb("Skip rebase started", Map::new());
-        match skip_rebase(&root_path) {
-          Ok(()) => {
+        match RepoCommand::SkipRebase.run(&root_path) {
+          Ok(RepoCommandOutcome::Conflicted {
+            path,
+            commit_message,
+            error,
+          }) => {
+            let mut data = Map::new();
+            data.insert("error".into(), error.into());
+            data.insert(
+              "file".into(),
+              path.to_string_lossy().replace(['\n', '\r'], "").into(),
+            );
+            self.record_git_expected_error("git.rebase.skip", "conflict", data.clone());
+            self.add_git_breadcrumb("Skip rebase blocked by conflicts", data);
+            self.open_conflicted_file(path, commit_message, Some(window), true, cx);
+            Ok(())
+          }
+          Ok(_) => {
             if !is_rebase_in_progress(&root_path).unwrap_or(false) {
               self.force_push_after_rebase = true;
             }
@@ -638,31 +656,11 @@ impl GitPage {
           }
           Err(err) => {
             let err_text = err.to_string();
-            if let Some(path) = Self::first_conflicted_path(&root_path) {
-              let mut data = Map::new();
-              data.insert("error".into(), err_text.into());
-              data.insert(
-                "file".into(),
-                path.to_string_lossy().replace(['\n', '\r'], "").into(),
-              );
-              self.record_git_expected_error("git.rebase.skip", "conflict", data.clone());
-              self.add_git_breadcrumb("Skip rebase blocked by conflicts", data);
-              if let Some(rebase_message) = current_rebase_commit_message(&root_path).ok().flatten()
-              {
-                self
-                  .commit_input
-                  .update(cx, |input, cx| input.set_value(&rebase_message, window, cx));
-              }
-              self.set_sidebar_mode(GitSidebarMode::Changes, window, cx);
-              self.open_file_revealing_first_conflict(path, cx);
-              Ok(())
-            } else {
-              let mut data = Map::new();
-              data.insert("error".into(), err_text.clone().into());
-              self.add_git_breadcrumb("Skip rebase failed", data.clone());
-              self.record_git_unexpected_error("git.rebase.skip", err_text.as_str(), data);
-              Err(err)
-            }
+            let mut data = Map::new();
+            data.insert("error".into(), err_text.clone().into());
+            self.add_git_breadcrumb("Skip rebase failed", data.clone());
+            self.record_git_unexpected_error("git.rebase.skip", err_text.as_str(), data);
+            Err(err)
           }
         }
       }
@@ -807,62 +805,38 @@ impl GitPage {
         let Some(root_path) = self.selected_repo.clone() else {
           return Err("No repository selected.".into());
         };
-        let branch_ref = BranchRef {
-          name: branch.name.to_string(),
-          kind: match branch.kind {
-            CommandPaletteBranchKind::Local => BranchKind::Local,
-            CommandPaletteBranchKind::Remote => BranchKind::Remote,
-          },
-        };
-        switch_branch(&root_path, &branch_ref)
+        RepoCommand::SwitchBranch(branch_ref_from_palette(&branch))
+          .run(&root_path)
+          .map(|_| ())
       }
       CommandPaletteAction::CreateBranch { name } => {
         let Some(root_path) = self.selected_repo.clone() else {
           return Err("No repository selected.".into());
         };
-        let branch_ref = BranchRef {
-          name: name.clone(),
-          kind: BranchKind::Local,
-        };
-        create_branch(&root_path, &name).and_then(|_| switch_branch(&root_path, &branch_ref))
+        RepoCommand::CreateBranch { name }
+          .run(&root_path)
+          .map(|_| ())
       }
       CommandPaletteAction::CreateBranchFrom { name, base } => {
         let Some(root_path) = self.selected_repo.clone() else {
           return Err("No repository selected.".into());
         };
-        let branch_ref = BranchRef {
-          name: base.name.to_string(),
-          kind: match base.kind {
-            CommandPaletteBranchKind::Local => BranchKind::Local,
-            CommandPaletteBranchKind::Remote => BranchKind::Remote,
-          },
-        };
-        let new_branch = BranchRef {
-          name: name.clone(),
-          kind: BranchKind::Local,
-        };
-        create_branch_from(&root_path, &name, &branch_ref)
-          .and_then(|_| switch_branch(&root_path, &new_branch))
+        RepoCommand::CreateBranchFrom {
+          name,
+          base: branch_ref_from_palette(&base),
+        }
+        .run(&root_path)
+        .map(|_| ())
       }
       CommandPaletteAction::DeleteBranch(branch) => {
         let Some(root_path) = self.selected_repo.clone() else {
           return Err("No repository selected.".into());
         };
-        let branch_ref = BranchRef {
-          name: branch.name.to_string(),
-          kind: match branch.kind {
-            CommandPaletteBranchKind::Local => BranchKind::Local,
-            CommandPaletteBranchKind::Remote => BranchKind::Remote,
-          },
-        };
-        let result = delete_branch(&root_path, &branch_ref);
-        if result.is_ok() {
-          window.push_notification(
-            Notification::success(format!("Deleted branch {}", branch_ref.name)),
-            cx,
-          );
+        let result = RepoCommand::DeleteBranch(branch_ref_from_palette(&branch)).run(&root_path);
+        if let Ok(outcome) = &result {
+          self.notify_repo_command_outcome(outcome, window, cx);
         }
-        result
+        result.map(|_| ())
       }
       CommandPaletteAction::MergeBranch { name } => {
         if self.selected_repo.is_none() {
@@ -871,27 +845,20 @@ impl GitPage {
         if !self.should_show_merge_branch_palette_command() {
           return Err("Merge command is currently disabled.".into());
         }
-        let branch_ref = BranchRef {
-          name: name.name.to_string(),
-          kind: match name.kind {
-            CommandPaletteBranchKind::Local => BranchKind::Local,
-            CommandPaletteBranchKind::Remote => BranchKind::Remote,
-          },
-        };
-        self.merge_branch_action(branch_ref, Some(window), true, cx)
+        self.merge_branch_action(branch_ref_from_palette(&name), Some(window), true, cx)
       }
       CommandPaletteAction::AbortMerge => {
         let Some(root_path) = self.selected_repo.clone() else {
           return Err("No repository selected.".into());
         };
-        let result = abort_merge(&root_path);
-        if result.is_ok() {
+        let result = RepoCommand::AbortMerge.run(&root_path);
+        if let Ok(outcome) = &result {
           self
             .commit_input
             .update(cx, |input, cx| input.set_value("", window, cx));
-          window.push_notification(Notification::success("Aborted merge"), cx);
+          self.notify_repo_command_outcome(outcome, window, cx);
         }
-        result
+        result.map(|_| ())
       }
       CommandPaletteAction::RebaseBranch { name } => {
         let Some(root_path) = self.selected_repo.clone() else {
@@ -900,69 +867,49 @@ impl GitPage {
         if !self.should_show_rebase_branch_palette_command() {
           return Err("Rebase command is currently disabled.".into());
         }
-        let branch_ref = BranchRef {
-          name: name.name.to_string(),
-          kind: match name.kind {
-            CommandPaletteBranchKind::Local => BranchKind::Local,
-            CommandPaletteBranchKind::Remote => BranchKind::Remote,
-          },
-        };
+        let branch_ref = branch_ref_from_palette(&name);
         let mut start_data = Map::new();
         start_data.insert("target_branch".into(), branch_ref.name.clone().into());
         self.add_git_breadcrumb("Rebase started", start_data);
-        crate::analytics::track(cx, "rebase_done");
-        match rebase_branch(&root_path, &branch_ref) {
-          Ok(outcome) => {
-            let mut data = Map::new();
-            data.insert("target_branch".into(), branch_ref.name.clone().into());
-            match outcome {
-              RebaseBranchOutcome::AlreadyUpToDate => {
-                self.add_git_breadcrumb("Rebase already up to date", data);
-                window.push_notification(
-                  Notification::info(format!("Already up to date with {}", branch_ref.name)),
-                  cx,
-                );
-              }
-              RebaseBranchOutcome::Rebased => {
-                self.force_push_after_rebase = true;
-                self.add_git_breadcrumb("Rebase succeeded", data);
-                window.push_notification(
-                  Notification::success(format!("Rebased onto {}", branch_ref.name)),
-                  cx,
-                );
-              }
-            }
+        let mut data = Map::new();
+        data.insert("target_branch".into(), branch_ref.name.clone().into());
+        let command = RepoCommand::RebaseBranch(branch_ref);
+        if let Some(event) = command.analytics_event() {
+          crate::analytics::track(cx, event);
+        }
+        match command.run(&root_path) {
+          Ok(outcome @ RepoCommandOutcome::UpToDate { .. }) => {
+            self.add_git_breadcrumb("Rebase already up to date", data);
+            self.notify_repo_command_outcome(&outcome, window, cx);
+            Ok(())
+          }
+          Ok(outcome @ RepoCommandOutcome::Done { .. }) => {
+            self.force_push_after_rebase = true;
+            self.add_git_breadcrumb("Rebase succeeded", data);
+            self.notify_repo_command_outcome(&outcome, window, cx);
+            Ok(())
+          }
+          Ok(RepoCommandOutcome::Conflicted {
+            path,
+            commit_message,
+            error,
+          }) => {
+            data.insert(
+              "file".into(),
+              path.to_string_lossy().replace(['\n', '\r'], "").into(),
+            );
+            data.insert("error".into(), error.into());
+            self.record_git_expected_error("git.rebase", "conflict", data.clone());
+            self.add_git_breadcrumb("Rebase has conflicts", data);
+            self.open_conflicted_file(path, commit_message, Some(window), true, cx);
             Ok(())
           }
           Err(err) => {
             let err_text = err.to_string();
-            if let Some(path) = Self::first_conflicted_path(&root_path) {
-              let mut data = Map::new();
-              data.insert("target_branch".into(), branch_ref.name.clone().into());
-              data.insert(
-                "file".into(),
-                path.to_string_lossy().replace(['\n', '\r'], "").into(),
-              );
-              data.insert("error".into(), err_text.into());
-              self.record_git_expected_error("git.rebase", "conflict", data.clone());
-              self.add_git_breadcrumb("Rebase has conflicts", data);
-              if let Some(rebase_message) = current_rebase_commit_message(&root_path).ok().flatten()
-              {
-                self
-                  .commit_input
-                  .update(cx, |input, cx| input.set_value(&rebase_message, window, cx));
-              }
-              self.set_sidebar_mode(GitSidebarMode::Changes, window, cx);
-              self.open_file_revealing_first_conflict(path, cx);
-              Ok(())
-            } else {
-              let mut data = Map::new();
-              data.insert("target_branch".into(), branch_ref.name.clone().into());
-              data.insert("error".into(), err_text.clone().into());
-              self.add_git_breadcrumb("Rebase failed", data.clone());
-              self.record_git_unexpected_error("git.rebase", err_text.as_str(), data);
-              Err(err)
-            }
+            data.insert("error".into(), err_text.clone().into());
+            self.add_git_breadcrumb("Rebase failed", data.clone());
+            self.record_git_unexpected_error("git.rebase", err_text.as_str(), data);
+            Err(err)
           }
         }
       }
@@ -1011,15 +958,15 @@ impl GitPage {
         let Some(root_path) = self.selected_repo.clone() else {
           return Err("No repository selected.".into());
         };
-        let result = abort_rebase(&root_path);
-        if result.is_ok() {
+        let result = RepoCommand::AbortRebase.run(&root_path);
+        if let Ok(outcome) = &result {
           self.force_push_after_rebase = false;
           self
             .commit_input
             .update(cx, |input, cx| input.set_value("", window, cx));
-          window.push_notification(Notification::success("Aborted rebase"), cx);
+          self.notify_repo_command_outcome(outcome, window, cx);
         }
-        result
+        result.map(|_| ())
       }
       CommandPaletteAction::StageAll => {
         if self.selected_repo.is_none() {
@@ -1063,51 +1010,41 @@ impl GitPage {
         let Some(root_path) = self.selected_repo.clone() else {
           return Err("No repository selected.".into());
         };
-        crate::analytics::track(cx, "stash_created");
-        let result = create_stash(&root_path, include_untracked, message.as_deref());
-        if result.is_ok() {
-          window.push_notification(Notification::success("Stashed changes"), cx);
-        }
-        result
+        let command = RepoCommand::Stash {
+          include_untracked,
+          message,
+        };
+        self.run_repo_command_with_notification(command, &root_path, window, cx)
       }
       CommandPaletteAction::ApplyStash(stash) => {
         let Some(root_path) = self.selected_repo.clone() else {
           return Err("No repository selected.".into());
         };
-        let result = apply_stash(&root_path, stash.index);
-        if result.is_ok() {
-          window.push_notification(
-            Notification::success(format!("Applied stash {}", stash.name)),
-            cx,
-          );
-        }
-        result
+        let command = RepoCommand::ApplyStash {
+          index: stash.index,
+          name: stash.name.to_string(),
+        };
+        self.run_repo_command_with_notification(command, &root_path, window, cx)
       }
       CommandPaletteAction::DropStash(stash) => {
         let Some(root_path) = self.selected_repo.clone() else {
           return Err("No repository selected.".into());
         };
-        let result = drop_stash(&root_path, stash.index);
-        if result.is_ok() {
-          window.push_notification(
-            Notification::success(format!("Dropped stash {}", stash.name)),
-            cx,
-          );
-        }
-        result
+        let command = RepoCommand::DropStash {
+          index: stash.index,
+          name: stash.name.to_string(),
+        };
+        self.run_repo_command_with_notification(command, &root_path, window, cx)
       }
       CommandPaletteAction::PopStash(stash) => {
         let Some(root_path) = self.selected_repo.clone() else {
           return Err("No repository selected.".into());
         };
-        let result = pop_stash(&root_path, stash.index);
-        if result.is_ok() {
-          window.push_notification(
-            Notification::success(format!("Popped stash {}", stash.name)),
-            cx,
-          );
-        }
-        result
+        let command = RepoCommand::PopStash {
+          index: stash.index,
+          name: stash.name.to_string(),
+        };
+        self.run_repo_command_with_notification(command, &root_path, window, cx)
       }
       CommandPaletteAction::CherryPick { commit_hashes } => {
         let Some(root_path) = self.selected_repo.clone() else {
@@ -1116,17 +1053,8 @@ impl GitPage {
         if !self.should_show_cherry_pick_palette_command() {
           return Err("Cherry-pick command is currently disabled.".into());
         }
-        let count = commit_hashes.len();
-        crate::analytics::track(cx, "cherry_pick_done");
-        let result = cherry_pick_commits(&root_path, &commit_hashes);
-        if result.is_ok() {
-          let label = if count == 1 { "commit" } else { "commits" };
-          window.push_notification(
-            Notification::success(format!("Cherry-picked {count} {label}")),
-            cx,
-          );
-        }
-        result
+        let command = RepoCommand::CherryPick { commit_hashes };
+        self.run_repo_command_with_notification(command, &root_path, window, cx)
       }
     };
 
@@ -1143,6 +1071,83 @@ impl GitPage {
     }
 
     Ok(())
+  }
+
+  /// Runs the command, then says what happened: a message, or the conflicted
+  /// file to resolve.
+  pub(super) fn run_repo_command_with_notification(
+    &mut self,
+    command: RepoCommand,
+    repo_root: &Path,
+    window: &mut Window,
+    cx: &mut Context<Self>,
+  ) -> Result<(), anyhow::Error> {
+    if let Some(event) = command.analytics_event() {
+      crate::analytics::track(cx, event);
+    }
+    let label = command.label();
+    self.add_git_breadcrumb(&format!("{label} started"), Map::new());
+    let outcome = match command.run(repo_root) {
+      Ok(outcome) => outcome,
+      Err(error) => {
+        let error_text = error.to_string();
+        let mut data = Map::new();
+        data.insert("error".into(), error_text.clone().into());
+        self.add_git_breadcrumb(&format!("{label} failed"), data.clone());
+        self.record_git_unexpected_error(command.telemetry_key(), error_text.as_str(), data);
+        return Err(error);
+      }
+    };
+    self.add_git_breadcrumb(&format!("{label} succeeded"), Map::new());
+    self.notify_repo_command_outcome(&outcome, window, cx);
+    Ok(())
+  }
+
+  pub(super) fn notify_repo_command_outcome(
+    &mut self,
+    outcome: &RepoCommandOutcome,
+    window: &mut Window,
+    cx: &mut Context<Self>,
+  ) {
+    match outcome {
+      RepoCommandOutcome::Done { message } => {
+        window.push_notification(Notification::success(message.clone()), cx);
+      }
+      RepoCommandOutcome::UpToDate { message } => {
+        window.push_notification(Notification::info(message.clone()), cx);
+      }
+      RepoCommandOutcome::Conflicted {
+        path,
+        commit_message,
+        ..
+      } => {
+        self.open_conflicted_file(path.clone(), commit_message.clone(), Some(window), true, cx);
+      }
+    }
+  }
+
+  /// Puts the user in front of the conflict: changes sidebar, prefilled commit
+  /// message, first conflict revealed.
+  pub(super) fn open_conflicted_file(
+    &mut self,
+    path: PathBuf,
+    commit_message: Option<String>,
+    window: Option<&mut Window>,
+    reveal_first_conflict: bool,
+    cx: &mut Context<Self>,
+  ) {
+    let mut window = window;
+    if let Some(window) = window.as_deref_mut() {
+      self.set_sidebar_mode(GitSidebarMode::Changes, window, cx);
+    }
+    if let Some(message) = commit_message {
+      self.set_commit_input_value(&message, window, cx);
+    }
+    if reveal_first_conflict {
+      self.open_file_revealing_first_conflict(path, cx);
+    } else {
+      self.open_status_file(path, cx);
+    }
   }
 
   pub(super) fn should_show_commit_palette_command(&self, commit_message: &str) -> bool {
@@ -1255,6 +1260,7 @@ impl GitPage {
 mod tests {
   use super::super::test_support::*;
   use super::*;
+  use git::{create_branch, merge_branch, rebase_branch};
   use git2::{BranchType, Repository};
   use gpui::TestAppContext;
   use ui::CommandPaletteCommandId;

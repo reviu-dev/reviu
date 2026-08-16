@@ -16,18 +16,14 @@ use editor::{
 use git::{
   BranchKind, BranchRef, BranchStatus, CommitChangedFile, CommitFileChangeKind, HeadCommitStatus,
   HistoryCommitNode, HistoryRevision, InteractiveRebaseTarget, InteractiveRebaseTodoEntry,
-  MergeBranchOutcome, PullOutcome, RebaseBranchOutcome, RepoStage, RepoStatusEntry, RepoStatusKind,
-  abort_merge, abort_rebase, amend_commit, apply_stash, branch_has_unpublished_commits,
-  checkout_detached_target, cherry_pick_commits, commit_changes, continue_rebase, create_branch,
-  create_branch_from, create_stash, current_branch_status, current_branch_upstream,
+  RepoStage, RepoStatusEntry, RepoStatusKind, abort_merge, abort_rebase, amend_commit,
+  branch_has_unpublished_commits, commit_changes, current_branch_status, current_branch_upstream,
   current_github_remote_repo, current_head_sha, current_history_revision,
-  current_rebase_commit_message, default_remote_branch, default_stash_message, delete_branch,
-  detached_head_label, diff_set_from_patch, drop_stash, fetch, head_commit_status,
-  is_merge_in_progress, is_rebase_in_progress, list_branches, list_commit_changed_files,
-  list_commit_history, list_interactive_rebase_commits, list_repo_head_files, list_repo_status,
-  list_stashes, load_commit_file_diff, merge_branch, pop_stash, pull, push, rebase_branch,
-  resolve_branch_ref, skip_rebase, stage_all, start_interactive_rebase, switch_branch,
-  undo_last_commit,
+  current_rebase_commit_message, default_remote_branch, default_stash_message, detached_head_label,
+  diff_set_from_patch, fetch, head_commit_status, is_merge_in_progress, is_rebase_in_progress,
+  list_branches, list_commit_changed_files, list_commit_history, list_interactive_rebase_commits,
+  list_repo_head_files, list_repo_status, list_stashes, load_commit_file_diff, push,
+  resolve_branch_ref, stage_all, start_interactive_rebase, switch_branch,
 };
 use gpui::{
   Anchor, AnyElement, AnyWindowHandle, App, Context, Entity, FocusHandle, Focusable, Global,
@@ -687,6 +683,7 @@ struct UnpublishedBranchCheckKey {
 use crate::agent_review::AgentReviewComments;
 use crate::changes_list::{ChangesList, ChangesListEvent};
 use crate::diff_view_policy::{DiffViewInputs, effective_diff_view};
+use crate::repo_command::{RepoCommand, RepoCommandOutcome, branch_ref_from_palette};
 use crate::svg_preview::SvgPreview;
 
 impl GitPage {
@@ -1276,14 +1273,6 @@ impl GitPage {
     Some((has_unpublished_branch_commits, Some(next_key), true))
   }
 
-  fn first_conflicted_path(repo_root: &Path) -> Option<PathBuf> {
-    list_repo_status(repo_root)
-      .ok()?
-      .into_iter()
-      .find(|entry| entry.status == RepoStatusKind::Conflicted)
-      .map(|entry| entry.path)
-  }
-
   fn open_editor_has_unresolved_conflict_markers(&self, cx: &App) -> bool {
     self.editor.as_ref().is_none_or(|editor| {
       editor.read_with(cx, |editor, cx| editor.has_unresolved_conflict_markers(cx))
@@ -1836,7 +1825,7 @@ impl GitPage {
   ) -> Option<ActiveConflictResolutionSnapshot> {
     let merge_in_progress = is_merge_in_progress(repo_root).unwrap_or(false);
     let rebase_in_progress = is_rebase_in_progress(repo_root).unwrap_or(false);
-    let conflicted_path = Self::first_conflicted_path(repo_root);
+    let conflicted_path = crate::repo_command::first_conflicted_path(repo_root);
 
     (merge_in_progress || rebase_in_progress || conflicted_path.is_some()).then_some(
       ActiveConflictResolutionSnapshot {
@@ -3461,6 +3450,7 @@ impl Focusable for GitPage {
 mod tests {
   use super::test_support::*;
   use super::*;
+  use git::create_branch;
   use git2::Repository;
   use gpui::TestAppContext;
   use ui::CommandPaletteCommandId;

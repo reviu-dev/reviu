@@ -174,11 +174,11 @@ impl GitPage {
     self.fetch_in_progress = true;
     let editor = self.editor.clone();
     let task = cx.spawn(async move |this, cx| {
-      let result = unblock(move || fetch(&repo_root)).await;
+      let result = unblock(move || RepoCommand::Fetch.run(&repo_root)).await;
       let _ = this.update(cx, |this, cx| {
         this.fetch_in_progress = false;
         match result {
-          Ok(()) => {
+          Ok(_) => {
             this.add_git_breadcrumb("Fetch succeeded", Map::new());
             this.push_git_action_success_notification("Fetched from remotes".into(), cx);
           }
@@ -213,15 +213,15 @@ impl GitPage {
     self.push_pull_in_progress = true;
     let editor = self.editor.clone();
     let task = cx.spawn(async move |this, cx| {
-      let result = unblock(move || pull(&repo_root)).await;
+      let result = unblock(move || RepoCommand::Pull.run(&repo_root)).await;
       let _ = this.update(cx, |this, cx| {
         this.push_pull_in_progress = false;
         match result {
-          Ok(PullOutcome::AlreadyUpToDate) => {
+          Ok(RepoCommandOutcome::UpToDate { .. }) => {
             this.add_git_breadcrumb("Pull already up to date", Map::new());
             this.push_git_action_success_notification("Already up to date".into(), cx);
           }
-          Ok(PullOutcome::Pulled) => {
+          Ok(_) => {
             this.add_git_breadcrumb("Pull succeeded", Map::new());
             this.push_git_action_success_notification("Pulled".into(), cx);
           }
@@ -257,11 +257,11 @@ impl GitPage {
     crate::analytics::track(cx, "push_done");
     self.push_pull_in_progress = true;
     let task = cx.spawn(async move |this, cx| {
-      let result = unblock(move || push(&repo_root, false)).await;
+      let result = unblock(move || RepoCommand::Push.run(&repo_root)).await;
       let _ = this.update(cx, |this, cx| {
         this.push_pull_in_progress = false;
         match result {
-          Ok(()) => {
+          Ok(_) => {
             this.force_push_after_rebase = false;
             this.add_git_breadcrumb("Push succeeded", Map::new());
             this.push_git_action_success_notification("Pushed".into(), cx);
@@ -295,11 +295,11 @@ impl GitPage {
     crate::analytics::track(cx, "force_push_done");
     self.push_pull_in_progress = true;
     let task = cx.spawn(async move |this, cx| {
-      let result = unblock(move || push(&repo_root, true)).await;
+      let result = unblock(move || RepoCommand::ForcePush.run(&repo_root)).await;
       let _ = this.update(cx, |this, cx| {
         this.push_pull_in_progress = false;
         match result {
-          Ok(()) => {
+          Ok(_) => {
             this.force_push_after_rebase = false;
             this.add_git_breadcrumb("Force push succeeded", Map::new());
             this.push_git_action_success_notification("Force-pushed".into(), cx);

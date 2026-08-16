@@ -97,82 +97,61 @@ impl GitPage {
   pub(super) fn merge_branch_action(
     &mut self,
     branch_ref: BranchRef,
-    mut window: Option<&mut Window>,
+    window: Option<&mut Window>,
     reveal_first_conflict_on_open: bool,
     cx: &mut Context<Self>,
   ) -> Result<(), anyhow::Error> {
     let Some(root_path) = self.selected_repo.clone() else {
       anyhow::bail!("No repository selected.");
     };
-    let target_branch = current_branch_status(&root_path)
-      .ok()
-      .map(|status| status.name)
-      .or_else(|| {
-        self
-          .branch_status
-          .as_ref()
-          .map(|status| status.name.clone())
-      })
-      .unwrap_or_else(|| "HEAD".to_string());
-
     let mut start_data = Map::new();
     start_data.insert("target_branch".into(), branch_ref.name.clone().into());
     self.add_git_breadcrumb("Merge started", start_data);
 
-    match merge_branch(&root_path, &branch_ref) {
-      Ok(outcome) => {
-        let mut data = Map::new();
-        data.insert("target_branch".into(), branch_ref.name.clone().into());
-        let notification = match outcome {
-          MergeBranchOutcome::AlreadyUpToDate => {
-            self.add_git_breadcrumb("Merge already up to date", data);
-            Notification::info(format!("Already up to date with {}", branch_ref.name))
-          }
-          MergeBranchOutcome::Merged => {
-            self.add_git_breadcrumb("Merge succeeded", data);
-            Notification::success(format!("Merged {}", branch_ref.name))
-          }
+    let mut data = Map::new();
+    data.insert("target_branch".into(), branch_ref.name.clone().into());
+
+    match RepoCommand::MergeBranch(branch_ref).run(&root_path) {
+      Ok(outcome @ (RepoCommandOutcome::Done { .. } | RepoCommandOutcome::UpToDate { .. })) => {
+        let breadcrumb = match outcome {
+          RepoCommandOutcome::UpToDate { .. } => "Merge already up to date",
+          _ => "Merge succeeded",
         };
+        self.add_git_breadcrumb(breadcrumb, data);
         if let Some(window) = window {
-          window.push_notification(notification, cx);
+          self.notify_repo_command_outcome(&outcome, window, cx);
         }
+        Ok(())
+      }
+      Ok(RepoCommandOutcome::Conflicted {
+        path,
+        commit_message,
+        error,
+      }) => {
+        self.merge_in_progress = true;
+        self.rebase_in_progress = false;
+        data.insert(
+          "file".into(),
+          path.to_string_lossy().replace(['\n', '\r'], "").into(),
+        );
+        data.insert("error".into(), error.into());
+        self.record_git_expected_error("git.merge", "conflict", data.clone());
+        self.add_git_breadcrumb("Merge has conflicts", data);
+        self.open_conflicted_file(
+          path,
+          commit_message,
+          window,
+          reveal_first_conflict_on_open,
+          cx,
+        );
         Ok(())
       }
       Err(err) => {
         let err_text = err.to_string();
-        if let Some(path) = Self::first_conflicted_path(&root_path) {
-          self.merge_in_progress = true;
-          self.rebase_in_progress = false;
-          let mut data = Map::new();
-          data.insert("target_branch".into(), branch_ref.name.clone().into());
-          data.insert(
-            "file".into(),
-            path.to_string_lossy().replace(['\n', '\r'], "").into(),
-          );
-          data.insert("error".into(), err_text.into());
-          self.record_git_expected_error("git.merge", "conflict", data.clone());
-          self.add_git_breadcrumb("Merge has conflicts", data);
-
-          let merge_message =
-            Self::merge_commit_message(branch_ref.name.as_str(), target_branch.as_str());
-          if let Some(w) = window.as_deref_mut() {
-            self.set_sidebar_mode(GitSidebarMode::Changes, w, cx);
-          }
-          self.set_commit_input_value(&merge_message, window, cx);
-          if reveal_first_conflict_on_open {
-            self.open_file_revealing_first_conflict(path, cx);
-          } else {
-            self.open_status_file(path, cx);
-          }
-          Ok(())
-        } else {
-          let mut data = Map::new();
-          data.insert("target_branch".into(), branch_ref.name.clone().into());
-          data.insert("error".into(), err_text.clone().into());
-          self.add_git_breadcrumb("Merge failed", data.clone());
-          self.record_git_unexpected_error("git.merge", err_text.as_str(), data);
-          Err(err)
-        }
+        data.insert("error".into(), err_text.clone().into());
+        self.add_git_breadcrumb("Merge failed", data.clone());
+        self.record_git_unexpected_error("git.merge", err_text.as_str(), data);
+        Err(err)
       }
     }
   }
@@ -200,15 +179,17 @@ impl GitPage {
     let editor = self.editor.clone();
     let task = cx.spawn(async move |this, cx| {
       let repo_root_for_continue = repo_root.clone();
-      let result = unblock(move || continue_rebase(&repo_root_for_continue)).await;
+      let result = unblock(move || RepoCommand::ContinueRebase.run(&repo_root_for_continue)).await;
       let (success, conflicted_path, error_message, failure_message, expected_conflict) =
         match result {
-          Ok(()) => (true, None, None, None, false),
+          Ok(RepoCommandOutcome::Conflicted { path, error, .. }) => {
+            (false, Some(path), None, Some(error), true)
+          }
+          Ok(_) => (true, None, None, None, false),
           Err(err) => {
-            let conflicted_path = Self::first_conflicted_path(&repo_root);
             let err_text = err.to_string();
-            let is_conflict_state =
-              conflicted_path.is_some() || err_text.contains("rebase has conflicts");
+            // git can stop on conflicts without leaving a conflicted entry behind.
+            let is_conflict_state = err_text.contains("rebase has conflicts");
             let error_message = if is_conflict_state {
               None
             } else {
@@ -216,7 +197,7 @@ impl GitPage {
             };
             (
               false,
-              conflicted_path,
+              None,
               error_message,
               Some(err_text),
               is_conflict_state,
@@ -422,7 +403,7 @@ impl GitPage {
           .await;
 
       let rebase_in_progress = is_rebase_in_progress(&repo_root).unwrap_or(false);
-      let conflicted_path = Self::first_conflicted_path(&repo_root);
+      let conflicted_path = crate::repo_command::first_conflicted_path(&repo_root);
       let rebase_message = if rebase_in_progress {
         current_rebase_commit_message(&repo_root).ok().flatten()
       } else {
@@ -607,10 +588,6 @@ impl GitPage {
     None
   }
 
-  pub(super) fn merge_commit_message(source_branch: &str, target_branch: &str) -> String {
-    format!("Merge branch '{source_branch}' into {target_branch}")
-  }
-
   pub(super) fn sync_rebase_commit_input(
     &mut self,
     was_rebase_in_progress: bool,
@@ -654,6 +631,7 @@ impl GitPage {
 mod tests {
   use super::super::test_support::*;
   use super::*;
+  use git::{create_branch, merge_branch, rebase_branch};
   use git2::Repository;
   use gpui::TestAppContext;
 

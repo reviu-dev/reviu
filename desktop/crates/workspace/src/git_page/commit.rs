@@ -180,10 +180,10 @@ impl GitPage {
 
     let editor = self.editor.clone();
     let task = cx.spawn(async move |this, cx| {
-      let result = unblock(move || undo_last_commit(&repo_root)).await;
+      let result = unblock(move || RepoCommand::UndoLastCommit.run(&repo_root)).await;
       let _ = this.update(cx, |this, cx| {
         match result {
-          Ok(()) => {
+          Ok(_) => {
             this.push_git_action_success_notification("Undid last commit".into(), cx);
           }
           Err(error) => {

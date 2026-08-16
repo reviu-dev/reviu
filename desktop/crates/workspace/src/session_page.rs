@@ -38,6 +38,7 @@ use crate::git_page::{
 };
 use crate::github_notifications::{self, GithubNotificationsStore};
 use crate::navigation::NavigationHistory;
+use crate::repo_command::{RepoCommand, RepoCommandOutcome};
 use crate::review_panel::{ReviewPanel, ReviewPanelEvent};
 use crate::svg_preview::SvgPreview;
 use crate::{
@@ -90,31 +91,6 @@ pub(crate) fn session_row_title(meta: &ConversationMeta) -> SharedString {
     "New session".into()
   } else {
     trimmed.to_string().into()
-  }
-}
-
-/// The repo-wide git commands the sessions palette runs off the main thread.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum RepoCommand {
-  StageAll,
-  UnstageAll,
-  Push,
-  Pull,
-  Fetch,
-}
-
-impl RepoCommand {
-  fn run(self, repo_root: &Path) -> anyhow::Result<SharedString> {
-    match self {
-      Self::StageAll => git::stage_all(repo_root).map(|()| "Staged all changes".into()),
-      Self::UnstageAll => git::unstage_all(repo_root).map(|()| "Unstaged all changes".into()),
-      Self::Push => git::push(repo_root, false).map(|()| "Pushed to the remote branch".into()),
-      Self::Pull => git::pull(repo_root).map(|outcome| match outcome {
-        git::PullOutcome::AlreadyUpToDate => "Already up to date".into(),
-        git::PullOutcome::Pulled => "Pulled from the remote branch".into(),
-      }),
-      Self::Fetch => git::fetch(repo_root).map(|()| "Fetched from remotes".into()),
-    }
   }
 }
 
@@ -1088,8 +1064,22 @@ impl SessionPage {
         let _ = this.update(cx, |this, cx| {
           this.repo_command_in_flight = false;
           match result {
-            Ok(message) => {
-              window.push_notification(Notification::success(message), cx);
+            Ok(outcome) => {
+              match outcome {
+                RepoCommandOutcome::Done { message } => {
+                  window.push_notification(Notification::success(message), cx);
+                }
+                RepoCommandOutcome::UpToDate { message } => {
+                  window.push_notification(Notification::info(message), cx);
+                }
+                RepoCommandOutcome::Conflicted { path, .. } => {
+                  window.push_notification(
+                    Notification::warning(format!("Resolve the conflicts in {}", path.display())),
+                    cx,
+                  );
+                  this.open_diff(path, None, window, cx);
+                }
+              }
               this.review_panel.update(cx, |panel, cx| panel.refresh(cx));
               this.refresh_branch(cx);
             }
@@ -1358,7 +1348,7 @@ impl SessionPage {
           .on_click(cx.listener(move |this, _, window, cx| {
             // The row switches repository; the counter runs its command instead.
             cx.stop_propagation();
-            if let Err(error) = this.run_repo_command(command, window, cx) {
+            if let Err(error) = this.run_repo_command(command.clone(), window, cx) {
               window.push_notification(Notification::warning(error), cx);
             }
           }))
@@ -2044,10 +2034,10 @@ impl Focusable for SessionPage {
 mod tests {
   use super::*;
   use crate::agent_review::LocalAgentReviewCommentState;
+  use crate::test_support::{TempRepo, commit_text_file};
   use crate::workspace::WorkspaceApi;
   use editor::ReviewCommentMode;
   use editor::ReviewCommentSide;
-  use git2::{Repository, Signature};
   use gpui::TestAppContext;
   use std::path::Path;
   use std::sync::atomic::{AtomicU64, Ordering};
@@ -2062,43 +2052,6 @@ mod tests {
       message_count: 0,
       session_id: None,
     }
-  }
-
-  #[test]
-  fn repo_command_stage_and_unstage_move_the_whole_worktree() {
-    let repo = TempRepo::init("session-page-stage-all");
-    commit_text_file(&repo.path, Path::new("README.md"), "v1\n", "initial");
-    std::fs::write(repo.path.join("README.md"), "v2\n").expect("update file");
-
-    let message = RepoCommand::StageAll.run(&repo.path).expect("stage all");
-    assert_eq!(message.as_ref(), "Staged all changes");
-    let staged = git::list_repo_status(&repo.path)
-      .expect("status")
-      .into_iter()
-      .filter(|entry| !matches!(entry.stage, git::RepoStage::Unstaged))
-      .count();
-    assert_eq!(staged, 1);
-
-    let message = RepoCommand::UnstageAll
-      .run(&repo.path)
-      .expect("unstage all");
-    assert_eq!(message.as_ref(), "Unstaged all changes");
-    let staged = git::list_repo_status(&repo.path)
-      .expect("status")
-      .into_iter()
-      .filter(|entry| !matches!(entry.stage, git::RepoStage::Unstaged))
-      .count();
-    assert_eq!(staged, 0);
-  }
-
-  #[test]
-  fn repo_command_surfaces_the_git_error_instead_of_a_message() {
-    let missing = std::env::temp_dir().join("reviu-session-page-not-a-repo");
-    let _ = std::fs::create_dir_all(&missing);
-
-    let error = RepoCommand::StageAll.run(&missing).expect_err("not a repo");
-
-    assert!(!error.to_string().is_empty());
   }
 
   #[test]
@@ -2124,54 +2077,6 @@ mod tests {
       session_row_title(&meta_with_title("Fix scroll")),
       "Fix scroll"
     );
-  }
-
-  struct TempRepo {
-    path: PathBuf,
-  }
-
-  impl TempRepo {
-    fn init(prefix: &str) -> Self {
-      let mut path = std::env::temp_dir();
-      let nanos = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .expect("system clock before unix epoch")
-        .as_nanos();
-      path.push(format!("reviu-{prefix}-{}-{nanos}", std::process::id()));
-      std::fs::create_dir_all(&path).expect("create temp dir");
-      Repository::init(&path).expect("init git repository");
-      Self { path }
-    }
-  }
-
-  impl Drop for TempRepo {
-    fn drop(&mut self) {
-      let _ = std::fs::remove_dir_all(&self.path);
-    }
-  }
-
-  fn commit_text_file(repo_root: &Path, rel_path: &Path, contents: &str, message: &str) {
-    let repo = Repository::open(repo_root).expect("open repo");
-    std::fs::write(repo_root.join(rel_path), contents).expect("write worktree file");
-
-    let mut index = repo.index().expect("open index");
-    index.add_path(rel_path).expect("stage file");
-    index.write().expect("write index");
-    let tree_id = index.write_tree().expect("write tree");
-    let tree = repo.find_tree(tree_id).expect("find tree");
-    let signature = Signature::now("Reviu Tests", "tests@reviu.local").expect("signature");
-    let parent = repo.head().ok().and_then(|head| head.peel_to_commit().ok());
-    let parents: Vec<_> = parent.iter().collect();
-    repo
-      .commit(
-        Some("HEAD"),
-        &signature,
-        &signature,
-        message,
-        &tree,
-        &parents,
-      )
-      .expect("commit");
   }
 
   fn isolate_config_store_for_test() {
@@ -3389,6 +3294,51 @@ mod tests {
     cx.run_until_parked();
     page.read_with(cx, |page, _| {
       assert_eq!(page.diff_view, DiffViewMode::Split);
+    });
+  }
+
+  #[gpui::test]
+  async fn a_command_that_conflicts_opens_the_file_to_resolve(cx: &mut TestAppContext) {
+    let repo = TempRepo::init("session-page-command-conflict");
+    commit_text_file(&repo.path, Path::new("a.txt"), "base\n", "initial");
+    let base = git::BranchRef {
+      name: git::current_branch_status(&repo.path)
+        .expect("branch status")
+        .name,
+      kind: git::BranchKind::Local,
+    };
+    let feature = git::BranchRef {
+      name: "feature".to_string(),
+      kind: git::BranchKind::Local,
+    };
+    git::create_branch(&repo.path, &feature.name).expect("create branch");
+    git::switch_branch(&repo.path, &feature).expect("switch to feature");
+    commit_text_file(&repo.path, Path::new("a.txt"), "feature\n", "feature work");
+    git::switch_branch(&repo.path, &base).expect("switch back");
+    commit_text_file(&repo.path, Path::new("a.txt"), "main\n", "main work");
+
+    let (page, cx) = add_session_page_window(repo.path.clone(), cx);
+    cx.executor().allow_parking();
+    page.update(cx, |page, cx| {
+      page.review_panel.update(cx, |panel, cx| panel.refresh(cx))
+    });
+    cx.run_until_parked();
+
+    page.update_in(cx, |page, window, cx| {
+      page
+        .run_repo_command(RepoCommand::MergeBranch(feature), window, cx)
+        .expect("the merge starts");
+    });
+    let task = page.update(cx, |page, _| {
+      page._repo_command_task.take().expect("command task")
+    });
+    task.await;
+    cx.run_until_parked();
+
+    // The conflict is a stop to resolve, not an error: the file is on screen.
+    page.read_with(cx, |page, _| {
+      assert_eq!(page.selected_file.as_deref(), Some(Path::new("a.txt")));
+      assert_eq!(page.center, CenterView::Diff);
     });
   }
 
