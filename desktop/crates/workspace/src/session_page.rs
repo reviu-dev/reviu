@@ -634,11 +634,14 @@ impl SessionPage {
   }
 
   fn toggle_diff_view(&mut self, cx: &mut Context<Self>) {
-    if self.center != CenterView::Diff || self.split_disabled(cx) {
+    // While the rendered file holds the pane there is no diff to switch.
+    if self.center != CenterView::Diff
+      || (self.show_preview && self.previewable())
+      || self.split_disabled(cx)
+    {
       return;
     }
 
-    self.show_preview = false;
     self.diff_view = match self.diff_view {
       DiffViewMode::Inline => DiffViewMode::Split,
       DiffViewMode::Split => DiffViewMode::Inline,
@@ -1766,7 +1769,9 @@ impl SessionPage {
         )
       })
       .when(
-        self.editor.is_some() && self.selected_file_has_changes(cx),
+        self.editor.is_some()
+          && self.selected_file_has_changes(cx)
+          && !(self.show_preview && self.previewable()),
         |this| {
           let split_disabled = self.split_disabled(cx);
           let (label, icon) = if split_disabled || self.diff_view == DiffViewMode::Inline {
@@ -2894,7 +2899,7 @@ mod tests {
   }
 
   #[gpui::test]
-  async fn switching_to_split_closes_the_preview(cx: &mut TestAppContext) {
+  async fn the_preview_takes_the_pane_and_hides_the_diff_controls(cx: &mut TestAppContext) {
     let repo = TempRepo::init("session-page-preview-vs-split");
     commit_text_file(&repo.path, Path::new("README.md"), "# Title\n", "initial");
     std::fs::write(repo.path.join("README.md"), "# Title\n\nBody\n").expect("update file");
@@ -2914,18 +2919,27 @@ mod tests {
     page.update(cx, |page, cx| {
       page.toggle_preview(cx);
       assert!(page.show_preview);
-      // While previewing, the editor half stays inline.
-      assert_eq!(
-        page.effective_diff_view(Path::new("README.md"), cx),
-        DiffViewMode::Inline
-      );
-
-      // The pane cannot hold a split diff and a rendered file at once: asking
-      // for split closes the preview.
-      page.toggle_diff_view(cx);
-      assert!(!page.show_preview);
-      assert_eq!(page.diff_view, DiffViewMode::Split);
     });
+    cx.run_until_parked();
+
+    // The rendered file takes the whole pane: no diff mode left to choose.
+    assert!(cx.debug_bounds(PREVIEW_PANE_DEBUG_SELECTOR).is_some());
+    assert!(
+      cx.debug_bounds(DIFF_VIEW_TOGGLE_DEBUG_SELECTOR).is_none(),
+      "the split toggle has nothing to act on while previewing"
+    );
+
+    // The shortcut is inert too.
+    page.update(cx, |page, cx| {
+      page.toggle_diff_view(cx);
+      assert_eq!(page.diff_view, DiffViewMode::Inline);
+    });
+
+    // Back to the code, the toggle is there again.
+    page.update(cx, |page, cx| page.toggle_preview(cx));
+    cx.run_until_parked();
+    assert!(cx.debug_bounds(PREVIEW_PANE_DEBUG_SELECTOR).is_none());
+    assert!(cx.debug_bounds(DIFF_VIEW_TOGGLE_DEBUG_SELECTOR).is_some());
   }
 
   #[gpui::test]
