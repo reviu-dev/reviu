@@ -97,6 +97,10 @@ impl TerminalView {
     view
   }
 
+  pub fn working_directory(&self) -> Option<&std::path::Path> {
+    self.working_directory.as_deref()
+  }
+
   pub fn set_working_directory(
     &mut self,
     working_directory: Option<PathBuf>,

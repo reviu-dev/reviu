@@ -18,6 +18,9 @@ use gpui_component::{
   v_flex,
 };
 use smol::unblock;
+use terminal::TerminalView;
+
+const REVIEW_PANEL_TERMINAL_DEBUG_SELECTOR: &str = "review-panel-terminal";
 use std::collections::BTreeMap;
 use std::rc::Rc;
 
@@ -72,6 +75,7 @@ enum ReviewPanelTab {
   Changes,
   Files,
   PullRequest,
+  Terminal,
 }
 
 /// Nested tree items from repo-relative paths. File ids are the relative path;
@@ -160,6 +164,9 @@ pub struct ReviewPanel {
   committing: bool,
   last_error: Option<SharedString>,
   active_tab: ReviewPanelTab,
+  /// Spawned on the first visit to the tab: a shell per session is too much
+  /// for someone who never opens it.
+  terminal_view: Option<Entity<TerminalView>>,
   branch_pr: BranchPrState,
   files_tree_state: Entity<TreeState>,
   files_loaded: bool,
@@ -202,6 +209,7 @@ impl ReviewPanel {
       committing: false,
       last_error: None,
       active_tab: ReviewPanelTab::Changes,
+      terminal_view: None,
       branch_pr: BranchPrState::Loading,
       files_tree_state: cx.new(|cx| TreeState::new(cx)),
       files_loaded: false,
@@ -312,10 +320,39 @@ impl ReviewPanel {
     self.repo_root.as_deref()
   }
 
-  pub(crate) fn set_repo_root(&mut self, repo_root: Option<PathBuf>) {
-    self.repo_root = repo_root;
+  pub(crate) fn set_repo_root(&mut self, repo_root: Option<PathBuf>, cx: &mut Context<Self>) {
+    self.repo_root = repo_root.clone();
     self.status_entries.clear();
     self.last_error = None;
+    if let Some(terminal) = self.terminal_view.clone() {
+      terminal.update(cx, |terminal, cx| {
+        terminal.set_working_directory(repo_root, cx);
+      });
+    }
+  }
+
+  fn ensure_terminal(&mut self, cx: &mut Context<Self>) {
+    if self.terminal_view.is_some() {
+      return;
+    }
+    let working_directory = self.repo_root.clone();
+    self.terminal_view = Some(cx.new(|cx| TerminalView::new(working_directory, cx)));
+  }
+
+  fn render_terminal_tab(&mut self, cx: &mut Context<Self>) -> AnyElement {
+    self.ensure_terminal(cx);
+    let Some(terminal) = self.terminal_view.clone() else {
+      return div().into_any_element();
+    };
+
+    div()
+      .id("review-panel-terminal")
+      .debug_selector(|| REVIEW_PANEL_TERMINAL_DEBUG_SELECTOR.to_string())
+      .flex_1()
+      .min_h_0()
+      .min_w(px(0.0))
+      .child(terminal)
+      .into_any_element()
   }
 
   fn has_staged_changes(&self) -> bool {
@@ -485,8 +522,10 @@ impl ReviewPanel {
         .on_click(cx.listener(move |this, _, _, cx| {
           if this.active_tab != target {
             this.active_tab = target;
-            if target == ReviewPanelTab::PullRequest {
-              this.refresh_branch_pull_request(cx);
+            match target {
+              ReviewPanelTab::PullRequest => this.refresh_branch_pull_request(cx),
+              ReviewPanelTab::Terminal => this.ensure_terminal(cx),
+              ReviewPanelTab::Changes | ReviewPanelTab::Files => {}
             }
             cx.notify();
           }
@@ -513,6 +552,12 @@ impl ReviewPanel {
         "Pull request",
         ReviewPanelTab::PullRequest,
         self.active_tab == ReviewPanelTab::PullRequest,
+      ))
+      .child(tab(
+        "review-panel-tab-terminal",
+        "Terminal",
+        ReviewPanelTab::Terminal,
+        self.active_tab == ReviewPanelTab::Terminal,
       ))
       .into_any_element()
   }
@@ -813,15 +858,17 @@ impl Render for ReviewPanel {
               )
             },
           )
-          .child(
-            Button::new("review-panel-refresh")
-              .icon(UiIconName::RefreshCw)
-              .ghost()
-              .compact()
-              .small()
-              .tooltip("Refresh")
-              .on_click(cx.listener(|this, _, _, cx| this.refresh(cx))),
-          ),
+          .when(self.active_tab != ReviewPanelTab::Terminal, |this| {
+            this.child(
+              Button::new("review-panel-refresh")
+                .icon(UiIconName::RefreshCw)
+                .ghost()
+                .compact()
+                .small()
+                .tooltip("Refresh")
+                .on_click(cx.listener(|this, _, _, cx| this.refresh(cx))),
+            )
+          }),
       );
 
     let body = match self.active_tab {
@@ -848,6 +895,7 @@ impl Render for ReviewPanel {
         }
       }
       ReviewPanelTab::PullRequest => self.render_pr_tab(cx),
+      ReviewPanelTab::Terminal => self.render_terminal_tab(cx),
     };
 
     let mut panel = v_flex()
@@ -1216,5 +1264,69 @@ mod tests {
     });
     panel.update(cx, |panel, cx| panel.commit(cx));
     panel.read_with(cx, |panel, _| assert!(panel._commit_task.is_none()));
+  }
+
+  #[gpui::test]
+  async fn the_terminal_starts_only_when_its_tab_is_opened(cx: &mut TestAppContext) {
+    cx.update(|cx| gpui_component::init(cx));
+    let repo = TempRepo::init("review-panel-terminal-lazy");
+    commit_text_file(&repo.path, Path::new("README.md"), "v1\n", "initial");
+
+    let (panel, cx) = add_review_panel_window(Some(repo.path.clone()), cx);
+    cx.executor().allow_parking();
+    await_refresh(&panel, cx).await;
+
+    panel.read_with(cx, |panel, _| {
+      // No shell for someone who never opens the tab.
+      assert!(panel.terminal_view.is_none());
+      assert!(panel.active_tab != ReviewPanelTab::Terminal);
+    });
+
+    panel.update(cx, |panel, cx| {
+      panel.active_tab = ReviewPanelTab::Terminal;
+      panel.ensure_terminal(cx);
+      cx.notify();
+    });
+    cx.run_until_parked();
+
+    panel.read_with(cx, |panel, cx| {
+      let terminal = panel.terminal_view.as_ref().expect("terminal view");
+      assert_eq!(
+        terminal.read(cx).working_directory(),
+        Some(repo.path.as_path())
+      );
+    });
+    assert!(
+      cx.debug_bounds(REVIEW_PANEL_TERMINAL_DEBUG_SELECTOR)
+        .is_some(),
+      "the terminal tab should be painted"
+    );
+  }
+
+  #[gpui::test]
+  async fn switching_repository_moves_a_running_terminal(cx: &mut TestAppContext) {
+    cx.update(|cx| gpui_component::init(cx));
+    let repo = TempRepo::init("review-panel-terminal-switch");
+    commit_text_file(&repo.path, Path::new("README.md"), "v1\n", "initial");
+    let other = TempRepo::init("review-panel-terminal-switch-other");
+    commit_text_file(&other.path, Path::new("README.md"), "other\n", "initial");
+
+    let (panel, cx) = add_review_panel_window(Some(repo.path.clone()), cx);
+    cx.executor().allow_parking();
+    await_refresh(&panel, cx).await;
+
+    panel.update(cx, |panel, cx| panel.ensure_terminal(cx));
+    panel.update(cx, |panel, cx| {
+      panel.set_repo_root(Some(other.path.clone()), cx)
+    });
+    cx.run_until_parked();
+
+    panel.read_with(cx, |panel, cx| {
+      let terminal = panel.terminal_view.as_ref().expect("terminal view");
+      assert_eq!(
+        terminal.read(cx).working_directory(),
+        Some(other.path.as_path())
+      );
+    });
   }
 }

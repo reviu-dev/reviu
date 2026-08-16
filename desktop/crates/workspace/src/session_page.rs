@@ -972,7 +972,7 @@ impl SessionPage {
     // next render with the new cwd and state directory.
     self.agent_chat_view = None;
     self.review_panel.update(cx, |panel, cx| {
-      panel.set_repo_root(repo_root);
+      panel.set_repo_root(repo_root, cx);
       panel.refresh(cx);
     });
     self.refresh_branch(cx);
@@ -1917,9 +1917,9 @@ mod tests {
     let page = mounted.expect("session page");
     page.update(cx, |page, cx| {
       page.selected_repo = Some(repo_root.clone());
-      page
-        .review_panel
-        .update(cx, |panel, _| panel.set_repo_root(Some(repo_root.clone())));
+      page.review_panel.update(cx, |panel, cx| {
+        panel.set_repo_root(Some(repo_root.clone()), cx)
+      });
     });
     (page, cx)
   }

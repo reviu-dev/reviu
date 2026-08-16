@@ -64,6 +64,18 @@ Settings gains a Home Page choice: Sessions, the default, or Git for those who c
 
 The command palette in the Sessions workspace was navigation only, even though the workspace shows your changes and commits them. It now carries the commands that match what is on screen: commit, stage all, unstage all, push, pull and fetch, on the repository the session is working in. Each one reports what happened and refreshes the changes panel.
 
+### Switch Repositories From The Sessions Workspace
+
+The Sessions workspace was stuck on whichever repository it picked at startup. The repository line at the bottom of the sidebar is now a button that opens the repository switcher, and the command palette gains Switch, Open and Forget repository. A session belongs to a repository: switching swaps the conversation list, the changes panel and the branch, and Reviu refuses to switch while the agent is mid-turn.
+
+### Push And Pull From The Sidebar
+
+The sidebar now shows how many commits you are ahead of and behind your branch's remote, and each counter runs its command when clicked: the up arrow pushes, the down arrow pulls. The counters appear only when there is something to sync, and they refresh after every commit made from the workspace.
+
+### A Terminal In The Sessions Workspace
+
+The right panel gains a Terminal tab, running in the repository the session is working in, so a quick command no longer means leaving for the Git page. The shell starts the first time you open the tab and follows along when you switch repositories.
+
 ## 0.18.0
 
 ### No More Failed Single Comments During A Review
