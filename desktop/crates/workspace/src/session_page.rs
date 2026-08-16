@@ -466,6 +466,8 @@ impl SessionPage {
     let Some(repo_root) = self.selected_repo.clone() else {
       return;
     };
+    // Previewing is a detour, not a mode: opening a file always shows its code.
+    self.show_preview = false;
     let app_settings = crate::config::AppSettings::get(cx);
     self.diff_view = if app_settings.split_diff_view {
       DiffViewMode::Split
@@ -2979,7 +2981,7 @@ mod tests {
   }
 
   #[gpui::test]
-  async fn the_preview_does_not_follow_onto_a_plain_file(cx: &mut TestAppContext) {
+  async fn the_preview_does_not_follow_onto_the_next_file(cx: &mut TestAppContext) {
     let repo = TempRepo::init("session-page-preview-then-code");
     commit_text_file(&repo.path, Path::new("README.md"), "# Title\n", "initial");
     commit_text_file(&repo.path, Path::new("main.rs"), "fn main() {}\n", "code");
@@ -3005,9 +3007,45 @@ mod tests {
     page.update(cx, |_, cx| cx.notify());
     cx.run_until_parked();
 
-    // Nothing to render for a .rs: no pane, no button, even though the preview
-    // was left on.
+    // Opening a file shows its code, whatever the previous file was showing.
+    page.read_with(cx, |page, _| assert!(!page.show_preview));
     assert!(cx.debug_bounds(PREVIEW_PANE_DEBUG_SELECTOR).is_none());
     assert!(cx.debug_bounds(PREVIEW_TOGGLE_DEBUG_SELECTOR).is_none());
+  }
+
+  #[gpui::test]
+  async fn coming_back_to_a_previewed_file_shows_its_code(cx: &mut TestAppContext) {
+    let repo = TempRepo::init("session-page-preview-reset");
+    commit_text_file(&repo.path, Path::new("README.md"), "# Title\n", "initial");
+    commit_text_file(&repo.path, Path::new("GUIDE.md"), "# Guide\n", "guide");
+    std::fs::write(repo.path.join("README.md"), "# Title\n\nBody\n").expect("update readme");
+    std::fs::write(repo.path.join("GUIDE.md"), "# Guide\n\nSteps\n").expect("update guide");
+
+    let (page, cx) = add_session_page_window(repo.path.clone(), cx);
+    cx.executor().allow_parking();
+    cx.run_until_parked();
+
+    page.update_in(cx, |page, window, cx| {
+      page.open_diff(PathBuf::from("README.md"), None, window, cx);
+    });
+    await_open_file(&page, cx).await;
+    page.update(cx, |page, cx| page.toggle_preview(cx));
+    cx.run_until_parked();
+    assert!(cx.debug_bounds(PREVIEW_PANE_DEBUG_SELECTOR).is_some());
+
+    // Another markdown file: the preview does not carry over.
+    page.update_in(cx, |page, window, cx| {
+      page.open_diff(PathBuf::from("GUIDE.md"), None, window, cx);
+    });
+    await_open_file(&page, cx).await;
+    page.update(cx, |_, cx| cx.notify());
+    cx.run_until_parked();
+
+    page.read_with(cx, |page, _| assert!(!page.show_preview));
+    assert!(cx.debug_bounds(PREVIEW_PANE_DEBUG_SELECTOR).is_none());
+    assert!(
+      cx.debug_bounds(PREVIEW_TOGGLE_DEBUG_SELECTOR).is_some(),
+      "the button is still offered, it just starts off"
+    );
   }
 }

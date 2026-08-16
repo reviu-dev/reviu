@@ -86,7 +86,7 @@ The diff in the Sessions workspace was stuck on whatever the settings said. It n
 
 ### Read Markdown And SVG Files In The Sessions Workspace
 
-Opening a `.md` or `.svg` in the Sessions workspace showed raw text. A Preview button in the diff header now swaps the pane for the rendered file, and Code brings the diff back. While the rendered file is up, the inline/split control steps aside: there is no diff on screen to switch.
+Opening a `.md` or `.svg` in the Sessions workspace showed raw text. A Preview button in the diff header now swaps the pane for the rendered file, and Code brings the diff back. While the rendered file is up, the inline/split control steps aside: there is no diff on screen to switch. Previewing is a detour rather than a mode, so opening the next file shows its code again.
 
 ## 0.18.0
 
