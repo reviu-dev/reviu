@@ -210,10 +210,14 @@ mod tests {
   }
 
   fn branch(name: &str, has_upstream: bool) -> BranchStatus {
+    tracking(name, 0, 0, has_upstream)
+  }
+
+  fn tracking(name: &str, ahead: usize, behind: usize, has_upstream: bool) -> BranchStatus {
     BranchStatus {
       name: name.to_string(),
-      ahead: 0,
-      behind: 0,
+      ahead,
+      behind,
       has_upstream,
     }
   }
@@ -494,6 +498,47 @@ mod tests {
     builder.entries = Vec::new();
     assert!(!builder.state().allows(PaletteCommand::Stash));
     assert!(!builder.state().allows(PaletteCommand::StashWithUntracked));
+  }
+
+  #[test]
+  fn push_flags_respect_upstream_and_divergence() {
+    // No upstream: the branch has to be published, and only if it has a commit.
+    let no_upstream = tracking("main", 3, 0, false);
+    assert_eq!(push_flags(Some(&no_upstream), false, false), (false, false));
+    assert_eq!(push_flags(Some(&no_upstream), true, false), (true, false));
+
+    let clean_ahead = tracking("main", 2, 0, true);
+    assert_eq!(push_flags(Some(&clean_ahead), true, false), (true, false));
+
+    let diverged = tracking("main", 1, 2, true);
+    assert_eq!(push_flags(Some(&diverged), true, false), (false, true));
+
+    let behind_only = tracking("main", 0, 2, true);
+    assert_eq!(push_flags(Some(&behind_only), true, false), (false, false));
+
+    assert_eq!(push_flags(None, true, false), (false, false));
+  }
+
+  #[test]
+  fn a_rebase_turns_the_next_push_into_a_force_push() {
+    let clean_ahead = tracking("main", 2, 0, true);
+    assert_eq!(push_flags(Some(&clean_ahead), true, true), (false, true));
+    assert_eq!(push_flags(Some(&clean_ahead), true, false), (true, false));
+
+    // Nothing ahead: a rebase that changed nothing needs no force push.
+    let no_ahead = tracking("main", 0, 0, true);
+    assert_eq!(push_flags(Some(&no_ahead), true, true), (false, false));
+  }
+
+  #[test]
+  fn a_detached_head_is_never_published() {
+    let detached = tracking("HEAD", 0, 0, false);
+    assert!(!should_publish_branch(Some(&detached), true));
+    assert!(should_publish_branch(
+      Some(&tracking("feature", 0, 0, false)),
+      true
+    ));
+    assert!(!should_publish_branch(None, true));
   }
 
   #[test]

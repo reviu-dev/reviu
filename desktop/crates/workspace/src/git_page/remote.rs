@@ -355,22 +355,6 @@ mod tests {
   }
 
   #[test]
-  fn push_flags_respect_upstream_and_divergence() {
-    let no_upstream = make_branch_status("main", 3, 0, false);
-    assert_eq!(push_flags(Some(&no_upstream), false, false), (false, false));
-    assert_eq!(push_flags(Some(&no_upstream), true, false), (true, false));
-
-    let clean_ahead = make_branch_status("main", 2, 0, true);
-    assert_eq!(push_flags(Some(&clean_ahead), true, false), (true, false));
-
-    let diverged = make_branch_status("main", 1, 2, true);
-    assert_eq!(push_flags(Some(&diverged), true, false), (false, true));
-
-    let behind_only = make_branch_status("main", 0, 2, true);
-    assert_eq!(push_flags(Some(&behind_only), true, false), (false, false));
-  }
-
-  #[test]
   fn push_action_label_mentions_publish_branch_without_upstream() {
     let no_upstream = make_branch_status("feature", 0, 0, false);
     assert_eq!(

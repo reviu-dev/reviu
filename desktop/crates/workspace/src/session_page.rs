@@ -3398,6 +3398,49 @@ mod tests {
   }
 
   #[gpui::test]
+  async fn the_palette_offers_syncing_once_the_branch_tracks_a_remote(cx: &mut TestAppContext) {
+    let repo = TempRepo::init("session-page-palette-sync");
+    let remote = crate::test_support::TempBareRepo::init("session-page-palette-sync-remote");
+    commit_text_file(&repo.path, Path::new("a.txt"), "v1\n", "initial");
+    git2::Repository::open(&repo.path)
+      .expect("open repo")
+      .remote("origin", remote.path.to_str().expect("remote path utf8"))
+      .expect("add origin");
+    let branch = git::current_branch_status(&repo.path)
+      .expect("branch status")
+      .name;
+    crate::test_support::push_branch_to_remote(&repo.path, &branch, "origin");
+    crate::test_support::set_upstream(&repo.path, &branch, &format!("origin/{branch}"));
+    commit_text_file(
+      &repo.path,
+      Path::new("a.txt"),
+      "v2\n",
+      "ahead of the remote",
+    );
+
+    let (page, cx) = add_session_page_window(repo.path.clone(), cx);
+    cx.executor().allow_parking();
+    page.update(cx, |page, cx| page.refresh_branch(cx));
+    await_branch_refresh(&page, cx).await;
+
+    page.read_with(cx, |page, cx| {
+      let ids = page
+        .palette_commands(1, cx)
+        .into_iter()
+        .map(|command| command.id)
+        .collect::<Vec<_>>();
+      assert!(
+        ids.contains(&CommandPaletteCommandId::Push),
+        "one commit ahead of the upstream is something to push"
+      );
+      assert!(
+        ids.contains(&CommandPaletteCommandId::Pull),
+        "a tracked branch can be pulled"
+      );
+    });
+  }
+
+  #[gpui::test]
   async fn a_command_that_conflicts_opens_the_file_to_resolve(cx: &mut TestAppContext) {
     let repo = TempRepo::init("session-page-command-conflict");
     commit_text_file(&repo.path, Path::new("a.txt"), "base\n", "initial");

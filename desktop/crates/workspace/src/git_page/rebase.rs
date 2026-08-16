@@ -971,16 +971,6 @@ mod tests {
   }
 
   #[test]
-  fn push_flags_require_force_push_after_rebase_for_tracked_branch() {
-    let clean_ahead = make_branch_status("main", 2, 0, true);
-    assert_eq!(push_flags(Some(&clean_ahead), true, true), (false, true));
-    assert_eq!(push_flags(Some(&clean_ahead), true, false), (true, false));
-
-    let no_ahead = make_branch_status("main", 0, 0, true);
-    assert_eq!(push_flags(Some(&no_ahead), true, true), (false, false));
-  }
-
-  #[test]
   fn accept_all_conflict_command_rules_match_editor_header_rules() {
     assert!(GitPage::can_accept_all_conflicts(
       Some(RepoStatusKind::Conflicted),
