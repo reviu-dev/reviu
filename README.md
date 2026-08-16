@@ -7,8 +7,8 @@ A keyboard-first desktop Git client, built in Rust with [GPUI](https://gpui.rs).
 Reviu keeps the whole review loop in one native app: read your local diffs, review the code your agent wrote, and (with Reviu Pro) do GitHub pull request review, instead of bouncing between a Git client, the terminal and the browser. No Electron, no webview.
 
 <picture>
-  <source media="(prefers-color-scheme: light)" srcset="landing/src/assets/app_screenshots/git_light.png">
-  <img alt="Reviu local Git view with a split diff and the agent panel" src="landing/src/assets/app_screenshots/git_dark.png">
+  <source media="(prefers-color-scheme: light)" srcset="website/src/assets/app_screenshots/git_light.png">
+  <img alt="Reviu local Git view with a split diff and the agent panel" src="website/src/assets/app_screenshots/git_dark.png">
 </picture>
 
 ## Features
@@ -26,8 +26,8 @@ Inline and split diffs, staging by hunk, commit / amend / undo, branch, merge, r
 Notifications, saved pull request lists with filters, and repository browsing in one desktop home, backed by a multi-tier cache so it stays fast.
 
 <picture>
-  <source media="(prefers-color-scheme: light)" srcset="landing/src/assets/app_screenshots/github_home_light.png">
-  <img alt="Reviu GitHub home with notifications and saved pull request lists" src="landing/src/assets/app_screenshots/github_home_dark.png">
+  <source media="(prefers-color-scheme: light)" srcset="website/src/assets/app_screenshots/github_home_light.png">
+  <img alt="Reviu GitHub home with notifications and saved pull request lists" src="website/src/assets/app_screenshots/github_home_dark.png">
 </picture>
 
 ### Pull request review on the desktop · Reviu Pro
@@ -35,8 +35,8 @@ Notifications, saved pull request lists with filters, and repository browsing in
 Open a PR in inline or split diff, comment on the exact lines, stack comments into a pending review and submit them together (Approve / Request changes / Comment), track checks, and merge when the branch is ready.
 
 <picture>
-  <source media="(prefers-color-scheme: light)" srcset="landing/src/assets/app_screenshots/github_pr_changes_light.png">
-  <img alt="Reviu pull request review with an inline diff and review comments" src="landing/src/assets/app_screenshots/github_pr_changes_dark.png">
+  <source media="(prefers-color-scheme: light)" srcset="website/src/assets/app_screenshots/github_pr_changes_light.png">
+  <img alt="Reviu pull request review with an inline diff and review comments" src="website/src/assets/app_screenshots/github_pr_changes_dark.png">
 </picture>
 
 ### Threads, replies and AI briefs · Reviu Pro
@@ -44,8 +44,8 @@ Open a PR in inline or split diff, comment on the exact lines, stack comments in
 Reply to review threads, resolve conversations, and get an optional AI brief of a pull request (summary, files to review first, risks) with your own OpenAI or Anthropic key.
 
 <picture>
-  <source media="(prefers-color-scheme: light)" srcset="landing/src/assets/app_screenshots/github_pr_conv_light.png">
-  <img alt="Reviu pull request conversation with review threads" src="landing/src/assets/app_screenshots/github_pr_conv_dark.png">
+  <source media="(prefers-color-scheme: light)" srcset="website/src/assets/app_screenshots/github_pr_conv_light.png">
+  <img alt="Reviu pull request conversation with review threads" src="website/src/assets/app_screenshots/github_pr_conv_dark.png">
 </picture>
 
 ## Reviu Pro
@@ -55,7 +55,7 @@ Free covers local Git and the agent panel. Reviu Pro adds the in-app GitHub inte
 ## Repository layout
 
 - `desktop/`: the Rust + GPUI desktop app (this is the client).
-- `landing/`: the Astro marketing site ([reviu.dev](https://reviu.dev)).
+- `website/`: the Astro marketing site ([reviu.dev](https://reviu.dev)).
 - `extension/`: browser extension for GitHub repos, PRs, and issues.
 
 The GitHub-integration backend (the service powering Reviu Pro) is closed-source and lives in a separate private repository. The Free features (local Git and the agent panel) run fully without it.

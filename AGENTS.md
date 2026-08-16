@@ -10,7 +10,7 @@
 ## Repo map
 
 - `desktop/`: Rust + GPUI desktop app.
-- `landing/`: Astro marketing site.
+- `website/`: Astro marketing site.
 - `extension/`: browser extension.
 
 The GitHub-integration backend (Reviu Pro) is closed-source in a separate private repo and is not part of this tree. Only the desktop-side API client (`api.rs`) lives here.

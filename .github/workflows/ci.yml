@@ -72,8 +72,8 @@ jobs:
         working-directory: desktop
         run: cargo nextest run
 
-  landing:
-    name: Landing
+  website:
+    name: Website
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
@@ -81,21 +81,21 @@ jobs:
       - name: Setup pnpm
         uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6.0.10
         with:
-          package_json_file: landing/package.json
+          package_json_file: website/package.json
 
       - name: Setup node
         uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
         with:
-          node-version-file: landing/package.json
+          node-version-file: website/package.json
           cache: pnpm
-          cache-dependency-path: landing/pnpm-lock.yaml
+          cache-dependency-path: website/pnpm-lock.yaml
 
       - name: Install dependencies
-        working-directory: landing
+        working-directory: website
         run: pnpm install --frozen-lockfile
 
       - name: Typecheck
-        working-directory: landing
+        working-directory: website
         env:
           PUBLIC_BACKEND_URL: https://api.reviu.dev
         run: pnpm typecheck

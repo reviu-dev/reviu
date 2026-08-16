@@ -1,5 +1,5 @@
 #!/usr/bin/env sh
-# NOTE: A copy of this script is served at landing/public/install.sh
+# NOTE: A copy of this script is served at website/public/install.sh
 # Update both files when making changes.
 set -eu
 
