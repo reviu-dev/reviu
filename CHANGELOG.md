@@ -76,6 +76,10 @@ The sidebar now shows how many commits you are ahead of and behind your branch's
 
 The right panel gains a Terminal tab, running in the repository the session is working in, so a quick command no longer means leaving for the Git page. The shell starts the first time you open the tab and follows along when you switch repositories.
 
+### Stage And Discard From The Sessions Workspace
+
+The Changes panel listed your modified files but could do nothing with them. It now groups them into Staged and Changes like the Git page, and each row carries the same actions on hover: stage, unstage, and discard. Files partially staged appear in both groups, and the list refreshes itself after every action.
+
 ## 0.18.0
 
 ### No More Failed Single Comments During A Review

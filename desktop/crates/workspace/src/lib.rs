@@ -58,6 +58,7 @@ mod browser_extensions_dialog;
 mod command_usage;
 mod dock_badge;
 
+mod changes_list;
 mod config;
 mod crash_report;
 mod date_format;

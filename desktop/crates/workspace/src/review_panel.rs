@@ -5,8 +5,8 @@ use std::path::Path;
 use std::path::PathBuf;
 
 use git::{
-  RepoStage, RepoStatusEntry, RepoStatusKind, commit_changes, current_branch_status,
-  current_github_remote_repo, list_repo_status, list_repo_worktree_files, stage_all,
+  RepoStage, RepoStatusEntry, commit_changes, current_branch_status, current_github_remote_repo,
+  list_repo_status, list_repo_worktree_files, stage_all,
 };
 use gpui::{
   AnyElement, AnyWindowHandle, App, Context, Entity, FocusHandle, Focusable, Render, SharedString,
@@ -19,6 +19,8 @@ use gpui_component::{
 };
 use smol::unblock;
 use terminal::TerminalView;
+
+use crate::changes_list::{ChangesList, ChangesListEvent};
 
 const REVIEW_PANEL_TERMINAL_DEBUG_SELECTOR: &str = "review-panel-terminal";
 #[cfg(test)]
@@ -36,31 +38,6 @@ use crate::github_navigation::open_pr_target;
 use crate::github_shared::{pull_request_status_color, pull_request_status_label};
 use crate::workspace::WorkspaceApi;
 use ui::{Button, ButtonVariants as _, StatusThemeExt as _, Textarea, TextareaState, UiIconName};
-
-fn status_color(kind: RepoStatusKind, theme: &gpui_component::Theme) -> gpui::Hsla {
-  match kind {
-    RepoStatusKind::Modified => theme.status_yellow(),
-    RepoStatusKind::Added => theme.status_green(),
-    RepoStatusKind::Deleted => theme.status_red(),
-    RepoStatusKind::Renamed => theme.status_blue(),
-    RepoStatusKind::TypeChange => theme.status_blue(),
-    RepoStatusKind::Untracked => theme.status_green(),
-    RepoStatusKind::Conflicted => theme.status_red(),
-  }
-}
-
-pub(crate) fn split_path_label(path: &std::path::Path) -> (String, String) {
-  let file = path
-    .file_name()
-    .map(|name| name.to_string_lossy().into_owned())
-    .unwrap_or_else(|| path.to_string_lossy().into_owned());
-  let dir = path
-    .parent()
-    .filter(|parent| !parent.as_os_str().is_empty())
-    .map(|parent| format!("{}/", parent.to_string_lossy()))
-    .unwrap_or_default();
-  (dir, file)
-}
 
 #[derive(Clone, Debug)]
 pub enum ReviewPanelEvent {
@@ -167,6 +144,7 @@ pub struct ReviewPanel {
   committing: bool,
   last_error: Option<SharedString>,
   active_tab: ReviewPanelTab,
+  changes_list: Entity<ChangesList>,
   /// Spawned on the first visit to the tab: a shell per session is too much
   /// for someone who never opens it.
   terminal_view: Option<Entity<TerminalView>>,
@@ -203,6 +181,20 @@ impl ReviewPanel {
     )
     .detach();
 
+    let split_sections = !crate::config::AppSettings::get(cx).git_unified_file_view;
+    let changes_list = cx.new(|_| ChangesList::new(repo_root.clone(), split_sections));
+    cx.subscribe_in(
+      &changes_list,
+      window,
+      |this, _list, event: &ChangesListEvent, _window, cx| match event {
+        ChangesListEvent::OpenFile { path } => {
+          cx.emit(ReviewPanelEvent::OpenFile { path: path.clone() });
+        }
+        ChangesListEvent::Changed => this.refresh(cx),
+      },
+    )
+    .detach();
+
     let mut panel = Self {
       focus_handle: cx.focus_handle(),
       window_handle: window.window_handle(),
@@ -212,6 +204,7 @@ impl ReviewPanel {
       committing: false,
       last_error: None,
       active_tab: ReviewPanelTab::Changes,
+      changes_list,
       terminal_view: None,
       branch_pr: BranchPrState::Loading,
       files_tree_state: cx.new(|cx| TreeState::new(cx)),
@@ -265,6 +258,10 @@ impl ReviewPanel {
       let _ = this.update(cx, |this, cx| {
         match result {
           Ok(entries) => {
+            this.changes_list.update(cx, |list, cx| {
+              list.set_entries(entries.clone());
+              cx.notify();
+            });
             this.status_entries = entries;
             this.last_error = None;
           }
@@ -327,6 +324,10 @@ impl ReviewPanel {
     self.repo_root = repo_root.clone();
     self.status_entries.clear();
     self.last_error = None;
+    self.changes_list.update(cx, |list, cx| {
+      list.set_repo_root(repo_root.clone());
+      cx.notify();
+    });
     if let Some(terminal) = self.terminal_view.clone() {
       terminal.update(cx, |terminal, cx| {
         terminal.set_working_directory(repo_root, cx);
@@ -409,61 +410,6 @@ impl ReviewPanel {
       });
     });
     self._commit_task = Some(task);
-  }
-
-  fn render_file_row(
-    &self,
-    ix: usize,
-    entry: &RepoStatusEntry,
-    cx: &mut Context<Self>,
-  ) -> AnyElement {
-    let theme = cx.theme().clone();
-    let (dir, file) = split_path_label(&entry.path);
-    let path = entry.path.clone();
-
-    div()
-      .id(("review-panel-file-row", ix))
-      .mx_2()
-      .px_2()
-      .py_1()
-      .rounded(px(5.0))
-      .cursor_pointer()
-      .hover(|s| s.bg(theme.secondary_hover))
-      .on_click(cx.listener(move |_, _, _, cx| {
-        cx.emit(ReviewPanelEvent::OpenFile { path: path.clone() });
-      }))
-      .child(
-        h_flex()
-          .items_center()
-          .gap_2()
-          .child(
-            div()
-              .w(px(12.0))
-              .flex_shrink_0()
-              .text_xs()
-              .font_weight(gpui::FontWeight::BOLD)
-              .text_color(status_color(entry.status, &theme))
-              .child(entry.status.short_code()),
-          )
-          .child(
-            h_flex()
-              .flex_1()
-              .min_w(px(0.0))
-              .overflow_hidden()
-              .text_sm()
-              .whitespace_nowrap()
-              .when(!dir.is_empty(), |this| {
-                this.child(
-                  div()
-                    .text_color(theme.muted_foreground)
-                    .truncate()
-                    .child(dir),
-                )
-              })
-              .child(div().text_color(theme.foreground).child(file)),
-          ),
-      )
-      .into_any_element()
   }
 
   fn render_commit_zone(&self, window: &Window, cx: &mut Context<Self>) -> AnyElement {
@@ -883,20 +829,13 @@ impl Render for ReviewPanel {
         if self.status_entries.is_empty() {
           self.render_empty_state(cx)
         } else {
-          let rows: Vec<AnyElement> = self
-            .status_entries
-            .clone()
-            .iter()
-            .enumerate()
-            .map(|(ix, entry)| self.render_file_row(ix, entry, cx))
-            .collect();
           div()
             .id("review-panel-file-list")
             .flex_1()
             .min_h_0()
             .overflow_y_scroll()
             .py_1()
-            .children(rows)
+            .child(self.changes_list.clone())
             .into_any_element()
         }
       }
@@ -929,31 +868,13 @@ impl Focusable for ReviewPanel {
 #[cfg(test)]
 mod tests {
   use super::*;
+  use git::RepoStatusKind;
   use git2::{Repository, Signature};
   use gpui::TestAppContext;
   use std::path::Path;
   use std::sync::Arc;
   use std::sync::atomic::{AtomicBool, Ordering};
   use std::time::{SystemTime, UNIX_EPOCH};
-
-  #[test]
-  fn split_path_label_separates_dir_and_file() {
-    assert_eq!(
-      split_path_label(Path::new("crates/workspace/src/git_page.rs")),
-      (
-        "crates/workspace/src/".to_string(),
-        "git_page.rs".to_string()
-      )
-    );
-  }
-
-  #[test]
-  fn split_path_label_handles_root_files() {
-    assert_eq!(
-      split_path_label(Path::new("CHANGELOG.md")),
-      (String::new(), "CHANGELOG.md".to_string())
-    );
-  }
 
   struct TempRepo {
     path: PathBuf,
@@ -1016,6 +937,9 @@ mod tests {
     cx: &mut TestAppContext,
   ) -> (Entity<ReviewPanel>, &mut gpui::VisualTestContext) {
     cx.update(|cx| {
+      if !cx.has_global::<crate::config::AppSettings>() {
+        cx.set_global(crate::config::AppSettings::default());
+      }
       if !cx.has_global::<AuthStateStore>() {
         cx.set_global(AuthStateStore::default());
       }
