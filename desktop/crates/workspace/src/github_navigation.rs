@@ -57,6 +57,42 @@ pub(crate) fn github_commit_url(owner: &str, repo: &str, sha: &str) -> String {
   format!("https://github.com/{owner}/{repo}/commit/{sha}")
 }
 
+/// The compare page of a branch with the pull request form open: what our own
+/// dialog cannot offer (reviewers, labels, projects) lives there.
+pub(crate) fn github_compare_url(owner: &str, repo: &str, branch: &str) -> String {
+  let branch = encode_ref(branch);
+  format!("https://github.com/{owner}/{repo}/compare/{branch}?expand=1")
+}
+
+/// Branch names carry slashes, which stay path separators; the rest is escaped.
+fn encode_ref(reference: &str) -> String {
+  reference
+    .split('/')
+    .map(|segment| {
+      segment
+        .chars()
+        .map(|character| match character {
+          'a'..='z' | 'A'..='Z' | '0'..='9' | '-' | '_' | '.' | '~' => character.to_string(),
+          other => {
+            let mut buffer = [0u8; 4];
+            other
+              .encode_utf8(&mut buffer)
+              .as_bytes()
+              .iter()
+              .map(|byte| format!("%{byte:02X}"))
+              .collect::<String>()
+          }
+        })
+        .collect::<String>()
+    })
+    .collect::<Vec<_>>()
+    .join("/")
+}
+
+pub fn open_compare_target(owner: String, repo: String, branch: String, cx: &mut App) {
+  cx.open_url(&github_compare_url(&owner, &repo, &branch));
+}
+
 pub fn open_repo_target(
   owner: String,
   repo: String,
@@ -102,9 +138,26 @@ pub fn open_commit_target(owner: String, repo: String, sha: String, cx: &mut App
 
 #[cfg(test)]
 mod tests {
+  #[test]
+  fn the_compare_url_opens_the_pull_request_form() {
+    assert_eq!(
+      github_compare_url("acme", "widget", "feature"),
+      "https://github.com/acme/widget/compare/feature?expand=1"
+    );
+    // Slashes are path separators; the rest of a branch name is escaped.
+    assert_eq!(
+      github_compare_url("acme", "widget", "feat/new thing"),
+      "https://github.com/acme/widget/compare/feat/new%20thing?expand=1"
+    );
+    assert_eq!(
+      github_compare_url("acme", "widget", "fix/#42"),
+      "https://github.com/acme/widget/compare/fix/%2342?expand=1"
+    );
+  }
+
   use super::{
-    CommandPaletteGithubRepoTab, SamePrGfmNavigation, github_commit_url, github_profile_url,
-    github_repo_url, same_pr_gfm_navigation,
+    CommandPaletteGithubRepoTab, SamePrGfmNavigation, github_commit_url, github_compare_url,
+    github_profile_url, github_repo_url, same_pr_gfm_navigation,
   };
 
   #[test]

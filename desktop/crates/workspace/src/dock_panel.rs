@@ -30,6 +30,8 @@ const DOCK_PANEL_TERMINAL_DEBUG_SELECTOR: &str = "dock-panel-terminal";
 pub(crate) const DOCK_PANEL_HISTORY_DEBUG_SELECTOR: &str = "dock-panel-history";
 const DOCK_PANEL_COMMIT_DEBUG_SELECTOR: &str = "dock-panel-commit";
 const DOCK_PANEL_COMMIT_MENU_DEBUG_SELECTOR: &str = "dock-panel-commit-menu";
+const DOCK_PANEL_CREATE_PR_DEBUG_SELECTOR: &str = "dock-panel-create-pr";
+const DOCK_PANEL_COMPARE_DEBUG_SELECTOR: &str = "dock-panel-compare-on-github";
 const DOCK_PANEL_OPERATION_DEBUG_SELECTOR: &str = "dock-panel-operation";
 #[cfg(test)]
 const DOCK_PANEL_TERMINAL_TAB_DEBUG_SELECTOR: &str = "dock-panel-tab-terminal";
@@ -41,7 +43,7 @@ use std::rc::Rc;
 
 use crate::api::GithubPullRequest;
 use crate::auth_state::AuthStateStore;
-use crate::github_navigation::open_pr_target;
+use crate::github_navigation::{open_compare_target, open_pr_target};
 use crate::github_shared::{pull_request_status_color, pull_request_status_label};
 use crate::pull_request_dialog::{
   GithubBranchContext, PullRequestCreatedHandler, open_create_pull_request_dialog,
@@ -990,16 +992,36 @@ impl DockPanel {
               .primary()
               .small()
               .label("Create pull request")
-              .on_click(cx.listener(move |this, _, window, cx| {
-                open_create_pull_request_dialog(
-                  WorkspaceApi::global(cx).api.clone(),
-                  this.window_handle,
-                  this.pr_created_handler(cx),
-                  context.clone(),
-                  window,
+              .debug_selector(|| DOCK_PANEL_CREATE_PR_DEBUG_SELECTOR.to_string())
+              .on_click(cx.listener({
+                let context = context.clone();
+                move |this, _, window, cx| {
+                  open_create_pull_request_dialog(
+                    WorkspaceApi::global(cx).api.clone(),
+                    this.window_handle,
+                    this.pr_created_handler(cx),
+                    context.clone(),
+                    window,
+                    cx,
+                  );
+                }
+              })),
+          )
+          .child(
+            // Reviewers, labels and projects live on github.com, not in our dialog.
+            Button::new("dock-panel-compare-on-github")
+              .ghost()
+              .xsmall()
+              .label("Open compare on GitHub")
+              .debug_selector(|| DOCK_PANEL_COMPARE_DEBUG_SELECTOR.to_string())
+              .on_click(move |_, _, cx| {
+                open_compare_target(
+                  context.owner.clone(),
+                  context.repo.clone(),
+                  context.branch.clone(),
                   cx,
                 );
-              })),
+              }),
           )
           .into_any_element()
       }
@@ -1421,6 +1443,50 @@ mod tests {
     cx.run_until_parked();
 
     assert!(!git::is_merge_in_progress(&repo.path).expect("merge state"));
+  }
+
+  #[gpui::test]
+  async fn a_branch_without_a_pull_request_offers_both_ways_to_open_one(cx: &mut TestAppContext) {
+    cx.update(|cx| gpui_component::init(cx));
+    let repo = TempRepo::init("dock-panel-create-pr");
+    commit_text_file(&repo.path, Path::new("a.txt"), "v1\n", "initial");
+
+    let (panel, cx) = add_dock_panel_window(Some(repo.path.clone()), cx);
+    cx.executor().allow_parking();
+    await_refresh(&panel, cx).await;
+
+    panel.update(cx, |panel, cx| {
+      panel.branch_pr = BranchPrState::Missing(GithubBranchContext {
+        owner: "acme".to_string(),
+        repo: "widget".to_string(),
+        branch: "feature".to_string(),
+      });
+      panel.active_tab = DockPanelTab::PullRequest;
+      cx.notify();
+    });
+    cx.run_until_parked();
+
+    assert!(
+      cx.debug_bounds(DOCK_PANEL_CREATE_PR_DEBUG_SELECTOR)
+        .is_some(),
+      "the dialog stays the default path"
+    );
+    assert!(
+      cx.debug_bounds(DOCK_PANEL_COMPARE_DEBUG_SELECTOR).is_some(),
+      "github.com covers what the dialog does not"
+    );
+
+    // A branch that already has a pull request offers neither.
+    panel.update(cx, |panel, cx| {
+      panel.branch_pr = BranchPrState::NoRemote;
+      cx.notify();
+    });
+    cx.run_until_parked();
+    assert!(
+      cx.debug_bounds(DOCK_PANEL_CREATE_PR_DEBUG_SELECTOR)
+        .is_none()
+    );
+    assert!(cx.debug_bounds(DOCK_PANEL_COMPARE_DEBUG_SELECTOR).is_none());
   }
 
   #[gpui::test]
