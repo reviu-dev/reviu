@@ -92,6 +92,10 @@ Opening a `.md` or `.svg` in the Sessions workspace showed raw text. A Preview b
 
 The Sessions workspace applied the whitespace setting when opening a file but gave you no way to change your mind. The diff header now carries the same Whitespace button as the Git page, with `cmd-alt-/`, and the choice holds for the rest of the session instead of resetting on every file. A file with no pending change, or a file being previewed, has no diff on screen: the button steps aside there, like the inline/split control.
 
+### Send A Selection To The Agent From The Sessions Workspace
+
+Selecting lines in the diff and pressing `cmd-shift-l` attaches them to your next message, without leaving the workspace: the agent is right there. `cmd-f` searches the open file from anywhere in the workspace, not only when the editor already has focus, and Escape closes the search before it closes the file.
+
 ### Branches, Stashes And Cherry-Pick In The Sessions Workspace
 
 The palette of the Sessions workspace now carries the commands that need a list: switch, create and delete a branch, merge or rebase onto one, cherry-pick commits, stash (with or without untracked files), then apply, pop or drop a stash. Switching branch is refused while the agent is mid-turn, for the same reason switching repository is: the ground cannot move under a running turn.

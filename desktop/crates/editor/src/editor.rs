@@ -3302,6 +3302,10 @@ impl Editor {
     self.select_find_match(previous_index, line_height, true, cx);
   }
 
+  pub fn is_find_panel_open(&self) -> bool {
+    self.find_panel_open
+  }
+
   pub fn find_panel_occludes_display_line(&self, display_line: usize) -> bool {
     if !self.find_panel_open {
       return false;

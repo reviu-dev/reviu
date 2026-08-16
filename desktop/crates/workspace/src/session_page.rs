@@ -821,6 +821,40 @@ impl SessionPage {
     NavigationHistory::navigate_back(cx);
   }
 
+  /// The editor handles `cmd-f` when it has focus; this catches it when the
+  /// focus sits in the dock instead.
+  fn find_action(&mut self, action: &editor::Find, window: &mut Window, cx: &mut Context<Self>) {
+    let Some(editor) = self.diff_editor() else {
+      return;
+    };
+    editor.update(cx, |editor, cx| editor::find(editor, action, window, cx));
+    cx.stop_propagation();
+  }
+
+  /// The selection of the open diff becomes context for the next prompt.
+  fn add_selection_to_agent_action(
+    &mut self,
+    _: &crate::AddSelectionToAgent,
+    window: &mut Window,
+    cx: &mut Context<Self>,
+  ) {
+    cx.stop_propagation();
+    let Some(editor) = self.diff_editor() else {
+      window.push_notification(Notification::info("Open a file diff first"), cx);
+      return;
+    };
+    let Some(text) = editor.read(cx).selected_text_for_copy(cx) else {
+      window.push_notification(Notification::info("Select code in the diff first"), cx);
+      return;
+    };
+    let path = self
+      .selected_file
+      .as_ref()
+      .map(|path| path.to_string_lossy().to_string())
+      .unwrap_or_else(|| "selection".to_string());
+    self.deliver_selection_context(path, text, window, cx);
+  }
+
   /// Escape is bound to the editor's CloseFind; it bubbles up here when there was
   /// no find panel to close, which is our cue to close the file view.
   fn close_file_view_action(

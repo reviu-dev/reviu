@@ -794,6 +794,8 @@ impl Render for SessionPage {
       .track_focus(&self.focus_handle)
       .on_action(cx.listener(Self::close_workspace_page_action))
       .on_action(cx.listener(Self::close_file_view_action))
+      .on_action(cx.listener(Self::find_action))
+      .on_action(cx.listener(Self::add_selection_to_agent_action))
       .on_action(cx.listener(Self::show_command_palette_action))
       .on_action(cx.listener(Self::show_file_search_action))
       .on_action(cx.listener(Self::send_review_comments_to_agent_action))
@@ -1495,6 +1497,105 @@ mod tests {
     cx.run_until_parked();
     page.read_with(cx, |page, _| {
       assert_eq!(page.diff_view, DiffViewMode::Split);
+    });
+  }
+
+  #[gpui::test]
+  async fn find_opens_on_the_file_and_escape_closes_the_search_first(cx: &mut TestAppContext) {
+    let repo = TempRepo::init("session-render-find");
+    commit_text_file(&repo.path, Path::new("a.txt"), "v1\n", "initial");
+    std::fs::write(repo.path.join("a.txt"), "v2\n").expect("update file");
+
+    let (page, cx) = add_session_page_window(repo.path.clone(), cx);
+    cx.executor().allow_parking();
+    cx.run_until_parked();
+
+    page.update_in(cx, |page, window, cx| {
+      page.open_diff(PathBuf::from("a.txt"), None, window, cx);
+    });
+    await_open_file(&page, cx).await;
+
+    let find_open = |page: &Entity<SessionPage>, cx: &mut gpui::VisualTestContext| {
+      page.read_with(cx, |page, cx| {
+        page
+          .editor
+          .as_ref()
+          .expect("editor")
+          .read(cx)
+          .is_find_panel_open()
+      })
+    };
+    assert!(!find_open(&page, cx));
+
+    page.update_in(cx, |page, window, cx| {
+      page.find_action(&editor::Find, window, cx)
+    });
+    cx.run_until_parked();
+    assert!(find_open(&page, cx), "cmd-f opens the search on the diff");
+
+    // Escape closes the search, and the file stays open.
+    page.update_in(cx, |page, window, cx| {
+      let editor = page.editor.clone().expect("editor");
+      editor.update(cx, |editor, cx| {
+        editor::close_find(editor, &editor::CloseFind, window, cx)
+      });
+    });
+    cx.run_until_parked();
+    assert!(!find_open(&page, cx));
+    page.read_with(cx, |page, _| {
+      assert_eq!(page.center, CenterView::Diff);
+      assert!(page.selected_file.is_some());
+    });
+
+    // With no search left to close, escape closes the file.
+    page.update_in(cx, |page, window, cx| {
+      page.close_file_view_action(&editor::CloseFind, window, cx)
+    });
+    page.read_with(cx, |page, _| {
+      assert_eq!(page.center, CenterView::Conversation);
+    });
+  }
+
+  #[gpui::test]
+  async fn sending_a_selection_needs_a_file_and_a_selection(cx: &mut TestAppContext) {
+    let repo = TempRepo::init("session-render-selection");
+    commit_text_file(&repo.path, Path::new("a.txt"), "v1\n", "initial");
+    std::fs::write(repo.path.join("a.txt"), "v2\n").expect("update file");
+
+    let (page, cx) = add_session_page_window(repo.path.clone(), cx);
+    cx.executor().allow_parking();
+    cx.run_until_parked();
+
+    // No diff on screen: the shell says so instead of spawning an agent.
+    page.update_in(cx, |page, window, cx| {
+      page.add_selection_to_agent_action(&crate::AddSelectionToAgent, window, cx)
+    });
+    cx.run_until_parked();
+    page.read_with(cx, |page, _| {
+      assert!(page.agent_chat_view.is_none(), "no agent was started");
+    });
+
+    page.update_in(cx, |page, window, cx| {
+      page.open_diff(PathBuf::from("a.txt"), None, window, cx);
+    });
+    await_open_file(&page, cx).await;
+
+    // A diff, but nothing selected: same, nothing is delivered.
+    page.update_in(cx, |page, window, cx| {
+      page.add_selection_to_agent_action(&crate::AddSelectionToAgent, window, cx)
+    });
+    cx.run_until_parked();
+    page.read_with(cx, |page, cx| {
+      assert!(
+        page
+          .editor
+          .as_ref()
+          .expect("editor")
+          .read(cx)
+          .selected_text_for_copy(cx)
+          .is_none()
+      );
+      assert!(page.agent_chat_view.is_none());
     });
   }
 
