@@ -51,6 +51,7 @@ use ui::{
 
 const DIFF_VIEW_TOGGLE_DEBUG_SELECTOR: &str = "session-diff-view-toggle";
 const PREVIEW_TOGGLE_DEBUG_SELECTOR: &str = "session-preview-toggle";
+const WHITESPACE_TOGGLE_DEBUG_SELECTOR: &str = "session-whitespace-toggle";
 const PREVIEW_PANE_DEBUG_SELECTOR: &str = "session-preview-pane";
 const REPO_CONTEXT_DEBUG_SELECTOR: &str = "session-repo-context";
 const REPO_AHEAD_DEBUG_SELECTOR: &str = "session-repo-ahead";
@@ -186,6 +187,7 @@ pub struct SessionPage {
   agent_review: AgentReviewComments,
   branch_status: Option<git::BranchStatus>,
   diff_view: DiffViewMode,
+  hide_whitespace: bool,
   show_preview: bool,
   svg_preview: Entity<SvgPreview>,
   // Review export waiting for the agent connection to become ready.
@@ -233,6 +235,7 @@ impl SessionPage {
       agent_review: AgentReviewComments::new(),
       branch_status: None,
       diff_view: DiffViewMode::Inline,
+      hide_whitespace: false,
       show_preview: false,
       svg_preview,
       pending_review_export: None,
@@ -475,7 +478,11 @@ impl SessionPage {
       DiffViewMode::Inline
     };
     let diff_view = self.effective_diff_view(&rel_path, cx);
-    let hide_whitespace = app_settings.hide_whitespace;
+    // Reading preference for the session, seeded from the settings once.
+    if self.selected_file.is_none() {
+      self.hide_whitespace = app_settings.hide_whitespace;
+    }
+    let hide_whitespace = self.hide_whitespace;
     // Agent line numbers are 1-based; the editor reveals by 0-based doc line.
     let reveal_doc_line = reveal_line.map(|line| line.saturating_sub(1) as usize);
 
@@ -633,6 +640,28 @@ impl SessionPage {
   ) {
     self.toggle_diff_view(cx);
     cx.stop_propagation();
+  }
+
+  fn toggle_hide_whitespace_action(
+    &mut self,
+    _: &crate::ToggleHideWhitespace,
+    _window: &mut Window,
+    cx: &mut Context<Self>,
+  ) {
+    self.toggle_hide_whitespace(cx);
+    cx.stop_propagation();
+  }
+
+  fn toggle_hide_whitespace(&mut self, cx: &mut Context<Self>) {
+    if self.center != CenterView::Diff {
+      return;
+    }
+    self.hide_whitespace = !self.hide_whitespace;
+    if let Some(editor) = self.editor.as_ref() {
+      let value = self.hide_whitespace;
+      editor.update(cx, |editor, cx| editor.set_ignore_whitespace(value, cx));
+    }
+    cx.notify();
   }
 
   fn toggle_diff_view(&mut self, cx: &mut Context<Self>) {
@@ -1772,6 +1801,32 @@ impl SessionPage {
       })
       .when(
         self.editor.is_some()
+          && self.binary_preview.is_none()
+          && !(self.show_preview && self.previewable()),
+        |this| {
+          let hide_whitespace = self.hide_whitespace;
+          this.child(
+            Button::new("session-page-whitespace-toggle")
+              .debug_selector(|| WHITESPACE_TOGGLE_DEBUG_SELECTOR.to_string())
+              .label("Whitespace")
+              .icon(if hide_whitespace {
+                gpui_component::IconName::Eye
+              } else {
+                gpui_component::IconName::EyeOff
+              })
+              .xsmall()
+              .ghost()
+              .tooltip(if hide_whitespace {
+                "Show whitespace changes"
+              } else {
+                "Hide whitespace changes"
+              })
+              .on_click(cx.listener(|this, _, _, cx| this.toggle_hide_whitespace(cx))),
+          )
+        },
+      )
+      .when(
+        self.editor.is_some()
           && self.selected_file_has_changes(cx)
           && !(self.show_preview && self.previewable()),
         |this| {
@@ -1913,6 +1968,7 @@ impl Render for SessionPage {
       .on_action(cx.listener(Self::send_review_comments_to_agent_action))
       .on_action(cx.listener(Self::comment_hunk_action))
       .on_action(cx.listener(Self::toggle_diff_view_action))
+      .on_action(cx.listener(Self::toggle_hide_whitespace_action))
       .child(
         ui::h_resizable("session-page-shell")
           .child(
@@ -3076,5 +3132,75 @@ mod tests {
 
     page.read_with(cx, |page, _| assert!(!page.show_preview));
     assert!(cx.debug_bounds(PREVIEW_PANE_DEBUG_SELECTOR).is_none());
+  }
+
+  #[gpui::test]
+  async fn the_whitespace_toggle_reaches_the_editor_and_survives_the_next_file(
+    cx: &mut TestAppContext,
+  ) {
+    let repo = TempRepo::init("session-page-whitespace");
+    commit_text_file(&repo.path, Path::new("a.rs"), "fn main() {}\n", "initial");
+    commit_text_file(&repo.path, Path::new("b.rs"), "fn other() {}\n", "second");
+    std::fs::write(repo.path.join("a.rs"), "fn main() { }\n").expect("update a");
+    std::fs::write(repo.path.join("b.rs"), "fn other() { }\n").expect("update b");
+
+    let (page, cx) = add_session_page_window(repo.path.clone(), cx);
+    cx.executor().allow_parking();
+    cx.run_until_parked();
+
+    page.update_in(cx, |page, window, cx| {
+      page.open_diff(PathBuf::from("a.rs"), None, window, cx);
+    });
+    await_open_file(&page, cx).await;
+    page.update(cx, |_, cx| cx.notify());
+    cx.run_until_parked();
+
+    page.read_with(cx, |page, cx| {
+      assert!(!page.hide_whitespace);
+      assert!(
+        !page
+          .editor
+          .as_ref()
+          .expect("editor")
+          .read(cx)
+          .ignore_whitespace()
+      );
+    });
+
+    let toggle = cx
+      .debug_bounds(WHITESPACE_TOGGLE_DEBUG_SELECTOR)
+      .expect("whitespace toggle bounds");
+    cx.simulate_click(toggle.center(), gpui::Modifiers::default());
+    cx.run_until_parked();
+
+    page.read_with(cx, |page, cx| {
+      assert!(page.hide_whitespace);
+      assert!(
+        page
+          .editor
+          .as_ref()
+          .expect("editor")
+          .read(cx)
+          .ignore_whitespace()
+      );
+    });
+
+    // A reading preference for the session, not a per-file one.
+    page.update_in(cx, |page, window, cx| {
+      page.open_diff(PathBuf::from("b.rs"), None, window, cx);
+    });
+    await_open_file(&page, cx).await;
+
+    page.read_with(cx, |page, cx| {
+      assert!(page.hide_whitespace);
+      assert!(
+        page
+          .editor
+          .as_ref()
+          .expect("editor")
+          .read(cx)
+          .ignore_whitespace()
+      );
+    });
   }
 }

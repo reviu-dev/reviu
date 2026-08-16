@@ -88,6 +88,10 @@ The diff in the Sessions workspace was stuck on whatever the settings said. It n
 
 Opening a `.md` or `.svg` in the Sessions workspace showed raw text. A Preview button in the diff header now swaps the pane for the rendered file, and Code brings the diff back. While the rendered file is up, the inline/split control steps aside: there is no diff on screen to switch. Previewing is a detour rather than a mode, so opening the next file shows its code again.
 
+### Hide Whitespace Changes In The Sessions Workspace
+
+The Sessions workspace applied the whitespace setting when opening a file but gave you no way to change your mind. The diff header now carries the same Whitespace button as the Git page, with `cmd-alt-/`, and the choice holds for the rest of the session instead of resetting on every file.
+
 ## 0.18.0
 
 ### No More Failed Single Comments During A Review
