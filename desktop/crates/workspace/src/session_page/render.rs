@@ -1550,12 +1550,95 @@ mod tests {
       page.open_changes_action(&crate::OpenGitChangesSidebar, window, cx)
     });
     cx.run_until_parked();
-    page.read_with(cx, |page, cx| {
-      assert_eq!(
-        page.dock_panel.read(cx).active_tab(),
-        crate::dock_panel::DockPanelTab::Changes
+    page.update_in(cx, |page, window, cx| {
+      let panel = page.dock_panel.read(cx);
+      assert_eq!(panel.active_tab(), crate::dock_panel::DockPanelTab::Changes);
+      assert!(
+        panel.changes_list().read(cx).is_focused(window, cx),
+        "the keyboard keeps going in the list the shortcut opened"
       );
     });
+  }
+
+  #[gpui::test]
+  async fn a_sync_shortcut_runs_nothing_when_its_command_cannot(cx: &mut TestAppContext) {
+    let (repo, remote, branch) = {
+      let repo = TempRepo::init("session-render-sync-shortcut");
+      let remote = crate::test_support::TempBareRepo::init("session-render-sync-remote");
+      commit_text_file(&repo.path, Path::new("a.txt"), "v1\n", "initial");
+      git2::Repository::open(&repo.path)
+        .expect("open repo")
+        .remote("origin", remote.path.to_str().expect("remote path utf8"))
+        .expect("add origin");
+      let branch = git::current_branch_status(&repo.path)
+        .expect("branch status")
+        .name;
+      crate::test_support::push_branch_to_remote(&repo.path, &branch, "origin");
+      crate::test_support::set_upstream(&repo.path, &branch, &format!("origin/{branch}"));
+      (repo, remote, branch)
+    };
+
+    let (page, cx) = add_session_page_window(repo.path.clone(), cx);
+    cx.executor().allow_parking();
+    page.update(cx, |page, cx| page.refresh_branch(cx));
+    await_branch_refresh(&page, cx).await;
+
+    // Nothing ahead: the shortcut is inert.
+    page.update_in(cx, |page, window, cx| {
+      page.push_changes_action(&crate::PushChanges, window, cx)
+    });
+    page.read_with(cx, |page, _| {
+      assert!(
+        page._repo_command_task.is_none(),
+        "pressing push with nothing to push starts no command"
+      );
+    });
+
+    // One commit ahead: the same key pushes.
+    commit_text_file(&repo.path, Path::new("a.txt"), "v2\n", "ahead");
+    page.update(cx, |page, cx| page.refresh_branch(cx));
+    await_branch_refresh(&page, cx).await;
+    page.update_in(cx, |page, window, cx| {
+      page.push_changes_action(&crate::PushChanges, window, cx)
+    });
+    let command = page.update(cx, |page, _| {
+      page._repo_command_task.take().expect("push task")
+    });
+    command.await;
+    cx.run_until_parked();
+
+    assert_eq!(
+      crate::test_support::remote_branch_oid(&remote.path, &branch),
+      crate::test_support::head_oid(&repo.path)
+    );
+  }
+
+  #[gpui::test]
+  async fn the_branch_switcher_needs_branches(cx: &mut TestAppContext) {
+    let repo = TempRepo::init("session-render-branch-switcher");
+    commit_text_file(&repo.path, Path::new("a.txt"), "v1\n", "initial");
+
+    let (page, cx) = add_session_page_window(repo.path.clone(), cx);
+    cx.executor().allow_parking();
+    cx.run_until_parked();
+
+    // Branches are not loaded yet: the shortcut opens nothing.
+    page.update_in(cx, |page, window, cx| {
+      page.show_branch_switcher_action(&crate::ShowBranchSwitcher, window, cx)
+    });
+    cx.run_until_parked();
+    assert!(!cx.update(|window, cx| window.has_active_dialog(cx)));
+
+    page.update(cx, |page, cx| page.refresh_branch(cx));
+    await_branch_refresh(&page, cx).await;
+    page.update_in(cx, |page, window, cx| {
+      page.show_branch_switcher_action(&crate::ShowBranchSwitcher, window, cx)
+    });
+    cx.run_until_parked();
+    assert!(
+      cx.update(|window, cx| window.has_active_dialog(cx)),
+      "the palette opens on the branch screen"
+    );
   }
 
   #[gpui::test]
