@@ -48,6 +48,7 @@ mod active_local_repo;
 mod agent_review;
 mod agent_settings;
 mod analytics;
+mod annotations;
 mod api;
 pub mod app_log;
 mod app_profile;

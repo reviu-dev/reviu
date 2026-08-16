@@ -700,11 +700,10 @@ impl GitPage {
     } else {
       selected_entry.as_ref().map(|entry| entry.status)
     };
-    let annotation_navigation =
-      Self::annotation_navigation_state_for(file_status, editor_state, cx);
-    let can_navigate_annotations = Self::can_navigate_annotations(annotation_navigation);
+    let annotation_navigation = annotation_navigation_state_for(file_status, editor_state, cx);
+    let can_navigate_annotations = can_navigate_annotations(annotation_navigation);
     let show_accept_all_conflict_actions = matches!(file_status, Some(RepoStatusKind::Conflicted));
-    let can_accept_all_conflicts = Self::can_accept_all_conflicts(
+    let can_accept_all_conflicts = can_accept_all_conflicts(
       file_status,
       editor_state.is_read_only,
       editor_state.has_unresolved_conflict_markers(cx),

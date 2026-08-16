@@ -1,6 +1,7 @@
 //! Everything the shell paints: sidebar, center, diff header, dock.
 
 use super::*;
+use crate::annotations::AnnotationKind;
 
 impl SessionPage {
   /// Ahead/behind counter that runs the matching sync command when clicked.
@@ -499,6 +500,68 @@ impl SessionPage {
           .on_click(cx.listener(|this, _, window, cx| this.close_diff(window, cx))),
       )
       .children(file_title)
+      .when(self.can_accept_all_conflicts(cx), |this| {
+        this
+          .child(
+            Button::new("session-page-accept-all-current")
+              .label("Accept All Current")
+              .debug_selector(|| ACCEPT_ALL_CURRENT_DEBUG_SELECTOR.to_string())
+              .xsmall()
+              .ghost()
+              .on_click(cx.listener(|this, _, _, cx| {
+                this.resolve_all_conflicts(ConflictResolution::Current, cx)
+              })),
+          )
+          .child(
+            Button::new("session-page-accept-all-incoming")
+              .label("Accept All Incoming")
+              .debug_selector(|| ACCEPT_ALL_INCOMING_DEBUG_SELECTOR.to_string())
+              .xsmall()
+              .ghost()
+              .on_click(cx.listener(|this, _, _, cx| {
+                this.resolve_all_conflicts(ConflictResolution::Incoming, cx)
+              })),
+          )
+      })
+      .when_some(self.annotation_navigation(cx), |this, state| {
+        let (previous_tooltip, next_tooltip) = match state.kind {
+          AnnotationKind::Conflict => ("Previous conflict", "Next conflict"),
+          AnnotationKind::Change => ("Previous change", "Next change"),
+        };
+        let enabled = can_navigate_annotations(Some(state));
+        this
+          .child(
+            div()
+              .text_xs()
+              .text_color(theme.muted_foreground)
+              .debug_selector(|| ANNOTATION_COUNTER_DEBUG_SELECTOR.to_string())
+              .child(format!("{}/{}", state.active_index + 1, state.total)),
+          )
+          .child(
+            Button::new("session-page-annotation-prev")
+              .icon(gpui_component::IconName::ArrowUp)
+              .xsmall()
+              .ghost()
+              .compact()
+              .tooltip(previous_tooltip)
+              .disabled(!enabled)
+              .on_click(cx.listener(|this, _, _, cx| {
+                this.navigate_change(AnnotationDirection::Previous, cx)
+              })),
+          )
+          .child(
+            Button::new("session-page-annotation-next")
+              .icon(gpui_component::IconName::ArrowDown)
+              .xsmall()
+              .ghost()
+              .compact()
+              .tooltip(next_tooltip)
+              .disabled(!enabled)
+              .on_click(
+                cx.listener(|this, _, _, cx| this.navigate_change(AnnotationDirection::Next, cx)),
+              ),
+          )
+      })
       .when(self.editor.is_some() && self.previewable(), |this| {
         let (label, icon) = if self.show_preview {
           ("Code", UiIconName::FileCode)
@@ -1386,6 +1449,120 @@ mod tests {
   }
 
   #[gpui::test]
+  async fn a_conflicted_file_offers_to_accept_a_side_and_walks_conflicts(cx: &mut TestAppContext) {
+    let repo = TempRepo::init("session-render-conflicts");
+    let base_contents = (1..=12)
+      .map(|line| format!("line {line}\n"))
+      .collect::<String>();
+    commit_text_file(&repo.path, Path::new("a.txt"), &base_contents, "initial");
+    let base = git::BranchRef {
+      name: git::current_branch_status(&repo.path)
+        .expect("branch status")
+        .name,
+      kind: git::BranchKind::Local,
+    };
+    let feature = git::BranchRef {
+      name: "feature".to_string(),
+      kind: git::BranchKind::Local,
+    };
+    git::create_branch(&repo.path, &feature.name).expect("create branch");
+    git::switch_branch(&repo.path, &feature).expect("switch to feature");
+    // Two conflicting areas, so navigating between conflicts has somewhere to go.
+    let feature_contents = base_contents
+      .replace("line 2\n", "line 2 feature\n")
+      .replace("line 11\n", "line 11 feature\n");
+    commit_text_file(
+      &repo.path,
+      Path::new("a.txt"),
+      &feature_contents,
+      "feature work",
+    );
+    git::switch_branch(&repo.path, &base).expect("switch back");
+    let main_contents = base_contents
+      .replace("line 2\n", "line 2 main\n")
+      .replace("line 11\n", "line 11 main\n");
+    commit_text_file(&repo.path, Path::new("a.txt"), &main_contents, "main work");
+    let _ = git::merge_branch(&repo.path, &feature);
+
+    let (page, cx) = add_session_page_window(repo.path.clone(), cx);
+    cx.executor().allow_parking();
+    let refresh = page.update(cx, |page, cx| {
+      page.dock_panel.update(cx, |panel, cx| {
+        panel.refresh(cx);
+        panel._refresh_task.take().expect("refresh task")
+      })
+    });
+    refresh.await;
+    cx.run_until_parked();
+
+    page.update_in(cx, |page, window, cx| {
+      page.open_diff(PathBuf::from("a.txt"), None, window, cx);
+    });
+    await_open_file(&page, cx).await;
+    page.update(cx, |_, cx| cx.notify());
+    cx.run_until_parked();
+
+    page.read_with(cx, |page, cx| {
+      assert_eq!(
+        page.selected_file_status(cx),
+        Some(git::RepoStatusKind::Conflicted)
+      );
+      assert!(page.can_accept_all_conflicts(cx));
+      // The counter walks conflicts, not hunks.
+      let navigation = page.annotation_navigation(cx).expect("navigation state");
+      assert_eq!(navigation.kind, AnnotationKind::Conflict);
+      assert_eq!(navigation.total, 2);
+      assert_eq!(navigation.active_index, 0);
+    });
+
+    // The shortcut walks conflicts here, not hunks.
+    page.update(cx, |page, cx| {
+      page.navigate_change(AnnotationDirection::Next, cx);
+      let navigation = page.annotation_navigation(cx).expect("navigation state");
+      assert_eq!(navigation.active_index, 1);
+      assert_eq!(navigation.kind, AnnotationKind::Conflict);
+    });
+
+    let accept = cx
+      .debug_bounds(ACCEPT_ALL_CURRENT_DEBUG_SELECTOR)
+      .expect("accept all current bounds");
+    assert!(
+      cx.debug_bounds(ACCEPT_ALL_INCOMING_DEBUG_SELECTOR)
+        .is_some(),
+      "both sides are offered"
+    );
+    assert!(cx.debug_bounds(ANNOTATION_COUNTER_DEBUG_SELECTOR).is_some());
+    cx.simulate_click(accept.center(), gpui::Modifiers::default());
+    cx.run_until_parked();
+
+    page.read_with(cx, |page, cx| {
+      let editor = page.editor.as_ref().expect("editor").read(cx);
+      assert!(
+        !editor.has_unresolved_conflict_markers(cx),
+        "accepting a side resolves every conflict of the file"
+      );
+      assert!(
+        !page.can_accept_all_conflicts(cx),
+        "nothing left to accept once the markers are gone"
+      );
+    });
+    // Current side of a merge is what HEAD held.
+    page.read_with(cx, |page, cx| {
+      let first_line = page
+        .editor
+        .as_ref()
+        .expect("editor")
+        .read(cx)
+        .document()
+        .read(cx)
+        .line_content(0)
+        .expect("first line")
+        .to_string();
+      assert_eq!(first_line.trim_end(), "line 1");
+    });
+  }
+
+  #[gpui::test]
   async fn walking_the_changes_moves_through_the_hunks(cx: &mut TestAppContext) {
     let repo = TempRepo::init("session-page-walk-changes");
     let original = (1..=60)
@@ -1425,19 +1602,19 @@ mod tests {
     });
 
     page.update(cx, |page, cx| {
-      page.navigate_change(HunkNavigationDirection::Next, cx);
+      page.navigate_change(AnnotationDirection::Next, cx);
       assert_eq!(hunk_state(page, cx).active_index, 1);
 
       // Walking past the last change comes back to the first.
-      page.navigate_change(HunkNavigationDirection::Next, cx);
+      page.navigate_change(AnnotationDirection::Next, cx);
       assert_eq!(hunk_state(page, cx).active_index, 0);
 
-      page.navigate_change(HunkNavigationDirection::Previous, cx);
+      page.navigate_change(AnnotationDirection::Previous, cx);
       assert_eq!(hunk_state(page, cx).active_index, 1);
 
       // A rendered file has no changes to walk.
       page.toggle_preview(cx);
-      page.navigate_change(HunkNavigationDirection::Next, cx);
+      page.navigate_change(AnnotationDirection::Next, cx);
       assert_eq!(hunk_state(page, cx).active_index, 1);
     });
   }

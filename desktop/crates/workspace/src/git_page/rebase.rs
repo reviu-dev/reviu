@@ -971,31 +971,6 @@ mod tests {
   }
 
   #[test]
-  fn accept_all_conflict_command_rules_match_editor_header_rules() {
-    assert!(GitPage::can_accept_all_conflicts(
-      Some(RepoStatusKind::Conflicted),
-      false,
-      true,
-    ));
-    assert!(!GitPage::can_accept_all_conflicts(
-      Some(RepoStatusKind::Conflicted),
-      true,
-      true,
-    ));
-    assert!(!GitPage::can_accept_all_conflicts(
-      Some(RepoStatusKind::Conflicted),
-      false,
-      false,
-    ));
-    assert!(!GitPage::can_accept_all_conflicts(
-      Some(RepoStatusKind::Modified),
-      false,
-      true,
-    ));
-    assert!(!GitPage::can_accept_all_conflicts(None, false, true));
-  }
-
-  #[test]
   fn has_conflicted_entries_detects_conflict_status() {
     let clean_entries = vec![
       make_status_entry("src/a.rs", RepoStage::Unstaged),

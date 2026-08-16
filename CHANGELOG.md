@@ -92,6 +92,10 @@ Opening a `.md` or `.svg` in the Sessions workspace showed raw text. A Preview b
 
 The Sessions workspace applied the whitespace setting when opening a file but gave you no way to change your mind. The diff header now carries the same Whitespace button as the Git page, with `cmd-alt-/`, and the choice holds for the rest of the session instead of resetting on every file. A file with no pending change, or a file being previewed, has no diff on screen: the button steps aside there, like the inline/split control.
 
+### Resolve Conflicts In The Sessions Workspace
+
+A conflicted file opened in the Sessions workspace now carries the same tools as the Git page: Accept All Current and Accept All Incoming in the diff header, and the same two commands in the palette. The arrows next to them, and `cmd-alt-up` / `cmd-alt-down`, walk conflict by conflict on a conflicted file and change by change everywhere else, with a counter saying where you are.
+
 ### Finish A Rebase Or A Merge From The Sessions Workspace
 
 A rebase stopped on a conflict used to leave the Sessions workspace with a Commit button that could not help. The right panel now says which operation is running, and Commit becomes Continue rebase, enabled once the conflicts are resolved and staged. The palette follows: Rebase continue, Rebase skip, Abort rebase and Abort merge appear only while there is something to continue or abort, and the commit message git prepared for the merge lands in the box on its own.

@@ -6,7 +6,7 @@ use std::sync::Arc;
 
 use agent_chat_panel::{AgentChatPanel, AgentChatPanelEvent, ConversationMeta};
 use editor::{
-  DiffViewMode, Editor, EditorEvent, HunkNavigationDirection, ReviewCommentCreateHandler,
+  ConflictResolution, DiffViewMode, Editor, EditorEvent, ReviewCommentCreateHandler,
   ReviewCommentCreateRequest, ReviewCommentDeleteHandler, ReviewCommentDisplayMode,
   ReviewCommentEditHandler,
 };
@@ -39,8 +39,14 @@ use crate::git_page::{
 };
 use crate::github_notifications::{self, GithubNotificationsStore};
 use crate::navigation::NavigationHistory;
+use git::RepoStatusKind;
+
+use crate::annotations::{
+  AnnotationDirection, AnnotationNavigationState, annotation_navigation_state_for,
+  can_navigate_annotations, navigate_annotation,
+};
 use crate::repo_command::{RepoCommand, RepoCommandOutcome};
-use crate::repo_state::{PaletteCommand, RepoState, push_flags};
+use crate::repo_state::{PaletteCommand, RepoState, can_accept_all_conflicts, push_flags};
 use crate::svg_preview::SvgPreview;
 use crate::{
   CloseWorkspacePage, CommentHunk, SendReviewCommentsToAgent, ShowCommandPalette, ShowFileSearch,
@@ -55,6 +61,9 @@ use ui::{
 const DIFF_VIEW_TOGGLE_DEBUG_SELECTOR: &str = "session-diff-view-toggle";
 const PREVIEW_TOGGLE_DEBUG_SELECTOR: &str = "session-preview-toggle";
 const WHITESPACE_TOGGLE_DEBUG_SELECTOR: &str = "session-whitespace-toggle";
+const ACCEPT_ALL_CURRENT_DEBUG_SELECTOR: &str = "session-accept-all-current";
+const ACCEPT_ALL_INCOMING_DEBUG_SELECTOR: &str = "session-accept-all-incoming";
+const ANNOTATION_COUNTER_DEBUG_SELECTOR: &str = "session-annotation-counter";
 const PREVIEW_PANE_DEBUG_SELECTOR: &str = "session-preview-pane";
 const REPO_CONTEXT_DEBUG_SELECTOR: &str = "session-repo-context";
 const REPO_AHEAD_DEBUG_SELECTOR: &str = "session-repo-ahead";
@@ -539,7 +548,7 @@ impl SessionPage {
     _window: &mut Window,
     cx: &mut Context<Self>,
   ) {
-    self.navigate_change(HunkNavigationDirection::Previous, cx);
+    self.navigate_change(AnnotationDirection::Previous, cx);
   }
 
   fn next_annotation_action(
@@ -548,19 +557,72 @@ impl SessionPage {
     _window: &mut Window,
     cx: &mut Context<Self>,
   ) {
-    self.navigate_change(HunkNavigationDirection::Next, cx);
+    self.navigate_change(AnnotationDirection::Next, cx);
   }
 
-  fn navigate_change(&mut self, direction: HunkNavigationDirection, cx: &mut Context<Self>) {
-    // A rendered file has no hunks to walk.
+  fn navigate_change(&mut self, direction: AnnotationDirection, cx: &mut Context<Self>) {
+    // A rendered file has nothing to walk.
     if self.center != CenterView::Diff || (self.show_preview && self.previewable()) {
       return;
     }
     let Some(editor) = self.editor.clone() else {
       return;
     };
-    editor.update(cx, |editor, cx| editor.navigate_hunk(direction, cx));
+    let file_status = self.selected_file_status(cx);
+    editor.update(cx, |editor, cx| {
+      navigate_annotation(editor, file_status, direction, cx)
+    });
     cx.stop_propagation();
+  }
+
+  /// The status of the open file, unless it comes from a commit: a snapshot has none.
+  fn selected_file_status(&self, cx: &App) -> Option<RepoStatusKind> {
+    if self.opened_commit.is_some() {
+      return None;
+    }
+    let path = self.selected_file.as_deref()?;
+    self
+      .dock_panel
+      .read(cx)
+      .status_entries()
+      .iter()
+      .find(|entry| entry.path == path)
+      .map(|entry| entry.status)
+  }
+
+  fn annotation_navigation(&self, cx: &App) -> Option<AnnotationNavigationState> {
+    let editor = self.editor.as_ref()?;
+    let file_status = self.selected_file_status(cx);
+    editor.read_with(cx, |editor, cx| {
+      annotation_navigation_state_for(file_status, editor, cx)
+    })
+  }
+
+  /// Accepting every conflict at once needs a conflicted file still holding markers.
+  fn can_accept_all_conflicts(&self, cx: &App) -> bool {
+    let file_status = self.selected_file_status(cx);
+    self.editor.as_ref().is_some_and(|editor| {
+      editor.read_with(cx, |editor, cx| {
+        can_accept_all_conflicts(
+          file_status,
+          editor.is_read_only,
+          editor.has_unresolved_conflict_markers(cx),
+        )
+      })
+    })
+  }
+
+  fn resolve_all_conflicts(&mut self, resolution: ConflictResolution, cx: &mut Context<Self>) {
+    if !self.can_accept_all_conflicts(cx) {
+      return;
+    }
+    let Some(editor) = self.editor.clone() else {
+      return;
+    };
+    editor.update(cx, |editor, cx| {
+      editor.resolve_all_conflicts(resolution, cx)
+    });
+    self.dock_panel.update(cx, |panel, cx| panel.refresh(cx));
   }
 
   fn toggle_hide_whitespace_action(
@@ -955,6 +1017,10 @@ impl SessionPage {
       if state.allows(PaletteCommand::Commit) {
         commands.push(CommandPaletteCommand::commit());
       }
+      if self.can_accept_all_conflicts(cx) {
+        commands.push(CommandPaletteCommand::accept_all_current_conflicts());
+        commands.push(CommandPaletteCommand::accept_all_incoming_conflicts());
+      }
       if state.allows(PaletteCommand::ContinueRebase) {
         commands.push(CommandPaletteCommand::continue_rebase());
       }
@@ -1030,6 +1096,14 @@ impl SessionPage {
           return Err("No repository selected.".into());
         }
         self.dock_panel.update(cx, |panel, cx| panel.commit(cx));
+        Ok(())
+      }
+      CommandPaletteAction::AcceptAllCurrentConflicts => {
+        self.resolve_all_conflicts(ConflictResolution::Current, cx);
+        Ok(())
+      }
+      CommandPaletteAction::AcceptAllIncomingConflicts => {
+        self.resolve_all_conflicts(ConflictResolution::Incoming, cx);
         Ok(())
       }
       CommandPaletteAction::ContinueRebase => {

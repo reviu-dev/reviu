@@ -7,9 +7,10 @@ use std::{
 };
 
 use agent_chat_panel::AgentChatPanel;
+#[cfg(test)]
+use editor::ConflictNavigationState;
 use editor::{
-  CloseFind, ConflictNavigationDirection, ConflictNavigationState, ConflictResolution,
-  DiffViewMode, Editor, Find, HunkAction, HunkNavigationDirection, HunkState,
+  CloseFind, ConflictResolution, DiffViewMode, Editor, Find, HunkAction, HunkState,
   ReviewCommentCancelHandler, ReviewCommentCreateHandler, ReviewCommentCreateRequest,
   ReviewCommentDeleteHandler, ReviewCommentDisplayMode, ReviewCommentEditHandler,
 };
@@ -206,41 +207,6 @@ enum GitCommitPrimaryButtonState {
   ContinueRebase,
   Commit,
   PublishBranch,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum AnnotationKind {
-  Conflict,
-  Change,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-struct AnnotationNavigationState {
-  active_index: usize,
-  total: usize,
-  kind: AnnotationKind,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum AnnotationDirection {
-  Previous,
-  Next,
-}
-
-impl AnnotationDirection {
-  fn conflict(self) -> ConflictNavigationDirection {
-    match self {
-      Self::Previous => ConflictNavigationDirection::Previous,
-      Self::Next => ConflictNavigationDirection::Next,
-    }
-  }
-
-  fn hunk(self) -> HunkNavigationDirection {
-    match self {
-      Self::Previous => HunkNavigationDirection::Previous,
-      Self::Next => HunkNavigationDirection::Next,
-    }
-  }
 }
 
 fn git_refresh_in_progress(status_loading: bool, branch_loading: bool) -> bool {
@@ -679,6 +645,12 @@ struct UnpublishedBranchCheckKey {
 }
 
 use crate::agent_review::AgentReviewComments;
+use crate::annotations::{
+  AnnotationDirection, AnnotationKind, annotation_navigation_state_for, can_navigate_annotations,
+  navigate_annotation,
+};
+#[cfg(test)]
+use crate::annotations::{AnnotationNavigationState, conflict_navigation_state_for};
 use crate::changes_list::{ChangesList, ChangesListEvent};
 use crate::diff_view_policy::{DiffViewInputs, effective_diff_view};
 use crate::history_list::{
@@ -3275,37 +3247,6 @@ impl GitPage {
       .find(|entry| &entry.path == selected)
   }
 
-  fn conflict_navigation_state_for(
-    file_status: Option<RepoStatusKind>,
-    editor: &Editor,
-    cx: &App,
-  ) -> Option<ConflictNavigationState> {
-    matches!(file_status, Some(RepoStatusKind::Conflicted))
-      .then(|| editor.conflict_navigation_state(cx))
-      .flatten()
-  }
-
-  fn annotation_navigation_state_for(
-    file_status: Option<RepoStatusKind>,
-    editor: &Editor,
-    cx: &App,
-  ) -> Option<AnnotationNavigationState> {
-    if let Some(state) = Self::conflict_navigation_state_for(file_status, editor, cx) {
-      return Some(AnnotationNavigationState {
-        active_index: state.active_index,
-        total: state.total,
-        kind: AnnotationKind::Conflict,
-      });
-    }
-    editor
-      .hunk_navigation_state(cx)
-      .map(|state| AnnotationNavigationState {
-        active_index: state.active_index,
-        total: state.total,
-        kind: AnnotationKind::Change,
-      })
-  }
-
   #[cfg(test)]
   fn editor_conflict_navigation_state(&self, cx: &App) -> Option<ConflictNavigationState> {
     let file_status = if self.history_opened_commit_file.is_some() {
@@ -3316,7 +3257,7 @@ impl GitPage {
 
     self.editor.as_ref().and_then(|editor| {
       editor.read_with(cx, |editor, cx| {
-        Self::conflict_navigation_state_for(file_status, editor, cx)
+        conflict_navigation_state_for(file_status, editor, cx)
       })
     })
   }
@@ -3331,13 +3272,9 @@ impl GitPage {
 
     self.editor.as_ref().and_then(|editor| {
       editor.read_with(cx, |editor, cx| {
-        Self::annotation_navigation_state_for(file_status, editor, cx)
+        annotation_navigation_state_for(file_status, editor, cx)
       })
     })
-  }
-
-  fn can_navigate_annotations(state: Option<AnnotationNavigationState>) -> bool {
-    state.is_some_and(|state| state.total > 1)
   }
 
   fn navigate_annotation_in_editor(
@@ -3355,28 +3292,12 @@ impl GitPage {
     };
 
     editor.update(cx, |editor, cx| {
-      let use_conflict_nav = matches!(file_status, Some(RepoStatusKind::Conflicted))
-        && editor.conflict_navigation_state(cx).is_some();
-      if use_conflict_nav {
-        editor.navigate_conflict(direction.conflict(), cx);
-      } else {
-        editor.navigate_hunk(direction.hunk(), cx);
-      }
+      navigate_annotation(editor, file_status, direction, cx)
     });
   }
 
   fn selected_file_status(&self) -> Option<RepoStatusKind> {
     self.selected_file_entry().map(|entry| entry.status)
-  }
-
-  fn can_accept_all_conflicts(
-    selected_status: Option<RepoStatusKind>,
-    is_read_only: bool,
-    has_unresolved_conflict_markers: bool,
-  ) -> bool {
-    matches!(selected_status, Some(RepoStatusKind::Conflicted))
-      && !is_read_only
-      && has_unresolved_conflict_markers
   }
 
   fn all_changes_staged(&self) -> bool {
@@ -3985,32 +3906,6 @@ mod tests {
     assert!(GitPage::branch_name_changed(Some(&main), None));
     assert!(!GitPage::branch_name_changed(None, None));
     assert!(!GitPage::branch_name_changed(Some(&main), Some(&main)));
-  }
-
-  #[test]
-  fn can_navigate_annotations_requires_multiple_annotations() {
-    assert!(!GitPage::can_navigate_annotations(None));
-    assert!(!GitPage::can_navigate_annotations(Some(
-      AnnotationNavigationState {
-        active_index: 0,
-        total: 1,
-        kind: AnnotationKind::Conflict,
-      }
-    )));
-    assert!(GitPage::can_navigate_annotations(Some(
-      AnnotationNavigationState {
-        active_index: 0,
-        total: 2,
-        kind: AnnotationKind::Conflict,
-      }
-    )));
-    assert!(GitPage::can_navigate_annotations(Some(
-      AnnotationNavigationState {
-        active_index: 0,
-        total: 3,
-        kind: AnnotationKind::Change,
-      }
-    )));
   }
 
   #[test]
