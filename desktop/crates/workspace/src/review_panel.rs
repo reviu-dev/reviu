@@ -21,6 +21,9 @@ use smol::unblock;
 use terminal::TerminalView;
 
 const REVIEW_PANEL_TERMINAL_DEBUG_SELECTOR: &str = "review-panel-terminal";
+#[cfg(test)]
+const REVIEW_PANEL_TERMINAL_TAB_DEBUG_SELECTOR: &str = "review-panel-tab-terminal";
+const REVIEW_PANEL_REFRESH_DEBUG_SELECTOR: &str = "review-panel-refresh";
 use std::collections::BTreeMap;
 use std::rc::Rc;
 
@@ -339,8 +342,9 @@ impl ReviewPanel {
     self.terminal_view = Some(cx.new(|cx| TerminalView::new(working_directory, cx)));
   }
 
-  fn render_terminal_tab(&mut self, cx: &mut Context<Self>) -> AnyElement {
-    self.ensure_terminal(cx);
+  /// Shows the shell, never starts it: spawning a process while painting is the
+  /// mistake this crate already made with the agent panel.
+  fn render_terminal_tab(&self) -> AnyElement {
     let Some(terminal) = self.terminal_view.clone() else {
       return div().into_any_element();
     };
@@ -505,6 +509,7 @@ impl ReviewPanel {
     let tab = |id: &'static str, label: &'static str, target: ReviewPanelTab, active: bool| {
       div()
         .id(id)
+        .debug_selector(move || id.to_string())
         .px_2()
         .py_1()
         .rounded(px(5.0))
@@ -861,6 +866,7 @@ impl Render for ReviewPanel {
           .when(self.active_tab != ReviewPanelTab::Terminal, |this| {
             this.child(
               Button::new("review-panel-refresh")
+                .debug_selector(|| REVIEW_PANEL_REFRESH_DEBUG_SELECTOR.to_string())
                 .icon(UiIconName::RefreshCw)
                 .ghost()
                 .compact()
@@ -895,7 +901,7 @@ impl Render for ReviewPanel {
         }
       }
       ReviewPanelTab::PullRequest => self.render_pr_tab(cx),
-      ReviewPanelTab::Terminal => self.render_terminal_tab(cx),
+      ReviewPanelTab::Terminal => self.render_terminal_tab(),
     };
 
     let mut panel = v_flex()
@@ -1328,5 +1334,67 @@ mod tests {
         Some(other.path.as_path())
       );
     });
+  }
+
+  #[gpui::test]
+  async fn clicking_the_terminal_tab_opens_a_shell(cx: &mut TestAppContext) {
+    cx.update(|cx| gpui_component::init(cx));
+    let repo = TempRepo::init("review-panel-terminal-click");
+    commit_text_file(&repo.path, Path::new("README.md"), "v1\n", "initial");
+
+    let (panel, cx) = add_review_panel_window(Some(repo.path.clone()), cx);
+    cx.executor().allow_parking();
+    await_refresh(&panel, cx).await;
+    panel.update(cx, |_, cx| cx.notify());
+    cx.run_until_parked();
+
+    assert!(
+      cx.debug_bounds(REVIEW_PANEL_REFRESH_DEBUG_SELECTOR)
+        .is_some(),
+      "the refresh button belongs to the review tabs"
+    );
+
+    let tab = cx
+      .debug_bounds(REVIEW_PANEL_TERMINAL_TAB_DEBUG_SELECTOR)
+      .expect("terminal tab bounds");
+    cx.simulate_click(tab.center(), gpui::Modifiers::default());
+    cx.run_until_parked();
+
+    panel.read_with(cx, |panel, _| {
+      assert_eq!(panel.active_tab, ReviewPanelTab::Terminal);
+      assert!(panel.terminal_view.is_some());
+    });
+    assert!(
+      cx.debug_bounds(REVIEW_PANEL_TERMINAL_DEBUG_SELECTOR)
+        .is_some()
+    );
+    assert!(
+      cx.debug_bounds(REVIEW_PANEL_REFRESH_DEBUG_SELECTOR)
+        .is_none(),
+      "nothing to refresh on the terminal tab"
+    );
+  }
+
+  #[gpui::test]
+  async fn reopening_the_terminal_tab_keeps_the_same_shell(cx: &mut TestAppContext) {
+    cx.update(|cx| gpui_component::init(cx));
+    let repo = TempRepo::init("review-panel-terminal-reuse");
+    commit_text_file(&repo.path, Path::new("README.md"), "v1\n", "initial");
+
+    let (panel, cx) = add_review_panel_window(Some(repo.path.clone()), cx);
+    cx.executor().allow_parking();
+    await_refresh(&panel, cx).await;
+
+    let first = panel.update(cx, |panel, cx| {
+      panel.ensure_terminal(cx);
+      panel.terminal_view.clone().expect("terminal view")
+    });
+    let second = panel.update(cx, |panel, cx| {
+      panel.ensure_terminal(cx);
+      panel.terminal_view.clone().expect("terminal view")
+    });
+
+    // A second shell would leak a process on every visit to the tab.
+    assert_eq!(first.entity_id(), second.entity_id());
   }
 }
