@@ -4,8 +4,8 @@ use std::path::{Path, PathBuf};
 use std::rc::Rc;
 
 use git::{
-  RepoStage, RepoStatusEntry, RepoStatusKind, delete_untracked_file, restore_file, stage_all,
-  stage_file, unstage_all, unstage_file,
+  RepoStage, RepoStatusEntry, RepoStatusKind, delete_untracked_file, restore_file,
+  restore_renamed_file, stage_all, stage_file, unstage_all, unstage_file,
 };
 use gpui::{
   AnyElement, App, Context, Entity, EventEmitter, Focusable as _, IntoElement, ParentElement,
@@ -37,6 +37,31 @@ pub(crate) fn restore_uses_delete(status: RepoStatusKind) -> bool {
 
 pub(crate) fn can_unstage(stage: RepoStage) -> bool {
   matches!(stage, RepoStage::Staged | RepoStage::PartiallyStaged)
+}
+
+pub(crate) fn stage_requires_confirmation(status: RepoStatusKind) -> bool {
+  status == RepoStatusKind::Conflicted
+}
+
+/// Only worth asking while the file still carries conflict markers: once they
+/// are resolved, staging is the normal way to mark the conflict done.
+pub(crate) fn should_confirm_stage(
+  status: RepoStatusKind,
+  has_unresolved_conflict_markers: bool,
+) -> bool {
+  stage_requires_confirmation(status) && has_unresolved_conflict_markers
+}
+
+pub(crate) fn has_conflicted_entries(entries: &[RepoStatusEntry]) -> bool {
+  entries
+    .iter()
+    .any(|entry| entry.status == RepoStatusKind::Conflicted)
+}
+
+pub(crate) fn has_untracked_entries(entries: &[RepoStatusEntry]) -> bool {
+  entries
+    .iter()
+    .any(|entry| entry.status == RepoStatusKind::Untracked)
 }
 
 pub(crate) fn can_restore(stage: RepoStage) -> bool {
@@ -369,9 +394,12 @@ impl ListDelegate for ChangesRowsDelegate {
                         let path = path.clone();
                         move |_, window, cx| {
                           let _ = list.update(cx, |list, cx| match toggle {
-                            FileStageButtonAction::Stage => {
-                              list.stage_file(path.clone(), window, cx)
-                            }
+                            FileStageButtonAction::Stage => list.stage_file_with_confirmation(
+                              path.clone(),
+                              status_kind,
+                              window,
+                              cx,
+                            ),
                             FileStageButtonAction::Unstage => {
                               list.unstage_file(path.clone(), window, cx)
                             }
@@ -422,6 +450,9 @@ pub(crate) struct ChangesList {
   entries: Vec<RepoStatusEntry>,
   list: Entity<ListState<ChangesRowsDelegate>>,
   action_in_flight: bool,
+  /// Set by the consumer showing the file: staging a conflict only asks while
+  /// markers are still there.
+  open_file_has_conflict_markers: bool,
   pub(crate) _action_task: Option<Task<()>>,
 }
 
@@ -456,8 +487,14 @@ impl ChangesList {
       entries: Vec::new(),
       list,
       action_in_flight: false,
+      open_file_has_conflict_markers: false,
       _action_task: None,
     }
+  }
+
+  #[allow(dead_code)] // set by the Git page, which shows the conflicted file
+  pub(crate) fn set_open_file_has_conflict_markers(&mut self, has_markers: bool) {
+    self.open_file_has_conflict_markers = has_markers;
   }
 
   pub(crate) fn set_repo_root(&mut self, repo_root: Option<PathBuf>, cx: &mut Context<Self>) {
@@ -530,6 +567,41 @@ impl ChangesList {
         });
       });
     }));
+  }
+
+  /// Staging a file whose conflict markers are still there asks first: it would
+  /// mark the conflict resolved.
+  pub(crate) fn stage_file_with_confirmation(
+    &mut self,
+    path: PathBuf,
+    status: RepoStatusKind,
+    window: &mut Window,
+    cx: &mut Context<Self>,
+  ) {
+    if !should_confirm_stage(status, self.open_file_has_conflict_markers) {
+      self.stage_file(path, window, cx);
+      return;
+    }
+
+    let file_label = path.to_string_lossy().replace(['\n', '\r'], "");
+    let title: SharedString = "Mark conflicts as resolved?".into();
+    let message: SharedString =
+      format!("Stage {file_label} and mark its merge conflicts as resolved?").into();
+    let view = cx.entity();
+
+    window.open_alert_dialog(cx, move |alert, _, _| {
+      let view = view.clone();
+      let path = path.clone();
+      ConfirmDialog::new(title.clone(), div().child(message.clone()))
+        .confirm_text("Stage")
+        .cancel_text("Cancel")
+        .on_confirm(move |_, window, cx| {
+          let path = path.clone();
+          view.update(cx, |view, cx| view.stage_file(path, window, cx));
+          true
+        })
+        .build(alert)
+    });
   }
 
   pub(crate) fn stage_file(&mut self, path: PathBuf, window: &mut Window, cx: &mut Context<Self>) {
@@ -608,19 +680,106 @@ impl ChangesList {
     window: &mut Window,
     cx: &mut Context<Self>,
   ) {
-    let delete = restore_uses_delete(status);
+    let old_path = self
+      .entries
+      .iter()
+      .find(|entry| entry.path == path)
+      .and_then(|entry| entry.old_path.clone());
     self.run(
       "Discard changes",
+      move |repo_root| restore_entry(repo_root, &path, old_path.as_deref(), status),
+      window,
+      cx,
+    );
+  }
+
+  /// Discards every change in the worktree, so it always asks first.
+  #[allow(dead_code)] // consumed when the Git page adopts this list
+  pub(crate) fn confirm_restore_all(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    if self.repo_root.is_none() || self.entries.is_empty() {
+      return;
+    }
+
+    let title: SharedString = "Restore all files?".into();
+    let message: SharedString = if has_untracked_entries(&self.entries) {
+      "Discard all tracked changes and delete all untracked files?".into()
+    } else {
+      "Discard all changes in the repository?".into()
+    };
+    let view = cx.entity();
+
+    window.open_alert_dialog(cx, move |alert, _, _| {
+      let view = view.clone();
+      ConfirmDialog::new(title.clone(), div().child(message.clone()))
+        .confirm_text("Restore all")
+        .cancel_text("Cancel")
+        .destructive()
+        .on_confirm(move |_, window, cx| {
+          view.update(cx, |view, cx| view.restore_all(window, cx));
+          true
+        })
+        .build(alert)
+    });
+  }
+
+  #[allow(dead_code)] // consumed when the Git page adopts this list
+  pub(crate) fn restore_all(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    let entries = self.entries.clone();
+    self.run(
+      "Restore all",
       move |repo_root| {
-        if delete {
-          delete_untracked_file(repo_root, &path)
-        } else {
-          restore_file(repo_root, &path)
+        let mut first_error = None;
+        for entry in entries {
+          let result = restore_entry(
+            repo_root,
+            &entry.path,
+            entry.old_path.as_deref(),
+            entry.status,
+          );
+          if let Err(error) = result
+            && first_error.is_none()
+          {
+            first_error = Some(error);
+          }
+        }
+        match first_error {
+          Some(error) => Err(error),
+          None => Ok(()),
         }
       },
       window,
       cx,
     );
+  }
+
+  /// Staging everything while a conflict is unresolved asks first.
+  #[allow(dead_code)] // consumed when the Git page adopts this list
+  pub(crate) fn stage_all_with_confirmation(
+    &mut self,
+    window: &mut Window,
+    cx: &mut Context<Self>,
+  ) {
+    if !has_conflicted_entries(&self.entries) {
+      self.stage_all(window, cx);
+      return;
+    }
+
+    let title: SharedString = "Mark conflicts as resolved?".into();
+    let message: SharedString =
+      "Stage all files and mark their merge conflicts as resolved?".into();
+    let view = cx.entity();
+
+    window.open_alert_dialog(cx, move |alert, _, _| {
+      let view = view.clone();
+      ConfirmDialog::new(title.clone(), div().child(message.clone()))
+        .confirm_text("Stage all")
+        .cancel_text("Cancel")
+        .on_confirm(move |_, window, cx| {
+          view.update(cx, |view, cx| view.stage_all(window, cx));
+          true
+        })
+        .build(alert)
+    });
   }
 
   #[allow(dead_code)] // consumed when the Git page adopts this list
@@ -637,6 +796,23 @@ impl ChangesList {
 impl gpui::Render for ChangesList {
   fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
     List::new(&self.list).w_full().min_h_0()
+  }
+}
+
+/// Discarding one entry: delete an untracked file, put a rename back, or
+/// restore the committed content.
+fn restore_entry(
+  repo_root: &Path,
+  path: &Path,
+  old_path: Option<&Path>,
+  status: RepoStatusKind,
+) -> anyhow::Result<()> {
+  if restore_uses_delete(status) {
+    return delete_untracked_file(repo_root, path);
+  }
+  match (status, old_path) {
+    (RepoStatusKind::Renamed, Some(old_path)) => restore_renamed_file(repo_root, old_path, path),
+    _ => restore_file(repo_root, path),
   }
 }
 
@@ -1101,5 +1277,82 @@ mod tests {
 
     let _ = std::fs::remove_dir_all(&repo_root);
     let _ = std::fs::remove_dir_all(&other_root);
+  }
+
+  #[test]
+  fn staging_only_asks_while_the_conflict_is_unresolved() {
+    assert!(should_confirm_stage(RepoStatusKind::Conflicted, true));
+    // Markers resolved: staging is how the conflict gets marked done.
+    assert!(!should_confirm_stage(RepoStatusKind::Conflicted, false));
+    assert!(!should_confirm_stage(RepoStatusKind::Modified, true));
+  }
+
+  #[gpui::test]
+  async fn staging_a_conflicted_file_asks_before_marking_it_resolved(
+    cx: &mut gpui::TestAppContext,
+  ) {
+    let repo_root = temp_repo("changes-list-conflict-stage");
+
+    let (list, cx) = add_changes_list_window(repo_root.clone(), cx);
+    cx.executor().allow_parking();
+    // A conflicted entry with the markers still in the open file.
+    list.update(cx, |list, cx| {
+      list.set_open_file_has_conflict_markers(true);
+      list.set_entries(
+        vec![RepoStatusEntry {
+          path: PathBuf::from("README.md"),
+          old_path: None,
+          status: RepoStatusKind::Conflicted,
+          stage: RepoStage::Unstaged,
+        }],
+        cx,
+      );
+    });
+    cx.run_until_parked();
+
+    let button = cx
+      .debug_bounds("changes-stage-0-0")
+      .expect("stage button bounds");
+    cx.simulate_click(button.center(), gpui::Modifiers::default());
+    cx.run_until_parked();
+
+    assert!(
+      cx.update(|window, cx| window.has_active_dialog(cx)),
+      "staging an unresolved conflict must ask first"
+    );
+    list.read_with(cx, |list, _| assert!(list._action_task.is_none()));
+
+    let _ = std::fs::remove_dir_all(&repo_root);
+  }
+
+  #[gpui::test]
+  async fn discarding_a_renamed_file_puts_the_old_name_back(cx: &mut gpui::TestAppContext) {
+    let repo_root = temp_repo("changes-list-rename-restore");
+    std::fs::write(repo_root.join("README.md"), "v1\n").expect("reset content");
+    std::fs::rename(repo_root.join("README.md"), repo_root.join("RENAMED.md"))
+      .expect("rename file");
+    stage_all(&repo_root).expect("stage the rename");
+
+    let (list, cx) = add_changes_list_window(repo_root.clone(), cx);
+    cx.executor().allow_parking();
+    set_entries_from_disk(&list, cx, &repo_root);
+
+    let entry = list.read_with(cx, |list, _| list.entries()[0].clone());
+    assert_eq!(entry.status, RepoStatusKind::Renamed);
+
+    let task = list.update_in(cx, |list, window, cx| {
+      list.restore_file(entry.path.clone(), entry.status, window, cx);
+      list._action_task.take().expect("restore task")
+    });
+    task.await;
+    cx.run_until_parked();
+
+    assert!(
+      repo_root.join("README.md").exists(),
+      "the original name should be back"
+    );
+    assert!(!repo_root.join("RENAMED.md").exists());
+
+    let _ = std::fs::remove_dir_all(&repo_root);
   }
 }
