@@ -60,6 +60,12 @@ pub(crate) fn agent_review_comment_is_copyable(comment: &LocalAgentReviewComment
   )
 }
 
+/// An addressed comment has nothing left to say; an outdated one still does,
+/// marked as such.
+pub(crate) fn agent_review_comment_is_shown_in_diff(comment: &LocalAgentReviewComment) -> bool {
+  !matches!(comment.state, LocalAgentReviewCommentState::Addressed)
+}
+
 fn lines_match_at(lines: &[String], start_line: usize, expected: &[String]) -> bool {
   if expected.is_empty() || start_line == 0 {
     return false;
@@ -329,7 +335,7 @@ impl AgentReviewComments {
       .comments
       .iter()
       .filter(|comment| comment.path == selected_file)
-      .filter(|comment| agent_review_comment_is_copyable(comment))
+      .filter(|comment| agent_review_comment_is_shown_in_diff(comment))
       .map(to_editor_comment)
       .collect()
   }
@@ -767,6 +773,39 @@ mod tests {
       .expect("suggestion context");
     assert_eq!(suggestion.original_start_line, Some(1));
     assert_eq!(suggestion.original_lines, vec!["let value = custom();"]);
+  }
+
+  #[test]
+  fn an_outdated_comment_stays_in_the_diff_marked_outdated() {
+    let mut comments = AgentReviewComments::new();
+    comments
+      .create(
+        &create_request(0, "rename it\n\n```suggestion\nlet total = custom();\n```"),
+        Some(Path::new("src/main.rs")),
+        (Some(1), vec!["let value = custom();".to_string()]),
+      )
+      .expect("create comment");
+    comments.mark_copyable_as_copied();
+
+    // The agent rewrote the line into something else: the comment lost its anchor.
+    comments.refresh_states(
+      Path::new("src/main.rs"),
+      &["let value = other();".to_string()],
+    );
+
+    assert_eq!(
+      comments.all()[0].state,
+      LocalAgentReviewCommentState::Outdated
+    );
+    let rendered = comments.editor_comments(Path::new("src/main.rs"));
+    assert_eq!(
+      rendered.len(),
+      1,
+      "an outdated comment still has something to say"
+    );
+    assert!(rendered[0].is_outdated);
+    // Outdated is not sendable: the agent would get a comment about gone code.
+    assert_eq!(comments.copyable_count(), 0);
   }
 
   #[test]

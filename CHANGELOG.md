@@ -92,6 +92,10 @@ Opening a `.md` or `.svg` in the Sessions workspace showed raw text. A Preview b
 
 The Sessions workspace applied the whitespace setting when opening a file but gave you no way to change your mind. The diff header now carries the same Whitespace button as the Git page, with `cmd-alt-/`, and the choice holds for the rest of the session instead of resetting on every file. A file with no pending change, or a file being previewed, has no diff on screen: the button steps aside there, like the inline/split control.
 
+### A Comment The Code Moved Under Says So Instead Of Vanishing
+
+When the agent rewrote the lines a review comment was anchored to, the comment disappeared from the diff without a word. It stays now, tagged Outdated, so you can see what you asked for and decide. It is left out of the batch sent to the agent: the code it talks about is gone.
+
 ### Browse The History From The Sessions Workspace
 
 The right panel gains a History tab: your commits, expandable to the files each one touched. Click a file to read it as it was in that commit, right where the diff shows up, read-only so a snapshot can never overwrite your work. Opening the same file from the Changes tab brings the working-tree version back. The history loads the first time you open the tab, not before.
