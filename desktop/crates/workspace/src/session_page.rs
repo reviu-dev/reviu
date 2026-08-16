@@ -684,7 +684,11 @@ impl SessionPage {
   }
 
   fn toggle_hide_whitespace(&mut self, cx: &mut Context<Self>) {
-    if self.center != CenterView::Diff {
+    // No diff on screen, nothing to hide: rendered file, or a file with no change.
+    if self.center != CenterView::Diff
+      || (self.show_preview && self.previewable())
+      || !self.selected_file_has_changes(cx)
+    {
       return;
     }
     self.hide_whitespace = !self.hide_whitespace;
@@ -1833,6 +1837,7 @@ impl SessionPage {
       .when(
         self.editor.is_some()
           && self.binary_preview.is_none()
+          && self.selected_file_has_changes(cx)
           && !(self.show_preview && self.previewable()),
         |this| {
           let hide_whitespace = self.hide_whitespace;
@@ -2916,7 +2921,7 @@ mod tests {
   }
 
   #[gpui::test]
-  async fn a_file_without_changes_has_no_diff_toggle(cx: &mut TestAppContext) {
+  async fn a_file_without_changes_has_no_diff_controls(cx: &mut TestAppContext) {
     let repo = TempRepo::init("session-page-diff-toggle-clean");
     commit_text_file(&repo.path, Path::new("README.md"), "v1\n", "initial");
 
@@ -2940,6 +2945,16 @@ mod tests {
       cx.debug_bounds(DIFF_VIEW_TOGGLE_DEBUG_SELECTOR).is_none(),
       "showing a split of a file against itself helps nobody"
     );
+    assert!(
+      cx.debug_bounds(WHITESPACE_TOGGLE_DEBUG_SELECTOR).is_none(),
+      "there are no whitespace changes to hide either"
+    );
+
+    // The shortcut is inert too.
+    page.update(cx, |page, cx| {
+      page.toggle_hide_whitespace(cx);
+      assert!(!page.hide_whitespace);
+    });
   }
 
   #[gpui::test]
@@ -3045,10 +3060,17 @@ mod tests {
       "the split toggle has nothing to act on while previewing"
     );
 
-    // The shortcut is inert too.
+    assert!(
+      cx.debug_bounds(WHITESPACE_TOGGLE_DEBUG_SELECTOR).is_none(),
+      "there is no diff on screen to hide whitespace in"
+    );
+
+    // The shortcuts are inert too.
     page.update(cx, |page, cx| {
       page.toggle_diff_view(cx);
       assert_eq!(page.diff_view, DiffViewMode::Inline);
+      page.toggle_hide_whitespace(cx);
+      assert!(!page.hide_whitespace);
     });
 
     // Back to the code, the toggle is there again.
@@ -3204,6 +3226,9 @@ mod tests {
 
     let (page, cx) = add_session_page_window(repo.path.clone(), cx);
     cx.executor().allow_parking();
+    page.update(cx, |page, cx| {
+      page.review_panel.update(cx, |panel, cx| panel.refresh(cx))
+    });
     cx.run_until_parked();
 
     page.update_in(cx, |page, window, cx| {
@@ -3259,6 +3284,111 @@ mod tests {
           .read(cx)
           .ignore_whitespace()
       );
+    });
+  }
+
+  #[gpui::test]
+  async fn the_first_file_of_the_session_follows_the_whitespace_setting(cx: &mut TestAppContext) {
+    let repo = TempRepo::init("session-page-whitespace-setting");
+    commit_text_file(&repo.path, Path::new("a.rs"), "fn main() {}\n", "initial");
+    std::fs::write(repo.path.join("a.rs"), "fn main() { }\n").expect("update a");
+
+    let (page, cx) = add_session_page_window(repo.path.clone(), cx);
+    cx.executor().allow_parking();
+    page.update(cx, |page, cx| {
+      crate::config::AppSettings::update(cx, |settings| settings.hide_whitespace = true);
+      page.review_panel.update(cx, |panel, cx| panel.refresh(cx))
+    });
+    cx.run_until_parked();
+
+    page.update_in(cx, |page, window, cx| {
+      page.open_diff(PathBuf::from("a.rs"), None, window, cx);
+    });
+    await_open_file(&page, cx).await;
+
+    page.read_with(cx, |page, cx| {
+      assert!(page.hide_whitespace);
+      assert!(
+        page
+          .editor
+          .as_ref()
+          .expect("editor")
+          .read(cx)
+          .ignore_whitespace()
+      );
+    });
+  }
+
+  #[gpui::test]
+  async fn the_diff_shortcuts_reach_the_shell(cx: &mut TestAppContext) {
+    let repo = TempRepo::init("session-page-diff-actions");
+    let original = (1..=60)
+      .map(|line| format!("line {line}\n"))
+      .collect::<String>();
+    commit_text_file(&repo.path, Path::new("a.rs"), &original, "initial");
+    let modified = original
+      .replace("line 5\n", "line 5 changed\n")
+      .replace("line 50\n", "line 50 changed\n");
+    std::fs::write(repo.path.join("a.rs"), modified).expect("update file");
+
+    let (page, cx) = add_session_page_window(repo.path.clone(), cx);
+    cx.executor().allow_parking();
+    page.update(cx, |page, cx| {
+      page.review_panel.update(cx, |panel, cx| panel.refresh(cx))
+    });
+    cx.run_until_parked();
+
+    page.update_in(cx, |page, window, cx| {
+      page.open_diff(PathBuf::from("a.rs"), None, window, cx);
+    });
+    await_open_file(&page, cx).await;
+    await_editor_diff(&page, cx).await;
+
+    // The actions the keybindings dispatch, not the methods behind them.
+    cx.dispatch_action(crate::NextAnnotation);
+    cx.run_until_parked();
+    page.read_with(cx, |page, cx| {
+      let state = page
+        .editor
+        .as_ref()
+        .expect("editor")
+        .read(cx)
+        .hunk_navigation_state(cx)
+        .expect("hunk navigation state");
+      assert_eq!(state.active_index, 1);
+    });
+
+    cx.dispatch_action(crate::PreviousAnnotation);
+    cx.run_until_parked();
+    page.read_with(cx, |page, cx| {
+      let state = page
+        .editor
+        .as_ref()
+        .expect("editor")
+        .read(cx)
+        .hunk_navigation_state(cx)
+        .expect("hunk navigation state");
+      assert_eq!(state.active_index, 0);
+    });
+
+    cx.dispatch_action(crate::ToggleHideWhitespace);
+    cx.run_until_parked();
+    page.read_with(cx, |page, cx| {
+      assert!(page.hide_whitespace);
+      assert!(
+        page
+          .editor
+          .as_ref()
+          .expect("editor")
+          .read(cx)
+          .ignore_whitespace()
+      );
+    });
+
+    cx.dispatch_action(crate::ToggleDiffView);
+    cx.run_until_parked();
+    page.read_with(cx, |page, _| {
+      assert_eq!(page.diff_view, DiffViewMode::Split);
     });
   }
 
