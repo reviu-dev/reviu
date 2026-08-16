@@ -1836,44 +1836,30 @@ impl SessionPage {
         .flex_1()
         .min_h_0()
         .min_w(px(0.0))
+        .flex()
+        .flex_col()
         .child(editor.clone())
         .into_any_element();
 
       if self.show_preview && self.previewable() {
-        let is_svg = self.selected_file_is_svg();
+        // A toggle, not a split: the rendered file takes the pane. Its children
+        // size themselves with flex_1, hence the flex column here.
         let preview_pane = crate::file_preview::render_preview_pane(
           "session-preview-text",
           &editor,
           &self.svg_preview,
-          is_svg,
+          self.selected_file_is_svg(),
           window,
           cx,
         );
         div()
           .flex_1()
           .min_h_0()
-          .child(
-            ui::h_resizable("session-page-preview-split")
-              .child(
-                ui::resizable_panel().child(
-                  div()
-                    .size_full()
-                    .min_w(px(0.0))
-                    .min_h_0()
-                    .child(editor_pane),
-                ),
-              )
-              .child(
-                ui::resizable_panel().child(
-                  div()
-                    .size_full()
-                    .min_w(px(0.0))
-                    .min_h_0()
-                    .debug_selector(|| PREVIEW_PANE_DEBUG_SELECTOR.to_string())
-                    .child(preview_pane),
-                ),
-              ),
-          )
+          .min_w(px(0.0))
+          .flex()
+          .flex_col()
+          .debug_selector(|| PREVIEW_PANE_DEBUG_SELECTOR.to_string())
+          .child(preview_pane)
           .into_any_element()
       } else {
         editor_pane
@@ -2869,7 +2855,21 @@ mod tests {
     cx.run_until_parked();
 
     page.read_with(cx, |page, _| assert!(page.show_preview));
-    assert!(cx.debug_bounds(PREVIEW_PANE_DEBUG_SELECTOR).is_some());
+    let content = cx
+      .debug_bounds(crate::file_preview::PREVIEW_CONTENT_DEBUG_SELECTOR)
+      .expect("rendered markdown bounds");
+    assert!(
+      content.size.width > gpui::px(0.0) && content.size.height > gpui::px(0.0),
+      "an empty pane means the rendered file is nowhere to be seen"
+    );
+    // The rendered file replaces the editor instead of sitting beside it.
+    let pane = cx
+      .debug_bounds(PREVIEW_PANE_DEBUG_SELECTOR)
+      .expect("preview pane bounds");
+    assert!(
+      content.size.width >= pane.size.width - gpui::px(1.0),
+      "the preview should take the whole pane, not half of it"
+    );
   }
 
   #[gpui::test]
@@ -2972,7 +2972,10 @@ mod tests {
     cx.simulate_click(toggle.center(), gpui::Modifiers::default());
     cx.run_until_parked();
 
-    assert!(cx.debug_bounds(PREVIEW_PANE_DEBUG_SELECTOR).is_some());
+    let pane = cx
+      .debug_bounds(PREVIEW_PANE_DEBUG_SELECTOR)
+      .expect("preview pane bounds");
+    assert!(pane.size.width > gpui::px(0.0) && pane.size.height > gpui::px(0.0));
   }
 
   #[gpui::test]

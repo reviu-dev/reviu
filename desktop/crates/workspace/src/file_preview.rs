@@ -11,6 +11,8 @@ pub enum FilePreviewKind {
 }
 
 /// The right-hand pane of a preview: the rendered SVG, or the markdown.
+pub(crate) const PREVIEW_CONTENT_DEBUG_SELECTOR: &str = "file-preview-content";
+
 pub(crate) fn render_preview_pane(
   id: &'static str,
   editor: &gpui::Entity<editor::Editor>,
@@ -41,6 +43,7 @@ pub(crate) fn render_preview_pane(
     .min_w(gpui::px(0.0))
     .bg(cx.theme().background)
     .occlude()
+    .debug_selector(|| PREVIEW_CONTENT_DEBUG_SELECTOR.to_string())
     .child(
       gpui::div().size_full().pb_4().px_4().child(
         gpui_component::text::TextView::markdown(id, markdown)
