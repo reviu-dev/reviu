@@ -10,6 +10,74 @@ use crate::dock_panel::DockPanelTab;
 use crate::repo_command::RepoCommandOutcome;
 use crate::sentry_context;
 
+/// Where the reports go. Sentry is not observable from a test, this is.
+pub(crate) trait TelemetrySink: Send + Sync {
+  fn breadcrumb(&self, message: &str, data: Map<String, Value>);
+  fn expected_error(&self, operation: &str, reason: &str, data: Map<String, Value>);
+  fn unexpected_error(&self, operation: &'static str, error: &str, data: Map<String, Value>);
+  fn sync_context(
+    &self,
+    repo_root: Option<&Path>,
+    selected_file: Option<&Path>,
+    branch: Option<&str>,
+    tab: &'static str,
+    diff_view: &'static str,
+  );
+  fn clear_context(&self);
+}
+
+struct SentrySink;
+
+impl TelemetrySink for SentrySink {
+  fn breadcrumb(&self, message: &str, data: Map<String, Value>) {
+    sentry_context::add_breadcrumb("git.action", message, data);
+  }
+
+  fn expected_error(&self, operation: &str, reason: &str, data: Map<String, Value>) {
+    sentry_context::record_expected_error(operation, reason, data);
+  }
+
+  fn unexpected_error(&self, operation: &'static str, error: &str, data: Map<String, Value>) {
+    let io_error = std::io::Error::other(error.to_string());
+    sentry_context::capture_unexpected_error(operation, &io_error, data);
+  }
+
+  fn sync_context(
+    &self,
+    repo_root: Option<&Path>,
+    selected_file: Option<&Path>,
+    branch: Option<&str>,
+    tab: &'static str,
+    diff_view: &'static str,
+  ) {
+    sentry_context::sync_git_context(repo_root, selected_file, branch, tab, diff_view);
+  }
+
+  fn clear_context(&self) {
+    sentry_context::clear_git_context();
+  }
+}
+
+// Tests run in parallel threads, so the override is per thread.
+#[cfg(test)]
+thread_local! {
+  static TEST_SINK: std::cell::RefCell<Option<std::sync::Arc<dyn TelemetrySink>>> =
+    const { std::cell::RefCell::new(None) };
+}
+
+#[cfg(test)]
+pub(crate) fn set_test_sink(sink: Option<std::sync::Arc<dyn TelemetrySink>>) {
+  TEST_SINK.with(|cell| *cell.borrow_mut() = sink);
+}
+
+fn sink() -> std::sync::Arc<dyn TelemetrySink> {
+  #[cfg(test)]
+  if let Some(sink) = TEST_SINK.with(|cell| cell.borrow().clone()) {
+    return sink;
+  }
+  std::sync::Arc::new(SentrySink)
+}
+
 pub(crate) fn dock_tab_tag(tab: DockPanelTab) -> &'static str {
   match tab {
     DockPanelTab::Changes => "changes",
@@ -90,7 +158,7 @@ impl GitTelemetry<'_> {
 
   /// The context that stays attached to whatever happens next.
   pub(crate) fn sync(&self) {
-    sentry_context::sync_git_context(
+    sink().sync_context(
       self.repo_root,
       self.selected_file,
       self.branch,
@@ -99,13 +167,23 @@ impl GitTelemetry<'_> {
     );
   }
 
+  /// Without a repository there is nothing to describe, and a stale context would
+  /// point a later crash at the repository the user just left.
+  pub(crate) fn sync_or_clear(&self) {
+    if self.repo_root.is_none() {
+      sink().clear_context();
+      return;
+    }
+    self.sync();
+  }
+
   pub(crate) fn breadcrumb(&self, message: &str, extra: Map<String, Value>) {
-    sentry_context::add_breadcrumb("git.action", message, self.with_context(extra));
+    sink().breadcrumb(message, self.with_context(extra));
   }
 
   /// Git refused for a reason we know about, a conflict being the usual one.
   pub(crate) fn expected_error(&self, operation: &str, reason: &str, extra: Map<String, Value>) {
-    sentry_context::record_expected_error(operation, reason, self.with_context(extra));
+    sink().expected_error(operation, reason, self.with_context(extra));
   }
 
   pub(crate) fn unexpected_error(
@@ -114,8 +192,7 @@ impl GitTelemetry<'_> {
     error: &str,
     extra: Map<String, Value>,
   ) {
-    let io_error = std::io::Error::other(error.to_string());
-    sentry_context::capture_unexpected_error(operation, &io_error, self.with_context(extra));
+    sink().unexpected_error(operation, error, self.with_context(extra));
   }
 
   /// Sends whatever the outcome deserves, under the command's own key.
@@ -150,7 +227,98 @@ impl GitTelemetry<'_> {
 }
 
 #[cfg(test)]
+pub(crate) mod test_support {
+  use super::*;
+  use std::sync::{Arc, Mutex};
+
+  #[derive(Debug, PartialEq, Eq)]
+  pub(crate) enum Report {
+    Breadcrumb(String),
+    Expected { operation: String, reason: String },
+    Unexpected { operation: String, error: String },
+    ContextSynced { tab: String, diff_view: String },
+    ContextCleared,
+  }
+
+  #[derive(Default)]
+  pub(crate) struct RecordingSink {
+    reports: Mutex<Vec<Report>>,
+    data: Mutex<Vec<Map<String, Value>>>,
+  }
+
+  impl RecordingSink {
+    /// Installs itself for the duration of the test.
+    pub(crate) fn install() -> Arc<Self> {
+      let sink = Arc::new(Self::default());
+      set_test_sink(Some(sink.clone()));
+      sink
+    }
+
+    pub(crate) fn reports(&self) -> Vec<Report> {
+      self.reports.lock().expect("reports").drain(..).collect()
+    }
+
+    pub(crate) fn last_data(&self) -> Option<Map<String, Value>> {
+      self.data.lock().expect("data").last().cloned()
+    }
+
+    fn record(&self, report: Report, data: Map<String, Value>) {
+      self.reports.lock().expect("reports").push(report);
+      self.data.lock().expect("data").push(data);
+    }
+  }
+
+  impl TelemetrySink for RecordingSink {
+    fn breadcrumb(&self, message: &str, data: Map<String, Value>) {
+      self.record(Report::Breadcrumb(message.to_string()), data);
+    }
+
+    fn expected_error(&self, operation: &str, reason: &str, data: Map<String, Value>) {
+      self.record(
+        Report::Expected {
+          operation: operation.to_string(),
+          reason: reason.to_string(),
+        },
+        data,
+      );
+    }
+
+    fn unexpected_error(&self, operation: &'static str, error: &str, data: Map<String, Value>) {
+      self.record(
+        Report::Unexpected {
+          operation: operation.to_string(),
+          error: error.to_string(),
+        },
+        data,
+      );
+    }
+
+    fn sync_context(
+      &self,
+      _repo_root: Option<&Path>,
+      _selected_file: Option<&Path>,
+      _branch: Option<&str>,
+      tab: &'static str,
+      diff_view: &'static str,
+    ) {
+      self.record(
+        Report::ContextSynced {
+          tab: tab.to_string(),
+          diff_view: diff_view.to_string(),
+        },
+        Map::new(),
+      );
+    }
+
+    fn clear_context(&self) {
+      self.record(Report::ContextCleared, Map::new());
+    }
+  }
+}
+
+#[cfg(test)]
 mod tests {
+  use super::test_support::{RecordingSink, Report};
   use super::*;
 
   fn value(data: &Map<String, Value>, key: &str) -> Option<String> {
@@ -258,6 +426,103 @@ mod tests {
         error: "remote hung up".to_string(),
       }
     );
+  }
+
+  #[test]
+  fn a_conflict_is_reported_as_expected_and_an_error_is_not() {
+    let sink = RecordingSink::install();
+    let telemetry = GitTelemetry {
+      repo_root: Some(Path::new("/tmp/widget")),
+      selected_file: None,
+      branch: Some("feature"),
+      tab: "changes",
+      diff_view: "inline",
+    };
+
+    telemetry.report_outcome(
+      "git.rebase",
+      outcome_report(&Ok(RepoCommandOutcome::Conflicted {
+        path: PathBuf::from("src/main.rs"),
+        commit_message: None,
+        error: "conflict".into(),
+      })),
+    );
+    assert_eq!(
+      sink.reports(),
+      vec![Report::Expected {
+        operation: "git.rebase".to_string(),
+        reason: "conflict".to_string(),
+      }],
+      "a conflict never reaches Sentry as a crash"
+    );
+    assert_eq!(
+      sink.last_data().and_then(|data| data
+        .get("file")
+        .and_then(|file| file.as_str())
+        .map(String::from)),
+      Some("src/main.rs".to_string())
+    );
+
+    telemetry.report_outcome(
+      "git.push",
+      outcome_report(&Err(anyhow::anyhow!("remote hung up"))),
+    );
+    assert_eq!(
+      sink.reports(),
+      vec![
+        Report::Breadcrumb("git.push failed".to_string()),
+        Report::Unexpected {
+          operation: "git.push".to_string(),
+          error: "remote hung up".to_string(),
+        },
+      ],
+      "an error leaves a trail and is captured"
+    );
+
+    telemetry.report_outcome(
+      "git.push",
+      outcome_report(&Ok(RepoCommandOutcome::Done {
+        message: "Pushed".into(),
+      })),
+    );
+    assert_eq!(sink.reports(), vec![], "success sends nothing at all");
+    set_test_sink(None);
+  }
+
+  #[test]
+  fn leaving_the_last_repository_clears_the_context() {
+    let sink = RecordingSink::install();
+
+    GitTelemetry {
+      repo_root: Some(Path::new("/tmp/widget")),
+      selected_file: None,
+      branch: None,
+      tab: "changes",
+      diff_view: "inline",
+    }
+    .sync_or_clear();
+    assert_eq!(
+      sink.reports(),
+      vec![Report::ContextSynced {
+        tab: "changes".to_string(),
+        diff_view: "inline".to_string(),
+      }]
+    );
+
+    GitTelemetry {
+      repo_root: None,
+      selected_file: None,
+      branch: None,
+      tab: "changes",
+      diff_view: "inline",
+    }
+    .sync_or_clear();
+    assert_eq!(
+      sink.reports(),
+      vec![Report::ContextCleared],
+      "a later crash must not be blamed on the repository we just left"
+    );
+    set_test_sink(None);
   }
 
   #[test]

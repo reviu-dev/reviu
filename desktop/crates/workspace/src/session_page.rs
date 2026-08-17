@@ -221,9 +221,6 @@ pub struct SessionPage {
   /// Mounting a real agent panel in a test would spawn an agent process.
   #[cfg(test)]
   pretend_agent_turn_in_flight: bool,
-  /// Sentry itself is not observable from a test; what we sent it is.
-  #[cfg(test)]
-  last_reported_outcome: Option<(&'static str, git_telemetry::OutcomeReport)>,
   open_file_generation: u64,
   open_file_task: Option<Task<()>>,
   agent_review: AgentReviewComments,
@@ -313,8 +310,6 @@ impl SessionPage {
       _merge_base_task: None,
       #[cfg(test)]
       pretend_agent_turn_in_flight: false,
-      #[cfg(test)]
-      last_reported_outcome: None,
       open_file_generation: 0,
       open_file_task: None,
       agent_review: AgentReviewComments::new(),
@@ -804,11 +799,7 @@ impl SessionPage {
 
   /// Keeps the crash context in step with what the user is looking at.
   fn sync_git_telemetry(&self, cx: &App) {
-    if self.selected_repo.is_none() {
-      crate::sentry_context::clear_git_context();
-      return;
-    }
-    self.git_telemetry(cx).sync();
+    self.git_telemetry(cx).sync_or_clear();
   }
 
   /// A conflicted file is shown whole: once its markers are resolved there is no
@@ -1643,12 +1634,9 @@ impl SessionPage {
       let _ = cx.update_window(window_handle, |_, window, cx| {
         let _ = this.update(cx, |this, cx| {
           this.repo_command_in_flight = false;
-          let report = git_telemetry::outcome_report(&result);
-          #[cfg(test)]
-          {
-            this.last_reported_outcome = Some((telemetry_key, report.clone()));
-          }
-          this.git_telemetry(cx).report_outcome(telemetry_key, report);
+          this
+            .git_telemetry(cx)
+            .report_outcome(telemetry_key, git_telemetry::outcome_report(&result));
           match result {
             Ok(outcome) => {
               match outcome {
@@ -4506,6 +4494,7 @@ mod tests {
 
     let (page, cx) = add_session_page_window(repo.path.clone(), cx);
     cx.run_until_parked();
+    let sink = crate::git_telemetry::test_support::RecordingSink::install();
 
     // No remote: the push cannot succeed.
     page.update_in(cx, |page, window, cx| {
@@ -4519,23 +4508,21 @@ mod tests {
     command.await;
     cx.run_until_parked();
 
-    page.read_with(cx, |page, _| {
-      let (key, report) = page
-        .last_reported_outcome
-        .clone()
-        .expect("a failure is reported");
-      assert_eq!(
-        key,
-        RepoCommand::Push.telemetry_key(),
-        "the report is filed under the command's own key"
-      );
-      assert!(
-        matches!(report, git_telemetry::OutcomeReport::Unexpected { .. }),
-        "a push that could not run is not business as usual, got {report:?}"
-      );
-    });
+    use crate::git_telemetry::test_support::Report;
+    let reports = sink.reports();
+    assert!(
+      reports.contains(&Report::Breadcrumb("Push".to_string())),
+      "the command that ran leaves a trail, got {reports:?}"
+    );
+    assert!(
+      reports.iter().any(|report| matches!(
+        report,
+        Report::Unexpected { operation, .. } if operation == RepoCommand::Push.telemetry_key()
+      )),
+      "the failure is filed under the command's own key, got {reports:?}"
+    );
 
-    // A command that works reports nothing.
+    // A command that works reports its run, and no error.
     page.update_in(cx, |page, window, cx| {
       page
         .run_repo_command(RepoCommand::StageAll, window, cx)
@@ -4547,13 +4534,14 @@ mod tests {
     command.await;
     cx.run_until_parked();
 
-    page.read_with(cx, |page, _| {
-      assert_eq!(
-        page.last_reported_outcome.clone().map(|(_, report)| report),
-        Some(git_telemetry::OutcomeReport::Nothing),
-        "success is not news"
-      );
-    });
+    let reports = sink.reports();
+    assert!(
+      !reports
+        .iter()
+        .any(|report| matches!(report, Report::Unexpected { .. })),
+      "success is not a crash, got {reports:?}"
+    );
+    crate::git_telemetry::set_test_sink(None);
   }
 
   #[gpui::test]
