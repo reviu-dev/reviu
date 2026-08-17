@@ -237,7 +237,7 @@ impl DockPanel {
         .auto_grow(1, 5)
         .placeholder("Commit message...")
     });
-    // cmd-enter from inside the input commits, matching the Git page.
+    // cmd-enter from inside the input commits.
     cx.subscribe_in(
       &commit_input,
       window,

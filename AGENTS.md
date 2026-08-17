@@ -2,8 +2,9 @@
 
 ## Product context
 
-- Reviu is a desktop Git client.
-- `Free`: local Git workflow.
+- Reviu is a desktop app where a coding agent works and you review what it did, with a real git client under it.
+- One view: agent sessions on the left, the conversation or the diff at the centre, the repository in the right dock.
+- `Free`: local git workflow.
 - `Reviu Pro`: GitHub integration (`$9/month` or `$79/year` in app billing UI).
 - Core UX: keyboard-first navigation, fast diff/review workflows, in-app GitHub context.
 
@@ -23,14 +24,20 @@ The GitHub-integration backend (Reviu Pro) is closed-source in a separate privat
   - `desktop/crates/workspace/src/workspace.rs`
 - Billing / subscription UI:
   - `desktop/crates/workspace/src/billing_page.rs`
-- Local Git workspace page:
-  - `desktop/crates/workspace/src/git_page.rs`
+- The workspace, the only view: agent sessions, the diff at the centre, the right dock:
+  - `desktop/crates/workspace/src/session_page.rs` (+ `session_page/render.rs`, `session_page/agent.rs`)
+- Right dock surfaces (Changes, Files, History, Pull request, Terminal):
+  - `desktop/crates/workspace/src/dock_panel.rs`
+- Working-tree changes with staging:
+  - `desktop/crates/workspace/src/changes_list.rs`
+- Git commands as data (23 one-shot commands, their messages and telemetry keys):
+  - `desktop/crates/workspace/src/repo_command.rs`
+- Which command the repository state allows:
+  - `desktop/crates/workspace/src/repo_state.rs`
 - Command palette actions (commit, fetch, push, rebase, stash, cherry-pick, etc.):
   - `desktop/crates/ui/src/command_palette.rs`
-- GitHub home (notifications + latest PRs):
-  - `desktop/crates/workspace/src/github_page.rs`
-- GitHub repo details (Overview, Readme, Code, PRs, Issues, branch select):
-  - `desktop/crates/workspace/src/github_repo_page.rs`
+- GitHub sign-in, sign-out and the keychain:
+  - `desktop/crates/workspace/src/auth_flow.rs`
 - GitHub PR details and review (inline/split diff, comment create/edit/reply/delete):
   - `desktop/crates/workspace/src/github_pr_details_page.rs`
 - Desktop API client (talks to the GitHub-integration backend):

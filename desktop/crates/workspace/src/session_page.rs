@@ -132,8 +132,7 @@ enum CenterView {
   InteractiveRebase,
 }
 
-/// Global entry point so other pages (git page review comments, selections)
-/// can route work into the sessions shell.
+/// Global entry point so other pages can route work into the sessions shell.
 pub(crate) struct SessionPageHandle {
   page: Option<gpui::WeakEntity<SessionPage>>,
 }
@@ -1017,7 +1016,7 @@ impl SessionPage {
       DiffViewMode::Inline => DiffViewMode::Split,
       DiffViewMode::Split => DiffViewMode::Inline,
     };
-    // Shared with the Git page: one preference for every diff surface.
+    // One preference for every diff surface, the shell and PR Changes alike.
     crate::config::AppSettings::update(cx, |settings| {
       settings.split_diff_view = self.diff_view == DiffViewMode::Split
     });

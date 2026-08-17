@@ -1051,7 +1051,7 @@ mod tests {
 
     page.read_with(cx, |page, cx| {
       assert_eq!(page.diff_view, DiffViewMode::Split);
-      // The Git page reads the same preference.
+      // The PR Changes tab reads the same preference.
       assert!(crate::config::AppSettings::get(cx).split_diff_view);
       assert_eq!(
         page

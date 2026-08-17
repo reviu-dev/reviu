@@ -1,4 +1,4 @@
-//! Working-tree changes with staging, shared by the Git page and the shell.
+//! Working-tree changes with staging, for the shell's Changes tab.
 
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
@@ -492,7 +492,7 @@ impl ChangesList {
     let list =
       cx.new(|cx| ListState::new(ChangesRowsDelegate::new(weak, split_sections), window, cx));
 
-    // Selecting with the keyboard or the mouse opens the file, like the Git page.
+    // Selecting with the keyboard or the mouse opens the file.
     cx.subscribe(&list, |_, state, event: &ListEvent, cx| match event {
       ListEvent::Select(ix) | ListEvent::Confirm(ix) => {
         if let Some(entry) = state.read(cx).delegate().row_at(*ix) {

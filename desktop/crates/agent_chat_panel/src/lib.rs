@@ -291,7 +291,7 @@ struct SelectionContext {
   text: String,
 }
 
-/// Emitted so the host (Git page) can act on panel interactions.
+/// Emitted so the host can act on panel interactions.
 #[derive(Clone, Debug)]
 pub enum AgentChatPanelEvent {
   /// User clicked a tool-call file location; open it in the diff view.

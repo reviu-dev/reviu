@@ -1733,7 +1733,6 @@ mod tests {
       "cmd-shift-enter",
       "cmd-shift-l",
     ] {
-      assert!(bound_in("/git", keystroke), "{keystroke} on the git page");
       assert!(bound_in("/session", keystroke), "{keystroke} in the shell");
       assert!(
         !bound_in("/github/owner/repo/pull/42/changes", keystroke),
@@ -1754,21 +1753,16 @@ mod tests {
     ] {
       assert!(
         has_binding("/session", keystroke),
-        "{keystroke} on the git page"
-      );
-      assert!(
-        has_binding("/session", keystroke),
-        "{keystroke} in the shell"
+        "{keystroke} followed its command into the shell"
       );
       assert!(
         !has_binding("/settings", keystroke),
-        "{keystroke} stays on the git surfaces"
+        "{keystroke} means nothing outside a repository surface"
       );
     }
 
-    // Staging a file needs the list or the editor focused, on both surfaces.
+    // Staging a file needs the list or the editor focused.
     for keystroke in ["cmd-enter", "cmd-backspace"] {
-      assert!(bound_in("/git", keystroke));
       assert!(bound_in("/session", keystroke));
     }
   }
@@ -1793,7 +1787,7 @@ mod tests {
       "cmd-shift-p",
       bindings.clone()
     ));
-    assert!(!has_binding_with_bindings("/git", "cmd-p", bindings));
+    assert!(!has_binding_with_bindings("/settings", "cmd-p", bindings));
   }
 
   #[test]
@@ -1809,7 +1803,7 @@ mod tests {
     ));
 
     let current_context =
-      [KeyContext::parse(&key_context_for_pathname_with_generation("/git", 2)).unwrap()];
+      [KeyContext::parse(&key_context_for_pathname_with_generation("/session", 2)).unwrap()];
     let old_input = [Keystroke::parse("cmd-p").unwrap()];
     let new_input = [Keystroke::parse("cmd-shift-p").unwrap()];
 
@@ -1895,7 +1889,7 @@ mod tests {
       &Keystroke::parse("cmd-enter").unwrap(),
       &overrides,
     )
-    .expect_err("git page overlap should be rejected");
+    .expect_err("an overlap with a staging shortcut should be rejected");
 
     assert_eq!(
       error,

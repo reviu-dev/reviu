@@ -3482,9 +3482,9 @@ impl GithubPrDetailsPage {
     window: &mut Window,
     cx: &mut Context<Self>,
   ) {
-    let title: SharedString = "Stash changes before opening Git page?".into();
+    let title: SharedString = "Stash changes before switching?".into();
     let message: SharedString =
-      "Create a stash with tracked and untracked files, then prepare this PR branch in the Git page?"
+      "Create a stash with tracked and untracked files, then prepare this PR branch in the workspace?"
         .into();
     let view = cx.entity();
 
@@ -3493,7 +3493,7 @@ impl GithubPrDetailsPage {
       let repo_root = repo_root.clone();
       let post_action = post_action.clone();
       ConfirmDialog::new(title.clone(), div().child(message.clone()))
-        .confirm_text("Stash and open Git page")
+        .confirm_text("Stash and switch")
         .cancel_text("Cancel")
         .on_confirm(move |_, window, cx| {
           let repo_root = repo_root.clone();
