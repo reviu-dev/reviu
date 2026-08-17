@@ -1639,6 +1639,14 @@ impl SessionPage {
     if self.selected_repo.as_deref() == Some(repo_root.as_path()) {
       return Ok(());
     }
+    // A folder that is not a repository would be remembered as the one to open
+    // on the next launch, so it is refused before anything is stored.
+    let Some(repo_root) = git::discover_repository_root(&repo_root) else {
+      return Err("This folder is not a git repository.".into());
+    };
+    if self.selected_repo.as_deref() == Some(repo_root.as_path()) {
+      return Ok(());
+    }
     if self.agent_turn_in_flight(cx) {
       return Err("Wait for the agent to finish before switching repository.".into());
     }
@@ -3106,6 +3114,64 @@ mod tests {
         .iter()
         .any(|recent| recent.path == repo.path)
     );
+  }
+
+  #[gpui::test]
+  async fn a_folder_without_a_repository_is_refused_and_not_remembered(cx: &mut TestAppContext) {
+    let repo = TempRepo::init("session-page-repo-validation");
+    commit_text_file(&repo.path, Path::new("README.md"), "v1\n", "initial");
+    let plain_folder = crate::test_support::temp_path("session-page-not-a-repo");
+    std::fs::create_dir_all(&plain_folder).expect("create plain folder");
+
+    let (page, cx) = add_session_page_window(repo.path.clone(), cx);
+    cx.run_until_parked();
+
+    let refused = page.update_in(cx, |page, window, cx| {
+      page.set_selected_repo(plain_folder.clone(), window, cx)
+    });
+    assert_eq!(
+      refused.expect_err("a plain folder is refused").as_ref(),
+      "This folder is not a git repository."
+    );
+    page.read_with(cx, |page, _| {
+      assert_eq!(
+        page.selected_repo.as_deref(),
+        Some(repo.path.as_path()),
+        "the shell stays on the repository it had"
+      );
+    });
+    assert!(
+      !ConfigStore::load_recent_repositories()
+        .iter()
+        .any(|recent| recent.path == plain_folder),
+      "a refused folder must not come back as the repository to open next launch"
+    );
+
+    // A directory inside a repository is accepted, as its root.
+    let nested = repo.path.join("src/deep");
+    std::fs::create_dir_all(&nested).expect("create nested dirs");
+    let other = TempRepo::init("session-page-repo-validation-other");
+    commit_text_file(&other.path, Path::new("README.md"), "v1\n", "initial");
+    let nested_other = other.path.join("src");
+    std::fs::create_dir_all(&nested_other).expect("create nested dir");
+
+    page
+      .update_in(cx, |page, window, cx| {
+        page.set_selected_repo(nested_other.clone(), window, cx)
+      })
+      .expect("a folder inside a repository is accepted");
+    cx.run_until_parked();
+
+    page.read_with(cx, |page, _| {
+      let selected = page.selected_repo.clone().expect("selected repository");
+      assert_eq!(
+        selected.canonicalize().expect("canonical selection"),
+        other.path.canonicalize().expect("canonical repo"),
+        "the root is selected, not the folder that was picked"
+      );
+    });
+
+    let _ = std::fs::remove_dir_all(&plain_folder);
   }
 
   #[gpui::test]

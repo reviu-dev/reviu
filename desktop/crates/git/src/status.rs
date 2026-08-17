@@ -46,6 +46,14 @@ pub struct RepoStatusEntry {
   pub stage: RepoStage,
 }
 
+/// The root of the repository that owns `path`: a directory inside a working
+/// tree resolves to its root, anything else is not a repository we can open.
+pub fn discover_repository_root(path: &Path) -> Option<PathBuf> {
+  let repo = Repository::discover(path).ok()?;
+  // A bare repository has no working tree, so there is nothing to review in it.
+  Some(repo.workdir()?.to_path_buf())
+}
+
 pub fn list_repo_status(repo_root: &Path) -> Result<Vec<RepoStatusEntry>> {
   let repo =
     Repository::open(repo_root).with_context(|| format!("open repo at {:?}", repo_root))?;
@@ -356,6 +364,44 @@ mod tests {
 
   fn init_repo(path: &Path) {
     Repository::init(path).expect("init git repository");
+  }
+
+  #[test]
+  fn discovering_a_repository_root_from_anywhere_inside_it() {
+    let temp = TempDir::new("status-discover");
+    let nested = temp.path.join("src/deep");
+    std::fs::create_dir_all(&nested).expect("create nested dirs");
+
+    // Not a repository yet.
+    assert_eq!(discover_repository_root(&temp.path), None);
+
+    init_repo(&temp.path);
+
+    let root = discover_repository_root(&temp.path).expect("root of the repository");
+    assert_eq!(
+      root.canonicalize().expect("canonical root"),
+      temp.path.canonicalize().expect("canonical temp")
+    );
+    assert_eq!(
+      discover_repository_root(&nested)
+        .expect("root from a nested directory")
+        .canonicalize()
+        .expect("canonical root"),
+      temp.path.canonicalize().expect("canonical temp"),
+      "a directory inside the working tree resolves to the root"
+    );
+  }
+
+  #[test]
+  fn a_bare_repository_is_not_a_working_tree() {
+    let temp = TempDir::new("status-discover-bare");
+    Repository::init_bare(&temp.path).expect("init bare repository");
+
+    assert_eq!(
+      discover_repository_root(&temp.path),
+      None,
+      "there is nothing to review in a bare repository"
+    );
   }
 
   #[test]

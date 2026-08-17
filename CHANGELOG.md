@@ -4,6 +4,10 @@ All notable changes to Reviu are documented here.
 
 ## 1.0.0
 
+### Only Git Repositories Get Opened
+
+Picking a folder that was not a git repository selected it anyway, remembered it, and reopened Reviu on it at the next launch with a git error in the panel. Reviu now says the folder is not a git repository and keeps the repository you had. Picking a folder inside a repository selects that repository instead of failing, and a folder that stopped being one drops out of the recent list.
+
 ### The Branch's Pull Request From The Command Palette
 
 The pull request of the current branch was only reachable by opening the Pull request tab and clicking. The Sessions command palette now mirrors that tab: `Open pull request #n` when the branch already has one, `Create pull request` when it does not, and nothing at all without GitHub access.

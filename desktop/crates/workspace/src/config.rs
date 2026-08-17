@@ -339,7 +339,9 @@ impl ConfigStore {
       match row {
         Ok(path_string) => {
           let path = PathBuf::from(&path_string);
-          if path.is_dir() {
+          // A folder that stopped being a repository would otherwise come back
+          // as the one to open on the next launch.
+          if path.is_dir() && path.join(".git").exists() {
             repositories.push(RecentRepository { path });
           } else {
             missing_paths.push(path_string);
@@ -741,6 +743,7 @@ mod tests {
     let path =
       std::env::temp_dir().join(format!("reviu-config-{label}-{}-{id}", std::process::id()));
     fs::create_dir_all(&path).expect("create temp repo dir");
+    git2::Repository::init(&path).expect("init temp repo");
     path
   }
 
@@ -788,6 +791,39 @@ mod tests {
 
     let _ = fs::remove_dir_all(&repo_a);
     let _ = fs::remove_dir_all(&repo_b);
+    ConfigStore::set_test_db_path(None);
+  }
+
+  #[test]
+  fn load_recent_repositories_drops_folders_that_stopped_being_repositories() {
+    let db_path = unique_test_db_path("stale-repo");
+    let _ = fs::remove_file(&db_path);
+    ConfigStore::set_test_db_path(Some(db_path));
+
+    let repo = unique_test_repo_dir("stale-repo-kept");
+    let stale = unique_test_repo_dir("stale-repo-dropped");
+    ConfigStore::persist_recent_repository(&repo);
+    ConfigStore::persist_recent_repository(&stale);
+
+    // The folder is still there, its repository is not.
+    fs::remove_dir_all(stale.join(".git")).expect("remove .git");
+
+    let paths: Vec<PathBuf> = ConfigStore::load_recent_repositories()
+      .into_iter()
+      .map(|repo| repo.path)
+      .collect();
+    assert_eq!(paths, vec![repo.clone()]);
+
+    // Forgotten for good, not just filtered out of this read.
+    fs::create_dir_all(stale.join(".git")).expect("recreate .git");
+    let paths_again: Vec<PathBuf> = ConfigStore::load_recent_repositories()
+      .into_iter()
+      .map(|repo| repo.path)
+      .collect();
+    assert_eq!(paths_again, vec![repo.clone()]);
+
+    let _ = fs::remove_dir_all(&repo);
+    let _ = fs::remove_dir_all(&stale);
     ConfigStore::set_test_db_path(None);
   }
 
