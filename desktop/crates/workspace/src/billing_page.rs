@@ -18,7 +18,7 @@ use ui::{
 };
 
 use crate::{
-  AuthCallbackTarget, CloseWorkspacePage, ShowCommandPalette,
+  CloseWorkspacePage, ShowCommandPalette,
   api::{ApiClient, CustomerStateSubscription, CustomerStateSubscriptionStatus},
   auth_state::{AuthState, AuthStateStore},
   date_format::{format_long_date_opt, parse_rfc3339},
@@ -561,7 +561,7 @@ impl BillingPage {
             .label("Sign in with GitHub")
             .small()
             .on_click(|_, _, cx| {
-              AuthCallbackTarget::start_sign_in(cx, "billing_page");
+              crate::auth_flow::start_github_sign_in(cx, "billing_page");
             }),
         ),
       )

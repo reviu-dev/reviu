@@ -16,9 +16,9 @@ use std::time::Duration;
 use ui::PAGE_HEADER_HEIGHT;
 use ui::{AppAssets, parse_github_url_action};
 use workspace::{
-  AppProfile, AuthCallbackTarget, AuthStateStore, WorkspaceView, build_app_menus,
-  github_navigation::open_pr_target, install_app_key_bindings, install_crash_reporter,
-  show_startup_crash_report_notification, take_pending_startup_crash_report,
+  AppProfile, AuthStateStore, WorkspaceView, build_app_menus, github_navigation::open_pr_target,
+  install_app_key_bindings, install_crash_reporter, show_startup_crash_report_notification,
+  take_pending_startup_crash_report,
 };
 
 #[cfg(target_os = "linux")]
@@ -390,10 +390,10 @@ fn main() {
           }
           cx.update(|cx| {
             for code in codes {
-              AuthCallbackTarget::handle_auth_code(code, cx);
+              workspace::auth_flow::handle_auth_code(code, cx);
             }
             if should_handle_subscription_callback {
-              AuthCallbackTarget::handle_subscription_callback(cx);
+              workspace::auth_flow::handle_subscription_callback(cx);
             }
           });
         }

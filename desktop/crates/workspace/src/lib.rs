@@ -55,6 +55,7 @@ mod api;
 pub mod app_log;
 mod app_profile;
 mod app_update;
+pub mod auth_flow;
 mod auth_state;
 mod billing_page;
 mod browser_extensions_dialog;
@@ -106,6 +107,5 @@ pub use crash_report::{
   StartupCrashReport, install_crash_reporter, show_startup_crash_report_notification,
   take_pending_startup_crash_report,
 };
-pub use git_page::AuthCallbackTarget;
 pub use shortcuts::{SHOW_COMMAND_PALETTE_SHORTCUT, install_app_key_bindings};
 pub use workspace::{WorkspaceView, build_app_menus};

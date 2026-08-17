@@ -139,7 +139,7 @@ impl GitPage {
     palette_repositories_len: usize,
     cx: &App,
   ) -> GitCommandPaletteContents {
-    let include_github = self.auth_state.has_github_access();
+    let include_github = crate::auth_state::AuthStateStore::has_github_access(cx);
     let mut commands = Vec::new();
     let mut stashes = Vec::new();
     let mut default_stash_message_value = None;

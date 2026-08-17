@@ -19,7 +19,6 @@ use gpui_component::{
 use gpui_router::{Route, Routes};
 
 use crate::AppProfile;
-use crate::AuthCallbackTarget;
 use crate::about_page::AboutPage;
 use crate::active_local_repo::ActiveLocalRepoStore;
 use crate::api::ApiClient;
@@ -339,6 +338,8 @@ impl WorkspaceView {
     crate::command_usage::install_palette_usage_recorder(cx);
     crate::analytics::Analytics::init(cx);
     crate::analytics::track(cx, "app_started");
+    // Signing in is app-wide, not something a page owns.
+    crate::auth_flow::load_stored_token(cx);
     set_indent_rainbow_enabled(settings.indent_rainbow);
     Theme::global_mut(cx).font_size = px(settings.font_size);
     if settings.auto_switch_theme {
@@ -840,10 +841,10 @@ impl WorkspaceView {
       crate::browser_extensions_dialog::open_browser_extensions_dialog(window, cx);
     });
     let sign_in = Rc::new(|_window: &mut Window, cx: &mut App| {
-      AuthCallbackTarget::start_sign_in(cx, "user_menu");
+      crate::auth_flow::start_github_sign_in(cx, "user_menu");
     });
     let sign_out = Rc::new(|_window: &mut Window, cx: &mut App| {
-      AuthCallbackTarget::sign_out(cx);
+      crate::auth_flow::sign_out(cx);
       GithubNotificationsStore::clear(cx);
     });
 
@@ -906,7 +907,7 @@ impl WorkspaceView {
       .gap_2()
       .small()
       .on_click(|_, _, cx| {
-        AuthCallbackTarget::start_sign_in(cx, "top_bar");
+        crate::auth_flow::start_github_sign_in(cx, "top_bar");
       });
 
     let show_file_search_button = page_has_file_search(pathname);

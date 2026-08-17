@@ -160,6 +160,16 @@ impl SessionPageHandle {
     });
   }
 
+  /// GitHub access changed: the inbox and the branch's pull request depend on it.
+  pub fn refresh_github_state(cx: &mut App) {
+    Self::with_page(cx, |page, _window, cx| {
+      page
+        .dock_panel
+        .update(cx, |panel, cx| panel.refresh_branch_pull_request_state(cx));
+      cx.notify();
+    });
+  }
+
   /// Navigate to the sessions shell and send a review-comment batch to the agent.
   pub fn send_review(text: String, cx: &mut App) {
     NavigationHistory::navigate("/session", cx);

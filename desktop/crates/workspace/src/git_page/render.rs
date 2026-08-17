@@ -1411,6 +1411,7 @@ impl GitPage {
 mod tests {
   use super::super::test_support::*;
   use super::*;
+  use crate::auth_state::AuthState;
 
   use crate::api::UserRole;
   use gpui::TestAppContext;

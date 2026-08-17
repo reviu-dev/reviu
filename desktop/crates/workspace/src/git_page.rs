@@ -49,7 +49,7 @@ use terminal::TerminalView;
 use crate::{
   active_local_repo::{ActiveLocalRepo, ActiveLocalRepoStore},
   api::{ApiClient, GithubPullRequest},
-  auth_state::{AuthState, AuthStateStore},
+  auth_state::AuthStateStore,
   config::{AppSettings, ConfigStore, RecentRepository},
   file_preview::{is_markdown_path, is_previewable_path, is_svg_path},
   file_search_palette::open_file_search_palette as open_shared_file_search_palette,
@@ -57,7 +57,6 @@ use crate::{
   github_navigation::{
     open_commit_target, open_profile_target, open_repo_target, should_open_externally,
   },
-  github_notifications::GithubNotificationsStore,
   github_pr_details_page::GithubPrDetailsPageHandle,
   github_shared,
   interactive_rebase_todo_view::{
@@ -398,56 +397,6 @@ impl DropdownSelectItem for BranchSelectItem {
   }
 }
 
-#[derive(Clone, Default)]
-pub struct AuthCallbackTarget {
-  git_page: Option<WeakEntity<GitPage>>,
-}
-
-impl Global for AuthCallbackTarget {}
-
-impl AuthCallbackTarget {
-  pub fn register_git_page(cx: &mut Context<GitPage>) {
-    cx.set_global(Self {
-      git_page: Some(cx.entity().downgrade()),
-    });
-  }
-
-  pub fn handle_auth_code(code: String, cx: &mut App) {
-    let Some(weak) = cx.global::<Self>().git_page.clone() else {
-      return;
-    };
-    let _ = weak.update(cx, |this, cx| this.handle_auth_code(code, cx));
-  }
-
-  pub fn start_sign_in(cx: &mut App, source: &'static str) {
-    let Some(weak) = cx.global::<Self>().git_page.clone() else {
-      return;
-    };
-    let _ = weak.update(cx, |this, cx| this.start_github_sign_in(source, cx));
-  }
-
-  pub fn sign_out(cx: &mut App) {
-    let Some(weak) = cx.global::<Self>().git_page.clone() else {
-      return;
-    };
-    let _ = weak.update(cx, |this, cx| this.logout(cx));
-  }
-
-  pub fn refresh_me(cx: &mut App) {
-    let Some(weak) = cx.global::<Self>().git_page.clone() else {
-      return;
-    };
-    let _ = weak.update(cx, |this, cx| this.refresh_auth_state(cx));
-  }
-
-  pub fn handle_subscription_callback(cx: &mut App) {
-    let Some(weak) = cx.global::<Self>().git_page.clone() else {
-      return;
-    };
-    let _ = weak.update(cx, |this, cx| this.handle_subscription_callback(cx));
-  }
-}
-
 pub struct GitPage {
   focus_handle: FocusHandle,
   history_tree_wrapper_focus: FocusHandle,
@@ -505,8 +454,6 @@ pub struct GitPage {
   branch_pr_lookup_result: Option<GithubPullRequest>,
   branch_pr_lookup_loading: bool,
   pending_conflict_reveal_path: Option<PathBuf>,
-  auth_state: AuthState,
-  auth_task: Option<Task<()>>,
   branch_pr_lookup_task: Option<Task<()>>,
   open_file_task: Option<Task<()>>,
   status_task: Option<Task<()>>,
@@ -1329,143 +1276,6 @@ impl GitPage {
     });
   }
 
-  fn handle_auth_code(&mut self, code: String, cx: &mut Context<Self>) {
-    let api = self.api.clone();
-    let service = self.api.keychain_service().to_string();
-    let username = self.api.keychain_username().to_string();
-    let task = cx.spawn(async move |this, cx| {
-      let result = cx
-        .background_spawn(async move { api.exchange_code_for_token(&code) })
-        .await;
-      match result {
-        Ok(token) => {
-          let secret = token.clone().into_bytes();
-          let write_task = cx.update(|cx| cx.write_credentials(&service, &username, &secret));
-          let _ = write_task.await;
-          let _ = this.update(cx, |this, cx| {
-            this.api.set_bearer_token(token);
-            crate::analytics::track(cx, "sign_in_completed");
-            this.refresh_auth_state(cx);
-          });
-        }
-        Err(_) => {
-          let _ = this.update(cx, |this, cx| {
-            this.set_auth_state(AuthState::Unauthenticated, cx);
-          });
-        }
-      }
-    });
-
-    self.auth_task = Some(task);
-  }
-
-  fn handle_subscription_callback(&mut self, cx: &mut Context<Self>) {
-    crate::analytics::track(cx, "subscription_callback_received");
-    self.refresh_auth_state(cx);
-
-    NavigationHistory::navigate("/billing", cx);
-  }
-
-  fn logout(&mut self, cx: &mut Context<Self>) {
-    let api = self.api.clone();
-    let service = self.api.keychain_service().to_string();
-    let task = cx.spawn(async move |this, cx| {
-      let _ = cx.background_spawn(async move { api.sign_out() }).await;
-      let delete_task = cx.update(|cx| cx.delete_credentials(&service));
-      let _ = delete_task.await;
-      let _ = this.update(cx, |this, cx| {
-        this.set_auth_state(AuthState::Unauthenticated, cx);
-      });
-    });
-
-    self.auth_task = Some(task);
-  }
-
-  fn load_bearer_from_keychain(&mut self, cx: &mut Context<Self>) {
-    let service = self.api.keychain_service().to_string();
-    let task = cx.spawn(async move |this, cx| {
-      let read_result = cx.update(|cx| cx.read_credentials(&service)).await;
-      let _ = this.update(cx, |this, cx| {
-        if let Ok(Some((_username, secret))) = read_result
-          && let Ok(token) = String::from_utf8(secret)
-        {
-          this.api.set_bearer_token(token);
-          this.refresh_auth_state(cx);
-          return;
-        }
-        this.set_auth_state(AuthState::Unauthenticated, cx);
-      });
-    });
-
-    self.auth_task = Some(task);
-  }
-
-  fn refresh_auth_state(&mut self, cx: &mut Context<Self>) {
-    let api = self.api.clone();
-    let task = cx.spawn(async move |this, cx| {
-      let result = cx.background_spawn(async move { api.fetch_me() }).await;
-      let _ = this.update(cx, |this, cx| {
-        let state = match result {
-          Ok(Some(user)) => AuthState::Authenticated(Box::new(user)),
-          Ok(None) => AuthState::Unauthenticated,
-          Err(_) => AuthState::Unauthenticated,
-        };
-        this.set_auth_state(state, cx);
-      });
-    });
-
-    self.auth_task = Some(task);
-  }
-
-  fn start_github_sign_in(&mut self, source: &'static str, cx: &mut Context<Self>) {
-    crate::analytics::track_with(
-      cx,
-      "sign_in_started",
-      Some(serde_json::json!({ "source": source })),
-    );
-    let api = self.api.clone();
-    let task = cx.spawn(async move |_, cx| {
-      let result = cx
-        .background_spawn(async move { api.sign_in_with_github() })
-        .await;
-      if let Ok(Some(url)) = result {
-        cx.update(|cx| cx.open_url(&url));
-      }
-    });
-
-    self.auth_task = Some(task);
-  }
-
-  fn set_auth_state(&mut self, state: AuthState, cx: &mut Context<Self>) {
-    let had_github_access = AuthStateStore::has_github_access(cx);
-    self.auth_state = state.clone();
-    AuthStateStore::set(cx, state);
-
-    if !had_github_access && AuthStateStore::has_github_access(cx) {
-      self.fetch_initial_notifications(cx);
-    }
-
-    self.refresh_branch_pr_lookup(cx);
-    cx.refresh_windows();
-    cx.notify();
-  }
-
-  fn fetch_initial_notifications(&mut self, cx: &mut Context<Self>) {
-    let api = self.api.clone();
-    cx.spawn(async move |_, cx| {
-      let result = cx
-        .background_spawn(async move { api.fetch_github_notifications() })
-        .await;
-      cx.update(|cx| {
-        if let Ok(notifications) = result {
-          GithubNotificationsStore::set(cx, notifications);
-          cx.refresh_windows();
-        }
-      });
-    })
-    .detach();
-  }
-
   pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
     let recent = ConfigStore::load_recent_repositories();
     let app_settings = AppSettings::get(cx);
@@ -1548,8 +1358,6 @@ impl GitPage {
       branch_pr_lookup_result: None,
       branch_pr_lookup_loading: false,
       pending_conflict_reveal_path: None,
-      auth_state: AuthState::Unknown,
-      auth_task: None,
       branch_pr_lookup_task: None,
       open_file_task: None,
       status_task: None,
@@ -1577,8 +1385,6 @@ impl GitPage {
     view.reload_status(cx);
     view.refresh_branches(cx);
     view.start_polling(cx);
-    view.load_bearer_from_keychain(cx);
-    AuthCallbackTarget::register_git_page(cx);
     GitPageHandle::register(cx);
 
     view
@@ -1652,8 +1458,6 @@ impl GitPage {
       branch_pr_lookup_result: None,
       branch_pr_lookup_loading: false,
       pending_conflict_reveal_path: None,
-      auth_state: AuthState::Unknown,
-      auth_task: None,
       branch_pr_lookup_task: None,
       open_file_task: None,
       status_task: None,
@@ -3207,6 +3011,7 @@ impl Focusable for GitPage {
 mod tests {
   use super::test_support::*;
   use super::*;
+  use crate::auth_state::AuthState;
   use git::RepoStage;
   use git::create_branch;
   use git2::Repository;

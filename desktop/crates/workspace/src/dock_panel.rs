@@ -395,6 +395,10 @@ impl DockPanel {
     }
   }
 
+  pub(crate) fn refresh_branch_pull_request_state(&mut self, cx: &mut Context<Self>) {
+    self.refresh_branch_pull_request(cx);
+  }
+
   fn refresh_branch_pull_request(&mut self, cx: &mut Context<Self>) {
     let Some(repo_root) = self.repo_root.clone() else {
       return;
