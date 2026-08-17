@@ -79,7 +79,6 @@ use ui::{
 
 mod command_palette;
 mod commit;
-mod file_list;
 mod history;
 mod rebase;
 mod remote;
@@ -89,7 +88,7 @@ mod staging;
 #[cfg(test)]
 mod test_support;
 
-use file_list::{format_git_file_name_label, render_repo_status_label};
+use crate::file_view::file_name_label as format_git_file_name_label;
 
 const SIDEBAR_DEFAULT_WIDTH: f32 = 400.0;
 const SIDEBAR_MIN_WIDTH: f32 = 250.0;

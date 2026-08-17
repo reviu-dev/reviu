@@ -35,7 +35,7 @@ use crate::diff_view_policy::{DiffViewInputs, effective_diff_view};
 use crate::dock_panel::{CommitMenuCommand, DockPanel, DockPanelEvent, DockPanelTab};
 use crate::file_search_palette::open_file_search_palette;
 use crate::file_view::{
-  BinaryPreview, build_binary_preview, render_binary_preview, render_file_title,
+  BinaryPreview, build_binary_preview, render_binary_preview, render_file_title_with_status,
 };
 use crate::github_notifications::{self, GithubNotificationsStore};
 use crate::navigation::NavigationHistory;
@@ -735,6 +735,21 @@ impl SessionPage {
       .iter()
       .find(|entry| entry.path == path)
       .map(|entry| entry.status)
+  }
+
+  /// The path a renamed file came from, so the diff header can name both sides.
+  fn selected_file_old_path(&self, cx: &App) -> Option<PathBuf> {
+    if self.opened_commit.is_some() {
+      return None;
+    }
+    let path = self.selected_file.as_deref()?;
+    self
+      .dock_panel
+      .read(cx)
+      .status_entries()
+      .iter()
+      .find(|entry| entry.path == path)
+      .and_then(|entry| entry.old_path.clone())
   }
 
   fn annotation_navigation(&self, cx: &App) -> Option<AnnotationNavigationState> {

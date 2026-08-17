@@ -6,6 +6,10 @@ use std::sync::Arc;
 use gpui::{AnyElement, Image, ObjectFit, SharedString, div, img, prelude::*, px};
 use gpui_component::{ActiveTheme as _, Icon, IconName, h_flex, v_flex};
 
+use git::RepoStatusKind;
+
+pub(crate) const FILE_TITLE_OLD_NAME_DEBUG_SELECTOR: &str = "file-title-old-name";
+
 use crate::file_preview::{
   FilePreviewKind, file_preview_kind, raster_image_from_bytes,
   should_show_unsupported_binary_placeholder,
@@ -155,6 +159,61 @@ pub(crate) fn render_binary_preview(preview: &BinaryPreview, cx: &gpui::App) -> 
 /// File title used in editor/diff headers: type icon, file name, unsaved dot,
 /// then the directory path trailing on the right.
 pub(crate) fn render_file_title(path: &Path, is_dirty: bool, cx: &gpui::App) -> AnyElement {
+  render_file_title_with_status(path, None, None, is_dirty, cx)
+}
+
+/// A rename has to name both sides, otherwise reading the diff of a moved file
+/// says nothing about where it came from.
+pub(crate) fn render_file_name_with_status(
+  theme: &gpui_component::Theme,
+  status: Option<RepoStatusKind>,
+  label: SharedString,
+  old_label: Option<SharedString>,
+) -> AnyElement {
+  if status == Some(RepoStatusKind::Renamed)
+    && let Some(old_label) = old_label
+  {
+    return h_flex()
+      .min_w_0()
+      .items_center()
+      .text_sm()
+      .gap_1()
+      .child(
+        div()
+          .debug_selector(|| FILE_TITLE_OLD_NAME_DEBUG_SELECTOR.to_string())
+          .min_w_0()
+          .overflow_hidden()
+          .text_ellipsis_start()
+          .text_color(theme.muted_foreground)
+          .line_through()
+          .child(old_label),
+      )
+      .child(
+        Icon::new(IconName::ArrowRight)
+          .size_3()
+          .text_color(theme.muted_foreground),
+      )
+      .child(div().flex_shrink_0().child(label))
+      .into_any_element();
+  }
+
+  div()
+    .flex_shrink_0()
+    .text_sm()
+    .when(status == Some(RepoStatusKind::Deleted), |this| {
+      this.line_through()
+    })
+    .child(label)
+    .into_any_element()
+}
+
+pub(crate) fn render_file_title_with_status(
+  path: &Path,
+  old_path: Option<&Path>,
+  status: Option<RepoStatusKind>,
+  is_dirty: bool,
+  cx: &gpui::App,
+) -> AnyElement {
   let theme = cx.theme().clone();
   let dir = file_dir_label(path);
 
@@ -175,10 +234,13 @@ pub(crate) fn render_file_title(path: &Path, is_dirty: bool, cx: &gpui::App) -> 
     )
     .child(
       div()
-        .flex_shrink_0()
-        .text_sm()
         .text_color(theme.foreground)
-        .child(file_name_label(path)),
+        .child(render_file_name_with_status(
+          &theme,
+          status,
+          file_name_label(path),
+          old_path.map(file_name_label),
+        )),
     )
     .when(is_dirty, |this| {
       this.child(

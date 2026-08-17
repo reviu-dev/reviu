@@ -4,6 +4,10 @@ All notable changes to Reviu are documented here.
 
 ## 1.0.0
 
+### A Renamed File Says Where It Came From
+
+Opening a renamed file in the Sessions workspace showed only its new name. The header now names both sides, old name struck through then the new one, the way the Git page did, and a deleted file keeps its struck-through title.
+
 ### Only Git Repositories Get Opened
 
 Picking a folder that was not a git repository selected it anyway, remembered it, and reopened Reviu on it at the next launch with a git error in the panel. Reviu now says the folder is not a git repository and keeps the repository you had. Picking a folder inside a repository selects that repository instead of failing, and a folder that stopped being one drops out of the recent list.

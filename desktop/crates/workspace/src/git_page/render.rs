@@ -553,7 +553,7 @@ impl GitPage {
               .min_w_0()
               .items_center()
               .gap_2()
-              .child(render_repo_status_label(
+              .child(crate::file_view::render_file_name_with_status(
                 &theme,
                 status_kind,
                 file_name,

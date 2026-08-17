@@ -549,10 +549,11 @@ impl SessionPage {
       .as_ref()
       .is_some_and(|editor| editor.read(cx).is_dirty);
     let save_editor = self.editor.clone();
-    let file_title = self
-      .selected_file
-      .as_deref()
-      .map(|path| render_file_title(path, file_dirty, cx));
+    let file_status = self.selected_file_status(cx);
+    let old_path = self.selected_file_old_path(cx);
+    let file_title = self.selected_file.clone().map(|path| {
+      render_file_title_with_status(&path, old_path.as_deref(), file_status, file_dirty, cx)
+    });
 
     h_flex()
       .h(px(40.))
@@ -973,6 +974,49 @@ mod tests {
     // The row under the counter opens the repository switcher: it must not fire.
     let switcher_open = cx.update(|window, cx| window.has_active_dialog(cx));
     assert!(!switcher_open, "the repository switcher should stay closed");
+  }
+
+  #[gpui::test]
+  async fn a_renamed_file_names_both_sides_in_the_header(cx: &mut TestAppContext) {
+    let repo = TempRepo::init("session-page-rename-header");
+    commit_text_file(&repo.path, Path::new("old_name.rs"), "v1\n", "initial");
+    std::fs::rename(repo.path.join("old_name.rs"), repo.path.join("new_name.rs"))
+      .expect("rename file");
+    git::stage_all(&repo.path).expect("stage the rename");
+
+    let (page, cx) = add_session_page_window(repo.path.clone(), cx);
+    page.update(cx, |page, cx| {
+      page.dock_panel.update(cx, |panel, cx| panel.refresh(cx))
+    });
+    cx.run_until_parked();
+
+    page.update_in(cx, |page, window, cx| {
+      page.open_diff(PathBuf::from("new_name.rs"), None, window, cx);
+    });
+    await_open_file(&page, cx).await;
+
+    assert!(
+      cx.debug_bounds(crate::file_view::FILE_TITLE_OLD_NAME_DEBUG_SELECTOR)
+        .is_some(),
+      "reading the diff of a moved file has to say where it came from"
+    );
+
+    // A plain modification names one file only.
+    std::fs::write(repo.path.join("plain.rs"), "v1\n").expect("write file");
+    git::stage_all(&repo.path).expect("stage the new file");
+    page.update(cx, |page, cx| {
+      page.dock_panel.update(cx, |panel, cx| panel.refresh(cx))
+    });
+    cx.run_until_parked();
+    page.update_in(cx, |page, window, cx| {
+      page.open_diff(PathBuf::from("plain.rs"), None, window, cx);
+    });
+    await_open_file(&page, cx).await;
+
+    assert!(
+      cx.debug_bounds(crate::file_view::FILE_TITLE_OLD_NAME_DEBUG_SELECTOR)
+        .is_none()
+    );
   }
 
   #[gpui::test]
