@@ -2416,7 +2416,10 @@ impl GithubPrDetailsPageHandle {
   }
 
   pub fn refresh(cx: &mut App) {
-    let Some(weak) = cx.global::<Self>().page.clone() else {
+    let Some(weak) = cx
+      .try_global::<Self>()
+      .and_then(|handle| handle.page.clone())
+    else {
       return;
     };
     let _ = weak.update(cx, |this, cx| this.refresh_current_page(cx));
@@ -2454,7 +2457,12 @@ impl GithubPrDetailsPageHandle {
     open_target: GithubPrOpenTarget,
     cx: &mut App,
   ) {
-    let Some(weak) = cx.global::<Self>().page.clone() else {
+    // Opening a pull request is one keystroke away from anywhere; the page it
+    // needs may not be mounted, which is not a crash.
+    let Some(weak) = cx
+      .try_global::<Self>()
+      .and_then(|handle| handle.page.clone())
+    else {
       return;
     };
 

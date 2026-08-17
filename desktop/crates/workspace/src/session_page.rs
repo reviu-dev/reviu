@@ -3541,6 +3541,50 @@ mod tests {
       cx.update(|window, cx| window.has_active_dialog(cx)),
       "the palette opens the same form as the tab"
     );
+
+    // An existing pull request: the palette opens it instead of the form.
+    page.update(cx, |page, cx| {
+      page.dock_panel.update(cx, |panel, cx| {
+        panel.set_branch_pull_request_state(
+          crate::dock_panel::BranchPrState::Found(
+            GithubBranchContext {
+              owner: "acme".to_string(),
+              repo: "widget".to_string(),
+              branch: "feature".to_string(),
+            },
+            Box::new(
+              serde_json::from_value(serde_json::json!({
+                "number": 42,
+                "title": "Add widgets",
+                "state": "open",
+                "draft": false,
+                "repository": { "owner": "acme", "repo": "widget" }
+              }))
+              .expect("build pull request"),
+            ),
+          ),
+          cx,
+        );
+      });
+    });
+
+    page.read_with(cx, |page, cx| {
+      let ids = page
+        .palette_commands(1, cx)
+        .into_iter()
+        .map(|command| command.id)
+        .collect::<Vec<_>>();
+      assert!(ids.contains(&CommandPaletteCommandId::OpenPullRequest));
+      assert!(!ids.contains(&CommandPaletteCommandId::CreatePullRequest));
+    });
+
+    // The pull request page is not mounted here: opening it is a no-op, not a crash.
+    page.update_in(cx, |page, window, cx| {
+      page
+        .handle_command_palette_action(CommandPaletteAction::OpenPullRequest, window, cx)
+        .expect("open pull request is allowed");
+    });
+    cx.run_until_parked();
   }
 
   #[gpui::test]
