@@ -3330,6 +3330,40 @@ mod tests {
       "v2\n",
       "the file is only discarded once the dialog is confirmed"
     );
+
+    // What the dialog runs on confirmation.
+    let restore = page.update_in(cx, |page, window, cx| {
+      page
+        .dock_panel
+        .read(cx)
+        .changes_list()
+        .update(cx, |list, cx| {
+          list.restore_all(window, cx);
+          list._action_task.take().expect("restore all task")
+        })
+    });
+    restore.await;
+    cx.run_until_parked();
+    let refresh = page.update(cx, |page, cx| {
+      page
+        .dock_panel
+        .update(cx, |panel, _| panel._refresh_task.take())
+    });
+    if let Some(task) = refresh {
+      task.await;
+    }
+    cx.run_until_parked();
+
+    assert_eq!(
+      std::fs::read_to_string(repo.path.join("a.txt")).expect("read file"),
+      "v1\n"
+    );
+    page.read_with(cx, |page, cx| {
+      assert!(
+        page.dock_panel.read(cx).status_entries().is_empty(),
+        "the changes list follows a discard without an explicit refresh"
+      );
+    });
   }
 
   #[gpui::test]
