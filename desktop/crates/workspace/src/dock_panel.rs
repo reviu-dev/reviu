@@ -23,13 +23,14 @@ use terminal::TerminalView;
 
 use crate::changes_list::{ChangesList, ChangesListEvent};
 use crate::history_list::{HistoryList, HistoryListEvent};
-use crate::repo_state::{PaletteCommand, RepoState, push_flags};
+use crate::repo_state::{PaletteCommand, RepoState, push_flags, should_publish_branch};
 
 const DOCK_PANEL_TERMINAL_DEBUG_SELECTOR: &str = "dock-panel-terminal";
 pub(crate) const DOCK_PANEL_HISTORY_DEBUG_SELECTOR: &str = "dock-panel-history";
 const DOCK_PANEL_COMMIT_DEBUG_SELECTOR: &str = "dock-panel-commit";
 const DOCK_PANEL_COMMIT_MENU_DEBUG_SELECTOR: &str = "dock-panel-commit-menu";
 const DOCK_PANEL_CREATE_PR_DEBUG_SELECTOR: &str = "dock-panel-create-pr";
+const DOCK_PANEL_PUBLISH_AND_CREATE_PR_DEBUG_SELECTOR: &str = "dock-panel-publish-and-create-pr";
 const DOCK_PANEL_COMPARE_DEBUG_SELECTOR: &str = "dock-panel-compare-on-github";
 const DOCK_PANEL_OPERATION_DEBUG_SELECTOR: &str = "dock-panel-operation";
 #[cfg(test)]
@@ -66,6 +67,8 @@ pub enum DockPanelEvent {
   ContinueRebase,
   /// A command picked in the commit menu; the host owns running it.
   RunCommand(CommitMenuCommand),
+  /// An unpublished branch: push it, then open the pull request form.
+  PublishBranchAndCreatePullRequest(GithubBranchContext),
 }
 
 impl gpui::EventEmitter<DockPanelEvent> for DockPanel {}
@@ -448,6 +451,14 @@ impl DockPanel {
   ) {
     self.branch_status = branch_status;
     cx.notify();
+  }
+
+  /// GitHub cannot open a pull request for a branch its remote has never seen.
+  fn branch_needs_publishing(&self) -> bool {
+    should_publish_branch(
+      self.branch_status.as_ref(),
+      self.head_status.has_head_commit,
+    )
   }
 
   fn repo_state<'a>(&'a self, commit_message: &'a str) -> RepoState<'a> {
@@ -988,6 +999,40 @@ impl DockPanel {
       ),
       BranchPrState::NoRemote => self.render_pr_message("No GitHub remote on this repository", cx),
       BranchPrState::Loading => self.render_pr_message("Loading pull request...", cx),
+      BranchPrState::Missing(context) if self.branch_needs_publishing() => {
+        let context = context.clone();
+        v_flex()
+          .flex_1()
+          .items_center()
+          .justify_center()
+          .gap_3()
+          .px_4()
+          .child(
+            Icon::new(UiIconName::GitPullRequestArrow)
+              .size_4()
+              .text_color(theme.muted_foreground),
+          )
+          .child(
+            div()
+              .text_sm()
+              .text_center()
+              .text_color(theme.muted_foreground)
+              .child(format!("{} is not on the remote yet", context.branch)),
+          )
+          .child(
+            Button::new("dock-panel-publish-and-create-pr")
+              .primary()
+              .small()
+              .label("Publish and create pull request")
+              .debug_selector(|| DOCK_PANEL_PUBLISH_AND_CREATE_PR_DEBUG_SELECTOR.to_string())
+              .on_click(cx.listener(move |_, _, _, cx| {
+                cx.emit(DockPanelEvent::PublishBranchAndCreatePullRequest(
+                  context.clone(),
+                ));
+              })),
+          )
+          .into_any_element()
+      }
       BranchPrState::Missing(context) => {
         let context = context.clone();
         v_flex()
@@ -1311,6 +1356,94 @@ mod tests {
         "an open history tab follows the repository"
       );
     });
+  }
+
+  #[gpui::test]
+  async fn an_unpublished_branch_is_offered_a_push_before_the_pull_request(
+    cx: &mut TestAppContext,
+  ) {
+    cx.update(|cx| gpui_component::init(cx));
+    let repo = TempRepo::init("dock-publish-and-create-pr");
+    commit_text_file(&repo.path, Path::new("README.md"), "v1\n", "initial");
+
+    let (panel, cx) = add_dock_panel_window(Some(repo.path.clone()), cx);
+    await_refresh(&panel, cx).await;
+
+    let context = GithubBranchContext {
+      owner: "acme".to_string(),
+      repo: "widget".to_string(),
+      branch: "feature".to_string(),
+    };
+    // Opening the tab refreshes the lookup, so the state is set afterwards.
+    panel.update_in(cx, |panel, window, cx| {
+      panel.open_tab(DockPanelTab::PullRequest, window, cx)
+    });
+    cx.run_until_parked();
+    panel.update(cx, |panel, cx| {
+      panel.branch_pr = BranchPrState::Missing(context.clone());
+      panel.set_branch_status(
+        Some(git::BranchStatus {
+          name: "feature".to_string(),
+          ahead: 1,
+          behind: 0,
+          has_upstream: false,
+        }),
+        cx,
+      );
+    });
+    cx.run_until_parked();
+
+    assert!(
+      cx.debug_bounds(DOCK_PANEL_PUBLISH_AND_CREATE_PR_DEBUG_SELECTOR)
+        .is_some(),
+      "a branch the remote never saw is published first"
+    );
+    assert!(
+      cx.debug_bounds(DOCK_PANEL_CREATE_PR_DEBUG_SELECTOR)
+        .is_none(),
+      "GitHub cannot open a pull request for it yet"
+    );
+
+    // The event carries the branch the form will target.
+    let published = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+    let recorder = published.clone();
+    cx.update(|_, cx| {
+      cx.subscribe(&panel, move |_panel, event: &DockPanelEvent, _cx| {
+        if let DockPanelEvent::PublishBranchAndCreatePullRequest(context) = event {
+          recorder.borrow_mut().push(context.branch.clone());
+        }
+      })
+      .detach();
+    });
+    let button = cx
+      .debug_bounds(DOCK_PANEL_PUBLISH_AND_CREATE_PR_DEBUG_SELECTOR)
+      .expect("publish button bounds");
+    cx.simulate_click(button.center(), gpui::Modifiers::default());
+    cx.run_until_parked();
+    assert_eq!(published.borrow().as_slice(), ["feature".to_string()]);
+
+    // Once it has an upstream, the plain Create button comes back.
+    panel.update(cx, |panel, cx| {
+      panel.set_branch_status(
+        Some(git::BranchStatus {
+          name: "feature".to_string(),
+          ahead: 0,
+          behind: 0,
+          has_upstream: true,
+        }),
+        cx,
+      );
+    });
+    cx.run_until_parked();
+    assert!(
+      cx.debug_bounds(DOCK_PANEL_CREATE_PR_DEBUG_SELECTOR)
+        .is_some(),
+      "a published branch goes straight to the form"
+    );
+    assert!(
+      cx.debug_bounds(DOCK_PANEL_PUBLISH_AND_CREATE_PR_DEBUG_SELECTOR)
+        .is_none()
+    );
   }
 
   async fn await_refresh(panel: &Entity<DockPanel>, cx: &mut gpui::VisualTestContext) {

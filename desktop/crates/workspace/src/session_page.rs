@@ -2,6 +2,7 @@
 
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
+use std::rc::Rc;
 use std::sync::Arc;
 
 use agent_chat_panel::{AgentChatPanel, AgentChatPanelEvent, ConversationMeta};
@@ -54,10 +55,12 @@ use crate::annotations::{
 use crate::palette_branches::{
   delete_branch_candidates, palette_branch, palette_stashes, rebase_branch_candidates,
 };
+use crate::pull_request_dialog::{GithubBranchContext, open_create_pull_request_dialog};
 use crate::repo_command::{RepoCommand, RepoCommandOutcome, branch_ref_from_palette};
 use crate::repo_state::{PaletteCommand, RepoState, can_accept_all_conflicts, push_flags};
 use crate::status_poll;
 use crate::svg_preview::SvgPreview;
+use crate::workspace::WorkspaceApi;
 use crate::{
   CloseWorkspacePage, CommentHunk, SendReviewCommentsToAgent, ShowCommandPalette, ShowFileSearch,
 };
@@ -221,6 +224,8 @@ pub struct SessionPage {
   // Review export waiting for the agent connection to become ready.
   pending_review_export: Option<String>,
   repo_command_in_flight: bool,
+  /// Set while pushing an unpublished branch on the way to the pull request form.
+  pending_pull_request: Option<GithubBranchContext>,
   poll_window_active: bool,
   _branch_task: Option<Task<()>>,
   _repo_command_task: Option<Task<()>>,
@@ -264,6 +269,9 @@ impl SessionPage {
             window.push_notification(Notification::warning(error), cx);
           }
         }
+        DockPanelEvent::PublishBranchAndCreatePullRequest(context) => {
+          this.publish_branch_and_create_pull_request(context.clone(), window, cx);
+        }
       },
     )
     .detach();
@@ -299,6 +307,7 @@ impl SessionPage {
       svg_preview,
       pending_review_export: None,
       repo_command_in_flight: false,
+      pending_pull_request: None,
       poll_window_active: true,
       _branch_task: None,
       _repo_command_task: None,
@@ -1545,8 +1554,10 @@ impl SessionPage {
               }
               this.dock_panel.update(cx, |panel, cx| panel.refresh(cx));
               this.refresh_branch(cx);
+              this.open_pending_pull_request_dialog(window, cx);
             }
             Err(error) => {
+              this.pending_pull_request = None;
               window.push_notification(Notification::error(error.to_string()), cx);
             }
           }
@@ -1557,6 +1568,38 @@ impl SessionPage {
     self._repo_command_task = Some(task);
 
     Ok(())
+  }
+
+  /// GitHub needs the branch on the remote before it can open a pull request,
+  /// so the push comes first and the form only follows if it worked.
+  fn publish_branch_and_create_pull_request(
+    &mut self,
+    context: GithubBranchContext,
+    window: &mut Window,
+    cx: &mut Context<Self>,
+  ) {
+    self.pending_pull_request = Some(context);
+    if let Err(error) = self.run_repo_command(RepoCommand::Push, window, cx) {
+      self.pending_pull_request = None;
+      window.push_notification(Notification::warning(error), cx);
+    }
+  }
+
+  fn open_pending_pull_request_dialog(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    let Some(context) = self.pending_pull_request.take() else {
+      return;
+    };
+    let panel = self.dock_panel.clone();
+    open_create_pull_request_dialog(
+      WorkspaceApi::global(cx).api.clone(),
+      self.window_handle,
+      Rc::new(move |_context, _pull_request, cx| {
+        panel.update(cx, |panel, cx| panel.refresh(cx));
+      }),
+      context,
+      window,
+      cx,
+    );
   }
 
   fn palette_repositories(&self) -> Vec<CommandPaletteRepository> {
@@ -3210,6 +3253,97 @@ mod tests {
 
     page.read_with(cx, |page, _| {
       assert_eq!(page.branch_status.as_ref().expect("status").ahead, 1);
+    });
+  }
+
+  #[gpui::test]
+  async fn publishing_a_branch_opens_the_pull_request_form_after_the_push(cx: &mut TestAppContext) {
+    let repo = TempRepo::init("session-page-publish-and-create");
+    commit_text_file(&repo.path, Path::new("README.md"), "v1\n", "initial");
+    let remote = publish_to_new_remote(&repo.path, "session-page-publish-and-create");
+    git::create_branch(&repo.path, "feature").expect("create branch");
+    git::switch_branch(
+      &repo.path,
+      &git::BranchRef {
+        name: "feature".to_string(),
+        kind: git::BranchKind::Local,
+      },
+    )
+    .expect("switch branch");
+    commit_text_file(&repo.path, Path::new("README.md"), "v2\n", "feature work");
+
+    let (page, cx) = add_session_page_window(repo.path.clone(), cx);
+    cx.run_until_parked();
+    page.update(cx, |page, cx| page.refresh_branch(cx));
+    await_branch_refresh(&page, cx).await;
+    page.read_with(cx, |page, _| {
+      assert!(
+        !page
+          .branch_status
+          .as_ref()
+          .expect("branch status")
+          .has_upstream,
+        "the branch starts unpublished"
+      );
+    });
+
+    let context = GithubBranchContext {
+      owner: "acme".to_string(),
+      repo: "widget".to_string(),
+      branch: "feature".to_string(),
+    };
+    page.update_in(cx, |page, window, cx| {
+      page.publish_branch_and_create_pull_request(context, window, cx);
+    });
+    let command = page.update(cx, |page, _| {
+      page._repo_command_task.take().expect("push task")
+    });
+    command.await;
+    cx.run_until_parked();
+
+    let remote_repo = git2::Repository::open(&remote).expect("open remote");
+    assert!(
+      remote_repo.refname_to_id("refs/heads/feature").is_ok(),
+      "the branch reached the remote"
+    );
+    assert!(
+      cx.update(|window, cx| window.has_active_dialog(cx)),
+      "the pull request form follows the push"
+    );
+    page.read_with(cx, |page, _| {
+      assert!(page.pending_pull_request.is_none());
+    });
+  }
+
+  #[gpui::test]
+  async fn a_failed_publish_opens_no_pull_request_form(cx: &mut TestAppContext) {
+    let repo = TempRepo::init("session-page-publish-failure");
+    commit_text_file(&repo.path, Path::new("README.md"), "v1\n", "initial");
+
+    let (page, cx) = add_session_page_window(repo.path.clone(), cx);
+    cx.run_until_parked();
+
+    // No remote at all: the push cannot go anywhere.
+    let context = GithubBranchContext {
+      owner: "acme".to_string(),
+      repo: "widget".to_string(),
+      branch: "feature".to_string(),
+    };
+    page.update_in(cx, |page, window, cx| {
+      page.publish_branch_and_create_pull_request(context, window, cx);
+    });
+    let command = page.update(cx, |page, _| {
+      page._repo_command_task.take().expect("push task")
+    });
+    command.await;
+    cx.run_until_parked();
+
+    assert!(
+      !cx.update(|window, cx| window.has_active_dialog(cx)),
+      "a push that failed must not open the form"
+    );
+    page.read_with(cx, |page, _| {
+      assert!(page.pending_pull_request.is_none());
     });
   }
 

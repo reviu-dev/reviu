@@ -4,6 +4,10 @@ All notable changes to Reviu are documented here.
 
 ## 1.0.0
 
+### Publish A Branch And Open Its Pull Request In One Go
+
+Creating a pull request for a branch that had never been pushed sent the request to GitHub for a branch it did not know, and it failed. The Pull request tab now says the branch is not on the remote yet and offers `Publish and create pull request`: Reviu pushes the branch first and only opens the pull request form once the push succeeded.
+
 ### Restore All From The Sessions Palette
 
 Discarding every change at once was only reachable from the Git page toolbar. The Sessions command palette now carries `Restore all`, offered whenever the working tree has something to discard, with the same confirmation before anything is thrown away.
