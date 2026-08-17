@@ -3038,6 +3038,32 @@ mod tests {
   }
 
   #[gpui::test]
+  async fn forgetting_the_only_repository_brings_the_open_row_back(cx: &mut TestAppContext) {
+    let repo = TempRepo::init("session-page-forget-only");
+    commit_text_file(&repo.path, Path::new("README.md"), "v1\n", "initial");
+
+    let (page, cx) = add_session_page_window(repo.path.clone(), cx);
+    page.update(cx, |_, cx| cx.notify());
+    cx.run_until_parked();
+    ConfigStore::persist_recent_repository(&repo.path);
+    assert!(cx.debug_bounds(REPO_CONTEXT_DEBUG_SELECTOR).is_some());
+
+    page.update_in(cx, |page, window, cx| {
+      page
+        .forget_repository(repo.path.clone(), window, cx)
+        .expect("forget repository");
+    });
+    cx.run_until_parked();
+
+    page.read_with(cx, |page, _| assert!(page.selected_repo.is_none()));
+    assert!(
+      cx.debug_bounds(OPEN_REPOSITORY_ROW_DEBUG_SELECTOR)
+        .is_some(),
+      "forgetting the last repository must not leave the shell without a way back"
+    );
+  }
+
+  #[gpui::test]
   async fn palette_repositories_put_the_open_repository_first(cx: &mut TestAppContext) {
     let repo = TempRepo::init("session-page-palette-repos");
     commit_text_file(&repo.path, Path::new("README.md"), "v1\n", "initial");
@@ -3749,6 +3775,17 @@ mod tests {
     let row = cx
       .debug_bounds(OPEN_REPOSITORY_ROW_DEBUG_SELECTOR)
       .expect("the sidebar offers to open a repository");
+
+    // Closing the picker changes nothing.
+    cx.simulate_click(row.center(), gpui::Modifiers::default());
+    cx.simulate_path_prompt_response(|_| None);
+    cx.run_until_parked();
+    page.read_with(cx, |page, _| assert!(page.selected_repo.is_none()));
+    assert!(
+      cx.debug_bounds(OPEN_REPOSITORY_ROW_DEBUG_SELECTOR)
+        .is_some(),
+      "a cancelled picker leaves the row where it was"
+    );
 
     // One gesture: the row opens the picker, no palette in between.
     let picked = repo.path.clone();
