@@ -65,7 +65,7 @@ type Migration = fn(&Connection) -> rusqlite::Result<()>;
 /// Ordered config-database migrations. The vector index + 1 is the migration's `user_version`.
 /// Only append; never reorder or edit a shipped migration. v1 is an idempotent baseline so any
 /// pre-existing database (which has `user_version` 0) converges to the current schema.
-const MIGRATIONS: &[Migration] = &[migrate_v1_baseline, migrate_v2_home_page];
+const MIGRATIONS: &[Migration] = &[migrate_v1_baseline];
 
 fn schema_version(conn: &Connection) -> rusqlite::Result<i64> {
   conn.query_row("PRAGMA user_version", [], |row| row.get(0))
@@ -104,10 +104,6 @@ fn migrate_v1_baseline(conn: &Connection) -> rusqlite::Result<()> {
   ensure_default_rows(conn)?;
   ensure_settings_columns(conn)?;
   Ok(())
-}
-
-fn migrate_v2_home_page(conn: &Connection) -> rusqlite::Result<()> {
-  add_settings_column_if_missing(conn, "home_page", "TEXT NOT NULL DEFAULT 'session'")
 }
 
 fn create_baseline_tables(conn: &Connection) -> rusqlite::Result<()> {
@@ -189,36 +185,6 @@ pub struct RecentRepository {
   pub path: PathBuf,
 }
 
-/// Where the app lands on launch.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum HomePage {
-  Session,
-  Git,
-}
-
-impl HomePage {
-  pub fn as_str(self) -> &'static str {
-    match self {
-      Self::Session => "session",
-      Self::Git => "git",
-    }
-  }
-
-  pub fn from_str(value: &str) -> Self {
-    match value {
-      "git" => Self::Git,
-      _ => Self::Session,
-    }
-  }
-
-  pub fn pathname(self) -> &'static str {
-    match self {
-      Self::Session => "/session",
-      Self::Git => "/git",
-    }
-  }
-}
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum CloneProtocol {
   Https,
@@ -253,7 +219,6 @@ pub struct AppSettings {
   pub clone_protocol: CloneProtocol,
   pub menu_bar_icon: bool,
   pub analytics_enabled: bool,
-  pub home_page: HomePage,
 }
 
 impl Global for AppSettings {}
@@ -284,7 +249,6 @@ impl Default for AppSettings {
       clone_protocol: CloneProtocol::Https,
       menu_bar_icon: true,
       analytics_enabled: true,
-      home_page: HomePage::Session,
     }
   }
 }
@@ -446,7 +410,7 @@ impl ConfigStore {
   fn load_app_settings_inner(&self) -> AppSettings {
     let settings = self.conn.query_row(
       &format!(
-        "SELECT auto_switch_theme, dark_mode, indent_rainbow, font_size, git_unified_file_view, split_diff_view, hide_whitespace, clone_protocol, menu_bar_icon, analytics_enabled, home_page FROM {} WHERE id = 1",
+        "SELECT auto_switch_theme, dark_mode, indent_rainbow, font_size, git_unified_file_view, split_diff_view, hide_whitespace, clone_protocol, menu_bar_icon, analytics_enabled FROM {} WHERE id = 1",
         SETTINGS_TABLE.name
       ),
       [],
@@ -461,7 +425,6 @@ impl ConfigStore {
         let clone_protocol: String = row.get(7)?;
         let menu_bar_icon: i64 = row.get(8)?;
         let analytics_enabled: i64 = row.get(9)?;
-        let home_page: String = row.get(10)?;
         Ok(AppSettings {
           auto_switch_theme: auto_switch_theme != 0,
           dark_mode: dark_mode != 0,
@@ -473,7 +436,6 @@ impl ConfigStore {
           clone_protocol: CloneProtocol::from_str(&clone_protocol),
           menu_bar_icon: menu_bar_icon != 0,
           analytics_enabled: analytics_enabled != 0,
-          home_page: HomePage::from_str(&home_page),
         })
       },
     );
@@ -686,8 +648,8 @@ impl ConfigStore {
   fn persist_app_settings_inner(&self, settings: AppSettings) {
     if let Err(err) = self.conn.execute(
       &format!(
-        "INSERT INTO {} (id, auto_switch_theme, dark_mode, indent_rainbow, font_size, git_unified_file_view, split_diff_view, hide_whitespace, clone_protocol, menu_bar_icon, analytics_enabled, home_page)
-         VALUES (1, ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)
+        "INSERT INTO {} (id, auto_switch_theme, dark_mode, indent_rainbow, font_size, git_unified_file_view, split_diff_view, hide_whitespace, clone_protocol, menu_bar_icon, analytics_enabled)
+         VALUES (1, ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
          ON CONFLICT(id) DO UPDATE
          SET auto_switch_theme = excluded.auto_switch_theme,
              dark_mode = excluded.dark_mode,
@@ -698,8 +660,7 @@ impl ConfigStore {
              hide_whitespace = excluded.hide_whitespace,
              clone_protocol = excluded.clone_protocol,
              menu_bar_icon = excluded.menu_bar_icon,
-             analytics_enabled = excluded.analytics_enabled,
-             home_page = excluded.home_page",
+             analytics_enabled = excluded.analytics_enabled",
         SETTINGS_TABLE.name
       ),
       params![
@@ -737,7 +698,6 @@ impl ConfigStore {
         } else {
           0_i64
         },
-        settings.home_page.as_str(),
       ],
     ) {
       eprintln!("Failed to persist app settings: {}", err);
@@ -879,7 +839,6 @@ mod tests {
       hide_whitespace: true,
       clone_protocol: CloneProtocol::Ssh,
       menu_bar_icon: false,
-      home_page: HomePage::Git,
     };
     ConfigStore::persist_app_settings(settings);
 
@@ -893,25 +852,8 @@ mod tests {
     assert!(loaded.hide_whitespace);
     assert_eq!(loaded.clone_protocol, CloneProtocol::Ssh);
     assert!(!loaded.menu_bar_icon);
-    assert_eq!(loaded.home_page, HomePage::Git);
 
     ConfigStore::set_test_db_path(None);
-  }
-
-  #[test]
-  fn home_page_defaults_to_sessions_and_maps_to_routes() {
-    assert_eq!(AppSettings::default().home_page, HomePage::Session);
-    assert_eq!(HomePage::Session.pathname(), "/session");
-    assert_eq!(HomePage::Git.pathname(), "/git");
-  }
-
-  #[test]
-  fn home_page_parsing_falls_back_to_sessions() {
-    assert_eq!(HomePage::from_str("git"), HomePage::Git);
-    assert_eq!(HomePage::from_str("session"), HomePage::Session);
-    assert_eq!(HomePage::from_str("github"), HomePage::Session);
-    assert_eq!(HomePage::from_str(""), HomePage::Session);
-    assert_eq!(HomePage::Git.as_str(), "git");
   }
 
   #[test]
@@ -1024,7 +966,6 @@ mod tests {
     "clone_protocol",
     "menu_bar_icon",
     "analytics_enabled",
-    "home_page",
   ];
 
   #[test]
@@ -1064,31 +1005,56 @@ mod tests {
     ConfigStore::set_test_db_path(None);
   }
 
-  /// A database stamped at v1 skips the baseline, so a column added there never lands.
+  /// A database already stamped at the current version keeps its values and is
+  /// not migrated again.
   #[test]
-  fn migrations_upgrade_an_already_versioned_db() {
+  fn an_already_versioned_db_is_left_alone() {
     let db_path = unique_test_db_path("migrate-versioned");
     let _ = fs::remove_file(&db_path);
 
-    // Simulate an install that already ran the v1 baseline and stopped there.
     {
       let conn = Connection::open(&db_path).expect("open db");
       conn.execute(SETTINGS_TABLE.create_sql, []).expect("create");
       ensure_default_rows(&conn).expect("default row");
       ensure_settings_columns(&conn).expect("v1 columns");
-      set_schema_version(&conn, 1).expect("stamp v1");
+      set_schema_version(&conn, MIGRATIONS.len() as i64).expect("stamp current version");
       conn
         .execute("UPDATE settings SET dark_mode = 1 WHERE id = 1", [])
         .expect("seed value");
-      assert!(!settings_columns(&db_path).contains("home_page"));
     }
 
     ConfigStore::set_test_db_path(Some(db_path.clone()));
     let settings = ConfigStore::load_app_settings();
 
-    assert!(settings.dark_mode, "stored value must survive the upgrade");
-    assert_eq!(settings.home_page, HomePage::Session);
+    assert!(settings.dark_mode, "stored value must survive the open");
     assert_eq!(db_user_version(&db_path), MIGRATIONS.len() as i64);
+
+    ConfigStore::set_test_db_path(None);
+  }
+
+  /// A retired setting leaves its column behind on existing installs; reads and
+  /// writes name their columns, so the extra one is simply ignored.
+  #[test]
+  fn a_db_carrying_a_retired_setting_column_still_loads_and_saves() {
+    let db_path = unique_test_db_path("retired-column");
+    let _ = fs::remove_file(&db_path);
+
+    {
+      let conn = Connection::open(&db_path).expect("open db");
+      conn.execute(SETTINGS_TABLE.create_sql, []).expect("create");
+      ensure_default_rows(&conn).expect("default row");
+      ensure_settings_columns(&conn).expect("v1 columns");
+      add_settings_column_if_missing(&conn, "home_page", "TEXT NOT NULL DEFAULT 'session'")
+        .expect("retired column");
+      set_schema_version(&conn, MIGRATIONS.len() as i64).expect("stamp current version");
+    }
+
+    ConfigStore::set_test_db_path(Some(db_path.clone()));
+    let mut settings = ConfigStore::load_app_settings();
+    settings.font_size = 18.0;
+    ConfigStore::persist_app_settings(settings);
+
+    assert_eq!(ConfigStore::load_app_settings().font_size, 18.0);
     assert!(settings_columns(&db_path).contains("home_page"));
 
     ConfigStore::set_test_db_path(None);

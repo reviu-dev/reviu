@@ -324,7 +324,7 @@ impl WorkspaceView {
 
     gpui_router::init(cx);
     NavigationHistory::init(cx);
-    NavigationHistory::navigate_replace(settings.home_page.pathname(), cx);
+    NavigationHistory::navigate_replace("/session", cx);
 
     cx.set_global(WorkspaceRoute::default());
     cx.set_global(WorkspaceApi::new());
