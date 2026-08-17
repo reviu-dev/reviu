@@ -78,6 +78,7 @@ const INTERACTIVE_REBASE_DEBUG_SELECTOR: &str = "session-interactive-rebase";
 const DIFF_EDITOR_DEBUG_SELECTOR: &str = "session-diff-editor";
 const PREVIEW_PANE_DEBUG_SELECTOR: &str = "session-preview-pane";
 const REPO_CONTEXT_DEBUG_SELECTOR: &str = "session-repo-context";
+const OPEN_REPOSITORY_ROW_DEBUG_SELECTOR: &str = "session-open-repository";
 const REPO_AHEAD_DEBUG_SELECTOR: &str = "session-repo-ahead";
 const REPO_BEHIND_DEBUG_SELECTOR: &str = "session-repo-behind";
 
@@ -3730,6 +3731,49 @@ mod tests {
       assert!(ids.contains(&CommandPaletteCommandId::Commit));
       assert!(!ids.contains(&CommandPaletteCommandId::ContinueRebase));
     });
+  }
+
+  #[gpui::test]
+  async fn without_a_repository_the_sidebar_asks_for_one(cx: &mut TestAppContext) {
+    let repo = TempRepo::init("session-open-repository");
+    commit_text_file(&repo.path, Path::new("README.md"), "v1\n", "initial");
+
+    let (page, cx) = add_session_page_window_without_repo(cx);
+    cx.run_until_parked();
+
+    page.read_with(cx, |page, _| assert!(page.selected_repo.is_none()));
+    assert!(
+      cx.debug_bounds(REPO_CONTEXT_DEBUG_SELECTOR).is_none(),
+      "there is no repository to name yet"
+    );
+    let row = cx
+      .debug_bounds(OPEN_REPOSITORY_ROW_DEBUG_SELECTOR)
+      .expect("the sidebar offers to open a repository");
+
+    // One gesture: the row opens the picker, no palette in between.
+    let picked = repo.path.clone();
+    cx.simulate_click(row.center(), gpui::Modifiers::default());
+    cx.simulate_path_prompt_response(move |_| Some(vec![picked]));
+    cx.run_until_parked();
+
+    page.read_with(cx, |page, cx| {
+      assert_eq!(page.selected_repo.as_deref(), Some(repo.path.as_path()));
+      assert_eq!(
+        page
+          .dock_panel
+          .read(cx)
+          .repo_root()
+          .map(|path| path.to_path_buf()),
+        Some(repo.path.clone()),
+        "the dock follows the repository that was just opened"
+      );
+    });
+    assert!(
+      cx.debug_bounds(OPEN_REPOSITORY_ROW_DEBUG_SELECTOR)
+        .is_none(),
+      "the row goes back to naming the repository"
+    );
+    assert!(cx.debug_bounds(REPO_CONTEXT_DEBUG_SELECTOR).is_some());
   }
 
   #[gpui::test]

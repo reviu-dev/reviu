@@ -5,6 +5,42 @@ use crate::annotations::AnnotationKind;
 use crate::hunk_actions::render_hunk_actions;
 
 impl SessionPage {
+  /// Without a repository half the shell has nothing to show, so the row that
+  /// normally names it asks for one instead.
+  pub(super) fn render_open_repository_row(&self, cx: &mut Context<Self>) -> AnyElement {
+    let theme = cx.theme().clone();
+    h_flex()
+      .id("session-open-repository")
+      .debug_selector(|| OPEN_REPOSITORY_ROW_DEBUG_SELECTOR.to_string())
+      .items_center()
+      .gap_2()
+      .px_3()
+      .py_2()
+      .border_t_1()
+      .border_color(theme.border)
+      .cursor_pointer()
+      .hover(|this| this.bg(theme.secondary_hover))
+      .tooltip(|window, cx| {
+        gpui_component::tooltip::Tooltip::new("Open a repository").build(window, cx)
+      })
+      .on_click(cx.listener(|this, _, window, cx| {
+        this.start_open_repository(window, cx);
+      }))
+      .child(
+        gpui_component::Icon::new(gpui_component::IconName::FolderOpen)
+          .size_3()
+          .text_color(theme.muted_foreground),
+      )
+      .child(
+        div()
+          .text_xs()
+          .text_color(theme.foreground)
+          .truncate()
+          .child("Open repository"),
+      )
+      .into_any_element()
+  }
+
   /// Ahead/behind counter that runs the matching sync command when clicked.
   pub(super) fn render_sync_counter(
     &self,
@@ -161,84 +197,88 @@ impl SessionPage {
     let branch_status = self.branch_status.clone();
     let sync_in_flight = self.repo_command_in_flight;
 
-    let repo_context = repo_name.map(|name| {
-      h_flex()
-        .id("session-repo-context")
-        .debug_selector(|| REPO_CONTEXT_DEBUG_SELECTOR.to_string())
-        .items_center()
-        .gap_2()
-        .px_3()
-        .py_2()
-        .border_t_1()
-        .border_color(theme.border)
-        .cursor_pointer()
-        .hover(|this| this.bg(theme.secondary_hover))
-        .tooltip(|window, cx| {
-          gpui_component::tooltip::Tooltip::new("Switch repository").build(window, cx)
-        })
-        .on_click(cx.listener(|this, _, window, cx| {
-          this.open_command_palette_with_screen(
-            Some(CommandPaletteInitialScreen::SwitchRepository),
-            window,
-            cx,
-          );
-        }))
-        .child(
-          div()
-            .text_xs()
-            .text_color(theme.foreground)
-            .truncate()
-            .child(name),
-        )
-        .when_some(branch_status.clone(), |this, status| {
-          this.child(
-            h_flex()
-              .items_center()
-              .gap_1()
-              .min_w(px(0.0))
-              .flex_1()
-              .child(
-                gpui_component::Icon::new(UiIconName::GitBranch)
-                  .size_3()
-                  .text_color(theme.muted_foreground),
-              )
-              .child(
-                div()
-                  .text_xs()
-                  .text_color(theme.muted_foreground)
-                  .truncate()
-                  .child(SharedString::from(status.name)),
-              ),
+    let repo_context = match repo_name {
+      None => Some(self.render_open_repository_row(cx).into_any_element()),
+      Some(name) => Some(
+        h_flex()
+          .id("session-repo-context")
+          .debug_selector(|| REPO_CONTEXT_DEBUG_SELECTOR.to_string())
+          .items_center()
+          .gap_2()
+          .px_3()
+          .py_2()
+          .border_t_1()
+          .border_color(theme.border)
+          .cursor_pointer()
+          .hover(|this| this.bg(theme.secondary_hover))
+          .tooltip(|window, cx| {
+            gpui_component::tooltip::Tooltip::new("Switch repository").build(window, cx)
+          })
+          .on_click(cx.listener(|this, _, window, cx| {
+            this.open_command_palette_with_screen(
+              Some(CommandPaletteInitialScreen::SwitchRepository),
+              window,
+              cx,
+            );
+          }))
+          .child(
+            div()
+              .text_xs()
+              .text_color(theme.foreground)
+              .truncate()
+              .child(name),
           )
-        })
-        .when_some(branch_status, |this, status| {
-          this
-            .when(status.behind > 0, |this| {
-              this.child(self.render_sync_counter(
-                REPO_BEHIND_DEBUG_SELECTOR,
-                gpui_component::IconName::ArrowDown,
-                status.behind,
-                theme.status_red(),
-                "Pull",
-                sync_in_flight,
-                RepoCommand::Pull,
-                cx,
-              ))
-            })
-            .when(status.ahead > 0, |this| {
-              this.child(self.render_sync_counter(
-                REPO_AHEAD_DEBUG_SELECTOR,
-                gpui_component::IconName::ArrowUp,
-                status.ahead,
-                theme.status_green(),
-                "Push",
-                sync_in_flight,
-                RepoCommand::Push,
-                cx,
-              ))
-            })
-        })
-    });
+          .when_some(branch_status.clone(), |this, status| {
+            this.child(
+              h_flex()
+                .items_center()
+                .gap_1()
+                .min_w(px(0.0))
+                .flex_1()
+                .child(
+                  gpui_component::Icon::new(UiIconName::GitBranch)
+                    .size_3()
+                    .text_color(theme.muted_foreground),
+                )
+                .child(
+                  div()
+                    .text_xs()
+                    .text_color(theme.muted_foreground)
+                    .truncate()
+                    .child(SharedString::from(status.name)),
+                ),
+            )
+          })
+          .when_some(branch_status, |this, status| {
+            this
+              .when(status.behind > 0, |this| {
+                this.child(self.render_sync_counter(
+                  REPO_BEHIND_DEBUG_SELECTOR,
+                  gpui_component::IconName::ArrowDown,
+                  status.behind,
+                  theme.status_red(),
+                  "Pull",
+                  sync_in_flight,
+                  RepoCommand::Pull,
+                  cx,
+                ))
+              })
+              .when(status.ahead > 0, |this| {
+                this.child(self.render_sync_counter(
+                  REPO_AHEAD_DEBUG_SELECTOR,
+                  gpui_component::IconName::ArrowUp,
+                  status.ahead,
+                  theme.status_green(),
+                  "Push",
+                  sync_in_flight,
+                  RepoCommand::Push,
+                  cx,
+                ))
+              })
+          })
+          .into_any_element(),
+      ),
+    };
 
     v_flex()
       .size_full()

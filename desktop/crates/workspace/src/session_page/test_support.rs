@@ -56,6 +56,33 @@ pub(super) fn add_session_page_window(
   (page, cx)
 }
 
+/// The shell as a fresh install sees it: no repository anywhere.
+pub(super) fn add_session_page_window_without_repo(
+  cx: &mut TestAppContext,
+) -> (Entity<SessionPage>, &mut gpui::VisualTestContext) {
+  isolate_config_store_for_test();
+  cx.update(|cx| {
+    gpui_component::init(cx);
+    if !cx.has_global::<crate::config::AppSettings>() {
+      cx.set_global(crate::config::AppSettings::default());
+    }
+    if !cx.has_global::<AuthStateStore>() {
+      cx.set_global(AuthStateStore::default());
+    }
+    if !cx.has_global::<WorkspaceApi>() {
+      cx.set_global(WorkspaceApi::new());
+    }
+  });
+
+  let mut mounted: Option<Entity<SessionPage>> = None;
+  let (_root, cx) = cx.add_window_view(|window, cx| {
+    let page = cx.new(|cx| SessionPage::new(window, cx));
+    mounted = Some(page.clone());
+    gpui_component::Root::new(page, window, cx)
+  });
+  (mounted.expect("session page"), cx)
+}
+
 pub(super) async fn await_open_file(page: &Entity<SessionPage>, cx: &mut gpui::VisualTestContext) {
   let task = page.update(cx, |page, _| page.open_file_task.take());
   if let Some(task) = task {

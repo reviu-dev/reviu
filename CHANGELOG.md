@@ -4,6 +4,10 @@ All notable changes to Reviu are documented here.
 
 ## 1.0.0
 
+### The Sidebar Asks For A Repository
+
+On a fresh install the Sessions sidebar showed nothing about repositories, so the only way to open one was the command palette. The bottom row of the sidebar now offers `Open repository` when none is selected, and turns back into the repository name, branch and ahead/behind counters once you pick one.
+
 ### New Agent-First Workspace
 
 Reviu now opens on a new Sessions workspace built around working with a coding agent. The left sidebar lists your agent sessions so you can switch between conversations or start a new one, the center is the agent conversation, and the right panel is reserved for reviewing the changes the agent makes. The Git and GitHub pages remain available from the navigation tabs while the new workspace takes shape.
