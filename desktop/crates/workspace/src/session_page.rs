@@ -3316,6 +3316,59 @@ mod tests {
   }
 
   #[gpui::test]
+  async fn a_refused_publish_leaves_no_form_waiting_for_the_next_push(cx: &mut TestAppContext) {
+    let repo = TempRepo::init("session-page-publish-refused");
+    commit_text_file(&repo.path, Path::new("README.md"), "v1\n", "initial");
+    let remote = publish_to_new_remote(&repo.path, "session-page-publish-refused");
+    commit_text_file(&repo.path, Path::new("README.md"), "v2\n", "second");
+
+    let (page, cx) = add_session_page_window(repo.path.clone(), cx);
+    cx.run_until_parked();
+
+    // Another git command is already running: the publish is refused up front.
+    page.update(cx, |page, _| page.repo_command_in_flight = true);
+    let context = GithubBranchContext {
+      owner: "acme".to_string(),
+      repo: "widget".to_string(),
+      branch: "feature".to_string(),
+    };
+    page.update_in(cx, |page, window, cx| {
+      page.publish_branch_and_create_pull_request(context, window, cx);
+    });
+    cx.run_until_parked();
+
+    page.read_with(cx, |page, _| {
+      assert!(page._repo_command_task.is_none(), "nothing was launched");
+      assert!(page.pending_pull_request.is_none());
+    });
+    assert!(!cx.update(|window, cx| window.has_active_dialog(cx)));
+
+    // An unrelated push must not inherit the form that was never opened.
+    page.update(cx, |page, _| page.repo_command_in_flight = false);
+    page.update_in(cx, |page, window, cx| {
+      page
+        .run_repo_command(RepoCommand::Push, window, cx)
+        .expect("push");
+    });
+    let command = page.update(cx, |page, _| {
+      page._repo_command_task.take().expect("push task")
+    });
+    command.await;
+    cx.run_until_parked();
+
+    let remote_repo = git2::Repository::open(&remote).expect("open remote");
+    let head = remote_repo
+      .head()
+      .and_then(|head| head.peel_to_commit())
+      .expect("remote head");
+    assert_eq!(head.summary(), Some("second"), "the push went through");
+    assert!(
+      !cx.update(|window, cx| window.has_active_dialog(cx)),
+      "a plain push opens no pull request form"
+    );
+  }
+
+  #[gpui::test]
   async fn a_failed_publish_opens_no_pull_request_form(cx: &mut TestAppContext) {
     let repo = TempRepo::init("session-page-publish-failure");
     commit_text_file(&repo.path, Path::new("README.md"), "v1\n", "initial");
