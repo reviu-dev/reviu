@@ -4,6 +4,10 @@ All notable changes to Reviu are documented here.
 
 ## 1.0.0
 
+### The Branch's Pull Request From The Command Palette
+
+The pull request of the current branch was only reachable by opening the Pull request tab and clicking. The Sessions command palette now mirrors that tab: `Open pull request #n` when the branch already has one, `Create pull request` when it does not, and nothing at all without GitHub access.
+
 ### Publish A Branch And Open Its Pull Request In One Go
 
 Creating a pull request for a branch that had never been pushed sent the request to GitHub for a branch it did not know, and it failed. The Pull request tab now says the branch is not on the remote yet and offers `Publish and create pull request`: Reviu pushes the branch first and only opens the pull request form once the push succeeded.

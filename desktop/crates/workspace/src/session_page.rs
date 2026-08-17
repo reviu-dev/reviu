@@ -1767,6 +1767,9 @@ impl SessionPage {
       if state.allows(PaletteCommand::RestoreAll) {
         commands.push(CommandPaletteCommand::restore_all());
       }
+      if let Some(command) = self.dock_panel.read(cx).branch_pull_request_command() {
+        commands.push(command);
+      }
       if state.allows(PaletteCommand::Push) {
         commands.push(CommandPaletteCommand::push("Push"));
       }
@@ -1923,6 +1926,18 @@ impl SessionPage {
       CommandPaletteAction::StageAll => self.run_repo_command(RepoCommand::StageAll, window, cx),
       CommandPaletteAction::UnstageAll => {
         self.run_repo_command(RepoCommand::UnstageAll, window, cx)
+      }
+      CommandPaletteAction::CreatePullRequest => {
+        self
+          .dock_panel
+          .update(cx, |panel, cx| panel.create_branch_pull_request(window, cx));
+        Ok(())
+      }
+      CommandPaletteAction::OpenPullRequest => {
+        self
+          .dock_panel
+          .update(cx, |panel, cx| panel.open_branch_pull_request(cx));
+        Ok(())
       }
       CommandPaletteAction::RestoreAll => {
         self
@@ -3457,6 +3472,75 @@ mod tests {
     });
 
     assert!(error.contains("still running"), "{error}");
+  }
+
+  #[gpui::test]
+  async fn the_palette_reaches_the_pull_request_of_the_branch(cx: &mut TestAppContext) {
+    let repo = TempRepo::init("session-page-pr-palette");
+    commit_text_file(&repo.path, Path::new("README.md"), "v1\n", "initial");
+
+    let (page, cx) = add_session_page_window(repo.path.clone(), cx);
+    cx.run_until_parked();
+
+    // No GitHub access: the palette says nothing about pull requests.
+    page.update(cx, |page, cx| {
+      page.dock_panel.update(cx, |panel, cx| {
+        panel.set_branch_pull_request_state(crate::dock_panel::BranchPrState::NoAccess, cx);
+      });
+    });
+    page.read_with(cx, |page, cx| {
+      let ids = page
+        .palette_commands(1, cx)
+        .into_iter()
+        .map(|command| command.id)
+        .collect::<Vec<_>>();
+      assert!(!ids.contains(&CommandPaletteCommandId::CreatePullRequest));
+      assert!(!ids.contains(&CommandPaletteCommandId::OpenPullRequest));
+    });
+
+    // A published branch with no pull request yet.
+    page.update(cx, |page, cx| {
+      page.dock_panel.update(cx, |panel, cx| {
+        panel.set_branch_pull_request_state(
+          crate::dock_panel::BranchPrState::Missing(GithubBranchContext {
+            owner: "acme".to_string(),
+            repo: "widget".to_string(),
+            branch: "feature".to_string(),
+          }),
+          cx,
+        );
+        panel.set_branch_status(
+          Some(git::BranchStatus {
+            name: "feature".to_string(),
+            ahead: 0,
+            behind: 0,
+            has_upstream: true,
+          }),
+          cx,
+        );
+      });
+    });
+
+    page.read_with(cx, |page, cx| {
+      let ids = page
+        .palette_commands(1, cx)
+        .into_iter()
+        .map(|command| command.id)
+        .collect::<Vec<_>>();
+      assert!(ids.contains(&CommandPaletteCommandId::CreatePullRequest));
+    });
+
+    page.update_in(cx, |page, window, cx| {
+      page
+        .handle_command_palette_action(CommandPaletteAction::CreatePullRequest, window, cx)
+        .expect("create pull request is allowed");
+    });
+    cx.run_until_parked();
+
+    assert!(
+      cx.update(|window, cx| window.has_active_dialog(cx)),
+      "the palette opens the same form as the tab"
+    );
   }
 
   #[gpui::test]

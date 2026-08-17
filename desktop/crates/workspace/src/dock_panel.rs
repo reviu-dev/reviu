@@ -49,7 +49,10 @@ use crate::pull_request_dialog::{
   GithubBranchContext, PullRequestCreatedHandler, open_create_pull_request_dialog,
 };
 use crate::workspace::WorkspaceApi;
-use ui::{Button, ButtonVariants as _, StatusThemeExt as _, Textarea, TextareaState, UiIconName};
+use ui::{
+  Button, ButtonVariants as _, CommandPaletteCommand, StatusThemeExt as _, Textarea, TextareaState,
+  UiIconName,
+};
 
 #[derive(Clone, Debug)]
 pub enum DockPanelEvent {
@@ -164,7 +167,7 @@ pub(crate) fn build_worktree_tree_items(files: &[PathBuf]) -> Vec<TreeItem> {
 }
 
 #[derive(Clone, Debug)]
-enum BranchPrState {
+pub(crate) enum BranchPrState {
   NoAccess,
   NoRemote,
   Loading,
@@ -451,6 +454,65 @@ impl DockPanel {
   ) {
     self.branch_status = branch_status;
     cx.notify();
+  }
+
+  /// The palette offers the same thing as the Pull request tab, so the keyboard
+  /// reaches the branch's pull request without going through the dock.
+  pub(crate) fn branch_pull_request_command(&self) -> Option<CommandPaletteCommand> {
+    match &self.branch_pr {
+      BranchPrState::NoAccess | BranchPrState::NoRemote => None,
+      BranchPrState::Loading => Some(
+        CommandPaletteCommand::create_pull_request().disabled("Checking for an open pull request"),
+      ),
+      // Publishing is a push: it stays a deliberate click in the tab.
+      BranchPrState::Missing(_) if self.branch_needs_publishing() => None,
+      BranchPrState::Missing(_) => Some(CommandPaletteCommand::create_pull_request()),
+      BranchPrState::Found(_, pull_request) => Some(CommandPaletteCommand::open_pull_request(
+        pull_request.number,
+      )),
+    }
+  }
+
+  /// What the Pull request tab's own button does, for the palette to reuse.
+  pub(crate) fn create_branch_pull_request(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    let BranchPrState::Missing(context) = &self.branch_pr else {
+      return;
+    };
+    if self.branch_needs_publishing() {
+      return;
+    }
+    open_create_pull_request_dialog(
+      WorkspaceApi::global(cx).api.clone(),
+      self.window_handle,
+      self.pr_created_handler(cx),
+      context.clone(),
+      window,
+      cx,
+    );
+  }
+
+  #[cfg(test)]
+  pub(crate) fn set_branch_pull_request_state(
+    &mut self,
+    state: BranchPrState,
+    cx: &mut Context<Self>,
+  ) {
+    self.branch_pr = state;
+    cx.notify();
+  }
+
+  pub(crate) fn open_branch_pull_request(&self, cx: &mut Context<Self>) {
+    let BranchPrState::Found(context, pull_request) = &self.branch_pr else {
+      return;
+    };
+    open_pr_target(
+      context.owner.clone(),
+      context.repo.clone(),
+      pull_request.number,
+      false,
+      None,
+      cx,
+    );
   }
 
   /// GitHub cannot open a pull request for a branch its remote has never seen.
@@ -1268,6 +1330,7 @@ mod tests {
   use std::path::Path;
   use std::sync::Arc;
   use std::sync::atomic::{AtomicBool, Ordering};
+  use ui::{CommandPaletteCommandId, WindowExt as _};
 
   #[gpui::test]
   async fn a_poll_re_reads_the_working_tree_without_calling_github(cx: &mut TestAppContext) {
@@ -1422,6 +1485,13 @@ mod tests {
     cx.run_until_parked();
     assert_eq!(published.borrow().as_slice(), ["feature".to_string()]);
 
+    // Even called directly, the form refuses a branch the remote never saw.
+    panel.update_in(cx, |panel, window, cx| {
+      panel.create_branch_pull_request(window, cx)
+    });
+    cx.run_until_parked();
+    assert!(!cx.update(|window, cx| window.has_active_dialog(cx)));
+
     // Once it has an upstream, the plain Create button comes back.
     panel.update(cx, |panel, cx| {
       panel.set_branch_status(
@@ -1444,6 +1514,95 @@ mod tests {
       cx.debug_bounds(DOCK_PANEL_PUBLISH_AND_CREATE_PR_DEBUG_SELECTOR)
         .is_none()
     );
+  }
+
+  #[gpui::test]
+  async fn the_palette_mirrors_what_the_pull_request_tab_offers(cx: &mut TestAppContext) {
+    cx.update(|cx| gpui_component::init(cx));
+    let repo = TempRepo::init("dock-pr-palette");
+    commit_text_file(&repo.path, Path::new("README.md"), "v1\n", "initial");
+
+    let (panel, cx) = add_dock_panel_window(Some(repo.path.clone()), cx);
+    await_refresh(&panel, cx).await;
+
+    let context = GithubBranchContext {
+      owner: "acme".to_string(),
+      repo: "widget".to_string(),
+      branch: "feature".to_string(),
+    };
+    let published = git::BranchStatus {
+      name: "feature".to_string(),
+      ahead: 0,
+      behind: 0,
+      has_upstream: true,
+    };
+
+    let command_id = |panel: &DockPanel| {
+      panel
+        .branch_pull_request_command()
+        .map(|command| (command.id, command.disabled_reason.is_some()))
+    };
+
+    // Without GitHub, or without a GitHub remote, the palette says nothing.
+    panel.update(cx, |panel, cx| {
+      panel.branch_pr = BranchPrState::NoAccess;
+      panel.set_branch_status(Some(published.clone()), cx);
+    });
+    panel.read_with(cx, |panel, _| assert_eq!(command_id(panel), None));
+    panel.update(cx, |panel, _| panel.branch_pr = BranchPrState::NoRemote);
+    panel.read_with(cx, |panel, _| assert_eq!(command_id(panel), None));
+
+    // While the lookup runs, the command shows up but cannot be run.
+    panel.update(cx, |panel, _| panel.branch_pr = BranchPrState::Loading);
+    panel.read_with(cx, |panel, _| {
+      assert_eq!(
+        command_id(panel),
+        Some((CommandPaletteCommandId::CreatePullRequest, true))
+      );
+    });
+
+    // No pull request on a published branch: the form is one keystroke away.
+    panel.update(cx, |panel, _| {
+      panel.branch_pr = BranchPrState::Missing(context.clone())
+    });
+    panel.read_with(cx, |panel, _| {
+      assert_eq!(
+        command_id(panel),
+        Some((CommandPaletteCommandId::CreatePullRequest, false))
+      );
+    });
+
+    // Unpublished: publishing is a push, it stays a deliberate click in the tab.
+    panel.update(cx, |panel, cx| {
+      panel.set_branch_status(
+        Some(git::BranchStatus {
+          name: "feature".to_string(),
+          ahead: 1,
+          behind: 0,
+          has_upstream: false,
+        }),
+        cx,
+      );
+    });
+    panel.read_with(cx, |panel, _| assert_eq!(command_id(panel), None));
+
+    // An existing pull request: the palette opens that one.
+    panel.update(cx, |panel, cx| {
+      panel.set_branch_status(Some(published), cx);
+      panel.branch_pr = BranchPrState::Found(context, Box::new(test_pull_request()));
+    });
+    panel.read_with(cx, |panel, _| {
+      assert_eq!(
+        command_id(panel),
+        Some((CommandPaletteCommandId::OpenPullRequest, false))
+      );
+      let label = panel
+        .branch_pull_request_command()
+        .expect("command")
+        .name
+        .to_string();
+      assert!(label.contains("42"), "the command names the pull request");
+    });
   }
 
   async fn await_refresh(panel: &Entity<DockPanel>, cx: &mut gpui::VisualTestContext) {
