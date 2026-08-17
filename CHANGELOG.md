@@ -4,6 +4,10 @@ All notable changes to Reviu are documented here.
 
 ## 1.0.0
 
+### Restore All From The Sessions Palette
+
+Discarding every change at once was only reachable from the Git page toolbar. The Sessions command palette now carries `Restore all`, offered whenever the working tree has something to discard, with the same confirmation before anything is thrown away.
+
 ### The Sidebar Asks For A Repository
 
 On a fresh install the Sessions sidebar showed nothing about repositories, so the only way to open one was the command palette. The bottom row of the sidebar now offers `Open repository` when none is selected, and turns back into the repository name, branch and ahead/behind counters once you pick one.

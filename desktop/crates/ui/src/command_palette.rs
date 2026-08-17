@@ -200,6 +200,7 @@ pub enum CommandPaletteAction {
   },
   StageAll,
   UnstageAll,
+  RestoreAll,
   Pull,
   Fetch,
   Stash {
@@ -792,6 +793,7 @@ pub enum CommandPaletteCommandId {
   CherryPick,
   StageAll,
   UnstageAll,
+  RestoreAll,
   Pull,
   Fetch,
   Stash,
@@ -850,6 +852,7 @@ impl CommandPaletteCommandId {
       Self::CherryPick => "cherry_pick",
       Self::StageAll => "stage_all",
       Self::UnstageAll => "unstage_all",
+      Self::RestoreAll => "restore_all",
       Self::Pull => "pull",
       Self::Fetch => "fetch",
       Self::Stash => "stash",
@@ -907,6 +910,7 @@ impl CommandPaletteCommandId {
       "open_pull_request" => Some(Self::OpenPullRequest),
       "cherry_pick" => Some(Self::CherryPick),
       "stage_all" => Some(Self::StageAll),
+      "restore_all" => Some(Self::RestoreAll),
       "unstage_all" => Some(Self::UnstageAll),
       "pull" => Some(Self::Pull),
       "fetch" => Some(Self::Fetch),
@@ -1259,6 +1263,14 @@ impl CommandPaletteCommand {
     )
   }
 
+  pub fn restore_all() -> Self {
+    Self::new(
+      CommandPaletteCommandId::RestoreAll,
+      "Restore all",
+      "Discard every change in the working tree",
+    )
+  }
+
   pub fn pull() -> Self {
     Self::new(
       CommandPaletteCommandId::Pull,
@@ -1499,6 +1511,7 @@ impl CommandPaletteCommand {
       | CommandPaletteCommandId::UnstageSelectedFile
       | CommandPaletteCommandId::StageAll
       | CommandPaletteCommandId::UnstageAll
+      | CommandPaletteCommandId::RestoreAll
       | CommandPaletteCommandId::AcceptAllCurrentConflicts
       | CommandPaletteCommandId::AcceptAllIncomingConflicts
       | CommandPaletteCommandId::CherryPick
@@ -1585,6 +1598,7 @@ impl CommandPaletteCommand {
       CommandPaletteCommandId::CherryPick => Icon::new(UiIconName::GitMerge),
       CommandPaletteCommandId::StageAll => Icon::new(IconName::Plus),
       CommandPaletteCommandId::UnstageAll => Icon::new(UiIconName::ArrowUpFromLine),
+      CommandPaletteCommandId::RestoreAll => Icon::new(IconName::Undo),
       CommandPaletteCommandId::Pull => Icon::new(IconName::ArrowDown),
       CommandPaletteCommandId::Fetch => Icon::new(UiIconName::RefreshCw),
       CommandPaletteCommandId::Stash | CommandPaletteCommandId::StashIncludeUntracked => {
@@ -2689,6 +2703,9 @@ impl CommandPalette {
       }
       CommandPaletteCommandId::UnstageAll => {
         self.trigger_action(command, CommandPaletteAction::UnstageAll, window, cx);
+      }
+      CommandPaletteCommandId::RestoreAll => {
+        self.trigger_action(command, CommandPaletteAction::RestoreAll, window, cx);
       }
       CommandPaletteCommandId::Pull => {
         self.trigger_action(command, CommandPaletteAction::Pull, window, cx);

@@ -1721,6 +1721,9 @@ impl SessionPage {
       if state.allows(PaletteCommand::UnstageAll) {
         commands.push(CommandPaletteCommand::unstage_all());
       }
+      if state.allows(PaletteCommand::RestoreAll) {
+        commands.push(CommandPaletteCommand::restore_all());
+      }
       if state.allows(PaletteCommand::Push) {
         commands.push(CommandPaletteCommand::push("Push"));
       }
@@ -1877,6 +1880,16 @@ impl SessionPage {
       CommandPaletteAction::StageAll => self.run_repo_command(RepoCommand::StageAll, window, cx),
       CommandPaletteAction::UnstageAll => {
         self.run_repo_command(RepoCommand::UnstageAll, window, cx)
+      }
+      CommandPaletteAction::RestoreAll => {
+        self
+          .dock_panel
+          .read(cx)
+          .changes_list()
+          .update(cx, |list, cx| {
+            list.confirm_restore_all(window, cx);
+          });
+        Ok(())
       }
       CommandPaletteAction::Push => self.run_repo_command(RepoCommand::Push, window, cx),
       CommandPaletteAction::ForcePush => self.run_repo_command(RepoCommand::ForcePush, window, cx),
@@ -3257,6 +3270,66 @@ mod tests {
     });
 
     assert!(error.contains("still running"), "{error}");
+  }
+
+  #[gpui::test]
+  async fn the_palette_restores_every_change_after_confirmation(cx: &mut TestAppContext) {
+    let repo = TempRepo::init("session-page-restore-all");
+    commit_text_file(&repo.path, Path::new("a.txt"), "v1\n", "initial");
+
+    let (page, cx) = add_session_page_window(repo.path.clone(), cx);
+    let refresh = page.update(cx, |page, cx| {
+      page.dock_panel.update(cx, |panel, cx| {
+        panel.refresh(cx);
+        panel._refresh_task.take().expect("refresh task")
+      })
+    });
+    refresh.await;
+    cx.run_until_parked();
+
+    // Nothing changed yet: nothing to restore.
+    page.read_with(cx, |page, cx| {
+      let ids = page
+        .palette_commands(1, cx)
+        .into_iter()
+        .map(|command| command.id)
+        .collect::<Vec<_>>();
+      assert!(!ids.contains(&CommandPaletteCommandId::RestoreAll));
+    });
+
+    std::fs::write(repo.path.join("a.txt"), "v2\n").expect("modify file");
+    let refresh = page.update(cx, |page, cx| {
+      page.dock_panel.update(cx, |panel, cx| {
+        panel.refresh(cx);
+        panel._refresh_task.take().expect("refresh task")
+      })
+    });
+    refresh.await;
+    cx.run_until_parked();
+
+    page.read_with(cx, |page, cx| {
+      let ids = page
+        .palette_commands(1, cx)
+        .into_iter()
+        .map(|command| command.id)
+        .collect::<Vec<_>>();
+      assert!(ids.contains(&CommandPaletteCommandId::RestoreAll));
+    });
+
+    // Destructive: the command asks first and touches nothing on its own.
+    page.update_in(cx, |page, window, cx| {
+      page
+        .handle_command_palette_action(CommandPaletteAction::RestoreAll, window, cx)
+        .expect("restore all is allowed");
+    });
+    cx.run_until_parked();
+
+    assert!(cx.update(|window, cx| window.has_active_dialog(cx)));
+    assert_eq!(
+      std::fs::read_to_string(repo.path.join("a.txt")).expect("read file"),
+      "v2\n",
+      "the file is only discarded once the dialog is confirmed"
+    );
   }
 
   #[gpui::test]

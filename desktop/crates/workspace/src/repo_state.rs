@@ -23,6 +23,7 @@ pub(crate) enum PaletteCommand {
   CherryPick,
   StageAll,
   UnstageAll,
+  RestoreAll,
   Stash,
   StashWithUntracked,
   StageSelectedFile,
@@ -91,6 +92,8 @@ impl RepoState<'_> {
         !self.status_entries.is_empty() && !all_entries_staged(self.status_entries)
       }
       PaletteCommand::UnstageAll => has_staged_entries(self.status_entries),
+      // Same rule as the button it replaces: something to discard, in a repository.
+      PaletteCommand::RestoreAll => self.has_repo && !self.status_entries.is_empty(),
       PaletteCommand::Stash => has_tracked_entries(self.status_entries),
       PaletteCommand::StashWithUntracked => {
         has_tracked_entries(self.status_entries) || has_untracked_entries(self.status_entries)
@@ -271,7 +274,7 @@ mod tests {
     }
   }
 
-  const EVERY_COMMAND: [PaletteCommand; 19] = [
+  const EVERY_COMMAND: [PaletteCommand; 20] = [
     PaletteCommand::Commit,
     PaletteCommand::ContinueRebase,
     PaletteCommand::SkipRebase,
@@ -287,6 +290,7 @@ mod tests {
     PaletteCommand::CherryPick,
     PaletteCommand::StageAll,
     PaletteCommand::UnstageAll,
+    PaletteCommand::RestoreAll,
     PaletteCommand::Stash,
     PaletteCommand::StashWithUntracked,
     PaletteCommand::StageSelectedFile,
@@ -461,6 +465,26 @@ mod tests {
     builder.entries = Vec::new();
     assert!(!builder.state().allows(PaletteCommand::StageAll));
     assert!(!builder.state().allows(PaletteCommand::UnstageAll));
+  }
+
+  #[test]
+  fn restoring_everything_needs_something_to_discard() {
+    let mut builder = StateBuilder::new();
+    assert!(builder.state().allows(PaletteCommand::RestoreAll));
+
+    // Staged changes are still changes to discard.
+    builder.entries = vec![modified("a.rs", RepoStage::Staged)];
+    assert!(builder.state().allows(PaletteCommand::RestoreAll));
+
+    builder.entries = Vec::new();
+    assert!(
+      !builder.state().allows(PaletteCommand::RestoreAll),
+      "a clean working tree has nothing to restore"
+    );
+
+    builder.entries = vec![modified("a.rs", RepoStage::Unstaged)];
+    builder.has_repo = false;
+    assert!(!builder.state().allows(PaletteCommand::RestoreAll));
   }
 
   #[test]

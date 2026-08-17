@@ -920,6 +920,16 @@ impl GitPage {
         self.unstage_all_action(window, cx);
         Ok(())
       }
+      CommandPaletteAction::RestoreAll => {
+        if self.selected_repo.is_none() {
+          return Err("No repository selected.".into());
+        }
+        should_post_action_refresh = false;
+        self
+          .changes_list
+          .update(cx, |list, cx| list.confirm_restore_all(window, cx));
+        Ok(())
+      }
       CommandPaletteAction::Pull => {
         let Some(root_path) = self.selected_repo.clone() else {
           return Err("No repository selected.".into());
