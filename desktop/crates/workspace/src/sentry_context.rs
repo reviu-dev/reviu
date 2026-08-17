@@ -81,7 +81,6 @@ pub(crate) struct CrashContextSnapshot {
 fn workspace_page_tag(page: WorkspacePage) -> &'static str {
   match page {
     WorkspacePage::Session => "session",
-    WorkspacePage::Git => "git",
     WorkspacePage::GithubPrDetails => "github_pr_details",
     WorkspacePage::Billing => "billing",
     WorkspacePage::GitConfig => "git_config",
@@ -443,7 +442,6 @@ mod tests {
   #[test]
   fn workspace_page_tag_maps_pages() {
     assert_eq!(workspace_page_tag(WorkspacePage::Session), "session");
-    assert_eq!(workspace_page_tag(WorkspacePage::Git), "git");
     assert_eq!(
       workspace_page_tag(WorkspacePage::GithubPrDetails),
       "github_pr_details"

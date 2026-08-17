@@ -4,6 +4,10 @@ All notable changes to Reviu are documented here.
 
 ## 1.0.0
 
+### One Workspace
+
+The separate Git page is gone: everything it did happens in the Sessions workspace, which is now the only place Reviu opens. The changes list with hunk staging, conflicts, the history, the terminal, branches, stashes, cherry-pick, interactive rebase, the commit menu and every keyboard shortcut moved there, next to the agent and the diff. `cmd-1` still goes to Sessions, `cmd-2` no longer exists, and old links to the Git page land in the workspace.
+
 ### Reviu Pro Offered Where It Makes Sense
 
 Pushing a branch of a GitHub repository without Reviu Pro shows a single notification, once per session, explaining that Pro brings pull requests, reviews and notifications into the app, with a way straight to the plans. Nothing is shown to subscribers or to repositories that are not on GitHub.

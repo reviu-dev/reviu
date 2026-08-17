@@ -3,26 +3,6 @@
 use super::*;
 
 impl SessionPage {
-  pub(super) fn deliver_review_export(
-    &mut self,
-    text: String,
-    window: &mut Window,
-    cx: &mut Context<Self>,
-  ) {
-    self.ensure_agent_chat_view(window, cx);
-    let Some(panel) = self.agent_chat_view.clone() else {
-      return;
-    };
-    let sent = panel.update(cx, |panel, cx| {
-      panel.is_ready() && panel.send_external_review(text.clone(), cx)
-    });
-    if !sent {
-      self.pending_review_export = Some(text);
-    }
-    self.focus_agent_input_on_next_frame(window, cx);
-    cx.notify();
-  }
-
   pub(super) fn deliver_selection_context(
     &mut self,
     path: String,

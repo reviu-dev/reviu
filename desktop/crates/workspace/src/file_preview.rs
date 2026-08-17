@@ -77,10 +77,6 @@ pub fn is_svg_path(path: &Path) -> bool {
   )
 }
 
-pub fn is_previewable_path(path: &Path) -> bool {
-  is_markdown_path(path) || is_svg_path(path)
-}
-
 pub fn raster_image_format_for_path(path: &Path) -> Option<ImageFormat> {
   match path
     .extension()
@@ -203,9 +199,10 @@ mod tests {
 
   #[test]
   fn previewable_path_detection_accepts_markdown_and_svg_only() {
-    assert!(is_previewable_path(Path::new("README.md")));
-    assert!(is_previewable_path(Path::new("icon.svg")));
-    assert!(!is_previewable_path(Path::new("script.ts")));
+    assert!(is_markdown_path(Path::new("README.md")));
+    assert!(is_svg_path(Path::new("icon.svg")));
+    assert!(!is_markdown_path(Path::new("script.ts")));
+    assert!(!is_svg_path(Path::new("script.ts")));
   }
 
   #[test]

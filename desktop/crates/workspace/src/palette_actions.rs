@@ -20,10 +20,6 @@ pub(crate) fn handle_global_command_palette_action(
       NavigationHistory::navigate("/session", cx);
       Ok(())
     }
-    CommandPaletteAction::OpenGitPage => {
-      NavigationHistory::navigate("/git", cx);
-      Ok(())
-    }
     CommandPaletteAction::OpenGitConfigPage => {
       NavigationHistory::navigate("/git-config", cx);
       Ok(())

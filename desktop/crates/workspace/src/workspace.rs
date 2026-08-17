@@ -31,7 +31,6 @@ use crate::auth_state::{AuthState, AuthStateStore};
 use crate::billing_page::BillingPage;
 use crate::config::{AppSettings as PersistedSettings, ConfigStore};
 use crate::git_config_page::GitConfigPage;
-use crate::git_page::{GitPage, GitPageHandle};
 use crate::github_notifications::{self, GithubNotificationsStore};
 use crate::github_pr_details_page::{GithubPrDetailsPage, GithubPrDetailsPageHandle};
 use crate::navigation::NavigationHistory;
@@ -53,7 +52,6 @@ pub const STATUS_BAR_ICON_PNG: &[u8] =
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum WorkspacePage {
   Session,
-  Git,
   GithubPrDetails,
   Billing,
   GitConfig,
@@ -71,7 +69,6 @@ pub(crate) fn workspace_page_from_pathname(pathname: &str) -> WorkspacePage {
   }
   match pathname {
     "/session" => WorkspacePage::Session,
-    "/git" => WorkspacePage::Git,
     "/billing" => WorkspacePage::Billing,
     "/settings" => WorkspacePage::Settings,
     "/git-config" => WorkspacePage::GitConfig,
@@ -81,9 +78,9 @@ pub(crate) fn workspace_page_from_pathname(pathname: &str) -> WorkspacePage {
 }
 
 /// Returns true when the current path supports file search.
-/// Git page always does; PR details on /changes tab.
+/// The shell always does; PR details on the /changes tab.
 fn page_has_file_search(pathname: &str) -> bool {
-  if pathname == "/git" || pathname == "/session" {
+  if pathname == "/session" {
     return true;
   }
   if pathname.starts_with("/github/") {
@@ -99,7 +96,6 @@ fn page_has_file_search(pathname: &str) -> bool {
 fn user_menu_page_for_workspace_page(page: WorkspacePage) -> UserMenuPage {
   match page {
     WorkspacePage::Session => UserMenuPage::Session,
-    WorkspacePage::Git => UserMenuPage::Git,
     WorkspacePage::GithubPrDetails => UserMenuPage::GithubPrDetails,
     WorkspacePage::Billing => UserMenuPage::Billing,
     WorkspacePage::GitConfig => UserMenuPage::GitConfig,
@@ -111,7 +107,6 @@ fn user_menu_page_for_workspace_page(page: WorkspacePage) -> UserMenuPage {
 fn primary_navigation_selected_index(page: WorkspacePage) -> Option<usize> {
   match page {
     WorkspacePage::Session => Some(0),
-    WorkspacePage::Git => Some(1),
     WorkspacePage::GithubPrDetails => None,
     WorkspacePage::Billing
     | WorkspacePage::GitConfig
@@ -123,7 +118,6 @@ fn primary_navigation_selected_index(page: WorkspacePage) -> Option<usize> {
 fn refresh_label_for_workspace_page(page: WorkspacePage) -> Option<&'static str> {
   match page {
     WorkspacePage::Session => None,
-    WorkspacePage::Git => Some("Refresh Git"),
     WorkspacePage::GithubPrDetails => Some("Refresh PR"),
     WorkspacePage::Billing
     | WorkspacePage::GitConfig
@@ -141,7 +135,6 @@ fn should_activate_session_page(previous: Option<WorkspacePage>, next: Workspace
 fn refresh_in_progress_for_workspace_page(page: WorkspacePage, cx: &App) -> bool {
   match page {
     WorkspacePage::Session => false,
-    WorkspacePage::Git => GitPageHandle::is_refreshing(cx),
     WorkspacePage::GithubPrDetails => GithubPrDetailsPageHandle::is_refreshing(cx),
     WorkspacePage::Billing
     | WorkspacePage::GitConfig
@@ -172,7 +165,6 @@ pub fn build_app_menus(show_billing_entry: bool) -> Vec<Menu> {
     MenuItem::action("Back", crate::NavigateBack),
     MenuItem::separator(),
     MenuItem::action("Sessions", crate::OpenSessionPage),
-    MenuItem::action("Git", crate::OpenGitPage),
     MenuItem::separator(),
     MenuItem::action("Git Config", crate::OpenGitConfigPage),
   ];
@@ -260,7 +252,6 @@ impl WorkspaceApi {
 
 pub struct WorkspaceView {
   session_page: Entity<SessionPage>,
-  git_page: Entity<GitPage>,
   git_config_page: Entity<GitConfigPage>,
   github_pr_details_page: Entity<GithubPrDetailsPage>,
   billing_page: Entity<BillingPage>,
@@ -355,7 +346,6 @@ impl WorkspaceView {
     crate::install_app_key_bindings(cx);
 
     let session_page = cx.new(|cx| SessionPage::new(window, cx));
-    let git_page = cx.new(|cx| GitPage::new(window, cx));
     let git_config_page = cx.new(|cx| GitConfigPage::new(window, cx));
     let github_pr_details_page = cx.new(|cx| GithubPrDetailsPage::new(window, cx));
     let billing_page = cx.new(|cx| BillingPage::new(window, cx));
@@ -364,7 +354,6 @@ impl WorkspaceView {
 
     let view = Self {
       session_page,
-      git_page,
       git_config_page,
       github_pr_details_page,
       billing_page,
@@ -714,7 +703,6 @@ impl WorkspaceView {
     }
 
     match page {
-      WorkspacePage::Git => GitPageHandle::refresh_page(cx),
       WorkspacePage::GithubPrDetails => GithubPrDetailsPageHandle::refresh(cx),
       WorkspacePage::Session
       | WorkspacePage::Billing
@@ -865,7 +853,6 @@ impl WorkspaceView {
             image: user.image.map(Into::into),
           }),
           current_page,
-          on_open_git: None,
           on_open_billing,
           on_open_git_config: Some(open_git_config),
           on_open_settings: Some(open_settings),
@@ -879,7 +866,6 @@ impl WorkspaceView {
         id: "workspace-auth-menu".into(),
         state: UserMenuState::Unauthenticated,
         current_page,
-        on_open_git: None,
         on_open_billing: None,
         on_open_git_config: Some(open_git_config),
         on_open_settings: Some(open_settings),
@@ -1085,9 +1071,6 @@ impl Render for WorkspaceView {
       let previous_page = self.last_page;
       self.last_page = Some(page);
       sentry_context::sync_workspace_page(previous_page, page);
-      if previous_page == Some(WorkspacePage::Git) && page != WorkspacePage::Git {
-        sentry_context::clear_git_context();
-      }
       if previous_page == Some(WorkspacePage::GithubPrDetails)
         && page != WorkspacePage::GithubPrDetails
       {
@@ -1103,7 +1086,6 @@ impl Render for WorkspaceView {
     }
 
     let session_page = self.session_page.clone();
-    let git_page = self.git_page.clone();
     let github_pr_details_page = self.github_pr_details_page.clone();
     let billing_page = self.billing_page.clone();
     let git_config_page = self.git_config_page.clone();
@@ -1115,11 +1097,6 @@ impl Render for WorkspaceView {
         Route::new()
           .path("session")
           .element(move |_w, _cx| session_page.clone()),
-      )
-      .child(
-        Route::new()
-          .path("git")
-          .element(move |_w, _cx| git_page.clone()),
       )
       .child(
         Route::new()
@@ -1164,9 +1141,6 @@ impl Render for WorkspaceView {
       .key_context(key_context.as_str())
       .on_action(cx.listener(|_, _: &crate::OpenSessionPage, _window, cx| {
         NavigationHistory::navigate("/session", cx);
-      }))
-      .on_action(cx.listener(|_, _: &crate::OpenGitPage, _window, cx| {
-        NavigationHistory::navigate("/git", cx);
       }))
       .on_action(cx.listener(Self::navigate_back_action))
       .on_action(cx.listener(Self::refresh_current_page_action))
@@ -1239,7 +1213,11 @@ mod tests {
       workspace_page_from_pathname("/session"),
       WorkspacePage::Session
     );
-    assert_eq!(workspace_page_from_pathname("/git"), WorkspacePage::Git);
+    assert_eq!(
+      workspace_page_from_pathname("/git"),
+      WorkspacePage::Session,
+      "an old link to the deleted page lands in the shell"
+    );
     assert_eq!(
       workspace_page_from_pathname("/billing"),
       WorkspacePage::Billing
@@ -1265,7 +1243,7 @@ mod tests {
 
     assert_eq!(
       action_menu_item_names(navigate_menu),
-      vec!["Back", "Sessions", "Git", "Git Config"]
+      vec!["Back", "Sessions", "Git Config"]
     );
   }
 
@@ -1279,7 +1257,7 @@ mod tests {
 
     assert_eq!(
       action_menu_item_names(navigate_menu),
-      vec!["Back", "Sessions", "Git", "Git Config", "Billing"]
+      vec!["Back", "Sessions", "Git Config", "Billing"]
     );
   }
 
@@ -1355,7 +1333,6 @@ mod tests {
 
   #[test]
   fn page_has_file_search_matches_correct_paths() {
-    assert!(page_has_file_search("/git"));
     assert!(page_has_file_search("/session"));
     assert!(page_has_file_search("/github/owner/repo/pull/123/changes"));
     assert!(!page_has_file_search("/github"));
@@ -1394,10 +1371,6 @@ mod tests {
       Some(0)
     );
     assert_eq!(
-      primary_navigation_selected_index(WorkspacePage::Git),
-      Some(1)
-    );
-    assert_eq!(
       primary_navigation_selected_index(WorkspacePage::GithubPrDetails),
       None
     );
@@ -1420,9 +1393,8 @@ mod tests {
   }
 
   #[test]
-  fn workspace_refresh_support_matches_git_and_github_surfaces() {
+  fn workspace_refresh_support_matches_github_surfaces() {
     assert!(!page_supports_refresh(WorkspacePage::Session));
-    assert!(page_supports_refresh(WorkspacePage::Git));
     assert!(page_supports_refresh(WorkspacePage::GithubPrDetails));
     assert!(!page_supports_refresh(WorkspacePage::Billing));
     assert!(!page_supports_refresh(WorkspacePage::GitConfig));
@@ -1435,19 +1407,15 @@ mod tests {
     // Startup on the shell, and every navigation back to it.
     assert!(should_activate_session_page(None, WorkspacePage::Session));
     assert!(should_activate_session_page(
-      Some(WorkspacePage::Git),
-      WorkspacePage::Session
-    ));
-    assert!(should_activate_session_page(
       Some(WorkspacePage::GithubPrDetails),
       WorkspacePage::Session
     ));
 
     // Never for another page, and never twice for the same one.
-    assert!(!should_activate_session_page(None, WorkspacePage::Git));
+    assert!(!should_activate_session_page(None, WorkspacePage::Billing));
     assert!(!should_activate_session_page(
       Some(WorkspacePage::Session),
-      WorkspacePage::Git
+      WorkspacePage::Billing
     ));
     assert!(!should_activate_session_page(
       Some(WorkspacePage::Session),
@@ -1465,10 +1433,6 @@ mod tests {
 
   #[test]
   fn refresh_label_for_workspace_page_matches_page_context() {
-    assert_eq!(
-      refresh_label_for_workspace_page(WorkspacePage::Git),
-      Some("Refresh Git")
-    );
     assert_eq!(
       refresh_label_for_workspace_page(WorkspacePage::GithubPrDetails),
       Some("Refresh PR")
@@ -1530,7 +1494,6 @@ impl Focusable for WorkspaceView {
   fn focus_handle(&self, cx: &App) -> FocusHandle {
     match WorkspaceRoute::global(cx).page {
       WorkspacePage::Session => self.session_page.read(cx).focus_handle(cx),
-      WorkspacePage::Git => self.git_page.read(cx).focus_handle(cx),
       WorkspacePage::GithubPrDetails => self.github_pr_details_page.read(cx).focus_handle(cx),
       WorkspacePage::Billing => self.billing_page.read(cx).focus_handle(cx),
       WorkspacePage::GitConfig => self.git_config_page.read(cx).focus_handle(cx),

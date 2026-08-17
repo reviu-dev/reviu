@@ -5,7 +5,7 @@ use std::rc::Rc;
 
 use git::{
   RepoStage, RepoStatusEntry, RepoStatusKind, delete_untracked_file, restore_file,
-  restore_renamed_file, stage_all, stage_file, unstage_all, unstage_file,
+  restore_renamed_file, stage_file, unstage_file,
 };
 use gpui::{
   AnyElement, App, Context, Entity, EventEmitter, Focusable as _, IntoElement, ParentElement,
@@ -142,13 +142,8 @@ pub(crate) enum ChangesListEvent {
   OpenFile {
     path: PathBuf,
   },
-  /// A staging action landed: the worktree and the diff moved. `label` names
-  /// the action for the consumer's telemetry.
-  Changed {
-    label: &'static str,
-    /// The action removed rows: whoever shows a file may be showing a ghost.
-    destructive: bool,
-  },
+  /// A staging action landed: the worktree and the diff moved.
+  Changed,
 }
 
 struct ChangesSection {
@@ -181,6 +176,22 @@ impl ChangesRowsDelegate {
   fn set_rows(&mut self, entries: Vec<RepoStatusEntry>) {
     self.rows = entries.into_iter().map(Rc::new).collect();
     self.rebuild_sections();
+  }
+
+  #[cfg(test)]
+  fn index_for_path(&self, path: &Path) -> Option<IndexPath> {
+    for (section_ix, section) in self.sections.iter().enumerate() {
+      for (row_ix, row) in section.rows.iter().enumerate() {
+        if row.path == path {
+          return Some(IndexPath {
+            section: section_ix,
+            row: row_ix,
+            column: 0,
+          });
+        }
+      }
+    }
+    None
   }
 
   fn rebuild_sections(&mut self) {
@@ -222,21 +233,6 @@ impl ChangesRowsDelegate {
       });
     }
     self.sections = sections;
-  }
-
-  fn index_for_path(&self, path: &Path) -> Option<IndexPath> {
-    for (section_ix, section) in self.sections.iter().enumerate() {
-      for (row_ix, row) in section.rows.iter().enumerate() {
-        if row.path == path {
-          return Some(IndexPath {
-            section: section_ix,
-            row: row_ix,
-            column: 0,
-          });
-        }
-      }
-    }
-    None
   }
 
   fn row_at(&self, ix: IndexPath) -> Option<Rc<RepoStatusEntry>> {
@@ -551,6 +547,25 @@ impl ChangesList {
     });
   }
 
+  #[cfg(test)]
+  pub(crate) fn select_path(&mut self, path: Option<&Path>, cx: &mut Context<Self>) {
+    let index = path.and_then(|path| self.list.read(cx).delegate().index_for_path(path));
+    self.list.update(cx, |state, cx| {
+      state.delegate_mut().selected_index = index;
+      cx.notify();
+    });
+  }
+
+  #[cfg(test)]
+  pub(crate) fn has_selection(&self, cx: &App) -> bool {
+    self.list.read(cx).delegate().selected_index.is_some()
+  }
+
+  #[cfg(test)]
+  pub(crate) fn is_focused(&self, window: &Window, cx: &App) -> bool {
+    self.list.read(cx).focus_handle(cx).is_focused(window)
+  }
+
   pub(crate) fn set_opened_path(&mut self, path: Option<PathBuf>, cx: &mut Context<Self>) {
     self.list.update(cx, |state, cx| {
       state.delegate_mut().opened_path = path;
@@ -601,7 +616,7 @@ impl ChangesList {
               if destructive {
                 this.select_first(cx);
               }
-              cx.emit(ChangesListEvent::Changed { label, destructive });
+              cx.emit(ChangesListEvent::Changed);
             }
             Err(error) => {
               window.push_notification(Notification::error(format!("{label} failed: {error}")), cx)
@@ -796,77 +811,13 @@ impl ChangesList {
     );
   }
 
-  /// Staging everything while a conflict is unresolved asks first.
-  pub(crate) fn stage_all_with_confirmation(
-    &mut self,
-    window: &mut Window,
-    cx: &mut Context<Self>,
-  ) {
-    if !has_conflicted_entries(&self.entries) {
-      self.stage_all(window, cx);
-      return;
-    }
-
-    let title: SharedString = "Mark conflicts as resolved?".into();
-    let message: SharedString =
-      "Stage all files and mark their merge conflicts as resolved?".into();
-    let view = cx.entity();
-
-    window.open_alert_dialog(cx, move |alert, _, _| {
-      let view = view.clone();
-      ConfirmDialog::new(title.clone(), div().child(message.clone()))
-        .confirm_text("Stage all")
-        .cancel_text("Cancel")
-        .on_confirm(move |_, window, cx| {
-          view.update(cx, |view, cx| view.stage_all(window, cx));
-          true
-        })
-        .build(alert)
-    });
-  }
-
-  /// The sidebar's single toggle: stage everything, or unstage it all when it
-  /// already is.
-  pub(crate) fn toggle_stage_all(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-    if all_entries_staged(&self.entries) {
-      self.unstage_all(window, cx);
-    } else {
-      self.stage_all_with_confirmation(window, cx);
-    }
-  }
-
-  /// Keeps the highlight on the file being shown, or on the first row when the
-  /// previous selection is gone.
-  pub(crate) fn select_path(&mut self, path: Option<&Path>, cx: &mut Context<Self>) {
-    let index = path.and_then(|path| self.list.read(cx).delegate().index_for_path(path));
-    self.list.update(cx, |state, cx| {
-      state.delegate_mut().selected_index = index;
-      cx.notify();
-    });
-  }
-
-  pub(crate) fn has_selection(&self, cx: &App) -> bool {
-    self.list.read(cx).delegate().selected_index.is_some()
-  }
-
-  pub(crate) fn is_focused(&self, window: &Window, cx: &App) -> bool {
-    self.list.read(cx).focus_handle(cx).is_focused(window)
-  }
-
+  /// Keeps the highlight on a row that still exists after a destructive action.
   pub(crate) fn select_first(&mut self, cx: &mut Context<Self>) {
     let index = (!self.entries.is_empty()).then(IndexPath::default);
     self.list.update(cx, |state, cx| {
       state.delegate_mut().selected_index = index;
       cx.notify();
     });
-  }
-
-  pub(crate) fn stage_all(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-    self.run("Stage all", stage_all, window, cx);
-  }
-
-  pub(crate) fn unstage_all(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-    self.run("Unstage all", unstage_all, window, cx);
   }
 }
 
@@ -911,6 +862,7 @@ pub(crate) fn split_path_label(path: &Path) -> (String, String) {
 mod tests {
   use super::*;
   use git::list_repo_status;
+  use git::stage_all;
 
   #[test]
   fn the_stage_button_follows_the_section_when_sections_are_split() {
@@ -1013,7 +965,7 @@ mod tests {
       let changed = changed.clone();
       cx.update(|_, cx| {
         cx.subscribe(&list, move |_, event: &ChangesListEvent, _| {
-          if matches!(event, ChangesListEvent::Changed { .. }) {
+          if matches!(event, ChangesListEvent::Changed) {
             changed.store(true, std::sync::atomic::Ordering::Relaxed);
           }
         })
@@ -1500,60 +1452,13 @@ mod tests {
   }
 
   #[gpui::test]
-  async fn staging_everything_only_asks_when_a_conflict_is_in_the_way(
-    cx: &mut gpui::TestAppContext,
-  ) {
-    let repo_root = temp_repo("changes-list-stage-all");
-
-    let (list, cx) = add_changes_list_window(repo_root.clone(), cx);
-    set_entries_from_disk(&list, cx, &repo_root);
-
-    // No conflict: it just stages.
-    let task = list.update_in(cx, |list, window, cx| {
-      list.stage_all_with_confirmation(window, cx);
-      list._action_task.take().expect("stage all task")
-    });
-    task.await;
-    cx.run_until_parked();
-    assert!(!cx.update(|window, cx| window.has_active_dialog(cx)));
-    assert!(
-      list_repo_status(&repo_root)
-        .expect("status")
-        .iter()
-        .all(|entry| entry.stage != RepoStage::Unstaged)
-    );
-
-    // With a conflict in the list, it asks first.
-    list.update(cx, |list, cx| {
-      list.set_entries(
-        vec![RepoStatusEntry {
-          path: PathBuf::from("README.md"),
-          old_path: None,
-          status: RepoStatusKind::Conflicted,
-          stage: RepoStage::Unstaged,
-        }],
-        cx,
-      );
-    });
-    list.update_in(cx, |list, window, cx| {
-      list.stage_all_with_confirmation(window, cx)
-    });
-    cx.run_until_parked();
-
-    assert!(cx.update(|window, cx| window.has_active_dialog(cx)));
-    list.read_with(cx, |list, _| assert!(list._action_task.is_none()));
-
-    let _ = std::fs::remove_dir_all(&repo_root);
-  }
-
-  #[gpui::test]
   async fn nothing_runs_without_a_repository(cx: &mut gpui::TestAppContext) {
     let (list, cx) = add_changes_list_window(std::env::temp_dir(), cx);
     list.update(cx, |list, cx| list.set_repo_root(None, cx));
 
     list.update_in(cx, |list, window, cx| {
       list.stage_file(PathBuf::from("README.md"), window, cx);
-      list.unstage_all(window, cx);
+      list.unstage_file(PathBuf::from("README.md"), window, cx);
       list.restore_file(
         PathBuf::from("README.md"),
         RepoStatusKind::Modified,
@@ -1563,45 +1468,6 @@ mod tests {
     });
 
     list.read_with(cx, |list, _| assert!(list._action_task.is_none()));
-  }
-
-  #[gpui::test]
-  async fn toggle_stage_all_flips_between_staging_and_unstaging(cx: &mut gpui::TestAppContext) {
-    let repo_root = temp_repo("changes-list-toggle-all");
-
-    let (list, cx) = add_changes_list_window(repo_root.clone(), cx);
-    set_entries_from_disk(&list, cx, &repo_root);
-
-    // Something unstaged: the toggle stages everything.
-    let task = list.update_in(cx, |list, window, cx| {
-      list.toggle_stage_all(window, cx);
-      list._action_task.take().expect("stage all task")
-    });
-    task.await;
-    cx.run_until_parked();
-    assert!(
-      list_repo_status(&repo_root)
-        .expect("status")
-        .iter()
-        .all(|entry| entry.stage == RepoStage::Staged)
-    );
-
-    // Everything staged: the same toggle unstages.
-    set_entries_from_disk(&list, cx, &repo_root);
-    let task = list.update_in(cx, |list, window, cx| {
-      list.toggle_stage_all(window, cx);
-      list._action_task.take().expect("unstage all task")
-    });
-    task.await;
-    cx.run_until_parked();
-    assert!(
-      list_repo_status(&repo_root)
-        .expect("status")
-        .iter()
-        .all(|entry| entry.stage == RepoStage::Unstaged)
-    );
-
-    let _ = std::fs::remove_dir_all(&repo_root);
   }
 
   #[gpui::test]

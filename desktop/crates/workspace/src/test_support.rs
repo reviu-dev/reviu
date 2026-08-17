@@ -4,7 +4,6 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use git2::build::CheckoutBuilder;
 use git2::{BranchType, Cred, PushOptions, RemoteCallbacks, Repository, Signature};
 
 pub(crate) struct TempRepo {
@@ -143,15 +142,6 @@ pub(crate) fn remote_branch_oid(remote_root: &Path, branch_name: &str) -> git2::
     .expect("open remote")
     .refname_to_id(&refname)
     .expect("read remote branch oid")
-}
-
-pub(crate) fn force_checkout_head(repo_root: &Path) {
-  let repo = Repository::open(repo_root).expect("open repo");
-  let mut checkout = CheckoutBuilder::new();
-  checkout.force();
-  repo
-    .checkout_head(Some(&mut checkout))
-    .expect("force checkout HEAD");
 }
 
 #[cfg(test)]

@@ -85,7 +85,6 @@ pub struct CommandPaletteCommand {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum CommandPalettePage {
   Session,
-  Git,
   GithubPrDetails,
   GitConfig,
   Settings,
@@ -212,7 +211,6 @@ pub enum CommandPaletteAction {
   PopStash(CommandPaletteStash),
   OpenRepository,
   OpenSessionPage,
-  OpenGitPage,
   OpenGithubRepoDetails {
     owner: String,
     repo: String,
@@ -803,7 +801,6 @@ pub enum CommandPaletteCommandId {
   PopStash,
   OpenRepository,
   OpenSessionPage,
-  OpenGitPage,
   OpenGithubFromUrl,
   SwitchToPrBranch,
   CopyPrBranch,
@@ -862,7 +859,6 @@ impl CommandPaletteCommandId {
       Self::PopStash => "pop_stash",
       Self::OpenRepository => "open_repository",
       Self::OpenSessionPage => "open_session_page",
-      Self::OpenGitPage => "open_git_page",
       Self::OpenGithubFromUrl => "open_github_from_url",
       Self::SwitchToPrBranch => "switch_to_pr_branch",
       Self::CopyPrBranch => "copy_pr_branch",
@@ -921,7 +917,6 @@ impl CommandPaletteCommandId {
       "pop_stash" => Some(Self::PopStash),
       "open_repository" => Some(Self::OpenRepository),
       "open_session_page" => Some(Self::OpenSessionPage),
-      "open_git_page" => Some(Self::OpenGitPage),
       "open_github_from_url" => Some(Self::OpenGithubFromUrl),
       "switch_to_pr_branch" => Some(Self::SwitchToPrBranch),
       "copy_pr_branch" => Some(Self::CopyPrBranch),
@@ -1343,14 +1338,6 @@ impl CommandPaletteCommand {
     )
   }
 
-  pub fn open_git_page() -> Self {
-    Self::new(
-      CommandPaletteCommandId::OpenGitPage,
-      "Go to Git",
-      "Navigate to the Git page",
-    )
-  }
-
   pub fn open_github_from_url() -> Self {
     Self::new(
       CommandPaletteCommandId::OpenGithubFromUrl,
@@ -1473,10 +1460,6 @@ impl CommandPaletteCommand {
       commands.push(Self::open_session_page());
     }
 
-    if current_page != CommandPalettePage::Git {
-      commands.push(Self::open_git_page());
-    }
-
     if include_github {
       commands.push(Self::open_github_from_url());
     }
@@ -1560,7 +1543,6 @@ impl CommandPaletteCommand {
       CommandPaletteCommandId::OpenGithubFromUrl => CommandPaletteGroup::Github,
 
       CommandPaletteCommandId::OpenSessionPage
-      | CommandPaletteCommandId::OpenGitPage
       | CommandPaletteCommandId::OpenGitConfigPage
       | CommandPaletteCommandId::OpenSettingsPage
       | CommandPaletteCommandId::OpenBillingPage
@@ -1617,7 +1599,6 @@ impl CommandPaletteCommand {
         Icon::new(UiIconName::GitPullRequestArrow)
       }
       CommandPaletteCommandId::OpenSessionPage => Icon::new(UiIconName::MessageCircle),
-      CommandPaletteCommandId::OpenGitPage => Icon::new(UiIconName::GitBranch),
       CommandPaletteCommandId::OpenGithubFromUrl => Icon::new(IconName::Github),
       CommandPaletteCommandId::SwitchToPrBranch => Icon::new(UiIconName::GitBranch),
       CommandPaletteCommandId::CopyPrBranch => Icon::new(IconName::Copy),
@@ -2739,9 +2720,6 @@ impl CommandPalette {
       CommandPaletteCommandId::OpenSessionPage => {
         self.trigger_action(command, CommandPaletteAction::OpenSessionPage, window, cx);
       }
-      CommandPaletteCommandId::OpenGitPage => {
-        self.trigger_action(command, CommandPaletteAction::OpenGitPage, window, cx);
-      }
       CommandPaletteCommandId::OpenGithubFromUrl => {
         let query = self.commands_list.read(cx).delegate().query.to_string();
         if let Some(action) = parse_github_pull_request_url_action(&query) {
@@ -3413,7 +3391,7 @@ mod tests {
   #[test]
   fn default_global_commands_include_github_commands_when_github_is_enabled() {
     let commands = CommandPaletteCommand::default_global_commands(
-      super::CommandPalettePage::Git,
+      super::CommandPalettePage::Session,
       /* include_github */ true,
     );
     assert!(
@@ -3426,7 +3404,7 @@ mod tests {
   #[test]
   fn default_global_commands_omit_github_commands_when_github_is_disabled() {
     let commands = CommandPaletteCommand::default_global_commands(
-      super::CommandPalettePage::Git,
+      super::CommandPalettePage::Session,
       /* include_github */ false,
     );
     assert!(
@@ -3700,7 +3678,6 @@ mod tests {
       CommandPaletteCommandId::PopStash,
       CommandPaletteCommandId::OpenRepository,
       CommandPaletteCommandId::OpenSessionPage,
-      CommandPaletteCommandId::OpenGitPage,
       CommandPaletteCommandId::OpenGithubFromUrl,
       CommandPaletteCommandId::SwitchToPrBranch,
       CommandPaletteCommandId::CopyPrBranch,

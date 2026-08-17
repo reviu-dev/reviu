@@ -174,14 +174,6 @@ impl SessionPageHandle {
     });
   }
 
-  /// Navigate to the sessions shell and send a review-comment batch to the agent.
-  pub fn send_review(text: String, cx: &mut App) {
-    NavigationHistory::navigate("/session", cx);
-    Self::with_page(cx, move |page, window, cx| {
-      page.deliver_review_export(text, window, cx);
-    });
-  }
-
   /// Navigate to the sessions shell and attach a code selection as agent context.
   /// Entry point from a pull request: land in the repository, fetch, and merge
   /// its base branch so the conflicts can be resolved here.
@@ -193,13 +185,6 @@ impl SessionPageHandle {
     NavigationHistory::navigate("/session", cx);
     Self::with_page(cx, move |page, window, cx| {
       page.start_merge_base_branch(repo_root.clone(), base_branch_name.clone(), window, cx);
-    });
-  }
-
-  pub fn add_selection(path: String, text: String, cx: &mut App) {
-    NavigationHistory::navigate("/session", cx);
-    Self::with_page(cx, move |page, window, cx| {
-      page.deliver_selection_context(path, text, window, cx);
     });
   }
 }
@@ -800,6 +785,40 @@ impl SessionPage {
         self.show_preview && self.previewable(),
       ),
     }
+  }
+
+  /// Staging a conflicted file marks its conflict resolved, which deserves a
+  /// question before it happens.
+  fn stage_all_with_confirmation(
+    &mut self,
+    window: &mut Window,
+    cx: &mut Context<Self>,
+  ) -> Result<(), SharedString> {
+    let entries = self.dock_panel.read(cx).status_entries().to_vec();
+    if !crate::changes_list::has_conflicted_entries(&entries) {
+      return self.run_repo_command(RepoCommand::StageAll, window, cx);
+    }
+
+    let view = cx.entity();
+    window.open_alert_dialog(cx, move |alert, _, _| {
+      let view = view.clone();
+      ConfirmDialog::new(
+        SharedString::from("Mark conflicts as resolved?"),
+        div().child("Stage all files and mark their merge conflicts as resolved?"),
+      )
+      .confirm_text("Stage all")
+      .cancel_text("Cancel")
+      .on_confirm(move |_, window, cx| {
+        view.update(cx, |view, cx| {
+          if let Err(error) = view.run_repo_command(RepoCommand::StageAll, window, cx) {
+            window.push_notification(Notification::warning(error), cx);
+          }
+        });
+        true
+      })
+      .build(alert)
+    });
+    Ok(())
   }
 
   /// Pushing to GitHub without Pro is the one moment the teaser is relevant.
@@ -1667,6 +1686,7 @@ impl SessionPage {
     self.repo_command_in_flight = true;
     let pushed = matches!(command, RepoCommand::Push | RepoCommand::ForcePush);
     let telemetry_key = command.telemetry_key();
+    let analytics_event = command.analytics_event();
     self
       .git_telemetry(cx)
       .breadcrumb(command.label(), Map::new());
@@ -1706,6 +1726,9 @@ impl SessionPage {
                   }
                   this.open_diff(path, None, window, cx);
                 }
+              }
+              if let Some(event) = analytics_event {
+                crate::analytics::track(cx, event);
               }
               this.dock_panel.update(cx, |panel, cx| panel.refresh(cx));
               this.refresh_branch(cx);
@@ -2093,7 +2116,7 @@ impl SessionPage {
       CommandPaletteAction::AbortMerge => {
         self.run_repo_command(RepoCommand::AbortMerge, window, cx)
       }
-      CommandPaletteAction::StageAll => self.run_repo_command(RepoCommand::StageAll, window, cx),
+      CommandPaletteAction::StageAll => self.stage_all_with_confirmation(window, cx),
       CommandPaletteAction::UnstageAll => {
         self.run_repo_command(RepoCommand::UnstageAll, window, cx)
       }

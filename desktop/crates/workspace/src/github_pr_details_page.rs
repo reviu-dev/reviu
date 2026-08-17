@@ -12157,10 +12157,6 @@ impl GithubPrDetailsPage {
         NavigationHistory::navigate("/session", cx);
         Ok(())
       }
-      CommandPaletteAction::OpenGitPage => {
-        NavigationHistory::navigate("/git", cx);
-        Ok(())
-      }
       CommandPaletteAction::OpenGithubPrDetails {
         owner,
         repo,

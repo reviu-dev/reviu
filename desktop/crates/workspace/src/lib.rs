@@ -5,7 +5,6 @@ actions!(
   [
     NavigateBack,
     CloseWorkspacePage,
-    OpenGitPage,
     OpenSessionPage,
     RefreshCurrentPage,
     ToggleTerminalSidebar,
@@ -73,7 +72,6 @@ mod file_preview;
 mod file_search_palette;
 mod file_view;
 mod git_config_page;
-mod git_page;
 mod git_telemetry;
 pub mod github_navigation;
 mod github_notifications;

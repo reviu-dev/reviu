@@ -23,7 +23,6 @@ fn git_config_icon() -> Icon {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum UserMenuPage {
   Session,
-  Git,
   GithubPrDetails,
   Billing,
   GitConfig,
@@ -49,7 +48,6 @@ pub struct UserMenuConfig {
   pub id: SharedString,
   pub state: UserMenuState,
   pub current_page: UserMenuPage,
-  pub on_open_git: Option<UserMenuHandler>,
   pub on_open_billing: Option<UserMenuHandler>,
   pub on_open_git_config: Option<UserMenuHandler>,
   pub on_open_settings: Option<UserMenuHandler>,
@@ -141,7 +139,6 @@ pub fn user_menu(config: UserMenuConfig) -> Option<AnyElement> {
         .small();
       let user_email = user.email.clone();
       let current_page = config.current_page;
-      let on_open_git = config.on_open_git.clone();
       let on_open_billing = config.on_open_billing.clone();
       let on_open_git_config = config.on_open_git_config.clone();
       let on_open_settings = config.on_open_settings.clone();
@@ -161,18 +158,6 @@ pub fn user_menu(config: UserMenuConfig) -> Option<AnyElement> {
                 .disabled(true),
             );
             menu = menu.separator();
-
-            if current_page != UserMenuPage::Git
-              && let Some(handler) = on_open_git.clone()
-            {
-              menu = menu.item(
-                PopupMenuItem::new("Git")
-                  .icon(Icon::new(UiIconName::GitBranch))
-                  .on_click(move |_, window, cx| {
-                    handler(window, cx);
-                  }),
-              );
-            }
 
             if current_page != UserMenuPage::GitConfig
               && let Some(handler) = on_open_git_config.clone()

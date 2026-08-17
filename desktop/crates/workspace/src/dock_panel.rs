@@ -261,9 +261,18 @@ impl DockPanel {
         ChangesListEvent::OpenFile { path } => {
           cx.emit(DockPanelEvent::OpenFile { path: path.clone() });
         }
-        ChangesListEvent::Changed { .. } => this.refresh(cx),
+        ChangesListEvent::Changed => this.refresh(cx),
       },
     )
+    .detach();
+
+    // The unified/split file list is a setting: follow it without a restart.
+    cx.observe_global::<crate::config::AppSettings>(|this, cx| {
+      let split_sections = !crate::config::AppSettings::get(cx).git_unified_file_view;
+      this
+        .changes_list
+        .update(cx, |list, cx| list.set_split_sections(split_sections, cx));
+    })
     .detach();
 
     let history_list = cx.new(HistoryList::new);
