@@ -331,6 +331,16 @@ impl DockPanel {
   }
 
   pub fn refresh(&mut self, cx: &mut Context<Self>) {
+    self.refresh_status(cx);
+    self.refresh_branch_pull_request(cx);
+    if self.files_loaded {
+      self.load_worktree_files(cx);
+    }
+  }
+
+  /// The working tree alone: what a poll can afford to re-read, with no request
+  /// to GitHub and no reload of the file tree.
+  pub(crate) fn refresh_status(&mut self, cx: &mut Context<Self>) {
     let Some(repo_root) = self.repo_root.clone() else {
       self.status_entries.clear();
       cx.notify();
@@ -366,9 +376,16 @@ impl DockPanel {
       });
     });
     self._refresh_task = Some(task);
-    self.refresh_branch_pull_request(cx);
-    if self.files_loaded {
-      self.load_worktree_files(cx);
+  }
+
+  /// One poll tick: the working tree, plus the history when its tab is open and
+  /// the repository actually moved.
+  pub(crate) fn poll(&mut self, cx: &mut Context<Self>) {
+    self.refresh_status(cx);
+    if self.active_tab == DockPanelTab::History {
+      self.history_list.update(cx, |list, cx| {
+        list.refresh_if_repository_moved(cx);
+      });
     }
   }
 

@@ -56,6 +56,7 @@ use crate::palette_branches::{
 };
 use crate::repo_command::{RepoCommand, RepoCommandOutcome, branch_ref_from_palette};
 use crate::repo_state::{PaletteCommand, RepoState, can_accept_all_conflicts, push_flags};
+use crate::status_poll;
 use crate::svg_preview::SvgPreview;
 use crate::{
   CloseWorkspacePage, CommentHunk, SendReviewCommentsToAgent, ShowCommandPalette, ShowFileSearch,
@@ -219,8 +220,10 @@ pub struct SessionPage {
   // Review export waiting for the agent connection to become ready.
   pending_review_export: Option<String>,
   repo_command_in_flight: bool,
+  poll_window_active: bool,
   _branch_task: Option<Task<()>>,
   _repo_command_task: Option<Task<()>>,
+  _poll_task: Option<Task<()>>,
 }
 
 mod agent;
@@ -295,12 +298,65 @@ impl SessionPage {
       svg_preview,
       pending_review_export: None,
       repo_command_in_flight: false,
+      poll_window_active: true,
       _branch_task: None,
       _repo_command_task: None,
+      _poll_task: None,
     };
     SessionPageHandle::register(cx);
     page.refresh_branch(cx);
+    page.watch_window_activation(window, cx);
+    page.start_polling(cx);
     page
+  }
+
+  /// Coming back to the window is the moment the working tree is most likely to
+  /// have moved behind our back.
+  fn watch_window_activation(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    cx.observe_window_activation(window, |this, window, cx| {
+      this.poll_window_active = window.is_window_active();
+      if this.poll_window_active {
+        this.poll_repository(cx);
+      }
+    })
+    .detach();
+  }
+
+  /// Nothing in the shell tells us about edits made outside Reviu, so the
+  /// working tree is re-read on a timer.
+  fn start_polling(&mut self, cx: &mut Context<Self>) {
+    self._poll_task = Some(cx.spawn(async move |this, cx| {
+      loop {
+        let Ok(window_active) = this.update(cx, |this, _| this.poll_window_active) else {
+          return;
+        };
+        cx.background_executor()
+          .timer(status_poll::poll_interval(window_active))
+          .await;
+
+        let polled = this.update(cx, |this, cx| {
+          if !status_poll::should_poll(
+            this.poll_window_active,
+            this.selected_repo.as_deref(),
+            this.repo_command_in_flight,
+          ) {
+            return;
+          }
+          this.poll_repository(cx);
+        });
+        if polled.is_err() {
+          return;
+        }
+      }
+    }));
+  }
+
+  fn poll_repository(&mut self, cx: &mut Context<Self>) {
+    if self.selected_repo.is_none() {
+      return;
+    }
+    self.refresh_branch(cx);
+    self.dock_panel.update(cx, |panel, cx| panel.poll(cx));
   }
 
   /// Connects the agent. Called when the workspace routes to the shell, never
@@ -3673,6 +3729,38 @@ mod tests {
         .collect::<Vec<_>>();
       assert!(ids.contains(&CommandPaletteCommandId::Commit));
       assert!(!ids.contains(&CommandPaletteCommandId::ContinueRebase));
+    });
+  }
+
+  #[gpui::test]
+  async fn an_edit_made_outside_reviu_shows_up_without_any_event(cx: &mut TestAppContext) {
+    let repo = TempRepo::init("session-poll");
+    commit_text_file(&repo.path, Path::new("README.md"), "v1\n", "initial");
+    let (page, cx) = add_session_page_window(repo.path.clone(), cx);
+    cx.run_until_parked();
+
+    page.read_with(cx, |page, cx| {
+      assert!(
+        page.dock_panel.read(cx).status_entries().is_empty(),
+        "a clean working tree has nothing to show"
+      );
+    });
+
+    // Another editor writes the file: nothing tells the shell about it.
+    std::fs::write(repo.path.join("README.md"), "v2\n").expect("edit outside Reviu");
+    cx.executor()
+      .advance_clock(status_poll::ACTIVE_STATUS_POLL_INTERVAL);
+    cx.run_until_parked();
+
+    page.read_with(cx, |page, cx| {
+      let paths = page
+        .dock_panel
+        .read(cx)
+        .status_entries()
+        .iter()
+        .map(|entry| entry.path.clone())
+        .collect::<Vec<_>>();
+      assert_eq!(paths, vec![PathBuf::from("README.md")]);
     });
   }
 }

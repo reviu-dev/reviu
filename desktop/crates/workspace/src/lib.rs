@@ -93,6 +93,7 @@ mod session_page;
 mod settings_page;
 mod shortcuts;
 pub mod status_bar;
+mod status_poll;
 mod svg_preview;
 #[cfg(test)]
 mod test_support;

@@ -95,6 +95,7 @@ pub(crate) struct HistoryList {
   tree_nodes: HashMap<String, HistoryTreeNode>,
   focus_handle: FocusHandle,
   pub(crate) _history_task: Option<Task<()>>,
+  pub(crate) _poll_task: Option<Task<()>>,
   pub(crate) _files_task: Option<Task<()>>,
 }
 
@@ -123,6 +124,7 @@ impl HistoryList {
       tree_nodes: HashMap::new(),
       focus_handle: cx.focus_handle().tab_stop(true),
       _history_task: None,
+      _poll_task: None,
       _files_task: None,
     }
   }
@@ -192,6 +194,35 @@ impl HistoryList {
       });
     });
     self._history_task = Some(task);
+  }
+
+  /// Reads the cheap revision marker first: a poll that finds the same commits
+  /// must not rebuild the list under the user's cursor.
+  pub(crate) fn refresh_if_repository_moved(&mut self, cx: &mut Context<Self>) {
+    let Some(repo_root) = self.repo_root.clone() else {
+      return;
+    };
+
+    let task = cx.spawn(async move |this, cx| {
+      let requested = repo_root.clone();
+      let polled = cx
+        .background_spawn(async move { current_history_revision(&repo_root).ok() })
+        .await;
+      let _ = this.update(cx, |this, cx| {
+        if this.repo_root.as_ref() != Some(&requested) {
+          return;
+        }
+        if should_refresh_history_for_poll(
+          true,
+          this.commits.is_empty(),
+          this.revision.as_ref(),
+          polled.as_ref(),
+        ) {
+          this.refresh(cx);
+        }
+      });
+    });
+    self._poll_task = Some(task);
   }
 
   fn drop_cache_of_gone_commits(&mut self) {
