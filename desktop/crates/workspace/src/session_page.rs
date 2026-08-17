@@ -3117,6 +3117,43 @@ mod tests {
   }
 
   #[gpui::test]
+  async fn picking_a_folder_that_is_not_a_repository_leaves_the_shell_empty(
+    cx: &mut TestAppContext,
+  ) {
+    let plain_folder = crate::test_support::temp_path("session-page-picker-not-a-repo");
+    std::fs::create_dir_all(&plain_folder).expect("create plain folder");
+
+    let (page, cx) = add_session_page_window_without_repo(cx);
+    cx.run_until_parked();
+
+    let row = cx
+      .debug_bounds(OPEN_REPOSITORY_ROW_DEBUG_SELECTOR)
+      .expect("the sidebar offers to open a repository");
+    let picked = plain_folder.clone();
+    cx.simulate_click(row.center(), gpui::Modifiers::default());
+    cx.simulate_path_prompt_response(move |_| Some(vec![picked]));
+    cx.run_until_parked();
+
+    page.read_with(cx, |page, _| {
+      assert!(
+        page.selected_repo.is_none(),
+        "a folder without a repository is not selected"
+      );
+    });
+    assert!(
+      cx.debug_bounds(OPEN_REPOSITORY_ROW_DEBUG_SELECTOR)
+        .is_some(),
+      "the sidebar still asks for a repository"
+    );
+    assert!(
+      ConfigStore::load_recent_repositories().is_empty(),
+      "and nothing was remembered"
+    );
+
+    let _ = std::fs::remove_dir_all(&plain_folder);
+  }
+
+  #[gpui::test]
   async fn a_folder_without_a_repository_is_refused_and_not_remembered(cx: &mut TestAppContext) {
     let repo = TempRepo::init("session-page-repo-validation");
     commit_text_file(&repo.path, Path::new("README.md"), "v1\n", "initial");
