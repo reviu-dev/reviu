@@ -6106,6 +6106,10 @@ impl Editor {
     self.conflict_cache.read().line_kinds.clone()
   }
 
+  pub fn is_unmerged(&self) -> bool {
+    self.is_unmerged
+  }
+
   pub fn set_is_unmerged(&mut self, value: bool, cx: &mut Context<Self>) {
     if self.is_unmerged == value {
       return;

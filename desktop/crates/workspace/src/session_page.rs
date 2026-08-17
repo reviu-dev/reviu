@@ -4549,6 +4549,92 @@ mod tests {
   }
 
   #[gpui::test]
+  async fn a_merge_that_conflicts_switches_the_open_file_to_the_whole_view(
+    cx: &mut TestAppContext,
+  ) {
+    let repo = TempRepo::init("session-page-unmerged-later");
+    let long_file = |mid: &str| {
+      let mut lines: Vec<String> = (1..=40).map(|i| format!("line {i}")).collect();
+      lines[19] = mid.to_string();
+      format!("{}\n", lines.join("\n"))
+    };
+    commit_text_file(
+      &repo.path,
+      Path::new("a.txt"),
+      &long_file("base"),
+      "initial",
+    );
+    let base = git::BranchRef {
+      name: git::current_branch_status(&repo.path)
+        .expect("branch status")
+        .name,
+      kind: git::BranchKind::Local,
+    };
+    let feature = git::BranchRef {
+      name: "feature".to_string(),
+      kind: git::BranchKind::Local,
+    };
+    git::create_branch(&repo.path, &feature.name).expect("create branch");
+    git::switch_branch(&repo.path, &feature).expect("switch to feature");
+    commit_text_file(
+      &repo.path,
+      Path::new("a.txt"),
+      &long_file("feature"),
+      "feature work",
+    );
+    git::switch_branch(&repo.path, &base).expect("switch back");
+    commit_text_file(
+      &repo.path,
+      Path::new("a.txt"),
+      &long_file("main"),
+      "main work",
+    );
+
+    let (page, cx) = add_session_page_window(repo.path.clone(), cx);
+    cx.run_until_parked();
+
+    // The file is open and clean when the merge starts.
+    page.update_in(cx, |page, window, cx| {
+      page.open_diff(PathBuf::from("a.txt"), None, window, cx);
+    });
+    await_open_file(&page, cx).await;
+    await_editor_diff(&page, cx).await;
+
+    let visible_and_total = |page: &SessionPage, cx: &App| {
+      let editor = page.editor.as_ref().expect("editor").read(cx);
+      let projection = editor.projection().expect("projection");
+      (
+        projection.visible_doc_lines.len(),
+        projection.doc_to_display.len(),
+      )
+    };
+    page.read_with(cx, |page, cx| {
+      let editor = page.editor.as_ref().expect("editor").read(cx);
+      assert!(!editor.is_unmerged(), "a clean file is read as a diff");
+      let (visible, total) = visible_and_total(page, cx);
+      assert_eq!(visible, total, "and a file without changes shows in full");
+    });
+
+    let _ = git::merge_branch(&repo.path, &feature);
+    let refresh = page.update(cx, |page, cx| {
+      page.dock_panel.update(cx, |panel, cx| {
+        panel.refresh(cx);
+        panel._refresh_task.take().expect("refresh task")
+      })
+    });
+    refresh.await;
+    await_editor_diff(&page, cx).await;
+
+    page.read_with(cx, |page, cx| {
+      let editor = page.editor.as_ref().expect("editor").read(cx);
+      assert!(
+        editor.is_unmerged(),
+        "the file the merge just broke is read whole, without reopening it"
+      );
+    });
+  }
+
+  #[gpui::test]
   async fn the_open_repository_is_published_for_the_pull_request_page(cx: &mut TestAppContext) {
     let repo = TempRepo::init("session-page-active-repo");
     commit_text_file(&repo.path, Path::new("README.md"), "v1\n", "initial");
