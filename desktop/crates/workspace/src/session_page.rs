@@ -4593,6 +4593,44 @@ mod tests {
   }
 
   #[gpui::test]
+  async fn pushing_a_repository_that_is_not_on_github_says_nothing(cx: &mut TestAppContext) {
+    let repo = TempRepo::init("session-page-pro-teaser-local");
+    commit_text_file(&repo.path, Path::new("README.md"), "v1\n", "initial");
+    // The only remote is a folder: Pro would bring this repository nothing.
+    let _remote = publish_to_new_remote(&repo.path, "session-page-pro-teaser-local");
+    commit_text_file(&repo.path, Path::new("README.md"), "v2\n", "second");
+
+    let (page, cx) = add_session_page_window(repo.path.clone(), cx);
+    cx.run_until_parked();
+
+    page.update_in(cx, |page, window, cx| {
+      let _ = page.run_repo_command(RepoCommand::Push, window, cx);
+    });
+    let command = page.update(cx, |page, _| page._repo_command_task.take());
+    if let Some(task) = command {
+      task.await;
+    }
+    cx.run_until_parked();
+    let teaser = page.update(cx, |page, _| page._pro_teaser_task.take());
+    if let Some(task) = teaser {
+      task.await;
+    }
+    cx.run_until_parked();
+
+    page.read_with(cx, |page, _| {
+      assert!(
+        !page.pro_teaser_shown,
+        "a repository hosted nowhere we integrate with gets no offer"
+      );
+    });
+    assert_eq!(
+      cx.update(|window, cx| window.notifications(cx).len()),
+      1,
+      "only the push result"
+    );
+  }
+
+  #[gpui::test]
   async fn pushing_with_pro_says_nothing_about_pro(cx: &mut TestAppContext) {
     let repo = TempRepo::init("session-page-pro-teaser-pro");
     commit_text_file(&repo.path, Path::new("README.md"), "v1\n", "initial");
