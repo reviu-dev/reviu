@@ -21,6 +21,7 @@ use gpui_component::{
   v_flex,
 };
 
+use crate::active_local_repo::{ActiveLocalRepoStore, active_local_repo_snapshot};
 use crate::agent_chat_state::{
   agent_chat_state_dir, agent_path_to_repo_relative, prune_agent_chat_state_once,
 };
@@ -238,6 +239,7 @@ pub struct SessionPage {
   pending_pull_request: Option<GithubBranchContext>,
   poll_window_active: bool,
   _branch_task: Option<Task<()>>,
+  _active_repo_task: Option<Task<()>>,
   _repo_command_task: Option<Task<()>>,
   _poll_task: Option<Task<()>>,
 }
@@ -320,6 +322,7 @@ impl SessionPage {
       pending_pull_request: None,
       poll_window_active: true,
       _branch_task: None,
+      _active_repo_task: None,
       _repo_command_task: None,
       _poll_task: None,
     };
@@ -417,10 +420,41 @@ impl SessionPage {
         this.default_branch = default_branch.ok().flatten();
         this.stashes = stashes.unwrap_or_default();
         this.default_stash_message = default_stash_message.ok().map(Into::into);
+        this.publish_active_local_repo(cx);
         cx.notify();
       });
     });
     self._branch_task = Some(task);
+  }
+
+  /// The pull request page reads this to know which repository is open here,
+  /// which is how it offers to switch branch or resolve conflicts.
+  fn publish_active_local_repo(&mut self, cx: &mut Context<Self>) {
+    let Some(repo_root) = self.selected_repo.clone() else {
+      ActiveLocalRepoStore::set(cx, None);
+      return;
+    };
+    let branch_name = self
+      .branch_status
+      .as_ref()
+      .map(|status| status.name.clone());
+    let has_uncommitted_changes = !self.dock_panel.read(cx).status_entries().is_empty();
+
+    let task = cx.spawn(async move |this, cx| {
+      let snapshot = cx
+        .background_spawn(async move {
+          active_local_repo_snapshot(&repo_root, branch_name, has_uncommitted_changes)
+        })
+        .await;
+      let _ = this.update(cx, |this, cx| {
+        // A repository switch mid-flight wins over what we just read.
+        if this.selected_repo.as_deref() != Some(snapshot.repo_root.as_path()) {
+          return;
+        }
+        ActiveLocalRepoStore::set(cx, Some(snapshot));
+      });
+    });
+    self._active_repo_task = Some(task);
   }
 
   fn open_diff(
@@ -1706,6 +1740,10 @@ impl SessionPage {
       panel.refresh(cx);
     });
     self.refresh_branch(cx);
+    // Without a repository there is no branch refresh to publish from.
+    if self.selected_repo.is_none() {
+      self.publish_active_local_repo(cx);
+    }
     cx.notify();
   }
 
@@ -4395,6 +4433,59 @@ mod tests {
     page.read_with(cx, |page, cx| {
       assert_eq!(page.dock_panel.read(cx).status_entries().len(), 1);
     });
+  }
+
+  #[gpui::test]
+  async fn the_open_repository_is_published_for_the_pull_request_page(cx: &mut TestAppContext) {
+    let repo = TempRepo::init("session-page-active-repo");
+    commit_text_file(&repo.path, Path::new("README.md"), "v1\n", "initial");
+    git2::Repository::open(&repo.path)
+      .expect("open repo")
+      .remote("origin", "git@github.com:acme/widget.git")
+      .expect("add remote");
+    std::fs::write(repo.path.join("README.md"), "v2\n").expect("leave a change behind");
+
+    let (page, cx) = add_session_page_window(repo.path.clone(), cx);
+    let refresh = page.update(cx, |page, cx| {
+      page.dock_panel.update(cx, |panel, cx| {
+        panel.refresh(cx);
+        panel._refresh_task.take().expect("refresh task")
+      })
+    });
+    refresh.await;
+    page.update(cx, |page, cx| page.refresh_branch(cx));
+    await_branch_refresh(&page, cx).await;
+    let publish = page.update(cx, |page, _| page._active_repo_task.take());
+    if let Some(task) = publish {
+      task.await;
+    }
+    cx.run_until_parked();
+
+    let published = cx
+      .update(|_, cx| crate::active_local_repo::ActiveLocalRepoStore::get(cx))
+      .expect("the shell publishes the repository it has open");
+    assert_eq!(published.repo_root, repo.path);
+    assert_eq!(published.github_owner.as_deref(), Some("acme"));
+    assert_eq!(published.github_repo.as_deref(), Some("widget"));
+    assert!(published.current_branch.is_some());
+    assert!(
+      published.has_uncommitted_changes,
+      "the pull request page refuses to switch branch over uncommitted work"
+    );
+
+    // Forgetting the last repository leaves nothing published.
+    ConfigStore::persist_recent_repository(&repo.path);
+    page.update_in(cx, |page, window, cx| {
+      page
+        .forget_repository(repo.path.clone(), window, cx)
+        .expect("forget repository");
+    });
+    cx.run_until_parked();
+
+    assert_eq!(
+      cx.update(|_, cx| crate::active_local_repo::ActiveLocalRepoStore::get(cx)),
+      None
+    );
   }
 
   #[gpui::test]
