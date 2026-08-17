@@ -4,6 +4,10 @@ All notable changes to Reviu are documented here.
 
 ## 1.0.0
 
+### A Conflicted File Is Read Whole
+
+Once you resolve the markers of a conflicted file by hand, there is no diff left to read, only the file. The Sessions workspace now shows such a file in full, as the Git page did, and goes back to a normal diff as soon as the resolution is staged.
+
 ### A Renamed File Says Where It Came From
 
 Opening a renamed file in the Sessions workspace showed only its new name. The header now names both sides, old name struck through then the new one, the way the Git page did, and a deleted file keeps its struck-through title.

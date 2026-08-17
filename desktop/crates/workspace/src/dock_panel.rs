@@ -72,6 +72,8 @@ pub enum DockPanelEvent {
   RunCommand(CommitMenuCommand),
   /// An unpublished branch: push it, then open the pull request form.
   PublishBranchAndCreatePullRequest(GithubBranchContext),
+  /// The working tree was re-read: whoever shows a file has to look again.
+  StatusRefreshed,
 }
 
 impl gpui::EventEmitter<DockPanelEvent> for DockPanel {}
@@ -375,6 +377,7 @@ impl DockPanel {
             });
             this.status_entries = entries;
             this.last_error = None;
+            cx.emit(DockPanelEvent::StatusRefreshed);
           }
           Err(error) => this.last_error = Some(format!("{error}").into()),
         }

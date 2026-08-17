@@ -284,6 +284,7 @@ impl SessionPage {
         DockPanelEvent::PublishBranchAndCreatePullRequest(context) => {
           this.publish_branch_and_create_pull_request(context.clone(), window, cx);
         }
+        DockPanelEvent::StatusRefreshed => this.sync_editor_unmerged_state(cx),
       },
     )
     .detach();
@@ -531,6 +532,7 @@ impl SessionPage {
         });
         this.binary_preview = binary_preview;
         this.editor = Some(editor.clone());
+        this.sync_editor_unmerged_state(cx);
         // Focus once loaded: the requester (file tree, list, search) may still hold
         // focus, and there was no editor to focus when the open was requested.
         if this.center == CenterView::Diff {
@@ -769,6 +771,19 @@ impl SessionPage {
       .iter()
       .find(|entry| entry.path == path)
       .map(|entry| entry.status)
+  }
+
+  /// A conflicted file is shown whole: once its markers are resolved there is no
+  /// diff left to read, only the file.
+  fn sync_editor_unmerged_state(&mut self, cx: &mut Context<Self>) {
+    let Some(editor) = self.editor.clone() else {
+      return;
+    };
+    let is_unmerged = matches!(
+      self.selected_file_status(cx),
+      Some(RepoStatusKind::Conflicted)
+    );
+    editor.update(cx, |editor, cx| editor.set_is_unmerged(is_unmerged, cx));
   }
 
   /// The path a renamed file came from, so the diff header can name both sides.
@@ -4432,6 +4447,104 @@ mod tests {
     cx.run_until_parked();
     page.read_with(cx, |page, cx| {
       assert_eq!(page.dock_panel.read(cx).status_entries().len(), 1);
+    });
+  }
+
+  #[gpui::test]
+  async fn a_conflicted_file_is_shown_whole_until_it_is_resolved(cx: &mut TestAppContext) {
+    let repo = TempRepo::init("session-page-unmerged");
+    // Long enough that a diff folds most of it away, unlike a whole-file view.
+    let long_file = |mid: &str| {
+      let mut lines: Vec<String> = (1..=40).map(|i| format!("line {i}")).collect();
+      lines[19] = mid.to_string();
+      format!("{}\n", lines.join("\n"))
+    };
+    commit_text_file(
+      &repo.path,
+      Path::new("a.txt"),
+      &long_file("base"),
+      "initial",
+    );
+    let base = git::BranchRef {
+      name: git::current_branch_status(&repo.path)
+        .expect("branch status")
+        .name,
+      kind: git::BranchKind::Local,
+    };
+    let feature = git::BranchRef {
+      name: "feature".to_string(),
+      kind: git::BranchKind::Local,
+    };
+    git::create_branch(&repo.path, &feature.name).expect("create branch");
+    git::switch_branch(&repo.path, &feature).expect("switch to feature");
+    commit_text_file(
+      &repo.path,
+      Path::new("a.txt"),
+      &long_file("feature"),
+      "feature work",
+    );
+    git::switch_branch(&repo.path, &base).expect("switch back");
+    commit_text_file(
+      &repo.path,
+      Path::new("a.txt"),
+      &long_file("main"),
+      "main work",
+    );
+    let _ = git::merge_branch(&repo.path, &feature);
+    // Markers resolved by hand, but git still calls the file conflicted.
+    std::fs::write(repo.path.join("a.txt"), long_file("resolved")).expect("resolve conflict");
+
+    let (page, cx) = add_session_page_window(repo.path.clone(), cx);
+    let refresh = page.update(cx, |page, cx| {
+      page.dock_panel.update(cx, |panel, cx| {
+        panel.refresh(cx);
+        panel._refresh_task.take().expect("refresh task")
+      })
+    });
+    refresh.await;
+    cx.run_until_parked();
+
+    page.update_in(cx, |page, window, cx| {
+      page.open_diff(PathBuf::from("a.txt"), None, window, cx);
+    });
+    await_open_file(&page, cx).await;
+    await_editor_diff(&page, cx).await;
+
+    // Whole file: every document line is visible, nothing is folded away.
+    let visible_and_total = |page: &SessionPage, cx: &App| {
+      let editor = page.editor.as_ref().expect("editor").read(cx);
+      let projection = editor.projection().expect("projection");
+      (
+        projection.visible_doc_lines.len(),
+        projection.doc_to_display.len(),
+      )
+    };
+
+    page.read_with(cx, |page, cx| {
+      let (visible, total) = visible_and_total(page, cx);
+      assert_eq!(
+        visible, total,
+        "a conflicted file is read whole, there is no diff left in it"
+      );
+    });
+
+    // Staging the resolution ends the conflict: the file goes back to a diff.
+    git::stage_all(&repo.path).expect("stage the resolution");
+    let refresh = page.update(cx, |page, cx| {
+      page.dock_panel.update(cx, |panel, cx| {
+        panel.refresh(cx);
+        panel._refresh_task.take().expect("refresh task")
+      })
+    });
+    refresh.await;
+    await_editor_diff(&page, cx).await;
+
+    page.read_with(cx, |page, cx| {
+      let (visible, total) = visible_and_total(page, cx);
+      assert!(
+        visible < total,
+        "a resolved file is read as a diff again, got {visible} of {total} lines"
+      );
     });
   }
 
