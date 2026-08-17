@@ -358,6 +358,88 @@ mod tests {
   }
 
   #[gpui::test]
+  async fn starting_a_sign_in_hands_the_browser_the_url(cx: &mut TestAppContext) {
+    let (base_url, _requests, _backend) = start_backend(vec![]);
+    init_test_app(cx, base_url);
+
+    cx.update(|cx| start_github_sign_in(cx, "test"));
+    cx.run_until_parked();
+
+    let opened = cx.opened_url().expect("a browser was sent somewhere");
+    assert!(
+      opened.contains("/auth/desktop"),
+      "the browser starts the OAuth round trip, got {opened}"
+    );
+  }
+
+  #[gpui::test]
+  async fn coming_back_from_the_checkout_refreshes_the_subscription(cx: &mut TestAppContext) {
+    let (base_url, requests, _backend) = start_backend(vec![
+      ("200 OK", user_payload()),
+      ("200 OK", "{}".to_string()),
+    ]);
+    init_test_app(cx, base_url);
+    cx.update(|cx| {
+      gpui_router::init(cx);
+      NavigationHistory::init(cx);
+      NavigationHistory::navigate_replace("/session", cx);
+    });
+
+    cx.update(handle_subscription_callback);
+    cx.run_until_parked();
+
+    assert!(
+      asked(&requests)
+        .iter()
+        .any(|line| line.starts_with("GET /users/me")),
+      "the plan just changed, so the app asks again who we are"
+    );
+    cx.update(|cx| {
+      assert_eq!(
+        NavigationHistory::current_pathname(cx).as_ref(),
+        "/billing",
+        "and lands on the page that shows the subscription"
+      );
+    });
+  }
+
+  #[gpui::test]
+  async fn a_token_the_backend_rejects_signs_us_out(cx: &mut TestAppContext) {
+    let (base_url, requests, _backend) = start_backend(vec![
+      (
+        "200 OK",
+        serde_json::json!({ "token": "tok_abc" }).to_string(),
+      ),
+      ("200 OK", user_payload()),
+      ("200 OK", "[]".to_string()),
+      // The token was revoked server-side since.
+      ("401 Unauthorized", "{}".to_string()),
+    ]);
+    init_test_app(cx, base_url);
+
+    cx.update(|cx| handle_auth_code("code_xyz".to_string(), cx));
+    cx.run_until_parked();
+    cx.update(|cx| assert!(AuthStateStore::has_github_access(cx)));
+
+    cx.update(refresh_me);
+    cx.run_until_parked();
+
+    assert_eq!(
+      asked(&requests)
+        .iter()
+        .filter(|line| line.starts_with("GET /users/me"))
+        .count(),
+      2
+    );
+    cx.update(|cx| {
+      assert!(
+        !AuthStateStore::has_github_access(cx),
+        "a rejected token must not keep showing Pro"
+      );
+    });
+  }
+
+  #[gpui::test]
   async fn without_a_stored_token_the_app_starts_signed_out(cx: &mut TestAppContext) {
     // The test platform has no keychain, which is exactly a fresh machine.
     let (base_url, requests, _backend) = start_backend(vec![]);
