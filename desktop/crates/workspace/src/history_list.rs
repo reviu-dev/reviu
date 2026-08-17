@@ -762,6 +762,44 @@ mod tests {
   }
 
   #[gpui::test]
+  async fn a_poll_reloads_the_list_only_when_the_repository_moved(cx: &mut TestAppContext) {
+    let repo = TempRepo::init("history-list-poll");
+    commit_text_file(&repo.path, Path::new("a.txt"), "v1\n", "first");
+
+    let (list, cx) = add_history_list_window(Some(repo.path.clone()), cx);
+    await_history(&list, cx).await;
+
+    // Nothing moved: the list must not be rebuilt under the cursor.
+    let poll = list.update(cx, |list, cx| {
+      list.refresh_if_repository_moved(cx);
+      list._poll_task.take().expect("poll task")
+    });
+    poll.await;
+    cx.run_until_parked();
+    list.read_with(cx, |list, _| {
+      assert!(
+        list._history_task.is_none(),
+        "an unchanged repository costs no reload"
+      );
+      assert_eq!(list.commits.len(), 1);
+    });
+
+    // A commit made outside Reviu moves the revision, so the poll reloads.
+    commit_text_file(&repo.path, Path::new("a.txt"), "v2\n", "second");
+    let poll = list.update(cx, |list, cx| {
+      list.refresh_if_repository_moved(cx);
+      list._poll_task.take().expect("poll task")
+    });
+    poll.await;
+    await_history(&list, cx).await;
+
+    list.read_with(cx, |list, _| {
+      assert_eq!(list.commits.len(), 2);
+      assert_eq!(list.commits[0].summary, "second");
+    });
+  }
+
+  #[gpui::test]
   async fn a_commit_loads_its_files_once(cx: &mut TestAppContext) {
     let repo = TempRepo::init("history-list-files");
     commit_text_file(&repo.path, Path::new("a.txt"), "v1\n", "first");

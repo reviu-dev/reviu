@@ -5,7 +5,8 @@ use std::time::Duration;
 
 /// Edits made outside Reviu should show up quickly while the user watches.
 pub(crate) const ACTIVE_STATUS_POLL_INTERVAL: Duration = Duration::from_secs(3);
-/// A window in the background is not worth a `git status` every three seconds.
+/// A background window reads nothing, so this only sets how often the loop wakes
+/// up to find that out; coming back to the window is what catches up.
 pub(crate) const INACTIVE_STATUS_POLL_INTERVAL: Duration = Duration::from_secs(60);
 
 pub(crate) fn poll_interval(window_active: bool) -> Duration {

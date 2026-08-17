@@ -1224,6 +1224,95 @@ mod tests {
   use std::sync::Arc;
   use std::sync::atomic::{AtomicBool, Ordering};
 
+  #[gpui::test]
+  async fn a_poll_re_reads_the_working_tree_without_calling_github(cx: &mut TestAppContext) {
+    cx.update(|cx| gpui_component::init(cx));
+    let repo = TempRepo::init("dock-poll-local");
+    commit_text_file(&repo.path, Path::new("README.md"), "v1\n", "initial");
+
+    let (panel, cx) = add_dock_panel_window(Some(repo.path.clone()), cx);
+    await_refresh(&panel, cx).await;
+    panel.update(cx, |panel, _| {
+      // As if the Files tab had been opened once already.
+      panel.files_loaded = true;
+      panel._files_task.take();
+      panel.branch_pr = BranchPrState::Loading;
+    });
+
+    std::fs::write(repo.path.join("README.md"), "v2\n").expect("edit outside Reviu");
+    panel.update(cx, |panel, cx| panel.poll(cx));
+    await_refresh(&panel, cx).await;
+
+    panel.read_with(cx, |panel, _| {
+      assert_eq!(panel.status_entries().len(), 1, "the poll saw the edit");
+      assert!(
+        matches!(panel.branch_pr, BranchPrState::Loading),
+        "a poll asks GitHub nothing"
+      );
+      assert!(
+        panel._files_task.is_none(),
+        "a poll does not rebuild the file tree"
+      );
+    });
+
+    // An explicit refresh still does both.
+    panel.update(cx, |panel, cx| panel.refresh(cx));
+    await_refresh(&panel, cx).await;
+    panel.read_with(cx, |panel, _| {
+      assert!(!matches!(panel.branch_pr, BranchPrState::Loading));
+      assert!(panel._files_task.is_some());
+    });
+  }
+
+  #[gpui::test]
+  async fn a_poll_touches_the_history_only_when_its_tab_is_open(cx: &mut TestAppContext) {
+    cx.update(|cx| gpui_component::init(cx));
+    let repo = TempRepo::init("dock-poll-history");
+    commit_text_file(&repo.path, Path::new("a.txt"), "v1\n", "first");
+
+    let (panel, cx) = add_dock_panel_window(Some(repo.path.clone()), cx);
+    await_refresh(&panel, cx).await;
+
+    // Open the history once, so it already knows the repository, then leave it.
+    panel.update_in(cx, |panel, window, cx| {
+      panel.open_tab(DockPanelTab::History, window, cx)
+    });
+    cx.run_until_parked();
+    panel.update_in(cx, |panel, window, cx| {
+      panel.open_tab(DockPanelTab::Changes, window, cx)
+    });
+    cx.run_until_parked();
+    panel.update(cx, |panel, cx| {
+      panel.history_list.update(cx, |list, _| {
+        list._poll_task.take();
+        list._history_task.take();
+      })
+    });
+
+    panel.update(cx, |panel, cx| panel.poll(cx));
+    await_refresh(&panel, cx).await;
+    panel.read_with(cx, |panel, cx| {
+      assert!(
+        panel.history_list.read(cx)._poll_task.is_none(),
+        "the history costs nothing while its tab is closed"
+      );
+    });
+
+    panel.update_in(cx, |panel, window, cx| {
+      panel.open_tab(DockPanelTab::History, window, cx)
+    });
+    cx.run_until_parked();
+
+    panel.update(cx, |panel, cx| panel.poll(cx));
+    await_refresh(&panel, cx).await;
+    panel.read_with(cx, |panel, cx| {
+      assert!(
+        panel.history_list.read(cx)._poll_task.is_some(),
+        "an open history tab follows the repository"
+      );
+    });
+  }
+
   async fn await_refresh(panel: &Entity<DockPanel>, cx: &mut gpui::VisualTestContext) {
     let task = panel.update(cx, |panel, _| panel._refresh_task.take());
     if let Some(task) = task {

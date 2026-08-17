@@ -3733,6 +3733,72 @@ mod tests {
   }
 
   #[gpui::test]
+  async fn a_window_nobody_looks_at_stops_polling(cx: &mut TestAppContext) {
+    let repo = TempRepo::init("session-poll-inactive");
+    commit_text_file(&repo.path, Path::new("README.md"), "v1\n", "initial");
+    let (page, cx) = add_session_page_window(repo.path.clone(), cx);
+    cx.update(|window, _| window.activate_window());
+    cx.run_until_parked();
+
+    cx.deactivate_window();
+    cx.run_until_parked();
+    std::fs::write(repo.path.join("README.md"), "v2\n").expect("edit outside Reviu");
+
+    // A background window reads nothing, however long it waits.
+    cx.executor()
+      .advance_clock(status_poll::ACTIVE_STATUS_POLL_INTERVAL);
+    cx.run_until_parked();
+    cx.executor()
+      .advance_clock(status_poll::INACTIVE_STATUS_POLL_INTERVAL);
+    cx.run_until_parked();
+    page.read_with(cx, |page, cx| {
+      assert!(
+        page.dock_panel.read(cx).status_entries().is_empty(),
+        "a background window is not worth a git status"
+      );
+    });
+
+    // Coming back to the window catches up right away, without waiting for a tick.
+    cx.update(|window, _| window.activate_window());
+    cx.run_until_parked();
+    page.read_with(cx, |page, cx| {
+      assert_eq!(page.dock_panel.read(cx).status_entries().len(), 1);
+    });
+  }
+
+  #[gpui::test]
+  async fn a_branch_switched_outside_reviu_shows_up_on_the_next_poll(cx: &mut TestAppContext) {
+    let repo = TempRepo::init("session-poll-branch");
+    commit_text_file(&repo.path, Path::new("README.md"), "v1\n", "initial");
+    let (page, cx) = add_session_page_window(repo.path.clone(), cx);
+    cx.run_until_parked();
+
+    git::create_branch(&repo.path, "feature").expect("create branch");
+    git::switch_branch(
+      &repo.path,
+      &git::BranchRef {
+        name: "feature".to_string(),
+        kind: git::BranchKind::Local,
+      },
+    )
+    .expect("switch branch");
+    cx.executor()
+      .advance_clock(status_poll::ACTIVE_STATUS_POLL_INTERVAL);
+    cx.run_until_parked();
+
+    page.read_with(cx, |page, _| {
+      assert_eq!(
+        page
+          .branch_status
+          .as_ref()
+          .map(|status| status.name.clone()),
+        Some("feature".to_string()),
+        "the poll follows the branch, not just the changed files"
+      );
+    });
+  }
+
+  #[gpui::test]
   async fn an_edit_made_outside_reviu_shows_up_without_any_event(cx: &mut TestAppContext) {
     let repo = TempRepo::init("session-poll");
     commit_text_file(&repo.path, Path::new("README.md"), "v1\n", "initial");
