@@ -4,6 +4,10 @@ All notable changes to Reviu are documented here.
 
 ## 1.0.0
 
+### Reviu Pro Offered Where It Makes Sense
+
+Pushing a branch of a GitHub repository without Reviu Pro shows a single notification, once per session, explaining that Pro brings pull requests, reviews and notifications into the app, with a way straight to the plans. Nothing is shown to subscribers or to repositories that are not on GitHub.
+
 ### A Conflicted File Is Read Whole
 
 Once you resolve the markers of a conflicted file by hand, there is no diff left to read, only the file. The Sessions workspace now shows such a file in full, as the Git page did, and goes back to a normal diff as soon as the resolution is staged.

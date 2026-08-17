@@ -38,6 +38,9 @@ pub(super) fn add_session_page_window(
     if !cx.has_global::<crate::active_local_repo::ActiveLocalRepoStore>() {
       cx.set_global(crate::active_local_repo::ActiveLocalRepoStore::default());
     }
+    if !cx.has_global::<GithubNotificationsStore>() {
+      cx.set_global(GithubNotificationsStore::default());
+    }
     if !cx.has_global::<WorkspaceApi>() {
       cx.set_global(WorkspaceApi::new());
     }
@@ -74,6 +77,9 @@ pub(super) fn add_session_page_window_without_repo(
     }
     if !cx.has_global::<crate::active_local_repo::ActiveLocalRepoStore>() {
       cx.set_global(crate::active_local_repo::ActiveLocalRepoStore::default());
+    }
+    if !cx.has_global::<GithubNotificationsStore>() {
+      cx.set_global(GithubNotificationsStore::default());
     }
     if !cx.has_global::<WorkspaceApi>() {
       cx.set_global(WorkspaceApi::new());
