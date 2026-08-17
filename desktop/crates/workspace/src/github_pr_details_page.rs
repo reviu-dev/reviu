@@ -2275,8 +2275,8 @@ enum GithubPrLocalProjectAvailability {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum GithubPrLocalProjectPostAction {
-  EnsurePrHeadThenOpenGitPageMergeBase { base_branch_name: String },
-  OpenGitPageMergeBase { base_branch_name: String },
+  EnsurePrHeadThenMergeBaseInWorkspace { base_branch_name: String },
+  MergeBaseInWorkspace { base_branch_name: String },
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -2359,7 +2359,7 @@ fn local_repo_has_active_conflict_resolution(repo_root: &Path) -> bool {
     .unwrap_or(false)
 }
 
-fn should_prepare_local_branch_before_opening_git_page(
+fn should_prepare_local_branch_before_merging_base(
   repo_root: &Path,
   has_uncommitted_changes: bool,
 ) -> bool {
@@ -3475,7 +3475,7 @@ impl GithubPrDetailsPage {
     });
   }
 
-  fn confirm_prepare_local_branch_for_git_page_with_stash(
+  fn confirm_prepare_local_branch_with_stash(
     &mut self,
     repo_root: PathBuf,
     post_action: GithubPrLocalProjectPostAction,
@@ -3515,7 +3515,7 @@ impl GithubPrDetailsPage {
     cx: &mut Context<Self>,
   ) {
     match post_action {
-      GithubPrLocalProjectPostAction::EnsurePrHeadThenOpenGitPageMergeBase { base_branch_name } => {
+      GithubPrLocalProjectPostAction::EnsurePrHeadThenMergeBaseInWorkspace { base_branch_name } => {
         let current_head = current_head_sha(&repo_root).ok().flatten();
         let pr_head = self.pull_request.as_ref().map(|pr| pr.head_sha.as_str());
 
@@ -3525,12 +3525,12 @@ impl GithubPrDetailsPage {
           self.start_sync_local_branch_to_pr_head(
             repo_root,
             false,
-            Some(GithubPrLocalProjectPostAction::OpenGitPageMergeBase { base_branch_name }),
+            Some(GithubPrLocalProjectPostAction::MergeBaseInWorkspace { base_branch_name }),
             cx,
           );
         }
       }
-      GithubPrLocalProjectPostAction::OpenGitPageMergeBase { base_branch_name } => {
+      GithubPrLocalProjectPostAction::MergeBaseInWorkspace { base_branch_name } => {
         SessionPageHandle::show_repository_and_merge_base(repo_root, base_branch_name, cx);
       }
     }
@@ -3834,7 +3834,7 @@ impl GithubPrDetailsPage {
       return;
     };
 
-    let post_action = GithubPrLocalProjectPostAction::OpenGitPageMergeBase {
+    let post_action = GithubPrLocalProjectPostAction::MergeBaseInWorkspace {
       base_branch_name: pull_request.base_ref_name.clone(),
     };
     let has_uncommitted_changes = self.effective_local_repo_has_uncommitted_changes(cx);
@@ -3846,7 +3846,7 @@ impl GithubPrDetailsPage {
         ..
       } => {
         let post_action = Some(
-          GithubPrLocalProjectPostAction::EnsurePrHeadThenOpenGitPageMergeBase {
+          GithubPrLocalProjectPostAction::EnsurePrHeadThenMergeBaseInWorkspace {
             base_branch_name: pull_request.base_ref_name.clone(),
           },
         );
@@ -3857,16 +3857,11 @@ impl GithubPrDetailsPage {
         }
       }
       GithubPrLocalProjectAvailability::Ready { repo_root } => {
-        if should_prepare_local_branch_before_opening_git_page(
+        if should_prepare_local_branch_before_merging_base(
           repo_root.as_path(),
           has_uncommitted_changes,
         ) {
-          self.confirm_prepare_local_branch_for_git_page_with_stash(
-            repo_root,
-            post_action,
-            window,
-            cx,
-          );
+          self.confirm_prepare_local_branch_with_stash(repo_root, post_action, window, cx);
         } else {
           self.execute_local_project_post_action(post_action, repo_root, cx);
         }
@@ -3875,13 +3870,8 @@ impl GithubPrDetailsPage {
         self.update_local_branch_to_pr_head(false, Some(post_action), window, cx);
       }
       GithubPrLocalProjectAvailability::Dirty { repo_root } => {
-        if should_prepare_local_branch_before_opening_git_page(repo_root.as_path(), true) {
-          self.confirm_prepare_local_branch_for_git_page_with_stash(
-            repo_root,
-            post_action,
-            window,
-            cx,
-          );
+        if should_prepare_local_branch_before_merging_base(repo_root.as_path(), true) {
+          self.confirm_prepare_local_branch_with_stash(repo_root, post_action, window, cx);
         } else {
           self.execute_local_project_post_action(post_action, repo_root, cx);
         }

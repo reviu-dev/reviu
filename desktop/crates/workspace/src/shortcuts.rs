@@ -1537,7 +1537,7 @@ mod tests {
   }
 
   #[test]
-  fn git_only_shortcuts_are_scoped_to_the_git_page() {
+  fn git_shortcuts_are_scoped_to_the_repository_surfaces() {
     assert!(has_binding("/session", "cmd-o"));
     assert!(has_binding_with_bindings_in_contexts(
       "/session",

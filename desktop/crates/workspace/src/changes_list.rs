@@ -904,10 +904,10 @@ mod tests {
   #[test]
   fn split_path_label_separates_the_folder_from_the_file() {
     assert_eq!(
-      split_path_label(Path::new("crates/workspace/src/git_page.rs")),
+      split_path_label(Path::new("crates/workspace/src/session_page.rs")),
       (
         "crates/workspace/src/".to_string(),
-        "git_page.rs".to_string()
+        "session_page.rs".to_string()
       )
     );
     assert_eq!(
