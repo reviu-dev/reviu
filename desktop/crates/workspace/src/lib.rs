@@ -74,6 +74,7 @@ mod file_search_palette;
 mod file_view;
 mod git_config_page;
 mod git_page;
+mod git_telemetry;
 pub mod github_navigation;
 mod github_notifications;
 mod github_pr_details_page;

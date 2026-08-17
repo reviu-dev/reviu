@@ -854,7 +854,6 @@ impl DockPanel {
     self.terminal_view.is_some()
   }
 
-  #[cfg(test)]
   pub(crate) fn active_tab(&self) -> DockPanelTab {
     self.active_tab
   }

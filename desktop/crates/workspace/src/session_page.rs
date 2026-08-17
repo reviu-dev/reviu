@@ -42,12 +42,14 @@ use crate::github_notifications::{self, GithubNotificationsStore};
 use crate::navigation::NavigationHistory;
 use git::{InteractiveRebaseTarget, RepoStatusKind};
 
+use crate::git_telemetry::{self, GitTelemetry};
 use crate::hunk_actions::{resolve_active_conflict, restore_hunk, toggle_hunk_stage};
 use crate::interactive_rebase;
 use crate::interactive_rebase_todo_view::{
   InteractiveRebaseTodoView, InteractiveRebaseTodoViewCancelHandler,
   InteractiveRebaseTodoViewConfig, InteractiveRebaseTodoViewHandler,
 };
+use sentry::protocol::Map;
 
 use crate::annotations::{
   AnnotationDirection, AnnotationNavigationState, annotation_navigation_state_for,
@@ -219,6 +221,9 @@ pub struct SessionPage {
   /// Mounting a real agent panel in a test would spawn an agent process.
   #[cfg(test)]
   pretend_agent_turn_in_flight: bool,
+  /// Sentry itself is not observable from a test; what we sent it is.
+  #[cfg(test)]
+  last_reported_outcome: Option<(&'static str, git_telemetry::OutcomeReport)>,
   open_file_generation: u64,
   open_file_task: Option<Task<()>>,
   agent_review: AgentReviewComments,
@@ -284,7 +289,10 @@ impl SessionPage {
         DockPanelEvent::PublishBranchAndCreatePullRequest(context) => {
           this.publish_branch_and_create_pull_request(context.clone(), window, cx);
         }
-        DockPanelEvent::StatusRefreshed => this.sync_editor_unmerged_state(cx),
+        DockPanelEvent::StatusRefreshed => {
+          this.sync_editor_unmerged_state(cx);
+          this.sync_git_telemetry(cx);
+        }
       },
     )
     .detach();
@@ -305,6 +313,8 @@ impl SessionPage {
       _merge_base_task: None,
       #[cfg(test)]
       pretend_agent_turn_in_flight: false,
+      #[cfg(test)]
+      last_reported_outcome: None,
       open_file_generation: 0,
       open_file_task: None,
       agent_review: AgentReviewComments::new(),
@@ -533,6 +543,7 @@ impl SessionPage {
         this.binary_preview = binary_preview;
         this.editor = Some(editor.clone());
         this.sync_editor_unmerged_state(cx);
+        this.sync_git_telemetry(cx);
         // Focus once loaded: the requester (file tree, list, search) may still hold
         // focus, and there was no editor to focus when the open was requested.
         if this.center == CenterView::Diff {
@@ -687,6 +698,7 @@ impl SessionPage {
     }
     self.show_preview = !self.show_preview;
     self.sync_diff_view(cx);
+    self.sync_git_telemetry(cx);
     cx.notify();
   }
 
@@ -771,6 +783,32 @@ impl SessionPage {
       .iter()
       .find(|entry| entry.path == path)
       .map(|entry| entry.status)
+  }
+
+  /// What a crash or a git error should carry about where the user was.
+  fn git_telemetry(&self, cx: &App) -> GitTelemetry<'_> {
+    GitTelemetry {
+      repo_root: self.selected_repo.as_deref(),
+      selected_file: self.selected_file.as_deref(),
+      branch: self
+        .branch_status
+        .as_ref()
+        .map(|status| status.name.as_str()),
+      tab: git_telemetry::dock_tab_tag(self.dock_panel.read(cx).active_tab()),
+      diff_view: git_telemetry::diff_view_tag(
+        self.diff_view,
+        self.show_preview && self.previewable(),
+      ),
+    }
+  }
+
+  /// Keeps the crash context in step with what the user is looking at.
+  fn sync_git_telemetry(&self, cx: &App) {
+    if self.selected_repo.is_none() {
+      crate::sentry_context::clear_git_context();
+      return;
+    }
+    self.git_telemetry(cx).sync();
   }
 
   /// A conflicted file is shown whole: once its markers are resolved there is no
@@ -931,6 +969,7 @@ impl SessionPage {
       settings.split_diff_view = self.diff_view == DiffViewMode::Split
     });
     self.sync_diff_view(cx);
+    self.sync_git_telemetry(cx);
     cx.notify();
   }
 
@@ -1592,6 +1631,10 @@ impl SessionPage {
     }
 
     self.repo_command_in_flight = true;
+    let telemetry_key = command.telemetry_key();
+    self
+      .git_telemetry(cx)
+      .breadcrumb(command.label(), Map::new());
     let window_handle = self.window_handle;
     let task = cx.spawn(async move |this, cx| {
       let result = cx
@@ -1600,6 +1643,12 @@ impl SessionPage {
       let _ = cx.update_window(window_handle, |_, window, cx| {
         let _ = this.update(cx, |this, cx| {
           this.repo_command_in_flight = false;
+          let report = git_telemetry::outcome_report(&result);
+          #[cfg(test)]
+          {
+            this.last_reported_outcome = Some((telemetry_key, report.clone()));
+          }
+          this.git_telemetry(cx).report_outcome(telemetry_key, report);
           match result {
             Ok(outcome) => {
               match outcome {
@@ -4447,6 +4496,63 @@ mod tests {
     cx.run_until_parked();
     page.read_with(cx, |page, cx| {
       assert_eq!(page.dock_panel.read(cx).status_entries().len(), 1);
+    });
+  }
+
+  #[gpui::test]
+  async fn a_failed_command_is_reported_under_its_own_key(cx: &mut TestAppContext) {
+    let repo = TempRepo::init("session-page-telemetry");
+    commit_text_file(&repo.path, Path::new("README.md"), "v1\n", "initial");
+
+    let (page, cx) = add_session_page_window(repo.path.clone(), cx);
+    cx.run_until_parked();
+
+    // No remote: the push cannot succeed.
+    page.update_in(cx, |page, window, cx| {
+      page
+        .run_repo_command(RepoCommand::Push, window, cx)
+        .expect("push starts");
+    });
+    let command = page.update(cx, |page, _| {
+      page._repo_command_task.take().expect("command task")
+    });
+    command.await;
+    cx.run_until_parked();
+
+    page.read_with(cx, |page, _| {
+      let (key, report) = page
+        .last_reported_outcome
+        .clone()
+        .expect("a failure is reported");
+      assert_eq!(
+        key,
+        RepoCommand::Push.telemetry_key(),
+        "the report is filed under the command's own key"
+      );
+      assert!(
+        matches!(report, git_telemetry::OutcomeReport::Unexpected { .. }),
+        "a push that could not run is not business as usual, got {report:?}"
+      );
+    });
+
+    // A command that works reports nothing.
+    page.update_in(cx, |page, window, cx| {
+      page
+        .run_repo_command(RepoCommand::StageAll, window, cx)
+        .expect("stage all starts");
+    });
+    let command = page.update(cx, |page, _| {
+      page._repo_command_task.take().expect("command task")
+    });
+    command.await;
+    cx.run_until_parked();
+
+    page.read_with(cx, |page, _| {
+      assert_eq!(
+        page.last_reported_outcome.clone().map(|(_, report)| report),
+        Some(git_telemetry::OutcomeReport::Nothing),
+        "success is not news"
+      );
     });
   }
 
