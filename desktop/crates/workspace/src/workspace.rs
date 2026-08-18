@@ -13,7 +13,6 @@ use gpui_component::{
   kbd::Kbd,
   notification::Notification,
   spinner::Spinner,
-  tab::{Tab, TabBar},
   tag::Tag,
 };
 use gpui_router::{Route, Routes};
@@ -101,17 +100,6 @@ fn user_menu_page_for_workspace_page(page: WorkspacePage) -> UserMenuPage {
     WorkspacePage::GitConfig => UserMenuPage::GitConfig,
     WorkspacePage::Settings => UserMenuPage::Settings,
     WorkspacePage::About => UserMenuPage::About,
-  }
-}
-
-fn primary_navigation_selected_index(page: WorkspacePage) -> Option<usize> {
-  match page {
-    WorkspacePage::Session => Some(0),
-    WorkspacePage::GithubPrDetails => None,
-    WorkspacePage::Billing
-    | WorkspacePage::GitConfig
-    | WorkspacePage::Settings
-    | WorkspacePage::About => None,
   }
 }
 
@@ -936,22 +924,6 @@ impl WorkspaceView {
         window.dispatch_action(Box::new(ShowCommandPalette), cx);
       });
 
-    let primary_navigation = TabBar::new("workspace-primary-navigation")
-      .segmented()
-      .small()
-      .on_click(|ix, _, cx| match ix {
-        0 => NavigationHistory::navigate("/session", cx),
-        1 => NavigationHistory::navigate("/git", cx),
-        _ => {}
-      })
-      .child(Tab::new().label("Sessions"))
-      .child(Tab::new().label("Git"));
-    let primary_navigation = if let Some(selected_index) = primary_navigation_selected_index(page) {
-      primary_navigation.selected_index(selected_index)
-    } else {
-      primary_navigation
-    };
-
     let bar = div()
       .h(px(GLOBAL_BAR_HEIGHT))
       .max_h(px(GLOBAL_BAR_HEIGHT))
@@ -996,7 +968,6 @@ impl WorkspaceView {
       .when_some(AppProfile::current().header_tag_label(), |this, label| {
         this.child(Tag::secondary().small().rounded_full().child(label))
       })
-      .child(primary_navigation)
       .when_some(refresh_button, |this, button| this.child(button));
 
     if use_client_decorations {
@@ -1169,8 +1140,8 @@ impl Render for WorkspaceView {
 mod tests {
   use super::{
     WorkspacePage, WorkspaceView, build_app_menus, page_has_file_search, page_supports_refresh,
-    primary_navigation_selected_index, refresh_label_for_workspace_page,
-    should_activate_session_page, should_run_scheduled_update_check,
+    refresh_label_for_workspace_page, should_activate_session_page,
+    should_run_scheduled_update_check,
     user_menu_page_for_workspace_page, workspace_page_from_pathname,
   };
   use crate::app_update::{
@@ -1361,34 +1332,6 @@ mod tests {
     assert_eq!(
       user_menu_page_for_workspace_page(WorkspacePage::GithubPrDetails),
       UserMenuPage::GithubPrDetails
-    );
-  }
-
-  #[test]
-  fn primary_navigation_selected_index_matches_top_level_sections() {
-    assert_eq!(
-      primary_navigation_selected_index(WorkspacePage::Session),
-      Some(0)
-    );
-    assert_eq!(
-      primary_navigation_selected_index(WorkspacePage::GithubPrDetails),
-      None
-    );
-    assert_eq!(
-      primary_navigation_selected_index(WorkspacePage::Billing),
-      None
-    );
-    assert_eq!(
-      primary_navigation_selected_index(WorkspacePage::GitConfig),
-      None
-    );
-    assert_eq!(
-      primary_navigation_selected_index(WorkspacePage::Settings),
-      None
-    );
-    assert_eq!(
-      primary_navigation_selected_index(WorkspacePage::About),
-      None
     );
   }
 
