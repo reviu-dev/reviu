@@ -79,8 +79,12 @@ fn render(
     &syntax_theme,
   );
 
+  let selector_lang = block
+    .lang
+    .clone()
+    .unwrap_or_else(|| SharedString::from("text"));
   v_flex()
-    .debug_selector(|| "chat-code-block".to_string())
+    .debug_selector(move || format!("chat-code-block-{selector_lang}"))
     .my_1()
     .w_full()
     .rounded(px(6.))

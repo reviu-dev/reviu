@@ -990,7 +990,12 @@ impl AgentChatPanel {
       row = row.child(div().text_xs().text_color(theme.muted_foreground).child(e));
     }
 
-    let mut container = v_flex().px_3().pb_3().gap_1().child(row);
+    let mut container = v_flex()
+      .debug_selector(|| "agent-chat-generating".to_string())
+      .px_3()
+      .pb_3()
+      .gap_1()
+      .child(row);
     if !self.pending_agent.is_empty() {
       container = container.child(markdown_view(
         "agent-chat-md-pending",
@@ -4800,7 +4805,7 @@ mod tests {
     cx.run_until_parked();
 
     assert!(
-      cx.debug_bounds("chat-code-block").is_some(),
+      cx.debug_bounds("chat-code-block-rust").is_some(),
       "the custom code block is painted"
     );
     let copy = cx.debug_bounds("chat-code-copy").expect("copy button painted");
@@ -4815,6 +4820,59 @@ mod tests {
       Some("fn main() { let x = 1; }"),
       "copy takes the code without the fences"
     );
+  }
+
+  #[gpui::test]
+  async fn a_code_block_streams_highlighted_in_the_generating_row(cx: &mut gpui::TestAppContext) {
+    let (panel, cx) = add_panel_window(cx);
+    // A streaming reply always follows a prompt; alone at index 0 the
+    // generating row does not paint under the test list, prompt included it does.
+    panel.update(cx, |panel, cx| {
+      panel.status = Status::Ready;
+      panel.in_flight = true;
+      panel.items = vec![user_message("show me toml")];
+      panel.pending_agent = "```toml\nkey = 1\n```".to_string();
+      panel.sync_list_count();
+      cx.notify();
+    });
+    cx.run_until_parked();
+
+    // The parse settles in the background; streaming remeasures the tail row
+    // on every chunk, which repaints it.
+    panel.update(cx, |panel, cx| {
+      panel.mark_last_item_changed();
+      cx.notify();
+    });
+    cx.run_until_parked();
+
+    assert!(
+      cx.debug_bounds("chat-code-block-toml").is_some(),
+      "the streaming pending markdown renders the custom code block"
+    );
+  }
+
+  #[gpui::test]
+  async fn an_unknown_language_block_still_renders_with_its_copy_button(
+    cx: &mut gpui::TestAppContext,
+  ) {
+    let (panel, cx) = add_panel_window(cx);
+    panel.update(cx, |panel, cx| {
+      panel.status = Status::Ready;
+      panel.items = vec![agent_message("```nosuchlang\nplain body\n```")];
+      panel.sync_list_count();
+      cx.notify();
+    });
+    cx.run_until_parked();
+
+    assert!(cx.debug_bounds("chat-code-block-nosuchlang").is_some());
+    let copy = cx.debug_bounds("chat-code-copy").expect("copy button painted");
+    cx.simulate_click(copy.center(), gpui::Modifiers::default());
+    cx.run_until_parked();
+
+    let copied = cx
+      .update(|_, cx| cx.read_from_clipboard())
+      .and_then(|item| item.text());
+    assert_eq!(copied.as_deref(), Some("plain body"));
   }
 
   #[gpui::test]
