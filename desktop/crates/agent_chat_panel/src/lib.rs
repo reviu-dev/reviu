@@ -308,6 +308,44 @@ const MAX_REPO_FILES: usize = 20_000;
 /// Caps the conversation and the composer to a readable measure on wide windows.
 const CONVERSATION_COLUMN_MAX_WIDTH_PX: f32 = 720.0;
 const CONVERSATION_BOTTOM_FADE_PX: f32 = 48.0;
+const THINKING_PEEK_MAX_HEIGHT_PX: f32 = 180.0;
+const THINKING_PEEK_TAIL_BYTES: usize = 4096;
+const THINKING_PEEK_TAIL_LINES: usize = 12;
+
+/// Tail of the streaming thought bounded in bytes then lines, plus whether
+/// older content was dropped. Bounding keeps the per-chunk markdown re-parse
+/// cost flat however long the think runs.
+fn thought_peek_tail(text: &str) -> (&str, bool) {
+  let text = text.trim_end();
+  let mut start = text.len().saturating_sub(THINKING_PEEK_TAIL_BYTES);
+  while !text.is_char_boundary(start) {
+    start += 1;
+  }
+  let mut slice = &text[start..];
+  let mut truncated = start > 0;
+  let lines = slice.lines().count();
+  if lines > THINKING_PEEK_TAIL_LINES {
+    let mut to_drop = lines - THINKING_PEEK_TAIL_LINES;
+    for (i, b) in slice.bytes().enumerate() {
+      if b == b'\n' {
+        to_drop -= 1;
+        if to_drop == 0 {
+          slice = &slice[i + 1..];
+          truncated = true;
+          break;
+        }
+      }
+    }
+  } else if truncated {
+    // Snap the byte cut to a line start so the peek opens on a whole line.
+    if let Some(nl) = slice.find('\n')
+      && nl + 1 < slice.len()
+    {
+      slice = &slice[nl + 1..];
+    }
+  }
+  (slice, truncated)
+}
 
 /// Code selected in the Git diff view, pushed in to attach as `@selection` context.
 #[derive(Clone, Debug)]
@@ -548,6 +586,19 @@ impl AgentChatPanel {
   #[cfg(any(test, feature = "test-support"))]
   pub fn backend_ready(&self) -> bool {
     matches!(self.status, Status::Ready)
+  }
+
+  /// The thought texts of the conversation, oldest first.
+  #[cfg(any(test, feature = "test-support"))]
+  pub fn thought_texts(&self) -> Vec<String> {
+    self
+      .items
+      .iter()
+      .filter_map(|item| match item {
+        ChatItem::Thought(t) => Some(t.text.clone()),
+        _ => None,
+      })
+      .collect()
   }
 
   /// Focus handle of the composer input.
@@ -996,6 +1047,9 @@ impl AgentChatPanel {
       .pb_3()
       .gap_1()
       .child(row);
+    if !self.pending_thought.is_empty() {
+      container = container.child(self.render_thinking_peek(theme, cx));
+    }
     if !self.pending_agent.is_empty() {
       container = container.child(markdown_view(
         "agent-chat-md-pending",
@@ -1005,6 +1059,63 @@ impl AgentChatPanel {
       ));
     }
     container.into_any_element()
+  }
+
+  /// Live peek at the streaming thought: the tail of the buffer, dimmed and
+  /// clipped to the bottom so the newest reasoning stays in view. It settles
+  /// into the collapsed Thought item when the segment closes.
+  fn render_thinking_peek(
+    &self,
+    theme: &gpui_component::Theme,
+    cx: &mut Context<Self>,
+  ) -> gpui::AnyElement {
+    let (tail, truncated) = thought_peek_tail(&self.pending_thought);
+    v_flex()
+      .debug_selector(|| "agent-chat-thinking-peek".to_string())
+      .gap_1()
+      .child(
+        div()
+          .text_xs()
+          .text_color(theme.muted_foreground)
+          .child("Thinking"),
+      )
+      .child(
+        div()
+          .relative()
+          .max_h(px(THINKING_PEEK_MAX_HEIGHT_PX))
+          .overflow_hidden()
+          .flex()
+          .flex_col()
+          .justify_end()
+          .child(
+            div()
+              .pl_4()
+              .text_xs()
+              .text_color(theme.muted_foreground)
+              .child(markdown_view(
+                "agent-chat-thought-pending",
+                tail,
+                &self.markdown_extensions,
+                cx,
+              )),
+          )
+          .when(truncated, |this| {
+            this.child(
+              div()
+                .absolute()
+                .top_0()
+                .left_0()
+                .right_0()
+                .h(px(24.))
+                .bg(gpui::linear_gradient(
+                  180.,
+                  gpui::linear_color_stop(theme.sidebar, 0.),
+                  gpui::linear_color_stop(theme.sidebar.opacity(0.), 1.),
+                )),
+            )
+          }),
+      )
+      .into_any_element()
   }
 
   fn render_extra_after(
@@ -4949,6 +5060,80 @@ mod tests {
 
     panel.read_with(cx, |panel, _| {
       assert_eq!(item_kinds(&panel.items), vec!["agent", "tool", "agent"]);
+    });
+  }
+
+  #[test]
+  fn thought_peek_tail_keeps_short_thoughts_whole() {
+    let (tail, truncated) = thought_peek_tail("one\ntwo\nthree");
+    assert_eq!(tail, "one\ntwo\nthree");
+    assert!(!truncated);
+  }
+
+  #[test]
+  fn thought_peek_tail_keeps_only_the_last_lines() {
+    let text: String = (1..=20)
+      .map(|i| format!("line {i}\n"))
+      .collect::<Vec<_>>()
+      .join("");
+    let (tail, truncated) = thought_peek_tail(&text);
+    assert!(truncated);
+    assert!(tail.starts_with("line 9\n"), "tail starts at {tail:?}");
+    assert!(tail.ends_with("line 20"));
+    assert_eq!(tail.lines().count(), THINKING_PEEK_TAIL_LINES);
+  }
+
+  #[test]
+  fn thought_peek_tail_respects_char_boundaries() {
+    // One long line of multibyte chars: the byte cut must not split a char.
+    let text = "é".repeat(THINKING_PEEK_TAIL_BYTES);
+    let (tail, truncated) = thought_peek_tail(&text);
+    assert!(truncated);
+    assert!(tail.chars().all(|c| c == 'é'));
+  }
+
+  #[gpui::test]
+  async fn the_streaming_thought_shows_a_peek_then_settles_collapsed(
+    cx: &mut gpui::TestAppContext,
+  ) {
+    let (panel, cx) = add_panel_window(cx);
+    panel.update(cx, |panel, cx| {
+      panel.status = Status::Ready;
+      panel.in_flight = true;
+      panel.items = vec![user_message("think about it")];
+      panel.on_event(thought_chunk("first I should check the tests"));
+      panel.sync_list_count();
+      cx.notify();
+    });
+    cx.run_until_parked();
+    panel.update(cx, |panel, cx| {
+      panel.mark_last_item_changed();
+      cx.notify();
+    });
+    cx.run_until_parked();
+
+    assert!(
+      cx.debug_bounds("agent-chat-thinking-peek").is_some(),
+      "the live thought is visible while streaming"
+    );
+
+    panel.update(cx, |panel, cx| {
+      panel.flush_turn_buffers();
+      panel.end_turn();
+      panel.sync_list_count();
+      cx.notify();
+    });
+    cx.run_until_parked();
+
+    assert!(
+      cx.debug_bounds("agent-chat-thinking-peek").is_none(),
+      "the peek leaves with the turn"
+    );
+    panel.read_with(cx, |panel, _| {
+      assert!(matches!(
+        panel.items.last(),
+        Some(ChatItem::Thought(t)) if t.collapsed
+      ));
     });
   }
 

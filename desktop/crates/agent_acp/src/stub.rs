@@ -39,6 +39,12 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
         async move |req: PromptRequest, responder, cx: ConnectionTo<Client>| {
           let session_id = req.session_id.clone();
           let _ = cx.send_notification(SessionNotification::new(
+            session_id.clone(),
+            SessionUpdate::AgentThoughtChunk(agent_client_protocol::schema::ContentChunk::new(
+              ContentBlock::Text(TextContent::new("stub thinking")),
+            )),
+          ));
+          let _ = cx.send_notification(SessionNotification::new(
             session_id,
             SessionUpdate::AgentMessageChunk(agent_client_protocol::schema::ContentChunk::new(
               ContentBlock::Text(TextContent::new("ack")),

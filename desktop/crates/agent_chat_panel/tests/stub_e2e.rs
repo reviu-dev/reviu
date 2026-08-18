@@ -36,6 +36,11 @@ async fn a_prompt_round_trips_through_a_real_agent_process(cx: &mut TestAppConte
     let transcript = panel.transcript_texts();
     assert_eq!(transcript[0], "hello stub");
     assert_eq!(transcript[1], "ack", "the stub acks every prompt");
+    assert_eq!(
+      panel.thought_texts(),
+      vec!["stub thinking"],
+      "the thought chunk lands as a Thought item"
+    );
   });
 
   set_backend_command_override(None);
