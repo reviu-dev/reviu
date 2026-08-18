@@ -170,6 +170,7 @@ async fn a_queued_message_runs_when_the_turn_ends_cleanly(cx: &mut TestAppContex
 
   panel.update(cx, |panel, cx| {
     panel.queue_prompt_for_test("and then this", cx);
+    panel.queue_prompt_for_test("and finally that", cx);
   });
 
   let (prompt_id, _) = panel.read_with(cx, |panel, _| panel.pending_permission().unwrap());
@@ -185,15 +186,61 @@ async fn a_queued_message_runs_when_the_turn_ends_cleanly(cx: &mut TestAppContex
         .iter()
         .filter(|t| *t == "ack")
         .count()
-        >= 2
+        >= 3
   })
   .await;
 
   panel.read_with(cx, |panel, _| {
     let transcript = panel.transcript_texts();
+    let first = transcript.iter().position(|t| t == "and then this");
+    let second = transcript.iter().position(|t| t == "and finally that");
     assert!(
-      transcript.iter().any(|t| t == "and then this"),
-      "the queued prompt was sent as its own turn, got {transcript:?}"
+      first.is_some() && second.is_some() && first < second,
+      "both queued prompts ran as their own turns, oldest first, got {transcript:?}"
+    );
+  });
+
+  set_backend_command_override(None);
+}
+
+#[gpui::test]
+async fn a_failed_turn_holds_the_queue(cx: &mut TestAppContext) {
+  cx.executor().allow_parking();
+  set_backend_command_override(Some(env!("CARGO_BIN_EXE_stub_agent").to_string()));
+
+  cx.update(gpui_component::init);
+  let cwd = std::env::temp_dir();
+  let mut mounted = None;
+  let (_root, cx) = cx.add_window_view(|window, cx| {
+    let panel =
+      cx.new(|cx| AgentChatPanel::new(BackendKind::Claude, cwd.clone(), None, window, cx));
+    mounted = Some(panel.clone());
+    gpui_component::Root::new(panel, window, cx)
+  });
+  let panel = mounted.expect("agent chat panel");
+
+  cx.condition(&panel, |panel, _| panel.backend_ready()).await;
+
+  panel.update(cx, |panel, cx| {
+    panel.queue_prompt_for_test("after the failure", cx);
+    // The stub errors a turn whose prompt mentions "fail".
+    assert!(panel.send_external_prompt("please fail".to_string(), cx));
+  });
+  cx.condition(&panel, |panel, _| !panel.is_turn_in_flight())
+    .await;
+
+  panel.read_with(cx, |panel, _| {
+    assert_eq!(
+      panel.queued_prompt_texts(),
+      vec!["after the failure".to_string()],
+      "an errored turn never auto-runs the queue"
+    );
+    assert!(
+      panel
+        .transcript_texts()
+        .iter()
+        .any(|t| t.starts_with("[error]")),
+      "the failure is visible in the transcript"
     );
   });
 

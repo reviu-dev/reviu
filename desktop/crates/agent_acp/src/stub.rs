@@ -100,6 +100,10 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
             slot.0 = Some(responder);
             return Ok(());
           }
+          // "fail" errors the turn, so clients can exercise the error path.
+          if prompt_contains("fail") {
+            return responder.respond_with_error(agent_client_protocol::Error::internal_error());
+          }
           // A prompt mentioning "permission" first round-trips a permission
           // request carrying a real command, so clients can exercise the flow.
           // Awaiting the outcome inline would park the connection's task queue
