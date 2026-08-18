@@ -45,6 +45,11 @@ The GitHub-integration backend (Reviu Pro) is closed-source in a separate privat
 - Markdown/GFM rendering:
   - `desktop/crates/gfm_markdown_viewer/src/gfm_markdown_viewer.rs`
 
+## UI conventions
+
+- **Focus when a surface closes**: dialogs (command palette, file search, confirmations) restore focus by themselves via gpui-component's `Root`. Page-level surfaces (right dock, centre views) must hand focus to `SessionPage`'s `Focusable` impl on the next frame - it resolves to the diff editor or the composer - never to a hardcoded target.
+- One dock surface = one entity in its own file, communicating by events; `session_page.rs` composes and routes.
+
 ## Required workflow
 
 - Search in codebase: `osgrep "query"` (or `rg` when needed).
