@@ -1628,10 +1628,17 @@ impl AgentChatPanel {
     if text.is_empty() {
       return;
     }
+    // Drain the composer only once the prompt is actually dispatched: while the
+    // agent is still connecting or errored, the user keeps what they typed.
+    let dispatched = self.dispatch_prompt(text.clone(), cx);
     self.input.update(cx, |state, cx| {
-      state.set_value("", window, cx);
+      if dispatched {
+        state.set_value("", window, cx);
+      } else {
+        // Drop the newline the refused Enter just typed into the textarea.
+        state.set_value(&text, window, cx);
+      }
     });
-    self.dispatch_prompt(text, cx);
   }
 
   /// Send a prompt programmatically; false if not ready or already in flight.
@@ -4683,8 +4690,8 @@ mod tests {
     cx.run_until_parked();
 
     panel.read_with(cx, |panel, cx| {
-      // Submit ran (the composer was drained) but nothing was dispatched.
-      assert_eq!(panel.input.read(cx).value(), "");
+      // Nothing was dispatched, and the composer keeps the user's text.
+      assert_eq!(panel.input.read(cx).value(), "do the thing");
       assert!(panel.items.is_empty(), "no prompt was recorded");
       assert!(!panel.in_flight);
     });
