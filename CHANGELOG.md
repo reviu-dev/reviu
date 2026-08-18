@@ -12,6 +12,10 @@ The separate Git page is gone: everything it did happens in the Sessions workspa
 
 The right panel is no longer pinned to the workspace. Its header gains a close button, and the shortcut of the active tab closes it too, so `cmd-j` on the terminal or `cmd-shift-e` on the changes now toggle the panel instead of only opening it. Any tab shortcut brings it back, sliding in and out. A new expand button gives the panel the whole window for a large diff or a long terminal session, and its edge can be dragged to resize, with a double-click returning the default width.
 
+### A Clean File Never Splits
+
+Opening an unmodified file while the split preference was on showed the same content twice, side by side. A file with no changes now always opens inline, and the split toggle stays quiet on it instead of silently flipping the preference.
+
 ### The Composer Keeps Your Words
 
 Pressing Enter while the agent was still connecting, or after it had failed, silently emptied the message box and sent nothing. The message now stays in the composer until the agent actually receives it.

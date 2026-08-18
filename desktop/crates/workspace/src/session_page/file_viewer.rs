@@ -183,6 +183,10 @@ impl SessionPage {
   }
 
   pub(super) fn effective_diff_view(&self, path: &Path, cx: &App) -> DiffViewMode {
+    // A clean file has no other side: the split preference must not follow it.
+    if !self.path_has_changes(path, cx) {
+      return DiffViewMode::Inline;
+    }
     effective_diff_view(DiffViewInputs {
       preferred: self.diff_view,
       binary_preview: self.binary_preview.is_some(),
@@ -194,13 +198,17 @@ impl SessionPage {
   /// A file opened from the Files tab with no pending change has nothing to
   /// compare: the toggle would show the same content twice.
   pub(super) fn selected_file_has_changes(&self, cx: &App) -> bool {
+    let Some(path) = self.selected_file.as_deref() else {
+      return false;
+    };
+    self.path_has_changes(path, cx)
+  }
+
+  fn path_has_changes(&self, path: &Path, cx: &App) -> bool {
     // A commit snapshot always carries its own patch.
     if self.opened_commit.is_some() {
       return true;
     }
-    let Some(path) = self.selected_file.as_deref() else {
-      return false;
-    };
     self
       .dock_panel
       .read(cx)
@@ -466,10 +474,12 @@ impl SessionPage {
   }
 
   pub(super) fn toggle_diff_view(&mut self, cx: &mut Context<Self>) {
-    // While the rendered file holds the pane there is no diff to switch.
+    // While the rendered file holds the pane there is no diff to switch, and a
+    // clean file must not flip the shared preference from a dead toggle.
     if self.center != CenterView::Diff
       || (self.show_preview && self.previewable())
       || self.split_disabled(cx)
+      || !self.selected_file_has_changes(cx)
     {
       return;
     }
@@ -857,6 +867,71 @@ mod tests {
       assert!(
         editor.is_unmerged(),
         "the file the merge just broke is read whole, without reopening it"
+      );
+    });
+  }
+
+  #[gpui::test]
+  async fn a_clean_file_opens_inline_even_with_the_split_preference_on(cx: &mut TestAppContext) {
+    let repo = TempRepo::init("session-clean-file-split");
+    commit_text_file(&repo.path, Path::new("clean.txt"), "same\n", "initial");
+    commit_text_file(&repo.path, Path::new("dirty.txt"), "v1\n", "second");
+    std::fs::write(repo.path.join("dirty.txt"), "v2\n").expect("modify file");
+
+    let (page, cx) = add_session_page_window(repo.path.clone(), cx);
+    page.update(cx, |page, cx| {
+      page.dock_panel.update(cx, |panel, cx| panel.refresh(cx))
+    });
+    cx.run_until_parked();
+
+    // Split on the modified file.
+    page.update_in(cx, |page, window, cx| {
+      page.open_diff(PathBuf::from("dirty.txt"), None, window, cx);
+    });
+    await_open_file(&page, cx).await;
+    page.update(cx, |page, cx| page.toggle_diff_view(cx));
+    page.read_with(cx, |page, cx| {
+      assert_eq!(
+        page
+          .editor
+          .as_ref()
+          .expect("editor")
+          .read(cx)
+          .diff_view_mode(),
+        DiffViewMode::Split
+      );
+    });
+
+    // A clean file from the Files tab must land inline anyway.
+    page.update_in(cx, |page, window, cx| {
+      page.open_diff(PathBuf::from("clean.txt"), None, window, cx);
+    });
+    await_open_file(&page, cx).await;
+    page.read_with(cx, |page, cx| {
+      assert_eq!(
+        page
+          .editor
+          .as_ref()
+          .expect("editor")
+          .read(cx)
+          .diff_view_mode(),
+        DiffViewMode::Inline,
+        "a clean file has no other side to show"
+      );
+    });
+
+    // And the shortcut toggle is dead on it: the preference must not flip.
+    page.update(cx, |page, cx| page.toggle_diff_view(cx));
+    page.read_with(cx, |page, cx| {
+      assert!(crate::config::AppSettings::get(cx).split_diff_view);
+      assert_eq!(
+        page
+          .editor
+          .as_ref()
+          .expect("editor")
+          .read(cx)
+          .diff_view_mode(),
+        DiffViewMode::Inline
       );
     });
   }
