@@ -563,6 +563,78 @@ impl SessionPage {
   }
 }
 
+pub(super) const DOCK_RESIZE_HANDLE_DEBUG_SELECTOR: &str = "session-dock-resize-handle";
+
+/// Payload of the dock resize drag; the ghost renders nothing.
+struct DraggedDock;
+
+impl Render for DraggedDock {
+  fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+    gpui::Empty
+  }
+}
+
+impl SessionPage {
+  fn render_dock_resize_handle(&self, cx: &mut Context<Self>) -> AnyElement {
+    let theme = cx.theme().clone();
+    div()
+      .id("session-dock-resize-handle")
+      .debug_selector(|| DOCK_RESIZE_HANDLE_DEBUG_SELECTOR.to_string())
+      .w(px(5.0))
+      .h_full()
+      .flex_shrink_0()
+      .cursor_col_resize()
+      .hover(|this| this.bg(theme.border))
+      .on_drag(DraggedDock, |_, _, _, cx| {
+        cx.stop_propagation();
+        cx.new(|_| DraggedDock)
+      })
+      .on_mouse_up(
+        gpui::MouseButton::Left,
+        cx.listener(|this, event: &gpui::MouseUpEvent, _, cx| {
+          if event.click_count == 2 {
+            this.resize_dock(DOCK_PANEL_DEFAULT_WIDTH, cx);
+            cx.stop_propagation();
+          }
+        }),
+      )
+      .into_any_element()
+  }
+
+  /// The dock owns its width so the open and close slides can animate; the
+  /// shared resizable state of gpui-component cannot (see #533 point 4).
+  fn render_dock(&mut self, cx: &mut Context<Self>) -> AnyElement {
+    let width = self.dock_width;
+    let (from, to) = if self.dock_open {
+      (0.0, width)
+    } else {
+      (width, 0.0)
+    };
+    let container = div()
+      .id("session-dock-container")
+      .h_full()
+      .flex_shrink_0()
+      .overflow_hidden()
+      .child(
+        div()
+          .w(px(width))
+          .h_full()
+          .child(self.render_dock_panel(cx)),
+      );
+    if !self.dock_slide_armed {
+      return container.w(px(to)).into_any_element();
+    }
+    container
+      .with_animation(
+        ("session-dock-slide", self.dock_open as u64),
+        gpui::Animation::new(std::time::Duration::from_millis(CENTER_SWAP_FADE_MS))
+          .with_easing(gpui::ease_out_quint()),
+        move |this, delta| this.w(px(from + (to - from) * delta)),
+      )
+      .into_any_element()
+  }
+}
+
 impl Render for SessionPage {
   fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
     div()
@@ -594,22 +666,43 @@ impl Render for SessionPage {
       .on_action(cx.listener(Self::open_changes_action))
       .on_action(cx.listener(Self::toggle_file_stage_action))
       .on_action(cx.listener(Self::restore_file_action))
-      .child(
-        ui::h_resizable("session-page-shell")
+      .on_drag_move(cx.listener(
+        |this, event: &gpui::DragMoveEvent<DraggedDock>, window, cx| {
+          let _ = event.drag(cx);
+          let width = window.viewport_size().width - event.event.position.x;
+          this.resize_dock(f32::from(width), cx);
+        },
+      ))
+      .child(if self.dock_zoomed {
+        div()
+          .size_full()
+          .min_w(px(0.0))
+          .min_h_0()
+          .child(self.render_dock_panel(cx))
+          .into_any_element()
+      } else {
+        h_flex()
+          .size_full()
+          .min_w(px(0.0))
+          .min_h_0()
           .child(
-            ui::resizable_panel()
-              .size(px(SESSIONS_SIDEBAR_DEFAULT_WIDTH))
-              .size_range(px(SESSIONS_SIDEBAR_MIN_WIDTH)..px(SESSIONS_SIDEBAR_MAX_WIDTH))
-              .child(self.render_sessions_sidebar(cx)),
+            div().flex_1().min_w(px(0.0)).h_full().child(
+              ui::h_resizable("session-page-shell")
+                .child(
+                  ui::resizable_panel()
+                    .size(px(SESSIONS_SIDEBAR_DEFAULT_WIDTH))
+                    .size_range(px(SESSIONS_SIDEBAR_MIN_WIDTH)..px(SESSIONS_SIDEBAR_MAX_WIDTH))
+                    .child(self.render_sessions_sidebar(cx)),
+                )
+                .child(ui::resizable_panel().child(self.render_center(window, cx))),
+            ),
           )
-          .child(ui::resizable_panel().child(self.render_center(window, cx)))
-          .child(
-            ui::resizable_panel()
-              .size(px(DOCK_PANEL_DEFAULT_WIDTH))
-              .size_range(px(DOCK_PANEL_MIN_WIDTH)..px(DOCK_PANEL_MAX_WIDTH))
-              .child(self.render_dock_panel(cx)),
-          ),
-      )
+          .when(self.dock_open, |this| {
+            this.child(self.render_dock_resize_handle(cx))
+          })
+          .child(self.render_dock(cx))
+          .into_any_element()
+      })
   }
 }
 
@@ -2294,5 +2387,130 @@ mod tests {
       page.navigate_change(AnnotationDirection::Next, cx);
       assert_eq!(hunk_state(page, cx).active_index, 1);
     });
+  }
+
+  #[gpui::test]
+  async fn the_active_tab_shortcut_toggles_the_dock_closed(cx: &mut TestAppContext) {
+    let repo = TempRepo::init("session-dock-toggle");
+    commit_text_file(&repo.path, Path::new("README.md"), "v1\n", "initial");
+    let (page, cx) = add_session_page_window(repo.path.clone(), cx);
+    cx.run_until_parked();
+
+    assert!(
+      cx.debug_bounds("dock-panel-close").is_some(),
+      "dock starts open"
+    );
+
+    // Changes is the active tab: its shortcut closes the dock.
+    page.update_in(cx, |page, window, cx| {
+      page.open_changes_action(&crate::OpenGitChangesSidebar, window, cx)
+    });
+    cx.executor()
+      .advance_clock(std::time::Duration::from_millis(250));
+    cx.run_until_parked();
+    page.read_with(cx, |page, _| assert!(!page.dock_open));
+
+    // Any tab shortcut reopens it on that tab.
+    page.update_in(cx, |page, window, cx| {
+      page.open_history_action(&crate::OpenGitHistorySidebar, window, cx)
+    });
+    cx.executor()
+      .advance_clock(std::time::Duration::from_millis(250));
+    cx.run_until_parked();
+    page.read_with(cx, |page, cx| {
+      assert!(page.dock_open);
+      assert_eq!(page.dock_panel.read(cx).active_tab(), DockPanelTab::History);
+    });
+  }
+
+  #[gpui::test]
+  async fn the_close_button_closes_the_dock(cx: &mut TestAppContext) {
+    let repo = TempRepo::init("session-dock-close-button");
+    commit_text_file(&repo.path, Path::new("README.md"), "v1\n", "initial");
+    let (page, cx) = add_session_page_window(repo.path.clone(), cx);
+    cx.run_until_parked();
+
+    let close = cx.debug_bounds("dock-panel-close").expect("close button");
+    cx.simulate_click(close.center(), gpui::Modifiers::default());
+    cx.run_until_parked();
+
+    page.read_with(cx, |page, _| assert!(!page.dock_open));
+  }
+
+  #[gpui::test]
+  async fn zooming_the_dock_takes_the_whole_shell(cx: &mut TestAppContext) {
+    let repo = TempRepo::init("session-dock-zoom");
+    commit_text_file(&repo.path, Path::new("README.md"), "v1\n", "initial");
+    let (page, cx) = add_session_page_window(repo.path.clone(), cx);
+    cx.run_until_parked();
+
+    let zoom = cx.debug_bounds("dock-panel-zoom").expect("zoom button");
+    cx.simulate_click(zoom.center(), gpui::Modifiers::default());
+    cx.run_until_parked();
+
+    page.read_with(cx, |page, _| assert!(page.dock_zoomed));
+    assert!(
+      cx.debug_bounds(REPO_CONTEXT_DEBUG_SELECTOR).is_none(),
+      "the sidebar is hidden while the dock is zoomed"
+    );
+
+    let zoom = cx
+      .debug_bounds("dock-panel-zoom")
+      .expect("zoom button, zoomed");
+    cx.simulate_click(zoom.center(), gpui::Modifiers::default());
+    cx.run_until_parked();
+
+    page.read_with(cx, |page, _| assert!(!page.dock_zoomed));
+    assert!(
+      cx.debug_bounds(REPO_CONTEXT_DEBUG_SELECTOR).is_some(),
+      "restoring brings the shell back"
+    );
+  }
+
+  #[gpui::test]
+  async fn dragging_the_handle_resizes_the_dock(cx: &mut TestAppContext) {
+    let repo = TempRepo::init("session-dock-drag");
+    commit_text_file(&repo.path, Path::new("README.md"), "v1\n", "initial");
+    let (page, cx) = add_session_page_window(repo.path.clone(), cx);
+    cx.run_until_parked();
+
+    let start_width = page.read_with(cx, |page, _| page.dock_width);
+    let handle = cx
+      .debug_bounds(DOCK_RESIZE_HANDLE_DEBUG_SELECTOR)
+      .expect("resize handle");
+    let from = handle.center();
+    let to = gpui::point(from.x - px(80.0), from.y);
+
+    cx.simulate_event(gpui::MouseDownEvent {
+      position: from,
+      button: gpui::MouseButton::Left,
+      modifiers: gpui::Modifiers::default(),
+      click_count: 1,
+      first_mouse: false,
+    });
+    // The first move only starts the drag; the next ones stream DragMoveEvent.
+    cx.simulate_event(gpui::MouseMoveEvent {
+      position: gpui::point(from.x - px(10.0), from.y),
+      pressed_button: Some(gpui::MouseButton::Left),
+      modifiers: gpui::Modifiers::default(),
+    });
+    cx.simulate_event(gpui::MouseMoveEvent {
+      position: to,
+      pressed_button: Some(gpui::MouseButton::Left),
+      modifiers: gpui::Modifiers::default(),
+    });
+    cx.simulate_event(gpui::MouseUpEvent {
+      position: to,
+      button: gpui::MouseButton::Left,
+      modifiers: gpui::Modifiers::default(),
+      click_count: 1,
+    });
+    cx.run_until_parked();
+
+    let width = page.read_with(cx, |page, _| page.dock_width);
+    assert!(
+      (width - (start_width + 80.0)).abs() < 5.0,
+      "dragging 80px left widens the dock: {start_width} -> {width}"
+    );
   }
 }

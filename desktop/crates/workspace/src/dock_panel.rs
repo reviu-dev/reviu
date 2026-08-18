@@ -38,6 +38,8 @@ const DOCK_PANEL_TERMINAL_TAB_DEBUG_SELECTOR: &str = "dock-panel-tab-terminal";
 #[cfg(test)]
 const DOCK_PANEL_HISTORY_TAB_DEBUG_SELECTOR: &str = "dock-panel-tab-history";
 const DOCK_PANEL_REFRESH_DEBUG_SELECTOR: &str = "dock-panel-refresh";
+pub(crate) const DOCK_PANEL_ZOOM_DEBUG_SELECTOR: &str = "dock-panel-zoom";
+pub(crate) const DOCK_PANEL_CLOSE_DEBUG_SELECTOR: &str = "dock-panel-close";
 use std::collections::BTreeMap;
 use std::rc::Rc;
 
@@ -74,6 +76,10 @@ pub enum DockPanelEvent {
   PublishBranchAndCreatePullRequest(GithubBranchContext),
   /// The working tree was re-read: whoever shows a file has to look again.
   StatusRefreshed,
+  /// The close button: the host owns the dock's visibility.
+  Close,
+  /// The zoom button: the host owns the layout.
+  ToggleZoom,
 }
 
 impl gpui::EventEmitter<DockPanelEvent> for DockPanel {}
@@ -214,6 +220,7 @@ pub struct DockPanel {
   committing: bool,
   last_error: Option<SharedString>,
   active_tab: DockPanelTab,
+  zoomed: bool,
   changes_list: Entity<ChangesList>,
   pub(crate) history_list: Entity<HistoryList>,
   /// Spawned on the first visit to the tab: a shell per session is too much
@@ -302,6 +309,7 @@ impl DockPanel {
       committing: false,
       last_error: None,
       active_tab: DockPanelTab::Changes,
+      zoomed: false,
       changes_list,
       history_list,
       terminal_view: None,
@@ -863,6 +871,13 @@ impl DockPanel {
     self.terminal_view.is_some()
   }
 
+  pub(crate) fn set_zoomed(&mut self, zoomed: bool, cx: &mut Context<Self>) {
+    if self.zoomed != zoomed {
+      self.zoomed = zoomed;
+      cx.notify();
+    }
+  }
+
   pub(crate) fn active_tab(&self) -> DockPanelTab {
     self.active_tab
   }
@@ -1262,9 +1277,16 @@ impl Render for DockPanel {
       .px_2()
       .border_b_1()
       .border_color(theme.border)
-      .child(self.render_tabs(cx))
+      .child(
+        div()
+          .flex_1()
+          .min_w(px(0.0))
+          .overflow_hidden()
+          .child(self.render_tabs(cx)),
+      )
       .child(
         h_flex()
+          .flex_shrink_0()
           .items_center()
           .gap_1()
           .when(
@@ -1289,7 +1311,31 @@ impl Render for DockPanel {
                 .tooltip("Refresh")
                 .on_click(cx.listener(|this, _, _, cx| this.refresh(cx))),
             )
-          }),
+          })
+          .child(
+            Button::new("dock-panel-zoom")
+              .debug_selector(|| DOCK_PANEL_ZOOM_DEBUG_SELECTOR.to_string())
+              .icon(if self.zoomed {
+                UiIconName::Minimize2
+              } else {
+                UiIconName::Maximize2
+              })
+              .ghost()
+              .compact()
+              .small()
+              .tooltip(if self.zoomed { "Restore" } else { "Expand" })
+              .on_click(cx.listener(|_, _, _, cx| cx.emit(DockPanelEvent::ToggleZoom))),
+          )
+          .child(
+            Button::new("dock-panel-close")
+              .debug_selector(|| DOCK_PANEL_CLOSE_DEBUG_SELECTOR.to_string())
+              .icon(gpui_component::IconName::PanelRightClose)
+              .ghost()
+              .compact()
+              .small()
+              .tooltip("Close panel")
+              .on_click(cx.listener(|_, _, _, cx| cx.emit(DockPanelEvent::Close))),
+          ),
       );
 
     let body = match self.active_tab {

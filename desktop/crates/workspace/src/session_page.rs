@@ -195,6 +195,11 @@ pub struct SessionPage {
   pro_teaser_shown: bool,
   /// Set while pushing an unpublished branch on the way to the pull request form.
   pending_pull_request: Option<GithubBranchContext>,
+  dock_open: bool,
+  dock_width: f32,
+  dock_zoomed: bool,
+  /// The slide only plays on a real open/close, never on the first paint.
+  dock_slide_armed: bool,
   poll_window_active: bool,
   _active_repo_task: Option<Task<()>>,
   _pro_teaser_task: Option<Task<()>>,
@@ -277,6 +282,12 @@ impl SessionPage {
           this.sync_editor_unmerged_state(cx);
           this.sync_git_telemetry(cx);
         }
+        DockPanelEvent::Close => {
+          this.close_dock(window, cx);
+        }
+        DockPanelEvent::ToggleZoom => {
+          this.toggle_dock_zoom(cx);
+        }
       },
     )
     .detach();
@@ -311,6 +322,10 @@ impl SessionPage {
       repo_command_in_flight: false,
       pro_teaser_shown: false,
       pending_pull_request: None,
+      dock_open: true,
+      dock_width: DOCK_PANEL_DEFAULT_WIDTH,
+      dock_zoomed: false,
+      dock_slide_armed: false,
       poll_window_active: true,
       _active_repo_task: None,
       _pro_teaser_task: None,
@@ -554,11 +569,54 @@ impl SessionPage {
     self.open_dock_tab(DockPanelTab::Changes, window, cx);
   }
 
+  /// A closed dock opens on the tab; the active tab's shortcut closes it.
   fn open_dock_tab(&mut self, tab: DockPanelTab, window: &mut Window, cx: &mut Context<Self>) {
+    cx.stop_propagation();
+    if self.dock_open && self.dock_panel.read(cx).active_tab() == tab {
+      self.close_dock(window, cx);
+      return;
+    }
+    if !self.dock_open {
+      self.dock_slide_armed = true;
+    }
+    self.dock_open = true;
     self
       .dock_panel
       .update(cx, |panel, cx| panel.open_tab(tab, window, cx));
-    cx.stop_propagation();
+    cx.notify();
+  }
+
+  fn close_dock(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    if !self.dock_open {
+      return;
+    }
+    self.dock_open = false;
+    self.dock_slide_armed = true;
+    self.set_dock_zoomed(false, cx);
+    // The dock stays mounted while it slides out; focus must not stay in it.
+    self.focus_agent_input_on_next_frame(window, cx);
+    cx.notify();
+  }
+
+  fn toggle_dock_zoom(&mut self, cx: &mut Context<Self>) {
+    let zoomed = !self.dock_zoomed;
+    self.set_dock_zoomed(zoomed, cx);
+    cx.notify();
+  }
+
+  fn set_dock_zoomed(&mut self, zoomed: bool, cx: &mut Context<Self>) {
+    self.dock_zoomed = zoomed;
+    self
+      .dock_panel
+      .update(cx, |panel, cx| panel.set_zoomed(zoomed, cx));
+  }
+
+  fn resize_dock(&mut self, width: f32, cx: &mut Context<Self>) {
+    let clamped = width.clamp(DOCK_PANEL_MIN_WIDTH, DOCK_PANEL_MAX_WIDTH);
+    if (clamped - self.dock_width).abs() > f32::EPSILON {
+      self.dock_width = clamped;
+      cx.notify();
+    }
   }
 
   fn toggle_file_stage_action(

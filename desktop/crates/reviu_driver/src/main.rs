@@ -12,6 +12,10 @@
 //!
 //! This is the real app on the real machine: it reads and writes the same
 //! config store and repositories the installed app uses.
+//!
+//! Known limit: width/opacity animations do not run to completion under the
+//! test scheduler, so an element mid-slide can be clipped out of reach; judge
+//! animated layouts on a real window, drive end states here.
 
 use std::io::{BufRead as _, Write as _};
 use std::time::Duration;
@@ -230,9 +234,19 @@ fn main() {
       }
       Command::Wait { ms } => {
         let deadline = std::time::Instant::now() + Duration::from_millis(ms);
+        let mut flip = false;
         while std::time::Instant::now() < deadline {
           cx.executor().tick();
-          std::thread::sleep(Duration::from_millis(10));
+          // Animations only advance when a frame is painted; an alternating
+          // mouse move forces one per iteration (repeats are deduplicated).
+          flip = !flip;
+          let x = if flip { 0.0 } else { 1.0 };
+          cx.simulate_mouse_move(
+            gpui::point(gpui::px(x), gpui::px(0.0)),
+            None,
+            gpui::Modifiers::default(),
+          );
+          std::thread::sleep(Duration::from_millis(5));
         }
         cx.run_until_parked();
         respond(ok(serde_json::json!({})));
@@ -254,7 +268,9 @@ fn main() {
       }
       Command::Quit => {
         respond(ok(serde_json::json!({})));
-        return;
+        // Skip the teardown: live agent processes and reactor threads make
+        // the test-context drop abort, and there is nothing to save.
+        std::process::exit(0);
       }
     }
   }
