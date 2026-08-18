@@ -4,6 +4,10 @@ All notable changes to Reviu are documented here.
 
 ## 1.0.0
 
+### Type The Next Message While The Agent Works
+
+You no longer wait for a turn to finish before writing the next instruction. Pressing Enter while the agent works queues the message in a card above the composer, ready to edit or remove; when the turn ends it is sent as the next one, and the following queued message after that. Stopping a turn holds the queue: nothing runs until you decide.
+
 ### Back To The Latest Message In One Click
 
 Scrolling up through a conversation while the agent keeps writing no longer strands you: a small pill appears at the bottom of the transcript and one click glides back to the latest message. Stopping a turn now leaves a "Stopped" marker in the conversation instead of ending silently, and everything the agent had already streamed stays visible. And when the agent process dies, the error offers a Reconnect button right there.

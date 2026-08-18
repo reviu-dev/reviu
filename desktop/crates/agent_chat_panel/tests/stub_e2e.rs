@@ -144,6 +144,109 @@ async fn cancelling_a_turn_leaves_a_stopped_marker(cx: &mut TestAppContext) {
 }
 
 #[gpui::test]
+async fn a_queued_message_runs_when_the_turn_ends_cleanly(cx: &mut TestAppContext) {
+  cx.executor().allow_parking();
+  set_backend_command_override(Some(env!("CARGO_BIN_EXE_stub_agent").to_string()));
+
+  cx.update(gpui_component::init);
+  let cwd = std::env::temp_dir();
+  let mut mounted = None;
+  let (_root, cx) = cx.add_window_view(|window, cx| {
+    let panel =
+      cx.new(|cx| AgentChatPanel::new(BackendKind::Claude, cwd.clone(), None, window, cx));
+    mounted = Some(panel.clone());
+    gpui_component::Root::new(panel, window, cx)
+  });
+  let panel = mounted.expect("agent chat panel");
+
+  cx.condition(&panel, |panel, _| panel.backend_ready()).await;
+
+  // The permission gate keeps the first turn open long enough to queue.
+  panel.update(cx, |panel, cx| {
+    assert!(panel.send_external_prompt("ask permission first".to_string(), cx));
+  });
+  cx.condition(&panel, |panel, _| panel.pending_permission().is_some())
+    .await;
+
+  panel.update(cx, |panel, cx| {
+    panel.queue_prompt_for_test("and then this", cx);
+  });
+
+  let (prompt_id, _) = panel.read_with(cx, |panel, _| panel.pending_permission().unwrap());
+  panel.update(cx, |panel, cx| {
+    panel.answer_permission(prompt_id, Some("allow".to_string()), cx);
+  });
+
+  cx.condition(&panel, |panel, _| {
+    !panel.is_turn_in_flight()
+      && panel.queued_prompt_texts().is_empty()
+      && panel
+        .transcript_texts()
+        .iter()
+        .filter(|t| *t == "ack")
+        .count()
+        >= 2
+  })
+  .await;
+
+  panel.read_with(cx, |panel, _| {
+    let transcript = panel.transcript_texts();
+    assert!(
+      transcript.iter().any(|t| t == "and then this"),
+      "the queued prompt was sent as its own turn, got {transcript:?}"
+    );
+  });
+
+  set_backend_command_override(None);
+}
+
+#[gpui::test]
+async fn stopping_a_turn_keeps_the_queue(cx: &mut TestAppContext) {
+  cx.executor().allow_parking();
+  set_backend_command_override(Some(env!("CARGO_BIN_EXE_stub_agent").to_string()));
+
+  cx.update(gpui_component::init);
+  let cwd = std::env::temp_dir();
+  let mut mounted = None;
+  let (_root, cx) = cx.add_window_view(|window, cx| {
+    let panel =
+      cx.new(|cx| AgentChatPanel::new(BackendKind::Claude, cwd.clone(), None, window, cx));
+    mounted = Some(panel.clone());
+    gpui_component::Root::new(panel, window, cx)
+  });
+  let panel = mounted.expect("agent chat panel");
+
+  cx.condition(&panel, |panel, _| panel.backend_ready()).await;
+
+  panel.update(cx, |panel, cx| {
+    assert!(panel.send_external_prompt("wait for me".to_string(), cx));
+  });
+  cx.condition(&panel, |panel, _| panel.is_turn_in_flight())
+    .await;
+
+  panel.update(cx, |panel, cx| {
+    panel.queue_prompt_for_test("held back", cx);
+    panel.cancel_turn(cx);
+  });
+  cx.condition(&panel, |panel, _| !panel.is_turn_in_flight())
+    .await;
+
+  panel.read_with(cx, |panel, _| {
+    assert_eq!(
+      panel.queued_prompt_texts(),
+      vec!["held back".to_string()],
+      "a user stop never auto-runs the queue"
+    );
+    assert!(
+      !panel.transcript_texts().iter().any(|t| t == "held back"),
+      "the queued prompt did not run"
+    );
+  });
+
+  set_backend_command_override(None);
+}
+
+#[gpui::test]
 async fn reconnect_respawns_the_agent_session(cx: &mut TestAppContext) {
   cx.executor().allow_parking();
   set_backend_command_override(Some(env!("CARGO_BIN_EXE_stub_agent").to_string()));

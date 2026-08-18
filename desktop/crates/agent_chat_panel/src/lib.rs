@@ -452,6 +452,8 @@ pub struct AgentChatPanel {
   tool_index: HashMap<ToolCallId, usize>,
   pending_agent: String,
   pending_thought: String,
+  /// Messages typed during a turn, drained oldest-first when it ends cleanly.
+  queued_prompts: Vec<String>,
   session: Option<Arc<AgentSession>>,
   input: Entity<TextareaState>,
   in_flight: bool,
@@ -513,6 +515,7 @@ impl AgentChatPanel {
       tool_index: loaded_index,
       pending_agent: String::new(),
       pending_thought: String::new(),
+      queued_prompts: Vec::new(),
       session: None,
       input,
       in_flight: false,
@@ -664,6 +667,19 @@ impl AgentChatPanel {
     self.on_agent_disconnected(cx);
   }
 
+  /// Messages currently queued for the next turns.
+  #[cfg(any(test, feature = "test-support"))]
+  pub fn queued_prompt_texts(&self) -> Vec<String> {
+    self.queued_prompts.clone()
+  }
+
+  /// Queue a message as the composer would mid-turn.
+  #[cfg(any(test, feature = "test-support"))]
+  pub fn queue_prompt_for_test(&mut self, text: impl Into<String>, cx: &mut Context<Self>) {
+    self.queued_prompts.push(text.into());
+    cx.notify();
+  }
+
   /// The first unanswered permission: its id and extracted invocation.
   #[cfg(any(test, feature = "test-support"))]
   pub fn pending_permission(&self) -> Option<(u64, Option<String>)> {
@@ -734,6 +750,7 @@ impl AgentChatPanel {
       tool_index: HashMap::new(),
       pending_agent: String::new(),
       pending_thought: String::new(),
+      queued_prompts: Vec::new(),
       session: None,
       input,
       in_flight: false,
@@ -1952,12 +1969,46 @@ impl AgentChatPanel {
     if text.is_empty() {
       return;
     }
+    // Mid-turn, the message queues instead of being refused.
+    if self.in_flight {
+      self.queued_prompts.push(text);
+      self
+        .input
+        .update(cx, |state, cx| state.set_value("", window, cx));
+      cx.notify();
+      return;
+    }
     // Drain the composer only once the prompt is actually dispatched: while the
     // agent is still connecting or errored, the user keeps what they typed.
     if self.dispatch_prompt(text, cx) {
       self
         .input
         .update(cx, |state, cx| state.set_value("", window, cx));
+    }
+  }
+
+  fn pop_queued_to_composer(&mut self, ix: usize, window: &mut Window, cx: &mut Context<Self>) {
+    if ix >= self.queued_prompts.len() {
+      return;
+    }
+    // A non-empty draft swaps into the queue slot so nothing is lost.
+    let draft = self.input.read(cx).value().trim().to_string();
+    let text = if draft.is_empty() {
+      self.queued_prompts.remove(ix)
+    } else {
+      std::mem::replace(&mut self.queued_prompts[ix], draft)
+    };
+    self.input.update(cx, |state, cx| {
+      state.set_value(&text, window, cx);
+    });
+    window.focus(&self.input.read(cx).focus_handle(cx), cx);
+    cx.notify();
+  }
+
+  fn delete_queued(&mut self, ix: usize, cx: &mut Context<Self>) {
+    if ix < self.queued_prompts.len() {
+      self.queued_prompts.remove(ix);
+      cx.notify();
     }
   }
 
@@ -2093,10 +2144,12 @@ impl AgentChatPanel {
       let result = session.send_prompt_blocks(blocks).await;
       let _ = this.update(cx, |panel, cx| {
         panel.flush_turn_buffers();
+        let mut drain_queue = false;
         match result {
           Ok(stop_reason) => {
             panel.auth_required = false;
             if stop_reason == agent_client_protocol::schema::StopReason::Cancelled {
+              // The user asked to stop, not to continue: the queue holds.
               let text = match panel.turn_started_at.map(|t| t.elapsed().as_secs()) {
                 Some(secs) if secs > 0 => format!("Stopped after {secs}s"),
                 _ => "Stopped".to_string(),
@@ -2105,6 +2158,8 @@ impl AgentChatPanel {
                 role: ChatRole::System,
                 text,
               }));
+            } else {
+              drain_queue = true;
             }
           }
           Err(e) => {
@@ -2133,6 +2188,10 @@ impl AgentChatPanel {
           }
         }
         panel.end_turn();
+        if drain_queue && !panel.queued_prompts.is_empty() {
+          let next = panel.queued_prompts.remove(0);
+          panel.dispatch_prompt(next, cx);
+        }
         panel.persist_state();
         panel.sync_list_count();
         cx.emit(AgentChatPanelEvent::TurnFinished);
@@ -3874,73 +3933,95 @@ impl Render for AgentChatPanel {
             v_flex()
               .w_full()
               .max_w(px(CONVERSATION_COLUMN_MAX_WIDTH_PX))
-              .px_2()
-              .py_1p5()
               .gap_1()
-              .rounded(theme.radius_lg)
-              .border_1()
-              .border_color(if composer_focused {
-                theme.ring
-              } else {
-                theme.border
-              })
-              .bg(theme.background)
+              .children(self.render_queued_prompts(theme, cx))
               .child(
-                div()
-                  .id("agent-mention-input")
-                  .relative()
+                v_flex()
                   .w_full()
-                  .capture_action(cx.listener(|panel, action: &input::Enter, window, cx| {
-                    panel.mention_on_enter(action, window, cx);
-                  }))
-                  // The textarea propagates a submitting Enter; unstopped, the
-                  // keystroke falls through and types "\n" into the input.
-                  .on_action(cx.listener(|_, action: &input::Enter, _, cx| {
-                    if !action.shift {
-                      cx.stop_propagation();
-                    }
-                  }))
-                  .capture_action(cx.listener(|panel, _: &input::MoveUp, _, cx| {
-                    panel.mention_on_move(-1, cx);
-                  }))
-                  .capture_action(cx.listener(|panel, _: &input::MoveDown, _, cx| {
-                    panel.mention_on_move(1, cx);
-                  }))
-                  .capture_action(cx.listener(|panel, _: &input::Escape, _, cx| {
-                    panel.mention_on_escape(cx);
-                  }))
-                  .child(Textarea::new(&self.input).appearance(false).w_full())
-                  .child(self.render_mention_overlay(cx)),
-              )
-              .child(
-                h_flex()
-                  .items_center()
-                  .justify_between()
-                  .gap_2()
+                  .px_2()
+                  .py_1p5()
+                  .gap_1()
+                  .rounded(theme.radius_lg)
+                  .border_1()
+                  .border_color(if composer_focused {
+                    theme.ring
+                  } else {
+                    theme.border
+                  })
+                  .bg(theme.background)
+                  .child(
+                    div()
+                      .id("agent-mention-input")
+                      .relative()
+                      .w_full()
+                      .capture_action(cx.listener(|panel, action: &input::Enter, window, cx| {
+                        panel.mention_on_enter(action, window, cx);
+                      }))
+                      // The textarea propagates a submitting Enter; unstopped, the
+                      // keystroke falls through and types "\n" into the input.
+                      .on_action(cx.listener(|_, action: &input::Enter, _, cx| {
+                        if !action.shift {
+                          cx.stop_propagation();
+                        }
+                      }))
+                      .capture_action(cx.listener(|panel, _: &input::MoveUp, _, cx| {
+                        panel.mention_on_move(-1, cx);
+                      }))
+                      .capture_action(cx.listener(|panel, _: &input::MoveDown, _, cx| {
+                        panel.mention_on_move(1, cx);
+                      }))
+                      .capture_action(cx.listener(|panel, _: &input::Escape, _, cx| {
+                        panel.mention_on_escape(cx);
+                      }))
+                      .child(Textarea::new(&self.input).appearance(false).w_full())
+                      .child(self.render_mention_overlay(cx)),
+                  )
                   .child(
                     h_flex()
-                      .gap_1()
-                      .flex_wrap()
-                      .child(self.render_model_selector(cx))
-                      .child(self.render_mode_selector(cx))
-                      .children(self.render_config_selector(cx)),
-                  )
-                  .child(if self.in_flight {
-                    Button::new("agent-chat-stop")
-                      .icon(UiIconName::Stop)
-                      .small()
-                      .rounded(px(999.))
-                      .danger()
-                      .on_click(cx.listener(|panel, _, _, cx| panel.cancel_turn(cx)))
-                  } else {
-                    Button::new("agent-chat-send")
-                      .icon(UiIconName::ArrowUp)
-                      .small()
-                      .rounded(px(999.))
-                      .primary()
-                      .disabled(!matches!(self.status, Status::Ready))
-                      .on_click(cx.listener(|panel, _, window, cx| panel.submit(window, cx)))
-                  }),
+                      .items_center()
+                      .justify_between()
+                      .gap_2()
+                      .child(
+                        h_flex()
+                          .gap_1()
+                          .flex_wrap()
+                          .child(self.render_model_selector(cx))
+                          .child(self.render_mode_selector(cx))
+                          .children(self.render_config_selector(cx)),
+                      )
+                      .child(if self.in_flight {
+                        h_flex()
+                          .gap_1()
+                          .child(
+                            Button::new("agent-chat-queue-send")
+                              .icon(UiIconName::ArrowUp)
+                              .small()
+                              .rounded(px(999.))
+                              .tooltip("Queue for the next turn")
+                              .on_click(
+                                cx.listener(|panel, _, window, cx| panel.submit(window, cx)),
+                              ),
+                          )
+                          .child(
+                            Button::new("agent-chat-stop")
+                              .icon(UiIconName::Stop)
+                              .small()
+                              .rounded(px(999.))
+                              .danger()
+                              .on_click(cx.listener(|panel, _, _, cx| panel.cancel_turn(cx))),
+                          )
+                          .into_any_element()
+                      } else {
+                        Button::new("agent-chat-send")
+                          .icon(UiIconName::ArrowUp)
+                          .small()
+                          .rounded(px(999.))
+                          .primary()
+                          .disabled(!matches!(self.status, Status::Ready))
+                          .on_click(cx.listener(|panel, _, window, cx| panel.submit(window, cx)))
+                          .into_any_element()
+                      }),
+                  ),
               ),
           ),
       )
@@ -3948,6 +4029,68 @@ impl Render for AgentChatPanel {
 }
 
 impl AgentChatPanel {
+  /// Cards for messages queued mid-turn, stacked above the composer.
+  fn render_queued_prompts(
+    &self,
+    theme: &gpui_component::Theme,
+    cx: &mut Context<Self>,
+  ) -> Option<gpui::AnyElement> {
+    if self.queued_prompts.is_empty() {
+      return None;
+    }
+    let mut col = v_flex()
+      .debug_selector(|| "agent-chat-queued".to_string())
+      .gap_1();
+    for (ix, text) in self.queued_prompts.iter().enumerate() {
+      col = col.child(
+        h_flex()
+          .gap_2()
+          .items_center()
+          .px_2()
+          .py_1()
+          .rounded(theme.radius)
+          .border_1()
+          .border_color(theme.border)
+          .bg(theme.background)
+          .child(
+            gpui_component::Icon::new(UiIconName::MessageCirclePlus)
+              .small()
+              .text_color(theme.muted_foreground),
+          )
+          .child(
+            div()
+              .flex_1()
+              .min_w_0()
+              .truncate()
+              .text_sm()
+              .text_color(theme.foreground)
+              .child(text.clone()),
+          )
+          .child(
+            Button::new(("agent-chat-queued-edit", ix))
+              .icon(UiIconName::SquarePen)
+              .xsmall()
+              .ghost()
+              .tooltip("Edit in composer")
+              .on_click(cx.listener(move |panel, _, window, cx| {
+                panel.pop_queued_to_composer(ix, window, cx);
+              })),
+          )
+          .child(
+            Button::new(("agent-chat-queued-delete", ix))
+              .icon(UiIconName::Trash)
+              .xsmall()
+              .ghost()
+              .tooltip("Remove")
+              .on_click(cx.listener(move |panel, _, _, cx| {
+                panel.delete_queued(ix, cx);
+              })),
+          ),
+      );
+    }
+    Some(col.into_any_element())
+  }
+
   fn render_model_selector(&self, cx: &mut Context<Self>) -> gpui::AnyElement {
     let models = self.available_models.clone();
     let current_id = self.current_model_id.clone();
@@ -5478,6 +5621,65 @@ mod tests {
         panel.items.last(),
         Some(ChatItem::Thought(t)) if t.collapsed
       ));
+    });
+  }
+
+  #[gpui::test]
+  async fn typing_enter_mid_turn_queues_the_message(cx: &mut gpui::TestAppContext) {
+    let (panel, cx) = add_panel_window(cx);
+    panel.update(cx, |panel, cx| {
+      panel.status = Status::Ready;
+      panel.in_flight = true;
+      cx.notify();
+    });
+    cx.run_until_parked();
+
+    let input_focus = panel.read_with(cx, |panel, cx| panel.input.read(cx).focus_handle(cx));
+    cx.update(|window, cx| window.focus(&input_focus, cx));
+    cx.simulate_input("do this next");
+    cx.simulate_keystrokes("enter");
+    cx.run_until_parked();
+
+    panel.read_with(cx, |panel, cx| {
+      assert_eq!(panel.queued_prompts, vec!["do this next".to_string()]);
+      assert_eq!(panel.input.read(cx).value(), "", "the composer drained");
+      assert!(
+        panel.items.is_empty(),
+        "nothing was dispatched while the turn runs"
+      );
+    });
+    assert!(
+      cx.debug_bounds("agent-chat-queued").is_some(),
+      "the queued card is painted above the composer"
+    );
+  }
+
+  #[gpui::test]
+  async fn editing_a_queued_message_swaps_it_with_the_draft(cx: &mut gpui::TestAppContext) {
+    let (panel, cx) = add_panel_window(cx);
+    panel.update_in(cx, |panel, window, cx| {
+      panel.status = Status::Ready;
+      panel.queued_prompts = vec!["first".into(), "second".into()];
+      // Empty draft: popping removes the row.
+      panel.pop_queued_to_composer(0, window, cx);
+    });
+    panel.read_with(cx, |panel, cx| {
+      assert_eq!(panel.input.read(cx).value(), "first");
+      assert_eq!(panel.queued_prompts, vec!["second".to_string()]);
+    });
+
+    panel.update_in(cx, |panel, window, cx| {
+      // Non-empty draft: popping swaps so nothing is lost.
+      panel.pop_queued_to_composer(0, window, cx);
+    });
+    panel.read_with(cx, |panel, cx| {
+      assert_eq!(panel.input.read(cx).value(), "second");
+      assert_eq!(panel.queued_prompts, vec!["first".to_string()]);
+    });
+
+    panel.update(cx, |panel, cx| panel.delete_queued(0, cx));
+    panel.read_with(cx, |panel, _| {
+      assert!(panel.queued_prompts.is_empty());
     });
   }
 
