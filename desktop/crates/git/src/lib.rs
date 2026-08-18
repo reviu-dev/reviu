@@ -8,8 +8,8 @@ mod history;
 mod interactive_rebase;
 mod status;
 mod store;
-#[cfg(test)]
-mod test_support;
+#[cfg(any(test, feature = "test-support"))]
+pub mod test_support;
 
 pub use branch::*;
 pub use checkpoint::*;

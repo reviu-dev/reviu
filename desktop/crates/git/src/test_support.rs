@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use git2::{Oid, Repository, Signature};
+use git2::{BranchType, Cred, Oid, PushOptions, RemoteCallbacks, Repository, Signature};
 
 /// Two fixtures created in the same clock tick would otherwise share a
 /// directory and fight over its `.lock` files.
@@ -14,7 +14,7 @@ fn temp_dir_name(prefix: &str, process_id: u32, nanos: u128, unique: u64) -> Str
   format!("reviu-{prefix}-{process_id}-{nanos}-{unique}")
 }
 
-pub(crate) fn temp_path(prefix: &str) -> PathBuf {
+pub fn temp_path(prefix: &str) -> PathBuf {
   let nanos = SystemTime::now()
     .duration_since(UNIX_EPOCH)
     .expect("system clock before unix epoch")
@@ -43,14 +43,17 @@ impl Drop for TempDir {
   }
 }
 
-pub(crate) struct TempRepo {
-  pub(crate) path: PathBuf,
+pub struct TempRepo {
+  pub path: PathBuf,
 }
 
 impl TempRepo {
-  pub(crate) fn init(prefix: &str) -> Self {
+  pub fn init(prefix: &str) -> Self {
     let path = temp_path(prefix);
     std::fs::create_dir_all(&path).expect("create temp dir");
+    // macOS puts temp dirs behind the /var -> /private/var symlink; hand out the
+    // canonical path so comparisons with git's resolved workdir hold.
+    let path = path.canonicalize().expect("canonicalize temp dir");
     let repo = Repository::init(&path).expect("init git repository");
     let mut config = repo.config().expect("open git config");
     config
@@ -69,12 +72,12 @@ impl Drop for TempRepo {
   }
 }
 
-pub(crate) struct TempBareRepo {
-  pub(crate) path: PathBuf,
+pub struct TempBareRepo {
+  pub path: PathBuf,
 }
 
 impl TempBareRepo {
-  pub(crate) fn init(prefix: &str) -> Self {
+  pub fn init(prefix: &str) -> Self {
     let path = temp_path(&format!("{prefix}-bare"));
     std::fs::create_dir_all(&path).expect("create temp dir");
     Repository::init_bare(&path).expect("init bare git repository");
@@ -88,12 +91,7 @@ impl Drop for TempBareRepo {
   }
 }
 
-pub(crate) fn commit_text_file(
-  repo_root: &Path,
-  rel_path: &Path,
-  contents: &str,
-  message: &str,
-) -> Oid {
+pub fn commit_text_file(repo_root: &Path, rel_path: &Path, contents: &str, message: &str) -> Oid {
   let repo = Repository::open(repo_root).expect("open repo");
   if let Some(parent) = rel_path.parent().filter(|dir| !dir.as_os_str().is_empty()) {
     std::fs::create_dir_all(repo_root.join(parent)).expect("create parent dirs");
@@ -119,6 +117,54 @@ pub(crate) fn commit_text_file(
       &parents,
     )
     .expect("commit")
+}
+
+pub fn push_branch_to_remote(repo_root: &Path, branch_name: &str, remote_name: &str) {
+  let repo = Repository::open(repo_root).expect("open repo");
+  let mut remote = repo.find_remote(remote_name).expect("find remote");
+  let refspec = format!("refs/heads/{branch_name}:refs/heads/{branch_name}");
+  let mut callbacks = RemoteCallbacks::new();
+  callbacks.credentials(|_, _, _| Cred::default());
+  let mut options = PushOptions::new();
+  options.remote_callbacks(callbacks);
+  remote
+    .push(&[refspec], Some(&mut options))
+    .expect("push branch");
+}
+
+pub fn set_upstream(repo_root: &Path, local_branch: &str, upstream_branch: &str) {
+  let repo = Repository::open(repo_root).expect("open repo");
+  let mut branch = repo
+    .find_branch(local_branch, BranchType::Local)
+    .expect("find local branch");
+  branch
+    .set_upstream(Some(upstream_branch))
+    .expect("set upstream");
+}
+
+pub fn set_remote_head(remote_root: &Path, branch_name: &str) {
+  let refname = format!("refs/heads/{branch_name}");
+  Repository::open(remote_root)
+    .expect("open remote")
+    .set_head(&refname)
+    .expect("set remote HEAD");
+}
+
+pub fn head_oid(repo_root: &Path) -> Oid {
+  Repository::open(repo_root)
+    .expect("open repo")
+    .head()
+    .and_then(|head| head.peel_to_commit())
+    .expect("read head")
+    .id()
+}
+
+pub fn remote_branch_oid(remote_root: &Path, branch_name: &str) -> Oid {
+  let refname = format!("refs/heads/{branch_name}");
+  Repository::open(remote_root)
+    .expect("open remote")
+    .refname_to_id(&refname)
+    .expect("read remote branch oid")
 }
 
 #[cfg(test)]

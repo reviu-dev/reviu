@@ -51,6 +51,7 @@ gtk = { workspace = true }
 libloading = { workspace = true }
 
 [dev-dependencies]
+git = { workspace = true, features = ["test-support"] }
 git2 = { workspace = true }
 gpui-base = { workspace = true }
 gpui = { workspace = true, features = ["test-support"] }
