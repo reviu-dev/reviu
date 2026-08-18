@@ -658,6 +658,12 @@ impl AgentChatPanel {
     matches!(self.status, Status::Ready)
   }
 
+  /// Simulate the agent process dying, as `on_agent_disconnected` would.
+  #[cfg(any(test, feature = "test-support"))]
+  pub fn mark_disconnected_for_test(&mut self, cx: &mut Context<Self>) {
+    self.on_agent_disconnected(cx);
+  }
+
   /// The first unanswered permission: its id and extracted invocation.
   #[cfg(any(test, feature = "test-support"))]
   pub fn pending_permission(&self) -> Option<(u64, Option<String>)> {
@@ -829,7 +835,7 @@ impl AgentChatPanel {
       self.status = Status::Error("Agent disconnected".into());
       self.items.push(ChatItem::Message(ChatMessage {
         role: ChatRole::System,
-        text: "Agent disconnected. Toggle the panel to reconnect.".into(),
+        text: "Agent disconnected.".into(),
       }));
       self.end_turn();
       self.session = None;
@@ -1212,12 +1218,23 @@ impl AgentChatPanel {
         let Status::Error(e) = &self.status else {
           return div().into_any_element();
         };
-        div()
+        v_flex()
           .px_3()
           .pb_3()
-          .text_sm()
-          .text_color(theme.danger)
-          .child(e.clone())
+          .gap_2()
+          .items_start()
+          .child(div().text_sm().text_color(theme.danger).child(e.clone()))
+          .child(
+            div()
+              .debug_selector(|| "agent-chat-reconnect".to_string())
+              .child(
+                Button::new("agent-chat-reconnect")
+                  .label("Reconnect")
+                  .small()
+                  .primary()
+                  .on_click(cx.listener(|panel, _, _, cx| panel.respawn_session(cx))),
+              ),
+          )
           .into_any_element()
       }
     }
@@ -1757,7 +1774,7 @@ impl AgentChatPanel {
     .detach();
   }
 
-  fn cancel(&mut self, cx: &mut Context<Self>) {
+  pub fn cancel_turn(&mut self, cx: &mut Context<Self>) {
     if let Some(session) = self.session.as_ref() {
       session.cancel();
     }
@@ -2077,8 +2094,18 @@ impl AgentChatPanel {
       let _ = this.update(cx, |panel, cx| {
         panel.flush_turn_buffers();
         match result {
-          Ok(_) => {
+          Ok(stop_reason) => {
             panel.auth_required = false;
+            if stop_reason == agent_client_protocol::schema::StopReason::Cancelled {
+              let text = match panel.turn_started_at.map(|t| t.elapsed().as_secs()) {
+                Some(secs) if secs > 0 => format!("Stopped after {secs}s"),
+                _ => "Stopped".to_string(),
+              };
+              panel.items.push(ChatItem::Message(ChatMessage {
+                role: ChatRole::System,
+                text,
+              }));
+            }
           }
           Err(e) => {
             let msg = format!("{e}");
@@ -3804,6 +3831,32 @@ impl Render for AgentChatPanel {
                     gpui::linear_color_stop(theme.sidebar, 1.),
                   )),
               )
+              // Painted after the fade so the pill sits above it.
+              .when(!self.messages_list.is_following_tail(), |this| {
+                this.child(
+                  div()
+                    .debug_selector(|| "agent-chat-jump-bottom".to_string())
+                    .absolute()
+                    .bottom(px(12.))
+                    .left_0()
+                    .right_0()
+                    .flex()
+                    .justify_center()
+                    .child(
+                      Button::new("agent-chat-jump-bottom")
+                        .icon(IconName::ChevronDown)
+                        .small()
+                        .rounded(px(999.))
+                        .border_1()
+                        .border_color(theme.border)
+                        .bg(theme.background)
+                        .on_click(cx.listener(|panel, _, _, cx| {
+                          panel.messages_list.scroll_to_end();
+                          cx.notify();
+                        })),
+                    ),
+                )
+              })
               .vertical_scrollbar(&self.messages_list),
           )
         }
@@ -3878,7 +3931,7 @@ impl Render for AgentChatPanel {
                       .small()
                       .rounded(px(999.))
                       .danger()
-                      .on_click(cx.listener(|panel, _, _, cx| panel.cancel(cx)))
+                      .on_click(cx.listener(|panel, _, _, cx| panel.cancel_turn(cx)))
                   } else {
                     Button::new("agent-chat-send")
                       .icon(UiIconName::ArrowUp)
@@ -5426,6 +5479,59 @@ mod tests {
         Some(ChatItem::Thought(t)) if t.collapsed
       ));
     });
+  }
+
+  #[gpui::test]
+  async fn scrolling_away_shows_the_jump_to_bottom_pill(cx: &mut gpui::TestAppContext) {
+    let (panel, cx) = add_panel_window(cx);
+    panel.update(cx, |panel, cx| {
+      panel.status = Status::Ready;
+      panel.items = (0..30)
+        .map(|i| agent_message(&format!("message {i}")))
+        .collect();
+      panel.sync_list_count();
+      cx.notify();
+    });
+    cx.run_until_parked();
+    assert!(
+      cx.debug_bounds("agent-chat-jump-bottom").is_none(),
+      "following the tail shows no pill"
+    );
+
+    panel.update(cx, |panel, cx| {
+      panel.messages_list.pause_following_tail();
+      cx.notify();
+    });
+    cx.run_until_parked();
+    let pill = cx
+      .debug_bounds("agent-chat-jump-bottom")
+      .expect("pill painted once the reader leaves the tail");
+
+    cx.simulate_click(pill.center(), gpui::Modifiers::default());
+    cx.run_until_parked();
+    assert!(
+      cx.debug_bounds("agent-chat-jump-bottom").is_none(),
+      "clicking returns to the tail and hides the pill"
+    );
+    panel.read_with(cx, |panel, _| {
+      assert!(panel.messages_list.is_following_tail());
+    });
+  }
+
+  #[gpui::test]
+  async fn a_disconnected_panel_offers_reconnect(cx: &mut gpui::TestAppContext) {
+    let (panel, cx) = add_panel_window(cx);
+    panel.update(cx, |panel, cx| {
+      panel.status = Status::Error("Agent disconnected".into());
+      panel.sync_list_count();
+      cx.notify();
+    });
+    cx.run_until_parked();
+
+    assert!(
+      cx.debug_bounds("agent-chat-reconnect").is_some(),
+      "the error state carries a reconnect button"
+    );
   }
 
   #[gpui::test]

@@ -96,6 +96,83 @@ async fn a_permission_request_carries_its_command_and_resumes_on_answer(cx: &mut
 }
 
 #[gpui::test]
+async fn cancelling_a_turn_leaves_a_stopped_marker(cx: &mut TestAppContext) {
+  cx.executor().allow_parking();
+  set_backend_command_override(Some(env!("CARGO_BIN_EXE_stub_agent").to_string()));
+
+  cx.update(gpui_component::init);
+  let cwd = std::env::temp_dir();
+  let mut mounted = None;
+  let (_root, cx) = cx.add_window_view(|window, cx| {
+    let panel =
+      cx.new(|cx| AgentChatPanel::new(BackendKind::Claude, cwd.clone(), None, window, cx));
+    mounted = Some(panel.clone());
+    gpui_component::Root::new(panel, window, cx)
+  });
+  let panel = mounted.expect("agent chat panel");
+
+  cx.condition(&panel, |panel, _| panel.backend_ready()).await;
+
+  panel.update(cx, |panel, cx| {
+    // The stub parks a turn whose prompt mentions "wait" until session/cancel.
+    assert!(panel.send_external_prompt("wait for me".to_string(), cx));
+  });
+  cx.condition(&panel, |panel, _| panel.is_turn_in_flight())
+    .await;
+
+  panel.update(cx, |panel, cx| panel.cancel_turn(cx));
+  cx.condition(&panel, |panel, _| !panel.is_turn_in_flight())
+    .await;
+
+  panel.read_with(cx, |panel, _| {
+    let transcript = panel.transcript_texts();
+    assert!(
+      transcript.last().is_some_and(|t| t.starts_with("Stopped")),
+      "the cancelled turn leaves a marker, got {transcript:?}"
+    );
+    assert!(
+      !transcript.iter().any(|t| t == "ack"),
+      "a cancelled turn never acked"
+    );
+  });
+
+  set_backend_command_override(None);
+}
+
+#[gpui::test]
+async fn reconnect_respawns_the_agent_session(cx: &mut TestAppContext) {
+  cx.executor().allow_parking();
+  set_backend_command_override(Some(env!("CARGO_BIN_EXE_stub_agent").to_string()));
+
+  cx.update(gpui_component::init);
+  let cwd = std::env::temp_dir();
+  let mut mounted = None;
+  let (_root, cx) = cx.add_window_view(|window, cx| {
+    let panel =
+      cx.new(|cx| AgentChatPanel::new(BackendKind::Claude, cwd.clone(), None, window, cx));
+    mounted = Some(panel.clone());
+    gpui_component::Root::new(panel, window, cx)
+  });
+  let panel = mounted.expect("agent chat panel");
+
+  cx.condition(&panel, |panel, _| panel.backend_ready()).await;
+
+  panel.update(cx, |panel, cx| {
+    panel.mark_disconnected_for_test(cx);
+  });
+  cx.run_until_parked();
+
+  let button = cx
+    .debug_bounds("agent-chat-reconnect")
+    .expect("reconnect button painted");
+  cx.simulate_click(button.center(), gpui::Modifiers::default());
+
+  cx.condition(&panel, |panel, _| panel.backend_ready()).await;
+
+  set_backend_command_override(None);
+}
+
+#[gpui::test]
 async fn enter_sends_the_composer_and_shift_enter_types_a_newline(cx: &mut TestAppContext) {
   cx.executor().allow_parking();
   set_backend_command_override(Some(env!("CARGO_BIN_EXE_stub_agent").to_string()));

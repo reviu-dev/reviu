@@ -1,12 +1,15 @@
 //! Minimal ACP agent for tests and the driver: acks every prompt.
 
+use std::sync::{Arc, Mutex};
+
 use agent_client_protocol::schema::{
-  AgentCapabilities, ContentBlock, Implementation, InitializeRequest, InitializeResponse,
-  NewSessionRequest, NewSessionResponse, PermissionOption, PermissionOptionKind, PromptRequest,
-  PromptResponse, RequestPermissionRequest, SessionId, SessionNotification, SessionUpdate,
-  StopReason, TextContent, ToolCallId, ToolCallUpdate, ToolCallUpdateFields, ToolKind,
+  AgentCapabilities, CancelNotification, ContentBlock, Implementation, InitializeRequest,
+  InitializeResponse, NewSessionRequest, NewSessionResponse, PermissionOption,
+  PermissionOptionKind, PromptRequest, PromptResponse, RequestPermissionRequest, SessionId,
+  SessionNotification, SessionUpdate, StopReason, TextContent, ToolCallId, ToolCallUpdate,
+  ToolCallUpdateFields, ToolKind,
 };
-use agent_client_protocol::{Agent, Client, ConnectionTo, Dispatch};
+use agent_client_protocol::{Agent, Client, ConnectionTo, Dispatch, Responder};
 use smol::Unblock;
 
 /// A thought chunk then the "ack" reply, closing the turn's notifications.
@@ -31,9 +34,29 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
     let stdin = Unblock::new(std::io::stdin());
     let stdout = Unblock::new(std::io::stdout());
 
+    // A prompt mentioning "wait" parks its responder here until session/cancel.
+    // The bool remembers a cancel that raced ahead of the prompt itself.
+    type WaitSlot = (Option<Responder<PromptResponse>>, bool);
+    let waiting: Arc<Mutex<WaitSlot>> = Arc::new(Mutex::new((None, false)));
+    let waiting_for_cancel = waiting.clone();
+
     Agent
       .builder()
       .name("stub-agent")
+      .on_receive_notification(
+        async move |_notif: CancelNotification, _: ConnectionTo<Client>| {
+          let parked = {
+            let mut slot = waiting_for_cancel.lock().expect("waiting slot");
+            slot.1 = true;
+            slot.0.take()
+          };
+          if let Some(responder) = parked {
+            let _ = responder.respond(PromptResponse::new(StopReason::Cancelled));
+          }
+          Ok(())
+        },
+        agent_client_protocol::on_receive_notification!(),
+      )
       .on_receive_request(
         async move |req: InitializeRequest, responder, _: ConnectionTo<Client>| {
           responder.respond(
@@ -55,14 +78,26 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
       .on_receive_request(
         async move |req: PromptRequest, responder, cx: ConnectionTo<Client>| {
           let session_id = req.session_id.clone();
+          let prompt_contains = |needle: &str| {
+            req
+              .prompt
+              .iter()
+              .any(|block| matches!(block, ContentBlock::Text(t) if t.text.contains(needle)))
+          };
+          // "wait" parks the turn until the client cancels it.
+          if prompt_contains("wait") {
+            let mut slot = waiting.lock().expect("waiting slot");
+            if slot.1 {
+              return responder.respond(PromptResponse::new(StopReason::Cancelled));
+            }
+            slot.0 = Some(responder);
+            return Ok(());
+          }
           // A prompt mentioning "permission" first round-trips a permission
           // request carrying a real command, so clients can exercise the flow.
           // Awaiting the outcome inline would park the connection's task queue
           // and deadlock; the turn finishes in the response callback instead.
-          let wants_permission = req
-            .prompt
-            .iter()
-            .any(|block| matches!(block, ContentBlock::Text(t) if t.text.contains("permission")));
+          let wants_permission = prompt_contains("permission");
           if wants_permission {
             let fields = ToolCallUpdateFields::new()
               .kind(ToolKind::Execute)

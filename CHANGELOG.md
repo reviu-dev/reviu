@@ -4,6 +4,10 @@ All notable changes to Reviu are documented here.
 
 ## 1.0.0
 
+### Back To The Latest Message In One Click
+
+Scrolling up through a conversation while the agent keeps writing no longer strands you: a small pill appears at the bottom of the transcript and one click glides back to the latest message. Stopping a turn now leaves a "Stopped" marker in the conversation instead of ending silently, and everything the agent had already streamed stays visible. And when the agent process dies, the error offers a Reconnect button right there.
+
 ### See What You Are Approving
 
 Permission requests now show the thing being approved, not just a title: the full command for a shell run, the URL for a fetch, per-file added and removed counts for an edit, and the file being touched. Long commands scroll in place and can be selected and copied. The buttons were already reachable with the keyboard; now you know what you are pressing them for.
