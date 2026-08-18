@@ -379,20 +379,7 @@ impl AgentChatPanel {
     cx: &mut Context<Self>,
   ) -> Self {
     let backend = resolve_backend_config(backend_kind);
-    let input = cx.new(|cx| {
-      TextareaState::new(window, cx)
-        .auto_grow(1, 8)
-        .placeholder("Message... (@ to add files or diffs)")
-    });
-    let input_sub = cx.subscribe_in(
-      &input,
-      window,
-      |this, _state, event: &InputEvent, window, cx| {
-        if let InputEvent::PressEnter { .. } = event {
-          this.submit(window, cx);
-        }
-      },
-    );
+    let (input, input_sub) = Self::build_composer_input(window, cx);
 
     let (current_conv, loaded_items, loaded_index) = state_dir
       .as_deref()
@@ -527,10 +514,47 @@ impl AgentChatPanel {
     panel
   }
 
+  /// Enter submits, Shift+Enter inserts a newline, Cmd/Ctrl+Enter submits.
+  fn build_composer_input(
+    window: &mut Window,
+    cx: &mut Context<Self>,
+  ) -> (Entity<TextareaState>, gpui::Subscription) {
+    let input = cx.new(|cx| {
+      TextareaState::new(window, cx)
+        .auto_grow(1, 8)
+        .submit_on_enter(true)
+        .placeholder("Message... (@ to add files or diffs)")
+    });
+    let input_sub = cx.subscribe_in(
+      &input,
+      window,
+      |this, _state, event: &InputEvent, window, cx| {
+        if let InputEvent::PressEnter { shift, .. } = event
+          && !shift
+        {
+          this.submit(window, cx);
+        }
+      },
+    );
+    (input, input_sub)
+  }
+
   /// Whether the agent process is connected and ready for prompts.
   #[cfg(any(test, feature = "test-support"))]
   pub fn backend_ready(&self) -> bool {
     matches!(self.status, Status::Ready)
+  }
+
+  /// Focus handle of the composer input.
+  #[cfg(any(test, feature = "test-support"))]
+  pub fn composer_focus_handle(&self, cx: &App) -> FocusHandle {
+    self.input.read(cx).focus_handle(cx)
+  }
+
+  /// Current composer text.
+  #[cfg(any(test, feature = "test-support"))]
+  pub fn composer_text(&self, cx: &App) -> String {
+    self.input.read(cx).value().to_string()
   }
 
   /// The plain message texts of the conversation, oldest first.
@@ -550,20 +574,7 @@ impl AgentChatPanel {
   #[cfg(test)]
   fn new_disconnected(cwd: PathBuf, window: &mut Window, cx: &mut Context<Self>) -> Self {
     let backend_kind = BackendKind::Claude;
-    let input = cx.new(|cx| {
-      TextareaState::new(window, cx)
-        .auto_grow(1, 8)
-        .placeholder("Message... (@ to add files or diffs)")
-    });
-    let input_sub = cx.subscribe_in(
-      &input,
-      window,
-      |this, _state, event: &InputEvent, window, cx| {
-        if let InputEvent::PressEnter { .. } = event {
-          this.submit(window, cx);
-        }
-      },
-    );
+    let (input, input_sub) = Self::build_composer_input(window, cx);
 
     let mut panel = Self {
       backend_kind,
@@ -1666,22 +1677,15 @@ impl AgentChatPanel {
   }
 
   fn submit(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-    let text = self.input.read(cx).value().to_string();
-    let text = text.trim().to_string();
+    let text = self.input.read(cx).value().trim().to_string();
     if text.is_empty() {
       return;
     }
     // Drain the composer only once the prompt is actually dispatched: while the
     // agent is still connecting or errored, the user keeps what they typed.
-    let dispatched = self.dispatch_prompt(text.clone(), cx);
-    self.input.update(cx, |state, cx| {
-      if dispatched {
-        state.set_value("", window, cx);
-      } else {
-        // Drop the newline the refused Enter just typed into the textarea.
-        state.set_value(&text, window, cx);
-      }
-    });
+    if self.dispatch_prompt(text, cx) {
+      self.input.update(cx, |state, cx| state.set_value("", window, cx));
+    }
   }
 
   /// Send a prompt programmatically; false if not ready or already in flight.
@@ -3516,6 +3520,13 @@ impl Render for AgentChatPanel {
                   .capture_action(cx.listener(|panel, action: &input::Enter, window, cx| {
                     panel.mention_on_enter(action, window, cx);
                   }))
+                  // The textarea propagates a submitting Enter; unstopped, the
+                  // keystroke falls through and types "\n" into the input.
+                  .on_action(cx.listener(|_, action: &input::Enter, _, cx| {
+                    if !action.shift {
+                      cx.stop_propagation();
+                    }
+                  }))
                   .capture_action(cx.listener(|panel, _: &input::MoveUp, _, cx| {
                     panel.mention_on_move(-1, cx);
                   }))
@@ -4745,6 +4756,25 @@ mod tests {
     panel.read_with(cx, |panel, cx| {
       // Nothing was dispatched, and the composer keeps the user's text.
       assert_eq!(panel.input.read(cx).value(), "do the thing");
+      assert!(panel.items.is_empty(), "no prompt was recorded");
+      assert!(!panel.in_flight);
+    });
+  }
+
+  #[gpui::test]
+  async fn shift_enter_inserts_a_newline_without_submitting(cx: &mut gpui::TestAppContext) {
+    let (panel, cx) = add_panel_window(cx);
+    cx.run_until_parked();
+
+    let input_focus = panel.read_with(cx, |panel, cx| panel.input.read(cx).focus_handle(cx));
+    cx.update(|window, cx| window.focus(&input_focus, cx));
+    cx.simulate_input("line one");
+    cx.simulate_keystrokes("shift-enter");
+    cx.simulate_input("line two");
+    cx.run_until_parked();
+
+    panel.read_with(cx, |panel, cx| {
+      assert_eq!(panel.input.read(cx).value(), "line one\nline two");
       assert!(panel.items.is_empty(), "no prompt was recorded");
       assert!(!panel.in_flight);
     });

@@ -4,6 +4,10 @@ All notable changes to Reviu are documented here.
 
 ## 1.0.0
 
+### Enter Sends, Shift+Enter Starts A New Line
+
+In the agent composer, Enter now sends the message and Shift+Enter inserts a line break. Before, every Enter variant sent at once and there was no way to write a multi-line prompt from the keyboard.
+
 ### Settings You Can Read And Edit
 
 Reviu now keeps its settings in a plain `settings.json` file in its configuration folder, next to its other data. Existing settings move over automatically on first launch. The file is yours: read it, edit it by hand, keep it in your dotfiles. A hand-edited file never breaks the app - an unknown or invalid value simply falls back to its default, and Reviu tells you at startup if the file could not be read at all.
