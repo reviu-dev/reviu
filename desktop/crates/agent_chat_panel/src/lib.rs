@@ -330,6 +330,9 @@ enum PersistedChatItem {
 struct PersistedConversation {
   meta: ConversationMeta,
   items: Vec<PersistedChatItem>,
+  /// Tool-group expand/collapse pins, keyed by the group's first tool id.
+  #[serde(default)]
+  group_pins: HashMap<String, bool>,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -472,6 +475,8 @@ pub struct AgentChatPanel {
   pending_thought: String,
   /// Messages typed during a turn, drained oldest-first when it ends cleanly.
   queued_prompts: Vec<String>,
+  /// Expand/collapse pins per tool group, keyed by the group's first tool id.
+  tool_group_pins: HashMap<ToolCallId, bool>,
   /// Slash commands advertised by the agent, latest update wins.
   available_commands: Vec<agent_client_protocol::schema::AvailableCommand>,
   /// Item index of the user message being edited, with its inline editor.
@@ -524,10 +529,17 @@ impl AgentChatPanel {
     let backend = resolve_backend_config(backend_kind);
     let (input, input_sub) = Self::build_composer_input(window, cx);
 
-    let (current_conv, loaded_items, loaded_index) = state_dir
+    let (current_conv, loaded_items, loaded_index, loaded_pins) = state_dir
       .as_deref()
       .and_then(load_active_conversation)
-      .unwrap_or_else(|| (new_conversation_meta(), Vec::new(), HashMap::new()));
+      .unwrap_or_else(|| {
+        (
+          new_conversation_meta(),
+          Vec::new(),
+          HashMap::new(),
+          HashMap::new(),
+        )
+      });
 
     let selection_registry = selectable_text::SelectionRegistry::new();
     let markdown_extensions = code_block::extensions(selection_registry.clone());
@@ -546,6 +558,7 @@ impl AgentChatPanel {
       pending_agent: String::new(),
       pending_thought: String::new(),
       queued_prompts: Vec::new(),
+      tool_group_pins: loaded_pins,
       available_commands: Vec::new(),
       editing_message: None,
       edit_input: None,
@@ -803,6 +816,7 @@ impl AgentChatPanel {
       pending_agent: String::new(),
       pending_thought: String::new(),
       queued_prompts: Vec::new(),
+      tool_group_pins: HashMap::new(),
       available_commands: Vec::new(),
       editing_message: None,
       edit_input: None,
@@ -1529,12 +1543,80 @@ impl AgentChatPanel {
           ToolCallStatus::InProgress => theme.warning,
           _ => theme.muted_foreground,
         };
-        timeline_row_with_color(
-          render_tool_call(t, theme, item_id_base, &registry, cx),
-          theme,
-          bullet,
-          is_last_row,
-        )
+        let (start, end) = tool_run_bounds(&self.items, idx);
+        if end - start + 1 < 2 {
+          timeline_row_with_color(
+            render_tool_call(t, theme, item_id_base, &registry, cx),
+            theme,
+            bullet,
+            is_last_row,
+          )
+        } else {
+          let expanded = self.tool_group_expanded(start, end);
+          if idx == start {
+            let tools: Vec<&ToolCallView> = self.items[start..=end]
+              .iter()
+              .filter_map(|item| match item {
+                ChatItem::Tool(t) => Some(t),
+                _ => None,
+              })
+              .collect();
+            let group_bullet = if tools
+              .iter()
+              .any(|t| matches!(t.status, ToolCallStatus::InProgress))
+            {
+              theme.warning
+            } else {
+              theme.muted_foreground
+            };
+            let summary = tool_group_summary(&tools);
+            let chevron = if expanded {
+              IconName::ChevronDown
+            } else {
+              IconName::ChevronRight
+            };
+            let header = h_flex()
+              .id(("agent-tool-group", start))
+              .debug_selector(|| "agent-tool-group".to_string())
+              .gap_1p5()
+              .items_center()
+              .cursor_pointer()
+              .rounded(theme.radius)
+              .hover(|s| s.bg(theme.secondary_hover))
+              .on_click(cx.listener(move |panel, _, _, cx| panel.toggle_tool_group(start, cx)))
+              .child(
+                gpui_component::Icon::new(chevron)
+                  .size_3()
+                  .text_color(theme.muted_foreground),
+              )
+              .child(
+                div()
+                  .text_xs()
+                  .text_color(theme.muted_foreground)
+                  .child(SharedString::from(summary)),
+              );
+            let content = if expanded {
+              v_flex()
+                .gap_1()
+                .child(header)
+                .child(render_tool_call(t, theme, item_id_base, &registry, cx))
+                .into_any_element()
+            } else {
+              header.into_any_element()
+            };
+            let group_is_last = end + 1 == total && !has_continuation_trailer;
+            timeline_row_with_color(content, theme, group_bullet, !expanded && group_is_last)
+          } else if expanded {
+            timeline_row_with_color(
+              render_tool_call(t, theme, item_id_base, &registry, cx),
+              theme,
+              bullet,
+              is_last_row,
+            )
+          } else {
+            return Empty.into_any_element();
+          }
+        }
       }
       ChatItem::Permission(p) => timeline_row(
         render_permission(p, theme, &registry, cx),
@@ -2321,6 +2403,32 @@ impl AgentChatPanel {
     }
   }
 
+  /// A pinned group keeps the user's choice; otherwise it is open only while
+  /// the turn streams into it (trailing), and folds once the turn settles.
+  fn tool_group_expanded(&self, start: usize, end: usize) -> bool {
+    if let Some(ChatItem::Tool(first)) = self.items.get(start)
+      && let Some(&pinned) = self.tool_group_pins.get(&first.id)
+    {
+      return pinned;
+    }
+    self.in_flight && end + 1 == self.items.len()
+  }
+
+  fn toggle_tool_group(&mut self, idx: usize, cx: &mut Context<Self>) {
+    let (start, end) = tool_run_bounds(&self.items, idx);
+    let expanded = self.tool_group_expanded(start, end);
+    let Some(ChatItem::Tool(first)) = self.items.get(start) else {
+      return;
+    };
+    self.tool_group_pins.insert(first.id.clone(), !expanded);
+    for item_ix in start..=end {
+      let list_ix = self.list_ix_for_item(item_ix);
+      self.mark_item_changed_at(list_ix);
+    }
+    self.persist_state();
+    cx.notify();
+  }
+
   pub fn begin_message_edit(&mut self, idx: usize, window: &mut Window, cx: &mut Context<Self>) {
     if self.in_flight {
       return;
@@ -2587,6 +2695,11 @@ impl AgentChatPanel {
           }
         }
         panel.end_turn();
+        // Unpinned groups fold when the turn settles; their rows must remeasure.
+        let count = panel.messages_list.item_count();
+        if count > 0 {
+          panel.messages_list.remeasure_items(0..count);
+        }
         if drain_queue && !panel.queued_prompts.is_empty() {
           let next = panel.queued_prompts.remove(0);
           panel.dispatch_prompt(next, cx);
@@ -2666,12 +2779,13 @@ impl AgentChatPanel {
     };
     self.persist_state();
     let path = dir.join(format!("{id}.json"));
-    let Some((meta, items, index)) = load_conversation_file(&path) else {
+    let Some((meta, items, index, pins)) = load_conversation_file(&path) else {
       return;
     };
     self.current_conv = meta;
     self.items = items;
     self.tool_index = index;
+    self.tool_group_pins = pins;
     self.pending_agent.clear();
     self.pending_thought.clear();
     let _ = std::fs::write(dir.join("active.txt"), &self.current_conv.id);
@@ -2824,6 +2938,11 @@ impl AgentChatPanel {
     let conv = PersistedConversation {
       meta: self.current_conv.clone(),
       items: persisted,
+      group_pins: self
+        .tool_group_pins
+        .iter()
+        .map(|(id, expanded)| (id.0.to_string(), *expanded))
+        .collect(),
     };
     let conv_path = dir.join(format!("{}.json", self.current_conv.id));
     if let Ok(json) = serde_json::to_string(&conv) {
@@ -2950,9 +3069,14 @@ fn load_model_choice(kind: BackendKind) -> Option<String> {
   model_choice_from_settings(&read_agent_settings_json(), kind.storage_key())
 }
 
-fn load_active_conversation(
-  dir: &std::path::Path,
-) -> Option<(ConversationMeta, Vec<ChatItem>, HashMap<ToolCallId, usize>)> {
+type LoadedConversation = (
+  ConversationMeta,
+  Vec<ChatItem>,
+  HashMap<ToolCallId, usize>,
+  HashMap<ToolCallId, bool>,
+);
+
+fn load_active_conversation(dir: &std::path::Path) -> Option<LoadedConversation> {
   let active_path = dir.join("active.txt");
   let active_id = std::fs::read_to_string(&active_path).ok()?;
   let active_id = active_id.trim().to_string();
@@ -2963,9 +3087,7 @@ fn load_active_conversation(
   load_conversation_file(&conv_path)
 }
 
-fn load_conversation_file(
-  path: &std::path::Path,
-) -> Option<(ConversationMeta, Vec<ChatItem>, HashMap<ToolCallId, usize>)> {
+fn load_conversation_file(path: &std::path::Path) -> Option<LoadedConversation> {
   let raw = std::fs::read_to_string(path).ok()?;
   let parsed: PersistedConversation = serde_json::from_str(&raw).ok()?;
   let mut items = Vec::with_capacity(parsed.items.len());
@@ -2990,7 +3112,12 @@ fn load_conversation_file(
       }
     }
   }
-  Some((parsed.meta, items, index))
+  let pins = parsed
+    .group_pins
+    .into_iter()
+    .map(|(id, expanded)| (ToolCallId::new(std::sync::Arc::from(id.as_str())), expanded))
+    .collect();
+  Some((parsed.meta, items, index, pins))
 }
 
 fn list_conversations_in(dir: &std::path::Path) -> Vec<ConversationMeta> {
@@ -3148,6 +3275,59 @@ fn deduped_model_entries(
 
 /// Insert the marker before the prompt it snapshots; a marker already sitting
 /// there (e.g. right after a rollback) is replaced instead of stacked.
+/// Bounds of the consecutive tool-call run containing `idx`.
+fn tool_run_bounds(items: &[ChatItem], idx: usize) -> (usize, usize) {
+  let mut start = idx;
+  while start > 0 && matches!(items[start - 1], ChatItem::Tool(_)) {
+    start -= 1;
+  }
+  let mut end = idx;
+  while end + 1 < items.len() && matches!(items[end + 1], ChatItem::Tool(_)) {
+    end += 1;
+  }
+  (start, end)
+}
+
+/// "Ran 2 commands · Edited 1 file · 1 failed" for a run of tool calls.
+/// Failures stay a tail count, never a red header: one failed step does not
+/// taint the whole group.
+fn tool_group_summary(tools: &[&ToolCallView]) -> String {
+  let mut order: Vec<&'static str> = Vec::new();
+  let mut counts: HashMap<&'static str, usize> = HashMap::new();
+  let mut failed = 0usize;
+  for tool in tools {
+    let label = tool_kind_label(&tool.kind);
+    if !counts.contains_key(label) {
+      order.push(label);
+    }
+    *counts.entry(label).or_insert(0) += 1;
+    if matches!(tool.status, ToolCallStatus::Failed) {
+      failed += 1;
+    }
+  }
+  let mut parts: Vec<String> = order
+    .into_iter()
+    .map(|label| {
+      let n = counts[label];
+      let s = if n > 1 { "s" } else { "" };
+      match label {
+        "Run" => format!("Ran {n} command{s}"),
+        "Edit" => format!("Edited {n} file{s}"),
+        "Read" => format!("Read {n} file{s}"),
+        "Search" => format!("Ran {n} search{s}"),
+        "Delete" => format!("Deleted {n} file{s}"),
+        "Move" => format!("Moved {n} file{s}"),
+        "Fetch" => format!("Fetched {n} page{s}"),
+        _ => format!("{n} tool call{s}"),
+      }
+    })
+    .collect();
+  if failed > 0 {
+    parts.push(format!("{failed} failed"));
+  }
+  parts.join(" · ")
+}
+
 /// The checkpoint guarding the prompt at `idx`: the nearest marker above it
 /// with no other user prompt in between.
 fn checkpoint_ref_before(items: &[ChatItem], idx: usize) -> Option<String> {
@@ -3659,6 +3839,7 @@ fn render_tool_call(
   });
 
   v_flex()
+    .debug_selector(|| "agent-tool-card".to_string())
     .gap_1()
     .child(
       h_flex()
@@ -5400,6 +5581,7 @@ mod tests {
           role: ChatRole::User,
           text: "hi".into(),
         })],
+        group_pins: HashMap::new(),
       };
       std::fs::write(
         dir.join(format!("{id}.json")),
@@ -6362,7 +6544,7 @@ mod tests {
     });
 
     let conv_id = panel.read_with(cx, |panel, _| panel.current_conv.id.clone());
-    let (_, items, _) =
+    let (_, items, _, _) =
       load_conversation_file(&dir.join(format!("{conv_id}.json"))).expect("reloads");
     let ChatItem::Permission(p) = &items[1] else {
       panic!("permission persisted, got {:?}", item_kinds(&items));
@@ -6386,7 +6568,7 @@ mod tests {
       panel.persist_state();
       cx.notify();
     });
-    let (_, items, _) =
+    let (_, items, _, _) =
       load_conversation_file(&dir.join(format!("{conv_id}.json"))).expect("reloads");
     let ChatItem::Permission(p) = &items[1] else {
       unreachable!()
@@ -6559,6 +6741,143 @@ mod tests {
         "a mismatched truncate disarms the edit instead of leaving it live"
       );
     });
+  }
+
+  #[test]
+  fn tool_run_bounds_finds_consecutive_runs() {
+    let items = vec![
+      user_message("go"),
+      ChatItem::Tool(tool_view("a", ToolKind::Read, ToolCallStatus::Completed)),
+      ChatItem::Tool(tool_view("b", ToolKind::Execute, ToolCallStatus::Completed)),
+      ChatItem::Tool(tool_view("c", ToolKind::Edit, ToolCallStatus::Failed)),
+      agent_message("done"),
+      ChatItem::Tool(tool_view("d", ToolKind::Read, ToolCallStatus::Completed)),
+    ];
+    assert_eq!(tool_run_bounds(&items, 1), (1, 3));
+    assert_eq!(tool_run_bounds(&items, 2), (1, 3));
+    assert_eq!(tool_run_bounds(&items, 3), (1, 3));
+    assert_eq!(tool_run_bounds(&items, 5), (5, 5));
+  }
+
+  #[test]
+  fn tool_group_summary_counts_by_kind_and_failures() {
+    let a = tool_view("a", ToolKind::Execute, ToolCallStatus::Completed);
+    let b = tool_view("b", ToolKind::Execute, ToolCallStatus::Failed);
+    let c = tool_view("c", ToolKind::Edit, ToolCallStatus::Completed);
+    let d = tool_view("d", ToolKind::Read, ToolCallStatus::Completed);
+    assert_eq!(
+      tool_group_summary(&[&a, &b, &c, &d]),
+      "Ran 2 commands · Edited 1 file · Read 1 file · 1 failed"
+    );
+    assert_eq!(tool_group_summary(&[&c]), "Edited 1 file");
+  }
+
+  fn tool_view(id: &str, kind: ToolKind, status: ToolCallStatus) -> ToolCallView {
+    let mut items: Vec<ChatItem> = Vec::new();
+    let mut index = HashMap::new();
+    upsert_tool_call_pure(&mut items, &mut index, call(id, id, kind), test_cwd());
+    let Some(ChatItem::Tool(mut view)) = items.pop() else {
+      unreachable!()
+    };
+    view.status = status;
+    view
+  }
+
+  #[gpui::test]
+  async fn tool_runs_fold_once_the_turn_settles_and_pin_on_click(cx: &mut gpui::TestAppContext) {
+    let (panel, cx) = add_panel_window(cx);
+    panel.update(cx, |panel, cx| {
+      panel.status = Status::Ready;
+      panel.in_flight = true;
+      panel.items = vec![user_message("go")];
+      panel.on_event(AgentEvent::ToolCall(call("t1", "Read a", ToolKind::Read)));
+      panel.on_event(AgentEvent::ToolCall(call("t2", "Run b", ToolKind::Execute)));
+      panel.sync_list_count();
+      cx.notify();
+    });
+    cx.run_until_parked();
+
+    assert!(
+      cx.debug_bounds("agent-tool-group").is_some(),
+      "a run of two tools grows a group header"
+    );
+    assert!(
+      cx.debug_bounds("agent-tool-card").is_some(),
+      "the trailing run streams expanded"
+    );
+
+    panel.update(cx, |panel, cx| {
+      panel.end_turn();
+      let count = panel.messages_list.item_count();
+      panel.messages_list.remeasure_items(0..count);
+      panel.sync_list_count();
+      cx.notify();
+    });
+    cx.run_until_parked();
+    assert!(
+      cx.debug_bounds("agent-tool-card").is_none(),
+      "the settled turn folds the group"
+    );
+
+    let header = cx.debug_bounds("agent-tool-group").expect("header painted");
+    cx.simulate_click(header.center(), gpui::Modifiers::default());
+    cx.run_until_parked();
+    assert!(
+      cx.debug_bounds("agent-tool-card").is_some(),
+      "clicking pins the group open"
+    );
+
+    let header = cx.debug_bounds("agent-tool-group").expect("header painted");
+    cx.simulate_click(header.center(), gpui::Modifiers::default());
+    cx.run_until_parked();
+    assert!(
+      cx.debug_bounds("agent-tool-card").is_none(),
+      "clicking again pins it closed"
+    );
+  }
+
+  #[gpui::test]
+  async fn a_single_tool_call_keeps_its_plain_row(cx: &mut gpui::TestAppContext) {
+    let (panel, cx) = add_panel_window(cx);
+    panel.update(cx, |panel, cx| {
+      panel.status = Status::Ready;
+      panel.items = vec![
+        user_message("go"),
+        ChatItem::Tool(tool_view("solo", ToolKind::Read, ToolCallStatus::Completed)),
+      ];
+      panel.sync_list_count();
+      cx.notify();
+    });
+    cx.run_until_parked();
+
+    assert!(cx.debug_bounds("agent-tool-group").is_none());
+    assert!(cx.debug_bounds("agent-tool-card").is_some());
+  }
+
+  #[gpui::test]
+  async fn group_pins_survive_a_reload(cx: &mut gpui::TestAppContext) {
+    let dir = temp_dir("agent-group-pins");
+    let (panel, cx) = add_panel_window(cx);
+    panel.update(cx, |panel, cx| {
+      panel.status = Status::Ready;
+      panel.state_dir = Some(dir.clone());
+      panel.items = vec![
+        user_message("go"),
+        ChatItem::Tool(tool_view("t1", ToolKind::Read, ToolCallStatus::Completed)),
+        ChatItem::Tool(tool_view("t2", ToolKind::Read, ToolCallStatus::Completed)),
+      ];
+      panel.sync_list_count();
+      panel.toggle_tool_group(1, cx);
+    });
+    let conv_id = panel.read_with(cx, |panel, _| panel.current_conv.id.clone());
+    let (_, _, _, pins) =
+      load_conversation_file(&dir.join(format!("{conv_id}.json"))).expect("reloads");
+    assert_eq!(pins.len(), 1);
+    assert!(
+      pins.values().all(|&expanded| expanded),
+      "the settled group was folded, so the click pinned it open"
+    );
+    std::fs::remove_dir_all(&dir).ok();
   }
 
   #[gpui::test]

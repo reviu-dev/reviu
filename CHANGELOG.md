@@ -4,6 +4,10 @@ All notable changes to Reviu are documented here.
 
 ## 1.0.0
 
+### Tool Calls Fold Into One Line
+
+Consecutive tool calls now group under a single summary line, like "Ran 2 commands · Edited 1 file". The group stays open while the agent works so you can watch, folds when the turn ends, and one click pins it the way you want, remembered across restarts. A failure shows as a count in the summary and in red on the step itself, without painting the whole group red.
+
 ### A Sturdier Conversation
 
 A batch of fixes under the hood: words the agent streams right as a turn ends are kept instead of silently dropped; permission cards survive a reload, showing what was asked and answered; the plan checklist updates in place instead of duplicating when tool calls interleave; the file list behind @ mentions refreshes after every turn, so files the agent just created are mentionable; and two conversations created in the same second no longer collide on disk.
