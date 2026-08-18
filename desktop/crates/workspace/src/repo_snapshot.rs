@@ -115,11 +115,6 @@ impl RepoSnapshot {
       .as_ref()
       .map(|status| status.name.as_str())
   }
-
-  #[cfg(test)]
-  pub(crate) fn take_refresh_task(&mut self) -> Option<Task<()>> {
-    self._refresh_task.take()
-  }
 }
 
 #[cfg(test)]

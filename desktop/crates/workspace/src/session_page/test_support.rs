@@ -99,15 +99,13 @@ pub(super) fn add_session_page_window_without_repo(
   (mounted.expect("session page"), cx)
 }
 
-pub(super) async fn await_open_file(page: &Entity<SessionPage>, cx: &mut gpui::VisualTestContext) {
-  let task = page.update(cx, |page, _| page.open_file_task.take());
-  if let Some(task) = task {
-    task.await;
-  }
+pub(super) async fn await_open_file(_page: &Entity<SessionPage>, cx: &mut gpui::VisualTestContext) {
   cx.run_until_parked();
 }
 
-/// The diff lands after the file load: bases, then diff, then projection.
+/// The diff lands after the file load: bases, then diff, then projection. The
+/// later stages are spawned while painting, so parking alone never reaches
+/// them; each round awaits what exists and repaints until nothing new spawns.
 pub(super) async fn await_editor_diff(
   page: &Entity<SessionPage>,
   cx: &mut gpui::VisualTestContext,
@@ -203,16 +201,8 @@ pub(super) fn publish_to_new_remote(repo_root: &Path, prefix: &str) -> PathBuf {
 }
 
 pub(super) async fn await_branch_refresh(
-  page: &Entity<SessionPage>,
+  _page: &Entity<SessionPage>,
   cx: &mut gpui::VisualTestContext,
 ) {
-  let task = page.update(cx, |page, cx| {
-    page
-      .repo_snapshot
-      .update(cx, |snapshot, _| snapshot.take_refresh_task())
-  });
-  if let Some(task) = task {
-    task.await;
-  }
   cx.run_until_parked();
 }
