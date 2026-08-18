@@ -1102,6 +1102,7 @@ impl AgentChatPanel {
           .when(truncated, |this| {
             this.child(
               div()
+                .debug_selector(|| "agent-chat-thinking-fade".to_string())
                 .absolute()
                 .top_0()
                 .left_0()
@@ -5084,6 +5085,15 @@ mod tests {
   }
 
   #[test]
+  fn thought_peek_tail_snaps_a_byte_cut_to_the_next_line_start() {
+    // Two long lines: the byte cap lands mid line one, the peek opens on line two.
+    let text = format!("{}\n{}", "a".repeat(3000), "b".repeat(3000));
+    let (tail, truncated) = thought_peek_tail(&text);
+    assert!(truncated);
+    assert!(tail.starts_with('b'), "tail starts at {:?}", &tail[..8]);
+  }
+
+  #[test]
   fn thought_peek_tail_respects_char_boundaries() {
     // One long line of multibyte chars: the byte cut must not split a char.
     let text = "é".repeat(THINKING_PEEK_TAIL_BYTES);
@@ -5115,6 +5125,25 @@ mod tests {
     assert!(
       cx.debug_bounds("agent-chat-thinking-peek").is_some(),
       "the live thought is visible while streaming"
+    );
+    assert!(
+      cx.debug_bounds("agent-chat-thinking-fade").is_none(),
+      "a short thought carries no top fade"
+    );
+
+    panel.update(cx, |panel, cx| {
+      let long_think: String = (1..=40)
+        .map(|i| format!("step {i}\n"))
+        .collect::<Vec<_>>()
+        .join("");
+      panel.pending_thought = long_think;
+      panel.mark_last_item_changed();
+      cx.notify();
+    });
+    cx.run_until_parked();
+    assert!(
+      cx.debug_bounds("agent-chat-thinking-fade").is_some(),
+      "a clipped thought fades out at the top"
     );
 
     panel.update(cx, |panel, cx| {
