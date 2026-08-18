@@ -12,6 +12,10 @@ The separate Git page is gone: everything it did happens in the Sessions workspa
 
 The right panel's text tabs are gone: a permanent icon rail carries Changes, Files, History, Pull request and the Terminal, so nothing truncates however narrow the panel gets, and its header names the open surface instead. Clicking an icon opens its surface, clicking the active one closes the panel, exactly like the shortcuts: `cmd-j` on the terminal or `cmd-shift-e` on the changes toggle it. An open/close toggle sits at the top of the rail. The sessions sidebar collapses into a slim rail the same way, keeping New session at hand. Panels slide in and out, their edges drag to resize with a double-click returning the default width, and an expand button gives the right panel the whole window for a large diff or a long terminal session. Focus always lands somewhere alive: closing a panel hands it to the diff or the composer, and opening an empty changes tab keeps the keyboard working.
 
+### Clicks Beside The Editor Stay Beside The Editor
+
+In split view, pressing a button at the edge of the workspace - a panel tab, for instance - could also start a text selection in the editor underneath, which then followed the mouse. The editor now only takes a press that visibly lands on it.
+
 ### A Clean File Never Splits
 
 Opening an unmodified file while the split preference was on showed the same content twice, side by side. A file with no changes now always opens inline, and the split toggle stays quiet on it instead of silently flipping the preference. The open file follows along: saving away its last change drops the view back to inline, and a new change brings the split back.

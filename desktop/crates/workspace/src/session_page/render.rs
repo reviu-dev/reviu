@@ -935,6 +935,9 @@ impl Render for SessionPage {
               .flex_1()
               .min_w(px(0.0))
               .h_full()
+              // The split editor can outgrow the column; without a clip its
+              // hitboxes keep living under the rail and the dock.
+              .overflow_hidden()
               .child(self.render_center(window, cx)),
           )
           .child(dock)
@@ -2893,5 +2896,66 @@ mod tests {
     cx.simulate_click(open.center(), gpui::Modifiers::default());
     cx.run_until_parked();
     page.read_with(cx, |page, _| assert!(page.sidebar_open));
+  }
+
+  #[gpui::test]
+  async fn a_rail_click_never_starts_a_selection_in_the_split_editor(cx: &mut TestAppContext) {
+    let repo = TempRepo::init("session-split-clickthrough");
+    commit_text_file(
+      &repo.path,
+      Path::new("a.txt"),
+      "one\ntwo\nthree\n",
+      "initial",
+    );
+    std::fs::write(repo.path.join("a.txt"), "one\nTWO\nthree\n").expect("modify file");
+    let (page, cx) = add_session_page_window(repo.path.clone(), cx);
+    page.update(cx, |page, cx| {
+      page.dock_panel.update(cx, |panel, cx| panel.refresh(cx))
+    });
+    cx.run_until_parked();
+
+    page.update_in(cx, |page, window, cx| {
+      page.open_diff(PathBuf::from("a.txt"), None, window, cx);
+    });
+    await_open_file(&page, cx).await;
+    await_editor_diff(&page, cx).await;
+    page.update(cx, |page, cx| page.toggle_diff_view(cx));
+    cx.run_until_parked();
+
+    // The user's gesture: press on a rail tab, drift the mouse, release.
+    let files = cx.debug_bounds("dock-rail-files").expect("rail files");
+    let press = files.center();
+    cx.simulate_event(gpui::MouseDownEvent {
+      position: press,
+      button: gpui::MouseButton::Left,
+      modifiers: gpui::Modifiers::default(),
+      click_count: 1,
+      first_mouse: false,
+    });
+    cx.simulate_event(gpui::MouseMoveEvent {
+      position: gpui::point(press.x, press.y + px(120.0)),
+      pressed_button: Some(gpui::MouseButton::Left),
+      modifiers: gpui::Modifiers::default(),
+    });
+    cx.simulate_event(gpui::MouseUpEvent {
+      position: gpui::point(press.x, press.y + px(120.0)),
+      button: gpui::MouseButton::Left,
+      modifiers: gpui::Modifiers::default(),
+      click_count: 1,
+    });
+    cx.run_until_parked();
+
+    page.read_with(cx, |page, cx| {
+      let selection = page
+        .editor
+        .as_ref()
+        .expect("editor")
+        .read(cx)
+        .selected_text_for_copy(cx);
+      assert!(
+        selection.is_none(),
+        "a click on the rail must not select text in the editor: {selection:?}"
+      );
+    });
   }
 }

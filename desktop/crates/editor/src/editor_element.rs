@@ -2048,8 +2048,14 @@ impl Element for EditorElement {
       window.on_mouse_event({
         let editor = self.editor.clone();
         let position_map = Rc::clone(&position_map);
+        let scroll_hitbox = prepaint.scroll_hitbox.clone();
         move |event: &MouseDownEvent, phase, window, cx| {
-          if phase == DispatchPhase::Bubble && event.button == MouseButton::Left {
+          // The laid-out bounds can outgrow the visible column; the hitbox
+          // carries the clip, so a press under an overlay never selects.
+          if phase == DispatchPhase::Bubble
+            && event.button == MouseButton::Left
+            && scroll_hitbox.is_hovered(window)
+          {
             editor.update(cx, |editor, cx| {
               editor.mouse_left_down(event, &position_map, window, cx);
             });
