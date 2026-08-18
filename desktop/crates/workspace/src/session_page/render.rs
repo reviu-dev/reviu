@@ -575,14 +575,20 @@ impl Render for DraggedDock {
 }
 
 impl SessionPage {
+  /// Absolute over the dock's left edge so it costs no layout column: the
+  /// header border line stays continuous and the 1px separator comes from the
+  /// dock's own border.
   fn render_dock_resize_handle(&self, cx: &mut Context<Self>) -> AnyElement {
     let theme = cx.theme().clone();
     div()
       .id("session-dock-resize-handle")
       .debug_selector(|| DOCK_RESIZE_HANDLE_DEBUG_SELECTOR.to_string())
+      .absolute()
+      .left_0()
+      .top_0()
       .w(px(5.0))
       .h_full()
-      .flex_shrink_0()
+      .occlude()
       .cursor_col_resize()
       .hover(|this| this.bg(theme.border))
       .on_drag(DraggedDock, |_, _, _, cx| {
@@ -610,8 +616,10 @@ impl SessionPage {
     } else {
       (width, 0.0)
     };
+    let theme = cx.theme().clone();
     let container = div()
       .id("session-dock-container")
+      .relative()
       .h_full()
       .flex_shrink_0()
       .overflow_hidden()
@@ -619,8 +627,13 @@ impl SessionPage {
         div()
           .w(px(width))
           .h_full()
+          .border_l_1()
+          .border_color(theme.border)
           .child(self.render_dock_panel(cx)),
-      );
+      )
+      .when(self.dock_open, |this| {
+        this.child(self.render_dock_resize_handle(cx))
+      });
     if !self.dock_slide_armed {
       return container.w(px(to)).into_any_element();
     }
@@ -697,9 +710,6 @@ impl Render for SessionPage {
                 .child(ui::resizable_panel().child(self.render_center(window, cx))),
             ),
           )
-          .when(self.dock_open, |this| {
-            this.child(self.render_dock_resize_handle(cx))
-          })
           .child(self.render_dock(cx))
           .into_any_element()
       })
