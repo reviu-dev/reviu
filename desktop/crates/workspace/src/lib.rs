@@ -89,6 +89,7 @@ mod pricing_copy;
 mod pro_teaser;
 mod pull_request_dialog;
 mod repo_command;
+mod repo_snapshot;
 mod repo_state;
 mod sentry_context;
 mod session_list;

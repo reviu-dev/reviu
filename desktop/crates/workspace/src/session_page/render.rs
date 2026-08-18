@@ -96,7 +96,7 @@ impl SessionPage {
       .and_then(|path| path.file_name())
       .map(|name| name.to_string_lossy().into_owned());
 
-    let branch_status = self.branch_status.clone();
+    let branch_status = self.repo_snapshot.read(cx).branch_status().cloned();
     let sync_in_flight = self.repo_command_in_flight;
 
     let repo_context = match repo_name {

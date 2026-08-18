@@ -60,6 +60,7 @@ use crate::palette_branches::{
 use crate::pro_teaser;
 use crate::pull_request_dialog::{GithubBranchContext, open_create_pull_request_dialog};
 use crate::repo_command::{RepoCommand, RepoCommandOutcome, branch_ref_from_palette};
+use crate::repo_snapshot::{RepoSnapshot, RepoSnapshotEvent};
 use crate::repo_state::{PaletteCommand, RepoState, can_accept_all_conflicts, push_flags};
 use crate::status_poll;
 use crate::svg_preview::SvgPreview;
@@ -183,12 +184,7 @@ pub struct SessionPage {
   open_file_generation: u64,
   open_file_task: Option<Task<()>>,
   agent_review: AgentReviewComments,
-  branch_status: Option<git::BranchStatus>,
-  branches: Vec<git::BranchRef>,
-  upstream_branch: Option<git::BranchRef>,
-  default_branch: Option<git::BranchRef>,
-  stashes: Vec<git::StashEntry>,
-  default_stash_message: Option<SharedString>,
+  repo_snapshot: Entity<RepoSnapshot>,
   diff_view: DiffViewMode,
   hide_whitespace: bool,
   show_preview: bool,
@@ -200,7 +196,6 @@ pub struct SessionPage {
   /// Set while pushing an unpublished branch on the way to the pull request form.
   pending_pull_request: Option<GithubBranchContext>,
   poll_window_active: bool,
-  _branch_task: Option<Task<()>>,
   _active_repo_task: Option<Task<()>>,
   _pro_teaser_task: Option<Task<()>>,
   _repo_command_task: Option<Task<()>>,
@@ -222,6 +217,21 @@ impl SessionPage {
       .map(|repo| repo.path.clone());
     let dock_panel = cx.new(|cx| DockPanel::new(selected_repo.clone(), window, cx));
     let inbox = cx.new(|_| Inbox::new());
+    let repo_snapshot = cx.new(|_| RepoSnapshot::new(selected_repo.clone()));
+    cx.subscribe(
+      &repo_snapshot,
+      |this, snapshot, event: &RepoSnapshotEvent, cx| match event {
+        RepoSnapshotEvent::Refreshed => {
+          let branch_status = snapshot.read(cx).branch_status().cloned();
+          this
+            .dock_panel
+            .update(cx, |panel, cx| panel.set_branch_status(branch_status, cx));
+          this.publish_active_local_repo(cx);
+          cx.notify();
+        }
+      },
+    )
+    .detach();
     let session_list = cx.new(|_| SessionList::new());
     cx.subscribe_in(
       &session_list,
@@ -291,12 +301,7 @@ impl SessionPage {
       open_file_generation: 0,
       open_file_task: None,
       agent_review: AgentReviewComments::new(),
-      branch_status: None,
-      branches: Vec::new(),
-      upstream_branch: None,
-      default_branch: None,
-      stashes: Vec::new(),
-      default_stash_message: None,
+      repo_snapshot,
       diff_view: DiffViewMode::Inline,
       hide_whitespace: false,
       show_preview: false,
@@ -306,7 +311,6 @@ impl SessionPage {
       pro_teaser_shown: false,
       pending_pull_request: None,
       poll_window_active: true,
-      _branch_task: None,
       _active_repo_task: None,
       _pro_teaser_task: None,
       _repo_command_task: None,
@@ -395,38 +399,9 @@ impl SessionPage {
   }
 
   fn refresh_branch(&mut self, cx: &mut Context<Self>) {
-    let Some(repo_root) = self.selected_repo.clone() else {
-      return;
-    };
-    let task = cx.spawn(async move |this, cx| {
-      let (status, branches, upstream, default_branch, stashes, default_stash_message) = cx
-        .background_spawn(async move {
-          (
-            git::current_branch_status(&repo_root),
-            git::list_branches(&repo_root),
-            git::current_branch_upstream(&repo_root),
-            git::default_remote_branch(&repo_root),
-            git::list_stashes(&repo_root),
-            git::default_stash_message(&repo_root),
-          )
-        })
-        .await;
-      let _ = this.update(cx, |this, cx| {
-        this.branch_status = status.ok();
-        let branch_status = this.branch_status.clone();
-        this
-          .dock_panel
-          .update(cx, |panel, cx| panel.set_branch_status(branch_status, cx));
-        this.branches = branches.unwrap_or_default();
-        this.upstream_branch = upstream.ok().flatten();
-        this.default_branch = default_branch.ok().flatten();
-        this.stashes = stashes.unwrap_or_default();
-        this.default_stash_message = default_stash_message.ok().map(Into::into);
-        this.publish_active_local_repo(cx);
-        cx.notify();
-      });
-    });
-    self._branch_task = Some(task);
+    self
+      .repo_snapshot
+      .update(cx, |snapshot, cx| snapshot.refresh(cx));
   }
 
   /// The pull request page reads this to know which repository is open here,
@@ -437,8 +412,9 @@ impl SessionPage {
       return;
     };
     let branch_name = self
-      .branch_status
-      .as_ref()
+      .repo_snapshot
+      .read(cx)
+      .branch_status()
       .map(|status| status.name.clone());
     let has_uncommitted_changes = !self.dock_panel.read(cx).status_entries().is_empty();
 
@@ -777,14 +753,11 @@ impl SessionPage {
   }
 
   /// What a crash or a git error should carry about where the user was.
-  fn git_telemetry(&self, cx: &App) -> GitTelemetry<'_> {
+  fn git_telemetry<'a>(&'a self, cx: &'a App) -> GitTelemetry<'a> {
     GitTelemetry {
       repo_root: self.selected_repo.as_deref(),
       selected_file: self.selected_file.as_deref(),
-      branch: self
-        .branch_status
-        .as_ref()
-        .map(|status| status.name.as_str()),
+      branch: self.repo_snapshot.read(cx).current_branch_name(),
       tab: git_telemetry::dock_tab_tag(self.dock_panel.read(cx).active_tab()),
       diff_view: git_telemetry::diff_view_tag(
         self.diff_view,
@@ -1109,7 +1082,7 @@ impl SessionPage {
     cx: &mut Context<Self>,
   ) {
     cx.stop_propagation();
-    if self.branches.is_empty() {
+    if self.repo_snapshot.read(cx).branches().is_empty() {
       return;
     }
     self.open_command_palette_with_screen(
@@ -1312,8 +1285,9 @@ mod tests {
 
     page.update(cx, |page, cx| page.refresh_branch(cx));
     await_branch_refresh(&page, cx).await;
-    page.read_with(cx, |page, _| {
-      let status = page.branch_status.as_ref().expect("branch status");
+    page.read_with(cx, |page, cx| {
+      let snapshot = page.repo_snapshot.read(cx);
+      let status = snapshot.branch_status().expect("branch status");
       assert_eq!(status.ahead, 0);
       assert_eq!(status.behind, 0);
       assert!(status.has_upstream);
@@ -1324,8 +1298,9 @@ mod tests {
     page.update(cx, |page, cx| page.refresh_branch(cx));
     await_branch_refresh(&page, cx).await;
 
-    page.read_with(cx, |page, _| {
-      assert_eq!(page.branch_status.as_ref().expect("status").ahead, 1);
+    page.read_with(cx, |page, cx| {
+      let snapshot = page.repo_snapshot.read(cx);
+      assert_eq!(snapshot.branch_status().expect("status").ahead, 1);
     });
   }
 
@@ -1341,8 +1316,9 @@ mod tests {
 
     page.update(cx, |page, cx| page.refresh_branch(cx));
     await_branch_refresh(&page, cx).await;
-    page.read_with(cx, |page, _| {
-      assert_eq!(page.branch_status.as_ref().expect("status").ahead, 1);
+    page.read_with(cx, |page, cx| {
+      let snapshot = page.repo_snapshot.read(cx);
+      assert_eq!(snapshot.branch_status().expect("status").ahead, 1);
     });
 
     // What the ahead counter runs when clicked.
@@ -1365,8 +1341,9 @@ mod tests {
       .expect("remote head");
     assert_eq!(head.summary(), Some("second"));
 
-    page.read_with(cx, |page, _| {
-      assert_eq!(page.branch_status.as_ref().expect("status").ahead, 0);
+    page.read_with(cx, |page, cx| {
+      let snapshot = page.repo_snapshot.read(cx);
+      assert_eq!(snapshot.branch_status().expect("status").ahead, 0);
     });
   }
 
@@ -1774,12 +1751,13 @@ mod tests {
       .advance_clock(status_poll::ACTIVE_STATUS_POLL_INTERVAL);
     cx.run_until_parked();
 
-    page.read_with(cx, |page, _| {
+    page.read_with(cx, |page, cx| {
       assert_eq!(
         page
-          .branch_status
-          .as_ref()
-          .map(|status| status.name.clone()),
+          .repo_snapshot
+          .read(cx)
+          .current_branch_name()
+          .map(str::to_string),
         Some("feature".to_string()),
         "the poll follows the branch, not just the changed files"
       );

@@ -101,16 +101,17 @@ impl SessionPage {
       if state.allows(PaletteCommand::InteractiveRebase) {
         commands.push(CommandPaletteCommand::interactive_rebase());
       }
-      if !self.branches.is_empty() {
+      let has_branches = !self.repo_snapshot.read(cx).branches().is_empty();
+      if has_branches {
         commands.push(CommandPaletteCommand::switch_branch());
-        if !self.delete_branch_targets().is_empty() {
+        if !self.delete_branch_targets(cx).is_empty() {
           commands.push(CommandPaletteCommand::delete_branch());
         }
       }
-      if state.allows(PaletteCommand::MergeBranch) && !self.branches.is_empty() {
+      if state.allows(PaletteCommand::MergeBranch) && has_branches {
         commands.push(CommandPaletteCommand::merge_branch());
       }
-      if state.allows(PaletteCommand::RebaseBranch) && !self.rebase_branch_targets().is_empty() {
+      if state.allows(PaletteCommand::RebaseBranch) && !self.rebase_branch_targets(cx).is_empty() {
         commands.push(CommandPaletteCommand::rebase_branch());
       }
       if state.allows(PaletteCommand::CherryPick) {
@@ -122,7 +123,7 @@ impl SessionPage {
       if state.allows(PaletteCommand::StashWithUntracked) {
         commands.push(CommandPaletteCommand::stash_with_untracked());
       }
-      if !self.stashes.is_empty() {
+      if !self.repo_snapshot.read(cx).stashes().is_empty() {
         commands.push(CommandPaletteCommand::apply_stash());
         commands.push(CommandPaletteCommand::pop_stash());
         commands.push(CommandPaletteCommand::drop_stash());
@@ -140,24 +141,19 @@ impl SessionPage {
     commands
   }
 
-  pub(super) fn current_branch_name(&self) -> Option<&str> {
-    self
-      .branch_status
-      .as_ref()
-      .map(|status| status.name.as_str())
-  }
-
-  pub(super) fn rebase_branch_targets(&self) -> Vec<ui::CommandPaletteBranch> {
+  pub(super) fn rebase_branch_targets(&self, cx: &App) -> Vec<ui::CommandPaletteBranch> {
+    let snapshot = self.repo_snapshot.read(cx);
     rebase_branch_candidates(
-      &self.branches,
-      self.current_branch_name(),
-      self.upstream_branch.as_ref(),
-      self.default_branch.as_ref(),
+      snapshot.branches(),
+      snapshot.current_branch_name(),
+      snapshot.upstream_branch(),
+      snapshot.default_branch(),
     )
   }
 
-  pub(super) fn delete_branch_targets(&self) -> Vec<ui::CommandPaletteBranch> {
-    delete_branch_candidates(&self.branches, self.current_branch_name())
+  pub(super) fn delete_branch_targets(&self, cx: &App) -> Vec<ui::CommandPaletteBranch> {
+    let snapshot = self.repo_snapshot.read(cx);
+    delete_branch_candidates(snapshot.branches(), snapshot.current_branch_name())
   }
 
   pub(super) fn open_command_palette(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -180,13 +176,16 @@ impl SessionPage {
       })
     });
 
-    let branches = self.branches.iter().map(palette_branch).collect::<Vec<_>>();
+    let snapshot = self.repo_snapshot.read(cx);
+    let branches = snapshot.branches().iter().map(palette_branch).collect();
+    let stashes = palette_stashes(snapshot.stashes());
+    let default_stash_message = snapshot.default_stash_message();
     let mut config = CommandPaletteConfig::new(branches, commands, handler)
       .with_repositories(repositories)
-      .with_rebase_branches(self.rebase_branch_targets())
-      .with_delete_branches(self.delete_branch_targets())
-      .with_stashes(palette_stashes(&self.stashes));
-    if let Some(message) = self.default_stash_message.clone() {
+      .with_rebase_branches(self.rebase_branch_targets(cx))
+      .with_delete_branches(self.delete_branch_targets(cx))
+      .with_stashes(stashes);
+    if let Some(message) = default_stash_message {
       config = config.with_default_stash_message(message);
     }
     if let Some(initial_screen) = initial_screen {
@@ -403,7 +402,11 @@ mod tests {
     await_branch_refresh(&page, cx).await;
 
     page.read_with(cx, |page, cx| {
-      assert_eq!(page.stashes.len(), 1, "the stash was loaded");
+      assert_eq!(
+        page.repo_snapshot.read(cx).stashes().len(),
+        1,
+        "the stash was loaded"
+      );
       let ids = page
         .palette_commands(1, cx)
         .into_iter()
@@ -422,7 +425,7 @@ mod tests {
       );
 
       // The lists behind the screens: never the branch we are on.
-      let targets = page.delete_branch_targets();
+      let targets = page.delete_branch_targets(cx);
       assert!(
         targets
           .iter()

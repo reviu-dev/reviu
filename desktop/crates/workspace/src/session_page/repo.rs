@@ -47,7 +47,9 @@ impl SessionPage {
     self.open_file_generation = self.open_file_generation.wrapping_add(1);
     self.agent_review.clear();
     self.pending_review_export = None;
-    self.branch_status = None;
+    self.repo_snapshot.update(cx, |snapshot, cx| {
+      snapshot.set_repo_root(repo_root.clone(), cx)
+    });
     // Conversations are stored per repository, so the panel is rebuilt on the
     // next render with the new cwd and state directory.
     self.agent_chat_view = None;
@@ -463,7 +465,7 @@ mod tests {
     page.read_with(cx, |page, cx| {
       assert!(page.selected_repo.is_none());
       assert!(page.dock_panel.read(cx).repo_root().is_none());
-      assert!(page.branch_status.is_none());
+      assert!(page.repo_snapshot.read(cx).branch_status().is_none());
     });
   }
 

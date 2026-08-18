@@ -56,6 +56,9 @@ pub(super) fn add_session_page_window(
   let page = mounted.expect("session page");
   page.update(cx, |page, cx| {
     page.selected_repo = Some(repo_root.clone());
+    page.repo_snapshot.update(cx, |snapshot, cx| {
+      snapshot.set_repo_root(Some(repo_root.clone()), cx)
+    });
     page.dock_panel.update(cx, |panel, cx| {
       panel.set_repo_root(Some(repo_root.clone()), cx)
     });
@@ -203,7 +206,11 @@ pub(super) async fn await_branch_refresh(
   page: &Entity<SessionPage>,
   cx: &mut gpui::VisualTestContext,
 ) {
-  let task = page.update(cx, |page, _| page._branch_task.take());
+  let task = page.update(cx, |page, cx| {
+    page
+      .repo_snapshot
+      .update(cx, |snapshot, _| snapshot.take_refresh_task())
+  });
   if let Some(task) = task {
     task.await;
   }

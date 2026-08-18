@@ -95,7 +95,7 @@ impl SessionPage {
   /// Runs a repo command in the background, then refreshes the changes panel.
   /// The shell tracks no operation in progress: it never starts a merge or a rebase.
   pub(super) fn repo_state<'a>(&'a self, commit_message: &'a str, cx: &'a App) -> RepoState<'a> {
-    let branch_status = self.branch_status.as_ref();
+    let branch_status = self.repo_snapshot.read(cx).branch_status();
     let (can_push, can_force_push) = push_flags(branch_status, branch_status.is_some(), false);
     let panel = self.dock_panel.read(cx);
     let status_entries = panel.status_entries();
@@ -655,9 +655,13 @@ mod tests {
     await_branch_refresh(&page, cx).await;
 
     // Git prepares a stash message from HEAD; the palette offers it.
-    page.read_with(cx, |page, _| {
+    page.read_with(cx, |page, cx| {
       assert!(
-        page.default_stash_message.is_some(),
+        page
+          .repo_snapshot
+          .read(cx)
+          .default_stash_message()
+          .is_some(),
         "the stash screen starts with a message"
       );
     });
@@ -1115,16 +1119,8 @@ mod tests {
     await_branch_refresh(&page, cx).await;
 
     // The palette offers the other branches, never the one we are on.
-    page.read_with(cx, |page, _| {
-      let targets = rebase_branch_candidates(
-        &page.branches,
-        page
-          .branch_status
-          .as_ref()
-          .map(|status| status.name.as_str()),
-        page.upstream_branch.as_ref(),
-        page.default_branch.as_ref(),
-      );
+    page.read_with(cx, |page, cx| {
+      let targets = page.rebase_branch_targets(cx);
       assert!(targets.iter().any(|branch| branch.name.as_ref() == base));
       assert!(
         !targets
@@ -1306,11 +1302,12 @@ mod tests {
     cx.run_until_parked();
     page.update(cx, |page, cx| page.refresh_branch(cx));
     await_branch_refresh(&page, cx).await;
-    page.read_with(cx, |page, _| {
+    page.read_with(cx, |page, cx| {
       assert!(
         !page
-          .branch_status
-          .as_ref()
+          .repo_snapshot
+          .read(cx)
+          .branch_status()
           .expect("branch status")
           .has_upstream,
         "the branch starts unpublished"
