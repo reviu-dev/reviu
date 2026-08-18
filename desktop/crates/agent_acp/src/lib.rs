@@ -50,6 +50,9 @@ pub struct PermissionPromptOption {
 pub struct PermissionPrompt {
   pub id: u64,
   pub tool_call_title: String,
+  /// The full update from the request: kind, raw input, content and locations,
+  /// so the card can show what is actually being approved.
+  pub tool_call: agent_client_protocol::schema::ToolCallUpdate,
   pub options: Vec<PermissionPromptOption>,
 }
 
@@ -772,6 +775,7 @@ async fn run_driver(
           let prompt = PermissionPrompt {
             id,
             tool_call_title: title,
+            tool_call: request.tool_call.clone(),
             options: request
               .options
               .iter()

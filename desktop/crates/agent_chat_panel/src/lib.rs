@@ -187,7 +187,77 @@ pub(crate) struct ToolOutput {
 #[derive(Clone, Debug)]
 struct PermissionItem {
   prompt: PermissionPrompt,
+  detail: PermissionDetail,
   resolved: Option<String>,
+}
+
+/// What the user is being asked to approve, extracted once when the prompt
+/// arrives. The full diff already lives on the tool item above the card, so
+/// edits show per-file counts only.
+#[derive(Clone, Debug, Default)]
+struct PermissionDetail {
+  invocation: Option<String>,
+  path: Option<String>,
+  diff_stats: Vec<(String, u32, u32)>,
+}
+
+fn permission_detail(
+  update: &agent_client_protocol::schema::ToolCallUpdate,
+  cwd: &std::path::Path,
+) -> PermissionDetail {
+  let fields = &update.fields;
+  let raw = fields.raw_input.as_ref();
+  let raw_str = |key: &str| {
+    raw
+      .and_then(|v| v.get(key))
+      .and_then(|v| v.as_str())
+      .map(str::to_string)
+  };
+  let pretty_raw = || {
+    raw
+      .filter(|v| !v.is_null() && *v != &serde_json::json!({}))
+      .and_then(|v| serde_json::to_string_pretty(v).ok())
+      .map(|s| truncate_chars(&s, 1000))
+  };
+  let invocation = match fields.kind {
+    Some(ToolKind::Execute) => raw_str("command").or_else(pretty_raw),
+    Some(ToolKind::Fetch) => raw_str("url").or_else(pretty_raw),
+    Some(
+      ToolKind::Read | ToolKind::Edit | ToolKind::Delete | ToolKind::Move | ToolKind::Search,
+    ) => None,
+    _ => pretty_raw(),
+  };
+  let path = fields
+    .locations
+    .as_ref()
+    .and_then(|locs| locs.first())
+    .map(|loc| match loc.line {
+      Some(line) => format!("{} (line {line})", loc.path.display()),
+      None => loc.path.display().to_string(),
+    });
+  let diff_stats = fields
+    .content
+    .as_ref()
+    .map(|content| {
+      extract_diffs(content, cwd)
+        .into_iter()
+        .map(|d| (d.path, d.added, d.removed))
+        .collect()
+    })
+    .unwrap_or_default();
+  PermissionDetail {
+    invocation,
+    path,
+    diff_stats,
+  }
+}
+
+fn truncate_chars(text: &str, max: usize) -> String {
+  if text.chars().count() <= max {
+    return text.to_string();
+  }
+  let cut: String = text.chars().take(max).collect();
+  format!("{cut}…")
 }
 
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
@@ -586,6 +656,17 @@ impl AgentChatPanel {
   #[cfg(any(test, feature = "test-support"))]
   pub fn backend_ready(&self) -> bool {
     matches!(self.status, Status::Ready)
+  }
+
+  /// The first unanswered permission: its id and extracted invocation.
+  #[cfg(any(test, feature = "test-support"))]
+  pub fn pending_permission(&self) -> Option<(u64, Option<String>)> {
+    self.items.iter().find_map(|item| match item {
+      ChatItem::Permission(p) if p.resolved.is_none() => {
+        Some((p.prompt.id, p.detail.invocation.clone()))
+      }
+      _ => None,
+    })
   }
 
   /// The thought texts of the conversation, oldest first.
@@ -1272,7 +1353,11 @@ impl AgentChatPanel {
           is_last_row,
         )
       }
-      ChatItem::Permission(p) => timeline_row(render_permission(p, theme, cx), theme, is_last_row),
+      ChatItem::Permission(p) => timeline_row(
+        render_permission(p, theme, &registry, cx),
+        theme,
+        is_last_row,
+      ),
       ChatItem::Plan(p) => {
         timeline_row_with_color(render_plan(p, theme), theme, theme.primary, is_last_row)
       }
@@ -1363,8 +1448,10 @@ impl AgentChatPanel {
     let task = cx.spawn(async move |this, cx| {
       while let Ok(prompt) = rx.recv().await {
         let _ = this.update(cx, |panel, cx| {
+          let detail = permission_detail(&prompt.tool_call, &panel.cwd);
           panel.items.push(ChatItem::Permission(PermissionItem {
             prompt,
+            detail,
             resolved: None,
           }));
           panel.sync_list_count();
@@ -1375,7 +1462,7 @@ impl AgentChatPanel {
     self._permission_task = Some(task);
   }
 
-  fn answer_permission(
+  pub fn answer_permission(
     &mut self,
     prompt_id: u64,
     option_id: Option<String>,
@@ -3286,10 +3373,12 @@ fn permission_option_is_destructive(kind: &PermissionOptionKind) -> bool {
 fn render_permission(
   item: &PermissionItem,
   theme: &gpui_component::Theme,
+  registry: &selectable_text::SelectionRegistry,
   cx: &mut Context<AgentChatPanel>,
 ) -> gpui::AnyElement {
   let prompt_id = item.prompt.id;
   let resolved = item.resolved.clone();
+  let detail = &item.detail;
   let mut card = v_flex()
     .gap_2()
     .p_3()
@@ -3308,6 +3397,65 @@ fn render_permission(
         .text_color(theme.foreground)
         .child(item.prompt.tool_call_title.clone()),
     );
+
+  if let Some(invocation) = &detail.invocation {
+    card = card.child(
+      div()
+        .id(("perm-invocation", prompt_id as usize))
+        .debug_selector(|| "perm-invocation".to_string())
+        .max_h(px(92.))
+        .overflow_y_scroll()
+        .px_2()
+        .py_1()
+        .bg(theme.background)
+        .border_1()
+        .border_color(theme.border)
+        .rounded(px(3.))
+        .font_family("monospace")
+        .text_xs()
+        .text_color(theme.foreground)
+        .whitespace_normal()
+        .child(selectable_text::SelectableText::new(
+          prompt_id | 0x8000_0000_0000_0000,
+          SharedString::from(invocation.clone()),
+          Vec::new(),
+          registry.clone(),
+        )),
+    );
+  }
+  if !detail.diff_stats.is_empty() {
+    let mut stats = v_flex().gap_0p5().debug_selector(|| "perm-diff-stats".to_string());
+    for (path, added, removed) in &detail.diff_stats {
+      stats = stats.child(
+        h_flex()
+          .gap_2()
+          .items_center()
+          .text_xs()
+          .child(
+            div()
+              .flex_1()
+              .truncate()
+              .text_color(theme.muted_foreground)
+              .child(path.clone()),
+          )
+          .child(
+            div()
+              .text_color(theme.status_green())
+              .child(format!("+{added}")),
+          )
+          .child(div().text_color(theme.danger).child(format!("-{removed}"))),
+      );
+    }
+    card = card.child(stats);
+  } else if let Some(path) = &detail.path {
+    card = card.child(
+      div()
+        .debug_selector(|| "perm-path".to_string())
+        .text_xs()
+        .text_color(theme.muted_foreground)
+        .child(path.clone()),
+    );
+  }
 
   if let Some(option_id) = &resolved {
     card = card.child(
@@ -4096,8 +4244,10 @@ fn diff_text(diff: anyhow::Result<String>) -> String {
 #[cfg(test)]
 mod tests {
   use super::*;
+  use agent_acp::PermissionPromptOption;
   use agent_client_protocol::schema::{
-    SessionConfigSelect, SessionConfigSelectOption, ToolCallLocation, ToolCallUpdateFields,
+    SessionConfigSelect, SessionConfigSelectOption, ToolCallContent, ToolCallLocation,
+    ToolCallUpdateFields,
   };
   use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -5062,6 +5212,110 @@ mod tests {
     panel.read_with(cx, |panel, _| {
       assert_eq!(item_kinds(&panel.items), vec!["agent", "tool", "agent"]);
     });
+  }
+
+  fn update_fields(
+    fields: agent_client_protocol::schema::ToolCallUpdateFields,
+  ) -> agent_client_protocol::schema::ToolCallUpdate {
+    agent_client_protocol::schema::ToolCallUpdate::new(
+      ToolCallId::new(std::sync::Arc::from("perm-tool")),
+      fields,
+    )
+  }
+
+  #[test]
+  fn permission_detail_extracts_the_command_of_a_run() {
+    let update = update_fields(
+      ToolCallUpdateFields::new()
+        .kind(ToolKind::Execute)
+        .raw_input(serde_json::json!({ "command": "rm -rf build" })),
+    );
+    let detail = permission_detail(&update, test_cwd());
+    assert_eq!(detail.invocation.as_deref(), Some("rm -rf build"));
+    assert!(detail.diff_stats.is_empty());
+  }
+
+  #[test]
+  fn permission_detail_extracts_the_url_of_a_fetch() {
+    let update = update_fields(
+      ToolCallUpdateFields::new()
+        .kind(ToolKind::Fetch)
+        .raw_input(serde_json::json!({ "url": "https://example.com" })),
+    );
+    let detail = permission_detail(&update, test_cwd());
+    assert_eq!(detail.invocation.as_deref(), Some("https://example.com"));
+  }
+
+  #[test]
+  fn permission_detail_summarizes_an_edit_as_diff_counts() {
+    use agent_client_protocol::schema::Diff;
+    let update = update_fields(
+      ToolCallUpdateFields::new()
+        .kind(ToolKind::Edit)
+        .content(vec![ToolCallContent::Diff(
+          Diff::new("foo.rs", "one\ntwo\n").old_text(Some("one\n".to_string())),
+        )])
+        .locations(vec![agent_client_protocol::schema::ToolCallLocation::new(
+          "foo.rs",
+        )]),
+    );
+    let detail = permission_detail(&update, test_cwd());
+    assert!(detail.invocation.is_none());
+    assert_eq!(detail.diff_stats.len(), 1);
+    let (path, added, removed) = &detail.diff_stats[0];
+    assert!(path.ends_with("foo.rs"));
+    assert_eq!((*added, *removed), (1, 0));
+  }
+
+  #[test]
+  fn permission_detail_falls_back_to_pretty_json_for_unknown_tools() {
+    let update = update_fields(
+      ToolCallUpdateFields::new()
+        .kind(ToolKind::Other)
+        .raw_input(serde_json::json!({ "table": "users" })),
+    );
+    let detail = permission_detail(&update, test_cwd());
+    let invocation = detail.invocation.expect("json fallback");
+    assert!(invocation.contains("\"table\": \"users\""));
+  }
+
+  #[gpui::test]
+  async fn the_permission_card_shows_the_command_being_approved(cx: &mut gpui::TestAppContext) {
+    let (panel, cx) = add_panel_window(cx);
+    panel.update(cx, |panel, cx| {
+      panel.status = Status::Ready;
+      let update = update_fields(
+        ToolCallUpdateFields::new()
+          .kind(ToolKind::Execute)
+          .raw_input(serde_json::json!({ "command": "cargo build" })),
+      );
+      let detail = permission_detail(&update, std::path::Path::new("."));
+      panel.items = vec![
+        user_message("do it"),
+        ChatItem::Permission(PermissionItem {
+          prompt: PermissionPrompt {
+            id: 7,
+            tool_call_title: "Run cargo build".into(),
+            tool_call: update,
+            options: vec![PermissionPromptOption {
+              option_id: "allow".into(),
+              label: "Allow".into(),
+              kind: PermissionOptionKind::AllowOnce,
+            }],
+          },
+          detail,
+          resolved: None,
+        }),
+      ];
+      panel.sync_list_count();
+      cx.notify();
+    });
+    cx.run_until_parked();
+
+    assert!(
+      cx.debug_bounds("perm-invocation").is_some(),
+      "the command is painted on the card"
+    );
   }
 
   #[test]

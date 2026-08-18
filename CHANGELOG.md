@@ -4,6 +4,10 @@ All notable changes to Reviu are documented here.
 
 ## 1.0.0
 
+### See What You Are Approving
+
+Permission requests now show the thing being approved, not just a title: the full command for a shell run, the URL for a fetch, per-file added and removed counts for an edit, and the file being touched. Long commands scroll in place and can be selected and copied. The buttons were already reachable with the keyboard; now you know what you are pressing them for.
+
 ### Watch The Agent Think
 
 While the agent reasons, the conversation now shows a live glimpse of its thinking: the latest lines, dimmed, fading out at the top as they scroll past. When the reasoning ends it folds into the usual collapsed thought, ready to expand. Before, a long think was just a spinner.
