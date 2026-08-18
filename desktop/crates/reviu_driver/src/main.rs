@@ -201,10 +201,9 @@ fn main() {
       },
       Command::Click { selector, x, y } => {
         let position = match (&selector, x, y) {
-          (Some(selector), _, _) => match cx.debug_bounds(intern_selector(selector)) {
-            Some(bounds) => Some(bounds.center()),
-            None => None,
-          },
+          (Some(selector), _, _) => cx
+            .debug_bounds(intern_selector(selector))
+            .map(|bounds| bounds.center()),
           (None, Some(x), Some(y)) => Some(gpui::point(gpui::px(x), gpui::px(y))),
           _ => None,
         };
