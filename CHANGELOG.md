@@ -4,6 +4,10 @@ All notable changes to Reviu are documented here.
 
 ## 1.0.0
 
+### Edit A Message And Replay From There
+
+Hovering a message now reveals a copy button, and your own prompts gain an edit button: change the text, press Send, and Reviu restores the files to the checkpoint taken before that prompt, drops the turns after it, and replays the conversation from your new wording in a fresh session. Copying grabs the message as written, formatting included.
+
 ### Slash Commands From Your Agent
 
 Typing "/" at the start of the composer now opens the commands your agent actually offers, from Claude's built-ins to your project's own, filtered as you type. Arrows navigate, Enter completes the command, and your arguments follow. The menu only appears for a leading slash: a path in the middle of a sentence stays a path.

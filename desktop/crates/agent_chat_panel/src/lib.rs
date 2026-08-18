@@ -39,6 +39,7 @@ use gpui::{
 use gpui_component::{
   ActiveTheme as _, Disableable as _, IconName, Sizable as _,
   button::{Button, ButtonVariants as _},
+  clipboard::Clipboard,
   h_flex,
   input::{self, InputEvent, Textarea, TextareaState},
   menu::{DropdownMenu as _, PopupMenuItem},
@@ -472,6 +473,14 @@ pub struct AgentChatPanel {
   queued_prompts: Vec<String>,
   /// Slash commands advertised by the agent, latest update wins.
   available_commands: Vec<agent_client_protocol::schema::AvailableCommand>,
+  /// Item index of the user message being edited, with its inline editor.
+  editing_message: Option<usize>,
+  edit_input: Option<Entity<TextareaState>>,
+  /// Armed on Send of an edit: (checkpoint ref, new text). Consumed only by
+  /// the truncate for that ref, so a failed rollback never resubmits.
+  pending_edit_resubmit: Option<(String, String)>,
+  /// Set by the matching truncate; dispatched once the session reconnects.
+  resubmit_after_connect: Option<String>,
   slash_selected_ix: usize,
   slash_dismissed: Option<String>,
   session: Option<Arc<AgentSession>>,
@@ -537,6 +546,10 @@ impl AgentChatPanel {
       pending_thought: String::new(),
       queued_prompts: Vec::new(),
       available_commands: Vec::new(),
+      editing_message: None,
+      edit_input: None,
+      pending_edit_resubmit: None,
+      resubmit_after_connect: None,
       slash_selected_ix: 0,
       slash_dismissed: None,
       session: None,
@@ -633,6 +646,9 @@ impl AgentChatPanel {
             if let Some(rx) = permissions {
               panel.start_permission_forwarder(rx, cx);
             }
+            if let Some(text) = panel.resubmit_after_connect.take() {
+              panel.dispatch_prompt(text, cx);
+            }
             panel.sync_list_count();
             cx.notify();
           });
@@ -688,6 +704,12 @@ impl AgentChatPanel {
   #[cfg(any(test, feature = "test-support"))]
   pub fn mark_disconnected_for_test(&mut self, cx: &mut Context<Self>) {
     self.on_agent_disconnected(cx);
+  }
+
+  /// The inline editor of the message being edited.
+  #[cfg(any(test, feature = "test-support"))]
+  pub fn edit_input_for_test(&self) -> Option<Entity<TextareaState>> {
+    self.edit_input.clone()
   }
 
   /// Names of the slash commands the agent advertised.
@@ -785,6 +807,10 @@ impl AgentChatPanel {
       pending_thought: String::new(),
       queued_prompts: Vec::new(),
       available_commands: Vec::new(),
+      editing_message: None,
+      edit_input: None,
+      pending_edit_resubmit: None,
+      resubmit_after_connect: None,
       slash_selected_ix: 0,
       slash_dismissed: None,
       session: None,
@@ -1329,30 +1355,116 @@ impl AgentChatPanel {
     let item_id_base = (idx as u64) << 32;
     let element: gpui::AnyElement = match &item {
       ChatItem::Message(m) => match m.role {
-        ChatRole::User => div()
-          .px_3()
-          .py_2()
-          .mb_3()
-          .rounded(theme.radius)
-          .bg(theme.input_background())
-          .border_1()
-          .border_color(theme.border)
-          .text_sm()
-          .text_color(theme.foreground)
-          .child(selectable_text::SelectableText::new(
-            item_id_base,
-            SharedString::from(m.text.clone()),
-            Vec::new(),
-            registry.clone(),
-          ))
-          .into_any_element(),
+        ChatRole::User if self.editing_message == Some(idx) => {
+          let editor = self.edit_input.clone();
+          v_flex()
+            .debug_selector(|| "agent-chat-edit-message".to_string())
+            .mb_3()
+            .gap_1()
+            .px_2()
+            .py_1p5()
+            .rounded(theme.radius)
+            .bg(theme.input_background())
+            .border_1()
+            .border_color(theme.ring)
+            .children(editor.map(|input| Textarea::new(&input).appearance(false).w_full()))
+            .child(
+              h_flex()
+                .gap_1()
+                .justify_end()
+                .child(
+                  Button::new(("agent-chat-edit-cancel", idx))
+                    .label("Cancel")
+                    .xsmall()
+                    .ghost()
+                    .on_click(cx.listener(|panel, _, _, cx| panel.cancel_message_edit(cx))),
+                )
+                .child(
+                  Button::new(("agent-chat-edit-send", idx))
+                    .label("Send")
+                    .xsmall()
+                    .primary()
+                    .tooltip("Restores the checkpoint and restarts from this message")
+                    .on_click(cx.listener(|panel, _, _, cx| panel.submit_message_edit(cx))),
+                ),
+            )
+            .into_any_element()
+        }
+        ChatRole::User => {
+          let can_edit = !self.in_flight && checkpoint_ref_before(&self.items, idx).is_some();
+          v_flex()
+            .group("chat-user-msg")
+            .mb_3()
+            .gap_0p5()
+            .child(
+              div()
+                .px_3()
+                .py_2()
+                .rounded(theme.radius)
+                .bg(theme.input_background())
+                .border_1()
+                .border_color(theme.border)
+                .text_sm()
+                .text_color(theme.foreground)
+                .child(selectable_text::SelectableText::new(
+                  item_id_base,
+                  SharedString::from(m.text.clone()),
+                  Vec::new(),
+                  registry.clone(),
+                )),
+            )
+            .child(
+              h_flex()
+                .justify_end()
+                .gap_0p5()
+                .opacity(0.)
+                .group_hover("chat-user-msg", |this| this.opacity(1.))
+                .child(
+                  div().debug_selector(|| "chat-msg-copy".to_string()).child(
+                    Clipboard::new(SharedString::from(format!("chat-msg-copy-{idx}")))
+                      .value(SharedString::from(m.text.clone()))
+                      .tooltip("Copy message"),
+                  ),
+                )
+                .when(can_edit, |this| {
+                  this.child(
+                    div().debug_selector(|| "chat-msg-edit".to_string()).child(
+                      Button::new(("chat-msg-edit", idx))
+                        .icon(UiIconName::SquarePen)
+                        .xsmall()
+                        .ghost()
+                        .tooltip("Edit and restart from here")
+                        .on_click(cx.listener(move |panel, _, window, cx| {
+                          panel.begin_message_edit(idx, window, cx);
+                        })),
+                    ),
+                  )
+                }),
+            )
+            .into_any_element()
+        }
         ChatRole::Agent => timeline_row(
-          markdown_view(
-            ("agent-chat-md", idx),
-            &m.text,
-            &self.markdown_extensions,
-            cx,
-          ),
+          v_flex()
+            .group("chat-agent-msg")
+            .gap_0p5()
+            .child(markdown_view(
+              ("agent-chat-md", idx),
+              &m.text,
+              &self.markdown_extensions,
+              cx,
+            ))
+            .child(
+              h_flex()
+                .gap_0p5()
+                .opacity(0.)
+                .group_hover("chat-agent-msg", |this| this.opacity(1.))
+                .child(
+                  Clipboard::new(SharedString::from(format!("chat-msg-copy-agent-{idx}")))
+                    .value(SharedString::from(m.text.clone()))
+                    .tooltip("Copy message"),
+                ),
+            )
+            .into_any_element(),
           theme,
           is_last_row,
         ),
@@ -2196,6 +2308,63 @@ impl AgentChatPanel {
     }
   }
 
+  pub fn begin_message_edit(&mut self, idx: usize, window: &mut Window, cx: &mut Context<Self>) {
+    if self.in_flight {
+      return;
+    }
+    let Some(ChatItem::Message(m)) = self.items.get(idx) else {
+      return;
+    };
+    if m.role != ChatRole::User || checkpoint_ref_before(&self.items, idx).is_none() {
+      return;
+    }
+    let text = m.text.clone();
+    let input = cx.new(|cx| {
+      TextareaState::new(window, cx)
+        .auto_grow(2, 8)
+        .default_value(text)
+    });
+    window.focus(&input.read(cx).focus_handle(cx), cx);
+    self.edit_input = Some(input);
+    self.editing_message = Some(idx);
+    self.mark_item_changed_at(self.list_ix_for_item(idx));
+    cx.notify();
+  }
+
+  pub fn cancel_message_edit(&mut self, cx: &mut Context<Self>) {
+    if let Some(idx) = self.editing_message.take() {
+      self.edit_input = None;
+      self.mark_item_changed_at(self.list_ix_for_item(idx));
+      cx.notify();
+    }
+  }
+
+  /// Rewind: restore the checkpoint guarding this prompt, truncate, and
+  /// resubmit the edited text once the fresh session connects.
+  pub fn submit_message_edit(&mut self, cx: &mut Context<Self>) {
+    let Some(idx) = self.editing_message else {
+      return;
+    };
+    let Some(text) = self
+      .edit_input
+      .as_ref()
+      .map(|input| input.read(cx).value().trim().to_string())
+    else {
+      return;
+    };
+    if text.is_empty() {
+      return;
+    }
+    let Some(ref_name) = checkpoint_ref_before(&self.items, idx) else {
+      return;
+    };
+    self.editing_message = None;
+    self.edit_input = None;
+    self.pending_edit_resubmit = Some((ref_name.clone(), text));
+    cx.emit(AgentChatPanelEvent::RollbackRequested { ref_name });
+    cx.notify();
+  }
+
   fn pop_queued_to_composer(&mut self, ix: usize, window: &mut Window, cx: &mut Context<Self>) {
     if ix >= self.queued_prompts.len() {
       return;
@@ -2259,6 +2428,13 @@ impl AgentChatPanel {
     let Some(keep_len) = checkpoint_truncate_len(&self.items, ref_name) else {
       return false;
     };
+    self.editing_message = None;
+    self.edit_input = None;
+    if let Some((armed_ref, text)) = self.pending_edit_resubmit.take()
+      && armed_ref == ref_name
+    {
+      self.resubmit_after_connect = Some(text);
+    }
     self.items.truncate(keep_len);
     self.rebuild_tool_index();
     self.pending_agent.clear();
@@ -2558,6 +2734,9 @@ impl AgentChatPanel {
             }
             if let Some(rx) = permissions {
               panel.start_permission_forwarder(rx, cx);
+            }
+            if let Some(text) = panel.resubmit_after_connect.take() {
+              panel.dispatch_prompt(text, cx);
             }
             panel.sync_list_count();
             cx.notify();
@@ -2946,6 +3125,19 @@ fn deduped_model_entries(
 
 /// Insert the marker before the prompt it snapshots; a marker already sitting
 /// there (e.g. right after a rollback) is replaced instead of stacked.
+/// The checkpoint guarding the prompt at `idx`: the nearest marker above it
+/// with no other user prompt in between.
+fn checkpoint_ref_before(items: &[ChatItem], idx: usize) -> Option<String> {
+  for item in items.get(..idx)?.iter().rev() {
+    match item {
+      ChatItem::Checkpoint(marker) => return Some(marker.ref_name.clone()),
+      ChatItem::Message(m) if m.role == ChatRole::User => return None,
+      _ => {}
+    }
+  }
+  None
+}
+
 fn place_checkpoint_marker(items: &mut Vec<ChatItem>, marker: ChatItem) {
   let insert_ix = checkpoint_insert_index(items);
   if insert_ix > 0 && matches!(items.get(insert_ix - 1), Some(ChatItem::Checkpoint(_))) {
@@ -6010,6 +6202,132 @@ mod tests {
     });
     cx.run_until_parked();
     assert!(cx.debug_bounds("agent-slash-menu").is_none());
+  }
+
+  fn checkpoint_item(ref_name: &str) -> ChatItem {
+    ChatItem::Checkpoint(CheckpointMarker {
+      ref_name: ref_name.to_string(),
+      created_at_secs: 0,
+    })
+  }
+
+  #[test]
+  fn checkpoint_ref_before_finds_the_guarding_marker() {
+    let items = vec![
+      checkpoint_item("cp-1"),
+      user_message("first"),
+      agent_message("reply"),
+      checkpoint_item("cp-2"),
+      user_message("second"),
+    ];
+    assert_eq!(checkpoint_ref_before(&items, 1), Some("cp-1".to_string()));
+    assert_eq!(checkpoint_ref_before(&items, 4), Some("cp-2".to_string()));
+    // A prompt with another prompt in between has no guarding marker.
+    let unguarded = vec![
+      checkpoint_item("cp-1"),
+      user_message("first"),
+      user_message("second"),
+    ];
+    assert_eq!(checkpoint_ref_before(&unguarded, 2), None);
+    assert_eq!(checkpoint_ref_before(&unguarded, 0), None);
+  }
+
+  #[gpui::test]
+  async fn the_copy_button_copies_the_message_markdown(cx: &mut gpui::TestAppContext) {
+    let (panel, cx) = add_panel_window(cx);
+    panel.update(cx, |panel, cx| {
+      panel.status = Status::Ready;
+      panel.items = vec![user_message("copy **me** please")];
+      panel.sync_list_count();
+      cx.notify();
+    });
+    cx.run_until_parked();
+
+    let copy = cx.debug_bounds("chat-msg-copy").expect("copy painted");
+    cx.simulate_click(copy.center(), gpui::Modifiers::default());
+    cx.run_until_parked();
+
+    let copied = cx
+      .update(|_, cx| cx.read_from_clipboard())
+      .and_then(|item| item.text());
+    assert_eq!(copied.as_deref(), Some("copy **me** please"));
+  }
+
+  #[gpui::test]
+  async fn editing_a_prompt_arms_the_rewind_and_truncate_resubmits(cx: &mut gpui::TestAppContext) {
+    let (panel, cx) = add_panel_window(cx);
+    panel.update(cx, |panel, cx| {
+      panel.status = Status::Ready;
+      panel.items = vec![
+        checkpoint_item("cp-1"),
+        user_message("old prompt"),
+        agent_message("old answer"),
+      ];
+      panel.sync_list_count();
+      cx.notify();
+    });
+    cx.run_until_parked();
+
+    assert!(
+      cx.debug_bounds("chat-msg-edit").is_some(),
+      "a guarded prompt offers editing"
+    );
+
+    panel.update_in(cx, |panel, window, cx| {
+      panel.begin_message_edit(1, window, cx);
+    });
+    cx.run_until_parked();
+    assert!(
+      cx.debug_bounds("agent-chat-edit-message").is_some(),
+      "the bubble becomes an inline editor"
+    );
+
+    panel.update_in(cx, |panel, window, cx| {
+      let input = panel.edit_input.clone().expect("edit editor");
+      input.update(cx, |state, cx| state.set_value("new prompt", window, cx));
+      panel.submit_message_edit(cx);
+    });
+    panel.read_with(cx, |panel, _| {
+      assert_eq!(
+        panel.pending_edit_resubmit,
+        Some(("cp-1".to_string(), "new prompt".to_string()))
+      );
+      assert!(panel.editing_message.is_none());
+    });
+
+    // The shell restores the worktree then calls truncate; the panel arms the
+    // resubmit for the fresh session and drops the edited turn.
+    panel.update(cx, |panel, cx| {
+      assert!(panel.truncate_at_checkpoint("cp-1", cx));
+    });
+    panel.read_with(cx, |panel, _| {
+      assert_eq!(panel.resubmit_after_connect, Some("new prompt".to_string()));
+      // The marker itself survives: the resubmitted prompt stays guarded by it.
+      assert_eq!(item_kinds(&panel.items), vec!["checkpoint"]);
+    });
+  }
+
+  #[gpui::test]
+  async fn a_truncate_for_another_checkpoint_never_resubmits(cx: &mut gpui::TestAppContext) {
+    let (panel, cx) = add_panel_window(cx);
+    panel.update(cx, |panel, cx| {
+      panel.status = Status::Ready;
+      panel.items = vec![
+        checkpoint_item("cp-1"),
+        user_message("one"),
+        checkpoint_item("cp-2"),
+        user_message("two"),
+      ];
+      panel.pending_edit_resubmit = Some(("cp-2".to_string(), "edited".to_string()));
+      assert!(panel.truncate_at_checkpoint("cp-1", cx));
+    });
+    panel.read_with(cx, |panel, _| {
+      assert!(panel.resubmit_after_connect.is_none());
+      assert!(
+        panel.pending_edit_resubmit.is_none(),
+        "a mismatched truncate disarms the edit instead of leaving it live"
+      );
+    });
   }
 
   #[gpui::test]

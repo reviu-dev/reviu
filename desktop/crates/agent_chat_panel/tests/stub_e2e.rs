@@ -299,6 +299,63 @@ async fn stopping_a_turn_keeps_the_queue(cx: &mut TestAppContext) {
 }
 
 #[gpui::test]
+async fn an_edited_prompt_rewinds_and_replays_through_a_fresh_session(cx: &mut TestAppContext) {
+  cx.executor().allow_parking();
+  set_backend_command_override(Some(env!("CARGO_BIN_EXE_stub_agent").to_string()));
+
+  cx.update(gpui_component::init);
+  let cwd = std::env::temp_dir();
+  let mut mounted = None;
+  let (_root, cx) = cx.add_window_view(|window, cx| {
+    let panel =
+      cx.new(|cx| AgentChatPanel::new(BackendKind::Claude, cwd.clone(), None, window, cx));
+    mounted = Some(panel.clone());
+    gpui_component::Root::new(panel, window, cx)
+  });
+  let panel = mounted.expect("agent chat panel");
+
+  cx.condition(&panel, |panel, _| panel.backend_ready()).await;
+
+  panel.update(cx, |panel, cx| {
+    assert!(panel.send_external_prompt("old prompt".to_string(), cx));
+    // The shell would snapshot the worktree on TurnStarted; stand in for it.
+    panel.record_checkpoint("refs/reviu/test-cp".to_string(), cx);
+  });
+  cx.condition(&panel, |panel, _| {
+    !panel.is_turn_in_flight() && panel.transcript_texts().len() >= 2
+  })
+  .await;
+
+  // Edit the prompt; the panel asks for a rollback, the shell (stood in for
+  // here) restores the worktree then truncates, and the fresh session replays.
+  panel.update_in(cx, |panel, window, cx| {
+    let idx = 1; // [checkpoint, user, thought, agent]
+    panel.begin_message_edit(idx, window, cx);
+    let input = panel.edit_input_for_test().expect("edit editor");
+    input.update(cx, |state, cx| state.set_value("new prompt", window, cx));
+    panel.submit_message_edit(cx);
+    assert!(panel.truncate_at_checkpoint("refs/reviu/test-cp", cx));
+  });
+
+  cx.condition(&panel, |panel, _| {
+    !panel.is_turn_in_flight()
+      && panel.transcript_texts().iter().any(|t| t == "new prompt")
+      && panel.transcript_texts().iter().any(|t| t == "ack")
+  })
+  .await;
+
+  panel.read_with(cx, |panel, _| {
+    let transcript = panel.transcript_texts();
+    assert!(
+      !transcript.iter().any(|t| t == "old prompt"),
+      "the edited turn is gone, got {transcript:?}"
+    );
+  });
+
+  set_backend_command_override(None);
+}
+
+#[gpui::test]
 async fn reconnect_respawns_the_agent_session(cx: &mut TestAppContext) {
   cx.executor().allow_parking();
   set_backend_command_override(Some(env!("CARGO_BIN_EXE_stub_agent").to_string()));
