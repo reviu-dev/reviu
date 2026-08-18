@@ -795,6 +795,8 @@ impl Element for GutterElement {
     window.on_mouse_event({
       let editor = self.editor.clone();
       let line_height = prepaint.line_height;
+      // The gutter hover belongs to its pane, like the text hover does.
+      let is_primary = !matches!(self.view, GutterView::SplitLeft);
       move |event: &MouseMoveEvent, phase, _window, cx| {
         if phase != DispatchPhase::Bubble {
           return;
@@ -803,6 +805,7 @@ impl Element for GutterElement {
           return;
         }
         editor.update(cx, |editor, cx| {
+          editor.hovered_from_primary = is_primary;
           let display_line = {
             let y_offset = event.position.y - bounds.top();
             let line_float = editor.scroll_offset_y + (y_offset / line_height);

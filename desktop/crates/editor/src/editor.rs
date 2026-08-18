@@ -553,7 +553,7 @@ pub struct Editor {
   pub visible_groups: Vec<GroupOverlay>,
   pub hovered_group_id: Option<Arc<str>>,
   /// Which split pane owns the current hover state.
-  hovered_from_primary: bool,
+  pub(crate) hovered_from_primary: bool,
   pub hovered_conflict_start_line: Option<usize>,
   pending_conflict_reveal_start_line: Option<usize>,
   conflict_cache: RwLock<ConflictCache>,
