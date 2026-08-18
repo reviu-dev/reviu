@@ -370,3 +370,457 @@ impl SessionPage {
     }
   }
 }
+
+#[cfg(test)]
+mod tests {
+  use super::super::test_support::*;
+  use super::super::*;
+  use crate::test_support::{TempRepo, commit_text_file};
+  use gpui::TestAppContext;
+  use std::path::Path;
+  use ui::CommandPaletteCommandId;
+
+  #[gpui::test]
+  async fn branches_and_stashes_reach_the_palette(cx: &mut TestAppContext) {
+    let repo = TempRepo::init("session-page-branches-stashes");
+    commit_text_file(&repo.path, Path::new("a.txt"), "v1\n", "initial");
+    let base = git::current_branch_status(&repo.path)
+      .expect("branch status")
+      .name;
+    git::create_branch(&repo.path, "feature").expect("create branch");
+    std::fs::write(repo.path.join("a.txt"), "v2\n").expect("update file");
+    git::create_stash(&repo.path, false, Some("wip")).expect("stash");
+
+    let (page, cx) = add_session_page_window(repo.path.clone(), cx);
+    let refresh = page.update(cx, |page, cx| {
+      page.refresh_branch(cx);
+      page.dock_panel.update(cx, |panel, cx| {
+        panel.refresh(cx);
+        panel._refresh_task.take().expect("refresh task")
+      })
+    });
+    refresh.await;
+    await_branch_refresh(&page, cx).await;
+
+    page.read_with(cx, |page, cx| {
+      assert_eq!(page.stashes.len(), 1, "the stash was loaded");
+      let ids = page
+        .palette_commands(1, cx)
+        .into_iter()
+        .map(|command| command.id)
+        .collect::<Vec<_>>();
+      assert!(ids.contains(&CommandPaletteCommandId::SwitchBranch));
+      assert!(ids.contains(&CommandPaletteCommandId::DeleteBranch));
+      assert!(ids.contains(&CommandPaletteCommandId::MergeBranch));
+      assert!(ids.contains(&CommandPaletteCommandId::CherryPick));
+      assert!(ids.contains(&CommandPaletteCommandId::ApplyStash));
+      assert!(ids.contains(&CommandPaletteCommandId::PopStash));
+      assert!(ids.contains(&CommandPaletteCommandId::DropStash));
+      assert!(
+        !ids.contains(&CommandPaletteCommandId::Stash),
+        "the worktree is clean once stashed"
+      );
+
+      // The lists behind the screens: never the branch we are on.
+      let targets = page.delete_branch_targets();
+      assert!(
+        targets
+          .iter()
+          .any(|branch| branch.name.as_ref() == "feature")
+      );
+      assert!(!targets.iter().any(|branch| branch.name.as_ref() == base));
+    });
+
+    // Applying the stash brings the change back.
+    page.update_in(cx, |page, window, cx| {
+      page
+        .handle_command_palette_action(
+          CommandPaletteAction::PopStash(ui::CommandPaletteStash {
+            index: 0,
+            name: "wip".into(),
+            oid: "".into(),
+          }),
+          window,
+          cx,
+        )
+        .expect("pop the stash")
+    });
+    let command = page.update(cx, |page, _| {
+      page._repo_command_task.take().expect("command task")
+    });
+    command.await;
+    cx.run_until_parked();
+
+    assert_eq!(
+      std::fs::read_to_string(repo.path.join("a.txt")).expect("read file"),
+      "v2\n"
+    );
+  }
+
+  #[gpui::test]
+  async fn palette_repositories_put_the_open_repository_first(cx: &mut TestAppContext) {
+    let repo = TempRepo::init("session-page-palette-repos");
+    commit_text_file(&repo.path, Path::new("README.md"), "v1\n", "initial");
+    let other = TempRepo::init("session-page-palette-repos-other");
+    commit_text_file(&other.path, Path::new("README.md"), "other\n", "initial");
+
+    let (page, cx) = add_session_page_window(repo.path.clone(), cx);
+    ConfigStore::persist_recent_repository(&other.path);
+
+    page.read_with(cx, |page, _| {
+      let repositories = page.palette_repositories();
+      // The open repository is not in the recents yet, it still leads the list.
+      assert_eq!(
+        repositories.first().map(|repo| repo.path.to_string()),
+        Some(repo.path.to_string_lossy().to_string())
+      );
+      assert_eq!(repositories.len(), 2);
+    });
+
+    // Once it is a recent too, it must not be listed twice. Order is left to the
+    // recents, whose timestamps have a one-second granularity.
+    ConfigStore::persist_recent_repository(&repo.path);
+    page.read_with(cx, |page, _| {
+      let repositories = page.palette_repositories();
+      assert_eq!(repositories.len(), 2);
+      assert_eq!(
+        repositories
+          .iter()
+          .filter(|entry| entry.path.as_ref() == repo.path.to_string_lossy())
+          .count(),
+        1
+      );
+    });
+  }
+
+  #[gpui::test]
+  async fn the_palette_reaches_the_pull_request_of_the_branch(cx: &mut TestAppContext) {
+    let repo = TempRepo::init("session-page-pr-palette");
+    commit_text_file(&repo.path, Path::new("README.md"), "v1\n", "initial");
+
+    let (page, cx) = add_session_page_window(repo.path.clone(), cx);
+    cx.run_until_parked();
+
+    // No GitHub access: the palette says nothing about pull requests.
+    page.update(cx, |page, cx| {
+      page.dock_panel.update(cx, |panel, cx| {
+        panel.set_branch_pull_request_state(crate::dock_panel::BranchPrState::NoAccess, cx);
+      });
+    });
+    page.read_with(cx, |page, cx| {
+      let ids = page
+        .palette_commands(1, cx)
+        .into_iter()
+        .map(|command| command.id)
+        .collect::<Vec<_>>();
+      assert!(!ids.contains(&CommandPaletteCommandId::CreatePullRequest));
+      assert!(!ids.contains(&CommandPaletteCommandId::OpenPullRequest));
+    });
+
+    // A published branch with no pull request yet.
+    page.update(cx, |page, cx| {
+      page.dock_panel.update(cx, |panel, cx| {
+        panel.set_branch_pull_request_state(
+          crate::dock_panel::BranchPrState::Missing(GithubBranchContext {
+            owner: "acme".to_string(),
+            repo: "widget".to_string(),
+            branch: "feature".to_string(),
+          }),
+          cx,
+        );
+        panel.set_branch_status(
+          Some(git::BranchStatus {
+            name: "feature".to_string(),
+            ahead: 0,
+            behind: 0,
+            has_upstream: true,
+          }),
+          cx,
+        );
+      });
+    });
+
+    page.read_with(cx, |page, cx| {
+      let ids = page
+        .palette_commands(1, cx)
+        .into_iter()
+        .map(|command| command.id)
+        .collect::<Vec<_>>();
+      assert!(ids.contains(&CommandPaletteCommandId::CreatePullRequest));
+    });
+
+    page.update_in(cx, |page, window, cx| {
+      page
+        .handle_command_palette_action(CommandPaletteAction::CreatePullRequest, window, cx)
+        .expect("create pull request is allowed");
+    });
+    cx.run_until_parked();
+
+    assert!(
+      cx.update(|window, cx| window.has_active_dialog(cx)),
+      "the palette opens the same form as the tab"
+    );
+
+    // An existing pull request: the palette opens it instead of the form.
+    page.update(cx, |page, cx| {
+      page.dock_panel.update(cx, |panel, cx| {
+        panel.set_branch_pull_request_state(
+          crate::dock_panel::BranchPrState::Found(
+            GithubBranchContext {
+              owner: "acme".to_string(),
+              repo: "widget".to_string(),
+              branch: "feature".to_string(),
+            },
+            Box::new(
+              serde_json::from_value(serde_json::json!({
+                "number": 42,
+                "title": "Add widgets",
+                "state": "open",
+                "draft": false,
+                "repository": { "owner": "acme", "repo": "widget" }
+              }))
+              .expect("build pull request"),
+            ),
+          ),
+          cx,
+        );
+      });
+    });
+
+    page.read_with(cx, |page, cx| {
+      let ids = page
+        .palette_commands(1, cx)
+        .into_iter()
+        .map(|command| command.id)
+        .collect::<Vec<_>>();
+      assert!(ids.contains(&CommandPaletteCommandId::OpenPullRequest));
+      assert!(!ids.contains(&CommandPaletteCommandId::CreatePullRequest));
+    });
+
+    // The pull request page is not mounted here: opening it is a no-op, not a crash.
+    page.update_in(cx, |page, window, cx| {
+      page
+        .handle_command_palette_action(CommandPaletteAction::OpenPullRequest, window, cx)
+        .expect("open pull request is allowed");
+    });
+    cx.run_until_parked();
+  }
+
+  #[gpui::test]
+  async fn the_palette_restores_every_change_after_confirmation(cx: &mut TestAppContext) {
+    let repo = TempRepo::init("session-page-restore-all");
+    commit_text_file(&repo.path, Path::new("a.txt"), "v1\n", "initial");
+
+    let (page, cx) = add_session_page_window(repo.path.clone(), cx);
+    let refresh = page.update(cx, |page, cx| {
+      page.dock_panel.update(cx, |panel, cx| {
+        panel.refresh(cx);
+        panel._refresh_task.take().expect("refresh task")
+      })
+    });
+    refresh.await;
+    cx.run_until_parked();
+
+    // Nothing changed yet: nothing to restore.
+    page.read_with(cx, |page, cx| {
+      let ids = page
+        .palette_commands(1, cx)
+        .into_iter()
+        .map(|command| command.id)
+        .collect::<Vec<_>>();
+      assert!(!ids.contains(&CommandPaletteCommandId::RestoreAll));
+    });
+
+    std::fs::write(repo.path.join("a.txt"), "v2\n").expect("modify file");
+    let refresh = page.update(cx, |page, cx| {
+      page.dock_panel.update(cx, |panel, cx| {
+        panel.refresh(cx);
+        panel._refresh_task.take().expect("refresh task")
+      })
+    });
+    refresh.await;
+    cx.run_until_parked();
+
+    page.read_with(cx, |page, cx| {
+      let ids = page
+        .palette_commands(1, cx)
+        .into_iter()
+        .map(|command| command.id)
+        .collect::<Vec<_>>();
+      assert!(ids.contains(&CommandPaletteCommandId::RestoreAll));
+    });
+
+    // Destructive: the command asks first and touches nothing on its own.
+    page.update_in(cx, |page, window, cx| {
+      page
+        .handle_command_palette_action(CommandPaletteAction::RestoreAll, window, cx)
+        .expect("restore all is allowed");
+    });
+    cx.run_until_parked();
+
+    assert!(cx.update(|window, cx| window.has_active_dialog(cx)));
+    assert_eq!(
+      std::fs::read_to_string(repo.path.join("a.txt")).expect("read file"),
+      "v2\n",
+      "the file is only discarded once the dialog is confirmed"
+    );
+
+    // What the dialog runs on confirmation.
+    let restore = page.update_in(cx, |page, window, cx| {
+      page
+        .dock_panel
+        .read(cx)
+        .changes_list()
+        .update(cx, |list, cx| {
+          list.restore_all(window, cx);
+          list._action_task.take().expect("restore all task")
+        })
+    });
+    restore.await;
+    cx.run_until_parked();
+    let refresh = page.update(cx, |page, cx| {
+      page
+        .dock_panel
+        .update(cx, |panel, _| panel._refresh_task.take())
+    });
+    if let Some(task) = refresh {
+      task.await;
+    }
+    cx.run_until_parked();
+
+    assert_eq!(
+      std::fs::read_to_string(repo.path.join("a.txt")).expect("read file"),
+      "v1\n"
+    );
+    page.read_with(cx, |page, cx| {
+      assert!(
+        page.dock_panel.read(cx).status_entries().is_empty(),
+        "the changes list follows a discard without an explicit refresh"
+      );
+    });
+  }
+
+  #[gpui::test]
+  async fn the_palette_only_offers_what_the_repository_allows(cx: &mut TestAppContext) {
+    let repo = TempRepo::init("session-page-palette-rules");
+    commit_text_file(&repo.path, Path::new("a.txt"), "v1\n", "initial");
+
+    let (page, cx) = add_session_page_window(repo.path.clone(), cx);
+    page.update(cx, |page, cx| {
+      page.dock_panel.update(cx, |panel, cx| panel.refresh(cx));
+      page.refresh_branch(cx);
+    });
+    await_branch_refresh(&page, cx).await;
+
+    let ids = |page: &SessionPage, cx: &App| {
+      page
+        .palette_commands(1, cx)
+        .into_iter()
+        .map(|command| command.id)
+        .collect::<Vec<_>>()
+    };
+
+    // Clean worktree, no upstream: nothing to commit, stage or sync.
+    page.read_with(cx, |page, cx| {
+      let ids = ids(page, cx);
+      assert!(!ids.contains(&CommandPaletteCommandId::Commit));
+      assert!(!ids.contains(&CommandPaletteCommandId::StageAll));
+      assert!(!ids.contains(&CommandPaletteCommandId::UnstageAll));
+      assert!(!ids.contains(&CommandPaletteCommandId::Pull));
+      assert!(
+        ids.contains(&CommandPaletteCommandId::Fetch),
+        "fetching is always available"
+      );
+    });
+
+    // A change and a message: committing and staging show up.
+    std::fs::write(repo.path.join("a.txt"), "v2\n").expect("update file");
+    let refresh = page.update(cx, |page, cx| {
+      page.dock_panel.update(cx, |panel, cx| {
+        panel.refresh(cx);
+        panel._refresh_task.take().expect("refresh task")
+      })
+    });
+    refresh.await;
+    cx.run_until_parked();
+    page.update_in(cx, |page, window, cx| {
+      page.dock_panel.update(cx, |panel, cx| {
+        panel.set_commit_message("a message", window, cx)
+      });
+    });
+
+    page.read_with(cx, |page, cx| {
+      let ids = ids(page, cx);
+      assert!(ids.contains(&CommandPaletteCommandId::Commit));
+      assert!(ids.contains(&CommandPaletteCommandId::StageAll));
+    });
+  }
+
+  #[gpui::test]
+  async fn the_palette_offers_syncing_once_the_branch_tracks_a_remote(cx: &mut TestAppContext) {
+    let repo = TempRepo::init("session-page-palette-sync");
+    let remote = crate::test_support::TempBareRepo::init("session-page-palette-sync-remote");
+    commit_text_file(&repo.path, Path::new("a.txt"), "v1\n", "initial");
+    git2::Repository::open(&repo.path)
+      .expect("open repo")
+      .remote("origin", remote.path.to_str().expect("remote path utf8"))
+      .expect("add origin");
+    let branch = git::current_branch_status(&repo.path)
+      .expect("branch status")
+      .name;
+    crate::test_support::push_branch_to_remote(&repo.path, &branch, "origin");
+    crate::test_support::set_upstream(&repo.path, &branch, &format!("origin/{branch}"));
+    commit_text_file(
+      &repo.path,
+      Path::new("a.txt"),
+      "v2\n",
+      "ahead of the remote",
+    );
+
+    let (page, cx) = add_session_page_window(repo.path.clone(), cx);
+    page.update(cx, |page, cx| page.refresh_branch(cx));
+    await_branch_refresh(&page, cx).await;
+
+    page.read_with(cx, |page, cx| {
+      let ids = page
+        .palette_commands(1, cx)
+        .into_iter()
+        .map(|command| command.id)
+        .collect::<Vec<_>>();
+      assert!(
+        ids.contains(&CommandPaletteCommandId::Push),
+        "one commit ahead of the upstream is something to push"
+      );
+      assert!(
+        ids.contains(&CommandPaletteCommandId::Pull),
+        "a tracked branch can be pulled"
+      );
+      assert!(
+        !ids.contains(&CommandPaletteCommandId::ForcePush),
+        "nothing forces a push on a branch that only moved forward"
+      );
+    });
+
+    // Rewriting a commit the remote already has diverges the branch.
+    git::push(&repo.path, false).expect("push the commit first");
+    git::undo_last_commit(&repo.path).expect("undo the last commit");
+    commit_text_file(
+      &repo.path,
+      Path::new("a.txt"),
+      "v2 rewritten\n",
+      "rewritten",
+    );
+    page.update(cx, |page, cx| page.refresh_branch(cx));
+    await_branch_refresh(&page, cx).await;
+
+    page.read_with(cx, |page, cx| {
+      let ids = page
+        .palette_commands(1, cx)
+        .into_iter()
+        .map(|command| command.id)
+        .collect::<Vec<_>>();
+      assert!(ids.contains(&CommandPaletteCommandId::ForcePush));
+      assert!(!ids.contains(&CommandPaletteCommandId::Push));
+    });
+  }
+}
