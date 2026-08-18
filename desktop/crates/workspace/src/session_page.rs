@@ -308,9 +308,6 @@ impl SessionPage {
           this.sync_editor_unmerged_state(cx);
           this.sync_git_telemetry(cx);
         }
-        DockPanelEvent::Close => {
-          this.close_dock(window, cx);
-        }
         DockPanelEvent::ToggleZoom => {
           this.toggle_dock_zoom(cx);
         }

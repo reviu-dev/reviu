@@ -10,7 +10,7 @@ The separate Git page is gone: everything it did happens in the Sessions workspa
 
 ### The Right Panel Opens And Closes
 
-The right panel is no longer pinned to the workspace. Its header gains a close button, and the shortcut of the active tab closes it too, so `cmd-j` on the terminal or `cmd-shift-e` on the changes now toggle the panel instead of only opening it. Any tab shortcut brings it back, sliding in and out, and a toggle in the top bar does the same with the mouse. Closing the panel hands the focus back to the diff or the composer, so the next shortcut always lands. A new expand button gives the panel the whole window for a large diff or a long terminal session, and its edge can be dragged to resize, with a double-click returning the default width.
+The right panel is no longer pinned to the workspace. A toggle in the top bar opens and closes it with the mouse, and the shortcut of the active tab closes it too, so `cmd-j` on the terminal or `cmd-shift-e` on the changes now toggle the panel instead of only opening it. Any tab shortcut brings it back, sliding in and out. Focus always lands somewhere alive: closing the panel hands it to the diff or the composer, and opening an empty changes tab keeps the keyboard working. A new expand button gives the panel the whole window for a large diff or a long terminal session, and its edge can be dragged to resize, with a double-click returning the default width.
 
 ### A Clean File Never Splits
 

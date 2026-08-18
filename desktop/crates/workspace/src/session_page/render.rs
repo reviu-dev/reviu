@@ -1428,8 +1428,12 @@ mod tests {
   async fn the_dock_shortcuts_open_their_tab(cx: &mut TestAppContext) {
     let repo = TempRepo::init("session-render-dock-shortcuts");
     commit_text_file(&repo.path, Path::new("a.txt"), "v1\n", "initial");
+    std::fs::write(repo.path.join("a.txt"), "v2\n").expect("modify file");
 
     let (page, cx) = add_session_page_window(repo.path.clone(), cx);
+    page.update(cx, |page, cx| {
+      page.dock_panel.update(cx, |panel, cx| panel.refresh(cx))
+    });
     cx.run_until_parked();
 
     page.update_in(cx, |page, window, cx| {
@@ -2414,7 +2418,7 @@ mod tests {
     cx.run_until_parked();
 
     assert!(
-      cx.debug_bounds("dock-panel-close").is_some(),
+      cx.debug_bounds("dock-panel-zoom").is_some(),
       "dock starts open"
     );
 
@@ -2438,20 +2442,6 @@ mod tests {
       assert!(page.dock_open);
       assert_eq!(page.dock_panel.read(cx).active_tab(), DockPanelTab::History);
     });
-  }
-
-  #[gpui::test]
-  async fn the_close_button_closes_the_dock(cx: &mut TestAppContext) {
-    let repo = TempRepo::init("session-dock-close-button");
-    commit_text_file(&repo.path, Path::new("README.md"), "v1\n", "initial");
-    let (page, cx) = add_session_page_window(repo.path.clone(), cx);
-    cx.run_until_parked();
-
-    let close = cx.debug_bounds("dock-panel-close").expect("close button");
-    cx.simulate_click(close.center(), gpui::Modifiers::default());
-    cx.run_until_parked();
-
-    page.read_with(cx, |page, _| assert!(!page.dock_open));
   }
 
   #[gpui::test]
@@ -2584,5 +2574,35 @@ mod tests {
     cx.update(|window, cx| SessionPageHandle::toggle_right_dock(window, cx));
     cx.run_until_parked();
     page.read_with(cx, |page, _| assert!(page.dock_open));
+  }
+
+  #[gpui::test]
+  async fn reopening_changes_on_a_clean_tree_keeps_a_live_focus(cx: &mut TestAppContext) {
+    let repo = TempRepo::init("session-dock-clean-focus");
+    commit_text_file(&repo.path, Path::new("README.md"), "v1\n", "initial");
+    let (page, cx) = add_session_page_window(repo.path.clone(), cx);
+    cx.run_until_parked();
+
+    // Close, then reopen Changes on a worktree with nothing in it.
+    page.update_in(cx, |page, window, cx| {
+      page.open_changes_action(&crate::OpenGitChangesSidebar, window, cx)
+    });
+    cx.run_until_parked();
+    page.update_in(cx, |page, window, cx| {
+      page.open_changes_action(&crate::OpenGitChangesSidebar, window, cx)
+    });
+    cx.run_until_parked();
+
+    page.read_with(cx, |page, _| assert!(page.dock_open));
+    let dock_handle = page.read_with(cx, |page, cx| page.dock_panel.read(cx).focus_handle(cx));
+    let focused = cx.update(|window, cx| {
+      let _ = cx;
+      window.focused(cx)
+    });
+    assert_eq!(
+      focused.as_ref(),
+      Some(&dock_handle),
+      "an empty changes tab must not send the focus to an unmounted list"
+    );
   }
 }

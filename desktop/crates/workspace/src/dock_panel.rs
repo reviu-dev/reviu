@@ -39,7 +39,6 @@ const DOCK_PANEL_TERMINAL_TAB_DEBUG_SELECTOR: &str = "dock-panel-tab-terminal";
 const DOCK_PANEL_HISTORY_TAB_DEBUG_SELECTOR: &str = "dock-panel-tab-history";
 const DOCK_PANEL_REFRESH_DEBUG_SELECTOR: &str = "dock-panel-refresh";
 pub(crate) const DOCK_PANEL_ZOOM_DEBUG_SELECTOR: &str = "dock-panel-zoom";
-pub(crate) const DOCK_PANEL_CLOSE_DEBUG_SELECTOR: &str = "dock-panel-close";
 use std::collections::BTreeMap;
 use std::rc::Rc;
 
@@ -76,8 +75,6 @@ pub enum DockPanelEvent {
   PublishBranchAndCreatePullRequest(GithubBranchContext),
   /// The working tree was re-read: whoever shows a file has to look again.
   StatusRefreshed,
-  /// The close button: the host owns the dock's visibility.
-  Close,
   /// The zoom button: the host owns the layout.
   ToggleZoom,
 }
@@ -858,8 +855,13 @@ impl DockPanel {
     }
     match target {
       DockPanelTab::Changes => {
-        let list = self.changes_list.clone();
-        list.update(cx, |list, cx| list.focus(window, cx));
+        if self.status_entries.is_empty() {
+          // The empty state mounts no list; its handle would drop the focus.
+          window.focus(&self.focus_handle, cx);
+        } else {
+          let list = self.changes_list.clone();
+          list.update(cx, |list, cx| list.focus(window, cx));
+        }
       }
       DockPanelTab::History => {
         let history = self.history_list.clone();
@@ -1318,16 +1320,6 @@ impl Render for DockPanel {
               .small()
               .tooltip(if self.zoomed { "Restore" } else { "Expand" })
               .on_click(cx.listener(|_, _, _, cx| cx.emit(DockPanelEvent::ToggleZoom))),
-          )
-          .child(
-            Button::new("dock-panel-close")
-              .debug_selector(|| DOCK_PANEL_CLOSE_DEBUG_SELECTOR.to_string())
-              .icon(gpui_component::IconName::PanelRightClose)
-              .ghost()
-              .compact()
-              .small()
-              .tooltip("Close panel")
-              .on_click(cx.listener(|_, _, _, cx| cx.emit(DockPanelEvent::Close))),
           ),
       );
 
