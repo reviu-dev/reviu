@@ -2105,6 +2105,7 @@ impl AgentChatPanel {
     deferred(
       div()
         .id("agent-mention-menu")
+        .debug_selector(|| "agent-mention-menu".to_string())
         .absolute()
         .left_0()
         .bottom(gpui::relative(1.0))
@@ -5897,6 +5898,91 @@ mod tests {
     panel.read_with(cx, |panel, cx| {
       assert_eq!(panel.input.read(cx).value(), "/compact ");
       assert!(panel.items.is_empty());
+    });
+  }
+
+  #[gpui::test]
+  async fn slash_and_mention_menus_never_open_together(cx: &mut gpui::TestAppContext) {
+    let (panel, cx) = add_panel_window(cx);
+    panel.update(cx, |panel, cx| {
+      panel.status = Status::Ready;
+      panel.available_commands = vec![command("compact", "Compact the conversation")];
+      cx.notify();
+    });
+    cx.run_until_parked();
+
+    let input_focus = panel.read_with(cx, |panel, cx| panel.input.read(cx).focus_handle(cx));
+    cx.update(|window, cx| window.focus(&input_focus, cx));
+
+    cx.simulate_input("@");
+    cx.run_until_parked();
+    assert!(
+      cx.debug_bounds("agent-mention-menu").is_some(),
+      "@ opens the mention menu"
+    );
+    assert!(cx.debug_bounds("agent-slash-menu").is_none());
+
+    panel.update_in(cx, |panel, window, cx| {
+      panel.input.update(cx, |state, cx| {
+        state.set_value("", window, cx);
+      });
+      cx.notify();
+    });
+    cx.simulate_input("/c");
+    cx.run_until_parked();
+    assert!(cx.debug_bounds("agent-slash-menu").is_some());
+    assert!(
+      cx.debug_bounds("agent-mention-menu").is_none(),
+      "a leading slash is not a mention"
+    );
+  }
+
+  #[gpui::test]
+  async fn escaping_the_slash_menu_dismisses_until_the_token_changes(
+    cx: &mut gpui::TestAppContext,
+  ) {
+    let (panel, cx) = add_panel_window(cx);
+    panel.update(cx, |panel, cx| {
+      panel.status = Status::Ready;
+      panel.available_commands = vec![command("compact", "Compact the conversation")];
+      cx.notify();
+    });
+    cx.run_until_parked();
+
+    let input_focus = panel.read_with(cx, |panel, cx| panel.input.read(cx).focus_handle(cx));
+    cx.update(|window, cx| window.focus(&input_focus, cx));
+    cx.simulate_input("/co");
+    cx.run_until_parked();
+    assert!(cx.debug_bounds("agent-slash-menu").is_some());
+
+    cx.simulate_keystrokes("escape");
+    cx.run_until_parked();
+    assert!(
+      cx.debug_bounds("agent-slash-menu").is_none(),
+      "escape closes the menu"
+    );
+
+    cx.simulate_input("m");
+    cx.run_until_parked();
+    assert!(
+      cx.debug_bounds("agent-slash-menu").is_some(),
+      "a changed token reopens the menu"
+    );
+  }
+
+  #[gpui::test]
+  async fn accepting_a_command_keeps_the_typed_arguments(cx: &mut gpui::TestAppContext) {
+    let (panel, cx) = add_panel_window(cx);
+    panel.update_in(cx, |panel, window, cx| {
+      panel.status = Status::Ready;
+      panel.available_commands = vec![command("compact", "Compact the conversation")];
+      panel.input.update(cx, |state, cx| {
+        state.set_value("/co keep this", window, cx);
+      });
+      panel.insert_slash_command("compact", window, cx);
+    });
+    panel.read_with(cx, |panel, cx| {
+      assert_eq!(panel.input.read(cx).value(), "/compact keep this");
     });
   }
 
