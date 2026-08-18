@@ -503,6 +503,71 @@ impl AgentChatPanel {
     panel
   }
 
+  /// The shape of `new` without connecting: no agent process, no state loading.
+  #[cfg(test)]
+  fn new_disconnected(cwd: PathBuf, window: &mut Window, cx: &mut Context<Self>) -> Self {
+    let backend_kind = BackendKind::Claude;
+    let input = cx.new(|cx| {
+      TextareaState::new(window, cx)
+        .auto_grow(1, 8)
+        .placeholder("Message... (@ to add files or diffs)")
+    });
+    let input_sub = cx.subscribe_in(
+      &input,
+      window,
+      |this, _state, event: &InputEvent, window, cx| {
+        if let InputEvent::PressEnter { .. } = event {
+          this.submit(window, cx);
+        }
+      },
+    );
+
+    let mut panel = Self {
+      backend_kind,
+      backend: backend_kind.config(),
+      cwd,
+      status: Status::Connecting,
+      items: Vec::new(),
+      repo_files: Arc::new(Vec::new()),
+      active_selection: None,
+      mention_selected_ix: 0,
+      mention_dismissed: None,
+      tool_index: HashMap::new(),
+      pending_agent: String::new(),
+      pending_thought: String::new(),
+      session: None,
+      input,
+      in_flight: false,
+      turn_started_at: None,
+      _tick_task: None,
+      messages_list: {
+        let list = gpui::ListState::new(0, gpui::ListAlignment::Top, px(300.));
+        list.set_follow_mode(gpui::FollowMode::Tail);
+        list
+      },
+      usage: None,
+      agent_version: None,
+      auth_methods: Vec::new(),
+      auth_required: false,
+      state_dir: None,
+      current_conv: new_conversation_meta(),
+      selection_registry: selectable_text::SelectionRegistry::new(),
+      available_modes: Vec::new(),
+      current_mode_id: None,
+      available_models: Vec::new(),
+      current_model_id: None,
+      config_options: Vec::new(),
+      config_defaults: HashMap::new(),
+      _connect_task: None,
+      _events_task: None,
+      _permission_task: None,
+      _input_sub: Some(input_sub),
+      show_conversation_controls: true,
+    };
+    panel.sync_list_count();
+    panel
+  }
+
   fn start_turn(&mut self, cx: &mut Context<Self>) {
     self.in_flight = true;
     self.turn_started_at = Some(std::time::Instant::now());
@@ -709,6 +774,7 @@ impl AgentChatPanel {
           return div().into_any_element();
         };
         v_flex()
+          .debug_selector(|| "agent-chat-missing-binary".to_string())
           .px_3()
           .gap_2()
           .child(
@@ -4535,5 +4601,92 @@ mod tests {
     assert_eq!(tool_kind_label(&ToolKind::Read), "Read");
     assert_eq!(tool_kind_label(&ToolKind::Edit), "Edit");
     assert_eq!(tool_kind_label(&ToolKind::Execute), "Run");
+  }
+
+  fn add_panel_window(
+    cx: &mut gpui::TestAppContext,
+  ) -> (gpui::Entity<AgentChatPanel>, &mut gpui::VisualTestContext) {
+    cx.update(gpui_component::init);
+    let mut mounted: Option<gpui::Entity<AgentChatPanel>> = None;
+    let (_root, cx) = cx.add_window_view(|window, cx| {
+      let panel = cx.new(|cx| AgentChatPanel::new_disconnected(PathBuf::from("."), window, cx));
+      mounted = Some(panel.clone());
+      gpui_component::Root::new(panel, window, cx)
+    });
+    (mounted.expect("agent chat panel"), cx)
+  }
+
+  #[gpui::test]
+  async fn mounting_the_panel_spawns_no_agent_and_paints(cx: &mut gpui::TestAppContext) {
+    let (panel, cx) = add_panel_window(cx);
+    cx.run_until_parked();
+
+    panel.read_with(cx, |panel, _| {
+      assert!(panel.session.is_none(), "no agent process was connected");
+      assert!(panel._connect_task.is_none());
+      // Connecting shows the generating row and nothing else.
+      assert_eq!(panel.messages_list.item_count(), 1);
+    });
+  }
+
+  #[gpui::test]
+  async fn a_missing_binary_paints_its_install_hint(cx: &mut gpui::TestAppContext) {
+    let (panel, cx) = add_panel_window(cx);
+    panel.update(cx, |panel, cx| {
+      panel.status = Status::MissingBinary {
+        command: "npx".to_string(),
+        hint: "Install Node.js to get npx".to_string(),
+      };
+      panel.sync_list_count();
+      cx.notify();
+    });
+    cx.run_until_parked();
+
+    assert!(
+      cx.debug_bounds("agent-chat-missing-binary").is_some(),
+      "the notice is painted"
+    );
+    panel.read_with(cx, |panel, _| {
+      assert_eq!(panel.messages_list.item_count(), 1);
+    });
+  }
+
+  #[gpui::test]
+  async fn a_loaded_conversation_renders_one_row_per_item(cx: &mut gpui::TestAppContext) {
+    let (panel, cx) = add_panel_window(cx);
+    panel.update(cx, |panel, cx| {
+      panel.status = Status::Ready;
+      panel.items = vec![user_message("hello"), agent_message("hi there")];
+      panel.sync_list_count();
+      cx.notify();
+    });
+    cx.run_until_parked();
+
+    panel.read_with(cx, |panel, _| {
+      // Ready and idle: no generating row, one list row per message.
+      assert_eq!(panel.messages_list.item_count(), 2);
+    });
+  }
+
+  #[gpui::test]
+  async fn typing_enter_without_a_session_sends_nothing(cx: &mut gpui::TestAppContext) {
+    let (panel, cx) = add_panel_window(cx);
+    cx.run_until_parked();
+
+    let input_focus = panel.read_with(cx, |panel, cx| panel.input.read(cx).focus_handle(cx));
+    cx.update(|window, cx| window.focus(&input_focus, cx));
+    cx.simulate_input("do the thing");
+    panel.read_with(cx, |panel, cx| {
+      assert_eq!(panel.input.read(cx).value(), "do the thing");
+    });
+    cx.simulate_keystrokes("enter");
+    cx.run_until_parked();
+
+    panel.read_with(cx, |panel, cx| {
+      // Submit ran (the composer was drained) but nothing was dispatched.
+      assert_eq!(panel.input.read(cx).value(), "");
+      assert!(panel.items.is_empty(), "no prompt was recorded");
+      assert!(!panel.in_flight);
+    });
   }
 }
