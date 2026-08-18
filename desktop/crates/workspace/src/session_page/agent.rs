@@ -61,6 +61,7 @@ impl SessionPage {
     // Also the flush point for a review export queued while the agent was connecting.
     cx.observe(&view, |this, _, cx| {
       this.flush_pending_review_export(cx);
+      this.sync_session_list(cx);
       cx.notify();
     })
     .detach();
@@ -90,6 +91,7 @@ impl SessionPage {
     )
     .detach();
     self.agent_chat_view = Some(view);
+    self.sync_session_list(cx);
   }
 
   pub(super) fn create_turn_checkpoint(&mut self, cx: &mut Context<Self>) {

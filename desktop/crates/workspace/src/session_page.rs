@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::sync::Arc;
 
-use agent_chat_panel::{AgentChatPanel, AgentChatPanelEvent, ConversationMeta};
+use agent_chat_panel::{AgentChatPanel, AgentChatPanelEvent};
 use editor::{
   ConflictResolution, DiffViewMode, Editor, EditorEvent, ReviewCommentCreateHandler,
   ReviewCommentCreateRequest, ReviewCommentDeleteHandler, ReviewCommentDisplayMode,
@@ -17,8 +17,7 @@ use gpui::{
   Render, SharedString, Task, Window, div, prelude::*, px,
 };
 use gpui_component::{
-  ActiveTheme as _, Disableable as _, Icon, Sizable as _, h_flex, notification::Notification,
-  v_flex,
+  ActiveTheme as _, Disableable as _, Sizable as _, h_flex, notification::Notification, v_flex,
 };
 
 use crate::active_local_repo::{ActiveLocalRepoStore, active_local_repo_snapshot};
@@ -39,6 +38,7 @@ use crate::file_view::{
 };
 use crate::inbox::Inbox;
 use crate::navigation::NavigationHistory;
+use crate::session_list::{SessionList, SessionListEvent};
 use git::{InteractiveRebaseTarget, RepoStatusKind};
 
 use crate::git_telemetry::{self, GitTelemetry};
@@ -95,32 +95,6 @@ const CENTER_SWAP_FADE_MS: u64 = 180;
 const DOCK_PANEL_DEFAULT_WIDTH: f32 = 320.0;
 const DOCK_PANEL_MIN_WIDTH: f32 = 240.0;
 const DOCK_PANEL_MAX_WIDTH: f32 = 560.0;
-
-pub(crate) fn format_relative_secs(updated_at_secs: u64, now_secs: u64) -> String {
-  let delta = now_secs.saturating_sub(updated_at_secs);
-  match delta {
-    0..=59 => "now".to_string(),
-    60..=3_599 => format!("{}m", delta / 60),
-    3_600..=86_399 => format!("{}h", delta / 3_600),
-    _ => format!("{}d", delta / 86_400),
-  }
-}
-
-fn now_secs() -> u64 {
-  std::time::SystemTime::now()
-    .duration_since(std::time::UNIX_EPOCH)
-    .map(|d| d.as_secs())
-    .unwrap_or(0)
-}
-
-pub(crate) fn session_row_title(meta: &ConversationMeta) -> SharedString {
-  let trimmed = meta.title.trim();
-  if trimmed.is_empty() {
-    "New session".into()
-  } else {
-    trimmed.to_string().into()
-  }
-}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum CenterView {
@@ -192,6 +166,7 @@ pub struct SessionPage {
   agent_chat_view: Option<Entity<AgentChatPanel>>,
   dock_panel: Entity<DockPanel>,
   inbox: Entity<Inbox>,
+  session_list: Entity<SessionList>,
   selected_repo: Option<PathBuf>,
   center: CenterView,
   editor: Option<Entity<Editor>>,
@@ -247,6 +222,17 @@ impl SessionPage {
       .map(|repo| repo.path.clone());
     let dock_panel = cx.new(|cx| DockPanel::new(selected_repo.clone(), window, cx));
     let inbox = cx.new(|_| Inbox::new());
+    let session_list = cx.new(|_| SessionList::new());
+    cx.subscribe_in(
+      &session_list,
+      window,
+      |this, _list, event: &SessionListEvent, window, cx| match event {
+        SessionListEvent::NewSession => this.new_session(window, cx),
+        SessionListEvent::Selected { id } => this.select_session(id, window, cx),
+        SessionListEvent::Deleted { id } => this.delete_session(id, cx),
+      },
+    )
+    .detach();
     let svg_preview = cx.new(|_| SvgPreview::new());
     // The SVG renders on a background task; repaint when it lands.
     cx.observe(&svg_preview, |_, _, cx| cx.notify()).detach();
@@ -290,6 +276,7 @@ impl SessionPage {
       agent_chat_view: None,
       dock_panel,
       inbox,
+      session_list,
       selected_repo,
       center: CenterView::Conversation,
       editor: None,
@@ -389,6 +376,22 @@ impl SessionPage {
     }
     self.ensure_agent_chat_view(window, cx);
     cx.notify();
+  }
+
+  fn sync_session_list(&mut self, cx: &mut Context<Self>) {
+    let (conversations, current_id) = match self.agent_chat_view.as_ref() {
+      Some(panel) => {
+        let panel = panel.read(cx);
+        (
+          panel.list_conversations(),
+          panel.current_conversation().id.clone(),
+        )
+      }
+      None => (Vec::new(), String::new()),
+    };
+    self.session_list.update(cx, |list, cx| {
+      list.set_conversations(conversations, current_id, cx)
+    });
   }
 
   fn refresh_branch(&mut self, cx: &mut Context<Self>) {
@@ -1267,42 +1270,6 @@ mod tests {
   use crate::test_support::{TempRepo, commit_text_file};
   use gpui::TestAppContext;
   use std::path::Path;
-
-  fn meta_with_title(title: &str) -> ConversationMeta {
-    ConversationMeta {
-      id: "1".to_string(),
-      started_at_secs: 0,
-      updated_at_secs: 0,
-      title: title.to_string(),
-      message_count: 0,
-      session_id: None,
-    }
-  }
-
-  #[test]
-  fn format_relative_secs_buckets() {
-    assert_eq!(format_relative_secs(100, 100), "now");
-    assert_eq!(format_relative_secs(100, 159), "now");
-    assert_eq!(format_relative_secs(100, 160), "1m");
-    assert_eq!(format_relative_secs(100, 100 + 3_600), "1h");
-    assert_eq!(format_relative_secs(100, 100 + 86_400), "1d");
-    assert_eq!(format_relative_secs(100, 100 + 3 * 86_400), "3d");
-  }
-
-  #[test]
-  fn format_relative_secs_clamps_future_timestamps() {
-    assert_eq!(format_relative_secs(200, 100), "now");
-  }
-
-  #[test]
-  fn session_row_title_falls_back_when_empty() {
-    assert_eq!(session_row_title(&meta_with_title("")), "New session");
-    assert_eq!(session_row_title(&meta_with_title("   ")), "New session");
-    assert_eq!(
-      session_row_title(&meta_with_title("Fix scroll")),
-      "Fix scroll"
-    );
-  }
 
   #[gpui::test]
   async fn open_diff_switches_center_and_escape_returns(cx: &mut TestAppContext) {

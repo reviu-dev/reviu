@@ -51,6 +51,7 @@ impl SessionPage {
     // Conversations are stored per repository, so the panel is rebuilt on the
     // next render with the new cwd and state directory.
     self.agent_chat_view = None;
+    self.sync_session_list(cx);
     self.dock_panel.update(cx, |panel, cx| {
       panel.set_repo_root(repo_root, cx);
       panel.refresh(cx);
