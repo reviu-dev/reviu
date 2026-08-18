@@ -1459,9 +1459,13 @@ impl AgentChatPanel {
                 .opacity(0.)
                 .group_hover("chat-agent-msg", |this| this.opacity(1.))
                 .child(
-                  Clipboard::new(SharedString::from(format!("chat-msg-copy-agent-{idx}")))
-                    .value(SharedString::from(m.text.clone()))
-                    .tooltip("Copy message"),
+                  div()
+                    .debug_selector(|| "chat-msg-copy-agent".to_string())
+                    .child(
+                      Clipboard::new(SharedString::from(format!("chat-msg-copy-agent-{idx}")))
+                        .value(SharedString::from(m.text.clone()))
+                        .tooltip("Copy message"),
+                    ),
                 ),
             )
             .into_any_element(),
@@ -6305,6 +6309,74 @@ mod tests {
       // The marker itself survives: the resubmitted prompt stays guarded by it.
       assert_eq!(item_kinds(&panel.items), vec!["checkpoint"]);
     });
+  }
+
+  #[gpui::test]
+  async fn editing_is_refused_mid_turn_and_cancel_restores_the_bubble(
+    cx: &mut gpui::TestAppContext,
+  ) {
+    let (panel, cx) = add_panel_window(cx);
+    panel.update(cx, |panel, cx| {
+      panel.status = Status::Ready;
+      panel.in_flight = true;
+      panel.items = vec![checkpoint_item("cp-1"), user_message("prompt")];
+      panel.sync_list_count();
+      cx.notify();
+    });
+    cx.run_until_parked();
+
+    assert!(
+      cx.debug_bounds("chat-msg-edit").is_none(),
+      "no edit button while a turn runs"
+    );
+    panel.update_in(cx, |panel, window, cx| {
+      panel.begin_message_edit(1, window, cx);
+      assert!(panel.editing_message.is_none(), "editing refused mid-turn");
+      panel.in_flight = false;
+      panel.begin_message_edit(1, window, cx);
+      assert_eq!(panel.editing_message, Some(1));
+      panel.cancel_message_edit(cx);
+      assert!(panel.editing_message.is_none());
+      cx.notify();
+    });
+    cx.run_until_parked();
+
+    assert!(
+      cx.debug_bounds("agent-chat-edit-message").is_none(),
+      "cancel restores the bubble"
+    );
+
+    // A prompt without a guarding checkpoint offers no edit either.
+    panel.update(cx, |panel, cx| {
+      panel.items = vec![user_message("unguarded")];
+      panel.sync_list_count();
+      cx.notify();
+    });
+    cx.run_until_parked();
+    assert!(cx.debug_bounds("chat-msg-edit").is_none());
+  }
+
+  #[gpui::test]
+  async fn the_copy_button_works_on_agent_messages_too(cx: &mut gpui::TestAppContext) {
+    let (panel, cx) = add_panel_window(cx);
+    panel.update(cx, |panel, cx| {
+      panel.status = Status::Ready;
+      panel.items = vec![agent_message("the agent said this")];
+      panel.sync_list_count();
+      cx.notify();
+    });
+    cx.run_until_parked();
+
+    let copy = cx
+      .debug_bounds("chat-msg-copy-agent")
+      .expect("agent copy painted");
+    cx.simulate_click(copy.center(), gpui::Modifiers::default());
+    cx.run_until_parked();
+
+    let copied = cx
+      .update(|_, cx| cx.read_from_clipboard())
+      .and_then(|item| item.text());
+    assert_eq!(copied.as_deref(), Some("the agent said this"));
   }
 
   #[gpui::test]
