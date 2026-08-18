@@ -1,0 +1,3 @@
+# A test that parks forever should fail the run, not hang CI.
+[profile.default]
+slow-timeout = { period = "60s", terminate-after = 2 }
