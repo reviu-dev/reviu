@@ -140,28 +140,6 @@ impl SessionPageHandle {
     });
   }
 
-  /// The global bar paints the dock toggle from this.
-  pub fn dock_is_open(cx: &mut App) -> Option<bool> {
-    let page = cx
-      .try_global::<Self>()
-      .and_then(|handle| handle.page.clone())
-      .and_then(|weak| weak.upgrade())?;
-    Some(page.read(cx).dock_open)
-  }
-
-  /// The global bar's dock toggle. Takes the caller's window: the click comes
-  /// from inside it, and `update_window` on a window mid-update is a no-op.
-  pub fn toggle_right_dock(window: &mut Window, cx: &mut App) {
-    let Some(page) = cx
-      .try_global::<Self>()
-      .and_then(|handle| handle.page.clone())
-      .and_then(|weak| weak.upgrade())
-    else {
-      return;
-    };
-    page.update(cx, |page, cx| page.toggle_dock(window, cx));
-  }
-
   /// GitHub access changed: the inbox and the branch's pull request depend on it.
   pub fn refresh_github_state(cx: &mut App) {
     Self::with_page(cx, |page, _window, cx| {
@@ -224,6 +202,9 @@ pub struct SessionPage {
   dock_open: bool,
   dock_width: f32,
   dock_zoomed: bool,
+  sidebar_open: bool,
+  sidebar_width: f32,
+  sidebar_slide_armed: bool,
   /// The slide only plays on a real open/close, never on the first paint.
   dock_slide_armed: bool,
   poll_window_active: bool,
@@ -270,6 +251,7 @@ impl SessionPage {
       window,
       |this, _list, event: &SessionListEvent, window, cx| match event {
         SessionListEvent::NewSession => this.new_session(window, cx),
+        SessionListEvent::Collapse => this.close_sidebar(cx),
         SessionListEvent::Selected { id } => this.select_session(id, window, cx),
         SessionListEvent::Deleted { id } => this.delete_session(id, cx),
       },
@@ -311,6 +293,9 @@ impl SessionPage {
         DockPanelEvent::ToggleZoom => {
           this.toggle_dock_zoom(cx);
         }
+        DockPanelEvent::Close => {
+          this.close_dock(window, cx);
+        }
       },
     )
     .detach();
@@ -348,6 +333,9 @@ impl SessionPage {
       dock_open: true,
       dock_width: DOCK_PANEL_DEFAULT_WIDTH,
       dock_zoomed: false,
+      sidebar_open: true,
+      sidebar_width: SESSIONS_SIDEBAR_DEFAULT_WIDTH,
+      sidebar_slide_armed: false,
       dock_slide_armed: false,
       poll_window_active: true,
       _active_repo_task: None,
@@ -635,6 +623,49 @@ impl SessionPage {
     } else {
       self.dock_open = true;
       self.dock_slide_armed = true;
+      cx.notify();
+    }
+  }
+
+  /// The rail always opens on the clicked tab, it never toggles shut.
+  fn open_dock_from_rail(
+    &mut self,
+    tab: DockPanelTab,
+    window: &mut Window,
+    cx: &mut Context<Self>,
+  ) {
+    if !self.dock_open {
+      self.dock_open = true;
+      self.dock_slide_armed = true;
+    }
+    self
+      .dock_panel
+      .update(cx, |panel, cx| panel.open_tab(tab, window, cx));
+    cx.notify();
+  }
+
+  fn close_sidebar(&mut self, cx: &mut Context<Self>) {
+    if !self.sidebar_open {
+      return;
+    }
+    self.sidebar_open = false;
+    self.sidebar_slide_armed = true;
+    cx.notify();
+  }
+
+  fn open_sidebar(&mut self, cx: &mut Context<Self>) {
+    if self.sidebar_open {
+      return;
+    }
+    self.sidebar_open = true;
+    self.sidebar_slide_armed = true;
+    cx.notify();
+  }
+
+  fn resize_sidebar(&mut self, width: f32, cx: &mut Context<Self>) {
+    let clamped = width.clamp(SESSIONS_SIDEBAR_MIN_WIDTH, SESSIONS_SIDEBAR_MAX_WIDTH);
+    if (clamped - self.sidebar_width).abs() > f32::EPSILON {
+      self.sidebar_width = clamped;
       cx.notify();
     }
   }

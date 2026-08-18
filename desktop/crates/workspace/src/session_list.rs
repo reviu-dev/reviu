@@ -33,8 +33,14 @@ pub(crate) fn session_row_title(meta: &ConversationMeta) -> SharedString {
 
 pub enum SessionListEvent {
   NewSession,
-  Selected { id: String },
-  Deleted { id: String },
+  /// The collapse button in the header; the page owns the sidebar width.
+  Collapse,
+  Selected {
+    id: String,
+  },
+  Deleted {
+    id: String,
+  },
 }
 
 pub struct SessionList {
@@ -87,13 +93,28 @@ impl Render for SessionList {
           .child("Sessions"),
       )
       .child(
-        Button::new("session-page-new-session")
-          .icon(UiIconName::SquarePen)
-          .ghost()
-          .compact()
-          .small()
-          .tooltip("New session")
-          .on_click(cx.listener(|_, _, _, cx| cx.emit(SessionListEvent::NewSession))),
+        h_flex()
+          .items_center()
+          .gap_1()
+          .child(
+            Button::new("session-page-new-session")
+              .icon(UiIconName::SquarePen)
+              .ghost()
+              .compact()
+              .small()
+              .tooltip("New session")
+              .on_click(cx.listener(|_, _, _, cx| cx.emit(SessionListEvent::NewSession))),
+          )
+          .child(
+            Button::new("session-sidebar-collapse")
+              .debug_selector(|| "session-sidebar-collapse".to_string())
+              .icon(gpui_component::IconName::PanelLeftClose)
+              .ghost()
+              .compact()
+              .small()
+              .tooltip("Collapse sidebar")
+              .on_click(cx.listener(|_, _, _, cx| cx.emit(SessionListEvent::Collapse))),
+          ),
       );
 
     let rows: Vec<_> = self

@@ -911,30 +911,6 @@ impl WorkspaceView {
         window.dispatch_action(Box::new(ShowFileSearch), cx);
       });
 
-    let dock_toggle_button = (page == WorkspacePage::Session)
-      .then(|| crate::session_page::SessionPageHandle::dock_is_open(cx))
-      .flatten()
-      .map(|dock_open| {
-        Button::new("workspace-global-dock-toggle")
-          .debug_selector(|| "workspace-global-dock-toggle".to_string())
-          .icon(if dock_open {
-            IconName::PanelRightClose
-          } else {
-            IconName::PanelRightOpen
-          })
-          .ghost()
-          .compact()
-          .small()
-          .tooltip(if dock_open {
-            "Close the right panel"
-          } else {
-            "Open the right panel"
-          })
-          .on_click(|_, window, cx| {
-            crate::session_page::SessionPageHandle::toggle_right_dock(window, cx);
-          })
-      });
-
     let command_palette_button = Button::new("workspace-global-command-palette")
       .label("Command palette")
       .ghost()
@@ -969,9 +945,6 @@ impl WorkspaceView {
       right = right.child(file_search_button);
     }
     right = right.child(command_palette_button);
-    if let Some(dock_toggle_button) = dock_toggle_button {
-      right = right.child(dock_toggle_button);
-    }
     if is_unauthenticated {
       right = right.child(sign_in_button);
     }

@@ -564,11 +564,22 @@ impl SessionPage {
 }
 
 pub(super) const DOCK_RESIZE_HANDLE_DEBUG_SELECTOR: &str = "session-dock-resize-handle";
+pub(super) const SIDEBAR_RESIZE_HANDLE_DEBUG_SELECTOR: &str = "session-sidebar-resize-handle";
 
-/// Payload of the dock resize drag; the ghost renders nothing.
-struct DraggedDock;
+/// Width of a collapsed side panel: just enough for its icon rail.
+pub(super) const SIDE_RAIL_WIDTH: f32 = 40.0;
 
-impl Render for DraggedDock {
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum PanelSide {
+  Left,
+  Right,
+}
+
+/// Payload of a side-panel resize drag; the ghost renders nothing.
+#[derive(Clone)]
+struct DraggedPanel(PanelSide);
+
+impl Render for DraggedPanel {
   fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
     gpui::Empty
   }
@@ -578,62 +589,98 @@ impl SessionPage {
   /// Absolute over the dock's left edge so it costs no layout column: the
   /// header border line stays continuous and the 1px separator comes from the
   /// dock's own border.
-  fn render_dock_resize_handle(&self, cx: &mut Context<Self>) -> AnyElement {
+  fn render_panel_resize_handle(&self, side: PanelSide, cx: &mut Context<Self>) -> AnyElement {
     let theme = cx.theme().clone();
-    div()
-      .id("session-dock-resize-handle")
-      .debug_selector(|| DOCK_RESIZE_HANDLE_DEBUG_SELECTOR.to_string())
+    let (id, selector): (&'static str, &'static str) = match side {
+      PanelSide::Left => (
+        "session-sidebar-resize-handle",
+        SIDEBAR_RESIZE_HANDLE_DEBUG_SELECTOR,
+      ),
+      PanelSide::Right => (
+        "session-dock-resize-handle",
+        DOCK_RESIZE_HANDLE_DEBUG_SELECTOR,
+      ),
+    };
+    let handle = div()
+      .id(id)
+      .debug_selector(move || selector.to_string())
       .absolute()
-      // Centered on the dock's 1px border, not sitting beside it.
-      .left(px(-2.0))
       .top_0()
       .w(px(5.0))
       .h_full()
       .occlude()
       .cursor_col_resize()
       .hover(|this| this.bg(theme.border))
-      .on_drag(DraggedDock, |_, _, _, cx| {
+      .on_drag(DraggedPanel(side), move |_, _, _, cx| {
         cx.stop_propagation();
-        cx.new(|_| DraggedDock)
+        cx.new(|_| DraggedPanel(side))
       })
       .on_mouse_up(
         gpui::MouseButton::Left,
-        cx.listener(|this, event: &gpui::MouseUpEvent, _, cx| {
+        cx.listener(move |this, event: &gpui::MouseUpEvent, _, cx| {
           if event.click_count == 2 {
-            this.resize_dock(DOCK_PANEL_DEFAULT_WIDTH, cx);
+            match side {
+              PanelSide::Left => this.resize_sidebar(SESSIONS_SIDEBAR_DEFAULT_WIDTH, cx),
+              PanelSide::Right => this.resize_dock(DOCK_PANEL_DEFAULT_WIDTH, cx),
+            }
             cx.stop_propagation();
           }
         }),
-      )
-      .into_any_element()
+      );
+    // Centered on the panel's 1px border, not sitting beside it.
+    match side {
+      PanelSide::Left => handle.right(px(-2.0)),
+      PanelSide::Right => handle.left(px(-2.0)),
+    }
+    .into_any_element()
   }
 
-  /// The dock owns its width so the open and close slides can animate; the
-  /// shared resizable state of gpui-component cannot (see #533 point 4).
-  fn render_dock(&mut self, cx: &mut Context<Self>) -> AnyElement {
-    let width = self.dock_width;
-    let (from, to) = if self.dock_open {
-      (0.0, width)
-    } else {
-      (width, 0.0)
-    };
+  /// A side panel that slides between its width and its icon rail. The rail
+  /// keeps every surface one click away instead of hiding them.
+  #[allow(clippy::too_many_arguments)]
+  fn render_side_panel(
+    &self,
+    side: PanelSide,
+    open: bool,
+    slide_armed: bool,
+    width: f32,
+    rail: AnyElement,
+    content: AnyElement,
+    cx: &mut Context<Self>,
+  ) -> AnyElement {
     let theme = cx.theme().clone();
+    let (from, to) = if open {
+      (SIDE_RAIL_WIDTH, width)
+    } else {
+      (width, SIDE_RAIL_WIDTH)
+    };
     let clipped = div()
-      .id("session-dock-container")
+      .id(match side {
+        PanelSide::Left => "session-sidebar-container",
+        PanelSide::Right => "session-dock-container",
+      })
       .h_full()
-      .overflow_hidden()
-      .child(
-        div()
-          .w(px(width))
-          .h_full()
-          .border_l_1()
-          .border_color(theme.border)
-          .child(self.render_dock_panel(cx)),
-      );
-    let clipped: AnyElement = if self.dock_slide_armed {
+      .overflow_hidden();
+    let clipped = match side {
+      PanelSide::Left => clipped.border_r_1().border_color(theme.border),
+      PanelSide::Right => clipped.border_l_1().border_color(theme.border),
+    };
+    let clipped = clipped.child(if open {
+      div().w(px(width)).h_full().child(content)
+    } else {
+      // The rail replaces the content: fixed width, nothing to clip.
+      div().w(px(SIDE_RAIL_WIDTH)).h_full().child(rail)
+    });
+    let clipped: AnyElement = if slide_armed {
       clipped
         .with_animation(
-          ("session-dock-slide", self.dock_open as u64),
+          (
+            match side {
+              PanelSide::Left => "session-sidebar-slide",
+              PanelSide::Right => "session-dock-slide",
+            },
+            open as u64,
+          ),
           gpui::Animation::new(std::time::Duration::from_millis(CENTER_SWAP_FADE_MS))
             .with_easing(gpui::ease_out_quint()),
           move |this, delta| this.w(px(from + (to - from) * delta)),
@@ -648,9 +695,106 @@ impl SessionPage {
       .h_full()
       .flex_shrink_0()
       .child(clipped)
-      .when(self.dock_open, |this| {
-        this.child(self.render_dock_resize_handle(cx))
+      .when(open, |this| {
+        this.child(self.render_panel_resize_handle(side, cx))
       })
+      .into_any_element()
+  }
+
+  fn rail_button(
+    id: &'static str,
+    icon: impl Into<gpui_component::Icon>,
+    tooltip: &'static str,
+  ) -> Button {
+    Button::new(id)
+      .debug_selector(move || id.to_string())
+      .icon(icon)
+      .ghost()
+      .compact()
+      .small()
+      .tooltip(tooltip)
+  }
+
+  fn render_dock_rail(&self, cx: &mut Context<Self>) -> AnyElement {
+    let tabs: [(
+      &'static str,
+      gpui_component::Icon,
+      &'static str,
+      DockPanelTab,
+    ); 5] = [
+      (
+        "dock-rail-changes",
+        gpui_component::Icon::new(UiIconName::FileDiff),
+        "Changes",
+        DockPanelTab::Changes,
+      ),
+      (
+        "dock-rail-files",
+        gpui_component::Icon::new(gpui_component::IconName::Folder),
+        "Files",
+        DockPanelTab::Files,
+      ),
+      (
+        "dock-rail-history",
+        gpui_component::Icon::new(UiIconName::History),
+        "History",
+        DockPanelTab::History,
+      ),
+      (
+        "dock-rail-pull-request",
+        gpui_component::Icon::new(UiIconName::GitPullRequest),
+        "Pull request",
+        DockPanelTab::PullRequest,
+      ),
+      (
+        "dock-rail-terminal",
+        gpui_component::Icon::new(UiIconName::SquareTerminal),
+        "Terminal",
+        DockPanelTab::Terminal,
+      ),
+    ];
+    let mut rail = v_flex().items_center().gap_1().pt_2().w_full();
+    for (id, icon, tooltip, tab) in tabs {
+      rail = rail.child(Self::rail_button(id, icon, tooltip).on_click(cx.listener(
+        move |this, _, window, cx| {
+          this.open_dock_from_rail(tab, window, cx);
+        },
+      )));
+    }
+    div().size_full().child(rail).into_any_element()
+  }
+
+  fn render_sidebar_rail(&self, cx: &mut Context<Self>) -> AnyElement {
+    let theme = cx.theme().clone();
+    div()
+      .size_full()
+      .bg(theme.sidebar)
+      .child(
+        v_flex()
+          .items_center()
+          .gap_1()
+          .pt_2()
+          .w_full()
+          .child(
+            Self::rail_button(
+              "sidebar-rail-open",
+              gpui_component::Icon::new(gpui_component::IconName::PanelLeftOpen),
+              "Open sidebar",
+            )
+            .on_click(cx.listener(|this, _, _, cx| this.open_sidebar(cx))),
+          )
+          .child(
+            Self::rail_button(
+              "sidebar-rail-new-session",
+              gpui_component::Icon::new(UiIconName::SquarePen),
+              "New session",
+            )
+            .on_click(cx.listener(|this, _, window, cx| {
+              this.open_sidebar(cx);
+              this.new_session(window, cx);
+            })),
+          ),
+      )
       .into_any_element()
   }
 }
@@ -687,10 +831,14 @@ impl Render for SessionPage {
       .on_action(cx.listener(Self::toggle_file_stage_action))
       .on_action(cx.listener(Self::restore_file_action))
       .on_drag_move(cx.listener(
-        |this, event: &gpui::DragMoveEvent<DraggedDock>, window, cx| {
-          let _ = event.drag(cx);
-          let width = window.viewport_size().width - event.event.position.x;
-          this.resize_dock(f32::from(width), cx);
+        |this, event: &gpui::DragMoveEvent<DraggedPanel>, window, cx| match event.drag(cx).0 {
+          PanelSide::Left => {
+            this.resize_sidebar(f32::from(event.event.position.x), cx);
+          }
+          PanelSide::Right => {
+            let width = window.viewport_size().width - event.event.position.x;
+            this.resize_dock(f32::from(width), cx);
+          }
         },
       ))
       .child(if self.dock_zoomed {
@@ -701,23 +849,41 @@ impl Render for SessionPage {
           .child(self.render_dock_panel(cx))
           .into_any_element()
       } else {
+        let sidebar_rail = self.render_sidebar_rail(cx);
+        let sidebar_content = self.render_sessions_sidebar(cx);
+        let sidebar = self.render_side_panel(
+          PanelSide::Left,
+          self.sidebar_open,
+          self.sidebar_slide_armed,
+          self.sidebar_width,
+          sidebar_rail,
+          sidebar_content,
+          cx,
+        );
+        let dock_rail = self.render_dock_rail(cx);
+        let dock_content = self.render_dock_panel(cx);
+        let dock = self.render_side_panel(
+          PanelSide::Right,
+          self.dock_open,
+          self.dock_slide_armed,
+          self.dock_width,
+          dock_rail,
+          dock_content,
+          cx,
+        );
         h_flex()
           .size_full()
           .min_w(px(0.0))
           .min_h_0()
+          .child(sidebar)
           .child(
-            div().flex_1().min_w(px(0.0)).h_full().child(
-              ui::h_resizable("session-page-shell")
-                .child(
-                  ui::resizable_panel()
-                    .size(px(SESSIONS_SIDEBAR_DEFAULT_WIDTH))
-                    .size_range(px(SESSIONS_SIDEBAR_MIN_WIDTH)..px(SESSIONS_SIDEBAR_MAX_WIDTH))
-                    .child(self.render_sessions_sidebar(cx)),
-                )
-                .child(ui::resizable_panel().child(self.render_center(window, cx))),
-            ),
+            div()
+              .flex_1()
+              .min_w(px(0.0))
+              .h_full()
+              .child(self.render_center(window, cx)),
           )
-          .child(self.render_dock(cx))
+          .child(dock)
           .into_any_element()
       })
   }
@@ -2557,26 +2723,6 @@ mod tests {
   }
 
   #[gpui::test]
-  async fn the_global_toggle_reaches_the_dock(cx: &mut TestAppContext) {
-    let repo = TempRepo::init("session-dock-global-toggle");
-    commit_text_file(&repo.path, Path::new("README.md"), "v1\n", "initial");
-    let (page, cx) = add_session_page_window(repo.path.clone(), cx);
-    cx.run_until_parked();
-
-    let open = cx.update(|_, cx| SessionPageHandle::dock_is_open(cx));
-    assert_eq!(open, Some(true));
-    cx.update(|window, cx| SessionPageHandle::toggle_right_dock(window, cx));
-    cx.run_until_parked();
-    page.read_with(cx, |page, _| assert!(!page.dock_open));
-    let open = cx.update(|_, cx| SessionPageHandle::dock_is_open(cx));
-    assert_eq!(open, Some(false));
-
-    cx.update(|window, cx| SessionPageHandle::toggle_right_dock(window, cx));
-    cx.run_until_parked();
-    page.read_with(cx, |page, _| assert!(page.dock_open));
-  }
-
-  #[gpui::test]
   async fn reopening_changes_on_a_clean_tree_keeps_a_live_focus(cx: &mut TestAppContext) {
     let repo = TempRepo::init("session-dock-clean-focus");
     commit_text_file(&repo.path, Path::new("README.md"), "v1\n", "initial");
@@ -2604,5 +2750,62 @@ mod tests {
       Some(&dock_handle),
       "an empty changes tab must not send the focus to an unmounted list"
     );
+  }
+
+  #[gpui::test]
+  async fn the_dock_rail_reopens_on_the_clicked_tab(cx: &mut TestAppContext) {
+    let repo = TempRepo::init("session-dock-rail");
+    commit_text_file(&repo.path, Path::new("README.md"), "v1\n", "initial");
+    let (page, cx) = add_session_page_window(repo.path.clone(), cx);
+    cx.run_until_parked();
+
+    // Close via the active tab shortcut: the rail takes over.
+    page.update_in(cx, |page, window, cx| {
+      page.open_changes_action(&crate::OpenGitChangesSidebar, window, cx)
+    });
+    // The test scheduler never finishes animations; pin the collapsed width.
+    page.update(cx, |page, cx| {
+      page.dock_slide_armed = false;
+      cx.notify();
+    });
+    cx.run_until_parked();
+    let history = cx
+      .debug_bounds("dock-rail-history")
+      .expect("the collapsed dock shows its tab rail");
+
+    cx.simulate_click(history.center(), gpui::Modifiers::default());
+    cx.run_until_parked();
+    page.read_with(cx, |page, cx| {
+      assert!(page.dock_open, "a rail click opens the dock");
+      assert_eq!(page.dock_panel.read(cx).active_tab(), DockPanelTab::History);
+    });
+  }
+
+  #[gpui::test]
+  async fn the_sidebar_collapses_to_a_rail_and_comes_back(cx: &mut TestAppContext) {
+    let repo = TempRepo::init("session-sidebar-rail");
+    commit_text_file(&repo.path, Path::new("README.md"), "v1\n", "initial");
+    let (page, cx) = add_session_page_window(repo.path.clone(), cx);
+    cx.run_until_parked();
+
+    let collapse = cx
+      .debug_bounds("session-sidebar-collapse")
+      .expect("collapse button");
+    cx.simulate_click(collapse.center(), gpui::Modifiers::default());
+    cx.run_until_parked();
+    page.read_with(cx, |page, _| assert!(!page.sidebar_open));
+
+    // The test scheduler never finishes animations; pin the collapsed width.
+    page.update(cx, |page, cx| {
+      page.sidebar_slide_armed = false;
+      cx.notify();
+    });
+    cx.run_until_parked();
+    let open = cx
+      .debug_bounds("sidebar-rail-open")
+      .expect("the collapsed sidebar shows its rail");
+    cx.simulate_click(open.center(), gpui::Modifiers::default());
+    cx.run_until_parked();
+    page.read_with(cx, |page, _| assert!(page.sidebar_open));
   }
 }
