@@ -1,6 +1,7 @@
 //! Shared fixtures for the shell tests.
 
 use super::*;
+use crate::github_notifications::GithubNotificationsStore;
 use crate::workspace::WorkspaceApi;
 use editor::{ReviewCommentMode, ReviewCommentSide};
 use gpui::TestAppContext;

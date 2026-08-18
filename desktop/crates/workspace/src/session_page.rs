@@ -31,14 +31,13 @@ use crate::agent_review::{
 use crate::agent_settings::AgentSettings;
 use crate::auth_state::AuthStateStore;
 use crate::config::ConfigStore;
-use crate::date_format::format_relative_time;
 use crate::diff_view_policy::{DiffViewInputs, effective_diff_view};
 use crate::dock_panel::{CommitMenuCommand, DockPanel, DockPanelEvent, DockPanelTab};
 use crate::file_search_palette::open_file_search_palette;
 use crate::file_view::{
   BinaryPreview, build_binary_preview, render_binary_preview, render_file_title_with_status,
 };
-use crate::github_notifications::{self, GithubNotificationsStore};
+use crate::inbox::Inbox;
 use crate::navigation::NavigationHistory;
 use git::{InteractiveRebaseTarget, RepoStatusKind};
 
@@ -92,7 +91,6 @@ const REPO_BEHIND_DEBUG_SELECTOR: &str = "session-repo-behind";
 const SESSIONS_SIDEBAR_DEFAULT_WIDTH: f32 = 250.0;
 const SESSIONS_SIDEBAR_MIN_WIDTH: f32 = 200.0;
 const SESSIONS_SIDEBAR_MAX_WIDTH: f32 = 420.0;
-const INBOX_MAX_HEIGHT: f32 = 220.0;
 const CENTER_SWAP_FADE_MS: u64 = 180;
 const DOCK_PANEL_DEFAULT_WIDTH: f32 = 320.0;
 const DOCK_PANEL_MIN_WIDTH: f32 = 240.0;
@@ -193,6 +191,7 @@ pub struct SessionPage {
   window_handle: AnyWindowHandle,
   agent_chat_view: Option<Entity<AgentChatPanel>>,
   dock_panel: Entity<DockPanel>,
+  inbox: Entity<Inbox>,
   selected_repo: Option<PathBuf>,
   center: CenterView,
   editor: Option<Entity<Editor>>,
@@ -247,6 +246,7 @@ impl SessionPage {
       .first()
       .map(|repo| repo.path.clone());
     let dock_panel = cx.new(|cx| DockPanel::new(selected_repo.clone(), window, cx));
+    let inbox = cx.new(|_| Inbox::new());
     let svg_preview = cx.new(|_| SvgPreview::new());
     // The SVG renders on a background task; repaint when it lands.
     cx.observe(&svg_preview, |_, _, cx| cx.notify()).detach();
@@ -289,6 +289,7 @@ impl SessionPage {
       window_handle: window.window_handle(),
       agent_chat_view: None,
       dock_panel,
+      inbox,
       selected_repo,
       center: CenterView::Conversation,
       editor: None,

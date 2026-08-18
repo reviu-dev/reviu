@@ -79,6 +79,7 @@ mod github_pr_details_page;
 mod github_shared;
 mod history_list;
 mod hunk_actions;
+mod inbox;
 mod interactive_rebase;
 mod interactive_rebase_todo_view;
 pub mod navigation;
