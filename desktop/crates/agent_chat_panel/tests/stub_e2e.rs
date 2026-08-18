@@ -47,6 +47,34 @@ async fn a_prompt_round_trips_through_a_real_agent_process(cx: &mut TestAppConte
       "the thought chunk lands as a Thought item"
     );
   });
+
+  // A chunk trailing in after the turn ended is kept, and surfaces ahead of
+  // the next prompt instead of being wiped by it.
+  panel.update(cx, |panel, cx| {
+    panel.inject_event_for_test(late_text_chunk("late words"));
+    assert!(panel.send_external_prompt("second prompt".to_string(), cx));
+  });
+  cx.condition(&panel, |panel, _| {
+    !panel.is_turn_in_flight() && panel.transcript_texts().len() >= 5
+  })
+  .await;
+  panel.read_with(cx, |panel, _| {
+    let transcript = panel.transcript_texts();
+    let late = transcript.iter().position(|t| t == "late words");
+    let second = transcript.iter().position(|t| t == "second prompt");
+    assert!(
+      late.is_some() && late < second,
+      "the late chunk lands before the next prompt, got {transcript:?}"
+    );
+  });
+}
+
+fn late_text_chunk(text: &str) -> agent_acp::AgentEvent {
+  agent_acp::AgentEvent::AgentMessageChunk(agent_client_protocol::schema::ContentChunk::new(
+    agent_client_protocol::schema::ContentBlock::Text(
+      agent_client_protocol::schema::TextContent::new(text),
+    ),
+  ))
 }
 
 #[gpui::test]

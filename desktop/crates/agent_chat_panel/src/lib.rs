@@ -703,6 +703,12 @@ impl AgentChatPanel {
     self.edit_input.clone()
   }
 
+  /// Feed an event as the forwarder would, e.g. one trailing in late.
+  #[cfg(any(test, feature = "test-support"))]
+  pub fn inject_event_for_test(&mut self, event: AgentEvent) {
+    self.on_event(event);
+  }
+
   /// Names of the slash commands the agent advertised.
   #[cfg(any(test, feature = "test-support"))]
   pub fn available_command_names(&self) -> Vec<String> {
@@ -6371,6 +6377,21 @@ mod tests {
       Some("unanswered"),
       "a pending card cannot offer live buttons after a reload"
     );
+
+    // An already answered card keeps its answer as-is.
+    panel.update(cx, |panel, cx| {
+      if let Some(ChatItem::Permission(p)) = panel.items.get_mut(1) {
+        p.resolved = Some("allow".to_string());
+      }
+      panel.persist_state();
+      cx.notify();
+    });
+    let (_, items, _) =
+      load_conversation_file(&dir.join(format!("{conv_id}.json"))).expect("reloads");
+    let ChatItem::Permission(p) = &items[1] else {
+      unreachable!()
+    };
+    assert_eq!(p.resolved.as_deref(), Some("allow"));
     std::fs::remove_dir_all(&dir).ok();
   }
 
