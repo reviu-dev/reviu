@@ -4816,6 +4816,471 @@ mod tests {
     assert!(!request.contains("\"body\""));
   }
 
+  const PENDING_REVIEW_BODY: &str = r#"{
+    "review": {
+      "id": 500,
+      "node_id": "PRR_kwDOPending",
+      "body": null,
+      "state": "PENDING",
+      "submitted_at": null,
+      "commit_id": null,
+      "html_url": "https://github.com/acme/widget/pull/42#pullrequestreview-500",
+      "user": { "login": "octocat", "avatar_url": null }
+    }
+  }"#;
+
+  const PENDING_THREAD_COMMENT_BODY: &str = r#"{
+    "comment": {
+      "id": 7,
+      "node_id": "PRRC_kwDOThread",
+      "pull_request_review_id": 500,
+      "diff_hunk": "@@ -1 +1 @@",
+      "path": "src/main.rs",
+      "position": 1,
+      "original_position": 1,
+      "commit_id": "head123",
+      "original_commit_id": "base123",
+      "in_reply_to_id": null,
+      "user": { "login": "octocat", "avatar_url": null },
+      "body": "Needs a guard",
+      "created_at": "2026-02-15T12:00:00Z",
+      "updated_at": "2026-02-15T12:00:00Z",
+      "start_line": null,
+      "original_start_line": null,
+      "start_side": null,
+      "line": 5,
+      "original_line": 5,
+      "side": "RIGHT"
+    }
+  }"#;
+
+  #[test]
+  fn start_pending_review_posts_the_pull_request_node_id() {
+    let (base_url, request, handle) =
+      start_single_response_server_with_request("200 OK", PENDING_REVIEW_BODY);
+    let api = make_test_api_client(base_url);
+
+    let review = api
+      .start_pending_review("acme", "widget", 42, "PR_kwDOExample")
+      .expect("start pending review");
+
+    assert_eq!(review.id, 500);
+    assert_eq!(review.state, GithubPullRequestReviewState::Pending);
+    assert_eq!(review.node_id, "PRR_kwDOPending");
+    handle.join().expect("join server thread");
+    let request = request
+      .lock()
+      .expect("lock request")
+      .clone()
+      .unwrap_or_default();
+    assert!(
+      request.contains("POST /github/pr/42/pending-review?org=acme&repo=widget "),
+      "request: {request}"
+    );
+    assert!(request.contains("\"pullRequestId\":\"PR_kwDOExample\""));
+  }
+
+  #[test]
+  fn start_pending_review_returns_unauthorized_error() {
+    let (base_url, handle) = start_single_response_server("401 UNAUTHORIZED", "{}");
+    let api = make_test_api_client(base_url);
+
+    let err = api
+      .start_pending_review("acme", "widget", 42, "PR_kwDOExample")
+      .expect_err("start pending review should fail");
+
+    assert_eq!(err.to_string(), "unauthorized");
+    handle.join().expect("join server thread");
+  }
+
+  #[test]
+  fn add_pending_review_thread_serializes_a_single_line_thread() {
+    let (base_url, request, handle) =
+      start_single_response_server_with_request("200 OK", PENDING_THREAD_COMMENT_BODY);
+    let api = make_test_api_client(base_url);
+
+    let comment = api
+      .add_pending_review_thread(
+        "acme",
+        "widget",
+        42,
+        "PR_kwDOExample",
+        "PRR_kwDOPending",
+        "src/main.rs",
+        "Needs a guard",
+        "LINE",
+        Some(5),
+        Some("RIGHT"),
+        None,
+        None,
+      )
+      .expect("add pending review thread");
+
+    assert_eq!(comment.id, 7);
+    assert_eq!(comment.body, "Needs a guard");
+    handle.join().expect("join server thread");
+    let request = request
+      .lock()
+      .expect("lock request")
+      .clone()
+      .unwrap_or_default();
+    assert!(
+      request.contains("POST /github/pr/42/pending-review/threads?org=acme&repo=widget "),
+      "request: {request}"
+    );
+    assert!(request.contains("\"pullRequestId\":\"PR_kwDOExample\""));
+    assert!(request.contains("\"pullRequestReviewId\":\"PRR_kwDOPending\""));
+    assert!(request.contains("\"subjectType\":\"LINE\""));
+    assert!(request.contains("\"line\":5"));
+    assert!(request.contains("\"side\":\"RIGHT\""));
+    assert!(!request.contains("startLine"), "request: {request}");
+    assert!(!request.contains("startSide"), "request: {request}");
+  }
+
+  #[test]
+  fn add_pending_review_thread_serializes_a_multi_line_range() {
+    let (base_url, request, handle) =
+      start_single_response_server_with_request("200 OK", PENDING_THREAD_COMMENT_BODY);
+    let api = make_test_api_client(base_url);
+
+    let _ = api
+      .add_pending_review_thread(
+        "acme",
+        "widget",
+        42,
+        "PR_kwDOExample",
+        "PRR_kwDOPending",
+        "src/main.rs",
+        "Needs a guard",
+        "LINE",
+        Some(5),
+        Some("RIGHT"),
+        Some(3),
+        Some("RIGHT"),
+      )
+      .expect("add pending review thread");
+
+    handle.join().expect("join server thread");
+    let request = request
+      .lock()
+      .expect("lock request")
+      .clone()
+      .unwrap_or_default();
+    assert!(request.contains("\"startLine\":3"));
+    assert!(request.contains("\"startSide\":\"RIGHT\""));
+  }
+
+  #[test]
+  fn reply_pending_review_thread_returns_the_new_comment_node() {
+    let (base_url, request, handle) =
+      start_single_response_server_with_request("200 OK", r#"{"node_id":"PRRC_kwDOReply"}"#);
+    let api = make_test_api_client(base_url);
+
+    let node_id = api
+      .reply_pending_review_thread(
+        "acme",
+        "widget",
+        42,
+        "PRR_kwDOPending",
+        "PRRT_kwDOThread",
+        "Same remark here",
+      )
+      .expect("reply pending review thread");
+
+    assert_eq!(node_id, "PRRC_kwDOReply");
+    handle.join().expect("join server thread");
+    let request = request
+      .lock()
+      .expect("lock request")
+      .clone()
+      .unwrap_or_default();
+    assert!(
+      request.contains("POST /github/pr/42/pending-review/replies?org=acme&repo=widget "),
+      "request: {request}"
+    );
+    assert!(request.contains("\"pullRequestReviewId\":\"PRR_kwDOPending\""));
+    assert!(request.contains("\"pullRequestReviewThreadId\":\"PRRT_kwDOThread\""));
+    assert!(request.contains("\"body\":\"Same remark here\""));
+  }
+
+  #[test]
+  fn reply_pending_review_thread_returns_unauthorized_error() {
+    let (base_url, handle) = start_single_response_server("401 UNAUTHORIZED", "{}");
+    let api = make_test_api_client(base_url);
+
+    let err = api
+      .reply_pending_review_thread("acme", "widget", 42, "PRR_x", "PRRT_x", "text")
+      .expect_err("reply pending review thread should fail");
+
+    assert_eq!(err.to_string(), "unauthorized");
+    handle.join().expect("join server thread");
+  }
+
+  #[test]
+  fn update_pending_review_comment_patches_the_comment_node() {
+    let (base_url, request, handle) = start_single_response_server_with_request("200 OK", "{}");
+    let api = make_test_api_client(base_url);
+
+    api
+      .update_pending_review_comment("acme", "widget", 42, "PRRC_kwDOThread", "Sharper wording")
+      .expect("update pending review comment");
+
+    handle.join().expect("join server thread");
+    let request = request
+      .lock()
+      .expect("lock request")
+      .clone()
+      .unwrap_or_default();
+    assert!(
+      request.contains(
+        "PATCH /github/pr/42/pending-review/comments/PRRC_kwDOThread?org=acme&repo=widget "
+      ),
+      "request: {request}"
+    );
+    assert!(request.contains("\"body\":\"Sharper wording\""));
+  }
+
+  #[test]
+  fn delete_pending_review_comment_uses_the_delete_route() {
+    let (base_url, request_line, handle) =
+      start_single_response_server_with_request_line("200 OK", "{}");
+    let api = make_test_api_client(base_url);
+
+    api
+      .delete_pending_review_comment("acme", "widget", 42, "PRRC_kwDOThread")
+      .expect("delete pending review comment");
+
+    handle.join().expect("join server thread");
+    let request_line = request_line
+      .lock()
+      .expect("lock request line")
+      .clone()
+      .unwrap_or_default();
+    assert_eq!(
+      request_line,
+      "DELETE /github/pr/42/pending-review/comments/PRRC_kwDOThread?org=acme&repo=widget HTTP/1.1"
+    );
+  }
+
+  #[test]
+  fn delete_pending_review_comment_returns_unauthorized_error() {
+    let (base_url, handle) = start_single_response_server("401 UNAUTHORIZED", "{}");
+    let api = make_test_api_client(base_url);
+
+    let err = api
+      .delete_pending_review_comment("acme", "widget", 42, "PRRC_x")
+      .expect_err("delete pending review comment should fail");
+
+    assert_eq!(err.to_string(), "unauthorized");
+    handle.join().expect("join server thread");
+  }
+
+  #[test]
+  fn submit_pending_review_serializes_review_id_event_and_trimmed_body() {
+    let (base_url, request, handle) =
+      start_single_response_server_with_request("200 OK", PENDING_REVIEW_BODY);
+    let api = make_test_api_client(base_url);
+
+    let _ = api
+      .submit_pending_review(
+        "acme",
+        "widget",
+        42,
+        "PRR_kwDOPending",
+        GithubPullRequestReviewEvent::RequestChanges,
+        "  Needs tests  ",
+      )
+      .expect("submit pending review");
+
+    handle.join().expect("join server thread");
+    let request = request
+      .lock()
+      .expect("lock request")
+      .clone()
+      .unwrap_or_default();
+    assert!(
+      request.contains("POST /github/pr/42/pending-review/submit?org=acme&repo=widget "),
+      "request: {request}"
+    );
+    assert!(request.contains("\"pullRequestReviewId\":\"PRR_kwDOPending\""));
+    assert!(request.contains("\"event\":\"REQUEST_CHANGES\""));
+    assert!(request.contains("\"body\":\"Needs tests\""));
+  }
+
+  #[test]
+  fn submit_pending_review_omits_the_empty_body_when_approving() {
+    let (base_url, request, handle) =
+      start_single_response_server_with_request("200 OK", PENDING_REVIEW_BODY);
+    let api = make_test_api_client(base_url);
+
+    let _ = api
+      .submit_pending_review(
+        "acme",
+        "widget",
+        42,
+        "PRR_kwDOPending",
+        GithubPullRequestReviewEvent::Approve,
+        "   ",
+      )
+      .expect("submit pending review");
+
+    handle.join().expect("join server thread");
+    let request = request
+      .lock()
+      .expect("lock request")
+      .clone()
+      .unwrap_or_default();
+    assert!(request.contains("\"event\":\"APPROVE\""));
+    assert!(!request.contains("\"body\""), "request: {request}");
+  }
+
+  #[test]
+  fn submit_pending_review_returns_unauthorized_error() {
+    let (base_url, handle) = start_single_response_server("401 UNAUTHORIZED", "{}");
+    let api = make_test_api_client(base_url);
+
+    let err = api
+      .submit_pending_review(
+        "acme",
+        "widget",
+        42,
+        "PRR_x",
+        GithubPullRequestReviewEvent::Approve,
+        "",
+      )
+      .expect_err("submit pending review should fail");
+
+    assert_eq!(err.to_string(), "unauthorized");
+    handle.join().expect("join server thread");
+  }
+
+  const RESOLVED_THREAD_BODY: &str = r#"{
+    "thread": {
+      "thread_id": "PRRT_kwDOThread",
+      "is_resolved": true,
+      "viewer_can_resolve": false,
+      "viewer_can_unresolve": true
+    }
+  }"#;
+
+  #[test]
+  fn resolve_review_thread_posts_the_resolve_route() {
+    let (base_url, request_line, handle) =
+      start_single_response_server_with_request_line("200 OK", RESOLVED_THREAD_BODY);
+    let api = make_test_api_client(base_url);
+
+    api
+      .resolve_pull_request_review_thread("acme", "widget", 42, "PRRT_kwDOThread")
+      .expect("resolve review thread");
+
+    handle.join().expect("join server thread");
+    let request_line = request_line
+      .lock()
+      .expect("lock request line")
+      .clone()
+      .unwrap_or_default();
+    assert_eq!(
+      request_line,
+      "POST /github/pr/42/review-threads/PRRT_kwDOThread/resolve?org=acme&repo=widget HTTP/1.1"
+    );
+  }
+
+  #[test]
+  fn unresolve_review_thread_posts_the_unresolve_route() {
+    let body = r#"{
+      "thread": {
+        "thread_id": "PRRT_kwDOThread",
+        "is_resolved": false,
+        "viewer_can_resolve": true,
+        "viewer_can_unresolve": false
+      }
+    }"#;
+    let (base_url, request_line, handle) =
+      start_single_response_server_with_request_line("200 OK", body);
+    let api = make_test_api_client(base_url);
+
+    api
+      .unresolve_pull_request_review_thread("acme", "widget", 42, "PRRT_kwDOThread")
+      .expect("unresolve review thread");
+
+    handle.join().expect("join server thread");
+    let request_line = request_line
+      .lock()
+      .expect("lock request line")
+      .clone()
+      .unwrap_or_default();
+    assert_eq!(
+      request_line,
+      "POST /github/pr/42/review-threads/PRRT_kwDOThread/unresolve?org=acme&repo=widget HTTP/1.1"
+    );
+  }
+
+  #[test]
+  fn mark_notification_read_patches_the_thread() {
+    let (base_url, request_line, handle) =
+      start_single_response_server_with_request_line("200 OK", "{}");
+    let api = make_test_api_client(base_url);
+
+    api
+      .mark_notification_read("thread-1")
+      .expect("mark notification read");
+
+    handle.join().expect("join server thread");
+    let request_line = request_line
+      .lock()
+      .expect("lock request line")
+      .clone()
+      .unwrap_or_default();
+    assert_eq!(
+      request_line,
+      "PATCH /github/notifications/thread-1/read HTTP/1.1"
+    );
+  }
+
+  #[test]
+  fn mark_notification_done_deletes_the_thread() {
+    let (base_url, request_line, handle) =
+      start_single_response_server_with_request_line("200 OK", "{}");
+    let api = make_test_api_client(base_url);
+
+    api
+      .mark_notification_done("thread-1")
+      .expect("mark notification done");
+
+    handle.join().expect("join server thread");
+    let request_line = request_line
+      .lock()
+      .expect("lock request line")
+      .clone()
+      .unwrap_or_default();
+    assert_eq!(
+      request_line,
+      "DELETE /github/notifications/thread-1/done HTTP/1.1"
+    );
+  }
+
+  #[test]
+  fn update_pull_request_branch_puts_the_update_branch_route() {
+    let (base_url, request_line, handle) =
+      start_single_response_server_with_request_line("200 OK", "{}");
+    let api = make_test_api_client(base_url);
+
+    api
+      .update_pull_request_branch("acme", "widget", 42)
+      .expect("update pull request branch");
+
+    handle.join().expect("join server thread");
+    let request_line = request_line
+      .lock()
+      .expect("lock request line")
+      .clone()
+      .unwrap_or_default();
+    assert_eq!(
+      request_line,
+      "PUT /github/pr/42/update-branch?org=acme&repo=widget HTTP/1.1"
+    );
+  }
+
   #[test]
   fn fetch_github_notifications_parses_success_payload() {
     let body = r#"{
