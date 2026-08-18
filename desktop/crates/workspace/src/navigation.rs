@@ -49,13 +49,13 @@ impl NavigationHistory {
     Self::set_pathname(&path, cx);
   }
 
-  /// Navigate back in history. Falls back to `/git` if the stack is empty.
+  /// Navigate back in history. Falls back to `/session` if the stack is empty.
   pub fn navigate_back(cx: &mut App) {
     let target = cx
       .global_mut::<Self>()
       .stack
       .pop()
-      .unwrap_or_else(|| "/git".into());
+      .unwrap_or_else(|| "/session".into());
 
     let target = if requires_github_access(&target) && !AuthStateStore::has_github_access(cx) {
       GITHUB_ACCESS_FALLBACK_PATH.into()
@@ -163,9 +163,9 @@ mod tests {
     cx.update(|cx| {
       init_navigation_test(cx);
 
-      // Start at /git
-      NavigationHistory::navigate_replace("/git", cx);
-      assert_eq!(NavigationHistory::current_pathname(cx).as_ref(), "/git");
+      // Start at /session
+      NavigationHistory::navigate_replace("/session", cx);
+      assert_eq!(NavigationHistory::current_pathname(cx).as_ref(), "/session");
 
       // Navigate to /settings
       NavigationHistory::navigate("/settings", cx);
@@ -174,9 +174,9 @@ mod tests {
         "/settings"
       );
 
-      // History should have /git
+      // History should have /session
       assert_eq!(cx.global::<NavigationHistory>().stack.len(), 1);
-      assert_eq!(cx.global::<NavigationHistory>().stack[0].as_ref(), "/git");
+      assert_eq!(cx.global::<NavigationHistory>().stack[0].as_ref(), "/session");
     });
   }
 
@@ -185,7 +185,7 @@ mod tests {
     cx.update(|cx| {
       init_navigation_test(cx);
 
-      NavigationHistory::navigate_replace("/git", cx);
+      NavigationHistory::navigate_replace("/session", cx);
       NavigationHistory::navigate("/settings", cx);
       NavigationHistory::navigate("/about", cx);
 
@@ -196,13 +196,13 @@ mod tests {
         "/settings"
       );
 
-      // Back from /settings -> /git
+      // Back from /settings -> /session
       NavigationHistory::navigate_back(cx);
-      assert_eq!(NavigationHistory::current_pathname(cx).as_ref(), "/git");
+      assert_eq!(NavigationHistory::current_pathname(cx).as_ref(), "/session");
 
-      // Back from /git -> /git (fallback)
+      // Back from /session -> /session (fallback)
       NavigationHistory::navigate_back(cx);
-      assert_eq!(NavigationHistory::current_pathname(cx).as_ref(), "/git");
+      assert_eq!(NavigationHistory::current_pathname(cx).as_ref(), "/session");
     });
   }
 
@@ -211,8 +211,8 @@ mod tests {
     cx.update(|cx| {
       init_navigation_test(cx);
 
-      NavigationHistory::navigate_replace("/git", cx);
-      NavigationHistory::navigate("/git", cx);
+      NavigationHistory::navigate_replace("/session", cx);
+      NavigationHistory::navigate("/session", cx);
 
       // Stack should be empty, no duplicate push
       assert_eq!(cx.global::<NavigationHistory>().stack.len(), 0);
@@ -224,7 +224,7 @@ mod tests {
     cx.update(|cx| {
       init_navigation_test(cx);
 
-      NavigationHistory::navigate_replace("/git", cx);
+      NavigationHistory::navigate_replace("/session", cx);
       NavigationHistory::navigate_replace("/settings", cx);
 
       // Stack should be empty, replace doesn't push
@@ -242,7 +242,7 @@ mod tests {
       init_navigation_test(cx);
       AuthStateStore::set(cx, AuthState::Unauthenticated);
 
-      NavigationHistory::navigate_replace("/git", cx);
+      NavigationHistory::navigate_replace("/session", cx);
       NavigationHistory::navigate("/github/owner/repo/pull/42", cx);
 
       assert_eq!(NavigationHistory::current_pathname(cx).as_ref(), "/billing");
@@ -255,12 +255,12 @@ mod tests {
       init_navigation_test(cx);
       AuthStateStore::set(cx, AuthState::Unauthenticated);
 
-      NavigationHistory::navigate_replace("/git", cx);
+      NavigationHistory::navigate_replace("/session", cx);
       NavigationHistory::navigate("/github/owner/repo/pull/42", cx);
 
       assert_eq!(NavigationHistory::current_pathname(cx).as_ref(), "/billing");
       assert_eq!(cx.global::<NavigationHistory>().stack.len(), 1);
-      assert_eq!(cx.global::<NavigationHistory>().stack[0].as_ref(), "/git");
+      assert_eq!(cx.global::<NavigationHistory>().stack[0].as_ref(), "/session");
     });
   }
 
@@ -269,7 +269,7 @@ mod tests {
     cx.update(|cx| {
       init_navigation_test(cx);
 
-      NavigationHistory::navigate_replace("/git", cx);
+      NavigationHistory::navigate_replace("/session", cx);
       for i in 0..(NAVIGATION_HISTORY_MAX_ENTRIES + 5) {
         NavigationHistory::navigate(format!("/page-{i}"), cx);
       }
