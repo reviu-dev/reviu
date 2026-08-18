@@ -7392,6 +7392,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "reviu_driver"
+version = "0.18.0"
+dependencies = [
+ "agent_chat_panel",
+ "anyhow",
+ "gpui",
+ "gpui-component",
+ "serde",
+ "serde_json",
+ "ui",
+ "workspace",
+]
+
+[[package]]
 name = "rgb"
 version = "0.8.53"
 source = "registry+https://github.com/rust-lang/crates.io-index"

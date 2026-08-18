@@ -13,6 +13,7 @@ members = [
   "crates/agent_acp",
   "crates/agent_chat_panel",
   "crates/selectable_text",
+  "crates/reviu_driver",
 ]
 
 [workspace.package]

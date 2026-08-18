@@ -1,0 +1,11 @@
+ui: loaded bundled font fonts/lilex/Lilex-Regular.ttf (194308 bytes)
+ui: loaded bundled font fonts/inter/Inter-Regular.otf (609600 bytes)
+ui: loaded bundled font fonts/inter/Inter-Italic.otf (589784 bytes)
+ui: loaded bundled font fonts/inter/Inter-Medium.otf (627988 bytes)
+ui: loaded bundled font fonts/inter/Inter-MediumItalic.otf (605956 bytes)
+ui: loaded bundled font fonts/inter/Inter-SemiBold.otf (629912 bytes)
+ui: loaded bundled font fonts/inter/Inter-SemiBoldItalic.otf (608028 bytes)
+ui: loaded bundled font fonts/inter/Inter-Bold.otf (631880 bytes)
+ui: loaded bundled font fonts/inter/Inter-BoldItalic.otf (609372 bytes)
+
+(reviu-driver:173234): libayatana-appindicator-WARNING **: 17:03:33.384: libayatana-appindicator is deprecated. Please use libayatana-appindicator-glib in newly written code.
