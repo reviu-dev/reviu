@@ -2091,7 +2091,7 @@ impl Element for EditorElement {
             } else {
               let is_occluded = !scroll_hitbox.is_hovered(window);
               editor.update(cx, |editor, cx| {
-                editor.mouse_moved(event, &position_map, is_occluded, cx);
+                editor.mouse_moved(event, &position_map, is_occluded, is_primary, cx);
               });
             }
           }

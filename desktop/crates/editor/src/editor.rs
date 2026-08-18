@@ -552,6 +552,8 @@ pub struct Editor {
   pub projection: Option<Arc<Projection>>,
   pub visible_groups: Vec<GroupOverlay>,
   pub hovered_group_id: Option<Arc<str>>,
+  /// Which split pane owns the current hover state.
+  hovered_from_primary: bool,
   pub hovered_conflict_start_line: Option<usize>,
   pending_conflict_reveal_start_line: Option<usize>,
   conflict_cache: RwLock<ConflictCache>,
@@ -976,6 +978,7 @@ impl Editor {
       projection: None,
       visible_groups: Vec::new(),
       hovered_group_id: None,
+      hovered_from_primary: true,
       hovered_conflict_start_line: None,
       pending_conflict_reveal_start_line: None,
       conflict_cache: RwLock::new(ConflictCache::default()),
@@ -8196,10 +8199,16 @@ impl Editor {
     event: &MouseMoveEvent,
     position_map: &PositionMap,
     is_occluded: bool,
+    is_primary: bool,
     cx: &mut Context<Self>,
   ) {
     let in_bounds = !is_occluded && position_map.bounds.contains(&event.position);
     if !in_bounds {
+      // Both split panes listen on the same editor: only the pane that set
+      // the hover may clear it, or crossing panes erases the fresh hover.
+      if self.hovered_from_primary != is_primary {
+        return;
+      }
       let had_hovered_group = self.hovered_group_id.take().is_some();
       let had_hovered_conflict = self.hovered_conflict_start_line.take().is_some();
       let in_adjacent_gutter_band = !is_occluded
@@ -8223,6 +8232,7 @@ impl Editor {
       return;
     }
     self.last_mouse_position = Some(event.position);
+    self.hovered_from_primary = is_primary;
     let display_line = position_map.display_line_for_position(event.position);
     self.update_review_comment_create_drag_from_display_line(display_line, cx);
 
@@ -9880,6 +9890,7 @@ pub mod tests {
           projection: None,
           visible_groups: Vec::new(),
           hovered_group_id: None,
+          hovered_from_primary: true,
           hovered_conflict_start_line: None,
           pending_conflict_reveal_start_line: None,
           conflict_cache: RwLock::new(ConflictCache::default()),

@@ -2958,4 +2958,67 @@ mod tests {
       );
     });
   }
+
+  #[gpui::test]
+  async fn hovering_the_right_split_pane_keeps_its_hunk_hover(cx: &mut TestAppContext) {
+    let repo = TempRepo::init("session-split-right-hover");
+    commit_text_file(
+      &repo.path,
+      Path::new("a.txt"),
+      "one\ntwo\nthree\n",
+      "initial",
+    );
+    std::fs::write(repo.path.join("a.txt"), "one\nTWO\nthree\n").expect("modify file");
+    let (page, cx) = add_session_page_window(repo.path.clone(), cx);
+    page.update(cx, |page, cx| {
+      page.dock_panel.update(cx, |panel, cx| panel.refresh(cx))
+    });
+    cx.run_until_parked();
+
+    page.update_in(cx, |page, window, cx| {
+      page.open_diff(PathBuf::from("a.txt"), None, window, cx);
+    });
+    await_open_file(&page, cx).await;
+    await_editor_diff(&page, cx).await;
+    page.update(cx, |page, cx| page.toggle_diff_view(cx));
+    cx.run_until_parked();
+
+    let editor_bounds = cx
+      .debug_bounds(DIFF_EDITOR_DEBUG_SELECTOR)
+      .expect("editor bounds");
+    let hover_pane = |cx: &mut gpui::VisualTestContext, x: gpui::Pixels| -> bool {
+      let mut y = editor_bounds.top() + px(4.0);
+      while y < editor_bounds.top() + px(200.0) {
+        cx.simulate_mouse_move(gpui::point(x, y), None, gpui::Modifiers::default());
+        cx.run_until_parked();
+        let hovered = page.read_with(cx, |page, cx| {
+          page
+            .editor
+            .as_ref()
+            .expect("editor")
+            .read(cx)
+            .hovered_group_id
+            .is_some()
+        });
+        if hovered {
+          return true;
+        }
+        y += px(10.0);
+      }
+      false
+    };
+
+    // The right pane (the added side) must light up the hunk actions...
+    let right_x = editor_bounds.right() - editor_bounds.size.width * 0.25;
+    assert!(
+      hover_pane(cx, right_x),
+      "hovering the changed line on the right pane must set the hunk hover"
+    );
+    // ...and so must the left pane.
+    let left_x = editor_bounds.left() + editor_bounds.size.width * 0.25;
+    assert!(
+      hover_pane(cx, left_x),
+      "hovering the changed line on the left pane must set the hunk hover"
+    );
+  }
 }
