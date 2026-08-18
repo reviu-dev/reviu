@@ -620,23 +620,6 @@ impl SessionPage {
     cx.notify();
   }
 
-  /// The rail always opens on the clicked tab, it never toggles shut.
-  fn open_dock_from_rail(
-    &mut self,
-    tab: DockPanelTab,
-    window: &mut Window,
-    cx: &mut Context<Self>,
-  ) {
-    if !self.dock_open {
-      self.dock_open = true;
-      self.dock_slide_armed = true;
-    }
-    self
-      .dock_panel
-      .update(cx, |panel, cx| panel.open_tab(tab, window, cx));
-    cx.notify();
-  }
-
   fn close_sidebar(&mut self, cx: &mut Context<Self>) {
     if !self.sidebar_open {
       return;

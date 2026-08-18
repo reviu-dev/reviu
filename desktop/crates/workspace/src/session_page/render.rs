@@ -3,6 +3,7 @@
 use super::*;
 use crate::annotations::AnnotationKind;
 use crate::hunk_actions::render_hunk_actions;
+use gpui_component::Selectable as _;
 
 impl SessionPage {
   /// Without a repository half the shell has nothing to show, so the row that
@@ -649,10 +650,17 @@ impl SessionPage {
     cx: &mut Context<Self>,
   ) -> AnyElement {
     let theme = cx.theme().clone();
-    let (from, to) = if open {
-      (SIDE_RAIL_WIDTH, width)
+    // A permanent rail sits beside the panel, so the content slides to zero;
+    // a replacing rail keeps its own width on screen.
+    let collapsed_width = if side == PanelSide::Right {
+      0.0
     } else {
-      (width, SIDE_RAIL_WIDTH)
+      SIDE_RAIL_WIDTH
+    };
+    let (from, to) = if open {
+      (collapsed_width, width)
+    } else {
+      (width, collapsed_width)
     };
     let clipped = div()
       .id(match side {
@@ -665,11 +673,14 @@ impl SessionPage {
       PanelSide::Left => clipped.border_r_1().border_color(theme.border),
       PanelSide::Right => clipped.border_l_1().border_color(theme.border),
     };
-    let clipped = clipped.child(if open {
-      div().w(px(width)).h_full().child(content)
-    } else {
-      // The rail replaces the content: fixed width, nothing to clip.
-      div().w(px(SIDE_RAIL_WIDTH)).h_full().child(rail)
+    // Right: the rail sits beside the panel for good. Left: it replaces it.
+    let (replacing_rail, side_rail) = match side {
+      PanelSide::Left => (Some(rail), None),
+      PanelSide::Right => (None, Some(rail)),
+    };
+    let clipped = clipped.child(match replacing_rail {
+      Some(rail) if !open => div().w(px(SIDE_RAIL_WIDTH)).h_full().child(rail),
+      _ => div().w(px(width)).h_full().child(content),
     });
     let clipped: AnyElement = if slide_armed {
       clipped
@@ -690,15 +701,23 @@ impl SessionPage {
       clipped.w(px(to)).into_any_element()
     };
     // The grab strip straddles the border, so it lives outside the clip.
-    div()
+    let sliding = div()
       .relative()
       .h_full()
       .flex_shrink_0()
       .child(clipped)
       .when(open, |this| {
         this.child(self.render_panel_resize_handle(side, cx))
-      })
-      .into_any_element()
+      });
+    if let Some(rail) = side_rail {
+      return h_flex()
+        .h_full()
+        .flex_shrink_0()
+        .child(sliding)
+        .child(div().w(px(SIDE_RAIL_WIDTH)).h_full().child(rail))
+        .into_any_element();
+    }
+    sliding.into_any_element()
   }
 
   fn rail_button(
@@ -715,7 +734,11 @@ impl SessionPage {
       .tooltip(tooltip)
   }
 
+  /// The permanent tab rail of the right panel: icons never truncate, and the
+  /// active icon closes the panel like its shortcut does.
   fn render_dock_rail(&self, cx: &mut Context<Self>) -> AnyElement {
+    let theme = cx.theme().clone();
+    let active_tab = self.dock_panel.read(cx).active_tab();
     let tabs: [(
       &'static str,
       gpui_component::Icon,
@@ -753,26 +776,22 @@ impl SessionPage {
         DockPanelTab::Terminal,
       ),
     ];
-    let mut rail = v_flex().items_center().gap_1().pt_2().w_full().child(
-      Self::rail_button(
-        "dock-rail-open",
-        gpui_component::Icon::new(gpui_component::IconName::PanelRightOpen),
-        "Open panel",
-      )
-      .on_click(cx.listener(|this, _, window, cx| {
-        // Reopens on the tab that was active when the panel closed.
-        let tab = this.dock_panel.read(cx).active_tab();
-        this.open_dock_from_rail(tab, window, cx);
-      })),
-    );
+    let mut rail = v_flex().items_center().gap_1().pt_2().w_full();
     for (id, icon, tooltip, tab) in tabs {
-      rail = rail.child(Self::rail_button(id, icon, tooltip).on_click(cx.listener(
-        move |this, _, window, cx| {
-          this.open_dock_from_rail(tab, window, cx);
-        },
-      )));
+      rail = rail.child(
+        Self::rail_button(id, icon, tooltip)
+          .selected(self.dock_open && active_tab == tab)
+          .on_click(cx.listener(move |this, _, window, cx| {
+            this.open_dock_tab(tab, window, cx);
+          })),
+      );
     }
-    div().size_full().child(rail).into_any_element()
+    div()
+      .size_full()
+      .border_l_1()
+      .border_color(theme.border)
+      .child(rail)
+      .into_any_element()
   }
 
   fn render_sidebar_rail(&self, cx: &mut Context<Self>) -> AnyElement {
@@ -847,7 +866,8 @@ impl Render for SessionPage {
             this.resize_sidebar(f32::from(event.event.position.x), cx);
           }
           PanelSide::Right => {
-            let width = window.viewport_size().width - event.event.position.x;
+            // The permanent rail sits between the panel and the window edge.
+            let width = window.viewport_size().width - event.event.position.x - px(SIDE_RAIL_WIDTH);
             this.resize_dock(f32::from(width), cx);
           }
         },
@@ -2791,25 +2811,21 @@ mod tests {
       assert_eq!(page.dock_panel.read(cx).active_tab(), DockPanelTab::History);
     });
 
-    // Close again: the plain open button comes back on the remembered tab.
-    page.update_in(cx, |page, window, cx| {
-      page.open_history_action(&crate::OpenGitHistorySidebar, window, cx)
-    });
-    cx.run_until_parked();
+    // The rail is permanent: clicking the active icon closes the panel.
     page.update(cx, |page, cx| {
       page.dock_slide_armed = false;
       cx.notify();
     });
     cx.run_until_parked();
-    let open = cx.debug_bounds("dock-rail-open").expect("rail open button");
-    cx.simulate_click(open.center(), gpui::Modifiers::default());
+    let history = cx.debug_bounds("dock-rail-history").expect("rail history");
+    cx.simulate_click(history.center(), gpui::Modifiers::default());
     cx.run_until_parked();
     page.read_with(cx, |page, cx| {
-      assert!(page.dock_open);
+      assert!(!page.dock_open, "the active icon toggles the panel shut");
       assert_eq!(
         page.dock_panel.read(cx).active_tab(),
         DockPanelTab::History,
-        "reopening lands on the tab it was closed on"
+        "the remembered tab survives the close"
       );
     });
   }

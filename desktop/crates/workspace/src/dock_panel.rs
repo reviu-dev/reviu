@@ -33,10 +33,6 @@ const DOCK_PANEL_CREATE_PR_DEBUG_SELECTOR: &str = "dock-panel-create-pr";
 const DOCK_PANEL_PUBLISH_AND_CREATE_PR_DEBUG_SELECTOR: &str = "dock-panel-publish-and-create-pr";
 const DOCK_PANEL_COMPARE_DEBUG_SELECTOR: &str = "dock-panel-compare-on-github";
 const DOCK_PANEL_OPERATION_DEBUG_SELECTOR: &str = "dock-panel-operation";
-#[cfg(test)]
-const DOCK_PANEL_TERMINAL_TAB_DEBUG_SELECTOR: &str = "dock-panel-tab-terminal";
-#[cfg(test)]
-const DOCK_PANEL_HISTORY_TAB_DEBUG_SELECTOR: &str = "dock-panel-tab-history";
 const DOCK_PANEL_REFRESH_DEBUG_SELECTOR: &str = "dock-panel-refresh";
 pub(crate) const DOCK_PANEL_ZOOM_DEBUG_SELECTOR: &str = "dock-panel-zoom";
 use std::collections::BTreeMap;
@@ -890,67 +886,6 @@ impl DockPanel {
     self.active_tab
   }
 
-  fn render_tabs(&self, cx: &mut Context<Self>) -> AnyElement {
-    let theme = cx.theme().clone();
-    let tab = |id: &'static str, label: &'static str, target: DockPanelTab, active: bool| {
-      div()
-        .id(id)
-        .debug_selector(move || id.to_string())
-        .px_2()
-        .py_1()
-        .rounded(px(5.0))
-        .text_xs()
-        .cursor_pointer()
-        .when(active, |this| {
-          this.bg(theme.secondary_active).text_color(theme.foreground)
-        })
-        .when(!active, |this| {
-          this
-            .text_color(theme.muted_foreground)
-            .hover(|s| s.bg(theme.secondary_hover))
-        })
-        .child(label)
-        .on_click(cx.listener(move |this, _, window, cx| {
-          this.open_tab(target, window, cx);
-        }))
-    };
-
-    h_flex()
-      .items_center()
-      .gap_1()
-      .child(tab(
-        "dock-panel-tab-changes",
-        "Changes",
-        DockPanelTab::Changes,
-        self.active_tab == DockPanelTab::Changes,
-      ))
-      .child(tab(
-        "dock-panel-tab-files",
-        "Files",
-        DockPanelTab::Files,
-        self.active_tab == DockPanelTab::Files,
-      ))
-      .child(tab(
-        "dock-panel-tab-history",
-        "History",
-        DockPanelTab::History,
-        self.active_tab == DockPanelTab::History,
-      ))
-      .child(tab(
-        "dock-panel-tab-pr",
-        "Pull request",
-        DockPanelTab::PullRequest,
-        self.active_tab == DockPanelTab::PullRequest,
-      ))
-      .child(tab(
-        "dock-panel-tab-terminal",
-        "Terminal",
-        DockPanelTab::Terminal,
-        self.active_tab == DockPanelTab::Terminal,
-      ))
-      .into_any_element()
-  }
-
   fn render_files_tab(&mut self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
     let theme = cx.theme().clone();
 
@@ -1290,7 +1225,16 @@ impl Render for DockPanel {
           .flex_1()
           .min_w(px(0.0))
           .overflow_hidden()
-          .child(self.render_tabs(cx)),
+          .text_sm()
+          .font_weight(gpui::FontWeight::SEMIBOLD)
+          .text_color(theme.muted_foreground)
+          .child(match self.active_tab {
+            DockPanelTab::Changes => "Changes",
+            DockPanelTab::Files => "Files",
+            DockPanelTab::History => "History",
+            DockPanelTab::PullRequest => "Pull request",
+            DockPanelTab::Terminal => "Terminal",
+          }),
       )
       .child(
         h_flex()
@@ -2248,10 +2192,10 @@ mod tests {
     panel.update(cx, |_, cx| cx.notify());
     cx.run_until_parked();
 
-    let tab = cx
-      .debug_bounds(DOCK_PANEL_HISTORY_TAB_DEBUG_SELECTOR)
-      .expect("history tab bounds");
-    cx.simulate_click(tab.center(), gpui::Modifiers::default());
+    // The tabs live in the page's rail now; the panel exposes open_tab.
+    panel.update_in(cx, |panel, window, cx| {
+      panel.open_tab(DockPanelTab::History, window, cx)
+    });
     let history = panel.read_with(cx, |panel, _| panel.history_list.clone());
     let load = history.update(cx, |list, _| list._history_task.take());
     if let Some(task) = load {
@@ -2310,10 +2254,10 @@ mod tests {
       "the refresh button belongs to the review tabs"
     );
 
-    let tab = cx
-      .debug_bounds(DOCK_PANEL_TERMINAL_TAB_DEBUG_SELECTOR)
-      .expect("terminal tab bounds");
-    cx.simulate_click(tab.center(), gpui::Modifiers::default());
+    // The tabs live in the page's rail now; the panel exposes open_tab.
+    panel.update_in(cx, |panel, window, cx| {
+      panel.open_tab(DockPanelTab::Terminal, window, cx)
+    });
     cx.run_until_parked();
 
     panel.read_with(cx, |panel, _| {
