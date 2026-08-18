@@ -626,6 +626,7 @@ impl DockPanel {
       .flex_1()
       .min_h_0()
       .min_w(px(0.0))
+      .px_1()
       .child(self.history_list.clone())
       .into_any_element()
   }
@@ -651,6 +652,8 @@ impl DockPanel {
       .flex_1()
       .min_h_0()
       .min_w(px(0.0))
+      .px_2()
+      .py_1()
       .child(terminal)
       .into_any_element()
   }
@@ -990,6 +993,7 @@ impl DockPanel {
       .flex_1()
       .min_h_0()
       .py_1()
+      .px_1()
       .child(tree(
         &self.files_tree_state,
         move |ix, entry, selected, _window, cx| {
@@ -1338,6 +1342,7 @@ impl Render for DockPanel {
             .min_h_0()
             .overflow_y_scroll()
             .py_1()
+            .px_1()
             .child(self.changes_list.clone())
             .into_any_element()
         }

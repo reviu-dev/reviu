@@ -584,7 +584,8 @@ impl SessionPage {
       .id("session-dock-resize-handle")
       .debug_selector(|| DOCK_RESIZE_HANDLE_DEBUG_SELECTOR.to_string())
       .absolute()
-      .left_0()
+      // Centered on the dock's 1px border, not sitting beside it.
+      .left(px(-2.0))
       .top_0()
       .w(px(5.0))
       .h_full()
@@ -617,11 +618,9 @@ impl SessionPage {
       (width, 0.0)
     };
     let theme = cx.theme().clone();
-    let container = div()
+    let clipped = div()
       .id("session-dock-container")
-      .relative()
       .h_full()
-      .flex_shrink_0()
       .overflow_hidden()
       .child(
         div()
@@ -630,20 +629,28 @@ impl SessionPage {
           .border_l_1()
           .border_color(theme.border)
           .child(self.render_dock_panel(cx)),
-      )
+      );
+    let clipped: AnyElement = if self.dock_slide_armed {
+      clipped
+        .with_animation(
+          ("session-dock-slide", self.dock_open as u64),
+          gpui::Animation::new(std::time::Duration::from_millis(CENTER_SWAP_FADE_MS))
+            .with_easing(gpui::ease_out_quint()),
+          move |this, delta| this.w(px(from + (to - from) * delta)),
+        )
+        .into_any_element()
+    } else {
+      clipped.w(px(to)).into_any_element()
+    };
+    // The grab strip straddles the border, so it lives outside the clip.
+    div()
+      .relative()
+      .h_full()
+      .flex_shrink_0()
+      .child(clipped)
       .when(self.dock_open, |this| {
         this.child(self.render_dock_resize_handle(cx))
-      });
-    if !self.dock_slide_armed {
-      return container.w(px(to)).into_any_element();
-    }
-    container
-      .with_animation(
-        ("session-dock-slide", self.dock_open as u64),
-        gpui::Animation::new(std::time::Duration::from_millis(CENTER_SWAP_FADE_MS))
-          .with_easing(gpui::ease_out_quint()),
-        move |this, delta| this.w(px(from + (to - from) * delta)),
-      )
+      })
       .into_any_element()
   }
 }
