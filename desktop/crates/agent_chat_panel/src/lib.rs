@@ -1,3 +1,4 @@
+mod code_block;
 mod diff;
 mod mention;
 mod persistence;
@@ -356,6 +357,8 @@ pub struct AgentChatPanel {
   state_dir: Option<PathBuf>,
   current_conv: ConversationMeta,
   selection_registry: selectable_text::SelectionRegistry,
+  /// Built once: rebuilding extensions busts TextView's parse cache.
+  markdown_extensions: gpui_component::text::MarkdownExtensions,
   available_modes: Vec<SessionMode>,
   current_mode_id: Option<SessionModeId>,
   available_models: Vec<ModelInfo>,
@@ -387,6 +390,7 @@ impl AgentChatPanel {
       .unwrap_or_else(|| (new_conversation_meta(), Vec::new(), HashMap::new()));
 
     let selection_registry = selectable_text::SelectionRegistry::new();
+    let markdown_extensions = code_block::extensions(selection_registry.clone());
 
     let mut panel = Self {
       backend_kind,
@@ -418,6 +422,7 @@ impl AgentChatPanel {
       state_dir,
       current_conv,
       selection_registry,
+      markdown_extensions,
       available_modes: Vec::new(),
       current_mode_id: None,
       available_models: Vec::new(),
@@ -575,6 +580,8 @@ impl AgentChatPanel {
   fn new_disconnected(cwd: PathBuf, window: &mut Window, cx: &mut Context<Self>) -> Self {
     let backend_kind = BackendKind::Claude;
     let (input, input_sub) = Self::build_composer_input(window, cx);
+    let selection_registry = selectable_text::SelectionRegistry::new();
+    let markdown_extensions = code_block::extensions(selection_registry.clone());
 
     let mut panel = Self {
       backend_kind,
@@ -605,7 +612,8 @@ impl AgentChatPanel {
       auth_required: false,
       state_dir: None,
       current_conv: new_conversation_meta(),
-      selection_registry: selectable_text::SelectionRegistry::new(),
+      selection_registry,
+      markdown_extensions,
       available_modes: Vec::new(),
       current_mode_id: None,
       available_models: Vec::new(),
@@ -987,6 +995,7 @@ impl AgentChatPanel {
       container = container.child(markdown_view(
         "agent-chat-md-pending",
         &self.pending_agent,
+        &self.markdown_extensions,
         cx,
       ));
     }
@@ -1070,7 +1079,12 @@ impl AgentChatPanel {
           ))
           .into_any_element(),
         ChatRole::Agent => timeline_row(
-          markdown_view(("agent-chat-md", idx), &m.text, cx),
+          markdown_view(
+            ("agent-chat-md", idx),
+            &m.text,
+            &self.markdown_extensions,
+            cx,
+          ),
           theme,
           is_last_row,
         ),
@@ -1121,6 +1135,7 @@ impl AgentChatPanel {
             .child(div().px_3().py_2().text_sm().child(markdown_view(
               ("agent-chat-review-md", idx),
               &m.text,
+              &self.markdown_extensions,
               cx,
             )))
             .into_any_element()
@@ -1144,7 +1159,11 @@ impl AgentChatPanel {
       ChatItem::Plan(p) => {
         timeline_row_with_color(render_plan(p, theme), theme, theme.primary, is_last_row)
       }
-      ChatItem::Thought(t) => timeline_row(render_thought(idx, t, theme, cx), theme, is_last_row),
+      ChatItem::Thought(t) => timeline_row(
+        render_thought(idx, t, theme, &self.markdown_extensions, cx),
+        theme,
+        is_last_row,
+      ),
       ChatItem::Checkpoint(marker) => {
         let ref_name = marker.ref_name.clone();
         // A trailing marker has nothing after it to undo.
@@ -2509,7 +2528,12 @@ fn render_selector_item(
     .into_any_element()
 }
 
-fn markdown_view(id: impl Into<gpui::ElementId>, source: &str, cx: &App) -> gpui::AnyElement {
+fn markdown_view(
+  id: impl Into<gpui::ElementId>,
+  source: &str,
+  extensions: &gpui_component::text::MarkdownExtensions,
+  cx: &App,
+) -> gpui::AnyElement {
   let theme = cx.theme();
   let mut style = TextViewStyle::default().paragraph_gap(gpui::rems(0.5));
   style.highlight_theme = theme.highlight_theme.clone();
@@ -2517,6 +2541,7 @@ fn markdown_view(id: impl Into<gpui::ElementId>, source: &str, cx: &App) -> gpui
 
   TextView::markdown(id, SharedString::from(source.to_string()))
     .style(style)
+    .markdown_extensions(extensions.clone())
     .selectable(true)
     // Body text inherits from here; headings scale off `heading_base_font_size`.
     .text_sm()
@@ -2624,7 +2649,7 @@ pub(crate) fn strip_markdown_code_fence(text: &str) -> &str {
   &trimmed[body_start..body_end]
 }
 
-fn mono_font_for(theme: &gpui_component::Theme) -> Font {
+pub(crate) fn mono_font_for(theme: &gpui_component::Theme) -> Font {
   Font {
     family: theme.mono_font_family.clone(),
     style: FontStyle::Normal,
@@ -2800,6 +2825,7 @@ fn render_thought(
   idx: usize,
   thought: &ThoughtView,
   theme: &gpui_component::Theme,
+  extensions: &gpui_component::text::MarkdownExtensions,
   cx: &mut Context<AgentChatPanel>,
 ) -> gpui::AnyElement {
   let collapsed = thought.collapsed;
@@ -2848,6 +2874,7 @@ fn render_thought(
           .child(markdown_view(
             ("agent-chat-thought-md", idx),
             &body_text,
+            extensions,
             cx,
           )),
       )
@@ -4759,6 +4786,35 @@ mod tests {
       assert!(panel.items.is_empty(), "no prompt was recorded");
       assert!(!panel.in_flight);
     });
+  }
+
+  #[gpui::test]
+  async fn agent_code_blocks_are_highlighted_and_copyable(cx: &mut gpui::TestAppContext) {
+    let (panel, cx) = add_panel_window(cx);
+    panel.update(cx, |panel, cx| {
+      panel.status = Status::Ready;
+      panel.items = vec![agent_message("```rust\nfn main() { let x = 1; }\n```")];
+      panel.sync_list_count();
+      cx.notify();
+    });
+    cx.run_until_parked();
+
+    assert!(
+      cx.debug_bounds("chat-code-block").is_some(),
+      "the custom code block is painted"
+    );
+    let copy = cx.debug_bounds("chat-code-copy").expect("copy button painted");
+    cx.simulate_click(copy.center(), gpui::Modifiers::default());
+    cx.run_until_parked();
+
+    let copied = cx
+      .update(|_, cx| cx.read_from_clipboard())
+      .and_then(|item| item.text());
+    assert_eq!(
+      copied.as_deref(),
+      Some("fn main() { let x = 1; }"),
+      "copy takes the code without the fences"
+    );
   }
 
   #[gpui::test]

@@ -4,6 +4,10 @@ All notable changes to Reviu are documented here.
 
 ## 1.0.0
 
+### Code Blocks Worth Reading
+
+Code blocks in the agent's replies are now syntax highlighted, using the same fifty-language engine as the rest of the app. Each block shows its language and carries a copy button that grabs the code without the fences.
+
 ### Enter Sends, Shift+Enter Starts A New Line
 
 In the agent composer, Enter now sends the message and Shift+Enter inserts a line break. Before, every Enter variant sent at once and there was no way to write a multi-line prompt from the keyboard.
