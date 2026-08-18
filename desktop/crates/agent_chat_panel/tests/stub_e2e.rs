@@ -71,8 +71,7 @@ async fn a_permission_request_carries_its_command_and_resumes_on_answer(cx: &mut
   cx.condition(&panel, |panel, _| panel.pending_permission().is_some())
     .await;
 
-  let (prompt_id, invocation) =
-    panel.read_with(cx, |panel, _| panel.pending_permission().unwrap());
+  let (prompt_id, invocation) = panel.read_with(cx, |panel, _| panel.pending_permission().unwrap());
   assert_eq!(
     invocation.as_deref(),
     Some("cargo test --workspace"),

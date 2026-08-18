@@ -3,8 +3,8 @@
 //! feature), so its built-in code blocks paint unstyled monospace.
 
 use gpui::{
-  App, InteractiveElement as _, IntoElement, ParentElement as _, SharedString, Styled as _,
-  Window, div, px,
+  App, InteractiveElement as _, IntoElement, ParentElement as _, SharedString, Styled as _, Window,
+  div, px,
 };
 use gpui_component::{
   ActiveTheme as _,
@@ -108,16 +108,14 @@ fn render(
             .child(block.lang.clone().unwrap_or_else(|| "text".into())),
         )
         .child(
-          div()
-            .debug_selector(|| "chat-code-copy".to_string())
-            .child(
-              Clipboard::new(SharedString::from(format!(
-                "chat-code-copy-{:x}",
-                block.text_id
-              )))
-              .value(block.code.clone())
-              .tooltip("Copy code"),
-            ),
+          div().debug_selector(|| "chat-code-copy".to_string()).child(
+            Clipboard::new(SharedString::from(format!(
+              "chat-code-copy-{:x}",
+              block.text_id
+            )))
+            .value(block.code.clone())
+            .tooltip("Copy code"),
+          ),
         ),
     )
     .child(

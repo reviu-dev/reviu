@@ -59,9 +59,10 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
           // request carrying a real command, so clients can exercise the flow.
           // Awaiting the outcome inline would park the connection's task queue
           // and deadlock; the turn finishes in the response callback instead.
-          let wants_permission = req.prompt.iter().any(
-            |block| matches!(block, ContentBlock::Text(t) if t.text.contains("permission")),
-          );
+          let wants_permission = req
+            .prompt
+            .iter()
+            .any(|block| matches!(block, ContentBlock::Text(t) if t.text.contains("permission")));
           if wants_permission {
             let fields = ToolCallUpdateFields::new()
               .kind(ToolKind::Execute)

@@ -301,7 +301,7 @@ fn default_thought_collapsed() -> bool {
 enum ChatItem {
   Message(ChatMessage),
   Tool(ToolCallView),
-  Permission(PermissionItem),
+  Permission(Box<PermissionItem>),
   Plan(PlanView),
   Thought(ThoughtView),
   Checkpoint(CheckpointMarker),
@@ -1449,11 +1449,13 @@ impl AgentChatPanel {
       while let Ok(prompt) = rx.recv().await {
         let _ = this.update(cx, |panel, cx| {
           let detail = permission_detail(&prompt.tool_call, &panel.cwd);
-          panel.items.push(ChatItem::Permission(PermissionItem {
-            prompt,
-            detail,
-            resolved: None,
-          }));
+          panel
+            .items
+            .push(ChatItem::Permission(Box::new(PermissionItem {
+              prompt,
+              detail,
+              resolved: None,
+            })));
           panel.sync_list_count();
           cx.notify();
         });
@@ -1936,7 +1938,9 @@ impl AgentChatPanel {
     // Drain the composer only once the prompt is actually dispatched: while the
     // agent is still connecting or errored, the user keeps what they typed.
     if self.dispatch_prompt(text, cx) {
-      self.input.update(cx, |state, cx| state.set_value("", window, cx));
+      self
+        .input
+        .update(cx, |state, cx| state.set_value("", window, cx));
     }
   }
 
@@ -3424,7 +3428,9 @@ fn render_permission(
     );
   }
   if !detail.diff_stats.is_empty() {
-    let mut stats = v_flex().gap_0p5().debug_selector(|| "perm-diff-stats".to_string());
+    let mut stats = v_flex()
+      .gap_0p5()
+      .debug_selector(|| "perm-diff-stats".to_string());
     for (path, added, removed) in &detail.diff_stats {
       stats = stats.child(
         h_flex()
@@ -5092,7 +5098,9 @@ mod tests {
       cx.debug_bounds("chat-code-block-rust").is_some(),
       "the custom code block is painted"
     );
-    let copy = cx.debug_bounds("chat-code-copy").expect("copy button painted");
+    let copy = cx
+      .debug_bounds("chat-code-copy")
+      .expect("copy button painted");
     cx.simulate_click(copy.center(), gpui::Modifiers::default());
     cx.run_until_parked();
 
@@ -5292,7 +5300,7 @@ mod tests {
       let detail = permission_detail(&update, std::path::Path::new("."));
       panel.items = vec![
         user_message("do it"),
-        ChatItem::Permission(PermissionItem {
+        ChatItem::Permission(Box::new(PermissionItem {
           prompt: PermissionPrompt {
             id: 7,
             tool_call_title: "Run cargo build".into(),
@@ -5305,7 +5313,7 @@ mod tests {
           },
           detail,
           resolved: None,
-        }),
+        })),
       ];
       panel.sync_list_count();
       cx.notify();
@@ -5503,7 +5511,9 @@ mod tests {
     cx.run_until_parked();
 
     assert!(cx.debug_bounds("chat-code-block-nosuchlang").is_some());
-    let copy = cx.debug_bounds("chat-code-copy").expect("copy button painted");
+    let copy = cx
+      .debug_bounds("chat-code-copy")
+      .expect("copy button painted");
     cx.simulate_click(copy.center(), gpui::Modifiers::default());
     cx.run_until_parked();
 
