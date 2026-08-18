@@ -18,10 +18,22 @@ pub(crate) fn now_secs() -> u64 {
     .unwrap_or(0)
 }
 
+/// Millis + pid + a process counter: two conversations created in the same
+/// second (or by two app instances) never share a file.
+pub(crate) fn unique_conversation_id() -> String {
+  static COUNTER: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+  let millis = std::time::SystemTime::now()
+    .duration_since(std::time::UNIX_EPOCH)
+    .map(|d| d.as_millis())
+    .unwrap_or(0);
+  let count = COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+  format!("{millis}-{}-{count}", std::process::id())
+}
+
 pub(crate) fn new_conversation_meta() -> ConversationMeta {
   let now = now_secs();
   ConversationMeta {
-    id: now.to_string(),
+    id: unique_conversation_id(),
     started_at_secs: now,
     updated_at_secs: now,
     title: String::new(),

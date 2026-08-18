@@ -4,6 +4,10 @@ All notable changes to Reviu are documented here.
 
 ## 1.0.0
 
+### A Sturdier Conversation
+
+A batch of fixes under the hood: words the agent streams right as a turn ends are kept instead of silently dropped; permission cards survive a reload, showing what was asked and answered; the plan checklist updates in place instead of duplicating when tool calls interleave; the file list behind @ mentions refreshes after every turn, so files the agent just created are mentionable; and two conversations created in the same second no longer collide on disk.
+
 ### Edit A Message And Replay From There
 
 Hovering a message now reveals a copy button, and your own prompts gain an edit button: change the text, press Send, and Reviu restores the files to the checkpoint taken before that prompt, drops the turns after it, and replays the conversation from your new wording in a fresh session. Copying grabs the message as written, formatting included.

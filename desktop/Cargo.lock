@@ -353,6 +353,7 @@ dependencies = [
  "async-channel",
  "async-process",
  "futures",
+ "serde",
  "serde_json",
  "shell-words",
  "smol",

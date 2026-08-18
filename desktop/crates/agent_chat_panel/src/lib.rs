@@ -185,7 +185,7 @@ pub(crate) struct ToolOutput {
   pub syntax_spans: Vec<HighlightSpan>,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 struct PermissionItem {
   prompt: PermissionPrompt,
   detail: PermissionDetail,
@@ -195,7 +195,7 @@ struct PermissionItem {
 /// What the user is being asked to approve, extracted once when the prompt
 /// arrives. The full diff already lives on the tool item above the card, so
 /// edits show per-file counts only.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
 struct PermissionDetail {
   invocation: Option<String>,
   path: Option<String>,
@@ -323,6 +323,7 @@ enum PersistedChatItem {
   Plan(PlanView),
   Thought(ThoughtView),
   Checkpoint(CheckpointMarker),
+  Permission(Box<PermissionItem>),
 }
 
 #[derive(serde::Serialize, serde::Deserialize)]
@@ -583,17 +584,7 @@ impl AgentChatPanel {
       show_conversation_controls: true,
     };
 
-    {
-      let files_cwd = cwd.clone();
-      cx.spawn(async move |this, cx| {
-        let files = list_repo_files(files_cwd).await;
-        let _ = this.update(cx, |panel, cx| {
-          panel.repo_files = Arc::new(files);
-          cx.notify();
-        });
-      })
-      .detach();
-    }
+    panel.refresh_repo_files(cx);
 
     if let BackendAvailability::MissingBinary {
       command,
@@ -1678,9 +1669,6 @@ impl AgentChatPanel {
   fn on_event(&mut self, event: AgentEvent) {
     match event {
       AgentEvent::AgentMessageChunk(chunk) => {
-        if !self.in_flight {
-          return;
-        }
         // Prose after a thought closes it, so the two keep their order.
         self.flush_pending_thought();
         if let ContentBlock::Text(t) = chunk.content {
@@ -1690,9 +1678,6 @@ impl AgentChatPanel {
         self.mark_last_item_changed();
       }
       AgentEvent::AgentThoughtChunk(chunk) => {
-        if !self.in_flight {
-          return;
-        }
         // A thought after prose closes the prose segment.
         self.flush_pending_agent();
         if let ContentBlock::Text(t) = chunk.content {
@@ -1757,16 +1742,34 @@ impl AgentChatPanel {
 
   fn apply_plan(&mut self, plan: Plan) {
     let view = plan_view_from_acp(&plan);
-    if let Some(last) = self.items.last_mut()
-      && let ChatItem::Plan(existing) = last
-    {
-      *existing = view;
-      let last_idx = self.items.len() - 1;
-      let list_ix = self.list_ix_for_item(last_idx);
-      self.mark_item_changed_at(list_ix);
-      return;
+    // The live plan is the last one of the current turn: an interleaved tool
+    // call must update it in place, not append a duplicate block.
+    for (ix, item) in self.items.iter_mut().enumerate().rev() {
+      match item {
+        ChatItem::Plan(existing) => {
+          *existing = view;
+          let list_ix = self.list_ix_for_item(ix);
+          self.mark_item_changed_at(list_ix);
+          return;
+        }
+        ChatItem::Message(m) if m.role == ChatRole::User => break,
+        _ => {}
+      }
     }
     self.items.push(ChatItem::Plan(view));
+  }
+
+  /// Reload the mention candidates; the agent creates files as it works.
+  fn refresh_repo_files(&mut self, cx: &mut Context<Self>) {
+    let files_cwd = self.cwd.clone();
+    cx.spawn(async move |this, cx| {
+      let files = list_repo_files(files_cwd).await;
+      let _ = this.update(cx, |panel, cx| {
+        panel.repo_files = Arc::new(files);
+        cx.notify();
+      });
+    })
+    .detach();
   }
 
   fn flush_pending_thought(&mut self) {
@@ -2512,12 +2515,13 @@ impl AgentChatPanel {
       return false;
     };
 
+    // Chunks that trailed in after the previous turn keep their place
+    // ahead of the new prompt instead of being wiped.
+    self.flush_turn_buffers();
     self.items.push(ChatItem::Message(ChatMessage {
       role,
       text: text.clone(),
     }));
-    self.pending_agent.clear();
-    self.pending_thought.clear();
     cx.emit(AgentChatPanelEvent::TurnStarted);
     self.start_turn(cx);
     self.persist_state();
@@ -2584,6 +2588,7 @@ impl AgentChatPanel {
         panel.persist_state();
         panel.sync_list_count();
         cx.emit(AgentChatPanelEvent::TurnFinished);
+        panel.refresh_repo_files(cx);
         cx.notify();
       });
     })
@@ -2800,13 +2805,13 @@ impl AgentChatPanel {
     let persisted: Vec<PersistedChatItem> = self
       .items
       .iter()
-      .filter_map(|item| match item {
-        ChatItem::Message(m) => Some(PersistedChatItem::Message(m.clone())),
-        ChatItem::Tool(t) => Some(PersistedChatItem::Tool(t.clone())),
-        ChatItem::Plan(p) => Some(PersistedChatItem::Plan(p.clone())),
-        ChatItem::Thought(t) => Some(PersistedChatItem::Thought(t.clone())),
-        ChatItem::Checkpoint(c) => Some(PersistedChatItem::Checkpoint(c.clone())),
-        ChatItem::Permission(_) => None,
+      .map(|item| match item {
+        ChatItem::Message(m) => PersistedChatItem::Message(m.clone()),
+        ChatItem::Tool(t) => PersistedChatItem::Tool(t.clone()),
+        ChatItem::Plan(p) => PersistedChatItem::Plan(p.clone()),
+        ChatItem::Thought(t) => PersistedChatItem::Thought(t.clone()),
+        ChatItem::Checkpoint(c) => PersistedChatItem::Checkpoint(c.clone()),
+        ChatItem::Permission(p) => PersistedChatItem::Permission(p.clone()),
       })
       .collect();
     let _ = std::fs::create_dir_all(dir);
@@ -2969,6 +2974,14 @@ fn load_conversation_file(
       PersistedChatItem::Plan(p) => items.push(ChatItem::Plan(p)),
       PersistedChatItem::Thought(t) => items.push(ChatItem::Thought(t)),
       PersistedChatItem::Checkpoint(c) => items.push(ChatItem::Checkpoint(c)),
+      PersistedChatItem::Permission(mut p) => {
+        // The session that could answer is gone; a pending card must not
+        // offer live buttons after a reload.
+        if p.resolved.is_none() {
+          p.resolved = Some("unanswered".to_string());
+        }
+        items.push(ChatItem::Permission(p));
+      }
     }
   }
   Some((parsed.meta, items, index))
@@ -6234,6 +6247,131 @@ mod tests {
     ];
     assert_eq!(checkpoint_ref_before(&unguarded, 2), None);
     assert_eq!(checkpoint_ref_before(&unguarded, 0), None);
+  }
+
+  #[test]
+  fn conversation_ids_are_unique_within_the_same_instant() {
+    let a = crate::persistence::unique_conversation_id();
+    let b = crate::persistence::unique_conversation_id();
+    assert_ne!(a, b);
+  }
+
+  #[gpui::test]
+  async fn late_chunks_after_a_turn_are_kept_not_dropped(cx: &mut gpui::TestAppContext) {
+    let (panel, cx) = add_panel_window(cx);
+    panel.update(cx, |panel, _| {
+      panel.status = Status::Ready;
+      panel.in_flight = false;
+      panel.on_event(text_chunk("trailing words"));
+      // The next boundary (here the next turn's flush) surfaces them in order.
+      panel.flush_turn_buffers();
+    });
+    panel.read_with(cx, |panel, _| {
+      assert_eq!(item_kinds(&panel.items), vec!["agent"]);
+      let ChatItem::Message(m) = &panel.items[0] else {
+        unreachable!()
+      };
+      assert_eq!(m.text, "trailing words");
+    });
+  }
+
+  #[gpui::test]
+  async fn a_plan_updates_in_place_across_interleaved_tool_calls(cx: &mut gpui::TestAppContext) {
+    use agent_client_protocol::schema::{Plan as AcpPlan, PlanEntry, PlanEntryStatus};
+    let plan_with = |text: &str, status: PlanEntryStatus| {
+      AcpPlan::new(vec![PlanEntry::new(
+        text.to_string(),
+        agent_client_protocol::schema::PlanEntryPriority::Medium,
+        status,
+      )])
+    };
+    let (panel, cx) = add_panel_window(cx);
+    panel.update(cx, |panel, _| {
+      panel.status = Status::Ready;
+      panel.in_flight = true;
+      panel.on_event(AgentEvent::Plan(plan_with(
+        "step",
+        PlanEntryStatus::Pending,
+      )));
+      panel.on_event(AgentEvent::ToolCall(call("t1", "Read foo", ToolKind::Read)));
+      panel.on_event(AgentEvent::Plan(plan_with(
+        "step",
+        PlanEntryStatus::Completed,
+      )));
+      panel.flush_turn_buffers();
+      panel.end_turn();
+    });
+    panel.read_with(cx, |panel, _| {
+      assert_eq!(
+        item_kinds(&panel.items),
+        vec!["plan", "tool"],
+        "the interleaved tool call must not duplicate the plan"
+      );
+    });
+
+    // A plan in a new turn starts its own block.
+    panel.update(cx, |panel, _| {
+      panel.items.push(user_message("next"));
+      panel.on_event(AgentEvent::Plan(plan_with(
+        "other",
+        PlanEntryStatus::Pending,
+      )));
+    });
+    panel.read_with(cx, |panel, _| {
+      assert_eq!(
+        item_kinds(&panel.items),
+        vec!["plan", "tool", "other", "plan"]
+      );
+    });
+  }
+
+  #[gpui::test]
+  async fn permissions_survive_a_reload_with_dead_buttons(cx: &mut gpui::TestAppContext) {
+    let dir = temp_dir("agent-perm-persist");
+    let (panel, cx) = add_panel_window(cx);
+    panel.update(cx, |panel, cx| {
+      panel.status = Status::Ready;
+      panel.state_dir = Some(dir.clone());
+      let update = update_fields(
+        ToolCallUpdateFields::new()
+          .kind(ToolKind::Execute)
+          .raw_input(serde_json::json!({ "command": "rm -rf build" })),
+      );
+      let detail = permission_detail(&update, test_cwd());
+      panel.items = vec![
+        user_message("do it"),
+        ChatItem::Permission(Box::new(PermissionItem {
+          prompt: PermissionPrompt {
+            id: 3,
+            tool_call_title: "Run rm".into(),
+            tool_call: update,
+            options: vec![],
+          },
+          detail,
+          resolved: None,
+        })),
+      ];
+      panel.persist_state();
+      cx.notify();
+    });
+
+    let conv_id = panel.read_with(cx, |panel, _| panel.current_conv.id.clone());
+    let (_, items, _) =
+      load_conversation_file(&dir.join(format!("{conv_id}.json"))).expect("reloads");
+    let ChatItem::Permission(p) = &items[1] else {
+      panic!("permission persisted, got {:?}", item_kinds(&items));
+    };
+    assert_eq!(
+      p.detail.invocation.as_deref(),
+      Some("rm -rf build"),
+      "the approved command survives the reload"
+    );
+    assert_eq!(
+      p.resolved.as_deref(),
+      Some("unanswered"),
+      "a pending card cannot offer live buttons after a reload"
+    );
+    std::fs::remove_dir_all(&dir).ok();
   }
 
   #[gpui::test]

@@ -39,14 +39,14 @@ pub use agent_client_protocol::schema::{
   SessionModeId as AcpSessionModeId,
 };
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct PermissionPromptOption {
   pub option_id: String,
   pub label: String,
   pub kind: PermissionOptionKind,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct PermissionPrompt {
   pub id: u64,
   pub tool_call_title: String,

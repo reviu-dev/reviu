@@ -47,8 +47,6 @@ async fn a_prompt_round_trips_through_a_real_agent_process(cx: &mut TestAppConte
       "the thought chunk lands as a Thought item"
     );
   });
-
-  set_backend_command_override(None);
 }
 
 #[gpui::test]
@@ -96,8 +94,6 @@ async fn a_permission_request_carries_its_command_and_resumes_on_answer(cx: &mut
     assert_eq!(panel.transcript_texts()[1], "ack");
     assert!(panel.pending_permission().is_none());
   });
-
-  set_backend_command_override(None);
 }
 
 #[gpui::test]
@@ -144,8 +140,6 @@ async fn cancelling_a_turn_leaves_a_stopped_marker(cx: &mut TestAppContext) {
       "a cancelled turn never acked"
     );
   });
-
-  set_backend_command_override(None);
 }
 
 #[gpui::test]
@@ -204,8 +198,6 @@ async fn a_queued_message_runs_when_the_turn_ends_cleanly(cx: &mut TestAppContex
       "both queued prompts ran as their own turns, oldest first, got {transcript:?}"
     );
   });
-
-  set_backend_command_override(None);
 }
 
 #[gpui::test]
@@ -248,8 +240,6 @@ async fn a_failed_turn_holds_the_queue(cx: &mut TestAppContext) {
       "the failure is visible in the transcript"
     );
   });
-
-  set_backend_command_override(None);
 }
 
 #[gpui::test]
@@ -294,8 +284,6 @@ async fn stopping_a_turn_keeps_the_queue(cx: &mut TestAppContext) {
       "the queued prompt did not run"
     );
   });
-
-  set_backend_command_override(None);
 }
 
 #[gpui::test]
@@ -351,8 +339,6 @@ async fn an_edited_prompt_rewinds_and_replays_through_a_fresh_session(cx: &mut T
       "the edited turn is gone, got {transcript:?}"
     );
   });
-
-  set_backend_command_override(None);
 }
 
 #[gpui::test]
@@ -394,8 +380,6 @@ async fn reconnect_respawns_the_agent_session(cx: &mut TestAppContext) {
       "reconnecting keeps the transcript"
     );
   });
-
-  set_backend_command_override(None);
 }
 
 #[gpui::test]
@@ -436,6 +420,4 @@ async fn enter_sends_the_composer_and_shift_enter_types_a_newline(cx: &mut TestA
     );
     assert_eq!(panel.composer_text(cx), "", "the composer drained on send");
   });
-
-  set_backend_command_override(None);
 }
