@@ -176,7 +176,10 @@ mod tests {
 
       // History should have /session
       assert_eq!(cx.global::<NavigationHistory>().stack.len(), 1);
-      assert_eq!(cx.global::<NavigationHistory>().stack[0].as_ref(), "/session");
+      assert_eq!(
+        cx.global::<NavigationHistory>().stack[0].as_ref(),
+        "/session"
+      );
     });
   }
 
@@ -260,7 +263,10 @@ mod tests {
 
       assert_eq!(NavigationHistory::current_pathname(cx).as_ref(), "/billing");
       assert_eq!(cx.global::<NavigationHistory>().stack.len(), 1);
-      assert_eq!(cx.global::<NavigationHistory>().stack[0].as_ref(), "/session");
+      assert_eq!(
+        cx.global::<NavigationHistory>().stack[0].as_ref(),
+        "/session"
+      );
     });
   }
 

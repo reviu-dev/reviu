@@ -9,11 +9,8 @@ use gpui::{
   MenuItem, Render, Subscription, Task, Window, WindowButton, div, prelude::*, px,
 };
 use gpui_component::{
-  ActiveTheme as _, Disableable, Icon, IconName, Sizable as _, Theme, ThemeMode, h_flex,
-  kbd::Kbd,
-  notification::Notification,
-  spinner::Spinner,
-  tag::Tag,
+  ActiveTheme as _, Disableable, Icon, IconName, Sizable as _, Theme, ThemeMode, h_flex, kbd::Kbd,
+  notification::Notification, spinner::Spinner, tag::Tag,
 };
 use gpui_router::{Route, Routes};
 
@@ -1141,8 +1138,8 @@ mod tests {
   use super::{
     WorkspacePage, WorkspaceView, build_app_menus, page_has_file_search, page_supports_refresh,
     refresh_label_for_workspace_page, should_activate_session_page,
-    should_run_scheduled_update_check,
-    user_menu_page_for_workspace_page, workspace_page_from_pathname,
+    should_run_scheduled_update_check, user_menu_page_for_workspace_page,
+    workspace_page_from_pathname,
   };
   use crate::app_update::{
     AppUpdateState, AvailableAppUpdate, ReadyToInstallAppUpdate, UpdateArtifact,
