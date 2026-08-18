@@ -4953,6 +4953,46 @@ mod tests {
   }
 
   #[gpui::test]
+  async fn a_turn_without_tools_still_makes_one_message(cx: &mut gpui::TestAppContext) {
+    let (panel, cx) = add_panel_window(cx);
+    panel.update(cx, |panel, _| {
+      panel.status = Status::Ready;
+      panel.in_flight = true;
+      panel.on_event(text_chunk("Hello, "));
+      panel.on_event(text_chunk("world."));
+      panel.flush_turn_buffers();
+      panel.end_turn();
+    });
+
+    panel.read_with(cx, |panel, _| {
+      assert_eq!(item_kinds(&panel.items), vec!["agent"]);
+      let ChatItem::Message(m) = &panel.items[0] else {
+        unreachable!()
+      };
+      assert_eq!(m.text, "Hello, world.");
+    });
+  }
+
+  #[gpui::test]
+  async fn a_disconnect_keeps_the_streamed_prose(cx: &mut gpui::TestAppContext) {
+    let (panel, cx) = add_panel_window(cx);
+    panel.update(cx, |panel, cx| {
+      panel.status = Status::Ready;
+      panel.in_flight = true;
+      panel.on_event(thought_chunk("half a thought"));
+      panel.on_event(text_chunk("Half an answer"));
+      panel.on_agent_disconnected(cx);
+    });
+
+    panel.read_with(cx, |panel, _| {
+      // Thought, prose, then the system notice; nothing streamed is lost.
+      assert_eq!(item_kinds(&panel.items), vec!["thought", "agent", "other"]);
+      assert!(panel.pending_agent.is_empty());
+      assert!(panel.pending_thought.is_empty());
+    });
+  }
+
+  #[gpui::test]
   async fn a_code_block_streams_highlighted_in_the_generating_row(cx: &mut gpui::TestAppContext) {
     let (panel, cx) = add_panel_window(cx);
     // A streaming reply always follows a prompt; alone at index 0 the
