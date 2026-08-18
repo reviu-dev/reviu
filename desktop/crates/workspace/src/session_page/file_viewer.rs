@@ -935,4 +935,71 @@ mod tests {
       );
     });
   }
+
+  #[gpui::test]
+  async fn the_view_leaves_split_when_a_save_empties_the_diff(cx: &mut TestAppContext) {
+    let repo = TempRepo::init("session-split-follows-status");
+    commit_text_file(&repo.path, Path::new("a.txt"), "v1\n", "initial");
+    std::fs::write(repo.path.join("a.txt"), "v2\n").expect("modify file");
+
+    let (page, cx) = add_session_page_window(repo.path.clone(), cx);
+    page.update(cx, |page, cx| {
+      page.dock_panel.update(cx, |panel, cx| panel.refresh(cx))
+    });
+    cx.run_until_parked();
+
+    page.update_in(cx, |page, window, cx| {
+      page.open_diff(PathBuf::from("a.txt"), None, window, cx);
+    });
+    await_open_file(&page, cx).await;
+    page.update(cx, |page, cx| page.toggle_diff_view(cx));
+    page.read_with(cx, |page, cx| {
+      assert_eq!(
+        page
+          .editor
+          .as_ref()
+          .expect("editor")
+          .read(cx)
+          .diff_view_mode(),
+        DiffViewMode::Split
+      );
+    });
+
+    // The change goes away on disk, as an editor save reverting it would do.
+    std::fs::write(repo.path.join("a.txt"), "v1\n").expect("revert file");
+    page.update(cx, |page, cx| {
+      page.dock_panel.update(cx, |panel, cx| panel.refresh(cx))
+    });
+    cx.run_until_parked();
+    page.read_with(cx, |page, cx| {
+      assert_eq!(
+        page
+          .editor
+          .as_ref()
+          .expect("editor")
+          .read(cx)
+          .diff_view_mode(),
+        DiffViewMode::Inline,
+        "a clean file has nothing left to split"
+      );
+    });
+
+    // And a new change brings the split preference back.
+    std::fs::write(repo.path.join("a.txt"), "v3\n").expect("modify again");
+    page.update(cx, |page, cx| {
+      page.dock_panel.update(cx, |panel, cx| panel.refresh(cx))
+    });
+    cx.run_until_parked();
+    page.read_with(cx, |page, cx| {
+      assert_eq!(
+        page
+          .editor
+          .as_ref()
+          .expect("editor")
+          .read(cx)
+          .diff_view_mode(),
+        DiffViewMode::Split
+      );
+    });
+  }
 }

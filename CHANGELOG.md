@@ -14,7 +14,7 @@ Both side panels now collapse into a slim icon rail instead of being pinned. The
 
 ### A Clean File Never Splits
 
-Opening an unmodified file while the split preference was on showed the same content twice, side by side. A file with no changes now always opens inline, and the split toggle stays quiet on it instead of silently flipping the preference.
+Opening an unmodified file while the split preference was on showed the same content twice, side by side. A file with no changes now always opens inline, and the split toggle stays quiet on it instead of silently flipping the preference. The open file follows along: saving away its last change drops the view back to inline, and a new change brings the split back.
 
 ### The Composer Keeps Your Words
 

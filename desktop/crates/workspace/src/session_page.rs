@@ -288,6 +288,9 @@ impl SessionPage {
         }
         DockPanelEvent::StatusRefreshed => {
           this.sync_editor_unmerged_state(cx);
+          // A save can empty the file's diff (or refill it): the split view
+          // must follow what the file can actually show.
+          this.sync_diff_view(cx);
           this.sync_git_telemetry(cx);
         }
         DockPanelEvent::ToggleZoom => {
