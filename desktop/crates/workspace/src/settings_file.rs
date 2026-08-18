@@ -201,6 +201,17 @@ mod tests {
   }
 
   #[test]
+  fn a_fresh_install_creates_the_file_with_defaults() {
+    let path = setup("fresh-install");
+
+    assert_eq!(load(), AppSettings::default());
+    assert!(path.exists(), "first load must stamp the settings file");
+    assert_eq!(load(), AppSettings::default());
+
+    teardown();
+  }
+
+  #[test]
   fn settings_round_trip_through_the_file() {
     let path = setup("round-trip");
 
