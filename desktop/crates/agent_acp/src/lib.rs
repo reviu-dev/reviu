@@ -12,6 +12,9 @@ use agent_client_protocol::{Agent, Client, ConnectionTo};
 use anyhow::{Context, Result, anyhow};
 use async_channel::{Receiver, Sender, unbounded};
 use async_process::Command;
+
+#[cfg(any(test, feature = "test-support"))]
+pub mod stub;
 use futures::channel::oneshot;
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -55,7 +58,7 @@ type PermissionReplyMap = Arc<Mutex<HashMap<u64, oneshot::Sender<Option<String>>
 #[derive(Clone, Debug)]
 pub struct BackendConfig {
   pub label: &'static str,
-  pub command: &'static str,
+  pub command: String,
   pub args: Vec<String>,
   pub install_hint: &'static str,
 }
@@ -105,7 +108,7 @@ impl BackendConfig {
   pub fn claude() -> Self {
     Self {
       label: "Claude",
-      command: "npx",
+      command: "npx".into(),
       args: vec![
         "-y".into(),
         "@agentclientprotocol/claude-agent-acp@0.68.0".into(),
@@ -117,7 +120,7 @@ impl BackendConfig {
   pub fn codex() -> Self {
     Self {
       label: "Codex",
-      command: "npx",
+      command: "npx".into(),
       args: vec!["-y".into(), "@agentclientprotocol/codex-acp@1.3.0".into()],
       install_hint: "Requires Node.js and `codex login` for ChatGPT subscription auth.",
     }
@@ -136,13 +139,21 @@ pub enum BackendAvailability {
 }
 
 impl BackendConfig {
+  /// Swaps the spawned program (tests and the driver); the packaged args
+  /// belong to the default command, so they are dropped.
+  pub fn with_command(mut self, command: impl Into<String>) -> Self {
+    self.command = command.into();
+    self.args = Vec::new();
+    self
+  }
+
   /// Check if the backend binary is reachable on PATH.
   pub fn check_availability(&self) -> BackendAvailability {
-    if which::which(self.command).is_ok() {
+    if which::which(&self.command).is_ok() {
       BackendAvailability::Ok
     } else {
       BackendAvailability::MissingBinary {
-        command: self.command.to_string(),
+        command: self.command.clone(),
         install_hint: self.install_hint.to_string(),
       }
     }
@@ -316,7 +327,7 @@ impl AgentSession {
     load_session: Option<String>,
     spawner: impl DriverSpawner,
   ) -> Result<Self> {
-    let mut cmd = Command::new(backend.command);
+    let mut cmd = Command::new(&backend.command);
     cmd.args(&backend.args);
     cmd.current_dir(&cwd);
     cmd.stdin(Stdio::piped());

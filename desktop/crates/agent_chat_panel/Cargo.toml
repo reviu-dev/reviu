@@ -4,6 +4,9 @@ version.workspace = true
 edition.workspace = true
 publish.workspace = true
 
+[features]
+test-support = ["agent_acp/test-support"]
+
 [dependencies]
 agent_acp = { workspace = true }
 agent-client-protocol = { workspace = true }
@@ -24,4 +27,10 @@ ui = { workspace = true }
 unicode-segmentation = { workspace = true }
 
 [dev-dependencies]
+agent_chat_panel = { path = ".", features = ["test-support"] }
 gpui = { workspace = true, features = ["test-support"] }
+
+[[bin]]
+name = "stub_agent"
+path = "src/bin/stub_agent.rs"
+required-features = ["test-support"]

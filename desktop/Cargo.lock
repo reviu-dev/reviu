@@ -348,6 +348,7 @@ version = "0.18.0"
 dependencies = [
  "agent-client-protocol",
  "agent-client-protocol-schema 0.14.0",
+ "agent_acp",
  "anyhow",
  "async-channel",
  "async-process",
@@ -365,6 +366,7 @@ version = "0.18.0"
 dependencies = [
  "agent-client-protocol",
  "agent_acp",
+ "agent_chat_panel",
  "anyhow",
  "async-channel",
  "async-process",

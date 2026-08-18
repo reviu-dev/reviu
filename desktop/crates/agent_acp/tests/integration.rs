@@ -4,7 +4,7 @@ use agent_client_protocol::schema::{ContentBlock, StopReason};
 fn stub_backend() -> BackendConfig {
   BackendConfig {
     label: "stub",
-    command: env!("CARGO_BIN_EXE_stub_agent"),
+    command: env!("CARGO_BIN_EXE_stub_agent").to_string(),
     args: Vec::new(),
     install_hint: "test only",
   }

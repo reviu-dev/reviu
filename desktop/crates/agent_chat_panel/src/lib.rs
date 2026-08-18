@@ -278,6 +278,30 @@ enum Status {
   MissingBinary { command: String, hint: String },
 }
 
+#[cfg(any(test, feature = "test-support"))]
+static BACKEND_COMMAND_OVERRIDE: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None);
+
+/// Points every new panel at a custom ACP agent binary (tests and the driver).
+#[cfg(any(test, feature = "test-support"))]
+pub fn set_backend_command_override(command: Option<String>) {
+  *BACKEND_COMMAND_OVERRIDE
+    .lock()
+    .expect("lock backend command override") = command;
+}
+
+fn resolve_backend_config(backend_kind: BackendKind) -> BackendConfig {
+  let config = backend_kind.config();
+  #[cfg(any(test, feature = "test-support"))]
+  if let Some(command) = BACKEND_COMMAND_OVERRIDE
+    .lock()
+    .expect("lock backend command override")
+    .clone()
+  {
+    return config.with_command(command);
+  }
+  config
+}
+
 const MENTION_MENU_MAX_ITEMS: usize = 10;
 const MAX_REPO_FILES: usize = 20_000;
 /// Caps the conversation and the composer to a readable measure on wide windows.
@@ -354,7 +378,7 @@ impl AgentChatPanel {
     window: &mut Window,
     cx: &mut Context<Self>,
   ) -> Self {
-    let backend = backend_kind.config();
+    let backend = resolve_backend_config(backend_kind);
     let input = cx.new(|cx| {
       TextareaState::new(window, cx)
         .auto_grow(1, 8)
@@ -501,6 +525,25 @@ impl AgentChatPanel {
     panel.sync_list_count();
     panel.start_tick_task(cx);
     panel
+  }
+
+  /// Whether the agent process is connected and ready for prompts.
+  #[cfg(any(test, feature = "test-support"))]
+  pub fn backend_ready(&self) -> bool {
+    matches!(self.status, Status::Ready)
+  }
+
+  /// The plain message texts of the conversation, oldest first.
+  #[cfg(any(test, feature = "test-support"))]
+  pub fn transcript_texts(&self) -> Vec<String> {
+    self
+      .items
+      .iter()
+      .filter_map(|item| match item {
+        ChatItem::Message(message) => Some(message.text.clone()),
+        _ => None,
+      })
+      .collect()
   }
 
   /// The shape of `new` without connecting: no agent process, no state loading.
@@ -800,7 +843,7 @@ impl AgentChatPanel {
     theme: &gpui_component::Theme,
     cx: &mut Context<Self>,
   ) -> gpui::AnyElement {
-    let executable = self.backend.command;
+    let executable = self.backend.command.clone();
     let mut card = v_flex()
       .px_3()
       .gap_2()
@@ -831,7 +874,7 @@ impl AgentChatPanel {
         );
       }
       if let Some(cmd) = method.terminal_command.clone() {
-        let shell_cmd = cmd.to_shell_string(executable);
+        let shell_cmd = cmd.to_shell_string(&executable);
         let preview = shell_cmd.clone();
         let copy_value = shell_cmd.clone();
         let copy_id = SharedString::from(format!("auth-copy-{}", method.id));
