@@ -6837,6 +6837,50 @@ mod tests {
   }
 
   #[gpui::test]
+  async fn a_pin_beats_streaming_and_prose_ends_the_trailing_run(cx: &mut gpui::TestAppContext) {
+    let (panel, cx) = add_panel_window(cx);
+    panel.update(cx, |panel, cx| {
+      panel.status = Status::Ready;
+      panel.in_flight = true;
+      panel.items = vec![user_message("go")];
+      panel.on_event(AgentEvent::ToolCall(call("t1", "Read a", ToolKind::Read)));
+      panel.on_event(AgentEvent::ToolCall(call("t2", "Read b", ToolKind::Read)));
+      panel.sync_list_count();
+      cx.notify();
+    });
+    cx.run_until_parked();
+    assert!(cx.debug_bounds("agent-tool-card").is_some());
+
+    // Folding while the agent still streams into the group wins over the
+    // trailing default.
+    let header = cx.debug_bounds("agent-tool-group").expect("header painted");
+    cx.simulate_click(header.center(), gpui::Modifiers::default());
+    cx.run_until_parked();
+    assert!(
+      cx.debug_bounds("agent-tool-card").is_none(),
+      "the pin folds the group mid-stream"
+    );
+
+    // Narration then another tool: the old group is no longer trailing, the
+    // new single tool renders as its own plain row.
+    panel.update(cx, |panel, cx| {
+      panel.on_event(text_chunk("checking something"));
+      panel.on_event(AgentEvent::ToolCall(call("t3", "Run c", ToolKind::Execute)));
+      panel.sync_list_count();
+      cx.notify();
+    });
+    cx.run_until_parked();
+    assert!(
+      cx.debug_bounds("agent-tool-card").is_some(),
+      "the new single tool paints its plain card"
+    );
+    assert!(
+      cx.debug_bounds("agent-tool-group").is_some(),
+      "the folded group keeps its summary header"
+    );
+  }
+
+  #[gpui::test]
   async fn a_single_tool_call_keeps_its_plain_row(cx: &mut gpui::TestAppContext) {
     let (panel, cx) = add_panel_window(cx);
     panel.update(cx, |panel, cx| {
