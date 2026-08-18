@@ -131,6 +131,10 @@ async fn cancelling_a_turn_leaves_a_stopped_marker(cx: &mut TestAppContext) {
       "the cancelled turn leaves a marker, got {transcript:?}"
     );
     assert!(
+      transcript.iter().any(|t| t == "partial reply"),
+      "prose streamed before the stop survives, got {transcript:?}"
+    );
+    assert!(
       !transcript.iter().any(|t| t == "ack"),
       "a cancelled turn never acked"
     );
@@ -168,6 +172,16 @@ async fn reconnect_respawns_the_agent_session(cx: &mut TestAppContext) {
   cx.simulate_click(button.center(), gpui::Modifiers::default());
 
   cx.condition(&panel, |panel, _| panel.backend_ready()).await;
+
+  panel.read_with(cx, |panel, _| {
+    assert!(
+      panel
+        .transcript_texts()
+        .iter()
+        .any(|t| t == "Agent disconnected."),
+      "reconnecting keeps the transcript"
+    );
+  });
 
   set_backend_command_override(None);
 }

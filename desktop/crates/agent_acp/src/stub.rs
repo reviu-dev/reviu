@@ -84,8 +84,15 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
               .iter()
               .any(|block| matches!(block, ContentBlock::Text(t) if t.text.contains(needle)))
           };
-          // "wait" parks the turn until the client cancels it.
+          // "wait" streams a partial reply then parks the turn until the
+          // client cancels it.
           if prompt_contains("wait") {
+            let _ = cx.send_notification(SessionNotification::new(
+              session_id.clone(),
+              SessionUpdate::AgentMessageChunk(agent_client_protocol::schema::ContentChunk::new(
+                ContentBlock::Text(TextContent::new("partial reply")),
+              )),
+            ));
             let mut slot = waiting.lock().expect("waiting slot");
             if slot.1 {
               return responder.respond(PromptResponse::new(StopReason::Cancelled));
