@@ -4,6 +4,10 @@ All notable changes to Reviu are documented here.
 
 ## 1.0.0
 
+### Slash Commands From Your Agent
+
+Typing "/" at the start of the composer now opens the commands your agent actually offers, from Claude's built-ins to your project's own, filtered as you type. Arrows navigate, Enter completes the command, and your arguments follow. The menu only appears for a leading slash: a path in the middle of a sentence stays a path.
+
 ### Type The Next Message While The Agent Works
 
 You no longer wait for a turn to finish before writing the next instruction. Pressing Enter while the agent works queues the message in a card above the composer, ready to edit or remove; when the turn ends it is sent as the next one, and the following queued message after that. Stopping a turn holds the queue: nothing runs until you decide.

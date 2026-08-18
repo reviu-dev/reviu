@@ -23,6 +23,11 @@ async fn a_prompt_round_trips_through_a_real_agent_process(cx: &mut TestAppConte
 
   cx.condition(&panel, |panel, _| panel.backend_ready()).await;
 
+  cx.condition(&panel, |panel, _| {
+    panel.available_command_names() == ["compact", "review"]
+  })
+  .await;
+
   panel.update(cx, |panel, cx| {
     assert!(panel.send_external_prompt("hello stub".to_string(), cx));
   });

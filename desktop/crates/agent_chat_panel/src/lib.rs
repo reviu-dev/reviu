@@ -374,6 +374,22 @@ fn resolve_backend_config(backend_kind: BackendKind) -> BackendConfig {
 }
 
 const MENTION_MENU_MAX_ITEMS: usize = 10;
+const SLASH_MENU_MAX_ITEMS: usize = 10;
+
+/// The "/command" token under the cursor: only a token opening the message
+/// counts (a "/" after any text is a path, not a command), running to the
+/// first whitespace.
+fn slash_token_at_cursor(text: &str, cursor: usize) -> Option<String> {
+  if !text.starts_with('/') || cursor == 0 || cursor > text.len() || !text.is_char_boundary(cursor)
+  {
+    return None;
+  }
+  let token_end = text.find(char::is_whitespace).unwrap_or(text.len());
+  if cursor > token_end {
+    return None;
+  }
+  Some(text[1..token_end].to_string())
+}
 const MAX_REPO_FILES: usize = 20_000;
 /// Caps the conversation and the composer to a readable measure on wide windows.
 const CONVERSATION_COLUMN_MAX_WIDTH_PX: f32 = 720.0;
@@ -454,6 +470,10 @@ pub struct AgentChatPanel {
   pending_thought: String,
   /// Messages typed during a turn, drained oldest-first when it ends cleanly.
   queued_prompts: Vec<String>,
+  /// Slash commands advertised by the agent, latest update wins.
+  available_commands: Vec<agent_client_protocol::schema::AvailableCommand>,
+  slash_selected_ix: usize,
+  slash_dismissed: Option<String>,
   session: Option<Arc<AgentSession>>,
   input: Entity<TextareaState>,
   in_flight: bool,
@@ -516,6 +536,9 @@ impl AgentChatPanel {
       pending_agent: String::new(),
       pending_thought: String::new(),
       queued_prompts: Vec::new(),
+      available_commands: Vec::new(),
+      slash_selected_ix: 0,
+      slash_dismissed: None,
       session: None,
       input,
       in_flight: false,
@@ -667,6 +690,16 @@ impl AgentChatPanel {
     self.on_agent_disconnected(cx);
   }
 
+  /// Names of the slash commands the agent advertised.
+  #[cfg(any(test, feature = "test-support"))]
+  pub fn available_command_names(&self) -> Vec<String> {
+    self
+      .available_commands
+      .iter()
+      .map(|c| c.name.clone())
+      .collect()
+  }
+
   /// Messages currently queued for the next turns.
   #[cfg(any(test, feature = "test-support"))]
   pub fn queued_prompt_texts(&self) -> Vec<String> {
@@ -751,6 +784,9 @@ impl AgentChatPanel {
       pending_agent: String::new(),
       pending_thought: String::new(),
       queued_prompts: Vec::new(),
+      available_commands: Vec::new(),
+      slash_selected_ix: 0,
+      slash_dismissed: None,
       session: None,
       input,
       in_flight: false,
@@ -1587,6 +1623,9 @@ impl AgentChatPanel {
       AgentEvent::SessionInfoUpdate(info) => {
         self.apply_session_info(info);
       }
+      AgentEvent::AvailableCommandsUpdate(update) => {
+        self.available_commands = update.available_commands;
+      }
       _ => {}
     }
   }
@@ -1863,6 +1902,175 @@ impl AgentChatPanel {
     self.mention_dismissed = Some(trigger);
     cx.stop_propagation();
     cx.notify();
+  }
+
+  fn slash_snapshot(
+    &self,
+    cx: &App,
+  ) -> Option<(String, Vec<agent_client_protocol::schema::AvailableCommand>)> {
+    if self.available_commands.is_empty() {
+      return None;
+    }
+    let input = self.input.read(cx);
+    let cursor = input.base_state().read(cx).cursor();
+    let token = slash_token_at_cursor(input.value().as_ref(), cursor)?;
+    if self.slash_dismissed.as_deref() == Some(token.as_str()) {
+      return None;
+    }
+    let filter = token.to_lowercase();
+    let matches: Vec<_> = self
+      .available_commands
+      .iter()
+      .filter(|c| {
+        c.name.to_lowercase().contains(&filter) || c.description.to_lowercase().contains(&filter)
+      })
+      .take(SLASH_MENU_MAX_ITEMS)
+      .cloned()
+      .collect();
+    if matches.is_empty() {
+      return None;
+    }
+    Some((token, matches))
+  }
+
+  fn slash_on_enter(&mut self, action: &input::Enter, window: &mut Window, cx: &mut Context<Self>) {
+    if action.secondary {
+      return;
+    }
+    let Some((_, candidates)) = self.slash_snapshot(cx) else {
+      return;
+    };
+    let ix = self.slash_selected_ix.min(candidates.len() - 1);
+    self.insert_slash_command(&candidates[ix].name.clone(), window, cx);
+    cx.stop_propagation();
+  }
+
+  fn slash_on_move(&mut self, delta: i32, cx: &mut Context<Self>) {
+    let Some((_, candidates)) = self.slash_snapshot(cx) else {
+      return;
+    };
+    let len = candidates.len();
+    self.slash_selected_ix = if delta < 0 {
+      if self.slash_selected_ix == 0 {
+        len - 1
+      } else {
+        self.slash_selected_ix - 1
+      }
+    } else {
+      (self.slash_selected_ix + 1) % len
+    };
+    cx.stop_propagation();
+    cx.notify();
+  }
+
+  fn slash_on_escape(&mut self, cx: &mut Context<Self>) {
+    let Some((token, _)) = self.slash_snapshot(cx) else {
+      return;
+    };
+    self.slash_dismissed = Some(token);
+    cx.stop_propagation();
+    cx.notify();
+  }
+
+  /// Replace the leading token with the chosen command, keeping any arguments.
+  fn insert_slash_command(&mut self, name: &str, window: &mut Window, cx: &mut Context<Self>) {
+    let text = self.input.read(cx).value();
+    let token_end = text.find(char::is_whitespace).unwrap_or(text.len());
+    let replacement = if token_end == text.len() {
+      format!("/{name} ")
+    } else {
+      format!("/{name}")
+    };
+    let replace_range = mention::byte_range_to_utf16_range(text.as_ref(), 0..token_end);
+    self.input.update(cx, |input, cx| {
+      input.base_state().clone().update(cx, |base, cx| {
+        base.replace_text_in_range(Some(replace_range), &replacement, window, cx);
+      });
+      input.focus(window, cx);
+    });
+    self.slash_selected_ix = 0;
+    // Keep the menu closed on the inserted name, or Enter would re-insert
+    // instead of sending; it reopens as soon as the token changes.
+    self.slash_dismissed = Some(name.to_string());
+    cx.notify();
+  }
+
+  fn render_slash_overlay(&mut self, cx: &mut Context<Self>) -> AnyElement {
+    let Some((_, candidates)) = self.slash_snapshot(cx) else {
+      return Empty.into_any_element();
+    };
+    let selected_ix = self.slash_selected_ix.min(candidates.len() - 1);
+    let theme = cx.theme().clone();
+    let entity = cx.entity();
+
+    deferred(
+      div()
+        .id("agent-slash-menu")
+        .debug_selector(|| "agent-slash-menu".to_string())
+        .absolute()
+        .left_0()
+        .bottom(gpui::relative(1.0))
+        .mb_1()
+        .w(px(360.))
+        .max_h(px(240.))
+        .overflow_hidden()
+        .occlude()
+        .bg(theme.popover)
+        .text_color(theme.popover_foreground)
+        .border_1()
+        .border_color(theme.border)
+        .rounded(theme.radius)
+        .shadow_lg()
+        .p_1()
+        .children(candidates.into_iter().enumerate().map(|(ix, command)| {
+          let selected = ix == selected_ix;
+          let entity_click = entity.clone();
+          let entity_hover = entity.clone();
+          h_flex()
+            .id(("agent-slash-item", ix))
+            .w_full()
+            .items_center()
+            .justify_between()
+            .gap_2()
+            .px_2()
+            .py_1()
+            .rounded(theme.radius)
+            .text_xs()
+            .line_height(gpui::relative(1.2))
+            .cursor_pointer()
+            .when(selected, |this| {
+              this.bg(theme.accent).text_color(theme.accent_foreground)
+            })
+            .hover(|this| this.bg(theme.accent.opacity(0.8)))
+            .on_mouse_move(move |_, _, cx| {
+              entity_hover.update(cx, |panel, cx| {
+                if panel.slash_selected_ix != ix {
+                  panel.slash_selected_ix = ix;
+                  cx.notify();
+                }
+              });
+            })
+            .on_mouse_down(MouseButton::Left, move |_, window, cx| {
+              entity_click.update(cx, |panel, cx| {
+                if let Some((_, candidates)) = panel.slash_snapshot(cx)
+                  && let Some(command) = candidates.get(ix)
+                {
+                  panel.insert_slash_command(&command.name.clone(), window, cx);
+                }
+                cx.stop_propagation();
+              });
+            })
+            .child(SharedString::from(format!("/{}", command.name)))
+            .child(
+              div()
+                .text_color(theme.muted_foreground)
+                .truncate()
+                .child(SharedString::from(command.description.clone())),
+            )
+        })),
+    )
+    .with_priority(2)
+    .into_any_element()
   }
 
   fn insert_mention(
@@ -3955,6 +4163,8 @@ impl Render for AgentChatPanel {
                       .relative()
                       .w_full()
                       .capture_action(cx.listener(|panel, action: &input::Enter, window, cx| {
+                        // Slash and mention popups are exclusive by token shape.
+                        panel.slash_on_enter(action, window, cx);
                         panel.mention_on_enter(action, window, cx);
                       }))
                       // The textarea propagates a submitting Enter; unstopped, the
@@ -3965,16 +4175,20 @@ impl Render for AgentChatPanel {
                         }
                       }))
                       .capture_action(cx.listener(|panel, _: &input::MoveUp, _, cx| {
+                        panel.slash_on_move(-1, cx);
                         panel.mention_on_move(-1, cx);
                       }))
                       .capture_action(cx.listener(|panel, _: &input::MoveDown, _, cx| {
+                        panel.slash_on_move(1, cx);
                         panel.mention_on_move(1, cx);
                       }))
                       .capture_action(cx.listener(|panel, _: &input::Escape, _, cx| {
+                        panel.slash_on_escape(cx);
                         panel.mention_on_escape(cx);
                       }))
                       .child(Textarea::new(&self.input).appearance(false).w_full())
-                      .child(self.render_mention_overlay(cx)),
+                      .child(self.render_mention_overlay(cx))
+                      .child(self.render_slash_overlay(cx)),
                   )
                   .child(
                     h_flex()
@@ -5622,6 +5836,94 @@ mod tests {
         Some(ChatItem::Thought(t)) if t.collapsed
       ));
     });
+  }
+
+  #[test]
+  fn slash_token_only_opens_the_message() {
+    assert_eq!(slash_token_at_cursor("/com", 4), Some("com".to_string()));
+    assert_eq!(slash_token_at_cursor("/", 1), Some(String::new()));
+    assert_eq!(
+      slash_token_at_cursor("/cmd args", 4),
+      Some("cmd".to_string())
+    );
+    // The cursor past the token is prose, not a command being typed.
+    assert_eq!(slash_token_at_cursor("/cmd args", 7), None);
+    // A slash after any text is a path.
+    assert_eq!(slash_token_at_cursor("see /tmp", 8), None);
+    assert_eq!(slash_token_at_cursor("/cmd", 0), None);
+  }
+
+  fn command(name: &str, description: &str) -> agent_client_protocol::schema::AvailableCommand {
+    agent_client_protocol::schema::AvailableCommand::new(name, description)
+  }
+
+  #[gpui::test]
+  async fn typing_slash_opens_the_command_menu_and_enter_inserts(cx: &mut gpui::TestAppContext) {
+    let (panel, cx) = add_panel_window(cx);
+    panel.update(cx, |panel, cx| {
+      panel.status = Status::Ready;
+      panel.available_commands = vec![
+        command("compact", "Compact the conversation"),
+        command("review", "Review the changes"),
+      ];
+      cx.notify();
+    });
+    cx.run_until_parked();
+
+    let input_focus = panel.read_with(cx, |panel, cx| panel.input.read(cx).focus_handle(cx));
+    cx.update(|window, cx| window.focus(&input_focus, cx));
+    cx.simulate_input("/co");
+    cx.run_until_parked();
+    assert!(
+      cx.debug_bounds("agent-slash-menu").is_some(),
+      "the menu opens on a leading slash"
+    );
+
+    cx.simulate_keystrokes("enter");
+    cx.run_until_parked();
+    panel.read_with(cx, |panel, cx| {
+      assert_eq!(panel.input.read(cx).value(), "/compact ");
+      assert!(panel.items.is_empty(), "accepting did not submit");
+    });
+    assert!(
+      cx.debug_bounds("agent-slash-menu").is_none(),
+      "the menu closes after accepting"
+    );
+
+    // Enter now submits the command text as a prompt; refused here (no
+    // session), so the composer keeps the draft instead of re-inserting.
+    cx.simulate_keystrokes("enter");
+    cx.run_until_parked();
+    panel.read_with(cx, |panel, cx| {
+      assert_eq!(panel.input.read(cx).value(), "/compact ");
+      assert!(panel.items.is_empty());
+    });
+  }
+
+  #[gpui::test]
+  async fn a_slash_menu_never_opens_mid_text_or_without_matches(cx: &mut gpui::TestAppContext) {
+    let (panel, cx) = add_panel_window(cx);
+    panel.update(cx, |panel, cx| {
+      panel.status = Status::Ready;
+      panel.available_commands = vec![command("compact", "Compact the conversation")];
+      cx.notify();
+    });
+    cx.run_until_parked();
+
+    let input_focus = panel.read_with(cx, |panel, cx| panel.input.read(cx).focus_handle(cx));
+    cx.update(|window, cx| window.focus(&input_focus, cx));
+    cx.simulate_input("see /tmp");
+    cx.run_until_parked();
+    assert!(cx.debug_bounds("agent-slash-menu").is_none());
+
+    panel.update_in(cx, |panel, window, cx| {
+      panel.input.update(cx, |state, cx| {
+        state.set_value("/nomatch", window, cx);
+      });
+      cx.notify();
+    });
+    cx.run_until_parked();
+    assert!(cx.debug_bounds("agent-slash-menu").is_none());
   }
 
   #[gpui::test]

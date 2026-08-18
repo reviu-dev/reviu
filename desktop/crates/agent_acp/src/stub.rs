@@ -70,8 +70,25 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
         agent_client_protocol::on_receive_request!(),
       )
       .on_receive_request(
-        async move |_req: NewSessionRequest, responder, _: ConnectionTo<Client>| {
-          responder.respond(NewSessionResponse::new(SessionId::new("stub-session")))
+        async move |_req: NewSessionRequest, responder, cx: ConnectionTo<Client>| {
+          let session_id = SessionId::new("stub-session");
+          let result = responder.respond(NewSessionResponse::new(session_id.clone()));
+          let _ = cx.send_notification(SessionNotification::new(
+            session_id,
+            SessionUpdate::AvailableCommandsUpdate(
+              agent_client_protocol::schema::AvailableCommandsUpdate::new(vec![
+                agent_client_protocol::schema::AvailableCommand::new(
+                  "compact",
+                  "Compact the conversation",
+                ),
+                agent_client_protocol::schema::AvailableCommand::new(
+                  "review",
+                  "Review the changes",
+                ),
+              ]),
+            ),
+          ));
+          result
         },
         agent_client_protocol::on_receive_request!(),
       )
