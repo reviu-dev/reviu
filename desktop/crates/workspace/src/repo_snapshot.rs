@@ -148,7 +148,7 @@ mod tests {
     });
   }
 
-  #[gpui::test]
+  #[gpui::test(iterations = 10)]
   async fn switching_repo_mid_refresh_drops_the_stale_read(cx: &mut TestAppContext) {
     let repo = TempRepo::init("repo-snapshot-stale");
     commit_text_file(&repo.path, Path::new("README.md"), "v1\n", "initial");

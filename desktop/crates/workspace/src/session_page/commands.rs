@@ -1282,7 +1282,7 @@ mod tests {
     });
   }
 
-  #[gpui::test]
+  #[gpui::test(iterations = 10)]
   async fn publishing_a_branch_opens_the_pull_request_form_after_the_push(cx: &mut TestAppContext) {
     let repo = TempRepo::init("session-page-publish-and-create");
     commit_text_file(&repo.path, Path::new("README.md"), "v1\n", "initial");
@@ -1342,7 +1342,7 @@ mod tests {
     });
   }
 
-  #[gpui::test]
+  #[gpui::test(iterations = 10)]
   async fn a_refused_publish_leaves_no_form_waiting_for_the_next_push(cx: &mut TestAppContext) {
     let repo = TempRepo::init("session-page-publish-refused");
     commit_text_file(&repo.path, Path::new("README.md"), "v1\n", "initial");
@@ -1395,7 +1395,7 @@ mod tests {
     );
   }
 
-  #[gpui::test]
+  #[gpui::test(iterations = 10)]
   async fn a_failed_publish_opens_no_pull_request_form(cx: &mut TestAppContext) {
     let repo = TempRepo::init("session-page-publish-failure");
     commit_text_file(&repo.path, Path::new("README.md"), "v1\n", "initial");
@@ -1427,7 +1427,7 @@ mod tests {
     });
   }
 
-  #[gpui::test]
+  #[gpui::test(iterations = 10)]
   async fn a_second_git_command_is_refused_while_one_runs(cx: &mut TestAppContext) {
     let repo = TempRepo::init("session-page-command-in-flight");
     commit_text_file(&repo.path, Path::new("README.md"), "v1\n", "initial");

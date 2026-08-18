@@ -679,7 +679,7 @@ mod tests {
   use gpui::TestAppContext;
   use std::path::Path;
 
-  #[gpui::test]
+  #[gpui::test(iterations = 10)]
   async fn committing_in_the_shell_updates_the_ahead_counter(cx: &mut TestAppContext) {
     let repo = TempRepo::init("session-page-ahead-counter");
     commit_text_file(&repo.path, Path::new("README.md"), "v1\n", "initial");
@@ -806,7 +806,7 @@ mod tests {
     assert!(cx.debug_bounds(REPO_CONTEXT_DEBUG_SELECTOR).is_some());
   }
 
-  #[gpui::test]
+  #[gpui::test(iterations = 10)]
   async fn a_window_nobody_looks_at_stops_polling(cx: &mut TestAppContext) {
     let repo = TempRepo::init("session-poll-inactive");
     commit_text_file(&repo.path, Path::new("README.md"), "v1\n", "initial");
@@ -893,7 +893,7 @@ mod tests {
     );
   }
 
-  #[gpui::test]
+  #[gpui::test(iterations = 10)]
   async fn a_branch_switched_outside_reviu_shows_up_on_the_next_poll(cx: &mut TestAppContext) {
     let repo = TempRepo::init("session-poll-branch");
     commit_text_file(&repo.path, Path::new("README.md"), "v1\n", "initial");
@@ -926,7 +926,7 @@ mod tests {
     });
   }
 
-  #[gpui::test]
+  #[gpui::test(iterations = 10)]
   async fn an_edit_made_outside_reviu_shows_up_without_any_event(cx: &mut TestAppContext) {
     let repo = TempRepo::init("session-poll");
     commit_text_file(&repo.path, Path::new("README.md"), "v1\n", "initial");

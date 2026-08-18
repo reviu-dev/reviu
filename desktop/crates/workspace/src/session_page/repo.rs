@@ -469,7 +469,7 @@ mod tests {
     });
   }
 
-  #[gpui::test]
+  #[gpui::test(iterations = 10)]
   async fn switching_repository_mid_publish_does_not_publish_the_old_one(cx: &mut TestAppContext) {
     let repo = TempRepo::init("session-page-active-repo-race");
     commit_text_file(&repo.path, Path::new("README.md"), "v1\n", "initial");
