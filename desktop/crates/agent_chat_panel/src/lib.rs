@@ -693,7 +693,7 @@ impl AgentChatPanel {
 
   fn on_agent_disconnected(&mut self, cx: &mut Context<Self>) {
     if matches!(self.status, Status::Ready) {
-      self.flush_pending_thought();
+      self.flush_turn_buffers();
       self.status = Status::Error("Agent disconnected".into());
       self.items.push(ChatItem::Message(ChatMessage {
         role: ChatRole::System,
@@ -1294,6 +1294,8 @@ impl AgentChatPanel {
         if !self.in_flight {
           return;
         }
+        // Prose after a thought closes it, so the two keep their order.
+        self.flush_pending_thought();
         if let ContentBlock::Text(t) = chunk.content {
           self.pending_agent.push_str(&t.text);
         }
@@ -1304,6 +1306,8 @@ impl AgentChatPanel {
         if !self.in_flight {
           return;
         }
+        // A thought after prose closes the prose segment.
+        self.flush_pending_agent();
         if let ContentBlock::Text(t) = chunk.content {
           self.pending_thought.push_str(&t.text);
         }
@@ -1313,6 +1317,12 @@ impl AgentChatPanel {
       AgentEvent::ToolCall(call) => {
         let new_id = call.tool_call_id.clone();
         let is_new = !self.tool_index.contains_key(&new_id);
+        if is_new {
+          // Narration streamed before this call keeps its place in the
+          // timeline instead of collapsing at the end of the turn.
+          self.flush_pending_thought();
+          self.flush_pending_agent();
+        }
         self.upsert_tool_call(call);
         if !is_new && let Some(&item_idx) = self.tool_index.get(&new_id) {
           let list_ix = self.list_ix_for_item(item_idx);
@@ -1370,7 +1380,8 @@ impl AgentChatPanel {
   }
 
   fn flush_pending_thought(&mut self) {
-    if self.pending_thought.is_empty() {
+    if self.pending_thought.trim().is_empty() {
+      self.pending_thought.clear();
       return;
     }
     let text = std::mem::take(&mut self.pending_thought);
@@ -1378,6 +1389,24 @@ impl AgentChatPanel {
       text,
       collapsed: true,
     }));
+  }
+
+  fn flush_pending_agent(&mut self) {
+    if self.pending_agent.trim().is_empty() {
+      self.pending_agent.clear();
+      return;
+    }
+    let text = std::mem::take(&mut self.pending_agent);
+    self.items.push(ChatItem::Message(ChatMessage {
+      role: ChatRole::Agent,
+      text,
+    }));
+  }
+
+  /// Close the streaming buffers at the end of a turn, thought first.
+  fn flush_turn_buffers(&mut self) {
+    self.flush_pending_thought();
+    self.flush_pending_agent();
   }
 
   fn toggle_diff_expanded(&mut self, tool_id: ToolCallId, diff_idx: usize, cx: &mut Context<Self>) {
@@ -1843,14 +1872,7 @@ impl AgentChatPanel {
       let blocks = build_prompt_blocks(text, files, selection, cwd).await;
       let result = session.send_prompt_blocks(blocks).await;
       let _ = this.update(cx, |panel, cx| {
-        panel.flush_pending_thought();
-        let pending = std::mem::take(&mut panel.pending_agent);
-        if !pending.is_empty() {
-          panel.items.push(ChatItem::Message(ChatMessage {
-            role: ChatRole::Agent,
-            text: pending,
-          }));
-        }
+        panel.flush_turn_buffers();
         match result {
           Ok(_) => {
             panel.auth_required = false;
@@ -4820,6 +4842,114 @@ mod tests {
       Some("fn main() { let x = 1; }"),
       "copy takes the code without the fences"
     );
+  }
+
+  fn text_chunk(text: &str) -> AgentEvent {
+    AgentEvent::AgentMessageChunk(agent_client_protocol::schema::ContentChunk::new(
+      ContentBlock::Text(TextContent::new(text)),
+    ))
+  }
+
+  fn thought_chunk(text: &str) -> AgentEvent {
+    AgentEvent::AgentThoughtChunk(agent_client_protocol::schema::ContentChunk::new(
+      ContentBlock::Text(TextContent::new(text)),
+    ))
+  }
+
+  fn item_kinds(items: &[ChatItem]) -> Vec<&'static str> {
+    items
+      .iter()
+      .map(|item| match item {
+        ChatItem::Message(m) if m.role == ChatRole::Agent => "agent",
+        ChatItem::Message(_) => "other",
+        ChatItem::Tool(_) => "tool",
+        ChatItem::Thought(_) => "thought",
+        ChatItem::Plan(_) => "plan",
+        ChatItem::Permission(_) => "permission",
+        ChatItem::Checkpoint(_) => "checkpoint",
+      })
+      .collect()
+  }
+
+  #[gpui::test]
+  async fn prose_keeps_its_place_between_tool_calls(cx: &mut gpui::TestAppContext) {
+    let (panel, cx) = add_panel_window(cx);
+    panel.update(cx, |panel, _| {
+      panel.status = Status::Ready;
+      panel.in_flight = true;
+      panel.on_event(text_chunk("Let me read the file."));
+      panel.on_event(AgentEvent::ToolCall(call("t1", "Read foo", ToolKind::Read)));
+      panel.on_event(text_chunk("Done reading."));
+      panel.flush_turn_buffers();
+      panel.end_turn();
+    });
+
+    panel.read_with(cx, |panel, _| {
+      assert_eq!(item_kinds(&panel.items), vec!["agent", "tool", "agent"]);
+      let ChatItem::Message(first) = &panel.items[0] else {
+        unreachable!()
+      };
+      assert_eq!(first.text, "Let me read the file.");
+      let ChatItem::Message(last) = &panel.items[2] else {
+        unreachable!()
+      };
+      assert_eq!(last.text, "Done reading.");
+    });
+  }
+
+  #[gpui::test]
+  async fn a_thought_closes_before_prose_and_prose_before_a_tool(cx: &mut gpui::TestAppContext) {
+    let (panel, cx) = add_panel_window(cx);
+    panel.update(cx, |panel, _| {
+      panel.status = Status::Ready;
+      panel.in_flight = true;
+      panel.on_event(thought_chunk("weighing options"));
+      panel.on_event(text_chunk("Here is the plan."));
+      panel.on_event(AgentEvent::ToolCall(call("t1", "Edit foo", ToolKind::Edit)));
+      panel.flush_turn_buffers();
+      panel.end_turn();
+    });
+
+    panel.read_with(cx, |panel, _| {
+      assert_eq!(item_kinds(&panel.items), vec!["thought", "agent", "tool"]);
+    });
+  }
+
+  #[gpui::test]
+  async fn whitespace_only_prose_makes_no_message_item(cx: &mut gpui::TestAppContext) {
+    let (panel, cx) = add_panel_window(cx);
+    panel.update(cx, |panel, _| {
+      panel.status = Status::Ready;
+      panel.in_flight = true;
+      panel.on_event(text_chunk("\n\n"));
+      panel.on_event(AgentEvent::ToolCall(call("t1", "Read foo", ToolKind::Read)));
+      panel.flush_turn_buffers();
+      panel.end_turn();
+    });
+
+    panel.read_with(cx, |panel, _| {
+      assert_eq!(item_kinds(&panel.items), vec!["tool"]);
+    });
+  }
+
+  #[gpui::test]
+  async fn a_tool_update_does_not_split_the_following_prose(cx: &mut gpui::TestAppContext) {
+    let (panel, cx) = add_panel_window(cx);
+    panel.update(cx, |panel, _| {
+      panel.status = Status::Ready;
+      panel.in_flight = true;
+      panel.on_event(text_chunk("Reading."));
+      panel.on_event(AgentEvent::ToolCall(call("t1", "Read foo", ToolKind::Read)));
+      panel.on_event(text_chunk("All good."));
+      // The same call again is an in-place update, not a new timeline entry.
+      panel.on_event(AgentEvent::ToolCall(call("t1", "Read foo", ToolKind::Read)));
+      panel.flush_turn_buffers();
+      panel.end_turn();
+    });
+
+    panel.read_with(cx, |panel, _| {
+      assert_eq!(item_kinds(&panel.items), vec!["agent", "tool", "agent"]);
+    });
   }
 
   #[gpui::test]

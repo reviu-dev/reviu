@@ -4,6 +4,10 @@ All notable changes to Reviu are documented here.
 
 ## 1.0.0
 
+### The Conversation Reads In Order
+
+The agent's narration now appears where it happened: an explanation before a file edit stays before the edit, thoughts close before the prose they led to, and commentary between two commands keeps its place. Before, everything the agent said during a turn was collected into a single block at the very end, after all the work.
+
 ### Code Blocks Worth Reading
 
 Code blocks in the agent's replies are now syntax highlighted, using the same fifty-language engine as the rest of the app. Each block shows its language and carries a copy button that grabs the code without the fences.
