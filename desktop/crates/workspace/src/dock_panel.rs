@@ -1265,7 +1265,6 @@ impl DockPanel {
 impl Render for DockPanel {
   fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
     let theme = cx.theme().clone();
-    let entry_count = self.status_entries.len();
 
     let header = h_flex()
       .h(px(40.))
@@ -1289,17 +1288,6 @@ impl Render for DockPanel {
           .flex_shrink_0()
           .items_center()
           .gap_1()
-          .when(
-            self.active_tab == DockPanelTab::Changes && entry_count > 0,
-            |this| {
-              this.child(
-                div()
-                  .text_xs()
-                  .text_color(theme.muted_foreground)
-                  .child(entry_count.to_string()),
-              )
-            },
-          )
           .when(self.active_tab != DockPanelTab::Terminal, |this| {
             this.child(
               Button::new("dock-panel-refresh")
