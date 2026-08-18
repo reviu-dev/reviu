@@ -50,6 +50,13 @@ The GitHub-integration backend (Reviu Pro) is closed-source in a separate privat
 - **Focus when a surface closes**: dialogs (command palette, file search, confirmations) restore focus by themselves via gpui-component's `Root`. Page-level surfaces (right dock, centre views) must hand focus to `SessionPage`'s `Focusable` impl on the next frame - it resolves to the diff editor or the composer - never to a hardcoded target.
 - One dock surface = one entity in its own file, communicating by events; `session_page.rs` composes and routes.
 
+## Driving the real app (reviu_driver)
+
+- `desktop/crates/reviu_driver`: mounts the real `WorkspaceView` in a test window and takes JSON-lines commands on stdin, one response per line on stdout. Use it to verify UI behavior live without launching the app.
+- Run: `cargo run -p reviu_driver` (from `desktop/`). Add `--agent-command <path>` to plug a fake agent; `cargo build -p agent_acp --features test-support --bin stub_agent` builds the stub (minimal ACP agent that acks every prompt) at `target/debug/stub_agent`.
+- Verbs: `bounds` (painted bounds of a `debug_selector`), `click` (selector or point), `type`, `key` (e.g. `{"cmd":"key","keystrokes":"cmd-p"}`), `clock` (virtual ms, timers/debounces), `wait` (real ms, live processes), `park`, `path_prompt`, `quit`.
+- Limits: it reads and writes the real config store and repositories (point it at a temp repo via `path_prompt`); no screenshots (macOS visual backend planned); animations do not run to completion under the test scheduler, judge end states.
+
 ## Required workflow
 
 - Search in codebase: `osgrep "query"` (or `rg` when needed).
