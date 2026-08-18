@@ -627,6 +627,7 @@ impl DockPanel {
       .min_h_0()
       .min_w(px(0.0))
       .px_1()
+      .py_1()
       .child(self.history_list.clone())
       .into_any_element()
   }
