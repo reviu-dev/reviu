@@ -2530,4 +2530,59 @@ mod tests {
       "dragging 80px left widens the dock: {start_width} -> {width}"
     );
   }
+
+  #[gpui::test]
+  async fn closing_the_dock_hands_focus_to_the_center(cx: &mut TestAppContext) {
+    let repo = TempRepo::init("session-dock-close-focus");
+    commit_text_file(&repo.path, Path::new("README.md"), "v1\n", "initial");
+    std::fs::write(repo.path.join("README.md"), "v2\n").expect("modify file");
+    let (page, cx) = add_session_page_window(repo.path.clone(), cx);
+    page.update(cx, |page, cx| {
+      page.dock_panel.update(cx, |panel, cx| panel.refresh(cx))
+    });
+    cx.run_until_parked();
+
+    page.update_in(cx, |page, window, cx| {
+      page.open_diff(PathBuf::from("README.md"), None, window, cx);
+    });
+    await_open_file(&page, cx).await;
+
+    page.update_in(cx, |page, window, cx| {
+      page.open_changes_action(&crate::OpenGitChangesSidebar, window, cx)
+    });
+    cx.run_until_parked();
+
+    let editor_handle = page.read_with(cx, |page, cx| {
+      page.editor.as_ref().expect("editor").focus_handle(cx)
+    });
+    let focused = cx.update(|window, cx| {
+      let _ = cx;
+      window.focused(cx)
+    });
+    assert_eq!(
+      focused.as_ref(),
+      Some(&editor_handle),
+      "the editor takes the focus back so shortcuts keep working"
+    );
+  }
+
+  #[gpui::test]
+  async fn the_global_toggle_reaches_the_dock(cx: &mut TestAppContext) {
+    let repo = TempRepo::init("session-dock-global-toggle");
+    commit_text_file(&repo.path, Path::new("README.md"), "v1\n", "initial");
+    let (page, cx) = add_session_page_window(repo.path.clone(), cx);
+    cx.run_until_parked();
+
+    let open = cx.update(|_, cx| SessionPageHandle::dock_is_open(cx));
+    assert_eq!(open, Some(true));
+    cx.update(|window, cx| SessionPageHandle::toggle_right_dock(window, cx));
+    cx.run_until_parked();
+    page.read_with(cx, |page, _| assert!(!page.dock_open));
+    let open = cx.update(|_, cx| SessionPageHandle::dock_is_open(cx));
+    assert_eq!(open, Some(false));
+
+    cx.update(|window, cx| SessionPageHandle::toggle_right_dock(window, cx));
+    cx.run_until_parked();
+    page.read_with(cx, |page, _| assert!(page.dock_open));
+  }
 }

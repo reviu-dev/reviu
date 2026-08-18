@@ -121,7 +121,7 @@ impl SessionPageHandle {
 
   fn with_page(
     cx: &mut App,
-    f: impl FnOnce(&mut SessionPage, &mut Window, &mut Context<SessionPage>),
+    f: impl FnOnce(&mut SessionPage, &mut Window, &mut Context<SessionPage>) + 'static,
   ) {
     let Some(page) = cx
       .try_global::<Self>()
@@ -131,9 +131,35 @@ impl SessionPageHandle {
       return;
     };
     let window_handle = page.read(cx).window_handle;
-    let _ = cx.update_window(window_handle, |_, window, cx| {
-      page.update(cx, |page, cx| f(page, window, cx));
+    // Deferred: callers often sit inside this very window's update, where a
+    // re-entrant `update_window` is a silent no-op.
+    cx.defer(move |cx| {
+      let _ = cx.update_window(window_handle, |_, window, cx| {
+        page.update(cx, |page, cx| f(page, window, cx));
+      });
     });
+  }
+
+  /// The global bar paints the dock toggle from this.
+  pub fn dock_is_open(cx: &mut App) -> Option<bool> {
+    let page = cx
+      .try_global::<Self>()
+      .and_then(|handle| handle.page.clone())
+      .and_then(|weak| weak.upgrade())?;
+    Some(page.read(cx).dock_open)
+  }
+
+  /// The global bar's dock toggle. Takes the caller's window: the click comes
+  /// from inside it, and `update_window` on a window mid-update is a no-op.
+  pub fn toggle_right_dock(window: &mut Window, cx: &mut App) {
+    let Some(page) = cx
+      .try_global::<Self>()
+      .and_then(|handle| handle.page.clone())
+      .and_then(|weak| weak.upgrade())
+    else {
+      return;
+    };
+    page.update(cx, |page, cx| page.toggle_dock(window, cx));
   }
 
   /// GitHub access changed: the inbox and the branch's pull request depend on it.
@@ -594,8 +620,26 @@ impl SessionPage {
     self.dock_slide_armed = true;
     self.set_dock_zoomed(false, cx);
     // The dock stays mounted while it slides out; focus must not stay in it.
-    self.focus_agent_input_on_next_frame(window, cx);
+    // The page resolves to the editor when the diff is open, the composer
+    // otherwise, so shortcuts keep working right after the close.
+    let view = cx.entity().downgrade();
+    window.on_next_frame(move |window, cx| {
+      let _ = view.update(cx, |this, cx| {
+        let handle = this.focus_handle(cx);
+        window.focus(&handle, cx);
+      });
+    });
     cx.notify();
+  }
+
+  pub(crate) fn toggle_dock(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    if self.dock_open {
+      self.close_dock(window, cx);
+    } else {
+      self.dock_open = true;
+      self.dock_slide_armed = true;
+      cx.notify();
+    }
   }
 
   fn toggle_dock_zoom(&mut self, cx: &mut Context<Self>) {
