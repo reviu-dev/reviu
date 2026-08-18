@@ -753,7 +753,18 @@ impl SessionPage {
         DockPanelTab::Terminal,
       ),
     ];
-    let mut rail = v_flex().items_center().gap_1().pt_2().w_full();
+    let mut rail = v_flex().items_center().gap_1().pt_2().w_full().child(
+      Self::rail_button(
+        "dock-rail-open",
+        gpui_component::Icon::new(gpui_component::IconName::PanelRightOpen),
+        "Open panel",
+      )
+      .on_click(cx.listener(|this, _, window, cx| {
+        // Reopens on the tab that was active when the panel closed.
+        let tab = this.dock_panel.read(cx).active_tab();
+        this.open_dock_from_rail(tab, window, cx);
+      })),
+    );
     for (id, icon, tooltip, tab) in tabs {
       rail = rail.child(Self::rail_button(id, icon, tooltip).on_click(cx.listener(
         move |this, _, window, cx| {
@@ -2778,6 +2789,28 @@ mod tests {
     page.read_with(cx, |page, cx| {
       assert!(page.dock_open, "a rail click opens the dock");
       assert_eq!(page.dock_panel.read(cx).active_tab(), DockPanelTab::History);
+    });
+
+    // Close again: the plain open button comes back on the remembered tab.
+    page.update_in(cx, |page, window, cx| {
+      page.open_history_action(&crate::OpenGitHistorySidebar, window, cx)
+    });
+    cx.run_until_parked();
+    page.update(cx, |page, cx| {
+      page.dock_slide_armed = false;
+      cx.notify();
+    });
+    cx.run_until_parked();
+    let open = cx.debug_bounds("dock-rail-open").expect("rail open button");
+    cx.simulate_click(open.center(), gpui::Modifiers::default());
+    cx.run_until_parked();
+    page.read_with(cx, |page, cx| {
+      assert!(page.dock_open);
+      assert_eq!(
+        page.dock_panel.read(cx).active_tab(),
+        DockPanelTab::History,
+        "reopening lands on the tab it was closed on"
+      );
     });
   }
 

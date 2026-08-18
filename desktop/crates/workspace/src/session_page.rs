@@ -617,16 +617,6 @@ impl SessionPage {
     cx.notify();
   }
 
-  pub(crate) fn toggle_dock(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-    if self.dock_open {
-      self.close_dock(window, cx);
-    } else {
-      self.dock_open = true;
-      self.dock_slide_armed = true;
-      cx.notify();
-    }
-  }
-
   /// The rail always opens on the clicked tab, it never toggles shut.
   fn open_dock_from_rail(
     &mut self,
