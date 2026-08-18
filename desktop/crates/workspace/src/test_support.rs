@@ -14,6 +14,9 @@ impl TempRepo {
   pub(crate) fn init(prefix: &str) -> Self {
     let path = temp_path(prefix);
     std::fs::create_dir_all(&path).expect("create temp dir");
+    // macOS puts temp dirs behind the /var -> /private/var symlink; hand out the
+    // canonical path so comparisons with git's resolved workdir hold.
+    let path = path.canonicalize().expect("canonicalize temp dir");
     Repository::init(&path).expect("init git repository");
     Self { path }
   }
