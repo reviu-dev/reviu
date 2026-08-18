@@ -82,6 +82,7 @@ mod hunk_actions;
 mod inbox;
 mod interactive_rebase;
 mod interactive_rebase_todo_view;
+mod keybindings_file;
 pub mod navigation;
 mod palette_actions;
 mod palette_branches;

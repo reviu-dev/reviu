@@ -323,6 +323,15 @@ impl WorkspaceView {
 
     cx.set_global(settings);
     cx.set_global(shortcuts::load_shortcut_overrides());
+    if let Some(error) = crate::keybindings_file::take_startup_error() {
+      window.push_notification(
+        Notification::new()
+          .title("Your keybindings could not be read")
+          .message(format!("Reviu started with default shortcuts. {error}"))
+          .autohide(false),
+        cx,
+      );
+    }
     cx.set_global(crate::command_usage::CommandUsageStore::load());
     crate::command_usage::install_palette_usage_recorder(cx);
     crate::analytics::Analytics::init(cx);

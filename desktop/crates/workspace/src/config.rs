@@ -568,6 +568,12 @@ impl ConfigStore {
   }
 
   pub fn load_shortcut_overrides() -> HashMap<ShortcutId, String> {
+    crate::keybindings_file::load()
+  }
+
+  /// Read of the legacy sqlite rows, kept for the one-time import into the
+  /// keybindings file. The rows are never written any more.
+  pub(crate) fn load_shortcut_overrides_from_db() -> HashMap<ShortcutId, String> {
     let Some(store) = Self::open_with_tables() else {
       return HashMap::default();
     };
@@ -614,42 +620,11 @@ impl ConfigStore {
   }
 
   pub fn persist_shortcut_override(shortcut_id: ShortcutId, keystroke: &str) {
-    let Some(store) = Self::open_with_tables() else {
-      return;
-    };
-    store.persist_shortcut_override_inner(shortcut_id, keystroke);
-  }
-
-  fn persist_shortcut_override_inner(&self, shortcut_id: ShortcutId, keystroke: &str) {
-    if let Err(err) = self.conn.execute(
-      &format!(
-        "INSERT INTO {} (shortcut_id, keystroke) VALUES (?1, ?2)
-         ON CONFLICT(shortcut_id) DO UPDATE SET keystroke = excluded.keystroke",
-        SHORTCUT_OVERRIDES_TABLE.name
-      ),
-      params![shortcut_id.storage_key(), keystroke],
-    ) {
-      eprintln!("Failed to persist shortcut override: {}", err);
-    }
+    crate::keybindings_file::set(shortcut_id, keystroke);
   }
 
   pub fn clear_shortcut_override(shortcut_id: ShortcutId) {
-    let Some(store) = Self::open_with_tables() else {
-      return;
-    };
-    store.clear_shortcut_override_inner(shortcut_id);
-  }
-
-  fn clear_shortcut_override_inner(&self, shortcut_id: ShortcutId) {
-    if let Err(err) = self.conn.execute(
-      &format!(
-        "DELETE FROM {} WHERE shortcut_id = ?1",
-        SHORTCUT_OVERRIDES_TABLE.name
-      ),
-      params![shortcut_id.storage_key()],
-    ) {
-      eprintln!("Failed to clear shortcut override: {}", err);
-    }
+    crate::keybindings_file::remove(shortcut_id);
   }
 }
 
@@ -1075,6 +1050,42 @@ mod tests {
     // The load imported the sqlite values into the settings file.
     assert!(db_path.with_extension("settings.json").exists());
     assert!(ConfigStore::load_app_settings().dark_mode);
+
+    ConfigStore::set_test_db_path(None);
+  }
+
+  #[test]
+  fn shortcut_rows_are_imported_into_the_keybindings_file() {
+    let db_path = unique_test_db_path("keybindings-import");
+    let _ = fs::remove_file(&db_path);
+    let file_path = db_path.with_extension("keybindings.json");
+    let _ = fs::remove_file(&file_path);
+
+    {
+      let conn = Connection::open(&db_path).expect("open db");
+      conn
+        .execute(SHORTCUT_OVERRIDES_TABLE.create_sql, [])
+        .expect("create");
+      conn
+        .execute(
+          "INSERT INTO shortcut_overrides (shortcut_id, keystroke) VALUES ('commit_changes', 'cmd-j')",
+          [],
+        )
+        .expect("seed row");
+    }
+
+    ConfigStore::set_test_db_path(Some(db_path));
+    let overrides = ConfigStore::load_shortcut_overrides();
+
+    assert_eq!(
+      overrides.get(&ShortcutId::CommitChanges),
+      Some(&"cmd-j".to_string())
+    );
+    assert!(file_path.exists(), "import must stamp the keybindings file");
+    assert_eq!(
+      ConfigStore::load_shortcut_overrides().get(&ShortcutId::CommitChanges),
+      Some(&"cmd-j".to_string())
+    );
 
     ConfigStore::set_test_db_path(None);
   }
