@@ -3081,6 +3081,7 @@ mod tests {
     CommandPaletteCommandId, CommandPaletteConfig, CommandPaletteGroup, CommandPaletteHandler,
     CommandPaletteInitialScreen, CommandPaletteScreen,
   };
+  use gpui::AppContext as _;
   use std::rc::Rc;
   use std::sync::Arc;
 
@@ -3767,5 +3768,156 @@ mod tests {
         .iter()
         .any(|(g, _)| *g == CommandPaletteGroup::Recent)
     );
+  }
+
+  type RecordedActions = Arc<std::sync::Mutex<Vec<super::CommandPaletteAction>>>;
+
+  fn recording_handler(fail: bool) -> (RecordedActions, CommandPaletteHandler) {
+    let recorded: RecordedActions = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let log = recorded.clone();
+    let handler: CommandPaletteHandler = Arc::new(move |action, _, _| {
+      log.lock().expect("lock recorded actions").push(action);
+      if fail {
+        Err("refused by the test handler".into())
+      } else {
+        Ok(())
+      }
+    });
+    (recorded, handler)
+  }
+
+  /// Mounts the palette as the window root: the production dialog never hands
+  /// focus to the screen input in a test window, so the harness focuses it and
+  /// repaints, which is when the input handler registers.
+  fn open_test_palette(
+    cx: &mut gpui::TestAppContext,
+    config: CommandPaletteConfig,
+  ) -> (gpui::Entity<CommandPalette>, &mut gpui::VisualTestContext) {
+    cx.update(gpui_component::init);
+    let mut palette = None;
+    let (_root, cx) = cx.add_window_view(|window, cx| {
+      let view = cx.new(|cx| CommandPalette::new(window, cx, config));
+      palette = Some(view.clone());
+      gpui_component::Root::new(view, window, cx)
+    });
+    let palette = palette.expect("palette");
+    cx.run_until_parked();
+    palette.update_in(cx, |palette, window, cx| {
+      palette.focus_screen_input(window, cx);
+      cx.notify();
+    });
+    cx.run_until_parked();
+    (palette, cx)
+  }
+
+  #[gpui::test]
+  async fn typing_filters_and_enter_runs_the_command(cx: &mut gpui::TestAppContext) {
+    let (recorded, handler) = recording_handler(false);
+    let commands = vec![
+      CommandPaletteCommand::commit(),
+      CommandPaletteCommand::push("Push"),
+      CommandPaletteCommand::fetch(),
+    ];
+    let (palette, cx) =
+      open_test_palette(cx, CommandPaletteConfig::new(Vec::new(), commands, handler));
+
+    cx.simulate_input("push");
+    cx.run_until_parked();
+    palette.read_with(cx, |palette, cx| {
+      let delegate = palette.commands_list.read(cx).delegate();
+      assert_eq!(delegate.query.as_ref(), "push");
+      assert_eq!(
+        delegate.matched_sections.len(),
+        1,
+        "commit and fetch fall away"
+      );
+    });
+    cx.simulate_keystrokes("enter");
+    cx.run_until_parked();
+
+    let recorded = recorded.lock().expect("lock recorded actions");
+    assert!(
+      matches!(recorded.as_slice(), [super::CommandPaletteAction::Push]),
+      "recorded: {recorded:?}"
+    );
+  }
+
+  #[gpui::test]
+  async fn a_disabled_command_reports_instead_of_running(cx: &mut gpui::TestAppContext) {
+    let (recorded, handler) = recording_handler(false);
+    let commands = vec![CommandPaletteCommand::push("Push").disabled("Nothing to push")];
+    let (palette, cx) =
+      open_test_palette(cx, CommandPaletteConfig::new(Vec::new(), commands, handler));
+
+    cx.simulate_input("push");
+    cx.run_until_parked();
+    palette.read_with(cx, |palette, cx| {
+      let delegate = palette.commands_list.read(cx).delegate();
+      assert!(delegate.selected_index.is_some(), "the command is selected");
+    });
+    cx.simulate_keystrokes("enter");
+    cx.run_until_parked();
+
+    assert!(recorded.lock().expect("lock recorded actions").is_empty());
+  }
+
+  #[gpui::test]
+  async fn switch_branch_walks_to_the_branch_screen_and_picks_one(cx: &mut gpui::TestAppContext) {
+    let (recorded, handler) = recording_handler(false);
+    let branches = vec![
+      CommandPaletteBranch {
+        name: "main".into(),
+        kind: CommandPaletteBranchKind::Local,
+      },
+      CommandPaletteBranch {
+        name: "feature".into(),
+        kind: CommandPaletteBranchKind::Local,
+      },
+    ];
+    let commands = vec![CommandPaletteCommand::switch_branch()];
+    let (palette, cx) =
+      open_test_palette(cx, CommandPaletteConfig::new(branches, commands, handler));
+
+    cx.simulate_input("switch branch");
+    cx.simulate_keystrokes("enter");
+    cx.run_until_parked();
+    palette.read_with(cx, |palette, _| {
+      assert_eq!(palette.screen, CommandPaletteScreen::SwitchBranch);
+    });
+    // The branch screen has its own search input; focus follows the screen.
+    palette.update_in(cx, |palette, window, cx| {
+      palette.focus_screen_input(window, cx);
+      cx.notify();
+    });
+    cx.run_until_parked();
+
+    cx.simulate_input("feature");
+    cx.simulate_keystrokes("enter");
+    cx.run_until_parked();
+
+    let recorded = recorded.lock().expect("lock recorded actions");
+    match recorded.as_slice() {
+      [super::CommandPaletteAction::SwitchBranch(branch)] => {
+        assert_eq!(branch.name.as_ref(), "feature");
+      }
+      other => panic!("unexpected actions: {other:?}"),
+    }
+  }
+
+  #[gpui::test]
+  async fn a_failed_action_leaves_the_palette_usable(cx: &mut gpui::TestAppContext) {
+    let (recorded, handler) = recording_handler(true);
+    let commands = vec![CommandPaletteCommand::push("Push")];
+    let (_palette, cx) =
+      open_test_palette(cx, CommandPaletteConfig::new(Vec::new(), commands, handler));
+
+    cx.simulate_input("push");
+    cx.simulate_keystrokes("enter");
+    cx.run_until_parked();
+    // Still interactive: the same command can be retried after the error.
+    cx.simulate_keystrokes("enter");
+    cx.run_until_parked();
+
+    assert_eq!(recorded.lock().expect("lock recorded actions").len(), 2);
   }
 }
