@@ -4,6 +4,10 @@ All notable changes to Reviu are documented here.
 
 ## 1.0.0
 
+### Settings You Can Read And Edit
+
+Reviu now keeps its settings in a plain `settings.json` file in its configuration folder, next to its other data. Existing settings move over automatically on first launch. The file is yours: read it, edit it by hand, keep it in your dotfiles. A hand-edited file never breaks the app - an unknown or invalid value simply falls back to its default, and Reviu tells you at startup if the file could not be read at all.
+
 ### One Workspace
 
 The separate Git page is gone: everything it did happens in the Sessions workspace, which is now the only place Reviu opens. The changes list with hunk staging, conflicts, the history, the terminal, branches, stashes, cherry-pick, interactive rebase, the commit menu and every keyboard shortcut moved there, next to the agent and the diff. `cmd-1` still goes to Sessions, `cmd-2` no longer exists, and old links to the Git page land in the workspace. The Sessions/Git switch in the header is gone with it.

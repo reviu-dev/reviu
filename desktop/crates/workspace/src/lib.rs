@@ -94,6 +94,7 @@ mod repo_state;
 mod sentry_context;
 mod session_list;
 mod session_page;
+mod settings_file;
 mod settings_page;
 mod shortcuts;
 pub mod status_bar;

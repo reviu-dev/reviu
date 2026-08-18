@@ -295,7 +295,20 @@ impl WorkspaceView {
   }
 
   pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
+    if let Some(dir) = AppProfile::current().config_dir() {
+      agent_chat_panel::set_settings_dir(dir);
+    }
+
     let settings = ConfigStore::load_app_settings();
+    if let Some(error) = crate::settings_file::take_startup_error() {
+      window.push_notification(
+        Notification::new()
+          .title("Your settings could not be read")
+          .message(format!("Reviu started with default settings. {error}"))
+          .autohide(false),
+        cx,
+      );
+    }
 
     gpui_router::init(cx);
     NavigationHistory::init(cx);

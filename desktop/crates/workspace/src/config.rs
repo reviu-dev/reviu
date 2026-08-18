@@ -11,6 +11,7 @@ use std::{
 use dirs::config_dir;
 use gpui::Keystroke;
 use rusqlite::{Connection, params};
+use serde::{Deserialize, Serialize};
 
 use crate::AppProfile;
 use crate::shortcuts::ShortcutId;
@@ -185,7 +186,8 @@ pub struct RecentRepository {
   pub path: PathBuf,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
 pub enum CloneProtocol {
   Https,
   Ssh,
@@ -207,7 +209,7 @@ impl CloneProtocol {
   }
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct AppSettings {
   pub auto_switch_theme: bool,
   pub dark_mode: bool,
@@ -264,7 +266,7 @@ impl ConfigStore {
   }
 
   #[cfg(test)]
-  fn test_db_path() -> Option<PathBuf> {
+  pub(crate) fn test_db_path() -> Option<PathBuf> {
     TEST_DB_PATH.with(|path| path.borrow().clone())
   }
 
@@ -403,6 +405,12 @@ impl ConfigStore {
   }
 
   pub fn load_app_settings() -> AppSettings {
+    crate::settings_file::load()
+  }
+
+  /// Read of the legacy sqlite columns, kept for the one-time import into the
+  /// settings file. The columns are never written any more.
+  pub(crate) fn load_app_settings_from_db() -> AppSettings {
     let Some(store) = Self::open_with_tables() else {
       return AppSettings::default();
     };
@@ -452,10 +460,7 @@ impl ConfigStore {
   }
 
   pub fn persist_app_settings(settings: AppSettings) {
-    let Some(store) = Self::open_with_tables() else {
-      return;
-    };
-    store.persist_app_settings_inner(settings);
+    crate::settings_file::persist(settings);
   }
 
   pub fn load_or_create_analytics_device_id() -> Option<String> {
@@ -644,65 +649,6 @@ impl ConfigStore {
       params![shortcut_id.storage_key()],
     ) {
       eprintln!("Failed to clear shortcut override: {}", err);
-    }
-  }
-
-  fn persist_app_settings_inner(&self, settings: AppSettings) {
-    if let Err(err) = self.conn.execute(
-      &format!(
-        "INSERT INTO {} (id, auto_switch_theme, dark_mode, indent_rainbow, font_size, git_unified_file_view, split_diff_view, hide_whitespace, clone_protocol, menu_bar_icon, analytics_enabled)
-         VALUES (1, ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
-         ON CONFLICT(id) DO UPDATE
-         SET auto_switch_theme = excluded.auto_switch_theme,
-             dark_mode = excluded.dark_mode,
-             indent_rainbow = excluded.indent_rainbow,
-             font_size = excluded.font_size,
-             git_unified_file_view = excluded.git_unified_file_view,
-             split_diff_view = excluded.split_diff_view,
-             hide_whitespace = excluded.hide_whitespace,
-             clone_protocol = excluded.clone_protocol,
-             menu_bar_icon = excluded.menu_bar_icon,
-             analytics_enabled = excluded.analytics_enabled",
-        SETTINGS_TABLE.name
-      ),
-      params![
-        if settings.auto_switch_theme {
-          1_i64
-        } else {
-          0_i64
-        },
-        if settings.dark_mode { 1_i64 } else { 0_i64 },
-        if settings.indent_rainbow {
-          1_i64
-        } else {
-          0_i64
-        },
-        settings.font_size as f64,
-        if settings.git_unified_file_view {
-          1_i64
-        } else {
-          0_i64
-        },
-        if settings.split_diff_view {
-          1_i64
-        } else {
-          0_i64
-        },
-        if settings.hide_whitespace {
-          1_i64
-        } else {
-          0_i64
-        },
-        settings.clone_protocol.as_str(),
-        if settings.menu_bar_icon { 1_i64 } else { 0_i64 },
-        if settings.analytics_enabled {
-          1_i64
-        } else {
-          0_i64
-        },
-      ],
-    ) {
-      eprintln!("Failed to persist app settings: {}", err);
     }
   }
 }
@@ -1125,6 +1071,10 @@ mod tests {
     for column in ALL_SETTINGS_COLUMNS {
       assert!(columns.contains(*column), "missing column {column}");
     }
+
+    // The load imported the sqlite values into the settings file.
+    assert!(db_path.with_extension("settings.json").exists());
+    assert!(ConfigStore::load_app_settings().dark_mode);
 
     ConfigStore::set_test_db_path(None);
   }

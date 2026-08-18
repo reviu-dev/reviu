@@ -2138,7 +2138,17 @@ impl AgentChatPanel {
   }
 }
 
+static AGENT_SETTINGS_DIR: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
+
+/// The host app points agent settings at its profile-specific config dir (prod vs dev).
+pub fn set_settings_dir(dir: PathBuf) {
+  let _ = AGENT_SETTINGS_DIR.set(dir);
+}
+
 fn agent_settings_path() -> Option<PathBuf> {
+  if let Some(dir) = AGENT_SETTINGS_DIR.get() {
+    return Some(dir.join("agent.json"));
+  }
   Some(dirs::config_dir()?.join("reviu").join("agent.json"))
 }
 

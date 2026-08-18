@@ -37,6 +37,10 @@ impl AppProfile {
     }
   }
 
+  pub fn config_dir(self) -> Option<std::path::PathBuf> {
+    Some(dirs::config_dir()?.join(self.storage_dir_name()))
+  }
+
   pub fn keychain_service(self) -> &'static str {
     match self {
       Self::Prod => "reviu_auth",
