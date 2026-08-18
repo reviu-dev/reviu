@@ -628,11 +628,12 @@ impl SessionPage {
           }
         }),
       );
-    // Centered on the panel's 1px border, not sitting beside it.
-    match side {
+    // Centered on the panel's 1px border, not sitting beside it; deferred so
+    // the overhanging half is not painted under the neighbouring column.
+    gpui::deferred(match side {
       PanelSide::Left => handle.right(px(-2.0)),
       PanelSide::Right => handle.left(px(-2.0)),
-    }
+    })
     .into_any_element()
   }
 
@@ -776,7 +777,29 @@ impl SessionPage {
         DockPanelTab::Terminal,
       ),
     ];
-    let mut rail = v_flex().items_center().gap_1().pt_2().w_full();
+    let mut rail = v_flex().items_center().gap_1().pt_2().w_full().child(
+      Self::rail_button(
+        "dock-rail-toggle",
+        gpui_component::Icon::new(if self.dock_open {
+          gpui_component::IconName::PanelRightClose
+        } else {
+          gpui_component::IconName::PanelRightOpen
+        }),
+        if self.dock_open {
+          "Close panel"
+        } else {
+          "Open panel"
+        },
+      )
+      .on_click(cx.listener(|this, _, window, cx| {
+        if this.dock_open {
+          this.close_dock(window, cx);
+        } else {
+          let tab = this.dock_panel.read(cx).active_tab();
+          this.open_dock_tab(tab, window, cx);
+        }
+      })),
+    );
     for (id, icon, tooltip, tab) in tabs {
       rail = rail.child(
         Self::rail_button(id, icon, tooltip)
@@ -2827,6 +2850,20 @@ mod tests {
         DockPanelTab::History,
         "the remembered tab survives the close"
       );
+    });
+
+    // The rail-top toggle reopens on that remembered tab.
+    page.update(cx, |page, cx| {
+      page.dock_slide_armed = false;
+      cx.notify();
+    });
+    cx.run_until_parked();
+    let toggle = cx.debug_bounds("dock-rail-toggle").expect("rail toggle");
+    cx.simulate_click(toggle.center(), gpui::Modifiers::default());
+    cx.run_until_parked();
+    page.read_with(cx, |page, cx| {
+      assert!(page.dock_open);
+      assert_eq!(page.dock_panel.read(cx).active_tab(), DockPanelTab::History);
     });
   }
 

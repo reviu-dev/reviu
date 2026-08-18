@@ -73,8 +73,6 @@ pub enum DockPanelEvent {
   StatusRefreshed,
   /// The zoom button: the host owns the layout.
   ToggleZoom,
-  /// The close button: the host owns the dock's visibility.
-  Close,
 }
 
 impl gpui::EventEmitter<DockPanelEvent> for DockPanel {}
@@ -1266,16 +1264,6 @@ impl Render for DockPanel {
               .small()
               .tooltip(if self.zoomed { "Restore" } else { "Expand" })
               .on_click(cx.listener(|_, _, _, cx| cx.emit(DockPanelEvent::ToggleZoom))),
-          )
-          .child(
-            Button::new("dock-panel-close")
-              .debug_selector(|| "dock-panel-close".to_string())
-              .icon(gpui_component::IconName::PanelRightClose)
-              .ghost()
-              .compact()
-              .small()
-              .tooltip("Collapse panel")
-              .on_click(cx.listener(|_, _, _, cx| cx.emit(DockPanelEvent::Close))),
           ),
       );
 

@@ -296,9 +296,6 @@ impl SessionPage {
         DockPanelEvent::ToggleZoom => {
           this.toggle_dock_zoom(cx);
         }
-        DockPanelEvent::Close => {
-          this.close_dock(window, cx);
-        }
       },
     )
     .detach();
