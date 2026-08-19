@@ -10,11 +10,15 @@ use crate::github_notifications::{self, GithubNotificationsStore};
 
 const INBOX_MAX_HEIGHT: f32 = 220.0;
 
-pub struct Inbox;
+pub struct Inbox {
+  scroll_handle: gpui::ScrollHandle,
+}
 
 impl Inbox {
   pub fn new() -> Self {
-    Self
+    Self {
+      scroll_handle: gpui::ScrollHandle::new(),
+    }
   }
 }
 
@@ -132,11 +136,13 @@ impl Render for Inbox {
     } else {
       div()
         .id("session-page-inbox-list")
+        .relative()
         .max_h(px(INBOX_MAX_HEIGHT))
         .overflow_y_scroll()
+        .track_scroll(&self.scroll_handle)
         .pb_1()
         .children(rows)
-        .overflow_y_scrollbar()
+        .vertical_scrollbar(&self.scroll_handle)
         .into_any_element()
     };
 
