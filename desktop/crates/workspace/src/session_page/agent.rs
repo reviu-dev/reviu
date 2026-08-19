@@ -94,6 +94,9 @@ impl SessionPage {
         AgentChatPanelEvent::RollbackRequested { ref_name } => {
           this.rollback_to_checkpoint(ref_name.clone(), window, cx);
         }
+        AgentChatPanelEvent::UndoTurnRequested { ref_name } => {
+          this.undo_turn_files(ref_name.clone(), window, cx);
+        }
       },
     )
     .detach();
@@ -249,6 +252,66 @@ impl SessionPage {
             let _ = cx.update_window(this.window_handle, |_, window, cx| {
               window
                 .push_notification(Notification::error(format!("Rollback failed: {error}")), cx);
+            });
+          }
+        }
+        cx.notify();
+      });
+    })
+    .detach();
+  }
+
+  /// Reverts one turn's file changes; the transcript keeps the turn and its
+  /// summary card flips to "Undone".
+  pub(super) fn undo_turn_files(
+    &mut self,
+    ref_name: String,
+    window: &mut Window,
+    cx: &mut Context<Self>,
+  ) {
+    let Some(repo_root) = self.selected_repo.clone() else {
+      return;
+    };
+    let Some(panel) = self.agent_chat_view.clone() else {
+      return;
+    };
+    if panel.read(cx).is_turn_in_flight() {
+      window.push_notification(
+        Notification::info("Wait for the agent to finish before undoing"),
+        cx,
+      );
+      return;
+    }
+    let session_id = panel.read(cx).current_conversation().id.clone();
+
+    cx.spawn(async move |this, cx| {
+      let restore_repo_root = repo_root.clone();
+      let restore_ref = ref_name.clone();
+      let result = cx
+        .background_spawn(async move {
+          // Safety net: snapshot the current state so the undo itself is undoable.
+          git::create_checkpoint(&restore_repo_root, &session_id)?;
+          git::restore_checkpoint(&restore_repo_root, &restore_ref)
+        })
+        .await;
+
+      let _ = this.update(cx, |this, cx| {
+        match result {
+          Ok(()) => {
+            if let Some(panel) = this.agent_chat_view.clone() {
+              panel.update(cx, |panel, cx| {
+                panel.mark_turn_undone(&ref_name, cx);
+              });
+            }
+            this.dock_panel.update(cx, |panel, cx| panel.refresh(cx));
+            if let Some(editor) = this.editor.clone() {
+              editor.update(cx, |editor, cx| editor.refresh_git_state(cx));
+            }
+            this.sync_agent_review_comments_to_editor(cx);
+          }
+          Err(error) => {
+            let _ = cx.update_window(this.window_handle, |_, window, cx| {
+              window.push_notification(Notification::error(format!("Undo failed: {error}")), cx);
             });
           }
         }

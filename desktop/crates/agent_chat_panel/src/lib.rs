@@ -333,6 +333,9 @@ struct TurnSummaryView {
   files: Vec<TurnFileStat>,
   /// Checkpoint guarding the turn; enables Undo.
   checkpoint_ref: Option<String>,
+  /// The turn's file changes were reverted; the transcript stays.
+  #[serde(default)]
+  undone: bool,
   #[serde(skip)]
   expanded: bool,
 }
@@ -505,6 +508,8 @@ pub enum AgentChatPanelEvent {
   TurnFinished,
   /// User asked to roll back to a checkpoint marker.
   RollbackRequested { ref_name: String },
+  /// User asked to revert one turn's file changes, keeping the transcript.
+  UndoTurnRequested { ref_name: String },
   /// The agent is waiting on a permission answer.
   PermissionRequested,
 }
@@ -1865,9 +1870,30 @@ impl AgentChatPanel {
       file_count.min(TURN_SUMMARY_COLLAPSED_FILES)
     };
     let hidden = file_count - visible;
-    let can_undo = view.checkpoint_ref.is_some() && !self.in_flight;
+    let undone = view.undone;
+    let can_undo = view.checkpoint_ref.is_some()
+      && !self.in_flight
+      && !undone
+      && is_trailing_turn_summary(&self.items, idx);
     let undo_ref = view.checkpoint_ref.clone();
-    let review_path = view.files.first().map(|f| PathBuf::from(&f.path));
+    let review_path = (!undone)
+      .then(|| view.files.first().map(|f| PathBuf::from(&f.path)))
+      .flatten();
+    let stat_green = if undone {
+      theme.muted_foreground
+    } else {
+      theme.status_green()
+    };
+    let stat_red = if undone {
+      theme.muted_foreground
+    } else {
+      theme.status_red()
+    };
+    let row_text = if undone {
+      theme.muted_foreground
+    } else {
+      theme.foreground
+    };
 
     let title = if file_count == 1 {
       "Edited 1 file".to_string()
@@ -1912,18 +1938,19 @@ impl AgentChatPanel {
             h_flex()
               .gap_1()
               .text_xs()
-              .child(
-                div()
-                  .text_color(theme.status_green())
-                  .child(format!("+{added}")),
-              )
-              .child(
-                div()
-                  .text_color(theme.status_red())
-                  .child(format!("-{removed}")),
-              ),
+              .child(div().text_color(stat_green).child(format!("+{added}")))
+              .child(div().text_color(stat_red).child(format!("-{removed}"))),
           ),
       )
+      .when(undone, |this| {
+        this.child(
+          div()
+            .debug_selector(|| "turn-summary-undone".to_string())
+            .text_xs()
+            .text_color(theme.muted_foreground)
+            .child("Undone"),
+        )
+      })
       .when(can_undo, |this| {
         this.child(
           div()
@@ -1933,10 +1960,10 @@ impl AgentChatPanel {
                 .label("Undo")
                 .xsmall()
                 .ghost()
-                .tooltip("Restore files and conversation to before this turn")
+                .tooltip("Revert this turn's file changes, keep the conversation")
                 .on_click(cx.listener(move |_, _, _, cx| {
                   if let Some(ref_name) = undo_ref.clone() {
-                    cx.emit(AgentChatPanelEvent::RollbackRequested { ref_name });
+                    cx.emit(AgentChatPanelEvent::UndoTurnRequested { ref_name });
                   }
                 })),
             ),
@@ -1996,7 +2023,7 @@ impl AgentChatPanel {
               .min_w(px(0.))
               .text_xs()
               .truncate()
-              .text_color(theme.foreground)
+              .text_color(row_text)
               .child(file.path.clone()),
           )
           .child(
@@ -2006,12 +2033,12 @@ impl AgentChatPanel {
               .text_xs()
               .child(
                 div()
-                  .text_color(theme.status_green())
+                  .text_color(stat_green)
                   .child(format!("+{}", file.added)),
               )
               .child(
                 div()
-                  .text_color(theme.status_red())
+                  .text_color(stat_red)
                   .child(format!("-{}", file.removed)),
               ),
           ),
@@ -3223,8 +3250,25 @@ impl AgentChatPanel {
     self.items.push(ChatItem::TurnSummary(TurnSummaryView {
       files,
       checkpoint_ref,
+      undone: false,
       expanded: false,
     }));
+  }
+
+  /// Marks the summary card guarded by this checkpoint as undone.
+  pub fn mark_turn_undone(&mut self, ref_name: &str, cx: &mut Context<Self>) {
+    let Some(idx) = self.items.iter().rposition(|item| {
+      matches!(item, ChatItem::TurnSummary(s) if s.checkpoint_ref.as_deref() == Some(ref_name))
+    }) else {
+      return;
+    };
+    if let Some(ChatItem::TurnSummary(s)) = self.items.get_mut(idx) {
+      s.undone = true;
+    }
+    let list_ix = self.list_ix_for_item(idx);
+    self.mark_item_changed_at(list_ix);
+    self.persist_state();
+    cx.notify();
   }
 
   /// Hide the header history/new-conversation buttons when the host provides
@@ -3906,6 +3950,23 @@ fn checkpoint_ref_before(items: &[ChatItem], idx: usize) -> Option<String> {
     }
   }
   None
+}
+
+/// Whether this summary card closes the latest turn. Undoing an older turn's
+/// files would clobber the turns that came after it.
+fn is_trailing_turn_summary(items: &[ChatItem], idx: usize) -> bool {
+  items.get(idx + 1..).is_none_or(|rest| {
+    !rest.iter().any(|item| {
+      matches!(
+        item,
+        ChatItem::Message(ChatMessage {
+          role: ChatRole::User | ChatRole::ReviewExport,
+          ..
+        }) | ChatItem::Checkpoint(_)
+          | ChatItem::TurnSummary(_)
+      )
+    })
+  })
 }
 
 /// Files edited since the current turn began, aggregated by path in first-edit
@@ -6044,6 +6105,7 @@ mod tests {
           removed: 9,
         }],
         checkpoint_ref: Some("cp-1".into()),
+        undone: false,
         expanded: false,
       }),
       checkpoint_marker("cp-2"),
@@ -6083,6 +6145,138 @@ mod tests {
     assert_eq!(checkpoint_ref, Some("cp-1".to_string()));
   }
 
+  fn summary_item(checkpoint_ref: &str) -> ChatItem {
+    ChatItem::TurnSummary(TurnSummaryView {
+      files: vec![TurnFileStat {
+        path: "a.rs".into(),
+        added: 1,
+        removed: 0,
+      }],
+      checkpoint_ref: Some(checkpoint_ref.to_string()),
+      undone: false,
+      expanded: false,
+    })
+  }
+
+  #[test]
+  fn is_trailing_turn_summary_only_for_the_latest_turn() {
+    let items = vec![
+      checkpoint_marker("cp-1"),
+      user_message("first"),
+      summary_item("cp-1"),
+      checkpoint_marker("cp-2"),
+      user_message("second"),
+      summary_item("cp-2"),
+      agent_message("late words"),
+    ];
+    assert!(!is_trailing_turn_summary(&items, 2), "an older turn's card");
+    assert!(
+      is_trailing_turn_summary(&items, 5),
+      "trailing prose does not retire the latest card"
+    );
+  }
+
+  #[gpui::test]
+  async fn undoing_a_turn_flags_only_the_matching_card(cx: &mut gpui::TestAppContext) {
+    let (panel, cx) = add_panel_window(cx);
+    panel.update(cx, |panel, cx| {
+      panel.items = vec![
+        checkpoint_marker("cp-1"),
+        user_message("first"),
+        summary_item("cp-1"),
+        checkpoint_marker("cp-2"),
+        user_message("second"),
+        summary_item("cp-2"),
+      ];
+      panel.sync_list_count();
+      panel.mark_turn_undone("cp-2", cx);
+      let flags: Vec<bool> = panel
+        .items
+        .iter()
+        .filter_map(|item| match item {
+          ChatItem::TurnSummary(s) => Some(s.undone),
+          _ => None,
+        })
+        .collect();
+      assert_eq!(flags, vec![false, true]);
+    });
+  }
+
+  #[gpui::test]
+  async fn only_the_latest_turn_summary_offers_undo_and_undone_retires_it(
+    cx: &mut gpui::TestAppContext,
+  ) {
+    let (panel, cx) = add_panel_window(cx);
+    panel.update(cx, |panel, cx| {
+      panel.status = Status::Ready;
+      panel.items = vec![
+        checkpoint_marker("cp-1"),
+        user_message("first"),
+        summary_item("cp-1"),
+        checkpoint_marker("cp-2"),
+        user_message("second"),
+        summary_item("cp-2"),
+      ];
+      panel.sync_list_count();
+      cx.notify();
+    });
+    cx.run_until_parked();
+
+    assert!(
+      cx.debug_bounds("turn-summary-undo").is_some(),
+      "the latest card offers Undo"
+    );
+
+    // Retire the latest card: no card is trailing any more, Undo disappears
+    // everywhere while Review stays on the standing one.
+    panel.update(cx, |panel, cx| {
+      panel.items.truncate(3);
+      panel.items.push(checkpoint_marker("cp-2"));
+      panel.items.push(user_message("second"));
+      panel.items.push(agent_message("no edits this time"));
+      panel.sync_list_count();
+      let count = panel.messages_list.item_count();
+      panel.messages_list.remeasure_items(0..count);
+      cx.notify();
+    });
+    cx.run_until_parked();
+    assert!(
+      cx.debug_bounds("turn-summary-undo").is_none(),
+      "an older turn's card cannot undo over later turns"
+    );
+    assert!(
+      cx.debug_bounds("turn-summary-review").is_some(),
+      "an older card keeps Review while its changes stand"
+    );
+
+    // A single undone card: state shown, both actions gone.
+    panel.update(cx, |panel, cx| {
+      panel.items = vec![
+        checkpoint_marker("cp-1"),
+        user_message("first"),
+        summary_item("cp-1"),
+      ];
+      panel.sync_list_count();
+      panel.mark_turn_undone("cp-1", cx);
+      let count = panel.messages_list.item_count();
+      panel.messages_list.remeasure_items(0..count);
+      cx.notify();
+    });
+    cx.run_until_parked();
+    assert!(
+      cx.debug_bounds("turn-summary-undone").is_some(),
+      "the undone card shows its state"
+    );
+    assert!(
+      cx.debug_bounds("turn-summary-undo").is_none(),
+      "an undone card cannot be undone again"
+    );
+    assert!(
+      cx.debug_bounds("turn-summary-review").is_none(),
+      "the undone card has nothing left to review"
+    );
+  }
+
   #[test]
   fn turn_summary_survives_persistence_roundtrip_collapsed() {
     let view = TurnSummaryView {
@@ -6092,6 +6286,7 @@ mod tests {
         removed: 3,
       }],
       checkpoint_ref: Some("refs/reviu/checkpoints/s/1".into()),
+      undone: false,
       expanded: true,
     };
     let json =

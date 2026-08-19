@@ -6,7 +6,7 @@ All notable changes to Reviu are documented here.
 
 ### A Receipt For Every Turn
 
-When the agent finishes a turn that touched files, the conversation now closes it with a summary card: how many files were edited, the added and removed line counts overall and per file. Each file row opens its diff, Review jumps straight into the diff view, and Undo restores files and conversation to before the turn. Long file lists fold behind a "Show more" toggle. The card is part of the transcript, so it is still there when you come back to the conversation.
+When the agent finishes a turn that touched files, the conversation now closes it with a summary card: how many files were edited, the added and removed line counts overall and per file. Each file row opens its diff, Review jumps straight into the diff view, and Undo reverts the turn's file changes while keeping the whole conversation, the card simply flips to "Undone". Undo is only offered on the latest turn, so it can never clobber work from the turns that came after. Rewinding both files and conversation stays available on the checkpoint divider and message editing. Long file lists fold behind a "Show more" toggle, and the card is part of the transcript, so it is still there when you come back.
 
 ### Small Alignments
 
