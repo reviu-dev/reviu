@@ -863,7 +863,7 @@ pub(crate) fn permission_option_is_destructive(kind: &PermissionOptionKind) -> b
 pub(crate) fn format_turn_duration(secs: u64) -> String {
   if secs < 60 {
     format!("{secs}s")
-  } else if secs % 60 == 0 {
+  } else if secs.is_multiple_of(60) {
     format!("{}m", secs / 60)
   } else {
     format!("{}m {}s", secs / 60, secs % 60)

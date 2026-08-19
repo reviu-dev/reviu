@@ -1264,9 +1264,10 @@ impl AgentChatPanel {
   /// (every stream commit remeasures it) mean unknown, not "away": hold the
   /// previous answer instead of blinking at commit cadence.
   fn update_jump_pill(&mut self) {
-    let visible = if self.messages_list.is_following_tail() || self.runway_following {
-      Some(false)
-    } else if self.messages_list.viewport_bounds().size.height <= px(0.) {
+    let visible = if self.messages_list.is_following_tail()
+      || self.runway_following
+      || self.messages_list.viewport_bounds().size.height <= px(0.)
+    {
       Some(false)
     } else {
       let viewport_bottom = self.messages_list.viewport_bounds().bottom();
