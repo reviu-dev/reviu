@@ -27,6 +27,8 @@ struct TerminalEntry {
   snapshot: TerminalSnapshot,
   byte_limit: usize,
   kill_tx: Option<oneshot::Sender<()>>,
+  /// Bytes of a UTF-8 character split across read chunks, kept for the next.
+  pending_bytes: Vec<u8>,
 }
 
 /// Live terminals of one agent session, shared between the ACP handlers and
@@ -75,10 +77,35 @@ impl TerminalStore {
     if let Ok(mut entries) = self.entries.lock()
       && let Some(entry) = entries.get_mut(id)
     {
-      entry
-        .snapshot
-        .output
-        .push_str(&String::from_utf8_lossy(chunk));
+      // A multi-byte character split across two reads must not turn into
+      // replacement glyphs: hold the incomplete tail for the next chunk.
+      entry.pending_bytes.extend_from_slice(chunk);
+      loop {
+        match std::str::from_utf8(&entry.pending_bytes) {
+          Ok(valid) => {
+            entry.snapshot.output.push_str(valid);
+            entry.pending_bytes.clear();
+            break;
+          }
+          Err(e) => {
+            let valid = e.valid_up_to();
+            entry
+              .snapshot
+              .output
+              .push_str(std::str::from_utf8(&entry.pending_bytes[..valid]).unwrap_or(""));
+            match e.error_len() {
+              Some(len) => {
+                entry.snapshot.output.push('\u{FFFD}');
+                entry.pending_bytes.drain(..valid + len);
+              }
+              None => {
+                entry.pending_bytes.drain(..valid);
+                break;
+              }
+            }
+          }
+        }
+      }
       let over = entry.snapshot.output.len().saturating_sub(entry.byte_limit);
       if over > 0 {
         let mut cut = over;
@@ -96,6 +123,14 @@ impl TerminalStore {
     if let Ok(mut entries) = self.entries.lock()
       && let Some(entry) = entries.get_mut(id)
     {
+      // A process dying mid-character leaves a stub tail: flush it lossily.
+      if !entry.pending_bytes.is_empty() {
+        let tail = std::mem::take(&mut entry.pending_bytes);
+        entry
+          .snapshot
+          .output
+          .push_str(&String::from_utf8_lossy(&tail));
+      }
       entry.snapshot.exit_code = exit_code;
       entry.snapshot.signal = signal;
       entry.snapshot.finished = true;
@@ -116,6 +151,7 @@ impl TerminalStore {
           snapshot: TerminalSnapshot::default(),
           byte_limit: DEFAULT_OUTPUT_BYTE_LIMIT,
           kill_tx: None,
+          pending_bytes: Vec::new(),
         });
     }
     self.notify(id);
@@ -230,6 +266,7 @@ pub(crate) fn spawn_terminal(
           .map(|l| l as usize)
           .unwrap_or(DEFAULT_OUTPUT_BYTE_LIMIT),
         kill_tx: Some(kill_tx),
+        pending_bytes: Vec::new(),
       },
     );
   }
@@ -300,6 +337,72 @@ mod tests {
     let mut update = ToolCallUpdate::new(ToolCallId::new("t1"), ToolCallUpdateFields::new());
     update.meta = Some(meta.as_object().expect("object").clone());
     SessionUpdate::ToolCallUpdate(update)
+  }
+
+  fn insert_entry(store: &TerminalStore, id: &str, byte_limit: usize) {
+    store.entries.lock().unwrap().insert(
+      id.to_string(),
+      TerminalEntry {
+        snapshot: TerminalSnapshot::default(),
+        byte_limit,
+        kill_tx: None,
+        pending_bytes: Vec::new(),
+      },
+    );
+  }
+
+  #[test]
+  fn output_over_the_byte_limit_truncates_from_the_start_on_a_char_boundary() {
+    let (tx, _rx) = async_channel::unbounded();
+    let store = TerminalStore::new(tx);
+    insert_entry(&store, "t", 16);
+    // Multi-byte content: é is two bytes, the cut must never split one.
+    store.append_output("t", "aaaaaaaaaa".as_bytes());
+    store.append_output("t", "ééééé".as_bytes());
+    let snap = store.snapshot("t").expect("entry");
+    assert!(snap.truncated, "the cap was exceeded");
+    assert!(snap.output.len() <= 16, "capped, got {}", snap.output.len());
+    assert!(
+      snap.output.ends_with("ééééé"),
+      "the newest output survives, got {:?}",
+      snap.output
+    );
+  }
+
+  #[test]
+  fn a_character_split_across_chunks_is_reassembled() {
+    let (tx, _rx) = async_channel::unbounded();
+    let store = TerminalStore::new(tx);
+    insert_entry(&store, "t", 1024);
+    let bytes = "voilà".as_bytes();
+    // Split in the middle of the two-byte à.
+    let cut = bytes.len() - 1;
+    store.append_output("t", &bytes[..cut]);
+    assert_eq!(
+      store.snapshot("t").unwrap().output,
+      "voil",
+      "the incomplete tail is held back"
+    );
+    store.append_output("t", &bytes[cut..]);
+    assert_eq!(store.snapshot("t").unwrap().output, "voilà");
+    // Truly invalid bytes still surface as replacement glyphs.
+    store.append_output("t", &[0xFF, b'!']);
+    assert_eq!(store.snapshot("t").unwrap().output, "voilà\u{FFFD}!");
+  }
+
+  #[test]
+  fn finish_flushes_a_pending_incomplete_tail() {
+    let (tx, _rx) = async_channel::unbounded();
+    let store = TerminalStore::new(tx);
+    insert_entry(&store, "t", 1024);
+    let bytes = "é".as_bytes();
+    store.append_output("t", &bytes[..1]);
+    store.finish("t", Some(1), None, false);
+    let snap = store.snapshot("t").unwrap();
+    assert_eq!(
+      snap.output, "\u{FFFD}",
+      "the stub tail is not silently lost"
+    );
   }
 
   #[test]

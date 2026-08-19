@@ -923,3 +923,115 @@ async fn the_stop_button_kills_a_running_terminal_command(cx: &mut TestAppContex
     assert!(snap.finished && snap.killed, "the stop button killed it");
   });
 }
+
+#[gpui::test]
+async fn cancelling_after_an_accepted_steer_settles_the_turn_cleanly(cx: &mut TestAppContext) {
+  cx.executor().allow_parking();
+  set_backend_command_override(Some(env!("CARGO_BIN_EXE_stub_agent").to_string()));
+
+  cx.update(gpui_component::init);
+  let cwd = std::env::temp_dir();
+  let mut mounted = None;
+  let (_root, cx) = cx.add_window_view(|window, cx| {
+    let panel =
+      cx.new(|cx| AgentChatPanel::new(BackendKind::Claude, cwd.clone(), None, window, cx));
+    mounted = Some(panel.clone());
+    gpui_component::Root::new(panel, window, cx)
+  });
+  let panel = mounted.expect("agent chat panel");
+
+  cx.condition(&panel, |panel, _| panel.backend_ready()).await;
+
+  panel.update(cx, |panel, cx| {
+    assert!(panel.send_external_prompt("wait right here".to_string(), cx));
+  });
+  // Let the pre-steer prose land first, so the flush at steer time is stable.
+  cx.condition(&panel, |panel, _| {
+    panel.is_turn_in_flight() && panel.streaming_prose().contains("partial reply")
+  })
+  .await;
+
+  // The stub injects this steer but keeps the turn parked.
+  panel.update(cx, |panel, cx| {
+    assert!(panel.steer_prompt("hold this steer".to_string(), cx));
+  });
+  cx.condition(&panel, |panel, _| {
+    panel.streaming_prose().contains("steered reply")
+  })
+  .await;
+
+  panel.update(cx, |panel, cx| panel.cancel_turn(cx));
+  cx.condition(&panel, |panel, _| !panel.is_turn_in_flight())
+    .await;
+
+  panel.read_with(cx, |panel, _| {
+    let transcript = panel.transcript_texts();
+    assert!(
+      transcript.iter().any(|t| t == "hold this steer"),
+      "the accepted steer keeps its bubble, got {transcript:?}"
+    );
+    assert!(
+      transcript.iter().any(|t| t.contains("steered reply")),
+      "the streamed reply survives the cancel, got {transcript:?}"
+    );
+    assert!(
+      transcript.last().is_some_and(|t| t.starts_with("Stopped")),
+      "the cancel leaves its marker"
+    );
+    assert!(
+      panel.queued_prompt_texts().is_empty(),
+      "an accepted steer is not re-queued by the cancel"
+    );
+  });
+}
+
+#[gpui::test]
+async fn codex_style_terminal_metadata_streams_into_the_transcript(cx: &mut TestAppContext) {
+  cx.executor().allow_parking();
+  set_backend_command_override(Some(env!("CARGO_BIN_EXE_stub_agent").to_string()));
+
+  cx.update(gpui_component::init);
+  let cwd = std::env::temp_dir();
+  let mut mounted = None;
+  let (_root, cx) = cx.add_window_view(|window, cx| {
+    let panel =
+      cx.new(|cx| AgentChatPanel::new(BackendKind::Claude, cwd.clone(), None, window, cx));
+    mounted = Some(panel.clone());
+    gpui_component::Root::new(panel, window, cx)
+  });
+  let panel = mounted.expect("agent chat panel");
+
+  cx.condition(&panel, |panel, _| panel.backend_ready()).await;
+
+  panel.update(cx, |panel, cx| {
+    assert!(panel.send_external_prompt("codex run".to_string(), cx));
+  });
+  cx.condition(&panel, |panel, _| !panel.is_turn_in_flight())
+    .await;
+
+  panel.read_with(cx, |panel, _| {
+    assert_eq!(
+      panel.tool_terminal_ids(),
+      vec!["codex-item-1".to_string()],
+      "the agent-owned terminal id reaches the tool item"
+    );
+    let snap = panel
+      .terminal_snapshot("codex-item-1")
+      .expect("metadata fed the store");
+    assert_eq!(snap.output, "chunk one\nchunk two\n");
+    assert!(snap.finished);
+    assert_eq!(snap.exit_code, Some(0));
+    assert!(!snap.can_kill, "no stop control for agent-owned commands");
+  });
+
+  panel.update(cx, |_, cx| cx.notify());
+  cx.run_until_parked();
+  assert!(
+    cx.debug_bounds("agent-terminal-block").is_some(),
+    "the streamed output is painted in the tool row"
+  );
+  assert!(
+    cx.debug_bounds("agent-terminal-stop").is_none(),
+    "no stop button on a finished agent-owned command"
+  );
+}

@@ -148,6 +148,53 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
               )),
             ));
           }
+          // "codex" mimics codex-acp: the agent runs the command itself and
+          // streams output through tool-call metadata, not client terminals.
+          if prompt_contains("codex") {
+            let meta_info = serde_json::json!({
+              "terminal_info": { "terminal_id": "codex-item-1", "cwd": "/repo" }
+            });
+            let mut call = ToolCall::new(ToolCallId::new("stub-codex"), "Run command".to_string());
+            call.kind = ToolKind::Execute;
+            call.status = ToolCallStatus::InProgress;
+            call.content = vec![ToolCallContent::Terminal(
+              agent_client_protocol::schema::Terminal::new(
+                agent_client_protocol::schema::TerminalId::new("codex-item-1"),
+              ),
+            )];
+            call.meta = meta_info.as_object().cloned();
+            let _ = cx.send_notification(SessionNotification::new(
+              session_id.clone(),
+              SessionUpdate::ToolCall(call),
+            ));
+            let mut delta =
+              ToolCallUpdate::new(ToolCallId::new("stub-codex"), ToolCallUpdateFields::new());
+            delta.meta = serde_json::json!({
+              "terminal_output_delta": { "terminal_id": "codex-item-1", "data": "chunk one\n" }
+            })
+            .as_object()
+            .cloned();
+            let _ = cx.send_notification(SessionNotification::new(
+              session_id.clone(),
+              SessionUpdate::ToolCallUpdate(delta),
+            ));
+            let mut done = ToolCallUpdate::new(
+              ToolCallId::new("stub-codex"),
+              ToolCallUpdateFields::new().status(ToolCallStatus::Completed),
+            );
+            done.meta = serde_json::json!({
+              "terminal_output_delta": { "terminal_id": "codex-item-1", "data": "chunk two\n" },
+              "terminal_exit": { "terminal_id": "codex-item-1", "exit_code": 0, "signal": null }
+            })
+            .as_object()
+            .cloned();
+            let _ = cx.send_notification(SessionNotification::new(
+              session_id.clone(),
+              SessionUpdate::ToolCallUpdate(done),
+            ));
+            finish_turn(&cx, session_id);
+            return responder.respond(PromptResponse::new(StopReason::EndTurn));
+          }
           // "terminal" runs a real command through the client's terminal
           // capability; "sleep" makes it long-lived so kill can be exercised.
           if prompt_contains("terminal") {
@@ -322,12 +369,27 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
                 return responder
                   .respond_with_error(agent_client_protocol::Error::internal_error());
               }
-              let parked = {
-                let mut slot = waiting_for_steer.lock().expect("waiting slot");
-                slot.0.take()
-              };
-              let Some(parked) = parked else {
-                return responder.respond(serde_json::json!({ "outcome": "promptRequired" }));
+              // "hold" injects but leaves the turn parked, so clients can
+              // exercise a cancel arriving after an accepted steer.
+              let keep_parked = text.contains("hold");
+              let parked = if keep_parked {
+                let running = {
+                  let slot = waiting_for_steer.lock().expect("waiting slot");
+                  slot.0.is_some()
+                };
+                if !running {
+                  return responder.respond(serde_json::json!({ "outcome": "promptRequired" }));
+                }
+                None
+              } else {
+                let taken = {
+                  let mut slot = waiting_for_steer.lock().expect("waiting slot");
+                  slot.0.take()
+                };
+                if taken.is_none() {
+                  return responder.respond(serde_json::json!({ "outcome": "promptRequired" }));
+                }
+                taken
               };
               let _ = cx.send_notification(SessionNotification::new(
                 SessionId::new(std::sync::Arc::<str>::from(session_id.as_str())),
@@ -335,7 +397,9 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
                   ContentBlock::Text(TextContent::new("steered reply")),
                 )),
               ));
-              let _ = parked.respond(PromptResponse::new(StopReason::EndTurn));
+              if let Some(parked) = parked {
+                let _ = parked.respond(PromptResponse::new(StopReason::EndTurn));
+              }
               return responder.respond(serde_json::json!({ "outcome": "injected" }));
             }
             return responder.respond_with_error(agent_client_protocol::Error::method_not_found());
