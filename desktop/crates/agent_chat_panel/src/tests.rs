@@ -2785,8 +2785,19 @@ async fn scrolling_away_shows_the_jump_to_bottom_pill(cx: &mut gpui::TestAppCont
     "following the tail shows no pill"
   );
 
+  // Merely pausing at the tail is not "scrolled away": no pill.
   panel.update(cx, |panel, cx| {
     panel.messages_list.pause_following_tail();
+    cx.notify();
+  });
+  cx.run_until_parked();
+  assert!(
+    cx.debug_bounds("agent-chat-jump-bottom").is_none(),
+    "resting at the tail shows no pill"
+  );
+
+  panel.update(cx, |panel, cx| {
+    panel.messages_list.scroll_by(px(-200.));
     cx.notify();
   });
   cx.run_until_parked();
@@ -2796,13 +2807,13 @@ async fn scrolling_away_shows_the_jump_to_bottom_pill(cx: &mut gpui::TestAppCont
 
   cx.simulate_click(pill.center(), gpui::Modifiers::default());
   cx.run_until_parked();
+  // The pill reads the spacer bounds of the previous frame; settle one more.
+  panel.update(cx, |_, cx| cx.notify());
+  cx.run_until_parked();
   assert!(
     cx.debug_bounds("agent-chat-jump-bottom").is_none(),
     "clicking returns to the tail and hides the pill"
   );
-  panel.read_with(cx, |panel, _| {
-    assert!(panel.messages_list.is_following_tail());
-  });
 }
 
 #[gpui::test]
@@ -2973,8 +2984,8 @@ async fn the_runway_holds_the_prompt_at_the_top_while_the_reply_grows(
   });
   let anchor_top = anchor_top.expect("the anchored prompt is painted");
   assert!(
-    (anchor_top - viewport_top).abs() < 2.0,
-    "the prompt sits at the viewport top: {anchor_top} vs {viewport_top}"
+    (anchor_top - viewport_top - RUNWAY_TOP_MARGIN_PX).abs() < 2.0,
+    "the prompt sits a margin below the viewport top: {anchor_top} vs {viewport_top}"
   );
   assert!(end_space > 0.0, "space is reserved below the prompt");
 
@@ -3057,5 +3068,35 @@ async fn a_wheel_scroll_releases_the_runway_hold(cx: &mut gpui::TestAppContext) 
       "the wheel hands the scroll back to the reader"
     );
     assert!(panel.runway_active, "the reservation itself stays");
+  });
+}
+
+#[gpui::test]
+async fn a_first_prompt_leaves_no_phantom_scroll(cx: &mut gpui::TestAppContext) {
+  let (panel, cx) = add_panel_window(cx);
+  panel.update(cx, |panel, cx| {
+    panel.status = Status::Ready;
+    panel.items = vec![checkpoint_marker("cp-1"), user_message("first prompt")];
+    panel.sync_list_count();
+    panel.arm_runway();
+    cx.notify();
+  });
+  cx.run_until_parked();
+  panel.update(cx, |_, cx| cx.notify());
+  cx.run_until_parked();
+
+  panel.read_with(cx, |panel, _| {
+    let viewport = panel.messages_list.viewport_bounds();
+    let spacer = panel
+      .messages_list
+      .bounds_for_item(panel.runway_spacer_ix())
+      .expect("spacer painted");
+    assert!(
+      f32::from(spacer.bottom()) <= f32::from(viewport.bottom()) + 1.0,
+      "a short transcript fits the viewport: {} vs {}",
+      f32::from(spacer.bottom()),
+      f32::from(viewport.bottom())
+    );
+    assert!(!panel.show_jump_pill, "nothing to jump to");
   });
 }

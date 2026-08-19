@@ -901,6 +901,7 @@ impl AgentChatPanel {
 impl Render for AgentChatPanel {
   fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
     self.update_runway(window);
+    self.update_jump_pill();
     let theme = cx.theme().clone();
     let theme = &theme;
     // The composer box owns the focus ring now that the textarea is bare.
@@ -1187,49 +1188,49 @@ impl Render for AgentChatPanel {
                     gpui::linear_color_stop(theme.sidebar, 1.),
                   )),
               )
-              // Painted after the fade so the pill sits above it. A held
-              // runway is a deliberate position, not a scrolled-away state.
-              .when(
-                !self.messages_list.is_following_tail() && !self.runway_following,
-                |this| {
-                  this.child(
-                    div()
-                      .debug_selector(|| "agent-chat-jump-bottom".to_string())
-                      .absolute()
-                      .bottom(px(CONVERSATION_BOTTOM_FADE_PX - 24.))
-                      .left_0()
-                      .right_0()
-                      .flex()
-                      .justify_center()
-                      .child(
-                        Button::new("agent-chat-jump-bottom")
-                          .icon(IconName::ChevronDown)
-                          .small()
-                          .rounded(px(999.))
-                          .border_1()
-                          .border_color(theme.border)
-                          .bg(theme.background)
-                          .on_click(cx.listener(|panel, _, _, cx| {
-                            // With a runway active, "bottom" is the held
-                            // position: the click re-arms the hold.
-                            if panel.runway_active {
-                              panel.runway_following = true;
-                              if let Some(item) = panel.runway_anchor_item() {
-                                let ix = panel.list_ix_for_item(item);
-                                panel.messages_list.scroll_to(gpui::ListOffset {
-                                  item_ix: ix,
-                                  offset_in_item: px(0.),
-                                });
+              // Painted after the fade so the pill sits above it.
+              .when(self.show_jump_pill, |this| {
+                this.child(
+                  div()
+                    .debug_selector(|| "agent-chat-jump-bottom".to_string())
+                    .absolute()
+                    .bottom(px(CONVERSATION_BOTTOM_FADE_PX - 24.))
+                    .left_0()
+                    .right_0()
+                    .flex()
+                    .justify_center()
+                    .child(
+                      // Opaque backdrop: the ghost hover tint composes over it
+                      // instead of letting the transcript show through.
+                      div()
+                        .rounded(px(999.))
+                        .bg(theme.background)
+                        .border_1()
+                        .border_color(theme.border)
+                        .overflow_hidden()
+                        .child(
+                          Button::new("agent-chat-jump-bottom")
+                            .icon(IconName::ChevronDown)
+                            .small()
+                            .ghost()
+                            .rounded(px(999.))
+                            .on_click(cx.listener(|panel, _, _, cx| {
+                              // With a runway active, "bottom" is the held
+                              // position: the click re-arms the hold.
+                              if panel.runway_active {
+                                panel.runway_following = true;
+                                if let Some(item) = panel.runway_anchor_item() {
+                                  panel.hold_runway_anchor(item);
+                                }
+                              } else {
+                                panel.messages_list.scroll_to_end();
                               }
-                            } else {
-                              panel.messages_list.scroll_to_end();
-                            }
-                            cx.notify();
-                          })),
-                      ),
-                  )
-                },
-              )
+                              cx.notify();
+                            })),
+                        ),
+                    ),
+                )
+              })
               .vertical_scrollbar(&self.messages_list),
           )
         }

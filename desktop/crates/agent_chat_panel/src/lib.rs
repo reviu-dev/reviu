@@ -333,6 +333,9 @@ struct TurnFileStat {
 /// File rows shown on a collapsed turn summary; beyond this, an expander.
 const TURN_SUMMARY_COLLAPSED_FILES: usize = 3;
 
+/// Gap kept above the runway-held prompt so it never glues to the header.
+const RUNWAY_TOP_MARGIN_PX: f32 = 16.0;
+
 #[derive(serde::Serialize, serde::Deserialize)]
 #[serde(tag = "type")]
 enum PersistedChatItem {
@@ -532,6 +535,8 @@ pub struct AgentChatPanel {
   runway_active: bool,
   runway_end_space: f32,
   runway_following: bool,
+  /// Derived each frame; held through unmeasured frames to avoid blinking.
+  show_jump_pill: bool,
   /// Slash commands advertised by the agent, latest update wins.
   available_commands: Vec<agent_client_protocol::schema::AvailableCommand>,
   /// Item index of the user message being edited, with its inline editor.
@@ -622,6 +627,7 @@ impl AgentChatPanel {
       runway_active: false,
       runway_end_space: 0.0,
       runway_following: false,
+      show_jump_pill: false,
       available_commands: Vec::new(),
       editing_message: None,
       edit_input: None,
@@ -976,6 +982,7 @@ impl AgentChatPanel {
       runway_active: false,
       runway_end_space: 0.0,
       runway_following: false,
+      show_jump_pill: false,
       available_commands: Vec::new(),
       editing_message: None,
       edit_input: None,
@@ -1126,13 +1133,20 @@ impl AgentChatPanel {
     let measured = f32::from(self.messages_list.viewport_bounds().size.height);
     self.runway_end_space = if measured > 0.0 { measured } else { 600.0 };
     self.messages_list.set_follow_mode(gpui::FollowMode::Normal);
+    self.hold_runway_anchor(anchor_item);
+    let spacer = self.runway_spacer_ix();
+    self.mark_item_changed_at(spacer);
+  }
+
+  /// Pins the anchor a small margin below the viewport top; the clamp at the
+  /// list start keeps a short transcript entirely visible (no phantom scroll).
+  fn hold_runway_anchor(&mut self, anchor_item: usize) {
     let anchor_ix = self.list_ix_for_item(anchor_item);
     self.messages_list.scroll_to(gpui::ListOffset {
       item_ix: anchor_ix,
       offset_in_item: px(0.),
     });
-    let spacer = self.runway_spacer_ix();
-    self.mark_item_changed_at(spacer);
+    self.messages_list.scroll_by(px(-RUNWAY_TOP_MARGIN_PX));
   }
 
   fn clear_runway(&mut self) {
@@ -1174,7 +1188,7 @@ impl AgentChatPanel {
       Some((last.bottom() - a.top()).max(px(0.)))
     });
     let end_space = match tail_height {
-      Some(height) => (viewport_height - height).max(px(0.)),
+      Some(height) => (viewport_height - px(RUNWAY_TOP_MARGIN_PX) - height).max(px(0.)),
       None => px(self.runway_end_space),
     };
     if end_space <= px(0.) {
@@ -1188,10 +1202,27 @@ impl AgentChatPanel {
       self.mark_item_changed_at(spacer_ix);
     }
     if self.runway_following {
-      self.messages_list.scroll_to(gpui::ListOffset {
-        item_ix: anchor_ix,
-        offset_in_item: px(0.),
-      });
+      self.hold_runway_anchor(anchor_item);
+    }
+  }
+
+  /// The jump pill shows only away from the tail. Unmeasured spacer bounds
+  /// (every stream commit remeasures it) mean unknown, not "away": hold the
+  /// previous answer instead of blinking at commit cadence.
+  fn update_jump_pill(&mut self) {
+    let visible = if self.messages_list.is_following_tail() || self.runway_following {
+      Some(false)
+    } else if self.messages_list.viewport_bounds().size.height <= px(0.) {
+      Some(false)
+    } else {
+      let viewport_bottom = self.messages_list.viewport_bounds().bottom();
+      self
+        .messages_list
+        .bounds_for_item(self.runway_spacer_ix())
+        .map(|b| b.bottom() > viewport_bottom + px(1.))
+    };
+    if let Some(visible) = visible {
+      self.show_jump_pill = visible;
     }
   }
 
