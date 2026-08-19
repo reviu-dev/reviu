@@ -599,6 +599,47 @@ mod tests {
   use std::path::Path;
 
   #[gpui::test]
+  async fn the_conversation_stays_visible_next_to_an_open_diff(cx: &mut TestAppContext) {
+    let repo = TempRepo::init("session-page-split-view");
+    commit_text_file(&repo.path, Path::new("README.md"), "v1\n", "initial");
+    std::fs::write(repo.path.join("README.md"), "v2\n").expect("update file");
+
+    let (page, cx) = add_session_page_window(repo.path.clone(), cx);
+    cx.run_until_parked();
+    assert!(
+      cx.debug_bounds("session-conversation-pane").is_some(),
+      "the conversation owns the center while no file is open"
+    );
+
+    page.update_in(cx, |page, window, cx| {
+      page.open_diff(PathBuf::from("README.md"), None, window, cx);
+    });
+    await_open_file(&page, cx).await;
+    page.update(cx, |_, cx| cx.notify());
+    cx.run_until_parked();
+
+    let conversation = cx
+      .debug_bounds("session-conversation-pane")
+      .expect("conversation still painted next to the diff");
+    let editor = cx
+      .debug_bounds("session-diff-editor")
+      .expect("diff editor painted");
+    assert!(
+      conversation.right() <= editor.left() + gpui::px(1.),
+      "conversation sits left of the diff: {conversation:?} vs {editor:?}"
+    );
+
+    page.update_in(cx, |page, window, cx| {
+      page.close_workspace_page_action(&CloseWorkspacePage, window, cx);
+    });
+    cx.run_until_parked();
+    assert!(
+      cx.debug_bounds("session-conversation-pane").is_some(),
+      "closing the file gives the conversation the full center back"
+    );
+  }
+
+  #[gpui::test]
   async fn open_diff_switches_center_and_escape_returns(cx: &mut TestAppContext) {
     let repo = TempRepo::init("session-page-open-diff");
     commit_text_file(&repo.path, Path::new("README.md"), "v1\n", "initial");

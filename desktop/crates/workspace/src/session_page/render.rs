@@ -245,9 +245,20 @@ impl SessionPage {
           .as_deref()
           .map(|path| path.to_string_lossy().into_owned())
           .unwrap_or_default();
+        // The conversation stays alongside the diff: reviewing while the
+        // agent streams is the whole point of the shell.
+        let split = ui::h_resizable("session-conversation-diff-split")
+          .child(
+            ui::resizable_panel()
+              .size(px(CONVERSATION_SPLIT_DEFAULT_WIDTH))
+              .size_range(px(CONVERSATION_SPLIT_MIN_WIDTH)..px(CONVERSATION_SPLIT_MAX_WIDTH))
+              .child(self.render_conversation(cx)),
+          )
+          .child(ui::resizable_panel().child(self.render_diff_view(window, cx)))
+          .into_any_element();
         (
           SharedString::from(format!("session-center-diff-{file}")),
-          self.render_diff_view(window, cx),
+          split,
         )
       }
     };
@@ -268,6 +279,7 @@ impl SessionPage {
   pub(super) fn render_conversation(&mut self, cx: &mut Context<Self>) -> AnyElement {
     let theme = cx.theme().clone();
     let mut container = div()
+      .debug_selector(|| "session-conversation-pane".to_string())
       .size_full()
       .min_w(px(0.0))
       .min_h_0()

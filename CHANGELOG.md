@@ -4,6 +4,10 @@ All notable changes to Reviu are documented here.
 
 ## 1.0.0
 
+### Read The Diff Without Losing The Conversation
+
+Opening a file no longer hides the conversation: the diff now opens beside it, with the conversation in a resizable column on the left. Watch the agent keep streaming while you review its edits, drag the divider to taste, and Escape still closes the file to give the conversation the full width back. The interactive rebase keeps the whole center, as before.
+
 ### Show The Agent A Screenshot
 
 Paste an image into the composer or drop one onto it and it stages as a thumbnail, removable with one click, then rides along with your next message. Dropping a regular file inserts it as an @ mention instead. Image attachments appear only when the connected agent actually accepts images.
