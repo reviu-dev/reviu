@@ -19,6 +19,8 @@ pub struct TerminalSnapshot {
   pub signal: Option<String>,
   pub finished: bool,
   pub killed: bool,
+  /// Whether a stop control makes sense: only processes this client owns.
+  pub can_kill: bool,
 }
 
 struct TerminalEntry {
@@ -98,9 +100,73 @@ impl TerminalStore {
       entry.snapshot.signal = signal;
       entry.snapshot.finished = true;
       entry.snapshot.killed = killed;
+      entry.snapshot.can_kill = false;
       entry.kill_tx = None;
     }
     self.notify(id);
+  }
+
+  /// An agent-owned terminal (e.g. codex runs commands itself and streams
+  /// them through `_meta`): tracked for display, but not killable here.
+  fn upsert_external(&self, id: &str) {
+    if let Ok(mut entries) = self.entries.lock() {
+      entries
+        .entry(id.to_string())
+        .or_insert_with(|| TerminalEntry {
+          snapshot: TerminalSnapshot::default(),
+          byte_limit: DEFAULT_OUTPUT_BYTE_LIMIT,
+          kill_tx: None,
+        });
+    }
+    self.notify(id);
+  }
+}
+
+/// Feeds the store from codex-style terminal metadata on tool call updates:
+/// `_meta.terminal_info` opens one, `terminal_output`/`terminal_output_delta`
+/// carry output, `terminal_exit` closes it.
+pub(crate) fn inspect_session_update(
+  store: &Arc<TerminalStore>,
+  update: &agent_client_protocol::schema::SessionUpdate,
+) {
+  use agent_client_protocol::schema::SessionUpdate;
+  let meta = match update {
+    SessionUpdate::ToolCall(call) => call.meta.as_ref(),
+    SessionUpdate::ToolCallUpdate(update) => update.meta.as_ref(),
+    _ => None,
+  };
+  let Some(meta) = meta else { return };
+  if let Some(id) = meta
+    .get("terminal_info")
+    .and_then(|v| v.get("terminal_id"))
+    .and_then(|v| v.as_str())
+  {
+    store.upsert_external(id);
+  }
+  for key in ["terminal_output_delta", "terminal_output"] {
+    if let Some(delta) = meta.get(key)
+      && let (Some(id), Some(data)) = (
+        delta.get("terminal_id").and_then(|v| v.as_str()),
+        delta.get("data").and_then(|v| v.as_str()),
+      )
+    {
+      store.upsert_external(id);
+      store.append_output(id, data.as_bytes());
+    }
+  }
+  if let Some(exit) = meta.get("terminal_exit")
+    && let Some(id) = exit.get("terminal_id").and_then(|v| v.as_str())
+  {
+    let exit_code = exit
+      .get("exit_code")
+      .and_then(|v| v.as_u64())
+      .map(|c| c as u32);
+    let signal = exit
+      .get("signal")
+      .and_then(|v| v.as_str())
+      .map(str::to_string);
+    store.upsert_external(id);
+    store.finish(id, exit_code, signal, false);
   }
 }
 
@@ -157,6 +223,7 @@ pub(crate) fn spawn_terminal(
       TerminalEntry {
         snapshot: TerminalSnapshot {
           command: display,
+          can_kill: true,
           ..Default::default()
         },
         byte_limit: output_byte_limit
@@ -220,4 +287,65 @@ pub(crate) fn spawn_terminal(
   .detach();
 
   Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+  use agent_client_protocol::schema::{
+    SessionUpdate, ToolCallId, ToolCallUpdate, ToolCallUpdateFields,
+  };
+
+  fn update_with_meta(meta: serde_json::Value) -> SessionUpdate {
+    let mut update = ToolCallUpdate::new(ToolCallId::new("t1"), ToolCallUpdateFields::new());
+    update.meta = Some(meta.as_object().expect("object").clone());
+    SessionUpdate::ToolCallUpdate(update)
+  }
+
+  #[test]
+  fn codex_meta_deltas_feed_an_external_terminal() {
+    let (tx, _rx) = async_channel::unbounded();
+    let store = TerminalStore::new(tx);
+
+    inspect_session_update(
+      &store,
+      &update_with_meta(serde_json::json!({
+        "terminal_info": { "terminal_id": "item-1", "cwd": "/repo" }
+      })),
+    );
+    inspect_session_update(
+      &store,
+      &update_with_meta(serde_json::json!({
+        "terminal_output_delta": { "terminal_id": "item-1", "data": "hello " }
+      })),
+    );
+    inspect_session_update(
+      &store,
+      &update_with_meta(serde_json::json!({
+        "terminal_output_delta": { "terminal_id": "item-1", "data": "world\n" },
+        "terminal_exit": { "terminal_id": "item-1", "exit_code": 2, "signal": null }
+      })),
+    );
+
+    let snap = store.snapshot("item-1").expect("tracked");
+    assert_eq!(snap.output, "hello world\n");
+    assert!(snap.finished);
+    assert_eq!(snap.exit_code, Some(2));
+    assert!(!snap.can_kill, "agent-owned commands offer no stop control");
+  }
+
+  #[test]
+  fn a_delta_for_an_unseen_terminal_creates_its_entry() {
+    let (tx, _rx) = async_channel::unbounded();
+    let store = TerminalStore::new(tx);
+    inspect_session_update(
+      &store,
+      &update_with_meta(serde_json::json!({
+        "terminal_output": { "terminal_id": "late", "data": "aggregated output" }
+      })),
+    );
+    let snap = store.snapshot("late").expect("created on the fly");
+    assert_eq!(snap.output, "aggregated output");
+    assert!(!snap.finished);
+  }
 }

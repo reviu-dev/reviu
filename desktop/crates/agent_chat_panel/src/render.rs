@@ -428,24 +428,26 @@ fn render_terminal_block(
           .text_color(theme.muted_foreground)
           .child("running"),
       )
-      .child(
-        div()
-          .debug_selector(|| "agent-terminal-stop".to_string())
-          .child({
-            let id = terminal_id.to_string();
-            Button::new(("agent-terminal-stop", item_id_base as usize + term_ix))
-              .icon(UiIconName::Stop)
-              .xsmall()
-              .ghost()
-              .tooltip("Stop this command")
-              .on_click(cx.listener(move |panel, _, _, cx| {
-                if let Some(store) = panel.terminal_store.as_ref() {
-                  store.kill(&id);
-                }
-                cx.notify();
-              }))
-          }),
-      )
+      .when(snap.can_kill, |this| {
+        this.child(
+          div()
+            .debug_selector(|| "agent-terminal-stop".to_string())
+            .child({
+              let id = terminal_id.to_string();
+              Button::new(("agent-terminal-stop", item_id_base as usize + term_ix))
+                .icon(UiIconName::Stop)
+                .xsmall()
+                .ghost()
+                .tooltip("Stop this command")
+                .on_click(cx.listener(move |panel, _, _, cx| {
+                  if let Some(store) = panel.terminal_store.as_ref() {
+                    store.kill(&id);
+                  }
+                  cx.notify();
+                }))
+            }),
+        )
+      })
       .into_any_element()
   } else if snap.killed {
     div()
@@ -502,7 +504,11 @@ fn render_terminal_block(
             .text_xs()
             .font_family("monospace")
             .text_color(theme.muted_foreground)
-            .child(format!("$ {}", snap.command)),
+            // Agent-owned terminals carry no command line; the tool header
+            // above already names the command.
+            .when(!snap.command.is_empty(), |this| {
+              this.child(format!("$ {}", snap.command))
+            }),
         )
         .child(status),
     )

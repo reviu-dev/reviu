@@ -835,10 +835,15 @@ async fn run_driver(
   // host already holds the transcript, so replayed content must not reach it.
   let replaying = Arc::new(std::sync::atomic::AtomicBool::new(false));
   let replaying_gate = replaying.clone();
+  let term_meta = terminal_store.clone();
   let result = Client
     .builder()
     .on_receive_notification(
       async move |notification: SessionNotification, _cx| {
+        // Codex-style agents run commands themselves and stream the output
+        // through tool-call metadata; feed it into the terminal store even
+        // during a replay, so reloaded conversations keep their output.
+        crate::terminal::inspect_session_update(&term_meta, &notification.update);
         if replaying_gate.load(Ordering::Relaxed) && is_replayable_content(&notification.update) {
           return Ok(());
         }
