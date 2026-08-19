@@ -36,6 +36,17 @@ pub(crate) fn extract_outputs(content: &[ToolCallContent]) -> Vec<crate::ToolOut
     .collect()
 }
 
+/// Terminal ids embedded in the tool call's content.
+pub(crate) fn extract_terminals(content: &[ToolCallContent]) -> Vec<String> {
+  content
+    .iter()
+    .filter_map(|c| match c {
+      ToolCallContent::Terminal(t) => Some(t.terminal_id.0.to_string()),
+      _ => None,
+    })
+    .collect()
+}
+
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub(crate) struct DiffLine {
   pub kind: DiffLineKind,

@@ -16,7 +16,7 @@ use std::sync::Arc;
 
 use crate::diff::{
   DiffLineKind, DiffSummary, InlineSpan, InlineSpanKind, MAX_DIFF_LINES_COLLAPSED,
-  MAX_TOOL_OUTPUT_LINES_COLLAPSED, extract_diffs, extract_outputs,
+  MAX_TOOL_OUTPUT_LINES_COLLAPSED, extract_diffs, extract_outputs, extract_terminals,
 };
 use crate::mention::{DiffMention, MentionCandidate, MentionTrigger, ResolvedMention};
 pub use crate::persistence::{ConversationMeta, state_dir_for_repo};
@@ -155,6 +155,9 @@ struct ToolCallView {
   diffs: Vec<DiffSummary>,
   #[serde(default)]
   outputs: Vec<ToolOutput>,
+  /// Ids of terminals embedded in this call; their live state is in the store.
+  #[serde(default)]
+  terminals: Vec<String>,
   /// Fingerprint of the content that produced diffs/outputs/spans; a re-sent
   /// call with identical content skips the diff and highlight recompute.
   #[serde(skip)]
@@ -530,6 +533,9 @@ pub struct AgentChatPanel {
   tool_group_pins: HashMap<ToolCallId, bool>,
   /// Permission requests are answered with their allow option automatically.
   auto_approve: bool,
+  /// Live terminals of the connected session, for rendering command output.
+  terminal_store: Option<Arc<agent_acp::TerminalStore>>,
+  _terminal_task: Option<Task<()>>,
   /// Runway: the sent prompt holds at the viewport top while the reply
   /// streams into reserved space below, instead of tail-scrolling.
   runway_active: bool,
@@ -624,6 +630,8 @@ impl AgentChatPanel {
       pending_md_state: None,
       tool_group_pins: loaded_pins,
       auto_approve: loaded_auto_approve,
+      terminal_store: None,
+      _terminal_task: None,
       runway_active: false,
       runway_end_space: 0.0,
       runway_following: false,
@@ -697,6 +705,8 @@ impl AgentChatPanel {
           let info = session.init_info().clone();
           let events = session.take_events();
           let permissions = session.take_permission_prompts();
+          let terminal_updates = session.take_terminal_updates();
+          let terminal_store = session.terminal_store();
           let session = Arc::new(session);
           let _ = this.update(cx, |panel, cx| {
             panel.session = Some(session.clone());
@@ -719,6 +729,10 @@ impl AgentChatPanel {
             }
             if let Some(rx) = permissions {
               panel.start_permission_forwarder(rx, cx);
+            }
+            panel.terminal_store = Some(terminal_store.clone());
+            if let Some(rx) = terminal_updates {
+              panel.start_terminal_forwarder(rx, cx);
             }
             if let Some(text) = panel.resubmit_after_connect.take() {
               panel.dispatch_prompt(text, cx);
@@ -851,6 +865,34 @@ impl AgentChatPanel {
       }
       _ => None,
     })
+  }
+
+  /// Terminal ids embedded in each tool item, oldest first.
+  #[cfg(any(test, feature = "test-support"))]
+  pub fn tool_terminal_ids(&self) -> Vec<String> {
+    self
+      .items
+      .iter()
+      .filter_map(|item| match item {
+        ChatItem::Tool(t) => Some(t.terminals.clone()),
+        _ => None,
+      })
+      .flatten()
+      .collect()
+  }
+
+  /// Live snapshot of one of the session's terminals.
+  #[cfg(any(test, feature = "test-support"))]
+  pub fn terminal_snapshot(&self, id: &str) -> Option<agent_acp::TerminalSnapshot> {
+    self.terminal_store.as_ref()?.snapshot(id)
+  }
+
+  /// Kill one of the session's terminals, as the stop button would.
+  #[cfg(any(test, feature = "test-support"))]
+  pub fn kill_terminal(&self, id: &str) {
+    if let Some(store) = self.terminal_store.as_ref() {
+      store.kill(id);
+    }
   }
 
   /// The prose still streaming into the current turn's buffer.
@@ -989,6 +1031,8 @@ impl AgentChatPanel {
       pending_md_state: None,
       tool_group_pins: HashMap::new(),
       auto_approve: false,
+      terminal_store: None,
+      _terminal_task: None,
       runway_active: false,
       runway_end_space: 0.0,
       runway_following: false,
@@ -2220,6 +2264,8 @@ impl AgentChatPanel {
           let info = session.init_info().clone();
           let events = session.take_events();
           let permissions = session.take_permission_prompts();
+          let terminal_updates = session.take_terminal_updates();
+          let terminal_store = session.terminal_store();
           let session = Arc::new(session);
           let _ = this.update(cx, |panel, cx| {
             panel.session = Some(session.clone());
@@ -2242,6 +2288,10 @@ impl AgentChatPanel {
             }
             if let Some(rx) = permissions {
               panel.start_permission_forwarder(rx, cx);
+            }
+            panel.terminal_store = Some(terminal_store.clone());
+            if let Some(rx) = terminal_updates {
+              panel.start_terminal_forwarder(rx, cx);
             }
             if let Some(text) = panel.resubmit_after_connect.take() {
               panel.dispatch_prompt(text, cx);

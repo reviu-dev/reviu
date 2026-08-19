@@ -8,6 +8,10 @@ All notable changes to Reviu are documented here.
 
 A new Auto-approve toggle in the composer answers the agent's permission requests for you, always picking the allow option, so long unattended runs stop parking on a question. Flipping it on also releases a request already waiting. Cards answered this way say "Auto-approved" so you can tell them apart later, a request with no allow option still waits for you, and the choice sticks with the conversation.
 
+### Watch Commands Run
+
+The agent's shell commands now run in terminals Reviu owns, and their output streams live into the conversation: a compact block under the tool step shows the command, the tail of its output as it arrives, and the exit code when it finishes (in red when it failed). A running command carries a stop button, so a hung build no longer holds the turn hostage.
+
 ### Steer The Turn, Don't Wait For It
 
 Cmd+Enter (Ctrl+Enter on Linux/Windows) now sends your message straight into the running turn instead of queueing it, so you can redirect the agent mid-flight: "actually, skip the tests" lands immediately. Queued messages gain a steer button to send them into the current turn too. If the agent refuses the injection, the message safely returns to the queue with a notice, and the turn keeps running. Plain Enter still queues, and outside a turn both keys just send.

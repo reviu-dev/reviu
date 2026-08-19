@@ -62,6 +62,28 @@ impl AgentChatPanel {
     self._permission_task = Some(task);
   }
 
+  /// Repaints the tool row embedding a terminal whenever its state changes.
+  pub(crate) fn start_terminal_forwarder(
+    &mut self,
+    rx: async_channel::Receiver<String>,
+    cx: &mut Context<Self>,
+  ) {
+    let task = cx.spawn(async move |this, cx| {
+      while let Ok(terminal_id) = rx.recv().await {
+        let _ = this.update(cx, |panel, cx| {
+          if let Some(item_idx) = panel.items.iter().position(|item| {
+            matches!(item, ChatItem::Tool(t) if t.terminals.iter().any(|id| id == &terminal_id))
+          }) {
+            let list_ix = panel.list_ix_for_item(item_idx);
+            panel.mark_item_changed_at(list_ix);
+          }
+          cx.notify();
+        });
+      }
+    });
+    self._terminal_task = Some(task);
+  }
+
   pub(crate) fn on_event(&mut self, event: AgentEvent, cx: &mut Context<Self>) {
     match event {
       AgentEvent::AgentMessageChunk(chunk) => {

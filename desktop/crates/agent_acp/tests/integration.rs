@@ -120,3 +120,72 @@ fn a_steer_prompt_joins_the_parked_turn() {
     assert!(matches!(main_stop, StopReason::EndTurn));
   });
 }
+
+#[test]
+fn a_terminal_command_streams_output_and_exit_code_into_the_store() {
+  smol::block_on(async {
+    let mut session = spawn_stub_session().await;
+    if let Some(events) = session.take_events() {
+      smol::spawn(async move { while events.recv().await.is_ok() {} }).detach();
+    }
+    let updates = session.take_terminal_updates().expect("updates channel");
+    let store = session.terminal_store();
+
+    let stop = session
+      .send_prompt("run a terminal command")
+      .await
+      .expect("prompt");
+    assert!(matches!(stop, StopReason::EndTurn));
+
+    // At least one update fired for the terminal's lifecycle.
+    let id = updates.recv().await.expect("a terminal update");
+    let snapshot = store.snapshot(&id).expect("snapshot survives release");
+    assert!(snapshot.finished, "the command ran to completion");
+    assert_eq!(snapshot.exit_code, Some(3));
+    assert!(
+      snapshot.output.contains("line one") && snapshot.output.contains("line two"),
+      "output streamed into the store, got {:?}",
+      snapshot.output
+    );
+    assert!(snapshot.command.contains("/bin/sh"));
+  });
+}
+
+#[test]
+fn killing_a_terminal_finishes_its_turn() {
+  smol::block_on(async {
+    let mut session = spawn_stub_session().await;
+    if let Some(events) = session.take_events() {
+      smol::spawn(async move { while events.recv().await.is_ok() {} }).detach();
+    }
+    let updates = session.take_terminal_updates().expect("updates channel");
+    let store = std::sync::Arc::new(session.terminal_store());
+    let session = std::sync::Arc::new(session);
+
+    let turn = {
+      let session = session.clone();
+      smol::spawn(async move { session.send_prompt("terminal sleep").await })
+    };
+
+    // Wait for the long-lived command to start, then kill it.
+    let id = loop {
+      let id = updates.recv().await.expect("a terminal update");
+      if let Some(snap) = store.snapshot(&id)
+        && snap.output.contains("started")
+        && !snap.finished
+      {
+        break id;
+      }
+    };
+    store.kill(&id);
+
+    let stop = turn.await.expect("turn resolves after kill");
+    assert!(matches!(stop, StopReason::EndTurn));
+    let snapshot = store.snapshot(&id).expect("snapshot kept");
+    assert!(snapshot.finished && snapshot.killed);
+    assert!(
+      snapshot.exit_code != Some(0),
+      "a killed command does not exit cleanly"
+    );
+  });
+}

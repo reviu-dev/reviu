@@ -96,6 +96,7 @@ pub(crate) fn upsert_tool_call_pure(
     if existing.content_fp != content_fp {
       existing.diffs = extract_diffs(&call.content, cwd);
       existing.outputs = extract_outputs(&call.content);
+      existing.terminals = extract_terminals(&call.content);
       existing.content_fp = content_fp;
       populate_syntax_spans(existing);
     }
@@ -109,6 +110,7 @@ pub(crate) fn upsert_tool_call_pure(
     locations,
     diffs: extract_diffs(&call.content, cwd),
     outputs: extract_outputs(&call.content),
+    terminals: extract_terminals(&call.content),
     content_fp,
   };
   populate_syntax_spans(&mut view);
@@ -146,6 +148,7 @@ pub(crate) fn apply_tool_call_update_pure(
     if view.content_fp != content_fp {
       view.diffs = extract_diffs(&content, cwd);
       view.outputs = extract_outputs(&content);
+      view.terminals = extract_terminals(&content);
       view.content_fp = content_fp;
       // Only fresh content is worth a re-highlight; a status flip is not.
       populate_syntax_spans(view);

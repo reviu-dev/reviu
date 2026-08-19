@@ -398,11 +398,136 @@ pub(crate) fn render_thought(
     .into_any_element()
 }
 
+/// One embedded terminal: command header, live output tail, exit state.
+fn render_terminal_block(
+  terminal_id: &str,
+  item_id_base: u64,
+  term_ix: usize,
+  terminal_store: Option<&std::sync::Arc<agent_acp::TerminalStore>>,
+  theme: &gpui_component::Theme,
+  cx: &mut Context<AgentChatPanel>,
+) -> gpui::AnyElement {
+  const TERMINAL_TAIL_LINES: usize = 24;
+  let Some(snap) = terminal_store.and_then(|store| store.snapshot(terminal_id)) else {
+    // A reloaded conversation has no live store for old terminals.
+    return div()
+      .text_xs()
+      .italic()
+      .text_color(theme.muted_foreground)
+      .child("(terminal session ended)")
+      .into_any_element();
+  };
+
+  let status: gpui::AnyElement = if !snap.finished {
+    h_flex()
+      .gap_1()
+      .items_center()
+      .child(
+        div()
+          .text_xs()
+          .text_color(theme.muted_foreground)
+          .child("running"),
+      )
+      .child(
+        div()
+          .debug_selector(|| "agent-terminal-stop".to_string())
+          .child({
+            let id = terminal_id.to_string();
+            Button::new(("agent-terminal-stop", item_id_base as usize + term_ix))
+              .icon(UiIconName::Stop)
+              .xsmall()
+              .ghost()
+              .tooltip("Stop this command")
+              .on_click(cx.listener(move |panel, _, _, cx| {
+                if let Some(store) = panel.terminal_store.as_ref() {
+                  store.kill(&id);
+                }
+                cx.notify();
+              }))
+          }),
+      )
+      .into_any_element()
+  } else if snap.killed {
+    div()
+      .text_xs()
+      .text_color(theme.danger)
+      .child("killed")
+      .into_any_element()
+  } else {
+    let code = snap.exit_code.unwrap_or_default();
+    div()
+      .text_xs()
+      .text_color(if code == 0 {
+        theme.muted_foreground
+      } else {
+        theme.danger
+      })
+      .child(match (snap.exit_code, snap.signal.as_deref()) {
+        (Some(code), _) => format!("exit {code}"),
+        (None, Some(signal)) => format!("signal {signal}"),
+        (None, None) => "exited".to_string(),
+      })
+      .into_any_element()
+  };
+
+  // The tail follows the stream: the last lines are always the ones shown.
+  let lines: Vec<&str> = snap.output.lines().collect();
+  let start = lines.len().saturating_sub(TERMINAL_TAIL_LINES);
+  let clipped = start > 0 || snap.truncated;
+  let mut tail = String::new();
+  if clipped {
+    tail.push_str("…\n");
+  }
+  tail.push_str(&lines[start..].join("\n"));
+
+  v_flex()
+    .debug_selector(|| "agent-terminal-block".to_string())
+    .gap_0p5()
+    .rounded(px(6.))
+    .border_1()
+    .border_color(theme.border.opacity(0.6))
+    .overflow_hidden()
+    .child(
+      h_flex()
+        .gap_2()
+        .items_center()
+        .px_2()
+        .py_1()
+        .bg(theme.secondary.opacity(0.6))
+        .child(
+          div()
+            .flex_1()
+            .min_w_0()
+            .truncate()
+            .text_xs()
+            .font_family("monospace")
+            .text_color(theme.muted_foreground)
+            .child(format!("$ {}", snap.command)),
+        )
+        .child(status),
+    )
+    .when(!tail.is_empty(), |this| {
+      this.child(
+        div()
+          .px_2()
+          .py_1()
+          .text_xs()
+          .font_family("monospace")
+          .whitespace_nowrap()
+          .overflow_hidden()
+          .text_color(theme.foreground)
+          .children(tail.lines().map(|l| div().child(l.to_string()))),
+      )
+    })
+    .into_any_element()
+}
+
 pub(crate) fn render_tool_call(
   t: &ToolCallView,
   theme: &gpui_component::Theme,
   item_id_base: u64,
   registry: &selectable_text::SelectionRegistry,
+  terminal_store: Option<&std::sync::Arc<agent_acp::TerminalStore>>,
   cx: &mut Context<AgentChatPanel>,
 ) -> gpui::AnyElement {
   let title_color = match t.status {
@@ -496,6 +621,19 @@ pub(crate) fn render_tool_call(
         }))
         .children(detail_el),
     )
+    .when(!t.terminals.is_empty(), |mut this| {
+      for (term_ix, id) in t.terminals.iter().enumerate() {
+        this = this.child(render_terminal_block(
+          id,
+          item_id_base,
+          term_ix,
+          terminal_store,
+          theme,
+          cx,
+        ));
+      }
+      this
+    })
     .when(!t.diffs.is_empty(), |this| {
       let mut diff_col = v_flex().gap_2();
       for (diff_idx, d) in t.diffs.iter().enumerate() {
@@ -2121,6 +2259,7 @@ impl AgentChatPanel {
 
     let item = self.items[idx].clone();
     let registry = self.selection_registry.clone();
+    let terminal_store = self.terminal_store.clone();
     let item_id_base = (idx as u64) << 32;
     let element: gpui::AnyElement = match &item {
       ChatItem::Message(m) => match m.role {
@@ -2355,7 +2494,14 @@ impl AgentChatPanel {
               v_flex()
                 .gap_1()
                 .child(header)
-                .child(render_tool_call(t, theme, item_id_base, &registry, cx))
+                .child(render_tool_call(
+                  t,
+                  theme,
+                  item_id_base,
+                  &registry,
+                  terminal_store.as_ref(),
+                  cx,
+                ))
                 .into_any_element()
             } else {
               header
@@ -2364,7 +2510,14 @@ impl AgentChatPanel {
             timeline_row_with_color(content, theme, group_bullet, !expanded && group_is_last)
           } else if expanded {
             timeline_row_with_color(
-              render_tool_call(t, theme, item_id_base, &registry, cx),
+              render_tool_call(
+                t,
+                theme,
+                item_id_base,
+                &registry,
+                terminal_store.as_ref(),
+                cx,
+              ),
               theme,
               bullet,
               is_last_row,
@@ -2374,7 +2527,14 @@ impl AgentChatPanel {
           }
         } else {
           timeline_row_with_color(
-            render_tool_call(t, theme, item_id_base, &registry, cx),
+            render_tool_call(
+              t,
+              theme,
+              item_id_base,
+              &registry,
+              terminal_store.as_ref(),
+              cx,
+            ),
             theme,
             bullet,
             is_last_row,

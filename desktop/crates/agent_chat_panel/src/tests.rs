@@ -114,6 +114,7 @@ fn tool_index_tracks_positions_after_checkpoint_insertion_and_truncation() {
       locations: Vec::new(),
       diffs: Vec::new(),
       outputs: Vec::new(),
+      terminals: Vec::new(),
       content_fp: 0,
     })
   };
@@ -229,6 +230,7 @@ fn edit_tool(id: &str, diffs: Vec<(&str, u32, u32)>) -> ChatItem {
       })
       .collect(),
     outputs: Vec::new(),
+    terminals: Vec::new(),
     content_fp: 0,
   })
 }

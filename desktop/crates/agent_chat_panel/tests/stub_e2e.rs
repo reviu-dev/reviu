@@ -829,3 +829,97 @@ async fn a_refused_steer_re_queues_the_message(cx: &mut TestAppContext) {
   cx.condition(&panel, |panel, _| !panel.is_turn_in_flight())
     .await;
 }
+
+#[gpui::test]
+async fn a_terminal_tool_call_streams_output_into_the_transcript(cx: &mut TestAppContext) {
+  cx.executor().allow_parking();
+  set_backend_command_override(Some(env!("CARGO_BIN_EXE_stub_agent").to_string()));
+
+  cx.update(gpui_component::init);
+  let cwd = std::env::temp_dir();
+  let mut mounted = None;
+  let (_root, cx) = cx.add_window_view(|window, cx| {
+    let panel =
+      cx.new(|cx| AgentChatPanel::new(BackendKind::Claude, cwd.clone(), None, window, cx));
+    mounted = Some(panel.clone());
+    gpui_component::Root::new(panel, window, cx)
+  });
+  let panel = mounted.expect("agent chat panel");
+
+  cx.condition(&panel, |panel, _| panel.backend_ready()).await;
+
+  panel.update(cx, |panel, cx| {
+    assert!(panel.send_external_prompt("run a terminal command".to_string(), cx));
+  });
+  cx.condition(&panel, |panel, _| {
+    !panel.is_turn_in_flight() && !panel.tool_terminal_ids().is_empty()
+  })
+  .await;
+
+  let id = panel.read_with(cx, |panel, _| panel.tool_terminal_ids()[0].clone());
+  panel.read_with(cx, |panel, _| {
+    let snap = panel
+      .terminal_snapshot(&id)
+      .expect("the snapshot outlives the release");
+    assert!(snap.finished);
+    assert_eq!(snap.exit_code, Some(3));
+    assert!(
+      snap.output.contains("line one") && snap.output.contains("line two"),
+      "live output captured, got {:?}",
+      snap.output
+    );
+  });
+
+  // The embedded terminal paints with its command and output.
+  panel.update(cx, |_, cx| cx.notify());
+  cx.run_until_parked();
+  assert!(
+    cx.debug_bounds("agent-terminal-block").is_some(),
+    "the terminal block is painted in the tool row"
+  );
+}
+
+#[gpui::test]
+async fn the_stop_button_kills_a_running_terminal_command(cx: &mut TestAppContext) {
+  cx.executor().allow_parking();
+  set_backend_command_override(Some(env!("CARGO_BIN_EXE_stub_agent").to_string()));
+
+  cx.update(gpui_component::init);
+  let cwd = std::env::temp_dir();
+  let mut mounted = None;
+  let (_root, cx) = cx.add_window_view(|window, cx| {
+    let panel =
+      cx.new(|cx| AgentChatPanel::new(BackendKind::Claude, cwd.clone(), None, window, cx));
+    mounted = Some(panel.clone());
+    gpui_component::Root::new(panel, window, cx)
+  });
+  let panel = mounted.expect("agent chat panel");
+
+  cx.condition(&panel, |panel, _| panel.backend_ready()).await;
+
+  panel.update(cx, |panel, cx| {
+    assert!(panel.send_external_prompt("terminal sleep please".to_string(), cx));
+  });
+  // Wait for the long-lived command to actually start.
+  cx.condition(&panel, |panel, _| {
+    panel
+      .tool_terminal_ids()
+      .first()
+      .and_then(|id| panel.terminal_snapshot(id))
+      .is_some_and(|snap| snap.output.contains("started") && !snap.finished)
+  })
+  .await;
+
+  let stop = cx
+    .debug_bounds("agent-terminal-stop")
+    .expect("a running command offers its stop button");
+  cx.simulate_click(stop.center(), gpui::Modifiers::default());
+
+  cx.condition(&panel, |panel, _| !panel.is_turn_in_flight())
+    .await;
+  panel.read_with(cx, |panel, _| {
+    let id = panel.tool_terminal_ids()[0].clone();
+    let snap = panel.terminal_snapshot(&id).expect("snapshot kept");
+    assert!(snap.finished && snap.killed, "the stop button killed it");
+  });
+}

@@ -15,6 +15,7 @@ use async_process::Command;
 
 #[cfg(any(test, feature = "test-support"))]
 pub mod stub;
+mod terminal;
 use futures::channel::oneshot;
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -23,6 +24,7 @@ use std::sync::Arc;
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
+pub use terminal::{TerminalSnapshot, TerminalStore};
 
 pub use agent_client_protocol::schema::PermissionOptionKind;
 pub use agent_client_protocol::schema::SessionUpdate as AgentEvent;
@@ -332,6 +334,8 @@ pub struct AgentSession {
   permission_rx: Option<Receiver<PermissionPrompt>>,
   permission_replies: PermissionReplyMap,
   init_info: AgentInitInfo,
+  terminal_store: Arc<TerminalStore>,
+  terminal_updates_rx: Option<Receiver<String>>,
 }
 
 impl AgentSession {
@@ -378,6 +382,8 @@ impl AgentSession {
     let (event_tx, event_rx) = unbounded::<AgentEvent>();
     let (permission_tx, permission_rx) = unbounded::<PermissionPrompt>();
     let permission_replies: PermissionReplyMap = Arc::new(Mutex::new(HashMap::new()));
+    let (terminal_updates_tx, terminal_updates_rx) = unbounded::<String>();
+    let terminal_store = TerminalStore::new(terminal_updates_tx);
     let (ready_tx, ready_rx) = oneshot::channel::<Result<AgentInitInfo>>();
 
     if let Some(stderr) = stderr {
@@ -393,6 +399,7 @@ impl AgentSession {
       event_tx,
       permission_tx,
       permission_replies.clone(),
+      terminal_store.clone(),
       ready_tx,
       child,
     ));
@@ -416,7 +423,19 @@ impl AgentSession {
       permission_rx: Some(permission_rx),
       permission_replies,
       init_info,
+      terminal_store,
+      terminal_updates_rx: Some(terminal_updates_rx),
     })
+  }
+
+  /// Live terminals the agent runs through this session.
+  pub fn terminal_store(&self) -> Arc<TerminalStore> {
+    self.terminal_store.clone()
+  }
+
+  /// Channel carrying the id of every terminal whose state changed.
+  pub fn take_terminal_updates(&mut self) -> Option<Receiver<String>> {
+    self.terminal_updates_rx.take()
   }
 
   pub fn init_info(&self) -> &AgentInitInfo {
@@ -797,12 +816,20 @@ async fn run_driver(
   event_tx: Sender<AgentEvent>,
   permission_tx: Sender<PermissionPrompt>,
   permission_replies: PermissionReplyMap,
+  terminal_store: Arc<TerminalStore>,
   ready_tx: oneshot::Sender<Result<AgentInitInfo>>,
   mut child: async_process::Child,
 ) {
   let event_tx_inner = event_tx.clone();
   let fs_root_read = cwd.clone();
   let fs_root_write = cwd.clone();
+  let terminal_cwd = cwd.clone();
+  let terminal_counter = Arc::new(AtomicU64::new(1));
+  let term_create = terminal_store.clone();
+  let term_output = terminal_store.clone();
+  let term_wait = terminal_store.clone();
+  let term_kill = terminal_store.clone();
+  let term_release = terminal_store.clone();
   let permission_counter = Arc::new(AtomicU64::new(1));
   // `session/load` replays the whole session history as ordinary updates; the
   // host already holds the transcript, so replayed content must not reach it.
@@ -942,12 +969,108 @@ async fn run_driver(
       },
       agent_client_protocol::on_receive_request!(),
     )
+    .on_receive_request(
+      async move |request: agent_client_protocol::schema::CreateTerminalRequest,
+                  responder,
+                  _connection| {
+        let id = format!("term-{}", terminal_counter.fetch_add(1, Ordering::Relaxed));
+        let env = request.env.into_iter().map(|v| (v.name, v.value)).collect();
+        let cwd = request.cwd.unwrap_or_else(|| terminal_cwd.clone());
+        match crate::terminal::spawn_terminal(
+          &term_create,
+          id.clone(),
+          request.command,
+          request.args,
+          env,
+          cwd,
+          request.output_byte_limit,
+        ) {
+          Ok(()) => responder.respond(agent_client_protocol::schema::CreateTerminalResponse::new(
+            agent_client_protocol::schema::TerminalId::new(std::sync::Arc::<str>::from(
+              id.as_str(),
+            )),
+          )),
+          Err(e) => Err(
+            agent_client_protocol::Error::internal_error()
+              .data(serde_json::Value::String(e.to_string())),
+          ),
+        }
+      },
+      agent_client_protocol::on_receive_request!(),
+    )
+    .on_receive_request(
+      async move |request: agent_client_protocol::schema::TerminalOutputRequest,
+                  responder,
+                  _connection| {
+        match term_output.snapshot(request.terminal_id.0.as_ref()) {
+          Some(snap) => {
+            let mut response = agent_client_protocol::schema::TerminalOutputResponse::new(
+              snap.output,
+              snap.truncated,
+            );
+            if snap.finished {
+              response = response.exit_status(
+                agent_client_protocol::schema::TerminalExitStatus::new()
+                  .exit_code(snap.exit_code)
+                  .signal(snap.signal),
+              );
+            }
+            responder.respond(response)
+          }
+          None => Err(agent_client_protocol::Error::invalid_params()),
+        }
+      },
+      agent_client_protocol::on_receive_request!(),
+    )
+    .on_receive_request(
+      async move |request: agent_client_protocol::schema::WaitForTerminalExitRequest,
+                  responder,
+                  _connection| {
+        let id = request.terminal_id.0.to_string();
+        loop {
+          match term_wait.snapshot(&id) {
+            Some(snap) if snap.finished => {
+              return responder.respond(
+                agent_client_protocol::schema::WaitForTerminalExitResponse::new(
+                  agent_client_protocol::schema::TerminalExitStatus::new()
+                    .exit_code(snap.exit_code)
+                    .signal(snap.signal),
+                ),
+              );
+            }
+            Some(_) => smol::Timer::after(Duration::from_millis(30)).await,
+            None => return Err(agent_client_protocol::Error::invalid_params()),
+          };
+        }
+      },
+      agent_client_protocol::on_receive_request!(),
+    )
+    .on_receive_request(
+      async move |request: agent_client_protocol::schema::KillTerminalRequest,
+                  responder,
+                  _connection| {
+        term_kill.kill(request.terminal_id.0.as_ref());
+        responder.respond(agent_client_protocol::schema::KillTerminalResponse::new())
+      },
+      agent_client_protocol::on_receive_request!(),
+    )
+    .on_receive_request(
+      async move |request: agent_client_protocol::schema::ReleaseTerminalRequest,
+                  responder,
+                  _connection| {
+        term_release.release(request.terminal_id.0.as_ref());
+        responder.respond(agent_client_protocol::schema::ReleaseTerminalResponse::new())
+      },
+      agent_client_protocol::on_receive_request!(),
+    )
     .connect_with(transport, |connection: ConnectionTo<Agent>| async move {
-      let capabilities = ClientCapabilities::new().fs(
-        FileSystemCapabilities::new()
-          .read_text_file(true)
-          .write_text_file(true),
-      );
+      let capabilities = ClientCapabilities::new()
+        .fs(
+          FileSystemCapabilities::new()
+            .read_text_file(true)
+            .write_text_file(true),
+        )
+        .terminal(true);
       let init = connection
         .send_request(InitializeRequest::new(ProtocolVersion::V1).client_capabilities(capabilities))
         .block_task()

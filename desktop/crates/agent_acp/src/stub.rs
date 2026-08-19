@@ -148,6 +148,84 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
               )),
             ));
           }
+          // "terminal" runs a real command through the client's terminal
+          // capability; "sleep" makes it long-lived so kill can be exercised.
+          if prompt_contains("terminal") {
+            let shell_cmd = if prompt_contains("sleep") {
+              "echo started; sleep 30".to_string()
+            } else {
+              "printf 'line one\\nline two\\n'; exit 3".to_string()
+            };
+            let cx = cx.clone();
+            let session_id = session_id.clone();
+            // Awaiting inside the handler would park the connection's task
+            // queue; the whole terminal round-trip runs as its own task.
+            smol::spawn(async move {
+              let created = cx
+                .send_request(
+                  agent_client_protocol::schema::CreateTerminalRequest::new(
+                    session_id.clone(),
+                    "/bin/sh",
+                  )
+                  .args(vec!["-c".to_string(), shell_cmd]),
+                )
+                .block_task()
+                .await;
+              let Ok(created) = created else {
+                let _ =
+                  responder.respond_with_error(agent_client_protocol::Error::internal_error());
+                return;
+              };
+              let terminal_id = created.terminal_id.clone();
+              let mut call =
+                ToolCall::new(ToolCallId::new("stub-terminal"), "Run command".to_string());
+              call.kind = ToolKind::Execute;
+              call.status = ToolCallStatus::InProgress;
+              call.content = vec![ToolCallContent::Terminal(
+                agent_client_protocol::schema::Terminal::new(terminal_id.clone()),
+              )];
+              let _ = cx.send_notification(SessionNotification::new(
+                session_id.clone(),
+                SessionUpdate::ToolCall(call),
+              ));
+              let exit = cx
+                .send_request(
+                  agent_client_protocol::schema::WaitForTerminalExitRequest::new(
+                    session_id.clone(),
+                    terminal_id.clone(),
+                  ),
+                )
+                .block_task()
+                .await;
+              let failed = match &exit {
+                Ok(response) => response.exit_status.exit_code != Some(0),
+                Err(_) => true,
+              };
+              let _ = cx
+                .send_request(agent_client_protocol::schema::ReleaseTerminalRequest::new(
+                  session_id.clone(),
+                  terminal_id.clone(),
+                ))
+                .block_task()
+                .await;
+              let fields = ToolCallUpdateFields::new().status(if failed {
+                ToolCallStatus::Failed
+              } else {
+                ToolCallStatus::Completed
+              });
+              let _ = cx.send_notification(SessionNotification::new(
+                session_id.clone(),
+                SessionUpdate::ToolCallUpdate(ToolCallUpdate::new(
+                  ToolCallId::new("stub-terminal"),
+                  fields,
+                )),
+              ));
+              finish_turn(&cx, session_id);
+              let _ = responder.respond(PromptResponse::new(StopReason::EndTurn));
+            })
+            .detach();
+            return Ok(());
+          }
           // "edit" streams an edit tool call carrying a diff, so clients can
           // exercise the per-turn edit summary.
           if prompt_contains("edit") {
