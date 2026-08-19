@@ -4,6 +4,10 @@ All notable changes to Reviu are documented here.
 
 ## 1.0.0
 
+### Approve For Me
+
+A new Auto-approve toggle in the composer answers the agent's permission requests for you, always picking the allow option, so long unattended runs stop parking on a question. Flipping it on also releases a request already waiting. Cards answered this way say "Auto-approved" so you can tell them apart later, a request with no allow option still waits for you, and the choice sticks with the conversation.
+
 ### A Receipt For Every Turn
 
 When the agent finishes a turn that touched files, the conversation now closes it with a summary card: how many files were edited, the added and removed line counts overall and per file. Each file row opens its diff, Review jumps straight into the diff view, and Undo reverts the turn's file changes while keeping the whole conversation, the card simply flips to "Undone". Undo is only offered on the latest turn, so it can never clobber work from the turns that came after. Rewinding both files and conversation stays available on the checkpoint divider and message editing. Long file lists fold behind a "Show more" toggle, and the card is part of the transcript, so it is still there when you come back.

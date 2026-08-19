@@ -585,3 +585,84 @@ async fn a_turn_with_edits_closes_on_an_aggregated_summary_card(cx: &mut TestApp
     assert_eq!(panel.turn_summary_rows().len(), 1);
   });
 }
+
+#[gpui::test]
+async fn auto_approve_answers_permissions_without_a_click(cx: &mut TestAppContext) {
+  cx.executor().allow_parking();
+  set_backend_command_override(Some(env!("CARGO_BIN_EXE_stub_agent").to_string()));
+
+  cx.update(gpui_component::init);
+  let cwd = std::env::temp_dir();
+  let mut mounted = None;
+  let (_root, cx) = cx.add_window_view(|window, cx| {
+    let panel =
+      cx.new(|cx| AgentChatPanel::new(BackendKind::Claude, cwd.clone(), None, window, cx));
+    mounted = Some(panel.clone());
+    gpui_component::Root::new(panel, window, cx)
+  });
+  let panel = mounted.expect("agent chat panel");
+
+  cx.condition(&panel, |panel, _| panel.backend_ready()).await;
+
+  panel.update(cx, |panel, cx| {
+    panel.toggle_auto_approve(cx);
+    assert!(panel.send_external_prompt("ask permission first".to_string(), cx));
+  });
+
+  // The turn completes with no human answer.
+  cx.condition(&panel, |panel, _| {
+    !panel.is_turn_in_flight() && panel.transcript_texts().len() >= 2
+  })
+  .await;
+
+  panel.read_with(cx, |panel, _| {
+    assert!(panel.pending_permission().is_none());
+    assert_eq!(
+      panel.permission_answers(),
+      vec![(Some("allow".to_string()), true)],
+      "the allow option was picked automatically"
+    );
+    assert_eq!(panel.transcript_texts()[1], "ack");
+  });
+}
+
+#[gpui::test]
+async fn enabling_auto_approve_answers_the_permission_already_waiting(cx: &mut TestAppContext) {
+  cx.executor().allow_parking();
+  set_backend_command_override(Some(env!("CARGO_BIN_EXE_stub_agent").to_string()));
+
+  cx.update(gpui_component::init);
+  let cwd = std::env::temp_dir();
+  let mut mounted = None;
+  let (_root, cx) = cx.add_window_view(|window, cx| {
+    let panel =
+      cx.new(|cx| AgentChatPanel::new(BackendKind::Claude, cwd.clone(), None, window, cx));
+    mounted = Some(panel.clone());
+    gpui_component::Root::new(panel, window, cx)
+  });
+  let panel = mounted.expect("agent chat panel");
+
+  cx.condition(&panel, |panel, _| panel.backend_ready()).await;
+
+  panel.update(cx, |panel, cx| {
+    assert!(panel.send_external_prompt("ask permission first".to_string(), cx));
+  });
+  cx.condition(&panel, |panel, _| panel.pending_permission().is_some())
+    .await;
+
+  // Flipping the toggle drains the parked prompt and the turn resumes.
+  panel.update(cx, |panel, cx| {
+    panel.toggle_auto_approve(cx);
+  });
+  cx.condition(&panel, |panel, _| {
+    !panel.is_turn_in_flight() && panel.transcript_texts().len() >= 2
+  })
+  .await;
+
+  panel.read_with(cx, |panel, _| {
+    assert_eq!(
+      panel.permission_answers(),
+      vec![(Some("allow".to_string()), true)]
+    );
+  });
+}

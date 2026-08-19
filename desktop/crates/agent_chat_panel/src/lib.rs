@@ -201,6 +201,9 @@ struct PermissionItem {
   prompt: PermissionPrompt,
   detail: PermissionDetail,
   resolved: Option<String>,
+  /// Answered by the auto-approve toggle, not by a click.
+  #[serde(default)]
+  auto: bool,
 }
 
 /// What the user is being asked to approve, extracted once when the prompt
@@ -369,6 +372,8 @@ struct PersistedConversation {
   /// Tool-group expand/collapse pins, keyed by the group's first tool id.
   #[serde(default)]
   group_pins: HashMap<String, bool>,
+  #[serde(default)]
+  auto_approve: bool,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -540,6 +545,8 @@ pub struct AgentChatPanel {
   pending_md_state: Option<gpui::Entity<gpui_component::text::TextViewState>>,
   /// Expand/collapse pins per tool group, keyed by the group's first tool id.
   tool_group_pins: HashMap<ToolCallId, bool>,
+  /// Permission requests are answered with their allow option automatically.
+  auto_approve: bool,
   /// Slash commands advertised by the agent, latest update wins.
   available_commands: Vec<agent_client_protocol::schema::AvailableCommand>,
   /// Item index of the user message being edited, with its inline editor.
@@ -592,7 +599,7 @@ impl AgentChatPanel {
     let backend = resolve_backend_config(backend_kind);
     let (input, input_sub) = Self::build_composer_input(window, cx);
 
-    let (current_conv, loaded_items, loaded_index, loaded_pins) = state_dir
+    let (current_conv, loaded_items, loaded_index, loaded_pins, loaded_auto_approve) = state_dir
       .as_deref()
       .and_then(load_active_conversation)
       .unwrap_or_else(|| {
@@ -601,6 +608,7 @@ impl AgentChatPanel {
           Vec::new(),
           HashMap::new(),
           HashMap::new(),
+          false,
         )
       });
 
@@ -625,6 +633,7 @@ impl AgentChatPanel {
       staged_images: Vec::new(),
       pending_md_state: None,
       tool_group_pins: loaded_pins,
+      auto_approve: loaded_auto_approve,
       available_commands: Vec::new(),
       editing_message: None,
       edit_input: None,
@@ -835,6 +844,19 @@ impl AgentChatPanel {
     })
   }
 
+  /// Every permission card's (resolved answer, answered automatically).
+  #[cfg(any(test, feature = "test-support"))]
+  pub fn permission_answers(&self) -> Vec<(Option<String>, bool)> {
+    self
+      .items
+      .iter()
+      .filter_map(|item| match item {
+        ChatItem::Permission(p) => Some((p.resolved.clone(), p.auto)),
+        _ => None,
+      })
+      .collect()
+  }
+
   /// The turn summary cards, oldest first: (path, added, removed) per file.
   #[cfg(any(test, feature = "test-support"))]
   pub fn turn_summary_rows(&self) -> Vec<Vec<(String, u32, u32)>> {
@@ -917,6 +939,7 @@ impl AgentChatPanel {
       staged_images: Vec::new(),
       pending_md_state: None,
       tool_group_pins: HashMap::new(),
+      auto_approve: false,
       available_commands: Vec::new(),
       editing_message: None,
       edit_input: None,
@@ -2100,20 +2123,61 @@ impl AgentChatPanel {
       while let Ok(prompt) = rx.recv().await {
         let _ = this.update(cx, |panel, cx| {
           let detail = permission_detail(&prompt.tool_call, &panel.cwd);
+          let prompt_id = prompt.id;
+          let auto_option = panel
+            .auto_approve
+            .then(|| auto_approve_option(&prompt.options))
+            .flatten();
+          let auto = auto_option.is_some();
           panel
             .items
             .push(ChatItem::Permission(Box::new(PermissionItem {
               prompt,
               detail,
               resolved: None,
+              auto,
             })));
           panel.sync_list_count();
-          cx.emit(AgentChatPanelEvent::PermissionRequested);
+          match auto_option {
+            Some(option_id) => panel.answer_permission(prompt_id, Some(option_id), cx),
+            // A prompt without an allow option still needs a human.
+            None => cx.emit(AgentChatPanelEvent::PermissionRequested),
+          }
           cx.notify();
         });
       }
     });
     self._permission_task = Some(task);
+  }
+
+  /// Flips auto-approve; enabling it also answers any permission already
+  /// waiting, so a parked turn resumes immediately.
+  pub fn toggle_auto_approve(&mut self, cx: &mut Context<Self>) {
+    self.auto_approve = !self.auto_approve;
+    if self.auto_approve {
+      let pending: Vec<(u64, Option<String>)> = self
+        .items
+        .iter()
+        .filter_map(|item| match item {
+          ChatItem::Permission(p) if p.resolved.is_none() => {
+            auto_approve_option(&p.prompt.options).map(|option| (p.prompt.id, Some(option)))
+          }
+          _ => None,
+        })
+        .collect();
+      for (prompt_id, option_id) in pending {
+        for item in self.items.iter_mut() {
+          if let ChatItem::Permission(p) = item
+            && p.prompt.id == prompt_id
+          {
+            p.auto = true;
+          }
+        }
+        self.answer_permission(prompt_id, option_id, cx);
+      }
+    }
+    self.persist_state();
+    cx.notify();
   }
 
   pub fn answer_permission(
@@ -3299,6 +3363,7 @@ impl AgentChatPanel {
     self.pending_thought.clear();
     self.end_turn();
     self.usage = None;
+    self.auto_approve = false;
     self.respawn_session(cx);
     self.sync_list_count();
     cx.notify();
@@ -3320,6 +3385,7 @@ impl AgentChatPanel {
       self.pending_thought.clear();
       self.end_turn();
       self.usage = None;
+      self.auto_approve = false;
       self.respawn_session(cx);
     }
     self.sync_list_count();
@@ -3332,13 +3398,14 @@ impl AgentChatPanel {
     };
     self.persist_state();
     let path = dir.join(format!("{id}.json"));
-    let Some((meta, items, index, pins)) = load_conversation_file(&path) else {
+    let Some((meta, items, index, pins, auto_approve)) = load_conversation_file(&path) else {
       return;
     };
     self.current_conv = meta;
     self.items = items;
     self.tool_index = index;
     self.tool_group_pins = pins;
+    self.auto_approve = auto_approve;
     self.pending_agent.clear();
     self.pending_md_state = None;
     self.pending_thought.clear();
@@ -3499,6 +3566,7 @@ impl AgentChatPanel {
         .iter()
         .map(|(id, expanded)| (id.0.to_string(), *expanded))
         .collect(),
+      auto_approve: self.auto_approve,
     };
     let conv_path = dir.join(format!("{}.json", self.current_conv.id));
     if let Ok(json) = serde_json::to_string(&conv) {
@@ -3630,6 +3698,7 @@ type LoadedConversation = (
   Vec<ChatItem>,
   HashMap<ToolCallId, usize>,
   HashMap<ToolCallId, bool>,
+  bool,
 );
 
 fn load_active_conversation(dir: &std::path::Path) -> Option<LoadedConversation> {
@@ -3674,7 +3743,7 @@ fn load_conversation_file(path: &std::path::Path) -> Option<LoadedConversation> 
     .into_iter()
     .map(|(id, expanded)| (ToolCallId::new(std::sync::Arc::from(id.as_str())), expanded))
     .collect();
-  Some((parsed.meta, items, index, pins))
+  Some((parsed.meta, items, index, pins, parsed.auto_approve))
 }
 
 fn list_conversations_in(dir: &std::path::Path) -> Vec<ConversationMeta> {
@@ -4776,6 +4845,19 @@ fn permission_option_is_destructive(kind: &PermissionOptionKind) -> bool {
   )
 }
 
+/// The option auto-approve picks: allow once first, then allow always.
+fn auto_approve_option(options: &[agent_acp::PermissionPromptOption]) -> Option<String> {
+  options
+    .iter()
+    .find(|o| matches!(o.kind, PermissionOptionKind::AllowOnce))
+    .or_else(|| {
+      options
+        .iter()
+        .find(|o| matches!(o.kind, PermissionOptionKind::AllowAlways))
+    })
+    .map(|o| o.option_id.clone())
+}
+
 fn render_permission(
   item: &PermissionItem,
   theme: &gpui_component::Theme,
@@ -4878,11 +4960,16 @@ fn render_permission(
       .find(|option| option.option_id == *option_id)
       .map(|option| option.label.clone())
       .unwrap_or_else(|| option_id.clone());
+    let answer = if item.auto {
+      format!("Auto-approved: {label}")
+    } else {
+      format!("Answered: {label}")
+    };
     card = card.child(
       div()
         .text_xs()
         .text_color(theme.muted_foreground)
-        .child(format!("Answered: {label}")),
+        .child(answer),
     );
     return card.into_any_element();
   }
@@ -5335,7 +5422,8 @@ impl Render for AgentChatPanel {
                           .flex_wrap()
                           .child(self.render_model_selector(cx))
                           .child(self.render_mode_selector(cx))
-                          .children(self.render_config_selector(cx)),
+                          .children(self.render_config_selector(cx))
+                          .child(self.render_auto_approve_toggle(cx)),
                       )
                       .child(if self.in_flight {
                         h_flex()
@@ -5536,6 +5624,27 @@ impl AgentChatPanel {
         }
         menu
       })
+      .into_any_element()
+  }
+
+  fn render_auto_approve_toggle(&self, cx: &mut Context<Self>) -> gpui::AnyElement {
+    let active = self.auto_approve;
+    div()
+      .debug_selector(|| "agent-chat-auto-approve".to_string())
+      .child(
+        Button::new("agent-chat-auto-approve")
+          .icon(UiIconName::CircleCheck)
+          .label("Auto-approve")
+          .xsmall()
+          .ghost()
+          .when(active, |this| this.text_color(cx.theme().primary))
+          .tooltip(if active {
+            "Permission requests are approved automatically"
+          } else {
+            "Approve permission requests automatically"
+          })
+          .on_click(cx.listener(|panel, _, _, cx| panel.toggle_auto_approve(cx))),
+      )
       .into_any_element()
   }
 
@@ -6278,6 +6387,46 @@ mod tests {
   }
 
   #[test]
+  fn auto_approve_picks_allow_once_then_allow_always_and_never_reject() {
+    let opt = |id: &str, kind: PermissionOptionKind| PermissionPromptOption {
+      option_id: id.into(),
+      label: id.into(),
+      kind,
+    };
+    let mixed = vec![
+      opt("reject", PermissionOptionKind::RejectOnce),
+      opt("always", PermissionOptionKind::AllowAlways),
+      opt("once", PermissionOptionKind::AllowOnce),
+    ];
+    assert_eq!(auto_approve_option(&mixed), Some("once".to_string()));
+    let always_only = vec![
+      opt("reject", PermissionOptionKind::RejectOnce),
+      opt("always", PermissionOptionKind::AllowAlways),
+    ];
+    assert_eq!(
+      auto_approve_option(&always_only),
+      Some("always".to_string())
+    );
+    let reject_only = vec![opt("reject", PermissionOptionKind::RejectAlways)];
+    assert_eq!(auto_approve_option(&reject_only), None);
+  }
+
+  #[gpui::test]
+  async fn the_auto_approve_flag_survives_a_conversation_reload(cx: &mut gpui::TestAppContext) {
+    let dir = temp_dir("agent-auto-approve");
+    let (panel, cx) = add_panel_window(cx);
+    panel.update(cx, |panel, cx| {
+      panel.state_dir = Some(dir.clone());
+      panel.items = vec![user_message("hi")];
+      panel.toggle_auto_approve(cx);
+    });
+    let conv_id = panel.read_with(cx, |panel, _| panel.current_conv.id.clone());
+    let (_, _, _, _, auto_approve) =
+      load_conversation_file(&dir.join(format!("{conv_id}.json"))).expect("reloads");
+    assert!(auto_approve, "the toggle persists with the conversation");
+  }
+
+  #[test]
   fn turn_summary_survives_persistence_roundtrip_collapsed() {
     let view = TurnSummaryView {
       files: vec![TurnFileStat {
@@ -6652,6 +6801,7 @@ mod tests {
           image_data: Vec::new(),
         })],
         group_pins: HashMap::new(),
+        auto_approve: false,
       };
       std::fs::write(
         dir.join(format!("{id}.json")),
@@ -7207,6 +7357,7 @@ mod tests {
           },
           detail,
           resolved: None,
+          auto: false,
         })),
       ];
       panel.sync_list_count();
@@ -7634,6 +7785,7 @@ mod tests {
           },
           detail,
           resolved: None,
+          auto: false,
         })),
       ];
       panel.persist_state();
@@ -7641,7 +7793,7 @@ mod tests {
     });
 
     let conv_id = panel.read_with(cx, |panel, _| panel.current_conv.id.clone());
-    let (_, items, _, _) =
+    let (_, items, _, _, _) =
       load_conversation_file(&dir.join(format!("{conv_id}.json"))).expect("reloads");
     let ChatItem::Permission(p) = &items[1] else {
       panic!("permission persisted, got {:?}", item_kinds(&items));
@@ -7665,7 +7817,7 @@ mod tests {
       panel.persist_state();
       cx.notify();
     });
-    let (_, items, _, _) =
+    let (_, items, _, _, _) =
       load_conversation_file(&dir.join(format!("{conv_id}.json"))).expect("reloads");
     let ChatItem::Permission(p) = &items[1] else {
       unreachable!()
@@ -8304,7 +8456,7 @@ mod tests {
       panel.toggle_tool_group(1, cx);
     });
     let conv_id = panel.read_with(cx, |panel, _| panel.current_conv.id.clone());
-    let (_, _, _, pins) =
+    let (_, _, _, pins, _) =
       load_conversation_file(&dir.join(format!("{conv_id}.json"))).expect("reloads");
     assert_eq!(pins.len(), 1);
     assert!(
