@@ -670,3 +670,54 @@ async fn enabling_auto_approve_answers_the_permission_already_waiting(cx: &mut T
     );
   });
 }
+
+#[gpui::test]
+async fn a_sent_prompt_holds_at_the_viewport_top_through_the_turn(cx: &mut TestAppContext) {
+  cx.executor().allow_parking();
+  set_backend_command_override(Some(env!("CARGO_BIN_EXE_stub_agent").to_string()));
+
+  cx.update(gpui_component::init);
+  let cwd = std::env::temp_dir();
+  let mut mounted = None;
+  let (_root, cx) = cx.add_window_view(|window, cx| {
+    let panel =
+      cx.new(|cx| AgentChatPanel::new(BackendKind::Claude, cwd.clone(), None, window, cx));
+    mounted = Some(panel.clone());
+    gpui_component::Root::new(panel, window, cx)
+  });
+  let panel = mounted.expect("agent chat panel");
+
+  cx.condition(&panel, |panel, _| panel.backend_ready()).await;
+
+  panel.update(cx, |panel, cx| {
+    assert!(panel.send_external_prompt("hello stub".to_string(), cx));
+  });
+  panel.read_with(cx, |panel, _| {
+    let (active, following, end_space) = panel.runway_state();
+    assert!(active && following, "the send arms the runway");
+    assert!(end_space > 0.0, "a provisional reservation is seeded");
+  });
+
+  cx.condition(&panel, |panel, _| {
+    !panel.is_turn_in_flight() && panel.transcript_texts().len() >= 2
+  })
+  .await;
+  // Settle a couple of frames so the reservation is trued up from bounds.
+  panel.update(cx, |_, cx| cx.notify());
+  cx.run_until_parked();
+  panel.update(cx, |_, cx| cx.notify());
+  cx.run_until_parked();
+
+  panel.read_with(cx, |panel, _| {
+    let (active, following, _) = panel.runway_state();
+    assert!(
+      active && following,
+      "a short reply leaves the hold in place after the turn"
+    );
+    let (anchor_top, viewport_top) = panel.runway_anchor_top().expect("anchor painted");
+    assert!(
+      (anchor_top - viewport_top).abs() < 2.0,
+      "the prompt rests at the viewport top: {anchor_top} vs {viewport_top}"
+    );
+  });
+}

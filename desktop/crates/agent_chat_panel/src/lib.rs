@@ -527,6 +527,11 @@ pub struct AgentChatPanel {
   tool_group_pins: HashMap<ToolCallId, bool>,
   /// Permission requests are answered with their allow option automatically.
   auto_approve: bool,
+  /// Runway: the sent prompt holds at the viewport top while the reply
+  /// streams into reserved space below, instead of tail-scrolling.
+  runway_active: bool,
+  runway_end_space: f32,
+  runway_following: bool,
   /// Slash commands advertised by the agent, latest update wins.
   available_commands: Vec<agent_client_protocol::schema::AvailableCommand>,
   /// Item index of the user message being edited, with its inline editor.
@@ -614,6 +619,9 @@ impl AgentChatPanel {
       pending_md_state: None,
       tool_group_pins: loaded_pins,
       auto_approve: loaded_auto_approve,
+      runway_active: false,
+      runway_end_space: 0.0,
+      runway_following: false,
       available_commands: Vec::new(),
       editing_message: None,
       edit_input: None,
@@ -724,9 +732,20 @@ impl AgentChatPanel {
       }
     });
     panel._connect_task = Some(task);
+    panel.install_runway_release(cx);
     panel.sync_list_count();
     panel.start_tick_task(cx);
     panel
+  }
+
+  /// A wheel scroll is the reader taking over: release the runway hold.
+  fn install_runway_release(&mut self, cx: &mut Context<Self>) {
+    let weak = cx.weak_entity();
+    self.messages_list.set_scroll_handler(move |_, _, cx| {
+      let _ = weak.update(cx, |panel, _| {
+        panel.runway_following = false;
+      });
+    });
   }
 
   /// Enter submits, Shift+Enter inserts a newline, Cmd/Ctrl+Enter submits.
@@ -822,6 +841,27 @@ impl AgentChatPanel {
       }
       _ => None,
     })
+  }
+
+  /// Runway state: (active, following, reserved space below the reply).
+  #[cfg(any(test, feature = "test-support"))]
+  pub fn runway_state(&self) -> (bool, bool, f32) {
+    (
+      self.runway_active,
+      self.runway_following,
+      self.runway_end_space,
+    )
+  }
+
+  /// Window-coordinate top of the runway anchor row and of the list viewport.
+  #[cfg(any(test, feature = "test-support"))]
+  pub fn runway_anchor_top(&self) -> Option<(f32, f32)> {
+    let anchor_ix = self.list_ix_for_item(self.runway_anchor_item()?);
+    let bounds = self.messages_list.bounds_for_item(anchor_ix)?;
+    Some((
+      f32::from(bounds.top()),
+      f32::from(self.messages_list.viewport_bounds().top()),
+    ))
   }
 
   /// Every permission card's (resolved answer, answered automatically).
@@ -933,6 +973,9 @@ impl AgentChatPanel {
       pending_md_state: None,
       tool_group_pins: HashMap::new(),
       auto_approve: false,
+      runway_active: false,
+      runway_end_space: 0.0,
+      runway_following: false,
       available_commands: Vec::new(),
       editing_message: None,
       edit_input: None,
@@ -970,6 +1013,7 @@ impl AgentChatPanel {
       _input_sub: Some(input_sub),
       show_conversation_controls: true,
     };
+    panel.install_runway_release(cx);
     panel.sync_list_count();
     panel
   }
@@ -1048,8 +1092,107 @@ impl AgentChatPanel {
     }
   }
 
+  /// One extra trailing row: the runway spacer, zero-height when inactive.
   fn total_list_items(&self) -> usize {
-    self.extras_before_count() + self.items.len() + self.extras_after_count()
+    self.extras_before_count() + self.items.len() + self.extras_after_count() + 1
+  }
+
+  fn runway_spacer_ix(&self) -> usize {
+    self.total_list_items() - 1
+  }
+
+  /// The prompt row the runway holds at the viewport top.
+  fn runway_anchor_item(&self) -> Option<usize> {
+    self.items.iter().rposition(|item| {
+      matches!(
+        item,
+        ChatItem::Message(ChatMessage {
+          role: ChatRole::User | ChatRole::ReviewExport,
+          ..
+        })
+      )
+    })
+  }
+
+  fn arm_runway(&mut self) {
+    let Some(anchor_item) = self.runway_anchor_item() else {
+      return;
+    };
+    self.runway_active = true;
+    self.runway_following = true;
+    // Provisional full-viewport reservation: the anchored rows have no
+    // measured bounds yet, and without scroll room past the tail the list
+    // clamps to its end for a frame. The first measured frame trues it up.
+    let measured = f32::from(self.messages_list.viewport_bounds().size.height);
+    self.runway_end_space = if measured > 0.0 { measured } else { 600.0 };
+    self.messages_list.set_follow_mode(gpui::FollowMode::Normal);
+    let anchor_ix = self.list_ix_for_item(anchor_item);
+    self.messages_list.scroll_to(gpui::ListOffset {
+      item_ix: anchor_ix,
+      offset_in_item: px(0.),
+    });
+    let spacer = self.runway_spacer_ix();
+    self.mark_item_changed_at(spacer);
+  }
+
+  fn clear_runway(&mut self) {
+    if !self.runway_active {
+      return;
+    }
+    self.runway_active = false;
+    self.runway_following = false;
+    self.runway_end_space = 0.0;
+    let spacer = self.runway_spacer_ix();
+    self.mark_item_changed_at(spacer);
+  }
+
+  /// Per-frame runway upkeep: size the reservation to what the turn has not
+  /// filled yet, and keep the anchor pinned while following.
+  fn update_runway(&mut self, window: &Window) {
+    if !self.runway_active {
+      return;
+    }
+    let Some(anchor_item) = self.runway_anchor_item() else {
+      self.clear_runway();
+      return;
+    };
+    let anchor_ix = self.list_ix_for_item(anchor_item);
+    let spacer_ix = self.runway_spacer_ix();
+    let viewport = self.messages_list.viewport_bounds();
+    let viewport_height = if viewport.size.height > px(0.) {
+      viewport.size.height
+    } else {
+      window.viewport_size().height
+    };
+    let anchor_bounds = self.messages_list.bounds_for_item(anchor_ix);
+    // Missing bounds mean unknown, not zero: every stream commit remeasures
+    // the tail rows, and a zero end space would snap the list to its end for
+    // one frame. Let the previous reservation stand through those frames.
+    let tail_height = anchor_bounds.and_then(|a| {
+      let last_content_ix = spacer_ix.checked_sub(1)?;
+      let last = self.messages_list.bounds_for_item(last_content_ix)?;
+      Some((last.bottom() - a.top()).max(px(0.)))
+    });
+    let end_space = match tail_height {
+      Some(height) => (viewport_height - height).max(px(0.)),
+      None => px(self.runway_end_space),
+    };
+    if end_space <= px(0.) {
+      // The reply outgrew the reservation: the runway has done its job and
+      // reading continues as plain scrolling.
+      self.clear_runway();
+      return;
+    }
+    if (f32::from(end_space) - self.runway_end_space).abs() > 0.5 {
+      self.runway_end_space = end_space.into();
+      self.mark_item_changed_at(spacer_ix);
+    }
+    if self.runway_following {
+      self.messages_list.scroll_to(gpui::ListOffset {
+        item_ix: anchor_ix,
+        offset_in_item: px(0.),
+      });
+    }
   }
 
   fn sync_list_count(&mut self) {
@@ -1059,18 +1202,22 @@ impl AgentChatPanel {
       return;
     }
     if new_count > old_count {
-      self
-        .messages_list
-        .splice(old_count..old_count, new_count - old_count);
+      // New rows go before the trailing runway spacer, so its measured
+      // height travels with it instead of landing on a content row.
+      let at = old_count.saturating_sub(1);
+      self.messages_list.splice(at..at, new_count - old_count);
     } else {
       self.messages_list.reset(new_count);
     }
   }
 
+  /// Remeasures the last content row (and the runway spacer behind it).
   fn mark_last_item_changed(&mut self) {
     let count = self.messages_list.item_count();
     if count > 0 {
-      self.messages_list.remeasure_items(count - 1..count);
+      self
+        .messages_list
+        .remeasure_items(count.saturating_sub(2)..count);
     }
   }
 
@@ -1788,6 +1935,7 @@ impl AgentChatPanel {
     self.pending_md_state = None;
     self.pending_thought.clear();
     self.end_turn();
+    self.clear_runway();
     self.persist_state();
     self.respawn_session(cx);
     self.sync_list_count();
@@ -1900,6 +2048,7 @@ impl AgentChatPanel {
     self.end_turn();
     self.usage = None;
     self.auto_approve = false;
+    self.clear_runway();
     self.respawn_session(cx);
     self.sync_list_count();
     cx.notify();
@@ -1922,6 +2071,7 @@ impl AgentChatPanel {
       self.end_turn();
       self.usage = None;
       self.auto_approve = false;
+      self.clear_runway();
       self.respawn_session(cx);
     }
     self.sync_list_count();
@@ -1942,6 +2092,7 @@ impl AgentChatPanel {
     self.tool_index = index;
     self.tool_group_pins = pins;
     self.auto_approve = auto_approve;
+    self.clear_runway();
     self.pending_agent.clear();
     self.pending_md_state = None;
     self.pending_thought.clear();

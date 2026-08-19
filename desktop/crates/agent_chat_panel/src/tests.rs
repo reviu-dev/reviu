@@ -1180,8 +1180,8 @@ async fn mounting_the_panel_spawns_no_agent_and_paints(cx: &mut gpui::TestAppCon
   panel.read_with(cx, |panel, _| {
     assert!(panel.session.is_none(), "no agent process was connected");
     assert!(panel._connect_task.is_none());
-    // Connecting shows the generating row and nothing else.
-    assert_eq!(panel.messages_list.item_count(), 1);
+    // Connecting shows the generating row, plus the runway spacer.
+    assert_eq!(panel.messages_list.item_count(), 2);
   });
 }
 
@@ -1203,7 +1203,8 @@ async fn a_missing_binary_paints_its_install_hint(cx: &mut gpui::TestAppContext)
     "the notice is painted"
   );
   panel.read_with(cx, |panel, _| {
-    assert_eq!(panel.messages_list.item_count(), 1);
+    // The notice row plus the runway spacer.
+    assert_eq!(panel.messages_list.item_count(), 2);
   });
 }
 
@@ -1219,8 +1220,9 @@ async fn a_loaded_conversation_renders_one_row_per_item(cx: &mut gpui::TestAppCo
   cx.run_until_parked();
 
   panel.read_with(cx, |panel, _| {
-    // Ready and idle: no generating row, one list row per message.
-    assert_eq!(panel.messages_list.item_count(), 2);
+    // Ready and idle: no generating row, one list row per message,
+    // plus the runway spacer.
+    assert_eq!(panel.messages_list.item_count(), 3);
   });
 }
 
@@ -2930,5 +2932,130 @@ async fn shift_enter_inserts_a_newline_without_submitting(cx: &mut gpui::TestApp
     assert_eq!(panel.input.read(cx).value(), "line one\nline two");
     assert!(panel.items.is_empty(), "no prompt was recorded");
     assert!(!panel.in_flight);
+  });
+}
+
+#[gpui::test]
+async fn the_runway_holds_the_prompt_at_the_top_while_the_reply_grows(
+  cx: &mut gpui::TestAppContext,
+) {
+  let (panel, cx) = add_panel_window(cx);
+  panel.update(cx, |panel, cx| {
+    panel.status = Status::Ready;
+    // Enough history to make the list scrollable past one viewport.
+    panel.items = (0..30)
+      .flat_map(|i| {
+        vec![
+          user_message(&format!("question {i}")),
+          agent_message(&format!("a long answer {i}\nwith\nseveral\nlines")),
+        ]
+      })
+      .collect();
+    panel.items.push(user_message("the runway prompt"));
+    panel.sync_list_count();
+    panel.arm_runway();
+    cx.notify();
+  });
+  cx.run_until_parked();
+  // Two frames: the first paint measures, the next one trues up the spacer.
+  panel.update(cx, |_, cx| cx.notify());
+  cx.run_until_parked();
+
+  let (anchor_top, viewport_top, end_space) = panel.read_with(cx, |panel, _| {
+    let anchor_ix = panel.list_ix_for_item(panel.runway_anchor_item().unwrap());
+    let bounds = panel.messages_list.bounds_for_item(anchor_ix);
+    let viewport = panel.messages_list.viewport_bounds();
+    (
+      bounds.map(|b| f32::from(b.top())),
+      f32::from(viewport.top()),
+      panel.runway_end_space,
+    )
+  });
+  let anchor_top = anchor_top.expect("the anchored prompt is painted");
+  assert!(
+    (anchor_top - viewport_top).abs() < 2.0,
+    "the prompt sits at the viewport top: {anchor_top} vs {viewport_top}"
+  );
+  assert!(end_space > 0.0, "space is reserved below the prompt");
+
+  // The streaming reply eats the reservation without moving the prompt.
+  panel.update(cx, |panel, cx| {
+    panel.items.push(agent_message("the reply starts\nhere"));
+    panel.sync_list_count();
+    cx.notify();
+  });
+  cx.run_until_parked();
+  panel.update(cx, |_, cx| cx.notify());
+  cx.run_until_parked();
+  let (anchor_top_after, shrunk) = panel.read_with(cx, |panel, _| {
+    let anchor_ix = panel.list_ix_for_item(panel.runway_anchor_item().unwrap());
+    let bounds = panel.messages_list.bounds_for_item(anchor_ix);
+    (bounds.map(|b| f32::from(b.top())), panel.runway_end_space)
+  });
+  assert_eq!(
+    anchor_top_after.map(|t| t.round()),
+    Some(anchor_top.round()),
+    "the prompt did not move as the reply grew"
+  );
+  assert!(
+    shrunk < end_space,
+    "the reservation shrank as the reply grew: {shrunk} vs {end_space}"
+  );
+
+  // A reply taller than the reservation retires the runway.
+  panel.update(cx, |panel, cx| {
+    let tall: String = (0..200).map(|i| format!("line {i}\n")).collect();
+    panel.items.push(agent_message(&tall));
+    panel.sync_list_count();
+    cx.notify();
+  });
+  cx.run_until_parked();
+  panel.update(cx, |_, cx| cx.notify());
+  cx.run_until_parked();
+  panel.read_with(cx, |panel, _| {
+    assert!(
+      !panel.runway_active,
+      "an overflowing reply retires the runway"
+    );
+  });
+}
+
+#[gpui::test]
+async fn a_wheel_scroll_releases_the_runway_hold(cx: &mut gpui::TestAppContext) {
+  let (panel, cx) = add_panel_window(cx);
+  panel.update(cx, |panel, cx| {
+    panel.status = Status::Ready;
+    panel.items = (0..30)
+      .flat_map(|i| {
+        vec![
+          user_message(&format!("question {i}")),
+          agent_message(&format!("answer {i}\nlines\nlines")),
+        ]
+      })
+      .collect();
+    panel.items.push(user_message("held prompt"));
+    panel.sync_list_count();
+    panel.arm_runway();
+    cx.notify();
+  });
+  cx.run_until_parked();
+  panel.read_with(cx, |panel, _| assert!(panel.runway_following));
+
+  let center = panel.read_with(cx, |panel, _| {
+    let b = panel.messages_list.viewport_bounds();
+    gpui::point(b.center().x, b.center().y)
+  });
+  cx.simulate_event(gpui::ScrollWheelEvent {
+    position: center,
+    delta: gpui::ScrollDelta::Pixels(gpui::point(gpui::px(0.), gpui::px(60.))),
+    ..Default::default()
+  });
+  cx.run_until_parked();
+  panel.read_with(cx, |panel, _| {
+    assert!(
+      !panel.runway_following,
+      "the wheel hands the scroll back to the reader"
+    );
+    assert!(panel.runway_active, "the reservation itself stays");
   });
 }

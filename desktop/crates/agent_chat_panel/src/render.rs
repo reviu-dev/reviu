@@ -900,6 +900,7 @@ impl AgentChatPanel {
 
 impl Render for AgentChatPanel {
   fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    self.update_runway(window);
     let theme = cx.theme().clone();
     let theme = &theme;
     // The composer box owns the focus ring now that the textarea is bare.
@@ -1186,32 +1187,49 @@ impl Render for AgentChatPanel {
                     gpui::linear_color_stop(theme.sidebar, 1.),
                   )),
               )
-              // Painted after the fade so the pill sits above it.
-              .when(!self.messages_list.is_following_tail(), |this| {
-                this.child(
-                  div()
-                    .debug_selector(|| "agent-chat-jump-bottom".to_string())
-                    .absolute()
-                    .bottom(px(CONVERSATION_BOTTOM_FADE_PX - 24.))
-                    .left_0()
-                    .right_0()
-                    .flex()
-                    .justify_center()
-                    .child(
-                      Button::new("agent-chat-jump-bottom")
-                        .icon(IconName::ChevronDown)
-                        .small()
-                        .rounded(px(999.))
-                        .border_1()
-                        .border_color(theme.border)
-                        .bg(theme.background)
-                        .on_click(cx.listener(|panel, _, _, cx| {
-                          panel.messages_list.scroll_to_end();
-                          cx.notify();
-                        })),
-                    ),
-                )
-              })
+              // Painted after the fade so the pill sits above it. A held
+              // runway is a deliberate position, not a scrolled-away state.
+              .when(
+                !self.messages_list.is_following_tail() && !self.runway_following,
+                |this| {
+                  this.child(
+                    div()
+                      .debug_selector(|| "agent-chat-jump-bottom".to_string())
+                      .absolute()
+                      .bottom(px(CONVERSATION_BOTTOM_FADE_PX - 24.))
+                      .left_0()
+                      .right_0()
+                      .flex()
+                      .justify_center()
+                      .child(
+                        Button::new("agent-chat-jump-bottom")
+                          .icon(IconName::ChevronDown)
+                          .small()
+                          .rounded(px(999.))
+                          .border_1()
+                          .border_color(theme.border)
+                          .bg(theme.background)
+                          .on_click(cx.listener(|panel, _, _, cx| {
+                            // With a runway active, "bottom" is the held
+                            // position: the click re-arms the hold.
+                            if panel.runway_active {
+                              panel.runway_following = true;
+                              if let Some(item) = panel.runway_anchor_item() {
+                                let ix = panel.list_ix_for_item(item);
+                                panel.messages_list.scroll_to(gpui::ListOffset {
+                                  item_ix: ix,
+                                  offset_in_item: px(0.),
+                                });
+                              }
+                            } else {
+                              panel.messages_list.scroll_to_end();
+                            }
+                            cx.notify();
+                          })),
+                      ),
+                  )
+                },
+              )
               .vertical_scrollbar(&self.messages_list),
           )
         }
@@ -1729,7 +1747,14 @@ impl AgentChatPanel {
     cx: &mut Context<Self>,
   ) -> gpui::AnyElement {
     let extras_before = self.extras_before_kinds();
-    let element = if list_ix < extras_before.len() {
+    let element = if list_ix == self.runway_spacer_ix() {
+      let reserved = if self.runway_active {
+        self.runway_end_space
+      } else {
+        0.0
+      };
+      return div().h(px(reserved)).into_any_element();
+    } else if list_ix < extras_before.len() {
       self.render_extra_before(extras_before[list_ix], theme, cx)
     } else {
       let item_ix = list_ix - extras_before.len();
@@ -1752,9 +1777,9 @@ impl AgentChatPanel {
           .child(element),
       )
       .into_any_element();
-    // The last item clears the bottom fade so a fully scrolled transcript is not
-    // read through it.
-    let is_last = list_ix + 1 == self.total_list_items();
+    // The last content row (the runway spacer sits after it) clears the
+    // bottom fade so a fully scrolled transcript is not read through it.
+    let is_last = list_ix + 2 == self.total_list_items();
     div()
       .when(list_ix == 0, |this| this.pt_3())
       .when(is_last, |this| {

@@ -196,7 +196,7 @@ impl AgentChatPanel {
     self.start_turn(cx);
     self.persist_state();
     self.sync_list_count();
-    self.messages_list.set_follow_mode(gpui::FollowMode::Tail);
+    self.arm_runway();
     cx.notify();
 
     let cwd = self.cwd.clone();

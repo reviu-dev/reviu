@@ -8,6 +8,10 @@ All notable changes to Reviu are documented here.
 
 A new Auto-approve toggle in the composer answers the agent's permission requests for you, always picking the allow option, so long unattended runs stop parking on a question. Flipping it on also releases a request already waiting. Cards answered this way say "Auto-approved" so you can tell them apart later, a request with no allow option still waits for you, and the choice sticks with the conversation.
 
+### Your Prompt Stays Put
+
+Sending a message now pins it to the top of the conversation, and the reply streams into the space below it: nothing scrolls under your eyes anymore. Scroll the wheel and the hold lets go so you can read freely; the jump-to-bottom pill brings you back to the held position. Once a reply grows past the reserved space, reading continues as plain scrolling.
+
 ### The Turn Folds Into Its Card
 
 A finished turn now tucks its work away: the thinking, the tool steps and the in-between narration fold behind the turn's summary card, leaving only your question, the agent's final answer and the card itself. A "Worked for 2m 5s · 8 steps" row on the card tells you what happened and how long it took; click it to unfold the full timeline for inspection, click again to tidy it back up. Turns that edited nothing keep their usual compact grouping.
