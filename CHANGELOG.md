@@ -4,6 +4,10 @@ All notable changes to Reviu are documented here.
 
 ## 1.0.0
 
+### Show The Agent A Screenshot
+
+Paste an image into the composer or drop one onto it and it stages as a thumbnail, removable with one click, then rides along with your next message. Dropping a regular file inserts it as an @ mention instead. Image attachments appear only when the connected agent actually accepts images.
+
 ### Know When The Agent Needs You
 
 Working in another app while the agent runs? Reviu now shows a small popup in the corner of your screen when a turn finishes or when the agent waits on a permission, and clicking it brings you straight back. It only appears while the window is inactive, never over your work in Reviu itself, and a queued message running on its own never fires one. A switch in Settings under Agent turns it off.

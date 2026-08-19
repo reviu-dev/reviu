@@ -125,6 +125,44 @@ async fn a_permission_request_carries_its_command_and_resumes_on_answer(cx: &mut
 }
 
 #[gpui::test]
+async fn a_staged_image_reaches_the_agent_as_an_image_block(cx: &mut TestAppContext) {
+  cx.executor().allow_parking();
+  set_backend_command_override(Some(env!("CARGO_BIN_EXE_stub_agent").to_string()));
+
+  cx.update(gpui_component::init);
+  let cwd = std::env::temp_dir();
+  let mut mounted = None;
+  let (_root, cx) = cx.add_window_view(|window, cx| {
+    let panel =
+      cx.new(|cx| AgentChatPanel::new(BackendKind::Claude, cwd.clone(), None, window, cx));
+    mounted = Some(panel.clone());
+    gpui_component::Root::new(panel, window, cx)
+  });
+  let panel = mounted.expect("agent chat panel");
+
+  cx.condition(&panel, |panel, _| panel.backend_ready()).await;
+
+  panel.update(cx, |panel, cx| {
+    panel.stage_image_for_test(
+      gpui::Image::from_bytes(gpui::ImageFormat::Png, vec![1, 2, 3, 4]),
+      cx,
+    );
+    assert_eq!(panel.staged_image_count(), 1, "the stub advertises images");
+    assert!(panel.send_external_prompt("look at this".to_string(), cx));
+    assert_eq!(panel.staged_image_count(), 0, "sending drains the staging");
+  });
+
+  cx.condition(&panel, |panel, _| {
+    !panel.is_turn_in_flight()
+      && panel
+        .transcript_texts()
+        .iter()
+        .any(|t| t == "image received")
+  })
+  .await;
+}
+
+#[gpui::test]
 async fn cancelling_a_turn_leaves_a_stopped_marker(cx: &mut TestAppContext) {
   cx.executor().allow_parking();
   set_backend_command_override(Some(env!("CARGO_BIN_EXE_stub_agent").to_string()));

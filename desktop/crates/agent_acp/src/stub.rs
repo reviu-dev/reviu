@@ -63,7 +63,13 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
             InitializeResponse::new(req.protocol_version)
               // load_session advertised but not handled: session/load errors with
               // method_not_found, which exercises the fall-back-to-new-session path.
-              .agent_capabilities(AgentCapabilities::new().load_session(true))
+              .agent_capabilities(
+                AgentCapabilities::new()
+                  .load_session(true)
+                  .prompt_capabilities(
+                    agent_client_protocol::schema::PromptCapabilities::new().image(true),
+                  ),
+              )
               .agent_info(Implementation::new("stub-agent", "0.0.1")),
           )
         },
@@ -101,6 +107,20 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
               .iter()
               .any(|block| matches!(block, ContentBlock::Text(t) if t.text.contains(needle)))
           };
+          // An image block gets its own acknowledgement, for clients testing
+          // the attachment path.
+          if req
+            .prompt
+            .iter()
+            .any(|block| matches!(block, ContentBlock::Image(_)))
+          {
+            let _ = cx.send_notification(SessionNotification::new(
+              session_id.clone(),
+              SessionUpdate::AgentMessageChunk(agent_client_protocol::schema::ContentChunk::new(
+                ContentBlock::Text(TextContent::new("image received")),
+              )),
+            ));
+          }
           // "wait" streams a partial reply then parks the turn until the
           // client cancels it.
           if prompt_contains("wait") {

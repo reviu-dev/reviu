@@ -212,6 +212,8 @@ pub struct AgentInitInfo {
   pub version: Option<String>,
   pub auth_methods: Vec<AuthMethodInfo>,
   pub supports_load_session: bool,
+  /// Whether the agent accepts `ContentBlock::Image` in prompts.
+  pub supports_images: bool,
   pub session_id: Option<String>,
   pub available_modes: Vec<SessionMode>,
   pub current_mode_id: Option<SessionModeId>,
@@ -904,6 +906,7 @@ async fn run_driver(
           })
           .collect(),
         supports_load_session: init.agent_capabilities.load_session,
+        supports_images: init.agent_capabilities.prompt_capabilities.image,
         session_id: None,
         available_modes: Vec::new(),
         current_mode_id: None,

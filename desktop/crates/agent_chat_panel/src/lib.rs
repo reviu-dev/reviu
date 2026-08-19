@@ -481,6 +481,10 @@ pub struct AgentChatPanel {
   pending_thought: String,
   /// Messages typed during a turn, drained oldest-first when it ends cleanly.
   queued_prompts: Vec<String>,
+  /// Whether the connected agent accepts image blocks in prompts.
+  supports_images: bool,
+  /// Images staged for the next prompt (pasted or dropped).
+  staged_images: Vec<std::sync::Arc<gpui::Image>>,
   /// Incremental markdown state for the streaming reply: chunks append via
   /// push_str so a chunk costs O(delta), not a full document re-parse.
   pending_md_state: Option<gpui::Entity<gpui_component::text::TextViewState>>,
@@ -567,6 +571,8 @@ impl AgentChatPanel {
       pending_agent: String::new(),
       pending_thought: String::new(),
       queued_prompts: Vec::new(),
+      supports_images: false,
+      staged_images: Vec::new(),
       pending_md_state: None,
       tool_group_pins: loaded_pins,
       available_commands: Vec::new(),
@@ -642,6 +648,7 @@ impl AgentChatPanel {
           let _ = this.update(cx, |panel, cx| {
             panel.session = Some(session.clone());
             panel.status = Status::Ready;
+            panel.supports_images = info.supports_images;
             panel.agent_version = info.version;
             panel.auth_methods = info.auth_methods;
             panel.available_modes = info.available_modes;
@@ -718,6 +725,18 @@ impl AgentChatPanel {
   #[cfg(any(test, feature = "test-support"))]
   pub fn mark_disconnected_for_test(&mut self, cx: &mut Context<Self>) {
     self.on_agent_disconnected(cx);
+  }
+
+  /// Stage an image as a paste or drop would.
+  #[cfg(any(test, feature = "test-support"))]
+  pub fn stage_image_for_test(&mut self, image: gpui::Image, cx: &mut Context<Self>) {
+    self.stage_image(image, cx);
+  }
+
+  /// Number of images staged for the next prompt.
+  #[cfg(any(test, feature = "test-support"))]
+  pub fn staged_image_count(&self) -> usize {
+    self.staged_images.len()
   }
 
   /// The inline editor of the message being edited.
@@ -826,6 +845,8 @@ impl AgentChatPanel {
       pending_agent: String::new(),
       pending_thought: String::new(),
       queued_prompts: Vec::new(),
+      supports_images: false,
+      staged_images: Vec::new(),
       pending_md_state: None,
       tool_group_pins: HashMap::new(),
       available_commands: Vec::new(),
@@ -2535,6 +2556,76 @@ impl AgentChatPanel {
     }
   }
 
+  fn stage_image(&mut self, image: gpui::Image, cx: &mut Context<Self>) {
+    if !self.supports_images {
+      return;
+    }
+    self.staged_images.push(std::sync::Arc::new(image));
+    cx.notify();
+  }
+
+  fn remove_staged_image(&mut self, ix: usize, cx: &mut Context<Self>) {
+    if ix < self.staged_images.len() {
+      self.staged_images.remove(ix);
+      cx.notify();
+    }
+  }
+
+  /// Paste with an image on the clipboard stages it; text keeps the input's
+  /// own paste behavior.
+  fn intercept_paste(&mut self, cx: &mut Context<Self>) {
+    if !self.supports_images {
+      return;
+    }
+    let Some(item) = cx.read_from_clipboard() else {
+      return;
+    };
+    let mut staged_any = false;
+    for entry in item.into_entries() {
+      if let gpui::ClipboardEntry::Image(image) = entry {
+        self.stage_image(image, cx);
+        staged_any = true;
+      }
+    }
+    if staged_any {
+      cx.stop_propagation();
+    }
+  }
+
+  fn handle_dropped_paths(
+    &mut self,
+    paths: &[PathBuf],
+    window: &mut Window,
+    cx: &mut Context<Self>,
+  ) {
+    for path in paths {
+      match image_format_for_path(path) {
+        Some(format) if self.supports_images => {
+          if let Ok(bytes) = std::fs::read(path) {
+            self.stage_image(gpui::Image::from_bytes(format, bytes), cx);
+          }
+        }
+        _ => {
+          // Non-image files land as a mention token the prompt builder resolves.
+          let token = match path.strip_prefix(&self.cwd) {
+            Ok(rel) => format!("@{} ", rel.display()),
+            Err(_) => format!("{} ", path.display()),
+          };
+          self.input.update(cx, |state, cx| {
+            let mut text = state.value().to_string();
+            if !text.is_empty() && !text.ends_with(char::is_whitespace) {
+              text.push(' ');
+            }
+            text.push_str(&token);
+            state.set_value(&text, window, cx);
+          });
+        }
+      }
+    }
+    window.focus(&self.input.read(cx).focus_handle(cx), cx);
+    cx.notify();
+  }
+
   /// Send a prompt programmatically; false if not ready or already in flight.
   pub fn send_external_prompt(&mut self, text: String, cx: &mut Context<Self>) -> bool {
     let text = text.trim().to_string();
@@ -2671,8 +2762,9 @@ impl AgentChatPanel {
     let cwd = self.cwd.clone();
     let files = self.repo_files.clone();
     let selection = self.active_selection.take();
+    let images = std::mem::take(&mut self.staged_images);
     cx.spawn(async move |this, cx| {
-      let blocks = build_prompt_blocks(text, files, selection, cwd).await;
+      let blocks = build_prompt_blocks(text, files, selection, images, cwd).await;
       let result = session.send_prompt_blocks(blocks).await;
       let _ = this.update(cx, |panel, cx| {
         panel.flush_turn_buffers();
@@ -2874,6 +2966,7 @@ impl AgentChatPanel {
           let _ = this.update(cx, |panel, cx| {
             panel.session = Some(session.clone());
             panel.status = Status::Ready;
+            panel.supports_images = info.supports_images;
             panel.agent_version = info.version;
             panel.auth_methods = info.auth_methods;
             panel.available_modes = info.available_modes;
@@ -3328,6 +3421,18 @@ fn deduped_model_entries(
 
 /// Insert the marker before the prompt it snapshots; a marker already sitting
 /// there (e.g. right after a rollback) is replaced instead of stacked.
+fn image_format_for_path(path: &std::path::Path) -> Option<gpui::ImageFormat> {
+  let ext = path.extension()?.to_str()?.to_lowercase();
+  match ext.as_str() {
+    "png" => Some(gpui::ImageFormat::Png),
+    "jpg" | "jpeg" => Some(gpui::ImageFormat::Jpeg),
+    "webp" => Some(gpui::ImageFormat::Webp),
+    "gif" => Some(gpui::ImageFormat::Gif),
+    "bmp" => Some(gpui::ImageFormat::Bmp),
+    _ => None,
+  }
+}
+
 /// Bounds of the consecutive tool-call run containing `idx`.
 fn tool_run_bounds(items: &[ChatItem], idx: usize) -> (usize, usize) {
   let mut start = idx;
@@ -4626,11 +4731,23 @@ impl Render for AgentChatPanel {
                     theme.border
                   })
                   .bg(theme.background)
+                  .on_drop(
+                    cx.listener(|panel, paths: &gpui::ExternalPaths, window, cx| {
+                      panel.handle_dropped_paths(paths.paths(), window, cx);
+                    }),
+                  )
+                  .drag_over::<gpui::ExternalPaths>(|style, _, _, cx| {
+                    style.border_color(cx.theme().ring)
+                  })
+                  .children(self.render_staged_images(theme, cx))
                   .child(
                     div()
                       .id("agent-mention-input")
                       .relative()
                       .w_full()
+                      .capture_action(cx.listener(|panel, _: &input::Paste, _, cx| {
+                        panel.intercept_paste(cx);
+                      }))
                       .capture_action(cx.listener(|panel, action: &input::Enter, window, cx| {
                         // Slash and mention popups are exclusive by token shape.
                         panel.slash_on_enter(action, window, cx);
@@ -4772,6 +4889,48 @@ impl AgentChatPanel {
       );
     }
     Some(col.into_any_element())
+  }
+
+  /// Thumbnails of the images staged for the next prompt.
+  fn render_staged_images(
+    &self,
+    theme: &gpui_component::Theme,
+    cx: &mut Context<Self>,
+  ) -> Option<gpui::AnyElement> {
+    if self.staged_images.is_empty() {
+      return None;
+    }
+    let mut strip = h_flex()
+      .debug_selector(|| "agent-chat-attachments".to_string())
+      .gap_1()
+      .flex_wrap();
+    for (ix, image) in self.staged_images.iter().enumerate() {
+      strip = strip.child(
+        div()
+          .relative()
+          .child(
+            gpui::img(image.clone())
+              .w(px(56.))
+              .h(px(56.))
+              .rounded(theme.radius)
+              .border_1()
+              .border_color(theme.border)
+              .object_fit(gpui::ObjectFit::Cover),
+          )
+          .child(
+            div().absolute().top_0().right_0().child(
+              Button::new(("agent-chat-attachment-remove", ix))
+                .icon(IconName::Close)
+                .xsmall()
+                .ghost()
+                .on_click(cx.listener(move |panel, _, _, cx| {
+                  panel.remove_staged_image(ix, cx);
+                })),
+            ),
+          ),
+      );
+    }
+    Some(strip.into_any_element())
   }
 
   fn render_model_selector(&self, cx: &mut Context<Self>) -> gpui::AnyElement {
@@ -5067,10 +5226,18 @@ async fn build_prompt_blocks(
   text: String,
   files: Arc<Vec<String>>,
   selection: Option<SelectionContext>,
+  images: Vec<std::sync::Arc<gpui::Image>>,
   cwd: PathBuf,
 ) -> Vec<ContentBlock> {
+  use base64::Engine as _;
   let mentions = mention::resolve_mentions(&text, files.as_slice(), selection.is_some());
   let mut blocks = vec![ContentBlock::Text(TextContent::new(text))];
+  for image in images {
+    let data = base64::engine::general_purpose::STANDARD.encode(&image.bytes);
+    blocks.push(ContentBlock::Image(
+      agent_client_protocol::schema::ImageContent::new(data, image.format.mime_type()),
+    ));
+  }
 
   for mention in mentions {
     match mention {
@@ -7197,6 +7364,66 @@ mod tests {
       pins.values().all(|&expanded| expanded),
       "the settled group was folded, so the click pinned it open"
     );
+    std::fs::remove_dir_all(&dir).ok();
+  }
+
+  #[test]
+  fn image_formats_are_detected_by_extension() {
+    use std::path::Path;
+    assert!(image_format_for_path(Path::new("shot.PNG")).is_some());
+    assert!(image_format_for_path(Path::new("photo.jpeg")).is_some());
+    assert!(image_format_for_path(Path::new("main.rs")).is_none());
+    assert!(image_format_for_path(Path::new("noext")).is_none());
+  }
+
+  #[gpui::test]
+  async fn staged_images_render_and_attach_only_when_supported(cx: &mut gpui::TestAppContext) {
+    let (panel, cx) = add_panel_window(cx);
+    let png = gpui::Image::from_bytes(gpui::ImageFormat::Png, vec![1, 2, 3]);
+
+    // Without the capability, staging is refused.
+    panel.update(cx, |panel, cx| {
+      panel.status = Status::Ready;
+      panel.stage_image(png.clone(), cx);
+      assert_eq!(panel.staged_images.len(), 0);
+
+      panel.supports_images = true;
+      panel.stage_image(png.clone(), cx);
+      panel.stage_image(png, cx);
+      assert_eq!(panel.staged_images.len(), 2);
+      cx.notify();
+    });
+    cx.run_until_parked();
+    assert!(
+      cx.debug_bounds("agent-chat-attachments").is_some(),
+      "the thumbnail strip is painted"
+    );
+
+    panel.update(cx, |panel, cx| {
+      panel.remove_staged_image(0, cx);
+      assert_eq!(panel.staged_images.len(), 1);
+    });
+  }
+
+  #[gpui::test]
+  async fn dropped_paths_stage_images_and_mention_other_files(cx: &mut gpui::TestAppContext) {
+    let dir = temp_dir("agent-drop");
+    let image_path = dir.join("shot.png");
+    std::fs::write(&image_path, [137, 80, 78, 71]).unwrap();
+    let (panel, cx) = add_panel_window(cx);
+    panel.update_in(cx, |panel, window, cx| {
+      panel.status = Status::Ready;
+      panel.supports_images = true;
+      panel.cwd = dir.clone();
+      let inside = dir.join("src/lib.rs");
+      panel.handle_dropped_paths(&[image_path.clone(), inside], window, cx);
+      assert_eq!(panel.staged_images.len(), 1, "the png staged as an image");
+      assert_eq!(
+        panel.input.read(cx).value().trim(),
+        "@src/lib.rs",
+        "a repo file lands as a mention token"
+      );
+    });
     std::fs::remove_dir_all(&dir).ok();
   }
 
