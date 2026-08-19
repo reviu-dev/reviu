@@ -3102,3 +3102,95 @@ async fn a_first_prompt_leaves_no_phantom_scroll(cx: &mut gpui::TestAppContext) 
     assert!(!panel.show_jump_pill, "nothing to jump to");
   });
 }
+
+#[gpui::test]
+async fn an_agent_without_steering_hides_the_steer_button(cx: &mut gpui::TestAppContext) {
+  let (panel, cx) = add_panel_window(cx);
+  panel.update(cx, |panel, cx| {
+    panel.status = Status::Ready;
+    panel.in_flight = true;
+    panel.supports_steering = true;
+    panel.queued_prompts = vec!["do this next".into()];
+    cx.notify();
+  });
+  cx.run_until_parked();
+  assert!(
+    cx.debug_bounds("agent-chat-queued-steer").is_some(),
+    "a steering agent offers to send the queued message into the turn"
+  );
+
+  panel.update(cx, |panel, cx| {
+    panel.supports_steering = false;
+    cx.notify();
+  });
+  cx.run_until_parked();
+  assert!(
+    cx.debug_bounds("agent-chat-queued-steer").is_none(),
+    "an agent without the steering extension hides the button"
+  );
+}
+
+#[gpui::test]
+async fn cmd_enter_queues_instead_of_steering_when_unsupported(cx: &mut gpui::TestAppContext) {
+  let steer_keystroke = if cfg!(target_os = "macos") {
+    "cmd-enter"
+  } else {
+    "ctrl-enter"
+  };
+  let (panel, cx) = add_panel_window(cx);
+  panel.update(cx, |panel, cx| {
+    panel.status = Status::Ready;
+    panel.in_flight = true;
+    panel.supports_steering = true;
+    cx.notify();
+  });
+  cx.run_until_parked();
+
+  let input_focus = panel.read_with(cx, |panel, cx| panel.input.read(cx).focus_handle(cx));
+  cx.update(|window, cx| window.focus(&input_focus, cx));
+  cx.simulate_input("actually, skip the tests");
+  cx.simulate_keystrokes(steer_keystroke);
+  cx.run_until_parked();
+
+  // The disconnected panel has no session to steer, so the attempt fails and
+  // the draft stays put: proof the keystroke took the steer path, since a
+  // plain Enter would have queued it.
+  panel.read_with(cx, |panel, cx| {
+    assert!(panel.queued_prompts.is_empty());
+    assert_eq!(panel.input.read(cx).value(), "actually, skip the tests");
+  });
+
+  panel.update(cx, |panel, cx| {
+    panel.supports_steering = false;
+    cx.notify();
+  });
+  cx.run_until_parked();
+  cx.update(|window, cx| window.focus(&input_focus, cx));
+  cx.simulate_keystrokes(steer_keystroke);
+  cx.run_until_parked();
+
+  panel.read_with(cx, |panel, cx| {
+    assert_eq!(
+      panel.queued_prompts,
+      vec!["actually, skip the tests".to_string()],
+      "the message waits for the next turn instead of being refused mid-flight"
+    );
+    assert_eq!(panel.input.read(cx).value(), "", "the composer drained");
+    assert!(
+      panel.items.is_empty(),
+      "no optimistic bubble for a steer that never happened"
+    );
+  });
+}
+
+#[gpui::test]
+async fn steer_prompt_refuses_when_the_agent_cannot_steer(cx: &mut gpui::TestAppContext) {
+  let (panel, cx) = add_panel_window(cx);
+  panel.update(cx, |panel, cx| {
+    panel.status = Status::Ready;
+    panel.in_flight = true;
+    panel.supports_steering = false;
+    assert!(!panel.steer_prompt("mid-turn".to_string(), cx));
+    assert!(panel.items.is_empty());
+  });
+}

@@ -60,17 +60,19 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
       )
       .on_receive_request(
         async move |req: InitializeRequest, responder, _: ConnectionTo<Client>| {
-          responder.respond(
-            InitializeResponse::new(req.protocol_version)
-              .agent_capabilities(
-                AgentCapabilities::new()
-                  .load_session(true)
-                  .prompt_capabilities(
-                    agent_client_protocol::schema::PromptCapabilities::new().image(true),
-                  ),
-              )
-              .agent_info(Implementation::new("stub-agent", "0.0.1")),
-          )
+          let mut response = InitializeResponse::new(req.protocol_version)
+            .agent_capabilities(
+              AgentCapabilities::new()
+                .load_session(true)
+                .prompt_capabilities(
+                  agent_client_protocol::schema::PromptCapabilities::new().image(true),
+                ),
+            )
+            .agent_info(Implementation::new("stub-agent", "0.0.1"));
+          response.meta = serde_json::json!({ "steering": { "supported": true } })
+            .as_object()
+            .cloned();
+          responder.respond(response)
         },
         agent_client_protocol::on_receive_request!(),
       )

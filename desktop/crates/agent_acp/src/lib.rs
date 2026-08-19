@@ -211,6 +211,15 @@ pub enum SteerOutcome {
 /// plain second `session/prompt` would queue behind it as a fresh turn.
 const STEER_METHOD: &str = "_session/steering";
 
+/// Agents advertise the steering extension under `_meta.steering.supported`.
+fn parse_steering_support(meta: Option<&agent_client_protocol::schema::Meta>) -> bool {
+  meta
+    .and_then(|meta| meta.get("steering"))
+    .and_then(|steering| steering.get("supported"))
+    .and_then(serde_json::Value::as_bool)
+    .unwrap_or(false)
+}
+
 fn parse_steer_outcome(value: &serde_json::Value) -> SteerOutcome {
   match value.get("outcome").and_then(|v| v.as_str()) {
     Some("startedNewTurn") => SteerOutcome::StartedNewTurn,
@@ -268,6 +277,9 @@ pub struct AgentInitInfo {
   pub supports_load_session: bool,
   /// Whether the agent accepts `ContentBlock::Image` in prompts.
   pub supports_images: bool,
+  /// Whether the agent answers `_session/steering`; agents without it can only
+  /// take a message at the next turn boundary.
+  pub supports_steering: bool,
   pub session_id: Option<String>,
   pub available_modes: Vec<SessionMode>,
   pub current_mode_id: Option<SessionModeId>,
@@ -773,6 +785,29 @@ mod tests {
   }
 
   #[test]
+  fn steering_support_is_read_from_the_initialize_meta() {
+    let advertised = serde_json::json!({ "steering": { "supported": true } })
+      .as_object()
+      .cloned()
+      .expect("object");
+    assert!(parse_steering_support(Some(&advertised)));
+
+    let declined = serde_json::json!({ "steering": { "supported": false } })
+      .as_object()
+      .cloned()
+      .expect("object");
+    assert!(!parse_steering_support(Some(&declined)));
+
+    let unrelated = serde_json::json!({ "goal": { "version": 1 } })
+      .as_object()
+      .cloned()
+      .expect("object");
+    assert!(!parse_steering_support(Some(&unrelated)));
+
+    assert!(!parse_steering_support(None));
+  }
+
+  #[test]
   fn terminal_auth_keeps_the_backend_args_ahead_of_its_own() {
     let auth = TerminalAuthCommand {
       args: vec!["--terminal-login".into()],
@@ -1213,6 +1248,7 @@ async fn run_driver(
           .collect(),
         supports_load_session: init.agent_capabilities.load_session,
         supports_images: init.agent_capabilities.prompt_capabilities.image,
+        supports_steering: parse_steering_support(init.meta.as_ref()),
         session_id: None,
         available_modes: Vec::new(),
         current_mode_id: None,

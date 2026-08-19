@@ -235,10 +235,14 @@ impl AgentChatPanel {
   }
 
   /// Injects a prompt into the running turn (Cmd+Enter). Falls back to a
-  /// fresh dispatch when no turn is in flight.
+  /// fresh dispatch when no turn is in flight, and refuses outright when the
+  /// agent does not advertise the steering extension.
   pub fn steer_prompt(&mut self, text: String, cx: &mut Context<Self>) -> bool {
     if !self.in_flight {
       return self.dispatch_prompt(text, cx);
+    }
+    if !self.supports_steering {
+      return false;
     }
     let Some(session) = self.session.clone() else {
       return false;

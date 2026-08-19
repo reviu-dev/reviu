@@ -532,6 +532,8 @@ pub struct AgentChatPanel {
   queued_prompts: Vec<String>,
   /// Whether the connected agent accepts image blocks in prompts.
   supports_images: bool,
+  /// Whether the connected agent can take a message mid-turn.
+  supports_steering: bool,
   /// Images staged for the next prompt (pasted or dropped).
   staged_images: Vec<std::sync::Arc<gpui::Image>>,
   /// Incremental markdown state for the streaming reply: chunks append via
@@ -634,6 +636,7 @@ impl AgentChatPanel {
       pending_thought: String::new(),
       queued_prompts: Vec::new(),
       supports_images: false,
+      supports_steering: false,
       staged_images: Vec::new(),
       pending_md_state: None,
       tool_group_pins: loaded_pins,
@@ -720,6 +723,7 @@ impl AgentChatPanel {
             panel.session = Some(session.clone());
             panel.status = Status::Ready;
             panel.supports_images = info.supports_images;
+            panel.supports_steering = info.supports_steering;
             panel.agent_version = info.version;
             panel.auth_methods = info.auth_methods;
             panel.available_modes = info.available_modes;
@@ -1035,6 +1039,7 @@ impl AgentChatPanel {
       pending_thought: String::new(),
       queued_prompts: Vec::new(),
       supports_images: false,
+      supports_steering: false,
       staged_images: Vec::new(),
       pending_md_state: None,
       tool_group_pins: HashMap::new(),
@@ -1800,7 +1805,7 @@ impl AgentChatPanel {
 
   /// Cmd/Ctrl+Enter: steer the running turn instead of queueing.
   fn submit_steer(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-    if !self.in_flight {
+    if !self.in_flight || !self.supports_steering {
       self.submit(window, cx);
       return;
     }
@@ -2160,6 +2165,10 @@ impl AgentChatPanel {
     self.backend_kind
   }
 
+  pub fn supports_steering(&self) -> bool {
+    self.supports_steering
+  }
+
   pub fn new_conversation(&mut self, cx: &mut Context<Self>) {
     self.persist_state();
     self.current_conv = new_conversation_meta();
@@ -2280,6 +2289,7 @@ impl AgentChatPanel {
             panel.session = Some(session.clone());
             panel.status = Status::Ready;
             panel.supports_images = info.supports_images;
+            panel.supports_steering = info.supports_steering;
             panel.agent_version = info.version;
             panel.auth_methods = info.auth_methods;
             panel.available_modes = info.available_modes;

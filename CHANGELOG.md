@@ -8,6 +8,8 @@ All notable changes to Reviu are documented here.
 
 Pi is now available in the agent picker alongside Claude and Codex, with its own icon throughout the conversation. Pi needs its CLI installed (`npm install -g @earendil-works/pi-coding-agent`); if it is missing, Reviu says so up front instead of failing on the first prompt. Claude and Codex also move up to their latest agent releases.
 
+Steering now follows what the agent can actually do. Claude and Codex take a message mid-turn as before; with an agent that cannot, Cmd+Enter simply queues like Enter and the queued message's steer button is gone, instead of trying and coming back with a refusal.
+
 ### Approve For Me
 
 A new Auto-approve toggle in the composer answers the agent's permission requests for you, always picking the allow option, so long unattended runs stop parking on a question. Flipping it on also releases a request already waiting. Cards answered this way say "Auto-approved" so you can tell them apart later, a request with no allow option still waits for you, and the choice sticks with the conversation.
