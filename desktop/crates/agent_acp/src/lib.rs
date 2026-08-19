@@ -536,6 +536,20 @@ fn auth_method_terminal_command(m: &AuthMethod) -> Option<TerminalAuthCommand> {
 
 // Prefer AllowOnce over AllowAlways; return None for reject-only sets so
 // destructive defaults never auto-apply.
+/// Updates that mirror transcript content during a `session/load` replay.
+/// Config, mode, model and command updates stay useful and pass through.
+fn is_replayable_content(update: &AgentEvent) -> bool {
+  matches!(
+    update,
+    AgentEvent::UserMessageChunk(_)
+      | AgentEvent::AgentMessageChunk(_)
+      | AgentEvent::AgentThoughtChunk(_)
+      | AgentEvent::ToolCall(_)
+      | AgentEvent::ToolCallUpdate(_)
+      | AgentEvent::Plan(_)
+  )
+}
+
 fn pick_default_permission_option(
   options: &[PermissionOption],
 ) -> Option<agent_client_protocol::schema::PermissionOptionId> {
@@ -751,10 +765,17 @@ async fn run_driver(
   let fs_root_read = cwd.clone();
   let fs_root_write = cwd.clone();
   let permission_counter = Arc::new(AtomicU64::new(1));
+  // `session/load` replays the whole session history as ordinary updates; the
+  // host already holds the transcript, so replayed content must not reach it.
+  let replaying = Arc::new(std::sync::atomic::AtomicBool::new(false));
+  let replaying_gate = replaying.clone();
   let result = Client
     .builder()
     .on_receive_notification(
       async move |notification: SessionNotification, _cx| {
+        if replaying_gate.load(Ordering::Relaxed) && is_replayable_content(&notification.update) {
+          return Ok(());
+        }
         let _ = event_tx_inner.send(notification.update).await;
         Ok(())
       },
@@ -917,11 +938,13 @@ async fn run_driver(
       let (session_id, modes, models, config_options) = match load_session.clone() {
         Some(id) if info.supports_load_session => {
           let sid = SessionId::new(id);
-          match connection
+          replaying.store(true, Ordering::Relaxed);
+          let loaded = connection
             .send_request(LoadSessionRequest::new(sid.clone(), cwd.clone()))
             .block_task()
-            .await
-          {
+            .await;
+          replaying.store(false, Ordering::Relaxed);
+          match loaded {
             Ok(resp) => (sid, resp.modes, resp.models, resp.config_options),
             // Agents often cannot restore sessions after a restart; fall back to a
             // fresh session instead of failing the whole connection. The local

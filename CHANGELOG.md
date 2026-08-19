@@ -4,6 +4,10 @@ All notable changes to Reviu are documented here.
 
 ## 1.0.0
 
+### No More Deja Vu On Reopen
+
+Coming back to a conversation no longer repeats its last thought or reply: the history an agent replays while resuming a session is now recognized and dropped, since the transcript already has it. The finished-turn popup also shows the icon of the agent that actually worked, Codex or Claude, and dragging an image over the composer now tints it so you can see it is a drop target.
+
 ### A Calmer Transcript
 
 The conversation sheds its scaffolding: no more rail and colored dots down the left, no more amber "Working" flashes; the activity verb and timer sit quietly in gray. Tool steps get a small icon tile and read as one clean line; only a failure brings color. Thoughts become a single discreet line that still expands on click. Your messages align right as proper bubbles, and images you attach now show as real thumbnails in the message, with a clear gap between staged images and your text in the composer. Rolling back all the way no longer leaves a lonely "Checkpoint" divider floating in an empty conversation. The thinking glimpse no longer opens holes for blank lines or shows raw markdown marks, expandable lines brighten on hover instead of painting a gray bar, and a step whose title already says the verb, like "Editing files", stops stuttering it twice.

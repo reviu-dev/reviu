@@ -17,6 +17,7 @@ pub const AGENT_NOTIFICATION_SIZE: Size<gpui::Pixels> = Size {
 };
 
 pub struct AgentNotification {
+  icon: UiIconName,
   title: SharedString,
   caption: SharedString,
 }
@@ -29,8 +30,13 @@ pub enum AgentNotificationEvent {
 impl EventEmitter<AgentNotificationEvent> for AgentNotification {}
 
 impl AgentNotification {
-  pub fn new(title: impl Into<SharedString>, caption: impl Into<SharedString>) -> Self {
+  pub fn new(
+    icon: UiIconName,
+    title: impl Into<SharedString>,
+    caption: impl Into<SharedString>,
+  ) -> Self {
     Self {
+      icon,
       title: title.into(),
       caption: caption.into(),
     }
@@ -74,7 +80,7 @@ impl Render for AgentNotification {
       .cursor_pointer()
       .on_click(cx.listener(|_, _, _, cx| cx.emit(AgentNotificationEvent::Accepted)))
       .child(
-        gpui_component::Icon::new(UiIconName::Claude)
+        gpui_component::Icon::new(self.icon)
           .small()
           .text_color(theme.foreground),
       )

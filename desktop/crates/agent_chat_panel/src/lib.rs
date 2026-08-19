@@ -4902,7 +4902,8 @@ impl Render for AgentChatPanel {
                     }),
                   )
                   .drag_over::<gpui::ExternalPaths>(|style, _, _, cx| {
-                    style.border_color(cx.theme().ring)
+                    let theme = cx.theme();
+                    style.border_color(theme.ring).bg(theme.ring.opacity(0.06))
                   })
                   .children(self.render_staged_images(theme, cx))
                   .child(

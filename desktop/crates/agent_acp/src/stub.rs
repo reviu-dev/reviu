@@ -76,6 +76,29 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
         agent_client_protocol::on_receive_request!(),
       )
       .on_receive_request(
+        async move |req: agent_client_protocol::schema::LoadSessionRequest,
+                    responder,
+                    cx: ConnectionTo<Client>| {
+          // Real agents replay the whole history during a load; the client
+          // must drop that replayed content instead of appending it again.
+          let session_id = req.session_id.clone();
+          let _ = cx.send_notification(SessionNotification::new(
+            session_id.clone(),
+            SessionUpdate::AgentThoughtChunk(agent_client_protocol::schema::ContentChunk::new(
+              ContentBlock::Text(TextContent::new("stub thinking")),
+            )),
+          ));
+          let _ = cx.send_notification(SessionNotification::new(
+            session_id,
+            SessionUpdate::AgentMessageChunk(agent_client_protocol::schema::ContentChunk::new(
+              ContentBlock::Text(TextContent::new("ack")),
+            )),
+          ));
+          responder.respond(agent_client_protocol::schema::LoadSessionResponse::new())
+        },
+        agent_client_protocol::on_receive_request!(),
+      )
+      .on_receive_request(
         async move |_req: NewSessionRequest, responder, cx: ConnectionTo<Client>| {
           let session_id = SessionId::new("stub-session");
           let result = responder.respond(NewSessionResponse::new(session_id.clone()));

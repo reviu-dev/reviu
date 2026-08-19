@@ -408,6 +408,57 @@ async fn an_edited_prompt_rewinds_and_replays_through_a_fresh_session(cx: &mut T
 }
 
 #[gpui::test]
+async fn a_session_load_replay_never_duplicates_the_transcript(cx: &mut TestAppContext) {
+  cx.executor().allow_parking();
+  set_backend_command_override(Some(env!("CARGO_BIN_EXE_stub_agent").to_string()));
+
+  cx.update(gpui_component::init);
+  let cwd = std::env::temp_dir();
+  let mut mounted = None;
+  let (_root, cx) = cx.add_window_view(|window, cx| {
+    let panel =
+      cx.new(|cx| AgentChatPanel::new(BackendKind::Claude, cwd.clone(), None, window, cx));
+    mounted = Some(panel.clone());
+    gpui_component::Root::new(panel, window, cx)
+  });
+  let panel = mounted.expect("agent chat panel");
+
+  cx.condition(&panel, |panel, _| panel.backend_ready()).await;
+
+  panel.update(cx, |panel, cx| {
+    assert!(panel.send_external_prompt("hello stub".to_string(), cx));
+  });
+  cx.condition(&panel, |panel, _| {
+    !panel.is_turn_in_flight() && panel.transcript_texts().len() >= 2
+  })
+  .await;
+
+  // A respawn with a stored session id goes through session/load, which the
+  // stub answers by replaying the whole history first.
+  panel.update(cx, |panel, cx| panel.mark_disconnected_for_test(cx));
+  cx.run_until_parked();
+  let button = cx
+    .debug_bounds("agent-chat-reconnect")
+    .expect("reconnect button painted");
+  cx.simulate_click(button.center(), gpui::Modifiers::default());
+  cx.condition(&panel, |panel, _| panel.backend_ready()).await;
+
+  panel.read_with(cx, |panel, _| {
+    let transcript = panel.transcript_texts();
+    assert_eq!(
+      transcript.iter().filter(|t| *t == "ack").count(),
+      1,
+      "the replayed reply was dropped, got {transcript:?}"
+    );
+    assert_eq!(
+      panel.thought_texts().len(),
+      1,
+      "the replayed thought was dropped"
+    );
+  });
+}
+
+#[gpui::test]
 async fn reconnect_respawns_the_agent_session(cx: &mut TestAppContext) {
   cx.executor().allow_parking();
   set_backend_command_override(Some(env!("CARGO_BIN_EXE_stub_agent").to_string()));
