@@ -723,3 +723,109 @@ async fn a_sent_prompt_holds_at_the_viewport_top_through_the_turn(cx: &mut TestA
     );
   });
 }
+
+#[gpui::test]
+async fn a_steer_joins_the_running_turn_without_closing_it(cx: &mut TestAppContext) {
+  cx.executor().allow_parking();
+  set_backend_command_override(Some(env!("CARGO_BIN_EXE_stub_agent").to_string()));
+
+  cx.update(gpui_component::init);
+  let cwd = std::env::temp_dir();
+  let mut mounted = None;
+  let (_root, cx) = cx.add_window_view(|window, cx| {
+    let panel =
+      cx.new(|cx| AgentChatPanel::new(BackendKind::Claude, cwd.clone(), None, window, cx));
+    mounted = Some(panel.clone());
+    gpui_component::Root::new(panel, window, cx)
+  });
+  let panel = mounted.expect("agent chat panel");
+
+  cx.condition(&panel, |panel, _| panel.backend_ready()).await;
+
+  // The stub parks this turn until something releases it.
+  panel.update(cx, |panel, cx| {
+    assert!(panel.send_external_prompt("wait here".to_string(), cx));
+  });
+  // "partial reply" is still streaming prose at this point, not an item.
+  cx.condition(&panel, |panel, _| {
+    panel.is_turn_in_flight() && panel.streaming_prose().contains("partial reply")
+  })
+  .await;
+
+  panel.update(cx, |panel, cx| {
+    assert!(panel.steer_prompt("steer now".to_string(), cx));
+    assert!(
+      panel.is_turn_in_flight(),
+      "the steer joins the turn instead of closing it"
+    );
+  });
+
+  cx.condition(&panel, |panel, _| !panel.is_turn_in_flight())
+    .await;
+
+  panel.read_with(cx, |panel, _| {
+    let transcript = panel.transcript_texts();
+    let wait = transcript.iter().position(|t| t == "wait here");
+    let partial = transcript.iter().position(|t| t == "partial reply");
+    let steer = transcript.iter().position(|t| t == "steer now");
+    let steered = transcript.iter().position(|t| t == "steered reply");
+    assert!(
+      wait < partial && partial < steer && steer < steered,
+      "the steered message lands inside the turn, got {transcript:?}"
+    );
+    assert!(
+      !transcript.iter().any(|t| t.starts_with("Stopped")),
+      "a superseded predecessor is not a stop, got {transcript:?}"
+    );
+  });
+}
+
+#[gpui::test]
+async fn a_refused_steer_re_queues_the_message(cx: &mut TestAppContext) {
+  cx.executor().allow_parking();
+  set_backend_command_override(Some(env!("CARGO_BIN_EXE_stub_agent").to_string()));
+
+  cx.update(gpui_component::init);
+  let cwd = std::env::temp_dir();
+  let mut mounted = None;
+  let (_root, cx) = cx.add_window_view(|window, cx| {
+    let panel =
+      cx.new(|cx| AgentChatPanel::new(BackendKind::Claude, cwd.clone(), None, window, cx));
+    mounted = Some(panel.clone());
+    gpui_component::Root::new(panel, window, cx)
+  });
+  let panel = mounted.expect("agent chat panel");
+
+  cx.condition(&panel, |panel, _| panel.backend_ready()).await;
+
+  panel.update(cx, |panel, cx| {
+    assert!(panel.send_external_prompt("wait here".to_string(), cx));
+  });
+  cx.condition(&panel, |panel, _| panel.is_turn_in_flight())
+    .await;
+
+  // The stub errors any prompt containing "fail": the steer is refused while
+  // the main turn keeps running.
+  panel.update(cx, |panel, cx| {
+    assert!(panel.steer_prompt("fail this one".to_string(), cx));
+  });
+  cx.condition(&panel, |panel, _| !panel.queued_prompt_texts().is_empty())
+    .await;
+
+  panel.read_with(cx, |panel, _| {
+    assert!(
+      panel.is_turn_in_flight(),
+      "the main turn survives the refusal"
+    );
+    assert_eq!(panel.queued_prompt_texts(), vec!["fail this one"]);
+    let transcript = panel.transcript_texts();
+    assert!(
+      !transcript.iter().any(|t| t == "fail this one"),
+      "the optimistic bubble was retracted, got {transcript:?}"
+    );
+  });
+
+  panel.update(cx, |panel, cx| panel.cancel_turn(cx));
+  cx.condition(&panel, |panel, _| !panel.is_turn_in_flight())
+    .await;
+}

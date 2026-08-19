@@ -174,6 +174,12 @@ enum DriverCmd {
     blocks: Vec<ContentBlock>,
     reply: oneshot::Sender<Result<StopReason>>,
   },
+  /// A second prompt sent into the running turn; the in-flight prompt is not
+  /// considered replaced and keeps waiting for its own stop reason.
+  Steer {
+    blocks: Vec<ContentBlock>,
+    reply: oneshot::Sender<Result<StopReason>>,
+  },
   Cancel,
   Stop,
   SetMode {
@@ -483,6 +489,19 @@ impl AgentSession {
     self
       .cmd_tx
       .send(DriverCmd::Prompt { blocks, reply: tx })
+      .await
+      .map_err(|_| anyhow!("agent driver closed"))?;
+    rx.await
+      .map_err(|_| anyhow!("agent driver dropped reply"))?
+  }
+
+  /// Inject a prompt into the running turn. Outside a turn this behaves like
+  /// a plain prompt.
+  pub async fn steer_prompt_blocks(&self, blocks: Vec<ContentBlock>) -> Result<StopReason> {
+    let (tx, rx) = oneshot::channel();
+    self
+      .cmd_tx
+      .send(DriverCmd::Steer { blocks, reply: tx })
       .await
       .map_err(|_| anyhow!("agent driver closed"))?;
     rx.await
@@ -999,16 +1018,38 @@ async fn run_driver(
 
       use futures::FutureExt;
 
+      let map_prompt_response = |response: std::result::Result<
+        agent_client_protocol::schema::PromptResponse,
+        agent_client_protocol::Error,
+      >| {
+        response.map(|r| r.stop_reason).map_err(|e| {
+          if e.code == agent_client_protocol::schema::ErrorCode::AuthRequired {
+            anyhow!("auth_required: {e}")
+          } else {
+            anyhow!("acp prompt error: {e}")
+          }
+        })
+      };
+
       'outer: while let Ok(cmd) = cmd_rx.recv().await {
         match cmd {
-          DriverCmd::Prompt { blocks, reply } => {
+          // A steer landing outside a turn is just a prompt.
+          DriverCmd::Prompt { blocks, reply } | DriverCmd::Steer { blocks, reply } => {
             let prompt_fut = connection
               .send_request(PromptRequest::new(session_id.clone(), blocks))
               .block_task()
               .fuse();
             futures::pin_mut!(prompt_fut);
-            let response_opt;
+            // Steers injected while this prompt runs; each waits for its own
+            // stop reason without replacing the main prompt.
+            let mut steers: futures::stream::FuturesUnordered<futures::future::BoxFuture<'_, _>> =
+              futures::stream::FuturesUnordered::new();
+            let mut response_opt = None;
             loop {
+              if response_opt.is_some() && steers.is_empty() {
+                break;
+              }
+              use futures::StreamExt as _;
               futures::select_biased! {
                 next_cmd = cmd_rx.recv().fuse() => {
                   match next_cmd {
@@ -1022,6 +1063,12 @@ async fn run_driver(
                     }
                     Ok(DriverCmd::Prompt { reply: other_reply, .. }) => {
                       let _ = other_reply.send(Err(anyhow!("another prompt in flight")));
+                    }
+                    Ok(DriverCmd::Steer { blocks, reply: steer_reply }) => {
+                      let fut = connection
+                        .send_request(PromptRequest::new(session_id.clone(), blocks))
+                        .block_task();
+                      steers.push(Box::pin(async move { (steer_reply, fut.await) }));
                     }
                     Ok(DriverCmd::SetMode { mode_id, reply: set_reply }) => {
                       let r = connection
@@ -1060,21 +1107,17 @@ async fn run_driver(
                     }
                   }
                 }
+                steer_done = steers.select_next_some() => {
+                  let (steer_reply, response) = steer_done;
+                  let _ = steer_reply.send(map_prompt_response(response));
+                }
                 response = prompt_fut => {
                   response_opt = Some(response);
-                  break;
                 },
               }
             }
             if let Some(response) = response_opt {
-              let mapped = response.map(|r| r.stop_reason).map_err(|e| {
-                if e.code == agent_client_protocol::schema::ErrorCode::AuthRequired {
-                  anyhow!("auth_required: {e}")
-                } else {
-                  anyhow!("acp prompt error: {e}")
-                }
-              });
-              let _ = reply.send(mapped);
+              let _ = reply.send(map_prompt_response(response));
             }
           }
           DriverCmd::Cancel => {

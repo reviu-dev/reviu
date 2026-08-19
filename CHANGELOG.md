@@ -8,6 +8,10 @@ All notable changes to Reviu are documented here.
 
 A new Auto-approve toggle in the composer answers the agent's permission requests for you, always picking the allow option, so long unattended runs stop parking on a question. Flipping it on also releases a request already waiting. Cards answered this way say "Auto-approved" so you can tell them apart later, a request with no allow option still waits for you, and the choice sticks with the conversation.
 
+### Steer The Turn, Don't Wait For It
+
+Cmd+Enter (Ctrl+Enter on Linux/Windows) now sends your message straight into the running turn instead of queueing it, so you can redirect the agent mid-flight: "actually, skip the tests" lands immediately. Queued messages gain a steer button to send them into the current turn too. If the agent refuses the injection, the message safely returns to the queue with a notice, and the turn keeps running. Plain Enter still queues, and outside a turn both keys just send.
+
 ### Your Prompt Stays Put
 
 Sending a message now pins it to the top of the conversation, and the reply streams into the space below it: nothing scrolls under your eyes anymore. Scroll the wheel and the hold lets go so you can read freely; the jump-to-bottom pill brings you back to the held position. Once a reply grows past the reserved space, reading continues as plain scrolling.

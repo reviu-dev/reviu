@@ -96,3 +96,27 @@ fn agent_message_chunk_arrives_on_events_channel() {
     assert_eq!(collected.as_deref(), Some("ack"));
   });
 }
+
+#[test]
+fn a_steer_prompt_joins_the_parked_turn() {
+  smol::block_on(async {
+    let mut session = spawn_stub_session().await;
+    if let Some(events) = session.take_events() {
+      smol::spawn(async move { while events.recv().await.is_ok() {} }).detach();
+    }
+    let session = std::sync::Arc::new(session);
+    let main = {
+      let session = session.clone();
+      smol::spawn(async move { session.send_prompt("wait here").await })
+    };
+    smol::Timer::after(std::time::Duration::from_millis(300)).await;
+    let steer =
+      session.steer_prompt_blocks(vec![agent_client_protocol::schema::ContentBlock::Text(
+        agent_client_protocol::schema::TextContent::new("steer now"),
+      )]);
+    let steer_stop = steer.await.expect("steer resolves");
+    assert!(matches!(steer_stop, StopReason::EndTurn));
+    let main_stop = main.await.expect("main resolves");
+    assert!(matches!(main_stop, StopReason::EndTurn));
+  });
+}

@@ -530,6 +530,9 @@ pub struct AgentChatPanel {
   tool_group_pins: HashMap<ToolCallId, bool>,
   /// Permission requests are answered with their allow option automatically.
   auto_approve: bool,
+  /// Prompts awaiting a stop reason; steers add to the count and the turn
+  /// only settles when the last one returns.
+  inflight_prompts: usize,
   /// Runway: the sent prompt holds at the viewport top while the reply
   /// streams into reserved space below, instead of tail-scrolling.
   runway_active: bool,
@@ -624,6 +627,7 @@ impl AgentChatPanel {
       pending_md_state: None,
       tool_group_pins: loaded_pins,
       auto_approve: loaded_auto_approve,
+      inflight_prompts: 0,
       runway_active: false,
       runway_end_space: 0.0,
       runway_following: false,
@@ -769,10 +773,14 @@ impl AgentChatPanel {
       &input,
       window,
       |this, _state, event: &InputEvent, window, cx| {
-        if let InputEvent::PressEnter { shift, .. } = event
+        if let InputEvent::PressEnter { shift, secondary } = event
           && !shift
         {
-          this.submit(window, cx);
+          if *secondary {
+            this.submit_steer(window, cx);
+          } else {
+            this.submit(window, cx);
+          }
         }
       },
     );
@@ -847,6 +855,12 @@ impl AgentChatPanel {
       }
       _ => None,
     })
+  }
+
+  /// The prose still streaming into the current turn's buffer.
+  #[cfg(any(test, feature = "test-support"))]
+  pub fn streaming_prose(&self) -> String {
+    self.pending_agent.clone()
   }
 
   /// Runway state: (active, following, reserved space below the reply).
@@ -979,6 +993,7 @@ impl AgentChatPanel {
       pending_md_state: None,
       tool_group_pins: HashMap::new(),
       auto_approve: false,
+      inflight_prompts: 0,
       runway_active: false,
       runway_end_space: 0.0,
       runway_following: false,
@@ -1735,6 +1750,23 @@ impl AgentChatPanel {
     }
   }
 
+  /// Cmd/Ctrl+Enter: steer the running turn instead of queueing.
+  fn submit_steer(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    if !self.in_flight {
+      self.submit(window, cx);
+      return;
+    }
+    let text = self.input.read(cx).value().trim().to_string();
+    if text.is_empty() {
+      return;
+    }
+    if self.steer_prompt(text, cx) {
+      self
+        .input
+        .update(cx, |state, cx| state.set_value("", window, cx));
+    }
+  }
+
   /// A pinned group keeps the user's choice; otherwise it is open only while
   /// the turn streams into it (trailing), and folds once the turn settles.
   fn tool_group_expanded(&self, start: usize, end: usize) -> bool {
@@ -1843,6 +1875,18 @@ impl AgentChatPanel {
       self.queued_prompts.remove(ix);
       cx.notify();
     }
+  }
+
+  /// Sends a queued message into the current turn instead of waiting.
+  fn steer_queued(&mut self, ix: usize, cx: &mut Context<Self>) {
+    if ix >= self.queued_prompts.len() {
+      return;
+    }
+    let text = self.queued_prompts.remove(ix);
+    if !self.steer_prompt(text.clone(), cx) {
+      self.queued_prompts.insert(ix, text);
+    }
+    cx.notify();
   }
 
   fn stage_image(&mut self, image: gpui::Image, cx: &mut Context<Self>) {

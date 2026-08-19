@@ -199,13 +199,101 @@ impl AgentChatPanel {
     self.arm_runway();
     cx.notify();
 
+    self.inflight_prompts += 1;
     let cwd = self.cwd.clone();
     let files = self.repo_files.clone();
     let selection = self.active_selection.take();
     cx.spawn(async move |this, cx| {
       let blocks = build_prompt_blocks(text, files, selection, images, cwd).await;
       let result = session.send_prompt_blocks(blocks).await;
+      let _ = this.update(cx, |panel, cx| panel.complete_prompt(result, cx));
+    })
+    .detach();
+
+    true
+  }
+
+  /// Injects a prompt into the running turn (Cmd+Enter). Falls back to a
+  /// fresh dispatch when no turn is in flight.
+  pub fn steer_prompt(&mut self, text: String, cx: &mut Context<Self>) -> bool {
+    if !self.in_flight {
+      return self.dispatch_prompt(text, cx);
+    }
+    let Some(session) = self.session.clone() else {
+      return false;
+    };
+    // The steered message joins the current turn: no checkpoint, no new
+    // turn boundary; prose streamed so far settles ahead of it.
+    self.flush_turn_buffers();
+    self.items.push(ChatItem::Message(ChatMessage {
+      role: ChatRole::User,
+      text: text.clone(),
+      images: 0,
+      image_data: Vec::new(),
+    }));
+    self.inflight_prompts += 1;
+    self.persist_state();
+    self.sync_list_count();
+    self.arm_runway();
+    cx.notify();
+
+    let cwd = self.cwd.clone();
+    let files = self.repo_files.clone();
+    cx.spawn(async move |this, cx| {
+      let blocks = build_prompt_blocks(text.clone(), files, None, Vec::new(), cwd).await;
+      let result = session.steer_prompt_blocks(blocks).await;
       let _ = this.update(cx, |panel, cx| {
+        // Cascade: a refusal while the turn still runs re-queues the message
+        // instead of losing it.
+        if result.is_err() && panel.inflight_prompts > 1 {
+          panel.retract_steered_message(&text);
+          panel.queued_prompts.push(text.clone());
+          panel.items.push(ChatItem::Message(ChatMessage {
+            role: ChatRole::System,
+            text: "Steer refused; message queued for the next turn.".into(),
+            images: 0,
+            image_data: Vec::new(),
+          }));
+          panel.inflight_prompts -= 1;
+          panel.persist_state();
+          panel.sync_list_count();
+          cx.notify();
+          return;
+        }
+        panel.complete_prompt(result, cx);
+      });
+    })
+    .detach();
+    true
+  }
+
+  /// Removes the optimistic bubble of a steer the session refused.
+  fn retract_steered_message(&mut self, text: &str) {
+    if let Some(idx) = self.items.iter().rposition(
+      |item| matches!(item, ChatItem::Message(m) if m.role == ChatRole::User && m.text == text),
+    ) {
+      self.items.remove(idx);
+      self.rebuild_tool_index();
+    }
+  }
+
+  /// Settles a finished prompt. With a steer still in flight the turn is not
+  /// over: the superseded predecessor's return must not close it.
+  pub(crate) fn complete_prompt(
+    &mut self,
+    result: anyhow::Result<agent_client_protocol::schema::StopReason>,
+    cx: &mut Context<Self>,
+  ) {
+    self.inflight_prompts = self.inflight_prompts.saturating_sub(1);
+    if self.inflight_prompts > 0 {
+      if let Err(e) = &result {
+        eprintln!("[agent] superseded prompt error: {e}");
+      }
+      return;
+    }
+    {
+      let panel = self;
+      {
         panel.flush_turn_buffers();
         panel.append_turn_summary();
         let mut drain_queue = false;
@@ -272,11 +360,8 @@ impl AgentChatPanel {
         cx.emit(AgentChatPanelEvent::TurnFinished);
         panel.refresh_repo_files(cx);
         cx.notify();
-      });
-    })
-    .detach();
-
-    true
+      }
+    }
   }
 
   /// Closes a turn that edited files with an aggregated summary card.

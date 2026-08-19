@@ -1402,6 +1402,18 @@ impl AgentChatPanel {
               .text_color(theme.foreground)
               .child(text.clone()),
           )
+          .when(self.in_flight, |this| {
+            this.child(
+              Button::new(("agent-chat-queued-steer", ix))
+                .icon(UiIconName::ArrowUpFromLine)
+                .xsmall()
+                .ghost()
+                .tooltip("Send into the current turn")
+                .on_click(cx.listener(move |panel, _, _, cx| {
+                  panel.steer_queued(ix, cx);
+                })),
+            )
+          })
           .child(
             Button::new(("agent-chat-queued-edit", ix))
               .icon(UiIconName::SquarePen)

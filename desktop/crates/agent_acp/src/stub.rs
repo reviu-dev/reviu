@@ -162,6 +162,24 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
               SessionUpdate::ToolCall(call),
             ));
           }
+          // "steer" is a second prompt landing inside a parked turn: it
+          // answers itself and releases the parked predecessor.
+          if prompt_contains("steer") {
+            let parked = {
+              let mut slot = waiting.lock().expect("waiting slot");
+              slot.0.take()
+            };
+            let _ = cx.send_notification(SessionNotification::new(
+              session_id.clone(),
+              SessionUpdate::AgentMessageChunk(agent_client_protocol::schema::ContentChunk::new(
+                ContentBlock::Text(TextContent::new("steered reply")),
+              )),
+            ));
+            if let Some(parked) = parked {
+              let _ = parked.respond(PromptResponse::new(StopReason::EndTurn));
+            }
+            return responder.respond(PromptResponse::new(StopReason::EndTurn));
+          }
           // "wait" streams a partial reply then parks the turn until the
           // client cancels it.
           if prompt_contains("wait") {
