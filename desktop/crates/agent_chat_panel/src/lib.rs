@@ -7406,6 +7406,57 @@ mod tests {
   }
 
   #[gpui::test]
+  async fn pasting_an_image_stages_it_and_text_still_pastes(cx: &mut gpui::TestAppContext) {
+    let (panel, cx) = add_panel_window(cx);
+    panel.update(cx, |panel, cx| {
+      panel.status = Status::Ready;
+      panel.supports_images = true;
+      cx.notify();
+    });
+    cx.run_until_parked();
+
+    let input_focus = panel.read_with(cx, |panel, cx| panel.input.read(cx).focus_handle(cx));
+    cx.update(|window, cx| window.focus(&input_focus, cx));
+
+    let image = gpui::Image::from_bytes(gpui::ImageFormat::Png, vec![9, 9, 9]);
+    cx.update(|_, cx| cx.write_to_clipboard(gpui::ClipboardItem::new_image(&image)));
+    cx.simulate_keystrokes("ctrl-v");
+    cx.run_until_parked();
+    panel.read_with(cx, |panel, cx| {
+      assert_eq!(panel.staged_images.len(), 1, "the image staged");
+      assert_eq!(
+        panel.input.read(cx).value(),
+        "",
+        "nothing was typed into the composer"
+      );
+    });
+
+    cx.update(|_, cx| cx.write_to_clipboard(gpui::ClipboardItem::new_string("plain words".into())));
+    cx.simulate_keystrokes("ctrl-v");
+    cx.run_until_parked();
+    panel.read_with(cx, |panel, cx| {
+      assert_eq!(panel.input.read(cx).value(), "plain words");
+      assert_eq!(panel.staged_images.len(), 1, "text pastes stage nothing");
+    });
+  }
+
+  #[gpui::test]
+  async fn a_refused_send_keeps_the_staged_images(cx: &mut gpui::TestAppContext) {
+    let (panel, cx) = add_panel_window(cx);
+    panel.update_in(cx, |panel, window, cx| {
+      panel.status = Status::Ready;
+      panel.supports_images = true;
+      panel.stage_image(gpui::Image::from_bytes(gpui::ImageFormat::Png, vec![1]), cx);
+      panel.input.update(cx, |state, cx| {
+        state.set_value("send me", window, cx);
+      });
+      // No session: the dispatch is refused before the staging is drained.
+      panel.submit(window, cx);
+      assert_eq!(panel.staged_images.len(), 1);
+    });
+  }
+
+  #[gpui::test]
   async fn dropped_paths_stage_images_and_mention_other_files(cx: &mut gpui::TestAppContext) {
     let dir = temp_dir("agent-drop");
     let image_path = dir.join("shot.png");
@@ -7416,12 +7467,13 @@ mod tests {
       panel.supports_images = true;
       panel.cwd = dir.clone();
       let inside = dir.join("src/lib.rs");
-      panel.handle_dropped_paths(&[image_path.clone(), inside], window, cx);
+      let outside = PathBuf::from("/somewhere/else/notes.txt");
+      panel.handle_dropped_paths(&[image_path.clone(), inside, outside], window, cx);
       assert_eq!(panel.staged_images.len(), 1, "the png staged as an image");
       assert_eq!(
         panel.input.read(cx).value().trim(),
-        "@src/lib.rs",
-        "a repo file lands as a mention token"
+        "@src/lib.rs /somewhere/else/notes.txt",
+        "a repo file lands as a mention token, a foreign file as its path"
       );
     });
     std::fs::remove_dir_all(&dir).ok();
