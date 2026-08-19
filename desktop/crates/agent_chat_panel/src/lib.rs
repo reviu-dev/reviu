@@ -530,9 +530,6 @@ pub struct AgentChatPanel {
   tool_group_pins: HashMap<ToolCallId, bool>,
   /// Permission requests are answered with their allow option automatically.
   auto_approve: bool,
-  /// Prompts awaiting a stop reason; steers add to the count and the turn
-  /// only settles when the last one returns.
-  inflight_prompts: usize,
   /// Runway: the sent prompt holds at the viewport top while the reply
   /// streams into reserved space below, instead of tail-scrolling.
   runway_active: bool,
@@ -627,7 +624,6 @@ impl AgentChatPanel {
       pending_md_state: None,
       tool_group_pins: loaded_pins,
       auto_approve: loaded_auto_approve,
-      inflight_prompts: 0,
       runway_active: false,
       runway_end_space: 0.0,
       runway_following: false,
@@ -993,7 +989,6 @@ impl AgentChatPanel {
       pending_md_state: None,
       tool_group_pins: HashMap::new(),
       auto_approve: false,
-      inflight_prompts: 0,
       runway_active: false,
       runway_end_space: 0.0,
       runway_following: false,

@@ -169,16 +169,37 @@ pub fn parse_command_string(s: &str) -> Result<(PathBuf, Vec<String>)> {
   Ok((PathBuf::from(first), parts[1..].to_vec()))
 }
 
+/// What the agent did with a steering request (`_session/steering`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SteerOutcome {
+  /// Delivered into the running turn; that turn's prompt still owns the end.
+  Injected,
+  /// No turn was running and the agent started a detached one by itself.
+  StartedNewTurn,
+  /// No turn was running; the client should send a normal prompt instead.
+  PromptRequired,
+}
+
+/// Extension method claude-agent-acp exposes to steer the running turn. A
+/// plain second `session/prompt` would queue behind it as a fresh turn.
+const STEER_METHOD: &str = "_session/steering";
+
+fn parse_steer_outcome(value: &serde_json::Value) -> SteerOutcome {
+  match value.get("outcome").and_then(|v| v.as_str()) {
+    Some("startedNewTurn") => SteerOutcome::StartedNewTurn,
+    Some("promptRequired") => SteerOutcome::PromptRequired,
+    _ => SteerOutcome::Injected,
+  }
+}
+
 enum DriverCmd {
   Prompt {
     blocks: Vec<ContentBlock>,
     reply: oneshot::Sender<Result<StopReason>>,
   },
-  /// A second prompt sent into the running turn; the in-flight prompt is not
-  /// considered replaced and keeps waiting for its own stop reason.
   Steer {
     blocks: Vec<ContentBlock>,
-    reply: oneshot::Sender<Result<StopReason>>,
+    reply: oneshot::Sender<Result<SteerOutcome>>,
   },
   Cancel,
   Stop,
@@ -495,9 +516,8 @@ impl AgentSession {
       .map_err(|_| anyhow!("agent driver dropped reply"))?
   }
 
-  /// Inject a prompt into the running turn. Outside a turn this behaves like
-  /// a plain prompt.
-  pub async fn steer_prompt_blocks(&self, blocks: Vec<ContentBlock>) -> Result<StopReason> {
+  /// Inject a prompt into the running turn via the steering extension.
+  pub async fn steer_prompt_blocks(&self, blocks: Vec<ContentBlock>) -> Result<SteerOutcome> {
     let (tx, rx) = oneshot::channel();
     self
       .cmd_tx
@@ -1033,8 +1053,11 @@ async fn run_driver(
 
       'outer: while let Ok(cmd) = cmd_rx.recv().await {
         match cmd {
-          // A steer landing outside a turn is just a prompt.
-          DriverCmd::Prompt { blocks, reply } | DriverCmd::Steer { blocks, reply } => {
+          // A steer landing outside a turn: nothing to inject into.
+          DriverCmd::Steer { reply, .. } => {
+            let _ = reply.send(Ok(SteerOutcome::PromptRequired));
+          }
+          DriverCmd::Prompt { blocks, reply } => {
             let prompt_fut = connection
               .send_request(PromptRequest::new(session_id.clone(), blocks))
               .block_task()
@@ -1065,10 +1088,20 @@ async fn run_driver(
                       let _ = other_reply.send(Err(anyhow!("another prompt in flight")));
                     }
                     Ok(DriverCmd::Steer { blocks, reply: steer_reply }) => {
-                      let fut = connection
-                        .send_request(PromptRequest::new(session_id.clone(), blocks))
-                        .block_task();
-                      steers.push(Box::pin(async move { (steer_reply, fut.await) }));
+                      let params = serde_json::json!({
+                        "sessionId": session_id,
+                        "prompt": blocks,
+                        "_meta": { "steering": { "idleBehavior": "promptRequired" } },
+                      });
+                      match agent_client_protocol::UntypedMessage::new(STEER_METHOD, params) {
+                        Ok(msg) => {
+                          let fut = connection.send_request(msg).block_task();
+                          steers.push(Box::pin(async move { (steer_reply, fut.await) }));
+                        }
+                        Err(e) => {
+                          let _ = steer_reply.send(Err(anyhow!("steer: {e}")));
+                        }
+                      }
                     }
                     Ok(DriverCmd::SetMode { mode_id, reply: set_reply }) => {
                       let r = connection
@@ -1108,8 +1141,14 @@ async fn run_driver(
                   }
                 }
                 steer_done = steers.select_next_some() => {
-                  let (steer_reply, response) = steer_done;
-                  let _ = steer_reply.send(map_prompt_response(response));
+                  let (steer_reply, response): (
+                    oneshot::Sender<Result<SteerOutcome>>,
+                    std::result::Result<serde_json::Value, agent_client_protocol::Error>,
+                  ) = steer_done;
+                  let mapped = response
+                    .map(|value| parse_steer_outcome(&value))
+                    .map_err(|e| anyhow!("steer: {e}"));
+                  let _ = steer_reply.send(mapped);
                 }
                 response = prompt_fut => {
                   response_opt = Some(response);

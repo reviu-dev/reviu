@@ -114,8 +114,8 @@ fn a_steer_prompt_joins_the_parked_turn() {
       session.steer_prompt_blocks(vec![agent_client_protocol::schema::ContentBlock::Text(
         agent_client_protocol::schema::TextContent::new("steer now"),
       )]);
-    let steer_stop = steer.await.expect("steer resolves");
-    assert!(matches!(steer_stop, StopReason::EndTurn));
+    let steer_outcome = steer.await.expect("steer resolves");
+    assert!(matches!(steer_outcome, agent_acp::SteerOutcome::Injected));
     let main_stop = main.await.expect("main resolves");
     assert!(matches!(main_stop, StopReason::EndTurn));
   });

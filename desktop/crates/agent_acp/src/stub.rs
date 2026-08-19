@@ -39,6 +39,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
     type WaitSlot = (Option<Responder<PromptResponse>>, bool);
     let waiting: Arc<Mutex<WaitSlot>> = Arc::new(Mutex::new((None, false)));
     let waiting_for_cancel = waiting.clone();
+    let waiting_for_steer = waiting.clone();
 
     Agent
       .builder()
@@ -162,24 +163,6 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
               SessionUpdate::ToolCall(call),
             ));
           }
-          // "steer" is a second prompt landing inside a parked turn: it
-          // answers itself and releases the parked predecessor.
-          if prompt_contains("steer") {
-            let parked = {
-              let mut slot = waiting.lock().expect("waiting slot");
-              slot.0.take()
-            };
-            let _ = cx.send_notification(SessionNotification::new(
-              session_id.clone(),
-              SessionUpdate::AgentMessageChunk(agent_client_protocol::schema::ContentChunk::new(
-                ContentBlock::Text(TextContent::new("steered reply")),
-              )),
-            ));
-            if let Some(parked) = parked {
-              let _ = parked.respond(PromptResponse::new(StopReason::EndTurn));
-            }
-            return responder.respond(PromptResponse::new(StopReason::EndTurn));
-          }
           // "wait" streams a partial reply then parks the turn until the
           // client cancels it.
           if prompt_contains("wait") {
@@ -233,7 +216,53 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
       )
       .on_receive_dispatch(
         async move |message: Dispatch, cx: ConnectionTo<Client>| {
-          message.respond_with_error(agent_client_protocol::Error::method_not_found(), cx)
+          let _ = &cx;
+          // Responses to requests this stub sent (e.g. request_permission)
+          // route to their waiting task.
+          if let Dispatch::Response(result, router) = message {
+            return router.respond_with_result(result);
+          }
+          // The steering extension: injects into a parked turn ("wait"),
+          // errors on "fail", asks for a plain prompt when nothing runs.
+          if let Dispatch::Request(request, responder) = message {
+            if request.method() == "_session/steering" {
+              let session_id = request
+                .params()
+                .get("sessionId")
+                .and_then(|v| v.as_str())
+                .unwrap_or("stub-session")
+                .to_string();
+              let text = request
+                .params()
+                .get("prompt")
+                .and_then(|p| p.get(0))
+                .and_then(|b| b.get("text"))
+                .and_then(|t| t.as_str())
+                .unwrap_or("")
+                .to_string();
+              if text.contains("fail") {
+                return responder
+                  .respond_with_error(agent_client_protocol::Error::internal_error());
+              }
+              let parked = {
+                let mut slot = waiting_for_steer.lock().expect("waiting slot");
+                slot.0.take()
+              };
+              let Some(parked) = parked else {
+                return responder.respond(serde_json::json!({ "outcome": "promptRequired" }));
+              };
+              let _ = cx.send_notification(SessionNotification::new(
+                SessionId::new(std::sync::Arc::<str>::from(session_id.as_str())),
+                SessionUpdate::AgentMessageChunk(agent_client_protocol::schema::ContentChunk::new(
+                  ContentBlock::Text(TextContent::new("steered reply")),
+                )),
+              ));
+              let _ = parked.respond(PromptResponse::new(StopReason::EndTurn));
+              return responder.respond(serde_json::json!({ "outcome": "injected" }));
+            }
+            return responder.respond_with_error(agent_client_protocol::Error::method_not_found());
+          }
+          Ok(())
         },
         agent_client_protocol::on_receive_dispatch!(),
       )

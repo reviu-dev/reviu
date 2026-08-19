@@ -199,7 +199,6 @@ impl AgentChatPanel {
     self.arm_runway();
     cx.notify();
 
-    self.inflight_prompts += 1;
     let cwd = self.cwd.clone();
     let files = self.repo_files.clone();
     let selection = self.active_selection.take();
@@ -231,7 +230,6 @@ impl AgentChatPanel {
       images: 0,
       image_data: Vec::new(),
     }));
-    self.inflight_prompts += 1;
     self.persist_state();
     self.sync_list_count();
     self.arm_runway();
@@ -243,24 +241,35 @@ impl AgentChatPanel {
       let blocks = build_prompt_blocks(text.clone(), files, None, Vec::new(), cwd).await;
       let result = session.steer_prompt_blocks(blocks).await;
       let _ = this.update(cx, |panel, cx| {
-        // Cascade: a refusal while the turn still runs re-queues the message
-        // instead of losing it.
-        if result.is_err() && panel.inflight_prompts > 1 {
-          panel.retract_steered_message(&text);
-          panel.queued_prompts.push(text.clone());
-          panel.items.push(ChatItem::Message(ChatMessage {
-            role: ChatRole::System,
-            text: "Steer refused; message queued for the next turn.".into(),
-            images: 0,
-            image_data: Vec::new(),
-          }));
-          panel.inflight_prompts -= 1;
-          panel.persist_state();
-          panel.sync_list_count();
-          cx.notify();
-          return;
+        match result {
+          // Delivered into the running turn; its prompt still owns the end.
+          Ok(agent_acp::SteerOutcome::Injected) => {}
+          // The agent started a detached turn itself; its stream lands as
+          // late chunks and there is no reply to wait for.
+          Ok(agent_acp::SteerOutcome::StartedNewTurn) => {}
+          // The turn was already over: run the message as a fresh turn.
+          Ok(agent_acp::SteerOutcome::PromptRequired) => {
+            panel.retract_steered_message(&text);
+            if !panel.in_flight && !panel.dispatch_prompt(text.clone(), cx) {
+              panel.queued_prompts.push(text.clone());
+            }
+          }
+          // Steering unsupported or refused: back to the queue, not lost.
+          Err(e) => {
+            eprintln!("[agent] steer error: {e}");
+            panel.retract_steered_message(&text);
+            panel.queued_prompts.push(text.clone());
+            panel.items.push(ChatItem::Message(ChatMessage {
+              role: ChatRole::System,
+              text: "Steer refused; message queued for the next turn.".into(),
+              images: 0,
+              image_data: Vec::new(),
+            }));
+          }
         }
-        panel.complete_prompt(result, cx);
+        panel.persist_state();
+        panel.sync_list_count();
+        cx.notify();
       });
     })
     .detach();
@@ -277,20 +286,13 @@ impl AgentChatPanel {
     }
   }
 
-  /// Settles a finished prompt. With a steer still in flight the turn is not
-  /// over: the superseded predecessor's return must not close it.
+  /// Settles a finished prompt: buffers flush, the summary card lands, the
+  /// turn ends and the queue drains.
   pub(crate) fn complete_prompt(
     &mut self,
     result: anyhow::Result<agent_client_protocol::schema::StopReason>,
     cx: &mut Context<Self>,
   ) {
-    self.inflight_prompts = self.inflight_prompts.saturating_sub(1);
-    if self.inflight_prompts > 0 {
-      if let Err(e) = &result {
-        eprintln!("[agent] superseded prompt error: {e}");
-      }
-      return;
-    }
     {
       let panel = self;
       {
