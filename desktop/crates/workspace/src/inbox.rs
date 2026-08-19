@@ -135,13 +135,16 @@ impl Render for Inbox {
         .into_any_element()
     } else {
       div()
-        .id("session-page-inbox-list")
         .relative()
-        .max_h(px(INBOX_MAX_HEIGHT))
-        .overflow_y_scroll()
-        .track_scroll(&self.scroll_handle)
-        .pb_1()
-        .children(rows)
+        .child(
+          div()
+            .id("session-page-inbox-list")
+            .max_h(px(INBOX_MAX_HEIGHT))
+            .overflow_y_scroll()
+            .track_scroll(&self.scroll_handle)
+            .pb_1()
+            .children(rows),
+        )
         .vertical_scrollbar(&self.scroll_handle)
         .into_any_element()
     };
