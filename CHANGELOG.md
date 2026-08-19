@@ -4,6 +4,10 @@ All notable changes to Reviu are documented here.
 
 ## 1.0.0
 
+### A Receipt For Every Turn
+
+When the agent finishes a turn that touched files, the conversation now closes it with a summary card: how many files were edited, the added and removed line counts overall and per file. Each file row opens its diff, Review jumps straight into the diff view, and Undo restores files and conversation to before the turn. Long file lists fold behind a "Show more" toggle. The card is part of the transcript, so it is still there when you come back to the conversation.
+
 ### Small Alignments
 
 The sessions list and the GitHub inbox show a scrollbar while scrolling. File search results use the same text size as the command palette instead of a larger one, and the right panel's titles match the sidebar's. In the sessions list, the timestamp now sits flush right; the delete button appears in its place on hover instead of reserving an empty gap.

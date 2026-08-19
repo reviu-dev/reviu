@@ -3,11 +3,11 @@
 use std::sync::{Arc, Mutex};
 
 use agent_client_protocol::schema::{
-  AgentCapabilities, CancelNotification, ContentBlock, Implementation, InitializeRequest,
+  AgentCapabilities, CancelNotification, ContentBlock, Diff, Implementation, InitializeRequest,
   InitializeResponse, NewSessionRequest, NewSessionResponse, PermissionOption,
   PermissionOptionKind, PromptRequest, PromptResponse, RequestPermissionRequest, SessionId,
-  SessionNotification, SessionUpdate, StopReason, TextContent, ToolCallId, ToolCallUpdate,
-  ToolCallUpdateFields, ToolKind,
+  SessionNotification, SessionUpdate, StopReason, TextContent, ToolCall, ToolCallContent,
+  ToolCallId, ToolCallStatus, ToolCallUpdate, ToolCallUpdateFields, ToolKind,
 };
 use agent_client_protocol::{Agent, Client, ConnectionTo, Dispatch, Responder};
 use smol::Unblock;
@@ -61,8 +61,6 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
         async move |req: InitializeRequest, responder, _: ConnectionTo<Client>| {
           responder.respond(
             InitializeResponse::new(req.protocol_version)
-              // load_session advertised but not handled: session/load errors with
-              // method_not_found, which exercises the fall-back-to-new-session path.
               .agent_capabilities(
                 AgentCapabilities::new()
                   .load_session(true)
@@ -79,6 +77,11 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
         async move |req: agent_client_protocol::schema::LoadSessionRequest,
                     responder,
                     cx: ConnectionTo<Client>| {
+          // Only the session this stub ever creates can be loaded; an unknown
+          // id errors so clients exercise the fall-back-to-new-session path.
+          if req.session_id.0.as_ref() != "stub-session" {
+            return responder.respond_with_error(agent_client_protocol::Error::invalid_params());
+          }
           // Real agents replay the whole history during a load; the client
           // must drop that replayed content instead of appending it again.
           let session_id = req.session_id.clone();
@@ -142,6 +145,21 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
               SessionUpdate::AgentMessageChunk(agent_client_protocol::schema::ContentChunk::new(
                 ContentBlock::Text(TextContent::new("image received")),
               )),
+            ));
+          }
+          // "edit" streams an edit tool call carrying a diff, so clients can
+          // exercise the per-turn edit summary.
+          if prompt_contains("edit") {
+            let mut call = ToolCall::new(ToolCallId::new("stub-edit"), "Editing files".to_string());
+            call.kind = ToolKind::Edit;
+            call.status = ToolCallStatus::Completed;
+            call.content = vec![ToolCallContent::Diff(
+              Diff::new("src/stub.rs", "line one\nline two\n")
+                .old_text(Some("line one\n".to_string())),
+            )];
+            let _ = cx.send_notification(SessionNotification::new(
+              session_id.clone(),
+              SessionUpdate::ToolCall(call),
             ));
           }
           // "wait" streams a partial reply then parks the turn until the

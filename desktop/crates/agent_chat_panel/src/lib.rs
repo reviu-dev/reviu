@@ -317,6 +317,7 @@ enum ChatItem {
   Plan(PlanView),
   Thought(ThoughtView),
   Checkpoint(CheckpointMarker),
+  TurnSummary(TurnSummaryView),
 }
 
 /// Working-tree snapshot taken before the prompt that follows it.
@@ -325,6 +326,26 @@ struct CheckpointMarker {
   ref_name: String,
   created_at_secs: u64,
 }
+
+/// Aggregated edits of one turn: one row per file, totals in the header.
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+struct TurnSummaryView {
+  files: Vec<TurnFileStat>,
+  /// Checkpoint guarding the turn; enables Undo.
+  checkpoint_ref: Option<String>,
+  #[serde(skip)]
+  expanded: bool,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+struct TurnFileStat {
+  path: String,
+  added: u32,
+  removed: u32,
+}
+
+/// File rows shown on a collapsed turn summary; beyond this, an expander.
+const TURN_SUMMARY_COLLAPSED_FILES: usize = 3;
 
 #[derive(serde::Serialize, serde::Deserialize)]
 #[serde(tag = "type")]
@@ -335,6 +356,7 @@ enum PersistedChatItem {
   Thought(ThoughtView),
   Checkpoint(CheckpointMarker),
   Permission(Box<PermissionItem>),
+  TurnSummary(TurnSummaryView),
 }
 
 #[derive(serde::Serialize, serde::Deserialize)]
@@ -806,6 +828,24 @@ impl AgentChatPanel {
       }
       _ => None,
     })
+  }
+
+  /// The turn summary cards, oldest first: (path, added, removed) per file.
+  #[cfg(any(test, feature = "test-support"))]
+  pub fn turn_summary_rows(&self) -> Vec<Vec<(String, u32, u32)>> {
+    self
+      .items
+      .iter()
+      .filter_map(|item| match item {
+        ChatItem::TurnSummary(s) => Some(
+          s.files
+            .iter()
+            .map(|f| (f.path.clone(), f.added, f.removed))
+            .collect(),
+        ),
+        _ => None,
+      })
+      .collect()
   }
 
   /// The thought texts of the conversation, oldest first.
@@ -1796,8 +1836,224 @@ impl AgentChatPanel {
           .child(hairline())
           .into_any_element()
       }
+      ChatItem::TurnSummary(s) => self.render_turn_summary(idx, s, theme, cx),
     };
     div().px_3().child(element).into_any_element()
+  }
+
+  fn render_turn_summary(
+    &self,
+    idx: usize,
+    view: &TurnSummaryView,
+    theme: &gpui_component::Theme,
+    cx: &mut Context<Self>,
+  ) -> gpui::AnyElement {
+    let added: u32 = view.files.iter().map(|f| f.added).sum();
+    let removed: u32 = view.files.iter().map(|f| f.removed).sum();
+    let file_count = view.files.len();
+    let visible = if view.expanded {
+      file_count
+    } else {
+      file_count.min(TURN_SUMMARY_COLLAPSED_FILES)
+    };
+    let hidden = file_count - visible;
+    let can_undo = view.checkpoint_ref.is_some() && !self.in_flight;
+    let undo_ref = view.checkpoint_ref.clone();
+    let review_path = view.files.first().map(|f| PathBuf::from(&f.path));
+
+    let title = if file_count == 1 {
+      "Edited 1 file".to_string()
+    } else {
+      format!("Edited {file_count} files")
+    };
+
+    let header = h_flex()
+      .items_center()
+      .gap_2()
+      .px_3()
+      .py_2()
+      .child(
+        div()
+          .flex_shrink_0()
+          .size(px(20.))
+          .rounded(px(5.))
+          .bg(theme.secondary)
+          .flex()
+          .items_center()
+          .justify_center()
+          .child(
+            gpui_component::Icon::new(UiIconName::FileDiff)
+              .size_3()
+              .text_color(theme.muted_foreground),
+          ),
+      )
+      .child(
+        h_flex()
+          .flex_1()
+          .min_w(px(0.))
+          .items_baseline()
+          .gap_2()
+          .child(
+            div()
+              .text_sm()
+              .font_weight(FontWeight::MEDIUM)
+              .text_color(theme.foreground)
+              .child(title),
+          )
+          .child(
+            h_flex()
+              .gap_1()
+              .text_xs()
+              .child(
+                div()
+                  .text_color(theme.status_green())
+                  .child(format!("+{added}")),
+              )
+              .child(
+                div()
+                  .text_color(theme.status_red())
+                  .child(format!("-{removed}")),
+              ),
+          ),
+      )
+      .when(can_undo, |this| {
+        this.child(
+          div()
+            .debug_selector(|| "turn-summary-undo".to_string())
+            .child(
+              Button::new(("turn-summary-undo", idx))
+                .label("Undo")
+                .xsmall()
+                .ghost()
+                .tooltip("Restore files and conversation to before this turn")
+                .on_click(cx.listener(move |_, _, _, cx| {
+                  if let Some(ref_name) = undo_ref.clone() {
+                    cx.emit(AgentChatPanelEvent::RollbackRequested { ref_name });
+                  }
+                })),
+            ),
+        )
+      })
+      .when_some(review_path, |this, path| {
+        this.child(
+          div()
+            .debug_selector(|| "turn-summary-review".to_string())
+            .child(
+              Button::new(("turn-summary-review", idx))
+                .label("Review")
+                .xsmall()
+                .outline()
+                .tooltip("Open the changes in the diff view")
+                .on_click(cx.listener(move |_, _, _, cx| {
+                  cx.emit(AgentChatPanelEvent::OpenPath {
+                    path: path.clone(),
+                    line: None,
+                  });
+                })),
+            ),
+        )
+      });
+
+    let mut card = v_flex()
+      .debug_selector(|| "chat-turn-summary".to_string())
+      .my_2()
+      .border_1()
+      .border_color(theme.border)
+      .rounded(px(8.))
+      .overflow_hidden()
+      .child(header);
+
+    for (row_ix, file) in view.files.iter().take(visible).enumerate() {
+      let path = PathBuf::from(&file.path);
+      card = card.child(
+        h_flex()
+          .id(("turn-summary-file", (idx << 16) | row_ix))
+          .items_center()
+          .gap_2()
+          .px_3()
+          .py_1p5()
+          .border_t_1()
+          .border_color(theme.border.opacity(0.6))
+          .cursor_pointer()
+          .hover(|s| s.bg(theme.secondary_hover))
+          .on_click(cx.listener(move |_, _, _, cx| {
+            cx.emit(AgentChatPanelEvent::OpenPath {
+              path: path.clone(),
+              line: None,
+            });
+          }))
+          .child(
+            div()
+              .flex_1()
+              .min_w(px(0.))
+              .text_xs()
+              .truncate()
+              .text_color(theme.foreground)
+              .child(file.path.clone()),
+          )
+          .child(
+            h_flex()
+              .flex_shrink_0()
+              .gap_1()
+              .text_xs()
+              .child(
+                div()
+                  .text_color(theme.status_green())
+                  .child(format!("+{}", file.added)),
+              )
+              .child(
+                div()
+                  .text_color(theme.status_red())
+                  .child(format!("-{}", file.removed)),
+              ),
+          ),
+      );
+    }
+
+    if hidden > 0 || (view.expanded && file_count > TURN_SUMMARY_COLLAPSED_FILES) {
+      let expanded = view.expanded;
+      let label = if expanded {
+        "Show fewer files".to_string()
+      } else {
+        format!(
+          "Show {hidden} more {}",
+          if hidden == 1 { "file" } else { "files" }
+        )
+      };
+      card = card.child(
+        h_flex()
+          .id(("turn-summary-toggle", idx))
+          .items_center()
+          .gap_1()
+          .px_3()
+          .py_1p5()
+          .border_t_1()
+          .border_color(theme.border.opacity(0.6))
+          .cursor_pointer()
+          .text_xs()
+          .text_color(theme.muted_foreground)
+          .hover(|s| s.bg(theme.secondary_hover))
+          .on_click(cx.listener(move |panel, _, _, cx| {
+            if let Some(ChatItem::TurnSummary(s)) = panel.items.get_mut(idx) {
+              s.expanded = !expanded;
+              let list_ix = panel.list_ix_for_item(idx);
+              panel.mark_item_changed_at(list_ix);
+              cx.notify();
+            }
+          }))
+          .child(label)
+          .child(
+            gpui_component::Icon::new(if expanded {
+              IconName::ChevronUp
+            } else {
+              IconName::ChevronDown
+            })
+            .size_3(),
+          ),
+      );
+    }
+
+    card.into_any_element()
   }
 
   fn start_permission_forwarder(
@@ -2874,6 +3130,7 @@ impl AgentChatPanel {
       let result = session.send_prompt_blocks(blocks).await;
       let _ = this.update(cx, |panel, cx| {
         panel.flush_turn_buffers();
+        panel.append_turn_summary();
         let mut drain_queue = false;
         match result {
           Ok(stop_reason) => {
@@ -2947,6 +3204,19 @@ impl AgentChatPanel {
 
   pub fn is_turn_in_flight(&self) -> bool {
     self.in_flight
+  }
+
+  /// Closes a turn that edited files with an aggregated summary card.
+  fn append_turn_summary(&mut self) {
+    let (files, checkpoint_ref) = turn_edit_stats(&self.items);
+    if files.is_empty() {
+      return;
+    }
+    self.items.push(ChatItem::TurnSummary(TurnSummaryView {
+      files,
+      checkpoint_ref,
+      expanded: false,
+    }));
   }
 
   /// Hide the header history/new-conversation buttons when the host provides
@@ -3165,6 +3435,7 @@ impl AgentChatPanel {
         ChatItem::Thought(t) => PersistedChatItem::Thought(t.clone()),
         ChatItem::Checkpoint(c) => PersistedChatItem::Checkpoint(c.clone()),
         ChatItem::Permission(p) => PersistedChatItem::Permission(p.clone()),
+        ChatItem::TurnSummary(s) => PersistedChatItem::TurnSummary(s.clone()),
       })
       .collect();
     let _ = std::fs::create_dir_all(dir);
@@ -3343,6 +3614,7 @@ fn load_conversation_file(path: &std::path::Path) -> Option<LoadedConversation> 
         }
         items.push(ChatItem::Permission(p));
       }
+      PersistedChatItem::TurnSummary(s) => items.push(ChatItem::TurnSummary(s)),
     }
   }
   let pins = parsed
@@ -3626,6 +3898,47 @@ fn checkpoint_ref_before(items: &[ChatItem], idx: usize) -> Option<String> {
     }
   }
   None
+}
+
+/// Files edited since the current turn began, aggregated by path in first-edit
+/// order, plus the checkpoint guarding that turn.
+fn turn_edit_stats(items: &[ChatItem]) -> (Vec<TurnFileStat>, Option<String>) {
+  let mut boundary = 0usize;
+  for (idx, item) in items.iter().enumerate().rev() {
+    match item {
+      ChatItem::Message(m) if matches!(m.role, ChatRole::User | ChatRole::ReviewExport) => {
+        boundary = idx;
+        break;
+      }
+      ChatItem::Checkpoint(_) | ChatItem::TurnSummary(_) => {
+        boundary = idx;
+        break;
+      }
+      _ => {}
+    }
+  }
+  let checkpoint_ref = match items.get(boundary) {
+    Some(ChatItem::Checkpoint(marker)) => Some(marker.ref_name.clone()),
+    _ => checkpoint_ref_before(items, boundary),
+  };
+  let mut files: Vec<TurnFileStat> = Vec::new();
+  let mut by_path: HashMap<String, usize> = HashMap::new();
+  for item in &items[boundary..] {
+    let ChatItem::Tool(tool) = item else { continue };
+    for diff in &tool.diffs {
+      let ix = *by_path.entry(diff.path.clone()).or_insert_with(|| {
+        files.push(TurnFileStat {
+          path: diff.path.clone(),
+          added: 0,
+          removed: 0,
+        });
+        files.len() - 1
+      });
+      files[ix].added += diff.added;
+      files[ix].removed += diff.removed;
+    }
+  }
+  (files, checkpoint_ref)
 }
 
 fn place_checkpoint_marker(items: &mut Vec<ChatItem>, marker: ChatItem) {
@@ -5687,6 +6000,130 @@ mod tests {
     }
   }
 
+  fn edit_tool(id: &str, diffs: Vec<(&str, u32, u32)>) -> ChatItem {
+    let arc: std::sync::Arc<str> = std::sync::Arc::from(id);
+    ChatItem::Tool(ToolCallView {
+      id: ToolCallId::new(arc),
+      title: "Edit".to_string(),
+      kind: ToolKind::Edit,
+      status: ToolCallStatus::Completed,
+      locations: Vec::new(),
+      diffs: diffs
+        .into_iter()
+        .map(|(path, added, removed)| DiffSummary {
+          path: path.to_string(),
+          added,
+          removed,
+          lines: Vec::new(),
+          expanded: false,
+        })
+        .collect(),
+      outputs: Vec::new(),
+      content_fp: 0,
+    })
+  }
+
+  #[test]
+  fn turn_edit_stats_aggregates_the_last_turn_only() {
+    let items = vec![
+      checkpoint_marker("cp-1"),
+      user_message("first"),
+      edit_tool("t1", vec![("old.rs", 9, 9)]),
+      ChatItem::TurnSummary(TurnSummaryView {
+        files: vec![TurnFileStat {
+          path: "old.rs".into(),
+          added: 9,
+          removed: 9,
+        }],
+        checkpoint_ref: Some("cp-1".into()),
+        expanded: false,
+      }),
+      checkpoint_marker("cp-2"),
+      user_message("second"),
+      edit_tool("t2", vec![("a.rs", 2, 1)]),
+      edit_tool("t3", vec![("a.rs", 3, 0), ("b.rs", 1, 1)]),
+    ];
+    let (files, checkpoint_ref) = turn_edit_stats(&items);
+    assert_eq!(checkpoint_ref, Some("cp-2".to_string()));
+    assert_eq!(
+      files,
+      vec![
+        TurnFileStat {
+          path: "a.rs".into(),
+          added: 5,
+          removed: 1
+        },
+        TurnFileStat {
+          path: "b.rs".into(),
+          added: 1,
+          removed: 1
+        },
+      ]
+    );
+  }
+
+  #[test]
+  fn turn_edit_stats_is_empty_for_a_turn_without_edit_diffs() {
+    let items = vec![
+      checkpoint_marker("cp-1"),
+      user_message("hi"),
+      edit_tool("t1", vec![]),
+      agent_message("done"),
+    ];
+    let (files, checkpoint_ref) = turn_edit_stats(&items);
+    assert!(files.is_empty());
+    assert_eq!(checkpoint_ref, Some("cp-1".to_string()));
+  }
+
+  #[test]
+  fn turn_summary_survives_persistence_roundtrip_collapsed() {
+    let view = TurnSummaryView {
+      files: vec![TurnFileStat {
+        path: "src/lib.rs".into(),
+        added: 12,
+        removed: 3,
+      }],
+      checkpoint_ref: Some("refs/reviu/checkpoints/s/1".into()),
+      expanded: true,
+    };
+    let json =
+      serde_json::to_string(&PersistedChatItem::TurnSummary(view.clone())).expect("serialize");
+    let restored: PersistedChatItem = serde_json::from_str(&json).expect("deserialize");
+    match restored {
+      PersistedChatItem::TurnSummary(restored) => {
+        assert_eq!(restored.files, view.files);
+        assert_eq!(restored.checkpoint_ref, view.checkpoint_ref);
+        // Expansion is a live-view state, not part of the transcript.
+        assert!(!restored.expanded);
+      }
+      _ => panic!("expected turn summary item"),
+    }
+  }
+
+  #[gpui::test]
+  async fn a_turn_with_edits_appends_a_summary_card(cx: &mut gpui::TestAppContext) {
+    let (panel, cx) = add_panel_window(cx);
+    panel.update(cx, |panel, _| {
+      panel.items = vec![
+        checkpoint_marker("cp-1"),
+        user_message("edit things"),
+        edit_tool("t1", vec![("a.rs", 4, 2)]),
+      ];
+      panel.append_turn_summary();
+      match panel.items.last() {
+        Some(ChatItem::TurnSummary(s)) => {
+          assert_eq!(s.checkpoint_ref, Some("cp-1".to_string()));
+          assert_eq!(s.files.len(), 1);
+        }
+        other => panic!("expected a turn summary, got {other:?}"),
+      }
+      // A turn without edits must not add a second card.
+      let len = panel.items.len();
+      panel.append_turn_summary();
+      assert_eq!(panel.items.len(), len);
+    });
+  }
+
   #[test]
   fn strip_effort_suffix_removes_known_levels_only() {
     assert_eq!(strip_effort_suffix("GPT-5.6-Sol (low)"), "GPT-5.6-Sol");
@@ -6375,6 +6812,7 @@ mod tests {
         ChatItem::Plan(_) => "plan",
         ChatItem::Permission(_) => "permission",
         ChatItem::Checkpoint(_) => "checkpoint",
+        ChatItem::TurnSummary(_) => "turn-summary",
       })
       .collect()
   }

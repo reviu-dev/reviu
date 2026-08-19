@@ -11610,6 +11610,7 @@ pub mod tests {
   }
 
   #[test]
+  #[allow(clippy::reversed_empty_ranges)]
   fn test_clamp_range_to_len_normalizes_and_clamps() {
     assert_eq!(Editor::clamp_range_to_len(2..5, 10), 2..5);
     assert_eq!(Editor::clamp_range_to_len(2..50, 10), 2..10);
@@ -11844,6 +11845,7 @@ pub mod tests {
   }
 
   #[test]
+  #[allow(clippy::reversed_empty_ranges)]
   fn test_utf16_range_to_char_range_in_text_clamps_and_normalizes() {
     let range = Editor::utf16_range_to_char_range_in_text("✅ab", &(10..1));
     assert_eq!(range, 1..3);
@@ -12383,7 +12385,7 @@ pub mod tests {
 
       // Highlighting is async with debouncing, so it might not be ready immediately
       // Just verify the document has content that should be highlighted
-      assert!(doc.len() > 0);
+      assert!(!doc.is_empty());
       assert!(doc.len_lines() > 0);
     });
 
