@@ -460,6 +460,8 @@ pub enum AgentChatPanelEvent {
   TurnFinished,
   /// User asked to roll back to a checkpoint marker.
   RollbackRequested { ref_name: String },
+  /// The agent is waiting on a permission answer.
+  PermissionRequested,
 }
 
 impl gpui::EventEmitter<AgentChatPanelEvent> for AgentChatPanel {}
@@ -1737,6 +1739,7 @@ impl AgentChatPanel {
               resolved: None,
             })));
           panel.sync_list_count();
+          cx.emit(AgentChatPanelEvent::PermissionRequested);
           cx.notify();
         });
       }

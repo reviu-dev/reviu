@@ -76,7 +76,14 @@ impl SessionPage {
         AgentChatPanelEvent::TurnStarted => {
           this.create_turn_checkpoint(cx);
         }
+        AgentChatPanelEvent::PermissionRequested => {
+          this.notify_agent_attention("Reviu agent needs a decision", window, cx);
+        }
         AgentChatPanelEvent::TurnFinished => {
+          // A queued prompt draining into a fresh turn is not a stopping point.
+          if !_panel.read(cx).is_turn_in_flight() {
+            this.notify_agent_attention("Reviu agent finished", window, cx);
+          }
           this.dock_panel.update(cx, |panel, cx| panel.refresh(cx));
           if let Some(editor) = this.editor.clone() {
             editor.update(cx, |editor, cx| editor.refresh_git_state(cx));
@@ -92,6 +99,69 @@ impl SessionPage {
     .detach();
     self.agent_chat_view = Some(view);
     self.sync_session_list(cx);
+  }
+
+  /// Popup on the primary display when the agent needs eyes and the main
+  /// window is inactive; clicking it brings the app back.
+  pub(super) fn notify_agent_attention(
+    &mut self,
+    title: &str,
+    window: &mut Window,
+    cx: &mut Context<Self>,
+  ) {
+    use crate::agent_notification::{AgentNotification, AgentNotificationEvent};
+
+    if window.is_window_active() {
+      return;
+    }
+    if !crate::config::AppSettings::get(cx).agent_notifications {
+      return;
+    }
+    // One popup at a time: the newest wins.
+    if let Some(existing) = self.agent_notification.take() {
+      let _ = existing.update(cx, |_, window, _| window.remove_window());
+    }
+    let Some(screen) = cx.primary_display() else {
+      return;
+    };
+    let caption = self
+      .agent_chat_view
+      .as_ref()
+      .map(|panel| panel.read(cx).current_conversation().title.clone())
+      .filter(|title| !title.is_empty())
+      .unwrap_or_else(|| "Agent session".to_string());
+    let main_window = self.window_handle;
+    let title = title.to_string();
+    let Ok(handle) = cx.open_window(AgentNotification::window_options(screen), |_, cx| {
+      cx.new(|_| AgentNotification::new(title, caption))
+    }) else {
+      return;
+    };
+    let this = cx.entity().downgrade();
+    let _ = handle.update(cx, |_, _, cx| {
+      cx.subscribe(
+        &cx.entity(),
+        move |_, _, event: &AgentNotificationEvent, cx| {
+          if matches!(event, AgentNotificationEvent::Accepted) {
+            let _ = cx.update_window(main_window, |_, window, _| window.activate_window());
+          }
+          cx.defer({
+            let this = this.clone();
+            move |cx| {
+              let _ = this.update(cx, |this, cx| this.dismiss_agent_notification(cx));
+            }
+          });
+        },
+      )
+      .detach();
+    });
+    self.agent_notification = Some(handle);
+  }
+
+  pub(super) fn dismiss_agent_notification(&mut self, cx: &mut Context<Self>) {
+    if let Some(handle) = self.agent_notification.take() {
+      let _ = handle.update(cx, |_, window, _| window.remove_window());
+    }
   }
 
   pub(super) fn create_turn_checkpoint(&mut self, cx: &mut Context<Self>) {

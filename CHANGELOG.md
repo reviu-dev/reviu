@@ -4,6 +4,10 @@ All notable changes to Reviu are documented here.
 
 ## 1.0.0
 
+### Know When The Agent Needs You
+
+Working in another app while the agent runs? Reviu now shows a small popup in the corner of your screen when a turn finishes or when the agent waits on a permission, and clicking it brings you straight back. It only appears while the window is inactive, never over your work in Reviu itself, and a queued message running on its own never fires one. A switch in Settings under Agent turns it off.
+
 ### Streaming That Stays Fast
 
 Long replies no longer get slower as they grow: each streamed chunk now extends the rendered reply incrementally instead of re-reading the whole message every time. Tool updates got the same treatment, recomputing diffs and syntax colors only when their content actually changes; a status change costs nothing. A side effect you can see: re-sent tool updates no longer collapse the diff you had expanded.

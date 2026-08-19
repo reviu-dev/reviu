@@ -221,6 +221,8 @@ pub struct AppSettings {
   pub clone_protocol: CloneProtocol,
   pub menu_bar_icon: bool,
   pub analytics_enabled: bool,
+  /// Popup when the agent finishes or asks while the window is inactive.
+  pub agent_notifications: bool,
 }
 
 impl Global for AppSettings {}
@@ -251,6 +253,7 @@ impl Default for AppSettings {
       clone_protocol: CloneProtocol::Https,
       menu_bar_icon: true,
       analytics_enabled: true,
+      agent_notifications: true,
     }
   }
 }
@@ -446,6 +449,7 @@ impl ConfigStore {
           clone_protocol: CloneProtocol::from_str(&clone_protocol),
           menu_bar_icon: menu_bar_icon != 0,
           analytics_enabled: analytics_enabled != 0,
+          agent_notifications: true,
         })
       },
     );
@@ -796,6 +800,7 @@ mod tests {
       hide_whitespace: true,
       clone_protocol: CloneProtocol::Ssh,
       menu_bar_icon: false,
+      agent_notifications: false,
     };
     ConfigStore::persist_app_settings(settings);
 

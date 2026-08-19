@@ -78,6 +78,8 @@ struct SettingsDoc {
   menu_bar_icon: Option<bool>,
   #[serde(deserialize_with = "lenient")]
   analytics_enabled: Option<bool>,
+  #[serde(deserialize_with = "lenient")]
+  agent_notifications: Option<bool>,
 }
 
 /// A field of the wrong type falls back to its default instead of failing the file.
@@ -106,6 +108,9 @@ impl SettingsDoc {
       clone_protocol: self.clone_protocol.unwrap_or(defaults.clone_protocol),
       menu_bar_icon: self.menu_bar_icon.unwrap_or(defaults.menu_bar_icon),
       analytics_enabled: self.analytics_enabled.unwrap_or(defaults.analytics_enabled),
+      agent_notifications: self
+        .agent_notifications
+        .unwrap_or(defaults.agent_notifications),
     }
   }
 }
@@ -123,6 +128,7 @@ impl From<AppSettings> for SettingsDoc {
       clone_protocol: Some(settings.clone_protocol),
       menu_bar_icon: Some(settings.menu_bar_icon),
       analytics_enabled: Some(settings.analytics_enabled),
+      agent_notifications: Some(settings.agent_notifications),
     }
   }
 }
@@ -226,6 +232,7 @@ mod tests {
       clone_protocol: CloneProtocol::Ssh,
       menu_bar_icon: false,
       analytics_enabled: false,
+      agent_notifications: false,
     };
     persist(settings);
 

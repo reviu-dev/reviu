@@ -225,6 +225,21 @@ impl SettingsPage {
           )
           .description("Color indentation guides by level in the editor."),
         ]),
+        SettingGroup::new().title("Agent").items(vec![
+          SettingItem::new(
+            "Notify When The Agent Needs You",
+            SettingField::checkbox(
+              move |cx: &App| PersistedSettings::get(cx).agent_notifications,
+              move |val: bool, cx: &mut App| {
+                PersistedSettings::update(cx, |s| s.agent_notifications = val);
+              },
+            )
+            .default_value(true),
+          )
+          .description(
+            "Show a popup when a turn finishes or a permission is asked while the window is inactive.",
+          ),
+        ]),
         SettingGroup::new().title("Git").items(vec![
           SettingItem::new(
             "Unified File View",

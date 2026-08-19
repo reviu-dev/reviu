@@ -169,6 +169,7 @@ pub struct SessionPage {
   focus_handle: FocusHandle,
   window_handle: AnyWindowHandle,
   agent_chat_view: Option<Entity<AgentChatPanel>>,
+  agent_notification: Option<gpui::WindowHandle<crate::agent_notification::AgentNotification>>,
   dock_panel: Entity<DockPanel>,
   inbox: Entity<Inbox>,
   session_list: Entity<SessionList>,
@@ -304,6 +305,7 @@ impl SessionPage {
       focus_handle: cx.focus_handle(),
       window_handle: window.window_handle(),
       agent_chat_view: None,
+      agent_notification: None,
       dock_panel,
       inbox,
       session_list,
@@ -781,6 +783,62 @@ mod tests {
   use crate::test_support::{TempRepo, commit_text_file};
   use gpui::TestAppContext;
   use std::path::Path;
+
+  #[gpui::test]
+  async fn agent_attention_pops_a_window_only_while_inactive(cx: &mut TestAppContext) {
+    let repo = TempRepo::init("session-page-agent-notify");
+    let (page, cx) = add_session_page_window(repo.path.clone(), cx);
+    cx.run_until_parked();
+    let windows_before = cx.update(|_, cx| cx.windows().len());
+
+    // Test windows are never platform-active, which is exactly the state the
+    // popup exists for; the active-window early return has no simulator.
+    cx.deactivate_window();
+    page.update_in(cx, |page, window, cx| {
+      page.notify_agent_attention("Reviu agent finished", window, cx);
+    });
+    cx.run_until_parked();
+    assert_eq!(
+      cx.update(|_, cx| cx.windows().len()),
+      windows_before + 1,
+      "an inactive window grows the popup"
+    );
+
+    // A newer notification replaces the old one instead of stacking.
+    page.update_in(cx, |page, window, cx| {
+      page.notify_agent_attention("Reviu agent needs a decision", window, cx);
+    });
+    cx.run_until_parked();
+    assert_eq!(cx.update(|_, cx| cx.windows().len()), windows_before + 1);
+
+    page.update(cx, |page, cx| page.dismiss_agent_notification(cx));
+    cx.run_until_parked();
+    assert_eq!(cx.update(|_, cx| cx.windows().len()), windows_before);
+  }
+
+  #[gpui::test]
+  async fn the_notification_setting_gates_the_popup(cx: &mut TestAppContext) {
+    let repo = TempRepo::init("session-page-agent-notify-off");
+    let (page, cx) = add_session_page_window(repo.path.clone(), cx);
+    cx.run_until_parked();
+    cx.update(|_, cx| {
+      let mut settings = crate::config::AppSettings::get(cx);
+      settings.agent_notifications = false;
+      cx.set_global(settings);
+    });
+    let windows_before = cx.update(|_, cx| cx.windows().len());
+
+    cx.deactivate_window();
+    page.update_in(cx, |page, window, cx| {
+      page.notify_agent_attention("Reviu agent finished", window, cx);
+    });
+    cx.run_until_parked();
+    assert_eq!(
+      cx.update(|_, cx| cx.windows().len()),
+      windows_before,
+      "the setting keeps the popup away"
+    );
+  }
 
   #[gpui::test(iterations = 10)]
   async fn committing_in_the_shell_updates_the_ahead_counter(cx: &mut TestAppContext) {

@@ -46,6 +46,7 @@ mod about_page;
 mod actions;
 mod active_local_repo;
 mod agent_chat_state;
+mod agent_notification;
 mod agent_review;
 mod agent_settings;
 mod analytics;
