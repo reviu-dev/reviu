@@ -72,6 +72,9 @@ struct ConfigSelector {
 struct ChatMessage {
   role: ChatRole,
   text: String,
+  /// Number of images attached when the message was sent.
+  #[serde(default)]
+  images: usize,
 }
 
 /// Seeded per conversation so two sessions never show the same word at once.
@@ -958,6 +961,7 @@ impl AgentChatPanel {
       self.items.push(ChatItem::Message(ChatMessage {
         role: ChatRole::System,
         text: "Agent disconnected.".into(),
+        images: 0,
       }));
       self.end_turn();
       self.session = None;
@@ -1282,7 +1286,7 @@ impl AgentChatPanel {
   fn render_thinking_peek(
     &self,
     theme: &gpui_component::Theme,
-    cx: &mut Context<Self>,
+    _cx: &mut Context<Self>,
   ) -> gpui::AnyElement {
     let (tail, truncated) = thought_peek_tail(&self.pending_thought);
     v_flex()
@@ -1303,16 +1307,14 @@ impl AgentChatPanel {
           .flex_col()
           .justify_end()
           .child(
+            // Plain dimmed text: rendered markdown would blast bold headings
+            // through the peek's quiet intent.
             div()
               .pl_4()
               .text_xs()
               .text_color(theme.muted_foreground)
-              .child(markdown_view(
-                "agent-chat-thought-pending",
-                tail,
-                &self.markdown_extensions,
-                cx,
-              )),
+              .whitespace_normal()
+              .child(SharedString::from(tail.to_string())),
           )
           .when(truncated, |this| {
             this.child(
@@ -1445,16 +1447,25 @@ impl AgentChatPanel {
             .group("chat-user-msg")
             .mb_3()
             .gap_0p5()
+            .items_start()
             .child(
               div()
                 .px_3()
                 .py_2()
-                .rounded(theme.radius)
-                .bg(theme.input_background())
-                .border_1()
-                .border_color(theme.border)
+                .max_w(px(560.))
+                .rounded(px(10.))
+                .bg(theme.secondary)
                 .text_sm()
                 .text_color(theme.foreground)
+                .when(m.images > 0, |this| {
+                  this.child(div().text_xs().text_color(theme.muted_foreground).child(
+                    if m.images == 1 {
+                      "1 image attached".to_string()
+                    } else {
+                      format!("{} images attached", m.images)
+                    },
+                  ))
+                })
                 .child(selectable_text::SelectableText::new(
                   item_id_base,
                   SharedString::from(m.text.clone()),
@@ -1581,58 +1592,17 @@ impl AgentChatPanel {
           ToolCallStatus::InProgress => theme.warning,
           _ => theme.muted_foreground,
         };
-        let (start, end) = tool_run_bounds(&self.items, idx);
-        if end - start + 1 < 2 {
-          timeline_row_with_color(
-            render_tool_call(t, theme, item_id_base, &registry, cx),
-            theme,
-            bullet,
-            is_last_row,
-          )
-        } else {
+        if let Some((start, end, _)) = tool_group_span(&self.items, idx) {
           let expanded = self.tool_group_expanded(start, end);
           if idx == start {
-            let tools: Vec<&ToolCallView> = self.items[start..=end]
-              .iter()
-              .filter_map(|item| match item {
-                ChatItem::Tool(t) => Some(t),
-                _ => None,
-              })
-              .collect();
-            let group_bullet = if tools
-              .iter()
-              .any(|t| matches!(t.status, ToolCallStatus::InProgress))
-            {
+            let group_bullet = if self.items[start..=end].iter().any(|item| {
+              matches!(item, ChatItem::Tool(t) if matches!(t.status, ToolCallStatus::InProgress))
+            }) {
               theme.warning
             } else {
               theme.muted_foreground
             };
-            let summary = tool_group_summary(&tools);
-            let chevron = if expanded {
-              IconName::ChevronDown
-            } else {
-              IconName::ChevronRight
-            };
-            let header = h_flex()
-              .id(("agent-tool-group", start))
-              .debug_selector(|| "agent-tool-group".to_string())
-              .gap_1p5()
-              .items_center()
-              .cursor_pointer()
-              .rounded(theme.radius)
-              .hover(|s| s.bg(theme.secondary_hover))
-              .on_click(cx.listener(move |panel, _, _, cx| panel.toggle_tool_group(start, cx)))
-              .child(
-                gpui_component::Icon::new(chevron)
-                  .size_3()
-                  .text_color(theme.muted_foreground),
-              )
-              .child(
-                div()
-                  .text_xs()
-                  .text_color(theme.muted_foreground)
-                  .child(SharedString::from(summary)),
-              );
+            let header = self.render_tool_group_header(start, end, expanded, theme, cx);
             let content = if expanded {
               v_flex()
                 .gap_1()
@@ -1640,7 +1610,7 @@ impl AgentChatPanel {
                 .child(render_tool_call(t, theme, item_id_base, &registry, cx))
                 .into_any_element()
             } else {
-              header.into_any_element()
+              header
             };
             let group_is_last = end + 1 == total && !has_continuation_trailer;
             timeline_row_with_color(content, theme, group_bullet, !expanded && group_is_last)
@@ -1654,6 +1624,13 @@ impl AgentChatPanel {
           } else {
             return Empty.into_any_element();
           }
+        } else {
+          timeline_row_with_color(
+            render_tool_call(t, theme, item_id_base, &registry, cx),
+            theme,
+            bullet,
+            is_last_row,
+          )
         }
       }
       ChatItem::Permission(p) => timeline_row(
@@ -1664,20 +1641,58 @@ impl AgentChatPanel {
       ChatItem::Plan(p) => {
         timeline_row_with_color(render_plan(p, theme), theme, theme.primary, is_last_row)
       }
-      ChatItem::Thought(t) => timeline_row(
-        render_thought(idx, t, theme, &self.markdown_extensions, cx),
-        theme,
-        is_last_row,
-      ),
+      ChatItem::Thought(t) => {
+        let span = tool_group_span(&self.items, idx);
+        match span {
+          Some((start, end, _)) => {
+            let expanded = self.tool_group_expanded(start, end);
+            if idx == start {
+              // A span can open on a thought; the header lives on its first row.
+              let header = self.render_tool_group_header(start, end, expanded, theme, cx);
+              let content = if expanded {
+                v_flex()
+                  .gap_1()
+                  .child(header)
+                  .child(render_thought(idx, t, theme, &self.markdown_extensions, cx))
+                  .into_any_element()
+              } else {
+                header
+              };
+              let group_is_last = end + 1 == total && !has_continuation_trailer;
+              timeline_row_with_color(
+                content,
+                theme,
+                theme.muted_foreground,
+                !expanded && group_is_last,
+              )
+            } else if expanded {
+              timeline_row(
+                render_thought(idx, t, theme, &self.markdown_extensions, cx),
+                theme,
+                is_last_row,
+              )
+            } else {
+              return Empty.into_any_element();
+            }
+          }
+          None => timeline_row(
+            render_thought(idx, t, theme, &self.markdown_extensions, cx),
+            theme,
+            is_last_row,
+          ),
+        }
+      }
       ChatItem::Checkpoint(marker) => {
         let ref_name = marker.ref_name.clone();
-        // A trailing marker has nothing after it to undo.
-        let can_roll_back = idx + 1 < total;
+        // A trailing marker has nothing after it to undo, and a running turn
+        // must finish before history can move.
+        let can_roll_back = idx + 1 < total && !self.in_flight;
         let hairline = || div().flex_1().h_px().bg(theme.border.opacity(0.5));
 
         let center: gpui::AnyElement = if can_roll_back {
           div()
             .id(("chat-checkpoint-rollback", idx))
+            .debug_selector(|| "chat-checkpoint-rollback".to_string())
             .flex()
             .items_center()
             .gap_1()
@@ -1926,6 +1941,7 @@ impl AgentChatPanel {
     self.items.push(ChatItem::Message(ChatMessage {
       role: ChatRole::Agent,
       text,
+      images: 0,
     }));
   }
 
@@ -2451,21 +2467,67 @@ impl AgentChatPanel {
   /// A pinned group keeps the user's choice; otherwise it is open only while
   /// the turn streams into it (trailing), and folds once the turn settles.
   fn tool_group_expanded(&self, start: usize, end: usize) -> bool {
-    if let Some(ChatItem::Tool(first)) = self.items.get(start)
-      && let Some(&pinned) = self.tool_group_pins.get(&first.id)
+    if let Some(id) = first_tool_id_in(&self.items, start, end)
+      && let Some(&pinned) = self.tool_group_pins.get(&id)
     {
       return pinned;
     }
     self.in_flight && end + 1 == self.items.len()
   }
 
+  fn render_tool_group_header(
+    &self,
+    start: usize,
+    end: usize,
+    expanded: bool,
+    theme: &gpui_component::Theme,
+    cx: &mut Context<Self>,
+  ) -> gpui::AnyElement {
+    let tools: Vec<&ToolCallView> = self.items[start..=end]
+      .iter()
+      .filter_map(|item| match item {
+        ChatItem::Tool(t) => Some(t),
+        _ => None,
+      })
+      .collect();
+    let summary = tool_group_summary(&tools);
+    let chevron = if expanded {
+      IconName::ChevronDown
+    } else {
+      IconName::ChevronRight
+    };
+    h_flex()
+      .id(("agent-tool-group", start))
+      .debug_selector(|| "agent-tool-group".to_string())
+      .gap_1p5()
+      .items_center()
+      .cursor_pointer()
+      .rounded(theme.radius)
+      .hover(|s| s.bg(theme.secondary_hover))
+      .on_click(cx.listener(move |panel, _, _, cx| panel.toggle_tool_group(start, cx)))
+      .child(
+        gpui_component::Icon::new(chevron)
+          .size_3()
+          .text_color(theme.muted_foreground),
+      )
+      .child(
+        div()
+          .text_xs()
+          .text_color(theme.muted_foreground)
+          .child(SharedString::from(summary)),
+      )
+      .into_any_element()
+  }
+
   fn toggle_tool_group(&mut self, idx: usize, cx: &mut Context<Self>) {
-    let (start, end) = tool_run_bounds(&self.items, idx);
-    let expanded = self.tool_group_expanded(start, end);
-    let Some(ChatItem::Tool(first)) = self.items.get(start) else {
+    let Some((start, end, _)) = tool_group_span(&self.items, idx) else {
       return;
     };
-    self.tool_group_pins.insert(first.id.clone(), !expanded);
+    let expanded = self.tool_group_expanded(start, end);
+    let Some(id) = first_tool_id_in(&self.items, start, end) else {
+      return;
+    };
+    self.tool_group_pins.insert(id, !expanded);
     for item_ix in start..=end {
       let list_ix = self.list_ix_for_item(item_ix);
       self.mark_item_changed_at(list_ix);
@@ -2748,9 +2810,11 @@ impl AgentChatPanel {
     // Chunks that trailed in after the previous turn keep their place
     // ahead of the new prompt instead of being wiped.
     self.flush_turn_buffers();
+    let images = std::mem::take(&mut self.staged_images);
     self.items.push(ChatItem::Message(ChatMessage {
       role,
       text: text.clone(),
+      images: images.len(),
     }));
     cx.emit(AgentChatPanelEvent::TurnStarted);
     self.start_turn(cx);
@@ -2762,7 +2826,6 @@ impl AgentChatPanel {
     let cwd = self.cwd.clone();
     let files = self.repo_files.clone();
     let selection = self.active_selection.take();
-    let images = std::mem::take(&mut self.staged_images);
     cx.spawn(async move |this, cx| {
       let blocks = build_prompt_blocks(text, files, selection, images, cwd).await;
       let result = session.send_prompt_blocks(blocks).await;
@@ -2781,6 +2844,7 @@ impl AgentChatPanel {
               panel.items.push(ChatItem::Message(ChatMessage {
                 role: ChatRole::System,
                 text,
+                images: 0,
               }));
             } else {
               drain_queue = true;
@@ -2793,6 +2857,7 @@ impl AgentChatPanel {
               panel.items.push(ChatItem::Message(ChatMessage {
                 role: ChatRole::System,
                 text: "Authentication required. Sign in below and retry.".into(),
+                images: 0,
               }));
             } else {
               let raw = format!("{e}");
@@ -2807,6 +2872,7 @@ impl AgentChatPanel {
               panel.items.push(ChatItem::Message(ChatMessage {
                 role: ChatRole::System,
                 text,
+                images: 0,
               }));
             }
           }
@@ -3433,17 +3499,34 @@ fn image_format_for_path(path: &std::path::Path) -> Option<gpui::ImageFormat> {
   }
 }
 
-/// Bounds of the consecutive tool-call run containing `idx`.
-fn tool_run_bounds(items: &[ChatItem], idx: usize) -> (usize, usize) {
+/// Bounds of the consecutive tool-call run containing `idx`, thoughts
+/// included: the agent thinks between its calls, and the fold hides the whole
+/// work span. Returns the tool count; fewer than two tools is no group.
+fn tool_group_span(items: &[ChatItem], idx: usize) -> Option<(usize, usize, usize)> {
+  let in_span = |item: &ChatItem| matches!(item, ChatItem::Tool(_) | ChatItem::Thought(_));
+  if !items.get(idx).is_some_and(in_span) {
+    return None;
+  }
   let mut start = idx;
-  while start > 0 && matches!(items[start - 1], ChatItem::Tool(_)) {
+  while start > 0 && in_span(&items[start - 1]) {
     start -= 1;
   }
   let mut end = idx;
-  while end + 1 < items.len() && matches!(items[end + 1], ChatItem::Tool(_)) {
+  while end + 1 < items.len() && in_span(&items[end + 1]) {
     end += 1;
   }
-  (start, end)
+  let tools = items[start..=end]
+    .iter()
+    .filter(|item| matches!(item, ChatItem::Tool(_)))
+    .count();
+  (tools >= 2).then_some((start, end, tools))
+}
+
+fn first_tool_id_in(items: &[ChatItem], start: usize, end: usize) -> Option<ToolCallId> {
+  items[start..=end].iter().find_map(|item| match item {
+    ChatItem::Tool(t) => Some(t.id.clone()),
+    _ => None,
+  })
 }
 
 /// "Ran 2 commands · Edited 1 file · 1 failed" for a run of tool calls.
@@ -3707,10 +3790,14 @@ fn tool_detail_label(t: &ToolCallView) -> String {
   }
   let kind = tool_kind_label(&t.kind);
 
-  t.title
-    .strip_prefix(kind)
-    .map(|s| s.trim_start().to_string())
-    .unwrap_or_else(|| t.title.clone())
+  // Strip the kind only on a word boundary: "Editing files" must not lose
+  // its "Edit" and read "ing files".
+  match t.title.strip_prefix(kind) {
+    Some(rest) if rest.is_empty() || rest.starts_with(char::is_whitespace) => {
+      rest.trim_start().to_string()
+    }
+    _ => t.title.clone(),
+  }
 }
 
 pub(crate) fn strip_markdown_code_fence(text: &str) -> &str {
@@ -3993,14 +4080,28 @@ fn render_tool_call(
   };
   let detail = tool_detail_label(t);
   let tool_id = t.id.clone();
+  // One line, truncated: a long command must not push past the edge. The
+  // full text lives in the tooltip.
+  let detail_first_line: SharedString =
+    detail.lines().next().unwrap_or_default().to_string().into();
+  let detail_full: SharedString = detail.clone().into();
   let detail_el = (!detail.is_empty()).then(|| match t.locations.first().cloned() {
     Some((path, line)) => div()
       .id(("agent-tool-location", item_id_base as usize))
+      .flex_1()
+      .min_w_0()
+      .truncate()
       .text_sm()
       .text_color(theme.muted_foreground)
       .cursor_pointer()
       .hover(|this| this.text_color(theme.foreground))
-      .child(detail.clone())
+      .child(detail_first_line.clone())
+      .tooltip({
+        let detail_full = detail_full.clone();
+        move |window, cx| {
+          gpui_component::tooltip::Tooltip::new(detail_full.clone()).build(window, cx)
+        }
+      })
       .on_click(cx.listener(move |_panel, _ev, _window, cx| {
         cx.emit(AgentChatPanelEvent::OpenPath {
           path: path.clone(),
@@ -4009,9 +4110,19 @@ fn render_tool_call(
       }))
       .into_any_element(),
     None => div()
+      .id(("agent-tool-detail", item_id_base as usize))
+      .flex_1()
+      .min_w_0()
+      .truncate()
       .text_sm()
       .text_color(theme.muted_foreground)
-      .child(detail.clone())
+      .child(detail_first_line.clone())
+      .tooltip({
+        let detail_full = detail_full.clone();
+        move |window, cx| {
+          gpui_component::tooltip::Tooltip::new(detail_full.clone()).build(window, cx)
+        }
+      })
       .into_any_element(),
   });
 
@@ -4022,16 +4133,18 @@ fn render_tool_call(
       h_flex()
         .gap_2()
         .items_center()
-        .flex_wrap()
+        .min_w_0()
         .child(
           gpui_component::Icon::new(tool_kind_icon(&t.kind))
             .small()
+            .flex_shrink_0()
             .text_color(title_color),
         )
         .child(
           div()
             .text_sm()
             .font_weight(gpui::FontWeight::BOLD)
+            .flex_shrink_0()
             .text_color(title_color)
             .child(tool_kind_label(&t.kind).to_string()),
         )
@@ -4080,6 +4193,10 @@ fn render_tool_call(
           let ui_theme = ui::Theme::new(theme.is_dark());
           let syntax_theme = ui_theme.syntax();
           let mono_font = mono_font_for(theme);
+          // A created-empty file is one blank added line: a bare green band
+          // reads as a glitch, so name the emptiness.
+          let empty_creation =
+            d.lines.len() == 1 && d.removed == 0 && d.lines[0].text.trim().is_empty();
           for line in d.lines.iter().take(visible) {
             let (bg, fg, hl_bg) = match line.kind {
               DiffLineKind::Added => (
@@ -4093,6 +4210,17 @@ fn render_tool_call(
                 ui_theme.diff_word_removed_background(),
               ),
             };
+            if empty_creation {
+              body = body.child(
+                h_flex().w_full().px_2().bg(bg).child(
+                  div()
+                    .text_color(theme.muted_foreground)
+                    .italic()
+                    .child("(empty file)"),
+                ),
+              );
+              continue;
+            }
             let runs = build_text_runs(
               &line.text,
               &line.spans,
@@ -4263,11 +4391,16 @@ fn render_permission(
         .text_color(theme.muted_foreground)
         .child("Permission required".to_string()),
     )
-    .child(
-      div()
-        .text_sm()
-        .text_color(theme.foreground)
-        .child(item.prompt.tool_call_title.clone()),
+    .when(
+      item.prompt.tool_call_title != "Permission required",
+      |this| {
+        this.child(
+          div()
+            .text_sm()
+            .text_color(theme.foreground)
+            .child(item.prompt.tool_call_title.clone()),
+        )
+      },
     );
 
   if let Some(invocation) = &detail.invocation {
@@ -4332,11 +4465,18 @@ fn render_permission(
   }
 
   if let Some(option_id) = &resolved {
+    let label = item
+      .prompt
+      .options
+      .iter()
+      .find(|option| option.option_id == *option_id)
+      .map(|option| option.label.clone())
+      .unwrap_or_else(|| option_id.clone());
     card = card.child(
       div()
         .text_xs()
         .text_color(theme.muted_foreground)
-        .child(format!("Answered: {option_id}")),
+        .child(format!("Answered: {label}")),
     );
     return card.into_any_element();
   }
@@ -4678,7 +4818,7 @@ impl Render for AgentChatPanel {
                   div()
                     .debug_selector(|| "agent-chat-jump-bottom".to_string())
                     .absolute()
-                    .bottom(px(12.))
+                    .bottom(px(CONVERSATION_BOTTOM_FADE_PX - 24.))
                     .left_0()
                     .right_0()
                     .flex()
@@ -4719,6 +4859,7 @@ impl Render for AgentChatPanel {
               .children(self.render_queued_prompts(theme, cx))
               .child(
                 v_flex()
+                  .debug_selector(|| "agent-chat-composer".to_string())
                   .w_full()
                   .px_2()
                   .py_1p5()
@@ -5335,6 +5476,7 @@ mod tests {
     ChatItem::Message(ChatMessage {
       role: ChatRole::User,
       text: text.to_string(),
+      images: 0,
     })
   }
 
@@ -5342,6 +5484,7 @@ mod tests {
     ChatItem::Message(ChatMessage {
       role: ChatRole::Agent,
       text: text.to_string(),
+      images: 0,
     })
   }
 
@@ -5367,6 +5510,7 @@ mod tests {
     let review_only = vec![ChatItem::Message(ChatMessage {
       role: ChatRole::ReviewExport,
       text: "### a.rs:L1 (new side)\nfix\n".to_string(),
+      images: 0,
     })];
     assert_eq!(checkpoint_insert_index(&review_only), 0);
   }
@@ -5577,6 +5721,7 @@ mod tests {
     let message = ChatMessage {
       role: ChatRole::ReviewExport,
       text: "### a.rs:L1 (new side)\nfix\n".to_string(),
+      images: 0,
     };
     let json = serde_json::to_string(&message).expect("serialize");
     let restored: ChatMessage = serde_json::from_str(&json).expect("deserialize");
@@ -5820,6 +5965,7 @@ mod tests {
         items: vec![PersistedChatItem::Message(ChatMessage {
           role: ChatRole::User,
           text: "hi".into(),
+          images: 0,
         })],
         group_pins: HashMap::new(),
       };
@@ -6979,6 +7125,72 @@ mod tests {
   }
 
   #[gpui::test]
+  async fn the_rollback_pill_sleeps_while_a_turn_runs(cx: &mut gpui::TestAppContext) {
+    let (panel, cx) = add_panel_window(cx);
+    panel.update(cx, |panel, cx| {
+      panel.status = Status::Ready;
+      panel.in_flight = true;
+      panel.items = vec![
+        checkpoint_item("cp-1"),
+        user_message("prompt"),
+        agent_message("reply"),
+      ];
+      panel.sync_list_count();
+      cx.notify();
+    });
+    cx.run_until_parked();
+    assert!(
+      cx.debug_bounds("chat-checkpoint-rollback").is_none(),
+      "no clickable rollback during a turn"
+    );
+
+    panel.update(cx, |panel, cx| {
+      panel.end_turn();
+      let count = panel.messages_list.item_count();
+      panel.messages_list.remeasure_items(0..count);
+      cx.notify();
+    });
+    cx.run_until_parked();
+    assert!(
+      cx.debug_bounds("chat-checkpoint-rollback").is_some(),
+      "the pill wakes up once the turn settles"
+    );
+  }
+
+  #[gpui::test]
+  async fn a_rollback_truncate_repaints_without_the_agent_reply(cx: &mut gpui::TestAppContext) {
+    let (panel, cx) = add_panel_window(cx);
+    panel.update(cx, |panel, cx| {
+      panel.status = Status::Ready;
+      panel.items = vec![
+        checkpoint_item("cp-1"),
+        user_message("do the thing"),
+        agent_message("here is my long reply"),
+      ];
+      panel.sync_list_count();
+      cx.notify();
+    });
+    cx.run_until_parked();
+    assert!(
+      cx.debug_bounds("chat-msg-copy-agent").is_some(),
+      "the agent reply is painted before the rollback"
+    );
+
+    panel.update(cx, |panel, cx| {
+      assert!(panel.truncate_at_checkpoint("cp-1", cx));
+    });
+    cx.run_until_parked();
+
+    panel.read_with(cx, |panel, _| {
+      assert_eq!(item_kinds(&panel.items), vec!["checkpoint"]);
+    });
+    assert!(
+      cx.debug_bounds("chat-msg-copy-agent").is_none(),
+      "the agent reply is gone from the very next paint"
+    );
+  }
+
+  #[gpui::test]
   async fn a_truncate_for_another_checkpoint_never_resubmits(cx: &mut gpui::TestAppContext) {
     let (panel, cx) = add_panel_window(cx);
     panel.update(cx, |panel, cx| {
@@ -7002,19 +7214,49 @@ mod tests {
   }
 
   #[test]
-  fn tool_run_bounds_finds_consecutive_runs() {
+  fn tool_detail_keeps_titles_that_merely_start_with_the_kind() {
+    let mut view = tool_view("t", ToolKind::Edit, ToolCallStatus::Completed);
+    view.title = "Editing files".to_string();
+    assert_eq!(tool_detail_label(&view), "Editing files");
+    view.title = "Edit src/main.rs".to_string();
+    assert_eq!(tool_detail_label(&view), "src/main.rs");
+    view.title = "Edit".to_string();
+    assert_eq!(tool_detail_label(&view), "");
+  }
+
+  #[test]
+  fn old_conversations_load_with_zero_images() {
+    let message: ChatMessage =
+      serde_json::from_str(r#"{"role":"User","text":"hi"}"#).expect("legacy message loads");
+    assert_eq!(message.images, 0);
+  }
+
+  #[test]
+  fn tool_group_span_rides_over_thoughts_and_needs_two_tools() {
+    let thought = || {
+      ChatItem::Thought(ThoughtView {
+        text: "hmm".into(),
+        collapsed: true,
+      })
+    };
     let items = vec![
       user_message("go"),
       ChatItem::Tool(tool_view("a", ToolKind::Read, ToolCallStatus::Completed)),
+      thought(),
       ChatItem::Tool(tool_view("b", ToolKind::Execute, ToolCallStatus::Completed)),
-      ChatItem::Tool(tool_view("c", ToolKind::Edit, ToolCallStatus::Failed)),
       agent_message("done"),
       ChatItem::Tool(tool_view("d", ToolKind::Read, ToolCallStatus::Completed)),
+      thought(),
     ];
-    assert_eq!(tool_run_bounds(&items, 1), (1, 3));
-    assert_eq!(tool_run_bounds(&items, 2), (1, 3));
-    assert_eq!(tool_run_bounds(&items, 3), (1, 3));
-    assert_eq!(tool_run_bounds(&items, 5), (5, 5));
+    // Thoughts between calls stay inside the span.
+    assert_eq!(tool_group_span(&items, 1), Some((1, 3, 2)));
+    assert_eq!(tool_group_span(&items, 2), Some((1, 3, 2)));
+    assert_eq!(tool_group_span(&items, 3), Some((1, 3, 2)));
+    // A single tool, even with a thought, is no group.
+    assert_eq!(tool_group_span(&items, 5), None);
+    assert_eq!(tool_group_span(&items, 6), None);
+    // Prose is a hard boundary.
+    assert_eq!(tool_group_span(&items, 4), None);
   }
 
   #[test]

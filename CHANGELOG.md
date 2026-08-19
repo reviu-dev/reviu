@@ -4,6 +4,10 @@ All notable changes to Reviu are documented here.
 
 ## 1.0.0
 
+### A Cleaner Conversation
+
+A polish pass across the transcript. Your prompts now read as tinted bubbles instead of look-alike input fields. Long commands truncate on one line with the full text a hover away instead of running off the edge. Tool steps and the thinking between them now fold together under one summary, so a working session collapses cleanly. The live thinking glimpse is properly dimmed. Messages sent with images say so. Creating an empty file shows "(empty file)" instead of a bare green band, tool titles like "Editing files" no longer lose their first word, permission cards stop repeating their own title and answers show the button you pressed. And the Roll back pill now sleeps while a turn is running instead of appearing clickable and silently refusing.
+
 ### Read The Diff Without Losing The Conversation
 
 Opening a file no longer hides the conversation: the diff now opens beside it, with the conversation in a resizable column on the left. Watch the agent keep streaming while you review its edits, drag the divider to taste, and Escape still closes the file to give the conversation the full width back. The interactive rebase keeps the whole center, as before.
