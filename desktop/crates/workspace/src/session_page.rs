@@ -817,6 +817,38 @@ mod tests {
   }
 
   #[gpui::test]
+  async fn accepting_the_popup_closes_it(cx: &mut TestAppContext) {
+    let repo = TempRepo::init("session-page-agent-notify-accept");
+    let (page, cx) = add_session_page_window(repo.path.clone(), cx);
+    cx.run_until_parked();
+    let windows_before = cx.update(|_, cx| cx.windows().len());
+
+    cx.deactivate_window();
+    page.update_in(cx, |page, window, cx| {
+      page.notify_agent_attention("Reviu agent finished", window, cx);
+    });
+    cx.run_until_parked();
+    assert_eq!(cx.update(|_, cx| cx.windows().len()), windows_before + 1);
+
+    let handle = page.read_with(cx, |page, _| page.agent_notification.expect("popup handle"));
+    let _ = cx.update(|_, cx| {
+      handle.update(cx, |_, _, cx| {
+        cx.emit(crate::agent_notification::AgentNotificationEvent::Accepted);
+      })
+    });
+    cx.run_until_parked();
+
+    assert_eq!(
+      cx.update(|_, cx| cx.windows().len()),
+      windows_before,
+      "accepting closes the popup"
+    );
+    page.read_with(cx, |page, _| {
+      assert!(page.agent_notification.is_none());
+    });
+  }
+
+  #[gpui::test]
   async fn the_notification_setting_gates_the_popup(cx: &mut TestAppContext) {
     let repo = TempRepo::init("session-page-agent-notify-off");
     let (page, cx) = add_session_page_window(repo.path.clone(), cx);
