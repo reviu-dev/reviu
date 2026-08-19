@@ -75,6 +75,10 @@ struct ChatMessage {
   /// Number of images attached when the message was sent.
   #[serde(default)]
   images: usize,
+  /// The attached images themselves, for this process only: conversations
+  /// reload with the count badge instead of megabytes of pixels.
+  #[serde(skip)]
+  image_data: Vec<std::sync::Arc<gpui::Image>>,
 }
 
 /// Seeded per conversation so two sessions never show the same word at once.
@@ -962,6 +966,7 @@ impl AgentChatPanel {
         role: ChatRole::System,
         text: "Agent disconnected.".into(),
         images: 0,
+        image_data: Vec::new(),
       }));
       self.end_turn();
       self.session = None;
@@ -1210,12 +1215,7 @@ impl AgentChatPanel {
       .turn_started_at
       .map(|t| t.elapsed().as_secs())
       .unwrap_or(0);
-    let is_long = elapsed >= 10;
-    let label_color = if is_long {
-      theme.warning
-    } else {
-      theme.muted_foreground
-    };
+    let label_color = theme.muted_foreground;
     let brand_icon = match self.backend_kind {
       BackendKind::Claude => UiIconName::Claude,
       BackendKind::Codex => UiIconName::OpenAi,
@@ -1314,7 +1314,7 @@ impl AgentChatPanel {
               .text_xs()
               .text_color(theme.muted_foreground)
               .whitespace_normal()
-              .child(SharedString::from(tail.to_string())),
+              .child(SharedString::from(tail.replace("**", "").replace('`', ""))),
           )
           .when(truncated, |this| {
             this.child(
@@ -1447,17 +1447,30 @@ impl AgentChatPanel {
             .group("chat-user-msg")
             .mb_3()
             .gap_0p5()
-            .items_start()
+            .items_end()
             .child(
-              div()
-                .px_3()
-                .py_2()
+              v_flex()
+                .items_end()
+                .gap_1()
                 .max_w(px(560.))
-                .rounded(px(10.))
-                .bg(theme.secondary)
-                .text_sm()
-                .text_color(theme.foreground)
-                .when(m.images > 0, |this| {
+                .when(!m.image_data.is_empty(), |this| {
+                  this.child(h_flex().gap_1().flex_wrap().justify_end().children(
+                    m.image_data.iter().map(|image| {
+                      div()
+                        .rounded(px(8.))
+                        .overflow_hidden()
+                        .border_1()
+                        .border_color(theme.border)
+                        .child(
+                          gpui::img(image.clone())
+                            .max_w(px(200.))
+                            .max_h(px(160.))
+                            .object_fit(gpui::ObjectFit::ScaleDown),
+                        )
+                    }),
+                  ))
+                })
+                .when(m.image_data.is_empty() && m.images > 0, |this| {
                   this.child(div().text_xs().text_color(theme.muted_foreground).child(
                     if m.images == 1 {
                       "1 image attached".to_string()
@@ -1466,12 +1479,21 @@ impl AgentChatPanel {
                     },
                   ))
                 })
-                .child(selectable_text::SelectableText::new(
-                  item_id_base,
-                  SharedString::from(m.text.clone()),
-                  Vec::new(),
-                  registry.clone(),
-                )),
+                .child(
+                  div()
+                    .px_3()
+                    .py_2()
+                    .rounded(px(10.))
+                    .bg(theme.secondary)
+                    .text_sm()
+                    .text_color(theme.foreground)
+                    .child(selectable_text::SelectableText::new(
+                      item_id_base,
+                      SharedString::from(m.text.clone()),
+                      Vec::new(),
+                      registry.clone(),
+                    )),
+                ),
             )
             .child(
               h_flex()
@@ -1687,6 +1709,10 @@ impl AgentChatPanel {
         // A trailing marker has nothing after it to undo, and a running turn
         // must finish before history can move.
         let can_roll_back = idx + 1 < total && !self.in_flight;
+        if !can_roll_back {
+          // An inert divider is noise; the marker returns when actionable.
+          return Empty.into_any_element();
+        }
         let hairline = || div().flex_1().h_px().bg(theme.border.opacity(0.5));
 
         let center: gpui::AnyElement = if can_roll_back {
@@ -1942,6 +1968,7 @@ impl AgentChatPanel {
       role: ChatRole::Agent,
       text,
       images: 0,
+      image_data: Vec::new(),
     }));
   }
 
@@ -2815,6 +2842,7 @@ impl AgentChatPanel {
       role,
       text: text.clone(),
       images: images.len(),
+      image_data: images.clone(),
     }));
     cx.emit(AgentChatPanelEvent::TurnStarted);
     self.start_turn(cx);
@@ -2845,6 +2873,7 @@ impl AgentChatPanel {
                 role: ChatRole::System,
                 text,
                 images: 0,
+                image_data: Vec::new(),
               }));
             } else {
               drain_queue = true;
@@ -2858,6 +2887,7 @@ impl AgentChatPanel {
                 role: ChatRole::System,
                 text: "Authentication required. Sign in below and retry.".into(),
                 images: 0,
+                image_data: Vec::new(),
               }));
             } else {
               let raw = format!("{e}");
@@ -2873,6 +2903,7 @@ impl AgentChatPanel {
                 role: ChatRole::System,
                 text,
                 images: 0,
+                image_data: Vec::new(),
               }));
             }
           }
@@ -3738,42 +3769,16 @@ fn timeline_row(
 
 fn timeline_row_with_color(
   content: gpui::AnyElement,
-  theme: &gpui_component::Theme,
-  bullet_color: gpui::Hsla,
-  is_last: bool,
+  _theme: &gpui_component::Theme,
+  _bullet_color: gpui::Hsla,
+  _is_last: bool,
 ) -> gpui::AnyElement {
-  h_flex()
+  // Flat rows: the rail-and-bullet chrome read as noise, not structure.
+  div()
     .w_full()
-    .gap_3()
-    .items_stretch()
-    .child(
-      div()
-        .relative()
-        .w(px(8.))
-        .flex_shrink_0()
-        .when(!is_last, |this| {
-          this.child(
-            div()
-              .absolute()
-              .top(px(14.))
-              .bottom(px(-8.))
-              .left(px(3.5))
-              .w(px(1.))
-              .bg(theme.border),
-          )
-        })
-        .child(
-          div()
-            .absolute()
-            .top(px(8.))
-            .left(px(1.))
-            .w(px(6.))
-            .h(px(6.))
-            .rounded_full()
-            .bg(bullet_color),
-        ),
-    )
-    .child(div().flex_1().min_w_0().pb_3().child(content))
+    .min_w_0()
+    .pb_3()
+    .child(content)
     .into_any_element()
 }
 
@@ -4013,11 +4018,6 @@ fn render_thought(
   cx: &mut Context<AgentChatPanel>,
 ) -> gpui::AnyElement {
   let collapsed = thought.collapsed;
-  let icon = if collapsed {
-    IconName::ChevronRight
-  } else {
-    IconName::ChevronDown
-  };
   let preview = thought.text.as_str();
   let header_label: SharedString = match (collapsed, thought_preview(preview)) {
     (true, Some(preview)) => format!("Thought · {preview}").into(),
@@ -4035,11 +4035,6 @@ fn render_thought(
         .rounded(theme.radius)
         .hover(|s| s.bg(theme.secondary_hover))
         .on_click(cx.listener(move |panel, _, _, cx| panel.toggle_thought_collapsed(idx, cx)))
-        .child(
-          gpui_component::Icon::new(icon)
-            .size_3()
-            .text_color(theme.muted_foreground),
-        )
         .child(
           div()
             .text_xs()
@@ -4075,7 +4070,6 @@ fn render_tool_call(
 ) -> gpui::AnyElement {
   let title_color = match t.status {
     ToolCallStatus::Failed => theme.danger,
-    ToolCallStatus::InProgress => theme.warning,
     _ => theme.foreground,
   };
   let detail = tool_detail_label(t);
@@ -4135,15 +4129,25 @@ fn render_tool_call(
         .items_center()
         .min_w_0()
         .child(
-          gpui_component::Icon::new(tool_kind_icon(&t.kind))
-            .small()
+          div()
             .flex_shrink_0()
-            .text_color(title_color),
+            .w(px(20.))
+            .h(px(20.))
+            .flex()
+            .items_center()
+            .justify_center()
+            .rounded(px(5.))
+            .bg(theme.secondary)
+            .child(
+              gpui_component::Icon::new(tool_kind_icon(&t.kind))
+                .size_3()
+                .text_color(title_color),
+            ),
         )
         .child(
           div()
             .text_sm()
-            .font_weight(gpui::FontWeight::BOLD)
+            .font_weight(gpui::FontWeight::SEMIBOLD)
             .flex_shrink_0()
             .text_color(title_color)
             .child(tool_kind_label(&t.kind).to_string()),
@@ -5043,31 +5047,45 @@ impl AgentChatPanel {
     }
     let mut strip = h_flex()
       .debug_selector(|| "agent-chat-attachments".to_string())
-      .gap_1()
+      .gap_2()
+      .pt_1()
+      .pb_2()
+      .mb_1()
+      .border_b_1()
+      .border_color(theme.border.opacity(0.5))
       .flex_wrap();
     for (ix, image) in self.staged_images.iter().enumerate() {
       strip = strip.child(
         div()
+          .group("chat-attachment")
           .relative()
+          .w(px(56.))
+          .h(px(56.))
+          .rounded(px(8.))
+          .overflow_hidden()
+          .border_1()
+          .border_color(theme.border)
           .child(
             gpui::img(image.clone())
-              .w(px(56.))
-              .h(px(56.))
-              .rounded(theme.radius)
-              .border_1()
-              .border_color(theme.border)
+              .size_full()
               .object_fit(gpui::ObjectFit::Cover),
           )
           .child(
-            div().absolute().top_0().right_0().child(
-              Button::new(("agent-chat-attachment-remove", ix))
-                .icon(IconName::Close)
-                .xsmall()
-                .ghost()
-                .on_click(cx.listener(move |panel, _, _, cx| {
-                  panel.remove_staged_image(ix, cx);
-                })),
-            ),
+            div()
+              .absolute()
+              .top(px(2.))
+              .right(px(2.))
+              .opacity(0.)
+              .group_hover("chat-attachment", |this| this.opacity(1.))
+              .child(
+                Button::new(("agent-chat-attachment-remove", ix))
+                  .icon(IconName::Close)
+                  .xsmall()
+                  .rounded(px(999.))
+                  .on_click(cx.listener(move |panel, _, _, cx| {
+                    panel.remove_staged_image(ix, cx);
+                  })),
+              ),
           ),
       );
     }
@@ -5477,6 +5495,7 @@ mod tests {
       role: ChatRole::User,
       text: text.to_string(),
       images: 0,
+      image_data: Vec::new(),
     })
   }
 
@@ -5485,6 +5504,7 @@ mod tests {
       role: ChatRole::Agent,
       text: text.to_string(),
       images: 0,
+      image_data: Vec::new(),
     })
   }
 
@@ -5511,6 +5531,7 @@ mod tests {
       role: ChatRole::ReviewExport,
       text: "### a.rs:L1 (new side)\nfix\n".to_string(),
       images: 0,
+      image_data: Vec::new(),
     })];
     assert_eq!(checkpoint_insert_index(&review_only), 0);
   }
@@ -5722,6 +5743,7 @@ mod tests {
       role: ChatRole::ReviewExport,
       text: "### a.rs:L1 (new side)\nfix\n".to_string(),
       images: 0,
+      image_data: Vec::new(),
     };
     let json = serde_json::to_string(&message).expect("serialize");
     let restored: ChatMessage = serde_json::from_str(&json).expect("deserialize");
@@ -5966,6 +5988,7 @@ mod tests {
           role: ChatRole::User,
           text: "hi".into(),
           images: 0,
+          image_data: Vec::new(),
         })],
         group_pins: HashMap::new(),
       };

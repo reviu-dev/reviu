@@ -4,6 +4,10 @@ All notable changes to Reviu are documented here.
 
 ## 1.0.0
 
+### A Calmer Transcript
+
+The conversation sheds its scaffolding: no more rail and colored dots down the left, no more amber "Working" flashes; the activity verb and timer sit quietly in gray. Tool steps get a small icon tile and read as one clean line; only a failure brings color. Thoughts become a single discreet line that still expands on click. Your messages align right as proper bubbles, and images you attach now show as real thumbnails in the message, with a clear gap between staged images and your text in the composer. Rolling back all the way no longer leaves a lonely "Checkpoint" divider floating in an empty conversation.
+
 ### A Cleaner Conversation
 
 A polish pass across the transcript. Your prompts now read as tinted bubbles instead of look-alike input fields. Long commands truncate on one line with the full text a hover away instead of running off the edge. Tool steps and the thinking between them now fold together under one summary, so a working session collapses cleanly. The live thinking glimpse is properly dimmed. Messages sent with images say so. Creating an empty file shows "(empty file)" instead of a bare green band, tool titles like "Editing files" no longer lose their first word, permission cards stop repeating their own title and answers show the button you pressed. And the Roll back pill now sleeps while a turn is running instead of appearing clickable and silently refusing.
