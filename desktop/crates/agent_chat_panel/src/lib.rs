@@ -417,7 +417,7 @@ const THINKING_PEEK_TAIL_LINES: usize = 12;
 /// Tail of the streaming thought bounded in bytes then lines, plus whether
 /// older content was dropped. Bounding keeps the per-chunk markdown re-parse
 /// cost flat however long the think runs.
-fn thought_peek_tail(text: &str) -> (&str, bool) {
+fn thought_peek_tail(text: &str) -> (String, bool) {
   let text = text.trim_end();
   let mut start = text.len().saturating_sub(THINKING_PEEK_TAIL_BYTES);
   while !text.is_char_boundary(start) {
@@ -446,7 +446,23 @@ fn thought_peek_tail(text: &str) -> (&str, bool) {
       slice = &slice[nl + 1..];
     }
   }
-  (slice, truncated)
+  // Plain-text peek: markdown markers show literally, and runs of blank
+  // lines open holes in a box meant to be a glimpse.
+  let mut cleaned = String::with_capacity(slice.len());
+  let mut last_blank = true;
+  for line in slice.lines() {
+    let line = line.replace("**", "").replace('`', "");
+    let blank = line.trim().is_empty();
+    if blank && last_blank {
+      continue;
+    }
+    if !cleaned.is_empty() {
+      cleaned.push('\n');
+    }
+    cleaned.push_str(line.trim_end());
+    last_blank = blank;
+  }
+  (cleaned.trim().to_string(), truncated)
 }
 
 /// Code selected in the Git diff view, pushed in to attach as `@selection` context.
@@ -1314,7 +1330,7 @@ impl AgentChatPanel {
               .text_xs()
               .text_color(theme.muted_foreground)
               .whitespace_normal()
-              .child(SharedString::from(tail.replace("**", "").replace('`', ""))),
+              .child(SharedString::from(tail)),
           )
           .when(truncated, |this| {
             this.child(
@@ -2529,8 +2545,7 @@ impl AgentChatPanel {
       .gap_1p5()
       .items_center()
       .cursor_pointer()
-      .rounded(theme.radius)
-      .hover(|s| s.bg(theme.secondary_hover))
+      .hover(|s| s.text_color(theme.foreground))
       .on_click(cx.listener(move |panel, _, _, cx| panel.toggle_tool_group(start, cx)))
       .child(
         gpui_component::Icon::new(chevron)
@@ -3782,26 +3797,27 @@ fn timeline_row_with_color(
     .into_any_element()
 }
 
-fn tool_detail_label(t: &ToolCallView) -> String {
+/// The bold kind label and the detail line of a tool header. The label hides
+/// when the title itself opens with the verb: "Editing files" needs no "Edit".
+fn tool_header_parts(t: &ToolCallView) -> (Option<&'static str>, String) {
+  let kind = tool_kind_label(&t.kind);
   if let Some((path, line)) = t.locations.first() {
     let name = path
       .file_name()
       .and_then(|s| s.to_str())
       .unwrap_or_else(|| path.to_str().unwrap_or(""));
-    return match line {
+    let detail = match line {
       Some(l) => format!("{name} (line {l})"),
       None => name.to_string(),
     };
+    return (Some(kind), detail);
   }
-  let kind = tool_kind_label(&t.kind);
-
-  // Strip the kind only on a word boundary: "Editing files" must not lose
-  // its "Edit" and read "ing files".
   match t.title.strip_prefix(kind) {
     Some(rest) if rest.is_empty() || rest.starts_with(char::is_whitespace) => {
-      rest.trim_start().to_string()
+      (Some(kind), rest.trim_start().to_string())
     }
-    _ => t.title.clone(),
+    Some(_) => (None, t.title.clone()),
+    None => (Some(kind), t.title.clone()),
   }
 }
 
@@ -4032,14 +4048,13 @@ fn render_thought(
         .gap_1p5()
         .items_center()
         .cursor_pointer()
-        .rounded(theme.radius)
-        .hover(|s| s.bg(theme.secondary_hover))
         .on_click(cx.listener(move |panel, _, _, cx| panel.toggle_thought_collapsed(idx, cx)))
         .child(
           div()
             .text_xs()
             .text_color(theme.muted_foreground)
             .truncate()
+            .hover(|s| s.text_color(theme.foreground))
             .child(header_label),
         )
         .into_any_element(),
@@ -4072,8 +4087,13 @@ fn render_tool_call(
     ToolCallStatus::Failed => theme.danger,
     _ => theme.foreground,
   };
-  let detail = tool_detail_label(t);
+  let (kind_label, detail) = tool_header_parts(t);
   let tool_id = t.id.clone();
+  let detail_color = if kind_label.is_some() {
+    theme.muted_foreground
+  } else {
+    title_color
+  };
   // One line, truncated: a long command must not push past the edge. The
   // full text lives in the tooltip.
   let detail_first_line: SharedString =
@@ -4086,7 +4106,7 @@ fn render_tool_call(
       .min_w_0()
       .truncate()
       .text_sm()
-      .text_color(theme.muted_foreground)
+      .text_color(detail_color)
       .cursor_pointer()
       .hover(|this| this.text_color(theme.foreground))
       .child(detail_first_line.clone())
@@ -4109,7 +4129,7 @@ fn render_tool_call(
       .min_w_0()
       .truncate()
       .text_sm()
-      .text_color(theme.muted_foreground)
+      .text_color(detail_color)
       .child(detail_first_line.clone())
       .tooltip({
         let detail_full = detail_full.clone();
@@ -4144,14 +4164,14 @@ fn render_tool_call(
                 .text_color(title_color),
             ),
         )
-        .child(
+        .children(kind_label.map(|label| {
           div()
             .text_sm()
             .font_weight(gpui::FontWeight::SEMIBOLD)
             .flex_shrink_0()
             .text_color(title_color)
-            .child(tool_kind_label(&t.kind).to_string()),
-        )
+            .child(label.to_string())
+        }))
         .children(detail_el),
     )
     .when(!t.diffs.is_empty(), |this| {
@@ -6566,6 +6586,14 @@ mod tests {
   }
 
   #[test]
+  fn thought_peek_tail_collapses_blank_runs_and_markdown_noise() {
+    let (tail, _) = thought_peek_tail("**Adding new file**\n\n\n\nnext `step`");
+    assert_eq!(tail, "Adding new file\n\nnext step");
+    let (leading, _) = thought_peek_tail("\n\n\nAdding new file");
+    assert_eq!(leading, "Adding new file");
+  }
+
+  #[test]
   fn thought_peek_tail_keeps_only_the_last_lines() {
     let text: String = (1..=20)
       .map(|i| format!("line {i}\n"))
@@ -7237,14 +7265,26 @@ mod tests {
   }
 
   #[test]
-  fn tool_detail_keeps_titles_that_merely_start_with_the_kind() {
+  fn tool_headers_never_stutter_the_kind() {
     let mut view = tool_view("t", ToolKind::Edit, ToolCallStatus::Completed);
+    // The title carries the verb: the bold label steps aside.
     view.title = "Editing files".to_string();
-    assert_eq!(tool_detail_label(&view), "Editing files");
+    assert_eq!(
+      tool_header_parts(&view),
+      (None, "Editing files".to_string())
+    );
     view.title = "Edit src/main.rs".to_string();
-    assert_eq!(tool_detail_label(&view), "src/main.rs");
+    assert_eq!(
+      tool_header_parts(&view),
+      (Some("Edit"), "src/main.rs".to_string())
+    );
     view.title = "Edit".to_string();
-    assert_eq!(tool_detail_label(&view), "");
+    assert_eq!(tool_header_parts(&view), (Some("Edit"), String::new()));
+    view.title = "Reformat everything".to_string();
+    assert_eq!(
+      tool_header_parts(&view),
+      (Some("Edit"), "Reformat everything".to_string())
+    );
   }
 
   #[test]
