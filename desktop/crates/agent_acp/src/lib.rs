@@ -65,6 +65,9 @@ pub struct BackendConfig {
   pub label: &'static str,
   pub command: String,
   pub args: Vec<String>,
+  /// Agent CLI the adapter shells out to. `None` when the adapter bundles its
+  /// own agent, in which case `command` is the whole requirement.
+  pub cli_executable: Option<&'static str>,
   pub install_hint: &'static str,
 }
 
@@ -72,17 +75,19 @@ pub struct BackendConfig {
 pub enum BackendKind {
   Claude,
   Codex,
+  Pi,
 }
 
 impl BackendKind {
   pub fn all() -> &'static [BackendKind] {
-    &[BackendKind::Claude, BackendKind::Codex]
+    &[BackendKind::Claude, BackendKind::Codex, BackendKind::Pi]
   }
 
   pub fn label(&self) -> &'static str {
     match self {
       BackendKind::Claude => "Claude",
       BackendKind::Codex => "Codex",
+      BackendKind::Pi => "Pi",
     }
   }
 
@@ -90,6 +95,7 @@ impl BackendKind {
     match self {
       BackendKind::Claude => "claude",
       BackendKind::Codex => "codex",
+      BackendKind::Pi => "pi",
     }
   }
 
@@ -97,6 +103,7 @@ impl BackendKind {
     match s {
       "claude" => Some(BackendKind::Claude),
       "codex" => Some(BackendKind::Codex),
+      "pi" => Some(BackendKind::Pi),
       _ => None,
     }
   }
@@ -105,6 +112,7 @@ impl BackendKind {
     match self {
       BackendKind::Claude => BackendConfig::claude(),
       BackendKind::Codex => BackendConfig::codex(),
+      BackendKind::Pi => BackendConfig::pi(),
     }
   }
 }
@@ -116,8 +124,9 @@ impl BackendConfig {
       command: "npx".into(),
       args: vec![
         "-y".into(),
-        "@agentclientprotocol/claude-agent-acp@0.68.0".into(),
+        "@agentclientprotocol/claude-agent-acp@0.70.0".into(),
       ],
+      cli_executable: None,
       install_hint: "Requires Node.js. The package is fetched via npx on first run. Sign in with `claude /login` to use your subscription.",
     }
   }
@@ -126,8 +135,19 @@ impl BackendConfig {
     Self {
       label: "Codex",
       command: "npx".into(),
-      args: vec!["-y".into(), "@agentclientprotocol/codex-acp@1.3.0".into()],
+      args: vec!["-y".into(), "@agentclientprotocol/codex-acp@1.6.0".into()],
+      cli_executable: None,
       install_hint: "Requires Node.js and `codex login` for ChatGPT subscription auth.",
+    }
+  }
+
+  pub fn pi() -> Self {
+    Self {
+      label: "Pi",
+      command: "npx".into(),
+      args: vec!["-y".into(), "pi-acp@0.0.33".into()],
+      cli_executable: Some("pi"),
+      install_hint: "Requires Node.js 22+ and the pi CLI on PATH: `npm install -g @earendil-works/pi-coding-agent`.",
     }
   }
 }
@@ -144,23 +164,28 @@ pub enum BackendAvailability {
 }
 
 impl BackendConfig {
-  /// Swaps the spawned program (tests and the driver); the packaged args
-  /// belong to the default command, so they are dropped.
+  /// Swaps the spawned program (tests and the driver); the packaged args and
+  /// the agent CLI belong to the default command, so they are dropped.
   pub fn with_command(mut self, command: impl Into<String>) -> Self {
     self.command = command.into();
     self.args = Vec::new();
+    self.cli_executable = None;
     self
   }
 
-  /// Check if the backend binary is reachable on PATH.
+  /// Check that the adapter command and the agent CLI it drives are on PATH.
   pub fn check_availability(&self) -> BackendAvailability {
-    if which::which(&self.command).is_ok() {
-      BackendAvailability::Ok
-    } else {
-      BackendAvailability::MissingBinary {
-        command: self.command.clone(),
+    let missing = [Some(self.command.as_str()), self.cli_executable]
+      .into_iter()
+      .flatten()
+      .find(|binary| which::which(binary).is_err());
+
+    match missing {
+      None => BackendAvailability::Ok,
+      Some(command) => BackendAvailability::MissingBinary {
+        command: command.to_string(),
         install_hint: self.install_hint.to_string(),
-      }
+      },
     }
   }
 }
@@ -267,22 +292,24 @@ pub struct TerminalAuthCommand {
 }
 
 impl TerminalAuthCommand {
-  /// Render as a single shell-safe command string.
-  pub fn to_shell_string(&self, executable: &str) -> String {
+  /// Render as a single shell-safe command string. `base_args` are the
+  /// backend's own args, without which the executable resolves to the wrong
+  /// program (`npx` alone rather than the packaged adapter).
+  pub fn to_shell_string(&self, executable: &str, base_args: &[String]) -> String {
     let mut parts: Vec<String> = Vec::new();
     for (k, v) in &self.env {
       parts.push(format!("{}={}", k, shell_words::quote(v)));
     }
     parts.push(executable.to_string());
-    for arg in &self.args {
+    for arg in base_args.iter().chain(self.args.iter()) {
       parts.push(shell_words::quote(arg).to_string());
     }
     parts.join(" ")
   }
 
   /// Try launching the command in the user's native terminal; false on failure.
-  pub fn try_launch_terminal(&self, executable: &str) -> bool {
-    let shell_cmd = self.to_shell_string(executable);
+  pub fn try_launch_terminal(&self, executable: &str, base_args: &[String]) -> bool {
+    let shell_cmd = self.to_shell_string(executable, base_args);
     #[cfg(target_os = "macos")]
     {
       let escaped = shell_cmd.replace('\\', "\\\\").replace('"', "\\\"");
@@ -673,6 +700,97 @@ mod tests {
     let truncated = truncate_stderr_line(&long);
     assert!(truncated.starts_with(&"x".repeat(STDERR_LINE_MAX_CHARS)));
     assert!(truncated.ends_with("[... 500 chars truncated]"));
+  }
+
+  #[test]
+  fn every_backend_kind_round_trips_through_its_storage_key() {
+    for kind in BackendKind::all() {
+      assert_eq!(
+        BackendKind::from_storage_key(kind.storage_key()),
+        Some(*kind)
+      );
+    }
+  }
+
+  #[test]
+  fn backend_configs_launch_their_adapter_through_npx() {
+    for kind in BackendKind::all() {
+      let config = kind.config();
+      assert_eq!(config.command, "npx");
+      assert_eq!(config.args.first().map(String::as_str), Some("-y"));
+      assert_eq!(config.label, kind.label());
+    }
+  }
+
+  #[test]
+  fn pi_requires_its_cli_while_bundled_adapters_do_not() {
+    assert_eq!(BackendConfig::pi().cli_executable, Some("pi"));
+    assert_eq!(BackendConfig::claude().cli_executable, None);
+    assert_eq!(BackendConfig::codex().cli_executable, None);
+  }
+
+  fn availability_config(command: &str, cli_executable: Option<&'static str>) -> BackendConfig {
+    BackendConfig {
+      label: "stub",
+      command: command.into(),
+      args: Vec::new(),
+      cli_executable,
+      install_hint: "install it",
+    }
+  }
+
+  fn missing_binary(config: BackendConfig) -> Option<String> {
+    match config.check_availability() {
+      BackendAvailability::MissingBinary { command, .. } => Some(command),
+      BackendAvailability::Ok => None,
+    }
+  }
+
+  #[test]
+  fn availability_reports_the_missing_agent_cli_behind_a_present_adapter() {
+    let present = std::env::current_exe().expect("current exe");
+    let present = present.to_str().expect("utf-8 exe path");
+
+    assert_eq!(missing_binary(availability_config(present, None)), None);
+    assert_eq!(
+      missing_binary(availability_config(
+        present,
+        Some("reviu-missing-agent-cli")
+      )),
+      Some("reviu-missing-agent-cli".to_string())
+    );
+  }
+
+  #[test]
+  fn availability_reports_the_adapter_command_first() {
+    assert_eq!(
+      missing_binary(availability_config(
+        "reviu-missing-adapter",
+        Some("reviu-missing-agent-cli")
+      )),
+      Some("reviu-missing-adapter".to_string())
+    );
+  }
+
+  #[test]
+  fn terminal_auth_keeps_the_backend_args_ahead_of_its_own() {
+    let auth = TerminalAuthCommand {
+      args: vec!["--terminal-login".into()],
+      env: vec![("PI_TOKEN".into(), "a b".into())],
+    };
+    let config = BackendConfig::pi();
+
+    assert_eq!(
+      auth.to_shell_string(&config.command, &config.args),
+      "PI_TOKEN='a b' npx -y pi-acp@0.0.33 --terminal-login"
+    );
+  }
+
+  #[test]
+  fn overriding_the_command_drops_the_agent_cli_requirement() {
+    let config = BackendConfig::pi().with_command("stub_agent");
+    assert_eq!(config.cli_executable, None);
+    assert!(config.args.is_empty());
   }
 
   #[test]

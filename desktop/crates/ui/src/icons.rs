@@ -60,6 +60,7 @@ pub enum UiIconName {
   FirefoxBrowser,
   Claude,
   OpenAi,
+  Pi,
 }
 
 pub const FILE_ICON_SIZE_PX: f32 = 16.0;
@@ -122,6 +123,7 @@ impl IconNamed for UiIconName {
       UiIconName::FirefoxBrowser => "icons/brands/firefoxbrowser.svg",
       UiIconName::Claude => "icons/brands/claude.svg",
       UiIconName::OpenAi => "icons/brands/openai.svg",
+      UiIconName::Pi => "icons/brands/pi.svg",
     }
     .into()
   }

@@ -6,6 +6,7 @@ fn stub_backend() -> BackendConfig {
     label: "stub",
     command: env!("CARGO_BIN_EXE_stub_agent").to_string(),
     args: Vec::new(),
+    cli_executable: None,
     install_hint: "test only",
   }
 }

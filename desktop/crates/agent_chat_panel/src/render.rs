@@ -1064,10 +1064,7 @@ impl Render for AgentChatPanel {
       && self.extras_before_kinds().is_empty()
       && matches!(self.status, Status::Ready | Status::Connecting);
     let empty_state = if show_empty_state {
-      let brand_icon = match self.backend_kind {
-        BackendKind::Claude => UiIconName::Claude,
-        BackendKind::Codex => UiIconName::OpenAi,
-      };
+      let brand_icon = crate::backend_icon(self.backend_kind);
       let content = if connecting {
         v_flex()
           .items_center()
@@ -1148,10 +1145,7 @@ impl Render for AgentChatPanel {
               Status::Ready => "",
             };
             let label = format!("{}{}", current.label(), label_suffix);
-            let brand_icon = match current {
-              BackendKind::Claude => UiIconName::Claude,
-              BackendKind::Codex => UiIconName::OpenAi,
-            };
+            let brand_icon = crate::backend_icon(current);
             let entity = cx.entity().downgrade();
             Button::new("agent-chat-backend")
               .label(label)
@@ -1166,10 +1160,7 @@ impl Render for AgentChatPanel {
                   let entity = entity.clone();
                   let is_current = kind == current;
                   let label_text: SharedString = kind.label().into();
-                  let brand_icon = match kind {
-                    BackendKind::Claude => UiIconName::Claude,
-                    BackendKind::Codex => UiIconName::OpenAi,
-                  };
+                  let brand_icon = crate::backend_icon(kind);
                   menu = menu.item(
                     PopupMenuItem::element(move |_, cx| {
                       let theme = cx.theme().clone();
@@ -1648,10 +1639,7 @@ impl AgentChatPanel {
       .map(|m| short_model_label(&m.name, m.description.as_deref()).into())
       .unwrap_or_else(|| "Model".into());
     let entity = cx.entity().downgrade();
-    let brand_icon = match self.backend_kind {
-      BackendKind::Claude => UiIconName::Claude,
-      BackendKind::Codex => UiIconName::OpenAi,
-    };
+    let brand_icon = crate::backend_icon(self.backend_kind);
     Button::new("agent-chat-model")
       .child(selector_trigger(Some(brand_icon), current_label))
       .xsmall()
@@ -1985,6 +1973,7 @@ impl AgentChatPanel {
     cx: &mut Context<Self>,
   ) -> gpui::AnyElement {
     let executable = self.backend.command.clone();
+    let base_args = self.backend.args.clone();
     let mut card = v_flex()
       .px_3()
       .gap_2()
@@ -2015,13 +2004,14 @@ impl AgentChatPanel {
         );
       }
       if let Some(cmd) = method.terminal_command.clone() {
-        let shell_cmd = cmd.to_shell_string(&executable);
+        let shell_cmd = cmd.to_shell_string(&executable, &base_args);
         let preview = shell_cmd.clone();
         let copy_value = shell_cmd.clone();
         let copy_id = SharedString::from(format!("auth-copy-{}", method.id));
         let open_id = SharedString::from(format!("auth-open-{}", method.id));
         let launch_cmd = cmd.clone();
         let exec_owned = executable.to_string();
+        let launch_args = base_args.clone();
         row = row.child(
           div()
             .text_xs()
@@ -2037,7 +2027,7 @@ impl AgentChatPanel {
                 .small()
                 .primary()
                 .on_click(cx.listener(move |_, _, _, cx| {
-                  if !launch_cmd.try_launch_terminal(&exec_owned) {
+                  if !launch_cmd.try_launch_terminal(&exec_owned, &launch_args) {
                     cx.write_to_clipboard(gpui::ClipboardItem::new_string(copy_value.clone()));
                   }
                 })),
@@ -2069,10 +2059,7 @@ impl AgentChatPanel {
       .map(|t| t.elapsed().as_secs())
       .unwrap_or(0);
     let label_color = theme.muted_foreground;
-    let brand_icon = match self.backend_kind {
-      BackendKind::Claude => UiIconName::Claude,
-      BackendKind::Codex => UiIconName::OpenAi,
-    };
+    let brand_icon = crate::backend_icon(self.backend_kind);
     let verb: SharedString = if connecting {
       format!("Connecting to {}...", self.backend.label).into()
     } else {

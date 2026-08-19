@@ -392,6 +392,14 @@ pub fn set_backend_command_override(command: Option<String>) {
     .expect("lock backend command override") = command;
 }
 
+pub fn backend_icon(kind: BackendKind) -> UiIconName {
+  match kind {
+    BackendKind::Claude => UiIconName::Claude,
+    BackendKind::Codex => UiIconName::OpenAi,
+    BackendKind::Pi => UiIconName::Pi,
+  }
+}
+
 fn resolve_backend_config(backend_kind: BackendKind) -> BackendConfig {
   let config = backend_kind.config();
   #[cfg(any(test, feature = "test-support"))]
@@ -2320,7 +2328,7 @@ impl AgentChatPanel {
       return;
     }
     self.backend_kind = kind;
-    self.backend = kind.config();
+    self.backend = resolve_backend_config(kind);
     // Session id is backend-specific; clear it so we don't try to load a
     // claude session on codex (or vice-versa).
     self.current_conv.session_id = None;
