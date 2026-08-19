@@ -6925,6 +6925,83 @@ mod tests {
   }
 
   #[gpui::test]
+  async fn changed_content_or_location_invalidates_the_tool_cache(cx: &mut gpui::TestAppContext) {
+    use agent_client_protocol::schema::{Diff, ToolCallLocation};
+    let (panel, cx) = add_panel_window(cx);
+    let call_with = |new_text: &str, path: &str| {
+      let mut c = call("t1", "Edit foo", ToolKind::Edit);
+      c.content = vec![ToolCallContent::Diff(
+        Diff::new("foo.rs", new_text.to_string()).old_text(Some("one\n".to_string())),
+      )];
+      c.locations = vec![ToolCallLocation::new(path)];
+      c
+    };
+    panel.update(cx, |panel, cx| {
+      panel.status = Status::Ready;
+      panel.in_flight = true;
+      panel.on_event(AgentEvent::ToolCall(call_with("one\ntwo\n", "foo.rs")), cx);
+      let added_before = match panel.items.last() {
+        Some(ChatItem::Tool(t)) => t.diffs[0].added,
+        _ => panic!("tool item"),
+      };
+      assert_eq!(added_before, 1);
+
+      // New content: the diff recomputes.
+      panel.on_event(
+        AgentEvent::ToolCall(call_with("one\ntwo\nthree\n", "foo.rs")),
+        cx,
+      );
+      match panel.items.last() {
+        Some(ChatItem::Tool(t)) => assert_eq!(t.diffs[0].added, 2, "fresh content recomputed"),
+        _ => panic!("tool item"),
+      }
+
+      // Same content, moved file: the language changes, so the cache must miss.
+      let fp_before = match panel.items.last() {
+        Some(ChatItem::Tool(t)) => t.content_fp,
+        _ => panic!("tool item"),
+      };
+      panel.on_event(
+        AgentEvent::ToolCall(call_with("one\ntwo\nthree\n", "bar.py")),
+        cx,
+      );
+      match panel.items.last() {
+        Some(ChatItem::Tool(t)) => {
+          assert_ne!(
+            t.content_fp, fp_before,
+            "a moved location changes the fingerprint"
+          );
+        }
+        _ => panic!("tool item"),
+      }
+    });
+  }
+
+  #[gpui::test]
+  async fn the_stateful_streaming_view_renders_custom_code_blocks(cx: &mut gpui::TestAppContext) {
+    let (panel, cx) = add_panel_window(cx);
+    panel.update(cx, |panel, cx| {
+      panel.status = Status::Ready;
+      panel.in_flight = true;
+      panel.items = vec![user_message("show me code")];
+      panel.on_event(text_chunk("```toml\nkey = 1\n```"), cx);
+      panel.sync_list_count();
+      cx.notify();
+    });
+    cx.run_until_parked();
+    panel.update(cx, |panel, cx| {
+      panel.mark_last_item_changed();
+      cx.notify();
+    });
+    cx.run_until_parked();
+
+    assert!(
+      cx.debug_bounds("chat-code-block-toml").is_some(),
+      "the incremental streaming view carries the custom block extensions"
+    );
+  }
+
+  #[gpui::test]
   async fn a_status_only_update_skips_the_rehighlight(cx: &mut gpui::TestAppContext) {
     use agent_client_protocol::schema::ToolCallUpdateFields;
     let (panel, cx) = add_panel_window(cx);
