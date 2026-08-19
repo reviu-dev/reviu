@@ -21,7 +21,7 @@ use agent_acp::{
 use agent_client_protocol::schema::{
   ContentBlock, EmbeddedResource, EmbeddedResourceResource, Plan, PlanEntryPriority,
   PlanEntryStatus, ResourceLink, SessionInfoUpdate, TextContent, TextResourceContents, ToolCall,
-  ToolCallId, ToolCallStatus, ToolCallUpdate, ToolKind,
+  ToolCallContent, ToolCallId, ToolCallStatus, ToolCallUpdate, ToolKind,
 };
 use agent_client_protocol::schema::{
   ModelId, ModelInfo, SessionConfigId, SessionConfigKind, SessionConfigOption,
@@ -174,6 +174,10 @@ struct ToolCallView {
   diffs: Vec<DiffSummary>,
   #[serde(default)]
   outputs: Vec<ToolOutput>,
+  /// Fingerprint of the content that produced diffs/outputs/spans; a re-sent
+  /// call with identical content skips the diff and highlight recompute.
+  #[serde(skip)]
+  content_fp: u64,
 }
 
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
@@ -475,6 +479,9 @@ pub struct AgentChatPanel {
   pending_thought: String,
   /// Messages typed during a turn, drained oldest-first when it ends cleanly.
   queued_prompts: Vec<String>,
+  /// Incremental markdown state for the streaming reply: chunks append via
+  /// push_str so a chunk costs O(delta), not a full document re-parse.
+  pending_md_state: Option<gpui::Entity<gpui_component::text::TextViewState>>,
   /// Expand/collapse pins per tool group, keyed by the group's first tool id.
   tool_group_pins: HashMap<ToolCallId, bool>,
   /// Slash commands advertised by the agent, latest update wins.
@@ -558,6 +565,7 @@ impl AgentChatPanel {
       pending_agent: String::new(),
       pending_thought: String::new(),
       queued_prompts: Vec::new(),
+      pending_md_state: None,
       tool_group_pins: loaded_pins,
       available_commands: Vec::new(),
       editing_message: None,
@@ -718,8 +726,8 @@ impl AgentChatPanel {
 
   /// Feed an event as the forwarder would, e.g. one trailing in late.
   #[cfg(any(test, feature = "test-support"))]
-  pub fn inject_event_for_test(&mut self, event: AgentEvent) {
-    self.on_event(event);
+  pub fn inject_event_for_test(&mut self, event: AgentEvent, cx: &mut Context<Self>) {
+    self.on_event(event, cx);
   }
 
   /// Names of the slash commands the agent advertised.
@@ -816,6 +824,7 @@ impl AgentChatPanel {
       pending_agent: String::new(),
       pending_thought: String::new(),
       queued_prompts: Vec::new(),
+      pending_md_state: None,
       tool_group_pins: HashMap::new(),
       available_commands: Vec::new(),
       editing_message: None,
@@ -904,7 +913,7 @@ impl AgentChatPanel {
     let task = cx.spawn(async move |this, cx| {
       while let Ok(event) = rx.recv().await {
         let _ = this.update(cx, |panel, cx| {
-          panel.on_event(event);
+          panel.on_event(event, cx);
           panel.persist_state();
           panel.sync_list_count();
           cx.notify();
@@ -1227,7 +1236,13 @@ impl AgentChatPanel {
     if !self.pending_thought.is_empty() {
       container = container.child(self.render_thinking_peek(theme, cx));
     }
-    if !self.pending_agent.is_empty() {
+    if let Some(state) = self.pending_md_state.clone() {
+      container = container.child(stateful_markdown_view(
+        &state,
+        &self.markdown_extensions,
+        cx,
+      ));
+    } else if !self.pending_agent.is_empty() {
       container = container.child(markdown_view(
         "agent-chat-md-pending",
         &self.pending_agent,
@@ -1754,13 +1769,17 @@ impl AgentChatPanel {
     cx.notify();
   }
 
-  fn on_event(&mut self, event: AgentEvent) {
+  fn on_event(&mut self, event: AgentEvent, cx: &mut Context<Self>) {
     match event {
       AgentEvent::AgentMessageChunk(chunk) => {
         // Prose after a thought closes it, so the two keep their order.
         self.flush_pending_thought();
         if let ContentBlock::Text(t) = chunk.content {
           self.pending_agent.push_str(&t.text);
+          let state = self.pending_md_state.get_or_insert_with(|| {
+            cx.new(|cx| gpui_component::text::TextViewState::markdown("", cx))
+          });
+          state.update(cx, |state, cx| state.push_str(&t.text, cx));
         }
         self.sync_list_count();
         self.mark_last_item_changed();
@@ -1873,8 +1892,10 @@ impl AgentChatPanel {
   }
 
   fn flush_pending_agent(&mut self) {
+    self.pending_md_state = None;
     if self.pending_agent.trim().is_empty() {
       self.pending_agent.clear();
+      self.pending_md_state = None;
       return;
     }
     let text = std::mem::take(&mut self.pending_agent);
@@ -2559,6 +2580,7 @@ impl AgentChatPanel {
     self.items.truncate(keep_len);
     self.rebuild_tool_index();
     self.pending_agent.clear();
+    self.pending_md_state = None;
     self.pending_thought.clear();
     self.end_turn();
     self.persist_state();
@@ -2744,6 +2766,7 @@ impl AgentChatPanel {
     self.items.clear();
     self.tool_index.clear();
     self.pending_agent.clear();
+    self.pending_md_state = None;
     self.pending_thought.clear();
     self.end_turn();
     self.usage = None;
@@ -2764,6 +2787,7 @@ impl AgentChatPanel {
       self.items.clear();
       self.tool_index.clear();
       self.pending_agent.clear();
+      self.pending_md_state = None;
       self.pending_thought.clear();
       self.end_turn();
       self.usage = None;
@@ -2787,6 +2811,7 @@ impl AgentChatPanel {
     self.tool_index = index;
     self.tool_group_pins = pins;
     self.pending_agent.clear();
+    self.pending_md_state = None;
     self.pending_thought.clear();
     let _ = std::fs::write(dir.join("active.txt"), &self.current_conv.id);
     self.respawn_session(cx);
@@ -3164,34 +3189,54 @@ fn populate_syntax_spans(view: &mut ToolCallView) {
   }
 }
 
+/// Fingerprint of the pieces that feed diffs, outputs and highlight spans.
+fn tool_content_fp(content: &[ToolCallContent], first_location: Option<&PathBuf>) -> u64 {
+  let mut bytes = serde_json::to_vec(content).unwrap_or_default();
+  if let Some(path) = first_location {
+    bytes.extend_from_slice(path.to_string_lossy().as_bytes());
+  }
+  code_block::fnv1a(&bytes)
+}
+
 fn upsert_tool_call_pure(
   items: &mut Vec<ChatItem>,
   index: &mut HashMap<ToolCallId, usize>,
   call: ToolCall,
   cwd: &std::path::Path,
 ) {
-  let diffs = extract_diffs(&call.content, cwd);
-  let outputs = extract_outputs(&call.content);
+  let locations: Vec<(PathBuf, Option<u32>)> = call
+    .locations
+    .into_iter()
+    .map(|l| (l.path, l.line))
+    .collect();
+  let content_fp = tool_content_fp(&call.content, locations.first().map(|(p, _)| p));
+  if let Some(&idx) = index.get(&call.tool_call_id)
+    && let Some(ChatItem::Tool(existing)) = items.get_mut(idx)
+  {
+    existing.title = call.title;
+    existing.kind = call.kind;
+    existing.status = call.status;
+    existing.locations = locations;
+    // Same content: keep diffs, outputs, spans and their expansion state.
+    if existing.content_fp != content_fp {
+      existing.diffs = extract_diffs(&call.content, cwd);
+      existing.outputs = extract_outputs(&call.content);
+      existing.content_fp = content_fp;
+      populate_syntax_spans(existing);
+    }
+    return;
+  }
   let mut view = ToolCallView {
     id: call.tool_call_id.clone(),
     title: call.title,
     kind: call.kind,
     status: call.status,
-    locations: call
-      .locations
-      .into_iter()
-      .map(|l| (l.path, l.line))
-      .collect(),
-    diffs,
-    outputs,
+    locations,
+    diffs: extract_diffs(&call.content, cwd),
+    outputs: extract_outputs(&call.content),
+    content_fp,
   };
   populate_syntax_spans(&mut view);
-  if let Some(&idx) = index.get(&call.tool_call_id)
-    && let Some(ChatItem::Tool(existing)) = items.get_mut(idx)
-  {
-    *existing = view;
-    return;
-  }
   let idx = items.len();
   index.insert(call.tool_call_id, idx);
   items.push(ChatItem::Tool(view));
@@ -3222,10 +3267,15 @@ fn apply_tool_call_update_pure(
     view.locations = locs.into_iter().map(|l| (l.path, l.line)).collect();
   }
   if let Some(content) = update.fields.content {
-    view.diffs = extract_diffs(&content, cwd);
-    view.outputs = extract_outputs(&content);
+    let content_fp = tool_content_fp(&content, view.locations.first().map(|(p, _)| p));
+    if view.content_fp != content_fp {
+      view.diffs = extract_diffs(&content, cwd);
+      view.outputs = extract_outputs(&content);
+      view.content_fp = content_fp;
+      // Only fresh content is worth a re-highlight; a status flip is not.
+      populate_syntax_spans(view);
+    }
   }
-  populate_syntax_spans(view);
 }
 
 /// Codex names embed the model's DEFAULT reasoning level ("GPT-5.6-Sol (low)"),
@@ -3445,6 +3495,25 @@ fn render_selector_item(
           .text_color(theme.foreground),
       )
     })
+    .into_any_element()
+}
+
+/// The streaming variant: the caller owns the state and appends via push_str.
+fn stateful_markdown_view(
+  state: &gpui::Entity<gpui_component::text::TextViewState>,
+  extensions: &gpui_component::text::MarkdownExtensions,
+  cx: &App,
+) -> gpui::AnyElement {
+  let theme = cx.theme();
+  let mut style = TextViewStyle::default().paragraph_gap(gpui::rems(0.5));
+  style.highlight_theme = theme.highlight_theme.clone();
+  style.is_dark = theme.mode.is_dark();
+
+  TextView::new(state)
+    .style(style)
+    .markdown_extensions(extensions.clone())
+    .selectable(true)
+    .text_sm()
     .into_any_element()
 }
 
@@ -5166,6 +5235,7 @@ mod tests {
         locations: Vec::new(),
         diffs: Vec::new(),
         outputs: Vec::new(),
+        content_fp: 0,
       })
     };
     let mut items = vec![
@@ -5952,12 +6022,15 @@ mod tests {
   #[gpui::test]
   async fn prose_keeps_its_place_between_tool_calls(cx: &mut gpui::TestAppContext) {
     let (panel, cx) = add_panel_window(cx);
-    panel.update(cx, |panel, _| {
+    panel.update(cx, |panel, cx| {
       panel.status = Status::Ready;
       panel.in_flight = true;
-      panel.on_event(text_chunk("Let me read the file."));
-      panel.on_event(AgentEvent::ToolCall(call("t1", "Read foo", ToolKind::Read)));
-      panel.on_event(text_chunk("Done reading."));
+      panel.on_event(text_chunk("Let me read the file."), cx);
+      panel.on_event(
+        AgentEvent::ToolCall(call("t1", "Read foo", ToolKind::Read)),
+        cx,
+      );
+      panel.on_event(text_chunk("Done reading."), cx);
       panel.flush_turn_buffers();
       panel.end_turn();
     });
@@ -5978,12 +6051,15 @@ mod tests {
   #[gpui::test]
   async fn a_thought_closes_before_prose_and_prose_before_a_tool(cx: &mut gpui::TestAppContext) {
     let (panel, cx) = add_panel_window(cx);
-    panel.update(cx, |panel, _| {
+    panel.update(cx, |panel, cx| {
       panel.status = Status::Ready;
       panel.in_flight = true;
-      panel.on_event(thought_chunk("weighing options"));
-      panel.on_event(text_chunk("Here is the plan."));
-      panel.on_event(AgentEvent::ToolCall(call("t1", "Edit foo", ToolKind::Edit)));
+      panel.on_event(thought_chunk("weighing options"), cx);
+      panel.on_event(text_chunk("Here is the plan."), cx);
+      panel.on_event(
+        AgentEvent::ToolCall(call("t1", "Edit foo", ToolKind::Edit)),
+        cx,
+      );
       panel.flush_turn_buffers();
       panel.end_turn();
     });
@@ -5996,11 +6072,14 @@ mod tests {
   #[gpui::test]
   async fn whitespace_only_prose_makes_no_message_item(cx: &mut gpui::TestAppContext) {
     let (panel, cx) = add_panel_window(cx);
-    panel.update(cx, |panel, _| {
+    panel.update(cx, |panel, cx| {
       panel.status = Status::Ready;
       panel.in_flight = true;
-      panel.on_event(text_chunk("\n\n"));
-      panel.on_event(AgentEvent::ToolCall(call("t1", "Read foo", ToolKind::Read)));
+      panel.on_event(text_chunk("\n\n"), cx);
+      panel.on_event(
+        AgentEvent::ToolCall(call("t1", "Read foo", ToolKind::Read)),
+        cx,
+      );
       panel.flush_turn_buffers();
       panel.end_turn();
     });
@@ -6013,14 +6092,20 @@ mod tests {
   #[gpui::test]
   async fn a_tool_update_does_not_split_the_following_prose(cx: &mut gpui::TestAppContext) {
     let (panel, cx) = add_panel_window(cx);
-    panel.update(cx, |panel, _| {
+    panel.update(cx, |panel, cx| {
       panel.status = Status::Ready;
       panel.in_flight = true;
-      panel.on_event(text_chunk("Reading."));
-      panel.on_event(AgentEvent::ToolCall(call("t1", "Read foo", ToolKind::Read)));
-      panel.on_event(text_chunk("All good."));
+      panel.on_event(text_chunk("Reading."), cx);
+      panel.on_event(
+        AgentEvent::ToolCall(call("t1", "Read foo", ToolKind::Read)),
+        cx,
+      );
+      panel.on_event(text_chunk("All good."), cx);
       // The same call again is an in-place update, not a new timeline entry.
-      panel.on_event(AgentEvent::ToolCall(call("t1", "Read foo", ToolKind::Read)));
+      panel.on_event(
+        AgentEvent::ToolCall(call("t1", "Read foo", ToolKind::Read)),
+        cx,
+      );
       panel.flush_turn_buffers();
       panel.end_turn();
     });
@@ -6181,7 +6266,7 @@ mod tests {
       panel.status = Status::Ready;
       panel.in_flight = true;
       panel.items = vec![user_message("think about it")];
-      panel.on_event(thought_chunk("first I should check the tests"));
+      panel.on_event(thought_chunk("first I should check the tests"), cx);
       panel.sync_list_count();
       cx.notify();
     });
@@ -6447,10 +6532,10 @@ mod tests {
   #[gpui::test]
   async fn late_chunks_after_a_turn_are_kept_not_dropped(cx: &mut gpui::TestAppContext) {
     let (panel, cx) = add_panel_window(cx);
-    panel.update(cx, |panel, _| {
+    panel.update(cx, |panel, cx| {
       panel.status = Status::Ready;
       panel.in_flight = false;
-      panel.on_event(text_chunk("trailing words"));
+      panel.on_event(text_chunk("trailing words"), cx);
       // The next boundary (here the next turn's flush) surfaces them in order.
       panel.flush_turn_buffers();
     });
@@ -6474,18 +6559,21 @@ mod tests {
       )])
     };
     let (panel, cx) = add_panel_window(cx);
-    panel.update(cx, |panel, _| {
+    panel.update(cx, |panel, cx| {
       panel.status = Status::Ready;
       panel.in_flight = true;
-      panel.on_event(AgentEvent::Plan(plan_with(
-        "step",
-        PlanEntryStatus::Pending,
-      )));
-      panel.on_event(AgentEvent::ToolCall(call("t1", "Read foo", ToolKind::Read)));
-      panel.on_event(AgentEvent::Plan(plan_with(
-        "step",
-        PlanEntryStatus::Completed,
-      )));
+      panel.on_event(
+        AgentEvent::Plan(plan_with("step", PlanEntryStatus::Pending)),
+        cx,
+      );
+      panel.on_event(
+        AgentEvent::ToolCall(call("t1", "Read foo", ToolKind::Read)),
+        cx,
+      );
+      panel.on_event(
+        AgentEvent::Plan(plan_with("step", PlanEntryStatus::Completed)),
+        cx,
+      );
       panel.flush_turn_buffers();
       panel.end_turn();
     });
@@ -6498,12 +6586,12 @@ mod tests {
     });
 
     // A plan in a new turn starts its own block.
-    panel.update(cx, |panel, _| {
+    panel.update(cx, |panel, cx| {
       panel.items.push(user_message("next"));
-      panel.on_event(AgentEvent::Plan(plan_with(
-        "other",
-        PlanEntryStatus::Pending,
-      )));
+      panel.on_event(
+        AgentEvent::Plan(plan_with("other", PlanEntryStatus::Pending)),
+        cx,
+      );
     });
     panel.read_with(cx, |panel, _| {
       assert_eq!(
@@ -6784,14 +6872,113 @@ mod tests {
   }
 
   #[gpui::test]
+  async fn streaming_chunks_feed_the_incremental_markdown_state(cx: &mut gpui::TestAppContext) {
+    let (panel, cx) = add_panel_window(cx);
+    panel.update(cx, |panel, cx| {
+      panel.status = Status::Ready;
+      panel.in_flight = true;
+      panel.on_event(text_chunk("Hello, "), cx);
+      panel.on_event(text_chunk("**world**."), cx);
+      assert!(
+        panel.pending_md_state.is_some(),
+        "the incremental parser state exists while streaming"
+      );
+      assert_eq!(panel.pending_agent, "Hello, **world**.");
+
+      panel.flush_turn_buffers();
+      assert!(
+        panel.pending_md_state.is_none(),
+        "flushing retires the streaming state"
+      );
+    });
+  }
+
+  #[gpui::test]
+  async fn a_resent_tool_call_with_identical_content_keeps_the_expansion(
+    cx: &mut gpui::TestAppContext,
+  ) {
+    use agent_client_protocol::schema::Diff;
+    let (panel, cx) = add_panel_window(cx);
+    let call_with_diff = || {
+      let mut c = call("t1", "Edit foo", ToolKind::Edit);
+      c.content = vec![ToolCallContent::Diff(
+        Diff::new("foo.rs", "one\ntwo\n").old_text(Some("one\n".to_string())),
+      )];
+      c
+    };
+    panel.update(cx, |panel, cx| {
+      panel.status = Status::Ready;
+      panel.in_flight = true;
+      panel.on_event(AgentEvent::ToolCall(call_with_diff()), cx);
+      if let Some(ChatItem::Tool(t)) = panel.items.last_mut() {
+        t.diffs[0].expanded = true;
+      }
+      // The same call again: identical content must not rebuild the diffs.
+      panel.on_event(AgentEvent::ToolCall(call_with_diff()), cx);
+    });
+    panel.read_with(cx, |panel, _| {
+      let Some(ChatItem::Tool(t)) = panel.items.last() else {
+        panic!("tool item");
+      };
+      assert!(t.diffs[0].expanded, "identical content kept the view state");
+    });
+  }
+
+  #[gpui::test]
+  async fn a_status_only_update_skips_the_rehighlight(cx: &mut gpui::TestAppContext) {
+    use agent_client_protocol::schema::ToolCallUpdateFields;
+    let (panel, cx) = add_panel_window(cx);
+    panel.update(cx, |panel, cx| {
+      panel.status = Status::Ready;
+      panel.in_flight = true;
+      let mut c = call("t1", "Run ls", ToolKind::Execute);
+      c.content = vec![ToolCallContent::from(ContentBlock::Text(TextContent::new(
+        "some output",
+      )))];
+      panel.on_event(AgentEvent::ToolCall(c), cx);
+      // Sentinel: recomputing spans would wipe it.
+      if let Some(ChatItem::Tool(t)) = panel.items.last_mut() {
+        t.outputs[0].syntax_spans = vec![HighlightSpan {
+          byte_range: 0..1,
+          token_type: syntax::TokenType::Keyword,
+        }];
+      }
+      panel.on_event(
+        AgentEvent::ToolCallUpdate(agent_client_protocol::schema::ToolCallUpdate::new(
+          ToolCallId::new(std::sync::Arc::from("t1")),
+          ToolCallUpdateFields::new().status(ToolCallStatus::Completed),
+        )),
+        cx,
+      );
+    });
+    panel.read_with(cx, |panel, _| {
+      let Some(ChatItem::Tool(t)) = panel.items.last() else {
+        panic!("tool item");
+      };
+      assert_eq!(t.status, ToolCallStatus::Completed);
+      assert_eq!(
+        t.outputs[0].syntax_spans.len(),
+        1,
+        "a status flip must not recompute highlights"
+      );
+    });
+  }
+
+  #[gpui::test]
   async fn tool_runs_fold_once_the_turn_settles_and_pin_on_click(cx: &mut gpui::TestAppContext) {
     let (panel, cx) = add_panel_window(cx);
     panel.update(cx, |panel, cx| {
       panel.status = Status::Ready;
       panel.in_flight = true;
       panel.items = vec![user_message("go")];
-      panel.on_event(AgentEvent::ToolCall(call("t1", "Read a", ToolKind::Read)));
-      panel.on_event(AgentEvent::ToolCall(call("t2", "Run b", ToolKind::Execute)));
+      panel.on_event(
+        AgentEvent::ToolCall(call("t1", "Read a", ToolKind::Read)),
+        cx,
+      );
+      panel.on_event(
+        AgentEvent::ToolCall(call("t2", "Run b", ToolKind::Execute)),
+        cx,
+      );
       panel.sync_list_count();
       cx.notify();
     });
@@ -6843,8 +7030,14 @@ mod tests {
       panel.status = Status::Ready;
       panel.in_flight = true;
       panel.items = vec![user_message("go")];
-      panel.on_event(AgentEvent::ToolCall(call("t1", "Read a", ToolKind::Read)));
-      panel.on_event(AgentEvent::ToolCall(call("t2", "Read b", ToolKind::Read)));
+      panel.on_event(
+        AgentEvent::ToolCall(call("t1", "Read a", ToolKind::Read)),
+        cx,
+      );
+      panel.on_event(
+        AgentEvent::ToolCall(call("t2", "Read b", ToolKind::Read)),
+        cx,
+      );
       panel.sync_list_count();
       cx.notify();
     });
@@ -6864,8 +7057,11 @@ mod tests {
     // Narration then another tool: the old group is no longer trailing, the
     // new single tool renders as its own plain row.
     panel.update(cx, |panel, cx| {
-      panel.on_event(text_chunk("checking something"));
-      panel.on_event(AgentEvent::ToolCall(call("t3", "Run c", ToolKind::Execute)));
+      panel.on_event(text_chunk("checking something"), cx);
+      panel.on_event(
+        AgentEvent::ToolCall(call("t3", "Run c", ToolKind::Execute)),
+        cx,
+      );
       panel.sync_list_count();
       cx.notify();
     });
@@ -7039,11 +7235,11 @@ mod tests {
   #[gpui::test]
   async fn a_turn_without_tools_still_makes_one_message(cx: &mut gpui::TestAppContext) {
     let (panel, cx) = add_panel_window(cx);
-    panel.update(cx, |panel, _| {
+    panel.update(cx, |panel, cx| {
       panel.status = Status::Ready;
       panel.in_flight = true;
-      panel.on_event(text_chunk("Hello, "));
-      panel.on_event(text_chunk("world."));
+      panel.on_event(text_chunk("Hello, "), cx);
+      panel.on_event(text_chunk("world."), cx);
       panel.flush_turn_buffers();
       panel.end_turn();
     });
@@ -7063,8 +7259,8 @@ mod tests {
     panel.update(cx, |panel, cx| {
       panel.status = Status::Ready;
       panel.in_flight = true;
-      panel.on_event(thought_chunk("half a thought"));
-      panel.on_event(text_chunk("Half an answer"));
+      panel.on_event(thought_chunk("half a thought"), cx);
+      panel.on_event(text_chunk("Half an answer"), cx);
       panel.on_agent_disconnected(cx);
     });
 

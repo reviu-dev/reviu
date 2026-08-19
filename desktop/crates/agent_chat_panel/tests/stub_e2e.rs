@@ -51,7 +51,7 @@ async fn a_prompt_round_trips_through_a_real_agent_process(cx: &mut TestAppConte
   // A chunk trailing in after the turn ended is kept, and surfaces ahead of
   // the next prompt instead of being wiped by it.
   panel.update(cx, |panel, cx| {
-    panel.inject_event_for_test(late_text_chunk("late words"));
+    panel.inject_event_for_test(late_text_chunk("late words"), cx);
     assert!(panel.send_external_prompt("second prompt".to_string(), cx));
   });
   cx.condition(&panel, |panel, _| {

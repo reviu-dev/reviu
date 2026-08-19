@@ -4,6 +4,10 @@ All notable changes to Reviu are documented here.
 
 ## 1.0.0
 
+### Streaming That Stays Fast
+
+Long replies no longer get slower as they grow: each streamed chunk now extends the rendered reply incrementally instead of re-reading the whole message every time. Tool updates got the same treatment, recomputing diffs and syntax colors only when their content actually changes; a status change costs nothing. A side effect you can see: re-sent tool updates no longer collapse the diff you had expanded.
+
 ### Tool Calls Fold Into One Line
 
 Consecutive tool calls now group under a single summary line, like "Ran 2 commands · Edited 1 file". The group stays open while the agent works so you can watch, folds when the turn ends, and one click pins it the way you want, remembered across restarts. A failure shows as a count in the summary and in red on the step itself, without painting the whole group red.
