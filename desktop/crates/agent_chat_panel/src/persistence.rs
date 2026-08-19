@@ -1,5 +1,8 @@
 use std::path::PathBuf;
 
+#[allow(clippy::wildcard_imports)]
+use super::*;
+
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct ConversationMeta {
   pub id: String,
@@ -86,4 +89,78 @@ mod tests {
     assert!(m.title.is_empty());
     assert!(m.session_id.is_none());
   }
+}
+
+pub(crate) type LoadedConversation = (
+  ConversationMeta,
+  Vec<ChatItem>,
+  HashMap<ToolCallId, usize>,
+  HashMap<ToolCallId, bool>,
+  bool,
+);
+
+pub(crate) fn load_active_conversation(dir: &std::path::Path) -> Option<LoadedConversation> {
+  let active_path = dir.join("active.txt");
+  let active_id = std::fs::read_to_string(&active_path).ok()?;
+  let active_id = active_id.trim().to_string();
+  if active_id.is_empty() {
+    return None;
+  }
+  let conv_path = dir.join(format!("{active_id}.json"));
+  load_conversation_file(&conv_path)
+}
+
+pub(crate) fn load_conversation_file(path: &std::path::Path) -> Option<LoadedConversation> {
+  let raw = std::fs::read_to_string(path).ok()?;
+  let parsed: PersistedConversation = serde_json::from_str(&raw).ok()?;
+  let mut items = Vec::with_capacity(parsed.items.len());
+  let mut index = HashMap::new();
+  for item in parsed.items {
+    match item {
+      PersistedChatItem::Message(m) => items.push(ChatItem::Message(m)),
+      PersistedChatItem::Tool(t) => {
+        index.insert(t.id.clone(), items.len());
+        items.push(ChatItem::Tool(t));
+      }
+      PersistedChatItem::Plan(p) => items.push(ChatItem::Plan(p)),
+      PersistedChatItem::Thought(t) => items.push(ChatItem::Thought(t)),
+      PersistedChatItem::Checkpoint(c) => items.push(ChatItem::Checkpoint(c)),
+      PersistedChatItem::Permission(mut p) => {
+        // The session that could answer is gone; a pending card must not
+        // offer live buttons after a reload.
+        if p.resolved.is_none() {
+          p.resolved = Some("unanswered".to_string());
+        }
+        items.push(ChatItem::Permission(p));
+      }
+      PersistedChatItem::TurnSummary(s) => items.push(ChatItem::TurnSummary(s)),
+    }
+  }
+  let pins = parsed
+    .group_pins
+    .into_iter()
+    .map(|(id, expanded)| (ToolCallId::new(std::sync::Arc::from(id.as_str())), expanded))
+    .collect();
+  Some((parsed.meta, items, index, pins, parsed.auto_approve))
+}
+
+pub(crate) fn list_conversations_in(dir: &std::path::Path) -> Vec<ConversationMeta> {
+  let Ok(entries) = std::fs::read_dir(dir) else {
+    return Vec::new();
+  };
+  let mut metas: Vec<ConversationMeta> = entries
+    .flatten()
+    .filter_map(|entry| {
+      let path = entry.path();
+      let name = path.file_name()?.to_str()?.to_string();
+      if !name.ends_with(".json") {
+        return None;
+      }
+      let raw = std::fs::read_to_string(&path).ok()?;
+      let parsed: PersistedConversation = serde_json::from_str(&raw).ok()?;
+      Some(parsed.meta)
+    })
+    .collect();
+  metas.sort_by_key(|m| std::cmp::Reverse(m.updated_at_secs));
+  metas
 }

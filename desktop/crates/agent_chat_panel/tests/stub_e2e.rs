@@ -571,6 +571,10 @@ async fn a_turn_with_edits_closes_on_an_aggregated_summary_card(cx: &mut TestApp
       vec![vec![("src/stub.rs".to_string(), 1, 0)]],
       "the edit diff lands as one summary card row"
     );
+    assert!(
+      matches!(panel.turn_summary_durations().as_slice(), [Some(_)]),
+      "the card records how long the turn ran"
+    );
   });
 
   // A follow-up turn without edits adds no card.
