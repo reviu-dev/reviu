@@ -1552,7 +1552,11 @@ impl AgentChatPanel {
                 ),
             )
             .child(
+              // Capped so the hover-only actions don't reserve a visible gap;
+              // the buttons overflow into the block's bottom margin instead.
               h_flex()
+                .h(px(10.))
+                .items_start()
                 .justify_end()
                 .gap_0p5()
                 .opacity(0.)
@@ -1592,7 +1596,11 @@ impl AgentChatPanel {
               cx,
             ))
             .child(
+              // Capped so the hover-only copy doesn't reserve a visible gap;
+              // the button overflows into the row's bottom padding instead.
               h_flex()
+                .h(px(10.))
+                .items_start()
                 .gap_0p5()
                 .opacity(0.)
                 .group_hover("chat-agent-msg", |this| this.opacity(1.))
