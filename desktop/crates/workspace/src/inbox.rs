@@ -1,6 +1,7 @@
 //! GitHub inbox in the sessions sidebar: open a notification, mark it done.
 
 use gpui::{Context, IntoElement, Render, SharedString, Window, div, prelude::*, px};
+use gpui_component::scroll::ScrollableElement as _;
 use gpui_component::{ActiveTheme as _, Sizable as _, h_flex, v_flex};
 use ui::{Button, ButtonVariants as _, UiIconName};
 
@@ -135,6 +136,7 @@ impl Render for Inbox {
         .overflow_y_scroll()
         .pb_1()
         .children(rows)
+        .overflow_y_scrollbar()
         .into_any_element()
     };
 

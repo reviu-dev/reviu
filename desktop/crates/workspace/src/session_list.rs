@@ -2,6 +2,7 @@
 
 use agent_chat_panel::ConversationMeta;
 use gpui::{Context, EventEmitter, IntoElement, Render, SharedString, Window, div, prelude::*, px};
+use gpui_component::scroll::ScrollableElement as _;
 use gpui_component::{ActiveTheme as _, Icon, Sizable as _, h_flex, v_flex};
 use ui::{Button, ButtonVariants as _, UiIconName};
 
@@ -216,6 +217,7 @@ impl Render for SessionList {
         .overflow_y_scroll()
         .py_1()
         .children(rows)
+        .overflow_y_scrollbar()
         .into_any_element()
     };
 

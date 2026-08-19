@@ -4,6 +4,10 @@ All notable changes to Reviu are documented here.
 
 ## 1.0.0
 
+### Small Alignments
+
+The sessions list and the GitHub inbox show a scrollbar while scrolling. File search results use the same text size as the command palette instead of a larger one, and the right panel's titles match the sidebar's.
+
 ### No More Deja Vu On Reopen
 
 Coming back to a conversation no longer repeats its last thought or reply: the history an agent replays while resuming a session is now recognized and dropped, since the transcript already has it. The finished-turn popup also shows the icon of the agent that actually worked, Codex or Claude, and dragging an image over the composer now tints it so you can see it is a drop target.

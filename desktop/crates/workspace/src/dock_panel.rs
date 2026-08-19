@@ -1223,7 +1223,7 @@ impl Render for DockPanel {
           .flex_1()
           .min_w(px(0.0))
           .overflow_hidden()
-          .text_sm()
+          .text_xs()
           .font_weight(gpui::FontWeight::SEMIBOLD)
           .text_color(theme.muted_foreground)
           .child(match self.active_tab {

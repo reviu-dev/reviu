@@ -192,7 +192,7 @@ impl ListDelegate for SearchFileListDelegate {
               .min_w_0()
               .flex_shrink(1.)
               .child(file_icon)
-              .child(Label::new(file_name).truncate()),
+              .child(div().text_sm().child(Label::new(file_name).truncate())),
           )
           .when_some(dir_label, |this, dir_label| {
             this.child(
