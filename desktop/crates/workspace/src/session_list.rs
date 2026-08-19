@@ -157,26 +157,43 @@ impl Render for SessionList {
                   .child(title),
               )
               .child(
+                // One trailing slot: the time sits flush right, the delete
+                // button takes its place on hover instead of reserving width.
                 div()
-                  .text_xs()
-                  .text_color(theme.muted_foreground)
-                  .group_hover(group_name.clone(), |this| this.opacity(0.0))
-                  .child(time),
-              )
-              .child(
-                Button::new(("session-page-session-delete", ix))
-                  .icon(UiIconName::Trash)
-                  .xsmall()
-                  .ghost()
-                  .opacity(0.0)
-                  .group_hover(group_name.clone(), |this| this.opacity(1.0))
-                  .tooltip("Delete session")
-                  .on_click(cx.listener(move |_, _, _, cx| {
-                    cx.stop_propagation();
-                    cx.emit(SessionListEvent::Deleted {
-                      id: delete_id.clone(),
-                    });
-                  })),
+                  .relative()
+                  .flex_shrink_0()
+                  .min_w(px(22.))
+                  .flex()
+                  .justify_end()
+                  .items_center()
+                  .child(
+                    div()
+                      .text_xs()
+                      .text_color(theme.muted_foreground)
+                      .group_hover(group_name.clone(), |this| this.opacity(0.0))
+                      .child(time),
+                  )
+                  .child(
+                    div()
+                      .absolute()
+                      .right(px(-2.))
+                      .top(px(-3.))
+                      .opacity(0.0)
+                      .group_hover(group_name.clone(), |this| this.opacity(1.0))
+                      .child(
+                        Button::new(("session-page-session-delete", ix))
+                          .icon(UiIconName::Trash)
+                          .xsmall()
+                          .ghost()
+                          .tooltip("Delete session")
+                          .on_click(cx.listener(move |_, _, _, cx| {
+                            cx.stop_propagation();
+                            cx.emit(SessionListEvent::Deleted {
+                              id: delete_id.clone(),
+                            });
+                          })),
+                      ),
+                  ),
               ),
           )
       })

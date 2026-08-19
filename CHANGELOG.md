@@ -6,7 +6,7 @@ All notable changes to Reviu are documented here.
 
 ### Small Alignments
 
-The sessions list and the GitHub inbox show a scrollbar while scrolling. File search results use the same text size as the command palette instead of a larger one, and the right panel's titles match the sidebar's.
+The sessions list and the GitHub inbox show a scrollbar while scrolling. File search results use the same text size as the command palette instead of a larger one, and the right panel's titles match the sidebar's. In the sessions list, the timestamp now sits flush right; the delete button appears in its place on hover instead of reserving an empty gap.
 
 ### No More Deja Vu On Reopen
 
