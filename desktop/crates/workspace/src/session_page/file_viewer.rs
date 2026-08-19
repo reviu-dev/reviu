@@ -629,6 +629,22 @@ mod tests {
       "conversation sits left of the diff: {conversation:?} vs {editor:?}"
     );
 
+    // Swapping to another file remounts the split; the conversation pane
+    // must ride along.
+    commit_text_file(&repo.path, Path::new("other.md"), "one\n", "second file");
+    std::fs::write(repo.path.join("other.md"), "two\n").expect("update other");
+    page.update_in(cx, |page, window, cx| {
+      page.open_diff(PathBuf::from("other.md"), None, window, cx);
+    });
+    await_open_file(&page, cx).await;
+    page.update(cx, |_, cx| cx.notify());
+    cx.run_until_parked();
+    assert!(
+      cx.debug_bounds("session-conversation-pane").is_some(),
+      "the conversation survives a file swap"
+    );
+    assert!(cx.debug_bounds("session-diff-editor").is_some());
+
     page.update_in(cx, |page, window, cx| {
       page.close_workspace_page_action(&CloseWorkspacePage, window, cx);
     });
