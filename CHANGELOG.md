@@ -28,7 +28,7 @@ Switching back to a conversation returns you to the exact spot you were reading 
 
 ### Select Text In Terminal Output
 
-The live output of commands running in tool cards is now selectable like everything else in the conversation: sweep across lines, double-click a word, triple-click a line, and the text lands in your clipboard on release.
+The live output of commands running in tool cards is now selectable like everything else in the conversation: sweep across lines, double-click a word, triple-click a line, and the text lands in your clipboard on release. Long lines also wrap now instead of being cut off at the edge, matching how file reads and diffs behave.
 
 ### Select Text In Diffs
 

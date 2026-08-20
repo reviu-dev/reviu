@@ -641,7 +641,6 @@ fn render_terminal_block(
               theme.foreground,
               mono_font,
             )
-            .no_wrap()
             .selectable(code_lines::SelectionSpec {
               text: SharedString::from(tail_text),
               row_ranges,
