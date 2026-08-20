@@ -393,6 +393,66 @@ mod tests {
     assert_eq!(snap.output, "always:1:1:xterm-256color:truecolor:1:unset");
   }
 
+  #[cfg(unix)]
+  #[test]
+  fn the_agents_env_overrides_the_color_forcing_defaults() {
+    let (tx, _rx) = async_channel::unbounded();
+    let store = Arc::new(TerminalStore::new(tx));
+    spawn_terminal(
+      &store,
+      "t".to_string(),
+      "sh".to_string(),
+      vec!["-c".to_string(), "printf \"$CARGO_TERM_COLOR\"".to_string()],
+      vec![("CARGO_TERM_COLOR".to_string(), "never".to_string())],
+      std::env::current_dir().expect("cwd"),
+      None,
+    )
+    .expect("spawns");
+    for _ in 0..250 {
+      if store.snapshot("t").is_some_and(|s| s.finished) {
+        break;
+      }
+      std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+    assert_eq!(
+      store.snapshot("t").expect("entry").output,
+      "never",
+      "an explicit agent env must win over our defaults"
+    );
+  }
+
+  #[cfg(unix)]
+  #[test]
+  fn an_inherited_no_color_is_scrubbed_from_spawned_commands() {
+    // Process-global, but harmless to parallel tests: apply_color_env strips
+    // NO_COLOR from every child this module spawns.
+    unsafe { std::env::set_var("NO_COLOR", "1") };
+    let (tx, _rx) = async_channel::unbounded();
+    let store = Arc::new(TerminalStore::new(tx));
+    spawn_terminal(
+      &store,
+      "t".to_string(),
+      "sh".to_string(),
+      vec!["-c".to_string(), "printf \"${NO_COLOR-unset}\"".to_string()],
+      Vec::new(),
+      std::env::current_dir().expect("cwd"),
+      None,
+    )
+    .expect("spawns");
+    for _ in 0..250 {
+      if store.snapshot("t").is_some_and(|s| s.finished) {
+        break;
+      }
+      std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+    unsafe { std::env::remove_var("NO_COLOR") };
+    assert_eq!(
+      store.snapshot("t").expect("entry").output,
+      "unset",
+      "a user's NO_COLOR must not silence the terminal cards"
+    );
+  }
+
   #[test]
   fn output_over_the_byte_limit_truncates_from_the_start_on_a_char_boundary() {
     let (tx, _rx) = async_channel::unbounded();
