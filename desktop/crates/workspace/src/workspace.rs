@@ -1,3 +1,4 @@
+use std::path::PathBuf;
 use std::rc::Rc;
 use std::time::Duration;
 
@@ -402,6 +403,18 @@ impl WorkspaceView {
     }
 
     view
+  }
+
+  #[doc(hidden)]
+  pub fn open_repository_for_driver(
+    &mut self,
+    repo_root: PathBuf,
+    window: &mut Window,
+    cx: &mut Context<Self>,
+  ) -> Result<(), gpui::SharedString> {
+    self.session_page.update(cx, |page, cx| {
+      page.open_repository_for_driver(repo_root, window, cx)
+    })
   }
 
   fn on_window_appearance_changed(&mut self, window: &mut Window, cx: &mut Context<Self>) {

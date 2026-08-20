@@ -9,7 +9,9 @@ agent_registry = { workspace = true }
 agent_chat_panel = { workspace = true, features = ["test-support"] }
 anyhow = { workspace = true }
 gpui = { workspace = true, features = ["test-support"] }
+gpui_platform = { workspace = true, features = ["test-support"] }
 gpui-component = { workspace = true }
+image = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 ui = { workspace = true }

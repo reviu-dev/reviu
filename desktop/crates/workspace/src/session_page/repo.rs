@@ -31,6 +31,16 @@ impl SessionPage {
     Ok(())
   }
 
+  #[doc(hidden)]
+  pub fn open_repository_for_driver(
+    &mut self,
+    repo_root: PathBuf,
+    window: &mut Window,
+    cx: &mut Context<Self>,
+  ) -> Result<(), SharedString> {
+    self.set_selected_repo(repo_root, window, cx)
+  }
+
   pub(super) fn apply_selected_repo(
     &mut self,
     repo_root: Option<PathBuf>,

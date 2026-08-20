@@ -7416,6 +7416,8 @@ dependencies = [
  "anyhow",
  "gpui",
  "gpui-component",
+ "gpui_platform",
+ "image",
  "serde",
  "serde_json",
  "ui",
