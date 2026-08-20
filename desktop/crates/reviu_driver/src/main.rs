@@ -315,7 +315,7 @@ fn handle_test_command(command: Command, cx: &mut gpui::VisualTestContext) {
       cx.run_until_parked();
       respond(ok(serde_json::json!({})));
     }
-    Command::Screenshot { .. } => {
+    Command::Screenshot { path: _path } => {
       respond(err("screenshot requires --backend visual"));
     }
     Command::Quit => quit_now(),
