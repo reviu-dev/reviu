@@ -6,6 +6,7 @@ publish.workspace = true
 
 [dependencies]
 agent_acp = { workspace = true }
+agent_registry = { workspace = true }
 agent_chat_panel = { workspace = true }
 editor = { workspace = true }
 git = { workspace = true }

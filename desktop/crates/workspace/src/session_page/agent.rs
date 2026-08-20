@@ -135,13 +135,12 @@ impl SessionPage {
       .unwrap_or_else(|| "Agent session".to_string());
     let main_window = self.window_handle;
     let title = title.to_string();
-    let icon = agent_chat_panel::backend_icon(
-      self
-        .agent_chat_view
-        .as_ref()
-        .map(|panel| panel.read(cx).backend_kind())
-        .unwrap_or(agent_acp::BackendKind::Claude),
-    );
+    let agent_id = self
+      .agent_chat_view
+      .as_ref()
+      .map(|panel| panel.read(cx).backend_kind().clone())
+      .unwrap_or_else(agent_chat_panel::default_agent_id);
+    let icon = agent_chat_panel::backend_icon(&agent_id);
     let Ok(handle) = cx.open_window(AgentNotification::window_options(screen), |_, cx| {
       cx.new(|_| AgentNotification::new(icon, title, caption))
     }) else {

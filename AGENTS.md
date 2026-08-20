@@ -40,6 +40,8 @@ The GitHub-integration backend (Reviu Pro) is closed-source in a separate privat
   - `desktop/crates/workspace/src/auth_flow.rs`
 - GitHub PR details and review (inline/split diff, comment create/edit/reply/delete):
   - `desktop/crates/workspace/src/github_pr_details_page.rs`
+- Agent catalogue (ACP registry: which agents exist, how each one launches):
+  - `desktop/crates/agent_registry/src/lib.rs` (+ `model.rs`, `assets/registry.json` snapshot)
 - Desktop API client (talks to the GitHub-integration backend):
   - `desktop/crates/workspace/src/api.rs`
 - Markdown/GFM rendering:

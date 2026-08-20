@@ -11,6 +11,7 @@ members = [
   "crates/workspace",
   "crates/reviu",
   "crates/agent_acp",
+  "crates/agent_registry",
   "crates/agent_chat_panel",
   "crates/selectable_text",
   "crates/reviu_driver",
@@ -132,6 +133,7 @@ terminal = { path = "crates/terminal" }
 ui = { path = "crates/ui" }
 workspace = { path = "crates/workspace" }
 agent_acp = { path = "crates/agent_acp" }
+agent_registry = { path = "crates/agent_registry" }
 agent_chat_panel = { path = "crates/agent_chat_panel" }
 selectable_text = { path = "crates/selectable_text" }
 gpui-router = { path = "vendor/gpui-router" }

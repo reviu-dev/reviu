@@ -349,6 +349,7 @@ dependencies = [
  "agent-client-protocol",
  "agent-client-protocol-schema 0.14.0",
  "agent_acp",
+ "agent_registry",
  "anyhow",
  "async-channel",
  "async-process",
@@ -368,6 +369,7 @@ dependencies = [
  "agent-client-protocol",
  "agent_acp",
  "agent_chat_panel",
+ "agent_registry",
  "anyhow",
  "async-channel",
  "async-process",
@@ -384,6 +386,17 @@ dependencies = [
  "syntax",
  "ui",
  "unicode-segmentation",
+]
+
+[[package]]
+name = "agent_registry"
+version = "0.18.0"
+dependencies = [
+ "anyhow",
+ "dirs 5.0.1",
+ "reqwest 0.12.28",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]
@@ -7375,6 +7388,7 @@ dependencies = [
 name = "reviu"
 version = "0.18.0"
 dependencies = [
+ "agent_registry",
  "anyhow",
  "editor",
  "embed-resource",
@@ -11670,6 +11684,7 @@ version = "0.18.0"
 dependencies = [
  "agent_acp",
  "agent_chat_panel",
+ "agent_registry",
  "anyhow",
  "base64 0.23.0",
  "dirs 5.0.1",

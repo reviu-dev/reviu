@@ -1064,7 +1064,7 @@ impl Render for AgentChatPanel {
       && self.extras_before_kinds().is_empty()
       && matches!(self.status, Status::Ready | Status::Connecting);
     let empty_state = if show_empty_state {
-      let brand_icon = crate::backend_icon(self.backend_kind);
+      let brand_icon = crate::backend_icon(&self.backend_kind);
       let content = if connecting {
         v_flex()
           .items_center()
@@ -1137,15 +1137,15 @@ impl Render for AgentChatPanel {
           .border_b_1()
           .border_color(theme.border)
           .child({
-            let current = self.backend_kind;
+            let current = self.backend_kind.clone();
             let label_suffix = match &self.status {
               Status::Connecting => "",
               Status::Error(_) => " (error)",
               Status::MissingBinary { .. } => " (not installed)",
               Status::Ready => "",
             };
-            let label = format!("{}{}", current.label(), label_suffix);
-            let brand_icon = crate::backend_icon(current);
+            let label = format!("{}{}", self.backend.label, label_suffix);
+            let brand_icon = crate::backend_icon(&current);
             let entity = cx.entity().downgrade();
             Button::new("agent-chat-backend")
               .label(label)
@@ -1155,12 +1155,13 @@ impl Render for AgentChatPanel {
               .ghost()
               .dropdown_menu_with_anchor(Anchor::TopLeft, move |menu, _, _| {
                 let mut menu = menu;
-                for kind in BackendKind::all() {
-                  let kind = *kind;
+                let registry = agent_registry::global();
+                for agent in registry.runnable() {
+                  let id = agent.id.clone();
                   let entity = entity.clone();
-                  let is_current = kind == current;
-                  let label_text: SharedString = kind.label().into();
-                  let brand_icon = crate::backend_icon(kind);
+                  let is_current = id == current;
+                  let label_text: SharedString = agent.name.clone().into();
+                  let brand_icon = crate::backend_icon(&id);
                   menu = menu.item(
                     PopupMenuItem::element(move |_, cx| {
                       let theme = cx.theme().clone();
@@ -1190,8 +1191,9 @@ impl Render for AgentChatPanel {
                         .into_any_element()
                     })
                     .on_click(move |_, _, cx| {
-                      persist_choice(kind);
-                      let _ = entity.update(cx, |panel, cx| panel.switch_backend(kind, cx));
+                      persist_choice(&id);
+                      let id = id.clone();
+                      let _ = entity.update(cx, |panel, cx| panel.switch_backend(id, cx));
                     }),
                   );
                 }
@@ -1640,7 +1642,7 @@ impl AgentChatPanel {
       .map(|m| short_model_label(&m.name, m.description.as_deref()).into())
       .unwrap_or_else(|| "Model".into());
     let entity = cx.entity().downgrade();
-    let brand_icon = crate::backend_icon(self.backend_kind);
+    let brand_icon = crate::backend_icon(&self.backend_kind);
     Button::new("agent-chat-model")
       .child(selector_trigger(Some(brand_icon), current_label))
       .xsmall()
@@ -2060,7 +2062,7 @@ impl AgentChatPanel {
       .map(|t| t.elapsed().as_secs())
       .unwrap_or(0);
     let label_color = theme.muted_foreground;
-    let brand_icon = crate::backend_icon(self.backend_kind);
+    let brand_icon = crate::backend_icon(&self.backend_kind);
     let verb: SharedString = if connecting {
       format!("Connecting to {}...", self.backend.label).into()
     } else {

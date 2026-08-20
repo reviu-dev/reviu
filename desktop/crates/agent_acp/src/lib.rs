@@ -62,93 +62,41 @@ type PermissionReplyMap = Arc<Mutex<HashMap<u64, oneshot::Sender<Option<String>>
 
 #[derive(Clone, Debug)]
 pub struct BackendConfig {
-  pub label: &'static str,
+  pub label: String,
   pub command: String,
   pub args: Vec<String>,
+  pub env: Vec<(String, String)>,
   /// Agent CLI the adapter shells out to. `None` when the adapter bundles its
   /// own agent, in which case `command` is the whole requirement.
-  pub cli_executable: Option<&'static str>,
-  pub install_hint: &'static str,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum BackendKind {
-  Claude,
-  Codex,
-  Pi,
-}
-
-impl BackendKind {
-  pub fn all() -> &'static [BackendKind] {
-    &[BackendKind::Claude, BackendKind::Codex, BackendKind::Pi]
-  }
-
-  pub fn label(&self) -> &'static str {
-    match self {
-      BackendKind::Claude => "Claude",
-      BackendKind::Codex => "Codex",
-      BackendKind::Pi => "Pi",
-    }
-  }
-
-  pub fn storage_key(&self) -> &'static str {
-    match self {
-      BackendKind::Claude => "claude",
-      BackendKind::Codex => "codex",
-      BackendKind::Pi => "pi",
-    }
-  }
-
-  pub fn from_storage_key(s: &str) -> Option<Self> {
-    match s {
-      "claude" => Some(BackendKind::Claude),
-      "codex" => Some(BackendKind::Codex),
-      "pi" => Some(BackendKind::Pi),
-      _ => None,
-    }
-  }
-
-  pub fn config(&self) -> BackendConfig {
-    match self {
-      BackendKind::Claude => BackendConfig::claude(),
-      BackendKind::Codex => BackendConfig::codex(),
-      BackendKind::Pi => BackendConfig::pi(),
-    }
-  }
+  pub cli_executable: Option<String>,
+  pub install_hint: String,
 }
 
 impl BackendConfig {
-  pub fn claude() -> Self {
+  pub fn new(label: impl Into<String>, command: impl Into<String>, args: Vec<String>) -> Self {
     Self {
-      label: "Claude",
-      command: "npx".into(),
-      args: vec![
-        "-y".into(),
-        "@agentclientprotocol/claude-agent-acp@0.70.0".into(),
-      ],
+      label: label.into(),
+      command: command.into(),
+      args,
+      env: Vec::new(),
       cli_executable: None,
-      install_hint: "Requires Node.js. The package is fetched via npx on first run. Sign in with `claude /login` to use your subscription.",
+      install_hint: String::new(),
     }
   }
 
-  pub fn codex() -> Self {
-    Self {
-      label: "Codex",
-      command: "npx".into(),
-      args: vec!["-y".into(), "@agentclientprotocol/codex-acp@1.6.0".into()],
-      cli_executable: None,
-      install_hint: "Requires Node.js and `codex login` for ChatGPT subscription auth.",
-    }
+  pub fn env(mut self, env: Vec<(String, String)>) -> Self {
+    self.env = env;
+    self
   }
 
-  pub fn pi() -> Self {
-    Self {
-      label: "Pi",
-      command: "npx".into(),
-      args: vec!["-y".into(), "pi-acp@0.0.33".into()],
-      cli_executable: Some("pi"),
-      install_hint: "Requires Node.js 22+ and the pi CLI on PATH: `npm install -g @earendil-works/pi-coding-agent`.",
-    }
+  pub fn cli_executable(mut self, cli: Option<impl Into<String>>) -> Self {
+    self.cli_executable = cli.map(Into::into);
+    self
+  }
+
+  pub fn install_hint(mut self, hint: impl Into<String>) -> Self {
+    self.install_hint = hint.into();
+    self
   }
 }
 
@@ -175,7 +123,7 @@ impl BackendConfig {
 
   /// Check that the adapter command and the agent CLI it drives are on PATH.
   pub fn check_availability(&self) -> BackendAvailability {
-    let missing = [Some(self.command.as_str()), self.cli_executable]
+    let missing = [Some(self.command.as_str()), self.cli_executable.as_deref()]
       .into_iter()
       .flatten()
       .find(|binary| which::which(binary).is_err());
@@ -184,7 +132,7 @@ impl BackendConfig {
       None => BackendAvailability::Ok,
       Some(command) => BackendAvailability::MissingBinary {
         command: command.to_string(),
-        install_hint: self.install_hint.to_string(),
+        install_hint: self.install_hint.clone(),
       },
     }
   }
@@ -404,6 +352,9 @@ impl AgentSession {
   ) -> Result<Self> {
     let mut cmd = Command::new(&backend.command);
     cmd.args(&backend.args);
+    for (key, value) in &backend.env {
+      cmd.env(key, value);
+    }
     cmd.current_dir(&cwd);
     cmd.stdin(Stdio::piped());
     cmd.stdout(Stdio::piped());
@@ -714,41 +665,10 @@ mod tests {
     assert!(truncated.ends_with("[... 500 chars truncated]"));
   }
 
-  #[test]
-  fn every_backend_kind_round_trips_through_its_storage_key() {
-    for kind in BackendKind::all() {
-      assert_eq!(
-        BackendKind::from_storage_key(kind.storage_key()),
-        Some(*kind)
-      );
-    }
-  }
-
-  #[test]
-  fn backend_configs_launch_their_adapter_through_npx() {
-    for kind in BackendKind::all() {
-      let config = kind.config();
-      assert_eq!(config.command, "npx");
-      assert_eq!(config.args.first().map(String::as_str), Some("-y"));
-      assert_eq!(config.label, kind.label());
-    }
-  }
-
-  #[test]
-  fn pi_requires_its_cli_while_bundled_adapters_do_not() {
-    assert_eq!(BackendConfig::pi().cli_executable, Some("pi"));
-    assert_eq!(BackendConfig::claude().cli_executable, None);
-    assert_eq!(BackendConfig::codex().cli_executable, None);
-  }
-
-  fn availability_config(command: &str, cli_executable: Option<&'static str>) -> BackendConfig {
-    BackendConfig {
-      label: "stub",
-      command: command.into(),
-      args: Vec::new(),
-      cli_executable,
-      install_hint: "install it",
-    }
+  fn availability_config(command: &str, cli_executable: Option<&str>) -> BackendConfig {
+    BackendConfig::new("stub", command, Vec::new())
+      .cli_executable(cli_executable)
+      .install_hint("install it")
   }
 
   fn missing_binary(config: BackendConfig) -> Option<String> {
@@ -813,7 +733,7 @@ mod tests {
       args: vec!["--terminal-login".into()],
       env: vec![("PI_TOKEN".into(), "a b".into())],
     };
-    let config = BackendConfig::pi();
+    let config = BackendConfig::new("Pi", "npx", vec!["-y".into(), "pi-acp@0.0.33".into()]);
 
     assert_eq!(
       auth.to_shell_string(&config.command, &config.args),
@@ -823,7 +743,9 @@ mod tests {
 
   #[test]
   fn overriding_the_command_drops_the_agent_cli_requirement() {
-    let config = BackendConfig::pi().with_command("stub_agent");
+    let config = BackendConfig::new("Pi", "npx", vec!["-y".into(), "pi-acp@0.0.33".into()])
+      .cli_executable(Some("pi"))
+      .with_command("stub_agent");
     assert_eq!(config.cli_executable, None);
     assert!(config.args.is_empty());
   }

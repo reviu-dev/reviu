@@ -25,7 +25,7 @@ use crate::persistence::{
   now_secs, truncate_title,
 };
 use agent_acp::{
-  AgentEvent, AgentSession, AuthMethodInfo, BackendAvailability, BackendConfig, BackendKind,
+  AgentEvent, AgentSession, AuthMethodInfo, BackendAvailability, BackendConfig,
   PermissionOptionKind, PermissionPrompt,
 };
 use agent_client_protocol::schema::{
@@ -38,6 +38,7 @@ use agent_client_protocol::schema::{
   SessionConfigOptionCategory, SessionConfigOptionValue, SessionConfigSelectOptions,
   SessionConfigValueId, SessionMode, SessionModeId,
 };
+use agent_registry::{AgentId, Registry, RegistryAgent};
 use futures::future::BoxFuture;
 use gpui::Anchor;
 use gpui::AnimationExt as _;
@@ -392,16 +393,54 @@ pub fn set_backend_command_override(command: Option<String>) {
     .expect("lock backend command override") = command;
 }
 
-pub fn backend_icon(kind: BackendKind) -> UiIconName {
-  match kind {
-    BackendKind::Claude => UiIconName::Claude,
-    BackendKind::Codex => UiIconName::OpenAi,
-    BackendKind::Pi => UiIconName::Pi,
+/// Registry ids we ship a brand icon for; every other agent falls back to a
+/// generic mark until its icon is fetched from the registry.
+pub fn backend_icon(id: &AgentId) -> UiIconName {
+  match id.as_str() {
+    "claude-acp" => UiIconName::Claude,
+    "codex-acp" => UiIconName::OpenAi,
+    "pi-acp" => UiIconName::Pi,
+    _ => UiIconName::Sparkles,
   }
 }
 
-fn resolve_backend_config(backend_kind: BackendKind) -> BackendConfig {
-  let config = backend_kind.config();
+/// The registry entry an id resolves to, or the default agent when the id is
+/// gone from the registry (renamed, withdrawn, or a stale saved choice).
+pub fn resolve_agent(registry: &Registry, id: &AgentId) -> Option<AgentId> {
+  if registry.get(id).is_some_and(|agent| agent.is_runnable()) {
+    return Some(id.clone());
+  }
+  registry
+    .get(&default_agent_id())
+    .filter(|agent| agent.is_runnable())
+    .map(|agent| agent.id.clone())
+    .or_else(|| registry.runnable().first().map(|agent| agent.id.clone()))
+}
+
+pub fn default_agent_id() -> AgentId {
+  AgentId::new("claude-acp")
+}
+
+/// Build the launch descriptor for a registry agent.
+pub fn backend_config_for(agent: &RegistryAgent) -> BackendConfig {
+  let (command, args) = agent
+    .command()
+    .unwrap_or_else(|| (String::new(), Vec::new()));
+  BackendConfig::new(agent.name.clone(), command, args)
+    .env(agent.env().to_vec())
+    .cli_executable(agent.required_cli())
+    .install_hint(agent.install_hint())
+}
+
+fn resolve_backend_config(id: &AgentId) -> BackendConfig {
+  let registry = agent_registry::global();
+  let config = registry.get(id).map(backend_config_for).unwrap_or_else(|| {
+    // The saved agent is gone from the registry: name the problem rather than
+    // failing on spawn with an empty command.
+    BackendConfig::new(id.to_string(), id.to_string(), Vec::new()).install_hint(format!(
+      "`{id}` is no longer in the agent registry. Pick another agent."
+    ))
+  });
   #[cfg(any(test, feature = "test-support"))]
   if let Some(command) = BACKEND_COMMAND_OVERRIDE
     .lock()
@@ -516,7 +555,7 @@ pub enum AgentChatPanelEvent {
 impl gpui::EventEmitter<AgentChatPanelEvent> for AgentChatPanel {}
 
 pub struct AgentChatPanel {
-  backend_kind: BackendKind,
+  backend_kind: AgentId,
   backend: BackendConfig,
   cwd: PathBuf,
   status: Status,
@@ -596,13 +635,13 @@ pub struct AgentChatPanel {
 
 impl AgentChatPanel {
   pub fn new(
-    backend_kind: BackendKind,
+    backend_kind: AgentId,
     cwd: PathBuf,
     state_dir: Option<PathBuf>,
     window: &mut Window,
     cx: &mut Context<Self>,
   ) -> Self {
-    let backend = resolve_backend_config(backend_kind);
+    let backend = resolve_backend_config(&backend_kind);
     let (input, input_sub) = Self::build_composer_input(window, cx);
 
     let (current_conv, loaded_items, loaded_index, loaded_pins, loaded_auto_approve) = state_dir
@@ -1019,14 +1058,14 @@ impl AgentChatPanel {
   /// The shape of `new` without connecting: no agent process, no state loading.
   #[cfg(test)]
   fn new_disconnected(cwd: PathBuf, window: &mut Window, cx: &mut Context<Self>) -> Self {
-    let backend_kind = BackendKind::Claude;
+    let backend_kind = default_agent_id();
     let (input, input_sub) = Self::build_composer_input(window, cx);
     let selection_registry = selectable_text::SelectionRegistry::new();
     let markdown_extensions = code_block::extensions(selection_registry.clone());
 
     let mut panel = Self {
+      backend: resolve_backend_config(&backend_kind),
       backend_kind,
-      backend: backend_kind.config(),
       cwd,
       status: Status::Connecting,
       items: Vec::new(),
@@ -1525,7 +1564,7 @@ impl AgentChatPanel {
     let Some(session) = self.session.clone() else {
       return;
     };
-    persist_model_choice(self.backend_kind, model_id.0.as_ref());
+    persist_model_choice(&self.backend_kind, model_id.0.as_ref());
     self.current_model_id = Some(model_id.clone());
     cx.notify();
     cx.spawn(async move |_, _| {
@@ -1536,7 +1575,7 @@ impl AgentChatPanel {
 
   /// Reapply the last model the user picked for this backend, if the agent still offers it.
   fn apply_saved_model_choice(&mut self, cx: &mut Context<Self>) {
-    let Some(saved) = load_model_choice(self.backend_kind) else {
+    let Some(saved) = load_model_choice(&self.backend_kind) else {
       return;
     };
     if self
@@ -2161,8 +2200,8 @@ impl AgentChatPanel {
     matches!(self.status, Status::Error(_) | Status::MissingBinary { .. })
   }
 
-  pub fn backend_kind(&self) -> BackendKind {
-    self.backend_kind
+  pub fn backend_kind(&self) -> &AgentId {
+    &self.backend_kind
   }
 
   pub fn supports_steering(&self) -> bool {
@@ -2333,12 +2372,12 @@ impl AgentChatPanel {
     self.start_tick_task(cx);
   }
 
-  pub fn switch_backend(&mut self, kind: BackendKind, cx: &mut Context<Self>) {
-    if kind == self.backend_kind {
+  pub fn switch_backend(&mut self, id: AgentId, cx: &mut Context<Self>) {
+    if id == self.backend_kind {
       return;
     }
-    self.backend_kind = kind;
-    self.backend = resolve_backend_config(kind);
+    self.backend = resolve_backend_config(&id);
+    self.backend_kind = id;
     // Session id is backend-specific; clear it so we don't try to load a
     // claude session on codex (or vice-versa).
     self.current_conv.session_id = None;
@@ -2505,18 +2544,18 @@ fn model_choice_from_settings(settings: &serde_json::Value, backend_key: &str) -
     .map(str::to_string)
 }
 
-pub fn persist_choice(kind: BackendKind) {
-  let settings = settings_with_backend(read_agent_settings_json(), kind.storage_key());
+pub fn persist_choice(id: &AgentId) {
+  let settings = settings_with_backend(read_agent_settings_json(), id.as_str());
   write_agent_settings_json(&settings);
 }
 
-fn persist_model_choice(kind: BackendKind, model_id: &str) {
-  let settings = settings_with_model(read_agent_settings_json(), kind.storage_key(), model_id);
+fn persist_model_choice(id: &AgentId, model_id: &str) {
+  let settings = settings_with_model(read_agent_settings_json(), id.as_str(), model_id);
   write_agent_settings_json(&settings);
 }
 
-fn load_model_choice(kind: BackendKind) -> Option<String> {
-  model_choice_from_settings(&read_agent_settings_json(), kind.storage_key())
+fn load_model_choice(id: &AgentId) -> Option<String> {
+  model_choice_from_settings(&read_agent_settings_json(), id.as_str())
 }
 
 /// Codex names embed the model's DEFAULT reasoning level ("GPT-5.6-Sol (low)"),

@@ -363,6 +363,16 @@ fn main() {
       })
       .unwrap();
 
+    // Refresh the agent registry off the UI thread; the cached or embedded
+    // copy already backs the picker, so a slow or failed fetch changes nothing.
+    cx.background_executor()
+      .spawn(async {
+        if let Err(err) = agent_registry::refresh_global_blocking() {
+          eprintln!("[agent-registry] refresh failed, keeping the cached list: {err}");
+        }
+      })
+      .detach();
+
     std::mem::drop(cx.register_url_scheme(app_profile.url_scheme()));
     cx.spawn(async move |cx| {
       let mut pending_open_github_urls: Vec<String> = Vec::new();

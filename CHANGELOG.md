@@ -4,6 +4,10 @@ All notable changes to Reviu are documented here.
 
 ## 1.0.0
 
+### Every ACP Agent, Not Just Three
+
+The agent picker is now served by the official ACP registry instead of a list baked into the app. Twenty-three agents are available out of the box, Gemini, Copilot, Qwen, Cline, Kilo, Grok and the rest alongside Claude, Codex and Pi, each launched with the version the registry publishes. The list refreshes itself in the background, so new agents and new versions arrive without an update to Reviu; a copy ships with the app and another is cached on disk, so the picker is fully populated on first launch and stays populated offline. Your saved agent and its selected model carry over.
+
 ### Pi Joins Claude And Codex
 
 Pi is now available in the agent picker alongside Claude and Codex, with its own icon throughout the conversation. Pi needs its CLI installed (`npm install -g @earendil-works/pi-coding-agent`); if it is missing, Reviu says so up front instead of failing on the first prompt. Claude and Codex also move up to their latest agent releases.

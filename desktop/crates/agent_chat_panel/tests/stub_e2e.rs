@@ -1,7 +1,7 @@
 //! End to end: the mounted panel drives a real ACP agent process (the stub).
 
-use agent_acp::BackendKind;
-use agent_chat_panel::{AgentChatPanel, set_backend_command_override};
+use agent_chat_panel::{AgentChatPanel, default_agent_id, set_backend_command_override};
+use agent_registry::AgentId;
 use gpui::{AppContext as _, TestAppContext};
 
 #[gpui::test]
@@ -14,8 +14,7 @@ async fn a_prompt_round_trips_through_a_real_agent_process(cx: &mut TestAppConte
   let cwd = std::env::temp_dir();
   let mut mounted = None;
   let (_root, cx) = cx.add_window_view(|window, cx| {
-    let panel =
-      cx.new(|cx| AgentChatPanel::new(BackendKind::Claude, cwd.clone(), None, window, cx));
+    let panel = cx.new(|cx| AgentChatPanel::new(default_agent_id(), cwd.clone(), None, window, cx));
     mounted = Some(panel.clone());
     gpui_component::Root::new(panel, window, cx)
   });
@@ -86,8 +85,7 @@ async fn a_permission_request_carries_its_command_and_resumes_on_answer(cx: &mut
   let cwd = std::env::temp_dir();
   let mut mounted = None;
   let (_root, cx) = cx.add_window_view(|window, cx| {
-    let panel =
-      cx.new(|cx| AgentChatPanel::new(BackendKind::Claude, cwd.clone(), None, window, cx));
+    let panel = cx.new(|cx| AgentChatPanel::new(default_agent_id(), cwd.clone(), None, window, cx));
     mounted = Some(panel.clone());
     gpui_component::Root::new(panel, window, cx)
   });
@@ -133,8 +131,7 @@ async fn a_staged_image_reaches_the_agent_as_an_image_block(cx: &mut TestAppCont
   let cwd = std::env::temp_dir();
   let mut mounted = None;
   let (_root, cx) = cx.add_window_view(|window, cx| {
-    let panel =
-      cx.new(|cx| AgentChatPanel::new(BackendKind::Claude, cwd.clone(), None, window, cx));
+    let panel = cx.new(|cx| AgentChatPanel::new(default_agent_id(), cwd.clone(), None, window, cx));
     mounted = Some(panel.clone());
     gpui_component::Root::new(panel, window, cx)
   });
@@ -171,8 +168,7 @@ async fn cancelling_a_turn_leaves_a_stopped_marker(cx: &mut TestAppContext) {
   let cwd = std::env::temp_dir();
   let mut mounted = None;
   let (_root, cx) = cx.add_window_view(|window, cx| {
-    let panel =
-      cx.new(|cx| AgentChatPanel::new(BackendKind::Claude, cwd.clone(), None, window, cx));
+    let panel = cx.new(|cx| AgentChatPanel::new(default_agent_id(), cwd.clone(), None, window, cx));
     mounted = Some(panel.clone());
     gpui_component::Root::new(panel, window, cx)
   });
@@ -217,8 +213,7 @@ async fn a_queued_message_runs_when_the_turn_ends_cleanly(cx: &mut TestAppContex
   let cwd = std::env::temp_dir();
   let mut mounted = None;
   let (_root, cx) = cx.add_window_view(|window, cx| {
-    let panel =
-      cx.new(|cx| AgentChatPanel::new(BackendKind::Claude, cwd.clone(), None, window, cx));
+    let panel = cx.new(|cx| AgentChatPanel::new(default_agent_id(), cwd.clone(), None, window, cx));
     mounted = Some(panel.clone());
     gpui_component::Root::new(panel, window, cx)
   });
@@ -275,8 +270,7 @@ async fn a_failed_turn_holds_the_queue(cx: &mut TestAppContext) {
   let cwd = std::env::temp_dir();
   let mut mounted = None;
   let (_root, cx) = cx.add_window_view(|window, cx| {
-    let panel =
-      cx.new(|cx| AgentChatPanel::new(BackendKind::Claude, cwd.clone(), None, window, cx));
+    let panel = cx.new(|cx| AgentChatPanel::new(default_agent_id(), cwd.clone(), None, window, cx));
     mounted = Some(panel.clone());
     gpui_component::Root::new(panel, window, cx)
   });
@@ -317,8 +311,7 @@ async fn stopping_a_turn_keeps_the_queue(cx: &mut TestAppContext) {
   let cwd = std::env::temp_dir();
   let mut mounted = None;
   let (_root, cx) = cx.add_window_view(|window, cx| {
-    let panel =
-      cx.new(|cx| AgentChatPanel::new(BackendKind::Claude, cwd.clone(), None, window, cx));
+    let panel = cx.new(|cx| AgentChatPanel::new(default_agent_id(), cwd.clone(), None, window, cx));
     mounted = Some(panel.clone());
     gpui_component::Root::new(panel, window, cx)
   });
@@ -361,8 +354,7 @@ async fn an_edited_prompt_rewinds_and_replays_through_a_fresh_session(cx: &mut T
   let cwd = std::env::temp_dir();
   let mut mounted = None;
   let (_root, cx) = cx.add_window_view(|window, cx| {
-    let panel =
-      cx.new(|cx| AgentChatPanel::new(BackendKind::Claude, cwd.clone(), None, window, cx));
+    let panel = cx.new(|cx| AgentChatPanel::new(default_agent_id(), cwd.clone(), None, window, cx));
     mounted = Some(panel.clone());
     gpui_component::Root::new(panel, window, cx)
   });
@@ -416,8 +408,7 @@ async fn a_session_load_replay_never_duplicates_the_transcript(cx: &mut TestAppC
   let cwd = std::env::temp_dir();
   let mut mounted = None;
   let (_root, cx) = cx.add_window_view(|window, cx| {
-    let panel =
-      cx.new(|cx| AgentChatPanel::new(BackendKind::Claude, cwd.clone(), None, window, cx));
+    let panel = cx.new(|cx| AgentChatPanel::new(default_agent_id(), cwd.clone(), None, window, cx));
     mounted = Some(panel.clone());
     gpui_component::Root::new(panel, window, cx)
   });
@@ -467,8 +458,7 @@ async fn reconnect_respawns_the_agent_session(cx: &mut TestAppContext) {
   let cwd = std::env::temp_dir();
   let mut mounted = None;
   let (_root, cx) = cx.add_window_view(|window, cx| {
-    let panel =
-      cx.new(|cx| AgentChatPanel::new(BackendKind::Claude, cwd.clone(), None, window, cx));
+    let panel = cx.new(|cx| AgentChatPanel::new(default_agent_id(), cwd.clone(), None, window, cx));
     mounted = Some(panel.clone());
     gpui_component::Root::new(panel, window, cx)
   });
@@ -508,8 +498,7 @@ async fn enter_sends_the_composer_and_shift_enter_types_a_newline(cx: &mut TestA
   let cwd = std::env::temp_dir();
   let mut mounted = None;
   let (_root, cx) = cx.add_window_view(|window, cx| {
-    let panel =
-      cx.new(|cx| AgentChatPanel::new(BackendKind::Claude, cwd.clone(), None, window, cx));
+    let panel = cx.new(|cx| AgentChatPanel::new(default_agent_id(), cwd.clone(), None, window, cx));
     mounted = Some(panel.clone());
     gpui_component::Root::new(panel, window, cx)
   });
@@ -548,8 +537,7 @@ async fn a_turn_with_edits_closes_on_an_aggregated_summary_card(cx: &mut TestApp
   let cwd = std::env::temp_dir();
   let mut mounted = None;
   let (_root, cx) = cx.add_window_view(|window, cx| {
-    let panel =
-      cx.new(|cx| AgentChatPanel::new(BackendKind::Claude, cwd.clone(), None, window, cx));
+    let panel = cx.new(|cx| AgentChatPanel::new(default_agent_id(), cwd.clone(), None, window, cx));
     mounted = Some(panel.clone());
     gpui_component::Root::new(panel, window, cx)
   });
@@ -599,8 +587,7 @@ async fn auto_approve_answers_permissions_without_a_click(cx: &mut TestAppContex
   let cwd = std::env::temp_dir();
   let mut mounted = None;
   let (_root, cx) = cx.add_window_view(|window, cx| {
-    let panel =
-      cx.new(|cx| AgentChatPanel::new(BackendKind::Claude, cwd.clone(), None, window, cx));
+    let panel = cx.new(|cx| AgentChatPanel::new(default_agent_id(), cwd.clone(), None, window, cx));
     mounted = Some(panel.clone());
     gpui_component::Root::new(panel, window, cx)
   });
@@ -639,8 +626,7 @@ async fn enabling_auto_approve_answers_the_permission_already_waiting(cx: &mut T
   let cwd = std::env::temp_dir();
   let mut mounted = None;
   let (_root, cx) = cx.add_window_view(|window, cx| {
-    let panel =
-      cx.new(|cx| AgentChatPanel::new(BackendKind::Claude, cwd.clone(), None, window, cx));
+    let panel = cx.new(|cx| AgentChatPanel::new(default_agent_id(), cwd.clone(), None, window, cx));
     mounted = Some(panel.clone());
     gpui_component::Root::new(panel, window, cx)
   });
@@ -680,8 +666,7 @@ async fn a_sent_prompt_holds_at_the_viewport_top_through_the_turn(cx: &mut TestA
   let cwd = std::env::temp_dir();
   let mut mounted = None;
   let (_root, cx) = cx.add_window_view(|window, cx| {
-    let panel =
-      cx.new(|cx| AgentChatPanel::new(BackendKind::Claude, cwd.clone(), None, window, cx));
+    let panel = cx.new(|cx| AgentChatPanel::new(default_agent_id(), cwd.clone(), None, window, cx));
     mounted = Some(panel.clone());
     gpui_component::Root::new(panel, window, cx)
   });
@@ -733,8 +718,7 @@ async fn a_steer_joins_the_running_turn_without_closing_it(cx: &mut TestAppConte
   let cwd = std::env::temp_dir();
   let mut mounted = None;
   let (_root, cx) = cx.add_window_view(|window, cx| {
-    let panel =
-      cx.new(|cx| AgentChatPanel::new(BackendKind::Claude, cwd.clone(), None, window, cx));
+    let panel = cx.new(|cx| AgentChatPanel::new(default_agent_id(), cwd.clone(), None, window, cx));
     mounted = Some(panel.clone());
     gpui_component::Root::new(panel, window, cx)
   });
@@ -789,8 +773,7 @@ async fn a_refused_steer_re_queues_the_message(cx: &mut TestAppContext) {
   let cwd = std::env::temp_dir();
   let mut mounted = None;
   let (_root, cx) = cx.add_window_view(|window, cx| {
-    let panel =
-      cx.new(|cx| AgentChatPanel::new(BackendKind::Claude, cwd.clone(), None, window, cx));
+    let panel = cx.new(|cx| AgentChatPanel::new(default_agent_id(), cwd.clone(), None, window, cx));
     mounted = Some(panel.clone());
     gpui_component::Root::new(panel, window, cx)
   });
@@ -839,8 +822,7 @@ async fn a_terminal_tool_call_streams_output_into_the_transcript(cx: &mut TestAp
   let cwd = std::env::temp_dir();
   let mut mounted = None;
   let (_root, cx) = cx.add_window_view(|window, cx| {
-    let panel =
-      cx.new(|cx| AgentChatPanel::new(BackendKind::Claude, cwd.clone(), None, window, cx));
+    let panel = cx.new(|cx| AgentChatPanel::new(default_agent_id(), cwd.clone(), None, window, cx));
     mounted = Some(panel.clone());
     gpui_component::Root::new(panel, window, cx)
   });
@@ -888,8 +870,7 @@ async fn the_stop_button_kills_a_running_terminal_command(cx: &mut TestAppContex
   let cwd = std::env::temp_dir();
   let mut mounted = None;
   let (_root, cx) = cx.add_window_view(|window, cx| {
-    let panel =
-      cx.new(|cx| AgentChatPanel::new(BackendKind::Claude, cwd.clone(), None, window, cx));
+    let panel = cx.new(|cx| AgentChatPanel::new(default_agent_id(), cwd.clone(), None, window, cx));
     mounted = Some(panel.clone());
     gpui_component::Root::new(panel, window, cx)
   });
@@ -933,8 +914,7 @@ async fn cancelling_after_an_accepted_steer_settles_the_turn_cleanly(cx: &mut Te
   let cwd = std::env::temp_dir();
   let mut mounted = None;
   let (_root, cx) = cx.add_window_view(|window, cx| {
-    let panel =
-      cx.new(|cx| AgentChatPanel::new(BackendKind::Claude, cwd.clone(), None, window, cx));
+    let panel = cx.new(|cx| AgentChatPanel::new(default_agent_id(), cwd.clone(), None, window, cx));
     mounted = Some(panel.clone());
     gpui_component::Root::new(panel, window, cx)
   });
@@ -994,8 +974,7 @@ async fn codex_style_terminal_metadata_streams_into_the_transcript(cx: &mut Test
   let cwd = std::env::temp_dir();
   let mut mounted = None;
   let (_root, cx) = cx.add_window_view(|window, cx| {
-    let panel =
-      cx.new(|cx| AgentChatPanel::new(BackendKind::Claude, cwd.clone(), None, window, cx));
+    let panel = cx.new(|cx| AgentChatPanel::new(default_agent_id(), cwd.clone(), None, window, cx));
     mounted = Some(panel.clone());
     gpui_component::Root::new(panel, window, cx)
   });
@@ -1045,8 +1024,7 @@ async fn switching_to_pi_respawns_the_session_on_the_new_backend(cx: &mut TestAp
   let cwd = std::env::temp_dir();
   let mut mounted = None;
   let (_root, cx) = cx.add_window_view(|window, cx| {
-    let panel =
-      cx.new(|cx| AgentChatPanel::new(BackendKind::Claude, cwd.clone(), None, window, cx));
+    let panel = cx.new(|cx| AgentChatPanel::new(default_agent_id(), cwd.clone(), None, window, cx));
     mounted = Some(panel.clone());
     gpui_component::Root::new(panel, window, cx)
   });
@@ -1055,12 +1033,12 @@ async fn switching_to_pi_respawns_the_session_on_the_new_backend(cx: &mut TestAp
   cx.condition(&panel, |panel, _| panel.backend_ready()).await;
 
   panel.update(cx, |panel, cx| {
-    panel.switch_backend(BackendKind::Pi, cx);
+    panel.switch_backend(AgentId::new("pi-acp"), cx);
   });
   cx.condition(&panel, |panel, _| panel.backend_ready()).await;
 
   panel.read_with(cx, |panel, _| {
-    assert_eq!(panel.backend_kind(), BackendKind::Pi);
+    assert_eq!(panel.backend_kind(), &AgentId::new("pi-acp"));
   });
 
   panel.update(cx, |panel, cx| {
