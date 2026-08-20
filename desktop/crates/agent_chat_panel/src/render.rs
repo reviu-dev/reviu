@@ -603,62 +603,6 @@ fn mini_code_block(theme: &gpui_component::Theme) -> gpui::Div {
     .overflow_hidden()
 }
 
-fn mini_code_row(
-  bg: Hsla,
-  gutter: Option<gpui::AnyElement>,
-  content: gpui::AnyElement,
-) -> gpui::Div {
-  div()
-    .flex()
-    .flex_row()
-    .items_stretch()
-    .w_full()
-    .bg(bg)
-    .children(gutter)
-    .child(content)
-}
-
-fn mini_code_text_cell(bg: Hsla, fg: Hsla, content: gpui::AnyElement) -> gpui::Div {
-  div()
-    .min_w_0()
-    .flex_1()
-    .px_2()
-    .bg(bg)
-    .text_color(fg)
-    .child(content)
-}
-
-fn mini_code_line_number_cell(
-  text: String,
-  width: gpui::Pixels,
-  theme: &gpui_component::Theme,
-) -> gpui::Div {
-  div()
-    .w(width)
-    .flex_shrink_0()
-    .text_right()
-    .text_color(theme.muted_foreground.opacity(0.72))
-    .child(text)
-}
-
-fn mini_code_gutter(
-  width: gpui::Pixels,
-  bg: Option<Hsla>,
-  theme: &gpui_component::Theme,
-  children: Vec<gpui::AnyElement>,
-) -> gpui::Div {
-  h_flex()
-    .items_start()
-    .w(width)
-    .flex_shrink_0()
-    .gap_1()
-    .px_2()
-    .border_r_1()
-    .border_color(theme.border.opacity(0.45))
-    .when_some(bg, |this, bg| this.bg(bg))
-    .children(children)
-}
-
 fn render_numbered_tool_output(
   output: &ToolOutput,
   start_line: u32,
@@ -670,14 +614,13 @@ fn render_numbered_tool_output(
   let ui_theme = ui::Theme::new(theme.is_dark());
   let syntax_theme = ui_theme.syntax();
   let mono_font = mono_font_for(theme);
-  let mut body = mini_code_block(theme).py_1();
 
-  for (line_idx, range) in visible_output_line_ranges(&output.text, visible)
-    .into_iter()
-    .enumerate()
-  {
+  let ranges = visible_output_line_ranges(&output.text, visible);
+  let selection_end = ranges.last().map(|r| r.end).unwrap_or(0);
+  let mut rows = Vec::with_capacity(ranges.len());
+  for (line_idx, range) in ranges.iter().enumerate() {
     let line_text = &output.text[range.clone()];
-    let line_spans = syntax_spans_for_range(&output.syntax_spans, range);
+    let line_spans = syntax_spans_for_range(&output.syntax_spans, range.clone());
     let runs = highlights_to_text_runs(
       &line_spans,
       line_text,
@@ -685,37 +628,36 @@ fn render_numbered_tool_output(
       mono_font.clone(),
       &syntax_theme,
     );
-    let text_id = text_id_base | line_idx as u64;
-    let gutter = mini_code_gutter(
-      px(54.),
-      None,
-      theme,
-      vec![
-        mini_code_line_number_cell((start_line + line_idx as u32).to_string(), px(38.), theme)
-          .into_any_element(),
-      ],
-    );
-    let content = mini_code_text_cell(
-      theme.background,
-      theme.foreground,
-      div()
-        .whitespace_normal()
-        .child(selectable_text::SelectableText::new(
-          text_id,
-          mini_diff_line_text_for_layout(line_text),
-          runs,
-          registry.clone(),
-        ))
-        .into_any_element(),
-    );
-    body = body.child(mini_code_row(
-      theme.background,
-      Some(gutter.into_any_element()),
-      content.into_any_element(),
-    ));
+    rows.push(code_lines::CodeLineRow {
+      gutter: Some(SharedString::from(format!(
+        "{:>5}",
+        start_line + line_idx as u32
+      ))),
+      text: mini_diff_line_text_for_layout(line_text),
+      runs,
+      band: theme.background,
+    });
   }
 
-  body.into_any_element()
+  mini_code_block(theme)
+    .py_1()
+    .child(
+      code_lines::CodeLines::new(
+        rows,
+        px(54.),
+        theme.muted_foreground.opacity(0.72),
+        theme.border.opacity(0.45),
+        theme.foreground,
+        mono_font,
+      )
+      .selectable(code_lines::SelectionSpec {
+        text: SharedString::from(output.text[..selection_end].to_string()),
+        row_ranges: ranges,
+        text_id: text_id_base,
+        registry: registry.clone(),
+      }),
+    )
+    .into_any_element()
 }
 
 pub(crate) fn render_tool_call(
