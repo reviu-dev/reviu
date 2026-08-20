@@ -498,6 +498,22 @@ impl SessionPage {
     cx.stop_propagation();
   }
 
+  pub(super) fn jump_to_latest_message_action(
+    &mut self,
+    _: &JumpToLatestMessage,
+    _window: &mut Window,
+    cx: &mut Context<Self>,
+  ) {
+    let Some(panel) = self.agent_chat_view.clone() else {
+      return;
+    };
+    panel.update(cx, |panel, cx| {
+      panel.jump_to_tail();
+      cx.notify();
+    });
+    cx.stop_propagation();
+  }
+
   pub(super) fn comment_hunk_action(
     &mut self,
     _: &CommentHunk,

@@ -1045,6 +1045,7 @@ impl AgentChatPanel {
 impl Render for AgentChatPanel {
   fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
     self.update_runway(window);
+    self.update_reader_follow();
     self.update_jump_pill();
     let theme = cx.theme().clone();
     let theme = &theme;
@@ -1359,16 +1360,7 @@ impl Render for AgentChatPanel {
                             .ghost()
                             .rounded(px(999.))
                             .on_click(cx.listener(|panel, _, _, cx| {
-                              // With a runway active, "bottom" is the held
-                              // position: the click re-arms the hold.
-                              if panel.runway_active {
-                                panel.runway_following = true;
-                                if let Some(item) = panel.runway_anchor_item() {
-                                  panel.hold_runway_anchor(item);
-                                }
-                              } else {
-                                panel.messages_list.scroll_to_end();
-                              }
+                              panel.jump_to_tail();
                               cx.notify();
                             })),
                         ),

@@ -3073,6 +3073,152 @@ async fn a_wheel_scroll_releases_the_runway_hold(cx: &mut gpui::TestAppContext) 
   });
 }
 
+async fn add_retired_runway_panel(
+  cx: &mut gpui::TestAppContext,
+) -> (
+  gpui::Entity<AgentChatPanel>,
+  &mut gpui::VisualTestContext,
+  gpui::Point<gpui::Pixels>,
+) {
+  let (panel, cx) = add_panel_window(cx);
+  panel.update(cx, |panel, cx| {
+    panel.status = Status::Ready;
+    panel.items = (0..30)
+      .flat_map(|i| {
+        vec![
+          user_message(&format!("question {i}")),
+          agent_message(&format!("answer {i}\nlines\nlines")),
+        ]
+      })
+      .collect();
+    panel.items.push(user_message("held prompt"));
+    panel.sync_list_count();
+    panel.arm_runway();
+    cx.notify();
+  });
+  cx.run_until_parked();
+  panel.update(cx, |panel, cx| {
+    let tall: String = (0..200).map(|i| format!("line {i}\n")).collect();
+    panel.items.push(agent_message(&tall));
+    panel.sync_list_count();
+    cx.notify();
+  });
+  cx.run_until_parked();
+  panel.update(cx, |_, cx| cx.notify());
+  cx.run_until_parked();
+  panel.read_with(cx, |panel, _| {
+    assert!(!panel.runway_active, "the tall reply retired the runway");
+  });
+  let center = panel.read_with(cx, |panel, _| {
+    let b = panel.messages_list.viewport_bounds();
+    gpui::point(b.center().x, b.center().y)
+  });
+  (panel, cx, center)
+}
+
+#[gpui::test]
+async fn the_jump_pill_keeps_following_the_tail(cx: &mut gpui::TestAppContext) {
+  let (panel, cx, center) = add_retired_runway_panel(cx).await;
+
+  // The reader scrolls up, away from the stream.
+  cx.simulate_event(gpui::ScrollWheelEvent {
+    position: center,
+    delta: gpui::ScrollDelta::Pixels(gpui::point(gpui::px(0.), gpui::px(120.))),
+    ..Default::default()
+  });
+  cx.run_until_parked();
+  panel.read_with(cx, |panel, _| {
+    assert!(!panel.messages_list.is_following_tail());
+  });
+
+  panel.update(cx, |panel, cx| {
+    panel.jump_to_tail();
+    cx.notify();
+  });
+  cx.run_until_parked();
+  panel.read_with(cx, |panel, _| {
+    assert!(
+      panel.messages_list.is_following_tail(),
+      "the pill engages sticky follow, not a one-shot scroll"
+    );
+  });
+
+  // The stream keeps growing: the reader stays glued without another click.
+  panel.update(cx, |panel, cx| {
+    panel.items.push(agent_message("more\nstreamed\nlines"));
+    panel.sync_list_count();
+    cx.notify();
+  });
+  cx.run_until_parked();
+  panel.update(cx, |_, cx| cx.notify());
+  cx.run_until_parked();
+  panel.read_with(cx, |panel, _| {
+    assert!(
+      panel.messages_list.is_following_tail(),
+      "growth does not shake the follow off"
+    );
+    assert!(!panel.show_jump_pill, "no pill while following");
+  });
+}
+
+#[gpui::test]
+async fn scrolling_back_to_the_end_reengages_follow(cx: &mut gpui::TestAppContext) {
+  let (panel, cx, center) = add_retired_runway_panel(cx).await;
+
+  cx.simulate_event(gpui::ScrollWheelEvent {
+    position: center,
+    delta: gpui::ScrollDelta::Pixels(gpui::point(gpui::px(0.), gpui::px(120.))),
+    ..Default::default()
+  });
+  cx.run_until_parked();
+  panel.read_with(cx, |panel, _| {
+    assert!(!panel.messages_list.is_following_tail());
+  });
+
+  // Wheeling all the way down lands on the end: follow re-engages by itself.
+  cx.simulate_event(gpui::ScrollWheelEvent {
+    position: center,
+    delta: gpui::ScrollDelta::Pixels(gpui::point(gpui::px(0.), gpui::px(-100000.))),
+    ..Default::default()
+  });
+  cx.run_until_parked();
+  panel.update(cx, |_, cx| cx.notify());
+  cx.run_until_parked();
+  panel.read_with(cx, |panel, _| {
+    assert!(
+      panel.messages_list.is_following_tail(),
+      "reaching the end by wheel re-engages sticky follow"
+    );
+  });
+}
+
+#[gpui::test]
+async fn scrolling_up_detaches_from_the_tail(cx: &mut gpui::TestAppContext) {
+  let (panel, cx, center) = add_retired_runway_panel(cx).await;
+
+  panel.update(cx, |panel, cx| {
+    panel.jump_to_tail();
+    cx.notify();
+  });
+  cx.run_until_parked();
+
+  cx.simulate_event(gpui::ScrollWheelEvent {
+    position: center,
+    delta: gpui::ScrollDelta::Pixels(gpui::point(gpui::px(0.), gpui::px(120.))),
+    ..Default::default()
+  });
+  cx.run_until_parked();
+  panel.update(cx, |_, cx| cx.notify());
+  cx.run_until_parked();
+  panel.read_with(cx, |panel, _| {
+    assert!(
+      !panel.messages_list.is_following_tail(),
+      "a wheel up hands the scroll back to the reader"
+    );
+    assert!(panel.show_jump_pill, "the pill offers the way back");
+  });
+}
+
 #[gpui::test]
 async fn a_first_prompt_leaves_no_phantom_scroll(cx: &mut gpui::TestAppContext) {
   let (panel, cx) = add_panel_window(cx);

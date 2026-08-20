@@ -34,6 +34,10 @@ Cmd+Enter (Ctrl+Enter on Linux/Windows) now sends your message straight into the
 
 Sending a message now pins it to the top of the conversation, and the reply streams into the space below it: nothing scrolls under your eyes anymore. Scroll the wheel and the hold lets go so you can read freely; the jump-to-bottom pill brings you back to the held position. Once a reply grows past the reserved space, reading continues as plain scrolling.
 
+### Catch the Tail of a Long Reply
+
+The jump-to-bottom pill now sticks: one click and the conversation follows the streaming reply until you scroll up to read, instead of dropping you the moment the next words arrive. Scrolling back down to the end re-engages the follow on its own, and Cmd+Shift+J (customizable in Settings) jumps to the latest message from the keyboard, so a long answer never turns into a clicking exercise.
+
 ### The Turn Folds Into Its Card
 
 A finished turn now tucks its work away: the thinking, the tool steps and the in-between narration fold behind the turn's summary card, leaving only your question, the agent's final answer and the card itself. A "Worked for 2m 5s · 8 steps" row on the card tells you what happened and how long it took; click it to unfold the full timeline for inspection, click again to tidy it back up. Turns that edited nothing keep their usual compact grouping.

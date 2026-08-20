@@ -623,6 +623,9 @@ pub struct AgentChatPanel {
   runway_following: bool,
   /// Derived each frame; held through unmeasured frames to avoid blinking.
   show_jump_pill: bool,
+  /// A reader scroll landed since the last frame; ListState can't be
+  /// re-borrowed inside its own scroll handler, so the check runs at render.
+  reader_scrolled: bool,
   /// Slash commands advertised by the agent, latest update wins.
   available_commands: Vec<agent_client_protocol::schema::AvailableCommand>,
   /// Item index of the user message being edited, with its inline editor.
@@ -717,6 +720,7 @@ impl AgentChatPanel {
       runway_end_space: 0.0,
       runway_following: false,
       show_jump_pill: false,
+      reader_scrolled: false,
       available_commands: Vec::new(),
       editing_message: None,
       edit_input: None,
@@ -846,6 +850,7 @@ impl AgentChatPanel {
     self.messages_list.set_scroll_handler(move |_, _, cx| {
       let _ = weak.update(cx, |panel, _| {
         panel.runway_following = false;
+        panel.reader_scrolled = true;
       });
     });
   }
@@ -1120,6 +1125,7 @@ impl AgentChatPanel {
       runway_end_space: 0.0,
       runway_following: false,
       show_jump_pill: false,
+      reader_scrolled: false,
       available_commands: Vec::new(),
       editing_message: None,
       edit_input: None,
@@ -1264,6 +1270,7 @@ impl AgentChatPanel {
     };
     self.runway_active = true;
     self.runway_following = true;
+    self.reader_scrolled = false;
     // Provisional full-viewport reservation: the anchored rows have no
     // measured bounds yet, and without scroll room past the tail the list
     // clamps to its end for a frame. The first measured frame trues it up.
@@ -1340,6 +1347,39 @@ impl AgentChatPanel {
     }
     if self.runway_following {
       self.hold_runway_anchor(anchor_item);
+    }
+  }
+
+  /// With a runway active, "bottom" is the held position: re-arm the hold.
+  /// Otherwise engage sticky follow until the reader scrolls up.
+  pub fn jump_to_tail(&mut self) {
+    if self.runway_active {
+      self.runway_following = true;
+      if let Some(item) = self.runway_anchor_item() {
+        self.hold_runway_anchor(item);
+      }
+    } else {
+      self.messages_list.set_follow_mode(gpui::FollowMode::Tail);
+    }
+  }
+
+  /// A reader scroll that lands on the very end opts into following the tail.
+  /// Same yardstick as the pill: the spacer's bottom against the viewport;
+  /// unmeasured bounds mean unknown, so the flag holds for a measured frame.
+  fn update_reader_follow(&mut self) {
+    if !self.reader_scrolled {
+      return;
+    }
+    let viewport = self.messages_list.viewport_bounds();
+    if viewport.size.height <= px(0.) {
+      return;
+    }
+    let Some(spacer) = self.messages_list.bounds_for_item(self.runway_spacer_ix()) else {
+      return;
+    };
+    self.reader_scrolled = false;
+    if spacer.bottom() <= viewport.bottom() + px(1.) && !self.messages_list.is_following_tail() {
+      self.jump_to_tail();
     }
   }
 

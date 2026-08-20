@@ -66,7 +66,8 @@ use crate::status_poll;
 use crate::svg_preview::SvgPreview;
 use crate::workspace::WorkspaceApi;
 use crate::{
-  CloseWorkspacePage, CommentHunk, SendReviewCommentsToAgent, ShowCommandPalette, ShowFileSearch,
+  CloseWorkspacePage, CommentHunk, JumpToLatestMessage, SendReviewCommentsToAgent,
+  ShowCommandPalette, ShowFileSearch,
 };
 use ui::{
   Button, ButtonVariants as _, CommandPalette, CommandPaletteAction, CommandPaletteCommand,

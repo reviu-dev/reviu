@@ -877,6 +877,7 @@ impl Render for SessionPage {
       .on_action(cx.listener(Self::show_command_palette_action))
       .on_action(cx.listener(Self::show_file_search_action))
       .on_action(cx.listener(Self::send_review_comments_to_agent_action))
+      .on_action(cx.listener(Self::jump_to_latest_message_action))
       .on_action(cx.listener(Self::comment_hunk_action))
       .on_action(cx.listener(Self::toggle_diff_view_action))
       .on_action(cx.listener(Self::toggle_hide_whitespace_action))

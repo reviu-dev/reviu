@@ -28,6 +28,7 @@ actions!(
     CommentHunk,
     SendReviewCommentsToAgent,
     AddSelectionToAgent,
+    JumpToLatestMessage,
     ToggleHunkStage,
     RestoreHunk,
     ToggleFileStage,
