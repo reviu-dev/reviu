@@ -185,6 +185,14 @@ pub(crate) fn mono_font_for(theme: &gpui_component::Theme) -> Font {
   }
 }
 
+pub(crate) fn mini_diff_line_text_for_layout(text: &str) -> SharedString {
+  if text.is_empty() {
+    SharedString::from(" ")
+  } else {
+    SharedString::from(text.to_string())
+  }
+}
+
 pub(crate) fn build_text_runs(
   text: &str,
   word_spans: &[InlineSpan],
@@ -715,6 +723,7 @@ pub(crate) fn render_tool_call(
             };
             let line_gutter = |old_line: Option<u32>, new_line: Option<u32>| {
               h_flex()
+                .items_start()
                 .w(px(70.))
                 .flex_shrink_0()
                 .gap_1()
@@ -727,8 +736,12 @@ pub(crate) fn render_tool_call(
             };
             if empty_creation {
               body = body.child(
-                h_flex()
+                div()
+                  .flex()
+                  .flex_row()
+                  .items_stretch()
                   .w_full()
+                  .bg(bg)
                   .when(show_line_numbers, |this| {
                     this.child(line_gutter(line.old_line, line.new_line))
                   })
@@ -745,6 +758,7 @@ pub(crate) fn render_tool_call(
               );
               continue;
             }
+            let layout_text = mini_diff_line_text_for_layout(&line.text);
             let runs = build_text_runs(
               &line.text,
               &line.spans,
@@ -755,7 +769,7 @@ pub(crate) fn render_tool_call(
               &mono_font,
             );
             let text_col: gpui::AnyElement = if runs.is_empty() {
-              div().flex_1().child(line.text.clone()).into_any_element()
+              div().flex_1().child(layout_text).into_any_element()
             } else {
               div()
                 .flex_1()
@@ -763,8 +777,12 @@ pub(crate) fn render_tool_call(
                 .into_any_element()
             };
             body = body.child(
-              h_flex()
+              div()
+                .flex()
+                .flex_row()
+                .items_stretch()
                 .w_full()
+                .bg(bg)
                 .when(show_line_numbers, |this| {
                   this.child(line_gutter(line.old_line, line.new_line))
                 })

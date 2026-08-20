@@ -2296,6 +2296,15 @@ fn tool_headers_never_stutter_the_kind() {
 }
 
 #[test]
+fn mini_diff_blank_lines_keep_text_height() {
+  assert_eq!(mini_diff_line_text_for_layout("").as_ref(), " ");
+  assert_eq!(
+    mini_diff_line_text_for_layout("let x = 1;").as_ref(),
+    "let x = 1;"
+  );
+}
+
+#[test]
 fn old_conversations_load_with_zero_images() {
   let message: ChatMessage =
     serde_json::from_str(r#"{"role":"User","text":"hi"}"#).expect("legacy message loads");
