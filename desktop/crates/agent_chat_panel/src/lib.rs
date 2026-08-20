@@ -1,3 +1,4 @@
+mod ansi;
 mod code_block;
 mod code_lines;
 mod store;

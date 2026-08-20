@@ -1267,26 +1267,30 @@ async fn code_lines_wraps_long_rows_and_keeps_short_ones_single(cx: &mut gpui::T
 }
 
 #[test]
-fn terminal_tail_ranges_slice_their_lines_and_flag_clipping() {
+fn terminal_tail_ranges_slice_their_lines_and_strip_ansi() {
+  // Colored lines: the selectable text must be the stripped one.
   let output = (0..30)
-    .map(|i| format!("line {i}"))
+    .map(|i| format!("\u{1b}[32mline {i}\u{1b}[0m"))
     .collect::<Vec<_>>()
     .join("\n");
-  let (text, ranges, clipped) = terminal_tail(&output, 24, false);
-  assert!(clipped, "30 lines against a 24-line tail clips the top");
+  let parsed = crate::ansi::parse_ansi(&output);
+  let start = parsed.len().saturating_sub(24);
+  assert!(start > 0, "30 lines against a 24-line tail clips the top");
+  let (text, ranges) = join_terminal_tail(&parsed[start..]);
   assert_eq!(ranges.len(), 24);
   assert_eq!(&text[ranges[0].clone()], "line 6", "the tail keeps the end");
   assert_eq!(&text[ranges[23].clone()], "line 29");
+  assert!(
+    !text.contains('\u{1b}'),
+    "escape sequences never reach the selection text"
+  );
 
-  let (text, ranges, clipped) = terminal_tail("only\ntwo", 24, false);
-  assert!(!clipped);
+  let parsed = crate::ansi::parse_ansi("only\ntwo");
+  let (text, ranges) = join_terminal_tail(&parsed);
   assert_eq!(&text[ranges[0].clone()], "only");
   assert_eq!(&text[ranges[1].clone()], "two");
 
-  let (_, _, clipped) = terminal_tail("short", 24, true);
-  assert!(clipped, "a store-truncated buffer reads as clipped");
-
-  let (text, ranges, _) = terminal_tail("", 24, false);
+  let (text, ranges) = join_terminal_tail(&[]);
   assert!(text.is_empty());
   assert!(ranges.is_empty());
 }

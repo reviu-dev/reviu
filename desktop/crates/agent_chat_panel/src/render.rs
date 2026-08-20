@@ -462,27 +462,22 @@ pub(crate) fn render_thought(
     .into_any_element()
 }
 
-/// The visible tail of a terminal: joined selectable text, one byte range per
-/// row, and whether older output was clipped off the top.
-pub(crate) fn terminal_tail(
-  output: &str,
-  max_lines: usize,
-  truncated: bool,
-) -> (String, Vec<std::ops::Range<usize>>, bool) {
-  let lines: Vec<&str> = output.lines().collect();
-  let start = lines.len().saturating_sub(max_lines);
-  let clipped = start > 0 || truncated;
+/// Joins the visible tail of a terminal into one selectable text with one
+/// byte range per row; the parser already stripped the escape sequences.
+pub(crate) fn join_terminal_tail(
+  tail: &[crate::ansi::AnsiLine],
+) -> (String, Vec<std::ops::Range<usize>>) {
   let mut text = String::new();
-  let mut ranges = Vec::with_capacity(lines.len() - start);
-  for line in &lines[start..] {
+  let mut ranges = Vec::with_capacity(tail.len());
+  for line in tail {
     if !ranges.is_empty() {
       text.push('\n');
     }
     let line_start = text.len();
-    text.push_str(line);
+    text.push_str(&line.text);
     ranges.push(line_start..text.len());
   }
-  (text, ranges, clipped)
+  (text, ranges)
 }
 
 /// One embedded terminal: command header, live output tail, exit state.
@@ -561,8 +556,10 @@ fn render_terminal_block(
   };
 
   // The tail follows the stream: the last lines are always the ones shown.
-  let (tail_text, tail_ranges, clipped) =
-    terminal_tail(&snap.output, TERMINAL_TAIL_LINES, snap.truncated);
+  let parsed = crate::ansi::parse_ansi(&snap.output);
+  let tail_start = parsed.len().saturating_sub(TERMINAL_TAIL_LINES);
+  let clipped = tail_start > 0 || snap.truncated;
+  let (tail_text, tail_ranges) = join_terminal_tail(&parsed[tail_start..]);
 
   v_flex()
     .debug_selector(|| "agent-terminal-block".to_string())
@@ -616,11 +613,11 @@ fn render_terminal_block(
         // The clip marker is not part of the selectable output.
         row_ranges.push(0..0);
       }
-      for range in &tail_ranges {
+      for line in &parsed[tail_start..] {
         rows.push(code_lines::CodeLineRow {
           gutter: None,
-          text: mini_diff_line_text_for_layout(&tail_text[range.clone()]),
-          runs: Vec::new(),
+          text: mini_diff_line_text_for_layout(&line.text),
+          runs: crate::ansi::runs_for_line(line, &mono_font, theme.foreground, theme.is_dark()),
           band,
         });
       }
