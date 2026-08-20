@@ -51,7 +51,9 @@ pub struct RepoStatusEntry {
 pub fn discover_repository_root(path: &Path) -> Option<PathBuf> {
   let repo = Repository::discover(path).ok()?;
   // A bare repository has no working tree, so there is nothing to review in it.
-  Some(repo.workdir()?.to_path_buf())
+  // libgit2 appends a trailing slash to the workdir; components() drops it so
+  // the persisted path matches the one the folder dialog produces.
+  Some(repo.workdir()?.components().collect())
 }
 
 pub fn list_repo_status(repo_root: &Path) -> Result<Vec<RepoStatusEntry>> {
@@ -381,6 +383,10 @@ mod tests {
     assert_eq!(
       root.canonicalize().expect("canonical root"),
       temp.path.canonicalize().expect("canonical temp")
+    );
+    assert!(
+      !root.to_string_lossy().ends_with(std::path::MAIN_SEPARATOR),
+      "the root is stored by string, so a trailing separator would duplicate it"
     );
     assert_eq!(
       discover_repository_root(&nested)
