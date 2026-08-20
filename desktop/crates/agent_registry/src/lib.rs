@@ -17,6 +17,10 @@ const SNAPSHOT: &str = include_str!("../assets/registry.json");
 
 const FETCH_TIMEOUT: Duration = Duration::from_secs(10);
 
+/// The registry moves by a few versions a week, so most launches can skip the
+/// request entirely; past the window an ETag keeps the answer to a 304.
+const CACHE_TTL: Duration = Duration::from_secs(6 * 60 * 60);
+
 /// Where the freshest known registry came from.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum RegistrySource {
@@ -90,38 +94,103 @@ fn publish(registry: Registry) -> Arc<Registry> {
   registry
 }
 
-/// Refresh from the network and publish the result. Blocking: call off the UI
-/// thread. A failure leaves the previously loaded registry in place.
-pub fn refresh_global_blocking() -> anyhow::Result<Arc<Registry>> {
-  refresh_blocking().map(publish)
+/// What a refresh attempt did.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RefreshOutcome {
+  /// The cache was young enough that no request was made.
+  Skipped,
+  /// The registry answered 304: the cache is already current.
+  NotModified,
+  /// A new registry was fetched and published.
+  Updated,
 }
 
-/// Fetch the registry and write it to the cache. Blocking: call off the UI thread.
-pub fn refresh_blocking() -> anyhow::Result<Registry> {
-  let body = reqwest::blocking::Client::builder()
+/// Refresh from the network and publish the result. Blocking: call off the UI
+/// thread. A failure leaves the previously loaded registry in place.
+pub fn refresh_global_blocking() -> anyhow::Result<RefreshOutcome> {
+  let path = cache_path();
+
+  if path
+    .as_deref()
+    .is_some_and(|path| cache_is_fresh(path, CACHE_TTL))
+  {
+    return Ok(RefreshOutcome::Skipped);
+  }
+
+  let mut request = reqwest::blocking::Client::builder()
     .timeout(FETCH_TIMEOUT)
     .build()?
-    .get(REGISTRY_URL)
-    .send()?
-    .error_for_status()?
-    .text()?;
+    .get(REGISTRY_URL);
+  if let Some(etag) = path.as_deref().and_then(read_etag) {
+    request = request.header(reqwest::header::IF_NONE_MATCH, etag);
+  }
+
+  let response = request.send()?;
+  if response.status() == reqwest::StatusCode::NOT_MODIFIED {
+    // Touch the cache so the TTL restarts from this confirmation.
+    if let Some(path) = path.as_deref() {
+      touch(path);
+    }
+    return Ok(RefreshOutcome::NotModified);
+  }
+
+  let response = response.error_for_status()?;
+  let etag = response
+    .headers()
+    .get(reqwest::header::ETAG)
+    .and_then(|value| value.to_str().ok())
+    .map(str::to_string);
+  let body = response.text()?;
 
   let agents = parse_registry(&body)?;
   if agents.is_empty() {
     anyhow::bail!("registry response held no usable agents");
   }
 
-  if let Some(path) = cache_path() {
+  if let Some(path) = path.as_deref() {
     if let Some(parent) = path.parent() {
       let _ = std::fs::create_dir_all(parent);
     }
-    let _ = std::fs::write(&path, &body);
+    let _ = std::fs::write(path, &body);
+    match etag {
+      Some(etag) => {
+        let _ = std::fs::write(etag_path(path), etag);
+      }
+      None => {
+        let _ = std::fs::remove_file(etag_path(path));
+      }
+    }
   }
 
-  Ok(Registry {
+  publish(Registry {
     agents,
     source: RegistrySource::Network,
-  })
+  });
+  Ok(RefreshOutcome::Updated)
+}
+
+/// Whether the cached registry is young enough to use without asking again.
+fn cache_is_fresh(path: &Path, ttl: Duration) -> bool {
+  std::fs::metadata(path)
+    .and_then(|meta| meta.modified())
+    // A modification time in the future means a clock we cannot trust: refetch.
+    .is_ok_and(|modified| modified.elapsed().is_ok_and(|age| age < ttl))
+}
+
+fn etag_path(cache: &Path) -> PathBuf {
+  cache.with_extension("etag")
+}
+
+fn read_etag(cache: &Path) -> Option<String> {
+  let etag = std::fs::read_to_string(etag_path(cache)).ok()?;
+  let etag = etag.trim().to_string();
+  (!etag.is_empty()).then_some(etag)
+}
+
+fn touch(path: &Path) {
+  if let Ok(file) = std::fs::OpenOptions::new().append(true).open(path) {
+    let _ = file.set_modified(std::time::SystemTime::now());
+  }
 }
 
 fn cache_path() -> Option<PathBuf> {
@@ -254,6 +323,75 @@ mod tests {
         "{id} bundles its agent, requiring nothing else on PATH"
       );
     }
+  }
+
+  #[test]
+  fn install_hints_point_at_the_agents_own_page() {
+    let registry = Registry::embedded();
+
+    let pi = registry.get(&AgentId::new("pi-acp")).expect("pi-acp");
+    assert_eq!(pi.homepage(), "https://github.com/svkozak/pi-acp");
+    let hint = pi.install_hint();
+    assert!(hint.contains("`pi` CLI"), "got {hint}");
+    assert!(hint.contains("github.com/svkozak/pi-acp"), "got {hint}");
+
+    for agent in registry.agents() {
+      assert_ne!(
+        agent.homepage(),
+        "https://agentclientprotocol.com",
+        "{} should carry its own site or repo",
+        agent.id
+      );
+    }
+  }
+
+  #[test]
+  fn an_agent_with_no_links_falls_back_to_the_protocol_page() {
+    let json =
+      r#"{"agents":[{"id":"bare","name":"Bare","distribution":{"npx":{"package":"bare@1"}}}]}"#;
+    let agents = parse_registry(json).expect("valid");
+    assert_eq!(agents[0].homepage(), "https://agentclientprotocol.com");
+  }
+
+  #[test]
+  fn a_fresh_cache_skips_the_request_and_a_stale_one_does_not() {
+    let dir = std::env::temp_dir().join("reviu-registry-freshness-test");
+    std::fs::create_dir_all(&dir).expect("temp dir");
+    let cache = dir.join("agent-registry.json");
+    std::fs::write(&cache, "{}").expect("write cache");
+
+    assert!(
+      cache_is_fresh(&cache, Duration::from_secs(3600)),
+      "a cache written just now is fresh"
+    );
+    assert!(
+      !cache_is_fresh(&cache, Duration::from_secs(0)),
+      "any cache is stale against a zero TTL"
+    );
+    assert!(
+      !cache_is_fresh(&dir.join("does-not-exist.json"), Duration::from_secs(3600)),
+      "a missing cache is never fresh"
+    );
+
+    std::fs::remove_dir_all(&dir).ok();
+  }
+
+  #[test]
+  fn the_etag_sits_beside_its_cache_and_blank_values_are_ignored() {
+    let dir = std::env::temp_dir().join("reviu-registry-etag-test");
+    std::fs::create_dir_all(&dir).expect("temp dir");
+    let cache = dir.join("agent-registry.json");
+    assert_eq!(etag_path(&cache), dir.join("agent-registry.etag"));
+
+    assert_eq!(read_etag(&cache), None, "no file means no validator");
+
+    std::fs::write(etag_path(&cache), "  \"abc123\"\n").expect("write etag");
+    assert_eq!(read_etag(&cache).as_deref(), Some("\"abc123\""));
+
+    std::fs::write(etag_path(&cache), "   ").expect("write blank etag");
+    assert_eq!(read_etag(&cache), None, "a blank validator is not sent");
+
+    std::fs::remove_dir_all(&dir).ok();
   }
 
   #[test]

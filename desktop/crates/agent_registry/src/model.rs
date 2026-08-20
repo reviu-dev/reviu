@@ -79,6 +79,8 @@ pub struct RegistryAgent {
   pub version: String,
   pub description: String,
   pub icon: Option<String>,
+  pub repository: Option<String>,
+  pub website: Option<String>,
   pub distribution: Distribution,
 }
 
@@ -128,8 +130,14 @@ impl RegistryAgent {
     }
   }
 
-  fn homepage(&self) -> &str {
-    "https://agentclientprotocol.com"
+  /// Where to send someone whose agent will not start. The registry carries a
+  /// site or a repo for every agent; the protocol page is the last resort.
+  pub fn homepage(&self) -> &str {
+    self
+      .website
+      .as_deref()
+      .or(self.repository.as_deref())
+      .unwrap_or("https://agentclientprotocol.com")
   }
 
   pub fn env(&self) -> &[(String, String)] {
@@ -186,6 +194,8 @@ fn parse_agent(value: &serde_json::Value) -> Option<RegistryAgent> {
     version: string_field(value, "version").unwrap_or_default(),
     description: string_field(value, "description").unwrap_or_default(),
     icon: string_field(value, "icon"),
+    repository: string_field(value, "repository"),
+    website: string_field(value, "website"),
     distribution,
   })
 }

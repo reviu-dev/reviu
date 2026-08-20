@@ -6,7 +6,7 @@ All notable changes to Reviu are documented here.
 
 ### Every ACP Agent, Not Just Three
 
-The agent picker is now served by the official ACP registry instead of a list baked into the app. Twenty-three agents are available out of the box, Gemini, Copilot, Qwen, Cline, Kilo, Grok and the rest alongside Claude, Codex and Pi, each launched with the version the registry publishes. The list refreshes itself in the background, so new agents and new versions arrive without an update to Reviu; a copy ships with the app and another is cached on disk, so the picker is fully populated on first launch and stays populated offline. Your saved agent and its selected model carry over.
+The agent picker is now served by the official ACP registry instead of a list baked into the app. Twenty-three agents are available out of the box, Gemini, Copilot, Qwen, Cline, Kilo, Grok and the rest alongside Claude, Codex and Pi, each launched with the version the registry publishes. The list scrolls rather than running off the screen, and refreshes itself in the background, so new agents and new versions arrive without an update to Reviu. A copy ships with the app and another is cached on disk, so the picker is fully populated on first launch and stays populated offline, and the refresh only asks the network when the cached list has aged. Your saved agent and its selected model carry over. When an agent will not start, the message now points at that agent's own page instead of a generic one.
 
 ### Pi Joins Claude And Codex
 

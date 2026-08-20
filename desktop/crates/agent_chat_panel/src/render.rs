@@ -1153,8 +1153,10 @@ impl Render for AgentChatPanel {
               .dropdown_caret(true)
               .small()
               .ghost()
+              .debug_selector(|| "agent-chat-backend".to_string())
               .dropdown_menu_with_anchor(Anchor::TopLeft, move |menu, _, _| {
-                let mut menu = menu;
+                // The registry serves more agents than fit on screen.
+                let mut menu = menu.max_h(px(360.)).scrollable(true);
                 let registry = agent_registry::global();
                 for agent in registry.runnable() {
                   let id = agent.id.clone();
@@ -1162,6 +1164,7 @@ impl Render for AgentChatPanel {
                   let is_current = id == current;
                   let label_text: SharedString = agent.name.clone().into();
                   let brand_icon = crate::backend_icon(&id);
+                  let selector_id = id.to_string();
                   menu = menu.item(
                     PopupMenuItem::element(move |_, cx| {
                       let theme = cx.theme().clone();
@@ -1169,6 +1172,10 @@ impl Render for AgentChatPanel {
                         .w_full()
                         .gap_2()
                         .items_center()
+                        .debug_selector({
+                          let selector_id = selector_id.clone();
+                          move || format!("agent-chat-backend-item-{selector_id}")
+                        })
                         .child(
                           gpui_component::Icon::new(brand_icon)
                             .small()

@@ -367,8 +367,11 @@ fn main() {
     // copy already backs the picker, so a slow or failed fetch changes nothing.
     cx.background_executor()
       .spawn(async {
-        if let Err(err) = agent_registry::refresh_global_blocking() {
-          eprintln!("[agent-registry] refresh failed, keeping the cached list: {err}");
+        match agent_registry::refresh_global_blocking() {
+          Ok(outcome) => eprintln!("[agent-registry] {outcome:?}"),
+          Err(err) => {
+            eprintln!("[agent-registry] refresh failed, keeping the cached list: {err}")
+          }
         }
       })
       .detach();
