@@ -46,6 +46,8 @@ pub(crate) struct CodeLines {
   default_color: Hsla,
   font: gpui::Font,
   selection: Option<Rc<SelectionSpec>>,
+  /// false = terminal-style: lines clip at the edge instead of wrapping.
+  wrap: bool,
   layout: Rc<RefCell<Option<CodeLinesLayout>>>,
 }
 
@@ -132,8 +134,14 @@ impl CodeLines {
       default_color,
       font,
       selection: None,
+      wrap: true,
       layout: Rc::new(RefCell::new(None)),
     }
+  }
+
+  pub(crate) fn no_wrap(mut self) -> Self {
+    self.wrap = false;
+    self
   }
 
   pub(crate) fn selectable(mut self, spec: SelectionSpec) -> Self {
@@ -335,6 +343,7 @@ impl Element for CodeLines {
     let default_color = self.default_color;
     let font = self.font.clone();
     let layout = self.layout.clone();
+    let wrap = self.wrap;
     let selection = self.resolved_selection();
     let selection_bg = _cx.theme().selection;
     let row_ranges = self.selection.as_ref().map(|spec| spec.row_ranges.clone());
@@ -345,7 +354,11 @@ impl Element for CodeLines {
           AvailableSpace::Definite(x) => Some(x),
           _ => None,
         });
-        let wrap_width = width.map(|w| (w - gutter_width - CELL_PADDING_X * 2.).max(px(16.)));
+        let wrap_width = if wrap {
+          width.map(|w| (w - gutter_width - CELL_PADDING_X * 2.).max(px(16.)))
+        } else {
+          None
+        };
 
         if let Some(cached) = layout.borrow().as_ref()
           && cached.wrap_width == wrap_width

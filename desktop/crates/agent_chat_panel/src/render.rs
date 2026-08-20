@@ -462,12 +462,36 @@ pub(crate) fn render_thought(
     .into_any_element()
 }
 
+/// The visible tail of a terminal: joined selectable text, one byte range per
+/// row, and whether older output was clipped off the top.
+pub(crate) fn terminal_tail(
+  output: &str,
+  max_lines: usize,
+  truncated: bool,
+) -> (String, Vec<std::ops::Range<usize>>, bool) {
+  let lines: Vec<&str> = output.lines().collect();
+  let start = lines.len().saturating_sub(max_lines);
+  let clipped = start > 0 || truncated;
+  let mut text = String::new();
+  let mut ranges = Vec::with_capacity(lines.len() - start);
+  for line in &lines[start..] {
+    if !ranges.is_empty() {
+      text.push('\n');
+    }
+    let line_start = text.len();
+    text.push_str(line);
+    ranges.push(line_start..text.len());
+  }
+  (text, ranges, clipped)
+}
+
 /// One embedded terminal: command header, live output tail, exit state.
 fn render_terminal_block(
   terminal_id: &str,
   item_id_base: u64,
   term_ix: usize,
   terminal_store: Option<&std::sync::Arc<agent_acp::TerminalStore>>,
+  registry: &selectable_text::SelectionRegistry,
   theme: &gpui_component::Theme,
   cx: &mut Context<AgentChatPanel>,
 ) -> gpui::AnyElement {
@@ -537,14 +561,8 @@ fn render_terminal_block(
   };
 
   // The tail follows the stream: the last lines are always the ones shown.
-  let lines: Vec<&str> = snap.output.lines().collect();
-  let start = lines.len().saturating_sub(TERMINAL_TAIL_LINES);
-  let clipped = start > 0 || snap.truncated;
-  let mut tail = String::new();
-  if clipped {
-    tail.push_str("…\n");
-  }
-  tail.push_str(&lines[start..].join("\n"));
+  let (tail_text, tail_ranges, clipped) =
+    terminal_tail(&snap.output, TERMINAL_TAIL_LINES, snap.truncated);
 
   v_flex()
     .debug_selector(|| "agent-terminal-block".to_string())
@@ -576,17 +594,61 @@ fn render_terminal_block(
         )
         .child(status),
     )
-    .when(!tail.is_empty(), |this| {
+    .when(!tail_text.is_empty() || clipped, |this| {
+      let mono_font = mono_font_for(theme);
+      let band = gpui::transparent_black();
+      let mut rows = Vec::with_capacity(tail_ranges.len() + 1);
+      let mut row_ranges = Vec::with_capacity(tail_ranges.len() + 1);
+      if clipped {
+        rows.push(code_lines::CodeLineRow {
+          gutter: None,
+          text: "…".into(),
+          runs: vec![TextRun {
+            len: "…".len(),
+            font: mono_font.clone(),
+            color: theme.muted_foreground,
+            background_color: None,
+            underline: None,
+            strikethrough: None,
+          }],
+          band,
+        });
+        // The clip marker is not part of the selectable output.
+        row_ranges.push(0..0);
+      }
+      for range in &tail_ranges {
+        rows.push(code_lines::CodeLineRow {
+          gutter: None,
+          text: mini_diff_line_text_for_layout(&tail_text[range.clone()]),
+          runs: Vec::new(),
+          band,
+        });
+      }
+      row_ranges.extend(tail_ranges);
       this.child(
         div()
-          .px_2()
           .py_1()
           .text_xs()
           .font_family("monospace")
-          .whitespace_nowrap()
           .overflow_hidden()
           .text_color(theme.foreground)
-          .children(tail.lines().map(|l| div().child(l.to_string()))),
+          .child(
+            code_lines::CodeLines::new(
+              rows,
+              px(0.),
+              theme.muted_foreground.opacity(0.72),
+              theme.border.opacity(0.45),
+              theme.foreground,
+              mono_font,
+            )
+            .no_wrap()
+            .selectable(code_lines::SelectionSpec {
+              text: SharedString::from(tail_text),
+              row_ranges,
+              text_id: item_id_base | 0x0400_0000 | ((term_ix as u64) << 12),
+              registry: registry.clone(),
+            }),
+          ),
       )
     })
     .into_any_element()
@@ -766,6 +828,7 @@ pub(crate) fn render_tool_call(
           item_id_base,
           term_ix,
           terminal_store,
+          registry,
           theme,
           cx,
         ));

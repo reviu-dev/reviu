@@ -26,6 +26,10 @@ A half-typed message now stays where you left it: each conversation keeps its ow
 
 Switching back to a conversation returns you to the exact spot you were reading instead of jumping to the bottom. A conversation left at the bottom still opens at the bottom and keeps following new messages.
 
+### Select Text In Terminal Output
+
+The live output of commands running in tool cards is now selectable like everything else in the conversation: sweep across lines, double-click a word, triple-click a line, and the text lands in your clipboard on release.
+
 ### Select Text In Diffs
 
 The small diffs inside tool cards are now selectable: sweep across added and removed lines, double-click a word or triple-click a line, and the selection lands in your clipboard on release, same as tool outputs.

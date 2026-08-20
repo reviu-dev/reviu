@@ -1266,6 +1266,73 @@ async fn code_lines_wraps_long_rows_and_keeps_short_ones_single(cx: &mut gpui::T
   );
 }
 
+#[test]
+fn terminal_tail_ranges_slice_their_lines_and_flag_clipping() {
+  let output = (0..30)
+    .map(|i| format!("line {i}"))
+    .collect::<Vec<_>>()
+    .join("\n");
+  let (text, ranges, clipped) = terminal_tail(&output, 24, false);
+  assert!(clipped, "30 lines against a 24-line tail clips the top");
+  assert_eq!(ranges.len(), 24);
+  assert_eq!(&text[ranges[0].clone()], "line 6", "the tail keeps the end");
+  assert_eq!(&text[ranges[23].clone()], "line 29");
+
+  let (text, ranges, clipped) = terminal_tail("only\ntwo", 24, false);
+  assert!(!clipped);
+  assert_eq!(&text[ranges[0].clone()], "only");
+  assert_eq!(&text[ranges[1].clone()], "two");
+
+  let (_, _, clipped) = terminal_tail("short", 24, true);
+  assert!(clipped, "a store-truncated buffer reads as clipped");
+
+  let (text, ranges, _) = terminal_tail("", 24, false);
+  assert!(text.is_empty());
+  assert!(ranges.is_empty());
+}
+
+#[gpui::test]
+async fn code_lines_no_wrap_keeps_long_rows_on_one_line(cx: &mut gpui::TestAppContext) {
+  let (_panel, cx) = add_panel_window(cx);
+  let mono = Font {
+    family: "monospace".into(),
+    ..Default::default()
+  };
+  let muted = gpui::hsla(0., 0., 0.5, 1.);
+  let band = gpui::hsla(0., 0., 0., 0.);
+  let rows = vec![
+    crate::code_lines::CodeLineRow {
+      gutter: None,
+      text: "short".into(),
+      runs: Vec::new(),
+      band,
+    },
+    crate::code_lines::CodeLineRow {
+      gutter: None,
+      text: "a very long terminal line that would normally wrap inside three hundred pixels of width for sure"
+        .into(),
+      runs: Vec::new(),
+      band,
+    },
+  ];
+  let element =
+    crate::code_lines::CodeLines::new(rows, px(0.), muted, muted, gpui::black(), mono).no_wrap();
+  let probe = element.probe();
+  cx.draw(
+    gpui::point(px(0.), px(0.)),
+    gpui::size(px(300.), px(600.)),
+    |_, _| element,
+  );
+  let heights = probe.row_heights();
+  assert_eq!(heights.len(), 2);
+  assert!(
+    (heights[0] - heights[1]).abs() < 0.5,
+    "no_wrap keeps every row at a single line height ({} vs {})",
+    heights[0],
+    heights[1]
+  );
+}
+
 #[gpui::test]
 async fn a_terminal_burst_lands_as_one_update(cx: &mut gpui::TestAppContext) {
   let (panel, cx) = add_panel_window(cx);
