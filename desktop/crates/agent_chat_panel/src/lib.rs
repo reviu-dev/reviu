@@ -667,6 +667,7 @@ pub struct AgentChatPanel {
   /// Baseline for the composer trigger's muted state.
   config_defaults: HashMap<SessionConfigId, SessionConfigValueId>,
   _connect_task: Option<Task<()>>,
+  events_rx: Option<async_channel::Receiver<AgentEvent>>,
   _events_task: Option<Task<()>>,
   _permission_task: Option<Task<()>>,
   _persist_task: Option<Task<()>>,
@@ -760,6 +761,7 @@ impl AgentChatPanel {
       config_options: Vec::new(),
       config_defaults: HashMap::new(),
       _connect_task: None,
+      events_rx: None,
       _events_task: None,
       _permission_task: None,
       _persist_task: None,
@@ -1174,6 +1176,7 @@ impl AgentChatPanel {
       config_options: Vec::new(),
       config_defaults: HashMap::new(),
       _connect_task: None,
+      events_rx: None,
       _events_task: None,
       _permission_task: None,
       _persist_task: None,

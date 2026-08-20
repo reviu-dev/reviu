@@ -3,7 +3,7 @@ use std::path::PathBuf;
 #[allow(clippy::wildcard_imports)]
 use super::*;
 
-#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct ConversationMeta {
   pub id: String,
   pub started_at_secs: u64,

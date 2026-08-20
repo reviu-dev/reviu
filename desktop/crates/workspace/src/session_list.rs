@@ -69,24 +69,37 @@ impl SessionList {
   }
 
   /// Refresh the current conversation's row in place; the rest of the list
-  /// only changes through `set_conversations`.
+  /// only changes through `set_conversations`. No-op notifies are skipped so
+  /// streaming commits don't re-render the sidebar.
   pub fn upsert_current(
     &mut self,
     meta: Option<ConversationMeta>,
     current_id: String,
     cx: &mut Context<Self>,
   ) {
+    let mut changed = self.current_id != current_id;
     self.current_id = current_id;
     if let Some(meta) = meta {
       match self.conversations.iter_mut().find(|c| c.id == meta.id) {
-        Some(entry) => *entry = meta,
-        None => self.conversations.push(meta),
+        Some(entry) if *entry == meta => {}
+        Some(entry) => {
+          *entry = meta;
+          changed = true;
+        }
+        None => {
+          self.conversations.push(meta);
+          changed = true;
+        }
       }
-      self
-        .conversations
-        .sort_by_key(|m| std::cmp::Reverse(m.updated_at_secs));
+      if changed {
+        self
+          .conversations
+          .sort_by_key(|m| std::cmp::Reverse(m.updated_at_secs));
+      }
     }
-    cx.notify();
+    if changed {
+      cx.notify();
+    }
   }
 }
 

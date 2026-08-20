@@ -8,6 +8,8 @@ All notable changes to Reviu are documented here.
 
 A busy agent session no longer drives the app to 100% CPU. Reviu used to rewrite the whole conversation to disk and re-read every conversation in the sidebar for each streamed chunk; transcripts now save on a short throttle (and always at turn boundaries, on switch and on quit), the sidebar updates from memory, and bursts of agent output collapse into a single UI update. Long sessions stay smooth from start to finish.
 
+The screen now also repaints at a steady beat while the agent streams instead of once per chunk: text, thoughts and terminal output gather for a fraction of a second and land together, so a fast provider or a chatty build no longer turns into a redraw storm. Nothing is lost or reordered, and the first word of a reply still appears instantly.
+
 ### Line Numbers In Read Results
 
 Read tool results in the agent conversation now show file line numbers, so you can refer back to exact lines without reopening the file.

@@ -449,6 +449,99 @@ fn auto_approve_picks_allow_once_then_allow_always_and_never_reject() {
   assert_eq!(auto_approve_option(&reject_only), None);
 }
 
+#[test]
+fn fold_adjacent_chunks_merges_same_kind_text_and_keeps_boundaries() {
+  let folded = events::fold_adjacent_chunks(vec![
+    text_chunk("Hello, "),
+    text_chunk("world"),
+    thought_chunk("hmm "),
+    thought_chunk("ok"),
+    text_chunk("!"),
+  ]);
+  let texts: Vec<(&'static str, String)> = folded
+    .iter()
+    .map(|ev| match ev {
+      AgentEvent::AgentMessageChunk(c) => ("msg", chunk_text(c)),
+      AgentEvent::AgentThoughtChunk(c) => ("thought", chunk_text(c)),
+      _ => panic!("unexpected event kind"),
+    })
+    .collect();
+  assert_eq!(
+    texts,
+    vec![
+      ("msg", "Hello, world".to_string()),
+      ("thought", "hmm ok".to_string()),
+      ("msg", "!".to_string()),
+    ],
+    "same-kind neighbours fold, kind changes stay boundaries"
+  );
+}
+
+#[test]
+fn fold_adjacent_chunks_keeps_non_chunk_events_in_place() {
+  let folded = events::fold_adjacent_chunks(vec![
+    text_chunk("before "),
+    AgentEvent::ToolCall(call("t1", "Read file", ToolKind::Read)),
+    text_chunk("after"),
+  ]);
+  assert_eq!(folded.len(), 3, "a tool call is an ordering boundary");
+}
+
+fn chunk_text(chunk: &agent_client_protocol::schema::ContentChunk) -> String {
+  match &chunk.content {
+    ContentBlock::Text(t) => t.text.clone(),
+    _ => panic!("expected text content"),
+  }
+}
+
+#[gpui::test]
+async fn a_burst_of_chunks_lands_as_one_update(cx: &mut gpui::TestAppContext) {
+  let (panel, cx) = add_panel_window(cx);
+  let (tx, rx) = async_channel::unbounded();
+  panel.update(cx, |panel, cx| {
+    panel.start_event_forwarder(rx, cx);
+  });
+
+  let notifies = std::rc::Rc::new(std::cell::Cell::new(0usize));
+  cx.update(|_, cx| {
+    let notifies = notifies.clone();
+    cx.observe(&panel, move |_, _| notifies.set(notifies.get() + 1))
+      .detach();
+  });
+
+  for part in ["a", "b", "c", "d", "e"] {
+    tx.send_blocking(text_chunk(part)).expect("channel open");
+  }
+  cx.run_until_parked();
+
+  assert_eq!(
+    notifies.get(),
+    1,
+    "the whole burst commits as one update + notify"
+  );
+  panel.read_with(cx, |panel, _| {
+    assert_eq!(panel.pending_agent, "abcde", "no chunk is lost by folding");
+  });
+
+  // A second burst holds the commit floor, then lands as one more commit.
+  for part in ["f", "g"] {
+    tx.send_blocking(text_chunk(part)).expect("channel open");
+  }
+  cx.executor()
+    .advance_clock(std::time::Duration::from_millis(
+      events::STREAM_COMMIT_MS + 10,
+    ));
+  cx.run_until_parked();
+  assert_eq!(
+    notifies.get(),
+    2,
+    "the floor coalesces the second burst too"
+  );
+  panel.read_with(cx, |panel, _| {
+    assert_eq!(panel.pending_agent, "abcdefg");
+  });
+}
+
 #[gpui::test]
 async fn a_scheduled_persist_waits_for_the_throttle_window(cx: &mut gpui::TestAppContext) {
   let dir = temp_dir("agent-persist-throttle");

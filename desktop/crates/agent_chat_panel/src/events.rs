@@ -2,24 +2,82 @@
 
 use super::*;
 
+/// Commit floor during streaming: one update + notify per window (~8
+/// redraws/s) whatever the provider's chunk rate. The first chunk after a
+/// quiet spell still paints immediately.
+pub(crate) const STREAM_COMMIT_MS: u64 = 120;
+
+/// Folds an adjacent same-message text chunk into `prev` so a burst costs
+/// one markdown push_str instead of one per chunk.
+fn merge_into_last(prev: Option<&mut AgentEvent>, next: &AgentEvent) -> bool {
+  let (prev, next) = match (prev, next) {
+    (Some(AgentEvent::AgentMessageChunk(p)), AgentEvent::AgentMessageChunk(n)) => (p, n),
+    (Some(AgentEvent::AgentThoughtChunk(p)), AgentEvent::AgentThoughtChunk(n)) => (p, n),
+    _ => return false,
+  };
+  if prev.message_id != next.message_id {
+    return false;
+  }
+  match (&mut prev.content, &next.content) {
+    (ContentBlock::Text(prev_text), ContentBlock::Text(next_text)) => {
+      prev_text.text.push_str(&next_text.text);
+      true
+    }
+    _ => false,
+  }
+}
+
+pub(crate) fn fold_adjacent_chunks(events: Vec<AgentEvent>) -> Vec<AgentEvent> {
+  let mut out: Vec<AgentEvent> = Vec::with_capacity(events.len());
+  for event in events {
+    if !merge_into_last(out.last_mut(), &event) {
+      out.push(event);
+    }
+  }
+  out
+}
+
 impl AgentChatPanel {
   pub(crate) fn start_event_forwarder(
     &mut self,
     rx: async_channel::Receiver<AgentEvent>,
     cx: &mut Context<Self>,
   ) {
+    // Boundaries (turn end, new prompt) drain this clone so no chunk can
+    // land after the event that should follow it.
+    self.events_rx = Some(rx.clone());
     let task = cx.spawn(async move |this, cx| {
-      while let Ok(event) = rx.recv().await {
-        let _ = this.update(cx, |panel, cx| {
-          panel.on_event(event, cx);
-          // Drain the burst: one update + notify per wake, not per chunk.
-          while let Ok(event) = rx.try_recv() {
+      let window = std::time::Duration::from_millis(STREAM_COMMIT_MS);
+      let mut last_commit: Option<std::time::Instant> = None;
+      loop {
+        // The floor runs before recv so nothing is ever held across an
+        // await: queued events stay drainable by a boundary.
+        if let Some(last) = last_commit {
+          let elapsed = last.elapsed();
+          if elapsed < window {
+            cx.background_executor().timer(window - elapsed).await;
+          }
+        }
+        let Ok(first) = rx.recv().await else {
+          break;
+        };
+        let mut events = vec![first];
+        while let Ok(event) = rx.try_recv() {
+          events.push(event);
+        }
+        let events = fold_adjacent_chunks(events);
+        let alive = this.update(cx, |panel, cx| {
+          for event in events {
             panel.on_event(event, cx);
           }
           panel.schedule_persist(cx);
           panel.sync_list_count();
           cx.notify();
         });
+        if alive.is_err() {
+          return;
+        }
+        last_commit = Some(std::time::Instant::now());
       }
       // Channel closed: the agent driver exited (child died or stopped).
       let _ = this.update(cx, |panel, cx| {
@@ -28,6 +86,17 @@ impl AgentChatPanel {
       });
     });
     self._events_task = Some(task);
+  }
+
+  /// Applies every event still queued (or riding the commit floor) so a
+  /// boundary never overtakes the chunks that streamed before it.
+  pub(crate) fn drain_pending_events(&mut self, cx: &mut Context<Self>) {
+    let Some(rx) = self.events_rx.clone() else {
+      return;
+    };
+    while let Ok(event) = rx.try_recv() {
+      self.on_event(event, cx);
+    }
   }
 
   pub(crate) fn start_permission_forwarder(
@@ -67,22 +136,43 @@ impl AgentChatPanel {
   }
 
   /// Repaints the tool row embedding a terminal whenever its state changes.
+  /// PTY floods (builds, test runs) ride the same commit floor as chunks.
   pub(crate) fn start_terminal_forwarder(
     &mut self,
     rx: async_channel::Receiver<String>,
     cx: &mut Context<Self>,
   ) {
     let task = cx.spawn(async move |this, cx| {
-      while let Ok(terminal_id) = rx.recv().await {
-        let _ = this.update(cx, |panel, cx| {
-          if let Some(item_idx) = panel.items.iter().position(|item| {
-            matches!(item, ChatItem::Tool(t) if t.terminals.iter().any(|id| id == &terminal_id))
-          }) {
-            let list_ix = panel.list_ix_for_item(item_idx);
-            panel.mark_item_changed_at(list_ix);
+      let window = std::time::Duration::from_millis(STREAM_COMMIT_MS);
+      let mut last_commit: Option<std::time::Instant> = None;
+      while let Ok(first) = rx.recv().await {
+        if let Some(last) = last_commit {
+          let elapsed = last.elapsed();
+          if elapsed < window {
+            cx.background_executor().timer(window - elapsed).await;
+          }
+        }
+        let mut ids = vec![first];
+        while let Ok(id) = rx.try_recv() {
+          if !ids.contains(&id) {
+            ids.push(id);
+          }
+        }
+        let alive = this.update(cx, |panel, cx| {
+          for terminal_id in &ids {
+            if let Some(item_idx) = panel.items.iter().position(|item| {
+              matches!(item, ChatItem::Tool(t) if t.terminals.iter().any(|id| id == terminal_id))
+            }) {
+              let list_ix = panel.list_ix_for_item(item_idx);
+              panel.mark_item_changed_at(list_ix);
+            }
           }
           cx.notify();
         });
+        if alive.is_err() {
+          return;
+        }
+        last_commit = Some(std::time::Instant::now());
       }
     });
     self._terminal_task = Some(task);
@@ -210,6 +300,7 @@ impl AgentChatPanel {
 
     // Chunks that trailed in after the previous turn keep their place
     // ahead of the new prompt instead of being wiped.
+    self.drain_pending_events(cx);
     self.flush_turn_buffers();
     let images = std::mem::take(&mut self.staged_images);
     self.items.push(ChatItem::Message(ChatMessage {
@@ -253,6 +344,7 @@ impl AgentChatPanel {
     };
     // The steered message joins the current turn: no checkpoint, no new
     // turn boundary; prose streamed so far settles ahead of it.
+    self.drain_pending_events(cx);
     self.flush_turn_buffers();
     self.items.push(ChatItem::Message(ChatMessage {
       role: ChatRole::User,
@@ -326,6 +418,7 @@ impl AgentChatPanel {
     {
       let panel = self;
       {
+        panel.drain_pending_events(cx);
         panel.flush_turn_buffers();
         panel.append_turn_summary();
         let mut drain_queue = false;
