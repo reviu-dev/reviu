@@ -577,6 +577,73 @@ fn render_terminal_block(
     .into_any_element()
 }
 
+fn mini_code_block(theme: &gpui_component::Theme) -> gpui::Div {
+  v_flex()
+    .font_family("monospace")
+    .text_xs()
+    .bg(theme.background)
+    .border_1()
+    .border_color(theme.border)
+    .rounded(px(3.))
+    .overflow_hidden()
+}
+
+fn mini_code_row(
+  bg: Hsla,
+  gutter: Option<gpui::AnyElement>,
+  content: gpui::AnyElement,
+) -> gpui::Div {
+  div()
+    .flex()
+    .flex_row()
+    .items_stretch()
+    .w_full()
+    .bg(bg)
+    .children(gutter)
+    .child(content)
+}
+
+fn mini_code_text_cell(bg: Hsla, fg: Hsla, content: gpui::AnyElement) -> gpui::Div {
+  div()
+    .min_w_0()
+    .flex_1()
+    .px_2()
+    .bg(bg)
+    .text_color(fg)
+    .child(content)
+}
+
+fn mini_code_line_number_cell(
+  text: String,
+  width: gpui::Pixels,
+  theme: &gpui_component::Theme,
+) -> gpui::Div {
+  div()
+    .w(width)
+    .flex_shrink_0()
+    .text_right()
+    .text_color(theme.muted_foreground.opacity(0.72))
+    .child(text)
+}
+
+fn mini_code_gutter(
+  width: gpui::Pixels,
+  bg: Option<Hsla>,
+  theme: &gpui_component::Theme,
+  children: Vec<gpui::AnyElement>,
+) -> gpui::Div {
+  h_flex()
+    .items_start()
+    .w(width)
+    .flex_shrink_0()
+    .gap_1()
+    .px_2()
+    .border_r_1()
+    .border_color(theme.border.opacity(0.45))
+    .when_some(bg, |this, bg| this.bg(bg))
+    .children(children)
+}
+
 fn render_numbered_tool_output(
   output: &ToolOutput,
   start_line: u32,
@@ -588,15 +655,7 @@ fn render_numbered_tool_output(
   let ui_theme = ui::Theme::new(theme.is_dark());
   let syntax_theme = ui_theme.syntax();
   let mono_font = mono_font_for(theme);
-  let mut body = v_flex()
-    .font_family("monospace")
-    .text_xs()
-    .bg(theme.background)
-    .border_1()
-    .border_color(theme.border)
-    .rounded(px(3.))
-    .overflow_hidden()
-    .py_1();
+  let mut body = mini_code_block(theme).py_1();
 
   for (line_idx, range) in visible_output_line_ranges(&output.text, visible)
     .into_iter()
@@ -612,43 +671,33 @@ fn render_numbered_tool_output(
       &syntax_theme,
     );
     let text_id = text_id_base | line_idx as u64;
-    body = body.child(
-      div()
-        .flex()
-        .flex_row()
-        .items_stretch()
-        .w_full()
-        .child(
-          h_flex()
-            .items_start()
-            .w(px(54.))
-            .flex_shrink_0()
-            .px_2()
-            .border_r_1()
-            .border_color(theme.border.opacity(0.45))
-            .text_color(theme.muted_foreground.opacity(0.72))
-            .child(
-              div()
-                .w_full()
-                .text_right()
-                .child((start_line + line_idx as u32).to_string()),
-            ),
-        )
-        .child(
-          div()
-            .min_w_0()
-            .flex_1()
-            .px_2()
-            .text_color(theme.foreground)
-            .whitespace_normal()
-            .child(selectable_text::SelectableText::new(
-              text_id,
-              mini_diff_line_text_for_layout(line_text),
-              runs,
-              registry.clone(),
-            )),
-        ),
+    let gutter = mini_code_gutter(
+      px(54.),
+      None,
+      theme,
+      vec![
+        mini_code_line_number_cell((start_line + line_idx as u32).to_string(), px(38.), theme)
+          .into_any_element(),
+      ],
     );
+    let content = mini_code_text_cell(
+      theme.background,
+      theme.foreground,
+      div()
+        .whitespace_normal()
+        .child(selectable_text::SelectableText::new(
+          text_id,
+          mini_diff_line_text_for_layout(line_text),
+          runs,
+          registry.clone(),
+        ))
+        .into_any_element(),
+    );
+    body = body.child(mini_code_row(
+      theme.background,
+      Some(gutter.into_any_element()),
+      content.into_any_element(),
+    ));
   }
 
   body.into_any_element()
@@ -798,14 +847,7 @@ pub(crate) fn render_tool_call(
           } else {
             total.min(MAX_DIFF_LINES_COLLAPSED)
           };
-          let mut body = v_flex()
-            .font_family("monospace")
-            .text_xs()
-            .bg(theme.background)
-            .border_1()
-            .border_color(theme.border)
-            .rounded(px(3.))
-            .overflow_hidden();
+          let mut body = mini_code_block(theme);
           let ui_theme = ui::Theme::new(theme.is_dark());
           let syntax_theme = ui_theme.syntax();
           let mono_font = mono_font_for(theme);
@@ -832,48 +874,32 @@ pub(crate) fn render_tool_call(
               ),
             };
             let line_number = |line: Option<u32>| {
-              div()
-                .w(px(30.))
-                .flex_shrink_0()
-                .text_right()
-                .text_color(theme.muted_foreground.opacity(0.72))
-                .child(line.map(|line| line.to_string()).unwrap_or_default())
+              mini_code_line_number_cell(
+                line.map(|line| line.to_string()).unwrap_or_default(),
+                px(30.),
+                theme,
+              )
             };
             let line_gutter = |old_line: Option<u32>, new_line: Option<u32>| {
-              h_flex()
-                .items_start()
-                .w(px(70.))
-                .flex_shrink_0()
-                .gap_1()
-                .px_2()
-                .border_r_1()
-                .border_color(theme.border.opacity(0.45))
-                .bg(bg)
-                .child(line_number(old_line))
-                .child(line_number(new_line))
+              mini_code_gutter(
+                px(70.),
+                Some(bg),
+                theme,
+                vec![
+                  line_number(old_line).into_any_element(),
+                  line_number(new_line).into_any_element(),
+                ],
+              )
             };
             if empty_creation {
-              body = body.child(
-                div()
-                  .flex()
-                  .flex_row()
-                  .items_stretch()
-                  .w_full()
-                  .bg(bg)
-                  .when(show_line_numbers, |this| {
-                    this.child(line_gutter(line.old_line, line.new_line))
-                  })
-                  .child(
-                    div()
-                      .min_w_0()
-                      .flex_1()
-                      .px_2()
-                      .bg(bg)
-                      .text_color(theme.muted_foreground)
-                      .italic()
-                      .child("(empty file)"),
-                  ),
+              let gutter = show_line_numbers
+                .then(|| line_gutter(line.old_line, line.new_line).into_any_element());
+              let content = mini_code_text_cell(
+                bg,
+                theme.muted_foreground,
+                div().italic().child("(empty file)").into_any_element(),
               );
+              body = body.child(mini_code_row(bg, gutter, content.into_any_element()));
               continue;
             }
             let layout_text = mini_diff_line_text_for_layout(&line.text);
@@ -894,26 +920,13 @@ pub(crate) fn render_tool_call(
                 .child(StyledText::new(SharedString::from(line.text.clone())).with_runs(runs))
                 .into_any_element()
             };
-            body = body.child(
-              div()
-                .flex()
-                .flex_row()
-                .items_stretch()
-                .w_full()
-                .bg(bg)
-                .when(show_line_numbers, |this| {
-                  this.child(line_gutter(line.old_line, line.new_line))
-                })
-                .child(
-                  div()
-                    .min_w_0()
-                    .flex_1()
-                    .px_2()
-                    .bg(bg)
-                    .text_color(fg)
-                    .child(text_col),
-                ),
-            );
+            let gutter = show_line_numbers
+              .then(|| line_gutter(line.old_line, line.new_line).into_any_element());
+            body = body.child(mini_code_row(
+              bg,
+              gutter,
+              mini_code_text_cell(bg, fg, text_col).into_any_element(),
+            ));
           }
           block = block.child(body);
           if total > MAX_DIFF_LINES_COLLAPSED {
@@ -993,14 +1006,7 @@ pub(crate) fn render_tool_call(
             mono_font.clone(),
             &syntax_theme,
           );
-          div()
-            .font_family("monospace")
-            .text_xs()
-            .bg(theme.background)
-            .border_1()
-            .border_color(theme.border)
-            .rounded(px(3.))
-            .overflow_hidden()
+          mini_code_block(theme)
             .px_2()
             .py_1()
             .text_color(theme.foreground)
