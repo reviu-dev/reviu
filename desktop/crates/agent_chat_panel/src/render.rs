@@ -2,6 +2,21 @@
 
 use super::*;
 
+/// Wall-clock pulse for live indicators. Sampled at render time so it rides
+/// the repaints the panel already does (stream commits, ticks); a repeating
+/// gpui Animation would request a frame every vsync and redraw the whole
+/// window at display rate for the entire turn.
+pub(crate) fn pulse_opacity(min: f32, max: f32) -> f32 {
+  const PERIOD_MS: f32 = 1400.0;
+  let now_ms = std::time::SystemTime::now()
+    .duration_since(std::time::UNIX_EPOCH)
+    .unwrap_or_default()
+    .as_millis() as f64;
+  let phase = ((now_ms % PERIOD_MS as f64) / PERIOD_MS as f64) as f32;
+  let wave = (phase * std::f32::consts::TAU).sin() * 0.5 + 0.5;
+  min + (max - min) * wave
+}
+
 pub(crate) fn render_selector_item(
   name: SharedString,
   description: Option<SharedString>,
@@ -1279,13 +1294,7 @@ impl Render for AgentChatPanel {
               .text_color(theme.muted_foreground)
               .child(format!("Connecting to {}...", self.backend.label)),
           )
-          .with_animation(
-            "agent-chat-connecting-pulse",
-            gpui::Animation::new(std::time::Duration::from_millis(1400))
-              .repeat()
-              .with_easing(gpui::pulsating_between(0.4, 1.0)),
-            |content, delta| content.opacity(delta),
-          )
+          .opacity(pulse_opacity(0.4, 1.0))
           .into_any_element()
       } else {
         v_flex()
@@ -2283,13 +2292,7 @@ impl AgentChatPanel {
           .text_xs()
           .text_color(label_color)
           .child(verb)
-          .with_animation(
-            "agent-chat-thinking-pulse",
-            gpui::Animation::new(std::time::Duration::from_millis(1400))
-              .repeat()
-              .with_easing(gpui::pulsating_between(0.35, 1.0)),
-            |label, delta| label.opacity(delta),
-          ),
+          .opacity(pulse_opacity(0.35, 1.0)),
       );
     if let Some(e) = elapsed_label {
       row = row.child(div().text_xs().text_color(theme.muted_foreground).child(e));
