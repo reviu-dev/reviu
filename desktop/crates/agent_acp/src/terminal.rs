@@ -231,6 +231,11 @@ pub(crate) fn spawn_terminal(
 ) -> Result<()> {
   let mut cmd = async_process::Command::new(&command);
   cmd.args(&args);
+  // Piped stdio is not a TTY, so tools silence their colors; these opt-ins
+  // bring them back for the terminal cards. The agent's env still overrides.
+  cmd.env("CLICOLOR_FORCE", "1");
+  cmd.env("FORCE_COLOR", "1");
+  cmd.env("CARGO_TERM_COLOR", "always");
   cmd.envs(env);
   cmd.current_dir(&cwd);
   cmd.stdin(std::process::Stdio::null());
@@ -349,6 +354,35 @@ mod tests {
         pending_bytes: Vec::new(),
       },
     );
+  }
+
+  #[cfg(unix)]
+  #[test]
+  fn spawned_commands_get_the_color_forcing_env() {
+    let (tx, _rx) = async_channel::unbounded();
+    let store = Arc::new(TerminalStore::new(tx));
+    spawn_terminal(
+      &store,
+      "t".to_string(),
+      "sh".to_string(),
+      vec![
+        "-c".to_string(),
+        "printf \"$CARGO_TERM_COLOR:$CLICOLOR_FORCE\"".to_string(),
+      ],
+      Vec::new(),
+      std::env::current_dir().expect("cwd"),
+      None,
+    )
+    .expect("spawns");
+    for _ in 0..250 {
+      if store.snapshot("t").is_some_and(|s| s.finished) {
+        break;
+      }
+      std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+    let snap = store.snapshot("t").expect("entry");
+    assert!(snap.finished, "the probe command finished");
+    assert_eq!(snap.output, "always:1");
   }
 
   #[test]
