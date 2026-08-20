@@ -12,6 +12,8 @@ The screen now also repaints at a steady beat while the agent streams instead of
 
 The pulsing "thinking" indicator used to quietly force the whole window to redraw at display refresh rate for the entire turn; it now animates on the same beat as the stream, which removes the last constant CPU drain while the agent works.
 
+Scrolling a conversation full of edits is much lighter too: the small diffs inside tool cards are now drawn as a single block instead of a stack of nested rows, cutting most of the layout work a diff-heavy screen used to redo on every frame.
+
 ### Line Numbers In Read Results
 
 Read tool results in the agent conversation now show file line numbers, so you can refer back to exact lines without reopening the file.

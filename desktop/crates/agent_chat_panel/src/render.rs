@@ -862,7 +862,6 @@ pub(crate) fn render_tool_call(
           } else {
             total.min(MAX_DIFF_LINES_COLLAPSED)
           };
-          let mut body = mini_code_block(theme);
           let ui_theme = ui::Theme::new(theme.is_dark());
           let syntax_theme = ui_theme.syntax();
           let mono_font = mono_font_for(theme);
@@ -875,6 +874,14 @@ pub(crate) fn render_tool_call(
             .iter()
             .take(visible)
             .any(|line| line.old_line.is_some() || line.new_line.is_some());
+          let diff_gutter = |old_line: Option<u32>, new_line: Option<u32>| {
+            SharedString::from(format!(
+              "{:>4} {:>4}",
+              old_line.map(|n| n.to_string()).unwrap_or_default(),
+              new_line.map(|n| n.to_string()).unwrap_or_default()
+            ))
+          };
+          let mut rows = Vec::with_capacity(visible);
           for line in d.lines.iter().take(visible) {
             let (bg, fg, hl_bg) = match line.kind {
               DiffLineKind::Added => (
@@ -888,36 +895,26 @@ pub(crate) fn render_tool_call(
                 ui_theme.diff_word_removed_background(),
               ),
             };
-            let line_number = |line: Option<u32>| {
-              mini_code_line_number_cell(
-                line.map(|line| line.to_string()).unwrap_or_default(),
-                px(30.),
-                theme,
-              )
-            };
-            let line_gutter = |old_line: Option<u32>, new_line: Option<u32>| {
-              mini_code_gutter(
-                px(70.),
-                Some(bg),
-                theme,
-                vec![
-                  line_number(old_line).into_any_element(),
-                  line_number(new_line).into_any_element(),
-                ],
-              )
-            };
+            let gutter = show_line_numbers.then(|| diff_gutter(line.old_line, line.new_line));
             if empty_creation {
-              let gutter = show_line_numbers
-                .then(|| line_gutter(line.old_line, line.new_line).into_any_element());
-              let content = mini_code_text_cell(
-                bg,
-                theme.muted_foreground,
-                div().italic().child("(empty file)").into_any_element(),
-              );
-              body = body.child(mini_code_row(bg, gutter, content.into_any_element()));
+              rows.push(code_lines::CodeLineRow {
+                gutter,
+                text: "(empty file)".into(),
+                runs: vec![TextRun {
+                  len: "(empty file)".len(),
+                  font: Font {
+                    style: FontStyle::Italic,
+                    ..mono_font.clone()
+                  },
+                  color: theme.muted_foreground,
+                  background_color: None,
+                  underline: None,
+                  strikethrough: None,
+                }],
+                band: bg,
+              });
               continue;
             }
-            let layout_text = mini_diff_line_text_for_layout(&line.text);
             let runs = build_text_runs(
               &line.text,
               &line.spans,
@@ -927,22 +924,22 @@ pub(crate) fn render_tool_call(
               Some(hl_bg),
               &mono_font,
             );
-            let text_col: gpui::AnyElement = if runs.is_empty() {
-              div().flex_1().child(layout_text).into_any_element()
-            } else {
-              div()
-                .flex_1()
-                .child(StyledText::new(SharedString::from(line.text.clone())).with_runs(runs))
-                .into_any_element()
-            };
-            let gutter = show_line_numbers
-              .then(|| line_gutter(line.old_line, line.new_line).into_any_element());
-            body = body.child(mini_code_row(
-              bg,
+            rows.push(code_lines::CodeLineRow {
               gutter,
-              mini_code_text_cell(bg, fg, text_col).into_any_element(),
-            ));
+              text: mini_diff_line_text_for_layout(&line.text),
+              runs,
+              band: bg,
+            });
           }
+          let gutter_width = if show_line_numbers { px(70.) } else { px(0.) };
+          let body = mini_code_block(theme).child(code_lines::CodeLines::new(
+            rows,
+            gutter_width,
+            theme.muted_foreground.opacity(0.72),
+            theme.border.opacity(0.45),
+            theme.foreground,
+            mono_font,
+          ));
           block = block.child(body);
           if total > MAX_DIFF_LINES_COLLAPSED {
             let remaining = total.saturating_sub(visible);

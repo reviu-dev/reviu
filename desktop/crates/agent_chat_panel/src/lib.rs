@@ -1,4 +1,5 @@
 mod code_block;
+mod code_lines;
 mod transcript;
 use transcript::*;
 mod prompt;
@@ -42,11 +43,10 @@ use agent_client_protocol::schema::{
 use agent_registry::{AgentId, Registry, RegistryAgent};
 use futures::future::BoxFuture;
 use gpui::Anchor;
-use gpui::AnimationExt as _;
 use gpui::{
   AnyElement, App, Context, Empty, Entity, EntityInputHandler as _, FocusHandle, Focusable, Font,
   FontStyle, FontWeight, Hsla, IntoElement, MouseButton, ParentElement, Render, SharedString,
-  Styled, StyledText, Task, TextRun, Window, deferred, div, prelude::*, px,
+  Styled, Task, TextRun, Window, deferred, div, prelude::*, px,
 };
 use gpui_component::{
   ActiveTheme as _, Disableable as _, IconName, Sizable as _,
