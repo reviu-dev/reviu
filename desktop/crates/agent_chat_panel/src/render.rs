@@ -1384,7 +1384,7 @@ impl Render for AgentChatPanel {
               .when(self.show_conversation_controls, |this| {
                 this.child({
                   let entity = cx.entity().downgrade();
-                  let conversations = self.list_conversations();
+                  let conversations = self.list_conversations(cx);
                   let current_id = self.current_conv.id.clone();
                   Button::new("agent-chat-history")
                     .icon(UiIconName::History)

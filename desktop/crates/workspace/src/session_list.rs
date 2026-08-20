@@ -47,6 +47,8 @@ pub enum SessionListEvent {
 pub struct SessionList {
   conversations: Vec<ConversationMeta>,
   current_id: String,
+  /// Row still hydrating after a click; shows a spinner in its trailing slot.
+  loading_id: Option<String>,
 }
 
 impl SessionList {
@@ -54,6 +56,14 @@ impl SessionList {
     Self {
       conversations: Vec::new(),
       current_id: String::new(),
+      loading_id: None,
+    }
+  }
+
+  pub fn set_loading(&mut self, loading_id: Option<String>, cx: &mut Context<Self>) {
+    if self.loading_id != loading_id {
+      self.loading_id = loading_id;
+      cx.notify();
     }
   }
 
@@ -158,9 +168,11 @@ impl Render for SessionList {
       .enumerate()
       .map(|(ix, meta)| {
         let is_current = meta.id == self.current_id;
+        let is_loading = self.loading_id.as_deref() == Some(meta.id.as_str());
         let id = meta.id.clone();
         let delete_id = meta.id.clone();
         let title = session_row_title(meta);
+        let preview = meta.preview.clone();
         let time = format_relative_secs(meta.updated_at_secs, now);
         let group_name = SharedString::from(format!("session-row-{}", meta.id));
 
@@ -200,13 +212,18 @@ impl Render for SessionList {
                   .flex()
                   .justify_end()
                   .items_center()
-                  .child(
+                  .child(if is_loading {
+                    div()
+                      .child(gpui_component::spinner::Spinner::new().xsmall())
+                      .into_any_element()
+                  } else {
                     div()
                       .text_xs()
                       .text_color(theme.muted_foreground)
                       .group_hover(group_name.clone(), |this| this.opacity(0.0))
-                      .child(time),
-                  )
+                      .child(time)
+                      .into_any_element()
+                  })
                   .child(
                     div()
                       .absolute()
@@ -230,6 +247,15 @@ impl Render for SessionList {
                   ),
               ),
           )
+          .when(!preview.is_empty(), |this| {
+            this.child(
+              div()
+                .text_xs()
+                .truncate()
+                .text_color(theme.muted_foreground)
+                .child(preview),
+            )
+          })
       })
       .collect();
 
@@ -293,6 +319,7 @@ mod tests {
       title: title.to_string(),
       message_count: 0,
       session_id: None,
+      preview: String::new(),
     }
   }
 
@@ -329,6 +356,7 @@ mod tests {
       title: id.to_string(),
       message_count: 1,
       session_id: None,
+      preview: String::new(),
     }
   }
 

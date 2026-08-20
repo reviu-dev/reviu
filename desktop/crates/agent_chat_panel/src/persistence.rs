@@ -3,6 +3,10 @@ use std::path::PathBuf;
 #[allow(clippy::wildcard_imports)]
 use super::*;
 
+/// Bump when the on-disk shape changes; readers dispatch on it. Version 0 is
+/// the tag-less legacy format.
+pub(crate) const CONVERSATION_FORMAT_VERSION: u32 = 1;
+
 #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct ConversationMeta {
   pub id: String,
@@ -12,6 +16,9 @@ pub struct ConversationMeta {
   pub message_count: usize,
   #[serde(default)]
   pub session_id: Option<String>,
+  /// First line of the last message, for the sidebar row.
+  #[serde(default)]
+  pub preview: String,
 }
 
 pub(crate) fn now_secs() -> u64 {
@@ -42,7 +49,20 @@ pub(crate) fn new_conversation_meta() -> ConversationMeta {
     title: String::new(),
     message_count: 0,
     session_id: None,
+    preview: String::new(),
   }
+}
+
+/// First line of the last message, truncated for a sidebar row.
+pub(crate) fn preview_of(items: &[ChatItem]) -> String {
+  items
+    .iter()
+    .rev()
+    .find_map(|item| match item {
+      ChatItem::Message(m) if !matches!(m.role, ChatRole::System) => Some(truncate_title(&m.text)),
+      _ => None,
+    })
+    .unwrap_or_default()
 }
 
 pub(crate) fn truncate_title(text: &str) -> String {
@@ -165,6 +185,33 @@ fn location_matches_diff_path(location: &std::path::Path, diff_path: &str) -> bo
 #[derive(serde::Deserialize)]
 struct PersistedConversationMetaOnly {
   meta: ConversationMeta,
+}
+
+#[derive(serde::Serialize, serde::Deserialize)]
+struct IndexFile {
+  #[serde(default)]
+  version: u32,
+  conversations: Vec<ConversationMeta>,
+}
+
+pub(crate) fn index_path(dir: &std::path::Path) -> PathBuf {
+  dir.join("index.json")
+}
+
+pub(crate) fn read_index(dir: &std::path::Path) -> Option<Vec<ConversationMeta>> {
+  let raw = std::fs::read_to_string(index_path(dir)).ok()?;
+  let parsed: IndexFile = serde_json::from_str(&raw).ok()?;
+  Some(parsed.conversations)
+}
+
+pub(crate) fn write_index(dir: &std::path::Path, conversations: &[ConversationMeta]) {
+  let file = IndexFile {
+    version: CONVERSATION_FORMAT_VERSION,
+    conversations: conversations.to_vec(),
+  };
+  if let Ok(json) = serde_json::to_string(&file) {
+    let _ = std::fs::write(index_path(dir), json);
+  }
 }
 
 pub(crate) fn list_conversations_in(dir: &std::path::Path) -> Vec<ConversationMeta> {

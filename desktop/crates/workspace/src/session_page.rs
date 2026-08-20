@@ -427,23 +427,25 @@ impl SessionPage {
     };
     let panel = panel.read(cx);
     let current_id = panel.current_conversation().id.clone();
+    let loading_id = panel.loading_conversation_id().map(str::to_string);
     // An empty draft is not on disk; the sidebar must not invent a row for it.
     let current = panel
       .has_persistable_content()
       .then(|| panel.current_conversation().clone());
-    self
-      .session_list
-      .update(cx, |list, cx| list.upsert_current(current, current_id, cx));
+    self.session_list.update(cx, |list, cx| {
+      list.set_loading(loading_id, cx);
+      list.upsert_current(current, current_id, cx);
+    });
   }
 
-  /// Full re-read of the conversation directory, for lifecycle changes
+  /// Full refresh from the store's meta index, for lifecycle changes
   /// (panel created, conversation created/loaded/deleted, repo switched).
   fn refresh_session_list(&mut self, cx: &mut Context<Self>) {
     let (conversations, current_id) = match self.agent_chat_view.as_ref() {
       Some(panel) => {
         let panel = panel.read(cx);
         (
-          panel.list_conversations(),
+          panel.list_conversations(cx),
           panel.current_conversation().id.clone(),
         )
       }

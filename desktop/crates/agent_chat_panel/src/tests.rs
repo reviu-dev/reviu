@@ -1,4 +1,5 @@
 use super::*;
+use crate::persistence::{list_conversations_in, load_conversation_file};
 use agent_acp::PermissionPromptOption;
 use agent_client_protocol::schema::{
   SessionConfigSelect, SessionConfigSelectOption, ToolCallContent, ToolCallLocation,
@@ -687,7 +688,7 @@ async fn a_scheduled_persist_waits_for_the_throttle_window(cx: &mut gpui::TestAp
   let dir = temp_dir("agent-persist-throttle");
   let (panel, cx) = add_panel_window(cx);
   panel.update(cx, |panel, cx| {
-    panel.state_dir = Some(dir.clone());
+    panel.store = Some(cx.new(|_| crate::store::ConversationStore::new(dir.clone())));
     panel.items = vec![user_message("hi")];
     panel.schedule_persist(cx);
     panel.schedule_persist(cx);
@@ -713,20 +714,161 @@ async fn a_direct_persist_supersedes_the_armed_throttle(cx: &mut gpui::TestAppCo
   let dir = temp_dir("agent-persist-direct");
   let (panel, cx) = add_panel_window(cx);
   panel.update(cx, |panel, cx| {
-    panel.state_dir = Some(dir.clone());
+    panel.store = Some(cx.new(|_| crate::store::ConversationStore::new(dir.clone())));
     panel.items = vec![user_message("hi")];
     panel.schedule_persist(cx);
-    panel.persist_state();
-    assert!(
-      panel._persist_task.is_none(),
-      "the direct write disarms the timer"
-    );
+    panel.persist_state(cx);
   });
+  cx.run_until_parked();
   let conv_id = panel.read_with(cx, |panel, _| panel.current_conv.id.clone());
   assert!(
     dir.join(format!("{conv_id}.json")).exists(),
-    "the direct write lands immediately"
+    "the direct write lands without waiting for the throttle window"
   );
+  panel.read_with(cx, |panel, cx| {
+    let pending = panel
+      .store
+      .as_ref()
+      .is_some_and(|store| store.read(cx).has_pending_save());
+    assert!(!pending, "nothing stays queued after the direct write");
+  });
+  std::fs::remove_dir_all(&dir).ok();
+}
+
+#[gpui::test]
+async fn a_legacy_file_without_version_loads_and_rewrites_versioned(cx: &mut gpui::TestAppContext) {
+  let dir = temp_dir("agent-store-version");
+  std::fs::create_dir_all(&dir).unwrap();
+  let legacy = r#"{"meta":{"id":"old-conv","started_at_secs":1,"updated_at_secs":2,"title":"old","message_count":1},"items":[{"type":"Message","role":"User","text":"hi","images":0}]}"#;
+  std::fs::write(dir.join("old-conv.json"), legacy).unwrap();
+  std::fs::write(dir.join("active.txt"), "old-conv").unwrap();
+
+  let (meta, items, ..) =
+    load_conversation_file(&dir.join("old-conv.json")).expect("legacy file loads");
+  assert_eq!(meta.id, "old-conv");
+  assert_eq!(items.len(), 1);
+
+  let (panel, cx) = add_panel_window(cx);
+  panel.update(cx, |panel, cx| {
+    panel.store = Some(cx.new(|_| crate::store::ConversationStore::new(dir.clone())));
+    panel.current_conv = meta;
+    panel.items = items;
+    panel.persist_state(cx);
+  });
+  cx.run_until_parked();
+  let raw = std::fs::read_to_string(dir.join("old-conv.json")).unwrap();
+  assert!(
+    raw.contains("\"version\":1"),
+    "the rewrite carries the format version"
+  );
+  std::fs::remove_dir_all(&dir).ok();
+}
+
+#[gpui::test]
+async fn the_listing_comes_from_the_index_without_reading_transcripts(
+  cx: &mut gpui::TestAppContext,
+) {
+  let dir = temp_dir("agent-store-index");
+  let (panel, cx) = add_panel_window(cx);
+  panel.update(cx, |panel, cx| {
+    panel.store = Some(cx.new(|_| crate::store::ConversationStore::new(dir.clone())));
+    panel.items = vec![user_message("question"), agent_message("answer")];
+    panel.persist_state(cx);
+  });
+  cx.run_until_parked();
+  let conv_id = panel.read_with(cx, |panel, _| panel.current_conv.id.clone());
+
+  // Corrupt the transcript: a listing that parsed it would lose the row.
+  std::fs::write(dir.join(format!("{conv_id}.json")), "not json").unwrap();
+  let (panel2, cx) = add_panel_window(cx);
+  let listed = panel2.update(cx, |panel, cx| {
+    panel.store = Some(cx.new(|_| crate::store::ConversationStore::new(dir.clone())));
+    panel.list_conversations(cx)
+  });
+  assert_eq!(listed.len(), 1, "the index alone serves the listing");
+  assert_eq!(listed[0].id, conv_id);
+  assert_eq!(
+    listed[0].preview, "answer",
+    "the index row carries the last-message preview"
+  );
+
+  // Without the index the store falls back to scanning the files.
+  std::fs::remove_file(crate::persistence::index_path(&dir)).unwrap();
+  let rebuilt = crate::store::ConversationStore::new(dir.clone()).list();
+  assert!(
+    rebuilt.is_empty(),
+    "the corrupted transcript cannot be scanned, so the rebuild is empty"
+  );
+  std::fs::remove_dir_all(&dir).ok();
+}
+
+#[gpui::test]
+async fn coalesced_saves_land_the_last_snapshot(cx: &mut gpui::TestAppContext) {
+  let dir = temp_dir("agent-store-lastwins");
+  let (panel, cx) = add_panel_window(cx);
+  panel.update(cx, |panel, cx| {
+    panel.store = Some(cx.new(|_| crate::store::ConversationStore::new(dir.clone())));
+    panel.items = vec![user_message("first wording")];
+    panel.persist_state(cx);
+    panel.items = vec![user_message("second wording")];
+    panel.persist_state(cx);
+  });
+  cx.run_until_parked();
+  let conv_id = panel.read_with(cx, |panel, _| panel.current_conv.id.clone());
+  let (_, items, ..) =
+    load_conversation_file(&dir.join(format!("{conv_id}.json"))).expect("reloads");
+  let ChatItem::Message(m) = &items[0] else {
+    panic!("message expected");
+  };
+  assert_eq!(m.text, "second wording", "the last snapshot wins");
+  std::fs::remove_dir_all(&dir).ok();
+}
+
+#[gpui::test]
+async fn switching_conversations_hydrates_in_the_background(cx: &mut gpui::TestAppContext) {
+  set_backend_command_override(Some("/nonexistent-agent-binary".to_string()));
+  let dir = temp_dir("agent-store-switch");
+  let (panel, cx) = add_panel_window(cx);
+  let first_id = panel.update(cx, |panel, cx| {
+    panel.store = Some(cx.new(|_| crate::store::ConversationStore::new(dir.clone())));
+    panel.items = vec![user_message("first conversation")];
+    panel.persist_state(cx);
+    panel.current_conv.id.clone()
+  });
+  cx.run_until_parked();
+
+  panel.update(cx, |panel, cx| {
+    panel.new_conversation(cx);
+    panel.items = vec![user_message("second conversation")];
+    panel.persist_state(cx);
+  });
+  cx.run_until_parked();
+
+  panel.update(cx, |panel, cx| {
+    let first_id = first_id.clone();
+    panel.load_conversation(&first_id, cx);
+    assert_eq!(
+      panel.loading_conversation_id(),
+      Some(first_id.as_str()),
+      "the target row is marked as hydrating"
+    );
+    let ChatItem::Message(m) = &panel.items[0] else {
+      panic!("message expected");
+    };
+    assert_eq!(
+      m.text, "second conversation",
+      "the current transcript stays on screen during the load"
+    );
+  });
+  cx.run_until_parked();
+  panel.read_with(cx, |panel, _| {
+    assert_eq!(panel.loading_conversation_id(), None);
+    let ChatItem::Message(m) = &panel.items[0] else {
+      panic!("message expected");
+    };
+    assert_eq!(m.text, "first conversation", "the switch landed");
+  });
+  set_backend_command_override(None);
   std::fs::remove_dir_all(&dir).ok();
 }
 
@@ -735,10 +877,11 @@ async fn the_auto_approve_flag_survives_a_conversation_reload(cx: &mut gpui::Tes
   let dir = temp_dir("agent-auto-approve");
   let (panel, cx) = add_panel_window(cx);
   panel.update(cx, |panel, cx| {
-    panel.state_dir = Some(dir.clone());
+    panel.store = Some(cx.new(|_| crate::store::ConversationStore::new(dir.clone())));
     panel.items = vec![user_message("hi")];
     panel.toggle_auto_approve(cx);
   });
+  cx.run_until_parked();
   let conv_id = panel.read_with(cx, |panel, _| panel.current_conv.id.clone());
   let (_, _, _, _, auto_approve) =
     load_conversation_file(&dir.join(format!("{conv_id}.json"))).expect("reloads");
@@ -751,6 +894,7 @@ fn persisted_tools_backfill_line_numbers_and_highlights_on_load() {
   let conv_id = "legacy-lines";
   let path = dir.join(format!("{conv_id}.json"));
   let conversation = PersistedConversation {
+    version: crate::persistence::CONVERSATION_FORMAT_VERSION,
     meta: ConversationMeta {
       id: conv_id.to_string(),
       started_at_secs: 0,
@@ -758,6 +902,7 @@ fn persisted_tools_backfill_line_numbers_and_highlights_on_load() {
       title: "legacy".to_string(),
       message_count: 1,
       session_id: None,
+      preview: String::new(),
     },
     items: vec![PersistedChatItem::Tool(ToolCallView {
       id: ToolCallId::new(std::sync::Arc::from("tool-1")),
@@ -1286,6 +1431,7 @@ fn list_conversations_sorted_by_updated_at_desc() {
   let dir = temp_dir("agent-sort");
   let mk = |id: &str, started: u64, updated: u64| {
     let conv = PersistedConversation {
+      version: crate::persistence::CONVERSATION_FORMAT_VERSION,
       meta: ConversationMeta {
         id: id.to_string(),
         started_at_secs: started,
@@ -1293,6 +1439,7 @@ fn list_conversations_sorted_by_updated_at_desc() {
         title: id.to_string(),
         message_count: 1,
         session_id: None,
+        preview: String::new(),
       },
       items: vec![PersistedChatItem::Message(ChatMessage {
         role: ChatRole::User,
@@ -2265,7 +2412,7 @@ async fn permissions_survive_a_reload_with_dead_buttons(cx: &mut gpui::TestAppCo
   let (panel, cx) = add_panel_window(cx);
   panel.update(cx, |panel, cx| {
     panel.status = Status::Ready;
-    panel.state_dir = Some(dir.clone());
+    panel.store = Some(cx.new(|_| crate::store::ConversationStore::new(dir.clone())));
     let update = update_fields(
       ToolCallUpdateFields::new()
         .kind(ToolKind::Execute)
@@ -2286,9 +2433,10 @@ async fn permissions_survive_a_reload_with_dead_buttons(cx: &mut gpui::TestAppCo
         auto: false,
       })),
     ];
-    panel.persist_state();
+    panel.persist_state(cx);
     cx.notify();
   });
+  cx.run_until_parked();
 
   let conv_id = panel.read_with(cx, |panel, _| panel.current_conv.id.clone());
   let (_, items, _, _, _) =
@@ -2312,9 +2460,10 @@ async fn permissions_survive_a_reload_with_dead_buttons(cx: &mut gpui::TestAppCo
     if let Some(ChatItem::Permission(p)) = panel.items.get_mut(1) {
       p.resolved = Some("allow".to_string());
     }
-    panel.persist_state();
+    panel.persist_state(cx);
     cx.notify();
   });
+  cx.run_until_parked();
   let (_, items, _, _, _) =
     load_conversation_file(&dir.join(format!("{conv_id}.json"))).expect("reloads");
   let ChatItem::Permission(p) = &items[1] else {
@@ -3002,7 +3151,7 @@ async fn group_pins_survive_a_reload(cx: &mut gpui::TestAppContext) {
   let (panel, cx) = add_panel_window(cx);
   panel.update(cx, |panel, cx| {
     panel.status = Status::Ready;
-    panel.state_dir = Some(dir.clone());
+    panel.store = Some(cx.new(|_| crate::store::ConversationStore::new(dir.clone())));
     panel.items = vec![
       user_message("go"),
       ChatItem::Tool(tool_view("t1", ToolKind::Read, ToolCallStatus::Completed)),
@@ -3011,6 +3160,7 @@ async fn group_pins_survive_a_reload(cx: &mut gpui::TestAppContext) {
     panel.sync_list_count();
     panel.toggle_tool_group(1, cx);
   });
+  cx.run_until_parked();
   let conv_id = panel.read_with(cx, |panel, _| panel.current_conv.id.clone());
   let (_, _, _, pins, _) =
     load_conversation_file(&dir.join(format!("{conv_id}.json"))).expect("reloads");

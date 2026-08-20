@@ -82,7 +82,7 @@ impl AgentChatPanel {
       // Channel closed: the agent driver exited (child died or stopped).
       let _ = this.update(cx, |panel, cx| {
         panel.on_agent_disconnected(cx);
-        panel.persist_state();
+        panel.persist_state(cx);
       });
     });
     self._events_task = Some(task);
@@ -311,7 +311,7 @@ impl AgentChatPanel {
     }));
     cx.emit(AgentChatPanelEvent::TurnStarted);
     self.start_turn(cx);
-    self.persist_state();
+    self.persist_state(cx);
     self.sync_list_count();
     self.arm_runway();
     cx.notify();
@@ -352,7 +352,7 @@ impl AgentChatPanel {
       images: 0,
       image_data: Vec::new(),
     }));
-    self.persist_state();
+    self.persist_state(cx);
     self.sync_list_count();
     self.arm_runway();
     cx.notify();
@@ -389,7 +389,7 @@ impl AgentChatPanel {
             }));
           }
         }
-        panel.persist_state();
+        panel.persist_state(cx);
         panel.sync_list_count();
         cx.notify();
       });
@@ -480,7 +480,7 @@ impl AgentChatPanel {
           let next = panel.queued_prompts.remove(0);
           panel.dispatch_prompt(next, cx);
         }
-        panel.persist_state();
+        panel.persist_state(cx);
         panel.sync_list_count();
         cx.emit(AgentChatPanelEvent::TurnFinished);
         panel.refresh_repo_files(cx);

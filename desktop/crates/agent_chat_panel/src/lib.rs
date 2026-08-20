@@ -1,5 +1,6 @@
 mod code_block;
 mod code_lines;
+mod store;
 mod transcript;
 use transcript::*;
 mod prompt;
@@ -21,11 +22,12 @@ use crate::diff::{
   extract_terminals,
 };
 use crate::mention::{DiffMention, MentionCandidate, MentionTrigger, ResolvedMention};
-pub use crate::persistence::{ConversationMeta, state_dir_for_repo};
 use crate::persistence::{
-  list_conversations_in, load_active_conversation, load_conversation_file, new_conversation_meta,
-  now_secs, truncate_title,
+  CONVERSATION_FORMAT_VERSION, LoadedConversation, new_conversation_meta, now_secs, preview_of,
+  truncate_title,
 };
+pub use crate::persistence::{ConversationMeta, state_dir_for_repo};
+use crate::store::{ConversationStore, SaveRequest};
 use agent_acp::{
   AgentEvent, AgentSession, AuthMethodInfo, BackendAvailability, BackendConfig,
   PermissionOptionKind, PermissionPrompt,
@@ -357,6 +359,9 @@ enum PersistedChatItem {
 
 #[derive(serde::Serialize, serde::Deserialize)]
 struct PersistedConversation {
+  /// 0 = legacy tag-less files; readers dispatch on this before parsing moves.
+  #[serde(default)]
+  version: u32,
   meta: ConversationMeta,
   items: Vec<PersistedChatItem>,
   /// Tool-group expand/collapse pins, keyed by the group's first tool id.
@@ -654,7 +659,11 @@ pub struct AgentChatPanel {
   agent_version: Option<String>,
   auth_methods: Vec<AuthMethodInfo>,
   auth_required: bool,
-  state_dir: Option<PathBuf>,
+  store: Option<Entity<ConversationStore>>,
+  /// Conversation being hydrated after a sidebar click, with a generation
+  /// guard so a slow load can't clobber a newer switch.
+  loading_conversation: Option<(String, u64)>,
+  load_generation: u64,
   current_conv: ConversationMeta,
   selection_registry: selectable_text::SelectionRegistry,
   /// Built once: rebuilding extensions busts TextView's parse cache.
@@ -670,7 +679,6 @@ pub struct AgentChatPanel {
   events_rx: Option<async_channel::Receiver<AgentEvent>>,
   _events_task: Option<Task<()>>,
   _permission_task: Option<Task<()>>,
-  _persist_task: Option<Task<()>>,
   _input_sub: Option<gpui::Subscription>,
   show_conversation_controls: bool,
 }
@@ -685,19 +693,7 @@ impl AgentChatPanel {
   ) -> Self {
     let backend = resolve_backend_config(&backend_kind);
     let (input, input_sub) = Self::build_composer_input(window, cx);
-
-    let (current_conv, loaded_items, loaded_index, loaded_pins, loaded_auto_approve) = state_dir
-      .as_deref()
-      .and_then(load_active_conversation)
-      .unwrap_or_else(|| {
-        (
-          new_conversation_meta(),
-          Vec::new(),
-          HashMap::new(),
-          HashMap::new(),
-          false,
-        )
-      });
+    let store = state_dir.map(|dir| cx.new(|_| ConversationStore::new(dir)));
 
     let selection_registry = selectable_text::SelectionRegistry::new();
     let markdown_extensions = code_block::extensions(selection_registry.clone());
@@ -707,12 +703,12 @@ impl AgentChatPanel {
       backend: backend.clone(),
       cwd: cwd.clone(),
       status: Status::Connecting,
-      items: loaded_items,
+      items: Vec::new(),
       repo_files: Arc::new(Vec::new()),
       active_selection: None,
       mention_selected_ix: 0,
       mention_dismissed: None,
-      tool_index: loaded_index,
+      tool_index: HashMap::new(),
       pending_agent: String::new(),
       pending_thought: String::new(),
       queued_prompts: Vec::new(),
@@ -720,8 +716,8 @@ impl AgentChatPanel {
       supports_steering: false,
       staged_images: Vec::new(),
       pending_md_state: None,
-      tool_group_pins: loaded_pins,
-      auto_approve: loaded_auto_approve,
+      tool_group_pins: HashMap::new(),
+      auto_approve: false,
       terminal_store: None,
       _terminal_task: None,
       runway_active: false,
@@ -750,8 +746,10 @@ impl AgentChatPanel {
       agent_version: None,
       auth_methods: Vec::new(),
       auth_required: false,
-      state_dir,
-      current_conv,
+      store,
+      loading_conversation: None,
+      load_generation: 0,
+      current_conv: new_conversation_meta(),
       selection_registry,
       markdown_extensions,
       available_modes: Vec::new(),
@@ -764,102 +762,60 @@ impl AgentChatPanel {
       events_rx: None,
       _events_task: None,
       _permission_task: None,
-      _persist_task: None,
       _input_sub: Some(input_sub),
       show_conversation_controls: true,
     };
 
     panel.refresh_repo_files(cx);
+    panel.install_runway_release(cx);
+    panel.sync_list_count();
 
-    // Flush a pending throttled write; without this a quit mid-stream loses
-    // the last ~400ms of transcript.
-    cx.on_app_quit(|panel: &mut Self, _| {
-      panel.persist_state();
+    // Flush queued writes on quit; without this a quit mid-stream loses the
+    // last throttle window of transcript.
+    cx.on_app_quit(|panel: &mut Self, cx| {
+      if let Some(store) = panel.store.clone() {
+        store.update(cx, |store, _| store.flush_on_quit());
+      }
       async {}
     })
     .detach();
 
-    if let BackendAvailability::MissingBinary {
-      command,
-      install_hint,
-    } = backend.check_availability()
-    {
-      panel.status = Status::MissingBinary {
-        command,
-        hint: install_hint,
-      };
-      panel.sync_list_count();
-      return panel;
-    }
-
-    let executor = cx.background_executor().clone();
-    let spawner = move |fut: BoxFuture<'static, ()>| {
-      executor.spawn(fut).detach();
-    };
-
-    let load_session_id = panel.current_conv.session_id.clone();
-    let task = cx.spawn(async move |this, cx| {
-      let result = match load_session_id {
-        Some(id) => AgentSession::spawn_with_load(backend, cwd, id, spawner).await,
-        None => AgentSession::spawn(backend, cwd, spawner).await,
-      };
-      match result {
-        Ok(mut session) => {
-          let info = session.init_info().clone();
-          let events = session.take_events();
-          let permissions = session.take_permission_prompts();
-          let terminal_updates = session.take_terminal_updates();
-          let terminal_store = session.terminal_store();
-          let session = Arc::new(session);
+    match panel.store.clone() {
+      // The active conversation hydrates off the main thread, and the session
+      // connects after it so a saved session id can resume.
+      Some(store) => {
+        let load = store.read(cx).load_active(cx);
+        cx.spawn(async move |this, cx| {
+          let loaded = load.await;
           let _ = this.update(cx, |panel, cx| {
-            panel.session = Some(session.clone());
-            panel.status = Status::Ready;
-            panel.supports_images = info.supports_images;
-            panel.supports_steering = info.supports_steering;
-            panel.agent_version = info.version;
-            panel.auth_methods = info.auth_methods;
-            panel.available_modes = info.available_modes;
-            panel.current_mode_id = info.current_mode_id;
-            panel.available_models = info.available_models;
-            panel.current_model_id = info.current_model_id;
-            panel.set_config_options(info.config_options);
-            panel.apply_saved_model_choice(cx);
-            if let Some(sid) = info.session_id {
-              panel.current_conv.session_id = Some(sid);
-              panel.persist_state();
+            if let Some(loaded) = loaded {
+              panel.apply_loaded_conversation(loaded);
             }
-            if let Some(rx) = events {
-              panel.start_event_forwarder(rx, cx);
-            }
-            if let Some(rx) = permissions {
-              panel.start_permission_forwarder(rx, cx);
-            }
-            panel.terminal_store = Some(terminal_store.clone());
-            if let Some(rx) = terminal_updates {
-              panel.start_terminal_forwarder(rx, cx);
-            }
-            if let Some(text) = panel.resubmit_after_connect.take() {
-              panel.dispatch_prompt(text, cx);
-            }
-            panel.sync_list_count();
+            panel.respawn_session(cx);
             cx.notify();
           });
-        }
-        Err(e) => {
-          let msg = format!("{e}");
-          let _ = this.update(cx, |panel, cx| {
-            panel.status = Status::Error(msg);
-            panel.sync_list_count();
-            cx.notify();
-          });
-        }
+        })
+        .detach();
       }
-    });
-    panel._connect_task = Some(task);
-    panel.install_runway_release(cx);
-    panel.sync_list_count();
-    panel.start_tick_task(cx);
+      None => panel.respawn_session(cx),
+    }
     panel
+  }
+
+  /// Replaces the in-memory conversation with a hydrated one; buffers and
+  /// runway state reset like any conversation switch.
+  fn apply_loaded_conversation(&mut self, loaded: LoadedConversation) {
+    let (meta, items, index, pins, auto_approve) = loaded;
+    self.current_conv = meta;
+    self.items = items;
+    self.tool_index = index;
+    self.tool_group_pins = pins;
+    self.auto_approve = auto_approve;
+    self.pending_agent.clear();
+    self.pending_md_state = None;
+    self.pending_thought.clear();
+    self.clear_runway();
+    self.sync_list_count();
   }
 
   /// A wheel scroll is the reader taking over: release the runway hold.
@@ -1165,7 +1121,9 @@ impl AgentChatPanel {
       agent_version: None,
       auth_methods: Vec::new(),
       auth_required: false,
-      state_dir: None,
+      store: None,
+      loading_conversation: None,
+      load_generation: 0,
       current_conv: new_conversation_meta(),
       selection_registry,
       markdown_extensions,
@@ -1179,7 +1137,6 @@ impl AgentChatPanel {
       events_rx: None,
       _events_task: None,
       _permission_task: None,
-      _persist_task: None,
       _input_sub: Some(input_sub),
       show_conversation_controls: true,
     };
@@ -1507,7 +1464,7 @@ impl AgentChatPanel {
         self.answer_permission(prompt_id, option_id, cx);
       }
     }
-    self.persist_state();
+    self.persist_state(cx);
     cx.notify();
   }
 
@@ -1974,7 +1931,7 @@ impl AgentChatPanel {
       let list_ix = self.list_ix_for_item(item_ix);
       self.mark_item_changed_at(list_ix);
     }
-    self.persist_state();
+    self.persist_state(cx);
     cx.notify();
   }
 
@@ -2169,7 +2126,7 @@ impl AgentChatPanel {
     });
     place_checkpoint_marker(&mut self.items, marker);
     self.rebuild_tool_index();
-    self.persist_state();
+    self.persist_state(cx);
     self.sync_list_count();
     cx.notify();
   }
@@ -2194,7 +2151,7 @@ impl AgentChatPanel {
     self.pending_thought.clear();
     self.end_turn();
     self.clear_runway();
-    self.persist_state();
+    self.persist_state(cx);
     self.respawn_session(cx);
     self.sync_list_count();
     cx.notify();
@@ -2273,7 +2230,7 @@ impl AgentChatPanel {
     }
     let list_ix = self.list_ix_for_item(idx);
     self.mark_item_changed_at(list_ix);
-    self.persist_state();
+    self.persist_state(cx);
     cx.notify();
   }
 
@@ -2300,7 +2257,7 @@ impl AgentChatPanel {
   }
 
   pub fn new_conversation(&mut self, cx: &mut Context<Self>) {
-    self.persist_state();
+    self.persist_state(cx);
     self.current_conv = new_conversation_meta();
     self.items.clear();
     self.tool_index.clear();
@@ -2318,13 +2275,12 @@ impl AgentChatPanel {
   }
 
   pub fn delete_conversation(&mut self, id: &str, cx: &mut Context<Self>) {
-    let Some(dir) = self.state_dir.clone() else {
+    let Some(store) = self.store.clone() else {
       return;
     };
-    let path = dir.join(format!("{id}.json"));
-    let _ = std::fs::remove_file(&path);
+    store.update(cx, |store, cx| store.delete(id, cx));
     if self.current_conv.id == id {
-      let _ = std::fs::remove_file(dir.join("active.txt"));
+      store.update(cx, |store, cx| store.set_active(None, cx));
       self.current_conv = new_conversation_meta();
       self.items.clear();
       self.tool_index.clear();
@@ -2342,29 +2298,48 @@ impl AgentChatPanel {
     cx.notify();
   }
 
+  /// Switch hydrates in the background: the current conversation stays on
+  /// screen and the sidebar row shows a spinner until its transcript lands.
   pub fn load_conversation(&mut self, id: &str, cx: &mut Context<Self>) {
-    let Some(dir) = self.state_dir.clone() else {
+    let Some(store) = self.store.clone() else {
       return;
     };
-    self.persist_state();
-    let path = dir.join(format!("{id}.json"));
-    let Some((meta, items, index, pins, auto_approve)) = load_conversation_file(&path) else {
-      return;
-    };
-    self.current_conv = meta;
-    self.items = items;
-    self.tool_index = index;
-    self.tool_group_pins = pins;
-    self.auto_approve = auto_approve;
-    self.clear_runway();
-    self.pending_agent.clear();
-    self.pending_md_state = None;
-    self.pending_thought.clear();
-    let _ = std::fs::write(dir.join("active.txt"), &self.current_conv.id);
-    self.respawn_session(cx);
-    self.sync_list_count();
-    cx.emit(AgentChatPanelEvent::ConversationsChanged);
+    self.persist_state(cx);
+    self.load_generation += 1;
+    let generation = self.load_generation;
+    self.loading_conversation = Some((id.to_string(), generation));
+    let load = store.read(cx).load(id, cx);
+    let id = id.to_string();
+    cx.spawn(async move |this, cx| {
+      let loaded = load.await;
+      let _ = this.update(cx, |panel, cx| {
+        if panel.load_generation != generation {
+          return;
+        }
+        panel.loading_conversation = None;
+        let Some(loaded) = loaded else {
+          cx.notify();
+          return;
+        };
+        panel.apply_loaded_conversation(loaded);
+        if let Some(store) = panel.store.clone() {
+          store.update(cx, |store, cx| store.set_active(Some(id.clone()), cx));
+        }
+        panel.respawn_session(cx);
+        cx.emit(AgentChatPanelEvent::ConversationsChanged);
+        cx.notify();
+      });
+    })
+    .detach();
     cx.notify();
+  }
+
+  /// The conversation a sidebar click is still hydrating, if any.
+  pub fn loading_conversation_id(&self) -> Option<&str> {
+    self
+      .loading_conversation
+      .as_ref()
+      .map(|(id, _)| id.as_str())
   }
 
   fn respawn_session(&mut self, cx: &mut Context<Self>) {
@@ -2433,7 +2408,7 @@ impl AgentChatPanel {
             panel.apply_saved_model_choice(cx);
             if let Some(sid) = info.session_id {
               panel.current_conv.session_id = Some(sid);
-              panel.persist_state();
+              panel.persist_state(cx);
             }
             if let Some(rx) = events {
               panel.start_event_forwarder(rx, cx);
@@ -2484,40 +2459,38 @@ impl AgentChatPanel {
     !self.items.is_empty() || !self.pending_agent.is_empty()
   }
 
-  /// Throttled persist for the streaming path: the first call arms a timer,
-  /// later calls ride it, so a busy turn writes every ~400ms instead of per
-  /// chunk. Boundaries (turn end, disconnect, switch) still persist directly.
+  /// Throttled persist for the streaming path: the store coalesces snapshots
+  /// and writes every ~400ms. Boundaries (turn end, disconnect, switch) go
+  /// through `persist_state` and skip the throttle.
   fn schedule_persist(&mut self, cx: &mut Context<Self>) {
-    if self._persist_task.is_some() || self.state_dir.is_none() {
-      return;
-    }
-    let task = cx.spawn(async move |this, cx| {
-      cx.background_executor()
-        .timer(std::time::Duration::from_millis(400))
-        .await;
-      let _ = this.update(cx, |panel, _| panel.persist_state());
-    });
-    self._persist_task = Some(task);
-  }
-
-  fn persist_state(&mut self) {
-    // A direct write supersedes any armed throttle timer.
-    self._persist_task = None;
-    let Some(dir) = self.state_dir.as_ref() else {
+    let Some((store, request)) = self.store.clone().zip(self.build_save_request()) else {
       return;
     };
+    store.update(cx, |store, cx| store.schedule_save(request, cx));
+  }
+
+  fn persist_state(&mut self, cx: &mut Context<Self>) {
+    let Some((store, request)) = self.store.clone().zip(self.build_save_request()) else {
+      return;
+    };
+    store.update(cx, |store, cx| store.save_now(request, cx));
+  }
+
+  /// Snapshot of the conversation for the store; refreshes the meta (count,
+  /// title, preview, timestamp) as a side effect so the sidebar stays true.
+  fn build_save_request(&mut self) -> Option<SaveRequest> {
     // Skip writing while the conversation has no user-visible content yet
     // (avoids polluting disk + History with empty drafts).
     if !self.has_persistable_content() {
-      return;
+      return None;
     }
-    // Update meta count + title before writing.
     self.current_conv.message_count = self
       .items
       .iter()
       .filter(|i| matches!(i, ChatItem::Message(_)))
       .count();
     self.current_conv.updated_at_secs = now_secs();
+    self.current_conv.preview = preview_of(&self.items);
     if self.current_conv.title.is_empty()
       && let Some(first_user) = self.items.iter().find_map(|i| match i {
         ChatItem::Message(m) if matches!(m.role, ChatRole::User) => Some(m.text.clone()),
@@ -2539,30 +2512,28 @@ impl AgentChatPanel {
         ChatItem::TurnSummary(s) => PersistedChatItem::TurnSummary(s.clone()),
       })
       .collect();
-    let _ = std::fs::create_dir_all(dir);
-    let conv = PersistedConversation {
-      meta: self.current_conv.clone(),
-      items: persisted,
-      group_pins: self
-        .tool_group_pins
-        .iter()
-        .map(|(id, expanded)| (id.0.to_string(), *expanded))
-        .collect(),
-      auto_approve: self.auto_approve,
-    };
-    let conv_path = dir.join(format!("{}.json", self.current_conv.id));
-    if let Ok(json) = serde_json::to_string(&conv) {
-      let _ = std::fs::write(&conv_path, json);
-    }
-    let active_path = dir.join("active.txt");
-    let _ = std::fs::write(&active_path, &self.current_conv.id);
+    Some(SaveRequest {
+      conversation: PersistedConversation {
+        version: CONVERSATION_FORMAT_VERSION,
+        meta: self.current_conv.clone(),
+        items: persisted,
+        group_pins: self
+          .tool_group_pins
+          .iter()
+          .map(|(id, expanded)| (id.0.to_string(), *expanded))
+          .collect(),
+        auto_approve: self.auto_approve,
+      },
+      active_id: self.current_conv.id.clone(),
+    })
   }
 
-  pub fn list_conversations(&self) -> Vec<ConversationMeta> {
-    let Some(dir) = self.state_dir.as_ref() else {
-      return Vec::new();
-    };
-    list_conversations_in(dir)
+  pub fn list_conversations(&self, cx: &App) -> Vec<ConversationMeta> {
+    self
+      .store
+      .as_ref()
+      .map(|store| store.read(cx).list())
+      .unwrap_or_default()
   }
 
   pub fn current_conversation(&self) -> &ConversationMeta {
