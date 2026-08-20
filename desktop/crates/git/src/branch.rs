@@ -3,8 +3,8 @@ use std::{path::Path, process::Command};
 use anyhow::{Context, Result, bail};
 use git2::build::CheckoutBuilder;
 use git2::{
-  BranchType, CherrypickOptions, Cred, ErrorCode, FetchOptions, PushOptions, Rebase,
-  RemoteCallbacks, Repository, RepositoryState, ResetType, Signature, StatusOptions,
+  BranchType, CherrypickOptions, ErrorCode, FetchOptions, PushOptions, Rebase, Repository,
+  RepositoryState, ResetType, Signature, StatusOptions,
 };
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -241,16 +241,8 @@ pub fn fetch(repo_root: &Path) -> Result<()> {
     let mut remote = repo
       .find_remote(remote_name)
       .with_context(|| format!("find remote {remote_name:?}"))?;
-    let mut callbacks = RemoteCallbacks::new();
-    callbacks.credentials(|_, username_from_url, _| {
-      if let Some(username) = username_from_url {
-        Cred::ssh_key_from_agent(username).or_else(|_| Cred::default())
-      } else {
-        Cred::default()
-      }
-    });
     let mut fetch_options = FetchOptions::new();
-    fetch_options.remote_callbacks(callbacks);
+    fetch_options.remote_callbacks(crate::remote_auth::remote_callbacks(&repo)?);
     remote
       .fetch(&[] as &[&str], Some(&mut fetch_options), None)
       .with_context(|| format!("fetch remote {remote_name:?}"))?;
@@ -804,17 +796,8 @@ pub fn delete_branch(repo_root: &Path, branch: &BranchRef) -> Result<()> {
         let mut remote = repo
           .find_remote(remote_name)
           .with_context(|| format!("find remote {:?}", remote_name))?;
-        let mut callbacks = RemoteCallbacks::new();
-        callbacks.credentials(|_, username_from_url, _| {
-          if let Some(username) = username_from_url {
-            Cred::ssh_key_from_agent(username).or_else(|_| Cred::default())
-          } else {
-            Cred::default()
-          }
-        });
-
         let mut options = PushOptions::new();
-        options.remote_callbacks(callbacks);
+        options.remote_callbacks(crate::remote_auth::remote_callbacks(&repo)?);
         let refspec = format!(":refs/heads/{remote_branch_name}");
         remote
           .push(&[refspec.as_str()], Some(&mut options))

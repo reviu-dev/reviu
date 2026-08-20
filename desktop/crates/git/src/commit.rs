@@ -1,9 +1,7 @@
 use std::{path::Path, process::Command};
 
 use anyhow::{Context, Result, bail};
-use git2::{
-  BranchType, Cred, PushOptions, RemoteCallbacks, Repository, RepositoryState, ResetType, Signature,
-};
+use git2::{BranchType, PushOptions, Repository, RepositoryState, ResetType, Signature};
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct HeadCommitStatus {
@@ -164,17 +162,8 @@ pub fn push(repo_root: &Path, force: bool) -> Result<()> {
 
   {
     let mut remote = repo.find_remote(&info.remote)?;
-    let mut callbacks = RemoteCallbacks::new();
-    callbacks.credentials(|_, username_from_url, _| {
-      if let Some(username) = username_from_url {
-        Cred::ssh_key_from_agent(username).or_else(|_| Cred::default())
-      } else {
-        Cred::default()
-      }
-    });
-
     let mut options = PushOptions::new();
-    options.remote_callbacks(callbacks);
+    options.remote_callbacks(crate::remote_auth::remote_callbacks(&repo)?);
 
     let local_ref = format!("refs/heads/{}", info.local_branch);
     let remote_ref = format!("refs/heads/{}", info.remote_branch);
@@ -284,6 +273,7 @@ fn default_publish_remote(repo: &Repository) -> Result<Option<String>> {
 mod tests {
   use super::*;
   use crate::test_support::{TempBareRepo, TempDir, TempRepo, commit_text_file};
+  use git2::{Cred, RemoteCallbacks};
 
   fn stage_text_file(repo_root: &Path, rel_path: &Path, contents: &str) {
     let repo = Repository::open(repo_root).expect("open repo");

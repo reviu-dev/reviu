@@ -4,6 +4,10 @@ All notable changes to Reviu are documented here.
 
 ## 1.0.0
 
+### Push With Saved Git Credentials
+
+Pushing and fetching over HTTPS now use the credentials already saved in your Git credential helper, such as the macOS keychain. If `git push` works in your terminal, the same remote can now work from Reviu too.
+
 ### See The App Through The Driver
 
 On macOS, the Reviu driver can now run the real UI through the visual renderer and save screenshots from JSON-lines commands. Agents can click, type, wait and capture the off-screen app while debugging, while the existing selector-based test backend remains available everywhere.

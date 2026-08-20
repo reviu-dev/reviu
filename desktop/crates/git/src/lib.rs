@@ -6,6 +6,7 @@ mod commit;
 mod diff;
 mod history;
 mod interactive_rebase;
+mod remote_auth;
 mod status;
 mod store;
 #[cfg(any(test, feature = "test-support"))]
