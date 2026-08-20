@@ -352,6 +352,7 @@ impl AgentSession {
   ) -> Result<Self> {
     let mut cmd = Command::new(&backend.command);
     cmd.args(&backend.args);
+    terminal::apply_color_env(&mut cmd);
     for (key, value) in &backend.env {
       cmd.env(key, value);
     }

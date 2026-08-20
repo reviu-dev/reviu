@@ -218,6 +218,18 @@ fn exit_parts(status: std::process::ExitStatus) -> (Option<u32>, Option<String>)
   (code, signal)
 }
 
+pub(crate) fn apply_color_env(cmd: &mut async_process::Command) {
+  // Piped stdio is not a TTY, so tools silence their colors; these opt-ins
+  // bring them back for the terminal cards. The agent's env still overrides.
+  cmd.env_remove("NO_COLOR");
+  cmd.env("TERM", "xterm-256color");
+  cmd.env("COLORTERM", "truecolor");
+  cmd.env("CLICOLOR", "1");
+  cmd.env("CLICOLOR_FORCE", "1");
+  cmd.env("FORCE_COLOR", "1");
+  cmd.env("CARGO_TERM_COLOR", "always");
+}
+
 /// Spawn the requested command and stream its output into the store. The
 /// readers and the exit waiter run as detached tasks; `kill` interrupts.
 pub(crate) fn spawn_terminal(
@@ -231,15 +243,7 @@ pub(crate) fn spawn_terminal(
 ) -> Result<()> {
   let mut cmd = async_process::Command::new(&command);
   cmd.args(&args);
-  // Piped stdio is not a TTY, so tools silence their colors; these opt-ins
-  // bring them back for the terminal cards. The agent's env still overrides.
-  cmd.env_remove("NO_COLOR");
-  cmd.env("TERM", "xterm-256color");
-  cmd.env("COLORTERM", "truecolor");
-  cmd.env("CLICOLOR", "1");
-  cmd.env("CLICOLOR_FORCE", "1");
-  cmd.env("FORCE_COLOR", "1");
-  cmd.env("CARGO_TERM_COLOR", "always");
+  apply_color_env(&mut cmd);
   cmd.envs(env);
   cmd.current_dir(&cwd);
   cmd.stdin(std::process::Stdio::null());
