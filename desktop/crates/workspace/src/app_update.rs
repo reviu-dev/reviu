@@ -166,20 +166,11 @@ pub fn resolved_build_version(build_version: &str) -> String {
 }
 
 pub fn current_platform() -> &'static str {
-  match std::env::consts::OS {
-    "macos" => "macos",
-    "linux" => "linux",
-    "windows" => "windows",
-    other => other,
-  }
+  std::env::consts::OS
 }
 
 pub fn current_arch() -> &'static str {
-  match std::env::consts::ARCH {
-    "aarch64" => "aarch64",
-    "x86_64" => "x86_64",
-    other => other,
-  }
+  std::env::consts::ARCH
 }
 
 pub fn download_update_artifact(update: &AvailableAppUpdate) -> Result<ReadyToInstallAppUpdate> {
