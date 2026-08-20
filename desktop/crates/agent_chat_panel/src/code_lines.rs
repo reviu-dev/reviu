@@ -63,6 +63,27 @@ struct CodeLinesLayout {
   size: Size<Pixels>,
 }
 
+#[cfg(test)]
+pub(crate) struct CodeLinesProbe(Rc<RefCell<Option<CodeLinesLayout>>>);
+
+#[cfg(test)]
+impl CodeLinesProbe {
+  pub(crate) fn row_heights(&self) -> Vec<f32> {
+    self
+      .0
+      .borrow()
+      .as_ref()
+      .map(|layout| {
+        layout
+          .rows
+          .iter()
+          .map(|row| f32::from(row.height))
+          .collect()
+      })
+      .unwrap_or_default()
+  }
+}
+
 /// Byte index into the selection source for a window-space position.
 fn index_for_position(
   layout: &CodeLinesLayout,
@@ -122,6 +143,13 @@ impl CodeLines {
 
   fn has_gutter(&self) -> bool {
     self.gutter_width > px(0.)
+  }
+
+  /// Test hook: the computed per-row heights survive the element being moved
+  /// into a draw call through the shared layout handle.
+  #[cfg(test)]
+  pub(crate) fn probe(&self) -> CodeLinesProbe {
+    CodeLinesProbe(self.layout.clone())
   }
 
   fn resolved_selection(&self) -> Option<Range<usize>> {

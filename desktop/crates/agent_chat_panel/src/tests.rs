@@ -1064,6 +1064,236 @@ async fn a_draft_survives_a_relaunch(cx: &mut gpui::TestAppContext) {
 }
 
 #[gpui::test]
+async fn deleting_a_conversation_scrubs_its_traces(cx: &mut gpui::TestAppContext) {
+  set_backend_command_override(Some("/nonexistent-agent-binary".to_string()));
+  let dir = temp_dir("agent-delete");
+  let (panel, cx) = add_panel_window(cx);
+  let conv_id = panel.update(cx, |panel, cx| {
+    let store = cx.new(|_| crate::store::ConversationStore::new(dir.clone()));
+    let id = panel.current_conv.id.clone();
+    store.update(cx, |store, cx| {
+      store.set_draft(&id, "unsent words", cx);
+      store.set_scroll(&id, Some((7, 2.0)), cx);
+    });
+    panel.store = Some(store);
+    panel.items = vec![user_message("to be deleted")];
+    panel.persist_state(cx);
+    id
+  });
+  cx.run_until_parked();
+  let path = dir.join(format!("{conv_id}.json"));
+  assert!(path.exists());
+
+  // A throttled save is still queued when the delete lands: it must not
+  // resurrect the file.
+  panel.update(cx, |panel, cx| {
+    panel.items.push(agent_message("late change"));
+    panel.schedule_persist(cx);
+  });
+  cx.update(|window, cx| {
+    panel.update(cx, |panel, cx| {
+      let conv_id = conv_id.clone();
+      panel.delete_conversation(&conv_id, window, cx);
+    });
+  });
+  cx.executor()
+    .advance_clock(std::time::Duration::from_millis(600));
+  cx.run_until_parked();
+
+  assert!(!path.exists(), "the transcript file is gone and stays gone");
+  assert!(
+    !dir.join("active.txt").exists(),
+    "deleting the current conversation clears the active pointer"
+  );
+  panel.read_with(cx, |panel, cx| {
+    assert_ne!(
+      panel.current_conv.id, conv_id,
+      "a fresh conversation took over"
+    );
+    assert!(
+      panel.list_conversations(cx).is_empty(),
+      "the index dropped the row"
+    );
+  });
+  let relaunched = crate::store::ConversationStore::new(dir.clone());
+  assert!(relaunched.list().is_empty());
+  assert_eq!(relaunched.draft(&conv_id), None, "the draft was scrubbed");
+  assert_eq!(relaunched.scroll(&conv_id), None, "the scroll was scrubbed");
+  set_backend_command_override(None);
+  std::fs::remove_dir_all(&dir).ok();
+}
+
+#[gpui::test]
+async fn a_pending_transcript_save_lands_on_quit(cx: &mut gpui::TestAppContext) {
+  let dir = temp_dir("agent-quit-flush");
+  let (panel, cx) = add_panel_window(cx);
+  let conv_id = panel.update(cx, |panel, cx| {
+    panel.store = Some(cx.new(|_| crate::store::ConversationStore::new(dir.clone())));
+    panel.items = vec![user_message("about to quit")];
+    panel.schedule_persist(cx);
+    panel.current_conv.id.clone()
+  });
+  // No parked run: the throttle window is still open at quit time.
+  let path = dir.join(format!("{conv_id}.json"));
+  assert!(!path.exists(), "the throttled write has not landed yet");
+  panel.update(cx, |panel, cx| {
+    if let Some(store) = panel.store.clone() {
+      store.update(cx, |store, _| store.flush_on_quit());
+    }
+  });
+  let (_, items, ..) = load_conversation_file(&path).expect("the quit flush wrote the transcript");
+  assert_eq!(items.len(), 1);
+  std::fs::remove_dir_all(&dir).ok();
+}
+
+#[gpui::test]
+async fn a_faster_second_switch_wins_over_a_stale_load(cx: &mut gpui::TestAppContext) {
+  set_backend_command_override(Some("/nonexistent-agent-binary".to_string()));
+  let dir = temp_dir("agent-double-switch");
+  let (panel, cx) = add_panel_window(cx);
+  let first_id = panel.update(cx, |panel, cx| {
+    panel.store = Some(cx.new(|_| crate::store::ConversationStore::new(dir.clone())));
+    panel.items = vec![user_message("first conversation")];
+    panel.persist_state(cx);
+    panel.current_conv.id.clone()
+  });
+  cx.run_until_parked();
+  let second_id = cx.update(|window, cx| {
+    panel.update(cx, |panel, cx| {
+      panel.new_conversation(window, cx);
+      panel.items = vec![user_message("second conversation")];
+      panel.persist_state(cx);
+      panel.current_conv.id.clone()
+    })
+  });
+  cx.run_until_parked();
+
+  // Two clicks before anything hydrates: only the last one may apply.
+  cx.update(|window, cx| {
+    panel.update(cx, |panel, cx| {
+      panel.load_conversation(&first_id, window, cx);
+      panel.load_conversation(&second_id, window, cx);
+    });
+  });
+  cx.run_until_parked();
+  panel.read_with(cx, |panel, _| {
+    assert_eq!(panel.current_conv.id, second_id, "the newest switch wins");
+    assert_eq!(panel.loading_conversation_id(), None);
+    let ChatItem::Message(m) = &panel.items[0] else {
+      panic!("message expected");
+    };
+    assert_eq!(m.text, "second conversation");
+  });
+  set_backend_command_override(None);
+  std::fs::remove_dir_all(&dir).ok();
+}
+
+#[gpui::test]
+async fn the_active_pointer_follows_a_switch(cx: &mut gpui::TestAppContext) {
+  set_backend_command_override(Some("/nonexistent-agent-binary".to_string()));
+  let dir = temp_dir("agent-active-switch");
+  let (panel, cx) = add_panel_window(cx);
+  let first_id = panel.update(cx, |panel, cx| {
+    panel.store = Some(cx.new(|_| crate::store::ConversationStore::new(dir.clone())));
+    panel.items = vec![user_message("first conversation")];
+    panel.persist_state(cx);
+    panel.current_conv.id.clone()
+  });
+  cx.run_until_parked();
+  cx.update(|window, cx| {
+    panel.update(cx, |panel, cx| {
+      panel.new_conversation(window, cx);
+      panel.items = vec![user_message("second conversation")];
+      panel.persist_state(cx);
+    });
+  });
+  cx.run_until_parked();
+
+  cx.update(|window, cx| {
+    panel.update(cx, |panel, cx| {
+      panel.load_conversation(&first_id, window, cx)
+    })
+  });
+  cx.run_until_parked();
+  let active = std::fs::read_to_string(dir.join("active.txt")).expect("active pointer exists");
+  assert_eq!(
+    active.trim(),
+    first_id,
+    "a relaunch would reopen the switched-to conversation"
+  );
+  set_backend_command_override(None);
+  std::fs::remove_dir_all(&dir).ok();
+}
+
+#[gpui::test]
+async fn code_lines_wraps_long_rows_and_keeps_short_ones_single(cx: &mut gpui::TestAppContext) {
+  let (_panel, cx) = add_panel_window(cx);
+  let mono = Font {
+    family: "monospace".into(),
+    ..Default::default()
+  };
+  let muted = gpui::hsla(0., 0., 0.5, 1.);
+  let band = gpui::hsla(0., 0., 0., 0.);
+  let rows = vec![
+    crate::code_lines::CodeLineRow {
+      gutter: Some("   1    1".into()),
+      text: "short".into(),
+      runs: Vec::new(),
+      band,
+    },
+    crate::code_lines::CodeLineRow {
+      gutter: Some("   2    2".into()),
+      text: "a very long line of code that cannot possibly fit in two hundred pixels of width and must wrap"
+        .into(),
+      runs: Vec::new(),
+      band,
+    },
+  ];
+  let element = crate::code_lines::CodeLines::new(rows, px(70.), muted, muted, gpui::black(), mono);
+  let probe = element.probe();
+  cx.draw(
+    gpui::point(px(0.), px(0.)),
+    gpui::size(px(300.), px(600.)),
+    |_, _| element,
+  );
+  let heights = probe.row_heights();
+  assert_eq!(heights.len(), 2, "both rows were laid out");
+  assert!(
+    heights[1] > heights[0] * 1.5,
+    "the long row wraps to more visual lines (short {} vs long {})",
+    heights[0],
+    heights[1]
+  );
+}
+
+#[gpui::test]
+async fn a_terminal_burst_lands_as_one_update(cx: &mut gpui::TestAppContext) {
+  let (panel, cx) = add_panel_window(cx);
+  let (tx, rx) = async_channel::unbounded();
+  panel.update(cx, |panel, cx| {
+    panel.start_terminal_forwarder(rx, cx);
+  });
+  let notifies = std::rc::Rc::new(std::cell::Cell::new(0usize));
+  cx.update(|_, cx| {
+    let notifies = notifies.clone();
+    cx.observe(&panel, move |_, _| notifies.set(notifies.get() + 1))
+      .detach();
+  });
+  for _ in 0..5 {
+    tx.send_blocking("term-1".to_string())
+      .expect("channel open");
+  }
+  tx.send_blocking("term-2".to_string())
+    .expect("channel open");
+  cx.run_until_parked();
+  assert_eq!(
+    notifies.get(),
+    1,
+    "a PTY flood coalesces into one update + notify"
+  );
+}
+
+#[gpui::test]
 async fn the_auto_approve_flag_survives_a_conversation_reload(cx: &mut gpui::TestAppContext) {
   let dir = temp_dir("agent-auto-approve");
   let (panel, cx) = add_panel_window(cx);
