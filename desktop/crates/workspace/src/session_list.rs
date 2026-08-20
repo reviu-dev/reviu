@@ -67,6 +67,27 @@ impl SessionList {
     self.current_id = current_id;
     cx.notify();
   }
+
+  /// Refresh the current conversation's row in place; the rest of the list
+  /// only changes through `set_conversations`.
+  pub fn upsert_current(
+    &mut self,
+    meta: Option<ConversationMeta>,
+    current_id: String,
+    cx: &mut Context<Self>,
+  ) {
+    self.current_id = current_id;
+    if let Some(meta) = meta {
+      match self.conversations.iter_mut().find(|c| c.id == meta.id) {
+        Some(entry) => *entry = meta,
+        None => self.conversations.push(meta),
+      }
+      self
+        .conversations
+        .sort_by_key(|m| std::cmp::Reverse(m.updated_at_secs));
+    }
+    cx.notify();
+  }
 }
 
 impl EventEmitter<SessionListEvent> for SessionList {}
@@ -285,5 +306,39 @@ mod tests {
       session_row_title(&meta_with_title("Fix scroll")),
       "Fix scroll"
     );
+  }
+
+  fn meta(id: &str, updated: u64) -> ConversationMeta {
+    ConversationMeta {
+      id: id.to_string(),
+      started_at_secs: 0,
+      updated_at_secs: updated,
+      title: id.to_string(),
+      message_count: 1,
+      session_id: None,
+    }
+  }
+
+  #[gpui::test]
+  async fn upsert_current_updates_in_place_inserts_and_resorts(cx: &mut gpui::TestAppContext) {
+    let list = cx.new(|_| SessionList::new());
+    list.update(cx, |list, cx| {
+      list.set_conversations(vec![meta("b", 20), meta("a", 10)], "a".into(), cx);
+
+      // Bumping the current row's timestamp moves it to the top, in place.
+      list.upsert_current(Some(meta("a", 30)), "a".into(), cx);
+      assert_eq!(list.conversations.len(), 2);
+      assert_eq!(list.conversations[0].id, "a");
+
+      // A row not yet on disk gets inserted.
+      list.upsert_current(Some(meta("c", 40)), "c".into(), cx);
+      assert_eq!(list.conversations.len(), 3);
+      assert_eq!(list.conversations[0].id, "c");
+
+      // An empty draft only moves the selection.
+      list.upsert_current(None, "b".into(), cx);
+      assert_eq!(list.current_id, "b");
+      assert_eq!(list.conversations.len(), 3);
+    });
   }
 }

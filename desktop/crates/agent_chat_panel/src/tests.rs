@@ -450,6 +450,54 @@ fn auto_approve_picks_allow_once_then_allow_always_and_never_reject() {
 }
 
 #[gpui::test]
+async fn a_scheduled_persist_waits_for_the_throttle_window(cx: &mut gpui::TestAppContext) {
+  let dir = temp_dir("agent-persist-throttle");
+  let (panel, cx) = add_panel_window(cx);
+  panel.update(cx, |panel, cx| {
+    panel.state_dir = Some(dir.clone());
+    panel.items = vec![user_message("hi")];
+    panel.schedule_persist(cx);
+    panel.schedule_persist(cx);
+  });
+  let conv_id = panel.read_with(cx, |panel, _| panel.current_conv.id.clone());
+  let path = dir.join(format!("{conv_id}.json"));
+  assert!(
+    !path.exists(),
+    "a streamed change must not hit the disk immediately"
+  );
+  cx.executor()
+    .advance_clock(std::time::Duration::from_millis(500));
+  cx.run_until_parked();
+  assert!(
+    path.exists(),
+    "the write lands once the throttle window closes"
+  );
+  std::fs::remove_dir_all(&dir).ok();
+}
+
+#[gpui::test]
+async fn a_direct_persist_supersedes_the_armed_throttle(cx: &mut gpui::TestAppContext) {
+  let dir = temp_dir("agent-persist-direct");
+  let (panel, cx) = add_panel_window(cx);
+  panel.update(cx, |panel, cx| {
+    panel.state_dir = Some(dir.clone());
+    panel.items = vec![user_message("hi")];
+    panel.schedule_persist(cx);
+    panel.persist_state();
+    assert!(
+      panel._persist_task.is_none(),
+      "the direct write disarms the timer"
+    );
+  });
+  let conv_id = panel.read_with(cx, |panel, _| panel.current_conv.id.clone());
+  assert!(
+    dir.join(format!("{conv_id}.json")).exists(),
+    "the direct write lands immediately"
+  );
+  std::fs::remove_dir_all(&dir).ok();
+}
+
+#[gpui::test]
 async fn the_auto_approve_flag_survives_a_conversation_reload(cx: &mut gpui::TestAppContext) {
   let dir = temp_dir("agent-auto-approve");
   let (panel, cx) = add_panel_window(cx);

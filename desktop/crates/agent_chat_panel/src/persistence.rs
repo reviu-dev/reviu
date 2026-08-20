@@ -160,6 +160,13 @@ fn location_matches_diff_path(location: &std::path::Path, diff_path: &str) -> bo
   location == diff_path || location.ends_with(diff_path)
 }
 
+/// Listing only needs `meta`; skipping `items` avoids materializing whole
+/// transcripts just to fill the sidebar.
+#[derive(serde::Deserialize)]
+struct PersistedConversationMetaOnly {
+  meta: ConversationMeta,
+}
+
 pub(crate) fn list_conversations_in(dir: &std::path::Path) -> Vec<ConversationMeta> {
   let Ok(entries) = std::fs::read_dir(dir) else {
     return Vec::new();
@@ -173,7 +180,7 @@ pub(crate) fn list_conversations_in(dir: &std::path::Path) -> Vec<ConversationMe
         return None;
       }
       let raw = std::fs::read_to_string(&path).ok()?;
-      let parsed: PersistedConversation = serde_json::from_str(&raw).ok()?;
+      let parsed: PersistedConversationMetaOnly = serde_json::from_str(&raw).ok()?;
       Some(parsed.meta)
     })
     .collect();

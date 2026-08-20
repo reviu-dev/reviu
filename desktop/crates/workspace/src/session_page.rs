@@ -415,7 +415,30 @@ impl SessionPage {
     cx.notify();
   }
 
+  /// Per-notify sync: only the current conversation's row can change while
+  /// the agent streams, so this never touches disk. Lifecycle changes go
+  /// through `refresh_session_list`.
   fn sync_session_list(&mut self, cx: &mut Context<Self>) {
+    let Some(panel) = self.agent_chat_view.as_ref() else {
+      self.session_list.update(cx, |list, cx| {
+        list.set_conversations(Vec::new(), String::new(), cx)
+      });
+      return;
+    };
+    let panel = panel.read(cx);
+    let current_id = panel.current_conversation().id.clone();
+    // An empty draft is not on disk; the sidebar must not invent a row for it.
+    let current = panel
+      .has_persistable_content()
+      .then(|| panel.current_conversation().clone());
+    self
+      .session_list
+      .update(cx, |list, cx| list.upsert_current(current, current_id, cx));
+  }
+
+  /// Full re-read of the conversation directory, for lifecycle changes
+  /// (panel created, conversation created/loaded/deleted, repo switched).
+  fn refresh_session_list(&mut self, cx: &mut Context<Self>) {
     let (conversations, current_id) = match self.agent_chat_view.as_ref() {
       Some(panel) => {
         let panel = panel.read(cx);

@@ -97,11 +97,14 @@ impl SessionPage {
         AgentChatPanelEvent::UndoTurnRequested { ref_name } => {
           this.undo_turn_files(ref_name.clone(), window, cx);
         }
+        AgentChatPanelEvent::ConversationsChanged => {
+          this.refresh_session_list(cx);
+        }
       },
     )
     .detach();
     self.agent_chat_view = Some(view);
-    self.sync_session_list(cx);
+    self.refresh_session_list(cx);
   }
 
   /// Popup on the primary display when the agent needs eyes and the main

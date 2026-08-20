@@ -584,6 +584,9 @@ pub enum AgentChatPanelEvent {
   UndoTurnRequested { ref_name: String },
   /// The agent is waiting on a permission answer.
   PermissionRequested,
+  /// A conversation was created, loaded or deleted; the host should re-read
+  /// the conversation list from disk.
+  ConversationsChanged,
 }
 
 impl gpui::EventEmitter<AgentChatPanelEvent> for AgentChatPanel {}
@@ -666,6 +669,7 @@ pub struct AgentChatPanel {
   _connect_task: Option<Task<()>>,
   _events_task: Option<Task<()>>,
   _permission_task: Option<Task<()>>,
+  _persist_task: Option<Task<()>>,
   _input_sub: Option<gpui::Subscription>,
   show_conversation_controls: bool,
 }
@@ -758,11 +762,20 @@ impl AgentChatPanel {
       _connect_task: None,
       _events_task: None,
       _permission_task: None,
+      _persist_task: None,
       _input_sub: Some(input_sub),
       show_conversation_controls: true,
     };
 
     panel.refresh_repo_files(cx);
+
+    // Flush a pending throttled write; without this a quit mid-stream loses
+    // the last ~400ms of transcript.
+    cx.on_app_quit(|panel: &mut Self, _| {
+      panel.persist_state();
+      async {}
+    })
+    .detach();
 
     if let BackendAvailability::MissingBinary {
       command,
@@ -1163,6 +1176,7 @@ impl AgentChatPanel {
       _connect_task: None,
       _events_task: None,
       _permission_task: None,
+      _persist_task: None,
       _input_sub: Some(input_sub),
       show_conversation_controls: true,
     };
@@ -1525,7 +1539,7 @@ impl AgentChatPanel {
     } else if info.title.is_null() {
       self.current_conv.title.clear();
     }
-    self.persist_state();
+    // The event forwarder schedules a persist after every on_event batch.
   }
 
   fn apply_plan(&mut self, plan: Plan) {
@@ -2296,6 +2310,7 @@ impl AgentChatPanel {
     self.clear_runway();
     self.respawn_session(cx);
     self.sync_list_count();
+    cx.emit(AgentChatPanelEvent::ConversationsChanged);
     cx.notify();
   }
 
@@ -2320,6 +2335,7 @@ impl AgentChatPanel {
       self.respawn_session(cx);
     }
     self.sync_list_count();
+    cx.emit(AgentChatPanelEvent::ConversationsChanged);
     cx.notify();
   }
 
@@ -2344,6 +2360,7 @@ impl AgentChatPanel {
     let _ = std::fs::write(dir.join("active.txt"), &self.current_conv.id);
     self.respawn_session(cx);
     self.sync_list_count();
+    cx.emit(AgentChatPanelEvent::ConversationsChanged);
     cx.notify();
   }
 
@@ -2459,13 +2476,36 @@ impl AgentChatPanel {
     cx.notify();
   }
 
+  /// Whether the conversation has user-visible content worth writing to disk.
+  pub fn has_persistable_content(&self) -> bool {
+    !self.items.is_empty() || !self.pending_agent.is_empty()
+  }
+
+  /// Throttled persist for the streaming path: the first call arms a timer,
+  /// later calls ride it, so a busy turn writes every ~400ms instead of per
+  /// chunk. Boundaries (turn end, disconnect, switch) still persist directly.
+  fn schedule_persist(&mut self, cx: &mut Context<Self>) {
+    if self._persist_task.is_some() || self.state_dir.is_none() {
+      return;
+    }
+    let task = cx.spawn(async move |this, cx| {
+      cx.background_executor()
+        .timer(std::time::Duration::from_millis(400))
+        .await;
+      let _ = this.update(cx, |panel, _| panel.persist_state());
+    });
+    self._persist_task = Some(task);
+  }
+
   fn persist_state(&mut self) {
+    // A direct write supersedes any armed throttle timer.
+    self._persist_task = None;
     let Some(dir) = self.state_dir.as_ref() else {
       return;
     };
     // Skip writing while the conversation has no user-visible content yet
     // (avoids polluting disk + History with empty drafts).
-    if self.items.is_empty() && self.pending_agent.is_empty() {
+    if !self.has_persistable_content() {
       return;
     }
     // Update meta count + title before writing.

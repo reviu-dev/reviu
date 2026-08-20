@@ -12,7 +12,11 @@ impl AgentChatPanel {
       while let Ok(event) = rx.recv().await {
         let _ = this.update(cx, |panel, cx| {
           panel.on_event(event, cx);
-          panel.persist_state();
+          // Drain the burst: one update + notify per wake, not per chunk.
+          while let Ok(event) = rx.try_recv() {
+            panel.on_event(event, cx);
+          }
+          panel.schedule_persist(cx);
           panel.sync_list_count();
           cx.notify();
         });
