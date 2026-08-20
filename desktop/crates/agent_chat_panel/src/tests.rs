@@ -837,28 +837,32 @@ async fn switching_conversations_hydrates_in_the_background(cx: &mut gpui::TestA
   });
   cx.run_until_parked();
 
-  panel.update(cx, |panel, cx| {
-    panel.new_conversation(cx);
-    panel.items = vec![user_message("second conversation")];
-    panel.persist_state(cx);
+  cx.update(|window, cx| {
+    panel.update(cx, |panel, cx| {
+      panel.new_conversation(window, cx);
+      panel.items = vec![user_message("second conversation")];
+      panel.persist_state(cx);
+    });
   });
   cx.run_until_parked();
 
-  panel.update(cx, |panel, cx| {
-    let first_id = first_id.clone();
-    panel.load_conversation(&first_id, cx);
-    assert_eq!(
-      panel.loading_conversation_id(),
-      Some(first_id.as_str()),
-      "the target row is marked as hydrating"
-    );
-    let ChatItem::Message(m) = &panel.items[0] else {
-      panic!("message expected");
-    };
-    assert_eq!(
-      m.text, "second conversation",
-      "the current transcript stays on screen during the load"
-    );
+  cx.update(|window, cx| {
+    panel.update(cx, |panel, cx| {
+      let first_id = first_id.clone();
+      panel.load_conversation(&first_id, window, cx);
+      assert_eq!(
+        panel.loading_conversation_id(),
+        Some(first_id.as_str()),
+        "the target row is marked as hydrating"
+      );
+      let ChatItem::Message(m) = &panel.items[0] else {
+        panic!("message expected");
+      };
+      assert_eq!(
+        m.text, "second conversation",
+        "the current transcript stays on screen during the load"
+      );
+    });
   });
   cx.run_until_parked();
   panel.read_with(cx, |panel, _| {
@@ -869,6 +873,114 @@ async fn switching_conversations_hydrates_in_the_background(cx: &mut gpui::TestA
     assert_eq!(m.text, "first conversation", "the switch landed");
   });
   set_backend_command_override(None);
+  std::fs::remove_dir_all(&dir).ok();
+}
+
+#[gpui::test]
+async fn composer_drafts_follow_their_conversation(cx: &mut gpui::TestAppContext) {
+  set_backend_command_override(Some("/nonexistent-agent-binary".to_string()));
+  let dir = temp_dir("agent-drafts");
+  let (panel, cx) = add_panel_window(cx);
+  panel.update(cx, |panel, cx| {
+    panel.store = Some(cx.new(|_| crate::store::ConversationStore::new(dir.clone())));
+    panel.items = vec![user_message("hello")];
+    panel.persist_state(cx);
+  });
+  cx.run_until_parked();
+  let first_id = panel.read_with(cx, |panel, _| panel.current_conv.id.clone());
+
+  cx.update(|window, cx| {
+    panel.update(cx, |panel, cx| {
+      let input = panel.input.clone();
+      input.update(cx, |state, cx| {
+        state.set_value("half-typed message", window, cx)
+      });
+      // Real typing emits InputEvent::Change; set_value is silent in tests.
+      panel.schedule_draft_save(cx);
+    });
+  });
+  cx.run_until_parked();
+
+  // A new conversation starts with an empty composer; the draft stays behind.
+  cx.update(|window, cx| panel.update(cx, |panel, cx| panel.new_conversation(window, cx)));
+  cx.run_until_parked();
+  panel.read_with(cx, |panel, cx| {
+    assert_eq!(
+      panel.input.read(cx).value().as_ref(),
+      "",
+      "the new conversation must not inherit the draft"
+    );
+  });
+
+  // Back on the first conversation the draft returns.
+  cx.update(|window, cx| {
+    panel.update(cx, |panel, cx| {
+      panel.load_conversation(&first_id, window, cx)
+    })
+  });
+  cx.run_until_parked();
+  panel.read_with(cx, |panel, cx| {
+    assert_eq!(
+      panel.input.read(cx).value().as_ref(),
+      "half-typed message",
+      "the draft follows its conversation"
+    );
+  });
+
+  // Clearing the input (what sending does) drops the stored draft.
+  cx.update(|window, cx| {
+    panel.update(cx, |panel, cx| {
+      let input = panel.input.clone();
+      input.update(cx, |state, cx| state.set_value("", window, cx));
+      panel.schedule_draft_save(cx);
+    });
+  });
+  cx.run_until_parked();
+  panel.update(cx, |panel, cx| {
+    if let Some(store) = panel.store.clone() {
+      store.update(cx, |store, _| store.flush_on_quit());
+    }
+  });
+  let relaunched = crate::store::ConversationStore::new(dir.clone());
+  assert_eq!(
+    relaunched.draft(&first_id),
+    None,
+    "a sent draft does not come back after a relaunch"
+  );
+  set_backend_command_override(None);
+  std::fs::remove_dir_all(&dir).ok();
+}
+
+#[gpui::test]
+async fn a_draft_survives_a_relaunch(cx: &mut gpui::TestAppContext) {
+  let dir = temp_dir("agent-drafts-relaunch");
+  let (panel, cx) = add_panel_window(cx);
+  panel.update(cx, |panel, cx| {
+    panel.store = Some(cx.new(|_| crate::store::ConversationStore::new(dir.clone())));
+    panel.items = vec![user_message("hello")];
+    panel.persist_state(cx);
+  });
+  cx.run_until_parked();
+  let conv_id = panel.read_with(cx, |panel, _| panel.current_conv.id.clone());
+  cx.update(|window, cx| {
+    panel.update(cx, |panel, cx| {
+      let input = panel.input.clone();
+      input.update(cx, |state, cx| state.set_value("survives quit", window, cx));
+      panel.schedule_draft_save(cx);
+    });
+  });
+  // No parked run: the debounce is still pending, quit must flush it.
+  panel.update(cx, |panel, cx| {
+    if let Some(store) = panel.store.clone() {
+      store.update(cx, |store, _| store.flush_on_quit());
+    }
+  });
+  let relaunched = crate::store::ConversationStore::new(dir.clone());
+  assert_eq!(
+    relaunched.draft(&conv_id).as_deref(),
+    Some("survives quit"),
+    "the quit flush lands the pending draft"
+  );
   std::fs::remove_dir_all(&dir).ok();
 }
 

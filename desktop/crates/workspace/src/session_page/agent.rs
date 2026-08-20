@@ -539,16 +539,16 @@ impl SessionPage {
     let Some(panel) = self.agent_chat_view.clone() else {
       return;
     };
-    panel.update(cx, |panel, cx| panel.new_conversation(cx));
+    panel.update(cx, |panel, cx| panel.new_conversation(window, cx));
     self.focus_agent_input_on_next_frame(window, cx);
     cx.notify();
   }
 
-  pub(super) fn delete_session(&mut self, id: &str, cx: &mut Context<Self>) {
+  pub(super) fn delete_session(&mut self, id: &str, window: &mut Window, cx: &mut Context<Self>) {
     let Some(panel) = self.agent_chat_view.clone() else {
       return;
     };
-    panel.update(cx, |panel, cx| panel.delete_conversation(id, cx));
+    panel.update(cx, |panel, cx| panel.delete_conversation(id, window, cx));
     cx.notify();
   }
 
@@ -560,7 +560,7 @@ impl SessionPage {
     if panel.read(cx).current_conversation().id == id {
       return;
     }
-    panel.update(cx, |panel, cx| panel.load_conversation(id, cx));
+    panel.update(cx, |panel, cx| panel.load_conversation(id, window, cx));
     self.focus_agent_input_on_next_frame(window, cx);
     cx.notify();
   }

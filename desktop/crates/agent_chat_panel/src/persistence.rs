@@ -198,6 +198,24 @@ pub(crate) fn index_path(dir: &std::path::Path) -> PathBuf {
   dir.join("index.json")
 }
 
+pub(crate) fn drafts_path(dir: &std::path::Path) -> PathBuf {
+  dir.join("drafts.json")
+}
+
+pub(crate) fn read_drafts(dir: &std::path::Path) -> HashMap<String, String> {
+  std::fs::read_to_string(drafts_path(dir))
+    .ok()
+    .and_then(|raw| serde_json::from_str(&raw).ok())
+    .unwrap_or_default()
+}
+
+pub(crate) fn write_drafts(dir: &std::path::Path, drafts: &HashMap<String, String>) {
+  let _ = std::fs::create_dir_all(dir);
+  if let Ok(json) = serde_json::to_string(drafts) {
+    let _ = std::fs::write(drafts_path(dir), json);
+  }
+}
+
 pub(crate) fn read_index(dir: &std::path::Path) -> Option<Vec<ConversationMeta>> {
   let raw = std::fs::read_to_string(index_path(dir)).ok()?;
   let parsed: IndexFile = serde_json::from_str(&raw).ok()?;

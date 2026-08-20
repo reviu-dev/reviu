@@ -785,12 +785,13 @@ impl AgentChatPanel {
       // connects after it so a saved session id can resume.
       Some(store) => {
         let load = store.read(cx).load_active(cx);
-        cx.spawn(async move |this, cx| {
+        cx.spawn_in(window, async move |this, cx| {
           let loaded = load.await;
-          let _ = this.update(cx, |panel, cx| {
+          let _ = this.update_in(cx, |panel, window, cx| {
             if let Some(loaded) = loaded {
               panel.apply_loaded_conversation(loaded);
             }
+            panel.restore_draft(window, cx);
             panel.respawn_session(cx);
             cx.notify();
           });
@@ -800,6 +801,28 @@ impl AgentChatPanel {
       None => panel.respawn_session(cx),
     }
     panel
+  }
+
+  /// Pushes the composer's text into the store as the draft of the current
+  /// conversation; the store debounces the disk write.
+  fn schedule_draft_save(&mut self, cx: &mut Context<Self>) {
+    let Some(store) = self.store.clone() else {
+      return;
+    };
+    let text = self.input.read(cx).value();
+    let id = self.current_conv.id.clone();
+    store.update(cx, |store, cx| store.set_draft(&id, &text, cx));
+  }
+
+  /// Fills the composer with the stored draft of the current conversation.
+  fn restore_draft(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    let draft = self
+      .store
+      .as_ref()
+      .and_then(|store| store.read(cx).draft(&self.current_conv.id))
+      .unwrap_or_default();
+    let input = self.input.clone();
+    input.update(cx, |state, cx| state.set_value(&draft, window, cx));
   }
 
   /// Replaces the in-memory conversation with a hydrated one; buffers and
@@ -843,16 +866,17 @@ impl AgentChatPanel {
     let input_sub = cx.subscribe_in(
       &input,
       window,
-      |this, _state, event: &InputEvent, window, cx| {
-        if let InputEvent::PressEnter { shift, secondary } = event
-          && !shift
-        {
+      |this, _state, event: &InputEvent, window, cx| match event {
+        InputEvent::PressEnter { shift, secondary } if !shift => {
           if *secondary {
             this.submit_steer(window, cx);
           } else {
             this.submit(window, cx);
           }
         }
+        // Sending clears the input, which lands here too and drops the draft.
+        InputEvent::Change => this.schedule_draft_save(cx),
+        _ => {}
       },
     );
     (input, input_sub)
@@ -1878,6 +1902,7 @@ impl AgentChatPanel {
       self
         .input
         .update(cx, |state, cx| state.set_value("", window, cx));
+      self.schedule_draft_save(cx);
       cx.notify();
       return;
     }
@@ -1887,6 +1912,7 @@ impl AgentChatPanel {
       self
         .input
         .update(cx, |state, cx| state.set_value("", window, cx));
+      self.schedule_draft_save(cx);
     }
   }
 
@@ -1904,6 +1930,7 @@ impl AgentChatPanel {
       self
         .input
         .update(cx, |state, cx| state.set_value("", window, cx));
+      self.schedule_draft_save(cx);
     }
   }
 
@@ -2006,6 +2033,7 @@ impl AgentChatPanel {
     self.input.update(cx, |state, cx| {
       state.set_value(&text, window, cx);
     });
+    self.schedule_draft_save(cx);
     window.focus(&self.input.read(cx).focus_handle(cx), cx);
     cx.notify();
   }
@@ -2092,6 +2120,7 @@ impl AgentChatPanel {
             text.push_str(&token);
             state.set_value(&text, window, cx);
           });
+          self.schedule_draft_save(cx);
         }
       }
     }
@@ -2256,7 +2285,7 @@ impl AgentChatPanel {
     self.supports_steering
   }
 
-  pub fn new_conversation(&mut self, cx: &mut Context<Self>) {
+  pub fn new_conversation(&mut self, window: &mut Window, cx: &mut Context<Self>) {
     self.persist_state(cx);
     self.current_conv = new_conversation_meta();
     self.items.clear();
@@ -2268,13 +2297,14 @@ impl AgentChatPanel {
     self.usage = None;
     self.auto_approve = false;
     self.clear_runway();
+    self.restore_draft(window, cx);
     self.respawn_session(cx);
     self.sync_list_count();
     cx.emit(AgentChatPanelEvent::ConversationsChanged);
     cx.notify();
   }
 
-  pub fn delete_conversation(&mut self, id: &str, cx: &mut Context<Self>) {
+  pub fn delete_conversation(&mut self, id: &str, window: &mut Window, cx: &mut Context<Self>) {
     let Some(store) = self.store.clone() else {
       return;
     };
@@ -2291,6 +2321,7 @@ impl AgentChatPanel {
       self.usage = None;
       self.auto_approve = false;
       self.clear_runway();
+      self.restore_draft(window, cx);
       self.respawn_session(cx);
     }
     self.sync_list_count();
@@ -2300,7 +2331,7 @@ impl AgentChatPanel {
 
   /// Switch hydrates in the background: the current conversation stays on
   /// screen and the sidebar row shows a spinner until its transcript lands.
-  pub fn load_conversation(&mut self, id: &str, cx: &mut Context<Self>) {
+  pub fn load_conversation(&mut self, id: &str, window: &mut Window, cx: &mut Context<Self>) {
     let Some(store) = self.store.clone() else {
       return;
     };
@@ -2310,9 +2341,9 @@ impl AgentChatPanel {
     self.loading_conversation = Some((id.to_string(), generation));
     let load = store.read(cx).load(id, cx);
     let id = id.to_string();
-    cx.spawn(async move |this, cx| {
+    cx.spawn_in(window, async move |this, cx| {
       let loaded = load.await;
-      let _ = this.update(cx, |panel, cx| {
+      let _ = this.update_in(cx, |panel, window, cx| {
         if panel.load_generation != generation {
           return;
         }
@@ -2322,6 +2353,7 @@ impl AgentChatPanel {
           return;
         };
         panel.apply_loaded_conversation(loaded);
+        panel.restore_draft(window, cx);
         if let Some(store) = panel.store.clone() {
           store.update(cx, |store, cx| store.set_active(Some(id.clone()), cx));
         }

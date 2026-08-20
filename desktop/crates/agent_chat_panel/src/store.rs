@@ -9,10 +9,12 @@ use gpui::{App, Context, Task};
 use crate::PersistedConversation;
 use crate::persistence::{
   ConversationMeta, LoadedConversation, list_conversations_in, load_active_conversation,
-  load_conversation_file, read_index, write_index,
+  load_conversation_file, read_drafts, read_index, write_drafts, write_index,
 };
+use std::collections::HashMap;
 
 const SAVE_THROTTLE: std::time::Duration = std::time::Duration::from_millis(400);
+const DRAFT_DEBOUNCE: std::time::Duration = std::time::Duration::from_millis(250);
 
 pub(crate) struct SaveRequest {
   pub conversation: PersistedConversation,
@@ -22,6 +24,7 @@ pub(crate) struct SaveRequest {
 enum DeferredOp {
   Delete { id: String },
   SetActive { id: Option<String> },
+  WriteDrafts(HashMap<String, String>),
 }
 
 pub(crate) struct ConversationStore {
@@ -30,6 +33,10 @@ pub(crate) struct ConversationStore {
   metas: Vec<ConversationMeta>,
   pending_save: Option<SaveRequest>,
   pending_ops: Vec<DeferredOp>,
+  /// Composer drafts keyed by conversation id, mirrored in `drafts.json`.
+  drafts: HashMap<String, String>,
+  drafts_dirty: bool,
+  draft_debounce: Option<Task<()>>,
   throttle: Option<Task<()>>,
   writer: Option<Task<()>>,
 }
@@ -38,14 +45,56 @@ impl ConversationStore {
   pub fn new(dir: PathBuf) -> Self {
     let mut metas = read_index(&dir).unwrap_or_else(|| list_conversations_in(&dir));
     metas.sort_by_key(|m| std::cmp::Reverse(m.updated_at_secs));
+    let drafts = read_drafts(&dir);
     Self {
       dir,
       metas,
       pending_save: None,
       pending_ops: Vec::new(),
+      drafts,
+      drafts_dirty: false,
+      draft_debounce: None,
       throttle: None,
       writer: None,
     }
+  }
+
+  pub fn draft(&self, id: &str) -> Option<String> {
+    self.drafts.get(id).cloned()
+  }
+
+  /// Debounced (250ms): typing updates the map immediately, the file follows.
+  pub fn set_draft(&mut self, id: &str, text: &str, cx: &mut Context<Self>) {
+    let changed = if text.trim().is_empty() {
+      self.drafts.remove(id).is_some()
+    } else {
+      self.drafts.insert(id.to_string(), text.to_string()) != Some(text.to_string())
+    };
+    if !changed {
+      return;
+    }
+    self.drafts_dirty = true;
+    if self.draft_debounce.is_some() {
+      return;
+    }
+    self.draft_debounce = Some(cx.spawn(async move |this, cx| {
+      cx.background_executor().timer(DRAFT_DEBOUNCE).await;
+      let _ = this.update(cx, |store, cx| {
+        store.draft_debounce = None;
+        store.queue_draft_write(cx);
+      });
+    }));
+  }
+
+  fn queue_draft_write(&mut self, cx: &mut Context<Self>) {
+    if !self.drafts_dirty {
+      return;
+    }
+    self.drafts_dirty = false;
+    self
+      .pending_ops
+      .push(DeferredOp::WriteDrafts(self.drafts.clone()));
+    self.kick_writer(cx);
   }
 
   pub fn list(&self) -> Vec<ConversationMeta> {
@@ -84,6 +133,10 @@ impl ConversationStore {
       // A queued save must not resurrect the file after the delete.
       self.pending_save = None;
     }
+    if self.drafts.remove(id).is_some() {
+      self.drafts_dirty = true;
+      self.queue_draft_write(cx);
+    }
     self.metas.retain(|m| m.id != id);
     self
       .pending_ops
@@ -111,12 +164,16 @@ impl ConversationStore {
   /// Quit path: whatever is still queued lands synchronously.
   pub fn flush_on_quit(&mut self) {
     self.throttle = None;
+    self.draft_debounce = None;
     for op in std::mem::take(&mut self.pending_ops) {
       apply_op(&self.dir, &self.metas, op);
     }
     if let Some(request) = self.pending_save.take() {
       apply_meta(&mut self.metas, &request.conversation.meta);
       write_save(&self.dir, &self.metas, request);
+    }
+    if std::mem::take(&mut self.drafts_dirty) {
+      write_drafts(&self.dir, &self.drafts);
     }
   }
 
@@ -194,6 +251,7 @@ fn apply_op(dir: &std::path::Path, metas: &[ConversationMeta], op: DeferredOp) {
       let _ = std::fs::remove_file(dir.join(format!("{id}.json")));
       write_index(dir, metas);
     }
+    DeferredOp::WriteDrafts(drafts) => write_drafts(dir, &drafts),
     DeferredOp::SetActive { id } => match id {
       Some(id) => {
         let _ = std::fs::create_dir_all(dir);

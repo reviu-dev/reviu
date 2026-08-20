@@ -258,7 +258,7 @@ impl SessionPage {
         SessionListEvent::NewSession => this.new_session(window, cx),
         SessionListEvent::Collapse => this.close_sidebar(cx),
         SessionListEvent::Selected { id } => this.select_session(id, window, cx),
-        SessionListEvent::Deleted { id } => this.delete_session(id, cx),
+        SessionListEvent::Deleted { id } => this.delete_session(id, window, cx),
       },
     )
     .detach();

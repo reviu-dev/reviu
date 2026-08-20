@@ -1435,18 +1435,18 @@ impl Render for AgentChatPanel {
                                   .ghost()
                                   .opacity(0.0)
                                   .group_hover(group_for_render.clone(), |this| this.opacity(1.0))
-                                  .on_click(move |_, _, cx| {
+                                  .on_click(move |_, window, cx| {
                                     let _ = entity_delete.update(cx, |panel, cx| {
-                                      panel.delete_conversation(&id_delete, cx)
+                                      panel.delete_conversation(&id_delete, window, cx)
                                     });
                                   }),
                               )
                               .into_any_element()
                           })
-                          .on_click(move |_, _, cx| {
+                          .on_click(move |_, window, cx| {
                             let id = id_load.clone();
-                            let _ =
-                              entity_load.update(cx, |panel, cx| panel.load_conversation(&id, cx));
+                            let _ = entity_load
+                              .update(cx, |panel, cx| panel.load_conversation(&id, window, cx));
                           }),
                         );
                         let _ = id;
@@ -1461,7 +1461,9 @@ impl Render for AgentChatPanel {
                     .icon(UiIconName::MessageCirclePlus)
                     .small()
                     .ghost()
-                    .on_click(cx.listener(|panel, _, _, cx| panel.new_conversation(cx))),
+                    .on_click(
+                      cx.listener(|panel, _, window, cx| panel.new_conversation(window, cx)),
+                    ),
                 )
               }),
           ),

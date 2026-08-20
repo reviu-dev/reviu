@@ -18,6 +18,10 @@ Scrolling a conversation full of edits is much lighter too: the small diffs and 
 
 Opening another conversation from the sidebar no longer freezes the app while the transcript loads: the current conversation stays on screen, the target row shows a small spinner, and the switch lands as soon as the transcript is ready. Saving also moved fully off the main thread, and the sidebar now lists conversations from a small index instead of re-reading every transcript, so repositories with a long history open their session list instantly. Each sidebar row also shows a one-line preview of the conversation's last message.
 
+### Drafts That Wait For You
+
+A half-typed message now stays where you left it: each conversation keeps its own composer draft, restored when you come back to it, after switching sessions or restarting the app. Sending the message clears its draft.
+
 ### Select Text In Diffs
 
 The small diffs inside tool cards are now selectable: sweep across added and removed lines, double-click a word or triple-click a line, and the selection lands in your clipboard on release, same as tool outputs.
