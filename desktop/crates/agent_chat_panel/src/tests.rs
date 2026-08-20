@@ -2933,9 +2933,14 @@ async fn pasting_an_image_stages_it_and_text_still_pastes(cx: &mut gpui::TestApp
   let input_focus = panel.read_with(cx, |panel, cx| panel.input.read(cx).focus_handle(cx));
   cx.update(|window, cx| window.focus(&input_focus, cx));
 
+  #[cfg(target_os = "macos")]
+  let paste_keystroke = "cmd-v";
+  #[cfg(not(target_os = "macos"))]
+  let paste_keystroke = "ctrl-v";
+
   let image = gpui::Image::from_bytes(gpui::ImageFormat::Png, vec![9, 9, 9]);
   cx.update(|_, cx| cx.write_to_clipboard(gpui::ClipboardItem::new_image(&image)));
-  cx.simulate_keystrokes("ctrl-v");
+  cx.simulate_keystrokes(paste_keystroke);
   cx.run_until_parked();
   panel.read_with(cx, |panel, cx| {
     assert_eq!(panel.staged_images.len(), 1, "the image staged");
@@ -2947,7 +2952,7 @@ async fn pasting_an_image_stages_it_and_text_still_pastes(cx: &mut gpui::TestApp
   });
 
   cx.update(|_, cx| cx.write_to_clipboard(gpui::ClipboardItem::new_string("plain words".into())));
-  cx.simulate_keystrokes("ctrl-v");
+  cx.simulate_keystrokes(paste_keystroke);
   cx.run_until_parked();
   panel.read_with(cx, |panel, cx| {
     assert_eq!(panel.input.read(cx).value(), "plain words");
