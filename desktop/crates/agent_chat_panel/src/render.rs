@@ -1219,6 +1219,10 @@ impl Render for AgentChatPanel {
     self.update_runway(window);
     self.update_reader_follow();
     self.update_jump_pill();
+    if self.scroll_save_pending {
+      self.scroll_save_pending = false;
+      self.save_scroll_position(cx);
+    }
     let theme = cx.theme().clone();
     let theme = &theme;
     // The composer box owns the focus ring now that the textarea is bare.

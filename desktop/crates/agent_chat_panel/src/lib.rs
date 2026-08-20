@@ -637,6 +637,8 @@ pub struct AgentChatPanel {
   /// A reader scroll landed since the last frame; ListState can't be
   /// re-borrowed inside its own scroll handler, so the check runs at render.
   reader_scrolled: bool,
+  /// Same deferral for persisting the reading position.
+  scroll_save_pending: bool,
   /// Slash commands advertised by the agent, latest update wins.
   available_commands: Vec<agent_client_protocol::schema::AvailableCommand>,
   /// Item index of the user message being edited, with its inline editor.
@@ -725,6 +727,7 @@ impl AgentChatPanel {
       runway_following: false,
       show_jump_pill: false,
       reader_scrolled: false,
+      scroll_save_pending: false,
       available_commands: Vec::new(),
       editing_message: None,
       edit_input: None,
@@ -790,6 +793,7 @@ impl AgentChatPanel {
           let _ = this.update_in(cx, |panel, window, cx| {
             if let Some(loaded) = loaded {
               panel.apply_loaded_conversation(loaded);
+              panel.restore_scroll(cx);
             }
             panel.restore_draft(window, cx);
             panel.respawn_session(cx);
@@ -812,6 +816,46 @@ impl AgentChatPanel {
     let text = self.input.read(cx).value();
     let id = self.current_conv.id.clone();
     store.update(cx, |store, cx| store.set_draft(&id, &text, cx));
+  }
+
+  /// Persists the reading position of the current conversation; tail-following
+  /// is stored as absence so a conversation left at the bottom stays live.
+  fn save_scroll_position(&mut self, cx: &mut Context<Self>) {
+    let Some(store) = self.store.clone() else {
+      return;
+    };
+    if self.loading_conversation.is_some() {
+      return;
+    }
+    let position = if self.messages_list.is_following_tail() {
+      None
+    } else {
+      let offset = self.messages_list.logical_scroll_top();
+      Some((offset.item_ix, f32::from(offset.offset_in_item)))
+    };
+    let id = self.current_conv.id.clone();
+    store.update(cx, |store, cx| store.set_scroll(&id, position, cx));
+  }
+
+  /// Puts the list back where the reader left this conversation: a stored
+  /// offset scrolls there, otherwise the list follows the tail as before.
+  fn restore_scroll(&mut self, cx: &App) {
+    let saved = self
+      .store
+      .as_ref()
+      .and_then(|store| store.read(cx).scroll(&self.current_conv.id));
+    match saved {
+      // scroll_to pauses tail-following by itself; the existing bottom
+      // re-engage logic resumes it when the reader returns to the end.
+      Some((item_ix, offset_px)) => {
+        self.messages_list.scroll_to(gpui::ListOffset {
+          item_ix: item_ix.min(self.messages_list.item_count().saturating_sub(1)),
+          offset_in_item: px(offset_px),
+        });
+      }
+      // Re-engaging Tail also jumps to the end.
+      None => self.messages_list.set_follow_mode(gpui::FollowMode::Tail),
+    }
   }
 
   /// Fills the composer with the stored draft of the current conversation.
@@ -848,6 +892,7 @@ impl AgentChatPanel {
       let _ = weak.update(cx, |panel, _| {
         panel.runway_following = false;
         panel.reader_scrolled = true;
+        panel.scroll_save_pending = true;
       });
     });
   }
@@ -1124,6 +1169,7 @@ impl AgentChatPanel {
       runway_following: false,
       show_jump_pill: false,
       reader_scrolled: false,
+      scroll_save_pending: false,
       available_commands: Vec::new(),
       editing_message: None,
       edit_input: None,
@@ -2336,6 +2382,7 @@ impl AgentChatPanel {
       return;
     };
     self.persist_state(cx);
+    self.save_scroll_position(cx);
     self.load_generation += 1;
     let generation = self.load_generation;
     self.loading_conversation = Some((id.to_string(), generation));
@@ -2353,6 +2400,7 @@ impl AgentChatPanel {
           return;
         };
         panel.apply_loaded_conversation(loaded);
+        panel.restore_scroll(cx);
         panel.restore_draft(window, cx);
         if let Some(store) = panel.store.clone() {
           store.update(cx, |store, cx| store.set_active(Some(id.clone()), cx));

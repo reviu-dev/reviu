@@ -952,6 +952,62 @@ async fn composer_drafts_follow_their_conversation(cx: &mut gpui::TestAppContext
 }
 
 #[gpui::test]
+async fn the_reading_position_follows_its_conversation(cx: &mut gpui::TestAppContext) {
+  set_backend_command_override(Some("/nonexistent-agent-binary".to_string()));
+  let dir = temp_dir("agent-scroll");
+  let (panel, cx) = add_panel_window(cx);
+  let first_id = panel.update(cx, |panel, cx| {
+    panel.store = Some(cx.new(|_| crate::store::ConversationStore::new(dir.clone())));
+    panel.items = (0..60)
+      .map(|i| user_message(&format!("message {i}")))
+      .collect();
+    panel.sync_list_count();
+    panel.persist_state(cx);
+    panel.current_conv.id.clone()
+  });
+  cx.run_until_parked();
+
+  // The reader scrolls away from the tail; render-time capture persists it.
+  panel.update(cx, |panel, cx| {
+    panel.messages_list.scroll_to(gpui::ListOffset {
+      item_ix: 12,
+      offset_in_item: px(4.),
+    });
+    panel.save_scroll_position(cx);
+  });
+  cx.run_until_parked();
+
+  cx.update(|window, cx| panel.update(cx, |panel, cx| panel.new_conversation(window, cx)));
+  cx.run_until_parked();
+  panel.read_with(cx, |panel, _| {
+    assert!(
+      panel.messages_list.is_following_tail(),
+      "a fresh conversation follows the tail"
+    );
+  });
+
+  cx.update(|window, cx| {
+    panel.update(cx, |panel, cx| {
+      panel.load_conversation(&first_id, window, cx)
+    })
+  });
+  cx.run_until_parked();
+  panel.read_with(cx, |panel, _| {
+    assert!(
+      !panel.messages_list.is_following_tail(),
+      "a stored offset pauses tail-following"
+    );
+    assert_eq!(
+      panel.messages_list.logical_scroll_top().item_ix,
+      12,
+      "the reading position came back"
+    );
+  });
+  set_backend_command_override(None);
+  std::fs::remove_dir_all(&dir).ok();
+}
+
+#[gpui::test]
 async fn a_draft_survives_a_relaunch(cx: &mut gpui::TestAppContext) {
   let dir = temp_dir("agent-drafts-relaunch");
   let (panel, cx) = add_panel_window(cx);

@@ -198,6 +198,24 @@ pub(crate) fn index_path(dir: &std::path::Path) -> PathBuf {
   dir.join("index.json")
 }
 
+pub(crate) fn scrolls_path(dir: &std::path::Path) -> PathBuf {
+  dir.join("scroll.json")
+}
+
+pub(crate) fn read_scrolls(dir: &std::path::Path) -> HashMap<String, (usize, f32)> {
+  std::fs::read_to_string(scrolls_path(dir))
+    .ok()
+    .and_then(|raw| serde_json::from_str(&raw).ok())
+    .unwrap_or_default()
+}
+
+pub(crate) fn write_scrolls(dir: &std::path::Path, scrolls: &HashMap<String, (usize, f32)>) {
+  let _ = std::fs::create_dir_all(dir);
+  if let Ok(json) = serde_json::to_string(scrolls) {
+    let _ = std::fs::write(scrolls_path(dir), json);
+  }
+}
+
 pub(crate) fn drafts_path(dir: &std::path::Path) -> PathBuf {
   dir.join("drafts.json")
 }

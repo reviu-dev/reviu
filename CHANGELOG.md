@@ -22,6 +22,10 @@ Opening another conversation from the sidebar no longer freezes the app while th
 
 A half-typed message now stays where you left it: each conversation keeps its own composer draft, restored when you come back to it, after switching sessions or restarting the app. Sending the message clears its draft.
 
+### Conversations Reopen Where You Left Them
+
+Switching back to a conversation returns you to the exact spot you were reading instead of jumping to the bottom. A conversation left at the bottom still opens at the bottom and keeps following new messages.
+
 ### Select Text In Diffs
 
 The small diffs inside tool cards are now selectable: sweep across added and removed lines, double-click a word or triple-click a line, and the selection lands in your clipboard on release, same as tool outputs.

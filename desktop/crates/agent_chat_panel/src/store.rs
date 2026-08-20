@@ -9,7 +9,8 @@ use gpui::{App, Context, Task};
 use crate::PersistedConversation;
 use crate::persistence::{
   ConversationMeta, LoadedConversation, list_conversations_in, load_active_conversation,
-  load_conversation_file, read_drafts, read_index, write_drafts, write_index,
+  load_conversation_file, read_drafts, read_index, read_scrolls, write_drafts, write_index,
+  write_scrolls,
 };
 use std::collections::HashMap;
 
@@ -25,6 +26,7 @@ enum DeferredOp {
   Delete { id: String },
   SetActive { id: Option<String> },
   WriteDrafts(HashMap<String, String>),
+  WriteScrolls(HashMap<String, (usize, f32)>),
 }
 
 pub(crate) struct ConversationStore {
@@ -37,6 +39,11 @@ pub(crate) struct ConversationStore {
   drafts: HashMap<String, String>,
   drafts_dirty: bool,
   draft_debounce: Option<Task<()>>,
+  /// Reading positions keyed by conversation id, mirrored in `scroll.json`.
+  /// Absent = the conversation was left following the tail.
+  scrolls: HashMap<String, (usize, f32)>,
+  scrolls_dirty: bool,
+  scroll_debounce: Option<Task<()>>,
   throttle: Option<Task<()>>,
   writer: Option<Task<()>>,
 }
@@ -46,6 +53,7 @@ impl ConversationStore {
     let mut metas = read_index(&dir).unwrap_or_else(|| list_conversations_in(&dir));
     metas.sort_by_key(|m| std::cmp::Reverse(m.updated_at_secs));
     let drafts = read_drafts(&dir);
+    let scrolls = read_scrolls(&dir);
     Self {
       dir,
       metas,
@@ -54,9 +62,49 @@ impl ConversationStore {
       drafts,
       drafts_dirty: false,
       draft_debounce: None,
+      scrolls,
+      scrolls_dirty: false,
+      scroll_debounce: None,
       throttle: None,
       writer: None,
     }
+  }
+
+  pub fn scroll(&self, id: &str) -> Option<(usize, f32)> {
+    self.scrolls.get(id).copied()
+  }
+
+  /// Debounced like drafts; None marks the conversation as tail-following.
+  pub fn set_scroll(&mut self, id: &str, position: Option<(usize, f32)>, cx: &mut Context<Self>) {
+    let changed = match position {
+      Some(position) => self.scrolls.insert(id.to_string(), position) != Some(position),
+      None => self.scrolls.remove(id).is_some(),
+    };
+    if !changed {
+      return;
+    }
+    self.scrolls_dirty = true;
+    if self.scroll_debounce.is_some() {
+      return;
+    }
+    self.scroll_debounce = Some(cx.spawn(async move |this, cx| {
+      cx.background_executor().timer(DRAFT_DEBOUNCE).await;
+      let _ = this.update(cx, |store, cx| {
+        store.scroll_debounce = None;
+        store.queue_scroll_write(cx);
+      });
+    }));
+  }
+
+  fn queue_scroll_write(&mut self, cx: &mut Context<Self>) {
+    if !self.scrolls_dirty {
+      return;
+    }
+    self.scrolls_dirty = false;
+    self
+      .pending_ops
+      .push(DeferredOp::WriteScrolls(self.scrolls.clone()));
+    self.kick_writer(cx);
   }
 
   pub fn draft(&self, id: &str) -> Option<String> {
@@ -137,6 +185,10 @@ impl ConversationStore {
       self.drafts_dirty = true;
       self.queue_draft_write(cx);
     }
+    if self.scrolls.remove(id).is_some() {
+      self.scrolls_dirty = true;
+      self.queue_scroll_write(cx);
+    }
     self.metas.retain(|m| m.id != id);
     self
       .pending_ops
@@ -165,6 +217,7 @@ impl ConversationStore {
   pub fn flush_on_quit(&mut self) {
     self.throttle = None;
     self.draft_debounce = None;
+    self.scroll_debounce = None;
     for op in std::mem::take(&mut self.pending_ops) {
       apply_op(&self.dir, &self.metas, op);
     }
@@ -174,6 +227,9 @@ impl ConversationStore {
     }
     if std::mem::take(&mut self.drafts_dirty) {
       write_drafts(&self.dir, &self.drafts);
+    }
+    if std::mem::take(&mut self.scrolls_dirty) {
+      write_scrolls(&self.dir, &self.scrolls);
     }
   }
 
@@ -252,6 +308,7 @@ fn apply_op(dir: &std::path::Path, metas: &[ConversationMeta], op: DeferredOp) {
       write_index(dir, metas);
     }
     DeferredOp::WriteDrafts(drafts) => write_drafts(dir, &drafts),
+    DeferredOp::WriteScrolls(scrolls) => write_scrolls(dir, &scrolls),
     DeferredOp::SetActive { id } => match id {
       Some(id) => {
         let _ = std::fs::create_dir_all(dir);
