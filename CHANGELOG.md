@@ -30,6 +30,8 @@ Switching back to a conversation returns you to the exact spot you were reading 
 
 Command output in tool cards now shows the colors the tools emit: cargo's greens and reds, test runner highlights, bold and underlined text all come through, adapted to light and dark themes. Escape sequences that used to leak as garbage characters are cleaned away, progress bars settle on their final state, and copied text stays clean.
 
+Terminals Reviu owns now ask common CLI tools to keep color on even though their output is captured, covering Cargo, pnpm, npm, Vitest, Jest and other color-aware commands without needing extra flags.
+
 ### Select Text In Terminal Output
 
 The live output of commands running in tool cards is now selectable like everything else in the conversation: sweep across lines, double-click a word, triple-click a line, and the text lands in your clipboard on release. Long lines also wrap now instead of being cut off at the edge, matching how file reads and diffs behave.

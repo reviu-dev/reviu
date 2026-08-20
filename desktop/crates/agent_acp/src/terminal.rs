@@ -233,6 +233,10 @@ pub(crate) fn spawn_terminal(
   cmd.args(&args);
   // Piped stdio is not a TTY, so tools silence their colors; these opt-ins
   // bring them back for the terminal cards. The agent's env still overrides.
+  cmd.env_remove("NO_COLOR");
+  cmd.env("TERM", "xterm-256color");
+  cmd.env("COLORTERM", "truecolor");
+  cmd.env("CLICOLOR", "1");
   cmd.env("CLICOLOR_FORCE", "1");
   cmd.env("FORCE_COLOR", "1");
   cmd.env("CARGO_TERM_COLOR", "always");
@@ -367,7 +371,7 @@ mod tests {
       "sh".to_string(),
       vec![
         "-c".to_string(),
-        "printf \"$CARGO_TERM_COLOR:$CLICOLOR_FORCE\"".to_string(),
+        "printf \"$CARGO_TERM_COLOR:$CLICOLOR_FORCE:$FORCE_COLOR:$TERM:$COLORTERM:$CLICOLOR:${NO_COLOR-unset}\"".to_string(),
       ],
       Vec::new(),
       std::env::current_dir().expect("cwd"),
@@ -382,7 +386,7 @@ mod tests {
     }
     let snap = store.snapshot("t").expect("entry");
     assert!(snap.finished, "the probe command finished");
-    assert_eq!(snap.output, "always:1");
+    assert_eq!(snap.output, "always:1:1:xterm-256color:truecolor:1:unset");
   }
 
   #[test]
