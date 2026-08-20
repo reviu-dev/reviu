@@ -312,6 +312,9 @@ fn main() {
   app.run(move |cx: &mut App| {
     gpui_component::init(cx);
     ui::init(cx);
+    if let Some(dir) = agent_registry::icon_cache_dir() {
+      ui::set_runtime_asset_dir(dir);
+    }
     // gpui-component defaults the UI font to `.SystemUIFont`, which only
     // resolves on macOS; elsewhere it falls back to a monospace face. Point
     // the theme at the fonts we bundle (see ui::init) so Linux and Windows
@@ -367,11 +370,22 @@ fn main() {
     // copy already backs the picker, so a slow or failed fetch changes nothing.
     cx.background_executor()
       .spawn(async {
-        match agent_registry::refresh_global_blocking() {
-          Ok(outcome) => eprintln!("[agent-registry] {outcome:?}"),
-          Err(err) => {
-            eprintln!("[agent-registry] refresh failed, keeping the cached list: {err}")
+        // Icons only need refetching when the document itself moved: their
+        // URLs sit under /latest/, so the same URL can serve new artwork.
+        let force_icons = match agent_registry::refresh_global_blocking() {
+          Ok(outcome) => {
+            eprintln!("[agent-registry] {outcome:?}");
+            outcome == agent_registry::RefreshOutcome::Updated
           }
+          Err(err) => {
+            eprintln!("[agent-registry] refresh failed, keeping the cached list: {err}");
+            false
+          }
+        };
+        let fetched =
+          agent_registry::download_icons_blocking(&agent_registry::global(), force_icons);
+        if fetched > 0 {
+          eprintln!("[agent-registry] cached {fetched} agent icons");
         }
       })
       .detach();

@@ -9,7 +9,6 @@ use gpui::{
 };
 use gpui_component::{ActiveTheme as _, Sizable as _, StyledExt as _, h_flex, v_flex};
 use std::rc::Rc;
-use ui::UiIconName;
 
 pub const AGENT_NOTIFICATION_SIZE: Size<gpui::Pixels> = Size {
   width: px(380.),
@@ -17,7 +16,7 @@ pub const AGENT_NOTIFICATION_SIZE: Size<gpui::Pixels> = Size {
 };
 
 pub struct AgentNotification {
-  icon: UiIconName,
+  icon: gpui_component::Icon,
   title: SharedString,
   caption: SharedString,
 }
@@ -31,7 +30,7 @@ impl EventEmitter<AgentNotificationEvent> for AgentNotification {}
 
 impl AgentNotification {
   pub fn new(
-    icon: UiIconName,
+    icon: gpui_component::Icon,
     title: impl Into<SharedString>,
     caption: impl Into<SharedString>,
   ) -> Self {
@@ -79,11 +78,7 @@ impl Render for AgentNotification {
       .shadow_lg()
       .cursor_pointer()
       .on_click(cx.listener(|_, _, _, cx| cx.emit(AgentNotificationEvent::Accepted)))
-      .child(
-        gpui_component::Icon::new(self.icon)
-          .small()
-          .text_color(theme.foreground),
-      )
+      .child(self.icon.clone().small().text_color(theme.foreground))
       .child(
         v_flex()
           .flex_1()

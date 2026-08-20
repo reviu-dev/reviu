@@ -7412,6 +7412,7 @@ name = "reviu_driver"
 version = "0.18.0"
 dependencies = [
  "agent_chat_panel",
+ "agent_registry",
  "anyhow",
  "gpui",
  "gpui-component",

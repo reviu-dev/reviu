@@ -393,14 +393,45 @@ pub fn set_backend_command_override(command: Option<String>) {
     .expect("lock backend command override") = command;
 }
 
-/// Registry ids we ship a brand icon for; every other agent falls back to a
-/// generic mark until its icon is fetched from the registry.
-pub fn backend_icon(id: &AgentId) -> UiIconName {
+/// Registry ids we ship a brand icon for. These stay embedded so the agents
+/// people use most keep their mark with no cache and no network.
+fn embedded_backend_icon(id: &AgentId) -> Option<UiIconName> {
   match id.as_str() {
-    "claude-acp" => UiIconName::Claude,
-    "codex-acp" => UiIconName::OpenAi,
-    "pi-acp" => UiIconName::Pi,
-    _ => UiIconName::Sparkles,
+    "claude-acp" => Some(UiIconName::Claude),
+    "codex-acp" => Some(UiIconName::OpenAi),
+    "pi-acp" => Some(UiIconName::Pi),
+    _ => None,
+  }
+}
+
+/// Where an agent's icon comes from.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum BackendIconSource {
+  /// A brand mark compiled into the binary.
+  Embedded(UiIconName),
+  /// An asset path fetched from the registry into the icon cache.
+  Registry(String),
+  /// Nothing better available.
+  Generic,
+}
+
+pub(crate) fn backend_icon_source(id: &AgentId, has_cached_icon: bool) -> BackendIconSource {
+  if let Some(embedded) = embedded_backend_icon(id) {
+    return BackendIconSource::Embedded(embedded);
+  }
+  match agent_registry::icon_asset_path(id.as_str()) {
+    Some(path) if has_cached_icon => BackendIconSource::Registry(path),
+    _ => BackendIconSource::Generic,
+  }
+}
+
+/// The agent's icon: the one fetched from the registry when it is cached, the
+/// embedded brand mark otherwise, and a generic mark as a last resort.
+pub fn backend_icon(id: &AgentId) -> gpui_component::Icon {
+  match backend_icon_source(id, agent_registry::has_cached_icon(id.as_str())) {
+    BackendIconSource::Embedded(icon) => gpui_component::Icon::new(icon),
+    BackendIconSource::Registry(path) => gpui_component::Icon::empty().path(path),
+    BackendIconSource::Generic => gpui_component::Icon::new(UiIconName::Sparkles),
   }
 }
 

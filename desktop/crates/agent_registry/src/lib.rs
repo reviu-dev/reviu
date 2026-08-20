@@ -4,7 +4,12 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, OnceLock, RwLock};
 use std::time::Duration;
 
+mod icons;
 mod model;
+pub use icons::{
+  ICON_ASSET_PREFIX, cached_icon_ids, download_icons_blocking, has_cached_icon, icon_asset_path,
+  icon_cache_dir,
+};
 pub use model::{
   AgentId, BinaryTarget, Distribution, RegistryAgent, Runner, is_safe_id, parse_registry,
 };
@@ -197,8 +202,17 @@ fn cache_path() -> Option<PathBuf> {
   Some(cache_path_in(&dirs::config_dir()?, storage_dir_name()))
 }
 
-fn cache_path_in(base: &Path, profile_dir: &str) -> PathBuf {
-  base.join(profile_dir).join("agent-registry.json")
+/// The app's per-profile config directory.
+pub(crate) fn profile_dir() -> Option<PathBuf> {
+  Some(profile_dir_in(&dirs::config_dir()?, storage_dir_name()))
+}
+
+fn profile_dir_in(base: &Path, profile: &str) -> PathBuf {
+  base.join(profile)
+}
+
+fn cache_path_in(base: &Path, profile: &str) -> PathBuf {
+  profile_dir_in(base, profile).join("agent-registry.json")
 }
 
 /// Mirrors the app profile split so a dev build never shares prod's cache.
@@ -214,14 +228,58 @@ fn storage_dir_name() -> &'static str {
 mod tests {
   use super::*;
 
+  /// A dropped agent is invisible, so assert on the document's own count
+  /// rather than a floor: a stricter field once cost us 8 agents in silence.
   #[test]
-  fn the_embedded_snapshot_parses_and_carries_the_known_agents() {
+  fn every_agent_in_the_snapshot_parses() {
+    let raw: serde_json::Value =
+      serde_json::from_str(SNAPSHOT).expect("the snapshot is valid json");
+    let documented: Vec<&str> = raw["agents"]
+      .as_array()
+      .expect("an agents array")
+      .iter()
+      .filter_map(|agent| agent["id"].as_str())
+      .collect();
+
     let registry = Registry::embedded();
+    let dropped: Vec<&str> = documented
+      .iter()
+      .copied()
+      .filter(|id| registry.get(&AgentId::new(*id)).is_none())
+      .collect();
+
+    assert!(dropped.is_empty(), "these agents were dropped: {dropped:?}");
+    assert_eq!(registry.agents().len(), documented.len());
+  }
+
+  #[test]
+  fn a_binary_target_keeps_its_args_env_and_optional_digest() {
+    let registry = Registry::embedded();
+    let cursor = registry.get(&AgentId::new("cursor")).expect("cursor");
+    let Distribution::Binary { targets } = &cursor.distribution else {
+      panic!("cursor is distributed as a binary");
+    };
+    let target = targets.first().expect("at least one target");
     assert!(
-      registry.agents().len() > 20,
-      "snapshot holds the full registry, got {}",
-      registry.agents().len()
+      target.args.contains(&"acp".to_string()),
+      "the launch args survive parsing, got {:?}",
+      target.args
     );
+    assert_eq!(target.sha256, None, "cursor publishes no digest");
+
+    let amp = registry.get(&AgentId::new("amp-acp")).expect("amp-acp");
+    let Distribution::Binary { targets } = &amp.distribution else {
+      panic!("amp is distributed as a binary");
+    };
+    assert!(
+      targets.iter().all(|t| t.sha256.is_some()),
+      "amp publishes a digest for every target"
+    );
+  }
+
+  #[test]
+  fn the_embedded_snapshot_carries_the_known_agents() {
+    let registry = Registry::embedded();
     for id in ["claude-acp", "codex-acp", "pi-acp"] {
       let agent = registry
         .get(&AgentId::new(id))
@@ -399,6 +457,10 @@ mod tests {
     assert_eq!(
       cache_path_in(Path::new("/tmp/cfg"), "reviu"),
       PathBuf::from("/tmp/cfg/reviu/agent-registry.json")
+    );
+    assert_eq!(
+      profile_dir_in(Path::new("/tmp/cfg"), "reviu.dev").join(ICON_ASSET_PREFIX),
+      PathBuf::from("/tmp/cfg/reviu.dev/agent-icons")
     );
   }
 }

@@ -69,7 +69,11 @@ pub struct BinaryTarget {
   pub triple: String,
   pub archive: String,
   pub cmd: String,
-  pub sha256: String,
+  pub args: Vec<String>,
+  pub env: Vec<(String, String)>,
+  /// Not every entry publishes a digest; installing one without it is a
+  /// decision for whoever wires up binary distribution.
+  pub sha256: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -172,7 +176,12 @@ struct RawCommand {
 struct RawBinaryTarget {
   archive: String,
   cmd: String,
-  sha256: String,
+  #[serde(default)]
+  args: Vec<String>,
+  #[serde(default)]
+  env: std::collections::BTreeMap<String, String>,
+  #[serde(default)]
+  sha256: Option<String>,
 }
 
 /// Parse a registry document, skipping entries we cannot understand rather
@@ -227,6 +236,8 @@ fn parse_distribution(value: &serde_json::Value) -> Option<Distribution> {
         triple: triple.clone(),
         archive: target.archive,
         cmd: target.cmd,
+        args: target.args,
+        env: target.env.into_iter().collect(),
         sha256: target.sha256,
       })
     })

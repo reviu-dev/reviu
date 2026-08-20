@@ -3194,3 +3194,39 @@ async fn steer_prompt_refuses_when_the_agent_cannot_steer(cx: &mut gpui::TestApp
     assert!(panel.items.is_empty());
   });
 }
+
+#[test]
+fn an_agent_icon_prefers_the_embedded_mark_then_the_registry_then_a_generic_one() {
+  // Our own agents keep their embedded mark whatever the cache holds.
+  for (id, expected) in [
+    ("claude-acp", UiIconName::Claude),
+    ("codex-acp", UiIconName::OpenAi),
+    ("pi-acp", UiIconName::Pi),
+  ] {
+    for cached in [false, true] {
+      assert_eq!(
+        backend_icon_source(&AgentId::new(id), cached),
+        BackendIconSource::Embedded(expected),
+        "{id} keeps its embedded mark (cached: {cached})"
+      );
+    }
+  }
+
+  assert_eq!(
+    backend_icon_source(&AgentId::new("gemini"), true),
+    BackendIconSource::Registry("agent-icons/gemini.svg".to_string()),
+    "a cached registry icon is used once it is on disk"
+  );
+  assert_eq!(
+    backend_icon_source(&AgentId::new("gemini"), false),
+    BackendIconSource::Generic,
+    "before the download lands, the generic mark stands in"
+  );
+
+  // An id that could escape the cache directory never becomes a path, even if
+  // something claims it is cached.
+  assert_eq!(
+    backend_icon_source(&AgentId::new("../evil"), true),
+    BackendIconSource::Generic
+  );
+}

@@ -154,6 +154,9 @@ fn main() {
   app.update(|cx| {
     gpui_component::init(cx);
     ui::init(cx);
+    if let Some(dir) = agent_registry::icon_cache_dir() {
+      ui::set_runtime_asset_dir(dir);
+    }
     let theme = gpui_component::Theme::global_mut(cx);
     theme.font_family = "Inter".into();
     theme.mono_font_family = "Lilex".into();

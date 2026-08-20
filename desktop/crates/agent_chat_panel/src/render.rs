@@ -1163,8 +1163,8 @@ impl Render for AgentChatPanel {
                   let entity = entity.clone();
                   let is_current = id == current;
                   let label_text: SharedString = agent.name.clone().into();
-                  let brand_icon = crate::backend_icon(&id);
                   let selector_id = id.to_string();
+                  let icon_id = id.clone();
                   menu = menu.item(
                     PopupMenuItem::element(move |_, cx| {
                       let theme = cx.theme().clone();
@@ -1177,7 +1177,7 @@ impl Render for AgentChatPanel {
                           move || format!("agent-chat-backend-item-{selector_id}")
                         })
                         .child(
-                          gpui_component::Icon::new(brand_icon)
+                          crate::backend_icon(&icon_id)
                             .small()
                             .text_color(theme.foreground),
                         )
@@ -1866,13 +1866,14 @@ pub(crate) fn config_customized(
 }
 
 /// Composer selector trigger: optional leading icon, label, trailing chevron.
-pub(crate) fn selector_trigger(icon: Option<UiIconName>, label: SharedString) -> impl IntoElement {
+pub(crate) fn selector_trigger(
+  icon: Option<gpui_component::Icon>,
+  label: SharedString,
+) -> impl IntoElement {
   h_flex()
     .items_center()
     .gap_1()
-    .when_some(icon, |this, icon| {
-      this.child(gpui_component::Icon::new(icon).xsmall())
-    })
+    .when_some(icon, |this, icon| this.child(icon.xsmall()))
     .child(label)
     .child(gpui_component::Icon::new(IconName::ChevronDown).xsmall())
 }

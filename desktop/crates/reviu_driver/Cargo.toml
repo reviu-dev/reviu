@@ -5,6 +5,7 @@ edition.workspace = true
 publish.workspace = true
 
 [dependencies]
+agent_registry = { workspace = true }
 agent_chat_panel = { workspace = true, features = ["test-support"] }
 anyhow = { workspace = true }
 gpui = { workspace = true, features = ["test-support"] }
