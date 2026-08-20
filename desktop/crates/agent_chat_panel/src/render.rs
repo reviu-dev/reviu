@@ -824,6 +824,8 @@ pub(crate) fn render_tool_call(
             ))
           };
           let mut rows = Vec::with_capacity(visible);
+          let mut selection_text = String::new();
+          let mut row_ranges = Vec::with_capacity(visible);
           for line in d.lines.iter().take(visible) {
             let (bg, fg, hl_bg) = match line.kind {
               DiffLineKind::Added => (
@@ -838,6 +840,16 @@ pub(crate) fn render_tool_call(
               ),
             };
             let gutter = show_line_numbers.then(|| diff_gutter(line.old_line, line.new_line));
+            if !selection_text.is_empty() {
+              selection_text.push('\n');
+            }
+            let selection_start = selection_text.len();
+            selection_text.push_str(if empty_creation {
+              "(empty file)"
+            } else {
+              &line.text
+            });
+            row_ranges.push(selection_start..selection_text.len());
             if empty_creation {
               rows.push(code_lines::CodeLineRow {
                 gutter,
@@ -874,14 +886,22 @@ pub(crate) fn render_tool_call(
             });
           }
           let gutter_width = if show_line_numbers { px(70.) } else { px(0.) };
-          let body = mini_code_block(theme).child(code_lines::CodeLines::new(
-            rows,
-            gutter_width,
-            theme.muted_foreground.opacity(0.72),
-            theme.border.opacity(0.45),
-            theme.foreground,
-            mono_font,
-          ));
+          let body = mini_code_block(theme).child(
+            code_lines::CodeLines::new(
+              rows,
+              gutter_width,
+              theme.muted_foreground.opacity(0.72),
+              theme.border.opacity(0.45),
+              theme.foreground,
+              mono_font,
+            )
+            .selectable(code_lines::SelectionSpec {
+              text: SharedString::from(selection_text),
+              row_ranges,
+              text_id: item_id_base | 0x0200_0000 | ((diff_idx as u64) << 12),
+              registry: registry.clone(),
+            }),
+          );
           block = block.child(body);
           if total > MAX_DIFF_LINES_COLLAPSED {
             let remaining = total.saturating_sub(visible);

@@ -14,6 +14,10 @@ The pulsing "thinking" indicator used to quietly force the whole window to redra
 
 Scrolling a conversation full of edits is much lighter too: the small diffs and numbered outputs inside tool cards are now drawn as a single block instead of a stack of nested rows, cutting most of the layout work a busy screen used to redo on every frame. Text in outputs stays selectable, and selecting can now sweep across lines in one drag instead of stopping at each line.
 
+### Select Text In Diffs
+
+The small diffs inside tool cards are now selectable: sweep across added and removed lines, double-click a word or triple-click a line, and the selection lands in your clipboard on release, same as tool outputs.
+
 ### Line Numbers In Read Results
 
 Read tool results in the agent conversation now show file line numbers, so you can refer back to exact lines without reopening the file.
