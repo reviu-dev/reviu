@@ -42,7 +42,7 @@ The small diffs inside tool cards are now selectable: sweep across added and rem
 
 ### Line Numbers In Read Results
 
-Read tool results in the agent conversation now show file line numbers, so you can refer back to exact lines without reopening the file.
+Read tool results in the agent conversation now show file line numbers, so you can refer back to exact lines without reopening the file. When the agent reads from an offset deep in a file, the numbers now start at the real file line instead of restarting at 1.
 
 ### Push With Saved Git Credentials
 

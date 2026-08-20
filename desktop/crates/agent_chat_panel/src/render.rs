@@ -1020,8 +1020,12 @@ pub(crate) fn render_tool_call(
           output.text[..end].to_string()
         };
         let text_id = item_id_base | 0x100 | (out_idx as u64);
-        let output_start_line =
-          read_tool_output_start_line(&t.kind, &t.locations).or(output.start_line);
+        // Stored resolutions first; the recompute only serves conversations
+        // persisted before read_start_line existed.
+        let output_start_line = t
+          .read_start_line
+          .or(output.start_line)
+          .or_else(|| read_tool_output_start_line(&t.kind, &t.locations));
         let content_div = if let Some(start_line) = output_start_line {
           render_numbered_tool_output(
             output,

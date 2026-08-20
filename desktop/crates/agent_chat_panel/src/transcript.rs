@@ -65,11 +65,28 @@ pub(crate) fn read_tool_output_start_line(
   kind: &ToolKind,
   locations: &[(PathBuf, Option<u32>)],
 ) -> Option<u32> {
-  if matches!(kind, ToolKind::Read) && !locations.is_empty() {
-    Some(locations[0].1.unwrap_or(1))
-  } else {
-    None
+  read_tool_start_line(kind, locations, None)
+}
+
+/// First file line of a Read tool's output: an explicit location line wins,
+/// then the `offset` in the tool's raw input (Claude-style Read), then 1 when
+/// a location at least proves this is a file read.
+pub(crate) fn read_tool_start_line(
+  kind: &ToolKind,
+  locations: &[(PathBuf, Option<u32>)],
+  raw_input: Option<&serde_json::Value>,
+) -> Option<u32> {
+  if !matches!(kind, ToolKind::Read) {
+    return None;
   }
+  let from_location = locations.first().and_then(|(_, line)| *line);
+  let from_input = raw_input
+    .and_then(|input| input.get("offset"))
+    .and_then(|offset| offset.as_u64())
+    .map(|offset| offset.clamp(1, u32::MAX as u64) as u32);
+  from_location
+    .or(from_input)
+    .or_else(|| (!locations.is_empty()).then_some(1))
 }
 
 /// Fingerprint of the pieces that feed diffs, outputs and highlight spans.
@@ -96,7 +113,7 @@ pub(crate) fn upsert_tool_call_pure(
     .map(|l| (l.path, l.line))
     .collect();
   let content_fp = tool_content_fp(&call.content, locations.first().map(|(p, _)| p));
-  let output_start_line = read_tool_output_start_line(&call.kind, &locations);
+  let read_start_line = read_tool_start_line(&call.kind, &locations, call.raw_input.as_ref());
   if let Some(&idx) = index.get(&call.tool_call_id)
     && let Some(ChatItem::Tool(existing)) = items.get_mut(idx)
   {
@@ -104,10 +121,11 @@ pub(crate) fn upsert_tool_call_pure(
     existing.kind = call.kind;
     existing.status = call.status;
     existing.locations = locations;
+    existing.read_start_line = read_start_line.or(existing.read_start_line);
     // Same content: keep diffs, outputs, spans and their expansion state.
     if existing.content_fp != content_fp {
       existing.diffs = extract_diffs(&call.content, cwd);
-      existing.outputs = extract_outputs(&call.content, output_start_line);
+      existing.outputs = extract_outputs(&call.content, existing.read_start_line);
       existing.terminals = extract_terminals(&call.content);
       existing.content_fp = content_fp;
       populate_syntax_spans(existing);
@@ -121,8 +139,9 @@ pub(crate) fn upsert_tool_call_pure(
     status: call.status,
     locations,
     diffs: extract_diffs(&call.content, cwd),
-    outputs: extract_outputs(&call.content, output_start_line),
+    outputs: extract_outputs(&call.content, read_start_line),
     terminals: extract_terminals(&call.content),
+    read_start_line,
     content_fp,
   };
   populate_syntax_spans(&mut view);
@@ -155,14 +174,19 @@ pub(crate) fn apply_tool_call_update_pure(
   if let Some(locs) = update.fields.locations {
     view.locations = locs.into_iter().map(|l| (l.path, l.line)).collect();
   }
+  // Updates rarely repeat the raw input; a resolution from fresh fields wins,
+  // the one captured at the initial call survives otherwise.
+  view.read_start_line = read_tool_start_line(
+    &view.kind,
+    &view.locations,
+    update.fields.raw_input.as_ref(),
+  )
+  .or(view.read_start_line);
   if let Some(content) = update.fields.content {
     let content_fp = tool_content_fp(&content, view.locations.first().map(|(p, _)| p));
     if view.content_fp != content_fp {
       view.diffs = extract_diffs(&content, cwd);
-      view.outputs = extract_outputs(
-        &content,
-        read_tool_output_start_line(&view.kind, &view.locations),
-      );
+      view.outputs = extract_outputs(&content, view.read_start_line);
       view.terminals = extract_terminals(&content);
       view.content_fp = content_fp;
       // Only fresh content is worth a re-highlight; a status flip is not.

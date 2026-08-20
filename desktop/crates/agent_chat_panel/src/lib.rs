@@ -163,6 +163,10 @@ struct ToolCallView {
   /// Ids of terminals embedded in this call; their live state is in the store.
   #[serde(default)]
   terminals: Vec<String>,
+  /// First file line of a Read's output, resolved from the location line or
+  /// the tool's raw input offset; drives the number gutter.
+  #[serde(default)]
+  read_start_line: Option<u32>,
   /// Fingerprint of the content that produced diffs/outputs/spans; a re-sent
   /// call with identical content skips the diff and highlight recompute.
   #[serde(skip)]

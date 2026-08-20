@@ -116,6 +116,7 @@ fn tool_index_tracks_positions_after_checkpoint_insertion_and_truncation() {
       diffs: Vec::new(),
       outputs: Vec::new(),
       terminals: Vec::new(),
+      read_start_line: None,
       content_fp: 0,
     })
   };
@@ -232,6 +233,7 @@ fn edit_tool(id: &str, diffs: Vec<(&str, u32, u32)>) -> ChatItem {
       .collect(),
     outputs: Vec::new(),
     terminals: Vec::new(),
+    read_start_line: None,
     content_fp: 0,
   })
 }
@@ -481,6 +483,7 @@ fn bench_diff_tool(id: &str, lines: usize) -> ChatItem {
     }],
     outputs: Vec::new(),
     terminals: Vec::new(),
+    read_start_line: None,
     content_fp: 0,
   })
 }
@@ -504,6 +507,7 @@ fn bench_output_tool(id: &str, lines: usize) -> ChatItem {
       syntax_spans: Vec::new(),
     }],
     terminals: Vec::new(),
+    read_start_line: None,
     content_fp: 0,
   })
 }
@@ -1267,6 +1271,51 @@ async fn code_lines_wraps_long_rows_and_keeps_short_ones_single(cx: &mut gpui::T
 }
 
 #[test]
+fn a_read_with_an_offset_numbers_from_the_real_file_line() {
+  use crate::transcript::{read_tool_start_line, upsert_tool_call_pure};
+
+  // The raw input's offset fills in when the location carries no line.
+  let locations = vec![(std::path::PathBuf::from("src/render.rs"), None)];
+  let input = serde_json::json!({ "file_path": "src/render.rs", "offset": 350 });
+  assert_eq!(
+    read_tool_start_line(&ToolKind::Read, &locations, Some(&input)),
+    Some(350)
+  );
+  // An explicit location line stays authoritative.
+  let located = vec![(std::path::PathBuf::from("src/render.rs"), Some(42))];
+  assert_eq!(
+    read_tool_start_line(&ToolKind::Read, &located, Some(&input)),
+    Some(42)
+  );
+  // No location and no offset: nothing proves this reads a file.
+  assert_eq!(read_tool_start_line(&ToolKind::Read, &[], None), None);
+  // An offset alone is enough, and 0 clamps to the first line.
+  let zero = serde_json::json!({ "offset": 0 });
+  assert_eq!(
+    read_tool_start_line(&ToolKind::Read, &[], Some(&zero)),
+    Some(1)
+  );
+  assert_eq!(read_tool_start_line(&ToolKind::Fetch, &located, None), None);
+
+  // End to end through the tool-call pipeline: the outputs carry the offset.
+  let mut items = Vec::new();
+  let mut index = HashMap::new();
+  let mut call = ToolCall::new(ToolCallId::new("read1"), "Read render.rs");
+  call.kind = ToolKind::Read;
+  call.locations = vec![ToolCallLocation::new("src/render.rs")];
+  call.raw_input = Some(serde_json::json!({ "offset": 350 }));
+  call.content = vec![ToolCallContent::from(
+    agent_client_protocol::schema::ContentBlock::Text(TextContent::new("let a = 1;\nlet b = 2;")),
+  )];
+  upsert_tool_call_pure(&mut items, &mut index, call, test_cwd());
+  let ChatItem::Tool(view) = &items[0] else {
+    panic!("tool expected");
+  };
+  assert_eq!(view.read_start_line, Some(350));
+  assert_eq!(view.outputs[0].start_line, Some(350));
+}
+
+#[test]
 fn terminal_tail_ranges_slice_their_lines_and_strip_ansi() {
   // Colored lines: the selectable text must be the stripped one.
   let output = (0..30)
@@ -1391,6 +1440,7 @@ fn persisted_tools_backfill_line_numbers_and_highlights_on_load() {
         syntax_spans: Vec::new(),
       }],
       terminals: Vec::new(),
+      read_start_line: None,
       content_fp: 0,
     })],
     group_pins: HashMap::new(),
