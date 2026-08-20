@@ -1008,6 +1008,29 @@ async fn the_reading_position_follows_its_conversation(cx: &mut gpui::TestAppCon
 }
 
 #[gpui::test]
+async fn the_reading_position_survives_the_generating_row_settling(cx: &mut gpui::TestAppContext) {
+  let (panel, cx) = add_panel_window(cx);
+  panel.update(cx, |panel, _| {
+    panel.items = (0..60).map(|i| user_message(&format!("m {i}"))).collect();
+    // Connecting shows the trailing Generating row.
+    panel.status = Status::Connecting;
+    panel.sync_list_count();
+    panel.messages_list.scroll_to(gpui::ListOffset {
+      item_ix: 12,
+      offset_in_item: px(4.),
+    });
+    // The row settles once the session is ready: one fewer list item.
+    panel.status = Status::Ready;
+    panel.sync_list_count();
+    assert_eq!(
+      panel.messages_list.logical_scroll_top().item_ix,
+      12,
+      "a tail-side shrink must not reset the reading position"
+    );
+  });
+}
+
+#[gpui::test]
 async fn a_draft_survives_a_relaunch(cx: &mut gpui::TestAppContext) {
   let dir = temp_dir("agent-drafts-relaunch");
   let (panel, cx) = add_panel_window(cx);

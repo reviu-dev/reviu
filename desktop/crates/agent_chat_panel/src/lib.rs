@@ -883,6 +883,10 @@ impl AgentChatPanel {
     self.pending_thought.clear();
     self.clear_runway();
     self.sync_list_count();
+    // The splice above may keep heights measured on the previous
+    // conversation's rows; they must not stick to the new transcript.
+    let count = self.messages_list.item_count();
+    self.messages_list.remeasure_items(0..count);
   }
 
   /// A wheel scroll is the reader taking over: release the runway hold.
@@ -1463,7 +1467,9 @@ impl AgentChatPanel {
       let at = old_count.saturating_sub(1);
       self.messages_list.splice(at..at, new_count - old_count);
     } else {
-      self.messages_list.reset(new_count);
+      // Shrinks are tail-side (the Generating row settling, truncation);
+      // a splice keeps the reading position where reset() jumped to top.
+      self.messages_list.splice(new_count..old_count, 0);
     }
   }
 
