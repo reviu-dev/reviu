@@ -50,6 +50,10 @@ pub(crate) fn extract_terminals(content: &[ToolCallContent]) -> Vec<String> {
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub(crate) struct DiffLine {
   pub kind: DiffLineKind,
+  #[serde(default)]
+  pub old_line: Option<u32>,
+  #[serde(default)]
+  pub new_line: Option<u32>,
   pub text: String,
   #[serde(default)]
   pub spans: Vec<InlineSpan>,
@@ -261,28 +265,36 @@ pub(crate) fn build_diff_lines(old: &str, new: &str) -> Vec<DiffLine> {
       let (old_spans, new_spans) = word_diff_spans(removed[k], added[k]);
       out.push(DiffLine {
         kind: DiffLineKind::Removed,
+        old_line: Some(hunk.before.start + k as u32 + 1),
+        new_line: None,
         text: removed[k].to_string(),
         spans: old_spans,
         syntax_spans: Vec::new(),
       });
       out.push(DiffLine {
         kind: DiffLineKind::Added,
+        old_line: None,
+        new_line: Some(hunk.after.start + k as u32 + 1),
         text: added[k].to_string(),
         spans: new_spans,
         syntax_spans: Vec::new(),
       });
     }
-    for line in removed.iter().skip(paired) {
+    for (offset, line) in removed.iter().enumerate().skip(paired) {
       out.push(DiffLine {
         kind: DiffLineKind::Removed,
+        old_line: Some(hunk.before.start + offset as u32 + 1),
+        new_line: None,
         text: (*line).to_string(),
         spans: Vec::new(),
         syntax_spans: Vec::new(),
       });
     }
-    for line in added.iter().skip(paired) {
+    for (offset, line) in added.iter().enumerate().skip(paired) {
       out.push(DiffLine {
         kind: DiffLineKind::Added,
+        old_line: None,
+        new_line: Some(hunk.after.start + offset as u32 + 1),
         text: (*line).to_string(),
         spans: Vec::new(),
         syntax_spans: Vec::new(),
@@ -290,6 +302,34 @@ pub(crate) fn build_diff_lines(old: &str, new: &str) -> Vec<DiffLine> {
     }
   }
   out
+}
+
+pub(crate) fn backfill_legacy_line_numbers(summary: &mut DiffSummary, start_line: Option<u32>) {
+  if summary
+    .lines
+    .iter()
+    .any(|line| line.old_line.is_some() || line.new_line.is_some())
+  {
+    return;
+  }
+  let Some(start_line) = start_line else {
+    return;
+  };
+
+  let mut old_line = start_line;
+  let mut new_line = start_line;
+  for line in &mut summary.lines {
+    match line.kind {
+      DiffLineKind::Removed => {
+        line.old_line = Some(old_line);
+        old_line += 1;
+      }
+      DiffLineKind::Added => {
+        line.new_line = Some(new_line);
+        new_line += 1;
+      }
+    }
+  }
 }
 
 pub(crate) fn diff_line_counts(old_text: Option<&str>, new_text: &str) -> (u32, u32) {
@@ -416,7 +456,7 @@ mod tests {
   }
 
   #[test]
-  fn build_diff_lines_pairs_and_carries_spans() {
+  fn build_diff_lines_pairs_and_carries_spans_and_line_numbers() {
     let lines = build_diff_lines(
       "export const VERSION = '3.0.0';\n",
       "export const VERSION = '2.0.0';\n",
@@ -431,9 +471,82 @@ mod tests {
       .count();
     assert_eq!(removed, 1);
     assert_eq!(added, 1);
+    assert_eq!(lines[0].old_line, Some(1));
+    assert_eq!(lines[0].new_line, None);
+    assert_eq!(lines[1].old_line, None);
+    assert_eq!(lines[1].new_line, Some(1));
     for l in &lines {
       assert!(!l.spans.is_empty(), "paired lines should have spans");
     }
+  }
+
+  #[test]
+  fn build_diff_lines_tracks_line_numbers_inside_the_file() {
+    let lines = build_diff_lines("keep\nold\nkeep\n", "keep\nnew\nkeep\nadded\n");
+    let removed = lines
+      .iter()
+      .find(|line| line.kind == DiffLineKind::Removed && line.text == "old")
+      .expect("removed line");
+    let added = lines
+      .iter()
+      .find(|line| line.kind == DiffLineKind::Added && line.text == "new")
+      .expect("added line");
+    let trailing = lines
+      .iter()
+      .find(|line| line.kind == DiffLineKind::Added && line.text == "added")
+      .expect("trailing added line");
+
+    assert_eq!(removed.old_line, Some(2));
+    assert_eq!(removed.new_line, None);
+    assert_eq!(added.old_line, None);
+    assert_eq!(added.new_line, Some(2));
+    assert_eq!(trailing.old_line, None);
+    assert_eq!(trailing.new_line, Some(4));
+  }
+
+  #[test]
+  fn backfill_legacy_line_numbers_uses_the_tool_location_as_a_start() {
+    let mut summary = DiffSummary {
+      path: "src/main.rs".to_string(),
+      added: 2,
+      removed: 1,
+      lines: vec![
+        DiffLine {
+          kind: DiffLineKind::Removed,
+          old_line: None,
+          new_line: None,
+          text: "old".to_string(),
+          spans: Vec::new(),
+          syntax_spans: Vec::new(),
+        },
+        DiffLine {
+          kind: DiffLineKind::Added,
+          old_line: None,
+          new_line: None,
+          text: "new".to_string(),
+          spans: Vec::new(),
+          syntax_spans: Vec::new(),
+        },
+        DiffLine {
+          kind: DiffLineKind::Added,
+          old_line: None,
+          new_line: None,
+          text: "newer".to_string(),
+          spans: Vec::new(),
+          syntax_spans: Vec::new(),
+        },
+      ],
+      expanded: false,
+    };
+
+    backfill_legacy_line_numbers(&mut summary, Some(12));
+
+    assert_eq!(summary.lines[0].old_line, Some(12));
+    assert_eq!(summary.lines[0].new_line, None);
+    assert_eq!(summary.lines[1].old_line, None);
+    assert_eq!(summary.lines[1].new_line, Some(12));
+    assert_eq!(summary.lines[2].old_line, None);
+    assert_eq!(summary.lines[2].new_line, Some(13));
   }
 
   #[test]

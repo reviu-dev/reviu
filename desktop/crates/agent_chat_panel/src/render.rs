@@ -687,6 +687,11 @@ pub(crate) fn render_tool_call(
           // reads as a glitch, so name the emptiness.
           let empty_creation =
             d.lines.len() == 1 && d.removed == 0 && d.lines[0].text.trim().is_empty();
+          let show_line_numbers = d
+            .lines
+            .iter()
+            .take(visible)
+            .any(|line| line.old_line.is_some() || line.new_line.is_some());
           for line in d.lines.iter().take(visible) {
             let (bg, fg, hl_bg) = match line.kind {
               DiffLineKind::Added => (
@@ -700,14 +705,43 @@ pub(crate) fn render_tool_call(
                 ui_theme.diff_word_removed_background(),
               ),
             };
+            let line_number = |line: Option<u32>| {
+              div()
+                .w(px(30.))
+                .flex_shrink_0()
+                .text_right()
+                .text_color(theme.muted_foreground.opacity(0.72))
+                .child(line.map(|line| line.to_string()).unwrap_or_default())
+            };
+            let line_gutter = |old_line: Option<u32>, new_line: Option<u32>| {
+              h_flex()
+                .w(px(70.))
+                .flex_shrink_0()
+                .gap_1()
+                .px_2()
+                .border_r_1()
+                .border_color(theme.border.opacity(0.45))
+                .bg(bg)
+                .child(line_number(old_line))
+                .child(line_number(new_line))
+            };
             if empty_creation {
               body = body.child(
-                h_flex().w_full().px_2().bg(bg).child(
-                  div()
-                    .text_color(theme.muted_foreground)
-                    .italic()
-                    .child("(empty file)"),
-                ),
+                h_flex()
+                  .w_full()
+                  .when(show_line_numbers, |this| {
+                    this.child(line_gutter(line.old_line, line.new_line))
+                  })
+                  .child(
+                    div()
+                      .min_w_0()
+                      .flex_1()
+                      .px_2()
+                      .bg(bg)
+                      .text_color(theme.muted_foreground)
+                      .italic()
+                      .child("(empty file)"),
+                  ),
               );
               continue;
             }
@@ -731,10 +765,18 @@ pub(crate) fn render_tool_call(
             body = body.child(
               h_flex()
                 .w_full()
-                .px_2()
-                .bg(bg)
-                .text_color(fg)
-                .child(text_col),
+                .when(show_line_numbers, |this| {
+                  this.child(line_gutter(line.old_line, line.new_line))
+                })
+                .child(
+                  div()
+                    .min_w_0()
+                    .flex_1()
+                    .px_2()
+                    .bg(bg)
+                    .text_color(fg)
+                    .child(text_col),
+                ),
             );
           }
           block = block.child(body);

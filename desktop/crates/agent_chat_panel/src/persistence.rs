@@ -118,7 +118,18 @@ pub(crate) fn load_conversation_file(path: &std::path::Path) -> Option<LoadedCon
   for item in parsed.items {
     match item {
       PersistedChatItem::Message(m) => items.push(ChatItem::Message(m)),
-      PersistedChatItem::Tool(t) => {
+      PersistedChatItem::Tool(mut t) => {
+        let default_start_line = t.locations.first().and_then(|(_, line)| *line);
+        for diff in &mut t.diffs {
+          let start_line = t
+            .locations
+            .iter()
+            .find(|(path, _)| location_matches_diff_path(path, &diff.path))
+            .and_then(|(_, line)| *line)
+            .or(default_start_line);
+          backfill_legacy_line_numbers(diff, start_line);
+        }
+        populate_syntax_spans(&mut t);
         index.insert(t.id.clone(), items.len());
         items.push(ChatItem::Tool(t));
       }
@@ -142,6 +153,11 @@ pub(crate) fn load_conversation_file(path: &std::path::Path) -> Option<LoadedCon
     .map(|(id, expanded)| (ToolCallId::new(std::sync::Arc::from(id.as_str())), expanded))
     .collect();
   Some((parsed.meta, items, index, pins, parsed.auto_approve))
+}
+
+fn location_matches_diff_path(location: &std::path::Path, diff_path: &str) -> bool {
+  let location = location.to_string_lossy();
+  location == diff_path || location.ends_with(diff_path)
 }
 
 pub(crate) fn list_conversations_in(dir: &std::path::Path) -> Vec<ConversationMeta> {

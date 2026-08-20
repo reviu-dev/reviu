@@ -465,6 +465,87 @@ async fn the_auto_approve_flag_survives_a_conversation_reload(cx: &mut gpui::Tes
 }
 
 #[test]
+fn persisted_tools_backfill_line_numbers_and_highlights_on_load() {
+  let dir = temp_dir("agent-tool-reload");
+  let conv_id = "legacy-lines";
+  let path = dir.join(format!("{conv_id}.json"));
+  let conversation = PersistedConversation {
+    meta: ConversationMeta {
+      id: conv_id.to_string(),
+      started_at_secs: 0,
+      updated_at_secs: 0,
+      title: "legacy".to_string(),
+      message_count: 1,
+      session_id: None,
+    },
+    items: vec![PersistedChatItem::Tool(ToolCallView {
+      id: ToolCallId::new(std::sync::Arc::from("tool-1")),
+      title: "Edit src/main.rs".to_string(),
+      kind: ToolKind::Edit,
+      status: ToolCallStatus::Completed,
+      locations: vec![(PathBuf::from("src/main.rs"), Some(12))],
+      diffs: vec![DiffSummary {
+        path: "src/main.rs".to_string(),
+        added: 1,
+        removed: 1,
+        lines: vec![
+          crate::diff::DiffLine {
+            kind: DiffLineKind::Removed,
+            old_line: None,
+            new_line: None,
+            text: "fn old() {}".to_string(),
+            spans: Vec::new(),
+            syntax_spans: Vec::new(),
+          },
+          crate::diff::DiffLine {
+            kind: DiffLineKind::Added,
+            old_line: None,
+            new_line: None,
+            text: "fn new() {}".to_string(),
+            spans: Vec::new(),
+            syntax_spans: Vec::new(),
+          },
+        ],
+        expanded: false,
+      }],
+      outputs: vec![ToolOutput {
+        text: "fn output() {}".to_string(),
+        expanded: false,
+        syntax_spans: Vec::new(),
+      }],
+      terminals: Vec::new(),
+      content_fp: 0,
+    })],
+    group_pins: HashMap::new(),
+    auto_approve: false,
+  };
+  std::fs::write(
+    &path,
+    serde_json::to_string(&conversation).expect("serialize conversation"),
+  )
+  .expect("write conversation");
+
+  let (_, items, _, _, _) = load_conversation_file(&path).expect("reloads");
+  let ChatItem::Tool(tool) = &items[0] else {
+    panic!("tool item");
+  };
+  assert_eq!(tool.diffs[0].lines[0].old_line, Some(12));
+  assert_eq!(tool.diffs[0].lines[0].new_line, None);
+  assert_eq!(tool.diffs[0].lines[1].old_line, None);
+  assert_eq!(tool.diffs[0].lines[1].new_line, Some(12));
+  assert!(
+    !tool.diffs[0].lines[0].syntax_spans.is_empty(),
+    "diff syntax is restored after serde skipped it"
+  );
+  assert!(
+    !tool.outputs[0].syntax_spans.is_empty(),
+    "output syntax is restored after serde skipped it"
+  );
+
+  std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
 fn turn_summary_survives_persistence_roundtrip_collapsed() {
   let view = TurnSummaryView {
     files: vec![TurnFileStat {
