@@ -19,13 +19,17 @@ pub(crate) const MAX_DIFF_LINES_COLLAPSED: usize = 40;
 pub(crate) const MAX_TOOL_OUTPUT_LINES_COLLAPSED: usize = 20;
 
 /// Extracts text content blocks from tool call output. Returns one entry per `Content` block.
-pub(crate) fn extract_outputs(content: &[ToolCallContent]) -> Vec<crate::ToolOutput> {
+pub(crate) fn extract_outputs(
+  content: &[ToolCallContent],
+  start_line: Option<u32>,
+) -> Vec<crate::ToolOutput> {
   content
     .iter()
     .filter_map(|c| match c {
       ToolCallContent::Content(text_content) => match &text_content.content {
         ContentBlock::Text(t) => Some(crate::ToolOutput {
           text: crate::strip_markdown_code_fence(&t.text).to_string(),
+          start_line,
           expanded: false,
           syntax_spans: Vec::new(),
         }),
@@ -583,11 +587,27 @@ mod tests {
         "second block",
       )))),
     ];
-    let outs = extract_outputs(&content);
+    let outs = extract_outputs(&content, None);
     assert_eq!(outs.len(), 2);
     assert_eq!(outs[0].text, "hello stdout");
     assert_eq!(outs[1].text, "second block");
+    assert_eq!(outs[0].start_line, None);
     assert!(!outs[0].expanded);
+  }
+
+  #[test]
+  fn extract_outputs_carries_read_start_line() {
+    use agent_client_protocol::schema::{
+      Content as AcpContent, ContentBlock, TextContent, ToolCallContent,
+    };
+    let content = vec![ToolCallContent::Content(AcpContent::new(
+      ContentBlock::Text(TextContent::new("first\nsecond")),
+    ))];
+
+    let outs = extract_outputs(&content, Some(42));
+
+    assert_eq!(outs.len(), 1);
+    assert_eq!(outs[0].start_line, Some(42));
   }
 
   #[test]

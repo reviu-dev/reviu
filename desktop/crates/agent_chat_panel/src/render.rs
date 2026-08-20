@@ -193,6 +193,47 @@ pub(crate) fn mini_diff_line_text_for_layout(text: &str) -> SharedString {
   }
 }
 
+pub(crate) fn visible_output_line_ranges(
+  text: &str,
+  visible: usize,
+) -> Vec<std::ops::Range<usize>> {
+  let mut ranges = Vec::new();
+  let mut start = 0usize;
+  while ranges.len() < visible && start < text.len() {
+    let Some(newline_offset) = text[start..].find('\n') else {
+      ranges.push(start..text.len());
+      break;
+    };
+    let mut end = start + newline_offset;
+    if end > start && text.as_bytes()[end - 1] == b'\r' {
+      end -= 1;
+    }
+    ranges.push(start..end);
+    start += newline_offset + 1;
+  }
+  ranges
+}
+
+pub(crate) fn syntax_spans_for_range(
+  spans: &[HighlightSpan],
+  range: std::ops::Range<usize>,
+) -> Vec<HighlightSpan> {
+  spans
+    .iter()
+    .filter_map(|span| {
+      let start = span.byte_range.start.max(range.start);
+      let end = span.byte_range.end.min(range.end);
+      if start >= end {
+        return None;
+      }
+      Some(HighlightSpan {
+        byte_range: start - range.start..end - range.start,
+        token_type: span.token_type,
+      })
+    })
+    .collect()
+}
+
 pub(crate) fn build_text_runs(
   text: &str,
   word_spans: &[InlineSpan],
@@ -536,6 +577,83 @@ fn render_terminal_block(
     .into_any_element()
 }
 
+fn render_numbered_tool_output(
+  output: &ToolOutput,
+  start_line: u32,
+  visible: usize,
+  text_id_base: u64,
+  registry: &selectable_text::SelectionRegistry,
+  theme: &gpui_component::Theme,
+) -> gpui::AnyElement {
+  let ui_theme = ui::Theme::new(theme.is_dark());
+  let syntax_theme = ui_theme.syntax();
+  let mono_font = mono_font_for(theme);
+  let mut body = v_flex()
+    .font_family("monospace")
+    .text_xs()
+    .bg(theme.background)
+    .border_1()
+    .border_color(theme.border)
+    .rounded(px(3.))
+    .overflow_hidden()
+    .py_1();
+
+  for (line_idx, range) in visible_output_line_ranges(&output.text, visible)
+    .into_iter()
+    .enumerate()
+  {
+    let line_text = &output.text[range.clone()];
+    let line_spans = syntax_spans_for_range(&output.syntax_spans, range);
+    let runs = highlights_to_text_runs(
+      &line_spans,
+      line_text,
+      theme.foreground,
+      mono_font.clone(),
+      &syntax_theme,
+    );
+    let text_id = text_id_base | line_idx as u64;
+    body = body.child(
+      div()
+        .flex()
+        .flex_row()
+        .items_stretch()
+        .w_full()
+        .child(
+          h_flex()
+            .items_start()
+            .w(px(54.))
+            .flex_shrink_0()
+            .px_2()
+            .border_r_1()
+            .border_color(theme.border.opacity(0.45))
+            .text_color(theme.muted_foreground.opacity(0.72))
+            .child(
+              div()
+                .w_full()
+                .text_right()
+                .child((start_line + line_idx as u32).to_string()),
+            ),
+        )
+        .child(
+          div()
+            .min_w_0()
+            .flex_1()
+            .px_2()
+            .text_color(theme.foreground)
+            .whitespace_normal()
+            .child(selectable_text::SelectableText::new(
+              text_id,
+              mini_diff_line_text_for_layout(line_text),
+              runs,
+              registry.clone(),
+            )),
+        ),
+    );
+  }
+
+  body.into_any_element()
+}
+
 pub(crate) fn render_tool_call(
   t: &ToolCallView,
   theme: &gpui_component::Theme,
@@ -855,32 +973,46 @@ pub(crate) fn render_tool_call(
           }
           output.text[..end].to_string()
         };
-        let runs = highlights_to_text_runs(
-          &output.syntax_spans,
-          &body_text,
-          theme.foreground,
-          mono_font.clone(),
-          &syntax_theme,
-        );
         let text_id = item_id_base | 0x100 | (out_idx as u64);
-        let content_div = div()
-          .font_family("monospace")
-          .text_xs()
-          .bg(theme.background)
-          .border_1()
-          .border_color(theme.border)
-          .rounded(px(3.))
-          .overflow_hidden()
-          .px_2()
-          .py_1()
-          .text_color(theme.foreground)
-          .whitespace_normal()
-          .child(selectable_text::SelectableText::new(
-            text_id,
-            SharedString::from(body_text),
-            runs,
-            registry.clone(),
-          ));
+        let output_start_line =
+          read_tool_output_start_line(&t.kind, &t.locations).or(output.start_line);
+        let content_div = if let Some(start_line) = output_start_line {
+          render_numbered_tool_output(
+            output,
+            start_line,
+            visible,
+            item_id_base | 0x0100_0000 | ((out_idx as u64) << 20),
+            registry,
+            theme,
+          )
+        } else {
+          let runs = highlights_to_text_runs(
+            &output.syntax_spans,
+            &body_text,
+            theme.foreground,
+            mono_font.clone(),
+            &syntax_theme,
+          );
+          div()
+            .font_family("monospace")
+            .text_xs()
+            .bg(theme.background)
+            .border_1()
+            .border_color(theme.border)
+            .rounded(px(3.))
+            .overflow_hidden()
+            .px_2()
+            .py_1()
+            .text_color(theme.foreground)
+            .whitespace_normal()
+            .child(selectable_text::SelectableText::new(
+              text_id,
+              SharedString::from(body_text),
+              runs,
+              registry.clone(),
+            ))
+            .into_any_element()
+        };
         let mut block = v_flex().gap_0p5().child(content_div);
         if total > MAX_TOOL_OUTPUT_LINES_COLLAPSED {
           let remaining = total.saturating_sub(visible);

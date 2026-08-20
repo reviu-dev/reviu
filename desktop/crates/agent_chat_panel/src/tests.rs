@@ -510,6 +510,7 @@ fn persisted_tools_backfill_line_numbers_and_highlights_on_load() {
       }],
       outputs: vec![ToolOutput {
         text: "fn output() {}".to_string(),
+        start_line: None,
         expanded: false,
         syntax_spans: Vec::new(),
       }],
@@ -2293,6 +2294,57 @@ fn tool_headers_never_stutter_the_kind() {
     tool_header_parts(&view),
     (Some("Edit"), "Reformat everything".to_string())
   );
+}
+
+#[test]
+fn read_tools_number_outputs_from_their_location() {
+  let locations = vec![(PathBuf::from("src/main.rs"), Some(42))];
+
+  assert_eq!(
+    read_tool_output_start_line(&ToolKind::Read, &locations),
+    Some(42)
+  );
+  assert_eq!(
+    read_tool_output_start_line(&ToolKind::Execute, &locations),
+    None
+  );
+}
+
+#[test]
+fn read_tools_without_line_start_at_one() {
+  let locations = vec![(PathBuf::from("src/main.rs"), None)];
+
+  assert_eq!(
+    read_tool_output_start_line(&ToolKind::Read, &locations),
+    Some(1)
+  );
+}
+
+#[test]
+fn visible_output_line_ranges_preserve_blank_lines() {
+  let ranges = visible_output_line_ranges("first\n\nthird\n", 3);
+
+  assert_eq!(ranges, vec![0..5, 6..6, 7..12]);
+}
+
+#[test]
+fn syntax_spans_for_range_skips_spans_before_the_visible_line() {
+  let spans = vec![
+    HighlightSpan {
+      byte_range: 0..3,
+      token_type: syntax::TokenType::Keyword,
+    },
+    HighlightSpan {
+      byte_range: 6..11,
+      token_type: syntax::TokenType::String,
+    },
+  ];
+
+  let clipped = syntax_spans_for_range(&spans, 5..10);
+
+  assert_eq!(clipped.len(), 1);
+  assert_eq!(clipped[0].byte_range, 1..5);
+  assert_eq!(clipped[0].token_type, syntax::TokenType::String);
 }
 
 #[test]

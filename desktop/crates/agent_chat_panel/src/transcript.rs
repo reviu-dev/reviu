@@ -61,6 +61,17 @@ pub(crate) fn populate_syntax_spans(view: &mut ToolCallView) {
   }
 }
 
+pub(crate) fn read_tool_output_start_line(
+  kind: &ToolKind,
+  locations: &[(PathBuf, Option<u32>)],
+) -> Option<u32> {
+  if matches!(kind, ToolKind::Read) && !locations.is_empty() {
+    Some(locations[0].1.unwrap_or(1))
+  } else {
+    None
+  }
+}
+
 /// Fingerprint of the pieces that feed diffs, outputs and highlight spans.
 pub(crate) fn tool_content_fp(
   content: &[ToolCallContent],
@@ -85,6 +96,7 @@ pub(crate) fn upsert_tool_call_pure(
     .map(|l| (l.path, l.line))
     .collect();
   let content_fp = tool_content_fp(&call.content, locations.first().map(|(p, _)| p));
+  let output_start_line = read_tool_output_start_line(&call.kind, &locations);
   if let Some(&idx) = index.get(&call.tool_call_id)
     && let Some(ChatItem::Tool(existing)) = items.get_mut(idx)
   {
@@ -95,7 +107,7 @@ pub(crate) fn upsert_tool_call_pure(
     // Same content: keep diffs, outputs, spans and their expansion state.
     if existing.content_fp != content_fp {
       existing.diffs = extract_diffs(&call.content, cwd);
-      existing.outputs = extract_outputs(&call.content);
+      existing.outputs = extract_outputs(&call.content, output_start_line);
       existing.terminals = extract_terminals(&call.content);
       existing.content_fp = content_fp;
       populate_syntax_spans(existing);
@@ -109,7 +121,7 @@ pub(crate) fn upsert_tool_call_pure(
     status: call.status,
     locations,
     diffs: extract_diffs(&call.content, cwd),
-    outputs: extract_outputs(&call.content),
+    outputs: extract_outputs(&call.content, output_start_line),
     terminals: extract_terminals(&call.content),
     content_fp,
   };
@@ -147,7 +159,10 @@ pub(crate) fn apply_tool_call_update_pure(
     let content_fp = tool_content_fp(&content, view.locations.first().map(|(p, _)| p));
     if view.content_fp != content_fp {
       view.diffs = extract_diffs(&content, cwd);
-      view.outputs = extract_outputs(&content);
+      view.outputs = extract_outputs(
+        &content,
+        read_tool_output_start_line(&view.kind, &view.locations),
+      );
       view.terminals = extract_terminals(&content);
       view.content_fp = content_fp;
       // Only fresh content is worth a re-highlight; a status flip is not.

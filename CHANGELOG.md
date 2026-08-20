@@ -4,6 +4,10 @@ All notable changes to Reviu are documented here.
 
 ## 1.0.0
 
+### Line Numbers In Read Results
+
+Read tool results in the agent conversation now show file line numbers, so you can refer back to exact lines without reopening the file.
+
 ### Push With Saved Git Credentials
 
 Pushing and fetching over HTTPS now use the credentials already saved in your Git credential helper, such as the macOS keychain. If `git push` works in your terminal, the same remote can now work from Reviu too.

@@ -169,6 +169,8 @@ struct ToolCallView {
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub(crate) struct ToolOutput {
   pub text: String,
+  #[serde(default)]
+  pub start_line: Option<u32>,
   #[serde(skip)]
   pub expanded: bool,
   #[serde(skip)]
