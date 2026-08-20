@@ -449,6 +449,146 @@ fn auto_approve_picks_allow_once_then_allow_always_and_never_reject() {
   assert_eq!(auto_approve_option(&reject_only), None);
 }
 
+fn bench_diff_tool(id: &str, lines: usize) -> ChatItem {
+  let arc: std::sync::Arc<str> = std::sync::Arc::from(id);
+  let diff_lines: Vec<crate::diff::DiffLine> = (0..lines)
+    .map(|i| crate::diff::DiffLine {
+      kind: if i % 3 == 0 {
+        DiffLineKind::Removed
+      } else {
+        DiffLineKind::Added
+      },
+      old_line: Some(i as u32 + 10),
+      new_line: Some(i as u32 + 10),
+      text: format!("let value_{i} = compute_something(input_{i}, {i});"),
+      spans: Vec::new(),
+      syntax_spans: Vec::new(),
+    })
+    .collect();
+  ChatItem::Tool(ToolCallView {
+    id: ToolCallId::new(arc),
+    title: "Edit".to_string(),
+    kind: ToolKind::Edit,
+    status: ToolCallStatus::Completed,
+    locations: Vec::new(),
+    diffs: vec![DiffSummary {
+      path: "src/main.rs".to_string(),
+      added: (lines * 2 / 3) as u32,
+      removed: (lines / 3) as u32,
+      lines: diff_lines,
+      expanded: false,
+    }],
+    outputs: Vec::new(),
+    terminals: Vec::new(),
+    content_fp: 0,
+  })
+}
+
+fn bench_output_tool(id: &str, lines: usize) -> ChatItem {
+  let arc: std::sync::Arc<str> = std::sync::Arc::from(id);
+  let text: String = (0..lines)
+    .map(|i| format!("fn helper_{i}() -> usize {{ {i} * 42 }}\n"))
+    .collect();
+  ChatItem::Tool(ToolCallView {
+    id: ToolCallId::new(arc),
+    title: "Read".to_string(),
+    kind: ToolKind::Read,
+    status: ToolCallStatus::Completed,
+    locations: vec![(std::path::PathBuf::from("src/lib.rs"), Some(1))],
+    diffs: Vec::new(),
+    outputs: vec![ToolOutput {
+      text,
+      start_line: Some(1),
+      expanded: false,
+      syntax_spans: Vec::new(),
+    }],
+    terminals: Vec::new(),
+    content_fp: 0,
+  })
+}
+
+fn bench_markdown_message(i: usize) -> ChatItem {
+  let text = format!(
+    "Step {i}: here is what changed and why it matters for the build.\n\n\
+```rust\nfn example_{i}(input: usize) -> usize {{\n  let doubled = input * 2;\n  doubled + {i}\n}}\n```\n\n\
+- point one about the change\n- point two with `inline_code`\n"
+  );
+  agent_message(&text)
+}
+
+/// Manual probe: `cargo test -p agent_chat_panel --lib draw_cost_probe -- --ignored --nocapture`
+#[gpui::test]
+#[ignore = "draw-cost probe, run manually with --nocapture"]
+async fn draw_cost_probe(cx: &mut gpui::TestAppContext) {
+  let (panel, cx) = add_panel_window(cx);
+  let scenarios: Vec<(&str, Vec<ChatItem>)> = vec![
+    (
+      "plain-messages-x40",
+      (0..40)
+        .map(|i| {
+          if i % 2 == 0 {
+            user_message(&format!("question {i} about the code"))
+          } else {
+            agent_message(&format!("short answer {i}"))
+          }
+        })
+        .collect(),
+    ),
+    (
+      "diff-tools-x8-40lines",
+      (0..8)
+        .map(|i| bench_diff_tool(&format!("d{i}"), 40))
+        .collect(),
+    ),
+    (
+      "output-tools-x8-20lines",
+      (0..8)
+        .map(|i| bench_output_tool(&format!("o{i}"), 20))
+        .collect(),
+    ),
+    (
+      "markdown-messages-x20",
+      (0..20).map(bench_markdown_message).collect(),
+    ),
+  ];
+
+  let viewport = cx.update(|window, _| window.viewport_size());
+  eprintln!("[draw-cost] viewport {viewport:?}");
+
+  for (label, items) in scenarios {
+    panel.update(cx, |panel, cx| {
+      panel.status = Status::Ready;
+      panel.items = items;
+      panel.rebuild_tool_index();
+      panel.sync_list_count();
+      cx.notify();
+    });
+    cx.run_until_parked();
+    let painted = cx.debug_bounds("agent-tool-card").is_some()
+      || cx.debug_bounds("agent-chat-composer").is_some();
+
+    // In test mode the draw runs synchronously inside flush_effects at the
+    // end of update(), so the update call itself is what gets timed.
+    let mut warm = std::time::Duration::from_secs(999);
+    for _ in 0..10 {
+      let t = std::time::Instant::now();
+      panel.update(cx, |_, cx| cx.notify());
+      warm = warm.min(t.elapsed());
+    }
+    let mut remeasure = std::time::Duration::from_secs(999);
+    for _ in 0..10 {
+      let t = std::time::Instant::now();
+      panel.update(cx, |panel, cx| {
+        let count = panel.messages_list.item_count();
+        panel.messages_list.remeasure_items(0..count);
+        cx.notify();
+      });
+      remeasure = remeasure.min(t.elapsed());
+    }
+    eprintln!("[draw-cost] {label}: painted={painted} warm {warm:?}, remeasure {remeasure:?}");
+  }
+}
+
 #[test]
 fn fold_adjacent_chunks_merges_same_kind_text_and_keeps_boundaries() {
   let folded = events::fold_adjacent_chunks(vec![
