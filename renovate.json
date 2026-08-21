@@ -21,6 +21,15 @@
       "automerge": true
     },
     {
+      "description": "ACP is pinned exactly and built on the crate's unstable feature: the spec moves faster than its version numbers. Bump deliberately, never on a bot's schedule.",
+      "matchManagers": ["cargo"],
+      "matchPackageNames": [
+        "agent-client-protocol",
+        "agent-client-protocol-schema"
+      ],
+      "enabled": false
+    },
+    {
       "description": "gpui/zed git deps drive the vendored GPL strip (sum_tree). Review manually, never automerge.",
       "matchManagers": ["cargo"],
       "matchPackageNames": [
