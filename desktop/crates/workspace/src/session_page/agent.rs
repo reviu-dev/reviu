@@ -689,6 +689,60 @@ mod tests {
     assert_eq!(actions[0].mode, editor::ReviewCommentMode::SingleComment);
   }
 
+  /// The card is painted over lines the diff set aside for it. Every sizing rule in
+  /// the editor exists to keep those two in step; this is where they are compared.
+  #[gpui::test]
+  async fn a_review_comment_card_fits_the_lines_the_diff_reserved(cx: &mut TestAppContext) {
+    let repo = TempRepo::init("session-page-review-card-fits");
+    commit_text_file(&repo.path, Path::new("README.md"), "v1\n", "initial");
+    std::fs::write(repo.path.join("README.md"), "v2\n").expect("update file");
+
+    let (page, cx) = add_session_page_window(repo.path.clone(), cx);
+    let refresh = page.update(cx, |page, cx| {
+      page.dock_panel.update(cx, |panel, cx| {
+        panel.refresh(cx);
+        panel._refresh_task.take().expect("refresh task")
+      })
+    });
+    refresh.await;
+    cx.run_until_parked();
+
+    page.update_in(cx, |page, window, cx| {
+      page.open_diff(PathBuf::from("README.md"), None, window, cx);
+    });
+    await_open_file(&page, cx).await;
+    await_editor_diff(&page, cx).await;
+
+    for body in [
+      "short",
+      "a comment long enough to wrap over several lines of the card,        with words of every width: iiii MMMM 0123456789 and a bit more prose",
+      "first line\nsecond line\nthird line",
+    ] {
+      page.update(cx, |page, cx| {
+        page.agent_review.clear();
+        page.create_agent_review_comment(create_request(0, body), cx);
+      });
+      await_editor_diff(&page, cx).await;
+
+      let block = cx
+        .debug_bounds(editor::REVIEW_COMMENT_BLOCK_DEBUG_SELECTOR)
+        .expect("the diff reserves a block for the comment");
+      let card = cx
+        .debug_bounds(editor::REVIEW_COMMENT_CARD_DEBUG_SELECTOR)
+        .expect("the comment paints a card");
+
+      assert!(
+        card.bottom() <= block.bottom(),
+        "the card runs {} past the lines reserved for {body:?}",
+        card.bottom() - block.bottom()
+      );
+      assert!(
+        card.top() >= block.top(),
+        "the card starts above the lines reserved for {body:?}"
+      );
+    }
+  }
+
   #[gpui::test]
   async fn cancelling_a_review_comment_hands_focus_back_to_the_diff(cx: &mut TestAppContext) {
     let repo = TempRepo::init("session-page-review-cancel-focus");

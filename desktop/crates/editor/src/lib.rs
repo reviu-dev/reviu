@@ -15,6 +15,7 @@ pub use document::Document;
 pub use editor::{
   ConflictNavigationDirection, ConflictNavigationState, ConflictResolution, DiffViewMode, Editor,
   EditorEvent, HunkAction, HunkNavigationDirection, HunkNavigationState,
+  REVIEW_COMMENT_BLOCK_DEBUG_SELECTOR, REVIEW_COMMENT_CARD_DEBUG_SELECTOR,
   ReviewCommentCancelHandler, ReviewCommentCodeReferencePreview, ReviewCommentCreateAction,
   ReviewCommentCreateHandler, ReviewCommentCreateRequest, ReviewCommentDeleteHandler,
   ReviewCommentDisplayMode, ReviewCommentEditHandler, ReviewCommentImageUploadHandler,

@@ -110,6 +110,9 @@ const REVIEW_COMMENT_MAX_WRAP_COLUMNS: usize = 180;
 const REVIEW_COMMENT_CHAR_WIDTH_PX: f32 = 7.8;
 const REVIEW_COMMENT_FONT_SIZE_PX: f32 = 14.0;
 pub(crate) const REVIEW_COMMENT_UI_FONT_FAMILY: &str = ".SystemUIFont";
+/// The lines the diff set aside for a comment, and the card that has to fit in them.
+pub const REVIEW_COMMENT_BLOCK_DEBUG_SELECTOR: &str = "review-comment-block";
+pub const REVIEW_COMMENT_CARD_DEBUG_SELECTOR: &str = "review-comment-card";
 const REVIEW_COMMENT_HORIZONTAL_PADDING_PX: f32 =
   REVIEW_COMMENT_CARD_PADDING_X_PX * 2.0 + REVIEW_COMMENT_CARD_BORDER_PX * 2.0;
 /// A composer gives one card padding back to the text box's own inset.
@@ -5199,6 +5202,7 @@ impl Editor {
       let card = self
         .review_comment_card_frame(review_comment_card_min_height(layout.height), &theme)
         .relative()
+        .debug_selector(|| REVIEW_COMMENT_CARD_DEBUG_SELECTOR.to_string())
         .font_family(REVIEW_COMMENT_UI_FONT_FAMILY)
         .on_mouse_down(MouseButton::Left, |_, _, cx| {
           cx.stop_propagation();
@@ -5234,6 +5238,7 @@ impl Editor {
           .right_0()
           .h(layout.height)
           .pr_2()
+          .debug_selector(|| REVIEW_COMMENT_BLOCK_DEBUG_SELECTOR.to_string())
           .child(card),
       );
     }
@@ -5340,6 +5345,7 @@ impl Editor {
         Some(
           self
             .review_comment_card_frame(review_comment_card_min_height(composer_height), &theme)
+            .debug_selector(|| REVIEW_COMMENT_CARD_DEBUG_SELECTOR.to_string())
             .on_mouse_down(MouseButton::Left, |_, _, cx| {
               cx.stop_propagation();
             })
@@ -5493,6 +5499,7 @@ impl Editor {
             .right_0()
             .h(composer_height)
             .pr_2()
+            .debug_selector(|| REVIEW_COMMENT_BLOCK_DEBUG_SELECTOR.to_string())
             .child(card),
         );
         has_content = true;
