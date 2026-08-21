@@ -110,10 +110,12 @@ pub(crate) const REVIEW_COMMENT_UI_FONT_FAMILY: &str = ".SystemUIFont";
 const REVIEW_COMMENT_HORIZONTAL_PADDING_PX: f32 =
   REVIEW_COMMENT_CARD_PADDING_X_PX * 2.0 + REVIEW_COMMENT_CARD_BORDER_PX * 2.0;
 const REVIEW_COMMENT_DEFAULT_LINE_HEIGHT_PX: f32 = 20.0;
-const REVIEW_COMMENT_MAX_WIDTH_PX: f32 = 800.0;
+const REVIEW_COMMENT_MAX_WIDTH_PX: f32 = 640.0;
 const REVIEW_COMMENT_MIN_WIDTH_PX: f32 = 320.0;
 /// Matches the `pr_2` the card overlays keep on the right of the content area.
 const REVIEW_COMMENT_CARD_RIGHT_MARGIN_PX: f32 = 8.0;
+/// Strip of diff left visible under a card, whatever the whole-line rounding gave it.
+const REVIEW_COMMENT_CARD_BOTTOM_MARGIN_PX: f32 = 6.0;
 const REVIEW_COMMENT_COMPOSER_ACTIONS_HEIGHT_PX: f32 = 24.0;
 const REVIEW_COMMENT_COMPOSER_ACTIONS_GAP_PX: f32 = 8.0;
 /// gpui-component input chrome around the text: `input_py` twice plus its border.
@@ -330,6 +332,12 @@ pub fn review_comment_create_actions(
 /// The create composer is a card of its own, so it pays its own vertical padding.
 fn review_comment_create_card_body_height_px(composer_body_height_px: f32) -> f32 {
   REVIEW_COMMENT_CARD_PADDING_X_PX * 2.0 + composer_body_height_px
+}
+
+/// The diff reserves whole lines, so a card is handed a few pixels more than it
+/// asked for. It takes them, and every card ends on the same thin strip of diff.
+fn review_comment_card_min_height(reserved_height: Pixels) -> Pixels {
+  px((reserved_height / px(1.0) - REVIEW_COMMENT_CARD_BOTTOM_MARGIN_PX).max(0.0))
 }
 
 fn review_comment_card_width_px(available_px: f32) -> f32 {
@@ -2100,22 +2108,6 @@ impl Editor {
     } else {
       0.0
     }
-  }
-
-  /// Everything the create card holds besides the text box itself.
-  fn review_comment_create_card_chrome_px(&self) -> f32 {
-    REVIEW_COMMENT_CARD_BORDER_PX * 2.0
-      + REVIEW_COMMENT_CARD_PADDING_X_PX * 2.0
-      + self.review_comment_composer_chrome_height_px()
-      + REVIEW_COMMENT_COMPOSER_ACTIONS_HEIGHT_PX.max(self.review_comment_line_height_px)
-      + REVIEW_COMMENT_COMPOSER_ACTIONS_GAP_PX
-  }
-
-  /// The diff reserves whole lines, so the card gets a few pixels more than it
-  /// asked for; the text box takes them instead of leaving a gap under the card.
-  fn review_comment_create_textarea_height(&self, reserved_height: Pixels) -> Pixels {
-    let minimum = review_comment_composer_textarea_height_px(1, self.review_comment_line_height_px);
-    px((reserved_height / px(1.0) - self.review_comment_create_card_chrome_px()).max(minimum))
   }
 
   fn review_comment_composer_body_height_px(&self, input: Option<&Entity<TextareaState>>) -> f32 {
@@ -4914,6 +4906,7 @@ impl Editor {
 
       let card = div()
         .w(self.review_comment_card_width())
+        .min_h(review_comment_card_min_height(layout.height))
         .bg(theme.sidebar)
         .border(px(REVIEW_COMMENT_CARD_BORDER_PX))
         .border_color(theme.border)
@@ -5044,6 +5037,7 @@ impl Editor {
         Some(
           div()
             .w(self.review_comment_card_width())
+            .min_h(review_comment_card_min_height(composer_height))
             .bg(theme.sidebar)
             .border(px(REVIEW_COMMENT_CARD_BORDER_PX))
             .border_color(theme.border)
@@ -5071,7 +5065,7 @@ impl Editor {
                     .child({
                       let mut composer = MarkdownComposer::new(&input_state)
                         .disabled(is_create_submitting)
-                        .h(self.review_comment_create_textarea_height(composer_height))
+                        .h(self.review_comment_composer_textarea_height(&input_state))
                         .preview_open(create_preview_open)
                         .on_toggle_preview(move |_, cx| {
                           create_toggle_editor.update(cx, |editor, cx| {
@@ -11375,27 +11369,14 @@ pub mod tests {
     );
   }
 
-  #[gpui::test]
-  fn test_create_composer_fills_the_reserved_block(cx: &mut TestAppContext) {
-    let mut ctx = EditorTestContext::with_text(cx.clone(), "a\nb");
-
-    ctx.editor.update(&mut ctx.cx, |editor, _| {
-      let chrome = editor.review_comment_create_card_chrome_px();
-
-      // The whole-line rounding goes into the text box, not under the card.
-      assert_eq!(
-        editor.review_comment_create_textarea_height(px(chrome + 100.0)),
-        px(100.0)
-      );
-      // A block smaller than the chrome still leaves one usable row.
-      assert_eq!(
-        editor.review_comment_create_textarea_height(px(0.0)),
-        px(review_comment_composer_textarea_height_px(
-          1,
-          editor.review_comment_line_height_px
-        ))
-      );
-    });
+  #[test]
+  fn test_cards_end_on_the_same_strip_of_diff() {
+    // The whole-line rounding goes inside the card, not under it.
+    assert_eq!(
+      review_comment_card_min_height(px(113.0)),
+      px(113.0 - REVIEW_COMMENT_CARD_BOTTOM_MARGIN_PX)
+    );
+    assert_eq!(review_comment_card_min_height(px(0.0)), px(0.0));
   }
 
   #[gpui::test]
