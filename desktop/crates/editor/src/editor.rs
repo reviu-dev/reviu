@@ -447,6 +447,16 @@ fn review_comment_composer_rows(
   )
 }
 
+/// A local note keeps its actions in the header row when it has one, and floating over
+/// the body otherwise. Only the floating case has to keep room clear of the text.
+fn review_comment_body_reserves_actions_room(
+  local_note: bool,
+  shows_header: bool,
+  has_actions: bool,
+) -> bool {
+  local_note && !shows_header && has_actions
+}
+
 /// The floating actions sit on the first line of the body, like the composer's do
 /// on the first line of the text box.
 fn review_comment_floating_actions_top_px(text_line_height_px: f32) -> f32 {
@@ -4228,6 +4238,55 @@ impl Editor {
       .into_any_element()
   }
 
+  /// Cancel and save, laid out like the read actions so they can take their place.
+  fn render_review_comment_edit_actions(
+    message_id: u64,
+    can_save: bool,
+    is_submitting: bool,
+    editor_entity: Entity<Editor>,
+  ) -> gpui::AnyElement {
+    let cancel_editor = editor_entity.clone();
+    let save_editor = editor_entity;
+    h_flex()
+      .items_center()
+      .gap_1()
+      .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+      .child(
+        Button::new(format!("review-comment-edit-cancel-{message_id}"))
+          .ghost()
+          .xsmall()
+          .compact()
+          .icon(Icon::new(UiIconName::X))
+          .tooltip("Cancel")
+          .disabled(is_submitting)
+          .on_click(move |_, window, cx| {
+            cx.stop_propagation();
+            cancel_editor.update(cx, |editor, cx| {
+              let was_editing = editor.editing_review_comment_id.is_some();
+              editor.cancel_review_comment_edit(cx);
+              if was_editing {
+                editor.invoke_review_comment_cancel_handler(window, cx);
+              }
+            });
+          }),
+      )
+      .child(
+        Button::new(format!("review-comment-edit-save-{message_id}"))
+          .xsmall()
+          .compact()
+          .icon(Icon::new(UiIconName::Check))
+          .tooltip("Save")
+          .disabled(!can_save || is_submitting)
+          .on_click(move |_, window, cx| {
+            cx.stop_propagation();
+            save_editor.update(cx, |editor, cx| {
+              editor.save_review_comment_edit(message_id, window, cx);
+            });
+          }),
+      )
+      .into_any_element()
+  }
+
   fn render_review_comment_direct_actions(
     message_id: u64,
     body: Arc<str>,
@@ -4555,7 +4614,13 @@ impl Editor {
           })
       };
 
-      let reserve_floating_actions_room = is_local_note_mode && first_message_actions.is_some();
+      let shows_header = first_message.shows_header;
+      let editing_first_message = self.editing_review_comment_id == Some(first_message_id);
+      let reserve_floating_actions_room = review_comment_body_reserves_actions_room(
+        is_local_note_mode,
+        shows_header,
+        first_message_actions.is_some() || editing_first_message,
+      );
       let actions_cluster = h_flex()
         .items_center()
         .gap_1()
@@ -4576,8 +4641,21 @@ impl Editor {
         .when_some(first_message_actions, |this, actions| this.child(actions))
         .when_some(toggle_button, |this, button| this.child(button));
 
-      // In a local note the actions float over the body instead of sitting in a header.
-      let shows_header = first_message.shows_header;
+      // In a local note the actions float over the body instead of sitting in a header,
+      // and the composer takes their place while it is open.
+      let actions_cluster = if is_local_note_mode && editing_first_message {
+        h_flex()
+          .items_center()
+          .gap_1()
+          .child(Self::render_review_comment_edit_actions(
+            first_message_id,
+            can_save_review_comment_edit,
+            self.review_comment_edit_submitting_id == Some(first_message_id),
+            editor_entity.clone(),
+          ))
+      } else {
+        actions_cluster
+      };
 
       let (header_actions, floating_actions) = if is_local_note_mode {
         (None, Some(actions_cluster))
@@ -4647,8 +4725,6 @@ impl Editor {
         let is_edit_submitting = self.review_comment_edit_submitting_id == Some(message.id);
         let body: gpui::AnyElement = if self.editing_review_comment_id == Some(message.id) {
           if let Some(input_state) = self.review_comment_edit_input.clone() {
-            let cancel_editor = editor_entity.clone();
-            let save_editor = editor_entity.clone();
             let toggle_editor = editor_entity.clone();
             let message_id = message.id;
             let edit_error = self
@@ -4702,59 +4778,22 @@ impl Editor {
                           }),
                       ),
                   )
-                  .child(
-                    h_flex()
-                      .mt(px(review_comment_composer_actions_top_px(
-                        self.review_comment_composer_line_height_px,
-                      )))
-                      .items_center()
-                      .gap_1()
-                      .child(
-                        div()
-                          .on_mouse_down(MouseButton::Left, |_, _, cx| {
-                            cx.stop_propagation();
-                          })
-                          .child(
-                            Button::new(format!("review-comment-edit-cancel-{}", message_id))
-                              .ghost()
-                              .xsmall()
-                              .compact()
-                              .icon(Icon::new(UiIconName::X))
-                              .tooltip("Cancel")
-                              .disabled(is_edit_submitting)
-                              .on_click(move |_, window, cx| {
-                                cx.stop_propagation();
-                                cancel_editor.update(cx, |editor, cx| {
-                                  let was_editing = editor.editing_review_comment_id.is_some();
-                                  editor.cancel_review_comment_edit(cx);
-                                  if was_editing {
-                                    editor.invoke_review_comment_cancel_handler(window, cx);
-                                  }
-                                });
-                              }),
-                          ),
-                      )
-                      .child(
-                        div()
-                          .on_mouse_down(MouseButton::Left, |_, _, cx| {
-                            cx.stop_propagation();
-                          })
-                          .child(
-                            Button::new(format!("review-comment-edit-save-{}", message_id))
-                              .xsmall()
-                              .compact()
-                              .icon(Icon::new(UiIconName::Check))
-                              .tooltip("Save")
-                              .disabled(!can_save_review_comment_edit || is_edit_submitting)
-                              .on_click(move |_, window, cx| {
-                                cx.stop_propagation();
-                                save_editor.update(cx, |editor, cx| {
-                                  editor.save_review_comment_edit(message_id, window, cx);
-                                });
-                              }),
-                          ),
-                      ),
-                  ),
+                  .when(!is_local_note_mode, |this| {
+                    this.child(
+                      h_flex()
+                        .mt(px(review_comment_composer_actions_top_px(
+                          self.review_comment_composer_line_height_px,
+                        )))
+                        .items_center()
+                        .gap_1()
+                        .child(Self::render_review_comment_edit_actions(
+                          message_id,
+                          can_save_review_comment_edit,
+                          is_edit_submitting,
+                          editor_entity.clone(),
+                        )),
+                    )
+                  }),
               )
               .when_some(edit_error, |this, error| {
                 this.child(
@@ -10289,6 +10328,21 @@ pub mod tests {
       min + 20.0
     );
     assert!(max > min);
+  }
+
+  #[test]
+  fn test_only_a_headerless_note_keeps_room_for_its_actions() {
+    // A header row carries them, so the body keeps its full width.
+    assert!(!review_comment_body_reserves_actions_room(true, true, true));
+    assert!(review_comment_body_reserves_actions_room(true, false, true));
+    // Nothing to keep room for.
+    assert!(!review_comment_body_reserves_actions_room(
+      true, false, false
+    ));
+    // A conversation lays its actions out in the header, never over the body.
+    assert!(!review_comment_body_reserves_actions_room(
+      false, false, true
+    ));
   }
 
   #[test]
