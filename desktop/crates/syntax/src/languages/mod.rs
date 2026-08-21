@@ -627,6 +627,20 @@ fn zig_config() -> &'static LanguageConfig {
 mod tests {
   use super::*;
 
+  // build_language_config panics on a query that no longer matches its grammar, and it
+  // only runs when that language is first highlighted. Force every one of them here so a
+  // grammar bump fails on this test instead of on whatever happens to open a file first.
+  #[test]
+  fn every_language_highlight_query_compiles() {
+    for registration in LANGUAGE_REGISTRATIONS {
+      let config = (registration.load)();
+      assert!(
+        !config.name.is_empty(),
+        "language registration has an empty name"
+      );
+    }
+  }
+
   #[test]
   fn test_detect_rust() {
     assert!(detect_language_config("rs").is_some());
