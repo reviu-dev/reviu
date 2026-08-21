@@ -65,6 +65,11 @@ impl GithubEmojiInput {
     self.input = self.input.h(height);
     self
   }
+
+  pub fn appearance(mut self, appearance: bool) -> Self {
+    self.input = self.input.appearance(appearance);
+    self
+  }
 }
 
 impl Styled for GithubEmojiInput {

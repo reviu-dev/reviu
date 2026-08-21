@@ -14,6 +14,7 @@ const REVIEW_COMMENT_COLLAPSED_LINES: usize = 2;
 pub const REVIEW_COMMENT_HEADER_HEIGHT_LINES: f32 = 2.0;
 pub const REVIEW_COMMENT_CARD_BORDER_PX: f32 = 1.0;
 pub const REVIEW_COMMENT_CARD_PADDING_X_PX: f32 = 12.0;
+pub const REVIEW_COMMENT_CARD_PADDING_Y_PX: f32 = 6.0;
 pub const REVIEW_COMMENT_CARD_CONTENT_GAP_PX: f32 = 4.0;
 pub const REVIEW_COMMENT_VERTICAL_PADDING_PX: f32 = 12.0;
 pub const REVIEW_COMMENT_HEADER_BODY_GAP_PX: f32 = 10.0;
@@ -62,6 +63,17 @@ pub struct ReviewComment {
   pub viewer_can_unresolve: bool,
   // Part of the viewer's unsubmitted pending review (draft comment).
   pub is_pending: bool,
+}
+
+/// What a diff needs to know to reserve room for its review comments.
+pub struct ReviewCommentLayoutInput<'a> {
+  pub collapsed: &'a HashSet<u64>,
+  pub editor_line_height_px: f32,
+  pub markdown_line_height_px: f32,
+  pub body_heights_px: &'a HashMap<u64, f32>,
+  /// Comments rendered as a bare composer card: no header row, no trailing padding.
+  pub composer_only_ids: &'a HashSet<u64>,
+  pub local_notes: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -612,28 +624,14 @@ impl Projection {
   pub fn with_review_comments(
     self,
     comments: &[ReviewComment],
-    collapsed: &HashSet<u64>,
-    _wrap_columns: usize,
-    editor_line_height_px: f32,
-    markdown_line_height_px: f32,
-    comment_body_heights_px: &HashMap<u64, f32>,
-    composer_only_comment_ids: &HashSet<u64>,
+    layout: &ReviewCommentLayoutInput<'_>,
   ) -> Self {
     if comments.is_empty() {
       return self;
     }
 
     let doc_line_count = self.doc_to_display.len();
-    let lines = insert_review_comments(
-      self.lines,
-      comments,
-      collapsed,
-      _wrap_columns,
-      editor_line_height_px,
-      markdown_line_height_px,
-      comment_body_heights_px,
-      composer_only_comment_ids,
-    );
+    let lines = insert_review_comments(self.lines, comments, layout);
     Projection::from_lines(
       doc_line_count,
       lines,
@@ -642,6 +640,12 @@ impl Projection {
       self.end_gap,
     )
   }
+}
+
+/// A local note has no author line: its header only exists to carry a range label
+/// or a status, so it is dropped when it would be empty.
+pub fn review_comment_shows_header(comment: &ReviewComment, local_note: bool) -> bool {
+  !local_note || comment.line_label.is_some() || comment.is_outdated || comment.is_pending
 }
 
 fn resolve_review_comment_thread_root(
@@ -688,44 +692,39 @@ fn required_extra_lines(extra_px: f32, line_height_px: f32) -> usize {
 
 fn estimated_expanded_thread_height_px(
   thread_comments: &[&ReviewComment],
-  editor_line_height_px: f32,
-  comment_body_heights_px: &HashMap<u64, f32>,
-  fallback_markdown_height_px: f32,
-  composer_only_comment_ids: &HashSet<u64>,
+  layout: &ReviewCommentLayoutInput<'_>,
 ) -> f32 {
+  let body_height_px = |comment: &ReviewComment| {
+    layout
+      .body_heights_px
+      .get(&comment.id)
+      .copied()
+      .unwrap_or(layout.markdown_line_height_px)
+  };
+
   if thread_comments.is_empty() {
-    return editor_line_height_px * REVIEW_COMMENT_HEADER_HEIGHT_LINES
+    return layout.editor_line_height_px * REVIEW_COMMENT_HEADER_HEIGHT_LINES
       + REVIEW_COMMENT_CARD_BORDER_PX * 2.0;
   }
 
   let first_message = thread_comments[0];
   // A composer card carries no header row and pays its padding in its own height.
-  if thread_comments.len() == 1 && composer_only_comment_ids.contains(&first_message.id) {
-    return REVIEW_COMMENT_CARD_BORDER_PX * 2.0
-      + comment_body_heights_px
-        .get(&first_message.id)
-        .copied()
-        .unwrap_or(fallback_markdown_height_px);
+  if thread_comments.len() == 1 && layout.composer_only_ids.contains(&first_message.id) {
+    return REVIEW_COMMENT_CARD_BORDER_PX * 2.0 + body_height_px(first_message);
   }
 
-  let mut total_px = REVIEW_COMMENT_CARD_BORDER_PX * 2.0;
-  total_px += editor_line_height_px * REVIEW_COMMENT_HEADER_HEIGHT_LINES;
-
-  total_px += comment_body_heights_px
-    .get(&first_message.id)
-    .copied()
-    .unwrap_or(fallback_markdown_height_px);
-  total_px += REVIEW_COMMENT_VERTICAL_PADDING_PX;
+  let mut total_px = REVIEW_COMMENT_CARD_BORDER_PX * 2.0 + REVIEW_COMMENT_CARD_PADDING_Y_PX * 2.0;
+  if review_comment_shows_header(first_message, layout.local_notes) {
+    total_px += layout.editor_line_height_px * REVIEW_COMMENT_HEADER_HEIGHT_LINES;
+  }
+  total_px += body_height_px(first_message);
 
   for reply in thread_comments.iter().skip(1) {
     total_px += REVIEW_COMMENT_VERTICAL_PADDING_PX * 2.0;
     total_px += REVIEW_COMMENT_REPLY_BORDER_TOP_PX;
     total_px += REVIEW_COMMENT_HEADER_BODY_GAP_PX;
-    total_px += editor_line_height_px;
-    total_px += comment_body_heights_px
-      .get(&reply.id)
-      .copied()
-      .unwrap_or(fallback_markdown_height_px);
+    total_px += layout.editor_line_height_px;
+    total_px += body_height_px(reply);
   }
 
   total_px
@@ -734,12 +733,7 @@ fn estimated_expanded_thread_height_px(
 fn insert_review_comments(
   lines: Vec<DisplayLine>,
   comments: &[ReviewComment],
-  collapsed: &HashSet<u64>,
-  _wrap_columns: usize,
-  editor_line_height_px: f32,
-  markdown_line_height_px: f32,
-  comment_body_heights_px: &HashMap<u64, f32>,
-  composer_only_comment_ids: &HashSet<u64>,
+  layout: &ReviewCommentLayoutInput<'_>,
 ) -> Vec<DisplayLine> {
   #[derive(Clone)]
   struct ThreadInsertion<'a> {
@@ -835,9 +829,6 @@ fn insert_review_comments(
   if threads_by_display.is_empty() {
     return lines;
   }
-  let editor_line_height_px = editor_line_height_px.max(1.0);
-  let markdown_line_height_px = markdown_line_height_px.max(1.0);
-
   let mut result = Vec::with_capacity(lines.len() + comments.len().saturating_mul(2));
   for (idx, line) in lines.into_iter().enumerate() {
     result.push(line);
@@ -900,7 +891,7 @@ fn insert_review_comments(
         && thread
           .comments
           .iter()
-          .all(|comment| collapsed.contains(&comment.id));
+          .all(|comment| layout.collapsed.contains(&comment.id));
 
       let comment_background = match (header_comment.side, background) {
         (ReviewCommentSide::Left, Some(ReviewCommentBackground::Added)) => {
@@ -914,14 +905,8 @@ fn insert_review_comments(
       let reserved_lines = if thread_is_collapsed {
         REVIEW_COMMENT_COLLAPSED_LINES
       } else {
-        let expanded_height_px = estimated_expanded_thread_height_px(
-          &thread.comments,
-          editor_line_height_px,
-          comment_body_heights_px,
-          markdown_line_height_px,
-          composer_only_comment_ids,
-        );
-        required_extra_lines(expanded_height_px, editor_line_height_px)
+        let expanded_height_px = estimated_expanded_thread_height_px(&thread.comments, layout);
+        required_extra_lines(expanded_height_px, layout.editor_line_height_px.max(1.0))
           .max(REVIEW_COMMENT_COLLAPSED_LINES)
       }
       .max(1);
@@ -1862,6 +1847,21 @@ mod tests {
     ));
   }
 
+  fn layout_input<'a>(
+    collapsed: &'a HashSet<u64>,
+    body_heights: &'a HashMap<u64, f32>,
+    composer_only: &'a HashSet<u64>,
+  ) -> ReviewCommentLayoutInput<'a> {
+    ReviewCommentLayoutInput {
+      collapsed,
+      editor_line_height_px: 20.0,
+      markdown_line_height_px: 20.0,
+      body_heights_px: body_heights,
+      composer_only_ids: composer_only,
+      local_notes: false,
+    }
+  }
+
   #[test]
   fn review_comment_collapsed_reserves_fixed_collapsed_lines() {
     let projection = projection_from("line 1\nline 2", "line 1\nline 2", false);
@@ -1872,12 +1872,7 @@ mod tests {
 
     let projection = projection.with_review_comments(
       &comments,
-      &collapsed,
-      80,
-      20.0,
-      20.0,
-      &body_heights,
-      &HashSet::new(),
+      &layout_input(&collapsed, &body_heights, &HashSet::new()),
     );
     let reserved = count_review_comment_lines(&projection, comment.id);
 
@@ -1892,12 +1887,7 @@ mod tests {
     let short_body_heights = HashMap::from([(short_comment.id, 20.0f32)]);
     let short_projection = base_projection.clone().with_review_comments(
       std::slice::from_ref(&short_comment),
-      &HashSet::new(),
-      80,
-      20.0,
-      20.0,
-      &short_body_heights,
-      &HashSet::new(),
+      &layout_input(&HashSet::new(), &short_body_heights, &HashSet::new()),
     );
 
     let long_body = "long paragraph ".repeat(80);
@@ -1905,12 +1895,7 @@ mod tests {
     let long_body_heights = HashMap::from([(long_comment.id, 120.0f32)]);
     let long_projection = base_projection.with_review_comments(
       std::slice::from_ref(&long_comment),
-      &HashSet::new(),
-      80,
-      20.0,
-      20.0,
-      &long_body_heights,
-      &HashSet::new(),
+      &layout_input(&HashSet::new(), &long_body_heights, &HashSet::new()),
     );
 
     let short_reserved = count_review_comment_lines(&short_projection, short_comment.id);
@@ -1924,23 +1909,18 @@ mod tests {
     let base_projection = projection_from("line 1\nline 2", "line 1\nline 2", false);
     let composer = review_comment(45, "");
     let body_heights = HashMap::from([(composer.id, 240.0f32)]);
-    let line_height = 20.0;
+    let composer_only = HashSet::from([composer.id]);
 
     let projection = base_projection.with_review_comments(
       std::slice::from_ref(&composer),
-      &HashSet::new(),
-      80,
-      line_height,
-      line_height,
-      &body_heights,
-      &HashSet::from([composer.id]),
+      &layout_input(&HashSet::new(), &body_heights, &composer_only),
     );
 
     let reserved = count_review_comment_lines(&projection, composer.id);
 
     assert_eq!(
       reserved,
-      required_extra_lines(240.0 + REVIEW_COMMENT_CARD_BORDER_PX * 2.0, line_height)
+      required_extra_lines(240.0 + REVIEW_COMMENT_CARD_BORDER_PX * 2.0, 20.0)
     );
   }
 
@@ -1949,30 +1929,67 @@ mod tests {
     let base_projection = projection_from("line 1\nline 2", "line 1\nline 2", false);
     let comment = review_comment(46, "body");
     let body_heights = HashMap::from([(comment.id, 240.0f32)]);
+    let composer_only = HashSet::from([comment.id]);
 
     let as_comment = base_projection.clone().with_review_comments(
       std::slice::from_ref(&comment),
-      &HashSet::new(),
-      80,
-      20.0,
-      20.0,
-      &body_heights,
-      &HashSet::new(),
+      &layout_input(&HashSet::new(), &body_heights, &HashSet::new()),
     );
     let as_composer = base_projection.with_review_comments(
       std::slice::from_ref(&comment),
-      &HashSet::new(),
-      80,
-      20.0,
-      20.0,
-      &body_heights,
-      &HashSet::from([comment.id]),
+      &layout_input(&HashSet::new(), &body_heights, &composer_only),
     );
 
     let comment_reserved = count_review_comment_lines(&as_comment, comment.id);
     let composer_reserved = count_review_comment_lines(&as_composer, comment.id);
 
-    // The header row and the trailing padding a comment card pays, the composer does not.
+    // The header row and the card padding a comment pays, the composer does not.
     assert_eq!(comment_reserved - composer_reserved, 2);
+  }
+
+  #[test]
+  fn a_local_note_without_a_label_reserves_no_header_row() {
+    let base_projection = projection_from("line 1\nline 2", "line 1\nline 2", false);
+    let mut comment = review_comment(47, "body");
+    comment.line_label = None;
+    let body_heights = HashMap::from([(comment.id, 40.0f32)]);
+    let collapsed = HashSet::new();
+    let composer_only = HashSet::new();
+
+    let mut as_conversation = layout_input(&collapsed, &body_heights, &composer_only);
+    as_conversation.local_notes = false;
+    let mut as_local_note = layout_input(&collapsed, &body_heights, &composer_only);
+    as_local_note.local_notes = true;
+
+    let with_header = base_projection
+      .clone()
+      .with_review_comments(std::slice::from_ref(&comment), &as_conversation);
+    let without_header =
+      base_projection.with_review_comments(std::slice::from_ref(&comment), &as_local_note);
+
+    assert_eq!(
+      count_review_comment_lines(&with_header, comment.id)
+        - count_review_comment_lines(&without_header, comment.id),
+      REVIEW_COMMENT_HEADER_HEIGHT_LINES as usize
+    );
+  }
+
+  #[test]
+  fn a_local_note_keeps_its_header_for_a_range_or_a_status() {
+    let mut comment = review_comment(48, "body");
+    comment.line_label = None;
+    assert!(!review_comment_shows_header(&comment, true));
+    assert!(review_comment_shows_header(&comment, false));
+
+    comment.line_label = Some(Arc::from("L11-L13"));
+    assert!(review_comment_shows_header(&comment, true));
+
+    comment.line_label = None;
+    comment.is_outdated = true;
+    assert!(review_comment_shows_header(&comment, true));
+
+    comment.is_outdated = false;
+    comment.is_pending = true;
+    assert!(review_comment_shows_header(&comment, true));
   }
 }

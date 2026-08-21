@@ -31,6 +31,7 @@ pub struct MarkdownComposer {
   style: StyleRefinement,
   height: Option<DefiniteLength>,
   disabled: bool,
+  appearance: bool,
   preview_open: bool,
   on_toggle_preview: Option<Rc<MarkdownComposerToggleFn>>,
   render_preview: Option<Rc<MarkdownComposerPreviewFn>>,
@@ -43,6 +44,7 @@ impl MarkdownComposer {
       style: StyleRefinement::default(),
       height: None,
       disabled: false,
+      appearance: true,
       preview_open: false,
       on_toggle_preview: None,
       render_preview: None,
@@ -56,6 +58,12 @@ impl MarkdownComposer {
 
   pub fn disabled(mut self, disabled: bool) -> Self {
     self.disabled = disabled;
+    self
+  }
+
+  /// Drops the input's own border so it can sit inside another frame.
+  pub fn appearance(mut self, appearance: bool) -> Self {
+    self.appearance = appearance;
     self
   }
 
@@ -81,7 +89,9 @@ impl MarkdownComposer {
   }
 
   fn render_input(&self) -> GithubEmojiInput {
-    let mut input = GithubEmojiInput::new(&self.input_state).disabled(self.disabled);
+    let mut input = GithubEmojiInput::new(&self.input_state)
+      .disabled(self.disabled)
+      .appearance(self.appearance);
     if let Some(height) = self.height {
       input = input.h(height);
     }

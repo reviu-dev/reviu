@@ -46,6 +46,12 @@ pub(crate) fn agent_review_line_label(comment: &LocalAgentReviewComment) -> Stri
   }
 }
 
+pub(crate) fn agent_review_comment_spans_a_range(comment: &LocalAgentReviewComment) -> bool {
+  comment
+    .start_line
+    .is_some_and(|start_line| start_line != comment.line)
+}
+
 pub(crate) fn agent_review_side_label(side: ReviewCommentSide) -> &'static str {
   match side {
     ReviewCommentSide::Left => "old",
@@ -362,7 +368,9 @@ fn to_editor_comment(comment: &LocalAgentReviewComment) -> ReviewComment {
     side: comment.side,
     author: Arc::from(""),
     avatar_url: None,
-    line_label: Some(Arc::<str>::from(agent_review_line_label(comment))),
+    // The anchor line is visible in the diff; only a range needs spelling out.
+    line_label: agent_review_comment_spans_a_range(comment)
+      .then(|| Arc::<str>::from(agent_review_line_label(comment))),
     body: comment.body.clone(),
     suggestion_context,
     created_at: Arc::from(""),
@@ -480,6 +488,23 @@ mod tests {
       original_lines: vec!["let value = custom();".to_string()],
       state,
     }
+  }
+
+  #[test]
+  fn only_a_range_carries_a_line_label_into_the_diff() {
+    let single = comment(1, 12, "fix", LocalAgentReviewCommentState::Draft);
+    assert!(!agent_review_comment_spans_a_range(&single));
+    assert!(to_editor_comment(&single).line_label.is_none());
+
+    let range = LocalAgentReviewComment {
+      start_line: Some(10),
+      ..comment(2, 12, "fix", LocalAgentReviewCommentState::Draft)
+    };
+    assert!(agent_review_comment_spans_a_range(&range));
+    assert_eq!(
+      to_editor_comment(&range).line_label.as_deref(),
+      Some("L11-L13")
+    );
   }
 
   #[test]
