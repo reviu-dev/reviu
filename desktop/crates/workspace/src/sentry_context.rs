@@ -108,7 +108,11 @@ pub(crate) fn sanitize_repo_path(repo_root: &Path) -> (String, String) {
 
   let mut hasher = Sha256::new();
   hasher.update(display.as_bytes());
-  let hash = format!("{:x}", hasher.finalize());
+  let hash: String = hasher
+    .finalize()
+    .iter()
+    .map(|byte| format!("{byte:02x}"))
+    .collect();
   (name, hash[..12].to_string())
 }
 
@@ -434,7 +438,7 @@ mod tests {
     let (repo_name, repo_hash) =
       sanitize_repo_path(Path::new("/Users/example/workspace/reviu/desktop"));
     assert_eq!(repo_name, "desktop");
-    assert_eq!(repo_hash.len(), 12);
+    assert_eq!(repo_hash, "c8fb129c85f5");
     assert!(!repo_hash.contains('/'));
     assert_ne!(repo_hash, "desktop");
   }
