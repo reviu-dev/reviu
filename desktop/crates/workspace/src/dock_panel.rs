@@ -24,9 +24,11 @@ use terminal::TerminalView;
 use crate::changes_list::{ChangesList, ChangesListEvent};
 use crate::history_list::{HistoryList, HistoryListEvent};
 use crate::repo_state::{PaletteCommand, RepoState, push_flags, should_publish_branch};
+use crate::review_list::{ReviewList, ReviewListEvent};
 
 const DOCK_PANEL_TERMINAL_DEBUG_SELECTOR: &str = "dock-panel-terminal";
 pub(crate) const DOCK_PANEL_HISTORY_DEBUG_SELECTOR: &str = "dock-panel-history";
+pub(crate) const DOCK_PANEL_REVIEW_DEBUG_SELECTOR: &str = "dock-panel-review";
 const DOCK_PANEL_COMMIT_DEBUG_SELECTOR: &str = "dock-panel-commit";
 const DOCK_PANEL_COMMIT_MENU_DEBUG_SELECTOR: &str = "dock-panel-commit-menu";
 const DOCK_PANEL_CREATE_PR_DEBUG_SELECTOR: &str = "dock-panel-create-pr";
@@ -73,6 +75,16 @@ pub enum DockPanelEvent {
   StatusRefreshed,
   /// The zoom button: the host owns the layout.
   ToggleZoom,
+  /// A row of the review panel: the host owns the diff and the batch.
+  OpenReviewComment {
+    path: PathBuf,
+    line: usize,
+  },
+  DeleteReviewComment {
+    id: u64,
+  },
+  SendReview,
+  DiscardReview,
 }
 
 impl gpui::EventEmitter<DockPanelEvent> for DockPanel {}
@@ -117,6 +129,7 @@ impl CommitMenuCommand {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum DockPanelTab {
   Changes,
+  Review,
   Files,
   History,
   PullRequest,
@@ -215,6 +228,7 @@ pub struct DockPanel {
   active_tab: DockPanelTab,
   zoomed: bool,
   changes_list: Entity<ChangesList>,
+  pub(crate) review_list: Entity<ReviewList>,
   pub(crate) history_list: Entity<HistoryList>,
   /// Spawned on the first visit to the tab: a shell per session is too much
   /// for someone who never opens it.
@@ -275,6 +289,25 @@ impl DockPanel {
     })
     .detach();
 
+    let review_list = cx.new(|_| ReviewList::new());
+    cx.subscribe(
+      &review_list,
+      |_this, _list, event: &ReviewListEvent, cx| match event {
+        ReviewListEvent::OpenComment { path, line } => {
+          cx.emit(DockPanelEvent::OpenReviewComment {
+            path: path.clone(),
+            line: *line,
+          });
+        }
+        ReviewListEvent::DeleteComment { id } => {
+          cx.emit(DockPanelEvent::DeleteReviewComment { id: *id });
+        }
+        ReviewListEvent::SendReview => cx.emit(DockPanelEvent::SendReview),
+        ReviewListEvent::DiscardReview => cx.emit(DockPanelEvent::DiscardReview),
+      },
+    )
+    .detach();
+
     let history_list = cx.new(HistoryList::new);
     cx.subscribe(
       &history_list,
@@ -290,6 +323,7 @@ impl DockPanel {
     .detach();
 
     let mut panel = Self {
+      review_list,
       focus_handle: cx.focus_handle(),
       window_handle: window.window_handle(),
       repo_root,
@@ -612,6 +646,19 @@ impl DockPanel {
     });
   }
 
+  fn render_review_tab(&self) -> AnyElement {
+    div()
+      .id("dock-panel-review")
+      .debug_selector(|| DOCK_PANEL_REVIEW_DEBUG_SELECTOR.to_string())
+      .flex_1()
+      .min_h_0()
+      .min_w(px(0.0))
+      .px_1()
+      .py_1()
+      .child(self.review_list.clone())
+      .into_any_element()
+  }
+
   fn render_history_tab(&self) -> AnyElement {
     div()
       .id("dock-panel-history")
@@ -846,7 +893,7 @@ impl DockPanel {
         DockPanelTab::PullRequest => self.refresh_branch_pull_request(cx),
         DockPanelTab::Terminal => self.ensure_terminal(cx),
         DockPanelTab::History => self.refresh_history(cx),
-        DockPanelTab::Changes | DockPanelTab::Files => {}
+        DockPanelTab::Changes | DockPanelTab::Files | DockPanelTab::Review => {}
       }
     }
     match target {
@@ -865,6 +912,16 @@ impl DockPanel {
       }
       _ => window.focus(&self.focus_handle, cx),
     }
+    cx.notify();
+  }
+
+  /// Switches tab without taking the focus: for the panel following what the page
+  /// is doing, rather than the user asking for it.
+  pub(crate) fn select_tab(&mut self, target: DockPanelTab, cx: &mut Context<Self>) {
+    if self.active_tab == target {
+      return;
+    }
+    self.active_tab = target;
     cx.notify();
   }
 
@@ -1228,6 +1285,7 @@ impl Render for DockPanel {
           .text_color(theme.muted_foreground)
           .child(match self.active_tab {
             DockPanelTab::Changes => "Changes",
+            DockPanelTab::Review => "Review",
             DockPanelTab::Files => "Files",
             DockPanelTab::History => "History",
             DockPanelTab::PullRequest => "Pull request",
@@ -1285,6 +1343,7 @@ impl Render for DockPanel {
         }
       }
       DockPanelTab::PullRequest => self.render_pr_tab(cx),
+      DockPanelTab::Review => self.render_review_tab(),
       DockPanelTab::History => self.render_history_tab(),
       DockPanelTab::Terminal => self.render_terminal_tab(),
     };

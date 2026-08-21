@@ -94,6 +94,7 @@ mod pull_request_dialog;
 mod repo_command;
 mod repo_snapshot;
 mod repo_state;
+mod review_list;
 mod sentry_context;
 mod session_list;
 mod session_page;

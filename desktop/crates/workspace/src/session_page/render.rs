@@ -321,7 +321,6 @@ impl SessionPage {
 
   pub(super) fn render_diff_header(&self, cx: &mut Context<Self>) -> AnyElement {
     let theme = cx.theme().clone();
-    let copyable_count = self.copyable_review_comment_count();
     let file_dirty = self
       .editor
       .as_ref()
@@ -507,23 +506,6 @@ impl SessionPage {
                 editor.update(cx, |editor, cx| editor.save(cx));
               }
             }),
-        )
-      })
-      .when(copyable_count > 0, |this| {
-        this.child(
-          Button::new("session-page-send-review")
-            .primary()
-            .compact()
-            .small()
-            .label(if copyable_count == 1 {
-              "Send 1 comment to agent".to_string()
-            } else {
-              format!("Send {copyable_count} comments to agent")
-            })
-            .tooltip("Send review comments to the agent (cmd-shift-a)")
-            .on_click(cx.listener(|this, _, window, cx| {
-              this.send_agent_review_to_agent(window, cx);
-            })),
         )
       })
       .into_any_element()
@@ -838,12 +820,18 @@ impl SessionPage {
       gpui_component::Icon,
       &'static str,
       DockPanelTab,
-    ); 5] = [
+    ); 6] = [
       (
         "dock-rail-changes",
         gpui_component::Icon::new(UiIconName::FileDiff),
         "Changes",
         DockPanelTab::Changes,
+      ),
+      (
+        "dock-rail-review",
+        gpui_component::Icon::new(UiIconName::MessageCircle),
+        "Review",
+        DockPanelTab::Review,
       ),
       (
         "dock-rail-files",
@@ -893,14 +881,32 @@ impl SessionPage {
         }
       })),
     );
+    let pending_review = self.copyable_review_comment_count();
     for (id, icon, tooltip, tab) in tabs {
-      rail = rail.child(
-        Self::rail_button(id, icon, tooltip)
-          .selected(self.dock_open && active_tab == tab)
-          .on_click(cx.listener(move |this, _, window, cx| {
-            this.open_dock_tab(tab, window, cx);
-          })),
-      );
+      let button = Self::rail_button(id, icon, tooltip)
+        .selected(self.dock_open && active_tab == tab)
+        .on_click(cx.listener(move |this, _, window, cx| {
+          this.open_dock_tab(tab, window, cx);
+        }));
+      // The panel is the only place the batch is visible: say it is waiting even
+      // when the dock is closed.
+      let badge = (tab == DockPanelTab::Review && pending_review > 0).then(|| {
+        div()
+          .absolute()
+          .top(px(0.0))
+          .right(px(2.0))
+          .size(px(8.0))
+          .rounded_full()
+          .bg(theme.primary)
+      });
+      rail = rail.child(match badge {
+        Some(badge) => div()
+          .relative()
+          .child(button)
+          .child(badge)
+          .into_any_element(),
+        None => button.into_any_element(),
+      });
     }
     div()
       .size_full()

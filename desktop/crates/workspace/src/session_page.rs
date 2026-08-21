@@ -62,6 +62,7 @@ use crate::pull_request_dialog::{GithubBranchContext, open_create_pull_request_d
 use crate::repo_command::{RepoCommand, RepoCommandOutcome, branch_ref_from_palette};
 use crate::repo_snapshot::{RepoSnapshot, RepoSnapshotEvent};
 use crate::repo_state::{PaletteCommand, RepoState, can_accept_all_conflicts, push_flags};
+use crate::review_list::review_panel_comments;
 use crate::status_poll;
 use crate::svg_preview::SvgPreview;
 use crate::workspace::WorkspaceApi;
@@ -302,6 +303,18 @@ impl SessionPage {
         }
         DockPanelEvent::ToggleZoom => {
           this.toggle_dock_zoom(cx);
+        }
+        DockPanelEvent::OpenReviewComment { path, line } => {
+          this.open_diff(path.clone(), Some(*line as u32), window, cx);
+        }
+        DockPanelEvent::DeleteReviewComment { id } => {
+          this.delete_agent_review_comment(*id, cx);
+        }
+        DockPanelEvent::SendReview => {
+          this.send_agent_review_to_agent(window, cx);
+        }
+        DockPanelEvent::DiscardReview => {
+          this.confirm_discard_agent_review(window, cx);
         }
       },
     )

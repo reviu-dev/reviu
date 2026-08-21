@@ -409,6 +409,13 @@ impl SessionPage {
 
     self.sync_agent_review_comments_to_editor(cx);
     self.finish_agent_review_create(None, cx);
+    // An open dock follows what you are doing; a closed one keeps the tab you
+    // left it on, and the rail badge says the batch grew.
+    if self.dock_open {
+      self
+        .dock_panel
+        .update(cx, |panel, cx| panel.select_tab(DockPanelTab::Review, cx));
+    }
     cx.notify();
   }
 
@@ -469,6 +476,56 @@ impl SessionPage {
       self.selected_file.as_deref(),
       cx,
     );
+    self.sync_review_panel(cx);
+  }
+
+  /// The panel shows the whole batch, including what the agent already addressed:
+  /// the diff drops those, the review is where you see they were dealt with.
+  pub(super) fn sync_review_panel(&mut self, cx: &mut Context<Self>) {
+    let comments = review_panel_comments(self.agent_review.all());
+    let sendable = self.agent_review.copyable_count();
+    self.dock_panel.update(cx, |panel, cx| {
+      panel
+        .review_list
+        .update(cx, |list, cx| list.set_comments(comments, sendable, cx));
+    });
+  }
+
+  /// Discarding is not undoable, and the batch is not persisted anywhere.
+  pub(super) fn confirm_discard_agent_review(
+    &mut self,
+    window: &mut Window,
+    cx: &mut Context<Self>,
+  ) {
+    let count = self.agent_review.all().len();
+    if count == 0 {
+      return;
+    }
+    let title: SharedString = "Discard this review?".into();
+    let message: SharedString = if count == 1 {
+      "Delete the comment of this review?".into()
+    } else {
+      format!("Delete the {count} comments of this review?").into()
+    };
+    let view = cx.entity();
+
+    window.open_alert_dialog(cx, move |alert, _, _| {
+      let view = view.clone();
+      ConfirmDialog::new(title.clone(), div().child(message.clone()))
+        .confirm_text("Discard")
+        .cancel_text("Cancel")
+        .on_confirm(move |_, _, cx| {
+          view.update(cx, |this, cx| this.discard_agent_review(cx));
+          true
+        })
+        .build(alert)
+    });
+  }
+
+  pub(super) fn discard_agent_review(&mut self, cx: &mut Context<Self>) {
+    self.agent_review.clear();
+    self.sync_agent_review_comments_to_editor(cx);
+    cx.notify();
   }
 
   pub(super) fn copyable_review_comment_count(&self) -> usize {
@@ -616,6 +673,7 @@ mod tests {
   use super::super::test_support::*;
   use super::*;
   use crate::agent_review::LocalAgentReviewCommentState;
+  use crate::review_list::ReviewListEvent;
   use crate::test_support::{TempRepo, commit_text_file};
   use gpui::TestAppContext;
   use std::path::Path;
@@ -741,6 +799,161 @@ mod tests {
         "the card starts above the lines reserved for {body:?}"
       );
     }
+  }
+
+  #[gpui::test]
+  async fn a_new_comment_lands_in_the_review_panel(cx: &mut TestAppContext) {
+    let repo = TempRepo::init("session-page-review-panel");
+    commit_text_file(&repo.path, Path::new("README.md"), "v1\n", "initial");
+    std::fs::write(repo.path.join("README.md"), "v2\n").expect("update file");
+
+    let (page, cx) = add_session_page_window(repo.path.clone(), cx);
+    cx.run_until_parked();
+
+    page.update_in(cx, |page, window, cx| {
+      page.open_diff(PathBuf::from("README.md"), None, window, cx);
+    });
+    await_open_file(&page, cx).await;
+
+    page.update(cx, |page, cx| {
+      page.create_agent_review_comment(create_request(0, "extract helper"), cx);
+    });
+
+    page.read_with(cx, |page, cx| {
+      let list = page.dock_panel.read(cx).review_list.read(cx);
+      assert_eq!(list.comments().len(), 1);
+      assert_eq!(list.comments()[0].excerpt, "extract helper");
+      assert_eq!(list.comments()[0].path, PathBuf::from("README.md"));
+    });
+  }
+
+  #[gpui::test]
+  async fn a_closed_dock_keeps_the_tab_it_was_left_on(cx: &mut TestAppContext) {
+    let repo = TempRepo::init("session-page-review-tab");
+    commit_text_file(&repo.path, Path::new("README.md"), "v1\n", "initial");
+    std::fs::write(repo.path.join("README.md"), "v2\n").expect("update file");
+
+    let (page, cx) = add_session_page_window(repo.path.clone(), cx);
+    cx.run_until_parked();
+
+    page.update_in(cx, |page, window, cx| {
+      page.open_diff(PathBuf::from("README.md"), None, window, cx);
+    });
+    await_open_file(&page, cx).await;
+
+    // Closed: the batch grows behind the rail badge, the tab does not move.
+    page.update_in(cx, |page, window, cx| page.close_dock(window, cx));
+    cx.run_until_parked();
+    page.read_with(cx, |page, _| assert!(!page.dock_open));
+    page.update(cx, |page, cx| {
+      page.create_agent_review_comment(create_request(0, "first"), cx);
+    });
+    page.read_with(cx, |page, cx| {
+      assert_eq!(page.dock_panel.read(cx).active_tab(), DockPanelTab::Changes);
+    });
+
+    // Open: the panel follows what the page is doing.
+    page.update_in(cx, |page, window, cx| {
+      page.open_changes_action(&crate::OpenGitChangesSidebar, window, cx)
+    });
+    cx.run_until_parked();
+    page.update(cx, |page, cx| {
+      page.create_agent_review_comment(create_request(1, "second"), cx);
+    });
+    page.read_with(cx, |page, cx| {
+      assert_eq!(page.dock_panel.read(cx).active_tab(), DockPanelTab::Review);
+    });
+  }
+
+  #[gpui::test]
+  async fn the_panel_rows_reach_the_batch_and_the_diff(cx: &mut TestAppContext) {
+    let repo = TempRepo::init("session-page-review-rows");
+    commit_text_file(&repo.path, Path::new("README.md"), "v1\n", "initial");
+    std::fs::write(repo.path.join("README.md"), "v2\n").expect("update file");
+
+    let (page, cx) = add_session_page_window(repo.path.clone(), cx);
+    cx.run_until_parked();
+
+    page.update_in(cx, |page, window, cx| {
+      page.open_diff(PathBuf::from("README.md"), None, window, cx);
+    });
+    await_open_file(&page, cx).await;
+    page.update(cx, |page, cx| {
+      page.create_agent_review_comment(create_request(0, "extract helper"), cx);
+    });
+
+    let (review_list, comment_id) = page.read_with(cx, |page, cx| {
+      (
+        page.dock_panel.read(cx).review_list.clone(),
+        page.agent_review.all()[0].id,
+      )
+    });
+
+    // A row opens the file it is about.
+    page.update(cx, |page, _| page.selected_file = None);
+    review_list.update(cx, |_, cx| {
+      cx.emit(ReviewListEvent::OpenComment {
+        path: PathBuf::from("README.md"),
+        line: 0,
+      });
+    });
+    cx.run_until_parked();
+    page.read_with(cx, |page, _| {
+      assert_eq!(page.selected_file, Some(PathBuf::from("README.md")));
+    });
+
+    // And its delete button takes the comment out of the batch.
+    review_list.update(cx, |_, cx| {
+      cx.emit(ReviewListEvent::DeleteComment { id: comment_id });
+    });
+    cx.run_until_parked();
+    page.read_with(cx, |page, cx| {
+      assert!(page.agent_review.all().is_empty());
+      assert!(
+        page
+          .dock_panel
+          .read(cx)
+          .review_list
+          .read(cx)
+          .comments()
+          .is_empty()
+      );
+    });
+  }
+
+  #[gpui::test]
+  async fn discarding_a_review_empties_the_batch(cx: &mut TestAppContext) {
+    let repo = TempRepo::init("session-page-review-discard");
+    commit_text_file(&repo.path, Path::new("README.md"), "v1\n", "initial");
+    std::fs::write(repo.path.join("README.md"), "v2\n").expect("update file");
+
+    let (page, cx) = add_session_page_window(repo.path.clone(), cx);
+    cx.run_until_parked();
+
+    page.update_in(cx, |page, window, cx| {
+      page.open_diff(PathBuf::from("README.md"), None, window, cx);
+    });
+    await_open_file(&page, cx).await;
+    page.update(cx, |page, cx| {
+      page.create_agent_review_comment(create_request(0, "first"), cx);
+      page.create_agent_review_comment(create_request(0, "second"), cx);
+    });
+
+    page.update(cx, |page, cx| page.discard_agent_review(cx));
+
+    page.read_with(cx, |page, cx| {
+      assert!(page.agent_review.all().is_empty());
+      assert_eq!(page.copyable_review_comment_count(), 0);
+      assert!(
+        page
+          .dock_panel
+          .read(cx)
+          .review_list
+          .read(cx)
+          .comments()
+          .is_empty()
+      );
+    });
   }
 
   #[gpui::test]

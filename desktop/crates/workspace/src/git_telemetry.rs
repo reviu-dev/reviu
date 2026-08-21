@@ -81,6 +81,7 @@ fn sink() -> std::sync::Arc<dyn TelemetrySink> {
 pub(crate) fn dock_tab_tag(tab: DockPanelTab) -> &'static str {
   match tab {
     DockPanelTab::Changes => "changes",
+    DockPanelTab::Review => "review",
     DockPanelTab::Files => "files",
     DockPanelTab::History => "history",
     DockPanelTab::PullRequest => "pull_request",

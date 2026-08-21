@@ -157,6 +157,8 @@ pub enum CommandPaletteAction {
     target: String,
   },
   Commit,
+  SendReview,
+  DiscardReview,
   ContinueRebase,
   SkipRebase,
   Push,
@@ -773,6 +775,8 @@ pub enum CommandPaletteCommandId {
   Amend,
   StageSelectedFile,
   UnstageSelectedFile,
+  SendReview,
+  DiscardReview,
   AcceptAllCurrentConflicts,
   AcceptAllIncomingConflicts,
   CreateBranch,
@@ -823,6 +827,8 @@ impl CommandPaletteCommandId {
       Self::SwitchBranch => "switch_branch",
       Self::CheckoutDetached => "checkout_detached",
       Self::Commit => "commit",
+      Self::SendReview => "send_review",
+      Self::DiscardReview => "discard_review",
       Self::ContinueRebase => "continue_rebase",
       Self::SkipRebase => "skip_rebase",
       Self::Push => "push",
@@ -1031,6 +1037,22 @@ impl CommandPaletteCommand {
       CommandPaletteCommandId::SwitchBranch,
       "Switch branch",
       "Checkout or create branches",
+    )
+  }
+
+  pub fn send_review() -> Self {
+    Self::new(
+      CommandPaletteCommandId::SendReview,
+      "Send review to agent",
+      "Send every review comment of this batch to the agent",
+    )
+  }
+
+  pub fn discard_review() -> Self {
+    Self::new(
+      CommandPaletteCommandId::DiscardReview,
+      "Discard review",
+      "Delete every comment of this review",
     )
   }
 
@@ -1488,6 +1510,8 @@ impl CommandPaletteCommand {
   pub fn group(&self) -> CommandPaletteGroup {
     match self.id {
       CommandPaletteCommandId::Commit
+      | CommandPaletteCommandId::SendReview
+      | CommandPaletteCommandId::DiscardReview
       | CommandPaletteCommandId::Amend
       | CommandPaletteCommandId::UndoLastCommit
       | CommandPaletteCommandId::StageSelectedFile
@@ -1559,6 +1583,8 @@ impl CommandPaletteCommand {
       CommandPaletteCommandId::SwitchBranch => Icon::new(UiIconName::GitBranch),
       CommandPaletteCommandId::CheckoutDetached => Icon::new(UiIconName::GitBranch),
       CommandPaletteCommandId::Commit => Icon::new(IconName::Check),
+      CommandPaletteCommandId::SendReview => Icon::new(UiIconName::MessageCircle),
+      CommandPaletteCommandId::DiscardReview => Icon::new(UiIconName::Trash),
       CommandPaletteCommandId::ContinueRebase => Icon::new(IconName::Check),
       CommandPaletteCommandId::SkipRebase => Icon::new(UiIconName::GitMerge),
       CommandPaletteCommandId::Push => Icon::new(IconName::ArrowUp),
@@ -2582,6 +2608,12 @@ impl CommandPalette {
       }
       CommandPaletteCommandId::Commit => {
         self.trigger_action(command, CommandPaletteAction::Commit, window, cx);
+      }
+      CommandPaletteCommandId::SendReview => {
+        self.trigger_action(command, CommandPaletteAction::SendReview, window, cx);
+      }
+      CommandPaletteCommandId::DiscardReview => {
+        self.trigger_action(command, CommandPaletteAction::DiscardReview, window, cx);
       }
       CommandPaletteCommandId::ContinueRebase => {
         self.trigger_action(command, CommandPaletteAction::ContinueRebase, window, cx);

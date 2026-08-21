@@ -194,7 +194,6 @@ impl AgentReviewComments {
     self.comments.is_empty()
   }
 
-  #[cfg(test)]
   pub(crate) fn all(&self) -> &[LocalAgentReviewComment] {
     &self.comments
   }
