@@ -246,13 +246,12 @@ impl SessionPage {
         Ok(())
       }
       CommandPaletteAction::RestoreAll => {
-        self
-          .dock_panel
-          .read(cx)
-          .changes_list()
-          .update(cx, |list, cx| {
+        let changes_list = self.dock_panel.read(cx).changes_list();
+        cx.defer_in(window, move |_, window, cx| {
+          changes_list.update(cx, |list, cx| {
             list.confirm_restore_all(window, cx);
           });
+        });
         Ok(())
       }
       CommandPaletteAction::Push => self.run_repo_command(RepoCommand::Push, window, cx),
@@ -607,6 +606,37 @@ mod tests {
         .expect("open pull request is allowed");
     });
     cx.run_until_parked();
+  }
+
+  #[gpui::test]
+  async fn restore_all_confirmation_survives_the_command_palette_closing(cx: &mut TestAppContext) {
+    let repo = TempRepo::init("session-page-restore-all-palette-dialog");
+    commit_text_file(&repo.path, Path::new("a.txt"), "v1\n", "initial");
+    std::fs::write(repo.path.join("a.txt"), "v2\n").expect("modify file");
+
+    let (page, cx) = add_session_page_window(repo.path.clone(), cx);
+    let refresh = page.update(cx, |page, cx| {
+      page.dock_panel.update(cx, |panel, cx| {
+        panel.refresh(cx);
+        panel._refresh_task.take().expect("refresh task")
+      })
+    });
+    refresh.await;
+    cx.run_until_parked();
+
+    page.update_in(cx, |page, window, cx| page.open_command_palette(window, cx));
+    cx.run_until_parked();
+    cx.simulate_input("restore all");
+    cx.run_until_parked();
+    cx.simulate_keystrokes("enter");
+    cx.run_until_parked();
+
+    assert!(cx.update(|window, cx| window.has_active_dialog(cx)));
+    assert_eq!(
+      std::fs::read_to_string(repo.path.join("a.txt")).expect("read file"),
+      "v2\n"
+    );
+    cx.update(|window, cx| window.close_dialog(cx));
   }
 
   #[gpui::test]

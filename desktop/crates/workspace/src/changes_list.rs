@@ -416,6 +416,7 @@ impl ListDelegate for ChangesRowsDelegate {
                         let list = list.clone();
                         let path = path.clone();
                         move |_, window, cx| {
+                          cx.stop_propagation();
                           let _ = list.update(cx, |list, cx| match toggle {
                             FileStageButtonAction::Stage => list.stage_file_with_confirmation(
                               path.clone(),
@@ -444,6 +445,7 @@ impl ListDelegate for ChangesRowsDelegate {
                           let list = list.clone();
                           let path = path.clone();
                           move |_, window, cx| {
+                            cx.stop_propagation();
                             let _ = list.update(cx, |list, cx| {
                               list.confirm_restore_file(path.clone(), status_kind, window, cx);
                             });
@@ -1050,6 +1052,62 @@ mod tests {
   }
 
   #[gpui::test]
+  async fn row_stage_button_does_not_open_the_file(cx: &mut gpui::TestAppContext) {
+    let repo_root = temp_repo("changes-list-stage-no-open");
+    let (list, cx) = add_changes_list_window(repo_root.clone(), cx);
+    set_entries_from_disk(&list, cx, &repo_root);
+
+    let opened = std::sync::Arc::new(std::sync::Mutex::new(None::<PathBuf>));
+    let observer = {
+      let opened = opened.clone();
+      cx.update(|_, cx| {
+        cx.subscribe(&list, move |_, event: &ChangesListEvent, _| {
+          if let ChangesListEvent::OpenFile { path } = event {
+            *opened.lock().unwrap() = Some(path.clone());
+          }
+        })
+      })
+    };
+
+    run_action(&list, cx, "changes-stage-0-0").await;
+    drop(observer);
+
+    assert_eq!(opened.lock().unwrap().clone(), None);
+    let _ = std::fs::remove_dir_all(&repo_root);
+  }
+
+  #[gpui::test]
+  async fn row_restore_button_does_not_open_the_file(cx: &mut gpui::TestAppContext) {
+    let repo_root = temp_repo("changes-list-restore-no-open");
+    let (list, cx) = add_changes_list_window(repo_root.clone(), cx);
+    set_entries_from_disk(&list, cx, &repo_root);
+
+    let opened = std::sync::Arc::new(std::sync::Mutex::new(None::<PathBuf>));
+    let observer = {
+      let opened = opened.clone();
+      cx.update(|_, cx| {
+        cx.subscribe(&list, move |_, event: &ChangesListEvent, _| {
+          if let ChangesListEvent::OpenFile { path } = event {
+            *opened.lock().unwrap() = Some(path.clone());
+          }
+        })
+      })
+    };
+
+    let button = cx
+      .debug_bounds("changes-restore-0-0")
+      .expect("restore button bounds");
+    cx.simulate_click(button.center(), gpui::Modifiers::default());
+    cx.run_until_parked();
+    drop(observer);
+
+    assert_eq!(opened.lock().unwrap().clone(), None);
+    assert!(cx.update(|window, cx| window.has_active_dialog(cx)));
+    cx.update(|window, cx| window.close_dialog(cx));
+    let _ = std::fs::remove_dir_all(&repo_root);
+  }
+
+  #[gpui::test]
   async fn unstaging_a_file_from_the_row_button_unstages_it(cx: &mut gpui::TestAppContext) {
     let repo_root = temp_repo("changes-list-unstage");
     stage_all(&repo_root).expect("stage all");
@@ -1088,6 +1146,14 @@ mod tests {
       std::fs::read_to_string(repo_root.join("README.md")).expect("read file"),
       "v2\n",
       "nothing should change until the dialog is confirmed"
+    );
+
+    cx.update(|window, cx| window.close_dialog(cx));
+    cx.run_until_parked();
+    assert_eq!(
+      std::fs::read_to_string(repo_root.join("README.md")).expect("read file"),
+      "v2\n",
+      "closing the confirmation must not discard the file"
     );
 
     let _ = std::fs::remove_dir_all(&repo_root);
