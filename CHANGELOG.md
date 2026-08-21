@@ -370,6 +370,10 @@ Git commands that stop on conflicts (merge, rebase, skip, pull) now say which fi
 
 Reviewing a long file in the Sessions workspace meant scrolling to hunt for the next change. `cmd-alt-down` and `cmd-alt-up` now walk the diff change by change, as on the Git page and the pull request diff, and wrap around at the ends. While a Markdown or SVG file is previewed there is no diff to walk, so the shortcuts stay out of the way.
 
+### Task Lists Show Their Checkboxes
+
+Markdown checklists came out as an empty list wherever they appeared: agent conversations, pull request descriptions, review comments and file previews. They now render every item with its checked state.
+
 ## 0.18.0
 
 ### No More Failed Single Comments During A Review

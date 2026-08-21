@@ -3574,6 +3574,19 @@ by <a href="https://x.com/colinhacks">@colinhacks</a>
   }
 
   #[test]
+  fn parses_task_list_checked_state() {
+    let blocks = parse_gfm("- [x] done\n- [ ] todo");
+    assert_eq!(blocks.len(), 1);
+    match &blocks[0] {
+      Block::List(list) => {
+        let checked: Vec<Option<bool>> = list.items.iter().map(|item| item.checked).collect();
+        assert_eq!(checked, vec![Some(true), Some(false)]);
+      }
+      _ => panic!("expected list"),
+    }
+  }
+
+  #[test]
   fn parses_code_blocks() {
     let blocks = parse_gfm("```rust\nfn main() {}\n```");
     assert_eq!(blocks.len(), 1);
