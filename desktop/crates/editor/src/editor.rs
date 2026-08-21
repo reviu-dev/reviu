@@ -136,13 +136,17 @@ const REVIEW_COMMENT_COMPOSER_LINE_HEIGHT_PX: f32 = 20.0;
 const REVIEW_COMMENT_COMPOSER_TEXTAREA_INSET_PX: f32 = 10.0;
 const REVIEW_COMMENT_COMPOSER_TEXTAREA_HORIZONTAL_CHROME_PX: f32 =
   REVIEW_COMMENT_COMPOSER_TEXTAREA_INSET_PX * 2.0;
-/// One xsmall compact icon button plus the gap before it.
-const REVIEW_COMMENT_COMPOSER_ACTION_BUTTON_WIDTH_PX: f32 = 24.0;
+/// One xsmall compact icon button.
+const REVIEW_COMMENT_COMPOSER_ACTION_BUTTON_WIDTH_PX: f32 = 21.0;
+/// `gap_1`, between two buttons and between the text and the first of them.
+const REVIEW_COMMENT_COMPOSER_ACTIONS_GAP_X_PX: f32 = 4.0;
 /// Room the two spelled-out GitHub destinations take instead of icons.
 const REVIEW_COMMENT_COMPOSER_LABELLED_ACTIONS_WIDTH_PX: f32 = 250.0;
 /// Room the actions floating over a read card take, cancel and save sized.
-const REVIEW_COMMENT_FLOATING_ACTIONS_WIDTH_PX: f32 =
-  2.0 * REVIEW_COMMENT_COMPOSER_ACTION_BUTTON_WIDTH_PX;
+const REVIEW_COMMENT_FLOATING_ACTIONS_WIDTH_PX: f32 = review_comment_actions_width_px(2);
+/// Reserving too little puts the card on the next line of diff, reserving too much
+/// only leaves air inside it, so the text column is assumed a little narrow.
+const REVIEW_COMMENT_COMPOSER_WRAP_SAFETY_PX: f32 = 4.0;
 const REVIEW_COMMENT_COMPOSER_MIN_TEXT_WIDTH_PX: f32 = 120.0;
 /// `input_text_size` at the input's default size.
 const REVIEW_COMMENT_COMPOSER_TEXT_REMS: f32 = 0.875;
@@ -387,6 +391,11 @@ pub fn review_comment_create_actions(
 /// asked for. It takes them, and every card ends on the same thin strip of diff.
 fn review_comment_card_min_height(reserved_height: Pixels) -> Pixels {
   px((reserved_height / px(1.0) - REVIEW_COMMENT_CARD_BOTTOM_MARGIN_PX).max(0.0))
+}
+
+const fn review_comment_actions_width_px(buttons: usize) -> f32 {
+  buttons as f32 * REVIEW_COMMENT_COMPOSER_ACTION_BUTTON_WIDTH_PX
+    + (buttons + 1) as f32 * REVIEW_COMMENT_COMPOSER_ACTIONS_GAP_X_PX
 }
 
 fn review_comment_card_width_px(available_px: f32) -> f32 {
@@ -1655,7 +1664,8 @@ impl Editor {
       (card_width_px
         - REVIEW_COMMENT_COMPOSER_HORIZONTAL_PADDING_PX
         - REVIEW_COMMENT_COMPOSER_TEXTAREA_HORIZONTAL_CHROME_PX
-        - actions_width_px)
+        - actions_width_px
+        - REVIEW_COMMENT_COMPOSER_WRAP_SAFETY_PX)
         .max(REVIEW_COMMENT_COMPOSER_MIN_TEXT_WIDTH_PX),
     )
   }
@@ -1669,7 +1679,7 @@ impl Editor {
       return REVIEW_COMMENT_COMPOSER_LABELLED_ACTIONS_WIDTH_PX;
     }
     let buttons = 1 + actions.len() + usize::from(self.can_insert_review_comment_suggestion(cx));
-    buttons as f32 * REVIEW_COMMENT_COMPOSER_ACTION_BUTTON_WIDTH_PX
+    review_comment_actions_width_px(buttons)
   }
 
   fn gutter_create_button_extra_width_px(&self) -> f32 {
@@ -10328,6 +10338,16 @@ pub mod tests {
         "the standalone card keeps the text box's own padding"
       );
     });
+  }
+
+  #[test]
+  fn test_actions_width_counts_the_gaps_around_the_buttons() {
+    assert_eq!(
+      review_comment_actions_width_px(2),
+      2.0 * REVIEW_COMMENT_COMPOSER_ACTION_BUTTON_WIDTH_PX
+        + 3.0 * REVIEW_COMMENT_COMPOSER_ACTIONS_GAP_X_PX
+    );
+    assert!(review_comment_actions_width_px(3) > review_comment_actions_width_px(2));
   }
 
   #[test]
