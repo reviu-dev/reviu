@@ -47,6 +47,7 @@ impl SessionPage {
     window: &mut Window,
     cx: &mut Context<Self>,
   ) {
+    let should_rebuild_agent = self.agent_chat_view.is_some();
     self.selected_repo = repo_root.clone();
     self.close_diff(window, cx);
     self.center = CenterView::Conversation;
@@ -60,10 +61,13 @@ impl SessionPage {
     self.repo_snapshot.update(cx, |snapshot, cx| {
       snapshot.set_repo_root(repo_root.clone(), cx)
     });
-    // Conversations are stored per repository, so the panel is rebuilt on the
-    // next render with the new cwd and state directory.
+    // Conversations are stored per repository, so the panel is rebuilt with
+    // the new cwd and state directory when the shell is already active.
     self.agent_chat_view = None;
     self.sync_session_list(cx);
+    if should_rebuild_agent {
+      self.ensure_agent_chat_view(window, cx);
+    }
     self.dock_panel.update(cx, |panel, cx| {
       panel.set_repo_root(repo_root, cx);
       panel.refresh(cx);
@@ -167,13 +171,62 @@ mod tests {
       assert!(page.editor.is_none());
       assert!(page.selected_file.is_none());
       assert!(page.agent_review.is_empty());
-      // Conversations are stored per repository, so the panel is rebuilt.
+      // This test never activated the agent panel, so switching does not start it.
       assert!(page.agent_chat_view.is_none());
       assert_eq!(
         page.dock_panel.read(cx).repo_root(),
         Some(other.path.as_path())
       );
     });
+  }
+
+  #[gpui::test]
+  async fn switching_repository_reloads_sessions_when_the_agent_panel_is_active(
+    cx: &mut TestAppContext,
+  ) {
+    let repo = TempRepo::init("session-page-active-switch-from");
+    commit_text_file(&repo.path, Path::new("README.md"), "v1\n", "initial");
+    let other = TempRepo::init("session-page-active-switch-to");
+    commit_text_file(&other.path, Path::new("README.md"), "other\n", "initial");
+
+    let state_dir = agent_chat_state_dir()
+      .map(|dir| AgentChatPanel::state_dir_for_repo(&dir, &other.path))
+      .expect("agent chat state dir");
+    let _ = std::fs::remove_dir_all(&state_dir);
+    std::fs::create_dir_all(&state_dir).expect("create agent chat state dir");
+    let index = serde_json::json!({
+      "version": 1,
+      "conversations": [{
+        "id": "session-in-other-repo",
+        "started_at_secs": 1,
+        "updated_at_secs": 2,
+        "title": "Other repo session",
+        "message_count": 1,
+        "session_id": null,
+        "preview": "hello"
+      }]
+    });
+    std::fs::write(state_dir.join("index.json"), index.to_string()).expect("write session index");
+
+    let (page, cx) = add_session_page_window(repo.path.clone(), cx);
+    page.update_in(cx, |page, window, cx| page.activate(window, cx));
+    page.read_with(cx, |page, _| assert!(page.agent_chat_view.is_some()));
+
+    page.update_in(cx, |page, window, cx| {
+      page
+        .set_selected_repo(other.path.clone(), window, cx)
+        .expect("switch repository");
+    });
+
+    page.read_with(cx, |page, cx| {
+      assert!(page.agent_chat_view.is_some());
+      assert_eq!(
+        page.session_list.read(cx).conversation_ids(),
+        vec!["session-in-other-repo".to_string()]
+      );
+    });
+
+    let _ = std::fs::remove_dir_all(&state_dir);
   }
 
   #[gpui::test]

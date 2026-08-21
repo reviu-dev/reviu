@@ -78,6 +78,15 @@ impl SessionList {
     cx.notify();
   }
 
+  #[cfg(test)]
+  pub(crate) fn conversation_ids(&self) -> Vec<String> {
+    self
+      .conversations
+      .iter()
+      .map(|conversation| conversation.id.clone())
+      .collect()
+  }
+
   /// Refresh the current conversation's row in place; the rest of the list
   /// only changes through `set_conversations`. No-op notifies are skipped so
   /// streaming commits don't re-render the sidebar.
