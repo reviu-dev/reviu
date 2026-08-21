@@ -260,27 +260,13 @@ fn main() {
   }
 
   let traces_sample_rate = if cfg!(debug_assertions) { 1.0 } else { 0.1 };
-  let dsn = if sentry_enabled() {
-    Some(SENTRY_DSN.parse().expect("Invalid Sentry DSN"))
-  } else {
-    None
-  };
+  let enabled = sentry_enabled();
 
-  if dsn.is_none() {
+  if !enabled {
     println!("Sentry error reporting is disabled.");
   }
 
-  let _guard = sentry::init(sentry::ClientOptions {
-    dsn,
-    release: resolved_sentry_release(),
-    send_default_pii: false,
-    attach_stacktrace: true,
-    max_breadcrumbs: 300,
-    traces_sample_rate,
-    in_app_include: vec!["reviu", "workspace", "editor", "git", "ui"],
-    before_send: Some(Arc::new(redact_sensitive_event_data)),
-    ..Default::default()
-  });
+  let _guard = sentry::init(sentry_client_options(enabled, traces_sample_rate));
   install_crash_reporter();
   let startup_crash_report = take_pending_startup_crash_report();
 
@@ -452,6 +438,24 @@ fn resolved_sentry_release_from(
 
 fn resolved_sentry_release() -> Option<Cow<'static, str>> {
   resolved_sentry_release_from(option_env!("SENTRY_RELEASE"), sentry::release_name!())
+}
+
+// ClientOptions is #[non_exhaustive] since sentry 0.49, so it only builds through setters.
+fn sentry_client_options(enabled: bool, traces_sample_rate: f32) -> sentry::ClientOptions {
+  let options = sentry::ClientOptions::default()
+    .maybe_release(resolved_sentry_release())
+    .send_default_pii(false)
+    .attach_stacktrace(true)
+    .max_breadcrumbs(300)
+    .traces_sample_rate(traces_sample_rate)
+    .in_app_include(["reviu", "workspace", "editor", "git", "ui"])
+    .before_send(redact_sensitive_event_data);
+
+  if enabled {
+    options.dsn(SENTRY_DSN)
+  } else {
+    options
+  }
 }
 
 fn sentry_enabled() -> bool {
@@ -668,7 +672,7 @@ mod tests {
     contains_sensitive_fragment, extract_auth_code_for_scheme, extract_open_url_for_scheme,
     is_sensitive_header, is_sensitive_key, is_subscription_callback_for_scheme,
     is_truthy_env_value, pr_deep_link, redact_sensitive_event_data, resolved_sentry_release_from,
-    sentry_enabled_for, startup_deeplink_url_from_args,
+    sentry_client_options, sentry_enabled_for, startup_deeplink_url_from_args,
   };
   use sentry::protocol::{Event, Request, Value};
   use std::borrow::Cow;
@@ -733,6 +737,24 @@ mod tests {
     assert!(!sentry_enabled_for(true, None));
     assert!(!sentry_enabled_for(true, Some("0")));
     assert!(sentry_enabled_for(true, Some("1")));
+  }
+
+  #[test]
+  fn sentry_client_options_carry_every_configured_field() {
+    let options = sentry_client_options(true, 0.1);
+    assert!(options.dsn.is_some());
+    assert_eq!(options.max_breadcrumbs, 300);
+    assert!(options.attach_stacktrace);
+    assert!(!options.send_default_pii);
+    assert_eq!(
+      options.in_app_include,
+      ["reviu", "workspace", "editor", "git", "ui"]
+    );
+  }
+
+  #[test]
+  fn sentry_client_options_omit_the_dsn_when_disabled() {
+    assert!(sentry_client_options(false, 1.0).dsn.is_none());
   }
 
   #[test]
