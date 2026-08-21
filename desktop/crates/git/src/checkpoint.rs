@@ -104,7 +104,7 @@ pub fn list_checkpoints(repo_root: &Path, session_id: &str) -> Result<Vec<Checkp
   let mut checkpoints = Vec::new();
   for reference in repo.references_glob(&format!("{prefix}*"))? {
     let reference = reference?;
-    let Some(ref_name) = reference.name() else {
+    let Ok(ref_name) = reference.name() else {
       continue;
     };
     let created_at_ms = ref_name
@@ -150,7 +150,7 @@ fn checkpoint_tree_files(repo: &Repository, ref_name: &str) -> Result<HashSet<Pa
   let mut files = HashSet::new();
   tree.walk(TreeWalkMode::PreOrder, |root, entry| {
     if entry.kind() == Some(ObjectType::Blob)
-      && let Some(name) = entry.name()
+      && let Ok(name) = entry.name()
     {
       files.insert(PathBuf::from(format!("{root}{name}")));
     }

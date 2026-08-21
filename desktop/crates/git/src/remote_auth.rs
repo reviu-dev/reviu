@@ -165,6 +165,15 @@ mod tests {
   use crate::test_support::TempDir;
   use git2::{ConfigLevel, CredentialType};
 
+  // git2 0.21 dropped ssh/https from its default features; losing them breaks every
+  // remote operation at runtime without failing the build.
+  #[test]
+  fn libgit2_is_linked_with_the_ssh_and_https_transports() {
+    let version = git2::Version::get();
+    assert!(version.https(), "libgit2 built without HTTPS support");
+    assert!(version.ssh(), "libgit2 built without SSH support");
+  }
+
   fn test_config(prefix: &str) -> (TempDir, Config) {
     let temp_dir = TempDir::new(prefix);
     let mut config = Config::new().expect("create config");

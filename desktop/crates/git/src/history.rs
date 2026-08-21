@@ -86,6 +86,8 @@ pub fn list_commit_history(repo_root: &Path, limit: usize) -> Result<Vec<History
 
     let summary = commit
       .summary()
+      .ok()
+      .flatten()
       .unwrap_or("No commit message")
       .replace(['\n', '\r'], "");
     let author = commit.author().name().unwrap_or("Unknown").to_string();
@@ -235,7 +237,7 @@ fn head_target(repo: &Repository) -> Option<(Oid, String)> {
     .or_else(|| head.peel_to_commit().ok().map(|commit| commit.id()))?;
   let label = if head.is_branch() {
     match head.shorthand() {
-      Some(name) if !name.is_empty() => format!("HEAD -> {name}"),
+      Ok(name) if !name.is_empty() => format!("HEAD -> {name}"),
       _ => "HEAD".to_string(),
     }
   } else {

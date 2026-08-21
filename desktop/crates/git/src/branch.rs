@@ -128,7 +128,7 @@ pub fn current_branch_upstream(repo_root: &Path) -> Result<Option<BranchRef>> {
     return Ok(None);
   }
 
-  let Some(local_name) = head.shorthand() else {
+  let Ok(local_name) = head.shorthand() else {
     return Ok(None);
   };
   let Ok(local_branch) = repo.find_branch(local_name, BranchType::Local) else {
@@ -212,7 +212,7 @@ pub fn detached_head_label(repo_root: &Path) -> Result<String> {
 
   let tag_names = repo.tag_names(None).context("list tags")?;
   let mut exact_tags = Vec::new();
-  for tag_name in tag_names.iter().flatten() {
+  for tag_name in tag_names.iter().filter_map(|value| value.ok().flatten()) {
     let refname = format!("refs/tags/{tag_name}");
     let Ok(object) = repo.revparse_single(&refname) else {
       continue;
@@ -237,7 +237,7 @@ pub fn fetch(repo_root: &Path) -> Result<()> {
     Repository::open(repo_root).with_context(|| format!("open repo at {:?}", repo_root))?;
   let remotes = repo.remotes().context("list remotes")?;
 
-  for remote_name in remotes.iter().flatten() {
+  for remote_name in remotes.iter().filter_map(|value| value.ok().flatten()) {
     let mut remote = repo
       .find_remote(remote_name)
       .with_context(|| format!("find remote {remote_name:?}"))?;
@@ -504,7 +504,7 @@ fn ensure_worktree_clean(repo_root: &Path) -> Result<()> {
 fn preferred_remote_name(repo: &Repository) -> Result<Option<String>> {
   if let Ok(head) = repo.head()
     && head.is_branch()
-    && let Some(local_name) = head.shorthand()
+    && let Ok(local_name) = head.shorthand()
     && let Ok(local_branch) = repo.find_branch(local_name, BranchType::Local)
     && let Ok(upstream) = local_branch.upstream()
     && let Some(upstream_name) = upstream.name()?
@@ -520,7 +520,13 @@ fn preferred_remote_name(repo: &Repository) -> Result<Option<String>> {
   }
 
   let remotes = repo.remotes().context("list remotes")?;
-  Ok(remotes.iter().flatten().next().map(str::to_string))
+  Ok(
+    remotes
+      .iter()
+      .filter_map(|value| value.ok().flatten())
+      .next()
+      .map(str::to_string),
+  )
 }
 
 pub fn default_remote_branch(repo_root: &Path) -> Result<Option<BranchRef>> {
@@ -535,7 +541,7 @@ pub fn default_remote_branch(repo_root: &Path) -> Result<Option<BranchRef>> {
     remote_names.push("origin".to_string());
   }
   let remotes = repo.remotes().context("list remotes")?;
-  for remote_name in remotes.iter().flatten() {
+  for remote_name in remotes.iter().filter_map(|value| value.ok().flatten()) {
     if !remote_names.iter().any(|name| name == remote_name) {
       remote_names.push(remote_name.to_string());
     }
@@ -544,7 +550,7 @@ pub fn default_remote_branch(repo_root: &Path) -> Result<Option<BranchRef>> {
   for remote_name in remote_names {
     let head_ref = format!("refs/remotes/{remote_name}/HEAD");
     if let Ok(reference) = repo.find_reference(&head_ref)
-      && let Some(target) = reference.symbolic_target()
+      && let Some(target) = reference.symbolic_target().ok().flatten()
       && let Some(branch) = branch_ref_from_full_name(target)?
     {
       return Ok(Some(branch));
@@ -636,11 +642,11 @@ fn resolve_github_remote_repo(repo: &Repository) -> Result<Option<GithubRemoteRe
   }
 
   let remotes = repo.remotes().context("list remotes")?;
-  for remote_name in remotes.iter().flatten() {
+  for remote_name in remotes.iter().filter_map(|value| value.ok().flatten()) {
     let Ok(remote) = repo.find_remote(remote_name) else {
       continue;
     };
-    if let Some(url) = remote.url()
+    if let Ok(url) = remote.url()
       && let Some(parsed) = parse_github_remote_repo(url)
     {
       return Ok(Some(parsed));
@@ -663,7 +669,7 @@ fn preferred_remote_url(repo: &Repository) -> Result<Option<String>> {
       if !upstream_name.is_empty() {
         let remote_name = upstream_name.split('/').next().unwrap_or("origin");
         if let Ok(remote) = repo.find_remote(remote_name)
-          && let Some(url) = remote.url()
+          && let Ok(url) = remote.url()
         {
           return Ok(Some(url.to_string()));
         }
@@ -672,7 +678,7 @@ fn preferred_remote_url(repo: &Repository) -> Result<Option<String>> {
   }
 
   if let Ok(remote) = repo.find_remote("origin")
-    && let Some(url) = remote.url()
+    && let Ok(url) = remote.url()
   {
     return Ok(Some(url.to_string()));
   }
@@ -720,7 +726,7 @@ pub fn checkout_detached_target(repo_root: &Path, target: &str) -> Result<()> {
     .revparse_ext(target)
     .with_context(|| format!("resolve detached target {target:?}"))?;
   if let Some(reference) = reference.as_ref()
-    && let Some(name) = reference.name()
+    && let Ok(name) = reference.name()
     && (name == "HEAD" || name.starts_with("refs/heads/") || name.starts_with("refs/remotes/"))
   {
     bail!("detached target must be a commit hash or tag");
@@ -773,7 +779,7 @@ pub fn delete_branch(repo_root: &Path, branch: &BranchRef) -> Result<()> {
   match branch.kind {
     BranchKind::Local => {
       let head = repo.head().context("read HEAD reference")?;
-      if head.is_branch() && head.shorthand() == Some(branch.name.as_str()) {
+      if head.is_branch() && head.shorthand().ok() == Some(branch.name.as_str()) {
         bail!("cannot delete the current branch")
       }
 
@@ -844,9 +850,7 @@ pub fn merge_branch(repo_root: &Path, branch: &BranchRef) -> Result<MergeBranchO
 
   if analysis.is_fast_forward() {
     let head_ref = repo.head()?;
-    let refname = head_ref
-      .name()
-      .ok_or_else(|| anyhow::anyhow!("invalid HEAD"))?;
+    let refname = head_ref.name().context("invalid HEAD")?;
     let mut reference = repo.find_reference(refname)?;
     reference.set_target(target_commit.id(), "Fast-Forward")?;
     repo.set_head(reference.name().unwrap())?;
@@ -934,7 +938,9 @@ pub fn current_rebase_commit_message(repo_root: &Path) -> Result<Option<String>>
   Ok(
     commit
       .summary()
-      .or_else(|| commit.message())
+      .ok()
+      .flatten()
+      .or_else(|| commit.message().ok())
       .map(str::trim)
       .filter(|message| !message.is_empty())
       .map(ToOwned::to_owned),
@@ -1254,6 +1260,7 @@ pub fn cherry_pick_commits(repo_root: &Path, commit_hashes: &[String]) -> Result
     let signature = repo_signature(&repo)?;
     let message = commit
       .message()
+      .ok()
       .map(str::trim)
       .filter(|msg| !msg.is_empty());
     let message = message.unwrap_or("cherry-pick");
@@ -1283,7 +1290,9 @@ pub fn default_stash_message(repo_root: &Path) -> Result<String> {
   let short_oid = commit.id().to_string().chars().take(7).collect::<String>();
   let summary = commit
     .summary()
-    .or_else(|| commit.message())
+    .ok()
+    .flatten()
+    .or_else(|| commit.message().ok())
     .map(str::trim)
     .filter(|message| !message.is_empty())
     .unwrap_or("WIP");

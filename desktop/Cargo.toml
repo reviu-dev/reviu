@@ -81,7 +81,11 @@ tree-sitter-python = "0.25"
 tree-sitter-toml-ng = "0.7"
 tree-sitter-vue = { path = "tree-sitter-vue" }
 once_cell = "1.21.4"
-git2 = { version = "0.20.1", features = [
+# git2 0.21 dropped ssh/https from its defaults; without them libgit2 builds with no
+# remote transport and fetch/push fail at runtime rather than at compile time.
+git2 = { version = "0.21.0", features = [
+  "https",
+  "ssh",
   "vendored-libgit2",
   "vendored-openssl",
 ] }

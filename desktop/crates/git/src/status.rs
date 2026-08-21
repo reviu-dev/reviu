@@ -118,7 +118,7 @@ pub fn list_repo_worktree_files(repo_root: &Path) -> Result<Vec<PathBuf>> {
     .statuses(Some(&mut opts))
     .context("read repository statuses")?;
   for entry in statuses.iter() {
-    let Some(path) = entry.path() else {
+    let Ok(path) = entry.path() else {
       continue;
     };
     let rel_path = PathBuf::from(path);
@@ -154,7 +154,7 @@ fn collect_tree_files(
   files: &mut BTreeSet<PathBuf>,
 ) -> Result<()> {
   for entry in tree.iter() {
-    let Some(name) = entry.name() else {
+    let Ok(name) = entry.name() else {
       continue;
     };
     let path = if prefix.as_os_str().is_empty() {
@@ -352,7 +352,7 @@ fn entry_paths(
     };
     (path, old_path)
   } else {
-    (PathBuf::from(entry.path()?), None)
+    (PathBuf::from(entry.path().ok()?), None)
   };
 
   Some((path, old_path))

@@ -996,7 +996,7 @@ mod tests {
       .head()
       .and_then(|head| head.peel_to_commit())
       .expect("remote head");
-    assert_eq!(head.summary(), Some("second"));
+    assert_eq!(head.summary().expect("read summary"), Some("second"));
 
     page.read_with(cx, |page, cx| {
       let snapshot = page.repo_snapshot.read(cx);

@@ -2068,7 +2068,10 @@ mod tests {
       .head()
       .and_then(|head| head.peel_to_commit())
       .expect("read head");
-    assert_eq!(head.summary(), Some("feat: update readme"));
+    assert_eq!(
+      head.summary().expect("read summary"),
+      Some("feat: update readme")
+    );
     panel.read_with(cx, |panel, cx| {
       assert!(panel.status_entries.is_empty());
       assert!(panel.commit_input.read(cx).value().is_empty());

@@ -188,7 +188,9 @@ fn collect_interactive_rebase_commits(
     }
     let summary = commit
       .summary()
-      .or_else(|| commit.message())
+      .ok()
+      .flatten()
+      .or_else(|| commit.message().ok())
       .map(str::trim)
       .filter(|value| !value.is_empty())
       .unwrap_or("No commit message")
@@ -400,7 +402,7 @@ mod tests {
       .expect("open repo")
       .head()
       .ok()
-      .and_then(|head| head.shorthand().map(ToString::to_string))
+      .and_then(|head| head.shorthand().ok().map(ToString::to_string))
       .unwrap_or_else(|| "HEAD".to_string())
   }
 
@@ -423,6 +425,8 @@ mod tests {
           .find_commit(oid)
           .expect("read commit")
           .summary()
+          .ok()
+          .flatten()
           .unwrap_or_default()
           .to_string()
       })

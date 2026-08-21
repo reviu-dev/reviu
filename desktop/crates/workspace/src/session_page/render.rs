@@ -1140,7 +1140,7 @@ mod tests {
       .head()
       .and_then(|head| head.peel_to_commit())
       .expect("remote head");
-    assert_eq!(head.summary(), Some("second"));
+    assert_eq!(head.summary().expect("read summary"), Some("second"));
 
     // The row under the counter opens the repository switcher: it must not fire.
     let switcher_open = cx.update(|window, cx| window.has_active_dialog(cx));

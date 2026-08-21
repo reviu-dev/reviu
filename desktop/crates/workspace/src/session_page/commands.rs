@@ -1388,7 +1388,11 @@ mod tests {
       .head()
       .and_then(|head| head.peel_to_commit())
       .expect("remote head");
-    assert_eq!(head.summary(), Some("second"), "the push went through");
+    assert_eq!(
+      head.summary().expect("read summary"),
+      Some("second"),
+      "the push went through"
+    );
     assert!(
       !cx.update(|window, cx| window.has_active_dialog(cx)),
       "a plain push opens no pull request form"

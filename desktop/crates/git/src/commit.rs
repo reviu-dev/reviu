@@ -260,7 +260,10 @@ fn default_publish_remote(repo: &Repository) -> Result<Option<String>> {
   }
 
   let remotes = repo.remotes().context("list remotes")?;
-  let mut remote_names = remotes.iter().flatten().map(ToString::to_string);
+  let mut remote_names = remotes
+    .iter()
+    .filter_map(|remote| remote.ok().flatten())
+    .map(ToString::to_string);
   let first = remote_names.next();
   if first.is_none() || remote_names.next().is_some() {
     return Ok(None);
@@ -289,7 +292,7 @@ mod tests {
       .expect("open repo")
       .head()
       .ok()
-      .and_then(|head| head.shorthand().map(ToString::to_string))
+      .and_then(|head| head.shorthand().ok().map(ToString::to_string))
       .unwrap_or_else(|| "HEAD".to_string())
   }
 
@@ -367,7 +370,10 @@ mod tests {
       .head()
       .and_then(|head| head.peel_to_commit())
       .expect("read head");
-    assert_eq!(head.summary(), Some("initial message"));
+    assert_eq!(
+      head.summary().expect("read summary"),
+      Some("initial message")
+    );
     assert_eq!(head.parent_count(), 0);
   }
 
@@ -385,9 +391,16 @@ mod tests {
       .head()
       .and_then(|head| head.peel_to_commit())
       .expect("read head");
-    assert_eq!(head.summary(), Some("second"));
+    assert_eq!(head.summary().expect("read summary"), Some("second"));
     assert_eq!(head.parent_count(), 1);
-    assert_eq!(head.parent(0).expect("parent").summary(), Some("first"));
+    assert_eq!(
+      head
+        .parent(0)
+        .expect("parent")
+        .summary()
+        .expect("read summary"),
+      Some("first")
+    );
   }
 
   #[test]
@@ -652,7 +665,10 @@ mod tests {
       .head()
       .and_then(|head| head.peel_to_commit())
       .expect("read head commit");
-    assert_eq!(head.summary(), Some("initial message"));
+    assert_eq!(
+      head.summary().expect("read summary"),
+      Some("initial message")
+    );
 
     let tree = head.tree().expect("head tree");
     let entry = tree.get_path(rel_path).expect("entry in tree");
@@ -676,7 +692,10 @@ mod tests {
       .head()
       .and_then(|head| head.peel_to_commit())
       .expect("read head commit");
-    assert_eq!(head.summary(), Some("updated message"));
+    assert_eq!(
+      head.summary().expect("read summary"),
+      Some("updated message")
+    );
   }
 
   #[test]
@@ -741,7 +760,10 @@ mod tests {
       .and_then(|head| head.peel_to_commit())
       .expect("read head after merge commit");
     assert_eq!(head.parent_count(), 2);
-    assert_eq!(head.summary(), Some("Merge branch 'feature' into main"));
+    assert_eq!(
+      head.summary().expect("read summary"),
+      Some("Merge branch 'feature' into main")
+    );
   }
 
   #[test]
