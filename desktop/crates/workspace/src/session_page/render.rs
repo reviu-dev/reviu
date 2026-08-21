@@ -627,6 +627,23 @@ impl Render for DraggedPanel {
   }
 }
 
+/// A dot on a rail icon: something is waiting behind a panel you cannot see.
+/// Exhaustive on purpose, so a new tab has to say whether it has news.
+pub(crate) fn dock_rail_tab_has_news(
+  tab: DockPanelTab,
+  changed_files: usize,
+  pending_review: usize,
+) -> bool {
+  match tab {
+    DockPanelTab::Changes => changed_files > 0,
+    DockPanelTab::Review => pending_review > 0,
+    DockPanelTab::Files
+    | DockPanelTab::History
+    | DockPanelTab::PullRequest
+    | DockPanelTab::Terminal => false,
+  }
+}
+
 impl SessionPage {
   /// Absolute over the dock's left edge so it costs no layout column: the
   /// header border line stays continuous and the 1px separator comes from the
@@ -882,15 +899,14 @@ impl SessionPage {
       })),
     );
     let pending_review = self.copyable_review_comment_count();
+    let changed_files = self.dock_panel.read(cx).status_entries().len();
     for (id, icon, tooltip, tab) in tabs {
       let button = Self::rail_button(id, icon, tooltip)
         .selected(self.dock_open && active_tab == tab)
         .on_click(cx.listener(move |this, _, window, cx| {
           this.open_dock_tab(tab, window, cx);
         }));
-      // The panel is the only place the batch is visible: say it is waiting even
-      // when the dock is closed.
-      let badge = (tab == DockPanelTab::Review && pending_review > 0).then(|| {
+      let badge = dock_rail_tab_has_news(tab, changed_files, pending_review).then(|| {
         div()
           .absolute()
           .top(px(0.0))
@@ -2959,6 +2975,23 @@ mod tests {
       (width - (start_width + 80.0)).abs() < 5.0,
       "dragging 80px right widens the chat: {start_width} -> {width}"
     );
+  }
+
+  #[test]
+  fn only_the_tabs_holding_work_wear_a_dot() {
+    assert!(dock_rail_tab_has_news(DockPanelTab::Changes, 2, 0));
+    assert!(!dock_rail_tab_has_news(DockPanelTab::Changes, 0, 3));
+    assert!(dock_rail_tab_has_news(DockPanelTab::Review, 0, 3));
+    assert!(!dock_rail_tab_has_news(DockPanelTab::Review, 2, 0));
+
+    for tab in [
+      DockPanelTab::Files,
+      DockPanelTab::History,
+      DockPanelTab::PullRequest,
+      DockPanelTab::Terminal,
+    ] {
+      assert!(!dock_rail_tab_has_news(tab, 5, 5));
+    }
   }
 
   #[gpui::test]

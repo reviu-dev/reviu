@@ -8,7 +8,7 @@ All notable changes to Reviu are documented here.
 
 The comments you leave on a diff now have a home: a Review tab in the right panel lists the whole batch, grouped by file, with each file collapsible. Click a comment to open its file and land on the lines it is about, delete one you changed your mind about, and see at a glance which ones the agent already addressed and which ones the code moved under.
 
-Sending happens from that panel too, next to a Discard button that clears the review after a confirmation. The diff header keeps only the tools you use while reading. When the panel is closed a dot on its rail icon says a review is waiting, `cmd-shift-a` still sends, and the command palette gained "Send review to agent" and "Discard review".
+Sending happens from that panel too, next to a Discard button that clears the review after a confirmation. The diff header keeps only the tools you use while reading. When the panel is closed a dot on its rail icon says a review is waiting, `cmd-shift-a` still sends, and the command palette gained "Send review to agent" and "Discard review". The Changes icon wears the same dot when the working tree has something in it.
 
 ### A Calm CPU While The Agent Works
 
