@@ -1316,6 +1316,34 @@ fn a_read_with_an_offset_numbers_from_the_real_file_line() {
 }
 
 #[test]
+fn read_offset_survives_status_updates_without_raw_input() {
+  use crate::transcript::{apply_tool_call_update_pure, upsert_tool_call_pure};
+
+  let mut items = Vec::new();
+  let mut index = HashMap::new();
+  let mut call = ToolCall::new(ToolCallId::new("read1"), "Read render.rs");
+  call.kind = ToolKind::Read;
+  call.locations = vec![ToolCallLocation::new("src/render.rs")];
+  call.raw_input = Some(serde_json::json!({ "offset": 350 }));
+  call.content = vec![ToolCallContent::from(
+    agent_client_protocol::schema::ContentBlock::Text(TextContent::new("let a = 1;\nlet b = 2;")),
+  )];
+  upsert_tool_call_pure(&mut items, &mut index, call, test_cwd());
+
+  let update = ToolCallUpdate::new(
+    ToolCallId::new("read1"),
+    ToolCallUpdateFields::new().status(ToolCallStatus::Completed),
+  );
+  apply_tool_call_update_pure(&mut items, &index, update, test_cwd());
+
+  let ChatItem::Tool(view) = &items[0] else {
+    panic!("tool expected");
+  };
+  assert_eq!(view.read_start_line, Some(350));
+  assert_eq!(view.outputs[0].start_line, Some(350));
+}
+
+#[test]
 fn terminal_tail_ranges_slice_their_lines_and_strip_ansi() {
   // Colored lines: the selectable text must be the stripped one.
   let output = (0..30)

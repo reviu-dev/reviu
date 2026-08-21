@@ -68,10 +68,7 @@ pub(crate) fn read_tool_output_start_line(
   read_tool_start_line(kind, locations, None)
 }
 
-/// First file line of a Read tool's output: an explicit location line wins,
-/// then the `offset` in the tool's raw input (Claude-style Read), then 1 when
-/// a location at least proves this is a file read.
-pub(crate) fn read_tool_start_line(
+fn read_tool_explicit_start_line(
   kind: &ToolKind,
   locations: &[(PathBuf, Option<u32>)],
   raw_input: Option<&serde_json::Value>,
@@ -84,9 +81,19 @@ pub(crate) fn read_tool_start_line(
     .and_then(|input| input.get("offset"))
     .and_then(|offset| offset.as_u64())
     .map(|offset| offset.clamp(1, u32::MAX as u64) as u32);
-  from_location
-    .or(from_input)
-    .or_else(|| (!locations.is_empty()).then_some(1))
+  from_location.or(from_input)
+}
+
+/// First file line of a Read tool's output: an explicit location line wins,
+/// then the `offset` in the tool's raw input (Claude-style Read), then 1 when
+/// a location at least proves this is a file read.
+pub(crate) fn read_tool_start_line(
+  kind: &ToolKind,
+  locations: &[(PathBuf, Option<u32>)],
+  raw_input: Option<&serde_json::Value>,
+) -> Option<u32> {
+  read_tool_explicit_start_line(kind, locations, raw_input)
+    .or_else(|| (matches!(kind, ToolKind::Read) && !locations.is_empty()).then_some(1))
 }
 
 /// Fingerprint of the pieces that feed diffs, outputs and highlight spans.
@@ -174,14 +181,15 @@ pub(crate) fn apply_tool_call_update_pure(
   if let Some(locs) = update.fields.locations {
     view.locations = locs.into_iter().map(|l| (l.path, l.line)).collect();
   }
-  // Updates rarely repeat the raw input; a resolution from fresh fields wins,
-  // the one captured at the initial call survives otherwise.
-  view.read_start_line = read_tool_start_line(
+  // Updates rarely repeat raw input; only an explicit line or offset can
+  // replace the one captured at the initial call.
+  view.read_start_line = read_tool_explicit_start_line(
     &view.kind,
     &view.locations,
     update.fields.raw_input.as_ref(),
   )
-  .or(view.read_start_line);
+  .or(view.read_start_line)
+  .or_else(|| read_tool_output_start_line(&view.kind, &view.locations));
   if let Some(content) = update.fields.content {
     let content_fp = tool_content_fp(&content, view.locations.first().map(|(p, _)| p));
     if view.content_fp != content_fp {
