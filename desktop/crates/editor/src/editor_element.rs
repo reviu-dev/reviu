@@ -1013,12 +1013,16 @@ impl Element for EditorElement {
       let dirty = document.drain_dirty_highlight_lines();
       (epoch, version, dirty)
     };
-    self.editor.update(cx, |editor, _| {
+    self.editor.update(cx, |editor, cx| {
       editor.editor_line_height = measured_line_height;
       editor.invalidate_layout_cache_if_font_size_changed(font_size);
       if is_primary {
         editor.viewport_height = bounds.size.height;
-        editor.viewport_width = bounds.size.width;
+        if editor.viewport_width != bounds.size.width {
+          editor.viewport_width = bounds.size.width;
+          // Review comment cards follow the content width; re-render to resize them.
+          cx.notify();
+        }
       }
 
       if editor.scroll_axis_lock == Some(ScrollAxis::Vertical)

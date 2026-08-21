@@ -110,10 +110,18 @@ pub(crate) const REVIEW_COMMENT_UI_FONT_FAMILY: &str = ".SystemUIFont";
 const REVIEW_COMMENT_HORIZONTAL_PADDING_PX: f32 =
   REVIEW_COMMENT_CARD_PADDING_X_PX * 2.0 + REVIEW_COMMENT_CARD_BORDER_PX * 2.0;
 const REVIEW_COMMENT_DEFAULT_LINE_HEIGHT_PX: f32 = 20.0;
-const REVIEW_COMMENT_FIXED_WIDTH_PX: f32 = 800.0;
-const REVIEW_COMMENT_COMPOSER_TEXTAREA_HEIGHT_PX: f32 = 180.0;
+const REVIEW_COMMENT_MAX_WIDTH_PX: f32 = 800.0;
+const REVIEW_COMMENT_MIN_WIDTH_PX: f32 = 320.0;
+/// Matches the `pr_2` the card overlays keep on the right of the content area.
+const REVIEW_COMMENT_CARD_RIGHT_MARGIN_PX: f32 = 8.0;
 const REVIEW_COMMENT_COMPOSER_ACTIONS_HEIGHT_PX: f32 = 24.0;
 const REVIEW_COMMENT_COMPOSER_ACTIONS_GAP_PX: f32 = 8.0;
+/// gpui-component input chrome around the text: `input_py` twice plus its border.
+const REVIEW_COMMENT_COMPOSER_TEXTAREA_VERTICAL_CHROME_PX: f32 = 18.0;
+/// Same, horizontally: `input_px` twice plus its border.
+const REVIEW_COMMENT_COMPOSER_TEXTAREA_HORIZONTAL_CHROME_PX: f32 = 22.0;
+const REVIEW_COMMENT_COMPOSER_MIN_ROWS: usize = 3;
+const REVIEW_COMMENT_COMPOSER_MAX_ROWS: usize = 12;
 const REVIEW_COMMENT_CREATE_DRAFT_COMMENT_ID: u64 = u64::MAX;
 const REVIEW_COMMENT_REPLY_DRAFT_COMMENT_ID: u64 = u64::MAX - 1;
 const REVIEW_COMMENT_CREATE_SELECTION_BACKGROUND_ALPHA: f32 = 0.16;
@@ -223,11 +231,17 @@ pub enum ReviewCommentMode {
 }
 
 /// GitHub rejects standalone comments (422) while the viewer has a pending review.
-pub fn review_comment_submit_mode(has_pending_review: bool) -> ReviewCommentMode {
-  if has_pending_review {
-    ReviewCommentMode::PendingReview
-  } else {
-    ReviewCommentMode::SingleComment
+pub fn review_comment_submit_mode(
+  display_mode: ReviewCommentDisplayMode,
+  has_pending_review: bool,
+) -> ReviewCommentMode {
+  match display_mode {
+    // A local note has a single destination; the batch is submitted by the page.
+    ReviewCommentDisplayMode::LocalNote => ReviewCommentMode::SingleComment,
+    ReviewCommentDisplayMode::Conversation if has_pending_review => {
+      ReviewCommentMode::PendingReview
+    }
+    ReviewCommentDisplayMode::Conversation => ReviewCommentMode::SingleComment,
   }
 }
 
@@ -260,6 +274,92 @@ fn review_comment_composer_body_height_px(
     + textarea_height_px
     + REVIEW_COMMENT_COMPOSER_ACTIONS_HEIGHT_PX.max(editor_line_height_px)
     + REVIEW_COMMENT_COMPOSER_ACTIONS_GAP_PX
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ReviewCommentCreateAction {
+  pub id: &'static str,
+  pub label: &'static str,
+  pub mode: ReviewCommentMode,
+  pub primary: bool,
+}
+
+const REVIEW_COMMENT_ADD_NOTE_ACTION: ReviewCommentCreateAction = ReviewCommentCreateAction {
+  id: "review-comment-create-save",
+  label: "Comment",
+  mode: ReviewCommentMode::SingleComment,
+  primary: true,
+};
+const REVIEW_COMMENT_SINGLE_COMMENT_ACTION: ReviewCommentCreateAction = ReviewCommentCreateAction {
+  id: "review-comment-create-save",
+  label: "Add single comment",
+  mode: ReviewCommentMode::SingleComment,
+  primary: false,
+};
+const REVIEW_COMMENT_START_REVIEW_ACTION: ReviewCommentCreateAction = ReviewCommentCreateAction {
+  id: "review-comment-create-start-review",
+  label: "Start a review",
+  mode: ReviewCommentMode::PendingReview,
+  primary: true,
+};
+const REVIEW_COMMENT_ADD_TO_REVIEW_ACTION: ReviewCommentCreateAction = ReviewCommentCreateAction {
+  id: "review-comment-create-start-review",
+  label: "Add review comment",
+  mode: ReviewCommentMode::PendingReview,
+  primary: true,
+};
+
+/// Two destinations only where the page has two. A local note goes to the agent
+/// batch, and GitHub rejects standalone comments while a review is pending.
+pub fn review_comment_create_actions(
+  display_mode: ReviewCommentDisplayMode,
+  has_pending_review: bool,
+) -> Vec<ReviewCommentCreateAction> {
+  match display_mode {
+    ReviewCommentDisplayMode::LocalNote => vec![REVIEW_COMMENT_ADD_NOTE_ACTION],
+    ReviewCommentDisplayMode::Conversation if has_pending_review => {
+      vec![REVIEW_COMMENT_ADD_TO_REVIEW_ACTION]
+    }
+    ReviewCommentDisplayMode::Conversation => vec![
+      REVIEW_COMMENT_SINGLE_COMMENT_ACTION,
+      REVIEW_COMMENT_START_REVIEW_ACTION,
+    ],
+  }
+}
+
+/// The create composer is a card of its own, so it pays its own vertical padding.
+fn review_comment_create_card_body_height_px(composer_body_height_px: f32) -> f32 {
+  REVIEW_COMMENT_CARD_PADDING_X_PX * 2.0 + composer_body_height_px
+}
+
+fn review_comment_card_width_px(available_px: f32) -> f32 {
+  (available_px - REVIEW_COMMENT_CARD_RIGHT_MARGIN_PX)
+    .clamp(REVIEW_COMMENT_MIN_WIDTH_PX, REVIEW_COMMENT_MAX_WIDTH_PX)
+}
+
+fn review_comment_wrap_columns_for_width(available_px: f32, char_width_px: f32) -> usize {
+  let char_width_px = char_width_px.max(1.0);
+  let columns = (available_px.max(char_width_px) / char_width_px).floor() as usize;
+  columns.clamp(
+    REVIEW_COMMENT_MIN_WRAP_COLUMNS,
+    REVIEW_COMMENT_MAX_WRAP_COLUMNS,
+  )
+}
+
+fn review_comment_composer_rows(value: &str, wrap_columns: usize) -> usize {
+  let columns = wrap_columns.max(1);
+  value
+    .split('\n')
+    .map(|line| line.chars().count().div_ceil(columns).max(1))
+    .sum::<usize>()
+    .clamp(
+      REVIEW_COMMENT_COMPOSER_MIN_ROWS,
+      REVIEW_COMMENT_COMPOSER_MAX_ROWS,
+    )
+}
+
+fn review_comment_composer_textarea_height_px(rows: usize, text_line_height_px: f32) -> f32 {
+  rows as f32 * text_line_height_px + REVIEW_COMMENT_COMPOSER_TEXTAREA_VERTICAL_CHROME_PX
 }
 
 fn review_comment_overlay_x_offset_for_scroll(scroll_x: Pixels) -> Pixels {
@@ -596,8 +696,7 @@ pub struct Editor {
   review_comment_asset_url_resolver: Option<ReviewCommentAssetUrlResolver>,
   review_comment_image_upload_handler: Option<ReviewCommentImageUploadHandler>,
   review_comment_preview_renderer: Option<ReviewCommentPreviewRenderer>,
-  review_comment_card_width: Pixels,
-  review_comment_textarea_height: Pixels,
+  review_comment_composer_rows: HashMap<gpui::EntityId, usize>,
   review_comment_create_input: Option<Entity<TextareaState>>,
   review_comment_create_draft: Option<ReviewCommentCreateDraft>,
   review_comment_create_drag_start_display_line: Option<usize>,
@@ -708,6 +807,7 @@ struct ProjectionBuildInput {
   editor_line_height_px: f32,
   markdown_line_height_px: f32,
   review_comment_body_heights_px: HashMap<u64, f32>,
+  composer_only_comment_ids: HashSet<u64>,
   conflict_doc_line_ranges: Vec<Range<usize>>,
   is_unmerged: bool,
 }
@@ -1024,8 +1124,7 @@ impl Editor {
       review_comment_asset_url_resolver: None,
       review_comment_image_upload_handler: None,
       review_comment_preview_renderer: None,
-      review_comment_card_width: px(REVIEW_COMMENT_FIXED_WIDTH_PX),
-      review_comment_textarea_height: px(REVIEW_COMMENT_COMPOSER_TEXTAREA_HEIGHT_PX),
+      review_comment_composer_rows: HashMap::new(),
       review_comment_create_input: None,
       review_comment_create_draft: None,
       review_comment_create_drag_start_display_line: None,
@@ -1387,14 +1486,29 @@ impl Editor {
     }
   }
 
+  /// The card follows the content area, never wider than its readable maximum.
+  fn review_comment_card_width(&self) -> Pixels {
+    px(review_comment_card_width_px(
+      self.horizontal_viewport_width() / px(1.0),
+    ))
+  }
+
   fn computed_review_comment_wrap_columns(&self) -> usize {
-    let char_width_px = (self.measured_review_comment_char_width() / px(1.0)).max(1.0);
-    let card_width_px = self.review_comment_card_width / px(1.0);
-    let available_px = (card_width_px - REVIEW_COMMENT_HORIZONTAL_PADDING_PX).max(char_width_px);
-    let columns = (available_px / char_width_px).floor() as usize;
-    columns.clamp(
-      REVIEW_COMMENT_MIN_WRAP_COLUMNS,
-      REVIEW_COMMENT_MAX_WRAP_COLUMNS,
+    let card_width_px = self.review_comment_card_width() / px(1.0);
+    review_comment_wrap_columns_for_width(
+      card_width_px - REVIEW_COMMENT_HORIZONTAL_PADDING_PX,
+      self.measured_review_comment_char_width() / px(1.0),
+    )
+  }
+
+  /// The composer text is inset by the input's own horizontal chrome.
+  fn review_comment_composer_wrap_columns(&self) -> usize {
+    let card_width_px = self.review_comment_card_width() / px(1.0);
+    review_comment_wrap_columns_for_width(
+      card_width_px
+        - REVIEW_COMMENT_HORIZONTAL_PADDING_PX
+        - REVIEW_COMMENT_COMPOSER_TEXTAREA_HORIZONTAL_CHROME_PX,
+      self.measured_review_comment_char_width() / px(1.0),
     )
   }
 
@@ -1825,6 +1939,10 @@ impl Editor {
     cx.notify();
   }
 
+  pub fn review_comment_display_mode(&self) -> ReviewCommentDisplayMode {
+    self.review_comment_display_mode
+  }
+
   pub fn set_review_comment_display_mode(
     &mut self,
     mode: ReviewCommentDisplayMode,
@@ -1923,11 +2041,37 @@ impl Editor {
     cx.notify();
   }
 
-  pub fn set_review_comment_card_width(&mut self, width: Pixels, cx: &mut Context<Self>) {
-    if self.review_comment_card_width == width {
+  /// Caches every open composer's row count; returns true when one of them moved,
+  /// so the diff has to reserve a different number of lines for it.
+  fn sync_review_comment_composer_rows(&mut self, cx: &App) -> bool {
+    let wrap_columns = self.review_comment_composer_wrap_columns();
+    let inputs = [
+      self.review_comment_create_input.clone(),
+      self.review_comment_edit_input.clone(),
+      self.review_comment_reply_input.clone(),
+    ];
+    let rows = inputs
+      .into_iter()
+      .flatten()
+      .map(|input| {
+        let value = input.read(cx).value();
+        (
+          input.entity_id(),
+          review_comment_composer_rows(value.as_ref(), wrap_columns),
+        )
+      })
+      .collect::<HashMap<_, _>>();
+    if rows == self.review_comment_composer_rows {
+      return false;
+    }
+    self.review_comment_composer_rows = rows;
+    true
+  }
+
+  fn refresh_review_comment_composer_layout(&mut self, cx: &mut Context<Self>) {
+    if !self.sync_review_comment_composer_rows(cx) {
       return;
     }
-    self.review_comment_card_width = width;
     if self.diffs.is_some() {
       self.rebuild_projection(cx);
     } else {
@@ -1935,16 +2079,19 @@ impl Editor {
     }
   }
 
-  pub fn set_review_comment_textarea_height(&mut self, height: Pixels, cx: &mut Context<Self>) {
-    if self.review_comment_textarea_height == height {
-      return;
-    }
-    self.review_comment_textarea_height = height;
-    if self.diffs.is_some() {
-      self.rebuild_projection(cx);
-    } else {
-      cx.notify();
-    }
+  fn review_comment_composer_rows_for(&self, input: &Entity<TextareaState>) -> usize {
+    self
+      .review_comment_composer_rows
+      .get(&input.entity_id())
+      .copied()
+      .unwrap_or(REVIEW_COMMENT_COMPOSER_MIN_ROWS)
+  }
+
+  fn review_comment_composer_textarea_height(&self, input: &Entity<TextareaState>) -> Pixels {
+    px(review_comment_composer_textarea_height_px(
+      self.review_comment_composer_rows_for(input),
+      self.review_comment_line_height_px,
+    ))
   }
 
   fn review_comment_composer_chrome_height_px(&self) -> f32 {
@@ -1955,9 +2102,17 @@ impl Editor {
     }
   }
 
-  fn review_comment_composer_body_height_px(&self) -> f32 {
+  fn review_comment_composer_body_height_px(&self, input: Option<&Entity<TextareaState>>) -> f32 {
+    let textarea_height_px = input
+      .map(|input| self.review_comment_composer_textarea_height(input) / px(1.0))
+      .unwrap_or_else(|| {
+        review_comment_composer_textarea_height_px(
+          REVIEW_COMMENT_COMPOSER_MIN_ROWS,
+          self.review_comment_line_height_px,
+        )
+      });
     review_comment_composer_body_height_px(
-      self.review_comment_textarea_height / px(1.0),
+      textarea_height_px,
       self.review_comment_composer_chrome_height_px(),
       self.review_comment_line_height_px,
     )
@@ -2123,6 +2278,12 @@ impl Editor {
         }
       },
     )
+    .detach();
+    // `insert` and `set_value` are silent, so the row count is read from the entity
+    // itself: every mutation notifies, typed or programmatic.
+    cx.observe(&input, |editor, _, cx| {
+      editor.refresh_review_comment_composer_layout(cx);
+    })
     .detach();
     self.review_comment_edit_input = Some(input.clone());
     input
@@ -2290,11 +2451,20 @@ impl Editor {
         } = event
         {
           Self::trim_review_comment_input_trailing_newline(state, window, cx);
-          let mode = review_comment_submit_mode(editor.has_pending_review);
+          let mode = review_comment_submit_mode(
+            editor.review_comment_display_mode,
+            editor.has_pending_review,
+          );
           editor.save_review_comment_create(mode, window, cx);
         }
       },
     )
+    .detach();
+    // `insert` and `set_value` are silent, so the row count is read from the entity
+    // itself: every mutation notifies, typed or programmatic.
+    cx.observe(&input, |editor, _, cx| {
+      editor.refresh_review_comment_composer_layout(cx);
+    })
     .detach();
     self.review_comment_create_input = Some(input.clone());
     input
@@ -2327,6 +2497,12 @@ impl Editor {
         }
       },
     )
+    .detach();
+    // `insert` and `set_value` are silent, so the row count is read from the entity
+    // itself: every mutation notifies, typed or programmatic.
+    cx.observe(&input, |editor, _, cx| {
+      editor.refresh_review_comment_composer_layout(cx);
+    })
     .detach();
     self.review_comment_reply_input = Some(input.clone());
     input
@@ -2730,6 +2906,19 @@ impl Editor {
     self.refresh_review_comment_projection(cx);
   }
 
+  /// Drops the draft and hands the focus back to the page that owns the diff.
+  pub fn cancel_review_comment_create_draft(
+    &mut self,
+    window: &mut Window,
+    cx: &mut Context<Self>,
+  ) {
+    let had_draft = self.review_comment_create_draft.is_some();
+    self.cancel_review_comment_create(cx);
+    if had_draft {
+      self.invoke_review_comment_cancel_handler(window, cx);
+    }
+  }
+
   fn on_review_comment_create_input_escape(
     &mut self,
     _: &InputEscape,
@@ -2740,11 +2929,7 @@ impl Editor {
       cx.stop_propagation();
       return;
     }
-    let had_draft = self.review_comment_create_draft.is_some();
-    self.cancel_review_comment_create(cx);
-    if had_draft {
-      self.invoke_review_comment_cancel_handler(window, cx);
-    }
+    self.cancel_review_comment_create_draft(window, cx);
     cx.stop_propagation();
   }
 
@@ -4257,7 +4442,7 @@ impl Editor {
                   .child({
                     let mut composer = MarkdownComposer::new(&input_state)
                       .disabled(is_edit_submitting)
-                      .h(self.review_comment_textarea_height)
+                      .h(self.review_comment_composer_textarea_height(&input_state))
                       .preview_open(edit_preview_open)
                       .on_toggle_preview(move |_, cx| {
                         toggle_editor.update(cx, |editor, cx| {
@@ -4624,7 +4809,7 @@ impl Editor {
                       .child({
                         let mut composer = MarkdownComposer::new(&input_state)
                           .disabled(is_reply_submitting)
-                          .h(self.review_comment_textarea_height)
+                          .h(self.review_comment_composer_textarea_height(&input_state))
                           .preview_open(reply_preview_open)
                           .on_toggle_preview(move |_, cx| {
                             toggle_editor.update(cx, |editor, cx| {
@@ -4721,7 +4906,7 @@ impl Editor {
       }
 
       let card = div()
-        .w(self.review_comment_card_width)
+        .w(self.review_comment_card_width())
         .bg(theme.sidebar)
         .border(px(REVIEW_COMMENT_CARD_BORDER_PX))
         .border_color(theme.border)
@@ -4837,10 +5022,10 @@ impl Editor {
       let composer_card = if let Some(input_state) = self.review_comment_create_input.clone() {
         let cancel_editor = editor_entity.clone();
         let save_editor = editor_entity.clone();
-        let review_editor = editor_entity.clone();
         let suggest_editor = editor_entity.clone();
         let can_save = self.review_comment_create_handler.is_some();
-        let has_pending_review = self.has_pending_review;
+        let create_actions =
+          review_comment_create_actions(self.review_comment_display_mode, self.has_pending_review);
         let can_suggest = self.can_insert_review_comment_suggestion(cx);
         let is_create_submitting = self.review_comment_create_submitting;
         let create_error = self.review_comment_create_error.clone();
@@ -4851,7 +5036,7 @@ impl Editor {
         let create_toggle_editor = editor_entity.clone();
         Some(
           div()
-            .w(self.review_comment_card_width)
+            .w(self.review_comment_card_width())
             .bg(theme.sidebar)
             .border(px(REVIEW_COMMENT_CARD_BORDER_PX))
             .border_color(theme.border)
@@ -4879,7 +5064,7 @@ impl Editor {
                     .child({
                       let mut composer = MarkdownComposer::new(&input_state)
                         .disabled(is_create_submitting)
-                        .h(self.review_comment_textarea_height)
+                        .h(self.review_comment_composer_textarea_height(&input_state))
                         .preview_open(create_preview_open)
                         .on_toggle_preview(move |_, cx| {
                           create_toggle_editor.update(cx, |editor, cx| {
@@ -4960,69 +5145,32 @@ impl Editor {
                                 .on_click(move |_, window, cx| {
                                   cx.stop_propagation();
                                   cancel_editor.update(cx, |editor, cx| {
-                                    let had_draft = editor.review_comment_create_draft.is_some();
-                                    editor.cancel_review_comment_create(cx);
-                                    if had_draft {
-                                      editor.invoke_review_comment_cancel_handler(window, cx);
-                                    }
+                                    editor.cancel_review_comment_create_draft(window, cx);
                                   });
                                 }),
                             ),
                         )
-                        .when(!has_pending_review, |this| {
-                          // GitHub rejects standalone comments while a review is pending.
-                          this.child(
-                            div()
-                              .on_mouse_down(MouseButton::Left, |_, _, cx| {
-                                cx.stop_propagation();
-                              })
-                              .child(
-                                Button::new("review-comment-create-save")
-                                  .ghost()
-                                  .xsmall()
-                                  .compact()
-                                  .label("Add single comment")
-                                  .disabled(!can_save || is_create_submitting)
-                                  .on_click(move |_, window, cx| {
-                                    cx.stop_propagation();
-                                    save_editor.update(cx, |editor, cx| {
-                                      editor.save_review_comment_create(
-                                        ReviewCommentMode::SingleComment,
-                                        window,
-                                        cx,
-                                      );
-                                    });
-                                  }),
-                              ),
-                          )
-                        })
-                        .child(
+                        .children(create_actions.into_iter().map(|action| {
+                          let action_editor = save_editor.clone();
                           div()
                             .on_mouse_down(MouseButton::Left, |_, _, cx| {
                               cx.stop_propagation();
                             })
                             .child(
-                              Button::new("review-comment-create-start-review")
+                              Button::new(action.id)
                                 .xsmall()
                                 .compact()
-                                .label(if has_pending_review {
-                                  "Add review comment"
-                                } else {
-                                  "Start a review"
-                                })
+                                .when(!action.primary, |this| this.ghost())
+                                .label(action.label)
                                 .disabled(!can_save || is_create_submitting)
                                 .on_click(move |_, window, cx| {
                                   cx.stop_propagation();
-                                  review_editor.update(cx, |editor, cx| {
-                                    editor.save_review_comment_create(
-                                      ReviewCommentMode::PendingReview,
-                                      window,
-                                      cx,
-                                    );
+                                  action_editor.update(cx, |editor, cx| {
+                                    editor.save_review_comment_create(action.mode, window, cx);
                                   });
                                 }),
-                            ),
-                        ),
+                            )
+                        })),
                     ),
                 ),
             ),
@@ -5340,6 +5488,7 @@ impl Editor {
       input.editor_line_height_px,
       input.markdown_line_height_px,
       &input.review_comment_body_heights_px,
+      &input.composer_only_comment_ids,
     )
   }
 
@@ -5399,6 +5548,7 @@ impl Editor {
     let markdown_line_height_px = self.review_comment_line_height_px;
     let wrap_columns = self.review_comment_wrap_columns;
     let mut review_comment_body_heights_px = HashMap::new();
+    let mut composer_only_comment_ids = HashSet::new();
     let show_review_comment_create_composer =
       self.review_comment_create_draft.is_some() && !self.review_comment_create_drag_active;
     let reply_target_comment = self.replying_to_review_comment_id.and_then(|reply_to_id| {
@@ -5421,7 +5571,7 @@ impl Editor {
         )
       };
       let estimated_height = if self.editing_review_comment_id == Some(comment_id) {
-        self.review_comment_composer_body_height_px()
+        self.review_comment_composer_body_height_px(self.review_comment_edit_input.as_ref())
       } else {
         let has_previews = self
           .review_comment_code_reference_previews
@@ -5468,8 +5618,11 @@ impl Editor {
       });
       review_comment_body_heights_px.insert(
         REVIEW_COMMENT_CREATE_DRAFT_COMMENT_ID,
-        self.review_comment_composer_body_height_px(),
+        review_comment_create_card_body_height_px(
+          self.review_comment_composer_body_height_px(self.review_comment_create_input.as_ref()),
+        ),
       );
+      composer_only_comment_ids.insert(REVIEW_COMMENT_CREATE_DRAFT_COMMENT_ID);
     }
     if show_review_comment_reply_composer && let Some(reply_to_comment) = reply_target_comment {
       projection_comments.push(ReviewComment {
@@ -5492,7 +5645,7 @@ impl Editor {
       });
       review_comment_body_heights_px.insert(
         REVIEW_COMMENT_REPLY_DRAFT_COMMENT_ID,
-        self.review_comment_composer_body_height_px(),
+        self.review_comment_composer_body_height_px(self.review_comment_reply_input.as_ref()),
       );
     }
 
@@ -5518,6 +5671,7 @@ impl Editor {
       editor_line_height_px,
       markdown_line_height_px,
       review_comment_body_heights_px,
+      composer_only_comment_ids,
       conflict_doc_line_ranges,
       is_unmerged,
     };
@@ -8589,6 +8743,10 @@ impl Render for Editor {
         self.rebuild_projection(cx);
       }
     }
+    // Catches the composer values set programmatically: they emit no input event.
+    if self.sync_review_comment_composer_rows(cx) && self.diffs.is_some() {
+      self.rebuild_projection(cx);
+    }
     let doc_line_count = self.document.read(cx).len_lines();
     let total_lines = self.display_line_count(doc_line_count);
     let viewport = self.viewport_range(line_height, total_lines);
@@ -8931,12 +9089,48 @@ pub mod tests {
   #[test]
   fn submit_mode_joins_pending_review_when_one_exists() {
     assert_eq!(
-      review_comment_submit_mode(false),
+      review_comment_submit_mode(ReviewCommentDisplayMode::Conversation, false),
       ReviewCommentMode::SingleComment
     );
     assert_eq!(
-      review_comment_submit_mode(true),
+      review_comment_submit_mode(ReviewCommentDisplayMode::Conversation, true),
       ReviewCommentMode::PendingReview
+    );
+  }
+
+  #[test]
+  fn submit_mode_of_a_local_note_ignores_any_pending_review() {
+    assert_eq!(
+      review_comment_submit_mode(ReviewCommentDisplayMode::LocalNote, false),
+      ReviewCommentMode::SingleComment
+    );
+    assert_eq!(
+      review_comment_submit_mode(ReviewCommentDisplayMode::LocalNote, true),
+      ReviewCommentMode::SingleComment
+    );
+  }
+
+  #[test]
+  fn local_notes_offer_a_single_submit_action() {
+    let actions = review_comment_create_actions(ReviewCommentDisplayMode::LocalNote, false);
+
+    assert_eq!(actions, vec![REVIEW_COMMENT_ADD_NOTE_ACTION]);
+    assert!(actions[0].primary);
+    assert_eq!(actions[0].mode, ReviewCommentMode::SingleComment);
+  }
+
+  #[test]
+  fn a_conversation_offers_both_github_destinations_until_a_review_is_pending() {
+    assert_eq!(
+      review_comment_create_actions(ReviewCommentDisplayMode::Conversation, false),
+      vec![
+        REVIEW_COMMENT_SINGLE_COMMENT_ACTION,
+        REVIEW_COMMENT_START_REVIEW_ACTION,
+      ]
+    );
+    assert_eq!(
+      review_comment_create_actions(ReviewCommentDisplayMode::Conversation, true),
+      vec![REVIEW_COMMENT_ADD_TO_REVIEW_ACTION]
     );
   }
 
@@ -9739,33 +9933,108 @@ pub mod tests {
     assert_eq!(base_gutter_width, px(GUTTER_WIDTH));
   }
 
-  #[gpui::test]
-  fn test_review_comment_composer_body_height_uses_fixed_textarea_size(_cx: &mut TestAppContext) {
+  #[test]
+  fn test_review_comment_composer_body_height_adds_the_actions_row() {
+    let textarea_height_px = review_comment_composer_textarea_height_px(3, 20.0);
+
     assert_eq!(
       review_comment_composer_body_height_px(
-        REVIEW_COMMENT_COMPOSER_TEXTAREA_HEIGHT_PX,
+        textarea_height_px,
         MARKDOWN_COMPOSER_CHROME_HEIGHT_PX,
         20.0
       ),
       MARKDOWN_COMPOSER_CHROME_HEIGHT_PX
-        + REVIEW_COMMENT_COMPOSER_TEXTAREA_HEIGHT_PX
+        + textarea_height_px
         + REVIEW_COMMENT_COMPOSER_ACTIONS_HEIGHT_PX
         + REVIEW_COMMENT_COMPOSER_ACTIONS_GAP_PX
     );
     assert_eq!(
       review_comment_composer_body_height_px(
-        REVIEW_COMMENT_COMPOSER_TEXTAREA_HEIGHT_PX,
+        textarea_height_px,
         MARKDOWN_COMPOSER_CHROME_HEIGHT_PX,
         40.0
       ),
       MARKDOWN_COMPOSER_CHROME_HEIGHT_PX
-        + REVIEW_COMMENT_COMPOSER_TEXTAREA_HEIGHT_PX
+        + textarea_height_px
         + 40.0
         + REVIEW_COMMENT_COMPOSER_ACTIONS_GAP_PX
     );
     assert_eq!(
       review_comment_composer_body_height_px(80.0, 0.0, 20.0),
       80.0 + REVIEW_COMMENT_COMPOSER_ACTIONS_HEIGHT_PX + REVIEW_COMMENT_COMPOSER_ACTIONS_GAP_PX
+    );
+  }
+
+  #[test]
+  fn test_review_comment_composer_starts_at_min_rows_and_grows_with_the_text() {
+    assert_eq!(
+      review_comment_composer_rows("", 40),
+      REVIEW_COMMENT_COMPOSER_MIN_ROWS
+    );
+    assert_eq!(
+      review_comment_composer_rows("one\ntwo", 40),
+      REVIEW_COMMENT_COMPOSER_MIN_ROWS
+    );
+    assert_eq!(review_comment_composer_rows("a\nb\nc\nd\ne", 40), 5);
+    // A long line wraps into as many rows as the composer is wide.
+    assert_eq!(review_comment_composer_rows(&"x".repeat(100), 40), 3);
+    assert_eq!(review_comment_composer_rows(&"x".repeat(200), 40), 5);
+    assert_eq!(
+      review_comment_composer_rows(&"line\n".repeat(200), 40),
+      REVIEW_COMMENT_COMPOSER_MAX_ROWS
+    );
+  }
+
+  #[test]
+  fn test_review_comment_composer_textarea_height_follows_its_rows() {
+    let min = review_comment_composer_textarea_height_px(REVIEW_COMMENT_COMPOSER_MIN_ROWS, 20.0);
+    let max = review_comment_composer_textarea_height_px(REVIEW_COMMENT_COMPOSER_MAX_ROWS, 20.0);
+
+    assert_eq!(
+      min,
+      60.0 + REVIEW_COMMENT_COMPOSER_TEXTAREA_VERTICAL_CHROME_PX
+    );
+    assert_eq!(
+      review_comment_composer_textarea_height_px(4, 20.0),
+      min + 20.0
+    );
+    assert!(max > min);
+  }
+
+  #[test]
+  fn test_review_comment_card_width_follows_the_content_area() {
+    assert_eq!(
+      review_comment_card_width_px(2000.0),
+      REVIEW_COMMENT_MAX_WIDTH_PX
+    );
+    assert_eq!(
+      review_comment_card_width_px(500.0),
+      500.0 - REVIEW_COMMENT_CARD_RIGHT_MARGIN_PX
+    );
+    assert_eq!(
+      review_comment_card_width_px(120.0),
+      REVIEW_COMMENT_MIN_WIDTH_PX
+    );
+  }
+
+  #[test]
+  fn test_review_comment_wrap_columns_shrink_with_the_card() {
+    let wide = review_comment_wrap_columns_for_width(800.0, 8.0);
+    let narrow = review_comment_wrap_columns_for_width(400.0, 8.0);
+
+    assert_eq!(wide, 100);
+    assert_eq!(narrow, 50);
+    assert_eq!(
+      review_comment_wrap_columns_for_width(10.0, 8.0),
+      REVIEW_COMMENT_MIN_WRAP_COLUMNS
+    );
+  }
+
+  #[test]
+  fn test_review_comment_create_card_pays_its_own_padding() {
+    assert_eq!(
+      review_comment_create_card_body_height_px(100.0),
+      100.0 + REVIEW_COMMENT_CARD_PADDING_X_PX * 2.0
     );
   }
 
@@ -9835,8 +10104,7 @@ pub mod tests {
           review_comment_asset_url_resolver: None,
           review_comment_image_upload_handler: None,
           review_comment_preview_renderer: None,
-          review_comment_card_width: px(REVIEW_COMMENT_FIXED_WIDTH_PX),
-          review_comment_textarea_height: px(REVIEW_COMMENT_COMPOSER_TEXTAREA_HEIGHT_PX),
+          review_comment_composer_rows: HashMap::new(),
           review_comment_create_input: None,
           review_comment_create_draft: None,
           review_comment_create_drag_start_display_line: None,
@@ -11111,6 +11379,41 @@ pub mod tests {
         .to_string()
     });
     assert_eq!(input_value, "please fix");
+  }
+
+  #[gpui::test]
+  fn test_create_composer_height_follows_its_value(cx: &mut TestAppContext) {
+    cx.update(gpui_component::init);
+    let ctx = EditorTestContext::with_text(cx.clone(), "a\nb");
+    let editor = ctx.editor.clone();
+    let (_root, cx) =
+      cx.add_window_view(|window, cx| gpui_component::Root::new(editor.clone(), window, cx));
+
+    let (empty_height, tall_height, min_height) = ctx.editor.update_in(cx, |editor, window, cx| {
+      let input = editor.ensure_review_comment_create_input(window, cx);
+      editor.sync_review_comment_composer_rows(cx);
+      let empty_height = editor.review_comment_composer_textarea_height(&input);
+      let min_height = px(review_comment_composer_textarea_height_px(
+        REVIEW_COMMENT_COMPOSER_MIN_ROWS,
+        editor.review_comment_line_height_px,
+      ));
+
+      input.update(cx, |input, cx| {
+        input.set_value("one\ntwo\nthree\nfour\nfive\nsix".to_string(), window, cx);
+      });
+      editor.sync_review_comment_composer_rows(cx);
+      (
+        empty_height,
+        editor.review_comment_composer_textarea_height(&input),
+        min_height,
+      )
+    });
+
+    assert_eq!(empty_height, min_height);
+    assert!(
+      tall_height > empty_height,
+      "six lines must not sit in a three-row box, got {tall_height:?}"
+    );
   }
 
   #[gpui::test]

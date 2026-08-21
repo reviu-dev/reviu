@@ -7,9 +7,9 @@ use std::sync::Arc;
 
 use agent_chat_panel::{AgentChatPanel, AgentChatPanelEvent};
 use editor::{
-  ConflictResolution, DiffViewMode, Editor, EditorEvent, ReviewCommentCreateHandler,
-  ReviewCommentCreateRequest, ReviewCommentDeleteHandler, ReviewCommentDisplayMode,
-  ReviewCommentEditHandler,
+  ConflictResolution, DiffViewMode, Editor, EditorEvent, ReviewCommentCancelHandler,
+  ReviewCommentCreateHandler, ReviewCommentCreateRequest, ReviewCommentDeleteHandler,
+  ReviewCommentDisplayMode, ReviewCommentEditHandler,
 };
 use gpui::AnimationExt as _;
 use gpui::{

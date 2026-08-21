@@ -349,6 +349,21 @@ impl SessionPage {
       editor.set_review_comment_replies_enabled(false, cx);
       editor.set_review_comment_display_mode(ReviewCommentDisplayMode::LocalNote, cx);
 
+      // The composer is gone on the next frame; the page resolves focus to the diff.
+      let cancel_handler: ReviewCommentCancelHandler = Arc::new({
+        let view = view.clone();
+        move |window, _cx| {
+          let view = view.clone();
+          window.on_next_frame(move |window, cx| {
+            let _ = view.update(cx, |this, cx| {
+              let handle = this.focus_handle(cx);
+              window.focus(&handle, cx);
+            });
+          });
+        }
+      });
+      editor.set_review_comment_cancel_handler(Some(cancel_handler), cx);
+
       let edit_handler: ReviewCommentEditHandler = Arc::new({
         let view = view.clone();
         move |comment_id, body, window, _cx| {
@@ -642,6 +657,85 @@ mod tests {
       assert!(page.agent_review.is_empty());
       assert_eq!(page.copyable_review_comment_count(), 0);
     });
+  }
+
+  #[gpui::test]
+  async fn the_session_composer_offers_a_single_destination(cx: &mut TestAppContext) {
+    let repo = TempRepo::init("session-page-review-one-action");
+    commit_text_file(&repo.path, Path::new("README.md"), "v1\n", "initial");
+    std::fs::write(repo.path.join("README.md"), "v2\n").expect("update file");
+
+    let (page, cx) = add_session_page_window(repo.path.clone(), cx);
+    cx.run_until_parked();
+
+    page.update_in(cx, |page, window, cx| {
+      page.open_diff(PathBuf::from("README.md"), None, window, cx);
+    });
+    await_open_file(&page, cx).await;
+
+    let mode = page.read_with(cx, |page, cx| {
+      page
+        .editor
+        .as_ref()
+        .expect("editor")
+        .read(cx)
+        .review_comment_display_mode()
+    });
+
+    assert_eq!(mode, ReviewCommentDisplayMode::LocalNote);
+    // Comments go to the agent batch, so the GitHub review destinations stay out.
+    let actions = editor::review_comment_create_actions(mode, false);
+    assert_eq!(actions.len(), 1);
+    assert_eq!(actions[0].mode, editor::ReviewCommentMode::SingleComment);
+  }
+
+  #[gpui::test]
+  async fn cancelling_a_review_comment_hands_focus_back_to_the_diff(cx: &mut TestAppContext) {
+    let repo = TempRepo::init("session-page-review-cancel-focus");
+    commit_text_file(&repo.path, Path::new("README.md"), "v1\n", "initial");
+    std::fs::write(repo.path.join("README.md"), "v2\n").expect("update file");
+
+    let (page, cx) = add_session_page_window(repo.path.clone(), cx);
+    let refresh = page.update(cx, |page, cx| {
+      page.dock_panel.update(cx, |panel, cx| {
+        panel.refresh(cx);
+        panel._refresh_task.take().expect("refresh task")
+      })
+    });
+    refresh.await;
+    cx.run_until_parked();
+
+    page.update_in(cx, |page, window, cx| {
+      page.open_diff(PathBuf::from("README.md"), None, window, cx);
+    });
+    await_open_file(&page, cx).await;
+    await_editor_diff(&page, cx).await;
+
+    let editor = page.read_with(cx, |page, _| page.editor.clone().expect("editor"));
+    let editor_handle = editor.read_with(cx, |editor, cx| editor.focus_handle(cx));
+    // Park the focus off the diff, the way the open composer does.
+    let dock_handle = page.read_with(cx, |page, cx| page.dock_panel.read(cx).focus_handle(cx));
+    cx.update(|window, cx| window.focus(&dock_handle, cx));
+    cx.run_until_parked();
+    assert_ne!(
+      cx.update(|window, cx| window.focused(cx)).as_ref(),
+      Some(&editor_handle)
+    );
+
+    editor.update_in(cx, |editor, window, cx| {
+      assert!(editor.start_review_comment_for_active_hunk(window, cx));
+      editor.cancel_review_comment_create_draft(window, cx);
+    });
+    // The handler restores the focus on the next frame, which tests must deliver.
+    let ran = cx.update(|window, cx| window.simulate_next_frame(cx));
+    assert!(ran > 0, "the cancel handler schedules the focus restore");
+    cx.run_until_parked();
+
+    assert_eq!(
+      cx.update(|window, cx| window.focused(cx)).as_ref(),
+      Some(&editor_handle),
+      "the composer is gone, so the diff takes the focus back"
+    );
   }
 
   #[gpui::test]
