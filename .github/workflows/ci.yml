@@ -78,6 +78,9 @@ jobs:
   website:
     name: Website
     runs-on: ubuntu-latest
+    # Matches the value baked into website/Dockerfile so CI builds what ships.
+    env:
+      PUBLIC_BACKEND_URL: https://api.reviu.dev
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
 
@@ -99,6 +102,8 @@ jobs:
 
       - name: Typecheck
         working-directory: website
-        env:
-          PUBLIC_BACKEND_URL: https://api.reviu.dev
         run: pnpm typecheck
+
+      - name: Build
+        working-directory: website
+        run: pnpm build
