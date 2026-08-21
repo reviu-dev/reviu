@@ -120,7 +120,7 @@ const REVIEW_COMMENT_COMPOSER_ACTIONS_GAP_PX: f32 = 8.0;
 const REVIEW_COMMENT_COMPOSER_TEXTAREA_VERTICAL_CHROME_PX: f32 = 18.0;
 /// Same, horizontally: `input_px` twice plus its border.
 const REVIEW_COMMENT_COMPOSER_TEXTAREA_HORIZONTAL_CHROME_PX: f32 = 22.0;
-const REVIEW_COMMENT_COMPOSER_MIN_ROWS: usize = 3;
+const REVIEW_COMMENT_COMPOSER_MIN_ROWS: usize = 1;
 const REVIEW_COMMENT_COMPOSER_MAX_ROWS: usize = 12;
 const REVIEW_COMMENT_CREATE_DRAFT_COMMENT_ID: u64 = u64::MAX;
 const REVIEW_COMMENT_REPLY_DRAFT_COMMENT_ID: u64 = u64::MAX - 1;
@@ -2102,6 +2102,22 @@ impl Editor {
     }
   }
 
+  /// Everything the create card holds besides the text box itself.
+  fn review_comment_create_card_chrome_px(&self) -> f32 {
+    REVIEW_COMMENT_CARD_BORDER_PX * 2.0
+      + REVIEW_COMMENT_CARD_PADDING_X_PX * 2.0
+      + self.review_comment_composer_chrome_height_px()
+      + REVIEW_COMMENT_COMPOSER_ACTIONS_HEIGHT_PX.max(self.review_comment_line_height_px)
+      + REVIEW_COMMENT_COMPOSER_ACTIONS_GAP_PX
+  }
+
+  /// The diff reserves whole lines, so the card gets a few pixels more than it
+  /// asked for; the text box takes them instead of leaving a gap under the card.
+  fn review_comment_create_textarea_height(&self, reserved_height: Pixels) -> Pixels {
+    let minimum = review_comment_composer_textarea_height_px(1, self.review_comment_line_height_px);
+    px((reserved_height / px(1.0) - self.review_comment_create_card_chrome_px()).max(minimum))
+  }
+
   fn review_comment_composer_body_height_px(&self, input: Option<&Entity<TextareaState>>) -> f32 {
     let textarea_height_px = input
       .map(|input| self.review_comment_composer_textarea_height(input) / px(1.0))
@@ -2259,17 +2275,14 @@ impl Editor {
 
     let input = cx.new(|cx| {
       TextareaState::new(window, cx)
-        .rows(6)
+        .submit_on_enter(true)
         .placeholder("Edit review comment...")
     });
     cx.subscribe_in(
       &input,
       window,
       |editor, state, event: &InputEvent, window, cx| {
-        if let InputEvent::PressEnter {
-          secondary: true, ..
-        } = event
-        {
+        if let InputEvent::PressEnter { shift: false, .. } = event {
           let Some(comment_id) = editor.editing_review_comment_id else {
             return;
           };
@@ -2439,17 +2452,14 @@ impl Editor {
 
     let input = cx.new(|cx| {
       TextareaState::new(window, cx)
-        .rows(6)
+        .submit_on_enter(true)
         .placeholder("Add review comment...")
     });
     cx.subscribe_in(
       &input,
       window,
       |editor, state, event: &InputEvent, window, cx| {
-        if let InputEvent::PressEnter {
-          secondary: true, ..
-        } = event
-        {
+        if let InputEvent::PressEnter { shift: false, .. } = event {
           Self::trim_review_comment_input_trailing_newline(state, window, cx);
           let mode = review_comment_submit_mode(
             editor.review_comment_display_mode,
@@ -2481,17 +2491,14 @@ impl Editor {
 
     let input = cx.new(|cx| {
       TextareaState::new(window, cx)
-        .rows(6)
+        .submit_on_enter(true)
         .placeholder("Reply to review comment...")
     });
     cx.subscribe_in(
       &input,
       window,
       |editor, state, event: &InputEvent, window, cx| {
-        if let InputEvent::PressEnter {
-          secondary: true, ..
-        } = event
-        {
+        if let InputEvent::PressEnter { shift: false, .. } = event {
           Self::trim_review_comment_input_trailing_newline(state, window, cx);
           editor.save_review_comment_reply(window, cx);
         }
@@ -5064,7 +5071,7 @@ impl Editor {
                     .child({
                       let mut composer = MarkdownComposer::new(&input_state)
                         .disabled(is_create_submitting)
-                        .h(self.review_comment_composer_textarea_height(&input_state))
+                        .h(self.review_comment_create_textarea_height(composer_height))
                         .preview_open(create_preview_open)
                         .on_toggle_preview(move |_, cx| {
                           create_toggle_editor.update(cx, |editor, cx| {
@@ -9971,10 +9978,8 @@ pub mod tests {
       review_comment_composer_rows("", 40),
       REVIEW_COMMENT_COMPOSER_MIN_ROWS
     );
-    assert_eq!(
-      review_comment_composer_rows("one\ntwo", 40),
-      REVIEW_COMMENT_COMPOSER_MIN_ROWS
-    );
+    assert_eq!(review_comment_composer_rows("one line", 40), 1);
+    assert_eq!(review_comment_composer_rows("one\ntwo", 40), 2);
     assert_eq!(review_comment_composer_rows("a\nb\nc\nd\ne", 40), 5);
     // A long line wraps into as many rows as the composer is wide.
     assert_eq!(review_comment_composer_rows(&"x".repeat(100), 40), 3);
@@ -9992,10 +9997,10 @@ pub mod tests {
 
     assert_eq!(
       min,
-      60.0 + REVIEW_COMMENT_COMPOSER_TEXTAREA_VERTICAL_CHROME_PX
+      20.0 + REVIEW_COMMENT_COMPOSER_TEXTAREA_VERTICAL_CHROME_PX
     );
     assert_eq!(
-      review_comment_composer_textarea_height_px(4, 20.0),
+      review_comment_composer_textarea_height_px(2, 20.0),
       min + 20.0
     );
     assert!(max > min);
@@ -11328,6 +11333,69 @@ pub mod tests {
       !*bubbled.lock().expect("bubbled lock"),
       "escape closing the find panel must not also close the file view"
     );
+  }
+
+  #[gpui::test]
+  fn test_review_comment_create_shift_enter_keeps_writing(cx: &mut TestAppContext) {
+    cx.update(gpui_component::init);
+    let ctx = EditorTestContext::with_text(cx.clone(), "a\nb");
+    let editor = ctx.editor.clone();
+    let submitted = StdArc::new(Mutex::new(false));
+    let submitted_for_handler = submitted.clone();
+    let (_root, cx) =
+      cx.add_window_view(|window, cx| gpui_component::Root::new(editor.clone(), window, cx));
+
+    ctx.editor.update_in(cx, |editor, window, cx| {
+      let handler: ReviewCommentCreateHandler = Arc::new(move |_, _, _| {
+        *submitted_for_handler.lock().expect("submitted lock") = true;
+      });
+      editor.set_review_comment_create_handler(Some(handler), cx);
+      editor.review_comment_create_draft = Some(ReviewCommentCreateDraft {
+        first_display_line: 0,
+        last_display_line: 0,
+        line: 0,
+        side: ReviewCommentSide::Right,
+        start_line: None,
+        start_side: None,
+      });
+
+      let input = editor.ensure_review_comment_create_input(window, cx);
+      input.update(cx, |input, cx| {
+        input.set_value("first line".to_string(), window, cx);
+        cx.emit(InputEvent::PressEnter {
+          secondary: false,
+          shift: true,
+        });
+      });
+    });
+
+    assert!(
+      !*submitted.lock().expect("submitted lock"),
+      "shift-enter grows the composer, it does not post the comment"
+    );
+  }
+
+  #[gpui::test]
+  fn test_create_composer_fills_the_reserved_block(cx: &mut TestAppContext) {
+    let mut ctx = EditorTestContext::with_text(cx.clone(), "a\nb");
+
+    ctx.editor.update(&mut ctx.cx, |editor, _| {
+      let chrome = editor.review_comment_create_card_chrome_px();
+
+      // The whole-line rounding goes into the text box, not under the card.
+      assert_eq!(
+        editor.review_comment_create_textarea_height(px(chrome + 100.0)),
+        px(100.0)
+      );
+      // A block smaller than the chrome still leaves one usable row.
+      assert_eq!(
+        editor.review_comment_create_textarea_height(px(0.0)),
+        px(review_comment_composer_textarea_height_px(
+          1,
+          editor.review_comment_line_height_px
+        ))
+      );
+    });
   }
 
   #[gpui::test]
