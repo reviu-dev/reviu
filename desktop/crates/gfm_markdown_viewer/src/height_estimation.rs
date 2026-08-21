@@ -3,7 +3,7 @@ use crate::image::{
   InlineImageData, MarkdownImageDimension, inline_contains_image, inline_image_data,
   parse_markdown_image_dimension, single_inline_image_data, split_inlines_by_hard_breaks,
 };
-use crate::parse::inline_to_plain_text;
+use crate::parse::inline_to_plain_text_with_soft_break;
 use crate::parsed_cache::parse_markdown_for_render;
 use crate::types::*;
 
@@ -354,7 +354,8 @@ pub(crate) fn wrap_columns_for_indent(base_wrap_columns: usize, indent: usize) -
 }
 
 pub(crate) fn estimate_inline_lines(inlines: &[Inline], wrap_columns: usize) -> usize {
-  let text = inline_to_plain_text(inlines);
+  // Review comments render in hardbreaks mode, so a soft break costs a line.
+  let text = inline_to_plain_text_with_soft_break(inlines, '\n');
   if text.is_empty() {
     return 1;
   }
@@ -495,6 +496,22 @@ mod tests {
       height > 100.0,
       "attachment links should reserve block image space"
     );
+  }
+
+  #[test]
+  fn a_soft_break_costs_a_line() {
+    let height = |source: &str| {
+      estimate_parsed_markdown_height_px_with_suggestion_context(
+        &parse_markdown_for_render(source),
+        72,
+        20.0,
+        None,
+      )
+    };
+    let one_line = height("one two");
+    let two_lines = height("one\ntwo");
+
+    assert_eq!(two_lines, one_line + 20.0);
   }
 
   #[test]

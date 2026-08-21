@@ -496,17 +496,24 @@ pub(crate) fn merge_adjacent_text(inlines: &[Inline]) -> Vec<Inline> {
 }
 
 pub(crate) fn inline_to_plain_text(inlines: &[Inline]) -> String {
+  inline_to_plain_text_with_soft_break(inlines, ' ')
+}
+
+/// A soft break is a space in plain markdown and a real break in hardbreaks mode.
+pub(crate) fn inline_to_plain_text_with_soft_break(inlines: &[Inline], soft_break: char) -> String {
   let mut text = String::new();
   for inline in inlines {
     match inline {
       Inline::Text(value) => text.push_str(value),
       Inline::Code(value) => text.push_str(value),
-      Inline::SoftBreak => text.push(' '),
+      Inline::SoftBreak => text.push(soft_break),
       Inline::HardBreak => text.push('\n'),
       Inline::Strong(children) | Inline::Emphasis(children) | Inline::Strikethrough(children) => {
-        text.push_str(&inline_to_plain_text(children))
+        text.push_str(&inline_to_plain_text_with_soft_break(children, soft_break))
       }
-      Inline::Link { content, .. } => text.push_str(&inline_to_plain_text(content)),
+      Inline::Link { content, .. } => {
+        text.push_str(&inline_to_plain_text_with_soft_break(content, soft_break))
+      }
       Inline::Image { alt, .. } => text.push_str(alt),
     }
   }

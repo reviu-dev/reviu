@@ -1558,9 +1558,19 @@ impl Editor {
   fn computed_review_comment_wrap_columns(&self) -> usize {
     let card_width_px = self.review_comment_card_width() / px(1.0);
     review_comment_wrap_columns_for_width(
-      card_width_px - REVIEW_COMMENT_HORIZONTAL_PADDING_PX,
+      card_width_px
+        - REVIEW_COMMENT_HORIZONTAL_PADDING_PX
+        - self.review_comment_floating_actions_width_px(),
       self.measured_review_comment_char_width() / px(1.0),
     )
+  }
+
+  /// A local note keeps its actions over the body, so the text stops before them.
+  fn review_comment_floating_actions_width_px(&self) -> f32 {
+    match self.review_comment_display_mode {
+      ReviewCommentDisplayMode::LocalNote => REVIEW_COMMENT_COMPOSER_ACTIONS_WIDTH_PX,
+      ReviewCommentDisplayMode::Conversation => 0.0,
+    }
   }
 
   /// What is left of the card once the buttons and every inset are taken out.
@@ -1898,9 +1908,11 @@ impl Editor {
     state: MarkdownRenderState,
     scope_id: usize,
   ) -> MarkdownRenderOptions {
+    // A newline typed in the composer is a line break in the comment, as on GitHub.
     let mut options = MarkdownRenderOptions::default()
       .with_state(state)
-      .with_scope_id(scope_id);
+      .with_scope_id(scope_id)
+      .with_hardbreaks();
     if let Some(resolver) = self.review_comment_asset_url_resolver.clone() {
       options = options.with_asset_url_resolver(resolver);
     }
@@ -4404,6 +4416,7 @@ impl Editor {
           })
       };
 
+      let reserve_floating_actions_room = is_local_note_mode && first_message_actions.is_some();
       let actions_cluster = h_flex()
         .items_center()
         .gap_1()
@@ -4426,6 +4439,7 @@ impl Editor {
 
       // In a local note the actions float over the body instead of sitting in a header.
       let shows_header = first_message.shows_header;
+
       let (header_actions, floating_actions) = if is_local_note_mode {
         (None, Some(actions_cluster))
       } else {
@@ -4713,7 +4727,11 @@ impl Editor {
         };
 
         let message_block = if index == 0 {
-          v_flex().child(body)
+          v_flex()
+            .when(reserve_floating_actions_room, |this| {
+              this.pr(px(REVIEW_COMMENT_COMPOSER_ACTIONS_WIDTH_PX))
+            })
+            .child(body)
         } else {
           let message_line_label: Option<Arc<str>> = None;
           let message_actions_menu = if !review_comment_submission_in_flight
@@ -9883,6 +9901,8 @@ pub mod tests {
       let options = editor.review_comment_markdown_options(MarkdownRenderState::new(), 42);
 
       assert!(options.asset_url_resolver.is_some());
+      // A newline typed in the composer must stay a newline once posted.
+      assert!(options.hardbreaks);
     });
   }
 
