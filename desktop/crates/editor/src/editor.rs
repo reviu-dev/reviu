@@ -1497,6 +1497,25 @@ impl Editor {
     }
   }
 
+  /// One frame for every review comment surface: square where it meets the diff
+  /// gutter, rounded everywhere else.
+  fn review_comment_card_frame(
+    &self,
+    min_height: Pixels,
+    theme: &gpui_component::Theme,
+  ) -> gpui::Div {
+    div()
+      .w(self.review_comment_card_width())
+      .min_h(min_height)
+      .bg(theme.sidebar)
+      .border(px(REVIEW_COMMENT_CARD_BORDER_PX))
+      .border_color(theme.border)
+      .rounded_tr_md()
+      .rounded_br_md()
+      .rounded_bl_md()
+      .cursor(CursorStyle::Arrow)
+  }
+
   /// The card follows the content area, never wider than its readable maximum.
   fn review_comment_card_width(&self) -> Pixels {
     px(review_comment_card_width_px(
@@ -4918,16 +4937,10 @@ impl Editor {
         thread_messages = thread_messages.child(reply_block);
       }
 
-      let card = div()
+      let card = self
+        .review_comment_card_frame(review_comment_card_min_height(layout.height), &theme)
         .relative()
-        .w(self.review_comment_card_width())
-        .min_h(review_comment_card_min_height(layout.height))
-        .bg(theme.sidebar)
-        .border(px(REVIEW_COMMENT_CARD_BORDER_PX))
-        .border_color(theme.border)
-        .rounded_r_md()
         .font_family(REVIEW_COMMENT_UI_FONT_FAMILY)
-        .cursor(CursorStyle::Arrow)
         .on_mouse_down(MouseButton::Left, |_, _, cx| {
           cx.stop_propagation();
         })
@@ -5064,14 +5077,8 @@ impl Editor {
           self.review_comment_create_preview_suggestion_context(cx);
         let create_toggle_editor = editor_entity.clone();
         Some(
-          div()
-            .w(self.review_comment_card_width())
-            .min_h(review_comment_card_min_height(composer_height))
-            .bg(theme.sidebar)
-            .border(px(REVIEW_COMMENT_CARD_BORDER_PX))
-            .border_color(theme.border)
-            .rounded_md()
-            .cursor(CursorStyle::Arrow)
+          self
+            .review_comment_card_frame(review_comment_card_min_height(composer_height), &theme)
             .on_mouse_down(MouseButton::Left, |_, _, cx| {
               cx.stop_propagation();
             })
