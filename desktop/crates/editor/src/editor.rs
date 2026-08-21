@@ -121,6 +121,8 @@ const REVIEW_COMMENT_COMPOSER_ACTIONS_HEIGHT_PX: f32 = 24.0;
 const REVIEW_COMMENT_COMPOSER_ACTIONS_GAP_PX: f32 = 8.0;
 /// gpui-component input chrome around the text: `input_py` twice plus its border.
 const REVIEW_COMMENT_COMPOSER_TEXTAREA_VERTICAL_CHROME_PX: f32 = 18.0;
+const REVIEW_COMMENT_COMPOSER_TEXTAREA_INSET_Y_PX: f32 =
+  REVIEW_COMMENT_COMPOSER_TEXTAREA_VERTICAL_CHROME_PX / 2.0;
 /// The input's own left inset before the text, `input_px` at the default size.
 const REVIEW_COMMENT_COMPOSER_TEXTAREA_INSET_PX: f32 = 10.0;
 const REVIEW_COMMENT_COMPOSER_TEXTAREA_HORIZONTAL_CHROME_PX: f32 =
@@ -391,6 +393,14 @@ fn review_comment_composer_rows(
     REVIEW_COMMENT_COMPOSER_MIN_ROWS,
     REVIEW_COMMENT_COMPOSER_MAX_ROWS,
   )
+}
+
+/// The floating actions sit on the first line of the body, like the composer's do
+/// on the first line of the text box.
+fn review_comment_floating_actions_top_px(text_line_height_px: f32) -> f32 {
+  (REVIEW_COMMENT_CARD_PADDING_Y_PX
+    + (text_line_height_px - REVIEW_COMMENT_COMPOSER_ACTIONS_HEIGHT_PX) / 2.0)
+    .max(0.0)
 }
 
 /// Lifts the buttons onto the first line of text instead of the top of the box.
@@ -2186,6 +2196,19 @@ impl Editor {
     } else {
       0.0
     }
+  }
+
+  /// A composer inside a card pulls its own inset back out, so only its text rows
+  /// take room: a one-line edit is exactly as tall as the one-line comment it replaces.
+  fn review_comment_in_card_composer_body_height_px(
+    &self,
+    input: Option<&Entity<TextareaState>>,
+  ) -> f32 {
+    self.review_comment_composer_chrome_height_px()
+      + (self.review_comment_composer_body_height_px(input)
+        - self.review_comment_composer_chrome_height_px()
+        - REVIEW_COMMENT_COMPOSER_TEXTAREA_VERTICAL_CHROME_PX)
+        .max(self.review_comment_line_height_px)
   }
 
   fn review_comment_composer_body_height_px(&self, input: Option<&Entity<TextareaState>>) -> f32 {
@@ -4522,6 +4545,10 @@ impl Editor {
               self.review_comment_preview_suggestion_context_for_id(message_id);
             v_flex()
               .on_action(cx.listener(Self::on_review_comment_edit_input_escape))
+              // The text box's own inset is given back, so editing a one-line comment
+              // leaves the card exactly as tall as reading it.
+              .mt(px(-REVIEW_COMMENT_COMPOSER_TEXTAREA_INSET_Y_PX))
+              .mb(px(-REVIEW_COMMENT_COMPOSER_TEXTAREA_INSET_Y_PX))
               .gap_1()
               .font_family(theme.font_family.clone())
               .child(
@@ -4898,6 +4925,8 @@ impl Editor {
               )
               .child(
                 v_flex()
+                  .mt(px(-REVIEW_COMMENT_COMPOSER_TEXTAREA_INSET_Y_PX))
+                  .mb(px(-REVIEW_COMMENT_COMPOSER_TEXTAREA_INSET_Y_PX))
                   .gap_1()
                   .child(
                     h_flex()
@@ -5036,8 +5065,10 @@ impl Editor {
           this.child(
             div()
               .absolute()
-              .top(px(REVIEW_COMMENT_CARD_PADDING_Y_PX))
-              .right(px(REVIEW_COMMENT_CARD_PADDING_Y_PX))
+              .top(px(review_comment_floating_actions_top_px(
+                self.review_comment_line_height_px,
+              )))
+              .right(px(REVIEW_COMMENT_CARD_PADDING_X_PX))
               .bg(theme.sidebar)
               .rounded_md()
               .child(actions),
@@ -5697,7 +5728,7 @@ impl Editor {
         )
       };
       let estimated_height = if self.editing_review_comment_id == Some(comment_id) {
-        self.review_comment_composer_body_height_px(self.review_comment_edit_input.as_ref())
+        self.review_comment_in_card_composer_body_height_px(self.review_comment_edit_input.as_ref())
       } else {
         let has_previews = self
           .review_comment_code_reference_previews
@@ -5769,7 +5800,8 @@ impl Editor {
       });
       review_comment_body_heights_px.insert(
         REVIEW_COMMENT_REPLY_DRAFT_COMMENT_ID,
-        self.review_comment_composer_body_height_px(self.review_comment_reply_input.as_ref()),
+        self
+          .review_comment_in_card_composer_body_height_px(self.review_comment_reply_input.as_ref()),
       );
     }
 
@@ -10140,6 +10172,36 @@ pub mod tests {
       min + 20.0
     );
     assert!(max > min);
+  }
+
+  #[test]
+  fn test_floating_actions_sit_on_the_first_line_of_the_body() {
+    // Same distance from the top as a button centred on a 20px first line.
+    assert_eq!(
+      review_comment_floating_actions_top_px(20.0),
+      REVIEW_COMMENT_CARD_PADDING_Y_PX - 2.0
+    );
+    assert_eq!(review_comment_floating_actions_top_px(0.0), 0.0);
+  }
+
+  #[gpui::test]
+  fn test_editing_a_one_line_comment_takes_one_line(cx: &mut TestAppContext) {
+    let mut ctx = EditorTestContext::with_text(cx.clone(), "a\nb");
+
+    ctx.editor.update(&mut ctx.cx, |editor, _| {
+      let line_height = editor.review_comment_line_height_px;
+
+      assert_eq!(
+        editor.review_comment_in_card_composer_body_height_px(None),
+        line_height,
+        "an empty composer must not make the card taller than the comment it replaces"
+      );
+      assert!(
+        editor.review_comment_composer_body_height_px(None)
+          > editor.review_comment_in_card_composer_body_height_px(None),
+        "the standalone card keeps the text box's own padding"
+      );
+    });
   }
 
   #[test]
