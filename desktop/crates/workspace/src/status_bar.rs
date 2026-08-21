@@ -455,7 +455,7 @@ mod desktop_tray {
   fn ensure_linux_appindicator_library() -> Result<(), String> {
     let mut errors = Vec::new();
     for name in super::LINUX_APPINDICATOR_LIBRARY_NAMES {
-      match unsafe { libloading::Library::new(name) } {
+      match unsafe { libloading::Library::new(*name) } {
         Ok(_) => return Ok(()),
         Err(error) => errors.push(format!("{name}: {error}")),
       }
