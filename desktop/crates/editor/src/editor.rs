@@ -107,9 +107,15 @@ const REVIEW_COMMENT_DEFAULT_WRAP_COLUMNS: usize = 72;
 const REVIEW_COMMENT_MIN_WRAP_COLUMNS: usize = 28;
 const REVIEW_COMMENT_MAX_WRAP_COLUMNS: usize = 180;
 const REVIEW_COMMENT_CHAR_WIDTH_PX: f32 = 7.8;
+const REVIEW_COMMENT_FONT_SIZE_PX: f32 = 14.0;
+/// Enough of a comment to average its glyph widths without walking a novel.
+const REVIEW_COMMENT_CHAR_WIDTH_SAMPLE_LIMIT: usize = 512;
 pub(crate) const REVIEW_COMMENT_UI_FONT_FAMILY: &str = ".SystemUIFont";
 const REVIEW_COMMENT_HORIZONTAL_PADDING_PX: f32 =
   REVIEW_COMMENT_CARD_PADDING_X_PX * 2.0 + REVIEW_COMMENT_CARD_BORDER_PX * 2.0;
+/// A composer gives one card padding back to the text box's own inset.
+const REVIEW_COMMENT_COMPOSER_HORIZONTAL_PADDING_PX: f32 =
+  REVIEW_COMMENT_HORIZONTAL_PADDING_PX - REVIEW_COMMENT_COMPOSER_TEXTAREA_INSET_PX;
 const REVIEW_COMMENT_DEFAULT_LINE_HEIGHT_PX: f32 = 20.0;
 const REVIEW_COMMENT_MAX_WIDTH_PX: f32 = 640.0;
 const REVIEW_COMMENT_MIN_WIDTH_PX: f32 = 320.0;
@@ -127,10 +133,13 @@ const REVIEW_COMMENT_COMPOSER_TEXTAREA_INSET_Y_PX: f32 =
 const REVIEW_COMMENT_COMPOSER_TEXTAREA_INSET_PX: f32 = 10.0;
 const REVIEW_COMMENT_COMPOSER_TEXTAREA_HORIZONTAL_CHROME_PX: f32 =
   REVIEW_COMMENT_COMPOSER_TEXTAREA_INSET_PX * 2.0;
-/// Room the action buttons take beside the text box, gap included.
-const REVIEW_COMMENT_COMPOSER_ACTIONS_WIDTH_PX: f32 = 76.0;
-/// Same, when the two GitHub destinations are spelled out instead of iconified.
+/// One xsmall compact icon button plus the gap before it.
+const REVIEW_COMMENT_COMPOSER_ACTION_BUTTON_WIDTH_PX: f32 = 24.0;
+/// Room the two spelled-out GitHub destinations take instead of icons.
 const REVIEW_COMMENT_COMPOSER_LABELLED_ACTIONS_WIDTH_PX: f32 = 250.0;
+/// Room the actions floating over a read card take, cancel and save sized.
+const REVIEW_COMMENT_FLOATING_ACTIONS_WIDTH_PX: f32 =
+  2.0 * REVIEW_COMMENT_COMPOSER_ACTION_BUTTON_WIDTH_PX;
 const REVIEW_COMMENT_COMPOSER_MIN_TEXT_WIDTH_PX: f32 = 120.0;
 /// `input_text_size` at the input's default size.
 const REVIEW_COMMENT_COMPOSER_TEXT_REMS: f32 = 0.875;
@@ -683,6 +692,7 @@ pub struct Editor {
   pub editor_line_height: Pixels,
   pub editor_char_width: Pixels,
   pub review_comment_char_width: Pixels,
+  pub review_comment_font_size: Pixels,
   pub viewport_height: Pixels,
   pub viewport_width: Pixels,
   pub max_line_width: Pixels, // Maximum width of visible lines (never decreases to avoid scroll jumps)
@@ -1116,6 +1126,7 @@ impl Editor {
       editor_line_height: px(DEFAULT_EDITOR_LINE_HEIGHT),
       editor_char_width: px(REVIEW_COMMENT_CHAR_WIDTH_PX),
       review_comment_char_width: px(REVIEW_COMMENT_CHAR_WIDTH_PX),
+      review_comment_font_size: px(REVIEW_COMMENT_FONT_SIZE_PX),
       viewport_height: px(DEFAULT_VIEWPORT_HEIGHT), // Will be updated on first render
       viewport_width: px(DEFAULT_VIEWPORT_WIDTH),   // Will be updated on first render
       max_line_width: px(DEFAULT_MAX_LINE_WIDTH),   // Will be updated on first render
@@ -1565,43 +1576,81 @@ impl Editor {
     ))
   }
 
+  /// Tracked only to rebuild the projection when the card resizes; every comment
+  /// then measures its own text.
   fn computed_review_comment_wrap_columns(&self) -> usize {
+    self.review_comment_body_wrap_columns(self.measured_review_comment_char_width() / px(1.0))
+  }
+
+  /// The average glyph width of this very comment. One global average makes a run of
+  /// lowercase reserve a line too many and a run of digits a line too few.
+  fn review_comment_char_width_for_text(&self, text: &str, cx: &App) -> f32 {
+    let fallback = self.measured_review_comment_char_width() / px(1.0);
+    let font_id = cx
+      .text_system()
+      .resolve_font(&gpui::font(REVIEW_COMMENT_UI_FONT_FAMILY));
+    let mut total_px = 0.0;
+    let mut count = 0usize;
+    for ch in text
+      .chars()
+      .filter(|ch| !ch.is_control())
+      .take(REVIEW_COMMENT_CHAR_WIDTH_SAMPLE_LIMIT)
+    {
+      let Ok(size) = cx
+        .text_system()
+        .advance(font_id, self.review_comment_font_size, ch)
+      else {
+        continue;
+      };
+      total_px += size.width / px(1.0);
+      count += 1;
+    }
+    if count == 0 {
+      return fallback;
+    }
+    (total_px / count as f32).max(1.0)
+  }
+
+  fn review_comment_body_wrap_columns(&self, char_width_px: f32) -> usize {
     let card_width_px = self.review_comment_card_width() / px(1.0);
     review_comment_wrap_columns_for_width(
       card_width_px
         - REVIEW_COMMENT_HORIZONTAL_PADDING_PX
         - self.review_comment_floating_actions_width_px(),
-      self.measured_review_comment_char_width() / px(1.0),
+      char_width_px,
     )
   }
 
   /// A local note keeps its actions over the body, so the text stops before them.
   fn review_comment_floating_actions_width_px(&self) -> f32 {
     match self.review_comment_display_mode {
-      ReviewCommentDisplayMode::LocalNote => REVIEW_COMMENT_COMPOSER_ACTIONS_WIDTH_PX,
+      ReviewCommentDisplayMode::LocalNote => REVIEW_COMMENT_FLOATING_ACTIONS_WIDTH_PX,
       ReviewCommentDisplayMode::Conversation => 0.0,
     }
   }
 
   /// What is left of the card once the buttons and every inset are taken out.
-  fn review_comment_composer_text_width(&self) -> Pixels {
+  fn review_comment_composer_text_width(&self, actions_width_px: f32) -> Pixels {
     let card_width_px = self.review_comment_card_width() / px(1.0);
-    let actions_width_px =
-      if review_comment_create_actions(self.review_comment_display_mode, self.has_pending_review)
-        .len()
-        > 1
-      {
-        REVIEW_COMMENT_COMPOSER_LABELLED_ACTIONS_WIDTH_PX
-      } else {
-        REVIEW_COMMENT_COMPOSER_ACTIONS_WIDTH_PX
-      };
     px(
       (card_width_px
-        - REVIEW_COMMENT_HORIZONTAL_PADDING_PX
+        - REVIEW_COMMENT_COMPOSER_HORIZONTAL_PADDING_PX
         - REVIEW_COMMENT_COMPOSER_TEXTAREA_HORIZONTAL_CHROME_PX
         - actions_width_px)
         .max(REVIEW_COMMENT_COMPOSER_MIN_TEXT_WIDTH_PX),
     )
+  }
+
+  /// The create composer carries a Suggest button and, on a pull request without a
+  /// pending review, two spelled-out destinations; the others carry cancel and save.
+  fn review_comment_create_actions_width_px(&self, cx: &App) -> f32 {
+    let actions =
+      review_comment_create_actions(self.review_comment_display_mode, self.has_pending_review);
+    if actions.len() > 1 {
+      return REVIEW_COMMENT_COMPOSER_LABELLED_ACTIONS_WIDTH_PX;
+    }
+    let buttons = 1 + actions.len() + usize::from(self.can_insert_review_comment_suggestion(cx));
+    buttons as f32 * REVIEW_COMMENT_COMPOSER_ACTION_BUTTON_WIDTH_PX
   }
 
   fn gutter_create_button_extra_width_px(&self) -> f32 {
@@ -1889,10 +1938,12 @@ impl Editor {
     &mut self,
     comment_id: u64,
     body: &str,
-    wrap_columns: usize,
     markdown_line_height_px: f32,
     suggestion_context: Option<&gfm_markdown_viewer::SuggestionContext>,
+    cx: &App,
   ) -> f32 {
+    let wrap_columns =
+      self.review_comment_body_wrap_columns(self.review_comment_char_width_for_text(body, cx));
     let entry = self.ensure_review_comment_markdown_cache_entry(comment_id, body);
     let key = (wrap_columns, markdown_line_height_px.to_bits());
     if suggestion_context.is_none()
@@ -2138,22 +2189,36 @@ impl Editor {
   /// Caches every open composer's row count; returns true when one of them moved,
   /// so the diff has to reserve a different number of lines for it.
   fn sync_review_comment_composer_rows(&mut self, window: &Window, cx: &App) -> bool {
-    let wrap_width = self.review_comment_composer_text_width();
     let font = gpui::font(cx.theme().font_family.as_ref());
     let font_size = window.rem_size() * REVIEW_COMMENT_COMPOSER_TEXT_REMS;
     let inputs = [
-      self.review_comment_create_input.clone(),
-      self.review_comment_edit_input.clone(),
-      self.review_comment_reply_input.clone(),
+      (
+        self.review_comment_create_input.clone(),
+        self.review_comment_create_actions_width_px(cx),
+      ),
+      (
+        self.review_comment_edit_input.clone(),
+        REVIEW_COMMENT_FLOATING_ACTIONS_WIDTH_PX,
+      ),
+      (
+        self.review_comment_reply_input.clone(),
+        REVIEW_COMMENT_FLOATING_ACTIONS_WIDTH_PX,
+      ),
     ];
     let rows = inputs
       .into_iter()
-      .flatten()
-      .map(|input| {
+      .filter_map(|(input, actions_width_px)| input.map(|input| (input, actions_width_px)))
+      .map(|(input, actions_width_px)| {
         let value = input.read(cx).value();
         (
           input.entity_id(),
-          review_comment_composer_rows(value.as_ref(), wrap_width, font.clone(), font_size, window),
+          review_comment_composer_rows(
+            value.as_ref(),
+            self.review_comment_composer_text_width(actions_width_px),
+            font.clone(),
+            font_size,
+            window,
+          ),
         )
       })
       .collect::<HashMap<_, _>>();
@@ -4756,7 +4821,7 @@ impl Editor {
         let message_block = if index == 0 {
           v_flex()
             .when(reserve_floating_actions_room, |this| {
-              this.pr(px(REVIEW_COMMENT_COMPOSER_ACTIONS_WIDTH_PX))
+              this.pr(px(REVIEW_COMMENT_FLOATING_ACTIONS_WIDTH_PX))
             })
             .child(body)
         } else {
@@ -5703,7 +5768,6 @@ impl Editor {
 
     let editor_line_height_px = (self.measured_editor_line_height() / px(1.0)).max(1.0);
     let markdown_line_height_px = self.review_comment_line_height_px;
-    let wrap_columns = self.review_comment_wrap_columns;
     let mut review_comment_body_heights_px = HashMap::new();
     let mut composer_only_comment_ids = HashSet::new();
     let show_review_comment_create_composer =
@@ -5738,7 +5802,9 @@ impl Editor {
           self.review_comment_segmented_height_px(
             comment_id,
             body.as_ref(),
-            wrap_columns,
+            self.review_comment_body_wrap_columns(
+              self.review_comment_char_width_for_text(body.as_ref(), cx),
+            ),
             markdown_line_height_px,
             suggestion_context.as_ref(),
           )
@@ -5746,9 +5812,9 @@ impl Editor {
           self.cached_review_comment_body_height_px(
             comment_id,
             body.as_ref(),
-            wrap_columns,
             markdown_line_height_px,
             suggestion_context.as_ref(),
+            cx,
           )
         }
       };
@@ -10220,6 +10286,28 @@ pub mod tests {
     );
   }
 
+  #[gpui::test]
+  fn test_a_comment_measures_its_own_glyphs(cx: &mut TestAppContext) {
+    let mut ctx = EditorTestContext::with_text(cx.clone(), "a");
+
+    ctx.editor.update(&mut ctx.cx, |editor, cx| {
+      // The headless text system advances every glyph the same, so the widths
+      // themselves cannot be compared here; only the wiring is checked.
+      let measured = editor.review_comment_char_width_for_text("iiii", cx);
+      assert!(measured > 0.0);
+      assert!(
+        editor.review_comment_body_wrap_columns(measured / 2.0)
+          > editor.review_comment_body_wrap_columns(measured),
+        "a line of narrower glyphs fits more of them"
+      );
+      // An empty body has nothing to measure and falls back to the sampled width.
+      assert_eq!(
+        editor.review_comment_char_width_for_text("", cx),
+        editor.measured_review_comment_char_width() / px(1.0)
+      );
+    });
+  }
+
   #[test]
   fn test_review_comment_wrap_columns_shrink_with_the_card() {
     let wide = review_comment_wrap_columns_for_width(800.0, 8.0);
@@ -10338,6 +10426,7 @@ pub mod tests {
           editor_line_height: px(DEFAULT_EDITOR_LINE_HEIGHT),
           editor_char_width: px(REVIEW_COMMENT_CHAR_WIDTH_PX),
           review_comment_char_width: px(REVIEW_COMMENT_CHAR_WIDTH_PX),
+          review_comment_font_size: px(REVIEW_COMMENT_FONT_SIZE_PX),
           viewport_height: px(DEFAULT_VIEWPORT_HEIGHT),
           viewport_width: px(DEFAULT_VIEWPORT_WIDTH),
           max_line_width: px(DEFAULT_MAX_LINE_WIDTH),

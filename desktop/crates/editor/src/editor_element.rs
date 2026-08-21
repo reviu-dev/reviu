@@ -1152,6 +1152,7 @@ impl Element for EditorElement {
     self.editor.update(cx, |editor, cx| {
       editor.editor_char_width = measured_char_width;
       editor.review_comment_char_width = measured_review_comment_char_width;
+      editor.review_comment_font_size = review_comment_style.font_size.to_pixels(window.rem_size());
       editor.set_review_comment_line_height_px(
         (measured_review_comment_line_height / px(1.0)).max(1.0),
         cx,
