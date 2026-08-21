@@ -2285,17 +2285,24 @@ impl Editor {
     }
   }
 
-  /// A composer inside a card pulls its own inset back out, so only its text rows
-  /// take room: a one-line edit is exactly as tall as the one-line comment it replaces.
+  /// A text box sits taller than the line of markdown it replaces: its own padding,
+  /// and a line height of its own. Half the difference is pulled back at each end so
+  /// editing a comment neither moves its text nor resizes its card.
+  fn review_comment_in_card_composer_pull_px(&self) -> f32 {
+    ((REVIEW_COMMENT_COMPOSER_TEXTAREA_VERTICAL_CHROME_PX
+      + self.review_comment_composer_line_height_px
+      - self.review_comment_line_height_px)
+      / 2.0)
+      .max(0.0)
+  }
+
   fn review_comment_in_card_composer_body_height_px(
     &self,
     input: Option<&Entity<TextareaState>>,
   ) -> f32 {
-    self.review_comment_composer_chrome_height_px()
-      + (self.review_comment_composer_body_height_px(input)
-        - self.review_comment_composer_chrome_height_px()
-        - REVIEW_COMMENT_COMPOSER_TEXTAREA_VERTICAL_CHROME_PX)
-        .max(self.review_comment_line_height_px)
+    (self.review_comment_composer_body_height_px(input)
+      - 2.0 * self.review_comment_in_card_composer_pull_px())
+    .max(self.review_comment_line_height_px)
   }
 
   fn review_comment_composer_body_height_px(&self, input: Option<&Entity<TextareaState>>) -> f32 {
@@ -2454,6 +2461,10 @@ impl Editor {
 
     let input = cx.new(|cx| {
       TextareaState::new(window, cx)
+        .auto_grow(
+          REVIEW_COMMENT_COMPOSER_MIN_ROWS,
+          REVIEW_COMMENT_COMPOSER_MAX_ROWS,
+        )
         .submit_on_enter(true)
         .placeholder("Edit review comment...")
     });
@@ -2631,6 +2642,10 @@ impl Editor {
 
     let input = cx.new(|cx| {
       TextareaState::new(window, cx)
+        .auto_grow(
+          REVIEW_COMMENT_COMPOSER_MIN_ROWS,
+          REVIEW_COMMENT_COMPOSER_MAX_ROWS,
+        )
         .submit_on_enter(true)
         .placeholder("Add review comment...")
     });
@@ -2670,6 +2685,10 @@ impl Editor {
 
     let input = cx.new(|cx| {
       TextareaState::new(window, cx)
+        .auto_grow(
+          REVIEW_COMMENT_COMPOSER_MIN_ROWS,
+          REVIEW_COMMENT_COMPOSER_MAX_ROWS,
+        )
         .submit_on_enter(true)
         .placeholder("Reply to review comment...")
     });
@@ -4632,10 +4651,8 @@ impl Editor {
               self.review_comment_preview_suggestion_context_for_id(message_id);
             v_flex()
               .on_action(cx.listener(Self::on_review_comment_edit_input_escape))
-              // The text box's own inset is given back, so editing a one-line comment
-              // leaves the card exactly as tall as reading it.
-              .mt(px(-REVIEW_COMMENT_COMPOSER_TEXTAREA_INSET_Y_PX))
-              .mb(px(-REVIEW_COMMENT_COMPOSER_TEXTAREA_INSET_Y_PX))
+              .mt(px(-self.review_comment_in_card_composer_pull_px()))
+              .mb(px(-self.review_comment_in_card_composer_pull_px()))
               .gap_1()
               .font_family(theme.font_family.clone())
               .child(
@@ -4658,7 +4675,6 @@ impl Editor {
                             let mut composer = MarkdownComposer::new(&input_state)
                               .disabled(is_edit_submitting)
                               .appearance(false)
-                              .h(self.review_comment_composer_textarea_height(&input_state))
                               .preview_open(edit_preview_open)
                               .on_toggle_preview(move |_, cx| {
                                 toggle_editor.update(cx, |editor, cx| {
@@ -5012,8 +5028,8 @@ impl Editor {
               )
               .child(
                 v_flex()
-                  .mt(px(-REVIEW_COMMENT_COMPOSER_TEXTAREA_INSET_Y_PX))
-                  .mb(px(-REVIEW_COMMENT_COMPOSER_TEXTAREA_INSET_Y_PX))
+                  .mt(px(-self.review_comment_in_card_composer_pull_px()))
+                  .mb(px(-self.review_comment_in_card_composer_pull_px()))
                   .gap_1()
                   .child(
                     h_flex()
@@ -5035,7 +5051,6 @@ impl Editor {
                                 let mut composer = MarkdownComposer::new(&input_state)
                                   .disabled(is_reply_submitting)
                                   .appearance(false)
-                                  .h(self.review_comment_composer_textarea_height(&input_state))
                                   .preview_open(reply_preview_open)
                                   .on_toggle_preview(move |_, cx| {
                                     toggle_editor.update(cx, |editor, cx| {
@@ -5305,7 +5320,6 @@ impl Editor {
                             let mut composer = MarkdownComposer::new(&input_state)
                               .disabled(is_create_submitting)
                               .appearance(false)
-                              .h(self.review_comment_composer_textarea_height(&input_state))
                               .preview_open(create_preview_open)
                               .on_toggle_preview(move |_, cx| {
                                 create_toggle_editor.update(cx, |editor, cx| {
@@ -10275,6 +10289,25 @@ pub mod tests {
       REVIEW_COMMENT_CARD_PADDING_Y_PX - 2.0
     );
     assert_eq!(review_comment_floating_actions_top_px(0.0), 0.0);
+  }
+
+  #[gpui::test]
+  fn test_an_edited_comment_keeps_its_text_where_it_was_read(cx: &mut TestAppContext) {
+    let mut ctx = EditorTestContext::with_text(cx.clone(), "a\nb");
+
+    ctx.editor.update(&mut ctx.cx, |editor, _| {
+      let pull = editor.review_comment_in_card_composer_pull_px();
+      let box_height = review_comment_composer_textarea_height_px(
+        1,
+        editor.review_comment_composer_line_height_px,
+      );
+
+      // Pulling both ends centres the box's single line on the line it replaces.
+      assert_eq!(
+        box_height - 2.0 * pull,
+        editor.review_comment_line_height_px
+      );
+    });
   }
 
   #[gpui::test]
