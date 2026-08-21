@@ -635,8 +635,9 @@ mod tests {
     for registration in LANGUAGE_REGISTRATIONS {
       let config = (registration.load)();
       assert!(
-        !config.name.is_empty(),
-        "language registration has an empty name"
+        config.highlight_config.is_some(),
+        "{} highlight query failed to compile",
+        config.name
       );
     }
   }

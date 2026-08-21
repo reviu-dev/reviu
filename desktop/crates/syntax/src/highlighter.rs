@@ -122,7 +122,8 @@ pub struct HighlightSpan {
 /// Language configuration
 pub struct LanguageConfig {
   pub name: &'static str,
-  pub highlight_config: HighlightConfiguration,
+  /// None when the query no longer matches its grammar; highlighting is then skipped.
+  pub highlight_config: Option<HighlightConfiguration>,
 }
 
 pub fn build_language_config(
@@ -136,16 +137,23 @@ pub fn build_language_config(
   let injections = join_query_fragments(injections);
   let locals = join_query_fragments(locals);
 
-  let mut highlight_config = HighlightConfiguration::new(
+  // A grammar bump can invalidate a query; losing colour beats taking the app down.
+  let highlight_config = match HighlightConfiguration::new(
     language,
     name,
     highlights.as_ref(),
     injections.as_ref(),
     locals.as_ref(),
-  )
-  .unwrap_or_else(|error| panic!("Failed to create {name} highlight config: {error}"));
-
-  highlight_config.configure(HIGHLIGHT_NAMES);
+  ) {
+    Ok(mut config) => {
+      config.configure(HIGHLIGHT_NAMES);
+      Some(config)
+    }
+    Err(error) => {
+      eprintln!("Failed to create {name} highlight config: {error}");
+      None
+    }
+  };
 
   LanguageConfig {
     name,
@@ -202,16 +210,17 @@ impl SyntaxHighlighter {
     F: FnMut(Range<usize>) -> bool,
     G: FnMut(HighlightSpan) -> bool,
   {
+    let Some(highlight_config) = self.config.highlight_config.as_ref() else {
+      on_source(0..text.len());
+      return Ok(());
+    };
+
     let events = self
       .highlighter
-      .highlight(
-        &self.config.highlight_config,
-        text.as_bytes(),
-        None,
-        |language| {
-          languages::language_config_for_name(language).map(|config| &config.highlight_config)
-        },
-      )
+      .highlight(highlight_config, text.as_bytes(), None, |language| {
+        languages::language_config_for_name(language)
+          .and_then(|config| config.highlight_config.as_ref())
+      })
       .map_err(|e| format!("Highlight failed: {}", e))?;
 
     let mut highlight_stack = Vec::new();
@@ -849,6 +858,48 @@ mod tests {
 
     // Should return a result (even with parse error)
     assert!(result.is_ok() || result.is_err());
+  }
+
+  fn broken_query_config() -> &'static LanguageConfig {
+    Box::leak(Box::new(build_language_config(
+      "broken",
+      tree_sitter_rust::LANGUAGE.into(),
+      &["(no_such_node) @keyword"],
+      &[],
+      &[],
+    )))
+  }
+
+  #[test]
+  fn an_invalid_query_leaves_the_language_without_a_highlight_config() {
+    assert!(broken_query_config().highlight_config.is_none());
+  }
+
+  #[test]
+  fn highlighting_a_language_with_an_invalid_query_yields_no_spans() {
+    let mut highlighter = SyntaxHighlighter::new(broken_query_config());
+    let highlights = highlighter
+      .highlight_text("fn main() {}")
+      .expect("highlighting must degrade, not fail");
+    assert!(highlights.is_empty());
+  }
+
+  #[test]
+  fn highlighting_a_language_with_an_invalid_query_still_reports_the_source_range() {
+    let mut highlighter = SyntaxHighlighter::new(broken_query_config());
+    let text = "fn main() {}";
+    let mut ranges = Vec::new();
+    highlighter
+      .highlight_text_stream(
+        text,
+        |range| {
+          ranges.push(range);
+          true
+        },
+        |_| true,
+      )
+      .expect("highlighting must degrade, not fail");
+    assert_eq!(ranges, vec![0..text.len()]);
   }
 
   #[test]
