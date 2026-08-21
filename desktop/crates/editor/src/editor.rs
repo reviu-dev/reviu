@@ -125,8 +125,13 @@ const REVIEW_COMMENT_COMPOSER_TEXTAREA_VERTICAL_CHROME_PX: f32 = 18.0;
 const REVIEW_COMMENT_COMPOSER_TEXTAREA_INSET_PX: f32 = 10.0;
 const REVIEW_COMMENT_COMPOSER_TEXTAREA_HORIZONTAL_CHROME_PX: f32 =
   REVIEW_COMMENT_COMPOSER_TEXTAREA_INSET_PX * 2.0;
-/// Room the action buttons take beside the text box.
-const REVIEW_COMMENT_COMPOSER_ACTIONS_WIDTH_PX: f32 = 84.0;
+/// Room the action buttons take beside the text box, gap included.
+const REVIEW_COMMENT_COMPOSER_ACTIONS_WIDTH_PX: f32 = 76.0;
+/// Same, when the two GitHub destinations are spelled out instead of iconified.
+const REVIEW_COMMENT_COMPOSER_LABELLED_ACTIONS_WIDTH_PX: f32 = 250.0;
+const REVIEW_COMMENT_COMPOSER_MIN_TEXT_WIDTH_PX: f32 = 120.0;
+/// `input_text_size` at the input's default size.
+const REVIEW_COMMENT_COMPOSER_TEXT_REMS: f32 = 0.875;
 const REVIEW_COMMENT_COMPOSER_MIN_ROWS: usize = 1;
 const REVIEW_COMMENT_COMPOSER_MAX_ROWS: usize = 12;
 const REVIEW_COMMENT_CREATE_DRAFT_COMMENT_ID: u64 = u64::MAX;
@@ -353,16 +358,46 @@ fn review_comment_wrap_columns_for_width(available_px: f32, char_width_px: f32) 
   )
 }
 
-fn review_comment_composer_rows(value: &str, wrap_columns: usize) -> usize {
-  let columns = wrap_columns.max(1);
-  value
-    .split('\n')
-    .map(|line| line.chars().count().div_ceil(columns).max(1))
-    .sum::<usize>()
-    .clamp(
-      REVIEW_COMMENT_COMPOSER_MIN_ROWS,
-      REVIEW_COMMENT_COMPOSER_MAX_ROWS,
-    )
+/// Shaped with the composer's own font: dividing by an average character width
+/// wraps a line of narrow glyphs a row too early, and the card grows before the
+/// text does.
+fn review_comment_composer_rows(
+  value: &str,
+  wrap_width: Pixels,
+  font: gpui::Font,
+  font_size: Pixels,
+  window: &Window,
+) -> usize {
+  let text: SharedString = value.to_string().into();
+  let runs = [gpui::TextRun {
+    len: text.len(),
+    font,
+    color: gpui::Hsla::default(),
+    background_color: None,
+    underline: None,
+    strikethrough: None,
+  }];
+  let rows = window
+    .text_system()
+    .shape_text(text, font_size, &runs, Some(wrap_width), None)
+    .map(|lines| {
+      lines
+        .iter()
+        .map(|line| 1 + line.wrap_boundaries.len())
+        .sum::<usize>()
+    })
+    .unwrap_or(REVIEW_COMMENT_COMPOSER_MIN_ROWS);
+  rows.clamp(
+    REVIEW_COMMENT_COMPOSER_MIN_ROWS,
+    REVIEW_COMMENT_COMPOSER_MAX_ROWS,
+  )
+}
+
+/// Lifts the buttons onto the first line of text instead of the top of the box.
+fn review_comment_composer_actions_top_px(text_line_height_px: f32) -> f32 {
+  (REVIEW_COMMENT_COMPOSER_TEXTAREA_VERTICAL_CHROME_PX / 2.0
+    - (REVIEW_COMMENT_COMPOSER_ACTIONS_HEIGHT_PX - text_line_height_px) / 2.0)
+    .max(0.0)
 }
 
 fn review_comment_composer_textarea_height_px(rows: usize, text_line_height_px: f32) -> f32 {
@@ -1528,15 +1563,24 @@ impl Editor {
     )
   }
 
-  /// The composer text is inset by the input's own horizontal chrome.
-  fn review_comment_composer_wrap_columns(&self) -> usize {
+  /// What is left of the card once the buttons and every inset are taken out.
+  fn review_comment_composer_text_width(&self) -> Pixels {
     let card_width_px = self.review_comment_card_width() / px(1.0);
-    review_comment_wrap_columns_for_width(
-      card_width_px
+    let actions_width_px =
+      if review_comment_create_actions(self.review_comment_display_mode, self.has_pending_review)
+        .len()
+        > 1
+      {
+        REVIEW_COMMENT_COMPOSER_LABELLED_ACTIONS_WIDTH_PX
+      } else {
+        REVIEW_COMMENT_COMPOSER_ACTIONS_WIDTH_PX
+      };
+    px(
+      (card_width_px
         - REVIEW_COMMENT_HORIZONTAL_PADDING_PX
         - REVIEW_COMMENT_COMPOSER_TEXTAREA_HORIZONTAL_CHROME_PX
-        - REVIEW_COMMENT_COMPOSER_ACTIONS_WIDTH_PX,
-      self.measured_review_comment_char_width() / px(1.0),
+        - actions_width_px)
+        .max(REVIEW_COMMENT_COMPOSER_MIN_TEXT_WIDTH_PX),
     )
   }
 
@@ -2071,8 +2115,10 @@ impl Editor {
 
   /// Caches every open composer's row count; returns true when one of them moved,
   /// so the diff has to reserve a different number of lines for it.
-  fn sync_review_comment_composer_rows(&mut self, cx: &App) -> bool {
-    let wrap_columns = self.review_comment_composer_wrap_columns();
+  fn sync_review_comment_composer_rows(&mut self, window: &Window, cx: &App) -> bool {
+    let wrap_width = self.review_comment_composer_text_width();
+    let font = gpui::font(cx.theme().font_family.as_ref());
+    let font_size = window.rem_size() * REVIEW_COMMENT_COMPOSER_TEXT_REMS;
     let inputs = [
       self.review_comment_create_input.clone(),
       self.review_comment_edit_input.clone(),
@@ -2085,7 +2131,7 @@ impl Editor {
         let value = input.read(cx).value();
         (
           input.entity_id(),
-          review_comment_composer_rows(value.as_ref(), wrap_columns),
+          review_comment_composer_rows(value.as_ref(), wrap_width, font.clone(), font_size, window),
         )
       })
       .collect::<HashMap<_, _>>();
@@ -2096,8 +2142,8 @@ impl Editor {
     true
   }
 
-  fn refresh_review_comment_composer_layout(&mut self, cx: &mut Context<Self>) {
-    if !self.sync_review_comment_composer_rows(cx) {
+  fn refresh_review_comment_composer_layout(&mut self, window: &Window, cx: &mut Context<Self>) {
+    if !self.sync_review_comment_composer_rows(window, cx) {
       return;
     }
     if self.diffs.is_some() {
@@ -2305,8 +2351,8 @@ impl Editor {
     .detach();
     // `insert` and `set_value` are silent, so the row count is read from the entity
     // itself: every mutation notifies, typed or programmatic.
-    cx.observe(&input, |editor, _, cx| {
-      editor.refresh_review_comment_composer_layout(cx);
+    cx.observe_in(&input, window, |editor, _, window, cx| {
+      editor.refresh_review_comment_composer_layout(window, cx);
     })
     .detach();
     self.review_comment_edit_input = Some(input.clone());
@@ -2483,8 +2529,8 @@ impl Editor {
     .detach();
     // `insert` and `set_value` are silent, so the row count is read from the entity
     // itself: every mutation notifies, typed or programmatic.
-    cx.observe(&input, |editor, _, cx| {
-      editor.refresh_review_comment_composer_layout(cx);
+    cx.observe_in(&input, window, |editor, _, window, cx| {
+      editor.refresh_review_comment_composer_layout(window, cx);
     })
     .detach();
     self.review_comment_create_input = Some(input.clone());
@@ -2518,8 +2564,8 @@ impl Editor {
     .detach();
     // `insert` and `set_value` are silent, so the row count is read from the entity
     // itself: every mutation notifies, typed or programmatic.
-    cx.observe(&input, |editor, _, cx| {
-      editor.refresh_review_comment_composer_layout(cx);
+    cx.observe_in(&input, window, |editor, _, window, cx| {
+      editor.refresh_review_comment_composer_layout(window, cx);
     })
     .detach();
     self.review_comment_reply_input = Some(input.clone());
@@ -4466,7 +4512,7 @@ impl Editor {
               .font_family(theme.font_family.clone())
               .child(
                 h_flex()
-                  .items_end()
+                  .items_start()
                   .gap_1()
                   .child(
                     div()
@@ -4504,6 +4550,9 @@ impl Editor {
                   )
                   .child(
                     h_flex()
+                      .mt(px(review_comment_composer_actions_top_px(
+                        self.review_comment_line_height_px,
+                      )))
                       .items_center()
                       .gap_1()
                       .child(
@@ -4834,7 +4883,7 @@ impl Editor {
                   .gap_1()
                   .child(
                     h_flex()
-                      .items_end()
+                      .items_start()
                       .gap_1()
                       .child(
                         div()
@@ -4877,6 +4926,9 @@ impl Editor {
                       )
                       .child(
                         h_flex()
+                          .mt(px(review_comment_composer_actions_top_px(
+                            self.review_comment_line_height_px,
+                          )))
                           .items_center()
                           .gap_1()
                           .child(
@@ -5103,7 +5155,7 @@ impl Editor {
                 .font_family(theme.font_family.clone())
                 .child(
                   h_flex()
-                    .items_center()
+                    .items_start()
                     .gap_1()
                     .child(
                       div().flex_1().min_w_0().child(
@@ -5142,6 +5194,9 @@ impl Editor {
                     )
                     .child(
                       h_flex()
+                        .mt(px(review_comment_composer_actions_top_px(
+                          self.review_comment_line_height_px,
+                        )))
                         .items_center()
                         .gap_1()
                         .when(can_suggest, |this| {
@@ -8798,7 +8853,7 @@ impl Render for Editor {
       }
     }
     // Catches the composer values set programmatically: they emit no input event.
-    if self.sync_review_comment_composer_rows(cx) && self.diffs.is_some() {
+    if self.sync_review_comment_composer_rows(window, cx) && self.diffs.is_some() {
       self.rebuild_projection(cx);
     }
     let doc_line_count = self.document.read(cx).len_lines();
@@ -10003,22 +10058,52 @@ pub mod tests {
     );
   }
 
-  #[test]
-  fn test_review_comment_composer_starts_at_min_rows_and_grows_with_the_text() {
-    assert_eq!(
-      review_comment_composer_rows("", 40),
-      REVIEW_COMMENT_COMPOSER_MIN_ROWS
-    );
-    assert_eq!(review_comment_composer_rows("one line", 40), 1);
-    assert_eq!(review_comment_composer_rows("one\ntwo", 40), 2);
-    assert_eq!(review_comment_composer_rows("a\nb\nc\nd\ne", 40), 5);
-    // A long line wraps into as many rows as the composer is wide.
-    assert_eq!(review_comment_composer_rows(&"x".repeat(100), 40), 3);
-    assert_eq!(review_comment_composer_rows(&"x".repeat(200), 40), 5);
-    assert_eq!(
-      review_comment_composer_rows(&"line\n".repeat(200), 40),
-      REVIEW_COMMENT_COMPOSER_MAX_ROWS
-    );
+  #[gpui::test]
+  fn test_review_comment_composer_rows_follow_the_shaped_text(cx: &mut TestAppContext) {
+    cx.update(gpui_component::init);
+    let ctx = EditorTestContext::with_text(cx.clone(), "a");
+    let editor = ctx.editor.clone();
+    let (_root, cx) =
+      cx.add_window_view(|window, cx| gpui_component::Root::new(editor.clone(), window, cx));
+
+    cx.update(|window, _| {
+      let font = gpui::font("Helvetica");
+      let font_size = px(14.0);
+      let roomy = px(10_000.0);
+
+      assert_eq!(
+        review_comment_composer_rows("", roomy, font.clone(), font_size, window),
+        REVIEW_COMMENT_COMPOSER_MIN_ROWS
+      );
+      assert_eq!(
+        review_comment_composer_rows("one line", roomy, font.clone(), font_size, window),
+        1
+      );
+      assert_eq!(
+        review_comment_composer_rows("one\ntwo", roomy, font.clone(), font_size, window),
+        2
+      );
+      assert_eq!(
+        review_comment_composer_rows(
+          &"line\n".repeat(200),
+          roomy,
+          font.clone(),
+          font_size,
+          window
+        ),
+        REVIEW_COMMENT_COMPOSER_MAX_ROWS
+      );
+      // The same text in a narrow column takes more rows.
+      assert!(
+        review_comment_composer_rows(
+          "one two three four five six seven",
+          px(60.0),
+          font,
+          font_size,
+          window
+        ) > 1
+      );
+    });
   }
 
   #[test]
@@ -11469,7 +11554,7 @@ pub mod tests {
 
     let (empty_height, tall_height, min_height) = ctx.editor.update_in(cx, |editor, window, cx| {
       let input = editor.ensure_review_comment_create_input(window, cx);
-      editor.sync_review_comment_composer_rows(cx);
+      editor.sync_review_comment_composer_rows(window, cx);
       let empty_height = editor.review_comment_composer_textarea_height(&input);
       let min_height = px(review_comment_composer_textarea_height_px(
         REVIEW_COMMENT_COMPOSER_MIN_ROWS,
@@ -11479,7 +11564,7 @@ pub mod tests {
       input.update(cx, |input, cx| {
         input.set_value("one\ntwo\nthree\nfour\nfive\nsix".to_string(), window, cx);
       });
-      editor.sync_review_comment_composer_rows(cx);
+      editor.sync_review_comment_composer_rows(window, cx);
       (
         empty_height,
         editor.review_comment_composer_textarea_height(&input),
