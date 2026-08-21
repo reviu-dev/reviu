@@ -1532,6 +1532,19 @@ impl Render for AgentChatPanel {
                       cx.listener(|panel, _, window, cx| panel.new_conversation(window, cx)),
                     ),
                 )
+              })
+              .when(self.show_close_control, |this| {
+                this.child(
+                  Button::new("agent-chat-close")
+                    .debug_selector(|| "agent-chat-close".to_string())
+                    .icon(IconName::Close)
+                    .small()
+                    .ghost()
+                    .tooltip("Close chat")
+                    .on_click(
+                      cx.listener(|_, _, _, cx| cx.emit(AgentChatPanelEvent::CloseRequested)),
+                    ),
+                )
               }),
           ),
       )

@@ -597,6 +597,8 @@ pub enum AgentChatPanelEvent {
   /// A conversation was created, loaded or deleted; the host should re-read
   /// the conversation list from disk.
   ConversationsChanged,
+  /// User asked the host to hide the chat pane.
+  CloseRequested,
 }
 
 impl gpui::EventEmitter<AgentChatPanelEvent> for AgentChatPanel {}
@@ -688,6 +690,7 @@ pub struct AgentChatPanel {
   _permission_task: Option<Task<()>>,
   _input_sub: Option<gpui::Subscription>,
   show_conversation_controls: bool,
+  show_close_control: bool,
 }
 
 impl AgentChatPanel {
@@ -772,6 +775,7 @@ impl AgentChatPanel {
       _permission_task: None,
       _input_sub: Some(input_sub),
       show_conversation_controls: true,
+      show_close_control: false,
     };
 
     panel.refresh_repo_files(cx);
@@ -1218,6 +1222,7 @@ impl AgentChatPanel {
       _permission_task: None,
       _input_sub: Some(input_sub),
       show_conversation_controls: true,
+      show_close_control: false,
     };
     panel.install_runway_release(cx);
     panel.sync_list_count();
@@ -2324,6 +2329,14 @@ impl AgentChatPanel {
   /// its own session list (the sessions shell sidebar).
   pub fn set_conversation_controls_visible(&mut self, visible: bool) {
     self.show_conversation_controls = visible;
+  }
+
+  pub fn set_close_control_visible(&mut self, visible: bool, cx: &mut Context<Self>) {
+    if self.show_close_control == visible {
+      return;
+    }
+    self.show_close_control = visible;
+    cx.notify();
   }
 
   pub fn is_ready(&self) -> bool {

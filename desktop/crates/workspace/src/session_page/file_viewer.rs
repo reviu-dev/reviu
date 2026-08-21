@@ -33,6 +33,7 @@ impl SessionPage {
     let reveal_doc_line = reveal_line.map(|line| line.saturating_sub(1) as usize);
 
     self.center = CenterView::Diff;
+    self.sync_agent_chat_close_control(cx);
     // Same path, but the snapshot of a commit is not the working-tree file.
     if !left_commit_file && self.selected_file.as_ref() == Some(&rel_path) && self.editor.is_some()
     {
@@ -122,6 +123,7 @@ impl SessionPage {
     };
     self.show_preview = false;
     self.center = CenterView::Diff;
+    self.sync_agent_chat_close_control(cx);
     self.open_file_generation = self.open_file_generation.wrapping_add(1);
     let generation = self.open_file_generation;
     self.selected_file = Some(rel_path.clone());
@@ -513,6 +515,8 @@ impl SessionPage {
       return;
     }
     self.center = CenterView::Conversation;
+    self.diff_chat_open = true;
+    self.sync_agent_chat_close_control(cx);
     self.focus_agent_input_on_next_frame(window, cx);
     cx.notify();
   }

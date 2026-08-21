@@ -207,6 +207,7 @@ pub struct SessionPage {
   dock_open: bool,
   dock_width: f32,
   dock_zoomed: bool,
+  diff_chat_open: bool,
   conversation_split_width: f32,
   sidebar_open: bool,
   sidebar_width: f32,
@@ -340,6 +341,7 @@ impl SessionPage {
       dock_open: true,
       dock_width: DOCK_PANEL_DEFAULT_WIDTH,
       dock_zoomed: false,
+      diff_chat_open: true,
       conversation_split_width: CONVERSATION_SPLIT_DEFAULT_WIDTH,
       sidebar_open: true,
       sidebar_width: SESSIONS_SIDEBAR_DEFAULT_WIDTH,
@@ -703,6 +705,24 @@ impl SessionPage {
       self.conversation_split_width = clamped;
       cx.notify();
     }
+  }
+
+  fn hide_diff_chat(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    if self.center != CenterView::Diff || !self.diff_chat_open {
+      return;
+    }
+    self.diff_chat_open = false;
+    self.sync_agent_chat_close_control(cx);
+    self.focus_editor_on_next_frame(window, cx);
+    cx.notify();
+  }
+
+  fn sync_agent_chat_close_control(&mut self, cx: &mut Context<Self>) {
+    let Some(panel) = self.agent_chat_view.clone() else {
+      return;
+    };
+    let visible = self.center == CenterView::Diff && self.diff_chat_open;
+    panel.update(cx, |panel, cx| panel.set_close_control_visible(visible, cx));
   }
 
   fn toggle_file_stage_action(

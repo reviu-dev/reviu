@@ -245,12 +245,15 @@ impl SessionPage {
           .as_deref()
           .map(|path| path.to_string_lossy().into_owned())
           .unwrap_or_default();
-        // The conversation stays alongside the diff: reviewing while the
-        // agent streams is the whole point of the shell.
-        let split = self.render_conversation_diff_split(window, cx);
+        // The conversation stays alongside the diff until the reviewer hides it.
+        let view = if self.diff_chat_open {
+          self.render_conversation_diff_split(window, cx)
+        } else {
+          self.render_diff_view(window, cx)
+        };
         (
           SharedString::from(format!("session-center-diff-{file}")),
-          split,
+          view,
         )
       }
     };
@@ -340,16 +343,26 @@ impl SessionPage {
       .px_3()
       .border_b_1()
       .border_color(theme.border)
-      .child(
-        Button::new("session-page-diff-back")
+      .child(if self.diff_chat_open {
+        Button::new("session-page-close-editor")
+          .debug_selector(|| "session-page-close-editor".to_string())
+          .icon(gpui_component::IconName::Close)
+          .ghost()
+          .compact()
+          .small()
+          .tooltip("Close editor (Esc)")
+          .on_click(cx.listener(|this, _, window, cx| this.close_diff(window, cx)))
+      } else {
+        Button::new("session-page-show-chat")
+          .debug_selector(|| "session-page-show-chat".to_string())
           .label("Chat")
           .icon(UiIconName::MessageCircle)
           .ghost()
           .compact()
           .small()
           .tooltip("Back to the conversation (Esc)")
-          .on_click(cx.listener(|this, _, window, cx| this.close_diff(window, cx))),
-      )
+          .on_click(cx.listener(|this, _, window, cx| this.close_diff(window, cx)))
+      })
       .children(file_title)
       .when(self.can_accept_all_conflicts(cx), |this| {
         this
@@ -2831,6 +2844,63 @@ mod tests {
       (width - (start_width + 80.0)).abs() < 5.0,
       "dragging 80px left widens the dock: {start_width} -> {width}"
     );
+  }
+
+  #[gpui::test]
+  async fn editor_header_keeps_one_center_pane(cx: &mut TestAppContext) {
+    let repo = TempRepo::init("session-chat-editor-close-buttons");
+    commit_text_file(&repo.path, Path::new("README.md"), "v1\n", "initial");
+    std::fs::write(repo.path.join("README.md"), "v2\n").expect("modify file");
+    let (page, cx) = add_session_page_window(repo.path.clone(), cx);
+    cx.run_until_parked();
+
+    page.update_in(cx, |page, window, cx| {
+      page.open_diff(PathBuf::from("README.md"), None, window, cx);
+    });
+    await_open_file(&page, cx).await;
+
+    assert!(cx.debug_bounds("session-page-close-editor").is_some());
+    assert!(cx.debug_bounds("session-page-show-chat").is_none());
+
+    let close_editor = cx
+      .debug_bounds("session-page-close-editor")
+      .expect("close editor");
+    cx.simulate_click(close_editor.center(), gpui::Modifiers::default());
+    cx.run_until_parked();
+
+    page.read_with(cx, |page, _| {
+      assert_eq!(page.center, CenterView::Conversation);
+      assert!(page.diff_chat_open);
+    });
+    assert!(cx.debug_bounds("session-page-close-editor").is_none());
+    assert!(cx.debug_bounds("session-page-show-chat").is_none());
+
+    page.update_in(cx, |page, window, cx| {
+      page.open_diff(PathBuf::from("README.md"), None, window, cx);
+    });
+    await_open_file(&page, cx).await;
+    page.update_in(cx, |page, window, cx| page.hide_diff_chat(window, cx));
+    cx.run_until_parked();
+
+    page.read_with(cx, |page, _| {
+      assert_eq!(page.center, CenterView::Diff);
+      assert!(!page.diff_chat_open);
+    });
+    assert!(cx.debug_bounds("session-page-close-editor").is_none());
+    assert!(cx.debug_bounds("session-page-show-chat").is_some());
+
+    let show_chat = cx
+      .debug_bounds("session-page-show-chat")
+      .expect("show chat");
+    cx.simulate_click(show_chat.center(), gpui::Modifiers::default());
+    cx.run_until_parked();
+
+    page.read_with(cx, |page, _| {
+      assert_eq!(page.center, CenterView::Conversation);
+      assert!(page.diff_chat_open);
+    });
+    assert!(cx.debug_bounds("session-page-close-editor").is_none());
+    assert!(cx.debug_bounds("session-page-show-chat").is_none());
   }
 
   #[gpui::test]

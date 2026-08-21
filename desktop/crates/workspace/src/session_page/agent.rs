@@ -54,8 +54,10 @@ impl SessionPage {
     let backend = AgentSettings::load();
     let view = cx.new(|cx| AgentChatPanel::new(backend, cwd, state_dir, window, cx));
     // The sessions sidebar owns the conversation list; hide the panel's own controls.
-    view.update(cx, |panel, _| {
-      panel.set_conversation_controls_visible(false)
+    let close_control_visible = self.center == CenterView::Diff && self.diff_chat_open;
+    view.update(cx, |panel, cx| {
+      panel.set_conversation_controls_visible(false);
+      panel.set_close_control_visible(close_control_visible, cx);
     });
     // Sidebar reads conversation state from the panel; re-render when it changes.
     // Also the flush point for a review export queued while the agent was connecting.
@@ -99,6 +101,9 @@ impl SessionPage {
         }
         AgentChatPanelEvent::ConversationsChanged => {
           this.refresh_session_list(cx);
+        }
+        AgentChatPanelEvent::CloseRequested => {
+          this.hide_diff_chat(window, cx);
         }
       },
     )
