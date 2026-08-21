@@ -108,7 +108,7 @@ serde_json = "1.0.151"
 uuid = { version = "1.24.0", features = ["v4"] }
 thiserror = "1.0.69"
 which = "6.0.3"
-comrak = "0.22"
+comrak = "0.54"
 imara-diff = "0.2.0"
 # Default features route the transport through native-tls; reqwest is unified to one
 # copy, so that would pull OpenSSL into our HTTP clients too.

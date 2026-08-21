@@ -2,7 +2,7 @@ use std::collections::HashSet;
 use std::sync::Arc;
 
 use comrak::nodes::{AstNode, ListType, NodeValue};
-use comrak::{Arena, ComrakOptions, parse_document};
+use comrak::{Arena, Options, parse_document};
 
 use crate::parse_html::*;
 use crate::types::*;
@@ -36,8 +36,8 @@ pub fn parse_markdown(source: &str) -> ParsedMarkdown {
   }
 }
 
-pub(crate) fn comrak_options() -> ComrakOptions {
-  let mut options = ComrakOptions::default();
+pub(crate) fn comrak_options() -> Options<'static> {
+  let mut options = Options::default();
   options.extension.strikethrough = true;
   options.extension.table = true;
   options.extension.tasklist = true;
@@ -360,7 +360,7 @@ pub(crate) fn blocks_from_node<'a>(node: &'a AstNode<'a>) -> Vec<Block> {
         blocks_from_html_fragment(&html.literal)
       }
     }
-    NodeValue::Text(text) => vec![Block::Paragraph(vec![Inline::Text(text.clone())])],
+    NodeValue::Text(text) => vec![Block::Paragraph(vec![Inline::Text(text.to_string())])],
     _ => {
       let text = collect_text(node);
       if text.is_empty() {
@@ -373,15 +373,12 @@ pub(crate) fn blocks_from_node<'a>(node: &'a AstNode<'a>) -> Vec<Block> {
 }
 
 pub(crate) fn list_item_from_node<'a>(node: &'a AstNode<'a>) -> Option<ListItem> {
-  if !matches!(node.data.borrow().value, NodeValue::Item(_)) {
-    return None;
-  }
-  let checked = node
-    .children()
-    .find_map(|child| match &child.data.borrow().value {
-      NodeValue::TaskItem(marker) => Some(marker.is_some()),
-      _ => None,
-    });
+  // Task items sit directly under the list; they are not Item nodes wrapping a marker.
+  let checked = match &node.data.borrow().value {
+    NodeValue::Item(_) => None,
+    NodeValue::TaskItem(marker) => Some(marker.symbol.is_some()),
+    _ => return None,
+  };
   Some(ListItem {
     blocks: node.children().flat_map(blocks_from_node).collect(),
     checked,
@@ -418,7 +415,7 @@ pub(crate) fn inlines_from_nodes<'a>(nodes: impl Iterator<Item = &'a AstNode<'a>
   let mut inlines = Vec::new();
   for node in nodes {
     match &node.data.borrow().value {
-      NodeValue::Text(text) => inlines.push(Inline::Text(text.clone())),
+      NodeValue::Text(text) => inlines.push(Inline::Text(text.to_string())),
       NodeValue::Code(code) => inlines.push(Inline::Code(code.literal.clone())),
       NodeValue::LineBreak => inlines.push(Inline::HardBreak),
       NodeValue::SoftBreak => inlines.push(Inline::SoftBreak),
@@ -518,7 +515,7 @@ pub(crate) fn inline_to_plain_text(inlines: &[Inline]) -> String {
 
 pub(crate) fn collect_text<'a>(node: &'a AstNode<'a>) -> String {
   match &node.data.borrow().value {
-    NodeValue::Text(text) => text.clone(),
+    NodeValue::Text(text) => text.to_string(),
     NodeValue::Code(code) => code.literal.clone(),
     NodeValue::Paragraph | NodeValue::Heading(_) => {
       inline_to_plain_text(&inlines_from_nodes(node.children()))
