@@ -140,7 +140,7 @@ selectable_text = { path = "crates/selectable_text" }
 gpui-router = { path = "vendor/gpui-router" }
 
 # ACP integration
-agent-client-protocol = { version = "=0.11.1", features = ["unstable"] }
+agent-client-protocol = { version = "=0.15.1", features = ["unstable"] }
 agent-client-protocol-schema = { version = "=0.14.0", features = ["unstable"] }
 async-channel = "2.5.0"
 async-process = "2.5.0"
