@@ -121,8 +121,10 @@ const REVIEW_COMMENT_COMPOSER_ACTIONS_HEIGHT_PX: f32 = 24.0;
 const REVIEW_COMMENT_COMPOSER_ACTIONS_GAP_PX: f32 = 8.0;
 /// gpui-component input chrome around the text: `input_py` twice plus its border.
 const REVIEW_COMMENT_COMPOSER_TEXTAREA_VERTICAL_CHROME_PX: f32 = 18.0;
-/// Same, horizontally: `input_px` twice.
-const REVIEW_COMMENT_COMPOSER_TEXTAREA_HORIZONTAL_CHROME_PX: f32 = 20.0;
+/// The input's own left inset before the text, `input_px` at the default size.
+const REVIEW_COMMENT_COMPOSER_TEXTAREA_INSET_PX: f32 = 10.0;
+const REVIEW_COMMENT_COMPOSER_TEXTAREA_HORIZONTAL_CHROME_PX: f32 =
+  REVIEW_COMMENT_COMPOSER_TEXTAREA_INSET_PX * 2.0;
 /// Room the action buttons take beside the text box.
 const REVIEW_COMMENT_COMPOSER_ACTIONS_WIDTH_PX: f32 = 84.0;
 const REVIEW_COMMENT_COMPOSER_MIN_ROWS: usize = 1;
@@ -329,11 +331,6 @@ pub fn review_comment_create_actions(
       REVIEW_COMMENT_START_REVIEW_ACTION,
     ],
   }
-}
-
-/// The create composer is a card of its own, so it pays its own vertical padding.
-fn review_comment_create_card_body_height_px(composer_body_height_px: f32) -> f32 {
-  REVIEW_COMMENT_CARD_PADDING_Y_PX * 2.0 + composer_body_height_px
 }
 
 /// The diff reserves whole lines, so a card is handed a few pixels more than it
@@ -4472,34 +4469,38 @@ impl Editor {
                   .items_end()
                   .gap_1()
                   .child(
-                    div().flex_1().min_w_0().child(
-                      self
-                        .review_comment_drop_zone(
-                          format!("review-comment-edit-drop-zone-{}", message_id),
-                          input_state.clone(),
-                          cx,
-                        )
-                        .child({
-                          let mut composer = MarkdownComposer::new(&input_state)
-                            .disabled(is_edit_submitting)
-                            .appearance(false)
-                            .h(self.review_comment_composer_textarea_height(&input_state))
-                            .preview_open(edit_preview_open)
-                            .on_toggle_preview(move |_, cx| {
-                              toggle_editor.update(cx, |editor, cx| {
-                                editor.review_comment_edit_preview_open =
-                                  !editor.review_comment_edit_preview_open;
-                                cx.notify();
+                    div()
+                      .flex_1()
+                      .min_w_0()
+                      .ml(px(-REVIEW_COMMENT_COMPOSER_TEXTAREA_INSET_PX))
+                      .child(
+                        self
+                          .review_comment_drop_zone(
+                            format!("review-comment-edit-drop-zone-{}", message_id),
+                            input_state.clone(),
+                            cx,
+                          )
+                          .child({
+                            let mut composer = MarkdownComposer::new(&input_state)
+                              .disabled(is_edit_submitting)
+                              .appearance(false)
+                              .h(self.review_comment_composer_textarea_height(&input_state))
+                              .preview_open(edit_preview_open)
+                              .on_toggle_preview(move |_, cx| {
+                                toggle_editor.update(cx, |editor, cx| {
+                                  editor.review_comment_edit_preview_open =
+                                    !editor.review_comment_edit_preview_open;
+                                  cx.notify();
+                                });
                               });
-                            });
-                          if let Some(renderer) = edit_preview_renderer {
-                            composer = composer.preview(move |text, window, cx| {
-                              renderer(text, edit_preview_suggestion_context.clone(), window, cx)
-                            });
-                          }
-                          composer
-                        }),
-                    ),
+                            if let Some(renderer) = edit_preview_renderer {
+                              composer = composer.preview(move |text, window, cx| {
+                                renderer(text, edit_preview_suggestion_context.clone(), window, cx)
+                              });
+                            }
+                            composer
+                          }),
+                      ),
                   )
                   .child(
                     h_flex()
@@ -4804,135 +4805,143 @@ impl Editor {
           .replying_to_review_comment_id
           .expect("reply target should exist when rendering thread reply composer");
         let is_reply_submitting = self.review_comment_reply_submitting;
-        let reply_block: gpui::AnyElement = if let Some(input_state) =
-          self.review_comment_reply_input.clone()
-        {
-          let cancel_editor = editor_entity.clone();
-          let save_editor = editor_entity.clone();
-          let toggle_editor = editor_entity.clone();
-          let reply_error = self.review_comment_reply_error.clone();
-          let reply_preview_open = self.review_comment_reply_preview_open;
-          let reply_preview_renderer = self.review_comment_preview_renderer.clone();
-          let reply_preview_suggestion_context =
-            self.review_comment_preview_suggestion_context_for_id(reply_to_id);
-          v_flex()
-            .on_action(cx.listener(Self::on_review_comment_reply_input_escape))
-            .pt(px(REVIEW_COMMENT_VERTICAL_PADDING_PX))
-            .pb(px(REVIEW_COMMENT_VERTICAL_PADDING_PX))
-            .gap(px(REVIEW_COMMENT_HEADER_BODY_GAP_PX))
-            .border_t(px(REVIEW_COMMENT_REPLY_BORDER_TOP_PX))
-            .border_color(theme.border)
-            .font_family(theme.font_family.clone())
-            .child(
-              h_flex()
-                .items_center()
-                .gap_2()
-                .child(div().text_sm().text_color(theme.foreground).child("You")),
-            )
-            .child(
-              v_flex()
-                .gap_1()
-                .child(
-                  h_flex()
-                    .items_end()
-                    .gap_1()
-                    .child(
-                      div().flex_1().min_w_0().child(
-                        self
-                          .review_comment_drop_zone(
-                            format!("review-comment-reply-drop-zone-{}", reply_to_id),
-                            input_state.clone(),
-                            cx,
+        let reply_block: gpui::AnyElement =
+          if let Some(input_state) = self.review_comment_reply_input.clone() {
+            let cancel_editor = editor_entity.clone();
+            let save_editor = editor_entity.clone();
+            let toggle_editor = editor_entity.clone();
+            let reply_error = self.review_comment_reply_error.clone();
+            let reply_preview_open = self.review_comment_reply_preview_open;
+            let reply_preview_renderer = self.review_comment_preview_renderer.clone();
+            let reply_preview_suggestion_context =
+              self.review_comment_preview_suggestion_context_for_id(reply_to_id);
+            v_flex()
+              .on_action(cx.listener(Self::on_review_comment_reply_input_escape))
+              .pt(px(REVIEW_COMMENT_VERTICAL_PADDING_PX))
+              .pb(px(REVIEW_COMMENT_VERTICAL_PADDING_PX))
+              .gap(px(REVIEW_COMMENT_HEADER_BODY_GAP_PX))
+              .border_t(px(REVIEW_COMMENT_REPLY_BORDER_TOP_PX))
+              .border_color(theme.border)
+              .font_family(theme.font_family.clone())
+              .child(
+                h_flex()
+                  .items_center()
+                  .gap_2()
+                  .child(div().text_sm().text_color(theme.foreground).child("You")),
+              )
+              .child(
+                v_flex()
+                  .gap_1()
+                  .child(
+                    h_flex()
+                      .items_end()
+                      .gap_1()
+                      .child(
+                        div()
+                          .flex_1()
+                          .min_w_0()
+                          .ml(px(-REVIEW_COMMENT_COMPOSER_TEXTAREA_INSET_PX))
+                          .child(
+                            self
+                              .review_comment_drop_zone(
+                                format!("review-comment-reply-drop-zone-{}", reply_to_id),
+                                input_state.clone(),
+                                cx,
+                              )
+                              .child({
+                                let mut composer = MarkdownComposer::new(&input_state)
+                                  .disabled(is_reply_submitting)
+                                  .appearance(false)
+                                  .h(self.review_comment_composer_textarea_height(&input_state))
+                                  .preview_open(reply_preview_open)
+                                  .on_toggle_preview(move |_, cx| {
+                                    toggle_editor.update(cx, |editor, cx| {
+                                      editor.review_comment_reply_preview_open =
+                                        !editor.review_comment_reply_preview_open;
+                                      cx.notify();
+                                    });
+                                  });
+                                if let Some(renderer) = reply_preview_renderer {
+                                  composer = composer.preview(move |text, window, cx| {
+                                    renderer(
+                                      text,
+                                      reply_preview_suggestion_context.clone(),
+                                      window,
+                                      cx,
+                                    )
+                                  });
+                                }
+                                composer
+                              }),
+                          ),
+                      )
+                      .child(
+                        h_flex()
+                          .items_center()
+                          .gap_1()
+                          .child(
+                            div()
+                              .on_mouse_down(MouseButton::Left, |_, _, cx| {
+                                cx.stop_propagation();
+                              })
+                              .child(
+                                Button::new(format!("review-comment-reply-cancel-{}", reply_to_id))
+                                  .ghost()
+                                  .xsmall()
+                                  .compact()
+                                  .icon(Icon::new(UiIconName::X))
+                                  .tooltip("Cancel")
+                                  .disabled(is_reply_submitting)
+                                  .on_click(move |_, window, cx| {
+                                    cx.stop_propagation();
+                                    cancel_editor.update(cx, |editor, cx| {
+                                      let was_replying =
+                                        editor.replying_to_review_comment_id.is_some();
+                                      editor.cancel_review_comment_reply(cx);
+                                      if was_replying {
+                                        editor.invoke_review_comment_cancel_handler(window, cx);
+                                      }
+                                    });
+                                  }),
+                              ),
                           )
-                          .child({
-                            let mut composer = MarkdownComposer::new(&input_state)
-                              .disabled(is_reply_submitting)
-                              .appearance(false)
-                              .h(self.review_comment_composer_textarea_height(&input_state))
-                              .preview_open(reply_preview_open)
-                              .on_toggle_preview(move |_, cx| {
-                                toggle_editor.update(cx, |editor, cx| {
-                                  editor.review_comment_reply_preview_open =
-                                    !editor.review_comment_reply_preview_open;
-                                  cx.notify();
-                                });
-                              });
-                            if let Some(renderer) = reply_preview_renderer {
-                              composer = composer.preview(move |text, window, cx| {
-                                renderer(text, reply_preview_suggestion_context.clone(), window, cx)
-                              });
-                            }
-                            composer
-                          }),
+                          .child(
+                            div()
+                              .on_mouse_down(MouseButton::Left, |_, _, cx| {
+                                cx.stop_propagation();
+                              })
+                              .child(
+                                Button::new(format!("review-comment-reply-save-{}", reply_to_id))
+                                  .xsmall()
+                                  .compact()
+                                  .icon(Icon::new(UiIconName::Check))
+                                  .tooltip("Reply")
+                                  .disabled(!can_save_review_comment_reply || is_reply_submitting)
+                                  .on_click(move |_, window, cx| {
+                                    cx.stop_propagation();
+                                    save_editor.update(cx, |editor, cx| {
+                                      editor.save_review_comment_reply(window, cx);
+                                    });
+                                  }),
+                              ),
+                          ),
                       ),
-                    )
-                    .child(
-                      h_flex()
-                        .items_center()
-                        .gap_1()
-                        .child(
-                          div()
-                            .on_mouse_down(MouseButton::Left, |_, _, cx| {
-                              cx.stop_propagation();
-                            })
-                            .child(
-                              Button::new(format!("review-comment-reply-cancel-{}", reply_to_id))
-                                .ghost()
-                                .xsmall()
-                                .compact()
-                                .icon(Icon::new(UiIconName::X))
-                                .tooltip("Cancel")
-                                .disabled(is_reply_submitting)
-                                .on_click(move |_, window, cx| {
-                                  cx.stop_propagation();
-                                  cancel_editor.update(cx, |editor, cx| {
-                                    let was_replying =
-                                      editor.replying_to_review_comment_id.is_some();
-                                    editor.cancel_review_comment_reply(cx);
-                                    if was_replying {
-                                      editor.invoke_review_comment_cancel_handler(window, cx);
-                                    }
-                                  });
-                                }),
-                            ),
-                        )
-                        .child(
-                          div()
-                            .on_mouse_down(MouseButton::Left, |_, _, cx| {
-                              cx.stop_propagation();
-                            })
-                            .child(
-                              Button::new(format!("review-comment-reply-save-{}", reply_to_id))
-                                .xsmall()
-                                .compact()
-                                .icon(Icon::new(UiIconName::Check))
-                                .tooltip("Reply")
-                                .disabled(!can_save_review_comment_reply || is_reply_submitting)
-                                .on_click(move |_, window, cx| {
-                                  cx.stop_propagation();
-                                  save_editor.update(cx, |editor, cx| {
-                                    editor.save_review_comment_reply(window, cx);
-                                  });
-                                }),
-                            ),
-                        ),
-                    ),
-                )
-                .when_some(reply_error, |this, error| {
-                  this.child(
-                    div()
-                      .text_xs()
-                      .text_color(theme.status_red())
-                      .overflow_hidden()
-                      .text_ellipsis_start()
-                      .child(error.as_ref().to_string()),
                   )
-                }),
-            )
-            .into_any_element()
-        } else {
-          div().into_any_element()
-        };
+                  .when_some(reply_error, |this, error| {
+                    this.child(
+                      div()
+                        .text_xs()
+                        .text_color(theme.status_red())
+                        .overflow_hidden()
+                        .text_ellipsis_start()
+                        .child(error.as_ref().to_string()),
+                    )
+                  }),
+              )
+              .into_any_element()
+          } else {
+            div().into_any_element()
+          };
 
         thread_messages = thread_messages.child(reply_block);
       }
@@ -5085,13 +5094,16 @@ impl Editor {
             .child(
               v_flex()
                 .on_action(cx.listener(Self::on_review_comment_create_input_escape))
-                .px(px(REVIEW_COMMENT_CARD_PADDING_X_PX))
-                .py(px(REVIEW_COMMENT_CARD_PADDING_Y_PX))
+                // The text box carries its own inset; the card only pads what is left.
+                .pl(px(
+                  REVIEW_COMMENT_CARD_PADDING_X_PX - REVIEW_COMMENT_COMPOSER_TEXTAREA_INSET_PX,
+                ))
+                .pr(px(REVIEW_COMMENT_CARD_PADDING_X_PX))
                 .gap(px(REVIEW_COMMENT_COMPOSER_ACTIONS_GAP_PX))
                 .font_family(theme.font_family.clone())
                 .child(
                   h_flex()
-                    .items_end()
+                    .items_center()
                     .gap_1()
                     .child(
                       div().flex_1().min_w_0().child(
@@ -5659,9 +5671,7 @@ impl Editor {
       });
       review_comment_body_heights_px.insert(
         REVIEW_COMMENT_CREATE_DRAFT_COMMENT_ID,
-        review_comment_create_card_body_height_px(
-          self.review_comment_composer_body_height_px(self.review_comment_create_input.as_ref()),
-        ),
+        self.review_comment_composer_body_height_px(self.review_comment_create_input.as_ref()),
       );
       composer_only_comment_ids.insert(REVIEW_COMMENT_CREATE_DRAFT_COMMENT_ID);
     }
@@ -10053,14 +10063,6 @@ pub mod tests {
     assert_eq!(
       review_comment_wrap_columns_for_width(10.0, 8.0),
       REVIEW_COMMENT_MIN_WRAP_COLUMNS
-    );
-  }
-
-  #[test]
-  fn test_review_comment_create_card_pays_its_own_padding() {
-    assert_eq!(
-      review_comment_create_card_body_height_px(100.0),
-      100.0 + REVIEW_COMMENT_CARD_PADDING_Y_PX * 2.0
     );
   }
 
