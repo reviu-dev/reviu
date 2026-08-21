@@ -207,6 +207,7 @@ pub struct SessionPage {
   dock_open: bool,
   dock_width: f32,
   dock_zoomed: bool,
+  conversation_split_width: f32,
   sidebar_open: bool,
   sidebar_width: f32,
   sidebar_slide_armed: bool,
@@ -339,6 +340,7 @@ impl SessionPage {
       dock_open: true,
       dock_width: DOCK_PANEL_DEFAULT_WIDTH,
       dock_zoomed: false,
+      conversation_split_width: CONVERSATION_SPLIT_DEFAULT_WIDTH,
       sidebar_open: true,
       sidebar_width: SESSIONS_SIDEBAR_DEFAULT_WIDTH,
       sidebar_slide_armed: false,
@@ -691,6 +693,14 @@ impl SessionPage {
     let clamped = width.clamp(DOCK_PANEL_MIN_WIDTH, DOCK_PANEL_MAX_WIDTH);
     if (clamped - self.dock_width).abs() > f32::EPSILON {
       self.dock_width = clamped;
+      cx.notify();
+    }
+  }
+
+  fn resize_conversation_split(&mut self, width: f32, cx: &mut Context<Self>) {
+    let clamped = width.clamp(CONVERSATION_SPLIT_MIN_WIDTH, CONVERSATION_SPLIT_MAX_WIDTH);
+    if (clamped - self.conversation_split_width).abs() > f32::EPSILON {
+      self.conversation_split_width = clamped;
       cx.notify();
     }
   }

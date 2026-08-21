@@ -247,15 +247,7 @@ impl SessionPage {
           .unwrap_or_default();
         // The conversation stays alongside the diff: reviewing while the
         // agent streams is the whole point of the shell.
-        let split = ui::h_resizable("session-conversation-diff-split")
-          .child(
-            ui::resizable_panel()
-              .size(px(CONVERSATION_SPLIT_DEFAULT_WIDTH))
-              .size_range(px(CONVERSATION_SPLIT_MIN_WIDTH)..px(CONVERSATION_SPLIT_MAX_WIDTH))
-              .child(self.render_conversation(cx)),
-          )
-          .child(ui::resizable_panel().child(self.render_diff_view(window, cx)))
-          .into_any_element();
+        let split = self.render_conversation_diff_split(window, cx);
         (
           SharedString::from(format!("session-center-diff-{file}")),
           split,
@@ -272,6 +264,40 @@ impl SessionPage {
         gpui::Animation::new(std::time::Duration::from_millis(CENTER_SWAP_FADE_MS))
           .with_easing(gpui::ease_out_quint()),
         |view, delta| view.opacity(delta),
+      )
+      .into_any_element()
+  }
+
+  pub(super) fn render_conversation_diff_split(
+    &mut self,
+    window: &mut Window,
+    cx: &mut Context<Self>,
+  ) -> AnyElement {
+    let theme = cx.theme().clone();
+    h_flex()
+      .id("session-conversation-diff-split")
+      .size_full()
+      .min_w(px(0.0))
+      .min_h_0()
+      .child(
+        div()
+          .relative()
+          .flex_none()
+          .w(px(self.conversation_split_width))
+          .h_full()
+          .min_w(px(CONVERSATION_SPLIT_MIN_WIDTH))
+          .max_w(px(CONVERSATION_SPLIT_MAX_WIDTH))
+          .border_r_1()
+          .border_color(theme.border)
+          .child(self.render_conversation(cx))
+          .child(self.render_conversation_split_resize_handle(cx)),
+      )
+      .child(
+        div()
+          .flex_1()
+          .min_w(px(0.0))
+          .h_full()
+          .child(self.render_diff_view(window, cx)),
       )
       .into_any_element()
   }
@@ -578,6 +604,8 @@ impl SessionPage {
 
 pub(super) const DOCK_RESIZE_HANDLE_DEBUG_SELECTOR: &str = "session-dock-resize-handle";
 pub(super) const SIDEBAR_RESIZE_HANDLE_DEBUG_SELECTOR: &str = "session-sidebar-resize-handle";
+pub(super) const CONVERSATION_SPLIT_RESIZE_HANDLE_DEBUG_SELECTOR: &str =
+  "session-conversation-diff-resize-handle";
 
 /// Width of a collapsed side panel: just enough for its icon rail.
 pub(super) const SIDE_RAIL_WIDTH: f32 = 40.0;
@@ -588,9 +616,15 @@ enum PanelSide {
   Right,
 }
 
-/// Payload of a side-panel resize drag; the ghost renders nothing.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ResizeTarget {
+  SidePanel(PanelSide),
+  ConversationSplit,
+}
+
+/// Payload of a resize drag; the ghost renders nothing.
 #[derive(Clone)]
-struct DraggedPanel(PanelSide);
+struct DraggedPanel(ResizeTarget);
 
 impl Render for DraggedPanel {
   fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
@@ -624,10 +658,13 @@ impl SessionPage {
       .occlude()
       .cursor_col_resize()
       .hover(|this| this.bg(theme.border))
-      .on_drag(DraggedPanel(side), move |_, _, _, cx| {
-        cx.stop_propagation();
-        cx.new(|_| DraggedPanel(side))
-      })
+      .on_drag(
+        DraggedPanel(ResizeTarget::SidePanel(side)),
+        move |_, _, _, cx| {
+          cx.stop_propagation();
+          cx.new(|_| DraggedPanel(ResizeTarget::SidePanel(side)))
+        },
+      )
       .on_mouse_up(
         gpui::MouseButton::Left,
         cx.listener(move |this, event: &gpui::MouseUpEvent, _, cx| {
@@ -647,6 +684,37 @@ impl SessionPage {
       PanelSide::Right => handle.left(px(-2.0)),
     })
     .into_any_element()
+  }
+
+  fn render_conversation_split_resize_handle(&self, cx: &mut Context<Self>) -> AnyElement {
+    let theme = cx.theme().clone();
+    let handle = div()
+      .id("session-conversation-diff-resize-handle")
+      .debug_selector(|| CONVERSATION_SPLIT_RESIZE_HANDLE_DEBUG_SELECTOR.to_string())
+      .absolute()
+      .top_0()
+      .w(px(5.0))
+      .h_full()
+      .occlude()
+      .cursor_col_resize()
+      .hover(|this| this.bg(theme.border))
+      .on_drag(
+        DraggedPanel(ResizeTarget::ConversationSplit),
+        move |_, _, _, cx| {
+          cx.stop_propagation();
+          cx.new(|_| DraggedPanel(ResizeTarget::ConversationSplit))
+        },
+      )
+      .on_mouse_up(
+        gpui::MouseButton::Left,
+        cx.listener(move |this, event: &gpui::MouseUpEvent, _, cx| {
+          if event.click_count == 2 {
+            this.resize_conversation_split(CONVERSATION_SPLIT_DEFAULT_WIDTH, cx);
+            cx.stop_propagation();
+          }
+        }),
+      );
+    gpui::deferred(handle.right(px(-2.0))).into_any_element()
   }
 
   /// A side panel that slides between its width and its icon rail. The rail
@@ -898,13 +966,21 @@ impl Render for SessionPage {
       .on_action(cx.listener(Self::restore_file_action))
       .on_drag_move(cx.listener(
         |this, event: &gpui::DragMoveEvent<DraggedPanel>, window, cx| match event.drag(cx).0 {
-          PanelSide::Left => {
+          ResizeTarget::SidePanel(PanelSide::Left) => {
             this.resize_sidebar(f32::from(event.event.position.x), cx);
           }
-          PanelSide::Right => {
+          ResizeTarget::SidePanel(PanelSide::Right) => {
             // The permanent rail sits between the panel and the window edge.
             let width = window.viewport_size().width - event.event.position.x - px(SIDE_RAIL_WIDTH);
             this.resize_dock(f32::from(width), cx);
+          }
+          ResizeTarget::ConversationSplit => {
+            let center_left = if this.sidebar_open {
+              this.sidebar_width
+            } else {
+              SIDE_RAIL_WIDTH
+            };
+            this.resize_conversation_split(f32::from(event.event.position.x) - center_left, cx);
           }
         },
       ))
@@ -2754,6 +2830,58 @@ mod tests {
     assert!(
       (width - (start_width + 80.0)).abs() < 5.0,
       "dragging 80px left widens the dock: {start_width} -> {width}"
+    );
+  }
+
+  #[gpui::test]
+  async fn dragging_the_conversation_split_handle_resizes_the_chat(cx: &mut TestAppContext) {
+    let repo = TempRepo::init("session-conversation-split-drag");
+    commit_text_file(&repo.path, Path::new("README.md"), "v1\n", "initial");
+    std::fs::write(repo.path.join("README.md"), "v2\n").expect("modify file");
+    let (page, cx) = add_session_page_window(repo.path.clone(), cx);
+    cx.run_until_parked();
+
+    page.update_in(cx, |page, window, cx| {
+      page.open_diff(PathBuf::from("README.md"), None, window, cx);
+    });
+    await_open_file(&page, cx).await;
+
+    let start_width = page.read_with(cx, |page, _| page.conversation_split_width);
+    let handle = cx
+      .debug_bounds(CONVERSATION_SPLIT_RESIZE_HANDLE_DEBUG_SELECTOR)
+      .expect("conversation split resize handle");
+    let from = handle.center();
+    let to = gpui::point(from.x + px(80.0), from.y);
+
+    cx.simulate_event(gpui::MouseDownEvent {
+      position: from,
+      button: gpui::MouseButton::Left,
+      modifiers: gpui::Modifiers::default(),
+      click_count: 1,
+      first_mouse: false,
+    });
+    cx.simulate_event(gpui::MouseMoveEvent {
+      position: gpui::point(from.x + px(10.0), from.y),
+      pressed_button: Some(gpui::MouseButton::Left),
+      modifiers: gpui::Modifiers::default(),
+    });
+    cx.simulate_event(gpui::MouseMoveEvent {
+      position: to,
+      pressed_button: Some(gpui::MouseButton::Left),
+      modifiers: gpui::Modifiers::default(),
+    });
+    cx.simulate_event(gpui::MouseUpEvent {
+      position: to,
+      button: gpui::MouseButton::Left,
+      modifiers: gpui::Modifiers::default(),
+      click_count: 1,
+    });
+    cx.run_until_parked();
+
+    let width = page.read_with(cx, |page, _| page.conversation_split_width);
+    assert!(
+      (width - (start_width + 80.0)).abs() < 5.0,
+      "dragging 80px right widens the chat: {start_width} -> {width}"
     );
   }
 
