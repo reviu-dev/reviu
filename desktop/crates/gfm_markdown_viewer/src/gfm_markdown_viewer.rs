@@ -4072,16 +4072,36 @@ Apres"#,
   fn estimates_markdown_height_grows_with_longer_content() {
     let short = "Short paragraph.";
     let long = "Short paragraph. ".repeat(40);
-    let short_height = estimate_markdown_height_px_with_suggestion_context(short, 72, 20.0, None);
-    let long_height = estimate_markdown_height_px_with_suggestion_context(&long, 72, 20.0, None);
+    let short_height = estimate_markdown_height_px_with_suggestion_context(
+      short,
+      MarkdownTextMetrics::columns(72),
+      20.0,
+      None,
+    );
+    let long_height = estimate_markdown_height_px_with_suggestion_context(
+      &long,
+      MarkdownTextMetrics::columns(72),
+      20.0,
+      None,
+    );
     assert!(long_height > short_height);
   }
 
   #[test]
   fn estimates_markdown_height_respects_wrap_columns() {
     let source = "This is a long markdown line that should wrap to more visual lines when the available width is smaller.";
-    let wide = estimate_markdown_height_px_with_suggestion_context(source, 96, 20.0, None);
-    let narrow = estimate_markdown_height_px_with_suggestion_context(source, 32, 20.0, None);
+    let wide = estimate_markdown_height_px_with_suggestion_context(
+      source,
+      MarkdownTextMetrics::columns(96),
+      20.0,
+      None,
+    );
+    let narrow = estimate_markdown_height_px_with_suggestion_context(
+      source,
+      MarkdownTextMetrics::columns(32),
+      20.0,
+      None,
+    );
     assert!(narrow > wide);
   }
 
@@ -4095,7 +4115,8 @@ Apres"#,
       },
     ];
 
-    let height = estimate_blocks_height_px(&blocks, 80, 20.0, 0, None);
+    let height =
+      estimate_blocks_height_px(&blocks, MarkdownTextMetrics::columns(80), 20.0, 0, None);
     let expected = 20.0 + MARKDOWN_BASE_BLOCK_GAP_PX + MARKDOWN_HEADING_EXTRA_TOP_MARGIN_PX + 24.0;
     assert_eq!(height, expected);
   }

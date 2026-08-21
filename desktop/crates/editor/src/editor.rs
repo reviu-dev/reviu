@@ -1,4 +1,5 @@
 use std::{
+  cell::RefCell,
   collections::{HashMap, HashSet, VecDeque, hash_map::DefaultHasher},
   hash::{Hash, Hasher},
   ops::Range,
@@ -13,7 +14,7 @@ use std::{
 use buffer::TransactionId;
 use gfm_markdown_viewer::{
   GithubCodeReferencePreview, LinkAction, MarkdownRenderOptions, MarkdownRenderState,
-  ParsedMarkdown, estimate_github_code_reference_preview_height_px,
+  MarkdownTextMetrics, ParsedMarkdown, estimate_github_code_reference_preview_height_px,
   estimate_markdown_height_px_with_suggestion_context,
   estimate_parsed_markdown_height_px_with_suggestion_context, parse_markdown,
   render_github_code_reference_preview_card, render_parsed_markdown,
@@ -108,8 +109,6 @@ const REVIEW_COMMENT_MIN_WRAP_COLUMNS: usize = 28;
 const REVIEW_COMMENT_MAX_WRAP_COLUMNS: usize = 180;
 const REVIEW_COMMENT_CHAR_WIDTH_PX: f32 = 7.8;
 const REVIEW_COMMENT_FONT_SIZE_PX: f32 = 14.0;
-/// Enough of a comment to average its glyph widths without walking a novel.
-const REVIEW_COMMENT_CHAR_WIDTH_SAMPLE_LIMIT: usize = 512;
 pub(crate) const REVIEW_COMMENT_UI_FONT_FAMILY: &str = ".SystemUIFont";
 const REVIEW_COMMENT_HORIZONTAL_PADDING_PX: f32 =
   REVIEW_COMMENT_CARD_PADDING_X_PX * 2.0 + REVIEW_COMMENT_CARD_BORDER_PX * 2.0;
@@ -125,10 +124,14 @@ const REVIEW_COMMENT_CARD_RIGHT_MARGIN_PX: f32 = 8.0;
 const REVIEW_COMMENT_CARD_BOTTOM_MARGIN_PX: f32 = 6.0;
 const REVIEW_COMMENT_COMPOSER_ACTIONS_HEIGHT_PX: f32 = 24.0;
 const REVIEW_COMMENT_COMPOSER_ACTIONS_GAP_PX: f32 = 8.0;
-/// gpui-component input chrome around the text: `input_py` twice plus its border.
-const REVIEW_COMMENT_COMPOSER_TEXTAREA_VERTICAL_CHROME_PX: f32 = 18.0;
-const REVIEW_COMMENT_COMPOSER_TEXTAREA_INSET_Y_PX: f32 =
-  REVIEW_COMMENT_COMPOSER_TEXTAREA_VERTICAL_CHROME_PX / 2.0;
+/// gpui-component input chrome above and below the text: `input_py`. Borderless
+/// here, so there is nothing else to count.
+const REVIEW_COMMENT_COMPOSER_TEXTAREA_INSET_Y_PX: f32 = 8.0;
+const REVIEW_COMMENT_COMPOSER_TEXTAREA_VERTICAL_CHROME_PX: f32 =
+  REVIEW_COMMENT_COMPOSER_TEXTAREA_INSET_Y_PX * 2.0;
+/// The input lays its text out at `LINE_HEIGHT`, which is not the markdown one.
+pub(crate) const REVIEW_COMMENT_COMPOSER_LINE_HEIGHT_REMS: f32 = 1.25;
+const REVIEW_COMMENT_COMPOSER_LINE_HEIGHT_PX: f32 = 20.0;
 /// The input's own left inset before the text, `input_px` at the default size.
 const REVIEW_COMMENT_COMPOSER_TEXTAREA_INSET_PX: f32 = 10.0;
 const REVIEW_COMMENT_COMPOSER_TEXTAREA_HORIZONTAL_CHROME_PX: f32 =
@@ -291,6 +294,37 @@ fn next_review_comment_body(raw_value: &str, initial_value: &str) -> Option<Arc<
 /// The action buttons sit beside the text box, so the taller of the two rules.
 fn review_comment_composer_body_height_px(textarea_height_px: f32, chrome_height_px: f32) -> f32 {
   chrome_height_px + textarea_height_px.max(REVIEW_COMMENT_COMPOSER_ACTIONS_HEIGHT_PX)
+}
+
+/// Measures a run of the comment font in column units, the column being the sampled
+/// average width the wrap budget is counted in. Counting characters makes a run of
+/// `i` wrap as late as a run of `M`; real glyph advances do not.
+struct ReviewCommentTextMeasurer<'a> {
+  column_px: f32,
+  font_id: gpui::FontId,
+  font_size: Pixels,
+  glyph_widths: RefCell<HashMap<char, f32>>,
+  cx: &'a App,
+}
+
+impl ReviewCommentTextMeasurer<'_> {
+  fn width_in_columns(&self, text: &str) -> f32 {
+    let mut glyph_widths = self.glyph_widths.borrow_mut();
+    let total_px: f32 = text
+      .chars()
+      .map(|ch| {
+        *glyph_widths.entry(ch).or_insert_with(|| {
+          self
+            .cx
+            .text_system()
+            .advance(self.font_id, self.font_size, ch)
+            .map(|size| size.width / px(1.0))
+            .unwrap_or(self.column_px)
+        })
+      })
+      .sum();
+    total_px / self.column_px
+  }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -693,6 +727,7 @@ pub struct Editor {
   pub editor_char_width: Pixels,
   pub review_comment_char_width: Pixels,
   pub review_comment_font_size: Pixels,
+  pub review_comment_composer_line_height_px: f32,
   pub viewport_height: Pixels,
   pub viewport_width: Pixels,
   pub max_line_width: Pixels, // Maximum width of visible lines (never decreases to avoid scroll jumps)
@@ -1127,6 +1162,7 @@ impl Editor {
       editor_char_width: px(REVIEW_COMMENT_CHAR_WIDTH_PX),
       review_comment_char_width: px(REVIEW_COMMENT_CHAR_WIDTH_PX),
       review_comment_font_size: px(REVIEW_COMMENT_FONT_SIZE_PX),
+      review_comment_composer_line_height_px: REVIEW_COMMENT_COMPOSER_LINE_HEIGHT_PX,
       viewport_height: px(DEFAULT_VIEWPORT_HEIGHT), // Will be updated on first render
       viewport_width: px(DEFAULT_VIEWPORT_WIDTH),   // Will be updated on first render
       max_line_width: px(DEFAULT_MAX_LINE_WIDTH),   // Will be updated on first render
@@ -1582,33 +1618,16 @@ impl Editor {
     self.review_comment_body_wrap_columns(self.measured_review_comment_char_width() / px(1.0))
   }
 
-  /// The average glyph width of this very comment. One global average makes a run of
-  /// lowercase reserve a line too many and a run of digits a line too few.
-  fn review_comment_char_width_for_text(&self, text: &str, cx: &App) -> f32 {
-    let fallback = self.measured_review_comment_char_width() / px(1.0);
-    let font_id = cx
-      .text_system()
-      .resolve_font(&gpui::font(REVIEW_COMMENT_UI_FONT_FAMILY));
-    let mut total_px = 0.0;
-    let mut count = 0usize;
-    for ch in text
-      .chars()
-      .filter(|ch| !ch.is_control())
-      .take(REVIEW_COMMENT_CHAR_WIDTH_SAMPLE_LIMIT)
-    {
-      let Ok(size) = cx
+  fn review_comment_text_measurer<'a>(&self, cx: &'a App) -> ReviewCommentTextMeasurer<'a> {
+    ReviewCommentTextMeasurer {
+      column_px: (self.measured_review_comment_char_width() / px(1.0)).max(1.0),
+      font_id: cx
         .text_system()
-        .advance(font_id, self.review_comment_font_size, ch)
-      else {
-        continue;
-      };
-      total_px += size.width / px(1.0);
-      count += 1;
+        .resolve_font(&gpui::font(REVIEW_COMMENT_UI_FONT_FAMILY)),
+      font_size: self.review_comment_font_size,
+      glyph_widths: RefCell::new(HashMap::new()),
+      cx,
     }
-    if count == 0 {
-      return fallback;
-    }
-    (total_px / count as f32).max(1.0)
   }
 
   fn review_comment_body_wrap_columns(&self, char_width_px: f32) -> usize {
@@ -1869,7 +1888,7 @@ impl Editor {
     &self,
     comment_id: u64,
     body: &str,
-    wrap_columns: usize,
+    metrics: MarkdownTextMetrics<'_>,
     markdown_line_height_px: f32,
     suggestion_context: Option<&gfm_markdown_viewer::SuggestionContext>,
   ) -> f32 {
@@ -1885,7 +1904,7 @@ impl Editor {
           }
           markdown_height += estimate_markdown_height_px_with_suggestion_context(
             &markdown,
-            wrap_columns,
+            metrics,
             markdown_line_height_px,
             suggestion_context,
           );
@@ -1943,7 +1962,10 @@ impl Editor {
     cx: &App,
   ) -> f32 {
     let wrap_columns =
-      self.review_comment_body_wrap_columns(self.review_comment_char_width_for_text(body, cx));
+      self.review_comment_body_wrap_columns(self.measured_review_comment_char_width() / px(1.0));
+    let measurer = self.review_comment_text_measurer(cx);
+    let width_of = |text: &str| measurer.width_in_columns(text);
+    let metrics = MarkdownTextMetrics::measured(wrap_columns, &width_of);
     let entry = self.ensure_review_comment_markdown_cache_entry(comment_id, body);
     let key = (wrap_columns, markdown_line_height_px.to_bits());
     if suggestion_context.is_none()
@@ -1954,7 +1976,7 @@ impl Editor {
 
     let estimated = estimate_parsed_markdown_height_px_with_suggestion_context(
       &entry.parsed,
-      wrap_columns,
+      metrics,
       markdown_line_height_px,
       suggestion_context,
     );
@@ -2251,7 +2273,7 @@ impl Editor {
   fn review_comment_composer_textarea_height(&self, input: &Entity<TextareaState>) -> Pixels {
     px(review_comment_composer_textarea_height_px(
       self.review_comment_composer_rows_for(input),
-      self.review_comment_line_height_px,
+      self.review_comment_composer_line_height_px,
     ))
   }
 
@@ -2282,7 +2304,7 @@ impl Editor {
       .unwrap_or_else(|| {
         review_comment_composer_textarea_height_px(
           REVIEW_COMMENT_COMPOSER_MIN_ROWS,
-          self.review_comment_line_height_px,
+          self.review_comment_composer_line_height_px,
         )
       });
     review_comment_composer_body_height_px(
@@ -4657,7 +4679,7 @@ impl Editor {
                   .child(
                     h_flex()
                       .mt(px(review_comment_composer_actions_top_px(
-                        self.review_comment_line_height_px,
+                        self.review_comment_composer_line_height_px,
                       )))
                       .items_center()
                       .gap_1()
@@ -5039,7 +5061,7 @@ impl Editor {
                       .child(
                         h_flex()
                           .mt(px(review_comment_composer_actions_top_px(
-                            self.review_comment_line_height_px,
+                            self.review_comment_composer_line_height_px,
                           )))
                           .items_center()
                           .gap_1()
@@ -5309,7 +5331,7 @@ impl Editor {
                     .child(
                       h_flex()
                         .mt(px(review_comment_composer_actions_top_px(
-                          self.review_comment_line_height_px,
+                          self.review_comment_composer_line_height_px,
                         )))
                         .items_center()
                         .gap_1()
@@ -5799,11 +5821,16 @@ impl Editor {
           .get(&comment_id)
           .is_some_and(|previews| !previews.is_empty());
         if has_previews {
+          let measurer = self.review_comment_text_measurer(cx);
+          let width_of = |text: &str| measurer.width_in_columns(text);
           self.review_comment_segmented_height_px(
             comment_id,
             body.as_ref(),
-            self.review_comment_body_wrap_columns(
-              self.review_comment_char_width_for_text(body.as_ref(), cx),
+            MarkdownTextMetrics::measured(
+              self.review_comment_body_wrap_columns(
+                self.measured_review_comment_char_width() / px(1.0),
+              ),
+              &width_of,
             ),
             markdown_line_height_px,
             suggestion_context.as_ref(),
@@ -10287,23 +10314,19 @@ pub mod tests {
   }
 
   #[gpui::test]
-  fn test_a_comment_measures_its_own_glyphs(cx: &mut TestAppContext) {
+  fn test_a_comment_measures_its_own_text(cx: &mut TestAppContext) {
     let mut ctx = EditorTestContext::with_text(cx.clone(), "a");
 
     ctx.editor.update(&mut ctx.cx, |editor, cx| {
-      // The headless text system advances every glyph the same, so the widths
-      // themselves cannot be compared here; only the wiring is checked.
-      let measured = editor.review_comment_char_width_for_text("iiii", cx);
-      assert!(measured > 0.0);
+      let measurer = editor.review_comment_text_measurer(cx);
+
+      // A column is the sampled average, so an average-width run measures its length.
+      assert_eq!(measurer.width_in_columns(""), 0.0);
+      let one = measurer.width_in_columns("a");
+      assert!(one > 0.0);
       assert!(
-        editor.review_comment_body_wrap_columns(measured / 2.0)
-          > editor.review_comment_body_wrap_columns(measured),
-        "a line of narrower glyphs fits more of them"
-      );
-      // An empty body has nothing to measure and falls back to the sampled width.
-      assert_eq!(
-        editor.review_comment_char_width_for_text("", cx),
-        editor.measured_review_comment_char_width() / px(1.0)
+        (measurer.width_in_columns("aaaa") - one * 4.0).abs() < 0.01,
+        "a run must measure the sum of its glyphs"
       );
     });
   }
@@ -10427,6 +10450,7 @@ pub mod tests {
           editor_char_width: px(REVIEW_COMMENT_CHAR_WIDTH_PX),
           review_comment_char_width: px(REVIEW_COMMENT_CHAR_WIDTH_PX),
           review_comment_font_size: px(REVIEW_COMMENT_FONT_SIZE_PX),
+          review_comment_composer_line_height_px: REVIEW_COMMENT_COMPOSER_LINE_HEIGHT_PX,
           viewport_height: px(DEFAULT_VIEWPORT_HEIGHT),
           viewport_width: px(DEFAULT_VIEWPORT_WIDTH),
           max_line_width: px(DEFAULT_MAX_LINE_WIDTH),
@@ -11729,7 +11753,7 @@ pub mod tests {
       let empty_height = editor.review_comment_composer_textarea_height(&input);
       let min_height = px(review_comment_composer_textarea_height_px(
         REVIEW_COMMENT_COMPOSER_MIN_ROWS,
-        editor.review_comment_line_height_px,
+        editor.review_comment_composer_line_height_px,
       ));
 
       input.update(cx, |input, cx| {

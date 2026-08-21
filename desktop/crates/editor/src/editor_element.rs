@@ -19,7 +19,7 @@ use crate::{
   document::Document,
   editor::{
     ConflictLineKind, DEFAULT_MAX_LINE_WIDTH, DisplayCursor, Editor, GroupOverlay,
-    REVIEW_COMMENT_UI_FONT_FAMILY, ScrollAxis,
+    REVIEW_COMMENT_COMPOSER_LINE_HEIGHT_REMS, REVIEW_COMMENT_UI_FONT_FAMILY, ScrollAxis,
   },
   projection::{
     ChangeKind, DisplayLine, HunkState, NO_NEWLINE_MARKER_TEXT, Projection,
@@ -1153,6 +1153,8 @@ impl Element for EditorElement {
       editor.editor_char_width = measured_char_width;
       editor.review_comment_char_width = measured_review_comment_char_width;
       editor.review_comment_font_size = review_comment_style.font_size.to_pixels(window.rem_size());
+      editor.review_comment_composer_line_height_px =
+        (window.rem_size() * REVIEW_COMMENT_COMPOSER_LINE_HEIGHT_REMS) / px(1.0);
       editor.set_review_comment_line_height_px(
         (measured_review_comment_line_height / px(1.0)).max(1.0),
         cx,

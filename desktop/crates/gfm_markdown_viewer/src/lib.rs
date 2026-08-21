@@ -14,7 +14,7 @@ pub use gfm_markdown_viewer::{
   render_markdown, render_parsed_markdown,
 };
 pub use height_estimation::{
-  estimate_github_code_reference_preview_height_px,
+  MarkdownTextMetrics, MarkdownTextWidthFn, estimate_github_code_reference_preview_height_px,
   estimate_markdown_height_px_with_suggestion_context,
   estimate_parsed_markdown_height_px_with_suggestion_context,
 };
