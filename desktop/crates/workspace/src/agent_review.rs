@@ -52,13 +52,6 @@ pub(crate) fn agent_review_comment_spans_a_range(comment: &LocalAgentReviewComme
     .is_some_and(|start_line| start_line != comment.line)
 }
 
-pub(crate) fn agent_review_side_label(side: ReviewCommentSide) -> &'static str {
-  match side {
-    ReviewCommentSide::Left => "old",
-    ReviewCommentSide::Right => "new",
-  }
-}
-
 pub(crate) fn agent_review_state_is_copyable(state: &LocalAgentReviewCommentState) -> bool {
   matches!(
     state,
@@ -198,9 +191,11 @@ pub(crate) fn format_agent_review_export(
     output.push_str(&comment.path.to_string_lossy().replace(['\n', '\r'], ""));
     output.push(':');
     output.push_str(&agent_review_line_label(comment));
-    output.push_str(" (");
-    output.push_str(agent_review_side_label(comment.side));
-    output.push_str(" side)");
+    // The new side is the ordinary case: only a comment on removed code needs
+    // saying which side its line number belongs to.
+    if comment.side == ReviewCommentSide::Left {
+      output.push_str(" (old side)");
+    }
     output.push('\n');
     output.push_str(comment.body.trim());
     output.push('\n');
@@ -589,10 +584,27 @@ mod tests {
 
     let export = format_agent_review_export(&comments, &ReviewSend::WholeBatch);
 
-    assert!(export.contains("### src/main.rs:L2 (new side)"));
+    assert!(export.contains("### src/main.rs:L2\n"));
     assert!(export.contains("```suggestion\nlet value = shared();\n```"));
-    assert!(export.contains("### src/lib.rs:L5 (new side)"));
+    assert!(export.contains("### src/lib.rs:L5\n"));
     assert!(export.find("src/lib.rs") < export.find("src/main.rs"));
+  }
+
+  #[test]
+  fn only_a_comment_on_removed_code_spells_out_its_side() {
+    let old_side = LocalAgentReviewComment {
+      side: ReviewCommentSide::Left,
+      ..comment(
+        1,
+        1,
+        "This line went away.",
+        LocalAgentReviewCommentState::Draft,
+      )
+    };
+
+    let export = format_agent_review_export(&[old_side], &ReviewSend::WholeBatch);
+
+    assert!(export.contains("### src/main.rs:L2 (old side)"));
   }
 
   #[test]

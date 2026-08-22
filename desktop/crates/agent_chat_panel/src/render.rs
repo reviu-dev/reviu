@@ -97,8 +97,32 @@ pub(crate) fn markdown_view(
   extensions: &gpui_component::text::MarkdownExtensions,
   cx: &App,
 ) -> gpui::AnyElement {
+  markdown_text_view(id, source, extensions, false, cx)
+}
+
+/// Headings kept at body size: the review card uses them as section labels, not
+/// as document titles.
+pub(crate) fn markdown_view_with_label_headings(
+  id: impl Into<gpui::ElementId>,
+  source: &str,
+  extensions: &gpui_component::text::MarkdownExtensions,
+  cx: &App,
+) -> gpui::AnyElement {
+  markdown_text_view(id, source, extensions, true, cx)
+}
+
+fn markdown_text_view(
+  id: impl Into<gpui::ElementId>,
+  source: &str,
+  extensions: &gpui_component::text::MarkdownExtensions,
+  label_headings: bool,
+  cx: &App,
+) -> gpui::AnyElement {
   let theme = cx.theme();
   let mut style = TextViewStyle::default().paragraph_gap(gpui::rems(0.5));
+  if label_headings {
+    style = style.heading_font_size(|_, base| base);
+  }
   style.highlight_theme = theme.highlight_theme.clone();
   style.is_dark = theme.mode.is_dark();
 
@@ -2691,22 +2715,28 @@ impl AgentChatPanel {
                 .child(
                   gpui_component::Icon::new(UiIconName::MessageCircleReply)
                     .size_4()
-                    .text_color(theme.warning),
+                    .text_color(theme.muted_foreground),
                 )
                 .child(
                   div()
                     .text_xs()
                     .font_weight(gpui::FontWeight::SEMIBOLD)
-                    .text_color(theme.warning)
+                    .text_color(theme.muted_foreground)
                     .child(label),
                 ),
             )
-            .child(div().px_3().py_2().text_sm().child(markdown_view(
-              ("agent-chat-review-md", idx),
-              &m.text,
-              &self.markdown_extensions,
-              cx,
-            )))
+            .child(
+              div()
+                .px_3()
+                .py_2()
+                .text_sm()
+                .child(markdown_view_with_label_headings(
+                  ("agent-chat-review-md", idx),
+                  &m.text,
+                  &self.markdown_extensions,
+                  cx,
+                )),
+            )
             .into_any_element()
         }
       },
