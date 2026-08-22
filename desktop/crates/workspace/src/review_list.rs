@@ -304,17 +304,15 @@ impl ReviewList {
         IconName::ChevronDown
       }))
       .child(div().text_sm().text_color(theme.foreground).child(file))
-      .when(!dir.is_empty(), |this| {
-        this.child(
-          div()
-            .flex_1()
-            .min_w_0()
-            .text_xs()
-            .text_color(theme.muted_foreground)
-            .truncate()
-            .child(dir),
-        )
-      })
+      .child(
+        div()
+          .flex_1()
+          .min_w_0()
+          .text_xs()
+          .text_color(theme.muted_foreground)
+          .truncate()
+          .child(dir),
+      )
       .child(
         div()
           .text_xs()
@@ -336,7 +334,7 @@ impl ReviewList {
     h_flex()
       .id(("review-comment", comment.id as usize))
       .w_full()
-      .items_start()
+      .items_center()
       .gap_2()
       .pl_5()
       .pr_1()
