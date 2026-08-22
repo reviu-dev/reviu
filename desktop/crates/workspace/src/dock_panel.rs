@@ -429,6 +429,7 @@ pub struct DockPanel {
   pr_selected_file: Option<PathBuf>,
   pr_checks: Option<GithubPullRequestChecksSummary>,
   pr_reviewers: Vec<ReviewerRow>,
+  pr_checks_loading: bool,
   /// Collapsed by default: the file list is what you work in.
   pr_details_expanded: bool,
   _pr_range_task: Option<Task<()>>,
@@ -550,6 +551,7 @@ impl DockPanel {
       pr_selected_file: None,
       pr_checks: None,
       pr_reviewers: Vec::new(),
+      pr_checks_loading: false,
       pr_details_expanded: false,
       _pr_range_task: None,
       _pr_checks_task: None,
@@ -688,11 +690,7 @@ impl DockPanel {
       let _ = this.update(cx, |this, cx| {
         let found_pull_request = matches!(state, BranchPrState::Found(_, _));
         this.branch_pr = state;
-        this.pr_range = None;
-        this.pr_files = Vec::new();
-        this.pr_files_error = None;
-        this.pr_selected_file = None;
-        this.pr_reviewers = Vec::new();
+        this.reset_pull_request_details();
         if found_pull_request {
           this.load_pull_request_range(cx);
           this.load_pull_request_checks(cx);
@@ -759,6 +757,18 @@ impl DockPanel {
     self._pr_range_task = Some(task);
   }
 
+  /// Everything the panel knows about one pull request. Another branch means
+  /// another pull request, and stale checks read as this one's.
+  fn reset_pull_request_details(&mut self) {
+    self.pr_range = None;
+    self.pr_files = Vec::new();
+    self.pr_files_error = None;
+    self.pr_selected_file = None;
+    self.pr_reviewers = Vec::new();
+    self.pr_checks = None;
+    self.pr_checks_loading = false;
+  }
+
   fn load_pull_request_checks(&mut self, cx: &mut Context<Self>) {
     let BranchPrState::Found(context, pull_request) = &self.branch_pr else {
       return;
@@ -768,11 +778,13 @@ impl DockPanel {
     let number = pull_request.number;
     let api = WorkspaceApi::global(cx).api.clone();
 
+    self.pr_checks_loading = true;
     let task = cx.spawn(async move |this, cx| {
       let checks = cx
         .background_spawn(async move { api.fetch_pull_request_checks(&owner, &repo, number) })
         .await;
       let _ = this.update(cx, |this, cx| {
+        this.pr_checks_loading = false;
         this.pr_checks = checks.ok();
         cx.notify();
       });
@@ -1581,7 +1593,7 @@ impl DockPanel {
       .pr_checks
       .as_ref()
       .filter(|checks| checks.total_checks > 0 || !checks.missing_required_contexts.is_empty());
-    if checks.is_none() && self.pr_reviewers.is_empty() {
+    if checks.is_none() && self.pr_reviewers.is_empty() && !self.pr_checks_loading {
       return div().into_any_element();
     }
 
@@ -1629,8 +1641,12 @@ impl DockPanel {
                 .flex_1()
                 .min_w_0()
                 .text_sm()
-                .text_color(theme.foreground)
-                .child(reviewers_summary_title(&self.pr_reviewers)),
+                .text_color(theme.muted_foreground)
+                .child(if self.pr_checks_loading {
+                  "Loading checks...".to_string()
+                } else {
+                  reviewers_summary_title(&self.pr_reviewers)
+                }),
             )
           })
           // Closed, the avatars still say who has answered.
@@ -2337,6 +2353,58 @@ mod tests {
     assert!(
       cx.debug_bounds(DOCK_PANEL_PR_CHECKS_DEBUG_SELECTOR)
         .is_none()
+    );
+  }
+
+  #[gpui::test]
+  async fn another_branch_leaves_none_of_the_previous_pull_request_behind(cx: &mut TestAppContext) {
+    let (panel, cx) = pull_request_panel(
+      cx,
+      vec![changed_file(
+        "src/main.rs",
+        git::CommitFileChangeKind::Modified,
+      )],
+    );
+    panel.update(cx, |panel, cx| {
+      panel.pr_checks = Some(crate::github_pr_details_page::test_support::make_checks_summary());
+      panel.pr_reviewers = vec![ReviewerRow {
+        login: "ada".to_string(),
+        avatar_url: None,
+        status: ReviewerStatus::Approved,
+      }];
+      panel.pr_selected_file = Some(PathBuf::from("src/main.rs"));
+      cx.notify();
+    });
+    cx.run_until_parked();
+
+    panel.update(cx, |panel, _| panel.reset_pull_request_details());
+
+    // Nothing of the previous pull request may read as this one's.
+    panel.read_with(cx, |panel, _| {
+      assert!(panel.pr_checks.is_none());
+      assert!(panel.pr_range.is_none());
+      assert!(panel.pr_files.is_empty());
+      assert!(panel.pr_reviewers.is_empty());
+      assert!(panel.pr_selected_file.is_none());
+      assert!(panel.pr_files_error.is_none());
+      assert!(!panel.pr_checks_loading);
+    });
+  }
+
+  #[gpui::test]
+  async fn the_checks_say_they_are_loading_instead_of_vanishing(cx: &mut TestAppContext) {
+    let (panel, cx) = pull_request_panel(cx, Vec::new());
+    panel.update(cx, |panel, cx| {
+      panel.pr_checks = None;
+      panel.pr_checks_loading = true;
+      cx.notify();
+    });
+    cx.run_until_parked();
+
+    // The block holds its line, so the file list below does not jump.
+    assert!(
+      cx.debug_bounds(DOCK_PANEL_PR_CHECKS_DEBUG_SELECTOR)
+        .is_some()
     );
   }
 
