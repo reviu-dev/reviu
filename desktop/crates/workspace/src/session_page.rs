@@ -28,6 +28,7 @@ use crate::agent_review::{
   AgentReviewComments, ReviewSend, original_lines_for_request, sync_comments_to_editor,
 };
 use crate::agent_review_store::{read_review, review_path_for_repo, write_review};
+use crate::review_destination::{AgentReviewHandlers, ReviewDestination, configure_review};
 use crate::agent_settings::AgentSettings;
 use crate::auth_state::AuthStateStore;
 use crate::config::ConfigStore;

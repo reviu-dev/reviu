@@ -239,7 +239,7 @@ pub type ReviewCommentPreviewRenderer = Arc<
     &mut App,
   ) -> gpui::AnyElement,
 >;
-type ReviewCommentAssetUrlResolver = Arc<dyn Fn(&str) -> Option<String> + Send + Sync>;
+pub type ReviewCommentAssetUrlResolver = Arc<dyn Fn(&str) -> Option<String> + Send + Sync>;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ReviewCommentCodeReferencePreview {

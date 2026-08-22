@@ -334,69 +334,73 @@ impl SessionPage {
     cx: &mut Context<Self>,
   ) {
     let view = cx.entity().downgrade();
-    editor.update(cx, |editor, cx| {
-      let create_handler: ReviewCommentCreateHandler = Arc::new({
+    let create: ReviewCommentCreateHandler = Arc::new({
+      let view = view.clone();
+      move |request, window, _cx| {
         let view = view.clone();
-        move |request, window, _cx| {
-          let view = view.clone();
-          window.on_next_frame(move |window, cx| {
-            let _ = view.update(cx, |this, cx| {
-              this.create_agent_review_comment(request, window, cx);
-            });
+        window.on_next_frame(move |window, cx| {
+          let _ = view.update(cx, |this, cx| {
+            this.create_agent_review_comment(request, window, cx);
           });
-        }
-      });
-      editor.set_review_comment_create_handler(Some(create_handler), cx);
-      editor.set_review_comment_replies_enabled(false, cx);
-      editor.set_review_comment_display_mode(ReviewCommentDisplayMode::LocalNote, cx);
-
-      let cancel_handler: ReviewCommentCancelHandler = Arc::new({
-        let view = view.clone();
-        move |window, cx| {
-          let _ = view.update(cx, |this, cx| this.focus_page_on_next_frame(window, cx));
-        }
-      });
-      editor.set_review_comment_cancel_handler(Some(cancel_handler), cx);
-
-      let edit_handler: ReviewCommentEditHandler = Arc::new({
-        let view = view.clone();
-        move |comment_id, body, window, _cx| {
-          let view = view.clone();
-          window.on_next_frame(move |window, cx| {
-            let _ = view.update(cx, |this, cx| {
-              this.update_agent_review_comment(comment_id, body, window, cx);
-            });
-          });
-        }
-      });
-      editor.set_review_comment_edit_handler(Some(edit_handler), cx);
-
-      let delete_handler: ReviewCommentDeleteHandler = Arc::new({
-        let view = view.clone();
-        move |comment_id, window, _cx| {
-          let view = view.clone();
-          window.on_next_frame(move |_window, cx| {
-            let _ = view.update(cx, |this, cx| {
-              this.delete_agent_review_comment(comment_id, cx);
-            });
-          });
-        }
-      });
-      editor.set_review_comment_delete_handler(Some(delete_handler), cx);
-
-      let send_handler: ReviewCommentSendHandler = Arc::new({
-        let view = view.clone();
-        move |comment_id, window, _cx| {
-          let view = view.clone();
-          window.on_next_frame(move |window, cx| {
-            let _ = view.update(cx, |this, cx| {
-              this.send_agent_review_comment_to_agent(comment_id, window, cx);
-            });
-          });
-        }
-      });
-      editor.set_review_comment_send_handler(Some(send_handler), cx);
+        });
+      }
     });
+
+    // The composer is gone on the next frame; the page resolves focus to the diff.
+    let cancel: ReviewCommentCancelHandler = Arc::new({
+      let view = view.clone();
+      move |window, cx| {
+        let _ = view.update(cx, |this, cx| this.focus_page_on_next_frame(window, cx));
+      }
+    });
+
+    let edit: ReviewCommentEditHandler = Arc::new({
+      let view = view.clone();
+      move |comment_id, body, window, _cx| {
+        let view = view.clone();
+        window.on_next_frame(move |window, cx| {
+          let _ = view.update(cx, |this, cx| {
+            this.update_agent_review_comment(comment_id, body, window, cx);
+          });
+        });
+      }
+    });
+
+    let delete: ReviewCommentDeleteHandler = Arc::new({
+      let view = view.clone();
+      move |comment_id, window, _cx| {
+        let view = view.clone();
+        window.on_next_frame(move |_window, cx| {
+          let _ = view.update(cx, |this, cx| {
+            this.delete_agent_review_comment(comment_id, cx);
+          });
+        });
+      }
+    });
+
+    let send: ReviewCommentSendHandler = Arc::new({
+      let view = view.clone();
+      move |comment_id, window, _cx| {
+        let view = view.clone();
+        window.on_next_frame(move |window, cx| {
+          let _ = view.update(cx, |this, cx| {
+            this.send_agent_review_comment_to_agent(comment_id, window, cx);
+          });
+        });
+      }
+    });
+
+    configure_review(
+      editor,
+      ReviewDestination::Agent(Box::new(AgentReviewHandlers {
+        create,
+        edit,
+        delete,
+        cancel,
+        send,
+      })),
+      cx,
+    );
   }
 
   pub(super) fn create_agent_review_comment(

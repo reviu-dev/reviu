@@ -1,0 +1,113 @@
+//! Where a comment written on a diff goes, and what the diff offers because of
+//! it. One place decides the whole capability set, so the two review flows
+//! cannot quietly drift apart as the editor grows knobs.
+
+use std::collections::HashMap;
+
+use editor::{
+  Editor, ReviewCommentAssetUrlResolver, ReviewCommentCancelHandler, ReviewCommentCreateHandler,
+  ReviewCommentDeleteHandler, ReviewCommentDisplayMode, ReviewCommentEditHandler,
+  ReviewCommentImageUploadHandler, ReviewCommentLinkHandler, ReviewCommentPreviewRenderer,
+  ReviewCommentResolveHandler, ReviewCommentSendHandler, ReviewCommentSuggestionActionFactory,
+};
+use gpui::{App, Entity};
+
+/// Comments addressed to the agent. No threads and no resolution: they are
+/// instructions, and a completed turn takes them away.
+pub(crate) struct AgentReviewHandlers {
+  pub create: ReviewCommentCreateHandler,
+  pub edit: ReviewCommentEditHandler,
+  pub delete: ReviewCommentDeleteHandler,
+  pub cancel: ReviewCommentCancelHandler,
+  pub send: ReviewCommentSendHandler,
+}
+
+/// Comments of a pull request review. They thread, they resolve, and they
+/// outlive the session, so the card carries far more than the agent's does.
+pub(crate) struct GithubReviewHandlers {
+  pub create: ReviewCommentCreateHandler,
+  pub edit: ReviewCommentEditHandler,
+  pub delete: ReviewCommentDeleteHandler,
+  pub cancel: ReviewCommentCancelHandler,
+  pub resolve: ReviewCommentResolveHandler,
+  pub link: ReviewCommentLinkHandler,
+  pub image_upload: ReviewCommentImageUploadHandler,
+  pub asset_url_resolver: ReviewCommentAssetUrlResolver,
+  pub preview_renderer: ReviewCommentPreviewRenderer,
+  pub suggestion_action_factory: ReviewCommentSuggestionActionFactory,
+}
+
+pub(crate) enum ReviewDestination {
+  Agent(Box<AgentReviewHandlers>),
+  Github(Box<GithubReviewHandlers>),
+  /// This editor takes no comments: the handlers go, and so does what was
+  /// already on it.
+  None,
+}
+
+/// Installs everything a destination offers and clears everything it does not.
+pub(crate) fn configure_review(
+  editor: &Entity<Editor>,
+  destination: ReviewDestination,
+  cx: &mut App,
+) {
+  editor.update(cx, |editor, cx| match destination {
+    ReviewDestination::Agent(handlers) => {
+      editor.set_review_comment_display_mode(ReviewCommentDisplayMode::LocalNote, cx);
+      editor.set_review_comment_replies_enabled(false, cx);
+      editor.set_review_comment_create_handler(Some(handlers.create), cx);
+      editor.set_review_comment_edit_handler(Some(handlers.edit), cx);
+      editor.set_review_comment_delete_handler(Some(handlers.delete), cx);
+      editor.set_review_comment_cancel_handler(Some(handlers.cancel), cx);
+      editor.set_review_comment_send_handler(Some(handlers.send), cx);
+      // Nothing to resolve, no GitHub assets to fetch, no pull request to
+      // belong to.
+      editor.set_review_comment_resolve_handler(None, cx);
+      editor.set_review_comment_link_handler(None, cx);
+      editor.set_review_comment_image_upload_handler(None, cx);
+      editor.set_review_comment_asset_url_resolver(None, cx);
+      editor.set_review_comment_preview_renderer(None, cx);
+      editor.set_review_comment_suggestion_action_factory(None, cx);
+      editor.set_review_comment_pr_number(None, cx);
+    }
+    ReviewDestination::Github(handlers) => {
+      editor.set_review_comment_display_mode(ReviewCommentDisplayMode::Conversation, cx);
+      editor.set_review_comment_replies_enabled(true, cx);
+      editor.set_review_comment_create_handler(Some(handlers.create), cx);
+      editor.set_review_comment_edit_handler(Some(handlers.edit), cx);
+      editor.set_review_comment_delete_handler(Some(handlers.delete), cx);
+      editor.set_review_comment_cancel_handler(Some(handlers.cancel), cx);
+      editor.set_review_comment_resolve_handler(Some(handlers.resolve), cx);
+      editor.set_review_comment_link_handler(Some(handlers.link), cx);
+      editor.set_review_comment_image_upload_handler(Some(handlers.image_upload), cx);
+      editor.set_review_comment_asset_url_resolver(Some(handlers.asset_url_resolver), cx);
+      editor.set_review_comment_preview_renderer(Some(handlers.preview_renderer), cx);
+      editor.set_review_comment_suggestion_action_factory(
+        Some(handlers.suggestion_action_factory),
+        cx,
+      );
+      // There is no agent on this side to send a comment to.
+      editor.set_review_comment_send_handler(None, cx);
+      editor.set_sendable_review_comment_ids(std::iter::empty::<u64>(), cx);
+    }
+    ReviewDestination::None => {
+      editor.set_review_comment_display_mode(ReviewCommentDisplayMode::Conversation, cx);
+      editor.set_review_comment_create_handler(None, cx);
+      editor.set_review_comment_edit_handler(None, cx);
+      editor.set_review_comment_delete_handler(None, cx);
+      editor.set_review_comment_cancel_handler(None, cx);
+      editor.set_review_comment_send_handler(None, cx);
+      editor.set_review_comment_resolve_handler(None, cx);
+      editor.set_review_comment_link_handler(None, cx);
+      editor.set_review_comment_image_upload_handler(None, cx);
+      editor.set_review_comment_asset_url_resolver(None, cx);
+      editor.set_review_comment_preview_renderer(None, cx);
+      editor.set_review_comment_suggestion_action_factory(None, cx);
+      editor.set_review_comment_pr_number(None, cx);
+      editor.set_editable_review_comment_ids(std::iter::empty::<u64>(), cx);
+      editor.set_sendable_review_comment_ids(std::iter::empty::<u64>(), cx);
+      editor.set_review_comments(Vec::new(), cx);
+      editor.set_review_comment_code_reference_previews(HashMap::new(), cx);
+    }
+  });
+}
