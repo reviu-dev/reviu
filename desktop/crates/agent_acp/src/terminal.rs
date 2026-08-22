@@ -218,9 +218,37 @@ fn exit_parts(status: std::process::ExitStatus) -> (Option<u32>, Option<String>)
   (code, signal)
 }
 
+const GIT_COLOR_CONFIG_KEYS: &[&str] = &[
+  "color.ui",
+  "color.diff",
+  "color.status",
+  "color.branch",
+  "color.grep",
+  "color.interactive",
+];
+
+fn git_color_config_env(inherited_count: Option<&str>) -> Vec<(String, String)> {
+  let index = inherited_count
+    .and_then(|count| count.parse::<usize>().ok())
+    .unwrap_or(0);
+  let mut env = Vec::with_capacity(1 + GIT_COLOR_CONFIG_KEYS.len() * 2);
+  env.push((
+    "GIT_CONFIG_COUNT".to_string(),
+    (index + GIT_COLOR_CONFIG_KEYS.len()).to_string(),
+  ));
+  for (offset, key) in GIT_COLOR_CONFIG_KEYS.iter().enumerate() {
+    let index = index + offset;
+    env.push((format!("GIT_CONFIG_KEY_{index}"), (*key).to_string()));
+    env.push((format!("GIT_CONFIG_VALUE_{index}"), "always".to_string()));
+  }
+  env
+}
+
 pub(crate) fn apply_color_env(cmd: &mut async_process::Command) {
   // Piped stdio is not a TTY, so tools silence their colors; these opt-ins
   // bring them back for the terminal cards. The agent's env still overrides.
+  let inherited_git_config_count = std::env::var("GIT_CONFIG_COUNT").ok();
+  let git_color_env = git_color_config_env(inherited_git_config_count.as_deref());
   cmd.env_remove("NO_COLOR");
   cmd.env("TERM", "xterm-256color");
   cmd.env("COLORTERM", "truecolor");
@@ -228,6 +256,7 @@ pub(crate) fn apply_color_env(cmd: &mut async_process::Command) {
   cmd.env("CLICOLOR_FORCE", "1");
   cmd.env("FORCE_COLOR", "1");
   cmd.env("CARGO_TERM_COLOR", "always");
+  cmd.envs(git_color_env);
 }
 
 /// Spawn the requested command and stream its output into the store. The
@@ -364,6 +393,30 @@ mod tests {
     );
   }
 
+  #[test]
+  fn git_color_config_starts_a_runtime_config_when_none_exists() {
+    let env = git_color_config_env(None);
+    assert_eq!(
+      env.first(),
+      Some(&("GIT_CONFIG_COUNT".to_string(), "6".to_string()))
+    );
+    assert!(env.contains(&("GIT_CONFIG_KEY_0".to_string(), "color.ui".to_string())));
+    assert!(env.contains(&("GIT_CONFIG_VALUE_0".to_string(), "always".to_string())));
+    assert!(env.contains(&("GIT_CONFIG_KEY_1".to_string(), "color.diff".to_string())));
+    assert!(env.contains(&("GIT_CONFIG_VALUE_1".to_string(), "always".to_string())));
+  }
+
+  #[test]
+  fn git_color_config_appends_to_an_existing_runtime_config() {
+    let env = git_color_config_env(Some("2"));
+    assert_eq!(
+      env.first(),
+      Some(&("GIT_CONFIG_COUNT".to_string(), "8".to_string()))
+    );
+    assert!(env.contains(&("GIT_CONFIG_KEY_2".to_string(), "color.ui".to_string())));
+    assert!(env.contains(&("GIT_CONFIG_KEY_3".to_string(), "color.diff".to_string())));
+  }
+
   #[cfg(unix)]
   #[test]
   fn spawned_commands_get_the_color_forcing_env() {
@@ -391,6 +444,45 @@ mod tests {
     let snap = store.snapshot("t").expect("entry");
     assert!(snap.finished, "the probe command finished");
     assert_eq!(snap.output, "always:1:1:xterm-256color:truecolor:1:unset");
+  }
+
+  #[cfg(unix)]
+  #[test]
+  fn git_commands_get_color_config_always() {
+    let git_exists = std::process::Command::new("git")
+      .arg("--version")
+      .stdout(std::process::Stdio::null())
+      .stderr(std::process::Stdio::null())
+      .status()
+      .is_ok_and(|status| status.success());
+    if !git_exists {
+      return;
+    }
+
+    let (tx, _rx) = async_channel::unbounded();
+    let store = Arc::new(TerminalStore::new(tx));
+    spawn_terminal(
+      &store,
+      "t".to_string(),
+      "sh".to_string(),
+      vec![
+        "-c".to_string(),
+        "git config --get color.ui && git config --get color.diff".to_string(),
+      ],
+      Vec::new(),
+      std::env::current_dir().expect("cwd"),
+      None,
+    )
+    .expect("spawns");
+    for _ in 0..250 {
+      if store.snapshot("t").is_some_and(|s| s.finished) {
+        break;
+      }
+      std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+    let snap = store.snapshot("t").expect("entry");
+    assert!(snap.finished, "the probe command finished");
+    assert_eq!(snap.output, "always\nalways\n");
   }
 
   #[cfg(unix)]
