@@ -10,6 +10,12 @@ The comments you leave on a diff now have a home: a Review tab in the right pane
 
 Sending happens from that panel too, next to a Discard button that clears the review after a confirmation. The diff header keeps only the tools you use while reading. When the panel is closed a dot on its rail icon says a review is waiting, `cmd-shift-a` still sends, and the command palette gained "Send review to agent" and "Discard review". The Changes icon wears the same dot when the working tree has something in it.
 
+### Send Part Of A Review
+
+A review no longer has to go out all at once. Tick the comments you want in the Review panel, or a whole file in one click, and Send carries only those. Leave everything unticked and it still sends the whole batch, so nothing is ever lost by not choosing; "Select all" gives you the other way round, starting from everything so you can untick the two you want to keep for later.
+
+Single comments also carry a send arrow, both on their row in the panel and on their card in the diff, for putting the agent back on one comment without resending the other four. Whatever stays behind stays a draft and goes with the next send.
+
 ### A Calm CPU While The Agent Works
 
 A busy agent session no longer drives the app to 100% CPU. Reviu used to rewrite the whole conversation to disk and re-read every conversation in the sidebar for each streamed chunk; transcripts now save on a short throttle (and always at turn boundaries, on switch and on quit), the sidebar updates from memory, and bursts of agent output collapse into a single UI update. Long sessions stay smooth from start to finish.

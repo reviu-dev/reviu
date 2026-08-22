@@ -83,6 +83,9 @@ pub enum DockPanelEvent {
   DeleteReviewComment {
     id: u64,
   },
+  SendReviewComment {
+    id: u64,
+  },
   SendReview,
   DiscardReview,
 }
@@ -301,6 +304,9 @@ impl DockPanel {
         }
         ReviewListEvent::DeleteComment { id } => {
           cx.emit(DockPanelEvent::DeleteReviewComment { id: *id });
+        }
+        ReviewListEvent::SendComment { id } => {
+          cx.emit(DockPanelEvent::SendReviewComment { id: *id });
         }
         ReviewListEvent::SendReview => cx.emit(DockPanelEvent::SendReview),
         ReviewListEvent::DiscardReview => cx.emit(DockPanelEvent::DiscardReview),

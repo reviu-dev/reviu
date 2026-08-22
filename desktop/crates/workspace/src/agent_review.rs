@@ -59,11 +59,44 @@ pub(crate) fn agent_review_side_label(side: ReviewCommentSide) -> &'static str {
   }
 }
 
-pub(crate) fn agent_review_comment_is_copyable(comment: &LocalAgentReviewComment) -> bool {
+pub(crate) fn agent_review_state_is_copyable(state: &LocalAgentReviewCommentState) -> bool {
   matches!(
-    comment.state,
+    state,
     LocalAgentReviewCommentState::Draft | LocalAgentReviewCommentState::Copied
   )
+}
+
+pub(crate) fn agent_review_comment_is_copyable(comment: &LocalAgentReviewComment) -> bool {
+  agent_review_state_is_copyable(&comment.state)
+}
+
+/// Which comments a send covers. The panel's empty selection means the whole
+/// batch: `Send` never sends nothing.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum ReviewSend {
+  WholeBatch,
+  Only(HashSet<u64>),
+}
+
+impl ReviewSend {
+  pub(crate) fn from_selection(selection: HashSet<u64>) -> Self {
+    if selection.is_empty() {
+      Self::WholeBatch
+    } else {
+      Self::Only(selection)
+    }
+  }
+
+  pub(crate) fn one(comment_id: u64) -> Self {
+    Self::Only(HashSet::from([comment_id]))
+  }
+
+  fn covers(&self, comment: &LocalAgentReviewComment) -> bool {
+    match self {
+      Self::WholeBatch => true,
+      Self::Only(ids) => ids.contains(&comment.id),
+    }
+  }
 }
 
 /// An addressed comment has nothing left to say; an outdated one still does,
@@ -140,10 +173,13 @@ pub(crate) fn next_agent_review_comment_state(
   LocalAgentReviewCommentState::Copied
 }
 
-pub(crate) fn format_agent_review_export(comments: &[LocalAgentReviewComment]) -> String {
+pub(crate) fn format_agent_review_export(
+  comments: &[LocalAgentReviewComment],
+  send: &ReviewSend,
+) -> String {
   let mut comments = comments
     .iter()
-    .filter(|comment| agent_review_comment_is_copyable(comment))
+    .filter(|comment| agent_review_comment_is_copyable(comment) && send.covers(comment))
     .collect::<Vec<_>>();
   comments.sort_by(|a, b| {
     a.path
@@ -203,6 +239,14 @@ impl AgentReviewComments {
       .comments
       .iter()
       .filter(|comment| agent_review_comment_is_copyable(comment))
+      .count()
+  }
+
+  pub(crate) fn sendable_count(&self, send: &ReviewSend) -> usize {
+    self
+      .comments
+      .iter()
+      .filter(|comment| agent_review_comment_is_copyable(comment) && send.covers(comment))
       .count()
   }
 
@@ -319,15 +363,16 @@ impl AgentReviewComments {
     changed
   }
 
-  pub(crate) fn export(&self) -> String {
-    format_agent_review_export(&self.comments)
+  pub(crate) fn export(&self, send: &ReviewSend) -> String {
+    format_agent_review_export(&self.comments, send)
   }
 
-  /// Marks every copyable comment as copied and returns how many were marked.
-  pub(crate) fn mark_copyable_as_copied(&mut self) -> usize {
+  /// Marks the sent comments as copied and returns how many were marked. What
+  /// stayed behind is still a draft, and goes with the next send.
+  pub(crate) fn mark_as_copied(&mut self, send: &ReviewSend) -> usize {
     let mut marked = 0;
     for comment in &mut self.comments {
-      if agent_review_comment_is_copyable(comment) {
+      if agent_review_comment_is_copyable(comment) && send.covers(comment) {
         comment.state = LocalAgentReviewCommentState::Copied;
         marked += 1;
       }
@@ -542,7 +587,7 @@ mod tests {
       ),
     ];
 
-    let export = format_agent_review_export(&comments);
+    let export = format_agent_review_export(&comments, &ReviewSend::WholeBatch);
 
     assert!(export.contains("### src/main.rs:L2 (new side)"));
     assert!(export.contains("```suggestion\nlet value = shared();\n```"));
@@ -591,6 +636,75 @@ mod tests {
   }
 
   #[test]
+  fn a_selection_sends_only_what_it_names() {
+    let comments = vec![
+      comment(1, 1, "First.", LocalAgentReviewCommentState::Draft),
+      comment(2, 3, "Second.", LocalAgentReviewCommentState::Draft),
+    ];
+
+    let export = format_agent_review_export(&comments, &ReviewSend::one(2));
+
+    assert!(!export.contains("First."));
+    assert!(export.contains("Second."));
+  }
+
+  #[test]
+  fn an_empty_selection_stands_for_the_whole_batch() {
+    let comments = vec![
+      comment(1, 1, "First.", LocalAgentReviewCommentState::Draft),
+      comment(2, 3, "Second.", LocalAgentReviewCommentState::Draft),
+    ];
+
+    let send = ReviewSend::from_selection(HashSet::new());
+
+    assert_eq!(send, ReviewSend::WholeBatch);
+    let export = format_agent_review_export(&comments, &send);
+    assert!(export.contains("First."));
+    assert!(export.contains("Second."));
+  }
+
+  #[test]
+  fn what_stayed_behind_is_still_a_draft() {
+    let mut comments = AgentReviewComments::new();
+    let first = comments
+      .create(
+        &create_request(0, "first"),
+        Some(Path::new("src/main.rs")),
+        (None, Vec::new()),
+      )
+      .expect("create first");
+    comments
+      .create(
+        &create_request(2, "second"),
+        Some(Path::new("src/main.rs")),
+        (None, Vec::new()),
+      )
+      .expect("create second");
+
+    let send = ReviewSend::one(first);
+    assert_eq!(comments.sendable_count(&send), 1);
+    assert_eq!(comments.mark_as_copied(&send), 1);
+
+    let stored = comments.all();
+    assert_eq!(stored[0].state, LocalAgentReviewCommentState::Copied);
+    assert_eq!(stored[1].state, LocalAgentReviewCommentState::Draft);
+    // The whole batch is still sendable: one copied, one never sent.
+    assert_eq!(comments.copyable_count(), 2);
+  }
+
+  #[test]
+  fn a_selection_never_sends_what_the_agent_already_addressed() {
+    let comments = vec![
+      comment(1, 1, "Done.", LocalAgentReviewCommentState::Addressed),
+      comment(2, 3, "Stale.", LocalAgentReviewCommentState::Outdated),
+    ];
+
+    let send = ReviewSend::Only(HashSet::from([1, 2]));
+
+    assert_eq!(format_agent_review_export(&comments, &send), "");
+  }
+
+  #[test]
   fn format_agent_review_export_skips_addressed_and_outdated_comments() {
     let comments = vec![
       comment(1, 1, "Still active.", LocalAgentReviewCommentState::Copied),
@@ -603,7 +717,7 @@ mod tests {
       comment(3, 5, "Stale.", LocalAgentReviewCommentState::Outdated),
     ];
 
-    let export = format_agent_review_export(&comments);
+    let export = format_agent_review_export(&comments, &ReviewSend::WholeBatch);
 
     assert!(export.contains("Still active."));
     assert!(!export.contains("Already fixed."));
@@ -696,7 +810,7 @@ mod tests {
       .expect("create comment");
 
     // Drafts are frozen until they are sent, so send them first.
-    comments.mark_copyable_as_copied();
+    comments.mark_as_copied(&ReviewSend::WholeBatch);
 
     let changed = comments.refresh_states(
       Path::new("src/main.rs"),
@@ -721,7 +835,7 @@ mod tests {
       .expect("create comment");
 
     assert_eq!(comments.copyable_count(), 1);
-    assert_eq!(comments.mark_copyable_as_copied(), 1);
+    assert_eq!(comments.mark_as_copied(&ReviewSend::WholeBatch), 1);
     assert_eq!(
       comments.all()[0].state,
       LocalAgentReviewCommentState::Copied
@@ -809,7 +923,7 @@ mod tests {
         (Some(1), vec!["let value = custom();".to_string()]),
       )
       .expect("create comment");
-    comments.mark_copyable_as_copied();
+    comments.mark_as_copied(&ReviewSend::WholeBatch);
 
     // The agent rewrote the line into something else: the comment lost its anchor.
     comments.refresh_states(
@@ -842,7 +956,7 @@ mod tests {
         (Some(1), vec!["let value = custom();".to_string()]),
       )
       .expect("create comment");
-    comments.mark_copyable_as_copied();
+    comments.mark_as_copied(&ReviewSend::WholeBatch);
 
     // The agent applied the suggestion.
     comments.refresh_states(

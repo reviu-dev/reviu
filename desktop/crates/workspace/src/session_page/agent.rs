@@ -389,6 +389,19 @@ impl SessionPage {
         }
       });
       editor.set_review_comment_delete_handler(Some(delete_handler), cx);
+
+      let send_handler: ReviewCommentSendHandler = Arc::new({
+        let view = view.clone();
+        move |comment_id, window, _cx| {
+          let view = view.clone();
+          window.on_next_frame(move |window, cx| {
+            let _ = view.update(cx, |this, cx| {
+              this.send_agent_review_comment_to_agent(comment_id, window, cx);
+            });
+          });
+        }
+      });
+      editor.set_review_comment_send_handler(Some(send_handler), cx);
     });
   }
 
@@ -483,12 +496,21 @@ impl SessionPage {
   /// the diff drops those, the review is where you see they were dealt with.
   pub(super) fn sync_review_panel(&mut self, cx: &mut Context<Self>) {
     let comments = review_panel_comments(self.agent_review.all());
-    let sendable = self.agent_review.copyable_count();
     self.dock_panel.update(cx, |panel, cx| {
       panel
         .review_list
-        .update(cx, |list, cx| list.set_comments(comments, sendable, cx));
+        .update(cx, |list, cx| list.set_comments(comments, cx));
     });
+  }
+
+  fn review_panel_selection(&self, cx: &App) -> HashSet<u64> {
+    self
+      .dock_panel
+      .read(cx)
+      .review_list
+      .read(cx)
+      .selected_ids()
+      .clone()
   }
 
   /// Discarding is not undoable, and the batch is not persisted anywhere.
@@ -532,15 +554,34 @@ impl SessionPage {
     self.agent_review.copyable_count()
   }
 
+  /// The panel's ticks decide what goes; nothing ticked sends the whole batch.
   pub(super) fn send_agent_review_to_agent(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    let send = ReviewSend::from_selection(self.review_panel_selection(cx));
+    self.send_agent_review(send, window, cx);
+  }
+
+  pub(super) fn send_agent_review_comment_to_agent(
+    &mut self,
+    comment_id: u64,
+    window: &mut Window,
+    cx: &mut Context<Self>,
+  ) {
+    self.send_agent_review(ReviewSend::one(comment_id), window, cx);
+  }
+
+  fn send_agent_review(&mut self, send: ReviewSend, window: &mut Window, cx: &mut Context<Self>) {
     self.sync_agent_review_comments_to_editor(cx);
 
-    if self.agent_review.copyable_count() == 0 {
+    if self.agent_review.sendable_count(&send) == 0 {
       window.push_notification(Notification::info("No review comments to send"), cx);
       return;
     }
 
-    let review = self.agent_review.export();
+    let review = self.agent_review.export(&send);
+    #[cfg(test)]
+    {
+      self.last_review_export = Some(review.clone());
+    }
     let Some(panel) = self.agent_chat_view.clone() else {
       return;
     };
@@ -561,11 +602,25 @@ impl SessionPage {
       return;
     }
 
-    self.agent_review.mark_copyable_as_copied();
+    self.agent_review.mark_as_copied(&send);
+    // Only what went out loses its tick: sending one comment on its own leaves
+    // the batch someone was building alone.
+    if let ReviewSend::Only(ids) = &send {
+      let ids = ids.clone();
+      self.deselect_review_panel_comments(&ids, cx);
+    }
     self.sync_agent_review_comments_to_editor(cx);
     // Back to the conversation to watch the agent address the comments.
     self.close_diff(window, cx);
     cx.notify();
+  }
+
+  fn deselect_review_panel_comments(&mut self, ids: &HashSet<u64>, cx: &mut Context<Self>) {
+    self.dock_panel.update(cx, |panel, cx| {
+      panel
+        .review_list
+        .update(cx, |list, cx| list.deselect(ids, cx));
+    });
   }
 
   pub(super) fn send_review_comments_to_agent_action(
@@ -1003,6 +1058,105 @@ mod tests {
       Some(&editor_handle),
       "the composer is gone, so the diff takes the focus back"
     );
+  }
+
+  /// Two drafts on one file, and the panel that lists them.
+  async fn page_with_two_review_comments<'a>(
+    name: &str,
+    cx: &'a mut TestAppContext,
+  ) -> (
+    TempRepo,
+    Entity<SessionPage>,
+    &'a mut gpui::VisualTestContext,
+    Entity<crate::review_list::ReviewList>,
+    (u64, u64),
+  ) {
+    let repo = TempRepo::init(name);
+    commit_text_file(&repo.path, Path::new("README.md"), "v1\n", "initial");
+    std::fs::write(repo.path.join("README.md"), "v2\nv3\n").expect("update file");
+
+    let (page, cx) = add_session_page_window(repo.path.clone(), cx);
+    cx.run_until_parked();
+
+    page.update_in(cx, |page, window, cx| {
+      page.open_diff(PathBuf::from("README.md"), None, window, cx);
+    });
+    await_open_file(&page, cx).await;
+
+    page.update(cx, |page, cx| {
+      page.create_agent_review_comment(create_request(0, "first"), cx);
+      page.create_agent_review_comment(create_request(1, "second"), cx);
+    });
+
+    let (review_list, ids) = page.read_with(cx, |page, cx| {
+      let comments = page.agent_review.all();
+      assert_eq!(comments.len(), 2);
+      (
+        page.dock_panel.read(cx).review_list.clone(),
+        (comments[0].id, comments[1].id),
+      )
+    });
+    (repo, page, cx, review_list, ids)
+  }
+
+  #[gpui::test]
+  async fn a_send_only_carries_the_ticked_comments(cx: &mut TestAppContext) {
+    let (_repo, page, cx, review_list, (first, second)) =
+      page_with_two_review_comments("session-page-review-partial-send", cx).await;
+
+    review_list.update(cx, |list, cx| list.toggle_comment(second, cx));
+    page.update_in(cx, |page, window, cx| {
+      page.send_agent_review_to_agent(window, cx)
+    });
+
+    page.read_with(cx, |page, cx| {
+      let export = page.last_review_export.as_deref().expect("an export");
+      assert!(export.contains("second"));
+      assert!(!export.contains("first"));
+      // No agent mounted: nothing was marked, and the tick is still there to
+      // try again with.
+      assert_eq!(
+        page.agent_review.all()[1].state,
+        LocalAgentReviewCommentState::Draft
+      );
+      assert_eq!(page.review_panel_selection(cx), HashSet::from([second]));
+      let _ = first;
+    });
+  }
+
+  #[gpui::test]
+  async fn nothing_ticked_sends_the_whole_batch(cx: &mut TestAppContext) {
+    let (_repo, page, cx, _review_list, _ids) =
+      page_with_two_review_comments("session-page-review-send-all", cx).await;
+
+    page.update_in(cx, |page, window, cx| {
+      page.send_agent_review_to_agent(window, cx)
+    });
+
+    page.read_with(cx, |page, _| {
+      let export = page.last_review_export.as_deref().expect("an export");
+      assert!(export.contains("first"));
+      assert!(export.contains("second"));
+    });
+  }
+
+  #[gpui::test]
+  async fn a_single_comment_send_ignores_the_ticks(cx: &mut TestAppContext) {
+    let (_repo, page, cx, review_list, (first, second)) =
+      page_with_two_review_comments("session-page-review-send-one", cx).await;
+
+    // Ticked one, sent the other: the row and the diff card send themselves.
+    review_list.update(cx, |list, cx| list.toggle_comment(second, cx));
+    review_list.update(cx, |_, cx| {
+      cx.emit(ReviewListEvent::SendComment { id: first });
+    });
+    cx.run_until_parked();
+
+    page.read_with(cx, |page, _| {
+      let export = page.last_review_export.as_deref().expect("an export");
+      assert!(export.contains("first"));
+      assert!(!export.contains("second"));
+    });
   }
 
   #[gpui::test]

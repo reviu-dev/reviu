@@ -9,7 +9,7 @@ use agent_chat_panel::{AgentChatPanel, AgentChatPanelEvent};
 use editor::{
   ConflictResolution, DiffViewMode, Editor, EditorEvent, ReviewCommentCancelHandler,
   ReviewCommentCreateHandler, ReviewCommentCreateRequest, ReviewCommentDeleteHandler,
-  ReviewCommentDisplayMode, ReviewCommentEditHandler,
+  ReviewCommentDisplayMode, ReviewCommentEditHandler, ReviewCommentSendHandler,
 };
 use gpui::AnimationExt as _;
 use gpui::{
@@ -25,7 +25,7 @@ use crate::agent_chat_state::{
   agent_chat_state_dir, agent_path_to_repo_relative, prune_agent_chat_state_once,
 };
 use crate::agent_review::{
-  AgentReviewComments, original_lines_for_request, sync_comments_to_editor,
+  AgentReviewComments, ReviewSend, original_lines_for_request, sync_comments_to_editor,
 };
 use crate::agent_settings::AgentSettings;
 use crate::auth_state::AuthStateStore;
@@ -191,6 +191,9 @@ pub struct SessionPage {
   /// Mounting a real agent panel in a test would spawn an agent process.
   #[cfg(test)]
   pretend_agent_turn_in_flight: bool,
+  /// A test has no agent to send to: the export a send built lands here.
+  #[cfg(test)]
+  last_review_export: Option<String>,
   open_file_generation: u64,
   open_file_task: Option<Task<()>>,
   agent_review: AgentReviewComments,
@@ -310,6 +313,9 @@ impl SessionPage {
         DockPanelEvent::DeleteReviewComment { id } => {
           this.delete_agent_review_comment(*id, cx);
         }
+        DockPanelEvent::SendReviewComment { id } => {
+          this.send_agent_review_comment_to_agent(*id, window, cx);
+        }
         DockPanelEvent::SendReview => {
           this.send_agent_review_to_agent(window, cx);
         }
@@ -339,6 +345,8 @@ impl SessionPage {
       _merge_base_task: None,
       #[cfg(test)]
       pretend_agent_turn_in_flight: false,
+      #[cfg(test)]
+      last_review_export: None,
       open_file_generation: 0,
       open_file_task: None,
       agent_review: AgentReviewComments::new(),

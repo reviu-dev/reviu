@@ -20,7 +20,8 @@ pub use editor::{
   ReviewCommentCreateHandler, ReviewCommentCreateRequest, ReviewCommentDeleteHandler,
   ReviewCommentDisplayMode, ReviewCommentEditHandler, ReviewCommentImageUploadHandler,
   ReviewCommentLinkHandler, ReviewCommentMode, ReviewCommentPreviewRenderer,
-  ReviewCommentResolveHandler, ReviewCommentSuggestionActionFactory, review_comment_create_actions,
+  ReviewCommentResolveHandler, ReviewCommentSendHandler, ReviewCommentSuggestionActionFactory,
+  review_comment_create_actions,
 };
 pub use editor_element::{EditorElement, PositionMap, benchmark_word_diff_ranges};
 pub use gutter_element::GutterElement;

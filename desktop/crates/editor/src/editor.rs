@@ -146,7 +146,9 @@ const REVIEW_COMMENT_COMPOSER_ACTIONS_GAP_X_PX: f32 = 4.0;
 /// Room the two spelled-out GitHub destinations take instead of icons.
 const REVIEW_COMMENT_COMPOSER_LABELLED_ACTIONS_WIDTH_PX: f32 = 250.0;
 /// Room the actions floating over a read card take, cancel and save sized.
-const REVIEW_COMMENT_FLOATING_ACTIONS_WIDTH_PX: f32 = review_comment_actions_width_px(2);
+/// Reserved for the widest set, send included, so a card does not resize when a
+/// comment stops being sendable.
+const REVIEW_COMMENT_FLOATING_ACTIONS_WIDTH_PX: f32 = review_comment_actions_width_px(3);
 /// Reserving too little puts the card on the next line of diff, reserving too much
 /// only leaves air inside it, so the text column is assumed a little narrow.
 const REVIEW_COMMENT_COMPOSER_WRAP_SAFETY_PX: f32 = 4.0;
@@ -212,6 +214,7 @@ pub type ReviewCommentEditHandler = Arc<dyn Fn(u64, Arc<str>, &mut Window, &mut 
 pub type ReviewCommentCreateHandler =
   Arc<dyn Fn(ReviewCommentCreateRequest, &mut Window, &mut App)>;
 pub type ReviewCommentDeleteHandler = Arc<dyn Fn(u64, &mut Window, &mut App)>;
+pub type ReviewCommentSendHandler = Arc<dyn Fn(u64, &mut Window, &mut App)>;
 pub type ReviewCommentResolveHandler = Arc<dyn Fn(Arc<str>, u64, bool, &mut Window, &mut App)>;
 pub type ReviewCommentSuggestionActionFactory = Arc<
   dyn Fn(
@@ -802,6 +805,7 @@ pub struct Editor {
   review_comment_edit_submitting_id: Option<u64>,
   review_comment_edit_error: Option<(u64, Arc<str>)>,
   review_comment_delete_handler: Option<ReviewCommentDeleteHandler>,
+  review_comment_send_handler: Option<ReviewCommentSendHandler>,
   review_comment_delete_submitting_id: Option<u64>,
   review_comment_resolve_handler: Option<ReviewCommentResolveHandler>,
   review_comment_resolve_in_flight: HashSet<Arc<str>>,
@@ -1233,6 +1237,7 @@ impl Editor {
       review_comment_edit_submitting_id: None,
       review_comment_edit_error: None,
       review_comment_delete_handler: None,
+      review_comment_send_handler: None,
       review_comment_delete_submitting_id: None,
       review_comment_resolve_handler: None,
       review_comment_resolve_in_flight: HashSet::new(),
@@ -2086,6 +2091,15 @@ impl Editor {
     cx.notify();
   }
 
+  pub fn set_review_comment_send_handler(
+    &mut self,
+    handler: Option<ReviewCommentSendHandler>,
+    cx: &mut Context<Self>,
+  ) {
+    self.review_comment_send_handler = handler;
+    cx.notify();
+  }
+
   pub fn set_review_comment_create_handler(
     &mut self,
     handler: Option<ReviewCommentCreateHandler>,
@@ -2622,6 +2636,31 @@ impl Editor {
 
     self.clear_review_comment_edit_state();
     self.refresh_review_comment_projection(cx);
+  }
+
+  /// Sends one comment on its own. An outdated comment is about code that moved,
+  /// so it never goes.
+  fn request_review_comment_send(
+    &mut self,
+    comment_id: u64,
+    window: &mut Window,
+    cx: &mut Context<Self>,
+  ) {
+    if !self.editable_review_comment_ids.contains(&comment_id) {
+      return;
+    }
+    let sendable = self
+      .review_comments
+      .iter()
+      .any(|comment| comment.id == comment_id && !comment.is_outdated);
+    if !sendable {
+      return;
+    }
+    let Some(handler) = self.review_comment_send_handler.clone() else {
+      return;
+    };
+
+    handler(comment_id, window, cx);
   }
 
   fn request_review_comment_delete(
@@ -4294,8 +4333,10 @@ impl Editor {
     message_id: u64,
     body: Arc<str>,
     can_delete: bool,
+    can_send: bool,
     editor_entity: Entity<Editor>,
   ) -> gpui::AnyElement {
+    let send_editor = editor_entity.clone();
     let edit_editor = editor_entity.clone();
     let delete_editor = editor_entity;
     div()
@@ -4304,6 +4345,22 @@ impl Editor {
         h_flex()
           .items_center()
           .gap_1()
+          .when(can_send, |this| {
+            this.child(
+              Button::new(format!("review-comment-send-{message_id}"))
+                .ghost()
+                .xsmall()
+                .compact()
+                .icon(UiIconName::ArrowUp)
+                .tooltip("Send this comment to the agent")
+                .on_click(move |_, window, cx| {
+                  cx.stop_propagation();
+                  send_editor.update(cx, |editor, cx| {
+                    editor.request_review_comment_send(message_id, window, cx);
+                  });
+                }),
+            )
+          })
           .child(
             Button::new(format!("review-comment-edit-{message_id}"))
               .ghost()
@@ -4380,6 +4437,7 @@ impl Editor {
       };
       let review_comment_edit_handler = self.review_comment_edit_handler.clone();
       let review_comment_delete_handler = self.review_comment_delete_handler.clone();
+      let review_comment_send_handler = self.review_comment_send_handler.clone();
       let review_comment_submission_in_flight = self.review_comment_edit_submitting_id.is_some()
         || self.review_comment_create_submitting
         || self.review_comment_reply_submitting
@@ -4426,11 +4484,13 @@ impl Editor {
       {
         let body = first_message.body.clone();
         let can_delete = review_comment_delete_handler.is_some();
+        let can_send = review_comment_send_handler.is_some() && !first_message.is_outdated;
         Some(if is_local_note_mode {
           Self::render_review_comment_direct_actions(
             first_message_id,
             body,
             can_delete,
+            can_send,
             editor_entity.clone(),
           )
         } else {
@@ -10511,6 +10571,7 @@ pub mod tests {
           review_comment_edit_submitting_id: None,
           review_comment_edit_error: None,
           review_comment_delete_handler: None,
+          review_comment_send_handler: None,
           review_comment_delete_submitting_id: None,
           review_comment_resolve_handler: None,
           review_comment_resolve_in_flight: HashSet::new(),
@@ -11114,6 +11175,75 @@ pub mod tests {
 
       assert!(editor.review_comment_delete_handler.is_some());
     });
+  }
+
+  #[gpui::test]
+  fn test_set_diffs_none_keeps_review_comment_send_handler(cx: &mut TestAppContext) {
+    let mut ctx = EditorTestContext::with_text(cx.clone(), "a\nb");
+
+    ctx.editor.update(&mut ctx.cx, |editor, cx| {
+      let handler: ReviewCommentSendHandler = Arc::new(|_, _, _| {});
+      editor.set_review_comment_send_handler(Some(handler), cx);
+      editor.set_diffs(None, cx);
+
+      assert!(editor.review_comment_send_handler.is_some());
+    });
+  }
+
+  #[gpui::test]
+  fn test_request_review_comment_send_skips_outdated_comments(cx: &mut TestAppContext) {
+    cx.update(gpui_component::init);
+    let ctx = EditorTestContext::with_text(cx.clone(), "a\nb");
+    let editor = ctx.editor.clone();
+    let (_root, cx) =
+      cx.add_window_view(|window, cx| gpui_component::Root::new(editor.clone(), window, cx));
+    let sent = StdArc::new(Mutex::new(Vec::<u64>::new()));
+
+    let handler: ReviewCommentSendHandler = {
+      let sent = sent.clone();
+      Arc::new(move |comment_id, _, _| sent.lock().expect("sent lock").push(comment_id))
+    };
+
+    ctx.editor.update_in(cx, |editor, window, cx| {
+      editor.set_review_comment_send_handler(Some(handler), cx);
+      editor.set_editable_review_comment_ids([1, 2], cx);
+      editor.set_review_comments(
+        vec![
+          review_comment_fixture(1, false),
+          review_comment_fixture(2, true),
+        ],
+        cx,
+      );
+
+      editor.request_review_comment_send(1, window, cx);
+      // Outdated: the code it is about moved, so it never goes.
+      editor.request_review_comment_send(2, window, cx);
+      // Not in the batch at all.
+      editor.request_review_comment_send(3, window, cx);
+    });
+
+    assert_eq!(*sent.lock().expect("sent lock"), vec![1]);
+  }
+
+  fn review_comment_fixture(id: u64, is_outdated: bool) -> ReviewComment {
+    ReviewComment {
+      id,
+      in_reply_to_id: None,
+      line: 0,
+      side: ReviewCommentSide::Right,
+      author: Arc::from(""),
+      avatar_url: None,
+      line_label: None,
+      body: Arc::from("extract this"),
+      suggestion_context: None,
+      created_at: Arc::from(""),
+      thread_id: None,
+      is_resolved: false,
+      is_outdated,
+      viewer_can_resolve: false,
+      viewer_can_unresolve: false,
+      is_pending: false,
+    }
   }
 
   #[gpui::test]

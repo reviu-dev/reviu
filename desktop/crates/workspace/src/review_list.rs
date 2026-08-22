@@ -10,17 +10,20 @@ use gpui::{
 use gpui_component::{
   ActiveTheme as _, Disableable as _, Icon, IconName, Sizable,
   button::{Button, ButtonVariants as _},
+  checkbox::Checkbox,
   h_flex, v_flex,
 };
 use ui::{StatusThemeExt as _, UiIconName};
 
 use crate::agent_review::{
   LocalAgentReviewComment, LocalAgentReviewCommentState, agent_review_line_label,
+  agent_review_state_is_copyable,
 };
 use crate::changes_list::split_path_label;
 
 pub(crate) const REVIEW_LIST_SEND_DEBUG_SELECTOR: &str = "review-list-send";
 pub(crate) const REVIEW_LIST_DISCARD_DEBUG_SELECTOR: &str = "review-list-discard";
+pub(crate) const REVIEW_LIST_SELECT_ALL_DEBUG_SELECTOR: &str = "review-list-select-all";
 
 /// Longest excerpt shown on a row before it is cut.
 const REVIEW_EXCERPT_MAX_CHARS: usize = 120;
@@ -32,6 +35,10 @@ pub(crate) enum ReviewListEvent {
     line: usize,
   },
   DeleteComment {
+    id: u64,
+  },
+  /// One comment on its own, whatever the selection holds.
+  SendComment {
     id: u64,
   },
   SendReview,
@@ -48,6 +55,8 @@ pub(crate) struct ReviewPanelComment {
   pub line_label: String,
   pub excerpt: String,
   pub state: LocalAgentReviewCommentState,
+  /// Addressed and outdated comments have a row, but nothing left to send.
+  pub sendable: bool,
 }
 
 /// The first line with something on it: a row shows one line, not a paragraph.
@@ -80,6 +89,7 @@ pub(crate) fn review_panel_comments(
       line_label: agent_review_line_label(comment),
       excerpt: review_comment_excerpt(comment.body.as_ref()),
       state: comment.state.clone(),
+      sendable: agent_review_state_is_copyable(&comment.state),
     })
     .collect::<Vec<_>>();
   rows.sort_by(|a, b| {
@@ -120,7 +130,8 @@ pub(crate) fn review_state_label(state: &LocalAgentReviewCommentState) -> Option
 pub(crate) struct ReviewList {
   comments: Vec<ReviewPanelComment>,
   collapsed_files: HashSet<PathBuf>,
-  sendable_count: usize,
+  /// Empty means the whole batch goes: nobody loses a comment by not ticking it.
+  selected: HashSet<u64>,
 }
 
 impl gpui::EventEmitter<ReviewListEvent> for ReviewList {}
@@ -130,17 +141,12 @@ impl ReviewList {
     Self {
       comments: Vec::new(),
       collapsed_files: HashSet::new(),
-      sendable_count: 0,
+      selected: HashSet::new(),
     }
   }
 
-  pub(crate) fn set_comments(
-    &mut self,
-    comments: Vec<ReviewPanelComment>,
-    sendable_count: usize,
-    cx: &mut Context<Self>,
-  ) {
-    if self.comments == comments && self.sendable_count == sendable_count {
+  pub(crate) fn set_comments(&mut self, comments: Vec<ReviewPanelComment>, cx: &mut Context<Self>) {
+    if self.comments == comments {
       return;
     }
     let paths = comments
@@ -148,14 +154,97 @@ impl ReviewList {
       .map(|comment| comment.path.clone())
       .collect::<HashSet<_>>();
     self.collapsed_files.retain(|path| paths.contains(path));
+    let sendable_ids = comments
+      .iter()
+      .filter(|comment| comment.sendable)
+      .map(|comment| comment.id)
+      .collect::<HashSet<_>>();
+    self.selected.retain(|id| sendable_ids.contains(id));
     self.comments = comments;
-    self.sendable_count = sendable_count;
     cx.notify();
   }
 
   #[cfg(test)]
   pub(crate) fn comments(&self) -> &[ReviewPanelComment] {
     &self.comments
+  }
+
+  pub(crate) fn selected_ids(&self) -> &HashSet<u64> {
+    &self.selected
+  }
+
+  /// Called once a send went out: what left is marked sent, so its tick has
+  /// nothing left to say. Ticks that did not go stay, waiting for their turn.
+  pub(crate) fn deselect(&mut self, ids: &HashSet<u64>, cx: &mut Context<Self>) {
+    let before = self.selected.len();
+    self.selected.retain(|id| !ids.contains(id));
+    if self.selected.len() != before {
+      cx.notify();
+    }
+  }
+
+  fn sendable_ids(&self) -> impl Iterator<Item = u64> + '_ {
+    self
+      .comments
+      .iter()
+      .filter(|comment| comment.sendable)
+      .map(|comment| comment.id)
+  }
+
+  fn sendable_count(&self) -> usize {
+    self.sendable_ids().count()
+  }
+
+  /// How many comments the Send button would send right now.
+  fn send_count(&self) -> usize {
+    if self.selected.is_empty() {
+      self.sendable_count()
+    } else {
+      self.selected.len()
+    }
+  }
+
+  fn everything_is_selected(&self) -> bool {
+    let sendable_count = self.sendable_count();
+    sendable_count > 0 && self.selected.len() == sendable_count
+  }
+
+  pub(crate) fn toggle_comment(&mut self, comment_id: u64, cx: &mut Context<Self>) {
+    if !self.selected.remove(&comment_id) {
+      self.selected.insert(comment_id);
+    }
+    cx.notify();
+  }
+
+  fn file_sendable_ids(&self, path: &Path) -> Vec<u64> {
+    self
+      .comments
+      .iter()
+      .filter(|comment| comment.path == path && comment.sendable)
+      .map(|comment| comment.id)
+      .collect()
+  }
+
+  pub(crate) fn toggle_file_selection(&mut self, path: PathBuf, cx: &mut Context<Self>) {
+    let ids = self.file_sendable_ids(&path);
+    if ids.is_empty() {
+      return;
+    }
+    if ids.iter().all(|id| self.selected.contains(id)) {
+      self.selected.retain(|id| !ids.contains(id));
+    } else {
+      self.selected.extend(ids);
+    }
+    cx.notify();
+  }
+
+  pub(crate) fn toggle_select_all(&mut self, cx: &mut Context<Self>) {
+    if self.everything_is_selected() {
+      self.selected.clear();
+    } else {
+      self.selected = self.sendable_ids().collect();
+    }
+    cx.notify();
   }
 
   fn toggle_file(&mut self, path: PathBuf, cx: &mut Context<Self>) {
@@ -170,6 +259,10 @@ impl ReviewList {
     let collapsed = self.collapsed_files.contains(path);
     let (dir, file) = split_path_label(path);
     let toggle_path = path.to_path_buf();
+    let sendable_ids = self.file_sendable_ids(path);
+    let file_is_selected =
+      !sendable_ids.is_empty() && sendable_ids.iter().all(|id| self.selected.contains(id));
+    let select_path = path.to_path_buf();
 
     h_flex()
       .id(gpui::SharedString::from(format!(
@@ -187,6 +280,24 @@ impl ReviewList {
       .on_click(cx.listener(move |this, _, _, cx| {
         this.toggle_file(toggle_path.clone(), cx);
       }))
+      .child(
+        div()
+          .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+          .child(
+            Checkbox::new(gpui::SharedString::from(format!(
+              "review-file-select-{}",
+              path.to_string_lossy()
+            )))
+            .small()
+            .checked(file_is_selected)
+            .disabled(sendable_ids.is_empty())
+            .tooltip("Select every comment of this file")
+            .on_click(cx.listener(move |this, _, _, cx| {
+              cx.stop_propagation();
+              this.toggle_file_selection(select_path.clone(), cx);
+            })),
+          ),
+      )
       .child(Icon::new(if collapsed {
         IconName::ChevronRight
       } else {
@@ -217,6 +328,10 @@ impl ReviewList {
     let theme = cx.theme().clone();
     let open = (comment.path.clone(), comment.line);
     let delete_id = comment.id;
+    let send_id = comment.id;
+    let select_id = comment.id;
+    let sendable = comment.sendable;
+    let is_selected = self.selected.contains(&comment.id);
 
     h_flex()
       .id(("review-comment", comment.id as usize))
@@ -233,6 +348,22 @@ impl ReviewList {
         let (path, line) = open.clone();
         cx.emit(ReviewListEvent::OpenComment { path, line });
       }))
+      // Always there, so every row's text starts on the same column.
+      .child(
+        div()
+          .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+          .child(
+            Checkbox::new(("review-comment-select", select_id as usize))
+              .small()
+              .checked(is_selected)
+              .disabled(!sendable)
+              .tooltip("Send only the selected comments")
+              .on_click(cx.listener(move |this, _, _, cx| {
+                cx.stop_propagation();
+                this.toggle_comment(select_id, cx);
+              })),
+          ),
+      )
       .child(
         div()
           .text_xs()
@@ -258,6 +389,24 @@ impl ReviewList {
           .child(label),
         )
       })
+      .when(sendable, |this| {
+        this.child(
+          div()
+            .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+            .child(
+              Button::new(("review-comment-send", send_id as usize))
+                .ghost()
+                .xsmall()
+                .compact()
+                .icon(Icon::new(UiIconName::ArrowUp))
+                .tooltip("Send this comment to the agent")
+                .on_click(cx.listener(move |_, _, _, cx| {
+                  cx.stop_propagation();
+                  cx.emit(ReviewListEvent::SendComment { id: send_id });
+                })),
+            ),
+        )
+      })
       .child(
         div()
           .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
@@ -279,7 +428,9 @@ impl ReviewList {
 
   fn render_actions(&self, cx: &mut Context<Self>) -> AnyElement {
     let theme = cx.theme().clone();
-    let sendable = self.sendable_count;
+    let sendable = self.sendable_count();
+    let send_count = self.send_count();
+    let everything_is_selected = self.everything_is_selected();
 
     h_flex()
       .w_full()
@@ -291,14 +442,33 @@ impl ReviewList {
       .border_t_1()
       .border_color(theme.border)
       .child(
-        Button::new("review-list-discard")
-          .debug_selector(|| REVIEW_LIST_DISCARD_DEBUG_SELECTOR.to_string())
-          .ghost()
-          .small()
-          .compact()
-          .label("Discard")
-          .tooltip("Delete every comment of this review")
-          .on_click(cx.listener(|_, _, _, cx| cx.emit(ReviewListEvent::DiscardReview))),
+        h_flex()
+          .items_center()
+          .gap_1()
+          .child(
+            Button::new("review-list-select-all")
+              .debug_selector(|| REVIEW_LIST_SELECT_ALL_DEBUG_SELECTOR.to_string())
+              .ghost()
+              .small()
+              .compact()
+              .label(if everything_is_selected {
+                "Deselect all"
+              } else {
+                "Select all"
+              })
+              .disabled(sendable == 0)
+              .on_click(cx.listener(|this, _, _, cx| this.toggle_select_all(cx))),
+          )
+          .child(
+            Button::new("review-list-discard")
+              .debug_selector(|| REVIEW_LIST_DISCARD_DEBUG_SELECTOR.to_string())
+              .ghost()
+              .small()
+              .compact()
+              .label("Discard")
+              .tooltip("Delete every comment of this review")
+              .on_click(cx.listener(|_, _, _, cx| cx.emit(ReviewListEvent::DiscardReview))),
+          ),
       )
       .child(
         Button::new("review-list-send")
@@ -306,12 +476,12 @@ impl ReviewList {
           .primary()
           .small()
           .compact()
-          .label(if sendable == 1 {
+          .label(if send_count == 1 {
             "Send 1 comment".to_string()
           } else {
-            format!("Send {sendable} comments")
+            format!("Send {send_count} comments")
           })
-          .disabled(sendable == 0)
+          .disabled(send_count == 0)
           .on_click(cx.listener(|_, _, _, cx| cx.emit(ReviewListEvent::SendReview))),
       )
       .into_any_element()
@@ -468,6 +638,208 @@ mod tests {
       review_state_label(&LocalAgentReviewCommentState::Outdated),
       Some("Outdated")
     );
+  }
+
+  fn add_review_list_window(
+    cx: &mut gpui::TestAppContext,
+  ) -> (gpui::Entity<ReviewList>, &mut gpui::VisualTestContext) {
+    use gpui::AppContext as _;
+
+    cx.update(gpui_component::init);
+    let mut mounted = None;
+    let (_root, cx) = cx.add_window_view(|window, cx| {
+      let list = cx.new(|_| ReviewList::new());
+      mounted = Some(list.clone());
+      gpui_component::Root::new(list, window, cx)
+    });
+    (mounted.expect("review list"), cx)
+  }
+
+  fn batch() -> Vec<ReviewPanelComment> {
+    review_panel_comments(&[
+      comment(
+        1,
+        "src/a.rs",
+        1,
+        "first",
+        LocalAgentReviewCommentState::Draft,
+      ),
+      comment(
+        2,
+        "src/a.rs",
+        4,
+        "second",
+        LocalAgentReviewCommentState::Draft,
+      ),
+      comment(
+        3,
+        "src/b.rs",
+        2,
+        "third",
+        LocalAgentReviewCommentState::Draft,
+      ),
+      comment(
+        4,
+        "src/b.rs",
+        7,
+        "done",
+        LocalAgentReviewCommentState::Addressed,
+      ),
+    ])
+  }
+
+  #[gpui::test]
+  async fn nothing_ticked_sends_the_whole_batch(cx: &mut gpui::TestAppContext) {
+    let (list, cx) = add_review_list_window(cx);
+
+    list.update(cx, |list, cx| list.set_comments(batch(), cx));
+
+    list.read_with(cx, |list, _| {
+      // Four rows, but the addressed one has nothing left to send.
+      assert_eq!(list.comments().len(), 4);
+      assert_eq!(list.sendable_count(), 3);
+      assert_eq!(list.send_count(), 3);
+      assert!(list.selected_ids().is_empty());
+      assert!(!list.everything_is_selected());
+    });
+  }
+
+  #[gpui::test]
+  async fn ticking_comments_narrows_what_send_sends(cx: &mut gpui::TestAppContext) {
+    let (list, cx) = add_review_list_window(cx);
+    list.update(cx, |list, cx| list.set_comments(batch(), cx));
+
+    list.update(cx, |list, cx| {
+      list.toggle_comment(2, cx);
+      list.toggle_comment(3, cx);
+      list.toggle_comment(3, cx);
+    });
+
+    list.read_with(cx, |list, _| {
+      assert_eq!(list.selected_ids(), &HashSet::from([2]));
+      assert_eq!(list.send_count(), 1);
+    });
+
+    // A send takes the ticks of what left with it, and leaves the rest.
+    list.update(cx, |list, cx| list.deselect(&HashSet::from([3]), cx));
+    list.read_with(cx, |list, _| {
+      assert_eq!(list.selected_ids(), &HashSet::from([2]));
+    });
+    list.update(cx, |list, cx| list.deselect(&HashSet::from([2]), cx));
+    list.read_with(cx, |list, _| {
+      assert!(list.selected_ids().is_empty());
+      assert_eq!(list.send_count(), 3);
+    });
+  }
+
+  #[gpui::test]
+  async fn a_file_checkbox_takes_its_whole_file(cx: &mut gpui::TestAppContext) {
+    let (list, cx) = add_review_list_window(cx);
+    list.update(cx, |list, cx| list.set_comments(batch(), cx));
+
+    list.update(cx, |list, cx| {
+      list.toggle_file_selection(PathBuf::from("src/a.rs"), cx)
+    });
+    list.read_with(cx, |list, _| {
+      assert_eq!(list.selected_ids(), &HashSet::from([1, 2]));
+    });
+
+    // The addressed comment of the other file stays out of it.
+    list.update(cx, |list, cx| {
+      list.toggle_file_selection(PathBuf::from("src/b.rs"), cx)
+    });
+    list.read_with(cx, |list, _| {
+      assert_eq!(list.selected_ids(), &HashSet::from([1, 2, 3]));
+      assert!(list.everything_is_selected());
+    });
+
+    // Ticked again, the file lets go.
+    list.update(cx, |list, cx| {
+      list.toggle_file_selection(PathBuf::from("src/a.rs"), cx)
+    });
+    list.read_with(cx, |list, _| {
+      assert_eq!(list.selected_ids(), &HashSet::from([3]));
+    });
+  }
+
+  #[gpui::test]
+  async fn select_all_starts_from_everything_and_gives_it_back(cx: &mut gpui::TestAppContext) {
+    let (list, cx) = add_review_list_window(cx);
+    list.update(cx, |list, cx| list.set_comments(batch(), cx));
+
+    list.update(cx, |list, cx| list.toggle_select_all(cx));
+    list.read_with(cx, |list, _| {
+      assert_eq!(list.selected_ids(), &HashSet::from([1, 2, 3]));
+      assert_eq!(list.send_count(), 3);
+    });
+
+    list.update(cx, |list, cx| list.toggle_select_all(cx));
+    list.read_with(cx, |list, _| {
+      assert!(list.selected_ids().is_empty());
+      // Back to the whole batch, not to nothing.
+      assert_eq!(list.send_count(), 3);
+    });
+  }
+
+  #[gpui::test]
+  async fn the_select_all_button_paints_and_takes_the_whole_batch(cx: &mut gpui::TestAppContext) {
+    let (list, cx) = add_review_list_window(cx);
+    list.update(cx, |list, cx| list.set_comments(batch(), cx));
+    cx.run_until_parked();
+
+    let button = cx
+      .debug_bounds(REVIEW_LIST_SELECT_ALL_DEBUG_SELECTOR)
+      .expect("select all bounds");
+    cx.simulate_click(button.center(), gpui::Modifiers::default());
+    cx.run_until_parked();
+
+    list.read_with(cx, |list, _| {
+      assert_eq!(list.selected_ids(), &HashSet::from([1, 2, 3]));
+    });
+
+    // The same button gives everything back once all of it is ticked.
+    let button = cx
+      .debug_bounds(REVIEW_LIST_SELECT_ALL_DEBUG_SELECTOR)
+      .expect("deselect all bounds");
+    cx.simulate_click(button.center(), gpui::Modifiers::default());
+    cx.run_until_parked();
+
+    list.read_with(cx, |list, _| assert!(list.selected_ids().is_empty()));
+  }
+
+  #[gpui::test]
+  async fn a_comment_leaving_the_batch_leaves_the_selection(cx: &mut gpui::TestAppContext) {
+    let (list, cx) = add_review_list_window(cx);
+    list.update(cx, |list, cx| list.set_comments(batch(), cx));
+    list.update(cx, |list, cx| list.toggle_select_all(cx));
+
+    // The agent addressed one and another was deleted from the batch.
+    list.update(cx, |list, cx| {
+      list.set_comments(
+        review_panel_comments(&[
+          comment(
+            1,
+            "src/a.rs",
+            1,
+            "first",
+            LocalAgentReviewCommentState::Draft,
+          ),
+          comment(
+            2,
+            "src/a.rs",
+            4,
+            "second",
+            LocalAgentReviewCommentState::Addressed,
+          ),
+        ]),
+        cx,
+      )
+    });
+
+    list.read_with(cx, |list, _| {
+      assert_eq!(list.selected_ids(), &HashSet::from([1]));
+      assert_eq!(list.send_count(), 1);
+    });
   }
 
   #[test]
