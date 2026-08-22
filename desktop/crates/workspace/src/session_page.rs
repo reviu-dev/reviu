@@ -245,8 +245,6 @@ impl SessionPage {
     let selected_repo = ConfigStore::load_recent_repositories()
       .first()
       .map(|repo| repo.path.clone());
-    let review_store_path = review_store_path_for(selected_repo.as_deref(), None);
-    let agent_review = load_agent_review(review_store_path.as_deref());
     let dock_panel = cx.new(|cx| DockPanel::new(selected_repo.clone(), window, cx));
     let inbox = cx.new(|_| Inbox::new());
     let repo_snapshot = cx.new(|_| RepoSnapshot::new(selected_repo.clone()));
@@ -357,8 +355,8 @@ impl SessionPage {
       last_review_export: None,
       open_file_generation: 0,
       open_file_task: None,
-      agent_review,
-      review_store_path,
+      agent_review: AgentReviewComments::new(),
+      review_store_path: None,
       review_state_dir: None,
       repo_snapshot,
       diff_view: DiffViewMode::Inline,
@@ -385,6 +383,7 @@ impl SessionPage {
       _poll_task: None,
     };
     SessionPageHandle::register(cx);
+    page.reload_review_for_repo(cx);
     page.refresh_branch(cx);
     page.watch_window_activation(window, cx);
     page.start_polling(cx);

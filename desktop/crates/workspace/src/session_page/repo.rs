@@ -58,9 +58,7 @@ impl SessionPage {
     self.open_file_generation = self.open_file_generation.wrapping_add(1);
     // The outgoing repository keeps its batch, the incoming one gets its own.
     self.persist_agent_review();
-    self.review_store_path =
-      review_store_path_for(repo_root.as_deref(), self.review_state_dir.as_deref());
-    self.agent_review = load_agent_review(self.review_store_path.as_deref());
+    self.reload_review_for_repo(cx);
     self.pending_review_export = None;
     self.repo_snapshot.update(cx, |snapshot, cx| {
       snapshot.set_repo_root(repo_root.clone(), cx)
@@ -144,6 +142,58 @@ mod tests {
   use std::path::Path;
 
   #[gpui::test]
+  async fn a_batch_on_disk_reaches_the_panel_without_opening_a_file(cx: &mut TestAppContext) {
+    use crate::agent_review::{LocalAgentReviewComment, LocalAgentReviewCommentState};
+    use editor::ReviewCommentSide;
+
+    let repo = TempRepo::init("session-page-review-reload");
+    commit_text_file(&repo.path, Path::new("README.md"), "v1\n", "initial");
+
+    let state_dir = std::env::temp_dir().join(format!(
+      "reviu-review-reload-{}-{:?}",
+      std::process::id(),
+      std::thread::current().id()
+    ));
+    let _ = std::fs::remove_dir_all(&state_dir);
+    // A previous run of the app left a batch behind.
+    write_review(
+      &review_path_for_repo(&state_dir, &repo.path),
+      &[LocalAgentReviewComment {
+        id: 4,
+        in_reply_to_id: None,
+        path: PathBuf::from("README.md"),
+        line: 0,
+        side: ReviewCommentSide::Right,
+        start_line: None,
+        start_side: None,
+        body: std::sync::Arc::from("from the last run"),
+        original_start_line: Some(1),
+        original_lines: vec!["v1".to_string()],
+        state: LocalAgentReviewCommentState::Draft,
+      }],
+      5,
+    );
+
+    let (page, cx) = add_session_page_window(repo.path.clone(), cx);
+    cx.run_until_parked();
+    page.update(cx, |page, cx| {
+      page.review_state_dir = Some(state_dir.clone());
+      page.reload_review_for_repo(cx);
+    });
+
+    page.read_with(cx, |page, cx| {
+      // The rail badge reads the page, so it was right even while the panel
+      // stayed empty: the panel needs its own sync after a load.
+      assert_eq!(page.copyable_review_comment_count(), 1);
+      let rows = page.dock_panel.read(cx).review_list.read(cx).comments();
+      assert_eq!(rows.len(), 1);
+      assert_eq!(rows[0].excerpt, "from the last run");
+    });
+
+    let _ = std::fs::remove_dir_all(&state_dir);
+  }
+
+  #[gpui::test]
   async fn each_repository_keeps_its_own_batch_across_switches(cx: &mut TestAppContext) {
     let repo = TempRepo::init("session-page-review-persist-a");
     commit_text_file(&repo.path, Path::new("README.md"), "v1\n", "initial");
@@ -182,7 +232,19 @@ mod tests {
         .set_selected_repo(other.path.clone(), window, cx)
         .expect("switch to the other repository");
     });
-    page.read_with(cx, |page, _| assert!(page.agent_review.all().is_empty()));
+    page.read_with(cx, |page, cx| {
+      assert!(page.agent_review.all().is_empty());
+      assert!(
+        page
+          .dock_panel
+          .read(cx)
+          .review_list
+          .read(cx)
+          .comments()
+          .is_empty(),
+        "the panel must not keep the rows of the repository we left"
+      );
+    });
 
     page.update_in(cx, |page, window, cx| {
       page

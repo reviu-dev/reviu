@@ -503,6 +503,17 @@ impl SessionPage {
     self.persist_agent_review();
   }
 
+  /// Reads the batch of the selected repository and hands it to the panel.
+  /// Nothing else fills the panel until a file is opened.
+  pub(super) fn reload_review_for_repo(&mut self, cx: &mut Context<Self>) {
+    self.review_store_path = review_store_path_for(
+      self.selected_repo.as_deref(),
+      self.review_state_dir.as_deref(),
+    );
+    self.agent_review = load_agent_review(self.review_store_path.as_deref());
+    self.sync_review_panel(cx);
+  }
+
   /// Every change goes through here, so the file on disk is never behind. The
   /// batch only moves on discrete gestures, which is why this needs no throttle.
   pub(super) fn persist_agent_review(&mut self) {
