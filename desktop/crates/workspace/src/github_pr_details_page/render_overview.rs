@@ -3,6 +3,708 @@
 
 use super::*;
 
+fn merged_reviewers(
+  requested_reviewers: &[GithubPullRequestFilterOptionUser],
+  reviews: &[GithubPullRequestReview],
+  author_login: &str,
+) -> Vec<GithubPullRequestFilterOptionUser> {
+  let mut reviewers = Vec::new();
+  let mut seen: HashSet<String> = HashSet::new();
+
+  for reviewer in requested_reviewers {
+    let key = reviewer.login.to_lowercase();
+    if github_shared::logins_match_case_insensitive(reviewer.login.as_str(), author_login) {
+      continue;
+    }
+    if seen.insert(key) {
+      reviewers.push(reviewer.clone());
+    }
+  }
+
+  for review in reviews {
+    let Some(user) = review.user.as_ref() else {
+      continue;
+    };
+    let key = user.login.to_lowercase();
+    if github_shared::logins_match_case_insensitive(user.login.as_str(), author_login) {
+      continue;
+    }
+    if seen.insert(key) {
+      reviewers.push(GithubPullRequestFilterOptionUser {
+        login: user.login.clone(),
+        avatar_url: user.avatar_url.clone(),
+      });
+    }
+  }
+
+  reviewers
+}
+
+fn non_empty_owned(value: &str) -> Option<String> {
+  let value = value.trim();
+  if value.is_empty() {
+    None
+  } else {
+    Some(value.to_string())
+  }
+}
+
+fn singular_or_plural(count: u64, singular: &'static str, plural: &'static str) -> &'static str {
+  if count == 1 { singular } else { plural }
+}
+
+fn overview_checks_summary_title(checks: &GithubPullRequestChecksSummary) -> String {
+  if checks.total_checks == 0 {
+    return "No checks have run".to_string();
+  }
+
+  match checks.overall_state {
+    GithubPullRequestChecksRollupState::Success => "All checks have passed".to_string(),
+    GithubPullRequestChecksRollupState::Skipped => "All checks were skipped".to_string(),
+    GithubPullRequestChecksRollupState::Pending => {
+      if checks.pending_checks == 0 {
+        "Checks are pending".to_string()
+      } else {
+        "Checks".to_string()
+      }
+    }
+    GithubPullRequestChecksRollupState::Failure => {
+      if checks.failed_checks == 0 {
+        "Checks need attention".to_string()
+      } else {
+        "Checks".to_string()
+      }
+    }
+  }
+}
+
+fn overview_checks_summary_subtitle(checks: &GithubPullRequestChecksSummary) -> String {
+  if checks.total_checks == 0 {
+    return "No checks reported".to_string();
+  }
+
+  let mut parts = Vec::new();
+  if checks.failed_checks > 0 {
+    parts.push(format!("{} failing", checks.failed_checks));
+  }
+  if checks.pending_checks > 0 {
+    parts.push(format!("{} pending", checks.pending_checks));
+  }
+  if checks.skipped_checks > 0 {
+    parts.push(format!("{} skipped", checks.skipped_checks));
+  }
+  if checks.successful_checks > 0 {
+    parts.push(format!(
+      "{} successful {}",
+      checks.successful_checks,
+      singular_or_plural(checks.successful_checks, "check", "checks")
+    ));
+  }
+
+  parts.join(", ")
+}
+
+fn overview_checks_uniform_state(
+  checks: &GithubPullRequestChecksSummary,
+) -> Option<GithubPullRequestChecksRollupState> {
+  if checks.total_checks == 0 {
+    return None;
+  }
+
+  if checks.successful_checks == checks.total_checks {
+    Some(GithubPullRequestChecksRollupState::Success)
+  } else if checks.pending_checks == checks.total_checks {
+    Some(GithubPullRequestChecksRollupState::Pending)
+  } else if checks.failed_checks == checks.total_checks {
+    Some(GithubPullRequestChecksRollupState::Failure)
+  } else if checks.skipped_checks == checks.total_checks {
+    Some(GithubPullRequestChecksRollupState::Skipped)
+  } else {
+    None
+  }
+}
+
+fn overview_checks_summary_slices(
+  checks: &GithubPullRequestChecksSummary,
+  theme: &gpui_component::Theme,
+) -> Vec<OverviewChecksSummarySlice> {
+  let mut slices = Vec::new();
+
+  if checks.failed_checks > 0 {
+    slices.push(OverviewChecksSummarySlice {
+      value: checks.failed_checks as f32,
+      color: theme.status_red(),
+    });
+  }
+
+  if checks.pending_checks > 0 {
+    slices.push(OverviewChecksSummarySlice {
+      value: checks.pending_checks as f32,
+      color: theme.status_orange(),
+    });
+  }
+
+  if checks.skipped_checks > 0 {
+    slices.push(OverviewChecksSummarySlice {
+      value: checks.skipped_checks as f32,
+      color: theme.status_gray(),
+    });
+  }
+
+  if checks.successful_checks > 0 {
+    slices.push(OverviewChecksSummarySlice {
+      value: checks.successful_checks as f32,
+      color: theme.status_green(),
+    });
+  }
+
+  if slices.is_empty() {
+    slices.push(OverviewChecksSummarySlice {
+      value: 1.0,
+      color: theme.muted_foreground.opacity(0.3),
+    });
+  }
+
+  slices
+}
+
+fn overview_checks_summary_segments(
+  slices: &[OverviewChecksSummarySlice],
+) -> Vec<OverviewChecksSummarySegment> {
+  let total: f32 = slices.iter().map(|slice| slice.value.max(0.0)).sum();
+  if total <= 0.0 {
+    return Vec::new();
+  }
+
+  let mut start_angle = 0.0;
+  let mut segments = Vec::new();
+
+  for slice in slices {
+    let span = (slice.value.max(0.0) / total) * std::f32::consts::TAU;
+    if span <= 0.0 {
+      continue;
+    }
+
+    let half_gap = if slices.len() > 1 {
+      (OVERVIEW_CHECKS_SUMMARY_RING_GAP_ANGLE / 2.0).min(span / 4.0)
+    } else {
+      0.0
+    };
+    let segment_start_angle = start_angle + half_gap;
+    let segment_end_angle = start_angle + span - half_gap;
+    if segment_end_angle > segment_start_angle {
+      segments.push(OverviewChecksSummarySegment {
+        start_angle: segment_start_angle,
+        end_angle: segment_end_angle,
+        color: slice.color,
+      });
+    }
+
+    start_angle += span;
+  }
+
+  segments
+}
+
+fn overview_checks_summary_caps(
+  segments: &[OverviewChecksSummarySegment],
+) -> Vec<OverviewChecksSummaryCap> {
+  if segments.len() <= 1 {
+    return Vec::new();
+  }
+
+  let center = OVERVIEW_CHECKS_SUMMARY_RING_SIZE / 2.0;
+  let mut caps = Vec::new();
+
+  for segment in segments {
+    for angle in [segment.start_angle, segment.end_angle] {
+      let visual_angle = angle - std::f32::consts::FRAC_PI_2;
+      let x = center + OVERVIEW_CHECKS_SUMMARY_RING_RADIUS * visual_angle.cos();
+      let y = center + OVERVIEW_CHECKS_SUMMARY_RING_RADIUS * visual_angle.sin();
+      caps.push(OverviewChecksSummaryCap {
+        left: x - OVERVIEW_CHECKS_SUMMARY_RING_STROKE_WIDTH / 2.0,
+        top: y - OVERVIEW_CHECKS_SUMMARY_RING_STROKE_WIDTH / 2.0,
+        size: OVERVIEW_CHECKS_SUMMARY_RING_STROKE_WIDTH,
+        color: segment.color,
+      });
+    }
+  }
+
+  caps
+}
+
+fn format_overview_check_duration(total_seconds: u64) -> String {
+  if total_seconds < 60 {
+    return format!("{total_seconds}s");
+  }
+
+  let total_minutes = total_seconds / 60;
+  let seconds = total_seconds % 60;
+  if total_minutes < 60 {
+    return if seconds == 0 {
+      format!("{total_minutes}m")
+    } else {
+      format!("{total_minutes}m {seconds}s")
+    };
+  }
+
+  let total_hours = total_minutes / 60;
+  let minutes = total_minutes % 60;
+  if total_hours < 24 {
+    return if minutes == 0 {
+      format!("{total_hours}h")
+    } else {
+      format!("{total_hours}h {minutes}m")
+    };
+  }
+
+  let days = total_hours / 24;
+  let hours = total_hours % 24;
+  if hours == 0 {
+    format!("{days}d")
+  } else {
+    format!("{days}d {hours}h")
+  }
+}
+
+fn overview_check_duration_label(
+  started_at: Option<&str>,
+  finished_at: Option<&str>,
+  state: GithubPullRequestChecksRollupState,
+) -> Option<String> {
+  let started_at = parse_rfc3339(started_at?)?;
+  let finished_at = finished_at.and_then(parse_rfc3339).or_else(|| {
+    (state == GithubPullRequestChecksRollupState::Pending).then(time::OffsetDateTime::now_utc)
+  })?;
+  let elapsed_seconds = (finished_at - started_at).whole_seconds();
+  if elapsed_seconds < 0 {
+    return None;
+  }
+
+  Some(format_overview_check_duration(elapsed_seconds as u64))
+}
+
+fn overview_check_status_label(
+  state: GithubPullRequestChecksRollupState,
+  started_at: Option<&str>,
+  finished_at: Option<&str>,
+) -> Option<String> {
+  match state {
+    GithubPullRequestChecksRollupState::Success => Some(
+      overview_check_duration_label(started_at, finished_at, state)
+        .map(|d| format!("Successful in {d}"))
+        .unwrap_or_else(|| "Successful".to_string()),
+    ),
+    GithubPullRequestChecksRollupState::Failure => Some(
+      overview_check_duration_label(started_at, finished_at, state)
+        .map(|d| format!("Failed in {d}"))
+        .unwrap_or_else(|| "Failed".to_string()),
+    ),
+    GithubPullRequestChecksRollupState::Skipped => Some(
+      finished_at
+        .or(started_at)
+        .map(|value| format!("Skipped {}", format_relative_time(value)))
+        .unwrap_or_else(|| "Skipped".to_string()),
+    ),
+    GithubPullRequestChecksRollupState::Pending => Some(
+      overview_check_duration_label(started_at, finished_at, state)
+        .map(|d| format!("In progress - {d}"))
+        .unwrap_or_else(|| "In progress".to_string()),
+    ),
+  }
+}
+
+fn overview_check_state_sort_key(row: &OverviewCheckRow) -> u8 {
+  match row.state {
+    GithubPullRequestChecksRollupState::Failure => 0,
+    GithubPullRequestChecksRollupState::Pending => 1,
+    GithubPullRequestChecksRollupState::Skipped => 2,
+    GithubPullRequestChecksRollupState::Success => 3,
+  }
+}
+
+fn overview_check_rows(checks: &GithubPullRequestChecksSummary) -> Vec<OverviewCheckRow> {
+  let mut rows = Vec::new();
+
+  for (ix, context) in checks.missing_required_contexts.iter().enumerate() {
+    rows.push(OverviewCheckRow {
+      id: format!("missing-required-context-{ix}"),
+      state: GithubPullRequestChecksRollupState::Pending,
+      title: context.clone(),
+      status_label: Some("Required check has not reported yet".to_string()),
+      app_label: None,
+      app_slug: None,
+      app_avatar_url: None,
+      open_url: None,
+    });
+  }
+
+  for run in &checks.actions_runs {
+    let run_name = run
+      .name
+      .as_deref()
+      .and_then(non_empty_owned)
+      .unwrap_or_else(|| "GitHub Actions".to_string());
+    let event_suffix = non_empty_owned(&run.event).map(|event| format!(" ({event})"));
+    let run_started_at = run
+      .run_started_at
+      .as_deref()
+      .or(Some(run.created_at.as_str()));
+    let run_finished_at =
+      (run.state != GithubPullRequestChecksRollupState::Pending).then_some(run.updated_at.as_str());
+
+    if run.jobs.is_empty() {
+      let title = match event_suffix.as_deref() {
+        Some(suffix) => format!("{run_name}{suffix}"),
+        None => run_name.clone(),
+      };
+      rows.push(OverviewCheckRow {
+        id: format!("workflow-run-{}", run.id),
+        state: run.state,
+        title,
+        status_label: overview_check_status_label(run.state, run_started_at, run_finished_at),
+        app_label: Some("GitHub Actions".to_string()),
+        app_slug: Some("github-actions".to_string()),
+        app_avatar_url: None,
+        open_url: run.html_url.clone(),
+      });
+      continue;
+    }
+
+    for job in &run.jobs {
+      let job_name = non_empty_owned(&job.name).unwrap_or_else(|| run_name.clone());
+      let title = match event_suffix.as_deref() {
+        Some(suffix) => format!("{run_name} / {job_name}{suffix}"),
+        None => format!("{run_name} / {job_name}"),
+      };
+      let job_started_at = job.started_at.as_deref().or(run_started_at);
+      let job_finished_at = if job.state == GithubPullRequestChecksRollupState::Pending {
+        None
+      } else {
+        job.completed_at.as_deref().or(run_finished_at)
+      };
+
+      rows.push(OverviewCheckRow {
+        id: format!("workflow-job-{}", job.id),
+        state: job.state,
+        title,
+        status_label: overview_check_status_label(job.state, job_started_at, job_finished_at),
+        app_label: job
+          .app_name
+          .as_deref()
+          .and_then(non_empty_owned)
+          .or_else(|| Some("GitHub Actions".to_string())),
+        app_slug: job
+          .app_slug
+          .as_deref()
+          .and_then(non_empty_owned)
+          .or_else(|| Some("github-actions".to_string())),
+        app_avatar_url: job.app_avatar_url.as_deref().and_then(non_empty_owned),
+        open_url: job.html_url.clone().or_else(|| run.html_url.clone()),
+      });
+    }
+  }
+
+  for check in &checks.other_checks {
+    let title = non_empty_owned(&check.name).unwrap_or_else(|| "Check run".to_string());
+    let finished_at = (check.state != GithubPullRequestChecksRollupState::Pending)
+      .then_some(check.completed_at.as_deref())
+      .flatten();
+
+    rows.push(OverviewCheckRow {
+      id: format!("check-run-{}", check.id),
+      state: check.state,
+      title,
+      status_label: overview_check_status_label(
+        check.state,
+        check.started_at.as_deref(),
+        finished_at,
+      ),
+      app_label: check
+        .app_name
+        .as_deref()
+        .and_then(non_empty_owned)
+        .or_else(|| check.app_slug.as_deref().and_then(non_empty_owned)),
+      app_slug: check.app_slug.as_deref().and_then(non_empty_owned),
+      app_avatar_url: check.app_avatar_url.as_deref().and_then(non_empty_owned),
+      open_url: check.details_url.clone().or_else(|| check.html_url.clone()),
+    });
+  }
+
+  for status in &checks.legacy_statuses {
+    let title = non_empty_owned(&status.context).unwrap_or_else(|| "Status check".to_string());
+    let finished_at = (status.state != GithubPullRequestChecksRollupState::Pending)
+      .then_some(status.updated_at.as_str());
+    rows.push(OverviewCheckRow {
+      id: format!("legacy-status-{}", status.id),
+      state: status.state,
+      title,
+      status_label: overview_check_status_label(
+        status.state,
+        Some(status.created_at.as_str()),
+        finished_at,
+      ),
+      app_label: None,
+      app_slug: None,
+      app_avatar_url: status.avatar_url.as_deref().and_then(non_empty_owned),
+      open_url: status.target_url.clone(),
+    });
+  }
+
+  rows.sort_by_key(overview_check_state_sort_key);
+  rows
+}
+
+fn overview_check_app_initial(row: &OverviewCheckRow) -> String {
+  row
+    .app_label
+    .as_deref()
+    .or(row.app_slug.as_deref())
+    .unwrap_or(row.title.as_str())
+    .chars()
+    .next()
+    .map(|c| c.to_uppercase().collect::<String>())
+    .filter(|initial| !initial.is_empty())
+    .unwrap_or_else(|| "C".to_string())
+}
+
+fn overview_pr_alert_kind(
+  merge_readiness: Option<&GithubPullRequestMergeReadiness>,
+  checks: Option<&GithubPullRequestChecksSummary>,
+) -> Option<OverviewPrAlertKind> {
+  if let Some(readiness) = merge_readiness {
+    match readiness
+      .mergeable_state
+      .as_deref()
+      .map(str::trim)
+      .map(str::to_ascii_lowercase)
+      .as_deref()
+    {
+      Some("dirty") => return Some(OverviewPrAlertKind::Conflicts),
+      Some("behind") => return Some(OverviewPrAlertKind::OutOfDate),
+      _ => {}
+    }
+
+    if matches!(
+      readiness.status,
+      GithubPullRequestMergeReadinessStatus::Blocked
+    ) {
+      return Some(OverviewPrAlertKind::Blocked);
+    }
+  }
+
+  if checks.is_some_and(|checks| checks.requires_up_to_date_branch) {
+    return Some(OverviewPrAlertKind::OutOfDate);
+  }
+
+  None
+}
+
+fn overview_review_status_info(
+  merge_readiness: Option<&GithubPullRequestMergeReadiness>,
+  requested_reviewers: &[GithubPullRequestFilterOptionUser],
+  reviews: &[GithubPullRequestReview],
+  author_login: &str,
+) -> Option<OverviewReviewStatusInfo> {
+  // Branch protection explicitly blocks the merge for review requirements.
+  if let Some(readiness) = merge_readiness
+    && matches!(
+      readiness.status,
+      GithubPullRequestMergeReadinessStatus::Blocked
+    )
+  {
+    let state = readiness
+      .mergeable_state
+      .as_deref()
+      .map(str::trim)
+      .map(str::to_ascii_lowercase);
+    if !matches!(state.as_deref(), Some("dirty") | Some("behind")) {
+      return Some(OverviewReviewStatusInfo {
+        title: "Review required",
+        message: readiness.message.clone(),
+      });
+    }
+  }
+
+  // Derive status from requested reviewers and submitted reviews.
+  let reviewers = merged_reviewers(requested_reviewers, reviews, author_login);
+  if reviewers.is_empty() {
+    return None;
+  }
+
+  let has_changes_requested = reviewers.iter().any(|r| {
+    matches!(
+      reviewer_status_for_login(reviews, &r.login, requested_reviewers),
+      ReviewerStatus::ChangesRequested
+    )
+  });
+  let has_approval = reviewers.iter().any(|r| {
+    matches!(
+      reviewer_status_for_login(reviews, &r.login, requested_reviewers),
+      ReviewerStatus::Approved
+    )
+  });
+
+  if has_changes_requested {
+    Some(OverviewReviewStatusInfo {
+      title: "Changes requested",
+      message: "Some reviewers have requested changes.".to_string(),
+    })
+  } else if has_approval {
+    Some(OverviewReviewStatusInfo {
+      title: "Changes approved",
+      message: "Pull request has been approved.".to_string(),
+    })
+  } else {
+    Some(OverviewReviewStatusInfo {
+      title: "Review required",
+      message: "Awaiting review from requested reviewers.".to_string(),
+    })
+  }
+}
+
+fn overview_conflicts_info(
+  merge_readiness: Option<&GithubPullRequestMergeReadiness>,
+  checks: Option<&GithubPullRequestChecksSummary>,
+) -> Option<OverviewConflictsInfo> {
+  if let Some(readiness) = merge_readiness {
+    let state = readiness
+      .mergeable_state
+      .as_deref()
+      .map(str::trim)
+      .map(str::to_ascii_lowercase);
+    match state.as_deref() {
+      Some("dirty") => {
+        return Some(OverviewConflictsInfo {
+          kind: OverviewConflictsKind::Conflicts,
+          title: "Merge conflicts detected",
+          message: "Resolve conflicts before continuing.".to_string(),
+        });
+      }
+      Some("behind") => {
+        return Some(OverviewConflictsInfo {
+          kind: OverviewConflictsKind::OutOfDate,
+          title: "Branch is out of date",
+          message: "Update this branch before merging.".to_string(),
+        });
+      }
+      _ => {
+        return Some(OverviewConflictsInfo {
+          kind: OverviewConflictsKind::NoConflicts,
+          title: "No conflicts with base branch",
+          message: "Merging can be performed automatically.".to_string(),
+        });
+      }
+    }
+  }
+
+  if checks.is_some_and(|c| c.requires_up_to_date_branch) {
+    return Some(OverviewConflictsInfo {
+      kind: OverviewConflictsKind::OutOfDate,
+      title: "Branch is out of date",
+      message: "The base branch rules require this pull request to be up to date before merging."
+        .to_string(),
+    });
+  }
+
+  None
+}
+
+fn filter_option_users_contains(
+  users: &[GithubPullRequestFilterOptionUser],
+  candidate: &str,
+) -> bool {
+  users
+    .iter()
+    .any(|user| github_shared::logins_match_case_insensitive(user.login.as_str(), candidate))
+}
+
+fn matching_filter_option_users(
+  options: &[GithubPullRequestFilterOptionUser],
+  query: &str,
+  selected: &[GithubPullRequestFilterOptionUser],
+) -> Vec<GithubPullRequestFilterOptionUser> {
+  let normalized_query = query.trim().to_lowercase();
+  options
+    .iter()
+    .filter(|option| !filter_option_users_contains(selected, option.login.as_str()))
+    .filter(|option| {
+      normalized_query.is_empty() || option.login.to_lowercase().contains(&normalized_query)
+    })
+    .take(6)
+    .cloned()
+    .collect()
+}
+
+fn matching_label_options(
+  options: &[GithubPullRequestFilterOptionLabel],
+  query: &str,
+  selected: &[GithubPullRequestLabel],
+) -> Vec<GithubPullRequestFilterOptionLabel> {
+  let normalized_query = query.trim().to_lowercase();
+  options
+    .iter()
+    .filter(|option| !labels_contains(selected, option.name.as_str()))
+    .filter(|option| {
+      normalized_query.is_empty() || option.name.to_lowercase().contains(&normalized_query)
+    })
+    .take(8)
+    .cloned()
+    .collect()
+}
+
+fn overview_change_stat_labels(pr: &GithubPullRequestDetails) -> [String; 2] {
+  [format!("+{}", pr.additions), format!("-{}", pr.deletions)]
+}
+
+fn pr_changes_tab_count_label(changed_files: u64) -> SharedString {
+  changed_files.to_string().into()
+}
+
+fn overview_change_stats(
+  pr: &GithubPullRequestDetails,
+  theme: &gpui_component::Theme,
+) -> Vec<gpui::AnyElement> {
+  let [additions, deletions] = overview_change_stat_labels(pr);
+  vec![
+    div()
+      .text_sm()
+      .font_medium()
+      .text_color(theme.status_green())
+      .child(additions)
+      .into_any_element(),
+    div()
+      .text_sm()
+      .font_medium()
+      .text_color(theme.status_red())
+      .child(deletions)
+      .into_any_element(),
+  ]
+}
+
+fn local_repo_has_active_conflict_resolution(repo_root: &Path) -> bool {
+  if is_merge_in_progress(repo_root).unwrap_or(false)
+    || is_rebase_in_progress(repo_root).unwrap_or(false)
+  {
+    return true;
+  }
+
+  list_repo_status(repo_root)
+    .map(|entries| {
+      entries
+        .iter()
+        .any(|entry| entry.status == RepoStatusKind::Conflicted)
+    })
+    .unwrap_or(false)
+}
+
+fn should_prepare_local_branch_before_merging_base(
+  repo_root: &Path,
+  has_uncommitted_changes: bool,
+) -> bool {
+  has_uncommitted_changes && !local_repo_has_active_conflict_resolution(repo_root)
+}
+
 impl GithubPrDetailsPage {
   pub(super) fn render_header(
     &mut self,
@@ -2087,5 +2789,512 @@ impl GithubPrDetailsPage {
         }
       }
     }
+  }
+}
+
+#[cfg(test)]
+mod tests {
+  use super::super::test_support::*;
+  use super::super::*;
+  use super::*;
+  use crate::api::{
+    GithubPullRequestCheckRun, GithubPullRequestLegacyStatus, GithubPullRequestReviewUser,
+    GithubPullRequestWorkflowJob, GithubPullRequestWorkflowRun,
+  };
+  use git::{BranchKind, BranchRef, merge_branch};
+
+  #[test]
+  fn overview_change_stat_labels_are_compact() {
+    let pr = make_pr_details_for_stats();
+    let labels = overview_change_stat_labels(&pr);
+
+    assert_eq!(labels, ["+20".to_string(), "-4".to_string()]);
+  }
+
+  #[test]
+  fn overview_check_rows_keep_provider_avatar_urls() {
+    let mut checks = make_checks_summary();
+    checks.missing_required_contexts.clear();
+    checks.actions_runs = vec![GithubPullRequestWorkflowRun {
+      id: 100,
+      name: Some("CI".to_string()),
+      display_title: Some("build branch".to_string()),
+      event: "pull_request".to_string(),
+      status: Some("completed".to_string()),
+      conclusion: Some("success".to_string()),
+      state: GithubPullRequestChecksRollupState::Success,
+      created_at: "2026-03-19T10:00:00Z".to_string(),
+      updated_at: "2026-03-19T10:02:00Z".to_string(),
+      run_started_at: Some("2026-03-19T10:00:00Z".to_string()),
+      run_number: 12,
+      run_attempt: Some(1),
+      html_url: Some("https://github.com/acme/widget/actions/runs/100".to_string()),
+      jobs: vec![GithubPullRequestWorkflowJob {
+        id: 200,
+        name: "build".to_string(),
+        status: Some("completed".to_string()),
+        conclusion: Some("success".to_string()),
+        state: GithubPullRequestChecksRollupState::Success,
+        started_at: Some("2026-03-19T10:00:00Z".to_string()),
+        completed_at: Some("2026-03-19T10:02:00Z".to_string()),
+        html_url: Some("https://github.com/acme/widget/actions/runs/100/job/200".to_string()),
+        required: true,
+        app_name: Some("GitHub Actions".to_string()),
+        app_slug: Some("github-actions".to_string()),
+        app_avatar_url: Some("https://avatars.githubusercontent.com/in/15368?v=4".to_string()),
+        steps: Vec::new(),
+      }],
+    }];
+    checks.other_checks = vec![GithubPullRequestCheckRun {
+      id: 301,
+      name: "lint".to_string(),
+      status: Some("completed".to_string()),
+      conclusion: Some("failure".to_string()),
+      state: GithubPullRequestChecksRollupState::Failure,
+      started_at: Some("2026-03-19T10:01:00Z".to_string()),
+      completed_at: Some("2026-03-19T10:03:00Z".to_string()),
+      html_url: Some("https://github.com/acme/widget/runs/301".to_string()),
+      details_url: Some("https://github.com/acme/widget/runs/301".to_string()),
+      required: true,
+      app_name: Some("Reviewdog".to_string()),
+      app_slug: Some("reviewdog".to_string()),
+      app_avatar_url: Some("https://avatars.githubusercontent.com/u/15138054?v=4".to_string()),
+      title: Some("Lint".to_string()),
+      summary: Some("Lint failed".to_string()),
+      text: None,
+      annotations_count: 2,
+    }];
+    checks.legacy_statuses = vec![GithubPullRequestLegacyStatus {
+      id: 401,
+      context: "security/brakeman".to_string(),
+      status: "success".to_string(),
+      state: GithubPullRequestChecksRollupState::Success,
+      description: Some("Security checks passed".to_string()),
+      target_url: Some("https://ci.example.com/401".to_string()),
+      avatar_url: Some("https://ci.example.com/avatar.png".to_string()),
+      created_at: "2026-03-19T10:00:00Z".to_string(),
+      updated_at: "2026-03-19T10:04:00Z".to_string(),
+      required: false,
+    }];
+
+    let rows = overview_check_rows(&checks);
+
+    assert_eq!(
+      rows
+        .iter()
+        .find(|row| row.id == "workflow-job-200")
+        .and_then(|row| row.app_avatar_url.as_deref()),
+      Some("https://avatars.githubusercontent.com/in/15368?v=4")
+    );
+    assert_eq!(
+      rows
+        .iter()
+        .find(|row| row.id == "check-run-301")
+        .and_then(|row| row.app_avatar_url.as_deref()),
+      Some("https://avatars.githubusercontent.com/u/15138054?v=4")
+    );
+    assert_eq!(
+      rows
+        .iter()
+        .find(|row| row.id == "legacy-status-401")
+        .and_then(|row| row.app_avatar_url.as_deref()),
+      Some("https://ci.example.com/avatar.png")
+    );
+  }
+
+  #[test]
+  fn overview_check_rows_prefix_workflow_name_with_event_suffix() {
+    let mut checks = make_checks_summary();
+    checks.missing_required_contexts.clear();
+    checks.actions_runs = vec![GithubPullRequestWorkflowRun {
+      id: 100,
+      name: Some("CI".to_string()),
+      display_title: Some("CI".to_string()),
+      event: "pull_request".to_string(),
+      status: Some("completed".to_string()),
+      conclusion: Some("success".to_string()),
+      state: GithubPullRequestChecksRollupState::Success,
+      created_at: "2026-04-25T10:00:00Z".to_string(),
+      updated_at: "2026-04-25T10:02:00Z".to_string(),
+      run_started_at: Some("2026-04-25T10:00:00Z".to_string()),
+      run_number: 12,
+      run_attempt: Some(1),
+      html_url: Some("https://github.com/acme/widget/actions/runs/100".to_string()),
+      jobs: vec![GithubPullRequestWorkflowJob {
+        id: 200,
+        name: "Frontend (build)".to_string(),
+        status: Some("completed".to_string()),
+        conclusion: Some("success".to_string()),
+        state: GithubPullRequestChecksRollupState::Success,
+        started_at: Some("2026-04-25T10:00:00Z".to_string()),
+        completed_at: Some("2026-04-25T10:02:00Z".to_string()),
+        html_url: None,
+        required: false,
+        app_name: Some("GitHub Actions".to_string()),
+        app_slug: Some("github-actions".to_string()),
+        app_avatar_url: None,
+        steps: Vec::new(),
+      }],
+    }];
+
+    let rows = overview_check_rows(&checks);
+    let row = rows
+      .iter()
+      .find(|row| row.id == "workflow-job-200")
+      .expect("workflow job row");
+
+    assert_eq!(row.title, "CI / Frontend (build) (pull_request)");
+    assert_eq!(row.status_label.as_deref(), Some("Successful in 2m"));
+  }
+
+  #[test]
+  fn overview_check_status_label_formats_skipped_and_success_states() {
+    assert_eq!(
+      overview_check_status_label(
+        GithubPullRequestChecksRollupState::Success,
+        Some("2026-04-25T10:00:00Z"),
+        Some("2026-04-25T10:00:07Z"),
+      )
+      .as_deref(),
+      Some("Successful in 7s"),
+    );
+    assert!(
+      overview_check_status_label(
+        GithubPullRequestChecksRollupState::Skipped,
+        Some("2026-04-24T10:00:00Z"),
+        Some("2026-04-24T10:00:00Z"),
+      )
+      .unwrap()
+      .starts_with("Skipped "),
+    );
+  }
+
+  #[test]
+  fn overview_checks_summary_subtitle_lists_skipped_alongside_success() {
+    let mut checks = make_checks_summary();
+    checks.total_checks = 31;
+    checks.successful_checks = 15;
+    checks.skipped_checks = 16;
+    checks.failed_checks = 0;
+    checks.pending_checks = 0;
+    checks.overall_state = GithubPullRequestChecksRollupState::Success;
+
+    assert_eq!(
+      overview_checks_summary_subtitle(&checks),
+      "16 skipped, 15 successful checks"
+    );
+  }
+
+  #[gpui::test]
+  fn overview_conflicts_action_lands_in_the_shell_when_conflict_resolution_is_already_active(
+    cx: &mut TestAppContext,
+  ) {
+    init_gpui_test(cx);
+    cx.update(|cx| {
+      gpui_router::init(cx);
+      NavigationHistory::init(cx);
+      NavigationHistory::navigate_replace("/github/acme/widget/pull/42", cx);
+    });
+
+    let (repo_root, _) =
+      create_local_repo_with_github_remote("acme", "widget", "feature", &["main"]);
+    let rel_path = Path::new("src/main.rs");
+    commit_local_project_file(
+      &repo_root,
+      rel_path,
+      "fn main() {\n  println!(\"feature\");\n}\n",
+      "feature change",
+    );
+    switch_to_branch_name(&repo_root, "main").expect("switch to main");
+    commit_local_project_file(
+      &repo_root,
+      rel_path,
+      "fn main() {\n  println!(\"main\");\n}\n",
+      "main change",
+    );
+    switch_to_branch_name(&repo_root, "feature").expect("switch back to feature");
+
+    let merge_result = merge_branch(
+      &repo_root,
+      &BranchRef {
+        name: "main".to_string(),
+        kind: BranchKind::Local,
+      },
+    );
+    assert!(merge_result.is_err(), "merge should stop on conflicts");
+    assert!(local_repo_has_active_conflict_resolution(&repo_root));
+
+    let snapshot = local_repo_snapshot(&repo_root, None).expect("snapshot conflicted repo");
+    let head_sha = snapshot
+      .head_sha
+      .clone()
+      .expect("feature branch head should stay available");
+    assert!(snapshot.has_uncommitted_changes);
+
+    cx.update(|cx| {
+      ActiveLocalRepoStore::set(cx, Some(snapshot));
+    });
+    let (page, cx) = cx.add_window_view(|window, cx| GithubPrDetailsPage::new(window, cx));
+
+    page.update_in(cx, |this, _window, cx| {
+      this.pull_request = Some(make_pr_details_for_local_repo(&head_sha, "feature"));
+      this.merge_readiness = Some(make_merge_readiness_with_state(
+        GithubPullRequestMergeReadinessStatus::Blocked,
+        Some("dirty"),
+        "This pull request has merge conflicts that must be resolved before it can be merged.",
+      ));
+      cx.notify();
+    });
+
+    page.update_in(cx, |this, window, cx| {
+      this.open_overview_pr_alert_in_shell(window, cx);
+    });
+
+    cx.update(|_, cx| {
+      assert_eq!(NavigationHistory::current_pathname(cx).as_ref(), "/session");
+    });
+
+    std::fs::remove_dir_all(&repo_root).ok();
+  }
+
+  #[test]
+  fn overview_conflicts_info_falls_back_to_checks_requirement() {
+    let info = overview_conflicts_info(None, Some(&make_checks_summary())).expect("conflicts info");
+
+    assert_eq!(info.kind, OverviewConflictsKind::OutOfDate);
+    assert_eq!(info.title, "Branch is out of date");
+  }
+
+  #[test]
+  fn overview_conflicts_info_returns_conflicts_for_dirty_mergeable_state() {
+    let readiness = make_merge_readiness_with_state(
+      GithubPullRequestMergeReadinessStatus::Blocked,
+      Some("dirty"),
+      "This pull request has merge conflicts that must be resolved before it can be merged.",
+    );
+
+    let info = overview_conflicts_info(Some(&readiness), None).expect("conflicts info");
+
+    assert_eq!(info.kind, OverviewConflictsKind::Conflicts);
+    assert_eq!(info.title, "Merge conflicts detected");
+  }
+
+  #[test]
+  fn overview_conflicts_info_returns_no_conflicts_when_pr_is_ready() {
+    let mut checks = make_checks_summary();
+    checks.requires_up_to_date_branch = false;
+    let readiness = make_merge_readiness(
+      GithubPullRequestMergeReadinessStatus::Ready,
+      vec![GithubPullRequestMergeMethod::Merge],
+    );
+
+    let info = overview_conflicts_info(Some(&readiness), Some(&checks)).expect("conflicts info");
+    assert_eq!(info.kind, OverviewConflictsKind::NoConflicts);
+  }
+
+  #[test]
+  fn overview_conflicts_info_returns_out_of_date_for_behind_mergeable_state() {
+    let readiness = make_merge_readiness_with_state(
+      GithubPullRequestMergeReadinessStatus::Blocked,
+      Some("behind"),
+      "This pull request branch is out of date with the base branch.",
+    );
+
+    let info = overview_conflicts_info(Some(&readiness), None).expect("conflicts info");
+
+    assert_eq!(info.kind, OverviewConflictsKind::OutOfDate);
+    assert_eq!(info.title, "Branch is out of date");
+  }
+
+  #[test]
+  fn overview_conflicts_status_is_built_when_pr_has_merge_conflicts() {
+    let readiness = make_merge_readiness_with_state(
+      GithubPullRequestMergeReadinessStatus::Blocked,
+      Some("dirty"),
+      "This pull request has merge conflicts that must be resolved before it can be merged.",
+    );
+
+    let info = overview_conflicts_info(Some(&readiness), None).expect("conflicts info");
+    assert_eq!(info.kind, OverviewConflictsKind::Conflicts);
+  }
+
+  #[test]
+  fn overview_review_status_changes_requested_overrides_approval() {
+    let readiness = make_merge_readiness(
+      GithubPullRequestMergeReadinessStatus::Ready,
+      vec![GithubPullRequestMergeMethod::Merge],
+    );
+    let reviews = vec![
+      GithubPullRequestReview {
+        node_id: "PRR_1".to_string(),
+        id: 1,
+        body: None,
+        state: GithubPullRequestReviewState::Approved,
+        submitted_at: Some("2025-01-01T00:00:00Z".to_string()),
+        commit_id: None,
+        html_url: String::new(),
+        user: Some(GithubPullRequestReviewUser {
+          login: "reviewer1".to_string(),
+          avatar_url: None,
+        }),
+      },
+      GithubPullRequestReview {
+        node_id: "PRR_2".to_string(),
+        id: 2,
+        body: None,
+        state: GithubPullRequestReviewState::RequestChanges,
+        submitted_at: Some("2025-01-01T00:00:00Z".to_string()),
+        commit_id: None,
+        html_url: String::new(),
+        user: Some(GithubPullRequestReviewUser {
+          login: "reviewer2".to_string(),
+          avatar_url: None,
+        }),
+      },
+    ];
+
+    let info =
+      overview_review_status_info(Some(&readiness), &[], &reviews, "author").expect("review info");
+    assert_eq!(info.title, "Changes requested");
+  }
+
+  #[test]
+  fn overview_review_status_returns_approved_when_all_reviewers_approved() {
+    let readiness = make_merge_readiness(
+      GithubPullRequestMergeReadinessStatus::Ready,
+      vec![GithubPullRequestMergeMethod::Merge],
+    );
+    let reviews = vec![GithubPullRequestReview {
+      node_id: "PRR_1".to_string(),
+      id: 1,
+      body: None,
+      state: GithubPullRequestReviewState::Approved,
+      submitted_at: Some("2025-01-01T00:00:00Z".to_string()),
+      commit_id: None,
+      html_url: String::new(),
+      user: Some(GithubPullRequestReviewUser {
+        login: "reviewer1".to_string(),
+        avatar_url: None,
+      }),
+    }];
+
+    let info =
+      overview_review_status_info(Some(&readiness), &[], &reviews, "author").expect("review info");
+    assert_eq!(info.title, "Changes approved");
+  }
+
+  #[test]
+  fn overview_review_status_returns_approved_when_one_approved_and_one_commented() {
+    let readiness = make_merge_readiness(
+      GithubPullRequestMergeReadinessStatus::Ready,
+      vec![GithubPullRequestMergeMethod::Merge],
+    );
+    let reviews = vec![
+      GithubPullRequestReview {
+        node_id: "PRR_1".to_string(),
+        id: 1,
+        body: None,
+        state: GithubPullRequestReviewState::Approved,
+        submitted_at: Some("2025-01-01T00:00:00Z".to_string()),
+        commit_id: None,
+        html_url: String::new(),
+        user: Some(GithubPullRequestReviewUser {
+          login: "reviewer1".to_string(),
+          avatar_url: None,
+        }),
+      },
+      GithubPullRequestReview {
+        node_id: "PRR_2".to_string(),
+        id: 2,
+        body: None,
+        state: GithubPullRequestReviewState::Commented,
+        submitted_at: Some("2025-01-01T00:00:00Z".to_string()),
+        commit_id: None,
+        html_url: String::new(),
+        user: Some(GithubPullRequestReviewUser {
+          login: "reviewer2".to_string(),
+          avatar_url: None,
+        }),
+      },
+    ];
+
+    let info =
+      overview_review_status_info(Some(&readiness), &[], &reviews, "author").expect("review info");
+    assert_eq!(info.title, "Changes approved");
+  }
+
+  #[test]
+  fn overview_review_status_returns_awaiting_when_reviewer_has_not_approved() {
+    let readiness = make_merge_readiness(
+      GithubPullRequestMergeReadinessStatus::Ready,
+      vec![GithubPullRequestMergeMethod::Merge],
+    );
+    let reviewers = vec![GithubPullRequestFilterOptionUser {
+      login: "reviewer1".to_string(),
+      avatar_url: None,
+    }];
+
+    let info = overview_review_status_info(Some(&readiness), &reviewers, &[], "author")
+      .expect("review info");
+    assert_eq!(info.title, "Review required");
+  }
+
+  #[test]
+  fn overview_review_status_returns_changes_requested() {
+    let readiness = make_merge_readiness(
+      GithubPullRequestMergeReadinessStatus::Ready,
+      vec![GithubPullRequestMergeMethod::Merge],
+    );
+    let reviews = vec![GithubPullRequestReview {
+      node_id: "PRR_1".to_string(),
+      id: 1,
+      body: None,
+      state: GithubPullRequestReviewState::RequestChanges,
+      submitted_at: Some("2025-01-01T00:00:00Z".to_string()),
+      commit_id: None,
+      html_url: String::new(),
+      user: Some(GithubPullRequestReviewUser {
+        login: "reviewer1".to_string(),
+        avatar_url: None,
+      }),
+    }];
+
+    let info =
+      overview_review_status_info(Some(&readiness), &[], &reviews, "author").expect("review info");
+    assert_eq!(info.title, "Changes requested");
+  }
+
+  #[test]
+  fn overview_review_status_returns_none_for_dirty_state() {
+    let readiness = make_merge_readiness_with_state(
+      GithubPullRequestMergeReadinessStatus::Blocked,
+      Some("dirty"),
+      "Merge conflicts.",
+    );
+
+    assert!(overview_review_status_info(Some(&readiness), &[], &[], "author").is_none());
+  }
+
+  #[test]
+  fn overview_review_status_returns_none_when_ready_and_no_reviewers() {
+    let readiness = make_merge_readiness(
+      GithubPullRequestMergeReadinessStatus::Ready,
+      vec![GithubPullRequestMergeMethod::Merge],
+    );
+
+    assert!(overview_review_status_info(Some(&readiness), &[], &[], "author").is_none());
+  }
+
+  #[test]
+  fn overview_review_status_returns_review_required_when_blocked() {
+    let readiness = make_merge_readiness_with_state(
+      GithubPullRequestMergeReadinessStatus::Blocked,
+      Some("blocked"),
+      "Review is required by reviewers with write access.",
+    );
+
+    let info =
+      overview_review_status_info(Some(&readiness), &[], &[], "author").expect("review info");
+    assert_eq!(info.title, "Review required");
   }
 }

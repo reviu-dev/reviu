@@ -3,6 +3,194 @@
 
 use super::*;
 
+fn pr_tab_url_segment(tab_ix: usize) -> &'static str {
+  match tab_ix {
+    PR_TAB_CHANGES_IX => "changes",
+    _ => "", // overview = no suffix
+  }
+}
+
+fn render_image_preview_status_message(
+  message: impl Into<SharedString>,
+  color: Hsla,
+) -> AnyElement {
+  div()
+    .w(px(280.0))
+    .max_w_full()
+    .px_3()
+    .text_sm()
+    .text_center()
+    .whitespace_normal()
+    .text_color(color)
+    .child(message.into())
+    .into_any_element()
+}
+
+fn resolve_diff_shas_for_context(
+  merge_base_sha: &str,
+  base_sha: &str,
+  head_sha: &str,
+  selected_commit_sha: Option<&str>,
+  selected_parent_sha: Option<&str>,
+) -> Option<(String, String)> {
+  if let Some(selected_commit_sha) = selected_commit_sha {
+    let selected_commit_sha = selected_commit_sha.trim();
+    if selected_commit_sha.is_empty() {
+      return None;
+    }
+    let base_sha = selected_parent_sha
+      .map(str::trim)
+      .filter(|sha| !sha.is_empty())
+      .unwrap_or_else(|| base_sha.trim());
+    if base_sha.is_empty() {
+      return None;
+    }
+    return Some((base_sha.to_string(), selected_commit_sha.to_string()));
+  }
+
+  let base_sha = if !merge_base_sha.trim().is_empty() {
+    merge_base_sha.trim()
+  } else {
+    base_sha.trim()
+  };
+  let head_sha = head_sha.trim();
+  if base_sha.is_empty() || head_sha.is_empty() {
+    return None;
+  }
+
+  Some((base_sha.to_string(), head_sha.to_string()))
+}
+
+fn build_tree_items_from_paths(
+  paths: &[String],
+  expanded_folder_paths: Option<&HashSet<String>>,
+) -> (Vec<TreeItem>, Option<usize>, Option<String>) {
+  let files = paths
+    .iter()
+    .map(|path| {
+      Rc::new(GithubPrLocalProjectFile {
+        path: path.clone().into(),
+      })
+    })
+    .collect::<Vec<_>>();
+  let (items, _, selected_index, selected_id) =
+    build_path_tree_items_with_expansion(&files, |file| file.path.as_ref(), expanded_folder_paths);
+  (items, selected_index, selected_id)
+}
+
+fn build_search_file_entry(path: &str) -> SearchFileEntry {
+  let label = path.replace(['\n', '\r'], "");
+  SearchFileEntry::new(PathBuf::from(label.clone()), label)
+}
+
+fn searchable_text_from_pr_file_contents<'a>(
+  file: &GithubPrFileDiff,
+  contents: &'a GithubPrFileContents,
+) -> Option<&'a str> {
+  match file.status {
+    GithubPrFileStatus::Deleted => contents.base.as_deref().or(contents.head.as_deref()),
+    _ => contents.head.as_deref().or(contents.base.as_deref()),
+  }
+}
+
+fn fetch_pr_file_search_contents(
+  api: &ApiClient,
+  diff_refs: &GithubPrDiffRefs,
+  file: &GithubPrFileDiff,
+) -> GithubPrFileContents {
+  match file.status {
+    GithubPrFileStatus::Deleted => GithubPrFileContents {
+      base: file
+        .old_path
+        .as_ref()
+        .or(Some(&file.path))
+        .and_then(|path| {
+          api
+            .fetch_github_file_content(
+              &diff_refs.base_owner,
+              &diff_refs.base_repo,
+              path.as_ref(),
+              &diff_refs.base_sha,
+            )
+            .ok()
+            .flatten()
+        }),
+      head: None,
+    },
+    _ => GithubPrFileContents {
+      base: None,
+      head: api
+        .fetch_github_file_content(
+          &diff_refs.head_owner,
+          &diff_refs.head_repo,
+          file.path.as_ref(),
+          &diff_refs.head_sha,
+        )
+        .ok()
+        .flatten(),
+    },
+  }
+}
+
+fn perform_tree_text_search(
+  query: &str,
+  scope_paths: &[String],
+  pr_files: &HashMap<String, GithubPrFileDiff>,
+  cached_file_contents: &HashMap<String, GithubPrFileContents>,
+  diff_refs: Option<&GithubPrDiffRefs>,
+  api: &ApiClient,
+  local_repo_root: Option<&Path>,
+) -> GithubPrTreeSearchResult {
+  let mut result = GithubPrTreeSearchResult::default();
+  let mut local_scope_paths = Vec::new();
+
+  for path in scope_paths {
+    if let Some(file) = pr_files.get(path) {
+      let contents = if let Some(contents) = cached_file_contents.get(path).cloned() {
+        contents
+      } else if let Some(diff_refs) = diff_refs {
+        let fetched = fetch_pr_file_search_contents(api, diff_refs, file);
+        result
+          .updated_file_contents
+          .insert(path.clone(), fetched.clone());
+        fetched
+      } else {
+        continue;
+      };
+
+      if searchable_text_from_pr_file_contents(file, &contents)
+        .is_some_and(|contents| contents.to_lowercase().contains(query))
+      {
+        result.matches.insert(path.clone());
+      }
+      continue;
+    }
+
+    if local_repo_root.is_some() {
+      local_scope_paths.push(PathBuf::from(path));
+    }
+  }
+
+  if let Some(local_repo_root) = local_repo_root
+    && !local_scope_paths.is_empty()
+  {
+    match search_repo_head_contents(local_repo_root, &local_scope_paths, query) {
+      Ok(matches) => {
+        result.matches.extend(
+          matches
+            .into_iter()
+            .map(|path| path.to_string_lossy().into_owned()),
+        );
+      }
+      Err(error) => {
+        result.error = Some(format!("Failed to search local files: {error}"));
+      }
+    }
+  }
+
+  result
+}
+
 impl GithubPrDetailsPage {
   pub(super) fn build_detached_diff_editor(
     path: impl Into<PathBuf>,
@@ -1137,6 +1325,7 @@ impl GithubPrDetailsPage {
 mod tests {
   use super::super::test_support::*;
   use super::super::*;
+  use super::*;
 
   #[gpui::test]
   fn set_active_tab_changes_focuses_file_tree(cx: &mut TestAppContext) {
@@ -1666,5 +1855,141 @@ mod tests {
     });
     assert_eq!(active_tab_ix, PR_TAB_CHANGES_IX);
     assert_eq!(selected_commit_sha.as_deref(), Some(target_sha));
+  }
+
+  #[test]
+  fn build_tree_items_from_paths_expands_only_folders_with_changed_files() {
+    let paths = vec![
+      "src/changed.rs".to_string(),
+      "src/nested/also_changed.rs".to_string(),
+      "tests/helper.rs".to_string(),
+      "README.md".to_string(),
+    ];
+    let expanded =
+      expanded_folder_paths_for_changed_files(["src/changed.rs", "src/nested/also_changed.rs"]);
+
+    let (items, selected_index, selected_id) = build_tree_items_from_paths(&paths, Some(&expanded));
+
+    assert_eq!(items.len(), 3);
+    assert_eq!(items[0].label.as_ref(), "src");
+    assert!(items[0].is_expanded());
+    assert_eq!(items[0].children[0].label.as_ref(), "nested");
+    assert!(items[0].children[0].is_expanded());
+    assert_eq!(items[1].label.as_ref(), "tests");
+    assert!(!items[1].is_expanded());
+    assert_eq!(items[2].label.as_ref(), "README.md");
+    assert_eq!(selected_id.as_deref(), Some("src/nested/also_changed.rs"));
+    assert_eq!(selected_index, Some(0));
+  }
+
+  #[test]
+  fn perform_tree_text_search_matches_changed_pr_files_from_cached_contents() {
+    let api = WorkspaceApi::new().api;
+    let scope_paths = vec!["src/pr_only.rs".to_string(), "src/other.rs".to_string()];
+    let pr_only = GithubPrFileDiff {
+      path: "src/pr_only.rs".into(),
+      old_path: None,
+      status: GithubPrFileStatus::Modified,
+    };
+    let other = GithubPrFileDiff {
+      path: "src/other.rs".into(),
+      old_path: None,
+      status: GithubPrFileStatus::Modified,
+    };
+    let pr_files = HashMap::from([
+      ("src/pr_only.rs".to_string(), pr_only),
+      ("src/other.rs".to_string(), other),
+    ]);
+    let cached_file_contents = HashMap::from([
+      (
+        "src/pr_only.rs".to_string(),
+        GithubPrFileContents {
+          base: Some("before\n".to_string()),
+          head: Some("needle appears here\n".to_string()),
+        },
+      ),
+      (
+        "src/other.rs".to_string(),
+        GithubPrFileContents {
+          base: Some("before\n".to_string()),
+          head: Some("different content\n".to_string()),
+        },
+      ),
+    ]);
+
+    let result = perform_tree_text_search(
+      "needle",
+      &scope_paths,
+      &pr_files,
+      &cached_file_contents,
+      None,
+      &api,
+      None,
+    );
+
+    assert_eq!(
+      result.matches,
+      HashSet::from(["src/pr_only.rs".to_string(),])
+    );
+    assert!(result.updated_file_contents.is_empty());
+  }
+
+  #[test]
+  fn perform_tree_text_search_matches_local_head_contents_and_skips_untracked() {
+    let repo_root = crate::test_support::temp_path("pr-search-local");
+    Repository::init(&repo_root).expect("init local project git repo");
+    commit_local_project_file(
+      &repo_root,
+      Path::new("tracked.txt"),
+      "needle in head\n",
+      "initial tracked",
+    );
+    std::fs::write(repo_root.join("tracked.txt"), "worktree without match\n")
+      .expect("write local worktree change");
+    std::fs::create_dir_all(repo_root.join("scratch")).expect("create scratch dir");
+    std::fs::write(
+      repo_root.join("scratch/tmp.txt"),
+      "needle only in untracked\n",
+    )
+    .expect("write untracked file");
+
+    let api = WorkspaceApi::new().api;
+    let result = perform_tree_text_search(
+      "needle",
+      &["tracked.txt".to_string(), "scratch/tmp.txt".to_string()],
+      &HashMap::new(),
+      &HashMap::new(),
+      None,
+      &api,
+      Some(repo_root.as_path()),
+    );
+
+    assert_eq!(result.matches, HashSet::from(["tracked.txt".to_string(),]));
+    assert!(result.updated_file_contents.is_empty());
+    std::fs::remove_dir_all(&repo_root).ok();
+  }
+
+  #[test]
+  fn resolve_diff_shas_for_context_uses_commit_parent_when_selected() {
+    let resolved = resolve_diff_shas_for_context(
+      "merge123",
+      "base123",
+      "head123",
+      Some("commit999"),
+      Some("parent888"),
+    );
+    assert_eq!(
+      resolved,
+      Some(("parent888".to_string(), "commit999".to_string()))
+    );
+  }
+
+  #[test]
+  fn resolve_diff_shas_for_context_uses_merge_base_when_no_commit_selected() {
+    let resolved = resolve_diff_shas_for_context("merge123", "base123", "head123", None, None);
+    assert_eq!(
+      resolved,
+      Some(("merge123".to_string(), "head123".to_string()))
+    );
   }
 }

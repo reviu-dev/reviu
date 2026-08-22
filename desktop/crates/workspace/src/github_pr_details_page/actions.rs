@@ -2,6 +2,15 @@
 
 use super::*;
 
+fn adjacent_pr_tab_ix(current: usize, direction: TabNavigationDirection) -> usize {
+  const PR_TAB_COUNT: usize = 2;
+
+  match direction {
+    TabNavigationDirection::Previous => (current + PR_TAB_COUNT - 1) % PR_TAB_COUNT,
+    TabNavigationDirection::Next => (current + 1) % PR_TAB_COUNT,
+  }
+}
+
 impl GithubPrDetailsPage {
   pub(super) fn show_file_search_action(
     &mut self,
@@ -506,6 +515,7 @@ impl GithubPrDetailsPage {
 mod tests {
   use super::super::test_support::*;
   use super::super::*;
+  use super::*;
 
   #[gpui::test]
   fn focus_file_tree_action_switches_to_changes_tab_and_focuses_tree(cx: &mut TestAppContext) {
@@ -757,5 +767,21 @@ mod tests {
     assert!(switch_error.is_none());
 
     std::fs::remove_dir_all(&repo_root).ok();
+  }
+
+  #[test]
+  fn adjacent_pr_tab_ix_wraps_in_both_directions() {
+    assert_eq!(
+      adjacent_pr_tab_ix(PR_TAB_OVERVIEW_IX, TabNavigationDirection::Previous),
+      PR_TAB_CHANGES_IX
+    );
+    assert_eq!(
+      adjacent_pr_tab_ix(PR_TAB_CHANGES_IX, TabNavigationDirection::Previous),
+      PR_TAB_OVERVIEW_IX
+    );
+    assert_eq!(
+      adjacent_pr_tab_ix(PR_TAB_CHANGES_IX, TabNavigationDirection::Next),
+      PR_TAB_OVERVIEW_IX
+    );
   }
 }

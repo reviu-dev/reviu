@@ -3,6 +3,53 @@
 
 use super::*;
 
+fn sorted_branch_names_for_target_selector(
+  branches: Vec<GithubRepositoryBranch>,
+  current_base: &str,
+  head_ref: &str,
+) -> Vec<String> {
+  let mut names = branches
+    .into_iter()
+    .map(|branch| branch.name)
+    .filter(|name| !name.trim().is_empty())
+    .filter(|name| !name.eq_ignore_ascii_case(head_ref))
+    .collect::<Vec<_>>();
+  if !current_base.trim().is_empty()
+    && !current_base.eq_ignore_ascii_case(head_ref)
+    && !names
+      .iter()
+      .any(|name| name.eq_ignore_ascii_case(current_base))
+  {
+    names.push(current_base.to_string());
+  }
+  names.sort_by_key(|name| name.to_ascii_lowercase());
+  names.dedup_by(|a, b| a.eq_ignore_ascii_case(b));
+  names
+}
+
+fn build_target_branch_select_items(
+  branches: Vec<GithubRepositoryBranch>,
+  current_base: &str,
+  head_ref: &str,
+) -> Vec<PrTargetBranchSelectItem> {
+  sorted_branch_names_for_target_selector(branches, current_base, head_ref)
+    .into_iter()
+    .map(PrTargetBranchSelectItem::new)
+    .collect()
+}
+
+fn merge_method_label(method: GithubPullRequestMergeMethod) -> &'static str {
+  match method {
+    GithubPullRequestMergeMethod::Merge => "Create a merge commit",
+    GithubPullRequestMergeMethod::Squash => "Squash and merge",
+    GithubPullRequestMergeMethod::Rebase => "Rebase and merge",
+  }
+}
+
+fn merge_method_supports_commit_message(method: GithubPullRequestMergeMethod) -> bool {
+  !matches!(method, GithubPullRequestMergeMethod::Rebase)
+}
+
 impl GithubPrDetailsPage {
   pub(super) fn mark_merge_form_reset_pending(&mut self) {
     self.merge_form_reset_pending = true;
@@ -916,6 +963,7 @@ impl GithubPrDetailsPage {
 mod tests {
   use super::super::test_support::*;
   use super::super::*;
+  use super::*;
 
   #[gpui::test]
   fn merge_button_renders_for_loaded_pull_request(cx: &mut TestAppContext) {
@@ -1216,5 +1264,61 @@ mod tests {
     assert!(!details_task_present);
     assert!(!loading);
     assert!(error.is_none());
+  }
+
+  #[test]
+  fn merge_method_label_covers_all_variants() {
+    assert_eq!(
+      merge_method_label(GithubPullRequestMergeMethod::Merge),
+      "Create a merge commit"
+    );
+    assert_eq!(
+      merge_method_label(GithubPullRequestMergeMethod::Squash),
+      "Squash and merge"
+    );
+    assert_eq!(
+      merge_method_label(GithubPullRequestMergeMethod::Rebase),
+      "Rebase and merge"
+    );
+  }
+
+  #[test]
+  fn merge_method_supports_commit_message_hides_fields_for_rebase_only() {
+    assert!(merge_method_supports_commit_message(
+      GithubPullRequestMergeMethod::Merge
+    ));
+    assert!(merge_method_supports_commit_message(
+      GithubPullRequestMergeMethod::Squash
+    ));
+    assert!(!merge_method_supports_commit_message(
+      GithubPullRequestMergeMethod::Rebase
+    ));
+  }
+
+  #[test]
+  fn target_branch_selector_excludes_head_branch() {
+    let branches = vec![
+      make_repo_branch("main"),
+      make_repo_branch("feature"),
+      make_repo_branch("Feature"),
+      make_repo_branch("release/next"),
+    ];
+
+    let names = sorted_branch_names_for_target_selector(branches, "main", "feature");
+
+    assert_eq!(names, vec!["main", "release/next"]);
+  }
+
+  #[test]
+  fn target_branch_selector_sorts_dedupes_and_keeps_current_base() {
+    let branches = vec![
+      make_repo_branch("release/next"),
+      make_repo_branch("main"),
+      make_repo_branch("Main"),
+    ];
+
+    let names = sorted_branch_names_for_target_selector(branches, "develop", "feature");
+
+    assert_eq!(names, vec!["develop", "main", "release/next"]);
   }
 }

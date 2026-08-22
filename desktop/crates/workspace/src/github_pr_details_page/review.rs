@@ -3,6 +3,282 @@
 
 use super::*;
 
+fn code_reference_requests_from_markdown(markdown: &str) -> Vec<GithubBlobLineReference> {
+  extract_github_blob_line_references(markdown)
+}
+
+fn next_review_comment_navigation_index(
+  comment_ids: &[u64],
+  active_comment_id: Option<u64>,
+  direction: ReviewCommentNavigationDirection,
+) -> Option<usize> {
+  if comment_ids.is_empty() {
+    return None;
+  }
+
+  let active_index =
+    active_comment_id.and_then(|id| comment_ids.iter().position(|value| *value == id));
+
+  Some(match direction {
+    ReviewCommentNavigationDirection::Next => active_index
+      .map(|ix| (ix + 1) % comment_ids.len())
+      .unwrap_or(0),
+    ReviewCommentNavigationDirection::Previous => active_index
+      .map(|ix| {
+        if ix == 0 {
+          comment_ids.len() - 1
+        } else {
+          ix - 1
+        }
+      })
+      .unwrap_or(comment_ids.len() - 1),
+  })
+}
+
+fn parse_github_commit_url(url: &str) -> Option<(String, String, String)> {
+  let url = url.trim();
+  let tail = url
+    .strip_prefix("https://github.com/")
+    .or_else(|| url.strip_prefix("http://github.com/"))
+    .or_else(|| url.strip_prefix("github.com/"))?;
+  let tail = tail
+    .split('#')
+    .next()
+    .unwrap_or(tail)
+    .split('?')
+    .next()
+    .unwrap_or(tail);
+
+  let parts = tail
+    .split('/')
+    .map(str::trim)
+    .filter(|part| !part.is_empty())
+    .collect::<Vec<_>>();
+  if parts.len() < 4 {
+    return None;
+  }
+
+  let owner = parts[0].to_string();
+  let repo = parts[1].to_string();
+  let sha = match parts[2] {
+    "commit" => parts.get(3)?,
+    "pull" if parts.get(4).copied() == Some("commits") => parts.get(5)?,
+    _ => return None,
+  };
+
+  Some((owner, repo, (*sha).to_string()))
+}
+
+fn resolve_same_pr_commit_link_sha(
+  current_pr_context: Option<&CurrentPrContext>,
+  commits: &[GithubPullRequestCommit],
+  url: &str,
+) -> Option<String> {
+  let (owner, repo, linked_sha) = parse_github_commit_url(url)?;
+  let context = current_pr_context?;
+  if !context.owner.eq_ignore_ascii_case(&owner) || !context.repo.eq_ignore_ascii_case(&repo) {
+    return None;
+  }
+
+  let linked_sha = linked_sha.trim();
+  if linked_sha.is_empty() {
+    return None;
+  }
+
+  if let Some(commit) = commits
+    .iter()
+    .find(|commit| commit.sha.eq_ignore_ascii_case(linked_sha))
+  {
+    return Some(commit.sha.clone());
+  }
+
+  let linked_sha = linked_sha.to_ascii_lowercase();
+  let mut matches = commits.iter().filter(|commit| {
+    commit
+      .sha
+      .to_ascii_lowercase()
+      .starts_with(linked_sha.as_str())
+  });
+  let first_match = matches.next()?;
+  if matches.next().is_some() {
+    return None;
+  }
+
+  Some(first_match.sha.clone())
+}
+
+fn normalize_line_range(start: Option<i64>, end: Option<i64>) -> Option<(usize, usize)> {
+  let start = positive_line_number(start);
+  let end = positive_line_number(end);
+  let (start, end) = match (start, end) {
+    (Some(start), Some(end)) => (start, end),
+    (Some(start), None) => (start, start),
+    (None, Some(end)) => (end, end),
+    (None, None) => return None,
+  };
+
+  Some(if start <= end {
+    (start, end)
+  } else {
+    (end, start)
+  })
+}
+
+fn review_comment_preview_line_range(
+  comment: &GithubPullRequestReviewComment,
+) -> Option<(usize, usize)> {
+  normalize_line_range(
+    comment.start_line.or(comment.line),
+    comment.line.or(comment.start_line),
+  )
+  .or_else(|| {
+    normalize_line_range(
+      comment.original_start_line.or(comment.original_line),
+      comment.original_line.or(comment.original_start_line),
+    )
+  })
+}
+
+fn review_comment_targets_file(
+  comment: &GithubPullRequestReviewComment,
+  file: &GithubPrFileDiff,
+) -> bool {
+  comment.path == file.path
+    || file
+      .old_path
+      .as_ref()
+      .is_some_and(|old_path| old_path.as_ref() == comment.path)
+}
+
+fn review_comment_to_editor_comment(
+  comment: &GithubPullRequestReviewComment,
+  comments_by_id: &HashMap<u64, &GithubPullRequestReviewComment>,
+) -> Option<ReviewComment> {
+  let (line, side, resolved_line) = resolve_review_comment_display_anchor(comment, comments_by_id)?;
+
+  let line_label = {
+    let line_label = if let Some(start) = comment.start_line
+      && let Some(end) = comment.line
+      && start != end
+    {
+      Some(format!("L{}-{}", start, end))
+    } else {
+      comment
+        .line
+        .or(comment.start_line)
+        .or(resolved_line)
+        .map(|value| format!("L{}", value))
+    };
+    line_label.map(|label| Arc::from(label.as_str()))
+  };
+
+  Some(ReviewComment {
+    id: comment.id,
+    in_reply_to_id: comment.in_reply_to_id,
+    line,
+    side,
+    author: Arc::from(comment.user.login.as_str()),
+    avatar_url: comment.user.avatar_url.as_deref().map(Arc::from),
+    line_label,
+    body: Arc::from(comment.body.as_str()),
+    suggestion_context: suggestion_context_from_review_comment(comment),
+    created_at: Arc::from(format_relative_time(&comment.created_at).to_string()),
+    thread_id: (!comment.thread_id.is_empty())
+      .then(|| Arc::<str>::from(comment.thread_id.as_str())),
+    is_resolved: comment.is_resolved,
+    is_outdated: comment.is_outdated,
+    viewer_can_resolve: comment.viewer_can_resolve,
+    viewer_can_unresolve: comment.viewer_can_unresolve,
+    is_pending: comment.is_pending,
+  })
+}
+
+fn resolve_review_comment_thread_root_id(
+  comment: &GithubPullRequestReviewComment,
+  comments_by_id: &HashMap<u64, &GithubPullRequestReviewComment>,
+) -> u64 {
+  let mut root_id = comment.id;
+  let mut parent = comment.in_reply_to_id;
+  for _ in 0..64 {
+    let Some(parent_id) = parent else {
+      break;
+    };
+    if parent_id == root_id {
+      break;
+    }
+    root_id = parent_id;
+    parent = comments_by_id
+      .get(&parent_id)
+      .and_then(|value| value.in_reply_to_id);
+  }
+  if comments_by_id.contains_key(&root_id) {
+    root_id
+  } else {
+    comment.id
+  }
+}
+
+fn overview_root_review_comment_ids(
+  review_comments: &[GithubPullRequestReviewComment],
+) -> Vec<u64> {
+  let comments_by_id: HashMap<u64, &GithubPullRequestReviewComment> = review_comments
+    .iter()
+    .map(|comment| (comment.id, comment))
+    .collect();
+  let mut root_ids = Vec::new();
+  let mut seen = HashSet::new();
+
+  for comment in review_comments {
+    let root_id = resolve_review_comment_thread_root_id(comment, &comments_by_id);
+    if seen.insert(root_id) {
+      root_ids.push(root_id);
+    }
+  }
+
+  root_ids
+}
+
+fn suggestion_context_from_review_comment(
+  comment: &GithubPullRequestReviewComment,
+) -> Option<SuggestionContext> {
+  let (_, line) = review_comment_preview_line_range(comment)?;
+  let start_line = comment
+    .start_line
+    .or(comment.line)
+    .or(comment.original_start_line)
+    .or(comment.original_line);
+  let original_range = github_shared::extract_original_line_range_from_diff_hunk(
+    &comment.diff_hunk,
+    start_line,
+    line as i64,
+  )?;
+  Some(SuggestionContext {
+    original_start_line: Some(original_range.start_line),
+    suggested_start_line: Some(original_range.start_line),
+    original_lines: original_range.lines,
+    path: Arc::from(comment.path.as_str()),
+  })
+}
+
+fn review_comment_owned_by_login(comment: &GithubPullRequestReviewComment, login: &str) -> bool {
+  github_shared::logins_match_case_insensitive(comment.user.login.as_str(), login)
+}
+
+fn upsert_review_local(
+  reviews: &mut Vec<GithubPullRequestReview>,
+  mut review: GithubPullRequestReview,
+) {
+  if let Some(existing) = reviews.iter_mut().find(|existing| existing.id == review.id) {
+    if review.node_id.is_empty() {
+      review.node_id.clone_from(&existing.node_id);
+    }
+    *existing = review;
+    return;
+  }
+
+  reviews.push(review);
+}
+
 impl GithubPrDetailsPage {
   pub(super) fn review_decision_to_api_event(
     decision: GithubPrReviewDecision,
@@ -2071,6 +2347,7 @@ impl GithubPrDetailsPage {
 mod tests {
   use super::super::test_support::*;
   use super::super::*;
+  use super::*;
 
   #[test]
   fn suggested_change_original_lines_detects_stale_head_content() {
@@ -2193,5 +2470,312 @@ mod tests {
       Some("src/new.rs")
     );
     assert!(file_for_review_comment_path(&lookup, "missing.rs").is_none());
+  }
+
+  #[test]
+  fn code_reference_requests_from_markdown_extracts_blob_links() {
+    let body = "[compose](https://github.com/acme/widget/blob/main/docker-compose.yml#L7)";
+    let references = code_reference_requests_from_markdown(body);
+    assert_eq!(references.len(), 1);
+    assert_eq!(references[0].owner, "acme");
+    assert_eq!(references[0].repo, "widget");
+  }
+
+  #[test]
+  fn next_review_comment_navigation_index_falls_back_when_active_comment_is_missing() {
+    let comment_ids = [11, 22, 33];
+    assert_eq!(
+      next_review_comment_navigation_index(
+        &comment_ids,
+        Some(99),
+        ReviewCommentNavigationDirection::Next
+      ),
+      Some(0)
+    );
+    assert_eq!(
+      next_review_comment_navigation_index(
+        &comment_ids,
+        Some(99),
+        ReviewCommentNavigationDirection::Previous
+      ),
+      Some(2)
+    );
+  }
+
+  #[test]
+  fn next_review_comment_navigation_index_handles_empty_list() {
+    assert_eq!(
+      next_review_comment_navigation_index(&[], None, ReviewCommentNavigationDirection::Next),
+      None
+    );
+  }
+
+  #[test]
+  fn next_review_comment_navigation_index_uses_first_or_last_without_active_selection() {
+    let comment_ids = [11, 22, 33];
+    assert_eq!(
+      next_review_comment_navigation_index(
+        &comment_ids,
+        None,
+        ReviewCommentNavigationDirection::Next
+      ),
+      Some(0)
+    );
+    assert_eq!(
+      next_review_comment_navigation_index(
+        &comment_ids,
+        None,
+        ReviewCommentNavigationDirection::Previous
+      ),
+      Some(2)
+    );
+  }
+
+  #[test]
+  fn next_review_comment_navigation_index_wraps_in_both_directions() {
+    let comment_ids = [11, 22, 33];
+    assert_eq!(
+      next_review_comment_navigation_index(
+        &comment_ids,
+        Some(33),
+        ReviewCommentNavigationDirection::Next
+      ),
+      Some(0)
+    );
+    assert_eq!(
+      next_review_comment_navigation_index(
+        &comment_ids,
+        Some(11),
+        ReviewCommentNavigationDirection::Previous
+      ),
+      Some(2)
+    );
+  }
+
+  #[test]
+  fn overview_root_review_comment_ids_collapses_threads_to_root_only() {
+    let review_comments = vec![
+      make_review_comment(1, "2026-02-28T10:00:00Z", None),
+      make_review_comment(2, "2026-02-28T10:01:00Z", Some(1)),
+      make_review_comment(3, "2026-02-28T10:02:00Z", Some(2)),
+    ];
+
+    let roots = overview_root_review_comment_ids(&review_comments);
+    assert_eq!(roots, vec![1]);
+    assert!(!roots.contains(&2));
+    assert!(!roots.contains(&3));
+  }
+
+  #[test]
+  fn overview_root_review_comment_ids_keeps_distinct_thread_roots() {
+    let review_comments = vec![
+      make_review_comment(1, "2026-02-28T10:00:00Z", None),
+      make_review_comment(2, "2026-02-28T10:01:00Z", Some(1)),
+      make_review_comment(10, "2026-02-28T10:02:00Z", None),
+      make_review_comment(11, "2026-02-28T10:03:00Z", Some(10)),
+    ];
+
+    let roots = overview_root_review_comment_ids(&review_comments);
+    assert_eq!(roots, vec![1, 10]);
+  }
+
+  #[test]
+  fn overview_root_review_comment_ids_uses_orphan_reply_as_its_own_root() {
+    let review_comments = vec![make_review_comment(7, "2026-02-28T10:00:00Z", Some(999))];
+    let roots = overview_root_review_comment_ids(&review_comments);
+    assert_eq!(roots, vec![7]);
+  }
+
+  #[test]
+  fn parse_github_commit_url_accepts_pull_request_commit_urls() {
+    let parsed = parse_github_commit_url(
+      "https://github.com/acme/widget/pull/42/commits/abcdef1234567890?diff=split",
+    );
+    assert_eq!(
+      parsed,
+      Some((
+        "acme".to_string(),
+        "widget".to_string(),
+        "abcdef1234567890".to_string(),
+      ))
+    );
+  }
+
+  #[test]
+  fn parse_github_commit_url_accepts_repository_commit_urls() {
+    let parsed = parse_github_commit_url("https://github.com/acme/widget/commit/abcdef1234567890");
+    assert_eq!(
+      parsed,
+      Some((
+        "acme".to_string(),
+        "widget".to_string(),
+        "abcdef1234567890".to_string(),
+      ))
+    );
+  }
+
+  #[test]
+  fn resolve_same_pr_commit_link_sha_matches_exact_and_unique_prefix_links() {
+    let commits = vec![
+      make_api_commit(
+        "abcdef1234567890abcdef1234567890abcdef12",
+        "first",
+        Some("2026-02-20T10:00:00Z"),
+        Some("p1"),
+      ),
+      make_api_commit(
+        "fedcba9876543210fedcba9876543210fedcba98",
+        "second",
+        Some("2026-02-21T10:00:00Z"),
+        Some("p2"),
+      ),
+    ];
+    let context = CurrentPrContext {
+      owner: "acme".to_string(),
+      repo: "widget".to_string(),
+      number: 42,
+    };
+
+    let exact = resolve_same_pr_commit_link_sha(
+      Some(&context),
+      &commits,
+      "https://github.com/acme/widget/commit/abcdef1234567890abcdef1234567890abcdef12",
+    );
+    assert_eq!(
+      exact.as_deref(),
+      Some("abcdef1234567890abcdef1234567890abcdef12")
+    );
+
+    let prefix = resolve_same_pr_commit_link_sha(
+      Some(&context),
+      &commits,
+      "https://github.com/acme/widget/commit/fedcba9",
+    );
+    assert_eq!(
+      prefix.as_deref(),
+      Some("fedcba9876543210fedcba9876543210fedcba98")
+    );
+  }
+
+  #[test]
+  fn resolve_same_pr_commit_link_sha_rejects_other_repos_and_ambiguous_prefixes() {
+    let commits = vec![
+      make_api_commit(
+        "abcdef1234567890abcdef1234567890abcdef12",
+        "first",
+        Some("2026-02-20T10:00:00Z"),
+        Some("p1"),
+      ),
+      make_api_commit(
+        "abcdef9999999999abcdef9999999999abcdef99",
+        "second",
+        Some("2026-02-21T10:00:00Z"),
+        Some("p2"),
+      ),
+    ];
+    let context = CurrentPrContext {
+      owner: "acme".to_string(),
+      repo: "widget".to_string(),
+      number: 42,
+    };
+
+    let other_repo = resolve_same_pr_commit_link_sha(
+      Some(&context),
+      &commits,
+      "https://github.com/acme/other/commit/abcdef1234567890abcdef1234567890abcdef12",
+    );
+    assert!(other_repo.is_none());
+
+    let ambiguous = resolve_same_pr_commit_link_sha(
+      Some(&context),
+      &commits,
+      "https://github.com/acme/widget/commit/abcdef",
+    );
+    assert!(ambiguous.is_none());
+  }
+
+  #[test]
+  fn review_comment_owned_by_login_is_case_insensitive() {
+    let comment = make_review_comment(1, "2026-02-28T10:00:00Z", None);
+    assert!(review_comment_owned_by_login(&comment, "OCTOCAT"));
+    assert!(!review_comment_owned_by_login(&comment, "hubot"));
+  }
+
+  #[test]
+  fn review_comment_preview_line_range_falls_back_to_original_fields() {
+    let mut comment = make_review_comment(1, "2026-02-28T10:00:00Z", None);
+    comment.start_line = None;
+    comment.line = None;
+    comment.original_start_line = Some(14);
+    comment.original_line = Some(16);
+
+    assert_eq!(review_comment_preview_line_range(&comment), Some((14, 16)));
+  }
+
+  #[test]
+  fn review_comment_preview_line_range_normalizes_order_and_rejects_non_positive_values() {
+    let mut comment = make_review_comment(1, "2026-02-28T10:00:00Z", None);
+    comment.start_line = Some(21);
+    comment.line = Some(19);
+    assert_eq!(review_comment_preview_line_range(&comment), Some((19, 21)));
+
+    comment.start_line = Some(0);
+    comment.line = Some(-2);
+    comment.original_start_line = Some(0);
+    comment.original_line = Some(-1);
+    assert_eq!(review_comment_preview_line_range(&comment), None);
+  }
+
+  #[test]
+  fn review_comment_preview_line_range_prefers_primary_fields() {
+    let mut comment = make_review_comment(1, "2026-02-28T10:00:00Z", None);
+    comment.start_line = Some(8);
+    comment.line = Some(11);
+    comment.original_start_line = Some(2);
+    comment.original_line = Some(4);
+
+    assert_eq!(review_comment_preview_line_range(&comment), Some((8, 11)));
+  }
+
+  #[test]
+  fn review_comment_targets_file_matches_renamed_old_path() {
+    let file = GithubPrFileDiff {
+      path: "src/new.rs".into(),
+      old_path: Some("src/old.rs".into()),
+      status: GithubPrFileStatus::Renamed,
+    };
+    let mut comment = make_review_comment(1, "2026-02-28T10:00:00Z", None);
+    comment.path = "src/old.rs".to_string();
+
+    assert!(review_comment_targets_file(&comment, &file));
+  }
+
+  #[test]
+  fn review_comment_to_editor_comment_returns_none_without_current_anchor() {
+    let mut comment = make_review_comment(1, "2026-02-28T10:00:00Z", None);
+    comment.line = None;
+    comment.start_line = None;
+    comment.original_line = Some(4);
+    comment.original_start_line = Some(4);
+
+    let comments_by_id = HashMap::from([(comment.id, &comment)]);
+
+    assert!(review_comment_to_editor_comment(&comment, &comments_by_id).is_none());
+  }
+
+  #[test]
+  fn suggestion_context_from_review_comment_falls_back_to_original_line_fields() {
+    let mut comment = make_review_comment(1, "2026-02-28T10:00:00Z", None);
+    comment.diff_hunk = "@@ -10,3 +10,3 @@\n keep\n current\n keep".to_string();
+    comment.start_line = None;
+    comment.line = None;
+    comment.original_start_line = None;
+    comment.original_line = Some(11);
+
+    let ctx = suggestion_context_from_review_comment(&comment).expect("suggestion context");
+
+    assert_eq!(ctx.original_start_line, Some(11));
+    assert_eq!(ctx.suggested_start_line, Some(11));
+    assert_eq!(ctx.original_lines, vec!["current".to_string()]);
   }
 }

@@ -3,6 +3,58 @@
 
 use super::*;
 
+fn reviewer_status_tooltip(status: ReviewerStatus, login: &str) -> SharedString {
+  match status {
+    ReviewerStatus::Awaiting => format!("Awaiting requested review from {login}").into(),
+    ReviewerStatus::Approved => format!("{login} approved").into(),
+    ReviewerStatus::Commented => format!("{login} left review comments").into(),
+    ReviewerStatus::ChangesRequested => format!("{login} requested changes").into(),
+  }
+}
+
+fn find_filter_option_user(
+  options: &[GithubPullRequestFilterOptionUser],
+  login: &str,
+) -> GithubPullRequestFilterOptionUser {
+  options
+    .iter()
+    .find(|option| github_shared::logins_match_case_insensitive(option.login.as_str(), login))
+    .cloned()
+    .unwrap_or_else(|| GithubPullRequestFilterOptionUser {
+      login: login.trim().to_string(),
+      avatar_url: None,
+    })
+}
+
+fn upsert_filter_option_user(
+  users: &mut Vec<GithubPullRequestFilterOptionUser>,
+  user: GithubPullRequestFilterOptionUser,
+) {
+  if let Some(existing) = users.iter_mut().find(|existing| {
+    github_shared::logins_match_case_insensitive(existing.login.as_str(), user.login.as_str())
+  }) {
+    *existing = user;
+    return;
+  }
+
+  users.push(user);
+}
+
+fn remove_filter_option_user(users: &mut Vec<GithubPullRequestFilterOptionUser>, login: &str) {
+  users.retain(|user| !github_shared::logins_match_case_insensitive(user.login.as_str(), login));
+}
+
+fn upsert_label(labels: &mut Vec<GithubPullRequestLabel>, label: GithubPullRequestLabel) {
+  if let Some(existing) = labels
+    .iter_mut()
+    .find(|existing| existing.name.eq_ignore_ascii_case(label.name.as_str()))
+  {
+    *existing = label;
+    return;
+  }
+  labels.push(label);
+}
+
 impl GithubPrDetailsPage {
   pub(super) fn render_people_token_row(
     id_prefix: &'static str,

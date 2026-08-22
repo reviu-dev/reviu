@@ -2,6 +2,60 @@
 
 use super::*;
 
+fn repo_status_for_pr_file(status: GithubPrFileStatus) -> RepoStatusKind {
+  match status {
+    GithubPrFileStatus::Added => RepoStatusKind::Added,
+    GithubPrFileStatus::Modified => RepoStatusKind::Modified,
+    GithubPrFileStatus::Deleted => RepoStatusKind::Deleted,
+    GithubPrFileStatus::Renamed => RepoStatusKind::Renamed,
+  }
+}
+
+fn status_letter(status: GithubPrFileStatus) -> &'static str {
+  match status {
+    GithubPrFileStatus::Added => "A",
+    GithubPrFileStatus::Modified => "M",
+    GithubPrFileStatus::Deleted => "D",
+    GithubPrFileStatus::Renamed => "R",
+  }
+}
+
+fn status_color(status: GithubPrFileStatus, theme: &gpui_component::Theme) -> gpui::Hsla {
+  match status {
+    GithubPrFileStatus::Modified => theme.status_orange(),
+    GithubPrFileStatus::Added => theme.status_green(),
+    GithubPrFileStatus::Deleted => theme.status_red(),
+    GithubPrFileStatus::Renamed => theme.info,
+  }
+}
+
+fn visible_review_comment_counts_by_path(
+  file_lookup: &HashMap<String, Rc<GithubPrFileDiff>>,
+  review_comments: &[GithubPullRequestReviewComment],
+) -> HashMap<String, usize> {
+  if file_lookup.is_empty() || review_comments.is_empty() {
+    return HashMap::new();
+  }
+
+  let comments_by_id: HashMap<u64, &GithubPullRequestReviewComment> = review_comments
+    .iter()
+    .map(|comment| (comment.id, comment))
+    .collect();
+  let mut counts = HashMap::new();
+
+  for comment in review_comments {
+    let Some(file) = file_for_review_comment_path(file_lookup, comment.path.as_str()) else {
+      continue;
+    };
+    if resolve_review_comment_display_anchor(comment, &comments_by_id).is_none() {
+      continue;
+    }
+    *counts.entry(file.path.to_string()).or_insert(0) += 1;
+  }
+
+  counts
+}
+
 impl GithubPrDetailsPage {
   pub(super) fn render_files_sidebar(
     &mut self,
@@ -785,5 +839,49 @@ impl GithubPrDetailsPage {
           .child(files_sidebar),
       )
       .child(resizable_panel().child(editor_panel))
+  }
+}
+
+#[cfg(test)]
+mod tests {
+  use super::super::test_support::*;
+  use super::super::*;
+  use super::*;
+
+  #[test]
+  fn status_letter_covers_all_file_statuses() {
+    assert_eq!(status_letter(GithubPrFileStatus::Added), "A");
+    assert_eq!(status_letter(GithubPrFileStatus::Modified), "M");
+    assert_eq!(status_letter(GithubPrFileStatus::Deleted), "D");
+    assert_eq!(status_letter(GithubPrFileStatus::Renamed), "R");
+  }
+
+  #[test]
+  fn visible_review_comment_counts_by_path_ignores_unanchored_comments_and_maps_renames() {
+    let files = files_from_api(vec![
+      make_api_file("src/main.rs", "modified", None),
+      make_api_file("src/new.rs", "renamed", Some("src/old.rs")),
+    ]);
+    let lookup: HashMap<String, Rc<GithubPrFileDiff>> = files
+      .into_iter()
+      .map(|file| (file.path.as_ref().to_string(), file))
+      .collect();
+
+    let mut renamed_comment = make_review_comment(1, "2026-02-28T10:00:00Z", None);
+    renamed_comment.path = "src/old.rs".to_string();
+    renamed_comment.line = Some(3);
+
+    let mut outdated_comment = make_review_comment(2, "2026-02-28T10:01:00Z", None);
+    outdated_comment.path = "src/main.rs".to_string();
+    outdated_comment.line = None;
+    outdated_comment.start_line = None;
+    outdated_comment.original_line = Some(7);
+    outdated_comment.original_start_line = Some(7);
+
+    let counts =
+      visible_review_comment_counts_by_path(&lookup, &[renamed_comment, outdated_comment]);
+
+    assert_eq!(counts.get("src/new.rs"), Some(&1));
+    assert!(counts.get("src/main.rs").is_none());
   }
 }

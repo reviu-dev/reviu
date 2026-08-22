@@ -3,6 +3,46 @@
 
 use super::*;
 
+fn build_local_project_tree_items(
+  files: &[Rc<GithubPrLocalProjectFile>],
+) -> FileTreeBuildResult<GithubPrLocalProjectFile> {
+  build_path_tree_items(files, |file| file.path.as_ref())
+}
+
+fn local_repo_matches_pull_request(
+  pull_request: &GithubPullRequestDetails,
+  local_repo: &ActiveLocalRepo,
+) -> bool {
+  let source_repo = GithubPrDetailsPage::pr_source_repository(pull_request);
+  let Some(local_owner) = local_repo.github_owner.as_deref() else {
+    return false;
+  };
+  let Some(local_name) = local_repo.github_repo.as_deref() else {
+    return false;
+  };
+
+  local_owner.eq_ignore_ascii_case(source_repo.owner.as_str())
+    && local_name.eq_ignore_ascii_case(source_repo.repo.as_str())
+}
+
+fn find_matching_recent_local_repo(
+  pull_request: &GithubPullRequestDetails,
+  excluded_repo_root: Option<&Path>,
+) -> Option<ActiveLocalRepo> {
+  ConfigStore::load_recent_repositories()
+    .into_iter()
+    .filter(|repo| {
+      excluded_repo_root
+        .map(|excluded| excluded != repo.path.as_path())
+        .unwrap_or(true)
+    })
+    .filter(|repo| repo.path.is_dir())
+    .find_map(|repo| {
+      let snapshot = local_repo_snapshot(repo.path.as_path(), None)?;
+      local_repo_matches_pull_request(pull_request, &snapshot).then_some(snapshot)
+    })
+}
+
 impl GithubPrDetailsPage {
   pub(super) fn pr_source_repository(pull_request: &GithubPullRequestDetails) -> &GithubRepository {
     pull_request
@@ -923,6 +963,7 @@ impl GithubPrDetailsPage {
 mod tests {
   use super::super::test_support::*;
   use super::super::*;
+  use super::*;
 
   #[gpui::test]
   fn local_project_availability_is_ready_when_repo_branch_and_sha_match(cx: &mut TestAppContext) {
@@ -1259,5 +1300,27 @@ mod tests {
     assert_eq!(selected_commit_sha.as_deref(), Some("commit-sha"));
     assert!(!show_local_project_files);
     assert!(selected_local_project_file.is_none());
+  }
+
+  #[test]
+  fn find_matching_recent_local_repo_returns_recent_repo_matching_pr_source() {
+    let db_path = unique_test_db_path("recent-repo-match");
+    let _ = std::fs::remove_file(&db_path);
+    ConfigStore::set_test_db_path(Some(db_path.clone()));
+
+    let (repo_root, snapshot) =
+      create_local_repo_with_github_remote("acme", "widget", "feature", &[]);
+    ConfigStore::persist_recent_repository(&repo_root);
+
+    let matched =
+      find_matching_recent_local_repo(&make_pr_details_for_stats(), None).expect("matching repo");
+    assert_eq!(matched.repo_root, repo_root);
+    assert_eq!(matched.github_owner.as_deref(), Some("acme"));
+    assert_eq!(matched.github_repo.as_deref(), Some("widget"));
+    assert_eq!(matched.current_branch, snapshot.current_branch);
+
+    ConfigStore::set_test_db_path(None);
+    let _ = std::fs::remove_file(&db_path);
+    std::fs::remove_dir_all(&repo_root).ok();
   }
 }
