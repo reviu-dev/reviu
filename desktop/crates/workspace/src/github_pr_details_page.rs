@@ -29,7 +29,7 @@ use gpui::{
   img, point, prelude::*, px, white,
 };
 use gpui_component::{
-  ActiveTheme as _, Disableable, Icon, IconName, Selectable, Sizable as _, StyledExt,
+  ActiveTheme as _, Disableable, Icon, IconName, Sizable as _, StyledExt,
   avatar::Avatar,
   button::{Button, ButtonVariant, ButtonVariants as _},
   clipboard::Clipboard,
@@ -37,7 +37,6 @@ use gpui_component::{
   h_flex,
   input::InputEvent,
   kbd::Kbd,
-  label::Label,
   menu::{DropdownMenu as _, PopupMenuItem},
   notification::Notification,
   radio::{Radio, RadioGroup},
@@ -70,6 +69,7 @@ use crate::file_tree::{
   FileTreeBuildResult, build_path_tree_items, build_path_tree_items_with_expansion,
   expanded_folder_paths_for_changed_files,
 };
+use crate::file_view::render_file_title_with_status;
 use crate::svg_preview::SvgPreview;
 use crate::{
   ShowCommandPalette, ShowFileSearch,
@@ -379,6 +379,15 @@ enum GithubPrFileStatus {
   Modified,
   Deleted,
   Renamed,
+}
+
+fn repo_status_for_pr_file(status: GithubPrFileStatus) -> RepoStatusKind {
+  match status {
+    GithubPrFileStatus::Added => RepoStatusKind::Added,
+    GithubPrFileStatus::Modified => RepoStatusKind::Modified,
+    GithubPrFileStatus::Deleted => RepoStatusKind::Deleted,
+    GithubPrFileStatus::Renamed => RepoStatusKind::Renamed,
+  }
 }
 
 fn status_letter(status: GithubPrFileStatus) -> &'static str {
@@ -11320,40 +11329,7 @@ impl GithubPrDetailsPage {
     file: &GithubPrFileDiff,
     cx: &mut Context<Self>,
   ) -> impl IntoElement {
-    let theme = cx.theme().clone();
     let path = Path::new(file.path.as_ref());
-    let file_name = path
-      .file_name()
-      .and_then(|name| name.to_str())
-      .unwrap_or(file.path.as_ref())
-      .to_string();
-    let dir_path = path
-      .parent()
-      .and_then(|parent| parent.to_str())
-      .unwrap_or("")
-      .to_string();
-    let old_file_name = if file.status == GithubPrFileStatus::Renamed {
-      file.old_path.as_ref().map(|old_path| {
-        Path::new(old_path.as_ref())
-          .file_name()
-          .and_then(|name| name.to_str())
-          .map(|name| name.to_string())
-          .unwrap_or_else(|| old_path.to_string())
-      })
-    } else {
-      None
-    };
-    let icon = file_icon_path_for_name_with_theme(&file_name, &theme)
-      .map(|path| img(path).size(px(FILE_ICON_SIZE_PX)).into_any_element())
-      .unwrap_or_else(|| {
-        Icon::new(IconName::File)
-          .size_3()
-          .text_color(theme.muted_foreground)
-          .into_any_element()
-      });
-
-    let status_letter = status_letter(file.status);
-    let status_color = status_color(file.status, &theme);
     let is_markdown = is_markdown_path(path);
     let is_svg = is_svg_path(path);
     let preview_active = (is_markdown || is_svg) && self.show_markdown_preview;
@@ -11365,63 +11341,13 @@ impl GithubPrDetailsPage {
       .hunk_navigation_state(cx)
       .filter(|state| state.total > 1);
 
-    let title = h_flex()
-      .min_w_0()
-      .flex_1()
-      .items_center()
-      .gap_2()
-      .child(
-        div()
-          .w(px(15.))
-          .text_xs()
-          .text_color(status_color)
-          .child(status_letter),
-      )
-      .child(icon)
-      .child(
-        h_flex()
-          .min_w_0()
-          .flex_1()
-          .items_center()
-          .gap_1()
-          .text_sm()
-          .child(
-            h_flex()
-              .min_w_0()
-              .items_center()
-              .gap_1()
-              .when_some(old_file_name.clone(), |this, old_name| {
-                this
-                  .child(
-                    div()
-                      .min_w_0()
-                      .overflow_hidden()
-                      .text_ellipsis_start()
-                      .text_color(theme.muted_foreground)
-                      .line_through()
-                      .child(old_name),
-                  )
-                  .child(
-                    Icon::new(IconName::ArrowRight)
-                      .size_3()
-                      .text_color(theme.muted_foreground),
-                  )
-              })
-              .child(Label::new(file_name).truncate()),
-          )
-          .when(!dir_path.is_empty(), |this| {
-            this.child(
-              div()
-                .min_w_0()
-                .flex_1()
-                .overflow_hidden()
-                .text_ellipsis_start()
-                .text_color(theme.muted_foreground)
-                .child(format!("- {}", dir_path)),
-            )
-          }),
-      )
-      .into_any_element();
+    let title = render_file_title_with_status(
+      path,
+      file.old_path.as_ref().map(|old| Path::new(old.as_ref())),
+      Some(repo_status_for_pr_file(file.status)),
+      false,
+      cx,
+    );
 
     let mut toolbar = DiffToolbar::new("pr").filled(true).title(title);
 
@@ -11494,67 +11420,24 @@ impl GithubPrDetailsPage {
     file: &GithubPrLocalProjectFile,
     cx: &mut Context<Self>,
   ) -> impl IntoElement {
-    let theme = cx.theme().clone();
     let path = Path::new(file.path.as_ref());
-    let file_name = path
-      .file_name()
-      .and_then(|name| name.to_str())
-      .unwrap_or(file.path.as_ref())
-      .to_string();
-    let dir_path = path
-      .parent()
-      .and_then(|parent| parent.to_str())
-      .unwrap_or("")
-      .to_string();
-    let icon = file_icon_path_for_name_with_theme(&file_name, &theme)
-      .map(|path| img(path).size(px(FILE_ICON_SIZE_PX)).into_any_element())
-      .unwrap_or_else(|| {
-        Icon::new(IconName::File)
-          .size_3()
-          .text_color(theme.muted_foreground)
-          .into_any_element()
-      });
+    let mut toolbar = DiffToolbar::new("pr-local-project")
+      .filled(true)
+      .title(render_file_title_with_status(path, None, None, false, cx));
 
-    let is_markdown = is_markdown_path(path);
-    let is_svg = is_svg_path(path);
-    let preview_active = (is_markdown || is_svg) && self.show_markdown_preview;
-    let view = cx.entity();
-    let preview_button = Button::new("pr-local-project-preview")
-      .label("Preview")
-      .icon(if preview_active {
-        IconName::EyeOff
-      } else {
-        IconName::Eye
-      })
-      .xsmall()
-      .ghost()
-      .selected(preview_active)
-      .disabled(self.file_loading)
-      .on_click(move |_, _, cx| {
-        view.update(cx, |this, cx| {
-          this.toggle_markdown_preview(cx);
-        });
+    if is_markdown_path(path) || is_svg_path(path) {
+      let view = cx.entity();
+      toolbar = toolbar.preview(ToggleControl {
+        active: self.show_markdown_preview,
+        disabled: self.file_loading,
+        debug_selector: PR_PREVIEW_TOGGLE_DEBUG_SELECTOR,
+        on_toggle: Rc::new(move |_, cx| {
+          view.update(cx, |this, cx| this.toggle_markdown_preview(cx));
+        }),
       });
+    }
 
-    div()
-      .h(px(DIFF_HEADER_HEIGHT))
-      .bg(theme.sidebar)
-      .px_3()
-      .flex()
-      .items_center()
-      .justify_between()
-      .border_b_1()
-      .border_color(theme.border)
-      .child(h_flex().items_center().gap_2().child(icon).child({
-        let mut label = Label::new(file_name);
-        if !dir_path.is_empty() {
-          label = label.secondary(format!("- {}", dir_path));
-        }
-        label.truncate()
-      }))
-      .when(is_markdown || is_svg, |this| {
-        this.child(h_flex().items_center().gap_2().child(preview_button))
-      })
+    toolbar.render(cx)
   }
 
   fn render_selected_editor_content(
