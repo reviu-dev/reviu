@@ -256,6 +256,8 @@ pub(crate) fn apply_color_env(cmd: &mut async_process::Command) {
   cmd.env("CLICOLOR_FORCE", "1");
   cmd.env("FORCE_COLOR", "1");
   cmd.env("CARGO_TERM_COLOR", "always");
+  cmd.env("PY_COLORS", "1");
+  cmd.env("RUST_LOG_STYLE", "always");
   cmd.envs(git_color_env);
 }
 
@@ -428,7 +430,7 @@ mod tests {
       "sh".to_string(),
       vec![
         "-c".to_string(),
-        "printf \"$CARGO_TERM_COLOR:$CLICOLOR_FORCE:$FORCE_COLOR:$TERM:$COLORTERM:$CLICOLOR:${NO_COLOR-unset}\"".to_string(),
+        "printf \"$CARGO_TERM_COLOR:$PY_COLORS:$RUST_LOG_STYLE:$CLICOLOR_FORCE:$FORCE_COLOR:$TERM:$COLORTERM:$CLICOLOR:${NO_COLOR-unset}\"".to_string(),
       ],
       Vec::new(),
       std::env::current_dir().expect("cwd"),
@@ -443,7 +445,10 @@ mod tests {
     }
     let snap = store.snapshot("t").expect("entry");
     assert!(snap.finished, "the probe command finished");
-    assert_eq!(snap.output, "always:1:1:xterm-256color:truecolor:1:unset");
+    assert_eq!(
+      snap.output,
+      "always:1:always:1:1:xterm-256color:truecolor:1:unset"
+    );
   }
 
   #[cfg(unix)]
@@ -494,8 +499,15 @@ mod tests {
       &store,
       "t".to_string(),
       "sh".to_string(),
-      vec!["-c".to_string(), "printf \"$CARGO_TERM_COLOR\"".to_string()],
-      vec![("CARGO_TERM_COLOR".to_string(), "never".to_string())],
+      vec![
+        "-c".to_string(),
+        "printf \"$CARGO_TERM_COLOR:$PY_COLORS:$RUST_LOG_STYLE\"".to_string(),
+      ],
+      vec![
+        ("CARGO_TERM_COLOR".to_string(), "never".to_string()),
+        ("PY_COLORS".to_string(), "0".to_string()),
+        ("RUST_LOG_STYLE".to_string(), "never".to_string()),
+      ],
       std::env::current_dir().expect("cwd"),
       None,
     )
@@ -508,7 +520,7 @@ mod tests {
     }
     assert_eq!(
       store.snapshot("t").expect("entry").output,
-      "never",
+      "never:0:never",
       "an explicit agent env must win over our defaults"
     );
   }
