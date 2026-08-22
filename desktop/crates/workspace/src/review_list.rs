@@ -429,7 +429,7 @@ impl ReviewList {
       .w_full()
       .items_center()
       .gap_1()
-      .px_1()
+      .px_2()
       .py_1()
       .border_b_1()
       .border_color(theme.border)
@@ -469,8 +469,7 @@ impl ReviewList {
       .items_center()
       .justify_between()
       .gap_2()
-      .px_1()
-      .py_1()
+      .p_2()
       .border_t_1()
       .border_color(theme.border)
       .child(
@@ -540,6 +539,8 @@ impl Render for ReviewList {
           .flex_1()
           .min_h(px(0.0))
           .overflow_y_scroll()
+          .px_1()
+          .py_1()
           .child(list),
       )
       .child(self.render_actions(cx))

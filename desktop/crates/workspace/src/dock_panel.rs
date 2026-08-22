@@ -653,14 +653,14 @@ impl DockPanel {
   }
 
   fn render_review_tab(&self) -> AnyElement {
+    // No padding here: the list's own header and footer rules run edge to edge,
+    // like the commit zone's does on the Changes tab.
     div()
       .id("dock-panel-review")
       .debug_selector(|| DOCK_PANEL_REVIEW_DEBUG_SELECTOR.to_string())
       .flex_1()
       .min_h_0()
       .min_w(px(0.0))
-      .px_1()
-      .py_1()
       .child(self.review_list.clone())
       .into_any_element()
   }
