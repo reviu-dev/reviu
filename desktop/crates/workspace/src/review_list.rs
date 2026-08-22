@@ -372,6 +372,7 @@ impl ReviewList {
           .min_w_0()
           .text_sm()
           .text_color(theme.foreground)
+          .truncate()
           .child(comment.excerpt.clone()),
       )
       .when_some(review_state_label(&comment.state), |this, label| {
