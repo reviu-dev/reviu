@@ -1,5 +1,5 @@
 use std::{
-  collections::{BTreeMap, BTreeSet, HashMap, HashSet},
+  collections::{BTreeSet, HashMap, HashSet},
   path::{Path, PathBuf},
   rc::Rc,
   sync::Arc,
@@ -65,6 +65,10 @@ use ui::{
 };
 
 use crate::diff_view_policy::{DiffViewInputs, effective_diff_view};
+use crate::file_tree::{
+  FileTreeBuildResult, build_path_tree_items, build_path_tree_items_with_expansion,
+  expanded_folder_paths_for_changed_files,
+};
 use crate::svg_preview::SvgPreview;
 use crate::{
   ShowCommandPalette, ShowFileSearch,
@@ -1778,114 +1782,6 @@ struct GithubPrDiffRefs {
   head_sha: String,
 }
 
-#[derive(Default)]
-struct FileTreeNode {
-  name: String,
-  path: String,
-  children: BTreeMap<String, FileTreeNode>,
-  file: Option<()>,
-}
-
-impl FileTreeNode {
-  fn new(name: String, path: String) -> Self {
-    Self {
-      name,
-      path,
-      children: BTreeMap::new(),
-      file: None,
-    }
-  }
-
-  fn is_folder(&self) -> bool {
-    !self.children.is_empty()
-  }
-}
-
-type FileTreeBuildResult<T> = (
-  Vec<TreeItem>,
-  HashMap<String, Rc<T>>,
-  Option<usize>,
-  Option<String>,
-);
-
-fn build_path_tree_items_with_expansion<T, F>(
-  files: &[Rc<T>],
-  path_for: F,
-  expanded_folder_paths: Option<&HashSet<String>>,
-) -> FileTreeBuildResult<T>
-where
-  F: Fn(&T) -> &str,
-{
-  fn insert_node(
-    map: &mut BTreeMap<String, FileTreeNode>,
-    parts: &[&str],
-    prefix: &str,
-    has_file: bool,
-  ) {
-    let Some((head, tail)) = parts.split_first() else {
-      return;
-    };
-
-    let path = if prefix.is_empty() {
-      head.to_string()
-    } else {
-      format!("{}/{}", prefix, head)
-    };
-
-    let node = map
-      .entry(head.to_string())
-      .or_insert_with(|| FileTreeNode::new(head.to_string(), path.clone()));
-
-    if tail.is_empty() {
-      if has_file {
-        node.file = Some(());
-      }
-      return;
-    }
-
-    let node_path = node.path.clone();
-    insert_node(&mut node.children, tail, &node_path, has_file);
-  }
-
-  let mut root: BTreeMap<String, FileTreeNode> = BTreeMap::new();
-  let mut file_lookup: HashMap<String, Rc<T>> = HashMap::new();
-
-  for file in files {
-    let path = path_for(file.as_ref());
-    file_lookup.insert(path.to_string(), file.clone());
-    let parts: Vec<&str> = path.split('/').collect();
-    insert_node(&mut root, &parts, "", true);
-  }
-
-  let mut order = Vec::new();
-  let mut first_file_id: Option<String> = None;
-
-  let mut root_nodes: Vec<FileTreeNode> = root.into_values().collect();
-  root_nodes.sort_by(|a, b| {
-    b.is_folder()
-      .cmp(&a.is_folder())
-      .then_with(|| a.name.cmp(&b.name))
-  });
-
-  let items = root_nodes
-    .into_iter()
-    .map(|node| build_tree_item(node, &mut order, &mut first_file_id, expanded_folder_paths))
-    .collect::<Vec<_>>();
-
-  let selected_index = first_file_id
-    .as_ref()
-    .and_then(|id| order.iter().position(|candidate| candidate == id));
-
-  (items, file_lookup, selected_index, first_file_id)
-}
-
-fn build_path_tree_items<T, F>(files: &[Rc<T>], path_for: F) -> FileTreeBuildResult<T>
-where
-  F: Fn(&T) -> &str,
-{
-  build_path_tree_items_with_expansion(files, path_for, None)
-}
-
 fn build_tree_items(files: &[Rc<GithubPrFileDiff>]) -> FileTreeBuildResult<GithubPrFileDiff> {
   build_path_tree_items(files, |file| file.path.as_ref())
 }
@@ -1894,27 +1790,6 @@ fn build_local_project_tree_items(
   files: &[Rc<GithubPrLocalProjectFile>],
 ) -> FileTreeBuildResult<GithubPrLocalProjectFile> {
   build_path_tree_items(files, |file| file.path.as_ref())
-}
-
-fn expanded_folder_paths_for_changed_files<'a, I>(paths: I) -> HashSet<String>
-where
-  I: IntoIterator<Item = &'a str>,
-{
-  let mut expanded = HashSet::new();
-  for path in paths {
-    let mut prefix = String::new();
-    let parts = path.split('/').collect::<Vec<_>>();
-    for folder in parts.iter().take(parts.len().saturating_sub(1)) {
-      if prefix.is_empty() {
-        prefix.push_str(folder);
-      } else {
-        prefix.push('/');
-        prefix.push_str(folder);
-      }
-      expanded.insert(prefix.clone());
-    }
-  }
-  expanded
 }
 
 fn build_tree_items_from_paths(
@@ -2045,39 +1920,6 @@ fn perform_tree_text_search(
   }
 
   result
-}
-
-fn build_tree_item(
-  node: FileTreeNode,
-  order: &mut Vec<String>,
-  first_file_id: &mut Option<String>,
-  expanded_folder_paths: Option<&HashSet<String>>,
-) -> TreeItem {
-  let mut child_nodes: Vec<FileTreeNode> = node.children.into_values().collect();
-  child_nodes.sort_by(|a, b| {
-    b.is_folder()
-      .cmp(&a.is_folder())
-      .then_with(|| a.name.cmp(&b.name))
-  });
-
-  let mut item = TreeItem::new(node.path.clone(), node.name.clone());
-  if !child_nodes.is_empty() {
-    let children = child_nodes
-      .into_iter()
-      .map(|child| build_tree_item(child, order, first_file_id, expanded_folder_paths))
-      .collect::<Vec<_>>();
-    let is_expanded = expanded_folder_paths
-      .map(|paths| paths.contains(&node.path))
-      .unwrap_or(true);
-    item = item.children(children).expanded(is_expanded);
-  }
-
-  order.push(node.path.clone());
-  if node.file.is_some() && first_file_id.is_none() {
-    *first_file_id = Some(node.path.clone());
-  }
-
-  item
 }
 
 pub struct GithubPrDetailsPage {
@@ -15999,15 +15841,6 @@ mod tests {
     assert_eq!(selected_index, Some(0));
     assert!(lookup.contains_key("src/lib.rs"));
     assert!(lookup.contains_key("README.md"));
-  }
-
-  #[test]
-  fn build_tree_items_empty_input_has_no_selection() {
-    let (items, lookup, selected_index, selected_id) = build_tree_items(&[]);
-    assert!(items.is_empty());
-    assert!(lookup.is_empty());
-    assert_eq!(selected_index, None);
-    assert_eq!(selected_id, None);
   }
 
   #[test]

@@ -73,6 +73,7 @@ mod dock_panel;
 mod feedback_dialog;
 mod file_preview;
 mod file_search_palette;
+mod file_tree;
 mod file_view;
 mod git_config_page;
 mod git_telemetry;
