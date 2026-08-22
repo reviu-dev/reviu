@@ -27,6 +27,7 @@ use crate::agent_chat_state::{
 use crate::agent_review::{
   AgentReviewComments, ReviewSend, original_lines_for_request, sync_comments_to_editor,
 };
+use crate::agent_review_store::{read_review, review_path_for_repo, write_review};
 use crate::agent_settings::AgentSettings;
 use crate::auth_state::AuthStateStore;
 use crate::config::ConfigStore;
@@ -197,6 +198,11 @@ pub struct SessionPage {
   open_file_generation: u64,
   open_file_task: Option<Task<()>>,
   agent_review: AgentReviewComments,
+  /// Where this repository's batch is written; none without a repository.
+  review_store_path: Option<PathBuf>,
+  /// Tests point the batch at a temporary directory of their own; production
+  /// reads the real state directory instead.
+  review_state_dir: Option<PathBuf>,
   repo_snapshot: Entity<RepoSnapshot>,
   diff_view: DiffViewMode,
   hide_whitespace: bool,
@@ -239,6 +245,8 @@ impl SessionPage {
     let selected_repo = ConfigStore::load_recent_repositories()
       .first()
       .map(|repo| repo.path.clone());
+    let review_store_path = review_store_path_for(selected_repo.as_deref(), None);
+    let agent_review = load_agent_review(review_store_path.as_deref());
     let dock_panel = cx.new(|cx| DockPanel::new(selected_repo.clone(), window, cx));
     let inbox = cx.new(|_| Inbox::new());
     let repo_snapshot = cx.new(|_| RepoSnapshot::new(selected_repo.clone()));
@@ -349,7 +357,9 @@ impl SessionPage {
       last_review_export: None,
       open_file_generation: 0,
       open_file_task: None,
-      agent_review: AgentReviewComments::new(),
+      agent_review,
+      review_store_path,
+      review_state_dir: None,
       repo_snapshot,
       diff_view: DiffViewMode::Inline,
       hide_whitespace: false,
@@ -839,6 +849,25 @@ impl SessionPage {
       Ok(())
     });
     open_file_search_palette(window, cx, entries, handler, false);
+  }
+}
+
+/// Under test there is no fallback to the real state directory: a test writes
+/// where it says it does, or nowhere at all.
+fn review_store_path_for(repo: Option<&Path>, test_state_dir: Option<&Path>) -> Option<PathBuf> {
+  let repo = repo?;
+  let state_dir = if cfg!(test) {
+    test_state_dir?.to_path_buf()
+  } else {
+    agent_chat_state_dir()?
+  };
+  Some(review_path_for_repo(&state_dir, repo))
+}
+
+fn load_agent_review(path: Option<&Path>) -> AgentReviewComments {
+  match path.and_then(read_review) {
+    Some(stored) => AgentReviewComments::restored(stored.comments, stored.next_id),
+    None => AgentReviewComments::new(),
   }
 }
 

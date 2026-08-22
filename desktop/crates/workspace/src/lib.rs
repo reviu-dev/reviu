@@ -49,6 +49,7 @@ mod active_local_repo;
 mod agent_chat_state;
 mod agent_notification;
 mod agent_review;
+mod agent_review_store;
 mod agent_settings;
 mod analytics;
 mod annotations;

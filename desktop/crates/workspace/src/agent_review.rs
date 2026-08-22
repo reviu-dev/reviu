@@ -210,6 +210,8 @@ pub(crate) fn format_agent_review_export(
 pub(crate) struct AgentReviewComments {
   comments: Vec<LocalAgentReviewComment>,
   next_id: u64,
+  /// Set by every change, taken by whoever writes the batch to disk.
+  dirty: bool,
 }
 
 impl AgentReviewComments {
@@ -217,7 +219,25 @@ impl AgentReviewComments {
     Self {
       comments: Vec::new(),
       next_id: 1,
+      dirty: false,
     }
+  }
+
+  /// A batch read back from disk starts clean: nothing to write yet.
+  pub(crate) fn restored(comments: Vec<LocalAgentReviewComment>, next_id: u64) -> Self {
+    Self {
+      comments,
+      next_id: next_id.max(1),
+      dirty: false,
+    }
+  }
+
+  pub(crate) fn next_id(&self) -> u64 {
+    self.next_id.max(1)
+  }
+
+  pub(crate) fn take_dirty(&mut self) -> bool {
+    std::mem::take(&mut self.dirty)
   }
 
   #[cfg(test)]
@@ -246,7 +266,11 @@ impl AgentReviewComments {
   }
 
   pub(crate) fn clear(&mut self) {
+    if self.comments.is_empty() {
+      return;
+    }
     self.comments.clear();
+    self.dirty = true;
   }
 
   /// Returns the created id, or the reason the comment could not be anchored.
@@ -288,6 +312,7 @@ impl AgentReviewComments {
       original_lines,
       state: LocalAgentReviewCommentState::Draft,
     });
+    self.dirty = true;
     Ok(id)
   }
 
@@ -300,6 +325,7 @@ impl AgentReviewComments {
       return false;
     };
     comment.body = body;
+    self.dirty = true;
     true
   }
 
@@ -319,6 +345,7 @@ impl AgentReviewComments {
     self
       .comments
       .retain(|comment| !removed_ids.contains(&comment.id));
+    self.dirty |= !removed_ids.is_empty();
   }
 
   pub(crate) fn root_id(&self, comment_id: u64) -> u64 {
@@ -355,6 +382,7 @@ impl AgentReviewComments {
         changed = true;
       }
     }
+    self.dirty |= changed;
     changed
   }
 
@@ -372,6 +400,7 @@ impl AgentReviewComments {
         marked += 1;
       }
     }
+    self.dirty |= marked > 0;
     marked
   }
 

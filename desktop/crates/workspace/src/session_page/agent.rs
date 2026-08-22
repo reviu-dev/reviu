@@ -500,6 +500,19 @@ impl SessionPage {
       cx,
     );
     self.sync_review_panel(cx);
+    self.persist_agent_review();
+  }
+
+  /// Every change goes through here, so the file on disk is never behind. The
+  /// batch only moves on discrete gestures, which is why this needs no throttle.
+  pub(super) fn persist_agent_review(&mut self) {
+    if !self.agent_review.take_dirty() {
+      return;
+    }
+    let Some(path) = self.review_store_path.clone() else {
+      return;
+    };
+    write_review(&path, self.agent_review.all(), self.agent_review.next_id());
   }
 
   /// The panel shows the whole batch, including what the agent already addressed:

@@ -56,7 +56,11 @@ impl SessionPage {
     self.selected_file = None;
     self.open_file_task = None;
     self.open_file_generation = self.open_file_generation.wrapping_add(1);
-    self.agent_review.clear();
+    // The outgoing repository keeps its batch, the incoming one gets its own.
+    self.persist_agent_review();
+    self.review_store_path =
+      review_store_path_for(repo_root.as_deref(), self.review_state_dir.as_deref());
+    self.agent_review = load_agent_review(self.review_store_path.as_deref());
     self.pending_review_export = None;
     self.repo_snapshot.update(cx, |snapshot, cx| {
       snapshot.set_repo_root(repo_root.clone(), cx)
@@ -138,6 +142,105 @@ mod tests {
   use crate::test_support::{TempRepo, commit_text_file};
   use gpui::TestAppContext;
   use std::path::Path;
+
+  #[gpui::test]
+  async fn each_repository_keeps_its_own_batch_across_switches(cx: &mut TestAppContext) {
+    let repo = TempRepo::init("session-page-review-persist-a");
+    commit_text_file(&repo.path, Path::new("README.md"), "v1\n", "initial");
+    std::fs::write(repo.path.join("README.md"), "v2\n").expect("update file");
+    let other = TempRepo::init("session-page-review-persist-b");
+    commit_text_file(&other.path, Path::new("README.md"), "other\n", "initial");
+
+    let state_dir = std::env::temp_dir().join(format!(
+      "reviu-review-persist-{}-{:?}",
+      std::process::id(),
+      std::thread::current().id()
+    ));
+    let _ = std::fs::remove_dir_all(&state_dir);
+
+    let (page, cx) = add_session_page_window(repo.path.clone(), cx);
+    cx.run_until_parked();
+    // The page mounted before this test could name a directory, so point it
+    // there by hand; every later switch resolves it on its own.
+    page.update(cx, |page, _| {
+      page.review_state_dir = Some(state_dir.clone());
+      page.review_store_path = review_store_path_for(Some(&repo.path), Some(&state_dir));
+    });
+
+    page.update_in(cx, |page, window, cx| {
+      page.open_diff(PathBuf::from("README.md"), None, window, cx);
+    });
+    await_open_file(&page, cx).await;
+    page.update_in(cx, |page, window, cx| {
+      page.create_agent_review_comment(create_request(0, "keep this"), window, cx);
+    });
+    let first_id = page.read_with(cx, |page, _| page.agent_review.all()[0].id);
+
+    // Away and back: each repository keeps the batch that belongs to it.
+    page.update_in(cx, |page, window, cx| {
+      page
+        .set_selected_repo(other.path.clone(), window, cx)
+        .expect("switch to the other repository");
+    });
+    page.read_with(cx, |page, _| assert!(page.agent_review.all().is_empty()));
+
+    page.update_in(cx, |page, window, cx| {
+      page
+        .set_selected_repo(repo.path.clone(), window, cx)
+        .expect("switch back");
+    });
+    page.read_with(cx, |page, cx| {
+      let comments = page.agent_review.all();
+      assert_eq!(comments.len(), 1);
+      assert_eq!(comments[0].body.as_ref(), "keep this");
+      assert_eq!(comments[0].id, first_id);
+      assert_eq!(
+        page
+          .dock_panel
+          .read(cx)
+          .review_list
+          .read(cx)
+          .comments()
+          .len(),
+        1
+      );
+    });
+
+    // A new comment must not take an id the reloaded batch already holds.
+    page.update_in(cx, |page, window, cx| {
+      page.open_diff(PathBuf::from("README.md"), None, window, cx);
+    });
+    await_open_file(&page, cx).await;
+    page.update_in(cx, |page, window, cx| {
+      page.create_agent_review_comment(create_request(0, "and this"), window, cx);
+    });
+    page.read_with(cx, |page, _| {
+      let ids = page
+        .agent_review
+        .all()
+        .iter()
+        .map(|comment| comment.id)
+        .collect::<Vec<_>>();
+      assert_eq!(ids.len(), 2);
+      assert_ne!(ids[0], ids[1]);
+    });
+
+    // Discarding takes the file with it: nothing comes back on the next visit.
+    page.update(cx, |page, cx| page.discard_agent_review(cx));
+    page.update_in(cx, |page, window, cx| {
+      page
+        .set_selected_repo(other.path.clone(), window, cx)
+        .expect("switch to the other repository");
+    });
+    page.update_in(cx, |page, window, cx| {
+      page
+        .set_selected_repo(repo.path.clone(), window, cx)
+        .expect("switch back");
+    });
+    page.read_with(cx, |page, _| assert!(page.agent_review.all().is_empty()));
+
+    let _ = std::fs::remove_dir_all(&state_dir);
+  }
 
   #[gpui::test]
   async fn switching_repository_resets_the_shell_state(cx: &mut TestAppContext) {

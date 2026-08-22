@@ -16,6 +16,12 @@ A review no longer has to go out all at once. Tick the comments you want in the 
 
 Single comments also carry a send arrow, both on their row in the panel and on their card in the diff, for putting the agent back on one comment without resending the other four. Whatever stays behind stays a draft and goes with the next send.
 
+### A Review That Waits For You
+
+A review in progress no longer dies with the session. Close the app, switch to another repository, come back a week later: the comments are still there, with the states the agent left them in. Each repository keeps its own batch, so moving between projects no longer costs you the eight comments you had just written.
+
+The batch is saved next to that repository's conversations, and it is written the moment anything changes, so there is no window where a crash costs you a comment. Discarding a review removes it for good. A batch nobody touches for a month is cleaned up along with the old conversations.
+
 ### A Calm CPU While The Agent Works
 
 A busy agent session no longer drives the app to 100% CPU. Reviu used to rewrite the whole conversation to disk and re-read every conversation in the sidebar for each streamed chunk; transcripts now save on a short throttle (and always at turn boundaries, on switch and on quit), the sidebar updates from memory, and bursts of agent output collapse into a single UI update. Long sessions stay smooth from start to finish.
