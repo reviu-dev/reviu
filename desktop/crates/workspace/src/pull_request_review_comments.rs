@@ -6,7 +6,7 @@ use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use editor::{ReviewComment, ReviewCommentSide};
+use editor::{ReviewComment, ReviewCommentCreateRequest, ReviewCommentMode, ReviewCommentSide};
 use gfm_markdown_viewer::SuggestionContext;
 
 use crate::api::GithubPullRequestReviewComment;
@@ -86,6 +86,111 @@ pub(crate) fn pending_review_rows(
     .collect::<Vec<_>>();
   sort_review_panel_comments(&mut rows);
   rows
+}
+
+/// Where a new comment hangs, in the numbers GitHub uses.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct LineAnchor {
+  pub path: String,
+  pub line: u64,
+  pub side: String,
+  pub start_line: Option<u64>,
+  pub start_side: Option<String>,
+}
+
+/// The one call a new comment turns into. Deciding this from the diff's request
+/// is the part that can be wrong in silence, so it is decided here and not in
+/// the middle of a task.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum ReviewCommentWrite {
+  /// A reply that joins the review being written.
+  ReplyToReview {
+    review_id: String,
+    thread_node_id: String,
+    body: String,
+  },
+  /// A reply that goes out on its own, published at once.
+  Reply { in_reply_to_id: u64, body: String },
+  /// A new comment in the viewer's review. Without a review id, one is started.
+  AddToReview {
+    pull_request_node_id: String,
+    review_id: Option<String>,
+    anchor: LineAnchor,
+    body: String,
+  },
+  /// A comment of its own, anchored to the head commit.
+  SingleComment {
+    head_sha: String,
+    anchor: LineAnchor,
+    body: String,
+  },
+  /// Nothing can be written yet, with the reason to show.
+  Unavailable(&'static str),
+}
+
+fn line_anchor(request: &ReviewCommentCreateRequest, path: &Path) -> LineAnchor {
+  // The diff counts lines from zero, GitHub from one.
+  let line = request.line.saturating_add(1) as u64;
+  LineAnchor {
+    path: path.to_string_lossy().into_owned(),
+    line,
+    side: review_comment_side_name(request.side).to_string(),
+    // A range of one line is a line: GitHub rejects a start equal to the end.
+    start_line: request
+      .start_line
+      .map(|start| start.saturating_add(1) as u64)
+      .filter(|start| *start != line),
+    start_side: request
+      .start_side
+      .map(|side| review_comment_side_name(side).to_string()),
+  }
+}
+
+pub(crate) fn review_comment_write_plan(
+  request: &ReviewCommentCreateRequest,
+  path: &Path,
+  pending_review_id: Option<String>,
+  thread_node_id: Option<String>,
+  pull_request_node_id: Option<String>,
+  head_sha: Option<String>,
+) -> ReviewCommentWrite {
+  let body = request.body.as_ref().to_string();
+
+  if let Some(in_reply_to_id) = request.in_reply_to_id {
+    return match (pending_review_id, thread_node_id) {
+      (Some(review_id), Some(thread_node_id)) => ReviewCommentWrite::ReplyToReview {
+        review_id,
+        thread_node_id,
+        body,
+      },
+      // No review of our own, or a thread we have not loaded: it goes out alone.
+      _ => ReviewCommentWrite::Reply {
+        in_reply_to_id,
+        body,
+      },
+    };
+  }
+
+  let anchor = line_anchor(request, path);
+  match request.mode {
+    ReviewCommentMode::PendingReview => match pull_request_node_id {
+      Some(pull_request_node_id) => ReviewCommentWrite::AddToReview {
+        pull_request_node_id,
+        review_id: pending_review_id,
+        anchor,
+        body,
+      },
+      None => ReviewCommentWrite::Unavailable("this pull request is not loaded yet"),
+    },
+    ReviewCommentMode::SingleComment => match head_sha {
+      Some(head_sha) => ReviewCommentWrite::SingleComment {
+        head_sha,
+        anchor,
+        body,
+      },
+      None => ReviewCommentWrite::Unavailable("this pull request is not loaded yet"),
+    },
+  }
 }
 
 /// What GitHub calls each side of a diff.
@@ -293,6 +398,168 @@ mod tests {
 
   fn comment(id: u64, path: &str, line: Option<i64>, body: &str) -> GithubPullRequestReviewComment {
     pending_comment_fixture(id, path, line, body)
+  }
+
+  fn create_request(mode: ReviewCommentMode) -> ReviewCommentCreateRequest {
+    ReviewCommentCreateRequest {
+      line: 11,
+      side: ReviewCommentSide::Right,
+      start_line: None,
+      start_side: None,
+      in_reply_to_id: None,
+      body: Arc::from("rename this"),
+      mode,
+    }
+  }
+
+  fn plan(
+    request: &ReviewCommentCreateRequest,
+    pending_review_id: Option<&str>,
+    thread_node_id: Option<&str>,
+  ) -> ReviewCommentWrite {
+    review_comment_write_plan(
+      request,
+      Path::new("src/a.rs"),
+      pending_review_id.map(str::to_string),
+      thread_node_id.map(str::to_string),
+      Some("pr-node".to_string()),
+      Some("head-sha".to_string()),
+    )
+  }
+
+  #[test]
+  fn a_new_comment_joins_the_review_being_written() {
+    let request = create_request(ReviewCommentMode::PendingReview);
+
+    assert_eq!(
+      plan(&request, Some("review-node"), None),
+      ReviewCommentWrite::AddToReview {
+        pull_request_node_id: "pr-node".to_string(),
+        review_id: Some("review-node".to_string()),
+        anchor: LineAnchor {
+          path: "src/a.rs".to_string(),
+          line: 12,
+          side: "RIGHT".to_string(),
+          start_line: None,
+          start_side: None,
+        },
+        body: "rename this".to_string(),
+      }
+    );
+
+    // No review yet: the same plan, and the executor starts one.
+    assert!(matches!(
+      plan(&request, None, None),
+      ReviewCommentWrite::AddToReview {
+        review_id: None,
+        ..
+      }
+    ));
+  }
+
+  #[test]
+  fn a_comment_asked_to_go_alone_goes_alone() {
+    let request = create_request(ReviewCommentMode::SingleComment);
+
+    // Even with a review open: the composer's choice decides, not the state.
+    assert!(matches!(
+      plan(&request, Some("review-node"), None),
+      ReviewCommentWrite::SingleComment { .. }
+    ));
+    match plan(&request, None, None) {
+      ReviewCommentWrite::SingleComment {
+        head_sha, anchor, ..
+      } => {
+        assert_eq!(head_sha, "head-sha");
+        assert_eq!(anchor.line, 12);
+      }
+      other => panic!("expected a single comment, got {other:?}"),
+    }
+  }
+
+  #[test]
+  fn a_reply_joins_the_review_only_when_there_is_a_thread_to_join() {
+    let mut request = create_request(ReviewCommentMode::PendingReview);
+    request.in_reply_to_id = Some(7);
+
+    assert_eq!(
+      plan(&request, Some("review-node"), Some("thread-node")),
+      ReviewCommentWrite::ReplyToReview {
+        review_id: "review-node".to_string(),
+        thread_node_id: "thread-node".to_string(),
+        body: "rename this".to_string(),
+      }
+    );
+
+    // A thread we never loaded, or no review of our own: it is published at once.
+    for (review, thread) in [
+      (Some("review-node"), None),
+      (None, Some("thread-node")),
+      (None, None),
+    ] {
+      assert_eq!(
+        plan(&request, review, thread),
+        ReviewCommentWrite::Reply {
+          in_reply_to_id: 7,
+          body: "rename this".to_string(),
+        }
+      );
+    }
+  }
+
+  #[test]
+  fn a_range_keeps_both_ends_and_a_single_line_keeps_one() {
+    let mut ranged = create_request(ReviewCommentMode::SingleComment);
+    ranged.start_line = Some(9);
+    ranged.start_side = Some(ReviewCommentSide::Left);
+
+    match plan(&ranged, None, None) {
+      ReviewCommentWrite::SingleComment { anchor, .. } => {
+        assert_eq!(anchor.start_line, Some(10));
+        assert_eq!(anchor.start_side.as_deref(), Some("LEFT"));
+        assert_eq!(anchor.line, 12);
+      }
+      other => panic!("expected a single comment, got {other:?}"),
+    }
+
+    // A range of one line is a line, which is what GitHub accepts.
+    let mut single = create_request(ReviewCommentMode::SingleComment);
+    single.start_line = Some(11);
+    match plan(&single, None, None) {
+      ReviewCommentWrite::SingleComment { anchor, .. } => assert_eq!(anchor.start_line, None),
+      other => panic!("expected a single comment, got {other:?}"),
+    }
+  }
+
+  #[test]
+  fn a_pull_request_still_loading_takes_no_comment() {
+    let request = create_request(ReviewCommentMode::PendingReview);
+    assert_eq!(
+      review_comment_write_plan(
+        &request,
+        Path::new("src/a.rs"),
+        None,
+        None,
+        // No node id: a review cannot be started on it.
+        None,
+        Some("head-sha".to_string()),
+      ),
+      ReviewCommentWrite::Unavailable("this pull request is not loaded yet")
+    );
+
+    let single = create_request(ReviewCommentMode::SingleComment);
+    assert_eq!(
+      review_comment_write_plan(
+        &single,
+        Path::new("src/a.rs"),
+        None,
+        None,
+        Some("pr-node".to_string()),
+        // No head sha to anchor it to.
+        None,
+      ),
+      ReviewCommentWrite::Unavailable("this pull request is not loaded yet")
+    );
   }
 
   #[test]

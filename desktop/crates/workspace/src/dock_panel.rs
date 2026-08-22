@@ -5,7 +5,7 @@ use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use editor::{ReviewCommentCreateRequest, ReviewCommentMode};
+use editor::ReviewCommentCreateRequest;
 
 use git::{
   HeadCommitStatus, RepoStage, RepoStatusEntry, commit_changes, current_branch_status,
@@ -32,11 +32,13 @@ use crate::file_view::{file_dir_label, file_name_label, render_file_name_with_st
 use crate::history_list::{HistoryList, HistoryListEvent, history_change_kind_to_repo_status};
 use crate::pro_promise::{ProPromiseSurface, render_pro_promise};
 use crate::pull_request_review_comments::{
-  pending_review_comment_node_id, pending_review_id, pending_review_rows, review_comment_side_name,
+  ReviewCommentWrite, pending_review_comment_node_id, pending_review_id, pending_review_rows,
+  review_comment_write_plan,
 };
+use crate::pull_request_review_submission::review_submission_target;
 use crate::repo_state::{PaletteCommand, RepoState, push_flags, should_publish_branch};
 use crate::review_list::{ReviewList, ReviewListEvent, ReviewSection};
-use crate::review_submit_dialog::{ReviewSubmissionTarget, open_submit_review_dialog};
+use crate::review_submit_dialog::open_submit_review_dialog;
 
 const DOCK_PANEL_TERMINAL_DEBUG_SELECTOR: &str = "dock-panel-terminal";
 pub(crate) const DOCK_PANEL_HISTORY_DEBUG_SELECTOR: &str = "dock-panel-history";
@@ -939,22 +941,14 @@ impl DockPanel {
       return;
     };
     let viewer_login = AuthStateStore::get(cx).github_login();
-    let viewer_is_author = match (viewer_login.as_deref(), self.pr_author_login.as_deref()) {
-      (Some(viewer), Some(author)) => viewer.eq_ignore_ascii_case(author),
-      _ => false,
-    };
-    let target = ReviewSubmissionTarget {
-      owner: context.owner.clone(),
-      repo: context.repo.clone(),
-      number: pull_request.number,
-      pending_review_id: pending_review_id(&self.pr_review_comments),
-      pending_comment_count: self
-        .pr_review_comments
-        .iter()
-        .filter(|comment| comment.is_pending)
-        .count(),
-      viewer_is_author,
-    };
+    let target = review_submission_target(
+      context.owner.clone(),
+      context.repo.clone(),
+      pull_request.number,
+      &self.pr_review_comments,
+      viewer_login.as_deref(),
+      self.pr_author_login.as_deref(),
+    );
     let api = WorkspaceApi::global(cx).api.clone();
     let panel = cx.entity().downgrade();
     let on_submitted: crate::review_submit_dialog::ReviewSubmittedHandler =
@@ -981,9 +975,6 @@ impl DockPanel {
     let repo = context.repo.clone();
     let number = pull_request.number;
     let api = WorkspaceApi::global(cx).api.clone();
-    let review_id = pending_review_id(&self.pr_review_comments);
-    let pull_request_node_id = self.pr_node_id.clone();
-    let head_sha = self.pr_range.as_ref().map(|range| range.head.clone());
     let thread_node_id = request.in_reply_to_id.and_then(|id| {
       self
         .pr_review_comments
@@ -992,27 +983,29 @@ impl DockPanel {
         .map(|comment| comment.thread_id.clone())
         .filter(|thread_id| !thread_id.is_empty())
     });
-    let body = request.body.as_ref().to_string();
-    let path = path.to_string_lossy().to_string();
-    // GitHub numbers the lines of a file from one.
-    let line = request.line.saturating_add(1) as u64;
-    let start_line = request
-      .start_line
-      .map(|line| line.saturating_add(1) as u64)
-      .filter(|start| *start != line);
-    let side = review_comment_side_name(request.side).to_string();
-    let start_side = request
-      .start_side
-      .map(|side| review_comment_side_name(side).to_string());
-    let joins_review = matches!(request.mode, ReviewCommentMode::PendingReview);
-    let in_reply_to_id = request.in_reply_to_id;
+    let plan = review_comment_write_plan(
+      &request,
+      path.as_path(),
+      pending_review_id(&self.pr_review_comments),
+      thread_node_id,
+      self.pr_node_id.clone(),
+      self.pr_range.as_ref().map(|range| range.head.clone()),
+    );
+
+    if let ReviewCommentWrite::Unavailable(reason) = plan {
+      self.finish_review_comment_write(anyhow::Result::<()>::Err(anyhow::anyhow!(reason)), cx);
+      return;
+    }
 
     let task = cx.spawn(async move |this, cx| {
       let result = cx
         .background_spawn(async move {
-          match (in_reply_to_id, thread_node_id, review_id.clone()) {
-            // A reply joins the review being written when there is one.
-            (Some(_), Some(thread_node_id), Some(review_id)) => api
+          match plan {
+            ReviewCommentWrite::ReplyToReview {
+              review_id,
+              thread_node_id,
+              body,
+            } => api
               .reply_pending_review_thread(
                 &owner,
                 &repo,
@@ -1022,12 +1015,18 @@ impl DockPanel {
                 &body,
               )
               .map(|_| ()),
-            (Some(in_reply_to_id), _, _) => api
+            ReviewCommentWrite::Reply {
+              in_reply_to_id,
+              body,
+            } => api
               .reply_pull_request_review_comment(&owner, &repo, number, in_reply_to_id, &body)
               .map(|_| ()),
-            _ if joins_review => {
-              let pull_request_node_id = pull_request_node_id
-                .ok_or_else(|| anyhow::anyhow!("this pull request is not loaded yet"))?;
+            ReviewCommentWrite::AddToReview {
+              pull_request_node_id,
+              review_id,
+              anchor,
+              body,
+            } => {
               let review_id = match review_id {
                 Some(review_id) => review_id,
                 None => {
@@ -1043,34 +1042,35 @@ impl DockPanel {
                   number,
                   &pull_request_node_id,
                   &review_id,
-                  &path,
+                  &anchor.path,
                   &body,
                   "LINE",
-                  Some(line),
-                  Some(side.as_str()),
-                  start_line,
-                  start_side.as_deref(),
+                  Some(anchor.line),
+                  Some(anchor.side.as_str()),
+                  anchor.start_line,
+                  anchor.start_side.as_deref(),
                 )
                 .map(|_| ())
             }
-            _ => {
-              let head_sha =
-                head_sha.ok_or_else(|| anyhow::anyhow!("this pull request is not loaded yet"))?;
-              api
-                .create_pull_request_review_comment(
-                  &owner,
-                  &repo,
-                  number,
-                  &path,
-                  &head_sha,
-                  line,
-                  &side,
-                  start_line,
-                  start_side.as_deref(),
-                  &body,
-                )
-                .map(|_| ())
-            }
+            ReviewCommentWrite::SingleComment {
+              head_sha,
+              anchor,
+              body,
+            } => api
+              .create_pull_request_review_comment(
+                &owner,
+                &repo,
+                number,
+                &anchor.path,
+                &head_sha,
+                anchor.line,
+                &anchor.side,
+                anchor.start_line,
+                anchor.start_side.as_deref(),
+                &body,
+              )
+              .map(|_| ()),
+            ReviewCommentWrite::Unavailable(reason) => Err(anyhow::anyhow!(reason)),
           }
         })
         .await;

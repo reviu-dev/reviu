@@ -3,7 +3,34 @@
 
 use gpui::SharedString;
 
-use crate::api::GithubPullRequestReviewEvent;
+use crate::api::{GithubPullRequestReviewComment, GithubPullRequestReviewEvent};
+use crate::github_shared::logins_match_case_insensitive;
+use crate::pull_request_review_comments::pending_review_id;
+use crate::review_submit_dialog::ReviewSubmissionTarget;
+
+/// What the dialog needs to know, all of it read off the same list of comments
+/// so the review it submits is the one it counted.
+pub(crate) fn review_submission_target(
+  owner: String,
+  repo: String,
+  number: u64,
+  comments: &[GithubPullRequestReviewComment],
+  viewer_login: Option<&str>,
+  author_login: Option<&str>,
+) -> ReviewSubmissionTarget {
+  let viewer_is_author = match (viewer_login, author_login) {
+    (Some(viewer), Some(author)) => logins_match_case_insensitive(viewer, author),
+    _ => false,
+  };
+  ReviewSubmissionTarget {
+    owner,
+    repo,
+    number,
+    pending_review_id: pending_review_id(comments),
+    pending_comment_count: comments.iter().filter(|comment| comment.is_pending).count(),
+    viewer_is_author,
+  }
+}
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(crate) enum ReviewDecision {
@@ -84,6 +111,73 @@ pub(crate) fn validate_review_submission(
 #[cfg(test)]
 mod tests {
   use super::*;
+
+  use crate::pull_request_review_comments::pending_comment_fixture;
+
+  #[test]
+  fn the_review_submitted_is_the_one_that_was_counted() {
+    let mut published = pending_comment_fixture(3, "src/c.rs", Some(1), "already out");
+    published.is_pending = false;
+    let comments = [
+      pending_comment_fixture(1, "src/a.rs", Some(9), "first"),
+      pending_comment_fixture(2, "src/b.rs", Some(4), "second"),
+      published,
+    ];
+
+    let target = review_submission_target(
+      "acme".to_string(),
+      "widget".to_string(),
+      42,
+      &comments,
+      Some("octocat"),
+      Some("ada"),
+    );
+
+    // Two pending comments, and the review that holds them.
+    assert_eq!(target.pending_comment_count, 2);
+    assert_eq!(target.pending_review_id.as_deref(), Some("review-node"));
+    assert!(!target.viewer_is_author);
+  }
+
+  #[test]
+  fn nothing_pending_submits_the_decision_on_its_own() {
+    let mut published = pending_comment_fixture(1, "src/a.rs", Some(9), "already out");
+    published.is_pending = false;
+
+    let target = review_submission_target(
+      "acme".to_string(),
+      "widget".to_string(),
+      42,
+      &[published],
+      None,
+      None,
+    );
+
+    assert_eq!(target.pending_comment_count, 0);
+    // No review to submit: the decision goes out by itself.
+    assert_eq!(target.pending_review_id, None);
+  }
+
+  #[test]
+  fn the_author_is_recognised_whatever_the_case() {
+    let target = |viewer: Option<&str>, author: Option<&str>| {
+      review_submission_target(
+        "acme".to_string(),
+        "widget".to_string(),
+        42,
+        &[],
+        viewer,
+        author,
+      )
+      .viewer_is_author
+    };
+
+    assert!(target(Some("OctoCat"), Some("octocat")));
+    assert!(!target(Some("octocat"), Some("ada")));
+    // Signed out, or an author we never read: judge nothing.
+    assert!(!target(None, Some("octocat")));
+    assert!(!target(Some("octocat"), None));
+  }
 
   #[test]
   fn every_decision_maps_to_its_api_event() {

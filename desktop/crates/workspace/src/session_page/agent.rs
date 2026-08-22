@@ -1275,6 +1275,24 @@ mod tests {
     let (_repo, page, cx, _review_list, (first, _second)) =
       page_with_two_review_comments("session-page-review-turn", cx).await;
 
+    // A review of the pull request is waiting in the other section the whole
+    // time: an agent turn has no business touching it.
+    page.update(cx, |page, cx| {
+      page.dock_panel.update(cx, |panel, cx| {
+        panel.set_pull_request_review_comments_for_test(
+          vec![
+            crate::pull_request_review_comments::pending_comment_fixture(
+              9,
+              "src/a.rs",
+              Some(3),
+              "waiting for GitHub",
+            ),
+          ],
+          cx,
+        );
+      });
+    });
+
     // What a successful send leaves behind: one gone, one still a draft.
     page.update(cx, |page, cx| {
       page.agent_review.mark_as_sent(&ReviewSend::one(first));
@@ -1306,6 +1324,17 @@ mod tests {
         .comments(ReviewSection::Agent);
       assert_eq!(rows.len(), 1);
       assert_eq!(rows[0].excerpt, "second");
+
+      // The pull request section is untouched: its comments live on GitHub and
+      // leave only when the review is submitted.
+      let pull_request_rows = page
+        .dock_panel
+        .read(cx)
+        .review_list
+        .read(cx)
+        .comments(ReviewSection::PullRequest);
+      assert_eq!(pull_request_rows.len(), 1);
+      assert_eq!(pull_request_rows[0].excerpt, "waiting for GitHub");
     });
   }
 
