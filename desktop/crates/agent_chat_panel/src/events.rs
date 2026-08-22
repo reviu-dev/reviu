@@ -421,7 +421,8 @@ impl AgentChatPanel {
         panel.drain_pending_events(cx);
         panel.flush_turn_buffers();
         panel.append_turn_summary();
-        let mut drain_queue = false;
+        // A turn that ran to the end: not stopped by the user, not failed.
+        let mut completed = false;
         match result {
           Ok(stop_reason) => {
             panel.auth_required = false;
@@ -438,7 +439,7 @@ impl AgentChatPanel {
                 image_data: Vec::new(),
               }));
             } else {
-              drain_queue = true;
+              completed = true;
             }
           }
           Err(e) => {
@@ -476,13 +477,13 @@ impl AgentChatPanel {
         if count > 0 {
           panel.messages_list.remeasure_items(0..count);
         }
-        if drain_queue && !panel.queued_prompts.is_empty() {
+        if completed && !panel.queued_prompts.is_empty() {
           let next = panel.queued_prompts.remove(0);
           panel.dispatch_prompt(next, cx);
         }
         panel.persist_state(cx);
         panel.sync_list_count();
-        cx.emit(AgentChatPanelEvent::TurnFinished);
+        cx.emit(AgentChatPanelEvent::TurnFinished { completed });
         panel.refresh_repo_files(cx);
         cx.notify();
       }

@@ -586,8 +586,9 @@ pub enum AgentChatPanelEvent {
   OpenPath { path: PathBuf, line: Option<u32> },
   /// A prompt was dispatched; the host may snapshot the working tree.
   TurnStarted,
-  /// The agent finished a turn; the working tree may have changed.
-  TurnFinished,
+  /// The agent finished a turn; the working tree may have changed. `completed`
+  /// is false when the user stopped it or it failed, so nothing was done.
+  TurnFinished { completed: bool },
   /// User asked to roll back to a checkpoint marker.
   RollbackRequested { ref_name: String },
   /// User asked to revert one turn's file changes, keeping the transcript.

@@ -81,7 +81,7 @@ impl SessionPage {
         AgentChatPanelEvent::PermissionRequested => {
           this.notify_agent_attention("Reviu agent needs a decision", window, cx);
         }
-        AgentChatPanelEvent::TurnFinished => {
+        AgentChatPanelEvent::TurnFinished { completed } => {
           // A queued prompt draining into a fresh turn is not a stopping point.
           if !_panel.read(cx).is_turn_in_flight() {
             this.notify_agent_attention("Reviu agent finished", window, cx);
@@ -90,6 +90,7 @@ impl SessionPage {
           if let Some(editor) = this.editor.clone() {
             editor.update(cx, |editor, cx| editor.refresh_git_state(cx));
           }
+          this.consume_sent_review_comments(*completed);
           this.sync_agent_review_comments_to_editor(cx);
           this.refresh_branch(cx);
         }
@@ -494,13 +495,23 @@ impl SessionPage {
   pub(super) fn sync_agent_review_comments_to_editor(&mut self, cx: &mut Context<Self>) {
     let editor = self.editor.clone();
     sync_comments_to_editor(
-      &mut self.agent_review,
+      &self.agent_review,
       editor.as_ref(),
       self.selected_file.as_deref(),
       cx,
     );
     self.sync_review_panel(cx);
     self.persist_agent_review();
+  }
+
+  /// A completed turn consumes the comments it carried: they were instructions,
+  /// and the work is over. One the user stopped, or one that failed, did nothing
+  /// with them, so they stay and can go again.
+  pub(super) fn consume_sent_review_comments(&mut self, completed: bool) -> usize {
+    if !completed {
+      return 0;
+    }
+    self.agent_review.clear_sent()
   }
 
   /// Reads the batch of the selected repository and hands it to the panel.
@@ -584,8 +595,8 @@ impl SessionPage {
     cx.notify();
   }
 
-  pub(super) fn copyable_review_comment_count(&self) -> usize {
-    self.agent_review.copyable_count()
+  pub(super) fn draft_review_comment_count(&self) -> usize {
+    self.agent_review.draft_count()
   }
 
   /// The panel's ticks decide what goes; nothing ticked sends the whole batch.
@@ -636,7 +647,7 @@ impl SessionPage {
       return;
     }
 
-    self.agent_review.mark_as_copied(&send);
+    self.agent_review.mark_as_sent(&send);
     // Only what went out loses its tick: sending one comment on its own leaves
     // the batch someone was building alone.
     if let ReviewSend::Only(ids) = &send {
@@ -793,7 +804,7 @@ mod tests {
       // agent addressed the comment.
       assert_eq!(comment.original_start_line, Some(1));
       assert_eq!(comment.original_lines, vec!["v2".to_string()]);
-      assert_eq!(page.copyable_review_comment_count(), 1);
+      assert_eq!(page.draft_review_comment_count(), 1);
       comment.id
     });
 
@@ -802,7 +813,7 @@ mod tests {
     });
     page.read_with(cx, |page, _| {
       assert!(page.agent_review.is_empty());
-      assert_eq!(page.copyable_review_comment_count(), 0);
+      assert_eq!(page.draft_review_comment_count(), 0);
     });
   }
 
@@ -1032,7 +1043,7 @@ mod tests {
 
     page.read_with(cx, |page, cx| {
       assert!(page.agent_review.all().is_empty());
-      assert_eq!(page.copyable_review_comment_count(), 0);
+      assert_eq!(page.draft_review_comment_count(), 0);
       assert!(
         page
           .dock_panel
@@ -1242,6 +1253,40 @@ mod tests {
       cx.update(|window, cx| window.focused(cx)).as_ref(),
       Some(&editor_handle)
     );
+  }
+
+  #[gpui::test]
+  async fn a_completed_turn_takes_the_sent_comments_away(cx: &mut TestAppContext) {
+    let (_repo, page, cx, _review_list, (first, _second)) =
+      page_with_two_review_comments("session-page-review-turn", cx).await;
+
+    // What a successful send leaves behind: one gone, one still a draft.
+    page.update(cx, |page, cx| {
+      page.agent_review.mark_as_sent(&ReviewSend::one(first));
+      page.sync_agent_review_comments_to_editor(cx);
+    });
+
+    // A turn the user stopped did nothing with it: nothing is dropped.
+    page.update(cx, |page, cx| {
+      assert_eq!(page.consume_sent_review_comments(false), 0);
+      page.sync_agent_review_comments_to_editor(cx);
+    });
+    page.read_with(cx, |page, _| assert_eq!(page.agent_review.all().len(), 2));
+
+    page.update(cx, |page, cx| {
+      assert_eq!(page.consume_sent_review_comments(true), 1);
+      page.sync_agent_review_comments_to_editor(cx);
+    });
+    page.read_with(cx, |page, cx| {
+      let comments = page.agent_review.all();
+      assert_eq!(comments.len(), 1);
+      assert_eq!(comments[0].body.as_ref(), "second");
+      assert_eq!(page.draft_review_comment_count(), 1);
+      // The panel follows, without waiting for a file to be opened.
+      let rows = page.dock_panel.read(cx).review_list.read(cx).comments();
+      assert_eq!(rows.len(), 1);
+      assert_eq!(rows[0].excerpt, "second");
+    });
   }
 
   #[gpui::test]

@@ -32,7 +32,7 @@ pub(crate) fn read_review(path: &Path) -> Option<StoredReview> {
   let comments = parsed
     .comments
     .into_iter()
-    .map(PersistedComment::into_comment)
+    .filter_map(PersistedComment::into_comment)
     .collect::<Vec<_>>();
   // A file written by a newer id counter than its own comments is fine; the
   // other way round would hand out an id that is already taken.
@@ -113,8 +113,9 @@ impl PersistedComment {
     }
   }
 
-  fn into_comment(self) -> LocalAgentReviewComment {
-    LocalAgentReviewComment {
+  fn into_comment(self) -> Option<LocalAgentReviewComment> {
+    let state = self.state.into_state()?;
+    Some(LocalAgentReviewComment {
       id: self.id,
       in_reply_to_id: self.in_reply_to_id,
       path: self.path,
@@ -125,8 +126,8 @@ impl PersistedComment {
       body: Arc::from(self.body.as_str()),
       original_start_line: self.original_start_line,
       original_lines: self.original_lines,
-      state: self.state.into(),
-    }
+      state,
+    })
   }
 }
 
@@ -168,20 +169,19 @@ impl From<&LocalAgentReviewCommentState> for PersistedState {
   fn from(state: &LocalAgentReviewCommentState) -> Self {
     match state {
       LocalAgentReviewCommentState::Draft => Self::Draft,
-      LocalAgentReviewCommentState::Copied => Self::Copied,
-      LocalAgentReviewCommentState::Addressed => Self::Addressed,
-      LocalAgentReviewCommentState::Outdated => Self::Outdated,
+      LocalAgentReviewCommentState::Sent => Self::Copied,
     }
   }
 }
 
-impl From<PersistedState> for LocalAgentReviewCommentState {
-  fn from(state: PersistedState) -> Self {
-    match state {
-      PersistedState::Draft => Self::Draft,
-      PersistedState::Copied => Self::Copied,
-      PersistedState::Addressed => Self::Addressed,
-      PersistedState::Outdated => Self::Outdated,
+impl PersistedState {
+  /// `addressed` and `outdated` come from the state machine that used to watch
+  /// the diff. Those comments were dealt with, so a reload drops them.
+  fn into_state(self) -> Option<LocalAgentReviewCommentState> {
+    match self {
+      Self::Draft => Some(LocalAgentReviewCommentState::Draft),
+      Self::Copied => Some(LocalAgentReviewCommentState::Sent),
+      Self::Addressed | Self::Outdated => None,
     }
   }
 }
@@ -227,7 +227,7 @@ mod tests {
         start_side: None,
         original_start_line: None,
         original_lines: Vec::new(),
-        ..comment(2, LocalAgentReviewCommentState::Copied)
+        ..comment(2, LocalAgentReviewCommentState::Sent)
       },
     ];
     write_review(&path, &comments, 3);
@@ -266,6 +266,53 @@ mod tests {
     assert!(read_review(&path).is_none());
 
     let _ = std::fs::remove_dir_all(&dir);
+  }
+
+  #[test]
+  fn a_batch_written_by_the_old_state_machine_keeps_only_what_still_means_something() {
+    let dir = temp_dir("legacy-states");
+    let path = dir.join(REVIEW_FILE_NAME);
+
+    // Written before comments became temporary: those two were dealt with.
+    std::fs::write(
+      &path,
+      serde_json::to_string(&PersistedReview {
+        version: REVIEW_FORMAT_VERSION,
+        next_id: 5,
+        comments: vec![
+          persisted(1, PersistedState::Draft),
+          persisted(2, PersistedState::Copied),
+          persisted(3, PersistedState::Addressed),
+          persisted(4, PersistedState::Outdated),
+        ],
+      })
+      .expect("serialize"),
+    )
+    .expect("write file");
+
+    let stored = read_review(&path).expect("read back");
+
+    let states = stored
+      .comments
+      .iter()
+      .map(|comment| (comment.id, comment.state.clone()))
+      .collect::<Vec<_>>();
+    assert_eq!(
+      states,
+      vec![
+        (1, LocalAgentReviewCommentState::Draft),
+        (2, LocalAgentReviewCommentState::Sent),
+      ]
+    );
+
+    let _ = std::fs::remove_dir_all(&dir);
+  }
+
+  fn persisted(id: u64, state: PersistedState) -> PersistedComment {
+    let mut persisted =
+      PersistedComment::from_comment(&comment(id, LocalAgentReviewCommentState::Draft));
+    persisted.state = state;
+    persisted
   }
 
   #[test]

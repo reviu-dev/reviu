@@ -1,5 +1,7 @@
-//! Local review comments addressed to the agent: draft on a diff, send as a prompt,
-//! then track whether the agent's edits addressed or outdated each comment.
+//! Local review comments addressed to the agent: draft on a diff, send as a
+//! prompt, and let a completed turn consume them. They are instructions, not a
+//! record like a pull request's comments, so they do not outlive the turn they
+//! were sent for.
 
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
@@ -12,9 +14,9 @@ use gpui::{App, Entity};
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum LocalAgentReviewCommentState {
   Draft,
-  Copied,
-  Addressed,
-  Outdated,
+  /// Handed to the agent, waiting for the turn to end. A completed turn takes
+  /// it away.
+  Sent,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -52,15 +54,13 @@ pub(crate) fn agent_review_comment_spans_a_range(comment: &LocalAgentReviewComme
     .is_some_and(|start_line| start_line != comment.line)
 }
 
-pub(crate) fn agent_review_state_is_copyable(state: &LocalAgentReviewCommentState) -> bool {
-  matches!(
-    state,
-    LocalAgentReviewCommentState::Draft | LocalAgentReviewCommentState::Copied
-  )
+/// Only what has not left yet: a sent comment is already with the agent.
+pub(crate) fn agent_review_state_is_sendable(state: &LocalAgentReviewCommentState) -> bool {
+  matches!(state, LocalAgentReviewCommentState::Draft)
 }
 
-pub(crate) fn agent_review_comment_is_copyable(comment: &LocalAgentReviewComment) -> bool {
-  agent_review_state_is_copyable(&comment.state)
+pub(crate) fn agent_review_comment_is_sendable(comment: &LocalAgentReviewComment) -> bool {
+  agent_review_state_is_sendable(&comment.state)
 }
 
 /// Which comments a send covers. The panel's empty selection means the whole
@@ -92,87 +92,13 @@ impl ReviewSend {
   }
 }
 
-/// An addressed comment has nothing left to say; an outdated one still does,
-/// marked as such.
-pub(crate) fn agent_review_comment_is_shown_in_diff(comment: &LocalAgentReviewComment) -> bool {
-  !matches!(comment.state, LocalAgentReviewCommentState::Addressed)
-}
-
-fn lines_match_at(lines: &[String], start_line: usize, expected: &[String]) -> bool {
-  if expected.is_empty() || start_line == 0 {
-    return false;
-  }
-  let start_ix = start_line - 1;
-  lines
-    .get(start_ix..start_ix.saturating_add(expected.len()))
-    .is_some_and(|lines| lines == expected)
-}
-
-fn contains_line_sequence(lines: &[String], expected: &[String]) -> bool {
-  if expected.is_empty() || expected.len() > lines.len() {
-    return false;
-  }
-  lines
-    .windows(expected.len())
-    .any(|window| window == expected)
-}
-
-fn extract_first_suggestion_lines(body: &str) -> Vec<String> {
-  let mut in_suggestion = false;
-  let mut lines = Vec::new();
-
-  for line in body.lines() {
-    let trimmed = line.trim();
-    if !in_suggestion {
-      if trimmed.starts_with("```suggestion") {
-        in_suggestion = true;
-      }
-      continue;
-    }
-
-    if trimmed == "```" {
-      return lines;
-    }
-
-    lines.push(line.to_string());
-  }
-
-  Vec::new()
-}
-
-pub(crate) fn next_agent_review_comment_state(
-  comment: &LocalAgentReviewComment,
-  current_file_lines: &[String],
-) -> LocalAgentReviewCommentState {
-  if matches!(comment.state, LocalAgentReviewCommentState::Draft) {
-    return LocalAgentReviewCommentState::Draft;
-  }
-
-  let suggested_lines = extract_first_suggestion_lines(comment.body.as_ref());
-  if contains_line_sequence(current_file_lines, &suggested_lines) {
-    return LocalAgentReviewCommentState::Addressed;
-  }
-
-  if let Some(original_start_line) = comment.original_start_line
-    && !lines_match_at(
-      current_file_lines,
-      original_start_line,
-      &comment.original_lines,
-    )
-  {
-    return LocalAgentReviewCommentState::Outdated;
-  }
-
-  LocalAgentReviewCommentState::Copied
-}
-
 pub(crate) fn format_agent_review_export(
   comments: &[LocalAgentReviewComment],
   send: &ReviewSend,
 ) -> String {
   let mut comments = comments
     .iter()
-    .filter(|comment| agent_review_comment_is_copyable(comment) && send.covers(comment))
+    .filter(|comment| agent_review_comment_is_sendable(comment) && send.covers(comment))
     .collect::<Vec<_>>();
   comments.sort_by(|a, b| {
     a.path
@@ -249,11 +175,12 @@ impl AgentReviewComments {
     &self.comments
   }
 
-  pub(crate) fn copyable_count(&self) -> usize {
+  /// What a plain `Send` would carry, and what the rail badge counts.
+  pub(crate) fn draft_count(&self) -> usize {
     self
       .comments
       .iter()
-      .filter(|comment| agent_review_comment_is_copyable(comment))
+      .filter(|comment| agent_review_comment_is_sendable(comment))
       .count()
   }
 
@@ -261,7 +188,7 @@ impl AgentReviewComments {
     self
       .comments
       .iter()
-      .filter(|comment| agent_review_comment_is_copyable(comment) && send.covers(comment))
+      .filter(|comment| agent_review_comment_is_sendable(comment) && send.covers(comment))
       .count()
   }
 
@@ -368,35 +295,17 @@ impl AgentReviewComments {
     root_id
   }
 
-  /// Recomputes the state of the comments anchored in `selected_file` against
-  /// its current content. Returns whether anything changed.
-  pub(crate) fn refresh_states(&mut self, selected_file: &Path, file_lines: &[String]) -> bool {
-    let mut changed = false;
-    for comment in &mut self.comments {
-      if comment.path != selected_file {
-        continue;
-      }
-      let next_state = next_agent_review_comment_state(comment, file_lines);
-      if comment.state != next_state {
-        comment.state = next_state;
-        changed = true;
-      }
-    }
-    self.dirty |= changed;
-    changed
-  }
-
   pub(crate) fn export(&self, send: &ReviewSend) -> String {
     format_agent_review_export(&self.comments, send)
   }
 
-  /// Marks the sent comments as copied and returns how many were marked. What
-  /// stayed behind is still a draft, and goes with the next send.
-  pub(crate) fn mark_as_copied(&mut self, send: &ReviewSend) -> usize {
+  /// Marks what just left and returns how many. What stayed behind is still a
+  /// draft, and goes with the next send.
+  pub(crate) fn mark_as_sent(&mut self, send: &ReviewSend) -> usize {
     let mut marked = 0;
     for comment in &mut self.comments {
-      if agent_review_comment_is_copyable(comment) && send.covers(comment) {
-        comment.state = LocalAgentReviewCommentState::Copied;
+      if agent_review_comment_is_sendable(comment) && send.covers(comment) {
+        comment.state = LocalAgentReviewCommentState::Sent;
         marked += 1;
       }
     }
@@ -404,12 +313,32 @@ impl AgentReviewComments {
     marked
   }
 
+  /// A completed turn consumes the comments it was sent: they were instructions,
+  /// and the work is over. Returns how many were dropped.
+  pub(crate) fn clear_sent(&mut self) -> usize {
+    let before = self.comments.len();
+    self.comments.retain(agent_review_comment_is_sendable);
+    let dropped = before - self.comments.len();
+    self.dirty |= dropped > 0;
+    dropped
+  }
+
+  /// Which of the open file's comments still have somewhere to go.
+  fn sendable_ids_in(&self, selected_file: &Path) -> Vec<u64> {
+    self
+      .comments
+      .iter()
+      .filter(|comment| comment.path == selected_file)
+      .filter(|comment| agent_review_comment_is_sendable(comment))
+      .map(|comment| comment.id)
+      .collect()
+  }
+
   fn editor_comments(&self, selected_file: &Path) -> Vec<ReviewComment> {
     self
       .comments
       .iter()
       .filter(|comment| comment.path == selected_file)
-      .filter(|comment| agent_review_comment_is_shown_in_diff(comment))
       .map(to_editor_comment)
       .collect()
   }
@@ -444,24 +373,12 @@ fn to_editor_comment(comment: &LocalAgentReviewComment) -> ReviewComment {
     created_at: Arc::from(""),
     thread_id: None,
     is_resolved: false,
-    is_outdated: matches!(comment.state, LocalAgentReviewCommentState::Outdated),
+    // Nothing local goes stale any more: a turn takes its comments with it.
+    is_outdated: false,
     viewer_can_resolve: false,
     viewer_can_unresolve: false,
     is_pending: false,
   }
-}
-
-/// The file content the comments are anchored against, newline endings stripped.
-pub(crate) fn editor_file_lines(editor: &Entity<Editor>, cx: &App) -> Vec<String> {
-  let document = editor.read(cx).document().clone();
-  let document = document.read(cx);
-  (0..document.len_lines())
-    .filter_map(|line_ix| {
-      document
-        .line_content(line_ix)
-        .map(|line| line.trim_end_matches(['\r', '\n']).to_string())
-    })
-    .collect()
 }
 
 /// Snapshot of the lines a new comment is anchored to, used later to tell
@@ -502,7 +419,7 @@ pub(crate) fn original_lines_for_request(
 /// Pushes the comments of `selected_file` into the editor, refreshing their
 /// state against the current content first.
 pub(crate) fn sync_comments_to_editor(
-  comments: &mut AgentReviewComments,
+  comments: &AgentReviewComments,
   editor: Option<&Entity<Editor>>,
   selected_file: Option<&Path>,
   cx: &mut App,
@@ -514,21 +431,21 @@ pub(crate) fn sync_comments_to_editor(
     editor.update(cx, |editor, cx| {
       editor.set_review_comments(Vec::new(), cx);
       editor.set_editable_review_comment_ids(std::iter::empty::<u64>(), cx);
+      editor.set_sendable_review_comment_ids(std::iter::empty::<u64>(), cx);
     });
     return;
   };
-
-  let file_lines = editor_file_lines(editor, cx);
-  comments.refresh_states(selected_file, &file_lines);
 
   let editor_comments = comments.editor_comments(selected_file);
   let editable_ids = editor_comments
     .iter()
     .map(|comment| comment.id)
     .collect::<Vec<_>>();
+  let sendable_ids = comments.sendable_ids_in(selected_file);
 
   editor.update(cx, |editor, cx| {
     editor.set_editable_review_comment_ids(editable_ids, cx);
+    editor.set_sendable_review_comment_ids(sendable_ids, cx);
     editor.set_review_comments(editor_comments, cx);
   });
 }
@@ -555,6 +472,18 @@ mod tests {
       original_start_line: Some(line.saturating_add(1)),
       original_lines: vec!["let value = custom();".to_string()],
       state,
+    }
+  }
+
+  fn create_request(line: usize, body: &str) -> ReviewCommentCreateRequest {
+    ReviewCommentCreateRequest {
+      line,
+      side: ReviewCommentSide::Right,
+      start_line: None,
+      start_side: None,
+      body: Arc::from(body),
+      in_reply_to_id: None,
+      mode: editor::ReviewCommentMode::SingleComment,
     }
   }
 
@@ -637,43 +566,16 @@ mod tests {
   }
 
   #[test]
-  fn next_agent_review_comment_state_marks_copied_suggestion_as_addressed() {
-    let comment = comment(
-      1,
-      1,
-      "Use this:\n\n```suggestion\nlet value = shared();\n```",
-      LocalAgentReviewCommentState::Copied,
-    );
-    let current_lines = vec![
-      "fn main() {".to_string(),
-      "let value = shared();".to_string(),
-      "}".to_string(),
+  fn a_sent_comment_does_not_go_out_twice() {
+    let comments = vec![
+      comment(1, 1, "Still waiting.", LocalAgentReviewCommentState::Draft),
+      comment(2, 3, "Already gone.", LocalAgentReviewCommentState::Sent),
     ];
 
-    assert_eq!(
-      next_agent_review_comment_state(&comment, &current_lines),
-      LocalAgentReviewCommentState::Addressed
-    );
-  }
+    let export = format_agent_review_export(&comments, &ReviewSend::WholeBatch);
 
-  #[test]
-  fn next_agent_review_comment_state_marks_copied_mismatch_as_outdated() {
-    let comment = comment(
-      1,
-      1,
-      "Please simplify this.",
-      LocalAgentReviewCommentState::Copied,
-    );
-    let current_lines = vec![
-      "fn main() {".to_string(),
-      "let value = changed();".to_string(),
-      "}".to_string(),
-    ];
-
-    assert_eq!(
-      next_agent_review_comment_state(&comment, &current_lines),
-      LocalAgentReviewCommentState::Outdated
-    );
+    assert!(export.contains("Still waiting."));
+    assert!(!export.contains("Already gone."));
   }
 
   #[test]
@@ -724,57 +626,57 @@ mod tests {
 
     let send = ReviewSend::one(first);
     assert_eq!(comments.sendable_count(&send), 1);
-    assert_eq!(comments.mark_as_copied(&send), 1);
+    assert_eq!(comments.mark_as_sent(&send), 1);
 
     let stored = comments.all();
-    assert_eq!(stored[0].state, LocalAgentReviewCommentState::Copied);
+    assert_eq!(stored[0].state, LocalAgentReviewCommentState::Sent);
     assert_eq!(stored[1].state, LocalAgentReviewCommentState::Draft);
-    // The whole batch is still sendable: one copied, one never sent.
-    assert_eq!(comments.copyable_count(), 2);
+    // Only the one left behind can still go.
+    assert_eq!(comments.draft_count(), 1);
   }
 
   #[test]
-  fn a_selection_never_sends_what_the_agent_already_addressed() {
-    let comments = vec![
-      comment(1, 1, "Done.", LocalAgentReviewCommentState::Addressed),
-      comment(2, 3, "Stale.", LocalAgentReviewCommentState::Outdated),
-    ];
+  fn a_completed_turn_takes_away_what_it_was_sent() {
+    let mut comments = AgentReviewComments::new();
+    let sent = comments
+      .create(
+        &create_request(0, "sent with the turn"),
+        Some(Path::new("src/main.rs")),
+        (None, Vec::new()),
+      )
+      .expect("create sent");
+    comments.mark_as_sent(&ReviewSend::WholeBatch);
+    // Written while the agent was working: it never left, so it stays.
+    comments
+      .create(
+        &create_request(2, "written meanwhile"),
+        Some(Path::new("src/main.rs")),
+        (None, Vec::new()),
+      )
+      .expect("create draft");
 
-    let send = ReviewSend::Only(HashSet::from([1, 2]));
+    assert_eq!(comments.clear_sent(), 1);
 
-    assert_eq!(format_agent_review_export(&comments, &send), "");
+    let stored = comments.all();
+    assert_eq!(stored.len(), 1);
+    assert_eq!(stored[0].body.as_ref(), "written meanwhile");
+    assert_ne!(stored[0].id, sent);
+    assert_eq!(comments.draft_count(), 1);
   }
 
   #[test]
-  fn format_agent_review_export_skips_addressed_and_outdated_comments() {
-    let comments = vec![
-      comment(1, 1, "Still active.", LocalAgentReviewCommentState::Copied),
-      comment(
-        2,
-        3,
-        "Already fixed.",
-        LocalAgentReviewCommentState::Addressed,
-      ),
-      comment(3, 5, "Stale.", LocalAgentReviewCommentState::Outdated),
-    ];
+  fn clearing_a_turn_that_sent_nothing_changes_nothing() {
+    let mut comments = AgentReviewComments::new();
+    comments
+      .create(
+        &create_request(0, "still a draft"),
+        Some(Path::new("src/main.rs")),
+        (None, Vec::new()),
+      )
+      .expect("create comment");
 
-    let export = format_agent_review_export(&comments, &ReviewSend::WholeBatch);
-
-    assert!(export.contains("Still active."));
-    assert!(!export.contains("Already fixed."));
-    assert!(!export.contains("Stale."));
-  }
-
-  fn create_request(line: usize, body: &str) -> ReviewCommentCreateRequest {
-    ReviewCommentCreateRequest {
-      line,
-      side: ReviewCommentSide::Right,
-      start_line: None,
-      start_side: None,
-      body: Arc::from(body),
-      in_reply_to_id: None,
-      mode: editor::ReviewCommentMode::SingleComment,
-    }
+    assert_eq!(comments.clear_sent(), 0);
+    assert_eq!(comments.all().len(), 1);
   }
 
   #[test]
@@ -833,75 +735,6 @@ mod tests {
   }
 
   #[test]
-  fn refresh_states_only_touches_comments_of_the_given_file() {
-    let mut comments = AgentReviewComments::new();
-    comments
-      .create(
-        &create_request(0, "extract this"),
-        Some(Path::new("src/main.rs")),
-        (Some(1), vec!["let value = custom();".to_string()]),
-      )
-      .expect("create comment");
-    comments
-      .create(
-        &create_request(0, "other file"),
-        Some(Path::new("src/other.rs")),
-        (Some(1), vec!["let value = custom();".to_string()]),
-      )
-      .expect("create comment");
-
-    // Drafts are frozen until they are sent, so send them first.
-    comments.mark_as_copied(&ReviewSend::WholeBatch);
-
-    let changed = comments.refresh_states(
-      Path::new("src/main.rs"),
-      &["let value = replaced();".to_string()],
-    );
-
-    assert!(changed);
-    let stored = comments.all();
-    assert_eq!(stored[0].state, LocalAgentReviewCommentState::Outdated);
-    assert_eq!(stored[1].state, LocalAgentReviewCommentState::Copied);
-  }
-
-  #[test]
-  fn marking_as_copied_covers_every_copyable_comment() {
-    let mut comments = AgentReviewComments::new();
-    comments
-      .create(
-        &create_request(0, "extract this"),
-        Some(Path::new("src/main.rs")),
-        (None, Vec::new()),
-      )
-      .expect("create comment");
-
-    assert_eq!(comments.copyable_count(), 1);
-    assert_eq!(comments.mark_as_copied(&ReviewSend::WholeBatch), 1);
-    assert_eq!(
-      comments.all()[0].state,
-      LocalAgentReviewCommentState::Copied
-    );
-    // Copied comments stay copyable until the agent addresses them.
-    assert_eq!(comments.copyable_count(), 1);
-  }
-
-  #[test]
-  fn update_reports_whether_the_comment_exists() {
-    let mut comments = AgentReviewComments::new();
-    let id = comments
-      .create(
-        &create_request(3, "extract this"),
-        Some(Path::new("src/main.rs")),
-        (None, Vec::new()),
-      )
-      .expect("create comment");
-
-    assert!(comments.update(id, Arc::from("extract this helper")));
-    assert!(!comments.update(id + 100, Arc::from("ghost")));
-    assert_eq!(comments.all()[0].body.as_ref(), "extract this helper");
-  }
-
-  #[test]
   fn deleting_a_reply_keeps_its_thread_root() {
     let mut comments = AgentReviewComments::new();
     let root = comments
@@ -925,7 +758,23 @@ mod tests {
   }
 
   #[test]
-  fn editor_comments_keep_only_the_pending_ones_of_the_open_file() {
+  fn update_reports_whether_the_comment_exists() {
+    let mut comments = AgentReviewComments::new();
+    let id = comments
+      .create(
+        &create_request(3, "extract this"),
+        Some(Path::new("src/main.rs")),
+        (None, Vec::new()),
+      )
+      .expect("create comment");
+
+    assert!(comments.update(id, Arc::from("extract this helper")));
+    assert!(!comments.update(id + 100, Arc::from("ghost")));
+    assert_eq!(comments.all()[0].body.as_ref(), "extract this helper");
+  }
+
+  #[test]
+  fn the_diff_shows_the_comments_of_the_open_file_only() {
     let mut comments = AgentReviewComments::new();
     comments
       .create(
@@ -955,65 +804,23 @@ mod tests {
   }
 
   #[test]
-  fn an_outdated_comment_stays_in_the_diff_marked_outdated() {
+  fn a_sent_comment_stays_in_the_diff_without_a_send_action() {
     let mut comments = AgentReviewComments::new();
     comments
       .create(
-        &create_request(0, "rename it\n\n```suggestion\nlet total = custom();\n```"),
+        &create_request(0, "extract this"),
         Some(Path::new("src/main.rs")),
-        (Some(1), vec!["let value = custom();".to_string()]),
+        (None, Vec::new()),
       )
       .expect("create comment");
-    comments.mark_as_copied(&ReviewSend::WholeBatch);
+    comments.mark_as_sent(&ReviewSend::WholeBatch);
 
-    // The agent rewrote the line into something else: the comment lost its anchor.
-    comments.refresh_states(
-      Path::new("src/main.rs"),
-      &["let value = other();".to_string()],
-    );
-
-    assert_eq!(
-      comments.all()[0].state,
-      LocalAgentReviewCommentState::Outdated
-    );
-    let rendered = comments.editor_comments(Path::new("src/main.rs"));
-    assert_eq!(
-      rendered.len(),
-      1,
-      "an outdated comment still has something to say"
-    );
-    assert!(rendered[0].is_outdated);
-    // Outdated is not sendable: the agent would get a comment about gone code.
-    assert_eq!(comments.copyable_count(), 0);
-  }
-
-  #[test]
-  fn an_addressed_suggestion_leaves_the_diff() {
-    let mut comments = AgentReviewComments::new();
-    comments
-      .create(
-        &create_request(0, "rename it\n\n```suggestion\nlet total = custom();\n```"),
-        Some(Path::new("src/main.rs")),
-        (Some(1), vec!["let value = custom();".to_string()]),
-      )
-      .expect("create comment");
-    comments.mark_as_copied(&ReviewSend::WholeBatch);
-
-    // The agent applied the suggestion.
-    comments.refresh_states(
-      Path::new("src/main.rs"),
-      &["let total = custom();".to_string()],
-    );
-
-    assert_eq!(
-      comments.all()[0].state,
-      LocalAgentReviewCommentState::Addressed
-    );
+    // Visible while the agent works on it, but it has nowhere left to go.
+    assert_eq!(comments.editor_comments(Path::new("src/main.rs")).len(), 1);
     assert!(
       comments
-        .editor_comments(Path::new("src/main.rs"))
+        .sendable_ids_in(Path::new("src/main.rs"))
         .is_empty()
     );
-    assert_eq!(comments.copyable_count(), 0);
   }
 }

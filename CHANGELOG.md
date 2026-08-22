@@ -18,9 +18,17 @@ Single comments also carry a send arrow, both on their row in the panel and on t
 
 ### A Review That Waits For You
 
-A review in progress no longer dies with the session. Close the app, switch to another repository, come back a week later: the comments are still there, with the states the agent left them in. Each repository keeps its own batch, so moving between projects no longer costs you the eight comments you had just written.
+A review you have not sent yet no longer dies with the session. Close the app, switch to another repository, come back a week later: the comments you were writing are still there. Each repository keeps its own batch, so moving between projects no longer costs you the eight comments you had just written.
 
 The batch is saved next to that repository's conversations, and it is written the moment anything changes, so there is no window where a crash costs you a comment. Discarding a review removes it for good. A batch nobody touches for a month is cleaned up along with the old conversations.
+
+### Comments That Do Not Pile Up
+
+Review comments are instructions to the agent, not a record to keep like a pull request's comments. So they now last exactly as long as they need to: you write them, you send them, and when the agent finishes that turn they leave the panel. Nothing to tidy up afterwards, and no growing list of comments you can no longer act on.
+
+Two things follow from that. What you write while the agent is working stays: only the comments that actually went out leave. And a turn you stop, or one that fails, changes nothing, because nothing was done with them: they are still there, ready to go again.
+
+Reviu no longer guesses whether the agent honoured each comment by watching the diff, which it often got wrong: a comment written in prose was marked "Outdated" whether the agent had done the work or ignored it. If the agent missed something, you see it in the diff and say so again. The text you sent stays in the conversation either way.
 
 ### A Calm CPU While The Agent Works
 

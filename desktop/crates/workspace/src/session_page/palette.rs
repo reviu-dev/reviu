@@ -49,7 +49,7 @@ impl SessionPage {
       if state.allows(PaletteCommand::Commit) {
         commands.push(CommandPaletteCommand::commit());
       }
-      if self.copyable_review_comment_count() > 0 {
+      if self.draft_review_comment_count() > 0 {
         commands.push(CommandPaletteCommand::send_review());
       }
       if !self.agent_review.all().is_empty() {

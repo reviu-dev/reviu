@@ -13,11 +13,11 @@ use gpui_component::{
   checkbox::Checkbox,
   h_flex, v_flex,
 };
-use ui::{StatusThemeExt as _, UiIconName};
+use ui::UiIconName;
 
 use crate::agent_review::{
   LocalAgentReviewComment, LocalAgentReviewCommentState, agent_review_line_label,
-  agent_review_state_is_copyable,
+  agent_review_state_is_sendable,
 };
 use crate::changes_list::split_path_label;
 
@@ -89,7 +89,7 @@ pub(crate) fn review_panel_comments(
       line_label: agent_review_line_label(comment),
       excerpt: review_comment_excerpt(comment.body.as_ref()),
       state: comment.state.clone(),
-      sendable: agent_review_state_is_copyable(&comment.state),
+      sendable: agent_review_state_is_sendable(&comment.state),
     })
     .collect::<Vec<_>>();
   rows.sort_by(|a, b| {
@@ -116,14 +116,12 @@ pub(crate) fn group_review_comments_by_file(
   groups
 }
 
-/// What a row says about a comment the batch already dealt with. A draft says
-/// nothing: it is the ordinary case.
+/// A draft says nothing: it is the ordinary case. A sent comment says so until
+/// the turn that carries it ends.
 pub(crate) fn review_state_label(state: &LocalAgentReviewCommentState) -> Option<&'static str> {
   match state {
     LocalAgentReviewCommentState::Draft => None,
-    LocalAgentReviewCommentState::Copied => Some("Sent"),
-    LocalAgentReviewCommentState::Addressed => Some("Addressed"),
-    LocalAgentReviewCommentState::Outdated => Some("Outdated"),
+    LocalAgentReviewCommentState::Sent => Some("Sent"),
   }
 }
 
@@ -377,13 +375,10 @@ impl ReviewList {
       )
       .when_some(review_state_label(&comment.state), |this, label| {
         this.child(
-          ui::StatusTag::new(match comment.state {
-            LocalAgentReviewCommentState::Outdated => theme.status_orange(),
-            _ => theme.muted_foreground,
-          })
-          .outline()
-          .small()
-          .child(label),
+          ui::StatusTag::new(theme.muted_foreground)
+            .outline()
+            .small()
+            .child(label),
         )
       })
       .when(sendable, |this| {
@@ -640,22 +635,14 @@ mod tests {
   }
 
   #[test]
-  fn a_row_only_carries_a_tag_when_the_comment_left_the_draft_state() {
+  fn a_row_only_carries_a_tag_once_the_comment_has_left() {
     assert_eq!(
       review_state_label(&LocalAgentReviewCommentState::Draft),
       None
     );
     assert_eq!(
-      review_state_label(&LocalAgentReviewCommentState::Copied),
+      review_state_label(&LocalAgentReviewCommentState::Sent),
       Some("Sent")
-    );
-    assert_eq!(
-      review_state_label(&LocalAgentReviewCommentState::Addressed),
-      Some("Addressed")
-    );
-    assert_eq!(
-      review_state_label(&LocalAgentReviewCommentState::Outdated),
-      Some("Outdated")
     );
   }
 
@@ -697,13 +684,7 @@ mod tests {
         "third",
         LocalAgentReviewCommentState::Draft,
       ),
-      comment(
-        4,
-        "src/b.rs",
-        7,
-        "done",
-        LocalAgentReviewCommentState::Addressed,
-      ),
+      comment(4, "src/b.rs", 7, "gone", LocalAgentReviewCommentState::Sent),
     ])
   }
 
@@ -832,7 +813,7 @@ mod tests {
     list.update(cx, |list, cx| list.set_comments(batch(), cx));
     list.update(cx, |list, cx| list.toggle_select_all(cx));
 
-    // The agent addressed one and another was deleted from the batch.
+    // One went out with a turn, another was deleted from the batch.
     list.update(cx, |list, cx| {
       list.set_comments(
         review_panel_comments(&[
@@ -848,7 +829,7 @@ mod tests {
             "src/a.rs",
             4,
             "second",
-            LocalAgentReviewCommentState::Addressed,
+            LocalAgentReviewCommentState::Sent,
           ),
         ]),
         cx,
@@ -862,18 +843,17 @@ mod tests {
   }
 
   #[test]
-  fn a_comment_the_agent_addressed_still_has_a_row() {
+  fn a_sent_comment_keeps_a_row_but_cannot_be_sent_again() {
     let rows = review_panel_comments(&[comment(
       1,
       "src/a.rs",
       2,
-      "done",
-      LocalAgentReviewCommentState::Addressed,
+      "gone to the agent",
+      LocalAgentReviewCommentState::Sent,
     )]);
 
-    // It is out of the diff and out of the batch, but the panel is where you
-    // see that the agent dealt with it.
+    // Visible while the agent works on it; the turn that ends takes it away.
     assert_eq!(rows.len(), 1);
-    assert_eq!(rows[0].state, LocalAgentReviewCommentState::Addressed);
+    assert!(!rows[0].sendable);
   }
 }

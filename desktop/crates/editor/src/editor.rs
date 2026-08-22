@@ -806,6 +806,7 @@ pub struct Editor {
   review_comment_edit_error: Option<(u64, Arc<str>)>,
   review_comment_delete_handler: Option<ReviewCommentDeleteHandler>,
   review_comment_send_handler: Option<ReviewCommentSendHandler>,
+  sendable_review_comment_ids: HashSet<u64>,
   review_comment_delete_submitting_id: Option<u64>,
   review_comment_resolve_handler: Option<ReviewCommentResolveHandler>,
   review_comment_resolve_in_flight: HashSet<Arc<str>>,
@@ -1238,6 +1239,7 @@ impl Editor {
       review_comment_edit_error: None,
       review_comment_delete_handler: None,
       review_comment_send_handler: None,
+      sendable_review_comment_ids: HashSet::new(),
       review_comment_delete_submitting_id: None,
       review_comment_resolve_handler: None,
       review_comment_resolve_in_flight: HashSet::new(),
@@ -2037,6 +2039,16 @@ impl Editor {
     }
   }
 
+  /// Which comments offer a send action. The host decides: a comment already
+  /// handed to the agent has nowhere left to go.
+  pub fn set_sendable_review_comment_ids<I>(&mut self, ids: I, cx: &mut Context<Self>)
+  where
+    I: IntoIterator<Item = u64>,
+  {
+    self.sendable_review_comment_ids = ids.into_iter().collect();
+    cx.notify();
+  }
+
   pub fn set_editable_review_comment_ids<I>(&mut self, ids: I, cx: &mut Context<Self>)
   where
     I: IntoIterator<Item = u64>,
@@ -2638,8 +2650,7 @@ impl Editor {
     self.refresh_review_comment_projection(cx);
   }
 
-  /// Sends one comment on its own. An outdated comment is about code that moved,
-  /// so it never goes.
+  /// Sends one comment on its own, if the host says it still can go.
   fn request_review_comment_send(
     &mut self,
     comment_id: u64,
@@ -2649,11 +2660,14 @@ impl Editor {
     if !self.editable_review_comment_ids.contains(&comment_id) {
       return;
     }
-    let sendable = self
+    if !self.sendable_review_comment_ids.contains(&comment_id) {
+      return;
+    }
+    if !self
       .review_comments
       .iter()
-      .any(|comment| comment.id == comment_id && !comment.is_outdated);
-    if !sendable {
+      .any(|comment| comment.id == comment_id)
+    {
       return;
     }
     let Some(handler) = self.review_comment_send_handler.clone() else {
@@ -4484,7 +4498,8 @@ impl Editor {
       {
         let body = first_message.body.clone();
         let can_delete = review_comment_delete_handler.is_some();
-        let can_send = review_comment_send_handler.is_some() && !first_message.is_outdated;
+        let can_send = review_comment_send_handler.is_some()
+          && self.sendable_review_comment_ids.contains(&first_message.id);
         Some(if is_local_note_mode {
           Self::render_review_comment_direct_actions(
             first_message_id,
@@ -10572,6 +10587,7 @@ pub mod tests {
           review_comment_edit_error: None,
           review_comment_delete_handler: None,
           review_comment_send_handler: None,
+          sendable_review_comment_ids: HashSet::new(),
           review_comment_delete_submitting_id: None,
           review_comment_resolve_handler: None,
           review_comment_resolve_in_flight: HashSet::new(),
@@ -11191,7 +11207,7 @@ pub mod tests {
   }
 
   #[gpui::test]
-  fn test_request_review_comment_send_skips_outdated_comments(cx: &mut TestAppContext) {
+  fn test_request_review_comment_send_only_sends_what_the_host_allows(cx: &mut TestAppContext) {
     cx.update(gpui_component::init);
     let ctx = EditorTestContext::with_text(cx.clone(), "a\nb");
     let editor = ctx.editor.clone();
@@ -11207,16 +11223,14 @@ pub mod tests {
     ctx.editor.update_in(cx, |editor, window, cx| {
       editor.set_review_comment_send_handler(Some(handler), cx);
       editor.set_editable_review_comment_ids([1, 2], cx);
+      // The host says only the first one still has somewhere to go.
+      editor.set_sendable_review_comment_ids([1], cx);
       editor.set_review_comments(
-        vec![
-          review_comment_fixture(1, false),
-          review_comment_fixture(2, true),
-        ],
+        vec![review_comment_fixture(1), review_comment_fixture(2)],
         cx,
       );
 
       editor.request_review_comment_send(1, window, cx);
-      // Outdated: the code it is about moved, so it never goes.
       editor.request_review_comment_send(2, window, cx);
       // Not in the batch at all.
       editor.request_review_comment_send(3, window, cx);
@@ -11225,7 +11239,7 @@ pub mod tests {
     assert_eq!(*sent.lock().expect("sent lock"), vec![1]);
   }
 
-  fn review_comment_fixture(id: u64, is_outdated: bool) -> ReviewComment {
+  fn review_comment_fixture(id: u64) -> ReviewComment {
     ReviewComment {
       id,
       in_reply_to_id: None,
@@ -11239,7 +11253,7 @@ pub mod tests {
       created_at: Arc::from(""),
       thread_id: None,
       is_resolved: false,
-      is_outdated,
+      is_outdated: false,
       viewer_can_resolve: false,
       viewer_can_unresolve: false,
       is_pending: false,

@@ -898,7 +898,7 @@ impl SessionPage {
         }
       })),
     );
-    let pending_review = self.copyable_review_comment_count();
+    let pending_review = self.draft_review_comment_count();
     let changed_files = self.dock_panel.read(cx).status_entries().len();
     for (id, icon, tooltip, tab) in tabs {
       let button = Self::rail_button(id, icon, tooltip)
