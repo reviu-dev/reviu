@@ -154,8 +154,8 @@ mod tests {
       page.open_diff(PathBuf::from("README.md"), None, window, cx);
     });
     await_open_file(&page, cx).await;
-    page.update_in(cx, |page, _window, cx| {
-      page.create_agent_review_comment(create_request(0, "keep this"), cx);
+    page.update_in(cx, |page, window, cx| {
+      page.create_agent_review_comment(create_request(0, "keep this"), window, cx);
     });
 
     page.update_in(cx, |page, window, cx| {

@@ -338,9 +338,9 @@ impl SessionPage {
         let view = view.clone();
         move |request, window, _cx| {
           let view = view.clone();
-          window.on_next_frame(move |_window, cx| {
+          window.on_next_frame(move |window, cx| {
             let _ = view.update(cx, |this, cx| {
-              this.create_agent_review_comment(request, cx);
+              this.create_agent_review_comment(request, window, cx);
             });
           });
         }
@@ -349,17 +349,10 @@ impl SessionPage {
       editor.set_review_comment_replies_enabled(false, cx);
       editor.set_review_comment_display_mode(ReviewCommentDisplayMode::LocalNote, cx);
 
-      // The composer is gone on the next frame; the page resolves focus to the diff.
       let cancel_handler: ReviewCommentCancelHandler = Arc::new({
         let view = view.clone();
-        move |window, _cx| {
-          let view = view.clone();
-          window.on_next_frame(move |window, cx| {
-            let _ = view.update(cx, |this, cx| {
-              let handle = this.focus_handle(cx);
-              window.focus(&handle, cx);
-            });
-          });
+        move |window, cx| {
+          let _ = view.update(cx, |this, cx| this.focus_page_on_next_frame(window, cx));
         }
       });
       editor.set_review_comment_cancel_handler(Some(cancel_handler), cx);
@@ -368,9 +361,9 @@ impl SessionPage {
         let view = view.clone();
         move |comment_id, body, window, _cx| {
           let view = view.clone();
-          window.on_next_frame(move |_window, cx| {
+          window.on_next_frame(move |window, cx| {
             let _ = view.update(cx, |this, cx| {
-              this.update_agent_review_comment(comment_id, body, cx);
+              this.update_agent_review_comment(comment_id, body, window, cx);
             });
           });
         }
@@ -408,6 +401,7 @@ impl SessionPage {
   pub(super) fn create_agent_review_comment(
     &mut self,
     request: ReviewCommentCreateRequest,
+    window: &mut Window,
     cx: &mut Context<Self>,
   ) {
     let original = original_lines_for_request(self.editor.as_ref(), &request, cx);
@@ -416,12 +410,14 @@ impl SessionPage {
       .create(&request, self.selected_file.as_deref(), original);
 
     if let Err(error) = created {
+      // The composer stays open on the error, so the focus stays in it.
       self.finish_agent_review_create(Some(error), cx);
       return;
     }
 
     self.sync_agent_review_comments_to_editor(cx);
     self.finish_agent_review_create(None, cx);
+    self.focus_page_on_next_frame(window, cx);
     // An open dock follows what you are doing; a closed one keeps the tab you
     // left it on, and the rail badge says the batch grew.
     if self.dock_open {
@@ -448,6 +444,7 @@ impl SessionPage {
     &mut self,
     comment_id: u64,
     body: Arc<str>,
+    window: &mut Window,
     cx: &mut Context<Self>,
   ) {
     if !self.agent_review.update(comment_id, body) {
@@ -460,7 +457,20 @@ impl SessionPage {
         editor.finish_review_comment_edit_submission(comment_id, None, cx);
       });
     }
+    self.focus_page_on_next_frame(window, cx);
     cx.notify();
+  }
+
+  /// A composer that closes takes the focus with it, and the shortcuts stop
+  /// answering until something takes it back.
+  pub(super) fn focus_page_on_next_frame(&self, window: &mut Window, cx: &mut Context<Self>) {
+    let view = cx.entity().downgrade();
+    window.on_next_frame(move |window, cx| {
+      let _ = view.update(cx, |this, cx| {
+        let handle = this.focus_handle(cx);
+        window.focus(&handle, cx);
+      });
+    });
   }
 
   pub(super) fn delete_agent_review_comment(&mut self, comment_id: u64, cx: &mut Context<Self>) {
@@ -746,8 +756,8 @@ mod tests {
     });
     await_open_file(&page, cx).await;
 
-    page.update_in(cx, |page, _window, cx| {
-      page.create_agent_review_comment(create_request(0, "extract helper"), cx);
+    page.update_in(cx, |page, window, cx| {
+      page.create_agent_review_comment(create_request(0, "extract helper"), window, cx);
     });
 
     let comment_id = page.read_with(cx, |page, _| {
@@ -831,9 +841,9 @@ mod tests {
       "a comment long enough to wrap over several lines of the card,        with words of every width: iiii MMMM 0123456789 and a bit more prose",
       "first line\nsecond line\nthird line",
     ] {
-      page.update(cx, |page, cx| {
+      page.update_in(cx, |page, window, cx| {
         page.agent_review.clear();
-        page.create_agent_review_comment(create_request(0, body), cx);
+        page.create_agent_review_comment(create_request(0, body), window, cx);
       });
       await_editor_diff(&page, cx).await;
 
@@ -870,8 +880,8 @@ mod tests {
     });
     await_open_file(&page, cx).await;
 
-    page.update(cx, |page, cx| {
-      page.create_agent_review_comment(create_request(0, "extract helper"), cx);
+    page.update_in(cx, |page, window, cx| {
+      page.create_agent_review_comment(create_request(0, "extract helper"), window, cx);
     });
 
     page.read_with(cx, |page, cx| {
@@ -900,8 +910,8 @@ mod tests {
     page.update_in(cx, |page, window, cx| page.close_dock(window, cx));
     cx.run_until_parked();
     page.read_with(cx, |page, _| assert!(!page.dock_open));
-    page.update(cx, |page, cx| {
-      page.create_agent_review_comment(create_request(0, "first"), cx);
+    page.update_in(cx, |page, window, cx| {
+      page.create_agent_review_comment(create_request(0, "first"), window, cx);
     });
     page.read_with(cx, |page, cx| {
       assert_eq!(page.dock_panel.read(cx).active_tab(), DockPanelTab::Changes);
@@ -912,8 +922,8 @@ mod tests {
       page.open_changes_action(&crate::OpenGitChangesSidebar, window, cx)
     });
     cx.run_until_parked();
-    page.update(cx, |page, cx| {
-      page.create_agent_review_comment(create_request(1, "second"), cx);
+    page.update_in(cx, |page, window, cx| {
+      page.create_agent_review_comment(create_request(1, "second"), window, cx);
     });
     page.read_with(cx, |page, cx| {
       assert_eq!(page.dock_panel.read(cx).active_tab(), DockPanelTab::Review);
@@ -933,8 +943,8 @@ mod tests {
       page.open_diff(PathBuf::from("README.md"), None, window, cx);
     });
     await_open_file(&page, cx).await;
-    page.update(cx, |page, cx| {
-      page.create_agent_review_comment(create_request(0, "extract helper"), cx);
+    page.update_in(cx, |page, window, cx| {
+      page.create_agent_review_comment(create_request(0, "extract helper"), window, cx);
     });
 
     let (review_list, comment_id) = page.read_with(cx, |page, cx| {
@@ -989,9 +999,9 @@ mod tests {
       page.open_diff(PathBuf::from("README.md"), None, window, cx);
     });
     await_open_file(&page, cx).await;
-    page.update(cx, |page, cx| {
-      page.create_agent_review_comment(create_request(0, "first"), cx);
-      page.create_agent_review_comment(create_request(0, "second"), cx);
+    page.update_in(cx, |page, window, cx| {
+      page.create_agent_review_comment(create_request(0, "first"), window, cx);
+      page.create_agent_review_comment(create_request(0, "second"), window, cx);
     });
 
     page.update(cx, |page, cx| page.discard_agent_review(cx));
@@ -1083,9 +1093,9 @@ mod tests {
     });
     await_open_file(&page, cx).await;
 
-    page.update(cx, |page, cx| {
-      page.create_agent_review_comment(create_request(0, "first"), cx);
-      page.create_agent_review_comment(create_request(1, "second"), cx);
+    page.update_in(cx, |page, window, cx| {
+      page.create_agent_review_comment(create_request(0, "first"), window, cx);
+      page.create_agent_review_comment(create_request(1, "second"), window, cx);
     });
 
     let (review_list, ids) = page.read_with(cx, |page, cx| {
@@ -1160,6 +1170,57 @@ mod tests {
   }
 
   #[gpui::test]
+  async fn saving_a_review_comment_hands_focus_back_to_the_diff(cx: &mut TestAppContext) {
+    let repo = TempRepo::init("session-page-review-save-focus");
+    commit_text_file(&repo.path, Path::new("README.md"), "v1\n", "initial");
+    std::fs::write(repo.path.join("README.md"), "v2\n").expect("update file");
+
+    let (page, cx) = add_session_page_window(repo.path.clone(), cx);
+    cx.run_until_parked();
+
+    page.update_in(cx, |page, window, cx| {
+      page.open_diff(PathBuf::from("README.md"), None, window, cx);
+    });
+    await_open_file(&page, cx).await;
+    await_editor_diff(&page, cx).await;
+
+    let editor = page.read_with(cx, |page, _| page.editor.clone().expect("editor"));
+    let editor_handle = editor.read_with(cx, |editor, cx| editor.focus_handle(cx));
+    // Park the focus off the diff, the way the open composer does.
+    let dock_handle = page.read_with(cx, |page, cx| page.dock_panel.read(cx).focus_handle(cx));
+    cx.update(|window, cx| window.focus(&dock_handle, cx));
+    cx.run_until_parked();
+
+    page.update_in(cx, |page, window, cx| {
+      page.create_agent_review_comment(create_request(0, "extract helper"), window, cx);
+    });
+    let ran = cx.update(|window, cx| window.simulate_next_frame(cx));
+    assert!(ran > 0, "saving schedules the focus restore");
+    cx.run_until_parked();
+
+    assert_eq!(
+      cx.update(|window, cx| window.focused(cx)).as_ref(),
+      Some(&editor_handle),
+      "the shortcuts only answer while something holds the focus"
+    );
+
+    // And an edit does the same.
+    let comment_id = page.read_with(cx, |page, _| page.agent_review.all()[0].id);
+    cx.update(|window, cx| window.focus(&dock_handle, cx));
+    cx.run_until_parked();
+    page.update_in(cx, |page, window, cx| {
+      page.update_agent_review_comment(comment_id, Arc::from("extract it twice"), window, cx);
+    });
+    cx.update(|window, cx| window.simulate_next_frame(cx));
+    cx.run_until_parked();
+
+    assert_eq!(
+      cx.update(|window, cx| window.focused(cx)).as_ref(),
+      Some(&editor_handle)
+    );
+  }
+
+  #[gpui::test]
   async fn send_without_agent_panel_keeps_drafts(cx: &mut TestAppContext) {
     let repo = TempRepo::init("session-page-send-no-agent");
     commit_text_file(&repo.path, Path::new("README.md"), "v1\n", "initial");
@@ -1174,7 +1235,7 @@ mod tests {
     await_open_file(&page, cx).await;
 
     page.update_in(cx, |page, window, cx| {
-      page.create_agent_review_comment(create_request(0, "still a draft"), cx);
+      page.create_agent_review_comment(create_request(0, "still a draft"), window, cx);
       // No agent chat view mounted: the send must not mark anything as sent.
       assert!(page.agent_chat_view.is_none());
       page.send_agent_review_to_agent(window, cx);
