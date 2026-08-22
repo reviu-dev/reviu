@@ -242,6 +242,7 @@ mod file_viewer;
 mod palette;
 mod render;
 mod repo;
+mod review_github;
 #[cfg(test)]
 mod test_support;
 
@@ -347,6 +348,12 @@ impl SessionPage {
         }
         DockPanelEvent::DiscardReview => {
           this.confirm_discard_agent_review(window, cx);
+        }
+        DockPanelEvent::PullRequestReviewCommentsChanged => {
+          this.sync_github_review_comments(cx);
+        }
+        DockPanelEvent::PullRequestReviewCommentSubmitted { error } => {
+          this.finish_github_review_comment(error.clone(), window, cx);
         }
         DockPanelEvent::SubmitPullRequestReview => {
           this.dock_panel.update(cx, |panel, cx| {

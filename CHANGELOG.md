@@ -14,6 +14,10 @@ Ticking comments stays what it was, an agent thing: GitHub submits a review whol
 
 Finishing the review happens from that section: Submit review asks for the decision (comment, approve, request changes) and its message, tells you how many comments go out with it, and refuses an empty message where GitHub would. Approving a pull request you have nothing to say about works too, from a Review button next to Merge. Reviu will not let you approve your own pull request, which GitHub would refuse anyway.
 
+Commenting happens on the diff itself. Open a file of the pull request, write on a line, and the comment joins the review you are building (or goes out on its own if that is what you pick, as on GitHub). Existing conversations show on their lines, with replies, resolving and unresolving, and editing or deleting your own words. Deleting a comment already published asks first; a draft of your unsubmitted review does not.
+
+Not there yet on those cards: the composer's preview tab, dropping images into a comment, applying a suggested change as a commit, and following a link out of a comment body.
+
 That block of the Pull request tab is now always there, even for a pull request with no CI and no reviewers: it holds what you can do to the pull request, so a small project no longer loses its merge button for lack of a test suite.
 
 ### The Pull Request You Are On, In The Right Panel

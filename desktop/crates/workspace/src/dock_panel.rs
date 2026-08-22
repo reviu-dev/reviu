@@ -3,6 +3,9 @@
 #[cfg(test)]
 use std::path::Path;
 use std::path::PathBuf;
+use std::sync::Arc;
+
+use editor::{ReviewCommentCreateRequest, ReviewCommentMode};
 
 use git::{
   HeadCommitStatus, RepoStage, RepoStatusEntry, commit_changes, current_branch_status,
@@ -25,7 +28,7 @@ use crate::changes_list::{ChangesList, ChangesListEvent, status_color};
 use crate::file_view::{file_dir_label, file_name_label, render_file_name_with_status};
 use crate::history_list::{HistoryList, HistoryListEvent, history_change_kind_to_repo_status};
 use crate::pull_request_review_comments::{
-  pending_review_comment_node_id, pending_review_id, pending_review_rows,
+  pending_review_comment_node_id, pending_review_id, pending_review_rows, review_comment_side_name,
 };
 use crate::repo_state::{PaletteCommand, RepoState, push_flags, should_publish_branch};
 use crate::review_list::{ReviewList, ReviewListEvent, ReviewSection};
@@ -120,6 +123,13 @@ pub enum DockPanelEvent {
   /// Finishing a pull request review needs a window the panel does not have
   /// where the request comes from.
   SubmitPullRequestReview,
+  /// What GitHub holds on this pull request changed: whoever shows the comments
+  /// has to look again.
+  PullRequestReviewCommentsChanged,
+  /// A comment the diff is waiting on: the composer stays open on an error.
+  PullRequestReviewCommentSubmitted {
+    error: Option<Arc<str>>,
+  },
 }
 
 impl gpui::EventEmitter<DockPanelEvent> for DockPanel {}
@@ -448,6 +458,8 @@ pub struct DockPanel {
   pr_review_comments: Vec<GithubPullRequestReviewComment>,
   /// Who opened it: an author reviews their own work with words only.
   pr_author_login: Option<String>,
+  /// GraphQL names the pull request by node id, and starting a review needs it.
+  pr_node_id: Option<String>,
   pr_reviewers: Vec<ReviewerRow>,
   pr_checks_loading: bool,
   pr_merge_readiness: Option<GithubPullRequestMergeReadiness>,
@@ -594,6 +606,7 @@ impl DockPanel {
       pr_checks: None,
       pr_review_comments: Vec::new(),
       pr_author_login: None,
+      pr_node_id: None,
       pr_reviewers: Vec::new(),
       pr_checks_loading: false,
       pr_merge_readiness: None,
@@ -775,9 +788,13 @@ impl DockPanel {
           };
           let files = list_pull_request_files(&repo_root, &range)?;
           let conversation = api.fetch_pull_request_conversation(&owner, &repo, number);
-          let (reviews, review_comments) = match conversation {
-            Ok(conversation) => (conversation.reviews, conversation.review_comments),
-            Err(_) => (Vec::new(), Vec::new()),
+          let (reviews, review_comments, node_id) = match conversation {
+            Ok(conversation) => (
+              conversation.reviews,
+              conversation.review_comments,
+              Some(conversation.pull_request.node_id),
+            ),
+            Err(_) => (Vec::new(), Vec::new(), None),
           };
           let reviewers = reviewer_rows(
             &details.requested_reviewers,
@@ -790,6 +807,7 @@ impl DockPanel {
             reviewers,
             review_comments,
             details.author.login.clone(),
+            node_id,
           ))
         })
         .await;
@@ -797,11 +815,12 @@ impl DockPanel {
       let _ = this.update(cx, |this, cx| {
         this.pr_files_loading = false;
         match loaded {
-          Ok((range, files, reviewers, review_comments, author_login)) => {
+          Ok((range, files, reviewers, review_comments, author_login, node_id)) => {
             this.pr_range = Some(range);
             this.pr_files = files;
             this.pr_reviewers = reviewers;
             this.pr_author_login = Some(author_login);
+            this.pr_node_id = node_id;
             this.set_pull_request_review_comments(review_comments, cx);
           }
           Err(error) => {
@@ -819,6 +838,7 @@ impl DockPanel {
   fn reset_pull_request_details(&mut self, cx: &mut Context<Self>) {
     self.set_pull_request_review_comments(Vec::new(), cx);
     self.pr_author_login = None;
+    self.pr_node_id = None;
     self.pr_range = None;
     self.pr_files = Vec::new();
     self.pr_files_error = None;
@@ -871,6 +891,33 @@ impl DockPanel {
     self.review_list.update(cx, |list, cx| {
       list.set_comments(ReviewSection::PullRequest, rows, cx);
     });
+    cx.emit(DockPanelEvent::PullRequestReviewCommentsChanged);
+  }
+
+  #[cfg(test)]
+  pub(crate) fn set_pull_request_review_comments_for_test(
+    &mut self,
+    comments: Vec<GithubPullRequestReviewComment>,
+    cx: &mut Context<Self>,
+  ) {
+    self.set_pull_request_review_comments(comments, cx);
+  }
+
+  pub(crate) fn pull_request_review_comments(&self) -> &[GithubPullRequestReviewComment] {
+    &self.pr_review_comments
+  }
+
+  pub(crate) fn pull_request_number(&self) -> Option<u64> {
+    match &self.branch_pr {
+      BranchPrState::Found(_, pull_request) => Some(pull_request.number),
+      _ => None,
+    }
+  }
+
+  /// Whether a new comment would join something: GitHub refuses a standalone
+  /// comment while an unsubmitted review is open.
+  pub(crate) fn has_pending_pull_request_review(&self) -> bool {
+    pending_review_id(&self.pr_review_comments).is_some()
   }
 
   /// GitHub is the source of truth for a pending review, so what it holds is
@@ -933,43 +980,239 @@ impl DockPanel {
     open_submit_review_dialog(api, window_handle, target, on_submitted, window, cx);
   }
 
-  /// A comment of a review nobody has submitted: dropping it is between the
-  /// viewer and their own draft, so it needs no confirmation.
-  fn delete_pending_review_comment(&mut self, id: u64, cx: &mut Context<Self>) {
+  /// A new comment on the pull request: it joins the review being written, or
+  /// goes out on its own when that is what was asked for.
+  pub(crate) fn create_pull_request_review_comment(
+    &mut self,
+    request: ReviewCommentCreateRequest,
+    path: PathBuf,
+    cx: &mut Context<Self>,
+  ) {
     let BranchPrState::Found(context, pull_request) = &self.branch_pr else {
-      return;
-    };
-    let Some(node_id) = pending_review_comment_node_id(&self.pr_review_comments, id) else {
       return;
     };
     let owner = context.owner.clone();
     let repo = context.repo.clone();
     let number = pull_request.number;
     let api = WorkspaceApi::global(cx).api.clone();
-    let window_handle = self.window_handle;
+    let review_id = pending_review_id(&self.pr_review_comments);
+    let pull_request_node_id = self.pr_node_id.clone();
+    let head_sha = self.pr_range.as_ref().map(|range| range.head.clone());
+    let thread_node_id = request.in_reply_to_id.and_then(|id| {
+      self
+        .pr_review_comments
+        .iter()
+        .find(|comment| comment.id == id)
+        .map(|comment| comment.thread_id.clone())
+        .filter(|thread_id| !thread_id.is_empty())
+    });
+    let body = request.body.as_ref().to_string();
+    let path = path.to_string_lossy().to_string();
+    // GitHub numbers the lines of a file from one.
+    let line = request.line.saturating_add(1) as u64;
+    let start_line = request
+      .start_line
+      .map(|line| line.saturating_add(1) as u64)
+      .filter(|start| *start != line);
+    let side = review_comment_side_name(request.side).to_string();
+    let start_side = request
+      .start_side
+      .map(|side| review_comment_side_name(side).to_string());
+    let joins_review = matches!(request.mode, ReviewCommentMode::PendingReview);
+    let in_reply_to_id = request.in_reply_to_id;
 
     let task = cx.spawn(async move |this, cx| {
       let result = cx
         .background_spawn(async move {
-          api.delete_pending_review_comment(&owner, &repo, number, &node_id)
+          match (in_reply_to_id, thread_node_id, review_id.clone()) {
+            // A reply joins the review being written when there is one.
+            (Some(_), Some(thread_node_id), Some(review_id)) => api
+              .reply_pending_review_thread(
+                &owner,
+                &repo,
+                number,
+                &review_id,
+                &thread_node_id,
+                &body,
+              )
+              .map(|_| ()),
+            (Some(in_reply_to_id), _, _) => api
+              .reply_pull_request_review_comment(&owner, &repo, number, in_reply_to_id, &body)
+              .map(|_| ()),
+            _ if joins_review => {
+              let pull_request_node_id = pull_request_node_id
+                .ok_or_else(|| anyhow::anyhow!("this pull request is not loaded yet"))?;
+              let review_id = match review_id {
+                Some(review_id) => review_id,
+                None => {
+                  api
+                    .start_pending_review(&owner, &repo, number, &pull_request_node_id)?
+                    .node_id
+                }
+              };
+              api
+                .add_pending_review_thread(
+                  &owner,
+                  &repo,
+                  number,
+                  &pull_request_node_id,
+                  &review_id,
+                  &path,
+                  &body,
+                  "LINE",
+                  Some(line),
+                  Some(side.as_str()),
+                  start_line,
+                  start_side.as_deref(),
+                )
+                .map(|_| ())
+            }
+            _ => {
+              let head_sha =
+                head_sha.ok_or_else(|| anyhow::anyhow!("this pull request is not loaded yet"))?;
+              api
+                .create_pull_request_review_comment(
+                  &owner,
+                  &repo,
+                  number,
+                  &path,
+                  &head_sha,
+                  line,
+                  &side,
+                  start_line,
+                  start_side.as_deref(),
+                  &body,
+                )
+                .map(|_| ())
+            }
+          }
         })
         .await;
-      let _ = this.update(cx, |this, cx| {
-        match result {
-          Ok(()) => this.refresh_pull_request_review_comments(cx),
-          Err(error) => {
-            let _ = cx.update_window(window_handle, |_, window, cx| {
-              window.push_notification(
-                Notification::error(format!("Could not delete the comment: {error}")),
-                cx,
-              );
-            });
-          }
-        }
-        cx.notify();
-      });
+
+      let _ = this.update(cx, |this, cx| this.finish_review_comment_write(result, cx));
     });
     self._pr_review_comments_task = Some(task);
+  }
+
+  pub(crate) fn edit_pull_request_review_comment(
+    &mut self,
+    id: u64,
+    body: Arc<str>,
+    cx: &mut Context<Self>,
+  ) {
+    let BranchPrState::Found(context, pull_request) = &self.branch_pr else {
+      return;
+    };
+    let owner = context.owner.clone();
+    let repo = context.repo.clone();
+    let number = pull_request.number;
+    let api = WorkspaceApi::global(cx).api.clone();
+    let body = body.as_ref().to_string();
+    // A comment nobody has seen yet is edited by node id, a published one by
+    // its number.
+    let pending_node_id = self
+      .pr_review_comments
+      .iter()
+      .find(|comment| comment.id == id && comment.is_pending)
+      .map(|comment| comment.node_id.clone())
+      .filter(|node_id| !node_id.is_empty());
+
+    let task = cx.spawn(async move |this, cx| {
+      let result = cx
+        .background_spawn(async move {
+          match pending_node_id {
+            Some(node_id) => {
+              api.update_pending_review_comment(&owner, &repo, number, &node_id, &body)
+            }
+            None => api
+              .update_pull_request_review_comment(&owner, &repo, number, id, &body)
+              .map(|_| ()),
+          }
+        })
+        .await;
+
+      let _ = this.update(cx, |this, cx| this.finish_review_comment_write(result, cx));
+    });
+    self._pr_review_comments_task = Some(task);
+  }
+
+  /// A comment of a review nobody has submitted: dropping it is between the
+  /// viewer and their own draft, so it needs no confirmation.
+  pub(crate) fn delete_pending_review_comment(&mut self, id: u64, cx: &mut Context<Self>) {
+    let BranchPrState::Found(context, pull_request) = &self.branch_pr else {
+      return;
+    };
+    let owner = context.owner.clone();
+    let repo = context.repo.clone();
+    let number = pull_request.number;
+    let api = WorkspaceApi::global(cx).api.clone();
+    let pending_node_id = self
+      .pr_review_comments
+      .iter()
+      .find(|comment| comment.id == id && comment.is_pending)
+      .and_then(|_| pending_review_comment_node_id(&self.pr_review_comments, id));
+
+    let task = cx.spawn(async move |this, cx| {
+      let result = cx
+        .background_spawn(async move {
+          match pending_node_id {
+            Some(node_id) => api.delete_pending_review_comment(&owner, &repo, number, &node_id),
+            None => api.delete_pull_request_review_comment(&owner, &repo, number, id),
+          }
+        })
+        .await;
+
+      let _ = this.update(cx, |this, cx| this.finish_review_comment_write(result, cx));
+    });
+    self._pr_review_comments_task = Some(task);
+  }
+
+  pub(crate) fn toggle_pull_request_review_thread(
+    &mut self,
+    thread_id: Arc<str>,
+    currently_resolved: bool,
+    cx: &mut Context<Self>,
+  ) {
+    let BranchPrState::Found(context, pull_request) = &self.branch_pr else {
+      return;
+    };
+    let owner = context.owner.clone();
+    let repo = context.repo.clone();
+    let number = pull_request.number;
+    let api = WorkspaceApi::global(cx).api.clone();
+    let thread_id = thread_id.as_ref().to_string();
+
+    let task = cx.spawn(async move |this, cx| {
+      let result = cx
+        .background_spawn(async move {
+          if currently_resolved {
+            api.unresolve_pull_request_review_thread(&owner, &repo, number, &thread_id)
+          } else {
+            api.resolve_pull_request_review_thread(&owner, &repo, number, &thread_id)
+          }
+        })
+        .await;
+
+      let _ = this.update(cx, |this, cx| this.finish_review_comment_write(result, cx));
+    });
+    self._pr_review_comments_task = Some(task);
+  }
+
+  /// One landing for every write: GitHub is asked what it holds now, and the
+  /// diff is told whether its composer can close.
+  fn finish_review_comment_write<T>(&mut self, result: anyhow::Result<T>, cx: &mut Context<Self>) {
+    match result {
+      Ok(_) => {
+        self.refresh_pull_request_review_comments(cx);
+        cx.emit(DockPanelEvent::PullRequestReviewCommentSubmitted { error: None });
+      }
+      Err(error) => {
+        cx.emit(DockPanelEvent::PullRequestReviewCommentSubmitted {
+          error: Some(Arc::from(error.to_string().as_str())),
+        });
+      }
+    }
+    cx.notify();
   }
 
   fn toggle_pull_request_details(&mut self, cx: &mut Context<Self>) {

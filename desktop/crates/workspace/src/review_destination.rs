@@ -24,17 +24,18 @@ pub(crate) struct AgentReviewHandlers {
 
 /// Comments of a pull request review. They thread, they resolve, and they
 /// outlive the session, so the card carries far more than the agent's does.
+/// What a host cannot offer stays `None` rather than being faked.
 pub(crate) struct GithubReviewHandlers {
   pub create: ReviewCommentCreateHandler,
   pub edit: ReviewCommentEditHandler,
   pub delete: ReviewCommentDeleteHandler,
   pub cancel: ReviewCommentCancelHandler,
   pub resolve: ReviewCommentResolveHandler,
-  pub link: ReviewCommentLinkHandler,
-  pub image_upload: ReviewCommentImageUploadHandler,
   pub asset_url_resolver: ReviewCommentAssetUrlResolver,
-  pub preview_renderer: ReviewCommentPreviewRenderer,
-  pub suggestion_action_factory: ReviewCommentSuggestionActionFactory,
+  pub preview_renderer: Option<ReviewCommentPreviewRenderer>,
+  pub link: Option<ReviewCommentLinkHandler>,
+  pub image_upload: Option<ReviewCommentImageUploadHandler>,
+  pub suggestion_action_factory: Option<ReviewCommentSuggestionActionFactory>,
 }
 
 pub(crate) enum ReviewDestination {
@@ -78,12 +79,11 @@ pub(crate) fn configure_review(
       editor.set_review_comment_delete_handler(Some(handlers.delete), cx);
       editor.set_review_comment_cancel_handler(Some(handlers.cancel), cx);
       editor.set_review_comment_resolve_handler(Some(handlers.resolve), cx);
-      editor.set_review_comment_link_handler(Some(handlers.link), cx);
-      editor.set_review_comment_image_upload_handler(Some(handlers.image_upload), cx);
       editor.set_review_comment_asset_url_resolver(Some(handlers.asset_url_resolver), cx);
-      editor.set_review_comment_preview_renderer(Some(handlers.preview_renderer), cx);
-      editor
-        .set_review_comment_suggestion_action_factory(Some(handlers.suggestion_action_factory), cx);
+      editor.set_review_comment_preview_renderer(handlers.preview_renderer, cx);
+      editor.set_review_comment_link_handler(handlers.link, cx);
+      editor.set_review_comment_image_upload_handler(handlers.image_upload, cx);
+      editor.set_review_comment_suggestion_action_factory(handlers.suggestion_action_factory, cx);
       // There is no agent on this side to send a comment to.
       editor.set_review_comment_send_handler(None, cx);
       editor.set_sendable_review_comment_ids(std::iter::empty::<u64>(), cx);
@@ -134,11 +134,15 @@ mod tests {
       delete: Arc::new(|_, _, _| {}),
       cancel: Arc::new(|_, _| {}),
       resolve: Arc::new(|_, _, _, _, _| {}),
-      link: Arc::new(|_, _, _| false),
-      image_upload: Arc::new(|_, _, _, _| {}),
       asset_url_resolver: Arc::new(|_| None),
-      preview_renderer: Arc::new(|_, _, _, _| -> AnyElement { div().into_any_element() }),
-      suggestion_action_factory: Arc::new(|_, _, _, _| Arc::new(|_, _| div().into_any_element())),
+      preview_renderer: Some(Arc::new(|_, _, _, _| -> AnyElement {
+        div().into_any_element()
+      })),
+      link: Some(Arc::new(|_, _, _| false)),
+      image_upload: Some(Arc::new(|_, _, _, _| {})),
+      suggestion_action_factory: Some(Arc::new(|_, _, _, _| {
+        Arc::new(|_, _| div().into_any_element())
+      })),
     }
   }
 

@@ -2200,6 +2200,20 @@ impl Editor {
     }
   }
 
+  /// The comments hanging in the diff right now, in the order the host gave
+  /// them.
+  pub fn review_comment_ids(&self) -> Vec<u64> {
+    self
+      .review_comments
+      .iter()
+      .map(|comment| comment.id)
+      .collect()
+  }
+
+  pub fn has_pending_review(&self) -> bool {
+    self.has_pending_review
+  }
+
   pub fn set_review_comment_display_mode(
     &mut self,
     mode: ReviewCommentDisplayMode,
