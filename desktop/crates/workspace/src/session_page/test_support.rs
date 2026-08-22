@@ -21,7 +21,7 @@ pub(super) fn isolate_config_store_for_test() {
 
 /// Mounts the page for real. The agent is only connected by `activate`, which
 /// the workspace calls when it routes here, so rendering spawns no process.
-pub(super) fn add_session_page_window(
+pub(crate) fn add_session_page_window(
   repo_root: PathBuf,
   cx: &mut TestAppContext,
 ) -> (Entity<SessionPage>, &mut gpui::VisualTestContext) {
@@ -35,9 +35,6 @@ pub(super) fn add_session_page_window(
     }
     if !cx.has_global::<AuthStateStore>() {
       cx.set_global(AuthStateStore::default());
-    }
-    if !cx.has_global::<crate::active_local_repo::ActiveLocalRepoStore>() {
-      cx.set_global(crate::active_local_repo::ActiveLocalRepoStore::default());
     }
     if !cx.has_global::<GithubNotificationsStore>() {
       cx.set_global(GithubNotificationsStore::default());
@@ -67,7 +64,7 @@ pub(super) fn add_session_page_window(
 }
 
 /// The shell as a fresh install sees it: no repository anywhere.
-pub(super) fn add_session_page_window_without_repo(
+pub(crate) fn add_session_page_window_without_repo(
   cx: &mut TestAppContext,
 ) -> (Entity<SessionPage>, &mut gpui::VisualTestContext) {
   isolate_config_store_for_test();
@@ -78,9 +75,6 @@ pub(super) fn add_session_page_window_without_repo(
     }
     if !cx.has_global::<AuthStateStore>() {
       cx.set_global(AuthStateStore::default());
-    }
-    if !cx.has_global::<crate::active_local_repo::ActiveLocalRepoStore>() {
-      cx.set_global(crate::active_local_repo::ActiveLocalRepoStore::default());
     }
     if !cx.has_global::<GithubNotificationsStore>() {
       cx.set_global(GithubNotificationsStore::default());

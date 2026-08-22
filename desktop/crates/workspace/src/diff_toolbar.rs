@@ -124,12 +124,6 @@ impl DiffToolbar {
     self
   }
 
-  /// Tints the row like a sidebar, for a header that sits beside a file tree.
-  pub(crate) fn filled(mut self, filled: bool) -> Self {
-    self.filled = filled;
-    self
-  }
-
   pub(crate) fn render(self, cx: &App) -> AnyElement {
     let theme = cx.theme().clone();
     let mut controls = h_flex().flex_shrink_0().items_center().gap_2();

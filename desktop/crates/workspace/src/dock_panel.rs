@@ -19,12 +19,15 @@ use gpui::{
 use gpui_component::{
   ActiveTheme as _, Disableable as _, Icon, IconName, Sizable as _, h_flex,
   menu::{DropdownMenu as _, PopupMenuItem},
-  tree::{TreeItem, TreeState, tree},
+  tree::{TreeState, tree},
   v_flex,
 };
 use terminal::TerminalView;
 
 use crate::changes_list::{ChangesList, ChangesListEvent, status_color};
+use crate::file_tree::{
+  build_path_tree_items_with_expansion, expanded_folder_paths_for_changed_files,
+};
 use crate::file_view::{file_dir_label, file_name_label, render_file_name_with_status};
 use crate::history_list::{HistoryList, HistoryListEvent, history_change_kind_to_repo_status};
 use crate::pro_promise::{ProPromiseSurface, render_pro_promise};
@@ -51,7 +54,6 @@ const DOCK_PANEL_COMPARE_DEBUG_SELECTOR: &str = "dock-panel-compare-on-github";
 const DOCK_PANEL_OPERATION_DEBUG_SELECTOR: &str = "dock-panel-operation";
 const DOCK_PANEL_REFRESH_DEBUG_SELECTOR: &str = "dock-panel-refresh";
 pub(crate) const DOCK_PANEL_ZOOM_DEBUG_SELECTOR: &str = "dock-panel-zoom";
-use std::collections::BTreeMap;
 use std::rc::Rc;
 
 use crate::api::{
@@ -59,7 +61,7 @@ use crate::api::{
   GithubPullRequestMergeReadiness, GithubPullRequestReviewComment,
 };
 use crate::auth_state::AuthStateStore;
-use crate::github_navigation::{open_compare_target, open_pr_target};
+use crate::github_navigation::{github_pull_request_url, open_compare_target};
 use crate::github_shared::{pull_request_status_color, pull_request_status_label};
 use crate::pull_request_checks::{
   CheckRow, check_rows, check_state_sort_key, checks_summary_subtitle, checks_summary_title,
@@ -183,50 +185,6 @@ pub enum DockPanelTab {
   History,
   PullRequest,
   Terminal,
-}
-
-/// Nested tree items from repo-relative paths. File ids are the relative path;
-/// directory ids get a trailing slash so they never collide with file ids.
-pub(crate) fn build_worktree_tree_items(files: &[PathBuf]) -> Vec<TreeItem> {
-  #[derive(Default)]
-  struct Node {
-    dirs: BTreeMap<String, Node>,
-    files: Vec<String>,
-  }
-
-  let mut root = Node::default();
-  for file in files {
-    let components: Vec<String> = file
-      .components()
-      .map(|component| component.as_os_str().to_string_lossy().into_owned())
-      .collect();
-    let Some((file_name, dirs)) = components.split_last() else {
-      continue;
-    };
-    let mut node = &mut root;
-    for dir in dirs {
-      node = node.dirs.entry(dir.clone()).or_default();
-    }
-    node.files.push(file_name.clone());
-  }
-
-  fn items_for(node: &Node, prefix: &str) -> Vec<TreeItem> {
-    let mut items = Vec::new();
-    for (name, child) in &node.dirs {
-      let child_prefix = format!("{prefix}{name}/");
-      items.push(
-        TreeItem::new(child_prefix.clone(), name.clone()).children(items_for(child, &child_prefix)),
-      );
-    }
-    let mut files = node.files.clone();
-    files.sort();
-    for name in files {
-      items.push(TreeItem::new(format!("{prefix}{name}"), name));
-    }
-    items
-  }
-
-  items_for(&root, "")
 }
 
 /// Exhaustive on the rollup state, so a new one has to pick its own colour
@@ -649,7 +607,20 @@ impl DockPanel {
       let _ = this.update(cx, |this, cx| {
         this.files_loading = false;
         if let Ok(files) = files {
-          let items = build_worktree_tree_items(&files);
+          let paths = files
+            .iter()
+            .map(|path| std::rc::Rc::new(path.to_string_lossy().into_owned()))
+            .collect::<Vec<_>>();
+          // Only the branches holding uncommitted work open by themselves: a
+          // whole repository expanded is a wall of folders.
+          let expanded = expanded_folder_paths_for_changed_files(
+            this
+              .status_entries
+              .iter()
+              .filter_map(|entry| entry.path.to_str()),
+          );
+          let (items, _, _, _) =
+            build_path_tree_items_with_expansion(&paths, |path| path.as_str(), Some(&expanded));
           this.files_tree_state.update(cx, |state, cx| {
             state.set_items(items, cx);
           });
@@ -730,12 +701,12 @@ impl DockPanel {
       return;
     };
     if !AuthStateStore::has_github_access(cx) {
-      self.branch_pr = BranchPrState::NoAccess;
+      self.set_branch_pr(BranchPrState::NoAccess, cx);
       cx.notify();
       return;
     }
 
-    self.branch_pr = BranchPrState::Loading;
+    self.set_branch_pr(BranchPrState::Loading, cx);
     let api = WorkspaceApi::global(cx).api.clone();
     let task = cx.spawn(async move |this, cx| {
       let state = cx
@@ -754,7 +725,7 @@ impl DockPanel {
 
       let _ = this.update(cx, |this, cx| {
         let found_pull_request = matches!(state, BranchPrState::Found(_, _));
-        this.branch_pr = state;
+        this.set_branch_pr(state, cx);
         this.reset_pull_request_details(cx);
         if found_pull_request {
           this.load_pull_request_range(cx);
@@ -777,6 +748,8 @@ impl DockPanel {
     let repo = context.repo.clone();
     let number = pull_request.number;
     let api = WorkspaceApi::global(cx).api.clone();
+    let sentry_owner = owner.clone();
+    let sentry_repo = repo.clone();
 
     self.pr_files_loading = true;
     self.pr_files_error = None;
@@ -826,6 +799,12 @@ impl DockPanel {
             this.pr_author_login = Some(author_login);
             this.pr_node_id = node_id;
             this.set_pull_request_review_comments(review_comments, cx);
+            crate::sentry_context::sync_github_pr_context(
+              &sentry_owner,
+              &sentry_repo,
+              number,
+              None,
+            );
           }
           Err(error) => {
             this.pr_files_error = Some(format!("{error}").into());
@@ -840,6 +819,7 @@ impl DockPanel {
   /// Everything the panel knows about one pull request. Another branch means
   /// another pull request, and stale checks read as this one's.
   fn reset_pull_request_details(&mut self, cx: &mut Context<Self>) {
+    crate::sentry_context::clear_github_pr_context();
     self.set_pull_request_review_comments(Vec::new(), cx);
     self.pr_author_login = None;
     self.pr_node_id = None;
@@ -1293,22 +1273,36 @@ impl DockPanel {
     state: BranchPrState,
     cx: &mut Context<Self>,
   ) {
-    self.branch_pr = state;
+    self.set_branch_pr(state, cx);
     cx.notify();
+  }
+
+  /// The one place the branch's pull request changes, so a link from outside
+  /// always knows what this panel is showing.
+  fn set_branch_pr(&mut self, state: BranchPrState, cx: &mut Context<Self>) {
+    let identity = match &state {
+      BranchPrState::Found(context, pull_request) => Some((
+        context.owner.clone(),
+        context.repo.clone(),
+        pull_request.number,
+      )),
+      _ => None,
+    };
+    self.branch_pr = state;
+    crate::pull_request_surface::PullRequestSurfaceHandle::publish(identity, cx);
   }
 
   pub(crate) fn open_branch_pull_request(&self, cx: &mut Context<Self>) {
     let BranchPrState::Found(context, pull_request) = &self.branch_pr else {
       return;
     };
-    open_pr_target(
-      context.owner.clone(),
-      context.repo.clone(),
+    cx.open_url(&github_pull_request_url(
+      &context.owner,
+      &context.repo,
       pull_request.number,
       false,
       None,
-      cx,
-    );
+    ));
   }
 
   /// GitHub cannot open a pull request for a branch its remote has never seen.
@@ -1689,16 +1683,16 @@ impl DockPanel {
   fn render_files_tab(&mut self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
     let theme = cx.theme().clone();
 
-    // A file row was selected (directories end with '/'): open it in the editor.
-    if let Some(selected_id) = self
+    // A file row was selected: open it in the editor. A folder row only folds.
+    if let Some((selected_id, is_folder)) = self
       .files_tree_state
       .read(cx)
       .selected_entry()
-      .map(|entry| entry.item().id.to_string())
+      .map(|entry| (entry.item().id.to_string(), entry.is_folder()))
       && Some(selected_id.as_str()) != self.selected_tree_id.as_deref()
     {
       self.selected_tree_id = Some(selected_id.clone());
-      if !selected_id.ends_with('/') {
+      if !is_folder {
         let path = PathBuf::from(selected_id);
         cx.on_next_frame(window, move |_, _, cx| {
           cx.emit(DockPanelEvent::OpenFile { path });
@@ -2058,7 +2052,7 @@ impl DockPanel {
               .icon(UiIconName::Globe)
               .tooltip("Open on GitHub")
               .on_click(cx.listener(move |_, _, _, cx| {
-                open_pr_target(owner.clone(), repo.clone(), number, false, None, cx);
+                cx.open_url(&github_pull_request_url(&owner, &repo, number, false, None));
               })),
           ),
       )
@@ -2972,7 +2966,7 @@ mod tests {
       )],
     );
     panel.update(cx, |panel, cx| {
-      panel.pr_checks = Some(crate::github_pr_details_page::test_support::make_checks_summary());
+      panel.pr_checks = Some(crate::pull_request_checks::checks_summary_fixture());
       cx.notify();
     });
     cx.run_until_parked();
@@ -3022,7 +3016,7 @@ mod tests {
       )],
     );
     panel.update(cx, |panel, cx| {
-      panel.pr_checks = Some(crate::github_pr_details_page::test_support::make_checks_summary());
+      panel.pr_checks = Some(crate::pull_request_checks::checks_summary_fixture());
       panel.pr_reviewers = vec![ReviewerRow {
         login: "ada".to_string(),
         avatar_url: None,
@@ -3434,56 +3428,6 @@ mod tests {
       Some(("b".repeat(40), "h".repeat(40), PathBuf::from("src/main.rs"))),
       "the row carries the range, so the centre can load the snapshot"
     );
-  }
-
-  fn tree_ids(items: &[TreeItem]) -> Vec<String> {
-    let mut ids = Vec::new();
-    for item in items {
-      ids.push(item.id.to_string());
-      ids.extend(tree_ids(&item.children));
-    }
-    ids
-  }
-
-  #[test]
-  fn build_worktree_tree_items_nests_dirs_first_then_files_sorted() {
-    let files = vec![
-      PathBuf::from("src/main.rs"),
-      PathBuf::from("README.md"),
-      PathBuf::from("src/api/client.rs"),
-      PathBuf::from("Cargo.toml"),
-    ];
-
-    let items = build_worktree_tree_items(&files);
-
-    // Top level: dirs first (src/), then files alphabetically.
-    assert_eq!(
-      items
-        .iter()
-        .map(|item| item.id.to_string())
-        .collect::<Vec<_>>(),
-      vec!["src/", "Cargo.toml", "README.md"]
-    );
-    // Depth-first: directory ids end with '/', file ids are the relative path.
-    assert_eq!(
-      tree_ids(&items),
-      vec![
-        "src/",
-        "src/api/",
-        "src/api/client.rs",
-        "src/main.rs",
-        "Cargo.toml",
-        "README.md"
-      ]
-    );
-    let src = &items[0];
-    assert!(src.is_folder());
-    assert_eq!(src.label.to_string(), "src");
-  }
-
-  #[test]
-  fn build_worktree_tree_items_handles_empty_input() {
-    assert!(build_worktree_tree_items(&[]).is_empty());
   }
 
   #[test]

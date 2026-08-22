@@ -16,9 +16,9 @@ use std::time::Duration;
 use ui::PAGE_HEADER_HEIGHT;
 use ui::{AppAssets, parse_github_url_action};
 use workspace::{
-  AppProfile, AuthStateStore, WorkspaceView, build_app_menus, github_navigation::open_pr_target,
-  install_app_key_bindings, install_crash_reporter, show_startup_crash_report_notification,
-  take_pending_startup_crash_report,
+  AppProfile, AuthStateStore, WorkspaceView, build_app_menus, install_app_key_bindings,
+  install_crash_reporter, pull_request_surface::PullRequestSurfaceHandle,
+  show_startup_crash_report_notification, take_pending_startup_crash_report,
 };
 
 #[cfg(target_os = "linux")]
@@ -626,11 +626,9 @@ struct PrDeepLink {
   owner: String,
   repo: String,
   number: u64,
-  open_changes_tab: bool,
-  review_comment_id: Option<u64>,
 }
 
-/// Only pull requests have a page in Reviu; other GitHub links would bounce
+/// Only a pull request can be reviewed here; other GitHub links would bounce
 /// straight back to the browser they came from.
 fn pr_deep_link(url: &str) -> Option<PrDeepLink> {
   match parse_github_url_action(url)? {
@@ -638,14 +636,11 @@ fn pr_deep_link(url: &str) -> Option<PrDeepLink> {
       owner,
       repo,
       number,
-      open_changes_tab,
-      review_comment_id,
+      ..
     } => Some(PrDeepLink {
       owner,
       repo,
       number,
-      open_changes_tab,
-      review_comment_id,
     }),
     _ => None,
   }
@@ -656,14 +651,9 @@ fn handle_open_github_url(url: &str, cx: &mut App) {
     return;
   };
   cx.activate(true);
-  open_pr_target(
-    target.owner,
-    target.repo,
-    target.number,
-    target.open_changes_tab,
-    target.review_comment_id,
-    cx,
-  );
+  // The link asked to review it here, so bouncing back to the browser would be
+  // no answer at all: the shell either shows it or says why it cannot.
+  PullRequestSurfaceHandle::show_or_explain(target.owner, target.repo, target.number, cx);
 }
 
 #[cfg(test)]
@@ -684,9 +674,10 @@ mod tests {
     assert_eq!(target.repo, "widget");
     assert_eq!(target.number, 42);
 
+    // A link to one of its comments still names the pull request.
     let with_comment =
       pr_deep_link("https://github.com/acme/widget/pull/42#discussion_r123").expect("pr deep link");
-    assert_eq!(with_comment.review_comment_id, Some(123));
+    assert_eq!(with_comment.number, 42);
   }
 
   #[test]

@@ -1364,7 +1364,7 @@ impl CommandPaletteCommand {
     Self::new(
       CommandPaletteCommandId::OpenGithubFromUrl,
       "Open pull request from URL",
-      "Open a GitHub pull request in Reviu from its URL",
+      "Open a GitHub pull request from its URL",
     )
   }
 

@@ -23,7 +23,6 @@ fn git_config_icon() -> Icon {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum UserMenuPage {
   Session,
-  GithubPrDetails,
   Billing,
   GitConfig,
   Settings,

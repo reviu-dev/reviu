@@ -64,9 +64,6 @@ pub(crate) struct CrashGithubPrContext {
   pub repo: String,
   pub number: u64,
   pub selected_file: Option<String>,
-  pub active_tab: Option<usize>,
-  #[serde(skip_serializing_if = "Option::is_none")]
-  pub selected_commit: Option<String>,
 }
 
 #[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
@@ -81,7 +78,6 @@ pub(crate) struct CrashContextSnapshot {
 fn workspace_page_tag(page: WorkspacePage) -> &'static str {
   match page {
     WorkspacePage::Session => "session",
-    WorkspacePage::GithubPrDetails => "github_pr_details",
     WorkspacePage::Billing => "billing",
     WorkspacePage::GitConfig => "git_config",
     WorkspacePage::Settings => "settings",
@@ -367,8 +363,6 @@ pub(crate) fn sync_github_pr_context(
   repo: &str,
   number: u64,
   selected_file: Option<&str>,
-  active_tab: Option<usize>,
-  selected_commit: Option<&str>,
 ) {
   sentry::configure_scope(|scope| {
     scope.set_tag("github.owner", owner);
@@ -385,12 +379,6 @@ pub(crate) fn sync_github_pr_context(
     } else {
       scope.remove_tag("github.selected_file");
     }
-    if let Some(tab) = active_tab {
-      context.insert("active_tab".into(), tab.into());
-    }
-    if let Some(commit) = selected_commit {
-      context.insert("selected_commit".into(), commit.to_string().into());
-    }
     scope.set_context("github_pr", to_unknown_context(context));
   });
 
@@ -400,8 +388,6 @@ pub(crate) fn sync_github_pr_context(
       repo: repo.to_string(),
       number,
       selected_file: selected_file.map(str::to_string),
-      active_tab,
-      selected_commit: selected_commit.map(str::to_string),
     });
   });
 }
@@ -446,10 +432,7 @@ mod tests {
   #[test]
   fn workspace_page_tag_maps_pages() {
     assert_eq!(workspace_page_tag(WorkspacePage::Session), "session");
-    assert_eq!(
-      workspace_page_tag(WorkspacePage::GithubPrDetails),
-      "github_pr_details"
-    );
+    assert_eq!(workspace_page_tag(WorkspacePage::Billing), "billing");
   }
 
   #[test]

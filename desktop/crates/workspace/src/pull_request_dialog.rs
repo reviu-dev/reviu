@@ -23,7 +23,6 @@ use ui::{
 };
 
 use crate::api::{ApiClient, GithubPullRequest};
-use crate::github_pr_details_page::GithubPrDetailsPageHandle;
 use crate::github_shared;
 
 /// Errors of a git action share one notification slot, so they replace each other.
@@ -354,16 +353,9 @@ impl CreatePullRequestDialog {
 
         match result {
           Ok(pull_request) => {
+            // The dock panel picks the new pull request up: it is the branch's.
             on_created(&branch_context, &pull_request, cx);
             window.close_dialog(cx);
-            GithubPrDetailsPageHandle::show_with_open_target(
-              pull_request.repository.owner.into(),
-              pull_request.repository.repo.into(),
-              pull_request.number,
-              false,
-              None,
-              cx,
-            );
           }
           Err(error) => {
             window.push_notification(

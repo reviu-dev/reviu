@@ -167,9 +167,6 @@ impl StartupCrashReport {
       if let Some(selected_file) = pr.selected_file.as_deref() {
         lines.push(format!("Selected file: {}", selected_file));
       }
-      if let Some(active_tab) = pr.active_tab {
-        lines.push(format!("Active tab: {}", active_tab));
-      }
     }
 
     lines.join("\n")

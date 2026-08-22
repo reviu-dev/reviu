@@ -85,26 +85,6 @@ pub(crate) fn checks_summary_subtitle(checks: &GithubPullRequestChecksSummary) -
   parts.join(", ")
 }
 
-pub(crate) fn checks_uniform_state(
-  checks: &GithubPullRequestChecksSummary,
-) -> Option<GithubPullRequestChecksRollupState> {
-  if checks.total_checks == 0 {
-    return None;
-  }
-
-  if checks.successful_checks == checks.total_checks {
-    Some(GithubPullRequestChecksRollupState::Success)
-  } else if checks.pending_checks == checks.total_checks {
-    Some(GithubPullRequestChecksRollupState::Pending)
-  } else if checks.failed_checks == checks.total_checks {
-    Some(GithubPullRequestChecksRollupState::Failure)
-  } else if checks.skipped_checks == checks.total_checks {
-    Some(GithubPullRequestChecksRollupState::Skipped)
-  } else {
-    None
-  }
-}
-
 pub(crate) fn format_check_duration(total_seconds: u64) -> String {
   if total_seconds < 60 {
     return format!("{total_seconds}s");
@@ -319,27 +299,44 @@ pub(crate) fn check_rows(checks: &GithubPullRequestChecksSummary) -> Vec<CheckRo
   rows
 }
 
-pub(crate) fn check_app_initial(row: &CheckRow) -> String {
-  row
-    .app_label
-    .as_deref()
-    .or(row.app_slug.as_deref())
-    .unwrap_or(row.title.as_str())
-    .chars()
-    .next()
-    .map(|c| c.to_uppercase().collect::<String>())
-    .filter(|initial| !initial.is_empty())
-    .unwrap_or_else(|| "C".to_string())
+/// A summary with something of every state in it: what a panel has to survive.
+#[cfg(test)]
+pub(crate) fn checks_summary_fixture() -> GithubPullRequestChecksSummary {
+  GithubPullRequestChecksSummary {
+    head_sha: "head123".to_string(),
+    overall_state: GithubPullRequestChecksRollupState::Failure,
+    required_state: GithubPullRequestChecksRollupState::Pending,
+    total_checks: 4,
+    successful_checks: 2,
+    failed_checks: 1,
+    pending_checks: 1,
+    skipped_checks: 0,
+    required_checks_total: 3,
+    required_checks_passed: 1,
+    required_checks_failed: 1,
+    required_checks_pending: 1,
+    required_checks_skipped: 0,
+    required_contexts: vec![
+      "build".to_string(),
+      "lint".to_string(),
+      "deploy".to_string(),
+    ],
+    missing_required_contexts: vec!["deploy".to_string()],
+    requires_up_to_date_branch: true,
+    actions_runs: Vec::new(),
+    other_checks: Vec::new(),
+    legacy_statuses: Vec::new(),
+  }
 }
 
 #[cfg(test)]
 mod tests {
+  use super::checks_summary_fixture as make_checks_summary;
   use super::*;
   use crate::api::{
     GithubPullRequestCheckRun, GithubPullRequestLegacyStatus, GithubPullRequestWorkflowJob,
     GithubPullRequestWorkflowRun,
   };
-  use crate::github_pr_details_page::test_support::make_checks_summary;
 
   #[test]
   fn check_rows_keep_provider_avatar_urls() {

@@ -75,10 +75,6 @@ impl SessionPage {
       panel.refresh(cx);
     });
     self.refresh_branch(cx);
-    // Without a repository there is no branch refresh to publish from.
-    if self.selected_repo.is_none() {
-      self.publish_active_local_repo(cx);
-    }
     cx.notify();
   }
 
@@ -700,31 +696,5 @@ mod tests {
       assert!(page.dock_panel.read(cx).repo_root().is_none());
       assert!(page.repo_snapshot.read(cx).branch_status().is_none());
     });
-  }
-
-  #[gpui::test(iterations = 10)]
-  async fn switching_repository_mid_publish_does_not_publish_the_old_one(cx: &mut TestAppContext) {
-    let repo = TempRepo::init("session-page-active-repo-race");
-    commit_text_file(&repo.path, Path::new("README.md"), "v1\n", "initial");
-    let other = TempRepo::init("session-page-active-repo-race-other");
-    commit_text_file(&other.path, Path::new("README.md"), "other\n", "initial");
-
-    let (page, cx) = add_session_page_window(repo.path.clone(), cx);
-    cx.run_until_parked();
-
-    // The read is in flight when the user switches repository.
-    let publish = page.update(cx, |page, cx| {
-      page.publish_active_local_repo(cx);
-      page._active_repo_task.take().expect("publish task")
-    });
-    page.update(cx, |page, _| page.selected_repo = Some(other.path.clone()));
-    publish.await;
-    cx.run_until_parked();
-
-    assert_eq!(
-      cx.update(|_, cx| crate::active_local_repo::ActiveLocalRepoStore::get(cx)),
-      None,
-      "the pull request page must never be pointed at the repository we just left"
-    );
   }
 }

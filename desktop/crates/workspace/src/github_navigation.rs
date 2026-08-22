@@ -1,32 +1,5 @@
-use gpui::{App, Window};
+use gpui::App;
 use ui::CommandPaletteGithubRepoTab;
-
-use crate::github_pr_details_page::GithubPrDetailsPageHandle;
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum SamePrGfmNavigation {
-  ShowOverview { switch_to_overview: bool },
-  ScrollComment { switch_to_changes: bool },
-}
-
-pub(crate) fn same_pr_gfm_navigation(
-  active_tab_ix: usize,
-  review_comment_id: Option<u64>,
-) -> SamePrGfmNavigation {
-  if review_comment_id.is_some() {
-    SamePrGfmNavigation::ScrollComment {
-      switch_to_changes: active_tab_ix != 1,
-    }
-  } else {
-    SamePrGfmNavigation::ShowOverview {
-      switch_to_overview: active_tab_ix != 0,
-    }
-  }
-}
-
-pub(crate) fn should_open_externally(window: &Window) -> bool {
-  window.modifiers().secondary()
-}
 
 pub(crate) fn github_repo_url(
   owner: &str,
@@ -114,6 +87,25 @@ pub fn open_profile_target(login: String, cx: &mut App) {
   cx.open_url(&github_profile_url(&login));
 }
 
+/// A pull request Reviu is not checked out on has no surface here: only the
+/// branch you are on gets the dock panel.
+pub(crate) fn github_pull_request_url(
+  owner: &str,
+  repo: &str,
+  number: u64,
+  changes: bool,
+  review_comment_id: Option<u64>,
+) -> String {
+  let base = format!("https://github.com/{owner}/{repo}/pull/{number}");
+  match (changes, review_comment_id) {
+    (_, Some(comment_id)) => format!("{base}/files#discussion_r{comment_id}"),
+    (true, None) => format!("{base}/files"),
+    (false, None) => base,
+  }
+}
+
+/// The best surface for a pull request: the panel when it is the open branch's,
+/// github.com otherwise.
 pub fn open_pr_target(
   owner: String,
   repo: String,
@@ -122,14 +114,18 @@ pub fn open_pr_target(
   review_comment_id: Option<u64>,
   cx: &mut App,
 ) {
-  GithubPrDetailsPageHandle::show_with_open_target(
-    owner.into(),
-    repo.into(),
+  if review_comment_id.is_none()
+    && crate::pull_request_surface::PullRequestSurfaceHandle::show(&owner, &repo, number, cx)
+  {
+    return;
+  }
+  cx.open_url(&github_pull_request_url(
+    &owner,
+    &repo,
     number,
     open_changes_tab,
     review_comment_id,
-    cx,
-  );
+  ));
 }
 
 pub fn open_commit_target(owner: String, repo: String, sha: String, cx: &mut App) {
@@ -156,37 +152,24 @@ mod tests {
   }
 
   use super::{
-    CommandPaletteGithubRepoTab, SamePrGfmNavigation, github_commit_url, github_compare_url,
-    github_profile_url, github_repo_url, same_pr_gfm_navigation,
+    CommandPaletteGithubRepoTab, github_commit_url, github_compare_url, github_profile_url,
+    github_pull_request_url, github_repo_url,
   };
 
   #[test]
-  fn same_pr_gfm_navigation_routes_comment_links_to_changes_and_scroll() {
-    let navigation = same_pr_gfm_navigation(0, Some(42));
+  fn a_pull_request_url_carries_where_it_was_pointing() {
     assert_eq!(
-      navigation,
-      SamePrGfmNavigation::ScrollComment {
-        switch_to_changes: true,
-      }
+      github_pull_request_url("acme", "widget", 42, false, None),
+      "https://github.com/acme/widget/pull/42"
     );
-  }
-
-  #[test]
-  fn same_pr_gfm_navigation_routes_non_comment_links_to_overview_without_reload() {
-    let already_overview = same_pr_gfm_navigation(0, None);
     assert_eq!(
-      already_overview,
-      SamePrGfmNavigation::ShowOverview {
-        switch_to_overview: false,
-      }
+      github_pull_request_url("acme", "widget", 42, true, None),
+      "https://github.com/acme/widget/pull/42/files"
     );
-
-    let from_changes = same_pr_gfm_navigation(1, None);
+    // A comment lives in the diff, whichever tab asked for it.
     assert_eq!(
-      from_changes,
-      SamePrGfmNavigation::ShowOverview {
-        switch_to_overview: true,
-      }
+      github_pull_request_url("acme", "widget", 42, false, Some(123)),
+      "https://github.com/acme/widget/pull/42/files#discussion_r123"
     );
   }
 

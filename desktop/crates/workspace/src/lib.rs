@@ -45,7 +45,6 @@ actions!(
 
 mod about_page;
 mod actions;
-mod active_local_repo;
 mod agent_chat_state;
 mod agent_notification;
 mod agent_review;
@@ -80,7 +79,6 @@ mod git_config_page;
 mod git_telemetry;
 pub mod github_navigation;
 mod github_notifications;
-mod github_pr_details_page;
 mod github_shared;
 mod history_list;
 mod hunk_actions;
@@ -100,6 +98,7 @@ mod pull_request_merge;
 mod pull_request_review_comments;
 mod pull_request_review_submission;
 mod pull_request_reviewers;
+pub mod pull_request_surface;
 mod repo_command;
 mod repo_snapshot;
 mod repo_state;

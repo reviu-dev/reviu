@@ -381,56 +381,6 @@ impl SessionPage {
     Ok(())
   }
 
-  pub(super) fn start_merge_base_branch(
-    &mut self,
-    repo_root: PathBuf,
-    base_branch_name: String,
-    window: &mut Window,
-    cx: &mut Context<Self>,
-  ) {
-    if self.selected_repo.as_deref() != Some(repo_root.as_path())
-      && let Err(error) = self.set_selected_repo(repo_root.clone(), window, cx)
-    {
-      window.push_notification(Notification::warning(error), cx);
-      return;
-    }
-
-    // A conflict is already waiting: resume it instead of starting another merge.
-    if let Some(path) = crate::repo_command::first_conflicted_path(&repo_root) {
-      self.open_diff(path, None, window, cx);
-      return;
-    }
-
-    let window_handle = self.window_handle;
-    let task = cx.spawn(async move |this, cx| {
-      let fetch_root = repo_root.clone();
-      let branch_name = base_branch_name.clone();
-      let resolved = cx
-        .background_spawn(async move {
-          git::fetch(&fetch_root)?;
-          git::resolve_branch_ref(&fetch_root, &branch_name)?.ok_or_else(|| {
-            anyhow::anyhow!("branch {branch_name:?} was not found locally or on any remote")
-          })
-        })
-        .await;
-
-      let _ = cx.update_window(window_handle, |_, window, cx| {
-        let _ = this.update(cx, |this, cx| match resolved {
-          Ok(branch) => {
-            if let Err(error) = this.run_repo_command(RepoCommand::MergeBranch(branch), window, cx)
-            {
-              window.push_notification(Notification::warning(error), cx);
-            }
-          }
-          Err(error) => {
-            window.push_notification(Notification::error(error.to_string()), cx);
-          }
-        });
-      });
-    });
-    self._merge_base_task = Some(task);
-  }
-
   pub(super) fn run_repo_command(
     &mut self,
     command: RepoCommand,
@@ -1623,54 +1573,6 @@ mod tests {
       "main\n",
       "the skipped commit left nothing behind"
     );
-  }
-
-  #[gpui::test]
-  async fn merging_the_base_branch_lands_on_the_conflict(cx: &mut TestAppContext) {
-    let repo = TempRepo::init("session-page-merge-base");
-    let base = start_conflicting_rebase_setup(&repo.path);
-
-    let (page, cx) = add_session_page_window(repo.path.clone(), cx);
-    cx.run_until_parked();
-
-    // Comes from a pull request: fetch, then merge its base branch here.
-    page.update_in(cx, |page, window, cx| {
-      page.start_merge_base_branch(repo.path.clone(), base.clone(), window, cx)
-    });
-    let merge_base = page.update(cx, |page, _| {
-      page._merge_base_task.take().expect("merge base task")
-    });
-    merge_base.await;
-    cx.run_until_parked();
-    let command = page.update(cx, |page, _| page._repo_command_task.take());
-    if let Some(command) = command {
-      command.await;
-    }
-    cx.run_until_parked();
-
-    assert!(git::is_merge_in_progress(&repo.path).expect("merge state"));
-    page.read_with(cx, |page, cx| {
-      assert_eq!(page.center, CenterView::Diff);
-      assert_eq!(page.selected_file.as_deref(), Some(Path::new("a.txt")));
-      assert_eq!(
-        page.dock_panel.read(cx).commit_message(cx),
-        crate::repo_command::merge_commit_message(&base, "feature")
-      );
-    });
-
-    // Asked again mid-merge: it resumes the conflict instead of merging twice.
-    page.update_in(cx, |page, window, cx| {
-      page.close_diff(window, cx);
-      page.start_merge_base_branch(repo.path.clone(), base.clone(), window, cx)
-    });
-    cx.run_until_parked();
-    page.read_with(cx, |page, _| {
-      assert!(
-        page._merge_base_task.is_none(),
-        "no fetch and no second merge"
-      );
-      assert_eq!(page.center, CenterView::Diff);
-    });
   }
 
   #[gpui::test]

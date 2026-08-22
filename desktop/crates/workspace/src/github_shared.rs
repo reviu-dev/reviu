@@ -1,143 +1,15 @@
-use std::path::Path;
 use std::sync::Arc;
 
-use gpui::{AppContext as _, Context, Entity, ExternalPaths, Hsla, ParentElement as _, Window};
-use gpui_component::{Colorize, Sizable as _, input::TextareaState, tag::Tag};
-use ui::{StatusTag, StatusThemeExt as _};
+use gpui::Hsla;
+use ui::StatusThemeExt as _;
 
-use crate::api::{
-  ApiClient, GithubPullRequestLabel, GithubPullRequestState, GithubPullRequestStatus,
-};
+use crate::api::{ApiClient, GithubPullRequestState, GithubPullRequestStatus};
 
 pub(crate) fn make_asset_url_resolver(
   api: &ApiClient,
 ) -> Arc<dyn Fn(&str) -> Option<String> + Send + Sync> {
   let api = api.clone();
   Arc::new(move |url: &str| api.resolve_github_asset_url(url).ok())
-}
-
-/// If the URL is a GitHub user-attachment URL, resolve and open the signed S3 URL.
-/// Returns true if the URL was handled.
-pub(crate) fn try_open_github_asset_url(url: &str, api: &ApiClient, cx: &mut gpui::App) -> bool {
-  if !gfm_markdown_viewer::is_github_user_attachment_url(url) {
-    return false;
-  }
-  // Try a quick blocking resolve, the asset URL resolver cache should already
-  // have the signed URL if the image was rendered. If not, this will block briefly
-  // (single HTTP request to our backend) which is acceptable for a click action.
-  match api.resolve_github_asset_url(url) {
-    Ok(signed_url) => cx.open_url(&signed_url),
-    Err(_) => cx.open_url(url),
-  }
-  true
-}
-
-pub(crate) fn image_content_type_and_name_for_path(path: &Path) -> Option<(String, String)> {
-  let extension = path
-    .extension()
-    .and_then(|ext| ext.to_str())
-    .map(|ext| ext.to_ascii_lowercase())?;
-  let content_type = match extension.as_str() {
-    "png" => "image/png",
-    "jpg" | "jpeg" => "image/jpeg",
-    "gif" => "image/gif",
-    "webp" => "image/webp",
-    _ => return None,
-  };
-  let file_name = path
-    .file_name()
-    .and_then(|name| name.to_str())
-    .unwrap_or("image")
-    .to_string();
-  Some((content_type.to_string(), file_name))
-}
-
-pub(crate) fn upload_placeholder_id() -> String {
-  use std::sync::atomic::{AtomicU64, Ordering};
-  static NEXT_ID: AtomicU64 = AtomicU64::new(1);
-  let n = NEXT_ID.fetch_add(1, Ordering::Relaxed);
-  format!("reviu-upload-{n}")
-}
-
-pub(crate) fn replace_placeholder_in_input(
-  input: &mut TextareaState,
-  placeholder: &str,
-  replacement: &str,
-  window: &mut Window,
-  cx: &mut Context<TextareaState>,
-) {
-  let current = input.value().to_string();
-  let Some(index) = current.find(placeholder) else {
-    return;
-  };
-  let mut next = String::with_capacity(current.len() + replacement.len());
-  next.push_str(&current[..index]);
-  next.push_str(replacement);
-  next.push_str(&current[index + placeholder.len()..]);
-  input.set_value(next, window, cx);
-}
-
-/// Spawn detached upload tasks for each image path in `paths`. For each image:
-/// - inserts an `![Uploading …]()` placeholder at the input's cursor immediately
-/// - uploads the bytes via the backend
-/// - replaces the placeholder with the final `![image](url)` markdown on success
-/// - strips the placeholder and invokes `on_error` on failure
-///
-/// Non-image paths are skipped silently.
-pub(crate) fn upload_dropped_images<V: 'static>(
-  paths: &ExternalPaths,
-  input: Entity<TextareaState>,
-  api: ApiClient,
-  on_error: impl Fn(&mut V, String, &mut Context<V>) + Send + 'static + Clone,
-  window: &mut Window,
-  cx: &mut Context<V>,
-) {
-  for path in paths.paths() {
-    let Some((content_type, file_name)) = image_content_type_and_name_for_path(path) else {
-      continue;
-    };
-    let placeholder_id = upload_placeholder_id();
-    let placeholder_markdown = format!(
-      "![Uploading {}…](uploading://{})\n",
-      file_name, placeholder_id
-    );
-    input.update(cx, |input, cx| {
-      input.insert(placeholder_markdown.clone(), window, cx);
-    });
-    let path = path.clone();
-    let api = api.clone();
-    let input = input.clone();
-    let window_handle = window.window_handle();
-    let on_error = on_error.clone();
-    cx.spawn(async move |this, cx| {
-      let upload = cx
-        .background_spawn(async move {
-          let bytes = std::fs::read(&path).map_err(anyhow::Error::from)?;
-          api.upload_asset(bytes, &content_type, &file_name)
-        })
-        .await;
-      let _ = this.update(cx, |this, cx| match upload {
-        Ok(url) => {
-          let markdown = format!("![image]({url})\n");
-          let _ = window_handle.update(cx, |_, window, cx| {
-            input.update(cx, |input, cx| {
-              replace_placeholder_in_input(input, &placeholder_markdown, &markdown, window, cx);
-            });
-          });
-        }
-        Err(error) => {
-          let _ = window_handle.update(cx, |_, window, cx| {
-            input.update(cx, |input, cx| {
-              replace_placeholder_in_input(input, &placeholder_markdown, "", window, cx);
-            });
-          });
-          on_error(this, error.to_string(), cx);
-          cx.notify();
-        }
-      });
-    })
-    .detach();
-  }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -282,67 +154,8 @@ fn parse_diff_hunk_start(header: &str, marker: char) -> Option<usize> {
   after_marker[..end].parse::<usize>().ok()
 }
 
-pub(crate) fn commit_subject(message: &str) -> String {
-  message
-    .lines()
-    .map(str::trim)
-    .find(|line| !line.is_empty())
-    .unwrap_or("No commit message")
-    .to_string()
-}
-
 pub(crate) fn repo_label(owner: &str, repo: &str) -> String {
   format!("{owner}/{repo}")
-}
-
-pub(crate) fn pr_url(owner: &str, repo: &str, pr_number: u64) -> String {
-  format!("https://github.com/{owner}/{repo}/pull/{pr_number}")
-}
-
-fn github_label_color(label: &GithubPullRequestLabel) -> Option<Hsla> {
-  let color = label
-    .color
-    .as_deref()
-    .map(str::trim)
-    .filter(|color| !color.is_empty())?;
-  let hex = if color.starts_with('#') {
-    color.to_string()
-  } else {
-    format!("#{color}")
-  };
-
-  <Hsla as gpui_component::Colorize>::parse_hex(&hex).ok()
-}
-
-pub(crate) fn github_label_tag(
-  label: &GithubPullRequestLabel,
-  theme: &gpui_component::Theme,
-) -> Tag {
-  let tag = if let Some(color) = github_label_color(label) {
-    let background = if theme.is_dark() {
-      color.mix_oklab(theme.background, 0.22)
-    } else {
-      color.mix_oklab(theme.background, 0.14)
-    };
-    let border = if theme.is_dark() {
-      color.mix_oklab(theme.border, 0.45)
-    } else {
-      color.mix_oklab(theme.border, 0.6)
-    };
-    let foreground = if theme.is_dark() {
-      color.mix_oklab(theme.foreground, 0.55)
-    } else if color.l > 0.62 {
-      color.mix_oklab(theme.foreground, 0.2)
-    } else {
-      color.mix_oklab(theme.foreground, 0.65)
-    };
-
-    Tag::custom(background, foreground, border)
-  } else {
-    Tag::secondary()
-  };
-
-  tag.small().rounded_full().child(label.name.clone())
 }
 
 pub(crate) fn resolve_pull_request_status(
@@ -382,76 +195,20 @@ pub(crate) fn pull_request_status_color(
   }
 }
 
-pub(crate) fn pull_request_status_tag(
-  status: GithubPullRequestStatus,
-  theme: &gpui_component::Theme,
-) -> StatusTag {
-  StatusTag::new(pull_request_status_color(status, theme))
-    .outline()
-    .child(pull_request_status_label(status))
-}
-
-pub(crate) fn line_snippets_from_content(
-  content: &str,
-  start_line: usize,
-  end_line: usize,
-) -> Option<Vec<String>> {
-  if start_line == 0 || end_line == 0 {
-    return None;
-  }
-  let (start_line, end_line) = if start_line <= end_line {
-    (start_line, end_line)
-  } else {
-    (end_line, start_line)
-  };
-
-  let lines: Vec<&str> = content.split('\n').collect();
-  if start_line > lines.len() {
-    return None;
-  }
-
-  let end_index = end_line.min(lines.len());
-  if end_index < start_line {
-    return None;
-  }
-
-  Some(
-    lines[start_line.saturating_sub(1)..end_index]
-      .iter()
-      .map(|line| line.trim_end_matches('\r').to_string())
-      .collect(),
-  )
-}
-
-pub(crate) fn is_unauthorized_error_message(error: &str) -> bool {
-  error.to_ascii_lowercase().contains("unauthorized")
-}
-
 pub(crate) fn logins_match_case_insensitive(left: &str, right: &str) -> bool {
   left.eq_ignore_ascii_case(right)
-}
-
-pub(crate) fn normalize_non_empty_text(value: &str) -> Option<String> {
-  let trimmed = value.trim();
-  if trimmed.is_empty() {
-    None
-  } else {
-    Some(trimmed.to_string())
-  }
 }
 
 #[cfg(test)]
 mod tests {
   use super::{
     DiffHunkLineKind, extract_original_line_range_from_diff_hunk,
-    extract_original_lines_from_diff_hunk, github_label_color, is_unauthorized_error_message,
-    line_snippets_from_content, logins_match_case_insensitive, normalize_non_empty_text,
-    parse_diff_hunk_lines, pr_url, pull_request_status_color, pull_request_status_label,
-    repo_label,
+    extract_original_lines_from_diff_hunk, logins_match_case_insensitive, parse_diff_hunk_lines,
+    pull_request_status_color, pull_request_status_label, repo_label,
   };
-  use crate::api::{GithubPullRequestLabel, GithubPullRequestStatus};
+  use crate::api::GithubPullRequestStatus;
   use gpui::TestAppContext;
-  use gpui_component::{ActiveTheme as _, Colorize as _};
+  use gpui_component::ActiveTheme as _;
   use ui::StatusThemeExt as _;
 
   fn init_gpui_test(cx: &mut TestAppContext) {
@@ -461,36 +218,6 @@ mod tests {
   #[test]
   fn repo_label_formats_owner_and_repo() {
     assert_eq!(repo_label("acme", "widget"), "acme/widget");
-  }
-
-  #[test]
-  fn github_label_color_parses_hex_without_hash() {
-    let color = github_label_color(&GithubPullRequestLabel {
-      name: "bug".to_string(),
-      color: Some("f29513".to_string()),
-    })
-    .expect("parsed color");
-
-    assert!(color.to_hex().starts_with("#F2951"));
-  }
-
-  #[test]
-  fn github_label_color_returns_none_for_missing_color() {
-    assert!(
-      github_label_color(&GithubPullRequestLabel {
-        name: "bug".to_string(),
-        color: None,
-      })
-      .is_none()
-    );
-  }
-
-  #[test]
-  fn pr_url_formats_expected_path() {
-    assert_eq!(
-      pr_url("acme", "widget", 7),
-      "https://github.com/acme/widget/pull/7"
-    );
   }
 
   #[test]
@@ -538,44 +265,9 @@ mod tests {
   }
 
   #[test]
-  fn line_snippets_from_content_handles_bounds_order_and_crlf() {
-    let content = "first\r\nsecond\r\nthird\r\n";
-    assert_eq!(
-      line_snippets_from_content(content, 2, 3),
-      Some(vec!["second".to_string(), "third".to_string()])
-    );
-    assert_eq!(
-      line_snippets_from_content(content, 3, 2),
-      Some(vec!["second".to_string(), "third".to_string()])
-    );
-    assert_eq!(
-      line_snippets_from_content(content, 4, 4),
-      Some(vec!["".to_string()])
-    );
-    assert!(line_snippets_from_content(content, 0, 3).is_none());
-    assert!(line_snippets_from_content(content, 10, 10).is_none());
-  }
-
-  #[test]
-  fn unauthorized_error_detection_is_case_insensitive() {
-    assert!(is_unauthorized_error_message("unauthorized"));
-    assert!(is_unauthorized_error_message("HTTP 401 Unauthorized"));
-    assert!(!is_unauthorized_error_message("unexpected status: 500"));
-  }
-
-  #[test]
   fn login_comparison_is_case_insensitive() {
     assert!(logins_match_case_insensitive("OctoCat", "octocat"));
     assert!(!logins_match_case_insensitive("octocat", "hubot"));
-  }
-
-  #[test]
-  fn normalize_non_empty_text_trims_and_rejects_blank_values() {
-    assert_eq!(
-      normalize_non_empty_text("  hello world  "),
-      Some("hello world".to_string())
-    );
-    assert_eq!(normalize_non_empty_text(" \n\t "), None);
   }
 
   #[test]

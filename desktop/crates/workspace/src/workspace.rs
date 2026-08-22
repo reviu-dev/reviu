@@ -17,7 +17,6 @@ use gpui_router::{Route, Routes};
 
 use crate::AppProfile;
 use crate::about_page::AboutPage;
-use crate::active_local_repo::ActiveLocalRepoStore;
 use crate::api::ApiClient;
 use crate::app_update::{
   AppUpdateNotificationId, AppUpdateState, AppUpdateStore, AvailableAppUpdate, UpdateArtifact,
@@ -29,7 +28,6 @@ use crate::billing_page::BillingPage;
 use crate::config::{AppSettings as PersistedSettings, ConfigStore};
 use crate::git_config_page::GitConfigPage;
 use crate::github_notifications::{self, GithubNotificationsStore};
-use crate::github_pr_details_page::{GithubPrDetailsPage, GithubPrDetailsPageHandle};
 use crate::navigation::NavigationHistory;
 use crate::sentry_context;
 use crate::session_page::SessionPage;
@@ -49,7 +47,6 @@ pub const STATUS_BAR_ICON_PNG: &[u8] =
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum WorkspacePage {
   Session,
-  GithubPrDetails,
   Billing,
   GitConfig,
   Settings,
@@ -57,13 +54,6 @@ pub enum WorkspacePage {
 }
 
 pub(crate) fn workspace_page_from_pathname(pathname: &str) -> WorkspacePage {
-  if pathname.starts_with("/github/") {
-    let segments: Vec<&str> = pathname.trim_start_matches('/').split('/').collect();
-    // PR details: /github/{owner}/{repo}/pull/{number}[/{tab}]
-    if segments.len() >= 5 && segments[3] == "pull" {
-      return WorkspacePage::GithubPrDetails;
-    }
-  }
   match pathname {
     "/session" => WorkspacePage::Session,
     "/billing" => WorkspacePage::Billing,
@@ -75,25 +65,14 @@ pub(crate) fn workspace_page_from_pathname(pathname: &str) -> WorkspacePage {
 }
 
 /// Returns true when the current path supports file search.
-/// The shell always does; PR details on the /changes tab.
+/// The shell is the only page with files to search.
 fn page_has_file_search(pathname: &str) -> bool {
-  if pathname == "/session" {
-    return true;
-  }
-  if pathname.starts_with("/github/") {
-    let segments: Vec<&str> = pathname.trim_start_matches('/').split('/').collect();
-    // PR: /github/{owner}/{repo}/pull/{number}/changes
-    if segments.len() >= 6 && segments[3] == "pull" && segments[5] == "changes" {
-      return true;
-    }
-  }
-  false
+  pathname == "/session"
 }
 
 fn user_menu_page_for_workspace_page(page: WorkspacePage) -> UserMenuPage {
   match page {
     WorkspacePage::Session => UserMenuPage::Session,
-    WorkspacePage::GithubPrDetails => UserMenuPage::GithubPrDetails,
     WorkspacePage::Billing => UserMenuPage::Billing,
     WorkspacePage::GitConfig => UserMenuPage::GitConfig,
     WorkspacePage::Settings => UserMenuPage::Settings,
@@ -104,7 +83,6 @@ fn user_menu_page_for_workspace_page(page: WorkspacePage) -> UserMenuPage {
 fn refresh_label_for_workspace_page(page: WorkspacePage) -> Option<&'static str> {
   match page {
     WorkspacePage::Session => None,
-    WorkspacePage::GithubPrDetails => Some("Refresh PR"),
     WorkspacePage::Billing
     | WorkspacePage::GitConfig
     | WorkspacePage::Settings
@@ -118,10 +96,9 @@ fn should_activate_session_page(previous: Option<WorkspacePage>, next: Workspace
   next == WorkspacePage::Session && previous != Some(WorkspacePage::Session)
 }
 
-fn refresh_in_progress_for_workspace_page(page: WorkspacePage, cx: &App) -> bool {
-  match page {
+fn refresh_in_progress_for_workspace_page(_page: WorkspacePage, _cx: &App) -> bool {
+  match _page {
     WorkspacePage::Session => false,
-    WorkspacePage::GithubPrDetails => GithubPrDetailsPageHandle::is_refreshing(cx),
     WorkspacePage::Billing
     | WorkspacePage::GitConfig
     | WorkspacePage::Settings
@@ -239,7 +216,6 @@ impl WorkspaceApi {
 pub struct WorkspaceView {
   session_page: Entity<SessionPage>,
   git_config_page: Entity<GitConfigPage>,
-  github_pr_details_page: Entity<GithubPrDetailsPage>,
   billing_page: Entity<BillingPage>,
   settings_page: Entity<SettingsPage>,
   about_page: Entity<AboutPage>,
@@ -318,7 +294,6 @@ impl WorkspaceView {
     cx.set_global(WorkspaceRoute::default());
     cx.set_global(WorkspaceApi::new());
     cx.set_global(AuthStateStore::default());
-    cx.set_global(ActiveLocalRepoStore::default());
     cx.set_global(AppUpdateStore::default());
     cx.set_global(GithubNotificationsStore::default());
 
@@ -355,7 +330,6 @@ impl WorkspaceView {
 
     let session_page = cx.new(|cx| SessionPage::new(window, cx));
     let git_config_page = cx.new(|cx| GitConfigPage::new(window, cx));
-    let github_pr_details_page = cx.new(|cx| GithubPrDetailsPage::new(window, cx));
     let billing_page = cx.new(|cx| BillingPage::new(window, cx));
     let settings_page = cx.new(|cx| SettingsPage::new(window, cx, settings));
     let about_page = cx.new(|cx| AboutPage::new(window, cx));
@@ -363,7 +337,6 @@ impl WorkspaceView {
     let view = Self {
       session_page,
       git_config_page,
-      github_pr_details_page,
       billing_page,
       settings_page,
       about_page,
@@ -723,7 +696,6 @@ impl WorkspaceView {
     }
 
     match page {
-      WorkspacePage::GithubPrDetails => GithubPrDetailsPageHandle::refresh(cx),
       WorkspacePage::Session
       | WorkspacePage::Billing
       | WorkspacePage::GitConfig
@@ -1074,11 +1046,6 @@ impl Render for WorkspaceView {
       let previous_page = self.last_page;
       self.last_page = Some(page);
       sentry_context::sync_workspace_page(previous_page, page);
-      if previous_page == Some(WorkspacePage::GithubPrDetails)
-        && page != WorkspacePage::GithubPrDetails
-      {
-        sentry_context::clear_github_pr_context();
-      }
       let focus_handle = self.focus_handle(cx);
       window.focus(&focus_handle, cx);
       if should_activate_session_page(previous_page, page) {
@@ -1089,7 +1056,6 @@ impl Render for WorkspaceView {
     }
 
     let session_page = self.session_page.clone();
-    let github_pr_details_page = self.github_pr_details_page.clone();
     let billing_page = self.billing_page.clone();
     let git_config_page = self.git_config_page.clone();
     let settings_page = self.settings_page.clone();
@@ -1100,19 +1066,6 @@ impl Render for WorkspaceView {
         Route::new()
           .path("session")
           .element(move |_w, _cx| session_page.clone()),
-      )
-      .child(
-        Route::new()
-          .path("github/{owner}/{repo}/pull/{number}")
-          .element({
-            let github_pr_details_page = github_pr_details_page.clone();
-            move |_w, _cx| github_pr_details_page.clone()
-          }),
-      )
-      .child(
-        Route::new()
-          .path("github/{owner}/{repo}/pull/{number}/{tab}")
-          .element(move |_w, _cx| github_pr_details_page.clone()),
       )
       .child(
         Route::new()
@@ -1172,9 +1125,8 @@ impl Render for WorkspaceView {
 mod tests {
   use super::{
     WorkspacePage, WorkspaceView, build_app_menus, page_has_file_search, page_supports_refresh,
-    refresh_label_for_workspace_page, should_activate_session_page,
-    should_run_scheduled_update_check, user_menu_page_for_workspace_page,
-    workspace_page_from_pathname,
+    should_activate_session_page, should_run_scheduled_update_check,
+    user_menu_page_for_workspace_page, workspace_page_from_pathname,
   };
   use crate::app_update::{
     AppUpdateState, AvailableAppUpdate, ReadyToInstallAppUpdate, UpdateArtifact,
@@ -1319,25 +1271,10 @@ mod tests {
   }
 
   #[test]
-  fn workspace_page_from_pathname_maps_github_pr_details() {
-    assert_eq!(
-      workspace_page_from_pathname("/github/owner/repo/pull/123"),
-      WorkspacePage::GithubPrDetails
-    );
-    assert_eq!(
-      workspace_page_from_pathname("/github/owner/repo/pull/123/changes"),
-      WorkspacePage::GithubPrDetails
-    );
-    assert_eq!(
-      workspace_page_from_pathname("/github/owner/repo/pull/123/checks"),
-      WorkspacePage::GithubPrDetails
-    );
-  }
-
-  #[test]
   fn page_has_file_search_matches_correct_paths() {
     assert!(page_has_file_search("/session"));
-    assert!(page_has_file_search("/github/owner/repo/pull/123/changes"));
+    // A pull request has no page of its own any more: the shell is the surface.
+    assert!(!page_has_file_search("/github/owner/repo/pull/123/changes"));
     assert!(!page_has_file_search("/github"));
     assert!(!page_has_file_search("/github/owner/repo"));
     assert!(!page_has_file_search("/github/owner/repo/code"));
@@ -1362,15 +1299,15 @@ mod tests {
       UserMenuPage::Session
     );
     assert_eq!(
-      user_menu_page_for_workspace_page(WorkspacePage::GithubPrDetails),
-      UserMenuPage::GithubPrDetails
+      user_menu_page_for_workspace_page(WorkspacePage::Billing),
+      UserMenuPage::Billing
     );
   }
 
   #[test]
   fn workspace_refresh_support_matches_github_surfaces() {
+    // Nothing refreshes a whole page any more: the shell refreshes its panels.
     assert!(!page_supports_refresh(WorkspacePage::Session));
-    assert!(page_supports_refresh(WorkspacePage::GithubPrDetails));
     assert!(!page_supports_refresh(WorkspacePage::Billing));
     assert!(!page_supports_refresh(WorkspacePage::GitConfig));
     assert!(!page_supports_refresh(WorkspacePage::Settings));
@@ -1382,7 +1319,7 @@ mod tests {
     // Startup on the shell, and every navigation back to it.
     assert!(should_activate_session_page(None, WorkspacePage::Session));
     assert!(should_activate_session_page(
-      Some(WorkspacePage::GithubPrDetails),
+      Some(WorkspacePage::Billing),
       WorkspacePage::Session
     ));
 
@@ -1403,18 +1340,6 @@ mod tests {
     assert_eq!(
       shortcuts::shortcut_keystroke(ShortcutId::RefreshCurrentPage),
       Keystroke::parse("cmd-r").expect("cmd-r keystroke")
-    );
-  }
-
-  #[test]
-  fn refresh_label_for_workspace_page_matches_page_context() {
-    assert_eq!(
-      refresh_label_for_workspace_page(WorkspacePage::GithubPrDetails),
-      Some("Refresh PR")
-    );
-    assert_eq!(
-      refresh_label_for_workspace_page(WorkspacePage::Billing),
-      None
     );
   }
 
@@ -1469,7 +1394,6 @@ impl Focusable for WorkspaceView {
   fn focus_handle(&self, cx: &App) -> FocusHandle {
     match WorkspaceRoute::global(cx).page {
       WorkspacePage::Session => self.session_page.read(cx).focus_handle(cx),
-      WorkspacePage::GithubPrDetails => self.github_pr_details_page.read(cx).focus_handle(cx),
       WorkspacePage::Billing => self.billing_page.read(cx).focus_handle(cx),
       WorkspacePage::GitConfig => self.git_config_page.read(cx).focus_handle(cx),
       WorkspacePage::Settings => self.settings_page.read(cx).focus_handle(cx),

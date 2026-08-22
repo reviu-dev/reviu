@@ -29,7 +29,6 @@ use crate::{
 pub const SHOW_COMMAND_PALETTE_SHORTCUT: &str = "cmd-k";
 const SHORTCUT_KEYMAP_GENERATION_CONTEXT_KEY: &str = "workspace_shortcuts_generation";
 pub const WORKSPACE_SHORTCUT_RECORDING_CONTEXT: &str = "WorkspaceShortcutRecording";
-pub const GITHUB_PR_CHANGES_TREE_CONTEXT: &str = "GithubPrChangesTree";
 
 pub const WORKSPACE_CONTEXT: &str = "Workspace";
 pub const WORKSPACE_SESSION_CONTEXT: &str = "Workspace WorkspaceSession";

@@ -109,13 +109,6 @@ where
   (items, file_lookup, selected_index, first_file_id)
 }
 
-pub(crate) fn build_path_tree_items<T, F>(files: &[Rc<T>], path_for: F) -> FileTreeBuildResult<T>
-where
-  F: Fn(&T) -> &str,
-{
-  build_path_tree_items_with_expansion(files, path_for, None)
-}
-
 /// Every folder on the way to one of these paths, so a tree can open just the
 /// branches that lead somewhere.
 pub(crate) fn expanded_folder_paths_for_changed_files<'a, I>(paths: I) -> HashSet<String>
@@ -192,7 +185,7 @@ mod tests {
   }
 
   fn build(paths: &[&str]) -> FileTreeBuildResult<TestFile> {
-    build_path_tree_items(&files(paths), |file| file.path.as_str())
+    build_path_tree_items_with_expansion(&files(paths), |file| file.path.as_str(), None)
   }
 
   #[test]

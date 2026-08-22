@@ -4,6 +4,14 @@ All notable changes to Reviu are documented here.
 
 ## 1.0.0
 
+### One Place To Review, Instead Of Two
+
+Reviewing a pull request used to mean leaving the workspace for a page of its own, with its own file tree, its own diff and its own comment cards. That page is gone. Everything it did happens in the workspace now: the branch's pull request in the right panel, its files opened in the centre, its comments in the diff and in the Review tab, its checks, its reviewers and its merge button in one collapsible block.
+
+What that changes for you: a link to a pull request (from the browser extension, the command palette, or the GitHub inbox) opens the panel when it is the pull request of the branch you have open. When it is not, it opens on github.com, and the extension button says which branch to check out to review it here. The workspace keeps its keyboard shortcuts, the pull request page's own ones are gone with it.
+
+The Files tab of the right panel now opens only the folders holding uncommitted work, instead of the whole repository at once.
+
 ### Surfaces That Say What They Are For
 
 The Pull request tab and the GitHub inbox used to be empty, or absent, for anyone without GitHub access. They now say what they would hold and how to get there: sign in, or start the Reviu Pro trial. Someone already signed in is asked to subscribe rather than to sign in again.

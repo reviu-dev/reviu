@@ -171,6 +171,8 @@ impl SessionPage {
           editor.set_diff_view_mode(diff_view, cx);
           editor.set_ignore_whitespace(hide_whitespace, cx);
         });
+        // A commit is history: a comment on it would have nowhere to go.
+        configure_review(&editor, ReviewDestination::None, cx);
         this.binary_preview =
           build_binary_preview(rel_path.as_path(), commit_file.binary_bytes.clone());
         this.editor = Some(editor);

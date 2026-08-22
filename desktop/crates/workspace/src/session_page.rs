@@ -20,7 +20,6 @@ use gpui_component::{
   ActiveTheme as _, Disableable as _, Sizable as _, h_flex, notification::Notification, v_flex,
 };
 
-use crate::active_local_repo::{ActiveLocalRepoStore, active_local_repo_snapshot};
 use crate::agent_chat_state::{
   agent_chat_state_dir, agent_path_to_repo_relative, prune_agent_chat_state_once,
 };
@@ -158,20 +157,6 @@ impl SessionPageHandle {
       cx.notify();
     });
   }
-
-  /// Navigate to the sessions shell and attach a code selection as agent context.
-  /// Entry point from a pull request: land in the repository, fetch, and merge
-  /// its base branch so the conflicts can be resolved here.
-  pub fn show_repository_and_merge_base(
-    repo_root: PathBuf,
-    base_branch_name: String,
-    cx: &mut App,
-  ) {
-    NavigationHistory::navigate("/session", cx);
-    Self::with_page(cx, move |page, window, cx| {
-      page.start_merge_base_branch(repo_root.clone(), base_branch_name.clone(), window, cx);
-    });
-  }
 }
 
 pub struct SessionPage {
@@ -244,7 +229,7 @@ mod render;
 mod repo;
 mod review_github;
 #[cfg(test)]
-mod test_support;
+pub(crate) mod test_support;
 
 impl SessionPage {
   pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
@@ -262,7 +247,6 @@ impl SessionPage {
           this
             .dock_panel
             .update(cx, |panel, cx| panel.set_branch_status(branch_status, cx));
-          this.publish_active_local_repo(cx);
           cx.notify();
         }
       },
@@ -419,6 +403,8 @@ impl SessionPage {
     page.refresh_branch(cx);
     page.watch_window_activation(window, cx);
     page.start_polling(cx);
+    // A link to a pull request has to find this shell, deep link included.
+    crate::pull_request_surface::PullRequestSurfaceHandle::register(cx);
     page
   }
 
@@ -526,37 +512,6 @@ impl SessionPage {
     self
       .repo_snapshot
       .update(cx, |snapshot, cx| snapshot.refresh(cx));
-  }
-
-  /// The pull request page reads this to know which repository is open here,
-  /// which is how it offers to switch branch or resolve conflicts.
-  fn publish_active_local_repo(&mut self, cx: &mut Context<Self>) {
-    let Some(repo_root) = self.selected_repo.clone() else {
-      ActiveLocalRepoStore::set(cx, None);
-      return;
-    };
-    let branch_name = self
-      .repo_snapshot
-      .read(cx)
-      .branch_status()
-      .map(|status| status.name.clone());
-    let has_uncommitted_changes = !self.dock_panel.read(cx).status_entries().is_empty();
-
-    let task = cx.spawn(async move |this, cx| {
-      let snapshot = cx
-        .background_spawn(async move {
-          active_local_repo_snapshot(&repo_root, branch_name, has_uncommitted_changes)
-        })
-        .await;
-      let _ = this.update(cx, |this, cx| {
-        // A repository switch mid-flight wins over what we just read.
-        if this.selected_repo.as_deref() != Some(snapshot.repo_root.as_path()) {
-          return;
-        }
-        ActiveLocalRepoStore::set(cx, Some(snapshot));
-      });
-    });
-    self._active_repo_task = Some(task);
   }
 
   /// What a crash or a git error should carry about where the user was.
@@ -675,6 +630,28 @@ impl SessionPage {
     cx: &mut Context<Self>,
   ) {
     self.open_dock_tab(DockPanelTab::Changes, window, cx);
+  }
+
+  pub(crate) fn window_handle(&self) -> AnyWindowHandle {
+    self.window_handle
+  }
+
+  /// Opens the dock on a tab without the toggle: something outside asked for
+  /// this surface, so closing it would be the opposite of the answer.
+  pub(crate) fn show_dock_tab(
+    &mut self,
+    tab: DockPanelTab,
+    window: &mut Window,
+    cx: &mut Context<Self>,
+  ) {
+    if !self.dock_open {
+      self.dock_slide_armed = true;
+    }
+    self.dock_open = true;
+    self
+      .dock_panel
+      .update(cx, |panel, cx| panel.open_tab(tab, window, cx));
+    cx.notify();
   }
 
   /// A closed dock opens on the tab; the active tab's shortcut closes it.
@@ -1173,59 +1150,6 @@ mod tests {
     });
   }
 
-  #[gpui::test]
-  async fn the_open_repository_is_published_for_the_pull_request_page(cx: &mut TestAppContext) {
-    let repo = TempRepo::init("session-page-active-repo");
-    commit_text_file(&repo.path, Path::new("README.md"), "v1\n", "initial");
-    git2::Repository::open(&repo.path)
-      .expect("open repo")
-      .remote("origin", "git@github.com:acme/widget.git")
-      .expect("add remote");
-    std::fs::write(repo.path.join("README.md"), "v2\n").expect("leave a change behind");
-
-    let (page, cx) = add_session_page_window(repo.path.clone(), cx);
-    let refresh = page.update(cx, |page, cx| {
-      page.dock_panel.update(cx, |panel, cx| {
-        panel.refresh(cx);
-        panel._refresh_task.take().expect("refresh task")
-      })
-    });
-    refresh.await;
-    page.update(cx, |page, cx| page.refresh_branch(cx));
-    await_branch_refresh(&page, cx).await;
-    let publish = page.update(cx, |page, _| page._active_repo_task.take());
-    if let Some(task) = publish {
-      task.await;
-    }
-    cx.run_until_parked();
-
-    let published = cx
-      .update(|_, cx| crate::active_local_repo::ActiveLocalRepoStore::get(cx))
-      .expect("the shell publishes the repository it has open");
-    assert_eq!(published.repo_root, repo.path);
-    assert_eq!(published.github_owner.as_deref(), Some("acme"));
-    assert_eq!(published.github_repo.as_deref(), Some("widget"));
-    assert!(published.current_branch.is_some());
-    assert!(
-      published.has_uncommitted_changes,
-      "the pull request page refuses to switch branch over uncommitted work"
-    );
-
-    // Forgetting the last repository leaves nothing published.
-    ConfigStore::persist_recent_repository(&repo.path);
-    page.update_in(cx, |page, window, cx| {
-      page
-        .forget_repository(repo.path.clone(), window, cx)
-        .expect("forget repository");
-    });
-    cx.run_until_parked();
-
-    assert_eq!(
-      cx.update(|_, cx| crate::active_local_repo::ActiveLocalRepoStore::get(cx)),
-      None
-    );
-  }
-
   #[gpui::test(iterations = 10)]
   async fn a_branch_switched_outside_reviu_shows_up_on_the_next_poll(cx: &mut TestAppContext) {
     let repo = TempRepo::init("session-poll-branch");
@@ -1289,5 +1213,87 @@ mod tests {
         .collect::<Vec<_>>();
       assert_eq!(paths, vec![PathBuf::from("README.md")]);
     });
+  }
+
+  fn surface_pull_request(number: u64) -> crate::dock_panel::BranchPrState {
+    crate::dock_panel::BranchPrState::Found(
+      crate::pull_request_dialog::GithubBranchContext {
+        owner: "acme".to_string(),
+        repo: "widget".to_string(),
+        branch: "feature".to_string(),
+      },
+      Box::new(
+        serde_json::from_value(serde_json::json!({
+          "number": number,
+          "title": "Add widgets",
+          "state": "open",
+          "draft": false,
+          "repository": { "owner": "acme", "repo": "widget" }
+        }))
+        .expect("build pull request"),
+      ),
+    )
+  }
+
+  #[gpui::test]
+  async fn a_link_to_the_open_branch_pull_request_shows_its_panel(cx: &mut TestAppContext) {
+    let repo = TempRepo::init("pull-request-surface-link");
+    commit_text_file(&repo.path, Path::new("README.md"), "v1\n", "initial");
+    let (page, cx) = add_session_page_window(repo.path.clone(), cx);
+    cx.run_until_parked();
+
+    page.update(cx, |page, cx| {
+      page.dock_panel.update(cx, |panel, cx| {
+        panel.set_branch_pull_request_state(surface_pull_request(42), cx);
+      });
+    });
+    cx.run_until_parked();
+
+    // Case does not decide whether a link is yours.
+    assert!(cx.update(
+      |_, cx| crate::pull_request_surface::PullRequestSurfaceHandle::show("ACME", "Widget", 42, cx)
+    ));
+    cx.run_until_parked();
+
+    page.read_with(cx, |page, cx| {
+      assert!(page.dock_open);
+      assert_eq!(
+        page.dock_panel.read(cx).active_tab(),
+        DockPanelTab::PullRequest
+      );
+    });
+  }
+
+  #[gpui::test]
+  async fn a_link_to_another_pull_request_has_no_home_here(cx: &mut TestAppContext) {
+    let repo = TempRepo::init("pull-request-surface-other-link");
+    commit_text_file(&repo.path, Path::new("README.md"), "v1\n", "initial");
+    let (page, cx) = add_session_page_window(repo.path.clone(), cx);
+    cx.run_until_parked();
+
+    page.update(cx, |page, cx| {
+      page.dock_panel.update(cx, |panel, cx| {
+        panel.set_branch_pull_request_state(surface_pull_request(42), cx);
+      });
+    });
+    cx.run_until_parked();
+
+    // Another number, another repository: neither is what this branch proposes.
+    assert!(!cx.update(
+      |_, cx| crate::pull_request_surface::PullRequestSurfaceHandle::show("acme", "widget", 7, cx)
+    ));
+    assert!(!cx.update(
+      |_, cx| crate::pull_request_surface::PullRequestSurfaceHandle::show("acme", "other", 42, cx)
+    ));
+
+    // And a branch that lost its pull request stops claiming links.
+    page.update(cx, |page, cx| {
+      page.dock_panel.update(cx, |panel, cx| {
+        panel.set_branch_pull_request_state(crate::dock_panel::BranchPrState::NoRemote, cx);
+      });
+    });
+    assert!(!cx.update(
+      |_, cx| crate::pull_request_surface::PullRequestSurfaceHandle::show("acme", "widget", 42, cx)
+    ));
   }
 }
