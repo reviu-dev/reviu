@@ -10,6 +10,15 @@ use crate::review_list::{
   sort_review_panel_comments,
 };
 
+/// The node id of the viewer's unsubmitted review. Nothing else on the pull
+/// request names it, so it is read off any of its comments.
+pub(crate) fn pending_review_id(comments: &[GithubPullRequestReviewComment]) -> Option<String> {
+  comments
+    .iter()
+    .filter(|comment| comment.is_pending)
+    .find_map(|comment| comment.pull_request_review_node_id.clone())
+}
+
 pub(crate) fn pending_review_comment_node_id(
   comments: &[GithubPullRequestReviewComment],
   id: u64,
@@ -176,6 +185,20 @@ mod tests {
     assert_eq!(rows[0].line_label, "L10-L12");
     // The row opens on the last line of the range, the one GitHub anchors to.
     assert_eq!(rows[0].line, 12);
+  }
+
+  #[test]
+  fn the_review_is_named_by_any_of_its_comments() {
+    let mut published = comment(2, "src/b.rs", Some(4), "already on GitHub");
+    published.is_pending = false;
+    published.pull_request_review_node_id = Some("other-review".to_string());
+
+    assert_eq!(
+      pending_review_id(&[published.clone(), comment(1, "src/a.rs", Some(9), "draft")]),
+      Some("review-node".to_string())
+    );
+    // Nothing pending: the decision would go out on its own.
+    assert_eq!(pending_review_id(&[published]), None);
   }
 
   #[test]

@@ -12,6 +12,10 @@ Clicking one of those rows opens the file as the pull request proposes it, on th
 
 Ticking comments stays what it was, an agent thing: GitHub submits a review whole, so its section has no checkboxes rather than promising a choice the API cannot honour. Clicking a comment row also lands on the right line now, instead of one line above it.
 
+Finishing the review happens from that section: Submit review asks for the decision (comment, approve, request changes) and its message, tells you how many comments go out with it, and refuses an empty message where GitHub would. Approving a pull request you have nothing to say about works too, from a Review button next to Merge. Reviu will not let you approve your own pull request, which GitHub would refuse anyway.
+
+That block of the Pull request tab is now always there, even for a pull request with no CI and no reviewers: it holds what you can do to the pull request, so a small project no longer loses its merge button for lack of a test suite.
+
 ### The Pull Request You Are On, In The Right Panel
 
 Checking out a branch that has a pull request now fills the Pull request tab with the whole picture, without leaving the workspace: the title and number, who opened it, the branches it goes between, and the list of files it proposes. Clicking a file opens the diff of the pull request itself, base against head, so you read what the branch adds rather than what your working tree happens to hold.

@@ -348,6 +348,11 @@ impl SessionPage {
         DockPanelEvent::DiscardReview => {
           this.confirm_discard_agent_review(window, cx);
         }
+        DockPanelEvent::SubmitPullRequestReview => {
+          this.dock_panel.update(cx, |panel, cx| {
+            panel.submit_pull_request_review(window, cx);
+          });
+        }
       },
     )
     .detach();

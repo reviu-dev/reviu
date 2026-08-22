@@ -24,14 +24,18 @@ use terminal::TerminalView;
 use crate::changes_list::{ChangesList, ChangesListEvent, status_color};
 use crate::file_view::{file_dir_label, file_name_label, render_file_name_with_status};
 use crate::history_list::{HistoryList, HistoryListEvent, history_change_kind_to_repo_status};
-use crate::pull_request_review_comments::{pending_review_comment_node_id, pending_review_rows};
+use crate::pull_request_review_comments::{
+  pending_review_comment_node_id, pending_review_id, pending_review_rows,
+};
 use crate::repo_state::{PaletteCommand, RepoState, push_flags, should_publish_branch};
 use crate::review_list::{ReviewList, ReviewListEvent, ReviewSection};
+use crate::review_submit_dialog::{ReviewSubmissionTarget, open_submit_review_dialog};
 
 const DOCK_PANEL_TERMINAL_DEBUG_SELECTOR: &str = "dock-panel-terminal";
 pub(crate) const DOCK_PANEL_HISTORY_DEBUG_SELECTOR: &str = "dock-panel-history";
 pub(crate) const DOCK_PANEL_PR_CHECKS_DEBUG_SELECTOR: &str = "dock-panel-pr-checks";
 pub(crate) const DOCK_PANEL_PR_MERGE_DEBUG_SELECTOR: &str = "dock-panel-pr-merge";
+pub(crate) const DOCK_PANEL_PR_REVIEW_DEBUG_SELECTOR: &str = "dock-panel-pr-review";
 pub(crate) const DOCK_PANEL_REVIEW_DEBUG_SELECTOR: &str = "dock-panel-review";
 const DOCK_PANEL_COMMIT_DEBUG_SELECTOR: &str = "dock-panel-commit";
 const DOCK_PANEL_COMMIT_MENU_DEBUG_SELECTOR: &str = "dock-panel-commit-menu";
@@ -113,6 +117,9 @@ pub enum DockPanelEvent {
   },
   SendReview,
   DiscardReview,
+  /// Finishing a pull request review needs a window the panel does not have
+  /// where the request comes from.
+  SubmitPullRequestReview,
 }
 
 impl gpui::EventEmitter<DockPanelEvent> for DockPanel {}
@@ -439,6 +446,8 @@ pub struct DockPanel {
   /// What the viewer wrote on this pull request and has not submitted yet.
   /// GitHub owns them, so they are read back rather than stored here.
   pr_review_comments: Vec<GithubPullRequestReviewComment>,
+  /// Who opened it: an author reviews their own work with words only.
+  pr_author_login: Option<String>,
   pr_reviewers: Vec<ReviewerRow>,
   pr_checks_loading: bool,
   pr_merge_readiness: Option<GithubPullRequestMergeReadiness>,
@@ -537,6 +546,7 @@ impl DockPanel {
         ReviewListEvent::SendComment { id } => {
           cx.emit(DockPanelEvent::SendReviewComment { id: *id });
         }
+        ReviewListEvent::SubmitReview => cx.emit(DockPanelEvent::SubmitPullRequestReview),
         ReviewListEvent::SendReview => cx.emit(DockPanelEvent::SendReview),
         ReviewListEvent::DiscardReview => cx.emit(DockPanelEvent::DiscardReview),
       },
@@ -583,6 +593,7 @@ impl DockPanel {
       pr_selected_file: None,
       pr_checks: None,
       pr_review_comments: Vec::new(),
+      pr_author_login: None,
       pr_reviewers: Vec::new(),
       pr_checks_loading: false,
       pr_merge_readiness: None,
@@ -773,17 +784,24 @@ impl DockPanel {
             &reviews,
             &details.author.login,
           );
-          anyhow::Ok((range, files, reviewers, review_comments))
+          anyhow::Ok((
+            range,
+            files,
+            reviewers,
+            review_comments,
+            details.author.login.clone(),
+          ))
         })
         .await;
 
       let _ = this.update(cx, |this, cx| {
         this.pr_files_loading = false;
         match loaded {
-          Ok((range, files, reviewers, review_comments)) => {
+          Ok((range, files, reviewers, review_comments, author_login)) => {
             this.pr_range = Some(range);
             this.pr_files = files;
             this.pr_reviewers = reviewers;
+            this.pr_author_login = Some(author_login);
             this.set_pull_request_review_comments(review_comments, cx);
           }
           Err(error) => {
@@ -800,6 +818,7 @@ impl DockPanel {
   /// another pull request, and stale checks read as this one's.
   fn reset_pull_request_details(&mut self, cx: &mut Context<Self>) {
     self.set_pull_request_review_comments(Vec::new(), cx);
+    self.pr_author_login = None;
     self.pr_range = None;
     self.pr_files = Vec::new();
     self.pr_files_error = None;
@@ -877,6 +896,41 @@ impl DockPanel {
       });
     });
     self._pr_review_comments_task = Some(task);
+  }
+
+  /// The decision and its message are asked for in a dialog: three choices and
+  /// a paragraph do not fit a 350px column, and this is not a gesture to make
+  /// halfway.
+  pub(crate) fn submit_pull_request_review(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    let BranchPrState::Found(context, pull_request) = &self.branch_pr else {
+      return;
+    };
+    let viewer_login = AuthStateStore::get(cx).github_login();
+    let viewer_is_author = match (viewer_login.as_deref(), self.pr_author_login.as_deref()) {
+      (Some(viewer), Some(author)) => viewer.eq_ignore_ascii_case(author),
+      _ => false,
+    };
+    let target = ReviewSubmissionTarget {
+      owner: context.owner.clone(),
+      repo: context.repo.clone(),
+      number: pull_request.number,
+      pending_review_id: pending_review_id(&self.pr_review_comments),
+      pending_comment_count: self
+        .pr_review_comments
+        .iter()
+        .filter(|comment| comment.is_pending)
+        .count(),
+      viewer_is_author,
+    };
+    let api = WorkspaceApi::global(cx).api.clone();
+    let panel = cx.entity().downgrade();
+    let on_submitted: crate::review_submit_dialog::ReviewSubmittedHandler =
+      std::rc::Rc::new(move |cx| {
+        let _ = panel.update(cx, |panel, cx| panel.refresh_branch_pull_request(cx));
+      });
+    let window_handle = self.window_handle;
+
+    open_submit_review_dialog(api, window_handle, target, on_submitted, window, cx);
   }
 
   /// A comment of a review nobody has submitted: dropping it is between the
@@ -1712,17 +1766,14 @@ impl DockPanel {
   }
 
   /// One line for the whole CI, expandable into one line per check. Collapsed by
-  /// default: the file list below is what you came for.
+  /// default: the file list below is what you came for. Always there even with
+  /// nothing to report, because it carries what can be done to the pull request.
   fn render_pr_checks(&self, cx: &mut Context<Self>) -> AnyElement {
     let theme = cx.theme().clone();
     let checks = self
       .pr_checks
       .as_ref()
       .filter(|checks| checks.total_checks > 0 || !checks.missing_required_contexts.is_empty());
-    if checks.is_none() && self.pr_reviewers.is_empty() && !self.pr_checks_loading {
-      return div().into_any_element();
-    }
-
     let expanded = self.pr_details_expanded;
     let mut rows = checks.map(check_rows).unwrap_or_default();
     rows.sort_by_key(check_state_sort_key);
@@ -1770,6 +1821,8 @@ impl DockPanel {
                 .text_color(theme.muted_foreground)
                 .child(if self.pr_checks_loading {
                   "Loading checks...".to_string()
+                } else if self.pr_reviewers.is_empty() {
+                  "No checks or reviewers".to_string()
                 } else {
                   reviewers_summary_title(&self.pr_reviewers)
                 }),
@@ -1820,7 +1873,7 @@ impl DockPanel {
       );
     }
 
-    block = block.child(self.render_pr_merge(cx));
+    block = block.child(self.render_pr_actions(cx));
 
     block.into_any_element()
   }
@@ -1828,7 +1881,9 @@ impl DockPanel {
   /// Merging from a narrow column: the button names the method it will use, and
   /// a confirmation repeats it, because the target is small and the act is not
   /// undoable.
-  fn render_pr_merge(&self, cx: &mut Context<Self>) -> AnyElement {
+  /// What can be done to the pull request from here: say something about it,
+  /// and land it.
+  fn render_pr_actions(&self, cx: &mut Context<Self>) -> AnyElement {
     let theme = cx.theme().clone();
     let availability = merge_availability(self.pr_merge_readiness.as_ref());
     let BranchPrState::Found(context, pull_request) = &self.branch_pr else {
@@ -1875,6 +1930,16 @@ impl DockPanel {
           .text_color(theme.muted_foreground)
           .truncate()
           .child(message),
+      )
+      .child(
+        Button::new("dock-panel-pr-review")
+          .debug_selector(|| DOCK_PANEL_PR_REVIEW_DEBUG_SELECTOR.to_string())
+          .outline()
+          .small()
+          .compact()
+          .label("Review")
+          .tooltip("Approve, comment or request changes")
+          .on_click(cx.listener(|this, _, window, cx| this.submit_pull_request_review(window, cx))),
       )
       .child(
         Button::new("dock-panel-pr-merge")
@@ -2617,12 +2682,20 @@ mod tests {
   }
 
   #[gpui::test]
-  async fn a_pull_request_without_checks_or_reviewers_shows_no_block(cx: &mut TestAppContext) {
+  async fn a_pull_request_without_checks_or_reviewers_still_offers_its_actions(
+    cx: &mut TestAppContext,
+  ) {
     let (_panel, cx) = pull_request_panel(cx, Vec::new());
 
+    // Nothing to report is not nothing to do: reviewing and merging live here.
     assert!(
       cx.debug_bounds(DOCK_PANEL_PR_CHECKS_DEBUG_SELECTOR)
-        .is_none()
+        .is_some()
+    );
+    assert!(
+      cx.debug_bounds(DOCK_PANEL_PR_MERGE_DEBUG_SELECTOR)
+        .is_none(),
+      "the actions stay behind the closed block"
     );
   }
 
@@ -2728,6 +2801,66 @@ mod tests {
           .is_empty()
       );
     });
+  }
+
+  #[gpui::test]
+  async fn finishing_a_review_asks_for_the_decision(cx: &mut TestAppContext) {
+    let (panel, cx) = pull_request_panel(cx, Vec::new());
+    panel.update(cx, |panel, cx| {
+      panel.set_pull_request_review_comments(
+        vec![
+          crate::pull_request_review_comments::pending_comment_fixture(
+            1,
+            "src/main.rs",
+            Some(12),
+            "rename this",
+          ),
+        ],
+        cx,
+      );
+    });
+    cx.run_until_parked();
+
+    let asked = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let observer = {
+      let asked = asked.clone();
+      cx.update(|_, cx| {
+        cx.subscribe(&panel, move |_, event: &DockPanelEvent, _| {
+          if matches!(event, DockPanelEvent::SubmitPullRequestReview) {
+            asked.store(true, std::sync::atomic::Ordering::SeqCst);
+          }
+        })
+      })
+    };
+
+    let review_list = panel.read_with(cx, |panel, _| panel.review_list.clone());
+    review_list.update(cx, |_, cx| cx.emit(ReviewListEvent::SubmitReview));
+    cx.run_until_parked();
+    drop(observer);
+
+    // Three choices and a paragraph: the panel column has room for neither, so
+    // the host is asked for a dialog.
+    assert!(asked.load(std::sync::atomic::Ordering::SeqCst));
+  }
+
+  #[gpui::test]
+  async fn approving_needs_no_pending_comment(cx: &mut TestAppContext) {
+    let (panel, cx) = pull_request_panel(cx, Vec::new());
+    panel.update(cx, |panel, cx| {
+      panel.pr_details_expanded = true;
+      cx.notify();
+    });
+    cx.run_until_parked();
+
+    // Nothing pending, so the Review panel shows no section: the pull request
+    // block is where an approval starts.
+    let button = cx
+      .debug_bounds(DOCK_PANEL_PR_REVIEW_DEBUG_SELECTOR)
+      .expect("review button bounds");
+    cx.simulate_click(button.center(), gpui::Modifiers::default());
+    cx.run_until_parked();
+
+    assert!(cx.update(|window, cx| window.has_active_dialog(cx)));
   }
 
   #[gpui::test]

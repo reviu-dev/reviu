@@ -24,6 +24,7 @@ use crate::changes_list::split_path_label;
 pub(crate) const REVIEW_LIST_SEND_DEBUG_SELECTOR: &str = "review-list-send";
 pub(crate) const REVIEW_LIST_DISCARD_DEBUG_SELECTOR: &str = "review-list-discard";
 pub(crate) const REVIEW_LIST_SELECT_ALL_DEBUG_SELECTOR: &str = "review-list-select-all";
+pub(crate) const REVIEW_LIST_SUBMIT_DEBUG_SELECTOR: &str = "review-list-submit";
 
 /// Longest excerpt shown on a row before it is cut.
 const REVIEW_EXCERPT_MAX_CHARS: usize = 120;
@@ -99,6 +100,9 @@ pub(crate) enum ReviewListEvent {
   },
   SendReview,
   DiscardReview,
+  /// Finish the pull request review: the decision and its message are asked for
+  /// where the whole batch is visible.
+  SubmitReview,
 }
 
 /// What a row needs, and nothing about where the comment came from: a pull
@@ -620,6 +624,30 @@ impl ReviewList {
       .into_any_element()
   }
 
+  fn render_pull_request_actions(&self, cx: &mut Context<Self>) -> AnyElement {
+    let theme = cx.theme().clone();
+
+    h_flex()
+      .w_full()
+      .items_center()
+      .justify_end()
+      .gap_2()
+      .p_2()
+      .border_t_1()
+      .border_color(theme.border)
+      .child(
+        Button::new("review-list-submit")
+          .debug_selector(|| REVIEW_LIST_SUBMIT_DEBUG_SELECTOR.to_string())
+          .primary()
+          .small()
+          .compact()
+          .label("Submit review")
+          .tooltip("Send these comments to GitHub with a decision")
+          .on_click(cx.listener(|_, _, _, cx| cx.emit(ReviewListEvent::SubmitReview))),
+      )
+      .into_any_element()
+  }
+
   fn render_section_actions(
     &self,
     section: ReviewSection,
@@ -627,7 +655,7 @@ impl ReviewList {
   ) -> Option<AnyElement> {
     match section {
       ReviewSection::Agent => Some(self.render_agent_actions(cx)),
-      ReviewSection::PullRequest => None,
+      ReviewSection::PullRequest => Some(self.render_pull_request_actions(cx)),
     }
   }
 
