@@ -4,6 +4,16 @@ All notable changes to Reviu are documented here.
 
 ## 1.0.0
 
+### Surfaces That Say What They Are For
+
+The Pull request tab and the GitHub inbox used to be empty, or absent, for anyone without GitHub access. They now say what they would hold and how to get there: sign in, or start the Reviu Pro trial. Someone already signed in is asked to subscribe rather than to sign in again.
+
+The Pull request icon also stays in the rail whatever the repository is: a rail whose icons come and go with your remote is a rail you cannot learn.
+
+### A Comment You Wrote Does Not Get Lost
+
+Writing on a pull request file puts the comment in the Review tab, which is not the tab you were working in. The Pull request panel now says so above the file list ("3 comments waiting in Review") and takes you there in one click. It disappears when nothing is waiting.
+
 ### One Review Panel, Two Destinations
 
 The Review panel now says where each comment is going. Comments written on your working tree sit under "To the agent" and behave as before. Comments belonging to a pull request review you have not submitted yet sit under "To this pull request", read back from GitHub rather than kept locally, so a review you started in the browser is there when you come back to the app.

@@ -92,6 +92,7 @@ pub mod navigation;
 mod palette_actions;
 mod palette_branches;
 mod pricing_copy;
+mod pro_promise;
 mod pro_teaser;
 mod pull_request_checks;
 mod pull_request_dialog;

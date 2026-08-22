@@ -64,6 +64,25 @@ impl AuthStateStore {
   }
 }
 
+/// Signed in, but nothing that grants Pro: the state every promotion surface
+/// has to handle.
+#[cfg(test)]
+pub(crate) fn signed_in_without_subscription() -> AuthState {
+  AuthState::Authenticated(Box::new(crate::api::User {
+    id: "user_123".to_string(),
+    name: "Joris".to_string(),
+    email: "joris@example.com".to_string(),
+    email_verified: true,
+    image: None,
+    github_login: Some("joris-gallot".to_string()),
+    role: crate::api::UserRole::User,
+    subscription: crate::api::UserSubscription {
+      portal_url: None,
+      active_subscription: None,
+    },
+  }))
+}
+
 impl Default for AuthStateStore {
   fn default() -> Self {
     Self {

@@ -27,6 +27,7 @@ use terminal::TerminalView;
 use crate::changes_list::{ChangesList, ChangesListEvent, status_color};
 use crate::file_view::{file_dir_label, file_name_label, render_file_name_with_status};
 use crate::history_list::{HistoryList, HistoryListEvent, history_change_kind_to_repo_status};
+use crate::pro_promise::{ProPromiseSurface, render_pro_promise};
 use crate::pull_request_review_comments::{
   pending_review_comment_node_id, pending_review_id, pending_review_rows, review_comment_side_name,
 };
@@ -39,6 +40,8 @@ pub(crate) const DOCK_PANEL_HISTORY_DEBUG_SELECTOR: &str = "dock-panel-history";
 pub(crate) const DOCK_PANEL_PR_CHECKS_DEBUG_SELECTOR: &str = "dock-panel-pr-checks";
 pub(crate) const DOCK_PANEL_PR_MERGE_DEBUG_SELECTOR: &str = "dock-panel-pr-merge";
 pub(crate) const DOCK_PANEL_PR_REVIEW_DEBUG_SELECTOR: &str = "dock-panel-pr-review";
+pub(crate) const DOCK_PANEL_PR_PENDING_COMMENTS_DEBUG_SELECTOR: &str =
+  "dock-panel-pr-pending-comments";
 pub(crate) const DOCK_PANEL_REVIEW_DEBUG_SELECTOR: &str = "dock-panel-review";
 const DOCK_PANEL_COMMIT_DEBUG_SELECTOR: &str = "dock-panel-commit";
 const DOCK_PANEL_COMMIT_MENU_DEBUG_SELECTOR: &str = "dock-panel-commit-menu";
@@ -60,6 +63,7 @@ use crate::github_navigation::{open_compare_target, open_pr_target};
 use crate::github_shared::{pull_request_status_color, pull_request_status_label};
 use crate::pull_request_checks::{
   CheckRow, check_rows, check_state_sort_key, checks_summary_subtitle, checks_summary_title,
+  singular_or_plural,
 };
 use crate::pull_request_dialog::{
   GithubBranchContext, PullRequestCreatedHandler, open_create_pull_request_dialog,
@@ -892,6 +896,8 @@ impl DockPanel {
       list.set_comments(ReviewSection::PullRequest, rows, cx);
     });
     cx.emit(DockPanelEvent::PullRequestReviewCommentsChanged);
+    // The panel counts them itself, above the file list.
+    cx.notify();
   }
 
   #[cfg(test)]
@@ -1823,10 +1829,18 @@ impl DockPanel {
   fn render_pr_tab(&self, cx: &mut Context<Self>) -> AnyElement {
     let theme = cx.theme().clone();
     match &self.branch_pr {
-      BranchPrState::NoAccess => self.render_pr_message(
-        "Sign in with GitHub to link this branch to a pull request",
+      // Nothing to show, so this is where Reviu says what it could show.
+      BranchPrState::NoAccess => render_pro_promise(
+        ProPromiseSurface::PullRequestPanel,
+        AuthStateStore::github_access_state(cx),
         cx,
-      ),
+      )
+      .unwrap_or_else(|| {
+        self.render_pr_message(
+          "Sign in with GitHub to link this branch to a pull request",
+          cx,
+        )
+      }),
       BranchPrState::NoRemote => self.render_pr_message("No GitHub remote on this repository", cx),
       BranchPrState::Loading => self.render_pr_message("Loading pull request...", cx),
       BranchPrState::Missing(context) if self.branch_needs_publishing() => {
@@ -1925,10 +1939,66 @@ impl DockPanel {
         .size_full()
         .min_h_0()
         .child(self.render_pr_identity(context, pull_request, cx))
+        .children(self.render_pr_pending_comments(cx))
         .child(self.render_pr_checks(cx))
         .child(self.render_pr_files(cx))
         .into_any_element(),
     }
+  }
+
+  /// A comment written here lands in the Review tab, which is another tab: say
+  /// so, and take them there.
+  fn render_pr_pending_comments(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
+    let theme = cx.theme().clone();
+    let count = self
+      .pr_review_comments
+      .iter()
+      .filter(|comment| comment.is_pending)
+      .count();
+    if count == 0 {
+      return None;
+    }
+
+    Some(
+      h_flex()
+        .id("dock-panel-pr-pending-comments")
+        .debug_selector(|| DOCK_PANEL_PR_PENDING_COMMENTS_DEBUG_SELECTOR.to_string())
+        .w_full()
+        .flex_shrink_0()
+        .items_center()
+        .gap_2()
+        .px_3()
+        .py_1()
+        .border_b_1()
+        .border_color(theme.border)
+        .hover(|this| this.bg(theme.accent))
+        .cursor_pointer()
+        .on_click(cx.listener(|this, _, window, cx| {
+          this.open_tab(DockPanelTab::Review, window, cx);
+        }))
+        .child(
+          Icon::new(UiIconName::MessageCircle)
+            .size_3()
+            .text_color(theme.muted_foreground),
+        )
+        .child(
+          div()
+            .flex_1()
+            .min_w_0()
+            .text_xs()
+            .text_color(theme.foreground)
+            .child(format!(
+              "{count} {} waiting in Review",
+              singular_or_plural(count as u64, "comment", "comments")
+            )),
+        )
+        .child(
+          Icon::new(IconName::ChevronRight)
+            .size_3()
+            .text_color(theme.muted_foreground),
+        )
+        .into_any_element(),
+    )
   }
 
   /// Pinned above the file list: what you are looking at stays visible while you
@@ -3043,6 +3113,68 @@ mod tests {
           .comments(ReviewSection::Agent)
           .is_empty()
       );
+    });
+  }
+
+  #[gpui::test]
+  async fn a_panel_with_no_github_says_what_it_would_be_for(cx: &mut TestAppContext) {
+    let (panel, cx) = add_dock_panel_window(Some(PathBuf::from("/repo")), cx);
+    panel.update(cx, |panel, cx| {
+      panel.active_tab = DockPanelTab::PullRequest;
+      panel.branch_pr = BranchPrState::NoAccess;
+      cx.notify();
+    });
+    cx.run_until_parked();
+
+    // Signed out: the invitation is to sign in.
+    assert!(
+      cx.debug_bounds("pro-promise-pull_request_panel").is_some(),
+      "an empty panel is a wasted surface"
+    );
+
+    // Signed in without a subscription is a different pitch, same surface.
+    cx.update(|_, cx| {
+      AuthStateStore::set(cx, crate::auth_state::signed_in_without_subscription());
+    });
+    panel.update(cx, |_, cx| cx.notify());
+    cx.run_until_parked();
+
+    assert!(cx.debug_bounds("pro-promise-pull_request_panel").is_some());
+  }
+
+  #[gpui::test]
+  async fn comments_written_here_say_where_they_went(cx: &mut TestAppContext) {
+    let (panel, cx) = pull_request_panel(cx, Vec::new());
+    assert!(
+      cx.debug_bounds(DOCK_PANEL_PR_PENDING_COMMENTS_DEBUG_SELECTOR)
+        .is_none(),
+      "nothing waiting, nothing to say"
+    );
+
+    panel.update(cx, |panel, cx| {
+      panel.set_pull_request_review_comments(
+        vec![
+          crate::pull_request_review_comments::pending_comment_fixture(
+            1,
+            "src/main.rs",
+            Some(12),
+            "rename this",
+          ),
+        ],
+        cx,
+      );
+    });
+    cx.run_until_parked();
+
+    let row = cx
+      .debug_bounds(DOCK_PANEL_PR_PENDING_COMMENTS_DEBUG_SELECTOR)
+      .expect("pending comments row");
+    cx.simulate_click(row.center(), gpui::Modifiers::default());
+    cx.run_until_parked();
+
+    // The comment landed in another tab: the row is the way there.
+    panel.read_with(cx, |panel, _| {
+      assert_eq!(panel.active_tab(), DockPanelTab::Review);
     });
   }
 

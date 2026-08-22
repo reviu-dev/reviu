@@ -2,8 +2,10 @@
 
 use super::*;
 use crate::annotations::AnnotationKind;
+use crate::auth_state::GithubAccessState;
 use crate::diff_toolbar::{DiffToolbar, NavigationControl, SplitControl, ToggleControl};
 use crate::hunk_actions::render_hunk_actions;
+use crate::pro_promise::{ProPromiseSurface, render_pro_promise};
 use gpui_component::Selectable as _;
 
 impl SessionPage {
@@ -89,8 +91,13 @@ impl SessionPage {
   pub(super) fn render_sessions_sidebar(&mut self, cx: &mut Context<Self>) -> AnyElement {
     let theme = cx.theme().clone();
 
-    let github_section =
-      AuthStateStore::has_github_access(cx).then(|| self.inbox.clone().into_any_element());
+    // Without GitHub the inbox has nothing to list, but the column still says
+    // what it would be for.
+    let github_access = AuthStateStore::github_access_state(cx);
+    let github_section = match github_access {
+      GithubAccessState::Available => Some(self.inbox.clone().into_any_element()),
+      state => render_pro_promise(ProPromiseSurface::Inbox, state, cx),
+    };
 
     let repo_name = self
       .selected_repo
@@ -3066,6 +3073,27 @@ mod tests {
       Some(&dock_handle),
       "an empty changes tab must not send the focus to an unmounted list"
     );
+  }
+
+  #[gpui::test]
+  async fn the_pull_request_tab_keeps_its_place_without_github(cx: &mut TestAppContext) {
+    let repo = TempRepo::init("session-dock-rail-no-github");
+    commit_text_file(&repo.path, Path::new("README.md"), "v1\n", "initial");
+    let (page, cx) = add_session_page_window(repo.path.clone(), cx);
+    cx.run_until_parked();
+
+    page.update_in(cx, |page, window, cx| {
+      page.open_changes_action(&crate::OpenGitChangesSidebar, window, cx)
+    });
+    page.update(cx, |page, cx| {
+      page.dock_slide_armed = false;
+      cx.notify();
+    });
+    cx.run_until_parked();
+
+    // Icons that come and go with the remote make the rail unlearnable, and the
+    // panel behind this one is a promotion surface.
+    assert!(cx.debug_bounds("dock-rail-pull-request").is_some());
   }
 
   #[gpui::test]

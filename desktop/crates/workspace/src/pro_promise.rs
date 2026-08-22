@@ -1,0 +1,181 @@
+//! The one place that says what Reviu Pro brings. Surfaces that cannot do their
+//! job without it show this instead of vanishing.
+
+use gpui::{AnyElement, App, SharedString, div, prelude::*};
+use gpui_component::{ActiveTheme as _, Icon, IconName, Sizable as _, v_flex};
+use ui::{Button, ButtonVariants as _, UiIconName};
+
+use crate::analytics;
+use crate::auth_state::GithubAccessState;
+use crate::navigation::NavigationHistory;
+
+/// Where the promise is being made, which is what tells us later which surface
+/// converts.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum ProPromiseSurface {
+  PullRequestPanel,
+  Inbox,
+}
+
+impl ProPromiseSurface {
+  fn source(self) -> &'static str {
+    match self {
+      Self::PullRequestPanel => "pull_request_panel",
+      Self::Inbox => "inbox",
+    }
+  }
+}
+
+/// What is missing, and what closes the gap.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum ProPromiseStep {
+  SignIn,
+  Subscribe,
+}
+
+pub(crate) struct ProPromiseCopy {
+  pub headline: &'static str,
+  pub body: &'static str,
+  pub action: &'static str,
+  pub step: ProPromiseStep,
+}
+
+/// Nothing to promise once GitHub works: the surface does its own job then.
+pub(crate) fn pro_promise_copy(state: GithubAccessState) -> Option<ProPromiseCopy> {
+  match state {
+    GithubAccessState::Available => None,
+    GithubAccessState::NeedsSignIn => Some(ProPromiseCopy {
+      headline: "Review pull requests in Reviu",
+      body: "Sign in with GitHub to bring pull requests, reviews and notifications into the app.",
+      action: "Sign in with GitHub",
+      step: ProPromiseStep::SignIn,
+    }),
+    GithubAccessState::NeedsSubscription => Some(ProPromiseCopy {
+      headline: "Review pull requests in Reviu",
+      body: "Reviu Pro brings GitHub pull requests, reviews and notifications into the app. 14-day free trial.",
+      action: "See Reviu Pro",
+      step: ProPromiseStep::Subscribe,
+    }),
+  }
+}
+
+fn take_step(step: ProPromiseStep, surface: ProPromiseSurface, cx: &mut App) {
+  analytics::track_with(
+    cx,
+    "pro_teaser_clicked",
+    Some(serde_json::json!({ "source": surface.source() })),
+  );
+  match step {
+    ProPromiseStep::SignIn => crate::auth_flow::start_github_sign_in(cx, surface.source()),
+    ProPromiseStep::Subscribe => NavigationHistory::navigate("/billing", cx),
+  }
+}
+
+pub(crate) fn render_pro_promise(
+  surface: ProPromiseSurface,
+  state: GithubAccessState,
+  cx: &App,
+) -> Option<AnyElement> {
+  let copy = pro_promise_copy(state)?;
+  let theme = cx.theme().clone();
+  let step = copy.step;
+  let button_id: SharedString = format!("pro-promise-{}", surface.source()).into();
+  let button = Button::new(button_id)
+    .debug_selector(move || format!("pro-promise-{}", surface.source()))
+    .small()
+    .when_else(
+      surface == ProPromiseSurface::PullRequestPanel,
+      |this| this.primary(),
+      |this| this.outline().compact(),
+    )
+    .when(step == ProPromiseStep::SignIn, |this| {
+      this.icon(IconName::Github)
+    })
+    .label(copy.action)
+    .on_click(move |_, _, cx| take_step(step, surface, cx));
+
+  let element = match surface {
+    // The panel is empty behind it: the promise takes the room.
+    ProPromiseSurface::PullRequestPanel => v_flex()
+      .flex_1()
+      .items_center()
+      .justify_center()
+      .gap_2()
+      .px_4()
+      .child(
+        Icon::new(UiIconName::GitPullRequestArrow)
+          .size_4()
+          .text_color(theme.muted_foreground),
+      )
+      .child(
+        div()
+          .text_sm()
+          .text_center()
+          .text_color(theme.foreground)
+          .child(copy.headline),
+      )
+      .child(
+        div()
+          .text_xs()
+          .text_center()
+          .text_color(theme.muted_foreground)
+          .child(copy.body),
+      )
+      .child(div().mt_1().child(button))
+      .into_any_element(),
+    // A card in a column of sessions: it says its piece without taking over.
+    ProPromiseSurface::Inbox => v_flex()
+      .w_full()
+      .gap_1()
+      .p_2()
+      .rounded_md()
+      .border_1()
+      .border_color(theme.border)
+      .child(
+        div()
+          .text_xs()
+          .text_color(theme.foreground)
+          .child(copy.headline),
+      )
+      .child(
+        div()
+          .text_xs()
+          .text_color(theme.muted_foreground)
+          .child(copy.body),
+      )
+      .child(div().mt_1().child(button))
+      .into_any_element(),
+  };
+  Some(element)
+}
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+
+  #[test]
+  fn a_working_github_has_nothing_to_promise() {
+    assert!(pro_promise_copy(GithubAccessState::Available).is_none());
+  }
+
+  #[test]
+  fn each_missing_piece_asks_for_itself() {
+    let sign_in = pro_promise_copy(GithubAccessState::NeedsSignIn).expect("copy");
+    assert_eq!(sign_in.step, ProPromiseStep::SignIn);
+    assert_eq!(sign_in.action, "Sign in with GitHub");
+
+    let subscribe = pro_promise_copy(GithubAccessState::NeedsSubscription).expect("copy");
+    assert_eq!(subscribe.step, ProPromiseStep::Subscribe);
+    // Someone already signed in is asked to subscribe, not to sign in again.
+    assert!(subscribe.body.contains("free trial"));
+  }
+
+  #[test]
+  fn every_surface_names_itself_for_the_analytics() {
+    assert_eq!(
+      ProPromiseSurface::PullRequestPanel.source(),
+      "pull_request_panel"
+    );
+    assert_eq!(ProPromiseSurface::Inbox.source(), "inbox");
+  }
+}
