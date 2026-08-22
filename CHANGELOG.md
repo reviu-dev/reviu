@@ -4,6 +4,14 @@ All notable changes to Reviu are documented here.
 
 ## 1.0.0
 
+### The Pull Request You Are On, In The Right Panel
+
+Checking out a branch that has a pull request now fills the Pull request tab with the whole picture, without leaving the workspace: the title and number, who opened it, the branches it goes between, and the list of files it proposes. Clicking a file opens the diff of the pull request itself, base against head, so you read what the branch adds rather than what your working tree happens to hold.
+
+Under an expandable Details block are the CI checks, one row per check with its status and how long it took, and the reviewers with where each one stands. The block leads with the bad news: a failing suite or a requested change is what you see first, without expanding anything.
+
+Merging happens there too. The button names the method your repository actually uses, so "Squash and merge" says what will happen, and it stays disabled until Reviu knows the pull request can merge, not merely when it knows it cannot. A confirmation names the method again before anything is pushed, because merging is not a gesture to make by accident from a narrow column.
+
 ### See Your Review Before You Send It
 
 The comments you leave on a diff now have a home: a Review tab in the right panel lists the whole batch, grouped by file, with each file collapsible. Click a comment to open its file and land on the lines it is about, delete one you changed your mind about, and see at a glance which ones the agent already addressed and which ones the code moved under.

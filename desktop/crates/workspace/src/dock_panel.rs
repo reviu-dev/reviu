@@ -30,6 +30,7 @@ use crate::review_list::{ReviewList, ReviewListEvent};
 const DOCK_PANEL_TERMINAL_DEBUG_SELECTOR: &str = "dock-panel-terminal";
 pub(crate) const DOCK_PANEL_HISTORY_DEBUG_SELECTOR: &str = "dock-panel-history";
 pub(crate) const DOCK_PANEL_PR_CHECKS_DEBUG_SELECTOR: &str = "dock-panel-pr-checks";
+pub(crate) const DOCK_PANEL_PR_MERGE_DEBUG_SELECTOR: &str = "dock-panel-pr-merge";
 pub(crate) const DOCK_PANEL_REVIEW_DEBUG_SELECTOR: &str = "dock-panel-review";
 const DOCK_PANEL_COMMIT_DEBUG_SELECTOR: &str = "dock-panel-commit";
 const DOCK_PANEL_COMMIT_MENU_DEBUG_SELECTOR: &str = "dock-panel-commit-menu";
@@ -44,6 +45,7 @@ use std::rc::Rc;
 
 use crate::api::{
   GithubPullRequest, GithubPullRequestChecksRollupState, GithubPullRequestChecksSummary,
+  GithubPullRequestMergeReadiness,
 };
 use crate::auth_state::AuthStateStore;
 use crate::github_navigation::{open_compare_target, open_pr_target};
@@ -54,14 +56,18 @@ use crate::pull_request_checks::{
 use crate::pull_request_dialog::{
   GithubBranchContext, PullRequestCreatedHandler, open_create_pull_request_dialog,
 };
+use crate::pull_request_merge::{
+  MergeAvailability, MergeRequest, merge_availability, merge_method_label,
+};
 use crate::pull_request_reviewers::{
   ReviewerRow, ReviewerStatus, reviewer_rows, reviewers_summary_title,
 };
 use crate::workspace::WorkspaceApi;
 use gpui_component::avatar::Avatar;
+use gpui_component::notification::Notification;
 use ui::{
-  Button, ButtonVariants as _, CommandPaletteCommand, StatusThemeExt as _, Textarea, TextareaState,
-  UiIconName,
+  Button, ButtonVariants as _, CommandPaletteCommand, ConfirmDialog, StatusThemeExt as _, Textarea,
+  TextareaState, UiIconName, WindowExt as _,
 };
 
 #[derive(Clone, Debug)]
@@ -430,6 +436,9 @@ pub struct DockPanel {
   pr_checks: Option<GithubPullRequestChecksSummary>,
   pr_reviewers: Vec<ReviewerRow>,
   pr_checks_loading: bool,
+  pr_merge_readiness: Option<GithubPullRequestMergeReadiness>,
+  pr_merging: bool,
+  _pr_merge_task: Option<Task<()>>,
   /// Collapsed by default: the file list is what you work in.
   pr_details_expanded: bool,
   _pr_range_task: Option<Task<()>>,
@@ -552,6 +561,9 @@ impl DockPanel {
       pr_checks: None,
       pr_reviewers: Vec::new(),
       pr_checks_loading: false,
+      pr_merge_readiness: None,
+      pr_merging: false,
+      _pr_merge_task: None,
       pr_details_expanded: false,
       _pr_range_task: None,
       _pr_checks_task: None,
@@ -767,6 +779,8 @@ impl DockPanel {
     self.pr_reviewers = Vec::new();
     self.pr_checks = None;
     self.pr_checks_loading = false;
+    self.pr_merge_readiness = None;
+    self.pr_merging = false;
   }
 
   fn load_pull_request_checks(&mut self, cx: &mut Context<Self>) {
@@ -780,12 +794,20 @@ impl DockPanel {
 
     self.pr_checks_loading = true;
     let task = cx.spawn(async move |this, cx| {
-      let checks = cx
-        .background_spawn(async move { api.fetch_pull_request_checks(&owner, &repo, number) })
+      // The CI state and the mergeability answer the same question, can this
+      // land, so they arrive together.
+      let loaded = cx
+        .background_spawn(async move {
+          (
+            api.fetch_pull_request_checks(&owner, &repo, number),
+            api.fetch_pull_request_merge_readiness(&owner, &repo, number),
+          )
+        })
         .await;
       let _ = this.update(cx, |this, cx| {
         this.pr_checks_loading = false;
-        this.pr_checks = checks.ok();
+        this.pr_checks = loaded.0.ok();
+        this.pr_merge_readiness = loaded.1.ok();
         cx.notify();
       });
     });
@@ -1694,7 +1716,150 @@ impl DockPanel {
       );
     }
 
+    block = block.child(self.render_pr_merge(cx));
+
     block.into_any_element()
+  }
+
+  /// Merging from a narrow column: the button names the method it will use, and
+  /// a confirmation repeats it, because the target is small and the act is not
+  /// undoable.
+  fn render_pr_merge(&self, cx: &mut Context<Self>) -> AnyElement {
+    let theme = cx.theme().clone();
+    let availability = merge_availability(self.pr_merge_readiness.as_ref());
+    let BranchPrState::Found(context, pull_request) = &self.branch_pr else {
+      return div().into_any_element();
+    };
+    let owner = context.owner.clone();
+    let repo = context.repo.clone();
+    let number = pull_request.number;
+
+    let (label, message, request) = match &availability {
+      MergeAvailability::Unknown => (
+        "Merge",
+        "Checking whether this can merge...".to_string(),
+        None,
+      ),
+      MergeAvailability::Blocked(reason) => ("Merge", reason.clone(), None),
+      MergeAvailability::Ready { method, head_sha } => (
+        merge_method_label(*method),
+        "Ready to merge".to_string(),
+        Some(MergeRequest {
+          owner,
+          repo,
+          number,
+          method: *method,
+          head_sha: head_sha.clone(),
+        }),
+      ),
+    };
+
+    h_flex()
+      .w_full()
+      .items_center()
+      .justify_between()
+      .gap_2()
+      .px_3()
+      .py_2()
+      .border_t_1()
+      .border_color(theme.border)
+      .child(
+        div()
+          .flex_1()
+          .min_w_0()
+          .text_xs()
+          .text_color(theme.muted_foreground)
+          .truncate()
+          .child(message),
+      )
+      .child(
+        Button::new("dock-panel-pr-merge")
+          .debug_selector(|| DOCK_PANEL_PR_MERGE_DEBUG_SELECTOR.to_string())
+          .primary()
+          .small()
+          .compact()
+          .label(label)
+          .disabled(request.is_none() || self.pr_merging)
+          .on_click(cx.listener(move |this, _, window, cx| {
+            let Some(request) = request.clone() else {
+              return;
+            };
+            this.confirm_merge_pull_request(request, window, cx);
+          })),
+      )
+      .into_any_element()
+  }
+
+  fn confirm_merge_pull_request(
+    &mut self,
+    request: MergeRequest,
+    window: &mut Window,
+    cx: &mut Context<Self>,
+  ) {
+    let title: SharedString = format!("Merge #{}?", request.number).into();
+    let message: SharedString = format!(
+      "{} into its base branch.",
+      merge_method_label(request.method)
+    )
+    .into();
+    let view = cx.entity();
+
+    window.open_alert_dialog(cx, move |alert, _, _| {
+      let view = view.clone();
+      let request = request.clone();
+      ConfirmDialog::new(title.clone(), div().child(message.clone()))
+        .confirm_text("Merge")
+        .cancel_text("Cancel")
+        .on_confirm(move |_, _, cx| {
+          view.update(cx, |this, cx| this.merge_pull_request(request.clone(), cx));
+          true
+        })
+        .build(alert)
+    });
+  }
+
+  fn merge_pull_request(&mut self, request: MergeRequest, cx: &mut Context<Self>) {
+    let api = WorkspaceApi::global(cx).api.clone();
+    let window_handle = self.window_handle;
+    let number = request.number;
+
+    self.pr_merging = true;
+    cx.notify();
+    let task = cx.spawn(async move |this, cx| {
+      let result = cx
+        .background_spawn(async move {
+          api.merge_pull_request(
+            &request.owner,
+            &request.repo,
+            request.number,
+            request.method,
+            &request.head_sha,
+            None,
+            None,
+          )
+        })
+        .await;
+
+      let _ = this.update(cx, |this, cx| {
+        this.pr_merging = false;
+        match result {
+          Ok(_) => {
+            let _ = cx.update_window(window_handle, |_, window, cx| {
+              window.push_notification(Notification::info(format!("Merged #{number}")), cx);
+            });
+            // The branch is behind its own reality now: everything reloads.
+            this.refresh_branch_pull_request(cx);
+          }
+          Err(error) => {
+            let _ = cx.update_window(window_handle, |_, window, cx| {
+              window.push_notification(Notification::error(format!("Merge failed: {error}")), cx);
+            });
+          }
+        }
+        cx.notify();
+      });
+    });
+    self._pr_merge_task = Some(task);
   }
 
   /// What the branch proposes against its base: the committed changes, which is
@@ -1948,7 +2113,7 @@ mod tests {
   use std::path::Path;
   use std::sync::Arc;
   use std::sync::atomic::{AtomicBool, Ordering};
-  use ui::{CommandPaletteCommandId, WindowExt as _};
+  use ui::CommandPaletteCommandId;
 
   #[gpui::test]
   async fn a_poll_re_reads_the_working_tree_without_calling_github(cx: &mut TestAppContext) {
@@ -2389,6 +2554,53 @@ mod tests {
       assert!(panel.pr_files_error.is_none());
       assert!(!panel.pr_checks_loading);
     });
+  }
+
+  #[gpui::test]
+  async fn the_merge_button_waits_for_an_answer_before_offering_anything(cx: &mut TestAppContext) {
+    let (panel, cx) = pull_request_panel(cx, Vec::new());
+    panel.update(cx, |panel, cx| {
+      panel.pr_reviewers = vec![ReviewerRow {
+        login: "ada".to_string(),
+        avatar_url: None,
+        status: ReviewerStatus::Approved,
+      }];
+      panel.pr_details_expanded = true;
+      cx.notify();
+    });
+    cx.run_until_parked();
+
+    // No readiness yet: the row is there, and the button cannot be pressed.
+    assert!(
+      cx.debug_bounds(DOCK_PANEL_PR_MERGE_DEBUG_SELECTOR)
+        .is_some()
+    );
+    panel.read_with(cx, |panel, _| {
+      assert_eq!(
+        merge_availability(panel.pr_merge_readiness.as_ref()),
+        MergeAvailability::Unknown
+      );
+    });
+  }
+
+  #[gpui::test]
+  async fn the_merge_row_stays_closed_with_the_block(cx: &mut TestAppContext) {
+    let (panel, cx) = pull_request_panel(cx, Vec::new());
+    panel.update(cx, |panel, cx| {
+      panel.pr_reviewers = vec![ReviewerRow {
+        login: "ada".to_string(),
+        avatar_url: None,
+        status: ReviewerStatus::Approved,
+      }];
+      cx.notify();
+    });
+    cx.run_until_parked();
+
+    // Merging is not a one-click-away act from a collapsed block.
+    assert!(
+      cx.debug_bounds(DOCK_PANEL_PR_MERGE_DEBUG_SELECTOR)
+        .is_none()
+    );
   }
 
   #[gpui::test]
