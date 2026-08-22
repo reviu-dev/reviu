@@ -15,14 +15,13 @@ pub use document::Document;
 pub use editor::{
   ConflictNavigationDirection, ConflictNavigationState, ConflictResolution, DiffViewMode, Editor,
   EditorEvent, HunkAction, HunkNavigationDirection, HunkNavigationState,
-  REVIEW_COMMENT_BLOCK_DEBUG_SELECTOR, REVIEW_COMMENT_CARD_DEBUG_SELECTOR,
+  REVIEW_COMMENT_BLOCK_DEBUG_SELECTOR, REVIEW_COMMENT_CARD_DEBUG_SELECTOR, ReviewCapabilities,
   ReviewCommentAssetUrlResolver, ReviewCommentCancelHandler, ReviewCommentCodeReferencePreview,
-  ReviewCommentCreateAction,
-  ReviewCommentCreateHandler, ReviewCommentCreateRequest, ReviewCommentDeleteHandler,
-  ReviewCommentDisplayMode, ReviewCommentEditHandler, ReviewCommentImageUploadHandler,
-  ReviewCommentLinkHandler, ReviewCommentMode, ReviewCommentPreviewRenderer,
-  ReviewCommentResolveHandler, ReviewCommentSendHandler, ReviewCommentSuggestionActionFactory,
-  review_comment_create_actions,
+  ReviewCommentCreateAction, ReviewCommentCreateHandler, ReviewCommentCreateRequest,
+  ReviewCommentDeleteHandler, ReviewCommentDisplayMode, ReviewCommentEditHandler,
+  ReviewCommentImageUploadHandler, ReviewCommentLinkHandler, ReviewCommentMode,
+  ReviewCommentPreviewRenderer, ReviewCommentResolveHandler, ReviewCommentSendHandler,
+  ReviewCommentSuggestionActionFactory, review_comment_create_actions,
 };
 pub use editor_element::{EditorElement, PositionMap, benchmark_word_diff_ranges};
 pub use gutter_element::GutterElement;

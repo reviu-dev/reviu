@@ -9,7 +9,7 @@ use agent_chat_panel::{AgentChatPanel, AgentChatPanelEvent};
 use editor::{
   ConflictResolution, DiffViewMode, Editor, EditorEvent, ReviewCommentCancelHandler,
   ReviewCommentCreateHandler, ReviewCommentCreateRequest, ReviewCommentDeleteHandler,
-  ReviewCommentDisplayMode, ReviewCommentEditHandler, ReviewCommentSendHandler,
+  ReviewCommentEditHandler, ReviewCommentSendHandler,
 };
 use gpui::AnimationExt as _;
 use gpui::{
@@ -28,7 +28,6 @@ use crate::agent_review::{
   AgentReviewComments, ReviewSend, original_lines_for_request, sync_comments_to_editor,
 };
 use crate::agent_review_store::{read_review, review_path_for_repo, write_review};
-use crate::review_destination::{AgentReviewHandlers, ReviewDestination, configure_review};
 use crate::agent_settings::AgentSettings;
 use crate::auth_state::AuthStateStore;
 use crate::config::ConfigStore;
@@ -40,6 +39,7 @@ use crate::file_view::{
 };
 use crate::inbox::Inbox;
 use crate::navigation::NavigationHistory;
+use crate::review_destination::{AgentReviewHandlers, ReviewDestination, configure_review};
 use crate::session_list::{SessionList, SessionListEvent};
 use git::{InteractiveRebaseTarget, RepoStatusKind};
 

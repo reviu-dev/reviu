@@ -779,6 +779,7 @@ mod tests {
   use crate::agent_review::LocalAgentReviewCommentState;
   use crate::review_list::ReviewListEvent;
   use crate::test_support::{TempRepo, commit_text_file};
+  use editor::ReviewCommentDisplayMode;
   use gpui::TestAppContext;
   use std::path::Path;
   #[gpui::test]

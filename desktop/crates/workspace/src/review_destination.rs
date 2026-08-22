@@ -82,10 +82,8 @@ pub(crate) fn configure_review(
       editor.set_review_comment_image_upload_handler(Some(handlers.image_upload), cx);
       editor.set_review_comment_asset_url_resolver(Some(handlers.asset_url_resolver), cx);
       editor.set_review_comment_preview_renderer(Some(handlers.preview_renderer), cx);
-      editor.set_review_comment_suggestion_action_factory(
-        Some(handlers.suggestion_action_factory),
-        cx,
-      );
+      editor
+        .set_review_comment_suggestion_action_factory(Some(handlers.suggestion_action_factory), cx);
       // There is no agent on this side to send a comment to.
       editor.set_review_comment_send_handler(None, cx);
       editor.set_sendable_review_comment_ids(std::iter::empty::<u64>(), cx);
@@ -110,4 +108,131 @@ pub(crate) fn configure_review(
       editor.set_review_comment_code_reference_previews(HashMap::new(), cx);
     }
   });
+}
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+  use editor::ReviewCapabilities;
+  use gpui::{AnyElement, AppContext as _, IntoElement as _, TestAppContext, div};
+  use std::sync::Arc;
+
+  fn agent_handlers() -> AgentReviewHandlers {
+    AgentReviewHandlers {
+      create: Arc::new(|_, _, _| {}),
+      edit: Arc::new(|_, _, _, _| {}),
+      delete: Arc::new(|_, _, _| {}),
+      cancel: Arc::new(|_, _| {}),
+      send: Arc::new(|_, _, _| {}),
+    }
+  }
+
+  fn github_handlers() -> GithubReviewHandlers {
+    GithubReviewHandlers {
+      create: Arc::new(|_, _, _| {}),
+      edit: Arc::new(|_, _, _, _| {}),
+      delete: Arc::new(|_, _, _| {}),
+      cancel: Arc::new(|_, _| {}),
+      resolve: Arc::new(|_, _, _, _, _| {}),
+      link: Arc::new(|_, _, _| false),
+      image_upload: Arc::new(|_, _, _, _| {}),
+      asset_url_resolver: Arc::new(|_| None),
+      preview_renderer: Arc::new(|_, _, _, _| -> AnyElement { div().into_any_element() }),
+      suggestion_action_factory: Arc::new(|_, _, _, _| Arc::new(|_, _| div().into_any_element())),
+    }
+  }
+
+  fn capabilities(destination: ReviewDestination, cx: &mut TestAppContext) -> ReviewCapabilities {
+    let editor = cx.new(|cx| Editor::new_with_paths("/repo".into(), "src/main.rs".into(), cx));
+    cx.update(|cx| configure_review(&editor, destination, cx));
+    editor.read_with(cx, |editor, _| editor.review_capabilities())
+  }
+
+  #[gpui::test]
+  fn the_agent_gets_a_note_it_can_send_and_nothing_from_github(cx: &mut TestAppContext) {
+    let capabilities = capabilities(ReviewDestination::Agent(Box::new(agent_handlers())), cx);
+
+    assert_eq!(
+      capabilities,
+      ReviewCapabilities {
+        display_mode: ReviewCommentDisplayMode::LocalNote,
+        replies_enabled: false,
+        create: true,
+        edit: true,
+        delete: true,
+        cancel: true,
+        send: true,
+        resolve: false,
+        link: false,
+        image_upload: false,
+        asset_url_resolver: false,
+        preview_renderer: false,
+        suggestion_action_factory: false,
+        pr_number: None,
+      }
+    );
+  }
+
+  #[gpui::test]
+  fn github_gets_threads_and_resolution_but_no_send(cx: &mut TestAppContext) {
+    let capabilities = capabilities(ReviewDestination::Github(Box::new(github_handlers())), cx);
+
+    assert_eq!(
+      capabilities,
+      ReviewCapabilities {
+        display_mode: ReviewCommentDisplayMode::Conversation,
+        replies_enabled: true,
+        create: true,
+        edit: true,
+        delete: true,
+        cancel: true,
+        // No agent on this side to send a comment to.
+        send: false,
+        resolve: true,
+        link: true,
+        image_upload: true,
+        asset_url_resolver: true,
+        preview_renderer: true,
+        suggestion_action_factory: true,
+        pr_number: None,
+      }
+    );
+  }
+
+  #[gpui::test]
+  fn nothing_survives_a_teardown(cx: &mut TestAppContext) {
+    let editor = cx.new(|cx| Editor::new_with_paths("/repo".into(), "src/main.rs".into(), cx));
+    cx.update(|cx| {
+      configure_review(
+        &editor,
+        ReviewDestination::Github(Box::new(github_handlers())),
+        cx,
+      );
+      editor.update(cx, |editor, cx| {
+        editor.set_review_comment_pr_number(Some(42), cx);
+      });
+      configure_review(&editor, ReviewDestination::None, cx);
+    });
+
+    let capabilities = editor.read_with(cx, |editor, _| editor.review_capabilities());
+    assert_eq!(
+      capabilities,
+      ReviewCapabilities {
+        display_mode: ReviewCommentDisplayMode::Conversation,
+        replies_enabled: true,
+        create: false,
+        edit: false,
+        delete: false,
+        cancel: false,
+        send: false,
+        resolve: false,
+        link: false,
+        image_upload: false,
+        asset_url_resolver: false,
+        preview_renderer: false,
+        suggestion_action_factory: false,
+        pr_number: None,
+      }
+    );
+  }
 }

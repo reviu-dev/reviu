@@ -953,145 +953,148 @@ impl GithubPrDetailsPage {
       return;
     }
     let view = cx.entity().downgrade();
-    self.diff_editor.update(cx, |editor, cx| {
-      let handler: ReviewCommentEditHandler = Arc::new({
-        let view = view.clone();
-        move |comment_id, body, _window, cx| {
-          let _ = view.update(cx, |this, cx| {
-            this.submit_review_comment_edit(comment_id, body.as_ref().to_string(), cx);
-          });
-        }
-      });
-      editor.set_review_comment_edit_handler(Some(handler), cx);
 
-      let create_handler: ReviewCommentCreateHandler = Arc::new({
-        let view = view.clone();
-        move |request, _window, cx| {
-          let _ = view.update(cx, |this, cx| {
-            this.submit_review_comment_create(request, cx);
-          });
-        }
-      });
-      editor.set_review_comment_create_handler(Some(create_handler), cx);
-
-      let cancel_handler: ReviewCommentCancelHandler = Arc::new({
-        let view = view.clone();
-        move |window, _cx| {
-          let view = view.clone();
-          window.on_next_frame(move |window, cx| {
-            let _ = view.update(cx, |this, cx| {
-              if this.active_tab_ix == PR_TAB_CHANGES_IX {
-                this.focus_changes_tree(window, cx);
-              }
-            });
-          });
-        }
-      });
-      editor.set_review_comment_cancel_handler(Some(cancel_handler), cx);
-
-      let delete_handler: ReviewCommentDeleteHandler = Arc::new({
-        let view = view.clone();
-        move |comment_id, window, cx| {
-          let _ = view.update(cx, |this, cx| {
-            this.confirm_review_comment_delete(comment_id, window, cx);
-          });
-        }
-      });
-      editor.set_review_comment_delete_handler(Some(delete_handler), cx);
-
-      let resolve_handler: ReviewCommentResolveHandler = Arc::new({
-        let view = view.clone();
-        move |thread_id: Arc<str>, root_comment_id: u64, currently_resolved, _window, cx| {
-          let _ = view.update(cx, |this, cx| {
-            this.toggle_review_thread_resolution(
-              thread_id.as_ref().to_string(),
-              root_comment_id,
-              currently_resolved,
-              cx,
-            );
-          });
-        }
-      });
-      editor.set_review_comment_resolve_handler(Some(resolve_handler), cx);
-
-      let suggestion_factory: ReviewCommentSuggestionActionFactory = Arc::new({
-        let view = view.clone();
-        move |comment_id, author_login, is_outdated, cx| {
-          let renderer = view.upgrade().map(|page| {
-            page.read(cx).suggested_change_commit_action_renderer(
-              page.clone(),
-              comment_id,
-              author_login,
-              is_outdated,
-              cx,
-            )
-          });
-          match renderer {
-            Some(renderer) => renderer,
-            None => Arc::new(|_ctx, _cx| div().into_any_element()),
-          }
-        }
-      });
-      editor.set_review_comment_suggestion_action_factory(Some(suggestion_factory), cx);
-
-      let link_handler: ReviewCommentLinkHandler = Arc::new({
-        let view = view.clone();
-        move |url, window, cx| {
-          view
-            .update(cx, |this, cx| this.handle_gfm_link(url, window, cx))
-            .unwrap_or(false)
-        }
-      });
-      editor.set_review_comment_link_handler(Some(link_handler), cx);
-      editor.set_review_comment_asset_url_resolver(
-        Some(github_shared::make_asset_url_resolver(&self.api)),
-        cx,
-      );
-
-      let image_upload_handler: ReviewCommentImageUploadHandler = Arc::new({
-        let view = view.clone();
-        move |paths, input, window, cx| {
-          let paths = paths.clone();
-          let _ = view.update(cx, |this, cx| {
-            this.handle_diff_editor_review_comment_drop(&paths, input, window, cx);
-          });
-        }
-      });
-      editor.set_review_comment_image_upload_handler(Some(image_upload_handler), cx);
-
-      let preview_renderer: editor::ReviewCommentPreviewRenderer = Arc::new({
-        let view = view.clone();
-        move |text: &str,
-              suggestion_context: Option<SuggestionContext>,
-              _window: &mut Window,
-              cx: &mut App|
-              -> AnyElement {
-          let mut options = view
-            .update(cx, |this, cx| {
-              this.build_overview_composer_markdown_options(4_444, cx)
-            })
-            .unwrap_or_default();
-          if let Some(mut ctx) = suggestion_context {
-            if ctx.path.as_ref().is_empty()
-              && let Some(path) = view
-                .update(cx, |this, _| {
-                  this
-                    .selected_file
-                    .as_ref()
-                    .map(|file| Arc::<str>::from(file.path.as_ref()))
-                })
-                .ok()
-                .flatten()
-            {
-              ctx.path = path;
-            }
-            options = options.with_suggestion_context(ctx);
-          }
-          render_markdown(text, &options, cx)
-        }
-      });
-      editor.set_review_comment_preview_renderer(Some(preview_renderer), cx);
+    let edit: ReviewCommentEditHandler = Arc::new({
+      let view = view.clone();
+      move |comment_id, body, _window, cx| {
+        let _ = view.update(cx, |this, cx| {
+          this.submit_review_comment_edit(comment_id, body.as_ref().to_string(), cx);
+        });
+      }
     });
+
+    let create: ReviewCommentCreateHandler = Arc::new({
+      let view = view.clone();
+      move |request, _window, cx| {
+        let _ = view.update(cx, |this, cx| {
+          this.submit_review_comment_create(request, cx);
+        });
+      }
+    });
+
+    let cancel: ReviewCommentCancelHandler = Arc::new({
+      let view = view.clone();
+      move |window, _cx| {
+        let view = view.clone();
+        window.on_next_frame(move |window, cx| {
+          let _ = view.update(cx, |this, cx| {
+            if this.active_tab_ix == PR_TAB_CHANGES_IX {
+              this.focus_changes_tree(window, cx);
+            }
+          });
+        });
+      }
+    });
+
+    let delete: ReviewCommentDeleteHandler = Arc::new({
+      let view = view.clone();
+      move |comment_id, window, cx| {
+        let _ = view.update(cx, |this, cx| {
+          this.confirm_review_comment_delete(comment_id, window, cx);
+        });
+      }
+    });
+
+    let resolve: ReviewCommentResolveHandler = Arc::new({
+      let view = view.clone();
+      move |thread_id: Arc<str>, root_comment_id: u64, currently_resolved, _window, cx| {
+        let _ = view.update(cx, |this, cx| {
+          this.toggle_review_thread_resolution(
+            thread_id.as_ref().to_string(),
+            root_comment_id,
+            currently_resolved,
+            cx,
+          );
+        });
+      }
+    });
+
+    let suggestion_action_factory: ReviewCommentSuggestionActionFactory = Arc::new({
+      let view = view.clone();
+      move |comment_id, author_login, is_outdated, cx| {
+        let renderer = view.upgrade().map(|page| {
+          page.read(cx).suggested_change_commit_action_renderer(
+            page.clone(),
+            comment_id,
+            author_login,
+            is_outdated,
+            cx,
+          )
+        });
+        match renderer {
+          Some(renderer) => renderer,
+          None => Arc::new(|_ctx, _cx| div().into_any_element()),
+        }
+      }
+    });
+
+    let link: ReviewCommentLinkHandler = Arc::new({
+      let view = view.clone();
+      move |url, window, cx| {
+        view
+          .update(cx, |this, cx| this.handle_gfm_link(url, window, cx))
+          .unwrap_or(false)
+      }
+    });
+
+    let image_upload: ReviewCommentImageUploadHandler = Arc::new({
+      let view = view.clone();
+      move |paths, input, window, cx| {
+        let paths = paths.clone();
+        let _ = view.update(cx, |this, cx| {
+          this.handle_diff_editor_review_comment_drop(&paths, input, window, cx);
+        });
+      }
+    });
+
+    let preview_renderer: ReviewCommentPreviewRenderer = Arc::new({
+      let view = view.clone();
+      move |text: &str,
+            suggestion_context: Option<SuggestionContext>,
+            _window: &mut Window,
+            cx: &mut App|
+            -> AnyElement {
+        let mut options = view
+          .update(cx, |this, cx| {
+            this.build_overview_composer_markdown_options(4_444, cx)
+          })
+          .unwrap_or_default();
+        if let Some(mut ctx) = suggestion_context {
+          if ctx.path.as_ref().is_empty()
+            && let Some(path) = view
+              .update(cx, |this, _| {
+                this
+                  .selected_file
+                  .as_ref()
+                  .map(|file| Arc::<str>::from(file.path.as_ref()))
+              })
+              .ok()
+              .flatten()
+          {
+            ctx.path = path;
+          }
+          options = options.with_suggestion_context(ctx);
+        }
+        render_markdown(text, &options, cx)
+      }
+    });
+
+    configure_review(
+      &self.diff_editor.clone(),
+      ReviewDestination::Github(Box::new(GithubReviewHandlers {
+        create,
+        edit,
+        delete,
+        cancel,
+        resolve,
+        link,
+        image_upload,
+        asset_url_resolver: github_shared::make_asset_url_resolver(&self.api),
+        preview_renderer,
+        suggestion_action_factory,
+      })),
+      cx,
+    );
   }
 
   pub(super) fn sync_review_comment_handlers(&mut self, cx: &mut Context<Self>) {
@@ -1106,21 +1109,7 @@ impl GithubPrDetailsPage {
       return;
     }
 
-    self.diff_editor.update(cx, |editor, cx| {
-      editor.set_review_comment_edit_handler(None, cx);
-      editor.set_review_comment_delete_handler(None, cx);
-      editor.set_review_comment_create_handler(None, cx);
-      editor.set_review_comment_cancel_handler(None, cx);
-      editor.set_review_comment_resolve_handler(None, cx);
-      editor.set_review_comment_suggestion_action_factory(None, cx);
-      editor.set_review_comment_asset_url_resolver(None, cx);
-      editor.set_review_comment_image_upload_handler(None, cx);
-      editor.set_review_comment_preview_renderer(None, cx);
-      editor.set_review_comment_pr_number(None, cx);
-      editor.set_editable_review_comment_ids(std::iter::empty::<u64>(), cx);
-      editor.set_review_comments(Vec::new(), cx);
-      editor.set_review_comment_code_reference_previews(HashMap::new(), cx);
-    });
+    configure_review(&self.diff_editor.clone(), ReviewDestination::None, cx);
   }
 
   pub(super) fn handle_gfm_link(

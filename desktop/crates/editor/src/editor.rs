@@ -241,6 +241,25 @@ pub type ReviewCommentPreviewRenderer = Arc<
 >;
 pub type ReviewCommentAssetUrlResolver = Arc<dyn Fn(&str) -> Option<String> + Send + Sync>;
 
+/// The review capabilities of one editor, as the host installed them.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ReviewCapabilities {
+  pub display_mode: ReviewCommentDisplayMode,
+  pub replies_enabled: bool,
+  pub create: bool,
+  pub edit: bool,
+  pub delete: bool,
+  pub cancel: bool,
+  pub send: bool,
+  pub resolve: bool,
+  pub link: bool,
+  pub image_upload: bool,
+  pub asset_url_resolver: bool,
+  pub preview_renderer: bool,
+  pub suggestion_action_factory: bool,
+  pub pr_number: Option<u64>,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ReviewCommentCodeReferencePreview {
   pub url: Arc<str>,
@@ -2157,6 +2176,28 @@ impl Editor {
 
   pub fn review_comment_display_mode(&self) -> ReviewCommentDisplayMode {
     self.review_comment_display_mode
+  }
+
+  /// What this editor currently offers a review comment. The host installs the
+  /// capabilities as a set, and this is how it checks it got the set it asked
+  /// for.
+  pub fn review_capabilities(&self) -> ReviewCapabilities {
+    ReviewCapabilities {
+      display_mode: self.review_comment_display_mode,
+      replies_enabled: self.review_comment_replies_enabled,
+      create: self.review_comment_create_handler.is_some(),
+      edit: self.review_comment_edit_handler.is_some(),
+      delete: self.review_comment_delete_handler.is_some(),
+      cancel: self.review_comment_cancel_handler.is_some(),
+      send: self.review_comment_send_handler.is_some(),
+      resolve: self.review_comment_resolve_handler.is_some(),
+      link: self.review_comment_link_handler.is_some(),
+      image_upload: self.review_comment_image_upload_handler.is_some(),
+      asset_url_resolver: self.review_comment_asset_url_resolver.is_some(),
+      preview_renderer: self.review_comment_preview_renderer.is_some(),
+      suggestion_action_factory: self.review_comment_suggestion_action_factory.is_some(),
+      pr_number: self.review_comment_pr_number,
+    }
   }
 
   pub fn set_review_comment_display_mode(

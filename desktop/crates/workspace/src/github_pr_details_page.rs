@@ -10,7 +10,8 @@ use editor::{
   ReviewCommentCancelHandler, ReviewCommentCodeReferencePreview, ReviewCommentCreateHandler,
   ReviewCommentCreateRequest, ReviewCommentDeleteHandler, ReviewCommentEditHandler,
   ReviewCommentImageUploadHandler, ReviewCommentLinkHandler, ReviewCommentMode,
-  ReviewCommentResolveHandler, ReviewCommentSide, ReviewCommentSuggestionActionFactory,
+  ReviewCommentPreviewRenderer, ReviewCommentResolveHandler, ReviewCommentSide,
+  ReviewCommentSuggestionActionFactory,
 };
 use gfm_markdown_viewer::{
   GithubBlobLineReference, LinkAction, MarkdownRenderOptions, MarkdownRenderState,
@@ -70,6 +71,7 @@ use crate::file_tree::{
   expanded_folder_paths_for_changed_files,
 };
 use crate::file_view::render_file_title_with_status;
+use crate::review_destination::{GithubReviewHandlers, ReviewDestination, configure_review};
 use crate::svg_preview::SvgPreview;
 use crate::{
   ShowCommandPalette, ShowFileSearch,
