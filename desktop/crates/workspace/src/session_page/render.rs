@@ -325,11 +325,15 @@ impl SessionPage {
       .editor
       .as_ref()
       .is_some_and(|editor| editor.read(cx).is_dirty);
-    let save_editor = self.editor.clone();
     let file_status = self.selected_file_status(cx);
     let old_path = self.selected_file_old_path(cx);
     let previewing = self.show_preview && self.previewable();
     let has_editor = self.editor.is_some();
+    // A snapshot of a commit or of a pull request cannot be written back.
+    let can_save = self
+      .editor
+      .as_ref()
+      .is_some_and(|editor| !editor.read(cx).is_read_only);
 
     let mut toolbar = DiffToolbar::new("session-page").before_title(if self.diff_chat_open {
       Button::new("session-page-close-editor")
@@ -390,7 +394,7 @@ impl SessionPage {
         );
     }
 
-    if let Some(state) = self.annotation_navigation(cx) {
+    if let Some(state) = self.annotation_navigation(cx).filter(|_| !previewing) {
       let (previous_tooltip, next_tooltip) = match state.kind {
         AnnotationKind::Conflict => ("Previous conflict", "Next conflict"),
         AnnotationKind::Change => ("Previous change", "Next change"),
@@ -453,9 +457,11 @@ impl SessionPage {
       });
     }
 
-    if save_editor.is_some() {
+    if can_save && !previewing {
+      let save_editor = self.editor.clone();
       toolbar = toolbar.after_toggles(
         Button::new("session-page-save-file")
+          .debug_selector(|| SAVE_BUTTON_DEBUG_SELECTOR.to_string())
           .label("Save")
           .xsmall()
           .ghost()
@@ -1223,6 +1229,48 @@ mod tests {
       assert_eq!(page.diff_view, DiffViewMode::Inline);
       assert!(!crate::config::AppSettings::get(cx).split_diff_view);
     });
+  }
+
+  #[gpui::test]
+  async fn a_snapshot_offers_no_save_and_a_preview_offers_no_diff_controls(
+    cx: &mut TestAppContext,
+  ) {
+    let repo = TempRepo::init("session-page-preview-toolbar");
+    commit_text_file(&repo.path, Path::new("README.md"), "# one\n", "initial");
+    let commit = commit_text_file(&repo.path, Path::new("README.md"), "# two\n", "second");
+    std::fs::write(repo.path.join("README.md"), "# three\n").expect("update file");
+
+    let (page, cx) = add_session_page_window(repo.path.clone(), cx);
+    page.update(cx, |page, cx| {
+      page.dock_panel.update(cx, |panel, cx| panel.refresh(cx))
+    });
+    cx.run_until_parked();
+
+    // A working-tree file can be written, so it keeps its Save.
+    page.update_in(cx, |page, window, cx| {
+      page.open_diff(PathBuf::from("README.md"), None, window, cx);
+    });
+    await_open_file(&page, cx).await;
+    await_editor_diff(&page, cx).await;
+    assert!(cx.debug_bounds(SAVE_BUTTON_DEBUG_SELECTOR).is_some());
+
+    // The preview renders the document, so there is no diff left to act on.
+    page.update(cx, |page, cx| page.toggle_preview(cx));
+    cx.run_until_parked();
+    assert!(cx.debug_bounds(SAVE_BUTTON_DEBUG_SELECTOR).is_none());
+    assert!(cx.debug_bounds(ANNOTATION_COUNTER_DEBUG_SELECTOR).is_none());
+    assert!(cx.debug_bounds(WHITESPACE_TOGGLE_DEBUG_SELECTOR).is_none());
+    assert!(cx.debug_bounds(DIFF_VIEW_TOGGLE_DEBUG_SELECTOR).is_none());
+    // The way back to the code is all that is left.
+    assert!(cx.debug_bounds(PREVIEW_TOGGLE_DEBUG_SELECTOR).is_some());
+
+    // A commit snapshot is read-only, in code view too.
+    page.update_in(cx, |page, window, cx| {
+      page.open_commit_file(commit.to_string(), PathBuf::from("README.md"), window, cx);
+    });
+    await_open_file(&page, cx).await;
+    cx.run_until_parked();
+    assert!(cx.debug_bounds(SAVE_BUTTON_DEBUG_SELECTOR).is_none());
   }
 
   #[gpui::test]

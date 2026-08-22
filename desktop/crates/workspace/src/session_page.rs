@@ -83,6 +83,7 @@ use ui::{
 const DIFF_VIEW_TOGGLE_DEBUG_SELECTOR: &str = "session-diff-view-toggle";
 const PREVIEW_TOGGLE_DEBUG_SELECTOR: &str = "session-preview-toggle";
 const WHITESPACE_TOGGLE_DEBUG_SELECTOR: &str = "session-whitespace-toggle";
+const SAVE_BUTTON_DEBUG_SELECTOR: &str = "session-save-file";
 const ACCEPT_ALL_CURRENT_DEBUG_SELECTOR: &str = "session-accept-all-current";
 const ACCEPT_ALL_INCOMING_DEBUG_SELECTOR: &str = "session-accept-all-incoming";
 const ANNOTATION_COUNTER_DEBUG_SELECTOR: &str = "session-annotation-counter";
