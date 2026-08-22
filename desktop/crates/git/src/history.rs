@@ -143,24 +143,33 @@ pub fn list_commit_changed_files(
   repo_root: &Path,
   commit_oid: &str,
 ) -> Result<Vec<CommitChangedFile>> {
-  let repo =
-    Repository::open(repo_root).with_context(|| format!("open repo at {:?}", repo_root))?;
+  let repo = open_repo(repo_root)?;
   let commit = parse_commit(&repo, commit_oid)?;
-  let commit_tree = commit.tree().context("read commit tree")?;
-  let parent_tree = commit.parent(0).ok().and_then(|parent| parent.tree().ok());
+  let head_tree = commit.tree().context("read commit tree")?;
+  let base_tree = commit.parent(0).ok().and_then(|parent| parent.tree().ok());
+  let diff = diff_trees(&repo, base_tree.as_ref(), &head_tree)?;
 
-  let mut options = DiffOptions::new();
-  let mut diff = repo
-    .diff_tree_to_tree(parent_tree.as_ref(), Some(&commit_tree), Some(&mut options))
-    .context("compute commit diff")?;
-  enable_rename_detection(&mut diff);
+  Ok(changed_files_in(&diff))
+}
 
-  Ok(
-    diff
-      .deltas()
-      .filter_map(|delta| commit_changed_file_from_delta(&delta))
-      .collect(),
-  )
+/// Everything a range of commits changes, `base_oid` excluded and `head_oid`
+/// included. For a pull request `base_oid` is the merge base, so the range holds
+/// what the branch proposes and nothing the base branch did meanwhile.
+pub fn list_range_changed_files(
+  repo_root: &Path,
+  base_oid: &str,
+  head_oid: &str,
+) -> Result<Vec<CommitChangedFile>> {
+  let repo = open_repo(repo_root)?;
+  let base_tree = parse_commit(&repo, base_oid)?
+    .tree()
+    .context("read base tree")?;
+  let head_tree = parse_commit(&repo, head_oid)?
+    .tree()
+    .context("read head tree")?;
+  let diff = diff_trees(&repo, Some(&base_tree), &head_tree)?;
+
+  Ok(changed_files_in(&diff))
 }
 
 pub fn load_commit_file_diff(
@@ -168,38 +177,50 @@ pub fn load_commit_file_diff(
   commit_oid: &str,
   rel_path: &Path,
 ) -> Result<CommitFileDiff> {
-  let repo =
-    Repository::open(repo_root).with_context(|| format!("open repo at {:?}", repo_root))?;
+  let repo = open_repo(repo_root)?;
   let commit = parse_commit(&repo, commit_oid)?;
-  let commit_tree = commit.tree().context("read commit tree")?;
-  let parent_tree = commit.parent(0).ok().and_then(|parent| parent.tree().ok());
+  let head_tree = commit.tree().context("read commit tree")?;
+  let base_tree = commit.parent(0).ok().and_then(|parent| parent.tree().ok());
+  let diff = diff_trees(&repo, base_tree.as_ref(), &head_tree)?;
 
-  let mut options = DiffOptions::new();
-  let mut diff = repo
-    .diff_tree_to_tree(parent_tree.as_ref(), Some(&commit_tree), Some(&mut options))
-    .context("compute commit diff")?;
-  enable_rename_detection(&mut diff);
-
-  let target_path = normalize_path(rel_path);
-  for (delta_ix, delta) in diff.deltas().enumerate() {
-    let Some(file) = commit_changed_file_from_delta(&delta) else {
-      continue;
-    };
-    if normalize_path(&file.path) != target_path {
-      continue;
-    }
-
-    let patch = patch_for_delta(&diff, delta_ix)?;
-    let (content, binary_bytes) = load_commit_file_content(&repo, &commit_tree, &file.path)?;
-    return Ok(CommitFileDiff {
-      file,
-      patch,
-      content,
-      binary_bytes,
-    });
+  match file_diff_in(&repo, &diff, &head_tree, rel_path)? {
+    Some(file_diff) => Ok(file_diff),
+    None => bail!("commit {commit_oid} does not change path {:?}", rel_path),
   }
+}
 
-  bail!("commit {commit_oid} does not change path {:?}", rel_path);
+pub fn load_range_file_diff(
+  repo_root: &Path,
+  base_oid: &str,
+  head_oid: &str,
+  rel_path: &Path,
+) -> Result<CommitFileDiff> {
+  let repo = open_repo(repo_root)?;
+  let base_tree = parse_commit(&repo, base_oid)?
+    .tree()
+    .context("read base tree")?;
+  let head_tree = parse_commit(&repo, head_oid)?
+    .tree()
+    .context("read head tree")?;
+  let diff = diff_trees(&repo, Some(&base_tree), &head_tree)?;
+
+  match file_diff_in(&repo, &diff, &head_tree, rel_path)? {
+    Some(file_diff) => Ok(file_diff),
+    None => bail!("{base_oid}..{head_oid} does not change path {:?}", rel_path),
+  }
+}
+
+/// The commit two branches share. A pull request is measured against it, not
+/// against the tip of its base branch, which may have moved since.
+pub fn merge_base(repo_root: &Path, one_oid: &str, other_oid: &str) -> Result<String> {
+  let repo = open_repo(repo_root)?;
+  let one = parse_commit(&repo, one_oid)?.id();
+  let other = parse_commit(&repo, other_oid)?.id();
+
+  repo
+    .merge_base(one, other)
+    .map(|oid| oid.to_string())
+    .with_context(|| format!("find merge base of {one_oid} and {other_oid}"))
 }
 
 fn refs_by_oid(repo: &Repository) -> Result<BTreeMap<Oid, Vec<String>>> {
@@ -257,6 +278,61 @@ fn insert_ref_label(by_oid: &mut BTreeMap<Oid, Vec<String>>, oid: Oid, label: St
     return;
   }
   by_oid.entry(oid).or_default().push(label);
+}
+
+fn open_repo(repo_root: &Path) -> Result<Repository> {
+  Repository::open(repo_root).with_context(|| format!("open repo at {:?}", repo_root))
+}
+
+/// One side may be absent: the first commit of a repository has no parent tree.
+fn diff_trees<'repo>(
+  repo: &'repo Repository,
+  base_tree: Option<&Tree<'repo>>,
+  head_tree: &Tree<'repo>,
+) -> Result<Diff<'repo>> {
+  let mut options = DiffOptions::new();
+  let mut diff = repo
+    .diff_tree_to_tree(base_tree, Some(head_tree), Some(&mut options))
+    .context("compute diff between trees")?;
+  enable_rename_detection(&mut diff);
+  Ok(diff)
+}
+
+fn changed_files_in(diff: &Diff<'_>) -> Vec<CommitChangedFile> {
+  diff
+    .deltas()
+    .filter_map(|delta| commit_changed_file_from_delta(&delta))
+    .collect()
+}
+
+/// The content comes from `head_tree`: a deleted file has none, which is what
+/// `load_commit_file_content` already answers.
+fn file_diff_in(
+  repo: &Repository,
+  diff: &Diff<'_>,
+  head_tree: &Tree<'_>,
+  rel_path: &Path,
+) -> Result<Option<CommitFileDiff>> {
+  let target_path = normalize_path(rel_path);
+  for (delta_ix, delta) in diff.deltas().enumerate() {
+    let Some(file) = commit_changed_file_from_delta(&delta) else {
+      continue;
+    };
+    if normalize_path(&file.path) != target_path {
+      continue;
+    }
+
+    let patch = patch_for_delta(diff, delta_ix)?;
+    let (content, binary_bytes) = load_commit_file_content(repo, head_tree, &file.path)?;
+    return Ok(Some(CommitFileDiff {
+      file,
+      patch,
+      content,
+      binary_bytes,
+    }));
+  }
+
+  Ok(None)
 }
 
 fn parse_commit<'repo>(repo: &'repo Repository, commit_oid: &str) -> Result<git2::Commit<'repo>> {
@@ -474,6 +550,132 @@ mod tests {
     assert!(
       diff.patch.contains("deleted file mode")
         || (diff.patch.contains("delete-me.txt") && diff.patch.contains("/dev/null"))
+    );
+  }
+
+  #[test]
+  fn the_first_commit_of_a_repository_has_no_side_to_compare_against() {
+    let repo = TempRepo::init("history-first-commit");
+    let initial = commit_text_file(&repo.path, Path::new("README.md"), "v1\n", "initial");
+
+    // No parent tree: everything the commit holds counts as added.
+    let files = list_commit_changed_files(&repo.path, &initial).expect("changed files");
+
+    assert_eq!(files.len(), 1);
+    assert_eq!(files[0].kind, CommitFileChangeKind::Added);
+    assert_eq!(files[0].path, PathBuf::from("README.md"));
+  }
+
+  #[test]
+  fn a_range_lists_what_every_commit_of_it_changed() {
+    let repo = TempRepo::init("history-range-union");
+    let base = commit_text_file(&repo.path, Path::new("README.md"), "v1\n", "initial");
+    commit_text_file(&repo.path, Path::new("src/one.rs"), "one\n", "add one");
+    let head = commit_text_file(&repo.path, Path::new("src/two.rs"), "two\n", "add two");
+
+    let files = list_range_changed_files(&repo.path, &base, &head).expect("list range");
+
+    let mut paths = files
+      .iter()
+      .map(|file| file.path.to_string_lossy().to_string())
+      .collect::<Vec<_>>();
+    paths.sort();
+    assert_eq!(paths, vec!["src/one.rs", "src/two.rs"]);
+    // The base itself is excluded: README.md landed there.
+    assert!(!paths.iter().any(|path| path == "README.md"));
+  }
+
+  #[test]
+  fn a_file_added_then_deleted_in_the_range_never_shows_up() {
+    let repo = TempRepo::init("history-range-transient");
+    let base = commit_text_file(&repo.path, Path::new("README.md"), "v1\n", "initial");
+    commit_text_file(&repo.path, Path::new("temp.txt"), "scratch\n", "add temp");
+    let head = delete_file_and_commit(&repo.path, Path::new("temp.txt"), "drop temp");
+
+    let files = list_range_changed_files(&repo.path, &base, &head).expect("list range");
+
+    assert!(
+      files.is_empty(),
+      "the range changed nothing in the end, got {files:?}"
+    );
+  }
+
+  #[test]
+  fn a_range_detects_a_rename_and_keeps_the_old_path() {
+    let repo = TempRepo::init("history-range-rename");
+    commit_text_file(
+      &repo.path,
+      Path::new("src/old.rs"),
+      "fn main() {}\n",
+      "initial",
+    );
+    let base = commit_text_file(&repo.path, Path::new("README.md"), "v1\n", "readme");
+    let head = rename_file_and_commit(
+      &repo.path,
+      Path::new("src/old.rs"),
+      Path::new("src/new.rs"),
+      "rename",
+    );
+
+    let files = list_range_changed_files(&repo.path, &base, &head).expect("list range");
+
+    assert_eq!(files.len(), 1);
+    assert_eq!(files[0].kind, CommitFileChangeKind::Renamed);
+    assert_eq!(files[0].path, PathBuf::from("src/new.rs"));
+    assert_eq!(files[0].old_path, Some(PathBuf::from("src/old.rs")));
+  }
+
+  #[test]
+  fn a_range_file_diff_carries_the_patch_and_the_head_content() {
+    let repo = TempRepo::init("history-range-file");
+    let base = commit_text_file(&repo.path, Path::new("src/main.rs"), "one\n", "initial");
+    commit_text_file(&repo.path, Path::new("src/main.rs"), "two\n", "second");
+    let head = commit_text_file(&repo.path, Path::new("src/main.rs"), "three\n", "third");
+
+    let diff = load_range_file_diff(&repo.path, &base, &head, Path::new("src/main.rs"))
+      .expect("load range file diff");
+
+    assert_eq!(diff.file.kind, CommitFileChangeKind::Modified);
+    // The whole range in one patch: from the base content to the head content.
+    assert!(diff.patch.contains("-one"));
+    assert!(diff.patch.contains("+three"));
+    assert!(!diff.patch.contains("two"));
+    assert_eq!(diff.content, "three\n");
+  }
+
+  #[test]
+  fn a_range_file_diff_refuses_a_path_the_range_never_touched() {
+    let repo = TempRepo::init("history-range-untouched");
+    let base = commit_text_file(&repo.path, Path::new("README.md"), "v1\n", "initial");
+    let head = commit_text_file(&repo.path, Path::new("src/main.rs"), "one\n", "add main");
+
+    let error = load_range_file_diff(&repo.path, &base, &head, Path::new("README.md"))
+      .expect_err("README.md is untouched by the range");
+
+    assert!(error.to_string().contains("does not change path"));
+  }
+
+  #[test]
+  fn an_unknown_commit_is_an_error_not_a_panic() {
+    let repo = TempRepo::init("history-range-unknown");
+    let head = commit_text_file(&repo.path, Path::new("README.md"), "v1\n", "initial");
+    let missing = "0".repeat(40);
+
+    let error = list_range_changed_files(&repo.path, &missing, &head).expect_err("unknown base");
+
+    assert!(error.to_string().contains("find commit"));
+  }
+
+  #[test]
+  fn the_merge_base_of_two_branches_is_where_they_parted() {
+    let repo = TempRepo::init("history-merge-base");
+    let base = commit_text_file(&repo.path, Path::new("README.md"), "v1\n", "initial");
+    let head = commit_text_file(&repo.path, Path::new("src/main.rs"), "one\n", "add main");
+
+    // A linear history: the older commit is the base of the newer one.
+    assert_eq!(
+      merge_base(&repo.path, &base, &head).expect("merge base"),
+      base
     );
   }
 }
