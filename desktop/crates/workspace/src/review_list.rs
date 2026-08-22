@@ -424,11 +424,51 @@ impl ReviewList {
       .into_any_element()
   }
 
-  fn render_actions(&self, cx: &mut Context<Self>) -> AnyElement {
+  /// The master checkbox sits on the column the file checkboxes use, so ticking
+  /// down the list reads as one column.
+  fn render_selection_header(&self, cx: &mut Context<Self>) -> AnyElement {
     let theme = cx.theme().clone();
     let sendable = self.sendable_count();
+    let selected = self.selected.len();
+
+    h_flex()
+      .w_full()
+      .items_center()
+      .gap_1()
+      .px_1()
+      .py_1()
+      .border_b_1()
+      .border_color(theme.border)
+      .child(
+        Checkbox::new("review-list-select-all")
+          .debug_selector(|| REVIEW_LIST_SELECT_ALL_DEBUG_SELECTOR.to_string())
+          .small()
+          .checked(self.everything_is_selected())
+          .disabled(sendable == 0)
+          .on_click(cx.listener(|this, _, _, cx| this.toggle_select_all(cx))),
+      )
+      .child(
+        div()
+          .flex_1()
+          .min_w_0()
+          .text_xs()
+          .text_color(theme.muted_foreground)
+          .child("Select all"),
+      )
+      .when(selected > 0, |this| {
+        this.child(
+          div()
+            .text_xs()
+            .text_color(theme.muted_foreground)
+            .child(format!("{selected} selected")),
+        )
+      })
+      .into_any_element()
+  }
+
+  fn render_actions(&self, cx: &mut Context<Self>) -> AnyElement {
+    let theme = cx.theme().clone();
     let send_count = self.send_count();
-    let everything_is_selected = self.everything_is_selected();
 
     h_flex()
       .w_full()
@@ -440,33 +480,14 @@ impl ReviewList {
       .border_t_1()
       .border_color(theme.border)
       .child(
-        h_flex()
-          .items_center()
-          .gap_1()
-          .child(
-            Button::new("review-list-select-all")
-              .debug_selector(|| REVIEW_LIST_SELECT_ALL_DEBUG_SELECTOR.to_string())
-              .ghost()
-              .small()
-              .compact()
-              .label(if everything_is_selected {
-                "Deselect all"
-              } else {
-                "Select all"
-              })
-              .disabled(sendable == 0)
-              .on_click(cx.listener(|this, _, _, cx| this.toggle_select_all(cx))),
-          )
-          .child(
-            Button::new("review-list-discard")
-              .debug_selector(|| REVIEW_LIST_DISCARD_DEBUG_SELECTOR.to_string())
-              .ghost()
-              .small()
-              .compact()
-              .label("Discard")
-              .tooltip("Delete every comment of this review")
-              .on_click(cx.listener(|_, _, _, cx| cx.emit(ReviewListEvent::DiscardReview))),
-          ),
+        Button::new("review-list-discard")
+          .debug_selector(|| REVIEW_LIST_DISCARD_DEBUG_SELECTOR.to_string())
+          .ghost()
+          .small()
+          .compact()
+          .label("Discard")
+          .tooltip("Delete every comment of this review")
+          .on_click(cx.listener(|_, _, _, cx| cx.emit(ReviewListEvent::DiscardReview))),
       )
       .child(
         Button::new("review-list-send")
@@ -518,6 +539,7 @@ impl Render for ReviewList {
     v_flex()
       .size_full()
       .min_h_0()
+      .child(self.render_selection_header(cx))
       .child(
         div()
           .id("review-list-scroll")
@@ -780,14 +802,14 @@ mod tests {
   }
 
   #[gpui::test]
-  async fn the_select_all_button_paints_and_takes_the_whole_batch(cx: &mut gpui::TestAppContext) {
+  async fn the_master_checkbox_paints_and_takes_the_whole_batch(cx: &mut gpui::TestAppContext) {
     let (list, cx) = add_review_list_window(cx);
     list.update(cx, |list, cx| list.set_comments(batch(), cx));
     cx.run_until_parked();
 
     let button = cx
       .debug_bounds(REVIEW_LIST_SELECT_ALL_DEBUG_SELECTOR)
-      .expect("select all bounds");
+      .expect("master checkbox bounds");
     cx.simulate_click(button.center(), gpui::Modifiers::default());
     cx.run_until_parked();
 
@@ -795,10 +817,10 @@ mod tests {
       assert_eq!(list.selected_ids(), &HashSet::from([1, 2, 3]));
     });
 
-    // The same button gives everything back once all of it is ticked.
+    // Ticked, the same checkbox gives everything back.
     let button = cx
       .debug_bounds(REVIEW_LIST_SELECT_ALL_DEBUG_SELECTOR)
-      .expect("deselect all bounds");
+      .expect("master checkbox bounds");
     cx.simulate_click(button.center(), gpui::Modifiers::default());
     cx.run_until_parked();
 
