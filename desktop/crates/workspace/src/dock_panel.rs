@@ -24,8 +24,9 @@ use terminal::TerminalView;
 use crate::changes_list::{ChangesList, ChangesListEvent, status_color};
 use crate::file_view::{file_dir_label, file_name_label, render_file_name_with_status};
 use crate::history_list::{HistoryList, HistoryListEvent, history_change_kind_to_repo_status};
+use crate::pull_request_review_comments::{pending_review_comment_node_id, pending_review_rows};
 use crate::repo_state::{PaletteCommand, RepoState, push_flags, should_publish_branch};
-use crate::review_list::{ReviewList, ReviewListEvent};
+use crate::review_list::{ReviewList, ReviewListEvent, ReviewSection};
 
 const DOCK_PANEL_TERMINAL_DEBUG_SELECTOR: &str = "dock-panel-terminal";
 pub(crate) const DOCK_PANEL_HISTORY_DEBUG_SELECTOR: &str = "dock-panel-history";
@@ -45,7 +46,7 @@ use std::rc::Rc;
 
 use crate::api::{
   GithubPullRequest, GithubPullRequestChecksRollupState, GithubPullRequestChecksSummary,
-  GithubPullRequestMergeReadiness,
+  GithubPullRequestMergeReadiness, GithubPullRequestReviewComment,
 };
 use crate::auth_state::AuthStateStore;
 use crate::github_navigation::{open_compare_target, open_pr_target};
@@ -108,6 +109,7 @@ pub enum DockPanelEvent {
     base_oid: String,
     head_oid: String,
     path: PathBuf,
+    line: Option<usize>,
   },
   SendReview,
   DiscardReview,
@@ -434,6 +436,9 @@ pub struct DockPanel {
   pr_files_error: Option<SharedString>,
   pr_selected_file: Option<PathBuf>,
   pr_checks: Option<GithubPullRequestChecksSummary>,
+  /// What the viewer wrote on this pull request and has not submitted yet.
+  /// GitHub owns them, so they are read back rather than stored here.
+  pr_review_comments: Vec<GithubPullRequestReviewComment>,
   pr_reviewers: Vec<ReviewerRow>,
   pr_checks_loading: bool,
   pr_merge_readiness: Option<GithubPullRequestMergeReadiness>,
@@ -443,6 +448,7 @@ pub struct DockPanel {
   pr_details_expanded: bool,
   _pr_range_task: Option<Task<()>>,
   _pr_checks_task: Option<Task<()>>,
+  _pr_review_comments_task: Option<Task<()>>,
   files_tree_state: Entity<TreeState>,
   files_loaded: bool,
   files_loading: bool,
@@ -501,16 +507,33 @@ impl DockPanel {
     let review_list = cx.new(|_| ReviewList::new());
     cx.subscribe(
       &review_list,
-      |_this, _list, event: &ReviewListEvent, cx| match event {
-        ReviewListEvent::OpenComment { path, line } => {
-          cx.emit(DockPanelEvent::OpenReviewComment {
+      |this, _list, event: &ReviewListEvent, cx| match event {
+        ReviewListEvent::OpenComment {
+          section,
+          path,
+          line,
+        } => match section {
+          ReviewSection::Agent => cx.emit(DockPanelEvent::OpenReviewComment {
             path: path.clone(),
             line: *line,
-          });
-        }
-        ReviewListEvent::DeleteComment { id } => {
-          cx.emit(DockPanelEvent::DeleteReviewComment { id: *id });
-        }
+          }),
+          // A pull request comment is about the range, not about the working
+          // tree, which may hold something else entirely on that line.
+          ReviewSection::PullRequest => {
+            if let Some(range) = this.pr_range.as_ref() {
+              cx.emit(DockPanelEvent::OpenPullRequestFile {
+                base_oid: range.base.clone(),
+                head_oid: range.head.clone(),
+                path: path.clone(),
+                line: Some(*line),
+              });
+            }
+          }
+        },
+        ReviewListEvent::DeleteComment { section, id } => match section {
+          ReviewSection::Agent => cx.emit(DockPanelEvent::DeleteReviewComment { id: *id }),
+          ReviewSection::PullRequest => this.delete_pending_review_comment(*id, cx),
+        },
         ReviewListEvent::SendComment { id } => {
           cx.emit(DockPanelEvent::SendReviewComment { id: *id });
         }
@@ -559,6 +582,7 @@ impl DockPanel {
       pr_files_error: None,
       pr_selected_file: None,
       pr_checks: None,
+      pr_review_comments: Vec::new(),
       pr_reviewers: Vec::new(),
       pr_checks_loading: false,
       pr_merge_readiness: None,
@@ -567,6 +591,7 @@ impl DockPanel {
       pr_details_expanded: false,
       _pr_range_task: None,
       _pr_checks_task: None,
+      _pr_review_comments_task: None,
       files_tree_state: cx.new(|cx| TreeState::new(cx)),
       files_loaded: false,
       files_loading: false,
@@ -702,7 +727,7 @@ impl DockPanel {
       let _ = this.update(cx, |this, cx| {
         let found_pull_request = matches!(state, BranchPrState::Found(_, _));
         this.branch_pr = state;
-        this.reset_pull_request_details();
+        this.reset_pull_request_details(cx);
         if found_pull_request {
           this.load_pull_request_range(cx);
           this.load_pull_request_checks(cx);
@@ -738,26 +763,28 @@ impl DockPanel {
             head_ref: details.head_ref_name.clone(),
           };
           let files = list_pull_request_files(&repo_root, &range)?;
-          let reviews = api
-            .fetch_pull_request_conversation(&owner, &repo, number)
-            .map(|conversation| conversation.reviews)
-            .unwrap_or_default();
+          let conversation = api.fetch_pull_request_conversation(&owner, &repo, number);
+          let (reviews, review_comments) = match conversation {
+            Ok(conversation) => (conversation.reviews, conversation.review_comments),
+            Err(_) => (Vec::new(), Vec::new()),
+          };
           let reviewers = reviewer_rows(
             &details.requested_reviewers,
             &reviews,
             &details.author.login,
           );
-          anyhow::Ok((range, files, reviewers))
+          anyhow::Ok((range, files, reviewers, review_comments))
         })
         .await;
 
       let _ = this.update(cx, |this, cx| {
         this.pr_files_loading = false;
         match loaded {
-          Ok((range, files, reviewers)) => {
+          Ok((range, files, reviewers, review_comments)) => {
             this.pr_range = Some(range);
             this.pr_files = files;
             this.pr_reviewers = reviewers;
+            this.set_pull_request_review_comments(review_comments, cx);
           }
           Err(error) => {
             this.pr_files_error = Some(format!("{error}").into());
@@ -771,7 +798,8 @@ impl DockPanel {
 
   /// Everything the panel knows about one pull request. Another branch means
   /// another pull request, and stale checks read as this one's.
-  fn reset_pull_request_details(&mut self) {
+  fn reset_pull_request_details(&mut self, cx: &mut Context<Self>) {
+    self.set_pull_request_review_comments(Vec::new(), cx);
     self.pr_range = None;
     self.pr_files = Vec::new();
     self.pr_files_error = None;
@@ -812,6 +840,82 @@ impl DockPanel {
       });
     });
     self._pr_checks_task = Some(task);
+  }
+
+  fn set_pull_request_review_comments(
+    &mut self,
+    comments: Vec<GithubPullRequestReviewComment>,
+    cx: &mut Context<Self>,
+  ) {
+    let rows = pending_review_rows(&comments);
+    self.pr_review_comments = comments;
+    self.review_list.update(cx, |list, cx| {
+      list.set_comments(ReviewSection::PullRequest, rows, cx);
+    });
+  }
+
+  /// GitHub is the source of truth for a pending review, so what it holds is
+  /// read again rather than guessed from what we just did to it.
+  fn refresh_pull_request_review_comments(&mut self, cx: &mut Context<Self>) {
+    let BranchPrState::Found(context, pull_request) = &self.branch_pr else {
+      return;
+    };
+    let owner = context.owner.clone();
+    let repo = context.repo.clone();
+    let number = pull_request.number;
+    let api = WorkspaceApi::global(cx).api.clone();
+
+    let task = cx.spawn(async move |this, cx| {
+      let loaded = cx
+        .background_spawn(async move { api.fetch_pull_request_conversation(&owner, &repo, number) })
+        .await;
+      let _ = this.update(cx, |this, cx| {
+        if let Ok(conversation) = loaded {
+          this.set_pull_request_review_comments(conversation.review_comments, cx);
+        }
+        cx.notify();
+      });
+    });
+    self._pr_review_comments_task = Some(task);
+  }
+
+  /// A comment of a review nobody has submitted: dropping it is between the
+  /// viewer and their own draft, so it needs no confirmation.
+  fn delete_pending_review_comment(&mut self, id: u64, cx: &mut Context<Self>) {
+    let BranchPrState::Found(context, pull_request) = &self.branch_pr else {
+      return;
+    };
+    let Some(node_id) = pending_review_comment_node_id(&self.pr_review_comments, id) else {
+      return;
+    };
+    let owner = context.owner.clone();
+    let repo = context.repo.clone();
+    let number = pull_request.number;
+    let api = WorkspaceApi::global(cx).api.clone();
+    let window_handle = self.window_handle;
+
+    let task = cx.spawn(async move |this, cx| {
+      let result = cx
+        .background_spawn(async move {
+          api.delete_pending_review_comment(&owner, &repo, number, &node_id)
+        })
+        .await;
+      let _ = this.update(cx, |this, cx| {
+        match result {
+          Ok(()) => this.refresh_pull_request_review_comments(cx),
+          Err(error) => {
+            let _ = cx.update_window(window_handle, |_, window, cx| {
+              window.push_notification(
+                Notification::error(format!("Could not delete the comment: {error}")),
+                cx,
+              );
+            });
+          }
+        }
+        cx.notify();
+      });
+    });
+    self._pr_review_comments_task = Some(task);
   }
 
   fn toggle_pull_request_details(&mut self, cx: &mut Context<Self>) {
@@ -1914,6 +2018,7 @@ impl DockPanel {
               base_oid: base_oid.clone(),
               head_oid: head_oid.clone(),
               path: open_path.clone(),
+              line: None,
             });
             cx.notify();
           }))
@@ -2538,11 +2643,22 @@ mod tests {
         status: ReviewerStatus::Approved,
       }];
       panel.pr_selected_file = Some(PathBuf::from("src/main.rs"));
+      panel.set_pull_request_review_comments(
+        vec![
+          crate::pull_request_review_comments::pending_comment_fixture(
+            1,
+            "src/main.rs",
+            Some(12),
+            "rename this",
+          ),
+        ],
+        cx,
+      );
       cx.notify();
     });
     cx.run_until_parked();
 
-    panel.update(cx, |panel, _| panel.reset_pull_request_details());
+    panel.update(cx, |panel, cx| panel.reset_pull_request_details(cx));
 
     // Nothing of the previous pull request may read as this one's.
     panel.read_with(cx, |panel, _| {
@@ -2553,7 +2669,121 @@ mod tests {
       assert!(panel.pr_selected_file.is_none());
       assert!(panel.pr_files_error.is_none());
       assert!(!panel.pr_checks_loading);
+      assert!(panel.pr_review_comments.is_empty());
     });
+    panel.read_with(cx, |panel, cx| {
+      assert!(
+        panel
+          .review_list
+          .read(cx)
+          .comments(ReviewSection::PullRequest)
+          .is_empty()
+      );
+    });
+  }
+
+  #[gpui::test]
+  async fn what_the_review_still_owes_github_shows_in_the_review_panel(cx: &mut TestAppContext) {
+    let (panel, cx) = pull_request_panel(cx, Vec::new());
+
+    panel.update(cx, |panel, cx| {
+      let mut published = crate::pull_request_review_comments::pending_comment_fixture(
+        2,
+        "src/other.rs",
+        Some(3),
+        "already submitted",
+      );
+      published.is_pending = false;
+      panel.set_pull_request_review_comments(
+        vec![
+          crate::pull_request_review_comments::pending_comment_fixture(
+            1,
+            "src/main.rs",
+            Some(12),
+            "rename this",
+          ),
+          published,
+        ],
+        cx,
+      );
+    });
+    cx.run_until_parked();
+
+    panel.read_with(cx, |panel, cx| {
+      let rows = panel
+        .review_list
+        .read(cx)
+        .comments(ReviewSection::PullRequest)
+        .to_vec();
+      // Only what is not submitted yet: the rest lives on GitHub already.
+      assert_eq!(rows.len(), 1);
+      assert_eq!(rows[0].excerpt, "rename this");
+      assert_eq!(rows[0].line, 12);
+      // The panel's own batch is untouched by the pull request's.
+      assert!(
+        panel
+          .review_list
+          .read(cx)
+          .comments(ReviewSection::Agent)
+          .is_empty()
+      );
+    });
+  }
+
+  #[gpui::test]
+  async fn a_pull_request_comment_opens_the_range_on_its_line(cx: &mut TestAppContext) {
+    let (panel, cx) = pull_request_panel(cx, Vec::new());
+    panel.update(cx, |panel, cx| {
+      panel.set_pull_request_review_comments(
+        vec![
+          crate::pull_request_review_comments::pending_comment_fixture(
+            1,
+            "src/main.rs",
+            Some(12),
+            "rename this",
+          ),
+        ],
+        cx,
+      );
+    });
+    cx.run_until_parked();
+
+    let opened = std::sync::Arc::new(std::sync::Mutex::new(
+      None::<(String, PathBuf, Option<usize>)>,
+    ));
+    let observer = {
+      let opened = opened.clone();
+      cx.update(|_, cx| {
+        cx.subscribe(&panel, move |_, event: &DockPanelEvent, _| {
+          if let DockPanelEvent::OpenPullRequestFile {
+            head_oid,
+            path,
+            line,
+            ..
+          } = event
+          {
+            *opened.lock().expect("lock") = Some((head_oid.clone(), path.clone(), *line));
+          }
+        })
+      })
+    };
+
+    let review_list = panel.read_with(cx, |panel, _| panel.review_list.clone());
+    review_list.update(cx, |_, cx| {
+      cx.emit(ReviewListEvent::OpenComment {
+        section: ReviewSection::PullRequest,
+        path: PathBuf::from("src/main.rs"),
+        line: 12,
+      });
+    });
+    cx.run_until_parked();
+    drop(observer);
+
+    // The range, not the working tree: that line may hold something else there.
+    assert_eq!(
+      opened.lock().expect("lock").clone(),
+      Some(("h".repeat(40), PathBuf::from("src/main.rs"), Some(12)))
+    );
   }
 
   #[gpui::test]
@@ -2674,6 +2904,7 @@ mod tests {
             base_oid,
             head_oid,
             path,
+            ..
           } = event
           {
             *opened.lock().expect("lock") =

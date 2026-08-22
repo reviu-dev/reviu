@@ -4,6 +4,14 @@ All notable changes to Reviu are documented here.
 
 ## 1.0.0
 
+### One Review Panel, Two Destinations
+
+The Review panel now says where each comment is going. Comments written on your working tree sit under "To the agent" and behave as before. Comments belonging to a pull request review you have not submitted yet sit under "To this pull request", read back from GitHub rather than kept locally, so a review you started in the browser is there when you come back to the app.
+
+Clicking one of those rows opens the file as the pull request proposes it, on the comment's line, not the working tree file that may hold something else entirely on that line. Dropping a comment you no longer want deletes it from your unsubmitted review straight away.
+
+Ticking comments stays what it was, an agent thing: GitHub submits a review whole, so its section has no checkboxes rather than promising a choice the API cannot honour. Clicking a comment row also lands on the right line now, instead of one line above it.
+
 ### The Pull Request You Are On, In The Right Panel
 
 Checking out a branch that has a pull request now fills the Pull request tab with the whole picture, without leaving the workspace: the title and number, who opened it, the branches it goes between, and the list of files it proposes. Clicking a file opens the diff of the pull request itself, base against head, so you read what the branch adds rather than what your working tree happens to hold.

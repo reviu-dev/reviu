@@ -1,4 +1,4 @@
-//! The Review tab: the batch of local comments waiting to go to the agent.
+//! The Review tab: the comments waiting to go out, one section per destination.
 
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
@@ -28,13 +28,69 @@ pub(crate) const REVIEW_LIST_SELECT_ALL_DEBUG_SELECTOR: &str = "review-list-sele
 /// Longest excerpt shown on a row before it is cut.
 const REVIEW_EXCERPT_MAX_CHARS: usize = 120;
 
+/// Where the comments of a section go. It is the only thing that separates them,
+/// and it is what the section header says instead of a colour code.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub(crate) enum ReviewSection {
+  Agent,
+  PullRequest,
+}
+
+impl ReviewSection {
+  pub(crate) const ALL: [Self; 2] = [Self::Agent, Self::PullRequest];
+
+  fn title(self) -> &'static str {
+    match self {
+      Self::Agent => "To the agent",
+      Self::PullRequest => "To this pull request",
+    }
+  }
+
+  fn id_prefix(self) -> &'static str {
+    match self {
+      Self::Agent => "agent",
+      Self::PullRequest => "pull-request",
+    }
+  }
+}
+
+/// What a row says about itself beyond its text.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum ReviewRowStatus {
+  Draft,
+  Sent,
+  Pending,
+  /// A pull request comment the diff moved under: GitHub keeps it, anchored to
+  /// the line it was written against.
+  Outdated,
+}
+
+pub(crate) fn review_row_status_label(status: ReviewRowStatus) -> Option<&'static str> {
+  match status {
+    // The ordinary case says nothing, and a pending comment has its section to
+    // say it for the whole list.
+    ReviewRowStatus::Draft | ReviewRowStatus::Pending => None,
+    ReviewRowStatus::Sent => Some("Sent"),
+    ReviewRowStatus::Outdated => Some("Outdated"),
+  }
+}
+
+fn agent_row_status(state: &LocalAgentReviewCommentState) -> ReviewRowStatus {
+  match state {
+    LocalAgentReviewCommentState::Draft => ReviewRowStatus::Draft,
+    LocalAgentReviewCommentState::Sent => ReviewRowStatus::Sent,
+  }
+}
+
 pub(crate) enum ReviewListEvent {
-  /// Take me to the lines this comment is about.
+  /// Take me to the lines this comment is about, on the surface it belongs to.
   OpenComment {
+    section: ReviewSection,
     path: PathBuf,
     line: usize,
   },
   DeleteComment {
+    section: ReviewSection,
     id: u64,
   },
   /// One comment on its own, whatever the selection holds.
@@ -46,16 +102,18 @@ pub(crate) enum ReviewListEvent {
 }
 
 /// What a row needs, and nothing about where the comment came from: a pull
-/// request's pending comments can feed the same panel.
+/// request's pending comments feed the same panel.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct ReviewPanelComment {
   pub id: u64,
+  pub section: ReviewSection,
   pub path: PathBuf,
   pub line: usize,
   pub line_label: String,
   pub excerpt: String,
-  pub state: LocalAgentReviewCommentState,
-  /// Addressed and outdated comments have a row, but nothing left to send.
+  pub status: ReviewRowStatus,
+  /// Whether this row takes part in a partial send. Only the agent's do: GitHub
+  /// submits a review whole.
   pub sendable: bool,
 }
 
@@ -77,6 +135,15 @@ pub(crate) fn review_comment_excerpt(body: &str) -> String {
   excerpt
 }
 
+pub(crate) fn sort_review_panel_comments(rows: &mut [ReviewPanelComment]) {
+  rows.sort_by(|a, b| {
+    a.path
+      .cmp(&b.path)
+      .then_with(|| a.line.cmp(&b.line))
+      .then_with(|| a.id.cmp(&b.id))
+  });
+}
+
 pub(crate) fn review_panel_comments(
   comments: &[LocalAgentReviewComment],
 ) -> Vec<ReviewPanelComment> {
@@ -84,20 +151,17 @@ pub(crate) fn review_panel_comments(
     .iter()
     .map(|comment| ReviewPanelComment {
       id: comment.id,
+      section: ReviewSection::Agent,
       path: comment.path.clone(),
-      line: comment.line,
+      // The line a reader would name, which is what opening the row asks for.
+      line: comment.line.saturating_add(1),
       line_label: agent_review_line_label(comment),
       excerpt: review_comment_excerpt(comment.body.as_ref()),
-      state: comment.state.clone(),
+      status: agent_row_status(&comment.state),
       sendable: agent_review_state_is_sendable(&comment.state),
     })
     .collect::<Vec<_>>();
-  rows.sort_by(|a, b| {
-    a.path
-      .cmp(&b.path)
-      .then_with(|| a.line.cmp(&b.line))
-      .then_with(|| a.id.cmp(&b.id))
-  });
+  sort_review_panel_comments(&mut rows);
   rows
 }
 
@@ -116,19 +180,12 @@ pub(crate) fn group_review_comments_by_file(
   groups
 }
 
-/// A draft says nothing: it is the ordinary case. A sent comment says so until
-/// the turn that carries it ends.
-pub(crate) fn review_state_label(state: &LocalAgentReviewCommentState) -> Option<&'static str> {
-  match state {
-    LocalAgentReviewCommentState::Draft => None,
-    LocalAgentReviewCommentState::Sent => Some("Sent"),
-  }
-}
-
 pub(crate) struct ReviewList {
-  comments: Vec<ReviewPanelComment>,
-  collapsed_files: HashSet<PathBuf>,
-  /// Empty means the whole batch goes: nobody loses a comment by not ticking it.
+  agent_comments: Vec<ReviewPanelComment>,
+  pull_request_comments: Vec<ReviewPanelComment>,
+  collapsed_files: HashSet<(ReviewSection, PathBuf)>,
+  /// Agent comments only, and empty means the whole batch goes: nobody loses a
+  /// comment by not ticking it.
   selected: HashSet<u64>,
 }
 
@@ -137,34 +194,54 @@ impl gpui::EventEmitter<ReviewListEvent> for ReviewList {}
 impl ReviewList {
   pub(crate) fn new() -> Self {
     Self {
-      comments: Vec::new(),
+      agent_comments: Vec::new(),
+      pull_request_comments: Vec::new(),
       collapsed_files: HashSet::new(),
       selected: HashSet::new(),
     }
   }
 
-  pub(crate) fn set_comments(&mut self, comments: Vec<ReviewPanelComment>, cx: &mut Context<Self>) {
-    if self.comments == comments {
+  pub(crate) fn comments(&self, section: ReviewSection) -> &[ReviewPanelComment] {
+    match section {
+      ReviewSection::Agent => &self.agent_comments,
+      ReviewSection::PullRequest => &self.pull_request_comments,
+    }
+  }
+
+  fn comments_mut(&mut self, section: ReviewSection) -> &mut Vec<ReviewPanelComment> {
+    match section {
+      ReviewSection::Agent => &mut self.agent_comments,
+      ReviewSection::PullRequest => &mut self.pull_request_comments,
+    }
+  }
+
+  /// One section at a time: the two destinations have their own lifetime, so a
+  /// reload of one must not take the other's rows away.
+  pub(crate) fn set_comments(
+    &mut self,
+    section: ReviewSection,
+    comments: Vec<ReviewPanelComment>,
+    cx: &mut Context<Self>,
+  ) {
+    if self.comments(section) == comments.as_slice() {
       return;
     }
-    let paths = comments
-      .iter()
-      .map(|comment| comment.path.clone())
+    *self.comments_mut(section) = comments;
+    let live = self
+      .sections()
+      .flat_map(|section| self.comments(section))
+      .map(|comment| (comment.section, comment.path.clone()))
       .collect::<HashSet<_>>();
-    self.collapsed_files.retain(|path| paths.contains(path));
-    let sendable_ids = comments
-      .iter()
-      .filter(|comment| comment.sendable)
-      .map(|comment| comment.id)
-      .collect::<HashSet<_>>();
+    self.collapsed_files.retain(|key| live.contains(key));
+    let sendable_ids = self.sendable_ids().collect::<HashSet<_>>();
     self.selected.retain(|id| sendable_ids.contains(id));
-    self.comments = comments;
     cx.notify();
   }
 
-  #[cfg(test)]
-  pub(crate) fn comments(&self) -> &[ReviewPanelComment] {
-    &self.comments
+  fn sections(&self) -> impl Iterator<Item = ReviewSection> + '_ {
+    ReviewSection::ALL
+      .into_iter()
+      .filter(|section| !self.comments(*section).is_empty())
   }
 
   pub(crate) fn selected_ids(&self) -> &HashSet<u64> {
@@ -183,7 +260,7 @@ impl ReviewList {
 
   fn sendable_ids(&self) -> impl Iterator<Item = u64> + '_ {
     self
-      .comments
+      .agent_comments
       .iter()
       .filter(|comment| comment.sendable)
       .map(|comment| comment.id)
@@ -209,6 +286,11 @@ impl ReviewList {
 
   pub(crate) fn toggle_comment(&mut self, comment_id: u64, cx: &mut Context<Self>) {
     if !self.selected.remove(&comment_id) {
+      // A tick promises a partial send, which only the agent's comments can be
+      // part of: a pull request review is submitted whole.
+      if !self.sendable_ids().any(|id| id == comment_id) {
+        return;
+      }
       self.selected.insert(comment_id);
     }
     cx.notify();
@@ -216,7 +298,7 @@ impl ReviewList {
 
   fn file_sendable_ids(&self, path: &Path) -> Vec<u64> {
     self
-      .comments
+      .agent_comments
       .iter()
       .filter(|comment| comment.path == path && comment.sendable)
       .map(|comment| comment.id)
@@ -245,26 +327,40 @@ impl ReviewList {
     cx.notify();
   }
 
-  fn toggle_file(&mut self, path: PathBuf, cx: &mut Context<Self>) {
-    if !self.collapsed_files.remove(&path) {
-      self.collapsed_files.insert(path);
+  fn toggle_file(&mut self, section: ReviewSection, path: PathBuf, cx: &mut Context<Self>) {
+    let key = (section, path);
+    if !self.collapsed_files.remove(&key) {
+      self.collapsed_files.insert(key);
     }
     cx.notify();
   }
 
-  fn render_file_header(&self, path: &Path, count: usize, cx: &mut Context<Self>) -> AnyElement {
+  fn render_file_header(
+    &self,
+    section: ReviewSection,
+    path: &Path,
+    count: usize,
+    cx: &mut Context<Self>,
+  ) -> AnyElement {
     let theme = cx.theme().clone();
-    let collapsed = self.collapsed_files.contains(path);
+    let collapsed = self
+      .collapsed_files
+      .contains(&(section, path.to_path_buf()));
     let (dir, file) = split_path_label(path);
     let toggle_path = path.to_path_buf();
-    let sendable_ids = self.file_sendable_ids(path);
-    let file_is_selected =
-      !sendable_ids.is_empty() && sendable_ids.iter().all(|id| self.selected.contains(id));
+    let sendable_ids = if section == ReviewSection::Agent {
+      self.file_sendable_ids(path)
+    } else {
+      Vec::new()
+    };
+    let selectable = !sendable_ids.is_empty();
+    let file_is_selected = selectable && sendable_ids.iter().all(|id| self.selected.contains(id));
     let select_path = path.to_path_buf();
 
     h_flex()
       .id(gpui::SharedString::from(format!(
-        "review-file-{}",
+        "review-file-{}-{}",
+        section.id_prefix(),
         path.to_string_lossy()
       )))
       .w_full()
@@ -276,25 +372,27 @@ impl ReviewList {
       .hover(|this| this.bg(theme.accent))
       .cursor_pointer()
       .on_click(cx.listener(move |this, _, _, cx| {
-        this.toggle_file(toggle_path.clone(), cx);
+        this.toggle_file(section, toggle_path.clone(), cx);
       }))
-      .child(
-        div()
-          .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-          .child(
-            Checkbox::new(gpui::SharedString::from(format!(
-              "review-file-select-{}",
-              path.to_string_lossy()
-            )))
-            .small()
-            .checked(file_is_selected)
-            .disabled(sendable_ids.is_empty())
-            .on_click(cx.listener(move |this, _, _, cx| {
-              cx.stop_propagation();
-              this.toggle_file_selection(select_path.clone(), cx);
-            })),
-          ),
-      )
+      .when(section == ReviewSection::Agent, |this| {
+        this.child(
+          div()
+            .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+            .child(
+              Checkbox::new(gpui::SharedString::from(format!(
+                "review-file-select-{}",
+                path.to_string_lossy()
+              )))
+              .small()
+              .checked(file_is_selected)
+              .disabled(!selectable)
+              .on_click(cx.listener(move |this, _, _, cx| {
+                cx.stop_propagation();
+                this.toggle_file_selection(select_path.clone(), cx);
+              })),
+            ),
+        )
+      })
       .child(Icon::new(if collapsed {
         IconName::ChevronRight
       } else {
@@ -321,6 +419,7 @@ impl ReviewList {
 
   fn render_comment_row(&self, comment: &ReviewPanelComment, cx: &mut Context<Self>) -> AnyElement {
     let theme = cx.theme().clone();
+    let section = comment.section;
     let open = (comment.path.clone(), comment.line);
     let delete_id = comment.id;
     let send_id = comment.id;
@@ -329,7 +428,13 @@ impl ReviewList {
     let is_selected = self.selected.contains(&comment.id);
 
     h_flex()
-      .id(("review-comment", comment.id as usize))
+      .id((
+        match section {
+          ReviewSection::Agent => "review-comment-agent",
+          ReviewSection::PullRequest => "review-comment-pull-request",
+        },
+        comment.id as usize,
+      ))
       .w_full()
       .items_center()
       .gap_2()
@@ -341,23 +446,30 @@ impl ReviewList {
       .cursor_pointer()
       .on_click(cx.listener(move |_, _, _, cx| {
         let (path, line) = open.clone();
-        cx.emit(ReviewListEvent::OpenComment { path, line });
+        cx.emit(ReviewListEvent::OpenComment {
+          section,
+          path,
+          line,
+        });
       }))
-      // Always there, so every row's text starts on the same column.
-      .child(
-        div()
-          .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-          .child(
-            Checkbox::new(("review-comment-select", select_id as usize))
-              .small()
-              .checked(is_selected)
-              .disabled(!sendable)
-              .on_click(cx.listener(move |this, _, _, cx| {
-                cx.stop_propagation();
-                this.toggle_comment(select_id, cx);
-              })),
-          ),
-      )
+      // Always there in the agent section, so every row's text starts on the
+      // same column.
+      .when(section == ReviewSection::Agent, |this| {
+        this.child(
+          div()
+            .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+            .child(
+              Checkbox::new(("review-comment-select", select_id as usize))
+                .small()
+                .checked(is_selected)
+                .disabled(!sendable)
+                .on_click(cx.listener(move |this, _, _, cx| {
+                  cx.stop_propagation();
+                  this.toggle_comment(select_id, cx);
+                })),
+            ),
+        )
+      })
       .child(
         div()
           .text_xs()
@@ -373,7 +485,7 @@ impl ReviewList {
           .truncate()
           .child(comment.excerpt.clone()),
       )
-      .when_some(review_state_label(&comment.state), |this, label| {
+      .when_some(review_row_status_label(comment.status), |this, label| {
         this.child(
           ui::StatusTag::new(theme.muted_foreground)
             .outline()
@@ -411,19 +523,24 @@ impl ReviewList {
               .tooltip("Delete comment")
               .on_click(cx.listener(move |_, _, _, cx| {
                 cx.stop_propagation();
-                cx.emit(ReviewListEvent::DeleteComment { id: delete_id });
+                cx.emit(ReviewListEvent::DeleteComment {
+                  section,
+                  id: delete_id,
+                });
               })),
           ),
       )
       .into_any_element()
   }
 
-  /// The master checkbox sits on the column the file checkboxes use, so ticking
-  /// down the list reads as one column.
-  fn render_selection_header(&self, cx: &mut Context<Self>) -> AnyElement {
+  /// The section header says where its comments go. In the agent's, the master
+  /// checkbox sits on the column the file checkboxes use, so ticking down the
+  /// list reads as one column.
+  fn render_section_header(&self, section: ReviewSection, cx: &mut Context<Self>) -> AnyElement {
     let theme = cx.theme().clone();
     let sendable = self.sendable_count();
     let selected = self.selected.len();
+    let count = self.comments(section).len();
 
     h_flex()
       .w_full()
@@ -433,34 +550,38 @@ impl ReviewList {
       .py_1()
       .border_b_1()
       .border_color(theme.border)
-      .child(
-        Checkbox::new("review-list-select-all")
-          .debug_selector(|| REVIEW_LIST_SELECT_ALL_DEBUG_SELECTOR.to_string())
-          .small()
-          .checked(self.everything_is_selected())
-          .disabled(sendable == 0)
-          .on_click(cx.listener(|this, _, _, cx| this.toggle_select_all(cx))),
-      )
+      .when(section == ReviewSection::Agent, |this| {
+        this.child(
+          Checkbox::new("review-list-select-all")
+            .debug_selector(|| REVIEW_LIST_SELECT_ALL_DEBUG_SELECTOR.to_string())
+            .small()
+            .checked(self.everything_is_selected())
+            .disabled(sendable == 0)
+            .on_click(cx.listener(|this, _, _, cx| this.toggle_select_all(cx))),
+        )
+      })
       .child(
         div()
           .flex_1()
           .min_w_0()
           .text_xs()
           .text_color(theme.muted_foreground)
-          .child("Select all"),
+          .truncate()
+          .child(section.title()),
       )
-      .when(selected > 0, |this| {
-        this.child(
-          div()
-            .text_xs()
-            .text_color(theme.muted_foreground)
-            .child(format!("{selected} selected")),
-        )
-      })
+      .child(
+        div()
+          .text_xs()
+          .text_color(theme.muted_foreground)
+          .child(match section {
+            ReviewSection::Agent if selected > 0 => format!("{selected} selected"),
+            _ => count.to_string(),
+          }),
+      )
       .into_any_element()
   }
 
-  fn render_actions(&self, cx: &mut Context<Self>) -> AnyElement {
+  fn render_agent_actions(&self, cx: &mut Context<Self>) -> AnyElement {
     let theme = cx.theme().clone();
     let send_count = self.send_count();
 
@@ -498,13 +619,51 @@ impl ReviewList {
       )
       .into_any_element()
   }
+
+  fn render_section_actions(
+    &self,
+    section: ReviewSection,
+    cx: &mut Context<Self>,
+  ) -> Option<AnyElement> {
+    match section {
+      ReviewSection::Agent => Some(self.render_agent_actions(cx)),
+      ReviewSection::PullRequest => None,
+    }
+  }
+
+  fn render_section_rows(&self, section: ReviewSection, cx: &mut Context<Self>) -> AnyElement {
+    let mut list = v_flex().w_full().gap_0p5();
+    for (path, comments) in group_review_comments_by_file(self.comments(section)) {
+      list = list.child(self.render_file_header(section, &path, comments.len(), cx));
+      if self.collapsed_files.contains(&(section, path)) {
+        continue;
+      }
+      for comment in &comments {
+        list = list.child(self.render_comment_row(comment, cx));
+      }
+    }
+    list.into_any_element()
+  }
 }
 
 impl Render for ReviewList {
   fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
     let theme = cx.theme().clone();
-    if self.comments.is_empty() {
-      return v_flex()
+    let sections = self.sections().collect::<Vec<_>>();
+
+    let scroll = |content: AnyElement| {
+      div()
+        .id("review-list-scroll")
+        .flex_1()
+        .min_h(px(0.0))
+        .overflow_y_scroll()
+        .px_1()
+        .py_1()
+        .child(content)
+    };
+
+    match sections.as_slice() {
+      [] => v_flex()
         .size_full()
         .items_center()
         .justify_center()
@@ -515,36 +674,31 @@ impl Render for ReviewList {
             .text_color(theme.muted_foreground)
             .child("Comment on a diff line to start a review."),
         )
-        .into_any_element();
-    }
-
-    let mut list = v_flex().w_full().gap_0p5();
-    for (path, comments) in group_review_comments_by_file(&self.comments) {
-      list = list.child(self.render_file_header(&path, comments.len(), cx));
-      if self.collapsed_files.contains(&path) {
-        continue;
+        .into_any_element(),
+      // One destination in play: its actions stay at the bottom of the panel,
+      // where the Changes footer is.
+      &[section] => v_flex()
+        .size_full()
+        .min_h_0()
+        .child(self.render_section_header(section, cx))
+        .child(scroll(self.render_section_rows(section, cx)))
+        .children(self.render_section_actions(section, cx))
+        .into_any_element(),
+      sections => {
+        let mut stack = v_flex().w_full();
+        for section in sections {
+          stack = stack
+            .child(self.render_section_header(*section, cx))
+            .child(self.render_section_rows(*section, cx))
+            .children(self.render_section_actions(*section, cx));
+        }
+        v_flex()
+          .size_full()
+          .min_h_0()
+          .child(scroll(stack.into_any_element()))
+          .into_any_element()
       }
-      for comment in &comments {
-        list = list.child(self.render_comment_row(comment, cx));
-      }
     }
-
-    v_flex()
-      .size_full()
-      .min_h_0()
-      .child(self.render_selection_header(cx))
-      .child(
-        div()
-          .id("review-list-scroll")
-          .flex_1()
-          .min_h(px(0.0))
-          .overflow_y_scroll()
-          .px_1()
-          .py_1()
-          .child(list),
-      )
-      .child(self.render_actions(cx))
-      .into_any_element()
   }
 }
 
@@ -576,6 +730,19 @@ mod tests {
     }
   }
 
+  fn pull_request_row(id: u64, path: &str, line: usize) -> ReviewPanelComment {
+    ReviewPanelComment {
+      id,
+      section: ReviewSection::PullRequest,
+      path: PathBuf::from(path),
+      line,
+      line_label: format!("L{line}"),
+      excerpt: "pending".to_string(),
+      status: ReviewRowStatus::Pending,
+      sendable: false,
+    }
+  }
+
   #[test]
   fn a_row_shows_the_first_line_that_says_something() {
     assert_eq!(
@@ -588,6 +755,31 @@ mod tests {
     let excerpt = review_comment_excerpt(&long);
     assert_eq!(excerpt.chars().count(), REVIEW_EXCERPT_MAX_CHARS + 1);
     assert!(excerpt.ends_with('…'));
+  }
+
+  #[test]
+  fn a_pending_pull_request_comment_carries_no_badge() {
+    assert_eq!(review_row_status_label(ReviewRowStatus::Draft), None);
+    assert_eq!(review_row_status_label(ReviewRowStatus::Pending), None);
+    assert_eq!(review_row_status_label(ReviewRowStatus::Sent), Some("Sent"));
+    assert_eq!(
+      review_row_status_label(ReviewRowStatus::Outdated),
+      Some("Outdated")
+    );
+  }
+
+  #[test]
+  fn a_row_carries_the_line_a_reader_would_name() {
+    let rows = review_panel_comments(&[comment(
+      1,
+      "src/a.rs",
+      4,
+      "here",
+      LocalAgentReviewCommentState::Draft,
+    )]);
+
+    assert_eq!(rows[0].line_label, "L5");
+    assert_eq!(rows[0].line, 5);
   }
 
   #[test]
@@ -632,18 +824,6 @@ mod tests {
         .map(|row| row.excerpt.as_str())
         .collect::<Vec<_>>(),
       vec!["first", "second"]
-    );
-  }
-
-  #[test]
-  fn a_row_only_carries_a_tag_once_the_comment_has_left() {
-    assert_eq!(
-      review_state_label(&LocalAgentReviewCommentState::Draft),
-      None
-    );
-    assert_eq!(
-      review_state_label(&LocalAgentReviewCommentState::Sent),
-      Some("Sent")
     );
   }
 
@@ -693,11 +873,13 @@ mod tests {
   async fn nothing_ticked_sends_the_whole_batch(cx: &mut gpui::TestAppContext) {
     let (list, cx) = add_review_list_window(cx);
 
-    list.update(cx, |list, cx| list.set_comments(batch(), cx));
+    list.update(cx, |list, cx| {
+      list.set_comments(ReviewSection::Agent, batch(), cx)
+    });
 
     list.read_with(cx, |list, _| {
       // Four rows, but the addressed one has nothing left to send.
-      assert_eq!(list.comments().len(), 4);
+      assert_eq!(list.comments(ReviewSection::Agent).len(), 4);
       assert_eq!(list.sendable_count(), 3);
       assert_eq!(list.send_count(), 3);
       assert!(list.selected_ids().is_empty());
@@ -708,7 +890,9 @@ mod tests {
   #[gpui::test]
   async fn ticking_comments_narrows_what_send_sends(cx: &mut gpui::TestAppContext) {
     let (list, cx) = add_review_list_window(cx);
-    list.update(cx, |list, cx| list.set_comments(batch(), cx));
+    list.update(cx, |list, cx| {
+      list.set_comments(ReviewSection::Agent, batch(), cx)
+    });
 
     list.update(cx, |list, cx| {
       list.toggle_comment(2, cx);
@@ -736,7 +920,9 @@ mod tests {
   #[gpui::test]
   async fn a_file_checkbox_takes_its_whole_file(cx: &mut gpui::TestAppContext) {
     let (list, cx) = add_review_list_window(cx);
-    list.update(cx, |list, cx| list.set_comments(batch(), cx));
+    list.update(cx, |list, cx| {
+      list.set_comments(ReviewSection::Agent, batch(), cx)
+    });
 
     list.update(cx, |list, cx| {
       list.toggle_file_selection(PathBuf::from("src/a.rs"), cx)
@@ -766,7 +952,9 @@ mod tests {
   #[gpui::test]
   async fn select_all_starts_from_everything_and_gives_it_back(cx: &mut gpui::TestAppContext) {
     let (list, cx) = add_review_list_window(cx);
-    list.update(cx, |list, cx| list.set_comments(batch(), cx));
+    list.update(cx, |list, cx| {
+      list.set_comments(ReviewSection::Agent, batch(), cx)
+    });
 
     list.update(cx, |list, cx| list.toggle_select_all(cx));
     list.read_with(cx, |list, _| {
@@ -785,7 +973,9 @@ mod tests {
   #[gpui::test]
   async fn the_master_checkbox_paints_and_takes_the_whole_batch(cx: &mut gpui::TestAppContext) {
     let (list, cx) = add_review_list_window(cx);
-    list.update(cx, |list, cx| list.set_comments(batch(), cx));
+    list.update(cx, |list, cx| {
+      list.set_comments(ReviewSection::Agent, batch(), cx)
+    });
     cx.run_until_parked();
 
     let button = cx
@@ -811,12 +1001,15 @@ mod tests {
   #[gpui::test]
   async fn a_comment_leaving_the_batch_leaves_the_selection(cx: &mut gpui::TestAppContext) {
     let (list, cx) = add_review_list_window(cx);
-    list.update(cx, |list, cx| list.set_comments(batch(), cx));
+    list.update(cx, |list, cx| {
+      list.set_comments(ReviewSection::Agent, batch(), cx)
+    });
     list.update(cx, |list, cx| list.toggle_select_all(cx));
 
     // One went out with a turn, another was deleted from the batch.
     list.update(cx, |list, cx| {
       list.set_comments(
+        ReviewSection::Agent,
         review_panel_comments(&[
           comment(
             1,
@@ -856,5 +1049,82 @@ mod tests {
     // Visible while the agent works on it; the turn that ends takes it away.
     assert_eq!(rows.len(), 1);
     assert!(!rows[0].sendable);
+  }
+  #[gpui::test]
+  async fn each_destination_keeps_its_own_rows(cx: &mut gpui::TestAppContext) {
+    let (list, cx) = add_review_list_window(cx);
+
+    list.update(cx, |list, cx| {
+      list.set_comments(ReviewSection::Agent, batch(), cx);
+      list.set_comments(
+        ReviewSection::PullRequest,
+        vec![pull_request_row(9, "src/a.rs", 3)],
+        cx,
+      );
+    });
+
+    // Reloading one destination leaves the other alone: they have their own
+    // lifetime, the agent's ends with a turn.
+    list.update(cx, |list, cx| {
+      list.set_comments(ReviewSection::Agent, Vec::new(), cx)
+    });
+
+    list.read_with(cx, |list, _| {
+      assert!(list.comments(ReviewSection::Agent).is_empty());
+      assert_eq!(list.comments(ReviewSection::PullRequest).len(), 1);
+    });
+  }
+
+  #[gpui::test]
+  async fn a_pending_pull_request_comment_takes_no_part_in_a_partial_send(
+    cx: &mut gpui::TestAppContext,
+  ) {
+    let (list, cx) = add_review_list_window(cx);
+
+    list.update(cx, |list, cx| {
+      list.set_comments(
+        ReviewSection::PullRequest,
+        vec![pull_request_row(9, "src/a.rs", 3)],
+        cx,
+      );
+      // GitHub submits a review whole, so ticking one of its comments would
+      // promise something the API cannot do.
+      list.toggle_comment(9, cx);
+      list.toggle_file_selection(PathBuf::from("src/a.rs"), cx);
+    });
+
+    list.read_with(cx, |list, _| {
+      assert_eq!(list.sendable_count(), 0);
+      assert_eq!(list.send_count(), 0);
+      assert!(!list.everything_is_selected());
+    });
+  }
+
+  #[gpui::test]
+  async fn the_same_file_collapses_once_per_destination(cx: &mut gpui::TestAppContext) {
+    let (list, cx) = add_review_list_window(cx);
+
+    list.update(cx, |list, cx| {
+      list.set_comments(ReviewSection::Agent, batch(), cx);
+      list.set_comments(
+        ReviewSection::PullRequest,
+        vec![pull_request_row(9, "src/a.rs", 3)],
+        cx,
+      );
+      list.toggle_file(ReviewSection::Agent, PathBuf::from("src/a.rs"), cx);
+    });
+
+    list.read_with(cx, |list, _| {
+      assert!(
+        list
+          .collapsed_files
+          .contains(&(ReviewSection::Agent, PathBuf::from("src/a.rs")))
+      );
+      assert!(
+        !list
+          .collapsed_files
+          .contains(&(ReviewSection::PullRequest, PathBuf::from("src/a.rs")))
+      );
+    });
   }
 }

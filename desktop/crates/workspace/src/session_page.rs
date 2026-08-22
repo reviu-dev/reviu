@@ -65,7 +65,7 @@ use crate::pull_request_dialog::{GithubBranchContext, open_create_pull_request_d
 use crate::repo_command::{RepoCommand, RepoCommandOutcome, branch_ref_from_palette};
 use crate::repo_snapshot::{RepoSnapshot, RepoSnapshotEvent};
 use crate::repo_state::{PaletteCommand, RepoState, can_accept_all_conflicts, push_flags};
-use crate::review_list::review_panel_comments;
+use crate::review_list::{ReviewSection, review_panel_comments};
 use crate::status_poll;
 use crate::svg_preview::SvgPreview;
 use crate::workspace::WorkspaceApi;
@@ -328,8 +328,16 @@ impl SessionPage {
           base_oid,
           head_oid,
           path,
+          line,
         } => {
-          this.open_pull_request_file(base_oid.clone(), head_oid.clone(), path.clone(), window, cx);
+          this.open_pull_request_file(
+            base_oid.clone(),
+            head_oid.clone(),
+            path.clone(),
+            line.map(|line| line as u32),
+            window,
+            cx,
+          );
         }
         DockPanelEvent::SendReviewComment { id } => {
           this.send_agent_review_comment_to_agent(*id, window, cx);

@@ -546,9 +546,9 @@ impl SessionPage {
   pub(super) fn sync_review_panel(&mut self, cx: &mut Context<Self>) {
     let comments = review_panel_comments(self.agent_review.all());
     self.dock_panel.update(cx, |panel, cx| {
-      panel
-        .review_list
-        .update(cx, |list, cx| list.set_comments(comments, cx));
+      panel.review_list.update(cx, |list, cx| {
+        list.set_comments(ReviewSection::Agent, comments, cx)
+      });
     });
   }
 
@@ -777,7 +777,7 @@ mod tests {
   use super::super::test_support::*;
   use super::*;
   use crate::agent_review::LocalAgentReviewCommentState;
-  use crate::review_list::ReviewListEvent;
+  use crate::review_list::{ReviewListEvent, ReviewSection};
   use crate::test_support::{TempRepo, commit_text_file};
   use editor::ReviewCommentDisplayMode;
   use gpui::TestAppContext;
@@ -926,9 +926,15 @@ mod tests {
 
     page.read_with(cx, |page, cx| {
       let list = page.dock_panel.read(cx).review_list.read(cx);
-      assert_eq!(list.comments().len(), 1);
-      assert_eq!(list.comments()[0].excerpt, "extract helper");
-      assert_eq!(list.comments()[0].path, PathBuf::from("README.md"));
+      assert_eq!(list.comments(ReviewSection::Agent).len(), 1);
+      assert_eq!(
+        list.comments(ReviewSection::Agent)[0].excerpt,
+        "extract helper"
+      );
+      assert_eq!(
+        list.comments(ReviewSection::Agent)[0].path,
+        PathBuf::from("README.md")
+      );
     });
   }
 
@@ -998,6 +1004,7 @@ mod tests {
     page.update(cx, |page, _| page.selected_file = None);
     review_list.update(cx, |_, cx| {
       cx.emit(ReviewListEvent::OpenComment {
+        section: ReviewSection::Agent,
         path: PathBuf::from("README.md"),
         line: 0,
       });
@@ -1009,7 +1016,10 @@ mod tests {
 
     // And its delete button takes the comment out of the batch.
     review_list.update(cx, |_, cx| {
-      cx.emit(ReviewListEvent::DeleteComment { id: comment_id });
+      cx.emit(ReviewListEvent::DeleteComment {
+        section: ReviewSection::Agent,
+        id: comment_id,
+      });
     });
     cx.run_until_parked();
     page.read_with(cx, |page, cx| {
@@ -1020,7 +1030,7 @@ mod tests {
           .read(cx)
           .review_list
           .read(cx)
-          .comments()
+          .comments(ReviewSection::Agent)
           .is_empty()
       );
     });
@@ -1055,7 +1065,7 @@ mod tests {
           .read(cx)
           .review_list
           .read(cx)
-          .comments()
+          .comments(ReviewSection::Agent)
           .is_empty()
       );
     });
@@ -1288,7 +1298,12 @@ mod tests {
       assert_eq!(comments[0].body.as_ref(), "second");
       assert_eq!(page.draft_review_comment_count(), 1);
       // The panel follows, without waiting for a file to be opened.
-      let rows = page.dock_panel.read(cx).review_list.read(cx).comments();
+      let rows = page
+        .dock_panel
+        .read(cx)
+        .review_list
+        .read(cx)
+        .comments(ReviewSection::Agent);
       assert_eq!(rows.len(), 1);
       assert_eq!(rows[0].excerpt, "second");
     });

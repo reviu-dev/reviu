@@ -185,7 +185,12 @@ mod tests {
       // The rail badge reads the page, so it was right even while the panel
       // stayed empty: the panel needs its own sync after a load.
       assert_eq!(page.draft_review_comment_count(), 1);
-      let rows = page.dock_panel.read(cx).review_list.read(cx).comments();
+      let rows = page
+        .dock_panel
+        .read(cx)
+        .review_list
+        .read(cx)
+        .comments(ReviewSection::Agent);
       assert_eq!(rows.len(), 1);
       assert_eq!(rows[0].excerpt, "from the last run");
     });
@@ -240,7 +245,7 @@ mod tests {
           .read(cx)
           .review_list
           .read(cx)
-          .comments()
+          .comments(ReviewSection::Agent)
           .is_empty(),
         "the panel must not keep the rows of the repository we left"
       );
@@ -262,7 +267,7 @@ mod tests {
           .read(cx)
           .review_list
           .read(cx)
-          .comments()
+          .comments(ReviewSection::Agent)
           .len(),
         1
       );

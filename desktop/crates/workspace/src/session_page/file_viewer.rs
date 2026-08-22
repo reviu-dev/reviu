@@ -183,8 +183,6 @@ impl SessionPage {
     cx.notify();
   }
 
-  /// Back to the working tree: the history row stops being the open one.
-  /// Leaving a snapshot for a working-tree file. Returns whether there was one.
   /// A file as the pull request proposes it: the merge base against the head,
   /// read-only. Comments on it go to GitHub, never to the agent, because the
   /// agent edits the working tree and that is a different content.
@@ -193,15 +191,33 @@ impl SessionPage {
     base_oid: String,
     head_oid: String,
     rel_path: PathBuf,
+    reveal_line: Option<u32>,
     window: &mut Window,
     cx: &mut Context<Self>,
   ) {
     let Some(repo_root) = self.selected_repo.clone() else {
       return;
     };
+    let reveal_doc_line = reveal_line.map(|line| line.saturating_sub(1) as usize);
     self.show_preview = false;
     self.center = CenterView::Diff;
     self.sync_agent_chat_close_control(cx);
+    // Another comment on the file already open: reveal, do not reload.
+    if self.opened_snapshot
+      == Some(OpenedSnapshot::PullRequestRange {
+        base: base_oid.clone(),
+        head: head_oid.clone(),
+      })
+      && self.selected_file.as_ref() == Some(&rel_path)
+      && let Some(editor) = self.editor.clone()
+    {
+      if let Some(doc_line) = reveal_doc_line {
+        editor.update(cx, |editor, cx| editor.reveal_source_line(doc_line, cx));
+      }
+      self.focus_editor_on_next_frame(window, cx);
+      cx.notify();
+      return;
+    }
     self.leave_commit_file(cx);
     self.open_file_generation = self.open_file_generation.wrapping_add(1);
     let generation = self.open_file_generation;
@@ -244,6 +260,9 @@ impl SessionPage {
           editor.load_readonly_snapshot(range_file.content, diff_set, cx);
           editor.set_diff_view_mode(diff_view, cx);
           editor.set_ignore_whitespace(hide_whitespace, cx);
+          if let Some(doc_line) = reveal_doc_line {
+            editor.reveal_source_line(doc_line, cx);
+          }
         });
         this.binary_preview =
           build_binary_preview(rel_path.as_path(), range_file.binary_bytes.clone());
@@ -257,6 +276,7 @@ impl SessionPage {
     cx.notify();
   }
 
+  /// Leaving a snapshot for a working-tree file. Returns whether there was one.
   pub(super) fn leave_commit_file(&mut self, cx: &mut Context<Self>) -> bool {
     let Some(snapshot) = self.opened_snapshot.take() else {
       return false;

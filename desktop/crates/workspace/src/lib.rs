@@ -96,6 +96,7 @@ mod pro_teaser;
 mod pull_request_checks;
 mod pull_request_dialog;
 mod pull_request_merge;
+mod pull_request_review_comments;
 mod pull_request_reviewers;
 mod repo_command;
 mod repo_snapshot;
