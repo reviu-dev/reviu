@@ -1132,3 +1132,539 @@ impl GithubPrDetailsPage {
     self.file_content_tasks.insert(key, task);
   }
 }
+
+#[cfg(test)]
+mod tests {
+  use super::super::test_support::*;
+  use super::super::*;
+
+  #[gpui::test]
+  fn set_active_tab_changes_focuses_file_tree(cx: &mut TestAppContext) {
+    init_gpui_test(cx);
+    let (page, cx) = cx.add_window_view(|window, cx| GithubPrDetailsPage::new(window, cx));
+
+    let files = files_from_api(vec![
+      make_api_file("src/main.rs", "modified", None),
+      make_api_file("src/lib.rs", "modified", None),
+    ]);
+    let (items, lookup, selected_index, selected_id) = build_tree_items(&files);
+
+    page.update_in(cx, |this, window, cx| {
+      this.file_lookup = lookup;
+      this.selected_tree_id = selected_id.clone();
+      this.selected_file = selected_id
+        .as_ref()
+        .and_then(|id| this.file_lookup.get(id).cloned());
+      this.tree_state.update(cx, |state, cx| {
+        state.set_items(items, cx);
+        state.set_selected_index(selected_index, cx);
+      });
+
+      let external_focus = cx.focus_handle();
+      let page_focus = this.focus_handle.clone();
+      window.focus(&external_focus, cx);
+
+      this.set_active_tab(PR_TAB_CHANGES_IX, window, cx);
+
+      let focused = window.focused(cx).expect("changes tree should take focus");
+      assert_ne!(focused, external_focus);
+      assert_ne!(focused, page_focus);
+    });
+  }
+
+  #[gpui::test]
+  fn changes_markdown_preview_keeps_editor_and_preview_panes_visible(cx: &mut TestAppContext) {
+    init_gpui_test(cx);
+    let markdown = "# Preview\n\nPR markdown preview should stay visible.\n";
+    let file = files_from_api(vec![make_api_file("README.md", "modified", None)])
+      .into_iter()
+      .next()
+      .expect("markdown file");
+    let file_key = file.path.to_string();
+    let (page, cx) = cx.add_window_view(|window, cx| GithubPrDetailsPage::new(window, cx));
+
+    page.update_in(cx, |this, _window, cx| {
+      this.active_tab_ix = PR_TAB_CHANGES_IX;
+      this.files_loading = false;
+      this.file_loading = false;
+      this.files_error = None;
+      this.file_error = None;
+      this.file_lookup.insert(file_key.clone(), file.clone());
+      this.file_contents.insert(
+        file_key.clone(),
+        GithubPrFileContents {
+          base: Some(String::new()),
+          head: Some(markdown.to_string()),
+        },
+      );
+      this.set_selected_file(Some(file.clone()), cx);
+      this.show_markdown_preview = true;
+      this.sync_diff_view(cx);
+      cx.notify();
+    });
+
+    cx.run_until_parked();
+    let editor_bounds = cx
+      .debug_bounds(GITHUB_PR_MARKDOWN_PREVIEW_EDITOR_DEBUG_SELECTOR)
+      .expect("pr preview editor pane bounds")
+      .size;
+    let preview_bounds = cx
+      .debug_bounds(GITHUB_PR_MARKDOWN_PREVIEW_RENDER_DEBUG_SELECTOR)
+      .expect("pr preview render pane bounds")
+      .size;
+
+    assert!(editor_bounds.width > gpui::px(0.0));
+    assert!(editor_bounds.height > gpui::px(0.0));
+    assert!(preview_bounds.width > gpui::px(0.0));
+    assert!(preview_bounds.height > gpui::px(0.0));
+    assert!(cx.debug_bounds("pr-whitespace-toggle").is_some());
+  }
+
+  #[gpui::test]
+  async fn changes_raster_image_preview_renders_without_source_editor(cx: &mut TestAppContext) {
+    init_gpui_test(cx);
+    let (base_url, handle) = start_single_response_server(
+      "200 OK",
+      r#"{"contentBase64":"iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aP0cAAAAASUVORK5CYII="}"#,
+    );
+    let file = files_from_api(vec![make_api_file("image.png", "modified", None)])
+      .into_iter()
+      .next()
+      .expect("image file");
+    let file_key = file.path.to_string();
+    let (page, cx) = cx.add_window_view(|window, cx| GithubPrDetailsPage::new(window, cx));
+
+    let file_asset_task = page.update_in(cx, |this, _window, cx| {
+      this.active_tab_ix = PR_TAB_CHANGES_IX;
+      this.api = make_test_api_client(base_url.clone());
+      this.pull_request = Some(make_pr_details_for_stats());
+      this.files_loading = false;
+      this.file_loading = false;
+      this.file_lookup.insert(file_key.clone(), file.clone());
+      this.set_selected_file(Some(file.clone()), cx);
+      this
+        .file_asset_tasks
+        .remove(file_key.as_str())
+        .expect("file asset task should exist")
+    });
+    file_asset_task.await;
+    handle.join().expect("join server thread");
+
+    let is_raster_preview = page.read_with(cx, |this, _cx| {
+      matches!(
+        this.binary_preview,
+        Some(GithubPrBinaryPreview::RasterImage(_))
+      )
+    });
+    cx.run_until_parked();
+    let preview_bounds = cx
+      .debug_bounds(GITHUB_PR_BINARY_PREVIEW_RENDER_DEBUG_SELECTOR)
+      .expect("binary preview render pane bounds")
+      .size;
+
+    assert!(is_raster_preview);
+    assert!(preview_bounds.width > gpui::px(0.0));
+    assert!(preview_bounds.height > gpui::px(0.0));
+    assert!(cx.debug_bounds("pr-whitespace-toggle").is_none());
+    assert!(
+      cx.debug_bounds(GITHUB_PR_MARKDOWN_PREVIEW_EDITOR_DEBUG_SELECTOR)
+        .is_none()
+    );
+    assert!(
+      cx.debug_bounds(GITHUB_PR_MARKDOWN_PREVIEW_RENDER_DEBUG_SELECTOR)
+        .is_none()
+    );
+  }
+
+  #[gpui::test]
+  async fn selected_raster_image_fetches_asset_when_pr_details_arrive_late(
+    cx: &mut TestAppContext,
+  ) {
+    init_gpui_test(cx);
+    let (base_url, handle) = start_single_response_server(
+      "200 OK",
+      r#"{"contentBase64":"iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aP0cAAAAASUVORK5CYII="}"#,
+    );
+    let file = files_from_api(vec![make_api_file("image.png", "modified", None)])
+      .into_iter()
+      .next()
+      .expect("image file");
+    let file_key = file.path.to_string();
+    let (page, cx) = cx.add_window_view(|window, cx| GithubPrDetailsPage::new(window, cx));
+
+    page.update_in(cx, |this, _window, cx| {
+      this.active_tab_ix = PR_TAB_CHANGES_IX;
+      this.api = make_test_api_client(base_url.clone());
+      this.file_lookup.insert(file_key.clone(), file.clone());
+      this.set_selected_file(Some(file.clone()), cx);
+
+      assert!(this.file_loading);
+      assert!(this.file_content_tasks.is_empty());
+      assert!(this.file_asset_tasks.is_empty());
+
+      this.pull_request = Some(make_pr_details_for_stats());
+      this.maybe_fetch_selected_file_contents(cx);
+
+      assert!(this.file_content_tasks.is_empty());
+      assert!(this.file_asset_tasks.contains_key(file_key.as_str()));
+    });
+
+    let file_asset_task = page.update_in(cx, |this, _window, _cx| {
+      this
+        .file_asset_tasks
+        .remove(file_key.as_str())
+        .expect("file asset task should exist")
+    });
+    file_asset_task.await;
+    handle.join().expect("join server thread");
+
+    let is_raster_preview = page.read_with(cx, |this, _cx| {
+      matches!(
+        this.binary_preview,
+        Some(GithubPrBinaryPreview::RasterImage(_))
+      )
+    });
+    cx.run_until_parked();
+    let preview_bounds = cx
+      .debug_bounds(GITHUB_PR_BINARY_PREVIEW_RENDER_DEBUG_SELECTOR)
+      .expect("binary preview render pane bounds")
+      .size;
+
+    assert!(is_raster_preview);
+    assert!(preview_bounds.width > gpui::px(0.0));
+    assert!(preview_bounds.height > gpui::px(0.0));
+  }
+
+  #[gpui::test]
+  fn changes_unsupported_binary_preview_shows_placeholder(cx: &mut TestAppContext) {
+    init_gpui_test(cx);
+    let file = files_from_api(vec![make_api_file("slides.pdf", "modified", None)])
+      .into_iter()
+      .next()
+      .expect("pdf file");
+    let file_key = file.path.to_string();
+    let (page, cx) = cx.add_window_view(|window, cx| GithubPrDetailsPage::new(window, cx));
+
+    page.update_in(cx, |this, _window, cx| {
+      this.active_tab_ix = PR_TAB_CHANGES_IX;
+      this.pull_request = Some(make_pr_details_for_stats());
+      this.files_loading = false;
+      this.file_loading = false;
+      this.file_lookup.insert(file_key, file.clone());
+      this.set_selected_file(Some(file.clone()), cx);
+      cx.notify();
+    });
+
+    let is_placeholder = page.read_with(cx, |this, _cx| {
+      matches!(
+        this.binary_preview,
+        Some(GithubPrBinaryPreview::UnsupportedBinary)
+      )
+    });
+    cx.run_until_parked();
+    let preview_bounds = cx
+      .debug_bounds(GITHUB_PR_BINARY_PREVIEW_RENDER_DEBUG_SELECTOR)
+      .expect("binary preview placeholder bounds")
+      .size;
+
+    assert!(is_placeholder);
+    assert!(preview_bounds.width > gpui::px(0.0));
+    assert!(preview_bounds.height > gpui::px(0.0));
+    assert!(cx.debug_bounds("pr-whitespace-toggle").is_none());
+  }
+
+  #[gpui::test]
+  fn changes_tab_renders_changed_files_count_tag(cx: &mut TestAppContext) {
+    init_gpui_test(cx);
+    let (page, cx) = cx.add_window_view(|window, cx| GithubPrDetailsPage::new(window, cx));
+
+    page.update_in(cx, |this, _window, cx| {
+      this.pull_request = Some(make_pr_details_for_stats());
+      cx.notify();
+    });
+
+    cx.run_until_parked();
+    let count_bounds = cx
+      .debug_bounds("github-pr-changes-tab-count")
+      .expect("changes tab count bounds")
+      .size;
+    assert!(count_bounds.width > gpui::px(0.0));
+    assert!(count_bounds.height > gpui::px(0.0));
+  }
+
+  #[gpui::test]
+  fn active_file_search_entries_include_pr_and_unchanged_local_files_when_mode_is_active(
+    cx: &mut TestAppContext,
+  ) {
+    init_gpui_test(cx);
+    cx.update(|cx| {
+      ActiveLocalRepoStore::set(cx, Some(make_active_local_repo("head", false)));
+    });
+    let (page, cx) = cx.add_window_view(|window, cx| GithubPrDetailsPage::new(window, cx));
+
+    page.update_in(cx, |this, _window, cx| {
+      this.pull_request = Some(make_pr_details_for_stats());
+      this.show_local_project_files = true;
+      this.file_lookup.insert(
+        "src/pr_only.rs".to_string(),
+        Rc::new(GithubPrFileDiff {
+          path: "src/pr_only.rs".into(),
+          old_path: None,
+          status: GithubPrFileStatus::Modified,
+        }),
+      );
+      this.local_project_lookup.insert(
+        "src/local.rs".to_string(),
+        Rc::new(GithubPrLocalProjectFile {
+          path: "src/local.rs".into(),
+        }),
+      );
+      this.local_project_lookup.insert(
+        "README.md".to_string(),
+        Rc::new(GithubPrLocalProjectFile {
+          path: "README.md".into(),
+        }),
+      );
+      cx.notify();
+    });
+
+    let labels = page.read_with(cx, |this, cx| {
+      this
+        .active_file_search_entries(cx)
+        .into_iter()
+        .map(|entry| entry.label.to_string())
+        .collect::<Vec<_>>()
+    });
+    assert_eq!(
+      labels,
+      vec![
+        "README.md".to_string(),
+        "src/local.rs".to_string(),
+        "src/pr_only.rs".to_string(),
+      ]
+    );
+  }
+
+  #[gpui::test]
+  fn active_file_search_entries_hide_unchanged_local_files_when_mode_is_inactive(
+    cx: &mut TestAppContext,
+  ) {
+    init_gpui_test(cx);
+    let (page, cx) = cx.add_window_view(|window, cx| GithubPrDetailsPage::new(window, cx));
+
+    page.update_in(cx, |this, _window, cx| {
+      this.file_lookup.insert(
+        "src/pr_only.rs".to_string(),
+        Rc::new(GithubPrFileDiff {
+          path: "src/pr_only.rs".into(),
+          old_path: None,
+          status: GithubPrFileStatus::Modified,
+        }),
+      );
+      this.local_project_lookup.insert(
+        "src/local.rs".to_string(),
+        Rc::new(GithubPrLocalProjectFile {
+          path: "src/local.rs".into(),
+        }),
+      );
+      cx.notify();
+    });
+
+    let labels = page.read_with(cx, |this, cx| {
+      this
+        .active_file_search_entries(cx)
+        .into_iter()
+        .map(|entry| entry.label.to_string())
+        .collect::<Vec<_>>()
+    });
+    assert_eq!(labels, vec!["src/pr_only.rs".to_string()]);
+  }
+
+  #[gpui::test]
+  fn active_file_search_entries_follow_tree_text_search_matches(cx: &mut TestAppContext) {
+    init_gpui_test(cx);
+    cx.update(|cx| {
+      ActiveLocalRepoStore::set(cx, Some(make_active_local_repo("head", false)));
+    });
+    let (page, cx) = cx.add_window_view(|window, cx| GithubPrDetailsPage::new(window, cx));
+
+    page.update_in(cx, |this, _window, cx| {
+      this.pull_request = Some(make_pr_details_for_stats());
+      this.show_local_project_files = true;
+      this.tree_search_query = "needle".to_string();
+      this.tree_search_matches = Some(HashSet::from([
+        "README.md".to_string(),
+        "src/pr_only.rs".to_string(),
+      ]));
+      this.file_lookup.insert(
+        "src/pr_only.rs".to_string(),
+        Rc::new(GithubPrFileDiff {
+          path: "src/pr_only.rs".into(),
+          old_path: None,
+          status: GithubPrFileStatus::Modified,
+        }),
+      );
+      this.local_project_lookup.insert(
+        "src/local.rs".to_string(),
+        Rc::new(GithubPrLocalProjectFile {
+          path: "src/local.rs".into(),
+        }),
+      );
+      this.local_project_lookup.insert(
+        "README.md".to_string(),
+        Rc::new(GithubPrLocalProjectFile {
+          path: "README.md".into(),
+        }),
+      );
+      cx.notify();
+    });
+
+    let labels = page.read_with(cx, |this, cx| {
+      this
+        .active_file_search_entries(cx)
+        .into_iter()
+        .map(|entry| entry.label.to_string())
+        .collect::<Vec<_>>()
+    });
+    assert_eq!(
+      labels,
+      vec!["README.md".to_string(), "src/pr_only.rs".to_string(),]
+    );
+  }
+
+  #[gpui::test]
+  async fn refresh_tree_text_search_keeps_previous_matches_visible_while_loading(
+    cx: &mut TestAppContext,
+  ) {
+    init_gpui_test(cx);
+    let (page, cx) = cx.add_window_view(|window, cx| GithubPrDetailsPage::new(window, cx));
+
+    page.update_in(cx, |this, _window, cx| {
+      this.file_lookup.insert(
+        "src/one.rs".to_string(),
+        Rc::new(GithubPrFileDiff {
+          path: "src/one.rs".into(),
+          old_path: None,
+          status: GithubPrFileStatus::Modified,
+        }),
+      );
+      this.file_lookup.insert(
+        "src/two.rs".to_string(),
+        Rc::new(GithubPrFileDiff {
+          path: "src/two.rs".into(),
+          old_path: None,
+          status: GithubPrFileStatus::Modified,
+        }),
+      );
+      this.tree_search_query = "needle".to_string();
+      this.tree_search_matches = Some(HashSet::from(["src/one.rs".to_string()]));
+
+      this.refresh_tree_text_search(cx);
+
+      assert!(this.tree_search_loading);
+      assert_eq!(
+        this.tree_search_matches,
+        Some(HashSet::from(["src/one.rs".to_string()]))
+      );
+    });
+
+    let search_task = page.update_in(cx, |this, _window, _cx| this.tree_search_task.take());
+    if let Some(task) = search_task {
+      task.await;
+    }
+  }
+
+  #[gpui::test]
+  fn selecting_visible_changed_file_prefers_pr_diff_over_local_copy(cx: &mut TestAppContext) {
+    init_gpui_test(cx);
+    cx.update(|cx| {
+      ActiveLocalRepoStore::set(cx, Some(make_active_local_repo("head", false)));
+    });
+    let (page, cx) = cx.add_window_view(|window, cx| GithubPrDetailsPage::new(window, cx));
+
+    page.update_in(cx, |this, _window, cx| {
+      this.pull_request = Some(make_pr_details_for_stats());
+      this.show_local_project_files = true;
+      this.file_lookup.insert(
+        "src/shared.rs".to_string(),
+        Rc::new(GithubPrFileDiff {
+          path: "src/shared.rs".into(),
+          old_path: None,
+          status: GithubPrFileStatus::Modified,
+        }),
+      );
+      this.local_project_lookup.insert(
+        "src/shared.rs".to_string(),
+        Rc::new(GithubPrLocalProjectFile {
+          path: "src/shared.rs".into(),
+        }),
+      );
+      this.file_contents.insert(
+        "src/shared.rs".to_string(),
+        GithubPrFileContents {
+          base: Some("old\n".to_string()),
+          head: Some("new\n".to_string()),
+        },
+      );
+      this.select_visible_tree_path("src/shared.rs", cx);
+    });
+
+    let (selected_file, selected_local_project_file) = page.read_with(cx, |this, _cx| {
+      (
+        this
+          .selected_file
+          .as_ref()
+          .map(|file| file.path.to_string()),
+        this
+          .selected_local_project_file
+          .as_ref()
+          .map(|file| file.path.to_string()),
+      )
+    });
+    assert_eq!(selected_file.as_deref(), Some("src/shared.rs"));
+    assert!(selected_local_project_file.is_none());
+  }
+
+  #[gpui::test]
+  async fn same_pr_commit_links_switch_to_changes_and_select_the_commit(cx: &mut TestAppContext) {
+    init_gpui_test(cx);
+    cx.update(|cx| {
+      gpui_router::init(cx);
+      NavigationHistory::init(cx);
+      NavigationHistory::navigate_replace("/github/acme/widget/pull/42", cx);
+    });
+    let target_sha = "abcdef1234567890abcdef1234567890abcdef12";
+    let (page, cx) = cx.add_window_view(|window, cx| GithubPrDetailsPage::new(window, cx));
+
+    let files_task = page.update_in(cx, |this, window, cx| {
+      this.api = make_test_api_client("http://127.0.0.1:1");
+      this.current_pr_context = Some(CurrentPrContext {
+        owner: "acme".to_string(),
+        repo: "widget".to_string(),
+        number: 42,
+      });
+      this.commits = vec![make_api_commit(
+        target_sha,
+        "feat: add filter",
+        Some("2026-02-26T10:00:00Z"),
+        Some("0000000000000000000000000000000000000000"),
+      )];
+      this.active_tab_ix = PR_TAB_OVERVIEW_IX;
+
+      let handled =
+        this.handle_gfm_link("https://github.com/acme/widget/commit/abcdef1", window, cx);
+      assert!(handled);
+
+      this.files_task.take()
+    });
+    if let Some(task) = files_task {
+      task.await;
+    }
+
+    let (active_tab_ix, selected_commit_sha) = page.read_with(cx, |this, _cx| {
+      (this.active_tab_ix, this.selected_commit_sha.clone())
+    });
+    assert_eq!(active_tab_ix, PR_TAB_CHANGES_IX);
+    assert_eq!(selected_commit_sha.as_deref(), Some(target_sha));
+  }
+}

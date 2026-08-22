@@ -918,3 +918,346 @@ impl GithubPrDetailsPage {
     toolbar.render(cx)
   }
 }
+
+#[cfg(test)]
+mod tests {
+  use super::super::test_support::*;
+  use super::super::*;
+
+  #[gpui::test]
+  fn local_project_availability_is_ready_when_repo_branch_and_sha_match(cx: &mut TestAppContext) {
+    init_gpui_test(cx);
+    cx.update(|cx| {
+      ActiveLocalRepoStore::set(cx, Some(make_active_local_repo("head", false)));
+    });
+    let (page, cx) = cx.add_window_view(|window, cx| GithubPrDetailsPage::new(window, cx));
+
+    page.update_in(cx, |this, _window, cx| {
+      this.pull_request = Some(make_pr_details_for_stats());
+      cx.notify();
+    });
+
+    let availability = page.read_with(cx, |this, cx| this.local_project_availability(cx));
+    assert!(matches!(
+      availability,
+      GithubPrLocalProjectAvailability::Ready { .. }
+    ));
+  }
+
+  #[gpui::test]
+  fn local_project_availability_requires_pr_head_sha_match_when_clean(cx: &mut TestAppContext) {
+    init_gpui_test(cx);
+    cx.update(|cx| {
+      ActiveLocalRepoStore::set(cx, Some(make_active_local_repo("stale-head", false)));
+    });
+    let (page, cx) = cx.add_window_view(|window, cx| GithubPrDetailsPage::new(window, cx));
+
+    page.update_in(cx, |this, _window, cx| {
+      this.pull_request = Some(make_pr_details_for_stats());
+      cx.notify();
+    });
+
+    let availability = page.read_with(cx, |this, cx| this.local_project_availability(cx));
+    assert!(matches!(
+      availability,
+      GithubPrLocalProjectAvailability::NeedsUpdate { .. }
+    ));
+  }
+
+  #[gpui::test]
+  fn local_project_availability_reports_dirty_when_sha_mismatches_and_worktree_is_dirty(
+    cx: &mut TestAppContext,
+  ) {
+    init_gpui_test(cx);
+    cx.update(|cx| {
+      ActiveLocalRepoStore::set(cx, Some(make_active_local_repo("stale-head", true)));
+    });
+    let (page, cx) = cx.add_window_view(|window, cx| GithubPrDetailsPage::new(window, cx));
+
+    page.update_in(cx, |this, _window, cx| {
+      this.pull_request = Some(make_pr_details_for_stats());
+      cx.notify();
+    });
+
+    let availability = page.read_with(cx, |this, cx| this.local_project_availability(cx));
+    assert!(matches!(
+      availability,
+      GithubPrLocalProjectAvailability::Dirty { .. }
+    ));
+  }
+
+  #[gpui::test]
+  fn local_project_availability_requires_branch_switch_when_current_branch_differs(
+    cx: &mut TestAppContext,
+  ) {
+    init_gpui_test(cx);
+    cx.update(|cx| {
+      ActiveLocalRepoStore::set(
+        cx,
+        Some(make_active_local_repo_for_branch("main", "head", false)),
+      );
+    });
+    let (page, cx) = cx.add_window_view(|window, cx| GithubPrDetailsPage::new(window, cx));
+
+    page.update_in(cx, |this, _window, cx| {
+      this.pull_request = Some(make_pr_details_for_stats());
+      cx.notify();
+    });
+
+    let availability = page.read_with(cx, |this, cx| this.local_project_availability(cx));
+    assert!(matches!(
+      availability,
+      GithubPrLocalProjectAvailability::NeedsBranchSwitch {
+        current_branch: Some(ref branch),
+        has_uncommitted_changes: false,
+        ..
+      } if branch == "main"
+    ));
+  }
+
+  #[gpui::test]
+  fn local_project_availability_requires_branch_switch_and_preserves_dirty_state(
+    cx: &mut TestAppContext,
+  ) {
+    init_gpui_test(cx);
+    cx.update(|cx| {
+      ActiveLocalRepoStore::set(
+        cx,
+        Some(make_active_local_repo_for_branch("main", "head", true)),
+      );
+    });
+    let (page, cx) = cx.add_window_view(|window, cx| GithubPrDetailsPage::new(window, cx));
+
+    page.update_in(cx, |this, _window, cx| {
+      this.pull_request = Some(make_pr_details_for_stats());
+      cx.notify();
+    });
+
+    let availability = page.read_with(cx, |this, cx| this.local_project_availability(cx));
+    assert!(matches!(
+      availability,
+      GithubPrLocalProjectAvailability::NeedsBranchSwitch {
+        current_branch: Some(ref branch),
+        has_uncommitted_changes: true,
+        ..
+      } if branch == "main"
+    ));
+  }
+
+  #[gpui::test]
+  fn local_project_availability_uses_resolved_recent_repo_when_active_repo_is_missing(
+    cx: &mut TestAppContext,
+  ) {
+    init_gpui_test(cx);
+    let (repo_root, snapshot) =
+      create_local_repo_with_github_remote("acme", "widget", "main", &["feature"]);
+    let (page, cx) = cx.add_window_view(|window, cx| GithubPrDetailsPage::new(window, cx));
+
+    page.update_in(cx, |this, _window, cx| {
+      this.pull_request = Some(make_pr_details_for_local_repo(
+        snapshot.head_sha.as_deref().expect("snapshot head sha"),
+        "feature",
+      ));
+      this.resolved_local_repo = Some(snapshot.clone());
+      this.resolved_local_repo_scan_complete = true;
+      cx.notify();
+    });
+
+    let availability = page.read_with(cx, |this, cx| this.local_project_availability(cx));
+    assert!(matches!(
+      availability,
+      GithubPrLocalProjectAvailability::NeedsBranchSwitch {
+        repo_root: ref resolved_repo_root,
+        current_branch: Some(ref branch),
+        has_uncommitted_changes: false,
+      } if resolved_repo_root == &repo_root && branch == "main"
+    ));
+
+    std::fs::remove_dir_all(&repo_root).ok();
+  }
+
+  #[test]
+  fn local_project_command_palette_commands_include_switch_to_pr_branch_only_when_available() {
+    let commands = GithubPrDetailsPage::local_project_command_palette_commands(
+      &GithubPrLocalProjectAvailability::NeedsBranchSwitch {
+        repo_root: PathBuf::from("/tmp/reviu-repo"),
+        current_branch: Some("main".to_string()),
+        has_uncommitted_changes: true,
+      },
+    );
+    assert_eq!(commands.len(), 1);
+    assert_eq!(
+      commands[0].id,
+      ui::CommandPaletteCommandId::SwitchToPrBranch
+    );
+
+    assert!(
+      GithubPrDetailsPage::local_project_command_palette_commands(
+        &GithubPrLocalProjectAvailability::Hidden
+      )
+      .is_empty()
+    );
+    assert!(
+      GithubPrDetailsPage::local_project_command_palette_commands(
+        &GithubPrLocalProjectAvailability::Ready {
+          repo_root: PathBuf::from("/tmp/reviu-repo"),
+        }
+      )
+      .is_empty()
+    );
+    assert!(
+      GithubPrDetailsPage::local_project_command_palette_commands(
+        &GithubPrLocalProjectAvailability::NeedsUpdate {
+          repo_root: PathBuf::from("/tmp/reviu-repo"),
+        }
+      )
+      .is_empty()
+    );
+    assert!(
+      GithubPrDetailsPage::local_project_command_palette_commands(
+        &GithubPrLocalProjectAvailability::Dirty {
+          repo_root: PathBuf::from("/tmp/reviu-repo"),
+        }
+      )
+      .is_empty()
+    );
+  }
+
+  #[gpui::test]
+  async fn loading_local_project_files_keeps_selected_pr_diff_visible(cx: &mut TestAppContext) {
+    init_gpui_test(cx);
+    let (page, cx) = cx.add_window_view(|window, cx| GithubPrDetailsPage::new(window, cx));
+
+    page.update_in(cx, |this, _window, cx| {
+      let file = Rc::new(GithubPrFileDiff {
+        path: "src/main.rs".into(),
+        old_path: None,
+        status: GithubPrFileStatus::Modified,
+      });
+      this.show_local_project_files = true;
+      this.file_lookup.insert(file.path.to_string(), file.clone());
+      this.file_contents.insert(
+        file.path.to_string(),
+        GithubPrFileContents {
+          base: Some("old contents\n".to_string()),
+          head: Some("new contents\n".to_string()),
+        },
+      );
+      this.set_selected_file(Some(file), cx);
+      this.load_local_project_files(PathBuf::from("/tmp/reviu-tests/non-repo"), cx);
+    });
+
+    let after = page.read_with(cx, |this, cx| {
+      let editor = this.diff_editor.read(cx);
+      let document = editor.document().read(cx);
+      document.slice_to_string(0..document.len())
+    });
+    assert_eq!(after, "new contents\n");
+
+    let files_task = page.update_in(cx, |this, _window, _cx| {
+      this.local_project_files_task.take()
+    });
+    if let Some(task) = files_task {
+      task.await;
+    }
+  }
+
+  #[gpui::test]
+  async fn selecting_local_project_file_uses_detached_readonly_snapshot(cx: &mut TestAppContext) {
+    init_gpui_test(cx);
+
+    let repo_root = crate::test_support::temp_path("pr-local-project");
+    let file_path = repo_root.join("src/local.rs");
+    std::fs::create_dir_all(
+      file_path
+        .parent()
+        .expect("local project file should have parent directory"),
+    )
+    .expect("create local project directory");
+    Repository::init(&repo_root).expect("init local project git repo");
+    commit_local_project_file(
+      &repo_root,
+      Path::new("src/local.rs"),
+      "fn clean() {}\n",
+      "initial",
+    );
+    std::fs::write(&file_path, "fn local_change() {}\n").expect("write local worktree change");
+
+    let (page, cx) = cx.add_window_view(|window, cx| GithubPrDetailsPage::new(window, cx));
+
+    let open_task = page.update_in(cx, |this, _window, cx| {
+      this.local_project_loaded_repo_root = Some(repo_root.clone());
+      this.set_selected_local_project_file(
+        Some(Rc::new(GithubPrLocalProjectFile {
+          path: "src/local.rs".into(),
+        })),
+        cx,
+      );
+      this
+        .local_project_open_file_task
+        .take()
+        .expect("local project open task should exist")
+    });
+    open_task.await;
+
+    let (repo_file_is_none, git_store_is_none, is_read_only, diffs_is_none, workdir_path, contents) =
+      page.read_with(cx, |this, cx| {
+        let editor = this.diff_editor.read(cx);
+        let document = editor.document().read(cx);
+        (
+          editor.repo_file.is_none(),
+          editor.git_store.is_none(),
+          editor.is_read_only,
+          editor.diffs.is_none(),
+          editor.workdir_path.clone(),
+          document.slice_to_string(0..document.len()),
+        )
+      });
+
+    assert!(repo_file_is_none);
+    assert!(git_store_is_none);
+    assert!(is_read_only);
+    assert!(diffs_is_none);
+    assert_eq!(workdir_path, PathBuf::from("src/local.rs"));
+    assert_eq!(contents, "fn clean() {}\n");
+
+    std::fs::remove_dir_all(&repo_root).ok();
+  }
+
+  #[gpui::test]
+  fn selecting_a_commit_disables_local_project_mode(cx: &mut TestAppContext) {
+    init_gpui_test(cx);
+    cx.update(|cx| {
+      ActiveLocalRepoStore::set(cx, Some(make_active_local_repo("head", false)));
+    });
+    let (page, cx) = cx.add_window_view(|window, cx| GithubPrDetailsPage::new(window, cx));
+
+    page.update_in(cx, |this, _window, cx| {
+      this.pull_request = Some(make_pr_details_for_stats());
+      let file = Rc::new(GithubPrFileDiff {
+        path: "src/main.rs".into(),
+        old_path: None,
+        status: GithubPrFileStatus::Modified,
+      });
+      this.file_lookup.insert(file.path.to_string(), file);
+      this.show_local_project_files = true;
+      this.selected_local_project_file = Some(Rc::new(GithubPrLocalProjectFile {
+        path: "src/local.rs".into(),
+      }));
+      this.selected_local_project_tree_id = Some("src/local.rs".to_string());
+      this.select_commit_filter(Some("commit-sha".to_string()), cx);
+    });
+
+    let (selected_commit_sha, show_local_project_files, selected_local_project_file) = page
+      .read_with(cx, |this, _cx| {
+        (
+          this.selected_commit_sha.clone(),
+          this.show_local_project_files,
+          this.selected_local_project_file.clone(),
+        )
+      });
+    assert_eq!(selected_commit_sha.as_deref(), Some("commit-sha"));
+    assert!(!show_local_project_files);
+    assert!(selected_local_project_file.is_none());
+  }
+}

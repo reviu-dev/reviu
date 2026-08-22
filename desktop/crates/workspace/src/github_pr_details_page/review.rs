@@ -2066,3 +2066,132 @@ impl GithubPrDetailsPage {
       .into_any_element()
   }
 }
+
+#[cfg(test)]
+mod tests {
+  use super::super::test_support::*;
+  use super::super::*;
+
+  #[test]
+  fn suggested_change_original_lines_detects_stale_head_content() {
+    let file_contents = HashMap::from([(
+      "src/main.rs".to_string(),
+      GithubPrFileContents {
+        base: None,
+        head: Some("fn main() {\n  println!(\"new\");\n}\n".to_string()),
+      },
+    )]);
+    let original_lines = vec!["  println!(\"old\");".to_string()];
+
+    assert_eq!(
+      GithubPrDetailsPage::suggested_change_original_lines_match_current_head(
+        &file_contents,
+        "src/main.rs",
+        Some(2),
+        &original_lines,
+      ),
+      Some(false)
+    );
+  }
+
+  #[test]
+  fn suggested_change_original_lines_match_current_head_content() {
+    let file_contents = HashMap::from([(
+      "src/main.rs".to_string(),
+      GithubPrFileContents {
+        base: None,
+        head: Some("fn main() {\r\n  println!(\"old\");\r\n}\r\n".to_string()),
+      },
+    )]);
+    let original_lines = vec!["  println!(\"old\");".to_string()];
+
+    assert_eq!(
+      GithubPrDetailsPage::suggested_change_original_lines_match_current_head(
+        &file_contents,
+        "src/main.rs",
+        Some(2),
+        &original_lines,
+      ),
+      Some(true)
+    );
+  }
+
+  #[test]
+  fn review_decision_to_api_event_maps_all_variants() {
+    assert_eq!(
+      GithubPrDetailsPage::review_decision_to_api_event(GithubPrReviewDecision::Comment),
+      GithubPullRequestReviewEvent::Comment
+    );
+    assert_eq!(
+      GithubPrDetailsPage::review_decision_to_api_event(GithubPrReviewDecision::Approve),
+      GithubPullRequestReviewEvent::Approve
+    );
+    assert_eq!(
+      GithubPrDetailsPage::review_decision_to_api_event(GithubPrReviewDecision::RequestChanges),
+      GithubPullRequestReviewEvent::RequestChanges
+    );
+  }
+
+  #[test]
+  fn validate_review_submission_requires_body_for_comment_and_request_changes() {
+    assert!(
+      GithubPrDetailsPage::validate_review_submission(GithubPrReviewDecision::Comment, "   ")
+        .is_some()
+    );
+    assert!(
+      GithubPrDetailsPage::validate_review_submission(GithubPrReviewDecision::RequestChanges, "")
+        .is_some()
+    );
+  }
+
+  #[test]
+  fn validate_review_submission_allows_empty_body_for_approve() {
+    assert!(
+      GithubPrDetailsPage::validate_review_submission(GithubPrReviewDecision::Approve, "   ")
+        .is_none()
+    );
+  }
+
+  #[test]
+  fn review_decision_defaults_to_comment() {
+    assert_eq!(
+      GithubPrReviewDecision::default(),
+      GithubPrReviewDecision::Comment
+    );
+  }
+
+  #[test]
+  fn file_for_review_comment_path_prefers_direct_match() {
+    let files = files_from_api(vec![make_api_file("src/main.rs", "modified", None)]);
+    let lookup: HashMap<String, Rc<GithubPrFileDiff>> = files
+      .into_iter()
+      .map(|file| (file.path.as_ref().to_string(), file))
+      .collect();
+
+    let resolved = file_for_review_comment_path(&lookup, "src/main.rs");
+    assert_eq!(
+      resolved.as_ref().map(|file| file.path.as_ref()),
+      Some("src/main.rs")
+    );
+  }
+
+  #[test]
+  fn file_for_review_comment_path_falls_back_to_renamed_old_path() {
+    let files = files_from_api(vec![make_api_file(
+      "src/new.rs",
+      "renamed",
+      Some("src/old.rs"),
+    )]);
+    let lookup: HashMap<String, Rc<GithubPrFileDiff>> = files
+      .into_iter()
+      .map(|file| (file.path.as_ref().to_string(), file))
+      .collect();
+
+    let resolved = file_for_review_comment_path(&lookup, "src/old.rs");
+    assert_eq!(
+      resolved.as_ref().map(|file| file.path.as_ref()),
+      Some("src/new.rs")
+    );
+    assert!(file_for_review_comment_path(&lookup, "missing.rs").is_none());
+  }
+}

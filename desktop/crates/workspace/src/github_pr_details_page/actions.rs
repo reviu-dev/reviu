@@ -501,3 +501,261 @@ impl GithubPrDetailsPage {
     NavigationHistory::navigate_back(cx);
   }
 }
+
+#[cfg(test)]
+mod tests {
+  use super::super::test_support::*;
+  use super::super::*;
+
+  #[gpui::test]
+  fn focus_file_tree_action_switches_to_changes_tab_and_focuses_tree(cx: &mut TestAppContext) {
+    init_gpui_test(cx);
+    let (page, cx) = cx.add_window_view(|window, cx| GithubPrDetailsPage::new(window, cx));
+
+    let files = files_from_api(vec![make_api_file("src/main.rs", "modified", None)]);
+    let (items, lookup, selected_index, selected_id) = build_tree_items(&files);
+
+    page.update_in(cx, |this, window, cx| {
+      this.file_lookup = lookup;
+      this.selected_tree_id = selected_id.clone();
+      this.selected_file = selected_id
+        .as_ref()
+        .and_then(|id| this.file_lookup.get(id).cloned());
+      this.tree_state.update(cx, |state, cx| {
+        state.set_items(items, cx);
+        state.set_selected_index(selected_index, cx);
+      });
+
+      this.active_tab_ix = PR_TAB_OVERVIEW_IX;
+      let external_focus = cx.focus_handle();
+      window.focus(&external_focus, cx);
+
+      this.focus_file_tree_action(&crate::FocusFileTree, window, cx);
+
+      assert_eq!(this.active_tab_ix, PR_TAB_CHANGES_IX);
+      let focused = window.focused(cx).expect("changes tree should take focus");
+      assert_ne!(focused, external_focus);
+    });
+  }
+
+  #[gpui::test]
+  fn refocus_page_shortcuts_focuses_page_container(cx: &mut TestAppContext) {
+    init_gpui_test(cx);
+    let (page, cx) = cx.add_window_view(|window, cx| GithubPrDetailsPage::new(window, cx));
+
+    page.update_in(cx, |this, window, cx| {
+      let external_focus = cx.focus_handle();
+      let page_focus = this.focus_handle.clone();
+      window.focus(&external_focus, cx);
+
+      this.refocus_page_shortcuts(window, cx);
+
+      let focused = window.focused(cx).expect("page should take focus");
+      assert_eq!(focused, page_focus);
+    });
+  }
+
+  #[gpui::test]
+  fn copy_pr_branch_command_writes_head_ref_to_clipboard(cx: &mut TestAppContext) {
+    init_gpui_test(cx);
+    let mut mounted_page = None;
+    let (_root, cx) = cx.add_window_view(|window, cx| {
+      let page = cx.new(|cx| GithubPrDetailsPage::new(window, cx));
+      mounted_page = Some(page.clone());
+      gpui_component::Root::new(page, window, cx)
+    });
+    let page = mounted_page.expect("pr details page");
+
+    page.update_in(cx, |this, window, cx| {
+      this.pull_request = Some(make_pr_details_for_stats());
+      let result =
+        this.handle_command_palette_action(ui::CommandPaletteAction::CopyPrBranch, window, cx);
+      assert!(result.is_ok());
+      let clipboard = cx
+        .read_from_clipboard()
+        .and_then(|item| item.text())
+        .expect("clipboard text");
+      assert_eq!(clipboard, "feature");
+    });
+  }
+
+  #[gpui::test]
+  fn copy_pr_branch_command_is_included_when_pull_request_is_loaded(cx: &mut TestAppContext) {
+    init_gpui_test(cx);
+    let (page, cx) = cx.add_window_view(|window, cx| GithubPrDetailsPage::new(window, cx));
+
+    let no_pr_commands = page.read_with(cx, |this, cx| this.command_palette_commands(cx));
+    assert!(
+      !no_pr_commands
+        .iter()
+        .any(|command| command.id == ui::CommandPaletteCommandId::CopyPrBranch),
+      "copy PR branch should be hidden without a loaded pull request"
+    );
+
+    page.update_in(cx, |this, _window, _cx| {
+      this.pull_request = Some(make_pr_details_for_stats());
+    });
+
+    let with_pr_commands = page.read_with(cx, |this, cx| this.command_palette_commands(cx));
+    assert!(
+      with_pr_commands
+        .iter()
+        .any(|command| command.id == ui::CommandPaletteCommandId::CopyPrBranch),
+      "copy PR branch should be present once a pull request is loaded"
+    );
+  }
+
+  #[gpui::test]
+  fn command_palette_commands_prepend_switch_to_pr_branch_when_available(cx: &mut TestAppContext) {
+    init_gpui_test(cx);
+    cx.update(|cx| {
+      ActiveLocalRepoStore::set(
+        cx,
+        Some(make_active_local_repo_for_branch("main", "head", false)),
+      );
+    });
+    let (page, cx) = cx.add_window_view(|window, cx| GithubPrDetailsPage::new(window, cx));
+
+    page.update_in(cx, |this, _window, cx| {
+      this.pull_request = Some(make_pr_details_for_stats());
+      cx.notify();
+    });
+
+    let commands = page.read_with(cx, |this, cx| this.command_palette_commands(cx));
+    assert_eq!(
+      commands.first().map(|command| command.id),
+      Some(ui::CommandPaletteCommandId::SwitchToPrBranch)
+    );
+  }
+
+  #[gpui::test]
+  fn command_palette_commands_prepend_switch_when_resolved_recent_repo_needs_branch_switch(
+    cx: &mut TestAppContext,
+  ) {
+    init_gpui_test(cx);
+    let (repo_root, snapshot) =
+      create_local_repo_with_github_remote("acme", "widget", "main", &["feature"]);
+    let (page, cx) = cx.add_window_view(|window, cx| GithubPrDetailsPage::new(window, cx));
+
+    page.update_in(cx, |this, _window, cx| {
+      this.pull_request = Some(make_pr_details_for_local_repo(
+        snapshot.head_sha.as_deref().expect("snapshot head sha"),
+        "feature",
+      ));
+      this.resolved_local_repo = Some(snapshot.clone());
+      this.resolved_local_repo_scan_complete = true;
+      cx.notify();
+    });
+
+    let commands = page.read_with(cx, |this, cx| this.command_palette_commands(cx));
+    assert_eq!(
+      commands.first().map(|command| command.id),
+      Some(ui::CommandPaletteCommandId::SwitchToPrBranch)
+    );
+
+    std::fs::remove_dir_all(&repo_root).ok();
+  }
+
+  #[gpui::test]
+  async fn switch_to_pr_branch_palette_action_defers_before_switching_branch(
+    cx: &mut TestAppContext,
+  ) {
+    init_gpui_test(cx);
+
+    let repo_root = crate::test_support::temp_path("pr-switch-palette");
+    std::fs::create_dir_all(repo_root.join("src")).expect("create repo directories");
+    Repository::init(&repo_root).expect("init repo");
+    commit_local_project_file(
+      &repo_root,
+      Path::new("src/main.rs"),
+      "fn main() {}\n",
+      "initial",
+    );
+
+    let repo = Repository::open(&repo_root).expect("open repo");
+    let head_commit = repo
+      .head()
+      .expect("repo head")
+      .peel_to_commit()
+      .expect("head commit");
+    let current_branch = repo
+      .head()
+      .expect("repo head")
+      .shorthand()
+      .expect("current branch shorthand")
+      .to_string();
+    repo
+      .branch("feature", &head_commit, false)
+      .expect("create feature branch");
+    let head_sha = head_commit.id().to_string();
+
+    cx.update(|cx| {
+      ActiveLocalRepoStore::set(
+        cx,
+        Some(ActiveLocalRepo {
+          repo_root: repo_root.clone(),
+          github_owner: Some("acme".to_string()),
+          github_repo: Some("widget".to_string()),
+          current_branch: Some(current_branch),
+          head_sha: Some(head_sha.clone()),
+          has_uncommitted_changes: false,
+        }),
+      );
+    });
+
+    let (page, cx) = cx.add_window_view(|window, cx| GithubPrDetailsPage::new(window, cx));
+
+    page.update_in(cx, |this, _window, cx| {
+      this.pull_request = Some(make_pr_details_for_stats());
+      cx.notify();
+    });
+
+    let (action_result, switch_task_is_scheduled_immediately) =
+      page.update_in(cx, |this, window, cx| {
+        let result =
+          this.handle_command_palette_action(CommandPaletteAction::SwitchToPrBranch, window, cx);
+        let switch_task_is_scheduled_immediately = this.local_branch_switch_task.is_some();
+        (result, switch_task_is_scheduled_immediately)
+      });
+    assert!(action_result.is_ok());
+    assert!(!switch_task_is_scheduled_immediately);
+
+    cx.run_until_parked();
+
+    // The deferred command has run by now; the switch it started may still be in
+    // flight (fast machines finish it inside run_until_parked), so only await when
+    // the task is still around.
+    let switch_task = page.update_in(cx, |this, _window, _cx| {
+      this.local_branch_switch_task.take()
+    });
+    if let Some(switch_task) = switch_task {
+      switch_task.await;
+    }
+    cx.run_until_parked();
+
+    let switched_branch = Repository::open(&repo_root)
+      .expect("reopen repo")
+      .head()
+      .expect("repo head after switch")
+      .shorthand()
+      .expect("branch shorthand after switch")
+      .to_string();
+    assert_eq!(switched_branch, "feature");
+
+    let store_branch = page.read_with(cx, |_, cx| {
+      ActiveLocalRepoStore::get(cx).and_then(|repo| repo.current_branch)
+    });
+    assert_eq!(store_branch.as_deref(), Some("feature"));
+
+    let (switch_loading, switch_error) = page.read_with(cx, |this, _cx| {
+      (
+        this.local_branch_switch_loading,
+        this.local_branch_switch_error.clone(),
+      )
+    });
+    assert!(!switch_loading);
+    assert!(switch_error.is_none());
+
+    std::fs::remove_dir_all(&repo_root).ok();
+  }
+}
