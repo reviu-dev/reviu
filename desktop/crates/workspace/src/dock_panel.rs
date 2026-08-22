@@ -54,7 +54,11 @@ use crate::pull_request_checks::{
 use crate::pull_request_dialog::{
   GithubBranchContext, PullRequestCreatedHandler, open_create_pull_request_dialog,
 };
+use crate::pull_request_reviewers::{
+  ReviewerRow, ReviewerStatus, reviewer_rows, reviewers_summary_title,
+};
 use crate::workspace::WorkspaceApi;
+use gpui_component::avatar::Avatar;
 use ui::{
   Button, ButtonVariants as _, CommandPaletteCommand, StatusThemeExt as _, Textarea, TextareaState,
   UiIconName,
@@ -218,6 +222,73 @@ fn check_state_icon(
   }
 }
 
+fn reviewer_status_icon(status: ReviewerStatus, theme: &gpui_component::Theme) -> Icon {
+  match status {
+    ReviewerStatus::Approved => Icon::new(UiIconName::CircleCheck).text_color(theme.status_green()),
+    ReviewerStatus::ChangesRequested => Icon::new(IconName::CircleX).text_color(theme.danger),
+    ReviewerStatus::Commented => {
+      Icon::new(UiIconName::MessageCircle).text_color(theme.muted_foreground)
+    }
+    ReviewerStatus::Awaiting => Icon::new(UiIconName::CircleDot).text_color(theme.muted_foreground),
+  }
+}
+
+/// Enough of the answer to read at a glance while the block is closed.
+fn render_reviewer_avatars(reviewers: &[ReviewerRow], theme: &gpui_component::Theme) -> AnyElement {
+  const SHOWN: usize = 3;
+  let mut row = h_flex().flex_shrink_0().items_center().gap_1();
+  for reviewer in reviewers.iter().take(SHOWN) {
+    row = row.child(
+      Avatar::new()
+        .name(reviewer.login.clone())
+        .when_some(reviewer.avatar_url.clone(), |this, url| this.src(url))
+        .xsmall(),
+    );
+  }
+  if reviewers.len() > SHOWN {
+    row = row.child(
+      div()
+        .text_xs()
+        .text_color(theme.muted_foreground)
+        .child(format!("+{}", reviewers.len() - SHOWN)),
+    );
+  }
+  row.into_any_element()
+}
+
+fn render_reviewer_row(reviewer: &ReviewerRow, theme: &gpui_component::Theme) -> AnyElement {
+  h_flex()
+    .w_full()
+    .items_center()
+    .gap_2()
+    .px_2()
+    .py_1()
+    .child(reviewer_status_icon(reviewer.status, theme).size_3())
+    .child(
+      Avatar::new()
+        .name(reviewer.login.clone())
+        .when_some(reviewer.avatar_url.clone(), |this, url| this.src(url))
+        .xsmall(),
+    )
+    .child(
+      div()
+        .flex_1()
+        .min_w_0()
+        .text_xs()
+        .text_color(theme.foreground)
+        .truncate()
+        .child(reviewer.login.clone()),
+    )
+    .child(
+      div()
+        .flex_shrink_0()
+        .text_xs()
+        .text_color(theme.muted_foreground)
+        .child(reviewer.status.label()),
+    )
+    .into_any_element()
+}
+
 /// One check: its state, its name, and how long it took. Clicking opens it on
 /// GitHub, which is where a failing run is actually read.
 fn render_check_row(
@@ -357,6 +428,7 @@ pub struct DockPanel {
   pr_files_error: Option<SharedString>,
   pr_selected_file: Option<PathBuf>,
   pr_checks: Option<GithubPullRequestChecksSummary>,
+  pr_reviewers: Vec<ReviewerRow>,
   /// Collapsed by default: the file list is what you work in.
   pr_details_expanded: bool,
   _pr_range_task: Option<Task<()>>,
@@ -477,6 +549,7 @@ impl DockPanel {
       pr_files_error: None,
       pr_selected_file: None,
       pr_checks: None,
+      pr_reviewers: Vec::new(),
       pr_details_expanded: false,
       _pr_range_task: None,
       _pr_checks_task: None,
@@ -619,6 +692,7 @@ impl DockPanel {
         this.pr_files = Vec::new();
         this.pr_files_error = None;
         this.pr_selected_file = None;
+        this.pr_reviewers = Vec::new();
         if found_pull_request {
           this.load_pull_request_range(cx);
           this.load_pull_request_checks(cx);
@@ -654,16 +728,26 @@ impl DockPanel {
             head_ref: details.head_ref_name.clone(),
           };
           let files = list_pull_request_files(&repo_root, &range)?;
-          anyhow::Ok((range, files))
+          let reviews = api
+            .fetch_pull_request_conversation(&owner, &repo, number)
+            .map(|conversation| conversation.reviews)
+            .unwrap_or_default();
+          let reviewers = reviewer_rows(
+            &details.requested_reviewers,
+            &reviews,
+            &details.author.login,
+          );
+          anyhow::Ok((range, files, reviewers))
         })
         .await;
 
       let _ = this.update(cx, |this, cx| {
         this.pr_files_loading = false;
         match loaded {
-          Ok((range, files)) => {
+          Ok((range, files, reviewers)) => {
             this.pr_range = Some(range);
             this.pr_files = files;
+            this.pr_reviewers = reviewers;
           }
           Err(error) => {
             this.pr_files_error = Some(format!("{error}").into());
@@ -1493,15 +1577,16 @@ impl DockPanel {
   /// default: the file list below is what you came for.
   fn render_pr_checks(&self, cx: &mut Context<Self>) -> AnyElement {
     let theme = cx.theme().clone();
-    let Some(checks) = self.pr_checks.as_ref() else {
-      return div().into_any_element();
-    };
-    if checks.total_checks == 0 && checks.missing_required_contexts.is_empty() {
+    let checks = self
+      .pr_checks
+      .as_ref()
+      .filter(|checks| checks.total_checks > 0 || !checks.missing_required_contexts.is_empty());
+    if checks.is_none() && self.pr_reviewers.is_empty() {
       return div().into_any_element();
     }
 
     let expanded = self.pr_details_expanded;
-    let mut rows = check_rows(checks);
+    let mut rows = checks.map(check_rows).unwrap_or_default();
     rows.sort_by_key(check_state_sort_key);
 
     let mut block = v_flex()
@@ -1525,36 +1610,75 @@ impl DockPanel {
           } else {
             IconName::ChevronRight
           }))
-          .child(check_state_icon(checks.overall_state, &theme).size_3())
-          .child(
-            div()
-              .flex_1()
-              .min_w_0()
-              .text_sm()
-              .text_color(theme.foreground)
-              .truncate()
-              .child(checks_summary_title(checks)),
-          ),
+          .when_some(checks, |this, checks| {
+            this
+              .child(check_state_icon(checks.overall_state, &theme).size_3())
+              .child(
+                div()
+                  .flex_1()
+                  .min_w_0()
+                  .text_sm()
+                  .text_color(theme.foreground)
+                  .truncate()
+                  .child(checks_summary_title(checks)),
+              )
+          })
+          .when(checks.is_none(), |this| {
+            this.child(
+              div()
+                .flex_1()
+                .min_w_0()
+                .text_sm()
+                .text_color(theme.foreground)
+                .child(reviewers_summary_title(&self.pr_reviewers)),
+            )
+          })
+          // Closed, the avatars still say who has answered.
+          .child(render_reviewer_avatars(&self.pr_reviewers, &theme)),
       );
 
     if !expanded {
       return block.into_any_element();
     }
 
-    block = block.child(
-      div()
-        .px_3()
-        .pb_1()
-        .text_xs()
-        .text_color(theme.muted_foreground)
-        .child(checks_summary_subtitle(checks)),
-    );
-
-    let mut list = v_flex().w_full().gap_0p5().px_1().pb_2();
-    for row in rows {
-      list = list.child(render_check_row(&row, &theme, cx));
+    if let Some(checks) = checks {
+      block = block.child(
+        div()
+          .px_3()
+          .pb_1()
+          .text_xs()
+          .text_color(theme.muted_foreground)
+          .child(checks_summary_subtitle(checks)),
+      );
+      let mut list = v_flex().w_full().gap_0p5().px_1().pb_2();
+      for row in rows {
+        list = list.child(render_check_row(&row, &theme, cx));
+      }
+      block = block.child(list);
     }
-    block.child(list).into_any_element()
+
+    if !self.pr_reviewers.is_empty() {
+      let mut list = v_flex().w_full().gap_0p5().px_1().pb_2();
+      for reviewer in &self.pr_reviewers {
+        list = list.child(render_reviewer_row(reviewer, &theme));
+      }
+      block = block.child(
+        v_flex()
+          .border_t_1()
+          .border_color(theme.border)
+          .child(
+            div()
+              .px_3()
+              .py_1()
+              .text_xs()
+              .text_color(theme.muted_foreground)
+              .child(reviewers_summary_title(&self.pr_reviewers)),
+          )
+          .child(list),
+      );
+    }
+
+    block.into_any_element()
   }
 
   /// What the branch proposes against its base: the committed changes, which is
@@ -2207,12 +2331,32 @@ mod tests {
   }
 
   #[gpui::test]
-  async fn a_pull_request_without_checks_shows_no_block(cx: &mut TestAppContext) {
+  async fn a_pull_request_without_checks_or_reviewers_shows_no_block(cx: &mut TestAppContext) {
     let (_panel, cx) = pull_request_panel(cx, Vec::new());
 
     assert!(
       cx.debug_bounds(DOCK_PANEL_PR_CHECKS_DEBUG_SELECTOR)
         .is_none()
+    );
+  }
+
+  #[gpui::test]
+  async fn reviewers_alone_are_enough_to_show_the_block(cx: &mut TestAppContext) {
+    let (panel, cx) = pull_request_panel(cx, Vec::new());
+    panel.update(cx, |panel, cx| {
+      panel.pr_reviewers = vec![ReviewerRow {
+        login: "ada".to_string(),
+        avatar_url: None,
+        status: ReviewerStatus::Awaiting,
+      }];
+      cx.notify();
+    });
+    cx.run_until_parked();
+
+    // No CI on this pull request, but there is still an answer to wait for.
+    assert!(
+      cx.debug_bounds(DOCK_PANEL_PR_CHECKS_DEBUG_SELECTOR)
+        .is_some()
     );
   }
 

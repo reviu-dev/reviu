@@ -7,43 +7,6 @@ use crate::pull_request_checks::{
   checks_uniform_state, non_empty_owned,
 };
 
-fn merged_reviewers(
-  requested_reviewers: &[GithubPullRequestFilterOptionUser],
-  reviews: &[GithubPullRequestReview],
-  author_login: &str,
-) -> Vec<GithubPullRequestFilterOptionUser> {
-  let mut reviewers = Vec::new();
-  let mut seen: HashSet<String> = HashSet::new();
-
-  for reviewer in requested_reviewers {
-    let key = reviewer.login.to_lowercase();
-    if github_shared::logins_match_case_insensitive(reviewer.login.as_str(), author_login) {
-      continue;
-    }
-    if seen.insert(key) {
-      reviewers.push(reviewer.clone());
-    }
-  }
-
-  for review in reviews {
-    let Some(user) = review.user.as_ref() else {
-      continue;
-    };
-    let key = user.login.to_lowercase();
-    if github_shared::logins_match_case_insensitive(user.login.as_str(), author_login) {
-      continue;
-    }
-    if seen.insert(key) {
-      reviewers.push(GithubPullRequestFilterOptionUser {
-        login: user.login.clone(),
-        avatar_url: user.avatar_url.clone(),
-      });
-    }
-  }
-
-  reviewers
-}
-
 fn overview_checks_summary_slices(
   checks: &GithubPullRequestChecksSummary,
   theme: &gpui_component::Theme,
@@ -2482,7 +2445,7 @@ mod tests {
   use super::super::test_support::*;
   use super::super::*;
   use super::*;
-  use crate::api::GithubPullRequestReviewUser;
+  use crate::api::{GithubPullRequestReviewState, GithubPullRequestReviewUser};
   use git::{BranchKind, BranchRef, merge_branch};
 
   #[test]

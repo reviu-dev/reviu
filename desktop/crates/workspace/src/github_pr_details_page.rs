@@ -71,6 +71,7 @@ use crate::file_tree::{
   expanded_folder_paths_for_changed_files,
 };
 use crate::file_view::render_file_title_with_status;
+use crate::pull_request_reviewers::{ReviewerStatus, merged_reviewers, reviewer_status_for_login};
 use crate::review_destination::{GithubReviewHandlers, ReviewDestination, configure_review};
 use crate::svg_preview::SvgPreview;
 use crate::{
@@ -83,8 +84,8 @@ use crate::{
     GithubPullRequestFilterOptionUser, GithubPullRequestIssueComment, GithubPullRequestLabel,
     GithubPullRequestMergeMethod, GithubPullRequestMergeReadiness,
     GithubPullRequestMergeReadinessStatus, GithubPullRequestMergeResult, GithubPullRequestReview,
-    GithubPullRequestReviewComment, GithubPullRequestReviewEvent, GithubPullRequestReviewState,
-    GithubPullRequestState, GithubRepository, GithubRepositoryBranch,
+    GithubPullRequestReviewComment, GithubPullRequestReviewEvent, GithubPullRequestState,
+    GithubRepository, GithubRepositoryBranch,
   },
   auth_state::{AuthState, AuthStateStore},
   config::{AppSettings, ConfigStore},
@@ -430,79 +431,6 @@ fn resolve_review_comment_display_anchor(
   };
 
   Some((line, side, resolved_line))
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum ReviewerStatus {
-  Awaiting,
-  Approved,
-  Commented,
-  ChangesRequested,
-}
-
-fn reviewer_status_for_login(
-  reviews: &[GithubPullRequestReview],
-  login: &str,
-  requested_reviewers: &[GithubPullRequestFilterOptionUser],
-) -> ReviewerStatus {
-  let mut latest_approved: Option<&str> = None;
-  let mut latest_changes: Option<&str> = None;
-  let mut latest_comment: Option<&str> = None;
-
-  for review in reviews {
-    let Some(user) = review.user.as_ref() else {
-      continue;
-    };
-    if !github_shared::logins_match_case_insensitive(user.login.as_str(), login) {
-      continue;
-    }
-    let Some(submitted_at) = review.submitted_at.as_deref() else {
-      continue;
-    };
-    match review.state {
-      GithubPullRequestReviewState::Approved => {
-        if latest_approved.is_none_or(|ts| submitted_at > ts) {
-          latest_approved = Some(submitted_at);
-        }
-      }
-      GithubPullRequestReviewState::RequestChanges => {
-        if latest_changes.is_none_or(|ts| submitted_at > ts) {
-          latest_changes = Some(submitted_at);
-        }
-      }
-      GithubPullRequestReviewState::Commented => {
-        if latest_comment.is_none_or(|ts| submitted_at > ts) {
-          latest_comment = Some(submitted_at);
-        }
-      }
-      GithubPullRequestReviewState::Dismissed | GithubPullRequestReviewState::Pending => {}
-    }
-  }
-
-  let is_requested = requested_reviewers
-    .iter()
-    .any(|r| r.login.eq_ignore_ascii_case(login));
-
-  let review_status = match (latest_approved, latest_changes, latest_comment) {
-    (Some(approved), Some(changes), _) => {
-      if approved > changes {
-        ReviewerStatus::Approved
-      } else {
-        ReviewerStatus::ChangesRequested
-      }
-    }
-    (_, Some(_), _) => ReviewerStatus::ChangesRequested,
-    (Some(_), None, _) => ReviewerStatus::Approved,
-    (None, None, Some(_)) => ReviewerStatus::Commented,
-    _ => return ReviewerStatus::Awaiting,
-  };
-
-  // If the reviewer was re-requested after their last review, show as awaiting.
-  if is_requested {
-    return ReviewerStatus::Awaiting;
-  }
-
-  review_status
 }
 
 #[derive(Clone, Copy, Debug)]
