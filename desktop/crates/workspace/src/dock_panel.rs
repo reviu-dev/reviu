@@ -21,8 +21,9 @@ use gpui_component::{
 };
 use terminal::TerminalView;
 
-use crate::changes_list::{ChangesList, ChangesListEvent};
-use crate::history_list::{HistoryList, HistoryListEvent};
+use crate::changes_list::{ChangesList, ChangesListEvent, status_color};
+use crate::file_view::{file_dir_label, file_name_label, render_file_name_with_status};
+use crate::history_list::{HistoryList, HistoryListEvent, history_change_kind_to_repo_status};
 use crate::repo_state::{PaletteCommand, RepoState, push_flags, should_publish_branch};
 use crate::review_list::{ReviewList, ReviewListEvent};
 
@@ -85,6 +86,12 @@ pub enum DockPanelEvent {
   },
   SendReviewComment {
     id: u64,
+  },
+  /// A row of the pull request file list: the host owns the centre pane.
+  OpenPullRequestFile {
+    base_oid: String,
+    head_oid: String,
+    path: PathBuf,
   },
   SendReview,
   DiscardReview,
@@ -183,6 +190,30 @@ pub(crate) fn build_worktree_tree_items(files: &[PathBuf]) -> Vec<TreeItem> {
   items_for(&root, "")
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct PullRequestRange {
+  pub base: String,
+  pub head: String,
+  pub base_ref: String,
+  pub head_ref: String,
+}
+
+/// The commits of a pull request may not be in the local object database yet.
+/// A fetch is the whole precondition: no checkout, and no file content over the
+/// network.
+fn list_pull_request_files(
+  repo_root: &std::path::Path,
+  range: &PullRequestRange,
+) -> anyhow::Result<Vec<git::CommitChangedFile>> {
+  match git::list_range_changed_files(repo_root, &range.base, &range.head) {
+    Ok(files) => Ok(files),
+    Err(_) => {
+      git::fetch(repo_root)?;
+      git::list_range_changed_files(repo_root, &range.base, &range.head)
+    }
+  }
+}
+
 #[derive(Clone, Debug)]
 pub(crate) enum BranchPrState {
   NoAccess,
@@ -237,6 +268,14 @@ pub struct DockPanel {
   /// for someone who never opens it.
   terminal_view: Option<Entity<TerminalView>>,
   branch_pr: BranchPrState,
+  /// The shas and the file list of the pull request on the current branch. The
+  /// identity arrives first, this follows.
+  pr_range: Option<PullRequestRange>,
+  pr_files: Vec<git::CommitChangedFile>,
+  pr_files_loading: bool,
+  pr_files_error: Option<SharedString>,
+  pr_selected_file: Option<PathBuf>,
+  _pr_range_task: Option<Task<()>>,
   files_tree_state: Entity<TreeState>,
   files_loaded: bool,
   files_loading: bool,
@@ -347,6 +386,12 @@ impl DockPanel {
       history_list,
       terminal_view: None,
       branch_pr: BranchPrState::Loading,
+      pr_range: None,
+      pr_files: Vec::new(),
+      pr_files_loading: false,
+      pr_files_error: None,
+      pr_selected_file: None,
+      _pr_range_task: None,
       files_tree_state: cx.new(|cx| TreeState::new(cx)),
       files_loaded: false,
       files_loading: false,
@@ -480,11 +525,65 @@ impl DockPanel {
         .await;
 
       let _ = this.update(cx, |this, cx| {
+        let found_pull_request = matches!(state, BranchPrState::Found(_, _));
         this.branch_pr = state;
+        this.pr_range = None;
+        this.pr_files = Vec::new();
+        this.pr_files_error = None;
+        this.pr_selected_file = None;
+        if found_pull_request {
+          this.load_pull_request_range(cx);
+        }
         cx.notify();
       });
     });
     self._pr_task = Some(task);
+  }
+
+  /// The shas a pull request spans, and what it changes between them.
+  fn load_pull_request_range(&mut self, cx: &mut Context<Self>) {
+    let (Some(repo_root), BranchPrState::Found(context, pull_request)) =
+      (self.repo_root.clone(), &self.branch_pr)
+    else {
+      return;
+    };
+    let owner = context.owner.clone();
+    let repo = context.repo.clone();
+    let number = pull_request.number;
+    let api = WorkspaceApi::global(cx).api.clone();
+
+    self.pr_files_loading = true;
+    self.pr_files_error = None;
+    let task = cx.spawn(async move |this, cx| {
+      let loaded = cx
+        .background_spawn(async move {
+          let details = api.fetch_pull_request_details(&owner, &repo, number)?;
+          let range = PullRequestRange {
+            base: details.merge_base_sha.clone(),
+            head: details.head_sha.clone(),
+            base_ref: details.base_ref_name.clone(),
+            head_ref: details.head_ref_name.clone(),
+          };
+          let files = list_pull_request_files(&repo_root, &range)?;
+          anyhow::Ok((range, files))
+        })
+        .await;
+
+      let _ = this.update(cx, |this, cx| {
+        this.pr_files_loading = false;
+        match loaded {
+          Ok((range, files)) => {
+            this.pr_range = Some(range);
+            this.pr_files = files;
+          }
+          Err(error) => {
+            this.pr_files_error = Some(format!("{error}").into());
+          }
+        }
+        cx.notify();
+      });
+    });
+    self._pr_range_task = Some(task);
   }
 
   /// Git prepared a message for the operation in progress (merge, rebase).
@@ -1188,15 +1287,45 @@ impl DockPanel {
           )
           .into_any_element()
       }
-      BranchPrState::Found(context, pull_request) => {
-        let status = pull_request.status();
-        let owner = context.owner.clone();
-        let repo = context.repo.clone();
-        let number = pull_request.number;
+      BranchPrState::Found(context, pull_request) => v_flex()
+        .size_full()
+        .min_h_0()
+        .child(self.render_pr_identity(context, pull_request, cx))
+        .child(self.render_pr_files(cx))
+        .into_any_element(),
+    }
+  }
 
-        v_flex()
+  /// Pinned above the file list: what you are looking at stays visible while you
+  /// work in the list below.
+  fn render_pr_identity(
+    &self,
+    context: &GithubBranchContext,
+    pull_request: &GithubPullRequest,
+    cx: &mut Context<Self>,
+  ) -> AnyElement {
+    let theme = cx.theme().clone();
+    let status = pull_request.status();
+    let number = pull_request.number;
+    let owner = context.owner.clone();
+    let repo = context.repo.clone();
+    let branches = self
+      .pr_range
+      .as_ref()
+      .map(|range| format!("{} into {}", range.head_ref, range.base_ref))
+      .unwrap_or_else(|| context.branch.clone());
+
+    v_flex()
+      .flex_shrink_0()
+      .gap_1()
+      .p_3()
+      .border_b_1()
+      .border_color(theme.border)
+      .child(
+        h_flex()
+          .items_center()
+          .justify_between()
           .gap_2()
-          .p_3()
           .child(
             h_flex()
               .items_center()
@@ -1208,40 +1337,149 @@ impl DockPanel {
                   .text_color(pull_request_status_color(status, &theme))
                   .child(pull_request_status_label(status)),
               )
-              .child(
-                div()
-                  .text_xs()
-                  .text_color(theme.muted_foreground)
-                  .child(format!("#{number}")),
-              ),
-          )
-          .child(
-            div()
-              .text_sm()
-              .text_color(theme.foreground)
-              .child(pull_request.title.clone()),
-          )
-          .child(
-            div()
-              .text_xs()
-              .text_color(theme.muted_foreground)
-              .child(format!(
-                "{} comments · {}",
-                pull_request.comments_count, context.branch
+              .child(div().text_xs().text_color(theme.muted_foreground).child(
+                if pull_request.comments_count > 0 {
+                  format!("#{number} · {} comments", pull_request.comments_count)
+                } else {
+                  format!("#{number}")
+                },
               )),
           )
           .child(
             Button::new("dock-panel-open-pr")
-              .small()
-              .w_full()
-              .label("Open pull request")
+              .ghost()
+              .xsmall()
+              .compact()
+              .icon(UiIconName::Globe)
+              .tooltip("Open on GitHub")
               .on_click(cx.listener(move |_, _, _, cx| {
                 open_pr_target(owner.clone(), repo.clone(), number, false, None, cx);
               })),
-          )
-          .into_any_element()
-      }
+          ),
+      )
+      .child(
+        div()
+          .text_sm()
+          .text_color(theme.foreground)
+          .child(pull_request.title.clone()),
+      )
+      .child(
+        div()
+          .text_xs()
+          .text_color(theme.muted_foreground)
+          .truncate()
+          .child(branches),
+      )
+      .into_any_element()
+  }
+
+  /// What the branch proposes against its base: the committed changes, which is
+  /// a different question from the working tree of the Changes tab.
+  fn render_pr_files(&self, cx: &mut Context<Self>) -> AnyElement {
+    let theme = cx.theme().clone();
+
+    if let Some(error) = self.pr_files_error.clone() {
+      return self.render_pr_files_message(error, cx);
     }
+    if self.pr_files_loading {
+      return self.render_pr_files_message("Loading changed files...".into(), cx);
+    }
+    if self.pr_files.is_empty() {
+      return self.render_pr_files_message("This pull request changes nothing".into(), cx);
+    }
+
+    let Some(range) = self.pr_range.clone() else {
+      return self.render_pr_files_message("Loading changed files...".into(), cx);
+    };
+
+    let mut list = v_flex().w_full().gap_0p5();
+    for file in &self.pr_files {
+      let path = file.path.clone();
+      let status = history_change_kind_to_repo_status(file.kind);
+      let selected = self.pr_selected_file.as_ref() == Some(&path);
+      let base_oid = range.base.clone();
+      let head_oid = range.head.clone();
+      let open_path = path.clone();
+      list = list.child(
+        h_flex()
+          .id(gpui::SharedString::from(format!(
+            "pr-file-{}",
+            path.to_string_lossy()
+          )))
+          .debug_selector({
+            let path = path.clone();
+            move || format!("pr-file-{}", path.to_string_lossy())
+          })
+          .w_full()
+          .items_center()
+          .gap_2()
+          .px_1()
+          .py_1()
+          .rounded_sm()
+          .when(selected, |this| this.bg(theme.accent))
+          .hover(|this| this.bg(theme.accent))
+          .cursor_pointer()
+          .on_click(cx.listener(move |this, _, _, cx| {
+            this.pr_selected_file = Some(open_path.clone());
+            cx.emit(DockPanelEvent::OpenPullRequestFile {
+              base_oid: base_oid.clone(),
+              head_oid: head_oid.clone(),
+              path: open_path.clone(),
+            });
+            cx.notify();
+          }))
+          .child(render_file_name_with_status(
+            &theme,
+            Some(status),
+            file_name_label(&path),
+            file.old_path.as_deref().map(file_name_label),
+          ))
+          .child(
+            div()
+              .flex_1()
+              .min_w_0()
+              .text_xs()
+              .text_color(theme.muted_foreground)
+              .truncate()
+              .child(file_dir_label(&path)),
+          )
+          .child(
+            div()
+              .flex_shrink_0()
+              .text_xs()
+              .text_color(status_color(status, &theme))
+              .child(status.short_code()),
+          ),
+      );
+    }
+
+    div()
+      .id("dock-panel-pr-files")
+      .flex_1()
+      .min_h_0()
+      .overflow_y_scroll()
+      .px_1()
+      .py_1()
+      .child(list)
+      .into_any_element()
+  }
+
+  fn render_pr_files_message(&self, message: SharedString, cx: &mut Context<Self>) -> AnyElement {
+    let theme = cx.theme().clone();
+    v_flex()
+      .flex_1()
+      .min_h_0()
+      .items_center()
+      .justify_center()
+      .p_4()
+      .child(
+        div()
+          .text_sm()
+          .text_center()
+          .text_color(theme.muted_foreground)
+          .child(message),
+      )
+      .into_any_element()
   }
 
   fn render_empty_state(&self, cx: &mut Context<Self>) -> AnyElement {
@@ -1674,6 +1912,8 @@ mod tests {
     cx: &mut TestAppContext,
   ) -> (Entity<DockPanel>, &mut gpui::VisualTestContext) {
     cx.update(|cx| {
+      // Painting a panel needs the theme, and some of these tests paint.
+      gpui_component::init(cx);
       if !cx.has_global::<crate::config::AppSettings>() {
         cx.set_global(crate::config::AppSettings::default());
       }
@@ -1711,6 +1951,100 @@ mod tests {
       "repository": { "owner": "acme", "repo": "widget" }
     }))
     .expect("build test pull request")
+  }
+
+  fn pull_request_panel(
+    cx: &mut TestAppContext,
+    files: Vec<git::CommitChangedFile>,
+  ) -> (Entity<DockPanel>, &mut gpui::VisualTestContext) {
+    let (panel, cx) = add_dock_panel_window(Some(PathBuf::from("/repo")), cx);
+    panel.update(cx, |panel, cx| {
+      panel.active_tab = DockPanelTab::PullRequest;
+      panel.branch_pr = BranchPrState::Found(
+        GithubBranchContext {
+          owner: "acme".to_string(),
+          repo: "widget".to_string(),
+          branch: "feature".to_string(),
+        },
+        Box::new(test_pull_request()),
+      );
+      panel.pr_range = Some(PullRequestRange {
+        base: "b".repeat(40),
+        head: "h".repeat(40),
+        base_ref: "main".to_string(),
+        head_ref: "feature".to_string(),
+      });
+      panel.pr_files = files;
+      panel.pr_files_loading = false;
+      cx.notify();
+    });
+    cx.run_until_parked();
+    (panel, cx)
+  }
+
+  fn changed_file(path: &str, kind: git::CommitFileChangeKind) -> git::CommitChangedFile {
+    git::CommitChangedFile {
+      path: PathBuf::from(path),
+      old_path: None,
+      kind,
+    }
+  }
+
+  #[gpui::test]
+  async fn the_pull_request_panel_lists_what_the_branch_proposes(cx: &mut TestAppContext) {
+    let (_panel, cx) = pull_request_panel(
+      cx,
+      vec![
+        changed_file("src/main.rs", git::CommitFileChangeKind::Modified),
+        changed_file("docs/gone.md", git::CommitFileChangeKind::Deleted),
+      ],
+    );
+
+    // A deleted file has no working-tree copy, and it still belongs to the list.
+    assert!(cx.debug_bounds("pr-file-src/main.rs").is_some());
+    assert!(cx.debug_bounds("pr-file-docs/gone.md").is_some());
+  }
+
+  #[gpui::test]
+  async fn clicking_a_pull_request_file_asks_the_host_to_open_the_range(cx: &mut TestAppContext) {
+    let (panel, cx) = pull_request_panel(
+      cx,
+      vec![changed_file(
+        "src/main.rs",
+        git::CommitFileChangeKind::Modified,
+      )],
+    );
+
+    let opened = std::sync::Arc::new(std::sync::Mutex::new(None::<(String, String, PathBuf)>));
+    let observer = {
+      let opened = opened.clone();
+      cx.update(|_, cx| {
+        cx.subscribe(&panel, move |_, event: &DockPanelEvent, _| {
+          if let DockPanelEvent::OpenPullRequestFile {
+            base_oid,
+            head_oid,
+            path,
+          } = event
+          {
+            *opened.lock().expect("lock") =
+              Some((base_oid.clone(), head_oid.clone(), path.clone()));
+          }
+        })
+      })
+    };
+
+    let row = cx
+      .debug_bounds("pr-file-src/main.rs")
+      .expect("file row bounds");
+    cx.simulate_click(row.center(), gpui::Modifiers::default());
+    cx.run_until_parked();
+    drop(observer);
+
+    assert_eq!(
+      opened.lock().expect("lock").clone(),
+      Some(("b".repeat(40), "h".repeat(40), PathBuf::from("src/main.rs"))),
+      "the row carries the range, so the centre can load the snapshot"
+    );
   }
 
   fn tree_ids(items: &[TreeItem]) -> Vec<String> {

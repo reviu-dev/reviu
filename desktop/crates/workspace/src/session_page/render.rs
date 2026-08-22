@@ -482,7 +482,7 @@ impl SessionPage {
       render_binary_preview(preview, cx)
     } else if let Some(editor) = self.editor.clone() {
       // Actions of the hovered hunk or conflict float over the editor.
-      let hunk_actions = (self.opened_commit.is_none())
+      let hunk_actions = (self.opened_snapshot.is_none())
         .then(|| {
           let file_status = self.selected_file_status(cx);
           render_hunk_actions(&editor, file_status, cx)

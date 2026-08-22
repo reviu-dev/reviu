@@ -41,6 +41,7 @@ use crate::inbox::Inbox;
 use crate::navigation::NavigationHistory;
 use crate::review_destination::{AgentReviewHandlers, ReviewDestination, configure_review};
 use crate::session_list::{SessionList, SessionListEvent};
+use crate::session_page::file_viewer::OpenedSnapshot;
 use git::{InteractiveRebaseTarget, RepoStatusKind};
 
 use crate::git_telemetry::{self, GitTelemetry};
@@ -186,7 +187,9 @@ pub struct SessionPage {
   binary_preview: Option<BinaryPreview>,
   selected_file: Option<PathBuf>,
   /// Set while the center shows a file as it was in a commit.
-  opened_commit: Option<String>,
+  /// The centre shows a read-only snapshot instead of a working-tree file:
+  /// no staging, no hunk actions, no git status.
+  opened_snapshot: Option<OpenedSnapshot>,
   interactive_rebase_todo_view: Option<Entity<InteractiveRebaseTodoView>>,
   _interactive_rebase_task: Option<Task<()>>,
   pub(crate) _merge_base_task: Option<Task<()>>,
@@ -320,6 +323,13 @@ impl SessionPage {
         DockPanelEvent::DeleteReviewComment { id } => {
           this.delete_agent_review_comment(*id, cx);
         }
+        DockPanelEvent::OpenPullRequestFile {
+          base_oid,
+          head_oid,
+          path,
+        } => {
+          this.open_pull_request_file(base_oid.clone(), head_oid.clone(), path.clone(), window, cx);
+        }
         DockPanelEvent::SendReviewComment { id } => {
           this.send_agent_review_comment_to_agent(*id, window, cx);
         }
@@ -346,7 +356,7 @@ impl SessionPage {
       editor: None,
       binary_preview: None,
       selected_file: None,
-      opened_commit: None,
+      opened_snapshot: None,
       interactive_rebase_todo_view: None,
       _interactive_rebase_task: None,
       _merge_base_task: None,

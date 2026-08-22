@@ -3,6 +3,15 @@
 
 use super::*;
 
+/// Where a read-only snapshot in the centre comes from.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum OpenedSnapshot {
+  /// One commit against its parent.
+  Commit(String),
+  /// What a pull request proposes: its merge base against its head.
+  PullRequestRange { base: String, head: String },
+}
+
 impl SessionPage {
   pub(super) fn open_diff(
     &mut self,
@@ -127,7 +136,7 @@ impl SessionPage {
     self.open_file_generation = self.open_file_generation.wrapping_add(1);
     let generation = self.open_file_generation;
     self.selected_file = Some(rel_path.clone());
-    self.opened_commit = Some(commit_oid.clone());
+    self.opened_snapshot = Some(OpenedSnapshot::Commit(commit_oid.clone()));
     self.editor = None;
     self.binary_preview = None;
     let hide_whitespace = self.hide_whitespace;
@@ -175,12 +184,87 @@ impl SessionPage {
   }
 
   /// Back to the working tree: the history row stops being the open one.
+  /// Leaving a snapshot for a working-tree file. Returns whether there was one.
+  /// A file as the pull request proposes it: the merge base against the head,
+  /// read-only. Comments on it go to GitHub, never to the agent, because the
+  /// agent edits the working tree and that is a different content.
+  pub(super) fn open_pull_request_file(
+    &mut self,
+    base_oid: String,
+    head_oid: String,
+    rel_path: PathBuf,
+    window: &mut Window,
+    cx: &mut Context<Self>,
+  ) {
+    let Some(repo_root) = self.selected_repo.clone() else {
+      return;
+    };
+    self.show_preview = false;
+    self.center = CenterView::Diff;
+    self.sync_agent_chat_close_control(cx);
+    self.leave_commit_file(cx);
+    self.open_file_generation = self.open_file_generation.wrapping_add(1);
+    let generation = self.open_file_generation;
+    self.selected_file = Some(rel_path.clone());
+    self.opened_snapshot = Some(OpenedSnapshot::PullRequestRange {
+      base: base_oid.clone(),
+      head: head_oid.clone(),
+    });
+    self.editor = None;
+    self.binary_preview = None;
+    let hide_whitespace = self.hide_whitespace;
+    let diff_view = self.effective_diff_view(&rel_path, cx);
+
+    let task = cx.spawn(async move |this, cx| {
+      let load_repo_root = repo_root.clone();
+      let load_base = base_oid.clone();
+      let load_head = head_oid.clone();
+      let load_rel_path = rel_path.clone();
+      let range_file = cx
+        .background_spawn(async move {
+          git::load_range_file_diff(&load_repo_root, &load_base, &load_head, &load_rel_path)
+        })
+        .await;
+      let _ = this.update(cx, move |this, cx| {
+        if this.open_file_generation != generation {
+          return;
+        }
+        let Ok(range_file) = range_file else {
+          return;
+        };
+
+        let file_path = repo_root.join(&rel_path);
+        let editor = cx.new(|cx| Editor::new_with_paths(repo_root.clone(), file_path, cx));
+        let diff_set = if range_file.patch.trim().is_empty() {
+          None
+        } else {
+          git::diff_set_from_patch(&range_file.patch).ok()
+        };
+        editor.update(cx, |editor, cx| {
+          editor.load_readonly_snapshot(range_file.content, diff_set, cx);
+          editor.set_diff_view_mode(diff_view, cx);
+          editor.set_ignore_whitespace(hide_whitespace, cx);
+        });
+        this.binary_preview =
+          build_binary_preview(rel_path.as_path(), range_file.binary_bytes.clone());
+        this.editor = Some(editor);
+        this.svg_preview.update(cx, |preview, _| preview.clear());
+        cx.notify();
+      });
+    });
+    self.open_file_task = Some(task);
+    self.focus_editor_on_next_frame(window, cx);
+    cx.notify();
+  }
+
   pub(super) fn leave_commit_file(&mut self, cx: &mut Context<Self>) -> bool {
-    if self.opened_commit.take().is_none() {
+    let Some(snapshot) = self.opened_snapshot.take() else {
       return false;
+    };
+    if matches!(snapshot, OpenedSnapshot::Commit(_)) {
+      let history = self.dock_panel.read(cx).history_list.clone();
+      history.update(cx, |list, cx| list.set_opened(None, cx));
     }
-    let history = self.dock_panel.read(cx).history_list.clone();
-    history.update(cx, |list, cx| list.set_opened(None, cx));
     true
   }
 
@@ -207,8 +291,8 @@ impl SessionPage {
   }
 
   fn path_has_changes(&self, path: &Path, cx: &App) -> bool {
-    // A commit snapshot always carries its own patch.
-    if self.opened_commit.is_some() {
+    // A snapshot always carries its own patch.
+    if self.opened_snapshot.is_some() {
       return true;
     }
     self
@@ -316,9 +400,9 @@ impl SessionPage {
     cx.stop_propagation();
   }
 
-  /// The status of the open file, unless it comes from a commit: a snapshot has none.
+  /// The status of the open file, unless it is a snapshot: those have none.
   pub(super) fn selected_file_status(&self, cx: &App) -> Option<RepoStatusKind> {
-    if self.opened_commit.is_some() {
+    if self.opened_snapshot.is_some() {
       return None;
     }
     let path = self.selected_file.as_deref()?;
@@ -346,7 +430,7 @@ impl SessionPage {
 
   /// The path a renamed file came from, so the diff header can name both sides.
   pub(super) fn selected_file_old_path(&self, cx: &App) -> Option<PathBuf> {
-    if self.opened_commit.is_some() {
+    if self.opened_snapshot.is_some() {
       return None;
     }
     let path = self.selected_file.as_deref()?;
@@ -713,7 +797,10 @@ mod tests {
 
     page.read_with(cx, |page, cx| {
       assert_eq!(page.center, CenterView::Diff);
-      assert_eq!(page.opened_commit.as_deref(), Some(first.as_str()));
+      assert_eq!(
+        page.opened_snapshot,
+        Some(OpenedSnapshot::Commit(first.clone()))
+      );
       let editor = page.editor.as_ref().expect("editor").read(cx);
       // A snapshot has no working-tree status, so it is walked change by change.
       assert!(page.selected_file_status(cx).is_none());
@@ -735,7 +822,7 @@ mod tests {
     await_open_file(&page, cx).await;
 
     page.read_with(cx, |page, cx| {
-      assert!(page.opened_commit.is_none());
+      assert!(page.opened_snapshot.is_none());
       let editor = page.editor.as_ref().expect("editor").read(cx);
       let first_line = editor
         .document()
