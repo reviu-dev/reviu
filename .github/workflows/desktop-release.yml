@@ -27,7 +27,7 @@ jobs:
       tag: ${{ steps.release_meta.outputs.tag }}
       sentry_release: ${{ steps.release_meta.outputs.sentry_release }}
     steps:
-      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.event.workflow_run.head_sha }}
 
@@ -88,7 +88,7 @@ jobs:
       MANIFEST_ARCH: ${{ matrix.manifest_arch }}
       API_BASE_URL: https://api.reviu.dev
     steps:
-      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.event.workflow_run.head_sha }}
       - name: Setup Rust
@@ -217,7 +217,7 @@ jobs:
       MANIFEST_ARCH: ${{ matrix.manifest_arch }}
       API_BASE_URL: https://api.reviu.dev
     steps:
-      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.event.workflow_run.head_sha }}
 
@@ -283,7 +283,7 @@ jobs:
       MANIFEST_ARCH: ${{ matrix.manifest_arch }}
       API_BASE_URL: https://api.reviu.dev
     steps:
-      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.event.workflow_run.head_sha }}
 
@@ -336,7 +336,7 @@ jobs:
       VERSION: ${{ needs.prepare-release.outputs.version }}
       TAG: ${{ needs.prepare-release.outputs.tag }}
     steps:
-      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.event.workflow_run.head_sha }}
 
