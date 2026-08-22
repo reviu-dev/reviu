@@ -761,11 +761,10 @@ pub(crate) fn render_tool_call(
   } else {
     title_color
   };
-  // One line, truncated: a long command must not push past the edge. The
-  // full text lives in the tooltip.
   let detail_first_line: SharedString =
     detail.lines().next().unwrap_or_default().to_string().into();
   let detail_full: SharedString = detail.clone().into();
+  let show_command_copy = matches!(t.kind, ToolKind::Execute) && !detail.is_empty();
   let detail_el = (!detail.is_empty()).then(|| match t.locations.first().cloned() {
     Some((path, line)) => div()
       .id(("agent-tool-location", item_id_base as usize))
@@ -777,12 +776,6 @@ pub(crate) fn render_tool_call(
       .cursor_pointer()
       .hover(|this| this.text_color(theme.foreground))
       .child(detail_first_line.clone())
-      .tooltip({
-        let detail_full = detail_full.clone();
-        move |window, cx| {
-          gpui_component::tooltip::Tooltip::new(detail_full.clone()).build(window, cx)
-        }
-      })
       .on_click(cx.listener(move |_panel, _ev, _window, cx| {
         cx.emit(AgentChatPanelEvent::OpenPath {
           path: path.clone(),
@@ -792,19 +785,24 @@ pub(crate) fn render_tool_call(
       .into_any_element(),
     None => div()
       .id(("agent-tool-detail", item_id_base as usize))
-      .flex_1()
       .min_w_0()
       .truncate()
       .text_sm()
       .text_color(detail_color)
       .child(detail_first_line.clone())
-      .tooltip({
-        let detail_full = detail_full.clone();
-        move |window, cx| {
-          gpui_component::tooltip::Tooltip::new(detail_full.clone()).build(window, cx)
-        }
-      })
       .into_any_element(),
+  });
+  let command_copy_el = show_command_copy.then(|| {
+    div()
+      .debug_selector(|| "agent-tool-copy-command".to_string())
+      .flex_shrink_0()
+      .child(
+        Clipboard::new(SharedString::from(format!(
+          "agent-tool-copy-command-{item_id_base}"
+        )))
+        .value(detail_full.clone()),
+      )
+      .into_any_element()
   });
 
   v_flex()
@@ -839,7 +837,8 @@ pub(crate) fn render_tool_call(
             .text_color(title_color)
             .child(label.to_string())
         }))
-        .children(detail_el),
+        .children(detail_el)
+        .children(command_copy_el),
     )
     .when(!t.terminals.is_empty(), |mut this| {
       for (term_ix, id) in t.terminals.iter().enumerate() {

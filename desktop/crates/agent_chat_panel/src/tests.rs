@@ -3041,6 +3041,36 @@ async fn the_copy_button_copies_the_message_markdown(cx: &mut gpui::TestAppConte
 }
 
 #[gpui::test]
+async fn the_tool_command_copy_button_copies_the_command(cx: &mut gpui::TestAppContext) {
+  let (panel, cx) = add_panel_window(cx);
+  panel.update(cx, |panel, cx| {
+    panel.status = Status::Ready;
+    panel.items = vec![ChatItem::Tool(tool_view(
+      "t1",
+      ToolKind::Execute,
+      ToolCallStatus::Completed,
+    ))];
+    if let Some(ChatItem::Tool(tool)) = panel.items.last_mut() {
+      tool.title = "Run rg needle src".to_string();
+    }
+    panel.sync_list_count();
+    cx.notify();
+  });
+  cx.run_until_parked();
+
+  let copy = cx
+    .debug_bounds("agent-tool-copy-command")
+    .expect("copy painted");
+  cx.simulate_click(copy.center(), gpui::Modifiers::default());
+  cx.run_until_parked();
+
+  let copied = cx
+    .update(|_, cx| cx.read_from_clipboard())
+    .and_then(|item| item.text());
+  assert_eq!(copied.as_deref(), Some("rg needle src"));
+}
+
+#[gpui::test]
 async fn editing_a_prompt_arms_the_rewind_and_truncate_resubmits(cx: &mut gpui::TestAppContext) {
   let (panel, cx) = add_panel_window(cx);
   panel.update(cx, |panel, cx| {
