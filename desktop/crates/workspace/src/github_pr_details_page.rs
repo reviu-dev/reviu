@@ -88,7 +88,7 @@ use crate::{
   },
   auth_state::{AuthState, AuthStateStore},
   config::{AppSettings, ConfigStore},
-  date_format::{format_relative_time, parse_rfc3339},
+  date_format::format_relative_time,
   file_preview::{
     FilePreviewKind, file_preview_kind, is_markdown_path, is_svg_path, raster_image_from_bytes,
     should_show_unsupported_binary_placeholder,
@@ -503,18 +503,6 @@ fn reviewer_status_for_login(
   }
 
   review_status
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-struct OverviewCheckRow {
-  id: String,
-  state: GithubPullRequestChecksRollupState,
-  title: String,
-  status_label: Option<String>,
-  app_label: Option<String>,
-  app_slug: Option<String>,
-  app_avatar_url: Option<String>,
-  open_url: Option<String>,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -974,7 +962,7 @@ fn local_repo_snapshot(
 }
 
 #[cfg(test)]
-mod test_support;
+pub(crate) mod test_support;
 
 mod actions;
 mod changes;

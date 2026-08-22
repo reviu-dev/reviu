@@ -93,6 +93,7 @@ mod palette_actions;
 mod palette_branches;
 mod pricing_copy;
 mod pro_teaser;
+mod pull_request_checks;
 mod pull_request_dialog;
 mod repo_command;
 mod repo_snapshot;

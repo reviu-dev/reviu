@@ -281,7 +281,7 @@ pub(super) fn make_merge_readiness_with_state(
   readiness
 }
 
-pub(super) fn make_checks_summary() -> GithubPullRequestChecksSummary {
+pub(crate) fn make_checks_summary() -> GithubPullRequestChecksSummary {
   GithubPullRequestChecksSummary {
     head_sha: "head123".to_string(),
     overall_state: GithubPullRequestChecksRollupState::Failure,

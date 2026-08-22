@@ -29,6 +29,7 @@ use crate::review_list::{ReviewList, ReviewListEvent};
 
 const DOCK_PANEL_TERMINAL_DEBUG_SELECTOR: &str = "dock-panel-terminal";
 pub(crate) const DOCK_PANEL_HISTORY_DEBUG_SELECTOR: &str = "dock-panel-history";
+pub(crate) const DOCK_PANEL_PR_CHECKS_DEBUG_SELECTOR: &str = "dock-panel-pr-checks";
 pub(crate) const DOCK_PANEL_REVIEW_DEBUG_SELECTOR: &str = "dock-panel-review";
 const DOCK_PANEL_COMMIT_DEBUG_SELECTOR: &str = "dock-panel-commit";
 const DOCK_PANEL_COMMIT_MENU_DEBUG_SELECTOR: &str = "dock-panel-commit-menu";
@@ -41,10 +42,15 @@ pub(crate) const DOCK_PANEL_ZOOM_DEBUG_SELECTOR: &str = "dock-panel-zoom";
 use std::collections::BTreeMap;
 use std::rc::Rc;
 
-use crate::api::GithubPullRequest;
+use crate::api::{
+  GithubPullRequest, GithubPullRequestChecksRollupState, GithubPullRequestChecksSummary,
+};
 use crate::auth_state::AuthStateStore;
 use crate::github_navigation::{open_compare_target, open_pr_target};
 use crate::github_shared::{pull_request_status_color, pull_request_status_label};
+use crate::pull_request_checks::{
+  CheckRow, check_rows, check_state_sort_key, checks_summary_subtitle, checks_summary_title,
+};
 use crate::pull_request_dialog::{
   GithubBranchContext, PullRequestCreatedHandler, open_create_pull_request_dialog,
 };
@@ -190,6 +196,81 @@ pub(crate) fn build_worktree_tree_items(files: &[PathBuf]) -> Vec<TreeItem> {
   items_for(&root, "")
 }
 
+/// Exhaustive on the rollup state, so a new one has to pick its own colour
+/// instead of silently reading as skipped.
+fn check_state_icon(
+  state: GithubPullRequestChecksRollupState,
+  theme: &gpui_component::Theme,
+) -> Icon {
+  match state {
+    GithubPullRequestChecksRollupState::Success => {
+      Icon::new(UiIconName::CircleCheck).text_color(theme.status_green())
+    }
+    GithubPullRequestChecksRollupState::Failure => {
+      Icon::new(IconName::CircleX).text_color(theme.danger)
+    }
+    GithubPullRequestChecksRollupState::Pending => {
+      Icon::new(UiIconName::CircleDot).text_color(theme.status_orange())
+    }
+    GithubPullRequestChecksRollupState::Skipped => {
+      Icon::new(UiIconName::CircleSlash).text_color(theme.muted_foreground)
+    }
+  }
+}
+
+/// One check: its state, its name, and how long it took. Clicking opens it on
+/// GitHub, which is where a failing run is actually read.
+fn render_check_row(
+  row: &CheckRow,
+  theme: &gpui_component::Theme,
+  _cx: &mut Context<DockPanel>,
+) -> AnyElement {
+  let open_url = row.open_url.clone();
+  let clickable = open_url.is_some();
+
+  h_flex()
+    .id(gpui::SharedString::from(format!("pr-check-{}", row.id)))
+    .w_full()
+    .items_center()
+    .gap_2()
+    .px_2()
+    .py_1()
+    .rounded_sm()
+    .when(clickable, |this| {
+      this
+        .hover(|this| this.bg(theme.accent))
+        .cursor_pointer()
+        .on_click(move |_, _, cx| {
+          if let Some(url) = open_url.clone() {
+            cx.open_url(&url);
+          }
+        })
+    })
+    .child(check_state_icon(row.state, theme).size_3())
+    .child(
+      v_flex()
+        .flex_1()
+        .min_w_0()
+        .child(
+          div()
+            .text_xs()
+            .text_color(theme.foreground)
+            .truncate()
+            .child(row.title.clone()),
+        )
+        .when_some(row.status_label.clone(), |this, label| {
+          this.child(
+            div()
+              .text_xs()
+              .text_color(theme.muted_foreground)
+              .truncate()
+              .child(label),
+          )
+        }),
+    )
+    .into_any_element()
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct PullRequestRange {
   pub base: String,
@@ -275,7 +356,11 @@ pub struct DockPanel {
   pr_files_loading: bool,
   pr_files_error: Option<SharedString>,
   pr_selected_file: Option<PathBuf>,
+  pr_checks: Option<GithubPullRequestChecksSummary>,
+  /// Collapsed by default: the file list is what you work in.
+  pr_details_expanded: bool,
   _pr_range_task: Option<Task<()>>,
+  _pr_checks_task: Option<Task<()>>,
   files_tree_state: Entity<TreeState>,
   files_loaded: bool,
   files_loading: bool,
@@ -391,7 +476,10 @@ impl DockPanel {
       pr_files_loading: false,
       pr_files_error: None,
       pr_selected_file: None,
+      pr_checks: None,
+      pr_details_expanded: false,
       _pr_range_task: None,
+      _pr_checks_task: None,
       files_tree_state: cx.new(|cx| TreeState::new(cx)),
       files_loaded: false,
       files_loading: false,
@@ -533,6 +621,7 @@ impl DockPanel {
         this.pr_selected_file = None;
         if found_pull_request {
           this.load_pull_request_range(cx);
+          this.load_pull_request_checks(cx);
         }
         cx.notify();
       });
@@ -584,6 +673,32 @@ impl DockPanel {
       });
     });
     self._pr_range_task = Some(task);
+  }
+
+  fn load_pull_request_checks(&mut self, cx: &mut Context<Self>) {
+    let BranchPrState::Found(context, pull_request) = &self.branch_pr else {
+      return;
+    };
+    let owner = context.owner.clone();
+    let repo = context.repo.clone();
+    let number = pull_request.number;
+    let api = WorkspaceApi::global(cx).api.clone();
+
+    let task = cx.spawn(async move |this, cx| {
+      let checks = cx
+        .background_spawn(async move { api.fetch_pull_request_checks(&owner, &repo, number) })
+        .await;
+      let _ = this.update(cx, |this, cx| {
+        this.pr_checks = checks.ok();
+        cx.notify();
+      });
+    });
+    self._pr_checks_task = Some(task);
+  }
+
+  fn toggle_pull_request_details(&mut self, cx: &mut Context<Self>) {
+    self.pr_details_expanded = !self.pr_details_expanded;
+    cx.notify();
   }
 
   /// Git prepared a message for the operation in progress (merge, rebase).
@@ -1291,6 +1406,7 @@ impl DockPanel {
         .size_full()
         .min_h_0()
         .child(self.render_pr_identity(context, pull_request, cx))
+        .child(self.render_pr_checks(cx))
         .child(self.render_pr_files(cx))
         .into_any_element(),
     }
@@ -1371,6 +1487,74 @@ impl DockPanel {
           .child(branches),
       )
       .into_any_element()
+  }
+
+  /// One line for the whole CI, expandable into one line per check. Collapsed by
+  /// default: the file list below is what you came for.
+  fn render_pr_checks(&self, cx: &mut Context<Self>) -> AnyElement {
+    let theme = cx.theme().clone();
+    let Some(checks) = self.pr_checks.as_ref() else {
+      return div().into_any_element();
+    };
+    if checks.total_checks == 0 && checks.missing_required_contexts.is_empty() {
+      return div().into_any_element();
+    }
+
+    let expanded = self.pr_details_expanded;
+    let mut rows = check_rows(checks);
+    rows.sort_by_key(check_state_sort_key);
+
+    let mut block = v_flex()
+      .flex_shrink_0()
+      .border_b_1()
+      .border_color(theme.border)
+      .child(
+        h_flex()
+          .id("dock-panel-pr-checks-toggle")
+          .debug_selector(|| DOCK_PANEL_PR_CHECKS_DEBUG_SELECTOR.to_string())
+          .w_full()
+          .items_center()
+          .gap_2()
+          .px_3()
+          .py_2()
+          .hover(|this| this.bg(theme.accent))
+          .cursor_pointer()
+          .on_click(cx.listener(|this, _, _, cx| this.toggle_pull_request_details(cx)))
+          .child(Icon::new(if expanded {
+            IconName::ChevronDown
+          } else {
+            IconName::ChevronRight
+          }))
+          .child(check_state_icon(checks.overall_state, &theme).size_3())
+          .child(
+            div()
+              .flex_1()
+              .min_w_0()
+              .text_sm()
+              .text_color(theme.foreground)
+              .truncate()
+              .child(checks_summary_title(checks)),
+          ),
+      );
+
+    if !expanded {
+      return block.into_any_element();
+    }
+
+    block = block.child(
+      div()
+        .px_3()
+        .pb_1()
+        .text_xs()
+        .text_color(theme.muted_foreground)
+        .child(checks_summary_subtitle(checks)),
+    );
+
+    let mut list = v_flex().w_full().gap_0p5().px_1().pb_2();
+    for row in rows {
+      list = list.child(render_check_row(&row, &theme, cx));
+    }
+    block.child(list).into_any_element()
   }
 
   /// What the branch proposes against its base: the committed changes, which is
@@ -1988,6 +2172,48 @@ mod tests {
       old_path: None,
       kind,
     }
+  }
+
+  #[gpui::test]
+  async fn the_checks_block_opens_on_demand_and_costs_one_line_closed(cx: &mut TestAppContext) {
+    let (panel, cx) = pull_request_panel(
+      cx,
+      vec![changed_file(
+        "src/main.rs",
+        git::CommitFileChangeKind::Modified,
+      )],
+    );
+    panel.update(cx, |panel, cx| {
+      panel.pr_checks = Some(crate::github_pr_details_page::test_support::make_checks_summary());
+      cx.notify();
+    });
+    cx.run_until_parked();
+
+    // Closed: the rollup line only, and the file list keeps its room.
+    let closed = cx
+      .debug_bounds(DOCK_PANEL_PR_CHECKS_DEBUG_SELECTOR)
+      .expect("checks rollup bounds");
+    assert!(cx.debug_bounds("pr-file-src/main.rs").is_some());
+
+    cx.simulate_click(closed.center(), gpui::Modifiers::default());
+    cx.run_until_parked();
+
+    panel.read_with(cx, |panel, _| assert!(panel.pr_details_expanded));
+    // The missing required context of the fixture becomes a row of its own.
+    assert!(
+      cx.debug_bounds("pr-file-src/main.rs").is_some(),
+      "the file list stays reachable while the checks are open"
+    );
+  }
+
+  #[gpui::test]
+  async fn a_pull_request_without_checks_shows_no_block(cx: &mut TestAppContext) {
+    let (_panel, cx) = pull_request_panel(cx, Vec::new());
+
+    assert!(
+      cx.debug_bounds(DOCK_PANEL_PR_CHECKS_DEBUG_SELECTOR)
+        .is_none()
+    );
   }
 
   #[gpui::test]
