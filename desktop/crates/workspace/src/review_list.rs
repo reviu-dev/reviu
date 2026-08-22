@@ -291,7 +291,6 @@ impl ReviewList {
             .small()
             .checked(file_is_selected)
             .disabled(sendable_ids.is_empty())
-            .tooltip("Select every comment of this file")
             .on_click(cx.listener(move |this, _, _, cx| {
               cx.stop_propagation();
               this.toggle_file_selection(select_path.clone(), cx);
@@ -355,7 +354,6 @@ impl ReviewList {
               .small()
               .checked(is_selected)
               .disabled(!sendable)
-              .tooltip("Send only the selected comments")
               .on_click(cx.listener(move |this, _, _, cx| {
                 cx.stop_propagation();
                 this.toggle_comment(select_id, cx);
