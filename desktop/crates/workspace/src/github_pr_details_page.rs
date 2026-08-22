@@ -64,6 +64,7 @@ use ui::{
   restrict_scroll_to_wheel_axis, scrollable_node, selectable_list_item,
 };
 
+use crate::diff_toolbar::{DiffToolbar, NavigationControl, SplitControl, ToggleControl};
 use crate::diff_view_policy::{DiffViewInputs, effective_diff_view};
 use crate::file_tree::{
   FileTreeBuildResult, build_path_tree_items, build_path_tree_items_with_expansion,
@@ -106,6 +107,10 @@ const SIDEBAR_DEFAULT_WIDTH: f32 = 400.0;
 const SIDEBAR_MIN_WIDTH: f32 = 350.0;
 const SIDEBAR_MAX_WIDTH: f32 = 1500.0;
 const DIFF_HEADER_HEIGHT: f32 = 40.0;
+const PR_CHANGE_COUNTER_DEBUG_SELECTOR: &str = "pr-change-counter";
+const PR_WHITESPACE_TOGGLE_DEBUG_SELECTOR: &str = "pr-whitespace-toggle";
+const PR_DIFF_VIEW_TOGGLE_DEBUG_SELECTOR: &str = "pr-diff-toggle";
+const PR_PREVIEW_TOGGLE_DEBUG_SELECTOR: &str = "pr-markdown-preview";
 const PR_TAB_OVERVIEW_IX: usize = 0;
 const PR_TAB_CHANGES_IX: usize = 1;
 const OVERVIEW_CHECKS_SCROLL_GUARD_ID: u64 = 0xCEDC_2025_C8EC_0001;
@@ -11354,202 +11359,134 @@ impl GithubPrDetailsPage {
     let preview_active = (is_markdown || is_svg) && self.show_markdown_preview;
     let file_loading = self.file_loading;
     let split_disabled = self.split_disabled_for_selected_file() || preview_active;
-    let (toggle_label, toggle_icon) = if split_disabled {
-      ("Split", IconName::PanelLeft)
-    } else {
-      match self.diff_view {
-        DiffViewMode::Inline => ("Split", IconName::PanelLeft),
-        DiffViewMode::Split => ("Inline", IconName::PanelLeftClose),
-      }
-    };
     let hunk_navigation = self
       .diff_editor
       .read(cx)
       .hunk_navigation_state(cx)
       .filter(|state| state.total > 1);
-    let view = cx.entity();
-    let previous_change_button = Button::new("pr-change-prev")
-      .icon(IconName::ArrowUp)
-      .xsmall()
-      .ghost()
-      .compact()
-      .tooltip("Previous change")
-      .disabled(file_loading || hunk_navigation.is_none())
-      .on_click(move |_, _, cx| {
-        view.update(cx, |this, cx| {
-          this.diff_editor.update(cx, |editor, cx| {
-            editor.navigate_hunk(HunkNavigationDirection::Previous, cx);
-          });
-        });
-      });
-    let view = cx.entity();
-    let next_change_button = Button::new("pr-change-next")
-      .icon(IconName::ArrowDown)
-      .xsmall()
-      .ghost()
-      .compact()
-      .tooltip("Next change")
-      .disabled(file_loading || hunk_navigation.is_none())
-      .on_click(move |_, _, cx| {
-        view.update(cx, |this, cx| {
-          this.diff_editor.update(cx, |editor, cx| {
-            editor.navigate_hunk(HunkNavigationDirection::Next, cx);
-          });
-        });
-      });
-    let view = cx.entity();
-    let toggle_button = Button::new("pr-diff-toggle")
-      .label(toggle_label)
-      .icon(toggle_icon)
-      .xsmall()
-      .ghost()
-      .disabled(split_disabled || file_loading)
-      .on_click(move |_, _, cx| {
-        view.update(cx, |this, cx| {
-          this.toggle_diff_view(cx);
-        });
-      });
-    let view = cx.entity();
-    let hide_whitespace = self.hide_whitespace;
-    let show_whitespace_button = self.binary_preview.is_none();
 
-    let whitespace_icon = if hide_whitespace {
-      IconName::Eye
-    } else {
-      IconName::EyeOff
-    };
-    let tooltip = if hide_whitespace {
-      "Show whitespace changes"
-    } else {
-      "Hide whitespace changes"
-    };
-    let whitespace_button = div()
-      .debug_selector(|| "pr-whitespace-toggle".to_string())
-      .child(
-        Button::new("pr-whitespace-toggle")
-          .label("Whitespace")
-          .icon(whitespace_icon)
-          .tooltip(tooltip)
-          .xsmall()
-          .ghost()
-          .disabled(file_loading)
-          .on_click(move |_, _, cx| {
-            view.update(cx, |this, cx| {
-              this.toggle_hide_whitespace(cx);
-            });
-          }),
-      );
-    let view = cx.entity();
-    let preview_button = Button::new("pr-markdown-preview")
-      .label("Preview")
-      .icon(if preview_active {
-        IconName::EyeOff
-      } else {
-        IconName::Eye
-      })
-      .xsmall()
-      .ghost()
-      .selected(preview_active)
-      .disabled(file_loading)
-      .on_click(move |_, _, cx| {
-        view.update(cx, |this, cx| {
-          this.toggle_markdown_preview(cx);
-        });
-      });
-
-    div()
-      .h(px(DIFF_HEADER_HEIGHT))
-      .bg(theme.sidebar)
-      .px_3()
-      .flex()
+    let title = h_flex()
+      .min_w_0()
+      .flex_1()
       .items_center()
-      .justify_between()
-      .border_b_1()
-      .border_color(theme.border)
+      .gap_2()
+      .child(
+        div()
+          .w(px(15.))
+          .text_xs()
+          .text_color(status_color)
+          .child(status_letter),
+      )
+      .child(icon)
       .child(
         h_flex()
           .min_w_0()
           .flex_1()
           .items_center()
-          .gap_2()
-          .child(
-            div()
-              .w(px(15.))
-              .text_xs()
-              .text_color(status_color)
-              .child(status_letter),
-          )
-          .child(icon)
+          .gap_1()
+          .text_sm()
           .child(
             h_flex()
               .min_w_0()
-              .flex_1()
               .items_center()
               .gap_1()
-              .text_sm()
-              .child(
-                h_flex()
-                  .min_w_0()
-                  .items_center()
-                  .gap_1()
-                  .when_some(old_file_name.clone(), |this, old_name| {
-                    this
-                      .child(
-                        div()
-                          .min_w_0()
-                          .overflow_hidden()
-                          .text_ellipsis_start()
-                          .text_color(theme.muted_foreground)
-                          .line_through()
-                          .child(old_name),
-                      )
-                      .child(
-                        Icon::new(IconName::ArrowRight)
-                          .size_3()
-                          .text_color(theme.muted_foreground),
-                      )
-                  })
-                  .child(Label::new(file_name).truncate()),
-              )
-              .when(!dir_path.is_empty(), |this| {
-                this.child(
-                  div()
-                    .min_w_0()
-                    .flex_1()
-                    .overflow_hidden()
-                    .text_ellipsis_start()
-                    .text_color(theme.muted_foreground)
-                    .child(format!("- {}", dir_path)),
-                )
-              }),
-          ),
-      )
-      .child(
-        h_flex()
-          .flex_shrink_0()
-          .items_center()
-          .gap_2()
-          .when_some(hunk_navigation, |this, state| {
+              .when_some(old_file_name.clone(), |this, old_name| {
+                this
+                  .child(
+                    div()
+                      .min_w_0()
+                      .overflow_hidden()
+                      .text_ellipsis_start()
+                      .text_color(theme.muted_foreground)
+                      .line_through()
+                      .child(old_name),
+                  )
+                  .child(
+                    Icon::new(IconName::ArrowRight)
+                      .size_3()
+                      .text_color(theme.muted_foreground),
+                  )
+              })
+              .child(Label::new(file_name).truncate()),
+          )
+          .when(!dir_path.is_empty(), |this| {
             this.child(
-              h_flex()
-                .items_center()
-                .gap_1()
-                .child(previous_change_button)
-                .child(
-                  div()
-                    .w(px(52.0))
-                    .text_xs()
-                    .text_center()
-                    .text_color(theme.muted_foreground)
-                    .child(format!("{}/{}", state.active_index + 1, state.total)),
-                )
-                .child(next_change_button),
+              div()
+                .min_w_0()
+                .flex_1()
+                .overflow_hidden()
+                .text_ellipsis_start()
+                .text_color(theme.muted_foreground)
+                .child(format!("- {}", dir_path)),
             )
-          })
-          .when(show_whitespace_button, |this| this.child(whitespace_button))
-          .child(toggle_button)
-          .when(is_markdown || is_svg, |this| this.child(preview_button)),
+          }),
       )
+      .into_any_element();
+
+    let mut toolbar = DiffToolbar::new("pr").filled(true).title(title);
+
+    if let Some(state) = hunk_navigation {
+      let previous_view = cx.entity();
+      let next_view = cx.entity();
+      toolbar = toolbar.navigation(NavigationControl {
+        active_index: state.active_index,
+        total: state.total,
+        enabled: !file_loading,
+        previous_tooltip: "Previous change",
+        next_tooltip: "Next change",
+        counter_debug_selector: PR_CHANGE_COUNTER_DEBUG_SELECTOR,
+        on_previous: Rc::new(move |_, cx| {
+          previous_view.update(cx, |this, cx| {
+            this.diff_editor.update(cx, |editor, cx| {
+              editor.navigate_hunk(HunkNavigationDirection::Previous, cx);
+            });
+          });
+        }),
+        on_next: Rc::new(move |_, cx| {
+          next_view.update(cx, |this, cx| {
+            this.diff_editor.update(cx, |editor, cx| {
+              editor.navigate_hunk(HunkNavigationDirection::Next, cx);
+            });
+          });
+        }),
+      });
+    }
+
+    if is_markdown || is_svg {
+      let view = cx.entity();
+      toolbar = toolbar.preview(ToggleControl {
+        active: preview_active,
+        disabled: file_loading,
+        debug_selector: PR_PREVIEW_TOGGLE_DEBUG_SELECTOR,
+        on_toggle: Rc::new(move |_, cx| {
+          view.update(cx, |this, cx| this.toggle_markdown_preview(cx));
+        }),
+      });
+    }
+
+    if self.binary_preview.is_none() {
+      let view = cx.entity();
+      toolbar = toolbar.whitespace(ToggleControl {
+        active: self.hide_whitespace,
+        disabled: file_loading,
+        debug_selector: PR_WHITESPACE_TOGGLE_DEBUG_SELECTOR,
+        on_toggle: Rc::new(move |_, cx| {
+          view.update(cx, |this, cx| this.toggle_hide_whitespace(cx));
+        }),
+      });
+    }
+
+    let view = cx.entity();
+    toolbar = toolbar.split(SplitControl {
+      mode: self.diff_view,
+      disabled: split_disabled || file_loading,
+      debug_selector: PR_DIFF_VIEW_TOGGLE_DEBUG_SELECTOR,
+      on_toggle: Rc::new(move |_, cx| {
+        view.update(cx, |this, cx| this.toggle_diff_view(cx));
+      }),
+    });
+
+    toolbar.render(cx)
   }
 
   fn render_local_project_file_header(

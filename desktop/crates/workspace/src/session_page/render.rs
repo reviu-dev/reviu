@@ -2,6 +2,7 @@
 
 use super::*;
 use crate::annotations::AnnotationKind;
+use crate::diff_toolbar::{DiffToolbar, NavigationControl, SplitControl, ToggleControl};
 use crate::hunk_actions::render_hunk_actions;
 use gpui_component::Selectable as _;
 
@@ -320,7 +321,6 @@ impl SessionPage {
   }
 
   pub(super) fn render_diff_header(&self, cx: &mut Context<Self>) -> AnyElement {
-    let theme = cx.theme().clone();
     let file_dirty = self
       .editor
       .as_ref()
@@ -328,187 +328,148 @@ impl SessionPage {
     let save_editor = self.editor.clone();
     let file_status = self.selected_file_status(cx);
     let old_path = self.selected_file_old_path(cx);
-    let file_title = self.selected_file.clone().map(|path| {
-      render_file_title_with_status(&path, old_path.as_deref(), file_status, file_dirty, cx)
+    let previewing = self.show_preview && self.previewable();
+    let has_editor = self.editor.is_some();
+
+    let mut toolbar = DiffToolbar::new("session-page").before_title(if self.diff_chat_open {
+      Button::new("session-page-close-editor")
+        .debug_selector(|| "session-page-close-editor".to_string())
+        .icon(gpui_component::IconName::Close)
+        .ghost()
+        .compact()
+        .small()
+        .tooltip("Close editor (Esc)")
+        .on_click(cx.listener(|this, _, window, cx| this.close_diff(window, cx)))
+        .into_any_element()
+    } else {
+      Button::new("session-page-show-chat")
+        .debug_selector(|| "session-page-show-chat".to_string())
+        .label("Chat")
+        .icon(UiIconName::MessageCircle)
+        .ghost()
+        .compact()
+        .small()
+        .tooltip("Back to the conversation (Esc)")
+        .on_click(cx.listener(|this, _, window, cx| this.close_diff(window, cx)))
+        .into_any_element()
     });
 
-    h_flex()
-      .h(px(40.))
-      .min_h(px(40.))
-      .max_h(px(40.))
-      .flex_shrink_0()
-      .items_center()
-      .gap_3()
-      .px_3()
-      .border_b_1()
-      .border_color(theme.border)
-      .child(if self.diff_chat_open {
-        Button::new("session-page-close-editor")
-          .debug_selector(|| "session-page-close-editor".to_string())
-          .icon(gpui_component::IconName::Close)
-          .ghost()
-          .compact()
-          .small()
-          .tooltip("Close editor (Esc)")
-          .on_click(cx.listener(|this, _, window, cx| this.close_diff(window, cx)))
-      } else {
-        Button::new("session-page-show-chat")
-          .debug_selector(|| "session-page-show-chat".to_string())
-          .label("Chat")
-          .icon(UiIconName::MessageCircle)
-          .ghost()
-          .compact()
-          .small()
-          .tooltip("Back to the conversation (Esc)")
-          .on_click(cx.listener(|this, _, window, cx| this.close_diff(window, cx)))
-      })
-      .children(file_title)
-      .when(self.can_accept_all_conflicts(cx), |this| {
-        this
-          .child(
-            Button::new("session-page-accept-all-current")
-              .label("Accept All Current")
-              .debug_selector(|| ACCEPT_ALL_CURRENT_DEBUG_SELECTOR.to_string())
-              .xsmall()
-              .ghost()
-              .on_click(cx.listener(|this, _, _, cx| {
-                this.resolve_all_conflicts(ConflictResolution::Current, cx)
-              })),
-          )
-          .child(
-            Button::new("session-page-accept-all-incoming")
-              .label("Accept All Incoming")
-              .debug_selector(|| ACCEPT_ALL_INCOMING_DEBUG_SELECTOR.to_string())
-              .xsmall()
-              .ghost()
-              .on_click(cx.listener(|this, _, _, cx| {
-                this.resolve_all_conflicts(ConflictResolution::Incoming, cx)
-              })),
-          )
-      })
-      .when_some(self.annotation_navigation(cx), |this, state| {
-        let (previous_tooltip, next_tooltip) = match state.kind {
-          AnnotationKind::Conflict => ("Previous conflict", "Next conflict"),
-          AnnotationKind::Change => ("Previous change", "Next change"),
-        };
-        let enabled = can_navigate_annotations(Some(state));
-        this
-          .child(
-            div()
-              .text_xs()
-              .text_color(theme.muted_foreground)
-              .debug_selector(|| ANNOTATION_COUNTER_DEBUG_SELECTOR.to_string())
-              .child(format!("{}/{}", state.active_index + 1, state.total)),
-          )
-          .child(
-            Button::new("session-page-annotation-prev")
-              .icon(gpui_component::IconName::ArrowUp)
-              .xsmall()
-              .ghost()
-              .compact()
-              .tooltip(previous_tooltip)
-              .disabled(!enabled)
-              .on_click(cx.listener(|this, _, _, cx| {
-                this.navigate_change(AnnotationDirection::Previous, cx)
-              })),
-          )
-          .child(
-            Button::new("session-page-annotation-next")
-              .icon(gpui_component::IconName::ArrowDown)
-              .xsmall()
-              .ghost()
-              .compact()
-              .tooltip(next_tooltip)
-              .disabled(!enabled)
-              .on_click(
-                cx.listener(|this, _, _, cx| this.navigate_change(AnnotationDirection::Next, cx)),
-              ),
-          )
-      })
-      .when(self.editor.is_some() && self.previewable(), |this| {
-        let (label, icon) = if self.show_preview {
-          ("Code", UiIconName::FileCode)
-        } else {
-          ("Preview", UiIconName::Eye)
-        };
-        this.child(
-          Button::new("session-page-preview-toggle")
-            .debug_selector(|| PREVIEW_TOGGLE_DEBUG_SELECTOR.to_string())
-            .label(label)
-            .icon(icon)
+    if let Some(path) = self.selected_file.clone() {
+      toolbar = toolbar.title(render_file_title_with_status(
+        &path,
+        old_path.as_deref(),
+        file_status,
+        file_dirty,
+        cx,
+      ));
+    }
+
+    if self.can_accept_all_conflicts(cx) {
+      toolbar = toolbar
+        .before_toggles(
+          Button::new("session-page-accept-all-current")
+            .label("Accept All Current")
+            .debug_selector(|| ACCEPT_ALL_CURRENT_DEBUG_SELECTOR.to_string())
             .xsmall()
             .ghost()
-            .tooltip("Show the rendered file")
-            .on_click(cx.listener(|this, _, _, cx| this.toggle_preview(cx))),
+            .on_click(cx.listener(|this, _, _, cx| {
+              this.resolve_all_conflicts(ConflictResolution::Current, cx)
+            }))
+            .into_any_element(),
         )
-      })
-      .when(
-        self.editor.is_some()
-          && self.binary_preview.is_none()
-          && self.selected_file_has_changes(cx)
-          && !(self.show_preview && self.previewable()),
-        |this| {
-          let hide_whitespace = self.hide_whitespace;
-          this.child(
-            Button::new("session-page-whitespace-toggle")
-              .debug_selector(|| WHITESPACE_TOGGLE_DEBUG_SELECTOR.to_string())
-              .label("Whitespace")
-              .icon(if hide_whitespace {
-                gpui_component::IconName::Eye
-              } else {
-                gpui_component::IconName::EyeOff
-              })
-              .xsmall()
-              .ghost()
-              .tooltip(if hide_whitespace {
-                "Show whitespace changes"
-              } else {
-                "Hide whitespace changes"
-              })
-              .on_click(cx.listener(|this, _, _, cx| this.toggle_hide_whitespace(cx))),
-          )
-        },
-      )
-      .when(
-        self.editor.is_some()
-          && self.selected_file_has_changes(cx)
-          && !(self.show_preview && self.previewable()),
-        |this| {
-          let split_disabled = self.split_disabled(cx);
-          let (label, icon) = if split_disabled || self.diff_view == DiffViewMode::Inline {
-            ("Split", gpui_component::IconName::PanelLeft)
-          } else {
-            ("Inline", gpui_component::IconName::PanelLeftClose)
-          };
-          this.child(
-            Button::new("session-page-diff-view-toggle")
-              .debug_selector(|| DIFF_VIEW_TOGGLE_DEBUG_SELECTOR.to_string())
-              .label(label)
-              .icon(icon)
-              .xsmall()
-              .ghost()
-              .disabled(split_disabled)
-              .tooltip("Toggle inline and split diff (cmd-/)")
-              .on_click(cx.listener(|this, _, _, cx| this.toggle_diff_view(cx))),
-          )
-        },
-      )
-      .when(save_editor.is_some(), |this| {
-        let save_editor = save_editor.clone();
-        this.child(
-          Button::new("session-page-save-file")
-            .label("Save")
+        .before_toggles(
+          Button::new("session-page-accept-all-incoming")
+            .label("Accept All Incoming")
+            .debug_selector(|| ACCEPT_ALL_INCOMING_DEBUG_SELECTOR.to_string())
             .xsmall()
             .ghost()
-            .disabled(!file_dirty)
-            .on_click(move |_, _, cx| {
-              if let Some(editor) = save_editor.clone() {
-                editor.update(cx, |editor, cx| editor.save(cx));
-              }
-            }),
-        )
-      })
-      .into_any_element()
+            .on_click(cx.listener(|this, _, _, cx| {
+              this.resolve_all_conflicts(ConflictResolution::Incoming, cx)
+            }))
+            .into_any_element(),
+        );
+    }
+
+    if let Some(state) = self.annotation_navigation(cx) {
+      let (previous_tooltip, next_tooltip) = match state.kind {
+        AnnotationKind::Conflict => ("Previous conflict", "Next conflict"),
+        AnnotationKind::Change => ("Previous change", "Next change"),
+      };
+      let view = cx.entity();
+      let previous_view = view.clone();
+      toolbar = toolbar.navigation(NavigationControl {
+        active_index: state.active_index,
+        total: state.total,
+        enabled: can_navigate_annotations(Some(state)),
+        previous_tooltip,
+        next_tooltip,
+        counter_debug_selector: ANNOTATION_COUNTER_DEBUG_SELECTOR,
+        on_previous: Rc::new(move |_, cx| {
+          previous_view.update(cx, |this, cx| {
+            this.navigate_change(AnnotationDirection::Previous, cx)
+          });
+        }),
+        on_next: Rc::new(move |_, cx| {
+          view.update(cx, |this, cx| {
+            this.navigate_change(AnnotationDirection::Next, cx)
+          });
+        }),
+      });
+    }
+
+    if has_editor && self.previewable() {
+      let view = cx.entity();
+      toolbar = toolbar.preview(ToggleControl {
+        active: self.show_preview,
+        disabled: false,
+        debug_selector: PREVIEW_TOGGLE_DEBUG_SELECTOR,
+        on_toggle: Rc::new(move |_, cx| {
+          view.update(cx, |this, cx| this.toggle_preview(cx));
+        }),
+      });
+    }
+
+    if has_editor && self.selected_file_has_changes(cx) && !previewing {
+      if self.binary_preview.is_none() {
+        let view = cx.entity();
+        toolbar = toolbar.whitespace(ToggleControl {
+          active: self.hide_whitespace,
+          disabled: false,
+          debug_selector: WHITESPACE_TOGGLE_DEBUG_SELECTOR,
+          on_toggle: Rc::new(move |_, cx| {
+            view.update(cx, |this, cx| this.toggle_hide_whitespace(cx));
+          }),
+        });
+      }
+
+      let view = cx.entity();
+      toolbar = toolbar.split(SplitControl {
+        mode: self.diff_view,
+        disabled: self.split_disabled(cx),
+        debug_selector: DIFF_VIEW_TOGGLE_DEBUG_SELECTOR,
+        on_toggle: Rc::new(move |_, cx| {
+          view.update(cx, |this, cx| this.toggle_diff_view(cx));
+        }),
+      });
+    }
+
+    if save_editor.is_some() {
+      toolbar = toolbar.after_toggles(
+        Button::new("session-page-save-file")
+          .label("Save")
+          .xsmall()
+          .ghost()
+          .disabled(!file_dirty)
+          .on_click(move |_, _, cx| {
+            if let Some(editor) = save_editor.clone() {
+              editor.update(cx, |editor, cx| editor.save(cx));
+            }
+          })
+          .into_any_element(),
+      );
+    }
+
+    toolbar.render(cx)
   }
 
   pub(super) fn render_diff_view(

@@ -68,6 +68,7 @@ mod changes_list;
 mod config;
 mod crash_report;
 mod date_format;
+mod diff_toolbar;
 mod diff_view_policy;
 mod dock_panel;
 mod feedback_dialog;
