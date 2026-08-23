@@ -129,6 +129,17 @@ impl HistoryList {
     }
   }
 
+  /// The commit tree carries the keyboard, not this container: its own handle is
+  /// the one the arrow keys are bound to.
+  pub(crate) fn focus(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    if self.commits.is_empty() {
+      // The empty state mounts no tree; its handle would drop the focus.
+      window.focus(&self.focus_handle, cx);
+      return;
+    }
+    self.tree.update(cx, |tree, cx| tree.focus(window, cx));
+  }
+
   pub(crate) fn set_repo_root(&mut self, repo_root: Option<PathBuf>, cx: &mut Context<Self>) {
     if self.repo_root == repo_root {
       return;
@@ -721,6 +732,27 @@ mod tests {
       list.update(cx, |list, cx| list.set_repo_root(Some(repo_root), cx));
     }
     (list, cx)
+  }
+
+  #[gpui::test]
+  async fn focusing_the_list_hands_the_keyboard_to_the_commit_tree(cx: &mut TestAppContext) {
+    let repo = TempRepo::init("history-list-keyboard");
+    commit_text_file(&repo.path, Path::new("a.txt"), "v1\n", "first");
+    commit_text_file(&repo.path, Path::new("b.txt"), "v1\n", "second");
+
+    let (list, cx) = add_history_list_window(Some(repo.path.clone()), cx);
+    await_history(&list, cx).await;
+
+    list.update_in(cx, |list, window, cx| list.focus(window, cx));
+    cx.run_until_parked();
+
+    let before = list.read_with(cx, |list, cx| list.tree.read(cx).selected_index());
+    cx.simulate_keystrokes("down");
+    let after = list.read_with(cx, |list, cx| list.tree.read(cx).selected_index());
+    assert_ne!(
+      before, after,
+      "the arrow keys belong to the tree, not to the container around it"
+    );
   }
 
   async fn await_history(list: &Entity<HistoryList>, cx: &mut gpui::VisualTestContext) {

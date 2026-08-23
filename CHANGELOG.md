@@ -4,6 +4,14 @@ All notable changes to Reviu are documented here.
 
 ## 1.0.0
 
+### The Right Panel Answers The Keyboard
+
+Opening a panel with its key used to be as far as the keyboard went. Files, Review and History now hand it over properly: arrows walk the rows, Enter opens what is selected, and left/right fold a folder or a file.
+
+History was the surprise. Its key opened the tab but the arrows went nowhere, because the focus landed next to the commit tree rather than on it. It has always been that way; it works now.
+
+Review gained the most. Its comments are a real list: walk them with the arrows and each one opens on its lines as you pass, fold a file with Enter on its row, and the list scrolls to follow the selection instead of leaving it off-screen. The Send and Submit buttons now stay at the bottom of the panel when both destinations have comments, rather than sitting between the two groups where a long review pushed them out of view.
+
 ### Review A Pull Request You Have Not Checked Out
 
 The Open in Reviu button of the browser extension used to say no whenever the pull request was not the one of the branch you had open. It now does the work: Reviu names the branch that carries the pull request, asks before touching your repository, checks it out (fetching it first when only the remote has it), and opens the Pull request panel on it once git has moved.

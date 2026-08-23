@@ -436,6 +436,8 @@ pub struct DockPanel {
   _pr_review_comments_task: Option<Task<()>>,
   files_tree_state: Entity<TreeState>,
   files_loaded: bool,
+  /// The tab was opened before its tree existed: focus it as soon as it does.
+  focus_files_tree_when_loaded: bool,
   files_loading: bool,
   selected_tree_id: Option<String>,
   pub(crate) _refresh_task: Option<Task<()>>,
@@ -489,7 +491,7 @@ impl DockPanel {
     })
     .detach();
 
-    let review_list = cx.new(|_| ReviewList::new());
+    let review_list = cx.new(|cx| ReviewList::new(window, cx));
     cx.subscribe(
       &review_list,
       |this, _list, event: &ReviewListEvent, cx| match event {
@@ -582,6 +584,7 @@ impl DockPanel {
       _pr_review_comments_task: None,
       files_tree_state: cx.new(|cx| TreeState::new(cx)),
       files_loaded: false,
+      focus_files_tree_when_loaded: false,
       files_loading: false,
       selected_tree_id: None,
       _refresh_task: None,
@@ -1647,9 +1650,28 @@ impl DockPanel {
       }
       DockPanelTab::History => {
         let history = self.history_list.clone();
-        window.focus(&history.read(cx).focus_handle(cx), cx);
+        history.update(cx, |history, cx| history.focus(window, cx));
       }
-      _ => window.focus(&self.focus_handle, cx),
+      DockPanelTab::Files => {
+        if self.files_loaded {
+          self
+            .files_tree_state
+            .update(cx, |tree, cx| tree.focus(window, cx));
+        } else {
+          self.focus_files_tree_when_loaded = true;
+          window.focus(&self.focus_handle, cx);
+        }
+      }
+      DockPanelTab::Review => {
+        if self.review_list.read(cx).is_empty() {
+          // The empty state mounts no list; its handle would drop the focus.
+          window.focus(&self.focus_handle, cx);
+        } else {
+          let review = self.review_list.clone();
+          review.update(cx, |review, cx| review.focus(window, cx));
+        }
+      }
+      DockPanelTab::PullRequest | DockPanelTab::Terminal => window.focus(&self.focus_handle, cx),
     }
     cx.notify();
   }
@@ -1682,6 +1704,15 @@ impl DockPanel {
 
   fn render_files_tab(&mut self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
     let theme = cx.theme().clone();
+
+    // Rendering is the first moment the tree exists to take the focus the tab
+    // was opened for.
+    if self.focus_files_tree_when_loaded && self.files_loaded {
+      self.focus_files_tree_when_loaded = false;
+      self
+        .files_tree_state
+        .update(cx, |tree, cx| tree.focus(window, cx));
+    }
 
     // A file row was selected: open it in the editor. A folder row only folds.
     if let Some((selected_id, is_folder)) = self
@@ -2862,6 +2893,85 @@ mod tests {
         .name
         .to_string();
       assert!(label.contains("42"), "the command names the pull request");
+    });
+  }
+
+  #[gpui::test]
+  async fn opening_the_files_tab_hands_the_keyboard_to_its_tree(cx: &mut TestAppContext) {
+    cx.update(|cx| gpui_component::init(cx));
+    let repo = TempRepo::init("dock-files-keyboard");
+    commit_text_file(&repo.path, Path::new("a.txt"), "v1\n", "first");
+    commit_text_file(&repo.path, Path::new("b.txt"), "v1\n", "second");
+
+    let (panel, cx) = add_dock_panel_window(Some(repo.path.clone()), cx);
+    await_refresh(&panel, cx).await;
+
+    // The tab is asked for before its tree exists: the files load off the main
+    // thread and the focus follows on the render that mounts them.
+    panel.update_in(cx, |panel, window, cx| {
+      panel.open_tab(DockPanelTab::Files, window, cx)
+    });
+    let files = panel.update(cx, |panel, _| panel._files_task.take());
+    if let Some(files) = files {
+      files.await;
+    }
+    cx.run_until_parked();
+
+    let before = panel.read_with(cx, |panel, cx| {
+      panel.files_tree_state.read(cx).selected_index()
+    });
+    cx.simulate_keystrokes("down");
+    let after = panel.read_with(cx, |panel, cx| {
+      panel.files_tree_state.read(cx).selected_index()
+    });
+    assert_ne!(before, after, "the arrow keys reach the file tree");
+  }
+
+  #[gpui::test]
+  async fn opening_the_review_tab_hands_the_keyboard_to_its_rows(cx: &mut TestAppContext) {
+    cx.update(|cx| gpui_component::init(cx));
+    let repo = TempRepo::init("dock-review-keyboard");
+    commit_text_file(&repo.path, Path::new("a.txt"), "v1\n", "first");
+
+    let (panel, cx) = add_dock_panel_window(Some(repo.path.clone()), cx);
+    await_refresh(&panel, cx).await;
+
+    let comments =
+      crate::review_list::review_panel_comments(&[crate::agent_review::LocalAgentReviewComment {
+        id: 1,
+        in_reply_to_id: None,
+        path: PathBuf::from("a.txt"),
+        line: 1,
+        side: editor::ReviewCommentSide::Right,
+        start_line: None,
+        start_side: None,
+        body: std::sync::Arc::from("look here"),
+        original_start_line: Some(2),
+        original_lines: Vec::new(),
+        state: crate::agent_review::LocalAgentReviewCommentState::Draft,
+      }]);
+    panel.update(cx, |panel, cx| {
+      panel.review_list.update(cx, |list, cx| {
+        list.set_comments(crate::review_list::ReviewSection::Agent, comments, cx)
+      });
+    });
+    cx.run_until_parked();
+
+    panel.update_in(cx, |panel, window, cx| {
+      panel.open_tab(DockPanelTab::Review, window, cx)
+    });
+    cx.run_until_parked();
+
+    cx.simulate_keystrokes("down");
+    panel.read_with(cx, |panel, cx| {
+      assert!(
+        panel
+          .review_list
+          .read(cx)
+          .keyboard_selected_row(cx)
+          .is_some(),
+        "the arrow keys reach the review rows"
+      );
     });
   }
 
