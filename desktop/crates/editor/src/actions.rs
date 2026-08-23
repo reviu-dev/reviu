@@ -102,7 +102,6 @@ pub fn backspace_word(
     let line = document.char_to_line(cursor);
     let line_start = document.line_to_char(line);
 
-    // If we're at the beginning of an empty line, behave like simple backspace
     if cursor == line_start && document.line_content(line).unwrap_or_default().is_empty() {
       editor.select_to(boundaries::previous_boundary(editor, cursor, cx), cx);
     } else {
@@ -125,11 +124,9 @@ pub fn backspace_all(
     let line = document.char_to_line(cursor);
     let line_start = document.line_to_char(line);
 
-    // If we're at the beginning of an empty line, behave like simple backspace
     if cursor == line_start && document.line_content(line).unwrap_or_default().is_empty() {
       editor.select_to(boundaries::previous_boundary(editor, cursor, cx), cx);
     } else {
-      // Delete from start of current line to cursor
       editor.select_to(line_start, cx);
     }
   }
@@ -165,7 +162,6 @@ pub fn up(editor: &mut Editor, _: &Up, window: &mut Window, cx: &mut Context<Edi
 
       let target_column = editor.target_column.unwrap();
 
-      // Calculate new position in target line (skip hidden lines)
       let target_line = editor.previous_visible_doc_line(current_line).unwrap_or(0);
       let target_start = document.line_to_char(target_line);
       let target_len = document
@@ -175,7 +171,6 @@ pub fn up(editor: &mut Editor, _: &Up, window: &mut Window, cx: &mut Context<Edi
 
       Some(target_start + target_column.min(target_len))
     } else {
-      // On first line, go to beginning of buffer
       editor.target_column = None;
       Some(0)
     }
@@ -354,7 +349,6 @@ pub fn cmd_right(editor: &mut Editor, _: &CmdRight, window: &mut Window, cx: &mu
   let cursor = editor.cursor_offset();
   let line = document.char_to_line(cursor);
   let line_range = document.line_range(line).unwrap_or(0..0);
-  // Go to end of line content (before the newline)
   let line_content = document.line_content(line).unwrap_or_default();
   let line_end = line_range.start + line_content.chars().count();
   editor.move_to(line_end, cx);
@@ -406,14 +400,12 @@ pub fn select_up(editor: &mut Editor, _: &SelectUp, window: &mut Window, cx: &mu
     editor.ensure_cursor_visible(window, cx);
     return;
   }
-  // Keep the anchor point of the selection
   let anchor = if editor.selection_reversed {
     editor.selected_range.end
   } else {
     editor.selected_range.start
   };
 
-  // Calculate new cursor position (same logic as up())
   let new_cursor = {
     let document = editor.document.read(cx);
     let cursor_offset = editor.cursor_offset();
@@ -441,7 +433,6 @@ pub fn select_up(editor: &mut Editor, _: &SelectUp, window: &mut Window, cx: &mu
     }
   };
 
-  // Move cursor and extend selection
   let cursor = new_cursor.unwrap();
   if anchor <= cursor {
     editor.selected_range = anchor..cursor;
@@ -464,14 +455,12 @@ pub fn select_down(
     editor.ensure_cursor_visible(window, cx);
     return;
   }
-  // Keep the anchor point of the selection
   let anchor = if editor.selection_reversed {
     editor.selected_range.end
   } else {
     editor.selected_range.start
   };
 
-  // Calculate new cursor position (same logic as down())
   let new_cursor = {
     let document = editor.document.read(cx);
     let cursor_offset = editor.cursor_offset();
@@ -497,13 +486,11 @@ pub fn select_down(
 
       Some(target_start + target_column.min(target_len))
     } else {
-      // On last line, go to end of buffer
       editor.target_column = None;
       Some(document.len())
     }
   };
 
-  // Move cursor and extend selection
   let cursor = new_cursor.unwrap();
   if anchor <= cursor {
     editor.selected_range = anchor..cursor;
@@ -679,8 +666,6 @@ pub fn select_all(editor: &mut Editor, _: &SelectAll, _: &mut Window, cx: &mut C
   editor.select_to(doc_len, cx);
 }
 
-// === Clipboard Actions ===
-
 pub fn paste(editor: &mut Editor, _: &Paste, window: &mut Window, cx: &mut Context<Editor>) {
   editor.target_column = None;
   if let Some(text) = cx.read_from_clipboard().and_then(|item| item.text()) {
@@ -715,14 +700,11 @@ pub fn cut(editor: &mut Editor, _: &Cut, window: &mut Window, cx: &mut Context<E
   }
 }
 
-// === Undo/Redo Actions ===
-
 pub fn undo(editor: &mut Editor, _: &Undo, _window: &mut Window, cx: &mut Context<Editor>) {
   if let Some(transaction) = editor.undo_stack.pop_back() {
     let buffer_tx_id = editor.document.update(cx, |doc, cx| {
       let result = doc.undo(cx);
 
-      // Trigger async syntax re-highlighting after undo
       if result.is_some() {
         doc.schedule_recompute_highlights(cx);
       }
@@ -730,23 +712,18 @@ pub fn undo(editor: &mut Editor, _: &Undo, _window: &mut Window, cx: &mut Contex
       result
     });
 
-    // Only restore selection if buffer undo succeeded
     if buffer_tx_id.is_some() {
-      // Restore cursor position from before the transaction
       editor.selected_range = transaction.selection_before.clone();
       editor.selection_reversed = false;
 
-      // Invalidate cache (content may have changed significantly)
       editor.line_layouts.clear();
 
-      // Move transaction to redo stack
       editor.redo_stack.push_back(transaction);
       editor.is_dirty = true;
 
       cx.notify();
       editor.schedule_diff_recompute(cx);
     } else {
-      // Buffer undo failed, push transaction back
       editor.undo_stack.push_back(transaction);
     }
   }
@@ -757,7 +734,6 @@ pub fn redo(editor: &mut Editor, _: &Redo, _window: &mut Window, cx: &mut Contex
     let buffer_tx_id = editor.document.update(cx, |doc, cx| {
       let result = doc.redo(cx);
 
-      // Trigger async syntax re-highlighting after redo
       if result.is_some() {
         doc.schedule_recompute_highlights(cx);
       }
@@ -765,23 +741,18 @@ pub fn redo(editor: &mut Editor, _: &Redo, _window: &mut Window, cx: &mut Contex
       result
     });
 
-    // Only restore selection if buffer redo succeeded
     if buffer_tx_id.is_some() {
-      // Restore cursor position from after the transaction
       editor.selected_range = transaction.selection_after.clone();
       editor.selection_reversed = false;
 
-      // Invalidate cache
       editor.line_layouts.clear();
 
-      // Move transaction to undo stack
       editor.undo_stack.push_back(transaction);
       editor.is_dirty = true;
 
       cx.notify();
       editor.schedule_diff_recompute(cx);
     } else {
-      // Buffer redo failed, push transaction back
       editor.redo_stack.push_back(transaction);
     }
   }
@@ -807,8 +778,6 @@ pub fn close_find(
     cx.propagate();
   }
 }
-
-// === System Actions ===
 
 pub fn show_character_palette(
   _editor: &mut Editor,

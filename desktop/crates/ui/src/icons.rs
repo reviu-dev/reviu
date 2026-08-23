@@ -54,7 +54,6 @@ pub enum UiIconName {
   BookOpen,
   Search,
   Globe,
-  // Brands
   BrandX,
   GoogleChrome,
   FirefoxBrowser,
@@ -117,7 +116,6 @@ impl IconNamed for UiIconName {
       UiIconName::BookOpen => "icons/book-open.svg",
       UiIconName::Search => "icons/search.svg",
       UiIconName::Globe => "icons/globe.svg",
-      // Brands
       UiIconName::BrandX => "icons/brands/x.svg",
       UiIconName::GoogleChrome => "icons/brands/googlechrome.svg",
       UiIconName::FirefoxBrowser => "icons/brands/firefoxbrowser.svg",

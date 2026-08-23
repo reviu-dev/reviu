@@ -497,7 +497,6 @@ pub fn compute_buffer_diff(
   for (i, raw_hunk) in raw_hunks.iter().enumerate() {
     // Check if this hunk is far enough from the previous to start a new group
     if i > 0 && raw_hunk.before.start.saturating_sub(group_before_pos) > 2 * context_lines {
-      // Emit trailing context for previous group
       let trailing_end = (group_before_pos + context_lines).min(before_len);
       for idx in group_before_pos..trailing_end {
         let (content, no_newline) = get_before_line(idx);
@@ -508,7 +507,6 @@ pub fn compute_buffer_diff(
         });
       }
 
-      // Finalize the current group as a DiffHunk
       let mut diff_hunk = DiffHunk {
         id: String::new(),
         old_start: group_before_start as usize + 1,
@@ -524,13 +522,11 @@ pub fn compute_buffer_diff(
       diff_hunk.id = compute_hunk_id(&diff_hunk);
       hunks.push(diff_hunk);
 
-      // Start new group
       group_before_start = raw_hunk.before.start.saturating_sub(context_lines);
       group_after_start = raw_hunk.after.start.saturating_sub(context_lines);
       group_before_pos = group_before_start;
     }
 
-    // Push context lines between previous position and this hunk
     for idx in group_before_pos..raw_hunk.before.start {
       let (content, no_newline) = get_before_line(idx);
       group_lines.push(DiffLine {
@@ -540,7 +536,6 @@ pub fn compute_buffer_diff(
       });
     }
 
-    // Push removed lines
     for idx in raw_hunk.before.start..raw_hunk.before.end {
       let (content, no_newline) = get_before_line(idx);
       group_lines.push(DiffLine {
@@ -550,7 +545,6 @@ pub fn compute_buffer_diff(
       });
     }
 
-    // Push added lines
     for idx in raw_hunk.after.start..raw_hunk.after.end {
       let (content, no_newline) = get_after_line(idx);
       group_lines.push(DiffLine {
@@ -563,7 +557,6 @@ pub fn compute_buffer_diff(
     group_before_pos = raw_hunk.before.end;
   }
 
-  // Finalize last group
   let trailing_end = (group_before_pos + context_lines).min(before_len);
   for idx in group_before_pos..trailing_end {
     let (content, no_newline) = get_before_line(idx);
@@ -1379,8 +1372,6 @@ index 1111111..0000000
     );
   }
 
-  // --- apply_hunk_to_text tests ---
-
   #[test]
   fn apply_hunk_forward_stages_correctly() {
     let base = "line1\nline2\nline3\n";
@@ -1413,7 +1404,6 @@ index 1111111..0000000
     .expect("diff");
 
     assert_eq!(diff.hunks.len(), 1);
-    // Apply forward first
     let staged = apply_hunk_to_text(base, &diff.hunks[0], false).expect("apply forward");
     assert_eq!(staged, buffer);
     // Now reverse (unstage), should get back to base

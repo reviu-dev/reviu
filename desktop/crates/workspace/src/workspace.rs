@@ -937,7 +937,6 @@ impl Render for WorkspaceView {
     self.handle_pending_status_bar_notification(cx);
     let auth_state = AuthStateStore::get(cx);
 
-    // Show a loading screen while the initial auth check is in progress
     if matches!(auth_state, AuthState::Unknown) {
       let theme = cx.theme().clone();
       let version = format!(
@@ -969,7 +968,6 @@ impl Render for WorkspaceView {
     cx.global_mut::<WorkspaceRoute>().page = page;
     sentry_context::sync_workspace_route(&pathname, page);
 
-    // Sync sentry context and focus on page change
     if self.last_page != Some(page) {
       let previous_page = self.last_page;
       self.last_page = Some(page);

@@ -147,18 +147,15 @@ mod tests {
     cx.update(|cx| {
       init_navigation_test(cx);
 
-      // Start at /session
       NavigationHistory::navigate_replace("/session", cx);
       assert_eq!(NavigationHistory::current_pathname(cx).as_ref(), "/session");
 
-      // Navigate to /settings
       NavigationHistory::navigate("/settings", cx);
       assert_eq!(
         NavigationHistory::current_pathname(cx).as_ref(),
         "/settings"
       );
 
-      // History should have /session
       assert_eq!(cx.global::<NavigationHistory>().stack.len(), 1);
       assert_eq!(
         cx.global::<NavigationHistory>().stack[0].as_ref(),
@@ -176,18 +173,15 @@ mod tests {
       NavigationHistory::navigate("/settings", cx);
       NavigationHistory::navigate("/about", cx);
 
-      // Back from /about -> /settings
       NavigationHistory::navigate_back(cx);
       assert_eq!(
         NavigationHistory::current_pathname(cx).as_ref(),
         "/settings"
       );
 
-      // Back from /settings -> /session
       NavigationHistory::navigate_back(cx);
       assert_eq!(NavigationHistory::current_pathname(cx).as_ref(), "/session");
 
-      // Back from /session -> /session (fallback)
       NavigationHistory::navigate_back(cx);
       assert_eq!(NavigationHistory::current_pathname(cx).as_ref(), "/session");
     });
@@ -201,7 +195,6 @@ mod tests {
       NavigationHistory::navigate_replace("/session", cx);
       NavigationHistory::navigate("/session", cx);
 
-      // Stack should be empty, no duplicate push
       assert_eq!(cx.global::<NavigationHistory>().stack.len(), 0);
     });
   }
@@ -214,7 +207,6 @@ mod tests {
       NavigationHistory::navigate_replace("/session", cx);
       NavigationHistory::navigate_replace("/settings", cx);
 
-      // Stack should be empty, replace doesn't push
       assert_eq!(cx.global::<NavigationHistory>().stack.len(), 0);
       assert_eq!(
         NavigationHistory::current_pathname(cx).as_ref(),

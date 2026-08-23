@@ -121,7 +121,7 @@ impl TextBuffer {
     if line_idx < self.len_lines() {
       let line_slice = self.text.line(line_idx);
 
-      // Try fast path: borrow if line is contiguous in memory and has no newlines
+      // ropey can only borrow a line that lives in one chunk; the rest must allocate.
       if let Some(line_str) = line_slice.as_str()
         && !line_str.ends_with('\n')
         && !line_str.ends_with('\r')
@@ -129,7 +129,6 @@ impl TextBuffer {
         return Some(Cow::Borrowed(line_str));
       }
 
-      // Slow path: line crosses chunk boundaries or has newlines, must allocate
       let mut owned = line_slice.to_string();
       if owned.ends_with('\n') {
         owned.pop();
@@ -208,7 +207,6 @@ impl TextBuffer {
     let transaction_id = self.next_transaction_id;
     self.next_transaction_id += 1;
 
-    // Try to group with last transaction if within time window
     if let Some(last) = self.undo_stack.back_mut()
       && !self.group_interval.is_zero()
       && now.saturating_duration_since(last.timestamp) < self.group_interval
@@ -219,7 +217,6 @@ impl TextBuffer {
       return last.id;
     }
 
-    // Create new transaction
     self.undo_stack.push_back(Transaction {
       id: transaction_id,
       timestamp: now,
@@ -231,23 +228,18 @@ impl TextBuffer {
 
   fn exec_operation(&mut self, operation: &TextOperation) {
     if operation.before.is_empty() && !operation.after.is_empty() {
-      // Insert
       self.text.insert(operation.range.start, &operation.after);
     } else if !operation.before.is_empty() && operation.after.is_empty() {
-      // Delete
       self.text.remove(operation.range.clone());
     } else if !operation.before.is_empty() && !operation.after.is_empty() {
-      // Replace
       self.text.remove(operation.range.clone());
       self.text.insert(operation.range.start, &operation.after);
     }
-    // If both empty, do nothing
   }
 
   pub fn undo(&mut self) -> Option<TransactionId> {
     let tx = self.undo_stack.pop_back()?;
 
-    // Execute operations in reverse order with inverted operations
     for operation in tx.operations.iter().rev() {
       self.exec_operation(&operation.undo());
     }
@@ -260,7 +252,6 @@ impl TextBuffer {
   pub fn redo(&mut self) -> Option<TransactionId> {
     let tx = self.redo_stack.pop_back()?;
 
-    // Execute operations in forward order
     for operation in &tx.operations {
       self.exec_operation(operation);
     }
@@ -367,7 +358,6 @@ mod tests {
     });
     buffer.undo();
 
-    // New edit should clear redo stack
     buffer.transaction(Instant::now(), |buf, tx| {
       buf.insert(tx, 0, "b");
     });
@@ -393,7 +383,6 @@ mod tests {
 
     assert_eq!(buffer.slice_to_string(0..3), "abc");
 
-    // All 3 inserts should be grouped into 1 undo
     assert!(buffer.undo().is_some());
     assert_eq!(buffer.len(), 0);
     assert!(!buffer.can_undo());
@@ -428,7 +417,6 @@ mod tests {
 
     assert_eq!(buffer.slice_to_string(0..11), "hello world");
 
-    // All operations in one transaction
     buffer.undo();
     assert_eq!(buffer.len(), 0);
   }
@@ -517,7 +505,6 @@ mod tests {
       buf.insert(tx, 1, "b");
     });
 
-    // Same ID when grouped
     assert_eq!(id1, id2);
   }
 

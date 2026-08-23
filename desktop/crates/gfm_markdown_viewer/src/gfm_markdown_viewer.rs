@@ -41,11 +41,6 @@ pub(crate) type LinkHandlerFn = dyn Fn(&str, &mut Window, &mut App) -> LinkActio
 pub type AssetUrlResolverFn = dyn Fn(&str) -> Option<String> + Send + Sync;
 const WORD_DIFF_MAX_COMBINED_BYTES: usize = 2_048;
 
-// Data types imported from crate::types
-
-// MarkdownRenderState, SelectionRange, SelectionState, ActiveSelection, clamp_to_char_boundary
-// imported from crate::types
-
 #[derive(Clone, Default)]
 pub struct MarkdownRenderOptions {
   pub on_link: Option<Arc<LinkHandlerFn>>,
@@ -124,9 +119,6 @@ impl MarkdownRenderOptions {
     self
   }
 }
-
-// Constants imported from crate::constants
-// BadgeImageSource, BadgeResolveState, Segment, ParsedMarkdown imported from crate::types
 
 pub fn render_parsed_markdown(
   parsed: &ParsedMarkdown,
@@ -812,7 +804,6 @@ fn highlight_full_text(text: &str, language_hint: Option<&str>) -> Arc<Vec<Inlin
 
   let cache_key = preview_highlight_cache_key(language_hint, text);
 
-  // Check cache.
   if let Ok(guard) = PREVIEW_HIGHLIGHT_CACHE.lock()
     && let Some(cache) = guard.as_ref()
     && let Some(cached) = cache.get(cache_key)
@@ -856,7 +847,6 @@ fn build_preview_code_spans_per_line(
     ..InlineStyle::default()
   };
 
-  // Use full file content if available and within size cap.
   let usable_full_content =
     full_content.filter(|content| content.len() <= FULL_FILE_HIGHLIGHT_MAX_BYTES);
 
@@ -867,7 +857,6 @@ fn build_preview_code_spans_per_line(
     return split_spans_per_line(snippets, content, &all_spans, target_line_indices);
   }
 
-  // Fallback: join snippets and highlight as one block.
   let joined: String = snippets
     .iter()
     .map(|s| s.as_ref())
@@ -1188,7 +1177,6 @@ fn render_block(
         (cx.theme().muted_foreground, None)
       };
 
-      // Build children, stripping the alert marker from the first paragraph
       let rendered_children = if let Some((_, remaining_first_text)) = &alert {
         let mut modified_children = children.clone();
         if let Some(Block::Paragraph(inlines)) = modified_children.first_mut()
@@ -1197,7 +1185,6 @@ fn render_block(
           *text = remaining_first_text.clone();
           if text.is_empty() {
             inlines.remove(0);
-            // Also remove leading SoftBreak if present
             if matches!(inlines.first(), Some(Inline::SoftBreak)) {
               inlines.remove(0);
             }
@@ -1802,7 +1789,6 @@ fn render_inline_with_images(
       if let Some(image_data) = inline_image_data(inline)
         && image_data.is_block_sized()
       {
-        // Flush current row, then render the image as a block on its own line.
         if !inline_row.is_empty() {
           let (flushed_container, flushed_content) = render_inline_row(
             &inline_row,
@@ -2367,7 +2353,6 @@ fn build_code_block_spans(
   code: &CodeBlock,
   syntax_cache: Option<&Arc<crate::syntax_cache::SyntaxHighlightCache>>,
 ) -> (SharedString, Vec<InlineSpan>, Vec<LinkRange>) {
-  // Check cache first, returns highlighted spans if previously computed
   if let Some(cache) = syntax_cache
     && let Some(cached) = cache.get(code)
   {
@@ -2386,7 +2371,6 @@ fn build_code_block_spans(
     return (text, Vec::new(), Vec::new());
   }
 
-  // If we have a cache, schedule async highlight and return plain spans now
   if let Some(cache) = syntax_cache
     && code_block_language_config(code.lang.as_deref()).is_some()
   {
@@ -2402,7 +2386,6 @@ fn build_code_block_spans(
     return (text, plain_spans, Vec::new());
   }
 
-  // No cache, synchronous highlight (fallback for preview cards etc.)
   let spans = code_block_language_config(code.lang.as_deref())
     .and_then(|config| {
       let mut highlighter = SyntaxHighlighter::new(config);
@@ -2785,8 +2768,6 @@ fn is_issue_reference_prefix_char(ch: char) -> bool {
 fn is_issue_reference_suffix_char(ch: char) -> bool {
   ch.is_alphanumeric() || ch == '_'
 }
-
-// HTML parsing functions moved to crate::parse_html
 
 #[cfg(test)]
 mod tests {
@@ -4628,7 +4609,6 @@ Apres"#,
     for (i, (text, spans)) in result.iter().enumerate() {
       assert_eq!(text.as_ref(), snippets[i].as_ref());
       let text_len = text.len();
-      // Verify spans cover 0..text_len without gaps
       let mut covered = 0;
       for span in spans {
         assert_eq!(

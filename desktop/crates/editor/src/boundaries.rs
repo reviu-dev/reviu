@@ -218,15 +218,13 @@ pub fn previous_word_boundary(editor: &Editor, offset: usize, cx: &Context<Edito
   let doc = editor.document.read(cx);
   let doc_len = doc.len();
 
-  // Work on a slice around the cursor instead of entire buffer
-  // Get up to 1000 chars before cursor and a bit after to check cursor position
+  // Bound the scan to a window around the cursor instead of the whole buffer.
   let start = offset.saturating_sub(1000);
   let end = (offset + 100).min(doc_len);
   let slice = doc.slice_to_string(start..end);
   let relative_offset = offset.saturating_sub(start).min(slice.chars().count());
   let relative_byte_offset = char_offset_to_byte_offset(&slice, relative_offset);
 
-  // Find the last newline before cursor to detect line boundaries
   let mut last_newline_pos = None;
   for (idx, ch) in slice.char_indices() {
     if ch == '\n' && idx < relative_byte_offset {
@@ -234,10 +232,7 @@ pub fn previous_word_boundary(editor: &Editor, offset: usize, cx: &Context<Edito
     }
   }
 
-  // Find the start of the current line (after the newline)
   let line_start = last_newline_pos.map(|pos| pos + 1).unwrap_or(0);
-
-  // Check if the current line has indentation (leading whitespace)
 
   let mut first_non_space_on_line = None;
   // Check up to and including cursor position
@@ -250,39 +245,30 @@ pub fn previous_word_boundary(editor: &Editor, offset: usize, cx: &Context<Edito
     }
   }
 
-  // If we have indentation and we're not at the start of indentation,
-  // we should stay on the current line
   let should_stay_on_line = if let Some(first_non_space) = first_non_space_on_line {
-    // We have non-whitespace on this line before or at cursor
-    // Check if there's indentation (spaces between line_start and first_non_space)
     first_non_space > line_start && relative_byte_offset >= first_non_space
   } else {
     false
   };
 
-  // Find all segments using split_word_bound_indices
   let mut last_segment_start = 0;
   let mut last_segment_on_current_line = line_start;
 
   for (idx, segment) in slice.split_word_bound_indices() {
     let segment_end = idx + segment.len();
 
-    // Skip whitespace-only segments (including newlines)
     if segment.trim().is_empty() {
       continue;
     }
 
-    // Track segments on the current line
     if idx >= line_start && idx < relative_byte_offset {
       last_segment_on_current_line = idx;
     }
 
-    // If we're exactly at the start of this segment, go to previous segment
     if idx == relative_byte_offset {
       continue;
     }
 
-    // If we're inside this segment, go to its start
     if idx < relative_byte_offset && relative_byte_offset <= segment_end {
       let local_cursor = relative_byte_offset - idx;
       if let Some(local_start) = code_subsegment_start(segment, local_cursor) {
@@ -291,18 +277,15 @@ pub fn previous_word_boundary(editor: &Editor, offset: usize, cx: &Context<Edito
       return start + byte_offset_to_char_offset(&slice, idx);
     }
 
-    // Track this as a potential previous segment
     if idx < relative_byte_offset {
       last_segment_start = idx;
     }
   }
 
-  // If we should stay on the current line, return the last segment on this line
   if should_stay_on_line && last_segment_on_current_line >= line_start {
     return start + byte_offset_to_char_offset(&slice, last_segment_on_current_line);
   }
 
-  // Otherwise, go to the previous segment (may cross lines)
   start + byte_offset_to_char_offset(&slice, last_segment_start)
 }
 
@@ -316,24 +299,20 @@ pub fn next_word_boundary(editor: &Editor, offset: usize, cx: &Context<Editor>) 
     return doc_len;
   }
 
-  // Work on a slice from current position
-  // We need to look backwards a bit to catch if we're in the middle of a segment
+  // Look back a little so a cursor inside a segment still finds that segment's start.
   let start = offset.saturating_sub(100);
   let end = (offset + 1000).min(doc_len);
   let slice = doc.slice_to_string(start..end);
   let relative_offset = offset.saturating_sub(start).min(slice.chars().count());
   let relative_byte_offset = char_offset_to_byte_offset(&slice, relative_offset);
 
-  // Find all segments and their ends using split_word_bound_indices
   for (idx, segment) in slice.split_word_bound_indices() {
     let segment_end = idx + segment.len();
 
-    // Skip whitespace-only segments
     if segment.trim().is_empty() {
       continue;
     }
 
-    // If we're before or at the start of this segment, go to its end
     if relative_byte_offset <= idx {
       if let Some(local_end) = code_subsegment_end(segment, 0) {
         return start + byte_offset_to_char_offset(&slice, idx + local_end);
@@ -341,7 +320,6 @@ pub fn next_word_boundary(editor: &Editor, offset: usize, cx: &Context<Editor>) 
       return start + byte_offset_to_char_offset(&slice, segment_end);
     }
 
-    // If we're inside this segment, go to its end
     if relative_byte_offset < segment_end {
       let local_cursor = relative_byte_offset - idx;
       if let Some(local_end) = code_subsegment_end(segment, local_cursor) {
@@ -367,7 +345,6 @@ pub fn word_range_at_offset(
     return (doc_len, doc_len);
   }
 
-  // Get a slice around the offset
   let start = offset.saturating_sub(500);
   let end = (offset + 500).min(doc_len);
   let slice = doc.slice_to_string(start..end);
@@ -404,10 +381,6 @@ mod tests {
   use super::*;
   use crate::editor::tests::EditorTestContext;
   use gpui::TestAppContext;
-
-  // ============================================================================
-  // Word Boundary Tests
-  // ============================================================================
 
   #[gpui::test]
   fn test_previous_word_boundary_simple(cx: &mut TestAppContext) {
@@ -627,7 +600,6 @@ mod tests {
       "    Red,\n    Green,\n    Blue,\n    RGB(u8, u8, u8),",
     );
 
-    // Test forward movement from "Green"
     // From start of "Green" (13) should go to end of "Green" (18)
     let boundary = ctx
       .editor
@@ -640,7 +612,6 @@ mod tests {
       .update(&mut ctx.cx, |editor, cx| next_word_boundary(editor, 18, cx));
     assert_eq!(boundary, 19);
 
-    // Test backward movement from "Blue"
     // From middle of "Blue" (26) should go to start of "Blue" (24)
     let boundary = ctx.editor.update(&mut ctx.cx, |editor, cx| {
       previous_word_boundary(editor, 26, cx)
@@ -717,10 +688,6 @@ mod tests {
     });
     assert_eq!(boundary, 14); // "{" on previous line
   }
-
-  // ============================================================================
-  // Character Boundary Tests
-  // ============================================================================
 
   #[gpui::test]
   fn test_previous_boundary(cx: &mut TestAppContext) {

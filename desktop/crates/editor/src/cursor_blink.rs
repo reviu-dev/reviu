@@ -19,7 +19,6 @@ impl CursorBlink {
       enabled: false,
     };
 
-    // Start blinking immediately
     blink.enable(cx);
     blink
   }
@@ -80,7 +79,6 @@ impl CursorBlink {
     }
 
     self.enabled = true;
-    // Start with cursor invisible, will become visible on first blink
     self.visible = false;
     self.blink_cursors(self.blink_epoch, cx);
   }

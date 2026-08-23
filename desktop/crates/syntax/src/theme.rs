@@ -110,7 +110,6 @@ impl SyntaxTheme {
   /// Default dark theme inspired by VS Code Dark+
   pub fn default_dark() -> Self {
     Self {
-      // Keywords - blue
       keyword: Hsla {
         h: 210.0 / 360.0,
         s: 0.59,
@@ -124,7 +123,6 @@ impl SyntaxTheme {
         a: 1.0,
       }, // #c586c0
 
-      // Functions - yellow
       function: Hsla {
         h: 50.0 / 360.0,
         s: 0.61,
@@ -144,7 +142,6 @@ impl SyntaxTheme {
         a: 1.0,
       }, // #569cd6 (macros in blue)
 
-      // Types - cyan/turquoise
       type_name: Hsla {
         h: 167.0 / 360.0,
         s: 0.49,
@@ -170,7 +167,6 @@ impl SyntaxTheme {
         a: 1.0,
       }, // #4ec9b0
 
-      // Strings - orange
       string: Hsla {
         h: 25.0 / 360.0,
         s: 0.51,
@@ -190,7 +186,6 @@ impl SyntaxTheme {
         a: 1.0,
       }, // #d16969
 
-      // Numbers - light green
       number: Hsla {
         h: 99.0 / 360.0,
         s: 0.28,
@@ -204,7 +199,6 @@ impl SyntaxTheme {
         a: 1.0,
       }, // #569cd6
 
-      // Comments - green/gray
       comment: Hsla {
         h: 113.0 / 360.0,
         s: 0.23,
@@ -218,7 +212,6 @@ impl SyntaxTheme {
         a: 1.0,
       }, // #6a9955 (slightly brighter)
 
-      // Operators - white
       operator: Hsla {
         h: 0.0,
         s: 0.0,
@@ -226,7 +219,6 @@ impl SyntaxTheme {
         a: 1.0,
       }, // #d4d4d4
 
-      // Variables
       variable: Hsla {
         h: 215.0 / 360.0,
         s: 0.76,
@@ -246,7 +238,6 @@ impl SyntaxTheme {
         a: 1.0,
       }, // #9cdcfe
 
-      // Properties
       property: Hsla {
         h: 215.0 / 360.0,
         s: 0.76,
@@ -254,7 +245,6 @@ impl SyntaxTheme {
         a: 1.0,
       }, // #9cdcfe
 
-      // Constants
       constant: Hsla {
         h: 215.0 / 360.0,
         s: 0.76,
@@ -268,7 +258,6 @@ impl SyntaxTheme {
         a: 1.0,
       }, // #569cd6 (true, false, null, etc.)
 
-      // Punctuation - light gray
       punctuation: Hsla {
         h: 0.0,
         s: 0.0,
@@ -294,7 +283,6 @@ impl SyntaxTheme {
         a: 1.0,
       }, // #569cd6
 
-      // Attributes/Decorators - yellow
       attribute: Hsla {
         h: 50.0 / 360.0,
         s: 0.61,
@@ -302,7 +290,6 @@ impl SyntaxTheme {
         a: 1.0,
       }, // #dcdcaa
 
-      // Lifetime (Rust) - cyan
       lifetime: Hsla {
         h: 167.0 / 360.0,
         s: 0.49,
@@ -323,7 +310,6 @@ impl SyntaxTheme {
   /// Default light theme
   pub fn default_light() -> Self {
     Self {
-      // Keywords - darker blue
       keyword: Hsla {
         h: 210.0 / 360.0,
         s: 0.79,
@@ -337,7 +323,6 @@ impl SyntaxTheme {
         a: 1.0,
       }, // #AF00DB
 
-      // Functions - darker brown/gold
       function: Hsla {
         h: 35.0 / 360.0,
         s: 0.75,
@@ -357,7 +342,6 @@ impl SyntaxTheme {
         a: 1.0,
       }, // #0000FF (macros in blue)
 
-      // Types - teal/cyan
       type_name: Hsla {
         h: 180.0 / 360.0,
         s: 0.69,
@@ -383,7 +367,6 @@ impl SyntaxTheme {
         a: 1.0,
       }, // #267F99
 
-      // Strings - dark orange/red
       string: Hsla {
         h: 5.0 / 360.0,
         s: 0.73,
@@ -403,7 +386,6 @@ impl SyntaxTheme {
         a: 1.0,
       }, // #D16969
 
-      // Numbers - dark green
       number: Hsla {
         h: 120.0 / 360.0,
         s: 0.53,
@@ -417,7 +399,6 @@ impl SyntaxTheme {
         a: 1.0,
       }, // #0000FF
 
-      // Comments - green
       comment: Hsla {
         h: 120.0 / 360.0,
         s: 0.43,
@@ -431,7 +412,6 @@ impl SyntaxTheme {
         a: 1.0,
       }, // #008000 (slightly brighter)
 
-      // Operators - dark gray
       operator: Hsla {
         h: 0.0,
         s: 0.0,
@@ -439,7 +419,6 @@ impl SyntaxTheme {
         a: 1.0,
       }, // #333333
 
-      // Variables - dark blue/black
       variable: Hsla {
         h: 210.0 / 360.0,
         s: 0.76,
@@ -459,7 +438,6 @@ impl SyntaxTheme {
         a: 1.0,
       }, // #001080
 
-      // Properties
       property: Hsla {
         h: 210.0 / 360.0,
         s: 0.76,
@@ -467,7 +445,6 @@ impl SyntaxTheme {
         a: 1.0,
       }, // #001080
 
-      // Constants
       constant: Hsla {
         h: 210.0 / 360.0,
         s: 0.76,
@@ -481,7 +458,6 @@ impl SyntaxTheme {
         a: 1.0,
       }, // #0000FF (true, false, null, etc.)
 
-      // Punctuation - dark gray
       punctuation: Hsla {
         h: 0.0,
         s: 0.0,
@@ -507,7 +483,6 @@ impl SyntaxTheme {
         a: 1.0,
       }, // #0000FF
 
-      // Attributes/Decorators - brown/gold
       attribute: Hsla {
         h: 35.0 / 360.0,
         s: 0.75,
@@ -515,7 +490,6 @@ impl SyntaxTheme {
         a: 1.0,
       }, // #795E26
 
-      // Lifetime (Rust) - teal
       lifetime: Hsla {
         h: 180.0 / 360.0,
         s: 0.69,

@@ -813,7 +813,6 @@ pub struct Editor {
   pub marked_range: Option<Range<usize>>,
   pub is_selecting: bool,
 
-  // Performance: cache and viewport
   pub line_layouts: HashMap<usize, Arc<ShapedLine>>,
   pub virtual_line_layouts: HashMap<usize, Arc<ShapedLine>>,
   pub(crate) last_layout_font_size: Pixels,
@@ -832,10 +831,8 @@ pub struct Editor {
   pub(crate) last_scroll_time: Option<Instant>,
   pub(crate) last_scroll_x: Pixels,
 
-  // Cache size limit to prevent memory issues with large files
   pub(crate) max_cache_size: usize,
 
-  // Target column for vertical navigation
   pub(crate) target_column: Option<usize>,
 
   pub(crate) undo_stack: VecDeque<Transaction>,
@@ -936,11 +933,9 @@ pub struct Editor {
   pub is_read_only: bool,
   is_unmerged: bool,
 
-  // Track syntax highlighting version to invalidate cache when highlights change
   pub last_highlights_version: usize,
   pub last_highlights_epoch: usize,
 
-  // Cursor blinking
   pub cursor_blink: Entity<CursorBlink>,
 }
 
@@ -7400,7 +7395,6 @@ impl Editor {
   }
 
   pub fn ensure_cache_size(&mut self, viewport: Range<usize>) {
-    // If cache is too large, keep only lines near the viewport
     if self.line_layouts.len() > self.max_cache_size {
       let viewport_start = viewport.start.saturating_sub(50);
       let viewport_end = viewport.end + 50;
@@ -7590,7 +7584,6 @@ impl Editor {
       }
     }
 
-    // Ensure cursor is visible horizontally
     let shaped_line = match cursor_doc_line {
       Some(doc_line) => self.line_layouts.get(&doc_line).cloned(),
       None => self.virtual_line_layouts.get(&cursor_line).cloned(),
@@ -7681,11 +7674,9 @@ impl Editor {
     selection_before: Range<usize>,
     selection_after: Range<usize>,
   ) {
-    // Check if we should update an existing transaction with the same ID (grouping)
     if let Some(transaction) = self.undo_stack.iter_mut().find(|t| t.id == id) {
       transaction.selection_after = selection_after;
     } else {
-      // Create new transaction
       self.undo_stack.push_back(Transaction {
         id,
         selection_before,
@@ -7701,7 +7692,6 @@ impl Editor {
     if !self.is_selecting {
       self.display_selection = None;
     }
-    // Show cursor immediately on move
     self.cursor_blink.update(cx, |blink, cx| {
       blink.pause_blinking(cx);
     });
@@ -8722,7 +8712,6 @@ impl Editor {
     self.target_column = None;
     self.is_selecting = true;
 
-    // Show cursor immediately on mouse down
     self.cursor_blink.update(cx, |blink, cx| {
       blink.pause_blinking(cx);
     });
@@ -9013,7 +9002,6 @@ impl EntityInputHandler for Editor {
     if self.is_read_only_display_cursor(cx) && self.selected_range.is_empty() {
       return;
     }
-    // Pause cursor blinking when typing
     self.cursor_blink.update(cx, |blink, cx| {
       blink.pause_blinking(cx);
     });
@@ -9046,7 +9034,6 @@ impl EntityInputHandler for Editor {
         buffer.replace(tx, range.clone(), new_text);
       });
 
-      // Trigger async syntax re-highlighting with debouncing
       if !doc.should_defer_full_highlight() {
         doc.schedule_recompute_highlights(cx);
       }
@@ -9065,10 +9052,8 @@ impl EntityInputHandler for Editor {
     let has_newline = new_text.contains('\n');
 
     if has_newline || start_line != end_line {
-      // Multi-line edit: invalidate from start line onwards
       self.invalidate_lines_from(start_line);
     } else {
-      // Single-line edit: only invalidate the affected line
       self.invalidate_line(start_line);
     }
 
@@ -9103,7 +9088,6 @@ impl EntityInputHandler for Editor {
     if self.is_read_only_display_cursor(cx) && self.selected_range.is_empty() {
       return;
     }
-    // Pause cursor blinking when typing
     self.cursor_blink.update(cx, |blink, cx| {
       blink.pause_blinking(cx);
     });
@@ -9142,7 +9126,6 @@ impl EntityInputHandler for Editor {
     });
     self.mark_conflict_cache_dirty();
 
-    // Invalidate cache for all lines from the start of the edit
     self.invalidate_lines_from(start_line);
 
     let new_text_chars = new_text.chars().count();
@@ -12250,15 +12233,10 @@ pub mod tests {
     assert!(!allowed);
   }
 
-  // ============================================================================
-  // Cache Management Tests
-  // ============================================================================
-
   #[gpui::test]
   fn test_invalidate_line_single(cx: &mut TestAppContext) {
     let mut ctx = EditorTestContext::with_lines(cx.clone(), 10);
 
-    // Simulate cached lines
     ctx.editor.update(&mut ctx.cx, |editor, _| {
       for i in 0..5 {
         editor
@@ -12267,17 +12245,14 @@ pub mod tests {
       }
     });
 
-    // Verify all are cached
     for i in 0..5 {
       assert!(ctx.is_line_cached(i));
     }
 
-    // Invalidate line 2
     ctx.editor.update(&mut ctx.cx, |editor, _| {
       editor.invalidate_line(2);
     });
 
-    // Line 2 should be removed, others stay
     assert!(ctx.is_line_cached(0));
     assert!(ctx.is_line_cached(1));
     assert!(!ctx.is_line_cached(2));
@@ -12289,7 +12264,6 @@ pub mod tests {
   fn test_invalidate_lines_from(cx: &mut TestAppContext) {
     let mut ctx = EditorTestContext::with_lines(cx.clone(), 10);
 
-    // Simulate cached lines 0-9
     ctx.editor.update(&mut ctx.cx, |editor, _| {
       for i in 0..10 {
         editor
@@ -12300,12 +12274,10 @@ pub mod tests {
 
     assert_eq!(ctx.cache_size(), 10);
 
-    // Invalidate from line 5
     ctx.editor.update(&mut ctx.cx, |editor, _| {
       editor.invalidate_lines_from(5);
     });
 
-    // Lines 0-4 should remain, 5-9 should be removed
     assert!(ctx.is_line_cached(0));
     assert!(ctx.is_line_cached(4));
     assert!(!ctx.is_line_cached(5));
@@ -12317,7 +12289,6 @@ pub mod tests {
   fn test_ensure_cache_size_limit(cx: &mut TestAppContext) {
     let mut ctx = EditorTestContext::with_lines(cx.clone(), 300);
 
-    // Fill cache beyond MAX_CACHE_SIZE
     ctx.editor.update(&mut ctx.cx, |editor, _| {
       for i in 0..250 {
         editor
@@ -12328,12 +12299,10 @@ pub mod tests {
 
     assert_eq!(ctx.cache_size(), 250);
 
-    // Call ensure_cache_size with viewport at lines 100-120
     ctx.editor.update(&mut ctx.cx, |editor, _| {
       editor.ensure_cache_size(100..120);
     });
 
-    // Cache should be reduced
     assert!(ctx.cache_size() < 250);
 
     // Lines near viewport should be kept (50..170 range)
@@ -12347,7 +12316,6 @@ pub mod tests {
   fn test_cache_retention_after_viewport_change(cx: &mut TestAppContext) {
     let mut ctx = EditorTestContext::with_lines(cx.clone(), 100);
 
-    // Cache lines 10-20
     ctx.editor.update(&mut ctx.cx, |editor, _| {
       for i in 10..=20 {
         editor
@@ -12356,12 +12324,10 @@ pub mod tests {
       }
     });
 
-    // Ensure cache size with different viewport
     ctx.editor.update(&mut ctx.cx, |editor, _| {
       editor.ensure_cache_size(30..40);
     });
 
-    // Old cache should still exist (under limit)
     assert!(ctx.is_line_cached(15));
   }
 
@@ -12369,7 +12335,6 @@ pub mod tests {
   fn test_invalidate_on_insert(cx: &mut TestAppContext) {
     let mut ctx = EditorTestContext::with_text(cx.clone(), "line1\nline2\nline3");
 
-    // Cache all lines
     ctx.editor.update(&mut ctx.cx, |editor, _| {
       for i in 0..3 {
         editor
@@ -12387,7 +12352,6 @@ pub mod tests {
       editor.invalidate_line(1);
     });
 
-    // Only line 1 should be invalidated
     assert!(ctx.is_line_cached(0));
     assert!(!ctx.is_line_cached(1));
     assert!(ctx.is_line_cached(2));
@@ -12397,7 +12361,6 @@ pub mod tests {
   fn test_invalidate_on_newline(cx: &mut TestAppContext) {
     let mut ctx = EditorTestContext::with_text(cx.clone(), "line1\nline2\nline3");
 
-    // Cache all lines
     ctx.editor.update(&mut ctx.cx, |editor, _| {
       for i in 0..3 {
         editor
@@ -12406,7 +12369,6 @@ pub mod tests {
       }
     });
 
-    // Insert newline on line 1
     ctx.set_cursor(6);
     ctx.editor.update(&mut ctx.cx, |editor, cx| {
       let current_line = editor.document.read(cx).char_to_line(6);
@@ -12416,15 +12378,10 @@ pub mod tests {
       editor.invalidate_lines_from(current_line);
     });
 
-    // Lines from 1 onwards should be invalidated
     assert!(ctx.is_line_cached(0));
     assert!(!ctx.is_line_cached(1));
     assert!(!ctx.is_line_cached(2));
   }
-
-  // ============================================================================
-  // Navigation Tests
-  // ============================================================================
 
   #[gpui::test]
   fn test_cursor_offset_initial(cx: &mut TestAppContext) {
@@ -12451,7 +12408,6 @@ pub mod tests {
 
     ctx.set_cursor(3);
 
-    // Test the internal logic by checking cursor moved left
     let prev_offset = ctx.cursor_offset();
     ctx.editor.update(&mut ctx.cx, |editor, cx| {
       let new_offset = if editor.selected_range.is_empty() {
@@ -12506,9 +12462,6 @@ pub mod tests {
     assert_eq!(ctx.cursor_offset(), 5); // Should stay at end
   }
 
-  // Note: Navigation tests that require Window are skipped for now
-  // These will be tested with integration tests or VisualTestContext
-
   #[gpui::test]
   fn test_move_to_updates_cursor(cx: &mut TestAppContext) {
     let mut ctx = EditorTestContext::with_text(cx.clone(), "hello world");
@@ -12522,7 +12475,6 @@ pub mod tests {
   fn test_cursor_at_line_boundary(cx: &mut TestAppContext) {
     let mut ctx = EditorTestContext::with_text(cx.clone(), "line1\nline2\nline3");
 
-    // Test cursor at line starts
     ctx.set_cursor(0);
     assert_eq!(ctx.cursor_offset(), 0);
 
@@ -12537,7 +12489,6 @@ pub mod tests {
   fn test_cursor_positioning(cx: &mut TestAppContext) {
     let mut ctx = EditorTestContext::with_text(cx.clone(), "hello world");
 
-    // Test various cursor positions
     for pos in [0, 5, 11] {
       ctx.set_cursor(pos);
       assert_eq!(ctx.cursor_offset(), pos);
@@ -12545,18 +12496,10 @@ pub mod tests {
     }
   }
 
-  // ============================================================================
-  // Text Editing Tests
-  // ============================================================================
-
-  // Note: Text editing tests that require Window are skipped for now
-  // The core logic is well-tested in buffer.rs and document.rs
-
   #[gpui::test]
   fn test_selection_with_replace(cx: &mut TestAppContext) {
     let mut ctx = EditorTestContext::with_text(cx.clone(), "hello world");
 
-    // Test replacing selection
     ctx.set_selection(2..7, false);
     ctx.editor.update(&mut ctx.cx, |editor, cx| {
       let range = editor.selected_range.clone();
@@ -12628,11 +12571,9 @@ pub mod tests {
   fn test_unicode_editing(cx: &mut TestAppContext) {
     let mut ctx = EditorTestContext::with_text(cx.clone(), "hello 👋 world");
 
-    // Verify emoji is present
     let text = ctx.text();
     assert!(text.contains("👋"));
 
-    // Test cursor positioning around emoji
     ctx.set_cursor(6); // Before emoji
     assert_eq!(ctx.cursor_offset(), 6);
 
@@ -12714,7 +12655,6 @@ pub mod tests {
   fn test_cache_invalidation_on_edit(cx: &mut TestAppContext) {
     let mut ctx = EditorTestContext::with_text(cx.clone(), "line1\nline2\nline3");
 
-    // Cache all lines
     ctx.editor.update(&mut ctx.cx, |editor, _| {
       for i in 0..3 {
         editor
@@ -12723,7 +12663,6 @@ pub mod tests {
       }
     });
 
-    // Edit line 1
     ctx.set_cursor(6);
     ctx.editor.update(&mut ctx.cx, |editor, cx| {
       editor.document.update(cx, |doc, cx| {
@@ -12733,7 +12672,6 @@ pub mod tests {
       editor.invalidate_line(line);
     });
 
-    // Only line 1 should be invalidated
     assert!(ctx.is_line_cached(0));
     assert!(!ctx.is_line_cached(1));
     assert!(ctx.is_line_cached(2));
@@ -12762,7 +12700,6 @@ pub mod tests {
   fn test_multiline_cache_invalidation(cx: &mut TestAppContext) {
     let mut ctx = EditorTestContext::with_text(cx.clone(), "line1\nline2\nline3\nline4");
 
-    // Cache all lines
     ctx.editor.update(&mut ctx.cx, |editor, _| {
       for i in 0..4 {
         editor
@@ -12771,7 +12708,6 @@ pub mod tests {
       }
     });
 
-    // Insert newline on line 1
     ctx.set_cursor(6);
     ctx.editor.update(&mut ctx.cx, |editor, cx| {
       let line = editor.document.read(cx).char_to_line(6);
@@ -12781,16 +12717,11 @@ pub mod tests {
       editor.invalidate_lines_from(line);
     });
 
-    // Lines from 1 onwards should be invalidated
     assert!(ctx.is_line_cached(0));
     assert!(!ctx.is_line_cached(1));
     assert!(!ctx.is_line_cached(2));
     assert!(!ctx.is_line_cached(3));
   }
-
-  // ============================================================================
-  // UTF-16 Conversion Tests
-  // ============================================================================
 
   #[gpui::test]
   fn test_offset_to_utf16_ascii(cx: &mut TestAppContext) {
@@ -12892,7 +12823,6 @@ pub mod tests {
   fn test_utf16_roundtrip(cx: &mut TestAppContext) {
     let ctx = EditorTestContext::with_text(cx.clone(), "hello 👋 世界");
 
-    // Test roundtrip: UTF-8 -> UTF-16 -> UTF-8
     for offset in [0, 5, 6, 7, 8, 9] {
       let utf16 = ctx
         .editor
@@ -12920,10 +12850,6 @@ pub mod tests {
     let range = Editor::utf16_range_to_char_range_in_text("✅ab", &(10..1));
     assert_eq!(range, 1..3);
   }
-
-  // ============================================================================
-  // Selection Logic Tests
-  // ============================================================================
 
   #[gpui::test]
   fn test_select_to_forward(cx: &mut TestAppContext) {
@@ -12955,10 +12881,8 @@ pub mod tests {
   fn test_select_to_extends_selection(cx: &mut TestAppContext) {
     let mut ctx = EditorTestContext::with_text(cx.clone(), "hello world");
 
-    // Start with selection 2..5
     ctx.set_selection(2..5, false);
 
-    // Extend to 8
     ctx.editor.update(&mut ctx.cx, |editor, cx| {
       editor.select_to(8, cx);
     });
@@ -12971,10 +12895,8 @@ pub mod tests {
   fn test_select_to_reverses_direction(cx: &mut TestAppContext) {
     let mut ctx = EditorTestContext::with_text(cx.clone(), "hello world");
 
-    // Start with forward selection 2..5
     ctx.set_selection(2..5, false);
 
-    // Select backwards past anchor
     ctx.editor.update(&mut ctx.cx, |editor, cx| {
       editor.select_to(0, cx);
     });
@@ -12987,10 +12909,8 @@ pub mod tests {
   fn test_selection_anchor_preserved(cx: &mut TestAppContext) {
     let mut ctx = EditorTestContext::with_text(cx.clone(), "hello world");
 
-    // Set selection with anchor at 3
     ctx.set_selection(3..7, false);
 
-    // Select to different position, anchor should stay at 3
     ctx.editor.update(&mut ctx.cx, |editor, cx| {
       editor.select_to(10, cx);
     });
@@ -13449,12 +13369,10 @@ pub mod tests {
     let repo_root = file_path.parent().expect("temp file parent").to_path_buf();
     let editor = cx.new(|cx| Editor::new_with_paths(repo_root, file_path.clone(), cx));
 
-    // Wait for async highlighting to complete (it's scheduled but not immediate)
     editor.read_with(cx, |editor, cx| {
       let doc = editor.document().read(cx);
 
       // Highlighting is async with debouncing, so it might not be ready immediately
-      // Just verify the document has content that should be highlighted
       assert!(!doc.is_empty());
       assert!(doc.len_lines() > 0);
     });
@@ -13478,7 +13396,6 @@ pub mod tests {
       cx.notify();
     });
 
-    // Verify entire buffer is selected
     assert_eq!(ctx.selection(), 0..doc_len);
     assert_eq!(doc_len, 17); // "line1\nline2\nline3"
   }

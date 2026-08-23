@@ -33,11 +33,8 @@ use syntax::HighlightSpan;
 use ui::Theme;
 use unicode_segmentation::UnicodeSegmentation;
 
-// Visual width for empty line selection indicator
 const NEWLINE_SELECTION_WIDTH: f32 = 4.0;
-// Scroll sensitivity for pixel-based scrolling (trackpad)
 const PIXEL_SCROLL_DIVISOR: f32 = 20.0;
-// Scroll sensitivity for line-based scrolling (mouse wheel)
 const LINE_SCROLL_MULTIPLIER: f32 = 3.0;
 const SCROLL_AXIS_RATIO: f32 = 1.1;
 const SCROLL_AXIS_SWITCH_RATIO: f32 = 1.4;
@@ -1005,7 +1002,6 @@ impl Element for EditorElement {
     let scroll_hitbox = window.insert_hitbox(bounds, HitboxBehavior::Normal);
     let is_primary = self.is_primary();
 
-    // Check if syntax highlights have been updated and invalidate cache if needed
     let (highlights_epoch, highlights_version, dirty_highlight_lines) = {
       let document = self.editor.read(cx).document().read(cx);
       let epoch = *document.highlights_epoch.read();
@@ -1162,7 +1158,6 @@ impl Element for EditorElement {
     });
     let line_height = measured_line_height;
 
-    // Get theme for syntax highlighting colors
     let theme = self.editor.read(cx).theme.clone();
 
     let document_entity = self.editor.read(cx).document().clone();
@@ -1269,7 +1264,6 @@ impl Element for EditorElement {
     if !newly_shaped.is_empty() {
       self.editor.update(cx, |editor, _| {
         for (display_idx, doc_line, shaped) in newly_shaped {
-          // Wrap in Arc for cheap cloning
           let shaped_arc = Arc::new(shaped);
           if let Some(doc_line) = doc_line {
             editor.line_layouts.insert(doc_line, shaped_arc.clone());
@@ -1280,7 +1274,6 @@ impl Element for EditorElement {
           }
           shaped_lines.push((display_idx, shaped_arc));
         }
-        // Limit cache size to prevent memory issues with large files
         editor.ensure_cache_size(viewport.clone());
       });
     }
@@ -1339,7 +1332,6 @@ impl Element for EditorElement {
       }
     }
 
-    // Calculate maximum line width for horizontal scrolling
     let max_width = shaped_lines
       .iter()
       .map(|(_, shaped)| shaped.width)
@@ -1957,8 +1949,7 @@ impl Element for EditorElement {
           let x_end = shaped.x_for_index(char_offset_to_byte_offset(&line_text, sel_line_end));
           let y = line_y(bounds.top(), line_height, display_line, scroll_offset);
 
-          // If selection is empty on this line (selecting just the newline),
-          // Only add width if we're actually selecting the newline character
+          // A selection covering only the newline measures zero wide, so it needs a sliver.
           let is_selecting_newline = sel_line_end > sel_line_start && x_start == x_end;
           let visual_x_end = if is_selecting_newline {
             x_end + px(NEWLINE_SELECTION_WIDTH) // Small width to show newline selection
@@ -2106,7 +2097,6 @@ impl Element for EditorElement {
       });
     }
 
-    // Handle mouse wheel scroll
     window.on_mouse_event({
       let editor = self.editor.clone();
       let scroll_hitbox = prepaint.scroll_hitbox.clone();
@@ -2128,7 +2118,6 @@ impl Element for EditorElement {
             }
             editor.last_scroll_time = Some(now);
 
-            // Extract scroll delta (handle both pixel and line scrolling)
             // Note: Negative delta because scrolling down should increase scroll_offset
             let pixel_delta = event.delta.pixel_delta(line_height);
             let delta_x_px = pixel_delta.x;
@@ -2202,17 +2191,14 @@ impl Element for EditorElement {
       }
     });
 
-    // Paint line backgrounds (diff highlights)
     for quad in &prepaint.line_backgrounds {
       window.paint_quad(quad.clone());
     }
 
-    // Paint gap separators
     for quad in &prepaint.gap_separators {
       window.paint_quad(quad.clone());
     }
 
-    // Paint word diff highlights
     for quad in &prepaint.word_diff_quads {
       window.paint_quad(quad.clone());
     }
@@ -2227,27 +2213,22 @@ impl Element for EditorElement {
       });
     }
 
-    // Paint staged group borders
     for quad in &prepaint.conflict_borders {
       window.paint_quad(quad.clone());
     }
 
-    // Paint staged group borders
     for quad in &prepaint.group_borders {
       window.paint_quad(quad.clone());
     }
 
-    // Paint indent guides
     for quad in &prepaint.indent_guides {
       window.paint_quad(quad.clone());
     }
 
-    // Paint selection
     for quad in &prepaint.selection_quads {
       window.paint_quad(quad.clone());
     }
 
-    // Paint text lines
     for (line_idx, shaped_line) in &prepaint.shaped_lines {
       let y = line_y(
         bounds.top(),
@@ -2267,7 +2248,6 @@ impl Element for EditorElement {
         .ok();
     }
 
-    // Paint cursor (if focused and visible from blink)
     let cursor_visible = self.editor.read(cx).cursor_blink.read(cx).visible();
     if is_primary
       && is_focused
@@ -2288,7 +2268,6 @@ mod tests {
   use std::sync::Arc;
   use syntax::TokenType;
 
-  // Helper to create test bounds
   fn test_bounds(width: f32, height: f32) -> Bounds<Pixels> {
     Bounds::new(Point::default(), size(px(width), px(height)))
   }
@@ -2396,10 +2375,6 @@ mod tests {
 
     assert!(!position_hits_review_comment_line(&position_map, position));
   }
-
-  // ============================================================================
-  // Viewport Calculation Tests
-  // ============================================================================
 
   #[gpui::test]
   fn test_calculate_viewport_simple(cx: &mut TestAppContext) {
@@ -2555,7 +2530,6 @@ mod tests {
     let viewport = element.calculate_viewport(bounds, line_height, scroll_offset, total_lines);
 
     // Empty document edge case - start_line gets clamped to 0
-    // This creates a 0..0 range which is valid but empty
     assert!(viewport.is_empty());
   }
 

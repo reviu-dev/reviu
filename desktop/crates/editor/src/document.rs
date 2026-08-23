@@ -37,16 +37,13 @@ struct LineHighlight {
 pub struct Document {
   pub buffer: TextBuffer,
 
-  // Syntax highlighting support
   highlighter: Option<SyntaxHighlighter>,
   // Line-local highlight cache (None = not computed yet)
   highlights: Arc<RwLock<Vec<Option<LineHighlight>>>>,
   pending_highlight_task: Option<Task<()>>,
   pending_viewport_highlight_task: Option<Task<()>>,
 
-  // Flag to track when highlights have been updated (for cache invalidation)
   pub highlights_version: Arc<RwLock<usize>>,
-  // Track highlight generations to invalidate stale caches on re-run
   pub highlights_epoch: Arc<RwLock<usize>>,
   dirty_highlight_lines: Arc<RwLock<Vec<usize>>>,
   highlight_generation: Arc<AtomicUsize>,
@@ -75,7 +72,6 @@ impl Document {
       viewport_highlight_generation: Arc::new(AtomicUsize::new(0)),
     };
 
-    // Schedule initial highlighting
     doc.schedule_initial_highlights(cx);
 
     doc
@@ -331,7 +327,6 @@ impl Document {
 
   /// Schedule async re-highlighting with debouncing
   pub fn schedule_recompute_highlights(&mut self, cx: &mut Context<Self>) {
-    // Cancel previous task
     self.pending_highlight_task = None;
     self.pending_viewport_highlight_task = None;
     self
@@ -349,7 +344,6 @@ impl Document {
     let dirty_highlight_lines = self.dirty_highlight_lines.clone();
     let highlight_generation = self.highlight_generation.clone();
 
-    // Clone highlighter config for background work
     let config = highlighter.config;
     let my_generation = highlight_generation.fetch_add(1, Ordering::Relaxed) + 1;
 
@@ -364,7 +358,6 @@ impl Document {
     dirty_highlight_lines.write().clear();
 
     let task = cx.spawn(async move |this, cx| {
-      // Debounce: wait 150ms
       cx.background_executor()
         .timer(Duration::from_millis(HIGHLIGHT_DEBOUNCE_MS))
         .await;

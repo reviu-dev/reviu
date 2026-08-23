@@ -403,7 +403,6 @@ impl Element for GutterElement {
       let active_hunk_focus_color = theme.hunk_focused_border();
       let active_conflict_doc_range = editor.highlighted_conflict_doc_range(cx);
 
-      // Format line numbers for visible lines
       let mut line_numbers = Vec::new();
       let mut line_backgrounds = Vec::new();
       let mut gap_separators = Vec::new();
@@ -954,7 +953,6 @@ impl Element for GutterElement {
           .text_system()
           .shape_line(line_number.clone().into(), font_size, &runs, None);
 
-      // Align to the right with padding
       let text_width = shaped.width;
       let x = bounds.right() - text_width - prepaint.line_number_right_padding;
 

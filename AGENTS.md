@@ -19,7 +19,7 @@ The GitHub-integration backend (Reviu Pro) is closed-source in a separate privat
 ## Rust coding guidelines
 
 * Prioritize code correctness and clarity. Speed and efficiency are secondary priorities unless otherwise specified.
-* Do not write organizational or comments that summarize the code. Comments should only be written in order to explain "why" the code is written in some way in the case there is a reason that is tricky / non-obvious.
+* Do not write organizational comments or comments that summarize the code. Comments should only be written in order to explain "why" the code is written in some way in the case there is a reason that is tricky / non-obvious.
 * Avoid using functions that panic like `unwrap()`, instead use mechanisms like `?` to propagate errors.
 * Be careful with operations like indexing which may panic if the indexes are out of bounds.
 * `let _ =` is the idiom for `WeakEntity::update` and `cx.update_window`: a failure there means the entity is gone, not that something went wrong. On any other fallible `Result`, handle it:

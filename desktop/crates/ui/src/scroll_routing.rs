@@ -62,8 +62,6 @@ pub fn restrict_scroll_to_wheel_axis(mut container: Stateful<Div>) -> Stateful<D
   container
 }
 
-// -- Registry & dispatcher state ---------------------------------------------
-
 #[derive(Clone)]
 struct ScrollNode {
   id: u64,
@@ -229,8 +227,6 @@ fn apply_to_node(node: &ScrollNode, axis: ScrollAxis, delta: Pixels) {
   }
   node.handle.set_offset(offset);
 }
-
-// -- Public element wrappers -------------------------------------------------
 
 /// Wraps a scrollable child into a node the central [`ScrollDispatcher`] knows
 /// about. The wrapper itself does not listen to wheel events; the dispatcher
@@ -472,8 +468,6 @@ mod tests {
   use super::*;
   use gpui::point;
 
-  // -- can_scroll_axis ------------------------------------------------------
-
   #[test]
   fn can_scroll_axis_at_top_blocks_upward_and_allows_downward() {
     // offset = 0 means we're at the top of the scrollable. Negative delta
@@ -524,8 +518,6 @@ mod tests {
     assert!(!can_scroll_axis(px(-0.4), max, px(10.0)));
   }
 
-  // -- scroll_axis_next_offset ---------------------------------------------
-
   #[test]
   fn scroll_axis_next_offset_clamps_at_bottom() {
     // Scrolling further than the remaining room saturates at -max_offset.
@@ -556,8 +548,6 @@ mod tests {
     let next = scroll_axis_next_offset(px(-50.0), max, px(-30.0));
     assert_eq!(next, Some(px(-80.0)));
   }
-
-  // -- pick_axis -----------------------------------------------------------
 
   #[test]
   fn pick_axis_prefers_dominant_axis_when_both_present() {

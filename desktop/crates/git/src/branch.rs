@@ -3400,11 +3400,9 @@ mod tests {
     let rel_path = Path::new("README.md");
     let _ = commit_text_file(&repo.path, rel_path, "line1\nline2\n", "initial");
 
-    // Modify and stash
     std::fs::write(repo.path.join(rel_path), "line1\nstashed change\n").expect("write for stash");
     create_stash(&repo.path, false, None).expect("create stash");
 
-    // Make a conflicting commit
     let _ = commit_text_file(
       &repo.path,
       rel_path,
@@ -3412,7 +3410,6 @@ mod tests {
       "conflict",
     );
 
-    // Apply stash, should succeed even though there are conflicts
     let result = apply_stash(&repo.path, 0);
     assert!(
       result.is_ok(),
@@ -3420,7 +3417,6 @@ mod tests {
       result.err()
     );
 
-    // Working tree should contain conflict markers
     let content = std::fs::read_to_string(repo.path.join(rel_path)).expect("read file after apply");
     assert!(
       content.contains("<<<<<<<") && content.contains(">>>>>>>"),
@@ -3438,11 +3434,9 @@ mod tests {
     let rel_path = Path::new("README.md");
     let _ = commit_text_file(&repo.path, rel_path, "line1\nline2\n", "initial");
 
-    // Modify and stash
     std::fs::write(repo.path.join(rel_path), "line1\nstashed change\n").expect("write for stash");
     create_stash(&repo.path, false, None).expect("create stash");
 
-    // Make a conflicting commit
     let _ = commit_text_file(
       &repo.path,
       rel_path,
@@ -3450,7 +3444,6 @@ mod tests {
       "conflict",
     );
 
-    // Pop stash, should succeed even though there are conflicts
     let result = pop_stash(&repo.path, 0);
     assert!(
       result.is_ok(),
@@ -3458,7 +3451,6 @@ mod tests {
       result.err()
     );
 
-    // Working tree should contain conflict markers
     let content = std::fs::read_to_string(repo.path.join(rel_path)).expect("read file after pop");
     assert!(
       content.contains("<<<<<<<") && content.contains(">>>>>>>"),

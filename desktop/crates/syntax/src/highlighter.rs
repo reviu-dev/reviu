@@ -310,7 +310,6 @@ mod tests {
     assert!(result.is_ok());
     let highlights = result.unwrap();
 
-    // "fn" should be highlighted as keyword
     assert!(
       highlights
         .iter()
@@ -823,7 +822,6 @@ mod tests {
     assert!(result.is_ok());
     let highlights = result.unwrap();
 
-    // Should have a String token
     assert!(highlights.iter().any(|h| h.token_type == TokenType::String));
   }
 
@@ -853,10 +851,8 @@ mod tests {
   #[test]
   fn test_highlight_invalid_syntax_doesnt_panic() {
     let mut highlighter = SyntaxHighlighter::new(&RUST_CONFIG);
-    // Tree-sitter should handle invalid syntax gracefully
     let result = highlighter.highlight_text("fn {{{");
 
-    // Should return a result (even with parse error)
     assert!(result.is_ok() || result.is_err());
   }
 
@@ -904,7 +900,6 @@ mod tests {
 
   #[test]
   fn test_map_highlight_indices() {
-    // Verify that all indices map correctly
     assert_eq!(
       map_highlight_index_to_token_type(0),
       Some(TokenType::Keyword)
@@ -959,7 +954,6 @@ mod tests {
     let mut highlighter = SyntaxHighlighter::new(&VUE_CONFIG);
     let highlights = highlighter.highlight_text(vue).unwrap();
 
-    // The first identifier right after the quote should be Variable, not missing
     let first_id_types = token_types_for_fragment(vue, &highlights, "myVar");
     assert!(
       first_id_types.contains(&TokenType::Variable),
