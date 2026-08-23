@@ -506,7 +506,7 @@ pub struct DockPanel {
   rebase_in_progress: bool,
   head_status: HeadCommitStatus,
   branch_status: Option<git::BranchStatus>,
-  commit_input: Entity<TextareaState>,
+  pub(crate) commit_input: Entity<TextareaState>,
   committing: bool,
   last_error: Option<SharedString>,
   active_tab: DockPanelTab,
@@ -567,6 +567,11 @@ impl DockPanel {
         .auto_grow(1, 5)
         .placeholder("Commit message...")
     });
+    let _ = commit_input
+      .read(cx)
+      .focus_handle(cx)
+      .tab_stop(true)
+      .tab_index(1);
     // cmd-enter from inside the input commits.
     cx.subscribe_in(
       &commit_input,
@@ -611,6 +616,11 @@ impl DockPanel {
     let panel = cx.entity().downgrade();
     let pr_files_list =
       cx.new(|cx| ListState::new(PrFilesDelegate::new(panel), window, cx).reset_on_cancel(false));
+    let _ = pr_files_list
+      .read(cx)
+      .focus_handle(cx)
+      .tab_stop(true)
+      .tab_index(0);
     cx.subscribe(&pr_files_list, |this, state, event: &ListEvent, cx| {
       let (ix, intent) = match event {
         ListEvent::Select(ix) => (*ix, OpenIntent::Browse),
@@ -641,6 +651,11 @@ impl DockPanel {
     // The worktree tree says where the user is and what they chose: a file row
     // shows as they walk it, and opens when they pick it.
     let files_tree_state = cx.new(|cx| TreeState::new(cx));
+    let _ = files_tree_state
+      .read(cx)
+      .focus_handle(cx)
+      .tab_stop(true)
+      .tab_index(0);
     cx.subscribe(&files_tree_state, |_this, _tree, event: &TreeEvent, cx| {
       let (id, intent) = match event {
         TreeEvent::Selected(id) => (id.clone(), OpenIntent::Browse),
@@ -1751,6 +1766,7 @@ impl DockPanel {
       .w_full()
       .child(
         Button::new("dock-panel-commit")
+          .tab_index(2)
           .label(if continuing_rebase {
             "Continue rebase"
           } else {
@@ -1776,6 +1792,7 @@ impl DockPanel {
       )
       .child(
         Button::new("dock-panel-commit-menu")
+          .tab_index(3)
           .icon(IconName::ChevronDown)
           .with_variant(gpui_component::button::ButtonVariant::Secondary)
           .outline()
@@ -2757,6 +2774,9 @@ impl Render for DockPanel {
       .min_h_0()
       .bg(theme.sidebar)
       .track_focus(&self.focus_handle)
+      // One stop of the window, and its own order inside: the surface first,
+      // then what the tab holds besides it.
+      .tab_group()
       .key_context(crate::shortcuts::DOCK_PANEL_CONTEXT)
       .on_action(cx.listener(|this, _: &crate::CommitChanges, _, cx| this.commit(cx)))
       .child(header)

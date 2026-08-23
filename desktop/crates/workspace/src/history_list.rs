@@ -116,6 +116,7 @@ impl Focusable for HistoryList {
 impl HistoryList {
   pub(crate) fn new(cx: &mut Context<Self>) -> Self {
     let tree = cx.new(|cx| TreeState::new(cx));
+    let _ = tree.read(cx).focus_handle(cx).tab_stop(true).tab_index(0);
     cx.subscribe(&tree, |this, _tree, event: &TreeEvent, cx| {
       this.on_tree_event(event, cx)
     })

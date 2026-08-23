@@ -1971,6 +1971,53 @@ mod tests {
   }
 
   #[gpui::test]
+  async fn tab_moves_between_the_file_list_and_the_commit_box(cx: &mut TestAppContext) {
+    let repo = TempRepo::init("session-dock-tab-order");
+    commit_text_file(&repo.path, Path::new("a.txt"), "v1\n", "initial");
+    std::fs::write(repo.path.join("a.txt"), "v2\n").expect("modify file");
+    let (page, cx) = add_session_page_window(repo.path.clone(), cx);
+    page.update(cx, |page, cx| {
+      page.dock_panel.update(cx, |panel, cx| panel.refresh(cx))
+    });
+    cx.run_until_parked();
+    page.update_in(cx, |page, window, cx| {
+      page.show_dock_tab(DockPanelTab::Changes, window, cx)
+    });
+    cx.run_until_parked();
+
+    let commit_box_focused = |page: &SessionPage, window: &Window, cx: &App| {
+      page
+        .dock_panel
+        .read(cx)
+        .commit_input
+        .read(cx)
+        .focus_handle(cx)
+        .is_focused(window)
+    };
+
+    cx.simulate_keystrokes("tab");
+    cx.run_until_parked();
+    page.update_in(cx, |page, window, cx| {
+      assert!(
+        commit_box_focused(page, window, cx),
+        "tab leaves the list for the message box, not for a button on the way"
+      );
+    });
+
+    cx.simulate_keystrokes("shift-tab");
+    cx.run_until_parked();
+    page.update_in(cx, |page, window, cx| {
+      assert!(
+        page
+          .dock_panel
+          .read(cx)
+          .tab_has_focus(DockPanelTab::Changes, window, cx),
+        "and shift-tab comes back to it"
+      );
+    });
+  }
+
+  #[gpui::test]
   async fn the_dock_shortcuts_open_their_tab(cx: &mut TestAppContext) {
     let repo = TempRepo::init("session-render-dock-shortcuts");
     commit_text_file(&repo.path, Path::new("a.txt"), "v1\n", "initial");

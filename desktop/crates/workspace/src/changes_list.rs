@@ -499,6 +499,9 @@ impl ChangesList {
         .reset_on_cancel(false)
     });
 
+    // The file list is the first stop of the Changes tab, ahead of the commit box.
+    let _ = list.read(cx).focus_handle(cx).tab_stop(true).tab_index(0);
+
     // Walking the list shows each file; a click or Enter hands the editor the
     // keyboard.
     cx.subscribe(&list, |_, state, event: &ListEvent, cx| {

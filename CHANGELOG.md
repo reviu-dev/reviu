@@ -4,6 +4,12 @@ All notable changes to Reviu are documented here.
 
 ## 1.0.0
 
+### Tab Reaches The Panel Now
+
+Tab and Shift-Tab moved between the controls of the window without ever stopping on the lists of the right panel, which were not in the order at all. They are now the first stop of their tab, so Tab takes you from the file list to the commit message box and Shift-Tab brings you back, the way a form does.
+
+The commit button and its menu come after the message box rather than before it, which is the order you use them in.
+
 ### A Panel Key That Brings You Back
 
 The key of a panel used to mean "toggle". Once Enter had moved the keyboard to the file, pressing `cmd-shift-e` to get back to the Changes list closed the panel instead, and you had to press it twice.

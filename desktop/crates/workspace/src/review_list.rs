@@ -306,6 +306,8 @@ impl ReviewList {
     let list = cx
       .new(|cx| ListState::new(ReviewRowsDelegate::new(owner), window, cx).reset_on_cancel(false));
 
+    let _ = list.read(cx).focus_handle(cx).tab_stop(true).tab_index(0);
+
     // Walking the list shows each comment; a click or Enter hands the editor the
     // keyboard. On a file row there is nothing to read, so both fold it.
     cx.subscribe(&list, |this, state, event: &ListEvent, cx| {
