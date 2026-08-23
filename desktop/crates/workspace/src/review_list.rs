@@ -30,6 +30,8 @@ pub(crate) const REVIEW_LIST_SEND_DEBUG_SELECTOR: &str = "review-list-send";
 pub(crate) const REVIEW_LIST_DISCARD_DEBUG_SELECTOR: &str = "review-list-discard";
 pub(crate) const REVIEW_LIST_SELECT_ALL_DEBUG_SELECTOR: &str = "review-list-select-all";
 pub(crate) const REVIEW_LIST_SUBMIT_DEBUG_SELECTOR: &str = "review-list-submit";
+pub(crate) const REVIEW_LIST_FOOTER_DESTINATION_DEBUG_SELECTOR: &str =
+  "review-list-footer-destination";
 
 fn review_list_section_header_debug_selector(section: ReviewSection) -> &'static str {
   match section {
@@ -307,6 +309,9 @@ pub(crate) struct ReviewList {
   /// Agent comments only, and empty means the whole batch goes: nobody loses a
   /// comment by not ticking it.
   selected: HashSet<u64>,
+  /// Which destination the footer acts on: the section of the row last walked
+  /// to. One set of actions at the bottom, and it follows the keyboard.
+  active_section: Option<ReviewSection>,
   list: Entity<ListState<ReviewRowsDelegate>>,
 }
 
@@ -331,6 +336,8 @@ impl ReviewList {
       let Some((section, row)) = state.read(cx).delegate().row_at(ix) else {
         return;
       };
+      this.active_section = Some(section);
+      cx.notify();
       match row {
         ReviewRow::Comment(comment) => cx.emit(ReviewListEvent::OpenComment {
           section,
@@ -352,6 +359,7 @@ impl ReviewList {
       pull_request_comments: Vec::new(),
       collapsed_files: HashSet::new(),
       selected: HashSet::new(),
+      active_section: None,
       list,
     }
   }
@@ -846,7 +854,24 @@ impl ReviewList {
       .into_any_element()
   }
 
-  fn render_agent_actions(&self, cx: &mut Context<Self>) -> AnyElement {
+  /// Where the footer sends what it acts on. The row last walked to decides;
+  /// before anything is walked, the first section on screen does.
+  fn footer_section(&self) -> Option<ReviewSection> {
+    let first = self.sections().next()?;
+    match self.active_section {
+      Some(active) if self.sections().any(|section| section == active) => Some(active),
+      _ => Some(first),
+    }
+  }
+
+  /// One footer, the actions of one destination. Two destinations in the list
+  /// means the footer has to say which one it is talking about.
+  fn render_footer(
+    &self,
+    section: ReviewSection,
+    names_its_destination: bool,
+    cx: &mut Context<Self>,
+  ) -> AnyElement {
     let theme = cx.theme().clone();
     let send_count = self.send_count();
 
@@ -859,17 +884,33 @@ impl ReviewList {
       .border_t_1()
       .border_color(theme.border)
       .child(
-        Button::new("review-list-discard")
-          .debug_selector(|| REVIEW_LIST_DISCARD_DEBUG_SELECTOR.to_string())
-          .ghost()
-          .small()
-          .compact()
-          .label("Discard")
-          .tooltip("Delete every comment of this review")
-          .on_click(cx.listener(|_, _, _, cx| cx.emit(ReviewListEvent::DiscardReview))),
+        h_flex()
+          .items_center()
+          .gap_2()
+          .when(names_its_destination, |this| {
+            this.child(
+              div()
+                .debug_selector(|| REVIEW_LIST_FOOTER_DESTINATION_DEBUG_SELECTOR.to_string())
+                .text_xs()
+                .text_color(theme.muted_foreground)
+                .child(section.title()),
+            )
+          })
+          .when(section == ReviewSection::Agent, |this| {
+            this.child(
+              Button::new("review-list-discard")
+                .debug_selector(|| REVIEW_LIST_DISCARD_DEBUG_SELECTOR.to_string())
+                .ghost()
+                .small()
+                .compact()
+                .label("Discard")
+                .tooltip("Delete every comment of this review")
+                .on_click(cx.listener(|_, _, _, cx| cx.emit(ReviewListEvent::DiscardReview))),
+            )
+          }),
       )
-      .child(
-        Button::new("review-list-send")
+      .child(match section {
+        ReviewSection::Agent => Button::new("review-list-send")
           .debug_selector(|| REVIEW_LIST_SEND_DEBUG_SELECTOR.to_string())
           .primary()
           .small()
@@ -881,23 +922,7 @@ impl ReviewList {
           })
           .disabled(send_count == 0)
           .on_click(cx.listener(|_, _, _, cx| cx.emit(ReviewListEvent::SendReview))),
-      )
-      .into_any_element()
-  }
-
-  fn render_pull_request_actions(&self, cx: &mut Context<Self>) -> AnyElement {
-    let theme = cx.theme().clone();
-
-    h_flex()
-      .w_full()
-      .items_center()
-      .justify_end()
-      .gap_2()
-      .p_2()
-      .border_t_1()
-      .border_color(theme.border)
-      .child(
-        Button::new("review-list-submit")
+        ReviewSection::PullRequest => Button::new("review-list-submit")
           .debug_selector(|| REVIEW_LIST_SUBMIT_DEBUG_SELECTOR.to_string())
           .primary()
           .small()
@@ -905,19 +930,8 @@ impl ReviewList {
           .label("Submit review")
           .tooltip("Send these comments to GitHub with a decision")
           .on_click(cx.listener(|_, _, _, cx| cx.emit(ReviewListEvent::SubmitReview))),
-      )
+      })
       .into_any_element()
-  }
-
-  fn render_section_actions(
-    &self,
-    section: ReviewSection,
-    cx: &mut Context<Self>,
-  ) -> Option<AnyElement> {
-    match section {
-      ReviewSection::Agent => Some(self.render_agent_actions(cx)),
-      ReviewSection::PullRequest => Some(self.render_pull_request_actions(cx)),
-    }
   }
 }
 
@@ -942,8 +956,8 @@ impl Render for ReviewList {
     }
 
     // A single destination pins its title above the rows; two of them carry
-    // their titles inside the list, where the rows separate them. Either way the
-    // actions stay at the bottom of the panel, reachable without scrolling.
+    // their titles inside the list, where the rows separate them. Either way one
+    // footer sits at the bottom, for the destination the rows point at.
     let mut panel = v_flex()
       .id("review-list")
       .size_full()
@@ -961,8 +975,8 @@ impl Render for ReviewList {
         .py_1()
         .child(List::new(&self.list).w_full().min_h_0()),
     );
-    for section in &sections {
-      panel = panel.children(self.render_section_actions(*section, cx));
+    if let Some(section) = self.footer_section() {
+      panel = panel.child(self.render_footer(section, sections.len() > 1, cx));
     }
     panel.into_any_element()
   }
@@ -1527,5 +1541,104 @@ mod tests {
           .contains(&(ReviewSection::PullRequest, PathBuf::from("src/a.rs")))
       );
     });
+  }
+
+  #[gpui::test]
+  async fn one_footer_at_a_time_and_it_follows_the_rows(cx: &mut gpui::TestAppContext) {
+    let (list, cx) = add_review_list_window(cx);
+    list.update(cx, |list, cx| {
+      list.set_comments(ReviewSection::Agent, batch(), cx);
+      list.set_comments(
+        ReviewSection::PullRequest,
+        vec![pull_request_row(9, "src/a.rs", 3)],
+        cx,
+      );
+    });
+    cx.run_until_parked();
+
+    // Nothing walked yet: the first section of the list owns the footer.
+    assert!(cx.debug_bounds(REVIEW_LIST_SEND_DEBUG_SELECTOR).is_some());
+    assert!(
+      cx.debug_bounds(REVIEW_LIST_DISCARD_DEBUG_SELECTOR)
+        .is_some()
+    );
+    assert!(
+      cx.debug_bounds(REVIEW_LIST_SUBMIT_DEBUG_SELECTOR).is_none(),
+      "two footers is one too many"
+    );
+
+    let row = cx
+      .debug_bounds("review-comment-pull-request-9")
+      .expect("pull request row bounds");
+    cx.simulate_click(row.center(), gpui::Modifiers::default());
+    cx.run_until_parked();
+
+    assert!(cx.debug_bounds(REVIEW_LIST_SUBMIT_DEBUG_SELECTOR).is_some());
+    assert!(cx.debug_bounds(REVIEW_LIST_SEND_DEBUG_SELECTOR).is_none());
+    assert!(
+      cx.debug_bounds(REVIEW_LIST_DISCARD_DEBUG_SELECTOR)
+        .is_none()
+    );
+  }
+
+  #[gpui::test]
+  async fn the_footer_names_its_destination_only_when_there_are_two(cx: &mut gpui::TestAppContext) {
+    let (list, cx) = add_review_list_window(cx);
+    list.update(cx, |list, cx| {
+      list.set_comments(ReviewSection::Agent, batch(), cx)
+    });
+    cx.run_until_parked();
+
+    // One destination: its title is already pinned above the rows.
+    assert!(
+      cx.debug_bounds(REVIEW_LIST_FOOTER_DESTINATION_DEBUG_SELECTOR)
+        .is_none()
+    );
+
+    list.update(cx, |list, cx| {
+      list.set_comments(
+        ReviewSection::PullRequest,
+        vec![pull_request_row(9, "src/a.rs", 3)],
+        cx,
+      )
+    });
+    cx.run_until_parked();
+
+    assert!(
+      cx.debug_bounds(REVIEW_LIST_FOOTER_DESTINATION_DEBUG_SELECTOR)
+        .is_some(),
+      "with two destinations the footer has to say which one it acts on"
+    );
+  }
+
+  #[gpui::test]
+  async fn a_section_that_empties_hands_the_footer_back(cx: &mut gpui::TestAppContext) {
+    let (list, cx) = add_review_list_window(cx);
+    list.update(cx, |list, cx| {
+      list.set_comments(ReviewSection::Agent, batch(), cx);
+      list.set_comments(
+        ReviewSection::PullRequest,
+        vec![pull_request_row(9, "src/a.rs", 3)],
+        cx,
+      );
+    });
+    cx.run_until_parked();
+
+    let row = cx
+      .debug_bounds("review-comment-pull-request-9")
+      .expect("pull request row bounds");
+    cx.simulate_click(row.center(), gpui::Modifiers::default());
+    cx.run_until_parked();
+    assert!(cx.debug_bounds(REVIEW_LIST_SUBMIT_DEBUG_SELECTOR).is_some());
+
+    // The review went out: the footer cannot keep acting on a section that has
+    // no comments left.
+    list.update(cx, |list, cx| {
+      list.set_comments(ReviewSection::PullRequest, Vec::new(), cx)
+    });
+    cx.run_until_parked();
+
+    assert!(cx.debug_bounds(REVIEW_LIST_SEND_DEBUG_SELECTOR).is_some());
+    assert!(cx.debug_bounds(REVIEW_LIST_SUBMIT_DEBUG_SELECTOR).is_none());
   }
 }

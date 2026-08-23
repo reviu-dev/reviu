@@ -4,6 +4,12 @@ All notable changes to Reviu are documented here.
 
 ## 1.0.0
 
+### One Footer In The Review Panel
+
+Reviewing for the agent and for a pull request at the same time stacked two action bars at the bottom of the panel, each with its own border, and neither said which comments it was talking about.
+
+There is one footer now, and it acts on the destination your rows point at: walk into the agent's comments and it offers `Discard` and `Send`, walk into the pull request's and it offers `Submit review`. When both destinations have comments, the footer names the one it acts on.
+
 ### Review Rows Are The Height Of Every Other Row
 
 The rows of the Review tab were 8px taller than the rows of Changes, Files, History and the files of a pull request: they padded themselves on top of the padding every row of the dock already pays. A comment now takes exactly the height of any other row, so the panel shows more of the review without scrolling.
