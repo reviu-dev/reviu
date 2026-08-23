@@ -14,10 +14,11 @@ use git::{
 };
 use gpui::{
   Anchor, AnyElement, AnyWindowHandle, App, Context, Entity, FocusHandle, Focusable, Render,
-  SharedString, Task, Window, div, img, prelude::*, px,
+  SharedString, Task, WeakEntity, Window, div, img, prelude::*, px,
 };
 use gpui_component::{
-  ActiveTheme as _, Disableable as _, Icon, IconName, Sizable as _, h_flex,
+  ActiveTheme as _, Disableable as _, Icon, IconName, IndexPath, Sizable as _, h_flex,
+  list::{List, ListDelegate, ListEvent, ListItem, ListState},
   menu::{DropdownMenu as _, PopupMenuItem},
   tree::{TreeEvent, TreeState, tree},
   v_flex,
@@ -83,8 +84,8 @@ use crate::workspace::WorkspaceApi;
 use gpui_component::avatar::Avatar;
 use gpui_component::notification::Notification;
 use ui::{
-  Button, ButtonVariants as _, CommandPaletteCommand, ConfirmDialog, StatusThemeExt as _, Textarea,
-  TextareaState, UiIconName, WindowExt as _,
+  Button, ButtonVariants as _, CommandPaletteCommand, ConfirmDialog, SelectableRowStyle,
+  StatusThemeExt as _, Textarea, TextareaState, UiIconName, WindowExt as _, selectable_list_item,
 };
 
 #[derive(Clone, Debug)]
@@ -181,6 +182,109 @@ impl CommitMenuCommand {
       Self::Push => PaletteCommand::Push,
       Self::ForcePush => PaletteCommand::ForcePush,
     }
+  }
+}
+
+/// The files a pull request proposes, as rows the keyboard can walk.
+struct PrFilesDelegate {
+  panel: WeakEntity<DockPanel>,
+  files: Vec<git::CommitChangedFile>,
+  selected_index: Option<IndexPath>,
+}
+
+impl PrFilesDelegate {
+  fn new(panel: WeakEntity<DockPanel>) -> Self {
+    Self {
+      panel,
+      files: Vec::new(),
+      selected_index: None,
+    }
+  }
+
+  fn file_at(&self, ix: IndexPath) -> Option<&git::CommitChangedFile> {
+    self.files.get(ix.row)
+  }
+}
+
+impl ListDelegate for PrFilesDelegate {
+  type Item = ListItem;
+
+  fn items_count(&self, _section: usize, _cx: &App) -> usize {
+    self.files.len()
+  }
+
+  fn render_item(
+    &mut self,
+    ix: IndexPath,
+    _window: &mut Window,
+    cx: &mut Context<ListState<Self>>,
+  ) -> Option<Self::Item> {
+    let theme = cx.theme().clone();
+    let file = self.file_at(ix)?;
+    let path = file.path.clone();
+    let status = history_change_kind_to_repo_status(file.kind);
+    let old_path = file.old_path.clone();
+    let selected = self
+      .selected_index
+      .map(|selected| selected.eq_row(ix))
+      .unwrap_or(false);
+
+    Some(
+      selectable_list_item(ix, selected, SelectableRowStyle::Inset, &theme)
+        .w_full()
+        .px_1()
+        .py_1()
+        .debug_selector({
+          let path = path.clone();
+          move || format!("pr-file-{}", path.to_string_lossy())
+        })
+        .child(
+          h_flex()
+            .w_full()
+            .items_center()
+            .gap_2()
+            .child(render_file_name_with_status(
+              &theme,
+              Some(status),
+              file_name_label(&path),
+              old_path.as_deref().map(file_name_label),
+            ))
+            .child(
+              div()
+                .flex_1()
+                .min_w_0()
+                .text_xs()
+                .text_color(theme.muted_foreground)
+                .truncate()
+                .child(file_dir_label(&path)),
+            )
+            .child(
+              div()
+                .flex_shrink_0()
+                .text_xs()
+                .text_color(status_color(status, &theme))
+                .child(status.short_code()),
+            ),
+        ),
+    )
+  }
+
+  fn set_selected_index(
+    &mut self,
+    ix: Option<IndexPath>,
+    _window: &mut Window,
+    cx: &mut Context<ListState<Self>>,
+  ) {
+    self.selected_index = ix;
+    if let Some(path) = ix
+      .and_then(|ix| self.file_at(ix))
+      .map(|file| file.path.clone())
+    {
+      let _ = self
+        .panel
+        .update(cx, |panel, _| panel.pr_selected_file = Some(path));
+    }
+    cx.notify();
   }
 }
 
@@ -418,6 +522,12 @@ pub struct DockPanel {
   /// identity arrives first, this follows.
   pr_range: Option<PullRequestRange>,
   pr_files: Vec<git::CommitChangedFile>,
+  pr_files_list: Entity<ListState<PrFilesDelegate>>,
+  /// The tab was asked for before its files were there: focus them once they are.
+  focus_pr_files_when_loaded: bool,
+  /// The shell is mounted by the render that follows: it cannot take the focus
+  /// before it exists.
+  focus_terminal_when_rendered: bool,
   pr_files_loading: bool,
   pr_files_error: Option<SharedString>,
   pr_selected_file: Option<PathBuf>,
@@ -495,6 +605,35 @@ impl DockPanel {
       this
         .changes_list
         .update(cx, |list, cx| list.set_split_sections(split_sections, cx));
+    })
+    .detach();
+
+    let panel = cx.entity().downgrade();
+    let pr_files_list = cx.new(|cx| ListState::new(PrFilesDelegate::new(panel), window, cx));
+    cx.subscribe(&pr_files_list, |this, state, event: &ListEvent, cx| {
+      let (ix, intent) = match event {
+        ListEvent::Select(ix) => (*ix, OpenIntent::Browse),
+        ListEvent::Confirm(ix) => (*ix, OpenIntent::Open),
+        _ => return,
+      };
+      let Some(range) = this.pr_range.clone() else {
+        return;
+      };
+      let Some(path) = state
+        .read(cx)
+        .delegate()
+        .file_at(ix)
+        .map(|file| file.path.clone())
+      else {
+        return;
+      };
+      cx.emit(DockPanelEvent::OpenPullRequestFile {
+        base_oid: range.base,
+        head_oid: range.head,
+        path,
+        line: None,
+        intent,
+      });
     })
     .detach();
 
@@ -597,6 +736,9 @@ impl DockPanel {
       branch_pr: BranchPrState::Loading,
       pr_range: None,
       pr_files: Vec::new(),
+      pr_files_list,
+      focus_pr_files_when_loaded: false,
+      focus_terminal_when_rendered: false,
       pr_files_loading: false,
       pr_files_error: None,
       pr_selected_file: None,
@@ -829,7 +971,7 @@ impl DockPanel {
         match loaded {
           Ok((range, files, reviewers, review_comments, author_login, node_id)) => {
             this.pr_range = Some(range);
-            this.pr_files = files;
+            this.set_pr_files(files, cx);
             this.pr_reviewers = reviewers;
             this.pr_author_login = Some(author_login);
             this.pr_node_id = node_id;
@@ -859,7 +1001,7 @@ impl DockPanel {
     self.pr_author_login = None;
     self.pr_node_id = None;
     self.pr_range = None;
-    self.pr_files = Vec::new();
+    self.set_pr_files(Vec::new(), cx);
     self.pr_files_error = None;
     self.pr_selected_file = None;
     self.pr_reviewers = Vec::new();
@@ -1454,10 +1596,17 @@ impl DockPanel {
 
   /// Shows the shell, never starts it: spawning a process while painting is the
   /// mistake this crate already made with the agent panel.
-  fn render_terminal_tab(&self) -> AnyElement {
+  fn render_terminal_tab(&mut self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
     let Some(terminal) = self.terminal_view.clone() else {
       return div().into_any_element();
     };
+
+    // Rendering is the first moment the shell exists to take the keyboard the
+    // tab was opened for.
+    if self.focus_terminal_when_rendered {
+      self.focus_terminal_when_rendered = false;
+      window.focus(&terminal.read(cx).focus_handle(cx), cx);
+    }
 
     div()
       .id("dock-panel-terminal")
@@ -1701,7 +1850,21 @@ impl DockPanel {
           review.update(cx, |review, cx| review.focus(window, cx));
         }
       }
-      DockPanelTab::PullRequest | DockPanelTab::Terminal => window.focus(&self.focus_handle, cx),
+      DockPanelTab::PullRequest => {
+        if self.pr_files.is_empty() {
+          // Nothing to walk yet: the list takes over when its files land.
+          self.focus_pr_files_when_loaded = true;
+          window.focus(&self.focus_handle, cx);
+        } else {
+          let list = self.pr_files_list.clone();
+          list.update(cx, |list, cx| list.focus(window, cx));
+        }
+      }
+      DockPanelTab::Terminal => {
+        self.ensure_terminal(cx);
+        self.focus_terminal_when_rendered = true;
+        window.focus(&self.focus_handle, cx);
+      }
     }
     cx.notify();
   }
@@ -1864,7 +2027,7 @@ impl DockPanel {
       .into_any_element()
   }
 
-  fn render_pr_tab(&self, cx: &mut Context<Self>) -> AnyElement {
+  fn render_pr_tab(&mut self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
     let theme = cx.theme().clone();
     match &self.branch_pr {
       // Nothing to show, so this is where Reviu says what it could show.
@@ -1979,7 +2142,7 @@ impl DockPanel {
         .child(self.render_pr_identity(context, pull_request, cx))
         .children(self.render_pr_pending_comments(cx))
         .child(self.render_pr_checks(cx))
-        .child(self.render_pr_files(cx))
+        .child(self.render_pr_files(window, cx))
         .into_any_element(),
     }
   }
@@ -2384,9 +2547,21 @@ impl DockPanel {
 
   /// What the branch proposes against its base: the committed changes, which is
   /// a different question from the working tree of the Changes tab.
-  fn render_pr_files(&self, cx: &mut Context<Self>) -> AnyElement {
-    let theme = cx.theme().clone();
+  /// The rows and the list that walks them are the same thing: they are set
+  /// together or they drift.
+  pub(crate) fn set_pr_files(
+    &mut self,
+    files: Vec<git::CommitChangedFile>,
+    cx: &mut Context<Self>,
+  ) {
+    self.pr_files = files.clone();
+    self.pr_files_list.update(cx, |list, cx| {
+      list.delegate_mut().files = files;
+      cx.notify();
+    });
+  }
 
+  fn render_pr_files(&mut self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
     if let Some(error) = self.pr_files_error.clone() {
       return self.render_pr_files_message(error, cx);
     }
@@ -2397,81 +2572,21 @@ impl DockPanel {
       return self.render_pr_files_message("This pull request changes nothing".into(), cx);
     }
 
-    let Some(range) = self.pr_range.clone() else {
-      return self.render_pr_files_message("Loading changed files...".into(), cx);
-    };
-
-    let mut list = v_flex().w_full().gap_0p5();
-    for file in &self.pr_files {
-      let path = file.path.clone();
-      let status = history_change_kind_to_repo_status(file.kind);
-      let selected = self.pr_selected_file.as_ref() == Some(&path);
-      let base_oid = range.base.clone();
-      let head_oid = range.head.clone();
-      let open_path = path.clone();
-      list = list.child(
-        h_flex()
-          .id(gpui::SharedString::from(format!(
-            "pr-file-{}",
-            path.to_string_lossy()
-          )))
-          .debug_selector({
-            let path = path.clone();
-            move || format!("pr-file-{}", path.to_string_lossy())
-          })
-          .w_full()
-          .items_center()
-          .gap_2()
-          .px_1()
-          .py_1()
-          .rounded_sm()
-          .when(selected, |this| this.bg(theme.accent))
-          .hover(|this| this.bg(theme.accent))
-          .cursor_pointer()
-          .on_click(cx.listener(move |this, _, _, cx| {
-            this.pr_selected_file = Some(open_path.clone());
-            cx.emit(DockPanelEvent::OpenPullRequestFile {
-              base_oid: base_oid.clone(),
-              head_oid: head_oid.clone(),
-              path: open_path.clone(),
-              line: None,
-              intent: OpenIntent::Open,
-            });
-            cx.notify();
-          }))
-          .child(render_file_name_with_status(
-            &theme,
-            Some(status),
-            file_name_label(&path),
-            file.old_path.as_deref().map(file_name_label),
-          ))
-          .child(
-            div()
-              .flex_1()
-              .min_w_0()
-              .text_xs()
-              .text_color(theme.muted_foreground)
-              .truncate()
-              .child(file_dir_label(&path)),
-          )
-          .child(
-            div()
-              .flex_shrink_0()
-              .text_xs()
-              .text_color(status_color(status, &theme))
-              .child(status.short_code()),
-          ),
-      );
+    // Rendering is the first moment the list exists to take the focus the tab
+    // was opened for.
+    if self.focus_pr_files_when_loaded {
+      self.focus_pr_files_when_loaded = false;
+      let list = self.pr_files_list.clone();
+      list.update(cx, |list, cx| list.focus(window, cx));
     }
 
     div()
       .id("dock-panel-pr-files")
       .flex_1()
       .min_h_0()
-      .overflow_y_scroll()
       .px_1()
       .py_1()
-      .child(list)
+      .child(List::new(&self.pr_files_list).w_full().min_h_0())
       .into_any_element()
   }
 
@@ -2597,10 +2712,10 @@ impl Render for DockPanel {
             .into_any_element()
         }
       }
-      DockPanelTab::PullRequest => self.render_pr_tab(cx),
+      DockPanelTab::PullRequest => self.render_pr_tab(_window, cx),
       DockPanelTab::Review => self.render_review_tab(),
       DockPanelTab::History => self.render_history_tab(),
-      DockPanelTab::Terminal => self.render_terminal_tab(),
+      DockPanelTab::Terminal => self.render_terminal_tab(_window, cx),
     };
 
     let mut panel = v_flex()
@@ -3113,7 +3228,7 @@ mod tests {
         base_ref: "main".to_string(),
         head_ref: "feature".to_string(),
       });
-      panel.pr_files = files;
+      panel.set_pr_files(files, cx);
       panel.pr_files_loading = false;
       cx.notify();
     });
@@ -3602,6 +3717,113 @@ mod tests {
       Some(("b".repeat(40), "h".repeat(40), PathBuf::from("src/main.rs"))),
       "the row carries the range, so the centre can load the snapshot"
     );
+  }
+
+  #[gpui::test]
+  async fn walking_the_pull_request_files_shows_them_and_enter_opens_them(cx: &mut TestAppContext) {
+    let (panel, cx) = pull_request_panel(
+      cx,
+      vec![
+        changed_file("src/main.rs", git::CommitFileChangeKind::Modified),
+        changed_file("docs/gone.md", git::CommitFileChangeKind::Deleted),
+      ],
+    );
+
+    let opened = Rc::new(std::cell::RefCell::new(Vec::new()));
+    let seen = opened.clone();
+    cx.update(|_, cx| {
+      cx.subscribe(&panel, move |_panel, event: &DockPanelEvent, _cx| {
+        if let DockPanelEvent::OpenPullRequestFile { path, intent, .. } = event {
+          seen.borrow_mut().push((path.clone(), *intent));
+        }
+      })
+      .detach();
+    });
+
+    panel.update_in(cx, |panel, window, cx| {
+      panel.open_tab(DockPanelTab::PullRequest, window, cx)
+    });
+    cx.run_until_parked();
+
+    cx.simulate_keystrokes("down");
+    cx.run_until_parked();
+    assert_eq!(
+      opened.borrow().as_slice(),
+      &[(PathBuf::from("src/main.rs"), OpenIntent::Browse)],
+      "walking the list shows the file it proposes"
+    );
+
+    cx.simulate_keystrokes("enter");
+    cx.run_until_parked();
+    assert_eq!(
+      opened.borrow().last(),
+      Some(&(PathBuf::from("src/main.rs"), OpenIntent::Open)),
+      "Enter chooses it"
+    );
+  }
+
+  #[gpui::test]
+  async fn the_pull_request_files_take_the_keyboard_when_they_land(cx: &mut TestAppContext) {
+    let (panel, cx) = pull_request_panel(cx, Vec::new());
+
+    // The tab is asked for while the files are still coming.
+    panel.update_in(cx, |panel, window, cx| {
+      panel.open_tab(DockPanelTab::PullRequest, window, cx)
+    });
+    cx.run_until_parked();
+
+    panel.update(cx, |panel, cx| {
+      panel.set_pr_files(
+        vec![changed_file(
+          "src/main.rs",
+          git::CommitFileChangeKind::Modified,
+        )],
+        cx,
+      )
+    });
+    cx.run_until_parked();
+
+    let opened = Rc::new(std::cell::RefCell::new(Vec::new()));
+    let seen = opened.clone();
+    cx.update(|_, cx| {
+      cx.subscribe(&panel, move |_panel, event: &DockPanelEvent, _cx| {
+        if let DockPanelEvent::OpenPullRequestFile { path, .. } = event {
+          seen.borrow_mut().push(path.clone());
+        }
+      })
+      .detach();
+    });
+
+    cx.simulate_keystrokes("down");
+    cx.run_until_parked();
+    assert_eq!(
+      opened.borrow().as_slice(),
+      &[PathBuf::from("src/main.rs")],
+      "the list took the keyboard the tab was opened for"
+    );
+  }
+
+  #[gpui::test]
+  async fn opening_the_terminal_hands_it_the_keyboard(cx: &mut TestAppContext) {
+    cx.update(|cx| gpui_component::init(cx));
+    let repo = TempRepo::init("dock-terminal-focus");
+    commit_text_file(&repo.path, Path::new("a.txt"), "v1\n", "first");
+
+    let (panel, cx) = add_dock_panel_window(Some(repo.path.clone()), cx);
+    await_refresh(&panel, cx).await;
+
+    panel.update_in(cx, |panel, window, cx| {
+      panel.open_tab(DockPanelTab::Terminal, window, cx)
+    });
+    cx.run_until_parked();
+
+    panel.update_in(cx, |panel, window, cx| {
+      let terminal = panel.terminal_view.clone().expect("terminal");
+      assert!(
+        terminal.read(cx).focus_handle(cx).is_focused(window),
+        "the shell takes the keyboard, without a click"
+      );
+    });
   }
 
   #[test]

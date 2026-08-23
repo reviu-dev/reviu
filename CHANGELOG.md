@@ -4,6 +4,12 @@ All notable changes to Reviu are documented here.
 
 ## 1.0.0
 
+### The Terminal And The Pull Request Files Answer Too
+
+`cmd-j` opened the terminal and left you to click in it before you could type. It hands the keyboard over now, as every other tab of the right panel does.
+
+The files a pull request proposes are a real list at last: arrows walk them and show each diff, Enter opens one and gives the editor the focus, and asking for the tab while the files are still loading now lands the keyboard on them the moment they arrive.
+
 ### The File Trees Answer The Keyboard Too
 
 Files and History now behave like the Changes and Review lists: arrows show what the row holds and leave the keyboard where it is, Enter opens the file and hands the editor the focus.
