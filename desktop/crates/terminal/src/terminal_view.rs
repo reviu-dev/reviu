@@ -1,9 +1,9 @@
 use alacritty_terminal::term::cell::Flags;
 use gpui::{
   App, ClipboardItem, Context, FocusHandle, Focusable, Font, FontFallbacks, FontFeatures,
-  FontStyle, FontWeight, InteractiveElement, IntoElement, KeyDownEvent, Modifiers, MouseButton,
-  ParentElement, Pixels, Render, ScrollWheelEvent, Styled, Task, TouchPhase, Window, div,
-  prelude::*, px, relative, rgb,
+  FontStyle, FontWeight, InteractiveElement, IntoElement, KeyDownEvent, Keystroke, Modifiers,
+  MouseButton, ParentElement, Pixels, Render, ScrollWheelEvent, Styled, Task, TouchPhase, Window,
+  actions, div, prelude::*, px, relative, rgb,
 };
 use gpui_component::ActiveTheme as _;
 use gpui_component::Sizable as _;
@@ -43,6 +43,12 @@ struct PreservedSelection {
 struct PendingLinkActivation {
   uri: Arc<str>,
 }
+
+actions!(terminal, [SendTab, SendBackTab]);
+
+/// Tab belongs to the shell, so the terminal has to claim it: the window's own
+/// Tab moves the focus, and it runs before any key reaches the pty.
+pub const TERMINAL_CONTEXT: &str = "Terminal";
 
 pub struct TerminalView {
   focus_handle: FocusHandle,
@@ -546,6 +552,31 @@ impl TerminalView {
     self.focus_handle.focus(window, cx);
   }
 
+  fn send_tab(&mut self, _: &SendTab, window: &mut Window, cx: &mut Context<Self>) {
+    self.send_keystroke("tab", window, cx);
+  }
+
+  fn send_back_tab(&mut self, _: &SendBackTab, window: &mut Window, cx: &mut Context<Self>) {
+    self.send_keystroke("shift-tab", window, cx);
+  }
+
+  /// Replays the key through the ordinary path, so the shell gets whatever the
+  /// encoder says it should, back-tab included.
+  fn send_keystroke(&mut self, keystroke: &str, window: &mut Window, cx: &mut Context<Self>) {
+    let Ok(keystroke) = Keystroke::parse(keystroke) else {
+      return;
+    };
+    self.on_key_down(
+      &KeyDownEvent {
+        keystroke,
+        is_held: false,
+        prefer_character_input: false,
+      },
+      window,
+      cx,
+    );
+  }
+
   fn on_key_down(&mut self, event: &KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) {
     self.focus_terminal(window, cx);
 
@@ -718,6 +749,9 @@ impl Render for TerminalView {
         }),
       )
       .on_key_down(cx.listener(Self::on_key_down))
+      .on_action(cx.listener(Self::send_tab))
+      .on_action(cx.listener(Self::send_back_tab))
+      .key_context(TERMINAL_CONTEXT)
       .track_focus(&self.focus_handle)
       .when_some(banner_message, |this, message| {
         this.child(

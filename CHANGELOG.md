@@ -10,6 +10,8 @@ Tab and Shift-Tab moved between the controls of the window without ever stopping
 
 The commit button and its menu come after the message box rather than before it, which is the order you use them in.
 
+In the terminal, Tab goes back to being Tab. It used to walk the focus out of the panel, which meant no shell completion: pressing it once sent you somewhere else in the window. The terminal now claims the key for itself, Shift-Tab included.
+
 ### A Panel Key That Brings You Back
 
 The key of a panel used to mean "toggle". Once Enter had moved the keyboard to the file, pressing `cmd-shift-e` to get back to the Changes list closed the panel instead, and you had to press it twice.

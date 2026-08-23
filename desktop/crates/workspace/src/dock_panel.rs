@@ -3858,6 +3858,34 @@ mod tests {
   }
 
   #[gpui::test]
+  async fn tab_stays_in_the_terminal(cx: &mut TestAppContext) {
+    cx.update(|cx| {
+      gpui_component::init(cx);
+      // The terminal's claim on tab lives with the app bindings.
+      crate::shortcuts::install_workspace_shortcuts(cx);
+    });
+    let repo = TempRepo::init("dock-terminal-tab");
+    commit_text_file(&repo.path, Path::new("a.txt"), "v1\n", "first");
+
+    let (panel, cx) = add_dock_panel_window(Some(repo.path.clone()), cx);
+    await_refresh(&panel, cx).await;
+    panel.update_in(cx, |panel, window, cx| {
+      panel.open_tab(DockPanelTab::Terminal, window, cx)
+    });
+    cx.run_until_parked();
+
+    cx.simulate_keystrokes("tab");
+    cx.run_until_parked();
+    panel.update_in(cx, |panel, window, cx| {
+      let terminal = panel.terminal_view.clone().expect("terminal");
+      assert!(
+        terminal.read(cx).focus_handle(cx).is_focused(window),
+        "tab belongs to the shell, it must not walk the focus out"
+      );
+    });
+  }
+
+  #[gpui::test]
   async fn opening_the_terminal_hands_it_the_keyboard(cx: &mut TestAppContext) {
     cx.update(|cx| gpui_component::init(cx));
     let repo = TempRepo::init("dock-terminal-focus");

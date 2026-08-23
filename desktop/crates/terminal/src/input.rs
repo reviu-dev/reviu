@@ -374,6 +374,26 @@ mod tests {
   use alacritty_terminal::term::TermMode;
   use gpui::{KeyDownEvent, Keystroke, Modifiers, MouseButton, NavigationDirection};
 
+  #[test]
+  fn tab_and_back_tab_reach_the_shell() {
+    assert_eq!(
+      encode_key_down(
+        &key_event("tab", None, Modifiers::default()),
+        TermMode::empty()
+      )
+      .as_deref(),
+      Some("\t")
+    );
+    assert_eq!(
+      encode_key_down(
+        &key_event("tab", None, Modifiers::shift()),
+        TermMode::empty()
+      )
+      .as_deref(),
+      Some("\u{1b}[Z")
+    );
+  }
+
   fn key_event(key: &str, key_char: Option<&str>, modifiers: Modifiers) -> KeyDownEvent {
     KeyDownEvent {
       keystroke: Keystroke {

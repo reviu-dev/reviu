@@ -1146,6 +1146,14 @@ fn default_app_key_bindings() -> Vec<KeyBinding> {
     KeyBinding::new("cmd-f", Find, None),
     KeyBinding::new("escape", CloseFind, Some("Editor")),
     KeyBinding::new("escape", ReturnFocusToEditor, Some(DOCK_PANEL_CONTEXT)),
+    // Deeper than the window's own Tab, so the shell gets the key instead of
+    // losing the focus to the next widget.
+    KeyBinding::new("tab", terminal::SendTab, Some(terminal::TERMINAL_CONTEXT)),
+    KeyBinding::new(
+      "shift-tab",
+      terminal::SendBackTab,
+      Some(terminal::TERMINAL_CONTEXT),
+    ),
     KeyBinding::new("home", Home, None),
     KeyBinding::new("end", End, None),
     KeyBinding::new("ctrl-cmd-space", ShowCharacterPalette, None),
