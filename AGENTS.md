@@ -163,4 +163,7 @@ Other entities can then register a callback to handle these events by doing `cx.
 ## Required workflow
 
 - Add tests for each feature/fix.
+- For desktop changes, run the same formatting and lint checks as CI before finishing:
+  - `cd desktop && cargo fmt -- --check`
+  - `cd desktop && cargo clippy -- -D warnings -A clippy::too_many_arguments -A clippy::type_complexity -A clippy::items_after_test_module -A clippy::should_implement_trait -A clippy::needless_range_loop`
 - **Changelog**: after each feature, add an entry to `CHANGELOG.md`. Use the next unreleased version section (create it if it doesn't exist). Follow the existing format: `## X.Y.Z` heading, then `### Feature Title` with a short paragraph. Keep changelog copy user-facing and outcome-focused. Do not describe internal implementation details unless they matter to users.
