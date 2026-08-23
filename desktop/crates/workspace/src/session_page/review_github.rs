@@ -189,35 +189,67 @@ mod tests {
   use git::test_support::{TempRepo, commit_text_file};
   use std::path::Path;
 
-  /// A pull request whose range is the two commits of a temp repository.
-  async fn open_pull_request_file(
-    cx: &mut gpui::TestAppContext,
-  ) -> (TempRepo, Entity<SessionPage>, &mut gpui::VisualTestContext) {
+  /// A pull request whose range is the two commits of a temp repository, both
+  /// files changed by the second one.
+  struct PullRequest {
+    repo: TempRepo,
+    base: String,
+    head: String,
+  }
+
+  fn pull_request() -> PullRequest {
     let repo = TempRepo::init("session-page-pr-file");
     commit_text_file(&repo.path, Path::new("a.txt"), "v1\n", "initial");
+    commit_text_file(&repo.path, Path::new("b.txt"), "v1\n", "initial b");
     let base = git::current_head_sha(&repo.path)
       .expect("head sha")
       .expect("head sha");
     commit_text_file(&repo.path, Path::new("a.txt"), "v1\nv2\n", "second");
+    commit_text_file(&repo.path, Path::new("b.txt"), "v1\nv2\n", "second b");
     let head = git::current_head_sha(&repo.path)
       .expect("head sha")
       .expect("head sha");
+    PullRequest { repo, base, head }
+  }
 
-    let (page, cx) = add_session_page_window(repo.path.clone(), cx);
+  async fn open_pull_request_file(
+    cx: &mut gpui::TestAppContext,
+  ) -> (TempRepo, Entity<SessionPage>, &mut gpui::VisualTestContext) {
+    let pull_request = pull_request();
+    let (page, cx) = add_session_page_window(pull_request.repo.path.clone(), cx);
     cx.run_until_parked();
-    page.update_in(cx, |page, window, cx| {
-      page.open_pull_request_file(
-        base,
-        head,
-        PathBuf::from("a.txt"),
-        None,
-        OpenIntent::Open,
-        window,
-        cx,
-      );
-    });
+    open_file(&page, &pull_request, "a.txt", cx);
     await_open_file(&page, cx).await;
-    (repo, page, cx)
+    (pull_request.repo, page, cx)
+  }
+
+  fn open_file(
+    page: &Entity<SessionPage>,
+    pull_request: &PullRequest,
+    path: &str,
+    cx: &mut gpui::VisualTestContext,
+  ) {
+    let (base, head, path) = (
+      pull_request.base.clone(),
+      pull_request.head.clone(),
+      PathBuf::from(path),
+    );
+    page.update_in(cx, |page, window, cx| {
+      page.open_pull_request_file(base, head, path, None, OpenIntent::Open, window, cx);
+    });
+  }
+
+  fn set_comment_on(page: &Entity<SessionPage>, path: &str, cx: &mut gpui::VisualTestContext) {
+    page.update(cx, |page, cx| {
+      page.dock_panel.update(cx, |panel, cx| {
+        panel.set_pull_request_review_comments_for_test(
+          vec![
+            crate::pull_request_review_comments::pending_comment_fixture(1, path, Some(2), "here"),
+          ],
+          cx,
+        );
+      });
+    });
   }
 
   #[gpui::test]
@@ -287,6 +319,52 @@ mod tests {
       assert_eq!(editor.review_comment_ids(), vec![1]);
       // Written but not submitted: the composer must offer to join the review.
       assert!(editor.has_pending_review());
+    });
+  }
+
+  /// The panel already holds the comments when the file opens: nothing fetches
+  /// again, so the open itself has to hang them.
+  #[gpui::test]
+  async fn a_file_opened_after_the_comments_loaded_still_shows_them(cx: &mut gpui::TestAppContext) {
+    let pull_request = pull_request();
+    let (page, cx) = add_session_page_window(pull_request.repo.path.clone(), cx);
+    cx.run_until_parked();
+    set_comment_on(&page, "a.txt", cx);
+    cx.run_until_parked();
+
+    open_file(&page, &pull_request, "a.txt", cx);
+    await_open_file(&page, cx).await;
+
+    page.read_with(cx, |page, cx| {
+      let editor = page.editor.as_ref().expect("editor").read(cx);
+      assert_eq!(editor.review_comment_ids(), vec![1]);
+    });
+  }
+
+  #[gpui::test]
+  async fn leaving_a_commented_file_and_coming_back_keeps_its_comments(
+    cx: &mut gpui::TestAppContext,
+  ) {
+    let pull_request = pull_request();
+    let (page, cx) = add_session_page_window(pull_request.repo.path.clone(), cx);
+    cx.run_until_parked();
+    set_comment_on(&page, "a.txt", cx);
+    cx.run_until_parked();
+
+    open_file(&page, &pull_request, "a.txt", cx);
+    await_open_file(&page, cx).await;
+    open_file(&page, &pull_request, "b.txt", cx);
+    await_open_file(&page, cx).await;
+    page.read_with(cx, |page, cx| {
+      let editor = page.editor.as_ref().expect("editor").read(cx);
+      assert!(editor.review_comment_ids().is_empty());
+    });
+
+    open_file(&page, &pull_request, "a.txt", cx);
+    await_open_file(&page, cx).await;
+    page.read_with(cx, |page, cx| {
+      let editor = page.editor.as_ref().expect("editor").read(cx);
+      assert_eq!(editor.review_comment_ids(), vec![1]);
     });
   }
 }

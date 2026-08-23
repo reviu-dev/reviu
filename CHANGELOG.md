@@ -4,6 +4,12 @@ All notable changes to Reviu are documented here.
 
 ## 1.0.0
 
+### Pull Request Comments Show Up The First Time
+
+Opening a file of a pull request from the Review list showed the diff without the comments on it. The only way to see them was to click the Pull request tab again and wait for it to reload, and changing file lost them once more.
+
+The comments now hang in the diff as soon as the file opens, and they stay there when you leave the file and come back.
+
 ### Tab Reaches The Panel Now
 
 Tab and Shift-Tab moved between the controls of the window without ever stopping on the lists of the right panel, which were not in the order at all. They are now the first stop of their tab, so Tab takes you from the file list to the commit message box and Shift-Tab brings you back, the way a form does.

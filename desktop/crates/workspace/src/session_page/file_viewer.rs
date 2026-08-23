@@ -270,10 +270,12 @@ impl SessionPage {
             editor.reveal_source_line(doc_line, cx);
           }
         });
-        this.install_github_review_handlers_for_editor(&editor, cx);
         this.binary_preview =
           build_binary_preview(rel_path.as_path(), range_file.binary_bytes.clone());
-        this.editor = Some(editor);
+        this.editor = Some(editor.clone());
+        // The comments sync through the page's editor: install after it lands,
+        // or they hang on the one this replaces.
+        this.install_github_review_handlers_for_editor(&editor, cx);
         this.svg_preview.update(cx, |preview, _| preview.clear());
         cx.notify();
       });
