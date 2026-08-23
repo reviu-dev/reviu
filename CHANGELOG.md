@@ -4,6 +4,10 @@ All notable changes to Reviu are documented here.
 
 ## 1.0.0
 
+### A Key For Every Surface Of The Right Panel
+
+The right panel holds six surfaces and only three answered to the keyboard. Files, Review and Pull request now have a key of their own: `cmd-shift-f`, `cmd-shift-r`, `cmd-shift-p`, next to the Changes, History and Terminal keys that were already there. They behave the same way: the key opens the panel on its surface, and pressing it again while that surface is showing closes the panel.
+
 ### Every Shortcut In Settings Does Something
 
 The keyboard shortcuts page listed ten keys that had stopped working when the pull request page went away: its two tabs, its commit-by-commit navigation, its jump from one review comment to the next, its file tree, and Switch to PR branch. They are gone from the list, and Switch to PR branch leaves the command palette with them. Checking out the branch of a pull request comes back later, from the link rather than from a key.

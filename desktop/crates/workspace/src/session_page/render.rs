@@ -971,6 +971,9 @@ impl Render for SessionPage {
       .on_action(cx.listener(Self::toggle_terminal_action))
       .on_action(cx.listener(Self::open_history_action))
       .on_action(cx.listener(Self::open_changes_action))
+      .on_action(cx.listener(Self::open_files_action))
+      .on_action(cx.listener(Self::open_review_action))
+      .on_action(cx.listener(Self::open_pull_request_action))
       .on_action(cx.listener(Self::toggle_file_stage_action))
       .on_action(cx.listener(Self::restore_file_action))
       .on_drag_move(cx.listener(
@@ -1837,6 +1840,49 @@ mod tests {
         panel.changes_list().read(cx).is_focused(window, cx),
         "the keyboard keeps going in the list the shortcut opened"
       );
+    });
+
+    page.update_in(cx, |page, window, cx| {
+      page.open_files_action(&crate::OpenFilesSidebar, window, cx)
+    });
+    cx.run_until_parked();
+    page.read_with(cx, |page, cx| {
+      assert_eq!(
+        page.dock_panel.read(cx).active_tab(),
+        crate::dock_panel::DockPanelTab::Files
+      );
+    });
+
+    page.update_in(cx, |page, window, cx| {
+      page.open_review_action(&crate::OpenReviewSidebar, window, cx)
+    });
+    cx.run_until_parked();
+    page.read_with(cx, |page, cx| {
+      assert_eq!(
+        page.dock_panel.read(cx).active_tab(),
+        crate::dock_panel::DockPanelTab::Review
+      );
+    });
+
+    page.update_in(cx, |page, window, cx| {
+      page.open_pull_request_action(&crate::OpenPullRequestSidebar, window, cx)
+    });
+    cx.run_until_parked();
+    page.read_with(cx, |page, cx| {
+      assert_eq!(
+        page.dock_panel.read(cx).active_tab(),
+        crate::dock_panel::DockPanelTab::PullRequest
+      );
+      assert!(page.dock_open, "the dock opens on the tab it was asked for");
+    });
+
+    // Pressing the shortcut of the tab already showing closes the dock.
+    page.update_in(cx, |page, window, cx| {
+      page.open_pull_request_action(&crate::OpenPullRequestSidebar, window, cx)
+    });
+    cx.run_until_parked();
+    page.read_with(cx, |page, _| {
+      assert!(!page.dock_open, "the same shortcut closes what it opened");
     });
   }
 

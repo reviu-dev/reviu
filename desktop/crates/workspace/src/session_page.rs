@@ -632,6 +632,33 @@ impl SessionPage {
     self.open_dock_tab(DockPanelTab::Changes, window, cx);
   }
 
+  fn open_files_action(
+    &mut self,
+    _: &crate::OpenFilesSidebar,
+    window: &mut Window,
+    cx: &mut Context<Self>,
+  ) {
+    self.open_dock_tab(DockPanelTab::Files, window, cx);
+  }
+
+  fn open_review_action(
+    &mut self,
+    _: &crate::OpenReviewSidebar,
+    window: &mut Window,
+    cx: &mut Context<Self>,
+  ) {
+    self.open_dock_tab(DockPanelTab::Review, window, cx);
+  }
+
+  fn open_pull_request_action(
+    &mut self,
+    _: &crate::OpenPullRequestSidebar,
+    window: &mut Window,
+    cx: &mut Context<Self>,
+  ) {
+    self.open_dock_tab(DockPanelTab::PullRequest, window, cx);
+  }
+
   pub(crate) fn window_handle(&self) -> AnyWindowHandle {
     self.window_handle
   }

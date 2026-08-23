@@ -17,11 +17,12 @@ use std::collections::HashSet;
 use crate::config::ConfigStore;
 use crate::{
   AcceptBothConflict, AddSelectionToAgent, CloseWorkspacePage, CommentHunk, CommitChanges,
-  ForcePushChanges, JumpToLatestMessage, NavigateBack, NextAnnotation, OpenGitChangesSidebar,
-  OpenGitHistorySidebar, OpenRepository, OpenSessionPage, OpenSettingsPage, PreviousAnnotation,
-  PullChanges, PushChanges, RestoreFile, RestoreHunk, SendReviewCommentsToAgent,
-  ShowBranchSwitcher, ShowCommandPalette, ShowFileSearch, ToggleDiffView, ToggleFileStage,
-  ToggleHideWhitespace, ToggleHunkStage, ToggleTerminalSidebar,
+  ForcePushChanges, JumpToLatestMessage, NavigateBack, NextAnnotation, OpenFilesSidebar,
+  OpenGitChangesSidebar, OpenGitHistorySidebar, OpenPullRequestSidebar, OpenRepository,
+  OpenReviewSidebar, OpenSessionPage, OpenSettingsPage, PreviousAnnotation, PullChanges,
+  PushChanges, RestoreFile, RestoreHunk, SendReviewCommentsToAgent, ShowBranchSwitcher,
+  ShowCommandPalette, ShowFileSearch, ToggleDiffView, ToggleFileStage, ToggleHideWhitespace,
+  ToggleHunkStage, ToggleTerminalSidebar,
 };
 
 pub const SHOW_COMMAND_PALETTE_SHORTCUT: &str = "cmd-k";
@@ -51,6 +52,9 @@ const TOGGLE_TERMINAL_CONTEXT: &str = "WorkspaceSession";
 const SHOW_BRANCH_SWITCHER_CONTEXT: &str = "WorkspaceSession";
 const OPEN_GIT_HISTORY_SIDEBAR_CONTEXT: &str = "WorkspaceSession";
 const OPEN_GIT_CHANGES_SIDEBAR_CONTEXT: &str = "WorkspaceSession";
+const OPEN_FILES_SIDEBAR_CONTEXT: &str = "WorkspaceSession";
+const OPEN_REVIEW_SIDEBAR_CONTEXT: &str = "WorkspaceSession";
+const OPEN_PULL_REQUEST_SIDEBAR_CONTEXT: &str = "WorkspaceSession";
 const TOGGLE_DIFF_VIEW_CONTEXT: &str = "WorkspaceSession";
 const REVIEW_ANNOTATION_CONTEXT: &str = "WorkspaceSession";
 const HUNK_ACTION_CONTEXT: &str = "WorkspaceSession";
@@ -97,6 +101,9 @@ pub enum ShortcutId {
   ShowBranchSwitcher,
   OpenGitHistorySidebar,
   OpenGitChangesSidebar,
+  OpenFilesSidebar,
+  OpenReviewSidebar,
+  OpenPullRequestSidebar,
   ToggleDiffView,
   ToggleHideWhitespace,
   PreviousAnnotation,
@@ -130,6 +137,9 @@ impl ShortcutId {
       ShortcutId::ShowBranchSwitcher => "show_branch_switcher",
       ShortcutId::OpenGitHistorySidebar => "open_git_history_sidebar",
       ShortcutId::OpenGitChangesSidebar => "open_git_changes_sidebar",
+      ShortcutId::OpenFilesSidebar => "open_files_sidebar",
+      ShortcutId::OpenReviewSidebar => "open_review_sidebar",
+      ShortcutId::OpenPullRequestSidebar => "open_pull_request_sidebar",
       ShortcutId::ToggleDiffView => "toggle_diff_view",
       ShortcutId::ToggleHideWhitespace => "toggle_hide_whitespace",
       ShortcutId::PreviousAnnotation => "previous_annotation",
@@ -163,6 +173,9 @@ impl ShortcutId {
       "show_branch_switcher" => Some(ShortcutId::ShowBranchSwitcher),
       "open_git_history_sidebar" => Some(ShortcutId::OpenGitHistorySidebar),
       "open_git_changes_sidebar" => Some(ShortcutId::OpenGitChangesSidebar),
+      "open_files_sidebar" => Some(ShortcutId::OpenFilesSidebar),
+      "open_review_sidebar" => Some(ShortcutId::OpenReviewSidebar),
+      "open_pull_request_sidebar" => Some(ShortcutId::OpenPullRequestSidebar),
       "toggle_diff_view" => Some(ShortcutId::ToggleDiffView),
       "toggle_hide_whitespace" => Some(ShortcutId::ToggleHideWhitespace),
       "previous_annotation" => Some(ShortcutId::PreviousAnnotation),
@@ -202,7 +215,7 @@ pub struct ShortcutDefinition {
   pub active_contexts: &'static [&'static str],
 }
 
-const SHORTCUT_DEFINITIONS: [ShortcutDefinition; 28] = [
+const SHORTCUT_DEFINITIONS: [ShortcutDefinition; 31] = [
   ShortcutDefinition {
     id: ShortcutId::ShowCommandPalette,
     title: "Command Palette",
@@ -486,6 +499,39 @@ const SHORTCUT_DEFINITIONS: [ShortcutDefinition; 28] = [
     category: ShortcutCategory::LocalGit,
     keystroke: "cmd-shift-e",
     context: OPEN_GIT_CHANGES_SIDEBAR_CONTEXT,
+    display_context: WORKSPACE_SESSION_CONTEXT,
+    active_contexts: &SESSION_ONLY_ACTIVE_CONTEXTS,
+  },
+  ShortcutDefinition {
+    id: ShortcutId::OpenFilesSidebar,
+    title: "Show Files",
+    description: "Switch the right panel to the repository file tree.",
+    scope_label: "Sessions",
+    category: ShortcutCategory::LocalGit,
+    keystroke: "cmd-shift-f",
+    context: OPEN_FILES_SIDEBAR_CONTEXT,
+    display_context: WORKSPACE_SESSION_CONTEXT,
+    active_contexts: &SESSION_ONLY_ACTIVE_CONTEXTS,
+  },
+  ShortcutDefinition {
+    id: ShortcutId::OpenReviewSidebar,
+    title: "Show Review",
+    description: "Switch the right panel to the review waiting to be sent.",
+    scope_label: "Sessions",
+    category: ShortcutCategory::Review,
+    keystroke: "cmd-shift-r",
+    context: OPEN_REVIEW_SIDEBAR_CONTEXT,
+    display_context: WORKSPACE_SESSION_CONTEXT,
+    active_contexts: &SESSION_ONLY_ACTIVE_CONTEXTS,
+  },
+  ShortcutDefinition {
+    id: ShortcutId::OpenPullRequestSidebar,
+    title: "Show Pull Request",
+    description: "Switch the right panel to the pull request of the current branch.",
+    scope_label: "Sessions",
+    category: ShortcutCategory::Review,
+    keystroke: "cmd-shift-p",
+    context: OPEN_PULL_REQUEST_SIDEBAR_CONTEXT,
     display_context: WORKSPACE_SESSION_CONTEXT,
     active_contexts: &SESSION_ONLY_ACTIVE_CONTEXTS,
   },
@@ -811,6 +857,13 @@ impl ShortcutDefinition {
       }
       ShortcutId::OpenGitChangesSidebar => {
         KeyBinding::new(keystroke, OpenGitChangesSidebar, Some(&context))
+      }
+      ShortcutId::OpenFilesSidebar => KeyBinding::new(keystroke, OpenFilesSidebar, Some(&context)),
+      ShortcutId::OpenReviewSidebar => {
+        KeyBinding::new(keystroke, OpenReviewSidebar, Some(&context))
+      }
+      ShortcutId::OpenPullRequestSidebar => {
+        KeyBinding::new(keystroke, OpenPullRequestSidebar, Some(&context))
       }
       ShortcutId::ToggleDiffView => KeyBinding::new(keystroke, ToggleDiffView, Some(&context)),
       ShortcutId::ToggleHideWhitespace => {
@@ -1165,6 +1218,9 @@ fn with_shortcut_action<T>(id: ShortcutId, f: impl FnOnce(&dyn Action) -> T) -> 
     ShortcutId::ShowBranchSwitcher => f(&ShowBranchSwitcher),
     ShortcutId::OpenGitHistorySidebar => f(&OpenGitHistorySidebar),
     ShortcutId::OpenGitChangesSidebar => f(&OpenGitChangesSidebar),
+    ShortcutId::OpenFilesSidebar => f(&OpenFilesSidebar),
+    ShortcutId::OpenReviewSidebar => f(&OpenReviewSidebar),
+    ShortcutId::OpenPullRequestSidebar => f(&OpenPullRequestSidebar),
     ShortcutId::ToggleDiffView => f(&ToggleDiffView),
     ShortcutId::ToggleHideWhitespace => f(&ToggleHideWhitespace),
     ShortcutId::PreviousAnnotation => f(&PreviousAnnotation),
@@ -1471,6 +1527,37 @@ mod tests {
   }
 
   #[test]
+  fn every_dock_surface_has_a_key_of_its_own() {
+    // Six surfaces in the right dock, six shortcuts, none of them shared.
+    let dock = [
+      (ShortcutId::OpenGitChangesSidebar, "cmd-shift-e"),
+      (ShortcutId::OpenReviewSidebar, "cmd-shift-r"),
+      (ShortcutId::OpenFilesSidebar, "cmd-shift-f"),
+      (ShortcutId::OpenGitHistorySidebar, "cmd-shift-h"),
+      (ShortcutId::OpenPullRequestSidebar, "cmd-shift-p"),
+      (ShortcutId::ToggleTerminalSidebar, "cmd-j"),
+    ];
+
+    for (id, keystroke) in dock {
+      assert_eq!(
+        shortcut_keystroke(id),
+        Keystroke::parse(keystroke).expect("dock keystroke")
+      );
+      assert!(
+        has_binding("/session", keystroke),
+        "{keystroke} should be active in the shell"
+      );
+      assert!(
+        !has_binding("/settings", keystroke),
+        "{keystroke} means nothing outside the shell"
+      );
+    }
+
+    let keystrokes: HashSet<&str> = dock.iter().map(|(_, keystroke)| *keystroke).collect();
+    assert_eq!(keystrokes.len(), dock.len(), "two surfaces share a key");
+  }
+
+  #[test]
   fn review_shortcuts_are_scoped_to_the_shell() {
     for keystroke in ["cmd-/", "cmd-alt-/"] {
       assert!(has_binding("/session", keystroke));
@@ -1539,12 +1626,12 @@ mod tests {
 
   #[test]
   fn workspace_key_bindings_apply_overrides() {
-    let overrides = overrides(&[(ShortcutId::ShowFileSearch, "cmd-shift-p")]);
+    let overrides = overrides(&[(ShortcutId::ShowFileSearch, "cmd-shift-u")]);
     let bindings = workspace_key_bindings_with_overrides(&overrides);
 
     assert!(has_binding_with_bindings(
       "/session",
-      "cmd-shift-p",
+      "cmd-shift-u",
       bindings.clone()
     ));
     assert!(!has_binding_with_bindings("/settings", "cmd-p", bindings));
@@ -1558,14 +1645,14 @@ mod tests {
       1,
     ));
     keymap.add_bindings(workspace_key_bindings_with_overrides_and_generation(
-      &overrides(&[(ShortcutId::ShowFileSearch, "cmd-shift-p")]),
+      &overrides(&[(ShortcutId::ShowFileSearch, "cmd-shift-u")]),
       2,
     ));
 
     let current_context =
       [KeyContext::parse(&key_context_for_pathname_with_generation("/session", 2)).unwrap()];
     let old_input = [Keystroke::parse("cmd-p").unwrap()];
-    let new_input = [Keystroke::parse("cmd-shift-p").unwrap()];
+    let new_input = [Keystroke::parse("cmd-shift-u").unwrap()];
 
     let (old_bindings, old_pending) = keymap.bindings_for_input(&old_input, &current_context);
     assert!(old_bindings.is_empty());
