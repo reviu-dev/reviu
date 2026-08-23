@@ -235,11 +235,6 @@ pub enum CommandPaletteAction {
     repo: String,
     sha: String,
   },
-  CopyPrBranch,
-  ToggleUnchangedFiles,
-  OpenPrMergePopover,
-  OpenPrReviewPopover,
-  TogglePrCommitByCommit,
   OpenGitConfigPage,
   OpenSettingsPage,
   OpenBillingPage,
@@ -805,11 +800,6 @@ pub enum CommandPaletteCommandId {
   OpenRepository,
   OpenSessionPage,
   OpenGithubFromUrl,
-  CopyPrBranch,
-  ToggleUnchangedFiles,
-  OpenPrMergePopover,
-  OpenPrReviewPopover,
-  TogglePrCommitByCommit,
   OpenGitConfigPage,
   OpenSettingsPage,
   OpenBillingPage,
@@ -864,11 +854,6 @@ impl CommandPaletteCommandId {
       Self::OpenRepository => "open_repository",
       Self::OpenSessionPage => "open_session_page",
       Self::OpenGithubFromUrl => "open_github_from_url",
-      Self::CopyPrBranch => "copy_pr_branch",
-      Self::ToggleUnchangedFiles => "toggle_unchanged_files",
-      Self::OpenPrMergePopover => "open_pr_merge_popover",
-      Self::OpenPrReviewPopover => "open_pr_review_popover",
-      Self::TogglePrCommitByCommit => "toggle_pr_commit_by_commit",
       Self::OpenGitConfigPage => "open_git_config_page",
       Self::OpenSettingsPage => "open_settings_page",
       Self::OpenBillingPage => "open_billing_page",
@@ -921,11 +906,6 @@ impl CommandPaletteCommandId {
       "open_repository" => Some(Self::OpenRepository),
       "open_session_page" => Some(Self::OpenSessionPage),
       "open_github_from_url" => Some(Self::OpenGithubFromUrl),
-      "copy_pr_branch" => Some(Self::CopyPrBranch),
-      "toggle_unchanged_files" => Some(Self::ToggleUnchangedFiles),
-      "open_pr_merge_popover" => Some(Self::OpenPrMergePopover),
-      "open_pr_review_popover" => Some(Self::OpenPrReviewPopover),
-      "toggle_pr_commit_by_commit" => Some(Self::TogglePrCommitByCommit),
       "open_git_config_page" => Some(Self::OpenGitConfigPage),
       "open_settings_page" => Some(Self::OpenSettingsPage),
       "open_billing_page" => Some(Self::OpenBillingPage),
@@ -1364,62 +1344,6 @@ impl CommandPaletteCommand {
     )
   }
 
-  pub fn copy_pr_branch() -> Self {
-    Self::new(
-      CommandPaletteCommandId::CopyPrBranch,
-      "Copy PR branch name",
-      "Copy the source branch name of the current pull request",
-    )
-  }
-
-  pub fn open_pr_merge_popover() -> Self {
-    Self::new(
-      CommandPaletteCommandId::OpenPrMergePopover,
-      "Merge pull request",
-      "Open the merge popover for the current pull request",
-    )
-  }
-
-  pub fn open_pr_review_popover() -> Self {
-    Self::new(
-      CommandPaletteCommandId::OpenPrReviewPopover,
-      "Review pull request",
-      "Open the review popover for the current pull request",
-    )
-  }
-
-  pub fn toggle_pr_commit_by_commit(in_commit_by_commit_mode: bool) -> Self {
-    if in_commit_by_commit_mode {
-      Self::new(
-        CommandPaletteCommandId::TogglePrCommitByCommit,
-        "Show all changes",
-        "Exit commit-by-commit review and show all pull request changes",
-      )
-    } else {
-      Self::new(
-        CommandPaletteCommandId::TogglePrCommitByCommit,
-        "Review commit by commit",
-        "Step through pull request changes one commit at a time",
-      )
-    }
-  }
-
-  pub fn toggle_unchanged_files(currently_shown: bool) -> Self {
-    if currently_shown {
-      Self::new(
-        CommandPaletteCommandId::ToggleUnchangedFiles,
-        "Hide unchanged files",
-        "Show only files changed in this pull request",
-      )
-    } else {
-      Self::new(
-        CommandPaletteCommandId::ToggleUnchangedFiles,
-        "Show unchanged files",
-        "Show all project files alongside changed files",
-      )
-    }
-  }
-
   pub fn open_settings_page() -> Self {
     Self::new(
       CommandPaletteCommandId::OpenSettingsPage,
@@ -1541,11 +1465,7 @@ impl CommandPaletteCommand {
 
       CommandPaletteCommandId::CreatePullRequest
       | CommandPaletteCommandId::OpenPullRequest
-      | CommandPaletteCommandId::CopyPrBranch
-      | CommandPaletteCommandId::ToggleUnchangedFiles
-      | CommandPaletteCommandId::OpenPrMergePopover
-      | CommandPaletteCommandId::OpenPrReviewPopover
-      | CommandPaletteCommandId::TogglePrCommitByCommit => CommandPaletteGroup::PullRequest,
+      | CommandPaletteCommandId::OpenPullRequest => CommandPaletteGroup::PullRequest,
 
       CommandPaletteCommandId::SwitchRepository
       | CommandPaletteCommandId::ForgetRepository
@@ -1613,11 +1533,6 @@ impl CommandPaletteCommand {
       }
       CommandPaletteCommandId::OpenSessionPage => Icon::new(UiIconName::MessageCircle),
       CommandPaletteCommandId::OpenGithubFromUrl => Icon::new(IconName::Github),
-      CommandPaletteCommandId::CopyPrBranch => Icon::new(IconName::Copy),
-      CommandPaletteCommandId::ToggleUnchangedFiles => Icon::new(UiIconName::ScanEye),
-      CommandPaletteCommandId::OpenPrMergePopover => Icon::new(UiIconName::GitMerge),
-      CommandPaletteCommandId::OpenPrReviewPopover => Icon::new(UiIconName::Eye),
-      CommandPaletteCommandId::TogglePrCommitByCommit => Icon::new(UiIconName::GitCommitHorizontal),
       CommandPaletteCommandId::OpenGitConfigPage => Self::git_config_icon(),
       CommandPaletteCommandId::OpenSettingsPage => Icon::new(IconName::Settings2),
       CommandPaletteCommandId::OpenBillingPage => Icon::new(UiIconName::CreditCard),
@@ -2749,41 +2664,6 @@ impl CommandPalette {
           self.set_screen(CommandPaletteScreen::OpenGithubFromUrl, cx, window);
         }
       }
-      CommandPaletteCommandId::CopyPrBranch => {
-        self.trigger_action(command, CommandPaletteAction::CopyPrBranch, window, cx);
-      }
-      CommandPaletteCommandId::ToggleUnchangedFiles => {
-        self.trigger_action(
-          command,
-          CommandPaletteAction::ToggleUnchangedFiles,
-          window,
-          cx,
-        );
-      }
-      CommandPaletteCommandId::OpenPrMergePopover => {
-        self.trigger_action(
-          command,
-          CommandPaletteAction::OpenPrMergePopover,
-          window,
-          cx,
-        );
-      }
-      CommandPaletteCommandId::OpenPrReviewPopover => {
-        self.trigger_action(
-          command,
-          CommandPaletteAction::OpenPrReviewPopover,
-          window,
-          cx,
-        );
-      }
-      CommandPaletteCommandId::TogglePrCommitByCommit => {
-        self.trigger_action(
-          command,
-          CommandPaletteAction::TogglePrCommitByCommit,
-          window,
-          cx,
-        );
-      }
       CommandPaletteCommandId::OpenGitConfigPage => {
         self.trigger_action(command, CommandPaletteAction::OpenGitConfigPage, window, cx);
       }
@@ -3687,8 +3567,6 @@ mod tests {
       CommandPaletteCommandId::OpenRepository,
       CommandPaletteCommandId::OpenSessionPage,
       CommandPaletteCommandId::OpenGithubFromUrl,
-      CommandPaletteCommandId::CopyPrBranch,
-      CommandPaletteCommandId::ToggleUnchangedFiles,
       CommandPaletteCommandId::OpenGitConfigPage,
       CommandPaletteCommandId::OpenSettingsPage,
       CommandPaletteCommandId::OpenBillingPage,
