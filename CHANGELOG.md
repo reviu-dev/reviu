@@ -4,6 +4,16 @@ All notable changes to Reviu are documented here.
 
 ## 1.0.0
 
+### Walking A List Is Not Choosing From It
+
+Moving through the Changes list or the Review list with the arrow keys used to open the row and hand the keyboard to the editor, so the next arrow key went into the file instead of the list. One keypress of browsing, then you were somewhere else.
+
+The two gestures are now told apart. Arrows show what the row holds and leave the keyboard where it is, so you can walk a whole review without touching the mouse. Enter, or a click, opens the file and gives the editor the focus, which is the moment you actually wanted to be there. The shortcut of the panel brings you back.
+
+Crossing a long list no longer loads everything on the way either: a row has to be the one you stopped on before its file is read.
+
+In the Review panel, left and right now fold and unfold a file, the same keys the Files and History trees use. Enter keeps folding a file row too, since there is nothing to read behind it.
+
 ### The Right Panel Answers The Keyboard
 
 Opening a panel with its key used to be as far as the keyboard went. Files, Review and History now hand it over properly: arrows walk the rows, Enter opens what is selected, and left/right fold a folder or a file.

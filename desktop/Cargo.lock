@@ -3509,7 +3509,7 @@ dependencies = [
 [[package]]
 name = "gpui-base"
 version = "0.5.2"
-source = "git+https://github.com/longbridge/gpui-component?branch=main#7033423d0b91ef74ce8ddbe3c64bca828dffb417"
+source = "git+https://github.com/joris-gallot/gpui-component?branch=reviu%2Ftree-selection-events#a4e3fb607100e4059f59c828a4dfea0113e0cef1"
 dependencies = [
  "aho-corasick",
  "anyhow",
@@ -3539,7 +3539,7 @@ dependencies = [
 [[package]]
 name = "gpui-component"
 version = "0.5.2"
-source = "git+https://github.com/longbridge/gpui-component?branch=main#7033423d0b91ef74ce8ddbe3c64bca828dffb417"
+source = "git+https://github.com/joris-gallot/gpui-component?branch=reviu%2Ftree-selection-events#a4e3fb607100e4059f59c828a4dfea0113e0cef1"
 dependencies = [
  "anyhow",
  "chrono",
@@ -3584,7 +3584,7 @@ dependencies = [
 [[package]]
 name = "gpui-component-assets"
 version = "0.5.1"
-source = "git+https://github.com/longbridge/gpui-component?branch=main#7033423d0b91ef74ce8ddbe3c64bca828dffb417"
+source = "git+https://github.com/joris-gallot/gpui-component?branch=reviu%2Ftree-selection-events#a4e3fb607100e4059f59c828a4dfea0113e0cef1"
 dependencies = [
  "anyhow",
  "gpui",
@@ -3598,7 +3598,7 @@ dependencies = [
 [[package]]
 name = "gpui-component-macros"
 version = "0.5.1"
-source = "git+https://github.com/longbridge/gpui-component?branch=main#7033423d0b91ef74ce8ddbe3c64bca828dffb417"
+source = "git+https://github.com/joris-gallot/gpui-component?branch=reviu%2Ftree-selection-events#a4e3fb607100e4059f59c828a4dfea0113e0cef1"
 dependencies = [
  "proc-macro2",
  "quote",

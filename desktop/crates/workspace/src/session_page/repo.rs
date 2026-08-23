@@ -219,7 +219,13 @@ mod tests {
     });
 
     page.update_in(cx, |page, window, cx| {
-      page.open_diff(PathBuf::from("README.md"), None, window, cx);
+      page.open_diff(
+        PathBuf::from("README.md"),
+        None,
+        OpenIntent::Open,
+        window,
+        cx,
+      );
     });
     await_open_file(&page, cx).await;
     page.update_in(cx, |page, window, cx| {
@@ -271,7 +277,13 @@ mod tests {
 
     // A new comment must not take an id the reloaded batch already holds.
     page.update_in(cx, |page, window, cx| {
-      page.open_diff(PathBuf::from("README.md"), None, window, cx);
+      page.open_diff(
+        PathBuf::from("README.md"),
+        None,
+        OpenIntent::Open,
+        window,
+        cx,
+      );
     });
     await_open_file(&page, cx).await;
     page.update_in(cx, |page, window, cx| {
@@ -317,7 +329,13 @@ mod tests {
     cx.run_until_parked();
 
     page.update_in(cx, |page, window, cx| {
-      page.open_diff(PathBuf::from("README.md"), None, window, cx);
+      page.open_diff(
+        PathBuf::from("README.md"),
+        None,
+        OpenIntent::Open,
+        window,
+        cx,
+      );
     });
     await_open_file(&page, cx).await;
     page.update_in(cx, |page, window, cx| {
@@ -458,7 +476,13 @@ mod tests {
     cx.run_until_parked();
 
     page.update_in(cx, |page, window, cx| {
-      page.open_diff(PathBuf::from("README.md"), None, window, cx);
+      page.open_diff(
+        PathBuf::from("README.md"),
+        None,
+        OpenIntent::Open,
+        window,
+        cx,
+      );
     });
     await_open_file(&page, cx).await;
 

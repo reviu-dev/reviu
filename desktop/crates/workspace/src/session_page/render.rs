@@ -1161,7 +1161,13 @@ mod tests {
     cx.run_until_parked();
 
     page.update_in(cx, |page, window, cx| {
-      page.open_diff(PathBuf::from("new_name.rs"), None, window, cx);
+      page.open_diff(
+        PathBuf::from("new_name.rs"),
+        None,
+        OpenIntent::Open,
+        window,
+        cx,
+      );
     });
     await_open_file(&page, cx).await;
 
@@ -1179,7 +1185,13 @@ mod tests {
     });
     cx.run_until_parked();
     page.update_in(cx, |page, window, cx| {
-      page.open_diff(PathBuf::from("plain.rs"), None, window, cx);
+      page.open_diff(
+        PathBuf::from("plain.rs"),
+        None,
+        OpenIntent::Open,
+        window,
+        cx,
+      );
     });
     await_open_file(&page, cx).await;
 
@@ -1202,7 +1214,13 @@ mod tests {
     cx.run_until_parked();
 
     page.update_in(cx, |page, window, cx| {
-      page.open_diff(PathBuf::from("README.md"), None, window, cx);
+      page.open_diff(
+        PathBuf::from("README.md"),
+        None,
+        OpenIntent::Open,
+        window,
+        cx,
+      );
     });
     await_open_file(&page, cx).await;
 
@@ -1258,7 +1276,13 @@ mod tests {
 
     // A working-tree file can be written, so it keeps its Save.
     page.update_in(cx, |page, window, cx| {
-      page.open_diff(PathBuf::from("README.md"), None, window, cx);
+      page.open_diff(
+        PathBuf::from("README.md"),
+        None,
+        OpenIntent::Open,
+        window,
+        cx,
+      );
     });
     await_open_file(&page, cx).await;
     await_editor_diff(&page, cx).await;
@@ -1276,7 +1300,13 @@ mod tests {
 
     // A commit snapshot is read-only, in code view too.
     page.update_in(cx, |page, window, cx| {
-      page.open_commit_file(commit.to_string(), PathBuf::from("README.md"), window, cx);
+      page.open_commit_file(
+        commit.to_string(),
+        PathBuf::from("README.md"),
+        OpenIntent::Open,
+        window,
+        cx,
+      );
     });
     await_open_file(&page, cx).await;
     cx.run_until_parked();
@@ -1296,7 +1326,7 @@ mod tests {
     cx.run_until_parked();
 
     page.update_in(cx, |page, window, cx| {
-      page.open_diff(PathBuf::from("new.txt"), None, window, cx);
+      page.open_diff(PathBuf::from("new.txt"), None, OpenIntent::Open, window, cx);
     });
     await_open_file(&page, cx).await;
 
@@ -1342,7 +1372,13 @@ mod tests {
 
     // Opened from the Files tab: committed content, nothing to compare.
     page.update_in(cx, |page, window, cx| {
-      page.open_diff(PathBuf::from("README.md"), None, window, cx);
+      page.open_diff(
+        PathBuf::from("README.md"),
+        None,
+        OpenIntent::Open,
+        window,
+        cx,
+      );
     });
     await_open_file(&page, cx).await;
     page.update(cx, |_, cx| cx.notify());
@@ -1375,7 +1411,13 @@ mod tests {
     cx.run_until_parked();
 
     page.update_in(cx, |page, window, cx| {
-      page.open_diff(PathBuf::from("README.md"), None, window, cx);
+      page.open_diff(
+        PathBuf::from("README.md"),
+        None,
+        OpenIntent::Open,
+        window,
+        cx,
+      );
     });
     await_open_file(&page, cx).await;
     page.update(cx, |_, cx| cx.notify());
@@ -1425,7 +1467,7 @@ mod tests {
     cx.run_until_parked();
 
     page.update_in(cx, |page, window, cx| {
-      page.open_diff(PathBuf::from("main.rs"), None, window, cx);
+      page.open_diff(PathBuf::from("main.rs"), None, OpenIntent::Open, window, cx);
     });
     await_open_file(&page, cx).await;
     page.update(cx, |_, cx| cx.notify());
@@ -1448,7 +1490,13 @@ mod tests {
     cx.run_until_parked();
 
     page.update_in(cx, |page, window, cx| {
-      page.open_diff(PathBuf::from("README.md"), None, window, cx);
+      page.open_diff(
+        PathBuf::from("README.md"),
+        None,
+        OpenIntent::Open,
+        window,
+        cx,
+      );
     });
     await_open_file(&page, cx).await;
 
@@ -1500,7 +1548,13 @@ mod tests {
     cx.run_until_parked();
 
     page.update_in(cx, |page, window, cx| {
-      page.open_diff(PathBuf::from("logo.svg"), None, window, cx);
+      page.open_diff(
+        PathBuf::from("logo.svg"),
+        None,
+        OpenIntent::Open,
+        window,
+        cx,
+      );
     });
     await_open_file(&page, cx).await;
     page.update(cx, |_, cx| cx.notify());
@@ -1532,7 +1586,13 @@ mod tests {
     cx.run_until_parked();
 
     page.update_in(cx, |page, window, cx| {
-      page.open_diff(PathBuf::from("README.md"), None, window, cx);
+      page.open_diff(
+        PathBuf::from("README.md"),
+        None,
+        OpenIntent::Open,
+        window,
+        cx,
+      );
     });
     await_open_file(&page, cx).await;
     page.update(cx, |page, cx| page.toggle_preview(cx));
@@ -1540,7 +1600,7 @@ mod tests {
     assert!(cx.debug_bounds(PREVIEW_PANE_DEBUG_SELECTOR).is_some());
 
     page.update_in(cx, |page, window, cx| {
-      page.open_diff(PathBuf::from("main.rs"), None, window, cx);
+      page.open_diff(PathBuf::from("main.rs"), None, OpenIntent::Open, window, cx);
     });
     await_open_file(&page, cx).await;
     page.update(cx, |_, cx| cx.notify());
@@ -1564,7 +1624,13 @@ mod tests {
     cx.run_until_parked();
 
     page.update_in(cx, |page, window, cx| {
-      page.open_diff(PathBuf::from("README.md"), None, window, cx);
+      page.open_diff(
+        PathBuf::from("README.md"),
+        None,
+        OpenIntent::Open,
+        window,
+        cx,
+      );
     });
     await_open_file(&page, cx).await;
     page.update(cx, |page, cx| page.toggle_preview(cx));
@@ -1573,7 +1639,13 @@ mod tests {
 
     // Another markdown file: the preview does not carry over.
     page.update_in(cx, |page, window, cx| {
-      page.open_diff(PathBuf::from("GUIDE.md"), None, window, cx);
+      page.open_diff(
+        PathBuf::from("GUIDE.md"),
+        None,
+        OpenIntent::Open,
+        window,
+        cx,
+      );
     });
     await_open_file(&page, cx).await;
     page.update(cx, |_, cx| cx.notify());
@@ -1597,7 +1669,13 @@ mod tests {
     cx.run_until_parked();
 
     page.update_in(cx, |page, window, cx| {
-      page.open_diff(PathBuf::from("README.md"), None, window, cx);
+      page.open_diff(
+        PathBuf::from("README.md"),
+        None,
+        OpenIntent::Open,
+        window,
+        cx,
+      );
     });
     await_open_file(&page, cx).await;
     page.update(cx, |page, cx| page.toggle_preview(cx));
@@ -1607,7 +1685,13 @@ mod tests {
     // The agent points at a line of the file already on screen: a rendered
     // document has no line to jump to.
     page.update_in(cx, |page, window, cx| {
-      page.open_diff(PathBuf::from("README.md"), Some(3), window, cx);
+      page.open_diff(
+        PathBuf::from("README.md"),
+        Some(3),
+        OpenIntent::Open,
+        window,
+        cx,
+      );
     });
     cx.run_until_parked();
 
@@ -1632,7 +1716,7 @@ mod tests {
     cx.run_until_parked();
 
     page.update_in(cx, |page, window, cx| {
-      page.open_diff(PathBuf::from("a.rs"), None, window, cx);
+      page.open_diff(PathBuf::from("a.rs"), None, OpenIntent::Open, window, cx);
     });
     await_open_file(&page, cx).await;
     page.update(cx, |_, cx| cx.notify());
@@ -1670,7 +1754,7 @@ mod tests {
 
     // A reading preference for the session, not a per-file one.
     page.update_in(cx, |page, window, cx| {
-      page.open_diff(PathBuf::from("b.rs"), None, window, cx);
+      page.open_diff(PathBuf::from("b.rs"), None, OpenIntent::Open, window, cx);
     });
     await_open_file(&page, cx).await;
 
@@ -1701,7 +1785,7 @@ mod tests {
     cx.run_until_parked();
 
     page.update_in(cx, |page, window, cx| {
-      page.open_diff(PathBuf::from("a.rs"), None, window, cx);
+      page.open_diff(PathBuf::from("a.rs"), None, OpenIntent::Open, window, cx);
     });
     await_open_file(&page, cx).await;
 
@@ -1737,7 +1821,7 @@ mod tests {
     cx.run_until_parked();
 
     page.update_in(cx, |page, window, cx| {
-      page.open_diff(PathBuf::from("a.rs"), None, window, cx);
+      page.open_diff(PathBuf::from("a.rs"), None, OpenIntent::Open, window, cx);
     });
     await_open_file(&page, cx).await;
     await_editor_diff(&page, cx).await;
@@ -1787,6 +1871,101 @@ mod tests {
     cx.run_until_parked();
     page.read_with(cx, |page, _| {
       assert_eq!(page.diff_view, DiffViewMode::Split);
+    });
+  }
+
+  #[gpui::test]
+  async fn walking_a_list_shows_files_without_taking_the_keyboard(cx: &mut TestAppContext) {
+    let repo = TempRepo::init("session-render-browse-keeps-focus");
+    commit_text_file(&repo.path, Path::new("a.txt"), "v1\n", "initial");
+    commit_text_file(&repo.path, Path::new("b.txt"), "v1\n", "second");
+    std::fs::write(repo.path.join("a.txt"), "v2\n").expect("modify a");
+    std::fs::write(repo.path.join("b.txt"), "v2\n").expect("modify b");
+
+    let (page, cx) = add_session_page_window(repo.path.clone(), cx);
+    page.update(cx, |page, cx| {
+      page.dock_panel.update(cx, |panel, cx| panel.refresh(cx))
+    });
+    cx.run_until_parked();
+
+    page.update_in(cx, |page, window, cx| {
+      page.show_dock_tab(DockPanelTab::Changes, window, cx)
+    });
+    cx.run_until_parked();
+
+    cx.simulate_keystrokes("down");
+    cx.executor()
+      .advance_clock(crate::session_page::BROWSE_DEBOUNCE * 2);
+    cx.run_until_parked();
+
+    page.update_in(cx, |page, window, cx| {
+      assert!(
+        page.selected_file.is_some(),
+        "walking the list shows what the row holds"
+      );
+      assert!(
+        page
+          .dock_panel
+          .read(cx)
+          .changes_list()
+          .read(cx)
+          .is_focused(window, cx),
+        "the next arrow key belongs to the list, not to the editor"
+      );
+    });
+
+    // Choosing a row hands the editor the keyboard.
+    cx.simulate_keystrokes("down");
+    cx.simulate_keystrokes("enter");
+    cx.run_until_parked();
+    page.update_in(cx, |page, window, cx| {
+      assert_eq!(page.selected_file.as_deref(), Some(Path::new("b.txt")));
+      let editor = page.editor.clone().expect("editor");
+      assert!(
+        editor.read(cx).focus_handle(cx).is_focused(window),
+        "Enter is the gesture that hands the keyboard over"
+      );
+    });
+  }
+
+  #[gpui::test]
+  async fn crossing_a_list_only_loads_the_row_it_stops_on(cx: &mut TestAppContext) {
+    let repo = TempRepo::init("session-render-browse-debounce");
+    commit_text_file(&repo.path, Path::new("a.txt"), "v1\n", "initial");
+    commit_text_file(&repo.path, Path::new("b.txt"), "v1\n", "second");
+    std::fs::write(repo.path.join("a.txt"), "v2\n").expect("modify a");
+    std::fs::write(repo.path.join("b.txt"), "v2\n").expect("modify b");
+
+    let (page, cx) = add_session_page_window(repo.path.clone(), cx);
+    page.update(cx, |page, cx| {
+      page.dock_panel.update(cx, |panel, cx| panel.refresh(cx))
+    });
+    cx.run_until_parked();
+    page.update_in(cx, |page, window, cx| {
+      page.show_dock_tab(DockPanelTab::Changes, window, cx)
+    });
+    cx.run_until_parked();
+
+    // Two rows crossed faster than the debounce: nothing has loaded yet.
+    cx.simulate_keystrokes("down");
+    cx.simulate_keystrokes("down");
+    cx.run_until_parked();
+    page.read_with(cx, |page, _| {
+      assert!(
+        page.selected_file.is_none(),
+        "a row crossed on the way is not a row to load"
+      );
+    });
+
+    cx.executor()
+      .advance_clock(crate::session_page::BROWSE_DEBOUNCE * 2);
+    cx.run_until_parked();
+    page.read_with(cx, |page, _| {
+      assert_eq!(
+        page.selected_file.as_deref(),
+        Some(Path::new("b.txt")),
+        "the row it stopped on is the one that loads"
+      );
     });
   }
 
@@ -1982,7 +2161,7 @@ mod tests {
     cx.run_until_parked();
 
     page.update_in(cx, |page, window, cx| {
-      page.open_diff(PathBuf::from("a.txt"), None, window, cx);
+      page.open_diff(PathBuf::from("a.txt"), None, OpenIntent::Open, window, cx);
     });
     await_open_file(&page, cx).await;
 
@@ -2053,7 +2232,7 @@ mod tests {
     cx.run_until_parked();
 
     page.update_in(cx, |page, window, cx| {
-      page.open_diff(PathBuf::from("a.txt"), None, window, cx);
+      page.open_diff(PathBuf::from("a.txt"), None, OpenIntent::Open, window, cx);
     });
     await_open_file(&page, cx).await;
 
@@ -2117,7 +2296,7 @@ mod tests {
     });
 
     page.update_in(cx, |page, window, cx| {
-      page.open_diff(PathBuf::from("a.txt"), None, window, cx);
+      page.open_diff(PathBuf::from("a.txt"), None, OpenIntent::Open, window, cx);
     });
     await_open_file(&page, cx).await;
 
@@ -2172,7 +2351,7 @@ mod tests {
     cx.run_until_parked();
 
     page.update_in(cx, |page, window, cx| {
-      page.open_diff(PathBuf::from("a.txt"), None, window, cx);
+      page.open_diff(PathBuf::from("a.txt"), None, OpenIntent::Open, window, cx);
     });
     await_open_file(&page, cx).await;
     await_editor_diff(&page, cx).await;
@@ -2285,7 +2464,7 @@ mod tests {
     cx.run_until_parked();
 
     page.update_in(cx, |page, window, cx| {
-      page.open_diff(PathBuf::from("new.txt"), None, window, cx);
+      page.open_diff(PathBuf::from("new.txt"), None, OpenIntent::Open, window, cx);
     });
     await_open_file(&page, cx).await;
     await_editor_diff(&page, cx).await;
@@ -2384,7 +2563,7 @@ mod tests {
     cx.run_until_parked();
 
     page.update_in(cx, |page, window, cx| {
-      page.open_diff(PathBuf::from("a.txt"), None, window, cx);
+      page.open_diff(PathBuf::from("a.txt"), None, OpenIntent::Open, window, cx);
     });
     await_open_file(&page, cx).await;
     await_editor_diff(&page, cx).await;
@@ -2452,7 +2631,7 @@ mod tests {
     cx.run_until_parked();
 
     page.update_in(cx, |page, window, cx| {
-      page.open_diff(PathBuf::from("a.txt"), None, window, cx);
+      page.open_diff(PathBuf::from("a.txt"), None, OpenIntent::Open, window, cx);
     });
     await_open_file(&page, cx).await;
     await_editor_diff(&page, cx).await;
@@ -2571,7 +2750,7 @@ mod tests {
     cx.run_until_parked();
 
     page.update_in(cx, |page, window, cx| {
-      page.open_diff(PathBuf::from("a.txt"), None, window, cx);
+      page.open_diff(PathBuf::from("a.txt"), None, OpenIntent::Open, window, cx);
     });
     await_open_file(&page, cx).await;
     page.update(cx, |_, cx| cx.notify());
@@ -2679,7 +2858,7 @@ mod tests {
     cx.run_until_parked();
 
     page.update_in(cx, |page, window, cx| {
-      page.open_diff(PathBuf::from("a.txt"), None, window, cx);
+      page.open_diff(PathBuf::from("a.txt"), None, OpenIntent::Open, window, cx);
     });
     await_open_file(&page, cx).await;
 
@@ -2731,7 +2910,7 @@ mod tests {
     cx.run_until_parked();
 
     page.update_in(cx, |page, window, cx| {
-      page.open_diff(PathBuf::from("a.txt"), None, window, cx);
+      page.open_diff(PathBuf::from("a.txt"), None, OpenIntent::Open, window, cx);
     });
     await_open_file(&page, cx).await;
     page.update(cx, |_, cx| cx.notify());
@@ -2780,7 +2959,13 @@ mod tests {
     cx.run_until_parked();
 
     page.update_in(cx, |page, window, cx| {
-      page.open_diff(PathBuf::from("README.md"), None, window, cx);
+      page.open_diff(
+        PathBuf::from("README.md"),
+        None,
+        OpenIntent::Open,
+        window,
+        cx,
+      );
     });
     await_open_file(&page, cx).await;
     await_editor_diff(&page, cx).await;
@@ -2939,7 +3124,13 @@ mod tests {
     cx.run_until_parked();
 
     page.update_in(cx, |page, window, cx| {
-      page.open_diff(PathBuf::from("README.md"), None, window, cx);
+      page.open_diff(
+        PathBuf::from("README.md"),
+        None,
+        OpenIntent::Open,
+        window,
+        cx,
+      );
     });
     await_open_file(&page, cx).await;
 
@@ -2960,7 +3151,13 @@ mod tests {
     assert!(cx.debug_bounds("session-page-show-chat").is_none());
 
     page.update_in(cx, |page, window, cx| {
-      page.open_diff(PathBuf::from("README.md"), None, window, cx);
+      page.open_diff(
+        PathBuf::from("README.md"),
+        None,
+        OpenIntent::Open,
+        window,
+        cx,
+      );
     });
     await_open_file(&page, cx).await;
     page.update_in(cx, |page, window, cx| page.hide_diff_chat(window, cx));
@@ -2996,7 +3193,13 @@ mod tests {
     cx.run_until_parked();
 
     page.update_in(cx, |page, window, cx| {
-      page.open_diff(PathBuf::from("README.md"), None, window, cx);
+      page.open_diff(
+        PathBuf::from("README.md"),
+        None,
+        OpenIntent::Open,
+        window,
+        cx,
+      );
     });
     await_open_file(&page, cx).await;
 
@@ -3068,7 +3271,13 @@ mod tests {
     cx.run_until_parked();
 
     page.update_in(cx, |page, window, cx| {
-      page.open_diff(PathBuf::from("README.md"), None, window, cx);
+      page.open_diff(
+        PathBuf::from("README.md"),
+        None,
+        OpenIntent::Open,
+        window,
+        cx,
+      );
     });
     await_open_file(&page, cx).await;
 
@@ -3248,7 +3457,7 @@ mod tests {
     cx.run_until_parked();
 
     page.update_in(cx, |page, window, cx| {
-      page.open_diff(PathBuf::from("a.txt"), None, window, cx);
+      page.open_diff(PathBuf::from("a.txt"), None, OpenIntent::Open, window, cx);
     });
     await_open_file(&page, cx).await;
     await_editor_diff(&page, cx).await;
@@ -3309,7 +3518,7 @@ mod tests {
     cx.run_until_parked();
 
     page.update_in(cx, |page, window, cx| {
-      page.open_diff(PathBuf::from("a.txt"), None, window, cx);
+      page.open_diff(PathBuf::from("a.txt"), None, OpenIntent::Open, window, cx);
     });
     await_open_file(&page, cx).await;
     await_editor_diff(&page, cx).await;

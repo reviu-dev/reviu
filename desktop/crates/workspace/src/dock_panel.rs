@@ -65,6 +65,7 @@ use crate::api::{
 use crate::auth_state::AuthStateStore;
 use crate::github_navigation::{github_pull_request_url, open_compare_target};
 use crate::github_shared::{pull_request_status_color, pull_request_status_label};
+use crate::open_intent::OpenIntent;
 use crate::pull_request_checks::{
   CheckRow, check_rows, check_state_sort_key, checks_summary_subtitle, checks_summary_title,
   singular_or_plural,
@@ -90,11 +91,13 @@ use ui::{
 pub enum DockPanelEvent {
   OpenFile {
     path: PathBuf,
+    intent: OpenIntent,
   },
   /// A file as it was in a commit, read-only.
   OpenCommitFile {
     commit_oid: String,
     path: PathBuf,
+    intent: OpenIntent,
   },
   /// A commit landed: whoever shows the branch state has to refresh it.
   Committed,
@@ -112,6 +115,7 @@ pub enum DockPanelEvent {
   OpenReviewComment {
     path: PathBuf,
     line: usize,
+    intent: OpenIntent,
   },
   DeleteReviewComment {
     id: u64,
@@ -125,6 +129,7 @@ pub enum DockPanelEvent {
     head_oid: String,
     path: PathBuf,
     line: Option<usize>,
+    intent: OpenIntent,
   },
   SendReview,
   DiscardReview,
@@ -474,8 +479,11 @@ impl DockPanel {
       &changes_list,
       window,
       |this, _list, event: &ChangesListEvent, _window, cx| match event {
-        ChangesListEvent::OpenFile { path } => {
-          cx.emit(DockPanelEvent::OpenFile { path: path.clone() });
+        ChangesListEvent::OpenFile { path, intent } => {
+          cx.emit(DockPanelEvent::OpenFile {
+            path: path.clone(),
+            intent: *intent,
+          });
         }
         ChangesListEvent::Changed => this.refresh(cx),
       },
@@ -499,10 +507,12 @@ impl DockPanel {
           section,
           path,
           line,
+          intent,
         } => match section {
           ReviewSection::Agent => cx.emit(DockPanelEvent::OpenReviewComment {
             path: path.clone(),
             line: *line,
+            intent: *intent,
           }),
           // A pull request comment is about the range, not about the working
           // tree, which may hold something else entirely on that line.
@@ -513,6 +523,7 @@ impl DockPanel {
                 head_oid: range.head.clone(),
                 path: path.clone(),
                 line: Some(*line),
+                intent: *intent,
               });
             }
           }
@@ -539,6 +550,7 @@ impl DockPanel {
           cx.emit(DockPanelEvent::OpenCommitFile {
             commit_oid: commit_oid.clone(),
             path: path.clone(),
+            intent: OpenIntent::Open,
           });
         }
       },
@@ -1726,7 +1738,10 @@ impl DockPanel {
       if !is_folder {
         let path = PathBuf::from(selected_id);
         cx.on_next_frame(window, move |_, _, cx| {
-          cx.emit(DockPanelEvent::OpenFile { path });
+          cx.emit(DockPanelEvent::OpenFile {
+            path,
+            intent: OpenIntent::Open,
+          });
         });
       }
     }
@@ -2422,6 +2437,7 @@ impl DockPanel {
               head_oid: head_oid.clone(),
               path: open_path.clone(),
               line: None,
+              intent: OpenIntent::Open,
             });
             cx.notify();
           }))
@@ -3386,6 +3402,7 @@ mod tests {
         section: ReviewSection::PullRequest,
         path: PathBuf::from("src/main.rs"),
         line: 12,
+        intent: OpenIntent::Open,
       });
     });
     cx.run_until_parked();
@@ -4050,7 +4067,10 @@ mod tests {
     let seen = opened.clone();
     cx.update(|_, cx| {
       cx.subscribe(&panel, move |_panel, event: &DockPanelEvent, _cx| {
-        if let DockPanelEvent::OpenCommitFile { commit_oid, path } = event {
+        if let DockPanelEvent::OpenCommitFile {
+          commit_oid, path, ..
+        } = event
+        {
           seen.borrow_mut().push((commit_oid.clone(), path.clone()));
         }
       })

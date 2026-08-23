@@ -24,6 +24,8 @@ use ui::{
   file_icon_path_for_path_with_theme, selectable_list_item,
 };
 
+use crate::open_intent::OpenIntent;
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum FileStageButtonAction {
   Stage,
@@ -141,6 +143,7 @@ pub(crate) fn stage_style(
 pub(crate) enum ChangesListEvent {
   OpenFile {
     path: PathBuf,
+    intent: OpenIntent,
   },
   /// A staging action landed: the worktree and the diff moved.
   Changed,
@@ -494,16 +497,20 @@ impl ChangesList {
     let list =
       cx.new(|cx| ListState::new(ChangesRowsDelegate::new(weak, split_sections), window, cx));
 
-    // Selecting with the keyboard or the mouse opens the file.
-    cx.subscribe(&list, |_, state, event: &ListEvent, cx| match event {
-      ListEvent::Select(ix) | ListEvent::Confirm(ix) => {
-        if let Some(entry) = state.read(cx).delegate().row_at(*ix) {
-          cx.emit(ChangesListEvent::OpenFile {
-            path: entry.path.clone(),
-          });
-        }
+    // Walking the list shows each file; a click or Enter hands the editor the
+    // keyboard.
+    cx.subscribe(&list, |_, state, event: &ListEvent, cx| {
+      let (ix, intent) = match event {
+        ListEvent::Select(ix) => (*ix, OpenIntent::Browse),
+        ListEvent::Confirm(ix) => (*ix, OpenIntent::Open),
+        _ => return,
+      };
+      if let Some(entry) = state.read(cx).delegate().row_at(ix) {
+        cx.emit(ChangesListEvent::OpenFile {
+          path: entry.path.clone(),
+          intent,
+        });
       }
-      ListEvent::Cancel => {}
     })
     .detach();
 
@@ -1009,7 +1016,7 @@ mod tests {
       let opened = opened.clone();
       cx.update(|_, cx| {
         cx.subscribe(&list, move |_, event: &ChangesListEvent, _| {
-          if let ChangesListEvent::OpenFile { path } = event {
+          if let ChangesListEvent::OpenFile { path, .. } = event {
             *opened.lock().unwrap() = Some(path.clone());
           }
         })
@@ -1062,7 +1069,7 @@ mod tests {
       let opened = opened.clone();
       cx.update(|_, cx| {
         cx.subscribe(&list, move |_, event: &ChangesListEvent, _| {
-          if let ChangesListEvent::OpenFile { path } = event {
+          if let ChangesListEvent::OpenFile { path, .. } = event {
             *opened.lock().unwrap() = Some(path.clone());
           }
         })
@@ -1087,7 +1094,7 @@ mod tests {
       let opened = opened.clone();
       cx.update(|_, cx| {
         cx.subscribe(&list, move |_, event: &ChangesListEvent, _| {
-          if let ChangesListEvent::OpenFile { path } = event {
+          if let ChangesListEvent::OpenFile { path, .. } = event {
             *opened.lock().unwrap() = Some(path.clone());
           }
         })
@@ -1255,7 +1262,7 @@ mod tests {
       let opened = opened.clone();
       cx.update(|_, cx| {
         cx.subscribe(&list, move |_, event: &ChangesListEvent, _| {
-          if let ChangesListEvent::OpenFile { path } = event {
+          if let ChangesListEvent::OpenFile { path, .. } = event {
             opened.lock().unwrap().push(path.clone());
           }
         })
@@ -1290,7 +1297,7 @@ mod tests {
       let opened = opened.clone();
       cx.update(|_, cx| {
         cx.subscribe(&list, move |_, event: &ChangesListEvent, _| {
-          if let ChangesListEvent::OpenFile { path } = event {
+          if let ChangesListEvent::OpenFile { path, .. } = event {
             opened.lock().unwrap().push(path.clone());
           }
         })

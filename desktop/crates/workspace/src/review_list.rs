@@ -5,8 +5,8 @@ use std::path::{Path, PathBuf};
 
 use gpui::{
   AnyElement, App, AppContext as _, Context, Entity, Focusable as _, InteractiveElement,
-  IntoElement, MouseButton, ParentElement, Render, StatefulInteractiveElement as _, Styled,
-  WeakEntity, Window, div, prelude::FluentBuilder as _, px,
+  IntoElement, KeyDownEvent, MouseButton, ParentElement, Render, Styled, WeakEntity, Window, div,
+  prelude::FluentBuilder as _, px,
 };
 use gpui_component::{
   ActiveTheme as _, Disableable as _, Icon, IconName, IndexPath, Sizable,
@@ -17,6 +17,8 @@ use gpui_component::{
   v_flex,
 };
 use ui::{SelectableRowStyle, UiIconName, selectable_list_item};
+
+use crate::open_intent::OpenIntent;
 
 use crate::agent_review::{
   LocalAgentReviewComment, LocalAgentReviewCommentState, agent_review_line_label,
@@ -92,6 +94,7 @@ pub(crate) enum ReviewListEvent {
     section: ReviewSection,
     path: PathBuf,
     line: usize,
+    intent: OpenIntent,
   },
   DeleteComment {
     section: ReviewSection,
@@ -302,11 +305,12 @@ impl ReviewList {
     let owner = cx.entity().downgrade();
     let list = cx.new(|cx| ListState::new(ReviewRowsDelegate::new(owner), window, cx));
 
-    // Walking the list with the keyboard opens what it lands on, as the Changes
-    // list does; a file row is a fold, so only Enter acts on it.
+    // Walking the list shows each comment; a click or Enter hands the editor the
+    // keyboard. On a file row there is nothing to read, so both fold it.
     cx.subscribe(&list, |this, state, event: &ListEvent, cx| {
-      let ix = match event {
-        ListEvent::Select(ix) | ListEvent::Confirm(ix) => *ix,
+      let (ix, intent) = match event {
+        ListEvent::Select(ix) => (*ix, OpenIntent::Browse),
+        ListEvent::Confirm(ix) => (*ix, OpenIntent::Open),
         _ => return,
       };
       let Some((section, row)) = state.read(cx).delegate().row_at(ix) else {
@@ -317,9 +321,10 @@ impl ReviewList {
           section,
           path: comment.path.clone(),
           line: comment.line,
+          intent,
         }),
         ReviewRow::FileHeader { path, .. } => {
-          if matches!(event, ListEvent::Confirm(_)) {
+          if intent.takes_focus() {
             this.toggle_file(section, path, cx);
           }
         }
@@ -382,6 +387,50 @@ impl ReviewList {
       delegate.show_section_headers = show_section_headers;
       cx.notify();
     });
+  }
+
+  /// Left folds the file the selection sits in, right unfolds it, whether the
+  /// row is the file or one of its comments. Same gesture as the trees.
+  fn on_key_down(&mut self, event: &KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) {
+    let keystroke = &event.keystroke;
+    if keystroke.modifiers.modified() {
+      return;
+    }
+    let collapse = match keystroke.key.as_str() {
+      "left" => true,
+      "right" => false,
+      _ => return,
+    };
+    if !self
+      .list
+      .read(cx)
+      .focus_handle(cx)
+      .contains_focused(window, cx)
+    {
+      return;
+    }
+    let Some(ix) = self.list.read(cx).delegate().selected_index else {
+      return;
+    };
+    let Some((section, row)) = self.list.read(cx).delegate().row_at(ix) else {
+      return;
+    };
+    let path = match row {
+      ReviewRow::FileHeader { path, .. } => path,
+      ReviewRow::Comment(comment) => comment.path.clone(),
+    };
+    let key = (section, path);
+    if self.collapsed_files.contains(&key) == collapse {
+      return;
+    }
+    if collapse {
+      self.collapsed_files.insert(key);
+    } else {
+      self.collapsed_files.remove(&key);
+    }
+    cx.stop_propagation();
+    self.sync_rows(cx);
+    cx.notify();
   }
 
   /// A tick or a count changed without moving a row: the list still has to
@@ -539,7 +588,6 @@ impl ReviewList {
       .collapsed_files
       .contains(&(section, path.to_path_buf()));
     let (dir, file) = split_path_label(path);
-    let toggle_path = path.to_path_buf();
     let sendable_ids = if section == ReviewSection::Agent {
       self.file_sendable_ids(path)
     } else {
@@ -561,9 +609,6 @@ impl ReviewList {
       .px_1()
       .py_1()
       .cursor_pointer()
-      .on_click(cx.listener(move |this, _, _, cx| {
-        this.toggle_file(section, toggle_path.clone(), cx);
-      }))
       .when(section == ReviewSection::Agent, |this| {
         this.child(
           div()
@@ -857,7 +902,11 @@ impl Render for ReviewList {
     // A single destination pins its title above the rows; two of them carry
     // their titles inside the list, where the rows separate them. Either way the
     // actions stay at the bottom of the panel, reachable without scrolling.
-    let mut panel = v_flex().size_full().min_h_0();
+    let mut panel = v_flex()
+      .id("review-list")
+      .size_full()
+      .min_h_0()
+      .on_key_down(cx.listener(Self::on_key_down));
     if let [section] = sections.as_slice() {
       panel = panel.child(self.render_section_header(*section, cx));
     }
@@ -1081,6 +1130,50 @@ mod tests {
       rows(&list, cx),
       4,
       "the folded file keeps its header and drops its comments"
+    );
+
+    // Left and right do the same, as they do in the trees.
+    cx.simulate_keystrokes("right");
+    cx.run_until_parked();
+    assert_eq!(rows(&list, cx), 6, "right unfolds the file");
+    cx.simulate_keystrokes("left");
+    cx.run_until_parked();
+    assert_eq!(rows(&list, cx), 4, "left folds it again");
+  }
+
+  #[gpui::test]
+  async fn walking_the_comments_keeps_the_keyboard_in_the_list(cx: &mut gpui::TestAppContext) {
+    let (list, cx) = add_review_list_window(cx);
+    list.update(cx, |list, cx| {
+      list.set_comments(ReviewSection::Agent, batch(), cx)
+    });
+    cx.run_until_parked();
+    list.update_in(cx, |list, window, cx| list.focus(window, cx));
+    cx.run_until_parked();
+
+    let opened = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+    let seen = opened.clone();
+    cx.update(|_, cx| {
+      cx.subscribe(&list, move |_, event: &ReviewListEvent, _| {
+        if let ReviewListEvent::OpenComment { intent, .. } = event {
+          seen.borrow_mut().push(*intent);
+        }
+      })
+      .detach();
+    });
+
+    // Down onto the first comment: the row shows, it is not chosen.
+    cx.simulate_keystrokes("down");
+    cx.simulate_keystrokes("down");
+    cx.run_until_parked();
+    assert_eq!(opened.borrow().as_slice(), &[OpenIntent::Browse]);
+
+    cx.simulate_keystrokes("enter");
+    cx.run_until_parked();
+    assert_eq!(
+      opened.borrow().as_slice(),
+      &[OpenIntent::Browse, OpenIntent::Open],
+      "Enter is what hands the editor the keyboard"
     );
   }
 

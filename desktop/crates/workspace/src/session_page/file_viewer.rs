@@ -17,6 +17,7 @@ impl SessionPage {
     &mut self,
     rel_path: PathBuf,
     reveal_line: Option<u32>,
+    intent: OpenIntent,
     window: &mut Window,
     cx: &mut Context<Self>,
   ) {
@@ -49,7 +50,7 @@ impl SessionPage {
       if let (Some(doc_line), Some(editor)) = (reveal_doc_line, self.editor.clone()) {
         editor.update(cx, |editor, cx| editor.reveal_source_line(doc_line, cx));
       }
-      self.focus_editor_on_next_frame(window, cx);
+      self.focus_editor_if_asked(intent, window, cx);
       cx.notify();
       return;
     }
@@ -92,7 +93,8 @@ impl SessionPage {
         this.sync_git_telemetry(cx);
         // Focus once loaded: the requester (file tree, list, search) may still hold
         // focus, and there was no editor to focus when the open was requested.
-        if this.center == CenterView::Diff {
+        // A browse leaves it where it is, or the arrow keys would land here.
+        if this.center == CenterView::Diff && intent.takes_focus() {
           let _ = cx.update_window(this.window_handle, |_, window, cx| {
             let focus_handle = editor.read(cx).focus_handle(cx);
             window.focus(&focus_handle, cx);
@@ -113,7 +115,7 @@ impl SessionPage {
       });
     });
     self.open_file_task = Some(task);
-    self.focus_editor_on_next_frame(window, cx);
+    self.focus_editor_if_asked(intent, window, cx);
     cx.notify();
   }
 
@@ -124,6 +126,7 @@ impl SessionPage {
     &mut self,
     commit_oid: String,
     rel_path: PathBuf,
+    intent: OpenIntent,
     window: &mut Window,
     cx: &mut Context<Self>,
   ) {
@@ -181,7 +184,7 @@ impl SessionPage {
       });
     });
     self.open_file_task = Some(task);
-    self.focus_editor_on_next_frame(window, cx);
+    self.focus_editor_if_asked(intent, window, cx);
     cx.notify();
   }
 
@@ -194,6 +197,7 @@ impl SessionPage {
     head_oid: String,
     rel_path: PathBuf,
     reveal_line: Option<u32>,
+    intent: OpenIntent,
     window: &mut Window,
     cx: &mut Context<Self>,
   ) {
@@ -216,7 +220,7 @@ impl SessionPage {
       if let Some(doc_line) = reveal_doc_line {
         editor.update(cx, |editor, cx| editor.reveal_source_line(doc_line, cx));
       }
-      self.focus_editor_on_next_frame(window, cx);
+      self.focus_editor_if_asked(intent, window, cx);
       cx.notify();
       return;
     }
@@ -275,7 +279,7 @@ impl SessionPage {
       });
     });
     self.open_file_task = Some(task);
-    self.focus_editor_on_next_frame(window, cx);
+    self.focus_editor_if_asked(intent, window, cx);
     cx.notify();
   }
 
@@ -628,6 +632,14 @@ impl SessionPage {
     cx.notify();
   }
 
+  /// The centre follows a browse, the keyboard does not: only a file the user
+  /// asked for takes the focus.
+  fn focus_editor_if_asked(&self, intent: OpenIntent, window: &mut Window, cx: &mut Context<Self>) {
+    if intent.takes_focus() {
+      self.focus_editor_on_next_frame(window, cx);
+    }
+  }
+
   pub(super) fn focus_editor_on_next_frame(&self, window: &mut Window, cx: &mut Context<Self>) {
     let view = cx.entity().downgrade();
     window.on_next_frame(move |window, cx| {
@@ -723,7 +735,13 @@ mod tests {
     );
 
     page.update_in(cx, |page, window, cx| {
-      page.open_diff(PathBuf::from("README.md"), None, window, cx);
+      page.open_diff(
+        PathBuf::from("README.md"),
+        None,
+        OpenIntent::Open,
+        window,
+        cx,
+      );
     });
     await_open_file(&page, cx).await;
     page.update(cx, |_, cx| cx.notify());
@@ -745,7 +763,13 @@ mod tests {
     commit_text_file(&repo.path, Path::new("other.md"), "one\n", "second file");
     std::fs::write(repo.path.join("other.md"), "two\n").expect("update other");
     page.update_in(cx, |page, window, cx| {
-      page.open_diff(PathBuf::from("other.md"), None, window, cx);
+      page.open_diff(
+        PathBuf::from("other.md"),
+        None,
+        OpenIntent::Open,
+        window,
+        cx,
+      );
     });
     await_open_file(&page, cx).await;
     page.update(cx, |_, cx| cx.notify());
@@ -776,7 +800,13 @@ mod tests {
     cx.run_until_parked();
 
     page.update_in(cx, |page, window, cx| {
-      page.open_diff(PathBuf::from("README.md"), None, window, cx);
+      page.open_diff(
+        PathBuf::from("README.md"),
+        None,
+        OpenIntent::Open,
+        window,
+        cx,
+      );
       assert_eq!(page.center, CenterView::Diff);
     });
     await_open_file(&page, cx).await;
@@ -840,7 +870,7 @@ mod tests {
 
     // Back to the working tree: the history row stops being the open one.
     page.update_in(cx, |page, window, cx| {
-      page.open_diff(PathBuf::from("a.txt"), None, window, cx);
+      page.open_diff(PathBuf::from("a.txt"), None, OpenIntent::Open, window, cx);
     });
     await_open_file(&page, cx).await;
 
@@ -913,7 +943,7 @@ mod tests {
     cx.run_until_parked();
 
     page.update_in(cx, |page, window, cx| {
-      page.open_diff(PathBuf::from("a.txt"), None, window, cx);
+      page.open_diff(PathBuf::from("a.txt"), None, OpenIntent::Open, window, cx);
     });
     await_open_file(&page, cx).await;
     await_editor_diff(&page, cx).await;
@@ -1003,7 +1033,7 @@ mod tests {
 
     // The file is open and clean when the merge starts.
     page.update_in(cx, |page, window, cx| {
-      page.open_diff(PathBuf::from("a.txt"), None, window, cx);
+      page.open_diff(PathBuf::from("a.txt"), None, OpenIntent::Open, window, cx);
     });
     await_open_file(&page, cx).await;
     await_editor_diff(&page, cx).await;
@@ -1057,7 +1087,13 @@ mod tests {
 
     // Split on the modified file.
     page.update_in(cx, |page, window, cx| {
-      page.open_diff(PathBuf::from("dirty.txt"), None, window, cx);
+      page.open_diff(
+        PathBuf::from("dirty.txt"),
+        None,
+        OpenIntent::Open,
+        window,
+        cx,
+      );
     });
     await_open_file(&page, cx).await;
     page.update(cx, |page, cx| page.toggle_diff_view(cx));
@@ -1075,7 +1111,13 @@ mod tests {
 
     // A clean file from the Files tab must land inline anyway.
     page.update_in(cx, |page, window, cx| {
-      page.open_diff(PathBuf::from("clean.txt"), None, window, cx);
+      page.open_diff(
+        PathBuf::from("clean.txt"),
+        None,
+        OpenIntent::Open,
+        window,
+        cx,
+      );
     });
     await_open_file(&page, cx).await;
     page.read_with(cx, |page, cx| {
@@ -1120,7 +1162,7 @@ mod tests {
     cx.run_until_parked();
 
     page.update_in(cx, |page, window, cx| {
-      page.open_diff(PathBuf::from("a.txt"), None, window, cx);
+      page.open_diff(PathBuf::from("a.txt"), None, OpenIntent::Open, window, cx);
     });
     await_open_file(&page, cx).await;
     page.update(cx, |page, cx| page.toggle_diff_view(cx));

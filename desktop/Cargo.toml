@@ -178,6 +178,13 @@ gpui = { git = "https://github.com/joris-gallot/zed", branch = "reviu/test-windo
 gpui_platform = { git = "https://github.com/joris-gallot/zed", branch = "reviu/test-window-raw-handle" }
 reqwest_client = { git = "https://github.com/joris-gallot/zed", branch = "reviu/test-window-raw-handle" }
 
+# TreeEvent only reported expansion, so a tree could not say whether the user
+# walked onto a row or chose it. The fork adds Selected and Confirmed.
+[patch."https://github.com/longbridge/gpui-component"]
+gpui-component = { git = "https://github.com/joris-gallot/gpui-component", branch = "reviu/tree-selection-events" }
+gpui-base = { git = "https://github.com/joris-gallot/gpui-component", branch = "reviu/tree-selection-events" }
+gpui-component-assets = { git = "https://github.com/joris-gallot/gpui-component", branch = "reviu/tree-selection-events" }
+
 # Strip GPL-3.0 deps (ztracing -> zlog) that gpui and sum_tree pull into the binary. See vendor/ztracing.
 [patch."https://github.com/joris-gallot/zed"]
 ztracing = { path = "vendor/ztracing" }

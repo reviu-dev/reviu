@@ -73,7 +73,7 @@ impl SessionPage {
       |this, _panel, event: &AgentChatPanelEvent, window, cx| match event {
         AgentChatPanelEvent::OpenPath { path, line } => {
           let rel_path = agent_path_to_repo_relative(path.clone(), this.selected_repo.as_deref());
-          this.open_diff(rel_path, *line, window, cx);
+          this.open_diff(rel_path, *line, OpenIntent::Open, window, cx);
         }
         AgentChatPanelEvent::TurnStarted => {
           this.create_turn_checkpoint(cx);
@@ -792,7 +792,13 @@ mod tests {
     cx.run_until_parked();
 
     page.update_in(cx, |page, window, cx| {
-      page.open_diff(PathBuf::from("README.md"), None, window, cx);
+      page.open_diff(
+        PathBuf::from("README.md"),
+        None,
+        OpenIntent::Open,
+        window,
+        cx,
+      );
     });
     await_open_file(&page, cx).await;
 
@@ -832,7 +838,13 @@ mod tests {
     cx.run_until_parked();
 
     page.update_in(cx, |page, window, cx| {
-      page.open_diff(PathBuf::from("README.md"), None, window, cx);
+      page.open_diff(
+        PathBuf::from("README.md"),
+        None,
+        OpenIntent::Open,
+        window,
+        cx,
+      );
     });
     await_open_file(&page, cx).await;
 
@@ -871,7 +883,13 @@ mod tests {
     cx.run_until_parked();
 
     page.update_in(cx, |page, window, cx| {
-      page.open_diff(PathBuf::from("README.md"), None, window, cx);
+      page.open_diff(
+        PathBuf::from("README.md"),
+        None,
+        OpenIntent::Open,
+        window,
+        cx,
+      );
     });
     await_open_file(&page, cx).await;
     await_editor_diff(&page, cx).await;
@@ -916,7 +934,13 @@ mod tests {
     cx.run_until_parked();
 
     page.update_in(cx, |page, window, cx| {
-      page.open_diff(PathBuf::from("README.md"), None, window, cx);
+      page.open_diff(
+        PathBuf::from("README.md"),
+        None,
+        OpenIntent::Open,
+        window,
+        cx,
+      );
     });
     await_open_file(&page, cx).await;
 
@@ -948,7 +972,13 @@ mod tests {
     cx.run_until_parked();
 
     page.update_in(cx, |page, window, cx| {
-      page.open_diff(PathBuf::from("README.md"), None, window, cx);
+      page.open_diff(
+        PathBuf::from("README.md"),
+        None,
+        OpenIntent::Open,
+        window,
+        cx,
+      );
     });
     await_open_file(&page, cx).await;
 
@@ -986,7 +1016,13 @@ mod tests {
     cx.run_until_parked();
 
     page.update_in(cx, |page, window, cx| {
-      page.open_diff(PathBuf::from("README.md"), None, window, cx);
+      page.open_diff(
+        PathBuf::from("README.md"),
+        None,
+        OpenIntent::Open,
+        window,
+        cx,
+      );
     });
     await_open_file(&page, cx).await;
     page.update_in(cx, |page, window, cx| {
@@ -1007,6 +1043,7 @@ mod tests {
         section: ReviewSection::Agent,
         path: PathBuf::from("README.md"),
         line: 0,
+        intent: OpenIntent::Open,
       });
     });
     cx.run_until_parked();
@@ -1046,7 +1083,13 @@ mod tests {
     cx.run_until_parked();
 
     page.update_in(cx, |page, window, cx| {
-      page.open_diff(PathBuf::from("README.md"), None, window, cx);
+      page.open_diff(
+        PathBuf::from("README.md"),
+        None,
+        OpenIntent::Open,
+        window,
+        cx,
+      );
     });
     await_open_file(&page, cx).await;
     page.update_in(cx, |page, window, cx| {
@@ -1088,7 +1131,13 @@ mod tests {
     cx.run_until_parked();
 
     page.update_in(cx, |page, window, cx| {
-      page.open_diff(PathBuf::from("README.md"), None, window, cx);
+      page.open_diff(
+        PathBuf::from("README.md"),
+        None,
+        OpenIntent::Open,
+        window,
+        cx,
+      );
     });
     await_open_file(&page, cx).await;
     await_editor_diff(&page, cx).await;
@@ -1139,7 +1188,13 @@ mod tests {
     cx.run_until_parked();
 
     page.update_in(cx, |page, window, cx| {
-      page.open_diff(PathBuf::from("README.md"), None, window, cx);
+      page.open_diff(
+        PathBuf::from("README.md"),
+        None,
+        OpenIntent::Open,
+        window,
+        cx,
+      );
     });
     await_open_file(&page, cx).await;
 
@@ -1229,7 +1284,13 @@ mod tests {
     cx.run_until_parked();
 
     page.update_in(cx, |page, window, cx| {
-      page.open_diff(PathBuf::from("README.md"), None, window, cx);
+      page.open_diff(
+        PathBuf::from("README.md"),
+        None,
+        OpenIntent::Open,
+        window,
+        cx,
+      );
     });
     await_open_file(&page, cx).await;
     await_editor_diff(&page, cx).await;
@@ -1348,7 +1409,13 @@ mod tests {
     cx.run_until_parked();
 
     page.update_in(cx, |page, window, cx| {
-      page.open_diff(PathBuf::from("README.md"), None, window, cx);
+      page.open_diff(
+        PathBuf::from("README.md"),
+        None,
+        OpenIntent::Open,
+        window,
+        cx,
+      );
     });
     await_open_file(&page, cx).await;
 

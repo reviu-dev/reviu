@@ -275,7 +275,7 @@ impl SessionPage {
           this.dock_panel.update(cx, |panel, cx| panel.refresh(cx));
           this.refresh_branch(cx);
           if let Some(path) = conflicted_path {
-            this.open_diff(path, None, window, cx);
+            this.open_diff(path, None, OpenIntent::Open, window, cx);
           }
           cx.notify();
         });
@@ -436,7 +436,7 @@ impl SessionPage {
                       panel.set_commit_message(&message, window, cx)
                     });
                   }
-                  this.open_diff(path, None, window, cx);
+                  this.open_diff(path, None, OpenIntent::Open, window, cx);
                 }
               }
               if let Some(event) = analytics_event {
@@ -928,7 +928,7 @@ mod tests {
     });
 
     page.update_in(cx, |page, window, cx| {
-      page.open_diff(PathBuf::from("a.txt"), None, window, cx);
+      page.open_diff(PathBuf::from("a.txt"), None, OpenIntent::Open, window, cx);
     });
     await_open_file(&page, cx).await;
 

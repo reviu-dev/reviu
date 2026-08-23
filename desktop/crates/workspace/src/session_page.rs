@@ -4,6 +4,7 @@ use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::sync::Arc;
+use std::time::Duration;
 
 use agent_chat_panel::{AgentChatPanel, AgentChatPanelEvent};
 use editor::{
@@ -38,6 +39,7 @@ use crate::file_view::{
 };
 use crate::inbox::Inbox;
 use crate::navigation::NavigationHistory;
+use crate::open_intent::OpenIntent;
 use crate::review_destination::{AgentReviewHandlers, ReviewDestination, configure_review};
 use crate::session_list::{SessionList, SessionListEvent};
 use crate::session_page::file_viewer::OpenedSnapshot;
@@ -78,6 +80,10 @@ use ui::{
   CommandPaletteRepository, ConfirmDialog, SearchFileEntry, SearchFileHandler, StatusThemeExt as _,
   UiIconName, WindowExt as _,
 };
+
+/// How long a browse waits before it loads. Long enough to cross a list without
+/// reading every file, short enough not to feel late when you stop.
+pub(crate) const BROWSE_DEBOUNCE: Duration = Duration::from_millis(100);
 
 const DIFF_VIEW_TOGGLE_DEBUG_SELECTOR: &str = "session-diff-view-toggle";
 const PREVIEW_TOGGLE_DEBUG_SELECTOR: &str = "session-preview-toggle";
@@ -219,6 +225,7 @@ pub struct SessionPage {
   _pro_teaser_task: Option<Task<()>>,
   _repo_command_task: Option<Task<()>>,
   _pull_request_link_task: Option<Task<()>>,
+  _browse_task: Option<Task<()>>,
   _poll_task: Option<Task<()>>,
 }
 
@@ -273,11 +280,27 @@ impl SessionPage {
       &dock_panel,
       window,
       |this, _panel, event: &DockPanelEvent, window, cx| match event {
-        DockPanelEvent::OpenFile { path } => {
-          this.open_diff(path.clone(), None, window, cx);
+        DockPanelEvent::OpenFile { path, intent } => {
+          let (path, intent) = (path.clone(), *intent);
+          this.open_for_intent(
+            intent,
+            move |this, window, cx| this.open_diff(path, None, intent, window, cx),
+            window,
+            cx,
+          );
         }
-        DockPanelEvent::OpenCommitFile { commit_oid, path } => {
-          this.open_commit_file(commit_oid.clone(), path.clone(), window, cx);
+        DockPanelEvent::OpenCommitFile {
+          commit_oid,
+          path,
+          intent,
+        } => {
+          let (commit_oid, path, intent) = (commit_oid.clone(), path.clone(), *intent);
+          this.open_for_intent(
+            intent,
+            move |this, window, cx| this.open_commit_file(commit_oid, path, intent, window, cx),
+            window,
+            cx,
+          );
         }
         DockPanelEvent::Committed => {
           this.refresh_branch(cx);
@@ -305,8 +328,14 @@ impl SessionPage {
         DockPanelEvent::ToggleZoom => {
           this.toggle_dock_zoom(cx);
         }
-        DockPanelEvent::OpenReviewComment { path, line } => {
-          this.open_diff(path.clone(), Some(*line as u32), window, cx);
+        DockPanelEvent::OpenReviewComment { path, line, intent } => {
+          let (path, line, intent) = (path.clone(), *line as u32, *intent);
+          this.open_for_intent(
+            intent,
+            move |this, window, cx| this.open_diff(path, Some(line), intent, window, cx),
+            window,
+            cx,
+          );
         }
         DockPanelEvent::DeleteReviewComment { id } => {
           this.delete_agent_review_comment(*id, cx);
@@ -316,12 +345,16 @@ impl SessionPage {
           head_oid,
           path,
           line,
+          intent,
         } => {
-          this.open_pull_request_file(
-            base_oid.clone(),
-            head_oid.clone(),
-            path.clone(),
-            line.map(|line| line as u32),
+          let (base_oid, head_oid, path, intent) =
+            (base_oid.clone(), head_oid.clone(), path.clone(), *intent);
+          let line = line.map(|line| line as u32);
+          this.open_for_intent(
+            intent,
+            move |this, window, cx| {
+              this.open_pull_request_file(base_oid, head_oid, path, line, intent, window, cx)
+            },
             window,
             cx,
           );
@@ -399,6 +432,7 @@ impl SessionPage {
       _pro_teaser_task: None,
       _repo_command_task: None,
       _pull_request_link_task: None,
+      _browse_task: None,
       _poll_task: None,
     };
     SessionPageHandle::register(cx);
@@ -662,6 +696,30 @@ impl SessionPage {
     self.open_dock_tab(DockPanelTab::PullRequest, window, cx);
   }
 
+  /// Browsing waits: holding an arrow down must load the file it stops on, not
+  /// every file it crosses. Choosing one never waits, and drops what was queued.
+  fn open_for_intent(
+    &mut self,
+    intent: OpenIntent,
+    open: impl FnOnce(&mut Self, &mut Window, &mut Context<Self>) + 'static,
+    window: &mut Window,
+    cx: &mut Context<Self>,
+  ) {
+    self._browse_task = None;
+    if intent.takes_focus() {
+      open(self, window, cx);
+      return;
+    }
+
+    let window_handle = self.window_handle;
+    self._browse_task = Some(cx.spawn(async move |this, cx| {
+      cx.background_executor().timer(BROWSE_DEBOUNCE).await;
+      let _ = cx.update_window(window_handle, |_, window, cx| {
+        let _ = this.update(cx, |this, cx| open(this, window, cx));
+      });
+    }));
+  }
+
   pub(crate) fn window_handle(&self) -> AnyWindowHandle {
     self.window_handle
   }
@@ -882,7 +940,7 @@ impl SessionPage {
     let view = cx.entity();
     let handler: SearchFileHandler = Arc::new(move |path, window, cx| {
       view.update(cx, |view, cx| {
-        view.open_diff(path, None, window, cx);
+        view.open_diff(path, None, OpenIntent::Open, window, cx);
       });
       Ok(())
     });

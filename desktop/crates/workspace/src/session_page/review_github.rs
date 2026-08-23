@@ -206,7 +206,15 @@ mod tests {
     let (page, cx) = add_session_page_window(repo.path.clone(), cx);
     cx.run_until_parked();
     page.update_in(cx, |page, window, cx| {
-      page.open_pull_request_file(base, head, PathBuf::from("a.txt"), None, window, cx);
+      page.open_pull_request_file(
+        base,
+        head,
+        PathBuf::from("a.txt"),
+        None,
+        OpenIntent::Open,
+        window,
+        cx,
+      );
     });
     await_open_file(&page, cx).await;
     (repo, page, cx)
