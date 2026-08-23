@@ -1463,9 +1463,9 @@ impl CommandPaletteCommand {
       | CommandPaletteCommandId::DropStash
       | CommandPaletteCommandId::PopStash => CommandPaletteGroup::Stash,
 
-      CommandPaletteCommandId::CreatePullRequest
-      | CommandPaletteCommandId::OpenPullRequest
-      | CommandPaletteCommandId::OpenPullRequest => CommandPaletteGroup::PullRequest,
+      CommandPaletteCommandId::CreatePullRequest | CommandPaletteCommandId::OpenPullRequest => {
+        CommandPaletteGroup::PullRequest
+      }
 
       CommandPaletteCommandId::SwitchRepository
       | CommandPaletteCommandId::ForgetRepository
