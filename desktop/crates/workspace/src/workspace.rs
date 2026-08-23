@@ -80,34 +80,10 @@ fn user_menu_page_for_workspace_page(page: WorkspacePage) -> UserMenuPage {
   }
 }
 
-fn refresh_label_for_workspace_page(page: WorkspacePage) -> Option<&'static str> {
-  match page {
-    WorkspacePage::Session => None,
-    WorkspacePage::Billing
-    | WorkspacePage::GitConfig
-    | WorkspacePage::Settings
-    | WorkspacePage::About => None,
-  }
-}
-
 /// The shell connects its agent when the workspace routes to it, never while
 /// painting: entering the page is the only signal.
 fn should_activate_session_page(previous: Option<WorkspacePage>, next: WorkspacePage) -> bool {
   next == WorkspacePage::Session && previous != Some(WorkspacePage::Session)
-}
-
-fn refresh_in_progress_for_workspace_page(_page: WorkspacePage, _cx: &App) -> bool {
-  match _page {
-    WorkspacePage::Session => false,
-    WorkspacePage::Billing
-    | WorkspacePage::GitConfig
-    | WorkspacePage::Settings
-    | WorkspacePage::About => false,
-  }
-}
-
-fn page_supports_refresh(page: WorkspacePage) -> bool {
-  refresh_label_for_workspace_page(page).is_some()
 }
 
 fn should_run_scheduled_update_check(state: Option<AppUpdateState>) -> bool {
@@ -252,15 +228,6 @@ impl WorkspaceView {
       cx,
       window,
       ShortcutId::ShowFileSearch,
-      shortcuts::key_context_for_pathname(pathname),
-    ))
-  }
-
-  fn refresh_kbd(window: &Window, pathname: &str, cx: &App) -> Kbd {
-    Kbd::new(shortcuts::resolved_shortcut_keystroke_in(
-      cx,
-      window,
-      ShortcutId::RefreshCurrentPage,
       shortcuts::key_context_for_pathname(pathname),
     ))
   }
@@ -684,26 +651,6 @@ impl WorkspaceView {
     });
   }
 
-  fn refresh_current_page_action(
-    &mut self,
-    _: &crate::RefreshCurrentPage,
-    _window: &mut Window,
-    cx: &mut Context<Self>,
-  ) {
-    let page = WorkspaceRoute::global(cx).page;
-    if refresh_in_progress_for_workspace_page(page, cx) {
-      return;
-    }
-
-    match page {
-      WorkspacePage::Session
-      | WorkspacePage::Billing
-      | WorkspacePage::GitConfig
-      | WorkspacePage::Settings
-      | WorkspacePage::About => {}
-    }
-  }
-
   fn navigate_back_action(
     &mut self,
     _: &crate::NavigateBack,
@@ -889,25 +836,6 @@ impl WorkspaceView {
       });
 
     let show_file_search_button = page_has_file_search(pathname);
-    let refresh_button = page_supports_refresh(page).then(|| {
-      let label = refresh_label_for_workspace_page(page)
-        .expect("refresh label should exist for refreshable workspace pages");
-      let refresh_in_progress = refresh_in_progress_for_workspace_page(page, cx);
-      Button::new("workspace-global-refresh")
-        .icon(UiIconName::RefreshCw)
-        .loading_icon(Icon::new(UiIconName::RefreshCw))
-        .loading(refresh_in_progress)
-        .ghost()
-        .compact()
-        .small()
-        .disabled(refresh_in_progress)
-        .tooltip(label)
-        .child(Self::refresh_kbd(window, pathname, cx).ml_1())
-        .on_click(|_, window, cx| {
-          window.dispatch_action(Box::new(crate::RefreshCurrentPage), cx);
-        })
-    });
-
     let file_search_button = Button::new("workspace-global-file-search")
       .label("File search")
       .ghost()
@@ -971,8 +899,7 @@ impl WorkspaceView {
       .gap_3()
       .when_some(AppProfile::current().header_tag_label(), |this, label| {
         this.child(Tag::secondary().small().rounded_full().child(label))
-      })
-      .when_some(refresh_button, |this, button| this.child(button));
+      });
 
     if use_client_decorations {
       let drag_area = div()
@@ -1099,7 +1026,6 @@ impl Render for WorkspaceView {
         NavigationHistory::navigate("/session", cx);
       }))
       .on_action(cx.listener(Self::navigate_back_action))
-      .on_action(cx.listener(Self::refresh_current_page_action))
       .on_action(cx.listener(|_, _: &crate::OpenBillingPage, _window, cx| {
         if AuthStateStore::should_show_billing_entry(cx) {
           NavigationHistory::navigate("/billing", cx);
@@ -1124,7 +1050,7 @@ impl Render for WorkspaceView {
 #[cfg(test)]
 mod tests {
   use super::{
-    WorkspacePage, WorkspaceView, build_app_menus, page_has_file_search, page_supports_refresh,
+    WorkspacePage, WorkspaceView, build_app_menus, page_has_file_search,
     should_activate_session_page, should_run_scheduled_update_check,
     user_menu_page_for_workspace_page, workspace_page_from_pathname,
   };
@@ -1133,7 +1059,7 @@ mod tests {
     ready_update_button_label,
   };
   use crate::shortcuts::{self, ShortcutId};
-  use gpui::{Keystroke, Menu, MenuItem};
+  use gpui::{Menu, MenuItem};
   use std::path::PathBuf;
   use ui::UserMenuPage;
 
@@ -1305,16 +1231,6 @@ mod tests {
   }
 
   #[test]
-  fn workspace_refresh_support_matches_github_surfaces() {
-    // Nothing refreshes a whole page any more: the shell refreshes its panels.
-    assert!(!page_supports_refresh(WorkspacePage::Session));
-    assert!(!page_supports_refresh(WorkspacePage::Billing));
-    assert!(!page_supports_refresh(WorkspacePage::GitConfig));
-    assert!(!page_supports_refresh(WorkspacePage::Settings));
-    assert!(!page_supports_refresh(WorkspacePage::About));
-  }
-
-  #[test]
   fn the_shell_activates_when_the_workspace_routes_to_it() {
     // Startup on the shell, and every navigation back to it.
     assert!(should_activate_session_page(None, WorkspacePage::Session));
@@ -1333,14 +1249,6 @@ mod tests {
       Some(WorkspacePage::Session),
       WorkspacePage::Session
     ));
-  }
-
-  #[test]
-  fn refresh_shortcut_matches_default_cmd_r() {
-    assert_eq!(
-      shortcuts::shortcut_keystroke(ShortcutId::RefreshCurrentPage),
-      Keystroke::parse("cmd-r").expect("cmd-r keystroke")
-    );
   }
 
   #[test]

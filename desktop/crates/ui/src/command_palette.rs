@@ -235,7 +235,6 @@ pub enum CommandPaletteAction {
     repo: String,
     sha: String,
   },
-  SwitchToPrBranch,
   CopyPrBranch,
   ToggleUnchangedFiles,
   OpenPrMergePopover,
@@ -806,7 +805,6 @@ pub enum CommandPaletteCommandId {
   OpenRepository,
   OpenSessionPage,
   OpenGithubFromUrl,
-  SwitchToPrBranch,
   CopyPrBranch,
   ToggleUnchangedFiles,
   OpenPrMergePopover,
@@ -866,7 +864,6 @@ impl CommandPaletteCommandId {
       Self::OpenRepository => "open_repository",
       Self::OpenSessionPage => "open_session_page",
       Self::OpenGithubFromUrl => "open_github_from_url",
-      Self::SwitchToPrBranch => "switch_to_pr_branch",
       Self::CopyPrBranch => "copy_pr_branch",
       Self::ToggleUnchangedFiles => "toggle_unchanged_files",
       Self::OpenPrMergePopover => "open_pr_merge_popover",
@@ -924,7 +921,6 @@ impl CommandPaletteCommandId {
       "open_repository" => Some(Self::OpenRepository),
       "open_session_page" => Some(Self::OpenSessionPage),
       "open_github_from_url" => Some(Self::OpenGithubFromUrl),
-      "switch_to_pr_branch" => Some(Self::SwitchToPrBranch),
       "copy_pr_branch" => Some(Self::CopyPrBranch),
       "toggle_unchanged_files" => Some(Self::ToggleUnchangedFiles),
       "open_pr_merge_popover" => Some(Self::OpenPrMergePopover),
@@ -1368,14 +1364,6 @@ impl CommandPaletteCommand {
     )
   }
 
-  pub fn switch_to_pr_branch() -> Self {
-    Self::new(
-      CommandPaletteCommandId::SwitchToPrBranch,
-      "Switch to PR branch",
-      "Switch the local repository to the current pull request branch",
-    )
-  }
-
   pub fn copy_pr_branch() -> Self {
     Self::new(
       CommandPaletteCommandId::CopyPrBranch,
@@ -1553,7 +1541,6 @@ impl CommandPaletteCommand {
 
       CommandPaletteCommandId::CreatePullRequest
       | CommandPaletteCommandId::OpenPullRequest
-      | CommandPaletteCommandId::SwitchToPrBranch
       | CommandPaletteCommandId::CopyPrBranch
       | CommandPaletteCommandId::ToggleUnchangedFiles
       | CommandPaletteCommandId::OpenPrMergePopover
@@ -1626,7 +1613,6 @@ impl CommandPaletteCommand {
       }
       CommandPaletteCommandId::OpenSessionPage => Icon::new(UiIconName::MessageCircle),
       CommandPaletteCommandId::OpenGithubFromUrl => Icon::new(IconName::Github),
-      CommandPaletteCommandId::SwitchToPrBranch => Icon::new(UiIconName::GitBranch),
       CommandPaletteCommandId::CopyPrBranch => Icon::new(IconName::Copy),
       CommandPaletteCommandId::ToggleUnchangedFiles => Icon::new(UiIconName::ScanEye),
       CommandPaletteCommandId::OpenPrMergePopover => Icon::new(UiIconName::GitMerge),
@@ -2763,9 +2749,6 @@ impl CommandPalette {
           self.set_screen(CommandPaletteScreen::OpenGithubFromUrl, cx, window);
         }
       }
-      CommandPaletteCommandId::SwitchToPrBranch => {
-        self.trigger_action(command, CommandPaletteAction::SwitchToPrBranch, window, cx);
-      }
       CommandPaletteCommandId::CopyPrBranch => {
         self.trigger_action(command, CommandPaletteAction::CopyPrBranch, window, cx);
       }
@@ -3448,14 +3431,6 @@ mod tests {
   }
 
   #[test]
-  fn switch_to_pr_branch_command_is_available_with_expected_metadata() {
-    let command = CommandPaletteCommand::switch_to_pr_branch();
-    assert_eq!(command.id, CommandPaletteCommandId::SwitchToPrBranch);
-    assert_eq!(command.name.as_ref(), "Switch to PR branch");
-    assert!(command.matches("current pull request branch"));
-  }
-
-  #[test]
   fn create_pull_request_command_is_available_with_expected_metadata() {
     let command = CommandPaletteCommand::create_pull_request();
     assert_eq!(command.id, CommandPaletteCommandId::CreatePullRequest);
@@ -3712,7 +3687,6 @@ mod tests {
       CommandPaletteCommandId::OpenRepository,
       CommandPaletteCommandId::OpenSessionPage,
       CommandPaletteCommandId::OpenGithubFromUrl,
-      CommandPaletteCommandId::SwitchToPrBranch,
       CommandPaletteCommandId::CopyPrBranch,
       CommandPaletteCommandId::ToggleUnchangedFiles,
       CommandPaletteCommandId::OpenGitConfigPage,

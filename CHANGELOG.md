@@ -4,6 +4,14 @@ All notable changes to Reviu are documented here.
 
 ## 1.0.0
 
+### Every Shortcut In Settings Does Something
+
+The keyboard shortcuts page listed ten keys that had stopped working when the pull request page went away: its two tabs, its commit-by-commit navigation, its jump from one review comment to the next, its file tree, and Switch to PR branch. They are gone from the list, and Switch to PR branch leaves the command palette with them. Checking out the branch of a pull request comes back later, from the link rather than from a key.
+
+`cmd-r` goes too. Nothing in the workspace refreshed a whole page any more, so the key did nothing wherever you pressed it, and the refresh button it belonged to never appeared in the top bar.
+
+A shortcut you had rebound to one of those keys is simply ignored, and the key is free again for whatever you want to put on it.
+
 ### One Place To Review, Instead Of Two
 
 Reviewing a pull request used to mean leaving the workspace for a page of its own, with its own file tree, its own diff and its own comment cards. That page is gone. Everything it did happens in the workspace now: the branch's pull request in the right panel, its files opened in the centre, its comments in the diff and in the Review tab, its checks, its reviewers and its merge button in one collapsible block.
