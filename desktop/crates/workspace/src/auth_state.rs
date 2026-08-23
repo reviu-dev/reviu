@@ -83,6 +83,16 @@ pub(crate) fn signed_in_without_subscription() -> AuthState {
   }))
 }
 
+/// Signed in with Pro: the state every GitHub surface needs.
+#[cfg(test)]
+pub(crate) fn signed_in_with_github_access() -> AuthState {
+  let AuthState::Authenticated(mut user) = signed_in_without_subscription() else {
+    unreachable!("the fixture is authenticated");
+  };
+  user.role = crate::api::UserRole::Pro;
+  AuthState::Authenticated(user)
+}
+
 impl Default for AuthStateStore {
   fn default() -> Self {
     Self {

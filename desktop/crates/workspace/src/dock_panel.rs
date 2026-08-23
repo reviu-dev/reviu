@@ -4,6 +4,7 @@
 use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::time::Instant;
 
 use editor::ReviewCommentCreateRequest;
 
@@ -32,6 +33,7 @@ use crate::file_tree::{
 use crate::file_view::{file_dir_label, file_name_label, render_file_name_with_status};
 use crate::history_list::{HistoryList, HistoryListEvent, history_change_kind_to_repo_status};
 use crate::pro_promise::{ProPromiseSurface, render_pro_promise};
+use crate::pull_request_refresh::{PullRequestRefresh, should_read_pull_request};
 use crate::pull_request_review_comments::{
   ReviewCommentWrite, pending_review_comment_node_id, pending_review_id, pending_review_rows,
   review_comment_write_plan,
@@ -473,6 +475,18 @@ pub(crate) enum BranchPrState {
   Found(GithubBranchContext, Box<GithubPullRequest>),
 }
 
+/// Which pull request a state is about, if any.
+fn pull_request_identity(state: &BranchPrState) -> Option<(String, String, u64)> {
+  match state {
+    BranchPrState::Found(context, pull_request) => Some((
+      context.owner.clone(),
+      context.repo.clone(),
+      pull_request.number,
+    )),
+    _ => None,
+  }
+}
+
 fn branch_pr_state_for_lookup(
   remote: Option<git::GithubRemoteRepo>,
   branch: Option<String>,
@@ -530,6 +544,8 @@ pub struct DockPanel {
   focus_terminal_when_rendered: bool,
   pr_files_loading: bool,
   pr_files_error: Option<SharedString>,
+  /// When GitHub was last read for this branch's pull request.
+  pr_fetched_at: Option<Instant>,
   pr_selected_file: Option<PathBuf>,
   pr_checks: Option<GithubPullRequestChecksSummary>,
   /// What the viewer wrote on this pull request and has not submitted yet.
@@ -757,6 +773,7 @@ impl DockPanel {
       focus_terminal_when_rendered: false,
       pr_files_loading: false,
       pr_files_error: None,
+      pr_fetched_at: None,
       pr_selected_file: None,
       pr_checks: None,
       pr_review_comments: Vec::new(),
@@ -826,8 +843,17 @@ impl DockPanel {
   }
 
   pub fn refresh(&mut self, cx: &mut Context<Self>) {
+    self.refresh_all(PullRequestRefresh::IfStale, cx);
+  }
+
+  /// The refresh button: being asked is reason enough to read GitHub again.
+  pub(crate) fn refresh_requested(&mut self, cx: &mut Context<Self>) {
+    self.refresh_all(PullRequestRefresh::Now, cx);
+  }
+
+  fn refresh_all(&mut self, refresh: PullRequestRefresh, cx: &mut Context<Self>) {
     self.refresh_status(cx);
-    self.refresh_branch_pull_request(cx);
+    self.refresh_branch_pull_request(refresh, cx);
     if self.files_loaded {
       self.load_worktree_files(cx);
     }
@@ -886,20 +912,31 @@ impl DockPanel {
   }
 
   pub(crate) fn refresh_branch_pull_request_state(&mut self, cx: &mut Context<Self>) {
-    self.refresh_branch_pull_request(cx);
+    self.refresh_branch_pull_request(PullRequestRefresh::Now, cx);
   }
 
-  fn refresh_branch_pull_request(&mut self, cx: &mut Context<Self>) {
+  fn refresh_branch_pull_request(&mut self, refresh: PullRequestRefresh, cx: &mut Context<Self>) {
     let Some(repo_root) = self.repo_root.clone() else {
       return;
     };
     if !AuthStateStore::has_github_access(cx) {
+      self.pr_fetched_at = None;
       self.set_branch_pr(BranchPrState::NoAccess, cx);
       cx.notify();
       return;
     }
+    if !should_read_pull_request(refresh, self.pr_fetched_at, cx.background_executor().now()) {
+      return;
+    }
 
-    self.set_branch_pr(BranchPrState::Loading, cx);
+    // Rereading the same pull request must not blank the panel: what is on
+    // screen stays until the answer replaces it.
+    if !matches!(
+      self.branch_pr,
+      BranchPrState::Found(_, _) | BranchPrState::Missing(_)
+    ) {
+      self.set_branch_pr(BranchPrState::Loading, cx);
+    }
     let api = WorkspaceApi::global(cx).api.clone();
     let task = cx.spawn(async move |this, cx| {
       let state = cx
@@ -917,17 +954,26 @@ impl DockPanel {
         .await;
 
       let _ = this.update(cx, |this, cx| {
-        let found_pull_request = matches!(state, BranchPrState::Found(_, _));
-        this.set_branch_pr(state, cx);
-        this.reset_pull_request_details(cx);
-        if found_pull_request {
-          this.load_pull_request_range(cx);
-          this.load_pull_request_checks(cx);
-        }
-        cx.notify();
+        this.pr_fetched_at = Some(cx.background_executor().now());
+        this.apply_branch_pull_request(state, cx);
       });
     });
     self._pr_task = Some(task);
+  }
+
+  /// What the lookup answered. Another pull request: the details of the last one
+  /// answer for nothing here. The same one keeps its own until the reread lands.
+  fn apply_branch_pull_request(&mut self, state: BranchPrState, cx: &mut Context<Self>) {
+    let found_pull_request = matches!(state, BranchPrState::Found(_, _));
+    if pull_request_identity(&state) != pull_request_identity(&self.branch_pr) {
+      self.reset_pull_request_details(cx);
+    }
+    self.set_branch_pr(state, cx);
+    if found_pull_request {
+      self.load_pull_request_range(cx);
+      self.load_pull_request_checks(cx);
+    }
+    cx.notify();
   }
 
   /// The shas a pull request spans, and what it changes between them.
@@ -944,7 +990,7 @@ impl DockPanel {
     let sentry_owner = owner.clone();
     let sentry_repo = repo.clone();
 
-    self.pr_files_loading = true;
+    self.pr_files_loading = self.pr_files.is_empty();
     self.pr_files_error = None;
     let task = cx.spawn(async move |this, cx| {
       let loaded = cx
@@ -1000,6 +1046,8 @@ impl DockPanel {
             );
           }
           Err(error) => {
+            // A read that failed is not a read: the next open tries again.
+            this.pr_fetched_at = None;
             this.pr_files_error = Some(format!("{error}").into());
           }
         }
@@ -1144,7 +1192,9 @@ impl DockPanel {
     let panel = cx.entity().downgrade();
     let on_submitted: crate::review_submit_dialog::ReviewSubmittedHandler =
       std::rc::Rc::new(move |cx| {
-        let _ = panel.update(cx, |panel, cx| panel.refresh_branch_pull_request(cx));
+        let _ = panel.update(cx, |panel, cx| {
+          panel.refresh_branch_pull_request(PullRequestRefresh::Now, cx)
+        });
       });
     let window_handle = self.window_handle;
 
@@ -1471,14 +1521,7 @@ impl DockPanel {
   /// The one place the branch's pull request changes, so a link from outside
   /// always knows what this panel is showing.
   fn set_branch_pr(&mut self, state: BranchPrState, cx: &mut Context<Self>) {
-    let identity = match &state {
-      BranchPrState::Found(context, pull_request) => Some((
-        context.owner.clone(),
-        context.repo.clone(),
-        pull_request.number,
-      )),
-      _ => None,
-    };
+    let identity = pull_request_identity(&state);
     self.branch_pr = state;
     crate::pull_request_surface::PullRequestSurfaceHandle::publish(identity, cx);
   }
@@ -1829,7 +1872,9 @@ impl DockPanel {
     if self.active_tab != target {
       self.active_tab = target;
       match target {
-        DockPanelTab::PullRequest => self.refresh_branch_pull_request(cx),
+        DockPanelTab::PullRequest => {
+          self.refresh_branch_pull_request(PullRequestRefresh::IfStale, cx)
+        }
         DockPanelTab::Terminal => self.ensure_terminal(cx),
         DockPanelTab::History => self.refresh_history(cx),
         DockPanelTab::Changes | DockPanelTab::Files | DockPanelTab::Review => {}
@@ -2054,7 +2099,7 @@ impl DockPanel {
     let panel = cx.entity().downgrade();
     Rc::new(move |_context, _pull_request, cx| {
       let _ = panel.update(cx, |panel, cx| {
-        panel.refresh_branch_pull_request(cx);
+        panel.refresh_branch_pull_request(PullRequestRefresh::Now, cx);
       });
     })
   }
@@ -2586,7 +2631,7 @@ impl DockPanel {
               window.push_notification(Notification::info(format!("Merged #{number}")), cx);
             });
             // The branch is behind its own reality now: everything reloads.
-            this.refresh_branch_pull_request(cx);
+            this.refresh_branch_pull_request(PullRequestRefresh::Now, cx);
           }
           Err(error) => {
             let _ = cx.update_window(window_handle, |_, window, cx| {
@@ -2731,7 +2776,7 @@ impl Render for DockPanel {
                 .compact()
                 .small()
                 .tooltip("Refresh")
-                .on_click(cx.listener(|this, _, _, cx| this.refresh(cx))),
+                .on_click(cx.listener(|this, _, _, cx| this.refresh_requested(cx))),
             )
           })
           .child(
@@ -3264,6 +3309,24 @@ mod tests {
       "repository": { "owner": "acme", "repo": "widget" }
     }))
     .expect("build test pull request")
+  }
+
+  fn test_pull_request_numbered(number: u64) -> GithubPullRequest {
+    let mut pull_request = test_pull_request();
+    pull_request.number = number;
+    pull_request
+  }
+
+  fn test_branch_context() -> GithubBranchContext {
+    GithubBranchContext {
+      owner: "acme".to_string(),
+      repo: "widget".to_string(),
+      branch: "feature".to_string(),
+    }
+  }
+
+  fn a_comment_on(path: &str) -> GithubPullRequestReviewComment {
+    crate::pull_request_review_comments::pending_comment_fixture(1, path, Some(2), "here")
   }
 
   fn pull_request_panel(
@@ -4549,6 +4612,125 @@ mod tests {
           .iter()
           .all(|entry| entry.stage != RepoStage::Unstaged),
         "the panel should have refreshed after the staging action"
+      );
+    });
+  }
+
+  /// A pull request read a moment ago, with a comment of its own on screen.
+  fn a_read_pull_request(
+    cx: &mut TestAppContext,
+  ) -> (Entity<DockPanel>, &mut gpui::VisualTestContext) {
+    let (panel, cx) = pull_request_panel(
+      cx,
+      vec![changed_file(
+        "src/main.rs",
+        git::CommitFileChangeKind::Modified,
+      )],
+    );
+    cx.update(|_, cx| {
+      AuthStateStore::set(cx, crate::auth_state::signed_in_with_github_access());
+    });
+    panel.update(cx, |panel, cx| {
+      panel.pr_fetched_at = Some(cx.background_executor().now());
+      panel.set_pull_request_review_comments(vec![a_comment_on("src/main.rs")], cx);
+    });
+    cx.run_until_parked();
+    (panel, cx)
+  }
+
+  /// The repository of these tests has no GitHub remote, so any read of the
+  /// pull request loses it: what is still there is what was never reread.
+  fn still_holds_its_pull_request(
+    panel: &Entity<DockPanel>,
+    cx: &mut gpui::VisualTestContext,
+  ) -> bool {
+    panel.read_with(cx, |panel, _| {
+      matches!(panel.branch_pr, BranchPrState::Found(_, _))
+        && panel.pull_request_review_comments().len() == 1
+        && !panel.pr_files.is_empty()
+        && !panel.pr_files_loading
+    })
+  }
+
+  #[gpui::test]
+  async fn reopening_the_pull_request_tab_shows_what_it_already_holds(cx: &mut TestAppContext) {
+    let (panel, cx) = a_read_pull_request(cx);
+
+    panel.update_in(cx, |panel, window, cx| {
+      panel.open_tab(DockPanelTab::Changes, window, cx);
+      panel.open_tab(DockPanelTab::PullRequest, window, cx);
+    });
+    cx.run_until_parked();
+
+    assert!(
+      still_holds_its_pull_request(&panel, cx),
+      "a read a moment old is the read this open needed"
+    );
+  }
+
+  #[gpui::test]
+  async fn the_pull_request_tab_reads_again_once_its_read_is_old(cx: &mut TestAppContext) {
+    let (panel, cx) = a_read_pull_request(cx);
+
+    cx.executor()
+      .advance_clock(std::time::Duration::from_secs(120));
+    panel.update_in(cx, |panel, window, cx| {
+      panel.open_tab(DockPanelTab::Changes, window, cx);
+      panel.open_tab(DockPanelTab::PullRequest, window, cx);
+    });
+    cx.run_until_parked();
+
+    assert!(
+      !still_holds_its_pull_request(&panel, cx),
+      "an old read is worth spending a request on"
+    );
+  }
+
+  #[gpui::test]
+  async fn the_refresh_button_reads_however_recent_the_last_read_was(cx: &mut TestAppContext) {
+    let (panel, cx) = a_read_pull_request(cx);
+
+    panel.update(cx, |panel, cx| panel.refresh(cx));
+    cx.run_until_parked();
+    assert!(
+      still_holds_its_pull_request(&panel, cx),
+      "a save is not a reason to read GitHub again"
+    );
+
+    panel.update(cx, |panel, cx| panel.refresh_requested(cx));
+    cx.run_until_parked();
+    assert!(
+      !still_holds_its_pull_request(&panel, cx),
+      "being asked is a reason"
+    );
+  }
+
+  #[gpui::test]
+  async fn a_reread_of_the_same_pull_request_keeps_its_comments(cx: &mut TestAppContext) {
+    let (panel, cx) = a_read_pull_request(cx);
+
+    panel.update(cx, |panel, cx| {
+      let same = BranchPrState::Found(
+        test_branch_context(),
+        Box::new(test_pull_request_numbered(42)),
+      );
+      panel.apply_branch_pull_request(same, cx);
+    });
+    panel.read_with(cx, |panel, _| {
+      assert_eq!(panel.pull_request_review_comments().len(), 1);
+    });
+
+    panel.update(cx, |panel, cx| {
+      let another = BranchPrState::Found(
+        test_branch_context(),
+        Box::new(test_pull_request_numbered(43)),
+      );
+      panel.apply_branch_pull_request(another, cx);
+    });
+    panel.read_with(cx, |panel, _| {
+      assert!(
+        panel.pull_request_review_comments().is_empty(),
+        "the comments of #42 say nothing about #43"
       );
     });
   }

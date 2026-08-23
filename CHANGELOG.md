@@ -4,6 +4,12 @@ All notable changes to Reviu are documented here.
 
 ## 1.0.0
 
+### Opening The Pull Request Tab Costs Nothing Now
+
+Every visit to the Pull request tab emptied the panel and asked GitHub for everything again: "Loading pull request...", then the files, then the comments, and the comments hanging in the diff went away in the meantime.
+
+It reuses what it read less than a minute ago, so going back and forth between tabs shows the pull request instantly. When it does read again, what is on screen stays until the answer replaces it, and the comments of a pull request now survive a reread of the same one. The refresh button of the panel is unchanged: asking for it reads GitHub again, however recent the last read was.
+
 ### Pull Request Comments Show Up The First Time
 
 Opening a file of a pull request from the Review list showed the diff without the comments on it. The only way to see them was to click the Pull request tab again and wait for it to reload, and changing file lost them once more.
