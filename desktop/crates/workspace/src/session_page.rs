@@ -340,6 +340,9 @@ impl SessionPage {
         DockPanelEvent::DeleteReviewComment { id } => {
           this.delete_agent_review_comment(*id, cx);
         }
+        DockPanelEvent::DeletePullRequestReviewComment { id } => {
+          this.confirm_github_review_comment_delete(*id, window, cx);
+        }
         DockPanelEvent::OpenPullRequestFile {
           base_oid,
           head_oid,

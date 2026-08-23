@@ -93,8 +93,9 @@ impl SessionPage {
   }
 
   /// A published comment is public and gone for good; a draft of your own review
-  /// is not.
-  fn confirm_github_review_comment_delete(
+  /// is not. Both surfaces that offer the deletion, the diff and the Review
+  /// panel, come through here so the question is asked once and the same way.
+  pub(super) fn confirm_github_review_comment_delete(
     &mut self,
     comment_id: u64,
     window: &mut Window,
@@ -366,5 +367,61 @@ mod tests {
       let editor = page.editor.as_ref().expect("editor").read(cx);
       assert_eq!(editor.review_comment_ids(), vec![1]);
     });
+  }
+
+  #[gpui::test]
+  async fn a_comment_already_on_github_asks_before_it_goes(cx: &mut gpui::TestAppContext) {
+    let (_repo, page, cx) = open_pull_request_file(cx).await;
+
+    let mut published =
+      crate::pull_request_review_comments::pending_comment_fixture(1, "a.txt", Some(2), "public");
+    published.is_pending = false;
+    page.update(cx, |page, cx| {
+      page.dock_panel.update(cx, |panel, cx| {
+        panel.set_pull_request_review_comments_for_test(vec![published], cx);
+      });
+    });
+    cx.run_until_parked();
+
+    page.update_in(cx, |page, window, cx| {
+      page.confirm_github_review_comment_delete(1, window, cx);
+    });
+    cx.run_until_parked();
+
+    assert!(
+      cx.update(|window, cx| window.has_active_dialog(cx)),
+      "deleting what is already public cannot be undone"
+    );
+  }
+
+  #[gpui::test]
+  async fn a_comment_of_your_own_unsent_review_goes_without_asking(cx: &mut gpui::TestAppContext) {
+    let (_repo, page, cx) = open_pull_request_file(cx).await;
+
+    page.update(cx, |page, cx| {
+      page.dock_panel.update(cx, |panel, cx| {
+        panel.set_pull_request_review_comments_for_test(
+          vec![
+            crate::pull_request_review_comments::pending_comment_fixture(
+              1,
+              "a.txt",
+              Some(2),
+              "draft",
+            ),
+          ],
+          cx,
+        );
+      });
+    });
+    cx.run_until_parked();
+
+    page.update_in(cx, |page, window, cx| {
+      page.confirm_github_review_comment_delete(1, window, cx);
+    });
+
+    assert!(
+      !cx.update(|window, cx| window.has_active_dialog(cx)),
+      "nobody has seen it: there is nothing to confirm"
+    );
   }
 }

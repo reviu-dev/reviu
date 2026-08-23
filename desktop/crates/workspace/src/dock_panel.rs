@@ -123,6 +123,11 @@ pub enum DockPanelEvent {
   DeleteReviewComment {
     id: u64,
   },
+  /// A comment already on GitHub cannot be taken back, so the host asks before
+  /// this one goes. The same question the diff asks.
+  DeletePullRequestReviewComment {
+    id: u64,
+  },
   SendReviewComment {
     id: u64,
   },
@@ -716,7 +721,9 @@ impl DockPanel {
         },
         ReviewListEvent::DeleteComment { section, id } => match section {
           ReviewSection::Agent => cx.emit(DockPanelEvent::DeleteReviewComment { id: *id }),
-          ReviewSection::PullRequest => this.delete_pending_review_comment(*id, cx),
+          ReviewSection::PullRequest => {
+            cx.emit(DockPanelEvent::DeletePullRequestReviewComment { id: *id })
+          }
         },
         ReviewListEvent::SendComment { id } => {
           cx.emit(DockPanelEvent::SendReviewComment { id: *id });
@@ -4778,5 +4785,36 @@ mod tests {
       .expect("review comment bounds");
 
     assert_eq!(review_row.size.height, pull_request_row.size.height);
+  }
+
+  /// The corbeille of a row used to call GitHub straight away, so a comment the
+  /// list still believed pending could go out of a published review without a
+  /// word. It asks the host now, like the diff does.
+  #[gpui::test]
+  async fn deleting_a_pull_request_comment_from_a_row_asks_the_host_first(cx: &mut TestAppContext) {
+    let (panel, cx) = pull_request_panel(cx, Vec::new());
+
+    let asked = Rc::new(std::cell::RefCell::new(Vec::new()));
+    let seen = asked.clone();
+    cx.update(|_, cx| {
+      cx.subscribe(&panel, move |_panel, event: &DockPanelEvent, _cx| {
+        if let DockPanelEvent::DeletePullRequestReviewComment { id } = event {
+          seen.borrow_mut().push(*id);
+        }
+      })
+      .detach();
+    });
+
+    panel.update(cx, |panel, cx| {
+      panel.review_list.update(cx, |_, cx| {
+        cx.emit(crate::review_list::ReviewListEvent::DeleteComment {
+          section: crate::review_list::ReviewSection::PullRequest,
+          id: 7,
+        });
+      });
+    });
+    cx.run_until_parked();
+
+    assert_eq!(asked.borrow().as_slice(), &[7]);
   }
 }
