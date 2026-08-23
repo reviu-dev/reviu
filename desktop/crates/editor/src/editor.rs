@@ -4680,9 +4680,7 @@ impl Editor {
         };
 
       // A single line is visible in the diff; only a range is worth spelling out.
-      let line_label = first_message.line_label.clone().or_else(|| {
-        (!is_local_note_mode).then(|| Arc::from(format!("L{}", first_message.line + 1)))
-      });
+      let line_label = first_message.line_label.clone();
 
       let meta = if is_local_note_mode {
         h_flex()

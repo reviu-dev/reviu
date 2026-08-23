@@ -47,19 +47,21 @@ fn comment_line(comment: &GithubPullRequestReviewComment) -> usize {
     .unsigned_abs() as usize
 }
 
-fn comment_line_label(comment: &GithubPullRequestReviewComment) -> String {
-  let line = comment_line(comment);
-  let Some(start_line) = comment
-    .start_line
-    .or(comment.original_start_line)
-    .map(|start| start.max(1).unsigned_abs() as usize)
-  else {
-    return format!("L{line}");
-  };
-  if start_line >= line {
-    return format!("L{line}");
+fn format_line_label(start_line: Option<usize>, line: usize) -> String {
+  match start_line {
+    Some(start) if start < line => format!("L{start}-L{line}"),
+    _ => format!("L{line}"),
   }
-  format!("L{start_line}-L{line}")
+}
+
+fn comment_line_label(comment: &GithubPullRequestReviewComment) -> String {
+  format_line_label(
+    comment
+      .start_line
+      .or(comment.original_start_line)
+      .map(|start| start.max(1).unsigned_abs() as usize),
+    comment_line(comment),
+  )
 }
 
 pub(crate) fn pending_review_rows(
@@ -280,18 +282,26 @@ fn display_anchor(
   Some((anchor, side, line))
 }
 
+/// The diff shows which line a comment hangs on, so only a range is worth
+/// spelling out. A comment GitHub calls outdated hangs where it can, not where
+/// it was written, and says so.
 fn line_label(
   comment: &GithubPullRequestReviewComment,
   resolved_line: Option<i64>,
 ) -> Option<Arc<str>> {
-  let label = match (comment.start_line, comment.line) {
-    (Some(start), Some(end)) if start != end => format!("L{start}-{end}"),
-    _ => format!(
-      "L{}",
-      comment.line.or(comment.start_line).or(resolved_line)?
-    ),
-  };
-  Some(Arc::from(label.as_str()))
+  let spans_range = matches!(
+    (comment.start_line, comment.line),
+    (Some(start), Some(end)) if start != end
+  );
+  if !spans_range && !comment.is_outdated {
+    return None;
+  }
+  let line = comment.line.or(comment.start_line).or(resolved_line)?;
+  let line = line.max(1).unsigned_abs() as usize;
+  let start_line = comment
+    .start_line
+    .map(|start| start.max(1).unsigned_abs() as usize);
+  Some(Arc::from(format_line_label(start_line, line).as_str()))
 }
 
 /// The comments of one file, as the diff hangs them: everything GitHub knows
@@ -646,7 +656,8 @@ mod tests {
     // GitHub counts from one, the diff from zero.
     assert_eq!(rows[0].line, 8);
     assert_eq!(rows[0].side, ReviewCommentSide::Right);
-    assert_eq!(rows[0].line_label.as_deref(), Some("L9"));
+    // The diff already shows which line it hangs on.
+    assert_eq!(rows[0].line_label, None);
   }
 
   #[test]
@@ -671,7 +682,18 @@ mod tests {
 
     let rows = editor_review_comments(&[ranged], Path::new("src/a.rs"));
 
-    assert_eq!(rows[0].line_label.as_deref(), Some("L10-12"));
+    assert_eq!(rows[0].line_label.as_deref(), Some("L10-L12"));
+  }
+
+  #[test]
+  fn a_comment_that_moved_says_where_it_hangs() {
+    let mut outdated = comment(1, "src/a.rs", Some(9), "moved");
+    outdated.is_outdated = true;
+
+    let rows = editor_review_comments(&[outdated], Path::new("src/a.rs"));
+
+    // Outdated: the line it hangs on is not the line it was written against.
+    assert_eq!(rows[0].line_label.as_deref(), Some("L9"));
   }
 
   #[test]
