@@ -1970,31 +1970,50 @@ mod tests {
     });
   }
 
-  /// Tab presses needed to come back to the panel's list: the length of the
-  /// cycle, which is what tells whether rows have crept into the order.
-  fn tab_cycle_length(
+  /// Walks a whole tab cycle from a dock surface and says, for each stop, whether
+  /// it sits in the right dock. Starts on the surface itself, so the first entry
+  /// is always true.
+  fn tab_cycle(
     page: &Entity<SessionPage>,
     tab: DockPanelTab,
     cx: &mut gpui::VisualTestContext,
-  ) -> usize {
+  ) -> Vec<bool> {
     page.update_in(cx, |page, window, cx| page.show_dock_tab(tab, window, cx));
     cx.run_until_parked();
-    for step in 1..60 {
+    let mut stops = vec![true];
+    for _ in 1..60 {
       cx.simulate_keystrokes("tab");
       cx.run_until_parked();
-      let back = page.update_in(cx, |page, window, cx| {
+      let (back, in_dock) = page.update_in(cx, |page, window, cx| {
         let panel = page.dock_panel.read(cx);
-        assert!(
-          !panel.focus_handle(cx).is_focused(window),
-          "the panel root is not a tab stop, so it must never be the answer"
-        );
-        panel.tab_has_focus(tab, window, cx)
+        (
+          panel.tab_has_focus(tab, window, cx),
+          panel.focus_handle(cx).contains_focused(window, cx),
+        )
       });
       if back {
-        return step;
+        return stops;
       }
+      stops.push(in_dock);
     }
     panic!("tab never came back to the panel");
+  }
+
+  fn stops_in_dock(stops: &[bool]) -> usize {
+    stops.iter().filter(|in_dock| **in_dock).count()
+  }
+
+  /// How many separate runs of dock stops the cycle holds, read as a circle
+  /// since the walk starts inside the panel. More than one means tab bounces in
+  /// and out of it.
+  fn dock_runs(stops: &[bool]) -> usize {
+    let last = stops.len() - 1;
+    stops
+      .iter()
+      .enumerate()
+      .filter(|(index, in_dock)| **in_dock && !stops[if *index == 0 { last } else { index - 1 }])
+      .count()
+      .max(usize::from(stops.iter().all(|in_dock| *in_dock)))
   }
 
   #[gpui::test]
@@ -2032,13 +2051,61 @@ mod tests {
       };
 
     set_comments(&page, cx, 2);
-    let with_two = tab_cycle_length(&page, DockPanelTab::Review, cx);
+    let with_two = tab_cycle(&page, DockPanelTab::Review, cx);
     set_comments(&page, cx, 8);
-    let with_eight = tab_cycle_length(&page, DockPanelTab::Review, cx);
+    let with_eight = tab_cycle(&page, DockPanelTab::Review, cx);
 
     assert_eq!(
-      with_two, with_eight,
+      stops_in_dock(&with_two),
+      stops_in_dock(&with_eight),
       "tab crosses the panel's own controls, not one stop per comment"
+    );
+    assert_eq!(
+      dock_runs(&with_eight),
+      1,
+      "tab crosses the panel once, it does not bounce in and out of it"
+    );
+  }
+
+  #[gpui::test]
+  async fn the_changes_tab_holds_its_own_stops_whatever_it_lists(cx: &mut TestAppContext) {
+    let repo = TempRepo::init("session-tab-changes-shape");
+    commit_text_file(&repo.path, Path::new("a.txt"), "v1\n", "initial");
+    for name in ["a.txt", "b.txt", "c.txt", "d.txt", "e.txt", "f.txt"] {
+      std::fs::write(repo.path.join(name), "v2\n").expect("write file");
+    }
+    let (page, cx) = add_session_page_window(repo.path.clone(), cx);
+    page.update(cx, |page, cx| {
+      page.dock_panel.update(cx, |panel, cx| panel.refresh(cx))
+    });
+    cx.run_until_parked();
+
+    let with_six_files = tab_cycle(&page, DockPanelTab::Changes, cx);
+
+    for name in ["b.txt", "c.txt", "d.txt", "e.txt", "f.txt"] {
+      std::fs::remove_file(repo.path.join(name)).expect("remove file");
+    }
+    page.update(cx, |page, cx| {
+      page.dock_panel.update(cx, |panel, cx| panel.refresh(cx))
+    });
+    cx.run_until_parked();
+    let with_one_file = tab_cycle(&page, DockPanelTab::Changes, cx);
+
+    assert_eq!(
+      stops_in_dock(&with_six_files),
+      stops_in_dock(&with_one_file),
+      "the panel's stops are its own controls, a row is not one of them"
+    );
+    // Zoom, the file list, the message box, the commit button and its menu.
+    assert_eq!(
+      stops_in_dock(&with_one_file),
+      5,
+      "and there are no others hiding in the panel"
+    );
+    assert_eq!(
+      dock_runs(&with_one_file),
+      1,
+      "tab crosses the panel once, it does not bounce in and out of it"
     );
   }
 
