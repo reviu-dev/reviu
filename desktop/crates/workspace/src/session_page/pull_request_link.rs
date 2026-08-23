@@ -320,6 +320,49 @@ mod tests {
   }
 
   #[gpui::test]
+  async fn a_checkout_that_fails_leaves_nothing_armed(cx: &mut TestAppContext) {
+    let repo = TempRepo::init("pull-request-link-checkout-fails");
+    commit_text_file(&repo.path, Path::new("README.md"), "v1\n", "initial");
+    let branch_before = git::current_branch_status(&repo.path)
+      .expect("branch status")
+      .name;
+
+    let (page, cx) = add_session_page_window(repo.path.clone(), cx);
+    cx.run_until_parked();
+
+    // No such branch, here or on any remote: the checkout fails.
+    page.update_in(cx, |page, window, cx| {
+      page.check_out_pull_request_branch(identity(42), "nowhere".to_string(), window, cx);
+    });
+    let command = page.update(cx, |page, _| {
+      page._repo_command_task.take().expect("command task")
+    });
+    command.await;
+    cx.run_until_parked();
+
+    assert_eq!(
+      git::current_branch_status(&repo.path)
+        .expect("branch status")
+        .name,
+      branch_before
+    );
+
+    // Checking that branch out by hand later is not the link answering late.
+    page.update(cx, |page, cx| {
+      page.dock_panel.update(cx, |panel, cx| {
+        panel.set_branch_pull_request_state(surface_pull_request(42), cx);
+      });
+    });
+    cx.run_until_parked();
+    page.read_with(cx, |page, cx| {
+      assert_ne!(
+        page.dock_panel.read(cx).active_tab(),
+        DockPanelTab::PullRequest
+      );
+    });
+  }
+
+  #[gpui::test]
   async fn a_link_does_not_move_the_branch_under_a_running_agent(cx: &mut TestAppContext) {
     let repo = TempRepo::init("pull-request-link-agent-busy");
     commit_text_file(&repo.path, Path::new("README.md"), "v1\n", "initial");

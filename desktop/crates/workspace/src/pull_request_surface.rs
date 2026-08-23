@@ -84,6 +84,24 @@ impl PullRequestSurfaceHandle {
     });
   }
 
+  /// The checkout the link asked for did not happen: nothing is coming, so the
+  /// panel must not open on a branch the user reaches by their own means later.
+  pub(crate) fn forget(cx: &mut App) {
+    let Some(handle) = cx.try_global::<Self>() else {
+      return;
+    };
+    if handle.pending.is_none() {
+      return;
+    }
+    let page = handle.page.clone();
+    let branch_pull_request = handle.branch_pull_request.clone();
+    cx.set_global(Self {
+      page,
+      branch_pull_request,
+      pending: None,
+    });
+  }
+
   fn shows(owner: &str, repo: &str, number: u64, cx: &App) -> bool {
     cx.try_global::<Self>()
       .and_then(|handle| handle.branch_pull_request.as_ref())

@@ -396,6 +396,7 @@ impl SessionPage {
 
     self.repo_command_in_flight = true;
     let pushed = matches!(command, RepoCommand::Push | RepoCommand::ForcePush);
+    let checked_out_for_link = matches!(command, RepoCommand::SwitchToBranchName { .. });
     let telemetry_key = command.telemetry_key();
     let analytics_event = command.analytics_event();
     self
@@ -450,6 +451,9 @@ impl SessionPage {
             }
             Err(error) => {
               this.pending_pull_request = None;
+              if checked_out_for_link {
+                crate::pull_request_surface::PullRequestSurfaceHandle::forget(cx);
+              }
               window.push_notification(Notification::error(error.to_string()), cx);
             }
           }
