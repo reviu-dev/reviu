@@ -218,6 +218,7 @@ pub struct SessionPage {
   _active_repo_task: Option<Task<()>>,
   _pro_teaser_task: Option<Task<()>>,
   _repo_command_task: Option<Task<()>>,
+  _pull_request_link_task: Option<Task<()>>,
   _poll_task: Option<Task<()>>,
 }
 
@@ -225,6 +226,7 @@ mod agent;
 mod commands;
 mod file_viewer;
 mod palette;
+mod pull_request_link;
 mod render;
 mod repo;
 mod review_github;
@@ -396,6 +398,7 @@ impl SessionPage {
       _active_repo_task: None,
       _pro_teaser_task: None,
       _repo_command_task: None,
+      _pull_request_link_task: None,
       _poll_task: None,
     };
     SessionPageHandle::register(cx);
@@ -1240,26 +1243,6 @@ mod tests {
         .collect::<Vec<_>>();
       assert_eq!(paths, vec![PathBuf::from("README.md")]);
     });
-  }
-
-  fn surface_pull_request(number: u64) -> crate::dock_panel::BranchPrState {
-    crate::dock_panel::BranchPrState::Found(
-      crate::pull_request_dialog::GithubBranchContext {
-        owner: "acme".to_string(),
-        repo: "widget".to_string(),
-        branch: "feature".to_string(),
-      },
-      Box::new(
-        serde_json::from_value(serde_json::json!({
-          "number": number,
-          "title": "Add widgets",
-          "state": "open",
-          "draft": false,
-          "repository": { "owner": "acme", "repo": "widget" }
-        }))
-        .expect("build pull request"),
-      ),
-    )
   }
 
   #[gpui::test]

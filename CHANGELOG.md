@@ -4,6 +4,14 @@ All notable changes to Reviu are documented here.
 
 ## 1.0.0
 
+### Review A Pull Request You Have Not Checked Out
+
+The Open in Reviu button of the browser extension used to say no whenever the pull request was not the one of the branch you had open. It now does the work: Reviu names the branch that carries the pull request, asks before touching your repository, checks it out (fetching it first when only the remote has it), and opens the Pull request panel on it once git has moved.
+
+It asks first because moving your branch is your call, and it will not do it while the agent is mid-turn, for the same reason switching branch from the palette waits. A working tree holding changes that the checkout would overwrite stops it, as any branch switch does, and says so instead of stashing behind your back.
+
+A link to a pull request of another repository still goes to github.com, and now says which repository Reviu has open rather than leaving you to guess.
+
 ### A Key For Every Surface Of The Right Panel
 
 The right panel holds six surfaces and only three answered to the keyboard. Files, Review and Pull request now have a key of their own: `cmd-shift-f`, `cmd-shift-r`, `cmd-shift-p`, next to the Changes, History and Terminal keys that were already there. They behave the same way: the key opens the panel on its surface, and pressing it again while that surface is showing closes the panel.

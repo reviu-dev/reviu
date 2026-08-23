@@ -8,7 +8,7 @@ use git::{
   cherry_pick_commits, continue_rebase, create_branch, create_branch_from, create_stash,
   current_branch_status, current_rebase_commit_message, delete_branch, drop_stash, fetch,
   list_repo_status, merge_branch, pop_stash, pull, push, rebase_branch, skip_rebase, stage_all,
-  switch_branch, undo_last_commit, unstage_all,
+  switch_branch, switch_to_branch_name, undo_last_commit, unstage_all,
 };
 use gpui::SharedString;
 use ui::{CommandPaletteBranch, CommandPaletteBranchKind};
@@ -30,6 +30,11 @@ pub(crate) enum RepoCommand {
     target: String,
   },
   SwitchBranch(BranchRef),
+  /// A branch named without knowing where it lives: fetches and creates the
+  /// tracking branch when only the remote has it.
+  SwitchToBranchName {
+    name: String,
+  },
   CreateBranch {
     name: String,
   },
@@ -123,6 +128,8 @@ impl RepoCommand {
         .map(|()| RepoCommandOutcome::done(format!("Checked out {target}"))),
       Self::SwitchBranch(branch) => switch_branch(repo_root, branch)
         .map(|()| RepoCommandOutcome::done(format!("Switched to {}", branch.name))),
+      Self::SwitchToBranchName { name } => switch_to_branch_name(repo_root, name)
+        .map(|()| RepoCommandOutcome::done(format!("Switched to {name}"))),
       Self::CreateBranch { name } => {
         let created = BranchRef {
           name: name.clone(),
@@ -211,7 +218,7 @@ impl RepoCommand {
       Self::UndoLastCommit => "git.undo_last_commit",
       Self::Amend { .. } => "git.amend",
       Self::CheckoutDetached { .. } => "git.checkout_detached",
-      Self::SwitchBranch(_) => "git.switch_branch",
+      Self::SwitchBranch(_) | Self::SwitchToBranchName { .. } => "git.switch_branch",
       Self::CreateBranch { .. } | Self::CreateBranchFrom { .. } => "git.create_branch",
       Self::DeleteBranch(_) => "git.delete_branch",
       Self::MergeBranch(_) => "git.merge",
@@ -240,7 +247,7 @@ impl RepoCommand {
       Self::UndoLastCommit => "Undo last commit",
       Self::Amend { .. } => "Amend",
       Self::CheckoutDetached { .. } => "Checkout detached",
-      Self::SwitchBranch(_) => "Switch branch",
+      Self::SwitchBranch(_) | Self::SwitchToBranchName { .. } => "Switch branch",
       Self::CreateBranch { .. } | Self::CreateBranchFrom { .. } => "Create branch",
       Self::DeleteBranch(_) => "Delete branch",
       Self::MergeBranch(_) => "Merge",
@@ -272,6 +279,7 @@ impl RepoCommand {
       | Self::Amend { .. }
       | Self::CheckoutDetached { .. }
       | Self::SwitchBranch(_)
+      | Self::SwitchToBranchName { .. }
       | Self::CreateBranch { .. }
       | Self::CreateBranchFrom { .. }
       | Self::DeleteBranch(_)
@@ -705,6 +713,70 @@ mod tests {
     set_remote_head(&remote.path, &branch);
 
     (repo, remote, branch)
+  }
+
+  #[test]
+  fn switching_to_a_branch_name_takes_the_local_one_and_fetches_the_rest() {
+    let (repo, remote, branch) = repo_with_remote("repo-command-switch-by-name");
+
+    // A branch only the remote has: a clone pushes it, we never saw it.
+    let other = TempRepo::init("repo-command-switch-by-name-other");
+    std::fs::remove_dir_all(&other.path).expect("clear clone target");
+    git2::Repository::clone(remote.path.to_str().expect("remote path utf8"), &other.path)
+      .expect("clone remote");
+    run(
+      &other.path,
+      RepoCommand::CreateBranch {
+        name: "feature".to_string(),
+      },
+    );
+    commit_text_file(&other.path, Path::new("b.txt"), "v1\n", "feature work");
+    push_branch_to_remote(&other.path, "feature", "origin");
+
+    let switched = run(
+      &repo.path,
+      RepoCommand::SwitchToBranchName {
+        name: "feature".to_string(),
+      },
+    );
+    assert_eq!(switched, RepoCommandOutcome::done("Switched to feature"));
+    assert_eq!(
+      current_branch_status(&repo.path)
+        .expect("branch status")
+        .name,
+      "feature",
+      "the branch is fetched and tracked, not left on the remote"
+    );
+
+    // And a branch already here needs no network at all.
+    let switched = run(
+      &repo.path,
+      RepoCommand::SwitchToBranchName {
+        name: branch.clone(),
+      },
+    );
+    assert_eq!(
+      switched,
+      RepoCommandOutcome::done(format!("Switched to {branch}"))
+    );
+  }
+
+  #[test]
+  fn switching_to_a_branch_nothing_knows_fails_without_moving_head() {
+    let (repo, _remote, branch) = repo_with_remote("repo-command-switch-unknown");
+
+    let error = RepoCommand::SwitchToBranchName {
+      name: "nowhere".to_string(),
+    }
+    .run(&repo.path)
+    .expect_err("no such branch");
+    assert!(error.to_string().contains("nowhere"));
+    assert_eq!(
+      current_branch_status(&repo.path)
+        .expect("branch status")
+        .name,
+      branch
+    );
   }
 
   #[test]

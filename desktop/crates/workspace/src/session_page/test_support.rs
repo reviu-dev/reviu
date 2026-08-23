@@ -135,6 +135,26 @@ pub(super) async fn await_editor_diff(
   }
 }
 
+pub(super) fn surface_pull_request(number: u64) -> crate::dock_panel::BranchPrState {
+  crate::dock_panel::BranchPrState::Found(
+    crate::pull_request_dialog::GithubBranchContext {
+      owner: "acme".to_string(),
+      repo: "widget".to_string(),
+      branch: "feature".to_string(),
+    },
+    Box::new(
+      serde_json::from_value(serde_json::json!({
+        "number": number,
+        "title": "Add widgets",
+        "state": "open",
+        "draft": false,
+        "repository": { "owner": "acme", "repo": "widget" }
+      }))
+      .expect("build pull request"),
+    ),
+  )
+}
+
 pub(super) fn create_request(line: usize, body: &str) -> ReviewCommentCreateRequest {
   ReviewCommentCreateRequest {
     line,
