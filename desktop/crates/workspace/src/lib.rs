@@ -10,6 +10,7 @@ actions!(
     ShowBranchSwitcher,
     OpenGitHistorySidebar,
     OpenGitChangesSidebar,
+    ReturnFocusToEditor,
     OpenFilesSidebar,
     OpenReviewSidebar,
     OpenPullRequestSidebar,

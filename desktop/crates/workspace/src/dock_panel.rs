@@ -609,7 +609,8 @@ impl DockPanel {
     .detach();
 
     let panel = cx.entity().downgrade();
-    let pr_files_list = cx.new(|cx| ListState::new(PrFilesDelegate::new(panel), window, cx));
+    let pr_files_list =
+      cx.new(|cx| ListState::new(PrFilesDelegate::new(panel), window, cx).reset_on_cancel(false));
     cx.subscribe(&pr_files_list, |this, state, event: &ListEvent, cx| {
       let (ix, intent) = match event {
         ListEvent::Select(ix) => (*ix, OpenIntent::Browse),
@@ -1869,6 +1870,38 @@ impl DockPanel {
     cx.notify();
   }
 
+  /// Whether the keyboard is already in the surface a tab's shortcut focuses.
+  /// Being in the panel is not enough: the commit box is in the Changes tab, and
+  /// its shortcut should reach the file list from there.
+  pub(crate) fn tab_has_focus(&self, tab: DockPanelTab, window: &Window, cx: &App) -> bool {
+    // An empty surface mounts nothing to focus and the panel holds it instead;
+    // the shortcut still has to be able to send the dock away.
+    if self.focus_handle.is_focused(window) {
+      return true;
+    }
+    match tab {
+      DockPanelTab::Changes => self.changes_list.read(cx).is_focused(window, cx),
+      DockPanelTab::Review => self.review_list.read(cx).is_focused(window, cx),
+      DockPanelTab::Files => self
+        .files_tree_state
+        .read(cx)
+        .focus_handle(cx)
+        .contains_focused(window, cx),
+      DockPanelTab::History => self.history_list.read(cx).tree_has_focus(window, cx),
+      DockPanelTab::PullRequest => self
+        .pr_files_list
+        .read(cx)
+        .focus_handle(cx)
+        .contains_focused(window, cx),
+      DockPanelTab::Terminal => self.terminal_view.as_ref().is_some_and(|terminal| {
+        terminal
+          .read(cx)
+          .focus_handle(cx)
+          .contains_focused(window, cx)
+      }),
+    }
+  }
+
   /// Switches tab without taking the focus: for the panel following what the page
   /// is doing, rather than the user asking for it.
   pub(crate) fn select_tab(&mut self, target: DockPanelTab, cx: &mut Context<Self>) {
@@ -2724,6 +2757,7 @@ impl Render for DockPanel {
       .min_h_0()
       .bg(theme.sidebar)
       .track_focus(&self.focus_handle)
+      .key_context(crate::shortcuts::DOCK_PANEL_CONTEXT)
       .on_action(cx.listener(|this, _: &crate::CommitChanges, _, cx| this.commit(cx)))
       .child(header)
       .child(body);

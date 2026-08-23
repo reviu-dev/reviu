@@ -494,8 +494,10 @@ impl ChangesList {
     cx: &mut Context<Self>,
   ) -> Self {
     let weak = cx.entity().downgrade();
-    let list =
-      cx.new(|cx| ListState::new(ChangesRowsDelegate::new(weak, split_sections), window, cx));
+    let list = cx.new(|cx| {
+      ListState::new(ChangesRowsDelegate::new(weak, split_sections), window, cx)
+        .reset_on_cancel(false)
+    });
 
     // Walking the list shows each file; a click or Enter hands the editor the
     // keyboard.
@@ -570,9 +572,12 @@ impl ChangesList {
     self.list.read(cx).delegate().selected_index.is_some()
   }
 
-  #[cfg(test)]
   pub(crate) fn is_focused(&self, window: &Window, cx: &App) -> bool {
-    self.list.read(cx).focus_handle(cx).is_focused(window)
+    self
+      .list
+      .read(cx)
+      .focus_handle(cx)
+      .contains_focused(window, cx)
   }
 
   pub(crate) fn set_opened_path(&mut self, path: Option<PathBuf>, cx: &mut Context<Self>) {

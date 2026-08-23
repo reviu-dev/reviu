@@ -974,6 +974,7 @@ impl Render for SessionPage {
       .on_action(cx.listener(Self::open_files_action))
       .on_action(cx.listener(Self::open_review_action))
       .on_action(cx.listener(Self::open_pull_request_action))
+      .on_action(cx.listener(Self::return_focus_to_editor_action))
       .on_action(cx.listener(Self::toggle_file_stage_action))
       .on_action(cx.listener(Self::restore_file_action))
       .on_drag_move(cx.listener(
@@ -2055,7 +2056,8 @@ mod tests {
       assert!(page.dock_open, "the dock opens on the tab it was asked for");
     });
 
-    // Pressing the shortcut of the tab already showing closes the dock.
+    // Nothing to focus in an empty pull request tab, so the panel holds it and
+    // the same shortcut sends the dock away.
     page.update_in(cx, |page, window, cx| {
       page.open_pull_request_action(&crate::OpenPullRequestSidebar, window, cx)
     });
@@ -3016,7 +3018,25 @@ mod tests {
       "dock starts open"
     );
 
-    // Changes is the active tab: its shortcut closes the dock.
+    // Changes is the active tab, but the keyboard is not in it: the shortcut
+    // takes us there rather than closing.
+    page.update_in(cx, |page, window, cx| {
+      page.open_changes_action(&crate::OpenGitChangesSidebar, window, cx)
+    });
+    cx.executor()
+      .advance_clock(std::time::Duration::from_millis(250));
+    cx.run_until_parked();
+    page.update_in(cx, |page, window, cx| {
+      assert!(page.dock_open);
+      assert!(
+        page
+          .dock_panel
+          .read(cx)
+          .tab_has_focus(DockPanelTab::Changes, window, cx)
+      );
+    });
+
+    // Now that we are in it, the same shortcut closes the dock.
     page.update_in(cx, |page, window, cx| {
       page.open_changes_action(&crate::OpenGitChangesSidebar, window, cx)
     });
@@ -3260,8 +3280,8 @@ mod tests {
   }
 
   #[gpui::test]
-  async fn closing_the_dock_hands_focus_to_the_center(cx: &mut TestAppContext) {
-    let repo = TempRepo::init("session-dock-close-focus");
+  async fn escape_hands_the_keyboard_back_and_the_shortcut_then_closes(cx: &mut TestAppContext) {
+    let repo = TempRepo::init("session-dock-escape-focus");
     commit_text_file(&repo.path, Path::new("README.md"), "v1\n", "initial");
     std::fs::write(repo.path.join("README.md"), "v2\n").expect("modify file");
     let (page, cx) = add_session_page_window(repo.path.clone(), cx);
@@ -3281,23 +3301,60 @@ mod tests {
     });
     await_open_file(&page, cx).await;
 
+    // Into the list, and the keyboard is there.
+    page.update_in(cx, |page, window, cx| {
+      page.show_dock_tab(DockPanelTab::Changes, window, cx)
+    });
+    cx.run_until_parked();
+    page.update_in(cx, |page, window, cx| {
+      assert!(
+        page
+          .dock_panel
+          .read(cx)
+          .tab_has_focus(DockPanelTab::Changes, window, cx)
+      );
+    });
+
+    // Escape gives it back to the file, and leaves the panel where it is.
+    page.update_in(cx, |page, window, cx| {
+      page.return_focus_to_editor_action(&crate::ReturnFocusToEditor, window, cx)
+    });
+    cx.run_until_parked();
+    let editor_handle = page.read_with(cx, |page, cx| {
+      page.editor.as_ref().expect("editor").focus_handle(cx)
+    });
+    let focused = cx.update(|window, cx| window.focused(cx));
+    assert_eq!(
+      focused.as_ref(),
+      Some(&editor_handle),
+      "escape returns the keyboard to the work without closing the panel"
+    );
+    page.read_with(cx, |page, _| assert!(page.dock_open));
+
+    // And from there the tab shortcut is a way back, not a way out.
     page.update_in(cx, |page, window, cx| {
       page.open_changes_action(&crate::OpenGitChangesSidebar, window, cx)
     });
     cx.run_until_parked();
+    page.update_in(cx, |page, window, cx| {
+      assert!(
+        page.dock_open,
+        "the shortcut brought us back instead of closing"
+      );
+      assert!(
+        page
+          .dock_panel
+          .read(cx)
+          .tab_has_focus(DockPanelTab::Changes, window, cx)
+      );
+    });
 
-    let editor_handle = page.read_with(cx, |page, cx| {
-      page.editor.as_ref().expect("editor").focus_handle(cx)
+    // Pressing it again, from inside, sends the dock away.
+    page.update_in(cx, |page, window, cx| {
+      page.open_changes_action(&crate::OpenGitChangesSidebar, window, cx)
     });
-    let focused = cx.update(|window, cx| {
-      let _ = cx;
-      window.focused(cx)
-    });
-    assert_eq!(
-      focused.as_ref(),
-      Some(&editor_handle),
-      "the editor takes the focus back so shortcuts keep working"
-    );
+    cx.run_until_parked();
+    page.read_with(cx, |page, _| assert!(!page.dock_open));
   }
 
   #[gpui::test]
@@ -3307,11 +3364,7 @@ mod tests {
     let (page, cx) = add_session_page_window(repo.path.clone(), cx);
     cx.run_until_parked();
 
-    // Close, then reopen Changes on a worktree with nothing in it.
-    page.update_in(cx, |page, window, cx| {
-      page.open_changes_action(&crate::OpenGitChangesSidebar, window, cx)
-    });
-    cx.run_until_parked();
+    // Changes on a worktree with nothing in it: there is no list to focus.
     page.update_in(cx, |page, window, cx| {
       page.open_changes_action(&crate::OpenGitChangesSidebar, window, cx)
     });

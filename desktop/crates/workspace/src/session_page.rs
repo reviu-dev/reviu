@@ -720,6 +720,24 @@ impl SessionPage {
     }));
   }
 
+  /// Escape hands the keyboard back to the work without closing the panel: the
+  /// list keeps its place, and the tab's shortcut brings you back to it.
+  fn return_focus_to_editor_action(
+    &mut self,
+    _: &crate::ReturnFocusToEditor,
+    window: &mut Window,
+    cx: &mut Context<Self>,
+  ) {
+    // A shell owns its own escape.
+    if self.dock_panel.read(cx).active_tab() == DockPanelTab::Terminal {
+      cx.propagate();
+      return;
+    }
+    let handle = self.focus_handle(cx);
+    window.focus(&handle, cx);
+    cx.stop_propagation();
+  }
+
   pub(crate) fn window_handle(&self) -> AnyWindowHandle {
     self.window_handle
   }
@@ -742,10 +760,13 @@ impl SessionPage {
     cx.notify();
   }
 
-  /// A closed dock opens on the tab; the active tab's shortcut closes it.
+  /// The shortcut of a tab means "take me there". It only means "get out of the
+  /// way" when the keyboard is already in that surface, which is what lets it
+  /// bring you back from the editor.
   fn open_dock_tab(&mut self, tab: DockPanelTab, window: &mut Window, cx: &mut Context<Self>) {
     cx.stop_propagation();
-    if self.dock_open && self.dock_panel.read(cx).active_tab() == tab {
+    let panel = self.dock_panel.read(cx);
+    if self.dock_open && panel.active_tab() == tab && panel.tab_has_focus(tab, window, cx) {
       self.close_dock(window, cx);
       return;
     }

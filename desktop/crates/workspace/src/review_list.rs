@@ -303,7 +303,8 @@ impl gpui::EventEmitter<ReviewListEvent> for ReviewList {}
 impl ReviewList {
   pub(crate) fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
     let owner = cx.entity().downgrade();
-    let list = cx.new(|cx| ListState::new(ReviewRowsDelegate::new(owner), window, cx));
+    let list = cx
+      .new(|cx| ListState::new(ReviewRowsDelegate::new(owner), window, cx).reset_on_cancel(false));
 
     // Walking the list shows each comment; a click or Enter hands the editor the
     // keyboard. On a file row there is nothing to read, so both fold it.
@@ -349,6 +350,14 @@ impl ReviewList {
   #[cfg(test)]
   pub(crate) fn keyboard_selected_row(&self, cx: &App) -> Option<IndexPath> {
     self.list.read(cx).delegate().selected_index
+  }
+
+  pub(crate) fn is_focused(&self, window: &Window, cx: &App) -> bool {
+    self
+      .list
+      .read(cx)
+      .focus_handle(cx)
+      .contains_focused(window, cx)
   }
 
   pub(crate) fn focus(&self, window: &mut Window, cx: &mut Context<Self>) {

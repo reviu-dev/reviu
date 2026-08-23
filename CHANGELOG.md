@@ -4,6 +4,14 @@ All notable changes to Reviu are documented here.
 
 ## 1.0.0
 
+### A Panel Key That Brings You Back
+
+The key of a panel used to mean "toggle". Once Enter had moved the keyboard to the file, pressing `cmd-shift-e` to get back to the Changes list closed the panel instead, and you had to press it twice.
+
+It now means "take me there", and only means "get out of the way" when the keyboard is already in that surface. Typing a commit message and reaching for the file list works too: the box is in the panel, but it is not the list, so the key moves you rather than closing anything.
+
+Escape completes the loop. From any list of the panel it hands the keyboard back to the file you were reading, without closing the panel and without losing your place in the list. The terminal keeps its own Escape, as a shell must.
+
 ### The Terminal And The Pull Request Files Answer Too
 
 `cmd-j` opened the terminal and left you to click in it before you could type. It hands the keyboard over now, as every other tab of the right panel does.

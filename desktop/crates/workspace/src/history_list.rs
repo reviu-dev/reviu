@@ -143,6 +143,14 @@ impl HistoryList {
 
   /// The commit tree carries the keyboard, not this container: its own handle is
   /// the one the arrow keys are bound to.
+  pub(crate) fn tree_has_focus(&self, window: &Window, cx: &App) -> bool {
+    self
+      .tree
+      .read(cx)
+      .focus_handle(cx)
+      .contains_focused(window, cx)
+  }
+
   pub(crate) fn focus(&mut self, window: &mut Window, cx: &mut Context<Self>) {
     if self.commits.is_empty() {
       // The empty state mounts no tree; its handle would drop the focus.

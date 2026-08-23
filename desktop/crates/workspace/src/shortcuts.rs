@@ -20,9 +20,9 @@ use crate::{
   ForcePushChanges, JumpToLatestMessage, NavigateBack, NextAnnotation, OpenFilesSidebar,
   OpenGitChangesSidebar, OpenGitHistorySidebar, OpenPullRequestSidebar, OpenRepository,
   OpenReviewSidebar, OpenSessionPage, OpenSettingsPage, PreviousAnnotation, PullChanges,
-  PushChanges, RestoreFile, RestoreHunk, SendReviewCommentsToAgent, ShowBranchSwitcher,
-  ShowCommandPalette, ShowFileSearch, ToggleDiffView, ToggleFileStage, ToggleHideWhitespace,
-  ToggleHunkStage, ToggleTerminalSidebar,
+  PushChanges, RestoreFile, RestoreHunk, ReturnFocusToEditor, SendReviewCommentsToAgent,
+  ShowBranchSwitcher, ShowCommandPalette, ShowFileSearch, ToggleDiffView, ToggleFileStage,
+  ToggleHideWhitespace, ToggleHunkStage, ToggleTerminalSidebar,
 };
 
 pub const SHOW_COMMAND_PALETTE_SHORTCUT: &str = "cmd-k";
@@ -30,6 +30,8 @@ const SHORTCUT_KEYMAP_GENERATION_CONTEXT_KEY: &str = "workspace_shortcuts_genera
 pub const WORKSPACE_SHORTCUT_RECORDING_CONTEXT: &str = "WorkspaceShortcutRecording";
 
 pub const WORKSPACE_CONTEXT: &str = "Workspace";
+/// The right dock, so escape can mean "give the keyboard back" only in there.
+pub const DOCK_PANEL_CONTEXT: &str = "DockPanel";
 pub const WORKSPACE_SESSION_CONTEXT: &str = "Workspace WorkspaceSession";
 pub const WORKSPACE_BILLING_CONTEXT: &str = "Workspace WorkspaceBilling";
 pub const WORKSPACE_GIT_CONFIG_CONTEXT: &str = "Workspace WorkspaceGitConfig";
@@ -1143,6 +1145,7 @@ fn default_app_key_bindings() -> Vec<KeyBinding> {
     KeyBinding::new("cmd-s", Save, None),
     KeyBinding::new("cmd-f", Find, None),
     KeyBinding::new("escape", CloseFind, Some("Editor")),
+    KeyBinding::new("escape", ReturnFocusToEditor, Some(DOCK_PANEL_CONTEXT)),
     KeyBinding::new("home", Home, None),
     KeyBinding::new("end", End, None),
     KeyBinding::new("ctrl-cmd-space", ShowCharacterPalette, None),
