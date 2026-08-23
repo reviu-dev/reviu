@@ -125,12 +125,6 @@ mod tests {
   }
 
   #[test]
-  fn log_is_a_no_op_without_a_sink() {
-    log("dropped on the floor");
-    assert!(active_log_path().is_none());
-  }
-
-  #[test]
   fn append_writes_a_timestamped_line() {
     let path = scratch_log("app_log_append_test");
 
@@ -159,8 +153,7 @@ mod tests {
 
   #[test]
   fn error_message_carries_the_call_site() {
-    let caller = Location::caller();
-    let message = error_message(caller, "", &"boom");
+    let message = error_message(Location::caller(), "", &"boom");
     assert!(message.ends_with(": boom"), "got {message:?}");
     assert!(message.contains("lib.rs"), "got {message:?}");
   }
@@ -183,5 +176,30 @@ mod tests {
     assert_eq!(failure.log_err(), None);
     let failure: Result<u8, String> = Err("boom".to_string());
     assert_eq!(failure.log_err_context("while testing"), None);
+  }
+
+  /// `init` only fires once per process, so everything that needs a live sink shares one test.
+  #[test]
+  fn the_installed_sink_receives_macro_and_log_err_output() {
+    let path = scratch_log("app_log_sink_test");
+    init(Some(path.clone()));
+    assert_eq!(active_log_path(), Some(path.as_path()));
+
+    let count = 3;
+    log!("macro wrote {count} things");
+
+    let failure: Result<(), String> = Err("disk full".to_string());
+    assert!(failure.log_err_context("saving config").is_none());
+
+    let contents = fs::read_to_string(&path).expect("log file should exist");
+    assert!(
+      contents.contains("macro wrote 3 things"),
+      "got {contents:?}"
+    );
+    assert!(
+      contents.contains("saving config: disk full"),
+      "got {contents:?}"
+    );
+    assert!(contents.contains("lib.rs:"), "got {contents:?}");
   }
 }

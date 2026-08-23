@@ -378,7 +378,7 @@ impl AgentChatPanel {
           }
           // Steering unsupported or refused: back to the queue, not lost.
           Err(e) => {
-            eprintln!("[agent] steer error: {e}");
+            app_log::log!("[agent] steer error: {e}");
             panel.retract_steered_message(&text);
             panel.queued_prompts.push(text.clone());
             panel.items.push(ChatItem::Message(ChatMessage {
@@ -457,7 +457,7 @@ impl AgentChatPanel {
               let text = match humanize_agent_error(&raw) {
                 Some(human) => {
                   // Full payload stays greppable in the app logs.
-                  eprintln!("[agent] prompt error: {raw}");
+                  app_log::log!("[agent] prompt error: {raw}");
                   format!("[error] {human}")
                 }
                 None => format!("[error] {raw}"),

@@ -150,7 +150,7 @@ pub fn build_language_config(
       Some(config)
     }
     Err(error) => {
-      eprintln!("Failed to create {name} highlight config: {error}");
+      app_log::log!("Failed to create {name} highlight config: {error}");
       None
     }
   };

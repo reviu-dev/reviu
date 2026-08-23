@@ -27,7 +27,7 @@ pub(crate) fn take_startup_error() -> Option<String> {
 }
 
 fn record_error(op: &'static str, err: &dyn std::error::Error, notify: bool) {
-  eprintln!("{op}: {err}");
+  app_log::log!("{op}: {err}");
   capture_unexpected_error(op, err, Default::default());
   if notify {
     STARTUP_ERROR.with(|slot| *slot.borrow_mut() = Some(err.to_string()));

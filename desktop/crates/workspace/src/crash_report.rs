@@ -184,7 +184,7 @@ pub fn install_crash_reporter() {
       if !CRASH_REPORT_PERSISTED.swap(true, std::sync::atomic::Ordering::SeqCst)
         && let Err(err) = persist_startup_crash_report(&StartupCrashReport::from_panic_info(info))
       {
-        eprintln!("Failed to persist crash report: {err}");
+        app_log::log!("Failed to persist crash report: {err}");
       }
 
       previous_hook(info);
@@ -199,7 +199,7 @@ pub fn take_pending_startup_crash_report() -> Option<StartupCrashReport> {
   match serde_json::from_slice::<StartupCrashReport>(&bytes) {
     Ok(report) => Some(report),
     Err(err) => {
-      eprintln!(
+      app_log::log!(
         "Failed to parse pending crash report {}: {}",
         pending_path.display(),
         err

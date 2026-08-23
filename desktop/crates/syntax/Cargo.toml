@@ -5,6 +5,7 @@ edition.workspace = true
 publish.workspace = true
 
 [dependencies]
+app_log = { workspace = true }
 gpui.workspace = true
 tree-sitter-highlight.workspace = true
 tree-sitter.workspace = true
