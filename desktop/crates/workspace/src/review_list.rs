@@ -904,7 +904,8 @@ impl ReviewList {
                 .small()
                 .compact()
                 .label("Discard")
-                .tooltip("Delete every comment of this review")
+                .tooltip("Delete every comment you have not sent yet")
+                .disabled(self.sendable_count() == 0)
                 .on_click(cx.listener(|_, _, _, cx| cx.emit(ReviewListEvent::DiscardReview))),
             )
           }),

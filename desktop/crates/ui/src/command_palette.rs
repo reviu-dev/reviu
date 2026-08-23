@@ -1033,7 +1033,7 @@ impl CommandPaletteCommand {
     Self::new(
       CommandPaletteCommandId::DiscardReview,
       "Discard review",
-      "Delete every comment of this review",
+      "Delete every comment you have not sent yet",
     )
   }
 

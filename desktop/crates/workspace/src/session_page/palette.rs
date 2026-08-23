@@ -52,7 +52,7 @@ impl SessionPage {
       if self.draft_review_comment_count() > 0 {
         commands.push(CommandPaletteCommand::send_review());
       }
-      if !self.agent_review.all().is_empty() {
+      if self.draft_review_comment_count() > 0 {
         commands.push(CommandPaletteCommand::discard_review());
       }
       if self.dock_panel.read(cx).has_pending_pull_request_review() {

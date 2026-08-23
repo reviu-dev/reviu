@@ -568,15 +568,15 @@ impl SessionPage {
     window: &mut Window,
     cx: &mut Context<Self>,
   ) {
-    let count = self.agent_review.all().len();
+    let count = self.draft_review_comment_count();
     if count == 0 {
       return;
     }
     let title: SharedString = "Discard this review?".into();
     let message: SharedString = if count == 1 {
-      "Delete the comment of this review?".into()
+      "Delete the comment you have not sent yet?".into()
     } else {
-      format!("Delete the {count} comments of this review?").into()
+      format!("Delete the {count} comments you have not sent yet?").into()
     };
     let view = cx.entity();
 
@@ -594,7 +594,9 @@ impl SessionPage {
   }
 
   pub(super) fn discard_agent_review(&mut self, cx: &mut Context<Self>) {
-    self.agent_review.clear();
+    if self.agent_review.clear_drafts() == 0 {
+      return;
+    }
     self.sync_agent_review_comments_to_editor(cx);
     cx.notify();
   }
@@ -900,7 +902,7 @@ mod tests {
       "first line\nsecond line\nthird line",
     ] {
       page.update_in(cx, |page, window, cx| {
-        page.agent_review.clear();
+        page.agent_review.clear_drafts();
         page.create_agent_review_comment(create_request(0, body), window, cx);
       });
       await_editor_diff(&page, cx).await;
@@ -1070,6 +1072,56 @@ mod tests {
           .comments(ReviewSection::Agent)
           .is_empty()
       );
+    });
+  }
+
+  /// A comment the agent already has is part of the conversation: discarding
+  /// takes back the drafts, and nothing else.
+  #[gpui::test]
+  async fn discarding_a_review_keeps_what_already_went_out(cx: &mut TestAppContext) {
+    let repo = TempRepo::init("session-page-review-discard-sent");
+    commit_text_file(&repo.path, Path::new("README.md"), "v1\n", "initial");
+    std::fs::write(repo.path.join("README.md"), "v2\n").expect("update file");
+
+    let (page, cx) = add_session_page_window(repo.path.clone(), cx);
+    cx.run_until_parked();
+    page.update_in(cx, |page, window, cx| {
+      page.open_diff(
+        PathBuf::from("README.md"),
+        None,
+        OpenIntent::Open,
+        window,
+        cx,
+      );
+    });
+    await_open_file(&page, cx).await;
+
+    let sent = page.update_in(cx, |page, window, cx| {
+      page.create_agent_review_comment(create_request(0, "sent"), window, cx);
+      let sent = page
+        .agent_review
+        .all()
+        .first()
+        .expect("the comment was created")
+        .id;
+      page
+        .agent_review
+        .mark_as_sent(&ReviewSend::Only(HashSet::from([sent])));
+      page.create_agent_review_comment(create_request(0, "draft"), window, cx);
+      sent
+    });
+
+    page.update(cx, |page, cx| page.discard_agent_review(cx));
+
+    page.read_with(cx, |page, _| {
+      let ids = page
+        .agent_review
+        .all()
+        .iter()
+        .map(|comment| comment.id)
+        .collect::<Vec<_>>();
+      assert_eq!(ids, vec![sent]);
+      assert_eq!(page.draft_review_comment_count(), 0);
     });
   }
 

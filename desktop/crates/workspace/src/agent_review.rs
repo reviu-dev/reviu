@@ -192,14 +192,6 @@ impl AgentReviewComments {
       .count()
   }
 
-  pub(crate) fn clear(&mut self) {
-    if self.comments.is_empty() {
-      return;
-    }
-    self.comments.clear();
-    self.dirty = true;
-  }
-
   /// Returns the created id, or the reason the comment could not be anchored.
   pub(crate) fn create(
     &mut self,
@@ -315,6 +307,18 @@ impl AgentReviewComments {
 
   /// A completed turn consumes the comments it was sent: they were instructions,
   /// and the work is over. Returns how many were dropped.
+  /// Discarding is for what has not left yet: a comment the agent already has
+  /// is part of the conversation, and deleting our copy would not take it back.
+  pub(crate) fn clear_drafts(&mut self) -> usize {
+    let before = self.comments.len();
+    self
+      .comments
+      .retain(|comment| !agent_review_comment_is_sendable(comment));
+    let dropped = before - self.comments.len();
+    self.dirty |= dropped > 0;
+    dropped
+  }
+
   pub(crate) fn clear_sent(&mut self) -> usize {
     let before = self.comments.len();
     self.comments.retain(agent_review_comment_is_sendable);

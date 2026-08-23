@@ -4,6 +4,10 @@ All notable changes to Reviu are documented here.
 
 ## 1.0.0
 
+### Discarding A Review Only Takes Back The Drafts
+
+`Discard` deleted the whole batch, comments already handed to the agent included. Deleting our copy of a comment the agent is working from takes nothing back, it just loses the record of what was asked. It now deletes the comments you have not sent yet, says how many in its confirmation, and greys out when there are none left to take back.
+
 ### One Footer In The Review Panel
 
 Reviewing for the agent and for a pull request at the same time stacked two action bars at the bottom of the panel, each with its own border, and neither said which comments it was talking about.
