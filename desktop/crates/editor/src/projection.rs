@@ -14,10 +14,9 @@ const REVIEW_COMMENT_COLLAPSED_LINES: usize = 2;
 pub const REVIEW_COMMENT_HEADER_HEIGHT_LINES: f32 = 1.0;
 pub const REVIEW_COMMENT_CARD_BORDER_PX: f32 = 1.0;
 pub const REVIEW_COMMENT_CARD_PADDING_X_PX: f32 = 12.0;
-pub const REVIEW_COMMENT_CARD_PADDING_Y_PX: f32 = 6.0;
-pub const REVIEW_COMMENT_CARD_CONTENT_GAP_PX: f32 = 4.0;
-pub const REVIEW_COMMENT_VERTICAL_PADDING_PX: f32 = 12.0;
-pub const REVIEW_COMMENT_HEADER_BODY_GAP_PX: f32 = 10.0;
+/// One step for every vertical boundary of a comment card: the card's own
+/// padding, a header above its body, and each side of a reply's separator.
+pub const REVIEW_COMMENT_SPACING_PX: f32 = 8.0;
 pub const REVIEW_COMMENT_REPLY_BORDER_TOP_PX: f32 = 1.0;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -713,16 +712,17 @@ fn estimated_expanded_thread_height_px(
     return REVIEW_COMMENT_CARD_BORDER_PX * 2.0 + body_height_px(first_message);
   }
 
-  let mut total_px = REVIEW_COMMENT_CARD_BORDER_PX * 2.0 + REVIEW_COMMENT_CARD_PADDING_Y_PX * 2.0;
+  let mut total_px = REVIEW_COMMENT_CARD_BORDER_PX * 2.0 + REVIEW_COMMENT_SPACING_PX * 2.0;
   if review_comment_shows_header(first_message, layout.local_notes) {
     total_px += layout.editor_line_height_px * REVIEW_COMMENT_HEADER_HEIGHT_LINES;
+    total_px += REVIEW_COMMENT_SPACING_PX;
   }
   total_px += body_height_px(first_message);
 
   for reply in thread_comments.iter().skip(1) {
-    total_px += REVIEW_COMMENT_VERTICAL_PADDING_PX * 2.0;
+    // A step above the separator, a step under it, a step under the author line.
+    total_px += REVIEW_COMMENT_SPACING_PX * 3.0;
     total_px += REVIEW_COMMENT_REPLY_BORDER_TOP_PX;
-    total_px += REVIEW_COMMENT_HEADER_BODY_GAP_PX;
     total_px += layout.editor_line_height_px;
     total_px += body_height_px(reply);
   }
@@ -1863,6 +1863,40 @@ mod tests {
   }
 
   #[test]
+  fn a_comment_pays_one_step_above_its_header_and_under_it() {
+    let comment = review_comment(60, "body");
+    let body_heights = HashMap::from([(comment.id, 40.0f32)]);
+    let collapsed = HashSet::new();
+    let composer_only = HashSet::new();
+    let layout = layout_input(&collapsed, &body_heights, &composer_only);
+
+    assert_eq!(
+      estimated_expanded_thread_height_px(&[&comment], &layout),
+      REVIEW_COMMENT_CARD_BORDER_PX * 2.0 + REVIEW_COMMENT_SPACING_PX * 3.0 + 20.0 + 40.0
+    );
+  }
+
+  #[test]
+  fn a_reply_pays_one_step_on_each_side_of_its_separator() {
+    let first = review_comment(61, "first");
+    let mut reply = review_comment(62, "reply");
+    reply.in_reply_to_id = Some(first.id);
+    let body_heights = HashMap::from([(first.id, 40.0f32), (reply.id, 20.0f32)]);
+    let collapsed = HashSet::new();
+    let composer_only = HashSet::new();
+    let layout = layout_input(&collapsed, &body_heights, &composer_only);
+
+    let alone = estimated_expanded_thread_height_px(&[&first], &layout);
+    let with_reply = estimated_expanded_thread_height_px(&[&first, &reply], &layout);
+
+    // One step over the separator, one under it, one under the author line.
+    assert_eq!(
+      with_reply - alone,
+      REVIEW_COMMENT_SPACING_PX * 3.0 + REVIEW_COMMENT_REPLY_BORDER_TOP_PX + 20.0 + 20.0
+    );
+  }
+
+  #[test]
   fn review_comment_collapsed_reserves_fixed_collapsed_lines() {
     let projection = projection_from("line 1\nline 2", "line 1\nline 2", false);
     let comment = review_comment(42, "short");
@@ -1971,9 +2005,19 @@ mod tests {
       base_projection.with_review_comments(std::slice::from_ref(&comment), &as_local_note);
 
     assert_eq!(
-      count_review_comment_lines(&with_header, comment.id)
-        - count_review_comment_lines(&without_header, comment.id),
-      REVIEW_COMMENT_HEADER_HEIGHT_LINES as usize
+      count_review_comment_lines(&with_header, comment.id),
+      required_extra_lines(
+        REVIEW_COMMENT_CARD_BORDER_PX * 2.0 + REVIEW_COMMENT_SPACING_PX * 3.0 + 20.0 + 40.0,
+        20.0
+      )
+    );
+    // No header row, and no step under it either.
+    assert_eq!(
+      count_review_comment_lines(&without_header, comment.id),
+      required_extra_lines(
+        REVIEW_COMMENT_CARD_BORDER_PX * 2.0 + REVIEW_COMMENT_SPACING_PX * 2.0 + 40.0,
+        20.0
+      )
     );
   }
 

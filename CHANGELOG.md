@@ -4,6 +4,14 @@ All notable changes to Reviu are documented here.
 
 ## 1.0.0
 
+### One Step Of Spacing In A Comment Card
+
+The spacing inside a comment card followed no rhythm. A reply's separator sat against the text above it and held all of its air underneath, and the reply box put its own space above `You` and almost none below. The first comment, its replies and the reply box now breathe the same.
+
+### Only The Buttons That Do Something
+
+`Resolve conversation` was there on conversations nobody could resolve, greyed out and taking the room a crowded header did not have: a comment of a review you have not submitted, or a pull request you only have read access to. The button now shows only when it does something, and a conversation someone else resolved says so with a `Resolved` tag instead of a dead button.
+
 ### A Pull Request Comment Says Its Line Only When It Has To
 
 A comment on a pull request carried its line number even when it sat on the line it was talking about, which the diff already shows. Only a range says both of its ends now, and a comment GitHub calls outdated still says where it hangs, because that is no longer where it was written. Ranges read the same everywhere: `L10-L12` in the diff as in the Review panel.

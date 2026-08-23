@@ -52,9 +52,8 @@ use crate::{
   projection::{
     ChangeKind, DisplayLine, GapId, GapReveal, HunkState, NO_NEWLINE_MARKER_TEXT, Projection,
     REVIEW_COMMENT_CARD_BORDER_PX, REVIEW_COMMENT_CARD_PADDING_X_PX,
-    REVIEW_COMMENT_CARD_PADDING_Y_PX, REVIEW_COMMENT_HEADER_BODY_GAP_PX,
     REVIEW_COMMENT_HEADER_HEIGHT_LINES, REVIEW_COMMENT_REPLY_BORDER_TOP_PX,
-    REVIEW_COMMENT_VERTICAL_PADDING_PX, ReviewComment, ReviewCommentLayoutInput, ReviewCommentSide,
+    REVIEW_COMMENT_SPACING_PX, ReviewComment, ReviewCommentLayoutInput, ReviewCommentSide,
     review_comment_shows_header,
   },
   text_offsets::{byte_offset_to_char_offset, char_offset_to_byte_offset},
@@ -482,10 +481,63 @@ fn review_comment_body_reserves_actions_room(
   local_note && !shows_header && has_actions
 }
 
+/// What a comment's header offers about the resolution of its conversation.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ReviewCommentResolveControl {
+  Toggle { label: &'static str, enabled: bool },
+  ResolvedTag,
+  Nothing,
+}
+
+/// A conversation nobody here can touch is not a button. Its state still has to
+/// show, so a resolved thread wears a tag in its place.
+fn review_comment_resolve_control(
+  has_thread: bool,
+  has_handler: bool,
+  resolve_in_flight: bool,
+  is_resolved: bool,
+  viewer_can_resolve: bool,
+  viewer_can_unresolve: bool,
+) -> ReviewCommentResolveControl {
+  if !has_thread {
+    return ReviewCommentResolveControl::Nothing;
+  }
+  if resolve_in_flight {
+    return ReviewCommentResolveControl::Toggle {
+      label: if is_resolved {
+        "Unresolving..."
+      } else {
+        "Resolving..."
+      },
+      enabled: false,
+    };
+  }
+  let viewer_can_toggle = if is_resolved {
+    viewer_can_unresolve
+  } else {
+    viewer_can_resolve
+  };
+  if has_handler && viewer_can_toggle {
+    return ReviewCommentResolveControl::Toggle {
+      label: if is_resolved {
+        "Unresolve conversation"
+      } else {
+        "Resolve conversation"
+      },
+      enabled: true,
+    };
+  }
+  if is_resolved {
+    ReviewCommentResolveControl::ResolvedTag
+  } else {
+    ReviewCommentResolveControl::Nothing
+  }
+}
+
 /// The floating actions sit on the first line of the body, like the composer's do
 /// on the first line of the text box.
 fn review_comment_floating_actions_top_px(text_line_height_px: f32) -> f32 {
-  (REVIEW_COMMENT_CARD_PADDING_Y_PX
+  (REVIEW_COMMENT_SPACING_PX
     + (text_line_height_px - REVIEW_COMMENT_COMPOSER_ACTIONS_HEIGHT_PX) / 2.0)
     .max(0.0)
 }
@@ -4580,54 +4632,48 @@ impl Editor {
       let resolve_in_flight = resolve_thread_id
         .as_ref()
         .is_some_and(|id| self.review_comment_resolve_in_flight.contains(id));
-      let can_toggle_resolution = resolve_thread_id.is_some()
-        && self.review_comment_resolve_handler.is_some()
-        && !resolve_in_flight
-        && if thread_is_resolved {
-          first_message.viewer_can_unresolve
-        } else {
-          first_message.viewer_can_resolve
-        };
-      let first_message_resolve_button = resolve_thread_id.clone().map(|thread_id_arc| {
-        let editor = editor_entity.clone();
-        let label = if resolve_in_flight {
-          if thread_is_resolved {
-            "Unresolving..."
-          } else {
-            "Resolving..."
-          }
-        } else if thread_is_resolved {
-          "Unresolve conversation"
-        } else {
-          "Resolve conversation"
-        };
-        let thread_id_for_click = thread_id_arc.clone();
-        div()
-          .on_mouse_down(MouseButton::Left, |_, _, cx| {
-            cx.stop_propagation();
-          })
-          .child(
-            Button::new(format!("review-comment-resolve-{}", first_message_id))
-              .ghost()
-              .xsmall()
-              .compact()
-              .label(label)
-              .disabled(!can_toggle_resolution)
-              .on_click(move |_, window, cx| {
+      let resolve_control = review_comment_resolve_control(
+        resolve_thread_id.is_some(),
+        self.review_comment_resolve_handler.is_some(),
+        resolve_in_flight,
+        thread_is_resolved,
+        first_message.viewer_can_resolve,
+        first_message.viewer_can_unresolve,
+      );
+      let first_message_resolve_button = match resolve_control {
+        ReviewCommentResolveControl::Toggle { label, enabled } => {
+          resolve_thread_id.clone().map(|thread_id_arc| {
+            let editor = editor_entity.clone();
+            let thread_id_for_click = thread_id_arc.clone();
+            div()
+              .on_mouse_down(MouseButton::Left, |_, _, cx| {
                 cx.stop_propagation();
-                let thread_id_for_click = thread_id_for_click.clone();
-                editor.update(cx, |editor, cx| {
-                  editor.toggle_review_comment_thread_resolution(
-                    thread_id_for_click,
-                    first_message_id,
-                    thread_is_resolved,
-                    window,
-                    cx,
-                  );
-                });
-              }),
-          )
-      });
+              })
+              .child(
+                Button::new(format!("review-comment-resolve-{}", first_message_id))
+                  .ghost()
+                  .xsmall()
+                  .compact()
+                  .label(label)
+                  .disabled(!enabled)
+                  .on_click(move |_, window, cx| {
+                    cx.stop_propagation();
+                    let thread_id_for_click = thread_id_for_click.clone();
+                    editor.update(cx, |editor, cx| {
+                      editor.toggle_review_comment_thread_resolution(
+                        thread_id_for_click,
+                        first_message_id,
+                        thread_is_resolved,
+                        window,
+                        cx,
+                      );
+                    });
+                  }),
+              )
+          })
+        }
+        ReviewCommentResolveControl::ResolvedTag | ReviewCommentResolveControl::Nothing => None,
+      };
       let first_message_reply_button =
         if self.review_comment_replies_enabled && last_message_id == Some(first_message_id) {
           let is_replying = self.replying_to_review_comment_id == Some(first_message_id);
@@ -4752,6 +4798,7 @@ impl Editor {
         shows_header,
         first_message_actions.is_some() || editing_first_message,
       );
+      let wears_resolved_tag = resolve_control == ReviewCommentResolveControl::ResolvedTag;
       let actions_cluster = h_flex()
         .items_center()
         .gap_1()
@@ -4761,6 +4808,14 @@ impl Editor {
               .outline()
               .small()
               .child("Pending"),
+          )
+        })
+        .when(wears_resolved_tag, |this| {
+          this.child(
+            ui::StatusTag::new(theme.status_green())
+              .outline()
+              .small()
+              .child("Resolved"),
           )
         })
         .when_some(first_message_resolve_button, |this, button| {
@@ -4850,7 +4905,7 @@ impl Editor {
         })
       };
 
-      let mut thread_messages = v_flex();
+      let mut thread_messages = v_flex().gap(px(REVIEW_COMMENT_SPACING_PX));
       for (index, message) in layout.messages.iter().enumerate() {
         let is_last_message = Some(message.id) == last_message_id;
         let is_edit_submitting = self.review_comment_edit_submitting_id == Some(message.id);
@@ -5112,8 +5167,8 @@ impl Editor {
           };
 
           v_flex()
-            .py(px(REVIEW_COMMENT_VERTICAL_PADDING_PX))
-            .gap(px(REVIEW_COMMENT_HEADER_BODY_GAP_PX))
+            .pt(px(REVIEW_COMMENT_SPACING_PX))
+            .gap(px(REVIEW_COMMENT_SPACING_PX))
             .border_t(px(REVIEW_COMMENT_REPLY_BORDER_TOP_PX))
             .border_color(theme.border)
             .child(
@@ -5194,9 +5249,8 @@ impl Editor {
               self.review_comment_preview_suggestion_context_for_id(reply_to_id);
             v_flex()
               .on_action(cx.listener(Self::on_review_comment_reply_input_escape))
-              .pt(px(REVIEW_COMMENT_VERTICAL_PADDING_PX))
-              .pb(px(REVIEW_COMMENT_VERTICAL_PADDING_PX))
-              .gap(px(REVIEW_COMMENT_HEADER_BODY_GAP_PX))
+              .pt(px(REVIEW_COMMENT_SPACING_PX))
+              .gap(px(REVIEW_COMMENT_SPACING_PX))
               .border_t(px(REVIEW_COMMENT_REPLY_BORDER_TOP_PX))
               .border_color(theme.border)
               .font_family(theme.font_family.clone())
@@ -5338,7 +5392,8 @@ impl Editor {
         .child(
           v_flex()
             .px(px(REVIEW_COMMENT_CARD_PADDING_X_PX))
-            .py(px(REVIEW_COMMENT_CARD_PADDING_Y_PX))
+            .py(px(REVIEW_COMMENT_SPACING_PX))
+            .gap(px(REVIEW_COMMENT_SPACING_PX))
             .when(shows_header, |this| this.child(header))
             .when(is_local_note_mode || !is_collapsed, |this| {
               this.child(thread_messages)
@@ -10481,11 +10536,57 @@ pub mod tests {
   }
 
   #[test]
+  fn a_conversation_you_cannot_touch_offers_no_button() {
+    // A comment of a review you have not submitted: GitHub has no thread to
+    // resolve yet, so the row keeps the space.
+    assert_eq!(
+      review_comment_resolve_control(true, true, false, false, false, false),
+      ReviewCommentResolveControl::Nothing
+    );
+    // Resolved by someone else, and not yours to reopen: the state still shows.
+    assert_eq!(
+      review_comment_resolve_control(true, true, false, true, false, false),
+      ReviewCommentResolveControl::ResolvedTag
+    );
+    // A local note has no conversation at all.
+    assert_eq!(
+      review_comment_resolve_control(false, true, false, false, true, true),
+      ReviewCommentResolveControl::Nothing
+    );
+  }
+
+  #[test]
+  fn a_conversation_you_can_touch_offers_its_button() {
+    assert_eq!(
+      review_comment_resolve_control(true, true, false, false, true, false),
+      ReviewCommentResolveControl::Toggle {
+        label: "Resolve conversation",
+        enabled: true
+      }
+    );
+    assert_eq!(
+      review_comment_resolve_control(true, true, false, true, false, true),
+      ReviewCommentResolveControl::Toggle {
+        label: "Unresolve conversation",
+        enabled: true
+      }
+    );
+    // In flight: the button says what is happening and takes no second click.
+    assert_eq!(
+      review_comment_resolve_control(true, true, true, false, true, false),
+      ReviewCommentResolveControl::Toggle {
+        label: "Resolving...",
+        enabled: false
+      }
+    );
+  }
+
+  #[test]
   fn test_floating_actions_sit_on_the_first_line_of_the_body() {
     // Same distance from the top as a button centred on a 20px first line.
     assert_eq!(
       review_comment_floating_actions_top_px(20.0),
-      REVIEW_COMMENT_CARD_PADDING_Y_PX - 2.0
+      REVIEW_COMMENT_SPACING_PX - 2.0
     );
     assert_eq!(review_comment_floating_actions_top_px(0.0), 0.0);
   }
