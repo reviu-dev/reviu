@@ -7,6 +7,7 @@ use agent_chat_panel::AgentChatPanel;
 use editor::ReviewCommentSide;
 
 use crate::agent_review::{LocalAgentReviewComment, LocalAgentReviewCommentState};
+use app_log::ResultExt;
 
 /// Bump when the on-disk shape changes; readers dispatch on it.
 const REVIEW_FORMAT_VERSION: u32 = 1;
@@ -48,11 +49,15 @@ pub(crate) fn read_review(path: &Path) -> Option<StoredReview> {
 /// An empty batch leaves nothing behind rather than an empty file.
 pub(crate) fn write_review(path: &Path, comments: &[LocalAgentReviewComment], next_id: u64) {
   if comments.is_empty() {
-    let _ = std::fs::remove_file(path);
+    std::fs::remove_file(path).log_err_context("clearing the review file");
     return;
   }
-  if let Some(dir) = path.parent() {
-    let _ = std::fs::create_dir_all(dir);
+  if let Some(dir) = path.parent()
+    && std::fs::create_dir_all(dir)
+      .log_err_context("creating the review dir")
+      .is_none()
+  {
+    return;
   }
   let file = PersistedReview {
     version: REVIEW_FORMAT_VERSION,
@@ -62,8 +67,8 @@ pub(crate) fn write_review(path: &Path, comments: &[LocalAgentReviewComment], ne
       .map(PersistedComment::from_comment)
       .collect(),
   };
-  if let Ok(json) = serde_json::to_string(&file) {
-    let _ = std::fs::write(path, json);
+  if let Some(json) = serde_json::to_string(&file).log_err_context("serializing the review") {
+    std::fs::write(path, json).log_err_context("writing the review");
   }
 }
 
@@ -196,6 +201,26 @@ mod tests {
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).expect("create temp dir");
     dir
+  }
+
+  /// `app_log::init` fires once per process, so this test owns the sink for the whole binary.
+  #[test]
+  fn a_failed_review_write_lands_in_the_log() {
+    let dir = temp_dir("write-failure");
+    let log_path = dir.join("reviu.log");
+    app_log::init(Some(log_path.clone()));
+
+    let blocker = dir.join("blocker");
+    std::fs::write(&blocker, b"not a directory").expect("seed blocker file");
+
+    write_review(
+      &blocker.join("review.json"),
+      &[comment(1, LocalAgentReviewCommentState::Draft)],
+      2,
+    );
+
+    let logged = std::fs::read_to_string(&log_path).expect("log file should exist");
+    assert!(logged.contains("creating the review dir"), "got {logged:?}");
   }
 
   fn comment(id: u64, state: LocalAgentReviewCommentState) -> LocalAgentReviewComment {

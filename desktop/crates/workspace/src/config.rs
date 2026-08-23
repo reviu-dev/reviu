@@ -15,6 +15,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::AppProfile;
 use crate::shortcuts::ShortcutId;
+use app_log::ResultExt;
 
 const CONFIG_DIR_NAME: &str = "reviu";
 const CONFIG_DB_NAME: &str = "reviu.sqlite";
@@ -92,7 +93,9 @@ fn run_migrations(conn: &Connection) -> rusqlite::Result<()> {
         current = version;
       }
       Err(err) => {
-        let _ = conn.execute_batch("ROLLBACK");
+        conn
+          .execute_batch("ROLLBACK")
+          .log_err_context("rolling back a failed migration");
         return Err(err);
       }
     }

@@ -2,6 +2,7 @@ use std::path::PathBuf;
 
 #[allow(clippy::wildcard_imports)]
 use super::*;
+use app_log::ResultExt;
 
 /// Bump when the on-disk shape changes; readers dispatch on it. Version 0 is
 /// the tag-less legacy format.
@@ -210,9 +211,14 @@ pub(crate) fn read_scrolls(dir: &std::path::Path) -> HashMap<String, (usize, f32
 }
 
 pub(crate) fn write_scrolls(dir: &std::path::Path, scrolls: &HashMap<String, (usize, f32)>) {
-  let _ = std::fs::create_dir_all(dir);
-  if let Ok(json) = serde_json::to_string(scrolls) {
-    let _ = std::fs::write(scrolls_path(dir), json);
+  if std::fs::create_dir_all(dir)
+    .log_err_context("creating the conversation dir")
+    .is_none()
+  {
+    return;
+  }
+  if let Some(json) = serde_json::to_string(scrolls).log_err_context("serializing scroll state") {
+    std::fs::write(scrolls_path(dir), json).log_err_context("writing scroll state");
   }
 }
 
@@ -228,9 +234,14 @@ pub(crate) fn read_drafts(dir: &std::path::Path) -> HashMap<String, String> {
 }
 
 pub(crate) fn write_drafts(dir: &std::path::Path, drafts: &HashMap<String, String>) {
-  let _ = std::fs::create_dir_all(dir);
-  if let Ok(json) = serde_json::to_string(drafts) {
-    let _ = std::fs::write(drafts_path(dir), json);
+  if std::fs::create_dir_all(dir)
+    .log_err_context("creating the conversation dir")
+    .is_none()
+  {
+    return;
+  }
+  if let Some(json) = serde_json::to_string(drafts).log_err_context("serializing drafts") {
+    std::fs::write(drafts_path(dir), json).log_err_context("writing drafts");
   }
 }
 
@@ -245,8 +256,10 @@ pub(crate) fn write_index(dir: &std::path::Path, conversations: &[ConversationMe
     version: CONVERSATION_FORMAT_VERSION,
     conversations: conversations.to_vec(),
   };
-  if let Ok(json) = serde_json::to_string(&file) {
-    let _ = std::fs::write(index_path(dir), json);
+  if let Some(json) =
+    serde_json::to_string(&file).log_err_context("serializing the conversation index")
+  {
+    std::fs::write(index_path(dir), json).log_err_context("writing the conversation index");
   }
 }
 

@@ -4,6 +4,12 @@ All notable changes to Reviu are documented here.
 
 ## 1.0.0
 
+### Errors Reach The Log File Instead Of Nowhere
+
+When saving a conversation, a draft, or a review batch failed, nothing said so. The app wrote its diagnostics to a stream that only exists when Reviu is started from a terminal, so a failed write was invisible in a normally launched app.
+
+Those failures now go to a log file, with the file and line that reported them. Logging is on by default in dev builds, and `REVIU_LOG=1` turns it on for a release build.
+
 ### Discarding A Review Only Takes Back The Drafts
 
 `Discard` deleted the whole batch, comments already handed to the agent included. Deleting our copy of a comment the agent is working from takes nothing back, it just loses the record of what was asked. It now deletes the comments you have not sent yet, says how many in its confirmation, and greys out when there are none left to take back.

@@ -12,6 +12,7 @@ use crate::persistence::{
   load_conversation_file, read_drafts, read_index, read_scrolls, write_drafts, write_index,
   write_scrolls,
 };
+use app_log::ResultExt;
 use std::collections::HashMap;
 
 const SAVE_THROTTLE: std::time::Duration = std::time::Duration::from_millis(400);
@@ -292,30 +293,46 @@ fn apply_meta(metas: &mut Vec<ConversationMeta>, meta: &ConversationMeta) {
 }
 
 fn write_save(dir: &std::path::Path, metas: &[ConversationMeta], request: SaveRequest) {
-  let _ = std::fs::create_dir_all(dir);
-  let id = request.conversation.meta.id.clone();
-  if let Ok(json) = serde_json::to_string(&request.conversation) {
-    let _ = std::fs::write(dir.join(format!("{id}.json")), json);
+  if std::fs::create_dir_all(dir)
+    .log_err_context("creating the conversation dir")
+    .is_none()
+  {
+    return;
   }
-  let _ = std::fs::write(dir.join("active.txt"), &request.active_id);
+  let id = request.conversation.meta.id.clone();
+  if let Some(json) =
+    serde_json::to_string(&request.conversation).log_err_context("serializing the conversation")
+  {
+    std::fs::write(dir.join(format!("{id}.json")), json)
+      .log_err_context("writing the conversation");
+  }
+  std::fs::write(dir.join("active.txt"), &request.active_id)
+    .log_err_context("writing the active conversation id");
   write_index(dir, metas);
 }
 
 fn apply_op(dir: &std::path::Path, metas: &[ConversationMeta], op: DeferredOp) {
   match op {
     DeferredOp::Delete { id } => {
-      let _ = std::fs::remove_file(dir.join(format!("{id}.json")));
+      std::fs::remove_file(dir.join(format!("{id}.json")))
+        .log_err_context("deleting the conversation");
       write_index(dir, metas);
     }
     DeferredOp::WriteDrafts(drafts) => write_drafts(dir, &drafts),
     DeferredOp::WriteScrolls(scrolls) => write_scrolls(dir, &scrolls),
     DeferredOp::SetActive { id } => match id {
       Some(id) => {
-        let _ = std::fs::create_dir_all(dir);
-        let _ = std::fs::write(dir.join("active.txt"), id);
+        if std::fs::create_dir_all(dir)
+          .log_err_context("creating the conversation dir")
+          .is_some()
+        {
+          std::fs::write(dir.join("active.txt"), id)
+            .log_err_context("writing the active conversation id");
+        }
       }
       None => {
-        let _ = std::fs::remove_file(dir.join("active.txt"));
+        std::fs::remove_file(dir.join("active.txt"))
+          .log_err_context("clearing the active conversation id");
       }
     },
   }
