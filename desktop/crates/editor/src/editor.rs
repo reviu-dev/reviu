@@ -969,7 +969,6 @@ struct FindMatch {
 
 struct ReviewCommentMessageLayout {
   id: u64,
-  line: usize,
   author: Arc<str>,
   avatar_url: Option<Arc<str>>,
   line_label: Option<Arc<str>>,
@@ -4234,7 +4233,6 @@ impl Editor {
         visible_comment_ids.push(*comment_id);
         messages.push(ReviewCommentMessageLayout {
           id: comment.id,
-          line: comment.line,
           author: comment.author.clone(),
           avatar_url: comment.avatar_url.clone(),
           line_label: comment.line_label.clone(),
@@ -4307,7 +4305,6 @@ impl Editor {
         height: line_height * count as f32,
         messages: vec![ReviewCommentMessageLayout {
           id: comment.id,
-          line: comment.line,
           author: comment.author.clone(),
           avatar_url: comment.avatar_url.clone(),
           line_label: comment.line_label.clone(),
