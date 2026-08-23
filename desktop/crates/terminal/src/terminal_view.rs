@@ -1535,8 +1535,10 @@ mod tests {
         cx,
       );
 
-      let mut shift = Modifiers::default();
-      shift.shift = true;
+      let shift = Modifiers {
+        shift: true,
+        ..Default::default()
+      };
       view.handle_mouse_down(
         MouseButton::Left,
         ViewportPoint { row: 0, col: 4 },

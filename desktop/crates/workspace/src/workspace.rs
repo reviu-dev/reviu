@@ -39,6 +39,8 @@ use ui::{
   UserMenuState, UserMenuUser, WindowExt, user_menu,
 };
 
+type NavigateFn = dyn Fn(&mut Window, &mut App);
+
 const UPDATE_CHECK_INTERVAL: Duration = Duration::from_secs(12 * 60 * 60);
 
 pub const STATUS_BAR_ICON_PNG: &[u8] =
@@ -751,10 +753,9 @@ impl WorkspaceView {
     let is_unauthenticated = matches!(auth_state, AuthState::Unauthenticated);
     let show_billing_entry = AuthStateStore::should_show_billing_entry(cx);
 
-    let open_billing: Rc<dyn Fn(&mut Window, &mut App)> =
-      Rc::new(|_window: &mut Window, cx: &mut App| {
-        NavigationHistory::navigate("/billing", cx);
-      });
+    let open_billing: Rc<NavigateFn> = Rc::new(|_window: &mut Window, cx: &mut App| {
+      NavigationHistory::navigate("/billing", cx);
+    });
     let open_git_config = Rc::new(|_window: &mut Window, cx: &mut App| {
       NavigationHistory::navigate("/git-config", cx);
     });
@@ -1047,6 +1048,18 @@ impl Render for WorkspaceView {
   }
 }
 
+impl Focusable for WorkspaceView {
+  fn focus_handle(&self, cx: &App) -> FocusHandle {
+    match WorkspaceRoute::global(cx).page {
+      WorkspacePage::Session => self.session_page.read(cx).focus_handle(cx),
+      WorkspacePage::Billing => self.billing_page.read(cx).focus_handle(cx),
+      WorkspacePage::GitConfig => self.git_config_page.read(cx).focus_handle(cx),
+      WorkspacePage::Settings => self.settings_page.read(cx).focus_handle(cx),
+      WorkspacePage::About => self.about_page.read(cx).focus_handle(cx),
+    }
+  }
+}
+
 #[cfg(test)]
 mod tests {
   use super::{
@@ -1295,17 +1308,5 @@ mod tests {
       WorkspaceView::command_palette_shortcut(),
       shortcuts::shortcut_keystroke(ShortcutId::ShowCommandPalette)
     );
-  }
-}
-
-impl Focusable for WorkspaceView {
-  fn focus_handle(&self, cx: &App) -> FocusHandle {
-    match WorkspaceRoute::global(cx).page {
-      WorkspacePage::Session => self.session_page.read(cx).focus_handle(cx),
-      WorkspacePage::Billing => self.billing_page.read(cx).focus_handle(cx),
-      WorkspacePage::GitConfig => self.git_config_page.read(cx).focus_handle(cx),
-      WorkspacePage::Settings => self.settings_page.read(cx).focus_handle(cx),
-      WorkspacePage::About => self.about_page.read(cx).focus_handle(cx),
-    }
   }
 }

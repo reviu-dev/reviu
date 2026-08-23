@@ -17,3 +17,6 @@ ui.workspace = true
 unicode-segmentation.workspace = true
 tree-sitter.workspace = true
 tree-sitter-html.workspace = true
+
+[lints]
+workspace = true

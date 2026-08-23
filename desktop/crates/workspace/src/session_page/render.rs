@@ -2601,7 +2601,7 @@ mod tests {
       let entries = git::list_repo_status(repo_root).expect("status");
       entries
         .iter()
-        .find(|entry| entry.path == PathBuf::from("a.txt"))
+        .find(|entry| entry.path == *"a.txt")
         .map(|entry| entry.stage)
     };
     assert_eq!(
@@ -2618,7 +2618,7 @@ mod tests {
         .read(cx)
         .status_entries()
         .iter()
-        .find(|entry| entry.path == PathBuf::from("a.txt"))
+        .find(|entry| entry.path == *"a.txt")
         .cloned()
         .expect("the file is still in the changes list");
       assert_eq!(entry.stage, git::RepoStage::PartiallyStaged);

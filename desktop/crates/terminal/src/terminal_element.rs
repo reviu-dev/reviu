@@ -366,6 +366,8 @@ fn build_row_layouts(
 
       byte_offsets.push(0);
 
+      // Bound by the screen geometry, which can be narrower than the stored row.
+      #[allow(clippy::needless_range_loop)]
       for col in 0..screen.cols {
         let cell = cell_grid[row][col];
         let ch = rendered_char(cell);

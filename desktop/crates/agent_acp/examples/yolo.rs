@@ -33,10 +33,10 @@ fn main() -> Result<()> {
     let events = session.take_events().expect("events channel");
     smol::spawn(async move {
       while let Ok(event) = events.recv().await {
-        if let AgentEvent::AgentMessageChunk(chunk) = &event {
-          if let agent_client_protocol::schema::ContentBlock::Text(t) = &chunk.content {
-            eprint!("{}", t.text);
-          }
+        if let AgentEvent::AgentMessageChunk(chunk) = &event
+          && let agent_client_protocol::schema::ContentBlock::Text(t) = &chunk.content
+        {
+          eprint!("{}", t.text);
         }
       }
     })

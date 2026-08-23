@@ -2865,7 +2865,7 @@ mod tests {
 
   #[gpui::test]
   async fn a_poll_re_reads_the_working_tree_without_calling_github(cx: &mut TestAppContext) {
-    cx.update(|cx| gpui_component::init(cx));
+    cx.update(gpui_component::init);
     let repo = TempRepo::init("dock-poll-local");
     commit_text_file(&repo.path, Path::new("README.md"), "v1\n", "initial");
 
@@ -2905,7 +2905,7 @@ mod tests {
 
   #[gpui::test]
   async fn a_poll_touches_the_history_only_when_its_tab_is_open(cx: &mut TestAppContext) {
-    cx.update(|cx| gpui_component::init(cx));
+    cx.update(gpui_component::init);
     let repo = TempRepo::init("dock-poll-history");
     commit_text_file(&repo.path, Path::new("a.txt"), "v1\n", "first");
 
@@ -2956,7 +2956,7 @@ mod tests {
   async fn an_unpublished_branch_is_offered_a_push_before_the_pull_request(
     cx: &mut TestAppContext,
   ) {
-    cx.update(|cx| gpui_component::init(cx));
+    cx.update(gpui_component::init);
     let repo = TempRepo::init("dock-publish-and-create-pr");
     commit_text_file(&repo.path, Path::new("README.md"), "v1\n", "initial");
 
@@ -3049,7 +3049,7 @@ mod tests {
 
   #[gpui::test]
   async fn the_palette_mirrors_what_the_pull_request_tab_offers(cx: &mut TestAppContext) {
-    cx.update(|cx| gpui_component::init(cx));
+    cx.update(gpui_component::init);
     let repo = TempRepo::init("dock-pr-palette");
     commit_text_file(&repo.path, Path::new("README.md"), "v1\n", "initial");
 
@@ -3138,7 +3138,7 @@ mod tests {
 
   #[gpui::test]
   async fn opening_the_files_tab_hands_the_keyboard_to_its_tree(cx: &mut TestAppContext) {
-    cx.update(|cx| gpui_component::init(cx));
+    cx.update(gpui_component::init);
     let repo = TempRepo::init("dock-files-keyboard");
     commit_text_file(&repo.path, Path::new("a.txt"), "v1\n", "first");
     commit_text_file(&repo.path, Path::new("b.txt"), "v1\n", "second");
@@ -3169,7 +3169,7 @@ mod tests {
 
   #[gpui::test]
   async fn opening_the_review_tab_hands_the_keyboard_to_its_rows(cx: &mut TestAppContext) {
-    cx.update(|cx| gpui_component::init(cx));
+    cx.update(gpui_component::init);
     let repo = TempRepo::init("dock-review-keyboard");
     commit_text_file(&repo.path, Path::new("a.txt"), "v1\n", "first");
 
@@ -3217,7 +3217,7 @@ mod tests {
 
   #[gpui::test]
   async fn walking_the_file_tree_shows_files_and_enter_opens_them(cx: &mut TestAppContext) {
-    cx.update(|cx| gpui_component::init(cx));
+    cx.update(gpui_component::init);
     let repo = TempRepo::init("dock-files-intent");
     commit_text_file(&repo.path, Path::new("a.txt"), "v1\n", "first");
     commit_text_file(&repo.path, Path::new("b.txt"), "v1\n", "second");
@@ -3962,7 +3962,7 @@ mod tests {
 
   #[gpui::test]
   async fn opening_the_terminal_hands_it_the_keyboard(cx: &mut TestAppContext) {
-    cx.update(|cx| gpui_component::init(cx));
+    cx.update(gpui_component::init);
     let repo = TempRepo::init("dock-terminal-focus");
     commit_text_file(&repo.path, Path::new("a.txt"), "v1\n", "first");
 
@@ -4035,7 +4035,7 @@ mod tests {
 
   #[gpui::test]
   async fn branch_pr_requires_github_access(cx: &mut TestAppContext) {
-    cx.update(|cx| gpui_component::init(cx));
+    cx.update(gpui_component::init);
     let repo = TempRepo::init("dock-panel-pr-gate");
     commit_text_file(&repo.path, Path::new("README.md"), "v1\n", "initial");
 
@@ -4050,7 +4050,7 @@ mod tests {
 
   #[gpui::test]
   async fn refresh_lists_working_tree_changes(cx: &mut TestAppContext) {
-    cx.update(|cx| gpui_component::init(cx));
+    cx.update(gpui_component::init);
     let repo = TempRepo::init("dock-panel-refresh");
     commit_text_file(&repo.path, Path::new("README.md"), "v1\n", "initial");
     std::fs::write(repo.path.join("README.md"), "v2\n").expect("update file");
@@ -4067,7 +4067,7 @@ mod tests {
 
   #[gpui::test]
   async fn a_merge_in_progress_still_ends_with_a_commit(cx: &mut TestAppContext) {
-    cx.update(|cx| gpui_component::init(cx));
+    cx.update(gpui_component::init);
     let repo = TempRepo::init("dock-panel-merge");
     commit_text_file(&repo.path, Path::new("a.txt"), "base\n", "initial");
     let base = git::BranchRef {
@@ -4122,7 +4122,7 @@ mod tests {
 
   #[gpui::test]
   async fn a_branch_without_a_pull_request_offers_both_ways_to_open_one(cx: &mut TestAppContext) {
-    cx.update(|cx| gpui_component::init(cx));
+    cx.update(gpui_component::init);
     let repo = TempRepo::init("dock-panel-create-pr");
     commit_text_file(&repo.path, Path::new("a.txt"), "v1\n", "initial");
 
@@ -4165,7 +4165,7 @@ mod tests {
 
   #[gpui::test]
   async fn the_commit_menu_offers_what_the_repository_allows(cx: &mut TestAppContext) {
-    cx.update(|cx| gpui_component::init(cx));
+    cx.update(gpui_component::init);
     let repo = TempRepo::init("dock-panel-commit-menu");
     commit_text_file(&repo.path, Path::new("a.txt"), "v1\n", "initial");
     commit_text_file(&repo.path, Path::new("b.txt"), "v1\n", "second");
@@ -4233,7 +4233,7 @@ mod tests {
 
   #[gpui::test]
   async fn a_rebase_in_progress_replaces_the_commit_button(cx: &mut TestAppContext) {
-    cx.update(|cx| gpui_component::init(cx));
+    cx.update(gpui_component::init);
     let repo = TempRepo::init("dock-panel-rebase");
     commit_text_file(&repo.path, Path::new("a.txt"), "base\n", "initial");
     let base = git::BranchRef {
@@ -4309,7 +4309,7 @@ mod tests {
 
   #[gpui::test]
   async fn commit_stages_and_commits_all_changes(cx: &mut TestAppContext) {
-    cx.update(|cx| gpui_component::init(cx));
+    cx.update(gpui_component::init);
     let repo = TempRepo::init("dock-panel-commit");
     commit_text_file(&repo.path, Path::new("README.md"), "v1\n", "initial");
     std::fs::write(repo.path.join("README.md"), "v2\n").expect("update file");
@@ -4365,7 +4365,7 @@ mod tests {
 
   #[gpui::test]
   async fn commit_requires_message_and_changes(cx: &mut TestAppContext) {
-    cx.update(|cx| gpui_component::init(cx));
+    cx.update(gpui_component::init);
     let repo = TempRepo::init("dock-panel-commit-guards");
     commit_text_file(&repo.path, Path::new("README.md"), "v1\n", "initial");
 
@@ -4396,7 +4396,7 @@ mod tests {
 
   #[gpui::test]
   async fn the_terminal_starts_only_when_its_tab_is_opened(cx: &mut TestAppContext) {
-    cx.update(|cx| gpui_component::init(cx));
+    cx.update(gpui_component::init);
     let repo = TempRepo::init("dock-panel-terminal-lazy");
     commit_text_file(&repo.path, Path::new("README.md"), "v1\n", "initial");
 
@@ -4432,7 +4432,7 @@ mod tests {
 
   #[gpui::test]
   async fn switching_repository_moves_a_running_terminal(cx: &mut TestAppContext) {
-    cx.update(|cx| gpui_component::init(cx));
+    cx.update(gpui_component::init);
     let repo = TempRepo::init("dock-panel-terminal-switch");
     commit_text_file(&repo.path, Path::new("README.md"), "v1\n", "initial");
     let other = TempRepo::init("dock-panel-terminal-switch-other");
@@ -4458,7 +4458,7 @@ mod tests {
 
   #[gpui::test]
   async fn the_history_tab_lists_the_commits_and_opens_one_of_their_files(cx: &mut TestAppContext) {
-    cx.update(|cx| gpui_component::init(cx));
+    cx.update(gpui_component::init);
     let repo = TempRepo::init("dock-panel-history-tab");
     commit_text_file(&repo.path, Path::new("README.md"), "v1\n", "initial");
     commit_text_file(&repo.path, Path::new("README.md"), "v2\n", "second");
@@ -4524,7 +4524,7 @@ mod tests {
 
   #[gpui::test]
   async fn clicking_the_terminal_tab_opens_a_shell(cx: &mut TestAppContext) {
-    cx.update(|cx| gpui_component::init(cx));
+    cx.update(gpui_component::init);
     let repo = TempRepo::init("dock-panel-terminal-click");
     commit_text_file(&repo.path, Path::new("README.md"), "v1\n", "initial");
 
@@ -4560,7 +4560,7 @@ mod tests {
 
   #[gpui::test]
   async fn reopening_the_terminal_tab_keeps_the_same_shell(cx: &mut TestAppContext) {
-    cx.update(|cx| gpui_component::init(cx));
+    cx.update(gpui_component::init);
     let repo = TempRepo::init("dock-panel-terminal-reuse");
     commit_text_file(&repo.path, Path::new("README.md"), "v1\n", "initial");
 
@@ -4582,7 +4582,7 @@ mod tests {
 
   #[gpui::test]
   async fn staging_from_the_changes_list_refreshes_the_panel(cx: &mut TestAppContext) {
-    cx.update(|cx| gpui_component::init(cx));
+    cx.update(gpui_component::init);
     let repo = TempRepo::init("dock-panel-changes-list");
     commit_text_file(&repo.path, Path::new("README.md"), "v1\n", "initial");
     std::fs::write(repo.path.join("README.md"), "v2\n").expect("update file");

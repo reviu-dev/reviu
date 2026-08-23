@@ -128,7 +128,7 @@ mod tests {
     TempRepo,
     &'a mut gpui::VisualTestContext,
   ) {
-    cx.update(|cx| gpui_component::init(cx));
+    cx.update(gpui_component::init);
     let repo = TempRepo::init("svg-preview");
     commit_text_file(&repo.path, Path::new("logo.svg"), contents, "initial");
     let repo_root = repo.path.clone();

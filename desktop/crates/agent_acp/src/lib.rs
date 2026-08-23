@@ -646,219 +646,6 @@ fn validate_path_in_root(path: &std::path::Path, root: &std::path::Path) -> Resu
   Ok(resolved)
 }
 
-#[cfg(test)]
-mod tests {
-  use super::*;
-  use agent_client_protocol::schema::{PermissionOption, PermissionOptionId};
-  use std::fs;
-
-  fn opt(id: &str, kind: PermissionOptionKind) -> PermissionOption {
-    PermissionOption::new(PermissionOptionId::new(id), id.to_string(), kind)
-  }
-
-  #[test]
-  fn truncate_stderr_line_keeps_short_lines_and_caps_long_ones() {
-    assert_eq!(truncate_stderr_line("short error"), "short error");
-
-    let long = "x".repeat(STDERR_LINE_MAX_CHARS + 500);
-    let truncated = truncate_stderr_line(&long);
-    assert!(truncated.starts_with(&"x".repeat(STDERR_LINE_MAX_CHARS)));
-    assert!(truncated.ends_with("[... 500 chars truncated]"));
-  }
-
-  fn availability_config(command: &str, cli_executable: Option<&str>) -> BackendConfig {
-    BackendConfig::new("stub", command, Vec::new())
-      .cli_executable(cli_executable)
-      .install_hint("install it")
-  }
-
-  fn missing_binary(config: BackendConfig) -> Option<String> {
-    match config.check_availability() {
-      BackendAvailability::MissingBinary { command, .. } => Some(command),
-      BackendAvailability::Ok => None,
-    }
-  }
-
-  #[test]
-  fn availability_reports_the_missing_agent_cli_behind_a_present_adapter() {
-    let present = std::env::current_exe().expect("current exe");
-    let present = present.to_str().expect("utf-8 exe path");
-
-    assert_eq!(missing_binary(availability_config(present, None)), None);
-    assert_eq!(
-      missing_binary(availability_config(
-        present,
-        Some("reviu-missing-agent-cli")
-      )),
-      Some("reviu-missing-agent-cli".to_string())
-    );
-  }
-
-  #[test]
-  fn availability_reports_the_adapter_command_first() {
-    assert_eq!(
-      missing_binary(availability_config(
-        "reviu-missing-adapter",
-        Some("reviu-missing-agent-cli")
-      )),
-      Some("reviu-missing-adapter".to_string())
-    );
-  }
-
-  #[test]
-  fn steering_support_is_read_from_the_initialize_meta() {
-    let advertised = serde_json::json!({ "steering": { "supported": true } })
-      .as_object()
-      .cloned()
-      .expect("object");
-    assert!(parse_steering_support(Some(&advertised)));
-
-    let declined = serde_json::json!({ "steering": { "supported": false } })
-      .as_object()
-      .cloned()
-      .expect("object");
-    assert!(!parse_steering_support(Some(&declined)));
-
-    let unrelated = serde_json::json!({ "goal": { "version": 1 } })
-      .as_object()
-      .cloned()
-      .expect("object");
-    assert!(!parse_steering_support(Some(&unrelated)));
-
-    assert!(!parse_steering_support(None));
-  }
-
-  #[test]
-  fn terminal_auth_keeps_the_backend_args_ahead_of_its_own() {
-    let auth = TerminalAuthCommand {
-      args: vec!["--terminal-login".into()],
-      env: vec![("PI_TOKEN".into(), "a b".into())],
-    };
-    let config = BackendConfig::new("Pi", "npx", vec!["-y".into(), "pi-acp@0.0.33".into()]);
-
-    assert_eq!(
-      auth.to_shell_string(&config.command, &config.args),
-      "PI_TOKEN='a b' npx -y pi-acp@0.0.33 --terminal-login"
-    );
-  }
-
-  #[test]
-  fn overriding_the_command_drops_the_agent_cli_requirement() {
-    let config = BackendConfig::new("Pi", "npx", vec!["-y".into(), "pi-acp@0.0.33".into()])
-      .cli_executable(Some("pi"))
-      .with_command("stub_agent");
-    assert_eq!(config.cli_executable, None);
-    assert!(config.args.is_empty());
-  }
-
-  #[test]
-  fn parse_command_simple() {
-    let (cmd, args) = parse_command_string("npx -y package").unwrap();
-    assert_eq!(cmd, PathBuf::from("npx"));
-    assert_eq!(args, vec!["-y", "package"]);
-  }
-
-  #[test]
-  fn parse_command_quoted() {
-    let (cmd, args) = parse_command_string(r#"my-cmd "arg with space" other"#).unwrap();
-    assert_eq!(cmd, PathBuf::from("my-cmd"));
-    assert_eq!(args, vec!["arg with space", "other"]);
-  }
-
-  #[test]
-  fn parse_command_empty() {
-    assert!(parse_command_string("").is_err());
-  }
-
-  #[test]
-  fn permission_prefers_allow_once() {
-    let options = vec![
-      opt("reject", PermissionOptionKind::RejectOnce),
-      opt("allow-always", PermissionOptionKind::AllowAlways),
-      opt("allow", PermissionOptionKind::AllowOnce),
-    ];
-    let chosen = pick_default_permission_option(&options).unwrap();
-    assert_eq!(chosen.0.as_ref(), "allow");
-  }
-
-  #[test]
-  fn permission_falls_back_to_allow_always() {
-    let options = vec![
-      opt("reject", PermissionOptionKind::RejectOnce),
-      opt("allow-always", PermissionOptionKind::AllowAlways),
-    ];
-    let chosen = pick_default_permission_option(&options).unwrap();
-    assert_eq!(chosen.0.as_ref(), "allow-always");
-  }
-
-  #[test]
-  fn permission_cancels_when_no_allow_option() {
-    let options = vec![
-      opt("reject", PermissionOptionKind::RejectOnce),
-      opt("reject-always", PermissionOptionKind::RejectAlways),
-    ];
-    assert!(pick_default_permission_option(&options).is_none());
-  }
-
-  #[test]
-  fn permission_empty_options_cancels() {
-    assert!(pick_default_permission_option(&[]).is_none());
-  }
-
-  #[test]
-  fn sandbox_allows_path_inside_root() {
-    let tmp = tempdir();
-    let file = tmp.join("inside.txt");
-    fs::write(&file, "x").unwrap();
-    let resolved = validate_path_in_root(&file, &tmp).unwrap();
-    assert!(resolved.starts_with(tmp.canonicalize().unwrap()));
-  }
-
-  #[test]
-  fn sandbox_allows_nonexistent_file_with_existing_parent() {
-    let tmp = tempdir();
-    let new_file = tmp.join("subdir").join("new.txt");
-    fs::create_dir_all(new_file.parent().unwrap()).unwrap();
-    let resolved = validate_path_in_root(&new_file, &tmp).unwrap();
-    assert!(resolved.starts_with(tmp.canonicalize().unwrap()));
-  }
-
-  #[test]
-  fn sandbox_blocks_path_outside_root() {
-    let tmp = tempdir();
-    let outside = std::env::temp_dir().join("totally-outside-reviu-test.txt");
-    fs::write(&outside, "x").unwrap();
-    let err = validate_path_in_root(&outside, &tmp);
-    let _ = fs::remove_file(&outside);
-    assert!(err.is_err());
-  }
-
-  #[test]
-  fn sandbox_blocks_dotdot_escape() {
-    let tmp = tempdir();
-    let escape = tmp.join("..").join("escape.txt");
-    let err = validate_path_in_root(&escape, &tmp);
-    assert!(err.is_err());
-  }
-
-  /// Two fixtures created in the same clock tick would otherwise share a directory.
-  static TEMP_DIR_COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-
-  fn tempdir() -> PathBuf {
-    let nanos = std::time::SystemTime::now()
-      .duration_since(std::time::UNIX_EPOCH)
-      .expect("system clock before unix epoch")
-      .as_nanos();
-    let unique = TEMP_DIR_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-    let dir = std::env::temp_dir().join(format!(
-      "reviu-agent-acp-test-{}-{nanos}-{unique}",
-      std::process::id()
-    ));
-    std::fs::create_dir_all(&dir).unwrap();
-    dir
-  }
-}
-
 /// Adapters occasionally dump huge payloads on stderr (model instruction templates,
 /// full API bodies); cap each line so real errors above stay visible.
 const STDERR_LINE_MAX_CHARS: usize = 2000;
@@ -1413,4 +1200,217 @@ async fn run_driver(
     app_log::log!("[agent_acp] driver exited: {e}");
   }
   let _ = child.kill();
+}
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+  use agent_client_protocol::schema::{PermissionOption, PermissionOptionId};
+  use std::fs;
+
+  fn opt(id: &str, kind: PermissionOptionKind) -> PermissionOption {
+    PermissionOption::new(PermissionOptionId::new(id), id.to_string(), kind)
+  }
+
+  #[test]
+  fn truncate_stderr_line_keeps_short_lines_and_caps_long_ones() {
+    assert_eq!(truncate_stderr_line("short error"), "short error");
+
+    let long = "x".repeat(STDERR_LINE_MAX_CHARS + 500);
+    let truncated = truncate_stderr_line(&long);
+    assert!(truncated.starts_with(&"x".repeat(STDERR_LINE_MAX_CHARS)));
+    assert!(truncated.ends_with("[... 500 chars truncated]"));
+  }
+
+  fn availability_config(command: &str, cli_executable: Option<&str>) -> BackendConfig {
+    BackendConfig::new("stub", command, Vec::new())
+      .cli_executable(cli_executable)
+      .install_hint("install it")
+  }
+
+  fn missing_binary(config: BackendConfig) -> Option<String> {
+    match config.check_availability() {
+      BackendAvailability::MissingBinary { command, .. } => Some(command),
+      BackendAvailability::Ok => None,
+    }
+  }
+
+  #[test]
+  fn availability_reports_the_missing_agent_cli_behind_a_present_adapter() {
+    let present = std::env::current_exe().expect("current exe");
+    let present = present.to_str().expect("utf-8 exe path");
+
+    assert_eq!(missing_binary(availability_config(present, None)), None);
+    assert_eq!(
+      missing_binary(availability_config(
+        present,
+        Some("reviu-missing-agent-cli")
+      )),
+      Some("reviu-missing-agent-cli".to_string())
+    );
+  }
+
+  #[test]
+  fn availability_reports_the_adapter_command_first() {
+    assert_eq!(
+      missing_binary(availability_config(
+        "reviu-missing-adapter",
+        Some("reviu-missing-agent-cli")
+      )),
+      Some("reviu-missing-adapter".to_string())
+    );
+  }
+
+  #[test]
+  fn steering_support_is_read_from_the_initialize_meta() {
+    let advertised = serde_json::json!({ "steering": { "supported": true } })
+      .as_object()
+      .cloned()
+      .expect("object");
+    assert!(parse_steering_support(Some(&advertised)));
+
+    let declined = serde_json::json!({ "steering": { "supported": false } })
+      .as_object()
+      .cloned()
+      .expect("object");
+    assert!(!parse_steering_support(Some(&declined)));
+
+    let unrelated = serde_json::json!({ "goal": { "version": 1 } })
+      .as_object()
+      .cloned()
+      .expect("object");
+    assert!(!parse_steering_support(Some(&unrelated)));
+
+    assert!(!parse_steering_support(None));
+  }
+
+  #[test]
+  fn terminal_auth_keeps_the_backend_args_ahead_of_its_own() {
+    let auth = TerminalAuthCommand {
+      args: vec!["--terminal-login".into()],
+      env: vec![("PI_TOKEN".into(), "a b".into())],
+    };
+    let config = BackendConfig::new("Pi", "npx", vec!["-y".into(), "pi-acp@0.0.33".into()]);
+
+    assert_eq!(
+      auth.to_shell_string(&config.command, &config.args),
+      "PI_TOKEN='a b' npx -y pi-acp@0.0.33 --terminal-login"
+    );
+  }
+
+  #[test]
+  fn overriding_the_command_drops_the_agent_cli_requirement() {
+    let config = BackendConfig::new("Pi", "npx", vec!["-y".into(), "pi-acp@0.0.33".into()])
+      .cli_executable(Some("pi"))
+      .with_command("stub_agent");
+    assert_eq!(config.cli_executable, None);
+    assert!(config.args.is_empty());
+  }
+
+  #[test]
+  fn parse_command_simple() {
+    let (cmd, args) = parse_command_string("npx -y package").unwrap();
+    assert_eq!(cmd, PathBuf::from("npx"));
+    assert_eq!(args, vec!["-y", "package"]);
+  }
+
+  #[test]
+  fn parse_command_quoted() {
+    let (cmd, args) = parse_command_string(r#"my-cmd "arg with space" other"#).unwrap();
+    assert_eq!(cmd, PathBuf::from("my-cmd"));
+    assert_eq!(args, vec!["arg with space", "other"]);
+  }
+
+  #[test]
+  fn parse_command_empty() {
+    assert!(parse_command_string("").is_err());
+  }
+
+  #[test]
+  fn permission_prefers_allow_once() {
+    let options = vec![
+      opt("reject", PermissionOptionKind::RejectOnce),
+      opt("allow-always", PermissionOptionKind::AllowAlways),
+      opt("allow", PermissionOptionKind::AllowOnce),
+    ];
+    let chosen = pick_default_permission_option(&options).unwrap();
+    assert_eq!(chosen.0.as_ref(), "allow");
+  }
+
+  #[test]
+  fn permission_falls_back_to_allow_always() {
+    let options = vec![
+      opt("reject", PermissionOptionKind::RejectOnce),
+      opt("allow-always", PermissionOptionKind::AllowAlways),
+    ];
+    let chosen = pick_default_permission_option(&options).unwrap();
+    assert_eq!(chosen.0.as_ref(), "allow-always");
+  }
+
+  #[test]
+  fn permission_cancels_when_no_allow_option() {
+    let options = vec![
+      opt("reject", PermissionOptionKind::RejectOnce),
+      opt("reject-always", PermissionOptionKind::RejectAlways),
+    ];
+    assert!(pick_default_permission_option(&options).is_none());
+  }
+
+  #[test]
+  fn permission_empty_options_cancels() {
+    assert!(pick_default_permission_option(&[]).is_none());
+  }
+
+  #[test]
+  fn sandbox_allows_path_inside_root() {
+    let tmp = tempdir();
+    let file = tmp.join("inside.txt");
+    fs::write(&file, "x").unwrap();
+    let resolved = validate_path_in_root(&file, &tmp).unwrap();
+    assert!(resolved.starts_with(tmp.canonicalize().unwrap()));
+  }
+
+  #[test]
+  fn sandbox_allows_nonexistent_file_with_existing_parent() {
+    let tmp = tempdir();
+    let new_file = tmp.join("subdir").join("new.txt");
+    fs::create_dir_all(new_file.parent().unwrap()).unwrap();
+    let resolved = validate_path_in_root(&new_file, &tmp).unwrap();
+    assert!(resolved.starts_with(tmp.canonicalize().unwrap()));
+  }
+
+  #[test]
+  fn sandbox_blocks_path_outside_root() {
+    let tmp = tempdir();
+    let outside = std::env::temp_dir().join("totally-outside-reviu-test.txt");
+    fs::write(&outside, "x").unwrap();
+    let err = validate_path_in_root(&outside, &tmp);
+    let _ = fs::remove_file(&outside);
+    assert!(err.is_err());
+  }
+
+  #[test]
+  fn sandbox_blocks_dotdot_escape() {
+    let tmp = tempdir();
+    let escape = tmp.join("..").join("escape.txt");
+    let err = validate_path_in_root(&escape, &tmp);
+    assert!(err.is_err());
+  }
+
+  /// Two fixtures created in the same clock tick would otherwise share a directory.
+  static TEMP_DIR_COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+  fn tempdir() -> PathBuf {
+    let nanos = std::time::SystemTime::now()
+      .duration_since(std::time::UNIX_EPOCH)
+      .expect("system clock before unix epoch")
+      .as_nanos();
+    let unique = TEMP_DIR_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let dir = std::env::temp_dir().join(format!(
+      "reviu-agent-acp-test-{}-{nanos}-{unique}",
+      std::process::id()
+    ));
+    std::fs::create_dir_all(&dir).unwrap();
+    dir
+  }
 }

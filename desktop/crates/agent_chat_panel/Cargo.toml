@@ -38,3 +38,6 @@ gpui = { workspace = true, features = ["test-support"] }
 name = "stub_agent"
 path = "src/bin/stub_agent.rs"
 required-features = ["test-support"]
+
+[lints]
+workspace = true

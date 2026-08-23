@@ -801,8 +801,10 @@ mod tests {
       .insert("Authorization".into(), "Bearer secret".into());
     request.headers.insert("X-Trace-Id".into(), "safe".into());
 
-    let mut event = Event::default();
-    event.request = Some(request);
+    let mut event = Event {
+      request: Some(request),
+      ..Default::default()
+    };
     event
       .extra
       .insert("api_token".into(), Value::String("token".into()));

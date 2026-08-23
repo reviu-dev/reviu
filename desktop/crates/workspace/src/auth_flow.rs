@@ -190,7 +190,7 @@ mod tests {
         }
         let response = format!(
           "HTTP/1.1 {status}\r\nContent-Length: {}\r\nContent-Type: application/json\r\nConnection: close\r\n\r\n{}",
-          body.as_bytes().len(),
+          body.len(),
           body,
         );
         let _ = stream.write_all(response.as_bytes());

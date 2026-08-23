@@ -37,9 +37,9 @@ fn record_error(op: &'static str, err: &dyn std::error::Error, notify: bool) {
 fn keybindings_file_path() -> PathBuf {
   #[cfg(test)]
   {
-    return ConfigStore::test_db_path()
+    ConfigStore::test_db_path()
       .expect("tests must set a ConfigStore test db path before touching keybindings")
-      .with_extension("keybindings.json");
+      .with_extension("keybindings.json")
   }
 
   #[cfg(not(test))]

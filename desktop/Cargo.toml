@@ -190,3 +190,7 @@ gpui-component-assets = { git = "https://github.com/joris-gallot/gpui-component"
 # Strip GPL-3.0 deps (ztracing -> zlog) that gpui and sum_tree pull into the binary. See vendor/ztracing.
 [patch."https://github.com/joris-gallot/zed"]
 ztracing = { path = "vendor/ztracing" }
+
+[workspace.lints.clippy]
+# GPUI render functions carry `window`, `cx` and their callbacks on top of real arguments.
+too_many_arguments = "allow"

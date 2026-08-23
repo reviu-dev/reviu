@@ -956,7 +956,7 @@ mod tests {
     repo_root: PathBuf,
     cx: &mut gpui::TestAppContext,
   ) -> (gpui::Entity<ChangesList>, &mut gpui::VisualTestContext) {
-    cx.update(|cx| gpui_component::init(cx));
+    cx.update(gpui_component::init);
     let mut mounted = None;
     let (_root, cx) = cx.add_window_view(|window, cx| {
       let list = cx.new(|cx| ChangesList::new(Some(repo_root.clone()), true, window, cx));

@@ -34,3 +34,6 @@ required-features = ["test-support"]
 [[example]]
 name = "yolo"
 path = "examples/yolo.rs"
+
+[lints]
+workspace = true

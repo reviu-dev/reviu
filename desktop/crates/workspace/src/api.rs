@@ -2151,7 +2151,7 @@ mod tests {
 
       let response = format!(
         "HTTP/1.1 {status}\r\nContent-Length: {}\r\nContent-Type: application/json\r\nConnection: close\r\n\r\n{}",
-        body.as_bytes().len(),
+        body.len(),
         body
       );
       stream
@@ -2188,7 +2188,7 @@ mod tests {
 
       let response = format!(
         "HTTP/1.1 {status}\r\nContent-Length: {}\r\nContent-Type: application/json\r\nConnection: close\r\n\r\n{}",
-        body.as_bytes().len(),
+        body.len(),
         body
       );
       stream
@@ -2220,7 +2220,7 @@ mod tests {
 
       let response = format!(
         "HTTP/1.1 {status}\r\nContent-Length: {}\r\nContent-Type: application/json\r\nConnection: close\r\n\r\n{}",
-        body.as_bytes().len(),
+        body.len(),
         body
       );
       stream
@@ -4285,8 +4285,7 @@ mod tests {
         None,
         false,
       )
-      .err()
-      .expect("error");
+      .expect_err("error");
     assert_eq!(
       err.to_string(),
       "A pull request already exists for acme:feature/parser."

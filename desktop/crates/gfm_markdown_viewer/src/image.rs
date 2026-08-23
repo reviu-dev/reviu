@@ -18,7 +18,7 @@ use reqwest::header::CONTENT_TYPE;
 
 use crate::constants::*;
 use crate::gfm_markdown_viewer::{
-  LinkHandlerFn, MarkdownRenderOptions, RenderContext, render_inline_text,
+  AssetUrlResolverFn, LinkHandlerFn, MarkdownRenderOptions, RenderContext, render_inline_text,
 };
 use crate::parse_html::extract_html_attribute;
 use crate::types::*;
@@ -40,10 +40,7 @@ pub fn is_github_user_attachment_url(url: &str) -> bool {
   url.starts_with("https://github.com/user-attachments/assets/")
 }
 
-fn resolve_github_asset_url_async(
-  url: &str,
-  resolver: &Arc<dyn Fn(&str) -> Option<String> + Send + Sync>,
-) -> Option<String> {
+fn resolve_github_asset_url_async(url: &str, resolver: &Arc<AssetUrlResolverFn>) -> Option<String> {
   {
     let cache = GITHUB_ASSET_URL_CACHE.lock().unwrap();
     if let Some(state) = cache.get(url) {
@@ -500,7 +497,7 @@ pub(crate) struct MarkdownImageRenderContext<'a> {
   pub(crate) on_link: Option<Arc<LinkHandlerFn>>,
   pub(crate) interactive: bool,
   pub(crate) is_dark_mode: bool,
-  pub(crate) asset_url_resolver: Option<&'a Arc<dyn Fn(&str) -> Option<String> + Send + Sync>>,
+  pub(crate) asset_url_resolver: Option<&'a Arc<AssetUrlResolverFn>>,
 }
 
 impl MarkdownImageRenderContext<'_> {

@@ -670,11 +670,7 @@ mod tests {
 
     assert!(repo.path.join("b.txt").exists());
     let entries = list_repo_status(&repo.path).expect("status");
-    assert!(
-      entries
-        .iter()
-        .any(|entry| entry.path == PathBuf::from("b.txt"))
-    );
+    assert!(entries.iter().any(|entry| entry.path == *"b.txt"));
   }
 
   #[test]

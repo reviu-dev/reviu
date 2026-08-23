@@ -35,3 +35,6 @@ shell-words = { workspace = true }
 
 [build-dependencies]
 embed-resource = { workspace = true }
+
+[lints]
+workspace = true

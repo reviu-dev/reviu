@@ -865,7 +865,7 @@ impl CommandPaletteCommandId {
     }
   }
 
-  pub fn from_str(value: &str) -> Option<Self> {
+  pub fn parse(value: &str) -> Option<Self> {
     match value {
       "switch_repository" => Some(Self::SwitchRepository),
       "forget_repository" => Some(Self::ForgetRepository),
@@ -3615,7 +3615,7 @@ mod tests {
     for id in all_ids {
       let key = id.as_str();
       assert_eq!(
-        CommandPaletteCommandId::from_str(key),
+        CommandPaletteCommandId::parse(key),
         Some(id),
         "round-trip failed for {:?}",
         id
@@ -3628,7 +3628,7 @@ mod tests {
     keys.dedup();
     assert_eq!(keys.len(), len_before_dedup, "duplicate as_str keys");
 
-    assert_eq!(CommandPaletteCommandId::from_str("nonexistent"), None);
+    assert_eq!(CommandPaletteCommandId::parse("nonexistent"), None);
   }
 
   #[test]

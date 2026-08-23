@@ -38,6 +38,7 @@ use unicode_segmentation::UnicodeSegmentation;
 
 type SuggestionActionRenderFn = dyn Fn(SuggestionActionContext, &App) -> AnyElement + Send + Sync;
 pub(crate) type LinkHandlerFn = dyn Fn(&str, &mut Window, &mut App) -> LinkAction + Send + Sync;
+pub type AssetUrlResolverFn = dyn Fn(&str) -> Option<String> + Send + Sync;
 const WORD_DIFF_MAX_COMBINED_BYTES: usize = 2_048;
 
 // Data types imported from crate::types
@@ -53,7 +54,7 @@ pub struct MarkdownRenderOptions {
   pub github_issue_reference_context: Option<GithubIssueReferenceContext>,
   pub hardbreaks: bool,
   pub syntax_cache: Option<Arc<crate::syntax_cache::SyntaxHighlightCache>>,
-  pub asset_url_resolver: Option<Arc<dyn Fn(&str) -> Option<String> + Send + Sync>>,
+  pub asset_url_resolver: Option<Arc<AssetUrlResolverFn>>,
   pub suggestion_context: Option<SuggestionContext>,
   pub suggestion_action: Option<Arc<SuggestionActionRenderFn>>,
 }
@@ -103,10 +104,7 @@ impl MarkdownRenderOptions {
     self
   }
 
-  pub fn with_asset_url_resolver(
-    mut self,
-    resolver: Arc<dyn Fn(&str) -> Option<String> + Send + Sync>,
-  ) -> Self {
+  pub fn with_asset_url_resolver(mut self, resolver: Arc<AssetUrlResolverFn>) -> Self {
     self.asset_url_resolver = Some(resolver);
     self
   }
@@ -4687,7 +4685,10 @@ Apres"#,
       background: None,
     }];
 
-    let spans = apply_inline_background_ranges(spans, &[2..5], InlineBackground::DiffWordAdded);
+    // The slice is the argument shape, not a range to collect over.
+    #[allow(clippy::single_range_in_vec_init)]
+    let ranges = [2..5];
+    let spans = apply_inline_background_ranges(spans, &ranges, InlineBackground::DiffWordAdded);
 
     assert_eq!(spans.len(), 3);
     assert_eq!(spans[0].range, 0..2);

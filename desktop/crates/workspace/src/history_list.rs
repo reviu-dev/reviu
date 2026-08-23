@@ -763,7 +763,7 @@ mod tests {
     repo_root: Option<PathBuf>,
     cx: &mut TestAppContext,
   ) -> (Entity<HistoryList>, &mut gpui::VisualTestContext) {
-    cx.update(|cx| gpui_component::init(cx));
+    cx.update(gpui_component::init);
     let mut mounted = None;
     let (_root, cx) = cx.add_window_view(|window, cx| {
       let list = cx.new(HistoryList::new);
@@ -1060,7 +1060,7 @@ mod tests {
 
   #[test]
   fn build_history_tree_items_marks_selected_commit_expanded() {
-    let commits = vec![
+    let commits = [
       make_commit("c3", &["c2"]),
       make_commit("c2", &["c1"]),
       make_commit("c1", &[]),
@@ -1095,7 +1095,7 @@ mod tests {
 
   #[test]
   fn build_history_tree_items_supports_multiple_expanded_commits() {
-    let commits = vec![
+    let commits = [
       make_commit("c3", &["c2"]),
       make_commit("c2", &["c1"]),
       make_commit("c1", &[]),
@@ -1118,7 +1118,7 @@ mod tests {
 
   #[test]
   fn build_history_tree_items_includes_commit_and_file_nodes() {
-    let commits = vec![make_commit("c2", &["c1"]), make_commit("c1", &[])];
+    let commits = [make_commit("c2", &["c1"]), make_commit("c1", &[])];
     let rows = commits
       .iter()
       .cloned()
@@ -1155,7 +1155,7 @@ mod tests {
 
   #[test]
   fn build_history_tree_items_uses_loading_placeholder() {
-    let commits = vec![make_commit("c1", &[])];
+    let commits = [make_commit("c1", &[])];
     let rows = commits
       .iter()
       .cloned()

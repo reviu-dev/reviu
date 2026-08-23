@@ -419,8 +419,10 @@ mod tests {
 
   #[test]
   fn encode_key_down_supports_control_sequences() {
-    let mut modifiers = Modifiers::default();
-    modifiers.control = true;
+    let modifiers = Modifiers {
+      control: true,
+      ..Default::default()
+    };
 
     assert_eq!(
       encode_key_down(&key_event("c", None, modifiers), TermMode::SHOW_CURSOR),
@@ -430,8 +432,10 @@ mod tests {
 
   #[test]
   fn encode_key_down_supports_platform_backspace_as_kill_line() {
-    let mut modifiers = Modifiers::default();
-    modifiers.platform = true;
+    let modifiers = Modifiers {
+      platform: true,
+      ..Default::default()
+    };
 
     assert_eq!(
       encode_key_down(
@@ -455,16 +459,20 @@ mod tests {
 
   #[test]
   fn encode_key_down_supports_modified_navigation_keys() {
-    let mut modifiers = Modifiers::default();
-    modifiers.alt = true;
+    let modifiers = Modifiers {
+      alt: true,
+      ..Default::default()
+    };
 
     assert_eq!(
       encode_key_down(&key_event("left", None, modifiers), TermMode::SHOW_CURSOR),
       Some("\u{1b}[1;3D".to_string())
     );
 
-    modifiers = Modifiers::default();
-    modifiers.control = true;
+    let modifiers = Modifiers {
+      control: true,
+      ..Default::default()
+    };
 
     assert_eq!(
       encode_key_down(&key_event("pageup", None, modifiers), TermMode::SHOW_CURSOR),
@@ -474,15 +482,19 @@ mod tests {
 
   #[test]
   fn encode_key_down_supports_modified_enter_and_backspace() {
-    let mut shift = Modifiers::default();
-    shift.shift = true;
+    let shift = Modifiers {
+      shift: true,
+      ..Default::default()
+    };
     assert_eq!(
       encode_key_down(&key_event("enter", None, shift), TermMode::SHOW_CURSOR),
       Some("\n".to_string())
     );
 
-    let mut alt = Modifiers::default();
-    alt.alt = true;
+    let alt = Modifiers {
+      alt: true,
+      ..Default::default()
+    };
     assert_eq!(
       encode_key_down(&key_event("backspace", None, alt), TermMode::SHOW_CURSOR),
       Some("\u{1b}\u{7f}".to_string())
@@ -491,9 +503,11 @@ mod tests {
 
   #[test]
   fn encode_key_down_prefixes_escape_for_alt_control_characters() {
-    let mut modifiers = Modifiers::default();
-    modifiers.alt = true;
-    modifiers.control = true;
+    let modifiers = Modifiers {
+      alt: true,
+      control: true,
+      ..Default::default()
+    };
 
     assert_eq!(
       encode_key_down(&key_event("c", None, modifiers), TermMode::SHOW_CURSOR),
@@ -545,8 +559,10 @@ mod tests {
 
   #[test]
   fn encode_mouse_move_uses_drag_code() {
-    let mut modifiers = Modifiers::default();
-    modifiers.alt = true;
+    let modifiers = Modifiers {
+      alt: true,
+      ..Default::default()
+    };
 
     assert_eq!(
       encode_mouse_move(

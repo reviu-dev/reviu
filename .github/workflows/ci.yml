@@ -51,7 +51,7 @@ jobs:
 
       - name: Clippy
         working-directory: desktop
-        run: cargo clippy -- -D warnings -A clippy::too_many_arguments -A clippy::type_complexity -A clippy::items_after_test_module -A clippy::should_implement_trait -A clippy::needless_range_loop
+        run: cargo clippy --all-targets -- -D warnings
 
       - name: Cargo fmt
         if: runner.os == 'Linux'

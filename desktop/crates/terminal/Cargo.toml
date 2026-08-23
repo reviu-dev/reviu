@@ -13,3 +13,6 @@ parking_lot = { workspace = true }
 
 [dev-dependencies]
 gpui = { workspace = true, features = ["test-support"] }
+
+[lints]
+workspace = true

@@ -1,13 +1,12 @@
 use std::sync::Arc;
 
+use gfm_markdown_viewer::AssetUrlResolverFn;
 use gpui::Hsla;
 use ui::StatusThemeExt as _;
 
 use crate::api::{ApiClient, GithubPullRequestState, GithubPullRequestStatus};
 
-pub(crate) fn make_asset_url_resolver(
-  api: &ApiClient,
-) -> Arc<dyn Fn(&str) -> Option<String> + Send + Sync> {
+pub(crate) fn make_asset_url_resolver(api: &ApiClient) -> Arc<AssetUrlResolverFn> {
   let api = api.clone();
   Arc::new(move |url: &str| api.resolve_github_asset_url(url).ok())
 }

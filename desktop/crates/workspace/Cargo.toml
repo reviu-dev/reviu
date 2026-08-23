@@ -57,3 +57,6 @@ git = { workspace = true, features = ["test-support"] }
 git2 = { workspace = true }
 gpui-base = { workspace = true }
 gpui = { workspace = true, features = ["test-support"] }
+
+[lints]
+workspace = true

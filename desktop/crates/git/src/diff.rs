@@ -931,6 +931,74 @@ fn compute_hunk_id(hunk: &DiffHunk) -> String {
   hasher.finalize().to_hex().to_string()
 }
 
+fn build_hunk_patch(rel_path: PathBuf, hunk: &DiffHunk, reverse: bool) -> String {
+  let old_start = if reverse {
+    hunk.new_start
+  } else {
+    hunk.old_start
+  };
+  let old_lines = if reverse {
+    hunk.new_lines
+  } else {
+    hunk.old_lines
+  };
+  let new_start = if reverse {
+    hunk.old_start
+  } else {
+    hunk.new_start
+  };
+  let new_lines = if reverse {
+    hunk.old_lines
+  } else {
+    hunk.new_lines
+  };
+
+  let old_range = format_hunk_range(old_start, old_lines);
+  let new_range = format_hunk_range(new_start, new_lines);
+
+  let rel_path = rel_path.to_string_lossy();
+  let mut patch = String::new();
+  patch.push_str(&format!("diff --git a/{path} b/{path}\n", path = rel_path));
+  patch.push_str(&format!("--- a/{path}\n", path = rel_path));
+  patch.push_str(&format!("+++ b/{path}\n", path = rel_path));
+  patch.push_str(&format!("@@ -{} +{} @@\n", old_range, new_range));
+
+  for line in &hunk.lines {
+    let mut kind = line.kind;
+    if reverse {
+      kind = match kind {
+        DiffLineKind::Add => DiffLineKind::Remove,
+        DiffLineKind::Remove => DiffLineKind::Add,
+        DiffLineKind::Context => DiffLineKind::Context,
+      };
+    }
+
+    let prefix = match kind {
+      DiffLineKind::Context => ' ',
+      DiffLineKind::Add => '+',
+      DiffLineKind::Remove => '-',
+    };
+
+    patch.push(prefix);
+    patch.push_str(line.content.as_ref());
+    patch.push('\n');
+
+    if line.no_newline {
+      patch.push_str("\\ No newline at end of file\n");
+    }
+  }
+
+  patch
+}
+
+fn format_hunk_range(start: usize, lines: usize) -> String {
+  if lines == 1 {
+    start.to_string()
+  } else {
+    format!("{},{}", start, lines)
+  }
+}
+
 #[cfg(test)]
 mod tests {
   use super::*;
@@ -1475,73 +1543,5 @@ index 1111111..0000000
       let unstaged = apply_hunk_to_text(&staged, hunk, true).expect("apply reverse");
       assert_eq!(unstaged, base);
     }
-  }
-}
-
-fn build_hunk_patch(rel_path: PathBuf, hunk: &DiffHunk, reverse: bool) -> String {
-  let old_start = if reverse {
-    hunk.new_start
-  } else {
-    hunk.old_start
-  };
-  let old_lines = if reverse {
-    hunk.new_lines
-  } else {
-    hunk.old_lines
-  };
-  let new_start = if reverse {
-    hunk.old_start
-  } else {
-    hunk.new_start
-  };
-  let new_lines = if reverse {
-    hunk.old_lines
-  } else {
-    hunk.new_lines
-  };
-
-  let old_range = format_hunk_range(old_start, old_lines);
-  let new_range = format_hunk_range(new_start, new_lines);
-
-  let rel_path = rel_path.to_string_lossy();
-  let mut patch = String::new();
-  patch.push_str(&format!("diff --git a/{path} b/{path}\n", path = rel_path));
-  patch.push_str(&format!("--- a/{path}\n", path = rel_path));
-  patch.push_str(&format!("+++ b/{path}\n", path = rel_path));
-  patch.push_str(&format!("@@ -{} +{} @@\n", old_range, new_range));
-
-  for line in &hunk.lines {
-    let mut kind = line.kind;
-    if reverse {
-      kind = match kind {
-        DiffLineKind::Add => DiffLineKind::Remove,
-        DiffLineKind::Remove => DiffLineKind::Add,
-        DiffLineKind::Context => DiffLineKind::Context,
-      };
-    }
-
-    let prefix = match kind {
-      DiffLineKind::Context => ' ',
-      DiffLineKind::Add => '+',
-      DiffLineKind::Remove => '-',
-    };
-
-    patch.push(prefix);
-    patch.push_str(line.content.as_ref());
-    patch.push('\n');
-
-    if line.no_newline {
-      patch.push_str("\\ No newline at end of file\n");
-    }
-  }
-
-  patch
-}
-
-fn format_hunk_range(start: usize, lines: usize) -> String {
-  if lines == 1 {
-    start.to_string()
-  } else {
-    format!("{},{}", start, lines)
   }
 }

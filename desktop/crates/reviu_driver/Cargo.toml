@@ -20,3 +20,6 @@ workspace = { workspace = true }
 [[bin]]
 name = "reviu-driver"
 path = "src/main.rs"
+
+[lints]
+workspace = true

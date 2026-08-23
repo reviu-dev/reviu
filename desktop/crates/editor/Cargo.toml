@@ -24,3 +24,6 @@ gpui = { workspace = true, features = ["test-support"] }
 [[bench]]
 name = "performance"
 harness = false
+
+[lints]
+workspace = true

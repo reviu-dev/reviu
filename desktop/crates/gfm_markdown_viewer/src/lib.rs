@@ -10,8 +10,8 @@ mod syntax_cache;
 pub(crate) mod types;
 
 pub use gfm_markdown_viewer::{
-  MarkdownRenderOptions, MarkdownRenderState, render_github_code_reference_preview_card,
-  render_markdown, render_parsed_markdown,
+  AssetUrlResolverFn, MarkdownRenderOptions, MarkdownRenderState,
+  render_github_code_reference_preview_card, render_markdown, render_parsed_markdown,
 };
 pub use height_estimation::{
   MarkdownTextMetrics, MarkdownTextWidthFn, estimate_github_code_reference_preview_height_px,

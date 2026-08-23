@@ -76,10 +76,10 @@ fn agent_message_chunk_arrives_on_events_channel() {
     let events = session.take_events().expect("events");
     let recv_task = smol::spawn(async move {
       while let Ok(event) = events.recv().await {
-        if let AgentEvent::AgentMessageChunk(chunk) = event {
-          if let ContentBlock::Text(t) = chunk.content {
-            return Some(t.text);
-          }
+        if let AgentEvent::AgentMessageChunk(chunk) = event
+          && let ContentBlock::Text(t) = chunk.content
+        {
+          return Some(t.text);
         }
       }
       None
