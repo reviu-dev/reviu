@@ -1970,6 +1970,78 @@ mod tests {
     });
   }
 
+  /// Tab presses needed to come back to the panel's list: the length of the
+  /// cycle, which is what tells whether rows have crept into the order.
+  fn tab_cycle_length(
+    page: &Entity<SessionPage>,
+    tab: DockPanelTab,
+    cx: &mut gpui::VisualTestContext,
+  ) -> usize {
+    page.update_in(cx, |page, window, cx| page.show_dock_tab(tab, window, cx));
+    cx.run_until_parked();
+    for step in 1..60 {
+      cx.simulate_keystrokes("tab");
+      cx.run_until_parked();
+      let back = page.update_in(cx, |page, window, cx| {
+        let panel = page.dock_panel.read(cx);
+        assert!(
+          !panel.focus_handle(cx).is_focused(window),
+          "the panel root is not a tab stop, so it must never be the answer"
+        );
+        panel.tab_has_focus(tab, window, cx)
+      });
+      if back {
+        return step;
+      }
+    }
+    panic!("tab never came back to the panel");
+  }
+
+  #[gpui::test]
+  async fn the_rows_of_a_review_are_not_tab_stops(cx: &mut TestAppContext) {
+    let repo = TempRepo::init("session-tab-review-rows");
+    commit_text_file(&repo.path, Path::new("a.txt"), "v1\n", "initial");
+    let (page, cx) = add_session_page_window(repo.path.clone(), cx);
+    cx.run_until_parked();
+
+    let set_comments =
+      |page: &Entity<SessionPage>, cx: &mut gpui::VisualTestContext, count: u64| {
+        let comments = (0..count)
+          .map(|index| crate::agent_review::LocalAgentReviewComment {
+            id: index + 1,
+            in_reply_to_id: None,
+            path: PathBuf::from("a.txt"),
+            line: index as usize + 1,
+            side: editor::ReviewCommentSide::Right,
+            start_line: None,
+            start_side: None,
+            body: std::sync::Arc::from("look here"),
+            original_start_line: Some(index as usize + 2),
+            original_lines: Vec::new(),
+            state: crate::agent_review::LocalAgentReviewCommentState::Draft,
+          })
+          .collect::<Vec<_>>();
+        let rows = crate::review_list::review_panel_comments(&comments);
+        let review_list = page.read_with(cx, |page, cx| {
+          page.dock_panel.read(cx).review_list().clone()
+        });
+        review_list.update(cx, |list, cx| {
+          list.set_comments(crate::review_list::ReviewSection::Agent, rows, cx)
+        });
+        cx.run_until_parked();
+      };
+
+    set_comments(&page, cx, 2);
+    let with_two = tab_cycle_length(&page, DockPanelTab::Review, cx);
+    set_comments(&page, cx, 8);
+    let with_eight = tab_cycle_length(&page, DockPanelTab::Review, cx);
+
+    assert_eq!(
+      with_two, with_eight,
+      "tab crosses the panel's own controls, not one stop per comment"
+    );
+  }
+
   #[gpui::test]
   async fn tab_moves_between_the_file_list_and_the_commit_box(cx: &mut TestAppContext) {
     let repo = TempRepo::init("session-dock-tab-order");

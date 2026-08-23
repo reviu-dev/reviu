@@ -1890,6 +1890,11 @@ impl DockPanel {
   /// Whether the keyboard is already in the surface a tab's shortcut focuses.
   /// Being in the panel is not enough: the commit box is in the Changes tab, and
   /// its shortcut should reach the file list from there.
+  #[cfg(test)]
+  pub(crate) fn review_list(&self) -> &Entity<ReviewList> {
+    &self.review_list
+  }
+
   pub(crate) fn tab_has_focus(&self, tab: DockPanelTab, window: &Window, cx: &App) -> bool {
     // An empty surface mounts nothing to focus and the panel holds it instead;
     // the shortcut still has to be able to send the dock away.
