@@ -84,22 +84,6 @@ impl NavigationHistory {
   }
 }
 
-/// Build path: `/github/{owner}/{repo}/pull/{number}`
-pub fn build_pr_path(owner: &str, repo: &str, number: u64) -> SharedString {
-  format!("/github/{owner}/{repo}/pull/{number}").into()
-}
-
-/// Build path with tab suffix: `/github/{owner}/{repo}/pull/{number}/{tab}`
-pub fn build_pr_tab_path(owner: &str, repo: &str, number: u64, tab: &str) -> SharedString {
-  format!("/github/{owner}/{repo}/pull/{number}/{tab}").into()
-}
-
-/// Returns the last segment of the current pathname (the tab), or empty string.
-pub fn current_tab_segment(cx: &gpui::App) -> &str {
-  let pathname = &gpui_router::use_location(cx).pathname;
-  pathname.rsplit('/').next().unwrap_or("")
-}
-
 fn requires_github_access(path: &str) -> bool {
   path.starts_with("/github")
 }

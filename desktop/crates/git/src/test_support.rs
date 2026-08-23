@@ -25,12 +25,12 @@ pub fn temp_path(prefix: &str) -> PathBuf {
   path
 }
 
-pub(crate) struct TempDir {
-  pub(crate) path: PathBuf,
+pub struct TempDir {
+  pub path: PathBuf,
 }
 
 impl TempDir {
-  pub(crate) fn new(prefix: &str) -> Self {
+  pub fn new(prefix: &str) -> Self {
     let path = temp_path(prefix);
     std::fs::create_dir_all(&path).expect("create temp dir");
     Self { path }
