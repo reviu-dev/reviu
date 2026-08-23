@@ -233,6 +233,7 @@ fn main() {
   shell_env::load();
 
   let app_profile = AppProfile::current();
+  workspace::app_log_sink::install(app_profile);
   // Used only on Linux/Windows (deeplink forwarding); unused on macOS.
   #[allow(unused_variables)]
   let startup_deeplink_url = startup_deeplink_url(app_profile);

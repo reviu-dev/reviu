@@ -1,6 +1,7 @@
 [workspace]
 resolver = "2"
 members = [
+  "crates/app_log",
   "crates/buffer",
   "crates/syntax",
   "crates/editor",
@@ -141,6 +142,7 @@ windows-sys = { version = "0.61.2", features = [
 ] }
 
 # Workspace member crates
+app_log = { path = "crates/app_log" }
 buffer = { path = "crates/buffer" }
 syntax = { path = "crates/syntax" }
 editor = { path = "crates/editor" }

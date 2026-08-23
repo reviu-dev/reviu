@@ -47,7 +47,7 @@ mod agent_settings;
 mod analytics;
 mod annotations;
 mod api;
-pub mod app_log;
+pub mod app_log_sink;
 mod app_profile;
 mod app_update;
 pub mod auth_flow;
