@@ -5,8 +5,8 @@ use std::path::{Path, PathBuf};
 
 use gpui::{
   AnyElement, App, AppContext as _, Context, Entity, Focusable as _, InteractiveElement,
-  IntoElement, KeyDownEvent, MouseButton, ParentElement, Render, Styled, WeakEntity, Window, div,
-  prelude::FluentBuilder as _, px,
+  IntoElement, KeyDownEvent, MouseButton, ParentElement, Render, StatefulInteractiveElement as _,
+  Styled, WeakEntity, Window, div, prelude::FluentBuilder as _, px,
 };
 use gpui_component::{
   ActiveTheme as _, Disableable as _, Icon, IconName, IndexPath, Sizable,
@@ -30,6 +30,13 @@ pub(crate) const REVIEW_LIST_SEND_DEBUG_SELECTOR: &str = "review-list-send";
 pub(crate) const REVIEW_LIST_DISCARD_DEBUG_SELECTOR: &str = "review-list-discard";
 pub(crate) const REVIEW_LIST_SELECT_ALL_DEBUG_SELECTOR: &str = "review-list-select-all";
 pub(crate) const REVIEW_LIST_SUBMIT_DEBUG_SELECTOR: &str = "review-list-submit";
+
+fn review_list_section_header_debug_selector(section: ReviewSection) -> &'static str {
+  match section {
+    ReviewSection::Agent => "review-list-section-agent",
+    ReviewSection::PullRequest => "review-list-section-pull-request",
+  }
+}
 
 /// Longest excerpt shown on a row before it is cut.
 const REVIEW_EXCERPT_MAX_CHARS: usize = 120;
@@ -776,7 +783,16 @@ impl ReviewList {
     let selected = self.selected.len();
     let count = self.comments(section).len();
 
+    // The whole header takes the click: a tick box that small is a poor target,
+    // and its title says what would be ticked.
+    let takes_the_selection = section == ReviewSection::Agent && sendable > 0;
+
     h_flex()
+      .id(gpui::SharedString::from(format!(
+        "review-list-section-{}",
+        section.id_prefix()
+      )))
+      .debug_selector(move || review_list_section_header_debug_selector(section).to_string())
       .w_full()
       .items_center()
       .gap_1()
@@ -784,14 +800,26 @@ impl ReviewList {
       .py_1()
       .border_b_1()
       .border_color(theme.border)
+      .when(takes_the_selection, |this| {
+        this
+          .cursor_pointer()
+          .on_click(cx.listener(|this, _, _, cx| this.toggle_select_all(cx)))
+      })
       .when(section == ReviewSection::Agent, |this| {
         this.child(
-          Checkbox::new("review-list-select-all")
-            .debug_selector(|| REVIEW_LIST_SELECT_ALL_DEBUG_SELECTOR.to_string())
-            .small()
-            .checked(self.everything_is_selected())
-            .disabled(sendable == 0)
-            .on_click(cx.listener(|this, _, _, cx| this.toggle_select_all(cx))),
+          div()
+            .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+            .child(
+              Checkbox::new("review-list-select-all")
+                .debug_selector(|| REVIEW_LIST_SELECT_ALL_DEBUG_SELECTOR.to_string())
+                .small()
+                .checked(self.everything_is_selected())
+                .disabled(sendable == 0)
+                .on_click(cx.listener(|this, _, _, cx| {
+                  cx.stop_propagation();
+                  this.toggle_select_all(cx);
+                })),
+            ),
         )
       })
       .child(
@@ -1314,6 +1342,57 @@ mod tests {
     cx.simulate_click(button.center(), gpui::Modifiers::default());
     cx.run_until_parked();
 
+    list.read_with(cx, |list, _| assert!(list.selected_ids().is_empty()));
+  }
+
+  #[gpui::test]
+  async fn the_section_title_ticks_the_whole_batch_too(cx: &mut gpui::TestAppContext) {
+    let (list, cx) = add_review_list_window(cx);
+    list.update(cx, |list, cx| {
+      list.set_comments(ReviewSection::Agent, batch(), cx)
+    });
+    cx.run_until_parked();
+
+    let header = cx
+      .debug_bounds(review_list_section_header_debug_selector(
+        ReviewSection::Agent,
+      ))
+      .expect("section header bounds");
+    // The centre of the header is its title, not its tick box.
+    cx.simulate_click(header.center(), gpui::Modifiers::default());
+    cx.run_until_parked();
+
+    list.read_with(cx, |list, _| {
+      assert_eq!(list.selected_ids(), &HashSet::from([1, 2, 3]));
+    });
+
+    cx.simulate_click(header.center(), gpui::Modifiers::default());
+    cx.run_until_parked();
+
+    list.read_with(cx, |list, _| assert!(list.selected_ids().is_empty()));
+  }
+
+  #[gpui::test]
+  async fn the_pull_request_section_title_ticks_nothing(cx: &mut gpui::TestAppContext) {
+    let (list, cx) = add_review_list_window(cx);
+    list.update(cx, |list, cx| {
+      list.set_comments(
+        ReviewSection::PullRequest,
+        vec![pull_request_row(9, "src/a.rs", 3)],
+        cx,
+      )
+    });
+    cx.run_until_parked();
+
+    let header = cx
+      .debug_bounds(review_list_section_header_debug_selector(
+        ReviewSection::PullRequest,
+      ))
+      .expect("section header bounds");
+    cx.simulate_click(header.center(), gpui::Modifiers::default());
+    cx.run_until_parked();
+
+    // GitHub submits a review whole: there is nothing to tick here.
     list.read_with(cx, |list, _| assert!(list.selected_ids().is_empty()));
   }
 

@@ -4,6 +4,10 @@ All notable changes to Reviu are documented here.
 
 ## 1.0.0
 
+### The Title Of A Review Section Ticks Its Comments
+
+Only the small tick box of `To the agent` selected the whole batch. Its title now does too, so the whole header row is the target instead of a 14px square.
+
 ### The Palette Submits A Pull Request Review
 
 Sending a review to the agent had a command, submitting one to GitHub did not: the only way in was the button at the bottom of the Review panel. `Submit pull request review` is in the palette now, offered only while you have comments waiting on a pull request, and it opens the same decision dialog.
