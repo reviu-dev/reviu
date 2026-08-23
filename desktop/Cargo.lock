@@ -2351,7 +2351,7 @@ version = "0.5.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ab8ecd87370524b461f8557c119c405552c396ed91fc0a8eec68679eab26f94a"
 dependencies = [
- "libloading 0.8.9",
+ "libloading 0.7.4",
 ]
 
 [[package]]
@@ -3509,7 +3509,7 @@ dependencies = [
 [[package]]
 name = "gpui-base"
 version = "0.5.2"
-source = "git+https://github.com/joris-gallot/gpui-component?branch=reviu%2Ftree-selection-events#a4e3fb607100e4059f59c828a4dfea0113e0cef1"
+source = "git+https://github.com/joris-gallot/gpui-component?branch=reviu%2Ftree-selection-events#b157776743454b193b51ee58fa167fa70bd9e3ae"
 dependencies = [
  "aho-corasick",
  "anyhow",
@@ -3539,7 +3539,7 @@ dependencies = [
 [[package]]
 name = "gpui-component"
 version = "0.5.2"
-source = "git+https://github.com/joris-gallot/gpui-component?branch=reviu%2Ftree-selection-events#a4e3fb607100e4059f59c828a4dfea0113e0cef1"
+source = "git+https://github.com/joris-gallot/gpui-component?branch=reviu%2Ftree-selection-events#b157776743454b193b51ee58fa167fa70bd9e3ae"
 dependencies = [
  "anyhow",
  "chrono",
@@ -3584,7 +3584,7 @@ dependencies = [
 [[package]]
 name = "gpui-component-assets"
 version = "0.5.1"
-source = "git+https://github.com/joris-gallot/gpui-component?branch=reviu%2Ftree-selection-events#a4e3fb607100e4059f59c828a4dfea0113e0cef1"
+source = "git+https://github.com/joris-gallot/gpui-component?branch=reviu%2Ftree-selection-events#b157776743454b193b51ee58fa167fa70bd9e3ae"
 dependencies = [
  "anyhow",
  "gpui",
@@ -3598,7 +3598,7 @@ dependencies = [
 [[package]]
 name = "gpui-component-macros"
 version = "0.5.1"
-source = "git+https://github.com/joris-gallot/gpui-component?branch=reviu%2Ftree-selection-events#a4e3fb607100e4059f59c828a4dfea0113e0cef1"
+source = "git+https://github.com/joris-gallot/gpui-component?branch=reviu%2Ftree-selection-events#b157776743454b193b51ee58fa167fa70bd9e3ae"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -4267,7 +4267,7 @@ dependencies = [
  "libc",
  "percent-encoding",
  "pin-project-lite",
- "socket2 0.6.3",
+ "socket2 0.5.10",
  "tokio",
  "tower-service",
  "tracing",
@@ -6940,7 +6940,7 @@ dependencies = [
  "quinn-udp",
  "rustc-hash 2.1.2",
  "rustls",
- "socket2 0.6.3",
+ "socket2 0.5.10",
  "thiserror 2.0.18",
  "tokio",
  "tracing",
@@ -6979,7 +6979,7 @@ dependencies = [
  "cfg_aliases",
  "libc",
  "once_cell",
- "socket2 0.6.3",
+ "socket2 0.5.10",
  "tracing",
  "windows-sys 0.60.2",
 ]
@@ -8369,7 +8369,7 @@ version = "3.1.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "32824fab5e16e6c4d86dc1ba84489390419a39f97699852b66480bb87d297ed8"
 dependencies = [
- "dirs 6.0.0",
+ "dirs 5.0.1",
 ]
 
 [[package]]
@@ -10914,7 +10914,7 @@ version = "0.1.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c2a7b1c03c876122aa43f3020e6c3c3ee5c05081c9a00739faf7503aeba10d22"
 dependencies = [
- "windows-sys 0.61.2",
+ "windows-sys 0.48.0",
 ]
 
 [[package]]

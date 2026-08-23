@@ -2513,7 +2513,7 @@ mod tests {
 
     let history = page.read_with(cx, |page, cx| page.dock_panel.read(cx).history_list.clone());
     history.update(cx, |list, cx| {
-      list.open_commit_file(head, PathBuf::from("a.txt"), cx)
+      list.open_commit_file(head, PathBuf::from("a.txt"), OpenIntent::Open, cx)
     });
     await_open_file(&page, cx).await;
     await_editor_diff(&page, cx).await;

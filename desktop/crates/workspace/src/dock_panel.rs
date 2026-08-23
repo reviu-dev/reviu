@@ -19,7 +19,7 @@ use gpui::{
 use gpui_component::{
   ActiveTheme as _, Disableable as _, Icon, IconName, Sizable as _, h_flex,
   menu::{DropdownMenu as _, PopupMenuItem},
-  tree::{TreeState, tree},
+  tree::{TreeEvent, TreeState, tree},
   v_flex,
 };
 use terminal::TerminalView;
@@ -444,7 +444,6 @@ pub struct DockPanel {
   /// The tab was opened before its tree existed: focus it as soon as it does.
   focus_files_tree_when_loaded: bool,
   files_loading: bool,
-  selected_tree_id: Option<String>,
   pub(crate) _refresh_task: Option<Task<()>>,
   _commit_task: Option<Task<()>>,
   _pr_task: Option<Task<()>>,
@@ -499,6 +498,22 @@ impl DockPanel {
     })
     .detach();
 
+    // The worktree tree says where the user is and what they chose: a file row
+    // shows as they walk it, and opens when they pick it.
+    let files_tree_state = cx.new(|cx| TreeState::new(cx));
+    cx.subscribe(&files_tree_state, |_this, _tree, event: &TreeEvent, cx| {
+      let (id, intent) = match event {
+        TreeEvent::Selected(id) => (id.clone(), OpenIntent::Browse),
+        TreeEvent::Confirmed(id) => (id.clone(), OpenIntent::Open),
+        TreeEvent::Expanded(_) | TreeEvent::Collapsed(_) => return,
+      };
+      cx.emit(DockPanelEvent::OpenFile {
+        path: PathBuf::from(id.as_ref()),
+        intent,
+      });
+    })
+    .detach();
+
     let review_list = cx.new(|cx| ReviewList::new(window, cx));
     cx.subscribe(
       &review_list,
@@ -546,11 +561,15 @@ impl DockPanel {
     cx.subscribe(
       &history_list,
       |_this, _list, event: &HistoryListEvent, cx| match event {
-        HistoryListEvent::OpenCommitFile { commit_oid, path } => {
+        HistoryListEvent::OpenCommitFile {
+          commit_oid,
+          path,
+          intent,
+        } => {
           cx.emit(DockPanelEvent::OpenCommitFile {
             commit_oid: commit_oid.clone(),
             path: path.clone(),
-            intent: OpenIntent::Open,
+            intent: *intent,
           });
         }
       },
@@ -594,11 +613,10 @@ impl DockPanel {
       _pr_range_task: None,
       _pr_checks_task: None,
       _pr_review_comments_task: None,
-      files_tree_state: cx.new(|cx| TreeState::new(cx)),
+      files_tree_state,
       files_loaded: false,
       focus_files_tree_when_loaded: false,
       files_loading: false,
-      selected_tree_id: None,
       _refresh_task: None,
       _commit_task: None,
       _pr_task: None,
@@ -1724,26 +1742,6 @@ impl DockPanel {
       self
         .files_tree_state
         .update(cx, |tree, cx| tree.focus(window, cx));
-    }
-
-    // A file row was selected: open it in the editor. A folder row only folds.
-    if let Some((selected_id, is_folder)) = self
-      .files_tree_state
-      .read(cx)
-      .selected_entry()
-      .map(|entry| (entry.item().id.to_string(), entry.is_folder()))
-      && Some(selected_id.as_str()) != self.selected_tree_id.as_deref()
-    {
-      self.selected_tree_id = Some(selected_id.clone());
-      if !is_folder {
-        let path = PathBuf::from(selected_id);
-        cx.on_next_frame(window, move |_, _, cx| {
-          cx.emit(DockPanelEvent::OpenFile {
-            path,
-            intent: OpenIntent::Open,
-          });
-        });
-      }
     }
 
     if !self.files_loaded {
@@ -2991,6 +2989,55 @@ mod tests {
     });
   }
 
+  #[gpui::test]
+  async fn walking_the_file_tree_shows_files_and_enter_opens_them(cx: &mut TestAppContext) {
+    cx.update(|cx| gpui_component::init(cx));
+    let repo = TempRepo::init("dock-files-intent");
+    commit_text_file(&repo.path, Path::new("a.txt"), "v1\n", "first");
+    commit_text_file(&repo.path, Path::new("b.txt"), "v1\n", "second");
+
+    let (panel, cx) = add_dock_panel_window(Some(repo.path.clone()), cx);
+    await_refresh(&panel, cx).await;
+
+    panel.update_in(cx, |panel, window, cx| {
+      panel.open_tab(DockPanelTab::Files, window, cx)
+    });
+    let files = panel.update(cx, |panel, _| panel._files_task.take());
+    if let Some(files) = files {
+      files.await;
+    }
+    cx.run_until_parked();
+
+    let opened = Rc::new(std::cell::RefCell::new(Vec::new()));
+    let seen = opened.clone();
+    cx.update(|_, cx| {
+      cx.subscribe(&panel, move |_panel, event: &DockPanelEvent, _cx| {
+        if let DockPanelEvent::OpenFile { path, intent } = event {
+          seen.borrow_mut().push((path.clone(), *intent));
+        }
+      })
+      .detach();
+    });
+
+    // The first down lands on the second row: the tree starts with nothing
+    // selected and counts from there.
+    cx.simulate_keystrokes("down");
+    cx.run_until_parked();
+    assert_eq!(
+      opened.borrow().as_slice(),
+      &[(PathBuf::from("b.txt"), OpenIntent::Browse)],
+      "walking the tree shows the file, it does not choose it"
+    );
+
+    cx.simulate_keystrokes("enter");
+    cx.run_until_parked();
+    assert_eq!(
+      opened.borrow().last(),
+      Some(&(PathBuf::from("b.txt"), OpenIntent::Open)),
+      "Enter chooses it"
+    );
+  }
+
   async fn await_refresh(panel: &Entity<DockPanel>, cx: &mut gpui::VisualTestContext) {
     let task = panel.update(cx, |panel, _| panel._refresh_task.take());
     if let Some(task) = task {
@@ -4081,7 +4128,12 @@ mod tests {
       .expect("head sha")
       .expect("head sha");
     history.update(cx, |list, cx| {
-      list.open_commit_file(head.clone(), PathBuf::from("README.md"), cx)
+      list.open_commit_file(
+        head.clone(),
+        PathBuf::from("README.md"),
+        OpenIntent::Open,
+        cx,
+      )
     });
     cx.run_until_parked();
 

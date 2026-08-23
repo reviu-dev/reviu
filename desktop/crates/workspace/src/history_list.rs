@@ -14,11 +14,13 @@ use gpui::{
 use gpui_component::{
   ActiveTheme as _, Icon, IconName, Sizable as _, h_flex,
   spinner::Spinner,
-  tree::{TreeItem, TreeState, tree},
+  tree::{TreeEvent, TreeItem, TreeState, tree},
 };
 use ui::{
   FILE_ICON_SIZE_PX, SelectableRowStyle, file_icon_path_for_path_with_theme, selectable_list_item,
 };
+
+use crate::open_intent::OpenIntent;
 
 pub(crate) const HISTORY_MAX_COMMITS: usize = 200;
 pub(crate) const HISTORY_LIST_DEBUG_SELECTOR: &str = "history-list";
@@ -77,7 +79,11 @@ pub(crate) enum HistoryTreeNode {
 }
 
 pub(crate) enum HistoryListEvent {
-  OpenCommitFile { commit_oid: String, path: PathBuf },
+  OpenCommitFile {
+    commit_oid: String,
+    path: PathBuf,
+    intent: OpenIntent,
+  },
 }
 
 pub(crate) struct HistoryList {
@@ -109,6 +115,12 @@ impl Focusable for HistoryList {
 
 impl HistoryList {
   pub(crate) fn new(cx: &mut Context<Self>) -> Self {
+    let tree = cx.new(|cx| TreeState::new(cx));
+    cx.subscribe(&tree, |this, _tree, event: &TreeEvent, cx| {
+      this.on_tree_event(event, cx)
+    })
+    .detach();
+
     Self {
       repo_root: None,
       commits: Vec::new(),
@@ -120,7 +132,7 @@ impl HistoryList {
       expanded_commits: HashSet::new(),
       opened: None,
       loading: false,
-      tree: cx.new(|cx| TreeState::new(cx)),
+      tree,
       tree_nodes: HashMap::new(),
       focus_handle: cx.focus_handle().tab_stop(true),
       _history_task: None,
@@ -349,11 +361,38 @@ impl HistoryList {
     &mut self,
     commit_oid: String,
     path: PathBuf,
+    intent: OpenIntent,
     cx: &mut Context<Self>,
   ) {
     self.opened = Some((commit_oid.clone(), path.clone()));
-    cx.emit(HistoryListEvent::OpenCommitFile { commit_oid, path });
+    cx.emit(HistoryListEvent::OpenCommitFile {
+      commit_oid,
+      path,
+      intent,
+    });
     cx.notify();
+  }
+
+  /// The tree says where the user is and what they chose; the rows say nothing,
+  /// so a click and a keystroke arrive here by the same road.
+  fn on_tree_event(&mut self, event: &TreeEvent, cx: &mut Context<Self>) {
+    let (id, intent) = match event {
+      TreeEvent::Selected(id) => (id.clone(), OpenIntent::Browse),
+      TreeEvent::Confirmed(id) => (id.clone(), OpenIntent::Open),
+      TreeEvent::Expanded(_) | TreeEvent::Collapsed(_) => return,
+    };
+    match self.tree_nodes.get(id.as_ref()) {
+      Some(HistoryTreeNode::File { commit_oid, file }) => {
+        let (commit_oid, path) = (commit_oid.clone(), file.path.clone());
+        self.open_commit_file(commit_oid, path, intent, cx);
+      }
+      // Loading more commits is a choice, not something to trip over in passing.
+      Some(HistoryTreeNode::LoadHint { oid }) if intent.takes_focus() => {
+        let oid = oid.clone();
+        self.load_commit_files(oid, cx);
+      }
+      _ => {}
+    }
   }
 
   fn render_tree(&mut self, cx: &mut Context<Self>) -> AnyElement {
@@ -457,8 +496,6 @@ impl HistoryList {
               .opened
               .as_ref()
               .is_some_and(|(oid, opened_path)| oid == &commit_oid && opened_path == &file.path);
-            let path = file.path.clone();
-            let open_commit_oid = commit_oid.clone();
             let row_index = ix;
 
             selectable_list_item(row_index, is_open, SelectableRowStyle::Inset, &theme)
@@ -489,9 +526,6 @@ impl HistoryList {
                       .child(file.label.clone()),
                   ),
               )
-              .on_click(cx.listener(move |this, _, _, cx| {
-                this.open_commit_file(open_commit_oid.clone(), path.clone(), cx);
-              }))
           }
           Some(HistoryTreeNode::LoadHint { oid }) => {
             let load_oid = oid.clone();
@@ -755,6 +789,57 @@ mod tests {
     );
   }
 
+  #[gpui::test]
+  async fn walking_a_commit_shows_its_files_and_enter_opens_them(cx: &mut TestAppContext) {
+    let repo = TempRepo::init("history-list-open-intent");
+    commit_text_file(&repo.path, Path::new("a.txt"), "v1\n", "first");
+
+    let (list, cx) = add_history_list_window(Some(repo.path.clone()), cx);
+    await_history(&list, cx).await;
+
+    let opened = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+    let seen = opened.clone();
+    cx.update(|_, cx| {
+      cx.subscribe(&list, move |_list, event: &HistoryListEvent, _cx| {
+        let HistoryListEvent::OpenCommitFile { path, intent, .. } = event;
+        seen.borrow_mut().push((path.clone(), *intent));
+      })
+      .detach();
+    });
+
+    list.update_in(cx, |list, window, cx| list.focus(window, cx));
+    cx.run_until_parked();
+
+    // Onto the commit and open it. The lazy load of its files is driven by the
+    // render, which a test window does not run, so it is asked for here.
+    cx.simulate_keystrokes("down");
+    cx.simulate_keystrokes("right");
+    cx.run_until_parked();
+    let oid = list.read_with(cx, |list, _| list.rows[0].commit.oid.clone());
+    list.update(cx, |list, cx| list.load_commit_files(oid, cx));
+    let files = list.update(cx, |list, _| list._files_task.take());
+    if let Some(files) = files {
+      files.await;
+    }
+    cx.run_until_parked();
+
+    cx.simulate_keystrokes("down");
+    cx.run_until_parked();
+    assert_eq!(
+      opened.borrow().as_slice(),
+      &[(PathBuf::from("a.txt"), OpenIntent::Browse)],
+      "walking onto a file of the commit shows it"
+    );
+
+    cx.simulate_keystrokes("enter");
+    cx.run_until_parked();
+    assert_eq!(
+      opened.borrow().last(),
+      Some(&(PathBuf::from("a.txt"), OpenIntent::Open)),
+      "Enter opens it, which it never did before"
+    );
+  }
+
   async fn await_history(list: &Entity<HistoryList>, cx: &mut gpui::VisualTestContext) {
     loop {
       let (history, files) = list.update(cx, |list, _| {
@@ -882,14 +967,16 @@ mod tests {
     let seen = opened.clone();
     cx.update(|_, cx| {
       cx.subscribe(&list, move |_list, event: &HistoryListEvent, _cx| {
-        let HistoryListEvent::OpenCommitFile { commit_oid, path } = event;
+        let HistoryListEvent::OpenCommitFile {
+          commit_oid, path, ..
+        } = event;
         seen.borrow_mut().push((commit_oid.clone(), path.clone()));
       })
       .detach();
     });
 
     list.update(cx, |list, cx| {
-      list.open_commit_file(head.clone(), PathBuf::from("a.txt"), cx)
+      list.open_commit_file(head.clone(), PathBuf::from("a.txt"), OpenIntent::Open, cx)
     });
     cx.run_until_parked();
 

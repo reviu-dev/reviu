@@ -4,6 +4,14 @@ All notable changes to Reviu are documented here.
 
 ## 1.0.0
 
+### The File Trees Answer The Keyboard Too
+
+Files and History now behave like the Changes and Review lists: arrows show what the row holds and leave the keyboard where it is, Enter opens the file and hands the editor the focus.
+
+History gains more than that. Pressing Enter on a file of a commit did nothing at all, and walking through them showed nothing either, so the only way in was the mouse. Both work now.
+
+Reviu also stopped guessing what you did in the Files tab. It used to compare the selected row against the previous one on every repaint to notice a change; the tree now says so itself, which is why walking it no longer drags the editor along.
+
 ### Walking A List Is Not Choosing From It
 
 Moving through the Changes list or the Review list with the arrow keys used to open the row and hand the keyboard to the editor, so the next arrow key went into the file instead of the list. One keypress of browsing, then you were somewhere else.
