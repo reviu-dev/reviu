@@ -4,6 +4,10 @@ All notable changes to Reviu are documented here.
 
 ## 1.0.0
 
+### Review Rows Are The Height Of Every Other Row
+
+The rows of the Review tab were 8px taller than the rows of Changes, Files, History and the files of a pull request: they padded themselves on top of the padding every row of the dock already pays. A comment now takes exactly the height of any other row, so the panel shows more of the review without scrolling.
+
 ### The Title Of A Review Section Ticks Its Comments
 
 Only the small tick box of `To the agent` selected the whole batch. Its title now does too, so the whole header row is the target instead of a 14px square.

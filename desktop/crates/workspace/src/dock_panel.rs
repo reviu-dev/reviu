@@ -4734,4 +4734,49 @@ mod tests {
       );
     });
   }
+
+  /// The Review tab used to pad its rows on top of the padding every list item
+  /// already pays, so its comments stood taller than every other list of the
+  /// dock.
+  #[gpui::test]
+  async fn a_review_row_is_as_tall_as_a_row_of_the_pull_request(cx: &mut TestAppContext) {
+    let (panel, cx) = pull_request_panel(
+      cx,
+      vec![changed_file(
+        "src/main.rs",
+        git::CommitFileChangeKind::Modified,
+      )],
+    );
+    let pull_request_row = cx
+      .debug_bounds("pr-file-src/main.rs")
+      .expect("pull request file bounds");
+
+    panel.update(cx, |panel, cx| {
+      panel.active_tab = DockPanelTab::Review;
+      panel.review_list.update(cx, |list, cx| {
+        list.set_comments(
+          crate::review_list::ReviewSection::Agent,
+          vec![crate::review_list::ReviewPanelComment {
+            id: 1,
+            section: crate::review_list::ReviewSection::Agent,
+            path: PathBuf::from("src/main.rs"),
+            line: 2,
+            line_label: "L2".to_string(),
+            excerpt: "here".to_string(),
+            status: crate::review_list::ReviewRowStatus::Draft,
+            sendable: true,
+          }],
+          cx,
+        );
+      });
+      cx.notify();
+    });
+    cx.run_until_parked();
+
+    let review_row = cx
+      .debug_bounds("review-comment-agent-1")
+      .expect("review comment bounds");
+
+    assert_eq!(review_row.size.height, pull_request_row.size.height);
+  }
 }
