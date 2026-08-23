@@ -4,6 +4,12 @@ All notable changes to Reviu are documented here.
 
 ## 1.0.0
 
+### The Palette Submits A Pull Request Review
+
+Sending a review to the agent had a command, submitting one to GitHub did not: the only way in was the button at the bottom of the Review panel. `Submit pull request review` is in the palette now, offered only while you have comments waiting on a pull request, and it opens the same decision dialog.
+
+The three review commands also left the `Changes` group, where they sat between commit and cherry-pick. They have a `Review` group of their own, right after `Changes`.
+
 ### One Step Of Spacing In A Comment Card
 
 The spacing inside a comment card followed no rhythm. A reply's separator sat against the text above it and held all of its air underneath, and the reply box put its own space above `You` and almost none below. The first comment, its replies and the reply box now breathe the same.

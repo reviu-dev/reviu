@@ -55,6 +55,9 @@ impl SessionPage {
       if !self.agent_review.all().is_empty() {
         commands.push(CommandPaletteCommand::discard_review());
       }
+      if self.dock_panel.read(cx).has_pending_pull_request_review() {
+        commands.push(CommandPaletteCommand::submit_pull_request_review());
+      }
       if self.can_accept_all_conflicts(cx) {
         commands.push(CommandPaletteCommand::accept_all_current_conflicts());
         commands.push(CommandPaletteCommand::accept_all_incoming_conflicts());
@@ -214,6 +217,12 @@ impl SessionPage {
       }
       CommandPaletteAction::DiscardReview => {
         self.confirm_discard_agent_review(window, cx);
+        Ok(())
+      }
+      CommandPaletteAction::SubmitPullRequestReview => {
+        self.dock_panel.update(cx, |panel, cx| {
+          panel.submit_pull_request_review(window, cx);
+        });
         Ok(())
       }
       CommandPaletteAction::Commit => {
@@ -868,6 +877,52 @@ mod tests {
         .collect::<Vec<_>>();
       assert!(ids.contains(&CommandPaletteCommandId::ForcePush));
       assert!(!ids.contains(&CommandPaletteCommandId::Push));
+    });
+  }
+
+  #[gpui::test]
+  async fn the_palette_submits_a_pull_request_review_only_while_one_is_pending(
+    cx: &mut TestAppContext,
+  ) {
+    let repo = TempRepo::init("session-page-palette-submit-review");
+    commit_text_file(&repo.path, Path::new("a.txt"), "v1\n", "initial");
+    let (page, cx) = add_session_page_window(repo.path.clone(), cx);
+    cx.run_until_parked();
+
+    let ids = |page: &SessionPage, cx: &App| {
+      page
+        .palette_commands(1, cx)
+        .into_iter()
+        .map(|command| command.id)
+        .collect::<Vec<_>>()
+    };
+
+    page.read_with(cx, |page, cx| {
+      assert!(
+        !ids(page, cx).contains(&CommandPaletteCommandId::SubmitPullRequestReview),
+        "nothing written, nothing to submit"
+      );
+    });
+
+    page.update(cx, |page, cx| {
+      page.dock_panel.update(cx, |panel, cx| {
+        panel.set_pull_request_review_comments_for_test(
+          vec![
+            crate::pull_request_review_comments::pending_comment_fixture(
+              1,
+              "a.txt",
+              Some(1),
+              "here",
+            ),
+          ],
+          cx,
+        );
+      });
+    });
+    cx.run_until_parked();
+
+    page.read_with(cx, |page, cx| {
+      assert!(ids(page, cx).contains(&CommandPaletteCommandId::SubmitPullRequestReview));
     });
   }
 }

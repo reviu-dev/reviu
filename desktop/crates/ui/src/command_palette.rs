@@ -159,6 +159,7 @@ pub enum CommandPaletteAction {
   Commit,
   SendReview,
   DiscardReview,
+  SubmitPullRequestReview,
   ContinueRebase,
   SkipRebase,
   Push,
@@ -771,6 +772,7 @@ pub enum CommandPaletteCommandId {
   UnstageSelectedFile,
   SendReview,
   DiscardReview,
+  SubmitPullRequestReview,
   AcceptAllCurrentConflicts,
   AcceptAllIncomingConflicts,
   CreateBranch,
@@ -817,6 +819,7 @@ impl CommandPaletteCommandId {
       Self::Commit => "commit",
       Self::SendReview => "send_review",
       Self::DiscardReview => "discard_review",
+      Self::SubmitPullRequestReview => "submit_pull_request_review",
       Self::ContinueRebase => "continue_rebase",
       Self::SkipRebase => "skip_rebase",
       Self::Push => "push",
@@ -933,6 +936,7 @@ impl CommandPaletteCommandId {
 pub enum CommandPaletteGroup {
   Recent,
   Changes,
+  Review,
   Sync,
   Branches,
   RebaseMergeProgress,
@@ -949,6 +953,7 @@ impl CommandPaletteGroup {
     match self {
       Self::Recent => "Recent",
       Self::Changes => "Changes",
+      Self::Review => "Review",
       Self::Sync => "Sync",
       Self::Branches => "Branches",
       Self::RebaseMergeProgress => "In progress",
@@ -1029,6 +1034,14 @@ impl CommandPaletteCommand {
       CommandPaletteCommandId::DiscardReview,
       "Discard review",
       "Delete every comment of this review",
+    )
+  }
+
+  pub fn submit_pull_request_review() -> Self {
+    Self::new(
+      CommandPaletteCommandId::SubmitPullRequestReview,
+      "Submit pull request review",
+      "Send these comments to GitHub with a decision",
     )
   }
 
@@ -1421,9 +1434,11 @@ impl CommandPaletteCommand {
 
   pub fn group(&self) -> CommandPaletteGroup {
     match self.id {
-      CommandPaletteCommandId::Commit
-      | CommandPaletteCommandId::SendReview
+      CommandPaletteCommandId::SendReview
       | CommandPaletteCommandId::DiscardReview
+      | CommandPaletteCommandId::SubmitPullRequestReview => CommandPaletteGroup::Review,
+
+      CommandPaletteCommandId::Commit
       | CommandPaletteCommandId::Amend
       | CommandPaletteCommandId::UndoLastCommit
       | CommandPaletteCommandId::StageSelectedFile
@@ -1492,6 +1507,7 @@ impl CommandPaletteCommand {
       CommandPaletteCommandId::Commit => Icon::new(IconName::Check),
       CommandPaletteCommandId::SendReview => Icon::new(UiIconName::MessageCircle),
       CommandPaletteCommandId::DiscardReview => Icon::new(UiIconName::Trash),
+      CommandPaletteCommandId::SubmitPullRequestReview => Icon::new(UiIconName::GitPullRequest),
       CommandPaletteCommandId::ContinueRebase => Icon::new(IconName::Check),
       CommandPaletteCommandId::SkipRebase => Icon::new(UiIconName::GitMerge),
       CommandPaletteCommandId::Push => Icon::new(IconName::ArrowUp),
@@ -2516,6 +2532,14 @@ impl CommandPalette {
       CommandPaletteCommandId::DiscardReview => {
         self.trigger_action(command, CommandPaletteAction::DiscardReview, window, cx);
       }
+      CommandPaletteCommandId::SubmitPullRequestReview => {
+        self.trigger_action(
+          command,
+          CommandPaletteAction::SubmitPullRequestReview,
+          window,
+          cx,
+        );
+      }
       CommandPaletteCommandId::ContinueRebase => {
         self.trigger_action(command, CommandPaletteAction::ContinueRebase, window, cx);
       }
@@ -3209,6 +3233,18 @@ mod tests {
       CommandPaletteGroup::Changes
     );
     assert_eq!(
+      CommandPaletteCommand::send_review().group(),
+      CommandPaletteGroup::Review
+    );
+    assert_eq!(
+      CommandPaletteCommand::discard_review().group(),
+      CommandPaletteGroup::Review
+    );
+    assert_eq!(
+      CommandPaletteCommand::submit_pull_request_review().group(),
+      CommandPaletteGroup::Review
+    );
+    assert_eq!(
       CommandPaletteCommand::push("Push").group(),
       CommandPaletteGroup::Sync
     );
@@ -3264,6 +3300,7 @@ mod tests {
       CommandPaletteGroup::RebaseMergeProgress,
       CommandPaletteGroup::Branches,
       CommandPaletteGroup::Sync,
+      CommandPaletteGroup::Review,
       CommandPaletteGroup::Changes,
     ];
     groups.sort();
@@ -3271,6 +3308,7 @@ mod tests {
       groups,
       [
         CommandPaletteGroup::Changes,
+        CommandPaletteGroup::Review,
         CommandPaletteGroup::Sync,
         CommandPaletteGroup::Branches,
         CommandPaletteGroup::RebaseMergeProgress,
