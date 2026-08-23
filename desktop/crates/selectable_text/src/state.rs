@@ -1,6 +1,6 @@
 use std::{
   ops::Range,
-  sync::{Arc, Mutex},
+  sync::{Arc, Mutex, MutexGuard},
 };
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
@@ -29,12 +29,20 @@ impl SelectionRegistry {
     Self::default()
   }
 
+  // A panic while the lock is held must not poison every later selection.
+  fn lock(&self) -> MutexGuard<'_, Option<ActiveSelection>> {
+    self
+      .0
+      .lock()
+      .unwrap_or_else(|poisoned| poisoned.into_inner())
+  }
+
   pub fn clear(&self) {
-    *self.0.lock().unwrap() = None;
+    *self.lock() = None;
   }
 
   pub fn active_for(&self, text_id: u64) -> Option<ActiveSelection> {
-    let guard = self.0.lock().unwrap();
+    let guard = self.lock();
     match guard.as_ref() {
       Some(active) if active.text_id == text_id => Some(active.clone()),
       _ => None,
@@ -50,7 +58,7 @@ impl SelectionRegistry {
     mode: SelectionMode,
     anchor_word: Option<Range<usize>>,
   ) {
-    *self.0.lock().unwrap() = Some(ActiveSelection {
+    *self.lock() = Some(ActiveSelection {
       text_id,
       anchor,
       head,
@@ -62,7 +70,7 @@ impl SelectionRegistry {
 
   #[allow(dead_code)]
   pub(crate) fn clear_if(&self, text_id: u64) {
-    let mut guard = self.0.lock().unwrap();
+    let mut guard = self.lock();
     if guard.as_ref().is_some_and(|a| a.text_id == text_id) {
       *guard = None;
     }
@@ -94,6 +102,24 @@ mod tests {
     let registry = SelectionRegistry::new();
     registry.set(1, 0, 3, false, SelectionMode::Character, None);
     assert!(registry.active_for(2).is_none());
+  }
+
+  #[test]
+  fn registry_survives_a_panic_holding_the_lock() {
+    let registry = SelectionRegistry::new();
+    registry.set(1, 0, 5, true, SelectionMode::Character, None);
+
+    let poisoner = registry.clone();
+    let panicked = std::thread::spawn(move || {
+      let _guard = poisoner.lock();
+      panic!("poison the selection lock");
+    })
+    .join();
+    assert!(panicked.is_err());
+
+    assert_eq!(registry.active_for(1).expect("active selection").head, 5);
+    registry.clear();
+    assert!(registry.active_for(1).is_none());
   }
 
   #[test]

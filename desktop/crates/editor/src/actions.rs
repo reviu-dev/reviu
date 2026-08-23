@@ -155,12 +155,9 @@ pub fn up(editor: &mut Editor, _: &Up, window: &mut Window, cx: &mut Context<Edi
     let current_line = document.char_to_line(cursor_offset);
 
     if current_line > 0 {
-      if editor.target_column.is_none() {
-        let line_start = document.line_to_char(current_line);
-        editor.target_column = Some(cursor_offset - line_start);
-      }
-
-      let target_column = editor.target_column.unwrap();
+      let target_column = *editor
+        .target_column
+        .get_or_insert_with(|| cursor_offset - document.line_to_char(current_line));
 
       let target_line = editor.previous_visible_doc_line(current_line).unwrap_or(0);
       let target_start = document.line_to_char(target_line);
@@ -169,17 +166,15 @@ pub fn up(editor: &mut Editor, _: &Up, window: &mut Window, cx: &mut Context<Edi
         .map(|line| line.chars().count())
         .unwrap_or(0);
 
-      Some(target_start + target_column.min(target_len))
+      target_start + target_column.min(target_len)
     } else {
       editor.target_column = None;
-      Some(0)
+      0
     }
   };
 
-  if let Some(cursor) = new_cursor {
-    editor.move_to(cursor, cx);
-    editor.ensure_cursor_visible(window, cx);
-  }
+  editor.move_to(new_cursor, cx);
+  editor.ensure_cursor_visible(window, cx);
 }
 
 pub fn down(editor: &mut Editor, _: &Down, window: &mut Window, cx: &mut Context<Editor>) {
@@ -194,12 +189,9 @@ pub fn down(editor: &mut Editor, _: &Down, window: &mut Window, cx: &mut Context
     let doc_line_count = document.len_lines();
 
     if current_line < doc_line_count.saturating_sub(1) {
-      if editor.target_column.is_none() {
-        let line_start = document.line_to_char(current_line);
-        editor.target_column = Some(cursor_offset - line_start);
-      }
-
-      let target_column = editor.target_column.unwrap();
+      let target_column = *editor
+        .target_column
+        .get_or_insert_with(|| cursor_offset - document.line_to_char(current_line));
 
       let target_line = editor
         .next_visible_doc_line(current_line, doc_line_count)
@@ -210,17 +202,15 @@ pub fn down(editor: &mut Editor, _: &Down, window: &mut Window, cx: &mut Context
         .map(|line| line.chars().count())
         .unwrap_or(0);
 
-      Some(target_start + target_column.min(target_len))
+      target_start + target_column.min(target_len)
     } else {
       editor.target_column = None;
-      Some(document.len())
+      document.len()
     }
   };
 
-  if let Some(cursor) = new_cursor {
-    editor.move_to(cursor, cx);
-    editor.ensure_cursor_visible(window, cx);
-  }
+  editor.move_to(new_cursor, cx);
+  editor.ensure_cursor_visible(window, cx);
 }
 
 pub fn left(editor: &mut Editor, _: &Left, window: &mut Window, cx: &mut Context<Editor>) {
@@ -406,18 +396,15 @@ pub fn select_up(editor: &mut Editor, _: &SelectUp, window: &mut Window, cx: &mu
     editor.selected_range.start
   };
 
-  let new_cursor = {
+  let cursor = {
     let document = editor.document.read(cx);
     let cursor_offset = editor.cursor_offset();
     let current_line = document.char_to_line(cursor_offset);
 
     if current_line > 0 {
-      if editor.target_column.is_none() {
-        let line_start = document.line_to_char(current_line);
-        editor.target_column = Some(cursor_offset - line_start);
-      }
-
-      let target_column = editor.target_column.unwrap();
+      let target_column = *editor
+        .target_column
+        .get_or_insert_with(|| cursor_offset - document.line_to_char(current_line));
 
       let target_line = editor.previous_visible_doc_line(current_line).unwrap_or(0);
       let target_start = document.line_to_char(target_line);
@@ -426,14 +413,13 @@ pub fn select_up(editor: &mut Editor, _: &SelectUp, window: &mut Window, cx: &mu
         .map(|line| line.chars().count())
         .unwrap_or(0);
 
-      Some(target_start + target_column.min(target_len))
+      target_start + target_column.min(target_len)
     } else {
       editor.target_column = None;
-      Some(0)
+      0
     }
   };
 
-  let cursor = new_cursor.unwrap();
   if anchor <= cursor {
     editor.selected_range = anchor..cursor;
     editor.selection_reversed = false;
@@ -461,19 +447,16 @@ pub fn select_down(
     editor.selected_range.start
   };
 
-  let new_cursor = {
+  let cursor = {
     let document = editor.document.read(cx);
     let cursor_offset = editor.cursor_offset();
     let current_line = document.char_to_line(cursor_offset);
     let total_lines = document.len_lines();
 
     if current_line + 1 < total_lines {
-      if editor.target_column.is_none() {
-        let line_start = document.line_to_char(current_line);
-        editor.target_column = Some(cursor_offset - line_start);
-      }
-
-      let target_column = editor.target_column.unwrap();
+      let target_column = *editor
+        .target_column
+        .get_or_insert_with(|| cursor_offset - document.line_to_char(current_line));
 
       let target_line = editor
         .next_visible_doc_line(current_line, total_lines)
@@ -484,14 +467,13 @@ pub fn select_down(
         .map(|line| line.chars().count())
         .unwrap_or(0);
 
-      Some(target_start + target_column.min(target_len))
+      target_start + target_column.min(target_len)
     } else {
       editor.target_column = None;
-      Some(document.len())
+      document.len()
     }
   };
 
-  let cursor = new_cursor.unwrap();
   if anchor <= cursor {
     editor.selected_range = anchor..cursor;
     editor.selection_reversed = false;

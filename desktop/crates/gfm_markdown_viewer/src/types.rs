@@ -3,7 +3,7 @@ use std::{
   ops::Range,
   path::PathBuf,
   sync::{
-    Arc, Mutex,
+    Arc, Mutex, MutexGuard,
     atomic::{AtomicUsize, Ordering},
   },
 };
@@ -285,4 +285,11 @@ pub(crate) enum Segment {
 #[derive(Clone)]
 pub struct ParsedMarkdown {
   pub(crate) blocks: Arc<Vec<Block>>,
+}
+
+// A panic while a cache lock is held must not poison every later render.
+pub(crate) fn lock_ignoring_poison<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
+  mutex
+    .lock()
+    .unwrap_or_else(|poisoned| poisoned.into_inner())
 }

@@ -42,7 +42,7 @@ pub fn is_github_user_attachment_url(url: &str) -> bool {
 
 fn resolve_github_asset_url_async(url: &str, resolver: &Arc<AssetUrlResolverFn>) -> Option<String> {
   {
-    let cache = GITHUB_ASSET_URL_CACHE.lock().unwrap();
+    let cache = lock_ignoring_poison(&GITHUB_ASSET_URL_CACHE);
     if let Some(state) = cache.get(url) {
       return match state {
         GithubAssetResolveState::Resolved(signed_url) => Some(signed_url.clone()),
@@ -51,9 +51,7 @@ fn resolve_github_asset_url_async(url: &str, resolver: &Arc<AssetUrlResolverFn>)
     }
   }
 
-  GITHUB_ASSET_URL_CACHE
-    .lock()
-    .unwrap()
+  lock_ignoring_poison(&GITHUB_ASSET_URL_CACHE)
     .insert(url.to_string(), GithubAssetResolveState::Pending);
 
   let url = url.to_string();
@@ -64,7 +62,7 @@ fn resolve_github_asset_url_async(url: &str, resolver: &Arc<AssetUrlResolverFn>)
     } else {
       GithubAssetResolveState::Failed
     };
-    GITHUB_ASSET_URL_CACHE.lock().unwrap().insert(url, state);
+    lock_ignoring_poison(&GITHUB_ASSET_URL_CACHE).insert(url, state);
   });
 
   None
@@ -72,7 +70,7 @@ fn resolve_github_asset_url_async(url: &str, resolver: &Arc<AssetUrlResolverFn>)
 
 pub(crate) fn resolve_badge_image_source_async(url: &str) -> Option<BadgeImageSource> {
   {
-    let cache = BADGE_IMAGE_SOURCE_CACHE.lock().unwrap();
+    let cache = lock_ignoring_poison(&BADGE_IMAGE_SOURCE_CACHE);
     if let Some(state) = cache.get(url) {
       return match state {
         BadgeResolveState::Ready(source) => Some(source.clone()),
@@ -81,9 +79,7 @@ pub(crate) fn resolve_badge_image_source_async(url: &str) -> Option<BadgeImageSo
     }
   }
 
-  BADGE_IMAGE_SOURCE_CACHE
-    .lock()
-    .unwrap()
+  lock_ignoring_poison(&BADGE_IMAGE_SOURCE_CACHE)
     .insert(url.to_string(), BadgeResolveState::Pending);
 
   let url = url.to_string();
@@ -94,7 +90,7 @@ pub(crate) fn resolve_badge_image_source_async(url: &str) -> Option<BadgeImageSo
     } else {
       BadgeResolveState::Failed
     };
-    BADGE_IMAGE_SOURCE_CACHE.lock().unwrap().insert(url, state);
+    lock_ignoring_poison(&BADGE_IMAGE_SOURCE_CACHE).insert(url, state);
   });
 
   None
@@ -113,16 +109,14 @@ pub(crate) fn load_badge_image_data(
 }
 
 pub(crate) fn fetch_badge_image_source(url: &str) -> Option<BadgeImageSource> {
-  if let Some(state) = BADGE_IMAGE_SOURCE_CACHE.lock().unwrap().get(url)
+  if let Some(state) = lock_ignoring_poison(&BADGE_IMAGE_SOURCE_CACHE).get(url)
     && let BadgeResolveState::Ready(source) = state
   {
     return Some(source.clone());
   }
 
   let source = fetch_badge_image_source_blocking(url)?;
-  BADGE_IMAGE_SOURCE_CACHE
-    .lock()
-    .unwrap()
+  lock_ignoring_poison(&BADGE_IMAGE_SOURCE_CACHE)
     .insert(url.to_string(), BadgeResolveState::Ready(source.clone()));
   Some(source)
 }

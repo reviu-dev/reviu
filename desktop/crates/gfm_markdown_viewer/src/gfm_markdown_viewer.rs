@@ -2494,7 +2494,7 @@ fn render_details(
   let theme = cx.theme();
   let details_id = ctx.next_details_id();
   let is_open = {
-    let mut map = options.state.details_open.lock().unwrap();
+    let mut map = lock_ignoring_poison(&options.state.details_open);
     map.entry(details_id).or_insert(details.open);
     *map.get(&details_id).unwrap_or(&details.open)
   };
@@ -2535,7 +2535,7 @@ fn render_details(
           .cursor_pointer()
           .child(gpui_component::Icon::new(toggle_icon).small())
           .on_mouse_down(MouseButton::Left, move |_, window, cx| {
-            let mut map = toggle_state.details_open.lock().unwrap();
+            let mut map = lock_ignoring_poison(&toggle_state.details_open);
             let next = !map.get(&details_id).copied().unwrap_or(default_open);
             map.insert(details_id, next);
             window.refresh();
@@ -2553,7 +2553,7 @@ fn render_details(
       .child(gpui_component::Icon::new(toggle_icon).small())
       .child(summary_text)
       .on_mouse_down(MouseButton::Left, move |_, window, cx| {
-        let mut map = toggle_state.details_open.lock().unwrap();
+        let mut map = lock_ignoring_poison(&toggle_state.details_open);
         let next = !map.get(&details_id).copied().unwrap_or(default_open);
         map.insert(details_id, next);
         window.refresh();
