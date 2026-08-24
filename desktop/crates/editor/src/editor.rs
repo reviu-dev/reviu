@@ -27,13 +27,14 @@ use gpui::{
   point, prelude::*, px, white,
 };
 use gpui_component::{
-  ActiveTheme as _, Disableable as _, Icon, IconName, Selectable, Sizable,
+  ActiveTheme as _, ColorName, Disableable as _, Icon, IconName, Selectable, Sizable,
   avatar::Avatar,
   button::{Button, ButtonVariants as _},
   h_flex,
   input::{Escape as InputEscape, Input, InputEvent, InputState, TextareaState},
   menu::{DropdownMenu as _, PopupMenuItem},
   resizable::{h_resizable, resizable_panel},
+  tag::Tag,
   v_flex,
 };
 use parking_lot::RwLock;
@@ -4733,12 +4734,7 @@ impl Editor {
             )
           })
           .when(first_message.is_outdated, |this| {
-            this.child(
-              ui::StatusTag::new(theme.status_orange())
-                .outline()
-                .small()
-                .child("Outdated"),
-            )
+            this.child(Tag::color(ColorName::Orange).small().child("Outdated"))
           })
       } else {
         h_flex()
@@ -4795,20 +4791,10 @@ impl Editor {
         .items_center()
         .gap_1()
         .when(first_message.is_pending, |this| {
-          this.child(
-            ui::StatusTag::new(theme.status_yellow())
-              .outline()
-              .small()
-              .child("Pending"),
-          )
+          this.child(Tag::color(ColorName::Amber).small().child("Pending"))
         })
         .when(wears_resolved_tag, |this| {
-          this.child(
-            ui::StatusTag::new(theme.status_green())
-              .outline()
-              .small()
-              .child("Resolved"),
-          )
+          this.child(Tag::color(ColorName::Green).small().child("Resolved"))
         })
         .when_some(first_message_resolve_button, |this, button| {
           this.child(button)
@@ -5479,7 +5465,7 @@ impl Editor {
         .saturating_add(1);
       let height = line_height * span_count as f32;
       let selection_color = theme
-        .status_yellow()
+        .status_amber()
         .opacity(REVIEW_COMMENT_CREATE_SELECTION_BACKGROUND_ALPHA);
 
       overlay = overlay.child(

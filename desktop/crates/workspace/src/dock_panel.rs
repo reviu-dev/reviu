@@ -316,7 +316,7 @@ fn check_state_icon(
       Icon::new(UiIconName::CircleCheck).text_color(theme.status_green())
     }
     GithubPullRequestChecksRollupState::Failure => {
-      Icon::new(IconName::CircleX).text_color(theme.danger)
+      Icon::new(IconName::CircleX).text_color(theme.status_red())
     }
     GithubPullRequestChecksRollupState::Pending => {
       Icon::new(UiIconName::CircleDot).text_color(theme.status_orange())
@@ -330,7 +330,7 @@ fn check_state_icon(
 fn reviewer_status_icon(status: ReviewerStatus, theme: &gpui_component::Theme) -> Icon {
   match status {
     ReviewerStatus::Approved => Icon::new(UiIconName::CircleCheck).text_color(theme.status_green()),
-    ReviewerStatus::ChangesRequested => Icon::new(IconName::CircleX).text_color(theme.danger),
+    ReviewerStatus::ChangesRequested => Icon::new(IconName::CircleX).text_color(theme.status_red()),
     ReviewerStatus::Commented => {
       Icon::new(UiIconName::MessageCircle).text_color(theme.muted_foreground)
     }
@@ -2143,7 +2143,7 @@ impl DockPanel {
                     div()
                       .text_xs()
                       .font_weight(gpui::FontWeight::BOLD)
-                      .text_color(theme.status_yellow())
+                      .text_color(theme.status_amber())
                       .child("M"),
                   )
                 }),

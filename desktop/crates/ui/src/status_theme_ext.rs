@@ -1,9 +1,15 @@
 use gpui::Hsla;
-use gpui_component::blue_600;
+use gpui_component::ColorName;
+
+// The scales gpui-component's `Tag` picks for its foreground, so a status colour
+// reads the same whether it lands in a tag or in bare text.
+const STATUS_DARK_SCALE: usize = 300;
+const STATUS_LIGHT_SCALE: usize = 600;
 
 pub trait StatusThemeExt {
+  fn status_color(&self, color: ColorName) -> Hsla;
   fn status_orange(&self) -> Hsla;
-  fn status_yellow(&self) -> Hsla;
+  fn status_amber(&self) -> Hsla;
   fn status_blue(&self) -> Hsla;
   fn status_green(&self) -> Hsla;
   fn status_red(&self) -> Hsla;
@@ -12,110 +18,86 @@ pub trait StatusThemeExt {
 }
 
 impl StatusThemeExt for gpui_component::Theme {
-  fn status_orange(&self) -> Hsla {
-    if self.mode.is_dark() {
-      Hsla {
-        h: 30.0 / 360.0,
-        s: 0.85,
-        l: 0.58,
-        a: 1.0,
-      }
+  fn status_color(&self, color: ColorName) -> Hsla {
+    color.scale(if self.mode.is_dark() {
+      STATUS_DARK_SCALE
     } else {
-      Hsla {
-        h: 28.0 / 360.0,
-        s: 0.9,
-        l: 0.45,
-        a: 1.0,
-      }
-    }
+      STATUS_LIGHT_SCALE
+    })
   }
 
-  fn status_yellow(&self) -> Hsla {
-    if self.mode.is_dark() {
-      Hsla {
-        h: 48.0 / 360.0,
-        s: 0.9,
-        l: 0.62,
-        a: 1.0,
-      }
-    } else {
-      Hsla {
-        h: 46.0 / 360.0,
-        s: 0.9,
-        l: 0.42,
-        a: 1.0,
-      }
-    }
+  fn status_orange(&self) -> Hsla {
+    self.status_color(ColorName::Orange)
+  }
+
+  fn status_amber(&self) -> Hsla {
+    self.status_color(ColorName::Amber)
   }
 
   fn status_blue(&self) -> Hsla {
-    blue_600()
+    self.status_color(ColorName::Blue)
   }
 
   fn status_green(&self) -> Hsla {
-    if self.mode.is_dark() {
-      Hsla {
-        h: 135.0 / 360.0,
-        s: 0.75,
-        l: 0.55,
-        a: 1.0,
-      }
-    } else {
-      Hsla {
-        h: 140.0 / 360.0,
-        s: 0.7,
-        l: 0.4,
-        a: 1.0,
-      }
-    }
+    self.status_color(ColorName::Green)
   }
 
   fn status_red(&self) -> Hsla {
-    if self.mode.is_dark() {
-      Hsla {
-        h: 0.0,
-        s: 0.75,
-        l: 0.58,
-        a: 1.0,
-      }
-    } else {
-      self.danger
-    }
+    self.status_color(ColorName::Red)
   }
 
   fn status_violet(&self) -> Hsla {
-    if self.mode.is_dark() {
-      Hsla {
-        h: 270.0 / 360.0,
-        s: 0.6,
-        l: 0.58,
-        a: 1.0,
-      }
-    } else {
-      Hsla {
-        h: 265.0 / 360.0,
-        s: 0.6,
-        l: 0.45,
-        a: 1.0,
-      }
-    }
+    self.status_color(ColorName::Violet)
   }
 
   fn status_gray(&self) -> Hsla {
-    if self.mode.is_dark() {
-      Hsla {
-        h: 0.0,
-        s: 0.0,
-        l: 0.55,
-        a: 1.0,
-      }
-    } else {
-      Hsla {
-        h: 0.0,
-        s: 0.0,
-        l: 0.4,
-        a: 1.0,
-      }
+    self.status_color(ColorName::Gray)
+  }
+}
+
+#[cfg(test)]
+mod tests {
+  use super::{STATUS_DARK_SCALE, STATUS_LIGHT_SCALE, StatusThemeExt as _};
+  use gpui::TestAppContext;
+  use gpui_component::{ActiveTheme as _, ColorName, Theme, ThemeMode};
+
+  #[gpui::test]
+  fn status_colors_follow_the_shared_color_scales(cx: &mut TestAppContext) {
+    cx.update(gpui_component::init);
+
+    for (mode, scale) in [
+      (ThemeMode::Dark, STATUS_DARK_SCALE),
+      (ThemeMode::Light, STATUS_LIGHT_SCALE),
+    ] {
+      cx.update(|cx| {
+        Theme::change(mode, None, cx);
+        let theme = cx.theme();
+
+        assert_eq!(theme.status_orange(), ColorName::Orange.scale(scale));
+        assert_eq!(theme.status_amber(), ColorName::Amber.scale(scale));
+        assert_eq!(theme.status_blue(), ColorName::Blue.scale(scale));
+        assert_eq!(theme.status_green(), ColorName::Green.scale(scale));
+        assert_eq!(theme.status_red(), ColorName::Red.scale(scale));
+        assert_eq!(theme.status_violet(), ColorName::Violet.scale(scale));
+        assert_eq!(theme.status_gray(), ColorName::Gray.scale(scale));
+      });
     }
+  }
+
+  #[gpui::test]
+  fn dark_and_light_pick_different_shades(cx: &mut TestAppContext) {
+    cx.update(gpui_component::init);
+
+    let dark = cx.update(|cx| {
+      Theme::change(ThemeMode::Dark, None, cx);
+      cx.theme().status_violet()
+    });
+    let light = cx.update(|cx| {
+      Theme::change(ThemeMode::Light, None, cx);
+      cx.theme().status_violet()
+    });
+
+    assert_ne!(dark, light);
+    assert!(dark.l > light.l);
   }
 }

@@ -10,9 +10,6 @@ mod palette;
 mod scroll_routing;
 mod search_file_palette;
 mod selectable_row;
-mod status_alert;
-mod status_surface;
-mod status_tag;
 mod status_theme_ext;
 mod theme;
 mod user_menu;
@@ -69,8 +66,6 @@ pub use search_file_palette::{
   SearchFileEntry, SearchFileHandler, SearchFilePalette, SearchFilePaletteConfig,
 };
 pub use selectable_row::{SelectableRowStyle, selectable_list_item};
-pub use status_alert::StatusAlert;
-pub use status_tag::StatusTag;
 pub use status_theme_ext::StatusThemeExt;
 pub use theme::Theme;
 pub use user_menu::{UserMenuConfig, UserMenuPage, UserMenuState, UserMenuUser, user_menu};

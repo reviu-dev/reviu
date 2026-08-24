@@ -4,6 +4,12 @@ All notable changes to Reviu are documented here.
 
 ## 1.0.0
 
+### Status Labels Share One Set Of Colours
+
+`Pending`, `Resolved` and `Outdated` on a review comment, the letters marking a changed file, and the subscription state in the Reviu Pro dialog each drew from their own colours, so the same idea landed in a slightly different green or yellow depending on where you read it. They now share a single palette, and that palette follows the theme: the blue marking a renamed file no longer keeps its dark-theme shade on a light background.
+
+The subscription state in the Reviu Pro dialog also drops its badge. It reads as coloured text next to the plan now, the same way the pull request state reads in the right dock.
+
 ### Coming Back From Checkout Opens No Second Reviu Pro Dialog
 
 Starting the free trial sends you to the browser, and Reviu opens the Reviu Pro dialog again when the checkout hands you back. The dialog you started from was still on screen, so you came back to two stacked copies of it and had to close both.

@@ -99,7 +99,7 @@ pub(crate) fn toggle_stage_action(
 
 pub(crate) fn status_color(kind: RepoStatusKind, theme: &gpui_component::Theme) -> gpui::Hsla {
   match kind {
-    RepoStatusKind::Modified => theme.status_yellow(),
+    RepoStatusKind::Modified => theme.status_amber(),
     RepoStatusKind::Added => theme.status_green(),
     RepoStatusKind::Deleted => theme.status_red(),
     RepoStatusKind::Renamed => theme.status_blue(),

@@ -14,6 +14,7 @@ use gpui_component::{
   checkbox::Checkbox,
   h_flex,
   list::{List, ListDelegate, ListEvent, ListItem, ListState},
+  tag::Tag,
   v_flex,
 };
 use ui::{SelectableRowStyle, UiIconName, selectable_list_item};
@@ -738,12 +739,7 @@ impl ReviewList {
           .child(comment.excerpt.clone()),
       )
       .when_some(review_row_status_label(comment.status), |this, label| {
-        this.child(
-          ui::StatusTag::new(theme.muted_foreground)
-            .outline()
-            .small()
-            .child(label),
-        )
+        this.child(Tag::secondary().outline().small().child(label))
       })
       .when(sendable, |this| {
         this.child(

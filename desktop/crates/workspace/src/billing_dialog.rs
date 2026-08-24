@@ -13,7 +13,7 @@ use gpui_component::{
   v_flex,
 };
 use time::OffsetDateTime;
-use ui::{StatusTag, StatusThemeExt, UiIconName, WindowExt};
+use ui::{StatusThemeExt, UiIconName, WindowExt};
 
 use crate::{
   api::{ApiClient, CustomerStateSubscription, CustomerStateSubscriptionStatus},
@@ -518,8 +518,10 @@ impl BillingDialog {
               .child(plan),
           )
           .child(
-            StatusTag::new(Self::status_color(status, theme))
-              .outline()
+            div()
+              .text_xs()
+              .font_weight(gpui::FontWeight::SEMIBOLD)
+              .text_color(Self::status_color(status, theme))
               .child(Self::status_label(status)),
           ),
       )
