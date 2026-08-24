@@ -4,6 +4,12 @@ All notable changes to Reviu are documented here.
 
 ## 1.0.0
 
+### Refresh Moved Out Of The Reviu Pro Offer
+
+The button that asks the server about your subscription again sat in the middle of the Reviu Pro dialog, right under the two prices, where it read like a third thing to click next to "Start free trial". It also moved around, since it followed the height of whatever the dialog had to say.
+
+It now sits in the bottom-left corner of the dialog, opposite Close: the same place in every state, clearly plumbing rather than part of the offer.
+
 ### The Palette Calls Things By Their Name
 
 Commands were named in three different styles at once. Pages were "Go to Settings", dialogs were just "Billing", panels were "Show changes", and one command shouted "Send Feedback". Worse, a shared verb in front of a name buried the word you actually type: searching `changes` ranked "Show changes" below commands that only mentioned changes, because the match did not start the name.

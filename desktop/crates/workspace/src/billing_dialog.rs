@@ -5,7 +5,7 @@ use gpui::{AnyElement, App, Context, Render, SharedString, Window, div, prelude:
 use gpui_component::{
   ActiveTheme as _, Disableable as _, Icon, IconName, Sizable as _, StyledExt,
   button::{Button, ButtonVariants as _},
-  dialog::DialogButtonProps,
+  dialog::{DialogFooter, DialogHeader, DialogTitle},
   h_flex,
   spinner::Spinner,
   v_flex,
@@ -30,6 +30,9 @@ const BILLING_DIALOG_WIDTH: f32 = 480.0;
 /// Names this surface in the checkout and sign-in funnels.
 const ANALYTICS_SOURCE: &str = "billing_dialog";
 
+const REFRESH_DEBUG_SELECTOR: &str = "billing-refresh";
+const CLOSE_DEBUG_SELECTOR: &str = "billing-close";
+
 pub fn open_billing_dialog(window: &mut Window, _cx: &mut App) {
   // Defer to next frame so the command palette dialog closes first
   window.on_next_frame(|window, cx| {
@@ -39,13 +42,12 @@ pub fn open_billing_dialog(window: &mut Window, _cx: &mut App) {
 
 fn open_billing_dialog_inner(window: &mut Window, cx: &mut App) {
   let billing = cx.new(BillingDialog::new);
-  window.open_alert_dialog(cx, move |alert, _, _| {
-    alert
-      .title("Reviu Pro")
-      .width(px(BILLING_DIALOG_WIDTH))
+  window.open_dialog(cx, move |dialog, _, _| {
+    dialog
+      .p_0()
+      .w(px(BILLING_DIALOG_WIDTH))
+      .close_button(false)
       .child(billing.clone())
-      .show_cancel(false)
-      .button_props(DialogButtonProps::default().ok_text("Close"))
   });
 }
 
@@ -603,35 +605,60 @@ impl Render for BillingDialog {
       } => self.render_subscription(subscription, portal_url, &theme),
     };
 
-    v_flex()
-      .w_full()
-      .gap_3()
-      .pt_2()
-      .child(body)
-      .when_some(self.error.clone(), |this, error| {
-        this.child(div().text_sm().text_color(theme.status_red()).child(error))
-      })
-      .when(can_refresh, |this| {
-        this.child(
-          h_flex().justify_start().child(
-            Button::new("billing-refresh")
-              .icon(UiIconName::RefreshCw)
-              .label("Refresh")
-              .ghost()
-              .small()
-              .loading(self.refresh_loading)
-              .disabled(self.refresh_loading || self.checkout_loading)
-              .on_click(cx.listener(Self::refresh_action)),
+    let refresh = can_refresh.then(|| {
+      Button::new("billing-refresh")
+        .debug_selector(|| REFRESH_DEBUG_SELECTOR.to_string())
+        .icon(UiIconName::RefreshCw)
+        .label("Refresh")
+        .ghost()
+        .small()
+        .loading(self.refresh_loading)
+        .disabled(self.refresh_loading || self.checkout_loading)
+        .on_click(cx.listener(Self::refresh_action))
+    });
+
+    div()
+      .id("billing-dialog")
+      .flex()
+      .flex_col()
+      .child(
+        DialogHeader::new()
+          .p_4()
+          .child(DialogTitle::new().child("Reviu Pro")),
+      )
+      .child(
+        v_flex()
+          .px_4()
+          .pb_4()
+          .gap_3()
+          .child(body)
+          .when_some(self.error.clone(), |this, error| {
+            this.child(div().text_sm().text_color(theme.status_red()).child(error))
+          }),
+      )
+      .child(
+        DialogFooter::new()
+          .px_4()
+          .pb_4()
+          .pt_1()
+          // Refresh is plumbing, not part of the offer: it sits opposite Close.
+          .when(refresh.is_some(), |this| this.justify_between())
+          .children(refresh)
+          .child(
+            Button::new("billing-close")
+              .debug_selector(|| CLOSE_DEBUG_SELECTOR.to_string())
+              .label("Close")
+              .primary()
+              .on_click(|_, window, cx| window.close_dialog(cx)),
           ),
-        )
-      })
+      )
   }
 }
 
 #[cfg(test)]
 mod tests {
   use super::*;
-  use gpui::TestAppContext;
+  use gpui::{TestAppContext, VisualTestContext};
 
   fn make_subscription() -> CustomerStateSubscription {
     CustomerStateSubscription {
@@ -666,9 +693,29 @@ mod tests {
   struct Page;
 
   impl Render for Page {
-    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
       div()
+        .size_full()
+        .children(gpui_component::Root::render_dialog_layer(window, cx))
     }
+  }
+
+  fn open_dialog_over_a_page(state: AuthState, cx: &mut TestAppContext) -> &mut VisualTestContext {
+    cx.update(|cx| {
+      gpui_component::init(cx);
+      cx.set_global(AuthStateStore::default());
+      cx.set_global(WorkspaceApi::new());
+      AuthStateStore::set(cx, state);
+    });
+
+    let (_root, cx) = cx.add_window_view(|window, cx| {
+      let page = cx.new(|_| Page);
+      gpui_component::Root::new(page, window, cx)
+    });
+
+    cx.update(open_billing_dialog_inner);
+    cx.run_until_parked();
+    cx
   }
 
   #[gpui::test]
@@ -691,6 +738,36 @@ mod tests {
     cx.run_until_parked();
 
     cx.update(|window, cx| assert!(window.has_active_dialog(cx)));
+  }
+
+  #[gpui::test]
+  fn refresh_sits_in_the_footer_opposite_close(cx: &mut TestAppContext) {
+    let cx = open_dialog_over_a_page(signed_in_with(None), cx);
+
+    let refresh = cx
+      .debug_bounds(REFRESH_DEBUG_SELECTOR)
+      .expect("refresh bounds");
+    let close = cx.debug_bounds(CLOSE_DEBUG_SELECTOR).expect("close bounds");
+
+    assert!(
+      refresh.right() < close.left(),
+      "refresh sits on the left of the footer, close on the right"
+    );
+    assert!(
+      (refresh.center().y - close.center().y).abs() < px(2.),
+      "refresh shares the footer row with close, it no longer floats in the body"
+    );
+  }
+
+  #[gpui::test]
+  fn a_visitor_without_an_account_only_gets_close(cx: &mut TestAppContext) {
+    let cx = open_dialog_over_a_page(AuthState::Unauthenticated, cx);
+
+    assert!(cx.debug_bounds(CLOSE_DEBUG_SELECTOR).is_some());
+    assert!(
+      cx.debug_bounds(REFRESH_DEBUG_SELECTOR).is_none(),
+      "there is no subscription state to ask about again"
+    );
   }
 
   #[test]
