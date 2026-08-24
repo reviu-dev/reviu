@@ -16,6 +16,12 @@
 
 The GitHub-integration backend (Reviu Pro) is closed-source in a separate private repo and is not part of this tree.
 
+## Desktop profiles
+
+- Debug builds use the `dev` profile by default, release builds use `prod`.
+- Override with `REVIU_PROFILE=dev` or `REVIU_PROFILE=prod` when testing auth, local data, or deep links.
+- Profiles isolate config, keychain auth, app data, and URL schemes: `prod` uses `reviu://`, `dev` uses `reviu-dev://`.
+
 ## Rust coding guidelines
 
 * Prioritize code correctness and clarity. Speed and efficiency are secondary priorities unless otherwise specified.
