@@ -615,7 +615,7 @@ pub fn has_pending_interaction() -> bool {
 #[cfg(test)]
 mod tests {
   use super::{
-    LINUX_APPINDICATOR_LIBRARY_NAMES, gtk_tray_init_error_message,
+    LINUX_APPINDICATOR_LIBRARY_NAMES, gtk_tray_init_error_message, gtk_tray_no_display_message,
     linux_appindicator_unavailable_message, notification_menu_title, status_bar_title,
     status_bar_tooltip, unread_notification_count_label,
   };
@@ -650,6 +650,14 @@ mod tests {
     assert_eq!(
       gtk_tray_init_error_message("Failed to initialize GTK"),
       "Unable to initialize GTK for the Reviu system tray: Failed to initialize GTK"
+    );
+  }
+
+  #[test]
+  fn gtk_tray_no_display_message_names_headless_context() {
+    assert_eq!(
+      gtk_tray_no_display_message(),
+      "Unable to initialize the Reviu system tray: no GDK display available (Wayland/headless session without GTK support)."
     );
   }
 
