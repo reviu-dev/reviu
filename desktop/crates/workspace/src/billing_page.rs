@@ -140,9 +140,13 @@ fn render_pro_promise_summary(theme: &gpui_component::Theme) -> AnyElement {
         .gap_2()
         .items_start()
         .child(
-          Icon::new(UiIconName::Check)
-            .size_3()
-            .text_color(theme.status_green()),
+          // The tick belongs on the first line of the benefit, not on the
+          // optical centre of a benefit that wraps.
+          div().mt(px(4.)).child(
+            Icon::new(UiIconName::Check)
+              .size_3()
+              .text_color(theme.status_green()),
+          ),
         )
         .child(
           div()
