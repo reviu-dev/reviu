@@ -4,6 +4,16 @@ All notable changes to Reviu are documented here.
 
 ## 1.0.0
 
+### The Command Palette Finds What You Meant
+
+The palette used to look for your whole query as one uninterrupted run of letters, anywhere in a command's text. `stash untracked` found nothing, because the command is called "Stash with untracked". Neither did `push force`, nor `branch delete`. Typing `interactive rebase` did not even find "Rebase interactive".
+
+Words are now matched one by one, and against the start of a word rather than its middle: `tag` no longer answers with every command that mentions a s-**tag**-e. Type an abbreviation and it still lands, `swbr` for "Switch branch", `untrk` for "Stash with untracked".
+
+Commands also answer to the words you would actually use, not only the ones we wrote: `revert` and `reset` reach undoing a commit, `wip` reaches the stash, `squash` reaches the interactive rebase, `upgrade` reaches billing.
+
+And once you type, results are ordered by how well they answer rather than by section: `commit` puts "Commit" first instead of burying it among the eight commands that merely mention committing. On an empty palette, the sections and your recent commands are unchanged.
+
 ### No More Pop-Up After A Push
 
 Pushing a branch to GitHub without Reviu Pro opened a notification offering the subscription, once per session. The panels that actually need Pro say so themselves now, where the gap is felt: the pull request panel and the inbox both carry the offer in place of an empty surface. A notification fired on an unrelated action was just noise on top.

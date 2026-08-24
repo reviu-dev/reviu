@@ -74,6 +74,81 @@ fn palette_row(
     })
 }
 
+/// Why a command answered a query, worst first: one whose name says it beats one
+/// that needed its supporting text.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+enum MatchQuality {
+  /// The letters of the query appear in the name, in order but not together.
+  Fuzzy,
+  /// Every word landed, some only in the description or the disabled reason.
+  SupportingText,
+  /// Every word landed, some only in the keywords.
+  Keyword,
+  /// Every word landed on a word of the name.
+  Name,
+  /// The name starts with the query.
+  NamePrefix,
+}
+
+/// The searchable words of a text: what a reader would call words, so a query
+/// cannot answer with the middle of one ("tag" is not "stage").
+fn search_words(text: &str) -> impl Iterator<Item = &str> {
+  text
+    .split(|character: char| !character.is_alphanumeric())
+    .filter(|word| !word.is_empty())
+}
+
+fn starts_with_ignore_ascii_case(text: &str, prefix: &str) -> bool {
+  text.len() >= prefix.len()
+    && text.as_bytes()[..prefix.len()].eq_ignore_ascii_case(prefix.as_bytes())
+}
+
+fn has_word_starting_with(text: &str, prefix: &str) -> bool {
+  search_words(text).any(|word| starts_with_ignore_ascii_case(word, prefix))
+}
+
+/// Byte offset of every word start, which is where an abbreviation may begin.
+fn word_starts(text: &str) -> Vec<usize> {
+  let mut starts = Vec::new();
+  let mut previous_was_word = false;
+  for (index, character) in text.char_indices() {
+    let is_word = character.is_alphanumeric();
+    if is_word && !previous_was_word {
+      starts.push(index);
+    }
+    previous_was_word = is_word;
+  }
+  starts
+}
+
+/// The letters of the query in order, starting on a word. Anchoring on a word is
+/// what separates "swbr" finding "Switch branch" from "tag" finding "Stage file".
+fn is_abbreviation(text: &str, query: &str) -> bool {
+  let needles: Vec<char> = query
+    .chars()
+    .filter(|character| character.is_alphanumeric())
+    .collect();
+  let Some((first, rest)) = needles.split_first() else {
+    return false;
+  };
+
+  word_starts(text).into_iter().any(|start| {
+    let Some(tail) = text.get(start..) else {
+      return false;
+    };
+    let mut characters = tail.chars();
+    if !characters
+      .next()
+      .is_some_and(|character| character.eq_ignore_ascii_case(first))
+    {
+      return false;
+    }
+    rest
+      .iter()
+      .all(|needle| characters.any(|character| character.eq_ignore_ascii_case(needle)))
+  })
+}
+
 #[derive(Clone, Debug)]
 pub struct CommandPaletteCommand {
   pub id: CommandPaletteCommandId,
@@ -599,17 +674,65 @@ fn bucketize_commands(
   buckets.into_iter().collect()
 }
 
+/// Groups are how you browse; once a query is typed the best answer has to come
+/// first, and a group would bury it under a whole section.
 fn build_matched_sections(
   filtered: &[Rc<CommandPaletteCommand>],
   recent: &[Rc<CommandPaletteCommand>],
   query: &str,
   show_recent: bool,
 ) -> Vec<(CommandPaletteGroup, Vec<Rc<CommandPaletteCommand>>)> {
+  if !query.trim().is_empty() {
+    return vec![(CommandPaletteGroup::Results, filtered.to_vec())];
+  }
+
   let mut sections = bucketize_commands(filtered);
-  if show_recent && query.is_empty() && !recent.is_empty() {
+  if show_recent && !recent.is_empty() {
     sections.insert(0, (CommandPaletteGroup::Recent, recent.to_vec()));
   }
   sections
+}
+
+/// Best answer first, the most used breaking a tie, declaration order breaking
+/// what is left.
+fn commands_by_relevance(
+  commands: &[Rc<CommandPaletteCommand>],
+  query: &str,
+  cx: &App,
+) -> Vec<Rc<CommandPaletteCommand>> {
+  let score = usage_scores(cx);
+
+  let mut scored: Vec<(Rc<CommandPaletteCommand>, MatchQuality, f64)> = commands
+    .iter()
+    .filter_map(|command| {
+      let quality = command.relevance(query)?;
+      Some((command.clone(), quality, score(command.id)))
+    })
+    .collect();
+
+  scored.sort_by(|left, right| {
+    right.1.cmp(&left.1).then_with(|| {
+      right
+        .2
+        .partial_cmp(&left.2)
+        .unwrap_or(std::cmp::Ordering::Equal)
+    })
+  });
+
+  scored.into_iter().map(|(command, _, _)| command).collect()
+}
+
+/// How often a command has been reached lately, `0.0` when nothing records it.
+fn usage_scores(cx: &App) -> impl Fn(CommandPaletteCommandId) -> f64 + '_ {
+  let scorer = cx
+    .try_global::<CommandPaletteUsageScorerGlobal>()
+    .map(|global| global.0);
+  let now_secs = std::time::SystemTime::now()
+    .duration_since(std::time::UNIX_EPOCH)
+    .map(|elapsed| elapsed.as_secs() as i64)
+    .unwrap_or(0);
+
+  move |id| scorer.map_or(0.0, |scorer| scorer(cx, id, now_secs))
 }
 
 fn compute_recent_commands(
@@ -617,39 +740,34 @@ fn compute_recent_commands(
   cx: &App,
   top_n: usize,
 ) -> Vec<Rc<CommandPaletteCommand>> {
-  let Some(scorer) = cx
-    .try_global::<CommandPaletteUsageScorerGlobal>()
-    .map(|g| g.0)
-  else {
+  if !cx.has_global::<CommandPaletteUsageScorerGlobal>() {
     return Vec::new();
-  };
-  let now_secs = std::time::SystemTime::now()
-    .duration_since(std::time::UNIX_EPOCH)
-    .map(|d| d.as_secs() as i64)
-    .unwrap_or(0);
+  }
+  let score = usage_scores(cx);
 
   let mut scored: Vec<(Rc<CommandPaletteCommand>, f64)> = commands
     .iter()
-    .filter(|c| !c.is_disabled())
-    .map(|c| {
-      let score = scorer(cx, c.id, now_secs);
-      (c.clone(), score)
-    })
-    .filter(|(_, s)| *s > 0.0)
+    .filter(|command| !command.is_disabled())
+    .map(|command| (command.clone(), score(command.id)))
+    .filter(|(_, score)| *score > 0.0)
     .collect();
-  scored.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
-  scored.into_iter().take(top_n).map(|(c, _)| c).collect()
+  scored.sort_by(|left, right| {
+    right
+      .1
+      .partial_cmp(&left.1)
+      .unwrap_or(std::cmp::Ordering::Equal)
+  });
+  scored
+    .into_iter()
+    .take(top_n)
+    .map(|(command, _)| command)
+    .collect()
 }
 
 impl CommandListDelegate {
-  fn prepare(&mut self, query: impl Into<SharedString>) {
+  fn prepare(&mut self, query: impl Into<SharedString>, cx: &App) {
     self.query = query.into();
-    let filtered: Vec<Rc<CommandPaletteCommand>> = self
-      ._commands
-      .iter()
-      .filter(|c| c.matches(&self.query))
-      .cloned()
-      .collect();
+    let filtered = commands_by_relevance(&self._commands, self.query.as_ref(), cx);
     self.matched_sections = build_matched_sections(
       &filtered,
       &self.recent_commands,
@@ -735,9 +853,9 @@ impl ListDelegate for CommandListDelegate {
     &mut self,
     query: &str,
     _: &mut Window,
-    _: &mut Context<ListState<Self>>,
+    cx: &mut Context<ListState<Self>>,
   ) -> Task<()> {
-    self.prepare(query.to_owned());
+    self.prepare(query.to_owned(), cx);
     Task::ready(())
   }
 }
@@ -933,6 +1051,8 @@ impl CommandPaletteCommandId {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum CommandPaletteGroup {
   Recent,
+  /// One flat list, so a typed query is answered by relevance and not by group.
+  Results,
   Changes,
   Review,
   Sync,
@@ -950,6 +1070,7 @@ impl CommandPaletteGroup {
   pub fn label(&self) -> &'static str {
     match self {
       Self::Recent => "Recent",
+      Self::Results => "Results",
       Self::Changes => "Changes",
       Self::Review => "Review",
       Self::Sync => "Sync",
@@ -1492,6 +1613,57 @@ impl CommandPaletteCommand {
     }
   }
 
+  /// The words someone would type that the name and the description do not
+  /// carry. Exhaustive on purpose: a new command has to say where it belongs.
+  fn keywords(&self) -> &'static [&'static str] {
+    use CommandPaletteCommandId as Id;
+    match self.id {
+      Id::UndoLastCommit => &["revert", "reset", "rollback"],
+      Id::RestoreAll => &["revert", "reset", "clean"],
+      Id::Stash | Id::StashIncludeUntracked => &["wip", "save", "shelve"],
+      Id::ApplyStash | Id::PopStash => &["unstash", "restore"],
+      Id::DropStash => &["unstash", "remove"],
+      Id::InteractiveRebase
+      | Id::InteractiveRebaseOntoBranch
+      | Id::InteractiveRebaseEditBranch
+      | Id::InteractiveRebaseHeadCount => &["squash", "fixup", "reword", "reorder"],
+      Id::Amend => &["fixup", "reword"],
+      Id::Commit => &["save"],
+      Id::StageAll | Id::StageSelectedFile => &["add"],
+      Id::UnstageAll | Id::UnstageSelectedFile => &["reset"],
+      Id::Push => &["upload", "publish"],
+      Id::ForcePush => &["upload", "publish", "overwrite"],
+      Id::Pull => &["sync", "download", "update"],
+      Id::Fetch => &["sync", "refresh"],
+      Id::SwitchBranch => &["checkout"],
+      Id::CheckoutDetached => &["sha", "revision"],
+      Id::CreateBranch | Id::CreateBranchFrom => &["new"],
+      Id::DeleteBranch => &["remove"],
+      Id::CherryPick => &["backport"],
+      Id::AbortMerge | Id::AbortRebase => &["cancel", "stop"],
+      Id::ContinueRebase => &["resume"],
+      Id::AcceptAllCurrentConflicts => &["ours", "mine", "resolve"],
+      Id::AcceptAllIncomingConflicts => &["theirs", "resolve"],
+      Id::CreatePullRequest | Id::OpenPullRequest => &["pr"],
+      Id::SubmitPullRequestReview => &["pr", "approve"],
+      Id::DiscardReview => &["clear"],
+      Id::OpenRepository => &["folder", "project"],
+      Id::ForgetRepository => &["remove"],
+      Id::OpenSessionPage => &["home", "workspace", "agent"],
+      Id::OpenGithubFromUrl => &["link", "paste"],
+      Id::OpenSettingsPage => &["preferences", "shortcuts", "keybindings", "theme"],
+      Id::OpenGitConfigPage => &["gitconfig", "identity", "email", "username"],
+      Id::OpenBillingPage => &["upgrade", "price", "pay", "plan", "invoice", "pro"],
+      Id::OpenAboutPage => &["version", "update", "changelog"],
+      Id::SendFeedback => &["issue", "support", "contact"],
+      Id::SwitchRepository
+      | Id::SkipRebase
+      | Id::MergeBranch
+      | Id::RebaseBranch
+      | Id::SendReview => &[],
+    }
+  }
+
   fn icon(&self) -> Icon {
     match self.id {
       CommandPaletteCommandId::SwitchRepository => Icon::new(IconName::FolderOpen),
@@ -1551,30 +1723,57 @@ impl CommandPaletteCommand {
     }
   }
 
-  fn matches(&self, query: &str) -> bool {
+  /// Where a single word of the query landed, or nothing if it landed nowhere.
+  fn word_quality(&self, word: &str) -> Option<MatchQuality> {
+    if has_word_starting_with(self.name.as_ref(), word) {
+      return Some(MatchQuality::Name);
+    }
+    if self
+      .keywords()
+      .iter()
+      .any(|keyword| has_word_starting_with(keyword, word))
+    {
+      return Some(MatchQuality::Keyword);
+    }
+    [self.description.as_ref(), self.disabled_reason.as_ref()]
+      .into_iter()
+      .flatten()
+      .any(|text| has_word_starting_with(text.as_ref(), word))
+      .then_some(MatchQuality::SupportingText)
+  }
+
+  /// How well the command answers the query, or nothing if it does not.
+  fn relevance(&self, query: &str) -> Option<MatchQuality> {
     if self.id == CommandPaletteCommandId::OpenGithubFromUrl
       && parse_github_pull_request_url_action(query).is_some()
     {
-      return true;
+      return Some(MatchQuality::NamePrefix);
     }
 
-    if query.is_empty() {
-      return true;
+    let mut words = search_words(query).peekable();
+    if words.peek().is_none() {
+      return Some(MatchQuality::Name);
     }
-    let query = query.to_lowercase();
-    if self.name.as_ref().to_lowercase().contains(&query) {
-      return true;
+
+    // A word nobody answers yields `None`, which `min` propagates: every word
+    // has to land somewhere.
+    let quality = words.map(|word| self.word_quality(word)).min().flatten();
+
+    match quality {
+      Some(MatchQuality::Name)
+        if starts_with_ignore_ascii_case(self.name.as_ref(), query.trim()) =>
+      {
+        Some(MatchQuality::NamePrefix)
+      }
+      Some(quality) => Some(quality),
+      // Typing an abbreviation is the last thing we try, and only against the
+      // name: over the supporting text a subsequence matches almost everything.
+      None => is_abbreviation(self.name.as_ref(), query).then_some(MatchQuality::Fuzzy),
     }
-    self
-      .description
-      .as_ref()
-      .map(|text| text.as_ref().to_lowercase().contains(&query))
-      .unwrap_or(false)
-      || self
-        .disabled_reason
-        .as_ref()
-        .map(|text| text.as_ref().to_lowercase().contains(&query))
-        .unwrap_or(false)
+  }
+
+  fn matches(&self, query: &str) -> bool {
+    self.relevance(query).is_some()
   }
 }
 
@@ -2992,9 +3191,10 @@ mod tests {
   use super::{
     CommandPalette, CommandPaletteBranch, CommandPaletteBranchKind, CommandPaletteCommand,
     CommandPaletteCommandId, CommandPaletteConfig, CommandPaletteGroup, CommandPaletteHandler,
-    CommandPaletteInitialScreen, CommandPaletteScreen,
+    CommandPaletteInitialScreen, CommandPaletteScreen, MatchQuality,
   };
   use gpui::AppContext as _;
+  use gpui::TestAppContext;
   use std::rc::Rc;
   use std::sync::Arc;
 
@@ -3624,6 +3824,197 @@ mod tests {
     assert_eq!(keys.len(), len_before_dedup, "duplicate as_str keys");
 
     assert_eq!(CommandPaletteCommandId::parse("nonexistent"), None);
+  }
+
+  fn quality(command: &CommandPaletteCommand, query: &str) -> Option<MatchQuality> {
+    command.relevance(query)
+  }
+
+  #[test]
+  fn a_query_can_name_the_words_in_any_order() {
+    // The whole query used to have to be one contiguous substring.
+    assert!(CommandPaletteCommand::stash_with_untracked().matches("stash untracked"));
+    assert!(CommandPaletteCommand::force_push().matches("push force"));
+    assert!(CommandPaletteCommand::delete_branch().matches("branch delete"));
+    assert!(CommandPaletteCommand::interactive_rebase().matches("interactive rebase"));
+  }
+
+  #[test]
+  fn a_query_matches_whole_words_and_not_their_middle() {
+    // "tag" used to answer with every command mentioning a s-tag-e.
+    assert!(!CommandPaletteCommand::stage_selected_file().matches("tag"));
+    assert!(!CommandPaletteCommand::commit().matches("tag"));
+    assert!(
+      CommandPaletteCommand::checkout_detached().matches("tag"),
+      "its description offers a tag, which is a word of its own"
+    );
+  }
+
+  #[test]
+  fn keywords_carry_the_words_the_copy_cannot() {
+    assert!(CommandPaletteCommand::undo_last_commit().matches("revert"));
+    assert!(CommandPaletteCommand::restore_all().matches("reset"));
+    assert!(CommandPaletteCommand::stash().matches("wip"));
+    assert!(CommandPaletteCommand::interactive_rebase().matches("squash"));
+    assert!(CommandPaletteCommand::create_pull_request().matches("pr"));
+    assert!(CommandPaletteCommand::open_billing_page().matches("upgrade"));
+  }
+
+  #[test]
+  fn an_abbreviation_answers_by_the_name_alone() {
+    assert_eq!(
+      quality(&CommandPaletteCommand::switch_branch(), "swbr"),
+      Some(MatchQuality::Fuzzy)
+    );
+    assert_eq!(
+      quality(&CommandPaletteCommand::stash_with_untracked(), "untrk"),
+      Some(MatchQuality::Fuzzy)
+    );
+
+    // Letters scattered across a description would match almost every command.
+    assert_eq!(quality(&CommandPaletteCommand::commit(), "xyz"), None);
+  }
+
+  #[test]
+  fn the_name_answers_before_the_supporting_text() {
+    assert_eq!(
+      quality(&CommandPaletteCommand::commit(), "commit"),
+      Some(MatchQuality::NamePrefix)
+    );
+    assert_eq!(
+      quality(&CommandPaletteCommand::undo_last_commit(), "commit"),
+      Some(MatchQuality::Name)
+    );
+    assert_eq!(
+      quality(&CommandPaletteCommand::stash(), "wip"),
+      Some(MatchQuality::Keyword)
+    );
+    assert_eq!(
+      quality(&CommandPaletteCommand::switch_repository(), "recent"),
+      Some(MatchQuality::SupportingText)
+    );
+  }
+
+  #[test]
+  fn the_weakest_word_decides_the_quality() {
+    // "repository" is in the name, "recent" only in the description.
+    assert_eq!(
+      quality(
+        &CommandPaletteCommand::switch_repository(),
+        "recent repository"
+      ),
+      Some(MatchQuality::SupportingText)
+    );
+    assert_eq!(
+      quality(
+        &CommandPaletteCommand::switch_repository(),
+        "switch repository"
+      ),
+      Some(MatchQuality::NamePrefix)
+    );
+  }
+
+  #[gpui::test]
+  fn the_best_answer_comes_first(cx: &mut TestAppContext) {
+    cx.update(|cx| {
+      let commands = vec![
+        Rc::new(CommandPaletteCommand::undo_last_commit()),
+        Rc::new(CommandPaletteCommand::amend()),
+        Rc::new(CommandPaletteCommand::commit()),
+      ];
+
+      let ordered = super::commands_by_relevance(&commands, "commit", cx);
+      assert_eq!(
+        ordered.first().map(|command| command.id),
+        Some(CommandPaletteCommandId::Commit),
+        "the command the query names outranks the ones that merely mention it"
+      );
+      assert!(ordered.len() > 1, "the others still answer");
+    });
+  }
+
+  /// A spread of the real commands, wide enough for a noisy query to show.
+  fn sample_commands() -> Vec<Rc<CommandPaletteCommand>> {
+    vec![
+      CommandPaletteCommand::commit(),
+      CommandPaletteCommand::amend(),
+      CommandPaletteCommand::undo_last_commit(),
+      CommandPaletteCommand::stage_selected_file(),
+      CommandPaletteCommand::unstage_selected_file(),
+      CommandPaletteCommand::stage_all(),
+      CommandPaletteCommand::unstage_all(),
+      CommandPaletteCommand::restore_all(),
+      CommandPaletteCommand::switch_branch(),
+      CommandPaletteCommand::checkout_detached(),
+      CommandPaletteCommand::delete_branch(),
+      CommandPaletteCommand::merge_branch(),
+      CommandPaletteCommand::interactive_rebase(),
+      CommandPaletteCommand::stash(),
+      CommandPaletteCommand::stash_with_untracked(),
+      CommandPaletteCommand::apply_stash(),
+      CommandPaletteCommand::push("Push"),
+      CommandPaletteCommand::force_push(),
+      CommandPaletteCommand::pull(),
+      CommandPaletteCommand::fetch(),
+      CommandPaletteCommand::cherry_pick(),
+      CommandPaletteCommand::create_pull_request(),
+      CommandPaletteCommand::open_billing_page(),
+      CommandPaletteCommand::open_settings_page(),
+    ]
+    .into_iter()
+    .map(Rc::new)
+    .collect()
+  }
+
+  #[gpui::test]
+  fn a_short_query_does_not_answer_with_half_the_palette(cx: &mut TestAppContext) {
+    cx.update(|cx| {
+      let commands = sample_commands();
+
+      // "tag" used to answer with every command holding a "s-tag-e", and an
+      // unanchored abbreviation would answer with almost all of them.
+      let answers = super::commands_by_relevance(&commands, "tag", cx);
+      assert_eq!(
+        answers.iter().map(|c| c.name.as_ref()).collect::<Vec<_>>(),
+        vec!["Git checkout detached"],
+        "of {} commands",
+        commands.len()
+      );
+    });
+  }
+
+  #[gpui::test]
+  fn a_synonym_reaches_the_command_it_belongs_to(cx: &mut TestAppContext) {
+    cx.update(|cx| {
+      let commands = sample_commands();
+
+      let stash = super::commands_by_relevance(&commands, "wip", cx);
+      assert_eq!(
+        stash.first().map(|c| c.id),
+        Some(CommandPaletteCommandId::Stash)
+      );
+
+      let revert = super::commands_by_relevance(&commands, "revert", cx);
+      assert_eq!(
+        revert.first().map(|c| c.id),
+        Some(CommandPaletteCommandId::UndoLastCommit)
+      );
+    });
+  }
+
+  #[test]
+  fn a_typed_query_is_one_flat_list() {
+    let commit = Rc::new(CommandPaletteCommand::commit());
+    let fetch = Rc::new(CommandPaletteCommand::fetch());
+    let filtered = vec![commit.clone(), fetch];
+
+    let sections = super::build_matched_sections(&filtered, &[commit], "commit", true);
+    assert_eq!(sections.len(), 1, "no group buries the best answer");
+    assert_eq!(
+      sections.first().map(|(group, _)| *group),
+      Some(CommandPaletteGroup::Results)
+    );
+    assert_eq!(sections.first().map(|(_, items)| items.len()), Some(2));
   }
 
   #[test]
