@@ -28,6 +28,17 @@ pub(crate) fn should_read_pull_request(
   }
 }
 
+/// Whether a checkout happened under the panel since the last lookup. The
+/// staleness window answers "how old", never "of what": the pull request of the
+/// branch you left is wrong immediately, not a minute later.
+pub(crate) fn branch_switched_since_lookup(
+  fetched_at: Option<Instant>,
+  looked_up_branch: Option<&str>,
+  current_branch: Option<&str>,
+) -> bool {
+  fetched_at.is_some() && looked_up_branch != current_branch
+}
+
 #[cfg(test)]
 mod tests {
   use super::*;
@@ -68,6 +79,43 @@ mod tests {
       PullRequestRefresh::Now,
       Some(now),
       now
+    ));
+  }
+
+  #[test]
+  fn the_same_branch_is_not_a_switch() {
+    assert!(!branch_switched_since_lookup(
+      Some(Instant::now()),
+      Some("main"),
+      Some("main")
+    ));
+  }
+
+  #[test]
+  fn another_branch_is_a_switch() {
+    assert!(branch_switched_since_lookup(
+      Some(Instant::now()),
+      Some("main"),
+      Some("feature")
+    ));
+  }
+
+  #[test]
+  fn leaving_every_branch_behind_is_a_switch() {
+    assert!(branch_switched_since_lookup(
+      Some(Instant::now()),
+      Some("main"),
+      None
+    ));
+  }
+
+  #[test]
+  fn nothing_read_yet_is_left_to_the_first_lookup() {
+    assert!(!branch_switched_since_lookup(None, None, Some("feature")));
+    assert!(!branch_switched_since_lookup(
+      None,
+      Some("main"),
+      Some("feature")
     ));
   }
 }

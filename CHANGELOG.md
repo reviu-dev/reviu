@@ -4,6 +4,12 @@ All notable changes to Reviu are documented here.
 
 ## 1.0.0
 
+### The Pull Request Panel Follows The Branch You Switch To
+
+Checking out another branch left the Pull request tab showing the pull request of the branch you had just left. Switching from Reviu, it corrected itself a minute later, which made it look random. Switching from a terminal, it never corrected itself at all.
+
+The panel now rereads GitHub as soon as the branch under it changes, whoever moved it. Staying on the same branch still reuses what was already read, so opening the tab or committing costs no round trip.
+
 ### Status Labels Share One Set Of Colours
 
 `Pending`, `Resolved` and `Outdated` on a review comment, the letters marking a changed file, and the subscription state in the Reviu Pro dialog each drew from their own colours, so the same idea landed in a slightly different green or yellow depending on where you read it. They now share a single palette, and that palette follows the theme: the blue marking a renamed file no longer keeps its dark-theme shade on a light background.

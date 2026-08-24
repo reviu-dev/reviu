@@ -33,7 +33,9 @@ use crate::file_tree::{
 use crate::file_view::{file_dir_label, file_name_label, render_file_name_with_status};
 use crate::history_list::{HistoryList, HistoryListEvent, history_change_kind_to_repo_status};
 use crate::pro_promise::{ProPromiseSurface, render_pro_promise};
-use crate::pull_request_refresh::{PullRequestRefresh, should_read_pull_request};
+use crate::pull_request_refresh::{
+  PullRequestRefresh, branch_switched_since_lookup, should_read_pull_request,
+};
 use crate::pull_request_review_comments::{
   ReviewCommentWrite, comment_line, pending_review_comment_node_id, pending_review_id,
   pending_review_rows, review_comment_write_plan,
@@ -551,6 +553,9 @@ pub struct DockPanel {
   pr_files_error: Option<SharedString>,
   /// When GitHub was last read for this branch's pull request.
   pr_fetched_at: Option<Instant>,
+  /// The branch the lookup above answered for. A cache keyed on time alone
+  /// survives a checkout, and the panel then shows the old branch's pull request.
+  pr_branch: Option<String>,
   pr_selected_file: Option<PathBuf>,
   pr_checks: Option<GithubPullRequestChecksSummary>,
   /// What the viewer wrote on this pull request and has not submitted yet.
@@ -794,6 +799,7 @@ impl DockPanel {
       pr_files_loading: false,
       pr_files_error: None,
       pr_fetched_at: None,
+      pr_branch: None,
       pr_selected_file: None,
       pr_checks: None,
       pr_review_comments: Vec::new(),
@@ -960,22 +966,25 @@ impl DockPanel {
     }
     let api = WorkspaceApi::global(cx).api.clone();
     let task = cx.spawn(async move |this, cx| {
-      let state = cx
+      let (branch, state) = cx
         .background_spawn(async move {
-          branch_pr_state_for_lookup(
+          let branch = current_branch_status(&repo_root)
+            .ok()
+            .map(|status| status.name);
+          let state = branch_pr_state_for_lookup(
             current_github_remote_repo(&repo_root).ok().flatten(),
-            current_branch_status(&repo_root)
-              .ok()
-              .map(|status| status.name),
+            branch.clone(),
             |context| {
               api.fetch_pull_request_for_branch(&context.owner, &context.repo, &context.branch)
             },
-          )
+          );
+          (branch, state)
         })
         .await;
 
       let _ = this.update(cx, |this, cx| {
         this.pr_fetched_at = Some(cx.background_executor().now());
+        this.pr_branch = branch;
         this.apply_branch_pull_request(state, cx);
       });
     });
@@ -1527,7 +1536,15 @@ impl DockPanel {
     branch_status: Option<git::BranchStatus>,
     cx: &mut Context<Self>,
   ) {
+    let switched = branch_switched_since_lookup(
+      self.pr_fetched_at,
+      self.pr_branch.as_deref(),
+      branch_status.as_ref().map(|status| status.name.as_str()),
+    );
     self.branch_status = branch_status;
+    if switched {
+      self.refresh_branch_pull_request(PullRequestRefresh::Now, cx);
+    }
     cx.notify();
   }
 
@@ -1574,6 +1591,12 @@ impl DockPanel {
   ) {
     self.set_branch_pr(state, cx);
     cx.notify();
+  }
+
+  #[cfg(test)]
+  pub(crate) fn set_pull_request_lookup_for_test(&mut self, branch: &str, at: Instant) {
+    self.pr_branch = Some(branch.to_string());
+    self.pr_fetched_at = Some(at);
   }
 
   /// The one place the branch's pull request changes, so a link from outside
@@ -4248,6 +4271,72 @@ mod tests {
     // Default auth state is Unknown: no GitHub access, no lookup attempted.
     panel.read_with(cx, |panel, _| {
       assert!(matches!(panel.branch_pr, BranchPrState::NoAccess));
+    });
+  }
+
+  #[gpui::test]
+  async fn a_checkout_rereads_the_branch_pull_request(cx: &mut TestAppContext) {
+    cx.update(gpui_component::init);
+    let repo = TempRepo::init("dock-panel-pr-branch-switch");
+    commit_text_file(&repo.path, Path::new("README.md"), "v1\n", "initial");
+
+    let (panel, cx) = add_dock_panel_window(Some(repo.path.clone()), cx);
+    await_refresh(&panel, cx).await;
+
+    // A pull request read a moment ago, for the branch we are about to leave.
+    panel.update(cx, |panel, cx| {
+      panel.set_branch_pull_request_state(
+        BranchPrState::Missing(GithubBranchContext {
+          owner: "acme".to_string(),
+          repo: "widget".to_string(),
+          branch: "main".to_string(),
+        }),
+        cx,
+      );
+      panel.set_pull_request_lookup_for_test("main", cx.background_executor().now());
+    });
+
+    // Staying put reads nothing again: the staleness window still governs.
+    panel.update(cx, |panel, cx| {
+      panel.set_branch_status(
+        Some(git::BranchStatus {
+          name: "main".to_string(),
+          ahead: 0,
+          behind: 0,
+          has_upstream: true,
+        }),
+        cx,
+      );
+    });
+    cx.run_until_parked();
+    panel.read_with(cx, |panel, _| {
+      assert!(
+        matches!(panel.branch_pr, BranchPrState::Missing(_)),
+        "the same branch keeps what was read for it"
+      );
+    });
+
+    panel.update(cx, |panel, cx| {
+      panel.set_branch_status(
+        Some(git::BranchStatus {
+          name: "feature".to_string(),
+          ahead: 0,
+          behind: 0,
+          has_upstream: false,
+        }),
+        cx,
+      );
+    });
+    cx.run_until_parked();
+
+    // Without GitHub access the reread lands on NoAccess, which is enough to
+    // show the checkout did not leave the previous branch's answer up.
+    panel.read_with(cx, |panel, _| {
+      assert!(
+        matches!(panel.branch_pr, BranchPrState::NoAccess),
+        "a checkout rereads instead of keeping the branch we left"
+      );
+      assert!(panel.pr_fetched_at.is_none());
     });
   }
 
