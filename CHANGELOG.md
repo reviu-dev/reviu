@@ -4,6 +4,12 @@ All notable changes to Reviu are documented here.
 
 ## 1.0.0
 
+### A Folder In The Files Panel No Longer Opens An Editor
+
+Walking the Files tree with the arrow keys, or clicking a folder, opened an editor tab named after the folder with nothing in it. The panel treated every row you landed on as a file to show.
+
+Landing on a folder now only moves the selection, and clicking one unfolds it. Files still show as you walk past them.
+
 ### Refresh Moved Out Of The Reviu Pro Offer
 
 The button that asks the server about your subscription again sat in the middle of the Reviu Pro dialog, right under the two prices, where it read like a third thing to click next to "Start free trial". It also moved around, since it followed the height of whatever the dialog had to say.

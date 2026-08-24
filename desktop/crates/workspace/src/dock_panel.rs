@@ -677,12 +677,22 @@ impl DockPanel {
       .focus_handle(cx)
       .tab_stop(true)
       .tab_index(0);
-    cx.subscribe(&files_tree_state, |_this, _tree, event: &TreeEvent, cx| {
+    cx.subscribe(&files_tree_state, |_this, tree, event: &TreeEvent, cx| {
       let (id, intent) = match event {
         TreeEvent::Selected(id) => (id.clone(), OpenIntent::Browse),
         TreeEvent::Confirmed(id) => (id.clone(), OpenIntent::Open),
         TreeEvent::Expanded(_) | TreeEvent::Collapsed(_) => return,
       };
+      // Walking onto a folder moves the selection and nothing else: a folder
+      // has no contents to show.
+      let state = tree.read(cx);
+      let is_folder = state
+        .index_of(&id)
+        .and_then(|ix| state.entry(ix))
+        .is_some_and(|entry| entry.is_folder());
+      if is_folder {
+        return;
+      }
       cx.emit(DockPanelEvent::OpenFile {
         path: PathBuf::from(id.as_ref()),
         intent,
@@ -3260,6 +3270,61 @@ mod tests {
       opened.borrow().last(),
       Some(&(PathBuf::from("b.txt"), OpenIntent::Open)),
       "Enter chooses it"
+    );
+  }
+
+  #[gpui::test]
+  async fn walking_onto_a_folder_opens_no_editor(cx: &mut TestAppContext) {
+    cx.update(gpui_component::init);
+    let repo = TempRepo::init("dock-files-folder");
+    commit_text_file(&repo.path, Path::new("one/a.txt"), "v1\n", "first");
+    commit_text_file(&repo.path, Path::new("two/b.txt"), "v1\n", "second");
+
+    let (panel, cx) = add_dock_panel_window(Some(repo.path.clone()), cx);
+    await_refresh(&panel, cx).await;
+
+    panel.update_in(cx, |panel, window, cx| {
+      panel.open_tab(DockPanelTab::Files, window, cx)
+    });
+    let files = panel.update(cx, |panel, _| panel._files_task.take());
+    if let Some(files) = files {
+      files.await;
+    }
+    cx.run_until_parked();
+
+    let opened = Rc::new(std::cell::RefCell::new(Vec::new()));
+    let seen = opened.clone();
+    cx.update(|_, cx| {
+      cx.subscribe(&panel, move |_panel, event: &DockPanelEvent, _cx| {
+        if let DockPanelEvent::OpenFile { path, intent } = event {
+          seen.borrow_mut().push((path.clone(), *intent));
+        }
+      })
+      .detach();
+    });
+
+    // Both rows are folders, and the first down lands on the second of them.
+    cx.simulate_keystrokes("down");
+    cx.run_until_parked();
+    assert!(
+      opened.borrow().is_empty(),
+      "a folder has no contents to show, got {:?}",
+      opened.borrow()
+    );
+
+    cx.simulate_keystrokes("enter");
+    cx.run_until_parked();
+    assert!(
+      opened.borrow().is_empty(),
+      "Enter on a folder unfolds it, it does not open an editor"
+    );
+
+    cx.simulate_keystrokes("down");
+    cx.run_until_parked();
+    assert_eq!(
+      opened.borrow().as_slice(),
+      &[(PathBuf::from("two/b.txt"), OpenIntent::Browse)],
+      "the file inside it still shows"
     );
   }
 
