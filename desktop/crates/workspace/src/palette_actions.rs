@@ -68,6 +68,19 @@ pub(crate) fn handle_global_command_palette_action(
       crate::feedback_dialog::open_feedback_dialog(window, cx);
       Ok(())
     }
+    CommandPaletteAction::SignIn => {
+      crate::auth_flow::start_github_sign_in(cx, "command_palette");
+      Ok(())
+    }
+    CommandPaletteAction::SignOut => {
+      crate::auth_flow::sign_out(cx);
+      crate::github_notifications::GithubNotificationsStore::clear(cx);
+      Ok(())
+    }
+    CommandPaletteAction::OpenBrowserExtensions => {
+      crate::browser_extensions_dialog::open_browser_extensions_dialog(window, cx);
+      Ok(())
+    }
     _ => Err("Command not available.".into()),
   }
 }

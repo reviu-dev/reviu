@@ -1037,6 +1037,17 @@ fn palette_command_shortcut(command: CommandPaletteCommandId) -> Option<Shortcut
     Command::SendReview => Some(ShortcutId::SendReviewCommentsToAgent),
     // One key toggles either way, so both rows show it.
     Command::StageSelectedFile | Command::UnstageSelectedFile => Some(ShortcutId::ToggleFileStage),
+    Command::ToggleTerminal => Some(ShortcutId::ToggleTerminalSidebar),
+    Command::ShowChanges => Some(ShortcutId::OpenGitChangesSidebar),
+    Command::ShowReview => Some(ShortcutId::OpenReviewSidebar),
+    Command::ShowFiles => Some(ShortcutId::OpenFilesSidebar),
+    Command::ShowHistory => Some(ShortcutId::OpenGitHistorySidebar),
+    Command::ShowPullRequest => Some(ShortcutId::OpenPullRequestSidebar),
+    Command::ShowFileSearch => Some(ShortcutId::ShowFileSearch),
+    Command::ToggleDiffView => Some(ShortcutId::ToggleDiffView),
+    Command::ToggleHideWhitespace => Some(ShortcutId::ToggleHideWhitespace),
+    Command::SendSelectionToAgent => Some(ShortcutId::AddSelectionToAgent),
+    Command::JumpToLatestMessage => Some(ShortcutId::JumpToLatestMessage),
     Command::SwitchRepository
     | Command::ForgetRepository
     | Command::CheckoutDetached
@@ -1075,7 +1086,10 @@ fn palette_command_shortcut(command: CommandPaletteCommandId) -> Option<Shortcut
     | Command::OpenGitConfigPage
     | Command::OpenBillingPage
     | Command::OpenAboutPage
-    | Command::SendFeedback => None,
+    | Command::SendFeedback
+    | Command::SignIn
+    | Command::SignOut
+    | Command::OpenBrowserExtensions => None,
   }
 }
 
@@ -1339,7 +1353,26 @@ mod tests {
       palette_command_shortcut(Command::UnstageSelectedFile)
     );
 
+    // The surfaces that only had a key now show it on their palette row.
+    assert_eq!(
+      palette_command_shortcut(Command::ToggleTerminal),
+      Some(ShortcutId::ToggleTerminalSidebar)
+    );
+    assert_eq!(
+      palette_command_shortcut(Command::ShowHistory),
+      Some(ShortcutId::OpenGitHistorySidebar)
+    );
+    assert_eq!(
+      palette_command_shortcut(Command::ShowFileSearch),
+      Some(ShortcutId::ShowFileSearch)
+    );
+    assert_eq!(
+      palette_command_shortcut(Command::SendSelectionToAgent),
+      Some(ShortcutId::AddSelectionToAgent)
+    );
+
     assert_eq!(palette_command_shortcut(Command::CherryPick), None);
+    assert_eq!(palette_command_shortcut(Command::SignOut), None);
     assert_eq!(palette_command_shortcut(Command::SendFeedback), None);
   }
 

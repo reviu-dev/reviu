@@ -653,8 +653,13 @@ impl SettingsPage {
 
   fn open_command_palette(&mut self, window: &mut Window, cx: &mut Context<Self>) {
     let include_github = AuthStateStore::has_github_access(cx);
+    let signed_in = AuthStateStore::is_signed_in(cx);
     let commands = crate::shortcuts::with_palette_keybindings(
-      CommandPaletteCommand::default_global_commands(CommandPalettePage::Settings, include_github),
+      CommandPaletteCommand::default_global_commands(
+        CommandPalettePage::Settings,
+        include_github,
+        signed_in,
+      ),
       window,
       cx,
     );

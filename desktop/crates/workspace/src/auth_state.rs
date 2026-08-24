@@ -34,6 +34,10 @@ impl AuthStateStore {
       .unwrap_or(AuthState::Unknown)
   }
 
+  pub fn is_signed_in(cx: &App) -> bool {
+    matches!(Self::get(cx), AuthState::Authenticated(_))
+  }
+
   pub fn has_github_access(cx: &App) -> bool {
     Self::get(cx).has_github_access()
   }

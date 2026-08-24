@@ -326,6 +326,20 @@ pub enum CommandPaletteAction {
   OpenBillingPage,
   OpenAboutPage,
   SendFeedback,
+  ToggleTerminal,
+  ShowChanges,
+  ShowReview,
+  ShowFiles,
+  ShowHistory,
+  ShowPullRequest,
+  ShowFileSearch,
+  ToggleDiffView,
+  ToggleHideWhitespace,
+  SendSelectionToAgent,
+  JumpToLatestMessage,
+  SignIn,
+  SignOut,
+  OpenBrowserExtensions,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -935,6 +949,20 @@ pub enum CommandPaletteCommandId {
   OpenBillingPage,
   OpenAboutPage,
   SendFeedback,
+  ToggleTerminal,
+  ShowChanges,
+  ShowReview,
+  ShowFiles,
+  ShowHistory,
+  ShowPullRequest,
+  ShowFileSearch,
+  ToggleDiffView,
+  ToggleHideWhitespace,
+  SendSelectionToAgent,
+  JumpToLatestMessage,
+  SignIn,
+  SignOut,
+  OpenBrowserExtensions,
 }
 
 impl CommandPaletteCommandId {
@@ -990,6 +1018,20 @@ impl CommandPaletteCommandId {
       Self::OpenBillingPage => "open_billing_page",
       Self::OpenAboutPage => "open_about_page",
       Self::SendFeedback => "send_feedback",
+      Self::ToggleTerminal => "toggle_terminal",
+      Self::ShowChanges => "show_changes",
+      Self::ShowReview => "show_review",
+      Self::ShowFiles => "show_files",
+      Self::ShowHistory => "show_history",
+      Self::ShowPullRequest => "show_pull_request",
+      Self::ShowFileSearch => "show_file_search",
+      Self::ToggleDiffView => "toggle_diff_view",
+      Self::ToggleHideWhitespace => "toggle_hide_whitespace",
+      Self::SendSelectionToAgent => "send_selection_to_agent",
+      Self::JumpToLatestMessage => "jump_to_latest_message",
+      Self::SignIn => "sign_in",
+      Self::SignOut => "sign_out",
+      Self::OpenBrowserExtensions => "open_browser_extensions",
     }
   }
 
@@ -1042,6 +1084,20 @@ impl CommandPaletteCommandId {
       "open_billing_page" => Some(Self::OpenBillingPage),
       "open_about_page" => Some(Self::OpenAboutPage),
       "send_feedback" => Some(Self::SendFeedback),
+      "toggle_terminal" => Some(Self::ToggleTerminal),
+      "show_changes" => Some(Self::ShowChanges),
+      "show_review" => Some(Self::ShowReview),
+      "show_files" => Some(Self::ShowFiles),
+      "show_history" => Some(Self::ShowHistory),
+      "show_pull_request" => Some(Self::ShowPullRequest),
+      "show_file_search" => Some(Self::ShowFileSearch),
+      "toggle_diff_view" => Some(Self::ToggleDiffView),
+      "toggle_hide_whitespace" => Some(Self::ToggleHideWhitespace),
+      "send_selection_to_agent" => Some(Self::SendSelectionToAgent),
+      "jump_to_latest_message" => Some(Self::JumpToLatestMessage),
+      "sign_in" => Some(Self::SignIn),
+      "sign_out" => Some(Self::SignOut),
+      "open_browser_extensions" => Some(Self::OpenBrowserExtensions),
       _ => None,
     }
   }
@@ -1066,6 +1122,7 @@ pub enum CommandPaletteGroup {
   /// One flat list, so a typed query is answered by relevance and not by group.
   Results,
   Changes,
+  View,
   Review,
   Sync,
   Branches,
@@ -1084,6 +1141,7 @@ impl CommandPaletteGroup {
       Self::Recent => "Recent",
       Self::Results => "Results",
       Self::Changes => "Changes",
+      Self::View => "View",
       Self::Review => "Review",
       Self::Sync => "Sync",
       Self::Branches => "Branches",
@@ -1526,6 +1584,118 @@ impl CommandPaletteCommand {
     )
   }
 
+  pub fn toggle_terminal() -> Self {
+    Self::new(
+      CommandPaletteCommandId::ToggleTerminal,
+      "Toggle terminal",
+      "Show or hide the terminal",
+    )
+  }
+
+  pub fn show_changes() -> Self {
+    Self::new(
+      CommandPaletteCommandId::ShowChanges,
+      "Show changes",
+      "Switch the right panel to Changes and focus the file list",
+    )
+  }
+
+  pub fn show_review() -> Self {
+    Self::new(
+      CommandPaletteCommandId::ShowReview,
+      "Show review",
+      "Switch the right panel to the review waiting to be sent",
+    )
+  }
+
+  pub fn show_files() -> Self {
+    Self::new(
+      CommandPaletteCommandId::ShowFiles,
+      "Show files",
+      "Switch the right panel to the repository file tree",
+    )
+  }
+
+  pub fn show_history() -> Self {
+    Self::new(
+      CommandPaletteCommandId::ShowHistory,
+      "Show history",
+      "Switch the right panel to History and focus the commit tree",
+    )
+  }
+
+  pub fn show_pull_request() -> Self {
+    Self::new(
+      CommandPaletteCommandId::ShowPullRequest,
+      "Show pull request",
+      "Switch the right panel to the pull request of the current branch",
+    )
+  }
+
+  pub fn show_file_search() -> Self {
+    Self::new(
+      CommandPaletteCommandId::ShowFileSearch,
+      "Search files",
+      "Find a file of the repository by name",
+    )
+  }
+
+  pub fn toggle_diff_view() -> Self {
+    Self::new(
+      CommandPaletteCommandId::ToggleDiffView,
+      "Toggle diff view",
+      "Switch between inline and split diff view",
+    )
+  }
+
+  pub fn toggle_hide_whitespace() -> Self {
+    Self::new(
+      CommandPaletteCommandId::ToggleHideWhitespace,
+      "Toggle hide whitespace",
+      "Show or hide whitespace-only changes in the diff",
+    )
+  }
+
+  pub fn send_selection_to_agent() -> Self {
+    Self::new(
+      CommandPaletteCommandId::SendSelectionToAgent,
+      "Send selection to agent",
+      "Attach the selected diff lines to the agent message as context",
+    )
+  }
+
+  pub fn jump_to_latest_message() -> Self {
+    Self::new(
+      CommandPaletteCommandId::JumpToLatestMessage,
+      "Jump to latest message",
+      "Scroll the conversation to the newest message",
+    )
+  }
+
+  pub fn sign_in() -> Self {
+    Self::new(
+      CommandPaletteCommandId::SignIn,
+      "Sign in with GitHub",
+      "Connect your GitHub account",
+    )
+  }
+
+  pub fn sign_out() -> Self {
+    Self::new(
+      CommandPaletteCommandId::SignOut,
+      "Sign out",
+      "Disconnect your GitHub account",
+    )
+  }
+
+  pub fn open_browser_extensions() -> Self {
+    Self::new(
+      CommandPaletteCommandId::OpenBrowserExtensions,
+      "Browser extension",
+      "Open any GitHub pull request in Reviu from your browser",
+    )
+  }
+
   pub fn send_feedback() -> Self {
     Self::new(
       CommandPaletteCommandId::SendFeedback,
@@ -1542,9 +1712,11 @@ impl CommandPaletteCommand {
     )
   }
 
+  /// What every page offers: navigation, the account, and feedback.
   pub fn default_global_commands(
     current_page: CommandPalettePage,
     include_github: bool,
+    signed_in: bool,
   ) -> Vec<Self> {
     let mut commands = Vec::new();
 
@@ -1567,6 +1739,14 @@ impl CommandPaletteCommand {
     commands.push(Self::open_billing_page());
 
     commands.push(Self::open_about_page());
+
+    commands.push(if signed_in {
+      Self::sign_out()
+    } else {
+      Self::sign_in()
+    });
+
+    commands.push(Self::open_browser_extensions());
 
     commands.push(Self::send_feedback());
 
@@ -1636,6 +1816,25 @@ impl CommandPaletteCommand {
       | CommandPaletteCommandId::OpenAboutPage => CommandPaletteGroup::Navigation,
 
       CommandPaletteCommandId::SendFeedback => CommandPaletteGroup::Feedback,
+
+      CommandPaletteCommandId::ToggleTerminal
+      | CommandPaletteCommandId::ShowChanges
+      | CommandPaletteCommandId::ShowReview
+      | CommandPaletteCommandId::ShowFiles
+      | CommandPaletteCommandId::ShowHistory
+      | CommandPaletteCommandId::ShowPullRequest
+      | CommandPaletteCommandId::ShowFileSearch
+      | CommandPaletteCommandId::JumpToLatestMessage => CommandPaletteGroup::Navigation,
+
+      CommandPaletteCommandId::ToggleDiffView | CommandPaletteCommandId::ToggleHideWhitespace => {
+        CommandPaletteGroup::View
+      }
+
+      CommandPaletteCommandId::SendSelectionToAgent => CommandPaletteGroup::Review,
+
+      CommandPaletteCommandId::SignIn
+      | CommandPaletteCommandId::SignOut
+      | CommandPaletteCommandId::OpenBrowserExtensions => CommandPaletteGroup::Github,
     }
   }
 
@@ -1675,6 +1874,20 @@ impl CommandPaletteCommand {
       Id::DiscardReview => &["clear"],
       Id::OpenRepository => &["folder", "project"],
       Id::SwitchRepository => &["recent"],
+      Id::ToggleTerminal => &["shell", "console"],
+      Id::ShowChanges => &["staged", "working", "panel"],
+      Id::ShowReview => &["comments", "panel"],
+      Id::ShowFiles => &["tree", "explorer", "panel"],
+      Id::ShowHistory => &["log", "commits", "panel"],
+      Id::ShowPullRequest => &["pr", "panel"],
+      Id::ShowFileSearch => &["find", "goto", "open"],
+      Id::ToggleDiffView => &["split", "inline", "unified", "side"],
+      Id::ToggleHideWhitespace => &["blank", "spaces", "indent"],
+      Id::SendSelectionToAgent => &["context", "attach", "prompt"],
+      Id::JumpToLatestMessage => &["bottom", "newest", "tail", "conversation"],
+      Id::SignIn => &["login", "connect", "github", "account"],
+      Id::SignOut => &["logout", "disconnect", "account"],
+      Id::OpenBrowserExtensions => &["chrome", "firefox", "addon", "browser"],
       Id::ForgetRepository => &["remove", "recent"],
       Id::OpenSessionPage => &["home", "workspace", "agent"],
       Id::OpenGithubFromUrl => &["link", "paste"],
@@ -1743,6 +1956,23 @@ impl CommandPaletteCommand {
       CommandPaletteCommandId::OpenBillingPage => Icon::new(UiIconName::CreditCard),
       CommandPaletteCommandId::OpenAboutPage => Icon::new(UiIconName::Info),
       CommandPaletteCommandId::SendFeedback => Icon::new(UiIconName::MessageCircle),
+
+      CommandPaletteCommandId::ToggleTerminal => Icon::new(UiIconName::SquareTerminal),
+      CommandPaletteCommandId::ShowChanges => Icon::new(UiIconName::FileDiff),
+      CommandPaletteCommandId::ShowReview => Icon::new(UiIconName::MessageCircle),
+      CommandPaletteCommandId::ShowFiles => Icon::new(IconName::FolderOpen),
+      CommandPaletteCommandId::ShowHistory => Icon::new(UiIconName::History),
+      CommandPaletteCommandId::ShowPullRequest => Icon::new(UiIconName::GitPullRequestArrow),
+      CommandPaletteCommandId::ShowFileSearch => Icon::new(UiIconName::Search),
+      CommandPaletteCommandId::ToggleDiffView | CommandPaletteCommandId::ToggleHideWhitespace => {
+        Icon::new(UiIconName::FileDiff)
+      }
+      CommandPaletteCommandId::SendSelectionToAgent => Icon::new(UiIconName::Sparkles),
+      CommandPaletteCommandId::JumpToLatestMessage => Icon::new(UiIconName::ArrowDownFromLine),
+      CommandPaletteCommandId::SignIn | CommandPaletteCommandId::SignOut => {
+        Icon::new(IconName::Github)
+      }
+      CommandPaletteCommandId::OpenBrowserExtensions => Icon::new(UiIconName::Puzzle),
     }
   }
 
@@ -2919,6 +3149,68 @@ impl CommandPalette {
       CommandPaletteCommandId::SendFeedback => {
         self.trigger_action(command, CommandPaletteAction::SendFeedback, window, cx);
       }
+      CommandPaletteCommandId::ToggleTerminal => {
+        self.trigger_action(command, CommandPaletteAction::ToggleTerminal, window, cx);
+      }
+      CommandPaletteCommandId::ShowChanges => {
+        self.trigger_action(command, CommandPaletteAction::ShowChanges, window, cx);
+      }
+      CommandPaletteCommandId::ShowReview => {
+        self.trigger_action(command, CommandPaletteAction::ShowReview, window, cx);
+      }
+      CommandPaletteCommandId::ShowFiles => {
+        self.trigger_action(command, CommandPaletteAction::ShowFiles, window, cx);
+      }
+      CommandPaletteCommandId::ShowHistory => {
+        self.trigger_action(command, CommandPaletteAction::ShowHistory, window, cx);
+      }
+      CommandPaletteCommandId::ShowPullRequest => {
+        self.trigger_action(command, CommandPaletteAction::ShowPullRequest, window, cx);
+      }
+      CommandPaletteCommandId::ShowFileSearch => {
+        self.trigger_action(command, CommandPaletteAction::ShowFileSearch, window, cx);
+      }
+      CommandPaletteCommandId::ToggleDiffView => {
+        self.trigger_action(command, CommandPaletteAction::ToggleDiffView, window, cx);
+      }
+      CommandPaletteCommandId::ToggleHideWhitespace => {
+        self.trigger_action(
+          command,
+          CommandPaletteAction::ToggleHideWhitespace,
+          window,
+          cx,
+        );
+      }
+      CommandPaletteCommandId::SendSelectionToAgent => {
+        self.trigger_action(
+          command,
+          CommandPaletteAction::SendSelectionToAgent,
+          window,
+          cx,
+        );
+      }
+      CommandPaletteCommandId::JumpToLatestMessage => {
+        self.trigger_action(
+          command,
+          CommandPaletteAction::JumpToLatestMessage,
+          window,
+          cx,
+        );
+      }
+      CommandPaletteCommandId::SignIn => {
+        self.trigger_action(command, CommandPaletteAction::SignIn, window, cx);
+      }
+      CommandPaletteCommandId::SignOut => {
+        self.trigger_action(command, CommandPaletteAction::SignOut, window, cx);
+      }
+      CommandPaletteCommandId::OpenBrowserExtensions => {
+        self.trigger_action(
+          command,
+          CommandPaletteAction::OpenBrowserExtensions,
+          window,
+          cx,
+        );
+      }
     }
   }
 
@@ -3544,6 +3836,7 @@ mod tests {
     let commands = CommandPaletteCommand::default_global_commands(
       super::CommandPalettePage::Session,
       /* include_github */ true,
+      /* signed_in */ true,
     );
     assert!(
       commands
@@ -3557,6 +3850,7 @@ mod tests {
     let commands = CommandPaletteCommand::default_global_commands(
       super::CommandPalettePage::Session,
       /* include_github */ false,
+      /* signed_in */ false,
     );
     assert!(
       !commands
@@ -3846,6 +4140,79 @@ mod tests {
 
   fn quality(command: &CommandPaletteCommand, query: &str) -> Option<MatchQuality> {
     command.relevance(query)
+  }
+
+  #[test]
+  fn the_surfaces_that_only_had_a_shortcut_are_now_commands() {
+    // Every one of these existed as a key and a Settings row, and nowhere the
+    // palette could reach.
+    for command in [
+      CommandPaletteCommand::toggle_terminal(),
+      CommandPaletteCommand::show_changes(),
+      CommandPaletteCommand::show_review(),
+      CommandPaletteCommand::show_files(),
+      CommandPaletteCommand::show_history(),
+      CommandPaletteCommand::show_pull_request(),
+      CommandPaletteCommand::show_file_search(),
+      CommandPaletteCommand::toggle_diff_view(),
+      CommandPaletteCommand::toggle_hide_whitespace(),
+      CommandPaletteCommand::send_selection_to_agent(),
+      CommandPaletteCommand::jump_to_latest_message(),
+    ] {
+      assert_eq!(
+        CommandPaletteCommandId::parse(command.id.as_str()),
+        Some(command.id),
+        "a command has to survive being written to the usage store"
+      );
+    }
+  }
+
+  #[test]
+  fn the_new_commands_answer_the_words_they_are_for() {
+    assert!(CommandPaletteCommand::toggle_terminal().matches("terminal"));
+    assert!(CommandPaletteCommand::toggle_terminal().matches("shell"));
+    assert!(CommandPaletteCommand::show_history().matches("history"));
+    assert!(CommandPaletteCommand::show_history().matches("log"));
+    assert!(CommandPaletteCommand::show_file_search().matches("search"));
+    assert!(CommandPaletteCommand::show_file_search().matches("find"));
+    assert!(CommandPaletteCommand::toggle_diff_view().matches("split"));
+    assert!(CommandPaletteCommand::sign_out().matches("logout"));
+    assert!(CommandPaletteCommand::open_browser_extensions().matches("chrome"));
+  }
+
+  #[test]
+  fn the_account_command_follows_who_is_signed_in() {
+    let signed_out = CommandPaletteCommand::default_global_commands(
+      super::CommandPalettePage::Session,
+      /* include_github */ false,
+      /* signed_in */ false,
+    );
+    assert!(
+      signed_out
+        .iter()
+        .any(|command| command.id == CommandPaletteCommandId::SignIn)
+    );
+    assert!(
+      !signed_out
+        .iter()
+        .any(|command| command.id == CommandPaletteCommandId::SignOut)
+    );
+
+    let signed_in = CommandPaletteCommand::default_global_commands(
+      super::CommandPalettePage::Session,
+      /* include_github */ true,
+      /* signed_in */ true,
+    );
+    assert!(
+      signed_in
+        .iter()
+        .any(|command| command.id == CommandPaletteCommandId::SignOut)
+    );
+    assert!(
+      !signed_in
+        .iter()
+        .any(|command| command.id == CommandPaletteCommandId::SignIn)
+    );
   }
 
   #[test]

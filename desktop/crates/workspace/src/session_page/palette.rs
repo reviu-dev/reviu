@@ -141,11 +141,33 @@ impl SessionPage {
         commands.push(CommandPaletteCommand::pull());
       }
       commands.push(CommandPaletteCommand::fetch());
+
+      commands.push(CommandPaletteCommand::show_changes());
+      commands.push(CommandPaletteCommand::show_review());
+      commands.push(CommandPaletteCommand::show_files());
+      commands.push(CommandPaletteCommand::show_history());
+      commands.push(CommandPaletteCommand::show_pull_request());
+      commands.push(CommandPaletteCommand::toggle_terminal());
+      commands.push(CommandPaletteCommand::show_file_search());
+
+      // The two diff toggles change what an open diff shows, so they need one.
+      if self.diff_editor().is_some() {
+        commands.push(CommandPaletteCommand::toggle_diff_view());
+        commands.push(CommandPaletteCommand::toggle_hide_whitespace());
+      }
+      if self.selection_context(cx).is_ok() {
+        commands.push(CommandPaletteCommand::send_selection_to_agent());
+      }
+    }
+
+    if self.agent_chat_view.is_some() {
+      commands.push(CommandPaletteCommand::jump_to_latest_message());
     }
 
     commands.extend(CommandPaletteCommand::default_global_commands(
       CommandPalettePage::Session,
       AuthStateStore::has_github_access(cx),
+      AuthStateStore::is_signed_in(cx),
     ));
     commands
   }
@@ -391,6 +413,50 @@ impl SessionPage {
       CommandPaletteAction::ForgetRepository(repository) => {
         self.forget_repository(PathBuf::from(repository.path.as_ref()), window, cx)
       }
+      CommandPaletteAction::ToggleTerminal => {
+        self.open_dock_tab(DockPanelTab::Terminal, window, cx);
+        Ok(())
+      }
+      CommandPaletteAction::ShowChanges => {
+        self.open_dock_tab(DockPanelTab::Changes, window, cx);
+        Ok(())
+      }
+      CommandPaletteAction::ShowReview => {
+        self.open_dock_tab(DockPanelTab::Review, window, cx);
+        Ok(())
+      }
+      CommandPaletteAction::ShowFiles => {
+        self.open_dock_tab(DockPanelTab::Files, window, cx);
+        Ok(())
+      }
+      CommandPaletteAction::ShowHistory => {
+        self.open_dock_tab(DockPanelTab::History, window, cx);
+        Ok(())
+      }
+      CommandPaletteAction::ShowPullRequest => {
+        self.open_dock_tab(DockPanelTab::PullRequest, window, cx);
+        Ok(())
+      }
+      CommandPaletteAction::ShowFileSearch => {
+        self.open_file_search(window, cx);
+        Ok(())
+      }
+      CommandPaletteAction::ToggleDiffView => {
+        self.toggle_diff_view(cx);
+        Ok(())
+      }
+      CommandPaletteAction::ToggleHideWhitespace => {
+        self.toggle_hide_whitespace(cx);
+        Ok(())
+      }
+      CommandPaletteAction::SendSelectionToAgent => {
+        self.add_selection_to_agent_action(&crate::AddSelectionToAgent, window, cx);
+        Ok(())
+      }
+      CommandPaletteAction::JumpToLatestMessage => {
+        self.jump_to_latest_message_action(&JumpToLatestMessage, window, cx);
+        Ok(())
+      }
       other => crate::palette_actions::handle_global_command_palette_action(other, window, cx),
     }
   }
@@ -404,6 +470,41 @@ mod tests {
   use gpui::TestAppContext;
   use std::path::Path;
   use ui::CommandPaletteCommandId;
+
+  #[gpui::test]
+  async fn the_dock_surfaces_reach_the_palette(cx: &mut TestAppContext) {
+    let repo = TempRepo::init("session-page-dock-commands");
+    commit_text_file(&repo.path, Path::new("a.txt"), "v1\n", "initial");
+
+    let (page, cx) = add_session_page_window(repo.path.clone(), cx);
+    cx.run_until_parked();
+
+    page.read_with(cx, |page, cx| {
+      let ids = page
+        .palette_commands(1, cx)
+        .into_iter()
+        .map(|command| command.id)
+        .collect::<Vec<_>>();
+
+      // Each of these was a key and a Settings row, reachable from nowhere else.
+      for id in [
+        CommandPaletteCommandId::ShowChanges,
+        CommandPaletteCommandId::ShowReview,
+        CommandPaletteCommandId::ShowFiles,
+        CommandPaletteCommandId::ShowHistory,
+        CommandPaletteCommandId::ShowPullRequest,
+        CommandPaletteCommandId::ToggleTerminal,
+        CommandPaletteCommandId::ShowFileSearch,
+      ] {
+        assert!(ids.contains(&id), "{id:?} is missing from the palette");
+      }
+
+      // Nothing is open, so the two diff toggles have nothing to act on.
+      assert!(!ids.contains(&CommandPaletteCommandId::ToggleDiffView));
+      assert!(!ids.contains(&CommandPaletteCommandId::ToggleHideWhitespace));
+      assert!(!ids.contains(&CommandPaletteCommandId::SendSelectionToAgent));
+    });
+  }
 
   #[gpui::test]
   async fn branches_and_stashes_reach_the_palette(cx: &mut TestAppContext) {

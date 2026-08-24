@@ -4,6 +4,14 @@ All notable changes to Reviu are documented here.
 
 ## 1.0.0
 
+### Everything With A Shortcut Is In The Palette
+
+Eleven things could only be reached by knowing their key: showing the Changes, Review, Files, History or Pull request panel, toggling the terminal, searching files, switching between inline and split diff, hiding whitespace-only changes, sending a diff selection to the agent, and jumping to the newest message. They were listed in Settings and nowhere else, so you either knew the key or you did not have the feature.
+
+They are commands now, each showing its key on the right, so looking one up teaches the shortcut. The two diff toggles and the selection only appear when there is a diff to act on.
+
+Signing in, signing out and installing the browser extension moved in too. They used to live only in the avatar menu.
+
 ### The Palette Shows The Key That Runs A Command
 
 The right of a palette row was empty unless the command was unavailable, in which case it said why. When a command has a keyboard shortcut, it now shows it there instead: the palette teaches its own shortcuts as you look for them, rather than leaving them in Settings. A command that cannot run still says why, which is the more useful of the two.
