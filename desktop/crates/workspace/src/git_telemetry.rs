@@ -398,7 +398,7 @@ mod tests {
   fn only_what_is_worth_reporting_is_reported() {
     assert_eq!(
       outcome_report(&Ok(RepoCommandOutcome::Done {
-        message: "Pushed".into()
+        message: Some("Pushed".into())
       })),
       OutcomeReport::Nothing,
       "a command that worked is not news"
@@ -483,7 +483,7 @@ mod tests {
     telemetry.report_outcome(
       "git.push",
       outcome_report(&Ok(RepoCommandOutcome::Done {
-        message: "Pushed".into(),
+        message: Some("Pushed".into()),
       })),
     );
     assert_eq!(sink.reports(), vec![], "success sends nothing at all");

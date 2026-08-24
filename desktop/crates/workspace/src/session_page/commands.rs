@@ -378,7 +378,9 @@ impl SessionPage {
             Ok(outcome) => {
               match outcome {
                 RepoCommandOutcome::Done { message } => {
-                  window.push_notification(Notification::success(message), cx);
+                  if let Some(message) = message {
+                    window.push_notification(Notification::success(message), cx);
+                  }
                 }
                 RepoCommandOutcome::UpToDate { message } => {
                   window.push_notification(Notification::info(message), cx);
@@ -469,6 +471,78 @@ mod tests {
   use gpui::TestAppContext;
   use std::path::Path;
   use ui::CommandPaletteCommandId;
+
+  #[gpui::test]
+  async fn staging_says_nothing_while_a_stash_still_speaks(cx: &mut TestAppContext) {
+    let repo = TempRepo::init("session-page-stage-quiet");
+    commit_text_file(&repo.path, Path::new("a.txt"), "v1\n", "first");
+    std::fs::write(repo.path.join("a.txt"), "v2\n").expect("dirty the worktree");
+
+    let (page, cx) = add_session_page_window(repo.path.clone(), cx);
+
+    run_command(&page, RepoCommand::StageAll, cx).await;
+    assert!(
+      notifications(cx).is_empty(),
+      "the Changes panel already shows the file move"
+    );
+    let staged = git::list_repo_status(&repo.path).expect("status");
+    assert!(
+      staged
+        .iter()
+        .all(|entry| entry.stage == git::RepoStage::Staged)
+    );
+
+    run_command(&page, RepoCommand::UnstageAll, cx).await;
+    assert!(notifications(cx).is_empty(), "and the move back");
+    let unstaged = git::list_repo_status(&repo.path).expect("status");
+    assert!(
+      unstaged
+        .iter()
+        .all(|entry| entry.stage == git::RepoStage::Unstaged)
+    );
+
+    // A command whose result leaves no trace on screen still says so.
+    run_command(
+      &page,
+      RepoCommand::Stash {
+        include_untracked: false,
+        message: None,
+      },
+      cx,
+    )
+    .await;
+    assert!(
+      !notifications(cx).is_empty(),
+      "stashed work is gone from the panel with nothing to explain it"
+    );
+  }
+
+  async fn run_command(
+    page: &Entity<SessionPage>,
+    command: RepoCommand,
+    cx: &mut gpui::VisualTestContext,
+  ) {
+    page.update_in(cx, |page, window, cx| {
+      page
+        .run_repo_command(command, window, cx)
+        .expect("the command runs")
+    });
+    let task = page.update(cx, |page, _| {
+      page._repo_command_task.take().expect("command task")
+    });
+    task.await;
+    cx.run_until_parked();
+  }
+
+  fn notifications(cx: &mut gpui::VisualTestContext) -> Vec<gpui::Entity<Notification>> {
+    cx.update(|window, cx| {
+      gpui_component::Root::read(window, cx)
+        .notification
+        .read(cx)
+        .notifications()
+        .to_vec()
+    })
+  }
 
   #[gpui::test]
   async fn amending_and_undoing_reach_the_last_commit(cx: &mut TestAppContext) {

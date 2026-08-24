@@ -4,6 +4,12 @@ All notable changes to Reviu are documented here.
 
 ## 1.0.0
 
+### Staging No Longer Announces Itself
+
+`Stage all` and `Unstage all` raised a notification saying what you had just asked for, while the Changes panel was already showing the files move between sections. Staging a single file from its row never said anything, so the same action behaved two ways.
+
+Both are quiet now, and they still report a failure. Toasts are kept for what leaves no trace on screen: pushes and pulls, history rewrites, stashes, and anything that went wrong.
+
 ### A Folder In The Files Panel No Longer Opens An Editor
 
 Walking the Files tree with the arrow keys, or clicking a folder, opened an editor tab named after the folder with nothing in it. The panel treated every row you landed on as a file to show.

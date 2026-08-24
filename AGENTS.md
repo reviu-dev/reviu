@@ -146,6 +146,7 @@ Other entities can then register a callback to handle these events by doing `cx.
 
 - **Focus when a surface closes**: dialogs (command palette, file search, confirmations) restore focus by themselves via gpui-component's `Root`. Page-level surfaces (right dock, centre views) must hand focus to `SessionPage`'s `Focusable` impl on the next frame - it resolves to the diff editor or the composer - never to a hardcoded target.
 - One dock surface = one entity in its own file, communicating by events; `session_page.rs` composes and routes.
+- **Notifications**: a toast is for what leaves no trace on screen - remote work, history rewrites, destructive acts, refusals that explain why nothing happened, and every error. When a panel refresh already shows the result, the action stays silent: staging is the reference case (`RepoCommandOutcome::silent()`, and `changes_list::run_action` for the per-file buttons, both of which only speak when the job fails).
 
 ## Driving the real app (reviu_driver)
 

@@ -73,13 +73,10 @@ pub(crate) enum RepoCommand {
 /// What the caller has to react to once the command ran.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum RepoCommandOutcome {
-  Done {
-    message: SharedString,
-  },
+  /// `None` when the panel already shows the result: staging speaks for itself.
+  Done { message: Option<SharedString> },
   /// Nothing to do: the branch was already in sync.
-  UpToDate {
-    message: SharedString,
-  },
+  UpToDate { message: SharedString },
   /// The command stopped on conflicts; the file is waiting to be resolved.
   Conflicted {
     path: PathBuf,
@@ -92,8 +89,12 @@ pub(crate) enum RepoCommandOutcome {
 impl RepoCommandOutcome {
   fn done(message: impl Into<SharedString>) -> Self {
     Self::Done {
-      message: message.into(),
+      message: Some(message.into()),
     }
+  }
+
+  fn silent() -> Self {
+    Self::Done { message: None }
   }
 }
 
@@ -101,12 +102,8 @@ impl RepoCommand {
   /// Blocking: run it off the main thread.
   pub(crate) fn run(&self, repo_root: &Path) -> anyhow::Result<RepoCommandOutcome> {
     match self {
-      Self::StageAll => {
-        stage_all(repo_root).map(|()| RepoCommandOutcome::done("Staged all changes"))
-      }
-      Self::UnstageAll => {
-        unstage_all(repo_root).map(|()| RepoCommandOutcome::done("Unstaged all changes"))
-      }
+      Self::StageAll => stage_all(repo_root).map(|()| RepoCommandOutcome::silent()),
+      Self::UnstageAll => unstage_all(repo_root).map(|()| RepoCommandOutcome::silent()),
       Self::Push => {
         push(repo_root, false).map(|()| RepoCommandOutcome::done("Pushed to the remote branch"))
       }
@@ -378,8 +375,8 @@ mod tests {
     let outcome = run(&repo.path, RepoCommand::StageAll);
     assert_eq!(
       outcome,
-      RepoCommandOutcome::done("Staged all changes"),
-      "the message goes straight to the notification"
+      RepoCommandOutcome::silent(),
+      "the Changes panel already shows the file move, it says nothing"
     );
     let staged = list_repo_status(&repo.path).expect("status");
     assert!(staged.iter().all(|entry| entry.stage == RepoStage::Staged));
