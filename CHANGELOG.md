@@ -14,6 +14,8 @@ The panel now rereads GitHub as soon as the branch under it changes, whoever mov
 
 `Pending`, `Resolved` and `Outdated` on a review comment, the letters marking a changed file, and the subscription state in the Reviu Pro dialog each drew from their own colours, so the same idea landed in a slightly different green or yellow depending on where you read it. They now share a single palette, and that palette follows the theme: the blue marking a renamed file no longer keeps its dark-theme shade on a light background.
 
+The badges themselves now carry the shape and the spacing of the rest of the design system rather than a tighter variant of it, and in dark mode the greens, reds and oranges are a shade deeper, where the previous ones read washed out against the background.
+
 The subscription state in the Reviu Pro dialog also drops its badge. It reads as coloured text next to the plan now, the same way the pull request state reads in the right dock.
 
 ### Coming Back From Checkout Opens No Second Reviu Pro Dialog

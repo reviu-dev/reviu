@@ -1,9 +1,9 @@
 use gpui::Hsla;
 use gpui_component::ColorName;
 
-// The scales gpui-component's `Tag` picks for its foreground, so a status colour
-// reads the same whether it lands in a tag or in bare text.
-const STATUS_DARK_SCALE: usize = 300;
+// `Tag` puts its foreground on a tint of its own colour and can afford scale 300;
+// these land on the app background, where that shade reads washed out.
+const STATUS_DARK_SCALE: usize = 400;
 const STATUS_LIGHT_SCALE: usize = 600;
 
 pub trait StatusThemeExt {

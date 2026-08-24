@@ -4734,7 +4734,7 @@ impl Editor {
             )
           })
           .when(first_message.is_outdated, |this| {
-            this.child(Tag::color(ColorName::Orange).small().child("Outdated"))
+            this.child(Tag::color(ColorName::Orange).child("Outdated"))
           })
       } else {
         h_flex()
@@ -4791,10 +4791,10 @@ impl Editor {
         .items_center()
         .gap_1()
         .when(first_message.is_pending, |this| {
-          this.child(Tag::color(ColorName::Amber).small().child("Pending"))
+          this.child(Tag::color(ColorName::Amber).child("Pending"))
         })
         .when(wears_resolved_tag, |this| {
-          this.child(Tag::color(ColorName::Green).small().child("Resolved"))
+          this.child(Tag::color(ColorName::Green).child("Resolved"))
         })
         .when_some(first_message_resolve_button, |this, button| {
           this.child(button)

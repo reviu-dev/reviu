@@ -739,7 +739,7 @@ impl ReviewList {
           .child(comment.excerpt.clone()),
       )
       .when_some(review_row_status_label(comment.status), |this, label| {
-        this.child(Tag::secondary().outline().small().child(label))
+        this.child(Tag::secondary().outline().child(label))
       })
       .when(sendable, |this| {
         this.child(
