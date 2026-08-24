@@ -1,10 +1,11 @@
 use std::sync::Arc;
 
 use gpui::{
-  App, Context, FocusHandle, Focusable, Render, SharedString, Window, div, prelude::*, px,
+  AnyElement, App, Context, FocusHandle, Focusable, Render, SharedString, Window, div, prelude::*,
+  px,
 };
 use gpui_component::{
-  ActiveTheme as _, Disableable as _, IconName, Sizable as _, StyledExt,
+  ActiveTheme as _, Disableable as _, Icon, IconName, Sizable as _, StyledExt,
   button::{Button, ButtonVariants as _},
   h_flex,
   spinner::Spinner,
@@ -24,8 +25,8 @@ use crate::{
   date_format::{format_long_date_opt, parse_rfc3339},
   navigation::NavigationHistory,
   pricing_copy::{
-    PRO_ANNUAL_PERIOD, PRO_ANNUAL_PRICE, PRO_ANNUAL_SAVE_PERCENT, PRO_ANNUAL_SLUG,
-    PRO_MONTHLY_PERIOD, PRO_MONTHLY_PRICE, PRO_MONTHLY_SLUG,
+    PRO_ANNUAL_PERIOD, PRO_ANNUAL_PRICE, PRO_ANNUAL_SAVE_PERCENT, PRO_ANNUAL_SLUG, PRO_BENEFITS,
+    PRO_MONTHLY_PERIOD, PRO_MONTHLY_PRICE, PRO_MONTHLY_SLUG, PRO_TRIAL,
   },
   workspace::WorkspaceApi,
 };
@@ -48,6 +49,33 @@ enum BillingSubscriptionState {
   Canceled,
 }
 
+/// What the page has to say, so the promise-bearing states are named rather
+/// than inferred from a chain of `if let`.
+#[derive(Debug)]
+enum BillingContent<'a> {
+  Loading,
+  SignIn,
+  Subscribe,
+  Manage {
+    subscription: &'a CustomerStateSubscription,
+    portal_url: Option<&'a str>,
+  },
+}
+
+fn billing_content(state: &AuthState) -> BillingContent<'_> {
+  match state {
+    AuthState::Unknown => BillingContent::Loading,
+    AuthState::Unauthenticated => BillingContent::SignIn,
+    AuthState::Authenticated(user) => match user.subscription.active_subscription.as_ref() {
+      Some(subscription) => BillingContent::Manage {
+        subscription,
+        portal_url: user.subscription.portal_url.as_deref(),
+      },
+      None => BillingContent::Subscribe,
+    },
+  }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum ReviuProCheckoutCta {
   SubscribeMonthly,
@@ -68,6 +96,69 @@ pub(crate) fn reviu_pro_checkout_button(id: &'static str, cta: ReviuProCheckoutC
     .icon(UiIconName::CreditCard)
     .label(cta.label())
     .small()
+}
+
+/// The promise has to reach the screen where the money changes hands, not stop
+/// at the surfaces that are missing the feature. `footer` is what the visitor
+/// can do about it: pay, or sign in first.
+fn render_pro_offer(theme: &gpui_component::Theme, footer: impl IntoElement) -> AnyElement {
+  v_flex()
+    .w_full()
+    .gap_4()
+    .p_4()
+    .border_1()
+    .border_color(theme.border)
+    .rounded(theme.radius)
+    .bg(theme.sidebar)
+    .child(
+      v_flex()
+        .gap_2()
+        .child(
+          div()
+            .text_lg()
+            .font_semibold()
+            .text_color(theme.foreground)
+            .child("Reviu Pro"),
+        )
+        .child(render_pro_promise_summary(theme)),
+    )
+    .child(footer)
+    .into_any_element()
+}
+
+fn render_pro_promise_summary(theme: &gpui_component::Theme) -> AnyElement {
+  v_flex()
+    .gap_2()
+    .child(
+      div()
+        .text_sm()
+        .text_color(theme.muted_foreground)
+        .child("Pull requests, reviews and notifications, inside the app."),
+    )
+    .child(v_flex().gap_1().children(PRO_BENEFITS.map(|benefit| {
+      h_flex()
+        .gap_2()
+        .items_start()
+        .child(
+          Icon::new(UiIconName::Check)
+            .size_3()
+            .text_color(theme.status_green()),
+        )
+        .child(
+          div()
+            .flex_1()
+            .text_sm()
+            .text_color(theme.foreground)
+            .child(benefit),
+        )
+    })))
+    .child(
+      div()
+        .text_xs()
+        .text_color(theme.muted_foreground)
+        .child(PRO_TRIAL),
+    )
+    .into_any_element()
 }
 
 pub(crate) fn render_pro_pricing_cards(
@@ -498,73 +589,27 @@ impl BillingPage {
     .disabled(self.checkout_loading || self.refresh_loading)
     .on_click(cx.listener(Self::subscribe_monthly_action));
 
-    v_flex()
-      .w_full()
-      .gap_4()
-      .p_4()
-      .border_1()
-      .border_color(theme.border)
-      .rounded(theme.radius)
-      .bg(theme.sidebar)
-      .child(
-        v_flex()
-          .gap_1()
-          .child(
-            div()
-              .text_lg()
-              .font_semibold()
-              .text_color(theme.foreground)
-              .child("Reviu Pro"),
-          )
-          .child(
-            div()
-              .text_sm()
-              .text_color(theme.muted_foreground)
-              .child("No active subscription found for your account."),
-          ),
-      )
-      .child(render_pro_pricing_cards(
-        annual_button,
-        monthly_button,
-        &theme,
-      ))
+    render_pro_offer(
+      &theme,
+      render_pro_pricing_cards(annual_button, monthly_button, &theme),
+    )
   }
 
   fn render_unauthenticated(&self, cx: &mut Context<Self>) -> impl IntoElement {
     let theme = cx.theme().clone();
 
-    v_flex()
-      .w_full()
-      .gap_3()
-      .p_4()
-      .border_1()
-      .border_color(theme.border)
-      .rounded(theme.radius)
-      .bg(theme.sidebar)
-      .child(
-        div()
-          .text_lg()
-          .font_semibold()
-          .text_color(theme.foreground)
-          .child("Billing"),
-      )
-      .child(
-        div()
-          .text_sm()
-          .text_color(theme.muted_foreground)
-          .child("Sign in with GitHub to manage your subscription."),
-      )
-      .child(
-        h_flex().justify_start().child(
-          Button::new("billing-sign-in")
-            .icon(IconName::Github)
-            .label("Sign in with GitHub")
-            .small()
-            .on_click(|_, _, cx| {
-              crate::auth_flow::start_github_sign_in(cx, "billing_page");
-            }),
-        ),
-      )
+    render_pro_offer(
+      &theme,
+      h_flex().justify_start().child(
+        Button::new("billing-sign-in")
+          .icon(IconName::Github)
+          .label("Sign in with GitHub")
+          .small()
+          .on_click(|_, _, cx| {
+            crate::auth_flow::start_github_sign_in(cx, "billing_page");
+          }),
+      ),
+    )
   }
 
   fn render_loading(&self, cx: &mut Context<Self>) -> impl IntoElement {
@@ -636,19 +681,17 @@ impl Render for BillingPage {
   fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
     let theme = cx.theme().clone();
 
-    let content = match AuthStateStore::get(cx) {
-      AuthState::Unknown => self.render_loading(cx).into_any_element(),
-      AuthState::Unauthenticated => self.render_unauthenticated(cx).into_any_element(),
-      AuthState::Authenticated(user) => {
-        let portal_url = user.subscription.portal_url.as_deref();
-        if let Some(subscription) = user.subscription.active_subscription.as_ref() {
-          self
-            .render_active_subscription(subscription, portal_url, &theme)
-            .into_any_element()
-        } else {
-          self.render_no_subscription(cx).into_any_element()
-        }
-      }
+    let auth_state = AuthStateStore::get(cx);
+    let content = match billing_content(&auth_state) {
+      BillingContent::Loading => self.render_loading(cx).into_any_element(),
+      BillingContent::SignIn => self.render_unauthenticated(cx).into_any_element(),
+      BillingContent::Subscribe => self.render_no_subscription(cx).into_any_element(),
+      BillingContent::Manage {
+        subscription,
+        portal_url,
+      } => self
+        .render_active_subscription(subscription, portal_url, &theme)
+        .into_any_element(),
     };
 
     div()
@@ -798,6 +841,53 @@ mod tests {
     canceled.cancel_at_period_end = true;
     canceled.current_period_end = Some("2000-01-01T00:00:00Z".to_string());
     assert_eq!(BillingPage::billing_date_label(&canceled), "Expiry Date");
+  }
+
+  fn signed_in_with(subscription: Option<CustomerStateSubscription>) -> AuthState {
+    let AuthState::Authenticated(mut user) = crate::auth_state::signed_in_without_subscription()
+    else {
+      unreachable!("the fixture is authenticated");
+    };
+    user.subscription.active_subscription = subscription;
+    AuthState::Authenticated(user)
+  }
+
+  #[test]
+  fn every_auth_state_maps_to_what_the_page_says() {
+    assert!(matches!(
+      billing_content(&AuthState::Unknown),
+      BillingContent::Loading
+    ));
+    assert!(matches!(
+      billing_content(&AuthState::Unauthenticated),
+      BillingContent::SignIn
+    ));
+    assert!(matches!(
+      billing_content(&signed_in_with(None)),
+      BillingContent::Subscribe
+    ));
+
+    let state = signed_in_with(Some(make_subscription()));
+    assert!(matches!(
+      billing_content(&state),
+      BillingContent::Manage { .. }
+    ));
+  }
+
+  #[test]
+  fn the_promise_names_what_pro_brings() {
+    assert!(!PRO_BENEFITS.is_empty());
+    assert!(
+      PRO_BENEFITS
+        .iter()
+        .any(|line| line.contains("Pull requests"))
+    );
+    assert!(
+      PRO_BENEFITS
+        .iter()
+        .any(|line| line.contains("notifications"))
+    );
+    assert!(PRO_TRIAL.contains("free trial"));
   }
 
   #[test]

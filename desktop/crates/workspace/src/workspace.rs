@@ -16,12 +16,12 @@ use gpui_component::{
 use gpui_router::{Route, Routes};
 
 use crate::AppProfile;
-use crate::about_page::AboutPage;
+use crate::about_dialog::open_about_dialog;
 use crate::api::ApiClient;
 use crate::app_update::{
   AppUpdateNotificationId, AppUpdateState, AppUpdateStore, AvailableAppUpdate, UpdateArtifact,
-  current_arch, current_platform, download_update_artifact, install_update_artifact,
-  ready_update_button_label, resolved_build_version, should_install_update_after_download,
+  current_arch, current_platform, resolved_build_version, start_update_download,
+  update_action_label,
 };
 use crate::auth_state::{AuthState, AuthStateStore};
 use crate::billing_page::BillingPage;
@@ -52,7 +52,6 @@ pub enum WorkspacePage {
   Billing,
   GitConfig,
   Settings,
-  About,
 }
 
 pub(crate) fn workspace_page_from_pathname(pathname: &str) -> WorkspacePage {
@@ -61,7 +60,6 @@ pub(crate) fn workspace_page_from_pathname(pathname: &str) -> WorkspacePage {
     "/billing" => WorkspacePage::Billing,
     "/settings" => WorkspacePage::Settings,
     "/git-config" => WorkspacePage::GitConfig,
-    "/about" => WorkspacePage::About,
     _ => WorkspacePage::Session,
   }
 }
@@ -78,7 +76,6 @@ fn user_menu_page_for_workspace_page(page: WorkspacePage) -> UserMenuPage {
     WorkspacePage::Billing => UserMenuPage::Billing,
     WorkspacePage::GitConfig => UserMenuPage::GitConfig,
     WorkspacePage::Settings => UserMenuPage::Settings,
-    WorkspacePage::About => UserMenuPage::About,
   }
 }
 
@@ -196,12 +193,10 @@ pub struct WorkspaceView {
   git_config_page: Entity<GitConfigPage>,
   billing_page: Entity<BillingPage>,
   settings_page: Entity<SettingsPage>,
-  about_page: Entity<AboutPage>,
   window_handle: AnyWindowHandle,
   last_page: Option<WorkspacePage>,
   _update_check_task: Option<Task<()>>,
   _periodic_update_check_task: Option<Task<()>>,
-  _update_download_task: Option<Task<()>>,
   _notification_poll_task: Option<Task<()>>,
   #[cfg(any(target_os = "linux", target_os = "windows"))]
   _status_bar_event_task: Option<Task<()>>,
@@ -301,19 +296,16 @@ impl WorkspaceView {
     let git_config_page = cx.new(|cx| GitConfigPage::new(window, cx));
     let billing_page = cx.new(|cx| BillingPage::new(window, cx));
     let settings_page = cx.new(|cx| SettingsPage::new(window, cx, settings));
-    let about_page = cx.new(|cx| AboutPage::new(window, cx));
 
     let view = Self {
       session_page,
       git_config_page,
       billing_page,
       settings_page,
-      about_page,
       window_handle: window.window_handle(),
       last_page: None,
       _update_check_task: None,
       _periodic_update_check_task: None,
-      _update_download_task: None,
       _notification_poll_task: None,
       #[cfg(any(target_os = "linux", target_os = "windows"))]
       _status_bar_event_task: None,
@@ -508,77 +500,6 @@ impl WorkspaceView {
     self._status_bar_event_task = Some(task);
   }
 
-  fn trigger_update_download(&mut self, cx: &mut Context<Self>) {
-    if AppUpdateStore::is_downloading(cx) {
-      return;
-    }
-
-    if let Some(ready) = AppUpdateStore::try_ready_to_install(cx) {
-      #[cfg(target_os = "windows")]
-      {
-        match install_update_artifact(&ready) {
-          Ok(()) => cx.quit(),
-          Err(err) => AppUpdateStore::set_error(cx, Some(ready.update.clone()), err.to_string()),
-        }
-        return;
-      }
-
-      #[cfg(not(target_os = "windows"))]
-      {
-        if let Some(path) = ready.restart_binary_path {
-          cx.set_restart_path(path);
-        }
-        cx.restart();
-        return;
-      }
-    }
-
-    let Some(update) = AppUpdateStore::try_available_update(cx) else {
-      return;
-    };
-
-    AppUpdateStore::set_downloading(cx, update.clone());
-    let task = cx.spawn(async move |this, cx| {
-      let download_result = cx
-        .background_spawn({
-          let update = update.clone();
-          async move { download_update_artifact(&update) }
-        })
-        .await;
-
-      match download_result {
-        Ok(ready) => {
-          if !should_install_update_after_download() {
-            let _ = this.update(cx, |_, cx| {
-              AppUpdateStore::set_ready_to_install(cx, ready.clone());
-            });
-            return;
-          }
-
-          let install_ready = ready.clone();
-          let install_result = cx
-            .background_spawn(async move { install_update_artifact(&install_ready) })
-            .await;
-          let _ = this.update(cx, |_, cx| match install_result {
-            Ok(()) => {
-              AppUpdateStore::set_ready_to_install(cx, ready.clone());
-            }
-            Err(err) => {
-              AppUpdateStore::set_error(cx, Some(ready.update.clone()), err.to_string());
-            }
-          });
-        }
-        Err(err) => {
-          let _ = this.update(cx, |_, cx| {
-            AppUpdateStore::set_error(cx, Some(update.clone()), err.to_string());
-          });
-        }
-      }
-    });
-
-    self._update_download_task = Some(task);
-  }
-
   fn dismiss_update_notification(&self, cx: &mut Context<Self>) {
     let _ = cx.update_window(self.window_handle, |_, window, cx| {
       window.remove_notification::<AppUpdateNotificationId>(cx);
@@ -620,7 +541,7 @@ impl WorkspaceView {
                   .icon(UiIconName::Download)
                   .label("Download")
                   .on_click(move |_, window, cx| {
-                    view.update(cx, |this, cx| this.trigger_update_download(cx));
+                    view.update(cx, |_, cx| start_update_download(cx));
                     window.on_next_frame(|window, cx| {
                       window.remove_notification::<AppUpdateNotificationId>(cx);
                     });
@@ -633,21 +554,13 @@ impl WorkspaceView {
     });
   }
 
-  fn update_button_label(state: Option<AppUpdateState>) -> &'static str {
-    match state {
-      Some(AppUpdateState::Downloading(_)) => "Downloading...",
-      Some(AppUpdateState::ReadyToInstall(_)) => ready_update_button_label(),
-      _ => "New version available",
-    }
-  }
-
   fn global_update_download_action(
     &mut self,
     _: &gpui::ClickEvent,
     window: &mut Window,
     cx: &mut Context<Self>,
   ) {
-    self.trigger_update_download(cx);
+    start_update_download(cx);
     window.on_next_frame(|window, cx| {
       window.remove_notification::<AppUpdateNotificationId>(cx);
     });
@@ -746,7 +659,7 @@ impl WorkspaceView {
     let theme = cx.theme().clone();
     let show_update_button = AppUpdateStore::try_available_update(cx).is_some();
     let update_download_in_progress = AppUpdateStore::is_downloading(cx);
-    let update_button_label = Self::update_button_label(AppUpdateStore::try_state(cx));
+    let update_button_label = update_action_label(AppUpdateStore::try_state(cx));
 
     let current_page = user_menu_page_for_workspace_page(page);
     let auth_state = AuthStateStore::get(cx);
@@ -762,8 +675,8 @@ impl WorkspaceView {
     let open_settings = Rc::new(|_window: &mut Window, cx: &mut App| {
       NavigationHistory::navigate("/settings", cx);
     });
-    let open_about = Rc::new(|_window: &mut Window, cx: &mut App| {
-      NavigationHistory::navigate("/about", cx);
+    let open_about = Rc::new(|window: &mut Window, cx: &mut App| {
+      open_about_dialog(window, cx);
     });
     let open_browser_extensions = Rc::new(|window: &mut Window, cx: &mut App| {
       crate::browser_extensions_dialog::open_browser_extensions_dialog(window, cx);
@@ -985,7 +898,6 @@ impl Render for WorkspaceView {
     let billing_page = self.billing_page.clone();
     let git_config_page = self.git_config_page.clone();
     let settings_page = self.settings_page.clone();
-    let about_page = self.about_page.clone();
 
     let routes = Routes::new()
       .child(
@@ -1007,11 +919,6 @@ impl Render for WorkspaceView {
         Route::new()
           .path("settings")
           .element(move |_w, _cx| settings_page.clone()),
-      )
-      .child(
-        Route::new()
-          .path("about")
-          .element(move |_w, _cx| about_page.clone()),
       );
 
     let key_context = shortcuts::current_key_context_for_pathname(&pathname, cx);
@@ -1036,8 +943,8 @@ impl Render for WorkspaceView {
       .on_action(cx.listener(|_, _: &crate::OpenSettingsPage, _window, cx| {
         NavigationHistory::navigate("/settings", cx);
       }))
-      .on_action(cx.listener(|_, _: &crate::OpenAboutPage, _window, cx| {
-        NavigationHistory::navigate("/about", cx);
+      .on_action(cx.listener(|_, _: &crate::OpenAboutPage, window, cx| {
+        open_about_dialog(window, cx);
       }))
       .child(ui::scroll_dispatcher())
       .child(self.render_global_bar(window, page, &pathname, cx))
@@ -1053,7 +960,6 @@ impl Focusable for WorkspaceView {
       WorkspacePage::Billing => self.billing_page.read(cx).focus_handle(cx),
       WorkspacePage::GitConfig => self.git_config_page.read(cx).focus_handle(cx),
       WorkspacePage::Settings => self.settings_page.read(cx).focus_handle(cx),
-      WorkspacePage::About => self.about_page.read(cx).focus_handle(cx),
     }
   }
 }
@@ -1067,7 +973,6 @@ mod tests {
   };
   use crate::app_update::{
     AppUpdateState, AvailableAppUpdate, ReadyToInstallAppUpdate, UpdateArtifact,
-    ready_update_button_label,
   };
   use crate::shortcuts::{self, ShortcutId};
   use gpui::{Menu, MenuItem};
@@ -1122,7 +1027,6 @@ mod tests {
       workspace_page_from_pathname("/git-config"),
       WorkspacePage::GitConfig
     );
-    assert_eq!(workspace_page_from_pathname("/about"), WorkspacePage::About);
   }
 
   #[test]
@@ -1260,44 +1164,6 @@ mod tests {
       Some(WorkspacePage::Session),
       WorkspacePage::Session
     ));
-  }
-
-  #[test]
-  fn workspace_update_button_label_tracks_update_state() {
-    let update = AvailableAppUpdate {
-      latest_version: "0.2.0".to_string(),
-      minimum_supported_version: "0.1.0".to_string(),
-      release_notes_url: "https://reviu.dev/releases/0.2.0".to_string(),
-      force_update: false,
-      artifact: UpdateArtifact {
-        url: "https://reviu.dev/downloads/latest".to_string(),
-        sha256: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef".to_string(),
-        size: 1024,
-      },
-    };
-
-    assert_eq!(
-      WorkspaceView::update_button_label(None),
-      "New version available"
-    );
-    assert_eq!(
-      WorkspaceView::update_button_label(Some(AppUpdateState::Available(update.clone()))),
-      "New version available"
-    );
-    assert_eq!(
-      WorkspaceView::update_button_label(Some(AppUpdateState::Downloading(update.clone()))),
-      "Downloading..."
-    );
-    assert_eq!(
-      WorkspaceView::update_button_label(Some(AppUpdateState::ReadyToInstall(
-        ReadyToInstallAppUpdate {
-          update,
-          artifact_path: PathBuf::from("/tmp/reviu-installer.dmg"),
-          restart_binary_path: None,
-        }
-      ))),
-      ready_update_button_label()
-    );
   }
 
   #[test]

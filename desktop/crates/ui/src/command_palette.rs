@@ -89,7 +89,6 @@ pub enum CommandPalettePage {
   GitConfig,
   Settings,
   Billing,
-  About,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -1376,8 +1375,8 @@ impl CommandPaletteCommand {
   pub fn open_about_page() -> Self {
     Self::new(
       CommandPaletteCommandId::OpenAboutPage,
-      "Go to About",
-      "Navigate to About",
+      "About Reviu",
+      "Show the version and check for updates",
     )
   }
 
@@ -1423,9 +1422,7 @@ impl CommandPaletteCommand {
       commands.push(Self::open_billing_page());
     }
 
-    if current_page != CommandPalettePage::About {
-      commands.push(Self::open_about_page());
-    }
+    commands.push(Self::open_about_page());
 
     commands.push(Self::send_feedback());
 
@@ -3390,7 +3387,7 @@ mod tests {
     assert!(billing.matches("billing"));
 
     assert_eq!(about.id, CommandPaletteCommandId::OpenAboutPage);
-    assert_eq!(about.name.as_ref(), "Go to About");
+    assert_eq!(about.name.as_ref(), "About Reviu");
     assert!(about.matches("about"));
   }
 

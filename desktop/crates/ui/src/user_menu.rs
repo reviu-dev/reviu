@@ -26,7 +26,6 @@ pub enum UserMenuPage {
   Billing,
   GitConfig,
   Settings,
-  About,
 }
 
 #[derive(Clone, Debug)]
@@ -117,9 +116,7 @@ pub fn user_menu(config: UserMenuConfig) -> Option<AnyElement> {
               );
             }
 
-            if current_page != UserMenuPage::About
-              && let Some(handler) = on_open_about.clone()
-            {
+            if let Some(handler) = on_open_about.clone() {
               menu = menu.item(PopupMenuItem::new("About").icon(UiIconName::Info).on_click(
                 move |_, window, cx| {
                   handler(window, cx);
@@ -204,9 +201,7 @@ pub fn user_menu(config: UserMenuConfig) -> Option<AnyElement> {
               );
             }
 
-            if current_page != UserMenuPage::About
-              && let Some(handler) = on_open_about.clone()
-            {
+            if let Some(handler) = on_open_about.clone() {
               menu = menu.item(PopupMenuItem::new("About").icon(UiIconName::Info).on_click(
                 move |_, window, cx| {
                   handler(window, cx);

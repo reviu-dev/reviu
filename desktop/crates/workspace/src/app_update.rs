@@ -10,7 +10,7 @@ use std::{
 
 use anyhow::{Context as _, Result, bail};
 use dirs::config_dir;
-use gpui::{App, Global};
+use gpui::{App, AppContext as _, Global};
 use reqwest::blocking::Client;
 use sha2::{Digest, Sha256};
 
@@ -296,6 +296,78 @@ pub fn ready_update_status_message() -> &'static str {
   } else {
     "Update ready. Restart Reviu to finish applying it."
   }
+}
+
+pub fn update_action_label(state: Option<AppUpdateState>) -> &'static str {
+  match state {
+    Some(AppUpdateState::Downloading(_)) => "Downloading...",
+    Some(AppUpdateState::ReadyToInstall(_)) => ready_update_button_label(),
+    _ => "New version available",
+  }
+}
+
+/// Downloading then installing is the same job wherever it is triggered from,
+/// and it must outlive the surface that asked for it.
+pub fn start_update_download(cx: &mut App) {
+  if AppUpdateStore::is_downloading(cx) {
+    return;
+  }
+
+  if let Some(ready) = AppUpdateStore::try_ready_to_install(cx) {
+    #[cfg(target_os = "windows")]
+    {
+      match install_update_artifact(&ready) {
+        Ok(()) => cx.quit(),
+        Err(err) => AppUpdateStore::set_error(cx, Some(ready.update.clone()), err.to_string()),
+      }
+      return;
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    {
+      if let Some(path) = ready.restart_binary_path {
+        cx.set_restart_path(path);
+      }
+      cx.restart();
+      return;
+    }
+  }
+
+  let Some(update) = AppUpdateStore::try_available_update(cx) else {
+    return;
+  };
+
+  AppUpdateStore::set_downloading(cx, update.clone());
+  cx.spawn(async move |cx| {
+    let download_result = cx
+      .background_spawn({
+        let update = update.clone();
+        async move { download_update_artifact(&update) }
+      })
+      .await;
+
+    match download_result {
+      Ok(ready) => {
+        if !should_install_update_after_download() {
+          cx.update(|cx| AppUpdateStore::set_ready_to_install(cx, ready.clone()));
+          return;
+        }
+
+        let install_ready = ready.clone();
+        let install_result = cx
+          .background_spawn(async move { install_update_artifact(&install_ready) })
+          .await;
+        cx.update(|cx| match install_result {
+          Ok(()) => AppUpdateStore::set_ready_to_install(cx, ready.clone()),
+          Err(err) => AppUpdateStore::set_error(cx, Some(ready.update.clone()), err.to_string()),
+        });
+      }
+      Err(err) => {
+        cx.update(|cx| AppUpdateStore::set_error(cx, Some(update.clone()), err.to_string()));
+      }
+    }
+  })
+  .detach();
 }
 
 #[cfg(target_os = "windows")]
@@ -868,6 +940,41 @@ mod tests {
     assert_eq!(resolved_build_version("0.1.0"), "0.1.0");
     assert_eq!(resolved_build_version("v0.1.0"), "0.1.0");
     assert_eq!(resolved_build_version("invalid"), "invalid");
+  }
+
+  #[test]
+  fn update_action_label_tracks_update_state() {
+    let update = AvailableAppUpdate {
+      latest_version: "0.2.0".to_string(),
+      minimum_supported_version: "0.1.0".to_string(),
+      release_notes_url: "https://reviu.dev/releases/0.2.0".to_string(),
+      force_update: false,
+      artifact: UpdateArtifact {
+        url: "https://reviu.dev/downloads/latest".to_string(),
+        sha256: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef".to_string(),
+        size: 1024,
+      },
+    };
+
+    assert_eq!(update_action_label(None), "New version available");
+    assert_eq!(
+      update_action_label(Some(AppUpdateState::Available(update.clone()))),
+      "New version available"
+    );
+    assert_eq!(
+      update_action_label(Some(AppUpdateState::Downloading(update.clone()))),
+      "Downloading..."
+    );
+    assert_eq!(
+      update_action_label(Some(AppUpdateState::ReadyToInstall(
+        ReadyToInstallAppUpdate {
+          update,
+          artifact_path: PathBuf::from("/tmp/reviu-installer.dmg"),
+          restart_binary_path: None,
+        }
+      ))),
+      ready_update_button_label()
+    );
   }
 
   #[gpui::test]

@@ -171,7 +171,7 @@ mod tests {
 
       NavigationHistory::navigate_replace("/session", cx);
       NavigationHistory::navigate("/settings", cx);
-      NavigationHistory::navigate("/about", cx);
+      NavigationHistory::navigate("/git-config", cx);
 
       NavigationHistory::navigate_back(cx);
       assert_eq!(

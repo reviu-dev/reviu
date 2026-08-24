@@ -81,7 +81,6 @@ fn workspace_page_tag(page: WorkspacePage) -> &'static str {
     WorkspacePage::Billing => "billing",
     WorkspacePage::GitConfig => "git_config",
     WorkspacePage::Settings => "settings",
-    WorkspacePage::About => "about",
   }
 }
 

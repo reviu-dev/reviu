@@ -37,7 +37,7 @@ actions!(
   ]
 );
 
-mod about_page;
+mod about_dialog;
 mod actions;
 mod agent_chat_state;
 mod agent_notification;

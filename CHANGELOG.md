@@ -4,6 +4,16 @@ All notable changes to Reviu are documented here.
 
 ## 1.0.0
 
+### About Is A Dialog, Not A Page
+
+Checking which version you were on took over the whole window to show four lines and a button, and pushed the session you were working in out of the way. It is a dialog now: it opens over whatever you are doing, from the app menu, the user menu or the palette, and Escape puts you back. When a new version is waiting, the dialog offers the download itself instead of sending you back to the top bar.
+
+### Billing Says What Reviu Pro Brings
+
+The page where you decide to subscribe said "No active subscription found for your account" and showed two prices. Nothing about what the money buys, even though the panels that need Pro say it clearly.
+
+It now names what Pro brings before it asks for anything: pull requests for your branch in the dock, reviewing and submitting without leaving Reviu, and GitHub notifications in the inbox, followed by the length of the free trial. Signed out, the same promise comes with the GitHub sign-in instead of the prices. Subscribers keep their plan and renewal date, with nothing to sell them.
+
 ### Errors Reach The Log File Instead Of Nowhere
 
 When saving a conversation, a draft, or a review batch failed, nothing said so. The app wrote its diagnostics to a stream that only exists when Reviu is started from a terminal, so a failed write was invisible in a normally launched app.

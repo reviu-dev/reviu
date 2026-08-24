@@ -33,7 +33,7 @@ pub(crate) fn handle_global_command_palette_action(
       Ok(())
     }
     CommandPaletteAction::OpenAboutPage => {
-      NavigationHistory::navigate("/about", cx);
+      crate::about_dialog::open_about_dialog(window, cx);
       Ok(())
     }
     CommandPaletteAction::OpenGithubPrDetails {
