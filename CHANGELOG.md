@@ -4,6 +4,12 @@ All notable changes to Reviu are documented here.
 
 ## 1.0.0
 
+### Coming Back From Checkout Opens No Second Reviu Pro Dialog
+
+Starting the free trial sends you to the browser, and Reviu opens the Reviu Pro dialog again when the checkout hands you back. The dialog you started from was still on screen, so you came back to two stacked copies of it and had to close both.
+
+Reviu now reuses the one already up. It refreshes in place with your new subscription, and a single Close puts it away.
+
 ### A Link To A Review Comment Opens The File It Is About
 
 A GitHub link pointing at a review comment always went to github.com, even when the comment belonged to the pull request Reviu had open. Pasting such a link in the palette, clicking a comment notification in the inbox, or pressing the browser extension button all left the app for a page you were already looking at.

@@ -1,7 +1,9 @@
 //! Reviu Pro over whatever you were doing: what it brings, what it costs, and
 //! the state of your subscription.
 
-use gpui::{AnyElement, App, Context, Render, SharedString, Window, div, prelude::*, px};
+use gpui::{
+  AnyElement, App, Context, Global, Render, SharedString, WeakEntity, Window, div, prelude::*, px,
+};
 use gpui_component::{
   ActiveTheme as _, Disableable as _, Icon, IconName, Sizable as _, StyledExt,
   button::{Button, ButtonVariants as _},
@@ -40,8 +42,31 @@ pub fn open_billing_dialog(window: &mut Window, _cx: &mut App) {
   });
 }
 
+/// The dialog reads the auth state on every render, so the copy already up
+/// shows the fresh subscription: a second one would only stack a duplicate the
+/// user has to close twice.
+struct OpenBillingDialog(Option<WeakEntity<BillingDialog>>);
+
+impl Global for OpenBillingDialog {}
+
+fn billing_dialog_is_open(window: &mut Window, cx: &mut App) -> bool {
+  let tracked = cx
+    .try_global::<OpenBillingDialog>()
+    .and_then(|open| open.0.as_ref())
+    .is_some_and(|billing| billing.upgrade().is_some());
+
+  // A released dialog can outlive its entity for a frame, so the window has the
+  // final say on whether anything is still on screen.
+  tracked && window.has_active_dialog(cx)
+}
+
 fn open_billing_dialog_inner(window: &mut Window, cx: &mut App) {
+  if billing_dialog_is_open(window, cx) {
+    return;
+  }
+
   let billing = cx.new(BillingDialog::new);
+  cx.set_global(OpenBillingDialog(Some(billing.downgrade())));
   window.open_dialog(cx, move |dialog, _, _| {
     dialog
       .p_0()
@@ -738,6 +763,35 @@ mod tests {
     cx.run_until_parked();
 
     cx.update(|window, cx| assert!(window.has_active_dialog(cx)));
+  }
+
+  #[gpui::test]
+  fn coming_back_to_an_open_dialog_leaves_a_single_one_to_close(cx: &mut TestAppContext) {
+    let cx = open_dialog_over_a_page(signed_in_with(None), cx);
+
+    cx.update(open_billing_dialog_inner);
+    cx.run_until_parked();
+
+    cx.update(|window, cx| window.close_dialog(cx));
+    cx.run_until_parked();
+
+    assert!(
+      !cx.update(|window, cx| window.has_active_dialog(cx)),
+      "the checkout callback reused the dialog already up instead of stacking one"
+    );
+  }
+
+  #[gpui::test]
+  fn the_dialog_opens_again_once_the_previous_one_is_closed(cx: &mut TestAppContext) {
+    let cx = open_dialog_over_a_page(signed_in_with(None), cx);
+
+    cx.update(|window, cx| window.close_dialog(cx));
+    cx.run_until_parked();
+
+    cx.update(open_billing_dialog_inner);
+    cx.run_until_parked();
+
+    assert!(cx.update(|window, cx| window.has_active_dialog(cx)));
   }
 
   #[gpui::test]
