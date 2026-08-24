@@ -2138,17 +2138,16 @@ impl DockPanel {
     let theme = cx.theme().clone();
     match &self.branch_pr {
       // Nothing to show, so this is where Reviu says what it could show.
-      BranchPrState::NoAccess => render_pro_promise(
-        ProPromiseSurface::PullRequestPanel,
-        AuthStateStore::github_access_state(cx),
-        cx,
-      )
-      .unwrap_or_else(|| {
-        self.render_pr_message(
-          "Sign in with GitHub to link this branch to a pull request",
-          cx,
-        )
-      }),
+      BranchPrState::NoAccess => {
+        let github_access = AuthStateStore::github_access_state(cx);
+        match render_pro_promise(ProPromiseSurface::PullRequestPanel, github_access, cx) {
+          Some(promise) => promise,
+          None => self.render_pr_message(
+            "Sign in with GitHub to link this branch to a pull request",
+            cx,
+          ),
+        }
+      }
       BranchPrState::NoRemote => self.render_pr_message("No GitHub remote on this repository", cx),
       BranchPrState::Loading => self.render_pr_message("Loading pull request...", cx),
       BranchPrState::Missing(context) if self.branch_needs_publishing() => {

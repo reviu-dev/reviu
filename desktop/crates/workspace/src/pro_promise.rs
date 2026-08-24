@@ -1,7 +1,9 @@
 //! The one place that says what Reviu Pro brings. Surfaces that cannot do their
 //! job without it show this instead of vanishing.
 
-use gpui::{AnyElement, App, SharedString, div, prelude::*};
+use std::collections::HashSet;
+
+use gpui::{AnyElement, App, Global, SharedString, div, prelude::*};
 use gpui_component::{ActiveTheme as _, Icon, IconName, Sizable as _, v_flex};
 use ui::{Button, ButtonVariants as _, UiIconName};
 
@@ -59,6 +61,32 @@ pub(crate) fn pro_promise_copy(state: GithubAccessState) -> Option<ProPromiseCop
   }
 }
 
+/// One impression per surface per session: a render runs on every frame, and a
+/// sighting is not a stream of events.
+#[derive(Default)]
+struct ReportedProPromiseImpressions(HashSet<&'static str>);
+
+impl Global for ReportedProPromiseImpressions {}
+
+/// True the first time a surface is seen this session, false afterwards.
+fn take_impression(surface: ProPromiseSurface, cx: &mut App) -> bool {
+  cx.default_global::<ReportedProPromiseImpressions>()
+    .0
+    .insert(surface.source())
+}
+
+fn report_impression(surface: ProPromiseSurface, cx: &mut App) {
+  if !take_impression(surface, cx) {
+    return;
+  }
+
+  analytics::track_with(
+    cx,
+    "pro_teaser_shown",
+    Some(serde_json::json!({ "source": surface.source() })),
+  );
+}
+
 fn take_step(step: ProPromiseStep, surface: ProPromiseSurface, cx: &mut App) {
   analytics::track_with(
     cx,
@@ -74,9 +102,10 @@ fn take_step(step: ProPromiseStep, surface: ProPromiseSurface, cx: &mut App) {
 pub(crate) fn render_pro_promise(
   surface: ProPromiseSurface,
   state: GithubAccessState,
-  cx: &App,
+  cx: &mut App,
 ) -> Option<AnyElement> {
   let copy = pro_promise_copy(state)?;
+  report_impression(surface, cx);
   let theme = cx.theme().clone();
   let step = copy.step;
   let button_id: SharedString = format!("pro-promise-{}", surface.source()).into();
@@ -152,6 +181,7 @@ pub(crate) fn render_pro_promise(
 #[cfg(test)]
 mod tests {
   use super::*;
+  use gpui::TestAppContext;
 
   #[test]
   fn a_working_github_has_nothing_to_promise() {
@@ -168,6 +198,35 @@ mod tests {
     assert_eq!(subscribe.step, ProPromiseStep::Subscribe);
     // Someone already signed in is asked to subscribe, not to sign in again.
     assert!(subscribe.body.contains("free trial"));
+  }
+
+  #[gpui::test]
+  fn a_surface_is_reported_once_however_often_it_is_rendered(cx: &mut TestAppContext) {
+    cx.update(|cx| {
+      assert!(take_impression(ProPromiseSurface::Inbox, cx));
+      assert!(
+        !take_impression(ProPromiseSurface::Inbox, cx),
+        "a render runs every frame; the sighting is still one"
+      );
+
+      assert!(
+        take_impression(ProPromiseSurface::PullRequestPanel, cx),
+        "each surface is counted on its own, that is the point of the source"
+      );
+    });
+  }
+
+  #[gpui::test]
+  fn a_working_github_is_never_counted_as_an_impression(cx: &mut TestAppContext) {
+    cx.update(|cx| {
+      assert!(
+        render_pro_promise(ProPromiseSurface::Inbox, GithubAccessState::Available, cx).is_none()
+      );
+      assert!(
+        take_impression(ProPromiseSurface::Inbox, cx),
+        "nothing was promised, so nothing was seen"
+      );
+    });
   }
 
   #[test]

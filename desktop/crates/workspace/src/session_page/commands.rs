@@ -37,44 +37,6 @@ impl SessionPage {
     Ok(())
   }
 
-  /// Pushing to GitHub without Pro is the one moment the teaser is relevant.
-  pub(super) fn maybe_show_pro_teaser(&mut self, cx: &mut Context<Self>) {
-    if !pro_teaser::should_show_after_push(
-      self.pro_teaser_shown,
-      AuthStateStore::has_github_access(cx),
-      true,
-    ) {
-      return;
-    }
-    let Some(repo_root) = self.selected_repo.clone() else {
-      return;
-    };
-
-    let window_handle = self.window_handle;
-    let task = cx.spawn(async move |this, cx| {
-      let has_github_remote = cx
-        .background_spawn(async move {
-          git::current_github_remote_repo(&repo_root)
-            .ok()
-            .flatten()
-            .is_some()
-        })
-        .await;
-      let _ = this.update(cx, |this, cx| {
-        if !pro_teaser::should_show_after_push(
-          this.pro_teaser_shown,
-          AuthStateStore::has_github_access(cx),
-          has_github_remote,
-        ) {
-          return;
-        }
-        this.pro_teaser_shown = true;
-        pro_teaser::show_after_push(window_handle, cx);
-      });
-    });
-    self._pro_teaser_task = Some(task);
-  }
-
   /// A shortcut runs its command only when the palette would have offered it.
   pub(super) fn run_shortcut_command(
     &mut self,
@@ -395,7 +357,6 @@ impl SessionPage {
     }
 
     self.repo_command_in_flight = true;
-    let pushed = matches!(command, RepoCommand::Push | RepoCommand::ForcePush);
     let checked_out_for_link = matches!(command, RepoCommand::SwitchToBranchName { .. });
     let telemetry_key = command.telemetry_key();
     let analytics_event = command.analytics_event();
@@ -445,9 +406,6 @@ impl SessionPage {
               this.dock_panel.update(cx, |panel, cx| panel.refresh(cx));
               this.refresh_branch(cx);
               this.open_pending_pull_request_dialog(window, cx);
-              if pushed {
-                this.maybe_show_pro_teaser(cx);
-              }
             }
             Err(error) => {
               this.pending_pull_request = None;
@@ -1670,155 +1628,6 @@ mod tests {
       assert!(ids.contains(&CommandPaletteCommandId::Commit));
       assert!(!ids.contains(&CommandPaletteCommandId::ContinueRebase));
     });
-  }
-
-  #[gpui::test]
-  async fn pushing_to_github_without_pro_offers_pro_once(cx: &mut TestAppContext) {
-    let repo = TempRepo::init("session-page-pro-teaser");
-    commit_text_file(&repo.path, Path::new("README.md"), "v1\n", "initial");
-    let _remote = publish_to_new_remote(&repo.path, "session-page-pro-teaser");
-    // origin stays the local remote so the push can work; the repository is
-    // still on GitHub, which is what the offer is about.
-    git2::Repository::open(&repo.path)
-      .expect("open repo")
-      .remote("github", "git@github.com:acme/widget.git")
-      .expect("add the github remote");
-    commit_text_file(&repo.path, Path::new("README.md"), "v2\n", "second");
-
-    let (page, cx) = add_session_page_window(repo.path.clone(), cx);
-    cx.run_until_parked();
-
-    let push = |page: &Entity<SessionPage>, cx: &mut gpui::VisualTestContext| {
-      page.update_in(cx, |page, window, cx| {
-        let _ = page.run_repo_command(RepoCommand::Push, window, cx);
-      });
-      page.update(cx, |page, _| page._repo_command_task.take())
-    };
-
-    if let Some(task) = push(&page, cx) {
-      task.await;
-    }
-    cx.run_until_parked();
-    let teaser = page.update(cx, |page, _| page._pro_teaser_task.take());
-    if let Some(task) = teaser {
-      task.await;
-    }
-    cx.run_until_parked();
-
-    page.read_with(cx, |page, _| {
-      assert!(
-        page.pro_teaser_shown,
-        "pushing to GitHub without Pro is when the offer makes sense"
-      );
-    });
-    assert_eq!(
-      cx.update(|window, cx| window.notifications(cx).len()),
-      2,
-      "the offer is a notification of its own, next to the push result"
-    );
-
-    // A second push says nothing more.
-    if let Some(task) = push(&page, cx) {
-      task.await;
-    }
-    cx.run_until_parked();
-    page.read_with(cx, |page, _| {
-      assert!(
-        page._pro_teaser_task.is_none(),
-        "the second push does not even look"
-      );
-    });
-  }
-
-  #[gpui::test]
-  async fn pushing_a_repository_that_is_not_on_github_says_nothing(cx: &mut TestAppContext) {
-    let repo = TempRepo::init("session-page-pro-teaser-local");
-    commit_text_file(&repo.path, Path::new("README.md"), "v1\n", "initial");
-    // The only remote is a folder: Pro would bring this repository nothing.
-    let _remote = publish_to_new_remote(&repo.path, "session-page-pro-teaser-local");
-    commit_text_file(&repo.path, Path::new("README.md"), "v2\n", "second");
-
-    let (page, cx) = add_session_page_window(repo.path.clone(), cx);
-    cx.run_until_parked();
-
-    page.update_in(cx, |page, window, cx| {
-      let _ = page.run_repo_command(RepoCommand::Push, window, cx);
-    });
-    let command = page.update(cx, |page, _| page._repo_command_task.take());
-    if let Some(task) = command {
-      task.await;
-    }
-    cx.run_until_parked();
-    let teaser = page.update(cx, |page, _| page._pro_teaser_task.take());
-    if let Some(task) = teaser {
-      task.await;
-    }
-    cx.run_until_parked();
-
-    page.read_with(cx, |page, _| {
-      assert!(
-        !page.pro_teaser_shown,
-        "a repository hosted nowhere we integrate with gets no offer"
-      );
-    });
-    assert_eq!(
-      cx.update(|window, cx| window.notifications(cx).len()),
-      1,
-      "only the push result"
-    );
-  }
-
-  #[gpui::test]
-  async fn pushing_with_pro_says_nothing_about_pro(cx: &mut TestAppContext) {
-    let repo = TempRepo::init("session-page-pro-teaser-pro");
-    commit_text_file(&repo.path, Path::new("README.md"), "v1\n", "initial");
-    let _remote = publish_to_new_remote(&repo.path, "session-page-pro-teaser-pro");
-    git2::Repository::open(&repo.path)
-      .expect("open repo")
-      .remote("github", "git@github.com:acme/widget.git")
-      .expect("add the github remote");
-    commit_text_file(&repo.path, Path::new("README.md"), "v2\n", "second");
-
-    let (page, cx) = add_session_page_window(repo.path.clone(), cx);
-    cx.update(|_, cx| {
-      AuthStateStore::set(
-        cx,
-        crate::auth_state::AuthState::Authenticated(Box::new(
-          serde_json::from_value(serde_json::json!({
-            "id": "user_123",
-            "name": "Joris",
-            "email": "joris@example.com",
-            "emailVerified": true,
-            "image": null,
-            "githubLogin": "joris-gallot",
-            "role": "pro",
-          }))
-          .expect("build user"),
-        )),
-      );
-    });
-    cx.run_until_parked();
-
-    page.update_in(cx, |page, window, cx| {
-      let _ = page.run_repo_command(RepoCommand::Push, window, cx);
-    });
-    let command = page.update(cx, |page, _| page._repo_command_task.take());
-    if let Some(task) = command {
-      task.await;
-    }
-    cx.run_until_parked();
-
-    page.read_with(cx, |page, _| {
-      assert!(
-        !page.pro_teaser_shown,
-        "someone who already pays has nothing to be offered"
-      );
-    });
-    assert_eq!(
-      cx.update(|window, cx| window.notifications(cx).len()),
-      1,
-      "only the push result"
-    );
   }
 
   #[gpui::test]

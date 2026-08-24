@@ -61,7 +61,6 @@ use crate::annotations::{
 use crate::palette_branches::{
   delete_branch_candidates, palette_branch, palette_stashes, rebase_branch_candidates,
 };
-use crate::pro_teaser;
 use crate::pull_request_dialog::{GithubBranchContext, open_create_pull_request_dialog};
 use crate::repo_command::{RepoCommand, RepoCommandOutcome, branch_ref_from_palette};
 use crate::repo_snapshot::{RepoSnapshot, RepoSnapshotEvent};
@@ -207,7 +206,6 @@ pub struct SessionPage {
   // Review export waiting for the agent connection to become ready.
   pending_review_export: Option<String>,
   repo_command_in_flight: bool,
-  pro_teaser_shown: bool,
   /// Set while pushing an unpublished branch on the way to the pull request form.
   pending_pull_request: Option<GithubBranchContext>,
   dock_open: bool,
@@ -222,7 +220,6 @@ pub struct SessionPage {
   dock_slide_armed: bool,
   poll_window_active: bool,
   _active_repo_task: Option<Task<()>>,
-  _pro_teaser_task: Option<Task<()>>,
   _repo_command_task: Option<Task<()>>,
   _pull_request_link_task: Option<Task<()>>,
   _browse_task: Option<Task<()>>,
@@ -419,7 +416,6 @@ impl SessionPage {
       svg_preview,
       pending_review_export: None,
       repo_command_in_flight: false,
-      pro_teaser_shown: false,
       pending_pull_request: None,
       dock_open: true,
       dock_width: DOCK_PANEL_DEFAULT_WIDTH,
@@ -432,7 +428,6 @@ impl SessionPage {
       dock_slide_armed: false,
       poll_window_active: true,
       _active_repo_task: None,
-      _pro_teaser_task: None,
       _repo_command_task: None,
       _pull_request_link_task: None,
       _browse_task: None,

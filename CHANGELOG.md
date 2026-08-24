@@ -4,6 +4,10 @@ All notable changes to Reviu are documented here.
 
 ## 1.0.0
 
+### No More Pop-Up After A Push
+
+Pushing a branch to GitHub without Reviu Pro opened a notification offering the subscription, once per session. The panels that actually need Pro say so themselves now, where the gap is felt: the pull request panel and the inbox both carry the offer in place of an empty surface. A notification fired on an unrelated action was just noise on top.
+
 ### About Is A Dialog, Not A Page
 
 Checking which version you were on took over the whole window to show four lines and a button, and pushed the session you were working in out of the way. It is a dialog now: it opens over whatever you are doing, from the app menu, the user menu or the palette, and Escape puts you back. When a new version is waiting, the dialog offers the download itself instead of sending you back to the top bar.

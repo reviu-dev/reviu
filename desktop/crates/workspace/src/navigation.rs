@@ -1,10 +1,7 @@
 use gpui::{App, Global, SharedString};
 use gpui_router::use_navigate;
 
-use crate::auth_state::AuthStateStore;
-
 const NAVIGATION_HISTORY_MAX_ENTRIES: usize = 100;
-const GITHUB_ACCESS_FALLBACK_PATH: &str = "/billing";
 
 pub struct NavigationHistory {
   stack: Vec<SharedString>,
@@ -27,21 +24,11 @@ impl NavigationHistory {
   }
 
   /// Navigate to `path`, pushing the current location onto the history stack.
-  /// GitHub paths are gated behind GitHub access and fall back to billing, which
-  /// carries the Reviu Pro pitch.
   pub fn navigate(path: impl Into<SharedString>, cx: &mut App) {
     let path = path.into();
 
     let current = Self::current_pathname(cx);
     if current == path {
-      return;
-    }
-
-    if requires_github_access(&path) && !AuthStateStore::has_github_access(cx) {
-      if current != GITHUB_ACCESS_FALLBACK_PATH {
-        cx.global_mut::<Self>().push_entry(current);
-      }
-      Self::set_pathname(GITHUB_ACCESS_FALLBACK_PATH, cx);
       return;
     }
 
@@ -56,12 +43,6 @@ impl NavigationHistory {
       .stack
       .pop()
       .unwrap_or_else(|| "/session".into());
-
-    let target = if requires_github_access(&target) && !AuthStateStore::has_github_access(cx) {
-      GITHUB_ACCESS_FALLBACK_PATH.into()
-    } else {
-      target
-    };
 
     Self::set_pathname(&target, cx);
   }
@@ -84,62 +65,14 @@ impl NavigationHistory {
   }
 }
 
-fn requires_github_access(path: &str) -> bool {
-  path.starts_with("/github")
-}
-
 #[cfg(test)]
 mod tests {
   use super::*;
-  use crate::{
-    api::{
-      CustomerStateSubscription, CustomerStateSubscriptionStatus, User, UserRole, UserSubscription,
-    },
-    auth_state::{AuthState, AuthStateStore},
-  };
   use gpui::TestAppContext;
-
-  fn make_subscription() -> CustomerStateSubscription {
-    CustomerStateSubscription {
-      id: "sub_123".to_string(),
-      created_at: "2026-01-01T00:00:00Z".to_string(),
-      modified_at: None,
-      status: CustomerStateSubscriptionStatus::Active,
-      amount: 2_000,
-      currency: "usd".to_string(),
-      recurring_interval: "month".to_string(),
-      current_period_start: "2026-01-01T00:00:00Z".to_string(),
-      current_period_end: Some("2099-01-01T00:00:00Z".to_string()),
-      trial_start: None,
-      trial_end: None,
-      cancel_at_period_end: false,
-      canceled_at: None,
-      started_at: Some("2026-01-01T00:00:00Z".to_string()),
-      ends_at: None,
-      product_id: "prod_123".to_string(),
-    }
-  }
-
-  fn make_user(role: UserRole, subscribed: bool) -> User {
-    User {
-      id: "user_123".to_string(),
-      name: "Joris".to_string(),
-      email: "joris@example.com".to_string(),
-      email_verified: true,
-      image: None,
-      github_login: Some("joris-gallot".to_string()),
-      role,
-      subscription: UserSubscription {
-        portal_url: None,
-        active_subscription: subscribed.then(make_subscription),
-      },
-    }
-  }
 
   fn init_navigation_test(cx: &mut App) {
     gpui_router::init(cx);
     NavigationHistory::init(cx);
-    cx.set_global(AuthStateStore::default());
   }
 
   #[gpui::test]
@@ -216,37 +149,6 @@ mod tests {
   }
 
   #[gpui::test]
-  async fn test_navigate_sends_github_paths_to_billing_without_access(cx: &mut TestAppContext) {
-    cx.update(|cx| {
-      init_navigation_test(cx);
-      AuthStateStore::set(cx, AuthState::Unauthenticated);
-
-      NavigationHistory::navigate_replace("/session", cx);
-      NavigationHistory::navigate("/github/owner/repo/pull/42", cx);
-
-      assert_eq!(NavigationHistory::current_pathname(cx).as_ref(), "/billing");
-    });
-  }
-
-  #[gpui::test]
-  async fn test_navigate_keeps_history_when_redirecting_to_billing(cx: &mut TestAppContext) {
-    cx.update(|cx| {
-      init_navigation_test(cx);
-      AuthStateStore::set(cx, AuthState::Unauthenticated);
-
-      NavigationHistory::navigate_replace("/session", cx);
-      NavigationHistory::navigate("/github/owner/repo/pull/42", cx);
-
-      assert_eq!(NavigationHistory::current_pathname(cx).as_ref(), "/billing");
-      assert_eq!(cx.global::<NavigationHistory>().stack.len(), 1);
-      assert_eq!(
-        cx.global::<NavigationHistory>().stack[0].as_ref(),
-        "/session"
-      );
-    });
-  }
-
-  #[gpui::test]
   async fn test_navigate_caps_history_at_max_entries(cx: &mut TestAppContext) {
     cx.update(|cx| {
       init_navigation_test(cx);
@@ -277,26 +179,6 @@ mod tests {
           .as_ref(),
         "/page-103"
       );
-    });
-  }
-
-  #[gpui::test]
-  async fn test_navigate_back_falls_back_to_billing_when_access_is_lost(cx: &mut TestAppContext) {
-    cx.update(|cx| {
-      init_navigation_test(cx);
-      AuthStateStore::set(
-        cx,
-        AuthState::Authenticated(Box::new(make_user(UserRole::User, true))),
-      );
-
-      NavigationHistory::navigate_replace("/settings", cx);
-      cx.global_mut::<NavigationHistory>()
-        .stack
-        .push("/github/owner/repo/pull/42".into());
-      AuthStateStore::set(cx, AuthState::Unauthenticated);
-      NavigationHistory::navigate_back(cx);
-
-      assert_eq!(NavigationHistory::current_pathname(cx).as_ref(), "/billing");
     });
   }
 }
