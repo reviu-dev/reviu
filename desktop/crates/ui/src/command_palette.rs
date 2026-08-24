@@ -13,6 +13,7 @@ use gpui::{
 use gpui_component::{
   ActiveTheme as _, Icon, IconName, IndexPath, Sizable, WindowExt, h_flex,
   input::{Input, InputEvent, InputState},
+  kbd::Kbd,
   label::Label,
   list::{ListDelegate, ListEvent, ListItem, ListState},
   notification::Notification,
@@ -33,10 +34,16 @@ pub struct CommandPaletteUsageScorerGlobal(pub CommandPaletteUsageScorer);
 
 impl Global for CommandPaletteUsageScorerGlobal {}
 
+/// What a row says on its right: why it is unavailable, or the key that runs it.
+enum RowHint {
+  Text(SharedString),
+  Keybinding(gpui::Keystroke),
+}
+
 fn palette_row(
   icon: Icon,
   label: SharedString,
-  hint: Option<SharedString>,
+  hint: Option<RowHint>,
   theme: &gpui_component::Theme,
 ) -> impl IntoElement {
   h_flex()
@@ -61,16 +68,17 @@ fn palette_row(
             .child(Label::new(label)),
         ),
     )
-    .when_some(hint, |row, hint| {
-      row.child(
+    .when_some(hint, |row, hint| match hint {
+      RowHint::Text(text) => row.child(
         div()
           .text_xs()
           .text_color(theme.muted_foreground)
           .whitespace_nowrap()
           .text_ellipsis()
           .overflow_hidden()
-          .child(hint),
-      )
+          .child(text),
+      ),
+      RowHint::Keybinding(keystroke) => row.child(Kbd::new(keystroke)),
     })
 }
 
@@ -156,6 +164,9 @@ pub struct CommandPaletteCommand {
   pub name: SharedString,
   pub description: Option<SharedString>,
   pub disabled_reason: Option<SharedString>,
+  /// The key that runs it, when it has one. Filled in by the caller: only the
+  /// shell knows the keymap and the context it is resolved in.
+  pub keybinding: Option<gpui::Keystroke>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -523,7 +534,7 @@ impl ListDelegate for StashesListDelegate {
       palette_list_item(ix, self.selected_index).child(palette_row(
         Icon::new(IconName::Inbox),
         label,
-        Some(oid),
+        Some(RowHint::Text(oid)),
         &theme,
       ))
     })
@@ -814,7 +825,7 @@ impl ListDelegate for CommandListDelegate {
         .child(palette_row(
           command.icon(),
           command.name.clone(),
-          command.disabled_reason.clone(),
+          command.row_hint(),
           &theme,
         ))
     })
@@ -1105,7 +1116,21 @@ impl CommandPaletteCommand {
       name: name.into(),
       description: Some(description.into()),
       disabled_reason: None,
+      keybinding: None,
     }
+  }
+
+  pub fn keybinding(mut self, keystroke: gpui::Keystroke) -> Self {
+    self.keybinding = Some(keystroke);
+    self
+  }
+
+  /// Why it cannot run takes the slot over the key that would run it.
+  fn row_hint(&self) -> Option<RowHint> {
+    if let Some(reason) = self.disabled_reason.clone() {
+      return Some(RowHint::Text(reason));
+    }
+    self.keybinding.clone().map(RowHint::Keybinding)
   }
 
   pub fn disabled(mut self, reason: impl Into<SharedString>) -> Self {
@@ -3189,7 +3214,7 @@ mod tests {
   use super::{
     CommandPalette, CommandPaletteBranch, CommandPaletteBranchKind, CommandPaletteCommand,
     CommandPaletteCommandId, CommandPaletteConfig, CommandPaletteGroup, CommandPaletteHandler,
-    CommandPaletteInitialScreen, CommandPaletteScreen, MatchQuality,
+    CommandPaletteInitialScreen, CommandPaletteScreen, MatchQuality, RowHint,
   };
   use gpui::AppContext as _;
   use gpui::TestAppContext;
@@ -3821,6 +3846,35 @@ mod tests {
 
   fn quality(command: &CommandPaletteCommand, query: &str) -> Option<MatchQuality> {
     command.relevance(query)
+  }
+
+  #[test]
+  fn a_row_shows_the_key_that_runs_the_command() {
+    let keystroke = gpui::Keystroke::parse("cmd-k").expect("a keystroke");
+    let command = CommandPaletteCommand::commit().keybinding(keystroke.clone());
+
+    assert!(matches!(
+      command.row_hint(),
+      Some(RowHint::Keybinding(shown)) if shown == keystroke
+    ));
+  }
+
+  #[test]
+  fn a_command_that_cannot_run_says_why_instead_of_showing_its_key() {
+    let keystroke = gpui::Keystroke::parse("cmd-k").expect("a keystroke");
+    let command = CommandPaletteCommand::commit()
+      .keybinding(keystroke)
+      .disabled("Nothing to commit");
+
+    assert!(matches!(
+      command.row_hint(),
+      Some(RowHint::Text(reason)) if reason.as_ref() == "Nothing to commit"
+    ));
+  }
+
+  #[test]
+  fn a_command_without_a_key_says_nothing_on_its_right() {
+    assert!(CommandPaletteCommand::cherry_pick().row_hint().is_none());
   }
 
   #[test]

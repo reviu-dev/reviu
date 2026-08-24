@@ -653,8 +653,11 @@ impl SettingsPage {
 
   fn open_command_palette(&mut self, window: &mut Window, cx: &mut Context<Self>) {
     let include_github = AuthStateStore::has_github_access(cx);
-    let commands =
-      CommandPaletteCommand::default_global_commands(CommandPalettePage::Settings, include_github);
+    let commands = crate::shortcuts::with_palette_keybindings(
+      CommandPaletteCommand::default_global_commands(CommandPalettePage::Settings, include_github),
+      window,
+      cx,
+    );
 
     let view = cx.entity();
     let handler: CommandPaletteHandler = Arc::new(move |action, window, cx| {

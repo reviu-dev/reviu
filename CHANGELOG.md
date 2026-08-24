@@ -4,6 +4,12 @@ All notable changes to Reviu are documented here.
 
 ## 1.0.0
 
+### The Palette Shows The Key That Runs A Command
+
+The right of a palette row was empty unless the command was unavailable, in which case it said why. When a command has a keyboard shortcut, it now shows it there instead: the palette teaches its own shortcuts as you look for them, rather than leaving them in Settings. A command that cannot run still says why, which is the more useful of the two.
+
+The key shown is the one that works, so a shortcut you rebound appears as you rebound it.
+
 ### The Command Palette Finds What You Meant
 
 The palette used to look for your whole query as one uninterrupted run of letters, anywhere in a command's text. `stash untracked` found nothing, because the command is called "Stash with untracked". Neither did `push force`, nor `branch delete`. Typing `interactive rebase` did not even find "Rebase interactive".

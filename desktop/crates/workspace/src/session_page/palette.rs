@@ -176,7 +176,11 @@ impl SessionPage {
     cx: &mut Context<Self>,
   ) {
     let repositories = self.palette_repositories();
-    let commands = self.palette_commands(repositories.len(), cx);
+    let commands = crate::shortcuts::with_palette_keybindings(
+      self.palette_commands(repositories.len(), cx),
+      window,
+      cx,
+    );
 
     let view = cx.entity();
     let handler: CommandPaletteHandler = Arc::new(move |action, window, cx| {

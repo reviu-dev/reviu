@@ -7,7 +7,7 @@ use editor::{
   SelectRight, SelectUp, SelectWordLeft, SelectWordRight, ShowCharacterPalette, Tab, Undo, Up,
 };
 use gpui::{Action, App, Global, KeyBinding, KeyContext, Keystroke, Window};
-use ui::COMMAND_PALETTE_CONTEXT;
+use ui::{COMMAND_PALETTE_CONTEXT, CommandPaletteCommand, CommandPaletteCommandId};
 
 #[cfg(test)]
 use gpui::Keymap;
@@ -1021,6 +1021,82 @@ fn resolved_shortcut_keystroke_in_generation(
   })
 }
 
+/// The shortcut that runs a palette command, when one exists. Exhaustive on
+/// purpose: a new command has to say whether a key reaches it.
+fn palette_command_shortcut(command: CommandPaletteCommandId) -> Option<ShortcutId> {
+  use CommandPaletteCommandId as Command;
+  match command {
+    Command::Commit => Some(ShortcutId::CommitChanges),
+    Command::Push => Some(ShortcutId::PushChanges),
+    Command::ForcePush => Some(ShortcutId::ForcePushChanges),
+    Command::Pull => Some(ShortcutId::PullChanges),
+    Command::SwitchBranch => Some(ShortcutId::ShowBranchSwitcher),
+    Command::OpenRepository => Some(ShortcutId::OpenRepository),
+    Command::OpenSessionPage => Some(ShortcutId::OpenSessionPage),
+    Command::OpenSettingsPage => Some(ShortcutId::OpenSettingsPage),
+    Command::SendReview => Some(ShortcutId::SendReviewCommentsToAgent),
+    // One key toggles either way, so both rows show it.
+    Command::StageSelectedFile | Command::UnstageSelectedFile => Some(ShortcutId::ToggleFileStage),
+    Command::SwitchRepository
+    | Command::ForgetRepository
+    | Command::CheckoutDetached
+    | Command::ContinueRebase
+    | Command::SkipRebase
+    | Command::UndoLastCommit
+    | Command::Amend
+    | Command::DiscardReview
+    | Command::SubmitPullRequestReview
+    | Command::AcceptAllCurrentConflicts
+    | Command::AcceptAllIncomingConflicts
+    | Command::CreateBranch
+    | Command::CreateBranchFrom
+    | Command::DeleteBranch
+    | Command::MergeBranch
+    | Command::AbortMerge
+    | Command::RebaseBranch
+    | Command::InteractiveRebase
+    | Command::InteractiveRebaseOntoBranch
+    | Command::InteractiveRebaseEditBranch
+    | Command::InteractiveRebaseHeadCount
+    | Command::AbortRebase
+    | Command::CreatePullRequest
+    | Command::OpenPullRequest
+    | Command::CherryPick
+    | Command::StageAll
+    | Command::UnstageAll
+    | Command::RestoreAll
+    | Command::Fetch
+    | Command::Stash
+    | Command::StashIncludeUntracked
+    | Command::ApplyStash
+    | Command::DropStash
+    | Command::PopStash
+    | Command::OpenGithubFromUrl
+    | Command::OpenGitConfigPage
+    | Command::OpenBillingPage
+    | Command::OpenAboutPage
+    | Command::SendFeedback => None,
+  }
+}
+
+/// Stamps each command with the key that runs it, so a palette row teaches the
+/// shortcut instead of hiding it in Settings.
+pub fn with_palette_keybindings(
+  commands: Vec<CommandPaletteCommand>,
+  window: &Window,
+  cx: &App,
+) -> Vec<CommandPaletteCommand> {
+  commands
+    .into_iter()
+    .map(|command| match palette_command_shortcut(command.id) {
+      Some(shortcut) => {
+        command.keybinding(resolved_display_shortcut_keystroke_in(cx, window, shortcut))
+      }
+      None => command,
+    })
+    .collect()
+}
+
 pub fn resolved_display_shortcut_keystroke_in(
   cx: &App,
   window: &Window,
@@ -1240,6 +1316,32 @@ fn with_shortcut_action<T>(id: ShortcutId, f: impl FnOnce(&dyn Action) -> T) -> 
 #[cfg(test)]
 mod tests {
   use super::*;
+
+  #[test]
+  fn a_palette_command_points_at_the_shortcut_that_runs_it() {
+    use CommandPaletteCommandId as Command;
+
+    assert_eq!(
+      palette_command_shortcut(Command::Commit),
+      Some(ShortcutId::CommitChanges)
+    );
+    assert_eq!(
+      palette_command_shortcut(Command::SwitchBranch),
+      Some(ShortcutId::ShowBranchSwitcher)
+    );
+    assert_eq!(
+      palette_command_shortcut(Command::SendReview),
+      Some(ShortcutId::SendReviewCommentsToAgent)
+    );
+    // One key toggles either way.
+    assert_eq!(
+      palette_command_shortcut(Command::StageSelectedFile),
+      palette_command_shortcut(Command::UnstageSelectedFile)
+    );
+
+    assert_eq!(palette_command_shortcut(Command::CherryPick), None);
+    assert_eq!(palette_command_shortcut(Command::SendFeedback), None);
+  }
 
   fn context_stack(pathname: &str) -> Vec<KeyContext> {
     vec![KeyContext::parse(&key_context_for_pathname_with_generation(pathname, 0)).unwrap()]
