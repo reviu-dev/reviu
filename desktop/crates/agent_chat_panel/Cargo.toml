@@ -35,8 +35,8 @@ agent_chat_panel = { path = ".", features = ["test-support"] }
 gpui = { workspace = true, features = ["test-support"] }
 
 [[bin]]
-name = "stub_agent"
-path = "src/bin/stub_agent.rs"
+name = "stub_agent_panel"
+path = "src/bin/stub_agent_panel.rs"
 required-features = ["test-support"]
 
 [lints]

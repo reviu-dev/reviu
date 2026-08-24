@@ -8,7 +8,7 @@ use gpui::{AppContext as _, TestAppContext};
 async fn a_prompt_round_trips_through_a_real_agent_process(cx: &mut TestAppContext) {
   // A real child process answers off the test scheduler.
   cx.executor().allow_parking();
-  set_backend_command_override(Some(env!("CARGO_BIN_EXE_stub_agent").to_string()));
+  set_backend_command_override(Some(env!("CARGO_BIN_EXE_stub_agent_panel").to_string()));
 
   cx.update(gpui_component::init);
   let cwd = std::env::temp_dir();
@@ -79,7 +79,7 @@ fn late_text_chunk(text: &str) -> agent_acp::AgentEvent {
 #[gpui::test]
 async fn a_permission_request_carries_its_command_and_resumes_on_answer(cx: &mut TestAppContext) {
   cx.executor().allow_parking();
-  set_backend_command_override(Some(env!("CARGO_BIN_EXE_stub_agent").to_string()));
+  set_backend_command_override(Some(env!("CARGO_BIN_EXE_stub_agent_panel").to_string()));
 
   cx.update(gpui_component::init);
   let cwd = std::env::temp_dir();
@@ -125,7 +125,7 @@ async fn a_permission_request_carries_its_command_and_resumes_on_answer(cx: &mut
 #[gpui::test]
 async fn a_staged_image_reaches_the_agent_as_an_image_block(cx: &mut TestAppContext) {
   cx.executor().allow_parking();
-  set_backend_command_override(Some(env!("CARGO_BIN_EXE_stub_agent").to_string()));
+  set_backend_command_override(Some(env!("CARGO_BIN_EXE_stub_agent_panel").to_string()));
 
   cx.update(gpui_component::init);
   let cwd = std::env::temp_dir();
@@ -162,7 +162,7 @@ async fn a_staged_image_reaches_the_agent_as_an_image_block(cx: &mut TestAppCont
 #[gpui::test]
 async fn cancelling_a_turn_leaves_a_stopped_marker(cx: &mut TestAppContext) {
   cx.executor().allow_parking();
-  set_backend_command_override(Some(env!("CARGO_BIN_EXE_stub_agent").to_string()));
+  set_backend_command_override(Some(env!("CARGO_BIN_EXE_stub_agent_panel").to_string()));
 
   cx.update(gpui_component::init);
   let cwd = std::env::temp_dir();
@@ -207,7 +207,7 @@ async fn cancelling_a_turn_leaves_a_stopped_marker(cx: &mut TestAppContext) {
 #[gpui::test]
 async fn a_queued_message_runs_when_the_turn_ends_cleanly(cx: &mut TestAppContext) {
   cx.executor().allow_parking();
-  set_backend_command_override(Some(env!("CARGO_BIN_EXE_stub_agent").to_string()));
+  set_backend_command_override(Some(env!("CARGO_BIN_EXE_stub_agent_panel").to_string()));
 
   cx.update(gpui_component::init);
   let cwd = std::env::temp_dir();
@@ -264,7 +264,7 @@ async fn a_queued_message_runs_when_the_turn_ends_cleanly(cx: &mut TestAppContex
 #[gpui::test]
 async fn a_failed_turn_holds_the_queue(cx: &mut TestAppContext) {
   cx.executor().allow_parking();
-  set_backend_command_override(Some(env!("CARGO_BIN_EXE_stub_agent").to_string()));
+  set_backend_command_override(Some(env!("CARGO_BIN_EXE_stub_agent_panel").to_string()));
 
   cx.update(gpui_component::init);
   let cwd = std::env::temp_dir();
@@ -305,7 +305,7 @@ async fn a_failed_turn_holds_the_queue(cx: &mut TestAppContext) {
 #[gpui::test]
 async fn stopping_a_turn_keeps_the_queue(cx: &mut TestAppContext) {
   cx.executor().allow_parking();
-  set_backend_command_override(Some(env!("CARGO_BIN_EXE_stub_agent").to_string()));
+  set_backend_command_override(Some(env!("CARGO_BIN_EXE_stub_agent_panel").to_string()));
 
   cx.update(gpui_component::init);
   let cwd = std::env::temp_dir();
@@ -348,7 +348,7 @@ async fn stopping_a_turn_keeps_the_queue(cx: &mut TestAppContext) {
 #[gpui::test]
 async fn an_edited_prompt_rewinds_and_replays_through_a_fresh_session(cx: &mut TestAppContext) {
   cx.executor().allow_parking();
-  set_backend_command_override(Some(env!("CARGO_BIN_EXE_stub_agent").to_string()));
+  set_backend_command_override(Some(env!("CARGO_BIN_EXE_stub_agent_panel").to_string()));
 
   cx.update(gpui_component::init);
   let cwd = std::env::temp_dir();
@@ -402,7 +402,7 @@ async fn an_edited_prompt_rewinds_and_replays_through_a_fresh_session(cx: &mut T
 #[gpui::test]
 async fn a_session_load_replay_never_duplicates_the_transcript(cx: &mut TestAppContext) {
   cx.executor().allow_parking();
-  set_backend_command_override(Some(env!("CARGO_BIN_EXE_stub_agent").to_string()));
+  set_backend_command_override(Some(env!("CARGO_BIN_EXE_stub_agent_panel").to_string()));
 
   cx.update(gpui_component::init);
   let cwd = std::env::temp_dir();
@@ -452,7 +452,7 @@ async fn a_session_load_replay_never_duplicates_the_transcript(cx: &mut TestAppC
 #[gpui::test]
 async fn reconnect_respawns_the_agent_session(cx: &mut TestAppContext) {
   cx.executor().allow_parking();
-  set_backend_command_override(Some(env!("CARGO_BIN_EXE_stub_agent").to_string()));
+  set_backend_command_override(Some(env!("CARGO_BIN_EXE_stub_agent_panel").to_string()));
 
   cx.update(gpui_component::init);
   let cwd = std::env::temp_dir();
@@ -492,7 +492,7 @@ async fn reconnect_respawns_the_agent_session(cx: &mut TestAppContext) {
 #[gpui::test]
 async fn enter_sends_the_composer_and_shift_enter_types_a_newline(cx: &mut TestAppContext) {
   cx.executor().allow_parking();
-  set_backend_command_override(Some(env!("CARGO_BIN_EXE_stub_agent").to_string()));
+  set_backend_command_override(Some(env!("CARGO_BIN_EXE_stub_agent_panel").to_string()));
 
   cx.update(gpui_component::init);
   let cwd = std::env::temp_dir();
@@ -531,7 +531,7 @@ async fn enter_sends_the_composer_and_shift_enter_types_a_newline(cx: &mut TestA
 #[gpui::test]
 async fn a_turn_with_edits_closes_on_an_aggregated_summary_card(cx: &mut TestAppContext) {
   cx.executor().allow_parking();
-  set_backend_command_override(Some(env!("CARGO_BIN_EXE_stub_agent").to_string()));
+  set_backend_command_override(Some(env!("CARGO_BIN_EXE_stub_agent_panel").to_string()));
 
   cx.update(gpui_component::init);
   let cwd = std::env::temp_dir();
@@ -581,7 +581,7 @@ async fn a_turn_with_edits_closes_on_an_aggregated_summary_card(cx: &mut TestApp
 #[gpui::test]
 async fn auto_approve_answers_permissions_without_a_click(cx: &mut TestAppContext) {
   cx.executor().allow_parking();
-  set_backend_command_override(Some(env!("CARGO_BIN_EXE_stub_agent").to_string()));
+  set_backend_command_override(Some(env!("CARGO_BIN_EXE_stub_agent_panel").to_string()));
 
   cx.update(gpui_component::init);
   let cwd = std::env::temp_dir();
@@ -620,7 +620,7 @@ async fn auto_approve_answers_permissions_without_a_click(cx: &mut TestAppContex
 #[gpui::test]
 async fn enabling_auto_approve_answers_the_permission_already_waiting(cx: &mut TestAppContext) {
   cx.executor().allow_parking();
-  set_backend_command_override(Some(env!("CARGO_BIN_EXE_stub_agent").to_string()));
+  set_backend_command_override(Some(env!("CARGO_BIN_EXE_stub_agent_panel").to_string()));
 
   cx.update(gpui_component::init);
   let cwd = std::env::temp_dir();
@@ -660,7 +660,7 @@ async fn enabling_auto_approve_answers_the_permission_already_waiting(cx: &mut T
 #[gpui::test]
 async fn a_sent_prompt_holds_at_the_viewport_top_through_the_turn(cx: &mut TestAppContext) {
   cx.executor().allow_parking();
-  set_backend_command_override(Some(env!("CARGO_BIN_EXE_stub_agent").to_string()));
+  set_backend_command_override(Some(env!("CARGO_BIN_EXE_stub_agent_panel").to_string()));
 
   cx.update(gpui_component::init);
   let cwd = std::env::temp_dir();
@@ -712,7 +712,7 @@ async fn a_sent_prompt_holds_at_the_viewport_top_through_the_turn(cx: &mut TestA
 #[gpui::test]
 async fn a_steer_joins_the_running_turn_without_closing_it(cx: &mut TestAppContext) {
   cx.executor().allow_parking();
-  set_backend_command_override(Some(env!("CARGO_BIN_EXE_stub_agent").to_string()));
+  set_backend_command_override(Some(env!("CARGO_BIN_EXE_stub_agent_panel").to_string()));
 
   cx.update(gpui_component::init);
   let cwd = std::env::temp_dir();
@@ -767,7 +767,7 @@ async fn a_steer_joins_the_running_turn_without_closing_it(cx: &mut TestAppConte
 #[gpui::test]
 async fn a_refused_steer_re_queues_the_message(cx: &mut TestAppContext) {
   cx.executor().allow_parking();
-  set_backend_command_override(Some(env!("CARGO_BIN_EXE_stub_agent").to_string()));
+  set_backend_command_override(Some(env!("CARGO_BIN_EXE_stub_agent_panel").to_string()));
 
   cx.update(gpui_component::init);
   let cwd = std::env::temp_dir();
@@ -816,7 +816,7 @@ async fn a_refused_steer_re_queues_the_message(cx: &mut TestAppContext) {
 #[gpui::test]
 async fn a_terminal_tool_call_streams_output_into_the_transcript(cx: &mut TestAppContext) {
   cx.executor().allow_parking();
-  set_backend_command_override(Some(env!("CARGO_BIN_EXE_stub_agent").to_string()));
+  set_backend_command_override(Some(env!("CARGO_BIN_EXE_stub_agent_panel").to_string()));
 
   cx.update(gpui_component::init);
   let cwd = std::env::temp_dir();
@@ -864,7 +864,7 @@ async fn a_terminal_tool_call_streams_output_into_the_transcript(cx: &mut TestAp
 #[gpui::test]
 async fn the_stop_button_kills_a_running_terminal_command(cx: &mut TestAppContext) {
   cx.executor().allow_parking();
-  set_backend_command_override(Some(env!("CARGO_BIN_EXE_stub_agent").to_string()));
+  set_backend_command_override(Some(env!("CARGO_BIN_EXE_stub_agent_panel").to_string()));
 
   cx.update(gpui_component::init);
   let cwd = std::env::temp_dir();
@@ -908,7 +908,7 @@ async fn the_stop_button_kills_a_running_terminal_command(cx: &mut TestAppContex
 #[gpui::test]
 async fn cancelling_after_an_accepted_steer_settles_the_turn_cleanly(cx: &mut TestAppContext) {
   cx.executor().allow_parking();
-  set_backend_command_override(Some(env!("CARGO_BIN_EXE_stub_agent").to_string()));
+  set_backend_command_override(Some(env!("CARGO_BIN_EXE_stub_agent_panel").to_string()));
 
   cx.update(gpui_component::init);
   let cwd = std::env::temp_dir();
@@ -968,7 +968,7 @@ async fn cancelling_after_an_accepted_steer_settles_the_turn_cleanly(cx: &mut Te
 #[gpui::test]
 async fn codex_style_terminal_metadata_streams_into_the_transcript(cx: &mut TestAppContext) {
   cx.executor().allow_parking();
-  set_backend_command_override(Some(env!("CARGO_BIN_EXE_stub_agent").to_string()));
+  set_backend_command_override(Some(env!("CARGO_BIN_EXE_stub_agent_panel").to_string()));
 
   cx.update(gpui_component::init);
   let cwd = std::env::temp_dir();
@@ -1018,7 +1018,7 @@ async fn codex_style_terminal_metadata_streams_into_the_transcript(cx: &mut Test
 #[gpui::test]
 async fn switching_to_pi_respawns_the_session_on_the_new_backend(cx: &mut TestAppContext) {
   cx.executor().allow_parking();
-  set_backend_command_override(Some(env!("CARGO_BIN_EXE_stub_agent").to_string()));
+  set_backend_command_override(Some(env!("CARGO_BIN_EXE_stub_agent_panel").to_string()));
 
   cx.update(gpui_component::init);
   let cwd = std::env::temp_dir();
