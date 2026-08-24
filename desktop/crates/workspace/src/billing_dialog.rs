@@ -27,6 +27,9 @@ use crate::{
 /// Wide enough for the two price columns to sit side by side.
 const BILLING_DIALOG_WIDTH: f32 = 480.0;
 
+/// Names this surface in the checkout and sign-in funnels.
+const ANALYTICS_SOURCE: &str = "billing_dialog";
+
 pub fn open_billing_dialog(window: &mut Window, _cx: &mut App) {
   // Defer to next frame so the command palette dialog closes first
   window.on_next_frame(|window, cx| {
@@ -330,7 +333,7 @@ impl BillingDialog {
     crate::analytics::track_with(
       cx,
       "subscription_checkout_started",
-      Some(serde_json::json!({ "slug": slug, "source": "billing_page" })),
+      Some(serde_json::json!({ "slug": slug, "source": ANALYTICS_SOURCE })),
     );
 
     let api = self.api.clone();
@@ -557,7 +560,7 @@ impl BillingDialog {
           .label("Sign in with GitHub")
           .small()
           .on_click(|_, _, cx| {
-            crate::auth_flow::start_github_sign_in(cx, "billing_page");
+            crate::auth_flow::start_github_sign_in(cx, ANALYTICS_SOURCE);
           }),
       ),
     )
