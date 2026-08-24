@@ -1,29 +1,22 @@
-use std::sync::Arc;
+//! Reviu Pro over whatever you were doing: what it brings, what it costs, and
+//! the state of your subscription.
 
-use gpui::{
-  AnyElement, App, Context, FocusHandle, Focusable, Render, SharedString, Window, div, prelude::*,
-  px,
-};
+use gpui::{AnyElement, App, Context, Render, SharedString, Window, div, prelude::*, px};
 use gpui_component::{
   ActiveTheme as _, Disableable as _, Icon, IconName, Sizable as _, StyledExt,
   button::{Button, ButtonVariants as _},
+  dialog::DialogButtonProps,
   h_flex,
   spinner::Spinner,
   v_flex,
 };
 use time::OffsetDateTime;
-use ui::{
-  CommandPalette, CommandPaletteAction, CommandPaletteCommand, CommandPaletteConfig,
-  CommandPaletteHandler, CommandPalettePage, DETAILS_PAGE_CONTAINER_MAX_WIDTH, PAGE_HEADER_HEIGHT,
-  StatusTag, StatusThemeExt, UiIconName,
-};
+use ui::{StatusTag, StatusThemeExt, UiIconName, WindowExt};
 
 use crate::{
-  CloseWorkspacePage, ShowCommandPalette,
   api::{ApiClient, CustomerStateSubscription, CustomerStateSubscriptionStatus},
   auth_state::{AuthState, AuthStateStore},
   date_format::{format_long_date_opt, parse_rfc3339},
-  navigation::NavigationHistory,
   pricing_copy::{
     PRO_ANNUAL_PERIOD, PRO_ANNUAL_PRICE, PRO_ANNUAL_SAVE_PERCENT, PRO_ANNUAL_SLUG, PRO_BENEFITS,
     PRO_MONTHLY_PERIOD, PRO_MONTHLY_PRICE, PRO_MONTHLY_SLUG, PRO_TRIAL,
@@ -31,14 +24,26 @@ use crate::{
   workspace::WorkspaceApi,
 };
 
-pub struct BillingPage {
-  focus_handle: FocusHandle,
-  api: ApiClient,
-  checkout_loading: bool,
-  refresh_loading: bool,
-  checkout_task: Option<gpui::Task<()>>,
-  refresh_task: Option<gpui::Task<()>>,
-  error: Option<SharedString>,
+/// Wide enough for the two price columns to sit side by side.
+const BILLING_DIALOG_WIDTH: f32 = 480.0;
+
+pub fn open_billing_dialog(window: &mut Window, _cx: &mut App) {
+  // Defer to next frame so the command palette dialog closes first
+  window.on_next_frame(|window, cx| {
+    open_billing_dialog_inner(window, cx);
+  });
+}
+
+fn open_billing_dialog_inner(window: &mut Window, cx: &mut App) {
+  let billing = cx.new(BillingDialog::new);
+  window.open_alert_dialog(cx, move |alert, _, _| {
+    alert
+      .title("Reviu Pro")
+      .width(px(BILLING_DIALOG_WIDTH))
+      .child(billing.clone())
+      .show_cancel(false)
+      .button_props(DialogButtonProps::default().ok_text("Close"))
+  });
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -49,7 +54,7 @@ enum BillingSubscriptionState {
   Canceled,
 }
 
-/// What the page has to say, so the promise-bearing states are named rather
+/// What the dialog has to say, so the promise-bearing states are named rather
 /// than inferred from a chain of `if let`.
 #[derive(Debug)]
 enum BillingContent<'a> {
@@ -60,6 +65,14 @@ enum BillingContent<'a> {
     subscription: &'a CustomerStateSubscription,
     portal_url: Option<&'a str>,
   },
+}
+
+impl BillingContent<'_> {
+  /// Only someone with an account has a subscription state worth asking about
+  /// again.
+  fn can_refresh(&self) -> bool {
+    matches!(self, Self::Subscribe | Self::Manage { .. })
+  }
 }
 
 fn billing_content(state: &AuthState) -> BillingContent<'_> {
@@ -77,13 +90,13 @@ fn billing_content(state: &AuthState) -> BillingContent<'_> {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum ReviuProCheckoutCta {
+enum ReviuProCheckoutCta {
   SubscribeMonthly,
   SubscribeAnnual,
 }
 
 impl ReviuProCheckoutCta {
-  pub(crate) fn label(self) -> &'static str {
+  fn label(self) -> &'static str {
     match self {
       Self::SubscribeMonthly => "Start free trial",
       Self::SubscribeAnnual => "Start free trial",
@@ -91,7 +104,7 @@ impl ReviuProCheckoutCta {
   }
 }
 
-pub(crate) fn reviu_pro_checkout_button(id: &'static str, cta: ReviuProCheckoutCta) -> Button {
+fn reviu_pro_checkout_button(id: &'static str, cta: ReviuProCheckoutCta) -> Button {
   Button::new(id)
     .icon(UiIconName::CreditCard)
     .label(cta.label())
@@ -105,23 +118,7 @@ fn render_pro_offer(theme: &gpui_component::Theme, footer: impl IntoElement) -> 
   v_flex()
     .w_full()
     .gap_4()
-    .p_4()
-    .border_1()
-    .border_color(theme.border)
-    .rounded(theme.radius)
-    .bg(theme.sidebar)
-    .child(
-      v_flex()
-        .gap_2()
-        .child(
-          div()
-            .text_lg()
-            .font_semibold()
-            .text_color(theme.foreground)
-            .child("Reviu Pro"),
-        )
-        .child(render_pro_promise_summary(theme)),
-    )
+    .child(render_pro_promise_summary(theme))
     .child(footer)
     .into_any_element()
 }
@@ -165,7 +162,7 @@ fn render_pro_promise_summary(theme: &gpui_component::Theme) -> AnyElement {
     .into_any_element()
 }
 
-pub(crate) fn render_pro_pricing_cards(
+fn render_pro_pricing_cards(
   annual_button: impl IntoElement,
   monthly_button: impl IntoElement,
   theme: &gpui_component::Theme,
@@ -248,10 +245,18 @@ pub(crate) fn render_pro_pricing_cards(
     )
 }
 
-impl BillingPage {
-  pub fn new(_: &mut Window, cx: &mut Context<Self>) -> Self {
+struct BillingDialog {
+  api: ApiClient,
+  checkout_loading: bool,
+  refresh_loading: bool,
+  checkout_task: Option<gpui::Task<()>>,
+  refresh_task: Option<gpui::Task<()>>,
+  error: Option<SharedString>,
+}
+
+impl BillingDialog {
+  fn new(cx: &mut Context<Self>) -> Self {
     Self {
-      focus_handle: cx.focus_handle(),
       api: WorkspaceApi::global(cx).api.clone(),
       checkout_loading: false,
       refresh_loading: false,
@@ -357,50 +362,6 @@ impl BillingPage {
     cx.notify();
   }
 
-  fn show_command_palette_action(
-    &mut self,
-    _: &ShowCommandPalette,
-    window: &mut Window,
-    cx: &mut Context<Self>,
-  ) {
-    self.open_command_palette(window, cx);
-  }
-
-  fn close_workspace_page_action(
-    &mut self,
-    _: &CloseWorkspacePage,
-    _: &mut Window,
-    cx: &mut Context<Self>,
-  ) {
-    NavigationHistory::navigate_back(cx);
-  }
-
-  fn open_command_palette(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-    let include_github = AuthStateStore::has_github_access(cx);
-    let commands =
-      CommandPaletteCommand::default_global_commands(CommandPalettePage::Billing, include_github);
-
-    let view = cx.entity();
-    let handler: CommandPaletteHandler = Arc::new(move |action, window, cx| {
-      view.update(cx, |view, cx| {
-        view.handle_command_palette_action(action, window, cx)
-      })
-    });
-
-    let config = CommandPaletteConfig::new(Vec::new(), commands, handler);
-    let palette = cx.new(|cx| CommandPalette::new(window, cx, config));
-    ui::open_palette_dialog(palette, window, cx);
-  }
-
-  fn handle_command_palette_action(
-    &mut self,
-    action: CommandPaletteAction,
-    window: &mut Window,
-    cx: &mut Context<Self>,
-  ) -> Result<(), SharedString> {
-    crate::palette_actions::handle_global_command_palette_action(action, window, cx)
-  }
-
   fn format_amount(amount_cents: i64, currency: &str) -> SharedString {
     let amount = amount_cents as f64 / 100.0;
     let currency = currency.to_uppercase();
@@ -460,12 +421,12 @@ impl BillingPage {
     }
   }
 
-  fn render_active_subscription(
+  fn render_subscription(
     &self,
     subscription: &CustomerStateSubscription,
     portal_url: Option<&str>,
     theme: &gpui_component::Theme,
-  ) -> impl IntoElement {
+  ) -> AnyElement {
     let status = Self::display_status(subscription);
     let amount = Self::format_amount(subscription.amount, subscription.currency.as_str());
     let plan = format!(
@@ -513,33 +474,18 @@ impl BillingPage {
 
     v_flex()
       .w_full()
-      .gap_4()
-      .p_4()
-      .border_1()
-      .border_color(theme.border)
-      .rounded(theme.radius)
-      .bg(theme.sidebar)
+      .gap_3()
       .child(
         h_flex()
           .items_center()
           .justify_between()
           .gap_4()
           .child(
-            v_flex()
-              .gap_1()
-              .child(
-                div()
-                  .text_lg()
-                  .font_semibold()
-                  .text_color(theme.foreground)
-                  .child("Pro subscription - GitHub Integration"),
-              )
-              .child(
-                div()
-                  .text_sm()
-                  .text_color(theme.muted_foreground)
-                  .child(plan),
-              ),
+            div()
+              .text_sm()
+              .font_semibold()
+              .text_color(theme.foreground)
+              .child(plan),
           )
           .child(
             StatusTag::new(Self::status_color(status, theme))
@@ -572,9 +518,10 @@ impl BillingPage {
           )
         },
       )
+      .into_any_element()
   }
 
-  fn render_no_subscription(&self, cx: &mut Context<Self>) -> impl IntoElement {
+  fn render_subscribe(&self, cx: &mut Context<Self>) -> AnyElement {
     let theme = cx.theme().clone();
 
     let annual_button = reviu_pro_checkout_button(
@@ -599,7 +546,7 @@ impl BillingPage {
     )
   }
 
-  fn render_unauthenticated(&self, cx: &mut Context<Self>) -> impl IntoElement {
+  fn render_sign_in(&self, cx: &mut Context<Self>) -> AnyElement {
     let theme = cx.theme().clone();
 
     render_pro_offer(
@@ -616,15 +563,15 @@ impl BillingPage {
     )
   }
 
-  fn render_loading(&self, cx: &mut Context<Self>) -> impl IntoElement {
+  fn render_loading(&self, cx: &mut Context<Self>) -> AnyElement {
     let theme = cx.theme().clone();
 
     v_flex()
       .w_full()
-      .h_full()
       .items_center()
       .justify_center()
       .gap_2()
+      .py_4()
       .child(Spinner::new().small())
       .child(
         div()
@@ -632,114 +579,56 @@ impl BillingPage {
           .text_color(theme.muted_foreground)
           .child("Loading subscription..."),
       )
-  }
-
-  fn render_header(&self, cx: &mut Context<Self>) -> impl IntoElement {
-    let theme = cx.theme().clone();
-
-    let refresh_button = Button::new("billing-refresh")
-      .icon(UiIconName::RefreshCw)
-      .ghost()
-      .compact()
-      .loading(self.refresh_loading)
-      .disabled(self.refresh_loading || self.checkout_loading)
-      .tooltip("Refresh subscription state")
-      .on_click(cx.listener(Self::refresh_action));
-
-    let close_button = Button::new("close-billing")
-      .icon(IconName::Close)
-      .ghost()
-      .compact()
-      .tooltip("Close billing")
-      .on_click(|_, _, cx| {
-        NavigationHistory::navigate_back(cx);
-      });
-
-    div()
-      .h(px(PAGE_HEADER_HEIGHT))
-      .max_h(px(PAGE_HEADER_HEIGHT))
-      .px_3()
-      .flex()
-      .items_center()
-      .justify_between()
-      .bg(theme.sidebar)
-      .border_b_1()
-      .border_color(theme.title_bar_border)
-      .child(
-        div()
-          .text_sm()
-          .text_color(theme.foreground)
-          .child("Billing"),
-      )
-      .child(
-        h_flex()
-          .items_center()
-          .gap_2()
-          .child(refresh_button)
-          .child(close_button),
-      )
+      .into_any_element()
   }
 }
 
-impl Render for BillingPage {
+impl Render for BillingDialog {
   fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
     let theme = cx.theme().clone();
 
     let auth_state = AuthStateStore::get(cx);
-    let content = match billing_content(&auth_state) {
-      BillingContent::Loading => self.render_loading(cx).into_any_element(),
-      BillingContent::SignIn => self.render_unauthenticated(cx).into_any_element(),
-      BillingContent::Subscribe => self.render_no_subscription(cx).into_any_element(),
+    let content = billing_content(&auth_state);
+    let can_refresh = content.can_refresh();
+    let body = match content {
+      BillingContent::Loading => self.render_loading(cx),
+      BillingContent::SignIn => self.render_sign_in(cx),
+      BillingContent::Subscribe => self.render_subscribe(cx),
       BillingContent::Manage {
         subscription,
         portal_url,
-      } => self
-        .render_active_subscription(subscription, portal_url, &theme)
-        .into_any_element(),
+      } => self.render_subscription(subscription, portal_url, &theme),
     };
 
-    div()
-      .size_full()
-      .flex()
-      .flex_col()
-      .bg(theme.background)
-      .track_focus(&self.focus_handle(cx))
-      .on_action(cx.listener(BillingPage::show_command_palette_action))
-      .on_action(cx.listener(BillingPage::close_workspace_page_action))
-      .child(self.render_header(cx))
-      .child(
-        div().w_full().h_full().min_h_0().p_4().child(
-          v_flex()
-            .w_full()
-            .max_w(px(DETAILS_PAGE_CONTAINER_MAX_WIDTH))
-            .mx_auto()
-            .gap_3()
-            .child(content)
-            .when_some(self.error.clone(), |this, error| {
-              this.child(
-                div().w_full().flex().justify_center().child(
-                  div()
-                    .text_sm()
-                    .text_color(theme.status_red())
-                    .text_center()
-                    .child(error),
-                ),
-              )
-            }),
-        ),
-      )
-  }
-}
-
-impl Focusable for BillingPage {
-  fn focus_handle(&self, _: &App) -> FocusHandle {
-    self.focus_handle.clone()
+    v_flex()
+      .w_full()
+      .gap_3()
+      .pt_2()
+      .child(body)
+      .when_some(self.error.clone(), |this, error| {
+        this.child(div().text_sm().text_color(theme.status_red()).child(error))
+      })
+      .when(can_refresh, |this| {
+        this.child(
+          h_flex().justify_start().child(
+            Button::new("billing-refresh")
+              .icon(UiIconName::RefreshCw)
+              .label("Refresh")
+              .ghost()
+              .small()
+              .loading(self.refresh_loading)
+              .disabled(self.refresh_loading || self.checkout_loading)
+              .on_click(cx.listener(Self::refresh_action)),
+          ),
+        )
+      })
   }
 }
 
 #[cfg(test)]
 mod tests {
   use super::*;
+  use gpui::TestAppContext;
 
   fn make_subscription() -> CustomerStateSubscription {
     CustomerStateSubscription {
@@ -762,91 +651,6 @@ mod tests {
     }
   }
 
-  #[test]
-  fn display_status_matches_active_and_trialing() {
-    let mut active = make_subscription();
-    active.cancel_at_period_end = false;
-    active.status = CustomerStateSubscriptionStatus::Active;
-    assert_eq!(
-      BillingPage::display_status(&active),
-      BillingSubscriptionState::Active
-    );
-
-    let mut trialing = make_subscription();
-    trialing.cancel_at_period_end = false;
-    trialing.status = CustomerStateSubscriptionStatus::Trialing;
-    assert_eq!(
-      BillingPage::display_status(&trialing),
-      BillingSubscriptionState::Trialing
-    );
-  }
-
-  #[test]
-  fn display_status_is_to_be_canceled_when_end_date_is_in_future() {
-    let mut subscription = make_subscription();
-    subscription.cancel_at_period_end = true;
-    subscription.current_period_end = Some("2099-01-01T00:00:00Z".to_string());
-
-    assert_eq!(
-      BillingPage::display_status(&subscription),
-      BillingSubscriptionState::ToBeCanceled
-    );
-  }
-
-  #[test]
-  fn display_status_is_canceled_when_end_date_is_in_past() {
-    let mut subscription = make_subscription();
-    subscription.cancel_at_period_end = true;
-    subscription.current_period_end = Some("2000-01-01T00:00:00Z".to_string());
-
-    assert_eq!(
-      BillingPage::display_status(&subscription),
-      BillingSubscriptionState::Canceled
-    );
-  }
-
-  #[test]
-  fn display_status_uses_ends_at_when_current_period_end_is_missing() {
-    let mut subscription = make_subscription();
-    subscription.cancel_at_period_end = true;
-    subscription.current_period_end = None;
-    subscription.ends_at = Some("2000-01-01T00:00:00Z".to_string());
-
-    assert_eq!(
-      BillingPage::display_status(&subscription),
-      BillingSubscriptionState::Canceled
-    );
-  }
-
-  #[test]
-  fn billing_date_label_is_renewal_for_active_and_trialing() {
-    let mut active = make_subscription();
-    active.status = CustomerStateSubscriptionStatus::Active;
-    active.cancel_at_period_end = false;
-    assert_eq!(BillingPage::billing_date_label(&active), "Renewal Date");
-
-    let mut trialing = make_subscription();
-    trialing.status = CustomerStateSubscriptionStatus::Trialing;
-    trialing.cancel_at_period_end = false;
-    assert_eq!(BillingPage::billing_date_label(&trialing), "Renewal Date");
-  }
-
-  #[test]
-  fn billing_date_label_is_expiry_for_cancellation_states() {
-    let mut to_be_canceled = make_subscription();
-    to_be_canceled.cancel_at_period_end = true;
-    to_be_canceled.current_period_end = Some("2099-01-01T00:00:00Z".to_string());
-    assert_eq!(
-      BillingPage::billing_date_label(&to_be_canceled),
-      "Expiry Date"
-    );
-
-    let mut canceled = make_subscription();
-    canceled.cancel_at_period_end = true;
-    canceled.current_period_end = Some("2000-01-01T00:00:00Z".to_string());
-    assert_eq!(BillingPage::billing_date_label(&canceled), "Expiry Date");
-  }
-
   fn signed_in_with(subscription: Option<CustomerStateSubscription>) -> AuthState {
     let AuthState::Authenticated(mut user) = crate::auth_state::signed_in_without_subscription()
     else {
@@ -856,8 +660,38 @@ mod tests {
     AuthState::Authenticated(user)
   }
 
+  struct Page;
+
+  impl Render for Page {
+    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+      div()
+    }
+  }
+
+  #[gpui::test]
+  fn the_dialog_opens_over_whatever_page_is_up(cx: &mut TestAppContext) {
+    cx.update(|cx| {
+      gpui_component::init(cx);
+      cx.set_global(AuthStateStore::default());
+      cx.set_global(WorkspaceApi::new());
+    });
+
+    let (_root, cx) = cx.add_window_view(|window, cx| {
+      let page = cx.new(|_| Page);
+      gpui_component::Root::new(page, window, cx)
+    });
+
+    cx.update(|window, cx| {
+      assert!(!window.has_active_dialog(cx));
+      open_billing_dialog_inner(window, cx);
+    });
+    cx.run_until_parked();
+
+    cx.update(|window, cx| assert!(window.has_active_dialog(cx)));
+  }
+
   #[test]
-  fn every_auth_state_maps_to_what_the_page_says() {
+  fn every_auth_state_maps_to_what_the_dialog_says() {
     assert!(matches!(
       billing_content(&AuthState::Unknown),
       BillingContent::Loading
@@ -879,6 +713,21 @@ mod tests {
   }
 
   #[test]
+  fn only_someone_with_an_account_can_ask_again() {
+    assert!(billing_content(&signed_in_with(None)).can_refresh());
+    assert!(
+      billing_content(&signed_in_with(Some(make_subscription()))).can_refresh(),
+      "an answer that came back stale is exactly what the button is for"
+    );
+
+    assert!(!billing_content(&AuthState::Unauthenticated).can_refresh());
+    assert!(
+      !billing_content(&AuthState::Unknown).can_refresh(),
+      "an answer is already on its way"
+    );
+  }
+
+  #[test]
   fn the_promise_names_what_pro_brings() {
     assert!(!PRO_BENEFITS.is_empty());
     assert!(
@@ -895,21 +744,106 @@ mod tests {
   }
 
   #[test]
+  fn display_status_matches_active_and_trialing() {
+    let mut active = make_subscription();
+    active.cancel_at_period_end = false;
+    active.status = CustomerStateSubscriptionStatus::Active;
+    assert_eq!(
+      BillingDialog::display_status(&active),
+      BillingSubscriptionState::Active
+    );
+
+    let mut trialing = make_subscription();
+    trialing.cancel_at_period_end = false;
+    trialing.status = CustomerStateSubscriptionStatus::Trialing;
+    assert_eq!(
+      BillingDialog::display_status(&trialing),
+      BillingSubscriptionState::Trialing
+    );
+  }
+
+  #[test]
+  fn display_status_is_to_be_canceled_when_end_date_is_in_future() {
+    let mut subscription = make_subscription();
+    subscription.cancel_at_period_end = true;
+    subscription.current_period_end = Some("2099-01-01T00:00:00Z".to_string());
+
+    assert_eq!(
+      BillingDialog::display_status(&subscription),
+      BillingSubscriptionState::ToBeCanceled
+    );
+  }
+
+  #[test]
+  fn display_status_is_canceled_when_end_date_is_in_past() {
+    let mut subscription = make_subscription();
+    subscription.cancel_at_period_end = true;
+    subscription.current_period_end = Some("2000-01-01T00:00:00Z".to_string());
+
+    assert_eq!(
+      BillingDialog::display_status(&subscription),
+      BillingSubscriptionState::Canceled
+    );
+  }
+
+  #[test]
+  fn display_status_uses_ends_at_when_current_period_end_is_missing() {
+    let mut subscription = make_subscription();
+    subscription.cancel_at_period_end = true;
+    subscription.current_period_end = None;
+    subscription.ends_at = Some("2000-01-01T00:00:00Z".to_string());
+
+    assert_eq!(
+      BillingDialog::display_status(&subscription),
+      BillingSubscriptionState::Canceled
+    );
+  }
+
+  #[test]
+  fn billing_date_label_is_renewal_for_active_and_trialing() {
+    let mut active = make_subscription();
+    active.status = CustomerStateSubscriptionStatus::Active;
+    active.cancel_at_period_end = false;
+    assert_eq!(BillingDialog::billing_date_label(&active), "Renewal Date");
+
+    let mut trialing = make_subscription();
+    trialing.status = CustomerStateSubscriptionStatus::Trialing;
+    trialing.cancel_at_period_end = false;
+    assert_eq!(BillingDialog::billing_date_label(&trialing), "Renewal Date");
+  }
+
+  #[test]
+  fn billing_date_label_is_expiry_for_cancellation_states() {
+    let mut to_be_canceled = make_subscription();
+    to_be_canceled.cancel_at_period_end = true;
+    to_be_canceled.current_period_end = Some("2099-01-01T00:00:00Z".to_string());
+    assert_eq!(
+      BillingDialog::billing_date_label(&to_be_canceled),
+      "Expiry Date"
+    );
+
+    let mut canceled = make_subscription();
+    canceled.cancel_at_period_end = true;
+    canceled.current_period_end = Some("2000-01-01T00:00:00Z".to_string());
+    assert_eq!(BillingDialog::billing_date_label(&canceled), "Expiry Date");
+  }
+
+  #[test]
   fn status_label_covers_all_billing_states() {
     assert_eq!(
-      BillingPage::status_label(BillingSubscriptionState::Active),
+      BillingDialog::status_label(BillingSubscriptionState::Active),
       "Active"
     );
     assert_eq!(
-      BillingPage::status_label(BillingSubscriptionState::Trialing),
+      BillingDialog::status_label(BillingSubscriptionState::Trialing),
       "Trialing"
     );
     assert_eq!(
-      BillingPage::status_label(BillingSubscriptionState::ToBeCanceled),
+      BillingDialog::status_label(BillingSubscriptionState::ToBeCanceled),
       "To be canceled"
     );
     assert_eq!(
-      BillingPage::status_label(BillingSubscriptionState::Canceled),
+      BillingDialog::status_label(BillingSubscriptionState::Canceled),
       "Canceled"
     );
   }

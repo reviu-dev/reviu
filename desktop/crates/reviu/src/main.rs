@@ -323,7 +323,7 @@ fn main() {
 
     install_app_key_bindings(cx);
 
-    cx.set_menus(build_app_menus(false));
+    cx.set_menus(build_app_menus());
 
     let window_options = WindowOptions {
       window_bounds: Some(WindowBounds::Windowed(bounds)),

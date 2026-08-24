@@ -23,7 +23,6 @@ fn git_config_icon() -> Icon {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum UserMenuPage {
   Session,
-  Billing,
   GitConfig,
   Settings,
 }
@@ -60,12 +59,14 @@ pub fn user_menu(config: UserMenuConfig) -> Option<AnyElement> {
     UserMenuState::Unknown => None,
     UserMenuState::Unauthenticated => {
       let current_page = config.current_page;
+      let on_open_billing = config.on_open_billing.clone();
       let on_open_git_config = config.on_open_git_config.clone();
       let on_open_settings = config.on_open_settings.clone();
       let on_open_about = config.on_open_about.clone();
       let on_open_browser_extensions = config.on_open_browser_extensions.clone();
 
-      if on_open_git_config.is_none()
+      if on_open_billing.is_none()
+        && on_open_git_config.is_none()
         && on_open_settings.is_none()
         && on_open_about.is_none()
         && on_open_browser_extensions.is_none()
@@ -81,6 +82,16 @@ pub fn user_menu(config: UserMenuConfig) -> Option<AnyElement> {
           .child(Icon::new(UiIconName::EllipsisVertical).size_4())
           .dropdown_menu_with_anchor(gpui::Anchor::TopRight, move |menu: PopupMenu, _, _| {
             let mut menu = menu;
+
+            if let Some(handler) = on_open_billing.clone() {
+              menu = menu.item(
+                PopupMenuItem::new("Billing")
+                  .icon(UiIconName::CreditCard)
+                  .on_click(move |_, window, cx| {
+                    handler(window, cx);
+                  }),
+              );
+            }
 
             if current_page != UserMenuPage::GitConfig
               && let Some(handler) = on_open_git_config.clone()
@@ -167,9 +178,7 @@ pub fn user_menu(config: UserMenuConfig) -> Option<AnyElement> {
               );
             }
 
-            if current_page != UserMenuPage::Billing
-              && let Some(handler) = on_open_billing.clone()
-            {
+            if let Some(handler) = on_open_billing.clone() {
               menu = menu.item(
                 PopupMenuItem::new("Billing")
                   .icon(UiIconName::CreditCard)

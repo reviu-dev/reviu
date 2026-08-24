@@ -24,7 +24,7 @@ use crate::app_update::{
   update_action_label,
 };
 use crate::auth_state::{AuthState, AuthStateStore};
-use crate::billing_page::BillingPage;
+use crate::billing_dialog::open_billing_dialog;
 use crate::config::{AppSettings as PersistedSettings, ConfigStore};
 use crate::git_config_page::GitConfigPage;
 use crate::github_notifications::{self, GithubNotificationsStore};
@@ -33,6 +33,7 @@ use crate::sentry_context;
 use crate::session_page::SessionPage;
 use crate::settings_page::SettingsPage;
 use crate::shortcuts::{self, ShortcutId};
+use crate::workspace_window::WorkspaceWindow;
 use crate::{ShowCommandPalette, ShowFileSearch};
 use ui::{
   Button, ButtonVariants as _, GLOBAL_BAR_HEIGHT, UiIconName, UserMenuConfig, UserMenuPage,
@@ -49,7 +50,6 @@ pub const STATUS_BAR_ICON_PNG: &[u8] =
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum WorkspacePage {
   Session,
-  Billing,
   GitConfig,
   Settings,
 }
@@ -57,7 +57,6 @@ pub enum WorkspacePage {
 pub(crate) fn workspace_page_from_pathname(pathname: &str) -> WorkspacePage {
   match pathname {
     "/session" => WorkspacePage::Session,
-    "/billing" => WorkspacePage::Billing,
     "/settings" => WorkspacePage::Settings,
     "/git-config" => WorkspacePage::GitConfig,
     _ => WorkspacePage::Session,
@@ -73,7 +72,6 @@ fn page_has_file_search(pathname: &str) -> bool {
 fn user_menu_page_for_workspace_page(page: WorkspacePage) -> UserMenuPage {
   match page {
     WorkspacePage::Session => UserMenuPage::Session,
-    WorkspacePage::Billing => UserMenuPage::Billing,
     WorkspacePage::GitConfig => UserMenuPage::GitConfig,
     WorkspacePage::Settings => UserMenuPage::Settings,
   }
@@ -98,18 +96,15 @@ fn should_run_scheduled_update_check(state: Option<AppUpdateState>) -> bool {
   )
 }
 
-pub fn build_app_menus(show_billing_entry: bool) -> Vec<Menu> {
-  let mut navigate_items = vec![
+pub fn build_app_menus() -> Vec<Menu> {
+  let navigate_items = vec![
     MenuItem::action("Back", crate::NavigateBack),
     MenuItem::separator(),
     MenuItem::action("Sessions", crate::OpenSessionPage),
     MenuItem::separator(),
     MenuItem::action("Git Config", crate::OpenGitConfigPage),
+    MenuItem::action("Billing", crate::OpenBillingPage),
   ];
-
-  if show_billing_entry {
-    navigate_items.push(MenuItem::action("Billing", crate::OpenBillingPage));
-  }
 
   vec![
     Menu {
@@ -191,7 +186,6 @@ impl WorkspaceApi {
 pub struct WorkspaceView {
   session_page: Entity<SessionPage>,
   git_config_page: Entity<GitConfigPage>,
-  billing_page: Entity<BillingPage>,
   settings_page: Entity<SettingsPage>,
   window_handle: AnyWindowHandle,
   last_page: Option<WorkspacePage>,
@@ -230,9 +224,7 @@ impl WorkspaceView {
   }
 
   fn sync_app_menus(cx: &mut App) {
-    cx.set_menus(build_app_menus(AuthStateStore::should_show_billing_entry(
-      cx,
-    )));
+    cx.set_menus(build_app_menus());
   }
 
   pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
@@ -292,15 +284,17 @@ impl WorkspaceView {
     }
     crate::install_app_key_bindings(cx);
 
+    // Deep links and the pro promise land in the app with no window of their
+    // own, and both have to open the billing dialog.
+    WorkspaceWindow::register(window.window_handle(), cx);
+
     let session_page = cx.new(|cx| SessionPage::new(window, cx));
     let git_config_page = cx.new(|cx| GitConfigPage::new(window, cx));
-    let billing_page = cx.new(|cx| BillingPage::new(window, cx));
     let settings_page = cx.new(|cx| SettingsPage::new(window, cx, settings));
 
     let view = Self {
       session_page,
       git_config_page,
-      billing_page,
       settings_page,
       window_handle: window.window_handle(),
       last_page: None,
@@ -664,10 +658,9 @@ impl WorkspaceView {
     let current_page = user_menu_page_for_workspace_page(page);
     let auth_state = AuthStateStore::get(cx);
     let is_unauthenticated = matches!(auth_state, AuthState::Unauthenticated);
-    let show_billing_entry = AuthStateStore::should_show_billing_entry(cx);
 
-    let open_billing: Rc<NavigateFn> = Rc::new(|_window: &mut Window, cx: &mut App| {
-      NavigationHistory::navigate("/billing", cx);
+    let open_billing: Rc<NavigateFn> = Rc::new(|window: &mut Window, cx: &mut App| {
+      open_billing_dialog(window, cx);
     });
     let open_git_config = Rc::new(|_window: &mut Window, cx: &mut App| {
       NavigationHistory::navigate("/git-config", cx);
@@ -696,7 +689,6 @@ impl WorkspaceView {
         } else {
           user.name.clone()
         };
-        let on_open_billing = show_billing_entry.then_some(open_billing.clone());
 
         user_menu(UserMenuConfig {
           id: "workspace-auth-menu".into(),
@@ -706,7 +698,7 @@ impl WorkspaceView {
             image: user.image.map(Into::into),
           }),
           current_page,
-          on_open_billing,
+          on_open_billing: Some(open_billing.clone()),
           on_open_git_config: Some(open_git_config),
           on_open_settings: Some(open_settings),
           on_open_about: Some(open_about),
@@ -719,7 +711,7 @@ impl WorkspaceView {
         id: "workspace-auth-menu".into(),
         state: UserMenuState::Unauthenticated,
         current_page,
-        on_open_billing: None,
+        on_open_billing: Some(open_billing),
         on_open_git_config: Some(open_git_config),
         on_open_settings: Some(open_settings),
         on_open_about: Some(open_about),
@@ -895,7 +887,6 @@ impl Render for WorkspaceView {
     }
 
     let session_page = self.session_page.clone();
-    let billing_page = self.billing_page.clone();
     let git_config_page = self.git_config_page.clone();
     let settings_page = self.settings_page.clone();
 
@@ -904,11 +895,6 @@ impl Render for WorkspaceView {
         Route::new()
           .path("session")
           .element(move |_w, _cx| session_page.clone()),
-      )
-      .child(
-        Route::new()
-          .path("billing")
-          .element(move |_w, _cx| billing_page.clone()),
       )
       .child(
         Route::new()
@@ -932,10 +918,8 @@ impl Render for WorkspaceView {
         NavigationHistory::navigate("/session", cx);
       }))
       .on_action(cx.listener(Self::navigate_back_action))
-      .on_action(cx.listener(|_, _: &crate::OpenBillingPage, _window, cx| {
-        if AuthStateStore::should_show_billing_entry(cx) {
-          NavigationHistory::navigate("/billing", cx);
-        }
+      .on_action(cx.listener(|_, _: &crate::OpenBillingPage, window, cx| {
+        open_billing_dialog(window, cx);
       }))
       .on_action(cx.listener(|_, _: &crate::OpenGitConfigPage, _window, cx| {
         NavigationHistory::navigate("/git-config", cx);
@@ -957,7 +941,6 @@ impl Focusable for WorkspaceView {
   fn focus_handle(&self, cx: &App) -> FocusHandle {
     match WorkspaceRoute::global(cx).page {
       WorkspacePage::Session => self.session_page.read(cx).focus_handle(cx),
-      WorkspacePage::Billing => self.billing_page.read(cx).focus_handle(cx),
       WorkspacePage::GitConfig => self.git_config_page.read(cx).focus_handle(cx),
       WorkspacePage::Settings => self.settings_page.read(cx).focus_handle(cx),
     }
@@ -1016,10 +999,6 @@ mod tests {
       "an old link to the deleted page lands in the shell"
     );
     assert_eq!(
-      workspace_page_from_pathname("/billing"),
-      WorkspacePage::Billing
-    );
-    assert_eq!(
       workspace_page_from_pathname("/settings"),
       WorkspacePage::Settings
     );
@@ -1030,27 +1009,14 @@ mod tests {
   }
 
   #[test]
-  fn build_app_menus_hides_billing_when_entry_is_unavailable() {
-    let menus = build_app_menus(false);
+  fn build_app_menus_offers_billing_to_everyone() {
+    let menus = build_app_menus();
     let navigate_menu = menus
       .iter()
       .find(|menu| menu.name == "Navigate")
       .expect("navigate menu");
 
-    assert_eq!(
-      action_menu_item_names(navigate_menu),
-      vec!["Back", "Sessions", "Git Config"]
-    );
-  }
-
-  #[test]
-  fn build_app_menus_shows_billing_when_entry_is_available() {
-    let menus = build_app_menus(true);
-    let navigate_menu = menus
-      .iter()
-      .find(|menu| menu.name == "Navigate")
-      .expect("navigate menu");
-
+    // Someone with nothing to manage yet is exactly who the dialog is for.
     assert_eq!(
       action_menu_item_names(navigate_menu),
       vec!["Back", "Sessions", "Git Config", "Billing"]
@@ -1140,8 +1106,8 @@ mod tests {
       UserMenuPage::Session
     );
     assert_eq!(
-      user_menu_page_for_workspace_page(WorkspacePage::Billing),
-      UserMenuPage::Billing
+      user_menu_page_for_workspace_page(WorkspacePage::Settings),
+      UserMenuPage::Settings
     );
   }
 
@@ -1150,15 +1116,15 @@ mod tests {
     // Startup on the shell, and every navigation back to it.
     assert!(should_activate_session_page(None, WorkspacePage::Session));
     assert!(should_activate_session_page(
-      Some(WorkspacePage::Billing),
+      Some(WorkspacePage::Settings),
       WorkspacePage::Session
     ));
 
     // Never for another page, and never twice for the same one.
-    assert!(!should_activate_session_page(None, WorkspacePage::Billing));
+    assert!(!should_activate_session_page(None, WorkspacePage::Settings));
     assert!(!should_activate_session_page(
       Some(WorkspacePage::Session),
-      WorkspacePage::Billing
+      WorkspacePage::Settings
     ));
     assert!(!should_activate_session_page(
       Some(WorkspacePage::Session),

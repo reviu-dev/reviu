@@ -29,7 +29,7 @@ pub(crate) fn handle_global_command_palette_action(
       Ok(())
     }
     CommandPaletteAction::OpenBillingPage => {
-      NavigationHistory::navigate("/billing", cx);
+      crate::billing_dialog::open_billing_dialog(window, cx);
       Ok(())
     }
     CommandPaletteAction::OpenAboutPage => {

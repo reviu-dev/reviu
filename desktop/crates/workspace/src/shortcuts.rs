@@ -33,7 +33,6 @@ pub const WORKSPACE_CONTEXT: &str = "Workspace";
 /// The right dock, so escape can mean "give the keyboard back" only in there.
 pub const DOCK_PANEL_CONTEXT: &str = "DockPanel";
 pub const WORKSPACE_SESSION_CONTEXT: &str = "Workspace WorkspaceSession";
-pub const WORKSPACE_BILLING_CONTEXT: &str = "Workspace WorkspaceBilling";
 pub const WORKSPACE_GIT_CONFIG_CONTEXT: &str = "Workspace WorkspaceGitConfig";
 pub const WORKSPACE_SETTINGS_CONTEXT: &str = "Workspace WorkspaceSettings";
 
@@ -44,8 +43,7 @@ const COMMIT_CHANGES_DESCENDANT_FOCUS: &str = "CommitInput";
 const PULL_CHANGES_CONTEXT: &str = "WorkspaceSession";
 const PUSH_CHANGES_CONTEXT: &str = "WorkspaceSession";
 const FORCE_PUSH_CHANGES_CONTEXT: &str = "WorkspaceSession";
-const CLOSE_WORKSPACE_PAGE_CONTEXT: &str =
-  "WorkspaceBilling || WorkspaceGitConfig || WorkspaceSettings";
+const CLOSE_WORKSPACE_PAGE_CONTEXT: &str = "WorkspaceGitConfig || WorkspaceSettings";
 const OPEN_SETTINGS_CONTEXT: &str = "Workspace";
 const NAVIGATE_BACK_CONTEXT: &str = "Workspace";
 const OPEN_SESSION_PAGE_CONTEXT: &str = "Workspace";
@@ -64,9 +62,8 @@ const HUNK_ACTION_DESCENDANT_FOCUS: &str = "List || Editor";
 const COMMENT_HUNK_CONTEXT: &str = "WorkspaceSession";
 const COMMENT_HUNK_DESCENDANT_FOCUS: &str = "List || Editor || Tree";
 
-const ALL_WORKSPACE_ACTIVE_CONTEXTS: [&str; 4] = [
+const ALL_WORKSPACE_ACTIVE_CONTEXTS: [&str; 3] = [
   WORKSPACE_SESSION_CONTEXT,
-  WORKSPACE_BILLING_CONTEXT,
   WORKSPACE_GIT_CONFIG_CONTEXT,
   WORKSPACE_SETTINGS_CONTEXT,
 ];
@@ -75,11 +72,8 @@ const FILE_SEARCH_ACTIVE_CONTEXTS: [&str; 1] = [WORKSPACE_SESSION_CONTEXT];
 
 const SESSION_ONLY_ACTIVE_CONTEXTS: [&str; 1] = [WORKSPACE_SESSION_CONTEXT];
 
-const SECONDARY_PAGE_ACTIVE_CONTEXTS: [&str; 3] = [
-  WORKSPACE_BILLING_CONTEXT,
-  WORKSPACE_GIT_CONFIG_CONTEXT,
-  WORKSPACE_SETTINGS_CONTEXT,
-];
+const SECONDARY_PAGE_ACTIVE_CONTEXTS: [&str; 2] =
+  [WORKSPACE_GIT_CONFIG_CONTEXT, WORKSPACE_SETTINGS_CONTEXT];
 
 const COMMENT_HUNK_ACTIVE_CONTEXTS: [&str; 1] = [WORKSPACE_SESSION_CONTEXT];
 
@@ -1077,7 +1071,6 @@ fn workspace_key_bindings_with_overrides_and_generation(
 pub fn key_context_for_pathname(pathname: &str) -> &'static str {
   match pathname {
     "/session" => WORKSPACE_SESSION_CONTEXT,
-    "/billing" => WORKSPACE_BILLING_CONTEXT,
     "/git-config" => WORKSPACE_GIT_CONFIG_CONTEXT,
     "/settings" => WORKSPACE_SETTINGS_CONTEXT,
     _ => WORKSPACE_SESSION_CONTEXT,
@@ -1338,7 +1331,6 @@ mod tests {
   fn the_reachable_contexts_are_the_ones_routing_can_produce() {
     let routed: HashSet<&str> = [
       "/session",
-      "/billing",
       "/git-config",
       "/settings",
       "/github/owner/repo/pull/42",
@@ -1410,7 +1402,6 @@ mod tests {
   fn file_search_binding_is_limited_to_supported_routes() {
     assert!(has_binding("/session", "cmd-p"));
     assert!(!has_binding("/settings", "cmd-p"));
-    assert!(!has_binding("/billing", "cmd-p"));
   }
 
   #[test]
@@ -1456,7 +1447,6 @@ mod tests {
   #[test]
   fn close_page_binding_is_limited_to_secondary_workspace_pages() {
     assert!(has_binding("/settings", "cmd-w"));
-    assert!(has_binding("/billing", "cmd-w"));
     assert!(has_binding("/git-config", "cmd-w"));
     assert!(!has_binding("/session", "cmd-w"));
     assert!(!has_binding("/github", "cmd-w"));

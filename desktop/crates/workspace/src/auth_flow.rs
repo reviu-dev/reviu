@@ -6,7 +6,6 @@ use gpui::{App, AppContext as _, Global, Task};
 use crate::analytics;
 use crate::auth_state::{AuthState, AuthStateStore};
 use crate::github_notifications::GithubNotificationsStore;
-use crate::navigation::NavigationHistory;
 use crate::workspace::WorkspaceApi;
 
 /// Holds the task alive: dropping it would cancel a sign-in halfway through.
@@ -120,7 +119,9 @@ pub fn refresh_me(cx: &mut App) {
 pub fn handle_subscription_callback(cx: &mut App) {
   analytics::track(cx, "subscription_callback_received");
   refresh_me(cx);
-  NavigationHistory::navigate("/billing", cx);
+  crate::workspace_window::WorkspaceWindow::with_window(cx, |window, cx| {
+    crate::billing_dialog::open_billing_dialog(window, cx);
+  });
 }
 
 /// Gaining GitHub access is what fills the inbox and the branch's pull request,
@@ -379,11 +380,6 @@ mod tests {
       ("200 OK", "{}".to_string()),
     ]);
     init_test_app(cx, base_url);
-    cx.update(|cx| {
-      gpui_router::init(cx);
-      NavigationHistory::init(cx);
-      NavigationHistory::navigate_replace("/session", cx);
-    });
 
     cx.update(handle_subscription_callback);
     cx.run_until_parked();
@@ -394,13 +390,6 @@ mod tests {
         .any(|line| line.starts_with("GET /users/me")),
       "the plan just changed, so the app asks again who we are"
     );
-    cx.update(|cx| {
-      assert_eq!(
-        NavigationHistory::current_pathname(cx).as_ref(),
-        "/billing",
-        "and lands on the page that shows the subscription"
-      );
-    });
   }
 
   #[gpui::test]

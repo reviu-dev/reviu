@@ -52,7 +52,7 @@ mod app_profile;
 mod app_update;
 pub mod auth_flow;
 mod auth_state;
-mod billing_page;
+mod billing_dialog;
 mod browser_extensions_dialog;
 mod command_usage;
 mod dock_badge;
@@ -112,6 +112,7 @@ mod svg_preview;
 #[cfg(test)]
 mod test_support;
 mod workspace;
+mod workspace_window;
 
 pub use actions::{CommitChanges, OpenRepository, SaveFile, ShowCommandPalette, ShowFileSearch};
 pub use app_profile::{AppProfile, URL_SCHEME_PROD};

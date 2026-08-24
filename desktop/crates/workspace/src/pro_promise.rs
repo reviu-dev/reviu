@@ -9,7 +9,6 @@ use ui::{Button, ButtonVariants as _, UiIconName};
 
 use crate::analytics;
 use crate::auth_state::GithubAccessState;
-use crate::navigation::NavigationHistory;
 
 /// Where the promise is being made, which is what tells us later which surface
 /// converts.
@@ -113,7 +112,11 @@ fn take_step(step: ProPromiseStep, surface: ProPromiseSurface, cx: &mut App) {
   );
   match step {
     ProPromiseStep::SignIn => crate::auth_flow::start_github_sign_in(cx, surface.source()),
-    ProPromiseStep::Subscribe => NavigationHistory::navigate("/billing", cx),
+    ProPromiseStep::Subscribe => {
+      crate::workspace_window::WorkspaceWindow::with_window(cx, |window, cx| {
+        crate::billing_dialog::open_billing_dialog(window, cx);
+      })
+    }
   }
 }
 

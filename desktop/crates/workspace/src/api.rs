@@ -167,10 +167,6 @@ impl User {
     matches!(self.role, UserRole::Admin | UserRole::Pro)
       || self.subscription.active_subscription.is_some()
   }
-
-  pub fn should_show_billing_entry(&self) -> bool {
-    matches!(self.role, UserRole::Admin) || self.subscription.active_subscription.is_some()
-  }
 }
 
 #[derive(Clone, Debug, Deserialize)]

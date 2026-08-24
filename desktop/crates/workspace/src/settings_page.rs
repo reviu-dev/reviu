@@ -611,9 +611,7 @@ impl SettingsPage {
 
   fn rebuild_app_key_bindings(&self, cx: &mut Context<Self>) {
     crate::install_app_key_bindings(cx);
-    cx.set_menus(crate::build_app_menus(
-      AuthStateStore::should_show_billing_entry(cx),
-    ));
+    cx.set_menus(crate::build_app_menus());
   }
 
   fn is_recording_shortcut(&self, shortcut_id: ShortcutId) -> bool {

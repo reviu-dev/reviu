@@ -88,7 +88,6 @@ pub enum CommandPalettePage {
   GithubPrDetails,
   GitConfig,
   Settings,
-  Billing,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -1367,8 +1366,8 @@ impl CommandPaletteCommand {
   pub fn open_billing_page() -> Self {
     Self::new(
       CommandPaletteCommandId::OpenBillingPage,
-      "Go to Billing",
-      "Navigate to Billing",
+      "Billing",
+      "Manage your subscription or start the Reviu Pro trial",
     )
   }
 
@@ -1418,9 +1417,7 @@ impl CommandPaletteCommand {
       commands.push(Self::open_settings_page());
     }
 
-    if current_page != CommandPalettePage::Billing {
-      commands.push(Self::open_billing_page());
-    }
+    commands.push(Self::open_billing_page());
 
     commands.push(Self::open_about_page());
 
@@ -3383,7 +3380,8 @@ mod tests {
     let about = CommandPaletteCommand::open_about_page();
 
     assert_eq!(billing.id, CommandPaletteCommandId::OpenBillingPage);
-    assert_eq!(billing.name.as_ref(), "Go to Billing");
+    assert_eq!(billing.name.as_ref(), "Billing");
+    // Only the name is searched, so it has to be the word people type.
     assert!(billing.matches("billing"));
 
     assert_eq!(about.id, CommandPaletteCommandId::OpenAboutPage);

@@ -12,11 +12,13 @@ Pushing a branch to GitHub without Reviu Pro opened a notification offering the 
 
 Checking which version you were on took over the whole window to show four lines and a button, and pushed the session you were working in out of the way. It is a dialog now: it opens over whatever you are doing, from the app menu, the user menu or the palette, and Escape puts you back. When a new version is waiting, the dialog offers the download itself instead of sending you back to the top bar.
 
-### Billing Says What Reviu Pro Brings
+### Reviu Pro Is A Dialog, And Open To Everyone
 
-The page where you decide to subscribe said "No active subscription found for your account" and showed two prices. Nothing about what the money buys, even though the panels that need Pro say it clearly.
+Subscribing used to mean leaving your session for a full page that said "No active subscription found for your account" over two prices, with nothing about what the money buys. Worse, the menus only offered it to people who already had a subscription: the person most likely to want it had no way in.
 
-It now names what Pro brings before it asks for anything: pull requests for your branch in the dock, reviewing and submitting without leaving Reviu, and GitHub notifications in the inbox, followed by the length of the free trial. Signed out, the same promise comes with the GitHub sign-in instead of the prices. Subscribers keep their plan and renewal date, with nothing to sell them.
+It is a dialog now, offered from the app menu, the user menu and the palette whoever you are, and Escape puts you back where you were. It names what Pro brings before asking for anything: pull requests for your branch in the dock, reviewing and submitting without leaving Reviu, and GitHub notifications in the inbox, followed by the length of the free trial. Signed out, the same promise comes with the GitHub sign-in instead of the prices. Subscribers see their plan, status and renewal date, with nothing to sell them.
+
+Coming back from the browser after paying lands you on your work with the confirmation over it, instead of on a page you have to navigate out of.
 
 ### Errors Reach The Log File Instead Of Nowhere
 

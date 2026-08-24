@@ -50,10 +50,6 @@ impl AuthStateStore {
     Self::get(cx).github_access_state()
   }
 
-  pub fn should_show_billing_entry(cx: &App) -> bool {
-    Self::get(cx).should_show_billing_entry()
-  }
-
   pub fn set(cx: &mut App, state: AuthState) {
     sentry_context::sync_auth_state(&state);
     let store = cx.global::<Self>().clone();
@@ -122,10 +118,6 @@ impl AuthState {
     matches!(self.github_access_state(), GithubAccessState::Available)
   }
 
-  pub fn should_show_billing_entry(&self) -> bool {
-    matches!(self, AuthState::Authenticated(user) if user.should_show_billing_entry())
-  }
-
   pub fn github_login(&self) -> Option<String> {
     match self {
       AuthState::Authenticated(user) => user.github_login.clone(),
@@ -186,7 +178,6 @@ mod tests {
     assert!(state.has_pro_access());
     assert!(state.has_github_access());
     assert_eq!(state.github_access_state(), GithubAccessState::Available);
-    assert!(state.should_show_billing_entry());
   }
 
   #[test]
@@ -197,7 +188,6 @@ mod tests {
     assert!(state.has_pro_access());
     assert!(state.has_github_access());
     assert_eq!(state.github_access_state(), GithubAccessState::Available);
-    assert!(!state.should_show_billing_entry());
   }
 
   #[test]
@@ -215,7 +205,6 @@ mod tests {
       no_subscription.github_access_state(),
       GithubAccessState::NeedsSubscription
     );
-    assert!(!no_subscription.should_show_billing_entry());
     assert!(with_subscription.has_pro_access());
     assert!(with_subscription.has_github_access());
     assert!(!with_subscription.is_admin());
@@ -223,7 +212,6 @@ mod tests {
       with_subscription.github_access_state(),
       GithubAccessState::Available
     );
-    assert!(with_subscription.should_show_billing_entry());
   }
 
   #[test]
@@ -233,6 +221,5 @@ mod tests {
     assert!(!state.is_admin());
     assert_eq!(state.github_access_state(), GithubAccessState::NeedsSignIn);
     assert!(!state.has_github_access());
-    assert!(!state.should_show_billing_entry());
   }
 }
