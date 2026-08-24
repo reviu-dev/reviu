@@ -112,11 +112,12 @@ impl GitConfigPage {
     let include_github = AuthStateStore::has_github_access(cx);
     let signed_in = AuthStateStore::is_signed_in(cx);
     let commands = crate::shortcuts::with_palette_keybindings(
-      CommandPaletteCommand::default_global_commands(
-        CommandPalettePage::GitConfig,
+      CommandPaletteCommand::default_global_commands(ui::GlobalCommandsContext {
+        current_page: CommandPalettePage::GitConfig,
         include_github,
         signed_in,
-      ),
+        has_subscription: AuthStateStore::has_subscription(cx),
+      }),
       window,
       cx,
     );

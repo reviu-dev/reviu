@@ -87,7 +87,7 @@ impl SessionPage {
         commands.push(command);
       }
       if state.allows(PaletteCommand::Push) {
-        commands.push(CommandPaletteCommand::push("Push"));
+        commands.push(CommandPaletteCommand::push());
       }
       if state.allows(PaletteCommand::ForcePush) {
         commands.push(CommandPaletteCommand::force_push());
@@ -165,9 +165,12 @@ impl SessionPage {
     }
 
     commands.extend(CommandPaletteCommand::default_global_commands(
-      CommandPalettePage::Session,
-      AuthStateStore::has_github_access(cx),
-      AuthStateStore::is_signed_in(cx),
+      ui::GlobalCommandsContext {
+        current_page: CommandPalettePage::Session,
+        include_github: AuthStateStore::has_github_access(cx),
+        signed_in: AuthStateStore::is_signed_in(cx),
+        has_subscription: AuthStateStore::has_subscription(cx),
+      },
     ));
     commands
   }

@@ -38,6 +38,10 @@ impl AuthStateStore {
     matches!(Self::get(cx), AuthState::Authenticated(_))
   }
 
+  pub fn has_subscription(cx: &App) -> bool {
+    matches!(Self::get(cx), AuthState::Authenticated(user) if user.subscription.active_subscription.is_some())
+  }
+
   pub fn has_github_access(cx: &App) -> bool {
     Self::get(cx).has_github_access()
   }

@@ -4,6 +4,18 @@ All notable changes to Reviu are documented here.
 
 ## 1.0.0
 
+### The Palette Calls Things By Their Name
+
+Commands were named in three different styles at once. Pages were "Go to Settings", dialogs were just "Billing", panels were "Show changes", and one command shouted "Send Feedback". Worse, a shared verb in front of a name buried the word you actually type: searching `changes` ranked "Show changes" below commands that only mentioned changes, because the match did not start the name.
+
+Destinations now go by the name the app already gives them: `Settings`, `Git Config`, `Sessions`. Panels lead with what they hold: `Changes panel`, `Review panel`, `Files panel`, `History panel`, `Pull request panel`, `Terminal`, `File search`. Verbs stay only where the object alone would be ambiguous or where something changes: `Open repository`, `Toggle diff view`, `Sign out`.
+
+`Reviu Pro` is what the command is called when you have no subscription, since there is nothing to bill yet; it becomes `Billing` once you do.
+
+Two commands stopped reading backwards, `Continue rebase` and `Skip rebase`. The interactive rebase variants say what they rebase, so they still make sense alone in a result list: `Rebase onto branch`, `Rebase commits since branch`, `Rebase last N commits`. `Git checkout detached` became `Checkout a commit or tag`. And `Open PR #42` now says `on GitHub`, because that is where it takes you, unlike the panel command next to it.
+
+Groups follow: a `Panels` group for the right panel, a `History` group for the commands that rewrite commits rather than the working tree, and every way to reach a pull request in one place.
+
 ### Everything With A Shortcut Is In The Palette
 
 Eleven things could only be reached by knowing their key: showing the Changes, Review, Files, History or Pull request panel, toggling the terminal, searching files, switching between inline and split diff, hiding whitespace-only changes, sending a diff selection to the agent, and jumping to the newest message. They were listed in Settings and nowhere else, so you either knew the key or you did not have the feature.

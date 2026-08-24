@@ -158,6 +158,15 @@ fn is_abbreviation(text: &str, query: &str) -> bool {
   })
 }
 
+/// What the palette needs to know about the account to offer the right global
+/// commands.
+pub struct GlobalCommandsContext {
+  pub current_page: CommandPalettePage,
+  pub include_github: bool,
+  pub signed_in: bool,
+  pub has_subscription: bool,
+}
+
 #[derive(Clone, Debug)]
 pub struct CommandPaletteCommand {
   pub id: CommandPaletteCommandId,
@@ -1122,6 +1131,7 @@ pub enum CommandPaletteGroup {
   /// One flat list, so a typed query is answered by relevance and not by group.
   Results,
   Changes,
+  History,
   View,
   Review,
   Sync,
@@ -1131,8 +1141,8 @@ pub enum CommandPaletteGroup {
   PullRequest,
   Repository,
   Github,
+  Panels,
   Navigation,
-  Feedback,
 }
 
 impl CommandPaletteGroup {
@@ -1141,6 +1151,7 @@ impl CommandPaletteGroup {
       Self::Recent => "Recent",
       Self::Results => "Results",
       Self::Changes => "Changes",
+      Self::History => "History",
       Self::View => "View",
       Self::Review => "Review",
       Self::Sync => "Sync",
@@ -1150,8 +1161,8 @@ impl CommandPaletteGroup {
       Self::PullRequest => "Pull request",
       Self::Repository => "Repository",
       Self::Github => "GitHub",
+      Self::Panels => "Panels",
       Self::Navigation => "Navigation",
-      Self::Feedback => "Feedback",
     }
   }
 }
@@ -1259,7 +1270,7 @@ impl CommandPaletteCommand {
   pub fn checkout_detached() -> Self {
     Self::new(
       CommandPaletteCommandId::CheckoutDetached,
-      "Git checkout detached",
+      "Checkout a commit or tag",
       "Detach HEAD at a commit hash or tag",
     )
   }
@@ -1267,7 +1278,7 @@ impl CommandPaletteCommand {
   pub fn continue_rebase() -> Self {
     Self::new(
       CommandPaletteCommandId::ContinueRebase,
-      "Rebase continue",
+      "Continue rebase",
       "Continue the current rebase",
     )
   }
@@ -1275,15 +1286,15 @@ impl CommandPaletteCommand {
   pub fn skip_rebase() -> Self {
     Self::new(
       CommandPaletteCommandId::SkipRebase,
-      "Rebase skip",
+      "Skip rebase",
       "Skip the current rebase commit",
     )
   }
 
-  pub fn push(label: impl Into<SharedString>) -> Self {
+  pub fn push() -> Self {
     Self::new(
       CommandPaletteCommandId::Push,
-      label,
+      "Push",
       "Push local commits to the remote branch",
     )
   }
@@ -1371,7 +1382,7 @@ impl CommandPaletteCommand {
   pub fn interactive_rebase_onto_branch() -> Self {
     Self::new(
       CommandPaletteCommandId::InteractiveRebaseOntoBranch,
-      "Onto branch",
+      "Rebase onto branch",
       "Start interactive rebase onto another branch",
     )
   }
@@ -1379,7 +1390,7 @@ impl CommandPaletteCommand {
   pub fn interactive_rebase_edit_branch() -> Self {
     Self::new(
       CommandPaletteCommandId::InteractiveRebaseEditBranch,
-      "Edit commits since branch",
+      "Rebase commits since branch",
       "Reorder, squash, or edit commits without incorporating upstream changes",
     )
   }
@@ -1387,7 +1398,7 @@ impl CommandPaletteCommand {
   pub fn interactive_rebase_head_count() -> Self {
     Self::new(
       CommandPaletteCommandId::InteractiveRebaseHeadCount,
-      "Last N commits (HEAD~n)",
+      "Rebase last N commits",
       "Start interactive rebase for the last N commits",
     )
   }
@@ -1427,7 +1438,7 @@ impl CommandPaletteCommand {
   pub fn open_pull_request(number: u64) -> Self {
     Self::new(
       CommandPaletteCommandId::OpenPullRequest,
-      format!("Open PR #{number}"),
+      format!("Open PR #{number} on GitHub"),
       "Open the pull request for the current branch",
     )
   }
@@ -1547,8 +1558,8 @@ impl CommandPaletteCommand {
   pub fn open_session_page() -> Self {
     Self::new(
       CommandPaletteCommandId::OpenSessionPage,
-      "Go to Sessions",
-      "Navigate to the sessions workspace",
+      "Sessions",
+      "Go to the sessions workspace",
     )
   }
 
@@ -1563,16 +1574,25 @@ impl CommandPaletteCommand {
   pub fn open_settings_page() -> Self {
     Self::new(
       CommandPaletteCommandId::OpenSettingsPage,
-      "Go to Settings",
-      "Navigate to Settings",
+      "Settings",
+      "Change shortcuts, appearance and agent settings",
     )
   }
 
-  pub fn open_billing_page() -> Self {
+  /// A subscriber has an invoice to manage. Everyone else is being sold Pro, and
+  /// "Billing" is the wrong word for what they see.
+  pub fn open_billing_page(has_subscription: bool) -> Self {
+    if has_subscription {
+      return Self::new(
+        CommandPaletteCommandId::OpenBillingPage,
+        "Billing",
+        "Manage your Reviu Pro subscription",
+      );
+    }
     Self::new(
       CommandPaletteCommandId::OpenBillingPage,
-      "Billing",
-      "Manage your subscription or start the Reviu Pro trial",
+      "Reviu Pro",
+      "Start the free trial, or see what Pro brings",
     )
   }
 
@@ -1587,15 +1607,15 @@ impl CommandPaletteCommand {
   pub fn toggle_terminal() -> Self {
     Self::new(
       CommandPaletteCommandId::ToggleTerminal,
-      "Toggle terminal",
-      "Show or hide the terminal",
+      "Terminal",
+      "Show the terminal in the right panel",
     )
   }
 
   pub fn show_changes() -> Self {
     Self::new(
       CommandPaletteCommandId::ShowChanges,
-      "Show changes",
+      "Changes panel",
       "Switch the right panel to Changes and focus the file list",
     )
   }
@@ -1603,7 +1623,7 @@ impl CommandPaletteCommand {
   pub fn show_review() -> Self {
     Self::new(
       CommandPaletteCommandId::ShowReview,
-      "Show review",
+      "Review panel",
       "Switch the right panel to the review waiting to be sent",
     )
   }
@@ -1611,7 +1631,7 @@ impl CommandPaletteCommand {
   pub fn show_files() -> Self {
     Self::new(
       CommandPaletteCommandId::ShowFiles,
-      "Show files",
+      "Files panel",
       "Switch the right panel to the repository file tree",
     )
   }
@@ -1619,7 +1639,7 @@ impl CommandPaletteCommand {
   pub fn show_history() -> Self {
     Self::new(
       CommandPaletteCommandId::ShowHistory,
-      "Show history",
+      "History panel",
       "Switch the right panel to History and focus the commit tree",
     )
   }
@@ -1627,7 +1647,7 @@ impl CommandPaletteCommand {
   pub fn show_pull_request() -> Self {
     Self::new(
       CommandPaletteCommandId::ShowPullRequest,
-      "Show pull request",
+      "Pull request panel",
       "Switch the right panel to the pull request of the current branch",
     )
   }
@@ -1635,7 +1655,7 @@ impl CommandPaletteCommand {
   pub fn show_file_search() -> Self {
     Self::new(
       CommandPaletteCommandId::ShowFileSearch,
-      "Search files",
+      "File search",
       "Find a file of the repository by name",
     )
   }
@@ -1699,7 +1719,7 @@ impl CommandPaletteCommand {
   pub fn send_feedback() -> Self {
     Self::new(
       CommandPaletteCommandId::SendFeedback,
-      "Send Feedback",
+      "Send feedback",
       "Report a bug or suggest a feature",
     )
   }
@@ -1707,17 +1727,19 @@ impl CommandPaletteCommand {
   pub fn open_git_config_page() -> Self {
     Self::new(
       CommandPaletteCommandId::OpenGitConfigPage,
-      "Go to Git Config",
+      "Git Config",
       "Edit ~/.gitconfig",
     )
   }
 
   /// What every page offers: navigation, the account, and feedback.
-  pub fn default_global_commands(
-    current_page: CommandPalettePage,
-    include_github: bool,
-    signed_in: bool,
-  ) -> Vec<Self> {
+  pub fn default_global_commands(context: GlobalCommandsContext) -> Vec<Self> {
+    let GlobalCommandsContext {
+      current_page,
+      include_github,
+      signed_in,
+      has_subscription,
+    } = context;
     let mut commands = Vec::new();
 
     if current_page != CommandPalettePage::Session {
@@ -1736,7 +1758,7 @@ impl CommandPaletteCommand {
       commands.push(Self::open_settings_page());
     }
 
-    commands.push(Self::open_billing_page());
+    commands.push(Self::open_billing_page(has_subscription));
 
     commands.push(Self::open_about_page());
 
@@ -1760,17 +1782,19 @@ impl CommandPaletteCommand {
       | CommandPaletteCommandId::SubmitPullRequestReview => CommandPaletteGroup::Review,
 
       CommandPaletteCommandId::Commit
-      | CommandPaletteCommandId::Amend
-      | CommandPaletteCommandId::UndoLastCommit
       | CommandPaletteCommandId::StageSelectedFile
       | CommandPaletteCommandId::UnstageSelectedFile
       | CommandPaletteCommandId::StageAll
       | CommandPaletteCommandId::UnstageAll
       | CommandPaletteCommandId::RestoreAll
       | CommandPaletteCommandId::AcceptAllCurrentConflicts
-      | CommandPaletteCommandId::AcceptAllIncomingConflicts
+      | CommandPaletteCommandId::AcceptAllIncomingConflicts => CommandPaletteGroup::Changes,
+
+      // These rewrite or move commits, which is not the working tree.
+      CommandPaletteCommandId::Amend
+      | CommandPaletteCommandId::UndoLastCommit
       | CommandPaletteCommandId::CherryPick
-      | CommandPaletteCommandId::CheckoutDetached => CommandPaletteGroup::Changes,
+      | CommandPaletteCommandId::CheckoutDetached => CommandPaletteGroup::History,
 
       CommandPaletteCommandId::Pull
       | CommandPaletteCommandId::Fetch
@@ -1807,7 +1831,7 @@ impl CommandPaletteCommand {
       | CommandPaletteCommandId::ForgetRepository
       | CommandPaletteCommandId::OpenRepository => CommandPaletteGroup::Repository,
 
-      CommandPaletteCommandId::OpenGithubFromUrl => CommandPaletteGroup::Github,
+      CommandPaletteCommandId::OpenGithubFromUrl => CommandPaletteGroup::PullRequest,
 
       CommandPaletteCommandId::OpenSessionPage
       | CommandPaletteCommandId::OpenGitConfigPage
@@ -1815,16 +1839,20 @@ impl CommandPaletteCommand {
       | CommandPaletteCommandId::OpenBillingPage
       | CommandPaletteCommandId::OpenAboutPage => CommandPaletteGroup::Navigation,
 
-      CommandPaletteCommandId::SendFeedback => CommandPaletteGroup::Feedback,
+      CommandPaletteCommandId::SendFeedback => CommandPaletteGroup::Navigation,
 
       CommandPaletteCommandId::ToggleTerminal
       | CommandPaletteCommandId::ShowChanges
       | CommandPaletteCommandId::ShowReview
       | CommandPaletteCommandId::ShowFiles
-      | CommandPaletteCommandId::ShowHistory
-      | CommandPaletteCommandId::ShowPullRequest
-      | CommandPaletteCommandId::ShowFileSearch
-      | CommandPaletteCommandId::JumpToLatestMessage => CommandPaletteGroup::Navigation,
+      | CommandPaletteCommandId::ShowHistory => CommandPaletteGroup::Panels,
+
+      // It opens the panel, but the pull request is what you came for.
+      CommandPaletteCommandId::ShowPullRequest => CommandPaletteGroup::PullRequest,
+
+      CommandPaletteCommandId::ShowFileSearch | CommandPaletteCommandId::JumpToLatestMessage => {
+        CommandPaletteGroup::Navigation
+      }
 
       CommandPaletteCommandId::ToggleDiffView | CommandPaletteCommandId::ToggleHideWhitespace => {
         CommandPaletteGroup::View
@@ -1861,7 +1889,7 @@ impl CommandPaletteCommand {
       Id::Pull => &["sync", "download", "update"],
       Id::Fetch => &["sync", "refresh"],
       Id::SwitchBranch => &["checkout"],
-      Id::CheckoutDetached => &["sha", "hash", "tag", "revision"],
+      Id::CheckoutDetached => &["sha", "hash", "tag", "revision", "detach", "detached"],
       Id::CreateBranch | Id::CreateBranchFrom => &["new"],
       Id::DeleteBranch => &["remove"],
       Id::CherryPick => &["backport"],
@@ -1874,13 +1902,13 @@ impl CommandPaletteCommand {
       Id::DiscardReview => &["clear"],
       Id::OpenRepository => &["folder", "project"],
       Id::SwitchRepository => &["recent"],
-      Id::ToggleTerminal => &["shell", "console"],
-      Id::ShowChanges => &["staged", "working", "panel"],
-      Id::ShowReview => &["comments", "panel"],
-      Id::ShowFiles => &["tree", "explorer", "panel"],
-      Id::ShowHistory => &["log", "commits", "panel"],
-      Id::ShowPullRequest => &["pr", "panel"],
-      Id::ShowFileSearch => &["find", "goto", "open"],
+      Id::ToggleTerminal => &["shell", "console", "toggle"],
+      Id::ShowChanges => &["staged", "working", "show"],
+      Id::ShowReview => &["comments", "show"],
+      Id::ShowFiles => &["tree", "explorer", "show"],
+      Id::ShowHistory => &["log", "commits", "show"],
+      Id::ShowPullRequest => &["pr", "show"],
+      Id::ShowFileSearch => &["find", "goto", "open", "search"],
       Id::ToggleDiffView => &["split", "inline", "unified", "side"],
       Id::ToggleHideWhitespace => &["blank", "spaces", "indent"],
       Id::SendSelectionToAgent => &["context", "attach", "prompt"],
@@ -1889,11 +1917,19 @@ impl CommandPaletteCommand {
       Id::SignOut => &["logout", "disconnect", "account"],
       Id::OpenBrowserExtensions => &["chrome", "firefox", "addon", "browser"],
       Id::ForgetRepository => &["remove", "recent"],
-      Id::OpenSessionPage => &["home", "workspace", "agent"],
+      Id::OpenSessionPage => &["home", "workspace", "agent", "goto"],
       Id::OpenGithubFromUrl => &["link", "paste"],
-      Id::OpenSettingsPage => &["preferences", "shortcuts", "keybindings", "theme"],
-      Id::OpenGitConfigPage => &["gitconfig", "identity", "email", "username"],
-      Id::OpenBillingPage => &["upgrade", "price", "pay", "plan", "invoice", "pro"],
+      Id::OpenSettingsPage => &["preferences", "shortcuts", "keybindings", "theme", "goto"],
+      Id::OpenGitConfigPage => &["gitconfig", "identity", "email", "username", "goto"],
+      Id::OpenBillingPage => &[
+        "billing",
+        "subscription",
+        "upgrade",
+        "price",
+        "pay",
+        "plan",
+        "invoice",
+      ],
       Id::OpenAboutPage => &["version", "update", "changelog"],
       Id::SendFeedback => &["issue", "support", "contact"],
       Id::SkipRebase | Id::MergeBranch | Id::RebaseBranch | Id::SendReview => &[],
@@ -3506,7 +3542,8 @@ mod tests {
   use super::{
     CommandPalette, CommandPaletteBranch, CommandPaletteBranchKind, CommandPaletteCommand,
     CommandPaletteCommandId, CommandPaletteConfig, CommandPaletteGroup, CommandPaletteHandler,
-    CommandPaletteInitialScreen, CommandPaletteScreen, MatchQuality, RowHint,
+    CommandPaletteInitialScreen, CommandPaletteScreen, GlobalCommandsContext, MatchQuality,
+    RowHint,
   };
   use gpui::AppContext as _;
   use gpui::TestAppContext;
@@ -3754,7 +3791,7 @@ mod tests {
       CommandPaletteGroup::Review
     );
     assert_eq!(
-      CommandPaletteCommand::push("Push").group(),
+      CommandPaletteCommand::push().group(),
       CommandPaletteGroup::Sync
     );
     assert_eq!(
@@ -3783,7 +3820,8 @@ mod tests {
     );
     assert_eq!(
       CommandPaletteCommand::open_github_from_url().group(),
-      CommandPaletteGroup::Github
+      CommandPaletteGroup::PullRequest,
+      "every way to reach a pull request sits together"
     );
     assert_eq!(
       CommandPaletteCommand::open_settings_page().group(),
@@ -3791,7 +3829,16 @@ mod tests {
     );
     assert_eq!(
       CommandPaletteCommand::send_feedback().group(),
-      CommandPaletteGroup::Feedback
+      CommandPaletteGroup::Navigation
+    );
+    assert_eq!(
+      CommandPaletteCommand::amend().group(),
+      CommandPaletteGroup::History,
+      "rewriting a commit is not a working tree change"
+    );
+    assert_eq!(
+      CommandPaletteCommand::show_changes().group(),
+      CommandPaletteGroup::Panels
     );
   }
 
@@ -3800,8 +3847,8 @@ mod tests {
     use super::CommandPaletteGroup;
     // Ord is derived from declaration order, make the contract explicit.
     let mut groups = [
-      CommandPaletteGroup::Feedback,
       CommandPaletteGroup::Navigation,
+      CommandPaletteGroup::Panels,
       CommandPaletteGroup::Github,
       CommandPaletteGroup::Repository,
       CommandPaletteGroup::PullRequest,
@@ -3810,6 +3857,8 @@ mod tests {
       CommandPaletteGroup::Branches,
       CommandPaletteGroup::Sync,
       CommandPaletteGroup::Review,
+      CommandPaletteGroup::View,
+      CommandPaletteGroup::History,
       CommandPaletteGroup::Changes,
     ];
     groups.sort();
@@ -3817,6 +3866,8 @@ mod tests {
       groups,
       [
         CommandPaletteGroup::Changes,
+        CommandPaletteGroup::History,
+        CommandPaletteGroup::View,
         CommandPaletteGroup::Review,
         CommandPaletteGroup::Sync,
         CommandPaletteGroup::Branches,
@@ -3825,19 +3876,20 @@ mod tests {
         CommandPaletteGroup::PullRequest,
         CommandPaletteGroup::Repository,
         CommandPaletteGroup::Github,
+        CommandPaletteGroup::Panels,
         CommandPaletteGroup::Navigation,
-        CommandPaletteGroup::Feedback,
       ]
     );
   }
 
   #[test]
   fn default_global_commands_include_github_commands_when_github_is_enabled() {
-    let commands = CommandPaletteCommand::default_global_commands(
-      super::CommandPalettePage::Session,
-      /* include_github */ true,
-      /* signed_in */ true,
-    );
+    let commands = CommandPaletteCommand::default_global_commands(GlobalCommandsContext {
+      current_page: super::CommandPalettePage::Session,
+      include_github: true,
+      signed_in: true,
+      has_subscription: true,
+    });
     assert!(
       commands
         .iter()
@@ -3847,11 +3899,12 @@ mod tests {
 
   #[test]
   fn default_global_commands_omit_github_commands_when_github_is_disabled() {
-    let commands = CommandPaletteCommand::default_global_commands(
-      super::CommandPalettePage::Session,
-      /* include_github */ false,
-      /* signed_in */ false,
-    );
+    let commands = CommandPaletteCommand::default_global_commands(GlobalCommandsContext {
+      current_page: super::CommandPalettePage::Session,
+      include_github: false,
+      signed_in: false,
+      has_subscription: false,
+    });
     assert!(
       !commands
         .iter()
@@ -3870,7 +3923,7 @@ mod tests {
   fn open_pull_request_command_is_available_with_expected_metadata() {
     let command = CommandPaletteCommand::open_pull_request(42);
     assert_eq!(command.id, CommandPaletteCommandId::OpenPullRequest);
-    assert_eq!(command.name.as_ref(), "Open PR #42");
+    assert_eq!(command.name.as_ref(), "Open PR #42 on GitHub");
     assert!(command.matches("pr"));
   }
 
@@ -3891,13 +3944,22 @@ mod tests {
 
   #[test]
   fn billing_and_about_commands_are_available_with_expected_metadata() {
-    let billing = CommandPaletteCommand::open_billing_page();
+    let billing = CommandPaletteCommand::open_billing_page(false);
     let about = CommandPaletteCommand::open_about_page();
 
     assert_eq!(billing.id, CommandPaletteCommandId::OpenBillingPage);
-    assert_eq!(billing.name.as_ref(), "Billing");
-    // Only the name is searched, so it has to be the word people type.
+    assert_eq!(
+      billing.name.as_ref(),
+      "Reviu Pro",
+      "nothing to bill until there is a subscription"
+    );
+    assert_eq!(
+      CommandPaletteCommand::open_billing_page(true).name.as_ref(),
+      "Billing"
+    );
+    // The name changes, so the word people type lives in the keywords.
     assert!(billing.matches("billing"));
+    assert!(billing.matches("subscription"));
 
     assert_eq!(about.id, CommandPaletteCommandId::OpenAboutPage);
     assert_eq!(about.name.as_ref(), "About Reviu");
@@ -3937,7 +3999,7 @@ mod tests {
     let interactive_rebase_onto_branch = CommandPaletteCommand::interactive_rebase_onto_branch();
     let interactive_rebase_edit_branch = CommandPaletteCommand::interactive_rebase_edit_branch();
     let interactive_rebase_head_count = CommandPaletteCommand::interactive_rebase_head_count();
-    let push = CommandPaletteCommand::push("Push");
+    let push = CommandPaletteCommand::push();
     let force_push = CommandPaletteCommand::force_push();
     let undo_last_commit = CommandPaletteCommand::undo_last_commit();
     let amend = CommandPaletteCommand::amend();
@@ -3950,18 +4012,18 @@ mod tests {
       checkout_detached.id,
       CommandPaletteCommandId::CheckoutDetached
     );
-    assert_eq!(checkout_detached.name.as_ref(), "Git checkout detached");
+    assert_eq!(checkout_detached.name.as_ref(), "Checkout a commit or tag");
     assert!(checkout_detached.matches("hash"));
 
     assert_eq!(commit.id, CommandPaletteCommandId::Commit);
     assert_eq!(commit.name.as_ref(), "Commit");
 
     assert_eq!(continue_rebase.id, CommandPaletteCommandId::ContinueRebase);
-    assert_eq!(continue_rebase.name.as_ref(), "Rebase continue");
+    assert_eq!(continue_rebase.name.as_ref(), "Continue rebase");
     assert!(continue_rebase.matches("resume"));
 
     assert_eq!(skip_rebase.id, CommandPaletteCommandId::SkipRebase);
-    assert_eq!(skip_rebase.name.as_ref(), "Rebase skip");
+    assert_eq!(skip_rebase.name.as_ref(), "Skip rebase");
 
     assert_eq!(
       interactive_rebase.id,
@@ -3974,7 +4036,10 @@ mod tests {
       interactive_rebase_onto_branch.id,
       CommandPaletteCommandId::InteractiveRebaseOntoBranch
     );
-    assert_eq!(interactive_rebase_onto_branch.name.as_ref(), "Onto branch");
+    assert_eq!(
+      interactive_rebase_onto_branch.name.as_ref(),
+      "Rebase onto branch"
+    );
     assert!(interactive_rebase_onto_branch.matches("onto"));
 
     assert_eq!(
@@ -3983,7 +4048,7 @@ mod tests {
     );
     assert_eq!(
       interactive_rebase_edit_branch.name.as_ref(),
-      "Edit commits since branch"
+      "Rebase commits since branch"
     );
     assert!(interactive_rebase_edit_branch.matches("reword"));
 
@@ -3993,7 +4058,7 @@ mod tests {
     );
     assert_eq!(
       interactive_rebase_head_count.name.as_ref(),
-      "Last N commits (HEAD~n)"
+      "Rebase last N commits"
     );
     assert!(interactive_rebase_head_count.matches("last commits"));
 
@@ -4182,11 +4247,12 @@ mod tests {
 
   #[test]
   fn the_account_command_follows_who_is_signed_in() {
-    let signed_out = CommandPaletteCommand::default_global_commands(
-      super::CommandPalettePage::Session,
-      /* include_github */ false,
-      /* signed_in */ false,
-    );
+    let signed_out = CommandPaletteCommand::default_global_commands(GlobalCommandsContext {
+      current_page: super::CommandPalettePage::Session,
+      include_github: false,
+      signed_in: false,
+      has_subscription: false,
+    });
     assert!(
       signed_out
         .iter()
@@ -4198,11 +4264,12 @@ mod tests {
         .any(|command| command.id == CommandPaletteCommandId::SignOut)
     );
 
-    let signed_in = CommandPaletteCommand::default_global_commands(
-      super::CommandPalettePage::Session,
-      /* include_github */ true,
-      /* signed_in */ true,
-    );
+    let signed_in = CommandPaletteCommand::default_global_commands(GlobalCommandsContext {
+      current_page: super::CommandPalettePage::Session,
+      include_github: true,
+      signed_in: true,
+      has_subscription: true,
+    });
     assert!(
       signed_in
         .iter()
@@ -4271,7 +4338,7 @@ mod tests {
     assert!(CommandPaletteCommand::stash().matches("wip"));
     assert!(CommandPaletteCommand::interactive_rebase().matches("squash"));
     assert!(CommandPaletteCommand::create_pull_request().matches("pr"));
-    assert!(CommandPaletteCommand::open_billing_page().matches("upgrade"));
+    assert!(CommandPaletteCommand::open_billing_page(false).matches("upgrade"));
   }
 
   #[test]
@@ -4366,13 +4433,13 @@ mod tests {
       CommandPaletteCommand::stash(),
       CommandPaletteCommand::stash_with_untracked(),
       CommandPaletteCommand::apply_stash(),
-      CommandPaletteCommand::push("Push"),
+      CommandPaletteCommand::push(),
       CommandPaletteCommand::force_push(),
       CommandPaletteCommand::pull(),
       CommandPaletteCommand::fetch(),
       CommandPaletteCommand::cherry_pick(),
       CommandPaletteCommand::create_pull_request(),
-      CommandPaletteCommand::open_billing_page(),
+      CommandPaletteCommand::open_billing_page(false),
       CommandPaletteCommand::open_settings_page(),
     ]
     .into_iter()
@@ -4390,7 +4457,7 @@ mod tests {
       let answers = super::commands_by_relevance(&commands, "tag", cx);
       assert_eq!(
         answers.iter().map(|c| c.name.as_ref()).collect::<Vec<_>>(),
-        vec!["Git checkout detached"],
+        vec!["Checkout a commit or tag"],
         "of {} commands",
         commands.len()
       );
@@ -4537,7 +4604,7 @@ mod tests {
     let (recorded, handler) = recording_handler(false);
     let commands = vec![
       CommandPaletteCommand::commit(),
-      CommandPaletteCommand::push("Push"),
+      CommandPaletteCommand::push(),
       CommandPaletteCommand::fetch(),
     ];
     let (palette, cx) =
@@ -4567,7 +4634,7 @@ mod tests {
   #[gpui::test]
   async fn a_disabled_command_reports_instead_of_running(cx: &mut gpui::TestAppContext) {
     let (recorded, handler) = recording_handler(false);
-    let commands = vec![CommandPaletteCommand::push("Push").disabled("Nothing to push")];
+    let commands = vec![CommandPaletteCommand::push().disabled("Nothing to push")];
     let (palette, cx) =
       open_test_palette(cx, CommandPaletteConfig::new(Vec::new(), commands, handler));
 
@@ -4629,7 +4696,7 @@ mod tests {
   #[gpui::test]
   async fn a_failed_action_leaves_the_palette_usable(cx: &mut gpui::TestAppContext) {
     let (recorded, handler) = recording_handler(true);
-    let commands = vec![CommandPaletteCommand::push("Push")];
+    let commands = vec![CommandPaletteCommand::push()];
     let (_palette, cx) =
       open_test_palette(cx, CommandPaletteConfig::new(Vec::new(), commands, handler));
 

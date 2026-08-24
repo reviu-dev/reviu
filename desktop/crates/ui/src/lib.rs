@@ -29,7 +29,7 @@ pub use command_palette::{
   CommandPaletteGithubRepoTab, CommandPaletteGroup, CommandPaletteHandler,
   CommandPaletteInitialScreen, CommandPalettePage, CommandPaletteRepository, CommandPaletteStash,
   CommandPaletteUsageRecorder, CommandPaletteUsageRecorderGlobal, CommandPaletteUsageScorer,
-  CommandPaletteUsageScorerGlobal,
+  CommandPaletteUsageScorerGlobal, GlobalCommandsContext,
 };
 pub use confirm_dialog::ConfirmDialog;
 pub use dropdown_select::{
