@@ -35,8 +35,8 @@ use crate::history_list::{HistoryList, HistoryListEvent, history_change_kind_to_
 use crate::pro_promise::{ProPromiseSurface, render_pro_promise};
 use crate::pull_request_refresh::{PullRequestRefresh, should_read_pull_request};
 use crate::pull_request_review_comments::{
-  ReviewCommentWrite, pending_review_comment_node_id, pending_review_id, pending_review_rows,
-  review_comment_write_plan,
+  ReviewCommentWrite, comment_line, pending_review_comment_node_id, pending_review_id,
+  pending_review_rows, review_comment_write_plan,
 };
 use crate::pull_request_review_submission::review_submission_target;
 use crate::repo_state::{PaletteCommand, RepoState, push_flags, should_publish_branch};
@@ -556,6 +556,9 @@ pub struct DockPanel {
   /// What the viewer wrote on this pull request and has not submitted yet.
   /// GitHub owns them, so they are read back rather than stored here.
   pr_review_comments: Vec<GithubPullRequestReviewComment>,
+  /// A link asked for a review comment the panel has not read yet; the load that
+  /// follows is what takes the diff to it.
+  awaited_review_comment: Option<u64>,
   /// Who opened it: an author reviews their own work with words only.
   pr_author_login: Option<String>,
   /// GraphQL names the pull request by node id, and starting a review needs it.
@@ -794,6 +797,7 @@ impl DockPanel {
       pr_selected_file: None,
       pr_checks: None,
       pr_review_comments: Vec::new(),
+      awaited_review_comment: None,
       pr_author_login: None,
       pr_node_id: None,
       pr_reviewers: Vec::new(),
@@ -1078,6 +1082,7 @@ impl DockPanel {
   /// another pull request, and stale checks read as this one's.
   fn reset_pull_request_details(&mut self, cx: &mut Context<Self>) {
     crate::sentry_context::clear_github_pr_context();
+    self.awaited_review_comment = None;
     self.set_pull_request_review_comments(Vec::new(), cx);
     self.pr_author_login = None;
     self.pr_node_id = None;
@@ -1133,9 +1138,17 @@ impl DockPanel {
     self.review_list.update(cx, |list, cx| {
       list.set_comments(ReviewSection::PullRequest, rows, cx);
     });
+    if let Some(comment_id) = self.awaited_review_comment.take() {
+      self.open_review_comment(comment_id, cx);
+    }
     cx.emit(DockPanelEvent::PullRequestReviewCommentsChanged);
     // The panel counts them itself, above the file list.
     cx.notify();
+  }
+
+  #[cfg(test)]
+  pub(crate) fn set_pull_request_range_for_test(&mut self, range: PullRequestRange) {
+    self.pr_range = Some(range);
   }
 
   #[cfg(test)]
@@ -1145,6 +1158,34 @@ impl DockPanel {
     cx: &mut Context<Self>,
   ) {
     self.set_pull_request_review_comments(comments, cx);
+  }
+
+  /// A link named a review comment: take the diff to the lines it is about. A
+  /// comment the panel has not read yet is answered by the load that follows.
+  pub(crate) fn reveal_review_comment(&mut self, comment_id: u64, cx: &mut Context<Self>) {
+    if !self.open_review_comment(comment_id, cx) {
+      self.awaited_review_comment = Some(comment_id);
+    }
+  }
+
+  fn open_review_comment(&self, comment_id: u64, cx: &mut Context<Self>) -> bool {
+    let (Some(range), Some(comment)) = (
+      self.pr_range.as_ref(),
+      self
+        .pr_review_comments
+        .iter()
+        .find(|comment| comment.id == comment_id),
+    ) else {
+      return false;
+    };
+    cx.emit(DockPanelEvent::OpenPullRequestFile {
+      base_oid: range.base.clone(),
+      head_oid: range.head.clone(),
+      path: PathBuf::from(comment.path.as_str()),
+      line: Some(comment_line(comment)),
+      intent: OpenIntent::Open,
+    });
+    true
   }
 
   pub(crate) fn pull_request_review_comments(&self) -> &[GithubPullRequestReviewComment] {
@@ -3952,6 +3993,104 @@ mod tests {
       opened.borrow().last(),
       Some(&(PathBuf::from("src/main.rs"), OpenIntent::Open)),
       "Enter chooses it"
+    );
+  }
+
+  #[gpui::test]
+  async fn a_link_takes_the_diff_to_the_review_comment_it_names(cx: &mut TestAppContext) {
+    let (panel, cx) = pull_request_panel(
+      cx,
+      vec![changed_file(
+        "src/main.rs",
+        git::CommitFileChangeKind::Modified,
+      )],
+    );
+    panel.update(cx, |panel, cx| {
+      panel.set_pull_request_review_comments_for_test(
+        vec![
+          crate::pull_request_review_comments::pending_comment_fixture(
+            9,
+            "src/main.rs",
+            Some(12),
+            "here",
+          ),
+        ],
+        cx,
+      );
+    });
+    cx.run_until_parked();
+
+    let opened = Rc::new(std::cell::RefCell::new(Vec::new()));
+    let seen = opened.clone();
+    cx.update(|_, cx| {
+      cx.subscribe(&panel, move |_panel, event: &DockPanelEvent, _cx| {
+        if let DockPanelEvent::OpenPullRequestFile {
+          path, line, intent, ..
+        } = event
+        {
+          seen.borrow_mut().push((path.clone(), *line, *intent));
+        }
+      })
+      .detach();
+    });
+
+    panel.update(cx, |panel, cx| panel.reveal_review_comment(9, cx));
+    cx.run_until_parked();
+
+    assert_eq!(
+      opened.borrow().as_slice(),
+      &[(PathBuf::from("src/main.rs"), Some(12), OpenIntent::Open)],
+      "the link asked for the comment, so the diff opens on its lines"
+    );
+  }
+
+  #[gpui::test]
+  async fn a_review_comment_not_read_yet_waits_for_the_load(cx: &mut TestAppContext) {
+    let (panel, cx) = pull_request_panel(
+      cx,
+      vec![changed_file(
+        "src/main.rs",
+        git::CommitFileChangeKind::Modified,
+      )],
+    );
+
+    let opened = Rc::new(std::cell::RefCell::new(Vec::new()));
+    let seen = opened.clone();
+    cx.update(|_, cx| {
+      cx.subscribe(&panel, move |_panel, event: &DockPanelEvent, _cx| {
+        if let DockPanelEvent::OpenPullRequestFile { path, line, .. } = event {
+          seen.borrow_mut().push((path.clone(), *line));
+        }
+      })
+      .detach();
+    });
+
+    panel.update(cx, |panel, cx| panel.reveal_review_comment(9, cx));
+    cx.run_until_parked();
+    assert!(
+      opened.borrow().is_empty(),
+      "nothing to open while the comments are still coming"
+    );
+
+    panel.update(cx, |panel, cx| {
+      panel.set_pull_request_review_comments_for_test(
+        vec![
+          crate::pull_request_review_comments::pending_comment_fixture(
+            9,
+            "src/main.rs",
+            Some(4),
+            "here",
+          ),
+        ],
+        cx,
+      );
+    });
+    cx.run_until_parked();
+
+    assert_eq!(
+      opened.borrow().as_slice(),
+      &[(PathBuf::from("src/main.rs"), Some(4))],
+      "the load that reads the comment answers the link"
     );
   }
 

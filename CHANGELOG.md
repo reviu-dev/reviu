@@ -4,6 +4,12 @@ All notable changes to Reviu are documented here.
 
 ## 1.0.0
 
+### A Link To A Review Comment Opens The File It Is About
+
+A GitHub link pointing at a review comment always went to github.com, even when the comment belonged to the pull request Reviu had open. Pasting such a link in the palette, clicking a comment notification in the inbox, or pressing the browser extension button all left the app for a page you were already looking at.
+
+When the comment belongs to the pull request of the open branch, Reviu now opens its file in the diff, on the line it was written against. From the extension, a comment on a pull request of the open repository survives the checkout it offers and lands on the same place afterwards. Everything Reviu does not show, issues, releases, discussions and pull requests of other branches, still opens on github.com.
+
 ### Staging No Longer Announces Itself
 
 `Stage all` and `Unstage all` raised a notification saying what you had just asked for, while the Changes panel was already showing the files move between sections. Staging a single file from its row never said anything, so the same action behaved two ways.

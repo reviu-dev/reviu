@@ -1338,7 +1338,9 @@ mod tests {
 
     // Case does not decide whether a link is yours.
     assert!(cx.update(
-      |_, cx| crate::pull_request_surface::PullRequestSurfaceHandle::show("ACME", "Widget", 42, cx)
+      |_, cx| crate::pull_request_surface::PullRequestSurfaceHandle::show(
+        "ACME", "Widget", 42, None, cx
+      )
     ));
     cx.run_until_parked();
 
@@ -1367,10 +1369,14 @@ mod tests {
 
     // Another number, another repository: neither is what this branch proposes.
     assert!(!cx.update(
-      |_, cx| crate::pull_request_surface::PullRequestSurfaceHandle::show("acme", "widget", 7, cx)
+      |_, cx| crate::pull_request_surface::PullRequestSurfaceHandle::show(
+        "acme", "widget", 7, None, cx
+      )
     ));
     assert!(!cx.update(
-      |_, cx| crate::pull_request_surface::PullRequestSurfaceHandle::show("acme", "other", 42, cx)
+      |_, cx| crate::pull_request_surface::PullRequestSurfaceHandle::show(
+        "acme", "other", 42, None, cx
+      )
     ));
 
     // And a branch that lost its pull request stops claiming links.
@@ -1380,7 +1386,9 @@ mod tests {
       });
     });
     assert!(!cx.update(
-      |_, cx| crate::pull_request_surface::PullRequestSurfaceHandle::show("acme", "widget", 42, cx)
+      |_, cx| crate::pull_request_surface::PullRequestSurfaceHandle::show(
+        "acme", "widget", 42, None, cx
+      )
     ));
   }
 }

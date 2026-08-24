@@ -38,7 +38,7 @@ pub(crate) fn pending_review_comment_node_id(
 
 /// The line the file numbers this comment on. A comment the diff moved under
 /// keeps the line it was written against, which is all there is left to show.
-fn comment_line(comment: &GithubPullRequestReviewComment) -> usize {
+pub(crate) fn comment_line(comment: &GithubPullRequestReviewComment) -> usize {
   comment
     .line
     .or(comment.original_line)

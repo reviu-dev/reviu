@@ -16,9 +16,10 @@ use std::time::Duration;
 use ui::PAGE_HEADER_HEIGHT;
 use ui::{AppAssets, parse_github_url_action};
 use workspace::{
-  AppProfile, AuthStateStore, WorkspaceView, build_app_menus, install_app_key_bindings,
-  install_crash_reporter, pull_request_surface::PullRequestSurfaceHandle,
-  show_startup_crash_report_notification, take_pending_startup_crash_report,
+  AppProfile, AuthStateStore, WorkspaceView, build_app_menus,
+  github_navigation::{PullRequestFallback, open_pull_request_target},
+  install_app_key_bindings, install_crash_reporter, show_startup_crash_report_notification,
+  take_pending_startup_crash_report,
 };
 
 #[cfg(target_os = "linux")]
@@ -627,6 +628,7 @@ struct PrDeepLink {
   owner: String,
   repo: String,
   number: u64,
+  review_comment_id: Option<u64>,
 }
 
 /// Only a pull request can be reviewed here; other GitHub links would bounce
@@ -637,11 +639,13 @@ fn pr_deep_link(url: &str) -> Option<PrDeepLink> {
       owner,
       repo,
       number,
+      review_comment_id,
       ..
     } => Some(PrDeepLink {
       owner,
       repo,
       number,
+      review_comment_id,
     }),
     _ => None,
   }
@@ -654,7 +658,15 @@ fn handle_open_github_url(url: &str, cx: &mut App) {
   cx.activate(true);
   // The link asked to review it here, so bouncing back to the browser would be
   // no answer at all: the shell either shows it or says why it cannot.
-  PullRequestSurfaceHandle::show_or_explain(target.owner, target.repo, target.number, cx);
+  open_pull_request_target(
+    target.owner,
+    target.repo,
+    target.number,
+    false,
+    target.review_comment_id,
+    PullRequestFallback::OfferCheckout,
+    cx,
+  );
 }
 
 #[cfg(test)]

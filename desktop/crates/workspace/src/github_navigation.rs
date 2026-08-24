@@ -104,28 +104,52 @@ pub(crate) fn github_pull_request_url(
   }
 }
 
+/// Where a pull request Reviu cannot show goes instead: the browser for a link
+/// followed in passing, an offer to check out for one that asked to review here.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PullRequestFallback {
+  OpenBrowser,
+  OfferCheckout,
+}
+
 /// The best surface for a pull request: the panel when it is the open branch's,
-/// github.com otherwise.
-pub fn open_pr_target(
+/// with the diff on the review comment the link named.
+pub fn open_pull_request_target(
   owner: String,
   repo: String,
   number: u64,
   open_changes_tab: bool,
   review_comment_id: Option<u64>,
+  fallback: PullRequestFallback,
   cx: &mut App,
 ) {
-  if review_comment_id.is_none()
-    && crate::pull_request_surface::PullRequestSurfaceHandle::show(&owner, &repo, number, cx)
-  {
-    return;
-  }
-  cx.open_url(&github_pull_request_url(
+  if crate::pull_request_surface::PullRequestSurfaceHandle::show(
     &owner,
     &repo,
     number,
-    open_changes_tab,
     review_comment_id,
-  ));
+    cx,
+  ) {
+    return;
+  }
+  match fallback {
+    PullRequestFallback::OpenBrowser => cx.open_url(&github_pull_request_url(
+      &owner,
+      &repo,
+      number,
+      open_changes_tab,
+      review_comment_id,
+    )),
+    PullRequestFallback::OfferCheckout => {
+      crate::pull_request_surface::PullRequestSurfaceHandle::offer_checkout(
+        owner,
+        repo,
+        number,
+        review_comment_id,
+        cx,
+      )
+    }
+  }
 }
 
 pub fn open_commit_target(owner: String, repo: String, sha: String, cx: &mut App) {

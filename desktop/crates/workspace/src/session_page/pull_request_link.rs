@@ -43,6 +43,18 @@ impl CheckoutRefusal {
 }
 
 impl SessionPage {
+  /// A link named a review comment of the pull request the panel is showing:
+  /// the diff opens on the lines it is about.
+  pub(crate) fn reveal_pull_request_review_comment(
+    &mut self,
+    comment_id: u64,
+    cx: &mut Context<Self>,
+  ) {
+    self.dock_panel.update(cx, |panel, cx| {
+      panel.reveal_review_comment(comment_id, cx);
+    });
+  }
+
   /// The link named a pull request of the open repository: find its branch and
   /// offer the checkout. Anything else belongs to github.com.
   pub(crate) fn offer_pull_request_checkout(
@@ -50,6 +62,7 @@ impl SessionPage {
     owner: String,
     repo: String,
     number: u64,
+    review_comment_id: Option<u64>,
     window: &mut Window,
     cx: &mut Context<Self>,
   ) {
@@ -60,6 +73,7 @@ impl SessionPage {
         owner,
         repo,
         number,
+        review_comment_id,
         self.window_handle,
         cx,
       );
@@ -102,7 +116,15 @@ impl SessionPage {
             window,
             cx,
           ),
-          Err(refusal) => explain_not_open(refusal, owner, repo, number, window_handle, cx),
+          Err(refusal) => explain_not_open(
+            refusal,
+            owner,
+            repo,
+            number,
+            review_comment_id,
+            window_handle,
+            cx,
+          ),
         });
       });
     });
@@ -175,6 +197,7 @@ fn explain_not_open(
   owner: String,
   repo: String,
   number: u64,
+  review_comment_id: Option<u64>,
   window_handle: AnyWindowHandle,
   cx: &mut App,
 ) {
@@ -199,7 +222,13 @@ fn explain_not_open(
                 .small()
                 .label("Open on GitHub")
                 .on_click(move |_, _, cx| {
-                  cx.open_url(&github_pull_request_url(&owner, &repo, number, false, None));
+                  cx.open_url(&github_pull_request_url(
+                    &owner,
+                    &repo,
+                    number,
+                    false,
+                    review_comment_id,
+                  ));
                 }),
             )
             .into_any_element()
@@ -247,6 +276,67 @@ mod tests {
         DockPanelTab::PullRequest
       );
     });
+  }
+
+  #[gpui::test]
+  async fn the_comment_a_link_named_survives_the_checkout(cx: &mut TestAppContext) {
+    let repo = TempRepo::init("pull-request-link-comment");
+    commit_text_file(&repo.path, Path::new("README.md"), "v1\n", "initial");
+    let (page, cx) = add_session_page_window(repo.path.clone(), cx);
+    cx.run_until_parked();
+
+    cx.update(|_, cx| {
+      PullRequestSurfaceHandle::expect(identity(42), cx);
+      PullRequestSurfaceHandle::expect_comment(identity(42), 9, cx);
+    });
+
+    let panel = page.read_with(cx, |page, _| page.dock_panel.clone());
+    let opened = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+    let seen = opened.clone();
+    cx.update(|_, cx| {
+      cx.subscribe(
+        &panel,
+        move |_panel, event: &crate::dock_panel::DockPanelEvent, _cx| {
+          if let crate::dock_panel::DockPanelEvent::OpenPullRequestFile { path, line, .. } = event {
+            seen.borrow_mut().push((path.clone(), *line));
+          }
+        },
+      )
+      .detach();
+    });
+
+    // The checkout landed: the branch carries the pull request the link asked for.
+    panel.update(cx, |panel, cx| {
+      panel.set_pull_request_range_for_test(crate::dock_panel::PullRequestRange {
+        base: "b".repeat(40),
+        head: "h".repeat(40),
+        base_ref: "main".to_string(),
+        head_ref: "feature".to_string(),
+      });
+      panel.set_branch_pull_request_state(surface_pull_request(42), cx);
+    });
+    cx.run_until_parked();
+
+    panel.update(cx, |panel, cx| {
+      panel.set_pull_request_review_comments_for_test(
+        vec![
+          crate::pull_request_review_comments::pending_comment_fixture(
+            9,
+            "README.md",
+            Some(3),
+            "here",
+          ),
+        ],
+        cx,
+      );
+    });
+    cx.run_until_parked();
+
+    assert_eq!(
+      opened.borrow().as_slice(),
+      &[(std::path::PathBuf::from("README.md"), Some(3))],
+      "the comment the link named outlives the checkout it triggered"
+    );
   }
 
   #[gpui::test]

@@ -4,7 +4,8 @@ use gpui::{App, SharedString, Window};
 use ui::CommandPaletteAction;
 
 use crate::github_navigation::{
-  open_commit_target, open_pr_target, open_profile_target, open_repo_target,
+  PullRequestFallback, open_commit_target, open_profile_target, open_pull_request_target,
+  open_repo_target,
 };
 use crate::navigation::NavigationHistory;
 
@@ -43,7 +44,15 @@ pub(crate) fn handle_global_command_palette_action(
       open_changes_tab,
       review_comment_id,
     } => {
-      open_pr_target(owner, repo, number, open_changes_tab, review_comment_id, cx);
+      open_pull_request_target(
+        owner,
+        repo,
+        number,
+        open_changes_tab,
+        review_comment_id,
+        PullRequestFallback::OpenBrowser,
+        cx,
+      );
       Ok(())
     }
     CommandPaletteAction::OpenGithubRepoDetails {

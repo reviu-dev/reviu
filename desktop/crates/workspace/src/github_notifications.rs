@@ -4,7 +4,7 @@ use gpui::{App, AppContext as _, Global};
 
 use crate::api::GithubNotification;
 use crate::dock_badge::set_dock_badge;
-use crate::github_navigation::{open_pr_target, open_repo_target};
+use crate::github_navigation::{PullRequestFallback, open_pull_request_target, open_repo_target};
 use crate::workspace::WorkspaceApi;
 
 /// Notifications last fetched from GitHub.
@@ -107,6 +107,19 @@ pub(crate) fn github_html_url_from_notification(
   }
 }
 
+/// The comment a notification is about, when GitHub anchors it to a file and a
+/// line. A conversation comment is `/issues/comments/<id>` and anchors nowhere.
+pub(crate) fn review_comment_id_from_notification(
+  notification: &GithubNotification,
+) -> Option<u64> {
+  notification
+    .subject
+    .latest_comment_url
+    .as_deref()?
+    .split_once("/pulls/comments/")
+    .and_then(|(_, id)| id.parse().ok())
+}
+
 /// Marks the notification read, then opens its subject: pull requests stay in
 /// Reviu, everything else opens on github.com.
 pub(crate) fn open_notification(notification: &GithubNotification, cx: &mut App) {
@@ -124,7 +137,15 @@ pub(crate) fn open_notification(notification: &GithubNotification, cx: &mut App)
   match notification.subject.subject_type.as_str() {
     "PullRequest" => {
       if let Some(number) = subject_number {
-        open_pr_target(owner, repo, number, false, None, cx);
+        open_pull_request_target(
+          owner,
+          repo,
+          number,
+          false,
+          review_comment_id_from_notification(notification),
+          PullRequestFallback::OpenBrowser,
+          cx,
+        );
       }
     }
     "Issue" => {
@@ -177,7 +198,7 @@ pub(crate) fn mark_notification_done(thread_id: String, cx: &mut App) {
 mod tests {
   use super::{
     GithubNotificationsStore, extract_number_from_api_url, github_html_url_from_notification,
-    notification_owner_repo, unread_count,
+    notification_owner_repo, review_comment_id_from_notification, unread_count,
   };
   use crate::api::{GithubNotification, GithubNotificationRepository, GithubNotificationSubject};
   use gpui::TestAppContext;
@@ -206,6 +227,21 @@ mod tests {
       url: "https://api.github.com/notifications/threads/1".to_string(),
       subscription_url: "https://api.github.com/notifications/threads/1/subscription".to_string(),
     }
+  }
+
+  #[test]
+  fn only_a_comment_anchored_to_a_file_is_read_off_a_notification() {
+    let mut notification = make_notification("1", "acme/widget", true);
+    assert_eq!(review_comment_id_from_notification(&notification), None);
+
+    notification.subject.latest_comment_url =
+      Some("https://api.github.com/repos/acme/widget/pulls/comments/9".to_string());
+    assert_eq!(review_comment_id_from_notification(&notification), Some(9));
+
+    // A conversation comment names no file and no line, so it anchors nowhere.
+    notification.subject.latest_comment_url =
+      Some("https://api.github.com/repos/acme/widget/issues/comments/9".to_string());
+    assert_eq!(review_comment_id_from_notification(&notification), None);
   }
 
   #[test]

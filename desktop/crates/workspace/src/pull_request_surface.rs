@@ -4,7 +4,6 @@
 use gpui::prelude::*;
 use gpui::{App, Context, WeakEntity};
 
-use crate::github_navigation::github_pull_request_url;
 use crate::session_page::SessionPage;
 
 /// Owner, repository and number: what identifies a pull request across the app.
@@ -20,6 +19,9 @@ pub struct PullRequestSurfaceHandle {
   /// resolved, and any other pull request answering drops it, so a checkout
   /// that never landed leaves nothing armed.
   pending: Option<PullRequestIdentity>,
+  /// The review comment that link named, so the checkout it triggers still ends
+  /// on the file the link was pointing at.
+  awaited_comment: Option<(PullRequestIdentity, u64)>,
 }
 
 impl gpui::Global for PullRequestSurfaceHandle {}
@@ -52,7 +54,23 @@ impl PullRequestSurfaceHandle {
     // A pull request answering for this branch settles the question, whether or
     // not it is the one the link asked for.
     let pending = if identity.is_some() { None } else { pending };
-    if handle.branch_pull_request == identity && handle.pending == pending {
+    let anchor = match (awaited, &identity, &handle.awaited_comment) {
+      (true, Some(identity), Some((waiting, comment_id)))
+        if same_pull_request(identity, &waiting.0, &waiting.1, waiting.2) =>
+      {
+        Some(*comment_id)
+      }
+      _ => None,
+    };
+    let awaited_comment = if identity.is_some() {
+      None
+    } else {
+      handle.awaited_comment.clone()
+    };
+    if handle.branch_pull_request == identity
+      && handle.pending == pending
+      && handle.awaited_comment == awaited_comment
+    {
       return;
     }
     let page = handle.page.clone();
@@ -60,12 +78,13 @@ impl PullRequestSurfaceHandle {
       page,
       branch_pull_request: identity.clone(),
       pending,
+      awaited_comment,
     });
 
     if let Some(identity) = identity
       && awaited
     {
-      Self::show(&identity.0, &identity.1, identity.2, cx);
+      Self::show(&identity.0, &identity.1, identity.2, anchor, cx);
     }
   }
 
@@ -77,10 +96,28 @@ impl PullRequestSurfaceHandle {
     };
     let page = handle.page.clone();
     let branch_pull_request = handle.branch_pull_request.clone();
+    let awaited_comment = handle.awaited_comment.clone();
     cx.set_global(Self {
       page,
       branch_pull_request,
       pending: Some(identity),
+      awaited_comment,
+    });
+  }
+
+  /// The review comment a link named, held while its checkout is being offered.
+  pub(crate) fn expect_comment(identity: PullRequestIdentity, comment_id: u64, cx: &mut App) {
+    let Some(handle) = cx.try_global::<Self>() else {
+      return;
+    };
+    let page = handle.page.clone();
+    let branch_pull_request = handle.branch_pull_request.clone();
+    let pending = handle.pending.clone();
+    cx.set_global(Self {
+      page,
+      branch_pull_request,
+      pending,
+      awaited_comment: Some((identity, comment_id)),
     });
   }
 
@@ -90,7 +127,7 @@ impl PullRequestSurfaceHandle {
     let Some(handle) = cx.try_global::<Self>() else {
       return;
     };
-    if handle.pending.is_none() {
+    if handle.pending.is_none() && handle.awaited_comment.is_none() {
       return;
     }
     let page = handle.page.clone();
@@ -99,6 +136,7 @@ impl PullRequestSurfaceHandle {
       page,
       branch_pull_request,
       pending: None,
+      awaited_comment: None,
     });
   }
 
@@ -114,8 +152,15 @@ impl PullRequestSurfaceHandle {
   }
 
   /// Shows the pull request panel when the link names the pull request of the
-  /// branch in the open repository. Returns whether it did.
-  pub fn show(owner: &str, repo: &str, number: u64, cx: &mut App) -> bool {
+  /// branch in the open repository, and takes the diff to the review comment it
+  /// named. Returns whether it did.
+  pub(crate) fn show(
+    owner: &str,
+    repo: &str,
+    number: u64,
+    review_comment_id: Option<u64>,
+    cx: &mut App,
+  ) -> bool {
     if !Self::shows(owner, repo, number, cx) {
       return false;
     }
@@ -131,29 +176,50 @@ impl PullRequestSurfaceHandle {
       let _ = cx.update_window(window_handle, move |_, window, cx| {
         let _ = page.update(cx, |page, cx| {
           page.show_dock_tab(crate::dock_panel::DockPanelTab::PullRequest, window, cx);
+          if let Some(comment_id) = review_comment_id {
+            page.reveal_pull_request_review_comment(comment_id, cx);
+          }
         });
       });
     });
     true
   }
 
-  /// For a link that asked Reviu to review the pull request: it either lands, or
-  /// the shell offers to check out the branch that carries it.
-  pub fn show_or_explain(owner: String, repo: String, number: u64, cx: &mut App) {
-    if Self::show(&owner, &repo, number, cx) {
-      return;
-    }
+  /// For a link that asked Reviu to review the pull request: the shell offers to
+  /// check out the branch that carries it, or says why it cannot.
+  pub(crate) fn offer_checkout(
+    owner: String,
+    repo: String,
+    number: u64,
+    review_comment_id: Option<u64>,
+    cx: &mut App,
+  ) {
     let Some(page) = Self::page(cx) else {
-      cx.open_url(&github_pull_request_url(&owner, &repo, number, false, None));
+      cx.open_url(&crate::github_navigation::github_pull_request_url(
+        &owner,
+        &repo,
+        number,
+        false,
+        review_comment_id,
+      ));
       return;
     };
     let Ok(window_handle) = page.read_with(cx, |page, _| page.window_handle()) else {
-      cx.open_url(&github_pull_request_url(&owner, &repo, number, false, None));
+      cx.open_url(&crate::github_navigation::github_pull_request_url(
+        &owner,
+        &repo,
+        number,
+        false,
+        review_comment_id,
+      ));
       return;
     };
+    if let Some(comment_id) = review_comment_id {
+      Self::expect_comment((owner.clone(), repo.clone(), number), comment_id, cx);
+    }
     let _ = cx.update_window(window_handle, move |_, window, cx| {
       let _ = page.update(cx, |page, cx| {
-        page.offer_pull_request_checkout(owner, repo, number, window, cx);
+        page.offer_pull_request_checkout(owner, repo, number, review_comment_id, window, cx);
       });
     });
   }
