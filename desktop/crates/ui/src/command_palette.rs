@@ -80,8 +80,9 @@ fn palette_row(
 enum MatchQuality {
   /// The letters of the query appear in the name, in order but not together.
   Fuzzy,
-  /// Every word landed, some only in the description or the disabled reason.
-  SupportingText,
+  /// Every word landed, some only in the reason the command is unavailable,
+  /// which is the text its row shows.
+  Reason,
   /// Every word landed, some only in the keywords.
   Keyword,
   /// Every word landed on a word of the name.
@@ -1636,7 +1637,7 @@ impl CommandPaletteCommand {
       Id::Pull => &["sync", "download", "update"],
       Id::Fetch => &["sync", "refresh"],
       Id::SwitchBranch => &["checkout"],
-      Id::CheckoutDetached => &["sha", "revision"],
+      Id::CheckoutDetached => &["sha", "hash", "tag", "revision"],
       Id::CreateBranch | Id::CreateBranchFrom => &["new"],
       Id::DeleteBranch => &["remove"],
       Id::CherryPick => &["backport"],
@@ -1648,7 +1649,8 @@ impl CommandPaletteCommand {
       Id::SubmitPullRequestReview => &["pr", "approve"],
       Id::DiscardReview => &["clear"],
       Id::OpenRepository => &["folder", "project"],
-      Id::ForgetRepository => &["remove"],
+      Id::SwitchRepository => &["recent"],
+      Id::ForgetRepository => &["remove", "recent"],
       Id::OpenSessionPage => &["home", "workspace", "agent"],
       Id::OpenGithubFromUrl => &["link", "paste"],
       Id::OpenSettingsPage => &["preferences", "shortcuts", "keybindings", "theme"],
@@ -1656,11 +1658,7 @@ impl CommandPaletteCommand {
       Id::OpenBillingPage => &["upgrade", "price", "pay", "plan", "invoice", "pro"],
       Id::OpenAboutPage => &["version", "update", "changelog"],
       Id::SendFeedback => &["issue", "support", "contact"],
-      Id::SwitchRepository
-      | Id::SkipRebase
-      | Id::MergeBranch
-      | Id::RebaseBranch
-      | Id::SendReview => &[],
+      Id::SkipRebase | Id::MergeBranch | Id::RebaseBranch | Id::SendReview => &[],
     }
   }
 
@@ -1735,11 +1733,11 @@ impl CommandPaletteCommand {
     {
       return Some(MatchQuality::Keyword);
     }
-    [self.description.as_ref(), self.disabled_reason.as_ref()]
-      .into_iter()
-      .flatten()
-      .any(|text| has_word_starting_with(text.as_ref(), word))
-      .then_some(MatchQuality::SupportingText)
+    self
+      .disabled_reason
+      .as_ref()
+      .is_some_and(|reason| has_word_starting_with(reason.as_ref(), word))
+      .then_some(MatchQuality::Reason)
   }
 
   /// How well the command answers the query, or nothing if it does not.
@@ -1767,7 +1765,7 @@ impl CommandPaletteCommand {
       }
       Some(quality) => Some(quality),
       // Typing an abbreviation is the last thing we try, and only against the
-      // name: over the supporting text a subsequence matches almost everything.
+      // name: over a longer text a subsequence matches almost everything.
       None => is_abbreviation(self.name.as_ref(), query).then_some(MatchQuality::Fuzzy),
     }
   }
@@ -3414,7 +3412,7 @@ mod tests {
     assert_eq!(command.id, CommandPaletteCommandId::ForgetRepository);
     assert_eq!(command.name.as_ref(), "Forget repository");
     assert!(command.matches("forget"));
-    assert!(command.matches("recent list"));
+    assert!(command.matches("recent"));
     assert_eq!(command.group(), CommandPaletteGroup::Repository);
   }
 
@@ -3547,7 +3545,6 @@ mod tests {
     let command = CommandPaletteCommand::create_pull_request();
     assert_eq!(command.id, CommandPaletteCommandId::CreatePullRequest);
     assert_eq!(command.name.as_ref(), "Create pull request");
-    assert!(command.matches("current branch"));
   }
 
   #[test]
@@ -3555,7 +3552,7 @@ mod tests {
     let command = CommandPaletteCommand::open_pull_request(42);
     assert_eq!(command.id, CommandPaletteCommandId::OpenPullRequest);
     assert_eq!(command.name.as_ref(), "Open PR #42");
-    assert!(command.matches("pull request for the current branch"));
+    assert!(command.matches("pr"));
   }
 
   #[test]
@@ -3571,7 +3568,6 @@ mod tests {
     let command = CommandPaletteCommand::delete_branch();
     assert_eq!(command.id, CommandPaletteCommandId::DeleteBranch);
     assert_eq!(command.name.as_ref(), "Delete branch");
-    assert!(command.matches("remote branch"));
   }
 
   #[test]
@@ -3594,7 +3590,6 @@ mod tests {
     let command = CommandPaletteCommand::fetch();
     assert_eq!(command.id, CommandPaletteCommandId::Fetch);
     assert_eq!(command.name.as_ref(), "Fetch");
-    assert!(command.matches("fetch updates"));
   }
 
   #[test]
@@ -3602,7 +3597,7 @@ mod tests {
     let command = CommandPaletteCommand::stage_all();
     assert_eq!(command.id, CommandPaletteCommandId::StageAll);
     assert_eq!(command.name.as_ref(), "Stage all");
-    assert!(command.matches("changed files"));
+    assert!(command.matches("add"));
   }
 
   #[test]
@@ -3610,7 +3605,7 @@ mod tests {
     let command = CommandPaletteCommand::unstage_all();
     assert_eq!(command.id, CommandPaletteCommandId::UnstageAll);
     assert_eq!(command.name.as_ref(), "Unstage all");
-    assert!(command.matches("staged files"));
+    assert!(command.matches("reset"));
   }
 
   #[test]
@@ -3637,33 +3632,31 @@ mod tests {
       CommandPaletteCommandId::CheckoutDetached
     );
     assert_eq!(checkout_detached.name.as_ref(), "Git checkout detached");
-    assert!(checkout_detached.matches("commit hash"));
+    assert!(checkout_detached.matches("hash"));
 
     assert_eq!(commit.id, CommandPaletteCommandId::Commit);
     assert_eq!(commit.name.as_ref(), "Commit");
-    assert!(commit.matches("stages all changes"));
 
     assert_eq!(continue_rebase.id, CommandPaletteCommandId::ContinueRebase);
     assert_eq!(continue_rebase.name.as_ref(), "Rebase continue");
-    assert!(continue_rebase.matches("current rebase"));
+    assert!(continue_rebase.matches("resume"));
 
     assert_eq!(skip_rebase.id, CommandPaletteCommandId::SkipRebase);
     assert_eq!(skip_rebase.name.as_ref(), "Rebase skip");
-    assert!(skip_rebase.matches("rebase commit"));
 
     assert_eq!(
       interactive_rebase.id,
       CommandPaletteCommandId::InteractiveRebase
     );
     assert_eq!(interactive_rebase.name.as_ref(), "Rebase interactive");
-    assert!(interactive_rebase.matches("reorder commits"));
+    assert!(interactive_rebase.matches("squash"));
 
     assert_eq!(
       interactive_rebase_onto_branch.id,
       CommandPaletteCommandId::InteractiveRebaseOntoBranch
     );
     assert_eq!(interactive_rebase_onto_branch.name.as_ref(), "Onto branch");
-    assert!(interactive_rebase_onto_branch.matches("another branch"));
+    assert!(interactive_rebase_onto_branch.matches("onto"));
 
     assert_eq!(
       interactive_rebase_edit_branch.id,
@@ -3673,7 +3666,7 @@ mod tests {
       interactive_rebase_edit_branch.name.as_ref(),
       "Edit commits since branch"
     );
-    assert!(interactive_rebase_edit_branch.matches("without incorporating upstream"));
+    assert!(interactive_rebase_edit_branch.matches("reword"));
 
     assert_eq!(
       interactive_rebase_head_count.id,
@@ -3683,37 +3676,37 @@ mod tests {
       interactive_rebase_head_count.name.as_ref(),
       "Last N commits (HEAD~n)"
     );
-    assert!(interactive_rebase_head_count.matches("last n commits"));
+    assert!(interactive_rebase_head_count.matches("last commits"));
 
     assert_eq!(push.id, CommandPaletteCommandId::Push);
     assert_eq!(push.name.as_ref(), "Push");
-    assert!(push.matches("remote branch"));
+    assert!(push.matches("publish"));
 
     assert_eq!(force_push.id, CommandPaletteCommandId::ForcePush);
     assert_eq!(force_push.name.as_ref(), "Force push (with lease)");
-    assert!(force_push.matches("force push local commits"));
+    assert!(force_push.matches("push force"));
 
     assert_eq!(undo_last_commit.id, CommandPaletteCommandId::UndoLastCommit);
     assert_eq!(undo_last_commit.name.as_ref(), "Undo last commit");
-    assert!(undo_last_commit.matches("recent local commit"));
+    assert!(undo_last_commit.matches("revert"));
 
     assert_eq!(amend.id, CommandPaletteCommandId::Amend);
     assert_eq!(amend.name.as_ref(), "Amend");
-    assert!(amend.matches("amend the most recent"));
+    assert!(amend.matches("fixup"));
 
     assert_eq!(
       stage_selected_file.id,
       CommandPaletteCommandId::StageSelectedFile
     );
     assert_eq!(stage_selected_file.name.as_ref(), "Stage file");
-    assert!(stage_selected_file.matches("selected file"));
+    assert!(stage_selected_file.matches("add"));
 
     assert_eq!(
       unstage_selected_file.id,
       CommandPaletteCommandId::UnstageSelectedFile
     );
     assert_eq!(unstage_selected_file.name.as_ref(), "Unstage file");
-    assert!(unstage_selected_file.matches("selected file"));
+    assert!(unstage_selected_file.matches("reset"));
 
     assert_eq!(
       accept_all_current_conflicts.id,
@@ -3723,7 +3716,7 @@ mod tests {
       accept_all_current_conflicts.name.as_ref(),
       "Accept all current conflicts"
     );
-    assert!(accept_all_current_conflicts.matches("keeping current changes"));
+    assert!(accept_all_current_conflicts.matches("ours"));
 
     assert_eq!(
       accept_all_incoming_conflicts.id,
@@ -3733,7 +3726,7 @@ mod tests {
       accept_all_incoming_conflicts.name.as_ref(),
       "Accept all incoming conflicts"
     );
-    assert!(accept_all_incoming_conflicts.matches("incoming changes"));
+    assert!(accept_all_incoming_conflicts.matches("theirs"));
   }
 
   #[test]
@@ -3752,8 +3745,8 @@ mod tests {
     assert_eq!(apply_stash.id, CommandPaletteCommandId::ApplyStash);
     assert_eq!(drop_stash.id, CommandPaletteCommandId::DropStash);
     assert_eq!(pop_stash.id, CommandPaletteCommandId::PopStash);
-    assert!(stash.matches("tracked changes"));
-    assert!(apply_stash.matches("without dropping"));
+    assert!(stash.matches("wip"));
+    assert!(apply_stash.matches("unstash"));
   }
 
   #[test]
@@ -3876,7 +3869,7 @@ mod tests {
   }
 
   #[test]
-  fn the_name_answers_before_the_supporting_text() {
+  fn the_name_answers_before_a_keyword() {
     assert_eq!(
       quality(&CommandPaletteCommand::commit(), "commit"),
       Some(MatchQuality::NamePrefix)
@@ -3891,19 +3884,19 @@ mod tests {
     );
     assert_eq!(
       quality(&CommandPaletteCommand::switch_repository(), "recent"),
-      Some(MatchQuality::SupportingText)
+      Some(MatchQuality::Keyword)
     );
   }
 
   #[test]
   fn the_weakest_word_decides_the_quality() {
-    // "repository" is in the name, "recent" only in the description.
+    // "repository" is in the name, "recent" only in the keywords.
     assert_eq!(
       quality(
         &CommandPaletteCommand::switch_repository(),
         "recent repository"
       ),
-      Some(MatchQuality::SupportingText)
+      Some(MatchQuality::Keyword)
     );
     assert_eq!(
       quality(
