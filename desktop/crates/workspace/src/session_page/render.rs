@@ -2,10 +2,8 @@
 
 use super::*;
 use crate::annotations::AnnotationKind;
-use crate::auth_state::GithubAccessState;
 use crate::diff_toolbar::{DiffToolbar, NavigationControl, SplitControl, ToggleControl};
 use crate::hunk_actions::render_hunk_actions;
-use crate::pro_promise::{ProPromiseSurface, render_pro_promise};
 use gpui_component::Selectable as _;
 
 impl SessionPage {
@@ -90,14 +88,6 @@ impl SessionPage {
 
   pub(super) fn render_sessions_sidebar(&mut self, cx: &mut Context<Self>) -> AnyElement {
     let theme = cx.theme().clone();
-
-    // Without GitHub the inbox has nothing to list, but the column still says
-    // what it would be for.
-    let github_access = AuthStateStore::github_access_state(cx);
-    let github_section = match github_access {
-      GithubAccessState::Available => Some(self.inbox.clone().into_any_element()),
-      state => render_pro_promise(ProPromiseSurface::Inbox, state, cx),
-    };
 
     let repo_name = self
       .selected_repo
@@ -197,7 +187,7 @@ impl SessionPage {
       .min_h_0()
       .bg(theme.sidebar)
       .child(div().flex_1().min_h_0().child(self.session_list.clone()))
-      .children(github_section)
+      .child(self.inbox.clone())
       .children(repo_context)
       .into_any_element()
   }

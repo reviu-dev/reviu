@@ -42,19 +42,37 @@ pub(crate) struct ProPromiseCopy {
   pub step: ProPromiseStep,
 }
 
-/// Nothing to promise once GitHub works: the surface does its own job then.
-pub(crate) fn pro_promise_copy(state: GithubAccessState) -> Option<ProPromiseCopy> {
-  match state {
-    GithubAccessState::Available => None,
-    GithubAccessState::NeedsSignIn => Some(ProPromiseCopy {
+/// Nothing to promise once GitHub works: the surface does its own job then. The
+/// copy names what *this* surface would show, not the whole integration.
+pub(crate) fn pro_promise_copy(
+  surface: ProPromiseSurface,
+  state: GithubAccessState,
+) -> Option<ProPromiseCopy> {
+  match (surface, state) {
+    (_, GithubAccessState::Available) => None,
+    (ProPromiseSurface::PullRequestPanel, GithubAccessState::NeedsSignIn) => Some(ProPromiseCopy {
       headline: "Review pull requests in Reviu",
       body: "Sign in with GitHub to bring pull requests, reviews and notifications into the app.",
       action: "Sign in with GitHub",
       step: ProPromiseStep::SignIn,
     }),
-    GithubAccessState::NeedsSubscription => Some(ProPromiseCopy {
-      headline: "Review pull requests in Reviu",
-      body: "Reviu Pro brings GitHub pull requests, reviews and notifications into the app. 14-day free trial.",
+    (ProPromiseSurface::PullRequestPanel, GithubAccessState::NeedsSubscription) => {
+      Some(ProPromiseCopy {
+        headline: "Review pull requests in Reviu",
+        body: "Reviu Pro brings GitHub pull requests, reviews and notifications into the app. 14-day free trial.",
+        action: "See Reviu Pro",
+        step: ProPromiseStep::Subscribe,
+      })
+    }
+    (ProPromiseSurface::Inbox, GithubAccessState::NeedsSignIn) => Some(ProPromiseCopy {
+      headline: "Your GitHub notifications, here",
+      body: "Sign in with GitHub to follow reviews and mentions without leaving Reviu.",
+      action: "Sign in with GitHub",
+      step: ProPromiseStep::SignIn,
+    }),
+    (ProPromiseSurface::Inbox, GithubAccessState::NeedsSubscription) => Some(ProPromiseCopy {
+      headline: "Your GitHub notifications, here",
+      body: "Reviu Pro brings reviews and mentions into this inbox. 14-day free trial.",
       action: "See Reviu Pro",
       step: ProPromiseStep::Subscribe,
     }),
@@ -104,7 +122,7 @@ pub(crate) fn render_pro_promise(
   state: GithubAccessState,
   cx: &mut App,
 ) -> Option<AnyElement> {
-  let copy = pro_promise_copy(state)?;
+  let copy = pro_promise_copy(surface, state)?;
   report_impression(surface, cx);
   let theme = cx.theme().clone();
   let step = copy.step;
@@ -112,11 +130,7 @@ pub(crate) fn render_pro_promise(
   let button = Button::new(button_id)
     .debug_selector(move || format!("pro-promise-{}", surface.source()))
     .small()
-    .when_else(
-      surface == ProPromiseSurface::PullRequestPanel,
-      |this| this.primary(),
-      |this| this.outline().compact(),
-    )
+    .primary()
     .when(step == ProPromiseStep::SignIn, |this| {
       this.icon(IconName::Github)
     })
@@ -152,14 +166,13 @@ pub(crate) fn render_pro_promise(
       )
       .child(div().mt_1().child(button))
       .into_any_element(),
-    // A card in a column of sessions: it says its piece without taking over.
+    // The body of the inbox section, which already carries the header and the
+    // rule above it: no chrome of its own, or the borders double up.
     ProPromiseSurface::Inbox => v_flex()
       .w_full()
       .gap_1()
-      .p_2()
-      .rounded_md()
-      .border_1()
-      .border_color(theme.border)
+      .px_3()
+      .py_2()
       .child(
         div()
           .text_xs()
@@ -183,21 +196,48 @@ mod tests {
   use super::*;
   use gpui::TestAppContext;
 
+  const SURFACES: [ProPromiseSurface; 2] = [
+    ProPromiseSurface::PullRequestPanel,
+    ProPromiseSurface::Inbox,
+  ];
+
   #[test]
   fn a_working_github_has_nothing_to_promise() {
-    assert!(pro_promise_copy(GithubAccessState::Available).is_none());
+    for surface in SURFACES {
+      assert!(pro_promise_copy(surface, GithubAccessState::Available).is_none());
+    }
   }
 
   #[test]
   fn each_missing_piece_asks_for_itself() {
-    let sign_in = pro_promise_copy(GithubAccessState::NeedsSignIn).expect("copy");
-    assert_eq!(sign_in.step, ProPromiseStep::SignIn);
-    assert_eq!(sign_in.action, "Sign in with GitHub");
+    for surface in SURFACES {
+      let sign_in = pro_promise_copy(surface, GithubAccessState::NeedsSignIn).expect("copy");
+      assert_eq!(sign_in.step, ProPromiseStep::SignIn);
+      assert_eq!(sign_in.action, "Sign in with GitHub");
 
-    let subscribe = pro_promise_copy(GithubAccessState::NeedsSubscription).expect("copy");
-    assert_eq!(subscribe.step, ProPromiseStep::Subscribe);
-    // Someone already signed in is asked to subscribe, not to sign in again.
-    assert!(subscribe.body.contains("free trial"));
+      let subscribe =
+        pro_promise_copy(surface, GithubAccessState::NeedsSubscription).expect("copy");
+      assert_eq!(subscribe.step, ProPromiseStep::Subscribe);
+      // Someone already signed in is asked to subscribe, not to sign in again.
+      assert!(subscribe.body.contains("free trial"));
+    }
+  }
+
+  #[test]
+  fn each_surface_promises_what_it_would_itself_show() {
+    // The inbox slot said "Review pull requests in Reviu", which is the panel's
+    // job, not its own.
+    for state in [
+      GithubAccessState::NeedsSignIn,
+      GithubAccessState::NeedsSubscription,
+    ] {
+      let panel = pro_promise_copy(ProPromiseSurface::PullRequestPanel, state).expect("copy");
+      assert!(panel.headline.contains("pull request"));
+
+      let inbox = pro_promise_copy(ProPromiseSurface::Inbox, state).expect("copy");
+      assert!(inbox.headline.contains("notifications"));
+      assert!(!inbox.headline.contains("pull request"));
+    }
   }
 
   #[gpui::test]

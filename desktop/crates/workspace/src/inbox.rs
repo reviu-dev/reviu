@@ -5,8 +5,10 @@ use gpui_component::scroll::ScrollableElement as _;
 use gpui_component::{ActiveTheme as _, Sizable as _, h_flex, v_flex};
 use ui::{Button, ButtonVariants as _, UiIconName};
 
+use crate::auth_state::{AuthStateStore, GithubAccessState};
 use crate::date_format::format_relative_time;
 use crate::github_notifications::{self, GithubNotificationsStore};
+use crate::pro_promise::{ProPromiseSurface, render_pro_promise};
 
 const INBOX_MAX_HEIGHT: f32 = 220.0;
 
@@ -25,8 +27,14 @@ impl Inbox {
 impl Render for Inbox {
   fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
     let theme = cx.theme().clone();
+    let github_access = AuthStateStore::github_access_state(cx);
+    let has_access = github_access == GithubAccessState::Available;
     let notifications = GithubNotificationsStore::list(cx);
-    let unread = GithubNotificationsStore::unread_count(cx);
+    let unread = if has_access {
+      GithubNotificationsStore::unread_count(cx)
+    } else {
+      0
+    };
 
     let header = h_flex()
       .items_center()
@@ -125,16 +133,18 @@ impl Render for Inbox {
       })
       .collect();
 
-    let body = if rows.is_empty() {
-      div()
+    // Without GitHub there is nothing to list, so the section keeps its header
+    // and says what it would be for instead of showing an empty inbox.
+    let body = match render_pro_promise(ProPromiseSurface::Inbox, github_access, cx) {
+      Some(promise) => promise,
+      None if rows.is_empty() => div()
         .px_3()
         .py_2()
         .text_xs()
         .text_color(theme.muted_foreground)
         .child("No notifications")
-        .into_any_element()
-    } else {
-      div()
+        .into_any_element(),
+      None => div()
         .relative()
         .child(
           div()
@@ -146,7 +156,7 @@ impl Render for Inbox {
             .children(rows),
         )
         .vertical_scrollbar(&self.scroll_handle)
-        .into_any_element()
+        .into_any_element(),
     };
 
     v_flex()
@@ -155,5 +165,43 @@ impl Render for Inbox {
       .border_color(theme.border)
       .child(header)
       .child(body)
+  }
+}
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+  use crate::auth_state::signed_in_with_github_access;
+  use gpui::TestAppContext;
+
+  #[gpui::test]
+  async fn the_section_keeps_its_header_and_swaps_only_its_body(cx: &mut TestAppContext) {
+    cx.update(|cx| {
+      gpui_component::init(cx);
+      cx.set_global(AuthStateStore::default());
+      cx.set_global(GithubNotificationsStore::default());
+    });
+
+    let (_root, cx) = cx.add_window_view(|window, cx| {
+      let inbox = cx.new(|_| Inbox::new());
+      gpui_component::Root::new(inbox, window, cx)
+    });
+    cx.run_until_parked();
+
+    assert!(
+      cx.debug_bounds("pro-promise-inbox").is_some(),
+      "without GitHub the section says what it would be for"
+    );
+
+    cx.update(|_, cx| {
+      AuthStateStore::set(cx, signed_in_with_github_access());
+      cx.refresh_windows();
+    });
+    cx.run_until_parked();
+
+    assert!(
+      cx.debug_bounds("pro-promise-inbox").is_none(),
+      "with GitHub the same section lists notifications instead"
+    );
   }
 }

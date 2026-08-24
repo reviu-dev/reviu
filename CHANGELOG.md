@@ -142,7 +142,7 @@ The Files tab of the right panel now opens only the folders holding uncommitted 
 
 ### Surfaces That Say What They Are For
 
-The Pull request tab and the GitHub inbox used to be empty, or absent, for anyone without GitHub access. They now say what they would hold and how to get there: sign in, or start the Reviu Pro trial. Someone already signed in is asked to subscribe rather than to sign in again.
+The Pull request tab and the GitHub inbox used to be empty, or absent, for anyone without GitHub access. They now say what they would hold and how to get there: sign in, or start the Reviu Pro trial. Someone already signed in is asked to subscribe rather than to sign in again. Each surface names what it would itself show, the tab your pull requests and the inbox your notifications, and the inbox keeps its header either way so only its contents change.
 
 The Pull request icon also stays in the rail whatever the repository is: a rail whose icons come and go with your remote is a rail you cannot learn.
 
