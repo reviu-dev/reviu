@@ -560,21 +560,31 @@ impl Render for SessionList {
                       div()
                         .child(gpui_component::spinner::Spinner::new().xsmall())
                         .into_any_element()
-                    } else if let Some(label) = status.label() {
-                      // The live state replaces the timestamp: a running or
-                      // stuck session matters more than how old it is.
-                      div()
-                        .text_xs()
-                        .text_color(status_color.opacity(0.9))
-                        .group_hover(group_name.clone(), |this| this.opacity(0.0))
-                        .child(label)
-                        .into_any_element()
                     } else {
-                      div()
-                        .text_xs()
-                        .text_color(theme.muted_foreground)
+                      // A dot says the live state without eating the title or
+                      // the timestamp; the word lives in its tooltip.
+                      h_flex()
+                        .items_center()
+                        .gap_1p5()
                         .group_hover(group_name.clone(), |this| this.opacity(0.0))
-                        .child(time)
+                        .when_some(status.label(), |this, label| {
+                          this.child(
+                            div()
+                              .id(("session-status-dot", ix))
+                              .size(px(7.))
+                              .rounded_full()
+                              .bg(status_color.opacity(0.9))
+                              .tooltip(move |window, cx| {
+                                gpui_component::tooltip::Tooltip::new(label).build(window, cx)
+                              }),
+                          )
+                        })
+                        .child(
+                          div()
+                            .text_xs()
+                            .text_color(theme.muted_foreground)
+                            .child(time),
+                        )
                         .into_any_element()
                     })
                     .child(
