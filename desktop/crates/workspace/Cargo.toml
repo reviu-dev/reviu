@@ -53,6 +53,7 @@ gtk = { workspace = true }
 libloading = { workspace = true }
 
 [dev-dependencies]
+agent_chat_panel = { workspace = true, features = ["test-support"] }
 git = { workspace = true, features = ["test-support"] }
 git2 = { workspace = true }
 gpui-base = { workspace = true }

@@ -6,7 +6,7 @@ use std::rc::Rc;
 use std::sync::Arc;
 use std::time::Duration;
 
-use agent_chat_panel::{AgentChatPanel, AgentChatPanelEvent};
+use agent_chat_panel::{AgentChatPanel, AgentChatPanelEvent, ConversationStore, TurnGate};
 use editor::{
   ConflictResolution, DiffViewMode, Editor, EditorEvent, ReviewCommentCancelHandler,
   ReviewCommentCreateHandler, ReviewCommentCreateRequest, ReviewCommentDeleteHandler,
@@ -168,6 +168,11 @@ pub struct SessionPage {
   focus_handle: FocusHandle,
   window_handle: AnyWindowHandle,
   agent_chat_view: Option<Entity<AgentChatPanel>>,
+  /// One store per repository, shared by every session panel.
+  chat_store: Option<Entity<ConversationStore>>,
+  /// Sessions kept alive off screen so their agents keep working; MRU first.
+  background_chat_panels: Vec<(String, Entity<AgentChatPanel>)>,
+  turn_gate: TurnGate,
   agent_notification: Option<gpui::WindowHandle<crate::agent_notification::AgentNotification>>,
   dock_panel: Entity<DockPanel>,
   inbox: Entity<Inbox>,
@@ -387,6 +392,9 @@ impl SessionPage {
       focus_handle: cx.focus_handle(),
       window_handle: window.window_handle(),
       agent_chat_view: None,
+      chat_store: None,
+      background_chat_panels: Vec::new(),
+      turn_gate: TurnGate::new(),
       agent_notification: None,
       dock_panel,
       inbox,
@@ -528,16 +536,16 @@ impl SessionPage {
   /// Full refresh from the store's meta index, for lifecycle changes
   /// (panel created, conversation created/loaded/deleted, repo switched).
   fn refresh_session_list(&mut self, cx: &mut Context<Self>) {
-    let (conversations, current_id) = match self.agent_chat_view.as_ref() {
-      Some(panel) => {
-        let panel = panel.read(cx);
-        (
-          panel.list_conversations(cx),
-          panel.current_conversation().id.clone(),
-        )
-      }
-      None => (Vec::new(), String::new()),
-    };
+    let conversations = self
+      .chat_store
+      .as_ref()
+      .map(|store| store.read(cx).list())
+      .unwrap_or_default();
+    let current_id = self
+      .agent_chat_view
+      .as_ref()
+      .map(|panel| panel.read(cx).current_conversation().id.clone())
+      .unwrap_or_default();
     self.session_list.update(cx, |list, cx| {
       list.set_conversations(conversations, current_id, cx)
     });
@@ -1019,7 +1027,7 @@ mod tests {
     // popup exists for; the active-window early return has no simulator.
     cx.deactivate_window();
     page.update_in(cx, |page, window, cx| {
-      page.notify_agent_attention("Reviu agent finished", window, cx);
+      page.notify_agent_attention("Reviu agent finished", None, window, cx);
     });
     cx.run_until_parked();
     assert_eq!(
@@ -1030,7 +1038,7 @@ mod tests {
 
     // A newer notification replaces the old one instead of stacking.
     page.update_in(cx, |page, window, cx| {
-      page.notify_agent_attention("Reviu agent needs a decision", window, cx);
+      page.notify_agent_attention("Reviu agent needs a decision", None, window, cx);
     });
     cx.run_until_parked();
     assert_eq!(cx.update(|_, cx| cx.windows().len()), windows_before + 1);
@@ -1049,7 +1057,7 @@ mod tests {
 
     cx.deactivate_window();
     page.update_in(cx, |page, window, cx| {
-      page.notify_agent_attention("Reviu agent finished", window, cx);
+      page.notify_agent_attention("Reviu agent finished", None, window, cx);
     });
     cx.run_until_parked();
     assert_eq!(cx.update(|_, cx| cx.windows().len()), windows_before + 1);
@@ -1086,7 +1094,7 @@ mod tests {
 
     cx.deactivate_window();
     page.update_in(cx, |page, window, cx| {
-      page.notify_agent_attention("Reviu agent finished", window, cx);
+      page.notify_agent_attention("Reviu agent finished", None, window, cx);
     });
     cx.run_until_parked();
     assert_eq!(

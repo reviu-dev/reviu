@@ -8,9 +8,8 @@ use gpui::{App, Context, Task};
 
 use crate::PersistedConversation;
 use crate::persistence::{
-  ConversationMeta, LoadedConversation, list_conversations_in, load_active_conversation,
-  load_conversation_file, read_drafts, read_index, read_scrolls, write_drafts, write_index,
-  write_scrolls,
+  ConversationMeta, LoadedConversation, list_conversations_in, load_conversation_file, read_drafts,
+  read_index, read_scrolls, write_drafts, write_index, write_scrolls,
 };
 use app_log::ResultExt;
 use std::collections::HashMap;
@@ -20,7 +19,9 @@ const DRAFT_DEBOUNCE: std::time::Duration = std::time::Duration::from_millis(250
 
 pub(crate) struct SaveRequest {
   pub conversation: PersistedConversation,
-  pub active_id: String,
+  /// Set only by the panel currently shown; background sessions must not
+  /// steal the active pointer with their streaming saves.
+  pub active_id: Option<String>,
 }
 
 enum DeferredOp {
@@ -30,10 +31,12 @@ enum DeferredOp {
   WriteScrolls(HashMap<String, (usize, f32)>),
 }
 
-pub(crate) struct ConversationStore {
+pub struct ConversationStore {
   dir: PathBuf,
   /// Listing source of truth at runtime; `index.json` is its cross-launch cache.
   metas: Vec<ConversationMeta>,
+  /// Mirror of `active.txt`: the conversation to reopen on the next launch.
+  active_id: Option<String>,
   pending_save: Option<SaveRequest>,
   pending_ops: Vec<DeferredOp>,
   /// Composer drafts keyed by conversation id, mirrored in `drafts.json`.
@@ -55,9 +58,14 @@ impl ConversationStore {
     metas.sort_by_key(|m| std::cmp::Reverse(m.updated_at_secs));
     let drafts = read_drafts(&dir);
     let scrolls = read_scrolls(&dir);
+    let active_id = std::fs::read_to_string(dir.join("active.txt"))
+      .ok()
+      .map(|raw| raw.trim().to_string())
+      .filter(|id| !id.is_empty());
     Self {
       dir,
       metas,
+      active_id,
       pending_save: None,
       pending_ops: Vec::new(),
       drafts,
@@ -152,7 +160,7 @@ impl ConversationStore {
 
   /// Coalescing throttle: the first call arms the timer, later snapshots
   /// replace the pending one, one write lands per window.
-  pub fn schedule_save(&mut self, request: SaveRequest, cx: &mut Context<Self>) {
+  pub(crate) fn schedule_save(&mut self, request: SaveRequest, cx: &mut Context<Self>) {
     self.pending_save = Some(request);
     if self.throttle.is_some() {
       return;
@@ -167,7 +175,7 @@ impl ConversationStore {
   }
 
   /// Boundary save: skips the throttle, still writes off the main thread.
-  pub fn save_now(&mut self, request: SaveRequest, cx: &mut Context<Self>) {
+  pub(crate) fn save_now(&mut self, request: SaveRequest, cx: &mut Context<Self>) {
     self.pending_save = Some(request);
     self.throttle = None;
     self.kick_writer(cx);
@@ -198,20 +206,34 @@ impl ConversationStore {
   }
 
   pub fn set_active(&mut self, id: Option<String>, cx: &mut Context<Self>) {
+    self.active_id = id.clone();
     self.pending_ops.push(DeferredOp::SetActive { id });
     self.kick_writer(cx);
   }
 
-  pub fn load(&self, id: &str, cx: &App) -> Task<Option<LoadedConversation>> {
+  pub fn active_id(&self) -> Option<&str> {
+    self.active_id.as_deref()
+  }
+
+  pub fn active_meta(&self) -> Option<ConversationMeta> {
+    let active_id = self.active_id.as_deref()?;
+    self.metas.iter().find(|meta| meta.id == active_id).cloned()
+  }
+
+  pub(crate) fn load(&self, id: &str, cx: &App) -> Task<Option<LoadedConversation>> {
     let path = self.dir.join(format!("{id}.json"));
     cx.background_executor()
       .spawn(async move { load_conversation_file(&path) })
   }
 
-  pub fn load_active(&self, cx: &App) -> Task<Option<LoadedConversation>> {
-    let dir = self.dir.clone();
-    cx.background_executor()
-      .spawn(async move { load_active_conversation(&dir) })
+  /// Flush queued writes when the app quits; without this a quit mid-stream
+  /// loses the last throttle window of transcript.
+  pub fn arm_quit_flush(&mut self, cx: &mut Context<Self>) {
+    cx.on_app_quit(|store: &mut Self, _| {
+      store.flush_on_quit();
+      async {}
+    })
+    .detach();
   }
 
   /// Quit path: whatever is still queued lands synchronously.
@@ -306,8 +328,10 @@ fn write_save(dir: &std::path::Path, metas: &[ConversationMeta], request: SaveRe
     std::fs::write(dir.join(format!("{id}.json")), json)
       .log_err_context("writing the conversation");
   }
-  std::fs::write(dir.join("active.txt"), &request.active_id)
-    .log_err_context("writing the active conversation id");
+  if let Some(active_id) = &request.active_id {
+    std::fs::write(dir.join("active.txt"), active_id)
+      .log_err_context("writing the active conversation id");
+  }
   write_index(dir, metas);
 }
 

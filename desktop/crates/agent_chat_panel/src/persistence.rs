@@ -120,17 +120,6 @@ pub(crate) type LoadedConversation = (
   bool,
 );
 
-pub(crate) fn load_active_conversation(dir: &std::path::Path) -> Option<LoadedConversation> {
-  let active_path = dir.join("active.txt");
-  let active_id = std::fs::read_to_string(&active_path).ok()?;
-  let active_id = active_id.trim().to_string();
-  if active_id.is_empty() {
-    return None;
-  }
-  let conv_path = dir.join(format!("{active_id}.json"));
-  load_conversation_file(&conv_path)
-}
-
 pub(crate) fn load_conversation_file(path: &std::path::Path) -> Option<LoadedConversation> {
   let raw = std::fs::read_to_string(path).ok()?;
   let parsed: PersistedConversation = serde_json::from_str(&raw).ok()?;

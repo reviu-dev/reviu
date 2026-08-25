@@ -784,11 +784,7 @@ async fn the_listing_comes_from_the_index_without_reading_transcripts(
 
   // Corrupt the transcript: a listing that parsed it would lose the row.
   std::fs::write(dir.join(format!("{conv_id}.json")), "not json").unwrap();
-  let (panel2, cx) = add_panel_window(cx);
-  let listed = panel2.update(cx, |panel, cx| {
-    panel.store = Some(cx.new(|_| crate::store::ConversationStore::new(dir.clone())));
-    panel.list_conversations(cx)
-  });
+  let listed = crate::store::ConversationStore::new(dir.clone()).list();
   assert_eq!(listed.len(), 1, "the index alone serves the listing");
   assert_eq!(listed[0].id, conv_id);
   assert_eq!(
@@ -829,52 +825,36 @@ async fn coalesced_saves_land_the_last_snapshot(cx: &mut gpui::TestAppContext) {
 }
 
 #[gpui::test]
-async fn switching_conversations_hydrates_in_the_background(cx: &mut gpui::TestAppContext) {
+async fn a_resumed_panel_hydrates_in_the_background(cx: &mut gpui::TestAppContext) {
   set_backend_command_override(Some("/nonexistent-agent-binary".to_string()));
-  let dir = temp_dir("agent-store-switch");
+  let dir = temp_dir("agent-store-resume");
   let (panel, cx) = add_panel_window(cx);
-  let first_id = panel.update(cx, |panel, cx| {
+  let first_meta = panel.update(cx, |panel, cx| {
     panel.store = Some(cx.new(|_| crate::store::ConversationStore::new(dir.clone())));
     panel.items = vec![user_message("first conversation")];
     panel.persist_state(cx);
-    panel.current_conv.id.clone()
+    panel.current_conv.clone()
   });
   cx.run_until_parked();
+  let store = panel.read_with(cx, |panel, _| panel.store.clone().expect("store"));
 
-  cx.update(|window, cx| {
-    panel.update(cx, |panel, cx| {
-      panel.new_conversation(window, cx);
-      panel.items = vec![user_message("second conversation")];
-      panel.persist_state(cx);
-    });
+  let resumed = resumed_panel(&store, Some(first_meta.clone()), cx);
+  resumed.read_with(cx, |panel, _| {
+    assert_eq!(
+      panel.loading_conversation_id(),
+      Some(first_meta.id.as_str()),
+      "the conversation is marked as hydrating until its transcript lands"
+    );
+    assert!(panel.items.is_empty());
   });
   cx.run_until_parked();
-
-  cx.update(|window, cx| {
-    panel.update(cx, |panel, cx| {
-      let first_id = first_id.clone();
-      panel.load_conversation(&first_id, window, cx);
-      assert_eq!(
-        panel.loading_conversation_id(),
-        Some(first_id.as_str()),
-        "the target row is marked as hydrating"
-      );
-      let ChatItem::Message(m) = &panel.items[0] else {
-        panic!("message expected");
-      };
-      assert_eq!(
-        m.text, "second conversation",
-        "the current transcript stays on screen during the load"
-      );
-    });
-  });
-  cx.run_until_parked();
-  panel.read_with(cx, |panel, _| {
+  resumed.read_with(cx, |panel, _| {
     assert_eq!(panel.loading_conversation_id(), None);
+    assert_eq!(panel.current_conv.id, first_meta.id);
     let ChatItem::Message(m) = &panel.items[0] else {
       panic!("message expected");
     };
-    assert_eq!(m.text, "first conversation", "the switch landed");
+    assert_eq!(m.text, "first conversation", "the transcript hydrated");
   });
   set_backend_command_override(None);
   std::fs::remove_dir_all(&dir).ok();
@@ -891,7 +871,9 @@ async fn composer_drafts_follow_their_conversation(cx: &mut gpui::TestAppContext
     panel.persist_state(cx);
   });
   cx.run_until_parked();
-  let first_id = panel.read_with(cx, |panel, _| panel.current_conv.id.clone());
+  let first_meta = panel.read_with(cx, |panel, _| panel.current_conv.clone());
+  let first_id = first_meta.id.clone();
+  let store = panel.read_with(cx, |panel, _| panel.store.clone().expect("store"));
 
   cx.update(|window, cx| {
     panel.update(cx, |panel, cx| {
@@ -905,25 +887,21 @@ async fn composer_drafts_follow_their_conversation(cx: &mut gpui::TestAppContext
   });
   cx.run_until_parked();
 
-  // A new conversation starts with an empty composer; the draft stays behind.
-  cx.update(|window, cx| panel.update(cx, |panel, cx| panel.new_conversation(window, cx)));
+  // A fresh session starts with an empty composer; the draft stays behind.
+  let fresh = resumed_panel(&store, None, cx);
   cx.run_until_parked();
-  panel.read_with(cx, |panel, cx| {
+  fresh.read_with(cx, |panel, cx| {
     assert_eq!(
       panel.input.read(cx).value().as_ref(),
       "",
-      "the new conversation must not inherit the draft"
+      "a fresh conversation must not inherit the draft"
     );
   });
 
-  // Back on the first conversation the draft returns.
-  cx.update(|window, cx| {
-    panel.update(cx, |panel, cx| {
-      panel.load_conversation(&first_id, window, cx)
-    })
-  });
+  // A panel resuming the first conversation gets the draft back.
+  let resumed = resumed_panel(&store, Some(first_meta), cx);
   cx.run_until_parked();
-  panel.read_with(cx, |panel, cx| {
+  resumed.read_with(cx, |panel, cx| {
     assert_eq!(
       panel.input.read(cx).value().as_ref(),
       "half-typed message",
@@ -933,18 +911,14 @@ async fn composer_drafts_follow_their_conversation(cx: &mut gpui::TestAppContext
 
   // Clearing the input (what sending does) drops the stored draft.
   cx.update(|window, cx| {
-    panel.update(cx, |panel, cx| {
+    resumed.update(cx, |panel, cx| {
       let input = panel.input.clone();
       input.update(cx, |state, cx| state.set_value("", window, cx));
       panel.schedule_draft_save(cx);
     });
   });
   cx.run_until_parked();
-  panel.update(cx, |panel, cx| {
-    if let Some(store) = panel.store.clone() {
-      store.update(cx, |store, _| store.flush_on_quit());
-    }
-  });
+  store.update(cx, |store, _| store.flush_on_quit());
   let relaunched = crate::store::ConversationStore::new(dir.clone());
   assert_eq!(
     relaunched.draft(&first_id),
@@ -960,16 +934,17 @@ async fn the_reading_position_follows_its_conversation(cx: &mut gpui::TestAppCon
   set_backend_command_override(Some("/nonexistent-agent-binary".to_string()));
   let dir = temp_dir("agent-scroll");
   let (panel, cx) = add_panel_window(cx);
-  let first_id = panel.update(cx, |panel, cx| {
+  let first_meta = panel.update(cx, |panel, cx| {
     panel.store = Some(cx.new(|_| crate::store::ConversationStore::new(dir.clone())));
     panel.items = (0..60)
       .map(|i| user_message(&format!("message {i}")))
       .collect();
     panel.sync_list_count();
     panel.persist_state(cx);
-    panel.current_conv.id.clone()
+    panel.current_conv.clone()
   });
   cx.run_until_parked();
+  let store = panel.read_with(cx, |panel, _| panel.store.clone().expect("store"));
 
   // The reader scrolls away from the tail; render-time capture persists it.
   panel.update(cx, |panel, cx| {
@@ -981,22 +956,18 @@ async fn the_reading_position_follows_its_conversation(cx: &mut gpui::TestAppCon
   });
   cx.run_until_parked();
 
-  cx.update(|window, cx| panel.update(cx, |panel, cx| panel.new_conversation(window, cx)));
+  let fresh = resumed_panel(&store, None, cx);
   cx.run_until_parked();
-  panel.read_with(cx, |panel, _| {
+  fresh.read_with(cx, |panel, _| {
     assert!(
       panel.messages_list.is_following_tail(),
       "a fresh conversation follows the tail"
     );
   });
 
-  cx.update(|window, cx| {
-    panel.update(cx, |panel, cx| {
-      panel.load_conversation(&first_id, window, cx)
-    })
-  });
+  let resumed = resumed_panel(&store, Some(first_meta), cx);
   cx.run_until_parked();
-  panel.read_with(cx, |panel, _| {
+  resumed.read_with(cx, |panel, _| {
     assert!(
       !panel.messages_list.is_following_tail(),
       "a stored offset pauses tail-following"
@@ -1080,6 +1051,8 @@ async fn deleting_a_conversation_scrubs_its_traces(cx: &mut gpui::TestAppContext
       store.set_scroll(&id, Some((7, 2.0)), cx);
     });
     panel.store = Some(store);
+    // The shown panel writes the active pointer with each save.
+    panel.set_active_conversation(true);
     panel.items = vec![user_message("to be deleted")];
     panel.persist_state(cx);
     id
@@ -1087,6 +1060,8 @@ async fn deleting_a_conversation_scrubs_its_traces(cx: &mut gpui::TestAppContext
   cx.run_until_parked();
   let path = dir.join(format!("{conv_id}.json"));
   assert!(path.exists());
+  assert!(dir.join("active.txt").exists());
+  let store = panel.read_with(cx, |panel, _| panel.store.clone().expect("store"));
 
   // A throttled save is still queued when the delete lands: it must not
   // resurrect the file.
@@ -1094,11 +1069,9 @@ async fn deleting_a_conversation_scrubs_its_traces(cx: &mut gpui::TestAppContext
     panel.items.push(agent_message("late change"));
     panel.schedule_persist(cx);
   });
-  cx.update(|window, cx| {
-    panel.update(cx, |panel, cx| {
-      let conv_id = conv_id.clone();
-      panel.delete_conversation(&conv_id, window, cx);
-    });
+  store.update(cx, |store, cx| {
+    store.delete(&conv_id, cx);
+    store.set_active(None, cx);
   });
   cx.executor()
     .advance_clock(std::time::Duration::from_millis(600));
@@ -1107,20 +1080,10 @@ async fn deleting_a_conversation_scrubs_its_traces(cx: &mut gpui::TestAppContext
   assert!(!path.exists(), "the transcript file is gone and stays gone");
   assert!(
     !dir.join("active.txt").exists(),
-    "deleting the current conversation clears the active pointer"
+    "deleting the active conversation clears the active pointer"
   );
-  panel.read_with(cx, |panel, cx| {
-    assert_ne!(
-      panel.current_conv.id, conv_id,
-      "a fresh conversation took over"
-    );
-    assert!(
-      panel.list_conversations(cx).is_empty(),
-      "the index dropped the row"
-    );
-  });
   let relaunched = crate::store::ConversationStore::new(dir.clone());
-  assert!(relaunched.list().is_empty());
+  assert!(relaunched.list().is_empty(), "the index dropped the row");
   assert_eq!(relaunched.draft(&conv_id), None, "the draft was scrubbed");
   assert_eq!(relaunched.scroll(&conv_id), None, "the scroll was scrubbed");
   set_backend_command_override(None);
@@ -1151,82 +1114,60 @@ async fn a_pending_transcript_save_lands_on_quit(cx: &mut gpui::TestAppContext) 
 }
 
 #[gpui::test]
-async fn a_faster_second_switch_wins_over_a_stale_load(cx: &mut gpui::TestAppContext) {
-  set_backend_command_override(Some("/nonexistent-agent-binary".to_string()));
-  let dir = temp_dir("agent-double-switch");
+async fn a_background_panel_never_writes_the_active_pointer(cx: &mut gpui::TestAppContext) {
+  let dir = temp_dir("agent-active-background");
   let (panel, cx) = add_panel_window(cx);
-  let first_id = panel.update(cx, |panel, cx| {
+  panel.update(cx, |panel, cx| {
     panel.store = Some(cx.new(|_| crate::store::ConversationStore::new(dir.clone())));
-    panel.items = vec![user_message("first conversation")];
+    panel.items = vec![user_message("streaming in the background")];
     panel.persist_state(cx);
-    panel.current_conv.id.clone()
   });
   cx.run_until_parked();
-  let second_id = cx.update(|window, cx| {
-    panel.update(cx, |panel, cx| {
-      panel.new_conversation(window, cx);
-      panel.items = vec![user_message("second conversation")];
-      panel.persist_state(cx);
-      panel.current_conv.id.clone()
-    })
-  });
-  cx.run_until_parked();
+  assert!(
+    !dir.join("active.txt").exists(),
+    "a save from a background panel must not steal the active pointer"
+  );
 
-  // Two clicks before anything hydrates: only the last one may apply.
-  cx.update(|window, cx| {
-    panel.update(cx, |panel, cx| {
-      panel.load_conversation(&first_id, window, cx);
-      panel.load_conversation(&second_id, window, cx);
-    });
+  panel.update(cx, |panel, cx| {
+    panel.set_active_conversation(true);
+    panel.items.push(agent_message("now shown"));
+    panel.persist_state(cx);
   });
   cx.run_until_parked();
-  panel.read_with(cx, |panel, _| {
-    assert_eq!(panel.current_conv.id, second_id, "the newest switch wins");
-    assert_eq!(panel.loading_conversation_id(), None);
-    let ChatItem::Message(m) = &panel.items[0] else {
-      panic!("message expected");
-    };
-    assert_eq!(m.text, "second conversation");
-  });
-  set_backend_command_override(None);
+  let active = std::fs::read_to_string(dir.join("active.txt")).expect("active pointer exists");
+  let conv_id = panel.read_with(cx, |panel, _| panel.current_conv.id.clone());
+  assert_eq!(active.trim(), conv_id, "the shown panel writes the pointer");
   std::fs::remove_dir_all(&dir).ok();
 }
 
 #[gpui::test]
-async fn the_active_pointer_follows_a_switch(cx: &mut gpui::TestAppContext) {
-  set_backend_command_override(Some("/nonexistent-agent-binary".to_string()));
-  let dir = temp_dir("agent-active-switch");
+async fn the_turn_gate_refuses_a_second_concurrent_turn(cx: &mut gpui::TestAppContext) {
   let (panel, cx) = add_panel_window(cx);
-  let first_id = panel.update(cx, |panel, cx| {
-    panel.store = Some(cx.new(|_| crate::store::ConversationStore::new(dir.clone())));
-    panel.items = vec![user_message("first conversation")];
-    panel.persist_state(cx);
-    panel.current_conv.id.clone()
-  });
-  cx.run_until_parked();
-  cx.update(|window, cx| {
-    panel.update(cx, |panel, cx| {
-      panel.new_conversation(window, cx);
-      panel.items = vec![user_message("second conversation")];
-      panel.persist_state(cx);
-    });
-  });
-  cx.run_until_parked();
+  let gate = panel.read_with(cx, |panel, _| panel.turn_gate.clone());
+  gate.acquire("some-other-conversation");
 
-  cx.update(|window, cx| {
-    panel.update(cx, |panel, cx| {
-      panel.load_conversation(&first_id, window, cx)
-    })
+  panel.update(cx, |panel, cx| {
+    let dispatched = panel.dispatch_prompt("hello".to_string(), cx);
+    assert!(!dispatched, "the gate blocks a turn while another runs");
+    let ChatItem::Message(m) = panel.items.last().expect("a system message") else {
+      panic!("message expected");
+    };
+    assert!(matches!(m.role, ChatRole::System));
+    assert!(m.text.contains("Another session is running"));
   });
-  cx.run_until_parked();
-  let active = std::fs::read_to_string(dir.join("active.txt")).expect("active pointer exists");
-  assert_eq!(
-    active.trim(),
-    first_id,
-    "a relaunch would reopen the switched-to conversation"
-  );
-  set_backend_command_override(None);
-  std::fs::remove_dir_all(&dir).ok();
+
+  gate.release("some-other-conversation");
+  panel.update(cx, |panel, cx| {
+    // Free gate: the dispatch now fails on the missing session, not the gate.
+    let items_before = panel.items.len();
+    let dispatched = panel.dispatch_prompt("hello".to_string(), cx);
+    assert!(!dispatched, "no session is connected in this fixture");
+    assert_eq!(
+      panel.items.len(),
+      items_before,
+      "a free gate adds no refusal message"
+    );
+  });
 }
 
 #[gpui::test]
@@ -2197,6 +2138,29 @@ fn tool_kind_labels_cover_main_kinds() {
   assert_eq!(tool_kind_label(&ToolKind::Read), "Read");
   assert_eq!(tool_kind_label(&ToolKind::Edit), "Edit");
   assert_eq!(tool_kind_label(&ToolKind::Execute), "Run");
+}
+
+/// A real `new` panel sharing `store`, hydrating `resume`; the backend
+/// override must point at a nonexistent binary so no process spawns.
+fn resumed_panel(
+  store: &gpui::Entity<crate::store::ConversationStore>,
+  resume: Option<ConversationMeta>,
+  cx: &mut gpui::VisualTestContext,
+) -> gpui::Entity<AgentChatPanel> {
+  let store = store.clone();
+  cx.update(|window, cx| {
+    cx.new(|cx| {
+      AgentChatPanel::new(
+        default_agent_id(),
+        PathBuf::from("."),
+        Some(store),
+        resume,
+        TurnGate::default(),
+        window,
+        cx,
+      )
+    })
+  })
 }
 
 fn add_panel_window(

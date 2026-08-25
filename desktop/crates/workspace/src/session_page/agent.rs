@@ -36,27 +36,75 @@ impl SessionPage {
   }
 
   pub(super) fn ensure_agent_chat_view(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-    if let Some(view) = self.agent_chat_view.as_ref()
-      && view.read(cx).needs_reconnect()
-    {
-      self.agent_chat_view = None;
-    }
-    if self.agent_chat_view.is_some() {
+    // A panel whose backend connection errored out is rebuilt on the same
+    // conversation instead of revived in place.
+    let reconnect_resume = match self.agent_chat_view.as_ref() {
+      Some(view) if view.read(cx).needs_reconnect() => {
+        let id = view.read(cx).current_conversation().id.clone();
+        self.agent_chat_view = None;
+        Some(self.conversation_meta(&id, cx))
+      }
+      Some(_) => return,
+      None => None,
+    };
+    prune_agent_chat_state_once();
+    self.ensure_chat_store(cx);
+    let resume = match reconnect_resume {
+      Some(meta) => meta,
+      None => self
+        .chat_store
+        .as_ref()
+        .and_then(|store| store.read(cx).active_meta()),
+    };
+    let view = self.build_chat_panel(resume, window, cx);
+    view.update(cx, |panel, _| panel.set_active_conversation(true));
+    self.agent_chat_view = Some(view);
+    self.refresh_session_list(cx);
+  }
+
+  fn ensure_chat_store(&mut self, cx: &mut Context<Self>) {
+    if self.chat_store.is_some() {
       return;
     }
-    prune_agent_chat_state_once();
     let cwd = self
       .selected_repo
       .clone()
       .unwrap_or_else(|| PathBuf::from("."));
-    let state_dir =
-      agent_chat_state_dir().map(|dir| AgentChatPanel::state_dir_for_repo(&dir, &cwd));
+    let Some(state_dir) =
+      agent_chat_state_dir().map(|dir| AgentChatPanel::state_dir_for_repo(&dir, &cwd))
+    else {
+      return;
+    };
+    let store = cx.new(|_| ConversationStore::new(state_dir));
+    store.update(cx, |store, cx| store.arm_quit_flush(cx));
+    self.chat_store = Some(store);
+  }
+
+  fn conversation_meta(&self, id: &str, cx: &App) -> Option<agent_chat_panel::ConversationMeta> {
+    self
+      .chat_store
+      .as_ref()
+      .and_then(|store| store.read(cx).list().into_iter().find(|meta| meta.id == id))
+  }
+
+  /// One panel per conversation: process, transcript and composer live and die
+  /// with it. The shell only decides which one is on screen.
+  fn build_chat_panel(
+    &mut self,
+    resume: Option<agent_chat_panel::ConversationMeta>,
+    window: &mut Window,
+    cx: &mut Context<Self>,
+  ) -> Entity<AgentChatPanel> {
+    let cwd = self
+      .selected_repo
+      .clone()
+      .unwrap_or_else(|| PathBuf::from("."));
     let backend = AgentSettings::load();
-    let view = cx.new(|cx| AgentChatPanel::new(backend, cwd, state_dir, window, cx));
-    // The sessions sidebar owns the conversation list; hide the panel's own controls.
+    let store = self.chat_store.clone();
+    let turn_gate = self.turn_gate.clone();
+    let view = cx.new(|cx| AgentChatPanel::new(backend, cwd, store, resume, turn_gate, window, cx));
     let close_control_visible = self.center == CenterView::Diff && self.diff_chat_open;
     view.update(cx, |panel, cx| {
-      panel.set_conversation_controls_visible(false);
       panel.set_close_control_visible(close_control_visible, cx);
     });
     // Sidebar reads conversation state from the panel; re-render when it changes.
@@ -70,21 +118,21 @@ impl SessionPage {
     cx.subscribe_in(
       &view,
       window,
-      |this, _panel, event: &AgentChatPanelEvent, window, cx| match event {
+      |this, panel, event: &AgentChatPanelEvent, window, cx| match event {
         AgentChatPanelEvent::OpenPath { path, line } => {
           let rel_path = agent_path_to_repo_relative(path.clone(), this.selected_repo.as_deref());
           this.open_diff(rel_path, *line, OpenIntent::Open, window, cx);
         }
         AgentChatPanelEvent::TurnStarted => {
-          this.create_turn_checkpoint(cx);
+          this.create_turn_checkpoint(panel.clone(), cx);
         }
         AgentChatPanelEvent::PermissionRequested => {
-          this.notify_agent_attention("Reviu agent needs a decision", window, cx);
+          this.notify_agent_attention("Reviu agent needs a decision", Some(panel), window, cx);
         }
         AgentChatPanelEvent::TurnFinished { completed } => {
           // A queued prompt draining into a fresh turn is not a stopping point.
-          if !_panel.read(cx).is_turn_in_flight() {
-            this.notify_agent_attention("Reviu agent finished", window, cx);
+          if !panel.read(cx).is_turn_in_flight() {
+            this.notify_agent_attention("Reviu agent finished", Some(panel), window, cx);
           }
           this.dock_panel.update(cx, |panel, cx| panel.refresh(cx));
           if let Some(editor) = this.editor.clone() {
@@ -93,6 +141,8 @@ impl SessionPage {
           this.consume_sent_review_comments(*completed);
           this.sync_agent_review_comments_to_editor(cx);
           this.refresh_branch(cx);
+          // A background session's row (timestamp, preview) moved too.
+          this.refresh_session_list(cx);
         }
         AgentChatPanelEvent::RollbackRequested { ref_name } => {
           this.rollback_to_checkpoint(ref_name.clone(), window, cx);
@@ -100,24 +150,64 @@ impl SessionPage {
         AgentChatPanelEvent::UndoTurnRequested { ref_name } => {
           this.undo_turn_files(ref_name.clone(), window, cx);
         }
-        AgentChatPanelEvent::ConversationsChanged => {
-          this.refresh_session_list(cx);
-        }
         AgentChatPanelEvent::CloseRequested => {
           this.hide_diff_chat(window, cx);
         }
       },
     )
     .detach();
-    self.agent_chat_view = Some(view);
-    self.refresh_session_list(cx);
+    view
+  }
+
+  /// Moves the shown panel to the background without stopping its agent.
+  fn park_active_chat_panel(&mut self, cx: &mut Context<Self>) {
+    let Some(panel) = self.agent_chat_view.take() else {
+      return;
+    };
+    // A blank idle conversation has no row to come back through; drop it.
+    let keep = {
+      let panel = panel.read(cx);
+      panel.has_persistable_content() || !panel.is_parked()
+    };
+    if !keep {
+      return;
+    }
+    let id = panel.read(cx).current_conversation().id.clone();
+    panel.update(cx, |panel, cx| {
+      panel.set_active_conversation(false);
+      panel.persist_now(cx);
+    });
+    self.background_chat_panels.insert(0, (id, panel));
+  }
+
+  /// Keeps the most recent parked panels alive; the rest are dropped, which
+  /// stops their agent process. Running sessions are never evicted.
+  fn evict_parked_chat_panels(&mut self, cx: &mut Context<Self>) {
+    const MAX_PARKED_CHAT_PANELS: usize = 5;
+    let mut kept = 0;
+    let mut index = 0;
+    while index < self.background_chat_panels.len() {
+      if !self.background_chat_panels[index].1.read(cx).is_parked() {
+        index += 1;
+        continue;
+      }
+      kept += 1;
+      if kept > MAX_PARKED_CHAT_PANELS {
+        let (_, panel) = self.background_chat_panels.remove(index);
+        panel.update(cx, |panel, cx| panel.persist_now(cx));
+      } else {
+        index += 1;
+      }
+    }
   }
 
   /// Popup on the primary display when the agent needs eyes and the main
-  /// window is inactive; clicking it brings the app back.
+  /// window is inactive; clicking it brings the app back. `panel` names the
+  /// session that asked, background ones included.
   pub(super) fn notify_agent_attention(
     &mut self,
     title: &str,
+    panel: Option<&Entity<AgentChatPanel>>,
     window: &mut Window,
     cx: &mut Context<Self>,
   ) {
@@ -136,17 +226,14 @@ impl SessionPage {
     let Some(screen) = cx.primary_display() else {
       return;
     };
-    let caption = self
-      .agent_chat_view
-      .as_ref()
+    let panel = panel.or(self.agent_chat_view.as_ref());
+    let caption = panel
       .map(|panel| panel.read(cx).current_conversation().title.clone())
       .filter(|title| !title.is_empty())
       .unwrap_or_else(|| "Agent session".to_string());
     let main_window = self.window_handle;
     let title = title.to_string();
-    let agent_id = self
-      .agent_chat_view
-      .as_ref()
+    let agent_id = panel
       .map(|panel| panel.read(cx).backend_kind().clone())
       .unwrap_or_else(agent_chat_panel::default_agent_id);
     let icon = agent_chat_panel::backend_icon(&agent_id);
@@ -182,28 +269,27 @@ impl SessionPage {
     }
   }
 
-  pub(super) fn create_turn_checkpoint(&mut self, cx: &mut Context<Self>) {
+  pub(super) fn create_turn_checkpoint(
+    &mut self,
+    panel: Entity<AgentChatPanel>,
+    cx: &mut Context<Self>,
+  ) {
     let Some(repo_root) = self.selected_repo.clone() else {
-      return;
-    };
-    let Some(panel) = self.agent_chat_view.clone() else {
       return;
     };
     let session_id = panel.read(cx).current_conversation().id.clone();
 
-    cx.spawn(async move |this, cx| {
+    // The marker must land on the session that started the turn, shown or not.
+    let panel = panel.downgrade();
+    cx.spawn(async move |_this, cx| {
       let result = cx
         .background_spawn(async move { git::create_checkpoint(&repo_root, &session_id) })
         .await;
       let Ok(checkpoint) = result else {
         return;
       };
-      let _ = this.update(cx, |this, cx| {
-        if let Some(panel) = this.agent_chat_view.clone() {
-          panel.update(cx, |panel, cx| {
-            panel.record_checkpoint(checkpoint.ref_name, cx);
-          });
-        }
+      let _ = panel.update(cx, |panel, cx| {
+        panel.record_checkpoint(checkpoint.ref_name, cx);
       });
     })
     .detach();
@@ -717,33 +803,92 @@ impl SessionPage {
   }
 
   pub(super) fn new_session(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-    // Revives the panel when the previous backend connection errored out.
-    self.ensure_agent_chat_view(window, cx);
-    let Some(panel) = self.agent_chat_view.clone() else {
-      return;
-    };
-    panel.update(cx, |panel, cx| panel.new_conversation(window, cx));
+    prune_agent_chat_state_once();
+    self.ensure_chat_store(cx);
+    if let Some(panel) = self.agent_chat_view.as_ref() {
+      // The shown conversation is still blank: it already is the new session.
+      // Not while hydrating (its transcript may be about to land) and not when
+      // its connection died (a fresh panel is the revival).
+      let panel = panel.read(cx);
+      if !panel.has_persistable_content()
+        && panel.loading_conversation_id().is_none()
+        && !panel.needs_reconnect()
+      {
+        self.focus_agent_input_on_next_frame(window, cx);
+        return;
+      }
+    }
+    self.park_active_chat_panel(cx);
+    let view = self.build_chat_panel(None, window, cx);
+    view.update(cx, |panel, _| panel.set_active_conversation(true));
+    self.agent_chat_view = Some(view);
+    self.evict_parked_chat_panels(cx);
+    self.sync_agent_chat_close_control(cx);
+    self.refresh_session_list(cx);
     self.focus_agent_input_on_next_frame(window, cx);
     cx.notify();
   }
 
   pub(super) fn delete_session(&mut self, id: &str, window: &mut Window, cx: &mut Context<Self>) {
-    let Some(panel) = self.agent_chat_view.clone() else {
+    let Some(store) = self.chat_store.clone() else {
       return;
     };
-    panel.update(cx, |panel, cx| panel.delete_conversation(id, window, cx));
+    store.update(cx, |store, cx| store.delete(id, cx));
+    // Dropping the panel stops its agent process.
+    self
+      .background_chat_panels
+      .retain(|(panel_id, _)| panel_id != id);
+    let deleting_active = self
+      .agent_chat_view
+      .as_ref()
+      .is_some_and(|panel| panel.read(cx).current_conversation().id == id);
+    if deleting_active {
+      store.update(cx, |store, cx| store.set_active(None, cx));
+      self.agent_chat_view = None;
+      let view = self.build_chat_panel(None, window, cx);
+      view.update(cx, |panel, _| panel.set_active_conversation(true));
+      self.agent_chat_view = Some(view);
+    }
+    self.refresh_session_list(cx);
     cx.notify();
   }
 
   pub(super) fn select_session(&mut self, id: &str, window: &mut Window, cx: &mut Context<Self>) {
-    self.ensure_agent_chat_view(window, cx);
-    let Some(panel) = self.agent_chat_view.clone() else {
-      return;
-    };
-    if panel.read(cx).current_conversation().id == id {
+    prune_agent_chat_state_once();
+    self.ensure_chat_store(cx);
+    if let Some(active) = self.agent_chat_view.as_ref()
+      && active.read(cx).current_conversation().id == id
+    {
       return;
     }
-    panel.update(cx, |panel, cx| panel.load_conversation(id, window, cx));
+    self.park_active_chat_panel(cx);
+    let panel = match self
+      .background_chat_panels
+      .iter()
+      .position(|(panel_id, _)| panel_id == id)
+    {
+      // The session was live in the background: back on screen as it is,
+      // reviving its connection if it died while parked.
+      Some(position) => {
+        let panel = self.background_chat_panels.remove(position).1;
+        if panel.read(cx).needs_reconnect() {
+          panel.update(cx, |panel, cx| panel.reconnect(cx));
+        }
+        panel
+      }
+      None => {
+        let resume = self.conversation_meta(id, cx);
+        self.build_chat_panel(resume, window, cx)
+      }
+    };
+    panel.update(cx, |panel, _| panel.set_active_conversation(true));
+    self.agent_chat_view = Some(panel);
+    if let Some(store) = self.chat_store.clone() {
+      store.update(cx, |store, cx| store.set_active(Some(id.to_string()), cx));
+    }
+    self.evict_parked_chat_panels(cx);
+    self.sync_agent_chat_close_control(cx);
+    self.refresh_session_list(cx);
     self.focus_agent_input_on_next_frame(window, cx);
     cx.notify();
   }
@@ -762,6 +907,7 @@ impl SessionPage {
     });
   }
 
+  /// A turn in ANY session counts: they all share the same working tree.
   pub(super) fn agent_turn_in_flight(&self, cx: &App) -> bool {
     #[cfg(test)]
     if self.pretend_agent_turn_in_flight {
@@ -771,6 +917,10 @@ impl SessionPage {
       .agent_chat_view
       .as_ref()
       .is_some_and(|panel| panel.read(cx).is_turn_in_flight())
+      || self
+        .background_chat_panels
+        .iter()
+        .any(|(_, panel)| panel.read(cx).is_turn_in_flight())
   }
 }
 
@@ -1448,6 +1598,219 @@ mod tests {
         .comments(ReviewSection::PullRequest);
       assert_eq!(pull_request_rows.len(), 1);
       assert_eq!(pull_request_rows[0].excerpt, "waiting for GitHub");
+    });
+  }
+
+  /// A page with the agent panel mounted against a nonexistent binary: the
+  /// full multi-panel plumbing runs, no process ever spawns. The override is
+  /// process-wide and never cleared: tests run in parallel, and clearing it
+  /// mid-run would let another test spawn a real agent.
+  async fn page_with_agent_panel<'a>(
+    name: &str,
+    cx: &'a mut TestAppContext,
+  ) -> (
+    TempRepo,
+    Entity<SessionPage>,
+    &'a mut gpui::VisualTestContext,
+  ) {
+    agent_chat_panel::set_backend_command_override(Some("/nonexistent-agent-binary".to_string()));
+    let repo = TempRepo::init(name);
+    commit_text_file(&repo.path, Path::new("README.md"), "v1\n", "initial");
+    let state_dir = agent_chat_state_dir()
+      .map(|dir| AgentChatPanel::state_dir_for_repo(&dir, &repo.path))
+      .expect("agent chat state dir");
+    let _ = std::fs::remove_dir_all(&state_dir);
+    let (page, cx) = add_session_page_window(repo.path.clone(), cx);
+    cx.run_until_parked();
+    page.update_in(cx, |page, window, cx| page.activate(window, cx));
+    cx.run_until_parked();
+    (repo, page, cx)
+  }
+
+  fn active_panel(page: &Entity<SessionPage>, cx: &TestAppContext) -> Entity<AgentChatPanel> {
+    page.read_with(cx, |page, _| {
+      page.agent_chat_view.clone().expect("active panel")
+    })
+  }
+
+  #[gpui::test]
+  async fn switching_sessions_parks_the_panel_and_brings_it_back(cx: &mut TestAppContext) {
+    let (_repo, page, cx) = page_with_agent_panel("session-page-park-revive", cx).await;
+
+    let first = active_panel(&page, cx);
+    first.update(cx, |panel, cx| {
+      panel.seed_user_message_for_test("first", cx)
+    });
+    cx.run_until_parked();
+    let first_id = first.read_with(cx, |panel, _| panel.current_conversation().id.clone());
+
+    page.update_in(cx, |page, window, cx| page.new_session(window, cx));
+    cx.run_until_parked();
+    let second = active_panel(&page, cx);
+    assert_ne!(
+      second.entity_id(),
+      first.entity_id(),
+      "a fresh panel took over"
+    );
+    second.update(cx, |panel, cx| {
+      panel.seed_user_message_for_test("second", cx)
+    });
+    cx.run_until_parked();
+    page.read_with(cx, |page, _| {
+      assert_eq!(page.background_chat_panels.len(), 1);
+      assert_eq!(page.background_chat_panels[0].0, first_id);
+    });
+
+    // Coming back revives the very same panel entity: nothing was reloaded.
+    page.update_in(cx, |page, window, cx| {
+      page.select_session(&first_id, window, cx)
+    });
+    cx.run_until_parked();
+    assert_eq!(active_panel(&page, cx).entity_id(), first.entity_id());
+    page.read_with(cx, |page, cx| {
+      assert_eq!(page.background_chat_panels.len(), 1);
+      let store = page.chat_store.as_ref().expect("store").read(cx);
+      assert_eq!(
+        store.active_id(),
+        Some(first_id.as_str()),
+        "a relaunch would reopen the switched-to conversation"
+      );
+    });
+  }
+
+  #[gpui::test]
+  async fn deleting_the_active_session_starts_a_fresh_one(cx: &mut TestAppContext) {
+    let (_repo, page, cx) = page_with_agent_panel("session-page-delete-active", cx).await;
+
+    let first = active_panel(&page, cx);
+    first.update(cx, |panel, cx| {
+      panel.seed_user_message_for_test("doomed", cx)
+    });
+    cx.run_until_parked();
+    let first_id = first.read_with(cx, |panel, _| panel.current_conversation().id.clone());
+
+    page.update_in(cx, |page, window, cx| {
+      page.delete_session(&first_id, window, cx)
+    });
+    cx.run_until_parked();
+
+    let fresh = active_panel(&page, cx);
+    assert_ne!(fresh.entity_id(), first.entity_id());
+    page.read_with(cx, |page, cx| {
+      let store = page.chat_store.as_ref().expect("store").read(cx);
+      assert!(store.list().is_empty(), "the conversation left the index");
+      assert_eq!(store.active_id(), None);
+      assert!(page.background_chat_panels.is_empty());
+    });
+  }
+
+  #[gpui::test]
+  async fn deleting_a_background_session_drops_its_panel(cx: &mut TestAppContext) {
+    let (_repo, page, cx) = page_with_agent_panel("session-page-delete-background", cx).await;
+
+    let first = active_panel(&page, cx);
+    first.update(cx, |panel, cx| {
+      panel.seed_user_message_for_test("first", cx)
+    });
+    cx.run_until_parked();
+    let first_id = first.read_with(cx, |panel, _| panel.current_conversation().id.clone());
+    page.update_in(cx, |page, window, cx| page.new_session(window, cx));
+    let second = active_panel(&page, cx);
+    cx.run_until_parked();
+
+    page.update_in(cx, |page, window, cx| {
+      page.delete_session(&first_id, window, cx)
+    });
+    cx.run_until_parked();
+
+    page.read_with(cx, |page, cx| {
+      assert!(page.background_chat_panels.is_empty());
+      let store = page.chat_store.as_ref().expect("store").read(cx);
+      assert!(store.list().is_empty());
+    });
+    // The shown session was untouched.
+    assert_eq!(active_panel(&page, cx).entity_id(), second.entity_id());
+  }
+
+  #[gpui::test]
+  async fn parked_panels_beyond_the_cap_are_dropped_oldest_first(cx: &mut TestAppContext) {
+    let (_repo, page, cx) = page_with_agent_panel("session-page-eviction", cx).await;
+
+    for i in 0..8 {
+      let panel = active_panel(&page, cx);
+      panel.update(cx, |panel, cx| {
+        panel.seed_user_message_for_test(format!("session {i}"), cx)
+      });
+      cx.run_until_parked();
+      page.update_in(cx, |page, window, cx| page.new_session(window, cx));
+      cx.run_until_parked();
+    }
+
+    page.read_with(cx, |page, cx| {
+      assert_eq!(
+        page.background_chat_panels.len(),
+        5,
+        "idle panels beyond the cap are dropped"
+      );
+      let store = page.chat_store.as_ref().expect("store").read(cx);
+      assert_eq!(
+        store.list().len(),
+        8,
+        "evicting a panel never deletes its conversation"
+      );
+    });
+  }
+
+  #[gpui::test]
+  async fn a_running_background_session_is_never_evicted_and_blocks_repo_moves(
+    cx: &mut TestAppContext,
+  ) {
+    let (_repo, page, cx) = page_with_agent_panel("session-page-running-background", cx).await;
+
+    let first = active_panel(&page, cx);
+    first.update(cx, |panel, cx| {
+      panel.seed_user_message_for_test("busy one", cx);
+      panel.pretend_turn_in_flight_for_test(cx);
+    });
+    cx.run_until_parked();
+
+    // Park it behind six more sessions: the cap must not touch it.
+    for i in 0..6 {
+      page.update_in(cx, |page, window, cx| page.new_session(window, cx));
+      let panel = active_panel(&page, cx);
+      panel.update(cx, |panel, cx| {
+        panel.seed_user_message_for_test(format!("filler {i}"), cx)
+      });
+      cx.run_until_parked();
+    }
+
+    page.read_with(cx, |page, cx| {
+      assert!(
+        page
+          .background_chat_panels
+          .iter()
+          .any(|(_, panel)| panel.entity_id() == first.entity_id()),
+        "the running panel survived the eviction pass"
+      );
+      assert!(page.agent_turn_in_flight(cx), "a background turn counts");
+    });
+  }
+
+  #[gpui::test]
+  async fn a_blank_session_never_stacks_parked_panels(cx: &mut TestAppContext) {
+    let (_repo, page, cx) = page_with_agent_panel("session-page-blank-reuse", cx).await;
+
+    // Repeated New Session on a blank conversation piles nothing up: no
+    // parked panel, no row on disk. (The entity itself may be rebuilt when
+    // its connection is dead, as it always is under this fixture.)
+    for _ in 0..3 {
+      page.update_in(cx, |page, window, cx| page.new_session(window, cx));
+      cx.run_until_parked();
+    }
+    page.read_with(cx, |page, cx| {
+      assert!(page.background_chat_panels.is_empty());
+      let store = page.chat_store.as_ref().expect("store").read(cx);
+      assert!(store.list().is_empty(), "nothing blank was persisted");
     });
   }
 

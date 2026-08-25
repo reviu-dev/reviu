@@ -28,7 +28,8 @@ use crate::persistence::{
   truncate_title,
 };
 pub use crate::persistence::{ConversationMeta, state_dir_for_repo};
-use crate::store::{ConversationStore, SaveRequest};
+pub use crate::store::ConversationStore;
+use crate::store::SaveRequest;
 use agent_acp::{
   AgentEvent, AgentSession, AuthMethodInfo, BackendAvailability, BackendConfig,
   PermissionOptionKind, PermissionPrompt,
@@ -579,6 +580,34 @@ struct SelectionContext {
   text: String,
 }
 
+/// One turn at a time across every session sharing a checkout: two agents
+/// editing the same working tree would corrupt each other's work. Goes away
+/// per-worktree once sessions get isolated checkouts.
+#[derive(Clone, Default)]
+pub struct TurnGate(std::rc::Rc<std::cell::RefCell<Option<String>>>);
+
+impl TurnGate {
+  pub fn new() -> Self {
+    Self::default()
+  }
+
+  fn can_start(&self, conversation_id: &str) -> bool {
+    let holder = self.0.borrow();
+    holder.is_none() || holder.as_deref() == Some(conversation_id)
+  }
+
+  fn acquire(&self, conversation_id: &str) {
+    *self.0.borrow_mut() = Some(conversation_id.to_string());
+  }
+
+  fn release(&self, conversation_id: &str) {
+    let mut holder = self.0.borrow_mut();
+    if holder.as_deref() == Some(conversation_id) {
+      *holder = None;
+    }
+  }
+}
+
 /// Emitted so the host can act on panel interactions.
 #[derive(Clone, Debug)]
 pub enum AgentChatPanelEvent {
@@ -595,14 +624,18 @@ pub enum AgentChatPanelEvent {
   UndoTurnRequested { ref_name: String },
   /// The agent is waiting on a permission answer.
   PermissionRequested,
-  /// A conversation was created, loaded or deleted; the host should re-read
-  /// the conversation list from disk.
-  ConversationsChanged,
   /// User asked the host to hide the chat pane.
   CloseRequested,
 }
 
 impl gpui::EventEmitter<AgentChatPanelEvent> for AgentChatPanel {}
+
+impl Drop for AgentChatPanel {
+  fn drop(&mut self) {
+    // A panel deleted mid-turn must not leave the shared gate held forever.
+    self.turn_gate.release(&self.current_conv.id);
+  }
+}
 
 pub struct AgentChatPanel {
   backend_kind: AgentId,
@@ -670,11 +703,12 @@ pub struct AgentChatPanel {
   auth_methods: Vec<AuthMethodInfo>,
   auth_required: bool,
   store: Option<Entity<ConversationStore>>,
-  /// Conversation being hydrated after a sidebar click, with a generation
-  /// guard so a slow load can't clobber a newer switch.
-  loading_conversation: Option<(String, u64)>,
-  load_generation: u64,
+  /// Conversation still hydrating from disk after this panel was created.
+  loading_conversation: Option<String>,
   current_conv: ConversationMeta,
+  /// The shown panel writes the active pointer; background ones must not.
+  is_active: bool,
+  turn_gate: TurnGate,
   selection_registry: selectable_text::SelectionRegistry,
   /// Built once: rebuilding extensions busts TextView's parse cache.
   markdown_extensions: gpui_component::text::MarkdownExtensions,
@@ -690,21 +724,23 @@ pub struct AgentChatPanel {
   _events_task: Option<Task<()>>,
   _permission_task: Option<Task<()>>,
   _input_sub: Option<gpui::Subscription>,
-  show_conversation_controls: bool,
   show_close_control: bool,
 }
 
 impl AgentChatPanel {
+  /// A panel bound to one conversation for its whole life: `resume` hydrates
+  /// an existing one from the shared store, `None` starts fresh.
   pub fn new(
     backend_kind: AgentId,
     cwd: PathBuf,
-    state_dir: Option<PathBuf>,
+    store: Option<Entity<ConversationStore>>,
+    resume: Option<ConversationMeta>,
+    turn_gate: TurnGate,
     window: &mut Window,
     cx: &mut Context<Self>,
   ) -> Self {
     let backend = resolve_backend_config(&backend_kind);
     let (input, input_sub) = Self::build_composer_input(window, cx);
-    let store = state_dir.map(|dir| cx.new(|_| ConversationStore::new(dir)));
 
     let selection_registry = selectable_text::SelectionRegistry::new();
     let markdown_extensions = code_block::extensions(selection_registry.clone());
@@ -760,8 +796,9 @@ impl AgentChatPanel {
       auth_required: false,
       store,
       loading_conversation: None,
-      load_generation: 0,
-      current_conv: new_conversation_meta(),
+      current_conv: resume.clone().unwrap_or_else(new_conversation_meta),
+      is_active: false,
+      turn_gate,
       selection_registry,
       markdown_extensions,
       available_modes: Vec::new(),
@@ -775,7 +812,6 @@ impl AgentChatPanel {
       _events_task: None,
       _permission_task: None,
       _input_sub: Some(input_sub),
-      show_conversation_controls: true,
       show_close_control: false,
     };
 
@@ -783,24 +819,16 @@ impl AgentChatPanel {
     panel.install_runway_release(cx);
     panel.sync_list_count();
 
-    // Flush queued writes on quit; without this a quit mid-stream loses the
-    // last throttle window of transcript.
-    cx.on_app_quit(|panel: &mut Self, cx| {
-      if let Some(store) = panel.store.clone() {
-        store.update(cx, |store, _| store.flush_on_quit());
-      }
-      async {}
-    })
-    .detach();
-
-    match panel.store.clone() {
-      // The active conversation hydrates off the main thread, and the session
-      // connects after it so a saved session id can resume.
-      Some(store) => {
-        let load = store.read(cx).load_active(cx);
+    match resume.zip(panel.store.clone()) {
+      // The transcript hydrates off the main thread, and the session connects
+      // after it so a saved session id can resume.
+      Some((meta, store)) => {
+        panel.loading_conversation = Some(meta.id.clone());
+        let load = store.read(cx).load(&meta.id, cx);
         cx.spawn_in(window, async move |this, cx| {
           let loaded = load.await;
           let _ = this.update_in(cx, |panel, window, cx| {
+            panel.loading_conversation = None;
             if let Some(loaded) = loaded {
               panel.apply_loaded_conversation(loaded);
               panel.restore_scroll(cx);
@@ -812,9 +840,30 @@ impl AgentChatPanel {
         })
         .detach();
       }
-      None => panel.respawn_session(cx),
+      None => {
+        panel.restore_draft(window, cx);
+        panel.respawn_session(cx);
+      }
     }
     panel
+  }
+
+  /// A panel with no shared store and its own gate, for the driver and tests.
+  pub fn standalone(
+    backend_kind: AgentId,
+    cwd: PathBuf,
+    window: &mut Window,
+    cx: &mut Context<Self>,
+  ) -> Self {
+    Self::new(
+      backend_kind,
+      cwd,
+      None,
+      None,
+      TurnGate::default(),
+      window,
+      cx,
+    )
   }
 
   /// Pushes the composer's text into the store as the draft of the current
@@ -998,6 +1047,26 @@ impl AgentChatPanel {
   pub fn queue_prompt_for_test(&mut self, text: impl Into<String>, cx: &mut Context<Self>) {
     self.queued_prompts.push(text.into());
     cx.notify();
+  }
+
+  /// Give the conversation persistable content without an agent connected.
+  #[cfg(any(test, feature = "test-support"))]
+  pub fn seed_user_message_for_test(&mut self, text: impl Into<String>, cx: &mut Context<Self>) {
+    self.items.push(ChatItem::Message(ChatMessage {
+      role: ChatRole::User,
+      text: text.into(),
+      images: 0,
+      image_data: Vec::new(),
+    }));
+    self.persist_state(cx);
+    self.sync_list_count();
+    cx.notify();
+  }
+
+  /// Pretend a turn is running, as `start_turn` would.
+  #[cfg(any(test, feature = "test-support"))]
+  pub fn pretend_turn_in_flight_for_test(&mut self, cx: &mut Context<Self>) {
+    self.start_turn(cx);
   }
 
   /// The first unanswered permission: its id and extracted invocation.
@@ -1207,8 +1276,9 @@ impl AgentChatPanel {
       auth_required: false,
       store: None,
       loading_conversation: None,
-      load_generation: 0,
       current_conv: new_conversation_meta(),
+      is_active: false,
+      turn_gate: TurnGate::default(),
       selection_registry,
       markdown_extensions,
       available_modes: Vec::new(),
@@ -1222,7 +1292,6 @@ impl AgentChatPanel {
       _events_task: None,
       _permission_task: None,
       _input_sub: Some(input_sub),
-      show_conversation_controls: true,
       show_close_control: false,
     };
     panel.install_runway_release(cx);
@@ -1231,12 +1300,14 @@ impl AgentChatPanel {
   }
 
   fn start_turn(&mut self, cx: &mut Context<Self>) {
+    self.turn_gate.acquire(&self.current_conv.id);
     self.in_flight = true;
     self.turn_started_at = Some(std::time::Instant::now());
     self.start_tick_task(cx);
   }
 
   fn end_turn(&mut self) {
+    self.turn_gate.release(&self.current_conv.id);
     self.in_flight = false;
     self.turn_started_at = None;
     self._tick_task = None;
@@ -1611,8 +1682,9 @@ impl AgentChatPanel {
   /// Reload the mention candidates; the agent creates files as it works.
   fn refresh_repo_files(&mut self, cx: &mut Context<Self>) {
     let files_cwd = self.cwd.clone();
+    let listing = cx.background_spawn(async move { list_repo_files(files_cwd) });
     cx.spawn(async move |this, cx| {
-      let files = list_repo_files(files_cwd).await;
+      let files = listing.await;
       let _ = this.update(cx, |panel, cx| {
         panel.repo_files = Arc::new(files);
         cx.notify();
@@ -2326,12 +2398,6 @@ impl AgentChatPanel {
     cx.notify();
   }
 
-  /// Hide the header history/new-conversation buttons when the host provides
-  /// its own session list (the sessions shell sidebar).
-  pub fn set_conversation_controls_visible(&mut self, visible: bool) {
-    self.show_conversation_controls = visible;
-  }
-
   pub fn set_close_control_visible(&mut self, visible: bool, cx: &mut Context<Self>) {
     if self.show_close_control == visible {
       return;
@@ -2348,6 +2414,11 @@ impl AgentChatPanel {
     matches!(self.status, Status::Error(_) | Status::MissingBinary { .. })
   }
 
+  /// Respawn a dead connection in place, resuming the saved agent session.
+  pub fn reconnect(&mut self, cx: &mut Context<Self>) {
+    self.respawn_session(cx);
+  }
+
   pub fn backend_kind(&self) -> &AgentId {
     &self.backend_kind
   }
@@ -2356,95 +2427,25 @@ impl AgentChatPanel {
     self.supports_steering
   }
 
-  pub fn new_conversation(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-    self.persist_state(cx);
-    self.current_conv = new_conversation_meta();
-    self.items.clear();
-    self.tool_index.clear();
-    self.pending_agent.clear();
-    self.pending_md_state = None;
-    self.pending_thought.clear();
-    self.end_turn();
-    self.usage = None;
-    self.auto_approve = false;
-    self.clear_runway();
-    self.restore_draft(window, cx);
-    self.respawn_session(cx);
-    self.sync_list_count();
-    cx.emit(AgentChatPanelEvent::ConversationsChanged);
-    cx.notify();
+  /// Whether the shown panel is this one; only it writes the active pointer.
+  pub fn set_active_conversation(&mut self, is_active: bool) {
+    self.is_active = is_active;
   }
 
-  pub fn delete_conversation(&mut self, id: &str, window: &mut Window, cx: &mut Context<Self>) {
-    let Some(store) = self.store.clone() else {
-      return;
-    };
-    store.update(cx, |store, cx| store.delete(id, cx));
-    if self.current_conv.id == id {
-      store.update(cx, |store, cx| store.set_active(None, cx));
-      self.current_conv = new_conversation_meta();
-      self.items.clear();
-      self.tool_index.clear();
-      self.pending_agent.clear();
-      self.pending_md_state = None;
-      self.pending_thought.clear();
-      self.end_turn();
-      self.usage = None;
-      self.auto_approve = false;
-      self.clear_runway();
-      self.restore_draft(window, cx);
-      self.respawn_session(cx);
-    }
-    self.sync_list_count();
-    cx.emit(AgentChatPanelEvent::ConversationsChanged);
-    cx.notify();
+  /// A panel is parked when nothing live would be lost by dropping it.
+  pub fn is_parked(&self) -> bool {
+    !self.in_flight && self.queued_prompts.is_empty() && self.loading_conversation.is_none()
   }
 
-  /// Switch hydrates in the background: the current conversation stays on
-  /// screen and the sidebar row shows a spinner until its transcript lands.
-  pub fn load_conversation(&mut self, id: &str, window: &mut Window, cx: &mut Context<Self>) {
-    let Some(store) = self.store.clone() else {
-      return;
-    };
-    self.persist_state(cx);
+  /// Boundary persist before a park or an eviction.
+  pub fn persist_now(&mut self, cx: &mut Context<Self>) {
     self.save_scroll_position(cx);
-    self.load_generation += 1;
-    let generation = self.load_generation;
-    self.loading_conversation = Some((id.to_string(), generation));
-    let load = store.read(cx).load(id, cx);
-    let id = id.to_string();
-    cx.spawn_in(window, async move |this, cx| {
-      let loaded = load.await;
-      let _ = this.update_in(cx, |panel, window, cx| {
-        if panel.load_generation != generation {
-          return;
-        }
-        panel.loading_conversation = None;
-        let Some(loaded) = loaded else {
-          cx.notify();
-          return;
-        };
-        panel.apply_loaded_conversation(loaded);
-        panel.restore_scroll(cx);
-        panel.restore_draft(window, cx);
-        if let Some(store) = panel.store.clone() {
-          store.update(cx, |store, cx| store.set_active(Some(id.clone()), cx));
-        }
-        panel.respawn_session(cx);
-        cx.emit(AgentChatPanelEvent::ConversationsChanged);
-        cx.notify();
-      });
-    })
-    .detach();
-    cx.notify();
+    self.persist_state(cx);
   }
 
-  /// The conversation a sidebar click is still hydrating, if any.
+  /// The conversation this panel is still hydrating, if any.
   pub fn loading_conversation_id(&self) -> Option<&str> {
-    self
-      .loading_conversation
-      .as_ref()
-      .map(|(id, _)| id.as_str())
+    self.loading_conversation.as_deref()
   }
 
   fn respawn_session(&mut self, cx: &mut Context<Self>) {
@@ -2629,16 +2630,8 @@ impl AgentChatPanel {
           .collect(),
         auto_approve: self.auto_approve,
       },
-      active_id: self.current_conv.id.clone(),
+      active_id: self.is_active.then(|| self.current_conv.id.clone()),
     })
-  }
-
-  pub fn list_conversations(&self, cx: &App) -> Vec<ConversationMeta> {
-    self
-      .store
-      .as_ref()
-      .map(|store| store.read(cx).list())
-      .unwrap_or_default()
   }
 
   pub fn current_conversation(&self) -> &ConversationMeta {

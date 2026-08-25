@@ -63,9 +63,19 @@ impl SessionPage {
     self.repo_snapshot.update(cx, |snapshot, cx| {
       snapshot.set_repo_root(repo_root.clone(), cx)
     });
-    // Conversations are stored per repository, so the panel is rebuilt with
-    // the new cwd and state directory when the shell is already active.
-    self.agent_chat_view = None;
+    // Conversations are stored per repository, so every panel and the store
+    // are rebuilt on the new cwd and state directory.
+    for (_, panel) in std::mem::take(&mut self.background_chat_panels) {
+      panel.update(cx, |panel, cx| panel.persist_now(cx));
+    }
+    if let Some(panel) = self.agent_chat_view.take() {
+      panel.update(cx, |panel, cx| panel.persist_now(cx));
+    }
+    if let Some(store) = self.chat_store.take() {
+      // The store's write lane dies with it; land what it still holds.
+      store.update(cx, |store, _| store.flush_on_quit());
+    }
+    self.turn_gate = agent_chat_panel::TurnGate::new();
     self.sync_session_list(cx);
     if should_rebuild_agent {
       self.ensure_agent_chat_view(window, cx);
@@ -368,6 +378,8 @@ mod tests {
   async fn switching_repository_reloads_sessions_when_the_agent_panel_is_active(
     cx: &mut TestAppContext,
   ) {
+    // Never cleared: the override is process-wide and other tests mount panels.
+    agent_chat_panel::set_backend_command_override(Some("/nonexistent-agent-binary".to_string()));
     let repo = TempRepo::init("session-page-active-switch-from");
     commit_text_file(&repo.path, Path::new("README.md"), "v1\n", "initial");
     let other = TempRepo::init("session-page-active-switch-to");

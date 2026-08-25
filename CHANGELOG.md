@@ -2,6 +2,14 @@
 
 All notable changes to Reviu are documented here.
 
+## 1.1.0
+
+### Switching Sessions No Longer Stops The Agent
+
+Clicking another session used to kill the running agent: the turn was abandoned mid-stream, and coming back reopened a conversation that had silently stopped. Each session now keeps its own agent process alive in the background while you look at another one. Its reply keeps streaming into the transcript, and coming back shows the conversation exactly as it progressed, without reloading anything.
+
+Only one session runs a turn at a time for now: sessions still share the working tree, and two agents editing the same files would trample each other. Sending a message while another session is working tells you so instead of interleaving their edits. The most recent idle sessions stay warm in the background; older ones let their process go and reconnect when you return to them.
+
 ## 1.0.0
 
 ### The Pull Request Panel Follows The Branch You Switch To

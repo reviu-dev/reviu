@@ -294,6 +294,17 @@ impl AgentChatPanel {
     if self.in_flight {
       return false;
     }
+    if !self.turn_gate.can_start(&self.current_conv.id) {
+      self.items.push(ChatItem::Message(ChatMessage {
+        role: ChatRole::System,
+        text: "Another session is running. Wait for it to finish.".into(),
+        images: 0,
+        image_data: Vec::new(),
+      }));
+      self.sync_list_count();
+      cx.notify();
+      return false;
+    }
     let Some(session) = self.session.clone() else {
       return false;
     };
