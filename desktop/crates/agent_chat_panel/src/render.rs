@@ -2440,34 +2440,48 @@ impl AgentChatPanel {
     let element: gpui::AnyElement = match &item {
       ChatItem::Message(m) => match m.role {
         ChatRole::User if self.editing_message == Some(idx) => {
+          // The bubble stays the reading bubble: same shape, same colors,
+          // same place. Only the cursor and the two small actions below say
+          // this is an edit.
           let editor = self.edit_input.clone();
           v_flex()
             .debug_selector(|| "agent-chat-edit-message".to_string())
             .mb_3()
-            .gap_1()
-            .px_2()
-            .py_1p5()
-            .rounded(theme.radius)
-            .bg(theme.input_background())
-            .border_1()
-            .border_color(theme.ring)
-            .children(editor.map(|input| Textarea::new(&input).appearance(false).w_full()))
+            .gap_0p5()
+            .items_end()
+            .child(
+              div()
+                .w(px(560.))
+                .max_w_full()
+                .px_3()
+                .py_2()
+                .rounded(px(10.))
+                .bg(theme.secondary)
+                .text_sm()
+                .text_color(theme.foreground)
+                .children(editor.map(|input| Textarea::new(&input).appearance(false).w_full())),
+            )
             .child(
               h_flex()
-                .gap_1()
+                .h(px(10.))
+                .items_start()
                 .justify_end()
+                .gap_0p5()
                 .child(
                   Button::new(("agent-chat-edit-cancel", idx))
-                    .label("Cancel")
+                    .icon(UiIconName::X)
                     .xsmall()
                     .ghost()
+                    .compact()
+                    .tooltip("Cancel the edit")
                     .on_click(cx.listener(|panel, _, _, cx| panel.cancel_message_edit(cx))),
                 )
                 .child(
                   Button::new(("agent-chat-edit-send", idx))
-                    .label("Send")
+                    .icon(UiIconName::ArrowUp)
                     .xsmall()
-                    .primary()
+                    .ghost()
+                    .compact()
                     .tooltip("Restores the checkpoint and restarts from this message")
                     .on_click(cx.listener(|panel, _, _, cx| panel.submit_message_edit(cx))),
                 ),

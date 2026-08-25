@@ -12,6 +12,10 @@ Sessions sharing the main checkout still take turns, since two agents editing th
 
 Nothing accumulates behind your back either: opening a repository sweeps away `reviu-` worktrees that no session references any more, the leftovers of a crash or a failed delete. Worktrees on a branch you made yours are left alone.
 
+### Editing A Message Keeps Its Bubble
+
+Editing one of your messages swapped the bubble for a full-width bordered input with Cancel/Send buttons: the conversation jumped around you. The edit now happens inside the bubble itself, same shape, same colors, same place, with just a cursor and two small icon actions below it, the way review comments already edit in place.
+
 ### Session State Is A Dot, Not A Word
 
 The Working/Waiting/Failed word on a session row ate the end of its title and displaced its timestamp. It is now a small colored dot next to the time (amber running, blue waiting on you, red failed), with the word in its tooltip. And a failed turn no longer raises a toast on top of everything: the red card in the conversation and the red dot on the row already say it.
