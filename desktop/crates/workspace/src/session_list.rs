@@ -1,10 +1,37 @@
 //! The sidebar's session list: pick, create and delete conversations.
 
+use std::collections::HashMap;
+
 use agent_chat_panel::ConversationMeta;
 use gpui::{Context, EventEmitter, IntoElement, Render, SharedString, Window, div, prelude::*, px};
 use gpui_component::scroll::ScrollableElement as _;
 use gpui_component::{ActiveTheme as _, Icon, Sizable as _, h_flex, v_flex};
-use ui::{Button, ButtonVariants as _, UiIconName};
+use ui::{Button, ButtonVariants as _, StatusThemeExt as _, UiIconName};
+
+/// Live state of a session's agent, derived from its panel; a session with no
+/// panel alive is Idle. Deliberately NOT animated: a repeating per-row
+/// animation once pinned a whole window at 120Hz (see comet's motion.rs).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum SessionStatus {
+  #[default]
+  Idle,
+  Working,
+  /// The agent waits on a permission answer.
+  Waiting,
+  /// The agent process died or its binary is missing.
+  Failed,
+}
+
+impl SessionStatus {
+  fn label(self) -> Option<&'static str> {
+    match self {
+      SessionStatus::Idle => None,
+      SessionStatus::Working => Some("Working"),
+      SessionStatus::Waiting => Some("Waiting"),
+      SessionStatus::Failed => Some("Failed"),
+    }
+  }
+}
 
 pub(crate) fn format_relative_secs(updated_at_secs: u64, now_secs: u64) -> String {
   let delta = now_secs.saturating_sub(updated_at_secs);
@@ -51,6 +78,10 @@ pub struct SessionList {
   current_id: String,
   /// Row still hydrating after a click; shows a spinner in its trailing slot.
   loading_id: Option<String>,
+  /// Live agent state by conversation id; absent rows are Idle.
+  statuses: HashMap<String, SessionStatus>,
+  /// Worktree branch by conversation id, shown under the row.
+  worktree_branches: HashMap<String, String>,
 }
 
 impl SessionList {
@@ -59,6 +90,8 @@ impl SessionList {
       conversations: Vec::new(),
       current_id: String::new(),
       loading_id: None,
+      statuses: HashMap::new(),
+      worktree_branches: HashMap::new(),
     }
   }
 
@@ -67,6 +100,36 @@ impl SessionList {
       self.loading_id = loading_id;
       cx.notify();
     }
+  }
+
+  /// No-op notifies are skipped: statuses re-derive on every panel notify and
+  /// must not re-render the sidebar while nothing visible moved.
+  pub fn set_statuses(&mut self, statuses: HashMap<String, SessionStatus>, cx: &mut Context<Self>) {
+    if self.statuses != statuses {
+      self.statuses = statuses;
+      cx.notify();
+    }
+  }
+
+  pub fn set_worktree_branches(
+    &mut self,
+    worktree_branches: HashMap<String, String>,
+    cx: &mut Context<Self>,
+  ) {
+    if self.worktree_branches != worktree_branches {
+      self.worktree_branches = worktree_branches;
+      cx.notify();
+    }
+  }
+
+  #[cfg(test)]
+  pub(crate) fn status_of(&self, id: &str) -> SessionStatus {
+    self.statuses.get(id).copied().unwrap_or_default()
+  }
+
+  #[cfg(test)]
+  pub(crate) fn worktree_branch_of(&self, id: &str) -> Option<&str> {
+    self.worktree_branches.get(id).map(String::as_str)
   }
 
   pub fn set_conversations(
@@ -190,6 +253,17 @@ impl Render for SessionList {
       .map(|(ix, meta)| {
         let is_current = meta.id == self.current_id;
         let is_loading = self.loading_id.as_deref() == Some(meta.id.as_str());
+        let status = self.statuses.get(&meta.id).copied().unwrap_or_default();
+        let status_color = match status {
+          SessionStatus::Idle => theme.muted_foreground,
+          SessionStatus::Working => theme.status_amber(),
+          SessionStatus::Waiting => theme.status_blue(),
+          SessionStatus::Failed => theme.status_red(),
+        };
+        let worktree_branch = self
+          .worktree_branches
+          .get(&meta.id)
+          .map(|branch| SharedString::from(branch.clone()));
         let id = meta.id.clone();
         let delete_id = meta.id.clone();
         let title = session_row_title(meta);
@@ -237,6 +311,15 @@ impl Render for SessionList {
                     div()
                       .child(gpui_component::spinner::Spinner::new().xsmall())
                       .into_any_element()
+                  } else if let Some(label) = status.label() {
+                    // The live state replaces the timestamp: a running or
+                    // stuck session matters more than how old it is.
+                    div()
+                      .text_xs()
+                      .text_color(status_color.opacity(0.9))
+                      .group_hover(group_name.clone(), |this| this.opacity(0.0))
+                      .child(label)
+                      .into_any_element()
                   } else {
                     div()
                       .text_xs()
@@ -275,6 +358,25 @@ impl Render for SessionList {
                 .truncate()
                 .text_color(theme.muted_foreground)
                 .child(preview),
+            )
+          })
+          .when_some(worktree_branch, |this, branch| {
+            this.child(
+              h_flex()
+                .items_center()
+                .gap_1()
+                .child(
+                  Icon::new(UiIconName::GitBranch)
+                    .size(px(10.))
+                    .text_color(theme.muted_foreground.opacity(0.8)),
+                )
+                .child(
+                  div()
+                    .text_xs()
+                    .truncate()
+                    .text_color(theme.muted_foreground.opacity(0.8))
+                    .child(branch),
+                ),
             )
           })
       })

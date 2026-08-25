@@ -89,6 +89,15 @@ impl ConversationStore {
     self.worktrees.get(id).cloned()
   }
 
+  /// Branch names by conversation id, for the sidebar's worktree rows.
+  pub fn worktree_branches(&self) -> HashMap<String, String> {
+    self
+      .worktrees
+      .iter()
+      .map(|(id, binding)| (id.clone(), binding.branch.clone()))
+      .collect()
+  }
+
   /// Bindings change on discrete gestures (create, delete): written right away.
   pub fn set_worktree(
     &mut self,

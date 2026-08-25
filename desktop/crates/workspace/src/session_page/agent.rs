@@ -2514,6 +2514,66 @@ mod tests {
   }
 
   #[gpui::test]
+  async fn the_sidebar_shows_each_sessions_live_status_and_worktree_branch(
+    cx: &mut TestAppContext,
+  ) {
+    let (repo, page, cx) = page_with_agent_panel("session-page-sidebar-status", cx).await;
+
+    // A worktree session left running in the background.
+    page.update_in(cx, |page, window, cx| page.new_worktree_session(window, cx));
+    cx.run_until_parked();
+    let working = active_panel(&page, cx);
+    working.update(cx, |panel, cx| {
+      panel.seed_user_message_for_test("busy", cx);
+      panel.pretend_turn_in_flight_for_test(cx);
+    });
+    cx.run_until_parked();
+    let working_id = working.read_with(cx, |panel, _| panel.current_conversation().id.clone());
+    let branch = page.read_with(cx, |page, cx| {
+      page
+        .chat_store
+        .as_ref()
+        .expect("store")
+        .read(cx)
+        .worktree(&working_id)
+        .expect("binding")
+        .branch
+    });
+
+    // A second session, idle in the foreground (its connection is dead under
+    // this fixture, which is exactly what Failed reports).
+    page.update_in(cx, |page, window, cx| page.new_session(window, cx));
+    cx.run_until_parked();
+    let failed = active_panel(&page, cx);
+    failed.update(cx, |panel, cx| panel.seed_user_message_for_test("idle", cx));
+    cx.run_until_parked();
+    let failed_id = failed.read_with(cx, |panel, _| panel.current_conversation().id.clone());
+
+    page.update(cx, |page, cx| page.refresh_session_list(cx));
+    page.read_with(cx, |page, cx| {
+      let list = page.session_list.read(cx);
+      assert_eq!(
+        list.status_of(&working_id),
+        SessionStatus::Working,
+        "a background turn shows as Working on its row"
+      );
+      assert_eq!(
+        list.status_of(&failed_id),
+        SessionStatus::Failed,
+        "a dead connection shows as Failed"
+      );
+      assert_eq!(
+        list.worktree_branch_of(&working_id),
+        Some(branch.as_str()),
+        "the worktree row names its branch"
+      );
+      assert_eq!(list.worktree_branch_of(&failed_id), None);
+    });
+
+    cleanup_worktrees_root(&repo.path);
+  }
+
+  #[gpui::test]
   async fn a_blank_session_never_stacks_parked_panels(cx: &mut TestAppContext) {
     let (_repo, page, cx) = page_with_agent_panel("session-page-blank-reuse", cx).await;
 

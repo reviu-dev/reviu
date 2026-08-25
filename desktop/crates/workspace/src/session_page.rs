@@ -41,7 +41,7 @@ use crate::inbox::Inbox;
 use crate::navigation::NavigationHistory;
 use crate::open_intent::OpenIntent;
 use crate::review_destination::{AgentReviewHandlers, ReviewDestination, configure_review};
-use crate::session_list::{SessionList, SessionListEvent};
+use crate::session_list::{SessionList, SessionListEvent, SessionStatus};
 use crate::session_page::file_viewer::OpenedSnapshot;
 use git::{InteractiveRebaseTarget, RepoStatusKind};
 
@@ -534,10 +534,42 @@ impl SessionPage {
     let current = panel
       .has_persistable_content()
       .then(|| panel.current_conversation().clone());
+    let statuses = self.session_statuses(cx);
     self.session_list.update(cx, |list, cx| {
       list.set_loading(loading_id, cx);
       list.upsert_current(current, current_id, cx);
+      list.set_statuses(statuses, cx);
     });
+  }
+
+  /// Live agent state per conversation: derived from the panels alive right
+  /// now, background ones included. A session with no panel is Idle.
+  fn session_statuses(&self, cx: &App) -> std::collections::HashMap<String, SessionStatus> {
+    let status_of = |panel: &Entity<AgentChatPanel>| {
+      let panel = panel.read(cx);
+      let status = if panel.awaiting_permission() {
+        SessionStatus::Waiting
+      } else if panel.is_turn_in_flight() {
+        SessionStatus::Working
+      } else if panel.needs_reconnect() {
+        SessionStatus::Failed
+      } else {
+        SessionStatus::Idle
+      };
+      (panel.current_conversation().id.clone(), status)
+    };
+    self
+      .agent_chat_view
+      .iter()
+      .map(&status_of)
+      .chain(
+        self
+          .background_chat_panels
+          .iter()
+          .map(|(_, panel)| status_of(panel)),
+      )
+      .filter(|(_, status)| *status != SessionStatus::Idle)
+      .collect()
   }
 
   /// Full refresh from the store's meta index, for lifecycle changes
@@ -553,8 +585,16 @@ impl SessionPage {
       .as_ref()
       .map(|panel| panel.read(cx).current_conversation().id.clone())
       .unwrap_or_default();
+    let statuses = self.session_statuses(cx);
+    let worktree_branches = self
+      .chat_store
+      .as_ref()
+      .map(|store| store.read(cx).worktree_branches())
+      .unwrap_or_default();
     self.session_list.update(cx, |list, cx| {
-      list.set_conversations(conversations, current_id, cx)
+      list.set_conversations(conversations, current_id, cx);
+      list.set_statuses(statuses, cx);
+      list.set_worktree_branches(worktree_branches, cx);
     });
   }
 

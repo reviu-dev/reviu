@@ -10,6 +10,10 @@ The sessions sidebar gains a second button: a session started with it gets its o
 
 Sessions sharing the main checkout still take turns, since two agents editing the same files would trample each other. Checkpoints, rollback and undo follow each session into its worktree. Deleting a worktree session removes its worktree, its branch and its checkpoint snapshots; a worktree session abandoned before its first message cleans up after itself. A branch you renamed or checked out yourself is never deleted.
 
+### The Sidebar Tells You What Each Session Is Doing
+
+With agents running in parallel, the session rows now carry their live state: `Working` while a turn runs, `Waiting` when an agent sits on a permission it needs you to answer, `Failed` when its connection died. The state replaces the timestamp while it matters and gives the row back to it when the session settles. Sessions in a worktree also show their branch under the row, so you can tell at a glance where each agent is working.
+
 ### The Whole Window Follows The Session's Checkout
 
 Selecting a worktree session points everything at its checkout: the changes panel shows the agent's edits there, the branch header names its branch, the history, the terminal and file search all read the same tree the agent writes. Coming back to a main-checkout session points everything home again. A diff you had open survives switching between sessions that share a checkout, and closes when the checkout underneath it changes.

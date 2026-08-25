@@ -2385,6 +2385,22 @@ impl AgentChatPanel {
     self.in_flight
   }
 
+  /// The turn is parked on a permission card waiting for a human answer.
+  pub fn awaiting_permission(&self) -> bool {
+    if !self.in_flight {
+      return false;
+    }
+    self
+      .items
+      .iter()
+      .rev()
+      .find_map(|item| match item {
+        ChatItem::Permission(permission) => Some(permission.resolved.is_none()),
+        _ => None,
+      })
+      .unwrap_or(false)
+  }
+
   /// Shows or hides the folded work above this turn's summary card.
   fn toggle_turn_work(&mut self, summary_idx: usize, cx: &mut Context<Self>) {
     if let Some(ChatItem::TurnSummary(s)) = self.items.get_mut(summary_idx) {

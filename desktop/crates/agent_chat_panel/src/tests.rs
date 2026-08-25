@@ -1184,6 +1184,47 @@ async fn the_turn_gate_refuses_a_second_concurrent_turn(cx: &mut gpui::TestAppCo
   });
 }
 
+#[gpui::test]
+async fn awaiting_permission_tracks_the_last_unresolved_card(cx: &mut gpui::TestAppContext) {
+  let (panel, cx) = add_panel_window(cx);
+  panel.update(cx, |panel, cx| {
+    let permission = |resolved: Option<String>| {
+      let update = update_fields(
+        ToolCallUpdateFields::new()
+          .kind(ToolKind::Execute)
+          .raw_input(serde_json::json!({ "command": "cargo build" })),
+      );
+      let detail = permission_detail(&update, std::path::Path::new("."));
+      ChatItem::Permission(Box::new(PermissionItem {
+        prompt: PermissionPrompt {
+          id: 7,
+          tool_call_title: "Run cargo build".into(),
+          tool_call: update,
+          options: Vec::new(),
+        },
+        detail,
+        resolved,
+        auto: false,
+      }))
+    };
+
+    panel.items = vec![user_message("do it"), permission(None)];
+    assert!(
+      !panel.awaiting_permission(),
+      "an unresolved card without a running turn is a stale reload, not a wait"
+    );
+
+    panel.pretend_turn_in_flight_for_test(cx);
+    assert!(panel.awaiting_permission(), "the turn waits on the card");
+
+    panel.items = vec![user_message("do it"), permission(Some("allow".into()))];
+    assert!(
+      !panel.awaiting_permission(),
+      "an answered card is a working turn again"
+    );
+  });
+}
+
 #[test]
 fn the_turn_gate_is_scoped_to_the_checkout() {
   let gate = TurnGate::default();
