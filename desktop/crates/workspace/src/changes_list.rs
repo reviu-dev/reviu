@@ -181,7 +181,6 @@ impl ChangesRowsDelegate {
     self.rebuild_sections();
   }
 
-  #[cfg(test)]
   fn index_for_path(&self, path: &Path) -> Option<IndexPath> {
     for (section_ix, section) in self.sections.iter().enumerate() {
       for (row_ix, row) in section.rows.iter().enumerate() {
@@ -561,7 +560,6 @@ impl ChangesList {
     });
   }
 
-  #[cfg(test)]
   pub(crate) fn select_path(&mut self, path: Option<&Path>, cx: &mut Context<Self>) {
     let index = path.and_then(|path| self.list.read(cx).delegate().index_for_path(path));
     self.list.update(cx, |state, cx| {

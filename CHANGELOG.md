@@ -12,6 +12,10 @@ Sessions sharing the main checkout still take turns, since two agents editing th
 
 Nothing accumulates behind your back either: opening a repository sweeps away `reviu-` worktrees that no session references any more, the leftovers of a crash or a failed delete. Worktrees on a branch you made yours are left alone.
 
+### Opening A File From Anywhere Highlights It In Changes
+
+Clicking a file in the agent's turn recap (or opening one from the palette or a review row) showed its diff but left the Changes list highlighting whatever was selected before. The list now follows: the file on screen is the file highlighted, wherever the open came from.
+
 ### The Sidebar Groups Sessions By Repository, And Holds Still
 
 Session rows used to reorder themselves while an agent streamed, since recency drove their position. Rows now hold still: each repository is a foldable section, newest sessions first inside it, and nothing moves while agents work. Folding a section is the filter; a folded section shows how many sessions it holds.

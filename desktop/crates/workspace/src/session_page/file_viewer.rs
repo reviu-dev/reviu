@@ -60,6 +60,15 @@ impl SessionPage {
     self.selected_file = Some(rel_path.clone());
     self.editor = None;
     self.binary_preview = None;
+    // Wherever the open came from (chat recap, palette, review row), the
+    // Changes list highlights the file it is now showing.
+    self
+      .dock_panel
+      .read(cx)
+      .changes_list()
+      .update(cx, |list, cx| {
+        list.select_path(Some(rel_path.as_path()), cx);
+      });
 
     let file_path = repo_root.join(&rel_path);
     let load_repo_root = repo_root.clone();
@@ -790,6 +799,45 @@ mod tests {
       cx.debug_bounds("session-conversation-pane").is_some(),
       "closing the file gives the conversation the full center back"
     );
+  }
+
+  #[gpui::test]
+  async fn opening_a_file_highlights_it_in_the_changes_list(cx: &mut TestAppContext) {
+    let repo = TempRepo::init("session-page-open-selects-row");
+    commit_text_file(&repo.path, Path::new("README.md"), "v1\n", "initial");
+    commit_text_file(&repo.path, Path::new("other.md"), "v1\n", "second file");
+    std::fs::write(repo.path.join("README.md"), "v2\n").expect("update file");
+    std::fs::write(repo.path.join("other.md"), "v2\n").expect("update other");
+
+    let (page, cx) = add_session_page_window(repo.path.clone(), cx);
+    let refresh = page.update(cx, |page, cx| {
+      page.dock_panel.update(cx, |panel, cx| {
+        panel.refresh(cx);
+        panel._refresh_task.take().expect("refresh task")
+      })
+    });
+    refresh.await;
+    cx.run_until_parked();
+
+    // An open that does NOT come from the Changes list (chat recap, palette):
+    // the list must highlight the file it now shows.
+    page.update_in(cx, |page, window, cx| {
+      page.open_diff(
+        PathBuf::from("other.md"),
+        None,
+        OpenIntent::Open,
+        window,
+        cx,
+      );
+    });
+    await_open_file(&page, cx).await;
+
+    page.read_with(cx, |page, cx| {
+      let selected = page
+        .selected_status_entry(cx)
+        .expect("the Changes list selected a row");
+      assert_eq!(selected.path, PathBuf::from("other.md"));
+    });
   }
 
   #[gpui::test]
