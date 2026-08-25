@@ -91,12 +91,11 @@ impl SessionPage {
         true
       }
     });
-    if self
+    let active_was_doomed = self
       .agent_chat_view
       .as_ref()
-      .is_some_and(|panel| panel.read(cx).repo_root() == repo_root.as_path())
-      && let Some(panel) = self.agent_chat_view.take()
-    {
+      .is_some_and(|panel| panel.read(cx).repo_root() == repo_root.as_path());
+    if active_was_doomed && let Some(panel) = self.agent_chat_view.take() {
       doomed_panels.push(panel);
     }
     for panel in doomed_panels {
@@ -107,6 +106,15 @@ impl SessionPage {
 
     let forgetting_selected = self.selected_repo.as_deref() == Some(repo_root.as_path());
     if !forgetting_selected {
+      // The shown session may have gone with the repo: a fresh scope session
+      // takes over so the centre and the git surfaces never point at a dead
+      // checkout.
+      if active_was_doomed {
+        let view = self.build_scope_chat_panel(None, window, cx);
+        view.update(cx, |panel, _| panel.set_active_conversation(true));
+        self.agent_chat_view = Some(view);
+        self.sync_active_checkout(window, cx);
+      }
       self.refresh_session_list(cx);
       cx.notify();
       return Ok(());

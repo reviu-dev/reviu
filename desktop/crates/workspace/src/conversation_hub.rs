@@ -40,7 +40,11 @@ impl ConversationHub {
       return Some((store.clone(), false));
     }
     if self.stores.len() >= MAX_TRACKED_REPOS {
-      return None;
+      // Make room instead of silently handing out no store (sessions created
+      // without one would never persist). Evicting only drops the repo from
+      // the aggregation: live panels hold their own handle to its store.
+      let evicted = self.stores.remove(0);
+      evicted.1.update(cx, |store, _| store.flush_on_quit());
     }
     let state_dir =
       agent_chat_state_dir().map(|dir| AgentChatPanel::state_dir_for_repo(&dir, repo_root))?;

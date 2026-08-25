@@ -218,7 +218,7 @@ impl SessionPage {
   }
 
   /// A panel for a conversation of the SCOPE repo (the new-session target).
-  fn build_scope_chat_panel(
+  pub(super) fn build_scope_chat_panel(
     &mut self,
     resume: Option<agent_chat_panel::ConversationMeta>,
     window: &mut Window,
@@ -3397,6 +3397,146 @@ mod tests {
     });
 
     let _ = std::fs::remove_dir_all(&other_state);
+    cleanup_worktrees_root(&repo.path);
+  }
+
+  #[gpui::test]
+  async fn forgetting_a_repo_takes_only_its_sessions_and_replaces_the_shown_one(
+    cx: &mut TestAppContext,
+  ) {
+    let (repo, page, cx) = page_with_agent_panel("session-page-forget-scoped", cx).await;
+    let (other, other_state) = seed_second_repo("session-page-forget-scoped-b", "doomed-b");
+
+    // A session of the first repo, parked in the background.
+    let survivor = active_panel(&page, cx);
+    survivor.update(cx, |panel, cx| {
+      panel.seed_user_message_for_test("keep me", cx)
+    });
+    cx.run_until_parked();
+    let survivor_id = survivor.read_with(cx, |panel, _| panel.current_conversation().id.clone());
+
+    // The other repo's session on screen, while the scope stays on repo A.
+    page.update_in(cx, |page, window, cx| {
+      page
+        .set_selected_repo(other.path.clone(), window, cx)
+        .expect("track the other repo");
+      page
+        .set_selected_repo(repo.path.clone(), window, cx)
+        .expect("scope back");
+      page.set_scope_all_repos(true, cx);
+      page.select_session("doomed-b", window, cx);
+    });
+    cx.run_until_parked();
+
+    page.update_in(cx, |page, window, cx| {
+      page
+        .forget_repository(other.path.clone(), window, cx)
+        .expect("forget the other repo");
+    });
+    cx.run_until_parked();
+
+    page.read_with(cx, |page, cx| {
+      // The shown session died with its repo: a fresh scope session took over
+      // and the git surfaces left the dead checkout.
+      let panel = page.agent_chat_view.as_ref().expect("a panel is shown");
+      assert_eq!(panel.read(cx).repo_root(), repo.path.as_path());
+      assert_eq!(
+        page.dock_panel.read(cx).repo_root(),
+        Some(repo.path.as_path())
+      );
+      // The first repo's session survived untouched.
+      assert!(
+        page
+          .background_chat_panels
+          .iter()
+          .any(|(id, _)| id == &survivor_id),
+        "the other repo's sessions were never touched"
+      );
+      let ids = page.session_list.read(cx).conversation_ids();
+      assert!(!ids.contains(&"doomed-b".to_string()));
+    });
+
+    let _ = std::fs::remove_dir_all(&other_state);
+    cleanup_worktrees_root(&repo.path);
+  }
+
+  #[gpui::test]
+  async fn the_hub_evicts_an_old_store_instead_of_refusing_the_ninth_repo(cx: &mut TestAppContext) {
+    let (_repo, page, cx) = page_with_agent_panel("session-page-hub-cap", cx).await;
+
+    // Track repos up to and past the cap; every scope visit must get a store,
+    // or its new sessions would silently never persist.
+    let mut extra_repos = Vec::new();
+    for index in 0..crate::conversation_hub::MAX_TRACKED_REPOS + 1 {
+      let extra = TempRepo::init(&format!("session-page-hub-cap-{index}"));
+      commit_text_file(&extra.path, Path::new("README.md"), "v1\n", "initial");
+      page.update_in(cx, |page, window, cx| {
+        page
+          .set_selected_repo(extra.path.clone(), window, cx)
+          .expect("scope to the extra repo");
+      });
+      page.read_with(cx, |page, _| {
+        assert!(
+          page.chat_store.is_some(),
+          "repo {index}: the scope always gets a store, cap or not"
+        );
+      });
+      extra_repos.push(extra);
+    }
+  }
+
+  #[gpui::test]
+  async fn a_cross_repo_worktree_session_resolves_its_binding_from_its_own_store(
+    cx: &mut TestAppContext,
+  ) {
+    let (repo, page, cx) = page_with_agent_panel("session-page-cross-worktree", cx).await;
+    let (other, other_state) =
+      seed_second_repo("session-page-cross-worktree-b", "worktree-b-conversation");
+    // The other repo's conversation is bound to a real worktree of ITS repo.
+    let worktree = git::create_worktree(&other.path, None).expect("worktree of the other repo");
+    std::fs::write(
+      other_state.join("worktrees.json"),
+      serde_json::json!({
+        "worktree-b-conversation": { "path": worktree.path, "branch": worktree.branch }
+      })
+      .to_string(),
+    )
+    .expect("write bindings");
+
+    page.update_in(cx, |page, window, cx| {
+      page
+        .set_selected_repo(other.path.clone(), window, cx)
+        .expect("track the other repo");
+      page
+        .set_selected_repo(repo.path.clone(), window, cx)
+        .expect("scope back");
+      page.set_scope_all_repos(true, cx);
+      page.select_session("worktree-b-conversation", window, cx);
+    });
+    cx.run_until_parked();
+
+    active_panel(&page, cx).read_with(cx, |panel, _| {
+      assert_eq!(
+        panel.repo_root(),
+        other.path.as_path(),
+        "the session belongs to its own repo"
+      );
+      assert_eq!(
+        panel.cwd(),
+        worktree.path.as_path(),
+        "and works in ITS worktree, resolved from ITS store"
+      );
+    });
+    page.read_with(cx, |page, cx| {
+      assert_eq!(
+        page.dock_panel.read(cx).repo_root(),
+        Some(worktree.path.as_path()),
+        "the git surfaces follow the cross-repo worktree"
+      );
+    });
+
+    let _ = std::fs::remove_dir_all(&other_state);
+    cleanup_worktrees_root(&other.path);
     cleanup_worktrees_root(&repo.path);
   }
 
