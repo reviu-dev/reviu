@@ -628,21 +628,12 @@ impl SessionPage {
       .unwrap_or_default();
     let statuses = self.session_statuses(cx);
     let worktree_branches = self.conversation_hub.worktree_branches(cx);
-    // Local branches only: a worktree base picker offers starting points, and
-    // every local branch is one (the worktree gets a NEW branch at its commit).
-    let base_candidates: Vec<SharedString> = self
-      .repo_snapshot
-      .read(cx)
-      .branches()
-      .iter()
-      .filter(|branch| branch.kind == git::BranchKind::Local)
-      .map(|branch| SharedString::from(branch.name.clone()))
-      .collect();
+    let scope_repo = self.selected_repo.clone();
     self.session_list.update(cx, |list, cx| {
       list.set_conversations(conversations, current_id, cx);
       list.set_statuses(statuses, cx);
       list.set_worktree_branches(worktree_branches, cx);
-      list.set_base_candidates(base_candidates, cx);
+      list.set_scope_repo(scope_repo, cx);
     });
   }
 

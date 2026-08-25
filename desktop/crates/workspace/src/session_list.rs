@@ -1,6 +1,7 @@
 //! The sidebar's session list: pick, create and delete conversations.
 
 use std::collections::HashMap;
+use std::path::PathBuf;
 
 use agent_chat_panel::ConversationMeta;
 use gpui::{
@@ -96,8 +97,9 @@ pub struct SessionList {
   statuses: HashMap<String, SessionStatus>,
   /// Worktree branch by conversation id, shown under the row.
   worktree_branches: HashMap<String, String>,
-  /// Local branches offered as a worktree base, picker order.
-  base_candidates: Vec<SharedString>,
+  /// The scope repo: worktree creation targets it, so its base picker reads
+  /// branches from it, at menu-open time (always fresh, never polled).
+  scope_repo: Option<PathBuf>,
 }
 
 impl SessionList {
@@ -108,17 +110,13 @@ impl SessionList {
       loading_id: None,
       statuses: HashMap::new(),
       worktree_branches: HashMap::new(),
-      base_candidates: Vec::new(),
+      scope_repo: None,
     }
   }
 
-  pub fn set_base_candidates(
-    &mut self,
-    base_candidates: Vec<SharedString>,
-    cx: &mut Context<Self>,
-  ) {
-    if self.base_candidates != base_candidates {
-      self.base_candidates = base_candidates;
+  pub fn set_scope_repo(&mut self, scope_repo: Option<PathBuf>, cx: &mut Context<Self>) {
+    if self.scope_repo != scope_repo {
+      self.scope_repo = scope_repo;
       cx.notify();
     }
   }
@@ -258,7 +256,7 @@ impl Render for SessionList {
           )
           .child({
             let entity = cx.entity().downgrade();
-            let base_candidates = self.base_candidates.clone();
+            let scope_repo = self.scope_repo.clone();
             Button::new("session-page-new-worktree-session")
               .debug_selector(|| "session-page-new-worktree-session".to_string())
               .icon(UiIconName::GitBranch)
@@ -268,6 +266,16 @@ impl Render for SessionList {
               .tooltip("New session in a worktree")
               .dropdown_menu_with_anchor(Anchor::TopLeft, move |menu, _, _| {
                 let mut menu = menu.max_h(px(360.)).scrollable(true);
+                // Read at menu-open, from the SCOPE repo (worktree creation
+                // targets it, not the shown session's checkout).
+                let base_candidates: Vec<SharedString> = scope_repo
+                  .as_deref()
+                  .and_then(|repo| git::list_branches(repo).ok())
+                  .unwrap_or_default()
+                  .into_iter()
+                  .filter(|branch| branch.kind == git::BranchKind::Local)
+                  .map(|branch| SharedString::from(branch.name))
+                  .collect();
                 let default_entity = entity.clone();
                 menu = menu.item(
                   PopupMenuItem::element(move |_, cx| {
