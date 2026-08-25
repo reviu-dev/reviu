@@ -3,8 +3,9 @@
 use super::*;
 
 impl SessionPage {
-  /// A session belongs to a repository: switching swaps the conversation set,
-  /// the changes panel and the branch, so the agent is respawned on the new cwd.
+  /// Points the SCOPE at another repository: the sidebar filter and the
+  /// target of new sessions move, running sessions are untouched (the repo is
+  /// an attribute of each session, not a mode of the app).
   pub(super) fn set_selected_repo(
     &mut self,
     repo_root: PathBuf,
@@ -22,13 +23,20 @@ impl SessionPage {
     if self.selected_repo.as_deref() == Some(repo_root.as_path()) {
       return Ok(());
     }
-    if self.agent_turn_in_flight(cx) {
-      return Err("Wait for the agent to finish before switching repository.".into());
-    }
 
     ConfigStore::persist_recent_repository(&repo_root);
     self.apply_selected_repo(Some(repo_root), window, cx);
     Ok(())
+  }
+
+  /// The sidebar lists every tracked repo's sessions, or only the scope's.
+  pub(super) fn set_scope_all_repos(&mut self, all: bool, cx: &mut Context<Self>) {
+    if self.scope_all_repos == all {
+      return;
+    }
+    self.scope_all_repos = all;
+    self.refresh_session_list(cx);
+    cx.notify();
   }
 
   #[doc(hidden)]
@@ -47,47 +55,17 @@ impl SessionPage {
     window: &mut Window,
     cx: &mut Context<Self>,
   ) {
-    let should_rebuild_agent = self.agent_chat_view.is_some();
-    self.selected_repo = repo_root.clone();
-    self.close_diff(window, cx);
-    self.center = CenterView::Conversation;
-    self.editor = None;
-    self.binary_preview = None;
-    self.selected_file = None;
-    self.open_file_task = None;
-    self.open_file_generation = self.open_file_generation.wrapping_add(1);
-    // The outgoing repository keeps its batch, the incoming one gets its own.
-    self.persist_agent_review();
-    self.reload_review_for_repo(cx);
-    self.pending_review_export = None;
-    self.repo_snapshot.update(cx, |snapshot, cx| {
-      snapshot.set_repo_root(repo_root.clone(), cx)
-    });
-    // Conversations are stored per repository, so every panel and the store
-    // are rebuilt on the new cwd and state directory.
-    for (_, panel) in std::mem::take(&mut self.background_chat_panels) {
-      panel.update(cx, |panel, cx| panel.persist_now(cx));
+    self.selected_repo = repo_root;
+    // The scope repo's store becomes the new-session target; its first visit
+    // sweeps its orphaned worktrees.
+    self.chat_store = None;
+    if self.selected_repo.is_some() {
+      self.ensure_chat_store(cx);
     }
-    if let Some(panel) = self.agent_chat_view.take() {
-      panel.update(cx, |panel, cx| panel.persist_now(cx));
-    }
-    if let Some(store) = self.chat_store.take() {
-      // The store's write lane dies with it; land what it still holds.
-      store.update(cx, |store, _| store.flush_on_quit());
-    }
-    self.turn_gate = agent_chat_panel::TurnGate::new();
-    self.sync_session_list(cx);
-    // Point the git surfaces at the new main checkout first; a resumed
-    // worktree session corrects them through ensure's checkout sync.
-    self.synced_checkout = repo_root.clone();
-    self.dock_panel.update(cx, |panel, cx| {
-      panel.set_repo_root(repo_root, cx);
-      panel.refresh(cx);
-    });
-    self.refresh_branch(cx);
-    if should_rebuild_agent {
-      self.ensure_agent_chat_view(window, cx);
-    }
+    self.refresh_session_list(cx);
+    // With no session on screen the git surfaces follow the scope; with one,
+    // they stay on the session's checkout and this is a no-op.
+    self.sync_active_checkout(window, cx);
     cx.notify();
   }
 
@@ -97,13 +75,39 @@ impl SessionPage {
     window: &mut Window,
     cx: &mut Context<Self>,
   ) -> Result<(), SharedString> {
-    let forgetting_selected = self.selected_repo.as_deref() == Some(repo_root.as_path());
-    if forgetting_selected && self.agent_turn_in_flight(cx) {
+    if self.agent_turn_in_flight_for_repo(&repo_root, cx) {
       return Err("Wait for the agent to finish before forgetting this repository.".into());
     }
 
     ConfigStore::forget_recent_repository(&repo_root);
+    // Its sessions stop here (conversations stay on disk); a forgotten repo
+    // keeps nothing running.
+    let mut doomed_panels: Vec<Entity<AgentChatPanel>> = Vec::new();
+    self.background_chat_panels.retain(|(_, panel)| {
+      if panel.read(cx).repo_root() == repo_root.as_path() {
+        doomed_panels.push(panel.clone());
+        false
+      } else {
+        true
+      }
+    });
+    if self
+      .agent_chat_view
+      .as_ref()
+      .is_some_and(|panel| panel.read(cx).repo_root() == repo_root.as_path())
+      && let Some(panel) = self.agent_chat_view.take()
+    {
+      doomed_panels.push(panel);
+    }
+    for panel in doomed_panels {
+      panel.update(cx, |panel, cx| panel.persist_now(cx));
+    }
+    self.conversation_hub.drop_store(&repo_root, cx);
+    self.swept_repos.remove(&repo_root);
+
+    let forgetting_selected = self.selected_repo.as_deref() == Some(repo_root.as_path());
     if !forgetting_selected {
+      self.refresh_session_list(cx);
       cx.notify();
       return Ok(());
     }
@@ -429,7 +433,9 @@ mod tests {
   }
 
   #[gpui::test]
-  async fn a_repository_cannot_move_under_a_running_agent(cx: &mut TestAppContext) {
+  async fn switching_scope_keeps_running_sessions_but_forgetting_their_repo_waits(
+    cx: &mut TestAppContext,
+  ) {
     let repo = TempRepo::init("session-page-turn-guard-from");
     commit_text_file(&repo.path, Path::new("README.md"), "v1\n", "initial");
     let other = TempRepo::init("session-page-turn-guard-to");
@@ -440,28 +446,27 @@ mod tests {
     ConfigStore::persist_recent_repository(&repo.path);
     page.update(cx, |page, _| page.pretend_agent_turn_in_flight = true);
 
-    let switch = page.update_in(cx, |page, window, cx| {
-      page.set_selected_repo(other.path.clone(), window, cx)
+    // The repo is an attribute of the session, not a mode: pointing the
+    // scope elsewhere never interrupts a running agent.
+    page.update_in(cx, |page, window, cx| {
+      page
+        .set_selected_repo(other.path.clone(), window, cx)
+        .expect("switching scope is always allowed")
     });
-    assert_eq!(
-      switch.expect_err("switching is refused mid-turn").as_ref(),
-      "Wait for the agent to finish before switching repository."
-    );
+    page.read_with(cx, |page, _| {
+      assert_eq!(page.selected_repo.as_deref(), Some(other.path.as_path()));
+    });
 
+    // Forgetting a repo tears its sessions down, so a running one refuses.
     let forget = page.update_in(cx, |page, window, cx| {
       page.forget_repository(repo.path.clone(), window, cx)
     });
     assert_eq!(
       forget
-        .expect_err("forgetting the open repository is refused mid-turn")
+        .expect_err("forgetting a repo with a running agent is refused")
         .as_ref(),
       "Wait for the agent to finish before forgetting this repository."
     );
-
-    // The shell stayed where it was.
-    page.read_with(cx, |page, _| {
-      assert_eq!(page.selected_repo.as_deref(), Some(repo.path.as_path()));
-    });
     assert!(
       ConfigStore::load_recent_repositories()
         .iter()
@@ -469,16 +474,18 @@ mod tests {
       "a refused forget must not drop the repository from the list"
     );
 
-    // The turn ends: the switch goes through.
+    // The turn ends: the forget goes through.
     page.update(cx, |page, _| page.pretend_agent_turn_in_flight = false);
     page.update_in(cx, |page, window, cx| {
       page
-        .set_selected_repo(other.path.clone(), window, cx)
-        .expect("switching once the agent is idle")
+        .forget_repository(repo.path.clone(), window, cx)
+        .expect("forgetting once the agent is idle")
     });
-    page.read_with(cx, |page, _| {
-      assert_eq!(page.selected_repo.as_deref(), Some(other.path.as_path()));
-    });
+    assert!(
+      !ConfigStore::load_recent_repositories()
+        .iter()
+        .any(|recent| recent.path == repo.path)
+    );
   }
 
   #[gpui::test]

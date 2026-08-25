@@ -1,8 +1,6 @@
 //! The right dock of the shell: changes, files, history, pull request, terminal.
 
-#[cfg(test)]
-use std::path::Path;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -1667,7 +1665,6 @@ impl DockPanel {
     &self.status_entries
   }
 
-  #[cfg(test)]
   pub(crate) fn repo_root(&self) -> Option<&Path> {
     self.repo_root.as_deref()
   }

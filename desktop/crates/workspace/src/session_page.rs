@@ -31,6 +31,7 @@ use crate::agent_review_store::{read_review, review_path_for_repo, write_review}
 use crate::agent_settings::AgentSettings;
 use crate::auth_state::AuthStateStore;
 use crate::config::ConfigStore;
+use crate::conversation_hub::ConversationHub;
 use crate::diff_view_policy::{DiffViewInputs, effective_diff_view};
 use crate::dock_panel::{CommitMenuCommand, DockPanel, DockPanelEvent, DockPanelTab};
 use crate::file_search_palette::open_file_search_palette;
@@ -168,8 +169,17 @@ pub struct SessionPage {
   focus_handle: FocusHandle,
   window_handle: AnyWindowHandle,
   agent_chat_view: Option<Entity<AgentChatPanel>>,
-  /// One store per repository, shared by every session panel.
+  /// All per-repo stores live here; everything cross-repo reads through it.
+  conversation_hub: ConversationHub,
+  /// The SCOPE repo's store: the target of new sessions. Sessions of other
+  /// repos carry their own store handle.
   chat_store: Option<Entity<ConversationStore>>,
+  /// Sidebar shows every tracked repo's sessions instead of just the scope's.
+  scope_all_repos: bool,
+  /// Repos already swept for orphaned worktrees this run.
+  swept_repos: HashSet<PathBuf>,
+  /// The repo whose review batch is loaded; follows the active session.
+  reviewed_repo: Option<PathBuf>,
   /// Sessions kept alive off screen so their agents keep working; MRU first.
   background_chat_panels: Vec<(String, Entity<AgentChatPanel>)>,
   turn_gate: TurnGate,
@@ -399,7 +409,11 @@ impl SessionPage {
       focus_handle: cx.focus_handle(),
       window_handle: window.window_handle(),
       agent_chat_view: None,
+      conversation_hub: ConversationHub::new(),
       chat_store: None,
+      scope_all_repos: false,
+      swept_repos: HashSet::new(),
+      reviewed_repo: selected_repo.clone(),
       background_chat_panels: Vec::new(),
       turn_gate: TurnGate::new(),
       agent_notification: None,
@@ -450,6 +464,14 @@ impl SessionPage {
       _poll_task: None,
     };
     SessionPageHandle::register(cx);
+    // Bounded aggregation: the recent repos get their stores up front so the
+    // all-repos sidebar can list them without touching anything else.
+    for recent in ConfigStore::load_recent_repositories()
+      .into_iter()
+      .take(crate::conversation_hub::MAX_TRACKED_REPOS)
+    {
+      let _ = page.conversation_hub.store_for(&recent.path, cx);
+    }
     page.reload_review_for_repo(cx);
     page.refresh_branch(cx);
     page.watch_window_activation(window, cx);
@@ -536,6 +558,13 @@ impl SessionPage {
     let current = panel
       .has_persistable_content()
       .then(|| panel.current_conversation().clone());
+    let current = current.map(|meta| crate::session_list::SessionRow {
+      repo_name: self
+        .scope_all_repos
+        .then(|| repo_display_name(panel.repo_root()))
+        .flatten(),
+      meta,
+    });
     let statuses = self.session_statuses(cx);
     self.session_list.update(cx, |list, cx| {
       list.set_loading(loading_id, cx);
@@ -577,22 +606,28 @@ impl SessionPage {
   /// Full refresh from the store's meta index, for lifecycle changes
   /// (panel created, conversation created/loaded/deleted, repo switched).
   fn refresh_session_list(&mut self, cx: &mut Context<Self>) {
-    let conversations = self
-      .chat_store
-      .as_ref()
-      .map(|store| store.read(cx).list())
-      .unwrap_or_default();
+    let scope = (!self.scope_all_repos)
+      .then(|| self.selected_repo.clone())
+      .flatten();
+    let conversations: Vec<crate::session_list::SessionRow> = self
+      .conversation_hub
+      .rows(scope.as_deref(), cx)
+      .into_iter()
+      .map(|(repo, meta)| crate::session_list::SessionRow {
+        repo_name: self
+          .scope_all_repos
+          .then(|| repo_display_name(&repo))
+          .flatten(),
+        meta,
+      })
+      .collect();
     let current_id = self
       .agent_chat_view
       .as_ref()
       .map(|panel| panel.read(cx).current_conversation().id.clone())
       .unwrap_or_default();
     let statuses = self.session_statuses(cx);
-    let worktree_branches = self
-      .chat_store
-      .as_ref()
-      .map(|store| store.read(cx).worktree_branches())
-      .unwrap_or_default();
+    let worktree_branches = self.conversation_hub.worktree_branches(cx);
     // Local branches only: a worktree base picker offers starting points, and
     // every local branch is one (the worktree gets a NEW branch at its commit).
     let base_candidates: Vec<SharedString> = self
@@ -633,7 +668,11 @@ impl SessionPage {
   /// same-checkout switches cost nothing.
   pub(super) fn sync_active_checkout(&mut self, window: &mut Window, cx: &mut Context<Self>) {
     let checkout = self.checkout_root(cx);
-    if self.synced_checkout == checkout {
+    // The memo alone is not trusted: a fixture or future code may assign
+    // `selected_repo` directly, so the dock's actual root double-checks it.
+    if self.synced_checkout == checkout
+      && self.dock_panel.read(cx).repo_root() == checkout.as_deref()
+    {
       return;
     }
     self.synced_checkout = checkout.clone();
@@ -654,6 +693,18 @@ impl SessionPage {
       panel.refresh(cx);
     });
     self.refresh_branch(cx);
+    // The review batch belongs to a REPO (worktree sessions share their
+    // repo's batch); it follows the active session across repos.
+    let review_repo = self
+      .agent_chat_view
+      .as_ref()
+      .map(|panel| panel.read(cx).repo_root().to_path_buf())
+      .or_else(|| self.selected_repo.clone());
+    if self.reviewed_repo != review_repo {
+      self.persist_agent_review();
+      self.reviewed_repo = review_repo;
+      self.reload_review_for_repo(cx);
+    }
     cx.notify();
   }
 
@@ -1073,6 +1124,12 @@ impl SessionPage {
     });
     open_file_search_palette(window, cx, entries, handler, false);
   }
+}
+
+fn repo_display_name(repo_root: &Path) -> Option<SharedString> {
+  repo_root
+    .file_name()
+    .map(|name| SharedString::from(name.to_string_lossy().into_owned()))
 }
 
 /// Under test there is no fallback to the real state directory: a test writes

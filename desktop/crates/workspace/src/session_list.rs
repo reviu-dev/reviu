@@ -62,6 +62,14 @@ pub(crate) fn session_row_title(meta: &ConversationMeta) -> SharedString {
   }
 }
 
+/// One sidebar row: the conversation plus, when the list spans several
+/// repos, the repo it belongs to.
+#[derive(Clone, Debug, PartialEq)]
+pub struct SessionRow {
+  pub meta: ConversationMeta,
+  pub repo_name: Option<SharedString>,
+}
+
 pub enum SessionListEvent {
   NewSession,
   /// A session whose agent works in its own git worktree, started from
@@ -80,7 +88,7 @@ pub enum SessionListEvent {
 }
 
 pub struct SessionList {
-  conversations: Vec<ConversationMeta>,
+  conversations: Vec<SessionRow>,
   current_id: String,
   /// Row still hydrating after a click; shows a spinner in its trailing slot.
   loading_id: Option<String>,
@@ -154,7 +162,7 @@ impl SessionList {
 
   pub fn set_conversations(
     &mut self,
-    conversations: Vec<ConversationMeta>,
+    conversations: Vec<SessionRow>,
     current_id: String,
     cx: &mut Context<Self>,
   ) {
@@ -168,7 +176,7 @@ impl SessionList {
     self
       .conversations
       .iter()
-      .map(|conversation| conversation.id.clone())
+      .map(|row| row.meta.id.clone())
       .collect()
   }
 
@@ -177,28 +185,32 @@ impl SessionList {
   /// streaming commits don't re-render the sidebar.
   pub fn upsert_current(
     &mut self,
-    meta: Option<ConversationMeta>,
+    row: Option<SessionRow>,
     current_id: String,
     cx: &mut Context<Self>,
   ) {
     let mut changed = self.current_id != current_id;
     self.current_id = current_id;
-    if let Some(meta) = meta {
-      match self.conversations.iter_mut().find(|c| c.id == meta.id) {
-        Some(entry) if *entry == meta => {}
+    if let Some(row) = row {
+      match self
+        .conversations
+        .iter_mut()
+        .find(|existing| existing.meta.id == row.meta.id)
+      {
+        Some(entry) if *entry == row => {}
         Some(entry) => {
-          *entry = meta;
+          *entry = row;
           changed = true;
         }
         None => {
-          self.conversations.push(meta);
+          self.conversations.push(row);
           changed = true;
         }
       }
       if changed {
         self
           .conversations
-          .sort_by_key(|m| std::cmp::Reverse(m.updated_at_secs));
+          .sort_by_key(|row| std::cmp::Reverse(row.meta.updated_at_secs));
       }
     }
     if changed {
@@ -320,7 +332,9 @@ impl Render for SessionList {
       .conversations
       .iter()
       .enumerate()
-      .map(|(ix, meta)| {
+      .map(|(ix, row)| {
+        let meta = &row.meta;
+        let repo_name = row.repo_name.clone();
         let is_current = meta.id == self.current_id;
         let is_loading = self.loading_id.as_deref() == Some(meta.id.as_str());
         let status = self.statuses.get(&meta.id).copied().unwrap_or_default();
@@ -430,23 +444,49 @@ impl Render for SessionList {
                 .child(preview),
             )
           })
-          .when_some(worktree_branch, |this, branch| {
+          .when(repo_name.is_some() || worktree_branch.is_some(), |this| {
             this.child(
               h_flex()
                 .items_center()
-                .gap_1()
-                .child(
-                  Icon::new(UiIconName::GitBranch)
-                    .size(px(10.))
-                    .text_color(theme.muted_foreground.opacity(0.8)),
-                )
-                .child(
-                  div()
-                    .text_xs()
-                    .truncate()
-                    .text_color(theme.muted_foreground.opacity(0.8))
-                    .child(branch),
-                ),
+                .gap_2()
+                .when_some(repo_name, |this, repo_name| {
+                  this.child(
+                    h_flex()
+                      .items_center()
+                      .gap_1()
+                      .child(
+                        Icon::new(gpui_component::IconName::Folder)
+                          .size(px(10.))
+                          .text_color(theme.muted_foreground.opacity(0.8)),
+                      )
+                      .child(
+                        div()
+                          .text_xs()
+                          .truncate()
+                          .text_color(theme.muted_foreground.opacity(0.8))
+                          .child(repo_name),
+                      ),
+                  )
+                })
+                .when_some(worktree_branch, |this, branch| {
+                  this.child(
+                    h_flex()
+                      .items_center()
+                      .gap_1()
+                      .child(
+                        Icon::new(UiIconName::GitBranch)
+                          .size(px(10.))
+                          .text_color(theme.muted_foreground.opacity(0.8)),
+                      )
+                      .child(
+                        div()
+                          .text_xs()
+                          .truncate()
+                          .text_color(theme.muted_foreground.opacity(0.8))
+                          .child(branch),
+                      ),
+                  )
+                }),
             )
           })
       })
@@ -541,15 +581,18 @@ mod tests {
     );
   }
 
-  fn meta(id: &str, updated: u64) -> ConversationMeta {
-    ConversationMeta {
-      id: id.to_string(),
-      started_at_secs: 0,
-      updated_at_secs: updated,
-      title: id.to_string(),
-      message_count: 1,
-      session_id: None,
-      preview: String::new(),
+  fn meta(id: &str, updated: u64) -> SessionRow {
+    SessionRow {
+      meta: ConversationMeta {
+        id: id.to_string(),
+        started_at_secs: 0,
+        updated_at_secs: updated,
+        title: id.to_string(),
+        message_count: 1,
+        session_id: None,
+        preview: String::new(),
+      },
+      repo_name: None,
     }
   }
 
@@ -596,12 +639,12 @@ mod tests {
       // Bumping the current row's timestamp moves it to the top, in place.
       list.upsert_current(Some(meta("a", 30)), "a".into(), cx);
       assert_eq!(list.conversations.len(), 2);
-      assert_eq!(list.conversations[0].id, "a");
+      assert_eq!(list.conversations[0].meta.id, "a");
 
       // A row not yet on disk gets inserted.
       list.upsert_current(Some(meta("c", 40)), "c".into(), cx);
       assert_eq!(list.conversations.len(), 3);
-      assert_eq!(list.conversations[0].id, "c");
+      assert_eq!(list.conversations[0].meta.id, "c");
 
       // An empty draft only moves the selection.
       list.upsert_current(None, "b".into(), cx);

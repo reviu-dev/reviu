@@ -12,6 +12,12 @@ Sessions sharing the main checkout still take turns, since two agents editing th
 
 Nothing accumulates behind your back either: opening a repository sweeps away `reviu-` worktrees that no session references any more, the leftovers of a crash or a failed delete. Worktrees on a branch you made yours are left alone.
 
+### Sessions From All Your Repositories, In One List
+
+Switching repositories used to stop every running session: the repository was a mode, and changing it tore the whole shell down. It is now an attribute of each session. Switching repositories just points the sidebar and the New Session button somewhere else; agents keep running wherever they are, and the diff, branch header and changes panel stay on the session you are looking at.
+
+A globe toggle next to the repository name widens the sidebar to every recent repository's sessions in one list, each row naming its repository, with the same live Working/Waiting/Failed states across all of them. Selecting a session from another repository just works: its agent runs in its own checkout, its diff shows in the dock, its review batch loads, while your other sessions keep going. Forgetting a repository still waits for its own agents to finish, and never touches the others.
+
 ### Worktree Branches Take The Name Of Their Session
 
 A worktree session starts on a generated branch like `reviu-swift-otter`, which says nothing at merge time. Once the conversation has its title, the branch quietly renames itself after it: `reviu-fix-the-scroll-jump`. A branch you checked out or renamed yourself is yours and never touched, and once renamed it never renames again.

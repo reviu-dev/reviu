@@ -56,45 +56,42 @@ impl SessionPage {
         .as_ref()
         .and_then(|store| store.read(cx).active_meta()),
     };
-    let view = self.build_chat_panel(resume, window, cx);
+    let view = self.build_scope_chat_panel(resume, window, cx);
     view.update(cx, |panel, _| panel.set_active_conversation(true));
     self.agent_chat_view = Some(view);
     self.refresh_session_list(cx);
     self.sync_active_checkout(window, cx);
   }
 
-  fn ensure_chat_store(&mut self, cx: &mut Context<Self>) {
-    if self.chat_store.is_some() {
-      return;
-    }
-    let cwd = self
+  /// Points `chat_store` at the SCOPE repo's store (the target of new
+  /// sessions); sessions of other repos reach their own store through their
+  /// panel or the hub.
+  pub(super) fn ensure_chat_store(&mut self, cx: &mut Context<Self>) {
+    let repo = self
       .selected_repo
       .clone()
       .unwrap_or_else(|| PathBuf::from("."));
-    let Some(state_dir) =
-      agent_chat_state_dir().map(|dir| AgentChatPanel::state_dir_for_repo(&dir, &cwd))
-    else {
+    let Some((store, _)) = self.conversation_hub.store_for(&repo, cx) else {
       return;
     };
-    let store = cx.new(|_| ConversationStore::new(state_dir));
-    store.update(cx, |store, cx| store.arm_quit_flush(cx));
-    self.chat_store = Some(store);
-    self.sweep_orphan_worktrees(cx);
+    self.chat_store = Some(store.clone());
+    if self.selected_repo.is_some() && self.swept_repos.insert(repo.clone()) {
+      self.sweep_orphan_worktrees(repo, store, cx);
+    }
   }
 
   /// Boot-time housekeeping for the checkouts we created: a crash between the
   /// worktree and its binding, a failed removal, or a pruned conversation all
   /// leave a `reviu-` worktree nothing references any more. Comet and waku
   /// both leak these forever; we don't.
-  fn sweep_orphan_worktrees(&mut self, cx: &mut Context<Self>) {
+  fn sweep_orphan_worktrees(
+    &mut self,
+    repo_root: PathBuf,
+    store: Entity<ConversationStore>,
+    cx: &mut Context<Self>,
+  ) {
     use app_log::ResultExt as _;
 
-    let Some(repo_root) = self.selected_repo.clone() else {
-      return;
-    };
-    if self.chat_store.is_none() {
-      return;
-    }
     let list_root = repo_root.clone();
     let listing = cx.background_spawn(async move { git::list_worktrees(&list_root) });
     cx.spawn(async move |this, cx| {
@@ -107,7 +104,7 @@ impl SessionPage {
       // queue is ordered), so it can never be mistaken for an orphan.
       let doomed = this
         .update(cx, |this, cx| {
-          this.doomed_worktrees(&repo_root, worktrees, cx)
+          this.doomed_worktrees(&repo_root, &store, worktrees, cx)
         })
         .unwrap_or_default();
       if doomed.is_empty() {
@@ -130,14 +127,13 @@ impl SessionPage {
   fn doomed_worktrees(
     &mut self,
     repo_root: &Path,
+    store: &Entity<ConversationStore>,
     worktrees: Vec<git::LinkedWorktree>,
     cx: &mut Context<Self>,
   ) -> Vec<PathBuf> {
     use app_log::ResultExt as _;
 
-    let Some(store) = self.chat_store.clone() else {
-      return Vec::new();
-    };
+    let store = store.clone();
     let canonical =
       |path: &Path| std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
     // A conversation proves it is alive through the index, or through a live
@@ -189,20 +185,23 @@ impl SessionPage {
 
   fn conversation_meta(&self, id: &str, cx: &App) -> Option<agent_chat_panel::ConversationMeta> {
     self
-      .chat_store
-      .as_ref()
-      .and_then(|store| store.read(cx).list().into_iter().find(|meta| meta.id == id))
+      .conversation_hub
+      .find_conversation(id, cx)
+      .map(|(_, _, meta)| meta)
   }
 
   /// The checkout a conversation's agent works in: its bound worktree when it
   /// has one and the directory still exists, the main checkout otherwise. A
   /// stale binding (worktree deleted outside Reviu) is dropped on the way.
-  fn session_cwd_for(&mut self, conversation_id: Option<&str>, cx: &mut Context<Self>) -> PathBuf {
-    let main = self
-      .selected_repo
-      .clone()
-      .unwrap_or_else(|| PathBuf::from("."));
-    let Some((conversation_id, store)) = conversation_id.zip(self.chat_store.clone()) else {
+  fn session_cwd_for(
+    &mut self,
+    repo_root: &Path,
+    store: Option<&Entity<ConversationStore>>,
+    conversation_id: Option<&str>,
+    cx: &mut Context<Self>,
+  ) -> PathBuf {
+    let main = repo_root.to_path_buf();
+    let Some((conversation_id, store)) = conversation_id.zip(store.cloned()) else {
       return main;
     };
     let Some(binding) = store.read(cx).worktree(conversation_id) else {
@@ -218,29 +217,57 @@ impl SessionPage {
     }
   }
 
-  /// One panel per conversation: process, transcript and composer live and die
-  /// with it. The shell only decides which one is on screen.
-  fn build_chat_panel(
+  /// A panel for a conversation of the SCOPE repo (the new-session target).
+  fn build_scope_chat_panel(
     &mut self,
     resume: Option<agent_chat_panel::ConversationMeta>,
     window: &mut Window,
     cx: &mut Context<Self>,
   ) -> Entity<AgentChatPanel> {
-    let cwd = self.session_cwd_for(resume.as_ref().map(|meta| meta.id.as_str()), cx);
-    self.build_chat_panel_at(cwd, resume, window, cx)
+    let repo = self
+      .selected_repo
+      .clone()
+      .unwrap_or_else(|| PathBuf::from("."));
+    let store = self.chat_store.clone();
+    self.build_chat_panel(repo, store, resume, window, cx)
   }
 
+  /// One panel per conversation: process, transcript and composer live and die
+  /// with it. The shell only decides which one is on screen.
+  fn build_chat_panel(
+    &mut self,
+    repo_root: PathBuf,
+    store: Option<Entity<ConversationStore>>,
+    resume: Option<agent_chat_panel::ConversationMeta>,
+    window: &mut Window,
+    cx: &mut Context<Self>,
+  ) -> Entity<AgentChatPanel> {
+    let cwd = self.session_cwd_for(
+      &repo_root,
+      store.as_ref(),
+      resume.as_ref().map(|meta| meta.id.as_str()),
+      cx,
+    );
+    self.build_chat_panel_at(repo_root, cwd, store, resume, window, cx)
+  }
+
+  #[allow(clippy::too_many_arguments)]
   fn build_chat_panel_at(
     &mut self,
+    repo_root: PathBuf,
     cwd: PathBuf,
+    store: Option<Entity<ConversationStore>>,
     resume: Option<agent_chat_panel::ConversationMeta>,
     window: &mut Window,
     cx: &mut Context<Self>,
   ) -> Entity<AgentChatPanel> {
     let backend = AgentSettings::load();
-    let store = self.chat_store.clone();
     let turn_gate = self.turn_gate.clone();
-    let view = cx.new(|cx| AgentChatPanel::new(backend, cwd, store, resume, turn_gate, window, cx));
+    let view = cx.new(|cx| {
+      AgentChatPanel::new(
+        backend, repo_root, cwd, store, resume, turn_gate, window, cx,
+      )
+    });
     let close_control_visible = self.center == CenterView::Diff && self.diff_chat_open;
     view.update(cx, |panel, cx| {
       panel.set_close_control_visible(close_control_visible, cx);
@@ -258,7 +285,8 @@ impl SessionPage {
       window,
       |this, panel, event: &AgentChatPanelEvent, window, cx| match event {
         AgentChatPanelEvent::OpenPath { path, line } => {
-          let rel_path = agent_path_to_repo_relative(path.clone(), this.selected_repo.as_deref());
+          let checkout = panel.read(cx).cwd().to_path_buf();
+          let rel_path = agent_path_to_repo_relative(path.clone(), Some(checkout.as_path()));
           this.open_diff(rel_path, *line, OpenIntent::Open, window, cx);
         }
         AgentChatPanelEvent::TurnStarted => {
@@ -311,10 +339,8 @@ impl SessionPage {
   ) {
     use app_log::ResultExt as _;
 
-    let Some(repo_root) = self.selected_repo.clone() else {
-      return;
-    };
-    let Some(store) = self.chat_store.clone() else {
+    let repo_root = panel.read(cx).repo_root().to_path_buf();
+    let Some(store) = panel.read(cx).store() else {
       return;
     };
     let conversation_id = panel.read(cx).current_conversation().id.clone();
@@ -340,9 +366,6 @@ impl SessionPage {
         return;
       }
       let _ = this.update(cx, |this, cx| {
-        let Some(store) = this.chat_store.clone() else {
-          return;
-        };
         // The session may have been deleted while git ran: never resurrect
         // its binding.
         let still_bound = store
@@ -382,8 +405,12 @@ impl SessionPage {
     };
     if !keep {
       let id = panel.read(cx).current_conversation().id.clone();
+      let repo_root = panel.read(cx).repo_root().to_path_buf();
+      let store = panel.read(cx).store();
       drop(panel);
-      self.cleanup_session_worktree(&id, cx);
+      if let Some(store) = store {
+        self.cleanup_session_worktree(repo_root, store, &id, cx);
+      }
       return;
     }
     let id = panel.read(cx).current_conversation().id.clone();
@@ -1041,7 +1068,7 @@ impl SessionPage {
       }
     }
     self.park_active_chat_panel(cx);
-    let view = self.build_chat_panel(None, window, cx);
+    let view = self.build_scope_chat_panel(None, window, cx);
     view.update(cx, |panel, _| panel.set_active_conversation(true));
     self.agent_chat_view = Some(view);
     self.evict_parked_chat_panels(cx);
@@ -1054,19 +1081,19 @@ impl SessionPage {
 
   /// A session in its own worktree that never went anywhere: no reason to
   /// keep the checkout. Unbinds first so a failure leaves no dangling pointer.
-  fn cleanup_session_worktree(&mut self, conversation_id: &str, cx: &mut Context<Self>) {
-    let Some(store) = self.chat_store.clone() else {
-      return;
-    };
+  fn cleanup_session_worktree(
+    &mut self,
+    repo_root: PathBuf,
+    store: Entity<ConversationStore>,
+    conversation_id: &str,
+    cx: &mut Context<Self>,
+  ) {
     let Some(binding) = store.read(cx).worktree(conversation_id) else {
       return;
     };
     store.update(cx, |store, cx| {
       store.set_worktree(conversation_id, None, cx)
     });
-    let Some(repo_root) = self.selected_repo.clone() else {
-      return;
-    };
     let window_handle = self.window_handle;
     cx.spawn(async move |_this, cx| {
       let removed = cx
@@ -1086,10 +1113,12 @@ impl SessionPage {
 
   /// Checkpoint refs pin up to 50 snapshots per conversation in the object
   /// database; a deleted conversation releases them.
-  fn cleanup_session_checkpoints(&mut self, conversation_id: &str, cx: &mut Context<Self>) {
-    let Some(repo_root) = self.selected_repo.clone() else {
-      return;
-    };
+  fn cleanup_session_checkpoints(
+    &mut self,
+    repo_root: PathBuf,
+    conversation_id: &str,
+    cx: &mut Context<Self>,
+  ) {
     let conversation_id = conversation_id.to_string();
     cx.background_spawn(async move {
       // Best-effort: stale refs cost disk, not correctness.
@@ -1114,14 +1143,23 @@ impl SessionPage {
       return;
     };
     cx.spawn_in(window, async move |this, cx| {
+      let create_root = repo_root.clone();
       let created = cx
-        .background_spawn(async move { git::create_worktree(&repo_root, base.as_deref()) })
+        .background_spawn(async move { git::create_worktree(&create_root, base.as_deref()) })
         .await;
       let _ = this.update_in(cx, |this, window, cx| {
         match created {
           Ok(worktree) => {
             this.park_active_chat_panel(cx);
-            let view = this.build_chat_panel_at(worktree.path.clone(), None, window, cx);
+            let store = this.chat_store.clone();
+            let view = this.build_chat_panel_at(
+              repo_root.clone(),
+              worktree.path.clone(),
+              store,
+              None,
+              window,
+              cx,
+            );
             view.update(cx, |panel, _| panel.set_active_conversation(true));
             let conversation_id = view.read(cx).current_conversation().id.clone();
             this.agent_chat_view = Some(view);
@@ -1157,12 +1195,31 @@ impl SessionPage {
   }
 
   pub(super) fn delete_session(&mut self, id: &str, window: &mut Window, cx: &mut Context<Self>) {
-    let Some(store) = self.chat_store.clone() else {
+    // The session's own repo and store, which may not be the scope's: a row
+    // of another repo can be deleted straight from the aggregated sidebar.
+    let found = self.conversation_hub.find_conversation(id, cx);
+    let from_panel = || {
+      self
+        .agent_chat_view
+        .iter()
+        .chain(self.background_chat_panels.iter().map(|(_, panel)| panel))
+        .find(|panel| panel.read(cx).current_conversation().id == id)
+        .and_then(|panel| {
+          let panel = panel.read(cx);
+          panel
+            .store()
+            .map(|store| (panel.repo_root().to_path_buf(), store))
+        })
+    };
+    let Some((repo_root, store)) = found
+      .map(|(repo, store, _)| (repo, store))
+      .or_else(from_panel)
+    else {
       return;
     };
     // Bindings are read before the delete scrubs them.
-    self.cleanup_session_worktree(id, cx);
-    self.cleanup_session_checkpoints(id, cx);
+    self.cleanup_session_worktree(repo_root.clone(), store.clone(), id, cx);
+    self.cleanup_session_checkpoints(repo_root, id, cx);
     store.update(cx, |store, cx| store.delete(id, cx));
     // Dropping the panel stops its agent process.
     self
@@ -1175,7 +1232,7 @@ impl SessionPage {
     if deleting_active {
       store.update(cx, |store, cx| store.set_active(None, cx));
       self.agent_chat_view = None;
-      let view = self.build_chat_panel(None, window, cx);
+      let view = self.build_scope_chat_panel(None, window, cx);
       view.update(cx, |panel, _| panel.set_active_conversation(true));
       self.agent_chat_view = Some(view);
     }
@@ -1207,16 +1264,19 @@ impl SessionPage {
         }
         panel
       }
-      None => {
-        let resume = self.conversation_meta(id, cx);
-        self.build_chat_panel(resume, window, cx)
-      }
+      None => match self.conversation_hub.find_conversation(id, cx) {
+        Some((repo_root, store, meta)) => {
+          self.build_chat_panel(repo_root, Some(store), Some(meta), window, cx)
+        }
+        // Unknown id (stale click): a fresh scope session is the least wrong.
+        None => self.build_scope_chat_panel(None, window, cx),
+      },
     };
     panel.update(cx, |panel, _| panel.set_active_conversation(true));
-    self.agent_chat_view = Some(panel);
-    if let Some(store) = self.chat_store.clone() {
+    if let Some(store) = panel.read(cx).store() {
       store.update(cx, |store, cx| store.set_active(Some(id.to_string()), cx));
     }
+    self.agent_chat_view = Some(panel);
     self.evict_parked_chat_panels(cx);
     self.sync_agent_chat_close_control(cx);
     self.refresh_session_list(cx);
@@ -1257,7 +1317,25 @@ impl SessionPage {
         .any(|(_, panel)| busy_here(panel))
   }
 
-  /// A turn in ANY session counts: for gestures that tear every panel down.
+  /// A turn in any session OF THIS REPO, whatever checkout it works in.
+  pub(super) fn agent_turn_in_flight_for_repo(&self, repo_root: &Path, cx: &App) -> bool {
+    #[cfg(test)]
+    if self.pretend_agent_turn_in_flight {
+      return true;
+    }
+    let busy = |panel: &Entity<AgentChatPanel>| {
+      let panel = panel.read(cx);
+      panel.is_turn_in_flight() && panel.repo_root() == repo_root
+    };
+    self.agent_chat_view.iter().any(&busy)
+      || self
+        .background_chat_panels
+        .iter()
+        .any(|(_, panel)| busy(panel))
+  }
+
+  /// A turn in ANY session, whatever repo it belongs to.
+  #[cfg(test)]
   pub(super) fn agent_turn_in_flight(&self, cx: &App) -> bool {
     #[cfg(test)]
     if self.pretend_agent_turn_in_flight {
@@ -3067,7 +3145,11 @@ mod tests {
     });
 
     // The sweep runs again, as it would if it raced the creation at boot.
-    page.update(cx, |page, cx| page.sweep_orphan_worktrees(cx));
+    page.update(cx, |page, cx| {
+      let repo_root = page.selected_repo.clone().expect("scope repo");
+      let store = page.chat_store.clone().expect("scope store");
+      page.sweep_orphan_worktrees(repo_root, store, cx);
+    });
     cx.run_until_parked();
 
     assert!(
@@ -3137,6 +3219,213 @@ mod tests {
     });
 
     let _ = std::fs::remove_dir_all(&state_dir);
+    cleanup_worktrees_root(&repo.path);
+  }
+
+  /// A second repo with one conversation already on disk, tracked by the hub
+  /// through a scope visit.
+  fn seed_second_repo(name: &str, conversation_id: &str) -> (TempRepo, PathBuf) {
+    let repo = TempRepo::init(name);
+    commit_text_file(&repo.path, Path::new("README.md"), "other\n", "initial");
+    let state_dir = agent_chat_state_dir()
+      .map(|dir| AgentChatPanel::state_dir_for_repo(&dir, &repo.path))
+      .expect("agent chat state dir");
+    let _ = std::fs::remove_dir_all(&state_dir);
+    std::fs::create_dir_all(&state_dir).expect("create state dir");
+    let meta = serde_json::json!({
+      "id": conversation_id,
+      "started_at_secs": 1,
+      "updated_at_secs": 2,
+      "title": "In the other repo",
+      "message_count": 1,
+      "session_id": null,
+      "preview": "hello"
+    });
+    std::fs::write(
+      state_dir.join("index.json"),
+      serde_json::json!({ "version": 1, "conversations": [meta.clone()] }).to_string(),
+    )
+    .expect("write index");
+    std::fs::write(
+      state_dir.join(format!("{conversation_id}.json")),
+      serde_json::json!({
+        "version": 1,
+        "meta": meta,
+        "items": [{ "type": "Message", "role": "User", "text": "hello", "images": 0 }],
+        "group_pins": {},
+        "auto_approve": false
+      })
+      .to_string(),
+    )
+    .expect("write transcript");
+    (repo, state_dir)
+  }
+
+  #[gpui::test]
+  async fn switching_scope_never_touches_a_running_session(cx: &mut TestAppContext) {
+    let (repo, page, cx) = page_with_agent_panel("session-page-scope-running", cx).await;
+    let (other, other_state) = seed_second_repo("session-page-scope-running-b", "b-conversation");
+
+    let running = active_panel(&page, cx);
+    running.update(cx, |panel, cx| {
+      panel.seed_user_message_for_test("busy", cx);
+      panel.pretend_turn_in_flight_for_test(cx);
+    });
+    cx.run_until_parked();
+
+    page.update_in(cx, |page, window, cx| {
+      page
+        .set_selected_repo(other.path.clone(), window, cx)
+        .expect("scope switch");
+    });
+    cx.run_until_parked();
+
+    assert_eq!(
+      active_panel(&page, cx).entity_id(),
+      running.entity_id(),
+      "the running session stayed on screen through the scope switch"
+    );
+    running.read_with(cx, |panel, _| {
+      assert!(panel.is_turn_in_flight(), "and its turn never stopped");
+      assert_eq!(panel.repo_root(), repo.path.as_path());
+    });
+    page.read_with(cx, |page, cx| {
+      assert_eq!(page.selected_repo.as_deref(), Some(other.path.as_path()));
+      assert_eq!(
+        page.dock_panel.read(cx).repo_root(),
+        Some(repo.path.as_path()),
+        "the git surfaces follow the session, not the scope"
+      );
+    });
+
+    let _ = std::fs::remove_dir_all(&other_state);
+    cleanup_worktrees_root(&repo.path);
+  }
+
+  #[gpui::test]
+  async fn the_all_repos_scope_lists_every_tracked_repos_sessions(cx: &mut TestAppContext) {
+    let (repo, page, cx) = page_with_agent_panel("session-page-scope-all", cx).await;
+    let (other, other_state) = seed_second_repo("session-page-scope-all-b", "all-b-conversation");
+
+    let local = active_panel(&page, cx);
+    local.update(cx, |panel, cx| panel.seed_user_message_for_test("mine", cx));
+    cx.run_until_parked();
+    let local_id = local.read_with(cx, |panel, _| panel.current_conversation().id.clone());
+
+    // Visiting the other repo tracks it; scoping back narrows the list again.
+    page.update_in(cx, |page, window, cx| {
+      page
+        .set_selected_repo(other.path.clone(), window, cx)
+        .expect("track the other repo");
+    });
+    page.read_with(cx, |page, cx| {
+      let ids = page.session_list.read(cx).conversation_ids();
+      assert!(ids.contains(&"all-b-conversation".to_string()));
+      assert!(
+        !ids.contains(&local_id),
+        "a repo scope hides the other repos' sessions"
+      );
+    });
+
+    page.update(cx, |page, cx| page.set_scope_all_repos(true, cx));
+    page.read_with(cx, |page, cx| {
+      let ids = page.session_list.read(cx).conversation_ids();
+      assert!(ids.contains(&"all-b-conversation".to_string()));
+      assert!(
+        ids.contains(&local_id),
+        "the all-repos scope lists both repos' sessions"
+      );
+    });
+
+    let _ = std::fs::remove_dir_all(&other_state);
+    cleanup_worktrees_root(&repo.path);
+  }
+
+  #[gpui::test]
+  async fn selecting_another_repos_session_builds_it_on_its_own_repo(cx: &mut TestAppContext) {
+    let (repo, page, cx) = page_with_agent_panel("session-page-cross-select", cx).await;
+    let (other, other_state) =
+      seed_second_repo("session-page-cross-select-b", "cross-b-conversation");
+
+    // Track the other repo, then come back: scope = the first repo.
+    page.update_in(cx, |page, window, cx| {
+      page
+        .set_selected_repo(other.path.clone(), window, cx)
+        .expect("track the other repo");
+      page
+        .set_selected_repo(repo.path.clone(), window, cx)
+        .expect("scope back to the first repo");
+      page.set_scope_all_repos(true, cx);
+    });
+
+    page.update_in(cx, |page, window, cx| {
+      page.select_session("cross-b-conversation", window, cx)
+    });
+    cx.run_until_parked();
+
+    let panel = active_panel(&page, cx);
+    panel.read_with(cx, |panel, _| {
+      assert_eq!(panel.current_conversation().id, "cross-b-conversation");
+      assert_eq!(
+        panel.repo_root(),
+        other.path.as_path(),
+        "the session runs in ITS repo, wherever the scope points"
+      );
+      assert_eq!(panel.cwd(), other.path.as_path());
+      assert_eq!(
+        panel.transcript_texts(),
+        vec!["hello".to_string()],
+        "its transcript hydrated from its own store"
+      );
+    });
+    page.read_with(cx, |page, cx| {
+      assert_eq!(
+        page.selected_repo.as_deref(),
+        Some(repo.path.as_path()),
+        "the scope did not move"
+      );
+      assert_eq!(
+        page.dock_panel.read(cx).repo_root(),
+        Some(other.path.as_path()),
+        "the git surfaces follow the selected session"
+      );
+      assert_eq!(
+        page.reviewed_repo.as_deref(),
+        Some(other.path.as_path()),
+        "the review batch follows the session's repo"
+      );
+    });
+
+    let _ = std::fs::remove_dir_all(&other_state);
+    cleanup_worktrees_root(&repo.path);
+  }
+
+  #[gpui::test]
+  async fn a_new_session_targets_the_scope_repo(cx: &mut TestAppContext) {
+    let (repo, page, cx) = page_with_agent_panel("session-page-new-in-scope", cx).await;
+    let (other, other_state) = seed_second_repo("session-page-new-in-scope-b", "seed-b");
+
+    // Content first, so New Session forks instead of reusing the blank.
+    active_panel(&page, cx).update(cx, |panel, cx| panel.seed_user_message_for_test("mine", cx));
+    cx.run_until_parked();
+
+    page.update_in(cx, |page, window, cx| {
+      page
+        .set_selected_repo(other.path.clone(), window, cx)
+        .expect("scope to the other repo");
+      page.new_session(window, cx);
+    });
+    cx.run_until_parked();
+
+    active_panel(&page, cx).read_with(cx, |panel, _| {
+      assert_eq!(
+        panel.repo_root(),
+        other.path.as_path(),
+        "a new session lands in the scope repo"
+      );
+    });
+
+    let _ = std::fs::remove_dir_all(&other_state);
     cleanup_worktrees_root(&repo.path);
   }
 

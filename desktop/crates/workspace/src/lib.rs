@@ -59,6 +59,7 @@ mod dock_badge;
 
 mod changes_list;
 mod config;
+mod conversation_hub;
 mod crash_report;
 mod date_format;
 mod diff_toolbar;

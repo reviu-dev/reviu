@@ -1375,6 +1375,7 @@ async fn dropping_a_panel_mid_turn_frees_the_shared_gate(cx: &mut gpui::TestAppC
       AgentChatPanel::new(
         default_agent_id(),
         PathBuf::from("."),
+        PathBuf::from("."),
         None,
         None,
         gate.clone(),
@@ -2461,6 +2462,7 @@ fn resumed_panel(
     cx.new(|cx| {
       AgentChatPanel::new(
         default_agent_id(),
+        PathBuf::from("."),
         PathBuf::from("."),
         Some(store),
         resume,

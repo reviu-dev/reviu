@@ -657,6 +657,8 @@ impl Drop for AgentChatPanel {
 pub struct AgentChatPanel {
   backend_kind: AgentId,
   backend: BackendConfig,
+  /// The repository this session belongs to; `cwd` may be one of its worktrees.
+  repo_root: PathBuf,
   cwd: PathBuf,
   status: Status,
   items: Vec<ChatItem>,
@@ -749,8 +751,10 @@ pub struct AgentChatPanel {
 impl AgentChatPanel {
   /// A panel bound to one conversation for its whole life: `resume` hydrates
   /// an existing one from the shared store, `None` starts fresh.
+  #[allow(clippy::too_many_arguments)]
   pub fn new(
     backend_kind: AgentId,
+    repo_root: PathBuf,
     cwd: PathBuf,
     store: Option<Entity<ConversationStore>>,
     resume: Option<ConversationMeta>,
@@ -767,6 +771,7 @@ impl AgentChatPanel {
     let mut panel = Self {
       backend_kind,
       backend: backend.clone(),
+      repo_root,
       cwd: cwd.clone(),
       status: Status::Connecting,
       items: Vec::new(),
@@ -877,6 +882,7 @@ impl AgentChatPanel {
   ) -> Self {
     Self::new(
       backend_kind,
+      cwd.clone(),
       cwd,
       None,
       None,
@@ -1272,6 +1278,7 @@ impl AgentChatPanel {
     let mut panel = Self {
       backend: resolve_backend_config(&backend_kind),
       backend_kind,
+      repo_root: cwd.clone(),
       cwd,
       status: Status::Connecting,
       items: Vec::new(),
@@ -2717,6 +2724,16 @@ impl AgentChatPanel {
   /// The checkout this session's agent works in: a worktree or the main repo.
   pub fn cwd(&self) -> &Path {
     &self.cwd
+  }
+
+  /// The repository this session belongs to, whatever checkout it works in.
+  pub fn repo_root(&self) -> &Path {
+    &self.repo_root
+  }
+
+  /// The per-repo store this session persists into.
+  pub fn store(&self) -> Option<Entity<ConversationStore>> {
+    self.store.clone()
   }
 
   pub fn state_dir_for_repo(state_dir: &std::path::Path, repo: &std::path::Path) -> PathBuf {
