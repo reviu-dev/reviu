@@ -1084,6 +1084,30 @@ impl AgentChatPanel {
     self.start_turn(cx);
   }
 
+  /// Park the conversation on an unanswered permission card.
+  #[cfg(any(test, feature = "test-support"))]
+  pub fn seed_unresolved_permission_for_test(&mut self, cx: &mut Context<Self>) {
+    let update = agent_client_protocol::schema::ToolCallUpdate::new(
+      ToolCallId::new(std::sync::Arc::from("test-permission")),
+      agent_client_protocol::schema::ToolCallUpdateFields::new().kind(ToolKind::Execute),
+    );
+    self
+      .items
+      .push(ChatItem::Permission(Box::new(PermissionItem {
+        prompt: PermissionPrompt {
+          id: 1,
+          tool_call_title: "Run something".into(),
+          tool_call: update.clone(),
+          options: Vec::new(),
+        },
+        detail: permission_detail(&update, &self.cwd),
+        resolved: None,
+        auto: false,
+      })));
+    self.sync_list_count();
+    cx.notify();
+  }
+
   /// The first unanswered permission: its id and extracted invocation.
   #[cfg(any(test, feature = "test-support"))]
   pub fn pending_permission(&self) -> Option<(u64, Option<String>)> {

@@ -484,6 +484,40 @@ mod tests {
   }
 
   #[gpui::test]
+  async fn identical_statuses_never_repaint_the_sidebar(cx: &mut gpui::TestAppContext) {
+    use std::cell::Cell;
+    use std::rc::Rc;
+
+    let list = cx.new(|_| SessionList::new());
+    let repaints = Rc::new(Cell::new(0_usize));
+    cx.update(|cx| {
+      let repaints = repaints.clone();
+      cx.observe(&list, move |_, _| repaints.set(repaints.get() + 1))
+        .detach();
+    });
+
+    let mut statuses = HashMap::new();
+    statuses.insert("a".to_string(), SessionStatus::Working);
+    list.update(cx, |list, cx| list.set_statuses(statuses.clone(), cx));
+    cx.run_until_parked();
+    assert_eq!(repaints.get(), 1, "a real change repaints");
+
+    // Statuses re-derive on every panel notify, streaming included: the same
+    // map must cost nothing.
+    list.update(cx, |list, cx| list.set_statuses(statuses.clone(), cx));
+    list.update(cx, |list, cx| {
+      list.set_worktree_branches(HashMap::new(), cx)
+    });
+    cx.run_until_parked();
+    assert_eq!(repaints.get(), 1, "no-op updates never repaint");
+
+    statuses.insert("a".to_string(), SessionStatus::Waiting);
+    list.update(cx, |list, cx| list.set_statuses(statuses, cx));
+    cx.run_until_parked();
+    assert_eq!(repaints.get(), 2);
+  }
+
+  #[gpui::test]
   async fn upsert_current_updates_in_place_inserts_and_resorts(cx: &mut gpui::TestAppContext) {
     let list = cx.new(|_| SessionList::new());
     list.update(cx, |list, cx| {

@@ -2557,6 +2557,21 @@ mod tests {
         SessionStatus::Working,
         "a background turn shows as Working on its row"
       );
+      let _ = list;
+    });
+
+    // The working session hits a permission wall: Waiting outranks Working.
+    working.update(cx, |panel, cx| {
+      panel.seed_unresolved_permission_for_test(cx);
+    });
+    page.update(cx, |page, cx| page.refresh_session_list(cx));
+    page.read_with(cx, |page, cx| {
+      let list = page.session_list.read(cx);
+      assert_eq!(
+        list.status_of(&working_id),
+        SessionStatus::Waiting,
+        "a turn parked on a permission shows as Waiting, not Working"
+      );
       assert_eq!(
         list.status_of(&failed_id),
         SessionStatus::Failed,
