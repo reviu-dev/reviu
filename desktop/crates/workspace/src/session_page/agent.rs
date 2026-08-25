@@ -92,62 +92,99 @@ impl SessionPage {
     let Some(repo_root) = self.selected_repo.clone() else {
       return;
     };
-    let Some(store) = self.chat_store.clone() else {
+    if self.chat_store.is_none() {
       return;
+    }
+    let list_root = repo_root.clone();
+    let listing = cx.background_spawn(async move { git::list_worktrees(&list_root) });
+    cx.spawn(async move |this, cx| {
+      let Some(worktrees) = listing.await.log_err_context("listing worktrees") else {
+        return;
+      };
+      // The doomed set is decided back on the foreground, against the
+      // bindings AS OF NOW: a worktree session created while the listing ran
+      // has its binding in by the time this continuation runs (the foreground
+      // queue is ordered), so it can never be mistaken for an orphan.
+      let doomed = this
+        .update(cx, |this, cx| {
+          this.doomed_worktrees(&repo_root, worktrees, cx)
+        })
+        .unwrap_or_default();
+      if doomed.is_empty() {
+        return;
+      }
+      cx.background_spawn(async move {
+        for path in doomed {
+          git::remove_worktree(&repo_root, &path).log_err_context("removing an orphaned worktree");
+        }
+      })
+      .await;
+    })
+    .detach();
+  }
+
+  /// Which of `worktrees` nothing references: ours (our directory, still on a
+  /// `reviu-` branch; a renamed branch means the user took over) and bound to
+  /// no surviving conversation. Bindings whose conversation is gone (pruned,
+  /// or a delete that lost its removal) are dropped on the way.
+  fn doomed_worktrees(
+    &mut self,
+    repo_root: &Path,
+    worktrees: Vec<git::LinkedWorktree>,
+    cx: &mut Context<Self>,
+  ) -> Vec<PathBuf> {
+    use app_log::ResultExt as _;
+
+    let Some(store) = self.chat_store.clone() else {
+      return Vec::new();
     };
-    let bindings = store.read(cx).worktree_bindings();
-    let known_ids: std::collections::HashSet<String> = store
+    let canonical =
+      |path: &Path| std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+    // A conversation proves it is alive through the index, or through a live
+    // panel: a just-created worktree session is still blank, so it has no
+    // index row yet, only its panel.
+    let mut known_ids: std::collections::HashSet<String> = store
       .read(cx)
       .list()
       .into_iter()
       .map(|meta| meta.id)
       .collect();
-    // A binding whose conversation is gone (pruned, or a delete that lost its
-    // removal) is unbound now; its checkout falls to the sweep below.
+    known_ids.extend(
+      self
+        .agent_chat_view
+        .iter()
+        .map(|panel| panel.read(cx).current_conversation().id.clone()),
+    );
+    known_ids.extend(self.background_chat_panels.iter().map(|(id, _)| id.clone()));
     let mut live_paths = std::collections::HashSet::new();
-    for (conversation_id, binding) in &bindings {
-      if known_ids.contains(conversation_id) {
-        live_paths.insert(binding.path.clone());
+    for (conversation_id, binding) in store.read(cx).worktree_bindings() {
+      if known_ids.contains(&conversation_id) {
+        live_paths.insert(canonical(&binding.path));
       } else {
         store.update(cx, |store, cx| {
-          store.set_worktree(conversation_id, None, cx)
+          store.set_worktree(&conversation_id, None, cx)
         });
       }
     }
-    cx.background_spawn(async move {
-      let canonical =
-        |path: &Path| std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
-      let live_paths: std::collections::HashSet<PathBuf> =
-        live_paths.iter().map(|path| canonical(path)).collect();
-      let Some(worktrees) = git::list_worktrees(&repo_root).log_err_context("listing worktrees")
-      else {
-        return;
-      };
-      let Some(sweep_root) =
-        git::worktrees_root_for(&repo_root).log_err_context("resolving the worktrees root")
-      else {
-        return;
-      };
-      let sweep_root = canonical(&sweep_root);
-      for worktree in worktrees {
-        // Only checkouts that are provably ours: under our directory, still
-        // on a reviu- branch. A renamed branch means the user took over.
+    let Some(sweep_root) =
+      git::worktrees_root_for(repo_root).log_err_context("resolving the worktrees root")
+    else {
+      return Vec::new();
+    };
+    let sweep_root = canonical(&sweep_root);
+    worktrees
+      .into_iter()
+      .filter(|worktree| {
         let path = canonical(&worktree.path);
-        if !path.starts_with(&sweep_root) || live_paths.contains(&path) {
-          continue;
-        }
-        let ours = worktree
-          .branch
-          .as_deref()
-          .is_some_and(|branch| branch.starts_with(git::WORKTREE_BRANCH_PREFIX));
-        if !ours {
-          continue;
-        }
-        git::remove_worktree(&repo_root, &worktree.path)
-          .log_err_context("removing an orphaned worktree");
-      }
-    })
-    .detach();
+        path.starts_with(&sweep_root)
+          && !live_paths.contains(&path)
+          && worktree
+            .branch
+            .as_deref()
+            .is_some_and(|branch| branch.starts_with(git::WORKTREE_BRANCH_PREFIX))
+      })
+      .map(|worktree| worktree.path)
+      .collect()
   }
 
   fn conversation_meta(&self, id: &str, cx: &App) -> Option<agent_chat_panel::ConversationMeta> {
@@ -2717,6 +2754,45 @@ mod tests {
     );
 
     let _ = std::fs::remove_dir_all(&state_dir);
+    cleanup_worktrees_root(&repo.path);
+  }
+
+  #[gpui::test]
+  async fn the_sweep_spares_a_blank_worktree_session_that_is_still_alive(cx: &mut TestAppContext) {
+    let (repo, page, cx) = page_with_agent_panel("session-page-sweep-blank-live", cx).await;
+
+    // A fresh worktree session: bound, but blank, so absent from the index.
+    page.update_in(cx, |page, window, cx| page.new_worktree_session(window, cx));
+    cx.run_until_parked();
+    let panel = active_panel(&page, cx);
+    let (conversation_id, cwd) = panel.read_with(cx, |panel, _| {
+      (
+        panel.current_conversation().id.clone(),
+        panel.cwd().to_path_buf(),
+      )
+    });
+
+    // The sweep runs again, as it would if it raced the creation at boot.
+    page.update(cx, |page, cx| page.sweep_orphan_worktrees(cx));
+    cx.run_until_parked();
+
+    assert!(
+      cwd.exists(),
+      "a live session's checkout is never an orphan, blank or not"
+    );
+    page.read_with(cx, |page, cx| {
+      assert!(
+        page
+          .chat_store
+          .as_ref()
+          .expect("store")
+          .read(cx)
+          .worktree(&conversation_id)
+          .is_some(),
+        "its binding survived too"
+      );
+    });
+
     cleanup_worktrees_root(&repo.path);
   }
 
