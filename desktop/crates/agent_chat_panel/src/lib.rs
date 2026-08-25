@@ -2169,7 +2169,7 @@ impl AgentChatPanel {
     let text = m.text.clone();
     let input = cx.new(|cx| {
       TextareaState::new(window, cx)
-        .auto_grow(2, 8)
+        .auto_grow(1, 8)
         .default_value(text)
     });
     window.focus(&input.read(cx).focus_handle(cx), cx);

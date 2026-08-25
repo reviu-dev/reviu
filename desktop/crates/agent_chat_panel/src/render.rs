@@ -2453,8 +2453,10 @@ impl AgentChatPanel {
               div()
                 .w(px(560.))
                 .max_w_full()
-                .px_3()
-                .py_2()
+                // The textarea keeps its own inner padding (10x8) even
+                // appearance-less; the bubble only adds the difference so the
+                // text sits exactly where the reading bubble puts it (12x8).
+                .px(px(2.))
                 .rounded(px(10.))
                 .bg(theme.secondary)
                 .text_sm()
