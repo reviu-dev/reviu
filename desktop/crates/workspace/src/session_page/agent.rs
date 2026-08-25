@@ -2269,6 +2269,83 @@ mod tests {
   }
 
   #[gpui::test]
+  async fn activating_resumes_a_worktree_session_and_points_the_dock_at_it(
+    cx: &mut TestAppContext,
+  ) {
+    agent_chat_panel::set_backend_command_override(Some("/nonexistent-agent-binary".to_string()));
+    let repo = TempRepo::init("session-page-resume-worktree");
+    commit_text_file(&repo.path, Path::new("README.md"), "v1\n", "initial");
+    let worktree = git::create_worktree(&repo.path, None).expect("create worktree");
+
+    // What a previous run left behind: a worktree session marked active.
+    let state_dir = agent_chat_state_dir()
+      .map(|dir| AgentChatPanel::state_dir_for_repo(&dir, &repo.path))
+      .expect("agent chat state dir");
+    let _ = std::fs::remove_dir_all(&state_dir);
+    std::fs::create_dir_all(&state_dir).expect("create state dir");
+    let meta = serde_json::json!({
+      "id": "worktree-conversation",
+      "started_at_secs": 1,
+      "updated_at_secs": 2,
+      "title": "In a worktree",
+      "message_count": 1,
+      "session_id": null,
+      "preview": "hello"
+    });
+    std::fs::write(
+      state_dir.join("index.json"),
+      serde_json::json!({ "version": 1, "conversations": [meta.clone()] }).to_string(),
+    )
+    .expect("write index");
+    std::fs::write(
+      state_dir.join("worktree-conversation.json"),
+      serde_json::json!({
+        "version": 1,
+        "meta": meta,
+        "items": [{ "type": "Message", "role": "User", "text": "hello", "images": 0 }],
+        "group_pins": {},
+        "auto_approve": false
+      })
+      .to_string(),
+    )
+    .expect("write transcript");
+    std::fs::write(
+      state_dir.join("worktrees.json"),
+      serde_json::json!({
+        "worktree-conversation": { "path": worktree.path, "branch": worktree.branch }
+      })
+      .to_string(),
+    )
+    .expect("write bindings");
+    std::fs::write(state_dir.join("active.txt"), "worktree-conversation").expect("write active");
+
+    let (page, cx) = add_session_page_window(repo.path.clone(), cx);
+    cx.run_until_parked();
+    page.update_in(cx, |page, window, cx| page.activate(window, cx));
+    cx.run_until_parked();
+
+    let panel = active_panel(&page, cx);
+    panel.read_with(cx, |panel, _| {
+      assert_eq!(panel.current_conversation().id, "worktree-conversation");
+      assert_eq!(
+        panel.cwd(),
+        worktree.path.as_path(),
+        "the resumed session works in its worktree again"
+      );
+    });
+    page.read_with(cx, |page, cx| {
+      assert_eq!(
+        page.dock_panel.read(cx).repo_root(),
+        Some(worktree.path.as_path()),
+        "the dock followed the resumed checkout, not the main one"
+      );
+    });
+
+    let _ = std::fs::remove_dir_all(&state_dir);
+    cleanup_worktrees_root(&repo.path);
+  }
+
+  #[gpui::test]
   async fn the_git_surfaces_follow_the_active_sessions_checkout(cx: &mut TestAppContext) {
     let (repo, page, cx) = page_with_agent_panel("session-page-checkout-follow", cx).await;
 
