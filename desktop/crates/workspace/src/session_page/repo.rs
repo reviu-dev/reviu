@@ -25,18 +25,24 @@ impl SessionPage {
     }
 
     ConfigStore::persist_recent_repository(&repo_root);
-    self.apply_selected_repo(Some(repo_root), window, cx);
-    Ok(())
-  }
-
-  /// The sidebar lists every tracked repo's sessions, or only the scope's.
-  pub(super) fn set_scope_all_repos(&mut self, all: bool, cx: &mut Context<Self>) {
-    if self.scope_all_repos == all {
-      return;
+    self.apply_selected_repo(Some(repo_root.clone()), window, cx);
+    // Switching repository means going back to work there: reopen the
+    // session you left active in it, when there is one.
+    let resume = self
+      .chat_store
+      .as_ref()
+      .and_then(|store| store.read(cx).active_meta())
+      .map(|meta| meta.id);
+    if let Some(id) = resume {
+      let already_shown = self
+        .agent_chat_view
+        .as_ref()
+        .is_some_and(|panel| panel.read(cx).current_conversation().id == id);
+      if !already_shown {
+        self.select_session(&id, window, cx);
+      }
     }
-    self.scope_all_repos = all;
-    self.refresh_session_list(cx);
-    cx.notify();
+    Ok(())
   }
 
   #[doc(hidden)]

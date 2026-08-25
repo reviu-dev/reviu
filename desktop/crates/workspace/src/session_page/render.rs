@@ -98,7 +98,6 @@ impl SessionPage {
     let branch_status = self.repo_snapshot.read(cx).branch_status().cloned();
     let sync_in_flight = self.repo_command_in_flight;
 
-    let scope_all = self.scope_all_repos;
     let repo_context = match repo_name {
       None => Some(self.render_open_repository_row(cx).into_any_element()),
       Some(name) => Some(
@@ -124,33 +123,11 @@ impl SessionPage {
             );
           }))
           .child(
-            Button::new("session-scope-all-repos")
-              .debug_selector(|| "session-scope-all-repos".to_string())
-              .icon(UiIconName::Globe)
-              .ghost()
-              .compact()
-              .xsmall()
-              .when(scope_all, |this| this.primary())
-              .tooltip(if scope_all {
-                "Show only this repository's sessions"
-              } else {
-                "Show every repository's sessions"
-              })
-              .on_click(cx.listener(move |this, _, _, cx| {
-                cx.stop_propagation();
-                this.set_scope_all_repos(!scope_all, cx);
-              })),
-          )
-          .child(
             div()
               .text_xs()
               .text_color(theme.foreground)
               .truncate()
-              .child(if scope_all {
-                format!("All repositories · {name}")
-              } else {
-                name
-              }),
+              .child(name),
           )
           .when_some(branch_status.clone(), |this, status| {
             this.child(

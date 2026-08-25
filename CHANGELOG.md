@@ -12,6 +12,12 @@ Sessions sharing the main checkout still take turns, since two agents editing th
 
 Nothing accumulates behind your back either: opening a repository sweeps away `reviu-` worktrees that no session references any more, the leftovers of a crash or a failed delete. Worktrees on a branch you made yours are left alone.
 
+### The Sidebar Groups Sessions By Repository, And Holds Still
+
+Session rows used to reorder themselves while an agent streamed, since recency drove their position. Rows now hold still: each repository is a foldable section, newest sessions first inside it, and nothing moves while agents work. Folding a section is the filter; a folded section shows how many sessions it holds.
+
+Creation follows where you are: New Session and the worktree button land in the repository of the session you are looking at, and every section header carries its own compose button for an explicit target. Switching repositories from the palette now reopens the session you left active there. The all-repositories toggle is gone; the one list simply shows everything.
+
 ### Sessions From All Your Repositories, In One List
 
 Switching repositories used to stop every running session: the repository was a mode, and changing it tore the whole shell down. It is now an attribute of each session. Switching repositories just points the sidebar and the New Session button somewhere else; agents keep running wherever they are, and the diff, branch header and changes panel stay on the session you are looking at.

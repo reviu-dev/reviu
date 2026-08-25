@@ -54,25 +54,20 @@ impl ConversationHub {
     Some((store, true))
   }
 
-  /// Every conversation of every tracked repo (or one repo when scoped),
-  /// newest first. Conversation ids are unique across repos by construction
-  /// (millis + pid + counter).
-  pub fn rows(&self, scope: Option<&Path>, cx: &App) -> Vec<(PathBuf, ConversationMeta)> {
-    let scope = scope.map(canonical);
-    let mut rows: Vec<(PathBuf, ConversationMeta)> = self
+  /// Every tracked repo's conversations, grouped by repo in a STABLE order
+  /// (tracking order, never resorted) and newest-created first inside each
+  /// group: rows must not dance while sessions stream. Conversation ids are
+  /// unique across repos by construction (millis + pid + counter).
+  pub fn sections(&self, cx: &App) -> Vec<(PathBuf, Vec<ConversationMeta>)> {
+    self
       .stores
       .iter()
-      .filter(|(repo, _)| scope.as_deref().is_none_or(|scope| scope == repo))
-      .flat_map(|(repo, store)| {
-        store
-          .read(cx)
-          .list()
-          .into_iter()
-          .map(|meta| (repo.clone(), meta))
+      .map(|(repo, store)| {
+        let mut metas = store.read(cx).list();
+        metas.sort_by_key(|meta| std::cmp::Reverse(meta.started_at_secs));
+        (repo.clone(), metas)
       })
-      .collect();
-    rows.sort_by_key(|(_, meta)| std::cmp::Reverse(meta.updated_at_secs));
-    rows
+      .collect()
   }
 
   pub fn find_conversation(

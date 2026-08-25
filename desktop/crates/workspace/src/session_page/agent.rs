@@ -1051,9 +1051,33 @@ impl SessionPage {
     }
   }
 
+  /// Creation lands where you are: the shown session's repo, else the scope.
+  fn creation_repo(&self, cx: &App) -> PathBuf {
+    self
+      .agent_chat_view
+      .as_ref()
+      .map(|panel| panel.read(cx).repo_root().to_path_buf())
+      .or_else(|| self.selected_repo.clone())
+      .unwrap_or_else(|| PathBuf::from("."))
+  }
+
   pub(super) fn new_session(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    let repo_root = self.creation_repo(cx);
+    self.new_session_in(repo_root, window, cx);
+  }
+
+  pub(super) fn new_session_in(
+    &mut self,
+    repo_root: PathBuf,
+    window: &mut Window,
+    cx: &mut Context<Self>,
+  ) {
     prune_agent_chat_state_once();
     self.ensure_chat_store(cx);
+    let store = self
+      .conversation_hub
+      .store_for(&repo_root, cx)
+      .map(|(store, _)| store);
     if let Some(panel) = self.agent_chat_view.as_ref() {
       // The shown conversation is still blank: it already is the new session.
       // Not while hydrating (its transcript may be about to land) and not when
@@ -1062,13 +1086,14 @@ impl SessionPage {
       if !panel.has_persistable_content()
         && panel.loading_conversation_id().is_none()
         && !panel.needs_reconnect()
+        && panel.repo_root() == repo_root.as_path()
       {
         self.focus_agent_input_on_next_frame(window, cx);
         return;
       }
     }
     self.park_active_chat_panel(cx);
-    let view = self.build_scope_chat_panel(None, window, cx);
+    let view = self.build_chat_panel(repo_root, store, None, window, cx);
     view.update(cx, |panel, _| panel.set_active_conversation(true));
     self.agent_chat_view = Some(view);
     self.evict_parked_chat_panels(cx);
@@ -1135,13 +1160,18 @@ impl SessionPage {
   ) {
     prune_agent_chat_state_once();
     self.ensure_chat_store(cx);
-    let Some(repo_root) = self.selected_repo.clone() else {
+    if self.selected_repo.is_none() && self.agent_chat_view.is_none() {
       window.push_notification(
         Notification::warning("Open a repository before starting a worktree session."),
         cx,
       );
       return;
-    };
+    }
+    let repo_root = self.creation_repo(cx);
+    let target_store = self
+      .conversation_hub
+      .store_for(&repo_root, cx)
+      .map(|(store, _)| store);
     cx.spawn_in(window, async move |this, cx| {
       let create_root = repo_root.clone();
       let created = cx
@@ -1151,7 +1181,7 @@ impl SessionPage {
         match created {
           Ok(worktree) => {
             this.park_active_chat_panel(cx);
-            let store = this.chat_store.clone();
+            let store = target_store.clone();
             let view = this.build_chat_panel_at(
               repo_root.clone(),
               worktree.path.clone(),
@@ -1163,7 +1193,7 @@ impl SessionPage {
             view.update(cx, |panel, _| panel.set_active_conversation(true));
             let conversation_id = view.read(cx).current_conversation().id.clone();
             this.agent_chat_view = Some(view);
-            if let Some(store) = this.chat_store.clone() {
+            if let Some(store) = target_store.clone() {
               store.update(cx, |store, cx| {
                 store.set_worktree(
                   &conversation_id,
@@ -1217,6 +1247,7 @@ impl SessionPage {
     else {
       return;
     };
+    let deleted_repo = repo_root.clone();
     // Bindings are read before the delete scrubs them.
     self.cleanup_session_worktree(repo_root.clone(), store.clone(), id, cx);
     self.cleanup_session_checkpoints(repo_root, id, cx);
@@ -1232,7 +1263,15 @@ impl SessionPage {
     if deleting_active {
       store.update(cx, |store, cx| store.set_active(None, cx));
       self.agent_chat_view = None;
-      let view = self.build_scope_chat_panel(None, window, cx);
+      // You were working in that repo: the fresh session stays there.
+      let repo = self
+        .conversation_hub
+        .store_for(&deleted_repo, cx)
+        .map(|(store, _)| (deleted_repo.clone(), Some(store)));
+      let view = match repo {
+        Some((repo_root, store)) => self.build_chat_panel(repo_root, store, None, window, cx),
+        None => self.build_scope_chat_panel(None, window, cx),
+      };
       view.update(cx, |panel, _| panel.set_active_conversation(true));
       self.agent_chat_view = Some(view);
     }
@@ -3303,7 +3342,7 @@ mod tests {
   }
 
   #[gpui::test]
-  async fn the_all_repos_scope_lists_every_tracked_repos_sessions(cx: &mut TestAppContext) {
+  async fn the_sidebar_always_lists_every_tracked_repos_sessions(cx: &mut TestAppContext) {
     let (repo, page, cx) = page_with_agent_panel("session-page-scope-all", cx).await;
     let (other, other_state) = seed_second_repo("session-page-scope-all-b", "all-b-conversation");
 
@@ -3312,28 +3351,19 @@ mod tests {
     cx.run_until_parked();
     let local_id = local.read_with(cx, |panel, _| panel.current_conversation().id.clone());
 
-    // Visiting the other repo tracks it; scoping back narrows the list again.
+    // Tracking the other repo is enough: no mode, no filter, one list.
     page.update_in(cx, |page, window, cx| {
       page
         .set_selected_repo(other.path.clone(), window, cx)
         .expect("track the other repo");
     });
-    page.read_with(cx, |page, cx| {
-      let ids = page.session_list.read(cx).conversation_ids();
-      assert!(ids.contains(&"all-b-conversation".to_string()));
-      assert!(
-        !ids.contains(&local_id),
-        "a repo scope hides the other repos' sessions"
-      );
-    });
-
-    page.update(cx, |page, cx| page.set_scope_all_repos(true, cx));
+    cx.run_until_parked();
     page.read_with(cx, |page, cx| {
       let ids = page.session_list.read(cx).conversation_ids();
       assert!(ids.contains(&"all-b-conversation".to_string()));
       assert!(
         ids.contains(&local_id),
-        "the all-repos scope lists both repos' sessions"
+        "both repos' sessions share the one list"
       );
     });
 
@@ -3355,7 +3385,6 @@ mod tests {
       page
         .set_selected_repo(repo.path.clone(), window, cx)
         .expect("scope back to the first repo");
-      page.set_scope_all_repos(true, cx);
     });
 
     page.update_in(cx, |page, window, cx| {
@@ -3423,7 +3452,6 @@ mod tests {
       page
         .set_selected_repo(repo.path.clone(), window, cx)
         .expect("scope back");
-      page.set_scope_all_repos(true, cx);
       page.select_session("doomed-b", window, cx);
     });
     cx.run_until_parked();
@@ -3510,7 +3538,6 @@ mod tests {
       page
         .set_selected_repo(repo.path.clone(), window, cx)
         .expect("scope back");
-      page.set_scope_all_repos(true, cx);
       page.select_session("worktree-b-conversation", window, cx);
     });
     cx.run_until_parked();
@@ -3541,27 +3568,54 @@ mod tests {
   }
 
   #[gpui::test]
-  async fn a_new_session_targets_the_scope_repo(cx: &mut TestAppContext) {
-    let (repo, page, cx) = page_with_agent_panel("session-page-new-in-scope", cx).await;
-    let (other, other_state) = seed_second_repo("session-page-new-in-scope-b", "seed-b");
+  async fn a_new_session_lands_where_you_are(cx: &mut TestAppContext) {
+    let (repo, page, cx) = page_with_agent_panel("session-page-new-in-context", cx).await;
+    let (other, other_state) = seed_second_repo("session-page-new-in-context-b", "seed-b");
 
     // Content first, so New Session forks instead of reusing the blank.
     active_panel(&page, cx).update(cx, |panel, cx| panel.seed_user_message_for_test("mine", cx));
     cx.run_until_parked();
 
+    // The scope moves to the other repo, but the SHOWN session stays in the
+    // first one: the plain New Session follows what you are looking at.
     page.update_in(cx, |page, window, cx| {
       page
         .set_selected_repo(other.path.clone(), window, cx)
         .expect("scope to the other repo");
+      page.select_session(
+        &page
+          .conversation_hub
+          .sections(cx)
+          .iter()
+          .find(|(section_repo, _)| section_repo == &repo.path)
+          .and_then(|(_, metas)| metas.first().cloned())
+          .expect("the first repo's conversation")
+          .id
+          .clone(),
+        window,
+        cx,
+      );
       page.new_session(window, cx);
     });
     cx.run_until_parked();
+    active_panel(&page, cx).read_with(cx, |panel, _| {
+      assert_eq!(
+        panel.repo_root(),
+        repo.path.as_path(),
+        "a new session lands in the shown session's repo"
+      );
+    });
 
+    // The section header's compose button targets ITS repo explicitly.
+    page.update_in(cx, |page, window, cx| {
+      page.new_session_in(other.path.clone(), window, cx);
+    });
+    cx.run_until_parked();
     active_panel(&page, cx).read_with(cx, |panel, _| {
       assert_eq!(
         panel.repo_root(),
         other.path.as_path(),
-        "a new session lands in the scope repo"
+        "the per-section compose creates in that section's repo"
       );
     });
 

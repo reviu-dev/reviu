@@ -1,7 +1,7 @@
 //! The sidebar's session list: pick, create and delete conversations.
 
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use agent_chat_panel::ConversationMeta;
 use gpui::{
@@ -63,16 +63,24 @@ pub(crate) fn session_row_title(meta: &ConversationMeta) -> SharedString {
   }
 }
 
-/// One sidebar row: the conversation plus, when the list spans several
-/// repos, the repo it belongs to.
+/// One sidebar row: the conversation and the repo it belongs to. Rows arrive
+/// grouped by repo (stable section order) and render under section headers.
 #[derive(Clone, Debug, PartialEq)]
 pub struct SessionRow {
   pub meta: ConversationMeta,
-  pub repo_name: Option<SharedString>,
+  pub repo_root: PathBuf,
 }
 
 pub enum SessionListEvent {
   NewSession,
+  /// The section header's compose button: a session in THAT repo.
+  NewSessionIn {
+    repo_root: PathBuf,
+  },
+  /// The section header itself: fold or unfold a repo's sessions.
+  ToggleRepoCollapsed {
+    repo_root: PathBuf,
+  },
   /// A session whose agent works in its own git worktree, started from
   /// `base`; `None` is the repository's default branch.
   NewWorktreeSession {
@@ -97,9 +105,11 @@ pub struct SessionList {
   statuses: HashMap<String, SessionStatus>,
   /// Worktree branch by conversation id, shown under the row.
   worktree_branches: HashMap<String, String>,
-  /// The scope repo: worktree creation targets it, so its base picker reads
-  /// branches from it, at menu-open time (always fresh, never polled).
+  /// Worktree creation targets this repo, so its base picker reads branches
+  /// from it, at menu-open time (always fresh, never polled).
   scope_repo: Option<PathBuf>,
+  /// Folded repo sections; folding IS the filter now.
+  collapsed_repos: std::collections::HashSet<PathBuf>,
 }
 
 impl SessionList {
@@ -111,7 +121,20 @@ impl SessionList {
       statuses: HashMap::new(),
       worktree_branches: HashMap::new(),
       scope_repo: None,
+      collapsed_repos: std::collections::HashSet::new(),
     }
+  }
+
+  pub fn toggle_repo_collapsed(&mut self, repo_root: &Path, cx: &mut Context<Self>) {
+    if !self.collapsed_repos.remove(repo_root) {
+      self.collapsed_repos.insert(repo_root.to_path_buf());
+    }
+    cx.notify();
+  }
+
+  #[cfg(test)]
+  pub(crate) fn is_repo_collapsed(&self, repo_root: &Path) -> bool {
+    self.collapsed_repos.contains(repo_root)
   }
 
   pub fn set_scope_repo(&mut self, scope_repo: Option<PathBuf>, cx: &mut Context<Self>) {
@@ -196,24 +219,121 @@ impl SessionList {
         .find(|existing| existing.meta.id == row.meta.id)
       {
         Some(entry) if *entry == row => {}
+        // Updated in place: a streaming session must never change position.
         Some(entry) => {
           *entry = row;
           changed = true;
         }
         None => {
-          self.conversations.push(row);
+          // A fresh conversation heads its repo's section (newest-created
+          // first); an unknown repo opens a section at the end until the
+          // next full refresh settles the order.
+          let at = self
+            .conversations
+            .iter()
+            .position(|existing| existing.repo_root == row.repo_root)
+            .unwrap_or(self.conversations.len());
+          self.conversations.insert(at, row);
           changed = true;
         }
-      }
-      if changed {
-        self
-          .conversations
-          .sort_by_key(|row| std::cmp::Reverse(row.meta.updated_at_secs));
       }
     }
     if changed {
       cx.notify();
     }
+  }
+}
+
+impl SessionList {
+  /// A repo's section header: fold toggle, name, count when folded, and a
+  /// hover compose button that creates a session in THAT repo.
+  fn render_repo_header(
+    &self,
+    repo_root: &Path,
+    count: usize,
+    theme: &gpui_component::Theme,
+    cx: &mut Context<Self>,
+  ) -> gpui::AnyElement {
+    let collapsed = self.collapsed_repos.contains(repo_root);
+    let name: SharedString = repo_root
+      .file_name()
+      .map(|name| name.to_string_lossy().into_owned())
+      .unwrap_or_else(|| repo_root.to_string_lossy().into_owned())
+      .into();
+    let toggle_repo = repo_root.to_path_buf();
+    let compose_repo = repo_root.to_path_buf();
+    let group_name = SharedString::from(format!("repo-section-{}", repo_root.display()));
+
+    h_flex()
+      .id(SharedString::from(format!(
+        "session-repo-section-{}",
+        repo_root.display()
+      )))
+      .group(group_name.clone())
+      .items_center()
+      .gap_1()
+      .mx_2()
+      .mt_1()
+      .px_2()
+      .py_1()
+      .rounded(px(6.0))
+      .cursor_pointer()
+      .hover(|this| this.bg(theme.secondary_hover))
+      .on_click(cx.listener(move |_, _, _, cx| {
+        cx.emit(SessionListEvent::ToggleRepoCollapsed {
+          repo_root: toggle_repo.clone(),
+        });
+      }))
+      .child(
+        Icon::new(if collapsed {
+          gpui_component::IconName::ChevronRight
+        } else {
+          gpui_component::IconName::ChevronDown
+        })
+        .size(px(12.))
+        .text_color(theme.muted_foreground),
+      )
+      .child(
+        div()
+          .flex_1()
+          .min_w(px(0.0))
+          .text_xs()
+          .font_weight(gpui::FontWeight::SEMIBOLD)
+          .truncate()
+          .text_color(theme.muted_foreground)
+          .child(name),
+      )
+      .when(collapsed, |this| {
+        this.child(
+          div()
+            .text_xs()
+            .text_color(theme.muted_foreground.opacity(0.8))
+            .child(count.to_string()),
+        )
+      })
+      .child(
+        div()
+          .opacity(0.0)
+          .group_hover(group_name, |this| this.opacity(1.0))
+          .child(
+            Button::new(SharedString::from(format!(
+              "session-repo-new-{}",
+              repo_root.display()
+            )))
+            .icon(UiIconName::SquarePen)
+            .ghost()
+            .compact()
+            .xsmall()
+            .tooltip("New session in this repository")
+            .on_click(cx.listener(move |_, _, _, cx| {
+              cx.stop_propagation();
+              cx.emit(SessionListEvent::NewSessionIn {
+                repo_root: compose_repo.clone(),
+              });
+            })),
+          ),
+      )
+      .into_any_element()
   }
 }
 
@@ -336,13 +456,23 @@ impl Render for SessionList {
           ),
       );
 
-    let rows: Vec<_> = self
-      .conversations
-      .iter()
-      .enumerate()
-      .map(|(ix, row)| {
+    let mut items: Vec<gpui::AnyElement> = Vec::new();
+    let mut header_repo: Option<PathBuf> = None;
+    for (ix, row) in self.conversations.iter().enumerate() {
+      if header_repo.as_deref() != Some(row.repo_root.as_path()) {
+        header_repo = Some(row.repo_root.clone());
+        let count = self
+          .conversations
+          .iter()
+          .filter(|other| other.repo_root == row.repo_root)
+          .count();
+        items.push(self.render_repo_header(&row.repo_root, count, &theme, cx));
+      }
+      if self.collapsed_repos.contains(&row.repo_root) {
+        continue;
+      }
+      items.push({
         let meta = &row.meta;
-        let repo_name = row.repo_name.clone();
         let is_current = meta.id == self.current_id;
         let is_loading = self.loading_id.as_deref() == Some(meta.id.as_str());
         let status = self.statuses.get(&meta.id).copied().unwrap_or_default();
@@ -452,53 +582,29 @@ impl Render for SessionList {
                 .child(preview),
             )
           })
-          .when(repo_name.is_some() || worktree_branch.is_some(), |this| {
+          .when_some(worktree_branch, |this, branch| {
             this.child(
               h_flex()
                 .items_center()
-                .gap_2()
-                .when_some(repo_name, |this, repo_name| {
-                  this.child(
-                    h_flex()
-                      .items_center()
-                      .gap_1()
-                      .child(
-                        Icon::new(gpui_component::IconName::Folder)
-                          .size(px(10.))
-                          .text_color(theme.muted_foreground.opacity(0.8)),
-                      )
-                      .child(
-                        div()
-                          .text_xs()
-                          .truncate()
-                          .text_color(theme.muted_foreground.opacity(0.8))
-                          .child(repo_name),
-                      ),
-                  )
-                })
-                .when_some(worktree_branch, |this, branch| {
-                  this.child(
-                    h_flex()
-                      .items_center()
-                      .gap_1()
-                      .child(
-                        Icon::new(UiIconName::GitBranch)
-                          .size(px(10.))
-                          .text_color(theme.muted_foreground.opacity(0.8)),
-                      )
-                      .child(
-                        div()
-                          .text_xs()
-                          .truncate()
-                          .text_color(theme.muted_foreground.opacity(0.8))
-                          .child(branch),
-                      ),
-                  )
-                }),
+                .gap_1()
+                .child(
+                  Icon::new(UiIconName::GitBranch)
+                    .size(px(10.))
+                    .text_color(theme.muted_foreground.opacity(0.8)),
+                )
+                .child(
+                  div()
+                    .text_xs()
+                    .truncate()
+                    .text_color(theme.muted_foreground.opacity(0.8))
+                    .child(branch),
+                ),
             )
           })
-      })
-      .collect();
+          .into_any_element()
+      });
+    }
+    let rows = items;
 
     let body = if rows.is_empty() {
       v_flex()
@@ -600,7 +706,7 @@ mod tests {
         session_id: None,
         preview: String::new(),
       },
-      repo_name: None,
+      repo_root: PathBuf::from("/repo"),
     }
   }
 
@@ -639,25 +745,40 @@ mod tests {
   }
 
   #[gpui::test]
-  async fn upsert_current_updates_in_place_inserts_and_resorts(cx: &mut gpui::TestAppContext) {
+  async fn upsert_current_updates_in_place_and_never_moves_a_streaming_row(
+    cx: &mut gpui::TestAppContext,
+  ) {
     let list = cx.new(|_| SessionList::new());
     list.update(cx, |list, cx| {
       list.set_conversations(vec![meta("b", 20), meta("a", 10)], "a".into(), cx);
 
-      // Bumping the current row's timestamp moves it to the top, in place.
+      // A streaming session bumps its timestamp: the row must NOT move.
       list.upsert_current(Some(meta("a", 30)), "a".into(), cx);
-      assert_eq!(list.conversations.len(), 2);
-      assert_eq!(list.conversations[0].meta.id, "a");
+      assert_eq!(
+        list.conversation_ids(),
+        vec!["b".to_string(), "a".to_string()],
+        "positions are stable while sessions stream"
+      );
+      assert_eq!(list.conversations[1].meta.updated_at_secs, 30);
 
-      // A row not yet on disk gets inserted.
+      // A row not yet on disk heads its repo's section.
       list.upsert_current(Some(meta("c", 40)), "c".into(), cx);
-      assert_eq!(list.conversations.len(), 3);
-      assert_eq!(list.conversations[0].meta.id, "c");
+      assert_eq!(
+        list.conversation_ids(),
+        vec!["c".to_string(), "b".to_string(), "a".to_string()]
+      );
 
       // An empty draft only moves the selection.
       list.upsert_current(None, "b".into(), cx);
       assert_eq!(list.current_id, "b");
       assert_eq!(list.conversations.len(), 3);
+
+      // Folding a repo is list state, not data: rows stay.
+      list.toggle_repo_collapsed(Path::new("/repo"), cx);
+      assert!(list.is_repo_collapsed(Path::new("/repo")));
+      assert_eq!(list.conversations.len(), 3);
+      list.toggle_repo_collapsed(Path::new("/repo"), cx);
+      assert!(!list.is_repo_collapsed(Path::new("/repo")));
     });
   }
 }

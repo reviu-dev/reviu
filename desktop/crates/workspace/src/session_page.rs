@@ -174,8 +174,6 @@ pub struct SessionPage {
   /// The SCOPE repo's store: the target of new sessions. Sessions of other
   /// repos carry their own store handle.
   chat_store: Option<Entity<ConversationStore>>,
-  /// Sidebar shows every tracked repo's sessions instead of just the scope's.
-  scope_all_repos: bool,
   /// Repos already swept for orphaned worktrees this run.
   swept_repos: HashSet<PathBuf>,
   /// The repo whose review batch is loaded; follows the active session.
@@ -283,6 +281,15 @@ impl SessionPage {
       window,
       |this, _list, event: &SessionListEvent, window, cx| match event {
         SessionListEvent::NewSession => this.new_session(window, cx),
+        SessionListEvent::NewSessionIn { repo_root } => {
+          this.new_session_in(repo_root.clone(), window, cx)
+        }
+        SessionListEvent::ToggleRepoCollapsed { repo_root } => {
+          let repo_root = repo_root.clone();
+          this
+            .session_list
+            .update(cx, |list, cx| list.toggle_repo_collapsed(&repo_root, cx));
+        }
         SessionListEvent::NewWorktreeSession { base } => {
           this.new_worktree_session(base.clone(), window, cx)
         }
@@ -411,7 +418,6 @@ impl SessionPage {
       agent_chat_view: None,
       conversation_hub: ConversationHub::new(),
       chat_store: None,
-      scope_all_repos: false,
       swept_repos: HashSet::new(),
       reviewed_repo: selected_repo.clone(),
       background_chat_panels: Vec::new(),
@@ -559,10 +565,7 @@ impl SessionPage {
       .has_persistable_content()
       .then(|| panel.current_conversation().clone());
     let current = current.map(|meta| crate::session_list::SessionRow {
-      repo_name: self
-        .scope_all_repos
-        .then(|| repo_display_name(panel.repo_root()))
-        .flatten(),
+      repo_root: panel.repo_root().to_path_buf(),
       meta,
     });
     let statuses = self.session_statuses(cx);
@@ -606,19 +609,18 @@ impl SessionPage {
   /// Full refresh from the store's meta index, for lifecycle changes
   /// (panel created, conversation created/loaded/deleted, repo switched).
   fn refresh_session_list(&mut self, cx: &mut Context<Self>) {
-    let scope = (!self.scope_all_repos)
-      .then(|| self.selected_repo.clone())
-      .flatten();
     let conversations: Vec<crate::session_list::SessionRow> = self
       .conversation_hub
-      .rows(scope.as_deref(), cx)
+      .sections(cx)
       .into_iter()
-      .map(|(repo, meta)| crate::session_list::SessionRow {
-        repo_name: self
-          .scope_all_repos
-          .then(|| repo_display_name(&repo))
-          .flatten(),
-        meta,
+      .flat_map(|(repo, metas)| {
+        metas
+          .into_iter()
+          .map(move |meta| crate::session_list::SessionRow {
+            repo_root: repo.clone(),
+            meta,
+          })
+          .collect::<Vec<_>>()
       })
       .collect();
     let current_id = self
@@ -628,7 +630,11 @@ impl SessionPage {
       .unwrap_or_default();
     let statuses = self.session_statuses(cx);
     let worktree_branches = self.conversation_hub.worktree_branches(cx);
-    let scope_repo = self.selected_repo.clone();
+    let scope_repo = self
+      .agent_chat_view
+      .as_ref()
+      .map(|panel| panel.read(cx).repo_root().to_path_buf())
+      .or_else(|| self.selected_repo.clone());
     self.session_list.update(cx, |list, cx| {
       list.set_conversations(conversations, current_id, cx);
       list.set_statuses(statuses, cx);
@@ -1115,12 +1121,6 @@ impl SessionPage {
     });
     open_file_search_palette(window, cx, entries, handler, false);
   }
-}
-
-fn repo_display_name(repo_root: &Path) -> Option<SharedString> {
-  repo_root
-    .file_name()
-    .map(|name| SharedString::from(name.to_string_lossy().into_owned()))
 }
 
 /// Under test there is no fallback to the real state directory: a test writes
