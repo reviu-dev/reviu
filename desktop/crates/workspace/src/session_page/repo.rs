@@ -12,35 +12,40 @@ impl SessionPage {
     window: &mut Window,
     cx: &mut Context<Self>,
   ) -> Result<(), SharedString> {
-    if self.selected_repo.as_deref() == Some(repo_root.as_path()) {
-      return Ok(());
-    }
     // A folder that is not a repository would be remembered as the one to open
     // on the next launch, so it is refused before anything is stored.
     let Some(repo_root) = git::discover_repository_root(&repo_root) else {
       return Err("This folder is not a git repository.".into());
     };
-    if self.selected_repo.as_deref() == Some(repo_root.as_path()) {
+    let shown_elsewhere = self
+      .agent_chat_view
+      .as_ref()
+      .is_some_and(|panel| panel.read(cx).repo_root() != repo_root.as_path());
+    if self.selected_repo.as_deref() == Some(repo_root.as_path()) && !shown_elsewhere {
       return Ok(());
     }
 
     ConfigStore::persist_recent_repository(&repo_root);
     self.apply_selected_repo(Some(repo_root.clone()), window, cx);
-    // Switching repository means going back to work there: reopen the
-    // session you left active in it, when there is one.
+    // Switching repository means going to work there: reopen the session you
+    // left active in it, or open a blank one so the screen, the git surfaces
+    // and the New Session button all agree on where you are.
     let resume = self
       .chat_store
       .as_ref()
       .and_then(|store| store.read(cx).active_meta())
       .map(|meta| meta.id);
-    if let Some(id) = resume {
-      let already_shown = self
-        .agent_chat_view
-        .as_ref()
-        .is_some_and(|panel| panel.read(cx).current_conversation().id == id);
-      if !already_shown {
-        self.select_session(&id, window, cx);
+    match resume {
+      Some(id) => {
+        let already_shown = self
+          .agent_chat_view
+          .as_ref()
+          .is_some_and(|panel| panel.read(cx).current_conversation().id == id);
+        if !already_shown {
+          self.select_session(&id, window, cx);
+        }
       }
+      None => self.new_session_in(repo_root, window, cx),
     }
     Ok(())
   }
@@ -349,7 +354,7 @@ mod tests {
   }
 
   #[gpui::test]
-  async fn switching_repository_resets_the_shell_state(cx: &mut TestAppContext) {
+  async fn switching_repository_takes_you_there(cx: &mut TestAppContext) {
     let repo = TempRepo::init("session-page-switch-from");
     commit_text_file(&repo.path, Path::new("README.md"), "v1\n", "initial");
     std::fs::write(repo.path.join("README.md"), "v2\n").expect("update file");
@@ -378,16 +383,20 @@ mod tests {
         .set_selected_repo(other.path.clone(), window, cx)
         .expect("switch repository");
     });
+    cx.run_until_parked();
 
     page.read_with(cx, |page, cx| {
       assert_eq!(page.selected_repo.as_deref(), Some(other.path.as_path()));
-      // The open diff and its draft comments belong to the previous repository.
+      // No session was active there: a blank one opens so the screen, the
+      // git surfaces and New Session all agree on where you are.
+      let panel = page.agent_chat_view.as_ref().expect("a session is shown");
+      assert_eq!(panel.read(cx).repo_root(), other.path.as_path());
+      assert!(!panel.read(cx).has_persistable_content());
+      // The open diff and its draft comments belong to the previous repo.
       assert_eq!(page.center, CenterView::Conversation);
       assert!(page.editor.is_none());
       assert!(page.selected_file.is_none());
       assert!(page.agent_review.is_empty());
-      // This test never activated the agent panel, so switching does not start it.
-      assert!(page.agent_chat_view.is_none());
       assert_eq!(
         page.dock_panel.read(cx).repo_root(),
         Some(other.path.as_path())

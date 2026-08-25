@@ -609,9 +609,9 @@ impl SessionPage {
   /// Full refresh from the store's meta index, for lifecycle changes
   /// (panel created, conversation created/loaded/deleted, repo switched).
   fn refresh_session_list(&mut self, cx: &mut Context<Self>) {
-    let conversations: Vec<crate::session_list::SessionRow> = self
-      .conversation_hub
-      .sections(cx)
+    let sections = self.conversation_hub.sections(cx);
+    let section_order: Vec<PathBuf> = sections.iter().map(|(repo, _)| repo.clone()).collect();
+    let conversations: Vec<crate::session_list::SessionRow> = sections
       .into_iter()
       .flat_map(|(repo, metas)| {
         metas
@@ -637,6 +637,7 @@ impl SessionPage {
       .or_else(|| self.selected_repo.clone());
     self.session_list.update(cx, |list, cx| {
       list.set_conversations(conversations, current_id, cx);
+      list.set_section_order(section_order, cx);
       list.set_statuses(statuses, cx);
       list.set_worktree_branches(worktree_branches, cx);
       list.set_scope_repo(scope_repo, cx);

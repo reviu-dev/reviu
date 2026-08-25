@@ -3301,7 +3301,9 @@ mod tests {
   }
 
   #[gpui::test]
-  async fn switching_scope_never_touches_a_running_session(cx: &mut TestAppContext) {
+  async fn switching_repository_parks_a_running_session_without_stopping_it(
+    cx: &mut TestAppContext,
+  ) {
     let (repo, page, cx) = page_with_agent_panel("session-page-scope-running", cx).await;
     let (other, other_state) = seed_second_repo("session-page-scope-running-b", "b-conversation");
 
@@ -3315,26 +3317,31 @@ mod tests {
     page.update_in(cx, |page, window, cx| {
       page
         .set_selected_repo(other.path.clone(), window, cx)
-        .expect("scope switch");
+        .expect("switch repository");
     });
     cx.run_until_parked();
 
-    assert_eq!(
-      active_panel(&page, cx).entity_id(),
-      running.entity_id(),
-      "the running session stayed on screen through the scope switch"
-    );
-    running.read_with(cx, |panel, _| {
-      assert!(panel.is_turn_in_flight(), "and its turn never stopped");
-      assert_eq!(panel.repo_root(), repo.path.as_path());
+    // You went to the other repo; the running session keeps working behind.
+    active_panel(&page, cx).read_with(cx, |panel, _| {
+      assert_eq!(panel.repo_root(), other.path.as_path());
     });
     page.read_with(cx, |page, cx| {
-      assert_eq!(page.selected_repo.as_deref(), Some(other.path.as_path()));
+      assert!(
+        page
+          .background_chat_panels
+          .iter()
+          .any(|(_, panel)| panel.entity_id() == running.entity_id()),
+        "the running session parked instead of stopping"
+      );
       assert_eq!(
         page.dock_panel.read(cx).repo_root(),
-        Some(repo.path.as_path()),
-        "the git surfaces follow the session, not the scope"
+        Some(other.path.as_path()),
+        "the git surfaces follow where you went"
       );
+    });
+    running.read_with(cx, |panel, _| {
+      assert!(panel.is_turn_in_flight(), "its turn never stopped");
+      assert_eq!(panel.repo_root(), repo.path.as_path());
     });
 
     let _ = std::fs::remove_dir_all(&other_state);
@@ -3564,6 +3571,45 @@ mod tests {
 
     let _ = std::fs::remove_dir_all(&other_state);
     cleanup_worktrees_root(&other.path);
+    cleanup_worktrees_root(&repo.path);
+  }
+
+  #[gpui::test]
+  async fn an_emptied_repo_keeps_its_section_and_its_compose_button(cx: &mut TestAppContext) {
+    let (repo, page, cx) = page_with_agent_panel("session-page-empty-section", cx).await;
+
+    let panel = active_panel(&page, cx);
+    panel.update(cx, |panel, cx| {
+      panel.seed_user_message_for_test("only one", cx)
+    });
+    cx.run_until_parked();
+    let id = panel.read_with(cx, |panel, _| panel.current_conversation().id.clone());
+
+    page.update_in(cx, |page, window, cx| page.delete_session(&id, window, cx));
+    cx.run_until_parked();
+
+    page.read_with(cx, |page, cx| {
+      let list = page.session_list.read(cx);
+      assert!(list.conversation_ids().is_empty(), "no rows left");
+      assert!(
+        list
+          .section_order_for_test()
+          .iter()
+          .any(|section| section == &repo.path),
+        "the emptied repo keeps its section header"
+      );
+    });
+
+    // And the section's compose button still works: creating there is
+    // possible without any surviving row.
+    page.update_in(cx, |page, window, cx| {
+      page.new_session_in(repo.path.clone(), window, cx)
+    });
+    cx.run_until_parked();
+    active_panel(&page, cx).read_with(cx, |panel, _| {
+      assert_eq!(panel.repo_root(), repo.path.as_path());
+    });
+
     cleanup_worktrees_root(&repo.path);
   }
 

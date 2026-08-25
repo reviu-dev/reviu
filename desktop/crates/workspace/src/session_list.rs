@@ -110,6 +110,9 @@ pub struct SessionList {
   scope_repo: Option<PathBuf>,
   /// Folded repo sections; folding IS the filter now.
   collapsed_repos: std::collections::HashSet<PathBuf>,
+  /// Every tracked repo, in stable order: sections render from this, so an
+  /// emptied repo keeps its header (and its compose button).
+  section_order: Vec<PathBuf>,
 }
 
 impl SessionList {
@@ -122,7 +125,20 @@ impl SessionList {
       worktree_branches: HashMap::new(),
       scope_repo: None,
       collapsed_repos: std::collections::HashSet::new(),
+      section_order: Vec::new(),
     }
+  }
+
+  pub fn set_section_order(&mut self, section_order: Vec<PathBuf>, cx: &mut Context<Self>) {
+    if self.section_order != section_order {
+      self.section_order = section_order;
+      cx.notify();
+    }
+  }
+
+  #[cfg(test)]
+  pub(crate) fn section_order_for_test(&self) -> &[PathBuf] {
+    &self.section_order
   }
 
   pub fn toggle_repo_collapsed(&mut self, repo_root: &Path, cx: &mut Context<Self>) {
@@ -456,153 +472,165 @@ impl Render for SessionList {
           ),
       );
 
-    let mut items: Vec<gpui::AnyElement> = Vec::new();
-    let mut header_repo: Option<PathBuf> = None;
-    for (ix, row) in self.conversations.iter().enumerate() {
-      if header_repo.as_deref() != Some(row.repo_root.as_path()) {
-        header_repo = Some(row.repo_root.clone());
-        let count = self
-          .conversations
-          .iter()
-          .filter(|other| other.repo_root == row.repo_root)
-          .count();
-        items.push(self.render_repo_header(&row.repo_root, count, &theme, cx));
+    // Sections come from the tracked-repo order so an empty repo keeps its
+    // header; rows not yet in that order (fresh upsert) get a section at the
+    // end until the next refresh settles it.
+    let mut section_repos: Vec<PathBuf> = self.section_order.clone();
+    for row in &self.conversations {
+      if !section_repos.contains(&row.repo_root) {
+        section_repos.push(row.repo_root.clone());
       }
-      if self.collapsed_repos.contains(&row.repo_root) {
+    }
+    let mut items: Vec<gpui::AnyElement> = Vec::new();
+    for section_repo in &section_repos {
+      let count = self
+        .conversations
+        .iter()
+        .filter(|row| &row.repo_root == section_repo)
+        .count();
+      items.push(self.render_repo_header(section_repo, count, &theme, cx));
+      if self.collapsed_repos.contains(section_repo) {
         continue;
       }
-      items.push({
-        let meta = &row.meta;
-        let is_current = meta.id == self.current_id;
-        let is_loading = self.loading_id.as_deref() == Some(meta.id.as_str());
-        let status = self.statuses.get(&meta.id).copied().unwrap_or_default();
-        let status_color = match status {
-          SessionStatus::Idle => theme.muted_foreground,
-          SessionStatus::Working => theme.status_amber(),
-          SessionStatus::Waiting => theme.status_blue(),
-          SessionStatus::Failed => theme.status_red(),
-        };
-        let worktree_branch = self
-          .worktree_branches
-          .get(&meta.id)
-          .map(|branch| SharedString::from(branch.clone()));
-        let id = meta.id.clone();
-        let delete_id = meta.id.clone();
-        let title = session_row_title(meta);
-        let preview = meta.preview.clone();
-        let time = format_relative_secs(meta.updated_at_secs, now);
-        let group_name = SharedString::from(format!("session-row-{}", meta.id));
+      for (ix, row) in self
+        .conversations
+        .iter()
+        .enumerate()
+        .filter(|(_, row)| &row.repo_root == section_repo)
+      {
+        items.push({
+          let meta = &row.meta;
+          let is_current = meta.id == self.current_id;
+          let is_loading = self.loading_id.as_deref() == Some(meta.id.as_str());
+          let status = self.statuses.get(&meta.id).copied().unwrap_or_default();
+          let status_color = match status {
+            SessionStatus::Idle => theme.muted_foreground,
+            SessionStatus::Working => theme.status_amber(),
+            SessionStatus::Waiting => theme.status_blue(),
+            SessionStatus::Failed => theme.status_red(),
+          };
+          let worktree_branch = self
+            .worktree_branches
+            .get(&meta.id)
+            .map(|branch| SharedString::from(branch.clone()));
+          let id = meta.id.clone();
+          let delete_id = meta.id.clone();
+          let title = session_row_title(meta);
+          let preview = meta.preview.clone();
+          let time = format_relative_secs(meta.updated_at_secs, now);
+          let group_name = SharedString::from(format!("session-row-{}", meta.id));
 
-        div()
-          .id(("session-page-session-row", ix))
-          .group(group_name.clone())
-          .mx_2()
-          .px_2()
-          .py_1p5()
-          .rounded(px(6.0))
-          .cursor_pointer()
-          .when(is_current, |this| this.bg(theme.secondary_active))
-          .hover(|s| s.bg(theme.secondary_hover))
-          .on_click(cx.listener(move |_, _, _, cx| {
-            cx.emit(SessionListEvent::Selected { id: id.clone() });
-          }))
-          .child(
-            h_flex()
-              .items_center()
-              .gap_2()
-              .child(
-                div()
-                  .flex_1()
-                  .min_w(px(0.0))
-                  .text_sm()
-                  .truncate()
-                  .text_color(theme.foreground)
-                  .child(title),
-              )
-              .child(
-                // One trailing slot: the time sits flush right, the delete
-                // button takes its place on hover instead of reserving width.
-                div()
-                  .relative()
-                  .flex_shrink_0()
-                  .min_w(px(22.))
-                  .flex()
-                  .justify_end()
-                  .items_center()
-                  .child(if is_loading {
-                    div()
-                      .child(gpui_component::spinner::Spinner::new().xsmall())
-                      .into_any_element()
-                  } else if let Some(label) = status.label() {
-                    // The live state replaces the timestamp: a running or
-                    // stuck session matters more than how old it is.
-                    div()
-                      .text_xs()
-                      .text_color(status_color.opacity(0.9))
-                      .group_hover(group_name.clone(), |this| this.opacity(0.0))
-                      .child(label)
-                      .into_any_element()
-                  } else {
-                    div()
-                      .text_xs()
-                      .text_color(theme.muted_foreground)
-                      .group_hover(group_name.clone(), |this| this.opacity(0.0))
-                      .child(time)
-                      .into_any_element()
-                  })
-                  .child(
-                    div()
-                      .absolute()
-                      .right(px(-2.))
-                      .top(px(-3.))
-                      .opacity(0.0)
-                      .group_hover(group_name.clone(), |this| this.opacity(1.0))
-                      .child(
-                        Button::new(("session-page-session-delete", ix))
-                          .icon(UiIconName::Trash)
-                          .xsmall()
-                          .ghost()
-                          .tooltip("Delete session")
-                          .on_click(cx.listener(move |_, _, _, cx| {
-                            cx.stop_propagation();
-                            cx.emit(SessionListEvent::Deleted {
-                              id: delete_id.clone(),
-                            });
-                          })),
-                      ),
-                  ),
-              ),
-          )
-          .when(!preview.is_empty(), |this| {
-            this.child(
-              div()
-                .text_xs()
-                .truncate()
-                .text_color(theme.muted_foreground)
-                .child(preview),
-            )
-          })
-          .when_some(worktree_branch, |this, branch| {
-            this.child(
+          div()
+            .id(("session-page-session-row", ix))
+            .group(group_name.clone())
+            .mx_2()
+            .px_2()
+            .py_1p5()
+            .rounded(px(6.0))
+            .cursor_pointer()
+            .when(is_current, |this| this.bg(theme.secondary_active))
+            .hover(|s| s.bg(theme.secondary_hover))
+            .on_click(cx.listener(move |_, _, _, cx| {
+              cx.emit(SessionListEvent::Selected { id: id.clone() });
+            }))
+            .child(
               h_flex()
                 .items_center()
-                .gap_1()
-                .child(
-                  Icon::new(UiIconName::GitBranch)
-                    .size(px(10.))
-                    .text_color(theme.muted_foreground.opacity(0.8)),
-                )
+                .gap_2()
                 .child(
                   div()
-                    .text_xs()
+                    .flex_1()
+                    .min_w(px(0.0))
+                    .text_sm()
                     .truncate()
-                    .text_color(theme.muted_foreground.opacity(0.8))
-                    .child(branch),
+                    .text_color(theme.foreground)
+                    .child(title),
+                )
+                .child(
+                  // One trailing slot: the time sits flush right, the delete
+                  // button takes its place on hover instead of reserving width.
+                  div()
+                    .relative()
+                    .flex_shrink_0()
+                    .min_w(px(22.))
+                    .flex()
+                    .justify_end()
+                    .items_center()
+                    .child(if is_loading {
+                      div()
+                        .child(gpui_component::spinner::Spinner::new().xsmall())
+                        .into_any_element()
+                    } else if let Some(label) = status.label() {
+                      // The live state replaces the timestamp: a running or
+                      // stuck session matters more than how old it is.
+                      div()
+                        .text_xs()
+                        .text_color(status_color.opacity(0.9))
+                        .group_hover(group_name.clone(), |this| this.opacity(0.0))
+                        .child(label)
+                        .into_any_element()
+                    } else {
+                      div()
+                        .text_xs()
+                        .text_color(theme.muted_foreground)
+                        .group_hover(group_name.clone(), |this| this.opacity(0.0))
+                        .child(time)
+                        .into_any_element()
+                    })
+                    .child(
+                      div()
+                        .absolute()
+                        .right(px(-2.))
+                        .top(px(-3.))
+                        .opacity(0.0)
+                        .group_hover(group_name.clone(), |this| this.opacity(1.0))
+                        .child(
+                          Button::new(("session-page-session-delete", ix))
+                            .icon(UiIconName::Trash)
+                            .xsmall()
+                            .ghost()
+                            .tooltip("Delete session")
+                            .on_click(cx.listener(move |_, _, _, cx| {
+                              cx.stop_propagation();
+                              cx.emit(SessionListEvent::Deleted {
+                                id: delete_id.clone(),
+                              });
+                            })),
+                        ),
+                    ),
                 ),
             )
-          })
-          .into_any_element()
-      });
+            .when(!preview.is_empty(), |this| {
+              this.child(
+                div()
+                  .text_xs()
+                  .truncate()
+                  .text_color(theme.muted_foreground)
+                  .child(preview),
+              )
+            })
+            .when_some(worktree_branch, |this, branch| {
+              this.child(
+                h_flex()
+                  .items_center()
+                  .gap_1()
+                  .child(
+                    Icon::new(UiIconName::GitBranch)
+                      .size(px(10.))
+                      .text_color(theme.muted_foreground.opacity(0.8)),
+                  )
+                  .child(
+                    div()
+                      .text_xs()
+                      .truncate()
+                      .text_color(theme.muted_foreground.opacity(0.8))
+                      .child(branch),
+                  ),
+              )
+            })
+            .into_any_element()
+        });
+      }
     }
     let rows = items;
 
