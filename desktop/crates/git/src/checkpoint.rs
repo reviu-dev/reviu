@@ -26,7 +26,7 @@ fn now_ms() -> u64 {
     .unwrap_or(0)
 }
 
-fn run_git(repo_root: &Path, args: &[&str], env: &[(&str, &str)]) -> Result<String> {
+pub(crate) fn run_git(repo_root: &Path, args: &[&str], env: &[(&str, &str)]) -> Result<String> {
   let mut command = Command::new("git");
   command.current_dir(repo_root).args(args);
   for (key, value) in env {
