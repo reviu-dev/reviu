@@ -306,6 +306,8 @@ impl ListDelegate for ReviewRowsDelegate {
 pub(crate) struct ReviewList {
   agent_comments: Vec<ReviewPanelComment>,
   pull_request_comments: Vec<ReviewPanelComment>,
+  /// The GitHub fetch is in flight and nothing has landed yet.
+  pull_request_loading: bool,
   collapsed_files: HashSet<(ReviewSection, PathBuf)>,
   /// Agent comments only, and empty means the whole batch goes: nobody loses a
   /// comment by not ticking it.
@@ -358,6 +360,7 @@ impl ReviewList {
     Self {
       agent_comments: Vec::new(),
       pull_request_comments: Vec::new(),
+      pull_request_loading: false,
       collapsed_files: HashSet::new(),
       selected: HashSet::new(),
       active_section: None,
@@ -367,7 +370,16 @@ impl ReviewList {
 
   /// Nothing to walk: the panel shows its empty state instead of a list.
   pub(crate) fn is_empty(&self) -> bool {
-    self.sections().next().is_none()
+    self.sections().next().is_none() && !self.pull_request_loading
+  }
+
+  /// While the GitHub round-trip runs, an empty panel says loading instead of
+  /// pretending the review has no comments.
+  pub(crate) fn set_pull_request_loading(&mut self, loading: bool, cx: &mut Context<Self>) {
+    if self.pull_request_loading != loading {
+      self.pull_request_loading = loading;
+      cx.notify();
+    }
   }
 
   #[cfg(test)]
@@ -938,6 +950,24 @@ impl Render for ReviewList {
     let sections = self.sections().collect::<Vec<_>>();
 
     if sections.is_empty() {
+      // The pull request's comments may simply not be here yet.
+      if self.pull_request_loading {
+        return v_flex()
+          .debug_selector(|| "review-list-loading".to_string())
+          .size_full()
+          .items_center()
+          .justify_center()
+          .gap_2()
+          .p_4()
+          .child(gpui_component::spinner::Spinner::new().small())
+          .child(
+            div()
+              .text_sm()
+              .text_color(theme.muted_foreground)
+              .child("Loading pull request comments..."),
+          )
+          .into_any_element();
+      }
       return v_flex()
         .size_full()
         .items_center()
@@ -1144,6 +1174,23 @@ mod tests {
       ),
       comment(4, "src/b.rs", 7, "gone", LocalAgentReviewCommentState::Sent),
     ])
+  }
+
+  #[gpui::test]
+  async fn an_empty_panel_says_loading_while_the_pull_request_fetch_runs(
+    cx: &mut gpui::TestAppContext,
+  ) {
+    let (list, cx) = add_review_list_window(cx);
+    list.update(cx, |list, cx| {
+      assert!(list.is_empty());
+      list.set_pull_request_loading(true, cx);
+      assert!(
+        !list.is_empty(),
+        "loading is a state of its own, not the empty state"
+      );
+      list.set_pull_request_loading(false, cx);
+      assert!(list.is_empty());
+    });
   }
 
   #[gpui::test]

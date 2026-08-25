@@ -1223,11 +1223,19 @@ impl DockPanel {
     let number = pull_request.number;
     let api = WorkspaceApi::global(cx).api.clone();
 
+    // Only an empty panel shows the loading state: a refresh over existing
+    // rows must not blank them.
+    self
+      .review_list
+      .update(cx, |list, cx| list.set_pull_request_loading(true, cx));
     let task = cx.spawn(async move |this, cx| {
       let loaded = cx
         .background_spawn(async move { api.fetch_pull_request_conversation(&owner, &repo, number) })
         .await;
       let _ = this.update(cx, |this, cx| {
+        this
+          .review_list
+          .update(cx, |list, cx| list.set_pull_request_loading(false, cx));
         if let Ok(conversation) = loaded {
           this.set_pull_request_review_comments(conversation.review_comments, cx);
         }
