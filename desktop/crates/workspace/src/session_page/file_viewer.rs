@@ -21,7 +21,7 @@ impl SessionPage {
     window: &mut Window,
     cx: &mut Context<Self>,
   ) {
-    let Some(repo_root) = self.selected_repo.clone() else {
+    let Some(repo_root) = self.checkout_root(cx) else {
       return;
     };
     // Previewing is a detour, not a mode: opening a file always shows its code.
@@ -130,7 +130,7 @@ impl SessionPage {
     window: &mut Window,
     cx: &mut Context<Self>,
   ) {
-    let Some(repo_root) = self.selected_repo.clone() else {
+    let Some(repo_root) = self.checkout_root(cx) else {
       return;
     };
     self.show_preview = false;
@@ -201,7 +201,7 @@ impl SessionPage {
     window: &mut Window,
     cx: &mut Context<Self>,
   ) {
-    let Some(repo_root) = self.selected_repo.clone() else {
+    let Some(repo_root) = self.checkout_root(cx) else {
       return;
     };
     let reveal_doc_line = reveal_line.map(|line| line.saturating_sub(1) as usize);

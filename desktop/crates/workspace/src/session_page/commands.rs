@@ -85,7 +85,7 @@ impl SessionPage {
     window: &mut Window,
     cx: &mut Context<Self>,
   ) -> Result<(), SharedString> {
-    let Some(repo_root) = self.selected_repo.clone() else {
+    let Some(repo_root) = self.checkout_root(cx) else {
       return Err("No repository selected.".into());
     };
     if !self
@@ -187,7 +187,7 @@ impl SessionPage {
     window: &mut Window,
     cx: &mut Context<Self>,
   ) -> Result<(), SharedString> {
-    let Some(repo_root) = self.selected_repo.clone() else {
+    let Some(repo_root) = self.checkout_root(cx) else {
       return Err("No repository selected.".into());
     };
     self.close_interactive_rebase_todo(window, cx);
@@ -285,13 +285,16 @@ impl SessionPage {
   }
 
   /// Moving HEAD under a running agent breaks its turn: the branch waits.
+  /// Only a turn in THIS checkout counts; worktree sessions are isolated.
   pub(super) fn run_branch_command(
     &mut self,
     command: RepoCommand,
     window: &mut Window,
     cx: &mut Context<Self>,
   ) -> Result<(), SharedString> {
-    if self.agent_turn_in_flight(cx) {
+    if let Some(checkout) = self.checkout_root(cx)
+      && self.agent_turn_in_flight_at(&checkout, cx)
+    {
       return Err("Wait for the agent to finish before switching branch.".into());
     }
     self.run_repo_command(command, window, cx)
@@ -349,7 +352,7 @@ impl SessionPage {
     _window: &mut Window,
     cx: &mut Context<Self>,
   ) -> Result<(), SharedString> {
-    let Some(repo_root) = self.selected_repo.clone() else {
+    let Some(repo_root) = self.checkout_root(cx) else {
       return Err("No repository selected.".into());
     };
     if self.repo_command_in_flight {

@@ -1211,7 +1211,7 @@ impl Editor {
     let file_mtime = std::fs::metadata(workdir_path)
       .and_then(|meta| meta.modified())
       .ok();
-    let index_mtime = std::fs::metadata(repo_root.join(".git/index"))
+    let index_mtime = std::fs::metadata(git::index_path(repo_root))
       .and_then(|meta| meta.modified())
       .ok();
 
@@ -6230,7 +6230,7 @@ impl Editor {
             if let Err(err) = git::write_index_content(&repo_file, &index_text) {
               return Err(std::io::Error::other(err));
             }
-            index_mtime = std::fs::metadata(repo_file.repo_root.join(".git/index"))
+            index_mtime = std::fs::metadata(git::index_path(&repo_file.repo_root))
               .and_then(|meta| meta.modified())
               .ok();
           }
@@ -6526,7 +6526,7 @@ impl Editor {
           let file_mtime = std::fs::metadata(&workdir_path)
             .and_then(|meta| meta.modified())
             .ok();
-          let index_mtime = std::fs::metadata(repo_for_meta.repo_root.join(".git/index"))
+          let index_mtime = std::fs::metadata(git::index_path(&repo_for_meta.repo_root))
             .and_then(|meta| meta.modified())
             .ok();
           (contents, file_mtime, index_mtime)
@@ -6585,7 +6585,7 @@ impl Editor {
             let file_mtime = std::fs::metadata(&workdir_path_for_meta)
               .and_then(|meta| meta.modified())
               .ok();
-            let index_mtime = std::fs::metadata(repo_file.repo_root.join(".git/index"))
+            let index_mtime = std::fs::metadata(git::index_path(&repo_file.repo_root))
               .ok()
               .and_then(|meta| meta.modified().ok());
             (file_mtime, index_mtime)

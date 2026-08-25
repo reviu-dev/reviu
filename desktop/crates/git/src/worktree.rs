@@ -203,22 +203,38 @@ pub fn prune_worktrees(repo_root: &Path) -> Result<()> {
   Ok(())
 }
 
-/// The main checkout root when `path` is a linked worktree, `None` otherwise.
-/// A linked worktree carries a `.git` FILE pointing at
-/// `<root>/.git/worktrees/<name>`; anything else is not one.
-pub fn linked_worktree_root(path: &Path) -> Option<PathBuf> {
+/// The private gitdir of a linked worktree (`<root>/.git/worktrees/<name>`),
+/// read from its `.git` FILE; `None` for a main checkout or a non-repo.
+fn linked_gitdir(path: &Path) -> Option<PathBuf> {
   let git_file = path.join(".git");
   if !std::fs::metadata(&git_file).ok()?.is_file() {
     return None;
   }
   let contents = std::fs::read_to_string(&git_file).ok()?;
   let target = contents.lines().next()?.strip_prefix("gitdir:")?.trim();
-  let target = if Path::new(target).is_absolute() {
-    PathBuf::from(target)
+  if Path::new(target).is_absolute() {
+    Some(PathBuf::from(target))
   } else {
     // `worktree.useRelativePaths` writes `../..` hops; resolve them.
-    std::fs::canonicalize(path.join(target)).ok()?
-  };
+    std::fs::canonicalize(path.join(target)).ok()
+  }
+}
+
+/// Where a checkout's index file lives: `.git/index` for a main checkout,
+/// inside the worktree's private gitdir for a linked one. Watching
+/// `<checkout>/.git/index` silently breaks in a worktree: `.git` is a file.
+pub fn index_path(checkout: &Path) -> PathBuf {
+  match linked_gitdir(checkout) {
+    Some(gitdir) => gitdir.join("index"),
+    None => checkout.join(".git").join("index"),
+  }
+}
+
+/// The main checkout root when `path` is a linked worktree, `None` otherwise.
+/// A linked worktree carries a `.git` FILE pointing at
+/// `<root>/.git/worktrees/<name>`; anything else is not one.
+pub fn linked_worktree_root(path: &Path) -> Option<PathBuf> {
+  let target = linked_gitdir(path)?;
   let worktrees_dir = target.parent()?;
   if worktrees_dir.file_name()? != "worktrees" {
     return None;
@@ -714,6 +730,35 @@ mod tests {
     assert_eq!(
       crate::test_support::head_oid(&created.path).to_string(),
       head
+    );
+
+    cleanup_worktrees_root(&repo.path);
+  }
+
+  #[test]
+  fn index_path_points_inside_the_worktrees_private_gitdir() {
+    let repo = TempRepo::init("worktree-index-path");
+    commit_text_file(&repo.path, Path::new("README.md"), "v1\n", "initial");
+    let created = create_worktree(&repo.path, None).expect("create worktree");
+
+    let main_index = index_path(&repo.path);
+    assert_eq!(main_index, repo.path.join(".git").join("index"));
+    assert!(main_index.exists());
+
+    let worktree_index = index_path(&created.path);
+    assert!(
+      worktree_index.exists(),
+      "the linked worktree has its own index"
+    );
+    assert_ne!(
+      worktree_index, main_index,
+      "watching the main index would miss the worktree's staging"
+    );
+    assert!(
+      worktree_index
+        .to_string_lossy()
+        .contains(&format!(".git/worktrees/{}", created.name)),
+      "the index lives in the worktree's private gitdir"
     );
 
     cleanup_worktrees_root(&repo.path);

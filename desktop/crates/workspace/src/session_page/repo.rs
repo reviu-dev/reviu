@@ -77,14 +77,17 @@ impl SessionPage {
     }
     self.turn_gate = agent_chat_panel::TurnGate::new();
     self.sync_session_list(cx);
-    if should_rebuild_agent {
-      self.ensure_agent_chat_view(window, cx);
-    }
+    // Point the git surfaces at the new main checkout first; a resumed
+    // worktree session corrects them through ensure's checkout sync.
+    self.synced_checkout = repo_root.clone();
     self.dock_panel.update(cx, |panel, cx| {
       panel.set_repo_root(repo_root, cx);
       panel.refresh(cx);
     });
     self.refresh_branch(cx);
+    if should_rebuild_agent {
+      self.ensure_agent_chat_view(window, cx);
+    }
     cx.notify();
   }
 

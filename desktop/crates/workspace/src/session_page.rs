@@ -177,7 +177,11 @@ pub struct SessionPage {
   dock_panel: Entity<DockPanel>,
   inbox: Entity<Inbox>,
   session_list: Entity<SessionList>,
+  /// The repository's identity: recents, persistence keys, GitHub. The dock
+  /// and the diff follow `checkout_root` instead, which may be a worktree.
   selected_repo: Option<PathBuf>,
+  /// What the git surfaces currently point at; compared to detect switches.
+  synced_checkout: Option<PathBuf>,
   center: CenterView,
   editor: Option<Entity<Editor>>,
   binary_preview: Option<BinaryPreview>,
@@ -400,6 +404,7 @@ impl SessionPage {
       dock_panel,
       inbox,
       session_list,
+      synced_checkout: selected_repo.clone(),
       selected_repo,
       center: CenterView::Conversation,
       editor: None,
@@ -477,9 +482,10 @@ impl SessionPage {
           .await;
 
         let polled = this.update(cx, |this, cx| {
+          let checkout = this.checkout_root(cx);
           if !status_poll::should_poll(
             this.poll_window_active,
-            this.selected_repo.as_deref(),
+            checkout.as_deref(),
             this.repo_command_in_flight,
           ) {
             return;
@@ -494,7 +500,7 @@ impl SessionPage {
   }
 
   fn poll_repository(&mut self, cx: &mut Context<Self>) {
-    if self.selected_repo.is_none() {
+    if self.checkout_root(cx).is_none() {
       return;
     }
     self.refresh_branch(cx);
@@ -558,10 +564,50 @@ impl SessionPage {
       .update(cx, |snapshot, cx| snapshot.refresh(cx));
   }
 
+  /// The checkout the git surfaces should show: the active session's worktree
+  /// when it has one, the main checkout otherwise.
+  pub(crate) fn checkout_root(&self, cx: &App) -> Option<PathBuf> {
+    self.selected_repo.as_ref()?;
+    self
+      .agent_chat_view
+      .as_ref()
+      .map(|panel| panel.read(cx).cwd().to_path_buf())
+      .or_else(|| self.selected_repo.clone())
+  }
+
+  /// Points the dock, the branch header and the diff at the active session's
+  /// checkout. No-op while the checkout has not changed, so streaming and
+  /// same-checkout switches cost nothing.
+  pub(super) fn sync_active_checkout(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    let checkout = self.checkout_root(cx);
+    if self.synced_checkout == checkout {
+      return;
+    }
+    self.synced_checkout = checkout.clone();
+    // The open diff belongs to the checkout being left.
+    self.close_diff(window, cx);
+    self.center = CenterView::Conversation;
+    self.editor = None;
+    self.binary_preview = None;
+    self.selected_file = None;
+    self.opened_snapshot = None;
+    self.open_file_task = None;
+    self.open_file_generation = self.open_file_generation.wrapping_add(1);
+    self.repo_snapshot.update(cx, |snapshot, cx| {
+      snapshot.set_repo_root(checkout.clone(), cx)
+    });
+    self.dock_panel.update(cx, |panel, cx| {
+      panel.set_repo_root(checkout, cx);
+      panel.refresh(cx);
+    });
+    self.refresh_branch(cx);
+    cx.notify();
+  }
+
   /// What a crash or a git error should carry about where the user was.
   fn git_telemetry<'a>(&'a self, cx: &'a App) -> GitTelemetry<'a> {
     GitTelemetry {
-      repo_root: self.selected_repo.as_deref(),
+      repo_root: self.synced_checkout.as_deref(),
       selected_file: self.selected_file.as_deref(),
       branch: self.repo_snapshot.read(cx).current_branch_name(),
       tab: git_telemetry::dock_tab_tag(self.dock_panel.read(cx).active_tab()),
@@ -937,7 +983,7 @@ impl SessionPage {
   }
 
   fn open_file_search(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-    let Some(repo_root) = self.selected_repo.clone() else {
+    let Some(repo_root) = self.checkout_root(cx) else {
       return;
     };
 

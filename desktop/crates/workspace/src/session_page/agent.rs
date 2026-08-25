@@ -60,6 +60,7 @@ impl SessionPage {
     view.update(cx, |panel, _| panel.set_active_conversation(true));
     self.agent_chat_view = Some(view);
     self.refresh_session_list(cx);
+    self.sync_active_checkout(window, cx);
   }
 
   fn ensure_chat_store(&mut self, cx: &mut Context<Self>) {
@@ -868,6 +869,7 @@ impl SessionPage {
     self.evict_parked_chat_panels(cx);
     self.sync_agent_chat_close_control(cx);
     self.refresh_session_list(cx);
+    self.sync_active_checkout(window, cx);
     self.focus_agent_input_on_next_frame(window, cx);
     cx.notify();
   }
@@ -955,6 +957,7 @@ impl SessionPage {
             this.evict_parked_chat_panels(cx);
             this.sync_agent_chat_close_control(cx);
             this.refresh_session_list(cx);
+            this.sync_active_checkout(window, cx);
             this.focus_agent_input_on_next_frame(window, cx);
           }
           Err(error) => {
@@ -994,6 +997,7 @@ impl SessionPage {
       self.agent_chat_view = Some(view);
     }
     self.refresh_session_list(cx);
+    self.sync_active_checkout(window, cx);
     cx.notify();
   }
 
@@ -1033,6 +1037,7 @@ impl SessionPage {
     self.evict_parked_chat_panels(cx);
     self.sync_agent_chat_close_control(cx);
     self.refresh_session_list(cx);
+    self.sync_active_checkout(window, cx);
     self.focus_agent_input_on_next_frame(window, cx);
     cx.notify();
   }
@@ -1051,7 +1056,25 @@ impl SessionPage {
     });
   }
 
-  /// A turn in ANY session counts: they all share the same working tree.
+  /// A turn running in THIS checkout; turns isolated in other worktrees
+  /// don't block work here.
+  pub(super) fn agent_turn_in_flight_at(&self, checkout: &Path, cx: &App) -> bool {
+    #[cfg(test)]
+    if self.pretend_agent_turn_in_flight {
+      return true;
+    }
+    let busy_here = |panel: &Entity<AgentChatPanel>| {
+      let panel = panel.read(cx);
+      panel.is_turn_in_flight() && panel.cwd() == checkout
+    };
+    self.agent_chat_view.iter().any(&busy_here)
+      || self
+        .background_chat_panels
+        .iter()
+        .any(|(_, panel)| busy_here(panel))
+  }
+
+  /// A turn in ANY session counts: for gestures that tear every panel down.
   pub(super) fn agent_turn_in_flight(&self, cx: &App) -> bool {
     #[cfg(test)]
     if self.pretend_agent_turn_in_flight {
@@ -2240,6 +2263,153 @@ mod tests {
         None,
         "nothing was bound"
       );
+    });
+
+    cleanup_worktrees_root(&repo.path);
+  }
+
+  #[gpui::test]
+  async fn the_git_surfaces_follow_the_active_sessions_checkout(cx: &mut TestAppContext) {
+    let (repo, page, cx) = page_with_agent_panel("session-page-checkout-follow", cx).await;
+
+    let main_session = active_panel(&page, cx);
+    main_session.update(cx, |panel, cx| panel.seed_user_message_for_test("main", cx));
+    cx.run_until_parked();
+    let main_id = main_session.read_with(cx, |panel, _| panel.current_conversation().id.clone());
+    page.read_with(cx, |page, cx| {
+      assert_eq!(
+        page.dock_panel.read(cx).repo_root(),
+        Some(repo.path.as_path())
+      );
+    });
+
+    // A worktree session points the dock and the branch header at its checkout.
+    page.update_in(cx, |page, window, cx| page.new_worktree_session(window, cx));
+    cx.run_until_parked();
+    let worktree_panel = active_panel(&page, cx);
+    let cwd = worktree_panel.read_with(cx, |panel, _| panel.cwd().to_path_buf());
+    let branch = page.read_with(cx, |page, cx| {
+      assert_eq!(page.dock_panel.read(cx).repo_root(), Some(cwd.as_path()));
+      page
+        .chat_store
+        .as_ref()
+        .expect("store")
+        .read(cx)
+        .worktree(&worktree_panel.read(cx).current_conversation().id)
+        .expect("binding")
+        .branch
+    });
+    page.update(cx, |page, cx| page.refresh_branch(cx));
+    await_branch_refresh(&page, cx).await;
+    page.read_with(cx, |page, cx| {
+      assert_eq!(
+        page.repo_snapshot.read(cx).current_branch_name(),
+        Some(branch.as_str()),
+        "the branch header names the worktree's branch"
+      );
+    });
+
+    // Back on the main session, everything points home again.
+    worktree_panel.update(cx, |panel, cx| panel.seed_user_message_for_test("keep", cx));
+    cx.run_until_parked();
+    page.update_in(cx, |page, window, cx| {
+      page.select_session(&main_id, window, cx)
+    });
+    cx.run_until_parked();
+    page.read_with(cx, |page, cx| {
+      assert_eq!(
+        page.dock_panel.read(cx).repo_root(),
+        Some(repo.path.as_path())
+      );
+    });
+
+    cleanup_worktrees_root(&repo.path);
+  }
+
+  #[gpui::test]
+  async fn an_open_diff_survives_a_same_checkout_switch_and_closes_on_a_checkout_change(
+    cx: &mut TestAppContext,
+  ) {
+    let (repo, page, cx) = page_with_agent_panel("session-page-checkout-diff", cx).await;
+    std::fs::write(repo.path.join("README.md"), "v2\n").expect("dirty the main checkout");
+
+    let first = active_panel(&page, cx);
+    first.update(cx, |panel, cx| {
+      panel.seed_user_message_for_test("first", cx)
+    });
+    cx.run_until_parked();
+    let first_id = first.read_with(cx, |panel, _| panel.current_conversation().id.clone());
+
+    page.update_in(cx, |page, window, cx| {
+      page.open_diff(
+        PathBuf::from("README.md"),
+        None,
+        OpenIntent::Open,
+        window,
+        cx,
+      );
+    });
+    await_open_file(&page, cx).await;
+
+    // Another MAIN-checkout session: same checkout, the diff stays.
+    page.update_in(cx, |page, window, cx| page.new_session(window, cx));
+    cx.run_until_parked();
+    page.read_with(cx, |page, _| {
+      assert_eq!(
+        page.center,
+        CenterView::Diff,
+        "same checkout keeps the diff"
+      );
+    });
+
+    // A worktree session changes the checkout: the diff belongs to the one left.
+    page.update_in(cx, |page, window, cx| page.new_worktree_session(window, cx));
+    cx.run_until_parked();
+    page.read_with(cx, |page, _| {
+      assert_eq!(page.center, CenterView::Conversation);
+      assert!(page.editor.is_none());
+      assert!(page.selected_file.is_none());
+    });
+
+    let _ = first_id;
+    cleanup_worktrees_root(&repo.path);
+  }
+
+  #[gpui::test]
+  async fn a_turn_in_a_worktree_does_not_block_work_in_the_main_checkout(cx: &mut TestAppContext) {
+    let (repo, page, cx) = page_with_agent_panel("session-page-checkout-guard", cx).await;
+
+    let main_session = active_panel(&page, cx);
+    main_session.update(cx, |panel, cx| panel.seed_user_message_for_test("main", cx));
+    cx.run_until_parked();
+    let main_id = main_session.read_with(cx, |panel, _| panel.current_conversation().id.clone());
+
+    page.update_in(cx, |page, window, cx| page.new_worktree_session(window, cx));
+    cx.run_until_parked();
+    let worktree_panel = active_panel(&page, cx);
+    let worktree_cwd = worktree_panel.read_with(cx, |panel, _| panel.cwd().to_path_buf());
+    worktree_panel.update(cx, |panel, cx| {
+      panel.seed_user_message_for_test("busy", cx);
+      panel.pretend_turn_in_flight_for_test(cx);
+    });
+    cx.run_until_parked();
+
+    // Back on the main session while the worktree agent runs.
+    page.update_in(cx, |page, window, cx| {
+      page.select_session(&main_id, window, cx)
+    });
+    cx.run_until_parked();
+
+    page.read_with(cx, |page, cx| {
+      assert!(
+        page.agent_turn_in_flight(cx),
+        "the worktree turn is real work"
+      );
+      assert!(
+        !page.agent_turn_in_flight_at(&repo.path, cx),
+        "but it does not occupy the main checkout"
+      );
+      assert!(page.agent_turn_in_flight_at(&worktree_cwd, cx));
     });
 
     cleanup_worktrees_root(&repo.path);
