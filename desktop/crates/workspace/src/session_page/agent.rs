@@ -2740,6 +2740,126 @@ mod tests {
   }
 
   #[gpui::test]
+  async fn a_session_deleted_during_the_rename_never_gets_a_zombie_binding(
+    cx: &mut TestAppContext,
+  ) {
+    let (repo, page, cx) = page_with_agent_panel("session-page-rename-deleted", cx).await;
+
+    page.update_in(cx, |page, window, cx| {
+      page.new_worktree_session(None, window, cx)
+    });
+    cx.run_until_parked();
+    let panel = active_panel(&page, cx);
+    let conversation_id = panel.read_with(cx, |panel, _| panel.current_conversation().id.clone());
+
+    // The title lands (rename task spawned) and the session dies right after,
+    // before anything parked: whatever the rename outcome, the deleted
+    // conversation must not come back with a binding.
+    panel.update(cx, |panel, cx| {
+      panel.seed_user_message_for_test("Fix the scroll jump", cx)
+    });
+    page.update_in(cx, |page, window, cx| {
+      page.delete_session(&conversation_id, window, cx)
+    });
+    cx.run_until_parked();
+
+    page.read_with(cx, |page, cx| {
+      assert_eq!(
+        page
+          .chat_store
+          .as_ref()
+          .expect("store")
+          .read(cx)
+          .worktree(&conversation_id),
+        None,
+        "a finished rename must not resurrect the deleted session's binding"
+      );
+    });
+
+    cleanup_worktrees_root(&repo.path);
+  }
+
+  #[gpui::test]
+  async fn a_rename_lost_to_a_crash_heals_on_the_next_run(cx: &mut TestAppContext) {
+    agent_chat_panel::set_backend_command_override(Some("/nonexistent-agent-binary".to_string()));
+    let repo = TempRepo::init("session-page-rename-heal");
+    commit_text_file(&repo.path, Path::new("README.md"), "v1\n", "initial");
+    // What a crash between the title and the rename leaves behind: a titled
+    // conversation still bound to its generated branch.
+    let worktree = git::create_worktree(&repo.path, None).expect("create worktree");
+    let state_dir = agent_chat_state_dir()
+      .map(|dir| AgentChatPanel::state_dir_for_repo(&dir, &repo.path))
+      .expect("agent chat state dir");
+    let _ = std::fs::remove_dir_all(&state_dir);
+    std::fs::create_dir_all(&state_dir).expect("create state dir");
+    let meta = serde_json::json!({
+      "id": "titled-conversation",
+      "started_at_secs": 1,
+      "updated_at_secs": 2,
+      "title": "Fix the scroll jump",
+      "message_count": 1,
+      "session_id": null,
+      "preview": "hello"
+    });
+    std::fs::write(
+      state_dir.join("index.json"),
+      serde_json::json!({ "version": 1, "conversations": [meta.clone()] }).to_string(),
+    )
+    .expect("write index");
+    std::fs::write(
+      state_dir.join("titled-conversation.json"),
+      serde_json::json!({
+        "version": 1,
+        "meta": meta,
+        "items": [{ "type": "Message", "role": "User", "text": "Fix the scroll jump", "images": 0 }],
+        "group_pins": {},
+        "auto_approve": false
+      })
+      .to_string(),
+    )
+    .expect("write transcript");
+    std::fs::write(
+      state_dir.join("worktrees.json"),
+      serde_json::json!({
+        "titled-conversation": { "path": worktree.path, "branch": worktree.branch }
+      })
+      .to_string(),
+    )
+    .expect("write bindings");
+    std::fs::write(state_dir.join("active.txt"), "titled-conversation").expect("write active");
+
+    let (page, cx) = add_session_page_window(repo.path.clone(), cx);
+    cx.run_until_parked();
+    page.update_in(cx, |page, window, cx| page.activate(window, cx));
+    cx.run_until_parked();
+
+    // The next persist re-announces the title and the rename catches up.
+    let panel = active_panel(&page, cx);
+    panel.update(cx, |panel, cx| {
+      panel.seed_user_message_for_test("more work", cx)
+    });
+    cx.run_until_parked();
+
+    page.read_with(cx, |page, cx| {
+      assert_eq!(
+        page
+          .chat_store
+          .as_ref()
+          .expect("store")
+          .read(cx)
+          .worktree("titled-conversation")
+          .expect("binding")
+          .branch,
+        "reviu-fix-the-scroll-jump",
+        "the crashed rename healed on the next run"
+      );
+    });
+
+    let _ = std::fs::remove_dir_all(&state_dir);
+    cleanup_worktrees_root(&repo.path);
+  }
+
+  #[gpui::test]
   async fn a_worktree_session_starts_from_the_picked_base(cx: &mut TestAppContext) {
     let (repo, page, cx) = page_with_agent_panel("session-page-worktree-base-pick", cx).await;
     let main_oid = crate::test_support::head_oid(&repo.path).to_string();
