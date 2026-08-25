@@ -3,7 +3,10 @@
 use std::collections::HashMap;
 
 use agent_chat_panel::ConversationMeta;
-use gpui::{Context, EventEmitter, IntoElement, Render, SharedString, Window, div, prelude::*, px};
+use gpui::{
+  Anchor, Context, EventEmitter, IntoElement, Render, SharedString, Window, div, prelude::*, px,
+};
+use gpui_component::menu::{DropdownMenu as _, PopupMenuItem};
 use gpui_component::scroll::ScrollableElement as _;
 use gpui_component::{ActiveTheme as _, Icon, Sizable as _, h_flex, v_flex};
 use ui::{Button, ButtonVariants as _, StatusThemeExt as _, UiIconName};
@@ -61,8 +64,11 @@ pub(crate) fn session_row_title(meta: &ConversationMeta) -> SharedString {
 
 pub enum SessionListEvent {
   NewSession,
-  /// A session whose agent works in its own git worktree.
-  NewWorktreeSession,
+  /// A session whose agent works in its own git worktree, started from
+  /// `base`; `None` is the repository's default branch.
+  NewWorktreeSession {
+    base: Option<String>,
+  },
   /// The collapse button in the header; the page owns the sidebar width.
   Collapse,
   Selected {
@@ -82,6 +88,8 @@ pub struct SessionList {
   statuses: HashMap<String, SessionStatus>,
   /// Worktree branch by conversation id, shown under the row.
   worktree_branches: HashMap<String, String>,
+  /// Local branches offered as a worktree base, picker order.
+  base_candidates: Vec<SharedString>,
 }
 
 impl SessionList {
@@ -92,6 +100,18 @@ impl SessionList {
       loading_id: None,
       statuses: HashMap::new(),
       worktree_branches: HashMap::new(),
+      base_candidates: Vec::new(),
+    }
+  }
+
+  pub fn set_base_candidates(
+    &mut self,
+    base_candidates: Vec<SharedString>,
+    cx: &mut Context<Self>,
+  ) {
+    if self.base_candidates != base_candidates {
+      self.base_candidates = base_candidates;
+      cx.notify();
     }
   }
 
@@ -224,7 +244,9 @@ impl Render for SessionList {
               .tooltip("New session")
               .on_click(cx.listener(|_, _, _, cx| cx.emit(SessionListEvent::NewSession))),
           )
-          .child(
+          .child({
+            let entity = cx.entity().downgrade();
+            let base_candidates = self.base_candidates.clone();
             Button::new("session-page-new-worktree-session")
               .debug_selector(|| "session-page-new-worktree-session".to_string())
               .icon(UiIconName::GitBranch)
@@ -232,8 +254,56 @@ impl Render for SessionList {
               .compact()
               .small()
               .tooltip("New session in a worktree")
-              .on_click(cx.listener(|_, _, _, cx| cx.emit(SessionListEvent::NewWorktreeSession))),
-          )
+              .dropdown_menu_with_anchor(Anchor::TopLeft, move |menu, _, _| {
+                let mut menu = menu.max_h(px(360.)).scrollable(true);
+                let default_entity = entity.clone();
+                menu = menu.item(
+                  PopupMenuItem::element(move |_, cx| {
+                    let theme = cx.theme().clone();
+                    div()
+                      .text_sm()
+                      .text_color(theme.foreground)
+                      .debug_selector(|| "session-worktree-base-default".to_string())
+                      .child("Default branch")
+                      .into_any_element()
+                  })
+                  .on_click(move |_, _, cx| {
+                    let _ = default_entity.update(cx, |_, cx| {
+                      cx.emit(SessionListEvent::NewWorktreeSession { base: None });
+                    });
+                  }),
+                );
+                // Any branch is a valid base: the worktree gets a NEW branch
+                // at its commit, nothing is checked out twice.
+                for candidate in &base_candidates {
+                  let label = candidate.clone();
+                  let base = candidate.to_string();
+                  let entity = entity.clone();
+                  menu = menu.item(
+                    PopupMenuItem::element(move |_, cx| {
+                      let theme = cx.theme().clone();
+                      h_flex()
+                        .gap_2()
+                        .items_center()
+                        .child(
+                          Icon::new(UiIconName::GitBranch)
+                            .small()
+                            .text_color(theme.muted_foreground),
+                        )
+                        .child(div().text_sm().child(label.clone()))
+                        .into_any_element()
+                    })
+                    .on_click(move |_, _, cx| {
+                      let base = base.clone();
+                      let _ = entity.update(cx, |_, cx| {
+                        cx.emit(SessionListEvent::NewWorktreeSession { base: Some(base) });
+                      });
+                    }),
+                  );
+                }
+                menu
+              })
+          })
           .child(
             Button::new("session-sidebar-collapse")
               .debug_selector(|| "session-sidebar-collapse".to_string())

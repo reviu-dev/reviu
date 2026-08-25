@@ -203,6 +203,89 @@ pub fn prune_worktrees(repo_root: &Path) -> Result<()> {
   Ok(())
 }
 
+/// A branch slug from a conversation title: ASCII lowercase, everything else
+/// collapsed to `-`, truncated. No slash on purpose (same codex bug as the
+/// prefix). `None` when nothing printable survives.
+pub fn worktree_branch_slug(title: &str) -> Option<String> {
+  const MAX_SLUG_BYTES: usize = 48;
+  let mut slug = String::new();
+  let mut last_dash = true;
+  for character in title.chars() {
+    let character = character.to_ascii_lowercase();
+    if character.is_ascii_alphanumeric() {
+      slug.push(character);
+      last_dash = false;
+    } else if !last_dash {
+      slug.push('-');
+      last_dash = true;
+    }
+    if slug.len() >= MAX_SLUG_BYTES {
+      break;
+    }
+  }
+  let slug = slug.trim_matches('-').to_string();
+  if slug.is_empty() { None } else { Some(slug) }
+}
+
+/// Renames a worktree's generated branch after its conversation earned a
+/// title, comet-style. Returns the branch the worktree ends on, which is the
+/// old one whenever the rename must not happen:
+/// - the worktree left `expected_branch` (the user checked out or renamed:
+///   the branch is theirs now),
+/// - `expected_branch` is not the generated `reviu-<folder>` name any more
+///   (already renamed once; one title, one rename),
+/// - the slug collides even with a stable suffix.
+pub fn rename_worktree_branch(
+  repo_root: &Path,
+  worktree_path: &Path,
+  expected_branch: &str,
+  title: &str,
+) -> Result<String> {
+  let keep = || expected_branch.to_string();
+  let Some(current) = worktree_current_branch(worktree_path) else {
+    return Ok(keep());
+  };
+  if current != expected_branch {
+    return Ok(keep());
+  }
+  let generated = worktree_path
+    .file_name()
+    .map(|name| format!("{WORKTREE_BRANCH_PREFIX}{}", name.to_string_lossy()));
+  if generated.as_deref() != Some(expected_branch) {
+    return Ok(keep());
+  }
+  let Some(slug) = worktree_branch_slug(title) else {
+    return Ok(keep());
+  };
+  let mut new_branch = format!("{WORKTREE_BRANCH_PREFIX}{slug}");
+  if new_branch == expected_branch {
+    return Ok(keep());
+  }
+  if branch_exists(repo_root, &new_branch)? {
+    // Stable suffix, not a counter: the same worktree always retries the
+    // same name, so a crashed rename never mints a second candidate.
+    let suffix = blake3::hash(worktree_path.to_string_lossy().as_bytes()).to_hex();
+    new_branch = format!("{new_branch}-{}", &suffix.as_str()[..6]);
+    if branch_exists(repo_root, &new_branch)? {
+      return Ok(keep());
+    }
+  }
+  run_git(
+    repo_root,
+    &["branch", "-m", expected_branch, &new_branch],
+    &[],
+  )
+  .with_context(|| format!("rename {expected_branch} to {new_branch}"))?;
+  // Re-read rather than trust ourselves: a concurrent external checkout in
+  // the worktree wins the metadata race.
+  Ok(worktree_current_branch(worktree_path).unwrap_or(new_branch))
+}
+
+fn branch_exists(repo_root: &Path, branch: &str) -> Result<bool> {
+  let repo = Repository::open(repo_root).with_context(|| format!("open repo at {repo_root:?}"))?;
+  Ok(repo.find_branch(branch, BranchType::Local).is_ok())
+}
+
 /// The private gitdir of a linked worktree (`<root>/.git/worktrees/<name>`),
 /// read from its `.git` FILE; `None` for a main checkout or a non-repo.
 fn linked_gitdir(path: &Path) -> Option<PathBuf> {
@@ -730,6 +813,83 @@ mod tests {
     assert_eq!(
       crate::test_support::head_oid(&created.path).to_string(),
       head
+    );
+
+    cleanup_worktrees_root(&repo.path);
+  }
+
+  #[test]
+  fn branch_slugs_are_ascii_dashed_and_bounded() {
+    assert_eq!(
+      worktree_branch_slug("Fix the scroll jump!").as_deref(),
+      Some("fix-the-scroll-jump")
+    );
+    assert_eq!(
+      worktree_branch_slug("café/crème & braces").as_deref(),
+      Some("caf-cr-me-braces"),
+      "no slash, no unicode, no punctuation"
+    );
+    assert_eq!(worktree_branch_slug("   ***   "), None);
+    let long = worktree_branch_slug(&"word ".repeat(30)).expect("slug");
+    assert!(long.len() <= 48);
+    assert!(!long.ends_with('-'));
+  }
+
+  #[test]
+  fn the_generated_branch_is_renamed_after_the_title_once() {
+    let repo = TempRepo::init("worktree-rename");
+    commit_text_file(&repo.path, Path::new("README.md"), "v1\n", "initial");
+    let created = create_worktree(&repo.path, None).expect("create worktree");
+
+    let renamed =
+      rename_worktree_branch(&repo.path, &created.path, &created.branch, "Fix the scroll")
+        .expect("rename");
+    assert_eq!(renamed, "reviu-fix-the-scroll");
+    assert_eq!(
+      worktree_current_branch(&created.path).as_deref(),
+      Some("reviu-fix-the-scroll"),
+      "the worktree rode along with its branch"
+    );
+
+    // One title, one rename: the branch no longer matches the folder's
+    // generated name, so a second title change leaves it alone.
+    let again = rename_worktree_branch(&repo.path, &created.path, &renamed, "Another title")
+      .expect("second rename attempt");
+    assert_eq!(again, renamed);
+
+    cleanup_worktrees_root(&repo.path);
+  }
+
+  #[test]
+  fn a_branch_the_user_moved_is_never_renamed() {
+    let repo = TempRepo::init("worktree-rename-user");
+    commit_text_file(&repo.path, Path::new("README.md"), "v1\n", "initial");
+    let created = create_worktree(&repo.path, None).expect("create worktree");
+    git(&created.path, &["switch", "-c", "my-own-work"]);
+
+    let kept = rename_worktree_branch(&repo.path, &created.path, &created.branch, "A title")
+      .expect("rename attempt");
+    assert_eq!(kept, created.branch, "the user's checkout wins");
+    assert_eq!(
+      worktree_current_branch(&created.path).as_deref(),
+      Some("my-own-work")
+    );
+
+    cleanup_worktrees_root(&repo.path);
+  }
+
+  #[test]
+  fn a_colliding_title_gets_a_stable_suffix() {
+    let repo = TempRepo::init("worktree-rename-collision");
+    commit_text_file(&repo.path, Path::new("README.md"), "v1\n", "initial");
+    git(&repo.path, &["branch", "reviu-same-title"]);
+    let created = create_worktree(&repo.path, None).expect("create worktree");
+
+    let renamed = rename_worktree_branch(&repo.path, &created.path, &created.branch, "Same title")
+      .expect("rename");
+    assert!(
+      renamed.starts_with("reviu-same-title-") && renamed.len() == "reviu-same-title-".len() + 6,
+      "a taken slug gets a short stable suffix: {renamed}"
     );
 
     cleanup_worktrees_root(&repo.path);

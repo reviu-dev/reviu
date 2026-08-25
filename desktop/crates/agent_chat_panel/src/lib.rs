@@ -639,6 +639,8 @@ pub enum AgentChatPanelEvent {
   UndoTurnRequested { ref_name: String },
   /// The agent is waiting on a permission answer.
   PermissionRequested,
+  /// The conversation earned its title (first user message), once.
+  TitleSettled { title: String },
   /// User asked the host to hide the chat pane.
   CloseRequested,
 }
@@ -723,6 +725,8 @@ pub struct AgentChatPanel {
   current_conv: ConversationMeta,
   /// The shown panel writes the active pointer; background ones must not.
   is_active: bool,
+  /// TitleSettled fired; one title announcement per panel.
+  title_announced: bool,
   turn_gate: TurnGate,
   selection_registry: selectable_text::SelectionRegistry,
   /// Built once: rebuilding extensions busts TextView's parse cache.
@@ -813,6 +817,7 @@ impl AgentChatPanel {
       loading_conversation: None,
       current_conv: resume.clone().unwrap_or_else(new_conversation_meta),
       is_active: false,
+      title_announced: false,
       turn_gate,
       selection_registry,
       markdown_extensions,
@@ -1317,6 +1322,7 @@ impl AgentChatPanel {
       loading_conversation: None,
       current_conv: new_conversation_meta(),
       is_active: false,
+      title_announced: false,
       turn_gate: TurnGate::default(),
       selection_registry,
       markdown_extensions,
@@ -2628,6 +2634,7 @@ impl AgentChatPanel {
       return;
     };
     store.update(cx, |store, cx| store.schedule_save(request, cx));
+    self.announce_title_if_settled(cx);
   }
 
   fn persist_state(&mut self, cx: &mut Context<Self>) {
@@ -2635,6 +2642,20 @@ impl AgentChatPanel {
       return;
     };
     store.update(cx, |store, cx| store.save_now(request, cx));
+    self.announce_title_if_settled(cx);
+  }
+
+  /// Fires once per panel: also on the first persist of a resumed, already
+  /// titled conversation, so a rename lost to a crash heals on the next run
+  /// (the host's guards make a second rename a no-op).
+  fn announce_title_if_settled(&mut self, cx: &mut Context<Self>) {
+    if self.title_announced || self.current_conv.title.is_empty() {
+      return;
+    }
+    self.title_announced = true;
+    cx.emit(AgentChatPanelEvent::TitleSettled {
+      title: self.current_conv.title.clone(),
+    });
   }
 
   /// Snapshot of the conversation for the store; refreshes the meta (count,

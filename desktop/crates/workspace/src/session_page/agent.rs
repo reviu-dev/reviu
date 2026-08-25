@@ -288,6 +288,9 @@ impl SessionPage {
         AgentChatPanelEvent::UndoTurnRequested { ref_name } => {
           this.undo_turn_files(ref_name.clone(), window, cx);
         }
+        AgentChatPanelEvent::TitleSettled { title } => {
+          this.rename_session_worktree_branch(panel.clone(), title.clone(), cx);
+        }
         AgentChatPanelEvent::CloseRequested => {
           this.hide_diff_chat(window, cx);
         }
@@ -295,6 +298,75 @@ impl SessionPage {
     )
     .detach();
     view
+  }
+
+  /// `reviu-swift-otter` becomes `reviu-fix-the-scroll` once the conversation
+  /// has a title. Best-effort polish the user never asked for: a refusal
+  /// (branch moved, name taken) keeps the generated name, silently.
+  fn rename_session_worktree_branch(
+    &mut self,
+    panel: Entity<AgentChatPanel>,
+    title: String,
+    cx: &mut Context<Self>,
+  ) {
+    use app_log::ResultExt as _;
+
+    let Some(repo_root) = self.selected_repo.clone() else {
+      return;
+    };
+    let Some(store) = self.chat_store.clone() else {
+      return;
+    };
+    let conversation_id = panel.read(cx).current_conversation().id.clone();
+    let Some(binding) = store.read(cx).worktree(&conversation_id) else {
+      return;
+    };
+    cx.spawn(async move |this, cx| {
+      let rename_binding = binding.clone();
+      let renamed = cx
+        .background_spawn(async move {
+          git::rename_worktree_branch(
+            &repo_root,
+            &rename_binding.path,
+            &rename_binding.branch,
+            &title,
+          )
+        })
+        .await;
+      let Some(branch) = renamed.log_err_context("renaming the worktree branch") else {
+        return;
+      };
+      if branch == binding.branch {
+        return;
+      }
+      let _ = this.update(cx, |this, cx| {
+        let Some(store) = this.chat_store.clone() else {
+          return;
+        };
+        // The session may have been deleted while git ran: never resurrect
+        // its binding.
+        let still_bound = store
+          .read(cx)
+          .worktree(&conversation_id)
+          .is_some_and(|current| current.path == binding.path);
+        if !still_bound {
+          return;
+        }
+        store.update(cx, |store, cx| {
+          store.set_worktree(
+            &conversation_id,
+            Some(agent_chat_panel::WorktreeBinding {
+              path: binding.path.clone(),
+              branch: branch.clone(),
+            }),
+            cx,
+          )
+        });
+        this.refresh_session_list(cx);
+        this.refresh_branch(cx);
+      });
+    })
+    .detach();
   }
 
   /// Moves the shown panel to the background without stopping its agent.
@@ -1026,7 +1098,12 @@ impl SessionPage {
     .detach();
   }
 
-  pub(super) fn new_worktree_session(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+  pub(super) fn new_worktree_session(
+    &mut self,
+    base: Option<String>,
+    window: &mut Window,
+    cx: &mut Context<Self>,
+  ) {
     prune_agent_chat_state_once();
     self.ensure_chat_store(cx);
     let Some(repo_root) = self.selected_repo.clone() else {
@@ -1038,7 +1115,7 @@ impl SessionPage {
     };
     cx.spawn_in(window, async move |this, cx| {
       let created = cx
-        .background_spawn(async move { git::create_worktree(&repo_root, None) })
+        .background_spawn(async move { git::create_worktree(&repo_root, base.as_deref()) })
         .await;
       let _ = this.update_in(cx, |this, window, cx| {
         match created {
@@ -2143,7 +2220,9 @@ mod tests {
   async fn a_worktree_session_binds_its_checkout_and_survives_a_revisit(cx: &mut TestAppContext) {
     let (repo, page, cx) = page_with_agent_panel("session-page-worktree-bind", cx).await;
 
-    page.update_in(cx, |page, window, cx| page.new_worktree_session(window, cx));
+    page.update_in(cx, |page, window, cx| {
+      page.new_worktree_session(None, window, cx)
+    });
     cx.run_until_parked();
 
     let panel = active_panel(&page, cx);
@@ -2194,7 +2273,9 @@ mod tests {
   ) {
     let (repo, page, cx) = page_with_agent_panel("session-page-worktree-delete", cx).await;
 
-    page.update_in(cx, |page, window, cx| page.new_worktree_session(window, cx));
+    page.update_in(cx, |page, window, cx| {
+      page.new_worktree_session(None, window, cx)
+    });
     cx.run_until_parked();
     let panel = active_panel(&page, cx);
     panel.update(cx, |panel, cx| panel.seed_user_message_for_test("work", cx));
@@ -2239,7 +2320,9 @@ mod tests {
   async fn a_stale_worktree_binding_falls_back_to_the_main_checkout(cx: &mut TestAppContext) {
     let (repo, page, cx) = page_with_agent_panel("session-page-worktree-stale", cx).await;
 
-    page.update_in(cx, |page, window, cx| page.new_worktree_session(window, cx));
+    page.update_in(cx, |page, window, cx| {
+      page.new_worktree_session(None, window, cx)
+    });
     cx.run_until_parked();
     let panel = active_panel(&page, cx);
     panel.update(cx, |panel, cx| panel.seed_user_message_for_test("work", cx));
@@ -2293,7 +2376,9 @@ mod tests {
   ) {
     let (repo, page, cx) = page_with_agent_panel("session-page-worktree-checkpoint", cx).await;
 
-    page.update_in(cx, |page, window, cx| page.new_worktree_session(window, cx));
+    page.update_in(cx, |page, window, cx| {
+      page.new_worktree_session(None, window, cx)
+    });
     cx.run_until_parked();
     let panel = active_panel(&page, cx);
     let (conversation_id, cwd) = panel.read_with(cx, |panel, _| {
@@ -2348,7 +2433,9 @@ mod tests {
     cx.run_until_parked();
     let before = active_panel(&page, cx);
 
-    page.update_in(cx, |page, window, cx| page.new_worktree_session(window, cx));
+    page.update_in(cx, |page, window, cx| {
+      page.new_worktree_session(None, window, cx)
+    });
     cx.run_until_parked();
 
     assert_eq!(
@@ -2467,7 +2554,9 @@ mod tests {
     });
 
     // A worktree session points the dock and the branch header at its checkout.
-    page.update_in(cx, |page, window, cx| page.new_worktree_session(window, cx));
+    page.update_in(cx, |page, window, cx| {
+      page.new_worktree_session(None, window, cx)
+    });
     cx.run_until_parked();
     let worktree_panel = active_panel(&page, cx);
     let cwd = worktree_panel.read_with(cx, |panel, _| panel.cwd().to_path_buf());
@@ -2546,7 +2635,9 @@ mod tests {
     });
 
     // A worktree session changes the checkout: the diff belongs to the one left.
-    page.update_in(cx, |page, window, cx| page.new_worktree_session(window, cx));
+    page.update_in(cx, |page, window, cx| {
+      page.new_worktree_session(None, window, cx)
+    });
     cx.run_until_parked();
     page.read_with(cx, |page, _| {
       assert_eq!(page.center, CenterView::Conversation);
@@ -2567,7 +2658,9 @@ mod tests {
     cx.run_until_parked();
     let main_id = main_session.read_with(cx, |panel, _| panel.current_conversation().id.clone());
 
-    page.update_in(cx, |page, window, cx| page.new_worktree_session(window, cx));
+    page.update_in(cx, |page, window, cx| {
+      page.new_worktree_session(None, window, cx)
+    });
     cx.run_until_parked();
     let worktree_panel = active_panel(&page, cx);
     let worktree_cwd = worktree_panel.read_with(cx, |panel, _| panel.cwd().to_path_buf());
@@ -2599,10 +2692,87 @@ mod tests {
   }
 
   #[gpui::test]
+  async fn the_worktree_branch_takes_the_conversations_title(cx: &mut TestAppContext) {
+    let (repo, page, cx) = page_with_agent_panel("session-page-worktree-rename", cx).await;
+
+    page.update_in(cx, |page, window, cx| {
+      page.new_worktree_session(None, window, cx)
+    });
+    cx.run_until_parked();
+    let panel = active_panel(&page, cx);
+    let conversation_id = panel.read_with(cx, |panel, _| panel.current_conversation().id.clone());
+
+    // The first user message titles the conversation; the branch follows.
+    panel.update(cx, |panel, cx| {
+      panel.seed_user_message_for_test("Fix the scroll jump", cx)
+    });
+    cx.run_until_parked();
+
+    let binding = page.read_with(cx, |page, cx| {
+      page
+        .chat_store
+        .as_ref()
+        .expect("store")
+        .read(cx)
+        .worktree(&conversation_id)
+        .expect("binding")
+    });
+    assert_eq!(binding.branch, "reviu-fix-the-scroll-jump");
+    assert_eq!(
+      git::list_worktrees(&repo.path).expect("list")[0]
+        .branch
+        .as_deref(),
+      Some("reviu-fix-the-scroll-jump"),
+      "the checkout rode along with its renamed branch"
+    );
+    page.read_with(cx, |page, cx| {
+      assert_eq!(
+        page
+          .session_list
+          .read(cx)
+          .worktree_branch_of(&conversation_id),
+        Some("reviu-fix-the-scroll-jump"),
+        "the sidebar row shows the new name"
+      );
+    });
+
+    cleanup_worktrees_root(&repo.path);
+  }
+
+  #[gpui::test]
+  async fn a_worktree_session_starts_from_the_picked_base(cx: &mut TestAppContext) {
+    let (repo, page, cx) = page_with_agent_panel("session-page-worktree-base-pick", cx).await;
+    let main_oid = crate::test_support::head_oid(&repo.path).to_string();
+    std::process::Command::new("git")
+      .current_dir(&repo.path)
+      .args(["switch", "-c", "feature"])
+      .output()
+      .expect("create feature branch");
+    commit_text_file(&repo.path, Path::new("extra.txt"), "x\n", "on feature");
+
+    page.update_in(cx, |page, window, cx| {
+      page.new_worktree_session(Some("feature".to_string()), window, cx)
+    });
+    cx.run_until_parked();
+    let feature_oid = crate::test_support::head_oid(&repo.path).to_string();
+    let cwd = active_panel(&page, cx).read_with(cx, |panel, _| panel.cwd().to_path_buf());
+    assert_eq!(
+      crate::test_support::head_oid(&cwd).to_string(),
+      feature_oid,
+      "the worktree starts from the picked base"
+    );
+    assert_ne!(feature_oid, main_oid);
+
+    cleanup_worktrees_root(&repo.path);
+  }
+
+  #[gpui::test]
   async fn an_abandoned_blank_worktree_session_takes_its_checkout_with_it(cx: &mut TestAppContext) {
     let (repo, page, cx) = page_with_agent_panel("session-page-worktree-blank", cx).await;
 
-    page.update_in(cx, |page, window, cx| page.new_worktree_session(window, cx));
+    page.update_in(cx, |page, window, cx| {
+      page.new_worktree_session(None, window, cx)
+    });
     cx.run_until_parked();
     let cwd = active_panel(&page, cx).read_with(cx, |panel, _| panel.cwd().to_path_buf());
     assert!(cwd.is_dir());
@@ -2626,7 +2796,9 @@ mod tests {
     let (repo, page, cx) = page_with_agent_panel("session-page-sidebar-status", cx).await;
 
     // A worktree session left running in the background.
-    page.update_in(cx, |page, window, cx| page.new_worktree_session(window, cx));
+    page.update_in(cx, |page, window, cx| {
+      page.new_worktree_session(None, window, cx)
+    });
     cx.run_until_parked();
     let working = active_panel(&page, cx);
     working.update(cx, |panel, cx| {
@@ -2762,7 +2934,9 @@ mod tests {
     let (repo, page, cx) = page_with_agent_panel("session-page-sweep-blank-live", cx).await;
 
     // A fresh worktree session: bound, but blank, so absent from the index.
-    page.update_in(cx, |page, window, cx| page.new_worktree_session(window, cx));
+    page.update_in(cx, |page, window, cx| {
+      page.new_worktree_session(None, window, cx)
+    });
     cx.run_until_parked();
     let panel = active_panel(&page, cx);
     let (conversation_id, cwd) = panel.read_with(cx, |panel, _| {

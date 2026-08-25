@@ -12,6 +12,12 @@ Sessions sharing the main checkout still take turns, since two agents editing th
 
 Nothing accumulates behind your back either: opening a repository sweeps away `reviu-` worktrees that no session references any more, the leftovers of a crash or a failed delete. Worktrees on a branch you made yours are left alone.
 
+### Worktree Branches Take The Name Of Their Session
+
+A worktree session starts on a generated branch like `reviu-swift-otter`, which says nothing at merge time. Once the conversation has its title, the branch quietly renames itself after it: `reviu-fix-the-scroll-jump`. A branch you checked out or renamed yourself is yours and never touched, and once renamed it never renames again.
+
+The worktree button also opens a base picker: start the session from your default branch as before, or from any local branch. The new worktree always gets its own fresh branch, so nothing you have checked out is ever disturbed.
+
 ### The Sidebar Tells You What Each Session Is Doing
 
 With agents running in parallel, the session rows now carry their live state: `Working` while a turn runs, `Waiting` when an agent sits on a permission it needs you to answer, `Failed` when its connection died. The state replaces the timestamp while it matters and gives the row back to it when the session settles. Sessions in a worktree also show their branch under the row, so you can tell at a glance where each agent is working.

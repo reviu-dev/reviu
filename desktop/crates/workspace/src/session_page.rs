@@ -273,7 +273,9 @@ impl SessionPage {
       window,
       |this, _list, event: &SessionListEvent, window, cx| match event {
         SessionListEvent::NewSession => this.new_session(window, cx),
-        SessionListEvent::NewWorktreeSession => this.new_worktree_session(window, cx),
+        SessionListEvent::NewWorktreeSession { base } => {
+          this.new_worktree_session(base.clone(), window, cx)
+        }
         SessionListEvent::Collapse => this.close_sidebar(cx),
         SessionListEvent::Selected { id } => this.select_session(id, window, cx),
         SessionListEvent::Deleted { id } => this.delete_session(id, window, cx),
@@ -591,10 +593,21 @@ impl SessionPage {
       .as_ref()
       .map(|store| store.read(cx).worktree_branches())
       .unwrap_or_default();
+    // Local branches only: a worktree base picker offers starting points, and
+    // every local branch is one (the worktree gets a NEW branch at its commit).
+    let base_candidates: Vec<SharedString> = self
+      .repo_snapshot
+      .read(cx)
+      .branches()
+      .iter()
+      .filter(|branch| branch.kind == git::BranchKind::Local)
+      .map(|branch| SharedString::from(branch.name.clone()))
+      .collect();
     self.session_list.update(cx, |list, cx| {
       list.set_conversations(conversations, current_id, cx);
       list.set_statuses(statuses, cx);
       list.set_worktree_branches(worktree_branches, cx);
+      list.set_base_candidates(base_candidates, cx);
     });
   }
 

@@ -1225,6 +1225,49 @@ async fn awaiting_permission_tracks_the_last_unresolved_card(cx: &mut gpui::Test
   });
 }
 
+#[gpui::test]
+async fn the_title_settles_exactly_once(cx: &mut gpui::TestAppContext) {
+  use std::cell::RefCell;
+  use std::rc::Rc;
+
+  let dir = temp_dir("agent-title-settled");
+  let (panel, cx) = add_panel_window(cx);
+  let titles: Rc<RefCell<Vec<String>>> = Rc::default();
+  cx.update(|_, cx| {
+    let titles = titles.clone();
+    cx.subscribe(&panel, move |_, event: &AgentChatPanelEvent, _| {
+      if let AgentChatPanelEvent::TitleSettled { title } = event {
+        titles.borrow_mut().push(title.clone());
+      }
+    })
+    .detach();
+  });
+
+  panel.update(cx, |panel, cx| {
+    panel.store = Some(cx.new(|_| crate::store::ConversationStore::new(dir.clone())));
+    // No user message yet: nothing to announce.
+    panel.items = vec![agent_message("hello")];
+    panel.persist_state(cx);
+  });
+  cx.run_until_parked();
+  assert!(titles.borrow().is_empty(), "no title, no event");
+
+  panel.update(cx, |panel, cx| {
+    panel.items.push(user_message("Fix the scroll jump"));
+    panel.persist_state(cx);
+    // Streaming keeps persisting; the announcement must not repeat.
+    panel.items.push(agent_message("on it"));
+    panel.persist_state(cx);
+  });
+  cx.run_until_parked();
+  assert_eq!(
+    titles.borrow().as_slice(),
+    ["Fix the scroll jump".to_string()],
+    "one title, one event"
+  );
+  std::fs::remove_dir_all(&dir).ok();
+}
+
 #[test]
 fn the_turn_gate_is_scoped_to_the_checkout() {
   let gate = TurnGate::default();
