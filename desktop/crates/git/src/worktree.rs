@@ -144,7 +144,12 @@ pub fn list_worktrees(repo_root: &Path) -> Result<Vec<LinkedWorktree>> {
 
 /// Removes a linked worktree, dirty or not, and the `reviu-` branch it sits
 /// on. A branch the user checked out or renamed themselves is left alone.
+/// Refuses a directory that is not a linked worktree of this repository:
+/// the fallback deletion must never reach an arbitrary folder.
 pub fn remove_worktree(repo_root: &Path, worktree_path: &Path) -> Result<()> {
+  if worktree_path.exists() && !belongs_to_repository(repo_root, worktree_path) {
+    bail!("{worktree_path:?} is not a linked worktree of {repo_root:?}");
+  }
   let branch = worktree_current_branch(worktree_path);
   let path_arg = worktree_path.to_string_lossy().into_owned();
   if run_git(
@@ -169,6 +174,27 @@ pub fn remove_worktree(repo_root: &Path, worktree_path: &Path) -> Result<()> {
     let _ = run_git(repo_root, &["branch", "-D", &branch], &[]);
   }
   Ok(())
+}
+
+/// Whether `path` is a linked worktree whose main checkout is `repo_root`.
+/// Two proofs accepted: the `.git` file points back at the repository, or the
+/// repository's own worktree registry lists the path (covers a worktree whose
+/// `.git` file was deleted by hand).
+fn belongs_to_repository(repo_root: &Path, path: &Path) -> bool {
+  let canonical = |path: &Path| std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+  if let Some(resolved_root) = linked_worktree_root(path)
+    && canonical(&resolved_root) == canonical(repo_root)
+  {
+    return true;
+  }
+  let target = canonical(path);
+  list_worktrees(repo_root)
+    .map(|worktrees| {
+      worktrees
+        .iter()
+        .any(|worktree| canonical(&worktree.path) == target)
+    })
+    .unwrap_or(false)
 }
 
 /// Drops the metadata of worktrees whose directories are gone.
@@ -505,6 +531,189 @@ mod tests {
     assert!(
       list_worktrees(&repo.path).expect("list").is_empty(),
       "the stale metadata is pruned"
+    );
+
+    cleanup_worktrees_root(&repo.path);
+  }
+
+  #[test]
+  fn removing_refuses_a_directory_that_is_not_ours() {
+    let repo = TempRepo::init("worktree-remove-refuse");
+    commit_text_file(&repo.path, Path::new("README.md"), "v1\n", "initial");
+
+    // A plain folder full of user files.
+    let plain = crate::test_support::TempDir::new("worktree-remove-refuse-plain");
+    std::fs::write(plain.path.join("precious.txt"), "do not touch").expect("write");
+    assert!(
+      remove_worktree(&repo.path, &plain.path).is_err(),
+      "a folder that is no worktree of ours is refused"
+    );
+    assert!(
+      plain.path.join("precious.txt").exists(),
+      "and nothing in it was deleted"
+    );
+
+    // A real worktree, but of ANOTHER repository.
+    let other = TempRepo::init("worktree-remove-refuse-other");
+    commit_text_file(&other.path, Path::new("README.md"), "v1\n", "initial");
+    let foreign = create_worktree(&other.path, None).expect("foreign worktree");
+    assert!(
+      remove_worktree(&repo.path, &foreign.path).is_err(),
+      "a worktree of another repository is refused"
+    );
+    assert!(foreign.path.exists());
+
+    cleanup_worktrees_root(&repo.path);
+    cleanup_worktrees_root(&other.path);
+  }
+
+  #[test]
+  fn a_worktree_whose_git_file_was_deleted_is_still_ours_to_remove() {
+    let repo = TempRepo::init("worktree-remove-corrupt");
+    commit_text_file(&repo.path, Path::new("README.md"), "v1\n", "initial");
+    let created = create_worktree(&repo.path, None).expect("create worktree");
+
+    // The pointer is gone but git's registry still names the path.
+    std::fs::remove_file(created.path.join(".git")).expect("corrupt the worktree");
+    remove_worktree(&repo.path, &created.path).expect("remove the corrupted worktree");
+
+    assert!(!created.path.exists());
+    assert!(list_worktrees(&repo.path).expect("list").is_empty());
+
+    cleanup_worktrees_root(&repo.path);
+  }
+
+  #[test]
+  fn checkpoints_work_from_inside_a_worktree_and_share_the_refs() {
+    let repo = TempRepo::init("worktree-checkpoints");
+    commit_text_file(&repo.path, Path::new("README.md"), "v1\n", "initial");
+    let created = create_worktree(&repo.path, None).expect("create worktree");
+
+    // The agent edits in its worktree; the turn snapshots from there.
+    std::fs::write(created.path.join("README.md"), "agent edit\n").expect("edit");
+    let checkpoint =
+      crate::create_checkpoint(&created.path, "conv-1").expect("checkpoint from the worktree");
+
+    // Checkpoint refs live in the shared .git: the main checkout sees them.
+    let from_main = crate::list_checkpoints(&repo.path, "conv-1").expect("list from main");
+    assert_eq!(from_main.len(), 1);
+    assert_eq!(from_main[0].ref_name, checkpoint.ref_name);
+
+    // Restoring inside the worktree rewinds the worktree, not the main checkout.
+    std::fs::write(created.path.join("README.md"), "later edit\n").expect("edit again");
+    crate::restore_checkpoint(&created.path, &checkpoint.ref_name).expect("restore");
+    assert_eq!(
+      std::fs::read_to_string(created.path.join("README.md")).expect("read"),
+      "agent edit\n"
+    );
+    assert_eq!(
+      std::fs::read_to_string(repo.path.join("README.md")).expect("read main"),
+      "v1\n",
+      "the main checkout never moved"
+    );
+
+    // Deleting the conversation's refs from the main checkout clears them.
+    crate::delete_session_checkpoints(&repo.path, "conv-1").expect("delete refs");
+    assert!(
+      crate::list_checkpoints(&repo.path, "conv-1")
+        .expect("list again")
+        .is_empty()
+    );
+
+    cleanup_worktrees_root(&repo.path);
+  }
+
+  #[test]
+  fn the_status_pipeline_reads_a_worktree_like_any_checkout() {
+    let repo = TempRepo::init("worktree-status");
+    commit_text_file(&repo.path, Path::new("README.md"), "v1\n", "initial");
+    let created = create_worktree(&repo.path, None).expect("create worktree");
+
+    assert_eq!(
+      crate::discover_repository_root(&created.path)
+        .expect("a worktree is a repository root")
+        .canonicalize()
+        .expect("canonical discovered root"),
+      created.path.canonicalize().expect("canonical worktree")
+    );
+
+    std::fs::write(created.path.join("README.md"), "dirty\n").expect("edit");
+    let entries = crate::list_repo_status(&created.path).expect("status from the worktree");
+    assert_eq!(entries.len(), 1);
+    assert_eq!(entries[0].path, PathBuf::from("README.md"));
+    assert!(
+      crate::list_repo_status(&repo.path)
+        .expect("status from main")
+        .is_empty(),
+      "the main checkout stays clean"
+    );
+
+    cleanup_worktrees_root(&repo.path);
+  }
+
+  #[test]
+  fn linked_worktree_root_handles_a_relative_gitdir() {
+    let repo = TempRepo::init("worktree-root-relative");
+    commit_text_file(&repo.path, Path::new("README.md"), "v1\n", "initial");
+    let created = create_worktree(&repo.path, None).expect("create worktree");
+
+    // What `worktree.useRelativePaths` writes: hops instead of an absolute path.
+    let git_file = created.path.join(".git");
+    let absolute = std::fs::read_to_string(&git_file).expect("read .git file");
+    let target = absolute
+      .lines()
+      .next()
+      .and_then(|line| line.strip_prefix("gitdir:"))
+      .expect("gitdir line")
+      .trim();
+    let relative = pathdiff_relative(Path::new(target), &created.path);
+    std::fs::write(&git_file, format!("gitdir: {}\n", relative.display())).expect("rewrite");
+
+    assert_eq!(
+      linked_worktree_root(&created.path)
+        .expect("a relative gitdir still resolves")
+        .canonicalize()
+        .expect("canonical resolved root"),
+      repo.path.canonicalize().expect("canonical repo root")
+    );
+
+    cleanup_worktrees_root(&repo.path);
+  }
+
+  /// Minimal relative-path builder for the fixture: walk up from `base`, then
+  /// down into `target`.
+  fn pathdiff_relative(target: &Path, base: &Path) -> PathBuf {
+    let target = target.canonicalize().expect("canonical target");
+    let base = base.canonicalize().expect("canonical base");
+    let target_parts: Vec<_> = target.components().collect();
+    let base_parts: Vec<_> = base.components().collect();
+    let shared = target_parts
+      .iter()
+      .zip(base_parts.iter())
+      .take_while(|(a, b)| a == b)
+      .count();
+    let mut relative = PathBuf::new();
+    for _ in shared..base_parts.len() {
+      relative.push("..");
+    }
+    for part in &target_parts[shared..] {
+      relative.push(part);
+    }
+    relative
+  }
+
+  #[test]
+  fn a_detached_head_still_gives_a_working_base() {
+    let repo = TempRepo::init("worktree-base-detached");
+    commit_text_file(&repo.path, Path::new("README.md"), "v1\n", "initial");
+    let head = crate::test_support::head_oid(&repo.path).to_string();
+    git(&repo.path, &["checkout", "--detach", &head]);
+
+    assert_eq!(default_worktree_base(&repo.path).expect("base"), "HEAD");
+    let created = create_worktree(&repo.path, None).expect("create from detached HEAD");
+    assert_eq!(
+      crate::test_support::head_oid(&created.path).to_string(),
+      head
     );
 
     cleanup_worktrees_root(&repo.path);
