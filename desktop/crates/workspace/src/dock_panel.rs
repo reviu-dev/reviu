@@ -947,6 +947,9 @@ impl DockPanel {
     if !AuthStateStore::has_github_access(cx) {
       self.pr_fetched_at = None;
       self.set_branch_pr(BranchPrState::NoAccess, cx);
+      self
+        .review_list
+        .update(cx, |list, cx| list.set_pull_request_loading(false, cx));
       cx.notify();
       return;
     }
@@ -961,6 +964,11 @@ impl DockPanel {
       BranchPrState::Found(_, _) | BranchPrState::Missing(_)
     ) {
       self.set_branch_pr(BranchPrState::Loading, cx);
+      if self.pr_review_comments.is_empty() {
+        self
+          .review_list
+          .update(cx, |list, cx| list.set_pull_request_loading(true, cx));
+      }
     }
     let api = WorkspaceApi::global(cx).api.clone();
     let task = cx.spawn(async move |this, cx| {
@@ -997,6 +1005,12 @@ impl DockPanel {
       self.reset_pull_request_details(cx);
     }
     self.set_branch_pr(state, cx);
+    // The comments ride the range load below: an empty review panel says
+    // loading until they land; no pull request means nothing is coming.
+    let loading = found_pull_request && self.pr_review_comments.is_empty();
+    self
+      .review_list
+      .update(cx, |list, cx| list.set_pull_request_loading(loading, cx));
     if found_pull_request {
       self.load_pull_request_range(cx);
       self.load_pull_request_checks(cx);
@@ -1077,6 +1091,9 @@ impl DockPanel {
             // A read that failed is not a read: the next open tries again.
             this.pr_fetched_at = None;
             this.pr_files_error = Some(format!("{error}").into());
+            this
+              .review_list
+              .update(cx, |list, cx| list.set_pull_request_loading(false, cx));
           }
         }
         cx.notify();
@@ -1140,6 +1157,9 @@ impl DockPanel {
     comments: Vec<GithubPullRequestReviewComment>,
     cx: &mut Context<Self>,
   ) {
+    self
+      .review_list
+      .update(cx, |list, cx| list.set_pull_request_loading(false, cx));
     let rows = pending_review_rows(&comments);
     self.pr_review_comments = comments;
     self.review_list.update(cx, |list, cx| {
