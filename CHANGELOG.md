@@ -12,6 +12,10 @@ Sessions sharing the main checkout still take turns, since two agents editing th
 
 Nothing accumulates behind your back either: opening a repository sweeps away `reviu-` worktrees that no session references any more, the leftovers of a crash or a failed delete. Worktrees on a branch you made yours are left alone.
 
+### Session State Is A Dot, Not A Word
+
+The Working/Waiting/Failed word on a session row ate the end of its title and displaced its timestamp. It is now a small colored dot next to the time (amber running, blue waiting on you, red failed), with the word in its tooltip. And a failed turn no longer raises a toast on top of everything: the red card in the conversation and the red dot on the row already say it.
+
 ### The Review Panel Says When It Is Still Loading
 
 While the pull request's review comments were on their way from GitHub, the Review panel showed its empty state, as if the review had no comments. An empty panel now shows a spinner and says it is loading; a refresh over existing rows keeps them on screen instead of blanking anything.
