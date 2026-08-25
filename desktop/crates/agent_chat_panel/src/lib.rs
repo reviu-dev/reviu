@@ -27,7 +27,7 @@ use crate::persistence::{
   CONVERSATION_FORMAT_VERSION, LoadedConversation, new_conversation_meta, now_secs, preview_of,
   truncate_title,
 };
-pub use crate::persistence::{ConversationMeta, state_dir_for_repo};
+pub use crate::persistence::{ConversationMeta, WorktreeBinding, state_dir_for_repo};
 pub use crate::store::ConversationStore;
 use crate::store::SaveRequest;
 use agent_acp::{
@@ -580,30 +580,45 @@ struct SelectionContext {
   text: String,
 }
 
-/// One turn at a time across every session sharing a checkout: two agents
-/// editing the same working tree would corrupt each other's work. Goes away
-/// per-worktree once sessions get isolated checkouts.
+/// One turn at a time per CHECKOUT: two agents editing the same working tree
+/// would corrupt each other's work. Sessions in their own worktrees hold
+/// different keys, so they run in parallel.
 #[derive(Clone, Default)]
-pub struct TurnGate(std::rc::Rc<std::cell::RefCell<Option<String>>>);
+pub struct TurnGate(std::rc::Rc<std::cell::RefCell<HashMap<PathBuf, String>>>);
 
 impl TurnGate {
   pub fn new() -> Self {
     Self::default()
   }
 
-  fn can_start(&self, conversation_id: &str) -> bool {
-    let holder = self.0.borrow();
-    holder.is_none() || holder.as_deref() == Some(conversation_id)
+  /// Keys are canonicalized so a worktree reached through a symlink still
+  /// collides with itself.
+  fn key(checkout: &Path) -> PathBuf {
+    std::fs::canonicalize(checkout).unwrap_or_else(|_| checkout.to_path_buf())
   }
 
-  fn acquire(&self, conversation_id: &str) {
-    *self.0.borrow_mut() = Some(conversation_id.to_string());
+  fn can_start(&self, checkout: &Path, conversation_id: &str) -> bool {
+    match self.0.borrow().get(&Self::key(checkout)) {
+      None => true,
+      Some(holder) => holder == conversation_id,
+    }
   }
 
-  fn release(&self, conversation_id: &str) {
-    let mut holder = self.0.borrow_mut();
-    if holder.as_deref() == Some(conversation_id) {
-      *holder = None;
+  fn acquire(&self, checkout: &Path, conversation_id: &str) {
+    self
+      .0
+      .borrow_mut()
+      .insert(Self::key(checkout), conversation_id.to_string());
+  }
+
+  fn release(&self, checkout: &Path, conversation_id: &str) {
+    let mut holders = self.0.borrow_mut();
+    let key = Self::key(checkout);
+    if holders
+      .get(&key)
+      .is_some_and(|holder| holder == conversation_id)
+    {
+      holders.remove(&key);
     }
   }
 }
@@ -633,7 +648,7 @@ impl gpui::EventEmitter<AgentChatPanelEvent> for AgentChatPanel {}
 impl Drop for AgentChatPanel {
   fn drop(&mut self) {
     // A panel deleted mid-turn must not leave the shared gate held forever.
-    self.turn_gate.release(&self.current_conv.id);
+    self.turn_gate.release(&self.cwd, &self.current_conv.id);
   }
 }
 
@@ -1300,14 +1315,14 @@ impl AgentChatPanel {
   }
 
   fn start_turn(&mut self, cx: &mut Context<Self>) {
-    self.turn_gate.acquire(&self.current_conv.id);
+    self.turn_gate.acquire(&self.cwd, &self.current_conv.id);
     self.in_flight = true;
     self.turn_started_at = Some(std::time::Instant::now());
     self.start_tick_task(cx);
   }
 
   fn end_turn(&mut self) {
-    self.turn_gate.release(&self.current_conv.id);
+    self.turn_gate.release(&self.cwd, &self.current_conv.id);
     self.in_flight = false;
     self.turn_started_at = None;
     self._tick_task = None;
@@ -2636,6 +2651,11 @@ impl AgentChatPanel {
 
   pub fn current_conversation(&self) -> &ConversationMeta {
     &self.current_conv
+  }
+
+  /// The checkout this session's agent works in: a worktree or the main repo.
+  pub fn cwd(&self) -> &Path {
+    &self.cwd
   }
 
   pub fn state_dir_for_repo(state_dir: &std::path::Path, repo: &std::path::Path) -> PathBuf {

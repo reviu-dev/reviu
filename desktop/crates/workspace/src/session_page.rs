@@ -269,6 +269,7 @@ impl SessionPage {
       window,
       |this, _list, event: &SessionListEvent, window, cx| match event {
         SessionListEvent::NewSession => this.new_session(window, cx),
+        SessionListEvent::NewWorktreeSession => this.new_worktree_session(window, cx),
         SessionListEvent::Collapse => this.close_sidebar(cx),
         SessionListEvent::Selected { id } => this.select_session(id, window, cx),
         SessionListEvent::Deleted { id } => this.delete_session(id, window, cx),

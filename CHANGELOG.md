@@ -4,6 +4,12 @@ All notable changes to Reviu are documented here.
 
 ## 1.1.0
 
+### Sessions Can Run In Their Own Worktree, In Parallel
+
+The sessions sidebar gains a second button: a session started with it gets its own git worktree, created next to your repository on a fresh `reviu-` branch, starting from your default branch without touching your checkout. Its agent reads and writes there, so it can run at the same time as agents in other worktrees, and at the same time as you working in the main checkout.
+
+Sessions sharing the main checkout still take turns, since two agents editing the same files would trample each other. Checkpoints, rollback and undo follow each session into its worktree. Deleting a worktree session removes its worktree, its branch and its checkpoint snapshots; a worktree session abandoned before its first message cleans up after itself. A branch you renamed or checked out yourself is never deleted.
+
 ### Switching Sessions No Longer Stops The Agent
 
 Clicking another session used to kill the running agent: the turn was abandoned mid-stream, and coming back reopened a conversation that had silently stopped. Each session now keeps its own agent process alive in the background while you look at another one. Its reply keeps streaming into the transcript, and coming back shows the conversation exactly as it progressed, without reloading anything.

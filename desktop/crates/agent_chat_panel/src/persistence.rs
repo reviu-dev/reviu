@@ -211,6 +211,38 @@ pub(crate) fn write_scrolls(dir: &std::path::Path, scrolls: &HashMap<String, (us
   }
 }
 
+/// The worktree a conversation's agent works in; absent = the main checkout.
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct WorktreeBinding {
+  pub path: PathBuf,
+  pub branch: String,
+}
+
+pub(crate) fn worktrees_path(dir: &std::path::Path) -> PathBuf {
+  dir.join("worktrees.json")
+}
+
+pub(crate) fn read_worktrees(dir: &std::path::Path) -> HashMap<String, WorktreeBinding> {
+  std::fs::read_to_string(worktrees_path(dir))
+    .ok()
+    .and_then(|raw| serde_json::from_str(&raw).ok())
+    .unwrap_or_default()
+}
+
+pub(crate) fn write_worktrees(dir: &std::path::Path, worktrees: &HashMap<String, WorktreeBinding>) {
+  if std::fs::create_dir_all(dir)
+    .log_err_context("creating the conversation dir")
+    .is_none()
+  {
+    return;
+  }
+  if let Some(json) =
+    serde_json::to_string(worktrees).log_err_context("serializing worktree bindings")
+  {
+    std::fs::write(worktrees_path(dir), json).log_err_context("writing worktree bindings");
+  }
+}
+
 pub(crate) fn drafts_path(dir: &std::path::Path) -> PathBuf {
   dir.join("drafts.json")
 }

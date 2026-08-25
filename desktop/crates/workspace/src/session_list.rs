@@ -34,6 +34,8 @@ pub(crate) fn session_row_title(meta: &ConversationMeta) -> SharedString {
 
 pub enum SessionListEvent {
   NewSession,
+  /// A session whose agent works in its own git worktree.
+  NewWorktreeSession,
   /// The collapse button in the header; the page owns the sidebar width.
   Collapse,
   Selected {
@@ -158,6 +160,16 @@ impl Render for SessionList {
               .small()
               .tooltip("New session")
               .on_click(cx.listener(|_, _, _, cx| cx.emit(SessionListEvent::NewSession))),
+          )
+          .child(
+            Button::new("session-page-new-worktree-session")
+              .debug_selector(|| "session-page-new-worktree-session".to_string())
+              .icon(UiIconName::GitBranch)
+              .ghost()
+              .compact()
+              .small()
+              .tooltip("New session in a worktree")
+              .on_click(cx.listener(|_, _, _, cx| cx.emit(SessionListEvent::NewWorktreeSession))),
           )
           .child(
             Button::new("session-sidebar-collapse")

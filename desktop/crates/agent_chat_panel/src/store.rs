@@ -8,8 +8,9 @@ use gpui::{App, Context, Task};
 
 use crate::PersistedConversation;
 use crate::persistence::{
-  ConversationMeta, LoadedConversation, list_conversations_in, load_conversation_file, read_drafts,
-  read_index, read_scrolls, write_drafts, write_index, write_scrolls,
+  ConversationMeta, LoadedConversation, WorktreeBinding, list_conversations_in,
+  load_conversation_file, read_drafts, read_index, read_scrolls, read_worktrees, write_drafts,
+  write_index, write_scrolls, write_worktrees,
 };
 use app_log::ResultExt;
 use std::collections::HashMap;
@@ -29,6 +30,7 @@ enum DeferredOp {
   SetActive { id: Option<String> },
   WriteDrafts(HashMap<String, String>),
   WriteScrolls(HashMap<String, (usize, f32)>),
+  WriteWorktrees(HashMap<String, WorktreeBinding>),
 }
 
 pub struct ConversationStore {
@@ -48,6 +50,8 @@ pub struct ConversationStore {
   scrolls: HashMap<String, (usize, f32)>,
   scrolls_dirty: bool,
   scroll_debounce: Option<Task<()>>,
+  /// Worktree bindings keyed by conversation id, mirrored in `worktrees.json`.
+  worktrees: HashMap<String, WorktreeBinding>,
   throttle: Option<Task<()>>,
   writer: Option<Task<()>>,
 }
@@ -58,6 +62,7 @@ impl ConversationStore {
     metas.sort_by_key(|m| std::cmp::Reverse(m.updated_at_secs));
     let drafts = read_drafts(&dir);
     let scrolls = read_scrolls(&dir);
+    let worktrees = read_worktrees(&dir);
     let active_id = std::fs::read_to_string(dir.join("active.txt"))
       .ok()
       .map(|raw| raw.trim().to_string())
@@ -74,9 +79,34 @@ impl ConversationStore {
       scrolls,
       scrolls_dirty: false,
       scroll_debounce: None,
+      worktrees,
       throttle: None,
       writer: None,
     }
+  }
+
+  pub fn worktree(&self, id: &str) -> Option<WorktreeBinding> {
+    self.worktrees.get(id).cloned()
+  }
+
+  /// Bindings change on discrete gestures (create, delete): written right away.
+  pub fn set_worktree(
+    &mut self,
+    id: &str,
+    binding: Option<WorktreeBinding>,
+    cx: &mut Context<Self>,
+  ) {
+    let changed = match binding {
+      Some(binding) => self.worktrees.insert(id.to_string(), binding.clone()) != Some(binding),
+      None => self.worktrees.remove(id).is_some(),
+    };
+    if !changed {
+      return;
+    }
+    self
+      .pending_ops
+      .push(DeferredOp::WriteWorktrees(self.worktrees.clone()));
+    self.kick_writer(cx);
   }
 
   pub fn scroll(&self, id: &str) -> Option<(usize, f32)> {
@@ -197,6 +227,11 @@ impl ConversationStore {
     if self.scrolls.remove(id).is_some() {
       self.scrolls_dirty = true;
       self.queue_scroll_write(cx);
+    }
+    if self.worktrees.remove(id).is_some() {
+      self
+        .pending_ops
+        .push(DeferredOp::WriteWorktrees(self.worktrees.clone()));
     }
     self.metas.retain(|m| m.id != id);
     self
@@ -344,6 +379,7 @@ fn apply_op(dir: &std::path::Path, metas: &[ConversationMeta], op: DeferredOp) {
     }
     DeferredOp::WriteDrafts(drafts) => write_drafts(dir, &drafts),
     DeferredOp::WriteScrolls(scrolls) => write_scrolls(dir, &scrolls),
+    DeferredOp::WriteWorktrees(worktrees) => write_worktrees(dir, &worktrees),
     DeferredOp::SetActive { id } => match id {
       Some(id) => {
         if std::fs::create_dir_all(dir)

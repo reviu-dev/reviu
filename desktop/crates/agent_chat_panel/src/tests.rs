@@ -1144,7 +1144,7 @@ async fn a_background_panel_never_writes_the_active_pointer(cx: &mut gpui::TestA
 async fn the_turn_gate_refuses_a_second_concurrent_turn(cx: &mut gpui::TestAppContext) {
   let (panel, cx) = add_panel_window(cx);
   let gate = panel.read_with(cx, |panel, _| panel.turn_gate.clone());
-  gate.acquire("some-other-conversation");
+  gate.acquire(Path::new("."), "some-other-conversation");
 
   panel.update(cx, |panel, cx| {
     let dispatched = panel.dispatch_prompt("hello".to_string(), cx);
@@ -1156,7 +1156,7 @@ async fn the_turn_gate_refuses_a_second_concurrent_turn(cx: &mut gpui::TestAppCo
     assert!(m.text.contains("Another session is running"));
   });
 
-  gate.release("some-other-conversation");
+  gate.release(Path::new("."), "some-other-conversation");
   panel.update(cx, |panel, cx| {
     // Free gate: the dispatch now fails on the missing session, not the gate.
     let items_before = panel.items.len();
@@ -1168,6 +1168,62 @@ async fn the_turn_gate_refuses_a_second_concurrent_turn(cx: &mut gpui::TestAppCo
       "a free gate adds no refusal message"
     );
   });
+}
+
+#[test]
+fn the_turn_gate_is_scoped_to_the_checkout() {
+  let gate = TurnGate::default();
+  let main = std::path::Path::new("/repo");
+  let worktree = std::path::Path::new("/repo-worktrees/calm-river");
+
+  gate.acquire(main, "conversation-a");
+  assert!(
+    gate.can_start(worktree, "conversation-b"),
+    "a session in its own worktree runs in parallel"
+  );
+  assert!(
+    !gate.can_start(main, "conversation-b"),
+    "two sessions sharing the main checkout still serialize"
+  );
+  assert!(
+    gate.can_start(main, "conversation-a"),
+    "the holder re-enters"
+  );
+
+  gate.acquire(worktree, "conversation-b");
+  gate.release(main, "conversation-a");
+  assert!(gate.can_start(main, "conversation-c"));
+  assert!(
+    !gate.can_start(worktree, "conversation-c"),
+    "releasing one checkout leaves the other held"
+  );
+}
+
+#[gpui::test]
+async fn worktree_bindings_roundtrip_and_die_with_their_conversation(
+  cx: &mut gpui::TestAppContext,
+) {
+  let dir = temp_dir("agent-worktree-bindings");
+  let store = cx.new(|_| crate::store::ConversationStore::new(dir.clone()));
+  let binding = crate::persistence::WorktreeBinding {
+    path: PathBuf::from("/somewhere/repo-worktrees/calm-river"),
+    branch: "reviu-calm-river".to_string(),
+  };
+  store.update(cx, |store, cx| {
+    store.set_worktree("conv-1", Some(binding.clone()), cx);
+  });
+  cx.run_until_parked();
+
+  // A relaunch reads the binding back.
+  let relaunched = crate::store::ConversationStore::new(dir.clone());
+  assert_eq!(relaunched.worktree("conv-1"), Some(binding));
+
+  // Deleting the conversation scrubs it.
+  store.update(cx, |store, cx| store.delete("conv-1", cx));
+  cx.run_until_parked();
+  let relaunched = crate::store::ConversationStore::new(dir.clone());
+  assert_eq!(relaunched.worktree("conv-1"), None);
+  std::fs::remove_dir_all(&dir).ok();
 }
 
 #[gpui::test]
@@ -1186,7 +1242,7 @@ async fn a_turn_completing_in_the_background_persists_and_frees_the_gate(
     panel.current_conv.id.clone()
   });
   assert!(
-    !gate.can_start("another-conversation"),
+    !gate.can_start(Path::new("."), "another-conversation"),
     "the turn holds the gate"
   );
 
@@ -1197,7 +1253,7 @@ async fn a_turn_completing_in_the_background_persists_and_frees_the_gate(
 
   panel.read_with(cx, |panel, _| assert!(!panel.is_turn_in_flight()));
   assert!(
-    gate.can_start("another-conversation"),
+    gate.can_start(Path::new("."), "another-conversation"),
     "a settled background turn releases the gate for other sessions"
   );
   assert!(
@@ -1230,14 +1286,20 @@ async fn dropping_a_panel_mid_turn_frees_the_shared_gate(cx: &mut gpui::TestAppC
     })
   });
   panel.update(cx, |panel, cx| panel.pretend_turn_in_flight_for_test(cx));
-  assert!(!gate.can_start("other"), "the turn holds the gate");
+  assert!(
+    !gate.can_start(Path::new("."), "other"),
+    "the turn holds the gate"
+  );
 
   // Deleting a running session drops its panel; the gate must not stay held.
   drop(panel);
   // Entity release happens on the next effect flush, not at handle drop.
   cx.update(|_, _| {});
   cx.run_until_parked();
-  assert!(gate.can_start("other"), "the drop released the gate");
+  assert!(
+    gate.can_start(Path::new("."), "other"),
+    "the drop released the gate"
+  );
   set_backend_command_override(None);
 }
 
@@ -1245,7 +1307,7 @@ async fn dropping_a_panel_mid_turn_frees_the_shared_gate(cx: &mut gpui::TestAppC
 async fn a_submit_blocked_by_the_gate_keeps_the_composer_text(cx: &mut gpui::TestAppContext) {
   let (panel, cx) = add_panel_window(cx);
   let gate = panel.read_with(cx, |panel, _| panel.turn_gate.clone());
-  gate.acquire("the-busy-conversation");
+  gate.acquire(Path::new("."), "the-busy-conversation");
 
   cx.update(|window, cx| {
     panel.update(cx, |panel, cx| {
