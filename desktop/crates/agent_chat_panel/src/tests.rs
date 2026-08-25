@@ -1168,6 +1168,20 @@ async fn the_turn_gate_refuses_a_second_concurrent_turn(cx: &mut gpui::TestAppCo
       "a free gate adds no refusal message"
     );
   });
+
+  // A turn running in ANOTHER checkout never blocks this panel's dispatch:
+  // the refusal path is not taken, only the missing session stops it.
+  gate.acquire(Path::new("/some/other/worktree"), "worktree-conversation");
+  panel.update(cx, |panel, cx| {
+    let items_before = panel.items.len();
+    let dispatched = panel.dispatch_prompt("hello".to_string(), cx);
+    assert!(!dispatched, "no session is connected in this fixture");
+    assert_eq!(
+      panel.items.len(),
+      items_before,
+      "a busy foreign checkout adds no refusal message"
+    );
+  });
 }
 
 #[test]

@@ -2159,6 +2159,93 @@ mod tests {
   }
 
   #[gpui::test]
+  async fn a_turn_checkpoint_snapshots_the_sessions_worktree_not_the_main_checkout(
+    cx: &mut TestAppContext,
+  ) {
+    let (repo, page, cx) = page_with_agent_panel("session-page-worktree-checkpoint", cx).await;
+
+    page.update_in(cx, |page, window, cx| page.new_worktree_session(window, cx));
+    cx.run_until_parked();
+    let panel = active_panel(&page, cx);
+    let (conversation_id, cwd) = panel.read_with(cx, |panel, _| {
+      (
+        panel.current_conversation().id.clone(),
+        panel.cwd().to_path_buf(),
+      )
+    });
+
+    // The agent edited in its worktree; the turn snapshot must capture THAT.
+    std::fs::write(cwd.join("README.md"), "agent v1\n").expect("edit in the worktree");
+    page.update(cx, |page, cx| {
+      page.create_turn_checkpoint(panel.clone(), cx);
+    });
+    cx.run_until_parked();
+    let checkpoints =
+      git::list_checkpoints(&repo.path, &conversation_id).expect("list checkpoint refs");
+    assert_eq!(checkpoints.len(), 1, "the turn snapshot landed");
+
+    // Rolling back restores the worktree and leaves the main checkout alone.
+    std::fs::write(cwd.join("README.md"), "agent v2\n").expect("edit again");
+    page.update_in(cx, |page, window, cx| {
+      page.rollback_to_checkpoint(checkpoints[0].ref_name.clone(), window, cx);
+    });
+    cx.run_until_parked();
+    assert_eq!(
+      std::fs::read_to_string(cwd.join("README.md")).expect("read worktree file"),
+      "agent v1\n",
+      "the rollback rewound the session's worktree"
+    );
+    assert_eq!(
+      std::fs::read_to_string(repo.path.join("README.md")).expect("read main file"),
+      "v1\n",
+      "the main checkout never moved"
+    );
+
+    cleanup_worktrees_root(&repo.path);
+  }
+
+  #[gpui::test]
+  async fn a_worktree_session_in_an_empty_repository_fails_softly(cx: &mut TestAppContext) {
+    agent_chat_panel::set_backend_command_override(Some("/nonexistent-agent-binary".to_string()));
+    // No commit: `git worktree add` has no base to start from.
+    let repo = TempRepo::init("session-page-worktree-empty");
+    let state_dir = agent_chat_state_dir()
+      .map(|dir| AgentChatPanel::state_dir_for_repo(&dir, &repo.path))
+      .expect("agent chat state dir");
+    let _ = std::fs::remove_dir_all(&state_dir);
+    let (page, cx) = add_session_page_window(repo.path.clone(), cx);
+    cx.run_until_parked();
+    page.update_in(cx, |page, window, cx| page.activate(window, cx));
+    cx.run_until_parked();
+    let before = active_panel(&page, cx);
+
+    page.update_in(cx, |page, window, cx| page.new_worktree_session(window, cx));
+    cx.run_until_parked();
+
+    assert_eq!(
+      active_panel(&page, cx).entity_id(),
+      before.entity_id(),
+      "a failed worktree creation leaves the shown session in place"
+    );
+    page.read_with(cx, |page, cx| {
+      assert!(page.background_chat_panels.is_empty());
+      let conversation_id = before.read(cx).current_conversation().id.clone();
+      assert_eq!(
+        page
+          .chat_store
+          .as_ref()
+          .expect("store")
+          .read(cx)
+          .worktree(&conversation_id),
+        None,
+        "nothing was bound"
+      );
+    });
+
+    cleanup_worktrees_root(&repo.path);
+  }
+
+  #[gpui::test]
   async fn an_abandoned_blank_worktree_session_takes_its_checkout_with_it(cx: &mut TestAppContext) {
     let (repo, page, cx) = page_with_agent_panel("session-page-worktree-blank", cx).await;
 
