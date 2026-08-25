@@ -2167,9 +2167,13 @@ impl AgentChatPanel {
       return;
     }
     let text = m.text.clone();
+    // auto_grow only measures the wrap after the first layout: started at one
+    // row, a tall bubble collapses for a frame then jumps back. Seeding the
+    // minimum with an estimate keeps the bubble's height through the switch.
+    let estimated_rows = estimate_wrapped_rows(&text).clamp(1, 8);
     let input = cx.new(|cx| {
       TextareaState::new(window, cx)
-        .auto_grow(1, 8)
+        .auto_grow(estimated_rows, 8)
         .default_value(text)
     });
     window.focus(&input.read(cx).focus_handle(cx), cx);
@@ -2950,6 +2954,18 @@ fn short_model_label(name: &str, description: Option<&str>) -> String {
   } else {
     trimmed.to_string()
   }
+}
+
+/// How many visual rows `text` takes in the 560px edit bubble, estimated at
+/// ~75 characters per wrapped line. One row of error either way settles in a
+/// single frame; collapsing to one row was the visible blink.
+fn estimate_wrapped_rows(text: &str) -> usize {
+  const CHARS_PER_ROW: usize = 75;
+  text
+    .lines()
+    .map(|line| line.chars().count().div_ceil(CHARS_PER_ROW).max(1))
+    .sum::<usize>()
+    .max(1)
 }
 
 /// A short, actionable line for the error classes users actually hit.

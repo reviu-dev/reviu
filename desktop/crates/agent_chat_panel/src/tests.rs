@@ -1226,6 +1226,18 @@ async fn awaiting_permission_tracks_the_last_unresolved_card(cx: &mut gpui::Test
 }
 
 #[test]
+fn wrapped_row_estimates_track_newlines_and_long_lines() {
+  assert_eq!(estimate_wrapped_rows(""), 1);
+  assert_eq!(estimate_wrapped_rows("short"), 1);
+  assert_eq!(estimate_wrapped_rows("a\nb\nc"), 3);
+  assert_eq!(estimate_wrapped_rows(&"x".repeat(80)), 2);
+  assert_eq!(
+    estimate_wrapped_rows(&format!("{}\n{}", "x".repeat(80), "y")),
+    3
+  );
+}
+
+#[test]
 fn agent_error_hints_name_the_classes_users_hit() {
   assert_eq!(
     agent_error_hint("Codex error: The usage limit has been reached"),
