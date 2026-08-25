@@ -2702,6 +2702,18 @@ impl AgentChatPanel {
     state_dir_for_repo(state_dir, repo)
   }
 
+  /// The per-repo files that hold state ABOUT conversations rather than a
+  /// conversation itself. Their mtime says nothing about staleness: an old
+  /// `worktrees.json` may still bind live checkouts, and pruning it would
+  /// orphan them.
+  const STATE_METADATA_FILES: [&'static str; 5] = [
+    "index.json",
+    "active.txt",
+    "drafts.json",
+    "scroll.json",
+    "worktrees.json",
+  ];
+
   /// Delete conversation files older than `max_age`; best-effort, errors ignored.
   pub fn prune_old_state(state_dir: &std::path::Path, max_age: std::time::Duration) -> usize {
     let now = std::time::SystemTime::now();
@@ -2718,6 +2730,13 @@ impl AgentChatPanel {
         continue;
       }
       if !meta.is_file() {
+        continue;
+      }
+      if path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .is_some_and(|name| Self::STATE_METADATA_FILES.contains(&name))
+      {
         continue;
       }
       let Ok(modified) = meta.modified() else {

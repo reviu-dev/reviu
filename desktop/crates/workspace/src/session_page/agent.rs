@@ -79,6 +79,75 @@ impl SessionPage {
     let store = cx.new(|_| ConversationStore::new(state_dir));
     store.update(cx, |store, cx| store.arm_quit_flush(cx));
     self.chat_store = Some(store);
+    self.sweep_orphan_worktrees(cx);
+  }
+
+  /// Boot-time housekeeping for the checkouts we created: a crash between the
+  /// worktree and its binding, a failed removal, or a pruned conversation all
+  /// leave a `reviu-` worktree nothing references any more. Comet and waku
+  /// both leak these forever; we don't.
+  fn sweep_orphan_worktrees(&mut self, cx: &mut Context<Self>) {
+    use app_log::ResultExt as _;
+
+    let Some(repo_root) = self.selected_repo.clone() else {
+      return;
+    };
+    let Some(store) = self.chat_store.clone() else {
+      return;
+    };
+    let bindings = store.read(cx).worktree_bindings();
+    let known_ids: std::collections::HashSet<String> = store
+      .read(cx)
+      .list()
+      .into_iter()
+      .map(|meta| meta.id)
+      .collect();
+    // A binding whose conversation is gone (pruned, or a delete that lost its
+    // removal) is unbound now; its checkout falls to the sweep below.
+    let mut live_paths = std::collections::HashSet::new();
+    for (conversation_id, binding) in &bindings {
+      if known_ids.contains(conversation_id) {
+        live_paths.insert(binding.path.clone());
+      } else {
+        store.update(cx, |store, cx| {
+          store.set_worktree(conversation_id, None, cx)
+        });
+      }
+    }
+    cx.background_spawn(async move {
+      let canonical =
+        |path: &Path| std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+      let live_paths: std::collections::HashSet<PathBuf> =
+        live_paths.iter().map(|path| canonical(path)).collect();
+      let Some(worktrees) = git::list_worktrees(&repo_root).log_err_context("listing worktrees")
+      else {
+        return;
+      };
+      let Some(sweep_root) =
+        git::worktrees_root_for(&repo_root).log_err_context("resolving the worktrees root")
+      else {
+        return;
+      };
+      let sweep_root = canonical(&sweep_root);
+      for worktree in worktrees {
+        // Only checkouts that are provably ours: under our directory, still
+        // on a reviu- branch. A renamed branch means the user took over.
+        let path = canonical(&worktree.path);
+        if !path.starts_with(&sweep_root) || live_paths.contains(&path) {
+          continue;
+        }
+        let ours = worktree
+          .branch
+          .as_deref()
+          .is_some_and(|branch| branch.starts_with(git::WORKTREE_BRANCH_PREFIX));
+        if !ours {
+          continue;
+        }
+        git::remove_worktree(&repo_root, &worktree.path)
+          .log_err_context("removing an orphaned worktree");
+      }
+    })
+    .detach();
   }
 
   fn conversation_meta(&self, id: &str, cx: &App) -> Option<agent_chat_panel::ConversationMeta> {
@@ -2585,6 +2654,119 @@ mod tests {
       assert_eq!(list.worktree_branch_of(&failed_id), None);
     });
 
+    cleanup_worktrees_root(&repo.path);
+  }
+
+  #[gpui::test]
+  async fn the_boot_sweep_removes_orphans_and_spares_bound_and_user_worktrees(
+    cx: &mut TestAppContext,
+  ) {
+    agent_chat_panel::set_backend_command_override(Some("/nonexistent-agent-binary".to_string()));
+    let repo = TempRepo::init("session-page-sweep");
+    commit_text_file(&repo.path, Path::new("README.md"), "v1\n", "initial");
+
+    // Three worktrees before the app boots: one bound to a conversation, one
+    // orphaned, one the user claimed by renaming its branch.
+    let bound = git::create_worktree(&repo.path, None).expect("bound worktree");
+    let orphan = git::create_worktree(&repo.path, None).expect("orphan worktree");
+    let claimed = git::create_worktree(&repo.path, None).expect("claimed worktree");
+    std::process::Command::new("git")
+      .current_dir(&claimed.path)
+      .args(["switch", "-c", "my-own-work"])
+      .output()
+      .expect("rename the claimed branch");
+
+    let state_dir = agent_chat_state_dir()
+      .map(|dir| AgentChatPanel::state_dir_for_repo(&dir, &repo.path))
+      .expect("agent chat state dir");
+    let _ = std::fs::remove_dir_all(&state_dir);
+    std::fs::create_dir_all(&state_dir).expect("create state dir");
+    let meta = serde_json::json!({
+      "id": "bound-conversation",
+      "started_at_secs": 1,
+      "updated_at_secs": 2,
+      "title": "Bound",
+      "message_count": 1,
+      "session_id": null,
+      "preview": "hello"
+    });
+    std::fs::write(
+      state_dir.join("index.json"),
+      serde_json::json!({ "version": 1, "conversations": [meta] }).to_string(),
+    )
+    .expect("write index");
+    std::fs::write(
+      state_dir.join("worktrees.json"),
+      serde_json::json!({
+        "bound-conversation": { "path": bound.path, "branch": bound.branch }
+      })
+      .to_string(),
+    )
+    .expect("write bindings");
+
+    let (page, cx) = add_session_page_window(repo.path.clone(), cx);
+    cx.run_until_parked();
+    page.update_in(cx, |page, window, cx| page.activate(window, cx));
+    cx.run_until_parked();
+
+    assert!(!orphan.path.exists(), "the orphan was swept at boot");
+    assert!(bound.path.exists(), "a bound worktree is not an orphan");
+    assert!(
+      claimed.path.exists(),
+      "a worktree whose branch the user renamed is theirs now"
+    );
+
+    let _ = std::fs::remove_dir_all(&state_dir);
+    cleanup_worktrees_root(&repo.path);
+  }
+
+  #[gpui::test]
+  async fn a_binding_whose_conversation_is_gone_is_dropped_with_its_worktree(
+    cx: &mut TestAppContext,
+  ) {
+    agent_chat_panel::set_backend_command_override(Some("/nonexistent-agent-binary".to_string()));
+    let repo = TempRepo::init("session-page-sweep-stale-binding");
+    commit_text_file(&repo.path, Path::new("README.md"), "v1\n", "initial");
+    let stale = git::create_worktree(&repo.path, None).expect("stale worktree");
+
+    // The binding survived a prune that took its conversation away.
+    let state_dir = agent_chat_state_dir()
+      .map(|dir| AgentChatPanel::state_dir_for_repo(&dir, &repo.path))
+      .expect("agent chat state dir");
+    let _ = std::fs::remove_dir_all(&state_dir);
+    std::fs::create_dir_all(&state_dir).expect("create state dir");
+    std::fs::write(
+      state_dir.join("worktrees.json"),
+      serde_json::json!({
+        "pruned-conversation": { "path": stale.path, "branch": stale.branch }
+      })
+      .to_string(),
+    )
+    .expect("write bindings");
+
+    let (page, cx) = add_session_page_window(repo.path.clone(), cx);
+    cx.run_until_parked();
+    page.update_in(cx, |page, window, cx| page.activate(window, cx));
+    cx.run_until_parked();
+
+    assert!(
+      !stale.path.exists(),
+      "the unreferenced checkout was removed"
+    );
+    page.read_with(cx, |page, cx| {
+      assert_eq!(
+        page
+          .chat_store
+          .as_ref()
+          .expect("store")
+          .read(cx)
+          .worktree("pruned-conversation"),
+        None,
+        "the dangling binding was dropped"
+      );
+    });
+
+    let _ = std::fs::remove_dir_all(&state_dir);
     cleanup_worktrees_root(&repo.path);
   }
 

@@ -10,6 +10,8 @@ The sessions sidebar gains a second button: a session started with it gets its o
 
 Sessions sharing the main checkout still take turns, since two agents editing the same files would trample each other. Checkpoints, rollback and undo follow each session into its worktree. Deleting a worktree session removes its worktree, its branch and its checkpoint snapshots; a worktree session abandoned before its first message cleans up after itself. A branch you renamed or checked out yourself is never deleted.
 
+Nothing accumulates behind your back either: opening a repository sweeps away `reviu-` worktrees that no session references any more, the leftovers of a crash or a failed delete. Worktrees on a branch you made yours are left alone.
+
 ### The Sidebar Tells You What Each Session Is Doing
 
 With agents running in parallel, the session rows now carry their live state: `Working` while a turn runs, `Waiting` when an agent sits on a permission it needs you to answer, `Failed` when its connection died. The state replaces the timestamp while it matters and gives the row back to it when the session settles. Sessions in a worktree also show their branch under the row, so you can tell at a glance where each agent is working.

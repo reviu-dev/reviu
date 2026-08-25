@@ -2129,6 +2129,39 @@ fn prune_old_state_keeps_recent_files() {
 }
 
 #[test]
+fn prune_old_state_never_touches_the_metadata_files() {
+  let dir = temp_dir("agent-prune-metadata");
+  // Old age says nothing about these: an untouched worktrees.json may still
+  // bind live checkouts, active.txt still names the session to reopen.
+  for name in [
+    "index.json",
+    "active.txt",
+    "drafts.json",
+    "scroll.json",
+    "worktrees.json",
+  ] {
+    std::fs::write(dir.join(name), "{}").unwrap();
+  }
+  std::fs::write(dir.join("old-conversation.json"), "{}").unwrap();
+  std::thread::sleep(std::time::Duration::from_millis(20));
+
+  let pruned = AgentChatPanel::prune_old_state(&dir, std::time::Duration::from_millis(1));
+
+  assert_eq!(pruned, 1, "only the conversation transcript is stale");
+  assert!(!dir.join("old-conversation.json").exists());
+  for name in [
+    "index.json",
+    "active.txt",
+    "drafts.json",
+    "scroll.json",
+    "worktrees.json",
+  ] {
+    assert!(dir.join(name).exists(), "{name} must survive the prune");
+  }
+  std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
 fn list_conversations_sorted_by_updated_at_desc() {
   let dir = temp_dir("agent-sort");
   let mk = |id: &str, started: u64, updated: u64| {

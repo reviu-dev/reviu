@@ -89,6 +89,11 @@ impl ConversationStore {
     self.worktrees.get(id).cloned()
   }
 
+  /// Every binding, for the boot-time orphan sweep.
+  pub fn worktree_bindings(&self) -> HashMap<String, WorktreeBinding> {
+    self.worktrees.clone()
+  }
+
   /// Branch names by conversation id, for the sidebar's worktree rows.
   pub fn worktree_branches(&self) -> HashMap<String, String> {
     self
