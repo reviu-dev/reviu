@@ -9652,6 +9652,10 @@ pub mod tests {
       Some("xml".to_string())
     );
     assert_eq!(
+      Editor::language_hint_for_path(Path::new("/tmp/route-statistics.gpx")),
+      Some("xml".to_string())
+    );
+    assert_eq!(
       Editor::language_hint_for_path(Path::new("/tmp/CMakeLists.txt")),
       Some("cmake".to_string())
     );

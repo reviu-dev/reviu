@@ -345,8 +345,8 @@ const LANGUAGE_REGISTRATIONS: &[LanguageRegistration] = &[
     load: xml_config,
     aliases: &["xml"],
     extensions: &[
-      "xml", "svg", "xhtml", "xht", "xsl", "xslt", "xsd", "wsdl", "ares", "axml", "ant", "mxml",
-      "plist", "iml", "idea", "csproj", "fsproj", "vbproj", "props", "targets", "resx",
+      "xml", "gpx", "svg", "xhtml", "xht", "xsl", "xslt", "xsd", "wsdl", "ares", "axml", "ant",
+      "mxml", "plist", "iml", "idea", "csproj", "fsproj", "vbproj", "props", "targets", "resx",
     ],
     file_names: &[],
     file_name_prefixes: &[],
@@ -981,6 +981,10 @@ mod tests {
   #[test]
   fn test_detect_xml() {
     assert!(detect_language_config("xml").is_some());
+    assert_eq!(
+      detect_language_config("route-statistics.gpx").unwrap().name,
+      "xml"
+    );
     assert!(detect_language_config("csproj").is_some());
     assert!(detect_language_config("props").is_some());
   }
@@ -1325,6 +1329,10 @@ mod tests {
     );
     assert_eq!(
       detect_language_name_for_path(Path::new("/tmp/App.csproj")),
+      Some("xml")
+    );
+    assert_eq!(
+      detect_language_name_for_path(Path::new("/tmp/route-statistics.gpx")),
       Some("xml")
     );
     assert_eq!(
