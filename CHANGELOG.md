@@ -12,6 +12,10 @@ Sessions sharing the main checkout still take turns, since two agents editing th
 
 Nothing accumulates behind your back either: opening a repository sweeps away `reviu-` worktrees that no session references any more, the leftovers of a crash or a failed delete. Worktrees on a branch you made yours are left alone.
 
+### A Failed Turn Is Loud, Whatever The Agent Hides
+
+Running out of provider credits used to look like nothing: a one-second spinner, then silence, because the error landed as a discreet grey line, or nowhere at all when the agent ended the turn without reporting anything. A failed turn now shows a red error card in the conversation naming what happened (usage limit or credits exhausted, rate limited, provider unreachable), raises a toast, and marks the session's row as Failed until the next attempt. A turn that ends without any reply at all is flagged the same way, so an agent that swallows its provider's refusal can no longer fail silently. An error the agent already printed itself is not shown twice.
+
 ### Opening A File From Anywhere Highlights It In Changes
 
 Clicking a file in the agent's turn recap (or opening one from the palette or a review row) showed its diff but left the Changes list highlighting whatever was selected before. The list now follows: the file on screen is the file highlighted, wherever the open came from.

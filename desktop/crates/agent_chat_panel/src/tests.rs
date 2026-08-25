@@ -1225,6 +1225,138 @@ async fn awaiting_permission_tracks_the_last_unresolved_card(cx: &mut gpui::Test
   });
 }
 
+#[test]
+fn agent_error_hints_name_the_classes_users_hit() {
+  assert_eq!(
+    agent_error_hint("Codex error: The usage limit has been reached"),
+    Some("The provider refused this turn: usage limit or credits exhausted.")
+  );
+  assert_eq!(
+    agent_error_hint("insufficient_quota: you have run out of credits"),
+    Some("The provider refused this turn: usage limit or credits exhausted.")
+  );
+  assert_eq!(
+    agent_error_hint("HTTP 429 Too Many Requests"),
+    Some("Rate limited by the provider. Wait a moment and retry.")
+  );
+  assert_eq!(
+    agent_error_hint("connection reset by peer"),
+    Some("The provider looks unreachable. Check your connection and retry.")
+  );
+  assert_eq!(agent_error_hint("something exotic went wrong"), None);
+}
+
+#[gpui::test]
+async fn a_failed_turn_is_loud_everywhere(cx: &mut gpui::TestAppContext) {
+  use std::cell::RefCell;
+  use std::rc::Rc;
+
+  let (panel, cx) = add_panel_window(cx);
+  let failures: Rc<RefCell<Vec<String>>> = Rc::default();
+  cx.update(|_, cx| {
+    let failures = failures.clone();
+    cx.subscribe(&panel, move |_, event: &AgentChatPanelEvent, _| {
+      if let AgentChatPanelEvent::TurnFailed { message } = event {
+        failures.borrow_mut().push(message.clone());
+      }
+    })
+    .detach();
+  });
+
+  panel.update(cx, |panel, cx| {
+    panel.pretend_turn_in_flight_for_test(cx);
+    panel.complete_prompt(
+      Err(anyhow::anyhow!(
+        "Codex error: The usage limit has been reached"
+      )),
+      cx,
+    );
+  });
+  cx.run_until_parked();
+
+  panel.read_with(cx, |panel, _| {
+    assert!(panel.last_turn_failed(), "the sidebar can show Failed");
+    let ChatItem::Message(m) = panel
+      .items
+      .iter()
+      .rev()
+      .find(|item| matches!(item, ChatItem::Message(m) if m.text.starts_with("[error]")))
+      .expect("an error line landed in the transcript")
+    else {
+      panic!("message expected");
+    };
+    assert!(
+      m.text.contains("usage limit or credits exhausted"),
+      "the error names its class: {}",
+      m.text
+    );
+  });
+  assert_eq!(
+    failures.borrow().as_slice(),
+    ["The provider refused this turn: usage limit or credits exhausted.".to_string()],
+    "the host was told, so it can toast"
+  );
+
+  // The next attempt clears the flag; and a turn that answered stays quiet.
+  panel.update(cx, |panel, cx| {
+    panel.items.push(user_message("again"));
+    panel.items.push(agent_message("a real reply"));
+    panel.pretend_turn_in_flight_for_test(cx);
+    assert!(!panel.last_turn_failed());
+    panel.complete_prompt(Ok(agent_client_protocol::schema::StopReason::EndTurn), cx);
+  });
+  panel.read_with(cx, |panel, _| assert!(!panel.last_turn_failed()));
+}
+
+#[gpui::test]
+async fn an_empty_turn_is_reported_even_when_the_adapter_stays_silent(
+  cx: &mut gpui::TestAppContext,
+) {
+  let (panel, cx) = add_panel_window(cx);
+  panel.update(cx, |panel, cx| {
+    // The pi shape: the prompt "succeeds", the turn holds nothing at all.
+    panel.items.push(user_message("t la ?"));
+    panel.pretend_turn_in_flight_for_test(cx);
+    panel.complete_prompt(Ok(agent_client_protocol::schema::StopReason::EndTurn), cx);
+  });
+  panel.read_with(cx, |panel, _| {
+    assert!(panel.last_turn_failed());
+    let ChatItem::Message(m) = panel.items.last().expect("an error line") else {
+      panic!("message expected");
+    };
+    assert!(m.text.contains("without a reply"), "{}", m.text);
+  });
+}
+
+#[gpui::test]
+async fn an_error_already_streamed_as_a_bubble_is_not_shown_twice(cx: &mut gpui::TestAppContext) {
+  let (panel, cx) = add_panel_window(cx);
+  panel.update(cx, |panel, cx| {
+    // The codex shape: the same text arrives as an agent bubble AND as the
+    // prompt error.
+    panel.items.push(user_message("t la ?"));
+    panel.items.push(agent_message(
+      "You've hit your usage limit. Upgrade to Pro.",
+    ));
+    panel.pretend_turn_in_flight_for_test(cx);
+    panel.complete_prompt(
+      Err(anyhow::anyhow!(
+        "You've hit your usage limit. Upgrade to Pro."
+      )),
+      cx,
+    );
+  });
+  panel.read_with(cx, |panel, _| {
+    assert!(panel.last_turn_failed(), "the failure still registers");
+    let error_lines = panel
+      .items
+      .iter()
+      .filter(|item| matches!(item, ChatItem::Message(m) if m.text.starts_with("[error]")))
+      .count();
+    assert_eq!(error_lines, 0, "the bubble already says it once");
+  });
+}
+
 #[gpui::test]
 async fn the_title_settles_exactly_once(cx: &mut gpui::TestAppContext) {
   use std::cell::RefCell;

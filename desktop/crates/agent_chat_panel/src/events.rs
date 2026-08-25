@@ -7,6 +7,26 @@ use super::*;
 /// quiet spell still paints immediately.
 pub(crate) const STREAM_COMMIT_MS: u64 = 120;
 
+/// Whether anything answered the last prompt: any agent output between the
+/// tail and the most recent user message. No user message at all counts as
+/// answered (nothing was asked).
+fn turn_produced_reply(items: &[ChatItem]) -> bool {
+  for item in items.iter().rev() {
+    match item {
+      ChatItem::Message(message) => match message.role {
+        ChatRole::User | ChatRole::ReviewExport => return false,
+        ChatRole::Agent => return true,
+        ChatRole::System => {}
+      },
+      ChatItem::Tool(_) | ChatItem::Thought(_) | ChatItem::Plan(_) | ChatItem::Permission(_) => {
+        return true;
+      }
+      ChatItem::Checkpoint(_) | ChatItem::TurnSummary(_) => {}
+    }
+  }
+  true
+}
+
 /// Folds an adjacent same-message text chunk into `prev` so a burst costs
 /// one markdown push_str instead of one per chunk.
 fn merge_into_last(prev: Option<&mut AgentEvent>, next: &AgentEvent) -> bool {
@@ -451,6 +471,23 @@ impl AgentChatPanel {
               }));
             } else {
               completed = true;
+              // The pi-style silent failure: the provider refused (credits,
+              // limits) but the adapter ended the turn cleanly with nothing
+              // in it. Whatever the adapter hides, an empty turn is loud.
+              if !turn_produced_reply(&panel.items) {
+                let message = "The agent ended the turn without a reply. \
+Its provider may have refused it (credits, usage limit) without reporting an error.";
+                panel.last_turn_failed = true;
+                cx.emit(AgentChatPanelEvent::TurnFailed {
+                  message: message.to_string(),
+                });
+                panel.items.push(ChatItem::Message(ChatMessage {
+                  role: ChatRole::System,
+                  text: format!("[error] {message}"),
+                  images: 0,
+                  image_data: Vec::new(),
+                }));
+              }
             }
           }
           Err(e) => {
@@ -465,20 +502,49 @@ impl AgentChatPanel {
               }));
             } else {
               let raw = format!("{e}");
-              let text = match humanize_agent_error(&raw) {
-                Some(human) => {
-                  // Full payload stays greppable in the app logs.
-                  app_log::log!("[agent] prompt error: {raw}");
-                  format!("[error] {human}")
-                }
-                None => format!("[error] {raw}"),
+              // Full payload stays greppable in the app logs.
+              app_log::log!("[agent] prompt error: {raw}");
+              let human = humanize_agent_error(&raw).unwrap_or_else(|| raw.clone());
+              let short = agent_error_hint(&human)
+                .or_else(|| agent_error_hint(&raw))
+                .map(str::to_string)
+                .unwrap_or_else(|| truncate_chars(&human, 200));
+              let text = if short == human {
+                format!("[error] {human}")
+              } else {
+                format!("[error] {short}\n{human}")
               };
-              panel.items.push(ChatItem::Message(ChatMessage {
-                role: ChatRole::System,
-                text,
-                images: 0,
-                image_data: Vec::new(),
-              }));
+              panel.last_turn_failed = true;
+              cx.emit(AgentChatPanelEvent::TurnFailed {
+                message: short.clone(),
+              });
+              // Some adapters (codex) stream the error as an agent bubble AND
+              // fail the prompt with the same text: one display is enough.
+              let already_shown = panel
+                .items
+                .iter()
+                .rev()
+                .find_map(|item| match item {
+                  ChatItem::Message(m) if matches!(m.role, ChatRole::Agent) => Some(m.text.clone()),
+                  ChatItem::Message(m)
+                    if matches!(m.role, ChatRole::User | ChatRole::ReviewExport) =>
+                  {
+                    Some(String::new())
+                  }
+                  _ => None,
+                })
+                .is_some_and(|bubble| {
+                  !bubble.is_empty()
+                    && (bubble.contains(human.trim()) || human.contains(bubble.trim()))
+                });
+              if !already_shown {
+                panel.items.push(ChatItem::Message(ChatMessage {
+                  role: ChatRole::System,
+                  text,
+                  images: 0,
+                  image_data: Vec::new(),
+                }));
+              }
             }
           }
         }

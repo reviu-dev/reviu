@@ -319,6 +319,11 @@ impl SessionPage {
         AgentChatPanelEvent::TitleSettled { title } => {
           this.rename_session_worktree_branch(panel.clone(), title.clone(), cx);
         }
+        AgentChatPanelEvent::TurnFailed { message } => {
+          window.push_notification(Notification::error(message.clone()), cx);
+          this.notify_agent_attention("Reviu agent failed", Some(panel), window, cx);
+          this.refresh_session_list(cx);
+        }
         AgentChatPanelEvent::CloseRequested => {
           this.hide_diff_chat(window, cx);
         }

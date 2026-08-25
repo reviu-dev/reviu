@@ -585,7 +585,7 @@ impl SessionPage {
         SessionStatus::Waiting
       } else if panel.is_turn_in_flight() {
         SessionStatus::Working
-      } else if panel.needs_reconnect() {
+      } else if panel.needs_reconnect() || panel.last_turn_failed() {
         SessionStatus::Failed
       } else {
         SessionStatus::Idle

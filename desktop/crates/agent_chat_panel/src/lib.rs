@@ -641,6 +641,8 @@ pub enum AgentChatPanelEvent {
   PermissionRequested,
   /// The conversation earned its title (first user message), once.
   TitleSettled { title: String },
+  /// The turn died on an error; `message` is the short human line.
+  TurnFailed { message: String },
   /// User asked the host to hide the chat pane.
   CloseRequested,
 }
@@ -729,6 +731,8 @@ pub struct AgentChatPanel {
   is_active: bool,
   /// TitleSettled fired; one title announcement per panel.
   title_announced: bool,
+  /// The last turn ended in an error; cleared when the next one starts.
+  last_turn_failed: bool,
   turn_gate: TurnGate,
   selection_registry: selectable_text::SelectionRegistry,
   /// Built once: rebuilding extensions busts TextView's parse cache.
@@ -823,6 +827,7 @@ impl AgentChatPanel {
       current_conv: resume.clone().unwrap_or_else(new_conversation_meta),
       is_active: false,
       title_announced: false,
+      last_turn_failed: false,
       turn_gate,
       selection_registry,
       markdown_extensions,
@@ -1330,6 +1335,7 @@ impl AgentChatPanel {
       current_conv: new_conversation_meta(),
       is_active: false,
       title_announced: false,
+      last_turn_failed: false,
       turn_gate: TurnGate::default(),
       selection_registry,
       markdown_extensions,
@@ -1353,6 +1359,7 @@ impl AgentChatPanel {
 
   fn start_turn(&mut self, cx: &mut Context<Self>) {
     self.turn_gate.acquire(&self.cwd, &self.current_conv.id);
+    self.last_turn_failed = false;
     self.in_flight = true;
     self.turn_started_at = Some(std::time::Instant::now());
     self.start_tick_task(cx);
@@ -2422,6 +2429,11 @@ impl AgentChatPanel {
     self.in_flight
   }
 
+  /// The last turn ended in an error and nothing ran since.
+  pub fn last_turn_failed(&self) -> bool {
+    self.last_turn_failed
+  }
+
   /// The turn is parked on a permission card waiting for a human answer.
   pub fn awaiting_permission(&self) -> bool {
     if !self.in_flight {
@@ -2938,6 +2950,38 @@ fn short_model_label(name: &str, description: Option<&str>) -> String {
   } else {
     trimmed.to_string()
   }
+}
+
+/// A short, actionable line for the error classes users actually hit.
+/// `None` falls back to the raw provider text.
+fn agent_error_hint(raw: &str) -> Option<&'static str> {
+  let lowered = raw.to_ascii_lowercase();
+  let has = |needles: &[&str]| needles.iter().any(|needle| lowered.contains(needle));
+  if has(&[
+    "usage limit",
+    "quota",
+    "credit",
+    "billing",
+    "insufficient",
+    "payment",
+  ]) {
+    return Some("The provider refused this turn: usage limit or credits exhausted.");
+  }
+  if has(&["rate limit", "too many requests", "429"]) {
+    return Some("Rate limited by the provider. Wait a moment and retry.");
+  }
+  if has(&[
+    "overloaded",
+    "unavailable",
+    "timed out",
+    "timeout",
+    "connection",
+    "network",
+    "dns",
+  ]) {
+    return Some("The provider looks unreachable. Check your connection and retry.");
+  }
+  None
 }
 
 /// Pull the human-readable message out of a structured agent error, e.g. Codex's

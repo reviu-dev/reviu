@@ -2595,6 +2595,39 @@ impl AgentChatPanel {
           theme,
           is_last_row,
         ),
+        ChatRole::System if m.text.starts_with("[error]") => timeline_row(
+          h_flex()
+            .debug_selector(|| "chat-turn-error".to_string())
+            .items_start()
+            .gap_2()
+            .px_3()
+            .py_2()
+            .rounded(theme.radius)
+            .border_1()
+            .border_color(theme.status_red().opacity(0.4))
+            .bg(theme.status_red().opacity(0.08))
+            .child(
+              gpui_component::Icon::new(UiIconName::CircleSlash)
+                .size_4()
+                .text_color(theme.status_red()),
+            )
+            .child(
+              div()
+                .flex_1()
+                .min_w(px(0.0))
+                .text_xs()
+                .text_color(theme.foreground)
+                .child(selectable_text::SelectableText::new(
+                  item_id_base | 0x1,
+                  SharedString::from(m.text.trim_start_matches("[error]").trim().to_string()),
+                  Vec::new(),
+                  registry.clone(),
+                )),
+            )
+            .into_any_element(),
+          theme,
+          is_last_row,
+        ),
         ChatRole::System => timeline_row(
           div()
             .text_xs()
