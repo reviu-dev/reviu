@@ -1797,6 +1797,70 @@ mod tests {
   }
 
   #[gpui::test]
+  async fn activating_the_shell_resumes_the_conversation_left_active(cx: &mut TestAppContext) {
+    agent_chat_panel::set_backend_command_override(Some("/nonexistent-agent-binary".to_string()));
+    let repo = TempRepo::init("session-page-resume-active");
+    commit_text_file(&repo.path, Path::new("README.md"), "v1\n", "initial");
+    let state_dir = agent_chat_state_dir()
+      .map(|dir| AgentChatPanel::state_dir_for_repo(&dir, &repo.path))
+      .expect("agent chat state dir");
+    let _ = std::fs::remove_dir_all(&state_dir);
+    std::fs::create_dir_all(&state_dir).expect("create state dir");
+
+    // What a previous run left behind: two conversations, one marked active.
+    let meta = serde_json::json!({
+      "id": "resumed-conversation",
+      "started_at_secs": 1,
+      "updated_at_secs": 2,
+      "title": "Left open last time",
+      "message_count": 1,
+      "session_id": null,
+      "preview": "hello from disk"
+    });
+    let other = serde_json::json!({
+      "id": "some-other-conversation",
+      "started_at_secs": 1,
+      "updated_at_secs": 3,
+      "title": "Not this one",
+      "message_count": 1,
+      "session_id": null,
+      "preview": ""
+    });
+    let index = serde_json::json!({ "version": 1, "conversations": [other, meta.clone()] });
+    std::fs::write(state_dir.join("index.json"), index.to_string()).expect("write index");
+    let transcript = serde_json::json!({
+      "version": 1,
+      "meta": meta,
+      "items": [{ "type": "Message", "role": "User", "text": "hello from disk", "images": 0 }],
+      "group_pins": {},
+      "auto_approve": false
+    });
+    std::fs::write(
+      state_dir.join("resumed-conversation.json"),
+      transcript.to_string(),
+    )
+    .expect("write transcript");
+    std::fs::write(state_dir.join("active.txt"), "resumed-conversation").expect("write active");
+
+    let (page, cx) = add_session_page_window(repo.path.clone(), cx);
+    cx.run_until_parked();
+    page.update_in(cx, |page, window, cx| page.activate(window, cx));
+    cx.run_until_parked();
+
+    let panel = active_panel(&page, cx);
+    panel.read_with(cx, |panel, _| {
+      assert_eq!(panel.current_conversation().id, "resumed-conversation");
+      assert_eq!(
+        panel.transcript_texts(),
+        vec!["hello from disk".to_string()],
+        "the transcript hydrated from disk"
+      );
+    });
+
+    let _ = std::fs::remove_dir_all(&state_dir);
+  }
+
+  #[gpui::test]
   async fn a_blank_session_never_stacks_parked_panels(cx: &mut TestAppContext) {
     let (_repo, page, cx) = page_with_agent_panel("session-page-blank-reuse", cx).await;
 

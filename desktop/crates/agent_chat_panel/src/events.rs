@@ -490,7 +490,11 @@ impl AgentChatPanel {
         }
         if completed && !panel.queued_prompts.is_empty() {
           let next = panel.queued_prompts.remove(0);
-          panel.dispatch_prompt(next, cx);
+          // A refused dispatch (session died between turns) must not lose
+          // the message: it goes back to the head of the queue.
+          if !panel.dispatch_prompt(next.clone(), cx) {
+            panel.queued_prompts.insert(0, next);
+          }
         }
         panel.persist_state(cx);
         panel.sync_list_count();

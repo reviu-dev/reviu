@@ -1171,6 +1171,122 @@ async fn the_turn_gate_refuses_a_second_concurrent_turn(cx: &mut gpui::TestAppCo
 }
 
 #[gpui::test]
+async fn a_turn_completing_in_the_background_persists_and_frees_the_gate(
+  cx: &mut gpui::TestAppContext,
+) {
+  let dir = temp_dir("agent-background-turn");
+  let (panel, cx) = add_panel_window(cx);
+  let gate = panel.read_with(cx, |panel, _| panel.turn_gate.clone());
+  let conv_id = panel.update(cx, |panel, cx| {
+    panel.store = Some(cx.new(|_| crate::store::ConversationStore::new(dir.clone())));
+    // Parked in the background: not the shown panel.
+    panel.set_active_conversation(false);
+    panel.items = vec![user_message("work on this")];
+    panel.pretend_turn_in_flight_for_test(cx);
+    panel.current_conv.id.clone()
+  });
+  assert!(
+    !gate.can_start("another-conversation"),
+    "the turn holds the gate"
+  );
+
+  panel.update(cx, |panel, cx| {
+    panel.complete_prompt(Ok(agent_client_protocol::schema::StopReason::EndTurn), cx);
+  });
+  cx.run_until_parked();
+
+  panel.read_with(cx, |panel, _| assert!(!panel.is_turn_in_flight()));
+  assert!(
+    gate.can_start("another-conversation"),
+    "a settled background turn releases the gate for other sessions"
+  );
+  assert!(
+    dir.join(format!("{conv_id}.json")).exists(),
+    "the background transcript landed on disk"
+  );
+  assert!(
+    !dir.join("active.txt").exists(),
+    "a background completion never touches the active pointer"
+  );
+  std::fs::remove_dir_all(&dir).ok();
+}
+
+#[gpui::test]
+async fn dropping_a_panel_mid_turn_frees_the_shared_gate(cx: &mut gpui::TestAppContext) {
+  set_backend_command_override(Some("/nonexistent-agent-binary".to_string()));
+  let (_host, cx) = add_panel_window(cx);
+  let gate = TurnGate::default();
+  let panel = cx.update(|window, cx| {
+    cx.new(|cx| {
+      AgentChatPanel::new(
+        default_agent_id(),
+        PathBuf::from("."),
+        None,
+        None,
+        gate.clone(),
+        window,
+        cx,
+      )
+    })
+  });
+  panel.update(cx, |panel, cx| panel.pretend_turn_in_flight_for_test(cx));
+  assert!(!gate.can_start("other"), "the turn holds the gate");
+
+  // Deleting a running session drops its panel; the gate must not stay held.
+  drop(panel);
+  // Entity release happens on the next effect flush, not at handle drop.
+  cx.update(|_, _| {});
+  cx.run_until_parked();
+  assert!(gate.can_start("other"), "the drop released the gate");
+  set_backend_command_override(None);
+}
+
+#[gpui::test]
+async fn a_submit_blocked_by_the_gate_keeps_the_composer_text(cx: &mut gpui::TestAppContext) {
+  let (panel, cx) = add_panel_window(cx);
+  let gate = panel.read_with(cx, |panel, _| panel.turn_gate.clone());
+  gate.acquire("the-busy-conversation");
+
+  cx.update(|window, cx| {
+    panel.update(cx, |panel, cx| {
+      let input = panel.input.clone();
+      input.update(cx, |state, cx| state.set_value("my prompt", window, cx));
+      panel.submit(window, cx);
+    });
+  });
+
+  panel.read_with(cx, |panel, cx| {
+    assert_eq!(
+      panel.input.read(cx).value().as_ref(),
+      "my prompt",
+      "a blocked submit must not swallow what was typed"
+    );
+    let ChatItem::Message(m) = panel.items.last().expect("a system message") else {
+      panic!("message expected");
+    };
+    assert!(m.text.contains("Another session is running"));
+  });
+}
+
+#[gpui::test]
+async fn a_refused_queue_drain_keeps_the_message_queued(cx: &mut gpui::TestAppContext) {
+  let (panel, cx) = add_panel_window(cx);
+  panel.update(cx, |panel, cx| {
+    panel.queue_prompt_for_test("typed mid-turn", cx);
+    panel.pretend_turn_in_flight_for_test(cx);
+    // The session died during the turn: the drain's dispatch is refused.
+    panel.complete_prompt(Ok(agent_client_protocol::schema::StopReason::EndTurn), cx);
+  });
+  panel.read_with(cx, |panel, _| {
+    assert_eq!(
+      panel.queued_prompt_texts(),
+      vec!["typed mid-turn".to_string()],
+      "a refused dispatch puts the message back instead of losing it"
+    );
+  });
+}
+
+#[gpui::test]
 async fn code_lines_wraps_long_rows_and_keeps_short_ones_single(cx: &mut gpui::TestAppContext) {
   let (_panel, cx) = add_panel_window(cx);
   let mono = Font {
