@@ -2451,7 +2451,10 @@ impl AgentChatPanel {
             .items_end()
             .child(
               div()
-                .w(px(560.))
+                // 10px wider than the reading bubble: the editor reserves
+                // that much for the cursor (RIGHT_MARGIN) before wrapping, so
+                // this keeps the wrap width at the reading bubble's 536px.
+                .w(px(570.))
                 .max_w_full()
                 // The textarea keeps its own inner padding (10x8) even
                 // appearance-less; the bubble only adds the difference so the
@@ -2461,7 +2464,14 @@ impl AgentChatPanel {
                 .bg(theme.secondary)
                 .text_sm()
                 .text_color(theme.foreground)
-                .children(editor.map(|input| Textarea::new(&input).appearance(false).w_full())),
+                .children(editor.map(|input| {
+                  // The input hardcodes 1.25rem; the reading bubble uses
+                  // gpui's default, so match it or lines drift on entry.
+                  Textarea::new(&input)
+                    .appearance(false)
+                    .line_height(gpui::phi())
+                    .w_full()
+                })),
             )
             .child(
               h_flex()
