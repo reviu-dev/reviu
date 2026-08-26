@@ -136,10 +136,6 @@ Everything with a shortcut is a command, showing its key as you rebound it; a co
 
 Arrows show what a row holds and leave the keyboard in the list; Enter or a click opens the file and hands the editor the focus. Left and right fold, in every tree, and files load only when you stop on them.
 
-### Reviu Pro, A Dialog That Says What It Sells
-
-Billing leaves its page for a dialog, open to everyone: it names what Pro brings (pull requests in the dock, reviews without leaving, the GitHub inbox), then the free trial. Signed out it offers the GitHub sign-in; subscribers see plan, status and renewal, with nothing to sell them. The surfaces that need Pro carry the offer themselves, in place of an empty surface, and About becomes a dialog too.
-
 ### Push With Saved Git Credentials
 
 HTTPS pushes and fetches use the credentials already saved in your Git credential helper, such as the macOS keychain: if `git push` works in your terminal, the same remote works from Reviu.
@@ -147,7 +143,3 @@ HTTPS pushes and fetches use the credentials already saved in your Git credentia
 ### Settings And Keybindings In Plain Files
 
 `settings.json` and `keybindings.json` replace the internal storage, and existing settings and shortcut overrides move over on first launch. The files are yours: hand-editable, dotfiles-friendly. An invalid value falls back to its default, an unknown entry is left untouched, and a file that no longer parses is reported and never overwritten.
-
-### Errors Reach The Log File
-
-Failures with no surface to speak from go to a log file with the file and line that reported them; `REVIU_LOG=1` turns it on for release builds. Toasts are kept for what leaves no trace on screen: pushes, history rewrites, destructive acts, and anything that failed.
