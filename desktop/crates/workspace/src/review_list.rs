@@ -286,7 +286,7 @@ impl ListDelegate for ReviewRowsDelegate {
       ReviewRow::FileHeader { path, count } => list.render_file_header(section, path, *count, cx),
       ReviewRow::Comment(comment) => list.render_comment_row(comment, cx),
     });
-    let mut item = selectable_list_item(ix, selected, SelectableRowStyle::Inset, &theme);
+    let mut item = selectable_list_item(ix, selected, SelectableRowStyle::Inset, &theme).px_2();
     if let ReviewRow::Comment(comment) = &row {
       let (prefix, id) = (section.id_prefix(), comment.id);
       item = item.debug_selector(move || format!("review-comment-{prefix}-{id}"));
@@ -652,7 +652,6 @@ impl ReviewList {
       .w_full()
       .items_center()
       .gap_1()
-      .px_1()
       .cursor_pointer()
       .when(section == ReviewSection::Agent, |this| {
         this.child(
@@ -717,8 +716,7 @@ impl ReviewList {
       .w_full()
       .items_center()
       .gap_2()
-      .pl_5()
-      .pr_1()
+      .pl_4()
       // Always there in the agent section, so every row's text starts on the
       // same column.
       .when(section == ReviewSection::Agent, |this| {
@@ -817,7 +815,7 @@ impl ReviewList {
       .w_full()
       .items_center()
       .gap_1()
-      .px_2()
+      .px_3()
       .py_1()
       .border_b_1()
       .border_color(theme.border)

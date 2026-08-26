@@ -10,6 +10,10 @@ The merge button now carries a chevron listing the other merge methods the repos
 
 Confirming a merge opens a small form prefilled with exactly what GitHub would generate for the commit title and message, following the repository's merge-message settings - down to the squash bullet list and its Co-authored-by trailers. Edit them, or clear a field to let GitHub write it. Rebase shows no fields, since it keeps the commits as they are.
 
+### The Right Dock's Lists Share One Ruler
+
+Every list in the right dock now insets its rows the same way: 8px from the row's edge to its content, whichever tab you are on. The pull request files hugged their border at 4px, a commit row kept 12px on its right, and the Review tab inherited a 12px default nobody had asked for - its rows, header and checkbox column now line up with everyone else.
+
 ### The Checks Read At A Glance And Stay In Their Place
 
 The checks block header now carries compact per-state counts - failing first, then pending, skipped, successful - visible without opening the block, where the split used to hide behind a click. Opened, the list shows about six checks and scrolls for the rest: a CI with thirty jobs no longer pushes the file list out of the panel.

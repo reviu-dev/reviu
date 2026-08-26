@@ -451,7 +451,7 @@ impl HistoryList {
 
             selectable_list_item(ix, selected, SelectableRowStyle::Inset, &theme)
               .w_full()
-              .pr_3()
+              .pr_2()
               .pl(indent)
               .child(
                 h_flex()

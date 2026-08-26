@@ -251,7 +251,7 @@ impl ListDelegate for PrFilesDelegate {
     Some(
       selectable_list_item(ix, selected, SelectableRowStyle::Inset, &theme)
         .w_full()
-        .px_1()
+        .px_2()
         .py_1()
         .debug_selector({
           let path = path.clone();
