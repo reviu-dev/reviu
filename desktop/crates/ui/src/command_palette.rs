@@ -3279,10 +3279,14 @@ impl CommandPalette {
     window: &mut Window,
     cx: &mut Context<Self>,
   ) {
-    let Some(handler) = self.on_action.as_ref() else {
+    let Some(handler) = self.on_action.clone() else {
       return;
     };
 
+    // The palette closes before the action runs: closing after would pop the
+    // dialog an action just opened (a confirmation, the review submit form)
+    // instead of the palette itself.
+    window.close_dialog(cx);
     match handler(action, window, cx) {
       Ok(()) => {
         let recorder = cx
@@ -3294,7 +3298,6 @@ impl CommandPalette {
             recorder(parent, cx);
           }
         }
-        window.close_dialog(cx);
       }
       Err(err) => {
         window.push_notification(Notification::error(err), cx);
@@ -4717,6 +4720,29 @@ mod tests {
       }
       other => panic!("unexpected actions: {other:?}"),
     }
+  }
+
+  #[gpui::test]
+  async fn an_action_that_opens_a_dialog_keeps_it_open(cx: &mut gpui::TestAppContext) {
+    use gpui_component::WindowExt as _;
+    // Discarding a review, submitting one: the action's first move is a dialog.
+    // The palette closing after the handler used to pop that dialog instead.
+    let handler: CommandPaletteHandler = Arc::new(move |_, window, cx| {
+      window.open_alert_dialog(cx, |alert, _, _| alert);
+      Ok(())
+    });
+    let commands = vec![CommandPaletteCommand::discard_review()];
+    let (_palette, cx) =
+      open_test_palette(cx, CommandPaletteConfig::new(Vec::new(), commands, handler));
+
+    cx.simulate_input("discard");
+    cx.simulate_keystrokes("enter");
+    cx.run_until_parked();
+
+    assert!(
+      cx.update(|window, cx| window.has_active_dialog(cx)),
+      "the dialog the action opened must survive the palette's close"
+    );
   }
 
   #[gpui::test]

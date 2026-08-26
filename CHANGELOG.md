@@ -4,6 +4,10 @@ All notable changes to Reviu are documented here.
 
 ## 1.1.0
 
+### Palette Commands That Ask Before Acting Work Again
+
+Running Discard review from the command palette did nothing: the palette closed the confirmation the command had just opened instead of closing itself. Every palette command that opens a dialog (a confirmation, the review submit form) was affected. The palette now leaves the screen before its command runs.
+
 ### A Pull Request Review Can Be Discarded
 
 A review started on a pull request by mistake had no way out from Reviu: the panel only offered Submit review, and deleting the draft meant going to github.com. The Review panel's pull request footer now has a Discard button next to Submit review, with a matching palette command. It deletes the pending review and its comments on GitHub after a confirmation that says exactly that, since the draft lives on their servers even though nobody else has seen it. With the pending review gone, single comments can be published on their own again.
