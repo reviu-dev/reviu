@@ -520,11 +520,7 @@ fn review_comment_resolve_control(
   };
   if has_handler && viewer_can_toggle {
     return ReviewCommentResolveControl::Toggle {
-      label: if is_resolved {
-        "Unresolve conversation"
-      } else {
-        "Resolve conversation"
-      },
+      label: if is_resolved { "Unresolve" } else { "Resolve" },
       enabled: true,
     };
   }
@@ -4698,7 +4694,6 @@ impl Editor {
                   .xsmall()
                   .compact()
                   .icon(UiIconName::MessageCircleReply)
-                  .label("Reply")
                   .selected(is_replying)
                   .disabled(disabled)
                   .on_click(move |_, window, cx| {
@@ -4718,7 +4713,7 @@ impl Editor {
                 if let Some(reason) = disabled_reason {
                   button.tooltip(reason)
                 } else {
-                  button
+                  button.tooltip("Reply")
                 }
               }),
           )
@@ -4727,7 +4722,20 @@ impl Editor {
         };
 
       // A single line is visible in the diff; only a range is worth spelling out.
+      // An outdated card's origin rides its tag instead: the line it was
+      // written against no longer exists here.
       let line_label = first_message.line_label.clone();
+      let github_outdated_tag = (!is_local_note_mode && first_message.is_outdated).then(|| {
+        match first_message.line_label.as_deref() {
+          Some(label) => format!("Outdated · was {label}"),
+          None => "Outdated".to_string(),
+        }
+      });
+      let github_line_label = if first_message.is_outdated {
+        None
+      } else {
+        line_label.clone()
+      };
 
       let meta = if is_local_note_mode {
         h_flex()
@@ -4762,7 +4770,7 @@ impl Editor {
               .text_color(theme.foreground)
               .child(first_message.author.to_string()),
           )
-          .when_some(line_label, |this, label| {
+          .when_some(github_line_label, |this, label| {
             this
               .child(
                 div()
@@ -4801,8 +4809,8 @@ impl Editor {
         .when(first_message.is_pending, |this| {
           this.child(Tag::color(ColorName::Amber).child("Pending"))
         })
-        .when(first_message.is_outdated, |this| {
-          this.child(Tag::color(ColorName::Orange).child("Outdated"))
+        .when_some(github_outdated_tag, |this, text| {
+          this.child(Tag::color(ColorName::Orange).child(text))
         })
         .when(wears_resolved_tag, |this| {
           this.child(Tag::color(ColorName::Green).child("Resolved"))
@@ -5127,7 +5135,6 @@ impl Editor {
                     .xsmall()
                     .compact()
                     .icon(UiIconName::MessageCircleReply)
-                    .label("Reply")
                     .selected(is_replying)
                     .disabled(disabled)
                     .on_click(move |_, window, cx| {
@@ -5147,7 +5154,7 @@ impl Editor {
                   if let Some(reason) = disabled_reason {
                     button.tooltip(reason)
                   } else {
-                    button
+                    button.tooltip("Reply")
                   }
                 }),
             )
@@ -10541,14 +10548,14 @@ pub mod tests {
     assert_eq!(
       review_comment_resolve_control(true, true, false, false, true, false),
       ReviewCommentResolveControl::Toggle {
-        label: "Resolve conversation",
+        label: "Resolve",
         enabled: true
       }
     );
     assert_eq!(
       review_comment_resolve_control(true, true, false, true, false, true),
       ReviewCommentResolveControl::Toggle {
-        label: "Unresolve conversation",
+        label: "Unresolve",
         enabled: true
       }
     );
