@@ -14,7 +14,7 @@ Nothing accumulates behind your back either: opening a repository sweeps away `r
 
 ### Editing A Message Keeps Its Bubble
 
-Editing one of your messages swapped the bubble for a full-width bordered input with Cancel/Send buttons: the conversation jumped around you. The edit now happens inside the bubble itself, same shape, same colors, same place, with just a cursor and two small icon actions below it, the way review comments already edit in place.
+Editing one of your messages swapped the bubble for a full-width bordered input with Cancel/Send buttons: the conversation jumped around you. The edit now happens inside the bubble itself, same shape, same colors, same place, with just a cursor and two small icon actions below it, the way review comments already edit in place. Escape cancels the edit and puts the cursor back in the composer, just like review comments.
 
 ### Session State Is A Dot, Not A Word
 

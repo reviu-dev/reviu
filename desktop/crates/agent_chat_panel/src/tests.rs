@@ -3587,6 +3587,39 @@ async fn editing_is_refused_mid_turn_and_cancel_restores_the_bubble(cx: &mut gpu
 }
 
 #[gpui::test]
+async fn escape_cancels_the_message_edit_and_refocuses_the_composer(cx: &mut gpui::TestAppContext) {
+  let (panel, cx) = add_panel_window(cx);
+  panel.update(cx, |panel, cx| {
+    panel.status = Status::Ready;
+    panel.items = vec![checkpoint_item("cp-1"), user_message("prompt")];
+    panel.sync_list_count();
+    cx.notify();
+  });
+  cx.run_until_parked();
+
+  panel.update_in(cx, |panel, window, cx| {
+    panel.begin_message_edit(1, window, cx);
+  });
+  cx.run_until_parked();
+  assert!(cx.debug_bounds("agent-chat-edit-message").is_some());
+
+  cx.simulate_keystrokes("escape");
+  cx.run_until_parked();
+
+  panel.read_with(cx, |panel, _| assert!(panel.editing_message.is_none()));
+  assert!(
+    cx.debug_bounds("agent-chat-edit-message").is_none(),
+    "escape restores the reading bubble"
+  );
+  panel.update_in(cx, |panel, window, cx| {
+    assert!(
+      panel.input.read(cx).focus_handle(cx).is_focused(window),
+      "escape hands focus back to the composer"
+    );
+  });
+}
+
+#[gpui::test]
 async fn the_copy_button_works_on_agent_messages_too(cx: &mut gpui::TestAppContext) {
   let (panel, cx) = add_panel_window(cx);
   panel.update(cx, |panel, cx| {

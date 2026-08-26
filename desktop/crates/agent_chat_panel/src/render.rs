@@ -2446,6 +2446,11 @@ impl AgentChatPanel {
           let editor = self.edit_input.clone();
           v_flex()
             .debug_selector(|| "agent-chat-edit-message".to_string())
+            .on_action(cx.listener(|panel, _: &input::Escape, window, cx| {
+              panel.cancel_message_edit(cx);
+              window.focus(&panel.input.read(cx).focus_handle(cx), cx);
+              cx.stop_propagation();
+            }))
             .mb_3()
             .gap_0p5()
             .items_end()
