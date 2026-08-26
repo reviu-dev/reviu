@@ -56,26 +56,25 @@ impl SessionPage {
         .as_ref()
         .and_then(|store| store.read(cx).active_meta()),
     };
-    let view = self.build_scope_chat_panel(resume, window, cx);
+    let view = self.build_fallback_chat_panel(resume, window, cx);
     view.update(cx, |panel, _| panel.set_active_conversation(true));
     self.agent_chat_view = Some(view);
     self.refresh_session_list(cx);
     self.sync_active_checkout(window, cx);
   }
 
-  /// Points `chat_store` at the SCOPE repo's store (the target of new
-  /// sessions); sessions of other repos reach their own store through their
-  /// panel or the hub.
+  /// Points `chat_store` at the FALLBACK repo's store; sessions of other
+  /// repos reach their own store through their panel or the hub.
   pub(super) fn ensure_chat_store(&mut self, cx: &mut Context<Self>) {
     let repo = self
-      .selected_repo
+      .fallback_repo
       .clone()
       .unwrap_or_else(|| PathBuf::from("."));
     let Some((store, _)) = self.conversation_hub.store_for(&repo, cx) else {
       return;
     };
     self.chat_store = Some(store.clone());
-    if self.selected_repo.is_some() && self.swept_repos.insert(repo.clone()) {
+    if self.fallback_repo.is_some() && self.swept_repos.insert(repo.clone()) {
       self.sweep_orphan_worktrees(repo, store, cx);
     }
   }
@@ -217,15 +216,16 @@ impl SessionPage {
     }
   }
 
-  /// A panel for a conversation of the SCOPE repo (the new-session target).
-  pub(super) fn build_scope_chat_panel(
+  /// A panel for a conversation of the FALLBACK repo, when nothing on screen
+  /// names one.
+  pub(super) fn build_fallback_chat_panel(
     &mut self,
     resume: Option<agent_chat_panel::ConversationMeta>,
     window: &mut Window,
     cx: &mut Context<Self>,
   ) -> Entity<AgentChatPanel> {
     let repo = self
-      .selected_repo
+      .fallback_repo
       .clone()
       .unwrap_or_else(|| PathBuf::from("."));
     let store = self.chat_store.clone();
@@ -521,7 +521,7 @@ impl SessionPage {
     panel: Entity<AgentChatPanel>,
     cx: &mut Context<Self>,
   ) {
-    if self.selected_repo.is_none() {
+    if self.fallback_repo.is_none() {
       return;
     }
     // The snapshot covers the checkout the agent actually edits: the
@@ -551,7 +551,7 @@ impl SessionPage {
     window: &mut Window,
     cx: &mut Context<Self>,
   ) {
-    if self.selected_repo.is_none() {
+    if self.fallback_repo.is_none() {
       return;
     }
     let Some(panel) = self.agent_chat_view.clone() else {
@@ -615,7 +615,7 @@ impl SessionPage {
     window: &mut Window,
     cx: &mut Context<Self>,
   ) {
-    if self.selected_repo.is_none() {
+    if self.fallback_repo.is_none() {
       return;
     }
     let Some(panel) = self.agent_chat_view.clone() else {
@@ -1057,7 +1057,7 @@ impl SessionPage {
     }
   }
 
-  /// Creation lands where you are: the shown session's repo, else the scope.
+  /// Creation lands where you are: the shown session's repo, else the fallback.
   fn creation_repo(&self, cx: &App) -> PathBuf {
     self.session_repo(cx).unwrap_or_else(|| PathBuf::from("."))
   }
@@ -1221,7 +1221,7 @@ impl SessionPage {
   }
 
   pub(super) fn delete_session(&mut self, id: &str, window: &mut Window, cx: &mut Context<Self>) {
-    // The session's own repo and store, which may not be the scope's: a row
+    // The session's own repo and store, which may not be the fallback's: a row
     // of another repo can be deleted straight from the aggregated sidebar.
     let found = self.conversation_hub.find_conversation(id, cx);
     let from_panel = || {
@@ -1266,7 +1266,7 @@ impl SessionPage {
         .map(|(store, _)| (deleted_repo.clone(), Some(store)));
       let view = match repo {
         Some((repo_root, store)) => self.build_chat_panel(repo_root, store, None, window, cx),
-        None => self.build_scope_chat_panel(None, window, cx),
+        None => self.build_fallback_chat_panel(None, window, cx),
       };
       view.update(cx, |panel, _| panel.set_active_conversation(true));
       self.agent_chat_view = Some(view);
@@ -1303,8 +1303,8 @@ impl SessionPage {
         Some((repo_root, store, meta)) => {
           self.build_chat_panel(repo_root, Some(store), Some(meta), window, cx)
         }
-        // Unknown id (stale click): a fresh scope session is the least wrong.
-        None => self.build_scope_chat_panel(None, window, cx),
+        // Unknown id (stale click): a fresh fallback session is the least wrong.
+        None => self.build_fallback_chat_panel(None, window, cx),
       },
     };
     panel.update(cx, |panel, _| panel.set_active_conversation(true));
@@ -2381,7 +2381,7 @@ mod tests {
   }
 
   #[gpui::test]
-  async fn a_worktree_session_can_start_in_a_repo_other_than_the_scope(cx: &mut TestAppContext) {
+  async fn a_worktree_session_can_start_in_a_repo_other_than_the_fallback(cx: &mut TestAppContext) {
     let (repo, page, cx) = page_with_agent_panel("session-page-worktree-cross", cx).await;
     let other = TempRepo::init("session-page-worktree-cross-b");
     commit_text_file(&other.path, Path::new("README.md"), "other\n", "initial");
@@ -2400,7 +2400,7 @@ mod tests {
       assert_eq!(
         panel.repo_root(),
         other.path.as_path(),
-        "the session belongs to the section's repo, not the scope"
+        "the session belongs to the section's repo, not the fallback"
       );
       assert_ne!(panel.cwd(), other.path.as_path());
       assert!(
@@ -2410,9 +2410,9 @@ mod tests {
     });
     page.read_with(cx, |page, _| {
       assert_eq!(
-        page.selected_repo.as_deref(),
+        page.fallback_repo.as_deref(),
         Some(repo.path.as_path()),
-        "the scope did not move"
+        "the fallback did not move"
       );
     });
 
@@ -3222,8 +3222,8 @@ mod tests {
 
     // The sweep runs again, as it would if it raced the creation at boot.
     page.update(cx, |page, cx| {
-      let repo_root = page.selected_repo.clone().expect("scope repo");
-      let store = page.chat_store.clone().expect("scope store");
+      let repo_root = page.fallback_repo.clone().expect("fallback repo");
+      let store = page.chat_store.clone().expect("fallback store");
       page.sweep_orphan_worktrees(repo_root, store, cx);
     });
     cx.run_until_parked();
@@ -3299,7 +3299,7 @@ mod tests {
   }
 
   /// A second repo with one conversation already on disk, tracked by the hub
-  /// through a scope visit.
+  /// through a fallback visit.
   fn seed_second_repo(name: &str, conversation_id: &str) -> (TempRepo, PathBuf) {
     let repo = TempRepo::init(name);
     commit_text_file(&repo.path, Path::new("README.md"), "other\n", "initial");
@@ -3341,8 +3341,9 @@ mod tests {
   async fn switching_repository_parks_a_running_session_without_stopping_it(
     cx: &mut TestAppContext,
   ) {
-    let (repo, page, cx) = page_with_agent_panel("session-page-scope-running", cx).await;
-    let (other, other_state) = seed_second_repo("session-page-scope-running-b", "b-conversation");
+    let (repo, page, cx) = page_with_agent_panel("session-page-fallback-running", cx).await;
+    let (other, other_state) =
+      seed_second_repo("session-page-fallback-running-b", "b-conversation");
 
     let running = active_panel(&page, cx);
     running.update(cx, |panel, cx| {
@@ -3353,7 +3354,7 @@ mod tests {
 
     page.update_in(cx, |page, window, cx| {
       page
-        .set_selected_repo(other.path.clone(), window, cx)
+        .set_fallback_repo(other.path.clone(), window, cx)
         .expect("switch repository");
     });
     cx.run_until_parked();
@@ -3387,8 +3388,9 @@ mod tests {
 
   #[gpui::test]
   async fn the_sidebar_always_lists_every_tracked_repos_sessions(cx: &mut TestAppContext) {
-    let (repo, page, cx) = page_with_agent_panel("session-page-scope-all", cx).await;
-    let (other, other_state) = seed_second_repo("session-page-scope-all-b", "all-b-conversation");
+    let (repo, page, cx) = page_with_agent_panel("session-page-fallback-all", cx).await;
+    let (other, other_state) =
+      seed_second_repo("session-page-fallback-all-b", "all-b-conversation");
 
     let local = active_panel(&page, cx);
     local.update(cx, |panel, cx| panel.seed_user_message_for_test("mine", cx));
@@ -3398,7 +3400,7 @@ mod tests {
     // Tracking the other repo is enough: no mode, no filter, one list.
     page.update_in(cx, |page, window, cx| {
       page
-        .set_selected_repo(other.path.clone(), window, cx)
+        .set_fallback_repo(other.path.clone(), window, cx)
         .expect("track the other repo");
     });
     cx.run_until_parked();
@@ -3421,14 +3423,14 @@ mod tests {
     let (other, other_state) =
       seed_second_repo("session-page-cross-select-b", "cross-b-conversation");
 
-    // Track the other repo, then come back: scope = the first repo.
+    // Track the other repo, then come back: fallback = the first repo.
     page.update_in(cx, |page, window, cx| {
       page
-        .set_selected_repo(other.path.clone(), window, cx)
+        .set_fallback_repo(other.path.clone(), window, cx)
         .expect("track the other repo");
       page
-        .set_selected_repo(repo.path.clone(), window, cx)
-        .expect("scope back to the first repo");
+        .set_fallback_repo(repo.path.clone(), window, cx)
+        .expect("switch back to the first repo");
     });
 
     page.update_in(cx, |page, window, cx| {
@@ -3442,7 +3444,7 @@ mod tests {
       assert_eq!(
         panel.repo_root(),
         other.path.as_path(),
-        "the session runs in ITS repo, wherever the scope points"
+        "the session runs in ITS repo, wherever the fallback points"
       );
       assert_eq!(panel.cwd(), other.path.as_path());
       assert_eq!(
@@ -3453,9 +3455,9 @@ mod tests {
     });
     page.read_with(cx, |page, cx| {
       assert_eq!(
-        page.selected_repo.as_deref(),
+        page.fallback_repo.as_deref(),
         Some(repo.path.as_path()),
-        "the scope did not move"
+        "the fallback did not move"
       );
       assert_eq!(
         page.dock_panel.read(cx).repo_root(),
@@ -3511,14 +3513,14 @@ mod tests {
       page.review_store_path = review_store_path_for(Some(&repo.path), Some(&state_dir));
     });
 
-    // Track the other repo, then come back: scope = the first repo.
+    // Track the other repo, then come back: fallback = the first repo.
     page.update_in(cx, |page, window, cx| {
       page
-        .set_selected_repo(other.path.clone(), window, cx)
+        .set_fallback_repo(other.path.clone(), window, cx)
         .expect("track the other repo");
       page
-        .set_selected_repo(repo.path.clone(), window, cx)
-        .expect("scope back to the first repo");
+        .set_fallback_repo(repo.path.clone(), window, cx)
+        .expect("switch back to the first repo");
     });
 
     page.update_in(cx, |page, window, cx| {
@@ -3530,14 +3532,14 @@ mod tests {
       assert_eq!(
         page.review_store_path.as_deref(),
         Some(review_path_for_repo(&state_dir, &other.path).as_path()),
-        "the batch loads and persists in the SESSION's repo, not the scope"
+        "the batch loads and persists in the SESSION's repo, not the fallback"
       );
       let comments = page.agent_review.all();
       assert_eq!(comments.len(), 1);
       assert_eq!(comments[0].body.as_ref(), "from the other repo");
     });
 
-    // A comment written here lands in the other repo's file, not the scope's.
+    // A comment written here lands in the other repo's file, not the fallback's.
     page.update_in(cx, |page, window, cx| {
       page.open_diff(
         PathBuf::from("README.md"),
@@ -3558,7 +3560,7 @@ mod tests {
     assert_eq!(stored.comments.len(), 2);
     assert!(
       !review_path_for_repo(&state_dir, &repo.path).exists(),
-      "nothing leaked into the scope repo's batch"
+      "nothing leaked into the fallback repo's batch"
     );
 
     let _ = std::fs::remove_dir_all(&state_dir);
@@ -3581,14 +3583,14 @@ mod tests {
     cx.run_until_parked();
     let survivor_id = survivor.read_with(cx, |panel, _| panel.current_conversation().id.clone());
 
-    // The other repo's session on screen, while the scope stays on repo A.
+    // The other repo's session on screen, while the fallback stays on repo A.
     page.update_in(cx, |page, window, cx| {
       page
-        .set_selected_repo(other.path.clone(), window, cx)
+        .set_fallback_repo(other.path.clone(), window, cx)
         .expect("track the other repo");
       page
-        .set_selected_repo(repo.path.clone(), window, cx)
-        .expect("scope back");
+        .set_fallback_repo(repo.path.clone(), window, cx)
+        .expect("switch back");
       page.select_session("doomed-b", window, cx);
     });
     cx.run_until_parked();
@@ -3601,7 +3603,7 @@ mod tests {
     cx.run_until_parked();
 
     page.read_with(cx, |page, cx| {
-      // The shown session died with its repo: a fresh scope session took over
+      // The shown session died with its repo: a fresh fallback session took over
       // and the git surfaces left the dead checkout.
       let panel = page.agent_chat_view.as_ref().expect("a panel is shown");
       assert_eq!(panel.read(cx).repo_root(), repo.path.as_path());
@@ -3629,7 +3631,7 @@ mod tests {
   async fn the_hub_evicts_an_old_store_instead_of_refusing_the_ninth_repo(cx: &mut TestAppContext) {
     let (_repo, page, cx) = page_with_agent_panel("session-page-hub-cap", cx).await;
 
-    // Track repos up to and past the cap; every scope visit must get a store,
+    // Track repos up to and past the cap; every fallback visit must get a store,
     // or its new sessions would silently never persist.
     let mut extra_repos = Vec::new();
     for index in 0..crate::conversation_hub::MAX_TRACKED_REPOS + 1 {
@@ -3637,13 +3639,13 @@ mod tests {
       commit_text_file(&extra.path, Path::new("README.md"), "v1\n", "initial");
       page.update_in(cx, |page, window, cx| {
         page
-          .set_selected_repo(extra.path.clone(), window, cx)
-          .expect("scope to the extra repo");
+          .set_fallback_repo(extra.path.clone(), window, cx)
+          .expect("switch to the extra repo");
       });
       page.read_with(cx, |page, _| {
         assert!(
           page.chat_store.is_some(),
-          "repo {index}: the scope always gets a store, cap or not"
+          "repo {index}: the fallback always gets a store, cap or not"
         );
       });
       extra_repos.push(extra);
@@ -3670,11 +3672,11 @@ mod tests {
 
     page.update_in(cx, |page, window, cx| {
       page
-        .set_selected_repo(other.path.clone(), window, cx)
+        .set_fallback_repo(other.path.clone(), window, cx)
         .expect("track the other repo");
       page
-        .set_selected_repo(repo.path.clone(), window, cx)
-        .expect("scope back");
+        .set_fallback_repo(repo.path.clone(), window, cx)
+        .expect("switch back");
       page.select_session("worktree-b-conversation", window, cx);
     });
     cx.run_until_parked();
@@ -3752,12 +3754,12 @@ mod tests {
     active_panel(&page, cx).update(cx, |panel, cx| panel.seed_user_message_for_test("mine", cx));
     cx.run_until_parked();
 
-    // The scope moves to the other repo, but the SHOWN session stays in the
+    // The fallback moves to the other repo, but the SHOWN session stays in the
     // first one: the plain New Session follows what you are looking at.
     page.update_in(cx, |page, window, cx| {
       page
-        .set_selected_repo(other.path.clone(), window, cx)
-        .expect("scope to the other repo");
+        .set_fallback_repo(other.path.clone(), window, cx)
+        .expect("fallback to the other repo");
       page.select_session(
         &page
           .conversation_hub

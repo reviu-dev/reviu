@@ -171,8 +171,8 @@ pub struct SessionPage {
   agent_chat_view: Option<Entity<AgentChatPanel>>,
   /// All per-repo stores live here; everything cross-repo reads through it.
   conversation_hub: ConversationHub,
-  /// The SCOPE repo's store: the target of new sessions. Sessions of other
-  /// repos carry their own store handle.
+  /// The FALLBACK repo's store: where sessions land when nothing on screen
+  /// names a repo. Sessions of other repos carry their own store handle.
   chat_store: Option<Entity<ConversationStore>>,
   /// Repos already swept for orphaned worktrees this run.
   swept_repos: HashSet<PathBuf>,
@@ -187,7 +187,7 @@ pub struct SessionPage {
   session_list: Entity<SessionList>,
   /// The repository's identity: recents, persistence keys, GitHub. The dock
   /// and the diff follow `checkout_root` instead, which may be a worktree.
-  selected_repo: Option<PathBuf>,
+  fallback_repo: Option<PathBuf>,
   /// What the git surfaces currently point at; compared to detect switches.
   synced_checkout: Option<PathBuf>,
   center: CenterView,
@@ -256,12 +256,12 @@ pub(crate) mod test_support;
 
 impl SessionPage {
   pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
-    let selected_repo = ConfigStore::load_recent_repositories()
+    let fallback_repo = ConfigStore::load_recent_repositories()
       .first()
       .map(|repo| repo.path.clone());
-    let dock_panel = cx.new(|cx| DockPanel::new(selected_repo.clone(), window, cx));
+    let dock_panel = cx.new(|cx| DockPanel::new(fallback_repo.clone(), window, cx));
     let inbox = cx.new(|_| Inbox::new());
-    let repo_snapshot = cx.new(|_| RepoSnapshot::new(selected_repo.clone()));
+    let repo_snapshot = cx.new(|_| RepoSnapshot::new(fallback_repo.clone()));
     cx.subscribe(
       &repo_snapshot,
       |this, snapshot, event: &RepoSnapshotEvent, cx| match event {
@@ -423,15 +423,15 @@ impl SessionPage {
       conversation_hub: ConversationHub::new(),
       chat_store: None,
       swept_repos: HashSet::new(),
-      reviewed_repo: selected_repo.clone(),
+      reviewed_repo: fallback_repo.clone(),
       background_chat_panels: Vec::new(),
       turn_gate: TurnGate::new(),
       agent_notification: None,
       dock_panel,
       inbox,
       session_list,
-      synced_checkout: selected_repo.clone(),
-      selected_repo,
+      synced_checkout: fallback_repo.clone(),
+      fallback_repo,
       center: CenterView::Conversation,
       editor: None,
       binary_preview: None,
@@ -651,23 +651,23 @@ impl SessionPage {
   /// The checkout the git surfaces should show: the active session's worktree
   /// when it has one, the main checkout otherwise.
   pub(crate) fn checkout_root(&self, cx: &App) -> Option<PathBuf> {
-    self.selected_repo.as_ref()?;
+    self.fallback_repo.as_ref()?;
     self
       .agent_chat_view
       .as_ref()
       .map(|panel| panel.read(cx).cwd().to_path_buf())
-      .or_else(|| self.selected_repo.clone())
+      .or_else(|| self.fallback_repo.clone())
   }
 
-  /// The repo the shown session belongs to; the scope only fills in while
-  /// nothing is on screen. Everything that follows "where you are" (review
-  /// batch, session creation, context row) derives from this one place.
+  /// The repo the shown session belongs to; the fallback repo only fills in
+  /// while nothing is on screen. Everything that follows "where you are"
+  /// (review batch, session creation, context row) derives from this one place.
   pub(super) fn session_repo(&self, cx: &App) -> Option<PathBuf> {
     self
       .agent_chat_view
       .as_ref()
       .map(|panel| panel.read(cx).repo_root().to_path_buf())
-      .or_else(|| self.selected_repo.clone())
+      .or_else(|| self.fallback_repo.clone())
   }
 
   /// Points the dock, the branch header and the diff at the active session's
@@ -676,7 +676,7 @@ impl SessionPage {
   pub(super) fn sync_active_checkout(&mut self, window: &mut Window, cx: &mut Context<Self>) {
     let checkout = self.checkout_root(cx);
     // The memo alone is not trusted: a fixture or future code may assign
-    // `selected_repo` directly, so the dock's actual root double-checks it.
+    // `fallback_repo` directly, so the dock's actual root double-checks it.
     if self.synced_checkout == checkout
       && self.dock_panel.read(cx).repo_root() == checkout.as_deref()
     {
@@ -1339,7 +1339,7 @@ mod tests {
     let (page, cx) = add_session_page_window_without_repo(cx);
     cx.run_until_parked();
 
-    page.read_with(cx, |page, _| assert!(page.selected_repo.is_none()));
+    page.read_with(cx, |page, _| assert!(page.fallback_repo.is_none()));
     assert!(
       cx.debug_bounds(REPO_CONTEXT_DEBUG_SELECTOR).is_none(),
       "there is no repository to name yet"
@@ -1352,7 +1352,7 @@ mod tests {
     cx.simulate_click(row.center(), gpui::Modifiers::default());
     cx.simulate_path_prompt_response(|_| None);
     cx.run_until_parked();
-    page.read_with(cx, |page, _| assert!(page.selected_repo.is_none()));
+    page.read_with(cx, |page, _| assert!(page.fallback_repo.is_none()));
     assert!(
       cx.debug_bounds(OPEN_REPOSITORY_ROW_DEBUG_SELECTOR)
         .is_some(),
@@ -1366,7 +1366,7 @@ mod tests {
     cx.run_until_parked();
 
     page.read_with(cx, |page, cx| {
-      assert_eq!(page.selected_repo.as_deref(), Some(repo.path.as_path()));
+      assert_eq!(page.fallback_repo.as_deref(), Some(repo.path.as_path()));
       assert_eq!(
         page
           .dock_panel

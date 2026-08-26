@@ -3,10 +3,10 @@
 use super::*;
 
 impl SessionPage {
-  /// Points the SCOPE at another repository: the sidebar filter and the
-  /// target of new sessions move, running sessions are untouched (the repo is
-  /// an attribute of each session, not a mode of the app).
-  pub(super) fn set_selected_repo(
+  /// Switches the FALLBACK repo: what the app stands on when no session is
+  /// shown, and the repo reopened next launch. Running sessions are untouched
+  /// (the repo is an attribute of each session, not a mode of the app).
+  pub(super) fn set_fallback_repo(
     &mut self,
     repo_root: PathBuf,
     window: &mut Window,
@@ -21,12 +21,12 @@ impl SessionPage {
       .agent_chat_view
       .as_ref()
       .is_some_and(|panel| panel.read(cx).repo_root() != repo_root.as_path());
-    if self.selected_repo.as_deref() == Some(repo_root.as_path()) && !shown_elsewhere {
+    if self.fallback_repo.as_deref() == Some(repo_root.as_path()) && !shown_elsewhere {
       return Ok(());
     }
 
     ConfigStore::persist_recent_repository(&repo_root);
-    self.apply_selected_repo(Some(repo_root.clone()), window, cx);
+    self.apply_fallback_repo(Some(repo_root.clone()), window, cx);
     // Switching repository means going to work there: reopen the session you
     // left active in it, or open a blank one so the screen, the git surfaces
     // and the New Session button all agree on where you are.
@@ -57,25 +57,25 @@ impl SessionPage {
     window: &mut Window,
     cx: &mut Context<Self>,
   ) -> Result<(), SharedString> {
-    self.set_selected_repo(repo_root, window, cx)
+    self.set_fallback_repo(repo_root, window, cx)
   }
 
-  pub(super) fn apply_selected_repo(
+  pub(super) fn apply_fallback_repo(
     &mut self,
     repo_root: Option<PathBuf>,
     window: &mut Window,
     cx: &mut Context<Self>,
   ) {
-    self.selected_repo = repo_root;
-    // The scope repo's store becomes the new-session target; its first visit
-    // sweeps its orphaned worktrees.
+    self.fallback_repo = repo_root;
+    // The fallback repo's store takes over; its first visit sweeps its
+    // orphaned worktrees.
     self.chat_store = None;
-    if self.selected_repo.is_some() {
+    if self.fallback_repo.is_some() {
       self.ensure_chat_store(cx);
     }
     self.refresh_session_list(cx);
-    // With no session on screen the git surfaces follow the scope; with one,
-    // they stay on the session's checkout and this is a no-op.
+    // With no session on screen the git surfaces follow the fallback repo;
+    // with one, they stay on the session's checkout and this is a no-op.
     self.sync_active_checkout(window, cx);
     cx.notify();
   }
@@ -115,13 +115,13 @@ impl SessionPage {
     self.conversation_hub.drop_store(&repo_root, cx);
     self.swept_repos.remove(&repo_root);
 
-    let forgetting_selected = self.selected_repo.as_deref() == Some(repo_root.as_path());
-    if !forgetting_selected {
-      // The shown session may have gone with the repo: a fresh scope session
-      // takes over so the centre and the git surfaces never point at a dead
-      // checkout.
+    let forgetting_fallback = self.fallback_repo.as_deref() == Some(repo_root.as_path());
+    if !forgetting_fallback {
+      // The shown session may have gone with the repo: a fresh fallback-repo
+      // session takes over so the centre and the git surfaces never point at
+      // a dead checkout.
       if active_was_doomed {
-        let view = self.build_scope_chat_panel(None, window, cx);
+        let view = self.build_fallback_chat_panel(None, window, cx);
         view.update(cx, |panel, _| panel.set_active_conversation(true));
         self.agent_chat_view = Some(view);
         self.sync_active_checkout(window, cx);
@@ -135,7 +135,7 @@ impl SessionPage {
       .into_iter()
       .map(|repo| repo.path)
       .find(|path| path != &repo_root);
-    self.apply_selected_repo(next_repo, window, cx);
+    self.apply_fallback_repo(next_repo, window, cx);
     Ok(())
   }
 
@@ -156,7 +156,7 @@ impl SessionPage {
       };
 
       let _ = this.update_in(cx, |this, window, cx| {
-        if let Err(error) = this.set_selected_repo(path, window, cx) {
+        if let Err(error) = this.set_fallback_repo(path, window, cx) {
           window.push_notification(Notification::warning(error), cx);
         }
       });
@@ -272,7 +272,7 @@ mod tests {
     // Away and back: each repository keeps the batch that belongs to it.
     page.update_in(cx, |page, window, cx| {
       page
-        .set_selected_repo(other.path.clone(), window, cx)
+        .set_fallback_repo(other.path.clone(), window, cx)
         .expect("switch to the other repository");
     });
     page.read_with(cx, |page, cx| {
@@ -291,7 +291,7 @@ mod tests {
 
     page.update_in(cx, |page, window, cx| {
       page
-        .set_selected_repo(repo.path.clone(), window, cx)
+        .set_fallback_repo(repo.path.clone(), window, cx)
         .expect("switch back");
     });
     page.read_with(cx, |page, cx| {
@@ -340,12 +340,12 @@ mod tests {
     page.update(cx, |page, cx| page.discard_agent_review(cx));
     page.update_in(cx, |page, window, cx| {
       page
-        .set_selected_repo(other.path.clone(), window, cx)
+        .set_fallback_repo(other.path.clone(), window, cx)
         .expect("switch to the other repository");
     });
     page.update_in(cx, |page, window, cx| {
       page
-        .set_selected_repo(repo.path.clone(), window, cx)
+        .set_fallback_repo(repo.path.clone(), window, cx)
         .expect("switch back");
     });
     page.read_with(cx, |page, _| assert!(page.agent_review.all().is_empty()));
@@ -380,13 +380,13 @@ mod tests {
 
     page.update_in(cx, |page, window, cx| {
       page
-        .set_selected_repo(other.path.clone(), window, cx)
+        .set_fallback_repo(other.path.clone(), window, cx)
         .expect("switch repository");
     });
     cx.run_until_parked();
 
     page.read_with(cx, |page, cx| {
-      assert_eq!(page.selected_repo.as_deref(), Some(other.path.as_path()));
+      assert_eq!(page.fallback_repo.as_deref(), Some(other.path.as_path()));
       // No session was active there: a blank one opens so the screen, the
       // git surfaces and New Session all agree on where you are.
       let panel = page.agent_chat_view.as_ref().expect("a session is shown");
@@ -440,7 +440,7 @@ mod tests {
 
     page.update_in(cx, |page, window, cx| {
       page
-        .set_selected_repo(other.path.clone(), window, cx)
+        .set_fallback_repo(other.path.clone(), window, cx)
         .expect("switch repository");
     });
 
@@ -456,7 +456,7 @@ mod tests {
   }
 
   #[gpui::test]
-  async fn switching_scope_keeps_running_sessions_but_forgetting_their_repo_waits(
+  async fn switching_fallback_keeps_running_sessions_but_forgetting_their_repo_waits(
     cx: &mut TestAppContext,
   ) {
     let repo = TempRepo::init("session-page-turn-guard-from");
@@ -470,14 +470,14 @@ mod tests {
     page.update(cx, |page, _| page.pretend_agent_turn_in_flight = true);
 
     // The repo is an attribute of the session, not a mode: pointing the
-    // scope elsewhere never interrupts a running agent.
+    // fallback elsewhere never interrupts a running agent.
     page.update_in(cx, |page, window, cx| {
       page
-        .set_selected_repo(other.path.clone(), window, cx)
-        .expect("switching scope is always allowed")
+        .set_fallback_repo(other.path.clone(), window, cx)
+        .expect("switching fallback is always allowed")
     });
     page.read_with(cx, |page, _| {
-      assert_eq!(page.selected_repo.as_deref(), Some(other.path.as_path()));
+      assert_eq!(page.fallback_repo.as_deref(), Some(other.path.as_path()));
     });
 
     // Forgetting a repo tears its sessions down, so a running one refuses.
@@ -533,7 +533,7 @@ mod tests {
 
     page.update_in(cx, |page, window, cx| {
       page
-        .set_selected_repo(repo.path.clone(), window, cx)
+        .set_fallback_repo(repo.path.clone(), window, cx)
         .expect("same repository");
     });
 
@@ -544,7 +544,7 @@ mod tests {
   }
 
   #[gpui::test]
-  async fn forgetting_the_selected_repository_falls_back_to_the_next_recent_one(
+  async fn forgetting_the_fallback_repository_falls_back_to_the_next_recent_one(
     cx: &mut TestAppContext,
   ) {
     let repo = TempRepo::init("session-page-forget-selected");
@@ -564,7 +564,7 @@ mod tests {
     });
 
     page.read_with(cx, |page, _| {
-      assert_eq!(page.selected_repo.as_deref(), Some(other.path.as_path()));
+      assert_eq!(page.fallback_repo.as_deref(), Some(other.path.as_path()));
     });
     assert!(
       !ConfigStore::load_recent_repositories()
@@ -593,7 +593,7 @@ mod tests {
 
     page.read_with(cx, |page, _| {
       assert!(
-        page.selected_repo.is_none(),
+        page.fallback_repo.is_none(),
         "a folder without a repository is not selected"
       );
     });
@@ -621,7 +621,7 @@ mod tests {
     cx.run_until_parked();
 
     let refused = page.update_in(cx, |page, window, cx| {
-      page.set_selected_repo(plain_folder.clone(), window, cx)
+      page.set_fallback_repo(plain_folder.clone(), window, cx)
     });
     assert_eq!(
       refused.expect_err("a plain folder is refused").as_ref(),
@@ -629,7 +629,7 @@ mod tests {
     );
     page.read_with(cx, |page, _| {
       assert_eq!(
-        page.selected_repo.as_deref(),
+        page.fallback_repo.as_deref(),
         Some(repo.path.as_path()),
         "the shell stays on the repository it had"
       );
@@ -651,13 +651,13 @@ mod tests {
 
     page
       .update_in(cx, |page, window, cx| {
-        page.set_selected_repo(nested_other.clone(), window, cx)
+        page.set_fallback_repo(nested_other.clone(), window, cx)
       })
       .expect("a folder inside a repository is accepted");
     cx.run_until_parked();
 
     page.read_with(cx, |page, _| {
-      let selected = page.selected_repo.clone().expect("selected repository");
+      let selected = page.fallback_repo.clone().expect("selected repository");
       assert_eq!(
         selected.canonicalize().expect("canonical selection"),
         other.path.canonicalize().expect("canonical repo"),
@@ -686,7 +686,7 @@ mod tests {
     });
     cx.run_until_parked();
 
-    page.read_with(cx, |page, _| assert!(page.selected_repo.is_none()));
+    page.read_with(cx, |page, _| assert!(page.fallback_repo.is_none()));
     assert!(
       cx.debug_bounds(OPEN_REPOSITORY_ROW_DEBUG_SELECTOR)
         .is_some(),
@@ -717,7 +717,7 @@ mod tests {
 
     assert!(error.contains("Repository not found"), "{error}");
     page.read_with(cx, |page, _| {
-      assert_eq!(page.selected_repo.as_deref(), Some(repo.path.as_path()));
+      assert_eq!(page.fallback_repo.as_deref(), Some(repo.path.as_path()));
     });
   }
 
@@ -739,7 +739,7 @@ mod tests {
     });
 
     page.read_with(cx, |page, _| {
-      assert_eq!(page.selected_repo.as_deref(), Some(repo.path.as_path()));
+      assert_eq!(page.fallback_repo.as_deref(), Some(repo.path.as_path()));
     });
     let recents = ConfigStore::load_recent_repositories();
     assert!(recents.iter().any(|recent| recent.path == repo.path));
@@ -761,7 +761,7 @@ mod tests {
     });
 
     page.read_with(cx, |page, cx| {
-      assert!(page.selected_repo.is_none());
+      assert!(page.fallback_repo.is_none());
       assert!(page.dock_panel.read(cx).repo_root().is_none());
       assert!(page.repo_snapshot.read(cx).branch_status().is_none());
     });

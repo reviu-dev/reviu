@@ -62,7 +62,7 @@ impl SessionPage {
     let panel = self.dock_panel.read(cx);
     let status_entries = panel.status_entries();
     RepoState {
-      has_repo: self.selected_repo.is_some(),
+      has_repo: self.fallback_repo.is_some(),
       merge_in_progress: panel.merge_in_progress(),
       rebase_in_progress: panel.rebase_in_progress(),
       has_head_commit: panel.head_status().has_head_commit,

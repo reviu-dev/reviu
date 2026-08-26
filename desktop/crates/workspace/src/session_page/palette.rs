@@ -11,8 +11,8 @@ impl SessionPage {
       })
       .collect::<Vec<_>>();
 
-    if let Some(selected_repo) = self.selected_repo.as_ref() {
-      let selected = selected_repo.to_string_lossy().replace(['\n', '\r'], "");
+    if let Some(fallback_repo) = self.fallback_repo.as_ref() {
+      let selected = fallback_repo.to_string_lossy().replace(['\n', '\r'], "");
       if !repositories
         .iter()
         .any(|repo| repo.path.as_ref() == selected)
@@ -43,7 +43,7 @@ impl SessionPage {
       commands.push(CommandPaletteCommand::forget_repository());
     }
 
-    if self.selected_repo.is_some() {
+    if self.fallback_repo.is_some() {
       let commit_message = self.dock_panel.read(cx).commit_message(cx);
       let state = self.repo_state(&commit_message, cx);
       if state.allows(PaletteCommand::Commit) {
@@ -262,7 +262,7 @@ impl SessionPage {
         Ok(())
       }
       CommandPaletteAction::Commit => {
-        if self.selected_repo.is_none() {
+        if self.fallback_repo.is_none() {
           return Err("No repository selected.".into());
         }
         self.dock_panel.update(cx, |panel, cx| panel.commit(cx));
@@ -418,7 +418,7 @@ impl SessionPage {
         if !repo_root.is_dir() {
           return Err(format!("Repository not found: {}", repo_root.display()).into());
         }
-        self.set_selected_repo(repo_root, window, cx)
+        self.set_fallback_repo(repo_root, window, cx)
       }
       CommandPaletteAction::ForgetRepository(repository) => {
         self.forget_repository(PathBuf::from(repository.path.as_ref()), window, cx)

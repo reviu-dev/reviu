@@ -21,10 +21,10 @@ pub(crate) fn poll_interval(window_active: bool) -> Duration {
 /// is running, and not on a window nobody is looking at.
 pub(crate) fn should_poll(
   window_active: bool,
-  selected_repo: Option<&Path>,
+  fallback_repo: Option<&Path>,
   command_in_flight: bool,
 ) -> bool {
-  window_active && selected_repo.is_some() && !command_in_flight
+  window_active && fallback_repo.is_some() && !command_in_flight
 }
 
 #[cfg(test)]
