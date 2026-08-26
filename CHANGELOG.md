@@ -12,7 +12,7 @@ Confirming a merge opens a small form prefilled with exactly what GitHub would g
 
 ### The Refresh Button Shows It Heard You
 
-Clicking refresh in the right dock rereads everything - git status, the pull request, its comments and checks - but did so in complete silence, looking like a dead button. It now spins until the pull request read lands. The panel still refreshes itself when it gets stale (a minute) and on events like opening the tab or switching branches; the button remains the way to force a read right now.
+Clicking refresh in the right dock rereads everything - git status, the pull request, its comments and checks - but did so in complete silence, looking like a dead button. It now spins until every read it triggered has landed, comments and checks included. The panel still refreshes itself when it gets stale (a minute) and on events like opening the tab or switching branches; the button remains the way to force a read right now.
 
 ### Palette Commands That Ask Before Acting Work Again
 

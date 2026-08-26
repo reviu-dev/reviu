@@ -576,9 +576,10 @@ pub struct DockPanel {
   /// The viewer's remembered method for this repository, kept only while the
   /// repository allows it.
   selected_merge_method: Option<GithubPullRequestMergeMethod>,
-  /// An asked-for refresh spins the button until the lookup lands: rereads are
-  /// deliberately silent otherwise, so the click needs its own answer.
-  pr_refreshing: bool,
+  /// An asked-for refresh spins the button until everything it triggered has
+  /// landed: the lookup, then the range and checks reads it fans out to.
+  /// Rereads are deliberately silent otherwise, so the click needs its answer.
+  pr_refresh_pending: u8,
   pr_merging: bool,
   _pr_merge_task: Option<Task<()>>,
   /// Collapsed by default: the file list is what you work in.
@@ -821,7 +822,7 @@ impl DockPanel {
       pr_checks_loading: false,
       pr_merge_readiness: None,
       selected_merge_method: None,
-      pr_refreshing: false,
+      pr_refresh_pending: 0,
       pr_merging: false,
       _pr_merge_task: None,
       pr_details_expanded: false,
@@ -888,7 +889,7 @@ impl DockPanel {
 
   /// The refresh button: being asked is reason enough to read GitHub again.
   pub(crate) fn refresh_requested(&mut self, cx: &mut Context<Self>) {
-    self.pr_refreshing = true;
+    self.pr_refresh_pending = 1;
     self.refresh_all(PullRequestRefresh::Now, cx);
     cx.notify();
   }
@@ -959,11 +960,11 @@ impl DockPanel {
 
   fn refresh_branch_pull_request(&mut self, refresh: PullRequestRefresh, cx: &mut Context<Self>) {
     let Some(repo_root) = self.repo_root.clone() else {
-      self.pr_refreshing = false;
+      self.pr_refresh_pending = 0;
       return;
     };
     if !AuthStateStore::has_github_access(cx) {
-      self.pr_refreshing = false;
+      self.pr_refresh_pending = 0;
       self.pr_fetched_at = None;
       self.set_branch_pr(BranchPrState::NoAccess, cx);
       self
@@ -973,7 +974,7 @@ impl DockPanel {
       return;
     }
     if !should_read_pull_request(refresh, self.pr_fetched_at, cx.background_executor().now()) {
-      self.pr_refreshing = false;
+      self.pr_refresh_pending = 0;
       return;
     }
 
@@ -1009,10 +1010,16 @@ impl DockPanel {
         .await;
 
       let _ = this.update(cx, |this, cx| {
-        this.pr_refreshing = false;
+        let refreshing = this.pr_refresh_pending > 0;
+        this.pr_refresh_pending = 0;
         this.pr_fetched_at = Some(cx.background_executor().now());
         this.pr_branch = branch;
         this.apply_branch_pull_request(state, cx);
+        // A found pull request fans out into the range and checks reads: the
+        // button keeps spinning until both land.
+        if refreshing && matches!(this.branch_pr, BranchPrState::Found(_, _)) {
+          this.pr_refresh_pending = 2;
+        }
       });
     });
     self._pr_task = Some(task);
@@ -1092,6 +1099,7 @@ impl DockPanel {
         .await;
 
       let _ = this.update(cx, |this, cx| {
+        this.pr_refresh_pending = this.pr_refresh_pending.saturating_sub(1);
         this.pr_files_loading = false;
         match loaded {
           Ok((range, files, reviewers, review_comments, author_login, node_id)) => {
@@ -1165,6 +1173,7 @@ impl DockPanel {
         })
         .await;
       let _ = this.update(cx, |this, cx| {
+        this.pr_refresh_pending = this.pr_refresh_pending.saturating_sub(1);
         this.pr_checks_loading = false;
         this.pr_checks = loaded.0.ok();
         this.pr_merge_readiness = loaded.1.ok();
@@ -3067,7 +3076,7 @@ impl Render for DockPanel {
                 .compact()
                 .small()
                 .tooltip("Refresh")
-                .loading(self.pr_refreshing)
+                .loading(self.pr_refresh_pending > 0)
                 .loading_icon(gpui_component::Icon::new(UiIconName::RefreshCw))
                 .on_click(cx.listener(|this, _, _, cx| this.refresh_requested(cx))),
             )
@@ -5424,12 +5433,18 @@ mod tests {
 
     panel.update(cx, |panel, cx| panel.refresh_requested(cx));
     panel.read_with(cx, |panel, _| {
-      assert!(panel.pr_refreshing, "the click has to show as taken");
+      assert!(
+        panel.pr_refresh_pending > 0,
+        "the click has to show as taken"
+      );
     });
 
     cx.run_until_parked();
     panel.read_with(cx, |panel, _| {
-      assert!(!panel.pr_refreshing, "the read landed, the button rests");
+      assert_eq!(
+        panel.pr_refresh_pending, 0,
+        "the reads landed, the button rests"
+      );
     });
   }
 
