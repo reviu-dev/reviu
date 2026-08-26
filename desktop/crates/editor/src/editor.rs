@@ -2662,6 +2662,7 @@ impl Editor {
     }
     self.clear_review_comment_create_state();
     self.clear_review_comment_reply_state();
+    self.expand_review_comment_thread_for(comment_id);
 
     let input = self.ensure_review_comment_edit_input(window, cx);
     let initial_text = body.to_string();
@@ -2941,6 +2942,7 @@ impl Editor {
 
     self.clear_review_comment_edit_state();
     self.clear_review_comment_create_state();
+    self.expand_review_comment_thread_for(comment_id);
 
     let input = self.ensure_review_comment_reply_input(window, cx);
     input.update(cx, |state, cx| {
@@ -3490,6 +3492,17 @@ impl Editor {
       .get(&comment_id)
       .copied()
       .unwrap_or(comment_id)
+  }
+
+  /// Replying to or editing a collapsed thread reopens it: the input has to
+  /// land somewhere visible.
+  fn expand_review_comment_thread_for(&mut self, comment_id: u64) {
+    let thread_id = self.thread_id_for_comment(comment_id);
+    if let Some(ids) = self.review_comment_threads.get(&thread_id) {
+      for id in ids {
+        self.collapsed_review_comments.remove(id);
+      }
+    }
   }
 
   fn toggle_review_comment_thread(&mut self, thread_id: u64, cx: &mut Context<Self>) {
@@ -11593,6 +11606,88 @@ pub mod tests {
       assert!(editor.collapsed_review_comments.contains(&1));
       assert!(editor.collapsed_review_comments.contains(&2));
       assert!(!editor.collapsed_review_comments.contains(&3));
+    });
+  }
+
+  fn thread_comment(id: u64, in_reply_to_id: Option<u64>, resolved: bool) -> ReviewComment {
+    ReviewComment {
+      id,
+      in_reply_to_id,
+      line: 0,
+      side: ReviewCommentSide::Right,
+      author: Arc::from("alice"),
+      avatar_url: None,
+      line_label: None,
+      body: Arc::from("body"),
+      suggestion_context: None,
+      created_at: Arc::from("2026-02-18"),
+      thread_id: Some(Arc::from("thread-1")),
+      is_resolved: resolved,
+      is_outdated: false,
+      viewer_can_resolve: true,
+      viewer_can_unresolve: true,
+      is_pending: false,
+    }
+  }
+
+  #[gpui::test]
+  fn test_acting_on_a_collapsed_thread_reopens_it(cx: &mut TestAppContext) {
+    let mut ctx = EditorTestContext::with_text(cx.clone(), "a\nb");
+
+    ctx.editor.update(&mut ctx.cx, |editor, cx| {
+      editor.set_review_comments(
+        vec![
+          thread_comment(1, None, false),
+          thread_comment(2, Some(1), false),
+        ],
+        cx,
+      );
+      editor.toggle_review_comment_thread(1, cx);
+      assert!(editor.collapsed_review_comments.contains(&1));
+
+      // Reply and edit both go through this before opening their input.
+      editor.expand_review_comment_thread_for(2);
+
+      assert!(!editor.collapsed_review_comments.contains(&1));
+      assert!(!editor.collapsed_review_comments.contains(&2));
+    });
+  }
+
+  #[gpui::test]
+  fn test_a_thread_collapses_when_it_resolves_and_stays_open_if_reopened(cx: &mut TestAppContext) {
+    let mut ctx = EditorTestContext::with_text(cx.clone(), "a\nb");
+
+    ctx.editor.update(&mut ctx.cx, |editor, cx| {
+      editor.set_review_comments(
+        vec![
+          thread_comment(1, None, false),
+          thread_comment(2, Some(1), false),
+        ],
+        cx,
+      );
+      assert!(!editor.collapsed_review_comments.contains(&1));
+
+      // The refresh after resolving folds the thread away.
+      editor.set_review_comments(
+        vec![
+          thread_comment(1, None, true),
+          thread_comment(2, Some(1), true),
+        ],
+        cx,
+      );
+      assert!(editor.collapsed_review_comments.contains(&1));
+      assert!(editor.collapsed_review_comments.contains(&2));
+
+      // The user reopened it: later refreshes must not fold it again.
+      editor.toggle_review_comment_thread(1, cx);
+      editor.set_review_comments(
+        vec![
+          thread_comment(1, None, true),
+          thread_comment(2, Some(1), true),
+        ],
+        cx,
+      );
+      assert!(!editor.collapsed_review_comments.contains(&1));
     });
   }
 
