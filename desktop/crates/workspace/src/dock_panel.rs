@@ -91,6 +91,7 @@ use crate::pull_request_reviewers::{
 use crate::workspace::WorkspaceApi;
 use gpui_component::avatar::Avatar;
 use gpui_component::notification::Notification;
+use gpui_component::scroll::ScrollableElement as _;
 use ui::{
   Button, ButtonVariants as _, CommandPaletteCommand, ConfirmDialog, SelectableRowStyle,
   StatusThemeExt as _, Textarea, TextareaState, UiIconName, WindowExt as _, selectable_list_item,
@@ -2842,7 +2843,7 @@ impl DockPanel {
       let mut list = v_flex()
         .id("dock-panel-pr-checks-rows")
         .w_full()
-        .max_h(px(250.))
+        .max_h(px(300.))
         .overflow_y_scroll()
         .gap_0p5()
         .px_1()
@@ -2850,7 +2851,7 @@ impl DockPanel {
       for row in rows {
         list = list.child(render_check_row(&row, &theme, cx));
       }
-      block = block.child(list);
+      block = block.child(list.overflow_y_scrollbar());
     }
 
     if !self.pr_reviewers.is_empty() {
