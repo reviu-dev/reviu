@@ -3243,16 +3243,17 @@ impl DockPanel {
     let options = self.checkout_options.clone();
     let view = cx.entity();
 
-    let selector = Button::new("dock-panel-checkout-selector")
+    let mut selector = Button::new("dock-panel-checkout-selector")
       .debug_selector(|| DOCK_PANEL_CHECKOUT_SELECTOR_DEBUG_SELECTOR.to_string())
       .icon(UiIconName::GitBranch)
-      // A child instead of a label: the button's own label never shrinks,
-      // this one gives the whole branch when there is room and an ellipsis
-      // when there is not.
+      // A child instead of a label: the button's own label never shrinks.
+      // The max_w bound is what makes the ellipsis kick in: the popover
+      // wrapper around this button ignores flex shrinking (its trigger_style
+      // never reaches the trigger), so the button cannot follow the header.
       .child(div().min_w(px(0.)).truncate().child(displayed_branch))
+      .max_w(px(220.))
       .min_w(px(0.))
       .overflow_hidden()
-      .flex_shrink(1.)
       .compact()
       .small()
       .tooltip(if pinned {
@@ -3260,6 +3261,21 @@ impl DockPanel {
       } else {
         "Show another checkout"
       });
+    if pinned {
+      let view = cx.entity();
+      selector = selector.child(
+        div()
+          .id("dock-panel-checkout-follow")
+          .debug_selector(|| DOCK_PANEL_CHECKOUT_FOLLOW_DEBUG_SELECTOR.to_string())
+          .flex_none()
+          .cursor_pointer()
+          .on_mouse_down(gpui::MouseButton::Left, move |_, _, cx| {
+            cx.stop_propagation();
+            view.update(cx, |_, cx| cx.emit(DockPanelEvent::FollowSessionCheckout));
+          })
+          .child(Icon::new(IconName::Close).size_3()),
+      );
+    }
     let selector = if pinned {
       selector.primary()
     } else {
@@ -3304,24 +3320,7 @@ impl DockPanel {
       })
     });
 
-    let mut row = h_flex()
-      .min_w(px(0.))
-      .items_center()
-      .gap_1()
-      .child(selector);
-    if pinned {
-      row = row.child(
-        Button::new("dock-panel-checkout-follow")
-          .debug_selector(|| DOCK_PANEL_CHECKOUT_FOLLOW_DEBUG_SELECTOR.to_string())
-          .icon(IconName::Close)
-          .ghost()
-          .compact()
-          .small()
-          .tooltip("Follow the session's checkout again")
-          .on_click(cx.listener(|_, _, _, cx| cx.emit(DockPanelEvent::FollowSessionCheckout))),
-      );
-    }
-    row.into_any_element()
+    selector.into_any_element()
   }
 }
 
