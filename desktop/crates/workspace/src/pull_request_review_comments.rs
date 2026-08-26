@@ -273,13 +273,24 @@ fn suggestion_context(comment: &GithubPullRequestReviewComment) -> Option<Sugges
   })
 }
 
+/// GitHub nulls the live line of an outdated thread and keeps only the
+/// original one; a card with no line at all would silently vanish from the
+/// diff while the file badge still counts it.
+fn anchor_line(comment: &GithubPullRequestReviewComment) -> Option<i64> {
+  comment
+    .line
+    .or(comment.start_line)
+    .or(comment.original_line)
+    .or(comment.original_start_line)
+}
+
 /// Where the card hangs in the diff. A reply carries no anchor of its own, so
 /// it borrows the one of the comment it answers.
 fn display_anchor(
   comment: &GithubPullRequestReviewComment,
   by_id: &HashMap<u64, &GithubPullRequestReviewComment>,
 ) -> Option<(usize, ReviewCommentSide, Option<i64>)> {
-  let mut line = comment.line.or(comment.start_line);
+  let mut line = anchor_line(comment);
   let mut side = comment.side.as_deref().or(comment.start_side.as_deref());
   let mut current = Some(comment);
   // A thread deeper than this is a cycle, not a conversation.
@@ -294,7 +305,7 @@ fn display_anchor(
       break;
     };
     current = Some(parent);
-    line = line.or(parent.line.or(parent.start_line));
+    line = line.or(anchor_line(parent));
     side = side.or(parent.side.as_deref().or(parent.start_side.as_deref()));
   }
 
@@ -711,13 +722,33 @@ mod tests {
 
   #[test]
   fn a_comment_that_moved_says_where_it_hangs() {
-    let mut outdated = comment(1, "src/a.rs", Some(9), "moved");
+    // The real shape of an outdated thread: GitHub nulls the live line and
+    // keeps only the original one.
+    let mut outdated = comment(1, "src/a.rs", None, "moved");
     outdated.is_outdated = true;
+    outdated.original_line = Some(9);
 
     let rows = editor_review_comments(&[outdated], Path::new("src/a.rs"));
 
     // Outdated: the line it hangs on is not the line it was written against.
+    assert_eq!(rows.len(), 1, "an outdated comment still shows in the diff");
     assert_eq!(rows[0].line_label.as_deref(), Some("L9"));
+    assert!(rows[0].is_outdated);
+  }
+
+  #[test]
+  fn a_reply_to_an_outdated_comment_hangs_with_its_thread() {
+    let mut root = comment(1, "src/a.rs", None, "moved");
+    root.is_outdated = true;
+    root.original_line = Some(9);
+    let mut reply = comment(2, "src/a.rs", None, "still here");
+    reply.in_reply_to_id = Some(1);
+    reply.is_outdated = true;
+
+    let rows = editor_review_comments(&[root, reply], Path::new("src/a.rs"));
+
+    assert_eq!(rows.len(), 2);
+    assert_eq!(rows[0].line, rows[1].line);
   }
 
   #[test]
