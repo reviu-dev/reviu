@@ -635,11 +635,7 @@ impl SessionPage {
       .unwrap_or_default();
     let statuses = self.session_statuses(cx);
     let worktree_branches = self.conversation_hub.worktree_branches(cx);
-    let scope_repo = self
-      .agent_chat_view
-      .as_ref()
-      .map(|panel| panel.read(cx).repo_root().to_path_buf())
-      .or_else(|| self.selected_repo.clone());
+    let scope_repo = self.session_repo(cx);
     self.session_list.update(cx, |list, cx| {
       list.set_conversations(conversations, current_id, cx);
       list.set_section_order(section_order, cx);
@@ -663,6 +659,17 @@ impl SessionPage {
       .agent_chat_view
       .as_ref()
       .map(|panel| panel.read(cx).cwd().to_path_buf())
+      .or_else(|| self.selected_repo.clone())
+  }
+
+  /// The repo the shown session belongs to; the scope only fills in while
+  /// nothing is on screen. Everything that follows "where you are" (review
+  /// batch, session creation, context row) derives from this one place.
+  pub(super) fn session_repo(&self, cx: &App) -> Option<PathBuf> {
+    self
+      .agent_chat_view
+      .as_ref()
+      .map(|panel| panel.read(cx).repo_root().to_path_buf())
       .or_else(|| self.selected_repo.clone())
   }
 
@@ -698,11 +705,7 @@ impl SessionPage {
     self.refresh_branch(cx);
     // The review batch belongs to a REPO (worktree sessions share their
     // repo's batch); it follows the active session across repos.
-    let review_repo = self
-      .agent_chat_view
-      .as_ref()
-      .map(|panel| panel.read(cx).repo_root().to_path_buf())
-      .or_else(|| self.selected_repo.clone());
+    let review_repo = self.session_repo(cx);
     if self.reviewed_repo != review_repo {
       self.persist_agent_review();
       self.reviewed_repo = review_repo;

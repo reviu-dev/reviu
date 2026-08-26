@@ -66,7 +66,7 @@ impl SessionPage {
     window: &mut Window,
     cx: &mut Context<Self>,
   ) {
-    let Some(repo_root) = self.selected_repo.clone() else {
+    let Some(repo_root) = self.session_repo(cx) else {
       let _ = window;
       explain_not_open(
         CheckoutRefusal::NoRepository,

@@ -89,13 +89,8 @@ impl SessionPage {
   pub(super) fn render_sessions_sidebar(&mut self, cx: &mut Context<Self>) -> AnyElement {
     let theme = cx.theme().clone();
 
-    // The context row names where you ARE: the shown session's repo. The
-    // internal scope only fills in when nothing is on screen yet.
-    let context_repo = self
-      .agent_chat_view
-      .as_ref()
-      .map(|panel| panel.read(cx).repo_root().to_path_buf())
-      .or_else(|| self.selected_repo.clone());
+    // The context row names where you ARE: the shown session's repo.
+    let context_repo = self.session_repo(cx);
     let repo_name = context_repo
       .as_deref()
       .and_then(|path| path.file_name())

@@ -859,11 +859,11 @@ impl SessionPage {
     self.agent_review.clear_sent()
   }
 
-  /// Reads the batch of the selected repository and hands it to the panel.
-  /// Nothing else fills the panel until a file is opened.
+  /// Reads the batch of the shown session's repository and hands it to the
+  /// panel. Nothing else fills the panel until a file is opened.
   pub(super) fn reload_review_for_repo(&mut self, cx: &mut Context<Self>) {
     self.review_store_path = review_store_path_for(
-      self.selected_repo.as_deref(),
+      self.session_repo(cx).as_deref(),
       self.review_state_dir.as_deref(),
     );
     self.agent_review = load_agent_review(self.review_store_path.as_deref());
@@ -1059,12 +1059,7 @@ impl SessionPage {
 
   /// Creation lands where you are: the shown session's repo, else the scope.
   fn creation_repo(&self, cx: &App) -> PathBuf {
-    self
-      .agent_chat_view
-      .as_ref()
-      .map(|panel| panel.read(cx).repo_root().to_path_buf())
-      .or_else(|| self.selected_repo.clone())
-      .unwrap_or_else(|| PathBuf::from("."))
+    self.session_repo(cx).unwrap_or_else(|| PathBuf::from("."))
   }
 
   pub(super) fn new_session(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -3438,6 +3433,99 @@ mod tests {
       );
     });
 
+    let _ = std::fs::remove_dir_all(&other_state);
+    cleanup_worktrees_root(&repo.path);
+  }
+
+  #[gpui::test]
+  async fn selecting_another_repos_session_loads_its_review_batch(cx: &mut TestAppContext) {
+    use crate::agent_review::LocalAgentReviewComment;
+    use editor::ReviewCommentSide;
+
+    let (repo, page, cx) = page_with_agent_panel("session-page-cross-review", cx).await;
+    let (other, other_state) = seed_second_repo("session-page-cross-review-b", "cross-review-b");
+    std::fs::write(other.path.join("README.md"), "changed\n").expect("dirty the other repo");
+
+    let state_dir = std::env::temp_dir().join(format!(
+      "reviu-cross-review-{}-{:?}",
+      std::process::id(),
+      std::thread::current().id()
+    ));
+    let _ = std::fs::remove_dir_all(&state_dir);
+    // A batch the other repo left behind in a previous run.
+    write_review(
+      &review_path_for_repo(&state_dir, &other.path),
+      &[LocalAgentReviewComment {
+        id: 4,
+        in_reply_to_id: None,
+        path: PathBuf::from("README.md"),
+        line: 0,
+        side: ReviewCommentSide::Right,
+        start_line: None,
+        start_side: None,
+        body: std::sync::Arc::from("from the other repo"),
+        original_start_line: Some(1),
+        original_lines: vec!["other".to_string()],
+        state: LocalAgentReviewCommentState::Draft,
+      }],
+      5,
+    );
+    page.update(cx, |page, _| {
+      page.review_state_dir = Some(state_dir.clone());
+      page.review_store_path = review_store_path_for(Some(&repo.path), Some(&state_dir));
+    });
+
+    // Track the other repo, then come back: scope = the first repo.
+    page.update_in(cx, |page, window, cx| {
+      page
+        .set_selected_repo(other.path.clone(), window, cx)
+        .expect("track the other repo");
+      page
+        .set_selected_repo(repo.path.clone(), window, cx)
+        .expect("scope back to the first repo");
+    });
+
+    page.update_in(cx, |page, window, cx| {
+      page.select_session("cross-review-b", window, cx)
+    });
+    cx.run_until_parked();
+
+    page.read_with(cx, |page, _| {
+      assert_eq!(
+        page.review_store_path.as_deref(),
+        Some(review_path_for_repo(&state_dir, &other.path).as_path()),
+        "the batch loads and persists in the SESSION's repo, not the scope"
+      );
+      let comments = page.agent_review.all();
+      assert_eq!(comments.len(), 1);
+      assert_eq!(comments[0].body.as_ref(), "from the other repo");
+    });
+
+    // A comment written here lands in the other repo's file, not the scope's.
+    page.update_in(cx, |page, window, cx| {
+      page.open_diff(
+        PathBuf::from("README.md"),
+        None,
+        OpenIntent::Open,
+        window,
+        cx,
+      );
+    });
+    await_open_file(&page, cx).await;
+    page.update_in(cx, |page, window, cx| {
+      page.create_agent_review_comment(create_request(0, "on the other repo"), window, cx);
+    });
+
+    let stored =
+      crate::agent_review_store::read_review(&review_path_for_repo(&state_dir, &other.path))
+        .expect("the other repo's batch is on disk");
+    assert_eq!(stored.comments.len(), 2);
+    assert!(
+      !review_path_for_repo(&state_dir, &repo.path).exists(),
+      "nothing leaked into the scope repo's batch"
+    );
+
+    let _ = std::fs::remove_dir_all(&state_dir);
     let _ = std::fs::remove_dir_all(&other_state);
     cleanup_worktrees_root(&repo.path);
   }
