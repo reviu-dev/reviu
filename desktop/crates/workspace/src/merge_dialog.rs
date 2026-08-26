@@ -214,6 +214,7 @@ pub(crate) fn open_merge_dialog(
 #[cfg(test)]
 mod tests {
   use std::cell::RefCell;
+  use std::time::Duration;
 
   use gpui::{TestAppContext, VisualTestContext};
 
@@ -252,6 +253,15 @@ mod tests {
     }
   }
 
+  /// The dialog's entrance slide runs on real time, so bounds captured
+  /// mid-flight sit above where the next repaint puts the button and a click
+  /// there misses. Wait it out and repaint so the layout is final.
+  fn settle_dialog_animation(cx: &mut VisualTestContext) {
+    std::thread::sleep(*gpui_component::dialog::ANIMATION_DURATION + Duration::from_millis(50));
+    cx.refresh().expect("refresh windows");
+    cx.run_until_parked();
+  }
+
   #[gpui::test]
   async fn the_form_prefills_and_hands_back_what_it_shows(cx: &mut TestAppContext) {
     type ConfirmedFields = std::rc::Rc<RefCell<Option<(Option<String>, Option<String>)>>>;
@@ -271,6 +281,7 @@ mod tests {
       );
     });
     cx.run_until_parked();
+    settle_dialog_animation(cx);
 
     assert!(cx.debug_bounds(MERGE_DIALOG_TITLE_DEBUG_SELECTOR).is_some());
     assert!(
