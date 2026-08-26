@@ -1,58 +1,58 @@
 ---
-import gitHubHomeDark from "../assets/app_screenshots/github_home_dark.png";
-import gitHubHomeLight from "../assets/app_screenshots/github_home_light.png";
-import BellIcon from "@lucide/astro/icons/bell";
-import CommandIcon from "@lucide/astro/icons/command";
-import FolderIcon from "@lucide/astro/icons/folder";
-import GitPullRequestArrowIcon from "@lucide/astro/icons/git-pull-request-arrow";
-import MonitorIcon from "@lucide/astro/icons/monitor";
-import SearchCheckIcon from "@lucide/astro/icons/search-check";
+import sessionsDark from "../assets/app_screenshots/sessions_dark.png";
+import sessionsLight from "../assets/app_screenshots/sessions_light.png";
+import FileDiffIcon from "@lucide/astro/icons/file-diff";
+import KeyRoundIcon from "@lucide/astro/icons/key-round";
+import LayersIcon from "@lucide/astro/icons/layers";
+import LockIcon from "@lucide/astro/icons/lock";
+import MessageCircleReplyIcon from "@lucide/astro/icons/message-circle-reply";
+import ReceiptTextIcon from "@lucide/astro/icons/receipt-text";
 import ThemePicture from "./ThemePicture.astro";
 import { themeImageSources } from "../lib/themeImage";
 
 const sectionImage = await themeImageSources(
-  gitHubHomeLight,
-  gitHubHomeDark,
+  sessionsLight,
+  sessionsDark,
   3020,
   1894,
 );
 
 const features = [
   {
-    name: "Keep GitHub notifications in the app",
+    name: "Parallel sessions, isolated worktrees",
     description:
-      "See unread work immediately from a desktop inbox, repo sections, and quick search.",
-    icon: BellIcon,
+      "Run several agents at once, each session in its own Git worktree. They never step on each other's changes, and you switch between them as they finish.",
+    icon: LayersIcon,
   },
   {
-    name: "Save pull request lists with filters",
+    name: "Your subscription, not an API key",
     description:
-      "Create saved pull request lists filtered by repository, label, author, assignee, reviewer, review status, and draft visibility.",
-    icon: GitPullRequestArrowIcon,
+      "Reviu drives the agent you already installed and signed into - Claude Code, Codex, Gemini, and twenty more from the official ACP registry. No key to paste, no separate inference bill.",
+    icon: KeyRoundIcon,
   },
   {
-    name: "Browse your repositories without the browser",
+    name: "The diff is always one click away",
     description:
-      "Keep your active repositories close with search, recent updates, pinned repos, and private repo visibility.",
-    icon: FolderIcon,
+      "Every file the agent touches lands in the Changes panel as it happens. Open it in a real diff editor, not a terminal scrollback.",
+    icon: FileDiffIcon,
   },
   {
-    name: "Built-in cache so nothing feels slow",
+    name: "Inline comments go back to the agent",
     description:
-      "Every GitHub request goes through a multi-tier cache with conditional fetches. Stale data is served instantly while fresh data loads in the background.",
-    icon: SearchCheckIcon,
+      "Draft review comments on the exact lines you want changed, then send the batch to the agent in one action. No copy-paste.",
+    icon: MessageCircleReplyIcon,
   },
   {
-    name: "Navigate with the command palette",
+    name: "Every turn ends with a receipt",
     description:
-      "Paste any GitHub repository, pull request, or issue URL to open it directly in the app.",
-    icon: CommandIcon,
+      "Files edited, lines added and removed, per file. Each row opens its diff, Review jumps into the diff view, and Undo reverts the turn.",
+    icon: ReceiptTextIcon,
   },
   {
-    name: "Notifications in the menu bar and system tray",
+    name: "Local and private by default",
     description:
-      "A desktop icon shows your unread count and lists recent notifications. Click one to jump straight into the app.",
-    icon: MonitorIcon,
+      "Agents run as local processes on your machine. Your code never goes through Reviu's servers.",
+    icon: LockIcon,
   },
 ];
 ---
@@ -64,16 +64,16 @@ const features = [
 >
   <div class="mx-auto max-w-7xl px-6 lg:px-8">
     <div class="reviu-reveal mx-auto max-w-2xl sm:text-center">
-      <h2 class="text-base/7 font-semibold text-primary">Reviu Pro</h2>
+      <h2 class="text-base/7 font-semibold text-primary">Agent sessions</h2>
       <p
         class="mt-2 text-4xl font-semibold tracking-tight text-pretty text-foreground sm:text-5xl sm:text-balance"
       >
-        A GitHub home page built for daily review work
+        The agent works where you review.
       </p>
       <p class="mt-6 text-lg/8 text-muted-foreground">
-        Start from one desktop home for notifications, repositories, and saved
-        pull request lists, then open the right PR, repo, or notification in one
-        click.
+        One window: sessions on the left, the conversation or the diff in the
+        centre, your repository on the right. No terminal juggling, no
+        copy-paste between apps.
       </p>
     </div>
   </div>
@@ -84,7 +84,7 @@ const features = [
     >
       <ThemePicture
         sources={sectionImage}
-        alt="Reviu GitHub home screenshot"
+        alt="Reviu agent sessions screenshot"
         loading="lazy"
         class="mb-[-12%] rounded-sm sm:rounded-xl shadow-2xl ring-1 ring-gray-900/10 dark:ring-white/10"
       />

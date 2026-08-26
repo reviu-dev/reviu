@@ -4,15 +4,16 @@ import DownloadIcon from "@lucide/astro/icons/download";
 import GithubIcon from "../assets/icons/github.svg?raw";
 import GitPullRequestIcon from "@lucide/astro/icons/git-pull-request";
 import KeyboardIcon from "@lucide/astro/icons/keyboard";
+import SparklesIcon from "@lucide/astro/icons/sparkles";
 import ZapIcon from "@lucide/astro/icons/zap";
-import gitDark from "../assets/app_screenshots/git_dark.png";
-import gitLight from "../assets/app_screenshots/git_light.png";
+import heroDark from "../assets/app_screenshots/hero_dark.png";
+import heroLight from "../assets/app_screenshots/hero_light.png";
 import LogoDark from "../assets/logo_dark.svg";
 import LogoLight from "../assets/logo_light.svg";
 import ThemePicture from "./ThemePicture.astro";
 import { themeImageSources } from "../lib/themeImage";
 
-const heroImage = await themeImageSources(gitLight, gitDark, 1400, 829);
+const heroImage = await themeImageSources(heroLight, heroDark, 1400, 829);
 ---
 
 <section
@@ -74,11 +75,18 @@ const heroImage = await themeImageSources(gitLight, gitDark, 1400, 829);
       </div>
 
       <div class="reviu-reveal mt-8 sm:mt-16" style="--reveal-delay: 100ms;">
-        <span
-          class="inline-flex rounded-full bg-primary/10 px-3 py-1 text-sm/6 font-semibold text-primary ring-1 ring-primary/20 ring-inset dark:ring-primary/25"
+        <a
+          href="/changelog"
+          data-umami-event="v1-badge-hero"
+          class="inline-flex items-center gap-2 rounded-full bg-primary/10 px-3 py-1 text-sm/6 font-semibold text-primary ring-1 ring-primary/20 ring-inset transition-colors hover:bg-primary/15 dark:ring-primary/25"
         >
-          Local Git · AI review · GitHub PRs
-        </span>
+          <span
+            class="rounded-full bg-primary px-2 py-0.5 text-xs font-semibold text-white"
+          >
+            v1.0
+          </span>
+          Reviu 1.0 is here <span aria-hidden="true">→</span>
+        </a>
       </div>
 
       <h1
@@ -92,9 +100,9 @@ const heroImage = await themeImageSources(gitLight, gitDark, 1400, 829);
         class="reviu-reveal mt-8 text-lg font-medium text-pretty text-muted-foreground sm:text-xl/8"
         style="--reveal-delay: 300ms;"
       >
-        Your agent writes the diff. You read it, comment, and send fixes back -
-        all in Reviu, free. Upgrade to Pro to review and merge GitHub pull
-        requests in the same native app.
+        Claude Code or Codex writes the diff in Reviu. You read it, comment on
+        the lines, and send fixes back - then stage, commit, and open the PR
+        with a real Git client underneath. Free for local work.
       </p>
 
       <div
@@ -110,12 +118,16 @@ const heroImage = await themeImageSources(gitLight, gitDark, 1400, 829);
           Keyboard-first
         </span>
         <span class="inline-flex items-center gap-2">
+          <SparklesIcon class="size-4 text-primary" aria-hidden="true" />
+          Parallel agent sessions
+        </span>
+        <span class="inline-flex items-center gap-2">
           <GitBranchIcon class="size-4 text-primary" aria-hidden="true" />
-          Full local Git
+          Real Git underneath
         </span>
         <span class="inline-flex items-center gap-2">
           <GitPullRequestIcon class="size-4 text-primary" aria-hidden="true" />
-          PR review in-app
+          GitHub PRs in-app
         </span>
       </div>
 

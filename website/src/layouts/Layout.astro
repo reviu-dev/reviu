@@ -22,7 +22,7 @@ interface Props {
 const site = Astro.site ?? new URL("https://reviu.dev");
 const defaultTitle = "Reviu";
 const defaultDescription =
-  "Reviu is a native Rust Git client with fast local diffs, keyboard-first workflows, and GitHub pull request review in Reviu Pro. No Electron, no webview.";
+  "Reviu is a native Rust desktop app where a coding agent works and you review every diff, with a real Git client underneath. No Electron, no webview. GitHub pull request review in Reviu Pro.";
 
 const {
   title = defaultTitle,
@@ -36,7 +36,7 @@ const {
 
 const pageTitle =
   pathname === "/" || title === defaultTitle
-    ? "Reviu - Rust Desktop Git Client"
+    ? "Reviu - Review Your Agent's Code, Real Git Client"
     : `Reviu - ${title}`;
 const canonicalUrl = new URL(pathname, site).toString();
 const imagePath = typeof image === "string" ? image : image.src;

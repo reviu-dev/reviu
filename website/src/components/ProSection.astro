@@ -1,51 +1,53 @@
 ---
-import gitHubPrChangesDark from "../assets/app_screenshots/github_pr_changes_dark.png";
-import gitHubPrChangesLight from "../assets/app_screenshots/github_pr_changes_light.png";
-import GitMergeConflictIcon from "@lucide/astro/icons/git-merge-conflict";
+import prDark from "../assets/app_screenshots/pr_dark.png";
+import prLight from "../assets/app_screenshots/pr_light.png";
+import BellIcon from "@lucide/astro/icons/bell";
 import GitMergeIcon from "@lucide/astro/icons/git-merge";
 import GitPullRequestArrowIcon from "@lucide/astro/icons/git-pull-request-arrow";
+import GitPullRequestCreateIcon from "@lucide/astro/icons/git-pull-request-create";
 import MessageCircleReplyIcon from "@lucide/astro/icons/message-circle-reply";
-import SearchCheckIcon from "@lucide/astro/icons/search-check";
+import PuzzleIcon from "@lucide/astro/icons/puzzle";
 import ThemePicture from "./ThemePicture.astro";
 import { themeImageSources } from "../lib/themeImage";
 
-const sectionImage = await themeImageSources(
-  gitHubPrChangesLight,
-  gitHubPrChangesDark,
-  3020,
-  1894,
-);
+const sectionImage = await themeImageSources(prLight, prDark, 3020, 1894);
 
 const features = [
   {
-    name: "Review the full changeset",
+    name: "The PR next to your working tree",
     description:
-      "Open pull request diffs in a desktop view with inline and split layouts.",
+      "A dock tab shows the pull request for the branch you're on: description, commits, checks, and review threads, beside the actual code.",
     icon: GitPullRequestArrowIcon,
   },
   {
-    name: "Comment where the code changed",
+    name: "Open or create it in one click",
     description:
-      "Start a review comment from the diff and keep replies tied to the exact lines under discussion.",
+      "A button in the header connects your current branch to its pull request, or creates one without leaving Reviu.",
+    icon: GitPullRequestCreateIcon,
+  },
+  {
+    name: "Review with inline comments",
+    description:
+      "Comment on the PR diff - whole changeset or commit by commit - reply, resolve threads, and submit your review from the desktop.",
     icon: MessageCircleReplyIcon,
   },
   {
-    name: "Review and merge in one place",
+    name: "Checks and merge, no browser",
     description:
-      "Approve, request changes, convert draft, or merge without bouncing back to GitHub in the browser.",
+      "Track checks and merge readiness as they update, and merge when the branch is green.",
     icon: GitMergeIcon,
   },
   {
-    name: "Resolve conflicts in the Git page",
+    name: "GitHub inbox in the sidebar",
     description:
-      "When a pull request hits merge conflicts, jump from the PR to the Git page, fix the branch locally, and keep moving.",
-    icon: GitMergeConflictIcon,
+      "Notifications land next to your sessions with an unread badge. Open one, deal with it, mark it done.",
+    icon: BellIcon,
   },
   {
-    name: "Browse the full project from the PR",
+    name: "From github.com to a local checkout",
     description:
-      "When you're on the PR branch locally, toggle unchanged files to see the surrounding code - not just what changed.",
-    icon: SearchCheckIcon,
+      "The browser extension opens a pull request in Reviu and offers to check out its branch, so you review with the whole project around it.",
+    icon: PuzzleIcon,
   },
 ];
 ---
@@ -61,11 +63,11 @@ const features = [
       <p
         class="mt-2 text-4xl font-semibold tracking-tight text-pretty text-foreground sm:text-5xl sm:text-balance"
       >
-        Desktop pull request review that stays in flow
+        Your branch's pull request, right in the dock.
       </p>
       <p class="mt-6 text-lg/8 text-muted-foreground">
-        Open pull requests in Reviu to review changed files, comment inline,
-        track checks, and merge when the branch is ready.
+        Connect GitHub and the pull request follows your work: open it next to
+        the diff, review it, track checks, and merge - without a browser tab.
       </p>
     </div>
   </div>

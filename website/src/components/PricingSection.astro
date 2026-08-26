@@ -13,13 +13,13 @@ const tiers = [
     available: true,
     price: "$0",
     description:
-      "Full local Git client for everyday development and review workflows.",
+      "Everything local: agent sessions and a full Git client, no account.",
     features: [
-      "Real-time diff editor with inline and split views",
-      "Branch, merge, rebase, stash, cherry-pick, and conflict resolution",
-      "Interactive rebase, squash, and edit commits",
-      "Keyboard-first command palette and shortcuts",
-      "AI agent panel with Claude or Codex and review-to-agent comments",
+      "Agent sessions with Claude Code or Codex, in parallel worktrees",
+      "Inline review comments sent back to the agent",
+      "Diff editor with hunk staging, inline and split views",
+      "Interactive rebase, conflict resolution, history, stash, cherry-pick",
+      "Keyboard-first command palette and built-in terminal",
     ],
     featured: false,
     cta: "Download app",
@@ -35,13 +35,13 @@ const tiers = [
     monthlyPriceSuffix: "/month",
     savePercent: "Save 27%",
     description:
-      "14-day free trial included. For developers who review pull requests every day.",
+      "14-day free trial included. For developers whose work ends in a pull request.",
     features: [
-      "GitHub notifications, saved PR lists, and repository sections",
-      "Pull request reviews with inline comments and resolved threads",
-      "Checks, merge readiness, merge actions, and auto-merge",
-      "Issues, reactions, labels, assignees, and reviewers",
-      "Browser extensions for GitHub repos, PRs, and issues",
+      "Your branch's pull request in the dock - open or create it in one click",
+      "PR review with inline comments, replies, and thread resolution",
+      "Checks, merge readiness, and merge actions",
+      "GitHub inbox in the sidebar with an unread badge",
+      "Browser extension: from github.com to a local checkout",
     ],
     featured: true,
     cta: "Download & start free trial",
@@ -50,67 +50,62 @@ const tiers = [
 
 const comparisonRows = [
   {
-    feature: "Full local Git workflow",
+    feature: "Agent sessions with Claude Code or Codex",
     free: true,
     pro: true,
   },
   {
-    feature: "Real-time diff editor",
+    feature: "Parallel sessions in isolated worktrees",
     free: true,
     pro: true,
   },
   {
-    feature: "Inline and split diff views",
+    feature: "Inline review comments sent back to the agent",
     free: true,
     pro: true,
   },
   {
-    feature: "Conflict resolution",
+    feature: "Diff editor with hunk staging, inline and split views",
     free: true,
     pro: true,
   },
   {
-    feature: "Merge, rebase, and interactive rebase",
+    feature: "Interactive rebase and conflict resolution",
     free: true,
     pro: true,
   },
   {
-    feature: "AI agent panel with Claude or Codex and review-to-agent comments",
+    feature: "Full local Git workflow, history, and built-in terminal",
     free: true,
     pro: true,
   },
   {
-    feature: "GitHub notifications and desktop notification badges",
+    feature: "Your branch's pull request in the dock",
     free: false,
     pro: true,
   },
   {
-    feature: "Review pull requests, comment inline, track checks, and merge",
+    feature: "PR review with inline comments, replies, and thread resolution",
     free: false,
     pro: true,
   },
   {
-    feature: "Resolve review threads and apply suggested changes",
+    feature: "Checks, merge readiness, and merge actions",
     free: false,
     pro: true,
   },
   {
-    feature: "Move between your local branch and its pull request",
+    feature: "Create a pull request from your local branch",
     free: false,
     pro: true,
   },
   {
-    feature: "Saved pull request lists with filters",
+    feature: "GitHub inbox with unread badge",
     free: false,
     pro: true,
   },
   {
-    feature: "Browse GitHub repositories, pull requests, and issues",
-    free: false,
-    pro: true,
-  },
-  {
-    feature: "Open GitHub repos, pull requests, and issues from the browser",
+    feature: "Browser extension: open a PR as a local checkout",
     free: false,
     pro: true,
   },
@@ -129,12 +124,13 @@ const comparisonRows = [
       <p
         class="mt-2 text-4xl font-semibold tracking-tight text-balance text-foreground sm:text-5xl"
       >
-        Free for local Git. Pro for GitHub review workflows.
+        Free for local work. Pro when it ends in a pull request.
       </p>
       <p
         class="mx-auto mt-6 max-w-2xl text-center text-lg font-medium text-pretty text-gray-600 sm:text-xl/8 dark:text-gray-400"
       >
-        Use Free for complete local Git workflows, then upgrade to Pro when GitHub becomes part of your daily review loop.
+        Agent sessions and the full Git client are free, no account needed. Pro
+        connects GitHub to the same window.
       </p>
     </div>
 
@@ -245,9 +241,9 @@ const comparisonRows = [
           Compare Free and Pro
         </h3>
         <p class="mt-3 text-base text-muted-foreground sm:text-lg">
-          Free covers the full local Git workflow. Pro keeps all of that and
-          adds GitHub notifications, repository context, issue work, and pull
-          request review.
+          Free covers agent sessions and the full local Git workflow. Pro keeps
+          all of that and adds GitHub pull request review, checks, merge, and
+          the inbox.
         </p>
       </div>
 

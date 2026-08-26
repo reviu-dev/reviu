@@ -1,39 +1,44 @@
 ---
 import HeroSection from "../components/HeroSection.astro";
-import DownloadSection from "../components/DownloadSection.astro";
-import GitHubHomeFeaturesSection from "../components/GitHubHomeFeaturesSection.astro";
-import GitHubPRFeaturesSection from "../components/GitHubPRFeaturesSection.astro";
+import ReviewLoopSection from "../components/ReviewLoopSection.astro";
+import AgentSessionsSection from "../components/AgentSessionsSection.astro";
 import GitFeaturesSection from "../components/GitFeaturesSection.astro";
+import ProSection from "../components/ProSection.astro";
 import PricingSection from "../components/PricingSection.astro";
 import BrowserExtensionsSection from "../components/BrowserExtensionsSection.astro";
-import SwitchToReviuSection from "../components/SwitchToReviuSection.astro";
+import DownloadSection from "../components/DownloadSection.astro";
 import FaqSection from "../components/FaqSection.astro";
 import SiteFooter from "../components/SiteFooter.astro";
 import Layout from "../layouts/Layout.astro";
 
 const description =
-  "Reviu is a native Rust desktop Git client for reviewing your AI agent's code before you push, with a built-in Claude and Codex agent panel, free local Git workflows, and GitHub notifications, repositories, issues, pull request review, and merge actions in Reviu Pro.";
+  "Reviu is a native Rust desktop app where Claude Code or Codex writes the diff and you review it for real: inline comments back to the agent, hunk staging, interactive rebase, conflicts, and history - free. Reviu Pro puts your branch's GitHub pull request, checks, and merge in the same window.";
 
 const faqItems: { question: string; answer: string }[] = [
   {
     question: "What is Reviu?",
     answer:
-      "Reviu is a native desktop Git client built with Rust and GPUI for reviewing your AI agent's code before you push. Use it free for local Git and the built-in Claude or Codex agent panel, or upgrade to Reviu Pro for GitHub notifications, repositories, issues, and pull request review in the same app.",
+      "Reviu is a native desktop app built with Rust and GPUI where a coding agent works and you review what it did, with a real Git client underneath. Run Claude Code or Codex in agent sessions, read every diff, send fixes back, then stage, commit, and push - all free. Reviu Pro adds GitHub: your branch's pull request in the dock, review, checks, merge, and a notifications inbox.",
+  },
+  {
+    question: "Which agents does Reviu support?",
+    answer:
+      "Any agent from the official Agent Client Protocol registry: Claude Code, Codex, Gemini, Copilot, Cline, and about twenty others. Reviu drives the CLI you already installed and signed into, so agents run with your existing subscription - no API key to paste. Agents run as local processes on your machine.",
   },
   {
     question: "Can I review my agent's code inside Reviu?",
     answer:
-      "Yes. Reviu has a built-in agent panel that runs Claude or Codex from the sidebar. Review the diff your agent produced, leave inline review comments on the lines you want changed, and send them back to the agent without copy-paste. The agent panel is free and works on local changes.",
+      "Yes, that's the point. Review the diff your agent produced in a real editor, leave inline review comments on the lines you want changed, and send them back to the agent without copy-paste. You can also run several sessions in parallel, each in its own isolated Git worktree.",
   },
   {
     question: "Why use Reviu if I already use Fork, Tower, or GitKraken?",
     answer:
-      "Reviu is built for the loop from agent diff to GitHub merge. Free covers local Git plus the built-in Claude or Codex agent panel. Pro adds saved pull request lists, notifications, issue context, inline review comments, checks, merge readiness, and browser-to-desktop shortcuts.",
+      "Those are strong Git clients. Reviu is built for the loop that starts before the commit: the agent writes the diff in the same window, you review it and send fixes back. You still keep a full Git client - hunk staging, interactive rebase, conflicts, history - and Pro adds your branch's pull request in the dock.",
   },
   {
     question: "How is Reviu different from GitHub Desktop?",
     answer:
-      "GitHub Desktop is great for opening a pull request branch locally. Reviu Pro goes deeper into review work with inline comments, replies, resolved threads, checks, issue context, and merge actions inside the desktop app.",
+      "GitHub Desktop is great for opening a pull request branch locally. Reviu keeps the pull request next to your working tree: review with inline comments, reply, resolve threads, track checks, and merge from the desktop - plus the agent sessions and a deeper local Git toolset.",
   },
   {
     question: "Is Reviu built with a webview?",
@@ -48,7 +53,7 @@ const faqItems: { question: string; answer: string }[] = [
   {
     question: "Do I need an account to use Reviu?",
     answer:
-      "No. All local Git features work without an account, signing in is only required for GitHub integration in Reviu Pro.",
+      "No. Agent sessions and all local Git features work without an account. Signing in is only required for the GitHub integration in Reviu Pro.",
   },
   {
     question: "Which platforms does Reviu support?",
@@ -89,18 +94,18 @@ const structuredData = [
     ],
     featureList: [
       "Native Rust GPU-accelerated desktop application",
-      "Keyboard-first Git command palette",
-      "Real-time diff editor",
-      "Inline and split diff views",
-      "AI agent panel with Claude and Codex",
-      "Review-to-agent inline comments on local diffs",
-      "GitHub notifications",
-      "Saved GitHub pull request lists",
-      "GitHub repository browsing",
-      "GitHub pull request review",
-      "GitHub pull request checks and merge actions",
-      "GitHub issues context",
-      "Browser extensions for GitHub repositories, pull requests, and issues",
+      "Agent sessions with Claude Code and Codex",
+      "Parallel agent sessions in isolated Git worktrees",
+      "Inline review comments sent back to the agent",
+      "Real-time diff editor with inline and split views",
+      "Hunk-level staging, editing, and restore in the diff",
+      "Interactive rebase and conflict resolution",
+      "Commit history with per-commit file views",
+      "Built-in terminal",
+      "Keyboard-first command palette",
+      "GitHub pull request review, checks, and merge in Reviu Pro",
+      "GitHub notifications inbox in Reviu Pro",
+      "Browser extension that opens pull requests as local checkouts",
     ],
   },
   {
@@ -121,10 +126,10 @@ const structuredData = [
 <Layout description={description} pathname="/" structuredData={structuredData}>
   <main>
     <HeroSection />
+    <ReviewLoopSection />
+    <AgentSessionsSection />
     <GitFeaturesSection />
-    <GitHubHomeFeaturesSection />
-    <GitHubPRFeaturesSection />
-    <SwitchToReviuSection />
+    <ProSection />
     <PricingSection />
     <BrowserExtensionsSection />
     <DownloadSection />

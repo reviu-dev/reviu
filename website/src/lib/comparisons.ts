@@ -23,7 +23,7 @@ export const reviuColumn: Record<RowId, string> = {
   price: "Free local Git, Pro $9/mo or $79/yr",
   source: "Yes, FSL-1.1 (Apache-2.0 after 2 years)",
   palette: "Yes, every Git action",
-  agent: "Yes, Claude and Codex, free",
+  agent: "Yes - Claude Code, Codex, and 20+ ACP agents, free",
   prReview: "Yes, inline/split diff, comments, checks, merge (Pro)",
 };
 
