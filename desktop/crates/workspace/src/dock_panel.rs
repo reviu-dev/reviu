@@ -2840,11 +2840,12 @@ impl DockPanel {
     if checks.is_some() && !rows.is_empty() {
       // Six rows on screen, the rest a scroll away: a wide CI must not push
       // the file list out of the panel.
+      // overflow_y_scrollbar brings its own tracked scroll area: adding
+      // overflow_y_scroll here would steal the wheel from the scrollbar.
       let mut list = v_flex()
         .id("dock-panel-pr-checks-rows")
         .w_full()
         .max_h(px(300.))
-        .overflow_y_scroll()
         .gap_0p5()
         .px_1()
         .pb_2();
