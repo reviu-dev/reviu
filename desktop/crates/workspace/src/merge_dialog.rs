@@ -4,8 +4,8 @@
 use std::rc::Rc;
 
 use gpui::{
-  App, Context, Entity, FocusHandle, Focusable, IntoElement, ParentElement, Render, Styled, Window,
-  div, prelude::*, px,
+  App, Context, Entity, FocusHandle, Focusable as _, IntoElement, ParentElement, Render, Styled,
+  Window, div, prelude::*, px,
 };
 use gpui_component::{
   ActiveTheme as _,
@@ -29,7 +29,6 @@ struct MergeDialog {
   method: GithubPullRequestMergeMethod,
   /// `None` when the method takes no commit inputs (rebase).
   inputs: Option<MergeDialogInputs>,
-  focus_handle: FocusHandle,
   on_confirmed: MergeConfirmedHandler,
 }
 
@@ -71,9 +70,17 @@ impl MergeDialog {
       number,
       method,
       inputs,
-      focus_handle: cx.focus_handle(),
       on_confirmed,
     }
+  }
+
+  /// Rebase has no input: the dialog's own focus stays put, so Escape and the
+  /// close button keep reaching it.
+  fn input_focus_handle(&self, cx: &App) -> Option<FocusHandle> {
+    self
+      .inputs
+      .as_ref()
+      .map(|inputs| inputs.title.read(cx).focus_handle(cx))
   }
 
   fn confirm(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -97,15 +104,6 @@ impl MergeDialog {
       GithubPullRequestMergeMethod::Rebase => {
         format!("The commits of #{number} land on the base branch as they are, messages included.")
       }
-    }
-  }
-}
-
-impl Focusable for MergeDialog {
-  fn focus_handle(&self, cx: &App) -> FocusHandle {
-    match &self.inputs {
-      Some(inputs) => inputs.title.read(cx).focus_handle(cx),
-      None => self.focus_handle.clone(),
     }
   }
 }
@@ -207,8 +205,9 @@ pub(crate) fn open_merge_dialog(
   });
 
   window.on_next_frame(move |window, cx| {
-    let focus_handle = dialog_for_focus.read(cx).focus_handle(cx);
-    window.focus(&focus_handle, cx);
+    if let Some(focus_handle) = dialog_for_focus.read(cx).input_focus_handle(cx) {
+      window.focus(&focus_handle, cx);
+    }
   });
 }
 
@@ -293,6 +292,30 @@ mod tests {
         Some("* first\n\n* second".to_string()),
       ))
     );
+    assert!(!cx.update(|window, cx| window.has_active_dialog(cx)));
+  }
+
+  #[gpui::test]
+  async fn escape_closes_the_dialog_even_without_inputs(cx: &mut TestAppContext) {
+    let cx = dialog_page(cx);
+    cx.update(|window, cx| {
+      open_merge_dialog(
+        42,
+        GithubPullRequestMergeMethod::Rebase,
+        None,
+        std::rc::Rc::new(|_, _, _| {}),
+        window,
+        cx,
+      );
+    });
+    cx.run_until_parked();
+    assert!(cx.update(|window, cx| window.has_active_dialog(cx)));
+
+    // No input to hand focus to: the dialog's own focus must stay, or Escape
+    // and the close button dispatch into the void.
+    cx.simulate_keystrokes("escape");
+    cx.run_until_parked();
+
     assert!(!cx.update(|window, cx| window.has_active_dialog(cx)));
   }
 

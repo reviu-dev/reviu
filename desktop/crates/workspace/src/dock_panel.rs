@@ -576,6 +576,9 @@ pub struct DockPanel {
   /// The viewer's remembered method for this repository, kept only while the
   /// repository allows it.
   selected_merge_method: Option<GithubPullRequestMergeMethod>,
+  /// An asked-for refresh spins the button until the lookup lands: rereads are
+  /// deliberately silent otherwise, so the click needs its own answer.
+  pr_refreshing: bool,
   pr_merging: bool,
   _pr_merge_task: Option<Task<()>>,
   /// Collapsed by default: the file list is what you work in.
@@ -818,6 +821,7 @@ impl DockPanel {
       pr_checks_loading: false,
       pr_merge_readiness: None,
       selected_merge_method: None,
+      pr_refreshing: false,
       pr_merging: false,
       _pr_merge_task: None,
       pr_details_expanded: false,
@@ -884,7 +888,9 @@ impl DockPanel {
 
   /// The refresh button: being asked is reason enough to read GitHub again.
   pub(crate) fn refresh_requested(&mut self, cx: &mut Context<Self>) {
+    self.pr_refreshing = true;
     self.refresh_all(PullRequestRefresh::Now, cx);
+    cx.notify();
   }
 
   fn refresh_all(&mut self, refresh: PullRequestRefresh, cx: &mut Context<Self>) {
@@ -953,9 +959,11 @@ impl DockPanel {
 
   fn refresh_branch_pull_request(&mut self, refresh: PullRequestRefresh, cx: &mut Context<Self>) {
     let Some(repo_root) = self.repo_root.clone() else {
+      self.pr_refreshing = false;
       return;
     };
     if !AuthStateStore::has_github_access(cx) {
+      self.pr_refreshing = false;
       self.pr_fetched_at = None;
       self.set_branch_pr(BranchPrState::NoAccess, cx);
       self
@@ -965,6 +973,7 @@ impl DockPanel {
       return;
     }
     if !should_read_pull_request(refresh, self.pr_fetched_at, cx.background_executor().now()) {
+      self.pr_refreshing = false;
       return;
     }
 
@@ -1000,6 +1009,7 @@ impl DockPanel {
         .await;
 
       let _ = this.update(cx, |this, cx| {
+        this.pr_refreshing = false;
         this.pr_fetched_at = Some(cx.background_executor().now());
         this.pr_branch = branch;
         this.apply_branch_pull_request(state, cx);
@@ -3057,6 +3067,7 @@ impl Render for DockPanel {
                 .compact()
                 .small()
                 .tooltip("Refresh")
+                .loading(self.pr_refreshing)
                 .on_click(cx.listener(|this, _, _, cx| this.refresh_requested(cx))),
             )
           })
@@ -5404,6 +5415,21 @@ mod tests {
       !still_holds_its_pull_request(&panel, cx),
       "being asked is a reason"
     );
+  }
+
+  #[gpui::test]
+  async fn the_refresh_button_answers_the_click_until_the_read_lands(cx: &mut TestAppContext) {
+    let (panel, cx) = a_read_pull_request(cx);
+
+    panel.update(cx, |panel, cx| panel.refresh_requested(cx));
+    panel.read_with(cx, |panel, _| {
+      assert!(panel.pr_refreshing, "the click has to show as taken");
+    });
+
+    cx.run_until_parked();
+    panel.read_with(cx, |panel, _| {
+      assert!(!panel.pr_refreshing, "the read landed, the button rests");
+    });
   }
 
   #[gpui::test]

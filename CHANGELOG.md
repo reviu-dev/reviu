@@ -10,6 +10,10 @@ The merge button now carries a chevron listing the other merge methods the repos
 
 Confirming a merge opens a small form prefilled with exactly what GitHub would generate for the commit title and message, following the repository's merge-message settings - down to the squash bullet list and its Co-authored-by trailers. Edit them, or clear a field to let GitHub write it. Rebase shows no fields, since it keeps the commits as they are.
 
+### The Refresh Button Shows It Heard You
+
+Clicking refresh in the right dock rereads everything - git status, the pull request, its comments and checks - but did so in complete silence, looking like a dead button. It now spins until the pull request read lands. The panel still refreshes itself when it gets stale (a minute) and on events like opening the tab or switching branches; the button remains the way to force a read right now.
+
 ### Palette Commands That Ask Before Acting Work Again
 
 Running Discard review from the command palette did nothing: the palette closed the confirmation the command had just opened instead of closing itself. Every palette command that opens a dialog (a confirmation, the review submit form) was affected. The palette now leaves the screen before its command runs.
