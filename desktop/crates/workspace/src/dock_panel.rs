@@ -619,6 +619,7 @@ pub struct DockPanel {
   /// The viewer's remembered method for this repository, kept only while the
   /// repository allows it.
   selected_merge_method: Option<GithubPullRequestMergeMethod>,
+  pr_checks_scroll: gpui::ScrollHandle,
   /// An asked-for refresh spins the button until everything it triggered has
   /// landed: the lookup, then the range and checks reads it fans out to.
   /// Rereads are deliberately silent otherwise, so the click needs its answer.
@@ -866,6 +867,7 @@ impl DockPanel {
       pr_checks_loading: false,
       pr_merge_readiness: None,
       selected_merge_method: None,
+      pr_checks_scroll: gpui::ScrollHandle::new(),
       pr_refresh_pending: 0,
       pr_merging: false,
       _pr_merge_task: None,
@@ -2838,21 +2840,26 @@ impl DockPanel {
     }
 
     if checks.is_some() && !rows.is_empty() {
-      // Six rows on screen, the rest a scroll away: a wide CI must not push
-      // the file list out of the panel.
-      // overflow_y_scrollbar brings its own tracked scroll area: adding
-      // overflow_y_scroll here would steal the wheel from the scrollbar.
+      // Six-or-so rows on screen, the rest behind a real scrollbar: a wide CI
+      // must not push the file list out of the panel.
       let mut list = v_flex()
         .id("dock-panel-pr-checks-rows")
         .w_full()
         .max_h(px(300.))
+        .overflow_y_scroll()
+        .track_scroll(&self.pr_checks_scroll)
         .gap_0p5()
         .px_1()
         .pb_2();
       for row in rows {
         list = list.child(render_check_row(&row, &theme, cx));
       }
-      block = block.child(list.overflow_y_scrollbar());
+      block = block.child(
+        div()
+          .relative()
+          .child(list)
+          .vertical_scrollbar(&self.pr_checks_scroll),
+      );
     }
 
     if !self.pr_reviewers.is_empty() {
