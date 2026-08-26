@@ -3620,6 +3620,62 @@ async fn escape_cancels_the_message_edit_and_refocuses_the_composer(cx: &mut gpu
 }
 
 #[gpui::test]
+async fn enter_submits_the_message_edit_and_shift_enter_stays_a_newline(
+  cx: &mut gpui::TestAppContext,
+) {
+  let (panel, cx) = add_panel_window(cx);
+  panel.update(cx, |panel, cx| {
+    panel.status = Status::Ready;
+    panel.items = vec![checkpoint_item("cp-1"), user_message("old prompt")];
+    panel.sync_list_count();
+    cx.notify();
+  });
+  cx.run_until_parked();
+
+  panel.update_in(cx, |panel, window, cx| {
+    panel.begin_message_edit(1, window, cx);
+  });
+  cx.run_until_parked();
+
+  cx.simulate_keystrokes("shift-enter");
+  cx.run_until_parked();
+  panel.read_with(cx, |panel, cx| {
+    assert_eq!(panel.editing_message, Some(1), "shift-enter keeps editing");
+    let value = panel
+      .edit_input
+      .as_ref()
+      .expect("edit editor")
+      .read(cx)
+      .value()
+      .to_string();
+    assert!(
+      value.contains('\n'),
+      "shift-enter inserts a newline: {value:?}"
+    );
+  });
+
+  panel.update_in(cx, |panel, window, cx| {
+    let input = panel.edit_input.clone().expect("edit editor");
+    input.update(cx, |state, cx| state.set_value("new prompt", window, cx));
+  });
+  cx.simulate_keystrokes("enter");
+  cx.run_until_parked();
+  panel.read_with(cx, |panel, cx| {
+    assert_eq!(
+      panel.pending_edit_resubmit,
+      Some(("cp-1".to_string(), "new prompt".to_string())),
+      "enter submits the edit"
+    );
+    assert!(panel.editing_message.is_none());
+    let composer = panel.input.read(cx).value().to_string();
+    assert!(
+      composer.is_empty(),
+      "no newline leaked anywhere: {composer:?}"
+    );
+  });
+}
+
+#[gpui::test]
 async fn the_copy_button_works_on_agent_messages_too(cx: &mut gpui::TestAppContext) {
   let (panel, cx) = add_panel_window(cx);
   panel.update(cx, |panel, cx| {

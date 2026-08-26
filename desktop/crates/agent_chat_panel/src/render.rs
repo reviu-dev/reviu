@@ -2451,6 +2451,13 @@ impl AgentChatPanel {
               window.focus(&panel.input.read(cx).focus_handle(cx), cx);
               cx.stop_propagation();
             }))
+            // The textarea propagates a submitting Enter; unstopped, the
+            // keystroke falls through and types "\n" into the input.
+            .on_action(cx.listener(|_, action: &input::Enter, _, cx| {
+              if !action.shift {
+                cx.stop_propagation();
+              }
+            }))
             .mb_3()
             .gap_0p5()
             .items_end()

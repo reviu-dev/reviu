@@ -706,6 +706,7 @@ pub struct AgentChatPanel {
   /// Item index of the user message being edited, with its inline editor.
   editing_message: Option<usize>,
   edit_input: Option<Entity<TextareaState>>,
+  edit_input_sub: Option<gpui::Subscription>,
   /// Armed on Send of an edit: (checkpoint ref, new text). Consumed only by
   /// the truncate for that ref, so a failed rollback never resubmits.
   pending_edit_resubmit: Option<(String, String)>,
@@ -804,6 +805,7 @@ impl AgentChatPanel {
       available_commands: Vec::new(),
       editing_message: None,
       edit_input: None,
+      edit_input_sub: None,
       pending_edit_resubmit: None,
       resubmit_after_connect: None,
       slash_selected_ix: 0,
@@ -1312,6 +1314,7 @@ impl AgentChatPanel {
       available_commands: Vec::new(),
       editing_message: None,
       edit_input: None,
+      edit_input_sub: None,
       pending_edit_resubmit: None,
       resubmit_after_connect: None,
       slash_selected_ix: 0,
@@ -2174,9 +2177,19 @@ impl AgentChatPanel {
     let input = cx.new(|cx| {
       TextareaState::new(window, cx)
         .auto_grow(estimated_rows, 8)
+        .submit_on_enter(true)
         .default_value(text)
     });
     window.focus(&input.read(cx).focus_handle(cx), cx);
+    self.edit_input_sub = Some(cx.subscribe_in(
+      &input,
+      window,
+      |this, _state, event: &InputEvent, _window, cx| {
+        if let InputEvent::PressEnter { shift: false, .. } = event {
+          this.submit_message_edit(cx);
+        }
+      },
+    ));
     self.edit_input = Some(input);
     self.editing_message = Some(idx);
     self.mark_item_changed_at(self.list_ix_for_item(idx));
@@ -2186,6 +2199,7 @@ impl AgentChatPanel {
   pub fn cancel_message_edit(&mut self, cx: &mut Context<Self>) {
     if let Some(idx) = self.editing_message.take() {
       self.edit_input = None;
+      self.edit_input_sub = None;
       self.mark_item_changed_at(self.list_ix_for_item(idx));
       cx.notify();
     }
@@ -2212,6 +2226,7 @@ impl AgentChatPanel {
     };
     self.editing_message = None;
     self.edit_input = None;
+    self.edit_input_sub = None;
     self.pending_edit_resubmit = Some((ref_name.clone(), text));
     cx.emit(AgentChatPanelEvent::RollbackRequested { ref_name });
     cx.notify();
@@ -2366,6 +2381,7 @@ impl AgentChatPanel {
     };
     self.editing_message = None;
     self.edit_input = None;
+    self.edit_input_sub = None;
     if let Some((armed_ref, text)) = self.pending_edit_resubmit.take()
       && armed_ref == ref_name
     {
