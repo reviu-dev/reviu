@@ -3068,6 +3068,7 @@ impl Render for DockPanel {
                 .small()
                 .tooltip("Refresh")
                 .loading(self.pr_refreshing)
+                .loading_icon(gpui_component::Icon::new(UiIconName::RefreshCw))
                 .on_click(cx.listener(|this, _, _, cx| this.refresh_requested(cx))),
             )
           })
