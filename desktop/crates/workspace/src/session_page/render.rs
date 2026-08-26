@@ -1432,6 +1432,82 @@ mod tests {
   }
 
   #[gpui::test]
+  async fn a_pinned_checkout_shows_its_own_diff(cx: &mut TestAppContext) {
+    let repo = TempRepo::init("session-page-pin-diff");
+    commit_text_file(&repo.path, Path::new("README.md"), "main text\n", "initial");
+    let worktree = git::create_worktree(&repo.path, None).expect("create worktree");
+    std::fs::write(worktree.path.join("README.md"), "worktree text\n")
+      .expect("edit the file in the worktree");
+
+    let (page, cx) = add_session_page_window(repo.path.clone(), cx);
+    cx.run_until_parked();
+
+    page.update_in(cx, |page, window, cx| {
+      page.open_diff(
+        PathBuf::from("README.md"),
+        None,
+        OpenIntent::Open,
+        window,
+        cx,
+      );
+    });
+    await_open_file(&page, cx).await;
+    page.read_with(cx, |page, cx| {
+      let editor = page.editor.as_ref().expect("editor").read(cx);
+      let first_line = editor
+        .document()
+        .read(cx)
+        .line_content(0)
+        .expect("first line")
+        .to_string();
+      assert_eq!(first_line.trim_end(), "main text");
+    });
+
+    // The open diff belongs to the checkout being left: pinning closes it.
+    page.update_in(cx, |page, window, cx| {
+      page.pin_checkout(worktree.path.clone(), window, cx);
+    });
+    cx.run_until_parked();
+    page.read_with(cx, |page, _| {
+      assert!(page.editor.is_none());
+      assert!(page.selected_file.is_none());
+    });
+
+    // The same path now reads the pinned worktree's file, and the dock lists
+    // that checkout's change.
+    page.update_in(cx, |page, window, cx| {
+      page.open_diff(
+        PathBuf::from("README.md"),
+        None,
+        OpenIntent::Open,
+        window,
+        cx,
+      );
+    });
+    await_open_file(&page, cx).await;
+    await_editor_diff(&page, cx).await;
+    page.read_with(cx, |page, cx| {
+      let editor = page.editor.as_ref().expect("editor").read(cx);
+      let first_line = editor
+        .document()
+        .read(cx)
+        .line_content(0)
+        .expect("first line")
+        .to_string();
+      assert_eq!(first_line.trim_end(), "worktree text");
+      assert!(
+        page
+          .dock_panel
+          .read(cx)
+          .status_entries()
+          .iter()
+          .any(|entry| entry.path == Path::new("README.md")),
+        "the changes list follows the pinned checkout"
+      );
+    });
+  }
+
+  #[gpui::test]
   async fn the_dock_offers_the_checkouts_and_wears_its_pin(cx: &mut TestAppContext) {
     let repo = TempRepo::init("session-page-checkout-selector");
     commit_text_file(&repo.path, Path::new("README.md"), "v1\n", "initial");
