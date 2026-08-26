@@ -4797,6 +4797,9 @@ impl Editor {
         .when(first_message.is_pending, |this| {
           this.child(Tag::color(ColorName::Amber).child("Pending"))
         })
+        .when(first_message.is_outdated, |this| {
+          this.child(Tag::color(ColorName::Orange).child("Outdated"))
+        })
         .when(wears_resolved_tag, |this| {
           this.child(Tag::color(ColorName::Green).child("Resolved"))
         })
