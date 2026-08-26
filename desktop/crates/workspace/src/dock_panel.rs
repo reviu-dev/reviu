@@ -1,5 +1,6 @@
 //! The right dock of the shell: changes, files, history, pull request, terminal.
 
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Instant;
@@ -35,8 +36,9 @@ use crate::pull_request_refresh::{
   PullRequestRefresh, branch_switched_since_lookup, should_read_pull_request,
 };
 use crate::pull_request_review_comments::{
-  ReviewCommentWrite, comment_line, pending_review_comment_node_id, pending_review_id,
-  pending_review_rows, review_comment_write_plan,
+  FileCommentCounts, ReviewCommentWrite, comment_line, file_comment_counts,
+  pending_review_comment_node_id, pending_review_id, pending_review_rows,
+  review_comment_write_plan,
 };
 use crate::pull_request_review_submission::review_submission_target;
 use crate::repo_state::{PaletteCommand, RepoState, push_flags, should_publish_branch};
@@ -201,6 +203,7 @@ impl CommitMenuCommand {
 struct PrFilesDelegate {
   panel: WeakEntity<DockPanel>,
   files: Vec<git::CommitChangedFile>,
+  comment_counts: HashMap<PathBuf, FileCommentCounts>,
   selected_index: Option<IndexPath>,
 }
 
@@ -209,6 +212,7 @@ impl PrFilesDelegate {
     Self {
       panel,
       files: Vec::new(),
+      comment_counts: HashMap::new(),
       selected_index: None,
     }
   }
@@ -236,6 +240,7 @@ impl ListDelegate for PrFilesDelegate {
     let path = file.path.clone();
     let status = history_change_kind_to_repo_status(file.kind);
     let old_path = file.old_path.clone();
+    let comments = self.comment_counts.get(&path).copied();
     let selected = self
       .selected_index
       .map(|selected| selected.eq_row(ix))
@@ -270,6 +275,29 @@ impl ListDelegate for PrFilesDelegate {
                 .truncate()
                 .child(file_dir_label(&path)),
             )
+            .when_some(comments, |this, comments| {
+              // Unsent comments call for the eye; published ones just say the
+              // file has words on it.
+              let color = if comments.pending > 0 {
+                theme.primary
+              } else {
+                theme.muted_foreground
+              };
+              this.child(
+                h_flex()
+                  .flex_shrink_0()
+                  .items_center()
+                  .gap_0p5()
+                  .text_xs()
+                  .text_color(color)
+                  .child(
+                    Icon::new(UiIconName::MessageCircle)
+                      .size_3()
+                      .text_color(color),
+                  )
+                  .child(comments.total.to_string()),
+              )
+            })
             .child(
               div()
                 .flex_shrink_0()
@@ -368,6 +396,15 @@ fn render_reviewer_avatars(reviewers: &[ReviewerRow], theme: &gpui_component::Th
 
 fn render_reviewer_row(reviewer: &ReviewerRow, theme: &gpui_component::Theme) -> AnyElement {
   h_flex()
+    .id(SharedString::from(format!(
+      "pr-reviewer-{}",
+      reviewer.login
+    )))
+    .when_some(reviewer.latest_message.clone(), |this, message| {
+      this.tooltip(move |window, cx| {
+        gpui_component::tooltip::Tooltip::new(message.clone()).build(window, cx)
+      })
+    })
     .w_full()
     .items_center()
     .gap_2()
@@ -1233,9 +1270,14 @@ impl DockPanel {
       .review_list
       .update(cx, |list, cx| list.set_pull_request_loading(false, cx));
     let rows = pending_review_rows(&comments);
+    let counts = file_comment_counts(&comments);
     self.pr_review_comments = comments;
     self.review_list.update(cx, |list, cx| {
       list.set_comments(ReviewSection::PullRequest, rows, cx);
+    });
+    self.pr_files_list.update(cx, |list, cx| {
+      list.delegate_mut().comment_counts = counts;
+      cx.notify();
     });
     if let Some(comment_id) = self.awaited_review_comment.take() {
       self.open_review_comment(comment_id, cx);
@@ -1302,6 +1344,15 @@ impl DockPanel {
   /// comment while an unsubmitted review is open.
   pub(crate) fn has_pending_pull_request_review(&self) -> bool {
     pending_review_id(&self.pr_review_comments).is_some()
+  }
+
+  /// Comments written but not submitted: work the rail's dot must point at.
+  pub(crate) fn pending_pull_request_comment_count(&self) -> usize {
+    self
+      .pr_review_comments
+      .iter()
+      .filter(|comment| comment.is_pending)
+      .count()
   }
 
   /// GitHub is the source of truth for a pending review, so what it holds is
@@ -1378,6 +1429,12 @@ impl DockPanel {
           login: user.login.clone(),
           avatar_url: user.avatar_url.clone(),
           status,
+          latest_message: review
+            .body
+            .as_deref()
+            .map(str::trim)
+            .filter(|body| !body.is_empty())
+            .map(str::to_string),
         });
       }
     }
@@ -3842,6 +3899,7 @@ mod tests {
         login: "ada".to_string(),
         avatar_url: None,
         status: ReviewerStatus::Approved,
+        latest_message: None,
       }];
       panel.pr_selected_file = Some(PathBuf::from("src/main.rs"));
       panel.set_pull_request_review_comments(
@@ -4183,6 +4241,7 @@ mod tests {
         login: "ada".to_string(),
         avatar_url: None,
         status: ReviewerStatus::Approved,
+        latest_message: None,
       }];
       panel.pr_details_expanded = true;
       cx.notify();
@@ -4210,6 +4269,7 @@ mod tests {
         login: "ada".to_string(),
         avatar_url: None,
         status: ReviewerStatus::Approved,
+        latest_message: None,
       }];
       cx.notify();
     });
@@ -4357,6 +4417,7 @@ mod tests {
       login: login.to_string(),
       avatar_url: None,
       status: ReviewerStatus::Awaiting,
+      latest_message: None,
     }
   }
 
@@ -4388,6 +4449,7 @@ mod tests {
         login: "octocat".to_string(),
         avatar_url: None,
         status: ReviewerStatus::Approved,
+        latest_message: None,
       }];
       panel.apply_submitted_review_overlay();
       panel.pr_reviewers = vec![awaiting_row("octocat")];
@@ -4395,6 +4457,46 @@ mod tests {
     });
     panel.read_with(cx, |panel, _| {
       assert_eq!(panel.pr_reviewers[0].status, ReviewerStatus::Awaiting);
+    });
+  }
+
+  #[gpui::test]
+  async fn the_file_rows_learn_their_comment_counts_with_the_comments(cx: &mut TestAppContext) {
+    let (panel, cx) = pull_request_panel(
+      cx,
+      vec![changed_file(
+        "src/main.rs",
+        git::CommitFileChangeKind::Modified,
+      )],
+    );
+    panel.update(cx, |panel, cx| {
+      panel.set_pull_request_review_comments(
+        vec![
+          crate::pull_request_review_comments::pending_comment_fixture(
+            1,
+            "src/main.rs",
+            Some(12),
+            "rename this",
+          ),
+        ],
+        cx,
+      );
+    });
+
+    panel.read_with(cx, |panel, cx| {
+      let counts = panel
+        .pr_files_list
+        .read(cx)
+        .delegate()
+        .comment_counts
+        .clone();
+      assert_eq!(
+        counts.get(Path::new("src/main.rs")),
+        Some(&crate::pull_request_review_comments::FileCommentCounts {
+          total: 1,
+          pending: 1
+        })
+      );
     });
   }
 
@@ -4471,6 +4573,7 @@ mod tests {
         login: "ada".to_string(),
         avatar_url: None,
         status: ReviewerStatus::Awaiting,
+        latest_message: None,
       }];
       cx.notify();
     });

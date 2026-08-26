@@ -26,6 +26,30 @@ pub(crate) fn pending_review_id(comments: &[GithubPullRequestReviewComment]) -> 
     .find_map(|comment| comment.pull_request_review_node_id.clone())
 }
 
+/// How many comments hang on each file, and how many of them still wait to be
+/// submitted. Replies count: they are words on the file too.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct FileCommentCounts {
+  pub total: usize,
+  pub pending: usize,
+}
+
+pub(crate) fn file_comment_counts(
+  comments: &[GithubPullRequestReviewComment],
+) -> HashMap<PathBuf, FileCommentCounts> {
+  let mut counts: HashMap<PathBuf, FileCommentCounts> = HashMap::new();
+  for comment in comments {
+    let entry = counts
+      .entry(PathBuf::from(comment.path.as_str()))
+      .or_default();
+    entry.total += 1;
+    if comment.is_pending {
+      entry.pending += 1;
+    }
+  }
+  counts
+}
+
 pub(crate) fn pending_review_comment_node_id(
   comments: &[GithubPullRequestReviewComment],
   id: u64,
@@ -709,6 +733,35 @@ mod tests {
     );
     // Signed out of GitHub: nothing is editable, not everything.
     assert!(editable_comment_ids(&comments, None).is_empty());
+  }
+
+  #[test]
+  fn each_file_counts_its_comments_and_what_still_waits() {
+    let mut published = comment(2, "src/a.rs", Some(4), "already on GitHub");
+    published.is_pending = false;
+    let comments = [
+      comment(1, "src/a.rs", Some(9), "draft"),
+      published,
+      comment(3, "src/b.rs", Some(2), "another draft"),
+    ];
+
+    let counts = file_comment_counts(&comments);
+
+    assert_eq!(
+      counts.get(Path::new("src/a.rs")),
+      Some(&FileCommentCounts {
+        total: 2,
+        pending: 1
+      })
+    );
+    assert_eq!(
+      counts.get(Path::new("src/b.rs")),
+      Some(&FileCommentCounts {
+        total: 1,
+        pending: 1
+      })
+    );
+    assert_eq!(counts.get(Path::new("src/c.rs")), None);
   }
 
   #[test]

@@ -15,6 +15,8 @@ pub(crate) struct ReviewerRow {
   pub login: String,
   pub avatar_url: Option<String>,
   pub status: ReviewerStatus,
+  /// The words of their latest review, for the row's tooltip.
+  pub latest_message: Option<String>,
 }
 
 /// Everyone whose opinion is expected or given, each with their latest word.
@@ -27,6 +29,7 @@ pub(crate) fn reviewer_rows(
     .into_iter()
     .map(|reviewer| ReviewerRow {
       status: reviewer_status_for_login(reviews, &reviewer.login, requested_reviewers),
+      latest_message: latest_review_message(reviews, &reviewer.login),
       login: reviewer.login,
       avatar_url: reviewer.avatar_url,
     })
@@ -70,6 +73,31 @@ pub(crate) enum ReviewerStatus {
   Approved,
   Commented,
   ChangesRequested,
+}
+
+/// The words of the reviewer's most recent review with any: the statuses say
+/// where they stand, this says why.
+pub(crate) fn latest_review_message(
+  reviews: &[GithubPullRequestReview],
+  login: &str,
+) -> Option<String> {
+  reviews
+    .iter()
+    .filter(|review| {
+      review.user.as_ref().is_some_and(|user| {
+        github_shared::logins_match_case_insensitive(user.login.as_str(), login)
+      })
+    })
+    .filter_map(|review| {
+      let body = review
+        .body
+        .as_deref()
+        .map(str::trim)
+        .filter(|b| !b.is_empty())?;
+      Some((review.submitted_at.as_deref()?, body))
+    })
+    .max_by_key(|(submitted_at, _)| *submitted_at)
+    .map(|(_, body)| body.to_string())
 }
 
 /// What a just-submitted review says about its reviewer's row.
@@ -240,11 +268,29 @@ mod tests {
   }
 
   #[test]
+  fn the_row_carries_the_latest_words_of_its_reviewer() {
+    let mut early = review("ada", "CHANGES_REQUESTED", "2026-08-01T00:00:00Z");
+    early.body = Some("rename this".to_string());
+    let mut late = review("ada", "APPROVED", "2026-08-02T00:00:00Z");
+    late.body = Some("all good now".to_string());
+    // A decision sent without a word must not erase the words before it.
+    let silent = review("ada", "APPROVED", "2026-08-03T00:00:00Z");
+
+    let rows = reviewer_rows(&[], &[early, late, silent], "author");
+
+    assert_eq!(rows[0].latest_message.as_deref(), Some("all good now"));
+
+    let wordless = reviewer_rows(&[user("linus")], &[], "author");
+    assert_eq!(wordless[0].latest_message, None);
+  }
+
+  #[test]
   fn the_summary_leads_with_the_bad_news() {
     let approved = vec![ReviewerRow {
       login: "ada".to_string(),
       avatar_url: None,
       status: ReviewerStatus::Approved,
+      latest_message: None,
     }];
     assert_eq!(reviewers_summary_title(&approved), "Approved");
 
@@ -254,6 +300,7 @@ mod tests {
         login: "linus".to_string(),
         avatar_url: None,
         status: ReviewerStatus::ChangesRequested,
+        latest_message: None,
       },
     ];
     assert_eq!(reviewers_summary_title(&mixed), "1 asked for changes");
@@ -262,6 +309,7 @@ mod tests {
       login: "ada".to_string(),
       avatar_url: None,
       status: ReviewerStatus::Awaiting,
+      latest_message: None,
     }];
     assert_eq!(reviewers_summary_title(&waiting), "0 of 1 approved");
   }

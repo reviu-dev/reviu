@@ -603,10 +603,13 @@ pub(crate) fn dock_rail_tab_has_news(
   tab: DockPanelTab,
   changed_files: usize,
   pending_review: usize,
+  pending_pull_request_comments: usize,
 ) -> bool {
   match tab {
     DockPanelTab::Changes => changed_files > 0,
-    DockPanelTab::Review => pending_review > 0,
+    // Work waiting to be sent, wherever it goes: the agent's drafts, or the
+    // comments of an unsubmitted pull request review.
+    DockPanelTab::Review => pending_review > 0 || pending_pull_request_comments > 0,
     DockPanelTab::Files
     | DockPanelTab::History
     | DockPanelTab::PullRequest
@@ -869,6 +872,10 @@ impl SessionPage {
       })),
     );
     let pending_review = self.draft_review_comment_count();
+    let pending_pull_request_comments = self
+      .dock_panel
+      .read(cx)
+      .pending_pull_request_comment_count();
     let changed_files = self.dock_panel.read(cx).status_entries().len();
     for (id, icon, tooltip, tab) in tabs {
       let button = Self::rail_button(id, icon, tooltip)
@@ -876,7 +883,13 @@ impl SessionPage {
         .on_click(cx.listener(move |this, _, window, cx| {
           this.open_dock_tab(tab, window, cx);
         }));
-      let badge = dock_rail_tab_has_news(tab, changed_files, pending_review).then(|| {
+      let badge = dock_rail_tab_has_news(
+        tab,
+        changed_files,
+        pending_review,
+        pending_pull_request_comments,
+      )
+      .then(|| {
         div()
           .absolute()
           .top(px(0.0))
@@ -3446,10 +3459,12 @@ mod tests {
 
   #[test]
   fn only_the_tabs_holding_work_wear_a_dot() {
-    assert!(dock_rail_tab_has_news(DockPanelTab::Changes, 2, 0));
-    assert!(!dock_rail_tab_has_news(DockPanelTab::Changes, 0, 3));
-    assert!(dock_rail_tab_has_news(DockPanelTab::Review, 0, 3));
-    assert!(!dock_rail_tab_has_news(DockPanelTab::Review, 2, 0));
+    assert!(dock_rail_tab_has_news(DockPanelTab::Changes, 2, 0, 0));
+    assert!(!dock_rail_tab_has_news(DockPanelTab::Changes, 0, 3, 0));
+    assert!(dock_rail_tab_has_news(DockPanelTab::Review, 0, 3, 0));
+    assert!(!dock_rail_tab_has_news(DockPanelTab::Review, 2, 0, 0));
+    // An unsubmitted pull request review is work waiting to go out too.
+    assert!(dock_rail_tab_has_news(DockPanelTab::Review, 0, 0, 1));
 
     for tab in [
       DockPanelTab::Files,
@@ -3457,7 +3472,7 @@ mod tests {
       DockPanelTab::PullRequest,
       DockPanelTab::Terminal,
     ] {
-      assert!(!dock_rail_tab_has_news(tab, 5, 5));
+      assert!(!dock_rail_tab_has_news(tab, 5, 5, 5));
     }
   }
 
