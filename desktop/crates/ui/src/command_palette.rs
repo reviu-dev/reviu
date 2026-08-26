@@ -254,6 +254,7 @@ pub enum CommandPaletteAction {
   SendReview,
   DiscardReview,
   SubmitPullRequestReview,
+  DiscardPullRequestReview,
   ContinueRebase,
   SkipRebase,
   Push,
@@ -924,6 +925,7 @@ pub enum CommandPaletteCommandId {
   SendReview,
   DiscardReview,
   SubmitPullRequestReview,
+  DiscardPullRequestReview,
   AcceptAllCurrentConflicts,
   AcceptAllIncomingConflicts,
   CreateBranch,
@@ -985,6 +987,7 @@ impl CommandPaletteCommandId {
       Self::SendReview => "send_review",
       Self::DiscardReview => "discard_review",
       Self::SubmitPullRequestReview => "submit_pull_request_review",
+      Self::DiscardPullRequestReview => "discard_pull_request_review",
       Self::ContinueRebase => "continue_rebase",
       Self::SkipRebase => "skip_rebase",
       Self::Push => "push",
@@ -1256,6 +1259,14 @@ impl CommandPaletteCommand {
       CommandPaletteCommandId::SubmitPullRequestReview,
       "Submit pull request review",
       "Send these comments to GitHub with a decision",
+    )
+  }
+
+  pub fn discard_pull_request_review() -> Self {
+    Self::new(
+      CommandPaletteCommandId::DiscardPullRequestReview,
+      "Discard pull request review",
+      "Delete your pending review and its comments on GitHub",
     )
   }
 
@@ -1779,7 +1790,8 @@ impl CommandPaletteCommand {
     match self.id {
       CommandPaletteCommandId::SendReview
       | CommandPaletteCommandId::DiscardReview
-      | CommandPaletteCommandId::SubmitPullRequestReview => CommandPaletteGroup::Review,
+      | CommandPaletteCommandId::SubmitPullRequestReview
+      | CommandPaletteCommandId::DiscardPullRequestReview => CommandPaletteGroup::Review,
 
       CommandPaletteCommandId::Commit
       | CommandPaletteCommandId::StageSelectedFile
@@ -1900,6 +1912,7 @@ impl CommandPaletteCommand {
       Id::CreatePullRequest | Id::OpenPullRequest => &["pr"],
       Id::SubmitPullRequestReview => &["pr", "approve"],
       Id::DiscardReview => &["clear"],
+      Id::DiscardPullRequestReview => &["pr", "delete", "clear"],
       Id::OpenRepository => &["folder", "project"],
       Id::SwitchRepository => &["recent"],
       Id::ToggleTerminal => &["shell", "console", "toggle"],
@@ -1946,6 +1959,7 @@ impl CommandPaletteCommand {
       CommandPaletteCommandId::SendReview => Icon::new(UiIconName::MessageCircle),
       CommandPaletteCommandId::DiscardReview => Icon::new(UiIconName::Trash),
       CommandPaletteCommandId::SubmitPullRequestReview => Icon::new(UiIconName::GitPullRequest),
+      CommandPaletteCommandId::DiscardPullRequestReview => Icon::new(UiIconName::Trash),
       CommandPaletteCommandId::ContinueRebase => Icon::new(IconName::Check),
       CommandPaletteCommandId::SkipRebase => Icon::new(UiIconName::GitMerge),
       CommandPaletteCommandId::Push => Icon::new(IconName::ArrowUp),
@@ -3022,6 +3036,14 @@ impl CommandPalette {
           cx,
         );
       }
+      CommandPaletteCommandId::DiscardPullRequestReview => {
+        self.trigger_action(
+          command,
+          CommandPaletteAction::DiscardPullRequestReview,
+          window,
+          cx,
+        );
+      }
       CommandPaletteCommandId::ContinueRebase => {
         self.trigger_action(command, CommandPaletteAction::ContinueRebase, window, cx);
       }
@@ -3788,6 +3810,10 @@ mod tests {
     );
     assert_eq!(
       CommandPaletteCommand::submit_pull_request_review().group(),
+      CommandPaletteGroup::Review
+    );
+    assert_eq!(
+      CommandPaletteCommand::discard_pull_request_review().group(),
       CommandPaletteGroup::Review
     );
     assert_eq!(

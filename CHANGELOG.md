@@ -4,6 +4,10 @@ All notable changes to Reviu are documented here.
 
 ## 1.1.0
 
+### A Pull Request Review Can Be Discarded
+
+A review started on a pull request by mistake had no way out from Reviu: the panel only offered Submit review, and deleting the draft meant going to github.com. The Review panel's pull request footer now has a Discard button next to Submit review, with a matching palette command. It deletes the pending review and its comments on GitHub after a confirmation that says exactly that, since the draft lives on their servers even though nobody else has seen it. With the pending review gone, single comments can be published on their own again.
+
 ### Sessions Can Run In Their Own Worktree, In Parallel
 
 The sessions sidebar gains a second button: a session started with it gets its own git worktree, created next to your repository on a fresh `reviu-` branch, starting from your default branch without touching your checkout. Its agent reads and writes there, so it can run at the same time as agents in other worktrees, and at the same time as you working in the main checkout.

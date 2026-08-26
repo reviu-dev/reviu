@@ -144,6 +144,8 @@ pub enum DockPanelEvent {
   /// Finishing a pull request review needs a window the panel does not have
   /// where the request comes from.
   SubmitPullRequestReview,
+  /// Discarding the review pending on GitHub asks the same window first.
+  DiscardPullRequestReview,
   /// What GitHub holds on this pull request changed: whoever shows the comments
   /// has to look again.
   PullRequestReviewCommentsChanged,
@@ -745,6 +747,9 @@ impl DockPanel {
           cx.emit(DockPanelEvent::SendReviewComment { id: *id });
         }
         ReviewListEvent::SubmitReview => cx.emit(DockPanelEvent::SubmitPullRequestReview),
+        ReviewListEvent::DiscardPullRequestReview => {
+          cx.emit(DockPanelEvent::DiscardPullRequestReview)
+        }
         ReviewListEvent::SendReview => cx.emit(DockPanelEvent::SendReview),
         ReviewListEvent::DiscardReview => cx.emit(DockPanelEvent::DiscardReview),
       },
@@ -1292,6 +1297,88 @@ impl DockPanel {
     let window_handle = self.window_handle;
 
     open_submit_review_dialog(api, window_handle, target, on_submitted, window, cx);
+  }
+
+  /// Deleting the review pending on GitHub is confirmed first: nobody else has
+  /// seen it, but it lives on their servers and its comments go with it.
+  pub(crate) fn discard_pull_request_review(
+    &mut self,
+    window: &mut Window,
+    cx: &mut Context<Self>,
+  ) {
+    let Some(review_id) = pending_review_id(&self.pr_review_comments) else {
+      return;
+    };
+    let BranchPrState::Found(context, pull_request) = &self.branch_pr else {
+      return;
+    };
+    let owner = context.owner.clone();
+    let repo = context.repo.clone();
+    let number = pull_request.number;
+    let title: SharedString = "Discard this review?".into();
+    let message: SharedString =
+      format!("Delete your pending review on #{number} and its comments from GitHub.").into();
+    let view = cx.entity();
+
+    window.open_alert_dialog(cx, move |alert, _, _| {
+      let view = view.clone();
+      let owner = owner.clone();
+      let repo = repo.clone();
+      let review_id = review_id.clone();
+      ConfirmDialog::new(title.clone(), div().child(message.clone()))
+        .confirm_text("Discard")
+        .cancel_text("Cancel")
+        .on_confirm(move |_, _, cx| {
+          view.update(cx, |this, cx| {
+            this.discard_pending_pull_request_review(
+              owner.clone(),
+              repo.clone(),
+              number,
+              review_id.clone(),
+              cx,
+            )
+          });
+          true
+        })
+        .build(alert)
+    });
+  }
+
+  fn discard_pending_pull_request_review(
+    &mut self,
+    owner: String,
+    repo: String,
+    number: u64,
+    review_id: String,
+    cx: &mut Context<Self>,
+  ) {
+    let api = WorkspaceApi::global(cx).api.clone();
+    let window_handle = self.window_handle;
+    let task = cx.spawn(async move |this, cx| {
+      let result = cx
+        .background_spawn(
+          async move { api.discard_pending_review(&owner, &repo, number, &review_id) },
+        )
+        .await;
+
+      let _ = this.update(cx, |this, cx| {
+        match result {
+          Ok(()) => {
+            let _ = cx.update_window(window_handle, |_, window, cx| {
+              window.push_notification(Notification::info("Review discarded"), cx);
+            });
+            this.refresh_pull_request_review_comments(cx);
+          }
+          Err(error) => {
+            let _ = cx.update_window(window_handle, |_, window, cx| {
+              window.push_notification(Notification::error(format!("Discard failed: {error}")), cx);
+            });
+          }
+        }
+        cx.notify();
+      });
+    });
+    self._pr_review_comments_task = Some(task);
   }
 
   /// A new comment on the pull request: it joins the review being written, or
@@ -3780,6 +3867,71 @@ mod tests {
     // Three choices and a paragraph: the panel column has room for neither, so
     // the host is asked for a dialog.
     assert!(asked.load(std::sync::atomic::Ordering::SeqCst));
+  }
+
+  #[gpui::test]
+  async fn discarding_the_pending_review_reaches_the_host(cx: &mut TestAppContext) {
+    let (panel, cx) = pull_request_panel(cx, Vec::new());
+
+    let asked = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let observer = {
+      let asked = asked.clone();
+      cx.update(|_, cx| {
+        cx.subscribe(&panel, move |_, event: &DockPanelEvent, _| {
+          if matches!(event, DockPanelEvent::DiscardPullRequestReview) {
+            asked.store(true, std::sync::atomic::Ordering::SeqCst);
+          }
+        })
+      })
+    };
+
+    let review_list = panel.read_with(cx, |panel, _| panel.review_list.clone());
+    review_list.update(cx, |_, cx| {
+      cx.emit(ReviewListEvent::DiscardPullRequestReview)
+    });
+    cx.run_until_parked();
+    drop(observer);
+
+    assert!(asked.load(std::sync::atomic::Ordering::SeqCst));
+  }
+
+  #[gpui::test]
+  async fn discarding_a_pull_request_review_asks_first(cx: &mut TestAppContext) {
+    let (panel, cx) = pull_request_panel(cx, Vec::new());
+    panel.update(cx, |panel, cx| {
+      panel.set_pull_request_review_comments(
+        vec![
+          crate::pull_request_review_comments::pending_comment_fixture(
+            1,
+            "src/main.rs",
+            Some(12),
+            "rename this",
+          ),
+        ],
+        cx,
+      );
+    });
+    cx.run_until_parked();
+
+    panel.update_in(cx, |panel, window, cx| {
+      panel.discard_pull_request_review(window, cx)
+    });
+    cx.run_until_parked();
+
+    // The review lives on GitHub's servers: nothing is deleted unasked.
+    assert!(cx.update(|window, cx| window.has_active_dialog(cx)));
+  }
+
+  #[gpui::test]
+  async fn nothing_pending_leaves_nothing_to_discard(cx: &mut TestAppContext) {
+    let (panel, cx) = pull_request_panel(cx, Vec::new());
+
+    panel.update_in(cx, |panel, window, cx| {
+      panel.discard_pull_request_review(window, cx)
+    });
+    cx.run_until_parked();
+
+    assert!(!cx.update(|window, cx| window.has_active_dialog(cx)));
   }
 
   #[gpui::test]

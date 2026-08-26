@@ -119,6 +119,8 @@ pub(crate) enum ReviewListEvent {
   /// Finish the pull request review: the decision and its message are asked for
   /// where the whole batch is visible.
   SubmitReview,
+  /// Delete the pending review GitHub holds, comments included.
+  DiscardPullRequestReview,
 }
 
 /// What a row needs, and nothing about where the comment came from: a pull
@@ -904,18 +906,24 @@ impl ReviewList {
                 .child(section.title()),
             )
           })
-          .when(section == ReviewSection::Agent, |this| {
-            this.child(
-              Button::new("review-list-discard")
-                .debug_selector(|| REVIEW_LIST_DISCARD_DEBUG_SELECTOR.to_string())
-                .ghost()
-                .small()
-                .compact()
-                .label("Discard")
+          .child({
+            let discard = Button::new("review-list-discard")
+              .debug_selector(|| REVIEW_LIST_DISCARD_DEBUG_SELECTOR.to_string())
+              .ghost()
+              .small()
+              .compact()
+              .label("Discard");
+            match section {
+              ReviewSection::Agent => discard
                 .tooltip("Delete every comment you have not sent yet")
                 .disabled(self.sendable_count() == 0)
                 .on_click(cx.listener(|_, _, _, cx| cx.emit(ReviewListEvent::DiscardReview))),
-            )
+              ReviewSection::PullRequest => discard
+                .tooltip("Delete this pending review and its comments on GitHub")
+                .on_click(
+                  cx.listener(|_, _, _, cx| cx.emit(ReviewListEvent::DiscardPullRequestReview)),
+                ),
+            }
           }),
       )
       .child(match section {
@@ -1619,10 +1627,44 @@ mod tests {
 
     assert!(cx.debug_bounds(REVIEW_LIST_SUBMIT_DEBUG_SELECTOR).is_some());
     assert!(cx.debug_bounds(REVIEW_LIST_SEND_DEBUG_SELECTOR).is_none());
+    // The pull request destination keeps a Discard of its own.
     assert!(
       cx.debug_bounds(REVIEW_LIST_DISCARD_DEBUG_SELECTOR)
-        .is_none()
+        .is_some()
     );
+  }
+
+  #[gpui::test]
+  async fn the_pull_request_discard_names_its_own_destination(cx: &mut gpui::TestAppContext) {
+    let (list, cx) = add_review_list_window(cx);
+    list.update(cx, |list, cx| {
+      list.set_comments(
+        ReviewSection::PullRequest,
+        vec![pull_request_row(9, "src/a.rs", 3)],
+        cx,
+      );
+    });
+    cx.run_until_parked();
+
+    let events = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+    let seen = events.clone();
+    cx.update(|_, cx| {
+      cx.subscribe(&list, move |_, event: &ReviewListEvent, _| match event {
+        ReviewListEvent::DiscardReview => seen.borrow_mut().push("agent"),
+        ReviewListEvent::DiscardPullRequestReview => seen.borrow_mut().push("pull-request"),
+        _ => {}
+      })
+      .detach();
+    });
+
+    let discard = cx
+      .debug_bounds(REVIEW_LIST_DISCARD_DEBUG_SELECTOR)
+      .expect("discard button bounds");
+    cx.simulate_click(discard.center(), gpui::Modifiers::default());
+    cx.run_until_parked();
+
+    // The local drafts are not what this button deletes.
+    assert_eq!(events.borrow().as_slice(), &["pull-request"]);
   }
 
   #[gpui::test]

@@ -1100,6 +1100,12 @@ struct SubmitGithubPendingReviewRequest<'a> {
 }
 
 #[derive(Debug, Serialize)]
+struct DiscardGithubPendingReviewRequest<'a> {
+  #[serde(rename = "pullRequestReviewId")]
+  pull_request_review_id: &'a str,
+}
+
+#[derive(Debug, Serialize)]
 struct CreateGithubPullRequestMergeRequest<'a> {
   method: GithubPullRequestMergeMethod,
   #[serde(rename = "expectedHeadSha")]
@@ -1951,6 +1957,32 @@ impl ApiClient {
     let response = self
       .authed_request(Method::DELETE, route.as_str())
       .query(&[("org", owner), ("repo", repo)])
+      .send()?;
+    let status = response.status();
+    Self::record_http_status("DELETE", route.as_str(), status);
+    if status == StatusCode::UNAUTHORIZED {
+      anyhow::bail!("unauthorized")
+    }
+    if !status.is_success() {
+      anyhow::bail!("unexpected status: {}", status);
+    }
+    Ok(())
+  }
+
+  pub fn discard_pending_review(
+    &self,
+    owner: &str,
+    repo: &str,
+    number: u64,
+    pull_request_review_id: &str,
+  ) -> Result<()> {
+    let route = format!("/github/pr/{number}/pending-review");
+    let response = self
+      .authed_request(Method::DELETE, route.as_str())
+      .query(&[("org", owner), ("repo", repo)])
+      .json(&DiscardGithubPendingReviewRequest {
+        pull_request_review_id,
+      })
       .send()?;
     let status = response.status();
     Self::record_http_status("DELETE", route.as_str(), status);
@@ -3295,6 +3327,38 @@ mod tests {
     assert!(request.contains("POST /github/pr/42/pending-review/submit"));
     assert!(request.contains("\"pullRequestReviewId\":\"PRR_node\""));
     assert!(request.contains("\"event\":\"APPROVE\""));
+  }
+
+  #[test]
+  fn discard_pending_review_uses_expected_route_and_payload() {
+    let (base_url, request, handle) =
+      start_single_response_server_with_request("200 OK", r#"{"success":true}"#);
+    let api = make_test_api_client(base_url);
+
+    api
+      .discard_pending_review("acme", "widget", 42, "PRR_node")
+      .expect("discard pending review");
+
+    handle.join().expect("join server thread");
+    let request = request
+      .lock()
+      .expect("lock request")
+      .clone()
+      .unwrap_or_default();
+    assert!(request.contains("DELETE /github/pr/42/pending-review?org=acme&repo=widget "));
+    assert!(request.contains("\"pullRequestReviewId\":\"PRR_node\""));
+  }
+
+  #[test]
+  fn discard_pending_review_returns_unauthorized_error() {
+    let (base_url, handle) = start_single_response_server("401 Unauthorized", "{}");
+    let api = make_test_api_client(base_url);
+
+    let error = api
+      .discard_pending_review("acme", "widget", 42, "PRR_node")
+      .expect_err("unauthorized");
+    assert_eq!(error.to_string(), "unauthorized");
+    handle.join().expect("join server thread");
   }
 
   #[test]

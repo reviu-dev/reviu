@@ -1057,6 +1057,7 @@ fn palette_command_shortcut(command: CommandPaletteCommandId) -> Option<Shortcut
     | Command::Amend
     | Command::DiscardReview
     | Command::SubmitPullRequestReview
+    | Command::DiscardPullRequestReview
     | Command::AcceptAllCurrentConflicts
     | Command::AcceptAllIncomingConflicts
     | Command::CreateBranch

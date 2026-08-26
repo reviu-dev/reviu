@@ -57,6 +57,7 @@ impl SessionPage {
       }
       if self.dock_panel.read(cx).has_pending_pull_request_review() {
         commands.push(CommandPaletteCommand::submit_pull_request_review());
+        commands.push(CommandPaletteCommand::discard_pull_request_review());
       }
       if self.can_accept_all_conflicts(cx) {
         commands.push(CommandPaletteCommand::accept_all_current_conflicts());
@@ -251,6 +252,12 @@ impl SessionPage {
       CommandPaletteAction::SubmitPullRequestReview => {
         self.dock_panel.update(cx, |panel, cx| {
           panel.submit_pull_request_review(window, cx);
+        });
+        Ok(())
+      }
+      CommandPaletteAction::DiscardPullRequestReview => {
+        self.dock_panel.update(cx, |panel, cx| {
+          panel.discard_pull_request_review(window, cx);
         });
         Ok(())
       }

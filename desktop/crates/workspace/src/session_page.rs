@@ -408,6 +408,11 @@ impl SessionPage {
             panel.submit_pull_request_review(window, cx);
           });
         }
+        DockPanelEvent::DiscardPullRequestReview => {
+          this.dock_panel.update(cx, |panel, cx| {
+            panel.discard_pull_request_review(window, cx);
+          });
+        }
       },
     )
     .detach();
