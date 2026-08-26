@@ -43,6 +43,19 @@ impl SessionPage {
       commands.push(CommandPaletteCommand::forget_repository());
     }
 
+    // Creation lands where you are; the repo in the label says so upfront.
+    if let Some(session_repo) = self.session_repo(cx) {
+      let repo_name = session_repo
+        .file_name()
+        .map(|name| name.to_string_lossy().replace(['\n', '\r'], ""));
+      commands.push(CommandPaletteCommand::new_agent_session(
+        repo_name.as_deref(),
+      ));
+      commands.push(CommandPaletteCommand::new_agent_worktree_session(
+        repo_name.as_deref(),
+      ));
+    }
+
     if self.fallback_repo.is_some() {
       let commit_message = self.dock_panel.read(cx).commit_message(cx);
       let state = self.repo_state(&commit_message, cx);
@@ -467,6 +480,14 @@ impl SessionPage {
         self.jump_to_latest_message_action(&JumpToLatestMessage, window, cx);
         Ok(())
       }
+      CommandPaletteAction::NewAgentSession => {
+        self.new_agent_session_action(&crate::NewAgentSession, window, cx);
+        Ok(())
+      }
+      CommandPaletteAction::NewAgentWorktreeSession => {
+        self.new_agent_worktree_session_action(&crate::NewAgentWorktreeSession, window, cx);
+        Ok(())
+      }
       other => crate::palette_actions::handle_global_command_palette_action(other, window, cx),
     }
   }
@@ -513,6 +534,55 @@ mod tests {
       assert!(!ids.contains(&CommandPaletteCommandId::ToggleDiffView));
       assert!(!ids.contains(&CommandPaletteCommandId::ToggleHideWhitespace));
       assert!(!ids.contains(&CommandPaletteCommandId::SendSelectionToAgent));
+    });
+  }
+
+  #[gpui::test]
+  async fn session_creation_reaches_the_palette_named_after_the_repo(cx: &mut TestAppContext) {
+    let repo = TempRepo::init("session-page-palette-new-session");
+    commit_text_file(&repo.path, Path::new("a.txt"), "v1\n", "initial");
+
+    let (page, cx) = add_session_page_window(repo.path.clone(), cx);
+    cx.run_until_parked();
+
+    let repo_name = repo
+      .path
+      .file_name()
+      .expect("repo dir name")
+      .to_string_lossy()
+      .into_owned();
+    page.read_with(cx, |page, cx| {
+      let commands = page.palette_commands(1, cx);
+      let new_session = commands
+        .iter()
+        .find(|command| command.id == CommandPaletteCommandId::NewAgentSession)
+        .expect("the new session command is offered");
+      assert!(
+        new_session.name.contains(&repo_name),
+        "the label names the target repo: {}",
+        new_session.name
+      );
+      assert!(
+        commands
+          .iter()
+          .any(|command| command.id == CommandPaletteCommandId::NewAgentWorktreeSession)
+      );
+    });
+  }
+
+  #[gpui::test]
+  async fn session_creation_stays_out_of_the_palette_without_a_repo(cx: &mut TestAppContext) {
+    let (page, cx) = add_session_page_window_without_repo(cx);
+    cx.run_until_parked();
+
+    page.read_with(cx, |page, cx| {
+      let ids = page
+        .palette_commands(0, cx)
+        .into_iter()
+        .map(|command| command.id)
+        .collect::<Vec<_>>();
+      assert!(!ids.contains(&CommandPaletteCommandId::NewAgentSession));
+      assert!(!ids.contains(&CommandPaletteCommandId::NewAgentWorktreeSession));
     });
   }
 

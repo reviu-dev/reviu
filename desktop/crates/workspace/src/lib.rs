@@ -25,6 +25,8 @@ actions!(
     SendReviewCommentsToAgent,
     AddSelectionToAgent,
     JumpToLatestMessage,
+    NewAgentSession,
+    NewAgentWorktreeSession,
     ToggleHunkStage,
     RestoreHunk,
     ToggleFileStage,

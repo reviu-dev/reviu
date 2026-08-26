@@ -309,6 +309,8 @@ pub enum CommandPaletteAction {
   PopStash(CommandPaletteStash),
   OpenRepository,
   OpenSessionPage,
+  NewAgentSession,
+  NewAgentWorktreeSession,
   OpenGithubRepoDetails {
     owner: String,
     repo: String,
@@ -971,6 +973,8 @@ pub enum CommandPaletteCommandId {
   ToggleHideWhitespace,
   SendSelectionToAgent,
   JumpToLatestMessage,
+  NewAgentSession,
+  NewAgentWorktreeSession,
   SignIn,
   SignOut,
   OpenBrowserExtensions,
@@ -1041,6 +1045,8 @@ impl CommandPaletteCommandId {
       Self::ToggleHideWhitespace => "toggle_hide_whitespace",
       Self::SendSelectionToAgent => "send_selection_to_agent",
       Self::JumpToLatestMessage => "jump_to_latest_message",
+      Self::NewAgentSession => "new_agent_session",
+      Self::NewAgentWorktreeSession => "new_agent_worktree_session",
       Self::SignIn => "sign_in",
       Self::SignOut => "sign_out",
       Self::OpenBrowserExtensions => "open_browser_extensions",
@@ -1107,6 +1113,8 @@ impl CommandPaletteCommandId {
       "toggle_hide_whitespace" => Some(Self::ToggleHideWhitespace),
       "send_selection_to_agent" => Some(Self::SendSelectionToAgent),
       "jump_to_latest_message" => Some(Self::JumpToLatestMessage),
+      "new_agent_session" => Some(Self::NewAgentSession),
+      "new_agent_worktree_session" => Some(Self::NewAgentWorktreeSession),
       "sign_in" => Some(Self::SignIn),
       "sign_out" => Some(Self::SignOut),
       "open_browser_extensions" => Some(Self::OpenBrowserExtensions),
@@ -1703,6 +1711,30 @@ impl CommandPaletteCommand {
     )
   }
 
+  pub fn new_agent_session(repo_name: Option<&str>) -> Self {
+    let name = match repo_name {
+      Some(repo) => format!("New session in {repo}"),
+      None => "New session".to_string(),
+    };
+    Self::new(
+      CommandPaletteCommandId::NewAgentSession,
+      name,
+      "Start an agent session in the current repository",
+    )
+  }
+
+  pub fn new_agent_worktree_session(repo_name: Option<&str>) -> Self {
+    let name = match repo_name {
+      Some(repo) => format!("New worktree session in {repo}"),
+      None => "New worktree session".to_string(),
+    };
+    Self::new(
+      CommandPaletteCommandId::NewAgentWorktreeSession,
+      name,
+      "Start an agent session in its own git worktree",
+    )
+  }
+
   pub fn sign_in() -> Self {
     Self::new(
       CommandPaletteCommandId::SignIn,
@@ -1845,6 +1877,9 @@ impl CommandPaletteCommand {
 
       CommandPaletteCommandId::OpenGithubFromUrl => CommandPaletteGroup::PullRequest,
 
+      CommandPaletteCommandId::NewAgentSession
+      | CommandPaletteCommandId::NewAgentWorktreeSession => CommandPaletteGroup::Repository,
+
       CommandPaletteCommandId::OpenSessionPage
       | CommandPaletteCommandId::OpenGitConfigPage
       | CommandPaletteCommandId::OpenSettingsPage
@@ -1926,6 +1961,8 @@ impl CommandPaletteCommand {
       Id::ToggleHideWhitespace => &["blank", "spaces", "indent"],
       Id::SendSelectionToAgent => &["context", "attach", "prompt"],
       Id::JumpToLatestMessage => &["bottom", "newest", "tail", "conversation"],
+      Id::NewAgentSession => &["session", "conversation", "agent", "start", "create"],
+      Id::NewAgentWorktreeSession => &["session", "worktree", "branch", "parallel", "create"],
       Id::SignIn => &["login", "connect", "github", "account"],
       Id::SignOut => &["logout", "disconnect", "account"],
       Id::OpenBrowserExtensions => &["chrome", "firefox", "addon", "browser"],
@@ -2019,6 +2056,8 @@ impl CommandPaletteCommand {
       }
       CommandPaletteCommandId::SendSelectionToAgent => Icon::new(UiIconName::Sparkles),
       CommandPaletteCommandId::JumpToLatestMessage => Icon::new(UiIconName::ArrowDownFromLine),
+      CommandPaletteCommandId::NewAgentSession => Icon::new(UiIconName::SquarePen),
+      CommandPaletteCommandId::NewAgentWorktreeSession => Icon::new(UiIconName::GitBranch),
       CommandPaletteCommandId::SignIn | CommandPaletteCommandId::SignOut => {
         Icon::new(IconName::Github)
       }
@@ -3251,6 +3290,17 @@ impl CommandPalette {
         self.trigger_action(
           command,
           CommandPaletteAction::JumpToLatestMessage,
+          window,
+          cx,
+        );
+      }
+      CommandPaletteCommandId::NewAgentSession => {
+        self.trigger_action(command, CommandPaletteAction::NewAgentSession, window, cx);
+      }
+      CommandPaletteCommandId::NewAgentWorktreeSession => {
+        self.trigger_action(
+          command,
+          CommandPaletteAction::NewAgentWorktreeSession,
           window,
           cx,
         );

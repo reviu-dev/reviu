@@ -17,12 +17,12 @@ use std::collections::HashSet;
 use crate::config::ConfigStore;
 use crate::{
   AcceptBothConflict, AddSelectionToAgent, CloseWorkspacePage, CommentHunk, CommitChanges,
-  ForcePushChanges, JumpToLatestMessage, NavigateBack, NextAnnotation, OpenFilesSidebar,
-  OpenGitChangesSidebar, OpenGitHistorySidebar, OpenPullRequestSidebar, OpenRepository,
-  OpenReviewSidebar, OpenSessionPage, OpenSettingsPage, PreviousAnnotation, PullChanges,
-  PushChanges, RestoreFile, RestoreHunk, ReturnFocusToEditor, SendReviewCommentsToAgent,
-  ShowBranchSwitcher, ShowCommandPalette, ShowFileSearch, ToggleDiffView, ToggleFileStage,
-  ToggleHideWhitespace, ToggleHunkStage, ToggleTerminalSidebar,
+  ForcePushChanges, JumpToLatestMessage, NavigateBack, NewAgentSession, NewAgentWorktreeSession,
+  NextAnnotation, OpenFilesSidebar, OpenGitChangesSidebar, OpenGitHistorySidebar,
+  OpenPullRequestSidebar, OpenRepository, OpenReviewSidebar, OpenSessionPage, OpenSettingsPage,
+  PreviousAnnotation, PullChanges, PushChanges, RestoreFile, RestoreHunk, ReturnFocusToEditor,
+  SendReviewCommentsToAgent, ShowBranchSwitcher, ShowCommandPalette, ShowFileSearch,
+  ToggleDiffView, ToggleFileStage, ToggleHideWhitespace, ToggleHunkStage, ToggleTerminalSidebar,
 };
 
 pub const SHOW_COMMAND_PALETTE_SHORTCUT: &str = "cmd-k";
@@ -105,6 +105,8 @@ pub enum ShortcutId {
   SendReviewCommentsToAgent,
   AddSelectionToAgent,
   JumpToLatestMessage,
+  NewAgentSession,
+  NewAgentWorktreeSession,
   ToggleHunkStage,
   RestoreHunk,
   ToggleFileStage,
@@ -141,6 +143,8 @@ impl ShortcutId {
       ShortcutId::SendReviewCommentsToAgent => "send_review_comments_to_agent",
       ShortcutId::AddSelectionToAgent => "add_selection_to_agent",
       ShortcutId::JumpToLatestMessage => "jump_to_latest_message",
+      ShortcutId::NewAgentSession => "new_agent_session",
+      ShortcutId::NewAgentWorktreeSession => "new_agent_worktree_session",
       ShortcutId::ToggleHunkStage => "toggle_hunk_stage",
       ShortcutId::RestoreHunk => "restore_hunk",
       ShortcutId::ToggleFileStage => "toggle_file_stage",
@@ -177,6 +181,8 @@ impl ShortcutId {
       "send_review_comments_to_agent" => Some(ShortcutId::SendReviewCommentsToAgent),
       "add_selection_to_agent" => Some(ShortcutId::AddSelectionToAgent),
       "jump_to_latest_message" => Some(ShortcutId::JumpToLatestMessage),
+      "new_agent_session" => Some(ShortcutId::NewAgentSession),
+      "new_agent_worktree_session" => Some(ShortcutId::NewAgentWorktreeSession),
       "toggle_hunk_stage" => Some(ShortcutId::ToggleHunkStage),
       "restore_hunk" => Some(ShortcutId::RestoreHunk),
       "toggle_file_stage" => Some(ShortcutId::ToggleFileStage),
@@ -208,7 +214,7 @@ pub struct ShortcutDefinition {
   pub active_contexts: &'static [&'static str],
 }
 
-const SHORTCUT_DEFINITIONS: [ShortcutDefinition; 31] = [
+const SHORTCUT_DEFINITIONS: [ShortcutDefinition; 33] = [
   ShortcutDefinition {
     id: ShortcutId::ShowCommandPalette,
     title: "Command Palette",
@@ -305,6 +311,28 @@ const SHORTCUT_DEFINITIONS: [ShortcutDefinition; 31] = [
     category: ShortcutCategory::LocalGit,
     keystroke: "cmd-shift-l",
     context: HUNK_ACTION_SESSION_CONTEXT,
+    display_context: WORKSPACE_SESSION_CONTEXT,
+    active_contexts: &SESSION_ONLY_ACTIVE_CONTEXTS,
+  },
+  ShortcutDefinition {
+    id: ShortcutId::NewAgentSession,
+    title: "New Session",
+    description: "Start a new agent session in the current repository.",
+    scope_label: "Sessions",
+    category: ShortcutCategory::Core,
+    keystroke: "cmd-t",
+    context: "WorkspaceSession",
+    display_context: WORKSPACE_SESSION_CONTEXT,
+    active_contexts: &SESSION_ONLY_ACTIVE_CONTEXTS,
+  },
+  ShortcutDefinition {
+    id: ShortcutId::NewAgentWorktreeSession,
+    title: "New Worktree Session",
+    description: "Start a new agent session in its own git worktree of the current repository.",
+    scope_label: "Sessions",
+    category: ShortcutCategory::Core,
+    keystroke: "cmd-shift-t",
+    context: "WorkspaceSession",
     display_context: WORKSPACE_SESSION_CONTEXT,
     active_contexts: &SESSION_ONLY_ACTIVE_CONTEXTS,
   },
@@ -876,6 +904,10 @@ impl ShortcutDefinition {
       ShortcutId::JumpToLatestMessage => {
         KeyBinding::new(keystroke, JumpToLatestMessage, Some(&context))
       }
+      ShortcutId::NewAgentSession => KeyBinding::new(keystroke, NewAgentSession, Some(&context)),
+      ShortcutId::NewAgentWorktreeSession => {
+        KeyBinding::new(keystroke, NewAgentWorktreeSession, Some(&context))
+      }
       ShortcutId::ToggleHunkStage => KeyBinding::new(keystroke, ToggleHunkStage, Some(&context)),
       ShortcutId::RestoreHunk => KeyBinding::new(keystroke, RestoreHunk, Some(&context)),
       ShortcutId::ToggleFileStage => KeyBinding::new(keystroke, ToggleFileStage, Some(&context)),
@@ -1048,6 +1080,8 @@ fn palette_command_shortcut(command: CommandPaletteCommandId) -> Option<Shortcut
     Command::ToggleHideWhitespace => Some(ShortcutId::ToggleHideWhitespace),
     Command::SendSelectionToAgent => Some(ShortcutId::AddSelectionToAgent),
     Command::JumpToLatestMessage => Some(ShortcutId::JumpToLatestMessage),
+    Command::NewAgentSession => Some(ShortcutId::NewAgentSession),
+    Command::NewAgentWorktreeSession => Some(ShortcutId::NewAgentWorktreeSession),
     Command::SwitchRepository
     | Command::ForgetRepository
     | Command::CheckoutDetached
@@ -1320,6 +1354,8 @@ fn with_shortcut_action<T>(id: ShortcutId, f: impl FnOnce(&dyn Action) -> T) -> 
     ShortcutId::SendReviewCommentsToAgent => f(&SendReviewCommentsToAgent),
     ShortcutId::AddSelectionToAgent => f(&AddSelectionToAgent),
     ShortcutId::JumpToLatestMessage => f(&JumpToLatestMessage),
+    ShortcutId::NewAgentSession => f(&NewAgentSession),
+    ShortcutId::NewAgentWorktreeSession => f(&NewAgentWorktreeSession),
     ShortcutId::ToggleHunkStage => f(&ToggleHunkStage),
     ShortcutId::RestoreHunk => f(&RestoreHunk),
     ShortcutId::ToggleFileStage => f(&ToggleFileStage),
@@ -1538,6 +1574,14 @@ mod tests {
   fn file_search_binding_is_limited_to_supported_routes() {
     assert!(has_binding("/session", "cmd-p"));
     assert!(!has_binding("/settings", "cmd-p"));
+  }
+
+  #[test]
+  fn session_creation_bindings_live_on_the_session_page() {
+    assert!(has_binding("/session", "cmd-t"));
+    assert!(has_binding("/session", "cmd-shift-t"));
+    assert!(!has_binding("/settings", "cmd-t"));
+    assert!(!has_binding("/settings", "cmd-shift-t"));
   }
 
   #[test]

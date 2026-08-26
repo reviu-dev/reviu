@@ -1067,6 +1067,38 @@ impl SessionPage {
     self.new_session_in(repo_root, window, cx);
   }
 
+  pub(super) fn new_agent_session_action(
+    &mut self,
+    _: &crate::NewAgentSession,
+    window: &mut Window,
+    cx: &mut Context<Self>,
+  ) {
+    if self.session_repo(cx).is_none() {
+      window.push_notification(
+        Notification::warning("Open a repository before starting a session."),
+        cx,
+      );
+      return;
+    }
+    self.new_session(window, cx);
+  }
+
+  pub(super) fn new_agent_worktree_session_action(
+    &mut self,
+    _: &crate::NewAgentWorktreeSession,
+    window: &mut Window,
+    cx: &mut Context<Self>,
+  ) {
+    let Some(repo_root) = self.session_repo(cx) else {
+      window.push_notification(
+        Notification::warning("Open a repository before starting a worktree session."),
+        cx,
+      );
+      return;
+    };
+    self.new_worktree_session_in(repo_root, None, window, cx);
+  }
+
   pub(super) fn new_session_in(
     &mut self,
     repo_root: PathBuf,
@@ -2378,6 +2410,77 @@ mod tests {
     revived.read_with(cx, |panel, _| assert_eq!(panel.cwd(), cwd.as_path()));
 
     cleanup_worktrees_root(&repo.path);
+  }
+
+  #[gpui::test]
+  async fn the_new_session_action_lands_where_you_are(cx: &mut TestAppContext) {
+    let (repo, page, cx) = page_with_agent_panel("session-page-new-session-action", cx).await;
+    let (other, other_state) = seed_second_repo("session-page-new-session-action-b", "action-b");
+
+    // The other repo's session on screen, fallback on the first repo.
+    page.update_in(cx, |page, window, cx| {
+      page
+        .set_fallback_repo(other.path.clone(), window, cx)
+        .expect("track the other repo");
+      page
+        .set_fallback_repo(repo.path.clone(), window, cx)
+        .expect("switch back");
+      page.select_session("action-b", window, cx);
+    });
+    cx.run_until_parked();
+
+    page.update_in(cx, |page, window, cx| {
+      page.new_agent_session_action(&crate::NewAgentSession, window, cx)
+    });
+    cx.run_until_parked();
+
+    let panel = active_panel(&page, cx);
+    panel.read_with(cx, |panel, _| {
+      assert_eq!(
+        panel.repo_root(),
+        other.path.as_path(),
+        "creation lands in the SHOWN session's repo, not the fallback"
+      );
+      assert!(!panel.has_persistable_content(), "a fresh blank session");
+    });
+
+    let _ = std::fs::remove_dir_all(&other_state);
+    cleanup_worktrees_root(&repo.path);
+  }
+
+  #[gpui::test]
+  async fn the_worktree_session_action_lands_where_you_are(cx: &mut TestAppContext) {
+    let (repo, page, cx) = page_with_agent_panel("session-page-worktree-action", cx).await;
+
+    page.update_in(cx, |page, window, cx| {
+      page.new_agent_worktree_session_action(&crate::NewAgentWorktreeSession, window, cx)
+    });
+    cx.run_until_parked();
+
+    let panel = active_panel(&page, cx);
+    panel.read_with(cx, |panel, _| {
+      assert_eq!(panel.repo_root(), repo.path.as_path());
+      assert_ne!(panel.cwd(), repo.path.as_path(), "its own checkout");
+      assert!(panel.cwd().join(".git").is_file());
+    });
+
+    cleanup_worktrees_root(&repo.path);
+  }
+
+  #[gpui::test]
+  async fn session_creation_actions_refuse_without_a_repository(cx: &mut TestAppContext) {
+    let (page, cx) = add_session_page_window_without_repo(cx);
+    cx.run_until_parked();
+
+    page.update_in(cx, |page, window, cx| {
+      page.new_agent_session_action(&crate::NewAgentSession, window, cx);
+      page.new_agent_worktree_session_action(&crate::NewAgentWorktreeSession, window, cx);
+    });
+    cx.run_until_parked();
+
+    page.read_with(cx, |page, _| {
+      assert!(page.agent_chat_view.is_none(), "nothing to create in");
+    });
   }
 
   #[gpui::test]

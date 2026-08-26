@@ -76,6 +76,8 @@ Each conversation keeps its composer draft and its scroll position across switch
 
 The repository is an attribute of each session, not a mode. The sidebar shows every repository as a foldable section, newest sessions first, and nothing reorders while agents work. Each row carries a live state dot (amber working, blue waiting on you, red failed), and worktree sessions show their branch.
 
+Cmd+T starts a session in the repository you are looking at, Cmd+Shift+T starts one in its own worktree, and both live in the command palette too, named after the repository they will create in.
+
 ### Agents Keep Running In The Background
 
 Switching sessions never kills a running agent: its reply keeps streaming into the transcript, and coming back shows the conversation as it progressed. Sessions sharing the main checkout take turns; recent idle sessions stay warm, older ones reconnect when you return.
