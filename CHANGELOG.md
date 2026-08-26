@@ -10,6 +10,10 @@ The merge button now carries a chevron listing the other merge methods the repos
 
 Confirming a merge opens a small form prefilled with exactly what GitHub would generate for the commit title and message, following the repository's merge-message settings - down to the squash bullet list and its Co-authored-by trailers. Edit them, or clear a field to let GitHub write it. Rebase shows no fields, since it keeps the commits as they are.
 
+### Your Review Shows Up The Moment You Submit It
+
+Submitting a review left the reviewers block saying "Awaiting review" until a later refresh: the reread that follows a submit can hit a GitHub that has not caught up with its own write. The panel now applies the answer the submit call itself returned - your row flips to Approved, Changes requested or Commented immediately - and keeps it against stale rereads until GitHub catches up.
+
 ### The Refresh Button Shows It Heard You
 
 Clicking refresh in the right dock rereads everything - git status, the pull request, its comments and checks - but did so in complete silence, looking like a dead button. It now spins until every read it triggered has landed, comments and checks included. The panel still refreshes itself when it gets stale (a minute) and on events like opening the tab or switching branches; the button remains the way to force a read right now.

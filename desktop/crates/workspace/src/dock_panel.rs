@@ -64,7 +64,8 @@ use std::rc::Rc;
 
 use crate::api::{
   GithubPullRequest, GithubPullRequestChecksRollupState, GithubPullRequestChecksSummary,
-  GithubPullRequestMergeMethod, GithubPullRequestMergeReadiness, GithubPullRequestReviewComment,
+  GithubPullRequestMergeMethod, GithubPullRequestMergeReadiness, GithubPullRequestReview,
+  GithubPullRequestReviewComment,
 };
 use crate::auth_state::AuthStateStore;
 use crate::github_navigation::{github_pull_request_url, open_compare_target};
@@ -82,7 +83,7 @@ use crate::pull_request_merge::{
   MergeAvailability, MergeRequest, merge_availability, merge_commit_defaults, merge_method_label,
 };
 use crate::pull_request_reviewers::{
-  ReviewerRow, ReviewerStatus, reviewer_rows, reviewers_summary_title,
+  ReviewerRow, ReviewerStatus, reviewer_rows, reviewers_summary_title, submitted_review_status,
 };
 use crate::workspace::WorkspaceApi;
 use gpui_component::avatar::Avatar;
@@ -571,6 +572,9 @@ pub struct DockPanel {
   /// GraphQL names the pull request by node id, and starting a review needs it.
   pr_node_id: Option<String>,
   pr_reviewers: Vec<ReviewerRow>,
+  /// The review the viewer just submitted: GitHub's reads can lag its writes,
+  /// so this outranks a fetched Awaiting until the fetches catch up.
+  submitted_review_overlay: Option<GithubPullRequestReview>,
   pr_checks_loading: bool,
   pr_merge_readiness: Option<GithubPullRequestMergeReadiness>,
   /// The viewer's remembered method for this repository, kept only while the
@@ -819,6 +823,7 @@ impl DockPanel {
       pr_author_login: None,
       pr_node_id: None,
       pr_reviewers: Vec::new(),
+      submitted_review_overlay: None,
       pr_checks_loading: false,
       pr_merge_readiness: None,
       selected_merge_method: None,
@@ -1106,6 +1111,7 @@ impl DockPanel {
             this.pr_range = Some(range);
             this.set_pr_files(files, cx);
             this.pr_reviewers = reviewers;
+            this.apply_submitted_review_overlay();
             this.pr_author_login = Some(author_login);
             this.pr_node_id = node_id;
             this.set_pull_request_review_comments(review_comments, cx);
@@ -1144,6 +1150,7 @@ impl DockPanel {
     self.pr_files_error = None;
     self.pr_selected_file = None;
     self.pr_reviewers = Vec::new();
+    self.submitted_review_overlay = None;
     self.pr_checks = None;
     self.pr_checks_loading = false;
     self.pr_merge_readiness = None;
@@ -1330,6 +1337,52 @@ impl DockPanel {
     self._pr_review_comments_task = Some(task);
   }
 
+  /// The review the API just answered with is applied to the reviewers block
+  /// at once: the refetch that follows can read a GitHub that has not caught
+  /// up with its own write yet.
+  fn note_submitted_review(&mut self, review: GithubPullRequestReview, cx: &mut Context<Self>) {
+    self.submitted_review_overlay = Some(review);
+    self.apply_submitted_review_overlay();
+    cx.notify();
+  }
+
+  /// Overrides a fetched Awaiting for the reviewer who just spoke; once a
+  /// fetch carries their answer, the fetches have caught up and the overlay
+  /// retires, so a later re-request can read as awaiting again.
+  fn apply_submitted_review_overlay(&mut self) {
+    let Some(review) = &self.submitted_review_overlay else {
+      return;
+    };
+    let (Some(user), Some(status)) = (review.user.as_ref(), submitted_review_status(review.state))
+    else {
+      self.submitted_review_overlay = None;
+      return;
+    };
+    let row = self.pr_reviewers.iter_mut().find(|row| {
+      crate::github_shared::logins_match_case_insensitive(row.login.as_str(), user.login.as_str())
+    });
+    match row {
+      Some(row) if row.status == ReviewerStatus::Awaiting => row.status = status,
+      Some(_) => self.submitted_review_overlay = None,
+      None => {
+        // The author reviews nothing of their own; anyone else who was not
+        // requested still gets their row, as the fetch will give it later.
+        let viewer_is_author = self.pr_author_login.as_deref().is_some_and(|author| {
+          crate::github_shared::logins_match_case_insensitive(author, user.login.as_str())
+        });
+        if viewer_is_author {
+          self.submitted_review_overlay = None;
+          return;
+        }
+        self.pr_reviewers.push(ReviewerRow {
+          login: user.login.clone(),
+          avatar_url: user.avatar_url.clone(),
+          status,
+        });
+      }
+    }
+  }
+
   /// The decision and its message are asked for in a dialog: three choices and
   /// a paragraph do not fit a 350px column, and this is not a gesture to make
   /// halfway.
@@ -1349,8 +1402,9 @@ impl DockPanel {
     let api = WorkspaceApi::global(cx).api.clone();
     let panel = cx.entity().downgrade();
     let on_submitted: crate::review_submit_dialog::ReviewSubmittedHandler =
-      std::rc::Rc::new(move |cx| {
+      std::rc::Rc::new(move |review, cx| {
         let _ = panel.update(cx, |panel, cx| {
+          panel.note_submitted_review(review.clone(), cx);
           panel.refresh_branch_pull_request(PullRequestRefresh::Now, cx)
         });
       });
@@ -4284,6 +4338,94 @@ mod tests {
       cx.debug_bounds(DOCK_PANEL_PR_MERGE_METHOD_DEBUG_SELECTOR)
         .is_some()
     );
+  }
+
+  fn submitted_review(login: &str, state: &str) -> GithubPullRequestReview {
+    serde_json::from_value(serde_json::json!({
+      "id": 7,
+      "user": { "login": login, "avatar_url": null },
+      "state": state,
+      "submitted_at": "2026-08-26T10:00:00Z",
+      "body": null,
+      "html_url": "https://github.com/acme/widget/pull/42",
+    }))
+    .expect("build submitted review")
+  }
+
+  fn awaiting_row(login: &str) -> ReviewerRow {
+    ReviewerRow {
+      login: login.to_string(),
+      avatar_url: None,
+      status: ReviewerStatus::Awaiting,
+    }
+  }
+
+  #[gpui::test]
+  async fn a_submitted_review_outlives_the_stale_reads_that_follow(cx: &mut TestAppContext) {
+    let (panel, cx) = pull_request_panel(cx, Vec::new());
+    panel.update(cx, |panel, cx| {
+      panel.pr_reviewers = vec![awaiting_row("octocat")];
+      panel.note_submitted_review(submitted_review("octocat", "APPROVED"), cx);
+    });
+    panel.read_with(cx, |panel, _| {
+      assert_eq!(panel.pr_reviewers[0].status, ReviewerStatus::Approved);
+    });
+
+    // GitHub answers the refetch with a read it has not caught up on: the
+    // fetched Awaiting must not undo what its own mutation just answered.
+    panel.update(cx, |panel, _| {
+      panel.pr_reviewers = vec![awaiting_row("octocat")];
+      panel.apply_submitted_review_overlay();
+    });
+    panel.read_with(cx, |panel, _| {
+      assert_eq!(panel.pr_reviewers[0].status, ReviewerStatus::Approved);
+    });
+
+    // A fetch that carries the answer retires the overlay: the next Awaiting
+    // is a genuine re-request, not staleness.
+    panel.update(cx, |panel, _| {
+      panel.pr_reviewers = vec![ReviewerRow {
+        login: "octocat".to_string(),
+        avatar_url: None,
+        status: ReviewerStatus::Approved,
+      }];
+      panel.apply_submitted_review_overlay();
+      panel.pr_reviewers = vec![awaiting_row("octocat")];
+      panel.apply_submitted_review_overlay();
+    });
+    panel.read_with(cx, |panel, _| {
+      assert_eq!(panel.pr_reviewers[0].status, ReviewerStatus::Awaiting);
+    });
+  }
+
+  #[gpui::test]
+  async fn a_review_from_someone_not_requested_gets_their_row_at_once(cx: &mut TestAppContext) {
+    let (panel, cx) = pull_request_panel(cx, Vec::new());
+    panel.update(cx, |panel, cx| {
+      panel.pr_author_login = Some("author".to_string());
+      panel.note_submitted_review(submitted_review("octocat", "CHANGES_REQUESTED"), cx);
+    });
+    panel.read_with(cx, |panel, _| {
+      assert_eq!(panel.pr_reviewers.len(), 1);
+      assert_eq!(panel.pr_reviewers[0].login, "octocat");
+      assert_eq!(
+        panel.pr_reviewers[0].status,
+        ReviewerStatus::ChangesRequested
+      );
+    });
+  }
+
+  #[gpui::test]
+  async fn the_author_commenting_on_their_own_pull_request_gets_no_row(cx: &mut TestAppContext) {
+    let (panel, cx) = pull_request_panel(cx, Vec::new());
+    panel.update(cx, |panel, cx| {
+      panel.pr_author_login = Some("octocat".to_string());
+      panel.note_submitted_review(submitted_review("octocat", "COMMENTED"), cx);
+    });
+    panel.read_with(cx, |panel, _| {
+      assert!(panel.pr_reviewers.is_empty());
+      assert!(panel.submitted_review_overlay.is_none());
+    });
   }
 
   #[gpui::test]

@@ -72,6 +72,18 @@ pub(crate) enum ReviewerStatus {
   ChangesRequested,
 }
 
+/// What a just-submitted review says about its reviewer's row.
+pub(crate) fn submitted_review_status(
+  state: GithubPullRequestReviewState,
+) -> Option<ReviewerStatus> {
+  match state {
+    GithubPullRequestReviewState::Approved => Some(ReviewerStatus::Approved),
+    GithubPullRequestReviewState::RequestChanges => Some(ReviewerStatus::ChangesRequested),
+    GithubPullRequestReviewState::Commented => Some(ReviewerStatus::Commented),
+    GithubPullRequestReviewState::Dismissed | GithubPullRequestReviewState::Pending => None,
+  }
+}
+
 pub(crate) fn reviewer_status_for_login(
   reviews: &[GithubPullRequestReview],
   login: &str,

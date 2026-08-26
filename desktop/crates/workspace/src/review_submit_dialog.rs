@@ -17,14 +17,15 @@ use ui::{
   Button, ButtonVariants as _, StatusThemeExt as _, Textarea, TextareaState, WindowExt as _,
 };
 
-use crate::api::ApiClient;
+use crate::api::{ApiClient, GithubPullRequestReview};
 use crate::pull_request_review_submission::{
   ReviewDecision, decision_from_index, decision_index, validate_review_submission,
 };
 
-/// Invoked once the review is on GitHub: what showed it as pending has to look
-/// again.
-pub(crate) type ReviewSubmittedHandler = Rc<dyn Fn(&mut App)>;
+/// Invoked once the review is on GitHub, with the review the API answered:
+/// what showed it as pending has to look again, and the answer is the one
+/// thing GitHub cannot serve stale.
+pub(crate) type ReviewSubmittedHandler = Rc<dyn Fn(&GithubPullRequestReview, &mut App)>;
 
 /// The pull request a review is being submitted on, and what is waiting on it.
 #[derive(Clone, Debug)]
@@ -132,8 +133,8 @@ impl SubmitReviewDialog {
         });
 
         match result {
-          Ok(_) => {
-            on_submitted(cx);
+          Ok(review) => {
+            on_submitted(&review, cx);
             window.close_dialog(cx);
             window.push_notification(
               Notification::info(format!("Review submitted on #{number}")),
