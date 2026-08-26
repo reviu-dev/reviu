@@ -3246,14 +3246,12 @@ impl DockPanel {
     let mut selector = Button::new("dock-panel-checkout-selector")
       .debug_selector(|| DOCK_PANEL_CHECKOUT_SELECTOR_DEBUG_SELECTOR.to_string())
       .icon(UiIconName::GitBranch)
-      // A child instead of a label: the button's own label never shrinks.
-      // The max_w bound is what makes the ellipsis kick in: the popover
-      // wrapper around this button ignores flex shrinking (its trigger_style
-      // never reaches the trigger), so the button cannot follow the header.
+      // A child instead of a label: the button's own label never shrinks,
+      // this one takes the room the header has and ellipsizes past it.
       .child(div().min_w(px(0.)).truncate().child(displayed_branch))
-      .max_w(px(220.))
       .min_w(px(0.))
       .overflow_hidden()
+      .flex_shrink(1.)
       .compact()
       .small()
       .tooltip(if pinned {
