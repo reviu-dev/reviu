@@ -50,6 +50,7 @@ pub(crate) const DOCK_PANEL_HISTORY_DEBUG_SELECTOR: &str = "dock-panel-history";
 pub(crate) const DOCK_PANEL_PR_CHECKS_DEBUG_SELECTOR: &str = "dock-panel-pr-checks";
 pub(crate) const DOCK_PANEL_PR_MERGE_DEBUG_SELECTOR: &str = "dock-panel-pr-merge";
 pub(crate) const DOCK_PANEL_PR_MERGE_METHOD_DEBUG_SELECTOR: &str = "dock-panel-pr-merge-method";
+pub(crate) const DOCK_PANEL_PR_CHECKS_COUNTS_DEBUG_SELECTOR: &str = "dock-panel-pr-checks-counts";
 pub(crate) const DOCK_PANEL_PR_REVIEW_DEBUG_SELECTOR: &str = "dock-panel-pr-review";
 pub(crate) const DOCK_PANEL_PR_PENDING_COMMENTS_DEBUG_SELECTOR: &str =
   "dock-panel-pr-pending-comments";
@@ -75,7 +76,7 @@ use crate::github_shared::{pull_request_status_color, pull_request_status_label}
 use crate::merge_dialog::{MergeConfirmedHandler, open_merge_dialog};
 use crate::open_intent::OpenIntent;
 use crate::pull_request_checks::{
-  CheckRow, check_rows, check_state_sort_key, checks_summary_subtitle, checks_summary_title,
+  CheckRow, check_rows, check_state_sort_key, checks_state_counts, checks_summary_title,
   singular_or_plural,
 };
 use crate::pull_request_dialog::{
@@ -2777,6 +2778,7 @@ impl DockPanel {
             IconName::ChevronRight
           }))
           .when_some(checks, |this, checks| {
+            let counts = checks_state_counts(checks);
             this
               .child(check_state_icon(checks.overall_state, &theme).size_3())
               .child(
@@ -2788,6 +2790,27 @@ impl DockPanel {
                   .truncate()
                   .child(checks_summary_title(checks)),
               )
+              .when(!counts.is_empty(), |this| {
+                this.child(
+                  h_flex()
+                    .debug_selector(|| DOCK_PANEL_PR_CHECKS_COUNTS_DEBUG_SELECTOR.to_string())
+                    .flex_shrink_0()
+                    .items_center()
+                    .gap_1p5()
+                    .children(counts.into_iter().map(|(state, count)| {
+                      h_flex()
+                        .items_center()
+                        .gap_0p5()
+                        .child(check_state_icon(state, &theme).size_3())
+                        .child(
+                          div()
+                            .text_xs()
+                            .text_color(theme.muted_foreground)
+                            .child(count.to_string()),
+                        )
+                    })),
+                )
+              })
           })
           .when(checks.is_none(), |this| {
             this.child(
@@ -2813,16 +2836,17 @@ impl DockPanel {
       return block.into_any_element();
     }
 
-    if let Some(checks) = checks {
-      block = block.child(
-        div()
-          .px_3()
-          .pb_1()
-          .text_xs()
-          .text_color(theme.muted_foreground)
-          .child(checks_summary_subtitle(checks)),
-      );
-      let mut list = v_flex().w_full().gap_0p5().px_1().pb_2();
+    if checks.is_some() && !rows.is_empty() {
+      // Six rows on screen, the rest a scroll away: a wide CI must not push
+      // the file list out of the panel.
+      let mut list = v_flex()
+        .id("dock-panel-pr-checks-rows")
+        .w_full()
+        .max_h(px(250.))
+        .overflow_y_scroll()
+        .gap_0p5()
+        .px_1()
+        .pb_2();
       for row in rows {
         list = list.child(render_check_row(&row, &theme, cx));
       }
@@ -4546,6 +4570,25 @@ mod tests {
     cx.run_until_parked();
 
     assert!(cx.update(|window, cx| window.has_active_dialog(cx)));
+  }
+
+  #[gpui::test]
+  async fn the_check_counts_show_without_opening_the_block(cx: &mut TestAppContext) {
+    let (panel, cx) = pull_request_panel(cx, Vec::new());
+    panel.update(cx, |panel, cx| {
+      panel.pr_checks = Some(crate::pull_request_checks::checks_summary_fixture());
+      cx.notify();
+    });
+    cx.run_until_parked();
+
+    panel.read_with(cx, |panel, _| {
+      assert!(!panel.pr_details_expanded, "the block starts closed");
+    });
+    assert!(
+      cx.debug_bounds(DOCK_PANEL_PR_CHECKS_COUNTS_DEBUG_SELECTOR)
+        .is_some(),
+      "the split of the checks reads without a click"
+    );
   }
 
   #[gpui::test]

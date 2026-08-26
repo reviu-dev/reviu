@@ -10,6 +10,10 @@ The merge button now carries a chevron listing the other merge methods the repos
 
 Confirming a merge opens a small form prefilled with exactly what GitHub would generate for the commit title and message, following the repository's merge-message settings - down to the squash bullet list and its Co-authored-by trailers. Edit them, or clear a field to let GitHub write it. Rebase shows no fields, since it keeps the commits as they are.
 
+### The Checks Read At A Glance And Stay In Their Place
+
+The checks block header now carries compact per-state counts - failing first, then pending, skipped, successful - visible without opening the block, where the split used to hide behind a click. Opened, the list shows about six checks and scrolls for the rest: a CI with thirty jobs no longer pushes the file list out of the panel.
+
 ### The Pull Request Panel Says Where The Comments Are
 
 Each file in the pull request's file list now carries a comment icon and count when comments hang on it - tinted when some are still unsubmitted, muted when everything is published. Single comments finally have a place to be seen without opening every diff. Hovering a reviewer shows the message they left with their decision. And the Review tab's dot on the rail now also lights up for an unsubmitted pull request review, not only for local drafts to the agent.

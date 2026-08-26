@@ -59,30 +59,31 @@ pub(crate) fn checks_summary_title(checks: &GithubPullRequestChecksSummary) -> S
   }
 }
 
-pub(crate) fn checks_summary_subtitle(checks: &GithubPullRequestChecksSummary) -> String {
-  if checks.total_checks == 0 {
-    return "No checks reported".to_string();
-  }
-
-  let mut parts = Vec::new();
-  if checks.failed_checks > 0 {
-    parts.push(format!("{} failing", checks.failed_checks));
-  }
-  if checks.pending_checks > 0 {
-    parts.push(format!("{} pending", checks.pending_checks));
-  }
-  if checks.skipped_checks > 0 {
-    parts.push(format!("{} skipped", checks.skipped_checks));
-  }
-  if checks.successful_checks > 0 {
-    parts.push(format!(
-      "{} successful {}",
+/// The per-state counts the header wears, bad news first, zeroes dropped.
+pub(crate) fn checks_state_counts(
+  checks: &GithubPullRequestChecksSummary,
+) -> Vec<(GithubPullRequestChecksRollupState, u64)> {
+  [
+    (
+      GithubPullRequestChecksRollupState::Failure,
+      checks.failed_checks,
+    ),
+    (
+      GithubPullRequestChecksRollupState::Pending,
+      checks.pending_checks,
+    ),
+    (
+      GithubPullRequestChecksRollupState::Skipped,
+      checks.skipped_checks,
+    ),
+    (
+      GithubPullRequestChecksRollupState::Success,
       checks.successful_checks,
-      singular_or_plural(checks.successful_checks, "check", "checks")
-    ));
-  }
-
-  parts.join(", ")
+    ),
+  ]
+  .into_iter()
+  .filter(|(_, count)| *count > 0)
+  .collect()
 }
 
 pub(crate) fn format_check_duration(total_seconds: u64) -> String {
@@ -497,18 +498,31 @@ mod tests {
   }
 
   #[test]
-  fn checks_summary_subtitle_lists_skipped_alongside_success() {
+  fn the_counts_lead_with_the_bad_news_and_drop_the_zeroes() {
     let mut checks = make_checks_summary();
     checks.total_checks = 31;
     checks.successful_checks = 15;
-    checks.skipped_checks = 16;
-    checks.failed_checks = 0;
-    checks.pending_checks = 0;
-    checks.overall_state = GithubPullRequestChecksRollupState::Success;
+    checks.skipped_checks = 13;
+    checks.failed_checks = 2;
+    checks.pending_checks = 1;
+    checks.overall_state = GithubPullRequestChecksRollupState::Failure;
 
     assert_eq!(
-      checks_summary_subtitle(&checks),
-      "16 skipped, 15 successful checks"
+      checks_state_counts(&checks),
+      vec![
+        (GithubPullRequestChecksRollupState::Failure, 2),
+        (GithubPullRequestChecksRollupState::Pending, 1),
+        (GithubPullRequestChecksRollupState::Skipped, 13),
+        (GithubPullRequestChecksRollupState::Success, 15),
+      ]
+    );
+
+    checks.failed_checks = 0;
+    checks.pending_checks = 0;
+    checks.skipped_checks = 0;
+    assert_eq!(
+      checks_state_counts(&checks),
+      vec![(GithubPullRequestChecksRollupState::Success, 15)]
     );
   }
 }
