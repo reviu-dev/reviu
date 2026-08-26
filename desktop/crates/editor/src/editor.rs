@@ -3540,15 +3540,25 @@ impl Editor {
     self
       .review_comment_resolve_in_flight
       .insert(thread_id.clone());
-    // Remove the auto-collapse marker so a fresh re-resolve auto-collapses
-    // again on the next refresh; if the user just resolved, we also want the
-    // thread to collapse immediately rather than stay expanded.
+    self.apply_resolution_visibility(first_message_id, currently_resolved);
+    if self.diffs.is_some() {
+      self.rebuild_projection(cx);
+    } else {
+      cx.notify();
+    }
+    handler(thread_id, first_message_id, currently_resolved, window, cx);
+  }
+
+  /// Resolving folds the thread away at once; unresolving reopens the
+  /// conversation, so it unfolds at once. The auto-collapse marker resets so
+  /// a fresh re-resolve folds again on the next refresh.
+  fn apply_resolution_visibility(&mut self, first_message_id: u64, currently_resolved: bool) {
     self
       .auto_collapsed_resolved_thread_ids
       .remove(&first_message_id);
-    if !currently_resolved
-      && let Some(comment_ids) = self.review_comment_threads.get(&first_message_id).cloned()
-    {
+    if currently_resolved {
+      self.expand_review_comment_thread_for(first_message_id);
+    } else if let Some(comment_ids) = self.review_comment_threads.get(&first_message_id).cloned() {
       self
         .collapsed_review_comments
         .extend(comment_ids.iter().copied());
@@ -3556,12 +3566,6 @@ impl Editor {
         .auto_collapsed_resolved_thread_ids
         .insert(first_message_id);
     }
-    if self.diffs.is_some() {
-      self.rebuild_projection(cx);
-    } else {
-      cx.notify();
-    }
-    handler(thread_id, first_message_id, currently_resolved, window, cx);
   }
 
   fn ensure_find_input(
@@ -11682,6 +11686,29 @@ pub mod tests {
         cx,
       );
       assert!(!editor.collapsed_review_comments.contains(&1));
+    });
+  }
+
+  #[gpui::test]
+  fn test_resolving_folds_the_thread_and_unresolving_unfolds_it(cx: &mut TestAppContext) {
+    let mut ctx = EditorTestContext::with_text(cx.clone(), "a\nb");
+
+    ctx.editor.update(&mut ctx.cx, |editor, cx| {
+      editor.set_review_comments(
+        vec![
+          thread_comment(1, None, false),
+          thread_comment(2, Some(1), false),
+        ],
+        cx,
+      );
+
+      editor.apply_resolution_visibility(1, false);
+      assert!(editor.collapsed_review_comments.contains(&1));
+      assert!(editor.collapsed_review_comments.contains(&2));
+
+      editor.apply_resolution_visibility(1, true);
+      assert!(!editor.collapsed_review_comments.contains(&1));
+      assert!(!editor.collapsed_review_comments.contains(&2));
     });
   }
 
