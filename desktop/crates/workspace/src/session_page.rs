@@ -1,6 +1,6 @@
 //! Agent-first shell: sessions sidebar, conversation center, right dock.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::sync::Arc;
@@ -837,43 +837,18 @@ impl SessionPage {
   fn push_checkout_selector(&mut self, cx: &mut Context<Self>) {
     let displayed = self.checkout_root(cx);
     let pinned = self.active_checkout_override(cx).is_some();
-    let session_titles = self.worktree_session_titles(cx);
     let options: Vec<crate::dock_panel::CheckoutOption> = self
       .available_checkouts
       .iter()
       .map(|checkout| crate::dock_panel::CheckoutOption {
         path: checkout.path.clone(),
         branch: checkout.branch.clone().map(SharedString::from),
-        session_title: session_titles
-          .get(&checkout.path)
-          .cloned()
-          .map(SharedString::from),
         is_displayed: displayed.as_deref() == Some(checkout.path.as_path()),
       })
       .collect();
     self.dock_panel.update(cx, |panel, cx| {
       panel.set_checkout_selector(options, pinned, cx);
     });
-  }
-
-  /// Worktree path -> the bound session's title, for the selector's labels.
-  fn worktree_session_titles(&mut self, cx: &mut Context<Self>) -> HashMap<PathBuf, String> {
-    let Some(repo) = self.session_repo(cx) else {
-      return HashMap::new();
-    };
-    let Some((store, _)) = self.conversation_hub.store_for(&repo, cx) else {
-      return HashMap::new();
-    };
-    let store = store.read(cx);
-    let metas = store.list();
-    store
-      .worktree_bindings()
-      .into_iter()
-      .filter_map(|(id, binding)| {
-        let title = metas.iter().find(|meta| meta.id == id)?.title.clone();
-        (!title.is_empty()).then_some((binding.path, title))
-      })
-      .collect()
   }
 
   /// What a crash or a git error should carry about where the user was.

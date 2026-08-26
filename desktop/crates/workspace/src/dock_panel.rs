@@ -65,16 +65,6 @@ const DOCK_PANEL_REFRESH_DEBUG_SELECTOR: &str = "dock-panel-refresh";
 pub(crate) const DOCK_PANEL_ZOOM_DEBUG_SELECTOR: &str = "dock-panel-zoom";
 pub(crate) const DOCK_PANEL_CHECKOUT_SELECTOR_DEBUG_SELECTOR: &str = "dock-panel-checkout-selector";
 pub(crate) const DOCK_PANEL_CHECKOUT_FOLLOW_DEBUG_SELECTOR: &str = "dock-panel-checkout-follow";
-/// Worktree branches carry whole session titles; past this the header drowns.
-const CHECKOUT_LABEL_MAX_CHARS: usize = 20;
-
-fn ellipsize(text: &str, max_chars: usize) -> String {
-  if text.chars().count() <= max_chars {
-    return text.to_string();
-  }
-  let cut: String = text.chars().take(max_chars).collect();
-  format!("{}…", cut.trim_end())
-}
 use std::rc::Rc;
 
 use crate::api::{
@@ -560,8 +550,6 @@ pub(crate) struct CheckoutOption {
   pub path: PathBuf,
   /// None on a detached HEAD.
   pub branch: Option<SharedString>,
-  /// The worktree session's title, when a binding names one.
-  pub session_title: Option<SharedString>,
   pub is_displayed: bool,
 }
 
@@ -3258,7 +3246,13 @@ impl DockPanel {
     let selector = Button::new("dock-panel-checkout-selector")
       .debug_selector(|| DOCK_PANEL_CHECKOUT_SELECTOR_DEBUG_SELECTOR.to_string())
       .icon(UiIconName::GitBranch)
-      .label(ellipsize(&displayed_branch, CHECKOUT_LABEL_MAX_CHARS))
+      // A child instead of a label: the button's own label never shrinks,
+      // this one gives the whole branch when there is room and an ellipsis
+      // when there is not.
+      .child(div().min_w(px(0.)).truncate().child(displayed_branch))
+      .min_w(px(0.))
+      .overflow_hidden()
+      .flex_shrink(1.)
       .compact()
       .small()
       .tooltip(if pinned {
@@ -3287,13 +3281,10 @@ impl DockPanel {
       options.iter().fold(menu, |menu, option| {
         let view = view.clone();
         let path = option.path.clone();
-        // The worktree branch is generated from the session title: showing
-        // both would say the same thing twice.
         let label = option
-          .session_title
+          .branch
           .as_ref()
-          .map(|session| session.to_string())
-          .or_else(|| option.branch.as_ref().map(|branch| branch.to_string()))
+          .map(|branch| branch.to_string())
           .unwrap_or_else(|| {
             option
               .path
@@ -3314,7 +3305,7 @@ impl DockPanel {
     });
 
     let mut row = h_flex()
-      .flex_shrink_0()
+      .min_w(px(0.))
       .items_center()
       .gap_1()
       .child(selector);
@@ -3353,6 +3344,7 @@ impl Render for DockPanel {
           .flex_1()
           .min_w(px(0.0))
           .overflow_hidden()
+          .truncate()
           .text_xs()
           .font_weight(gpui::FontWeight::SEMIBOLD)
           .text_color(theme.muted_foreground)
@@ -3367,7 +3359,7 @@ impl Render for DockPanel {
       )
       .child(
         h_flex()
-          .flex_shrink_0()
+          .min_w(px(0.0))
           .items_center()
           .gap_1()
           .when(
@@ -3464,16 +3456,6 @@ mod tests {
   use std::sync::Arc;
   use std::sync::atomic::{AtomicBool, Ordering};
   use ui::CommandPaletteCommandId;
-
-  #[test]
-  fn ellipsize_cuts_on_characters_not_bytes() {
-    assert_eq!(ellipsize("main", 20), "main");
-    assert_eq!(
-      ellipsize("reviu-ya-quoi-dans-le-readme", 20),
-      "reviu-ya-quoi-dans-l…"
-    );
-    assert_eq!(ellipsize("héllo wörld élongated", 10), "héllo wörl…");
-  }
 
   #[gpui::test]
   async fn a_poll_re_reads_the_working_tree_without_calling_github(cx: &mut TestAppContext) {
