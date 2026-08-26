@@ -1,7 +1,7 @@
 //! Everything the shell paints: sidebar, center, diff header, dock.
 
 use super::*;
-use crate::annotations::AnnotationKind;
+use crate::annotations::{AnnotationKind, shows_annotation_navigation};
 use crate::diff_toolbar::{DiffToolbar, NavigationControl, SplitControl, ToggleControl};
 use crate::hunk_actions::render_hunk_actions;
 use gpui_component::Selectable as _;
@@ -392,7 +392,10 @@ impl SessionPage {
         );
     }
 
-    if let Some(state) = self.annotation_navigation(cx).filter(|_| !previewing) {
+    if let Some(state) = self
+      .annotation_navigation(cx)
+      .filter(|state| !previewing && shows_annotation_navigation(*state))
+    {
       let (previous_tooltip, next_tooltip) = match state.kind {
         AnnotationKind::Conflict => ("Previous conflict", "Next conflict"),
         AnnotationKind::Change => ("Previous change", "Next change"),
@@ -1363,6 +1366,81 @@ mod tests {
 
     page.read_with(cx, |page, _| {
       assert_eq!(page.diff_view, DiffViewMode::Inline);
+    });
+  }
+
+  #[gpui::test]
+  async fn a_single_hunk_hides_the_change_walker_but_keeps_its_target(cx: &mut TestAppContext) {
+    let repo = TempRepo::init("session-page-single-hunk-walker");
+    let original = (1..=60)
+      .map(|line| format!("line {line}\n"))
+      .collect::<String>();
+    commit_text_file(&repo.path, Path::new("README.md"), &original, "initial");
+    std::fs::write(repo.path.join("new.txt"), "brand new\n").expect("write untracked file");
+    let one_hunk = original.replace("line 5\n", "line 5 changed\n");
+    std::fs::write(repo.path.join("README.md"), &one_hunk).expect("update file");
+
+    let (page, cx) = add_session_page_window(repo.path.clone(), cx);
+    page.update(cx, |page, cx| {
+      page.dock_panel.update(cx, |panel, cx| panel.refresh(cx))
+    });
+    cx.run_until_parked();
+
+    // A new file is one hunk: no counter, no focus border, still a comment target.
+    page.update_in(cx, |page, window, cx| {
+      page.open_diff(PathBuf::from("new.txt"), None, OpenIntent::Open, window, cx);
+    });
+    await_open_file(&page, cx).await;
+    await_editor_diff(&page, cx).await;
+    page.update(cx, |_, cx| cx.notify());
+    cx.run_until_parked();
+    assert!(cx.debug_bounds(ANNOTATION_COUNTER_DEBUG_SELECTOR).is_none());
+    page.read_with(cx, |page, cx| {
+      let editor = page.editor.as_ref().expect("editor").read(cx);
+      assert!(editor.highlighted_hunk_group_id(cx).is_none());
+      assert!(editor.active_hunk_group_id(cx).is_some());
+    });
+
+    // A modified file with a single hunk follows the same rule.
+    page.update_in(cx, |page, window, cx| {
+      page.open_diff(
+        PathBuf::from("README.md"),
+        None,
+        OpenIntent::Open,
+        window,
+        cx,
+      );
+    });
+    await_open_file(&page, cx).await;
+    await_editor_diff(&page, cx).await;
+    page.update(cx, |_, cx| cx.notify());
+    cx.run_until_parked();
+    assert!(cx.debug_bounds(ANNOTATION_COUNTER_DEBUG_SELECTOR).is_none());
+
+    // A second hunk brings the walker back.
+    let two_hunks = one_hunk.replace("line 50\n", "line 50 changed\n");
+    std::fs::write(repo.path.join("README.md"), &two_hunks).expect("update file again");
+    page.update_in(cx, |page, window, cx| {
+      page.open_diff(PathBuf::from("new.txt"), None, OpenIntent::Open, window, cx);
+    });
+    await_open_file(&page, cx).await;
+    page.update_in(cx, |page, window, cx| {
+      page.open_diff(
+        PathBuf::from("README.md"),
+        None,
+        OpenIntent::Open,
+        window,
+        cx,
+      );
+    });
+    await_open_file(&page, cx).await;
+    await_editor_diff(&page, cx).await;
+    page.update(cx, |_, cx| cx.notify());
+    cx.run_until_parked();
+    assert!(cx.debug_bounds(ANNOTATION_COUNTER_DEBUG_SELECTOR).is_some());
+    page.read_with(cx, |page, cx| {
+      let editor = page.editor.as_ref().expect("editor").read(cx);
+      assert!(editor.highlighted_hunk_group_id(cx).is_some());
     });
   }
 

@@ -7139,6 +7139,10 @@ impl Editor {
 
   pub fn highlighted_hunk_group_id(&self, cx: &App) -> Option<Arc<str>> {
     let ordered = self.ordered_hunk_display_lines();
+    // A lone hunk gets no focus border: the diff backgrounds already mark it.
+    if ordered.len() < 2 {
+      return None;
+    }
     let active_index = self.active_hunk_index(&ordered, cx)?;
     Some(ordered[active_index].0.clone())
   }
@@ -10211,6 +10215,21 @@ pub mod tests {
         .expect("previous hunk navigation state");
       assert_eq!(previous_state.active_index, 1);
       assert_eq!(previous_state.active_display_line, 4);
+    });
+  }
+
+  #[gpui::test]
+  fn a_single_hunk_is_not_highlighted_but_stays_active(cx: &mut TestAppContext) {
+    let mut ctx = EditorTestContext::with_text(cx.clone(), "a\nb\nc\nd\ne\nf\n");
+
+    ctx.editor.update(&mut ctx.cx, |editor, cx| {
+      editor.projection = Some(Arc::new(projection_with_two_hunks(6, &[1])));
+      assert!(editor.highlighted_hunk_group_id(cx).is_none());
+      // The comment shortcut still has a target: only the focus cue goes away.
+      assert_eq!(editor.active_hunk_group_id(cx).as_deref(), Some("hunk-0"));
+
+      editor.projection = Some(Arc::new(projection_with_two_hunks(6, &[1, 4])));
+      assert!(editor.highlighted_hunk_group_id(cx).is_some());
     });
   }
 

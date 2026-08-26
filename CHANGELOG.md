@@ -94,6 +94,10 @@ Selecting a worktree session points everything at its checkout: changes, branch 
 
 Click a changed file, in the Changes list, the turn recap or a tool call, and its diff opens beside the conversation; Escape gives the conversation the width back. Comment on diff lines and send the batch to the agent as a structured prompt with file, lines and side.
 
+### A Quiet Diff For A Single Change
+
+When a file has only one hunk, a brand-new file included, the diff stops pointing at it: no focus border around the change, no arrows and no "1/1" counter in the header. The comment-this-hunk shortcut still targets it, and a conflicted file keeps its counter even at one conflict, since watching it fall to zero is the point.
+
 ### A Review Panel For The Batch
 
 The Review tab lists your comments grouped by file: click one to land on its lines, tick a selection or send everything, and single comments carry their own send arrow. A batch survives restarts and repository switches; sent comments leave the panel when the turn ends, a stopped or failed turn keeps them, and a comment whose lines were rewritten stays, tagged Outdated, left out of the batch. Dots on the rail icons say when a review or the working tree is waiting.
