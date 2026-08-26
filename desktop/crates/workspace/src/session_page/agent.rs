@@ -1153,22 +1153,17 @@ impl SessionPage {
     .detach();
   }
 
-  pub(super) fn new_worktree_session(
+  /// The section buttons name their repo explicitly: a worktree session is
+  /// always created in a repo the user pointed at.
+  pub(super) fn new_worktree_session_in(
     &mut self,
+    repo_root: PathBuf,
     base: Option<String>,
     window: &mut Window,
     cx: &mut Context<Self>,
   ) {
     prune_agent_chat_state_once();
     self.ensure_chat_store(cx);
-    if self.selected_repo.is_none() && self.agent_chat_view.is_none() {
-      window.push_notification(
-        Notification::warning("Open a repository before starting a worktree session."),
-        cx,
-      );
-      return;
-    }
-    let repo_root = self.creation_repo(cx);
     let target_store = self
       .conversation_hub
       .store_for(&repo_root, cx)
@@ -2339,7 +2334,7 @@ mod tests {
     let (repo, page, cx) = page_with_agent_panel("session-page-worktree-bind", cx).await;
 
     page.update_in(cx, |page, window, cx| {
-      page.new_worktree_session(None, window, cx)
+      page.new_worktree_session_in(repo.path.clone(), None, window, cx)
     });
     cx.run_until_parked();
 
@@ -2386,13 +2381,54 @@ mod tests {
   }
 
   #[gpui::test]
+  async fn a_worktree_session_can_start_in_a_repo_other_than_the_scope(cx: &mut TestAppContext) {
+    let (repo, page, cx) = page_with_agent_panel("session-page-worktree-cross", cx).await;
+    let other = TempRepo::init("session-page-worktree-cross-b");
+    commit_text_file(&other.path, Path::new("README.md"), "other\n", "initial");
+    let other_state = agent_chat_state_dir()
+      .map(|dir| AgentChatPanel::state_dir_for_repo(&dir, &other.path))
+      .expect("agent chat state dir");
+    let _ = std::fs::remove_dir_all(&other_state);
+
+    page.update_in(cx, |page, window, cx| {
+      page.new_worktree_session_in(other.path.clone(), None, window, cx)
+    });
+    cx.run_until_parked();
+
+    let panel = active_panel(&page, cx);
+    panel.read_with(cx, |panel, _| {
+      assert_eq!(
+        panel.repo_root(),
+        other.path.as_path(),
+        "the session belongs to the section's repo, not the scope"
+      );
+      assert_ne!(panel.cwd(), other.path.as_path());
+      assert!(
+        panel.cwd().join(".git").is_file(),
+        "a linked worktree of the other repo"
+      );
+    });
+    page.read_with(cx, |page, _| {
+      assert_eq!(
+        page.selected_repo.as_deref(),
+        Some(repo.path.as_path()),
+        "the scope did not move"
+      );
+    });
+
+    let _ = std::fs::remove_dir_all(&other_state);
+    cleanup_worktrees_root(&other.path);
+    cleanup_worktrees_root(&repo.path);
+  }
+
+  #[gpui::test]
   async fn deleting_a_worktree_session_removes_its_checkout_and_checkpoints(
     cx: &mut TestAppContext,
   ) {
     let (repo, page, cx) = page_with_agent_panel("session-page-worktree-delete", cx).await;
 
     page.update_in(cx, |page, window, cx| {
-      page.new_worktree_session(None, window, cx)
+      page.new_worktree_session_in(repo.path.clone(), None, window, cx)
     });
     cx.run_until_parked();
     let panel = active_panel(&page, cx);
@@ -2439,7 +2475,7 @@ mod tests {
     let (repo, page, cx) = page_with_agent_panel("session-page-worktree-stale", cx).await;
 
     page.update_in(cx, |page, window, cx| {
-      page.new_worktree_session(None, window, cx)
+      page.new_worktree_session_in(repo.path.clone(), None, window, cx)
     });
     cx.run_until_parked();
     let panel = active_panel(&page, cx);
@@ -2495,7 +2531,7 @@ mod tests {
     let (repo, page, cx) = page_with_agent_panel("session-page-worktree-checkpoint", cx).await;
 
     page.update_in(cx, |page, window, cx| {
-      page.new_worktree_session(None, window, cx)
+      page.new_worktree_session_in(repo.path.clone(), None, window, cx)
     });
     cx.run_until_parked();
     let panel = active_panel(&page, cx);
@@ -2552,7 +2588,7 @@ mod tests {
     let before = active_panel(&page, cx);
 
     page.update_in(cx, |page, window, cx| {
-      page.new_worktree_session(None, window, cx)
+      page.new_worktree_session_in(repo.path.clone(), None, window, cx)
     });
     cx.run_until_parked();
 
@@ -2673,7 +2709,7 @@ mod tests {
 
     // A worktree session points the dock and the branch header at its checkout.
     page.update_in(cx, |page, window, cx| {
-      page.new_worktree_session(None, window, cx)
+      page.new_worktree_session_in(repo.path.clone(), None, window, cx)
     });
     cx.run_until_parked();
     let worktree_panel = active_panel(&page, cx);
@@ -2754,7 +2790,7 @@ mod tests {
 
     // A worktree session changes the checkout: the diff belongs to the one left.
     page.update_in(cx, |page, window, cx| {
-      page.new_worktree_session(None, window, cx)
+      page.new_worktree_session_in(repo.path.clone(), None, window, cx)
     });
     cx.run_until_parked();
     page.read_with(cx, |page, _| {
@@ -2777,7 +2813,7 @@ mod tests {
     let main_id = main_session.read_with(cx, |panel, _| panel.current_conversation().id.clone());
 
     page.update_in(cx, |page, window, cx| {
-      page.new_worktree_session(None, window, cx)
+      page.new_worktree_session_in(repo.path.clone(), None, window, cx)
     });
     cx.run_until_parked();
     let worktree_panel = active_panel(&page, cx);
@@ -2814,7 +2850,7 @@ mod tests {
     let (repo, page, cx) = page_with_agent_panel("session-page-worktree-rename", cx).await;
 
     page.update_in(cx, |page, window, cx| {
-      page.new_worktree_session(None, window, cx)
+      page.new_worktree_session_in(repo.path.clone(), None, window, cx)
     });
     cx.run_until_parked();
     let panel = active_panel(&page, cx);
@@ -2864,7 +2900,7 @@ mod tests {
     let (repo, page, cx) = page_with_agent_panel("session-page-rename-deleted", cx).await;
 
     page.update_in(cx, |page, window, cx| {
-      page.new_worktree_session(None, window, cx)
+      page.new_worktree_session_in(repo.path.clone(), None, window, cx)
     });
     cx.run_until_parked();
     let panel = active_panel(&page, cx);
@@ -2989,7 +3025,7 @@ mod tests {
     commit_text_file(&repo.path, Path::new("extra.txt"), "x\n", "on feature");
 
     page.update_in(cx, |page, window, cx| {
-      page.new_worktree_session(Some("feature".to_string()), window, cx)
+      page.new_worktree_session_in(repo.path.clone(), Some("feature".to_string()), window, cx)
     });
     cx.run_until_parked();
     let feature_oid = crate::test_support::head_oid(&repo.path).to_string();
@@ -3009,7 +3045,7 @@ mod tests {
     let (repo, page, cx) = page_with_agent_panel("session-page-worktree-blank", cx).await;
 
     page.update_in(cx, |page, window, cx| {
-      page.new_worktree_session(None, window, cx)
+      page.new_worktree_session_in(repo.path.clone(), None, window, cx)
     });
     cx.run_until_parked();
     let cwd = active_panel(&page, cx).read_with(cx, |panel, _| panel.cwd().to_path_buf());
@@ -3035,7 +3071,7 @@ mod tests {
 
     // A worktree session left running in the background.
     page.update_in(cx, |page, window, cx| {
-      page.new_worktree_session(None, window, cx)
+      page.new_worktree_session_in(repo.path.clone(), None, window, cx)
     });
     cx.run_until_parked();
     let working = active_panel(&page, cx);
@@ -3173,7 +3209,7 @@ mod tests {
 
     // A fresh worktree session: bound, but blank, so absent from the index.
     page.update_in(cx, |page, window, cx| {
-      page.new_worktree_session(None, window, cx)
+      page.new_worktree_session_in(repo.path.clone(), None, window, cx)
     });
     cx.run_until_parked();
     let panel = active_panel(&page, cx);

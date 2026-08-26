@@ -82,7 +82,7 @@ Switching sessions never kills a running agent: its reply keeps streaming into t
 
 ### Sessions In Their Own Worktree, In Parallel
 
-A second sidebar button starts a session in its own git worktree, on a fresh `reviu-` branch from the base you pick, so its agent runs in parallel with other worktrees and with you in the main checkout. The branch renames itself after the conversation's title; a branch you checked out or renamed yourself is never touched. Deleting the session removes worktree, branch and snapshots, and opening a repository sweeps unreferenced `reviu-` worktrees.
+Each repository section in the sidebar carries two buttons: one starts a session in that repository, the other starts it in its own git worktree, on a fresh `reviu-` branch from the base you pick, so its agent runs in parallel with other worktrees and with you in the main checkout. The branch renames itself after the conversation's title; a branch you checked out or renamed yourself is never touched. Deleting the session removes worktree, branch and snapshots, and opening a repository sweeps unreferenced `reviu-` worktrees.
 
 ### The Whole Window Follows The Session's Checkout
 

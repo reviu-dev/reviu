@@ -280,7 +280,6 @@ impl SessionPage {
       &session_list,
       window,
       |this, _list, event: &SessionListEvent, window, cx| match event {
-        SessionListEvent::NewSession => this.new_session(window, cx),
         SessionListEvent::NewSessionIn { repo_root } => {
           this.new_session_in(repo_root.clone(), window, cx)
         }
@@ -290,8 +289,8 @@ impl SessionPage {
             .session_list
             .update(cx, |list, cx| list.toggle_repo_collapsed(&repo_root, cx));
         }
-        SessionListEvent::NewWorktreeSession { base } => {
-          this.new_worktree_session(base.clone(), window, cx)
+        SessionListEvent::NewWorktreeSessionIn { repo_root, base } => {
+          this.new_worktree_session_in(repo_root.clone(), base.clone(), window, cx)
         }
         SessionListEvent::Collapse => this.close_sidebar(cx),
         SessionListEvent::Selected { id } => this.select_session(id, window, cx),
@@ -635,13 +634,11 @@ impl SessionPage {
       .unwrap_or_default();
     let statuses = self.session_statuses(cx);
     let worktree_branches = self.conversation_hub.worktree_branches(cx);
-    let scope_repo = self.session_repo(cx);
     self.session_list.update(cx, |list, cx| {
       list.set_conversations(conversations, current_id, cx);
       list.set_section_order(section_order, cx);
       list.set_statuses(statuses, cx);
       list.set_worktree_branches(worktree_branches, cx);
-      list.set_scope_repo(scope_repo, cx);
     });
   }
 

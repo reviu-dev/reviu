@@ -72,7 +72,6 @@ pub struct SessionRow {
 }
 
 pub enum SessionListEvent {
-  NewSession,
   /// The section header's compose button: a session in THAT repo.
   NewSessionIn {
     repo_root: PathBuf,
@@ -81,9 +80,11 @@ pub enum SessionListEvent {
   ToggleRepoCollapsed {
     repo_root: PathBuf,
   },
-  /// A session whose agent works in its own git worktree, started from
-  /// `base`; `None` is the repository's default branch.
-  NewWorktreeSession {
+  /// The section header's worktree button: a session whose agent works in its
+  /// own git worktree of THAT repo, started from `base`; `None` is the
+  /// repository's default branch.
+  NewWorktreeSessionIn {
+    repo_root: PathBuf,
     base: Option<String>,
   },
   /// The collapse button in the header; the page owns the sidebar width.
@@ -105,9 +106,6 @@ pub struct SessionList {
   statuses: HashMap<String, SessionStatus>,
   /// Worktree branch by conversation id, shown under the row.
   worktree_branches: HashMap<String, String>,
-  /// Worktree creation targets this repo, so its base picker reads branches
-  /// from it, at menu-open time (always fresh, never polled).
-  scope_repo: Option<PathBuf>,
   /// Folded repo sections; folding IS the filter now.
   collapsed_repos: std::collections::HashSet<PathBuf>,
   /// Every tracked repo, in stable order: sections render from this, so an
@@ -123,7 +121,6 @@ impl SessionList {
       loading_id: None,
       statuses: HashMap::new(),
       worktree_branches: HashMap::new(),
-      scope_repo: None,
       collapsed_repos: std::collections::HashSet::new(),
       section_order: Vec::new(),
     }
@@ -151,13 +148,6 @@ impl SessionList {
   #[cfg(test)]
   pub(crate) fn is_repo_collapsed(&self, repo_root: &Path) -> bool {
     self.collapsed_repos.contains(repo_root)
-  }
-
-  pub fn set_scope_repo(&mut self, scope_repo: Option<PathBuf>, cx: &mut Context<Self>) {
-    if self.scope_repo != scope_repo {
-      self.scope_repo = scope_repo;
-      cx.notify();
-    }
   }
 
   pub fn set_loading(&mut self, loading_id: Option<String>, cx: &mut Context<Self>) {
@@ -261,8 +251,8 @@ impl SessionList {
 }
 
 impl SessionList {
-  /// A repo's section header: fold toggle, name, count when folded, and a
-  /// hover compose button that creates a session in THAT repo.
+  /// A repo's section header: fold toggle, name, count when folded, and the
+  /// two create buttons that target THAT repo (session, worktree session).
   fn render_repo_header(
     &self,
     repo_root: &Path,
@@ -278,6 +268,7 @@ impl SessionList {
       .into();
     let toggle_repo = repo_root.to_path_buf();
     let compose_repo = repo_root.to_path_buf();
+    let worktree_repo = repo_root.to_path_buf();
     let group_name = SharedString::from(format!("repo-section-{}", repo_root.display()));
 
     h_flex()
@@ -328,8 +319,10 @@ impl SessionList {
         )
       })
       .child(
-        div()
-          .opacity(0.0)
+        h_flex()
+          .items_center()
+          .gap_1()
+          .opacity(0.6)
           .group_hover(group_name, |this| this.opacity(1.0))
           .child(
             Button::new(SharedString::from(format!(
@@ -347,9 +340,101 @@ impl SessionList {
                 repo_root: compose_repo.clone(),
               });
             })),
+          )
+          .child(
+            // The wrapper keeps the dropdown's click from folding the section.
+            div()
+              .id(SharedString::from(format!(
+                "session-repo-worktree-wrap-{}",
+                worktree_repo.display()
+              )))
+              .on_click(cx.listener(|_, _, _, cx| cx.stop_propagation()))
+              .child(Self::render_worktree_button(worktree_repo, cx)),
           ),
       )
       .into_any_element()
+  }
+
+  /// The worktree button of one repo section: its base picker reads branches
+  /// from THAT repo, at menu-open time (always fresh, never polled).
+  fn render_worktree_button(repo_root: PathBuf, cx: &mut Context<Self>) -> impl IntoElement {
+    let entity = cx.entity().downgrade();
+    Button::new(SharedString::from(format!(
+      "session-repo-worktree-{}",
+      repo_root.display()
+    )))
+    .debug_selector(|| format!("session-repo-worktree-{}", repo_root.display()))
+    .icon(UiIconName::GitBranch)
+    .ghost()
+    .compact()
+    .xsmall()
+    .tooltip("New worktree session in this repository")
+    .dropdown_menu_with_anchor(Anchor::TopLeft, move |menu, _, _| {
+      let mut menu = menu.max_h(px(360.)).scrollable(true);
+      let base_candidates: Vec<SharedString> = git::list_branches(&repo_root)
+        .ok()
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|branch| branch.kind == git::BranchKind::Local)
+        .map(|branch| SharedString::from(branch.name))
+        .collect();
+      let default_entity = entity.clone();
+      let default_repo = repo_root.clone();
+      menu = menu.item(
+        PopupMenuItem::element(move |_, cx| {
+          let theme = cx.theme().clone();
+          div()
+            .text_sm()
+            .text_color(theme.foreground)
+            .debug_selector(|| "session-worktree-base-default".to_string())
+            .child("Default branch")
+            .into_any_element()
+        })
+        .on_click(move |_, _, cx| {
+          let repo_root = default_repo.clone();
+          let _ = default_entity.update(cx, |_, cx| {
+            cx.emit(SessionListEvent::NewWorktreeSessionIn {
+              repo_root,
+              base: None,
+            });
+          });
+        }),
+      );
+      // Any branch is a valid base: the worktree gets a NEW branch at its
+      // commit, nothing is checked out twice.
+      for candidate in &base_candidates {
+        let label = candidate.clone();
+        let base = candidate.to_string();
+        let entity = entity.clone();
+        let item_repo = repo_root.clone();
+        menu = menu.item(
+          PopupMenuItem::element(move |_, cx| {
+            let theme = cx.theme().clone();
+            h_flex()
+              .gap_2()
+              .items_center()
+              .child(
+                Icon::new(UiIconName::GitBranch)
+                  .small()
+                  .text_color(theme.muted_foreground),
+              )
+              .child(div().text_sm().child(label.clone()))
+              .into_any_element()
+          })
+          .on_click(move |_, _, cx| {
+            let repo_root = item_repo.clone();
+            let base = base.clone();
+            let _ = entity.update(cx, |_, cx| {
+              cx.emit(SessionListEvent::NewWorktreeSessionIn {
+                repo_root,
+                base: Some(base),
+              });
+            });
+          }),
+        );
+      }
+      menu
+    })
   }
 }
 
@@ -378,98 +463,14 @@ impl Render for SessionList {
           .child("Sessions"),
       )
       .child(
-        h_flex()
-          .items_center()
-          .gap_1()
-          .child(
-            Button::new("session-page-new-session")
-              .icon(UiIconName::SquarePen)
-              .ghost()
-              .compact()
-              .small()
-              .tooltip("New session")
-              .on_click(cx.listener(|_, _, _, cx| cx.emit(SessionListEvent::NewSession))),
-          )
-          .child({
-            let entity = cx.entity().downgrade();
-            let scope_repo = self.scope_repo.clone();
-            Button::new("session-page-new-worktree-session")
-              .debug_selector(|| "session-page-new-worktree-session".to_string())
-              .icon(UiIconName::GitBranch)
-              .ghost()
-              .compact()
-              .small()
-              .tooltip("New session in a worktree")
-              .dropdown_menu_with_anchor(Anchor::TopLeft, move |menu, _, _| {
-                let mut menu = menu.max_h(px(360.)).scrollable(true);
-                // Read at menu-open, from the SCOPE repo (worktree creation
-                // targets it, not the shown session's checkout).
-                let base_candidates: Vec<SharedString> = scope_repo
-                  .as_deref()
-                  .and_then(|repo| git::list_branches(repo).ok())
-                  .unwrap_or_default()
-                  .into_iter()
-                  .filter(|branch| branch.kind == git::BranchKind::Local)
-                  .map(|branch| SharedString::from(branch.name))
-                  .collect();
-                let default_entity = entity.clone();
-                menu = menu.item(
-                  PopupMenuItem::element(move |_, cx| {
-                    let theme = cx.theme().clone();
-                    div()
-                      .text_sm()
-                      .text_color(theme.foreground)
-                      .debug_selector(|| "session-worktree-base-default".to_string())
-                      .child("Default branch")
-                      .into_any_element()
-                  })
-                  .on_click(move |_, _, cx| {
-                    let _ = default_entity.update(cx, |_, cx| {
-                      cx.emit(SessionListEvent::NewWorktreeSession { base: None });
-                    });
-                  }),
-                );
-                // Any branch is a valid base: the worktree gets a NEW branch
-                // at its commit, nothing is checked out twice.
-                for candidate in &base_candidates {
-                  let label = candidate.clone();
-                  let base = candidate.to_string();
-                  let entity = entity.clone();
-                  menu = menu.item(
-                    PopupMenuItem::element(move |_, cx| {
-                      let theme = cx.theme().clone();
-                      h_flex()
-                        .gap_2()
-                        .items_center()
-                        .child(
-                          Icon::new(UiIconName::GitBranch)
-                            .small()
-                            .text_color(theme.muted_foreground),
-                        )
-                        .child(div().text_sm().child(label.clone()))
-                        .into_any_element()
-                    })
-                    .on_click(move |_, _, cx| {
-                      let base = base.clone();
-                      let _ = entity.update(cx, |_, cx| {
-                        cx.emit(SessionListEvent::NewWorktreeSession { base: Some(base) });
-                      });
-                    }),
-                  );
-                }
-                menu
-              })
-          })
-          .child(
-            Button::new("session-sidebar-collapse")
-              .debug_selector(|| "session-sidebar-collapse".to_string())
-              .icon(gpui_component::IconName::PanelLeftClose)
-              .ghost()
-              .compact()
-              .small()
-              .tooltip("Collapse sidebar")
-              .on_click(cx.listener(|_, _, _, cx| cx.emit(SessionListEvent::Collapse))),
-          ),
+        Button::new("session-sidebar-collapse")
+          .debug_selector(|| "session-sidebar-collapse".to_string())
+          .icon(gpui_component::IconName::PanelLeftClose)
+          .ghost()
+          .compact()
+          .small()
+          .tooltip("Collapse sidebar")
+          .on_click(cx.listener(|_, _, _, cx| cx.emit(SessionListEvent::Collapse))),
       );
 
     // Sections come from the tracked-repo order so an empty repo keeps its
