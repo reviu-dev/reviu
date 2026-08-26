@@ -1960,6 +1960,19 @@ impl DockPanel {
   }
 
   pub(crate) fn set_repo_root(&mut self, repo_root: Option<PathBuf>, cx: &mut Context<Self>) {
+    // Another checkout means another pull request: what is on screen or still
+    // in flight answers for the one we left, and the staleness window or a
+    // same-named branch would keep it alive. Drop it all before moving.
+    if self.repo_root != repo_root {
+      self._pr_task = None;
+      self._pr_range_task = None;
+      self._pr_checks_task = None;
+      self.pr_refresh_pending = 0;
+      self.pr_fetched_at = None;
+      self.pr_branch = None;
+      self.reset_pull_request_details(cx);
+      self.set_branch_pr(BranchPrState::Loading, cx);
+    }
     self.repo_root = repo_root.clone();
     self.status_entries.clear();
     self.last_error = None;
@@ -4785,6 +4798,72 @@ mod tests {
       &[(PathBuf::from("src/main.rs"), Some(12), OpenIntent::Open)],
       "the link asked for the comment, so the diff opens on its lines"
     );
+  }
+
+  #[gpui::test]
+  async fn switching_checkout_drops_the_previous_pull_requests_review(cx: &mut TestAppContext) {
+    let (panel, cx) = pull_request_panel(
+      cx,
+      vec![changed_file(
+        "src/main.rs",
+        git::CommitFileChangeKind::Modified,
+      )],
+    );
+    panel.update(cx, |panel, cx| {
+      // A fresh lookup: without the reset, the staleness window would happily
+      // reuse it for the next checkout.
+      panel.pr_fetched_at = Some(cx.background_executor().now());
+      panel.set_pull_request_review_comments_for_test(
+        vec![
+          crate::pull_request_review_comments::pending_comment_fixture(
+            9,
+            "src/main.rs",
+            Some(12),
+            "from the repo we left",
+          ),
+        ],
+        cx,
+      );
+    });
+    cx.run_until_parked();
+
+    // The same checkout again: nothing moves.
+    panel.update(cx, |panel, cx| {
+      panel.set_repo_root(Some(PathBuf::from("/repo")), cx)
+    });
+    panel.read_with(cx, |panel, cx| {
+      assert_eq!(
+        panel
+          .review_list
+          .read(cx)
+          .comments(ReviewSection::PullRequest)
+          .len(),
+        1,
+        "the same checkout keeps its review"
+      );
+    });
+
+    panel.update(cx, |panel, cx| {
+      panel.set_repo_root(Some(PathBuf::from("/other")), cx)
+    });
+    panel.read_with(cx, |panel, cx| {
+      assert!(
+        panel
+          .review_list
+          .read(cx)
+          .comments(ReviewSection::PullRequest)
+          .is_empty(),
+        "the review of the checkout we left is gone at once"
+      );
+      assert!(
+        matches!(panel.branch_pr, BranchPrState::Loading),
+        "the old pull request no longer answers for the new checkout"
+      );
+      assert!(
+        panel.pr_fetched_at.is_none(),
+        "the next refresh may not reuse the old lookup"
+      );
+    });
   }
 
   #[gpui::test]
