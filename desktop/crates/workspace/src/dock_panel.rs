@@ -65,6 +65,16 @@ const DOCK_PANEL_REFRESH_DEBUG_SELECTOR: &str = "dock-panel-refresh";
 pub(crate) const DOCK_PANEL_ZOOM_DEBUG_SELECTOR: &str = "dock-panel-zoom";
 pub(crate) const DOCK_PANEL_CHECKOUT_SELECTOR_DEBUG_SELECTOR: &str = "dock-panel-checkout-selector";
 pub(crate) const DOCK_PANEL_CHECKOUT_FOLLOW_DEBUG_SELECTOR: &str = "dock-panel-checkout-follow";
+/// Worktree branches carry whole session titles; past this the header drowns.
+const CHECKOUT_LABEL_MAX_CHARS: usize = 20;
+
+fn ellipsize(text: &str, max_chars: usize) -> String {
+  if text.chars().count() <= max_chars {
+    return text.to_string();
+  }
+  let cut: String = text.chars().take(max_chars).collect();
+  format!("{}…", cut.trim_end())
+}
 use std::rc::Rc;
 
 use crate::api::{
@@ -3230,7 +3240,7 @@ impl DockPanel {
   /// it until the session takes back over.
   fn render_checkout_selector(&self, cx: &mut Context<Self>) -> AnyElement {
     let pinned = self.checkout_pinned;
-    let displayed_branch: SharedString = self
+    let displayed_branch = self
       .checkout_options
       .iter()
       .find(|option| option.is_displayed)
@@ -3248,7 +3258,7 @@ impl DockPanel {
     let selector = Button::new("dock-panel-checkout-selector")
       .debug_selector(|| DOCK_PANEL_CHECKOUT_SELECTOR_DEBUG_SELECTOR.to_string())
       .icon(UiIconName::GitBranch)
-      .label(displayed_branch)
+      .label(ellipsize(&displayed_branch, CHECKOUT_LABEL_MAX_CHARS))
       .compact()
       .small()
       .tooltip(if pinned {
@@ -3277,16 +3287,20 @@ impl DockPanel {
       options.iter().fold(menu, |menu, option| {
         let view = view.clone();
         let path = option.path.clone();
-        let label = match (&option.branch, &option.session_title) {
-          (Some(branch), Some(session)) => format!("{branch} · {session}"),
-          (Some(branch), None) => branch.to_string(),
-          (None, Some(session)) => format!("detached · {session}"),
-          (None, None) => option
-            .path
-            .file_name()
-            .map(|name| name.to_string_lossy().into_owned())
-            .unwrap_or_else(|| option.path.display().to_string()),
-        };
+        // The worktree branch is generated from the session title: showing
+        // both would say the same thing twice.
+        let label = option
+          .session_title
+          .as_ref()
+          .map(|session| session.to_string())
+          .or_else(|| option.branch.as_ref().map(|branch| branch.to_string()))
+          .unwrap_or_else(|| {
+            option
+              .path
+              .file_name()
+              .map(|name| name.to_string_lossy().into_owned())
+              .unwrap_or_else(|| option.path.display().to_string())
+          });
         let mut item = PopupMenuItem::new(label).on_click(move |_, _, cx| {
           view.update(cx, |_, cx| {
             cx.emit(DockPanelEvent::PinCheckout { path: path.clone() });
@@ -3450,6 +3464,16 @@ mod tests {
   use std::sync::Arc;
   use std::sync::atomic::{AtomicBool, Ordering};
   use ui::CommandPaletteCommandId;
+
+  #[test]
+  fn ellipsize_cuts_on_characters_not_bytes() {
+    assert_eq!(ellipsize("main", 20), "main");
+    assert_eq!(
+      ellipsize("reviu-ya-quoi-dans-le-readme", 20),
+      "reviu-ya-quoi-dans-l…"
+    );
+    assert_eq!(ellipsize("héllo wörld élongated", 10), "héllo wörl…");
+  }
 
   #[gpui::test]
   async fn a_poll_re_reads_the_working_tree_without_calling_github(cx: &mut TestAppContext) {
