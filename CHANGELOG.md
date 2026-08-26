@@ -4,200 +4,150 @@ All notable changes to Reviu are documented here.
 
 ## 1.0.0
 
-The first release. A coding agent works, you review what it did, with a real git client underneath - in one window.
+### One Workspace
 
-### One Window For The Whole Loop
+The separate Git page is gone: everything it did happens in the Sessions workspace, now the only place Reviu opens. The changes list with hunk staging, conflicts, the history, the file tree, the terminal, branches, stashes, cherry-pick, the interactive rebase (its todo now takes the whole centre) and every keyboard shortcut moved there, next to the agent and the diff. Old links and shortcuts land in the workspace.
 
-Your agent sessions live in the left sidebar, the conversation and the diff share the centre, and the repository sits in the right dock: Changes, Review, Files, History, Pull request and a Terminal, on a permanent icon rail that never truncates however narrow the panel gets. Panels slide in and out, their edges drag to resize with a double-click returning the default width, and an expand button gives the right dock the whole window for a large diff or a long terminal session. Focus always lands somewhere alive: closing a panel hands the keyboard to the diff or the composer, never to nothing.
+### GitHub Without Its Pages
 
-What Reviu does not rebuild, it hands to the browser: repositories, issues, profiles, releases and discussions open on github.com, where they are always up to date. What stays in Reviu is the loop you came for: the agent, the diff, the review, the pull request.
+The pull request page, the repository browser, profiles and the GitHub home are gone too. The branch's pull request lives in the right dock, notifications live in the sidebar (one click to open, a check to mark done), and everything else opens on github.com, where it is always up to date: repositories, issues, profiles, commits, discussions.
+
+### One AI In The App, The Agent
+
+Reviu no longer asks for an OpenAI or Anthropic key: the AI settings, the pull request brief and the generate-commit-message button are gone. Your agent already reads the repository and the diff, so a summary or a commit message is one prompt away, with the model you already pay for.
 
 ### Any Coding Agent, From The ACP Registry
 
-The agent picker is served by the official ACP registry: twenty-three agents out of the box - Gemini, Copilot, Qwen, Cline, Kilo, Grok and the rest alongside Claude, Codex and Pi - each launched with the version the registry publishes, each with its own icon. A copy ships with the app and another is cached on disk, so the picker is populated on first launch and stays populated offline; the list refreshes itself in the background, so new agents arrive without an update to Reviu. Pick the model, mode, reasoning effort or thinking budget the backend advertises, and the choice is remembered per agent. When an agent will not start, the message points at that agent's own page instead of a generic one.
+The agent picker is served by the official ACP registry: twenty-three agents out of the box, from Claude, Codex and Gemini to Copilot and Cline, each launched with the version the registry publishes, each with its own icon. A bundled copy and a disk cache keep the picker populated offline, and background refreshes bring new agents without an update to Reviu.
 
 ### A Conversation Built For Watching An Agent Work
 
-The agent's narration appears where it happened: an explanation before an edit stays before the edit, thoughts close before the prose they led to. While the agent reasons, a live glimpse of its thinking scrolls by, dimmed, and folds into a discreet expandable line when it ends. Tool steps read as one clean line with a small icon tile; only a failure brings color. Consecutive tool calls group under a single summary like "Ran 2 commands · Edited 1 file", open while the agent works, folded when the turn ends. Your messages read as tinted bubbles on the right, images you attach show as real thumbnails, and code blocks in replies are syntax highlighted with a language label and a copy button.
-
-Read results and edit diffs inside tool cards carry real file line numbers, their text is selectable across lines in one drag, and everything the agent shows of a file is colored by the same fifty-language engine as the editor.
+The agent's narration appears where it happened, thinking streams as a dimmed live glimpse that folds when it ends, and tool steps read as one clean line, grouped under a summary that folds when the turn ends. Read results and edit diffs carry real file line numbers, text is selectable everywhere, and terminal output keeps the colors tools emit.
 
 ### The Turn Closes With A Receipt
 
-When a turn that touched files finishes, the conversation closes it with a summary card: how many files were edited, added and removed line counts overall and per file. Each file row opens its diff, Review jumps straight into the diff view, and Undo reverts the turn's file changes while keeping the conversation - the card simply flips to "Undone". Undo is only offered on the latest turn, so it can never clobber work from the turns that came after.
-
-The rest of the turn tucks itself away: the thinking, the tool steps and the in-between narration fold behind the card, leaving your question, the agent's final answer and a "Worked for 2m 5s · 8 steps" row. Click it to unfold the full timeline, click again to tidy it back up.
+A turn that touched files ends with a summary card: files edited, added and removed lines, per file. Each row opens its diff, Review jumps into the diff view, and Undo reverts the turn's changes while keeping the conversation. The rest of the turn folds behind the card: your question, the final answer and a "Worked for 2m 5s · 8 steps" row that unfolds on click.
 
 ### Checkpoints: Roll Back Any Turn
 
-Every prompt snapshots your working tree, untracked files included, before the agent starts, shown as a discreet checkpoint line in the conversation. Roll back restores your files exactly as they were at that point - your branch, HEAD and staged state are never touched - and trims the conversation back to the checkpoint, so a bad turn is never more than one click from undone. The rollback itself takes a safety snapshot first, so even a rollback can be recovered. Checkpoints live under hidden git refs and are pruned automatically.
+Every prompt snapshots your working tree, untracked files included, before the agent starts. Roll back restores your files exactly and trims the conversation to the checkpoint; your branch, HEAD and staged state are never touched, and the rollback itself takes a safety snapshot first. Checkpoints live under hidden git refs and are pruned automatically.
 
 ### Edit A Message And Replay From There
 
-Hovering a message reveals a copy button, and your own prompts gain an edit button. The edit happens inside the bubble itself - same shape, same place, Enter sends, Shift+Enter adds a line, Escape cancels. Sending the edit restores the files to the checkpoint taken before that prompt, drops the turns after it, and replays the conversation from your new wording in a fresh session.
+Your prompts gain edit and copy buttons on hover. The edit happens inside the bubble; sending it restores the files to the checkpoint taken before that prompt, drops the turns after it, and replays from your new wording in a fresh session.
 
 ### Queue The Next Message, Or Steer The Turn
 
-You never wait for a turn to finish before writing the next instruction. Enter queues the message in a card above the composer, ready to edit or remove; when the turn ends it is sent as the next one. Cmd+Enter (Ctrl+Enter on Linux/Windows) sends your message straight into the running turn instead: "actually, skip the tests" lands immediately. If the agent refuses the injection, the message safely returns to the queue and the turn keeps running. With an agent that cannot take mid-turn input, Cmd+Enter simply queues, instead of trying and coming back with a refusal. Stopping a turn holds the queue: nothing runs until you decide.
+Enter queues your message while a turn runs, editable until it goes out. Cmd+Enter sends it straight into the running turn; a refused injection returns to the queue, and an agent that cannot take mid-turn input simply queues. Stopping a turn holds the queue.
 
 ### Watch Commands Run
 
-The agent's shell commands run in terminals Reviu owns, and their output streams live into the conversation: the command, the tail of its output as it arrives, and the exit code when it finishes, in red when it failed. A running command carries a stop button, so a hung build never holds the turn hostage. Output shows the colors the tools emit - cargo's greens and reds, test runner highlights - adapted to light and dark themes, and Reviu asks common CLI tools (Cargo, pnpm, npm, Vitest, Jest and other color-aware commands) to keep color on even though their output is captured. Everything is selectable and copies clean.
+The agent's shell commands run in terminals Reviu owns and stream live into the conversation: the command, the tail of the output, the exit code, and a stop button while it runs, so a hung build never holds the turn hostage. Reviu asks Cargo, pnpm, Vitest and other color-aware tools to keep color on even though their output is captured.
 
 ### See What You Are Approving
 
-Permission requests show the thing being approved, not just a title: the full command for a shell run, the URL for a fetch, per-file added and removed counts for an edit. Long commands scroll in place and can be copied, answered cards show the button you pressed, and cards survive a reload.
-
-An Auto-approve toggle in the composer answers the agent's permission requests for you, always picking the allow option, so long unattended runs stop parking on a question. Cards answered this way say "Auto-approved", a request with no allow option still waits for you, and the choice sticks with the conversation.
+Permission cards show the thing being approved: the full command, the URL, per-file counts for an edit. An Auto-approve toggle answers requests for you, always picking the allow option; cards answered this way say "Auto-approved", and a request with no allow option still waits.
 
 ### Show The Agent A Screenshot
 
-Paste an image into the composer or drop one onto it and it stages as a thumbnail, removable with one click, then rides along with your next message. Dropping a regular file inserts it as an @ mention instead. Image attachments appear only when the connected agent actually accepts images.
+Paste or drop an image and it stages as a thumbnail riding along with your next message; a regular file drops as an @ mention. Image attachments appear only when the agent accepts images.
 
-### Slash Commands And @ Context
+### Slash Commands From Your Agent
 
-Typing "/" at the start of the composer opens the commands your agent actually offers, from its built-ins to your project's own, filtered as you type. Type "@" to reference a file by name; the list refreshes after every turn, so files the agent just created are mentionable. And selecting lines in the diff and pressing `cmd-shift-l` attaches exactly what you highlighted to your next message.
+Typing "/" at the start of the composer lists the commands your agent actually offers, from its built-ins to your project's own, filtered as you type. A path in the middle of a sentence stays a path.
 
 ### Know When The Agent Needs You
 
-Working in another app while the agent runs, Reviu shows a small popup in the corner of your screen when a turn finishes or when the agent waits on a permission, and clicking it brings you straight back. It only appears while the window is inactive, never over your work in Reviu itself. A switch in Settings turns it off.
+A small popup in the corner of your screen says when a turn finishes or a permission waits, only while the window is inactive, and clicking it brings you back. A switch in Settings turns it off.
 
 ### A Failed Turn Is Loud, Whatever The Agent Hides
 
-A failed turn shows a red error card in the conversation naming what happened (usage limit or credits exhausted, rate limited, provider unreachable), and marks the session's row as Failed until the next attempt. A turn that ends without any reply at all is flagged the same way, so an agent that swallows its provider's refusal cannot fail silently; an error the agent already printed itself is not shown twice. When the agent process dies, the error offers a Reconnect button right there, and a stopped turn leaves a "Stopped" marker instead of ending silently.
+A failed turn shows a red card naming what happened (credits exhausted, rate limited, provider unreachable) and marks the session's row Failed; a turn that ends with no reply at all is flagged the same way, so nothing fails silently. A dead agent process offers Reconnect right there.
 
 ### Fast From The First Word To The Last
 
-Each streamed chunk extends the rendered reply incrementally instead of re-reading the whole message, the screen repaints at a steady beat while the agent streams, and transcripts save on a short throttle off the main thread - so a busy session stays smooth and the CPU stays calm from start to finish. Switching conversations never freezes the app: the current one stays on screen, the target row shows a small spinner, and the switch lands as soon as the transcript is ready. The sidebar lists conversations from a small index, so repositories with a long history open their session list instantly, each row with a one-line preview of the last message.
+Streaming renders incrementally, repaints on a steady beat, and saves off the main thread, so long sessions stay smooth and the CPU calm. Switching conversations never freezes the app, and the sidebar lists sessions from an index, instantly, with a one-line preview per row.
 
 ### The Conversation Keeps Your Place
 
-A half-typed message stays where you left it: each conversation keeps its own composer draft, restored after switching sessions or restarting the app. Switching back to a conversation returns you to the exact spot you were reading; one left at the bottom keeps following new messages. Sending a message pins it to the top of the conversation with the reply streaming below it, so nothing scrolls under your eyes, and the jump-to-bottom pill sticks: one click and the conversation follows the streaming reply until you scroll up to read. Cmd+Shift+J jumps to the latest message from the keyboard.
+Each conversation keeps its composer draft and its scroll position across switches and restarts. Sending pins your message to the top with the reply streaming below; the jump-to-bottom pill sticks and follows the stream, and Cmd+Shift+J jumps to the latest message.
 
 ### Sessions From All Your Repositories, In One List
 
-The repository is an attribute of each session, not a mode of the app. The sidebar shows every recent repository's sessions in one list, each repository a foldable section, newest sessions first inside it - and nothing reorders itself while agents work. Folding a section is the filter; a folded section shows how many sessions it holds. New Session lands in the repository of the session you are looking at, and every section header carries its own compose button for an explicit target.
-
-Each row carries its live state as a small colored dot next to the time: amber working, blue waiting on you, red failed, with the word in its tooltip. Sessions in a worktree show their branch under the row, so you can tell at a glance where each agent is working.
+The repository is an attribute of each session, not a mode. The sidebar shows every repository as a foldable section, newest sessions first, and nothing reorders while agents work. Each row carries a live state dot (amber working, blue waiting on you, red failed), and worktree sessions show their branch.
 
 ### Agents Keep Running In The Background
 
-Clicking another session never kills the running agent: each session keeps its own agent process alive while you look at another one, its reply keeps streaming into the transcript, and coming back shows the conversation exactly as it progressed. Sessions sharing the main checkout take turns, since two agents editing the same files would trample each other - sending a message while another one is working tells you so. The most recent idle sessions stay warm; older ones let their process go and reconnect when you return.
+Switching sessions never kills a running agent: its reply keeps streaming into the transcript, and coming back shows the conversation as it progressed. Sessions sharing the main checkout take turns; recent idle sessions stay warm, older ones reconnect when you return.
 
 ### Sessions In Their Own Worktree, In Parallel
 
-The sidebar's second button starts a session in its own git worktree, created next to your repository on a fresh `reviu-` branch - from your default branch or any local branch you pick. Its agent reads and writes there, so it runs at the same time as agents in other worktrees, and at the same time as you working in the main checkout. Checkpoints, rollback and undo follow each session into its worktree.
-
-The generated branch renames itself after the conversation's title once it has one - `reviu-fix-the-scroll-jump` instead of `reviu-swift-otter` - and once renamed it never renames again. A branch you checked out or renamed yourself is yours and never touched. Deleting a worktree session removes its worktree, its branch and its snapshots; opening a repository sweeps away `reviu-` worktrees no session references any more, so nothing accumulates behind your back.
+A second sidebar button starts a session in its own git worktree, on a fresh `reviu-` branch from the base you pick, so its agent runs in parallel with other worktrees and with you in the main checkout. The branch renames itself after the conversation's title; a branch you checked out or renamed yourself is never touched. Deleting the session removes worktree, branch and snapshots, and opening a repository sweeps unreferenced `reviu-` worktrees.
 
 ### The Whole Window Follows The Session's Checkout
 
-Selecting a worktree session points everything at its checkout: the changes panel shows the agent's edits there, the branch header names its branch, the history, the terminal and file search all read the same tree the agent writes. Coming back to a main-checkout session points everything home again. An agent busy in its own worktree never blocks switching branches in the main checkout.
+Selecting a worktree session points everything at its checkout: changes, branch header, history, terminal and file search. Coming back points everything home, and an agent busy in its worktree never blocks branch switches in the main checkout.
 
 ### Review The Agent's Diff And Comment Back
 
-Click a changed file - in the Changes list, in the agent's turn recap, or a file location on its tool calls - and its diff opens beside the conversation, in a resizable split; Escape closes it and gives the conversation the full width back. Comment on diff lines like a pull request review, then send the batch to the agent: comments arrive as a structured prompt with file, lines and side, and Reviu returns you to the conversation to watch the work. The Changes list always highlights the file on screen, wherever the open came from.
+Click a changed file, in the Changes list, the turn recap or a tool call, and its diff opens beside the conversation; Escape gives the conversation the width back. Comment on diff lines and send the batch to the agent as a structured prompt with file, lines and side.
 
 ### A Review Panel For The Batch
 
-The Review tab lists the comments you are building, grouped by file, each file collapsible. Click a comment to land on its lines, delete one you changed your mind about, and send from the panel - or send only part of it: tick the comments you want, or a whole file in one click, and Send carries only those. Single comments carry their own send arrow for putting the agent back on one thing without resending the rest. Whatever stays behind stays a draft and goes with the next send. When the panel is closed, a dot on its rail icon says a review is waiting; the Changes icon wears the same dot when the working tree has something in it.
-
-A review you have not sent survives everything: close the app, switch repositories, come back a week later - each repository keeps its own batch, written the moment anything changes. Comments last exactly as long as they need to: you write them, you send them, and when the agent finishes that turn they leave the panel. A turn you stop, or one that fails, changes nothing: they are still there, ready to go again. When the agent rewrites the lines a comment was anchored to before you send it, the comment stays, tagged Outdated, and is left out of the batch.
-
-### Git, The Whole Client
-
-The Changes tab groups your files into Staged and Changes, refreshed after every agent turn. Each row stages, unstages or discards on hover; hovering a change in the diff brings up Stage, Unstage and Restore for that hunk alone, with `shift-enter` / `shift-backspace` from the keyboard and `cmd-enter` / `cmd-backspace` for the whole file. Write a commit message and commit without leaving the workspace; the commit button's menu carries Amend, Undo last commit, Push and Force push (with lease), greyed out when they cannot run. Staging is silent - the panel already shows the files move - and only a failure speaks.
-
-The command palette carries the rest, each command offered only when it does something: switch, create and delete a branch, merge or rebase onto one, cherry-pick, stash with or without untracked files, then apply, pop or drop, checkout a commit or tag, push, pull and fetch. Switching branch or repository is refused while an agent is mid-turn in that checkout: the ground cannot move under a running turn. The sidebar shows ahead/behind counters that run their command when clicked.
-
-### Rewrite History
-
-Interactive rebase takes the whole centre, where a table of commits belongs: pick it from the palette on a branch or on the last N commits, reorder, squash, fixup or drop, then apply. A range containing merge commits says how many merges will be dropped and continues like `git rebase -i` does. It is offered only with a clean working tree, and Force push sits next to Push for the branch you just rewrote.
-
-### Conflicts Stop You On The File, Not On An Error
-
-Git commands that stop on conflicts - merge, rebase, skip, pull - say which file is waiting and put it on screen. A conflicted file carries Accept Current, Accept Incoming and Accept Both per conflict block (`cmd-shift-enter` for both sides), Accept All in the header, and `cmd-alt-up` / `cmd-alt-down` walk conflict by conflict with a counter. Once you resolve the markers by hand there is no diff left to read, so the file shows in full until the resolution is staged. The right dock says which operation is running, Commit becomes Continue rebase once conflicts are resolved and staged, the message git prepared lands in the box on its own, and Abort is in the palette while there is something to abort.
-
-### The History, The Files, The Terminal
-
-A History tab lists your commits, expandable to the files each one touched; click a file to read it as it was in that commit, read-only, so a snapshot can never overwrite your work. A Files tab shows the repository as a tree, opened on the folders holding uncommitted work, modified files marked - and files are editable right there: type and save (`cmd-s`), your manual edits land in the same changeset as the agent's work. A Terminal tab runs in the repository the session is working in; Tab stays Tab there, Shift-Tab included, as a shell must.
-
-### A Diff Editor Built For Review
-
-Inline or split, toggled with `cmd-/` and remembered; files with a single side stay inline, and a clean file never splits. Hide whitespace-only changes with `cmd-alt-/`. Diffs use the histogram algorithm with precise word-level highlights, syntax highlighting covers fifty languages, `cmd-alt-down` / `cmd-alt-up` walk the file change by change and wrap at the ends, and `cmd-f` searches the open file from anywhere in the workspace. A renamed file names both sides, old name struck through; a selection lands in your clipboard on release.
-
-### Markdown, SVG And Images, Rendered
-
-A Preview button in the diff header swaps the pane for the rendered Markdown or SVG file, and Code brings the diff back - a detour, not a mode, so the next file opens on its code. PNG, JPEG and the other image formats open as pictures wherever they show up, and unsupported binaries show a clear placeholder instead of unreadable content. Markdown everywhere - replies, descriptions, comments, previews - renders GitHub-flavored, checklists included.
-
-### Push And Pull With Your Saved Credentials
-
-Pushing and fetching over HTTPS use the credentials already saved in your Git credential helper, such as the macOS keychain. If `git push` works in your terminal, the same remote works from Reviu. Only git repositories get opened: picking a folder inside a repository selects that repository, and a folder that stopped being one drops out of the recent list.
+The Review tab lists your comments grouped by file: click one to land on its lines, tick a selection or send everything, and single comments carry their own send arrow. A batch survives restarts and repository switches; sent comments leave the panel when the turn ends, a stopped or failed turn keeps them, and a comment whose lines were rewritten stays, tagged Outdated, left out of the batch. Dots on the rail icons say when a review or the working tree is waiting.
 
 ### The Branch's Pull Request, In The Dock (Reviu Pro)
 
-Checking out a branch that has a pull request fills the Pull request tab with the whole picture: title and number, who opened it, the branches it goes between, and the list of files it proposes. Clicking a file opens the diff of the pull request itself, base against head, so you read what the branch adds rather than what your working tree happens to hold. Each file carries a comment icon and count when comments hang on it - tinted when some are still unsubmitted, muted when everything is published. The panel rereads GitHub as soon as the branch under it changes, whoever moved it - from Reviu or from a terminal - and its refresh button spins until every read it triggered has landed.
-
-For a branch with no pull request, the tab offers Create pull request - and when the branch is not on the remote yet, `Publish and create pull request` pushes it first and only opens the form once the push succeeded.
+Checking out a branch with a pull request fills the tab: title, author, branches, and the files it proposes, each opening the pull request's own diff, base against head. Files carry comment icons, tinted while some are unsubmitted. The panel rereads GitHub as soon as the branch changes, whoever moved it, and the refresh button spins until every read has landed. A branch without a pull request gets Create pull request, or `Publish and create pull request` when it is not on the remote yet.
 
 ### Checks, Reviewers And Merge In One Block
 
-A collapsible block holds what you can do to the pull request, and leads with the bad news: a failing suite or a requested change is what you see first, without expanding anything. Its header carries compact per-state check counts - failing first, then pending, skipped, successful - and the open list shows about six checks and scrolls for the rest, so a CI with thirty jobs never pushes the file list out of the panel. Hovering a reviewer shows the message they left with their decision. The block is always there, even for a pull request with no CI and no reviewers, so a small project never loses its merge button for lack of a test suite.
+A collapsible block leads with the bad news: a failing suite or a requested change shows without expanding anything. Its header carries per-state check counts, the open list scrolls past six checks, and hovering a reviewer shows the message they left. The block is always there, so a small project never loses its merge button for lack of a CI.
 
 ### Merge Like On GitHub
 
-The merge button names the method it will apply and carries a chevron listing the other methods the repository allows - and only those: a method disabled in the repository settings is not offered at all. Your last choice is remembered per repository. Confirming opens a small form prefilled with exactly what GitHub would generate for the commit title and message, following the repository's merge-message settings, down to the squash bullet list and its Co-authored-by trailers. Edit them, or clear a field to let GitHub write it; rebase shows no fields, since it keeps the commits as they are. The button stays disabled until Reviu knows the pull request can merge, not merely when it knows it cannot.
+The merge button names its method and lists only the methods the repository allows, remembered per repository. Confirming opens a form prefilled with exactly what GitHub would generate for the commit title and message, down to the squash bullets and Co-authored-by trailers; clear a field to let GitHub write it. The button stays disabled until Reviu knows the pull request can merge.
 
 ### Review A Pull Request Without Leaving
 
-The Review panel says where each comment is going: comments on your working tree sit under "To the agent", comments belonging to a pull request review you have not submitted sit under "To this pull request", read back from GitHub, so a review you started in the browser is there when you come back. Commenting happens on the diff itself: open a file of the pull request, write on a line, and the comment joins the review you are building - or goes out on its own if that is what you pick, as on GitHub. Existing conversations show on their lines, with replies, resolving and unresolving, and editing or deleting your own words; a resolve button shows only when you can actually resolve.
-
-Submit review asks for the decision - comment, approve, request changes - and its message, says how many comments go out with it, and refuses an empty message where GitHub would. Approving a pull request you have nothing to say about works from a Review button next to Merge; Reviu will not let you approve your own. Your row in the reviewers block flips to your decision the moment you submit. And a review started by mistake has a way out: Discard deletes the pending review and its comments on GitHub after a confirmation that says exactly that.
-
-Not there yet on those cards: the composer's preview tab, dropping images into a comment, applying a suggested change as a commit, and following a link out of a comment body.
+The Review panel splits comments by destination: "To the agent" and "To this pull request", the latter read back from GitHub, so a review started in the browser is there when you come back. Write on a line of the pull request's diff and it joins your review, or goes out on its own; existing conversations show on their lines, with replies, resolving, editing and deleting. Submit asks for the decision and message, says how many comments go out, refuses an empty message where GitHub would, and your row in the reviewers block flips immediately. Discard deletes the pending review and its comments on GitHub after a confirmation. Not there yet: the preview tab, images in comments, applying suggestions, links out of comment bodies.
 
 ### A Link To A Review Comment Opens The File It Is About
 
-When a comment belongs to the pull request of the open branch, pasting its GitHub link in the palette, clicking its notification in the inbox, or pressing the extension button opens its file in the diff, on the line it was written against. Everything Reviu does not show - issues, releases, discussions, pull requests of other branches - opens on github.com, and Reviu says which repository it has open rather than leaving you to guess.
+A link to a comment of the open branch's pull request, pasted in the palette, clicked in the inbox or sent by the extension, opens its file in the diff on the line it was written against. Everything Reviu does not show opens on github.com.
 
 ### Review A Pull Request You Have Not Checked Out
 
-The Open in Reviu button of the browser extension does the work when the pull request is not the branch you have open: Reviu names the branch that carries it, asks before touching your repository, checks it out - fetching it first when only the remote has it - and opens the Pull request panel once git has moved. It asks first because moving your branch is your call, it will not do it while the agent is mid-turn, and a working tree holding changes the checkout would overwrite stops it, as any branch switch does. Extensions exist for Chrome and Firefox.
-
-### The GitHub Inbox In The Sidebar
-
-Your notifications live in the sessions sidebar: unread count, one click to open - pull requests in Reviu, everything else on github.com - and a check button to mark one as done without leaving your session. The unread count also shows in the macOS menu bar and the Windows and Linux system tray.
+The extension's Open in Reviu button names the branch carrying the pull request, asks before touching your repository, checks it out (fetching first if needed) and opens the panel. It never moves your branch mid-turn, and a working tree the checkout would overwrite stops it.
 
 ### A Command Palette That Finds What You Meant
 
-Words are matched one by one, against the start of a word rather than its middle: `stash untracked`, `push force` and `branch delete` all land, `tag` does not answer with every command that mentions a s-**tag**-e, and abbreviations work - `swbr` for "Switch branch". Commands answer to the words you would actually use, not only the ones we wrote: `revert` reaches undoing a commit, `wip` reaches the stash, `squash` reaches the interactive rebase. Results are ordered by how well they answer; an empty palette shows sections and your recent commands. Destinations go by the name the app gives them, panels lead with what they hold, and verbs stay only where something changes.
+Words match one by one against word starts: `stash untracked`, `push force` and `swbr` all land. Commands answer to the words you would use (`revert`, `wip`, `squash`), and results are ordered by how well they answer. Destinations go by the name the app gives them, panels lead with what they hold.
 
 ### The Palette Teaches Its Shortcuts
 
-Everything with a keyboard shortcut is a command, each showing its key on the right - the key that actually works, so a shortcut you rebound appears as you rebound it. A command that cannot run says why instead. Signing in, signing out and installing the browser extension are in there too.
+Everything with a shortcut is a command, showing its key as you rebound it; a command that cannot run says why instead.
 
 ### A Key For Every Surface, That Brings You Back
 
-Every surface of the right dock has a key: `cmd-shift-e` Changes, `cmd-shift-f` Files, `cmd-shift-r` Review, `cmd-shift-h` History, `cmd-shift-p` Pull request, `cmd-j` Terminal. The key means "take me there" - it opens the panel and hands the keyboard over - and only means "get out of the way" when the keyboard is already in that surface. Escape completes the loop: from any list of the dock it hands the keyboard back to the file you were reading, without closing anything. Tab reaches the dock like a form: file list, commit message box, commit button, in the order you use them.
+`cmd-shift-e` Changes, `cmd-shift-f` Files, `cmd-shift-r` Review, `cmd-shift-h` History, `cmd-shift-p` Pull request, `cmd-j` Terminal. The key means "take me there", and only closes the panel when the keyboard is already in that surface; Escape hands the keyboard back to the file you were reading. Tab reaches the dock like a form.
 
 ### Walking A List Is Not Choosing From It
 
-Arrows show what a row holds and leave the keyboard where it is, so you can walk a whole review or a whole history without touching the mouse - and without loading every file on the way, since a row has to be the one you stopped on before its file is read. Enter, or a click, opens the file and gives the editor the focus, which is the moment you actually wanted to be there. Left and right fold and unfold a folder or a file, the same keys in every tree. Every shortcut is remappable in `keybindings.json`.
+Arrows show what a row holds and leave the keyboard in the list; Enter or a click opens the file and hands the editor the focus. Left and right fold, in every tree, and files load only when you stop on them.
 
 ### Reviu Pro, A Dialog That Says What It Sells
 
-Reviu Pro is a dialog, offered from the app menu, the user menu and the palette whoever you are, and Escape puts you back where you were. It names what Pro brings before asking for anything - pull requests for your branch in the dock, reviewing and submitting without leaving Reviu, GitHub notifications in the inbox - followed by the length of the free trial. Signed out, the same promise comes with the GitHub sign-in instead of the prices; subscribers see their plan, status and renewal date, with nothing to sell them. Coming back from the browser after paying lands you on your work with the confirmation over it.
+Billing leaves its page for a dialog, open to everyone: it names what Pro brings (pull requests in the dock, reviews without leaving, the GitHub inbox), then the free trial. Signed out it offers the GitHub sign-in; subscribers see plan, status and renewal, with nothing to sell them. The surfaces that need Pro carry the offer themselves, in place of an empty surface, and About becomes a dialog too.
 
-The surfaces that need Pro say so themselves, where the gap is felt: the Pull request tab and the inbox carry the offer in place of an empty surface, each naming what it would itself show. The Pull request icon stays in the rail whatever the repository is: a rail whose icons come and go is a rail you cannot learn.
+### Push With Saved Git Credentials
+
+HTTPS pushes and fetches use the credentials already saved in your Git credential helper, such as the macOS keychain: if `git push` works in your terminal, the same remote works from Reviu.
 
 ### Settings And Keybindings In Plain Files
 
-Reviu keeps its settings in `settings.json` and your shortcut overrides in `keybindings.json`, in its configuration folder. The files are yours: read them, edit them by hand, keep them in your dotfiles. A hand-edited file never breaks the app - an unknown or invalid value falls back to its default, an entry Reviu does not recognize is left untouched, and a file that no longer parses is reported at startup and never overwritten. Dark and light themes with auto-switching, and a font size setting that scales the whole interface, live in Settings.
-
-### macOS, Linux And Windows, Updating Themselves
-
-Reviu runs on all three, checks for updates on launch, and installs them in-app after verifying their SHA-256 checksum. The About dialog opens over whatever you are doing, and when a new version is waiting it offers the download itself. A feedback dialog sends bug reports and feature requests without leaving the app, and a recovered crash offers to send a report on the next launch.
+`settings.json` and `keybindings.json` replace the internal storage, and existing settings and shortcut overrides move over on first launch. The files are yours: hand-editable, dotfiles-friendly. An invalid value falls back to its default, an unknown entry is left untouched, and a file that no longer parses is reported and never overwritten.
 
 ### Errors Reach The Log File
 
-Failures that have no surface to speak from go to a log file, with the file and line that reported them. Logging is on by default in dev builds, and `REVIU_LOG=1` turns it on for a release build. Everything else that goes wrong raises a toast: toasts are kept for what leaves no trace on screen - pushes and pulls, history rewrites, destructive acts, and anything that failed.
+Failures with no surface to speak from go to a log file with the file and line that reported them; `REVIU_LOG=1` turns it on for release builds. Toasts are kept for what leaves no trace on screen: pushes, history rewrites, destructive acts, and anything that failed.
