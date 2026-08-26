@@ -90,6 +90,10 @@ Each repository section in the sidebar carries two buttons: one starts a session
 
 Selecting a worktree session points everything at its checkout: changes, branch header, history, terminal and file search. Coming back points everything home, and an agent busy in its worktree never blocks branch switches in the main checkout.
 
+### Peek At Another Worktree Without Leaving
+
+A selector in the dock header lists the repository's checkouts: the main one and every worktree, named by branch and by the session working there. Pick one and the changes, the diff and the file search show that checkout while your conversation stays put. The dock wears its pin until you click back to following the session, switch sessions, or the worktree disappears.
+
 ### Review The Agent's Diff And Comment Back
 
 Click a changed file, in the Changes list, the turn recap or a tool call, and its diff opens beside the conversation; Escape gives the conversation the width back. Comment on diff lines and send the batch to the agent as a structured prompt with file, lines and side.

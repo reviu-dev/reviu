@@ -1370,6 +1370,118 @@ mod tests {
   }
 
   #[gpui::test]
+  async fn pinning_a_checkout_points_the_dock_without_switching_session(cx: &mut TestAppContext) {
+    let repo = TempRepo::init("session-page-pin-checkout");
+    commit_text_file(&repo.path, Path::new("README.md"), "v1\n", "initial");
+    let worktree = git::create_worktree(&repo.path, None).expect("create worktree");
+
+    let (page, cx) = add_session_page_window(repo.path.clone(), cx);
+    cx.run_until_parked();
+
+    // Pin: the git surfaces move, the session does not.
+    page.update_in(cx, |page, window, cx| {
+      page.pin_checkout(worktree.path.clone(), window, cx);
+    });
+    cx.run_until_parked();
+    page.read_with(cx, |page, cx| {
+      assert_eq!(
+        page.checkout_root(cx).as_deref(),
+        Some(worktree.path.as_path())
+      );
+      assert_eq!(
+        page.dock_panel.read(cx).repo_root(),
+        Some(worktree.path.as_path())
+      );
+    });
+
+    // Follow: back to the session's checkout.
+    page.update_in(cx, |page, window, cx| {
+      page.follow_session_checkout(window, cx);
+    });
+    cx.run_until_parked();
+    page.read_with(cx, |page, cx| {
+      assert_eq!(page.checkout_root(cx).as_deref(), Some(repo.path.as_path()));
+    });
+
+    // A pin set on another session is a leftover: the next sync drops it.
+    page.update_in(cx, |page, window, cx| {
+      page.checkout_override = Some(CheckoutOverride {
+        session_id: Some("a-session-no-longer-shown".to_string()),
+        path: worktree.path.clone(),
+      });
+      page.sync_active_checkout(window, cx);
+    });
+    page.read_with(cx, |page, cx| {
+      assert!(page.checkout_override.is_none());
+      assert_eq!(page.checkout_root(cx).as_deref(), Some(repo.path.as_path()));
+    });
+
+    // A pin pointing at a deleted worktree unpins on the next sync.
+    page.update_in(cx, |page, window, cx| {
+      page.pin_checkout(worktree.path.clone(), window, cx);
+    });
+    cx.run_until_parked();
+    std::fs::remove_dir_all(&worktree.path).expect("remove worktree");
+    page.update_in(cx, |page, window, cx| {
+      page.sync_active_checkout(window, cx);
+    });
+    page.read_with(cx, |page, cx| {
+      assert!(page.checkout_override.is_none());
+      assert_eq!(page.checkout_root(cx).as_deref(), Some(repo.path.as_path()));
+    });
+  }
+
+  #[gpui::test]
+  async fn the_dock_offers_the_checkouts_and_wears_its_pin(cx: &mut TestAppContext) {
+    let repo = TempRepo::init("session-page-checkout-selector");
+    commit_text_file(&repo.path, Path::new("README.md"), "v1\n", "initial");
+
+    let (page, cx) = add_session_page_window(repo.path.clone(), cx);
+    page.update(cx, |page, cx| {
+      page.dock_panel.update(cx, |panel, cx| panel.refresh(cx))
+    });
+    cx.run_until_parked();
+    // One checkout only: nothing to pick, no selector.
+    assert!(
+      cx.debug_bounds(crate::dock_panel::DOCK_PANEL_CHECKOUT_SELECTOR_DEBUG_SELECTOR)
+        .is_none()
+    );
+
+    let worktree = git::create_worktree(&repo.path, None).expect("create worktree");
+    page.update(cx, |page, cx| page.refresh_checkout_options(cx));
+    cx.run_until_parked();
+    page.update(cx, |_, cx| cx.notify());
+    cx.run_until_parked();
+    assert!(
+      cx.debug_bounds(crate::dock_panel::DOCK_PANEL_CHECKOUT_SELECTOR_DEBUG_SELECTOR)
+        .is_some()
+    );
+    assert!(
+      cx.debug_bounds(crate::dock_panel::DOCK_PANEL_CHECKOUT_FOLLOW_DEBUG_SELECTOR)
+        .is_none()
+    );
+
+    page.update_in(cx, |page, window, cx| {
+      page.pin_checkout(worktree.path.clone(), window, cx);
+    });
+    cx.run_until_parked();
+    page.update(cx, |_, cx| cx.notify());
+    cx.run_until_parked();
+    let follow = cx
+      .debug_bounds(crate::dock_panel::DOCK_PANEL_CHECKOUT_FOLLOW_DEBUG_SELECTOR)
+      .expect("follow control while pinned");
+    cx.simulate_click(follow.center(), gpui::Modifiers::default());
+    cx.run_until_parked();
+    page.read_with(cx, |page, cx| {
+      assert_eq!(page.checkout_root(cx).as_deref(), Some(repo.path.as_path()));
+    });
+    assert!(
+      cx.debug_bounds(crate::dock_panel::DOCK_PANEL_CHECKOUT_FOLLOW_DEBUG_SELECTOR)
+        .is_none()
+    );
+  }
+
+  #[gpui::test]
   async fn a_single_hunk_hides_the_change_walker_but_keeps_its_target(cx: &mut TestAppContext) {
     let repo = TempRepo::init("session-page-single-hunk-walker");
     let original = (1..=60)

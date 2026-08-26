@@ -63,6 +63,8 @@ const DOCK_PANEL_COMPARE_DEBUG_SELECTOR: &str = "dock-panel-compare-on-github";
 const DOCK_PANEL_OPERATION_DEBUG_SELECTOR: &str = "dock-panel-operation";
 const DOCK_PANEL_REFRESH_DEBUG_SELECTOR: &str = "dock-panel-refresh";
 pub(crate) const DOCK_PANEL_ZOOM_DEBUG_SELECTOR: &str = "dock-panel-zoom";
+pub(crate) const DOCK_PANEL_CHECKOUT_SELECTOR_DEBUG_SELECTOR: &str = "dock-panel-checkout-selector";
+pub(crate) const DOCK_PANEL_CHECKOUT_FOLLOW_DEBUG_SELECTOR: &str = "dock-panel-checkout-follow";
 use std::rc::Rc;
 
 use crate::api::{
@@ -156,6 +158,12 @@ pub enum DockPanelEvent {
   /// What GitHub holds on this pull request changed: whoever shows the comments
   /// has to look again.
   PullRequestReviewCommentsChanged,
+  /// A checkout picked in the header selector; the host owns the pin.
+  PinCheckout {
+    path: PathBuf,
+  },
+  /// The pinned dock goes back to following the session's checkout.
+  FollowSessionCheckout,
   /// A comment the diff is waiting on: the composer stays open on an error.
   PullRequestReviewCommentSubmitted {
     error: Option<Arc<str>>,
@@ -536,6 +544,17 @@ fn pull_request_identity(state: &BranchPrState) -> Option<(String, String, u64)>
   }
 }
 
+/// One checkout of the shown session's repo, ready for the header selector.
+#[derive(Clone, PartialEq)]
+pub(crate) struct CheckoutOption {
+  pub path: PathBuf,
+  /// None on a detached HEAD.
+  pub branch: Option<SharedString>,
+  /// The worktree session's title, when a binding names one.
+  pub session_title: Option<SharedString>,
+  pub is_displayed: bool,
+}
+
 fn branch_pr_state_for_lookup(
   remote: Option<git::GithubRemoteRepo>,
   branch: Option<String>,
@@ -564,6 +583,10 @@ pub struct DockPanel {
   focus_handle: FocusHandle,
   window_handle: AnyWindowHandle,
   repo_root: Option<PathBuf>,
+  /// The checkouts the header selector offers; the host computes them.
+  checkout_options: Vec<CheckoutOption>,
+  /// The dock shows a checkout the active session does not work in.
+  checkout_pinned: bool,
   status_entries: Vec<RepoStatusEntry>,
   merge_in_progress: bool,
   rebase_in_progress: bool,
@@ -833,6 +856,8 @@ impl DockPanel {
       focus_handle: cx.focus_handle(),
       window_handle: window.window_handle(),
       repo_root,
+      checkout_options: Vec::new(),
+      checkout_pinned: false,
       status_entries: Vec::new(),
       merge_in_progress: false,
       rebase_in_progress: false,
@@ -1819,6 +1844,20 @@ impl DockPanel {
   }
 
   /// The host owns the branch; the panel needs it to know what its menu allows.
+  pub(crate) fn set_checkout_selector(
+    &mut self,
+    options: Vec<CheckoutOption>,
+    pinned: bool,
+    cx: &mut Context<Self>,
+  ) {
+    if self.checkout_options == options && self.checkout_pinned == pinned {
+      return;
+    }
+    self.checkout_options = options;
+    self.checkout_pinned = pinned;
+    cx.notify();
+  }
+
   pub(crate) fn set_branch_status(
     &mut self,
     branch_status: Option<git::BranchStatus>,
@@ -3186,6 +3225,99 @@ impl DockPanel {
       ))
       .into_any_element()
   }
+
+  /// The dropdown listing the repo's checkouts; picking one pins the dock to
+  /// it until the session takes back over.
+  fn render_checkout_selector(&self, cx: &mut Context<Self>) -> AnyElement {
+    let pinned = self.checkout_pinned;
+    let displayed_branch: SharedString = self
+      .checkout_options
+      .iter()
+      .find(|option| option.is_displayed)
+      .and_then(|option| option.branch.clone())
+      .or_else(|| {
+        self
+          .branch_status
+          .as_ref()
+          .map(|status| SharedString::from(status.name.clone()))
+      })
+      .unwrap_or_else(|| SharedString::from("checkout"));
+    let options = self.checkout_options.clone();
+    let view = cx.entity();
+
+    let selector = Button::new("dock-panel-checkout-selector")
+      .debug_selector(|| DOCK_PANEL_CHECKOUT_SELECTOR_DEBUG_SELECTOR.to_string())
+      .icon(UiIconName::GitBranch)
+      .label(displayed_branch)
+      .compact()
+      .small()
+      .tooltip(if pinned {
+        "The dock is pinned to this checkout"
+      } else {
+        "Show another checkout"
+      });
+    let selector = if pinned {
+      selector.primary()
+    } else {
+      selector.ghost()
+    };
+    let selector = selector.dropdown_menu_with_anchor(Anchor::TopRight, move |menu, _, _| {
+      let menu = if pinned {
+        let view = view.clone();
+        menu.item(
+          PopupMenuItem::new("Follow the session")
+            .icon(UiIconName::Pin)
+            .on_click(move |_, _, cx| {
+              view.update(cx, |_, cx| cx.emit(DockPanelEvent::FollowSessionCheckout));
+            }),
+        )
+      } else {
+        menu
+      };
+      options.iter().fold(menu, |menu, option| {
+        let view = view.clone();
+        let path = option.path.clone();
+        let label = match (&option.branch, &option.session_title) {
+          (Some(branch), Some(session)) => format!("{branch} · {session}"),
+          (Some(branch), None) => branch.to_string(),
+          (None, Some(session)) => format!("detached · {session}"),
+          (None, None) => option
+            .path
+            .file_name()
+            .map(|name| name.to_string_lossy().into_owned())
+            .unwrap_or_else(|| option.path.display().to_string()),
+        };
+        let mut item = PopupMenuItem::new(label).on_click(move |_, _, cx| {
+          view.update(cx, |_, cx| {
+            cx.emit(DockPanelEvent::PinCheckout { path: path.clone() });
+          });
+        });
+        if option.is_displayed {
+          item = item.icon(UiIconName::Check);
+        }
+        menu.item(item)
+      })
+    });
+
+    let mut row = h_flex()
+      .flex_shrink_0()
+      .items_center()
+      .gap_1()
+      .child(selector);
+    if pinned {
+      row = row.child(
+        Button::new("dock-panel-checkout-follow")
+          .debug_selector(|| DOCK_PANEL_CHECKOUT_FOLLOW_DEBUG_SELECTOR.to_string())
+          .icon(IconName::Close)
+          .ghost()
+          .compact()
+          .small()
+          .tooltip("Follow the session's checkout again")
+          .on_click(cx.listener(|_, _, _, cx| cx.emit(DockPanelEvent::FollowSessionCheckout))),
+      );
+    }
+    row.into_any_element()
+  }
 }
 
 impl Render for DockPanel {
@@ -3224,6 +3356,10 @@ impl Render for DockPanel {
           .flex_shrink_0()
           .items_center()
           .gap_1()
+          .when(
+            self.checkout_options.len() > 1 || self.checkout_pinned,
+            |this| this.child(self.render_checkout_selector(cx)),
+          )
           .when(self.active_tab != DockPanelTab::Terminal, |this| {
             this.child(
               Button::new("dock-panel-refresh")

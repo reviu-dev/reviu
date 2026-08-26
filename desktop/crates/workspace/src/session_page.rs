@@ -1,6 +1,6 @@
 //! Agent-first shell: sessions sidebar, conversation center, right dock.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::sync::Arc;
@@ -165,6 +165,19 @@ impl SessionPageHandle {
   }
 }
 
+/// The pin remembers which session it was set on: any other session shown
+/// means the user moved on, and the dock follows them again.
+struct CheckoutOverride {
+  session_id: Option<String>,
+  path: PathBuf,
+}
+
+#[derive(Clone)]
+struct CheckoutInfo {
+  path: PathBuf,
+  branch: Option<String>,
+}
+
 pub struct SessionPage {
   focus_handle: FocusHandle,
   window_handle: AnyWindowHandle,
@@ -190,6 +203,12 @@ pub struct SessionPage {
   fallback_repo: Option<PathBuf>,
   /// What the git surfaces currently point at; compared to detect switches.
   synced_checkout: Option<PathBuf>,
+  /// A checkout pinned from the dock header; view state, dies with the pinned
+  /// session and never persists.
+  checkout_override: Option<CheckoutOverride>,
+  /// The shown session's repo checkouts (main first), refreshed in background.
+  available_checkouts: Vec<CheckoutInfo>,
+  _checkout_options_task: Option<Task<()>>,
   center: CenterView,
   editor: Option<Entity<Editor>>,
   binary_preview: Option<BinaryPreview>,
@@ -349,6 +368,13 @@ impl SessionPage {
           // must follow what the file can actually show.
           this.sync_diff_view(cx);
           this.sync_git_telemetry(cx);
+          this.refresh_checkout_options(cx);
+        }
+        DockPanelEvent::PinCheckout { path } => {
+          this.pin_checkout(path.clone(), window, cx);
+        }
+        DockPanelEvent::FollowSessionCheckout => {
+          this.follow_session_checkout(window, cx);
         }
         DockPanelEvent::ToggleZoom => {
           this.toggle_dock_zoom(cx);
@@ -432,6 +458,9 @@ impl SessionPage {
       session_list,
       synced_checkout: fallback_repo.clone(),
       fallback_repo,
+      checkout_override: None,
+      available_checkouts: Vec::new(),
+      _checkout_options_task: None,
       center: CenterView::Conversation,
       editor: None,
       binary_preview: None,
@@ -648,15 +677,28 @@ impl SessionPage {
       .update(cx, |snapshot, cx| snapshot.refresh(cx));
   }
 
-  /// The checkout the git surfaces should show: the active session's worktree
-  /// when it has one, the main checkout otherwise.
+  /// The checkout the git surfaces should show: a pinned one first, else the
+  /// active session's worktree when it has one, the main checkout otherwise.
   pub(crate) fn checkout_root(&self, cx: &App) -> Option<PathBuf> {
     self.fallback_repo.as_ref()?;
+    if let Some(pinned) = self.active_checkout_override(cx) {
+      return Some(pinned);
+    }
     self
       .agent_chat_view
       .as_ref()
       .map(|panel| panel.read(cx).cwd().to_path_buf())
       .or_else(|| self.fallback_repo.clone())
+  }
+
+  /// The pin holds only while the session it was set on stays shown.
+  fn active_checkout_override(&self, cx: &App) -> Option<PathBuf> {
+    let pin = self.checkout_override.as_ref()?;
+    let shown_id = self
+      .agent_chat_view
+      .as_ref()
+      .map(|panel| panel.read(cx).current_conversation().id.clone());
+    (shown_id == pin.session_id).then(|| pin.path.clone())
   }
 
   /// The repo the shown session belongs to; the fallback repo only fills in
@@ -674,6 +716,13 @@ impl SessionPage {
   /// checkout. No-op while the checkout has not changed, so streaming and
   /// same-checkout switches cost nothing.
   pub(super) fn sync_active_checkout(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    // A pin left behind by a session switch, or pointing at a deleted
+    // worktree, is dead weight: the dock goes back to following the session.
+    if let Some(pin) = self.checkout_override.as_ref()
+      && (self.active_checkout_override(cx).is_none() || !pin.path.is_dir())
+    {
+      self.checkout_override = None;
+    }
     let checkout = self.checkout_root(cx);
     // The memo alone is not trusted: a fixture or future code may assign
     // `fallback_repo` directly, so the dock's actual root double-checks it.
@@ -708,7 +757,123 @@ impl SessionPage {
       self.reviewed_repo = review_repo;
       self.reload_review_for_repo(cx);
     }
+    self.refresh_checkout_options(cx);
+    self.push_checkout_selector(cx);
     cx.notify();
+  }
+
+  /// Pins the git surfaces on one of the repo's checkouts without touching
+  /// the session; picking the session's own checkout just unpins.
+  pub(super) fn pin_checkout(
+    &mut self,
+    path: PathBuf,
+    window: &mut Window,
+    cx: &mut Context<Self>,
+  ) {
+    let session_checkout = self
+      .agent_chat_view
+      .as_ref()
+      .map(|panel| panel.read(cx).cwd().to_path_buf())
+      .or_else(|| self.fallback_repo.clone());
+    if session_checkout.as_deref() == Some(path.as_path()) {
+      self.checkout_override = None;
+    } else {
+      let session_id = self
+        .agent_chat_view
+        .as_ref()
+        .map(|panel| panel.read(cx).current_conversation().id.clone());
+      self.checkout_override = Some(CheckoutOverride { session_id, path });
+    }
+    self.sync_active_checkout(window, cx);
+    // The sync may no-op when the pin lands on the shown checkout; the
+    // selector's pinned state still has to repaint.
+    self.push_checkout_selector(cx);
+    cx.notify();
+  }
+
+  pub(super) fn follow_session_checkout(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    if self.checkout_override.take().is_none() {
+      return;
+    }
+    self.sync_active_checkout(window, cx);
+    self.push_checkout_selector(cx);
+    cx.notify();
+  }
+
+  /// Lists the shown session's repo checkouts off the UI thread; the selector
+  /// repaints when the listing lands.
+  pub(super) fn refresh_checkout_options(&mut self, cx: &mut Context<Self>) {
+    let Some(repo) = self.session_repo(cx) else {
+      self.available_checkouts = Vec::new();
+      self.push_checkout_selector(cx);
+      return;
+    };
+    let list_repo = repo.clone();
+    self._checkout_options_task = Some(cx.spawn(async move |this, cx| {
+      let (main_branch, worktrees) = cx
+        .background_spawn(async move {
+          let main_branch = git::current_branch_status(&list_repo)
+            .ok()
+            .map(|status| status.name);
+          let worktrees = git::list_worktrees(&list_repo).unwrap_or_default();
+          (main_branch, worktrees)
+        })
+        .await;
+      let _ = this.update(cx, |this, cx| {
+        let mut checkouts = vec![CheckoutInfo {
+          path: repo,
+          branch: main_branch,
+        }];
+        checkouts.extend(worktrees.into_iter().map(|worktree| CheckoutInfo {
+          path: worktree.path,
+          branch: worktree.branch,
+        }));
+        this.available_checkouts = checkouts;
+        this.push_checkout_selector(cx);
+      });
+    }));
+  }
+
+  fn push_checkout_selector(&mut self, cx: &mut Context<Self>) {
+    let displayed = self.checkout_root(cx);
+    let pinned = self.active_checkout_override(cx).is_some();
+    let session_titles = self.worktree_session_titles(cx);
+    let options: Vec<crate::dock_panel::CheckoutOption> = self
+      .available_checkouts
+      .iter()
+      .map(|checkout| crate::dock_panel::CheckoutOption {
+        path: checkout.path.clone(),
+        branch: checkout.branch.clone().map(SharedString::from),
+        session_title: session_titles
+          .get(&checkout.path)
+          .cloned()
+          .map(SharedString::from),
+        is_displayed: displayed.as_deref() == Some(checkout.path.as_path()),
+      })
+      .collect();
+    self.dock_panel.update(cx, |panel, cx| {
+      panel.set_checkout_selector(options, pinned, cx);
+    });
+  }
+
+  /// Worktree path -> the bound session's title, for the selector's labels.
+  fn worktree_session_titles(&mut self, cx: &mut Context<Self>) -> HashMap<PathBuf, String> {
+    let Some(repo) = self.session_repo(cx) else {
+      return HashMap::new();
+    };
+    let Some((store, _)) = self.conversation_hub.store_for(&repo, cx) else {
+      return HashMap::new();
+    };
+    let store = store.read(cx);
+    let metas = store.list();
+    store
+      .worktree_bindings()
+      .into_iter()
+      .filter_map(|(id, binding)| {
+        let title = metas.iter().find(|meta| meta.id == id)?.title.clone();
+        (!title.is_empty()).then_some((binding.path, title))
+      })
+      .collect()
   }
 
   /// What a crash or a git error should carry about where the user was.
