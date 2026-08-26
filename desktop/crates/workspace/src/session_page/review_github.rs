@@ -175,6 +175,9 @@ impl SessionPage {
     let failed = error.is_some();
     editor.update(cx, |editor, cx| {
       editor.finish_review_comment_create_submission(error, cx);
+      // Resolve toggles land through the same event; the refetch that follows
+      // never clears their spinner itself.
+      editor.finish_review_comment_resolve_submissions(cx);
     });
     if !failed {
       self.focus_page_on_next_frame(window, cx);

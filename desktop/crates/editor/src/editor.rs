@@ -2299,23 +2299,14 @@ impl Editor {
     cx.notify();
   }
 
-  pub fn clear_review_comment_resolve_in_flight(
-    &mut self,
-    thread_id: &str,
-    cx: &mut Context<Self>,
-  ) {
+  /// The host answers every resolve toggle with one write completion, success
+  /// or failure; without this the spinner survives the write forever.
+  pub fn finish_review_comment_resolve_submissions(&mut self, cx: &mut Context<Self>) {
     if self.review_comment_resolve_in_flight.is_empty() {
       return;
     }
-    let removed = self
-      .review_comment_resolve_in_flight
-      .iter()
-      .find(|id| id.as_ref() == thread_id)
-      .cloned();
-    if let Some(id) = removed {
-      self.review_comment_resolve_in_flight.remove(&id);
-      cx.notify();
-    }
+    self.review_comment_resolve_in_flight.clear();
+    cx.notify();
   }
 
   pub fn set_review_comment_link_handler(
@@ -11688,6 +11679,26 @@ pub mod tests {
         cx,
       );
       assert!(!editor.collapsed_review_comments.contains(&1));
+    });
+  }
+
+  #[gpui::test]
+  fn test_a_finished_resolve_write_stops_its_spinner(cx: &mut TestAppContext) {
+    let mut ctx = EditorTestContext::with_text(cx.clone(), "a\nb");
+
+    ctx.editor.update(&mut ctx.cx, |editor, cx| {
+      editor.set_review_comments(vec![thread_comment(1, None, false)], cx);
+      editor
+        .review_comment_resolve_in_flight
+        .insert(Arc::from("thread-1"));
+
+      // The refetch after the write keeps the thread, so it alone never
+      // clears the marker: the write completion has to.
+      editor.set_review_comments(vec![thread_comment(1, None, true)], cx);
+      assert!(!editor.review_comment_resolve_in_flight.is_empty());
+
+      editor.finish_review_comment_resolve_submissions(cx);
+      assert!(editor.review_comment_resolve_in_flight.is_empty());
     });
   }
 
