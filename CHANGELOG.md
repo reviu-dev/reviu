@@ -4,6 +4,12 @@ All notable changes to Reviu are documented here.
 
 ## 1.1.0
 
+### Merge Like On GitHub: Pick The Method, Shape The Commit
+
+The merge button now carries a chevron listing the other merge methods the repository allows - create a merge commit, squash, rebase - and only those: a method disabled in the repository settings is not offered at all. The button keeps naming the method it will apply, and your last choice is remembered per repository.
+
+Confirming a merge opens a small form prefilled with exactly what GitHub would generate for the commit title and message, following the repository's merge-message settings - down to the squash bullet list and its Co-authored-by trailers. Edit them, or clear a field to let GitHub write it. Rebase shows no fields, since it keeps the commits as they are.
+
 ### Palette Commands That Ask Before Acting Work Again
 
 Running Discard review from the command palette did nothing: the palette closed the confirmation the command had just opened instead of closing itself. Every palette command that opens a dialog (a confirmation, the review submit form) was affected. The palette now leaves the screen before its command runs.

@@ -14,6 +14,7 @@ use rusqlite::{Connection, params};
 use serde::{Deserialize, Serialize};
 
 use crate::AppProfile;
+use crate::api::GithubPullRequestMergeMethod;
 use crate::shortcuts::ShortcutId;
 use app_log::ResultExt;
 
@@ -52,6 +53,11 @@ const ANALYTICS_META_TABLE: ConfigTable = ConfigTable {
   create_sql: "CREATE TABLE IF NOT EXISTS analytics_meta (id INTEGER PRIMARY KEY CHECK (id = 1), device_id TEXT NOT NULL)",
 };
 
+const MERGE_METHODS_TABLE: ConfigTable = ConfigTable {
+  name: "merge_methods",
+  create_sql: "CREATE TABLE IF NOT EXISTS merge_methods (repo TEXT PRIMARY KEY, method TEXT NOT NULL)",
+};
+
 pub const COMMAND_USAGE_TIMESTAMP_CAP: usize = 30;
 
 const CONFIG_TABLES: [ConfigTable; 5] = [
@@ -67,7 +73,7 @@ type Migration = fn(&Connection) -> rusqlite::Result<()>;
 /// Ordered config-database migrations. The vector index + 1 is the migration's `user_version`.
 /// Only append; never reorder or edit a shipped migration. v1 is an idempotent baseline so any
 /// pre-existing database (which has `user_version` 0) converges to the current schema.
-const MIGRATIONS: &[Migration] = &[migrate_v1_baseline];
+const MIGRATIONS: &[Migration] = &[migrate_v1_baseline, migrate_v2_merge_methods];
 
 fn schema_version(conn: &Connection) -> rusqlite::Result<i64> {
   conn.query_row("PRAGMA user_version", [], |row| row.get(0))
@@ -108,6 +114,28 @@ fn migrate_v1_baseline(conn: &Connection) -> rusqlite::Result<()> {
   ensure_default_rows(conn)?;
   ensure_settings_columns(conn)?;
   Ok(())
+}
+
+fn migrate_v2_merge_methods(conn: &Connection) -> rusqlite::Result<()> {
+  conn.execute(MERGE_METHODS_TABLE.create_sql, [])?;
+  Ok(())
+}
+
+fn merge_method_storage_key(method: GithubPullRequestMergeMethod) -> &'static str {
+  match method {
+    GithubPullRequestMergeMethod::Merge => "merge",
+    GithubPullRequestMergeMethod::Squash => "squash",
+    GithubPullRequestMergeMethod::Rebase => "rebase",
+  }
+}
+
+fn merge_method_from_storage(value: &str) -> Option<GithubPullRequestMergeMethod> {
+  match value {
+    "merge" => Some(GithubPullRequestMergeMethod::Merge),
+    "squash" => Some(GithubPullRequestMergeMethod::Squash),
+    "rebase" => Some(GithubPullRequestMergeMethod::Rebase),
+    _ => None,
+  }
 }
 
 fn create_baseline_tables(conn: &Connection) -> rusqlite::Result<()> {
@@ -410,6 +438,40 @@ impl ConfigStore {
     }
   }
 
+  /// The merge method last used on this repository, GitHub's own memory being
+  /// out of reach.
+  pub fn load_merge_method(repo: &str) -> Option<GithubPullRequestMergeMethod> {
+    let store = Self::open_with_tables()?;
+    let value: Option<String> = store
+      .conn
+      .query_row(
+        &format!(
+          "SELECT method FROM {} WHERE repo = ?1",
+          MERGE_METHODS_TABLE.name
+        ),
+        params![repo],
+        |row| row.get(0),
+      )
+      .ok();
+    value.as_deref().and_then(merge_method_from_storage)
+  }
+
+  pub fn persist_merge_method(repo: &str, method: GithubPullRequestMergeMethod) {
+    let Some(store) = Self::open_with_tables() else {
+      return;
+    };
+    if let Err(err) = store.conn.execute(
+      &format!(
+        "INSERT INTO {} (repo, method) VALUES (?1, ?2)
+         ON CONFLICT(repo) DO UPDATE SET method = excluded.method",
+        MERGE_METHODS_TABLE.name
+      ),
+      params![repo, merge_method_storage_key(method)],
+    ) {
+      app_log::log!("Failed to persist merge method: {}", err);
+    }
+  }
+
   pub fn load_app_settings() -> AppSettings {
     crate::settings_file::load()
   }
@@ -696,6 +758,44 @@ mod tests {
     let _ = fs::remove_dir_all(&repo_a);
     let _ = fs::remove_dir_all(&repo_b);
     ConfigStore::set_test_db_path(None);
+  }
+
+  #[test]
+  fn merge_method_round_trips_per_repository() {
+    let db_path = unique_test_db_path("merge-method");
+    let _ = fs::remove_file(&db_path);
+    ConfigStore::set_test_db_path(Some(db_path));
+
+    assert_eq!(ConfigStore::load_merge_method("acme/widget"), None);
+
+    ConfigStore::persist_merge_method("acme/widget", GithubPullRequestMergeMethod::Squash);
+    ConfigStore::persist_merge_method("acme/gadget", GithubPullRequestMergeMethod::Rebase);
+    assert_eq!(
+      ConfigStore::load_merge_method("acme/widget"),
+      Some(GithubPullRequestMergeMethod::Squash)
+    );
+    assert_eq!(
+      ConfigStore::load_merge_method("acme/gadget"),
+      Some(GithubPullRequestMergeMethod::Rebase)
+    );
+
+    // The last choice wins, one row per repository.
+    ConfigStore::persist_merge_method("acme/widget", GithubPullRequestMergeMethod::Merge);
+    assert_eq!(
+      ConfigStore::load_merge_method("acme/widget"),
+      Some(GithubPullRequestMergeMethod::Merge)
+    );
+
+    ConfigStore::set_test_db_path(None);
+  }
+
+  #[test]
+  fn a_merge_method_this_build_does_not_know_reads_as_nothing() {
+    assert_eq!(merge_method_from_storage("rocket"), None);
+    assert_eq!(
+      merge_method_from_storage("squash"),
+      Some(GithubPullRequestMergeMethod::Squash)
+    );
   }
 
   #[test]

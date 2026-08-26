@@ -693,6 +693,22 @@ pub struct GithubPullRequestMergeReadiness {
   #[serde(rename = "mergeable_state")]
   pub mergeable_state: Option<String>,
   pub rebaseable: Option<bool>,
+  #[serde(rename = "commit_defaults", default)]
+  pub commit_defaults: Option<GithubPullRequestMergeCommitDefaults>,
+}
+
+/// What GitHub would generate for a method's commit, used to prefill the
+/// confirmation inputs.
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
+pub struct GithubMergeCommitDefaults {
+  pub title: String,
+  pub message: String,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
+pub struct GithubPullRequestMergeCommitDefaults {
+  pub merge: Option<GithubMergeCommitDefaults>,
+  pub squash: Option<GithubMergeCommitDefaults>,
 }
 
 #[derive(Clone, Debug, Deserialize)]

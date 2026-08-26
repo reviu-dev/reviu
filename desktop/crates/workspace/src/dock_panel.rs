@@ -47,6 +47,7 @@ const DOCK_PANEL_TERMINAL_DEBUG_SELECTOR: &str = "dock-panel-terminal";
 pub(crate) const DOCK_PANEL_HISTORY_DEBUG_SELECTOR: &str = "dock-panel-history";
 pub(crate) const DOCK_PANEL_PR_CHECKS_DEBUG_SELECTOR: &str = "dock-panel-pr-checks";
 pub(crate) const DOCK_PANEL_PR_MERGE_DEBUG_SELECTOR: &str = "dock-panel-pr-merge";
+pub(crate) const DOCK_PANEL_PR_MERGE_METHOD_DEBUG_SELECTOR: &str = "dock-panel-pr-merge-method";
 pub(crate) const DOCK_PANEL_PR_REVIEW_DEBUG_SELECTOR: &str = "dock-panel-pr-review";
 pub(crate) const DOCK_PANEL_PR_PENDING_COMMENTS_DEBUG_SELECTOR: &str =
   "dock-panel-pr-pending-comments";
@@ -63,11 +64,12 @@ use std::rc::Rc;
 
 use crate::api::{
   GithubPullRequest, GithubPullRequestChecksRollupState, GithubPullRequestChecksSummary,
-  GithubPullRequestMergeReadiness, GithubPullRequestReviewComment,
+  GithubPullRequestMergeMethod, GithubPullRequestMergeReadiness, GithubPullRequestReviewComment,
 };
 use crate::auth_state::AuthStateStore;
 use crate::github_navigation::{github_pull_request_url, open_compare_target};
 use crate::github_shared::{pull_request_status_color, pull_request_status_label};
+use crate::merge_dialog::{MergeConfirmedHandler, open_merge_dialog};
 use crate::open_intent::OpenIntent;
 use crate::pull_request_checks::{
   CheckRow, check_rows, check_state_sort_key, checks_summary_subtitle, checks_summary_title,
@@ -77,7 +79,7 @@ use crate::pull_request_dialog::{
   GithubBranchContext, PullRequestCreatedHandler, open_create_pull_request_dialog,
 };
 use crate::pull_request_merge::{
-  MergeAvailability, MergeRequest, merge_availability, merge_method_label,
+  MergeAvailability, MergeRequest, merge_availability, merge_commit_defaults, merge_method_label,
 };
 use crate::pull_request_reviewers::{
   ReviewerRow, ReviewerStatus, reviewer_rows, reviewers_summary_title,
@@ -571,6 +573,9 @@ pub struct DockPanel {
   pr_reviewers: Vec<ReviewerRow>,
   pr_checks_loading: bool,
   pr_merge_readiness: Option<GithubPullRequestMergeReadiness>,
+  /// The viewer's remembered method for this repository, kept only while the
+  /// repository allows it.
+  selected_merge_method: Option<GithubPullRequestMergeMethod>,
   pr_merging: bool,
   _pr_merge_task: Option<Task<()>>,
   /// Collapsed by default: the file list is what you work in.
@@ -812,6 +817,7 @@ impl DockPanel {
       pr_reviewers: Vec::new(),
       pr_checks_loading: false,
       pr_merge_readiness: None,
+      selected_merge_method: None,
       pr_merging: false,
       _pr_merge_task: None,
       pr_details_expanded: false,
@@ -1123,6 +1129,7 @@ impl DockPanel {
     self.pr_checks = None;
     self.pr_checks_loading = false;
     self.pr_merge_readiness = None;
+    self.selected_merge_method = None;
     self.pr_merging = false;
   }
 
@@ -1151,10 +1158,44 @@ impl DockPanel {
         this.pr_checks_loading = false;
         this.pr_checks = loaded.0.ok();
         this.pr_merge_readiness = loaded.1.ok();
+        this.sync_merge_method_with_readiness();
         cx.notify();
       });
     });
     self._pr_checks_task = Some(task);
+  }
+
+  /// The remembered method survives a readiness reload only while the
+  /// repository still allows it.
+  fn sync_merge_method_with_readiness(&mut self) {
+    let Some(readiness) = &self.pr_merge_readiness else {
+      return;
+    };
+    if self.selected_merge_method.is_none()
+      && let Some(key) = self.merge_method_store_key()
+    {
+      self.selected_merge_method = crate::config::ConfigStore::load_merge_method(&key);
+    }
+    if let Some(method) = self.selected_merge_method
+      && !readiness.available_methods.contains(&method)
+    {
+      self.selected_merge_method = None;
+    }
+  }
+
+  fn merge_method_store_key(&self) -> Option<String> {
+    let BranchPrState::Found(context, _) = &self.branch_pr else {
+      return None;
+    };
+    Some(format!("{}/{}", context.owner, context.repo))
+  }
+
+  fn choose_merge_method(&mut self, method: GithubPullRequestMergeMethod, cx: &mut Context<Self>) {
+    self.selected_merge_method = Some(method);
+    if let Some(key) = self.merge_method_store_key() {
+      crate::config::ConfigStore::persist_merge_method(&key, method);
+    }
+    cx.notify();
   }
 
   fn set_pull_request_review_comments(
@@ -2691,7 +2732,8 @@ impl DockPanel {
   /// and land it.
   fn render_pr_actions(&self, cx: &mut Context<Self>) -> AnyElement {
     let theme = cx.theme().clone();
-    let availability = merge_availability(self.pr_merge_readiness.as_ref());
+    let availability =
+      merge_availability(self.pr_merge_readiness.as_ref(), self.selected_merge_method);
     let BranchPrState::Found(context, pull_request) = &self.branch_pr else {
       return div().into_any_element();
     };
@@ -2718,6 +2760,23 @@ impl DockPanel {
         }),
       ),
     };
+    // Methods the repository forbids are not offered at all.
+    let other_methods: Vec<GithubPullRequestMergeMethod> = match &availability {
+      MergeAvailability::Ready { method, .. } => self
+        .pr_merge_readiness
+        .as_ref()
+        .map(|readiness| {
+          readiness
+            .available_methods
+            .iter()
+            .copied()
+            .filter(|other| other != method)
+            .collect()
+        })
+        .unwrap_or_default(),
+      _ => Vec::new(),
+    };
+    let view = cx.entity();
 
     h_flex()
       .w_full()
@@ -2748,19 +2807,47 @@ impl DockPanel {
           .on_click(cx.listener(|this, _, window, cx| this.submit_pull_request_review(window, cx))),
       )
       .child(
-        Button::new("dock-panel-pr-merge")
-          .debug_selector(|| DOCK_PANEL_PR_MERGE_DEBUG_SELECTOR.to_string())
-          .primary()
-          .small()
-          .compact()
-          .label(label)
-          .disabled(request.is_none() || self.pr_merging)
-          .on_click(cx.listener(move |this, _, window, cx| {
-            let Some(request) = request.clone() else {
-              return;
-            };
-            this.confirm_merge_pull_request(request, window, cx);
-          })),
+        h_flex()
+          .child(
+            Button::new("dock-panel-pr-merge")
+              .debug_selector(|| DOCK_PANEL_PR_MERGE_DEBUG_SELECTOR.to_string())
+              .primary()
+              .small()
+              .compact()
+              .label(label)
+              .disabled(request.is_none() || self.pr_merging)
+              .on_click(cx.listener(move |this, _, window, cx| {
+                let Some(request) = request.clone() else {
+                  return;
+                };
+                this.confirm_merge_pull_request(request, window, cx);
+              }))
+              .when(!other_methods.is_empty(), |this| this.rounded_r_none()),
+          )
+          .when(!other_methods.is_empty(), |this| {
+            this.child(
+              Button::new("dock-panel-pr-merge-method")
+                .debug_selector(|| DOCK_PANEL_PR_MERGE_METHOD_DEBUG_SELECTOR.to_string())
+                .icon(IconName::ChevronDown)
+                .primary()
+                .small()
+                .compact()
+                .rounded_l_none()
+                .border_l_0()
+                .disabled(self.pr_merging)
+                .dropdown_menu_with_anchor(Anchor::BottomRight, move |menu, _, _| {
+                  other_methods.iter().fold(menu, |menu, method| {
+                    let view = view.clone();
+                    let method = *method;
+                    menu.item(PopupMenuItem::new(merge_method_label(method)).on_click(
+                      move |_, _, cx| {
+                        view.update(cx, |this, cx| this.choose_merge_method(method, cx));
+                      },
+                    ))
+                  })
+                }),
+            )
+          }),
       )
       .into_any_element()
   }
@@ -2771,33 +2858,35 @@ impl DockPanel {
     window: &mut Window,
     cx: &mut Context<Self>,
   ) {
-    let title: SharedString = format!("Merge #{}?", request.number).into();
-    let message: SharedString = format!(
-      "{} into its base branch.",
-      merge_method_label(request.method)
-    )
-    .into();
-    let view = cx.entity();
-
-    window.open_alert_dialog(cx, move |alert, _, _| {
-      let view = view.clone();
+    let defaults = merge_commit_defaults(self.pr_merge_readiness.as_ref(), request.method);
+    let view = cx.entity().downgrade();
+    let number = request.number;
+    let method = request.method;
+    let on_confirmed: MergeConfirmedHandler = std::rc::Rc::new(move |title, message, cx| {
       let request = request.clone();
-      ConfirmDialog::new(title.clone(), div().child(message.clone()))
-        .confirm_text("Merge")
-        .cancel_text("Cancel")
-        .on_confirm(move |_, _, cx| {
-          view.update(cx, |this, cx| this.merge_pull_request(request.clone(), cx));
-          true
-        })
-        .build(alert)
+      let _ = view.update(cx, |this, cx| {
+        this.merge_pull_request(request, title, message, cx)
+      });
     });
+
+    open_merge_dialog(number, method, defaults, on_confirmed, window, cx);
   }
 
-  fn merge_pull_request(&mut self, request: MergeRequest, cx: &mut Context<Self>) {
+  fn merge_pull_request(
+    &mut self,
+    request: MergeRequest,
+    commit_title: Option<String>,
+    commit_message: Option<String>,
+    cx: &mut Context<Self>,
+  ) {
     let api = WorkspaceApi::global(cx).api.clone();
     let window_handle = self.window_handle;
     let number = request.number;
 
+    // GitHub remembers the last method used per repository; so do we.
+    if let Some(key) = self.merge_method_store_key() {
+      crate::config::ConfigStore::persist_merge_method(&key, request.method);
+    }
     self.pr_merging = true;
     cx.notify();
     let task = cx.spawn(async move |this, cx| {
@@ -2809,8 +2898,8 @@ impl DockPanel {
             request.number,
             request.method,
             &request.head_sha,
-            None,
-            None,
+            commit_title.as_deref(),
+            commit_message.as_deref(),
           )
         })
         .await;
@@ -4032,7 +4121,7 @@ mod tests {
     );
     panel.read_with(cx, |panel, _| {
       assert_eq!(
-        merge_availability(panel.pr_merge_readiness.as_ref()),
+        merge_availability(panel.pr_merge_readiness.as_ref(), None),
         MergeAvailability::Unknown
       );
     });
@@ -4056,6 +4145,142 @@ mod tests {
       cx.debug_bounds(DOCK_PANEL_PR_MERGE_DEBUG_SELECTOR)
         .is_none()
     );
+  }
+
+  fn ready_merge_readiness(
+    methods: Vec<GithubPullRequestMergeMethod>,
+  ) -> GithubPullRequestMergeReadiness {
+    GithubPullRequestMergeReadiness {
+      status: crate::api::GithubPullRequestMergeReadinessStatus::Ready,
+      message: "This pull request is ready to merge.".to_string(),
+      current_head_sha: "h".repeat(40),
+      default_method: methods.first().copied(),
+      available_methods: methods,
+      can_merge_now: true,
+      viewer_can_merge: true,
+      mergeable_state: None,
+      rebaseable: None,
+      commit_defaults: None,
+    }
+  }
+
+  #[gpui::test]
+  async fn the_chosen_method_is_remembered_and_falls_back_when_forbidden(cx: &mut TestAppContext) {
+    let db_path = std::env::temp_dir().join(format!(
+      "reviu-dock-merge-method-{}.sqlite",
+      std::process::id()
+    ));
+    let _ = std::fs::remove_file(&db_path);
+    crate::config::ConfigStore::set_test_db_path(Some(db_path.clone()));
+
+    let (panel, cx) = pull_request_panel(cx, Vec::new());
+    panel.update(cx, |panel, cx| {
+      panel.pr_merge_readiness = Some(ready_merge_readiness(vec![
+        GithubPullRequestMergeMethod::Squash,
+        GithubPullRequestMergeMethod::Merge,
+      ]));
+      panel.sync_merge_method_with_readiness();
+      panel.choose_merge_method(GithubPullRequestMergeMethod::Merge, cx);
+    });
+    panel.read_with(cx, |panel, _| {
+      assert!(matches!(
+        merge_availability(
+          panel.pr_merge_readiness.as_ref(),
+          panel.selected_merge_method
+        ),
+        MergeAvailability::Ready {
+          method: GithubPullRequestMergeMethod::Merge,
+          ..
+        }
+      ));
+    });
+
+    // A fresh readiness read starts with no selection: the store remembers.
+    panel.update(cx, |panel, _| {
+      panel.selected_merge_method = None;
+      panel.sync_merge_method_with_readiness();
+    });
+    panel.read_with(cx, |panel, _| {
+      assert_eq!(
+        panel.selected_merge_method,
+        Some(GithubPullRequestMergeMethod::Merge)
+      );
+    });
+
+    // The repository stopped allowing it: the choice falls back to the default.
+    panel.update(cx, |panel, _| {
+      panel.pr_merge_readiness = Some(ready_merge_readiness(vec![
+        GithubPullRequestMergeMethod::Squash,
+      ]));
+      panel.sync_merge_method_with_readiness();
+    });
+    panel.read_with(cx, |panel, _| {
+      assert_eq!(panel.selected_merge_method, None);
+      assert!(matches!(
+        merge_availability(
+          panel.pr_merge_readiness.as_ref(),
+          panel.selected_merge_method
+        ),
+        MergeAvailability::Ready {
+          method: GithubPullRequestMergeMethod::Squash,
+          ..
+        }
+      ));
+    });
+
+    let _ = std::fs::remove_file(&db_path);
+    crate::config::ConfigStore::set_test_db_path(None);
+  }
+
+  #[gpui::test]
+  async fn only_the_allowed_methods_reach_the_selector(cx: &mut TestAppContext) {
+    let (panel, cx) = pull_request_panel(cx, Vec::new());
+    panel.update(cx, |panel, cx| {
+      panel.pr_details_expanded = true;
+      panel.pr_merge_readiness = Some(ready_merge_readiness(vec![
+        GithubPullRequestMergeMethod::Squash,
+      ]));
+      cx.notify();
+    });
+    cx.run_until_parked();
+
+    // One allowed method: nothing to choose, so no chevron at all.
+    assert!(
+      cx.debug_bounds(DOCK_PANEL_PR_MERGE_METHOD_DEBUG_SELECTOR)
+        .is_none()
+    );
+
+    panel.update(cx, |panel, cx| {
+      panel.pr_merge_readiness = Some(ready_merge_readiness(vec![
+        GithubPullRequestMergeMethod::Squash,
+        GithubPullRequestMergeMethod::Rebase,
+      ]));
+      cx.notify();
+    });
+    cx.run_until_parked();
+
+    assert!(
+      cx.debug_bounds(DOCK_PANEL_PR_MERGE_METHOD_DEBUG_SELECTOR)
+        .is_some()
+    );
+  }
+
+  #[gpui::test]
+  async fn merging_asks_before_calling_github(cx: &mut TestAppContext) {
+    let (panel, cx) = pull_request_panel(cx, Vec::new());
+    let request = MergeRequest {
+      owner: "acme".to_string(),
+      repo: "widget".to_string(),
+      number: 42,
+      method: GithubPullRequestMergeMethod::Squash,
+      head_sha: "h".repeat(40),
+    };
+    panel.update_in(cx, |panel, window, cx| {
+      panel.confirm_merge_pull_request(request, window, cx)
+    });
+    cx.run_until_parked();
+
+    assert!(cx.update(|window, cx| window.has_active_dialog(cx)));
   }
 
   #[gpui::test]
