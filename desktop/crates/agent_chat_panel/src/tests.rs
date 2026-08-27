@@ -2,8 +2,8 @@ use super::*;
 use crate::persistence::{list_conversations_in, load_conversation_file};
 use agent_acp::PermissionPromptOption;
 use agent_client_protocol::schema::{
-  SessionConfigSelect, SessionConfigSelectOption, ToolCallContent, ToolCallLocation,
-  ToolCallUpdateFields,
+  Diff, ImageContent, ResourceLink, SessionConfigSelect, SessionConfigSelectOption,
+  ToolCallContent, ToolCallLocation, ToolCallUpdateFields,
 };
 use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -1632,9 +1632,167 @@ async fn code_lines_wraps_long_rows_and_keeps_short_ones_single(cx: &mut gpui::T
   );
 }
 
+fn tool_call_view_from_fixture(call: ToolCall) -> ToolCallView {
+  let mut items = Vec::new();
+  let mut index = HashMap::new();
+  upsert_tool_call_pure(&mut items, &mut index, call, test_cwd());
+  let Some(ChatItem::Tool(view)) = items.pop() else {
+    panic!("tool expected");
+  };
+  view
+}
+
+fn text_tool_content(text: &str) -> ToolCallContent {
+  ToolCallContent::from(ContentBlock::Text(TextContent::new(text)))
+}
+
+#[test]
+fn acp_registry_read_fixtures_normalize_to_reviu_numbered_outputs() {
+  let mut pi_read = call("pi-read", "Read README.md", ToolKind::Read);
+  pi_read.locations = vec![ToolCallLocation::new("README.md").line(3_u32)];
+  pi_read.content = vec![text_tool_content("# Reviu\n\nKeyboard-first")];
+
+  let mut claude_numbered_read = call("claude-numbered", "Read src/lib.rs", ToolKind::Read);
+  claude_numbered_read.locations = vec![ToolCallLocation::new("src/lib.rs")];
+  claude_numbered_read.content = vec![text_tool_content("   845\tlet a = 1;\n   846\tlet b = 2;")];
+
+  let mut claude_fenced_read = call("claude-fenced", "Read src/lib.rs", ToolKind::Read);
+  claude_fenced_read.locations = vec![ToolCallLocation::new("src/lib.rs")];
+  claude_fenced_read.raw_input = Some(serde_json::json!({ "offset": 350 }));
+  claude_fenced_read.content = vec![text_tool_content(
+    "```rust\n   410\tfn from_block() {}\n   411\tfn next() {}\n```",
+  )];
+
+  let mut codex_raw_output_read = call("codex-raw", "Read src/main.rs", ToolKind::Read);
+  codex_raw_output_read.raw_input = Some(serde_json::json!({ "offset": 12 }));
+  codex_raw_output_read.raw_output = Some(serde_json::json!({
+    "formatted_output": "fn main() {\n    println!(\"hi\");\n}"
+  }));
+
+  let fixtures = [
+    (
+      pi_read,
+      "# Reviu\n\nKeyboard-first",
+      Some(3),
+      "Pi ACP raw read content keeps the location gutter",
+    ),
+    (
+      claude_numbered_read,
+      "let a = 1;\nlet b = 2;",
+      Some(845),
+      "Claude numbered read content is stripped before Reviu adds its gutter",
+    ),
+    (
+      claude_fenced_read,
+      "fn from_block() {}\nfn next() {}",
+      Some(410),
+      "Claude fenced numbered read content uses the fenced first line",
+    ),
+    (
+      codex_raw_output_read,
+      "fn main() {\n    println!(\"hi\");\n}",
+      Some(12),
+      "Codex raw output read content falls back to formatted_output and rawInput offset",
+    ),
+  ];
+
+  for (call, expected_text, expected_start_line, message) in fixtures {
+    let view = tool_call_view_from_fixture(call);
+    assert!(matches!(view.kind, ToolKind::Read), "{message}");
+    assert!(view.diffs.is_empty(), "{message}");
+    assert_eq!(view.outputs.len(), 1, "{message}");
+    assert_eq!(view.outputs[0].text, expected_text, "{message}");
+    assert_eq!(view.read_start_line, expected_start_line, "{message}");
+    assert_eq!(view.outputs[0].start_line, expected_start_line, "{message}");
+  }
+}
+
+#[test]
+fn acp_registry_location_only_read_fixture_keeps_the_header_without_preview() {
+  let mut codex_location_only = call("codex-location", "Read src/main.rs", ToolKind::Read);
+  codex_location_only.locations = vec![ToolCallLocation::new("src/main.rs").line(27_u32)];
+
+  let view = tool_call_view_from_fixture(codex_location_only);
+
+  assert_eq!(view.read_start_line, Some(27));
+  assert_eq!(
+    view.locations,
+    vec![(PathBuf::from("src/main.rs"), Some(27))]
+  );
+  assert!(view.outputs.is_empty());
+  assert!(view.diffs.is_empty());
+}
+
+#[test]
+fn acp_registry_edit_diff_fixture_keeps_diff_render_data() {
+  let mut edit_call = call("edit-diff", "Edit fixtures/acp/edit.rs", ToolKind::Edit);
+  edit_call.content = vec![ToolCallContent::Diff(
+    Diff::new("fixtures/acp/edit.rs", "fn b() {}\n").old_text(Some("fn a() {}\n".to_string())),
+  )];
+
+  let view = tool_call_view_from_fixture(edit_call);
+
+  assert!(matches!(view.kind, ToolKind::Edit));
+  assert!(view.outputs.is_empty());
+  assert_eq!(view.diffs.len(), 1);
+  assert_eq!(view.diffs[0].path, "fixtures/acp/edit.rs");
+  assert_eq!(view.diffs[0].added, 1);
+  assert_eq!(view.diffs[0].removed, 1);
+  assert_eq!(view.diffs[0].lines.len(), 2);
+  assert_eq!(view.diffs[0].lines[0].old_line, Some(1));
+  assert_eq!(view.diffs[0].lines[1].new_line, Some(1));
+}
+
+#[test]
+fn acp_registry_non_text_content_fixture_does_not_create_text_preview() {
+  let mut image_call = call("image-read", "Read image", ToolKind::Read);
+  image_call.content = vec![ToolCallContent::from(ContentBlock::Image(
+    ImageContent::new("iVBORw0KGgo=", "image/png"),
+  ))];
+
+  let mut resource_call = call("resource-read", "Read resource", ToolKind::Read);
+  resource_call.content = vec![ToolCallContent::from(ContentBlock::ResourceLink(
+    ResourceLink::new("asset", "file:///tmp/asset.png"),
+  ))];
+
+  for call in [image_call, resource_call] {
+    let view = tool_call_view_from_fixture(call);
+    assert!(view.outputs.is_empty());
+    assert!(view.diffs.is_empty());
+  }
+}
+
+#[test]
+fn acp_registry_large_output_fixture_is_collapsed_by_default() {
+  let output = (1..=MAX_TOOL_OUTPUT_LINES_COLLAPSED + 5)
+    .map(|line| format!("line {line}"))
+    .collect::<Vec<_>>()
+    .join("\n");
+  let mut read_call = call("large-read", "Read large.rs", ToolKind::Read);
+  read_call.locations = vec![ToolCallLocation::new("large.rs")];
+  read_call.content = vec![text_tool_content(&output)];
+
+  let view = tool_call_view_from_fixture(read_call);
+  let output = &view.outputs[0];
+  let total = output.text.lines().count();
+  let visible = if output.expanded {
+    total
+  } else {
+    total.min(MAX_TOOL_OUTPUT_LINES_COLLAPSED)
+  };
+
+  assert_eq!(total, MAX_TOOL_OUTPUT_LINES_COLLAPSED + 5);
+  assert!(!output.expanded);
+  assert_eq!(visible, MAX_TOOL_OUTPUT_LINES_COLLAPSED);
+  assert_eq!(
+    visible_output_line_ranges(&output.text, visible).len(),
+    MAX_TOOL_OUTPUT_LINES_COLLAPSED
+  );
+}
+
 #[test]
 fn a_read_with_an_offset_numbers_from_the_real_file_line() {
-  use crate::transcript::{read_tool_start_line, upsert_tool_call_pure};
+  use crate::transcript::read_tool_start_line;
 
   // The raw input's offset fills in when the location carries no line.
   let locations = vec![(std::path::PathBuf::from("src/render.rs"), None)];
