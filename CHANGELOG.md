@@ -42,7 +42,7 @@ Enter queues your message while a turn runs, editable until it goes out. Cmd+Ent
 
 ### Watch Commands Run
 
-The agent's shell commands run in terminals Reviu owns and stream live into the conversation: the command, the tail of the output, the exit code, and a stop button while it runs, so a hung build never holds the turn hostage. Reviu asks Cargo, pnpm, Vitest and other color-aware tools to keep color on even though their output is captured.
+The agent's shell commands run in terminals Reviu owns and stream live into the conversation: the command, the tail of the output, the exit code, and a stop button while it runs, so a hung build never holds the turn hostage. Reviu asks Cargo, pnpm, Vitest and other color-aware tools to keep color on even though their output is captured, and command output still keeps its colors when an agent reports it as regular tool text.
 
 ### See What You Are Approving
 

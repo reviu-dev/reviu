@@ -504,6 +504,49 @@ pub(crate) fn join_terminal_tail(
   (text, ranges)
 }
 
+fn should_parse_ansi_output(text: &str) -> bool {
+  if text.contains('\u{1b}') {
+    return true;
+  }
+  let mut characters = text.chars().peekable();
+  while let Some(character) = characters.next() {
+    if character == '\r' && characters.peek() != Some(&'\n') {
+      return true;
+    }
+  }
+  false
+}
+
+pub(crate) fn ansi_output_rows(
+  text: &str,
+  mono_font: &Font,
+  default_color: Hsla,
+  is_dark: bool,
+  band: Hsla,
+) -> Option<(
+  Vec<code_lines::CodeLineRow>,
+  String,
+  Vec<std::ops::Range<usize>>,
+)> {
+  if !should_parse_ansi_output(text) {
+    return None;
+  }
+
+  let parsed = crate::ansi::parse_ansi(text);
+  let (selection_text, row_ranges) = join_terminal_tail(&parsed);
+  let rows = parsed
+    .iter()
+    .map(|line| code_lines::CodeLineRow {
+      gutter: None,
+      text: mini_diff_line_text_for_layout(&line.text),
+      runs: crate::ansi::runs_for_line(line, mono_font, default_color, is_dark),
+      band,
+    })
+    .collect();
+
+  Some((rows, selection_text, row_ranges))
+}
+
 /// One embedded terminal: command header, live output tail, exit state.
 fn render_terminal_block(
   terminal_id: &str,
@@ -1058,6 +1101,33 @@ pub(crate) fn render_tool_call(
             registry,
             theme,
           )
+        } else if let Some((rows, selection_text, row_ranges)) = ansi_output_rows(
+          &body_text,
+          &mono_font,
+          theme.foreground,
+          theme.is_dark(),
+          theme.background,
+        ) {
+          mini_code_block(theme)
+            .py_1()
+            .text_color(theme.foreground)
+            .child(
+              code_lines::CodeLines::new(
+                rows,
+                px(0.),
+                theme.muted_foreground.opacity(0.72),
+                theme.border.opacity(0.45),
+                theme.foreground,
+                mono_font.clone(),
+              )
+              .selectable(code_lines::SelectionSpec {
+                text: SharedString::from(selection_text),
+                row_ranges,
+                text_id,
+                registry: registry.clone(),
+              }),
+            )
+            .into_any_element()
         } else {
           let runs = highlights_to_text_runs(
             &output.syntax_spans,

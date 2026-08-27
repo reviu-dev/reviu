@@ -2267,6 +2267,71 @@ fn terminal_tail_ranges_slice_their_lines_and_strip_ansi() {
   assert!(ranges.is_empty());
 }
 
+#[test]
+fn ansi_tool_output_rows_strip_escape_sequences_and_keep_style_runs() {
+  let font = Font {
+    family: "monospace".into(),
+    ..Default::default()
+  };
+  let (rows, text, ranges) = ansi_output_rows(
+    "plain\n\u{1b}[1;32mgreen\u{1b}[0m",
+    &font,
+    gpui::black(),
+    true,
+    gpui::transparent_black(),
+  )
+  .expect("ansi output rows");
+
+  assert_eq!(text, "plain\ngreen");
+  assert_eq!(ranges.len(), 2);
+  assert_eq!(&text[ranges[0].clone()], "plain");
+  assert_eq!(&text[ranges[1].clone()], "green");
+  assert!(!text.contains('\u{1b}'));
+  assert!(rows[0].runs.is_empty());
+  assert!(!rows[1].runs.is_empty());
+  assert_eq!(rows[1].text.as_ref(), "green");
+}
+
+#[test]
+fn ansi_tool_output_rows_handle_carriage_return_progress() {
+  let font = Font {
+    family: "monospace".into(),
+    ..Default::default()
+  };
+  let (rows, text, ranges) = ansi_output_rows(
+    "progress 10%\rprogress 100%\n",
+    &font,
+    gpui::black(),
+    true,
+    gpui::transparent_black(),
+  )
+  .expect("carriage return output rows");
+
+  assert_eq!(text, "progress 100%");
+  assert_eq!(ranges.len(), 1);
+  assert_eq!(&text[ranges[0].clone()], "progress 100%");
+  assert_eq!(rows[0].text.as_ref(), "progress 100%");
+}
+
+#[test]
+fn ansi_tool_output_rows_leave_plain_crlf_output_on_the_text_path() {
+  let font = Font {
+    family: "monospace".into(),
+    ..Default::default()
+  };
+
+  assert!(
+    ansi_output_rows(
+      "windows\r\nline",
+      &font,
+      gpui::black(),
+      true,
+      gpui::transparent_black(),
+    )
+    .is_none()
+  );
+}
+
 #[gpui::test]
 async fn a_terminal_burst_lands_as_one_update(cx: &mut gpui::TestAppContext) {
   let (panel, cx) = add_panel_window(cx);
