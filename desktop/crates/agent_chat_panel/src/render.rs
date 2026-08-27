@@ -1045,9 +1045,9 @@ pub(crate) fn render_tool_call(
         let text_id = item_id_base | 0x100 | (out_idx as u64);
         // Stored resolutions first; the recompute only serves conversations
         // persisted before read_start_line existed.
-        let output_start_line = t
-          .read_start_line
-          .or(output.start_line)
+        let output_start_line = output
+          .start_line
+          .or(t.read_start_line)
           .or_else(|| read_tool_output_start_line(&t.kind, &t.locations));
         let content_div = if let Some(start_line) = output_start_line {
           render_numbered_tool_output(

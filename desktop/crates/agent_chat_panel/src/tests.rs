@@ -1678,6 +1678,30 @@ fn a_read_with_an_offset_numbers_from_the_real_file_line() {
 }
 
 #[test]
+fn a_cat_numbered_read_uses_the_agent_line_numbers_once() {
+  use crate::transcript::upsert_tool_call_pure;
+
+  let mut items = Vec::new();
+  let mut index = HashMap::new();
+  let mut call = ToolCall::new(ToolCallId::new("read1"), "Read render.rs");
+  call.kind = ToolKind::Read;
+  call.locations = vec![ToolCallLocation::new("src/render.rs")];
+  call.content = vec![ToolCallContent::from(
+    agent_client_protocol::schema::ContentBlock::Text(TextContent::new(
+      "   845\tlet a = 1;\n   846\tlet b = 2;",
+    )),
+  )];
+  upsert_tool_call_pure(&mut items, &mut index, call, test_cwd());
+
+  let ChatItem::Tool(view) = &items[0] else {
+    panic!("tool expected");
+  };
+  assert_eq!(view.read_start_line, Some(845));
+  assert_eq!(view.outputs[0].start_line, Some(845));
+  assert_eq!(view.outputs[0].text, "let a = 1;\nlet b = 2;");
+}
+
+#[test]
 fn read_offset_survives_status_updates_without_raw_input() {
   use crate::transcript::{apply_tool_call_update_pure, upsert_tool_call_pure};
 

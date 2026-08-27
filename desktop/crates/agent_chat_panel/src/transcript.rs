@@ -1,6 +1,7 @@
 //! Pure functions over the transcript: turns, tool calls, checkpoints.
 
 use super::*;
+use agent_client_protocol::schema::ToolCallContent;
 
 /// The marker goes right before the prompt that triggered it (the last user-authored
 /// message), so a rollback lands on the state that preceded that prompt.
@@ -102,6 +103,19 @@ fn sync_output_start_lines(view: &mut ToolCallView) {
   }
 }
 
+fn extract_outputs_and_read_start_line(
+  content: &[ToolCallContent],
+  read_start_line: Option<u32>,
+  is_read: bool,
+) -> (Vec<ToolOutput>, Option<u32>) {
+  let outputs = extract_outputs(content, read_start_line, is_read);
+  let resolved_start_line = outputs
+    .first()
+    .and_then(|output| output.start_line)
+    .or(read_start_line);
+  (outputs, resolved_start_line)
+}
+
 pub(crate) fn upsert_tool_call_pure(
   items: &mut Vec<ChatItem>,
   index: &mut HashMap<ToolCallId, usize>,
@@ -131,13 +145,24 @@ pub(crate) fn upsert_tool_call_pure(
     // Same content: keep diffs, outputs, spans and their expansion state.
     if existing.content_fp != content_fp {
       existing.diffs = extract_diffs(&call.content, cwd);
-      existing.outputs = extract_outputs(&call.content, existing.read_start_line);
+      let (outputs, read_start_line) = extract_outputs_and_read_start_line(
+        &call.content,
+        existing.read_start_line,
+        matches!(existing.kind, ToolKind::Read),
+      );
+      existing.outputs = outputs;
+      existing.read_start_line = read_start_line;
       existing.terminals = extract_terminals(&call.content);
       existing.content_fp = content_fp;
       populate_syntax_spans(existing);
     }
     return;
   }
+  let (outputs, read_start_line) = extract_outputs_and_read_start_line(
+    &call.content,
+    read_start_line,
+    matches!(call.kind, ToolKind::Read),
+  );
   let mut view = ToolCallView {
     id: call.id.clone(),
     title: call.title,
@@ -145,7 +170,7 @@ pub(crate) fn upsert_tool_call_pure(
     status: call.status,
     locations: call.locations,
     diffs: extract_diffs(&call.content, cwd),
-    outputs: extract_outputs(&call.content, read_start_line),
+    outputs,
     terminals: extract_terminals(&call.content),
     read_start_line,
     content_fp,
@@ -200,7 +225,13 @@ pub(crate) fn apply_tool_call_update_pure(
     );
     if view.content_fp != content_fp {
       view.diffs = extract_diffs(&content, cwd);
-      view.outputs = extract_outputs(&content, view.read_start_line);
+      let (outputs, read_start_line) = extract_outputs_and_read_start_line(
+        &content,
+        view.read_start_line,
+        matches!(view.kind, ToolKind::Read),
+      );
+      view.outputs = outputs;
+      view.read_start_line = read_start_line;
       view.terminals = extract_terminals(&content);
       view.content_fp = content_fp;
       // Only fresh content is worth a re-highlight; a status flip is not.

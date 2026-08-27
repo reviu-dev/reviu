@@ -18,21 +18,92 @@ pub(crate) const MAX_DIFF_LINES_COLLAPSED: usize = 40;
 /// Visible tool output lines per block when collapsed. Beyond this, an expander button is shown.
 pub(crate) const MAX_TOOL_OUTPUT_LINES_COLLAPSED: usize = 20;
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct ParsedCatNumberedCode {
+  code: String,
+  first_number: u32,
+}
+
+fn strip_line_ending(line: &str) -> &str {
+  let without_lf = line.strip_suffix('\n').unwrap_or(line);
+  without_lf.strip_suffix('\r').unwrap_or(without_lf)
+}
+
+fn parse_cat_numbered_line(line: &str) -> Option<(u32, &str)> {
+  let (prefix, text) = line.split_once('\t')?;
+  let number = prefix.trim();
+  if number.is_empty()
+    || !prefix
+      .chars()
+      .all(|character| character == ' ' || character.is_ascii_digit())
+  {
+    return None;
+  }
+  Some((number.parse().ok()?, text))
+}
+
+fn parse_cat_numbered_code(code: &str) -> Option<ParsedCatNumberedCode> {
+  if code.is_empty() {
+    return None;
+  }
+
+  let mut output = String::with_capacity(code.len());
+  let mut first_number = None;
+  let mut expected_number = None;
+  for (line_count, raw_line) in code.split_inclusive('\n').enumerate() {
+    let line = strip_line_ending(raw_line);
+    let (number, text) = parse_cat_numbered_line(line)?;
+    if let Some(expected) = expected_number {
+      if number != expected {
+        return None;
+      }
+    } else {
+      first_number = Some(number);
+    }
+    expected_number = number.checked_add(1);
+    if line_count > 0 {
+      output.push('\n');
+    }
+    output.push_str(text);
+  }
+
+  Some(ParsedCatNumberedCode {
+    code: output,
+    first_number: first_number?,
+  })
+}
+
+fn normalize_output_text(
+  text: &str,
+  start_line: Option<u32>,
+  strip_numbered_lines: bool,
+) -> (String, Option<u32>) {
+  let unfenced = crate::strip_markdown_code_fence(text);
+  if strip_numbered_lines && let Some(parsed) = parse_cat_numbered_code(unfenced) {
+    return (parsed.code, Some(parsed.first_number));
+  }
+  (unfenced.to_string(), start_line)
+}
+
 /// Extracts text content blocks from tool call output. Returns one entry per `Content` block.
 pub(crate) fn extract_outputs(
   content: &[ToolCallContent],
   start_line: Option<u32>,
+  strip_numbered_lines: bool,
 ) -> Vec<crate::ToolOutput> {
   content
     .iter()
     .filter_map(|c| match c {
       ToolCallContent::Content(text_content) => match &text_content.content {
-        ContentBlock::Text(t) => Some(crate::ToolOutput {
-          text: crate::strip_markdown_code_fence(&t.text).to_string(),
-          start_line,
-          expanded: false,
-          syntax_spans: Vec::new(),
-        }),
+        ContentBlock::Text(t) => {
+          let (text, start_line) = normalize_output_text(&t.text, start_line, strip_numbered_lines);
+          Some(crate::ToolOutput {
+            text,
+            start_line,
+            expanded: false,
+            syntax_spans: Vec::new(),
+          })
+        }
         _ => None,
       },
       _ => None,
@@ -587,7 +658,7 @@ mod tests {
         "second block",
       )))),
     ];
-    let outs = extract_outputs(&content, None);
+    let outs = extract_outputs(&content, None, false);
     assert_eq!(outs.len(), 2);
     assert_eq!(outs[0].text, "hello stdout");
     assert_eq!(outs[1].text, "second block");
@@ -604,10 +675,92 @@ mod tests {
       ContentBlock::Text(TextContent::new("first\nsecond")),
     ))];
 
-    let outs = extract_outputs(&content, Some(42));
+    let outs = extract_outputs(&content, Some(42), true);
 
     assert_eq!(outs.len(), 1);
     assert_eq!(outs[0].start_line, Some(42));
+  }
+
+  #[test]
+  fn extract_outputs_strips_cat_numbered_read_text() {
+    use agent_client_protocol::schema::{
+      Content as AcpContent, ContentBlock, TextContent, ToolCallContent,
+    };
+    let content = vec![ToolCallContent::Content(AcpContent::new(
+      ContentBlock::Text(TextContent::new("   845\tlet a = 1;\n   846\tlet b = 2;\n")),
+    ))];
+
+    let outs = extract_outputs(&content, Some(1), true);
+
+    assert_eq!(outs.len(), 1);
+    assert_eq!(outs[0].text, "let a = 1;\nlet b = 2;");
+    assert_eq!(outs[0].start_line, Some(845));
+  }
+
+  #[test]
+  fn extract_outputs_strips_cat_numbered_read_text_without_a_default_line() {
+    use agent_client_protocol::schema::{
+      Content as AcpContent, ContentBlock, TextContent, ToolCallContent,
+    };
+    let content = vec![ToolCallContent::Content(AcpContent::new(
+      ContentBlock::Text(TextContent::new("   845\tlet a = 1;\n   846\tlet b = 2;")),
+    ))];
+
+    let outs = extract_outputs(&content, None, true);
+
+    assert_eq!(outs.len(), 1);
+    assert_eq!(outs[0].text, "let a = 1;\nlet b = 2;");
+    assert_eq!(outs[0].start_line, Some(845));
+  }
+
+  #[test]
+  fn extract_outputs_strips_fenced_cat_numbered_read_text() {
+    use agent_client_protocol::schema::{
+      Content as AcpContent, ContentBlock, TextContent, ToolCallContent,
+    };
+    let content = vec![ToolCallContent::Content(AcpContent::new(
+      ContentBlock::Text(TextContent::new(
+        "```rust\n   845\tlet a = 1;\n   846\tlet b = 2;\n```",
+      )),
+    ))];
+
+    let outs = extract_outputs(&content, Some(1), true);
+
+    assert_eq!(outs.len(), 1);
+    assert_eq!(outs[0].text, "let a = 1;\nlet b = 2;");
+    assert_eq!(outs[0].start_line, Some(845));
+  }
+
+  #[test]
+  fn extract_outputs_keeps_non_contiguous_numbered_text_verbatim() {
+    use agent_client_protocol::schema::{
+      Content as AcpContent, ContentBlock, TextContent, ToolCallContent,
+    };
+    let content = vec![ToolCallContent::Content(AcpContent::new(
+      ContentBlock::Text(TextContent::new("   845\tlet a = 1;\n   847\tlet b = 2;")),
+    ))];
+
+    let outs = extract_outputs(&content, Some(1), true);
+
+    assert_eq!(outs.len(), 1);
+    assert_eq!(outs[0].text, "   845\tlet a = 1;\n   847\tlet b = 2;");
+    assert_eq!(outs[0].start_line, Some(1));
+  }
+
+  #[test]
+  fn extract_outputs_only_strips_numbered_text_for_reads() {
+    use agent_client_protocol::schema::{
+      Content as AcpContent, ContentBlock, TextContent, ToolCallContent,
+    };
+    let content = vec![ToolCallContent::Content(AcpContent::new(
+      ContentBlock::Text(TextContent::new("   1\tstdout line")),
+    ))];
+
+    let outs = extract_outputs(&content, None, false);
+
+    assert_eq!(outs.len(), 1);
+    assert_eq!(outs[0].text, "   1\tstdout line");
+    assert_eq!(outs[0].start_line, None);
   }
 
   #[test]
