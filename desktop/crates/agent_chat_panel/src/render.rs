@@ -2293,9 +2293,10 @@ impl AgentChatPanel {
         cx,
       ));
     } else if !self.pending_agent.is_empty() {
+      let pending_agent = sanitize_agent_markdown(&self.pending_agent);
       container = container.child(markdown_view(
         "agent-chat-md-pending",
-        &self.pending_agent,
+        &pending_agent,
         &self.markdown_extensions,
         cx,
       ));
@@ -2600,39 +2601,42 @@ impl AgentChatPanel {
             )
             .into_any_element()
         }
-        ChatRole::Agent => timeline_row(
-          v_flex()
-            .group("chat-agent-msg")
-            .gap_0p5()
-            .child(markdown_view(
-              ("agent-chat-md", idx),
-              &m.text,
-              &self.markdown_extensions,
-              cx,
-            ))
-            .child(
-              // Capped so the hover-only copy doesn't reserve a visible gap;
-              // the button overflows into the row's bottom padding instead.
-              h_flex()
-                .h(px(10.))
-                .items_start()
-                .gap_0p5()
-                .opacity(0.)
-                .group_hover("chat-agent-msg", |this| this.opacity(1.))
-                .child(
-                  div()
-                    .debug_selector(|| "chat-msg-copy-agent".to_string())
-                    .child(
-                      Clipboard::new(SharedString::from(format!("chat-msg-copy-agent-{idx}")))
-                        .value(SharedString::from(m.text.clone()))
-                        .tooltip("Copy message"),
-                    ),
-                ),
-            )
-            .into_any_element(),
-          theme,
-          is_last_row,
-        ),
+        ChatRole::Agent => {
+          let text = sanitize_agent_markdown(&m.text);
+          timeline_row(
+            v_flex()
+              .group("chat-agent-msg")
+              .gap_0p5()
+              .child(markdown_view(
+                ("agent-chat-md", idx),
+                &text,
+                &self.markdown_extensions,
+                cx,
+              ))
+              .child(
+                // Capped so the hover-only copy doesn't reserve a visible gap;
+                // the button overflows into the row's bottom padding instead.
+                h_flex()
+                  .h(px(10.))
+                  .items_start()
+                  .gap_0p5()
+                  .opacity(0.)
+                  .group_hover("chat-agent-msg", |this| this.opacity(1.))
+                  .child(
+                    div()
+                      .debug_selector(|| "chat-msg-copy-agent".to_string())
+                      .child(
+                        Clipboard::new(SharedString::from(format!("chat-msg-copy-agent-{idx}")))
+                          .value(SharedString::from(text))
+                          .tooltip("Copy message"),
+                      ),
+                  ),
+              )
+              .into_any_element(),
+            theme,
+            is_last_row,
+          )
+        }
         ChatRole::System if m.text.starts_with("[error]") => timeline_row(
           h_flex()
             .debug_selector(|| "chat-turn-error".to_string())

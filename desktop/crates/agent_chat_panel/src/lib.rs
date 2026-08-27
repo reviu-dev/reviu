@@ -13,6 +13,7 @@ use render::*;
 mod diff;
 mod events;
 mod mention;
+mod message_sanitizer;
 mod persistence;
 
 use std::collections::HashMap;
@@ -25,6 +26,7 @@ use crate::diff::{
   extract_outputs_with_fallback, extract_terminals,
 };
 use crate::mention::{DiffMention, MentionCandidate, MentionTrigger, ResolvedMention};
+use crate::message_sanitizer::sanitize_agent_markdown;
 use crate::persistence::{
   CONVERSATION_FORMAT_VERSION, LoadedConversation, new_conversation_meta, now_secs, preview_of,
   truncate_title,

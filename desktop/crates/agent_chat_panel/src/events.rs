@@ -286,7 +286,7 @@ impl AgentChatPanel {
       self.pending_md_state = None;
       return;
     }
-    let text = std::mem::take(&mut self.pending_agent);
+    let text = sanitize_agent_markdown(&std::mem::take(&mut self.pending_agent));
     self.items.push(ChatItem::Message(ChatMessage {
       role: ChatRole::Agent,
       text,
