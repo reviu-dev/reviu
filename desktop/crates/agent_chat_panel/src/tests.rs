@@ -112,6 +112,7 @@ fn tool_index_tracks_positions_after_checkpoint_insertion_and_truncation() {
       title: title.to_string(),
       kind,
       status: ToolCallStatus::Completed,
+      tool_name: None,
       locations: Vec::new(),
       diffs: Vec::new(),
       outputs: Vec::new(),
@@ -220,6 +221,7 @@ fn edit_tool(id: &str, diffs: Vec<(&str, u32, u32)>) -> ChatItem {
     title: "Edit".to_string(),
     kind: ToolKind::Edit,
     status: ToolCallStatus::Completed,
+    tool_name: None,
     locations: Vec::new(),
     diffs: diffs
       .into_iter()
@@ -473,6 +475,7 @@ fn bench_diff_tool(id: &str, lines: usize) -> ChatItem {
     title: "Edit".to_string(),
     kind: ToolKind::Edit,
     status: ToolCallStatus::Completed,
+    tool_name: None,
     locations: Vec::new(),
     diffs: vec![DiffSummary {
       path: "src/main.rs".to_string(),
@@ -498,6 +501,7 @@ fn bench_output_tool(id: &str, lines: usize) -> ChatItem {
     title: "Read".to_string(),
     kind: ToolKind::Read,
     status: ToolCallStatus::Completed,
+    tool_name: None,
     locations: vec![(std::path::PathBuf::from("src/lib.rs"), Some(1))],
     diffs: Vec::new(),
     outputs: vec![ToolOutput {
@@ -1918,6 +1922,7 @@ fn tool_call_normalization_preserves_wire_fields() {
   assert_eq!(normalized.raw_input, Some(raw_input));
   assert_eq!(normalized.raw_output, Some(raw_output));
   assert_eq!(normalized.meta, Some(meta));
+  assert_eq!(normalized.tool_name.as_deref(), Some("read_file"));
   assert_eq!(normalized.content, content);
 }
 
@@ -1944,7 +1949,72 @@ fn tool_update_normalization_keeps_shape_fields_optional() {
   assert_eq!(normalized.raw_input, None);
   assert_eq!(normalized.raw_output, Some(raw_output));
   assert_eq!(normalized.meta, Some(meta));
+  assert_eq!(normalized.tool_name.as_deref(), Some("read_file"));
   assert_eq!(normalized.content, None);
+}
+
+#[test]
+fn tool_name_metadata_can_hint_kind_without_parsing_titles() {
+  let mut meta = agent_client_protocol::schema::Meta::new();
+  meta.insert("tool_name".into(), serde_json::json!("read_file"));
+  let mut call = ToolCall::new(ToolCallId::new("read1"), "Inspecting target");
+  call.kind = ToolKind::Other;
+  call.locations = vec![ToolCallLocation::new("src/lib.rs")];
+  call.meta = Some(meta);
+  call.content = vec![text_tool_content("   12\tfn main() {}")];
+
+  let view = tool_call_view_from_fixture(call);
+
+  assert!(matches!(view.kind, ToolKind::Read));
+  assert_eq!(view.tool_name.as_deref(), Some("read_file"));
+  assert_eq!(view.read_start_line, Some(12));
+  assert_eq!(view.outputs[0].start_line, Some(12));
+  assert_eq!(view.outputs[0].text, "fn main() {}");
+}
+
+#[test]
+fn grok_style_tool_name_metadata_is_captured() {
+  let mut meta = agent_client_protocol::schema::Meta::new();
+  meta.insert("x.ai/tool.name".into(), serde_json::json!("shell_exec"));
+  let mut call = ToolCall::new(ToolCallId::new("run1"), "Working");
+  call.kind = ToolKind::Other;
+  call.raw_input = Some(serde_json::json!({ "command": "cargo test" }));
+  call.meta = Some(meta);
+
+  let normalized = NormalizedToolCall::from(call);
+
+  assert_eq!(normalized.tool_name.as_deref(), Some("shell_exec"));
+  assert!(matches!(normalized.kind, ToolKind::Execute));
+}
+
+#[test]
+fn tool_name_metadata_does_not_override_explicit_kind() {
+  let mut meta = agent_client_protocol::schema::Meta::new();
+  meta.insert("tool_name".into(), serde_json::json!("read_file"));
+  let mut call = ToolCall::new(ToolCallId::new("run1"), "Run tests");
+  call.kind = ToolKind::Execute;
+  call.raw_input = Some(serde_json::json!({ "command": "cargo test" }));
+  call.locations = vec![ToolCallLocation::new("src/lib.rs")];
+  call.meta = Some(meta);
+
+  let normalized = NormalizedToolCall::from(call);
+
+  assert_eq!(normalized.tool_name.as_deref(), Some("read_file"));
+  assert!(matches!(normalized.kind, ToolKind::Execute));
+}
+
+#[test]
+fn tool_name_metadata_alone_is_not_enough_to_change_kind() {
+  let mut meta = agent_client_protocol::schema::Meta::new();
+  meta.insert("tool_name".into(), serde_json::json!("read_file"));
+  let mut call = ToolCall::new(ToolCallId::new("read1"), "Working");
+  call.kind = ToolKind::Other;
+  call.meta = Some(meta);
+
+  let normalized = NormalizedToolCall::from(call);
+
+  assert_eq!(normalized.tool_name.as_deref(), Some("read_file"));
+  assert!(matches!(normalized.kind, ToolKind::Other));
 }
 
 #[test]
@@ -2141,6 +2211,7 @@ fn persisted_tools_backfill_line_numbers_and_highlights_on_load() {
       title: "Edit src/main.rs".to_string(),
       kind: ToolKind::Edit,
       status: ToolCallStatus::Completed,
+      tool_name: None,
       locations: vec![(PathBuf::from("src/main.rs"), Some(12))],
       diffs: vec![DiffSummary {
         path: "src/main.rs".to_string(),

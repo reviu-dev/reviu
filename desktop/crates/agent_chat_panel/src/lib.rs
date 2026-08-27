@@ -158,6 +158,8 @@ struct ToolCallView {
   title: String,
   kind: ToolKind,
   status: ToolCallStatus,
+  #[serde(default)]
+  tool_name: Option<String>,
   locations: Vec<(PathBuf, Option<u32>)>,
   #[serde(default)]
   diffs: Vec<DiffSummary>,

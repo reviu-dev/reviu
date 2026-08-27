@@ -136,6 +136,7 @@ pub(crate) fn upsert_tool_call_pure(
   {
     existing.title = call.title;
     existing.kind = call.kind;
+    existing.tool_name = call.tool_name;
     existing.status = call.status;
     existing.locations = call.locations;
     let previous_start_line = existing.read_start_line;
@@ -171,6 +172,7 @@ pub(crate) fn upsert_tool_call_pure(
     title: call.title,
     kind: call.kind,
     status: call.status,
+    tool_name: call.tool_name,
     locations: call.locations,
     diffs: extract_diffs(&call.content, cwd),
     outputs,
@@ -202,6 +204,9 @@ pub(crate) fn apply_tool_call_update_pure(
   }
   if let Some(status) = update.status {
     view.status = status;
+  }
+  if let Some(tool_name) = update.tool_name {
+    view.tool_name = Some(tool_name);
   }
   if let Some(title) = update.title {
     view.title = title;
