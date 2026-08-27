@@ -72,9 +72,6 @@ const FILE_SEARCH_ACTIVE_CONTEXTS: [&str; 1] = [WORKSPACE_SESSION_CONTEXT];
 
 const SESSION_ONLY_ACTIVE_CONTEXTS: [&str; 1] = [WORKSPACE_SESSION_CONTEXT];
 
-const SECONDARY_PAGE_ACTIVE_CONTEXTS: [&str; 2] =
-  [WORKSPACE_GIT_CONFIG_CONTEXT, WORKSPACE_SETTINGS_CONTEXT];
-
 const COMMENT_HUNK_ACTIVE_CONTEXTS: [&str; 1] = [WORKSPACE_SESSION_CONTEXT];
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -88,7 +85,6 @@ pub enum ShortcutId {
   PullChanges,
   PushChanges,
   ForcePushChanges,
-  CloseWorkspacePage,
   OpenSettingsPage,
   ToggleTerminalSidebar,
   ShowBranchSwitcher,
@@ -126,7 +122,6 @@ impl ShortcutId {
       ShortcutId::PullChanges => "pull_changes",
       ShortcutId::PushChanges => "push_changes",
       ShortcutId::ForcePushChanges => "force_push_changes",
-      ShortcutId::CloseWorkspacePage => "close_workspace_page",
       ShortcutId::OpenSettingsPage => "open_settings_page",
       ShortcutId::ToggleTerminalSidebar => "toggle_terminal_sidebar",
       ShortcutId::ShowBranchSwitcher => "show_branch_switcher",
@@ -164,7 +159,6 @@ impl ShortcutId {
       "pull_changes" => Some(ShortcutId::PullChanges),
       "push_changes" => Some(ShortcutId::PushChanges),
       "force_push_changes" => Some(ShortcutId::ForcePushChanges),
-      "close_workspace_page" => Some(ShortcutId::CloseWorkspacePage),
       "open_settings_page" => Some(ShortcutId::OpenSettingsPage),
       "toggle_terminal_sidebar" => Some(ShortcutId::ToggleTerminalSidebar),
       "show_branch_switcher" => Some(ShortcutId::ShowBranchSwitcher),
@@ -214,7 +208,7 @@ pub struct ShortcutDefinition {
   pub active_contexts: &'static [&'static str],
 }
 
-const SHORTCUT_DEFINITIONS: [ShortcutDefinition; 33] = [
+const SHORTCUT_DEFINITIONS: [ShortcutDefinition; 32] = [
   ShortcutDefinition {
     id: ShortcutId::ShowCommandPalette,
     title: "Command Palette",
@@ -567,17 +561,6 @@ const SHORTCUT_DEFINITIONS: [ShortcutDefinition; 33] = [
     display_context: WORKSPACE_SESSION_CONTEXT,
     active_contexts: &ALL_WORKSPACE_ACTIVE_CONTEXTS,
   },
-  ShortcutDefinition {
-    id: ShortcutId::CloseWorkspacePage,
-    title: "Close Page",
-    description: "Close the current secondary workspace page.",
-    scope_label: "Settings, Billing, About, and Git Config pages",
-    category: ShortcutCategory::App,
-    keystroke: "cmd-w",
-    context: CLOSE_WORKSPACE_PAGE_CONTEXT,
-    display_context: WORKSPACE_SETTINGS_CONTEXT,
-    active_contexts: &SECONDARY_PAGE_ACTIVE_CONTEXTS,
-  },
 ];
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -863,9 +846,6 @@ impl ShortcutDefinition {
       ShortcutId::PullChanges => KeyBinding::new(keystroke, PullChanges, Some(&context)),
       ShortcutId::PushChanges => KeyBinding::new(keystroke, PushChanges, Some(&context)),
       ShortcutId::ForcePushChanges => KeyBinding::new(keystroke, ForcePushChanges, Some(&context)),
-      ShortcutId::CloseWorkspacePage => {
-        KeyBinding::new(keystroke, CloseWorkspacePage, Some(&context))
-      }
       ShortcutId::OpenSettingsPage => KeyBinding::new(keystroke, OpenSettingsPage, Some(&context)),
       ShortcutId::ToggleTerminalSidebar => {
         KeyBinding::new(keystroke, ToggleTerminalSidebar, Some(&context))
@@ -1181,7 +1161,7 @@ fn workspace_key_bindings_with_overrides_and_generation(
   overrides: &ShortcutOverrides,
   generation: u32,
 ) -> Vec<KeyBinding> {
-  shortcut_definitions()
+  let mut bindings: Vec<KeyBinding> = shortcut_definitions()
     .iter()
     .copied()
     .map(|definition| {
@@ -1190,7 +1170,21 @@ fn workspace_key_bindings_with_overrides_and_generation(
         generation,
       )
     })
-    .collect()
+    .collect();
+  bindings.extend(fixed_workspace_key_bindings_with_generation(generation));
+  bindings
+}
+
+fn fixed_workspace_key_bindings_with_generation(generation: u32) -> Vec<KeyBinding> {
+  let context = shortcut_binding_context(
+    &guarded_shortcut_context(CLOSE_WORKSPACE_PAGE_CONTEXT),
+    generation,
+  );
+  vec![KeyBinding::new(
+    "escape",
+    CloseWorkspacePage,
+    Some(&context),
+  )]
 }
 
 pub fn key_context_for_pathname(pathname: &str) -> &'static str {
@@ -1337,7 +1331,6 @@ fn with_shortcut_action<T>(id: ShortcutId, f: impl FnOnce(&dyn Action) -> T) -> 
     ShortcutId::PullChanges => f(&PullChanges),
     ShortcutId::PushChanges => f(&PushChanges),
     ShortcutId::ForcePushChanges => f(&ForcePushChanges),
-    ShortcutId::CloseWorkspacePage => f(&CloseWorkspacePage),
     ShortcutId::OpenSettingsPage => f(&OpenSettingsPage),
     ShortcutId::ToggleTerminalSidebar => f(&ToggleTerminalSidebar),
     ShortcutId::ShowBranchSwitcher => f(&ShowBranchSwitcher),
@@ -1625,12 +1618,14 @@ mod tests {
   }
 
   #[test]
-  fn close_page_binding_is_limited_to_secondary_workspace_pages() {
-    assert!(has_binding("/settings", "cmd-w"));
-    assert!(has_binding("/git-config", "cmd-w"));
-    assert!(!has_binding("/session", "cmd-w"));
-    assert!(!has_binding("/github", "cmd-w"));
-    assert!(!has_binding("/github/owner/repo", "cmd-w"));
+  fn escape_closes_secondary_workspace_pages() {
+    assert!(has_binding("/settings", "escape"));
+    assert!(has_binding("/git-config", "escape"));
+    assert!(!has_binding("/session", "escape"));
+    assert!(!has_binding("/github", "escape"));
+    assert!(!has_binding("/github/owner/repo", "escape"));
+    assert!(!has_binding("/settings", "cmd-w"));
+    assert!(!has_binding("/git-config", "cmd-w"));
   }
 
   #[test]
@@ -1852,6 +1847,12 @@ mod tests {
       "/session",
       &[COMMAND_PALETTE_CONTEXT],
       "cmd-p",
+      bindings.clone(),
+    ));
+    assert!(!has_binding_with_bindings_in_contexts(
+      "/settings",
+      &[COMMAND_PALETTE_CONTEXT],
+      "escape",
       bindings,
     ));
   }
@@ -1869,7 +1870,7 @@ mod tests {
     assert!(!has_binding_with_bindings_in_contexts(
       "/settings",
       &[WORKSPACE_SHORTCUT_RECORDING_CONTEXT],
-      "cmd-w",
+      "escape",
       bindings,
     ));
   }

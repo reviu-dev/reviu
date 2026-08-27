@@ -1147,6 +1147,12 @@ mod tests {
           [],
         )
         .expect("seed row");
+      conn
+        .execute(
+          "INSERT INTO shortcut_overrides (shortcut_id, keystroke) VALUES ('close_workspace_page', 'cmd-w')",
+          [],
+        )
+        .expect("seed retired row");
     }
 
     ConfigStore::set_test_db_path(Some(db_path));
@@ -1157,6 +1163,8 @@ mod tests {
       Some(&"cmd-j".to_string())
     );
     assert!(file_path.exists(), "import must stamp the keybindings file");
+    let raw = fs::read_to_string(&file_path).expect("read keybindings file");
+    assert!(!raw.contains("close_workspace_page"));
     assert_eq!(
       ConfigStore::load_shortcut_overrides().get(&ShortcutId::CommitChanges),
       Some(&"cmd-j".to_string())
