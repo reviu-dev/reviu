@@ -96,16 +96,10 @@ pub(crate) fn read_tool_start_line(
     .or_else(|| (matches!(kind, ToolKind::Read) && !locations.is_empty()).then_some(1))
 }
 
-/// Fingerprint of the pieces that feed diffs, outputs and highlight spans.
-pub(crate) fn tool_content_fp(
-  content: &[ToolCallContent],
-  first_location: Option<&PathBuf>,
-) -> u64 {
-  let mut bytes = serde_json::to_vec(content).unwrap_or_default();
-  if let Some(path) = first_location {
-    bytes.extend_from_slice(path.to_string_lossy().as_bytes());
+fn sync_output_start_lines(view: &mut ToolCallView) {
+  for output in &mut view.outputs {
+    output.start_line = view.read_start_line;
   }
-  code_block::fnv1a(&bytes)
 }
 
 pub(crate) fn upsert_tool_call_pure(
@@ -114,21 +108,26 @@ pub(crate) fn upsert_tool_call_pure(
   call: ToolCall,
   cwd: &std::path::Path,
 ) {
-  let locations: Vec<(PathBuf, Option<u32>)> = call
-    .locations
-    .into_iter()
-    .map(|l| (l.path, l.line))
-    .collect();
-  let content_fp = tool_content_fp(&call.content, locations.first().map(|(p, _)| p));
-  let read_start_line = read_tool_start_line(&call.kind, &locations, call.raw_input.as_ref());
-  if let Some(&idx) = index.get(&call.tool_call_id)
+  let call = NormalizedToolCall::from(call);
+  let content_fp = tool_payload_fp(
+    &call.content,
+    call.first_location_path(),
+    call.raw_output.as_ref(),
+    call.meta.as_ref(),
+  );
+  let read_start_line = read_tool_start_line(&call.kind, &call.locations, call.raw_input.as_ref());
+  if let Some(&idx) = index.get(&call.id)
     && let Some(ChatItem::Tool(existing)) = items.get_mut(idx)
   {
     existing.title = call.title;
     existing.kind = call.kind;
     existing.status = call.status;
-    existing.locations = locations;
+    existing.locations = call.locations;
+    let previous_start_line = existing.read_start_line;
     existing.read_start_line = read_start_line.or(existing.read_start_line);
+    if existing.read_start_line != previous_start_line {
+      sync_output_start_lines(existing);
+    }
     // Same content: keep diffs, outputs, spans and their expansion state.
     if existing.content_fp != content_fp {
       existing.diffs = extract_diffs(&call.content, cwd);
@@ -140,11 +139,11 @@ pub(crate) fn upsert_tool_call_pure(
     return;
   }
   let mut view = ToolCallView {
-    id: call.tool_call_id.clone(),
+    id: call.id.clone(),
     title: call.title,
     kind: call.kind,
     status: call.status,
-    locations,
+    locations: call.locations,
     diffs: extract_diffs(&call.content, cwd),
     outputs: extract_outputs(&call.content, read_start_line),
     terminals: extract_terminals(&call.content),
@@ -153,7 +152,7 @@ pub(crate) fn upsert_tool_call_pure(
   };
   populate_syntax_spans(&mut view);
   let idx = items.len();
-  index.insert(call.tool_call_id, idx);
+  index.insert(call.id, idx);
   items.push(ChatItem::Tool(view));
 }
 
@@ -163,35 +162,42 @@ pub(crate) fn apply_tool_call_update_pure(
   update: ToolCallUpdate,
   cwd: &std::path::Path,
 ) {
-  let Some(&idx) = index.get(&update.tool_call_id) else {
+  let update = NormalizedToolCallUpdate::from(update);
+  let Some(&idx) = index.get(&update.id) else {
     return;
   };
   let Some(ChatItem::Tool(view)) = items.get_mut(idx) else {
     return;
   };
-  if let Some(kind) = update.fields.kind {
+  if let Some(kind) = update.kind {
     view.kind = kind;
   }
-  if let Some(status) = update.fields.status {
+  if let Some(status) = update.status {
     view.status = status;
   }
-  if let Some(title) = update.fields.title {
+  if let Some(title) = update.title {
     view.title = title;
   }
-  if let Some(locs) = update.fields.locations {
-    view.locations = locs.into_iter().map(|l| (l.path, l.line)).collect();
+  if let Some(locs) = update.locations {
+    view.locations = locs;
   }
   // Updates rarely repeat raw input; only an explicit line or offset can
   // replace the one captured at the initial call.
-  view.read_start_line = read_tool_explicit_start_line(
-    &view.kind,
-    &view.locations,
-    update.fields.raw_input.as_ref(),
-  )
-  .or(view.read_start_line)
-  .or_else(|| read_tool_output_start_line(&view.kind, &view.locations));
-  if let Some(content) = update.fields.content {
-    let content_fp = tool_content_fp(&content, view.locations.first().map(|(p, _)| p));
+  let previous_start_line = view.read_start_line;
+  view.read_start_line =
+    read_tool_explicit_start_line(&view.kind, &view.locations, update.raw_input.as_ref())
+      .or(view.read_start_line)
+      .or_else(|| read_tool_output_start_line(&view.kind, &view.locations));
+  if view.read_start_line != previous_start_line {
+    sync_output_start_lines(view);
+  }
+  if let Some(content) = update.content {
+    let content_fp = tool_payload_fp(
+      &content,
+      view.locations.first().map(|(p, _)| p),
+      update.raw_output.as_ref(),
+      update.meta.as_ref(),
+    );
     if view.content_fp != content_fp {
       view.diffs = extract_diffs(&content, cwd);
       view.outputs = extract_outputs(&content, view.read_start_line);

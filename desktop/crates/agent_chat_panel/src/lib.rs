@@ -4,6 +4,8 @@ mod code_lines;
 mod store;
 mod transcript;
 use transcript::*;
+mod tool_normalization;
+use tool_normalization::*;
 mod prompt;
 use prompt::*;
 mod render;
@@ -37,7 +39,7 @@ use agent_acp::{
 use agent_client_protocol::schema::{
   ContentBlock, EmbeddedResource, EmbeddedResourceResource, Plan, PlanEntryPriority,
   PlanEntryStatus, ResourceLink, SessionInfoUpdate, TextContent, TextResourceContents, ToolCall,
-  ToolCallContent, ToolCallId, ToolCallStatus, ToolCallUpdate, ToolKind,
+  ToolCallId, ToolCallStatus, ToolCallUpdate, ToolKind,
 };
 use agent_client_protocol::schema::{
   ModelId, ModelInfo, SessionConfigId, SessionConfigKind, SessionConfigOption,
