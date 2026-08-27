@@ -7,7 +7,7 @@ use std::path::PathBuf;
 use serde::{Deserialize, Serialize};
 
 use crate::AppProfile;
-use crate::config::{AppSettings, CloneProtocol, ConfigStore};
+use crate::config::{AppSettings, ConfigStore};
 use crate::sentry_context::capture_unexpected_error;
 
 const SETTINGS_FILE_NAME: &str = "settings.json";
@@ -73,8 +73,6 @@ struct SettingsDoc {
   #[serde(deserialize_with = "lenient")]
   hide_whitespace: Option<bool>,
   #[serde(deserialize_with = "lenient")]
-  clone_protocol: Option<CloneProtocol>,
-  #[serde(deserialize_with = "lenient")]
   menu_bar_icon: Option<bool>,
   #[serde(deserialize_with = "lenient")]
   analytics_enabled: Option<bool>,
@@ -105,7 +103,6 @@ impl SettingsDoc {
         .unwrap_or(defaults.git_unified_file_view),
       split_diff_view: self.split_diff_view.unwrap_or(defaults.split_diff_view),
       hide_whitespace: self.hide_whitespace.unwrap_or(defaults.hide_whitespace),
-      clone_protocol: self.clone_protocol.unwrap_or(defaults.clone_protocol),
       menu_bar_icon: self.menu_bar_icon.unwrap_or(defaults.menu_bar_icon),
       analytics_enabled: self.analytics_enabled.unwrap_or(defaults.analytics_enabled),
       agent_notifications: self
@@ -125,7 +122,6 @@ impl From<AppSettings> for SettingsDoc {
       git_unified_file_view: Some(settings.git_unified_file_view),
       split_diff_view: Some(settings.split_diff_view),
       hide_whitespace: Some(settings.hide_whitespace),
-      clone_protocol: Some(settings.clone_protocol),
       menu_bar_icon: Some(settings.menu_bar_icon),
       analytics_enabled: Some(settings.analytics_enabled),
       agent_notifications: Some(settings.agent_notifications),
@@ -229,7 +225,6 @@ mod tests {
       git_unified_file_view: true,
       split_diff_view: true,
       hide_whitespace: true,
-      clone_protocol: CloneProtocol::Ssh,
       menu_bar_icon: false,
       analytics_enabled: false,
       agent_notifications: false,
@@ -276,15 +271,10 @@ mod tests {
   #[test]
   fn a_mistyped_field_falls_back_alone() {
     let path = setup("mistyped-field");
-    fs::write(
-      &path,
-      r#"{ "font_size": "big", "clone_protocol": "gopher", "hide_whitespace": true }"#,
-    )
-    .expect("write file");
+    fs::write(&path, r#"{ "font_size": "big", "hide_whitespace": true }"#).expect("write file");
 
     let loaded = load();
     assert_eq!(loaded.font_size, 16.0);
-    assert_eq!(loaded.clone_protocol, CloneProtocol::Https);
     assert!(loaded.hide_whitespace, "valid fields must survive");
     assert!(take_startup_error().is_none());
 

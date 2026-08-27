@@ -8,15 +8,13 @@ use std::{
   time::{SystemTime, UNIX_EPOCH},
 };
 
-use dirs::config_dir;
-use gpui::Keystroke;
-use rusqlite::{Connection, params};
-use serde::{Deserialize, Serialize};
-
 use crate::AppProfile;
 use crate::api::GithubPullRequestMergeMethod;
 use crate::shortcuts::ShortcutId;
 use app_log::ResultExt;
+use dirs::config_dir;
+use gpui::Keystroke;
+use rusqlite::{Connection, params};
 
 const CONFIG_DIR_NAME: &str = "reviu";
 const CONFIG_DB_NAME: &str = "reviu.sqlite";
@@ -166,7 +164,6 @@ fn ensure_settings_columns(conn: &Connection) -> rusqlite::Result<()> {
     ("git_unified_file_view", "INTEGER NOT NULL DEFAULT 0"),
     ("split_diff_view", "INTEGER NOT NULL DEFAULT 0"),
     ("hide_whitespace", "INTEGER NOT NULL DEFAULT 0"),
-    ("clone_protocol", "TEXT NOT NULL DEFAULT 'https'"),
     ("menu_bar_icon", "INTEGER NOT NULL DEFAULT 1"),
     ("analytics_enabled", "INTEGER NOT NULL DEFAULT 1"),
   ];
@@ -217,29 +214,6 @@ pub struct RecentRepository {
   pub path: PathBuf,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum CloneProtocol {
-  Https,
-  Ssh,
-}
-
-impl CloneProtocol {
-  pub fn as_str(self) -> &'static str {
-    match self {
-      Self::Https => "https",
-      Self::Ssh => "ssh",
-    }
-  }
-
-  pub fn from_str(value: &str) -> Self {
-    match value {
-      "ssh" => Self::Ssh,
-      _ => Self::Https,
-    }
-  }
-}
-
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct AppSettings {
   pub auto_switch_theme: bool,
@@ -249,7 +223,6 @@ pub struct AppSettings {
   pub git_unified_file_view: bool,
   pub split_diff_view: bool,
   pub hide_whitespace: bool,
-  pub clone_protocol: CloneProtocol,
   pub menu_bar_icon: bool,
   pub analytics_enabled: bool,
   /// Popup when the agent finishes or asks while the window is inactive.
@@ -281,7 +254,6 @@ impl Default for AppSettings {
       git_unified_file_view: false,
       split_diff_view: false,
       hide_whitespace: false,
-      clone_protocol: CloneProtocol::Https,
       menu_bar_icon: true,
       analytics_enabled: true,
       agent_notifications: true,
@@ -488,7 +460,7 @@ impl ConfigStore {
   fn load_app_settings_inner(&self) -> AppSettings {
     let settings = self.conn.query_row(
       &format!(
-        "SELECT auto_switch_theme, dark_mode, indent_rainbow, font_size, git_unified_file_view, split_diff_view, hide_whitespace, clone_protocol, menu_bar_icon, analytics_enabled FROM {} WHERE id = 1",
+        "SELECT auto_switch_theme, dark_mode, indent_rainbow, font_size, git_unified_file_view, split_diff_view, hide_whitespace, menu_bar_icon, analytics_enabled FROM {} WHERE id = 1",
         SETTINGS_TABLE.name
       ),
       [],
@@ -500,9 +472,8 @@ impl ConfigStore {
         let git_unified_file_view: i64 = row.get(4)?;
         let split_diff_view: i64 = row.get(5)?;
         let hide_whitespace: i64 = row.get(6)?;
-        let clone_protocol: String = row.get(7)?;
-        let menu_bar_icon: i64 = row.get(8)?;
-        let analytics_enabled: i64 = row.get(9)?;
+        let menu_bar_icon: i64 = row.get(7)?;
+        let analytics_enabled: i64 = row.get(8)?;
         Ok(AppSettings {
           auto_switch_theme: auto_switch_theme != 0,
           dark_mode: dark_mode != 0,
@@ -511,7 +482,6 @@ impl ConfigStore {
           git_unified_file_view: git_unified_file_view != 0,
           split_diff_view: split_diff_view != 0,
           hide_whitespace: hide_whitespace != 0,
-          clone_protocol: CloneProtocol::from_str(&clone_protocol),
           menu_bar_icon: menu_bar_icon != 0,
           analytics_enabled: analytics_enabled != 0,
           agent_notifications: true,
@@ -901,7 +871,6 @@ mod tests {
       git_unified_file_view: true,
       split_diff_view: true,
       hide_whitespace: true,
-      clone_protocol: CloneProtocol::Ssh,
       menu_bar_icon: false,
       agent_notifications: false,
     };
@@ -915,7 +884,6 @@ mod tests {
     assert!(loaded.git_unified_file_view);
     assert!(loaded.split_diff_view);
     assert!(loaded.hide_whitespace);
-    assert_eq!(loaded.clone_protocol, CloneProtocol::Ssh);
     assert!(!loaded.menu_bar_icon);
 
     ConfigStore::set_test_db_path(None);
@@ -1028,7 +996,6 @@ mod tests {
     "git_unified_file_view",
     "split_diff_view",
     "hide_whitespace",
-    "clone_protocol",
     "menu_bar_icon",
     "analytics_enabled",
   ];
