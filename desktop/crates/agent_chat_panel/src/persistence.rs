@@ -2,6 +2,7 @@ use std::path::PathBuf;
 
 #[allow(clippy::wildcard_imports)]
 use super::*;
+use agent_registry::AgentId;
 use app_log::ResultExt;
 
 /// Bump when the on-disk shape changes; readers dispatch on it. Version 0 is
@@ -15,11 +16,17 @@ pub struct ConversationMeta {
   pub updated_at_secs: u64,
   pub title: String,
   pub message_count: usize,
+  #[serde(default = "default_meta_agent_id")]
+  pub agent_id: AgentId,
   #[serde(default)]
   pub session_id: Option<String>,
   /// First line of the last message, for the sidebar row.
   #[serde(default)]
   pub preview: String,
+}
+
+fn default_meta_agent_id() -> AgentId {
+  default_agent_id()
 }
 
 pub(crate) fn now_secs() -> u64 {
@@ -49,6 +56,7 @@ pub(crate) fn new_conversation_meta() -> ConversationMeta {
     updated_at_secs: now,
     title: String::new(),
     message_count: 0,
+    agent_id: default_meta_agent_id(),
     session_id: None,
     preview: String::new(),
   }
@@ -108,6 +116,7 @@ mod tests {
     assert_eq!(m.started_at_secs, m.updated_at_secs);
     assert_eq!(m.message_count, 0);
     assert!(m.title.is_empty());
+    assert_eq!(m.agent_id, default_agent_id());
     assert!(m.session_id.is_none());
   }
 }

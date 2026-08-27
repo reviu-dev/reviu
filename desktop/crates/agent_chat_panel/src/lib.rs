@@ -899,6 +899,8 @@ impl AgentChatPanel {
 
     let selection_registry = selectable_text::SelectionRegistry::new();
     let markdown_extensions = code_block::extensions(selection_registry.clone());
+    let mut current_conv = resume.clone().unwrap_or_else(new_conversation_meta);
+    current_conv.agent_id = backend_kind.clone();
 
     let mut panel = Self {
       backend_kind,
@@ -953,7 +955,7 @@ impl AgentChatPanel {
       auth_required: false,
       store,
       loading_conversation: None,
-      current_conv: resume.clone().unwrap_or_else(new_conversation_meta),
+      current_conv,
       is_active: false,
       title_announced: false,
       last_turn_failed: false,
@@ -1093,6 +1095,7 @@ impl AgentChatPanel {
   fn apply_loaded_conversation(&mut self, loaded: LoadedConversation) {
     let (meta, items, index, pins, auto_approve) = loaded;
     self.current_conv = meta;
+    self.current_conv.agent_id = self.backend_kind.clone();
     self.items = items;
     self.tool_index = index;
     self.tool_group_pins = pins;
@@ -2784,12 +2787,17 @@ impl AgentChatPanel {
     self.start_tick_task(cx);
   }
 
+  pub fn can_switch_backend(&self) -> bool {
+    !self.has_persistable_content() && self.loading_conversation.is_none() && !self.in_flight
+  }
+
   pub fn switch_backend(&mut self, id: AgentId, cx: &mut Context<Self>) {
-    if id == self.backend_kind {
+    if id == self.backend_kind || !self.can_switch_backend() {
       return;
     }
     self.backend = resolve_backend_config(&id);
-    self.backend_kind = id;
+    self.backend_kind = id.clone();
+    self.current_conv.agent_id = id;
     // Session id is backend-specific; clear it so we don't try to load a
     // claude session on codex (or vice-versa).
     self.current_conv.session_id = None;
@@ -2842,6 +2850,7 @@ impl AgentChatPanel {
     if !self.has_persistable_content() {
       return None;
     }
+    self.current_conv.agent_id = self.backend_kind.clone();
     self.current_conv.message_count = self
       .items
       .iter()

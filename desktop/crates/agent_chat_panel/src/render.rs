@@ -1639,66 +1639,86 @@ impl Render for AgentChatPanel {
             };
             let label = format!("{}{}", self.backend.label, label_suffix);
             let brand_icon = crate::backend_icon(&current);
-            let entity = cx.entity().downgrade();
-            Button::new("agent-chat-backend")
-              .label(label)
-              .icon(brand_icon)
-              .dropdown_caret(true)
-              .small()
-              .ghost()
-              .debug_selector(|| "agent-chat-backend".to_string())
-              .dropdown_menu_with_anchor(Anchor::TopLeft, move |menu, _, _| {
-                // The registry serves more agents than fit on screen.
-                let mut menu = menu.max_h(px(360.)).scrollable(true);
-                let registry = agent_registry::global();
-                for agent in registry.runnable() {
-                  let id = agent.id.clone();
-                  let entity = entity.clone();
-                  let is_current = id == current;
-                  let label_text: SharedString = agent.name.clone().into();
-                  let selector_id = id.to_string();
-                  let icon_id = id.clone();
-                  menu = menu.item(
-                    PopupMenuItem::element(move |_, cx| {
-                      let theme = cx.theme().clone();
-                      h_flex()
-                        .w_full()
-                        .gap_2()
-                        .items_center()
-                        .debug_selector({
-                          let selector_id = selector_id.clone();
-                          move || format!("agent-chat-backend-item-{selector_id}")
-                        })
-                        .child(
-                          crate::backend_icon(&icon_id)
-                            .small()
-                            .text_color(theme.foreground),
-                        )
-                        .child(
-                          div()
-                            .flex_1()
-                            .text_sm()
-                            .when(is_current, |this| this.font_weight(gpui::FontWeight::BOLD))
-                            .child(label_text.clone()),
-                        )
-                        .when(is_current, |this| {
-                          this.child(
-                            gpui_component::Icon::new(UiIconName::Check)
+            if !self.can_switch_backend() {
+              h_flex()
+                .h_6()
+                .px_2()
+                .gap_1()
+                .items_center()
+                .text_color(theme.secondary_foreground)
+                .debug_selector(|| "agent-chat-backend-locked".to_string())
+                .child(brand_icon.small())
+                .child(
+                  div()
+                    .flex_none()
+                    .text_sm()
+                    .line_height(gpui::relative(1.))
+                    .child(label),
+                )
+                .into_any_element()
+            } else {
+              let entity = cx.entity().downgrade();
+              Button::new("agent-chat-backend")
+                .label(label)
+                .icon(brand_icon)
+                .dropdown_caret(true)
+                .small()
+                .ghost()
+                .debug_selector(|| "agent-chat-backend".to_string())
+                .dropdown_menu_with_anchor(Anchor::TopLeft, move |menu, _, _| {
+                  // The registry serves more agents than fit on screen.
+                  let mut menu = menu.max_h(px(360.)).scrollable(true);
+                  let registry = agent_registry::global();
+                  for agent in registry.runnable() {
+                    let id = agent.id.clone();
+                    let entity = entity.clone();
+                    let is_current = id == current;
+                    let label_text: SharedString = agent.name.clone().into();
+                    let selector_id = id.to_string();
+                    let icon_id = id.clone();
+                    menu = menu.item(
+                      PopupMenuItem::element(move |_, cx| {
+                        let theme = cx.theme().clone();
+                        h_flex()
+                          .w_full()
+                          .gap_2()
+                          .items_center()
+                          .debug_selector({
+                            let selector_id = selector_id.clone();
+                            move || format!("agent-chat-backend-item-{selector_id}")
+                          })
+                          .child(
+                            crate::backend_icon(&icon_id)
                               .small()
                               .text_color(theme.foreground),
                           )
-                        })
-                        .into_any_element()
-                    })
-                    .on_click(move |_, _, cx| {
-                      persist_choice(&id);
-                      let id = id.clone();
-                      let _ = entity.update(cx, |panel, cx| panel.switch_backend(id, cx));
-                    }),
-                  );
-                }
-                menu
-              })
+                          .child(
+                            div()
+                              .flex_1()
+                              .text_sm()
+                              .when(is_current, |this| this.font_weight(gpui::FontWeight::BOLD))
+                              .child(label_text.clone()),
+                          )
+                          .when(is_current, |this| {
+                            this.child(
+                              gpui_component::Icon::new(UiIconName::Check)
+                                .small()
+                                .text_color(theme.foreground),
+                            )
+                          })
+                          .into_any_element()
+                      })
+                      .on_click(move |_, _, cx| {
+                        persist_choice(&id);
+                        let id = id.clone();
+                        let _ = entity.update(cx, |panel, cx| panel.switch_backend(id, cx));
+                      }),
+                    );
+                  }
+                  menu
+                })
+                .into_any_element()
+            }
           })
           .child(
             h_flex()

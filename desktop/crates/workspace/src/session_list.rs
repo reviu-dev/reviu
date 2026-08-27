@@ -519,6 +519,8 @@ impl Render for SessionList {
           let title = session_row_title(meta);
           let preview = meta.preview.clone();
           let time = format_relative_secs(meta.updated_at_secs, now);
+          let agent_id = meta.agent_id.clone();
+          let agent_icon_id = agent_id.clone();
           let group_name = SharedString::from(format!("session-row-{}", meta.id));
 
           div()
@@ -538,6 +540,16 @@ impl Render for SessionList {
               h_flex()
                 .items_center()
                 .gap_2()
+                .child(
+                  div()
+                    .flex_shrink_0()
+                    .debug_selector(move || format!("session-agent-icon-{agent_icon_id}"))
+                    .child(
+                      agent_chat_panel::backend_icon(&agent_id)
+                        .xsmall()
+                        .text_color(theme.muted_foreground),
+                    ),
+                )
                 .child(
                   div()
                     .flex_1()
@@ -704,6 +716,7 @@ mod tests {
       updated_at_secs: 0,
       title: title.to_string(),
       message_count: 0,
+      agent_id: agent_chat_panel::default_agent_id(),
       session_id: None,
       preview: String::new(),
     }
@@ -742,11 +755,30 @@ mod tests {
         updated_at_secs: updated,
         title: id.to_string(),
         message_count: 1,
+        agent_id: agent_chat_panel::default_agent_id(),
         session_id: None,
         preview: String::new(),
       },
       repo_root: PathBuf::from("/repo"),
     }
+  }
+
+  #[gpui::test]
+  async fn session_rows_show_their_agent_icon(cx: &mut gpui::TestAppContext) {
+    cx.update(gpui_component::init);
+    let list = cx.new(|_| SessionList::new());
+    let mounted = list.clone();
+    let (_root, cx) =
+      cx.add_window_view(move |window, cx| gpui_component::Root::new(mounted.clone(), window, cx));
+
+    list.update(cx, |list, cx| {
+      let mut row = meta("pi-session", 1);
+      row.meta.agent_id = agent_registry::AgentId::new("pi-acp");
+      list.set_conversations(vec![row], "pi-session".into(), cx);
+    });
+    cx.run_until_parked();
+
+    assert!(cx.debug_bounds("session-agent-icon-pi-acp").is_some());
   }
 
   #[gpui::test]

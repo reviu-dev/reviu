@@ -261,7 +261,10 @@ impl SessionPage {
     window: &mut Window,
     cx: &mut Context<Self>,
   ) -> Entity<AgentChatPanel> {
-    let backend = AgentSettings::load();
+    let backend = resume
+      .as_ref()
+      .and_then(|meta| agent_chat_panel::resolve_agent(&agent_registry::global(), &meta.agent_id))
+      .unwrap_or_else(AgentSettings::load);
     let turn_gate = self.turn_gate.clone();
     let view = cx.new(|cx| {
       AgentChatPanel::new(
@@ -2309,6 +2312,7 @@ mod tests {
       "updated_at_secs": 2,
       "title": "Left open last time",
       "message_count": 1,
+      "agent_id": "pi-acp",
       "session_id": null,
       "preview": "hello from disk"
     });
@@ -2318,6 +2322,7 @@ mod tests {
       "updated_at_secs": 3,
       "title": "Not this one",
       "message_count": 1,
+      "agent_id": "codex-acp",
       "session_id": null,
       "preview": ""
     });
@@ -2345,6 +2350,10 @@ mod tests {
     let panel = active_panel(&page, cx);
     panel.read_with(cx, |panel, _| {
       assert_eq!(panel.current_conversation().id, "resumed-conversation");
+      assert_eq!(
+        panel.backend_kind(),
+        &agent_registry::AgentId::new("pi-acp")
+      );
       assert_eq!(
         panel.transcript_texts(),
         vec!["hello from disk".to_string()],

@@ -754,6 +754,7 @@ async fn a_legacy_file_without_version_loads_and_rewrites_versioned(cx: &mut gpu
   let (meta, items, ..) =
     load_conversation_file(&dir.join("old-conv.json")).expect("legacy file loads");
   assert_eq!(meta.id, "old-conv");
+  assert_eq!(meta.agent_id, default_agent_id());
   assert_eq!(items.len(), 1);
 
   let (panel, cx) = add_panel_window(cx);
@@ -768,6 +769,10 @@ async fn a_legacy_file_without_version_loads_and_rewrites_versioned(cx: &mut gpu
   assert!(
     raw.contains("\"version\":1"),
     "the rewrite carries the format version"
+  );
+  assert!(
+    raw.contains("\"agent_id\":\"claude-acp\""),
+    "the rewrite records the conversation agent"
   );
   std::fs::remove_dir_all(&dir).ok();
 }
@@ -2388,6 +2393,7 @@ fn persisted_tools_backfill_line_numbers_and_highlights_on_load() {
       updated_at_secs: 0,
       title: "legacy".to_string(),
       message_count: 1,
+      agent_id: default_agent_id(),
       session_id: None,
       preview: String::new(),
     },
@@ -2986,6 +2992,7 @@ fn list_conversations_sorted_by_updated_at_desc() {
         updated_at_secs: updated,
         title: id.to_string(),
         message_count: 1,
+        agent_id: default_agent_id(),
         session_id: None,
         preview: String::new(),
       },
@@ -3266,6 +3273,19 @@ async fn mounting_the_panel_spawns_no_agent_and_paints(cx: &mut gpui::TestAppCon
     assert!(panel._connect_task.is_none());
     // Connecting shows the generating row, plus the runway spacer.
     assert_eq!(panel.messages_list.item_count(), 2);
+  });
+}
+
+#[gpui::test]
+async fn started_conversations_keep_their_agent(cx: &mut gpui::TestAppContext) {
+  let (panel, cx) = add_panel_window(cx);
+  panel.update(cx, |panel, cx| {
+    panel.items.push(user_message("started"));
+    assert!(!panel.can_switch_backend());
+
+    panel.switch_backend(AgentId::new("pi-acp"), cx);
+    assert_eq!(panel.backend_kind(), &default_agent_id());
+    assert_eq!(panel.current_conversation().agent_id, default_agent_id());
   });
 }
 
