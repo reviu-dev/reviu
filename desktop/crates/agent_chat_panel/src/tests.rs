@@ -1818,6 +1818,79 @@ fn read_location_update_refreshes_existing_output_line_numbers() {
 }
 
 #[test]
+fn raw_output_only_tool_call_builds_a_preview() {
+  use crate::transcript::upsert_tool_call_pure;
+
+  let mut items = Vec::new();
+  let mut index = HashMap::new();
+  let mut call = ToolCall::new(ToolCallId::new("read1"), "Read render.rs");
+  call.kind = ToolKind::Read;
+  call.locations = vec![ToolCallLocation::new("src/render.rs")];
+  call.raw_output = Some(serde_json::json!({
+    "output": "   845\tlet a = 1;\n   846\tlet b = 2;"
+  }));
+  upsert_tool_call_pure(&mut items, &mut index, call, test_cwd());
+
+  let ChatItem::Tool(view) = &items[0] else {
+    panic!("tool expected");
+  };
+  assert_eq!(view.read_start_line, Some(845));
+  assert_eq!(view.outputs.len(), 1);
+  assert_eq!(view.outputs[0].text, "let a = 1;\nlet b = 2;");
+  assert_eq!(view.outputs[0].start_line, Some(845));
+}
+
+#[test]
+fn raw_output_only_tool_update_fills_an_empty_preview() {
+  use crate::transcript::{apply_tool_call_update_pure, upsert_tool_call_pure};
+
+  let mut items = Vec::new();
+  let mut index = HashMap::new();
+  let mut call = ToolCall::new(ToolCallId::new("run1"), "Run tests");
+  call.kind = ToolKind::Execute;
+  upsert_tool_call_pure(&mut items, &mut index, call, test_cwd());
+
+  let update = ToolCallUpdate::new(
+    ToolCallId::new("run1"),
+    ToolCallUpdateFields::new().raw_output(serde_json::json!({ "stdout": "tests ok" })),
+  );
+  apply_tool_call_update_pure(&mut items, &index, update, test_cwd());
+
+  let ChatItem::Tool(view) = &items[0] else {
+    panic!("tool expected");
+  };
+  assert_eq!(view.outputs.len(), 1);
+  assert_eq!(view.outputs[0].text, "tests ok");
+  assert_eq!(view.outputs[0].start_line, None);
+}
+
+#[test]
+fn raw_output_update_does_not_replace_existing_content_preview() {
+  use crate::transcript::{apply_tool_call_update_pure, upsert_tool_call_pure};
+
+  let mut items = Vec::new();
+  let mut index = HashMap::new();
+  let mut call = ToolCall::new(ToolCallId::new("run1"), "Run tests");
+  call.kind = ToolKind::Execute;
+  call.content = vec![ToolCallContent::from(
+    agent_client_protocol::schema::ContentBlock::Text(TextContent::new("live output")),
+  )];
+  upsert_tool_call_pure(&mut items, &mut index, call, test_cwd());
+
+  let update = ToolCallUpdate::new(
+    ToolCallId::new("run1"),
+    ToolCallUpdateFields::new().raw_output(serde_json::json!({ "stdout": "final output" })),
+  );
+  apply_tool_call_update_pure(&mut items, &index, update, test_cwd());
+
+  let ChatItem::Tool(view) = &items[0] else {
+    panic!("tool expected");
+  };
+  assert_eq!(view.outputs.len(), 1);
+  assert_eq!(view.outputs[0].text, "live output");
+}
+
+#[test]
 fn terminal_tail_ranges_slice_their_lines_and_strip_ansi() {
   // Colored lines: the selectable text must be the stripped one.
   let output = (0..30)

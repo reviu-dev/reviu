@@ -21,8 +21,8 @@ use std::sync::Arc;
 
 use crate::diff::{
   DiffLineKind, DiffSummary, InlineSpan, InlineSpanKind, MAX_DIFF_LINES_COLLAPSED,
-  MAX_TOOL_OUTPUT_LINES_COLLAPSED, backfill_legacy_line_numbers, extract_diffs, extract_outputs,
-  extract_terminals,
+  MAX_TOOL_OUTPUT_LINES_COLLAPSED, backfill_legacy_line_numbers, extract_diffs,
+  extract_outputs_with_fallback, extract_terminals,
 };
 use crate::mention::{DiffMention, MentionCandidate, MentionTrigger, ResolvedMention};
 use crate::persistence::{

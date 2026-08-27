@@ -85,6 +85,73 @@ fn normalize_output_text(
   (unfenced.to_string(), start_line)
 }
 
+fn tool_output(
+  text: &str,
+  start_line: Option<u32>,
+  strip_numbered_lines: bool,
+) -> crate::ToolOutput {
+  let (text, start_line) = normalize_output_text(text, start_line, strip_numbered_lines);
+  crate::ToolOutput {
+    text,
+    start_line,
+    expanded: false,
+    syntax_spans: Vec::new(),
+  }
+}
+
+fn raw_output_object_text(map: &serde_json::Map<String, serde_json::Value>) -> Option<String> {
+  if map.is_empty() {
+    return None;
+  }
+  if map.get("type").and_then(|value| value.as_str()) == Some("text")
+    && let Some(text) = map
+      .get("text")
+      .and_then(|value| value.as_str())
+      .filter(|text| !text.trim().is_empty())
+  {
+    return Some(text.to_string());
+  }
+
+  for key in [
+    "content",
+    "output",
+    "result",
+    "aggregatedOutput",
+    "structuredContent",
+  ] {
+    if let Some(text) = map.get(key).and_then(raw_output_text) {
+      return Some(text);
+    }
+  }
+
+  let stream_output = ["stdout", "stderr"]
+    .into_iter()
+    .filter_map(|key| map.get(key).and_then(raw_output_text))
+    .collect::<Vec<_>>();
+  if !stream_output.is_empty() {
+    return Some(stream_output.join("\n"));
+  }
+
+  serde_json::to_string_pretty(map).ok()
+}
+
+fn raw_output_text(value: &serde_json::Value) -> Option<String> {
+  match value {
+    serde_json::Value::Null => None,
+    serde_json::Value::String(text) => (!text.trim().is_empty()).then(|| text.clone()),
+    serde_json::Value::Array(items) => {
+      let parts = items.iter().filter_map(raw_output_text).collect::<Vec<_>>();
+      if parts.is_empty() {
+        serde_json::to_string_pretty(value).ok()
+      } else {
+        Some(parts.join("\n"))
+      }
+    }
+    serde_json::Value::Object(map) => raw_output_object_text(map),
+    serde_json::Value::Bool(_) | serde_json::Value::Number(_) => Some(value.to_string()),
+  }
+}
+
 /// Extracts text content blocks from tool call output. Returns one entry per `Content` block.
 pub(crate) fn extract_outputs(
   content: &[ToolCallContent],
@@ -95,20 +162,28 @@ pub(crate) fn extract_outputs(
     .iter()
     .filter_map(|c| match c {
       ToolCallContent::Content(text_content) => match &text_content.content {
-        ContentBlock::Text(t) => {
-          let (text, start_line) = normalize_output_text(&t.text, start_line, strip_numbered_lines);
-          Some(crate::ToolOutput {
-            text,
-            start_line,
-            expanded: false,
-            syntax_spans: Vec::new(),
-          })
-        }
+        ContentBlock::Text(t) => Some(tool_output(&t.text, start_line, strip_numbered_lines)),
         _ => None,
       },
       _ => None,
     })
     .collect()
+}
+
+pub(crate) fn extract_outputs_with_fallback(
+  content: &[ToolCallContent],
+  raw_output: Option<&serde_json::Value>,
+  start_line: Option<u32>,
+  strip_numbered_lines: bool,
+) -> Vec<crate::ToolOutput> {
+  let outputs = extract_outputs(content, start_line, strip_numbered_lines);
+  if !outputs.is_empty() {
+    return outputs;
+  }
+  raw_output
+    .and_then(raw_output_text)
+    .map(|text| vec![tool_output(&text, start_line, strip_numbered_lines)])
+    .unwrap_or_default()
 }
 
 /// Terminal ids embedded in the tool call's content.
@@ -761,6 +836,84 @@ mod tests {
     assert_eq!(outs.len(), 1);
     assert_eq!(outs[0].text, "   1\tstdout line");
     assert_eq!(outs[0].start_line, None);
+  }
+
+  #[test]
+  fn raw_output_string_fills_empty_tool_output() {
+    let raw_output = serde_json::json!("hello stdout");
+
+    let outs = extract_outputs_with_fallback(&[], Some(&raw_output), None, false);
+
+    assert_eq!(outs.len(), 1);
+    assert_eq!(outs[0].text, "hello stdout");
+    assert_eq!(outs[0].start_line, None);
+  }
+
+  #[test]
+  fn raw_output_envelope_unwraps_known_text_fields() {
+    let raw_output = serde_json::json!({
+      "stdout": "build ok",
+      "stderr": "warning: slow",
+    });
+
+    let outs = extract_outputs_with_fallback(&[], Some(&raw_output), None, false);
+
+    assert_eq!(outs.len(), 1);
+    assert_eq!(outs[0].text, "build ok\nwarning: slow");
+  }
+
+  #[test]
+  fn raw_output_content_blocks_unwrap_text_items() {
+    let raw_output = serde_json::json!({
+      "content": [
+        { "type": "text", "text": "first" },
+        { "type": "text", "text": "second" }
+      ]
+    });
+
+    let outs = extract_outputs_with_fallback(&[], Some(&raw_output), None, false);
+
+    assert_eq!(outs.len(), 1);
+    assert_eq!(outs[0].text, "first\nsecond");
+  }
+
+  #[test]
+  fn unknown_raw_output_objects_fall_back_to_pretty_json() {
+    let raw_output = serde_json::json!({ "ok": true, "count": 2 });
+
+    let outs = extract_outputs_with_fallback(&[], Some(&raw_output), None, false);
+
+    assert_eq!(outs.len(), 1);
+    assert_eq!(outs[0].text, "{\n  \"ok\": true,\n  \"count\": 2\n}");
+  }
+
+  #[test]
+  fn content_blocks_win_over_raw_output_fallback() {
+    use agent_client_protocol::schema::{
+      Content as AcpContent, ContentBlock, TextContent, ToolCallContent,
+    };
+    let content = vec![ToolCallContent::Content(AcpContent::new(
+      ContentBlock::Text(TextContent::new("content text")),
+    ))];
+    let raw_output = serde_json::json!("raw text");
+
+    let outs = extract_outputs_with_fallback(&content, Some(&raw_output), None, false);
+
+    assert_eq!(outs.len(), 1);
+    assert_eq!(outs[0].text, "content text");
+  }
+
+  #[test]
+  fn raw_output_fallback_strips_numbered_read_text() {
+    let raw_output = serde_json::json!({
+      "output": "   845\tlet a = 1;\n   846\tlet b = 2;"
+    });
+
+    let outs = extract_outputs_with_fallback(&[], Some(&raw_output), None, true);
+
+    assert_eq!(outs.len(), 1);
+    assert_eq!(outs[0].text, "let a = 1;\nlet b = 2;");
+    assert_eq!(outs[0].start_line, Some(845));
   }
 
   #[test]

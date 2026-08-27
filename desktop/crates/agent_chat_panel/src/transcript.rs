@@ -105,10 +105,11 @@ fn sync_output_start_lines(view: &mut ToolCallView) {
 
 fn extract_outputs_and_read_start_line(
   content: &[ToolCallContent],
+  raw_output: Option<&serde_json::Value>,
   read_start_line: Option<u32>,
   is_read: bool,
 ) -> (Vec<ToolOutput>, Option<u32>) {
-  let outputs = extract_outputs(content, read_start_line, is_read);
+  let outputs = extract_outputs_with_fallback(content, raw_output, read_start_line, is_read);
   let resolved_start_line = outputs
     .first()
     .and_then(|output| output.start_line)
@@ -147,6 +148,7 @@ pub(crate) fn upsert_tool_call_pure(
       existing.diffs = extract_diffs(&call.content, cwd);
       let (outputs, read_start_line) = extract_outputs_and_read_start_line(
         &call.content,
+        call.raw_output.as_ref(),
         existing.read_start_line,
         matches!(existing.kind, ToolKind::Read),
       );
@@ -160,6 +162,7 @@ pub(crate) fn upsert_tool_call_pure(
   }
   let (outputs, read_start_line) = extract_outputs_and_read_start_line(
     &call.content,
+    call.raw_output.as_ref(),
     read_start_line,
     matches!(call.kind, ToolKind::Read),
   );
@@ -227,6 +230,7 @@ pub(crate) fn apply_tool_call_update_pure(
       view.diffs = extract_diffs(&content, cwd);
       let (outputs, read_start_line) = extract_outputs_and_read_start_line(
         &content,
+        update.raw_output.as_ref(),
         view.read_start_line,
         matches!(view.kind, ToolKind::Read),
       );
@@ -236,6 +240,28 @@ pub(crate) fn apply_tool_call_update_pure(
       view.content_fp = content_fp;
       // Only fresh content is worth a re-highlight; a status flip is not.
       populate_syntax_spans(view);
+    }
+  } else if update.raw_output.is_some() && view.outputs.is_empty() {
+    let content: Vec<ToolCallContent> = Vec::new();
+    let content_fp = tool_payload_fp(
+      &content,
+      view.locations.first().map(|(p, _)| p),
+      update.raw_output.as_ref(),
+      update.meta.as_ref(),
+    );
+    if view.content_fp != content_fp {
+      let (outputs, read_start_line) = extract_outputs_and_read_start_line(
+        &content,
+        update.raw_output.as_ref(),
+        view.read_start_line,
+        matches!(view.kind, ToolKind::Read),
+      );
+      if !outputs.is_empty() {
+        view.outputs = outputs;
+        view.read_start_line = read_start_line;
+        view.content_fp = content_fp;
+        populate_syntax_spans(view);
+      }
     }
   }
 }
