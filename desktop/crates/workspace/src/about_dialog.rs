@@ -1,11 +1,13 @@
-use gpui::{App, Context, Render, Task, Window, div, prelude::*};
+use gpui::{App, Context, Render, Task, Window, div, prelude::*, px};
 use gpui_component::{
-  ActiveTheme as _, Disableable as _, Sizable as _,
+  ActiveTheme as _, Disableable as _, IconName, Sizable as _,
   button::{Button, ButtonVariants as _},
-  dialog::DialogButtonProps,
-  h_flex, v_flex,
+  dialog::{DialogDescription, DialogFooter, DialogHeader, DialogTitle},
+  h_flex,
 };
 use ui::{StatusThemeExt, UiIconName, WindowExt};
+
+const CHANGELOG_URL: &str = "https://reviu.dev/changelog";
 
 use crate::{
   app_update::{
@@ -25,13 +27,9 @@ pub fn open_about_dialog(window: &mut Window, _cx: &mut App) {
 
 fn open_about_dialog_inner(window: &mut Window, cx: &mut App) {
   let about = cx.new(AboutContent::new);
-  window.open_alert_dialog(cx, move |alert, _, _| {
-    alert
-      .title("Reviu Desktop")
-      .description("Version information and update controls.")
-      .child(about.clone())
-      .show_cancel(false)
-      .button_props(DialogButtonProps::default().ok_text("Close"))
+  let about_for_overlay = about.clone();
+  window.open_dialog(cx, move |overlay, _, _| {
+    overlay.p_0().w(px(460.0)).child(about_for_overlay.clone())
   });
 }
 
@@ -68,6 +66,21 @@ impl AboutContent {
 
   fn current_client_version() -> String {
     resolved_build_version(env!("CARGO_PKG_VERSION"))
+  }
+
+  fn system_label() -> String {
+    let platform = match current_platform() {
+      "macos" => "macOS",
+      "windows" => "Windows",
+      "linux" => "Linux",
+      other => other,
+    };
+    let arch = match current_arch() {
+      "aarch64" => "arm64",
+      "x86_64" => "x64",
+      other => other,
+    };
+    format!("{platform} {arch}")
   }
 
   fn check_for_updates_action(
@@ -157,6 +170,10 @@ impl AboutContent {
         Some((format!("Update failed: {error}"), UpdateNoticeTone::Bad))
       }
       None => match AppUpdateStore::try_state(cx) {
+        Some(AppUpdateState::Available(update)) => Some((
+          format!("Update available: {}", update.latest_version),
+          UpdateNoticeTone::Good,
+        )),
         Some(AppUpdateState::Downloading(_)) => Some((
           "Downloading update artifact...".to_string(),
           UpdateNoticeTone::Neutral,
@@ -177,22 +194,27 @@ impl AboutContent {
 impl Render for AboutContent {
   fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
     let theme = cx.theme().clone();
-    let build_version = env!("CARGO_PKG_VERSION").to_string();
     let client_version = Self::current_client_version();
+    let system_label = Self::system_label();
     let notice = self.update_notice(cx);
 
     let update_state = AppUpdateStore::try_state(cx);
     let has_update = AppUpdateStore::try_available_update(cx).is_some();
     let download_in_progress = AppUpdateStore::is_downloading(cx);
 
+    let changelog_button = Button::new("about-changelog")
+      .small()
+      .ghost()
+      .icon(IconName::ExternalLink)
+      .label("Changelog")
+      .on_click(|_, _, cx| cx.open_url(CHANGELOG_URL));
+
     let check_button = Button::new("about-check-updates")
       .small()
+      .ghost()
       .icon(UiIconName::RefreshCw)
-      .label(if self.check_in_progress {
-        "Checking..."
-      } else {
-        "Check for updates"
-      })
+      .label("Check for updates")
+      .loading(self.check_in_progress)
       .disabled(self.check_in_progress)
       .on_click(cx.listener(Self::check_for_updates_action));
 
@@ -201,35 +223,21 @@ impl Render for AboutContent {
       .primary()
       .icon(UiIconName::Download)
       .label(update_action_label(update_state))
+      .loading(download_in_progress)
       .disabled(download_in_progress)
       .on_click(cx.listener(Self::download_action));
 
-    v_flex()
-      .w_full()
-      .gap_3()
-      .pt_2()
+    div()
+      .id("about-dialog")
+      .flex()
+      .flex_col()
       .child(
-        v_flex()
-          .gap_1()
+        DialogHeader::new()
+          .p_4()
+          .child(DialogTitle::new().child("Reviu Desktop"))
           .child(
-            div()
-              .text_sm()
-              .text_color(theme.foreground)
-              .child(format!("Client version: {client_version}")),
-          )
-          .child(
-            div()
-              .text_xs()
-              .text_color(theme.muted_foreground)
-              .child(format!("Build version: {build_version}")),
+            DialogDescription::new().child(format!("Version {client_version} · {system_label}")),
           ),
-      )
-      .child(
-        h_flex()
-          .gap_2()
-          .justify_start()
-          .child(check_button)
-          .when(has_update, |this| this.child(download_button)),
       )
       .when_some(notice, |this, (message, tone)| {
         let color = match tone {
@@ -237,8 +245,34 @@ impl Render for AboutContent {
           UpdateNoticeTone::Good => theme.status_green(),
           UpdateNoticeTone::Bad => theme.status_red(),
         };
-        this.child(div().text_sm().text_color(color).child(message))
+        this.child(
+          div()
+            .px_4()
+            .pb_4()
+            .text_sm()
+            .text_color(color)
+            .child(message),
+        )
       })
+      .child(
+        DialogFooter::new()
+          .px_4()
+          .pb_4()
+          .pt_1()
+          .justify_between()
+          .child(h_flex().gap_2().child(changelog_button).child(check_button))
+          .child(
+            h_flex()
+              .gap_2()
+              .when(has_update, |this| this.child(download_button))
+              .child(
+                Button::new("about-close")
+                  .label("Close")
+                  .primary()
+                  .on_click(|_, window, cx| window.close_dialog(cx)),
+              ),
+          ),
+      )
   }
 }
 
@@ -323,6 +357,20 @@ mod tests {
       content.read_with(cx, |content, cx| {
         let (message, _) = content.update_notice(cx).expect("a notice");
         assert_eq!(message, "Update failed: network is down");
+      });
+    });
+  }
+
+  #[gpui::test]
+  fn an_available_update_is_reported_in_the_dialog(cx: &mut TestAppContext) {
+    cx.update(|cx| {
+      cx.set_global(AppUpdateStore::default());
+      AppUpdateStore::set_available_update(cx, Some(available_update()));
+
+      let content = cx.new(AboutContent::new);
+      content.read_with(cx, |content, cx| {
+        let (message, _) = content.update_notice(cx).expect("a notice");
+        assert_eq!(message, "Update available: 0.19.0");
       });
     });
   }

@@ -36,8 +36,8 @@ use crate::shortcuts::{self, ShortcutId};
 use crate::workspace_window::WorkspaceWindow;
 use crate::{ShowCommandPalette, ShowFileSearch};
 use ui::{
-  Button, ButtonVariants as _, GLOBAL_BAR_HEIGHT, UiIconName, UserMenuConfig, UserMenuPage,
-  UserMenuState, UserMenuUser, WindowExt, user_menu,
+  Button, ButtonVariants as _, GLOBAL_BAR_HEIGHT, StatusThemeExt, UiIconName, UserMenuConfig,
+  UserMenuPage, UserMenuState, UserMenuUser, WindowExt, user_menu,
 };
 
 type NavigateFn = dyn Fn(&mut Window, &mut App);
@@ -94,6 +94,20 @@ fn should_run_scheduled_update_check(state: Option<AppUpdateState>) -> bool {
         ..
       })
   )
+}
+
+fn update_button_tooltip(state: Option<&AppUpdateState>) -> String {
+  match state {
+    Some(AppUpdateState::Available(update)) => {
+      format!("Download Reviu {}", update.latest_version)
+    }
+    Some(AppUpdateState::Downloading(_)) => "Downloading update...".to_string(),
+    Some(AppUpdateState::ReadyToInstall(_)) => update_action_label(state.cloned()).to_string(),
+    Some(AppUpdateState::Error {
+      update: Some(_), ..
+    }) => "Update failed. Try again.".to_string(),
+    _ => "New version available".to_string(),
+  }
 }
 
 pub fn build_app_menus() -> Vec<Menu> {
@@ -651,9 +665,10 @@ impl WorkspaceView {
     cx: &mut Context<Self>,
   ) -> impl IntoElement {
     let theme = cx.theme().clone();
+    let update_state = AppUpdateStore::try_state(cx);
     let show_update_button = AppUpdateStore::try_available_update(cx).is_some();
     let update_download_in_progress = AppUpdateStore::is_downloading(cx);
-    let update_button_label = update_action_label(AppUpdateStore::try_state(cx));
+    let update_button_tooltip = update_button_tooltip(update_state.as_ref());
 
     let current_page = user_menu_page_for_workspace_page(page);
     let auth_state = AuthStateStore::get(cx);
@@ -724,10 +739,12 @@ impl WorkspaceView {
 
     let update_button = Button::new("workspace-global-update-download")
       .icon(UiIconName::Download)
-      .label(update_button_label)
       .ghost()
       .compact()
       .small()
+      .text_color(theme.status_green())
+      .tooltip(update_button_tooltip)
+      .loading(update_download_in_progress)
       .disabled(update_download_in_progress)
       .on_click(cx.listener(Self::global_update_download_action));
 
@@ -951,11 +968,12 @@ impl Focusable for WorkspaceView {
 mod tests {
   use super::{
     WorkspacePage, WorkspaceView, build_app_menus, page_has_file_search,
-    should_activate_session_page, should_run_scheduled_update_check,
+    should_activate_session_page, should_run_scheduled_update_check, update_button_tooltip,
     user_menu_page_for_workspace_page, workspace_page_from_pathname,
   };
   use crate::app_update::{
     AppUpdateState, AvailableAppUpdate, ReadyToInstallAppUpdate, UpdateArtifact,
+    update_action_label,
   };
   use crate::shortcuts::{self, ShortcutId};
   use gpui::{Menu, MenuItem};
@@ -1058,6 +1076,42 @@ mod tests {
         message: "checksum mismatch".to_string(),
       }
     )));
+  }
+
+  #[test]
+  fn update_button_tooltip_tracks_the_current_update_state() {
+    let update = make_available_update();
+    let ready = ReadyToInstallAppUpdate {
+      update: update.clone(),
+      artifact_path: PathBuf::from("/tmp/reviu.dmg"),
+      restart_binary_path: None,
+    };
+
+    assert_eq!(
+      update_button_tooltip(Some(&AppUpdateState::Available(update.clone()))),
+      "Download Reviu 0.2.0"
+    );
+    assert_eq!(
+      update_button_tooltip(Some(&AppUpdateState::Downloading(update.clone()))),
+      "Downloading update..."
+    );
+    assert_eq!(
+      update_button_tooltip(Some(&AppUpdateState::ReadyToInstall(ready))),
+      update_action_label(Some(AppUpdateState::ReadyToInstall(
+        ReadyToInstallAppUpdate {
+          update: update.clone(),
+          artifact_path: PathBuf::from("/tmp/reviu.dmg"),
+          restart_binary_path: None,
+        },
+      )))
+    );
+    assert_eq!(
+      update_button_tooltip(Some(&AppUpdateState::Error {
+        update: Some(update),
+        message: "checksum mismatch".to_string(),
+      })),
+      "Update failed. Try again."
+    );
   }
 
   #[test]
