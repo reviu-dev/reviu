@@ -358,7 +358,7 @@ fn run_visual_backend() {
 
   let mut mounted = None;
   let window = cx
-    .open_offscreen_window(size(px(1280.0), px(800.0)), |window, cx| {
+    .open_offscreen_window(size(px(1510.0), px(945.0)), |window, cx| {
       cx.new(|cx| {
         let (root, view) = build_root(window, cx);
         mounted = Some(view);
