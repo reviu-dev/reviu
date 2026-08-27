@@ -114,6 +114,7 @@ fn raw_output_object_text(map: &serde_json::Map<String, serde_json::Value>) -> O
 
   for key in [
     "content",
+    "formatted_output",
     "output",
     "result",
     "aggregatedOutput",
@@ -860,6 +861,22 @@ mod tests {
 
     assert_eq!(outs.len(), 1);
     assert_eq!(outs[0].text, "build ok\nwarning: slow");
+  }
+
+  #[test]
+  fn raw_output_envelope_unwraps_formatted_output() {
+    let raw_output = serde_json::json!({
+      "formatted_output": "# Reviu\n\nA keyboard-first desktop Git client."
+    });
+
+    let outs = extract_outputs_with_fallback(&[], Some(&raw_output), Some(1), true);
+
+    assert_eq!(outs.len(), 1);
+    assert_eq!(
+      outs[0].text,
+      "# Reviu\n\nA keyboard-first desktop Git client."
+    );
+    assert_eq!(outs[0].start_line, Some(1));
   }
 
   #[test]
