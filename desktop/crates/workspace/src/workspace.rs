@@ -13,7 +13,6 @@ use gpui_component::{
   ActiveTheme as _, Disableable, Icon, IconName, Sizable as _, Theme, ThemeMode, h_flex, kbd::Kbd,
   notification::Notification, spinner::Spinner, tag::Tag,
 };
-use gpui_router::{Route, Routes};
 
 use crate::AppProfile;
 use crate::about_dialog::open_about_dialog;
@@ -26,12 +25,12 @@ use crate::app_update::{
 use crate::auth_state::{AuthState, AuthStateStore};
 use crate::billing_dialog::open_billing_dialog;
 use crate::config::{AppSettings as PersistedSettings, ConfigStore};
-use crate::git_config_page::GitConfigPage;
+use crate::git_config_page::open_git_config_dialog;
 use crate::github_notifications::{self, GithubNotificationsStore};
 use crate::navigation::NavigationHistory;
 use crate::sentry_context;
 use crate::session_page::SessionPage;
-use crate::settings_page::SettingsPage;
+use crate::settings_page::open_settings_dialog;
 use crate::shortcuts::{self, ShortcutId};
 use crate::workspace_window::WorkspaceWindow;
 use crate::{ShowCommandPalette, ShowFileSearch};
@@ -50,31 +49,20 @@ pub const STATUS_BAR_ICON_PNG: &[u8] =
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum WorkspacePage {
   Session,
-  GitConfig,
-  Settings,
 }
 
-pub(crate) fn workspace_page_from_pathname(pathname: &str) -> WorkspacePage {
-  match pathname {
-    "/session" => WorkspacePage::Session,
-    "/settings" => WorkspacePage::Settings,
-    "/git-config" => WorkspacePage::GitConfig,
-    _ => WorkspacePage::Session,
-  }
+pub(crate) fn workspace_page_from_pathname(_pathname: &str) -> WorkspacePage {
+  WorkspacePage::Session
 }
 
 /// Returns true when the current path supports file search.
 /// The shell is the only page with files to search.
 fn page_has_file_search(pathname: &str) -> bool {
-  pathname == "/session"
+  workspace_page_from_pathname(pathname) == WorkspacePage::Session
 }
 
-fn user_menu_page_for_workspace_page(page: WorkspacePage) -> UserMenuPage {
-  match page {
-    WorkspacePage::Session => UserMenuPage::Session,
-    WorkspacePage::GitConfig => UserMenuPage::GitConfig,
-    WorkspacePage::Settings => UserMenuPage::Settings,
-  }
+fn user_menu_page_for_workspace_page(_page: WorkspacePage) -> UserMenuPage {
+  UserMenuPage::Session
 }
 
 /// The shell connects its agent when the workspace routes to it, never while
@@ -154,30 +142,6 @@ pub fn build_app_menus() -> Vec<Menu> {
   ]
 }
 
-/// Lightweight global that tracks the current page for focus delegation and sidebar highlighting.
-/// The source of truth for navigation is `NavigationHistory` / `RouterState`.
-/// This struct is kept in sync by `WorkspaceView::render`.
-#[derive(Clone)]
-pub(crate) struct WorkspaceRoute {
-  pub page: WorkspacePage,
-}
-
-impl Default for WorkspaceRoute {
-  fn default() -> Self {
-    Self {
-      page: WorkspacePage::Session,
-    }
-  }
-}
-
-impl Global for WorkspaceRoute {}
-
-impl WorkspaceRoute {
-  pub fn global(cx: &App) -> &Self {
-    cx.global::<Self>()
-  }
-}
-
 #[derive(Clone)]
 pub struct WorkspaceApi {
   pub api: ApiClient,
@@ -199,8 +163,6 @@ impl WorkspaceApi {
 
 pub struct WorkspaceView {
   session_page: Entity<SessionPage>,
-  git_config_page: Entity<GitConfigPage>,
-  settings_page: Entity<SettingsPage>,
   window_handle: AnyWindowHandle,
   last_page: Option<WorkspacePage>,
   _update_check_task: Option<Task<()>>,
@@ -261,7 +223,6 @@ impl WorkspaceView {
     NavigationHistory::init(cx);
     NavigationHistory::navigate_replace("/session", cx);
 
-    cx.set_global(WorkspaceRoute::default());
     cx.set_global(WorkspaceApi::new());
     cx.set_global(AuthStateStore::default());
     cx.set_global(AppUpdateStore::default());
@@ -303,13 +264,9 @@ impl WorkspaceView {
     WorkspaceWindow::register(window.window_handle(), cx);
 
     let session_page = cx.new(|cx| SessionPage::new(window, cx));
-    let git_config_page = cx.new(|cx| GitConfigPage::new(window, cx));
-    let settings_page = cx.new(|cx| SettingsPage::new(window, cx, settings));
 
     let view = Self {
       session_page,
-      git_config_page,
-      settings_page,
       window_handle: window.window_handle(),
       last_page: None,
       _update_check_task: None,
@@ -360,7 +317,7 @@ impl WorkspaceView {
   }
 
   fn on_window_appearance_changed(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-    if !self.settings_page.read(cx).auto_switch_theme_enabled() {
+    if !PersistedSettings::get(cx).auto_switch_theme {
       return;
     }
 
@@ -677,11 +634,11 @@ impl WorkspaceView {
     let open_billing: Rc<NavigateFn> = Rc::new(|window: &mut Window, cx: &mut App| {
       open_billing_dialog(window, cx);
     });
-    let open_git_config = Rc::new(|_window: &mut Window, cx: &mut App| {
-      NavigationHistory::navigate("/git-config", cx);
+    let open_git_config = Rc::new(|window: &mut Window, cx: &mut App| {
+      open_git_config_dialog(window, cx);
     });
-    let open_settings = Rc::new(|_window: &mut Window, cx: &mut App| {
-      NavigationHistory::navigate("/settings", cx);
+    let open_settings = Rc::new(|window: &mut Window, cx: &mut App| {
+      open_settings_dialog(window, cx);
     });
     let open_about = Rc::new(|window: &mut Window, cx: &mut App| {
       open_about_dialog(window, cx);
@@ -886,8 +843,6 @@ impl Render for WorkspaceView {
     let pathname = NavigationHistory::current_pathname(cx);
     let page = workspace_page_from_pathname(&pathname);
 
-    // Keep WorkspaceRoute in sync BEFORE focus delegation (focus_handle reads it)
-    cx.global_mut::<WorkspaceRoute>().page = page;
     sentry_context::sync_workspace_route(&pathname, page);
 
     if self.last_page != Some(page) {
@@ -904,25 +859,6 @@ impl Render for WorkspaceView {
     }
 
     let session_page = self.session_page.clone();
-    let git_config_page = self.git_config_page.clone();
-    let settings_page = self.settings_page.clone();
-
-    let routes = Routes::new()
-      .child(
-        Route::new()
-          .path("session")
-          .element(move |_w, _cx| session_page.clone()),
-      )
-      .child(
-        Route::new()
-          .path("git-config")
-          .element(move |_w, _cx| git_config_page.clone()),
-      )
-      .child(
-        Route::new()
-          .path("settings")
-          .element(move |_w, _cx| settings_page.clone()),
-      );
 
     let key_context = shortcuts::current_key_context_for_pathname(&pathname, cx);
 
@@ -938,29 +874,25 @@ impl Render for WorkspaceView {
       .on_action(cx.listener(|_, _: &crate::OpenBillingPage, window, cx| {
         open_billing_dialog(window, cx);
       }))
-      .on_action(cx.listener(|_, _: &crate::OpenGitConfigPage, _window, cx| {
-        NavigationHistory::navigate("/git-config", cx);
+      .on_action(cx.listener(|_, _: &crate::OpenGitConfigPage, window, cx| {
+        open_git_config_dialog(window, cx);
       }))
-      .on_action(cx.listener(|_, _: &crate::OpenSettingsPage, _window, cx| {
-        NavigationHistory::navigate("/settings", cx);
+      .on_action(cx.listener(|_, _: &crate::OpenSettingsPage, window, cx| {
+        open_settings_dialog(window, cx);
       }))
       .on_action(cx.listener(|_, _: &crate::OpenAboutPage, window, cx| {
         open_about_dialog(window, cx);
       }))
       .child(ui::scroll_dispatcher())
       .child(self.render_global_bar(window, page, &pathname, cx))
-      .child(div().flex_1().min_h_0().child(routes))
+      .child(div().flex_1().min_h_0().child(session_page))
       .into_any_element()
   }
 }
 
 impl Focusable for WorkspaceView {
   fn focus_handle(&self, cx: &App) -> FocusHandle {
-    match WorkspaceRoute::global(cx).page {
-      WorkspacePage::Session => self.session_page.read(cx).focus_handle(cx),
-      WorkspacePage::GitConfig => self.git_config_page.read(cx).focus_handle(cx),
-      WorkspacePage::Settings => self.settings_page.read(cx).focus_handle(cx),
-    }
+    self.session_page.read(cx).focus_handle(cx)
   }
 }
 
@@ -1018,11 +950,13 @@ mod tests {
     );
     assert_eq!(
       workspace_page_from_pathname("/settings"),
-      WorkspacePage::Settings
+      WorkspacePage::Session,
+      "settings is a dialog now, so old links land in the shell"
     );
     assert_eq!(
       workspace_page_from_pathname("/git-config"),
-      WorkspacePage::GitConfig
+      WorkspacePage::Session,
+      "Git config is a dialog now, so old links land in the shell"
     );
   }
 
@@ -1134,14 +1068,14 @@ mod tests {
   #[test]
   fn page_has_file_search_matches_correct_paths() {
     assert!(page_has_file_search("/session"));
-    // A pull request has no page of its own any more: the shell is the surface.
-    assert!(!page_has_file_search("/github/owner/repo/pull/123/changes"));
-    assert!(!page_has_file_search("/github"));
-    assert!(!page_has_file_search("/github/owner/repo"));
-    assert!(!page_has_file_search("/github/owner/repo/code"));
-    assert!(!page_has_file_search("/github/owner/repo/pull/123"));
-    assert!(!page_has_file_search("/github/owner/repo/pulls"));
-    assert!(!page_has_file_search("/settings"));
+    // Removed page paths land on the shell now.
+    assert!(page_has_file_search("/github/owner/repo/pull/123/changes"));
+    assert!(page_has_file_search("/github"));
+    assert!(page_has_file_search("/github/owner/repo"));
+    assert!(page_has_file_search("/github/owner/repo/code"));
+    assert!(page_has_file_search("/github/owner/repo/pull/123"));
+    assert!(page_has_file_search("/github/owner/repo/pulls"));
+    assert!(page_has_file_search("/settings"));
   }
 
   #[test]
@@ -1154,14 +1088,10 @@ mod tests {
   }
 
   #[test]
-  fn user_menu_page_for_workspace_maps_github_surfaces() {
+  fn user_menu_page_for_workspace_maps_the_shell() {
     assert_eq!(
       user_menu_page_for_workspace_page(WorkspacePage::Session),
       UserMenuPage::Session
-    );
-    assert_eq!(
-      user_menu_page_for_workspace_page(WorkspacePage::Settings),
-      UserMenuPage::Settings
     );
   }
 
@@ -1169,17 +1099,7 @@ mod tests {
   fn the_shell_activates_when_the_workspace_routes_to_it() {
     // Startup on the shell, and every navigation back to it.
     assert!(should_activate_session_page(None, WorkspacePage::Session));
-    assert!(should_activate_session_page(
-      Some(WorkspacePage::Settings),
-      WorkspacePage::Session
-    ));
-
-    // Never for another page, and never twice for the same one.
-    assert!(!should_activate_session_page(None, WorkspacePage::Settings));
-    assert!(!should_activate_session_page(
-      Some(WorkspacePage::Session),
-      WorkspacePage::Settings
-    ));
+    // There is no secondary workspace page left to activate.
     assert!(!should_activate_session_page(
       Some(WorkspacePage::Session),
       WorkspacePage::Session

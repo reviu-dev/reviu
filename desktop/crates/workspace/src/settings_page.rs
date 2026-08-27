@@ -2,8 +2,8 @@ use std::sync::Arc;
 
 use editor::set_indent_rainbow_enabled;
 use gpui::{
-  App, Context, FocusHandle, Focusable, Keystroke, KeystrokeEvent, Render, SharedString,
-  Subscription, Window, div, prelude::*, px,
+  App, Context, Entity, FocusHandle, Focusable, Global, Keystroke, KeystrokeEvent, Render,
+  SharedString, Subscription, Window, div, prelude::*, px,
 };
 
 use gpui_component::{
@@ -15,19 +15,30 @@ use gpui_component::{
 
 use ui::{
   CommandPalette, CommandPaletteAction, CommandPaletteCommand, CommandPaletteConfig,
-  CommandPaletteHandler, CommandPalettePage, PAGE_HEADER_HEIGHT, StatusThemeExt,
+  CommandPaletteHandler, CommandPalettePage, PAGE_HEADER_HEIGHT, StatusThemeExt, WindowExt,
 };
 
 use crate::{
-  CloseWorkspacePage, ShowCommandPalette,
+  ShowCommandPalette,
   auth_state::AuthStateStore,
   config::AppSettings as PersistedSettings,
-  navigation::NavigationHistory,
   shortcuts::{
     self, ShortcutCategory, ShortcutDefinition, ShortcutId, ShortcutOverrides,
     resolved_display_shortcut_keystroke_in, shortcut_definitions,
   },
 };
+
+const SETTINGS_DIALOG_MAX_WIDTH: f32 = 1080.0;
+const SETTINGS_DIALOG_MAX_HEIGHT: f32 = 760.0;
+const SETTINGS_DIALOG_MARGIN: f32 = 64.0;
+
+#[derive(Clone, Default)]
+struct SettingsDialogState {
+  view: Option<Entity<SettingsPage>>,
+  is_open: bool,
+}
+
+impl Global for SettingsDialogState {}
 
 #[derive(Clone)]
 struct ShortcutCaptureError {
@@ -72,10 +83,6 @@ impl SettingsPage {
       size: Size::default(),
       _subscriptions: vec![shortcut_capture_subscription],
     }
-  }
-
-  pub(crate) fn auto_switch_theme_enabled(&self) -> bool {
-    self.auto_switch_theme
   }
 
   fn setting_pages(&self, window: &mut Window, cx: &mut Context<Self>) -> Vec<SettingPage> {
@@ -613,15 +620,6 @@ impl SettingsPage {
     self.open_command_palette(window, cx);
   }
 
-  fn close_workspace_page_action(
-    &mut self,
-    _: &CloseWorkspacePage,
-    _window: &mut Window,
-    cx: &mut Context<Self>,
-  ) {
-    NavigationHistory::navigate_back(cx);
-  }
-
   fn open_command_palette(&mut self, window: &mut Window, cx: &mut Context<Self>) {
     let include_github = AuthStateStore::has_github_access(cx);
     let signed_in = AuthStateStore::is_signed_in(cx);
@@ -683,22 +681,29 @@ impl Render for SettingsPage {
           .icon(IconName::Close)
           .ghost()
           .compact()
-          .on_click(|_, _, cx| {
-            NavigationHistory::navigate_back(cx);
+          .on_click(|_, window, cx| {
+            window.close_dialog(cx);
           }),
       );
+
+    let key_context = if self.shortcut_recording.is_some() {
+      format!(
+        "{} {}",
+        shortcuts::WORKSPACE_CONTEXT,
+        shortcuts::WORKSPACE_SHORTCUT_RECORDING_CONTEXT
+      )
+    } else {
+      shortcuts::WORKSPACE_CONTEXT.to_string()
+    };
 
     div()
       .size_full()
       .flex()
       .flex_col()
       .bg(theme.background)
-      .when(self.shortcut_recording.is_some(), |this| {
-        this.key_context(shortcuts::WORKSPACE_SHORTCUT_RECORDING_CONTEXT)
-      })
+      .key_context(key_context.as_str())
       .track_focus(&self.focus_handle(cx))
       .on_action(cx.listener(SettingsPage::show_command_palette_action))
-      .on_action(cx.listener(SettingsPage::close_workspace_page_action))
       .child(header)
       .child(
         Settings::new("app-settings")
@@ -714,10 +719,96 @@ impl Focusable for SettingsPage {
   }
 }
 
+pub(crate) fn open_settings_dialog(window: &mut Window, cx: &mut App) {
+  let state = cx
+    .try_global::<SettingsDialogState>()
+    .cloned()
+    .unwrap_or_default();
+  if state.is_open && window.has_active_dialog(cx) {
+    return;
+  }
+
+  let view = state
+    .view
+    .unwrap_or_else(|| cx.new(|cx| SettingsPage::new(window, cx, PersistedSettings::get(cx))));
+  cx.set_global(SettingsDialogState {
+    view: Some(view.clone()),
+    is_open: true,
+  });
+
+  let view_for_overlay = view.clone();
+  let view_for_focus = view.clone();
+  window.open_dialog(cx, move |dialog, window, _| {
+    let viewport = window.viewport_size();
+    let width = px(
+      (viewport.width.as_f32() - SETTINGS_DIALOG_MARGIN).clamp(640.0, SETTINGS_DIALOG_MAX_WIDTH),
+    );
+    let height = px(
+      (viewport.height.as_f32() - SETTINGS_DIALOG_MARGIN).clamp(480.0, SETTINGS_DIALOG_MAX_HEIGHT),
+    );
+
+    dialog
+      .p_0()
+      .gap_0()
+      .w(width)
+      .h(height)
+      .keyboard(true)
+      .close_button(false)
+      .on_close(|_, _, cx| {
+        if cx.has_global::<SettingsDialogState>() {
+          cx.global_mut::<SettingsDialogState>().is_open = false;
+        }
+      })
+      .child(view_for_overlay.clone())
+  });
+
+  window.on_next_frame(move |window, cx| {
+    let focus_handle = view_for_focus.read(cx).focus_handle(cx);
+    window.focus(&focus_handle, cx);
+  });
+}
+
 #[cfg(test)]
 mod tests {
   use super::*;
   use crate::shortcuts::ShortcutId;
+  use gpui::{TestAppContext, VisualTestContext};
+
+  struct DialogHost;
+
+  impl Render for DialogHost {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+      div()
+        .size_full()
+        .children(gpui_component::Root::render_dialog_layer(window, cx))
+    }
+  }
+
+  fn dialog_host(cx: &mut TestAppContext) -> &mut VisualTestContext {
+    cx.update(gpui_component::init);
+    cx.update(|cx| {
+      cx.set_global(PersistedSettings::default());
+      cx.set_global(ShortcutOverrides::default());
+    });
+    let (_root, cx) = cx.add_window_view(|window, cx| {
+      let host = cx.new(|_| DialogHost);
+      gpui_component::Root::new(host, window, cx)
+    });
+    cx
+  }
+
+  #[gpui::test]
+  async fn escape_closes_settings_dialog(cx: &mut TestAppContext) {
+    let cx = dialog_host(cx);
+    cx.update(open_settings_dialog);
+    cx.run_until_parked();
+    assert!(cx.update(|window, cx| window.has_active_dialog(cx)));
+
+    cx.simulate_keystrokes("escape");
+    cx.run_until_parked();
+
+    assert!(!cx.update(|window, cx| window.has_active_dialog(cx)));
+  }
 
   #[test]
   fn keyboard_shortcut_descriptions_include_scope_and_keystroke() {

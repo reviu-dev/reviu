@@ -7,8 +7,8 @@ use std::{
 use editor::Editor;
 use git::find_global_config_path;
 use gpui::{
-  AnyElement, App, Context, Entity, FocusHandle, Focusable, Render, SharedString, Window, div,
-  prelude::*, px,
+  AnyElement, App, Context, Entity, FocusHandle, Focusable, Global, Render, SharedString, Window,
+  div, prelude::*, px,
 };
 use gpui_component::{
   ActiveTheme as _, Disableable, IconName, Sizable as _,
@@ -18,13 +18,22 @@ use gpui_component::{
 
 use ui::{
   CommandPalette, CommandPaletteAction, CommandPaletteCommand, CommandPaletteConfig,
-  CommandPaletteHandler, CommandPalettePage, PAGE_HEADER_HEIGHT, StatusThemeExt,
+  CommandPaletteHandler, CommandPalettePage, PAGE_HEADER_HEIGHT, StatusThemeExt, WindowExt,
 };
 
-use crate::{
-  CloseWorkspacePage, ShowCommandPalette, auth_state::AuthStateStore, file_view::render_file_title,
-  navigation::NavigationHistory,
-};
+use crate::{ShowCommandPalette, auth_state::AuthStateStore, file_view::render_file_title};
+
+const GIT_CONFIG_DIALOG_MAX_WIDTH: f32 = 1120.0;
+const GIT_CONFIG_DIALOG_MAX_HEIGHT: f32 = 780.0;
+const GIT_CONFIG_DIALOG_MARGIN: f32 = 64.0;
+
+#[derive(Clone, Default)]
+struct GitConfigDialogState {
+  view: Option<Entity<GitConfigPage>>,
+  is_open: bool,
+}
+
+impl Global for GitConfigDialogState {}
 
 pub struct GitConfigPage {
   focus_handle: FocusHandle,
@@ -34,7 +43,10 @@ pub struct GitConfigPage {
 
 impl GitConfigPage {
   pub fn new(_: &mut Window, cx: &mut Context<Self>) -> Self {
-    let config_path = Self::git_config_path();
+    Self::new_for_path(Self::git_config_path(), cx)
+  }
+
+  fn new_for_path(config_path: PathBuf, cx: &mut Context<Self>) -> Self {
     let (editor, load_error) = Self::create_editor(&config_path, cx);
 
     Self {
@@ -99,15 +111,6 @@ impl GitConfigPage {
     self.open_command_palette(window, cx);
   }
 
-  fn close_workspace_page_action(
-    &mut self,
-    _: &CloseWorkspacePage,
-    _window: &mut Window,
-    cx: &mut Context<Self>,
-  ) {
-    NavigationHistory::navigate_back(cx);
-  }
-
   fn open_command_palette(&mut self, window: &mut Window, cx: &mut Context<Self>) {
     let include_github = AuthStateStore::has_github_access(cx);
     let signed_in = AuthStateStore::is_signed_in(cx);
@@ -164,8 +167,8 @@ impl GitConfigPage {
       .ghost()
       .compact()
       .tooltip("Close")
-      .on_click(|_, _, cx| {
-        NavigationHistory::navigate_back(cx);
+      .on_click(|_, window, cx| {
+        window.close_dialog(cx);
       });
 
     div()
@@ -243,8 +246,8 @@ impl Render for GitConfigPage {
                 .ghost()
                 .compact()
                 .tooltip("Close")
-                .on_click(|_, _, cx| {
-                  NavigationHistory::navigate_back(cx);
+                .on_click(|_, window, cx| {
+                  window.close_dialog(cx);
                 }),
             ),
         )
@@ -261,9 +264,9 @@ impl Render for GitConfigPage {
 
     div()
       .size_full()
+      .key_context(crate::shortcuts::WORKSPACE_CONTEXT)
       .track_focus(&self.focus_handle(cx))
       .on_action(cx.listener(GitConfigPage::show_command_palette_action))
-      .on_action(cx.listener(GitConfigPage::close_workspace_page_action))
       .child(body)
   }
 }
@@ -274,5 +277,112 @@ impl Focusable for GitConfigPage {
       return editor.read(cx).focus_handle(cx);
     }
     self.focus_handle.clone()
+  }
+}
+
+pub(crate) fn open_git_config_dialog(window: &mut Window, cx: &mut App) {
+  let state = cx
+    .try_global::<GitConfigDialogState>()
+    .cloned()
+    .unwrap_or_default();
+  if state.is_open && window.has_active_dialog(cx) {
+    return;
+  }
+
+  let view = state
+    .view
+    .unwrap_or_else(|| cx.new(|cx| GitConfigPage::new(window, cx)));
+  open_git_config_dialog_with_view(view, window, cx);
+}
+
+fn open_git_config_dialog_with_view(
+  view: Entity<GitConfigPage>,
+  window: &mut Window,
+  cx: &mut App,
+) {
+  cx.set_global(GitConfigDialogState {
+    view: Some(view.clone()),
+    is_open: true,
+  });
+
+  let view_for_overlay = view.clone();
+  let view_for_focus = view.clone();
+  window.open_dialog(cx, move |dialog, window, _| {
+    let viewport = window.viewport_size();
+    let width = px(
+      (viewport.width.as_f32() - GIT_CONFIG_DIALOG_MARGIN)
+        .clamp(700.0, GIT_CONFIG_DIALOG_MAX_WIDTH),
+    );
+    let height = px(
+      (viewport.height.as_f32() - GIT_CONFIG_DIALOG_MARGIN)
+        .clamp(500.0, GIT_CONFIG_DIALOG_MAX_HEIGHT),
+    );
+
+    dialog
+      .p_0()
+      .gap_0()
+      .w(width)
+      .h(height)
+      .keyboard(true)
+      .close_button(false)
+      .on_close(|_, _, cx| {
+        if cx.has_global::<GitConfigDialogState>() {
+          cx.global_mut::<GitConfigDialogState>().is_open = false;
+        }
+      })
+      .child(view_for_overlay.clone())
+  });
+
+  window.on_next_frame(move |window, cx| {
+    let focus_handle = view_for_focus.read(cx).focus_handle(cx);
+    window.focus(&focus_handle, cx);
+  });
+}
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+  use gpui::{TestAppContext, VisualTestContext};
+
+  struct DialogHost;
+
+  impl Render for DialogHost {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+      div()
+        .size_full()
+        .children(gpui_component::Root::render_dialog_layer(window, cx))
+    }
+  }
+
+  fn dialog_host(cx: &mut TestAppContext) -> &mut VisualTestContext {
+    cx.update(gpui_component::init);
+    let (_root, cx) = cx.add_window_view(|window, cx| {
+      let host = cx.new(|_| DialogHost);
+      gpui_component::Root::new(host, window, cx)
+    });
+    cx
+  }
+
+  #[gpui::test]
+  async fn escape_closes_git_config_dialog(cx: &mut TestAppContext) {
+    let cx = dialog_host(cx);
+    let path = std::env::temp_dir().join(format!(
+      "reviu-git-config-dialog-{}.gitconfig",
+      std::process::id()
+    ));
+    let _ = std::fs::remove_file(&path);
+
+    cx.update(|window, cx| {
+      let view = cx.new(|cx| GitConfigPage::new_for_path(path.clone(), cx));
+      open_git_config_dialog_with_view(view, window, cx);
+    });
+    cx.run_until_parked();
+    assert!(cx.update(|window, cx| window.has_active_dialog(cx)));
+
+    cx.simulate_keystrokes("escape");
+    cx.run_until_parked();
+
+    assert!(!cx.update(|window, cx| window.has_active_dialog(cx)));
+    let _ = std::fs::remove_file(&path);
   }
 }

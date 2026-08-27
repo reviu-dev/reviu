@@ -75,12 +75,8 @@ pub(crate) struct CrashContextSnapshot {
   pub github_pr: Option<CrashGithubPrContext>,
 }
 
-fn workspace_page_tag(page: WorkspacePage) -> &'static str {
-  match page {
-    WorkspacePage::Session => "session",
-    WorkspacePage::GitConfig => "git_config",
-    WorkspacePage::Settings => "settings",
-  }
+fn workspace_page_tag(_page: WorkspacePage) -> &'static str {
+  "session"
 }
 
 fn auth_state_tag(state: &AuthState) -> &'static str {
@@ -430,7 +426,6 @@ mod tests {
   #[test]
   fn workspace_page_tag_maps_pages() {
     assert_eq!(workspace_page_tag(WorkspacePage::Session), "session");
-    assert_eq!(workspace_page_tag(WorkspacePage::Settings), "settings");
   }
 
   #[test]
