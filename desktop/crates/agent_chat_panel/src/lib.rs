@@ -39,7 +39,7 @@ use agent_acp::{
 use agent_client_protocol::schema::{
   ContentBlock, EmbeddedResource, EmbeddedResourceResource, Plan, PlanEntryPriority,
   PlanEntryStatus, ResourceLink, SessionInfoUpdate, TextContent, TextResourceContents, ToolCall,
-  ToolCallId, ToolCallStatus, ToolCallUpdate, ToolKind,
+  ToolCallContent, ToolCallId, ToolCallStatus, ToolCallUpdate, ToolKind,
 };
 use agent_client_protocol::schema::{
   ModelId, ModelInfo, SessionConfigId, SessionConfigKind, SessionConfigOption,
@@ -189,6 +189,9 @@ pub(crate) struct ToolOutput {
   pub syntax_spans: Vec<HighlightSpan>,
 }
 
+const READ_SNAPSHOT_MAX_BYTES: u64 = 256 * 1024;
+const READ_SNAPSHOT_MAX_LINES: usize = 400;
+
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 struct PermissionItem {
   prompt: PermissionPrompt,
@@ -207,6 +210,123 @@ struct PermissionDetail {
   invocation: Option<String>,
   path: Option<String>,
   diff_stats: Vec<(String, u32, u32)>,
+}
+
+fn path_inside_root(path: &Path, root: &Path) -> Option<PathBuf> {
+  let candidate = if path.is_absolute() {
+    path.to_path_buf()
+  } else {
+    root.join(path)
+  };
+  let root = root.canonicalize().ok()?;
+  let candidate = candidate.canonicalize().ok()?;
+  candidate.starts_with(&root).then_some(candidate)
+}
+
+fn byte_offset_for_line(text: &str, line_number: u32) -> Option<usize> {
+  if line_number <= 1 {
+    return Some(0);
+  }
+  let mut current_line = 1_u32;
+  for (byte_offset, byte) in text.bytes().enumerate() {
+    if byte == b'\n' {
+      current_line = current_line.saturating_add(1);
+      if current_line == line_number {
+        return Some(byte_offset + 1);
+      }
+    }
+  }
+  None
+}
+
+fn local_read_snapshot(cwd: &Path, path: &Path, start_line: Option<u32>) -> Option<String> {
+  let path = path_inside_root(path, cwd)?;
+  let metadata = std::fs::metadata(&path).ok()?;
+  if !metadata.is_file() || metadata.len() > READ_SNAPSHOT_MAX_BYTES {
+    return None;
+  }
+  let text = std::fs::read_to_string(path).ok()?;
+  if text.contains('\0') {
+    return None;
+  }
+  let start = byte_offset_for_line(&text, start_line.unwrap_or(1))?;
+  let snapshot = text[start..].to_string();
+  if snapshot.is_empty() || snapshot.lines().count() > READ_SNAPSHOT_MAX_LINES {
+    return None;
+  }
+  Some(snapshot)
+}
+
+fn read_snapshot_content(text: String) -> ToolCallContent {
+  ToolCallContent::from(ContentBlock::Text(TextContent::new(text)))
+}
+
+fn read_locations_for_call(call: &ToolCall) -> Vec<(PathBuf, Option<u32>)> {
+  call
+    .locations
+    .iter()
+    .map(|location| (location.path.clone(), location.line))
+    .collect()
+}
+
+fn fill_tool_call_read_snapshot(call: &mut ToolCall, cwd: &Path) {
+  if !matches!(call.kind, ToolKind::Read) || !call.content.is_empty() || call.raw_output.is_some() {
+    return;
+  }
+  let locations = read_locations_for_call(call);
+  let Some((path, _)) = locations.first() else {
+    return;
+  };
+  let start_line = read_tool_start_line(&ToolKind::Read, &locations, call.raw_input.as_ref());
+  if let Some(snapshot) = local_read_snapshot(cwd, path, start_line) {
+    call.content = vec![read_snapshot_content(snapshot)];
+  }
+}
+
+fn fill_tool_update_read_snapshot(
+  update: &mut ToolCallUpdate,
+  existing: Option<&ToolCallView>,
+  cwd: &Path,
+) {
+  let content_is_empty = update
+    .fields
+    .content
+    .as_ref()
+    .is_none_or(|content| content.is_empty());
+  if !content_is_empty || update.fields.raw_output.is_some() {
+    return;
+  }
+  if existing.is_some_and(|view| !view.outputs.is_empty()) {
+    return;
+  }
+  let kind = update
+    .fields
+    .kind
+    .or_else(|| existing.map(|view| view.kind))
+    .unwrap_or(ToolKind::Other);
+  if !matches!(kind, ToolKind::Read) {
+    return;
+  }
+  let locations = update
+    .fields
+    .locations
+    .as_ref()
+    .map(|locations| {
+      locations
+        .iter()
+        .map(|location| (location.path.clone(), location.line))
+        .collect::<Vec<_>>()
+    })
+    .or_else(|| existing.map(|view| view.locations.clone()))
+    .unwrap_or_default();
+  let Some((path, _)) = locations.first() else {
+    return;
+  };
+  let start_line = read_tool_start_line(&kind, &locations, update.fields.raw_input.as_ref())
+    .or_else(|| existing.and_then(|view| view.read_start_line));
+  if let Some(snapshot) = local_read_snapshot(cwd, path, start_line) {
+    update.fields.content = Some(vec![read_snapshot_content(snapshot)]);
+  }
 }
 
 fn permission_detail(
@@ -1813,11 +1933,21 @@ impl AgentChatPanel {
     }
   }
 
-  fn upsert_tool_call(&mut self, call: ToolCall) {
+  fn upsert_tool_call(&mut self, mut call: ToolCall) {
+    fill_tool_call_read_snapshot(&mut call, &self.cwd);
     upsert_tool_call_pure(&mut self.items, &mut self.tool_index, call, &self.cwd);
   }
 
-  fn apply_tool_call_update(&mut self, update: ToolCallUpdate) {
+  fn apply_tool_call_update(&mut self, mut update: ToolCallUpdate) {
+    let existing = self
+      .tool_index
+      .get(&update.tool_call_id)
+      .and_then(|index| self.items.get(*index))
+      .and_then(|item| match item {
+        ChatItem::Tool(view) => Some(view),
+        _ => None,
+      });
+    fill_tool_update_read_snapshot(&mut update, existing, &self.cwd);
     apply_tool_call_update_pure(&mut self.items, &self.tool_index, update, &self.cwd);
   }
 

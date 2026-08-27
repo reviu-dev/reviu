@@ -1727,6 +1727,126 @@ fn acp_registry_location_only_read_fixture_keeps_the_header_without_preview() {
   assert!(view.diffs.is_empty());
 }
 
+#[gpui::test]
+async fn read_without_output_snapshots_the_local_file_once(cx: &mut gpui::TestAppContext) {
+  let dir = temp_dir("agent-read-snapshot");
+  std::fs::create_dir_all(dir.join("src")).expect("create src dir");
+  std::fs::write(dir.join("src/main.rs"), "fn first() {}\nfn second() {}\n").expect("write file");
+  let (panel, cx) = add_panel_window(cx);
+  panel.update(cx, |panel, cx| {
+    panel.cwd = dir.clone();
+    panel.status = Status::Ready;
+    panel.in_flight = true;
+    let mut call = call("read1", "Read src/main.rs", ToolKind::Read);
+    call.locations = vec![ToolCallLocation::new("src/main.rs").line(2_u32)];
+    panel.on_event(AgentEvent::ToolCall(call), cx);
+  });
+
+  std::fs::write(dir.join("src/main.rs"), "changed\n").expect("rewrite file");
+  panel.update(cx, |panel, cx| {
+    panel.on_event(
+      AgentEvent::ToolCallUpdate(ToolCallUpdate::new(
+        ToolCallId::new("read1"),
+        ToolCallUpdateFields::new().status(ToolCallStatus::Completed),
+      )),
+      cx,
+    );
+  });
+
+  panel.read_with(cx, |panel, _| {
+    let Some(ChatItem::Tool(view)) = panel.items.last() else {
+      panic!("tool expected");
+    };
+    assert_eq!(view.outputs.len(), 1);
+    assert_eq!(view.outputs[0].text, "fn second() {}\n");
+    assert_eq!(view.outputs[0].start_line, Some(2));
+  });
+  std::fs::remove_dir_all(&dir).ok();
+}
+
+#[gpui::test]
+async fn read_snapshot_ignores_files_outside_the_session_root(cx: &mut gpui::TestAppContext) {
+  let dir = temp_dir("agent-read-snapshot-root");
+  let outside = temp_dir("agent-read-snapshot-outside");
+  std::fs::write(outside.join("secret.rs"), "fn secret() {}\n").expect("write file");
+  let (panel, cx) = add_panel_window(cx);
+  panel.update(cx, |panel, cx| {
+    panel.cwd = dir.clone();
+    panel.status = Status::Ready;
+    panel.in_flight = true;
+    let mut call = call("read1", "Read secret.rs", ToolKind::Read);
+    call.locations = vec![ToolCallLocation::new(outside.join("secret.rs"))];
+    panel.on_event(AgentEvent::ToolCall(call), cx);
+  });
+
+  panel.read_with(cx, |panel, _| {
+    let Some(ChatItem::Tool(view)) = panel.items.last() else {
+      panic!("tool expected");
+    };
+    assert!(view.outputs.is_empty());
+  });
+  std::fs::remove_dir_all(&dir).ok();
+  std::fs::remove_dir_all(&outside).ok();
+}
+
+#[test]
+fn read_snapshot_rejects_binary_or_too_large_files() {
+  let binary_dir = temp_dir("agent-read-snapshot-binary");
+  std::fs::write(binary_dir.join("binary.dat"), b"abc\0def").expect("write binary");
+  assert_eq!(
+    local_read_snapshot(&binary_dir, Path::new("binary.dat"), Some(1)),
+    None
+  );
+  std::fs::remove_dir_all(&binary_dir).ok();
+
+  let large_dir = temp_dir("agent-read-snapshot-large");
+  let large = (0..=READ_SNAPSHOT_MAX_LINES)
+    .map(|line| format!("line {line}"))
+    .collect::<Vec<_>>()
+    .join("\n");
+  std::fs::write(large_dir.join("large.rs"), large).expect("write large file");
+  assert_eq!(
+    local_read_snapshot(&large_dir, Path::new("large.rs"), Some(1)),
+    None
+  );
+  std::fs::remove_dir_all(&large_dir).ok();
+}
+
+#[gpui::test]
+async fn read_location_update_can_fill_an_empty_snapshot(cx: &mut gpui::TestAppContext) {
+  let dir = temp_dir("agent-read-snapshot-update");
+  std::fs::create_dir_all(dir.join("src")).expect("create src dir");
+  std::fs::write(dir.join("src/lib.rs"), "fn one() {}\nfn two() {}\n").expect("write file");
+  let (panel, cx) = add_panel_window(cx);
+  panel.update(cx, |panel, cx| {
+    panel.cwd = dir.clone();
+    panel.status = Status::Ready;
+    panel.in_flight = true;
+    panel.on_event(
+      AgentEvent::ToolCall(call("read1", "Read file", ToolKind::Read)),
+      cx,
+    );
+    panel.on_event(
+      AgentEvent::ToolCallUpdate(ToolCallUpdate::new(
+        ToolCallId::new("read1"),
+        ToolCallUpdateFields::new()
+          .locations(vec![ToolCallLocation::new("src/lib.rs")])
+          .status(ToolCallStatus::Completed),
+      )),
+      cx,
+    );
+  });
+
+  panel.read_with(cx, |panel, _| {
+    let Some(ChatItem::Tool(view)) = panel.items.last() else {
+      panic!("tool expected");
+    };
+    assert_eq!(view.outputs[0].text, "fn one() {}\nfn two() {}\n");
+    assert_eq!(view.outputs[0].start_line, Some(1));
+  });
+  std::fs::remove_dir_all(&dir).ok();
+}
+
 #[test]
 fn acp_registry_edit_diff_fixture_keeps_diff_render_data() {
   let mut edit_call = call("edit-diff", "Edit fixtures/acp/edit.rs", ToolKind::Edit);

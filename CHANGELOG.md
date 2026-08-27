@@ -22,7 +22,7 @@ The agent picker is served by the official ACP registry: twenty-three agents out
 
 ### A Conversation Built For Watching An Agent Work
 
-The agent's narration appears where it happened, thinking streams as a dimmed live glimpse that folds when it ends, and tool steps read as one clean line, grouped under a summary that folds when the turn ends. Registry agents keep their protocol tool identity when they provide one, so reads, edits and commands stay consistent even when titles vary. Read results and edit diffs carry real file line numbers, text is selectable everywhere, and terminal output keeps the colors tools emit.
+The agent's narration appears where it happened, thinking streams as a dimmed live glimpse that folds when it ends, and tool steps read as one clean line, grouped under a summary that folds when the turn ends. Registry agents keep their protocol tool identity when they provide one, so reads, edits and commands stay consistent even when titles vary. Read results and edit diffs carry real file line numbers, and a read that only reports a local file location still shows a bounded snapshot when Reviu can safely read it. Text is selectable everywhere, and terminal output keeps the colors tools emit.
 
 ### The Turn Closes With A Receipt
 
