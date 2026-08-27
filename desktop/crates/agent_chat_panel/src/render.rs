@@ -1211,6 +1211,81 @@ pub(crate) fn auto_approve_option(options: &[agent_acp::PermissionPromptOption])
     .map(|o| o.option_id.clone())
 }
 
+pub(crate) fn permission_header_subtitle(item: &PermissionItem) -> Option<String> {
+  let title = item.prompt.tool_call_title.trim();
+  let fallback_title = || (title != "Permission required").then(|| title.to_string());
+  match item.prompt.tool_call.fields.kind {
+    Some(ToolKind::Execute) => item
+      .detail
+      .invocation
+      .as_ref()
+      .map(|_| "Terminal command".to_string())
+      .or_else(fallback_title),
+    Some(ToolKind::Fetch) => item
+      .detail
+      .invocation
+      .as_ref()
+      .map(|_| "Network request".to_string())
+      .or_else(fallback_title),
+    Some(ToolKind::Edit) => {
+      if item.detail.diff_stats.len() > 1 {
+        Some(format!("{} file edits", item.detail.diff_stats.len()))
+      } else if !item.detail.diff_stats.is_empty() || item.detail.path.is_some() {
+        Some("File edit".to_string())
+      } else {
+        fallback_title()
+      }
+    }
+    Some(ToolKind::Delete) => item
+      .detail
+      .path
+      .as_ref()
+      .map(|_| "File deletion".to_string())
+      .or_else(fallback_title),
+    Some(ToolKind::Move) => item
+      .detail
+      .path
+      .as_ref()
+      .map(|_| "File move".to_string())
+      .or_else(fallback_title),
+    Some(ToolKind::Read) => item
+      .detail
+      .path
+      .as_ref()
+      .map(|_| "File read".to_string())
+      .or_else(fallback_title),
+    Some(ToolKind::Search) => item
+      .detail
+      .path
+      .as_ref()
+      .map(|_| "Search".to_string())
+      .or_else(fallback_title),
+    _ => fallback_title(),
+  }
+}
+
+fn permission_option_button(
+  prompt_id: u64,
+  option: &agent_acp::PermissionPromptOption,
+  cx: &mut Context<AgentChatPanel>,
+) -> Button {
+  let option_id = option.option_id.clone();
+  let button_id = format!("perm-{}-{}", prompt_id, option.option_id);
+  let button = Button::new(SharedString::from(button_id))
+    .label(option.label.clone())
+    .small()
+    .on_click(cx.listener(move |panel, _, _, cx| {
+      panel.answer_permission(prompt_id, Some(option_id.clone()), cx);
+    }));
+
+  match &option.kind {
+    PermissionOptionKind::AllowOnce => button.primary(),
+    PermissionOptionKind::AllowAlways => button.secondary(),
+    PermissionOptionKind::RejectOnce | PermissionOptionKind::RejectAlways => button.danger(),
+    _ => button.secondary(),
+  }
+}
+
 pub(crate) fn render_permission(
   item: &PermissionItem,
   theme: &gpui_component::Theme,
@@ -1220,68 +1295,149 @@ pub(crate) fn render_permission(
   let prompt_id = item.prompt.id;
   let resolved = item.resolved.clone();
   let detail = &item.detail;
-  let mut card = v_flex()
+  let subtitle = permission_header_subtitle(item);
+  let hairline = theme.border.opacity(0.6);
+
+  let resolved_status = resolved.as_ref().map(|option_id| {
+    let selected_option = item
+      .prompt
+      .options
+      .iter()
+      .find(|option| option.option_id == *option_id);
+    let label = selected_option
+      .map(|option| option.label.clone())
+      .unwrap_or_else(|| option_id.clone());
+    let answer = if item.auto {
+      format!("Auto-approved: {label}")
+    } else {
+      format!("Answered: {label}")
+    };
+    let is_destructive = selected_option
+      .map(|option| permission_option_is_destructive(&option.kind))
+      .unwrap_or_else(|| option_id == "cancel");
+    let (icon, color) = if is_destructive {
+      (UiIconName::CircleSlash, theme.danger)
+    } else {
+      (UiIconName::CircleCheck, theme.status_green())
+    };
+    (icon, color, answer)
+  });
+
+  let header = h_flex()
+    .debug_selector(|| "perm-header".to_string())
+    .items_center()
     .gap_2()
-    .p_3()
-    .border_1()
-    .border_color(theme.warning)
-    .rounded(px(4.))
+    .px_3()
+    .py_2()
     .child(
       div()
-        .text_xs()
-        .text_color(theme.muted_foreground)
-        .child("Permission required".to_string()),
+        .flex_shrink_0()
+        .size(px(20.))
+        .rounded(px(5.))
+        .bg(theme.secondary)
+        .flex()
+        .items_center()
+        .justify_center()
+        .child(
+          gpui_component::Icon::new(UiIconName::Lock)
+            .size_3()
+            .text_color(theme.muted_foreground),
+        ),
     )
-    .when(
-      item.prompt.tool_call_title != "Permission required",
-      |this| {
-        this.child(
+    .child(
+      v_flex()
+        .flex_1()
+        .min_w_0()
+        .gap_0p5()
+        .child(
           div()
             .text_sm()
+            .font_weight(FontWeight::MEDIUM)
             .text_color(theme.foreground)
-            .child(item.prompt.tool_call_title.clone()),
+            .child("Permission required"),
         )
-      },
-    );
+        .when_some(subtitle, |this, subtitle| {
+          this.child(
+            div()
+              .text_xs()
+              .text_color(theme.muted_foreground)
+              .whitespace_normal()
+              .child(subtitle),
+          )
+        }),
+    )
+    .when(resolved.is_none(), |this| {
+      this.child(
+        div()
+          .debug_selector(|| "perm-status-pill".to_string())
+          .flex_shrink_0()
+          .child(Tag::color(ColorName::Amber).child("Awaiting approval")),
+      )
+    })
+    .when_some(resolved_status.clone(), |this, (icon, color, answer)| {
+      this.child(
+        h_flex()
+          .debug_selector(|| "perm-status".to_string())
+          .flex_shrink_0()
+          .gap_1p5()
+          .items_center()
+          .text_xs()
+          .text_color(color)
+          .child(gpui_component::Icon::new(icon).size_3())
+          .child(answer),
+      )
+    });
+
+  let mut card = v_flex()
+    .debug_selector(|| "perm-card".to_string())
+    .border_1()
+    .border_color(theme.border)
+    .rounded(px(8.))
+    .overflow_hidden()
+    .child(header);
 
   if let Some(invocation) = &detail.invocation {
     card = card.child(
       div()
-        .id(("perm-invocation", prompt_id as usize))
-        .debug_selector(|| "perm-invocation".to_string())
-        .max_h(px(92.))
-        .overflow_y_scroll()
-        .px_2()
-        .py_1()
-        .bg(theme.background)
-        .border_1()
-        .border_color(theme.border)
-        .rounded(px(3.))
-        .font_family("monospace")
-        .text_xs()
-        .text_color(theme.foreground)
-        .whitespace_normal()
-        .child(selectable_text::SelectableText::new(
-          prompt_id | 0x8000_0000_0000_0000,
-          SharedString::from(invocation.clone()),
-          Vec::new(),
-          registry.clone(),
-        )),
+        .px_3()
+        .py_2()
+        .border_t_1()
+        .border_color(hairline)
+        .child(
+          mini_code_block(theme)
+            .id(("perm-invocation", prompt_id as usize))
+            .debug_selector(|| "perm-invocation".to_string())
+            .max_h(px(112.))
+            .overflow_y_scroll()
+            .px_2()
+            .py_1()
+            .text_color(theme.foreground)
+            .whitespace_normal()
+            .child(selectable_text::SelectableText::new(
+              prompt_id | 0x8000_0000_0000_0000,
+              SharedString::from(invocation.clone()),
+              Vec::new(),
+              registry.clone(),
+            )),
+        ),
     );
   }
   if !detail.diff_stats.is_empty() {
-    let mut stats = v_flex()
-      .gap_0p5()
-      .debug_selector(|| "perm-diff-stats".to_string());
     for (path, added, removed) in &detail.diff_stats {
-      stats = stats.child(
+      card = card.child(
         h_flex()
-          .gap_2()
+          .debug_selector(|| "perm-diff-stats".to_string())
           .items_center()
+          .gap_2()
+          .px_3()
+          .py_1p5()
+          .border_t_1()
+          .border_color(hairline)
           .text_xs()
           .child(
             div()
               .flex_1()
+              .min_w_0()
               .truncate()
               .text_color(theme.muted_foreground)
               .child(path.clone()),
@@ -1294,68 +1450,78 @@ pub(crate) fn render_permission(
           .child(div().text_color(theme.danger).child(format!("-{removed}"))),
       );
     }
-    card = card.child(stats);
   } else if let Some(path) = &detail.path {
     card = card.child(
       div()
         .debug_selector(|| "perm-path".to_string())
+        .px_3()
+        .py_1p5()
+        .border_t_1()
+        .border_color(hairline)
         .text_xs()
         .text_color(theme.muted_foreground)
         .child(path.clone()),
     );
   }
 
-  if let Some(option_id) = &resolved {
-    let label = item
-      .prompt
-      .options
-      .iter()
-      .find(|option| option.option_id == *option_id)
-      .map(|option| option.label.clone())
-      .unwrap_or_else(|| option_id.clone());
-    let answer = if item.auto {
-      format!("Auto-approved: {label}")
-    } else {
-      format!("Answered: {label}")
-    };
-    card = card.child(
-      div()
-        .text_xs()
-        .text_color(theme.muted_foreground)
-        .child(answer),
-    );
-    return card.into_any_element();
-  }
-
-  let mut buttons = h_flex().gap_2().flex_wrap();
-  for option in &item.prompt.options {
-    let option_id = option.option_id.clone();
-    let destructive = permission_option_is_destructive(&option.kind);
-    let button_id = format!("perm-{}-{}", prompt_id, option.option_id);
-    let mut button = Button::new(SharedString::from(button_id))
-      .label(option.label.clone())
-      .small()
-      .on_click(cx.listener(move |panel, _, _, cx| {
-        panel.answer_permission(prompt_id, Some(option_id.clone()), cx);
-      }));
-    if destructive {
-      button = button.danger();
-    } else {
-      button = button.primary();
+  if resolved.is_none() {
+    let mut reject_options = Vec::new();
+    let mut persistent_allow_options = Vec::new();
+    let mut temporary_allow_options = Vec::new();
+    let mut other_options = Vec::new();
+    for option in &item.prompt.options {
+      match &option.kind {
+        PermissionOptionKind::AllowOnce => temporary_allow_options.push(option),
+        PermissionOptionKind::AllowAlways => persistent_allow_options.push(option),
+        PermissionOptionKind::RejectOnce | PermissionOptionKind::RejectAlways => {
+          reject_options.push(option);
+        }
+        _ => other_options.push(option),
+      }
     }
-    buttons = buttons.child(button);
-  }
-  buttons = buttons.child(
-    Button::new(SharedString::from(format!("perm-{prompt_id}-cancel")))
-      .label("Cancel")
-      .small()
-      .ghost()
-      .on_click(cx.listener(move |panel, _, _, cx| {
-        panel.answer_permission(prompt_id, None, cx);
-      })),
-  );
 
-  card.child(buttons).into_any_element()
+    let mut left_actions = h_flex().gap_1p5().flex_wrap();
+    for option in reject_options {
+      left_actions = left_actions.child(permission_option_button(prompt_id, option, cx));
+    }
+    left_actions = left_actions.child(
+      Button::new(SharedString::from(format!("perm-{prompt_id}-cancel")))
+        .label("Cancel")
+        .small()
+        .ghost()
+        .on_click(cx.listener(move |panel, _, _, cx| {
+          panel.answer_permission(prompt_id, None, cx);
+        })),
+    );
+
+    let mut right_actions = h_flex().gap_1p5().flex_wrap().justify_end();
+    for option in other_options {
+      right_actions = right_actions.child(permission_option_button(prompt_id, option, cx));
+    }
+    for option in persistent_allow_options {
+      right_actions = right_actions.child(permission_option_button(prompt_id, option, cx));
+    }
+    for option in temporary_allow_options {
+      right_actions = right_actions.child(permission_option_button(prompt_id, option, cx));
+    }
+
+    card = card.child(
+      h_flex()
+        .debug_selector(|| "perm-actions".to_string())
+        .gap_2()
+        .items_center()
+        .justify_between()
+        .flex_wrap()
+        .px_3()
+        .py_1p5()
+        .border_t_1()
+        .border_color(hairline)
+        .child(left_actions)
+        .child(right_actions),
+    );
+  }
+
+  card.into_any_element()
 }
 
 impl Focusable for AgentChatPanel {
@@ -2756,38 +2922,52 @@ impl AgentChatPanel {
         ),
         ChatRole::ReviewExport => {
           let label = review_export_label(&m.text);
+          let title = format!("Sent {label} to agent");
           div()
+            .debug_selector(|| "agent-chat-review-card".to_string())
             .mb_3()
-            .rounded(theme.radius)
+            .rounded(px(8.))
             .border_1()
             .border_color(theme.border)
             .overflow_hidden()
             .child(
-              gpui::div()
-                .flex()
+              h_flex()
+                .debug_selector(|| "agent-chat-review-header".to_string())
                 .items_center()
                 .gap_2()
                 .px_3()
-                .py_1p5()
-                .border_b_1()
-                .border_color(theme.border)
+                .py_2()
                 .child(
-                  gpui_component::Icon::new(UiIconName::MessageCircleReply)
-                    .size_4()
-                    .text_color(theme.muted_foreground),
+                  div()
+                    .flex_shrink_0()
+                    .size(px(20.))
+                    .rounded(px(5.))
+                    .bg(theme.secondary)
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .child(
+                      gpui_component::Icon::new(UiIconName::MessageCircleReply)
+                        .size_3()
+                        .text_color(theme.muted_foreground),
+                    ),
                 )
                 .child(
                   div()
-                    .text_xs()
-                    .font_weight(gpui::FontWeight::SEMIBOLD)
-                    .text_color(theme.muted_foreground)
-                    .child(label),
+                    .flex_1()
+                    .min_w(px(0.))
+                    .text_sm()
+                    .font_weight(FontWeight::MEDIUM)
+                    .text_color(theme.foreground)
+                    .child(title),
                 ),
             )
             .child(
               div()
                 .px_3()
                 .py_2()
+                .border_t_1()
+                .border_color(theme.border.opacity(0.6))
                 .text_sm()
                 .child(markdown_view_with_label_headings(
                   ("agent-chat-review-md", idx),

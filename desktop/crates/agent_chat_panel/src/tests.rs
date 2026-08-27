@@ -2681,6 +2681,32 @@ fn review_export_label_counts_sections() {
   );
 }
 
+#[gpui::test]
+async fn review_export_renders_as_a_prompt_card(cx: &mut gpui::TestAppContext) {
+  let (panel, cx) = add_panel_window(cx);
+  panel.update(cx, |panel, cx| {
+    panel.status = Status::Ready;
+    panel.items = vec![ChatItem::Message(ChatMessage {
+      role: ChatRole::ReviewExport,
+      text: "### a.rs:L1 (new side)\nfix this\n".to_string(),
+      images: 0,
+      image_data: Vec::new(),
+    })];
+    panel.sync_list_count();
+    cx.notify();
+  });
+  cx.run_until_parked();
+
+  assert!(
+    cx.debug_bounds("agent-chat-review-card").is_some(),
+    "review exports render as prompt cards"
+  );
+  assert!(
+    cx.debug_bounds("agent-chat-review-header").is_some(),
+    "review exports use the shared card header"
+  );
+}
+
 #[test]
 fn review_export_role_survives_persistence_roundtrip() {
   let message = ChatMessage {
@@ -3488,6 +3514,96 @@ fn update_fields(
   )
 }
 
+fn permission_item_for_subtitle(
+  title: &str,
+  update: ToolCallUpdate,
+  detail: PermissionDetail,
+) -> PermissionItem {
+  PermissionItem {
+    prompt: PermissionPrompt {
+      id: 1,
+      tool_call_title: title.into(),
+      tool_call: update,
+      options: Vec::new(),
+    },
+    detail,
+    resolved: None,
+    auto: false,
+  }
+}
+
+#[test]
+fn permission_header_subtitle_uses_the_tool_kind_for_known_requests() {
+  let command_update = update_fields(
+    ToolCallUpdateFields::new()
+      .kind(ToolKind::Execute)
+      .raw_input(serde_json::json!({ "command": "cargo test" })),
+  );
+  let command_detail = permission_detail(&command_update, test_cwd());
+  let command_item = permission_item_for_subtitle("cargo test", command_update, command_detail);
+  assert_eq!(
+    permission_header_subtitle(&command_item).as_deref(),
+    Some("Terminal command")
+  );
+
+  let fetch_update = update_fields(
+    ToolCallUpdateFields::new()
+      .kind(ToolKind::Fetch)
+      .raw_input(serde_json::json!({ "url": "https://example.com" })),
+  );
+  let fetch_detail = permission_detail(&fetch_update, test_cwd());
+  let fetch_item =
+    permission_item_for_subtitle("Fetch https://example.com", fetch_update, fetch_detail);
+  assert_eq!(
+    permission_header_subtitle(&fetch_item).as_deref(),
+    Some("Network request")
+  );
+}
+
+#[test]
+fn permission_header_subtitle_summarizes_file_requests() {
+  let edit_update = update_fields(
+    ToolCallUpdateFields::new()
+      .kind(ToolKind::Edit)
+      .content(vec![ToolCallContent::Diff(
+        Diff::new("foo.rs", "one\ntwo\n").old_text(Some("one\n".to_string())),
+      )]),
+  );
+  let edit_detail = permission_detail(&edit_update, test_cwd());
+  let edit_item = permission_item_for_subtitle("Edit foo.rs", edit_update, edit_detail);
+  assert_eq!(
+    permission_header_subtitle(&edit_item).as_deref(),
+    Some("File edit")
+  );
+
+  let read_update = update_fields(
+    ToolCallUpdateFields::new()
+      .kind(ToolKind::Read)
+      .locations(vec![ToolCallLocation::new("secret.rs")]),
+  );
+  let read_detail = permission_detail(&read_update, test_cwd());
+  let read_item = permission_item_for_subtitle("Read secret.rs", read_update, read_detail);
+  assert_eq!(
+    permission_header_subtitle(&read_item).as_deref(),
+    Some("File read")
+  );
+}
+
+#[test]
+fn permission_header_subtitle_keeps_unknown_request_titles() {
+  let update = update_fields(
+    ToolCallUpdateFields::new()
+      .kind(ToolKind::Other)
+      .raw_input(serde_json::json!({ "table": "users" })),
+  );
+  let detail = permission_detail(&update, test_cwd());
+  let item = permission_item_for_subtitle("Query users table", update, detail);
+  assert_eq!(
+    permission_header_subtitle(&item).as_deref(),
+    Some("Query users table")
+  );
+}
+
 #[test]
 fn permission_detail_extracts_the_command_of_a_run() {
   let update = update_fields(
@@ -3562,11 +3678,23 @@ async fn the_permission_card_shows_the_command_being_approved(cx: &mut gpui::Tes
           id: 7,
           tool_call_title: "Run cargo build".into(),
           tool_call: update,
-          options: vec![PermissionPromptOption {
-            option_id: "allow".into(),
-            label: "Allow".into(),
-            kind: PermissionOptionKind::AllowOnce,
-          }],
+          options: vec![
+            PermissionPromptOption {
+              option_id: "reject".into(),
+              label: "Deny".into(),
+              kind: PermissionOptionKind::RejectOnce,
+            },
+            PermissionPromptOption {
+              option_id: "allow-always".into(),
+              label: "Always Allow".into(),
+              kind: PermissionOptionKind::AllowAlways,
+            },
+            PermissionPromptOption {
+              option_id: "allow".into(),
+              label: "Allow Once".into(),
+              kind: PermissionOptionKind::AllowOnce,
+            },
+          ],
         },
         detail,
         resolved: None,
@@ -3579,8 +3707,61 @@ async fn the_permission_card_shows_the_command_being_approved(cx: &mut gpui::Tes
   cx.run_until_parked();
 
   assert!(
+    cx.debug_bounds("perm-card").is_some(),
+    "the permission card uses the review layout"
+  );
+  assert!(
+    cx.debug_bounds("perm-header").is_some(),
+    "the permission header is painted"
+  );
+  assert!(
+    cx.debug_bounds("perm-actions").is_some(),
+    "the permission actions are grouped on the card"
+  );
+  assert!(
+    cx.debug_bounds("perm-status-pill").is_some(),
+    "unanswered permissions show the awaiting approval tag"
+  );
+  assert!(
     cx.debug_bounds("perm-invocation").is_some(),
     "the command is painted on the card"
+  );
+}
+
+#[gpui::test]
+async fn the_answered_permission_card_shows_a_status_row(cx: &mut gpui::TestAppContext) {
+  let (panel, cx) = add_panel_window(cx);
+  panel.update(cx, |panel, cx| {
+    panel.status = Status::Ready;
+    let update = update_fields(
+      ToolCallUpdateFields::new()
+        .kind(ToolKind::Execute)
+        .raw_input(serde_json::json!({ "command": "cargo build" })),
+    );
+    let detail = permission_detail(&update, std::path::Path::new("."));
+    panel.items = vec![ChatItem::Permission(Box::new(PermissionItem {
+      prompt: PermissionPrompt {
+        id: 8,
+        tool_call_title: "Run cargo build".into(),
+        tool_call: update,
+        options: vec![PermissionPromptOption {
+          option_id: "reject".into(),
+          label: "Deny".into(),
+          kind: PermissionOptionKind::RejectOnce,
+        }],
+      },
+      detail,
+      resolved: Some("reject".into()),
+      auto: false,
+    }))];
+    panel.sync_list_count();
+    cx.notify();
+  });
+  cx.run_until_parked();
+
+  assert!(
+    cx.debug_bounds("perm-status").is_some(),
+    "answered permission cards show the outcome"
   );
 }
 

@@ -57,13 +57,14 @@ use gpui::{
   Styled, Task, TextRun, Window, deferred, div, prelude::*, px,
 };
 use gpui_component::{
-  ActiveTheme as _, Disableable as _, IconName, Sizable as _,
+  ActiveTheme as _, ColorName, Disableable as _, IconName, Sizable as _,
   button::{Button, ButtonVariants as _},
   clipboard::Clipboard,
   h_flex,
   input::{self, InputEvent, Textarea, TextareaState},
   menu::{DropdownMenu as _, PopupMenuItem},
   scroll::ScrollableElement as _,
+  tag::Tag,
   text::{TextView, TextViewStyle},
   v_flex,
 };
