@@ -465,7 +465,7 @@ impl Render for SessionList {
       .child(
         Button::new("session-sidebar-collapse")
           .debug_selector(|| "session-sidebar-collapse".to_string())
-          .icon(gpui_component::IconName::PanelLeftClose)
+          .icon(gpui_component::IconName::PanelLeft)
           .ghost()
           .compact()
           .small()

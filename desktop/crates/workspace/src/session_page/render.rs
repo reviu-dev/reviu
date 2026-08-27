@@ -849,11 +849,7 @@ impl SessionPage {
     let mut rail = v_flex().items_center().gap_1().pt_2().w_full().child(
       Self::rail_button(
         "dock-rail-toggle",
-        gpui_component::Icon::new(if self.dock_open {
-          gpui_component::IconName::PanelRightClose
-        } else {
-          gpui_component::IconName::PanelRightOpen
-        }),
+        gpui_component::Icon::new(gpui_component::IconName::PanelRight),
         if self.dock_open {
           "Close panel"
         } else {
@@ -927,7 +923,7 @@ impl SessionPage {
           .child(
             Self::rail_button(
               "sidebar-rail-open",
-              gpui_component::Icon::new(gpui_component::IconName::PanelLeftOpen),
+              gpui_component::Icon::new(gpui_component::IconName::PanelLeft),
               "Open sidebar",
             )
             .on_click(cx.listener(|this, _, _, cx| this.open_sidebar(cx))),
