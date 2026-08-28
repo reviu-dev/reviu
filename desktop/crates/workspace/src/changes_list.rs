@@ -160,6 +160,7 @@ pub(crate) struct ChangesRowsDelegate {
   sections: Vec<ChangesSection>,
   split_sections: bool,
   selected_index: Option<IndexPath>,
+  hovered_index: Option<IndexPath>,
   opened_path: Option<PathBuf>,
   list: WeakEntity<ChangesList>,
 }
@@ -171,6 +172,7 @@ impl ChangesRowsDelegate {
       sections: Vec::new(),
       split_sections,
       selected_index: None,
+      hovered_index: None,
       opened_path: None,
       list,
     }
@@ -243,6 +245,19 @@ impl ChangesRowsDelegate {
       .get(ix.section)
       .and_then(|section| section.rows.get(ix.row).cloned())
   }
+
+  fn shows_row_actions(&self, ix: IndexPath) -> bool {
+    row_actions_visible(self.selected_index, self.hovered_index, ix, cfg!(test))
+  }
+}
+
+fn row_actions_visible(
+  _selected_index: Option<IndexPath>,
+  hovered_index: Option<IndexPath>,
+  ix: IndexPath,
+  force_visible: bool,
+) -> bool {
+  force_visible || hovered_index == Some(ix)
 }
 
 impl ListDelegate for ChangesRowsDelegate {
@@ -307,21 +322,40 @@ impl ListDelegate for ChangesRowsDelegate {
       base = base.bg(theme.sidebar_accent.opacity(0.35));
     }
     // A partially staged file is painted twice, so the section is part of the id.
-    base = base.debug_selector(move || format!("changes-row-{}-{}", ix.section, ix.row));
+    let list_state = cx.entity().downgrade();
+    base = base
+      .debug_selector(move || format!("changes-row-{}-{}", ix.section, ix.row))
+      .on_hover(move |is_hovered, _, cx| {
+        let _ = list_state.update(cx, |state, cx| {
+          let delegate = state.delegate_mut();
+          let hovered_index = if *is_hovered {
+            Some(ix)
+          } else {
+            delegate.hovered_index.filter(|hovered| hovered != &ix)
+          };
+          if delegate.hovered_index != hovered_index {
+            delegate.hovered_index = hovered_index;
+            cx.notify();
+          }
+        });
+      });
 
     let status_kind = entry.status;
     let path = entry.path.clone();
+    let show_row_actions = self.shows_row_actions(ix);
     let (stage_icon, stage_color, stage_tooltip) = stage_style(entry.stage, &theme);
-    let stage_element: AnyElement = {
-      let icon = Icon::new(stage_icon).size_3().text_color(stage_color);
+    let stage_icon = Icon::new(stage_icon).size_3().text_color(stage_color);
+    let stage_element: AnyElement = if show_row_actions {
       match stage_tooltip {
         Some(tooltip) => div()
           .id(("changes-stage-icon", ix.row))
           .tooltip(move |window, cx| Tooltip::new(tooltip.clone()).build(window, cx))
-          .child(icon)
+          .child(stage_icon)
           .into_any_element(),
-        None => div().child(icon).into_any_element(),
+        None => div().child(stage_icon).into_any_element(),
       }
+    } else {
+      div().child(stage_icon).into_any_element()
     };
 
     let file_icon = file_icon_path_for_path_with_theme(&path, &theme)
@@ -339,19 +373,89 @@ impl ListDelegate for ChangesRowsDelegate {
       });
 
     let (dir, file) = split_path_label(&path);
-    let is_staged_section = self
-      .sections
-      .get(ix.section)
-      .map(|section| section.is_staged)
-      .unwrap_or(false);
-    let toggle = toggle_stage_action(entry.stage, self.split_sections, is_staged_section);
-    let (toggle_icon, toggle_tooltip) = match toggle {
-      FileStageButtonAction::Stage => (IconName::Plus, "Stage file"),
-      FileStageButtonAction::Unstage => (IconName::Minus, "Unstage file"),
+    let status_element: AnyElement = {
+      let status = div()
+        .id(("changes-status-letter", ix.row))
+        .w(px(15.))
+        .min_w(px(15.))
+        .text_xs()
+        .text_color(status_color(status_kind, &theme))
+        .child(status_kind.short_code());
+      if show_row_actions {
+        let status_tip = status_tooltip(status_kind);
+        status
+          .tooltip(move |window, cx| Tooltip::new(status_tip.clone()).build(window, cx))
+          .into_any_element()
+      } else {
+        status.into_any_element()
+      }
     };
-    let restorable = can_restore(entry.stage);
-    let status_tip = status_tooltip(status_kind);
-    let list = self.list.clone();
+    let row_actions = show_row_actions.then(|| {
+      let is_staged_section = self
+        .sections
+        .get(ix.section)
+        .map(|section| section.is_staged)
+        .unwrap_or(false);
+      let toggle = toggle_stage_action(entry.stage, self.split_sections, is_staged_section);
+      let (toggle_icon, toggle_tooltip) = match toggle {
+        FileStageButtonAction::Stage => (IconName::Plus, "Stage file"),
+        FileStageButtonAction::Unstage => (IconName::Minus, "Unstage file"),
+      };
+      let restorable = can_restore(entry.stage);
+      let list = self.list.clone();
+      let path = path.clone();
+      div()
+        .absolute()
+        .right_0()
+        .bg(theme.sidebar)
+        .rounded(theme.radius)
+        .child(
+          ButtonGroup::new(("changes-row-actions", ix.row))
+            .outline()
+            .child(
+              Button::new(("changes-stage", ix.row))
+                .debug_selector(move || format!("changes-stage-{}-{}", ix.section, ix.row))
+                .icon(toggle_icon)
+                .xsmall()
+                .tab_stop(false)
+                .tooltip(toggle_tooltip)
+                .on_click({
+                  let list = list.clone();
+                  let path = path.clone();
+                  move |_, window, cx| {
+                    cx.stop_propagation();
+                    let _ = list.update(cx, |list, cx| match toggle {
+                      FileStageButtonAction::Stage => {
+                        list.stage_file_with_confirmation(path.clone(), status_kind, window, cx)
+                      }
+                      FileStageButtonAction::Unstage => list.unstage_file(path.clone(), window, cx),
+                    });
+                  }
+                }),
+            )
+            .when(restorable, |this| {
+              this.child(
+                Button::new(("changes-restore", ix.row))
+                  .debug_selector(move || format!("changes-restore-{}-{}", ix.section, ix.row))
+                  .icon(IconName::Undo)
+                  .xsmall()
+                  .tab_stop(false)
+                  .tooltip("Discard changes")
+                  .on_click({
+                    let list = list.clone();
+                    let path = path.clone();
+                    move |_, window, cx| {
+                      cx.stop_propagation();
+                      let _ = list.update(cx, |list, cx| {
+                        list.confirm_restore_file(path.clone(), status_kind, window, cx);
+                      });
+                    }
+                  }),
+              )
+            }),
+        )
+        .into_any_element()
+    });
 
     Some(
       base.px_2().py_1().child(
@@ -366,16 +470,7 @@ impl ListDelegate for ChangesRowsDelegate {
               .items_center()
               .min_w_0()
               .gap_2()
-              .child(
-                div()
-                  .id(("changes-status-letter", ix.row))
-                  .w(px(15.))
-                  .min_w(px(15.))
-                  .text_xs()
-                  .text_color(status_color(status_kind, &theme))
-                  .tooltip(move |window, cx| Tooltip::new(status_tip.clone()).build(window, cx))
-                  .child(status_kind.short_code()),
-              )
+              .child(status_element)
               .child(stage_element)
               .child(file_icon)
               .child(
@@ -404,67 +499,7 @@ impl ListDelegate for ChangesRowsDelegate {
                   ),
               ),
           )
-          .child(
-            div()
-              .absolute()
-              .right_0()
-              .opacity(0.0)
-              .group_hover("changes-row", |this| this.opacity(1.0))
-              .bg(theme.sidebar)
-              .rounded(theme.radius)
-              .child(
-                ButtonGroup::new(("changes-row-actions", ix.row))
-                  .outline()
-                  .child(
-                    Button::new(("changes-stage", ix.row))
-                      .debug_selector(move || format!("changes-stage-{}-{}", ix.section, ix.row))
-                      .icon(toggle_icon)
-                      .xsmall()
-                      .tab_stop(false)
-                      .tooltip(toggle_tooltip)
-                      .on_click({
-                        let list = list.clone();
-                        let path = path.clone();
-                        move |_, window, cx| {
-                          cx.stop_propagation();
-                          let _ = list.update(cx, |list, cx| match toggle {
-                            FileStageButtonAction::Stage => list.stage_file_with_confirmation(
-                              path.clone(),
-                              status_kind,
-                              window,
-                              cx,
-                            ),
-                            FileStageButtonAction::Unstage => {
-                              list.unstage_file(path.clone(), window, cx)
-                            }
-                          });
-                        }
-                      }),
-                  )
-                  .when(restorable, |this| {
-                    this.child(
-                      Button::new(("changes-restore", ix.row))
-                        .debug_selector(move || {
-                          format!("changes-restore-{}-{}", ix.section, ix.row)
-                        })
-                        .icon(IconName::Undo)
-                        .xsmall()
-                        .tab_stop(false)
-                        .tooltip("Discard changes")
-                        .on_click({
-                          let list = list.clone();
-                          let path = path.clone();
-                          move |_, window, cx| {
-                            cx.stop_propagation();
-                            let _ = list.update(cx, |list, cx| {
-                              list.confirm_restore_file(path.clone(), status_kind, window, cx);
-                            });
-                          }
-                        }),
-                    )
-                  }),
-              ),
-          ),
+          .children(row_actions),
       ),
     )
   }
@@ -922,6 +957,37 @@ mod tests {
     ] {
       assert!(!restore_uses_delete(status));
     }
+  }
+
+  #[test]
+  fn row_actions_only_render_for_the_active_row() {
+    let first = IndexPath {
+      section: 0,
+      row: 0,
+      column: 0,
+    };
+    let second = IndexPath {
+      section: 0,
+      row: 1,
+      column: 0,
+    };
+
+    assert!(!row_actions_visible(None, None, first, false));
+    assert!(!row_actions_visible(Some(first), None, first, false));
+    assert!(row_actions_visible(None, Some(first), first, false));
+    assert!(!row_actions_visible(
+      Some(second),
+      Some(second),
+      first,
+      false
+    ));
+    assert!(!row_actions_visible(
+      Some(first),
+      Some(second),
+      first,
+      false
+    ));
+    assert!(row_actions_visible(None, None, first, true));
   }
 
   #[test]
