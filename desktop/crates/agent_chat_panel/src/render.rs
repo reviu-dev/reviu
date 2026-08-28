@@ -1563,16 +1563,17 @@ impl Render for AgentChatPanel {
       && self.extras_before_kinds().is_empty()
       && matches!(self.status, Status::Ready | Status::Connecting);
     let empty_state = if show_empty_state {
-      let brand_icon = crate::backend_icon(&self.backend_kind);
+      let brand_icon = crate::backend_icon(&self.backend_kind)
+        .large()
+        .text_color(theme.muted_foreground);
+      let brand_icon = div()
+        .debug_selector(|| "agent-chat-empty-state-icon".to_string())
+        .child(brand_icon);
       let content = if connecting {
         v_flex()
           .items_center()
           .gap_3()
-          .child(
-            gpui_component::Icon::new(brand_icon)
-              .large()
-              .text_color(theme.muted_foreground),
-          )
+          .child(brand_icon)
           .child(
             div()
               .text_sm()
@@ -1585,7 +1586,7 @@ impl Render for AgentChatPanel {
         v_flex()
           .items_center()
           .gap_2()
-          .child(gpui_component::Icon::new(UiIconName::Sparkles).text_color(theme.muted_foreground))
+          .child(brand_icon)
           .child(
             div()
               .text_sm()

@@ -3439,6 +3439,27 @@ async fn connecting_panel_shows_loading_controls(cx: &mut gpui::TestAppContext) 
 }
 
 #[gpui::test]
+async fn ready_empty_state_uses_the_connecting_agent_icon_size(cx: &mut gpui::TestAppContext) {
+  let (panel, cx) = add_panel_window(cx);
+  cx.run_until_parked();
+  let connecting_icon = cx
+    .debug_bounds("agent-chat-empty-state-icon")
+    .expect("connecting empty state icon painted");
+
+  panel.update(cx, |panel, cx| {
+    panel.status = Status::Ready;
+    cx.notify();
+  });
+  cx.run_until_parked();
+
+  let ready_icon = cx
+    .debug_bounds("agent-chat-empty-state-icon")
+    .expect("ready empty state icon painted");
+  assert_eq!(ready_icon.size.width, connecting_icon.size.width);
+  assert_eq!(ready_icon.size.height, connecting_icon.size.height);
+}
+
+#[gpui::test]
 async fn secondary_options_render_as_one_config_button(cx: &mut gpui::TestAppContext) {
   let (panel, cx) = add_panel_window(cx);
   panel.update(cx, |panel, cx| {
