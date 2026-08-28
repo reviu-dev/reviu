@@ -388,12 +388,20 @@ impl ListDelegate for ChangesRowsDelegate {
                   .when(!dir.is_empty(), |this| {
                     this.child(
                       div()
+                        .min_w_0()
+                        .overflow_hidden()
+                        .whitespace_nowrap()
+                        .text_ellipsis_start()
                         .text_color(theme.muted_foreground)
-                        .truncate()
                         .child(dir),
                     )
                   })
-                  .child(div().text_color(theme.foreground).child(file)),
+                  .child(
+                    div()
+                      .flex_shrink_0()
+                      .text_color(theme.foreground)
+                      .child(file),
+                  ),
               ),
           )
           .child(
