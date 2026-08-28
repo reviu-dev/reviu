@@ -507,6 +507,19 @@ pub(crate) struct PullRequestRange {
   pub head_ref: String,
 }
 
+struct PullRequestRangeLoad {
+  range: PullRequestRange,
+  files: Vec<git::CommitChangedFile>,
+  conversation: Option<PullRequestConversationLoad>,
+  author_login: String,
+  pull_request_node_id: String,
+}
+
+struct PullRequestConversationLoad {
+  reviewers: Vec<ReviewerRow>,
+  review_comments: Vec<GithubPullRequestReviewComment>,
+}
+
 /// The commits of a pull request may not be in the local object database yet.
 /// A fetch is the whole precondition: no checkout, and no file content over the
 /// network.
@@ -1142,28 +1155,28 @@ impl DockPanel {
             head_ref: details.head_ref_name.clone(),
           };
           let files = list_pull_request_files(&repo_root, &range)?;
-          let conversation = api.fetch_pull_request_conversation(&owner, &repo, number);
-          let (reviews, review_comments, node_id) = match conversation {
-            Ok(conversation) => (
-              conversation.reviews,
-              conversation.review_comments,
-              Some(conversation.pull_request.node_id),
+          let conversation = api
+            .fetch_pull_request_conversation(&owner, &repo, number)
+            .ok();
+          let pull_request_node_id = conversation
+            .as_ref()
+            .map(|conversation| conversation.pull_request.node_id.clone())
+            .unwrap_or_else(|| details.node_id.clone());
+          let conversation = conversation.map(|conversation| PullRequestConversationLoad {
+            reviewers: reviewer_rows(
+              &details.requested_reviewers,
+              &conversation.reviews,
+              &details.author.login,
             ),
-            Err(_) => (Vec::new(), Vec::new(), None),
-          };
-          let reviewers = reviewer_rows(
-            &details.requested_reviewers,
-            &reviews,
-            &details.author.login,
-          );
-          anyhow::Ok((
+            review_comments: conversation.review_comments,
+          });
+          anyhow::Ok(PullRequestRangeLoad {
             range,
             files,
-            reviewers,
-            review_comments,
-            details.author.login.clone(),
-            node_id,
-          ))
+            conversation,
+            author_login: details.author.login.clone(),
+            pull_request_node_id,
+          })
         })
         .await;
 
@@ -1171,14 +1184,8 @@ impl DockPanel {
         this.pr_refresh_pending = this.pr_refresh_pending.saturating_sub(1);
         this.pr_files_loading = false;
         match loaded {
-          Ok((range, files, reviewers, review_comments, author_login, node_id)) => {
-            this.pr_range = Some(range);
-            this.set_pr_files(files, cx);
-            this.pr_reviewers = reviewers;
-            this.apply_submitted_review_overlay();
-            this.pr_author_login = Some(author_login);
-            this.pr_node_id = node_id;
-            this.set_pull_request_review_comments(review_comments, cx);
+          Ok(loaded) => {
+            this.apply_pull_request_range_load(loaded, cx);
             crate::sentry_context::sync_github_pr_context(
               &sentry_owner,
               &sentry_repo,
@@ -1199,6 +1206,26 @@ impl DockPanel {
       });
     });
     self._pr_range_task = Some(task);
+  }
+
+  fn apply_pull_request_range_load(
+    &mut self,
+    loaded: PullRequestRangeLoad,
+    cx: &mut Context<Self>,
+  ) {
+    self.pr_range = Some(loaded.range);
+    self.set_pr_files(loaded.files, cx);
+    self.pr_author_login = Some(loaded.author_login);
+    self.pr_node_id = Some(loaded.pull_request_node_id);
+    if let Some(conversation) = loaded.conversation {
+      self.pr_reviewers = conversation.reviewers;
+      self.apply_submitted_review_overlay();
+      self.set_pull_request_review_comments(conversation.review_comments, cx);
+    } else {
+      self
+        .review_list
+        .update(cx, |list, cx| list.set_pull_request_loading(false, cx));
+    }
   }
 
   /// Everything the panel knows about one pull request. Another branch means
@@ -5989,6 +6016,47 @@ mod tests {
       assert!(
         panel.pull_request_review_comments().is_empty(),
         "the comments of #42 say nothing about #43"
+      );
+    });
+  }
+
+  #[gpui::test]
+  async fn a_range_reread_without_conversation_keeps_its_comments(cx: &mut TestAppContext) {
+    let (panel, cx) = a_read_pull_request(cx);
+
+    panel.update(cx, |panel, cx| {
+      panel.apply_pull_request_range_load(
+        PullRequestRangeLoad {
+          range: PullRequestRange {
+            base: "b".repeat(40),
+            head: "h".repeat(40),
+            base_ref: "main".to_string(),
+            head_ref: "feature".to_string(),
+          },
+          files: vec![changed_file(
+            "src/main.rs",
+            git::CommitFileChangeKind::Modified,
+          )],
+          conversation: None,
+          author_login: "octocat".to_string(),
+          pull_request_node_id: "PR_kwDOExample".to_string(),
+        },
+        cx,
+      );
+    });
+
+    panel.read_with(cx, |panel, cx| {
+      assert_eq!(panel.pull_request_review_comments().len(), 1);
+      assert_eq!(panel.pr_node_id.as_deref(), Some("PR_kwDOExample"));
+      assert_eq!(
+        panel
+          .pr_files_list
+          .read(cx)
+          .delegate()
+          .comment_counts
+          .get(Path::new("src/main.rs"))
+          .map(|counts| counts.total),
+        Some(1)
       );
     });
   }

@@ -346,6 +346,22 @@ mod tests {
   }
 
   #[gpui::test]
+  async fn an_agent_review_sync_does_not_clear_pull_request_comments(
+    cx: &mut gpui::TestAppContext,
+  ) {
+    let (_repo, page, cx) = open_pull_request_file(cx).await;
+    set_comment_on(&page, "a.txt", cx);
+    cx.run_until_parked();
+
+    page.update(cx, |page, cx| page.sync_agent_review_comments_to_editor(cx));
+
+    page.read_with(cx, |page, cx| {
+      let editor = page.editor.as_ref().expect("editor").read(cx);
+      assert_eq!(editor.review_comment_ids(), vec![1]);
+    });
+  }
+
+  #[gpui::test]
   async fn leaving_a_commented_file_and_coming_back_keeps_its_comments(
     cx: &mut gpui::TestAppContext,
   ) {

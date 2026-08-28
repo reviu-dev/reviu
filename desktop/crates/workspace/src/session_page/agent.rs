@@ -841,7 +841,11 @@ impl SessionPage {
   }
 
   pub(super) fn sync_agent_review_comments_to_editor(&mut self, cx: &mut Context<Self>) {
-    let editor = self.editor.clone();
+    let editor = self
+      .opened_snapshot
+      .is_none()
+      .then(|| self.editor.clone())
+      .flatten();
     sync_comments_to_editor(
       &self.agent_review,
       editor.as_ref(),
