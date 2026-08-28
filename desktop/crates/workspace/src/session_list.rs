@@ -177,9 +177,22 @@ impl SessionList {
     }
   }
 
+  pub(crate) fn contains_conversation(&self, id: &str) -> bool {
+    self.conversations.iter().any(|row| row.meta.id == id)
+  }
+
   #[cfg(test)]
   pub(crate) fn status_of(&self, id: &str) -> SessionStatus {
     self.statuses.get(id).copied().unwrap_or_default()
+  }
+
+  #[cfg(test)]
+  pub(crate) fn agent_id_of(&self, id: &str) -> Option<String> {
+    self
+      .conversations
+      .iter()
+      .find(|row| row.meta.id == id)
+      .map(|row| row.meta.agent_id.to_string())
   }
 
   #[cfg(test)]

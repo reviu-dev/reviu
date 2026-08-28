@@ -2136,6 +2136,46 @@ mod tests {
   }
 
   #[gpui::test]
+  async fn switching_agent_updates_an_existing_blank_sidebar_row(cx: &mut TestAppContext) {
+    let (_repo, page, cx) = page_with_agent_panel("session-page-blank-agent-icon", cx).await;
+    let panel = active_panel(&page, cx);
+    let current_id = panel.read_with(cx, |panel, _| panel.current_conversation().id.clone());
+
+    page.update(cx, |page, cx| {
+      let row = {
+        let panel = page
+          .agent_chat_view
+          .as_ref()
+          .expect("active panel")
+          .read(cx);
+        crate::session_list::SessionRow {
+          repo_root: panel.repo_root().to_path_buf(),
+          meta: panel.current_conversation().clone(),
+        }
+      };
+      page.session_list.update(cx, |list, cx| {
+        list.set_conversations(vec![row], current_id.clone(), cx);
+      });
+    });
+
+    panel.update(cx, |panel, cx| {
+      panel.switch_backend(agent_registry::AgentId::new("pi-acp"), cx)
+    });
+    cx.run_until_parked();
+
+    page.read_with(cx, |page, cx| {
+      assert_eq!(
+        page
+          .session_list
+          .read(cx)
+          .agent_id_of(&current_id)
+          .as_deref(),
+        Some("pi-acp")
+      );
+    });
+  }
+
+  #[gpui::test]
   async fn switching_sessions_parks_the_panel_and_brings_it_back(cx: &mut TestAppContext) {
     let (_repo, page, cx) = page_with_agent_panel("session-page-park-revive", cx).await;
 

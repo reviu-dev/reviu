@@ -593,9 +593,12 @@ impl SessionPage {
     let panel = panel.read(cx);
     let current_id = panel.current_conversation().id.clone();
     let loading_id = panel.loading_conversation_id().map(str::to_string);
+    let existing_current_row = self
+      .session_list
+      .read(cx)
+      .contains_conversation(&current_id);
     // An empty draft is not on disk; the sidebar must not invent a row for it.
-    let current = panel
-      .has_persistable_content()
+    let current = (panel.has_persistable_content() || existing_current_row)
       .then(|| panel.current_conversation().clone());
     let current = current.map(|meta| crate::session_list::SessionRow {
       repo_root: panel.repo_root().to_path_buf(),
