@@ -1873,13 +1873,23 @@ impl Render for AgentChatPanel {
                           cx.stop_propagation();
                         }
                       }))
-                      .capture_action(cx.listener(|panel, _: &input::MoveUp, _, cx| {
-                        panel.slash_on_move(-1, cx);
-                        panel.mention_on_move(-1, cx);
+                      .capture_action(cx.listener(|panel, _: &input::MoveUp, window, cx| {
+                        if panel.slash_snapshot(cx).is_some() {
+                          panel.slash_on_move(-1, cx);
+                        } else if panel.mention_snapshot(cx).is_some() {
+                          panel.mention_on_move(-1, cx);
+                        } else {
+                          panel.browse_composer_history(-1, window, cx);
+                        }
                       }))
-                      .capture_action(cx.listener(|panel, _: &input::MoveDown, _, cx| {
-                        panel.slash_on_move(1, cx);
-                        panel.mention_on_move(1, cx);
+                      .capture_action(cx.listener(|panel, _: &input::MoveDown, window, cx| {
+                        if panel.slash_snapshot(cx).is_some() {
+                          panel.slash_on_move(1, cx);
+                        } else if panel.mention_snapshot(cx).is_some() {
+                          panel.mention_on_move(1, cx);
+                        } else {
+                          panel.browse_composer_history(1, window, cx);
+                        }
                       }))
                       .capture_action(cx.listener(|panel, _: &input::Escape, _, cx| {
                         panel.slash_on_escape(cx);

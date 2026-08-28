@@ -5425,6 +5425,71 @@ async fn typing_enter_mid_turn_queues_the_message(cx: &mut gpui::TestAppContext)
 }
 
 #[gpui::test]
+async fn arrow_keys_browse_sent_prompt_history(cx: &mut gpui::TestAppContext) {
+  let (panel, cx) = add_panel_window(cx);
+  panel.update_in(cx, |panel, window, cx| {
+    panel.status = Status::Ready;
+    panel.items = vec![
+      user_message("first prompt"),
+      agent_message("first answer"),
+      user_message("second prompt"),
+    ];
+    panel.sync_list_count();
+    panel.set_composer_value("draft prompt", window, cx);
+    window.focus(&panel.input.read(cx).focus_handle(cx), cx);
+    cx.notify();
+  });
+  cx.run_until_parked();
+
+  cx.simulate_keystrokes("up");
+  cx.run_until_parked();
+  panel.read_with(cx, |panel, cx| {
+    assert_eq!(panel.input.read(cx).value(), "second prompt");
+  });
+
+  cx.simulate_keystrokes("up");
+  cx.run_until_parked();
+  panel.read_with(cx, |panel, cx| {
+    assert_eq!(panel.input.read(cx).value(), "first prompt");
+  });
+
+  cx.simulate_keystrokes("down");
+  cx.run_until_parked();
+  panel.read_with(cx, |panel, cx| {
+    assert_eq!(panel.input.read(cx).value(), "second prompt");
+  });
+
+  cx.simulate_keystrokes("down");
+  cx.run_until_parked();
+  panel.read_with(cx, |panel, cx| {
+    assert_eq!(panel.input.read(cx).value(), "draft prompt");
+  });
+}
+
+#[gpui::test]
+async fn arrow_up_inside_multiline_composer_moves_the_cursor(cx: &mut gpui::TestAppContext) {
+  let (panel, cx) = add_panel_window(cx);
+  panel.update_in(cx, |panel, window, cx| {
+    panel.status = Status::Ready;
+    panel.items = vec![user_message("history prompt")];
+    panel.sync_list_count();
+    panel.set_composer_value("top\nbottom", window, cx);
+    window.focus(&panel.input.read(cx).focus_handle(cx), cx);
+    cx.notify();
+  });
+  cx.run_until_parked();
+
+  cx.simulate_keystrokes("up");
+  cx.run_until_parked();
+
+  panel.read_with(cx, |panel, cx| {
+    let input = panel.input.read(cx);
+    assert_eq!(input.value(), "top\nbottom");
+    assert_eq!(input.cursor_position(cx).line, 0);
+  });
+}
+
+#[gpui::test]
 async fn queued_messages_stack_behind_the_composer(cx: &mut gpui::TestAppContext) {
   let (panel, cx) = add_panel_window(cx);
   panel.update(cx, |panel, cx| {

@@ -804,6 +804,8 @@ pub struct AgentChatPanel {
   pending_thought: String,
   /// Messages typed during a turn, drained oldest-first when it ends cleanly.
   queued_prompts: Vec<String>,
+  composer_history_index: Option<usize>,
+  composer_history_draft: Option<String>,
   /// Whether the connected agent accepts image blocks in prompts.
   supports_images: bool,
   /// Whether the connected agent can take a message mid-turn.
@@ -921,6 +923,8 @@ impl AgentChatPanel {
       pending_agent: String::new(),
       pending_thought: String::new(),
       queued_prompts: Vec::new(),
+      composer_history_index: None,
+      composer_history_draft: None,
       supports_images: false,
       supports_steering: false,
       staged_images: Vec::new(),
@@ -1085,13 +1089,97 @@ impl AgentChatPanel {
 
   /// Fills the composer with the stored draft of the current conversation.
   fn restore_draft(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    self.reset_composer_history();
     let draft = self
       .store
       .as_ref()
       .and_then(|store| store.read(cx).draft(&self.current_conv.id))
       .unwrap_or_default();
-    let input = self.input.clone();
-    input.update(cx, |state, cx| state.set_value(&draft, window, cx));
+    self.set_composer_value(&draft, window, cx);
+  }
+
+  fn reset_composer_history(&mut self) {
+    self.composer_history_index = None;
+    self.composer_history_draft = None;
+  }
+
+  fn sent_prompt_history(&self) -> Vec<String> {
+    self
+      .items
+      .iter()
+      .filter_map(|item| match item {
+        ChatItem::Message(message) if message.role == ChatRole::User => Some(message.text.clone()),
+        _ => None,
+      })
+      .collect()
+  }
+
+  fn set_composer_value(&self, text: &str, window: &mut Window, cx: &mut Context<Self>) {
+    let line = text.matches('\n').count() as u32;
+    let character = text.rsplit('\n').next().unwrap_or_default().chars().count() as u32;
+    self.input.update(cx, |state, cx| {
+      let base = state.base_state().clone();
+      state.set_value(text, window, cx);
+      base.update(cx, |base, cx| {
+        base.set_cursor_position(input::Position::new(line, character), window, cx);
+      });
+    });
+  }
+
+  fn browse_composer_history(&mut self, delta: i32, window: &mut Window, cx: &mut Context<Self>) {
+    let (value, at_history_edge) = {
+      let input = self.input.read(cx);
+      if !input.base_state().read(cx).selected_value().is_empty() {
+        return;
+      }
+      let value = input.value().to_string();
+      let cursor_line = input.cursor_position(cx).line;
+      let at_history_edge = if delta < 0 {
+        value.is_empty() || cursor_line == 0
+      } else {
+        let last_line = value.matches('\n').count() as u32;
+        self.composer_history_index.is_some() && cursor_line >= last_line
+      };
+      (value, at_history_edge)
+    };
+
+    if !at_history_edge {
+      return;
+    }
+
+    let history = self.sent_prompt_history();
+    if history.is_empty() {
+      return;
+    }
+
+    let next_index = if delta < 0 {
+      match self.composer_history_index {
+        Some(0) => 0,
+        Some(index) => index - 1,
+        None => {
+          self.composer_history_draft = Some(value);
+          history.len() - 1
+        }
+      }
+    } else {
+      let Some(index) = self.composer_history_index else {
+        return;
+      };
+      if index + 1 >= history.len() {
+        let draft = self.composer_history_draft.take().unwrap_or_default();
+        self.composer_history_index = None;
+        self.set_composer_value(&draft, window, cx);
+        self.schedule_draft_save(cx);
+        cx.stop_propagation();
+        return;
+      }
+      index + 1
+    };
+
+    self.composer_history_index = Some(next_index);
+    self.set_composer_value(&history[next_index], window, cx);
+    self.schedule_draft_save(cx);
+    cx.stop_propagation();
   }
 
   /// Replaces the in-memory conversation with a hydrated one; buffers and
@@ -1107,6 +1195,7 @@ impl AgentChatPanel {
     self.pending_agent.clear();
     self.pending_md_state = None;
     self.pending_thought.clear();
+    self.reset_composer_history();
     self.clear_runway();
     self.sync_list_count();
     // The splice above may keep heights measured on the previous
@@ -1149,8 +1238,10 @@ impl AgentChatPanel {
             this.submit(window, cx);
           }
         }
-        // Sending clears the input, which lands here too and drops the draft.
-        InputEvent::Change => this.schedule_draft_save(cx),
+        InputEvent::Change => {
+          this.reset_composer_history();
+          this.schedule_draft_save(cx);
+        }
         _ => {}
       },
     );
@@ -1431,6 +1522,8 @@ impl AgentChatPanel {
       pending_agent: String::new(),
       pending_thought: String::new(),
       queued_prompts: Vec::new(),
+      composer_history_index: None,
+      composer_history_draft: None,
       supports_images: false,
       supports_steering: false,
       staged_images: Vec::new(),
@@ -2235,6 +2328,7 @@ impl AgentChatPanel {
     if text.is_empty() {
       return;
     }
+    self.reset_composer_history();
     // Mid-turn, the message queues instead of being refused.
     if self.in_flight {
       self.queued_prompts.push(text);
@@ -2265,6 +2359,7 @@ impl AgentChatPanel {
     if text.is_empty() {
       return;
     }
+    self.reset_composer_history();
     if self.steer_prompt(text, cx) {
       self
         .input
@@ -2385,9 +2480,8 @@ impl AgentChatPanel {
     } else {
       std::mem::replace(&mut self.queued_prompts[ix], draft)
     };
-    self.input.update(cx, |state, cx| {
-      state.set_value(&text, window, cx);
-    });
+    self.reset_composer_history();
+    self.set_composer_value(&text, window, cx);
     self.schedule_draft_save(cx);
     window.focus(&self.input.read(cx).focus_handle(cx), cx);
     cx.notify();
