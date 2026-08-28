@@ -1558,60 +1558,7 @@ impl Render for AgentChatPanel {
       format!("{used_k:.1}k / {size_k:.0}k").into()
     });
 
-    let connecting = matches!(self.status, Status::Connecting);
-    let show_empty_state = self.items.is_empty()
-      && self.extras_before_kinds().is_empty()
-      && matches!(self.status, Status::Ready | Status::Connecting);
-    let empty_state = if show_empty_state {
-      let brand_icon = crate::backend_icon(&self.backend_kind)
-        .large()
-        .text_color(theme.muted_foreground);
-      let brand_icon = div()
-        .debug_selector(|| "agent-chat-empty-state-icon".to_string())
-        .child(brand_icon);
-      let content = if connecting {
-        v_flex()
-          .items_center()
-          .gap_3()
-          .child(brand_icon)
-          .child(
-            div()
-              .text_sm()
-              .text_color(theme.muted_foreground)
-              .child(format!("Connecting to {}...", self.backend.label)),
-          )
-          .opacity(pulse_opacity(0.4, 1.0))
-          .into_any_element()
-      } else {
-        v_flex()
-          .items_center()
-          .gap_2()
-          .child(brand_icon)
-          .child(
-            div()
-              .text_sm()
-              .text_color(theme.muted_foreground)
-              .child(format!("Start a conversation with {}", self.backend.label)),
-          )
-          .child(
-            div()
-              .text_xs()
-              .text_color(theme.muted_foreground)
-              .child("Send a message below to begin."),
-          )
-          .into_any_element()
-      };
-      Some(
-        v_flex()
-          .flex_1()
-          .min_h_0()
-          .items_center()
-          .justify_center()
-          .child(content),
-      )
-    } else {
-      None
-    };
+    let center_state = self.render_center_state(theme, cx);
 
     div()
       .flex()
@@ -1632,13 +1579,7 @@ impl Render for AgentChatPanel {
           .border_color(theme.border)
           .child({
             let current = self.backend_kind.clone();
-            let label_suffix = match &self.status {
-              Status::Connecting => "",
-              Status::Error(_) => " (error)",
-              Status::MissingBinary { .. } => " (not installed)",
-              Status::Ready => "",
-            };
-            let label = format!("{}{}", self.backend.label, label_suffix);
+            let label = self.backend.label.clone();
             let brand_icon = crate::backend_icon(&current);
             if !self.can_switch_backend() {
               h_flex()
@@ -1744,8 +1685,8 @@ impl Render for AgentChatPanel {
           ),
       )
       .map(|this| {
-        if let Some(empty_state) = empty_state {
-          this.child(empty_state)
+        if let Some(center_state) = center_state {
+          this.child(center_state)
         } else {
           let entity = cx.entity().clone();
           let messages_list = self.messages_list.clone();
@@ -1946,6 +1887,162 @@ impl Render for AgentChatPanel {
 }
 
 impl AgentChatPanel {
+  fn render_center_state(
+    &mut self,
+    theme: &gpui_component::Theme,
+    cx: &mut Context<Self>,
+  ) -> Option<gpui::AnyElement> {
+    if !self.items.is_empty() {
+      return None;
+    }
+
+    let brand_icon = || {
+      div()
+        .debug_selector(|| "agent-chat-empty-state-icon".to_string())
+        .child(
+          crate::backend_icon(&self.backend_kind)
+            .large()
+            .text_color(theme.muted_foreground),
+        )
+    };
+    let content = match &self.status {
+      Status::Connecting => Some(
+        v_flex()
+          .items_center()
+          .gap_3()
+          .child(brand_icon())
+          .child(
+            div()
+              .text_sm()
+              .text_color(theme.muted_foreground)
+              .child(format!("Connecting to {}...", self.backend.label)),
+          )
+          .opacity(pulse_opacity(0.4, 1.0))
+          .into_any_element(),
+      ),
+      Status::Ready if self.extras_before_kinds().is_empty() => Some(
+        v_flex()
+          .items_center()
+          .gap_2()
+          .child(brand_icon())
+          .child(
+            div()
+              .text_sm()
+              .text_color(theme.muted_foreground)
+              .child(format!("Start a conversation with {}", self.backend.label)),
+          )
+          .child(
+            div()
+              .text_xs()
+              .text_color(theme.muted_foreground)
+              .child("Send a message below to begin."),
+          )
+          .into_any_element(),
+      ),
+      Status::Error(error) => Some(
+        v_flex()
+          .debug_selector(|| "agent-chat-error-state".to_string())
+          .items_center()
+          .gap_3()
+          .max_w(px(420.))
+          .child(
+            div()
+              .p_3()
+              .rounded_full()
+              .bg(theme.danger.opacity(0.08))
+              .child(
+                gpui_component::Icon::new(IconName::TriangleAlert)
+                  .large()
+                  .text_color(theme.danger),
+              ),
+          )
+          .child(
+            div()
+              .text_sm()
+              .font_weight(gpui::FontWeight::SEMIBOLD)
+              .text_color(theme.foreground)
+              .child(format!("Could not connect to {}", self.backend.label)),
+          )
+          .child(
+            div()
+              .text_xs()
+              .text_center()
+              .text_color(theme.muted_foreground)
+              .child(error.clone()),
+          )
+          .child(
+            div()
+              .debug_selector(|| "agent-chat-reconnect".to_string())
+              .child(
+                Button::new("agent-chat-reconnect")
+                  .label("Reconnect")
+                  .small()
+                  .primary()
+                  .on_click(cx.listener(|panel, _, _, cx| panel.respawn_session(cx))),
+              ),
+          )
+          .into_any_element(),
+      ),
+      Status::MissingBinary { command, hint } => Some(
+        v_flex()
+          .debug_selector(|| "agent-chat-missing-binary".to_string())
+          .items_center()
+          .gap_3()
+          .max_w(px(420.))
+          .child(brand_icon())
+          .child(
+            div()
+              .text_sm()
+              .font_weight(gpui::FontWeight::SEMIBOLD)
+              .text_color(theme.foreground)
+              .child(format!("{} is not installed", self.backend.label)),
+          )
+          .child(
+            v_flex()
+              .items_center()
+              .gap_1()
+              .child(
+                div()
+                  .text_xs()
+                  .text_center()
+                  .text_color(theme.muted_foreground)
+                  .child(format!("`{command}` not found on PATH")),
+              )
+              .child(
+                div()
+                  .text_xs()
+                  .text_center()
+                  .text_color(theme.muted_foreground)
+                  .child(hint.clone()),
+              ),
+          )
+          .child(
+            div()
+              .debug_selector(|| "agent-chat-reconnect".to_string())
+              .child(
+                Button::new("agent-chat-reconnect")
+                  .label("Try again")
+                  .small()
+                  .primary()
+                  .on_click(cx.listener(|panel, _, _, cx| panel.respawn_session(cx))),
+              ),
+          )
+          .into_any_element(),
+      ),
+      _ => None,
+    }?;
+
+    Some(
+      v_flex()
+        .flex_1()
+        .min_h_0()
+        .items_center()
+        .justify_center()
+        .child(content)
+        .into_any_element(),
+    )
+  }
+
   /// Messages queued mid-turn, tucked behind the composer.
   fn render_queued_prompts(
     &self,

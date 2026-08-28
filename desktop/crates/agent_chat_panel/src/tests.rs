@@ -5684,6 +5684,10 @@ async fn a_disconnected_panel_offers_reconnect(cx: &mut gpui::TestAppContext) {
   cx.run_until_parked();
 
   assert!(
+    cx.debug_bounds("agent-chat-error-state").is_some(),
+    "the error state is centered"
+  );
+  assert!(
     cx.debug_bounds("agent-chat-reconnect").is_some(),
     "the error state carries a reconnect button"
   );
