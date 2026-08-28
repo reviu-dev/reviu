@@ -1092,6 +1092,26 @@ impl SessionPage {
     Ok(())
   }
 
+  #[cfg(any(test, feature = "test-support"))]
+  #[doc(hidden)]
+  pub fn agent_stats_for_driver(&self, cx: &App) -> serde_json::Value {
+    let active_in_flight = self
+      .agent_chat_view
+      .as_ref()
+      .is_some_and(|panel| panel.read(cx).is_turn_in_flight());
+    let background_in_flight = self
+      .background_chat_panels
+      .iter()
+      .filter(|(_, panel)| panel.read(cx).is_turn_in_flight())
+      .count();
+    serde_json::json!({
+      "active_in_flight": active_in_flight,
+      "background_count": self.background_chat_panels.len(),
+      "background_in_flight": background_in_flight,
+      "total_in_flight": background_in_flight + usize::from(active_in_flight),
+    })
+  }
+
   /// The shortcut of a tab means "take me there". It only means "get out of the
   /// way" when the keyboard is already in that surface, which is what lets it
   /// bring you back from the editor.

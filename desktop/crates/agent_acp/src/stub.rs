@@ -184,6 +184,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
           }
           if prompt_contains("perf-stream") {
             let wants_tools = prompt_contains("tools");
+            let chunk_count = if prompt_contains("long") { 240 } else { 80 };
             let cx = cx.clone();
             let session_id = session_id.clone();
             smol::spawn(async move {
@@ -201,7 +202,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
                 ));
               }
 
-              for index in 0..80 {
+              for index in 0..chunk_count {
                 let text = format!(
                   "\n\n### Chunk {index}\n\n- item `{index}` with **markdown** and [a link](https://example.com/{index})\n\n```rust\nfn perf_{index}(value: usize) -> usize {{\n  value + {index}\n}}\n```\n",
                 );

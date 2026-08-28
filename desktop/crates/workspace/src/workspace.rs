@@ -345,6 +345,12 @@ impl WorkspaceView {
     })
   }
 
+  #[cfg(any(test, feature = "test-support"))]
+  #[doc(hidden)]
+  pub fn agent_stats_for_driver(&self, cx: &App) -> serde_json::Value {
+    self.session_page.read(cx).agent_stats_for_driver(cx)
+  }
+
   fn on_window_appearance_changed(&mut self, window: &mut Window, cx: &mut Context<Self>) {
     if !PersistedSettings::get(cx).auto_switch_theme {
       return;

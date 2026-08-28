@@ -10,6 +10,7 @@ use serde::Serialize;
 
 const DEFAULT_FILE_COUNT: usize = 300;
 const DEFAULT_SAMPLE_SECONDS: u64 = 5;
+const DEFAULT_PARALLEL_SESSIONS: usize = 3;
 const DEFAULT_OUTPUT_ROOT: &str = "target/perf/reviu-driver";
 
 const SAMPLE_BUCKETS: &[SampleBucket] = &[
@@ -73,6 +74,7 @@ pub(crate) struct PerfArgs {
   pub(crate) output_root: PathBuf,
   pub(crate) file_count: usize,
   pub(crate) sample_seconds: u64,
+  pub(crate) parallel_sessions: usize,
   pub(crate) skip_sample: bool,
   pub(crate) driver_bin: Option<PathBuf>,
   pub(crate) agent_bin: Option<PathBuf>,
@@ -85,6 +87,7 @@ impl Default for PerfArgs {
       output_root: PathBuf::from(DEFAULT_OUTPUT_ROOT),
       file_count: DEFAULT_FILE_COUNT,
       sample_seconds: DEFAULT_SAMPLE_SECONDS,
+      parallel_sessions: DEFAULT_PARALLEL_SESSIONS,
       skip_sample: false,
       driver_bin: None,
       agent_bin: None,
@@ -99,6 +102,7 @@ struct PerfManifest {
   backend: String,
   file_count: usize,
   sample_seconds: u64,
+  parallel_sessions: usize,
   scenarios: Vec<ScenarioReport>,
 }
 
@@ -108,6 +112,7 @@ struct ScenarioReport {
   sample_path: Option<PathBuf>,
   screenshot_path: Option<PathBuf>,
   cpu_samples_path: PathBuf,
+  driver_stats: Option<serde_json::Value>,
   analysis: SampleAnalysis,
   ps_samples: Vec<PsSample>,
 }
@@ -158,6 +163,11 @@ pub(crate) fn parse_args(args: impl IntoIterator<Item = String>) -> Result<PerfA
           .parse()
           .context("--sample-seconds must be a positive integer")?;
       }
+      "--parallel-sessions" => {
+        parsed.parallel_sessions = required_value(&mut args, "--parallel-sessions")?
+          .parse()
+          .context("--parallel-sessions must be a positive integer")?;
+      }
       "--driver-bin" => {
         parsed.driver_bin = Some(PathBuf::from(required_value(&mut args, "--driver-bin")?))
       }
@@ -184,6 +194,12 @@ pub(crate) fn parse_args(args: impl IntoIterator<Item = String>) -> Result<PerfA
           .parse()
           .context("--sample-seconds must be a positive integer")?;
       }
+      other if other.starts_with("--parallel-sessions=") => {
+        parsed.parallel_sessions = other
+          .trim_start_matches("--parallel-sessions=")
+          .parse()
+          .context("--parallel-sessions must be a positive integer")?;
+      }
       other => bail!("unknown argument: {other}\n{}", usage()),
     }
   }
@@ -192,6 +208,9 @@ pub(crate) fn parse_args(args: impl IntoIterator<Item = String>) -> Result<PerfA
   }
   if parsed.sample_seconds == 0 {
     bail!("--sample-seconds must be greater than zero");
+  }
+  if parsed.parallel_sessions == 0 {
+    bail!("--parallel-sessions must be greater than zero");
   }
   if parsed.backend != "visual" && parsed.backend != "test" {
     bail!("--backend must be visual or test");
@@ -204,7 +223,7 @@ fn required_value(args: &mut impl Iterator<Item = String>, name: &str) -> Result
 }
 
 fn usage() -> &'static str {
-  "usage: cargo run -p reviu_driver --bin reviu-perf -- [--backend visual|test] [--files 300] [--sample-seconds 5] [--output target/perf/reviu-driver] [--skip-sample]"
+  "usage: cargo run -p reviu_driver --bin reviu-perf -- [--backend visual|test] [--files 300] [--sample-seconds 5] [--parallel-sessions 3] [--output target/perf/reviu-driver] [--skip-sample]"
 }
 
 pub(crate) fn run(args: PerfArgs) -> Result<()> {
@@ -212,6 +231,13 @@ pub(crate) fn run(args: PerfArgs) -> Result<()> {
     .with_context(|| format!("create {}", args.output_root.display()))?;
   let run_dir = TempRunDir::new(&args.output_root)?;
   let repo = setup_temp_repo(&run_dir.path.join("repo"), args.file_count)?;
+  let mut parallel_repos = Vec::with_capacity(args.parallel_sessions);
+  for index in 0..args.parallel_sessions {
+    parallel_repos.push(setup_temp_repo(
+      &run_dir.path.join(format!("parallel-repo-{index}")),
+      args.file_count,
+    )?);
+  }
   let artifacts = run_dir.path.join("artifacts");
   fs::create_dir_all(&artifacts).with_context(|| format!("create {}", artifacts.display()))?;
 
@@ -265,6 +291,26 @@ pub(crate) fn run(args: PerfArgs) -> Result<()> {
         Ok(())
       },
     )?,
+    run_scenario(
+      &mut driver,
+      &artifacts,
+      "parallel_chat_stream",
+      args.sample_seconds,
+      args.skip_sample,
+      true,
+      |driver| {
+        driver.command(serde_json::json!({ "cmd": "hide_dock" }))?;
+        for (index, repo) in parallel_repos.iter().enumerate() {
+          driver.command(serde_json::json!({ "cmd": "path_prompt", "path": repo }))?;
+          driver.command(serde_json::json!({ "cmd": "wait", "ms": 250 }))?;
+          driver.command(serde_json::json!({
+            "cmd": "submit_prompt",
+            "text": format!("perf-stream long markdown tools parallel {index}")
+          }))?;
+        }
+        Ok(())
+      },
+    )?,
   ];
 
   let manifest = PerfManifest {
@@ -273,6 +319,7 @@ pub(crate) fn run(args: PerfArgs) -> Result<()> {
     backend: args.backend,
     file_count: args.file_count,
     sample_seconds: args.sample_seconds,
+    parallel_sessions: args.parallel_sessions,
     scenarios,
   };
   let manifest_path = run_dir.path.join("manifest.json");
@@ -417,7 +464,11 @@ impl DriverProcess {
     let home = run_dir.join("home");
     let config = run_dir.join("config");
     fs::create_dir_all(&home)?;
-    fs::create_dir_all(&config)?;
+    fs::create_dir_all(config.join("reviu.dev"))?;
+    fs::write(
+      config.join("reviu.dev/settings.json"),
+      serde_json::json!({ "agent_notifications": false }).to_string(),
+    )?;
     let mut child = Command::new(driver_bin)
       .arg("--backend")
       .arg(backend)
@@ -489,6 +540,9 @@ fn run_scenario(
   prepare: impl FnOnce(&mut DriverProcess) -> Result<()>,
 ) -> Result<ScenarioReport> {
   prepare(driver)?;
+  let driver_stats = driver
+    .command(serde_json::json!({ "cmd": "agent_stats" }))
+    .ok();
   let scenario_dir = artifacts.join(name);
   fs::create_dir_all(&scenario_dir)?;
   let sample_path = scenario_dir.join("sample.txt");
@@ -524,6 +578,7 @@ fn run_scenario(
     sample_path: sample_path.exists().then_some(sample_path),
     screenshot_path: screenshot_path.exists().then_some(screenshot_path),
     cpu_samples_path,
+    driver_stats,
     analysis,
     ps_samples,
   })
@@ -627,13 +682,17 @@ fn render_summary(manifest: &PerfManifest) -> String {
   out.push_str(&format!("- backend: `{}`\n", manifest.backend));
   out.push_str(&format!("- files: `{}`\n", manifest.file_count));
   out.push_str(&format!(
-    "- sample seconds: `{}`\n\n",
+    "- sample seconds: `{}`\n",
     manifest.sample_seconds
   ));
+  out.push_str(&format!(
+    "- parallel sessions: `{}`\n\n",
+    manifest.parallel_sessions
+  ));
   out.push_str(
-    "| scenario | avg CPU | max RSS MB | changes_list | agent_chat | layout_paint | sample |\n",
+    "| scenario | avg CPU | max RSS MB | in-flight | changes_list | agent_chat | layout_paint | sample |\n",
   );
-  out.push_str("| --- | ---: | ---: | ---: | ---: | ---: | --- |\n");
+  out.push_str("| --- | ---: | ---: | ---: | ---: | ---: | ---: | --- |\n");
   for scenario in &manifest.scenarios {
     let avg_cpu = average_cpu(&scenario.ps_samples)
       .map(|value| format!("{value:.1}%"))
@@ -651,11 +710,19 @@ fn render_summary(manifest: &PerfManifest) -> String {
       .as_ref()
       .map(|path| format!("`{}`", path.display()))
       .unwrap_or_else(|| "n/a".to_string());
+    let in_flight = scenario
+      .driver_stats
+      .as_ref()
+      .and_then(|stats| stats.get("total_in_flight"))
+      .and_then(serde_json::Value::as_u64)
+      .map(|count| count.to_string())
+      .unwrap_or_else(|| "n/a".to_string());
     out.push_str(&format!(
-      "| {} | {} | {} | {} | {} | {} | {} |\n",
+      "| {} | {} | {} | {} | {} | {} | {} | {} |\n",
       scenario.name,
       avg_cpu,
       max_rss,
+      in_flight,
       bucket("changes_list"),
       bucket("agent_chat"),
       bucket("layout_paint"),
@@ -686,12 +753,15 @@ mod tests {
       "--files".to_string(),
       "42".to_string(),
       "--sample-seconds=2".to_string(),
+      "--parallel-sessions".to_string(),
+      "4".to_string(),
       "--skip-sample".to_string(),
     ])
     .expect("args");
     assert_eq!(args.backend, "test");
     assert_eq!(args.file_count, 42);
     assert_eq!(args.sample_seconds, 2);
+    assert_eq!(args.parallel_sessions, 4);
     assert!(args.skip_sample);
   }
 

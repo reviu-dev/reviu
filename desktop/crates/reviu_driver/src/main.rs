@@ -8,7 +8,7 @@
 //! Verbs: `bounds` (test backend only, of a debug selector), `click` (selector
 //! on test or point on both), `type`, `key`, `clock` (virtual ms), `wait` (real
 //! ms), `park`, `path_prompt`, `screenshot` (visual backend only),
-//! `show_changes`, `hide_dock`, `submit_prompt`, `quit`.
+//! `show_changes`, `hide_dock`, `submit_prompt`, `agent_stats`, `quit`.
 //!
 //! Usage: `cargo run -p reviu_driver -- --backend test` then e.g.
 //! `{"cmd":"bounds","selector":"session-repo-context"}`
@@ -160,6 +160,8 @@ enum Command {
   SubmitPrompt {
     text: String,
   },
+  /// Direct driver hook for perf runs: count active/background agent turns.
+  AgentStats,
   Quit,
 }
 
@@ -375,6 +377,10 @@ fn handle_test_command(
         Err(error) => respond(err(error)),
       }
     }
+    Command::AgentStats => {
+      let stats = view.read_with(cx, |view, cx| view.agent_stats_for_driver(cx));
+      respond(ok(stats));
+    }
     Command::Quit => quit_now(),
   }
 }
@@ -516,6 +522,10 @@ fn handle_visual_command(
       Ok(()) => respond(ok(serde_json::json!({}))),
       Err(error) => respond(err(error)),
     },
+    Command::AgentStats => match agent_stats_directly(cx, view) {
+      Ok(stats) => respond(ok(stats)),
+      Err(error) => respond(err(error)),
+    },
     Command::Quit => quit_now(),
   }
 }
@@ -602,6 +612,14 @@ fn submit_prompt_directly(
     .map_err(|error| error.to_string())?;
   cx.run_until_parked();
   result.map_err(|error| error.to_string())
+}
+
+#[cfg(target_os = "macos")]
+fn agent_stats_directly(
+  cx: &mut VisualTestAppContext,
+  view: &Entity<WorkspaceView>,
+) -> Result<serde_json::Value, String> {
+  Ok(view.read_with(cx, |view, cx| view.agent_stats_for_driver(cx)))
 }
 
 #[cfg(target_os = "macos")]
@@ -720,5 +738,9 @@ mod tests {
       Command::SubmitPrompt { text } => assert_eq!(text, "perf-stream"),
       _ => panic!("expected submit prompt command"),
     }
+    assert!(matches!(
+      serde_json::from_str::<Command>(r#"{"cmd":"agent_stats"}"#).expect("agent stats"),
+      Command::AgentStats
+    ));
   }
 }
