@@ -1894,15 +1894,7 @@ impl Render for AgentChatPanel {
                       .items_center()
                       .justify_between()
                       .gap_2()
-                      .child(
-                        h_flex()
-                          .gap_1()
-                          .flex_wrap()
-                          .child(self.render_model_selector(cx))
-                          .child(self.render_mode_selector(cx))
-                          .children(self.render_config_selector(cx))
-                          .child(self.render_auto_approve_toggle(cx)),
-                      )
+                      .child(self.render_composer_controls(cx))
                       .child(if self.in_flight {
                         h_flex()
                           .gap_1()
@@ -2074,94 +2066,256 @@ impl AgentChatPanel {
     Some(strip.into_any_element())
   }
 
-  fn render_model_selector(&self, cx: &mut Context<Self>) -> gpui::AnyElement {
+  fn render_composer_controls(&self, cx: &mut Context<Self>) -> gpui::AnyElement {
+    if matches!(self.status, Status::Connecting) {
+      return self.render_controls_loading(cx);
+    }
+
+    h_flex()
+      .gap_1()
+      .flex_wrap()
+      .children(self.render_model_selector(cx))
+      .children(self.render_reasoning_selector(cx))
+      .children(self.render_access_selector(cx))
+      .children(self.render_mode_selector(cx))
+      .children(self.render_config_selector(cx))
+      .children(self.render_auto_approve_toggle(cx))
+      .into_any_element()
+  }
+
+  fn render_controls_loading(&self, _cx: &mut Context<Self>) -> gpui::AnyElement {
+    h_flex()
+      .gap_1()
+      .items_center()
+      .debug_selector(|| "agent-chat-controls-loading".to_string())
+      .child(Skeleton::new().h(px(18.)).w(px(120.)).rounded(px(999.)))
+      .child(Skeleton::new().h(px(18.)).w(px(72.)).rounded(px(999.)))
+      .child(Skeleton::new().h(px(18.)).w(px(56.)).rounded(px(999.)))
+      .into_any_element()
+  }
+
+  fn render_model_selector(&self, cx: &mut Context<Self>) -> Option<gpui::AnyElement> {
     let models = self.available_models.clone();
     let current_id = self.current_model_id.clone();
+    let brand_icon = crate::backend_icon(&self.backend_kind);
+    let can_switch = self.can_switch_model();
+
+    if models.is_empty() {
+      return model_config_selector(&self.config_options).map(|selector| {
+        self.render_config_control(
+          "agent-chat-model",
+          Some(brand_icon),
+          "Select a model",
+          selector,
+          !can_switch,
+          false,
+          cx,
+        )
+      });
+    }
+
     let current_label: SharedString = current_id
       .as_ref()
       .and_then(|id| models.iter().find(|m| m.model_id == *id))
       .map(|m| short_model_label(&m.name, m.description.as_deref()).into())
       .unwrap_or_else(|| "Model".into());
     let entity = cx.entity().downgrade();
-    let brand_icon = crate::backend_icon(&self.backend_kind);
-    let can_switch = self.can_switch_model();
-    Button::new("agent-chat-model")
-      .child(selector_trigger(Some(brand_icon), current_label))
-      .xsmall()
-      .ghost()
-      .disabled(models.is_empty() || !can_switch)
-      .dropdown_menu_with_anchor(Anchor::BottomLeft, move |menu, _, _| {
-        let mut menu = menu
-          .label("Select a model")
-          .max_h(px(360.))
-          .scrollable(true);
-        for (label, model_id, description, is_current) in
-          deduped_model_entries(&models, current_id.as_ref())
-        {
-          let entity = entity.clone();
-          let label_text: SharedString = label.into();
-          let description: Option<SharedString> = description.map(Into::into);
-          menu = menu.item(
-            PopupMenuItem::element(move |_, cx| {
-              render_selector_item(label_text.clone(), description.clone(), is_current, cx)
-            })
-            .on_click(move |_, _, cx| {
-              let model_id = model_id.clone();
-              let _ = entity.update(cx, |panel, cx| {
-                if panel.can_switch_model() {
-                  panel.set_model(model_id, cx);
-                }
-              });
-            }),
-          );
-        }
-        menu
-      })
-      .into_any_element()
+    Some(
+      Button::new("agent-chat-model")
+        .child(selector_trigger(Some(brand_icon), current_label))
+        .xsmall()
+        .ghost()
+        .disabled(!can_switch)
+        .dropdown_menu_with_anchor(Anchor::BottomLeft, move |menu, _, _| {
+          let mut menu = menu
+            .label("Select a model")
+            .max_h(px(360.))
+            .scrollable(true);
+          for (label, model_id, description, is_current) in
+            deduped_model_entries(&models, current_id.as_ref())
+          {
+            let entity = entity.clone();
+            let label_text: SharedString = label.into();
+            let description: Option<SharedString> = description.map(Into::into);
+            menu = menu.item(
+              PopupMenuItem::element(move |_, cx| {
+                render_selector_item(label_text.clone(), description.clone(), is_current, cx)
+              })
+              .on_click(move |_, _, cx| {
+                let model_id = model_id.clone();
+                let _ = entity.update(cx, |panel, cx| {
+                  if panel.can_switch_model() {
+                    panel.set_model(model_id, cx);
+                  }
+                });
+              }),
+            );
+          }
+          menu
+        })
+        .into_any_element(),
+    )
   }
 
-  fn render_auto_approve_toggle(&self, cx: &mut Context<Self>) -> gpui::AnyElement {
+  fn render_auto_approve_toggle(&self, cx: &mut Context<Self>) -> Option<gpui::AnyElement> {
+    if self.has_native_access_control() {
+      return None;
+    }
+
     let active = self.auto_approve;
-    div()
-      .debug_selector(|| "agent-chat-auto-approve".to_string())
-      .child(
-        Button::new("agent-chat-auto-approve")
-          .icon(UiIconName::CircleCheck)
-          .label("Auto-approve")
-          .xsmall()
-          .ghost()
-          .when(active, |this| this.text_color(cx.theme().primary))
-          .tooltip(if active {
-            "Permission requests are approved automatically"
-          } else {
-            "Approve permission requests automatically"
-          })
-          .on_click(cx.listener(|panel, _, _, cx| panel.toggle_auto_approve(cx))),
-      )
-      .into_any_element()
+    Some(
+      div()
+        .debug_selector(|| "agent-chat-auto-approve".to_string())
+        .child(
+          Button::new("agent-chat-auto-approve")
+            .icon(UiIconName::CircleCheck)
+            .label(if active { "Auto-approve" } else { "Ask first" })
+            .xsmall()
+            .ghost()
+            .selected(active)
+            .when(!active, |this| this.text_color(cx.theme().muted_foreground))
+            .tooltip(if active {
+              "Automatically approve future permission requests"
+            } else {
+              "Ask before approving permission requests"
+            })
+            .on_click(cx.listener(|panel, _, _, cx| panel.toggle_auto_approve(cx))),
+        )
+        .into_any_element(),
+    )
   }
 
-  fn render_mode_selector(&self, cx: &mut Context<Self>) -> gpui::AnyElement {
-    let modes = self.available_modes.clone();
-    let current_id = self.current_mode_id.clone();
+  fn render_access_selector(&self, cx: &mut Context<Self>) -> Option<gpui::AnyElement> {
+    if let Some(selector) = access_config_selector(&self.config_options) {
+      return Some(self.render_config_control(
+        "agent-chat-access",
+        Some(gpui_component::Icon::new(UiIconName::Lock)),
+        "Select access",
+        selector,
+        false,
+        false,
+        cx,
+      ));
+    }
+
+    if modes_are_access(&self.available_modes) {
+      return Some(self.render_mode_control(
+        "agent-chat-access",
+        "Select access",
+        Some(gpui_component::Icon::new(UiIconName::Lock)),
+        self.available_modes.clone(),
+        self.current_mode_id.clone(),
+        false,
+        false,
+        cx,
+      ));
+    }
+
+    None
+  }
+
+  fn render_reasoning_selector(&self, cx: &mut Context<Self>) -> Option<gpui::AnyElement> {
+    if let Some(selector) = reasoning_config_selector(&self.config_options) {
+      return Some(self.render_config_control(
+        "agent-chat-reasoning",
+        Some(gpui_component::Icon::new(UiIconName::Sparkles)),
+        "Select reasoning",
+        normalize_reasoning_selector(selector),
+        false,
+        false,
+        cx,
+      ));
+    }
+
+    if modes_are_reasoning(&self.available_modes) {
+      return Some(self.render_mode_control(
+        "agent-chat-reasoning",
+        "Select reasoning",
+        Some(gpui_component::Icon::new(UiIconName::Sparkles)),
+        self.available_modes.clone(),
+        self.current_mode_id.clone(),
+        false,
+        true,
+        cx,
+      ));
+    }
+
+    None
+  }
+
+  fn render_mode_selector(&self, cx: &mut Context<Self>) -> Option<gpui::AnyElement> {
+    if modes_are_reasoning(&self.available_modes) || modes_are_access(&self.available_modes) {
+      return None;
+    }
+
+    if self.available_modes.is_empty() {
+      return mode_config_selector(&self.config_options).map(|selector| {
+        self.render_config_control(
+          "agent-chat-mode",
+          None,
+          "Select a mode",
+          selector,
+          false,
+          false,
+          cx,
+        )
+      });
+    }
+
+    Some(self.render_mode_control(
+      "agent-chat-mode",
+      "Select a mode",
+      None,
+      self.available_modes.clone(),
+      self.current_mode_id.clone(),
+      false,
+      false,
+      cx,
+    ))
+  }
+
+  fn render_mode_control(
+    &self,
+    id: &'static str,
+    menu_label: &'static str,
+    icon: Option<gpui_component::Icon>,
+    modes: Vec<SessionMode>,
+    current_id: Option<SessionModeId>,
+    disabled: bool,
+    normalize_reasoning: bool,
+    cx: &mut Context<Self>,
+  ) -> gpui::AnyElement {
     let current_label: SharedString = current_id
       .as_ref()
       .and_then(|id| modes.iter().find(|m| m.id == *id))
-      .map(|m| m.name.clone().into())
-      .unwrap_or_else(|| "Mode".into());
+      .map(|m| {
+        if normalize_reasoning {
+          reasoning_label(&m.name)
+        } else {
+          m.name.clone()
+        }
+        .into()
+      })
+      .unwrap_or_else(|| menu_label.into());
     let entity = cx.entity().downgrade();
-    Button::new("agent-chat-mode")
-      .child(selector_trigger(None, current_label))
+    Button::new(id)
+      .debug_selector(move || id.to_string())
+      .child(selector_trigger(icon, current_label))
       .xsmall()
       .ghost()
-      .disabled(modes.is_empty())
+      .disabled(disabled || modes.is_empty())
       .dropdown_menu_with_anchor(Anchor::BottomLeft, move |menu, _, _| {
-        let mut menu = menu.label("Select a mode");
+        let mut menu = menu.label(menu_label);
         for m in modes.iter() {
           let mode_id = m.id.clone();
           let entity = entity.clone();
           let is_current = current_id.as_ref() == Some(&mode_id);
-          let label_text: SharedString = m.name.clone().into();
+          let label_text: SharedString = if normalize_reasoning {
+            reasoning_label(&m.name)
+          } else {
+            m.name.clone()
+          }
+          .into();
           let description: Option<SharedString> = m.description.clone().map(Into::into);
           menu = menu.item(
             PopupMenuItem::element(move |_, cx| {
@@ -2178,6 +2332,52 @@ impl AgentChatPanel {
       .into_any_element()
   }
 
+  fn render_config_control(
+    &self,
+    id: &'static str,
+    icon: Option<gpui_component::Icon>,
+    menu_label: &'static str,
+    selector: ConfigSelector,
+    disabled: bool,
+    muted: bool,
+    cx: &mut Context<Self>,
+  ) -> gpui::AnyElement {
+    let entity = cx.entity().downgrade();
+    let trigger_label: SharedString = selector.current_label.clone().into();
+    Button::new(id)
+      .debug_selector(move || id.to_string())
+      .child(selector_trigger(icon, trigger_label))
+      .xsmall()
+      .ghost()
+      .disabled(disabled)
+      .when(muted, |this| this.text_color(cx.theme().muted_foreground))
+      .dropdown_menu_with_anchor(Anchor::BottomLeft, move |menu, _, _| {
+        let mut menu = menu.label(menu_label).max_h(px(360.)).scrollable(true);
+        for (value_id, name, description) in selector.values.iter() {
+          let value_id = value_id.clone();
+          let name: SharedString = name.clone().into();
+          let description: Option<SharedString> = description.clone().map(Into::into);
+          let entity = entity.clone();
+          let config_id = selector.id.clone();
+          let is_current = value_id == selector.current_value;
+          menu = menu.item(
+            PopupMenuItem::element(move |_, cx| {
+              render_selector_item(name.clone(), description.clone(), is_current, cx)
+            })
+            .on_click(move |_, _, cx| {
+              let value_id = value_id.clone();
+              let config_id = config_id.clone();
+              let _ = entity.update(cx, |panel, cx| {
+                panel.set_config_option(config_id, value_id, cx)
+              });
+            }),
+          );
+        }
+        menu
+      })
+      .into_any_element()
+  }
+
   /// One trigger instead of a row of bare dropdowns.
   fn render_config_selector(&self, cx: &mut Context<Self>) -> Option<gpui::AnyElement> {
     let options = self.selectable_config_options();
@@ -2185,15 +2385,17 @@ impl AgentChatPanel {
       return None;
     }
 
-    let summary: SharedString = config_summary(&options).into();
     let customized = config_customized(&options, &self.config_defaults);
     let entity = cx.entity().downgrade();
 
     Some(
       Button::new("agent-chat-config")
-        .child(selector_trigger(None, summary))
+        .debug_selector(|| "agent-chat-config".to_string())
+        .icon(UiIconName::SlidersHorizontal)
         .xsmall()
         .ghost()
+        .selected(customized)
+        .tooltip("Options")
         .when(!customized, |this| {
           this.text_color(cx.theme().muted_foreground)
         })
@@ -2234,74 +2436,11 @@ impl AgentChatPanel {
   fn selectable_config_options(&self) -> Vec<ConfigSelector> {
     selectable_config_options(&self.config_options)
   }
-}
 
-/// The non-model, non-mode selects the composer collapses behind one trigger.
-pub(crate) fn selectable_config_options(options: &[SessionConfigOption]) -> Vec<ConfigSelector> {
-  options
-    .iter()
-    .filter(|opt| {
-      !matches!(
-        opt.category,
-        Some(SessionConfigOptionCategory::Model) | Some(SessionConfigOptionCategory::Mode)
-      )
-    })
-    .filter_map(|opt| {
-      let SessionConfigKind::Select(sel) = &opt.kind else {
-        return None;
-      };
-      let values: Vec<(SessionConfigValueId, String, Option<String>)> = match &sel.options {
-        SessionConfigSelectOptions::Ungrouped(opts) => opts
-          .iter()
-          .map(|o| (o.value.clone(), o.name.clone(), o.description.clone()))
-          .collect(),
-        SessionConfigSelectOptions::Grouped(groups) => groups
-          .iter()
-          .flat_map(|g| {
-            g.options
-              .iter()
-              .map(|o| (o.value.clone(), o.name.clone(), o.description.clone()))
-          })
-          .collect(),
-        _ => Vec::new(),
-      };
-      if values.is_empty() {
-        return None;
-      }
-      let current_label = values
-        .iter()
-        .find(|(value, _, _)| *value == sel.current_value)
-        .map(|(_, name, _)| name.clone())
-        .unwrap_or_else(|| opt.name.clone());
-      Some(ConfigSelector {
-        id: opt.id.clone(),
-        name: opt.name.clone().into(),
-        current_value: sel.current_value.clone(),
-        current_label,
-        values,
-      })
-    })
-    .collect()
-}
-
-pub(crate) fn config_summary(selectors: &[ConfigSelector]) -> String {
-  selectors
-    .iter()
-    .map(|selector| selector.current_label.as_str())
-    .collect::<Vec<_>>()
-    .join(" · ")
-}
-
-/// True once any option left the value the agent first advertised.
-pub(crate) fn config_customized(
-  selectors: &[ConfigSelector],
-  defaults: &HashMap<SessionConfigId, SessionConfigValueId>,
-) -> bool {
-  selectors.iter().any(|selector| {
-    defaults
-      .get(&selector.id)
-      .is_some_and(|default| *default != selector.current_value)
-  })
+  fn has_native_access_control(&self) -> bool {
+    access_config_selector(&self.config_options).is_some()
+      || modes_are_access(&self.available_modes)
+  }
 }
 
 /// Composer selector trigger: optional leading icon, label, trailing chevron.

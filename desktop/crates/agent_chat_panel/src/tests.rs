@@ -3096,7 +3096,7 @@ fn select_option(
 }
 
 #[test]
-fn selectable_config_options_skips_model_and_mode_categories() {
+fn selectable_config_options_skips_primary_control_categories() {
   let options = vec![
     select_option(
       "model",
@@ -3112,14 +3112,167 @@ fn selectable_config_options_skips_model_and_mode_categories() {
       &["agent"],
       Some(SessionConfigOptionCategory::Mode),
     ),
-    select_option("effort", "Reasoning effort", "low", &["low", "high"], None),
+    select_option(
+      "thinking",
+      "Thinking",
+      "low",
+      &["low", "high"],
+      Some(SessionConfigOptionCategory::ThoughtLevel),
+    ),
+    select_option("sandbox", "Sandbox", "off", &["off", "on"], None),
   ];
 
   let selectors = selectable_config_options(&options);
 
   assert_eq!(selectors.len(), 1);
-  assert_eq!(selectors[0].name.as_ref(), "Reasoning effort");
-  assert_eq!(selectors[0].current_label, "low");
+  assert_eq!(selectors[0].name.as_ref(), "Sandbox");
+  assert_eq!(selectors[0].current_label, "off");
+}
+
+#[test]
+fn selectable_config_options_skips_reasoning_name_without_category() {
+  let options = vec![
+    select_option(
+      "reasoning",
+      "Reasoning effort",
+      "low",
+      &["low", "high"],
+      None,
+    ),
+    select_option("sandbox", "Sandbox", "off", &["off", "on"], None),
+  ];
+
+  let selectors = selectable_config_options(&options);
+
+  assert_eq!(selectors.len(), 1);
+  assert_eq!(selectors[0].name.as_ref(), "Sandbox");
+}
+
+#[test]
+fn dedicated_config_selectors_find_model_mode_and_reasoning() {
+  let options = vec![
+    select_option(
+      "model",
+      "Model",
+      "sonnet",
+      &["sonnet", "opus"],
+      Some(SessionConfigOptionCategory::Model),
+    ),
+    select_option(
+      "mode",
+      "Mode",
+      "build",
+      &["plan", "build"],
+      Some(SessionConfigOptionCategory::Mode),
+    ),
+    select_option(
+      "thinking",
+      "Thinking",
+      "high",
+      &["low", "high"],
+      Some(SessionConfigOptionCategory::ThoughtLevel),
+    ),
+  ];
+
+  assert_eq!(
+    model_config_selector(&options).unwrap().current_label,
+    "sonnet"
+  );
+  assert_eq!(
+    mode_config_selector(&options).unwrap().current_label,
+    "build"
+  );
+  assert_eq!(
+    reasoning_config_selector(&options).unwrap().current_label,
+    "high"
+  );
+}
+
+#[test]
+fn access_config_selector_claims_native_permission_policies() {
+  let options = vec![
+    select_option(
+      "mode",
+      "Mode",
+      "Approve for me",
+      &["Ask for approval", "Approve for me", "Full access"],
+      Some(SessionConfigOptionCategory::Mode),
+    ),
+    select_option("detail", "Detail", "brief", &["brief", "verbose"], None),
+  ];
+
+  assert_eq!(
+    access_config_selector(&options).unwrap().current_label,
+    "Approve for me"
+  );
+  assert!(mode_config_selector(&options).is_none());
+
+  let secondary = selectable_config_options(&options);
+  assert_eq!(secondary.len(), 1);
+  assert_eq!(secondary[0].name.as_ref(), "Detail");
+}
+
+#[test]
+fn access_config_selector_ignores_secondary_mode_options() {
+  let options = vec![
+    select_option(
+      "collaboration",
+      "Collaboration mode",
+      "default",
+      &["Default", "Plan"],
+      None,
+    ),
+    select_option("fast", "Fast mode", "off", &["Off", "On"], None),
+  ];
+
+  assert!(access_config_selector(&options).is_none());
+  assert_eq!(selectable_config_options(&options).len(), 2);
+}
+
+#[test]
+fn reasoning_labels_drop_provider_prefixes() {
+  assert_eq!(reasoning_label("Thinking: high"), "High");
+  assert_eq!(reasoning_label("Reasoning: low"), "Low");
+  assert_eq!(reasoning_label("Xhigh"), "Xhigh");
+}
+
+#[test]
+fn mode_reasoning_detection_keeps_build_modes_separate() {
+  let mode = |id: &str, name: &str| {
+    SessionMode::new(
+      SessionModeId::new(std::sync::Arc::from(id)),
+      name.to_string(),
+    )
+  };
+
+  assert!(modes_are_reasoning(&[
+    mode("low", "Low"),
+    mode("high", "High")
+  ]));
+  assert!(!modes_are_reasoning(&[
+    mode("plan", "Plan"),
+    mode("build", "Build")
+  ]));
+}
+
+#[test]
+fn native_access_modes_are_not_regular_modes() {
+  let mode = |id: &str, name: &str| {
+    SessionMode::new(
+      SessionModeId::new(std::sync::Arc::from(id)),
+      name.to_string(),
+    )
+  };
+
+  assert!(modes_are_access(&[
+    mode("ask", "Ask for approval"),
+    mode("approve", "Approve for me"),
+    mode("full", "Full access")
+  ]));
+  assert!(!modes_are_access(&[
+    mode("plan", "Plan"),
+    mode("build", "Build")
+  ]));
 }
 
 #[test]
@@ -3140,39 +3293,39 @@ fn selectable_config_options_falls_back_to_the_option_name_for_unknown_values() 
 #[test]
 fn config_summary_joins_effective_values() {
   let options = vec![
-    select_option("effort", "Effort", "high", &["low", "high"], None),
+    select_option("detail", "Detail", "verbose", &["brief", "verbose"], None),
     select_option("sandbox", "Sandbox", "off", &["off", "on"], None),
   ];
 
   let selectors = selectable_config_options(&options);
 
-  assert_eq!(config_summary(&selectors), "high · off");
+  assert_eq!(config_summary(&selectors), "verbose · off");
   assert_eq!(config_summary(&[]), "");
 }
 
 #[test]
 fn config_customized_only_when_a_value_left_its_advertised_default() {
   let options = vec![select_option(
-    "effort",
-    "Effort",
-    "low",
-    &["low", "high"],
+    "detail",
+    "Detail",
+    "brief",
+    &["brief", "verbose"],
     None,
   )];
   let selectors = selectable_config_options(&options);
   let mut defaults = HashMap::new();
   defaults.insert(
     selectors[0].id.clone(),
-    SessionConfigValueId::new(std::sync::Arc::from("low")),
+    SessionConfigValueId::new(std::sync::Arc::from("brief")),
   );
 
   assert!(!config_customized(&selectors, &defaults));
 
   let changed = selectable_config_options(&[select_option(
-    "effort",
-    "Effort",
-    "high",
-    &["low", "high"],
+    "detail",
+    "Detail",
+    "verbose",
+    &["brief", "verbose"],
     None,
   )]);
   assert!(config_customized(&changed, &defaults));
@@ -3181,10 +3334,10 @@ fn config_customized_only_when_a_value_left_its_advertised_default() {
 #[test]
 fn config_customized_is_false_without_a_recorded_default() {
   let selectors = selectable_config_options(&[select_option(
-    "effort",
-    "Effort",
-    "high",
-    &["low", "high"],
+    "detail",
+    "Detail",
+    "verbose",
+    &["brief", "verbose"],
     None,
   )]);
 
@@ -3274,6 +3427,57 @@ async fn mounting_the_panel_spawns_no_agent_and_paints(cx: &mut gpui::TestAppCon
     // Connecting shows the generating row, plus the runway spacer.
     assert_eq!(panel.messages_list.item_count(), 2);
   });
+}
+
+#[gpui::test]
+async fn connecting_panel_shows_loading_controls(cx: &mut gpui::TestAppContext) {
+  let (_panel, cx) = add_panel_window(cx);
+  cx.run_until_parked();
+
+  assert!(cx.debug_bounds("agent-chat-controls-loading").is_some());
+  assert!(cx.debug_bounds("agent-chat-auto-approve").is_none());
+}
+
+#[gpui::test]
+async fn secondary_options_render_as_one_config_button(cx: &mut gpui::TestAppContext) {
+  let (panel, cx) = add_panel_window(cx);
+  panel.update(cx, |panel, cx| {
+    panel.status = Status::Ready;
+    panel.set_config_options(vec![
+      select_option(
+        "collaboration",
+        "Collaboration mode",
+        "default",
+        &["Default", "Plan"],
+        None,
+      ),
+      select_option("fast", "Fast mode", "off", &["Off", "On"], None),
+    ]);
+    cx.notify();
+  });
+  cx.run_until_parked();
+
+  assert!(cx.debug_bounds("agent-chat-config").is_some());
+}
+
+#[gpui::test]
+async fn native_access_control_hides_reviu_auto_approve(cx: &mut gpui::TestAppContext) {
+  let (panel, cx) = add_panel_window(cx);
+  panel.update(cx, |panel, cx| {
+    panel.status = Status::Ready;
+    panel.set_config_options(vec![select_option(
+      "mode",
+      "Mode",
+      "Approve for me",
+      &["Ask for approval", "Approve for me", "Full access"],
+      Some(SessionConfigOptionCategory::Mode),
+    )]);
+    cx.notify();
+  });
+  cx.run_until_parked();
+
+  assert!(cx.debug_bounds("agent-chat-access").is_some());
+  assert!(cx.debug_bounds("agent-chat-auto-approve").is_none());
 }
 
 #[gpui::test]

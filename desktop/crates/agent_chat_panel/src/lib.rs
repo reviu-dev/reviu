@@ -10,6 +10,8 @@ mod prompt;
 use prompt::*;
 mod render;
 use render::*;
+mod session_controls;
+use session_controls::*;
 mod diff;
 mod events;
 mod mention;
@@ -57,13 +59,14 @@ use gpui::{
   Styled, Task, TextRun, Window, deferred, div, prelude::*, px,
 };
 use gpui_component::{
-  ActiveTheme as _, ColorName, Disableable as _, IconName, Sizable as _,
+  ActiveTheme as _, ColorName, Disableable as _, IconName, Selectable as _, Sizable as _,
   button::{Button, ButtonVariants as _},
   clipboard::Clipboard,
   h_flex,
   input::{self, InputEvent, Textarea, TextareaState},
   menu::{DropdownMenu as _, PopupMenuItem},
   scroll::ScrollableElement as _,
+  skeleton::Skeleton,
   tag::Tag,
   text::{TextView, TextViewStyle},
   v_flex,
@@ -81,6 +84,7 @@ enum ChatRole {
 }
 
 /// A session config select flattened for the composer trigger.
+#[derive(Clone)]
 struct ConfigSelector {
   id: SessionConfigId,
   name: SharedString,
