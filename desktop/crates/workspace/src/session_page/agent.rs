@@ -275,12 +275,12 @@ impl SessionPage {
     view.update(cx, |panel, cx| {
       panel.set_close_control_visible(close_control_visible, cx);
     });
-    // Sidebar reads conversation state from the panel; re-render when it changes.
+    // Sidebar reads conversation state from the panel. The panel already
+    // notifies itself, so avoid repainting the whole page on stream chunks.
     // Also the flush point for a review export queued while the agent was connecting.
     cx.observe(&view, |this, _, cx| {
       this.flush_pending_review_export(cx);
       this.sync_session_list(cx);
-      cx.notify();
     })
     .detach();
     cx.subscribe_in(
@@ -2133,6 +2133,27 @@ mod tests {
     page.read_with(cx, |page, _| {
       page.agent_chat_view.clone().expect("active panel")
     })
+  }
+
+  #[gpui::test]
+  async fn stream_chunks_do_not_notify_the_whole_page(cx: &mut TestAppContext) {
+    let (_repo, page, cx) = page_with_agent_panel("session-page-stream-no-page-notify", cx).await;
+    let panel = active_panel(&page, cx);
+    let page_notifies = std::rc::Rc::new(std::cell::Cell::new(0_usize));
+    cx.update(|_, cx| {
+      let page_notifies = page_notifies.clone();
+      cx.observe(&page, move |_, _| {
+        page_notifies.set(page_notifies.get() + 1);
+      })
+      .detach();
+    });
+
+    panel.update(cx, |panel, cx| {
+      panel.seed_user_message_for_test("stream", cx);
+    });
+    cx.run_until_parked();
+
+    assert_eq!(page_notifies.get(), 0);
   }
 
   #[gpui::test]
