@@ -133,7 +133,7 @@ image = { version = "0.25.10", default-features = false, features = ["png"] }
 tray-icon = "0.24.2"
 gtk = "0.18.2"
 libloading = "0.9.0"
-log = "0.4.29"
+log = "0.4.34"
 percent-encoding = "2.3.2"
 windows-sys = { version = "0.61.2", features = [
   "Win32_Foundation",
