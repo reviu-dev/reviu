@@ -1099,15 +1099,26 @@ impl SessionPage {
       .agent_chat_view
       .as_ref()
       .is_some_and(|panel| panel.read(cx).is_turn_in_flight());
+    let active_ready = self
+      .agent_chat_view
+      .as_ref()
+      .is_some_and(|panel| panel.read(cx).is_ready());
     let background_in_flight = self
       .background_chat_panels
       .iter()
       .filter(|(_, panel)| panel.read(cx).is_turn_in_flight())
       .count();
+    let background_ready = self
+      .background_chat_panels
+      .iter()
+      .filter(|(_, panel)| panel.read(cx).is_ready())
+      .count();
     serde_json::json!({
       "active_in_flight": active_in_flight,
+      "active_ready": active_ready,
       "background_count": self.background_chat_panels.len(),
       "background_in_flight": background_in_flight,
+      "background_ready": background_ready,
       "total_in_flight": background_in_flight + usize::from(active_in_flight),
     })
   }

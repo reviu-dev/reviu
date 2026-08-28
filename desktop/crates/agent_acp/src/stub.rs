@@ -184,7 +184,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
           }
           if prompt_contains("perf-stream") {
             let wants_tools = prompt_contains("tools");
-            let chunk_count = if prompt_contains("long") { 240 } else { 80 };
+            let chunk_count = if prompt_contains("long") { 160 } else { 80 };
             let cx = cx.clone();
             let session_id = session_id.clone();
             smol::spawn(async move {

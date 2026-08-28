@@ -12,6 +12,14 @@ const DEFAULT_FILE_COUNT: usize = 300;
 const DEFAULT_SAMPLE_SECONDS: u64 = 5;
 const DEFAULT_PARALLEL_SESSIONS: usize = 3;
 const DEFAULT_OUTPUT_ROOT: &str = "target/perf/reviu-driver";
+const DEFAULT_SCENARIOS: &[&str] = &[
+  "idle",
+  "chat_stream",
+  "chat_stream_changes",
+  "visible_chat_stream_long",
+  "visible_chat_stream_long_changes",
+  "parallel_chat_stream",
+];
 
 const SAMPLE_BUCKETS: &[SampleBucket] = &[
   SampleBucket {
@@ -29,23 +37,43 @@ const SAMPLE_BUCKETS: &[SampleBucket] = &[
     ],
   },
   SampleBucket {
-    name: "agent_chat",
+    name: "agent_chat_panel",
     needles: &["AgentChatPanel", "agent_chat_panel"],
   },
   SampleBucket {
-    name: "changes_list",
+    name: "text_view",
     needles: &[
-      "ChangesList",
-      "changes_list",
-      "DockPanel",
-      "dock_panel",
-      "VirtualList",
-      "ListState",
+      "TextView",
+      "TextViewState",
+      "markdown",
+      "MarkdownNode",
+      "comrak",
     ],
   },
   SampleBucket {
-    name: "gfm_text",
-    needles: &["gfm_markdown_viewer", "TextView", "markdown", "comrak"],
+    name: "session_page",
+    needles: &["SessionPage", "session_page"],
+  },
+  SampleBucket {
+    name: "dock_panel",
+    needles: &["DockPanel", "dock_panel"],
+  },
+  SampleBucket {
+    name: "changes_list",
+    needles: &["ChangesList", "changes_list"],
+  },
+  SampleBucket {
+    name: "list_state",
+    needles: &["VirtualList", "ListState"],
+  },
+  SampleBucket {
+    name: "serde_protocol",
+    needles: &[
+      "agent_client_protocol",
+      "JsonRpcMessage",
+      "SessionNotification",
+      "serde_json",
+    ],
   },
   SampleBucket {
     name: "git_status",
@@ -58,7 +86,12 @@ const SAMPLE_BUCKETS: &[SampleBucket] = &[
   },
   SampleBucket {
     name: "store_json",
-    needles: &["ConversationStore", "kick_writer", "serde_json"],
+    needles: &[
+      "ConversationStore",
+      "kick_writer",
+      "write_save",
+      "schedule_save",
+    ],
   },
 ];
 
@@ -75,6 +108,7 @@ pub(crate) struct PerfArgs {
   pub(crate) file_count: usize,
   pub(crate) sample_seconds: u64,
   pub(crate) parallel_sessions: usize,
+  pub(crate) scenarios: Vec<String>,
   pub(crate) skip_sample: bool,
   pub(crate) driver_bin: Option<PathBuf>,
   pub(crate) agent_bin: Option<PathBuf>,
@@ -88,6 +122,10 @@ impl Default for PerfArgs {
       file_count: DEFAULT_FILE_COUNT,
       sample_seconds: DEFAULT_SAMPLE_SECONDS,
       parallel_sessions: DEFAULT_PARALLEL_SESSIONS,
+      scenarios: DEFAULT_SCENARIOS
+        .iter()
+        .map(|scenario| scenario.to_string())
+        .collect(),
       skip_sample: false,
       driver_bin: None,
       agent_bin: None,
@@ -103,6 +141,7 @@ struct PerfManifest {
   file_count: usize,
   sample_seconds: u64,
   parallel_sessions: usize,
+  requested_scenarios: Vec<String>,
   scenarios: Vec<ScenarioReport>,
 }
 
@@ -168,6 +207,10 @@ pub(crate) fn parse_args(args: impl IntoIterator<Item = String>) -> Result<PerfA
           .parse()
           .context("--parallel-sessions must be a positive integer")?;
       }
+      "--scenario" => push_requested_scenarios(
+        &mut parsed.scenarios,
+        &required_value(&mut args, "--scenario")?,
+      )?,
       "--driver-bin" => {
         parsed.driver_bin = Some(PathBuf::from(required_value(&mut args, "--driver-bin")?))
       }
@@ -200,6 +243,10 @@ pub(crate) fn parse_args(args: impl IntoIterator<Item = String>) -> Result<PerfA
           .parse()
           .context("--parallel-sessions must be a positive integer")?;
       }
+      other if other.starts_with("--scenario=") => push_requested_scenarios(
+        &mut parsed.scenarios,
+        other.trim_start_matches("--scenario="),
+      )?,
       other => bail!("unknown argument: {other}\n{}", usage()),
     }
   }
@@ -215,6 +262,14 @@ pub(crate) fn parse_args(args: impl IntoIterator<Item = String>) -> Result<PerfA
   if parsed.backend != "visual" && parsed.backend != "test" {
     bail!("--backend must be visual or test");
   }
+  for scenario in &parsed.scenarios {
+    if !DEFAULT_SCENARIOS.contains(&scenario.as_str()) {
+      bail!(
+        "unknown scenario: {scenario}\navailable: {}",
+        DEFAULT_SCENARIOS.join(", ")
+      );
+    }
+  }
   Ok(parsed)
 }
 
@@ -222,8 +277,37 @@ fn required_value(args: &mut impl Iterator<Item = String>, name: &str) -> Result
   args.next().ok_or_else(|| anyhow!("{name} needs a value"))
 }
 
+fn push_requested_scenarios(scenarios: &mut Vec<String>, value: &str) -> Result<()> {
+  if is_default_scenario_set(scenarios) {
+    scenarios.clear();
+  }
+  for scenario in value
+    .split(',')
+    .map(str::trim)
+    .filter(|value| !value.is_empty())
+  {
+    scenarios.push(scenario.to_string());
+  }
+  if scenarios.is_empty() {
+    bail!("--scenario needs at least one scenario");
+  }
+  Ok(())
+}
+
+fn is_default_scenario_set(scenarios: &[String]) -> bool {
+  scenarios.len() == DEFAULT_SCENARIOS.len()
+    && scenarios
+      .iter()
+      .zip(DEFAULT_SCENARIOS)
+      .all(|(left, right)| left == right)
+}
+
+fn scenario_requested(scenarios: &[String], scenario: &str) -> bool {
+  scenarios.iter().any(|requested| requested == scenario)
+}
+
 fn usage() -> &'static str {
-  "usage: cargo run -p reviu_driver --bin reviu-perf -- [--backend visual|test] [--files 300] [--sample-seconds 5] [--parallel-sessions 3] [--output target/perf/reviu-driver] [--skip-sample]"
+  "usage: cargo run -p reviu_driver --bin reviu-perf -- [--backend visual|test] [--files 300] [--sample-seconds 5] [--parallel-sessions 3] [--scenario name[,name]] [--output target/perf/reviu-driver] [--skip-sample]"
 }
 
 pub(crate) fn run(args: PerfArgs) -> Result<()> {
@@ -231,12 +315,15 @@ pub(crate) fn run(args: PerfArgs) -> Result<()> {
     .with_context(|| format!("create {}", args.output_root.display()))?;
   let run_dir = TempRunDir::new(&args.output_root)?;
   let repo = setup_temp_repo(&run_dir.path.join("repo"), args.file_count)?;
-  let mut parallel_repos = Vec::with_capacity(args.parallel_sessions);
-  for index in 0..args.parallel_sessions {
-    parallel_repos.push(setup_temp_repo(
-      &run_dir.path.join(format!("parallel-repo-{index}")),
-      args.file_count,
-    )?);
+  let mut parallel_repos = Vec::new();
+  if scenario_requested(&args.scenarios, "parallel_chat_stream") {
+    parallel_repos.reserve(args.parallel_sessions);
+    for index in 0..args.parallel_sessions {
+      parallel_repos.push(setup_temp_repo(
+        &run_dir.path.join(format!("parallel-repo-{index}")),
+        args.file_count,
+      )?);
+    }
   }
   let artifacts = run_dir.path.join("artifacts");
   fs::create_dir_all(&artifacts).with_context(|| format!("create {}", artifacts.display()))?;
@@ -247,8 +334,9 @@ pub(crate) fn run(args: PerfArgs) -> Result<()> {
   driver.command(serde_json::json!({ "cmd": "path_prompt", "path": repo }))?;
   driver.command(serde_json::json!({ "cmd": "park" }))?;
 
-  let scenarios = vec![
-    run_scenario(
+  let mut scenarios = Vec::new();
+  if scenario_requested(&args.scenarios, "idle") {
+    scenarios.push(run_scenario(
       &mut driver,
       &artifacts,
       "idle",
@@ -260,8 +348,10 @@ pub(crate) fn run(args: PerfArgs) -> Result<()> {
         driver.command(serde_json::json!({ "cmd": "park" }))?;
         Ok(())
       },
-    )?,
-    run_scenario(
+    )?);
+  }
+  if scenario_requested(&args.scenarios, "chat_stream") {
+    scenarios.push(run_scenario(
       &mut driver,
       &artifacts,
       "chat_stream",
@@ -270,13 +360,16 @@ pub(crate) fn run(args: PerfArgs) -> Result<()> {
       true,
       |driver| {
         driver.command(serde_json::json!({ "cmd": "hide_dock" }))?;
+        wait_for_active_agent_ready(driver)?;
         driver.command(
           serde_json::json!({ "cmd": "submit_prompt", "text": "perf-stream markdown tools" }),
         )?;
         Ok(())
       },
-    )?,
-    run_scenario(
+    )?);
+  }
+  if scenario_requested(&args.scenarios, "chat_stream_changes") {
+    scenarios.push(run_scenario(
       &mut driver,
       &artifacts,
       "chat_stream_changes",
@@ -285,13 +378,52 @@ pub(crate) fn run(args: PerfArgs) -> Result<()> {
       true,
       |driver| {
         driver.command(serde_json::json!({ "cmd": "show_changes" }))?;
+        wait_for_active_agent_ready(driver)?;
         driver.command(
           serde_json::json!({ "cmd": "submit_prompt", "text": "perf-stream markdown tools changes" }),
         )?;
         Ok(())
       },
-    )?,
-    run_scenario(
+    )?);
+  }
+  if scenario_requested(&args.scenarios, "visible_chat_stream_long") {
+    scenarios.push(run_scenario(
+      &mut driver,
+      &artifacts,
+      "visible_chat_stream_long",
+      args.sample_seconds,
+      args.skip_sample,
+      true,
+      |driver| {
+        driver.command(serde_json::json!({ "cmd": "hide_dock" }))?;
+        wait_for_active_agent_ready(driver)?;
+        driver.command(
+          serde_json::json!({ "cmd": "submit_prompt", "text": "perf-stream long markdown tools visible" }),
+        )?;
+        Ok(())
+      },
+    )?);
+  }
+  if scenario_requested(&args.scenarios, "visible_chat_stream_long_changes") {
+    scenarios.push(run_scenario(
+      &mut driver,
+      &artifacts,
+      "visible_chat_stream_long_changes",
+      args.sample_seconds,
+      args.skip_sample,
+      true,
+      |driver| {
+        driver.command(serde_json::json!({ "cmd": "show_changes" }))?;
+        wait_for_active_agent_ready(driver)?;
+        driver.command(
+          serde_json::json!({ "cmd": "submit_prompt", "text": "perf-stream long markdown tools changes visible" }),
+        )?;
+        Ok(())
+      },
+    )?);
+  }
+  if scenario_requested(&args.scenarios, "parallel_chat_stream") {
+    scenarios.push(run_scenario(
       &mut driver,
       &artifacts,
       "parallel_chat_stream",
@@ -302,7 +434,7 @@ pub(crate) fn run(args: PerfArgs) -> Result<()> {
         driver.command(serde_json::json!({ "cmd": "hide_dock" }))?;
         for (index, repo) in parallel_repos.iter().enumerate() {
           driver.command(serde_json::json!({ "cmd": "path_prompt", "path": repo }))?;
-          driver.command(serde_json::json!({ "cmd": "wait", "ms": 250 }))?;
+          wait_for_active_agent_ready(driver)?;
           driver.command(serde_json::json!({
             "cmd": "submit_prompt",
             "text": format!("perf-stream long markdown tools parallel {index}")
@@ -310,8 +442,8 @@ pub(crate) fn run(args: PerfArgs) -> Result<()> {
         }
         Ok(())
       },
-    )?,
-  ];
+    )?);
+  }
 
   let manifest = PerfManifest {
     repo,
@@ -320,6 +452,7 @@ pub(crate) fn run(args: PerfArgs) -> Result<()> {
     file_count: args.file_count,
     sample_seconds: args.sample_seconds,
     parallel_sessions: args.parallel_sessions,
+    requested_scenarios: args.scenarios,
     scenarios,
   };
   let manifest_path = run_dir.path.join("manifest.json");
@@ -330,6 +463,24 @@ pub(crate) fn run(args: PerfArgs) -> Result<()> {
   println!("summary: {}", summary_path.display());
   println!("manifest: {}", manifest_path.display());
   Ok(())
+}
+
+fn wait_for_active_agent_ready(driver: &mut DriverProcess) -> Result<()> {
+  let deadline = Instant::now() + Duration::from_secs(5);
+  loop {
+    let stats = driver.command(serde_json::json!({ "cmd": "agent_stats" }))?;
+    if stats
+      .get("active_ready")
+      .and_then(serde_json::Value::as_bool)
+      .unwrap_or(false)
+    {
+      return Ok(());
+    }
+    if Instant::now() >= deadline {
+      bail!("agent did not become ready before the scenario started: {stats}");
+    }
+    driver.command(serde_json::json!({ "cmd": "wait", "ms": 100 }))?;
+  }
 }
 
 fn setup_temp_repo(path: &Path, file_count: usize) -> Result<PathBuf> {
@@ -572,7 +723,7 @@ fn run_scenario(
   {
     let _ = fs::remove_file(&screenshot_path);
   }
-  driver.command(serde_json::json!({ "cmd": "wait", "ms": 4_000 }))?;
+  wait_until_no_turns_in_flight(driver)?;
   Ok(ScenarioReport {
     name,
     sample_path: sample_path.exists().then_some(sample_path),
@@ -582,6 +733,21 @@ fn run_scenario(
     analysis,
     ps_samples,
   })
+}
+
+fn wait_until_no_turns_in_flight(driver: &mut DriverProcess) -> Result<()> {
+  let deadline = Instant::now() + Duration::from_secs(15);
+  loop {
+    let stats = driver.command(serde_json::json!({ "cmd": "agent_stats" }))?;
+    let in_flight = stats
+      .get("total_in_flight")
+      .and_then(serde_json::Value::as_u64)
+      .unwrap_or(0);
+    if in_flight == 0 || Instant::now() >= deadline {
+      return Ok(());
+    }
+    driver.command(serde_json::json!({ "cmd": "wait", "ms": 250 }))?;
+  }
 }
 
 fn start_sample(pid: u32, seconds: u64, path: &Path) -> Result<Option<Child>> {
@@ -686,13 +852,17 @@ fn render_summary(manifest: &PerfManifest) -> String {
     manifest.sample_seconds
   ));
   out.push_str(&format!(
-    "- parallel sessions: `{}`\n\n",
+    "- parallel sessions: `{}`\n",
     manifest.parallel_sessions
   ));
+  out.push_str(&format!(
+    "- scenarios: `{}`\n\n",
+    manifest.requested_scenarios.join(", ")
+  ));
+  out.push_str("| scenario | avg CPU | max RSS MB | in-flight | session_page | dock_panel | changes_list | list_state | agent_chat_panel | text_view | serde_protocol | layout_paint | sample |\n");
   out.push_str(
-    "| scenario | avg CPU | max RSS MB | in-flight | changes_list | agent_chat | layout_paint | sample |\n",
+    "| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |\n",
   );
-  out.push_str("| --- | ---: | ---: | ---: | ---: | ---: | ---: | --- |\n");
   for scenario in &manifest.scenarios {
     let avg_cpu = average_cpu(&scenario.ps_samples)
       .map(|value| format!("{value:.1}%"))
@@ -718,13 +888,18 @@ fn render_summary(manifest: &PerfManifest) -> String {
       .map(|count| count.to_string())
       .unwrap_or_else(|| "n/a".to_string());
     out.push_str(&format!(
-      "| {} | {} | {} | {} | {} | {} | {} | {} |\n",
+      "| {} | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} |\n",
       scenario.name,
       avg_cpu,
       max_rss,
       in_flight,
+      bucket("session_page"),
+      bucket("dock_panel"),
       bucket("changes_list"),
-      bucket("agent_chat"),
+      bucket("list_state"),
+      bucket("agent_chat_panel"),
+      bucket("text_view"),
+      bucket("serde_protocol"),
       bucket("layout_paint"),
       sample_path,
     ));
@@ -755,6 +930,8 @@ mod tests {
       "--sample-seconds=2".to_string(),
       "--parallel-sessions".to_string(),
       "4".to_string(),
+      "--scenario".to_string(),
+      "idle,visible_chat_stream_long".to_string(),
       "--skip-sample".to_string(),
     ])
     .expect("args");
@@ -762,6 +939,7 @@ mod tests {
     assert_eq!(args.file_count, 42);
     assert_eq!(args.sample_seconds, 2);
     assert_eq!(args.parallel_sessions, 4);
+    assert_eq!(args.scenarios, ["idle", "visible_chat_stream_long"]);
     assert!(args.skip_sample);
   }
 
@@ -776,7 +954,7 @@ mod tests {
     let analysis = analyze_sample_text(text);
     assert_eq!(analysis.total_symbol_samples, 24);
     assert_eq!(analysis.buckets.get("changes_list"), Some(&7));
-    assert_eq!(analysis.buckets.get("agent_chat"), Some(&3));
+    assert_eq!(analysis.buckets.get("agent_chat_panel"), Some(&3));
     assert_eq!(analysis.buckets.get("layout_paint"), Some(&2));
   }
 
