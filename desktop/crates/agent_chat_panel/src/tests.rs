@@ -5800,6 +5800,29 @@ async fn add_retired_runway_panel(
 }
 
 #[gpui::test]
+async fn consuming_the_runway_shows_a_jump_to_bottom_pill(cx: &mut gpui::TestAppContext) {
+  let (panel, cx, _) = add_retired_runway_panel(cx).await;
+
+  panel.read_with(cx, |panel, _| {
+    assert!(!panel.runway_active, "the tall reply retired the runway");
+    assert!(panel.show_jump_pill, "the reader can rejoin the tail");
+  });
+  let pill = cx
+    .debug_bounds("agent-chat-jump-bottom")
+    .expect("the jump button is painted after the runway is consumed");
+
+  cx.simulate_click(pill.center(), gpui::Modifiers::default());
+  cx.run_until_parked();
+  panel.update(cx, |_, cx| cx.notify());
+  cx.run_until_parked();
+  panel.read_with(cx, |panel, _| {
+    assert!(panel.messages_list.is_following_tail());
+    assert!(!panel.runway_active);
+    assert!(!panel.show_jump_pill);
+  });
+}
+
+#[gpui::test]
 async fn the_jump_pill_keeps_following_the_tail(cx: &mut gpui::TestAppContext) {
   let (panel, cx, center) = add_retired_runway_panel(cx).await;
 

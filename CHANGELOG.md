@@ -70,7 +70,7 @@ Streaming renders incrementally, repaints on a steady beat, and saves off the ma
 
 ### The Conversation Keeps Your Place
 
-Each conversation keeps its composer draft and its scroll position across switches and restarts. Sending pins your message to the top with the reply streaming below; the jump-to-bottom pill sticks and follows the stream, and Cmd+Shift+J jumps to the latest message.
+Each conversation keeps its composer draft and its scroll position across switches and restarts. Sending pins your message to the top with the reply streaming below; when the reply grows past that anchored view, the jump-to-bottom pill lets you rejoin live scrolling. Cmd+Shift+J jumps to the latest message.
 
 ### Sessions From All Your Repositories, In One List
 

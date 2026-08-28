@@ -1660,14 +1660,18 @@ impl AgentChatPanel {
       let last = self.messages_list.bounds_for_item(last_content_ix)?;
       Some((last.bottom() - a.top()).max(px(0.)))
     });
-    let end_space = match tail_height {
-      Some(height) => (viewport_height - px(RUNWAY_TOP_MARGIN_PX) - height).max(px(0.)),
+    let raw_end_space =
+      tail_height.map(|height| viewport_height - px(RUNWAY_TOP_MARGIN_PX) - height);
+    let end_space = match raw_end_space {
+      Some(space) => space.max(px(0.)),
       None => px(self.runway_end_space),
     };
     if end_space <= px(0.) {
-      // The reply outgrew the reservation: the runway has done its job and
-      // reading continues as plain scrolling.
+      let tail_below_viewport = raw_end_space.is_some_and(|space| space < px(-1.));
       self.clear_runway();
+      if tail_below_viewport {
+        self.show_jump_pill = true;
+      }
       return;
     }
     if (f32::from(end_space) - self.runway_end_space).abs() > 0.5 {
@@ -1679,22 +1683,16 @@ impl AgentChatPanel {
     }
   }
 
-  /// With a runway active, "bottom" is the held position: re-arm the hold.
-  /// Otherwise engage sticky follow until the reader scrolls up.
+  /// Engage sticky tail-follow until the reader scrolls up.
   pub fn jump_to_tail(&mut self) {
-    if self.runway_active {
-      self.runway_following = true;
-      if let Some(item) = self.runway_anchor_item() {
-        self.hold_runway_anchor(item);
-      }
-    } else {
-      self.messages_list.set_follow_mode(gpui::FollowMode::Tail);
-    }
+    self.clear_runway();
+    self.messages_list.set_follow_mode(gpui::FollowMode::Tail);
+    self.show_jump_pill = false;
   }
 
   /// A reader scroll that lands on the very end opts into following the tail.
-  /// Same yardstick as the pill: the spacer's bottom against the viewport;
-  /// unmeasured bounds mean unknown, so the flag holds for a measured frame.
+  /// The spacer's bottom includes active runway space, so reaching it means
+  /// the reader intentionally scrolled to the end of the surface.
   fn update_reader_follow(&mut self) {
     if !self.reader_scrolled {
       return;
@@ -1712,20 +1710,20 @@ impl AgentChatPanel {
     }
   }
 
-  /// The jump pill shows only away from the tail. Unmeasured spacer bounds
-  /// (every stream commit remeasures it) mean unknown, not "away": hold the
-  /// previous answer instead of blinking at commit cadence.
+  /// The jump pill shows only when real content continues below the viewport.
+  /// Unmeasured tail bounds mean unknown, not "away": hold the previous answer
+  /// instead of blinking at commit cadence.
   fn update_jump_pill(&mut self) {
     let visible = if self.messages_list.is_following_tail()
-      || self.runway_following
       || self.messages_list.viewport_bounds().size.height <= px(0.)
     {
       Some(false)
     } else {
       let viewport_bottom = self.messages_list.viewport_bounds().bottom();
       self
-        .messages_list
-        .bounds_for_item(self.runway_spacer_ix())
+        .runway_spacer_ix()
+        .checked_sub(1)
+        .and_then(|last_content_ix| self.messages_list.bounds_for_item(last_content_ix))
         .map(|b| b.bottom() > viewport_bottom + px(1.))
     };
     if let Some(visible) = visible {
