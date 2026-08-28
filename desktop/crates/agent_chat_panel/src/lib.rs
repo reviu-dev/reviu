@@ -836,6 +836,7 @@ pub struct AgentChatPanel {
   runway_following: bool,
   /// Derived each frame; held through unmeasured frames to avoid blinking.
   show_jump_pill: bool,
+  runway_measure_pending: bool,
   /// A reader scroll landed since the last frame; ListState can't be
   /// re-borrowed inside its own scroll handler, so the check runs at render.
   reader_scrolled: bool,
@@ -946,6 +947,7 @@ impl AgentChatPanel {
       runway_end_space: 0.0,
       runway_following: false,
       show_jump_pill: false,
+      runway_measure_pending: false,
       reader_scrolled: false,
       scroll_save_pending: false,
       available_commands: Vec::new(),
@@ -1547,6 +1549,7 @@ impl AgentChatPanel {
       runway_end_space: 0.0,
       runway_following: false,
       show_jump_pill: false,
+      runway_measure_pending: false,
       reader_scrolled: false,
       scroll_save_pending: false,
       available_commands: Vec::new(),
@@ -1705,6 +1708,7 @@ impl AgentChatPanel {
     };
     self.runway_active = true;
     self.runway_following = true;
+    self.runway_measure_pending = false;
     self.reader_scrolled = false;
     // Provisional full-viewport reservation: the anchored rows have no
     // measured bounds yet, and without scroll room past the tail the list
@@ -1717,15 +1721,16 @@ impl AgentChatPanel {
     self.mark_item_changed_at(spacer);
   }
 
-  /// Pins the anchor a small margin below the viewport top; the clamp at the
-  /// list start keeps a short transcript entirely visible (no phantom scroll).
+  /// Pins the anchor a small margin below the viewport top when the list has content above it.
   fn hold_runway_anchor(&mut self, anchor_item: usize) {
     let anchor_ix = self.list_ix_for_item(anchor_item);
     self.messages_list.scroll_to(gpui::ListOffset {
       item_ix: anchor_ix,
       offset_in_item: px(0.),
     });
-    self.messages_list.scroll_by(px(-RUNWAY_TOP_MARGIN_PX));
+    if anchor_ix > 0 {
+      self.messages_list.scroll_by(px(-RUNWAY_TOP_MARGIN_PX));
+    }
   }
 
   fn clear_runway(&mut self) {
@@ -1734,14 +1739,28 @@ impl AgentChatPanel {
     }
     self.runway_active = false;
     self.runway_following = false;
+    self.runway_measure_pending = false;
     self.runway_end_space = 0.0;
     let spacer = self.runway_spacer_ix();
     self.mark_item_changed_at(spacer);
   }
 
+  fn schedule_runway_measure(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    if self.runway_measure_pending {
+      return;
+    }
+    self.runway_measure_pending = true;
+    cx.on_next_frame(window, |panel, _window, cx| {
+      panel.runway_measure_pending = false;
+      if panel.runway_active {
+        cx.notify();
+      }
+    });
+  }
+
   /// Per-frame runway upkeep: size the reservation to what the turn has not
   /// filled yet, and keep the anchor pinned while following.
-  fn update_runway(&mut self, window: &Window) {
+  fn update_runway(&mut self, window: &mut Window, cx: &mut Context<Self>) {
     if !self.runway_active {
       return;
     }
@@ -1758,14 +1777,38 @@ impl AgentChatPanel {
       window.viewport_size().height
     };
     let anchor_bounds = self.messages_list.bounds_for_item(anchor_ix);
+    let last_content_ix = spacer_ix.checked_sub(1);
+    let last_content_bounds = last_content_ix.and_then(|ix| self.messages_list.bounds_for_item(ix));
+    if anchor_bounds.is_none()
+      && self
+        .messages_list
+        .item_is_above_viewport(anchor_ix)
+        .unwrap_or(false)
+    {
+      if self.runway_following {
+        self.hold_runway_anchor(anchor_item);
+        self.schedule_runway_measure(window, cx);
+        return;
+      }
+      let tail_below_viewport = last_content_bounds
+        .map(|last| last.bottom() > viewport.bottom() + px(1.))
+        .unwrap_or(false);
+      self.clear_runway();
+      if tail_below_viewport {
+        self.show_jump_pill = true;
+      }
+      return;
+    }
     // Missing bounds mean unknown, not zero: every stream commit remeasures
     // the tail rows, and a zero end space would snap the list to its end for
     // one frame. Let the previous reservation stand through those frames.
     let tail_height = anchor_bounds.and_then(|a| {
-      let last_content_ix = spacer_ix.checked_sub(1)?;
-      let last = self.messages_list.bounds_for_item(last_content_ix)?;
+      let last = last_content_bounds?;
       Some((last.bottom() - a.top()).max(px(0.)))
     });
+    if tail_height.is_none() {
+      self.schedule_runway_measure(window, cx);
+    }
     let raw_end_space =
       tail_height.map(|height| viewport_height - px(RUNWAY_TOP_MARGIN_PX) - height);
     let end_space = match raw_end_space {

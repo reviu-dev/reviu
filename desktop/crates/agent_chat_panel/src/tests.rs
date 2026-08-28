@@ -5783,6 +5783,56 @@ async fn shift_enter_inserts_a_newline_without_submitting(cx: &mut gpui::TestApp
 }
 
 #[gpui::test]
+async fn first_prompt_overflow_rechecks_runway_after_the_list_mounts(
+  cx: &mut gpui::TestAppContext,
+) {
+  let (panel, cx) = add_panel_window(cx);
+  cx.run_until_parked();
+  panel.update(cx, |panel, cx| {
+    panel.status = Status::Ready;
+    panel.items.push(user_message("first prompt"));
+    panel.in_flight = true;
+    panel.pending_agent = (0..200).map(|i| format!("paragraph {i}\n\n")).collect();
+    panel.sync_list_count();
+    panel.arm_runway();
+    cx.notify();
+  });
+  cx.run_until_parked();
+
+  for _ in 0..3 {
+    if panel.read_with(cx, |panel, _| panel.show_jump_pill) {
+      break;
+    }
+    if cx.update(|window, cx| window.simulate_next_frame(cx)) == 0 {
+      break;
+    }
+    cx.run_until_parked();
+  }
+
+  panel.read_with(cx, |panel, _| {
+    let viewport = panel.messages_list.viewport_bounds();
+    let anchor = panel
+      .runway_anchor_item()
+      .and_then(|item| panel.messages_list.bounds_for_item(panel.list_ix_for_item(item)));
+    let last = panel
+      .runway_spacer_ix()
+      .checked_sub(1)
+      .and_then(|item| panel.messages_list.bounds_for_item(item));
+    assert!(
+      !panel.runway_active,
+      "the tall first reply retired the runway: end_space={} viewport={viewport:?} anchor={anchor:?} last={last:?}",
+      panel.runway_end_space
+    );
+    assert!(
+      panel.show_jump_pill,
+      "the reader can rejoin the tail: following={} viewport={viewport:?} anchor={anchor:?} last={last:?}",
+      panel.messages_list.is_following_tail()
+    );
+  });
+  assert!(cx.debug_bounds("agent-chat-jump-bottom").is_some());
+}
+
+#[gpui::test]
 async fn the_runway_holds_the_prompt_at_the_top_while_the_reply_grows(
   cx: &mut gpui::TestAppContext,
 ) {

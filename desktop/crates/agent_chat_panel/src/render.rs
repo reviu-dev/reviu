@@ -1538,7 +1538,7 @@ impl AgentChatPanel {
 
 impl Render for AgentChatPanel {
   fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-    self.update_runway(window);
+    self.update_runway(window, cx);
     self.update_reader_follow();
     self.update_jump_pill();
     if self.scroll_save_pending {
