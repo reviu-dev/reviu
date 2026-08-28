@@ -269,11 +269,9 @@ mod tests {
     });
     let first_id = page.read_with(cx, |page, _| page.agent_review.all()[0].id);
 
-    // Away and back: each repository keeps the batch that belongs to it.
+    // Drive checkout sync directly so this review test does not spawn an agent process.
     page.update_in(cx, |page, window, cx| {
-      page
-        .set_fallback_repo(other.path.clone(), window, cx)
-        .expect("switch to the other repository");
+      page.apply_fallback_repo(Some(other.path.clone()), window, cx);
     });
     page.read_with(cx, |page, cx| {
       assert!(page.agent_review.all().is_empty());
@@ -290,9 +288,7 @@ mod tests {
     });
 
     page.update_in(cx, |page, window, cx| {
-      page
-        .set_fallback_repo(repo.path.clone(), window, cx)
-        .expect("switch back");
+      page.apply_fallback_repo(Some(repo.path.clone()), window, cx);
     });
     page.read_with(cx, |page, cx| {
       let comments = page.agent_review.all();
@@ -339,14 +335,10 @@ mod tests {
     // Discarding takes the file with it: nothing comes back on the next visit.
     page.update(cx, |page, cx| page.discard_agent_review(cx));
     page.update_in(cx, |page, window, cx| {
-      page
-        .set_fallback_repo(other.path.clone(), window, cx)
-        .expect("switch to the other repository");
+      page.apply_fallback_repo(Some(other.path.clone()), window, cx);
     });
     page.update_in(cx, |page, window, cx| {
-      page
-        .set_fallback_repo(repo.path.clone(), window, cx)
-        .expect("switch back");
+      page.apply_fallback_repo(Some(repo.path.clone()), window, cx);
     });
     page.read_with(cx, |page, _| assert!(page.agent_review.all().is_empty()));
 
