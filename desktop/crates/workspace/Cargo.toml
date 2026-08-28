@@ -4,6 +4,9 @@ version.workspace = true
 edition.workspace = true
 publish.workspace = true
 
+[features]
+test-support = ["agent_chat_panel/test-support"]
+
 [dependencies]
 agent_acp = { workspace = true }
 app_log = { workspace = true }

@@ -2,9 +2,13 @@
 //! window and takes JSON-lines commands on stdin, one response per line on
 //! stdout. Built for agents and humans debugging the UI without the full app.
 //!
+//! `reviu-perf` wraps this driver with repeatable perf scenarios, a temporary
+//! repository, the stub agent and `sample`/`ps` collection.
+//!
 //! Verbs: `bounds` (test backend only, of a debug selector), `click` (selector
 //! on test or point on both), `type`, `key`, `clock` (virtual ms), `wait` (real
-//! ms), `park`, `path_prompt`, `screenshot` (visual backend only), `quit`.
+//! ms), `park`, `path_prompt`, `screenshot` (visual backend only),
+//! `show_changes`, `hide_dock`, `submit_prompt`, `quit`.
 //!
 //! Usage: `cargo run -p reviu_driver -- --backend test` then e.g.
 //! `{"cmd":"bounds","selector":"session-repo-context"}`
@@ -148,6 +152,14 @@ enum Command {
   Screenshot {
     path: String,
   },
+  /// Direct driver hook for perf runs: open the Changes dock tab.
+  ShowChanges,
+  /// Direct driver hook for perf runs: close the right dock.
+  HideDock,
+  /// Direct driver hook for perf runs: fill and submit the agent composer.
+  SubmitPrompt {
+    text: String,
+  },
   Quit,
 }
 
@@ -237,8 +249,14 @@ fn run_test_backend() {
   app.executor().allow_parking();
   app.update(init_app);
 
-  let (root, cx) = app.add_window_view(|window, cx| build_root(window, cx).0);
+  let mut mounted = None;
+  let (root, cx) = app.add_window_view(|window, cx| {
+    let (root, view) = build_root(window, cx);
+    mounted = Some(view);
+    root
+  });
   let _root = root;
+  let view = mounted.expect("workspace view");
   cx.run_until_parked();
   respond(ok(serde_json::json!({
     "ready": true,
@@ -251,11 +269,15 @@ fn run_test_backend() {
     let Some(command) = parse_command_line(&line) else {
       continue;
     };
-    handle_test_command(command, cx);
+    handle_test_command(command, &view, cx);
   }
 }
 
-fn handle_test_command(command: Command, cx: &mut gpui::VisualTestContext) {
+fn handle_test_command(
+  command: Command,
+  view: &Entity<WorkspaceView>,
+  cx: &mut gpui::VisualTestContext,
+) {
   match command {
     Command::Bounds { selector } => match cx.debug_bounds(intern_selector(&selector)) {
       Some(bounds) => respond(ok(serde_json::json!({
@@ -307,16 +329,51 @@ fn handle_test_command(command: Command, cx: &mut gpui::VisualTestContext) {
       respond(ok(serde_json::json!({})));
     }
     Command::PathPrompt { path } => {
-      if !cx.did_prompt_for_paths() {
-        respond(err("no path prompt is open"));
+      if cx.did_prompt_for_paths() {
+        cx.simulate_path_prompt_response(|_| Some(vec![PathBuf::from(path)]));
+        cx.run_until_parked();
+        respond(ok(serde_json::json!({})));
         return;
       }
-      cx.simulate_path_prompt_response(|_| Some(vec![PathBuf::from(path)]));
+      let result = cx.update(|window, cx| {
+        view.update(cx, |view, cx| {
+          view.open_repository_for_driver(PathBuf::from(path), window, cx)
+        })
+      });
       cx.run_until_parked();
-      respond(ok(serde_json::json!({})));
+      match result {
+        Ok(()) => respond(ok(serde_json::json!({}))),
+        Err(error) => respond(err(error)),
+      }
     }
     Command::Screenshot { path: _path } => {
       respond(err("screenshot requires --backend visual"));
+    }
+    Command::ShowChanges => {
+      cx.update(|window, cx| {
+        view.update(cx, |view, cx| view.show_changes_for_driver(window, cx));
+      });
+      cx.run_until_parked();
+      respond(ok(serde_json::json!({})));
+    }
+    Command::HideDock => {
+      cx.update(|window, cx| {
+        view.update(cx, |view, cx| view.hide_dock_for_driver(window, cx));
+      });
+      cx.run_until_parked();
+      respond(ok(serde_json::json!({})));
+    }
+    Command::SubmitPrompt { text } => {
+      let result = cx.update(|window, cx| {
+        view.update(cx, |view, cx| {
+          view.submit_agent_prompt_for_driver(text, window, cx)
+        })
+      });
+      cx.run_until_parked();
+      match result {
+        Ok(()) => respond(ok(serde_json::json!({}))),
+        Err(error) => respond(err(error)),
+      }
     }
     Command::Quit => quit_now(),
   }
@@ -447,6 +504,18 @@ fn handle_visual_command(
         Err(error) => respond(err(error)),
       }
     }
+    Command::ShowChanges => match show_changes_directly(cx, window, view) {
+      Ok(()) => respond(ok(serde_json::json!({}))),
+      Err(error) => respond(err(error)),
+    },
+    Command::HideDock => match hide_dock_directly(cx, window, view) {
+      Ok(()) => respond(ok(serde_json::json!({}))),
+      Err(error) => respond(err(error)),
+    },
+    Command::SubmitPrompt { text } => match submit_prompt_directly(cx, window, view, text) {
+      Ok(()) => respond(ok(serde_json::json!({}))),
+      Err(error) => respond(err(error)),
+    },
     Command::Quit => quit_now(),
   }
 }
@@ -482,6 +551,52 @@ fn open_repository_directly(
     .update_window(window, |_, window, cx| {
       view.update(cx, |view, cx| {
         view.open_repository_for_driver(path, window, cx)
+      })
+    })
+    .map_err(|error| error.to_string())?;
+  cx.run_until_parked();
+  result.map_err(|error| error.to_string())
+}
+
+#[cfg(target_os = "macos")]
+fn show_changes_directly(
+  cx: &mut VisualTestAppContext,
+  window: AnyWindowHandle,
+  view: &Entity<WorkspaceView>,
+) -> Result<(), String> {
+  cx.update_window(window, |_, window, cx| {
+    view.update(cx, |view, cx| view.show_changes_for_driver(window, cx));
+  })
+  .map_err(|error| error.to_string())?;
+  cx.run_until_parked();
+  Ok(())
+}
+
+#[cfg(target_os = "macos")]
+fn hide_dock_directly(
+  cx: &mut VisualTestAppContext,
+  window: AnyWindowHandle,
+  view: &Entity<WorkspaceView>,
+) -> Result<(), String> {
+  cx.update_window(window, |_, window, cx| {
+    view.update(cx, |view, cx| view.hide_dock_for_driver(window, cx));
+  })
+  .map_err(|error| error.to_string())?;
+  cx.run_until_parked();
+  Ok(())
+}
+
+#[cfg(target_os = "macos")]
+fn submit_prompt_directly(
+  cx: &mut VisualTestAppContext,
+  window: AnyWindowHandle,
+  view: &Entity<WorkspaceView>,
+  text: String,
+) -> Result<(), String> {
+  let result = cx
+    .update_window(window, |_, window, cx| {
+      view.update(cx, |view, cx| {
+        view.submit_agent_prompt_for_driver(text, window, cx)
       })
     })
     .map_err(|error| error.to_string())?;
@@ -586,6 +701,24 @@ mod tests {
     match command {
       Command::Screenshot { path } => assert_eq!(path, "/tmp/reviu-driver/screen.png"),
       _ => panic!("expected screenshot command"),
+    }
+  }
+
+  #[test]
+  fn perf_driver_commands_are_json_lines_compatible() {
+    assert!(matches!(
+      serde_json::from_str::<Command>(r#"{"cmd":"show_changes"}"#).expect("show changes"),
+      Command::ShowChanges
+    ));
+    assert!(matches!(
+      serde_json::from_str::<Command>(r#"{"cmd":"hide_dock"}"#).expect("hide dock"),
+      Command::HideDock
+    ));
+    match serde_json::from_str::<Command>(r#"{"cmd":"submit_prompt","text":"perf-stream"}"#)
+      .expect("submit prompt")
+    {
+      Command::SubmitPrompt { text } => assert_eq!(text, "perf-stream"),
+      _ => panic!("expected submit prompt command"),
     }
   }
 }

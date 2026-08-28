@@ -1,6 +1,7 @@
 //! Minimal ACP agent for tests and the driver: acks every prompt.
 
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use agent_client_protocol::schema::{
   AgentCapabilities, CancelNotification, ContentBlock, Diff, Implementation, InitializeRequest,
@@ -180,6 +181,76 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
                 ContentBlock::Text(TextContent::new(format!("model: {model}"))),
               )),
             ));
+          }
+          if prompt_contains("perf-stream") {
+            let wants_tools = prompt_contains("tools");
+            let cx = cx.clone();
+            let session_id = session_id.clone();
+            smol::spawn(async move {
+              if wants_tools {
+                let mut call = ToolCall::new(
+                  ToolCallId::new("stub-perf-tool"),
+                  "Run perf fixture".to_string(),
+                );
+                call.kind = ToolKind::Execute;
+                call.status = ToolCallStatus::InProgress;
+                call.raw_input = Some(serde_json::json!({ "command": "generate perf output" }));
+                let _ = cx.send_notification(SessionNotification::new(
+                  session_id.clone(),
+                  SessionUpdate::ToolCall(call),
+                ));
+              }
+
+              for index in 0..80 {
+                let text = format!(
+                  "\n\n### Chunk {index}\n\n- item `{index}` with **markdown** and [a link](https://example.com/{index})\n\n```rust\nfn perf_{index}(value: usize) -> usize {{\n  value + {index}\n}}\n```\n",
+                );
+                let _ = cx.send_notification(SessionNotification::new(
+                  session_id.clone(),
+                  SessionUpdate::AgentMessageChunk(
+                    agent_client_protocol::schema::ContentChunk::new(ContentBlock::Text(
+                      TextContent::new(text),
+                    )),
+                  ),
+                ));
+
+                if wants_tools && index % 4 == 0 {
+                  let mut delta = ToolCallUpdate::new(
+                    ToolCallId::new("stub-perf-tool"),
+                    ToolCallUpdateFields::new(),
+                  );
+                  delta.meta = serde_json::json!({
+                    "terminal_output_delta": {
+                      "terminal_id": "stub-perf-tool",
+                      "data": format!("perf output line {index}\\n")
+                    }
+                  })
+                  .as_object()
+                  .cloned();
+                  let _ = cx.send_notification(SessionNotification::new(
+                    session_id.clone(),
+                    SessionUpdate::ToolCallUpdate(delta),
+                  ));
+                }
+
+                smol::Timer::after(Duration::from_millis(45)).await;
+              }
+
+              if wants_tools {
+                let done = ToolCallUpdate::new(
+                  ToolCallId::new("stub-perf-tool"),
+                  ToolCallUpdateFields::new().status(ToolCallStatus::Completed),
+                );
+                let _ = cx.send_notification(SessionNotification::new(
+                  session_id.clone(),
+                  SessionUpdate::ToolCallUpdate(done),
+                ));
+              }
+
+              let _ = responder.respond(PromptResponse::new(StopReason::EndTurn));
+            })
+            .detach();
+            return Ok(());
           }
           // "codex" mimics codex-acp: the agent runs the command itself and
           // streams output through tool-call metadata, not client terminals.

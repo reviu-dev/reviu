@@ -1141,6 +1141,18 @@ impl AgentChatPanel {
     });
   }
 
+  #[cfg(any(test, feature = "test-support"))]
+  #[doc(hidden)]
+  pub fn submit_prompt_for_driver(
+    &mut self,
+    text: &str,
+    window: &mut Window,
+    cx: &mut Context<Self>,
+  ) {
+    self.set_composer_value(text, window, cx);
+    self.submit(window, cx);
+  }
+
   fn browse_composer_history(&mut self, delta: i32, window: &mut Window, cx: &mut Context<Self>) {
     let (value, at_history_edge) = {
       let input = self.input.read(cx);

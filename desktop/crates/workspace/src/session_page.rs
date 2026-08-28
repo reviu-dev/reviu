@@ -1063,6 +1063,35 @@ impl SessionPage {
     cx.notify();
   }
 
+  #[cfg(any(test, feature = "test-support"))]
+  #[doc(hidden)]
+  pub fn show_changes_for_driver(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    self.show_dock_tab(DockPanelTab::Changes, window, cx);
+  }
+
+  #[cfg(any(test, feature = "test-support"))]
+  #[doc(hidden)]
+  pub fn hide_dock_for_driver(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    self.close_dock(window, cx);
+  }
+
+  #[cfg(any(test, feature = "test-support"))]
+  #[doc(hidden)]
+  pub fn submit_agent_prompt_for_driver(
+    &mut self,
+    text: String,
+    window: &mut Window,
+    cx: &mut Context<Self>,
+  ) -> Result<(), SharedString> {
+    let Some(panel) = self.agent_chat_view.clone() else {
+      return Err("No agent session is open.".into());
+    };
+    panel.update(cx, |panel, cx| {
+      panel.submit_prompt_for_driver(&text, window, cx);
+    });
+    Ok(())
+  }
+
   /// The shortcut of a tab means "take me there". It only means "get out of the
   /// way" when the keyboard is already in that surface, which is what lets it
   /// bring you back from the editor.

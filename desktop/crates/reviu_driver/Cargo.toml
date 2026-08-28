@@ -15,11 +15,15 @@ image = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 ui = { workspace = true }
-workspace = { workspace = true }
+workspace = { workspace = true, features = ["test-support"] }
 
 [[bin]]
 name = "reviu-driver"
 path = "src/main.rs"
+
+[[bin]]
+name = "reviu-perf"
+path = "src/bin/reviu_perf.rs"
 
 [lints]
 workspace = true

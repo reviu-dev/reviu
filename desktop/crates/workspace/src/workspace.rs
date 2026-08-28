@@ -316,6 +316,35 @@ impl WorkspaceView {
     })
   }
 
+  #[cfg(any(test, feature = "test-support"))]
+  #[doc(hidden)]
+  pub fn show_changes_for_driver(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    self
+      .session_page
+      .update(cx, |page, cx| page.show_changes_for_driver(window, cx));
+  }
+
+  #[cfg(any(test, feature = "test-support"))]
+  #[doc(hidden)]
+  pub fn hide_dock_for_driver(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    self
+      .session_page
+      .update(cx, |page, cx| page.hide_dock_for_driver(window, cx));
+  }
+
+  #[cfg(any(test, feature = "test-support"))]
+  #[doc(hidden)]
+  pub fn submit_agent_prompt_for_driver(
+    &mut self,
+    text: String,
+    window: &mut Window,
+    cx: &mut Context<Self>,
+  ) -> Result<(), gpui::SharedString> {
+    self.session_page.update(cx, |page, cx| {
+      page.submit_agent_prompt_for_driver(text, window, cx)
+    })
+  }
+
   fn on_window_appearance_changed(&mut self, window: &mut Window, cx: &mut Context<Self>) {
     if !PersistedSettings::get(cx).auto_switch_theme {
       return;
