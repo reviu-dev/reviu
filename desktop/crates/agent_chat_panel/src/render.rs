@@ -1935,7 +1935,7 @@ impl Render for AgentChatPanel {
 }
 
 impl AgentChatPanel {
-  /// Cards for messages queued mid-turn, stacked above the composer.
+  /// Messages queued mid-turn, tucked behind the composer.
   fn render_queued_prompts(
     &self,
     theme: &gpui_component::Theme,
@@ -1944,19 +1944,30 @@ impl AgentChatPanel {
     if self.queued_prompts.is_empty() {
       return None;
     }
-    let mut col = v_flex()
+
+    let mut stack = v_flex()
       .debug_selector(|| "agent-chat-queued".to_string())
-      .gap_1();
-    for (ix, text) in self.queued_prompts.iter().enumerate() {
-      col = col.child(
+      .gap_0();
+
+    for ix in (0..self.queued_prompts.len()).rev() {
+      let text = self.queued_prompts[ix].clone();
+      let inset = 12. + ix.min(3) as f32 * 8.;
+      let bottom_margin = if ix == 0 { -8. } else { -4. };
+
+      stack = stack.child(
         h_flex()
+          .debug_selector(move || format!("agent-chat-queued-card-{ix}"))
           .gap_2()
           .items_center()
-          .px_2()
+          .ml(px(inset))
+          .mr(px(inset))
+          .mb(px(bottom_margin))
+          .px_3()
           .py_1()
-          .rounded(theme.radius)
+          .rounded_t(theme.radius_lg)
+          .rounded_b(px(0.))
           .border_1()
-          .border_color(theme.border)
+          .border_color(theme.border.opacity(0.72))
           .bg(theme.background)
           .child(
             gpui_component::Icon::new(UiIconName::MessageCirclePlus)
@@ -1970,7 +1981,7 @@ impl AgentChatPanel {
               .truncate()
               .text_sm()
               .text_color(theme.foreground)
-              .child(text.clone()),
+              .child(text),
           )
           .when(self.in_flight && self.supports_steering, |this| {
             this.child(
@@ -2007,7 +2018,7 @@ impl AgentChatPanel {
           ),
       );
     }
-    Some(col.into_any_element())
+    Some(stack.into_any_element())
   }
 
   /// Thumbnails of the images staged for the next prompt.

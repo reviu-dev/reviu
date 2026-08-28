@@ -5425,6 +5425,48 @@ async fn typing_enter_mid_turn_queues_the_message(cx: &mut gpui::TestAppContext)
 }
 
 #[gpui::test]
+async fn queued_messages_stack_behind_the_composer(cx: &mut gpui::TestAppContext) {
+  let (panel, cx) = add_panel_window(cx);
+  panel.update(cx, |panel, cx| {
+    panel.status = Status::Ready;
+    panel.in_flight = true;
+    panel.queued_prompts = vec!["first".into(), "second".into(), "third".into()];
+    cx.notify();
+  });
+  cx.run_until_parked();
+
+  let composer = cx
+    .debug_bounds("agent-chat-composer")
+    .expect("composer is painted");
+  let first = cx
+    .debug_bounds("agent-chat-queued-card-0")
+    .expect("next queued prompt is painted");
+  let second = cx
+    .debug_bounds("agent-chat-queued-card-1")
+    .expect("second queued prompt is painted");
+  let third = cx
+    .debug_bounds("agent-chat-queued-card-2")
+    .expect("third queued prompt is painted");
+
+  assert!(
+    f32::from(third.top()) < f32::from(second.top())
+      && f32::from(second.top()) < f32::from(first.top())
+      && f32::from(first.top()) < f32::from(composer.top()),
+    "queued prompts stack above the composer in reverse send order"
+  );
+  assert!(
+    f32::from(first.bottom()) > f32::from(composer.top()),
+    "the next queued prompt tucks behind the composer"
+  );
+  assert!(
+    f32::from(composer.left()) < f32::from(first.left())
+      && f32::from(first.left()) < f32::from(second.left())
+      && f32::from(second.left()) < f32::from(third.left()),
+    "older queued prompts are progressively inset"
+  );
+}
+
+#[gpui::test]
 async fn editing_a_queued_message_swaps_it_with_the_draft(cx: &mut gpui::TestAppContext) {
   let (panel, cx) = add_panel_window(cx);
   panel.update_in(cx, |panel, window, cx| {
