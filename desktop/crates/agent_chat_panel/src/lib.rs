@@ -103,7 +103,7 @@ struct PendingModelSelection {
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 struct ChatMessage {
   role: ChatRole,
-  text: String,
+  text: SharedString,
   /// Number of images attached when the message was sent.
   #[serde(default)]
   images: usize,
@@ -1123,7 +1123,9 @@ impl AgentChatPanel {
       .items
       .iter()
       .filter_map(|item| match item {
-        ChatItem::Message(message) if message.role == ChatRole::User => Some(message.text.clone()),
+        ChatItem::Message(message) if message.role == ChatRole::User => {
+          Some(message.text.to_string())
+        }
         _ => None,
       })
       .collect()
@@ -1339,7 +1341,7 @@ impl AgentChatPanel {
   pub fn seed_user_message_for_test(&mut self, text: impl Into<String>, cx: &mut Context<Self>) {
     self.items.push(ChatItem::Message(ChatMessage {
       role: ChatRole::User,
-      text: text.into(),
+      text: SharedString::from(text.into()),
       images: 0,
       image_data: Vec::new(),
     }));
@@ -1520,7 +1522,7 @@ impl AgentChatPanel {
       .items
       .iter()
       .filter_map(|item| match item {
-        ChatItem::Message(message) => Some(message.text.clone()),
+        ChatItem::Message(message) => Some(message.text.to_string()),
         _ => None,
       })
       .collect()
@@ -2206,7 +2208,8 @@ impl AgentChatPanel {
             text: format!(
               "[error] Could not switch model: {}",
               truncate_chars(&raw, 200)
-            ),
+            )
+            .into(),
             images: 0,
             image_data: Vec::new(),
           }));
@@ -2563,7 +2566,7 @@ impl AgentChatPanel {
     if m.role != ChatRole::User || checkpoint_ref_before(&self.items, idx).is_none() {
       return;
     }
-    let text = m.text.clone();
+    let text = m.text.to_string();
     // auto_grow only measures the wrap after the first layout: started at one
     // row, a tall bubble collapses for a frame then jumps back. Seeding the
     // minimum with an estimate keeps the bubble's height through the switch.
@@ -3138,7 +3141,7 @@ impl AgentChatPanel {
     self.current_conv.preview = preview_of(&self.items);
     if self.current_conv.title.is_empty()
       && let Some(first_user) = self.items.iter().find_map(|i| match i {
-        ChatItem::Message(m) if matches!(m.role, ChatRole::User) => Some(m.text.clone()),
+        ChatItem::Message(m) if matches!(m.role, ChatRole::User) => Some(m.text.to_string()),
         _ => None,
       })
     {

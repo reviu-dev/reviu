@@ -289,7 +289,7 @@ impl AgentChatPanel {
     let text = sanitize_agent_markdown(&std::mem::take(&mut self.pending_agent));
     self.items.push(ChatItem::Message(ChatMessage {
       role: ChatRole::Agent,
-      text,
+      text: text.into(),
       images: 0,
       image_data: Vec::new(),
     }));
@@ -336,7 +336,7 @@ impl AgentChatPanel {
     let images = std::mem::take(&mut self.staged_images);
     self.items.push(ChatItem::Message(ChatMessage {
       role,
-      text: text.clone(),
+      text: text.clone().into(),
       images: images.len(),
       image_data: images.clone(),
     }));
@@ -379,7 +379,7 @@ impl AgentChatPanel {
     self.flush_turn_buffers();
     self.items.push(ChatItem::Message(ChatMessage {
       role: ChatRole::User,
-      text: text.clone(),
+      text: text.clone().into(),
       images: 0,
       image_data: Vec::new(),
     }));
@@ -465,7 +465,7 @@ impl AgentChatPanel {
               };
               panel.items.push(ChatItem::Message(ChatMessage {
                 role: ChatRole::System,
-                text,
+                text: text.into(),
                 images: 0,
                 image_data: Vec::new(),
               }));
@@ -483,7 +483,7 @@ Its provider may have refused it (credits, usage limit) without reporting an err
                 });
                 panel.items.push(ChatItem::Message(ChatMessage {
                   role: ChatRole::System,
-                  text: format!("[error] {message}"),
+                  text: format!("[error] {message}").into(),
                   images: 0,
                   image_data: Vec::new(),
                 }));
@@ -525,7 +525,9 @@ Its provider may have refused it (credits, usage limit) without reporting an err
                 .iter()
                 .rev()
                 .find_map(|item| match item {
-                  ChatItem::Message(m) if matches!(m.role, ChatRole::Agent) => Some(m.text.clone()),
+                  ChatItem::Message(m) if matches!(m.role, ChatRole::Agent) => {
+                    Some(m.text.to_string())
+                  }
                   ChatItem::Message(m)
                     if matches!(m.role, ChatRole::User | ChatRole::ReviewExport) =>
                   {
@@ -540,7 +542,7 @@ Its provider may have refused it (credits, usage limit) without reporting an err
               if !already_shown {
                 panel.items.push(ChatItem::Message(ChatMessage {
                   role: ChatRole::System,
-                  text,
+                  text: text.into(),
                   images: 0,
                   image_data: Vec::new(),
                 }));

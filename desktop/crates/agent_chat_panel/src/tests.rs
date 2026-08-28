@@ -38,7 +38,7 @@ fn test_cwd() -> &'static std::path::Path {
 fn user_message(text: &str) -> ChatItem {
   ChatItem::Message(ChatMessage {
     role: ChatRole::User,
-    text: text.to_string(),
+    text: text.into(),
     images: 0,
     image_data: Vec::new(),
   })
@@ -47,7 +47,7 @@ fn user_message(text: &str) -> ChatItem {
 fn agent_message(text: &str) -> ChatItem {
   ChatItem::Message(ChatMessage {
     role: ChatRole::Agent,
-    text: text.to_string(),
+    text: text.into(),
     images: 0,
     image_data: Vec::new(),
   })
@@ -74,7 +74,7 @@ fn checkpoint_insert_index_lands_before_last_user_prompt() {
 
   let review_only = vec![ChatItem::Message(ChatMessage {
     role: ChatRole::ReviewExport,
-    text: "### a.rs:L1 (new side)\nfix\n".to_string(),
+    text: "### a.rs:L1 (new side)\nfix\n".into(),
     images: 0,
     image_data: Vec::new(),
   })];
@@ -2708,7 +2708,7 @@ async fn review_export_renders_as_a_prompt_card(cx: &mut gpui::TestAppContext) {
     panel.status = Status::Ready;
     panel.items = vec![ChatItem::Message(ChatMessage {
       role: ChatRole::ReviewExport,
-      text: "### a.rs:L1 (new side)\nfix this\n".to_string(),
+      text: "### a.rs:L1 (new side)\nfix this\n".into(),
       images: 0,
       image_data: Vec::new(),
     })];
@@ -2731,7 +2731,7 @@ async fn review_export_renders_as_a_prompt_card(cx: &mut gpui::TestAppContext) {
 fn review_export_role_survives_persistence_roundtrip() {
   let message = ChatMessage {
     role: ChatRole::ReviewExport,
-    text: "### a.rs:L1 (new side)\nfix\n".to_string(),
+    text: "### a.rs:L1 (new side)\nfix\n".into(),
     images: 0,
     image_data: Vec::new(),
   };

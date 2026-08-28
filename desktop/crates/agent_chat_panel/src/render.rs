@@ -93,7 +93,7 @@ pub(crate) fn stateful_markdown_view(
 
 pub(crate) fn markdown_view(
   id: impl Into<gpui::ElementId>,
-  source: &str,
+  source: impl Into<SharedString>,
   extensions: &gpui_component::text::MarkdownExtensions,
   cx: &App,
 ) -> gpui::AnyElement {
@@ -104,16 +104,56 @@ pub(crate) fn markdown_view(
 /// as document titles.
 pub(crate) fn markdown_view_with_label_headings(
   id: impl Into<gpui::ElementId>,
-  source: &str,
+  source: impl Into<SharedString>,
   extensions: &gpui_component::text::MarkdownExtensions,
   cx: &App,
 ) -> gpui::AnyElement {
   markdown_text_view(id, source, extensions, true, cx)
 }
 
+fn agent_message_needs_markdown(source: &str) -> bool {
+  source.lines().any(|line| {
+    let trimmed = line.trim_start();
+    trimmed.starts_with('#')
+      || trimmed.starts_with('>')
+      || trimmed.starts_with("- ")
+      || trimmed.starts_with("* ")
+      || trimmed.starts_with("+ ")
+      || starts_with_ordered_list_marker(trimmed)
+      || trimmed.starts_with("```")
+      || trimmed.starts_with("~~~")
+      || trimmed.contains('`')
+      || trimmed.contains('*')
+      || trimmed.contains('_')
+      || (trimmed.contains('[') && trimmed.contains("]("))
+  })
+}
+
+fn starts_with_ordered_list_marker(source: &str) -> bool {
+  let digit_count = source.chars().take_while(|ch| ch.is_ascii_digit()).count();
+  digit_count > 0 && source[digit_count..].starts_with(". ")
+}
+
+#[cfg(test)]
+mod agent_message_render_tests {
+  use super::*;
+
+  #[test]
+  fn plain_agent_messages_skip_markdown_rendering() {
+    assert!(!agent_message_needs_markdown(
+      "short answer\nwith another line"
+    ));
+    assert!(agent_message_needs_markdown("- item"));
+    assert!(agent_message_needs_markdown("12. item"));
+    assert!(agent_message_needs_markdown("use `code` here"));
+    assert!(agent_message_needs_markdown("this is *important*"));
+    assert!(agent_message_needs_markdown("[link](https://example.com)"));
+  }
+}
+
 fn markdown_text_view(
   id: impl Into<gpui::ElementId>,
-  source: &str,
+  source: impl Into<SharedString>,
   extensions: &gpui_component::text::MarkdownExtensions,
   label_headings: bool,
   cx: &App,
@@ -126,7 +166,7 @@ fn markdown_text_view(
   style.highlight_theme = theme.highlight_theme.clone();
   style.is_dark = theme.mode.is_dark();
 
-  TextView::markdown(id, SharedString::from(source.to_string()))
+  TextView::markdown(id, source.into())
     .style(style)
     .markdown_extensions(extensions.clone())
     .selectable(true)
@@ -3209,7 +3249,7 @@ impl AgentChatPanel {
                     .text_color(theme.foreground)
                     .child(selectable_text::SelectableText::new(
                       item_id_base,
-                      SharedString::from(m.text.clone()),
+                      m.text.clone(),
                       Vec::new(),
                       registry.clone(),
                     )),
@@ -3228,7 +3268,7 @@ impl AgentChatPanel {
                 .child(
                   div().debug_selector(|| "chat-msg-copy".to_string()).child(
                     Clipboard::new(SharedString::from(format!("chat-msg-copy-{idx}")))
-                      .value(SharedString::from(m.text.clone()))
+                      .value(m.text.clone())
                       .tooltip("Copy message"),
                   ),
                 )
@@ -3250,17 +3290,31 @@ impl AgentChatPanel {
             .into_any_element()
         }
         ChatRole::Agent => {
-          let text = sanitize_agent_markdown(&m.text);
+          let text = m.text.clone();
+          let message = if agent_message_needs_markdown(&text) {
+            markdown_view(
+              ("agent-chat-md", idx),
+              text.clone(),
+              &self.markdown_extensions,
+              cx,
+            )
+          } else {
+            div()
+              .text_sm()
+              .text_color(theme.foreground)
+              .child(selectable_text::SelectableText::new(
+                item_id_base,
+                text.clone(),
+                Vec::new(),
+                registry.clone(),
+              ))
+              .into_any_element()
+          };
           timeline_row(
             v_flex()
               .group("chat-agent-msg")
               .gap_0p5()
-              .child(markdown_view(
-                ("agent-chat-md", idx),
-                &text,
-                &self.markdown_extensions,
-                cx,
-              ))
+              .child(message)
               .child(
                 // Capped so the hover-only copy doesn't reserve a visible gap;
                 // the button overflows into the row's bottom padding instead.
@@ -3275,7 +3329,7 @@ impl AgentChatPanel {
                       .debug_selector(|| "chat-msg-copy-agent".to_string())
                       .child(
                         Clipboard::new(SharedString::from(format!("chat-msg-copy-agent-{idx}")))
-                          .value(SharedString::from(text))
+                          .value(text.clone())
                           .tooltip("Copy message"),
                       ),
                   ),
@@ -3324,7 +3378,7 @@ impl AgentChatPanel {
             .text_color(theme.muted_foreground)
             .child(selectable_text::SelectableText::new(
               item_id_base | 0x1,
-              SharedString::from(m.text.clone()),
+              m.text.clone(),
               Vec::new(),
               registry.clone(),
             ))
