@@ -17,7 +17,7 @@ use async_process::Command;
 pub mod stub;
 mod terminal;
 use futures::channel::oneshot;
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::path::PathBuf;
 use std::process::Stdio;
 use std::sync::Arc;
@@ -59,6 +59,7 @@ pub struct PermissionPrompt {
 }
 
 type PermissionReplyMap = Arc<Mutex<HashMap<u64, oneshot::Sender<Option<String>>>>>;
+type StderrBuffer = Arc<Mutex<VecDeque<String>>>;
 
 #[derive(Clone, Debug)]
 pub struct BackendConfig {
@@ -377,8 +378,10 @@ impl AgentSession {
     let terminal_store = TerminalStore::new(terminal_updates_tx);
     let (ready_tx, ready_rx) = oneshot::channel::<Result<AgentInitInfo>>();
 
+    let stderr_buffer = Arc::new(Mutex::new(VecDeque::new()));
     if let Some(stderr) = stderr {
-      let stderr_future: futures::future::BoxFuture<'static, ()> = Box::pin(forward_stderr(stderr));
+      let stderr_future: futures::future::BoxFuture<'static, ()> =
+        Box::pin(forward_stderr(stderr, stderr_buffer.clone()));
       spawner.spawn(stderr_future);
     }
 
@@ -400,8 +403,11 @@ impl AgentSession {
     let init_info = futures::select_biased! {
       result = ready_rx.fuse() => match result {
         Ok(Ok(info)) => info,
-        Ok(Err(e)) => return Err(e),
-        Err(_) => return Err(anyhow!("Agent process exited before it became ready. Check the agent logs.")),
+        Ok(Err(e)) => return Err(with_launch_stderr(e, &stderr_buffer)),
+        Err(_) => return Err(with_launch_stderr(
+          anyhow!("Agent process exited before it became ready."),
+          &stderr_buffer,
+        )),
       },
       _ = smol::Timer::after(Duration::from_secs(60)).fuse() => {
         return Err(anyhow!("Agent did not respond within 60s. Check Node.js installation and network."));
@@ -649,6 +655,7 @@ fn validate_path_in_root(path: &std::path::Path, root: &std::path::Path) -> Resu
 /// Adapters occasionally dump huge payloads on stderr (model instruction templates,
 /// full API bodies); cap each line so real errors above stay visible.
 const STDERR_LINE_MAX_CHARS: usize = 2000;
+const STDERR_BACKLOG_LINES: usize = 40;
 
 fn truncate_stderr_line(line: &str) -> std::borrow::Cow<'_, str> {
   if line.chars().count() <= STDERR_LINE_MAX_CHARS {
@@ -659,12 +666,39 @@ fn truncate_stderr_line(line: &str) -> std::borrow::Cow<'_, str> {
   std::borrow::Cow::Owned(format!("{head} [... {dropped} chars truncated]"))
 }
 
-async fn forward_stderr(stderr: async_process::ChildStderr) {
+fn push_stderr_line(buffer: &StderrBuffer, line: String) {
+  let Ok(mut buffer) = buffer.lock() else {
+    return;
+  };
+  if buffer.len() == STDERR_BACKLOG_LINES {
+    buffer.pop_front();
+  }
+  buffer.push_back(line);
+}
+
+fn stderr_backlog(buffer: &StderrBuffer) -> Option<String> {
+  let buffer = buffer.lock().ok()?;
+  (!buffer.is_empty()).then(|| buffer.iter().cloned().collect::<Vec<_>>().join("\n"))
+}
+
+fn with_launch_stderr(error: anyhow::Error, buffer: &StderrBuffer) -> anyhow::Error {
+  let mut message = error.to_string();
+  if let Some(stderr) = stderr_backlog(buffer) {
+    message.push_str("\n\nLast stderr:\n");
+    message.push_str(&stderr);
+  }
+  anyhow!(message)
+}
+
+async fn forward_stderr(stderr: async_process::ChildStderr, buffer: StderrBuffer) {
   use futures::io::{AsyncBufReadExt, BufReader};
   let reader = BufReader::new(stderr);
   let mut lines = reader.lines();
   while let Some(Ok(line)) = futures::stream::StreamExt::next(&mut lines).await {
-    app_log::log!("[acp-server] {}", truncate_stderr_line(&line));
+    let stripped = ansi_text::strip_ansi_escapes(&line);
+    let line = truncate_stderr_line(&stripped).to_string();
+    push_stderr_line(&buffer, line.clone());
+    app_log::log!("[acp-server] {line}");
   }
 }
 
@@ -1220,6 +1254,26 @@ mod tests {
     let truncated = truncate_stderr_line(&long);
     assert!(truncated.starts_with(&"x".repeat(STDERR_LINE_MAX_CHARS)));
     assert!(truncated.ends_with("[... 500 chars truncated]"));
+  }
+
+  #[test]
+  fn strip_ansi_escapes_removes_sgr_sequences() {
+    assert_eq!(
+      ansi_text::strip_ansi_escapes("\u{1b}[31mError\u{1b}[0m: boom"),
+      "Error: boom"
+    );
+  }
+
+  #[test]
+  fn launch_errors_carry_recent_stderr() {
+    let buffer = Arc::new(Mutex::new(VecDeque::new()));
+    push_stderr_line(&buffer, "first".to_string());
+    push_stderr_line(&buffer, "second".to_string());
+
+    let error = with_launch_stderr(anyhow!("launch failed"), &buffer).to_string();
+
+    assert!(error.contains("launch failed"));
+    assert!(error.contains("Last stderr:\nfirst\nsecond"));
   }
 
   fn availability_config(command: &str, cli_executable: Option<&str>) -> BackendConfig {

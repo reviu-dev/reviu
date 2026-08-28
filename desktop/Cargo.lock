@@ -350,6 +350,7 @@ dependencies = [
  "agent-client-protocol-schema 0.14.0",
  "agent_acp",
  "agent_registry",
+ "ansi_text",
  "anyhow",
  "app_log",
  "async-channel",
@@ -371,6 +372,7 @@ dependencies = [
  "agent_acp",
  "agent_chat_panel",
  "agent_registry",
+ "ansi_text",
  "anyhow",
  "app_log",
  "async-channel",
@@ -507,6 +509,10 @@ dependencies = [
  "memchr",
  "unicode-width",
 ]
+
+[[package]]
+name = "ansi_text"
+version = "0.18.0"
 
 [[package]]
 name = "anstream"

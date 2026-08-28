@@ -1886,7 +1886,146 @@ impl Render for AgentChatPanel {
   }
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct ConnectionErrorDetails {
+  pub(crate) summary: String,
+  pub(crate) stderr: Option<String>,
+  pub(crate) copy_text: String,
+}
+
+pub(crate) fn connection_error_details(error: &str) -> ConnectionErrorDetails {
+  let error = strip_ansi_for_display(error);
+  let (summary, stderr) = match error.split_once("\n\nLast stderr:\n") {
+    Some((summary, stderr)) => (summary.trim().to_string(), Some(stderr.trim().to_string())),
+    None => (error.trim().to_string(), None),
+  };
+  let stderr = stderr.filter(|stderr| !stderr.is_empty());
+  let copy_text = match &stderr {
+    Some(stderr) => format!("{summary}\n\nLast stderr:\n{stderr}"),
+    None => summary.clone(),
+  };
+  ConnectionErrorDetails {
+    summary,
+    stderr,
+    copy_text,
+  }
+}
+
+pub(crate) fn strip_ansi_for_display(text: &str) -> String {
+  crate::ansi::strip_ansi_escapes(text)
+}
+
 impl AgentChatPanel {
+  fn render_connection_actions(
+    &self,
+    reconnect_label: &'static str,
+    details: String,
+    cx: &mut Context<Self>,
+  ) -> gpui::AnyElement {
+    let copy_details = details.clone();
+    h_flex()
+      .gap_2()
+      .items_center()
+      .child(
+        div()
+          .debug_selector(|| "agent-chat-reconnect".to_string())
+          .child(
+            Button::new("agent-chat-reconnect")
+              .label(reconnect_label)
+              .small()
+              .primary()
+              .on_click(cx.listener(|panel, _, _, cx| panel.respawn_session(cx))),
+          ),
+      )
+      .when(app_log::active_log_path().is_some(), |this| {
+        this.child(
+          Button::new("agent-chat-open-logs")
+            .label("Open logs")
+            .small()
+            .ghost()
+            .on_click(|_, _, cx| {
+              if let Some(path) = app_log::active_log_path() {
+                cx.reveal_path(path);
+              }
+            }),
+        )
+      })
+      .child(
+        Button::new("agent-chat-copy-error")
+          .label("Copy details")
+          .small()
+          .ghost()
+          .on_click(move |_, _, cx| {
+            cx.write_to_clipboard(gpui::ClipboardItem::new_string(copy_details.clone()));
+          }),
+      )
+      .into_any_element()
+  }
+
+  fn render_connection_stderr(
+    &self,
+    stderr: String,
+    theme: &gpui_component::Theme,
+  ) -> gpui::AnyElement {
+    let text_id = crate::code_block::fnv1a(stderr.as_bytes()) | 0x4000_0000_0000_0000;
+    let stderr = SharedString::from(stderr);
+    mini_code_block(theme)
+      .debug_selector(|| "agent-chat-error-details".to_string())
+      .w_full()
+      .max_w(px(560.))
+      .child(
+        h_flex()
+          .items_center()
+          .justify_between()
+          .pl_2()
+          .pr_1()
+          .py_0p5()
+          .border_b_1()
+          .border_color(theme.border)
+          .child(
+            div()
+              .text_xs()
+              .text_color(theme.muted_foreground)
+              .child("Last stderr"),
+          )
+          .child(
+            div()
+              .debug_selector(|| "agent-chat-error-copy-stderr".to_string())
+              .child(
+                Clipboard::new(SharedString::from(format!(
+                  "agent-chat-error-copy-stderr-{text_id:x}"
+                )))
+                .value(stderr.clone())
+                .tooltip("Copy stderr"),
+              ),
+          ),
+      )
+      .child(
+        div()
+          .relative()
+          .child(
+            div()
+              .id(("agent-chat-error-details-body", text_id as usize))
+              .max_h(px(180.))
+              .overflow_y_scroll()
+              .track_scroll(&self.connection_error_scroll)
+              .px_2()
+              .py_1()
+              .text_xs()
+              .text_color(theme.foreground)
+              .whitespace_normal()
+              .child(selectable_text::SelectableText::new(
+                text_id,
+                stderr,
+                Vec::new(),
+                self.selection_registry.clone(),
+              )),
+          )
+          .vertical_scrollbar(&self.connection_error_scroll),
+      )
+      .into_any_element()
+  }
+
   fn render_center_state(
     &mut self,
     theme: &gpui_component::Theme,
@@ -1939,50 +2078,46 @@ impl AgentChatPanel {
           )
           .into_any_element(),
       ),
-      Status::Error(error) => Some(
-        v_flex()
-          .debug_selector(|| "agent-chat-error-state".to_string())
-          .items_center()
-          .gap_3()
-          .max_w(px(420.))
-          .child(
-            div()
-              .p_3()
-              .rounded_full()
-              .bg(theme.danger.opacity(0.08))
-              .child(
-                gpui_component::Icon::new(IconName::TriangleAlert)
-                  .large()
-                  .text_color(theme.danger),
-              ),
-          )
-          .child(
-            div()
-              .text_sm()
-              .font_weight(gpui::FontWeight::SEMIBOLD)
-              .text_color(theme.foreground)
-              .child(format!("Could not connect to {}", self.backend.label)),
-          )
-          .child(
-            div()
-              .text_xs()
-              .text_center()
-              .text_color(theme.muted_foreground)
-              .child(error.clone()),
-          )
-          .child(
-            div()
-              .debug_selector(|| "agent-chat-reconnect".to_string())
-              .child(
-                Button::new("agent-chat-reconnect")
-                  .label("Reconnect")
-                  .small()
-                  .primary()
-                  .on_click(cx.listener(|panel, _, _, cx| panel.respawn_session(cx))),
-              ),
-          )
-          .into_any_element(),
-      ),
+      Status::Error(error) => {
+        let details = connection_error_details(error);
+        Some(
+          v_flex()
+            .debug_selector(|| "agent-chat-error-state".to_string())
+            .items_center()
+            .gap_3()
+            .max_w(px(560.))
+            .child(
+              div()
+                .p_3()
+                .rounded_full()
+                .bg(theme.danger.opacity(0.08))
+                .child(
+                  gpui_component::Icon::new(IconName::TriangleAlert)
+                    .large()
+                    .text_color(theme.danger),
+                ),
+            )
+            .child(
+              div()
+                .text_sm()
+                .font_weight(gpui::FontWeight::SEMIBOLD)
+                .text_color(theme.foreground)
+                .child(format!("Could not connect to {}", self.backend.label)),
+            )
+            .child(
+              div()
+                .text_xs()
+                .text_center()
+                .text_color(theme.muted_foreground)
+                .child(details.summary.clone()),
+            )
+            .when_some(details.stderr.clone(), |this, stderr| {
+              this.child(self.render_connection_stderr(stderr, theme))
+            })
+            .child(self.render_connection_actions("Reconnect", details.copy_text.clone(), cx))
+            .into_any_element(),
+        )
+      }
       Status::MissingBinary { command, hint } => Some(
         v_flex()
           .debug_selector(|| "agent-chat-missing-binary".to_string())
@@ -2016,17 +2151,11 @@ impl AgentChatPanel {
                   .child(hint.clone()),
               ),
           )
-          .child(
-            div()
-              .debug_selector(|| "agent-chat-reconnect".to_string())
-              .child(
-                Button::new("agent-chat-reconnect")
-                  .label("Try again")
-                  .small()
-                  .primary()
-                  .on_click(cx.listener(|panel, _, _, cx| panel.respawn_session(cx))),
-              ),
-          )
+          .child(self.render_connection_actions(
+            "Try again",
+            format!("`{command}` not found on PATH\n{hint}"),
+            cx,
+          ))
           .into_any_element(),
       ),
       _ => None,

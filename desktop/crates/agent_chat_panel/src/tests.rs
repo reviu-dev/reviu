@@ -1247,6 +1247,20 @@ fn wrapped_row_estimates_track_newlines_and_long_lines() {
 }
 
 #[test]
+fn connection_error_details_split_stderr_and_strip_ansi() {
+  let details = connection_error_details(
+    "Agent process exited before it became ready.\n\nLast stderr:\n\u{1b}[31mError\u{1b}[0m: boom",
+  );
+
+  assert_eq!(
+    details.summary,
+    "Agent process exited before it became ready."
+  );
+  assert_eq!(details.stderr.as_deref(), Some("Error: boom"));
+  assert!(!details.copy_text.contains("[0m"));
+}
+
+#[test]
 fn agent_error_hints_name_the_classes_users_hit() {
   assert_eq!(
     agent_error_hint("Codex error: The usage limit has been reached"),
@@ -5690,6 +5704,29 @@ async fn a_disconnected_panel_offers_reconnect(cx: &mut gpui::TestAppContext) {
   assert!(
     cx.debug_bounds("agent-chat-reconnect").is_some(),
     "the error state carries a reconnect button"
+  );
+}
+
+#[gpui::test]
+async fn connection_stderr_is_painted_as_a_card(cx: &mut gpui::TestAppContext) {
+  let (panel, cx) = add_panel_window(cx);
+  panel.update(cx, |panel, cx| {
+    panel.status = Status::Error(
+      "Agent process exited before it became ready.\n\nLast stderr:\n\u{1b}[31mError\u{1b}[0m: boom"
+        .into(),
+    );
+    panel.sync_list_count();
+    cx.notify();
+  });
+  cx.run_until_parked();
+
+  assert!(
+    cx.debug_bounds("agent-chat-error-details").is_some(),
+    "stderr is isolated in a log-style card"
+  );
+  assert!(
+    cx.debug_bounds("agent-chat-error-copy-stderr").is_some(),
+    "the stderr card can be copied directly"
   );
 }
 

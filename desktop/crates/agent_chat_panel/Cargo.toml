@@ -12,6 +12,7 @@ app_log = { workspace = true }
 agent_acp = { workspace = true }
 agent_registry = { workspace = true }
 agent-client-protocol = { workspace = true }
+ansi_text = { workspace = true }
 anyhow = { workspace = true }
 async-channel = { workspace = true }
 async-process = { workspace = true }

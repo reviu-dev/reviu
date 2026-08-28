@@ -6,29 +6,57 @@ use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-/// Truncate the log file when it exceeds this size (1 MB).
+/// Rotate the log file when it exceeds this size (1 MB).
 const MAX_LOG_SIZE: u64 = 1_024 * 1_024;
 
-static SINK: OnceLock<Option<PathBuf>> = OnceLock::new();
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SinkConfig {
+  path: PathBuf,
+  old_path: Option<PathBuf>,
+}
+
+impl SinkConfig {
+  pub fn new(path: PathBuf, old_path: Option<PathBuf>) -> Self {
+    Self { path, old_path }
+  }
+}
+
+static SINK: OnceLock<Option<SinkConfig>> = OnceLock::new();
 
 /// Point logging at `path`, or disable it with `None`. Only the first call wins, so
 /// `log` stays a no-op in binaries and tests that never opt in.
 pub fn init(path: Option<PathBuf>) {
-  if SINK.set(path).is_err() {
+  init_with_config(path.map(|path| SinkConfig::new(path, None)));
+}
+
+/// Point logging at a rotated file sink, or disable it with `None`.
+pub fn init_with_rotation(path: Option<PathBuf>, old_path: Option<PathBuf>) {
+  init_with_config(path.map(|path| SinkConfig::new(path, old_path)));
+}
+
+fn init_with_config(config: Option<SinkConfig>) {
+  if SINK.set(config).is_err() {
     log("app_log::init called twice, keeping the first sink");
   }
 }
 
 pub fn active_log_path() -> Option<&'static Path> {
-  SINK.get()?.as_deref()
+  SINK.get()?.as_ref().map(|sink| sink.path.as_path())
+}
+
+pub fn active_old_log_path() -> Option<&'static Path> {
+  SINK
+    .get()?
+    .as_ref()
+    .and_then(|sink| sink.old_path.as_deref())
 }
 
 /// Append a timestamped line to the log file. No-op until `init` opts in.
 pub fn log(message: &str) {
-  let Some(path) = active_log_path() else {
+  let Some(sink) = SINK.get().and_then(Option::as_ref) else {
     return;
   };
-  append(path, message);
+  append(sink, message);
 }
 
 /// Format and append a line, like `eprintln!` but into the app log.
@@ -37,8 +65,8 @@ macro_rules! log {
   ($($arg:tt)*) => { $crate::log(&format!($($arg)*)) };
 }
 
-fn append(path: &Path, message: &str) {
-  if let Some(parent) = path.parent()
+fn append(sink: &SinkConfig, message: &str) {
+  if let Some(parent) = sink.path.parent()
     && let Err(error) = fs::create_dir_all(parent)
   {
     // Nowhere left to report this, so stderr is the last resort.
@@ -46,20 +74,47 @@ fn append(path: &Path, message: &str) {
     return;
   }
 
-  if fs::metadata(path).is_ok_and(|meta| meta.len() > MAX_LOG_SIZE)
-    && let Err(error) = fs::remove_file(path)
+  if fs::metadata(&sink.path).is_ok_and(|meta| meta.len() > MAX_LOG_SIZE)
+    && let Err(error) = rotate(sink)
   {
-    eprintln!("app_log: cannot truncate {}: {error}", path.display());
+    eprintln!("app_log: cannot rotate {}: {error}", sink.path.display());
   }
 
   let line = format!("[{}] {message}\n", timestamp());
-  match OpenOptions::new().create(true).append(true).open(path) {
+  match OpenOptions::new()
+    .create(true)
+    .append(true)
+    .open(&sink.path)
+  {
     Ok(mut file) => {
       if let Err(error) = file.write_all(line.as_bytes()) {
-        eprintln!("app_log: cannot write {}: {error}", path.display());
+        eprintln!("app_log: cannot write {}: {error}", sink.path.display());
       }
     }
-    Err(error) => eprintln!("app_log: cannot open {}: {error}", path.display()),
+    Err(error) => eprintln!("app_log: cannot open {}: {error}", sink.path.display()),
+  }
+}
+
+fn rotate(sink: &SinkConfig) -> std::io::Result<()> {
+  match sink.old_path.as_ref() {
+    Some(old_path) => {
+      if let Some(parent) = old_path.parent() {
+        fs::create_dir_all(parent)?;
+      }
+      if old_path.exists() {
+        fs::remove_file(old_path)?;
+      }
+      if sink.path.exists() {
+        fs::rename(&sink.path, old_path)?;
+      }
+      Ok(())
+    }
+    None => {
+      if sink.path.exists() {
+        fs::remove_file(&sink.path)?;
+      }
+      Ok(())
+    }
   }
 }
 
@@ -127,8 +182,9 @@ mod tests {
   #[test]
   fn append_writes_a_timestamped_line() {
     let path = scratch_log("app_log_append_test");
+    let sink = SinkConfig::new(path.clone(), None);
 
-    append(&path, "hello");
+    append(&sink, "hello");
 
     let contents = fs::read_to_string(&path).expect("log file should exist");
     assert!(contents.contains("hello"), "got {contents:?}");
@@ -136,19 +192,25 @@ mod tests {
   }
 
   #[test]
-  fn append_truncates_an_oversized_file() {
-    let path = scratch_log("app_log_truncate_test");
+  fn append_rotates_an_oversized_file() {
+    let path = scratch_log("app_log_rotate_test");
+    let old_path = path.with_extension("log.old");
     if let Some(parent) = path.parent() {
       fs::create_dir_all(parent).expect("temp dir should be creatable");
     }
     fs::write(&path, vec![b'x'; (MAX_LOG_SIZE + 1) as usize])
       .expect("seed file should be writable");
+    let sink = SinkConfig::new(path.clone(), Some(old_path.clone()));
 
-    append(&path, "after truncate");
+    append(&sink, "after rotate");
 
     let contents = fs::read_to_string(&path).expect("log file should exist");
-    assert!(contents.contains("after truncate"));
-    assert!(!contents.contains('x'), "old contents should be gone");
+    assert!(contents.contains("after rotate"));
+    assert!(
+      !contents.contains('x'),
+      "old contents should be rotated out"
+    );
+    assert!(old_path.exists(), "old log should keep the rotated file");
   }
 
   #[test]

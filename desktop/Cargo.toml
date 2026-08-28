@@ -1,6 +1,7 @@
 [workspace]
 resolver = "2"
 members = [
+  "crates/ansi_text",
   "crates/app_log",
   "crates/buffer",
   "crates/syntax",
@@ -142,6 +143,7 @@ windows-sys = { version = "0.61.2", features = [
 ] }
 
 # Workspace member crates
+ansi_text = { path = "crates/ansi_text" }
 app_log = { path = "crates/app_log" }
 buffer = { path = "crates/buffer" }
 syntax = { path = "crates/syntax" }

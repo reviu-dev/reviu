@@ -877,6 +877,7 @@ pub struct AgentChatPanel {
   last_turn_failed: bool,
   turn_gate: TurnGate,
   selection_registry: selectable_text::SelectionRegistry,
+  connection_error_scroll: gpui::ScrollHandle,
   /// Built once: rebuilding extensions busts TextView's parse cache.
   markdown_extensions: gpui_component::text::MarkdownExtensions,
   available_modes: Vec<SessionMode>,
@@ -980,6 +981,7 @@ impl AgentChatPanel {
       last_turn_failed: false,
       turn_gate,
       selection_registry,
+      connection_error_scroll: gpui::ScrollHandle::new(),
       markdown_extensions,
       available_modes: Vec::new(),
       current_mode_id: None,
@@ -1582,6 +1584,7 @@ impl AgentChatPanel {
       last_turn_failed: false,
       turn_gate: TurnGate::default(),
       selection_registry,
+      connection_error_scroll: gpui::ScrollHandle::new(),
       markdown_extensions,
       available_modes: Vec::new(),
       current_mode_id: None,
