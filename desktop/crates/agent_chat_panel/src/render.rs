@@ -2218,7 +2218,7 @@ impl AgentChatPanel {
     if let Some(selector) = reasoning_config_selector(&self.config_options) {
       return Some(self.render_config_control(
         "agent-chat-reasoning",
-        Some(gpui_component::Icon::new(UiIconName::Sparkles)),
+        Some(gpui_component::Icon::new(UiIconName::Brain)),
         "Select reasoning",
         normalize_reasoning_selector(selector),
         false,
@@ -2231,7 +2231,7 @@ impl AgentChatPanel {
       return Some(self.render_mode_control(
         "agent-chat-reasoning",
         "Select reasoning",
-        Some(gpui_component::Icon::new(UiIconName::Sparkles)),
+        Some(gpui_component::Icon::new(UiIconName::Brain)),
         self.available_modes.clone(),
         self.current_mode_id.clone(),
         false,
