@@ -3282,10 +3282,27 @@ async fn started_conversations_keep_their_agent(cx: &mut gpui::TestAppContext) {
   panel.update(cx, |panel, cx| {
     panel.items.push(user_message("started"));
     assert!(!panel.can_switch_backend());
+    assert!(!panel.can_switch_model());
 
     panel.switch_backend(AgentId::new("pi-acp"), cx);
     assert_eq!(panel.backend_kind(), &default_agent_id());
     assert_eq!(panel.current_conversation().agent_id, default_agent_id());
+  });
+}
+
+#[gpui::test]
+async fn pre_conversation_agent_output_does_not_lock_choices(cx: &mut gpui::TestAppContext) {
+  let (panel, cx) = add_panel_window(cx);
+  panel.update(cx, |panel, cx| {
+    panel.status = Status::Ready;
+    panel.pending_agent = "\n".to_string();
+
+    assert!(panel.can_switch_backend());
+    assert!(panel.can_switch_model());
+
+    panel.switch_backend(AgentId::new("pi-acp"), cx);
+    assert_eq!(panel.backend_kind(), &AgentId::new("pi-acp"));
+    assert!(panel.pending_agent.is_empty());
   });
 }
 

@@ -2084,11 +2084,12 @@ impl AgentChatPanel {
       .unwrap_or_else(|| "Model".into());
     let entity = cx.entity().downgrade();
     let brand_icon = crate::backend_icon(&self.backend_kind);
+    let can_switch = self.can_switch_model();
     Button::new("agent-chat-model")
       .child(selector_trigger(Some(brand_icon), current_label))
       .xsmall()
       .ghost()
-      .disabled(models.is_empty())
+      .disabled(models.is_empty() || !can_switch)
       .dropdown_menu_with_anchor(Anchor::BottomLeft, move |menu, _, _| {
         let mut menu = menu
           .label("Select a model")
@@ -2106,7 +2107,11 @@ impl AgentChatPanel {
             })
             .on_click(move |_, _, cx| {
               let model_id = model_id.clone();
-              let _ = entity.update(cx, |panel, cx| panel.set_model(model_id, cx));
+              let _ = entity.update(cx, |panel, cx| {
+                if panel.can_switch_model() {
+                  panel.set_model(model_id, cx);
+                }
+              });
             }),
           );
         }

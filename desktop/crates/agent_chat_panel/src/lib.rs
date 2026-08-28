@@ -2695,6 +2695,15 @@ impl AgentChatPanel {
 
   fn respawn_session_with(&mut self, load_session_id: Option<String>, cx: &mut Context<Self>) {
     self.session = None;
+    self._connect_task = None;
+    self.events_rx = None;
+    self._events_task = None;
+    self._permission_task = None;
+    self._terminal_task = None;
+    self.terminal_store = None;
+    self.pending_agent.clear();
+    self.pending_md_state = None;
+    self.pending_thought.clear();
     self.end_turn();
     self.auth_required = false;
     self.auth_methods.clear();
@@ -2788,7 +2797,7 @@ impl AgentChatPanel {
   }
 
   pub fn can_switch_backend(&self) -> bool {
-    !self.has_persistable_content() && self.loading_conversation.is_none() && !self.in_flight
+    !self.conversation_started() && self.loading_conversation.is_none() && !self.in_flight
   }
 
   pub fn switch_backend(&mut self, id: AgentId, cx: &mut Context<Self>) {
@@ -2803,6 +2812,20 @@ impl AgentChatPanel {
     self.current_conv.session_id = None;
     self.respawn_session_with(None, cx);
     cx.notify();
+  }
+
+  fn conversation_started(&self) -> bool {
+    self.items.iter().any(|item| {
+      matches!(
+        item,
+        ChatItem::Message(message)
+          if matches!(message.role, ChatRole::User | ChatRole::ReviewExport)
+      )
+    })
+  }
+
+  fn can_switch_model(&self) -> bool {
+    !self.conversation_started() && self.loading_conversation.is_none() && !self.in_flight
   }
 
   /// Whether the conversation has user-visible content worth writing to disk.
