@@ -2,7 +2,8 @@ use std::backtrace::Backtrace;
 #[cfg(test)]
 use std::cell::RefCell;
 use std::collections::HashSet;
-use std::fs;
+use std::fs::{self, File};
+use std::io::{Read as _, Seek as _, SeekFrom};
 use std::panic::PanicHookInfo;
 use std::path::PathBuf;
 use std::sync::{Mutex, Once, OnceLock};
@@ -25,6 +26,7 @@ use crate::workspace::WorkspaceApi;
 const CRASH_REPORTS_DIR_NAME: &str = "crash-reports";
 const PENDING_CRASH_REPORT_FILE_NAME: &str = "pending.json";
 const CRASH_DETAILS_COPY_BACKTRACE_LIMIT: usize = 20_000;
+const CRASH_REPORT_LOG_TAIL_LIMIT: usize = 64 * 1024;
 
 static CRASH_REPORTER_INSTALL: Once = Once::new();
 static CRASH_REPORT_PERSISTED: std::sync::atomic::AtomicBool =
@@ -66,6 +68,8 @@ pub struct StartupCrashReport {
   pub(crate) git_context: Option<CrashGitContext>,
   #[serde(skip_serializing_if = "Option::is_none")]
   pub(crate) github_pr_context: Option<CrashGithubPrContext>,
+  #[serde(skip_serializing_if = "Option::is_none")]
+  pub recent_logs: Option<String>,
 }
 
 #[derive(Debug)]
@@ -90,6 +94,7 @@ impl StartupCrashReport {
       workspace_page: snapshot.workspace_page,
       git_context: snapshot.git,
       github_pr_context: snapshot.github_pr,
+      recent_logs: None,
     }
   }
 
@@ -129,6 +134,14 @@ impl StartupCrashReport {
         backtrace,
         CRASH_DETAILS_COPY_BACKTRACE_LIMIT,
       ));
+    }
+
+    if let Some(recent_logs) = self.recent_logs.as_deref()
+      && !recent_logs.trim().is_empty()
+    {
+      lines.push(String::new());
+      lines.push("Recent logs:".to_string());
+      lines.push(trim_multiline(recent_logs, CRASH_REPORT_LOG_TAIL_LIMIT));
     }
 
     if let Some(workspace_page) = self.workspace_page.as_deref() {
@@ -184,7 +197,7 @@ pub fn install_crash_reporter() {
       if !CRASH_REPORT_PERSISTED.swap(true, std::sync::atomic::Ordering::SeqCst)
         && let Err(err) = persist_startup_crash_report(&StartupCrashReport::from_panic_info(info))
       {
-        app_log::log!("Failed to persist crash report: {err}");
+        log::warn!("Failed to persist crash report: {err}");
       }
 
       previous_hook(info);
@@ -199,7 +212,7 @@ pub fn take_pending_startup_crash_report() -> Option<StartupCrashReport> {
   match serde_json::from_slice::<StartupCrashReport>(&bytes) {
     Ok(report) => Some(report),
     Err(err) => {
-      app_log::log!(
+      log::warn!(
         "Failed to parse pending crash report {}: {}",
         pending_path.display(),
         err
@@ -232,12 +245,15 @@ fn show_startup_crash_report_notification_with_state(
     Notification::new()
       .id::<StartupCrashReportNotificationId>()
       .title("Reviu recovered from a crash")
-      .message("Send a report to help the team investigate and fix this crash.")
+      .message("Send a report to help the team investigate and fix this crash. Logs are only included if you choose Send with logs.")
       .autohide(false)
       .content(move |_, _, _cx| {
         let report_crash_id = report.crash_id.clone();
         let report_for_send = report_for_send.clone();
         let send_label = if sending { "Sending..." } else { "Send report" };
+        let send_with_logs_label = if sending { "Sending..." } else { "Send with logs" };
+        let report_without_logs = report_for_send.clone();
+        let report_with_logs = report_for_send.clone();
         div()
           .flex()
           .mt_3()
@@ -263,16 +279,37 @@ fn show_startup_crash_report_notification_with_state(
               .disabled(sending)
               .label(send_label)
               .on_click(move |_: &ClickEvent, window: &mut Window, cx: &mut App| {
-                if !mark_crash_report_submitting(&report_for_send.crash_id) {
+                if !mark_crash_report_submitting(&report_without_logs.crash_id) {
                   return;
                 }
                 show_startup_crash_report_notification_with_state(
                   window,
-                  report_for_send.clone(),
+                  report_without_logs.clone(),
                   true,
                   cx,
                 );
-                submit_startup_crash_report(report_for_send.clone(), window_handle, cx);
+                submit_startup_crash_report(report_without_logs.clone(), false, window_handle, cx);
+              }),
+          )
+          .child(
+            Button::new("startup-crash-send-with-logs")
+              .ghost()
+              .compact()
+              .small()
+              .loading(sending)
+              .disabled(sending)
+              .label(send_with_logs_label)
+              .on_click(move |_: &ClickEvent, window: &mut Window, cx: &mut App| {
+                if !mark_crash_report_submitting(&report_with_logs.crash_id) {
+                  return;
+                }
+                show_startup_crash_report_notification_with_state(
+                  window,
+                  report_with_logs.clone(),
+                  true,
+                  cx,
+                );
+                submit_startup_crash_report(report_with_logs.clone(), true, window_handle, cx);
               }),
           )
           .into_any_element()
@@ -283,11 +320,15 @@ fn show_startup_crash_report_notification_with_state(
 
 fn submit_startup_crash_report(
   report: StartupCrashReport,
+  include_logs: bool,
   window_handle: AnyWindowHandle,
   cx: &mut App,
 ) {
   let crash_id = report.crash_id.clone();
-  let report_for_submission = report.clone();
+  let mut report_for_submission = report.clone();
+  if include_logs {
+    report_for_submission.recent_logs = active_recent_logs();
+  }
   let api = WorkspaceApi::global(cx).api.clone();
   cx.spawn(async move |cx| {
     let result = cx
@@ -367,6 +408,28 @@ fn clear_pending_startup_crash_report() -> std::io::Result<()> {
   }
 
   Ok(())
+}
+
+fn active_recent_logs() -> Option<String> {
+  let path = app_log::active_log_path()?;
+  let tail = read_file_tail(path, CRASH_REPORT_LOG_TAIL_LIMIT).ok()?;
+  (!tail.trim().is_empty()).then(|| format!("{}:\n{}", path.display(), tail.trim_end()))
+}
+
+fn read_file_tail(path: &std::path::Path, limit: usize) -> std::io::Result<String> {
+  let mut file = File::open(path)?;
+  let len = file.metadata()?.len();
+  let start = len.saturating_sub(limit as u64);
+  file.seek(SeekFrom::Start(start))?;
+
+  let mut bytes = Vec::new();
+  file.read_to_end(&mut bytes)?;
+  if start > 0
+    && let Some(newline) = bytes.iter().position(|byte| *byte == b'\n')
+  {
+    bytes.drain(..=newline);
+  }
+  Ok(String::from_utf8_lossy(&bytes).into_owned())
 }
 
 fn pending_crash_report_path() -> Option<PathBuf> {
@@ -494,6 +557,7 @@ mod tests {
         diff_view: "unified".to_string(),
       }),
       github_pr_context: None,
+      recent_logs: None,
     }
   }
 
@@ -535,7 +599,9 @@ mod tests {
 
   #[test]
   fn details_text_includes_core_context() {
-    let details = sample_report().details_text();
+    let mut report = sample_report();
+    report.recent_logs = Some("[1] INFO app: hello".to_string());
+    let details = report.details_text();
 
     assert!(details.contains("Reviu Desktop Crash Report"));
     assert!(details.contains("Crash ID: crash-123"));
@@ -543,6 +609,21 @@ mod tests {
     assert!(details.contains("UI Context:"));
     assert!(details.contains("Git Context:"));
     assert!(details.contains("Backtrace:"));
+    assert!(details.contains("Recent logs:"));
+    assert!(details.contains("INFO app: hello"));
+  }
+
+  #[test]
+  fn read_file_tail_keeps_complete_recent_lines() {
+    let dir = unique_test_dir();
+    fs::create_dir_all(&dir).expect("create test dir");
+    let path = dir.join("reviu.log");
+    fs::write(&path, "old line\nnew line\nlast line").expect("write log");
+
+    let tail = super::read_file_tail(&path, "new line\nlast line".len() + 3).expect("read tail");
+
+    assert_eq!(tail, "new line\nlast line");
+    let _ = fs::remove_dir_all(dir);
   }
 
   #[test]

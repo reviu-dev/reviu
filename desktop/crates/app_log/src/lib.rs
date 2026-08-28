@@ -1,10 +1,12 @@
-use std::fmt::Display;
+use std::fmt::{self, Display};
 use std::fs::{self, OpenOptions};
 use std::io::Write;
 use std::panic::Location;
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 use std::time::{SystemTime, UNIX_EPOCH};
+
+pub use log::{Level, LevelFilter};
 
 /// Rotate the log file when it exceeds this size (1 MB).
 const MAX_LOG_SIZE: u64 = 1_024 * 1_024;
@@ -13,31 +15,77 @@ const MAX_LOG_SIZE: u64 = 1_024 * 1_024;
 pub struct SinkConfig {
   path: PathBuf,
   old_path: Option<PathBuf>,
+  level: LevelFilter,
 }
 
 impl SinkConfig {
-  pub fn new(path: PathBuf, old_path: Option<PathBuf>) -> Self {
-    Self { path, old_path }
+  pub fn new(path: PathBuf, old_path: Option<PathBuf>, level: LevelFilter) -> Self {
+    Self {
+      path,
+      old_path,
+      level,
+    }
   }
 }
 
 static SINK: OnceLock<Option<SinkConfig>> = OnceLock::new();
+static LOGGER: FileLogger = FileLogger;
+
+struct FileLogger;
+
+impl log::Log for FileLogger {
+  fn enabled(&self, metadata: &log::Metadata<'_>) -> bool {
+    let Some(sink) = SINK.get().and_then(Option::as_ref) else {
+      return false;
+    };
+    metadata.level() <= sink.level
+  }
+
+  fn log(&self, record: &log::Record<'_>) {
+    if !self.enabled(record.metadata()) {
+      return;
+    }
+    let Some(sink) = SINK.get().and_then(Option::as_ref) else {
+      return;
+    };
+    append_record(sink, record.level(), record.target(), record.args());
+  }
+
+  fn flush(&self) {}
+}
 
 /// Point logging at `path`, or disable it with `None`. Only the first call wins, so
-/// `log` stays a no-op in binaries and tests that never opt in.
+/// logging stays a no-op in binaries and tests that never opt in.
 pub fn init(path: Option<PathBuf>) {
-  init_with_config(path.map(|path| SinkConfig::new(path, None)));
+  init_with_config(path.map(|path| SinkConfig::new(path, None, LevelFilter::Info)));
 }
 
 /// Point logging at a rotated file sink, or disable it with `None`.
 pub fn init_with_rotation(path: Option<PathBuf>, old_path: Option<PathBuf>) {
-  init_with_config(path.map(|path| SinkConfig::new(path, old_path)));
+  init_with_rotation_and_level(path, old_path, LevelFilter::Info);
+}
+
+pub fn init_with_rotation_and_level(
+  path: Option<PathBuf>,
+  old_path: Option<PathBuf>,
+  level: LevelFilter,
+) {
+  init_with_config(path.map(|path| SinkConfig::new(path, old_path, level)));
 }
 
 fn init_with_config(config: Option<SinkConfig>) {
+  let max_level = config
+    .as_ref()
+    .map(|config| config.level)
+    .unwrap_or(LevelFilter::Off);
   if SINK.set(config).is_err() {
-    log("app_log::init called twice, keeping the first sink");
+    log::warn!("app_log::init called twice, keeping the first sink");
+    return;
   }
+  if log::set_logger(&LOGGER).is_err() {
+    return;
+  }
+  log::set_max_level(max_level);
 }
 
 pub fn active_log_path() -> Option<&'static Path> {
@@ -51,21 +99,31 @@ pub fn active_old_log_path() -> Option<&'static Path> {
     .and_then(|sink| sink.old_path.as_deref())
 }
 
-/// Append a timestamped line to the log file. No-op until `init` opts in.
-pub fn log(message: &str) {
-  let Some(sink) = SINK.get().and_then(Option::as_ref) else {
-    return;
-  };
-  append(sink, message);
+pub fn active_level() -> Option<LevelFilter> {
+  SINK.get()?.as_ref().map(|sink| sink.level)
 }
 
-/// Format and append a line, like `eprintln!` but into the app log.
+/// Append an info line to the app log. No-op until `init` opts in.
+pub fn log(message: &str) {
+  log_target("app_log", message);
+}
+
+#[doc(hidden)]
+pub fn log_target(target: &str, message: &str) {
+  log::info!(target: target, "{message}");
+}
+
+/// Format and append an info line to the app log.
 #[macro_export]
 macro_rules! log {
-  ($($arg:tt)*) => { $crate::log(&format!($($arg)*)) };
+  ($($arg:tt)*) => { $crate::log_target(module_path!(), &format!($($arg)*)) };
 }
 
-fn append(sink: &SinkConfig, message: &str) {
+fn append_record(sink: &SinkConfig, level: Level, target: &str, message: &dyn Display) {
+  append_line(sink, format_args!("{level:<5} {target}: {message}"));
+}
+
+fn append_line(sink: &SinkConfig, message: fmt::Arguments<'_>) {
   if let Some(parent) = sink.path.parent()
     && let Err(error) = fs::create_dir_all(parent)
   {
@@ -80,14 +138,13 @@ fn append(sink: &SinkConfig, message: &str) {
     eprintln!("app_log: cannot rotate {}: {error}", sink.path.display());
   }
 
-  let line = format!("[{}] {message}\n", timestamp());
   match OpenOptions::new()
     .create(true)
     .append(true)
     .open(&sink.path)
   {
     Ok(mut file) => {
-      if let Err(error) = file.write_all(line.as_bytes()) {
+      if let Err(error) = writeln!(file, "[{}] {message}", timestamp()) {
         eprintln!("app_log: cannot write {}: {error}", sink.path.display());
       }
     }
@@ -149,7 +206,7 @@ impl<T, E: Display> ResultExt<T> for Result<T, E> {
     match self {
       Ok(value) => Some(value),
       Err(error) => {
-        log(&error_message(Location::caller(), "", &error));
+        log::error!(target: "app_log", "{}", error_message(Location::caller(), "", &error));
         None
       }
     }
@@ -160,7 +217,7 @@ impl<T, E: Display> ResultExt<T> for Result<T, E> {
     match self {
       Ok(value) => Some(value),
       Err(error) => {
-        log(&error_message(Location::caller(), context, &error));
+        log::error!(target: "app_log", "{}", error_message(Location::caller(), context, &error));
         None
       }
     }
@@ -182,9 +239,9 @@ mod tests {
   #[test]
   fn append_writes_a_timestamped_line() {
     let path = scratch_log("app_log_append_test");
-    let sink = SinkConfig::new(path.clone(), None);
+    let sink = SinkConfig::new(path.clone(), None, LevelFilter::Info);
 
-    append(&sink, "hello");
+    append_line(&sink, format_args!("hello"));
 
     let contents = fs::read_to_string(&path).expect("log file should exist");
     assert!(contents.contains("hello"), "got {contents:?}");
@@ -200,9 +257,9 @@ mod tests {
     }
     fs::write(&path, vec![b'x'; (MAX_LOG_SIZE + 1) as usize])
       .expect("seed file should be writable");
-    let sink = SinkConfig::new(path.clone(), Some(old_path.clone()));
+    let sink = SinkConfig::new(path.clone(), Some(old_path.clone()), LevelFilter::Info);
 
-    append(&sink, "after rotate");
+    append_line(&sink, format_args!("after rotate"));
 
     let contents = fs::read_to_string(&path).expect("log file should exist");
     assert!(contents.contains("after rotate"));
@@ -211,6 +268,20 @@ mod tests {
       "old contents should be rotated out"
     );
     assert!(old_path.exists(), "old log should keep the rotated file");
+  }
+
+  #[test]
+  fn log_records_include_level_and_target() {
+    let path = scratch_log("app_log_record_test");
+    let sink = SinkConfig::new(path.clone(), None, LevelFilter::Info);
+
+    append_record(&sink, Level::Warn, "test_target", &format_args!("careful"));
+
+    let contents = fs::read_to_string(&path).expect("log file should exist");
+    assert!(
+      contents.contains("WARN  test_target: careful"),
+      "got {contents:?}"
+    );
   }
 
   #[test]
@@ -244,22 +315,28 @@ mod tests {
   #[test]
   fn the_installed_sink_receives_macro_and_log_err_output() {
     let path = scratch_log("app_log_sink_test");
-    init(Some(path.clone()));
+    init_with_rotation_and_level(Some(path.clone()), None, LevelFilter::Debug);
     assert_eq!(active_log_path(), Some(path.as_path()));
+    assert_eq!(active_level(), Some(LevelFilter::Debug));
 
     let count = 3;
     log!("macro wrote {count} things");
+    log::debug!(target: "app_log_test", "debug wrote too");
 
     let failure: Result<(), String> = Err("disk full".to_string());
     assert!(failure.log_err_context("saving config").is_none());
 
     let contents = fs::read_to_string(&path).expect("log file should exist");
     assert!(
-      contents.contains("macro wrote 3 things"),
+      contents.contains("INFO  app_log::tests: macro wrote 3 things"),
       "got {contents:?}"
     );
     assert!(
-      contents.contains("saving config: disk full"),
+      contents.contains("DEBUG app_log_test: debug wrote too"),
+      "got {contents:?}"
+    );
+    assert!(
+      contents.contains("ERROR app_log: ") && contents.contains("saving config: disk full"),
       "got {contents:?}"
     );
     assert!(contents.contains("lib.rs:"), "got {contents:?}");

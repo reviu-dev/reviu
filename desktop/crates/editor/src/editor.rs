@@ -6277,7 +6277,7 @@ impl Editor {
           cx.notify();
         }
         Err(err) => {
-          app_log::log!("[editor] save failed: {:?}", err);
+          log::warn!("[editor] save failed: {:?}", err);
         }
       });
     }));

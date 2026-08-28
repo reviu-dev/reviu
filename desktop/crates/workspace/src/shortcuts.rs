@@ -1094,6 +1094,8 @@ fn palette_command_shortcut(command: CommandPaletteCommandId) -> Option<Shortcut
     | Command::OpenGitConfigPage
     | Command::OpenBillingPage
     | Command::OpenAboutPage
+    | Command::OpenLogs
+    | Command::RevealLogs
     | Command::SendFeedback
     | Command::SignIn
     | Command::SignOut

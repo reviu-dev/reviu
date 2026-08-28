@@ -5,11 +5,11 @@ edition.workspace = true
 publish.workspace = true
 
 [dependencies]
-app_log = { workspace = true }
 gpui = { workspace = true }
 gpui-base = { workspace = true }
 gpui-component = { workspace = true }
 gpui-component-assets = { workspace = true }
+log = { workspace = true }
 rust-embed = { workspace = true }
 syntax = { workspace = true }
 anyhow = { workspace = true }

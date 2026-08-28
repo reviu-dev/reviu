@@ -317,7 +317,7 @@ impl Document {
           });
         }
         Err(err) => {
-          app_log::log!("Viewport highlighting failed: {}", err);
+          log::warn!("Viewport highlighting failed: {}", err);
         }
       }
     });
@@ -427,7 +427,7 @@ impl Document {
 
         if done.load(Ordering::Acquire) {
           if let Some(err) = error.lock().take() {
-            app_log::log!("Syntax highlighting failed: {}", err);
+            log::warn!("Syntax highlighting failed: {}", err);
             let _ = this.update(cx, |_doc, cx| {
               let mut highlights = highlights_cache.write();
               let mut dirty_lines = dirty_highlight_lines.write();

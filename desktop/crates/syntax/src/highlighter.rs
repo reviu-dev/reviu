@@ -150,7 +150,7 @@ pub fn build_language_config(
       Some(config)
     }
     Err(error) => {
-      app_log::log!("Failed to create {name} highlight config: {error}");
+      log::warn!("Failed to create {name} highlight config: {error}");
       None
     }
   };

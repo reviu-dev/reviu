@@ -5,13 +5,13 @@ edition.workspace = true
 publish.workspace = true
 
 [dependencies]
-app_log = { workspace = true }
 buffer = { workspace = true }
 syntax = { workspace = true }
 ui = { workspace = true }
 gpui = { workspace = true }
 unicode-segmentation = { workspace = true }
 parking_lot = { workspace = true }
+log = { workspace = true }
 git = { workspace = true }
 gpui-component = { workspace = true }
 blake3 = { workspace = true }

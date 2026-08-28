@@ -362,18 +362,18 @@ fn main() {
         // URLs sit under /latest/, so the same URL can serve new artwork.
         let force_icons = match agent_registry::refresh_global_blocking() {
           Ok(outcome) => {
-            app_log::log!("[agent-registry] {outcome:?}");
+            log::info!("[agent-registry] {outcome:?}");
             outcome == agent_registry::RefreshOutcome::Updated
           }
           Err(err) => {
-            app_log::log!("[agent-registry] refresh failed, keeping the cached list: {err}");
+            log::warn!("[agent-registry] refresh failed, keeping the cached list: {err}");
             false
           }
         };
         let fetched =
           agent_registry::download_icons_blocking(&agent_registry::global(), force_icons);
         if fetched > 0 {
-          app_log::log!("[agent-registry] cached {fetched} agent icons");
+          log::info!("[agent-registry] cached {fetched} agent icons");
         }
       })
       .detach();

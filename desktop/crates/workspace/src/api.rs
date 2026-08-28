@@ -2371,6 +2371,7 @@ mod tests {
           diff_view: "unified".to_string(),
         }),
         github_pr_context: None,
+        recent_logs: Some("recent log line".to_string()),
       })
       .expect("submit crash report");
 
@@ -2402,6 +2403,10 @@ mod tests {
     );
     assert!(
       request.contains("\"gitContext\":{\"repoName\":\"reviu\""),
+      "request: {request}"
+    );
+    assert!(
+      request.contains("\"recentLogs\":\"recent log line\""),
       "request: {request}"
     );
   }

@@ -304,7 +304,7 @@ mod desktop_tray {
       }
 
       let Some(icon) = load_icon(icon_png) else {
-        app_log::log!("Unable to load Reviu system tray icon.");
+        log::warn!("Unable to load Reviu system tray icon.");
         return;
       };
 
@@ -332,13 +332,11 @@ mod desktop_tray {
           notification_items: HashMap::new(),
         },
         Ok(Err(stage)) => {
-          app_log::log!("Unable to initialize Reviu system tray ({stage}).");
+          log::warn!("Unable to initialize Reviu system tray ({stage}).");
           return;
         }
         Err(_) => {
-          app_log::log!(
-            "Reviu system tray initialization panicked; continuing without a tray icon."
-          );
+          log::warn!("Reviu system tray initialization panicked; continuing without a tray icon.");
           return;
         }
       };
@@ -430,19 +428,19 @@ mod desktop_tray {
   #[cfg(target_os = "linux")]
   fn ensure_platform_tray_runtime() -> bool {
     if let Err(error) = gtk::init() {
-      app_log::log!("{}", super::gtk_tray_init_error_message(error));
+      log::warn!("{}", super::gtk_tray_init_error_message(error));
       return false;
     }
 
     if gtk::gdk::Screen::default().is_none() {
-      app_log::log!("{}", super::gtk_tray_no_display_message());
+      log::warn!("{}", super::gtk_tray_no_display_message());
       return false;
     }
 
     match ensure_linux_appindicator_library() {
       Ok(()) => true,
       Err(error) => {
-        app_log::log!("{error}");
+        log::warn!("{error}");
         false
       }
     }

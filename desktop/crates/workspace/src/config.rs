@@ -288,7 +288,7 @@ impl ConfigStore {
     if let Some(parent) = path.parent()
       && let Err(err) = fs::create_dir_all(parent)
     {
-      app_log::log!(
+      log::warn!(
         "Failed to create config directory {}: {}",
         parent.display(),
         err
@@ -299,7 +299,7 @@ impl ConfigStore {
     match Connection::open(&path) {
       Ok(conn) => Some(Self { conn }),
       Err(err) => {
-        app_log::log!("Failed to open config database {}: {}", path.display(), err);
+        log::warn!("Failed to open config database {}: {}", path.display(), err);
         None
       }
     }
@@ -308,7 +308,7 @@ impl ConfigStore {
   fn open_with_tables() -> Option<Self> {
     let store = Self::open()?;
     if let Err(err) = run_migrations(&store.conn) {
-      app_log::log!("Failed to migrate config database: {}", err);
+      log::warn!("Failed to migrate config database: {}", err);
       return None;
     }
     Some(store)
@@ -328,7 +328,7 @@ impl ConfigStore {
     )) {
       Ok(stmt) => stmt,
       Err(err) => {
-        app_log::log!("Failed to load recent repositories: {}", err);
+        log::warn!("Failed to load recent repositories: {}", err);
         return Vec::new();
       }
     };
@@ -336,7 +336,7 @@ impl ConfigStore {
     let rows = match stmt.query_map([], |row| row.get::<_, String>(0)) {
       Ok(rows) => rows,
       Err(err) => {
-        app_log::log!("Failed to read recent repositories: {}", err);
+        log::warn!("Failed to read recent repositories: {}", err);
         return Vec::new();
       }
     };
@@ -355,7 +355,7 @@ impl ConfigStore {
             missing_paths.push(path_string);
           }
         }
-        Err(err) => app_log::log!("Failed to decode recent repository row: {}", err),
+        Err(err) => log::warn!("Failed to decode recent repository row: {}", err),
       }
     }
 
@@ -380,7 +380,7 @@ impl ConfigStore {
       &format!("DELETE FROM {} WHERE path = ?1", RECENT_REPOS_TABLE.name),
       params![path],
     ) {
-      app_log::log!("Failed to forget recent repository: {}", err);
+      log::warn!("Failed to forget recent repository: {}", err);
     }
   }
 
@@ -406,7 +406,7 @@ impl ConfigStore {
       ),
       params![path_string, last_opened],
     ) {
-      app_log::log!("Failed to persist recent repository: {}", err);
+      log::warn!("Failed to persist recent repository: {}", err);
     }
   }
 
@@ -440,7 +440,7 @@ impl ConfigStore {
       ),
       params![repo, merge_method_storage_key(method)],
     ) {
-      app_log::log!("Failed to persist merge method: {}", err);
+      log::warn!("Failed to persist merge method: {}", err);
     }
   }
 
@@ -492,7 +492,7 @@ impl ConfigStore {
     match settings {
       Ok(settings) => settings,
       Err(err) => {
-        app_log::log!("Failed to load app settings: {}", err);
+        log::warn!("Failed to load app settings: {}", err);
         AppSettings::default()
       }
     }
@@ -529,7 +529,7 @@ impl ConfigStore {
       ),
       params![id],
     ) {
-      app_log::log!("Failed to persist analytics device id: {}", err);
+      log::warn!("Failed to persist analytics device id: {}", err);
       return None;
     }
     Some(id)
@@ -549,7 +549,7 @@ impl ConfigStore {
     )) {
       Ok(stmt) => stmt,
       Err(err) => {
-        app_log::log!("Failed to load command usages: {}", err);
+        log::warn!("Failed to load command usages: {}", err);
         return HashMap::default();
       }
     };
@@ -559,7 +559,7 @@ impl ConfigStore {
     }) {
       Ok(rows) => rows,
       Err(err) => {
-        app_log::log!("Failed to read command usages: {}", err);
+        log::warn!("Failed to read command usages: {}", err);
         return HashMap::default();
       }
     };
@@ -589,7 +589,7 @@ impl ConfigStore {
     let json = match serde_json::to_string(timestamps) {
       Ok(value) => value,
       Err(err) => {
-        app_log::log!("Failed to serialize command usage timestamps: {}", err);
+        log::warn!("Failed to serialize command usage timestamps: {}", err);
         return;
       }
     };
@@ -602,7 +602,7 @@ impl ConfigStore {
       ),
       params![command_id, json],
     ) {
-      app_log::log!("Failed to persist command usage: {}", err);
+      log::warn!("Failed to persist command usage: {}", err);
     }
   }
 
@@ -626,7 +626,7 @@ impl ConfigStore {
     )) {
       Ok(stmt) => stmt,
       Err(err) => {
-        app_log::log!("Failed to load shortcut overrides: {}", err);
+        log::warn!("Failed to load shortcut overrides: {}", err);
         return HashMap::default();
       }
     };
@@ -636,7 +636,7 @@ impl ConfigStore {
     }) {
       Ok(rows) => rows,
       Err(err) => {
-        app_log::log!("Failed to read shortcut overrides: {}", err);
+        log::warn!("Failed to read shortcut overrides: {}", err);
         return HashMap::default();
       }
     };

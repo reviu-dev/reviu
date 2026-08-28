@@ -698,7 +698,7 @@ async fn forward_stderr(stderr: async_process::ChildStderr, buffer: StderrBuffer
     let stripped = ansi_text::strip_ansi_escapes(&line);
     let line = truncate_stderr_line(&stripped).to_string();
     push_stderr_line(&buffer, line.clone());
-    app_log::log!("[acp-server] {line}");
+    log::info!("[acp-server] {line}");
   }
 }
 
@@ -1015,7 +1015,7 @@ async fn run_driver(
             // fresh session instead of failing the whole connection. The local
             // transcript is kept by the host, only provider-side context is lost.
             Err(e) => {
-              app_log::log!("[agent] failed to load saved session, starting fresh: {e}");
+              log::warn!("[agent] failed to load saved session, starting fresh: {e}");
               let resp = connection
                 .send_request(NewSessionRequest::new(cwd.clone()))
                 .block_task()
@@ -1231,7 +1231,7 @@ async fn run_driver(
     .await;
 
   if let Err(e) = result {
-    app_log::log!("[agent_acp] driver exited: {e}");
+    log::warn!("[agent_acp] driver exited: {e}");
   }
   let _ = child.kill();
 }

@@ -401,6 +401,8 @@ pub enum CommandPaletteAction {
   OpenSettingsPage,
   OpenBillingPage,
   OpenAboutPage,
+  OpenLogs,
+  RevealLogs,
   SendFeedback,
   ToggleTerminal,
   ShowChanges,
@@ -1024,6 +1026,8 @@ pub enum CommandPaletteCommandId {
   OpenSettingsPage,
   OpenBillingPage,
   OpenAboutPage,
+  OpenLogs,
+  RevealLogs,
   SendFeedback,
   ToggleTerminal,
   ShowChanges,
@@ -1096,6 +1100,8 @@ impl CommandPaletteCommandId {
       Self::OpenSettingsPage => "open_settings_page",
       Self::OpenBillingPage => "open_billing_page",
       Self::OpenAboutPage => "open_about_page",
+      Self::OpenLogs => "open_logs",
+      Self::RevealLogs => "reveal_logs",
       Self::SendFeedback => "send_feedback",
       Self::ToggleTerminal => "toggle_terminal",
       Self::ShowChanges => "show_changes",
@@ -1164,6 +1170,8 @@ impl CommandPaletteCommandId {
       "open_settings_page" => Some(Self::OpenSettingsPage),
       "open_billing_page" => Some(Self::OpenBillingPage),
       "open_about_page" => Some(Self::OpenAboutPage),
+      "open_logs" => Some(Self::OpenLogs),
+      "reveal_logs" => Some(Self::RevealLogs),
       "send_feedback" => Some(Self::SendFeedback),
       "toggle_terminal" => Some(Self::ToggleTerminal),
       "show_changes" => Some(Self::ShowChanges),
@@ -1686,6 +1694,22 @@ impl CommandPaletteCommand {
     )
   }
 
+  pub fn open_logs() -> Self {
+    Self::new(
+      CommandPaletteCommandId::OpenLogs,
+      "Open logs",
+      "Open the current Reviu log file",
+    )
+  }
+
+  pub fn reveal_logs() -> Self {
+    Self::new(
+      CommandPaletteCommandId::RevealLogs,
+      "Reveal logs",
+      "Show the current Reviu log file in Finder or the file manager",
+    )
+  }
+
   pub fn toggle_terminal() -> Self {
     Self::new(
       CommandPaletteCommandId::ToggleTerminal,
@@ -1876,6 +1900,9 @@ impl CommandPaletteCommand {
 
     commands.push(Self::open_browser_extensions());
 
+    commands.push(Self::open_logs());
+    commands.push(Self::reveal_logs());
+
     commands.push(Self::send_feedback());
 
     commands
@@ -1947,7 +1974,9 @@ impl CommandPaletteCommand {
       | CommandPaletteCommandId::OpenGitConfigPage
       | CommandPaletteCommandId::OpenSettingsPage
       | CommandPaletteCommandId::OpenBillingPage
-      | CommandPaletteCommandId::OpenAboutPage => CommandPaletteGroup::Navigation,
+      | CommandPaletteCommandId::OpenAboutPage
+      | CommandPaletteCommandId::OpenLogs
+      | CommandPaletteCommandId::RevealLogs => CommandPaletteGroup::Navigation,
 
       CommandPaletteCommandId::SendFeedback => CommandPaletteGroup::Navigation,
 
@@ -2044,6 +2073,7 @@ impl CommandPaletteCommand {
         "invoice",
       ],
       Id::OpenAboutPage => &["version", "update", "changelog"],
+      Id::OpenLogs | Id::RevealLogs => &["log", "logs", "support", "debug"],
       Id::SendFeedback => &["issue", "support", "contact"],
       Id::SkipRebase | Id::MergeBranch | Id::RebaseBranch | Id::SendReview => &[],
     }
@@ -2105,6 +2135,9 @@ impl CommandPaletteCommand {
       CommandPaletteCommandId::OpenSettingsPage => Icon::new(IconName::Settings2),
       CommandPaletteCommandId::OpenBillingPage => Icon::new(UiIconName::CreditCard),
       CommandPaletteCommandId::OpenAboutPage => Icon::new(UiIconName::Info),
+      CommandPaletteCommandId::OpenLogs | CommandPaletteCommandId::RevealLogs => {
+        Icon::new(UiIconName::FileCode)
+      }
       CommandPaletteCommandId::SendFeedback => Icon::new(UiIconName::MessageCircle),
 
       CommandPaletteCommandId::ToggleTerminal => Icon::new(UiIconName::SquareTerminal),
@@ -3306,6 +3339,12 @@ impl CommandPalette {
       CommandPaletteCommandId::OpenAboutPage => {
         self.trigger_action(command, CommandPaletteAction::OpenAboutPage, window, cx);
       }
+      CommandPaletteCommandId::OpenLogs => {
+        self.trigger_action(command, CommandPaletteAction::OpenLogs, window, cx);
+      }
+      CommandPaletteCommandId::RevealLogs => {
+        self.trigger_action(command, CommandPaletteAction::RevealLogs, window, cx);
+      }
       CommandPaletteCommandId::SendFeedback => {
         self.trigger_action(command, CommandPaletteAction::SendFeedback, window, cx);
       }
@@ -3986,6 +4025,14 @@ mod tests {
       CommandPaletteGroup::Navigation
     );
     assert_eq!(
+      CommandPaletteCommand::open_logs().group(),
+      CommandPaletteGroup::Navigation
+    );
+    assert_eq!(
+      CommandPaletteCommand::reveal_logs().group(),
+      CommandPaletteGroup::Navigation
+    );
+    assert_eq!(
       CommandPaletteCommand::amend().group(),
       CommandPaletteGroup::History,
       "rewriting a commit is not a working tree change"
@@ -4067,6 +4114,26 @@ mod tests {
   }
 
   #[test]
+  fn default_global_commands_include_log_commands() {
+    let commands = CommandPaletteCommand::default_global_commands(GlobalCommandsContext {
+      current_page: super::CommandPalettePage::Session,
+      include_github: false,
+      signed_in: false,
+      has_subscription: false,
+    });
+    assert!(
+      commands
+        .iter()
+        .any(|c| c.id == CommandPaletteCommandId::OpenLogs)
+    );
+    assert!(
+      commands
+        .iter()
+        .any(|c| c.id == CommandPaletteCommandId::RevealLogs)
+    );
+  }
+
+  #[test]
   fn create_pull_request_command_is_available_with_expected_metadata() {
     let command = CommandPaletteCommand::create_pull_request();
     assert_eq!(command.id, CommandPaletteCommandId::CreatePullRequest);
@@ -4097,9 +4164,11 @@ mod tests {
   }
 
   #[test]
-  fn billing_and_about_commands_are_available_with_expected_metadata() {
+  fn billing_about_and_log_commands_are_available_with_expected_metadata() {
     let billing = CommandPaletteCommand::open_billing_page(false);
     let about = CommandPaletteCommand::open_about_page();
+    let open_logs = CommandPaletteCommand::open_logs();
+    let reveal_logs = CommandPaletteCommand::reveal_logs();
 
     assert_eq!(billing.id, CommandPaletteCommandId::OpenBillingPage);
     assert_eq!(
@@ -4118,6 +4187,13 @@ mod tests {
     assert_eq!(about.id, CommandPaletteCommandId::OpenAboutPage);
     assert_eq!(about.name.as_ref(), "About Reviu");
     assert!(about.matches("about"));
+
+    assert_eq!(open_logs.id, CommandPaletteCommandId::OpenLogs);
+    assert_eq!(open_logs.name.as_ref(), "Open logs");
+    assert!(open_logs.matches("support"));
+    assert_eq!(reveal_logs.id, CommandPaletteCommandId::RevealLogs);
+    assert_eq!(reveal_logs.name.as_ref(), "Reveal logs");
+    assert!(reveal_logs.matches("debug"));
   }
 
   #[test]
@@ -4335,6 +4411,8 @@ mod tests {
       CommandPaletteCommandId::OpenSettingsPage,
       CommandPaletteCommandId::OpenBillingPage,
       CommandPaletteCommandId::OpenAboutPage,
+      CommandPaletteCommandId::OpenLogs,
+      CommandPaletteCommandId::RevealLogs,
       CommandPaletteCommandId::SendFeedback,
     ];
 

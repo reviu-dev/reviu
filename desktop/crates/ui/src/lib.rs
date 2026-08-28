@@ -102,20 +102,20 @@ fn load_bundled_fonts(cx: &mut gpui::App) {
   for &path in BUNDLED_FONTS {
     match assets.load(path) {
       Ok(Some(data)) => {
-        app_log::log!("ui: loaded bundled font {path} ({} bytes)", data.len());
+        log::info!("ui: loaded bundled font {path} ({} bytes)", data.len());
         #[cfg(target_os = "macos")]
         register_with_core_text(&data);
         fonts.push(data);
       }
-      Ok(None) => app_log::log!("ui: bundled font missing: {path}"),
-      Err(err) => app_log::log!("ui: failed to load bundled font {path}: {err}"),
+      Ok(None) => log::warn!("ui: bundled font missing: {path}"),
+      Err(err) => log::warn!("ui: failed to load bundled font {path}: {err}"),
     }
   }
   if fonts.is_empty() {
     return;
   }
   if let Err(err) = cx.text_system().add_fonts(fonts) {
-    app_log::log!("ui: text_system.add_fonts failed: {err}");
+    log::warn!("ui: text_system.add_fonts failed: {err}");
   }
 }
 
@@ -127,7 +127,7 @@ fn register_with_core_text(data: &[u8]) {
 
   let provider = CGDataProvider::from_buffer(std::sync::Arc::new(data.to_vec()));
   let Ok(cg_font) = CGFont::from_data_provider(provider) else {
-    app_log::log!("ui: CGFont::from_data_provider failed");
+    log::warn!("ui: CGFont::from_data_provider failed");
     return;
   };
 
@@ -135,7 +135,7 @@ fn register_with_core_text(data: &[u8]) {
     let mut error: core_foundation::error::CFErrorRef = std::ptr::null_mut();
     let ok = CTFontManagerRegisterGraphicsFont(cg_font.as_ptr(), &mut error);
     if !ok {
-      app_log::log!("ui: CTFontManagerRegisterGraphicsFont failed");
+      log::warn!("ui: CTFontManagerRegisterGraphicsFont failed");
     }
   }
 }

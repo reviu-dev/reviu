@@ -2184,7 +2184,7 @@ impl AgentChatPanel {
         }
         if let Err(error) = result {
           let raw = format!("{error}");
-          app_log::log!("[agent] set model error: {raw}");
+          log::warn!("[agent] set model error: {raw}");
           panel.current_model_id = previous_model_id.clone();
           if let Some(previous) = previous_model_id.as_ref() {
             persist_model_choice(&panel.backend_kind, previous.0.as_ref());

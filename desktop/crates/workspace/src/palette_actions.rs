@@ -40,6 +40,20 @@ pub(crate) fn handle_global_command_palette_action(
       crate::about_dialog::open_about_dialog(window, cx);
       Ok(())
     }
+    CommandPaletteAction::OpenLogs => {
+      if crate::app_log_sink::open_active_log(cx) {
+        Ok(())
+      } else {
+        Err("Logs are disabled for this Reviu session.".into())
+      }
+    }
+    CommandPaletteAction::RevealLogs => {
+      if crate::app_log_sink::reveal_active_log(cx) {
+        Ok(())
+      } else {
+        Err("Logs are disabled for this Reviu session.".into())
+      }
+    }
     CommandPaletteAction::OpenGithubPrDetails {
       owner,
       repo,

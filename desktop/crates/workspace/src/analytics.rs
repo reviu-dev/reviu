@@ -40,7 +40,7 @@ impl Analytics {
     {
       Ok(client) => client,
       Err(err) => {
-        app_log::log!("Failed to build analytics client: {}", err);
+        log::warn!("Failed to build analytics client: {}", err);
         return;
       }
     };
