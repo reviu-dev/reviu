@@ -1022,7 +1022,11 @@ impl Render for SessionPage {
           cx,
         );
         let dock_rail = self.render_dock_rail(cx);
-        let dock_content = self.render_dock_panel(cx);
+        let dock_content = if self.dock_open {
+          self.render_dock_panel(cx)
+        } else {
+          gpui::Empty.into_any_element()
+        };
         let dock = self.render_side_panel(
           PanelSide::Right,
           self.dock_open,
@@ -3498,6 +3502,10 @@ mod tests {
       .advance_clock(std::time::Duration::from_millis(250));
     cx.run_until_parked();
     page.read_with(cx, |page, _| assert!(!page.dock_open));
+    assert!(
+      cx.debug_bounds("dock-panel-zoom").is_none(),
+      "closed dock content is not rendered"
+    );
 
     // Any tab shortcut reopens it on that tab.
     page.update_in(cx, |page, window, cx| {

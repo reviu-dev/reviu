@@ -66,7 +66,7 @@ A failed turn shows a red card naming what happened (credits exhausted, rate lim
 
 ### Fast From The First Word To The Last
 
-Streaming renders incrementally, repaints on a steady beat, and saves off the main thread, so long sessions stay smooth and the CPU calm. Settled chat messages reuse shared text when they repaint, keeping long transcripts lighter. Switching conversations never freezes the app, and the sidebar lists sessions from an index, instantly, with a one-line preview per row.
+Streaming renders incrementally, repaints on a steady beat, and saves off the main thread, so long sessions stay smooth and the CPU calm. Closed dock panels stop rendering their hidden contents, and settled chat messages reuse shared text when they repaint, keeping long transcripts lighter. Switching conversations never freezes the app, and the sidebar lists sessions from an index, instantly, with a one-line preview per row.
 
 ### The Conversation Keeps Your Place
 

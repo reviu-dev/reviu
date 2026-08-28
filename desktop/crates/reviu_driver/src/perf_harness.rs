@@ -18,8 +18,10 @@ const DEFAULT_SCENARIOS: &[&str] = &[
   "chat_stream_changes",
   "visible_chat_stream_long",
   "visible_chat_stream_long_changes",
+  "visible_chat_turn_settle",
   "parallel_chat_stream",
 ];
+const LONG_STREAM_MS: u64 = 160 * 45;
 
 const SAMPLE_BUCKETS: &[SampleBucket] = &[
   SampleBucket {
@@ -314,36 +316,23 @@ pub(crate) fn run(args: PerfArgs) -> Result<()> {
   fs::create_dir_all(&args.output_root)
     .with_context(|| format!("create {}", args.output_root.display()))?;
   let run_dir = TempRunDir::new(&args.output_root)?;
-  let repo = setup_temp_repo(&run_dir.path.join("repo"), args.file_count)?;
-  let mut parallel_repos = Vec::new();
-  if scenario_requested(&args.scenarios, "parallel_chat_stream") {
-    parallel_repos.reserve(args.parallel_sessions);
-    for index in 0..args.parallel_sessions {
-      parallel_repos.push(setup_temp_repo(
-        &run_dir.path.join(format!("parallel-repo-{index}")),
-        args.file_count,
-      )?);
-    }
-  }
   let artifacts = run_dir.path.join("artifacts");
   fs::create_dir_all(&artifacts).with_context(|| format!("create {}", artifacts.display()))?;
 
   let driver_bin = resolve_driver_bin(args.driver_bin.as_deref())?;
   let agent_bin = resolve_agent_bin(args.agent_bin.as_deref())?;
-  let mut driver = DriverProcess::spawn(&driver_bin, &agent_bin, &args.backend, &run_dir.path)?;
-  driver.command(serde_json::json!({ "cmd": "path_prompt", "path": repo }))?;
-  driver.command(serde_json::json!({ "cmd": "park" }))?;
-
   let mut scenarios = Vec::new();
+
   if scenario_requested(&args.scenarios, "idle") {
-    scenarios.push(run_scenario(
-      &mut driver,
+    scenarios.push(run_isolated_scenario(
+      &args,
+      &driver_bin,
+      &agent_bin,
+      &run_dir.path,
       &artifacts,
       "idle",
-      args.sample_seconds,
-      args.skip_sample,
       false,
-      |driver| {
+      |driver, _repo| {
         driver.command(serde_json::json!({ "cmd": "hide_dock" }))?;
         driver.command(serde_json::json!({ "cmd": "park" }))?;
         Ok(())
@@ -351,14 +340,15 @@ pub(crate) fn run(args: PerfArgs) -> Result<()> {
     )?);
   }
   if scenario_requested(&args.scenarios, "chat_stream") {
-    scenarios.push(run_scenario(
-      &mut driver,
+    scenarios.push(run_isolated_scenario(
+      &args,
+      &driver_bin,
+      &agent_bin,
+      &run_dir.path,
       &artifacts,
       "chat_stream",
-      args.sample_seconds,
-      args.skip_sample,
       true,
-      |driver| {
+      |driver, _repo| {
         driver.command(serde_json::json!({ "cmd": "hide_dock" }))?;
         wait_for_active_agent_ready(driver)?;
         driver.command(
@@ -369,14 +359,15 @@ pub(crate) fn run(args: PerfArgs) -> Result<()> {
     )?);
   }
   if scenario_requested(&args.scenarios, "chat_stream_changes") {
-    scenarios.push(run_scenario(
-      &mut driver,
+    scenarios.push(run_isolated_scenario(
+      &args,
+      &driver_bin,
+      &agent_bin,
+      &run_dir.path,
       &artifacts,
       "chat_stream_changes",
-      args.sample_seconds,
-      args.skip_sample,
       true,
-      |driver| {
+      |driver, _repo| {
         driver.command(serde_json::json!({ "cmd": "show_changes" }))?;
         wait_for_active_agent_ready(driver)?;
         driver.command(
@@ -387,14 +378,15 @@ pub(crate) fn run(args: PerfArgs) -> Result<()> {
     )?);
   }
   if scenario_requested(&args.scenarios, "visible_chat_stream_long") {
-    scenarios.push(run_scenario(
-      &mut driver,
+    scenarios.push(run_isolated_scenario(
+      &args,
+      &driver_bin,
+      &agent_bin,
+      &run_dir.path,
       &artifacts,
       "visible_chat_stream_long",
-      args.sample_seconds,
-      args.skip_sample,
       true,
-      |driver| {
+      |driver, _repo| {
         driver.command(serde_json::json!({ "cmd": "hide_dock" }))?;
         wait_for_active_agent_ready(driver)?;
         driver.command(
@@ -405,14 +397,15 @@ pub(crate) fn run(args: PerfArgs) -> Result<()> {
     )?);
   }
   if scenario_requested(&args.scenarios, "visible_chat_stream_long_changes") {
-    scenarios.push(run_scenario(
-      &mut driver,
+    scenarios.push(run_isolated_scenario(
+      &args,
+      &driver_bin,
+      &agent_bin,
+      &run_dir.path,
       &artifacts,
       "visible_chat_stream_long_changes",
-      args.sample_seconds,
-      args.skip_sample,
       true,
-      |driver| {
+      |driver, _repo| {
         driver.command(serde_json::json!({ "cmd": "show_changes" }))?;
         wait_for_active_agent_ready(driver)?;
         driver.command(
@@ -422,17 +415,47 @@ pub(crate) fn run(args: PerfArgs) -> Result<()> {
       },
     )?);
   }
+  if scenario_requested(&args.scenarios, "visible_chat_turn_settle") {
+    scenarios.push(run_isolated_scenario(
+      &args,
+      &driver_bin,
+      &agent_bin,
+      &run_dir.path,
+      &artifacts,
+      "visible_chat_turn_settle",
+      true,
+      |driver, _repo| {
+        driver.command(serde_json::json!({ "cmd": "hide_dock" }))?;
+        wait_for_active_agent_ready(driver)?;
+        driver.command(
+          serde_json::json!({ "cmd": "submit_prompt", "text": "perf-stream long markdown tools settle" }),
+        )?;
+        wait_for_stream_tail(driver, args.sample_seconds)?;
+        Ok(())
+      },
+    )?);
+  }
   if scenario_requested(&args.scenarios, "parallel_chat_stream") {
-    scenarios.push(run_scenario(
-      &mut driver,
+    scenarios.push(run_isolated_scenario(
+      &args,
+      &driver_bin,
+      &agent_bin,
+      &run_dir.path,
       &artifacts,
       "parallel_chat_stream",
-      args.sample_seconds,
-      args.skip_sample,
       true,
-      |driver| {
+      |driver, repo| {
         driver.command(serde_json::json!({ "cmd": "hide_dock" }))?;
-        for (index, repo) in parallel_repos.iter().enumerate() {
+        wait_for_active_agent_ready(driver)?;
+        driver.command(serde_json::json!({
+          "cmd": "submit_prompt",
+          "text": "perf-stream long markdown tools parallel 0"
+        }))?;
+        for index in 1..args.parallel_sessions {
+          let repo = setup_temp_repo(
+            &repo.with_file_name(format!("parallel_chat_stream-{index}")),
+            args.file_count,
+          )?;
           driver.command(serde_json::json!({ "cmd": "path_prompt", "path": repo }))?;
           wait_for_active_agent_ready(driver)?;
           driver.command(serde_json::json!({
@@ -446,7 +469,7 @@ pub(crate) fn run(args: PerfArgs) -> Result<()> {
   }
 
   let manifest = PerfManifest {
-    repo,
+    repo: run_dir.path.join("repos"),
     output_root: run_dir.path.clone(),
     backend: args.backend,
     file_count: args.file_count,
@@ -459,9 +482,49 @@ pub(crate) fn run(args: PerfArgs) -> Result<()> {
   let summary_path = run_dir.path.join("summary.md");
   fs::write(&manifest_path, serde_json::to_string_pretty(&manifest)?)?;
   fs::write(&summary_path, render_summary(&manifest))?;
-  driver.command(serde_json::json!({ "cmd": "quit" })).ok();
   println!("summary: {}", summary_path.display());
   println!("manifest: {}", manifest_path.display());
+  Ok(())
+}
+
+fn run_isolated_scenario(
+  args: &PerfArgs,
+  driver_bin: &Path,
+  agent_bin: &Path,
+  run_dir: &Path,
+  artifacts: &Path,
+  name: &'static str,
+  pump_driver: bool,
+  prepare: impl FnOnce(&mut DriverProcess, &Path) -> Result<()>,
+) -> Result<ScenarioReport> {
+  let repo = setup_temp_repo(&run_dir.join("repos").join(name), args.file_count)?;
+  let mut driver = DriverProcess::spawn(
+    driver_bin,
+    agent_bin,
+    &args.backend,
+    &run_dir.join("drivers").join(name),
+  )?;
+  driver.command(serde_json::json!({ "cmd": "path_prompt", "path": repo }))?;
+  driver.command(serde_json::json!({ "cmd": "park" }))?;
+  let report = run_scenario(
+    &mut driver,
+    artifacts,
+    name,
+    args.sample_seconds,
+    args.skip_sample,
+    pump_driver,
+    |driver| prepare(driver, &repo),
+  )?;
+  driver.command(serde_json::json!({ "cmd": "quit" })).ok();
+  Ok(report)
+}
+
+fn wait_for_stream_tail(driver: &mut DriverProcess, sample_seconds: u64) -> Result<()> {
+  let half_sample_ms = sample_seconds.saturating_mul(1_000) / 2;
+  let delay_ms = LONG_STREAM_MS.saturating_sub(half_sample_ms);
+  if delay_ms > 0 {
+    driver.command(serde_json::json!({ "cmd": "wait", "ms": delay_ms }))?;
+  }
   Ok(())
 }
 
