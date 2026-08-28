@@ -549,18 +549,29 @@ Its provider may have refused it (credits, usage limit) without reporting an err
           }
         }
         panel.end_turn();
+        let apply_model_before_queue = panel.pending_model_selection.take().and_then(|pending| {
+          let session = panel.session.clone()?;
+          Some((session, pending))
+        });
+        let dispatch_queued_after_model =
+          completed && !panel.queued_prompts.is_empty() && apply_model_before_queue.is_some();
+        if let Some((session, pending)) = apply_model_before_queue {
+          panel.spawn_set_model_request(
+            session,
+            pending.model_id,
+            pending.previous_model_id,
+            pending.generation,
+            dispatch_queued_after_model,
+            cx,
+          );
+        }
         // Unpinned groups fold when the turn settles; their rows must remeasure.
         let count = panel.messages_list.item_count();
         if count > 0 {
           panel.messages_list.remeasure_items(0..count);
         }
-        if completed && !panel.queued_prompts.is_empty() {
-          let next = panel.queued_prompts.remove(0);
-          // A refused dispatch (session died between turns) must not lose
-          // the message: it goes back to the head of the queue.
-          if !panel.dispatch_prompt(next.clone(), cx) {
-            panel.queued_prompts.insert(0, next);
-          }
+        if completed && !panel.queued_prompts.is_empty() && !dispatch_queued_after_model {
+          panel.dispatch_next_queued_prompt(cx);
         }
         panel.persist_state(cx);
         panel.sync_list_count();

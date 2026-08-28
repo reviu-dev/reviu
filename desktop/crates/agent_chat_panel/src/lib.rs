@@ -93,6 +93,13 @@ struct ConfigSelector {
   values: Vec<(SessionConfigValueId, String, Option<String>)>,
 }
 
+#[derive(Clone, Debug)]
+struct PendingModelSelection {
+  model_id: ModelId,
+  previous_model_id: Option<ModelId>,
+  generation: u64,
+}
+
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 struct ChatMessage {
   role: ChatRole,
@@ -875,6 +882,8 @@ pub struct AgentChatPanel {
   current_mode_id: Option<SessionModeId>,
   available_models: Vec<ModelInfo>,
   current_model_id: Option<ModelId>,
+  pending_model_selection: Option<PendingModelSelection>,
+  model_change_generation: u64,
   config_options: Vec<SessionConfigOption>,
   /// Baseline for the composer trigger's muted state.
   config_defaults: HashMap<SessionConfigId, SessionConfigValueId>,
@@ -974,6 +983,8 @@ impl AgentChatPanel {
       current_mode_id: None,
       available_models: Vec::new(),
       current_model_id: None,
+      pending_model_selection: None,
+      model_change_generation: 0,
       config_options: Vec::new(),
       config_defaults: HashMap::new(),
       _connect_task: None,
@@ -1573,6 +1584,8 @@ impl AgentChatPanel {
       current_mode_id: None,
       available_models: Vec::new(),
       current_model_id: None,
+      pending_model_selection: None,
+      model_change_generation: 0,
       config_options: Vec::new(),
       config_defaults: HashMap::new(),
       _connect_task: None,
@@ -2065,16 +2078,102 @@ impl AgentChatPanel {
   }
 
   fn set_model(&mut self, model_id: ModelId, cx: &mut Context<Self>) {
-    let Some(session) = self.session.clone() else {
+    let same_pending = self
+      .pending_model_selection
+      .as_ref()
+      .map(|pending| pending.model_id == model_id)
+      .unwrap_or(true);
+    if self.current_model_id.as_ref() == Some(&model_id) && same_pending {
       return;
-    };
+    }
+    let previous_model_id = self
+      .pending_model_selection
+      .as_ref()
+      .map(|pending| pending.previous_model_id.clone())
+      .unwrap_or_else(|| self.current_model_id.clone());
     persist_model_choice(&self.backend_kind, model_id.0.as_ref());
     self.current_model_id = Some(model_id.clone());
+    self.model_change_generation = self.model_change_generation.wrapping_add(1);
+    let generation = self.model_change_generation;
+    if self.in_flight {
+      self.pending_model_selection = Some(PendingModelSelection {
+        model_id,
+        previous_model_id,
+        generation,
+      });
+      cx.notify();
+      return;
+    }
+    let Some(session) = self.session.clone() else {
+      cx.notify();
+      return;
+    };
+    self.pending_model_selection = None;
+    let dispatch_queued_after = !self.queued_prompts.is_empty();
+    self.spawn_set_model_request(
+      session,
+      model_id,
+      previous_model_id,
+      generation,
+      dispatch_queued_after,
+      cx,
+    );
     cx.notify();
-    cx.spawn(async move |_, _| {
-      let _ = session.set_model(model_id).await;
+  }
+
+  fn spawn_set_model_request(
+    &mut self,
+    session: Arc<AgentSession>,
+    model_id: ModelId,
+    previous_model_id: Option<ModelId>,
+    generation: u64,
+    dispatch_queued_after: bool,
+    cx: &mut Context<Self>,
+  ) {
+    cx.spawn(async move |this, cx| {
+      let result = session.set_model(model_id.clone()).await;
+      let _ = this.update(cx, |panel, cx| {
+        if panel.model_change_generation != generation {
+          return;
+        }
+        if let Err(error) = result {
+          let raw = format!("{error}");
+          app_log::log!("[agent] set model error: {raw}");
+          panel.current_model_id = previous_model_id.clone();
+          if let Some(previous) = previous_model_id.as_ref() {
+            persist_model_choice(&panel.backend_kind, previous.0.as_ref());
+          }
+          panel.items.push(ChatItem::Message(ChatMessage {
+            role: ChatRole::System,
+            text: format!(
+              "[error] Could not switch model: {}",
+              truncate_chars(&raw, 200)
+            ),
+            images: 0,
+            image_data: Vec::new(),
+          }));
+          panel.persist_state(cx);
+          panel.sync_list_count();
+          cx.notify();
+          return;
+        }
+        if dispatch_queued_after {
+          panel.dispatch_next_queued_prompt(cx);
+        }
+        cx.notify();
+      });
     })
     .detach();
+  }
+
+  fn dispatch_next_queued_prompt(&mut self, cx: &mut Context<Self>) {
+    if self.queued_prompts.is_empty() {
+      return;
+    }
+    let next = self.queued_prompts.remove(0);
+    if !self.dispatch_prompt(next.clone(), cx) {
+      self.queued_prompts.insert(0, next);
+    }
   }
 
   /// Reapply the last model the user picked for this backend, if the agent still offers it.
@@ -2809,6 +2908,8 @@ impl AgentChatPanel {
     self.current_mode_id = None;
     self.available_models.clear();
     self.current_model_id = None;
+    self.pending_model_selection = None;
+    self.model_change_generation = self.model_change_generation.wrapping_add(1);
     self.config_options.clear();
     self.config_defaults.clear();
     self.status = Status::Connecting;
@@ -2921,7 +3022,7 @@ impl AgentChatPanel {
   }
 
   fn can_switch_model(&self) -> bool {
-    !self.conversation_started() && self.loading_conversation.is_none() && !self.in_flight
+    self.loading_conversation.is_none()
   }
 
   /// Whether the conversation has user-visible content worth writing to disk.

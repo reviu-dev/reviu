@@ -2128,7 +2128,7 @@ impl AgentChatPanel {
           Some(brand_icon),
           "Select a model",
           selector,
-          !can_switch,
+          !can_switch || self.in_flight,
           false,
           cx,
         )

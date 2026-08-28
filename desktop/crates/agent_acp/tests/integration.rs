@@ -1,5 +1,5 @@
 use agent_acp::{AgentEvent, AgentSession, BackendConfig};
-use agent_client_protocol::schema::{ContentBlock, StopReason};
+use agent_client_protocol::schema::{ContentBlock, ModelId, StopReason};
 
 fn stub_backend() -> BackendConfig {
   BackendConfig::new("stub", env!("CARGO_BIN_EXE_stub_agent"), Vec::new())
@@ -66,6 +66,27 @@ fn multi_turn_against_stub_agent() {
       let stop = session.send_prompt("hi").await.expect("prompt");
       assert!(matches!(stop, StopReason::EndTurn));
     }
+  });
+}
+
+#[test]
+fn set_model_round_trips_against_stub_agent() {
+  smol::block_on(async {
+    let mut session = spawn_stub_session().await;
+    let info = session.init_info().clone();
+    assert_eq!(
+      info.current_model_id.as_ref().map(|id| id.0.as_ref()),
+      Some("stub-small")
+    );
+
+    if let Some(events) = session.take_events() {
+      smol::spawn(async move { while events.recv().await.is_ok() {} }).detach();
+    }
+
+    session
+      .set_model(ModelId::new("stub-large"))
+      .await
+      .expect("model switch");
   });
 }
 

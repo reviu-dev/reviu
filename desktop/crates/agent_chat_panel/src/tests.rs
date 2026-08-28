@@ -3481,16 +3481,60 @@ async fn native_access_control_hides_reviu_auto_approve(cx: &mut gpui::TestAppCo
 }
 
 #[gpui::test]
-async fn started_conversations_keep_their_agent(cx: &mut gpui::TestAppContext) {
+async fn started_conversations_keep_their_agent_but_allow_model_changes(
+  cx: &mut gpui::TestAppContext,
+) {
   let (panel, cx) = add_panel_window(cx);
   panel.update(cx, |panel, cx| {
     panel.items.push(user_message("started"));
     assert!(!panel.can_switch_backend());
-    assert!(!panel.can_switch_model());
+    assert!(panel.can_switch_model());
 
     panel.switch_backend(AgentId::new("pi-acp"), cx);
     assert_eq!(panel.backend_kind(), &default_agent_id());
     assert_eq!(panel.current_conversation().agent_id, default_agent_id());
+  });
+}
+
+#[gpui::test]
+async fn model_changes_remain_available_during_a_turn(cx: &mut gpui::TestAppContext) {
+  let (panel, cx) = add_panel_window(cx);
+  panel.update(cx, |panel, cx| {
+    panel.status = Status::Ready;
+    panel.items.push(user_message("started"));
+    panel.pretend_turn_in_flight_for_test(cx);
+
+    assert!(panel.can_switch_model());
+  });
+}
+
+#[gpui::test]
+async fn model_changes_during_a_turn_are_deferred_until_the_turn_settles(
+  cx: &mut gpui::TestAppContext,
+) {
+  let (panel, cx) = add_panel_window(cx);
+  let model = |id: &str, name: &str| ModelInfo::new(ModelId::new(id.to_string()), name);
+
+  panel.update(cx, |panel, cx| {
+    panel.status = Status::Ready;
+    panel.available_models = vec![
+      model("stub-small", "Stub Small"),
+      model("stub-large", "Stub Large"),
+    ];
+    panel.current_model_id = Some(ModelId::new("stub-small"));
+    panel.items.push(user_message("started"));
+    panel.pretend_turn_in_flight_for_test(cx);
+
+    panel.set_model(ModelId::new("stub-large"), cx);
+    assert!(panel.pending_model_selection.is_some());
+    assert_eq!(
+      panel.current_model_id.as_ref().map(|id| id.0.as_ref()),
+      Some("stub-large")
+    );
+
+    panel.items.push(agent_message("done"));
+    panel.complete_prompt(Ok(agent_client_protocol::schema::StopReason::EndTurn), cx);
+    assert!(panel.pending_model_selection.is_none());
   });
 }
 

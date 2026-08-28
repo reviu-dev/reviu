@@ -4,13 +4,21 @@ use std::sync::{Arc, Mutex};
 
 use agent_client_protocol::schema::{
   AgentCapabilities, CancelNotification, ContentBlock, Diff, Implementation, InitializeRequest,
-  InitializeResponse, NewSessionRequest, NewSessionResponse, PermissionOption,
+  InitializeResponse, ModelId, ModelInfo, NewSessionRequest, NewSessionResponse, PermissionOption,
   PermissionOptionKind, PromptRequest, PromptResponse, RequestPermissionRequest, SessionId,
-  SessionNotification, SessionUpdate, StopReason, TextContent, ToolCall, ToolCallContent,
-  ToolCallId, ToolCallStatus, ToolCallUpdate, ToolCallUpdateFields, ToolKind,
+  SessionModelState, SessionNotification, SessionUpdate, SetSessionModelRequest,
+  SetSessionModelResponse, StopReason, TextContent, ToolCall, ToolCallContent, ToolCallId,
+  ToolCallStatus, ToolCallUpdate, ToolCallUpdateFields, ToolKind,
 };
 use agent_client_protocol::{Agent, Client, ConnectionTo, Dispatch, Responder};
 use smol::Unblock;
+
+fn stub_models() -> Vec<ModelInfo> {
+  vec![
+    ModelInfo::new(ModelId::new("stub-small"), "Stub Small"),
+    ModelInfo::new(ModelId::new("stub-large"), "Stub Large"),
+  ]
+}
 
 /// A thought chunk then the "ack" reply, closing the turn's notifications.
 fn finish_turn(cx: &ConnectionTo<Client>, session_id: SessionId) {
@@ -40,6 +48,10 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
     let waiting: Arc<Mutex<WaitSlot>> = Arc::new(Mutex::new((None, false)));
     let waiting_for_cancel = waiting.clone();
     let waiting_for_steer = waiting.clone();
+    let current_model = Arc::new(Mutex::new("stub-small".to_string()));
+    let model_for_new_session = current_model.clone();
+    let model_for_prompt = current_model.clone();
+    let model_for_set = current_model.clone();
 
     Agent
       .builder()
@@ -107,7 +119,10 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
       .on_receive_request(
         async move |_req: NewSessionRequest, responder, cx: ConnectionTo<Client>| {
           let session_id = SessionId::new("stub-session");
-          let result = responder.respond(NewSessionResponse::new(session_id.clone()));
+          let current_model = model_for_new_session.lock().expect("current model").clone();
+          let result = responder.respond(NewSessionResponse::new(session_id.clone()).models(
+            SessionModelState::new(ModelId::new(current_model), stub_models()),
+          ));
           let _ = cx.send_notification(SessionNotification::new(
             session_id,
             SessionUpdate::AvailableCommandsUpdate(
@@ -124,6 +139,13 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
             ),
           ));
           result
+        },
+        agent_client_protocol::on_receive_request!(),
+      )
+      .on_receive_request(
+        async move |req: SetSessionModelRequest, responder, _: ConnectionTo<Client>| {
+          *model_for_set.lock().expect("current model") = req.model_id.0.to_string();
+          responder.respond(SetSessionModelResponse::new())
         },
         agent_client_protocol::on_receive_request!(),
       )
@@ -147,6 +169,15 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
               session_id.clone(),
               SessionUpdate::AgentMessageChunk(agent_client_protocol::schema::ContentChunk::new(
                 ContentBlock::Text(TextContent::new("image received")),
+              )),
+            ));
+          }
+          if prompt_contains("which model") {
+            let model = model_for_prompt.lock().expect("current model").clone();
+            let _ = cx.send_notification(SessionNotification::new(
+              session_id.clone(),
+              SessionUpdate::AgentMessageChunk(agent_client_protocol::schema::ContentChunk::new(
+                ContentBlock::Text(TextContent::new(format!("model: {model}"))),
               )),
             ));
           }
