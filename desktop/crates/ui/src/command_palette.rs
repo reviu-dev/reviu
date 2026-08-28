@@ -1,4 +1,9 @@
-use std::{collections::BTreeMap, rc::Rc, sync::Arc};
+use std::{
+  collections::BTreeMap,
+  path::{MAIN_SEPARATOR, Path},
+  rc::Rc,
+  sync::Arc,
+};
 
 use crate::github_url::parse_github_pull_request_url_action;
 use crate::palette::{
@@ -80,6 +85,65 @@ fn palette_row(
       ),
       RowHint::Keybinding(keystroke) => row.child(Kbd::new(keystroke)),
     })
+}
+
+fn repository_path_label(path: &str) -> (String, String) {
+  let path = Path::new(path);
+  let name = path
+    .file_name()
+    .map(|name| name.to_string_lossy().into_owned())
+    .unwrap_or_else(|| path.to_string_lossy().into_owned());
+  let dir = path
+    .parent()
+    .filter(|parent| !parent.as_os_str().is_empty())
+    .map(|parent| {
+      let mut label = parent.to_string_lossy().into_owned();
+      if !label.ends_with(MAIN_SEPARATOR) {
+        label.push(MAIN_SEPARATOR);
+      }
+      label
+    })
+    .unwrap_or_default();
+
+  (dir, name)
+}
+
+fn repository_palette_row(
+  icon: Icon,
+  repository: &CommandPaletteRepository,
+  theme: &gpui_component::Theme,
+) -> impl IntoElement {
+  let (dir, name) = repository_path_label(repository.path.as_ref());
+
+  h_flex()
+    .w_full()
+    .items_center()
+    .gap_2()
+    .child(icon.small().text_color(theme.muted_foreground))
+    .child(
+      h_flex()
+        .min_w_0()
+        .flex_1()
+        .overflow_hidden()
+        .text_sm()
+        .whitespace_nowrap()
+        .when(!dir.is_empty(), |this| {
+          this.child(
+            div()
+              .min_w_0()
+              .overflow_hidden()
+              .text_ellipsis_start()
+              .text_color(theme.muted_foreground)
+              .child(dir),
+          )
+        })
+        .child(
+          div()
+            .flex_shrink_0()
+            .text_color(theme.foreground)
+            .child(name),
+        ),
+    )
 }
 
 /// Why a command answered a query, worst first: one whose name says it beats one
@@ -478,10 +542,9 @@ impl ListDelegate for RepositoriesListDelegate {
     let theme = cx.theme().clone();
 
     self.matched_repositories.get(ix.row).map(|repository| {
-      palette_list_item(ix, self.selected_index).child(palette_row(
+      palette_list_item(ix, self.selected_index).child(repository_palette_row(
         Icon::new(IconName::FolderOpen),
-        repository.path.clone(),
-        None,
+        repository,
         &theme,
       ))
     })
@@ -3618,7 +3681,7 @@ mod tests {
     CommandPalette, CommandPaletteBranch, CommandPaletteBranchKind, CommandPaletteCommand,
     CommandPaletteCommandId, CommandPaletteConfig, CommandPaletteGroup, CommandPaletteHandler,
     CommandPaletteInitialScreen, CommandPaletteScreen, GlobalCommandsContext, MatchQuality,
-    RowHint,
+    RowHint, repository_path_label,
   };
   use gpui::AppContext as _;
   use gpui::TestAppContext;
@@ -3815,6 +3878,18 @@ mod tests {
     assert_eq!(
       CommandPalette::interactive_rebase_head_count_git_command("1"),
       "git rebase -i HEAD~n"
+    );
+  }
+
+  #[test]
+  fn repository_path_label_keeps_the_repository_name_separate() {
+    assert_eq!(
+      repository_path_label("/Users/joris/workspace/reviu"),
+      ("/Users/joris/workspace/".to_string(), "reviu".to_string())
+    );
+    assert_eq!(
+      repository_path_label("reviu"),
+      (String::new(), "reviu".to_string())
     );
   }
 
