@@ -1065,6 +1065,21 @@ impl SessionPage {
 
   #[cfg(any(test, feature = "test-support"))]
   #[doc(hidden)]
+  pub fn open_file_for_driver(
+    &mut self,
+    rel_path: PathBuf,
+    window: &mut Window,
+    cx: &mut Context<Self>,
+  ) -> Result<(), SharedString> {
+    if self.checkout_root(cx).is_none() {
+      return Err("No repository selected.".into());
+    }
+    self.open_diff(rel_path, None, OpenIntent::Open, window, cx);
+    Ok(())
+  }
+
+  #[cfg(any(test, feature = "test-support"))]
+  #[doc(hidden)]
   pub fn show_changes_for_driver(&mut self, window: &mut Window, cx: &mut Context<Self>) {
     self.show_dock_tab(DockPanelTab::Changes, window, cx);
   }
@@ -1120,6 +1135,35 @@ impl SessionPage {
       "background_in_flight": background_in_flight,
       "background_ready": background_ready,
       "total_in_flight": background_in_flight + usize::from(active_in_flight),
+    })
+  }
+
+  #[cfg(any(test, feature = "test-support"))]
+  #[doc(hidden)]
+  pub fn editor_stats_for_driver(&self, cx: &App) -> serde_json::Value {
+    let selected_file = self
+      .selected_file
+      .as_ref()
+      .map(|path| path.display().to_string());
+    let Some(editor) = self.editor.as_ref() else {
+      return serde_json::json!({
+        "ready": false,
+        "selected_file": selected_file,
+      });
+    };
+    editor.read_with(cx, |editor, cx| {
+      let document = editor.document().read(cx);
+      let line_count = document.len_lines();
+      let display_line_count = editor.display_line_count(line_count);
+      serde_json::json!({
+        "ready": editor.projection().is_some(),
+        "selected_file": selected_file,
+        "line_count": line_count,
+        "display_line_count": display_line_count,
+        "scroll_offset_y": editor.scroll_offset_y,
+        "line_layout_cache_size": editor.line_layouts.len(),
+        "virtual_line_layout_cache_size": editor.virtual_line_layouts.len(),
+      })
     })
   }
 

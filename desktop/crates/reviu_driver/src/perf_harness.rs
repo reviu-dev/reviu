@@ -1,4 +1,5 @@
 use std::collections::BTreeMap;
+use std::fmt::Write as FmtWrite;
 use std::fs;
 use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
@@ -21,7 +22,18 @@ const DEFAULT_SCENARIOS: &[&str] = &[
   "visible_chat_turn_settle",
   "parallel_chat_stream",
 ];
+const AVAILABLE_SCENARIOS: &[&str] = &[
+  "idle",
+  "chat_stream",
+  "chat_stream_changes",
+  "visible_chat_stream_long",
+  "visible_chat_stream_long_changes",
+  "visible_chat_turn_settle",
+  "parallel_chat_stream",
+  "editor_scroll_large_diff",
+];
 const LONG_STREAM_MS: u64 = 160 * 45;
+const EDITOR_SCROLL_FILE: &str = "src/large-diff.rs";
 
 const SAMPLE_BUCKETS: &[SampleBucket] = &[
   SampleBucket {
@@ -36,6 +48,39 @@ const SAMPLE_BUCKETS: &[SampleBucket] = &[
       "prepaint",
       "paint",
       "Taffy",
+    ],
+  },
+  SampleBucket {
+    name: "editor",
+    needles: &[
+      "EditorElement",
+      "EditorScrollbarElement",
+      "GutterElement",
+      "editor_element",
+      "scrollbar_element",
+    ],
+  },
+  SampleBucket {
+    name: "editor_projection",
+    needles: &[
+      "Projection::",
+      "Projection ",
+      "projection::",
+      "build_projection",
+      "from_diffs",
+    ],
+  },
+  SampleBucket {
+    name: "editor_word_diff",
+    needles: &["word_diff", "word_diff_ranges", "collect_word_diffs"],
+  },
+  SampleBucket {
+    name: "syntax_highlight",
+    needles: &[
+      "SyntaxHighlighter",
+      "highlight_text",
+      "tree_sitter_highlight",
+      "highlight_text_to_line_spans",
     ],
   },
   SampleBucket {
@@ -265,10 +310,10 @@ pub(crate) fn parse_args(args: impl IntoIterator<Item = String>) -> Result<PerfA
     bail!("--backend must be visual or test");
   }
   for scenario in &parsed.scenarios {
-    if !DEFAULT_SCENARIOS.contains(&scenario.as_str()) {
+    if !AVAILABLE_SCENARIOS.contains(&scenario.as_str()) {
       bail!(
         "unknown scenario: {scenario}\navailable: {}",
-        DEFAULT_SCENARIOS.join(", ")
+        AVAILABLE_SCENARIOS.join(", ")
       );
     }
   }
@@ -309,7 +354,7 @@ fn scenario_requested(scenarios: &[String], scenario: &str) -> bool {
 }
 
 fn usage() -> &'static str {
-  "usage: cargo run -p reviu_driver --bin reviu-perf -- [--backend visual|test] [--files 300] [--sample-seconds 5] [--parallel-sessions 3] [--scenario name[,name]] [--output target/perf/reviu-driver] [--skip-sample]"
+  "usage: cargo run -p reviu_driver --bin reviu-perf -- [--backend visual|test] [--files 300] [--sample-seconds 5] [--parallel-sessions 3] [--scenario name[,name]] [--output target/perf/reviu-driver] [--skip-sample]\navailable scenarios: idle, chat_stream, chat_stream_changes, visible_chat_stream_long, visible_chat_stream_long_changes, visible_chat_turn_settle, parallel_chat_stream, editor_scroll_large_diff"
 }
 
 pub(crate) fn run(args: PerfArgs) -> Result<()> {
@@ -467,6 +512,15 @@ pub(crate) fn run(args: PerfArgs) -> Result<()> {
       },
     )?);
   }
+  if scenario_requested(&args.scenarios, "editor_scroll_large_diff") {
+    scenarios.push(run_editor_scroll_large_diff_scenario(
+      &args,
+      &driver_bin,
+      &agent_bin,
+      &run_dir.path,
+      &artifacts,
+    )?);
+  }
 
   let manifest = PerfManifest {
     repo: run_dir.path.join("repos"),
@@ -519,6 +573,49 @@ fn run_isolated_scenario(
   Ok(report)
 }
 
+fn run_editor_scroll_large_diff_scenario(
+  args: &PerfArgs,
+  driver_bin: &Path,
+  agent_bin: &Path,
+  run_dir: &Path,
+  artifacts: &Path,
+) -> Result<ScenarioReport> {
+  let name = "editor_scroll_large_diff";
+  let repo = setup_editor_temp_repo(
+    &run_dir.join("repos").join(name),
+    editor_fixture_line_count(args.file_count),
+  )?;
+  let mut driver = DriverProcess::spawn(
+    driver_bin,
+    agent_bin,
+    &args.backend,
+    &run_dir.join("drivers").join(name),
+  )?;
+  driver.command(serde_json::json!({ "cmd": "path_prompt", "path": repo }))?;
+  driver.command(serde_json::json!({ "cmd": "hide_dock" }))?;
+  driver.command(serde_json::json!({ "cmd": "open_file", "path": EDITOR_SCROLL_FILE }))?;
+  wait_for_editor_ready(&mut driver)?;
+  let report = run_scenario_with_sample_pump(
+    &mut driver,
+    artifacts,
+    name,
+    args.sample_seconds,
+    args.skip_sample,
+    |_| Ok(()),
+    |driver, tick| {
+      let direction = if tick % 20 < 10 { -640.0 } else { 640.0 };
+      driver.command(serde_json::json!({
+        "cmd": "scroll",
+        "delta_y": direction,
+        "steps": 3,
+      }))?;
+      Ok(())
+    },
+  )?;
+  driver.command(serde_json::json!({ "cmd": "quit" })).ok();
+  Ok(report)
+}
+
 fn wait_for_stream_tail(driver: &mut DriverProcess, sample_seconds: u64) -> Result<()> {
   let half_sample_ms = sample_seconds.saturating_mul(1_000) / 2;
   let delay_ms = LONG_STREAM_MS.saturating_sub(half_sample_ms);
@@ -543,6 +640,25 @@ fn wait_for_active_agent_ready(driver: &mut DriverProcess) -> Result<()> {
       bail!("agent did not become ready before the scenario started: {stats}");
     }
     driver.command(serde_json::json!({ "cmd": "wait", "ms": 100 }))?;
+  }
+}
+
+fn wait_for_editor_ready(driver: &mut DriverProcess) -> Result<()> {
+  let deadline = Instant::now() + Duration::from_secs(15);
+  loop {
+    let stats = driver.command(serde_json::json!({ "cmd": "editor_stats" }))?;
+    if stats
+      .get("ready")
+      .and_then(serde_json::Value::as_bool)
+      .unwrap_or(false)
+    {
+      return Ok(());
+    }
+    if Instant::now() >= deadline {
+      bail!("editor did not become ready before the scenario started: {stats}");
+    }
+    driver.command(serde_json::json!({ "cmd": "clock", "ms": 100 }))?;
+    driver.command(serde_json::json!({ "cmd": "wait", "ms": 25 }))?;
   }
 }
 
@@ -589,6 +705,66 @@ fn setup_temp_repo(path: &Path, file_count: usize) -> Result<PathBuf> {
     )?;
   }
   Ok(path.to_path_buf())
+}
+
+fn setup_editor_temp_repo(path: &Path, line_count: usize) -> Result<PathBuf> {
+  fs::create_dir_all(path.join("src"))?;
+  run_git(path, &["init", "-b", "main"])?;
+  run_git(path, &["config", "user.email", "perf@reviu.local"])?;
+  run_git(path, &["config", "user.name", "Reviu Perf"])?;
+
+  fs::write(path.join(EDITOR_SCROLL_FILE), editor_base_text(line_count))?;
+  fs::write(path.join("README.md"), "# Reviu editor perf fixture\n")?;
+  run_git(path, &["add", "."])?;
+  run_git(path, &["commit", "-m", "initial large editor fixture"])?;
+
+  fs::write(
+    path.join(EDITOR_SCROLL_FILE),
+    editor_modified_text(line_count),
+  )?;
+  Ok(path.to_path_buf())
+}
+
+fn editor_fixture_line_count(file_count: usize) -> usize {
+  file_count.saturating_mul(100).clamp(10_000, 120_000)
+}
+
+fn editor_base_text(lines: usize) -> String {
+  let mut text = String::with_capacity(lines.saturating_mul(96));
+  for line in 0..lines {
+    let _ = writeln!(
+      text,
+      "pub fn editor_fixture_{line:06}() -> usize {{ {line} + {} }}",
+      line % 37
+    );
+  }
+  text
+}
+
+fn editor_modified_text(lines: usize) -> String {
+  let mut text = String::with_capacity(lines.saturating_mul(112));
+  for line in 0..lines {
+    if line % 10 == 0 {
+      let _ = writeln!(
+        text,
+        "pub fn editor_fixture_{line:06}() -> usize {{ ({line} * 3) + {} }}",
+        line % 41
+      );
+    } else if line % 97 == 0 {
+      let _ = writeln!(
+        text,
+        "pub fn editor_fixture_{line:06}() -> usize {{ {line} + {} + 1 }}",
+        line % 37
+      );
+    } else {
+      let _ = writeln!(
+        text,
+        "pub fn editor_fixture_{line:06}() -> usize {{ {line} + {} }}",
+        line % 37
+      );
+    }
+  }
+  text
 }
 
 fn run_git(cwd: &Path, args: &[&str]) -> Result<()> {
@@ -753,6 +929,33 @@ fn run_scenario(
   pump_driver: bool,
   prepare: impl FnOnce(&mut DriverProcess) -> Result<()>,
 ) -> Result<ScenarioReport> {
+  run_scenario_with_sample_pump(
+    driver,
+    artifacts,
+    name,
+    sample_seconds,
+    skip_sample,
+    prepare,
+    move |driver, _| {
+      if pump_driver {
+        driver.command(serde_json::json!({ "cmd": "wait", "ms": 250 }))?;
+      } else {
+        std::thread::sleep(Duration::from_millis(250));
+      }
+      Ok(())
+    },
+  )
+}
+
+fn run_scenario_with_sample_pump(
+  driver: &mut DriverProcess,
+  artifacts: &Path,
+  name: &'static str,
+  sample_seconds: u64,
+  skip_sample: bool,
+  prepare: impl FnOnce(&mut DriverProcess) -> Result<()>,
+  pump: impl FnMut(&mut DriverProcess, usize) -> Result<()>,
+) -> Result<ScenarioReport> {
   prepare(driver)?;
   let driver_stats = driver
     .command(serde_json::json!({ "cmd": "agent_stats" }))
@@ -767,7 +970,7 @@ fn run_scenario(
   } else {
     start_sample(driver.pid(), sample_seconds, &sample_path)?
   };
-  let ps_samples = collect_ps_while(driver, sample_seconds, pump_driver)?;
+  let ps_samples = collect_ps_while_with(driver, sample_seconds, pump)?;
   if let Some(child) = sample_child.as_mut() {
     let _ = child.wait();
   }
@@ -831,21 +1034,17 @@ fn start_sample(pid: u32, seconds: u64, path: &Path) -> Result<Option<Child>> {
   }
 }
 
-fn collect_ps_while(
+fn collect_ps_while_with(
   driver: &mut DriverProcess,
   seconds: u64,
-  pump_driver: bool,
+  mut pump: impl FnMut(&mut DriverProcess, usize) -> Result<()>,
 ) -> Result<Vec<PsSample>> {
   let start = Instant::now();
   let deadline = start + Duration::from_secs(seconds);
   let mut samples = Vec::new();
   while Instant::now() < deadline {
     samples.push(read_ps(driver.pid(), start));
-    if pump_driver {
-      driver.command(serde_json::json!({ "cmd": "wait", "ms": 250 }))?;
-    } else {
-      std::thread::sleep(Duration::from_millis(250));
-    }
+    pump(driver, samples.len())?;
   }
   Ok(samples)
 }
@@ -922,9 +1121,9 @@ fn render_summary(manifest: &PerfManifest) -> String {
     "- scenarios: `{}`\n\n",
     manifest.requested_scenarios.join(", ")
   ));
-  out.push_str("| scenario | avg CPU | max RSS MB | in-flight | session_page | dock_panel | changes_list | list_state | agent_chat_panel | text_view | serde_protocol | layout_paint | sample |\n");
+  out.push_str("| scenario | avg CPU | max RSS MB | in-flight | session_page | dock_panel | changes_list | list_state | agent_chat_panel | text_view | serde_protocol | layout_paint | editor | editor_projection | editor_word_diff | syntax_highlight | sample |\n");
   out.push_str(
-    "| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |\n",
+    "| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |\n",
   );
   for scenario in &manifest.scenarios {
     let avg_cpu = average_cpu(&scenario.ps_samples)
@@ -951,7 +1150,7 @@ fn render_summary(manifest: &PerfManifest) -> String {
       .map(|count| count.to_string())
       .unwrap_or_else(|| "n/a".to_string());
     out.push_str(&format!(
-      "| {} | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} |\n",
+      "| {} | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} |\n",
       scenario.name,
       avg_cpu,
       max_rss,
@@ -964,6 +1163,10 @@ fn render_summary(manifest: &PerfManifest) -> String {
       bucket("text_view"),
       bucket("serde_protocol"),
       bucket("layout_paint"),
+      bucket("editor"),
+      bucket("editor_projection"),
+      bucket("editor_word_diff"),
+      bucket("syntax_highlight"),
       sample_path,
     ));
   }
@@ -1004,6 +1207,27 @@ mod tests {
     assert_eq!(args.parallel_sessions, 4);
     assert_eq!(args.scenarios, ["idle", "visible_chat_stream_long"]);
     assert!(args.skip_sample);
+  }
+
+  #[test]
+  fn editor_scroll_scenario_is_available_without_joining_defaults() {
+    let default_args = PerfArgs::default();
+    assert!(
+      !default_args
+        .scenarios
+        .iter()
+        .any(|scenario| scenario == "editor_scroll_large_diff")
+    );
+
+    let args = parse_args(["--scenario=editor_scroll_large_diff".to_string()]).expect("args");
+    assert_eq!(args.scenarios, ["editor_scroll_large_diff"]);
+  }
+
+  #[test]
+  fn editor_fixture_line_count_scales_from_file_count() {
+    assert_eq!(editor_fixture_line_count(1), 10_000);
+    assert_eq!(editor_fixture_line_count(300), 30_000);
+    assert_eq!(editor_fixture_line_count(2_000), 120_000);
   }
 
   #[test]

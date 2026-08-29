@@ -7,8 +7,9 @@
 //!
 //! Verbs: `bounds` (test backend only, of a debug selector), `click` (selector
 //! on test or point on both), `type`, `key`, `clock` (virtual ms), `wait` (real
-//! ms), `park`, `path_prompt`, `screenshot` (visual backend only),
-//! `show_changes`, `hide_dock`, `submit_prompt`, `agent_stats`, `quit`.
+//! ms), `park`, `path_prompt`, `open_file`, `scroll`, `screenshot`
+//! (visual backend only), `show_changes`, `hide_dock`, `submit_prompt`,
+//! `agent_stats`, `editor_stats`, `quit`.
 //!
 //! Usage: `cargo run -p reviu_driver -- --backend test` then e.g.
 //! `{"cmd":"bounds","selector":"session-repo-context"}`
@@ -22,10 +23,12 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 #[cfg(target_os = "macos")]
+use gpui::InputEvent as _;
+#[cfg(target_os = "macos")]
 use gpui::{AnyWindowHandle, VisualTestAppContext, size};
 use gpui::{
-  App, AppContext as _, Context, Entity, FocusHandle, Focusable, IntoElement, Render,
-  TestAppContext, TestDispatcher, Window, div, prelude::*, px,
+  App, AppContext as _, Context, Entity, FocusHandle, Focusable, IntoElement, Render, ScrollDelta,
+  ScrollWheelEvent, TestAppContext, TestDispatcher, TouchPhase, Window, div, point, prelude::*, px,
 };
 use gpui_component::Root;
 use workspace::WorkspaceView;
@@ -148,6 +151,18 @@ enum Command {
   PathPrompt {
     path: String,
   },
+  /// Open a repository-relative file in the center diff editor.
+  OpenFile {
+    path: String,
+  },
+  /// Simulate a mouse wheel scroll at an absolute point or the window center.
+  Scroll {
+    delta_x: Option<f32>,
+    delta_y: f32,
+    x: Option<f32>,
+    y: Option<f32>,
+    steps: Option<usize>,
+  },
   /// Capture the visual backend's rendered window as a PNG.
   Screenshot {
     path: String,
@@ -162,6 +177,8 @@ enum Command {
   },
   /// Direct driver hook for perf runs: count active/background agent turns.
   AgentStats,
+  /// Direct driver hook for perf runs: expose the active editor state.
+  EditorStats,
   Quit,
 }
 
@@ -348,6 +365,28 @@ fn handle_test_command(
         Err(error) => respond(err(error)),
       }
     }
+    Command::OpenFile { path } => {
+      let result = cx.update(|window, cx| {
+        view.update(cx, |view, cx| {
+          view.open_file_for_driver(PathBuf::from(path), window, cx)
+        })
+      });
+      cx.run_until_parked();
+      match result {
+        Ok(()) => respond(ok(serde_json::json!({}))),
+        Err(error) => respond(err(error)),
+      }
+    }
+    Command::Scroll {
+      delta_x,
+      delta_y,
+      x,
+      y,
+      steps,
+    } => {
+      simulate_scroll_events(cx, delta_x, delta_y, x, y, steps);
+      respond(ok(serde_json::json!({})));
+    }
     Command::Screenshot { path: _path } => {
       respond(err("screenshot requires --backend visual"));
     }
@@ -381,8 +420,33 @@ fn handle_test_command(
       let stats = view.read_with(cx, |view, cx| view.agent_stats_for_driver(cx));
       respond(ok(stats));
     }
+    Command::EditorStats => {
+      let stats = view.read_with(cx, |view, cx| view.editor_stats_for_driver(cx));
+      respond(ok(stats));
+    }
     Command::Quit => quit_now(),
   }
+}
+
+fn simulate_scroll_events(
+  cx: &mut gpui::VisualTestContext,
+  delta_x: Option<f32>,
+  delta_y: f32,
+  x: Option<f32>,
+  y: Option<f32>,
+  steps: Option<usize>,
+) {
+  let position = point(px(x.unwrap_or(400.0)), px(y.unwrap_or(300.0)));
+  let delta = point(px(delta_x.unwrap_or(0.0)), px(delta_y));
+  for _ in 0..steps.unwrap_or(1).max(1) {
+    cx.simulate_event(ScrollWheelEvent {
+      position,
+      delta: ScrollDelta::Pixels(delta),
+      modifiers: gpui::Modifiers::default(),
+      touch_phase: TouchPhase::Moved,
+    });
+  }
+  cx.run_until_parked();
 }
 
 fn wait_test(cx: &mut gpui::VisualTestContext, ms: u64) {
@@ -504,6 +568,20 @@ fn handle_visual_command(
       Ok(()) => respond(ok(serde_json::json!({}))),
       Err(error) => respond(err(error)),
     },
+    Command::OpenFile { path } => match open_file_directly(cx, window, view, path) {
+      Ok(()) => respond(ok(serde_json::json!({}))),
+      Err(error) => respond(err(error)),
+    },
+    Command::Scroll {
+      delta_x,
+      delta_y,
+      x,
+      y,
+      steps,
+    } => match simulate_visual_scroll_events(cx, window, delta_x, delta_y, x, y, steps) {
+      Ok(()) => respond(ok(serde_json::json!({}))),
+      Err(error) => respond(err(error)),
+    },
     Command::Screenshot { path } => {
       match save_screenshot(cx, window, std::path::Path::new(&path)) {
         Ok(()) => respond(ok(serde_json::json!({ "path": path }))),
@@ -523,6 +601,10 @@ fn handle_visual_command(
       Err(error) => respond(err(error)),
     },
     Command::AgentStats => match agent_stats_directly(cx, view) {
+      Ok(stats) => respond(ok(stats)),
+      Err(error) => respond(err(error)),
+    },
+    Command::EditorStats => match editor_stats_directly(cx, view) {
       Ok(stats) => respond(ok(stats)),
       Err(error) => respond(err(error)),
     },
@@ -566,6 +648,55 @@ fn open_repository_directly(
     .map_err(|error| error.to_string())?;
   cx.run_until_parked();
   result.map_err(|error| error.to_string())
+}
+
+#[cfg(target_os = "macos")]
+fn open_file_directly(
+  cx: &mut VisualTestAppContext,
+  window: AnyWindowHandle,
+  view: &Entity<WorkspaceView>,
+  path: String,
+) -> Result<(), String> {
+  let result = cx
+    .update_window(window, |_, window, cx| {
+      view.update(cx, |view, cx| {
+        view.open_file_for_driver(PathBuf::from(path), window, cx)
+      })
+    })
+    .map_err(|error| error.to_string())?;
+  cx.run_until_parked();
+  result.map_err(|error| error.to_string())
+}
+
+#[cfg(target_os = "macos")]
+fn simulate_visual_scroll_events(
+  cx: &mut VisualTestAppContext,
+  window: AnyWindowHandle,
+  delta_x: Option<f32>,
+  delta_y: f32,
+  x: Option<f32>,
+  y: Option<f32>,
+  steps: Option<usize>,
+) -> Result<(), String> {
+  let position = point(px(x.unwrap_or(755.0)), px(y.unwrap_or(470.0)));
+  let delta = point(px(delta_x.unwrap_or(0.0)), px(delta_y));
+  for _ in 0..steps.unwrap_or(1).max(1) {
+    cx.update_window(window, |_, window, cx| {
+      window.dispatch_event(
+        ScrollWheelEvent {
+          position,
+          delta: ScrollDelta::Pixels(delta),
+          modifiers: gpui::Modifiers::default(),
+          touch_phase: TouchPhase::Moved,
+        }
+        .to_platform_input(),
+        cx,
+      );
+    })
+    .map_err(|error| error.to_string())?;
+  }
+  cx.run_until_parked();
+  Ok(())
 }
 
 #[cfg(target_os = "macos")]
@@ -620,6 +751,14 @@ fn agent_stats_directly(
   view: &Entity<WorkspaceView>,
 ) -> Result<serde_json::Value, String> {
   Ok(view.read_with(cx, |view, cx| view.agent_stats_for_driver(cx)))
+}
+
+#[cfg(target_os = "macos")]
+fn editor_stats_directly(
+  cx: &mut VisualTestAppContext,
+  view: &Entity<WorkspaceView>,
+) -> Result<serde_json::Value, String> {
+  Ok(view.read_with(cx, |view, cx| view.editor_stats_for_driver(cx)))
 }
 
 #[cfg(target_os = "macos")]
@@ -724,6 +863,27 @@ mod tests {
 
   #[test]
   fn perf_driver_commands_are_json_lines_compatible() {
+    match serde_json::from_str::<Command>(r#"{"cmd":"open_file","path":"src/main.rs"}"#)
+      .expect("open file")
+    {
+      Command::OpenFile { path } => assert_eq!(path, "src/main.rs"),
+      _ => panic!("expected open file command"),
+    }
+    match serde_json::from_str::<Command>(r#"{"cmd":"scroll","delta_y":-640.0,"steps":3}"#)
+      .expect("scroll")
+    {
+      Command::Scroll {
+        delta_x,
+        delta_y,
+        steps,
+        ..
+      } => {
+        assert_eq!(delta_x, None);
+        assert_eq!(delta_y, -640.0);
+        assert_eq!(steps, Some(3));
+      }
+      _ => panic!("expected scroll command"),
+    }
     assert!(matches!(
       serde_json::from_str::<Command>(r#"{"cmd":"show_changes"}"#).expect("show changes"),
       Command::ShowChanges
@@ -741,6 +901,10 @@ mod tests {
     assert!(matches!(
       serde_json::from_str::<Command>(r#"{"cmd":"agent_stats"}"#).expect("agent stats"),
       Command::AgentStats
+    ));
+    assert!(matches!(
+      serde_json::from_str::<Command>(r#"{"cmd":"editor_stats"}"#).expect("editor stats"),
+      Command::EditorStats
     ));
   }
 }

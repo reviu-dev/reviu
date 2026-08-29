@@ -318,6 +318,19 @@ impl WorkspaceView {
 
   #[cfg(any(test, feature = "test-support"))]
   #[doc(hidden)]
+  pub fn open_file_for_driver(
+    &mut self,
+    rel_path: PathBuf,
+    window: &mut Window,
+    cx: &mut Context<Self>,
+  ) -> Result<(), gpui::SharedString> {
+    self.session_page.update(cx, |page, cx| {
+      page.open_file_for_driver(rel_path, window, cx)
+    })
+  }
+
+  #[cfg(any(test, feature = "test-support"))]
+  #[doc(hidden)]
   pub fn show_changes_for_driver(&mut self, window: &mut Window, cx: &mut Context<Self>) {
     self
       .session_page
@@ -349,6 +362,12 @@ impl WorkspaceView {
   #[doc(hidden)]
   pub fn agent_stats_for_driver(&self, cx: &App) -> serde_json::Value {
     self.session_page.read(cx).agent_stats_for_driver(cx)
+  }
+
+  #[cfg(any(test, feature = "test-support"))]
+  #[doc(hidden)]
+  pub fn editor_stats_for_driver(&self, cx: &App) -> serde_json::Value {
+    self.session_page.read(cx).editor_stats_for_driver(cx)
   }
 
   fn on_window_appearance_changed(&mut self, window: &mut Window, cx: &mut Context<Self>) {
