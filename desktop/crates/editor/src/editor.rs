@@ -52,10 +52,10 @@ use crate::{
   gutter_element::GutterElement,
   projection::{
     ChangeKind, DisplayLine, GapId, GapReveal, HunkState, NO_NEWLINE_MARKER_TEXT, Projection,
-    ProjectionBlockKind, ProjectionBlockMap, REVIEW_COMMENT_CARD_BORDER_PX,
-    REVIEW_COMMENT_CARD_PADDING_X_PX, REVIEW_COMMENT_HEADER_HEIGHT_LINES,
-    REVIEW_COMMENT_REPLY_BORDER_TOP_PX, REVIEW_COMMENT_SPACING_PX, ReviewComment,
-    ReviewCommentLayoutInput, ReviewCommentSide, review_comment_shows_header,
+    ProjectionBlockMap, REVIEW_COMMENT_CARD_BORDER_PX, REVIEW_COMMENT_CARD_PADDING_X_PX,
+    REVIEW_COMMENT_HEADER_HEIGHT_LINES, REVIEW_COMMENT_REPLY_BORDER_TOP_PX,
+    REVIEW_COMMENT_SPACING_PX, ReviewComment, ReviewCommentLayoutInput, ReviewCommentSide,
+    review_comment_shows_header,
   },
   scrollbar_element::EditorScrollbarElement,
   text_offsets::{byte_offset_to_char_offset, char_offset_to_byte_offset},
@@ -4435,7 +4435,7 @@ impl Editor {
     let mut spans_by_comment: HashMap<u64, (usize, usize)> = HashMap::new();
 
     for block in self.block_map.review_comment_blocks(side_filter) {
-      let ProjectionBlockKind::ReviewComment { id, .. } = block.kind else {
+      let Some(id) = block.review_comment_id() else {
         continue;
       };
       let count = block.display_range.len();
@@ -5693,7 +5693,7 @@ impl Editor {
     let mut count = 0usize;
 
     for block in self.block_map.review_comment_blocks(side_filter) {
-      let ProjectionBlockKind::ReviewComment { id, .. } = block.kind else {
+      let Some(id) = block.review_comment_id() else {
         continue;
       };
       if id != REVIEW_COMMENT_CREATE_DRAFT_COMMENT_ID {
@@ -7606,7 +7606,7 @@ impl Editor {
 
     let mut controls = Vec::new();
     for block in self.block_map.gap_blocks() {
-      let ProjectionBlockKind::Gap { id } = block.kind else {
+      let Some(id) = block.gap_id() else {
         continue;
       };
       let display_idx = block.display_range.start;
@@ -8187,45 +8187,11 @@ impl Editor {
   }
 
   fn is_gap_block_display_line(&self, display_line: usize) -> bool {
-    if self
-      .block_map
-      .block_at_display_line(display_line)
-      .is_some_and(|block| matches!(block.kind, ProjectionBlockKind::Gap { .. }))
-    {
-      return true;
-    }
-
-    self
-      .projection
-      .as_ref()
-      .and_then(|projection| projection.lines.get(display_line))
-      .is_some_and(|line| matches!(line, DisplayLine::Gap { .. }))
+    self.block_map.is_gap_display_line(display_line)
   }
 
   fn is_ui_block_display_line(&self, display_line: usize) -> bool {
-    if self
-      .block_map
-      .block_at_display_line(display_line)
-      .is_some_and(|block| {
-        matches!(
-          block.kind,
-          ProjectionBlockKind::Gap { .. } | ProjectionBlockKind::ReviewComment { .. }
-        )
-      })
-    {
-      return true;
-    }
-
-    self
-      .projection
-      .as_ref()
-      .and_then(|projection| projection.lines.get(display_line))
-      .is_some_and(|line| {
-        matches!(
-          line,
-          DisplayLine::Gap { .. } | DisplayLine::ReviewComment { .. }
-        )
-      })
+    self.block_map.is_ui_block_display_line(display_line)
   }
 
   fn set_display_selection_with_anchor(

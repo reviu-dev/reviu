@@ -163,6 +163,37 @@ impl ProjectionBlockMap {
     self.blocks.get(block_idx)
   }
 
+  pub fn gap_id_for_display_line(&self, display_line: usize) -> Option<GapId> {
+    self.block_at_display_line(display_line)?.gap_id()
+  }
+
+  pub fn review_comment_side_for_display_line(
+    &self,
+    display_line: usize,
+  ) -> Option<ReviewCommentSide> {
+    self
+      .block_at_display_line(display_line)?
+      .review_comment_side()
+  }
+
+  pub fn is_review_comment_display_line(&self, display_line: usize) -> bool {
+    self
+      .block_at_display_line(display_line)
+      .is_some_and(ProjectionBlock::is_review_comment)
+  }
+
+  pub fn is_gap_display_line(&self, display_line: usize) -> bool {
+    self
+      .block_at_display_line(display_line)
+      .is_some_and(ProjectionBlock::is_gap)
+  }
+
+  pub fn is_ui_block_display_line(&self, display_line: usize) -> bool {
+    self
+      .block_at_display_line(display_line)
+      .is_some_and(ProjectionBlock::is_ui_block)
+  }
+
   pub fn gap_blocks(&self) -> impl Iterator<Item = &ProjectionBlock> {
     self
       .blocks
@@ -286,12 +317,33 @@ pub enum ProjectionBlockKind {
 }
 
 impl ProjectionBlock {
+  pub fn gap_id(&self) -> Option<GapId> {
+    match self.kind {
+      ProjectionBlockKind::Gap { id } => Some(id),
+      ProjectionBlockKind::ReviewComment { .. } => None,
+    }
+  }
+
+  pub fn review_comment_id(&self) -> Option<u64> {
+    match self.kind {
+      ProjectionBlockKind::ReviewComment { id, .. } => Some(id),
+      ProjectionBlockKind::Gap { .. } => None,
+    }
+  }
+
   pub fn is_gap(&self) -> bool {
-    matches!(self.kind, ProjectionBlockKind::Gap { .. })
+    self.gap_id().is_some()
   }
 
   pub fn is_review_comment(&self) -> bool {
-    matches!(self.kind, ProjectionBlockKind::ReviewComment { .. })
+    self.review_comment_id().is_some()
+  }
+
+  pub fn is_ui_block(&self) -> bool {
+    matches!(
+      self.kind,
+      ProjectionBlockKind::Gap { .. } | ProjectionBlockKind::ReviewComment { .. }
+    )
   }
 
   pub fn review_comment_side(&self) -> Option<ReviewCommentSide> {
@@ -2098,6 +2150,12 @@ mod tests {
       None
     );
     assert_eq!(block_map.gap_blocks().count(), 1);
+    assert!(block_map.is_gap_display_line(gap_block.display_range.start));
+    assert_eq!(
+      block_map.gap_id_for_display_line(gap_block.display_range.start),
+      gap_block.gap_id()
+    );
+    assert!(block_map.is_ui_block_display_line(gap_block.display_range.start));
   }
 
   #[test]
@@ -2150,6 +2208,12 @@ mod tests {
         .count(),
       0
     );
+    assert!(block_map.is_review_comment_display_line(blocks[0].display_range.start));
+    assert_eq!(
+      block_map.review_comment_side_for_display_line(blocks[0].display_range.start),
+      Some(ReviewCommentSide::Right)
+    );
+    assert!(block_map.is_ui_block_display_line(blocks[0].display_range.start));
   }
 
   #[test]

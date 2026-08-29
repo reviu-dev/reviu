@@ -12,8 +12,8 @@ use git::DiffLineKind;
 use crate::{
   editor::{ConflictLineKind, Editor, ScrollAxis},
   projection::{
-    ChangeKind, DisplayLine, HunkState, Projection, ProjectionBlock, ProjectionBlockKind,
-    ReviewCommentBackground, ReviewCommentSide,
+    ChangeKind, DisplayLine, HunkState, Projection, ProjectionBlock, ReviewCommentBackground,
+    ReviewCommentSide,
   },
 };
 
@@ -345,12 +345,8 @@ impl Element for GutterElement {
       let stripe_removed = theme.diff_gutter_removed();
       let stripe_modified = theme.diff_gutter_modified();
 
-      let review_comment_side_for_block = |block: Option<&ProjectionBlock>| {
-        block.and_then(|block| match block.kind {
-          ProjectionBlockKind::ReviewComment { side, .. } => Some(side),
-          ProjectionBlockKind::Gap { .. } => None,
-        })
-      };
+      let review_comment_side_for_block =
+        |block: Option<&ProjectionBlock>| block.and_then(ProjectionBlock::review_comment_side);
       let review_comment_background_for_block = |block: Option<&ProjectionBlock>| {
         let block = block?;
         match block.background? {
@@ -399,7 +395,6 @@ impl Element for GutterElement {
           DisplayLine::Modified { group_id, .. } => group_id.clone(),
           DisplayLine::Removed { group_id, .. } => group_id.clone(),
           DisplayLine::NoNewline { group_id, .. } => group_id.clone(),
-          DisplayLine::ReviewComment { group_id, .. } => group_id.clone(),
           _ => None,
         }
       };
@@ -410,7 +405,6 @@ impl Element for GutterElement {
           DisplayLine::Modified { group_id, .. } => group_id.clone(),
           DisplayLine::Removed { group_id, .. } => group_id.clone(),
           DisplayLine::NoNewline { group_id, .. } => group_id.clone(),
-          DisplayLine::ReviewComment { group_id, .. } => group_id.clone(),
           _ => None,
         }
       };
@@ -431,7 +425,7 @@ impl Element for GutterElement {
       for display_idx in viewport.clone() {
         let display_line = editor.display_line(display_idx, doc_line_count);
         let block = editor.block_map.block_at_display_line(display_idx);
-        if let Some(ProjectionBlockKind::Gap { id }) = block.map(|block| block.kind) {
+        if let Some(id) = block.and_then(ProjectionBlock::gap_id) {
           let is_start_gap = id.start == 0;
           let is_end_gap = id.end == doc_line_count;
           if !is_start_gap && !is_end_gap {

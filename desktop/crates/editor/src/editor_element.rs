@@ -23,7 +23,7 @@ use crate::{
   },
   projection::{
     ChangeKind, DisplayLine, HunkState, NO_NEWLINE_MARKER_TEXT, Projection, ProjectionBlock,
-    ProjectionBlockKind, ProjectionBlockMap, ReviewCommentBackground, ReviewCommentSide,
+    ProjectionBlockMap, ReviewCommentBackground, ReviewCommentSide,
   },
   settings::indent_rainbow_enabled,
   text_offsets::{byte_offset_to_char_offset, char_offset_to_byte_offset},
@@ -310,8 +310,7 @@ fn position_hits_review_comment_line(position_map: &PositionMap, position: Point
   };
   position_map
     .block_map
-    .block_at_display_line(display_line)
-    .is_some_and(ProjectionBlock::is_review_comment)
+    .is_review_comment_display_line(display_line)
 }
 
 pub(crate) fn highlights_to_text_runs(
@@ -1483,7 +1482,7 @@ impl Element for EditorElement {
 
     for (display_idx, display_line) in &viewport_lines {
       let block = block_map.block_at_display_line(*display_idx);
-      if let Some(ProjectionBlockKind::Gap { id }) = block.map(|block| block.kind) {
+      if let Some(id) = block.and_then(ProjectionBlock::gap_id) {
         let is_start_gap = id.start == 0;
         let is_end_gap = id.end == doc_line_count;
         if !is_start_gap && !is_end_gap {
