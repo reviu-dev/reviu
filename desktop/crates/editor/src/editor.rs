@@ -24,7 +24,7 @@ use gpui::{
   Anchor, App, Bounds, Context, CursorStyle, Entity, EntityInputHandler, ExternalPaths,
   FocusHandle, Focusable, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels, Point,
   ScrollHandle, ShapedLine, SharedString, Subscription, Task, UTF16Selection, Window, black, div,
-  point, prelude::*, px, white,
+  point, prelude::*, px, size, white,
 };
 use gpui_component::{
   ActiveTheme as _, ColorName, Disableable as _, Icon, IconName, Selectable, Sizable,
@@ -34,6 +34,7 @@ use gpui_component::{
   input::{Escape as InputEscape, Input, InputEvent, InputState, TextareaState},
   menu::{DropdownMenu as _, PopupMenuItem},
   resizable::{h_resizable, resizable_panel},
+  scroll::Scrollbar,
   tag::Tag,
   v_flex,
 };
@@ -824,6 +825,8 @@ pub struct Editor {
   pub viewport_width: Pixels,
   pub max_line_width: Pixels, // Maximum width of visible lines (never decreases to avoid scroll jumps)
   pub scroll_handle: ScrollHandle, // Handle for horizontal scrolling
+  pub vertical_scroll_handle: ScrollHandle,
+  pub(crate) last_vertical_scrollbar_offset: Pixels,
   pub(crate) scroll_axis_lock: Option<ScrollAxis>,
   pub(crate) last_scroll_time: Option<Instant>,
   pub(crate) last_scroll_x: Pixels,
@@ -1256,6 +1259,8 @@ impl Editor {
       viewport_width: px(DEFAULT_VIEWPORT_WIDTH),   // Will be updated on first render
       max_line_width: px(DEFAULT_MAX_LINE_WIDTH),   // Will be updated on first render
       scroll_handle: ScrollHandle::new(),
+      vertical_scroll_handle: ScrollHandle::new(),
+      last_vertical_scrollbar_offset: px(0.0),
       scroll_axis_lock: None,
       last_scroll_time: None,
       last_scroll_x: px(0.0),
@@ -1472,6 +1477,7 @@ impl Editor {
     self.last_mouse_position = None;
     self.scroll_offset_y = 0.0;
     self.reset_horizontal_scroll_state();
+    self.reset_vertical_scrollbar_state();
   }
 
   pub fn set_diffs(&mut self, diffs: Option<DiffSet>, cx: &mut Context<Self>) {
@@ -1880,6 +1886,54 @@ impl Editor {
     self.max_line_width = px(DEFAULT_MAX_LINE_WIDTH);
     self.last_scroll_x = px(0.0);
     self.scroll_handle.set_offset(point(px(0.0), px(0.0)));
+  }
+
+  fn reset_vertical_scrollbar_state(&mut self) {
+    self.last_vertical_scrollbar_offset = px(0.0);
+    self
+      .vertical_scroll_handle
+      .set_offset(point(px(0.0), px(0.0)));
+  }
+
+  fn vertical_scrollbar_offset_for_scroll(scroll_offset_y: f32, line_height: Pixels) -> Pixels {
+    px(-scroll_offset_y * (line_height / px(1.0)))
+  }
+
+  pub(crate) fn vertical_scrollbar_content_size(
+    &self,
+    line_height: Pixels,
+    total_lines: usize,
+  ) -> gpui::Size<Pixels> {
+    let metrics = self.vertical_scroll_metrics(line_height, total_lines);
+    size(
+      self.viewport_width.max(px(1.0)),
+      (self.viewport_height + line_height * metrics.max_scroll).max(self.viewport_height),
+    )
+  }
+
+  pub(crate) fn sync_vertical_scrollbar_handle(&mut self, line_height: Pixels, total_lines: usize) {
+    let handle_offset_y = self.vertical_scroll_handle.offset().y;
+    if (handle_offset_y - self.last_vertical_scrollbar_offset).abs() > px(0.5) {
+      let requested_scroll_offset_y = if line_height > px(0.0) {
+        -(handle_offset_y / line_height)
+      } else {
+        0.0
+      };
+      self.scroll_offset_y =
+        self.clamp_vertical_scroll(requested_scroll_offset_y, line_height, total_lines);
+    } else {
+      self.scroll_offset_y =
+        self.clamp_vertical_scroll(self.scroll_offset_y, line_height, total_lines);
+    }
+
+    let scrollbar_offset_y =
+      Self::vertical_scrollbar_offset_for_scroll(self.scroll_offset_y, line_height);
+    if self.vertical_scroll_handle.offset().y != scrollbar_offset_y {
+      self
+        .vertical_scroll_handle
+        .set_offset(point(px(0.0), scrollbar_offset_y));
+    }
+    self.last_vertical_scrollbar_offset = scrollbar_offset_y;
   }
 
   pub(crate) fn set_horizontal_scroll_offset(&mut self, scroll_x: Pixels) {
@@ -6669,6 +6723,7 @@ impl Editor {
     self.last_highlights_epoch = 0;
     self.scroll_offset_y = 0.0;
     self.reset_horizontal_scroll_state();
+    self.reset_vertical_scrollbar_state();
     cx.notify();
   }
 
@@ -9242,6 +9297,10 @@ impl Render for Editor {
     }
     let doc_line_count = self.document.read(cx).len_lines();
     let total_lines = self.display_line_count(doc_line_count);
+    self.sync_vertical_scrollbar_handle(line_height, total_lines);
+    let vertical_scrollbar_content_size =
+      self.vertical_scrollbar_content_size(line_height, total_lines);
+    let vertical_scroll_handle = self.vertical_scroll_handle.clone();
     let viewport = self.viewport_range(line_height, total_lines);
     let gap_controls = self.gap_controls();
     let gutter_background = self.theme.gutter_background();
@@ -9488,7 +9547,18 @@ impl Render for Editor {
             ),
         )
     };
-    let content = content.font_family(editor_code_font_family(cx)).text_sm();
+    let content = content
+      .font_family(editor_code_font_family(cx))
+      .text_sm()
+      .relative()
+      .child(
+        div().absolute().inset_0().child(
+          Scrollbar::vertical(&vertical_scroll_handle)
+            .id("editor-vertical-scrollbar")
+            .scroll_size(vertical_scrollbar_content_size)
+            .viewport_from_layout(),
+        ),
+      );
 
     div()
       .key_context("Editor")
@@ -10807,6 +10877,8 @@ pub mod tests {
           viewport_width: px(DEFAULT_VIEWPORT_WIDTH),
           max_line_width: px(DEFAULT_MAX_LINE_WIDTH),
           scroll_handle: ScrollHandle::new(),
+          vertical_scroll_handle: ScrollHandle::new(),
+          last_vertical_scrollbar_offset: px(0.0),
           scroll_axis_lock: None,
           last_scroll_time: None,
           last_scroll_x: px(0.0),
@@ -13092,12 +13164,71 @@ pub mod tests {
       editor.max_line_width = px(300.0);
       editor.last_scroll_x = px(-120.0);
       editor.scroll_handle.set_offset(point(px(-120.0), px(0.0)));
+      editor.scroll_offset_y = 4.0;
+      editor.last_vertical_scrollbar_offset = px(-80.0);
+      editor
+        .vertical_scroll_handle
+        .set_offset(point(px(0.0), px(-80.0)));
 
       editor.reset_after_replace();
 
       assert_eq!(editor.max_line_width, px(DEFAULT_MAX_LINE_WIDTH));
       assert_eq!(editor.last_scroll_x, px(0.0));
       assert_eq!(editor.scroll_handle.offset().x, px(0.0));
+      assert_eq!(editor.scroll_offset_y, 0.0);
+      assert_eq!(editor.last_vertical_scrollbar_offset, px(0.0));
+      assert_eq!(editor.vertical_scroll_handle.offset().y, px(0.0));
+    });
+  }
+
+  #[gpui::test]
+  fn test_vertical_scrollbar_handle_follows_editor_scroll(cx: &mut TestAppContext) {
+    let mut ctx = EditorTestContext::with_lines(cx.clone(), 20);
+
+    ctx.editor.update(&mut ctx.cx, |editor, _| {
+      editor.viewport_height = px(100.0);
+      editor.editor_line_height = px(20.0);
+      editor.scroll_offset_y = 3.5;
+
+      editor.sync_vertical_scrollbar_handle(px(20.0), 20);
+
+      assert_eq!(editor.vertical_scroll_handle.offset().y, px(-70.0));
+      assert_eq!(editor.last_vertical_scrollbar_offset, px(-70.0));
+    });
+  }
+
+  #[gpui::test]
+  fn test_vertical_scrollbar_handle_updates_editor_scroll(cx: &mut TestAppContext) {
+    let mut ctx = EditorTestContext::with_lines(cx.clone(), 10);
+
+    ctx.editor.update(&mut ctx.cx, |editor, _| {
+      editor.viewport_height = px(100.0);
+      editor.editor_line_height = px(20.0);
+      editor.sync_vertical_scrollbar_handle(px(20.0), 10);
+      editor
+        .vertical_scroll_handle
+        .set_offset(point(px(0.0), px(-999.0)));
+
+      editor.sync_vertical_scrollbar_handle(px(20.0), 10);
+
+      assert_eq!(editor.scroll_offset_y, 8.0);
+      assert_eq!(editor.vertical_scroll_handle.offset().y, px(-160.0));
+      assert_eq!(editor.last_vertical_scrollbar_offset, px(-160.0));
+    });
+  }
+
+  #[gpui::test]
+  fn test_vertical_scrollbar_content_size_includes_scroll_padding(cx: &mut TestAppContext) {
+    let mut ctx = EditorTestContext::with_lines(cx.clone(), 10);
+
+    ctx.editor.update(&mut ctx.cx, |editor, _| {
+      editor.viewport_height = px(100.0);
+      editor.viewport_width = px(240.0);
+
+      let content_size = editor.vertical_scrollbar_content_size(px(20.0), 10);
+
+      assert_eq!(content_size.width, px(240.0));
+      assert_eq!(content_size.height, px(260.0));
     });
   }
 
