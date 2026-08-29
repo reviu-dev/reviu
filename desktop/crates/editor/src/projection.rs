@@ -236,6 +236,7 @@ impl ProjectionBlockMap {
         DisplayLine::Gap { id, hidden_range } => {
           blocks.push(ProjectionBlock {
             display_range: display_idx..display_idx + 1,
+            height_lines: 1,
             anchor_doc_line: Some(hidden_range.start),
             group_id: None,
             background: None,
@@ -274,6 +275,7 @@ impl ProjectionBlockMap {
             .unwrap_or((None, None, false));
           blocks.push(ProjectionBlock {
             display_range: start..display_idx,
+            height_lines: display_idx.saturating_sub(start),
             anchor_doc_line: nearest_doc_line_for_block(lines, start, display_idx),
             group_id,
             background,
@@ -304,6 +306,7 @@ impl ProjectionBlockMap {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ProjectionBlock {
   pub display_range: Range<usize>,
+  pub height_lines: usize,
   pub anchor_doc_line: Option<usize>,
   pub group_id: Option<Arc<str>>,
   pub background: Option<ReviewCommentBackground>,
@@ -318,6 +321,10 @@ pub enum ProjectionBlockKind {
 }
 
 impl ProjectionBlock {
+  pub fn height_lines(&self) -> usize {
+    self.height_lines
+  }
+
   pub fn gap_id(&self) -> Option<GapId> {
     match self.kind {
       ProjectionBlockKind::Gap { id } => Some(id),
@@ -2144,6 +2151,7 @@ mod tests {
       .expect("gap block");
 
     assert_eq!(gap_block.display_range.len(), 1);
+    assert_eq!(gap_block.height_lines(), 1);
     assert_eq!(gap_block.anchor_doc_line, Some(93));
     assert_eq!(
       block_map.block_at_display_line(gap_block.display_range.start),
@@ -2189,6 +2197,7 @@ mod tests {
 
     assert_eq!(blocks.len(), 1);
     assert_eq!(blocks[0].display_range.len(), comment_line_count);
+    assert_eq!(blocks[0].height_lines(), comment_line_count);
     assert_eq!(blocks[0].anchor_doc_line, Some(0));
     assert_eq!(blocks[0].background, None);
     assert!(!blocks[0].secondary);

@@ -9,12 +9,11 @@ Reviu should keep `Projection` as the diff-line model and move inline UI-only ro
 - folded gaps
 - review comment blocks, coalesced across their reserved display lines
 
-Each block carries its display range, kind, nearest document anchor, and the diff styling metadata needed by editor and gutter rendering for review comments. The map also stores a display-line to block index so hot hit-test paths do not scan the block list. `Projection` owns the map derived from its lines, `Editor` keeps a clone next to the active projection, and `PositionMap` carries the same map for pointer handling. Existing text rendering still reads `Projection::lines`, but hit testing, review-comment scroll/layout/create spans, scrollbar review markers, gutter gap/comment styling, editor blank/background/group styling for comment blocks, gap controls, and selection navigation now use typed block-map query helpers instead of matching every display-line variant directly.
+Each block carries its display range, reserved height in editor lines, kind, nearest document anchor, and the diff styling metadata needed by editor and gutter rendering for review comments. The map also stores a display-line to block index so hot hit-test paths do not scan the block list. `Projection` owns the map derived from its lines, `Editor` keeps a clone next to the active projection, and `PositionMap` carries the same map for pointer handling. Existing text rendering still reads `Projection::lines`, but hit testing, review-comment scroll/layout/create spans, scrollbar review markers, gutter gap/comment styling, editor blank/background/group styling for comment blocks, gap controls, and selection navigation now use typed block-map query helpers instead of matching every display-line variant directly.
 
 ## Migration plan
 
 1. Keep deriving `ProjectionBlockMap` from `Projection::lines` while remaining call sites move to block queries.
-2. Move review comment heights into block metadata so comment or composer height changes can update block ranges without rebuilding diff lines.
-3. Move folded gaps to blocks after review comments prove the model, keeping diff hunks and doc-line mapping in `Projection`.
+2. Move folded gaps to blocks after review comments prove the model, keeping diff hunks and doc-line mapping in `Projection`.
 
 The target is a small Reviu-specific seam: diff lines stay simple, UI blocks become independently measurable and eventually independently invalidated.

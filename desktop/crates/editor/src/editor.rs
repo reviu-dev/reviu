@@ -4438,7 +4438,7 @@ impl Editor {
       let Some(id) = block.review_comment_id() else {
         continue;
       };
-      let count = block.display_range.len();
+      let count = block.height_lines();
       if count == 0 {
         continue;
       }
@@ -5702,7 +5702,7 @@ impl Editor {
       if first.is_none() {
         first = Some(block.display_range.start);
       }
-      count = count.saturating_add(block.display_range.len());
+      count = count.saturating_add(block.height_lines());
     }
 
     first
