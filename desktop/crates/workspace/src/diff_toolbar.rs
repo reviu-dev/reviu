@@ -26,6 +26,7 @@ pub(crate) struct NavigationControl {
   pub active_index: usize,
   pub total: usize,
   pub enabled: bool,
+  pub label: &'static str,
   pub previous_tooltip: &'static str,
   pub next_tooltip: &'static str,
   /// Each host keeps the name its own tests and the driver already use.
@@ -198,10 +199,10 @@ fn render_navigation(
         .debug_selector(move || counter_selector.to_string())
         .text_xs()
         .text_color(theme.muted_foreground)
-        .child(format!(
-          "{}/{}",
-          navigation.active_index + 1,
-          navigation.total
+        .child(navigation_counter_text(
+          navigation.label,
+          navigation.active_index,
+          navigation.total,
         )),
     )
     .child(
@@ -215,6 +216,10 @@ fn render_navigation(
         .on_click(move |_, window, cx| on_next(window, cx)),
     )
     .into_any_element()
+}
+
+fn navigation_counter_text(label: &str, active_index: usize, total: usize) -> String {
+  format!("{label} {}/{}", active_index + 1, total)
 }
 
 fn render_whitespace(id_prefix: &'static str, whitespace: ToggleControl) -> AnyElement {
@@ -284,4 +289,15 @@ fn render_preview(id_prefix: &'static str, preview: ToggleControl) -> AnyElement
     .tooltip("Show the rendered file")
     .on_click(move |_, window, cx| on_toggle(window, cx))
     .into_any_element()
+}
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+
+  #[test]
+  fn navigation_counter_names_the_walked_annotation() {
+    assert_eq!(navigation_counter_text("Hunk", 1, 5), "Hunk 2/5");
+    assert_eq!(navigation_counter_text("Conflict", 0, 1), "Conflict 1/1");
+  }
 }

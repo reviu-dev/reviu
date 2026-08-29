@@ -396,9 +396,9 @@ impl SessionPage {
       .annotation_navigation(cx)
       .filter(|state| !previewing && shows_annotation_navigation(*state))
     {
-      let (previous_tooltip, next_tooltip) = match state.kind {
-        AnnotationKind::Conflict => ("Previous conflict", "Next conflict"),
-        AnnotationKind::Change => ("Previous change", "Next change"),
+      let (label, previous_tooltip, next_tooltip) = match state.kind {
+        AnnotationKind::Conflict => ("Conflict", "Previous conflict", "Next conflict"),
+        AnnotationKind::Change => ("Hunk", "Previous change", "Next change"),
       };
       let view = cx.entity();
       let previous_view = view.clone();
@@ -406,6 +406,7 @@ impl SessionPage {
         active_index: state.active_index,
         total: state.total,
         enabled: can_navigate_annotations(Some(state)),
+        label,
         previous_tooltip,
         next_tooltip,
         counter_debug_selector: ANNOTATION_COUNTER_DEBUG_SELECTOR,
