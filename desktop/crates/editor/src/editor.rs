@@ -1610,14 +1610,12 @@ impl Editor {
         );
       }
 
-      for block in self.block_map.blocks() {
-        if matches!(block.kind, ProjectionBlockKind::ReviewComment { .. }) {
-          push_scrollbar_marker(
-            &mut markers,
-            ScrollbarMarkerKind::ReviewComment,
-            block.display_range.clone(),
-          );
-        }
+      for block in self.block_map.review_comment_blocks(None) {
+        push_scrollbar_marker(
+          &mut markers,
+          ScrollbarMarkerKind::ReviewComment,
+          block.display_range.clone(),
+        );
       }
     }
 
@@ -4360,22 +4358,14 @@ impl Editor {
       return false;
     };
 
-    let display_line_for_comment = |id: u64| {
-      self.block_map.blocks().iter().find_map(|block| {
-        if let ProjectionBlockKind::ReviewComment { id: block_id, .. } = block.kind
-          && block_id == id
-        {
-          Some(block.display_range.start)
-        } else {
-          None
-        }
+    let Some(display_line) = self
+      .block_map
+      .first_review_comment_display_line(comment_id)
+      .or_else(|| {
+        let thread_id = self.thread_id_for_comment(comment_id);
+        self.block_map.first_review_comment_display_line(thread_id)
       })
-    };
-
-    let Some(display_line) = display_line_for_comment(comment_id).or_else(|| {
-      let thread_id = self.thread_id_for_comment(comment_id);
-      display_line_for_comment(thread_id)
-    }) else {
+    else {
       return false;
     };
 
@@ -4444,15 +4434,10 @@ impl Editor {
 
     let mut spans_by_comment: HashMap<u64, (usize, usize)> = HashMap::new();
 
-    for block in self.block_map.blocks() {
-      let ProjectionBlockKind::ReviewComment { id, side } = block.kind else {
+    for block in self.block_map.review_comment_blocks(side_filter) {
+      let ProjectionBlockKind::ReviewComment { id, .. } = block.kind else {
         continue;
       };
-      if let Some(filter) = side_filter
-        && side != filter
-      {
-        continue;
-      }
       let count = block.display_range.len();
       if count == 0 {
         continue;
@@ -5707,16 +5692,11 @@ impl Editor {
     let mut first = None;
     let mut count = 0usize;
 
-    for block in self.block_map.blocks() {
-      let ProjectionBlockKind::ReviewComment { id, side } = block.kind else {
+    for block in self.block_map.review_comment_blocks(side_filter) {
+      let ProjectionBlockKind::ReviewComment { id, .. } = block.kind else {
         continue;
       };
       if id != REVIEW_COMMENT_CREATE_DRAFT_COMMENT_ID {
-        continue;
-      }
-      if let Some(filter) = side_filter
-        && side != filter
-      {
         continue;
       }
       if first.is_none() {
@@ -7625,7 +7605,7 @@ impl Editor {
     };
 
     let mut controls = Vec::new();
-    for block in self.block_map.blocks() {
+    for block in self.block_map.gap_blocks() {
       let ProjectionBlockKind::Gap { id } = block.kind else {
         continue;
       };

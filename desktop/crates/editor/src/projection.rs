@@ -163,6 +163,38 @@ impl ProjectionBlockMap {
     self.blocks.get(block_idx)
   }
 
+  pub fn gap_blocks(&self) -> impl Iterator<Item = &ProjectionBlock> {
+    self
+      .blocks
+      .iter()
+      .filter(|block| matches!(block.kind, ProjectionBlockKind::Gap { .. }))
+  }
+
+  pub fn review_comment_blocks(
+    &self,
+    side_filter: Option<ReviewCommentSide>,
+  ) -> impl Iterator<Item = &ProjectionBlock> {
+    self.blocks.iter().filter(move |block| {
+      matches!(
+        block.kind,
+        ProjectionBlockKind::ReviewComment { side, .. }
+          if side_filter.is_none_or(|filter| filter == side)
+      )
+    })
+  }
+
+  pub fn first_review_comment_display_line(&self, comment_id: u64) -> Option<usize> {
+    self.review_comment_blocks(None).find_map(|block| {
+      if let ProjectionBlockKind::ReviewComment { id, .. } = block.kind
+        && id == comment_id
+      {
+        Some(block.display_range.start)
+      } else {
+        None
+      }
+    })
+  }
+
   fn from_lines(lines: &[DisplayLine]) -> Self {
     let mut blocks = Vec::new();
     let mut display_idx = 0;
@@ -2027,6 +2059,7 @@ mod tests {
       block_map.block_at_display_line(gap_block.display_range.end),
       None
     );
+    assert_eq!(block_map.gap_blocks().count(), 1);
   }
 
   #[test]
@@ -2066,6 +2099,17 @@ mod tests {
       Some(blocks[0])
     );
     assert_eq!(block_map.block_at_display_line(0), None);
+    assert_eq!(
+      block_map.first_review_comment_display_line(comment.id),
+      Some(blocks[0].display_range.start)
+    );
+    assert_eq!(block_map.review_comment_blocks(None).count(), 1);
+    assert_eq!(
+      block_map
+        .review_comment_blocks(Some(ReviewCommentSide::Left))
+        .count(),
+      0
+    );
   }
 
   #[test]
