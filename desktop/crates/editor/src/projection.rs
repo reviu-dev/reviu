@@ -87,6 +87,11 @@ pub struct GapReveal {
   pub tail: usize,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum DisplayBlockId {
+  Gap(GapId),
+}
+
 #[derive(Clone, Debug)]
 pub enum DisplayLine {
   Doc {
@@ -113,8 +118,8 @@ pub enum DisplayLine {
     group_id: Option<Arc<str>>,
     secondary: bool,
   },
-  Gap {
-    id: GapId,
+  Block {
+    id: DisplayBlockId,
   },
   NoNewline {
     hunk: Option<HunkState>,
@@ -274,7 +279,9 @@ impl ProjectionBlockMap {
 
     while display_idx < lines.len() {
       match &lines[display_idx] {
-        DisplayLine::Gap { id } => {
+        DisplayLine::Block {
+          id: DisplayBlockId::Gap(id),
+        } => {
           let hidden_range = gap_hidden_ranges
             .get(id)
             .cloned()
@@ -596,7 +603,9 @@ fn push_foldable_gap(
       }
     } else {
       gap_hidden_ranges.insert(gap_id, head_end..tail_start);
-      lines.push(DisplayLine::Gap { id: gap_id });
+      lines.push(DisplayLine::Block {
+        id: DisplayBlockId::Gap(gap_id),
+      });
     }
   } else {
     push_doc_range(head_end..tail_start, lines);
@@ -2169,7 +2178,7 @@ mod tests {
     let inline_gap_count = projection
       .lines
       .iter()
-      .filter(|line| matches!(line, DisplayLine::Gap { .. }))
+      .filter(|line| matches!(line, DisplayLine::Block { .. }))
       .count();
     assert_eq!(
       inline_gap_count, 1,

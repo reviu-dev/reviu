@@ -11357,7 +11357,9 @@ pub mod tests {
     let start_gap = GapId { start: 0, end: 1 };
     let end_gap = GapId { start: 4, end: 5 };
     let lines = vec![
-      DisplayLine::Gap { id: start_gap },
+      DisplayLine::Block {
+        id: crate::projection::DisplayBlockId::Gap(start_gap),
+      },
       DisplayLine::Doc {
         doc_line: 1,
         old_line: Some(1),
@@ -11382,7 +11384,9 @@ pub mod tests {
         group_id: None,
         secondary: false,
       },
-      DisplayLine::Gap { id: end_gap },
+      DisplayLine::Block {
+        id: crate::projection::DisplayBlockId::Gap(end_gap),
+      },
     ];
     Arc::new(Projection::from_lines(
       5,
@@ -11415,7 +11419,9 @@ pub mod tests {
         group_id: None,
         secondary: false,
       },
-      DisplayLine::Gap { id: gap },
+      DisplayLine::Block {
+        id: crate::projection::DisplayBlockId::Gap(gap),
+      },
       DisplayLine::Doc {
         doc_line: 49_990,
         old_line: Some(49_990),
@@ -11463,7 +11469,9 @@ pub mod tests {
         if previous_end == 0 {
           start_gap = Some(gap);
         }
-        lines.push(DisplayLine::Gap { id: gap });
+        lines.push(DisplayLine::Block {
+          id: crate::projection::DisplayBlockId::Gap(gap),
+        });
         display_to_doc.push(None);
       }
 
@@ -11491,7 +11499,9 @@ pub mod tests {
         end: doc_line_count,
       };
       end_gap = Some(gap);
-      lines.push(DisplayLine::Gap { id: gap });
+      lines.push(DisplayLine::Block {
+        id: crate::projection::DisplayBlockId::Gap(gap),
+      });
       display_to_doc.push(None);
     }
 
