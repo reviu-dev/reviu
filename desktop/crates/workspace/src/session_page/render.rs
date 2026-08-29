@@ -1606,7 +1606,7 @@ mod tests {
     cx.run_until_parked();
     assert!(cx.debug_bounds(ANNOTATION_COUNTER_DEBUG_SELECTOR).is_none());
 
-    // A second hunk brings the walker back.
+    // A second hunk brings the walker back, without selecting one until the user walks it.
     let two_hunks = one_hunk.replace("line 50\n", "line 50 changed\n");
     std::fs::write(repo.path.join("README.md"), &two_hunks).expect("update file again");
     page.update_in(cx, |page, window, cx| {
@@ -1629,7 +1629,7 @@ mod tests {
     assert!(cx.debug_bounds(ANNOTATION_COUNTER_DEBUG_SELECTOR).is_some());
     page.read_with(cx, |page, cx| {
       let editor = page.editor.as_ref().expect("editor").read(cx);
-      assert!(editor.highlighted_hunk_group_id(cx).is_some());
+      assert!(editor.highlighted_hunk_group_id(cx).is_none());
     });
   }
 

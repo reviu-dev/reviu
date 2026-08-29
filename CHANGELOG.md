@@ -6,7 +6,7 @@ All notable changes to Reviu are documented here.
 
 ### Editor Scrollbar Markers
 
-The editor scrollbar now shows compact markers for changed lines, search matches, conflicts, and review comments, making large diffs easier to scan without leaving the scroll track. The active hunk accent now appears only when walking changes explicitly, not while clicking, selecting, or moving the cursor in the editor, and the toolbar counter now names the hunk or conflict it is walking.
+The editor scrollbar now shows compact markers for changed lines, search matches, conflicts, and review comments, making large diffs easier to scan without leaving the scroll track. The active hunk accent now appears only when walking changes explicitly and stays pinned while clicking, selecting, or moving the cursor elsewhere, and the toolbar counter now names the hunk or conflict it is walking.
 
 ### One Workspace
 
