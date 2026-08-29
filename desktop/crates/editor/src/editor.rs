@@ -843,6 +843,7 @@ pub struct Editor {
   pub theme: Theme,
   pub projection: Option<Arc<Projection>>,
   pub visible_groups: Vec<GroupOverlay>,
+  hunk_navigation_highlight_group_id: Option<Arc<str>>,
   pub hovered_group_id: Option<Arc<str>>,
   /// Which split pane owns the current hover state.
   pub(crate) hovered_from_primary: bool,
@@ -1327,6 +1328,7 @@ impl Editor {
       theme: Theme::dark(),
       projection: None,
       visible_groups: Vec::new(),
+      hunk_navigation_highlight_group_id: None,
       hovered_group_id: None,
       hovered_from_primary: true,
       hovered_conflict_start_line: None,
@@ -7413,14 +7415,16 @@ impl Editor {
     Some(ordered[active_index].0.clone())
   }
 
-  pub fn highlighted_hunk_group_id(&self, cx: &App) -> Option<Arc<str>> {
+  pub fn highlighted_hunk_group_id(&self, _cx: &App) -> Option<Arc<str>> {
     let ordered = self.ordered_hunk_display_lines();
-    // A lone hunk needs no active accent: the diff backgrounds already mark it.
     if ordered.len() < 2 {
       return None;
     }
-    let active_index = self.active_hunk_index(&ordered, cx)?;
-    Some(ordered[active_index].0.clone())
+    let highlighted = self.hunk_navigation_highlight_group_id.as_ref()?;
+    ordered
+      .iter()
+      .any(|(group_id, _)| group_id.as_ref() == highlighted.as_ref())
+      .then(|| highlighted.clone())
   }
 
   pub fn navigate_hunk(&mut self, direction: HunkNavigationDirection, cx: &mut Context<Self>) {
@@ -7439,7 +7443,9 @@ impl Editor {
       }
       HunkNavigationDirection::Next => (active_index + 1) % ordered.len(),
     };
-    self.reveal_hunk_display_line(ordered[target_index].1, cx);
+    let (target_group_id, target_display_line) = ordered[target_index].clone();
+    self.reveal_hunk_display_line(target_display_line, cx);
+    self.hunk_navigation_highlight_group_id = Some(target_group_id);
   }
 
   fn reveal_hunk_display_line(&mut self, display_line: usize, cx: &mut Context<Self>) {
@@ -7973,7 +7979,12 @@ impl Editor {
     }
   }
 
+  fn clear_hunk_navigation_highlight(&mut self) {
+    self.hunk_navigation_highlight_group_id = None;
+  }
+
   pub(crate) fn move_to(&mut self, offset: usize, cx: &mut Context<Self>) {
+    self.clear_hunk_navigation_highlight();
     let offset = self.clamp_offset_to_doc_len(offset, cx);
     self.selected_range = offset..offset;
     if !self.is_selecting {
@@ -7994,6 +8005,7 @@ impl Editor {
   }
 
   pub(crate) fn select_to(&mut self, offset: usize, cx: &mut Context<Self>) {
+    self.clear_hunk_navigation_highlight();
     let offset = self.clamp_offset_to_doc_len(offset, cx);
     if self.selection_reversed {
       self.selected_range.start = offset
@@ -8172,6 +8184,7 @@ impl Editor {
   }
 
   fn set_display_cursor(&mut self, cursor: DisplayCursor, cx: &mut Context<Self>) {
+    self.clear_hunk_navigation_highlight();
     self.display_selection = Some(DisplaySelection {
       start: cursor,
       end: cursor,
@@ -8200,6 +8213,7 @@ impl Editor {
     cursor: DisplayCursor,
     cx: &mut Context<Self>,
   ) {
+    self.clear_hunk_navigation_highlight();
     self.display_selection = Some(DisplaySelection {
       start: anchor,
       end: cursor,
@@ -9001,6 +9015,7 @@ impl Editor {
     }
 
     self.target_column = None;
+    self.clear_hunk_navigation_highlight();
     self.is_selecting = true;
 
     self.cursor_blink.update(cx, |blink, cx| {
@@ -10480,6 +10495,7 @@ pub mod tests {
 
     ctx.editor.update(&mut ctx.cx, |editor, cx| {
       editor.set_projection(Some(projection_with_two_hunks(6, &[1, 4])));
+      assert!(editor.highlighted_hunk_group_id(cx).is_none());
 
       let initial_state = editor
         .hunk_navigation_state(cx)
@@ -10496,6 +10512,10 @@ pub mod tests {
       assert_eq!(second_state.active_display_line, 4);
       let second_offset = editor.document().read(cx).line_to_char(4);
       assert_eq!(editor.cursor_offset(), second_offset);
+      assert_eq!(
+        editor.highlighted_hunk_group_id(cx).as_deref(),
+        Some("hunk-1")
+      );
 
       editor.navigate_hunk(HunkNavigationDirection::Next, cx);
       let wrapped_state = editor
@@ -10503,6 +10523,10 @@ pub mod tests {
         .expect("wrapped hunk navigation state");
       assert_eq!(wrapped_state.active_index, 0);
       assert_eq!(wrapped_state.active_display_line, 1);
+      assert_eq!(
+        editor.highlighted_hunk_group_id(cx).as_deref(),
+        Some("hunk-0")
+      );
 
       editor.navigate_hunk(HunkNavigationDirection::Previous, cx);
       let previous_state = editor
@@ -10510,6 +10534,29 @@ pub mod tests {
         .expect("previous hunk navigation state");
       assert_eq!(previous_state.active_index, 1);
       assert_eq!(previous_state.active_display_line, 4);
+      assert_eq!(
+        editor.highlighted_hunk_group_id(cx).as_deref(),
+        Some("hunk-1")
+      );
+    });
+  }
+
+  #[gpui::test]
+  fn hunk_navigation_highlight_clears_on_regular_cursor_movement(cx: &mut TestAppContext) {
+    let mut ctx = EditorTestContext::with_text(cx.clone(), "a\nb\nc\nd\ne\nf\n");
+
+    ctx.editor.update(&mut ctx.cx, |editor, cx| {
+      editor.set_projection(Some(projection_with_two_hunks(6, &[1, 4])));
+      editor.navigate_hunk(HunkNavigationDirection::Next, cx);
+      assert_eq!(
+        editor.highlighted_hunk_group_id(cx).as_deref(),
+        Some("hunk-1")
+      );
+
+      editor.move_to(0, cx);
+
+      assert!(editor.highlighted_hunk_group_id(cx).is_none());
+      assert_eq!(editor.active_hunk_group_id(cx).as_deref(), Some("hunk-0"));
     });
   }
 
@@ -10524,6 +10571,8 @@ pub mod tests {
       assert_eq!(editor.active_hunk_group_id(cx).as_deref(), Some("hunk-0"));
 
       editor.set_projection(Some(projection_with_two_hunks(6, &[1, 4])));
+      assert!(editor.highlighted_hunk_group_id(cx).is_none());
+      editor.navigate_hunk(HunkNavigationDirection::Next, cx);
       assert!(editor.highlighted_hunk_group_id(cx).is_some());
     });
   }
@@ -11116,6 +11165,7 @@ pub mod tests {
           theme: Theme::dark(),
           projection: None,
           visible_groups: Vec::new(),
+          hunk_navigation_highlight_group_id: None,
           hovered_group_id: None,
           hovered_from_primary: true,
           hovered_conflict_start_line: None,
