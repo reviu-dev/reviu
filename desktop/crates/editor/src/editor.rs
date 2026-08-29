@@ -8055,6 +8055,10 @@ impl Editor {
   }
 
   fn display_line_len(&self, display_line: usize, cx: &App) -> usize {
+    if self.is_ui_block_display_line(display_line) {
+      return 0;
+    }
+
     let document = self.document.read(cx);
     let doc_line_count = document.len_lines();
     match self.display_line(display_line, doc_line_count) {
@@ -8067,7 +8071,6 @@ impl Editor {
         .map(|cow| cow.chars().count())
         .unwrap_or(0),
       Some(DisplayLine::Removed { text, .. }) => text.chars().count(),
-      Some(DisplayLine::ReviewComment { .. }) => 0,
       Some(DisplayLine::NoNewline { .. }) => NO_NEWLINE_MARKER_TEXT.chars().count(),
       _ => 0,
     }
@@ -10530,7 +10533,7 @@ pub mod tests {
     let mut ctx = EditorTestContext::with_text(cx.clone(), "a\nb\nc\nd\ne\nf\n");
 
     ctx.editor.update(&mut ctx.cx, |editor, cx| {
-      editor.projection = Some(Arc::new(projection_with_two_hunks(6, &[1, 4])));
+      editor.set_projection(Some(projection_with_two_hunks(6, &[1, 4])));
 
       let initial_state = editor
         .hunk_navigation_state(cx)
@@ -10569,12 +10572,12 @@ pub mod tests {
     let mut ctx = EditorTestContext::with_text(cx.clone(), "a\nb\nc\nd\ne\nf\n");
 
     ctx.editor.update(&mut ctx.cx, |editor, cx| {
-      editor.projection = Some(Arc::new(projection_with_two_hunks(6, &[1])));
+      editor.set_projection(Some(projection_with_two_hunks(6, &[1])));
       assert!(editor.highlighted_hunk_group_id(cx).is_none());
       // The comment shortcut still has a target: only the focus cue goes away.
       assert_eq!(editor.active_hunk_group_id(cx).as_deref(), Some("hunk-0"));
 
-      editor.projection = Some(Arc::new(projection_with_two_hunks(6, &[1, 4])));
+      editor.set_projection(Some(projection_with_two_hunks(6, &[1, 4])));
       assert!(editor.highlighted_hunk_group_id(cx).is_some());
     });
   }
@@ -10584,7 +10587,7 @@ pub mod tests {
     let mut ctx = EditorTestContext::with_text(cx.clone(), "a\nb\nc\n");
 
     ctx.editor.update(&mut ctx.cx, |editor, cx| {
-      editor.projection = Some(Arc::new(projection_with_doc_lines(3)));
+      editor.set_projection(Some(projection_with_doc_lines(3)));
       assert!(editor.hunk_navigation_state(cx).is_none());
     });
   }
@@ -13888,7 +13891,7 @@ pub mod tests {
     let mut ctx = EditorTestContext::with_text(cx.clone(), "a\nb");
 
     ctx.editor.update(&mut ctx.cx, |editor, _| {
-      editor.projection = Some(Arc::new(projection_with_visible_doc_segments(
+      editor.set_projection(Some(projection_with_visible_doc_segments(
         50_005,
         &[4997..5004, 19_997..20_004, 34_997..35_004, 49_997..50_004],
       )));
@@ -13996,7 +13999,7 @@ pub mod tests {
     let mut ctx = EditorTestContext::with_text(cx.clone(), "a\nb");
 
     ctx.editor.update(&mut ctx.cx, |editor, cx| {
-      editor.projection = Some(projection_with_removed_middle_line());
+      editor.set_projection(Some(projection_with_removed_middle_line().as_ref().clone()));
       assert!(editor.select_all_display_lines(cx));
 
       assert!(editor.select_display_cursor_horizontal(-1, cx));
@@ -14025,7 +14028,9 @@ pub mod tests {
     let mut ctx = EditorTestContext::with_text(cx.clone(), "a\nb\nc\nd\ne");
 
     ctx.editor.update(&mut ctx.cx, |editor, cx| {
-      editor.projection = Some(projection_with_hidden_start_and_end());
+      editor.set_projection(Some(
+        projection_with_hidden_start_and_end().as_ref().clone(),
+      ));
       editor.set_display_cursor(DisplayCursor { line: 1, column: 0 }, cx);
 
       let before_cursor = editor.current_display_cursor(cx);
@@ -14045,7 +14050,9 @@ pub mod tests {
     let mut ctx = EditorTestContext::with_text(cx.clone(), "a\nb\nc\nd\ne");
 
     ctx.editor.update(&mut ctx.cx, |editor, cx| {
-      editor.projection = Some(projection_with_hidden_start_and_end());
+      editor.set_projection(Some(
+        projection_with_hidden_start_and_end().as_ref().clone(),
+      ));
       editor.set_display_cursor(DisplayCursor { line: 3, column: 1 }, cx);
 
       let before_cursor = editor.current_display_cursor(cx);
@@ -14065,7 +14072,7 @@ pub mod tests {
     let mut ctx = EditorTestContext::with_text(cx.clone(), "a\nb");
 
     ctx.editor.update(&mut ctx.cx, |editor, _| {
-      editor.projection = Some(projection_with_large_middle_gap());
+      editor.set_projection(Some(projection_with_large_middle_gap().as_ref().clone()));
 
       let range = editor.doc_range_for_display_viewport(0..5);
       assert_eq!(range, 10..12);
@@ -14081,7 +14088,7 @@ pub mod tests {
     let mut ctx = EditorTestContext::with_text(cx.clone(), "a\nb");
 
     ctx.editor.update(&mut ctx.cx, |editor, cx| {
-      editor.projection = Some(projection_with_removed_middle_line());
+      editor.set_projection(Some(projection_with_removed_middle_line().as_ref().clone()));
       assert!(editor.select_all_display_lines(cx));
 
       let before = editor
@@ -14106,7 +14113,7 @@ pub mod tests {
     let mut ctx = EditorTestContext::with_text(cx.clone(), "a\nb");
 
     ctx.editor.update(&mut ctx.cx, |editor, cx| {
-      editor.projection = Some(projection_with_removed_middle_line());
+      editor.set_projection(Some(projection_with_removed_middle_line().as_ref().clone()));
       assert!(editor.select_all_display_lines(cx));
 
       assert!(editor.select_display_cursor_line_boundary(true, cx));
@@ -14135,7 +14142,7 @@ pub mod tests {
     let mut ctx = EditorTestContext::with_text(cx.clone(), "a\nb");
 
     ctx.editor.update(&mut ctx.cx, |editor, cx| {
-      editor.projection = Some(projection_with_removed_middle_line());
+      editor.set_projection(Some(projection_with_removed_middle_line().as_ref().clone()));
       assert!(editor.select_all_display_lines(cx));
 
       let before = editor
