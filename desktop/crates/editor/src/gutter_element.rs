@@ -12,8 +12,8 @@ use git::DiffLineKind;
 use crate::{
   editor::{ConflictLineKind, Editor, ScrollAxis},
   projection::{
-    ChangeKind, DisplayLine, HunkState, Projection, ProjectionBlock, ReviewCommentBackground,
-    ReviewCommentSide,
+    ChangeKind, DisplayLine, HunkState, Projection, ProjectionBlock, ProjectionBlockMap,
+    ReviewCommentBackground, ReviewCommentSide,
   },
 };
 
@@ -132,6 +132,33 @@ fn conflict_kind_for_display_line(
 ) -> Option<ConflictLineKind> {
   let doc_line = conflict_doc_line_for_display_line(display_line, projection, doc_line_count)?;
   conflict_line_kinds.get(&doc_line).copied()
+}
+
+fn group_id_for_gutter_display_line(
+  display_line: usize,
+  projection: Option<&Projection>,
+  block_map: &ProjectionBlockMap,
+  include_context_doc_lines: bool,
+) -> Option<Arc<str>> {
+  block_map
+    .block_at_display_line(display_line)
+    .and_then(|block| block.group_id.clone())
+    .or_else(|| {
+      projection
+        .and_then(|projection| projection.lines.get(display_line))
+        .and_then(|line| match line {
+          DisplayLine::Doc { group_id, .. } if include_context_doc_lines => group_id.clone(),
+          DisplayLine::Doc {
+            change: Some(ChangeKind::Added),
+            group_id,
+            ..
+          } => group_id.clone(),
+          DisplayLine::Modified { group_id, .. } => group_id.clone(),
+          DisplayLine::Removed { group_id, .. } => group_id.clone(),
+          DisplayLine::NoNewline { group_id, .. } => group_id.clone(),
+          _ => None,
+        })
+    })
 }
 
 pub struct GutterElement {
@@ -385,30 +412,6 @@ impl Element for GutterElement {
         }
       };
 
-      let group_id_for_line = |line: &DisplayLine| -> Option<Arc<str>> {
-        match line {
-          DisplayLine::Doc {
-            change: Some(ChangeKind::Added),
-            group_id,
-            ..
-          } => group_id.clone(),
-          DisplayLine::Modified { group_id, .. } => group_id.clone(),
-          DisplayLine::Removed { group_id, .. } => group_id.clone(),
-          DisplayLine::NoNewline { group_id, .. } => group_id.clone(),
-          _ => None,
-        }
-      };
-
-      let group_id_for_any_line = |line: &DisplayLine| -> Option<Arc<str>> {
-        match line {
-          DisplayLine::Doc { group_id, .. } => group_id.clone(),
-          DisplayLine::Modified { group_id, .. } => group_id.clone(),
-          DisplayLine::Removed { group_id, .. } => group_id.clone(),
-          DisplayLine::NoNewline { group_id, .. } => group_id.clone(),
-          _ => None,
-        }
-      };
-
       let active_hunk_group_id = editor.highlighted_hunk_group_id(cx);
       let active_hunk_focus_color = theme.hunk_focused_border();
       let active_conflict_doc_range = editor.highlighted_conflict_doc_range(cx);
@@ -515,9 +518,12 @@ impl Element for GutterElement {
           ));
         }
 
-        let any_group_id: Option<Arc<str>> = block
-          .and_then(|block| block.group_id.clone())
-          .or_else(|| display_line.as_ref().and_then(&group_id_for_any_line));
+        let any_group_id = group_id_for_gutter_display_line(
+          display_idx,
+          projection.as_deref(),
+          &editor.block_map,
+          true,
+        );
         let is_active_hunk_line = match (&active_hunk_group_id, &any_group_id) {
           (Some(active), Some(line_group)) => active.as_ref() == line_group.as_ref(),
           _ => false,
@@ -587,9 +593,12 @@ impl Element for GutterElement {
           blank_ranges.push((start, display_idx.saturating_sub(1)));
         }
 
-        let group_id: Option<Arc<str>> = block
-          .and_then(|block| block.group_id.clone())
-          .or_else(|| display_line.as_ref().and_then(&group_id_for_line));
+        let group_id = group_id_for_gutter_display_line(
+          display_idx,
+          projection.as_deref(),
+          &editor.block_map,
+          false,
+        );
         if show_stripes {
           let base_stripe_color = match conflict_kind {
             Some(conflict_kind) => conflict_stripe_color(&theme, conflict_kind),
@@ -633,14 +642,20 @@ impl Element for GutterElement {
             } else {
               border_colors
             };
-            let prev_group = display_idx
-              .checked_sub(1)
-              .and_then(|idx| projection.lines.get(idx))
-              .and_then(&group_id_for_line);
-            let next_group = projection
-              .lines
-              .get(display_idx + 1)
-              .and_then(&group_id_for_line);
+            let prev_group = display_idx.checked_sub(1).and_then(|idx| {
+              group_id_for_gutter_display_line(
+                idx,
+                Some(projection.as_ref()),
+                &editor.block_map,
+                false,
+              )
+            });
+            let next_group = group_id_for_gutter_display_line(
+              display_idx + 1,
+              Some(projection.as_ref()),
+              &editor.block_map,
+              false,
+            );
 
             let is_top = prev_group.as_deref() != Some(group_id.as_ref());
             let is_bottom = next_group.as_deref() != Some(group_id.as_ref());
@@ -1019,6 +1034,73 @@ mod tests {
       assert_eq!(conflict_stripe_color(&dark, kind).expect("dark").a, 1.0);
       assert_eq!(conflict_stripe_color(&light, kind).expect("light").a, 1.0);
     }
+  }
+
+  #[test]
+  fn group_id_for_gutter_display_line_uses_block_map_for_review_comment_rows() {
+    let group_id: Arc<str> = Arc::from("group-1");
+    let projection = Projection {
+      lines: vec![
+        DisplayLine::Doc {
+          doc_line: 0,
+          old_line: Some(0),
+          change: Some(ChangeKind::Added),
+          hunk: Some(HunkState::Unstaged),
+          group_id: Some(group_id.clone()),
+          secondary: false,
+        },
+        DisplayLine::ReviewComment {
+          id: 1,
+          side: ReviewCommentSide::Right,
+          group_id: Some(group_id.clone()),
+          background: None,
+          secondary: false,
+          text: Arc::from("comment"),
+          is_header: true,
+        },
+        DisplayLine::ReviewComment {
+          id: 1,
+          side: ReviewCommentSide::Right,
+          group_id: Some(group_id.clone()),
+          background: None,
+          secondary: false,
+          text: Arc::from(""),
+          is_header: false,
+        },
+        DisplayLine::Doc {
+          doc_line: 1,
+          old_line: Some(1),
+          change: Some(ChangeKind::Added),
+          hunk: Some(HunkState::Unstaged),
+          group_id: Some(group_id.clone()),
+          secondary: false,
+        },
+      ],
+      display_to_doc: vec![Some(0), None, None, Some(1)],
+      doc_to_display: vec![Some(0), Some(3)],
+      visible_doc_lines: vec![0, 1],
+      start_gap: None,
+      end_gap: None,
+      groups: HashMap::new(),
+    };
+    let block_map = projection.block_map();
+
+    assert_eq!(
+      group_id_for_gutter_display_line(1, Some(&projection), &ProjectionBlockMap::default(), false),
+      None
+    );
+    assert_eq!(
+      group_id_for_gutter_display_line(1, Some(&projection), &block_map, false).as_deref(),
+      Some(group_id.as_ref())
+    );
+    assert_eq!(
+      group_id_for_gutter_display_line(2, Some(&projection), &block_map, false).as_deref(),
+      Some(group_id.as_ref())
+    );
+    assert_eq!(
+      group_id_for_gutter_display_line(3, Some(&projection), &block_map, false).as_deref(),
+      Some(group_id.as_ref())
+    );
   }
 
   #[test]
