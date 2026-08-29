@@ -144,6 +144,80 @@ pub struct Projection {
   pub groups: HashMap<Arc<str>, ChangeGroup>,
 }
 
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct ProjectionBlockMap {
+  blocks: Vec<ProjectionBlock>,
+}
+
+impl ProjectionBlockMap {
+  pub fn blocks(&self) -> &[ProjectionBlock] {
+    &self.blocks
+  }
+
+  pub fn block_at_display_line(&self, display_line: usize) -> Option<&ProjectionBlock> {
+    self
+      .blocks
+      .iter()
+      .find(|block| block.display_range.contains(&display_line))
+  }
+
+  fn from_lines(lines: &[DisplayLine]) -> Self {
+    let mut blocks = Vec::new();
+    let mut display_idx = 0;
+
+    while display_idx < lines.len() {
+      match &lines[display_idx] {
+        DisplayLine::Gap { id, hidden_range } => {
+          blocks.push(ProjectionBlock {
+            display_range: display_idx..display_idx + 1,
+            anchor_doc_line: Some(hidden_range.start),
+            kind: ProjectionBlockKind::Gap { id: *id },
+          });
+          display_idx += 1;
+        }
+        DisplayLine::ReviewComment { id, side, .. } => {
+          let start = display_idx;
+          let id = *id;
+          let side = *side;
+          while display_idx < lines.len()
+            && matches!(
+              lines.get(display_idx),
+              Some(DisplayLine::ReviewComment {
+                id: line_id,
+                side: line_side,
+                ..
+              }) if *line_id == id && *line_side == side
+            )
+          {
+            display_idx += 1;
+          }
+          blocks.push(ProjectionBlock {
+            display_range: start..display_idx,
+            anchor_doc_line: nearest_doc_line_for_block(lines, start, display_idx),
+            kind: ProjectionBlockKind::ReviewComment { id, side },
+          });
+        }
+        _ => display_idx += 1,
+      }
+    }
+
+    Self { blocks }
+  }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ProjectionBlock {
+  pub display_range: Range<usize>,
+  pub anchor_doc_line: Option<usize>,
+  pub kind: ProjectionBlockKind,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ProjectionBlockKind {
+  Gap { id: GapId },
+  ReviewComment { id: u64, side: ReviewCommentSide },
+}
+
 #[derive(Clone, Debug)]
 pub struct ChangeGroup {
   pub id: Arc<str>,
@@ -171,6 +245,25 @@ struct LineOccurrenceKey {
   kind: LineKeyKind,
   line: usize,
   content: Arc<str>,
+}
+
+fn doc_line_for_block_anchor(line: &DisplayLine) -> Option<usize> {
+  match line {
+    DisplayLine::Doc { doc_line, .. } | DisplayLine::Modified { doc_line, .. } => Some(*doc_line),
+    DisplayLine::Removed { anchor_line, .. } => Some(*anchor_line),
+    _ => None,
+  }
+}
+
+fn nearest_doc_line_for_block(lines: &[DisplayLine], start: usize, end: usize) -> Option<usize> {
+  lines
+    .get(..start)
+    .and_then(|previous| previous.iter().rev().find_map(doc_line_for_block_anchor))
+    .or_else(|| {
+      lines
+        .get(end..)
+        .and_then(|next| next.iter().find_map(doc_line_for_block_anchor))
+    })
 }
 
 #[derive(Clone, Default)]
@@ -563,6 +656,10 @@ impl Projection {
 
   pub fn doc_to_display_line(&self, doc_line: usize) -> Option<usize> {
     self.doc_to_display.get(doc_line).and_then(|value| *value)
+  }
+
+  pub fn block_map(&self) -> ProjectionBlockMap {
+    ProjectionBlockMap::from_lines(&self.lines)
   }
 
   pub fn previous_visible_doc_line(&self, doc_line: usize) -> Option<usize> {
@@ -1893,6 +1990,58 @@ mod tests {
     assert_eq!(
       with_reply - alone,
       REVIEW_COMMENT_SPACING_PX * 3.0 + REVIEW_COMMENT_REPLY_BORDER_TOP_PX + 20.0 + 20.0
+    );
+  }
+
+  #[test]
+  fn block_map_indexes_folded_gaps() {
+    let projection = Projection::from_conflict_regions(200, &[80..90, 150..160], &HashMap::new());
+    let block_map = projection.block_map();
+    let gap_block = block_map
+      .blocks()
+      .iter()
+      .find(|block| matches!(block.kind, ProjectionBlockKind::Gap { .. }))
+      .expect("gap block");
+
+    assert_eq!(gap_block.display_range.len(), 1);
+    assert_eq!(gap_block.anchor_doc_line, Some(93));
+    assert_eq!(
+      block_map.block_at_display_line(gap_block.display_range.start),
+      Some(gap_block)
+    );
+  }
+
+  #[test]
+  fn block_map_coalesces_review_comment_lines() {
+    let projection = projection_from("line 1\nline 2", "line 1\nline 2", false);
+    let comment = review_comment(42, "body");
+    let body_heights = HashMap::from([(comment.id, 40.0f32)]);
+    let collapsed = HashSet::new();
+    let composer_only = HashSet::new();
+    let projection = projection.with_review_comments(
+      std::slice::from_ref(&comment),
+      &layout_input(&collapsed, &body_heights, &composer_only),
+    );
+    let comment_line_count = count_review_comment_lines(&projection, comment.id);
+    let block_map = projection.block_map();
+
+    let blocks: Vec<_> = block_map
+      .blocks()
+      .iter()
+      .filter(|block| {
+        matches!(
+          block.kind,
+          ProjectionBlockKind::ReviewComment { id, .. } if id == comment.id
+        )
+      })
+      .collect();
+
+    assert_eq!(blocks.len(), 1);
+    assert_eq!(blocks[0].display_range.len(), comment_line_count);
+    assert_eq!(blocks[0].anchor_doc_line, Some(0));
+    assert_eq!(
+      block_map.block_at_display_line(blocks[0].display_range.start),
+      Some(blocks[0])
     );
   }
 

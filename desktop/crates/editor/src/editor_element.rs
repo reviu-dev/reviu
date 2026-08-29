@@ -22,7 +22,7 @@ use crate::{
     REVIEW_COMMENT_COMPOSER_LINE_HEIGHT_REMS, REVIEW_COMMENT_UI_FONT_FAMILY, ScrollAxis,
   },
   projection::{
-    ChangeKind, DisplayLine, HunkState, NO_NEWLINE_MARKER_TEXT, Projection,
+    ChangeKind, DisplayLine, HunkState, NO_NEWLINE_MARKER_TEXT, Projection, ProjectionBlockKind,
     ReviewCommentBackground, ReviewCommentSide,
   },
   settings::indent_rainbow_enabled,
@@ -310,10 +310,10 @@ fn position_hits_review_comment_line(position_map: &PositionMap, position: Point
   let Some(projection) = &position_map.projection else {
     return false;
   };
-  matches!(
-    projection.lines.get(display_line),
-    Some(DisplayLine::ReviewComment { .. })
-  )
+  projection
+    .block_map()
+    .block_at_display_line(display_line)
+    .is_some_and(|block| matches!(block.kind, ProjectionBlockKind::ReviewComment { .. }))
 }
 
 pub(crate) fn highlights_to_text_runs(

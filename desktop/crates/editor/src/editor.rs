@@ -52,10 +52,10 @@ use crate::{
   gutter_element::GutterElement,
   projection::{
     ChangeKind, DisplayLine, GapId, GapReveal, HunkState, NO_NEWLINE_MARKER_TEXT, Projection,
-    REVIEW_COMMENT_CARD_BORDER_PX, REVIEW_COMMENT_CARD_PADDING_X_PX,
-    REVIEW_COMMENT_HEADER_HEIGHT_LINES, REVIEW_COMMENT_REPLY_BORDER_TOP_PX,
-    REVIEW_COMMENT_SPACING_PX, ReviewComment, ReviewCommentLayoutInput, ReviewCommentSide,
-    review_comment_shows_header,
+    ProjectionBlockKind, ProjectionBlockMap, REVIEW_COMMENT_CARD_BORDER_PX,
+    REVIEW_COMMENT_CARD_PADDING_X_PX, REVIEW_COMMENT_HEADER_HEIGHT_LINES,
+    REVIEW_COMMENT_REPLY_BORDER_TOP_PX, REVIEW_COMMENT_SPACING_PX, ReviewComment,
+    ReviewCommentLayoutInput, ReviewCommentSide, review_comment_shows_header,
   },
   scrollbar_element::EditorScrollbarElement,
   text_offsets::{byte_offset_to_char_offset, char_offset_to_byte_offset},
@@ -815,6 +815,7 @@ pub struct Editor {
   pub virtual_line_layouts: HashMap<usize, Arc<ShapedLine>>,
   pub(crate) last_layout_font_size: Pixels,
   pub(crate) word_diff_cache: WordDiffCache,
+  pub(crate) block_map: ProjectionBlockMap,
 
   pub scroll_offset_y: f32, // Vertical scroll offset in lines (0.0 = top, 1.5 = 1.5 lines down)
   pub editor_line_height: Pixels,
@@ -1303,6 +1304,7 @@ impl Editor {
       virtual_line_layouts: HashMap::new(),
       last_layout_font_size: px(0.0),
       word_diff_cache: WordDiffCache::default(),
+      block_map: ProjectionBlockMap::default(),
       scroll_offset_y: 0.0,
       editor_line_height: px(DEFAULT_EDITOR_LINE_HEIGHT),
       editor_char_width: px(REVIEW_COMMENT_CHAR_WIDTH_PX),
@@ -1480,7 +1482,13 @@ impl Editor {
   }
 
   pub fn set_projection(&mut self, projection: Option<Projection>) {
-    self.projection = projection.map(Arc::new);
+    if let Some(projection) = projection {
+      self.block_map = projection.block_map();
+      self.projection = Some(Arc::new(projection));
+    } else {
+      self.block_map = ProjectionBlockMap::default();
+      self.projection = None;
+    }
     self.word_diff_cache = WordDiffCache::default();
     self.virtual_line_layouts.clear();
   }
@@ -1592,20 +1600,6 @@ impl Editor {
           active_diff_kind = diff_kind;
           active_diff_start = display_line;
         }
-
-        if matches!(
-          line,
-          DisplayLine::ReviewComment {
-            is_header: true,
-            ..
-          }
-        ) {
-          push_scrollbar_marker(
-            &mut markers,
-            ScrollbarMarkerKind::ReviewComment,
-            display_line..display_line + 1,
-          );
-        }
       }
 
       if let Some(kind) = active_diff_kind {
@@ -1614,6 +1608,16 @@ impl Editor {
           kind,
           active_diff_start..projection.lines.len(),
         );
+      }
+
+      for block in self.block_map.blocks() {
+        if matches!(block.kind, ProjectionBlockKind::ReviewComment { .. }) {
+          push_scrollbar_marker(
+            &mut markers,
+            ScrollbarMarkerKind::ReviewComment,
+            block.display_range.clone(),
+          );
+        }
       }
     }
 
@@ -11103,6 +11107,7 @@ pub mod tests {
           virtual_line_layouts: HashMap::new(),
           last_layout_font_size: px(0.0),
           word_diff_cache: WordDiffCache::default(),
+          block_map: ProjectionBlockMap::default(),
           scroll_offset_y: 0.0,
           editor_line_height: px(DEFAULT_EDITOR_LINE_HEIGHT),
           editor_char_width: px(REVIEW_COMMENT_CHAR_WIDTH_PX),
