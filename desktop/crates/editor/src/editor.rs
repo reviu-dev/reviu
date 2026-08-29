@@ -1062,6 +1062,12 @@ pub(crate) enum ConflictLineKind {
   IncomingMarker,
 }
 
+#[derive(Clone, Debug, PartialEq)]
+struct ScrollAnchor {
+  doc_line: usize,
+  display_offset_from_scroll_top: f32,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct ScrollbarMarker {
   pub range: Range<usize>,
@@ -1485,6 +1491,80 @@ impl Editor {
 
   pub fn word_diff_cache_size(&self) -> usize {
     self.word_diff_cache.len()
+  }
+
+  fn capture_scroll_anchor(&self, doc_line_count: usize) -> Option<ScrollAnchor> {
+    let total_lines = self.display_line_count(doc_line_count);
+    if total_lines == 0 {
+      return None;
+    }
+
+    let scroll_top = self.scroll_offset_y.max(0.0);
+    let start_display_line = (scroll_top.floor() as usize).min(total_lines.saturating_sub(1));
+
+    if let Some(projection) = self.projection.as_ref() {
+      for display_line in start_display_line..projection.lines.len() {
+        if let Some(doc_line) = projection.display_to_doc_line(display_line) {
+          return Some(ScrollAnchor {
+            doc_line,
+            display_offset_from_scroll_top: display_line as f32 - scroll_top,
+          });
+        }
+      }
+
+      for display_line in (0..start_display_line).rev() {
+        if let Some(doc_line) = projection.display_to_doc_line(display_line) {
+          return Some(ScrollAnchor {
+            doc_line,
+            display_offset_from_scroll_top: display_line as f32 - scroll_top,
+          });
+        }
+      }
+
+      return None;
+    }
+
+    (start_display_line < doc_line_count).then_some(ScrollAnchor {
+      doc_line: start_display_line,
+      display_offset_from_scroll_top: start_display_line as f32 - scroll_top,
+    })
+  }
+
+  fn restore_scroll_anchor(
+    &mut self,
+    anchor: ScrollAnchor,
+    doc_line_count: usize,
+    total_lines: usize,
+  ) -> bool {
+    let display_line = if let Some(projection) = self.projection.as_ref() {
+      projection
+        .doc_to_display_line(anchor.doc_line)
+        .or_else(|| {
+          projection
+            .next_visible_doc_line(anchor.doc_line)
+            .and_then(|doc_line| projection.doc_to_display_line(doc_line))
+        })
+        .or_else(|| {
+          projection
+            .previous_visible_doc_line(anchor.doc_line)
+            .and_then(|doc_line| projection.doc_to_display_line(doc_line))
+        })
+    } else if anchor.doc_line < doc_line_count {
+      Some(anchor.doc_line)
+    } else {
+      None
+    };
+
+    let Some(display_line) = display_line else {
+      return false;
+    };
+
+    self.scroll_offset_y = self.clamp_vertical_scroll(
+      display_line as f32 - anchor.display_offset_from_scroll_top,
+      self.measured_editor_line_height(),
+      total_lines,
+    );
+    true
   }
 
   pub(crate) fn scrollbar_markers(&self, cx: &App) -> Vec<ScrollbarMarker> {
@@ -6170,6 +6250,7 @@ impl Editor {
     doc_line_count: usize,
     cx: &mut Context<Self>,
   ) {
+    let scroll_anchor = self.capture_scroll_anchor(doc_line_count);
     self.set_projection(Some(projection));
     if let Some(projection) = self.projection.as_ref() {
       self.word_diff_cache = build_word_diff_cache(projection, self.document.read(cx));
@@ -6182,11 +6263,15 @@ impl Editor {
     }
 
     let total_lines = self.display_line_count(doc_line_count);
-    self.scroll_offset_y = self.clamp_vertical_scroll(
-      self.scroll_offset_y,
-      self.measured_editor_line_height(),
-      total_lines,
-    );
+    if !scroll_anchor
+      .is_some_and(|anchor| self.restore_scroll_anchor(anchor, doc_line_count, total_lines))
+    {
+      self.scroll_offset_y = self.clamp_vertical_scroll(
+        self.scroll_offset_y,
+        self.measured_editor_line_height(),
+        total_lines,
+      );
+    }
 
     self.schedule_visible_viewport_highlights(cx);
     cx.notify();
@@ -6212,9 +6297,20 @@ impl Editor {
   fn rebuild_projection(&mut self, cx: &mut Context<Self>) {
     let doc_line_count = self.document.read(cx).len_lines();
     if self.diffs.is_none() {
+      let scroll_anchor = self.capture_scroll_anchor(doc_line_count);
       self.invalidate_projection_builds();
       self.set_projection(None);
       self.virtual_line_layouts.clear();
+      let total_lines = self.display_line_count(doc_line_count);
+      if !scroll_anchor
+        .is_some_and(|anchor| self.restore_scroll_anchor(anchor, doc_line_count, total_lines))
+      {
+        self.scroll_offset_y = self.clamp_vertical_scroll(
+          self.scroll_offset_y,
+          self.measured_editor_line_height(),
+          total_lines,
+        );
+      }
       cx.notify();
       return;
     }
@@ -11439,6 +11535,57 @@ pub mod tests {
     }
   }
 
+  fn projection_with_review_lines_before_doc(
+    line_count: usize,
+    doc_line_with_comments: usize,
+    comment_count: usize,
+  ) -> Projection {
+    let mut lines = Vec::new();
+    let mut display_to_doc = Vec::new();
+    let mut doc_to_display = vec![None; line_count];
+    let mut visible_doc_lines = Vec::new();
+
+    for (doc_line, doc_display_slot) in doc_to_display.iter_mut().enumerate() {
+      if doc_line == doc_line_with_comments {
+        for comment_idx in 0..comment_count {
+          lines.push(DisplayLine::ReviewComment {
+            id: comment_idx as u64 + 1,
+            side: ReviewCommentSide::Right,
+            group_id: None,
+            background: None,
+            secondary: false,
+            text: Arc::from("comment"),
+            is_header: comment_idx == 0,
+          });
+          display_to_doc.push(None);
+        }
+      }
+
+      let display_line = lines.len();
+      lines.push(DisplayLine::Doc {
+        doc_line,
+        old_line: Some(doc_line),
+        change: None,
+        hunk: None,
+        group_id: None,
+        secondary: false,
+      });
+      display_to_doc.push(Some(doc_line));
+      *doc_display_slot = Some(display_line);
+      visible_doc_lines.push(doc_line);
+    }
+
+    Projection {
+      lines,
+      display_to_doc,
+      doc_to_display,
+      visible_doc_lines,
+      start_gap: None,
+      end_gap: None,
+      groups: HashMap::new(),
+    }
+  }
+
   fn projection_with_doc_lines(line_count: usize) -> Projection {
     let mut lines = Vec::with_capacity(line_count);
     let mut display_to_doc = Vec::with_capacity(line_count);
@@ -13467,6 +13614,57 @@ pub mod tests {
       editor.scroll_offset_y = 9.0;
 
       assert_eq!(editor.viewport_range(px(20.0), 10), 8..10);
+    });
+  }
+
+  #[gpui::test]
+  fn test_apply_projection_result_preserves_top_doc_line_anchor(cx: &mut TestAppContext) {
+    let mut ctx = EditorTestContext::with_lines(cx.clone(), 10);
+
+    ctx.editor.update(&mut ctx.cx, |editor, cx| {
+      editor.viewport_height = px(100.0);
+      editor.editor_line_height = px(20.0);
+      editor.scroll_offset_y = 5.25;
+
+      editor.apply_projection_result(projection_with_review_lines_before_doc(10, 5, 1), 10, cx);
+
+      assert_eq!(editor.scroll_offset_y, 6.25);
+    });
+  }
+
+  #[gpui::test]
+  fn test_apply_projection_result_preserves_next_doc_line_anchor_when_top_is_virtual(
+    cx: &mut TestAppContext,
+  ) {
+    let mut ctx = EditorTestContext::with_lines(cx.clone(), 10);
+
+    ctx.editor.update(&mut ctx.cx, |editor, cx| {
+      editor.viewport_height = px(100.0);
+      editor.editor_line_height = px(20.0);
+      editor.set_projection(Some(projection_with_review_lines_before_doc(10, 5, 1)));
+      editor.scroll_offset_y = 5.25;
+
+      editor.apply_projection_result(projection_with_review_lines_before_doc(10, 5, 2), 10, cx);
+
+      assert_eq!(editor.scroll_offset_y, 6.25);
+    });
+  }
+
+  #[gpui::test]
+  fn test_rebuild_projection_preserves_scroll_anchor_when_projection_clears(
+    cx: &mut TestAppContext,
+  ) {
+    let mut ctx = EditorTestContext::with_lines(cx.clone(), 10);
+
+    ctx.editor.update(&mut ctx.cx, |editor, cx| {
+      editor.viewport_height = px(100.0);
+      editor.editor_line_height = px(20.0);
+      editor.set_projection(Some(projection_with_review_lines_before_doc(10, 5, 1)));
+      editor.scroll_offset_y = 5.25;
+
+      editor.rebuild_projection(cx);
+
+      assert_eq!(editor.scroll_offset_y, 4.25);
     });
   }
 
