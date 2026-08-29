@@ -23,7 +23,7 @@ use crate::{
   },
   projection::{
     ChangeKind, DisplayLine, HunkState, NO_NEWLINE_MARKER_TEXT, Projection, ProjectionBlockKind,
-    ReviewCommentBackground, ReviewCommentSide,
+    ProjectionBlockMap, ReviewCommentBackground, ReviewCommentSide,
   },
   settings::indent_rainbow_enabled,
   text_offsets::{byte_offset_to_char_offset, char_offset_to_byte_offset},
@@ -202,6 +202,7 @@ pub struct PositionMap {
   pub viewport: Range<usize>,
   pub scroll_offset: f32,
   pub projection: Option<Arc<Projection>>,
+  pub block_map: ProjectionBlockMap,
 }
 
 impl PositionMap {
@@ -307,11 +308,8 @@ fn position_hits_review_comment_line(position_map: &PositionMap, position: Point
   let Some(display_line) = position_map.display_line_for_position(position) else {
     return false;
   };
-  let Some(projection) = &position_map.projection else {
-    return false;
-  };
-  projection
-    .block_map()
+  position_map
+    .block_map
     .block_at_display_line(display_line)
     .is_some_and(|block| matches!(block.kind, ProjectionBlockKind::ReviewComment { .. }))
 }
@@ -890,6 +888,7 @@ pub struct PrepaintState {
   scroll_offset: f32,
   scroll_hitbox: Hitbox,
   projection: Option<Arc<Projection>>,
+  block_map: ProjectionBlockMap,
 }
 
 impl EditorElement {
@@ -1060,6 +1059,7 @@ impl Element for EditorElement {
       lines_to_shape,
       viewport_lines,
       projection,
+      block_map,
     ) = {
       let editor = self.editor.read(cx);
       let document = editor.document().read(cx);
@@ -1074,6 +1074,7 @@ impl Element for EditorElement {
       let mut shaped_lines = Vec::new();
       let mut viewport_lines = Vec::new();
       let projection = editor.projection.clone();
+      let block_map = editor.block_map.clone();
 
       for display_idx in viewport.clone() {
         let Some(display_line) = editor.display_line(display_idx, doc_line_count) else {
@@ -1125,6 +1126,7 @@ impl Element for EditorElement {
         lines_to_shape,
         viewport_lines,
         projection,
+        block_map,
       )
     };
 
@@ -2000,6 +2002,7 @@ impl Element for EditorElement {
       scroll_offset,
       scroll_hitbox,
       projection,
+      block_map,
     }
   }
 
@@ -2032,6 +2035,7 @@ impl Element for EditorElement {
       viewport: prepaint.viewport.clone(),
       scroll_offset,
       projection: prepaint.projection.clone(),
+      block_map: prepaint.block_map.clone(),
     });
 
     window.set_cursor_style(CursorStyle::IBeam, &prepaint.scroll_hitbox);
@@ -2322,6 +2326,10 @@ mod tests {
   }
 
   fn test_position_map(projection: Option<Arc<Projection>>) -> PositionMap {
+    let block_map = projection
+      .as_ref()
+      .map(|projection| projection.block_map())
+      .unwrap_or_default();
     PositionMap {
       shaped_lines: Vec::new(),
       line_texts: HashMap::new(),
@@ -2330,6 +2338,7 @@ mod tests {
       viewport: 0..3,
       scroll_offset: 0.0,
       projection,
+      block_map,
     }
   }
 
