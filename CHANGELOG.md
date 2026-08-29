@@ -4,6 +4,10 @@ All notable changes to Reviu are documented here.
 
 ## 1.0.0
 
+### Editor Scrollbar Markers
+
+The editor scrollbar now shows compact markers for changed lines, search matches, conflicts, and review comments, making large diffs easier to scan without leaving the scroll track.
+
 ### One Workspace
 
 The separate Git page is gone: everything it did happens in the Sessions workspace, now the only place Reviu opens. The changes list with hunk staging, conflicts, the history, the file tree, the terminal, branches, stashes, cherry-pick, the interactive rebase (its todo now takes the whole centre) and every keyboard shortcut moved there, next to the agent and the diff. Old links and shortcuts land in the workspace.

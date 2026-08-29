@@ -1003,6 +1003,26 @@ struct ProjectionBuildInput {
   is_unmerged: bool,
 }
 
+fn push_scrollbar_marker(
+  markers: &mut Vec<ScrollbarMarker>,
+  kind: ScrollbarMarkerKind,
+  range: Range<usize>,
+) {
+  if range.is_empty() {
+    return;
+  }
+
+  if let Some(last) = markers.last_mut()
+    && last.kind == kind
+    && range.start <= last.range.end
+  {
+    last.range.end = last.range.end.max(range.end);
+    return;
+  }
+
+  markers.push(ScrollbarMarker { range, kind });
+}
+
 fn staged_diff_from_bases(bases: &GitFileBases, rel_path: &Path) -> Option<FileDiff> {
   if bases.head.as_deref() == bases.index.as_deref() {
     return Some(FileDiff::empty(git::DiffKind::Staged));
@@ -1040,6 +1060,22 @@ pub(crate) enum ConflictLineKind {
   Divider,
   Incoming,
   IncomingMarker,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct ScrollbarMarker {
+  pub range: Range<usize>,
+  pub kind: ScrollbarMarkerKind,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum ScrollbarMarkerKind {
+  DiffAdded,
+  DiffRemoved,
+  DiffModified,
+  FindMatch,
+  Conflict,
+  ReviewComment,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -1449,6 +1485,78 @@ impl Editor {
 
   pub fn word_diff_cache_size(&self) -> usize {
     self.word_diff_cache.len()
+  }
+
+  pub(crate) fn scrollbar_markers(&self, cx: &App) -> Vec<ScrollbarMarker> {
+    let mut markers = Vec::new();
+
+    if let Some(projection) = self.projection.as_ref() {
+      let mut active_diff_kind = None;
+      let mut active_diff_start = 0;
+
+      for (display_line, line) in projection.lines.iter().enumerate() {
+        let diff_kind = match line {
+          DisplayLine::Doc {
+            change: Some(ChangeKind::Added),
+            ..
+          } => Some(ScrollbarMarkerKind::DiffAdded),
+          DisplayLine::Modified { .. } => Some(ScrollbarMarkerKind::DiffModified),
+          DisplayLine::Removed { .. } => Some(ScrollbarMarkerKind::DiffRemoved),
+          _ => None,
+        };
+
+        if diff_kind != active_diff_kind {
+          if let Some(kind) = active_diff_kind.take() {
+            push_scrollbar_marker(&mut markers, kind, active_diff_start..display_line);
+          }
+          active_diff_kind = diff_kind;
+          active_diff_start = display_line;
+        }
+
+        if matches!(
+          line,
+          DisplayLine::ReviewComment {
+            is_header: true,
+            ..
+          }
+        ) {
+          push_scrollbar_marker(
+            &mut markers,
+            ScrollbarMarkerKind::ReviewComment,
+            display_line..display_line + 1,
+          );
+        }
+      }
+
+      if let Some(kind) = active_diff_kind {
+        push_scrollbar_marker(
+          &mut markers,
+          kind,
+          active_diff_start..projection.lines.len(),
+        );
+      }
+    }
+
+    for find_match in &self.find_matches {
+      push_scrollbar_marker(
+        &mut markers,
+        ScrollbarMarkerKind::FindMatch,
+        find_match.display_line..find_match.display_line + 1,
+      );
+    }
+
+    for region in self.conflict_regions(cx).iter() {
+      let display_line = self
+        .doc_to_display_line(region.start_line)
+        .unwrap_or(region.start_line);
+      push_scrollbar_marker(
+        &mut markers,
+        ScrollbarMarkerKind::Conflict,
+        display_line..display_line + 1,
+      );
+    }
+
+    markers
   }
 
   pub fn diff_view_mode(&self) -> DiffViewMode {
@@ -12487,6 +12595,108 @@ pub mod tests {
       editor.can_insert_review_comment_suggestion(cx)
     });
     assert!(!allowed);
+  }
+
+  #[gpui::test]
+  fn test_scrollbar_markers_include_diff_find_and_review_lines(cx: &mut TestAppContext) {
+    let mut ctx =
+      EditorTestContext::with_text(cx.clone(), "added one\nadded two\nmodified\nstable\n");
+
+    ctx.editor.update(&mut ctx.cx, |editor, cx| {
+      editor.find_matches = vec![FindMatch {
+        display_line: 4,
+        column_start: 0,
+        column_end: 3,
+        doc_range: 0..3,
+      }];
+      editor.set_projection(Some(Projection {
+        lines: vec![
+          DisplayLine::Doc {
+            doc_line: 0,
+            old_line: None,
+            change: Some(ChangeKind::Added),
+            hunk: Some(HunkState::Unstaged),
+            group_id: None,
+            secondary: false,
+          },
+          DisplayLine::Doc {
+            doc_line: 1,
+            old_line: None,
+            change: Some(ChangeKind::Added),
+            hunk: Some(HunkState::Unstaged),
+            group_id: None,
+            secondary: false,
+          },
+          DisplayLine::Modified {
+            old_text: Arc::from("old modified"),
+            doc_line: 2,
+            old_line: 2,
+            hunk: HunkState::Unstaged,
+            group_id: None,
+            secondary: false,
+          },
+          DisplayLine::ReviewComment {
+            id: 1,
+            side: ReviewCommentSide::Right,
+            group_id: None,
+            background: None,
+            secondary: false,
+            text: Arc::from("comment"),
+            is_header: true,
+          },
+          DisplayLine::Doc {
+            doc_line: 3,
+            old_line: Some(3),
+            change: None,
+            hunk: None,
+            group_id: None,
+            secondary: false,
+          },
+        ],
+        display_to_doc: vec![Some(0), Some(1), Some(2), None, Some(3)],
+        doc_to_display: vec![Some(0), Some(1), Some(2), Some(4)],
+        visible_doc_lines: vec![0, 1, 2, 3],
+        start_gap: None,
+        end_gap: None,
+        groups: HashMap::new(),
+      }));
+
+      let markers = editor.scrollbar_markers(cx);
+
+      assert!(markers.contains(&ScrollbarMarker {
+        range: 0..2,
+        kind: ScrollbarMarkerKind::DiffAdded,
+      }));
+      assert!(markers.contains(&ScrollbarMarker {
+        range: 2..3,
+        kind: ScrollbarMarkerKind::DiffModified,
+      }));
+      assert!(markers.contains(&ScrollbarMarker {
+        range: 3..4,
+        kind: ScrollbarMarkerKind::ReviewComment,
+      }));
+      assert!(markers.contains(&ScrollbarMarker {
+        range: 4..5,
+        kind: ScrollbarMarkerKind::FindMatch,
+      }));
+    });
+  }
+
+  #[gpui::test]
+  fn test_scrollbar_markers_include_conflicts(cx: &mut TestAppContext) {
+    let mut ctx = EditorTestContext::with_text(
+      cx.clone(),
+      "<<<<<<< HEAD\ncurrent\n=======\nincoming\n>>>>>>> branch\n",
+    );
+
+    ctx.editor.update(&mut ctx.cx, |editor, cx| {
+      let markers = editor.scrollbar_markers(cx);
+
+      assert!(markers.contains(&ScrollbarMarker {
+        range: 0..1,
+        kind: ScrollbarMarkerKind::Conflict,
+      }));
+    });
   }
 
   #[gpui::test]

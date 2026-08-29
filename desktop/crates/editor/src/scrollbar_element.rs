@@ -1,19 +1,23 @@
 use gpui::{
   App, Bounds, ContentMask, CursorStyle, DispatchPhase, Element, ElementId, Entity,
-  GlobalElementId, Hitbox, HitboxBehavior, InspectorElementId, LayoutId, MouseButton,
+  GlobalElementId, Hitbox, HitboxBehavior, Hsla, InspectorElementId, LayoutId, MouseButton,
   MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels, Point, Position, Style, Window, fill,
   point, prelude::*, px, relative, size,
 };
 
 use gpui_component::ActiveTheme as _;
 
-use crate::editor::{Editor, EditorScrollbarDrag, ScrollAxis};
+use crate::editor::{
+  Editor, EditorScrollbarDrag, ScrollAxis, ScrollbarMarker, ScrollbarMarkerKind,
+};
 
 const TRACK_THICKNESS: Pixels = px(16.0);
 const THUMB_THICKNESS: Pixels = px(6.0);
 const THUMB_ACTIVE_THICKNESS: Pixels = px(8.0);
 const MIN_THUMB_LENGTH: Pixels = px(48.0);
 const EDGE_INSET: Pixels = px(4.0);
+const MARKER_THICKNESS: Pixels = px(3.0);
+const MIN_MARKER_LENGTH: Pixels = px(2.0);
 
 #[derive(Clone, Copy, Debug)]
 enum ScrollbarKind {
@@ -41,6 +45,7 @@ pub(crate) struct ScrollbarMetrics {
   line_height: Pixels,
   total_lines: usize,
   viewport_height: Pixels,
+  markers: Vec<ScrollbarMarker>,
 }
 
 pub(crate) struct ScrollbarPrepaintState {
@@ -103,6 +108,7 @@ impl EditorScrollbarElement {
           line_height: editor.measured_editor_line_height(),
           total_lines: 0,
           viewport_height: bounds.size.height,
+          markers: Vec::new(),
         })
       }
       ScrollbarKind::Vertical => {
@@ -141,6 +147,7 @@ impl EditorScrollbarElement {
           line_height,
           total_lines,
           viewport_height: bounds.size.height,
+          markers: editor.scrollbar_markers(cx),
         })
       }
     }
@@ -233,6 +240,7 @@ impl Element for EditorScrollbarElement {
       || active;
     let thumb_hovered = active || metrics.thumb_bounds.contains(&window.mouse_position());
     let theme = cx.theme();
+    let marker_theme = self.editor.read(cx).theme.clone();
     let track_color = theme.scrollbar;
     let thumb_color = if thumb_hovered {
       theme.scrollbar_thumb_hover
@@ -253,6 +261,13 @@ impl Element for EditorScrollbarElement {
       |window| {
         if hovered && track_color.a > 0.0 {
           window.paint_quad(fill(metrics.track_bounds, track_color));
+        }
+        for marker in &metrics.markers {
+          if let Some(bounds) = marker_fill_bounds(&metrics, marker) {
+            window.paint_quad(
+              fill(bounds, marker_color(marker.kind, &marker_theme)).corner_radii(px(1.5)),
+            );
+          }
         }
         window.paint_quad(
           fill(thumb_fill_bounds(&metrics, thumb_thickness), thumb_color)
@@ -440,6 +455,51 @@ fn thumb_fill_bounds(metrics: &ScrollbarMetrics, thickness: Pixels) -> Bounds<Pi
   }
 }
 
+fn marker_fill_bounds(
+  metrics: &ScrollbarMetrics,
+  marker: &ScrollbarMarker,
+) -> Option<Bounds<Pixels>> {
+  if metrics.axis != ScrollAxis::Vertical || metrics.total_lines == 0 {
+    return None;
+  }
+
+  let start_line = marker.range.start.min(metrics.total_lines);
+  let end_line = marker
+    .range
+    .end
+    .max(start_line + 1)
+    .min(metrics.total_lines);
+  let total_lines = metrics.total_lines as f32;
+  let track_length = metrics.track_bounds.size.height;
+  let start = metrics.track_bounds.top() + track_length * (start_line as f32 / total_lines);
+  let end = metrics.track_bounds.top() + track_length * (end_line as f32 / total_lines);
+  let length = (end - start).max(MIN_MARKER_LENGTH).min(track_length);
+  let top = start.min(metrics.track_bounds.bottom() - length);
+
+  Some(Bounds::new(
+    point(metrics.track_bounds.left() + EDGE_INSET, top),
+    size(MARKER_THICKNESS, length),
+  ))
+}
+
+fn marker_color(kind: ScrollbarMarkerKind, theme: &ui::Theme) -> Hsla {
+  let mut color = match kind {
+    ScrollbarMarkerKind::DiffAdded => theme.diff_gutter_added(),
+    ScrollbarMarkerKind::DiffRemoved => theme.diff_gutter_removed(),
+    ScrollbarMarkerKind::DiffModified => theme.diff_gutter_modified(),
+    ScrollbarMarkerKind::FindMatch => Hsla {
+      h: 48.0 / 360.0,
+      s: 0.95,
+      l: 0.55,
+      a: 1.0,
+    },
+    ScrollbarMarkerKind::Conflict => theme.current_conflict_stripe(),
+    ScrollbarMarkerKind::ReviewComment => theme.hunk_focused_border(),
+  };
+  color.a = color.a.min(0.9);
+  color
+}
+
 #[cfg(test)]
 mod tests {
   use super::*;
@@ -458,6 +518,53 @@ mod tests {
     assert_eq!(end.right(), track.right());
   }
 
+  fn test_vertical_metrics(total_lines: usize) -> ScrollbarMetrics {
+    let track = Bounds::new(point(px(0.0), px(0.0)), size(px(16.0), px(100.0)));
+    let thumb = thumb_bounds_for_metrics(track, ScrollAxis::Vertical, 0.0, 100.0).expect("thumb");
+    ScrollbarMetrics {
+      id: "test",
+      axis: ScrollAxis::Vertical,
+      track_bounds: track,
+      thumb_bounds: thumb,
+      scroll_amount: 0.0,
+      scroll_max: 100.0,
+      track_travel: track.size.height - thumb.size.height,
+      line_height: px(20.0),
+      total_lines,
+      viewport_height: px(100.0),
+      markers: Vec::new(),
+    }
+  }
+
+  #[test]
+  fn marker_bounds_place_line_on_vertical_track() {
+    let metrics = test_vertical_metrics(100);
+    let marker = ScrollbarMarker {
+      range: 50..51,
+      kind: ScrollbarMarkerKind::DiffAdded,
+    };
+
+    let bounds = marker_fill_bounds(&metrics, &marker).expect("marker bounds");
+
+    assert_eq!(bounds.left(), px(4.0));
+    assert_eq!(bounds.size.width, MARKER_THICKNESS);
+    assert!(bounds.top() >= px(50.0));
+    assert!(bounds.bottom() <= px(53.0));
+  }
+
+  #[test]
+  fn marker_bounds_clamps_last_line_to_track() {
+    let metrics = test_vertical_metrics(100);
+    let marker = ScrollbarMarker {
+      range: 99..100,
+      kind: ScrollbarMarkerKind::DiffRemoved,
+    };
+
+    let bounds = marker_fill_bounds(&metrics, &marker).expect("marker bounds");
+
+    assert_eq!(bounds.bottom(), metrics.track_bounds.bottom());
+  }
+
   #[test]
   fn vertical_track_click_centers_thumb() {
     let track = Bounds::new(point(px(0.0), px(0.0)), size(px(12.0), px(100.0)));
@@ -473,6 +580,7 @@ mod tests {
       line_height: px(20.0),
       total_lines: 10,
       viewport_height: px(100.0),
+      markers: Vec::new(),
     };
 
     let amount = scroll_amount_for_track_position(&metrics, px(100.0));
