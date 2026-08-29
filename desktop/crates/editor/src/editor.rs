@@ -5704,26 +5704,25 @@ impl Editor {
     &self,
     side_filter: Option<ReviewCommentSide>,
   ) -> Option<(usize, usize)> {
-    let projection = self.projection.as_ref()?;
     let mut first = None;
     let mut count = 0usize;
 
-    for (idx, line) in projection.lines.iter().enumerate() {
-      let DisplayLine::ReviewComment { id, side, .. } = line else {
+    for block in self.block_map.blocks() {
+      let ProjectionBlockKind::ReviewComment { id, side } = block.kind else {
         continue;
       };
-      if *id != REVIEW_COMMENT_CREATE_DRAFT_COMMENT_ID {
+      if id != REVIEW_COMMENT_CREATE_DRAFT_COMMENT_ID {
         continue;
       }
       if let Some(filter) = side_filter
-        && *side != filter
+        && side != filter
       {
         continue;
       }
       if first.is_none() {
-        first = Some(idx);
+        first = Some(block.display_range.start);
       }
-      count = count.saturating_add(1);
+      count = count.saturating_add(block.display_range.len());
     }
 
     first
@@ -8204,6 +8203,48 @@ impl Editor {
     cx.notify();
   }
 
+  fn is_gap_block_display_line(&self, display_line: usize) -> bool {
+    if self
+      .block_map
+      .block_at_display_line(display_line)
+      .is_some_and(|block| matches!(block.kind, ProjectionBlockKind::Gap { .. }))
+    {
+      return true;
+    }
+
+    self
+      .projection
+      .as_ref()
+      .and_then(|projection| projection.lines.get(display_line))
+      .is_some_and(|line| matches!(line, DisplayLine::Gap { .. }))
+  }
+
+  fn is_ui_block_display_line(&self, display_line: usize) -> bool {
+    if self
+      .block_map
+      .block_at_display_line(display_line)
+      .is_some_and(|block| {
+        matches!(
+          block.kind,
+          ProjectionBlockKind::Gap { .. } | ProjectionBlockKind::ReviewComment { .. }
+        )
+      })
+    {
+      return true;
+    }
+
+    self
+      .projection
+      .as_ref()
+      .and_then(|projection| projection.lines.get(display_line))
+      .is_some_and(|line| {
+        matches!(
+          line,
+          DisplayLine::Gap { .. } | DisplayLine::ReviewComment { .. }
+        )
+      })
+  }
+
   fn set_display_selection_with_anchor(
     &mut self,
     anchor: DisplayCursor,
@@ -8241,11 +8282,12 @@ impl Editor {
     let mut line = start as i32 + direction;
     let max_line = projection.lines.len() as i32;
     while line >= 0 && line < max_line {
-      if let Some(DisplayLine::Gap { .. }) = projection.lines.get(line as usize) {
+      let display_line = line as usize;
+      if self.is_gap_block_display_line(display_line) {
         line += direction;
         continue;
       }
-      return Some(line as usize);
+      return Some(display_line);
     }
     None
   }
@@ -8798,22 +8840,14 @@ impl Editor {
 
   fn first_selectable_display_line(&self) -> Option<usize> {
     let projection = self.projection.as_ref()?;
-    for (idx, line) in projection.lines.iter().enumerate() {
-      if !matches!(line, DisplayLine::Gap { .. }) {
-        return Some(idx);
-      }
-    }
-    None
+    (0..projection.lines.len()).find(|display_line| !self.is_gap_block_display_line(*display_line))
   }
 
   fn last_selectable_display_line(&self) -> Option<usize> {
     let projection = self.projection.as_ref()?;
-    for (idx, line) in projection.lines.iter().enumerate().rev() {
-      if !matches!(line, DisplayLine::Gap { .. }) {
-        return Some(idx);
-      }
-    }
-    None
+    (0..projection.lines.len())
+      .rev()
+      .find(|display_line| !self.is_gap_block_display_line(*display_line))
   }
 
   pub(crate) fn select_display_cursor_to_display_boundary(
@@ -9025,20 +9059,10 @@ impl Editor {
     });
 
     if let Some(display_line) = position_map.display_line_for_position(event.position)
-      && let Some(projection) = &position_map.projection
+      && self.is_ui_block_display_line(display_line)
     {
-      if let Some(DisplayLine::ReviewComment { .. }) = projection.lines.get(display_line) {
-        self.is_selecting = false;
-        return;
-      }
-
-      if matches!(
-        projection.lines.get(display_line),
-        Some(DisplayLine::Gap { .. })
-      ) {
-        self.is_selecting = false;
-        return;
-      }
+      self.is_selecting = false;
+      return;
     }
 
     let Some(display_cursor) = position_map.display_cursor_for_position(event.position) else {
@@ -12925,6 +12949,37 @@ pub mod tests {
 
       assert!(editor.scroll_to_review_comment(1, px(20.0), cx));
       assert_eq!(editor.scroll_offset_y, 5.0);
+    });
+  }
+
+  #[gpui::test]
+  fn test_review_comment_create_span_uses_projection_block_map(cx: &mut TestAppContext) {
+    let mut ctx = EditorTestContext::with_lines(cx.clone(), 3);
+
+    ctx.editor.update(&mut ctx.cx, |editor, _| {
+      let mut comment = review_comment_fixture(REVIEW_COMMENT_CREATE_DRAFT_COMMENT_ID);
+      comment.line = 1;
+      let collapsed = HashSet::from([comment.id]);
+      let body_heights = HashMap::from([(comment.id, 40.0f32)]);
+      let composer_only = HashSet::new();
+      let projection = Projection::full(3).with_review_comments(
+        std::slice::from_ref(&comment),
+        &ReviewCommentLayoutInput {
+          collapsed: &collapsed,
+          editor_line_height_px: 20.0,
+          markdown_line_height_px: 20.0,
+          body_heights_px: &body_heights,
+          composer_only_ids: &composer_only,
+          local_notes: false,
+        },
+      );
+      editor.set_projection(Some(projection));
+
+      assert_eq!(editor.review_comment_create_span(None), Some((2, 2)));
+      assert_eq!(
+        editor.review_comment_create_span(Some(ReviewCommentSide::Left)),
+        None
+      );
     });
   }
 
