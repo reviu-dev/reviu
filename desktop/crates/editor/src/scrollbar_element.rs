@@ -17,6 +17,7 @@ const THUMB_ACTIVE_THICKNESS: Pixels = px(8.0);
 const MIN_THUMB_LENGTH: Pixels = px(48.0);
 const EDGE_INSET: Pixels = px(4.0);
 const MARKER_THICKNESS: Pixels = px(3.0);
+const MARKER_THUMB_GAP: Pixels = px(1.0);
 const MIN_MARKER_LENGTH: Pixels = px(2.0);
 
 #[derive(Clone, Copy, Debug)]
@@ -38,7 +39,7 @@ pub(crate) struct ScrollbarMetrics {
   id: &'static str,
   axis: ScrollAxis,
   track_bounds: Bounds<Pixels>,
-  thumb_bounds: Bounds<Pixels>,
+  thumb_bounds: Option<Bounds<Pixels>>,
   scroll_amount: f32,
   scroll_max: f32,
   track_travel: Pixels,
@@ -101,7 +102,7 @@ impl EditorScrollbarElement {
           id,
           axis: ScrollAxis::Horizontal,
           track_bounds,
-          thumb_bounds,
+          thumb_bounds: Some(thumb_bounds),
           scroll_amount,
           scroll_max,
           track_travel: (track_width - thumb_bounds.size.width).max(px(0.0)),
@@ -120,7 +121,8 @@ impl EditorScrollbarElement {
         let total_lines = editor.display_line_count(editor.document.read(cx).len_lines());
         let metrics =
           Editor::vertical_scroll_metrics_for_height(bounds.size.height, line_height, total_lines);
-        if metrics.max_scroll <= 0.0 {
+        let markers = editor.scrollbar_markers(cx);
+        if !should_show_vertical_scrollbar(metrics.max_scroll, !markers.is_empty()) {
           return None;
         }
         let track_bounds = Bounds::new(
@@ -130,12 +132,16 @@ impl EditorScrollbarElement {
         let line_height_px = (line_height / px(1.0)).max(1.0);
         let scroll_amount = editor.scroll_offset_y * line_height_px;
         let scroll_max = metrics.max_scroll * line_height_px;
-        let thumb_bounds = thumb_bounds_for_metrics(
-          track_bounds,
-          ScrollAxis::Vertical,
-          scroll_amount,
-          scroll_max,
-        )?;
+        let thumb_bounds = if scroll_max > 0.0 {
+          Some(thumb_bounds_for_metrics(
+            track_bounds,
+            ScrollAxis::Vertical,
+            scroll_amount,
+            scroll_max,
+          )?)
+        } else {
+          None
+        };
         Some(ScrollbarMetrics {
           id: "vertical",
           axis: ScrollAxis::Vertical,
@@ -143,11 +149,13 @@ impl EditorScrollbarElement {
           thumb_bounds,
           scroll_amount,
           scroll_max,
-          track_travel: (track_height - thumb_bounds.size.height).max(px(0.0)),
+          track_travel: thumb_bounds
+            .map(|thumb_bounds| (track_height - thumb_bounds.size.height).max(px(0.0)))
+            .unwrap_or(px(0.0)),
           line_height,
           total_lines,
           viewport_height: bounds.size.height,
-          markers: editor.scrollbar_markers(cx),
+          markers,
         })
       }
     }
@@ -238,7 +246,10 @@ impl Element for EditorScrollbarElement {
     let hovered = hitbox.is_hovered(window)
       || self.editor.read(cx).scrollbar_hovered_axis == Some(metrics.axis)
       || active;
-    let thumb_hovered = active || metrics.thumb_bounds.contains(&window.mouse_position());
+    let thumb_hovered = active
+      || metrics
+        .thumb_bounds
+        .is_some_and(|bounds| bounds.contains(&window.mouse_position()));
     let theme = cx.theme();
     let marker_theme = self.editor.read(cx).theme.clone();
     let track_color = theme.scrollbar;
@@ -269,10 +280,9 @@ impl Element for EditorScrollbarElement {
             );
           }
         }
-        window.paint_quad(
-          fill(thumb_fill_bounds(&metrics, thumb_thickness), thumb_color)
-            .corner_radii(thumb_radius),
-        );
+        if let Some(thumb_bounds) = thumb_fill_bounds(&metrics, thumb_thickness) {
+          window.paint_quad(fill(thumb_bounds, thumb_color).corner_radii(thumb_radius));
+        }
       },
     );
     window.set_cursor_style(CursorStyle::Arrow, &hitbox);
@@ -290,9 +300,12 @@ impl Element for EditorScrollbarElement {
         }
 
         editor.update(cx, |editor, cx| {
+          let Some(thumb_bounds) = metrics.thumb_bounds else {
+            return;
+          };
           let pointer = pointer_along_axis(event.position, metrics.axis);
           let mut scroll_start = metrics.scroll_amount;
-          if !metrics.thumb_bounds.contains(&event.position) {
+          if !thumb_bounds.contains(&event.position) {
             scroll_start = scroll_amount_for_track_position(&metrics, pointer);
             set_scroll_amount(editor, &metrics, scroll_start, cx);
           }
@@ -390,9 +403,12 @@ fn set_scroll_amount(
 
 fn scroll_amount_for_track_position(metrics: &ScrollbarMetrics, pointer: Pixels) -> f32 {
   let start = pointer_along_axis(metrics.track_bounds.origin, metrics.axis);
+  let Some(thumb_bounds) = metrics.thumb_bounds else {
+    return 0.0;
+  };
   let thumb_length = match metrics.axis {
-    ScrollAxis::Horizontal => metrics.thumb_bounds.size.width,
-    ScrollAxis::Vertical => metrics.thumb_bounds.size.height,
+    ScrollAxis::Horizontal => thumb_bounds.size.width,
+    ScrollAxis::Vertical => thumb_bounds.size.height,
   };
   let travel = (metrics.track_travel / px(1.0)).max(1.0);
   let offset = (pointer - start - thumb_length / 2.0) / px(1.0);
@@ -436,23 +452,28 @@ fn thumb_bounds_for_metrics(
   })
 }
 
-fn thumb_fill_bounds(metrics: &ScrollbarMetrics, thickness: Pixels) -> Bounds<Pixels> {
-  match metrics.axis {
+fn should_show_vertical_scrollbar(max_scroll: f32, has_markers: bool) -> bool {
+  max_scroll > 0.0 || has_markers
+}
+
+fn thumb_fill_bounds(metrics: &ScrollbarMetrics, thickness: Pixels) -> Option<Bounds<Pixels>> {
+  let thumb_bounds = metrics.thumb_bounds?;
+  Some(match metrics.axis {
     ScrollAxis::Horizontal => Bounds::new(
       point(
-        metrics.thumb_bounds.left(),
+        thumb_bounds.left(),
         metrics.track_bounds.bottom() - EDGE_INSET - thickness,
       ),
-      size(metrics.thumb_bounds.size.width, thickness),
+      size(thumb_bounds.size.width, thickness),
     ),
     ScrollAxis::Vertical => Bounds::new(
       point(
         metrics.track_bounds.right() - EDGE_INSET - thickness,
-        metrics.thumb_bounds.top(),
+        thumb_bounds.top(),
       ),
-      size(thickness, metrics.thumb_bounds.size.height),
+      size(thickness, thumb_bounds.size.height),
     ),
-  }
+  })
 }
 
 fn marker_fill_bounds(
@@ -476,8 +497,15 @@ fn marker_fill_bounds(
   let length = (end - start).max(MIN_MARKER_LENGTH).min(track_length);
   let top = start.min(metrics.track_bounds.bottom() - length);
 
+  let marker_left = (metrics.track_bounds.right()
+    - EDGE_INSET
+    - THUMB_ACTIVE_THICKNESS
+    - MARKER_THUMB_GAP
+    - MARKER_THICKNESS)
+    .max(metrics.track_bounds.left());
+
   Some(Bounds::new(
-    point(metrics.track_bounds.left() + EDGE_INSET, top),
+    point(marker_left, top),
     size(MARKER_THICKNESS, length),
   ))
 }
@@ -525,7 +553,7 @@ mod tests {
       id: "test",
       axis: ScrollAxis::Vertical,
       track_bounds: track,
-      thumb_bounds: thumb,
+      thumb_bounds: Some(thumb),
       scroll_amount: 0.0,
       scroll_max: 100.0,
       track_travel: track.size.height - thumb.size.height,
@@ -546,7 +574,7 @@ mod tests {
 
     let bounds = marker_fill_bounds(&metrics, &marker).expect("marker bounds");
 
-    assert_eq!(bounds.left(), px(4.0));
+    assert_eq!(bounds.left(), px(0.0));
     assert_eq!(bounds.size.width, MARKER_THICKNESS);
     assert!(bounds.top() >= px(50.0));
     assert!(bounds.bottom() <= px(53.0));
@@ -566,6 +594,13 @@ mod tests {
   }
 
   #[test]
+  fn vertical_scrollbar_shows_when_markers_exist_without_overflow() {
+    assert!(should_show_vertical_scrollbar(0.0, true));
+    assert!(should_show_vertical_scrollbar(1.0, false));
+    assert!(!should_show_vertical_scrollbar(0.0, false));
+  }
+
+  #[test]
   fn vertical_track_click_centers_thumb() {
     let track = Bounds::new(point(px(0.0), px(0.0)), size(px(12.0), px(100.0)));
     let thumb = thumb_bounds_for_metrics(track, ScrollAxis::Vertical, 0.0, 100.0).expect("thumb");
@@ -573,7 +608,7 @@ mod tests {
       id: "test",
       axis: ScrollAxis::Vertical,
       track_bounds: track,
-      thumb_bounds: thumb,
+      thumb_bounds: Some(thumb),
       scroll_amount: 0.0,
       scroll_max: 100.0,
       track_travel: track.size.height - thumb.size.height,
