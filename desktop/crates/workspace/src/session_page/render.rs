@@ -397,8 +397,16 @@ impl SessionPage {
       .filter(|state| !previewing && shows_annotation_navigation(*state))
     {
       let (label, previous_tooltip, next_tooltip) = match state.kind {
-        AnnotationKind::Conflict => ("Conflict", "Previous conflict", "Next conflict"),
-        AnnotationKind::Change => ("Hunk", "Previous change", "Next change"),
+        AnnotationKind::Conflict => (
+          "Conflict",
+          "Previous conflict (cmd-alt-up)",
+          "Next conflict (cmd-alt-down)",
+        ),
+        AnnotationKind::Change => (
+          "Hunk",
+          "Select previous hunk (cmd-alt-up)",
+          "Select next hunk (cmd-alt-down)",
+        ),
       };
       let view = cx.entity();
       let previous_view = view.clone();
