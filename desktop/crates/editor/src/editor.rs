@@ -7415,7 +7415,7 @@ impl Editor {
 
   pub fn highlighted_hunk_group_id(&self, cx: &App) -> Option<Arc<str>> {
     let ordered = self.ordered_hunk_display_lines();
-    // A lone hunk gets no focus border: the diff backgrounds already mark it.
+    // A lone hunk needs no active accent: the diff backgrounds already mark it.
     if ordered.len() < 2 {
       return None;
     }

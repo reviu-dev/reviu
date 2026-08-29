@@ -13,8 +13,6 @@ use std::{
   time::{Duration, Instant},
 };
 
-use git::DiffLineKind;
-
 use crate::{
   document::Document,
   editor::{
@@ -838,27 +836,6 @@ enum LineVisibility {
   Blank,
 }
 
-fn group_id_for_display_line<'a>(
-  display_idx: usize,
-  projection: Option<&'a Projection>,
-  block_map: &'a ProjectionBlockMap,
-) -> Option<&'a Arc<str>> {
-  block_map
-    .block_at_display_line(display_idx)
-    .and_then(|block| block.group_id.as_ref())
-    .or_else(|| {
-      projection
-        .and_then(|projection| projection.lines.get(display_idx))
-        .and_then(|line| match line {
-          DisplayLine::Doc { group_id, .. } => group_id.as_ref(),
-          DisplayLine::Modified { group_id, .. } => group_id.as_ref(),
-          DisplayLine::Removed { group_id, .. } => group_id.as_ref(),
-          DisplayLine::NoNewline { group_id, .. } => group_id.as_ref(),
-          _ => None,
-        })
-    })
-}
-
 fn display_line_text_for_view(
   display_line: &DisplayLine,
   diff_view: DiffElementView,
@@ -898,7 +875,6 @@ pub struct PrepaintState {
   gap_separators: Vec<PaintQuad>,
   word_diff_quads: Vec<PaintQuad>,
   conflict_borders: Vec<PaintQuad>,
-  group_borders: Vec<PaintQuad>,
   diag_paths: Vec<Path<Pixels>>,
   cursor_quad: Option<PaintQuad>,
   selection_quads: Vec<PaintQuad>,
@@ -1384,7 +1360,6 @@ impl Element for EditorElement {
     let mut gap_separators = Vec::new();
     let mut word_diff_quads = Vec::new();
     let mut conflict_borders = Vec::new();
-    let mut group_borders = Vec::new();
     let mut diag_paths = Vec::new();
     let added_bg = theme.diff_added_background();
     let added_staged_bg = theme.diff_added_staged_background();
@@ -1413,67 +1388,8 @@ impl Element for EditorElement {
       }
     };
     let conflict_line_kinds = self.editor.read(cx).conflict_line_kinds(cx);
-    let active_hunk_group_id = self.editor.read(cx).highlighted_hunk_group_id(cx);
     let active_hunk_focus_color = theme.hunk_focused_border();
     let active_conflict_doc_range = self.editor.read(cx).highlighted_conflict_doc_range(cx);
-    let mut group_border_colors: HashMap<Arc<str>, (gpui::Hsla, gpui::Hsla)> = HashMap::new();
-    if let Some(projection) = projection.as_ref() {
-      for (group_id, group) in &projection.groups {
-        if group.state != HunkState::Staged {
-          continue;
-        }
-        let mut has_add = false;
-        let mut has_remove = false;
-        let mut first_kind: Option<DiffLineKind> = None;
-        let mut last_kind: Option<DiffLineKind> = None;
-        for line in &group.hunk.lines {
-          match line.kind {
-            DiffLineKind::Add => {
-              has_add = true;
-              if first_kind.is_none() {
-                first_kind = Some(line.kind);
-              }
-              last_kind = Some(line.kind);
-            }
-            DiffLineKind::Remove => {
-              has_remove = true;
-              if first_kind.is_none() {
-                first_kind = Some(line.kind);
-              }
-              last_kind = Some(line.kind);
-            }
-            DiffLineKind::Context => {}
-          }
-        }
-
-        if has_add && has_remove {
-          let removed = theme.diff_gutter_removed();
-          let added = theme.diff_gutter_added();
-          let (top_color, bottom_color) = match self.diff_view {
-            DiffElementView::SplitLeft => (removed, removed),
-            DiffElementView::SplitRight => (added, added),
-            DiffElementView::Inline => (removed, added),
-          };
-          group_border_colors.insert(group_id.clone(), (top_color, bottom_color));
-          continue;
-        }
-
-        let (Some(first_kind), Some(last_kind)) = (first_kind, last_kind) else {
-          continue;
-        };
-        let top_color = match first_kind {
-          DiffLineKind::Add => theme.diff_gutter_added(),
-          DiffLineKind::Remove => theme.diff_gutter_removed(),
-          DiffLineKind::Context => theme.diff_gutter_modified(),
-        };
-        let bottom_color = match last_kind {
-          DiffLineKind::Add => theme.diff_gutter_added(),
-          DiffLineKind::Remove => theme.diff_gutter_removed(),
-          DiffLineKind::Context => theme.diff_gutter_modified(),
-        };
-        group_border_colors.insert(group_id.clone(), (top_color, bottom_color));
-      }
-    }
 
     let mut blank_line_set = HashSet::new();
     if !matches!(self.diff_view, DiffElementView::Inline) {
@@ -1635,54 +1551,6 @@ impl Element for EditorElement {
             ),
             word_diff.background,
           ));
-        }
-      }
-
-      let group_id = group_id_for_display_line(*display_idx, projection.as_deref(), &block_map);
-
-      if conflict_kind.is_none()
-        && let (Some(projection), Some(group_id)) = (projection.as_ref(), group_id)
-      {
-        let is_active = active_hunk_group_id.as_deref() == Some(group_id.as_ref());
-        let staged_colors = group_border_colors.get(group_id.as_ref()).copied();
-        if let Some(border_colors) = staged_colors
-          .or_else(|| is_active.then_some((active_hunk_focus_color, active_hunk_focus_color)))
-        {
-          let (top_color, bottom_color) = if is_active {
-            (active_hunk_focus_color, active_hunk_focus_color)
-          } else {
-            border_colors
-          };
-          let prev_group = display_idx
-            .checked_sub(1)
-            .and_then(|idx| group_id_for_display_line(idx, Some(projection.as_ref()), &block_map));
-          let next_group =
-            group_id_for_display_line(display_idx + 1, Some(projection.as_ref()), &block_map);
-
-          let is_top = prev_group.map(|id| id.as_ref()) != Some(group_id.as_ref());
-          let is_bottom = next_group.map(|id| id.as_ref()) != Some(group_id.as_ref());
-          let border_thickness = px(1.0);
-          let y = line_y(bounds.top(), line_height, *display_idx, scroll_offset);
-
-          if is_top {
-            group_borders.push(fill(
-              Bounds::new(
-                point(bounds.left(), y),
-                size(bounds.size.width, border_thickness),
-              ),
-              top_color,
-            ));
-          }
-
-          if is_bottom {
-            group_borders.push(fill(
-              Bounds::new(
-                point(bounds.left(), y + line_height - border_thickness),
-                size(bounds.size.width, border_thickness),
-              ),
-              bottom_color,
-            ));
-          }
         }
       }
     }
@@ -1999,7 +1867,6 @@ impl Element for EditorElement {
       gap_separators,
       word_diff_quads,
       conflict_borders,
-      group_borders,
       diag_paths,
       cursor_quad,
       selection_quads,
@@ -2232,10 +2099,6 @@ impl Element for EditorElement {
     }
 
     for quad in &prepaint.conflict_borders {
-      window.paint_quad(quad.clone());
-    }
-
-    for quad in &prepaint.group_borders {
       window.paint_quad(quad.clone());
     }
 
