@@ -205,6 +205,9 @@ impl ProjectionBlockMap {
           blocks.push(ProjectionBlock {
             display_range: display_idx..display_idx + 1,
             anchor_doc_line: Some(hidden_range.start),
+            group_id: None,
+            background: None,
+            secondary: false,
             kind: ProjectionBlockKind::Gap { id: *id },
           });
           display_idx += 1;
@@ -225,9 +228,24 @@ impl ProjectionBlockMap {
           {
             display_idx += 1;
           }
+          let (group_id, background, secondary) = lines
+            .get(start)
+            .and_then(|line| match line {
+              DisplayLine::ReviewComment {
+                group_id,
+                background,
+                secondary,
+                ..
+              } => Some((group_id.clone(), *background, *secondary)),
+              _ => None,
+            })
+            .unwrap_or((None, None, false));
           blocks.push(ProjectionBlock {
             display_range: start..display_idx,
             anchor_doc_line: nearest_doc_line_for_block(lines, start, display_idx),
+            group_id,
+            background,
+            secondary,
             kind: ProjectionBlockKind::ReviewComment { id, side },
           });
         }
@@ -255,6 +273,9 @@ impl ProjectionBlockMap {
 pub struct ProjectionBlock {
   pub display_range: Range<usize>,
   pub anchor_doc_line: Option<usize>,
+  pub group_id: Option<Arc<str>>,
+  pub background: Option<ReviewCommentBackground>,
+  pub secondary: bool,
   pub kind: ProjectionBlockKind,
 }
 
@@ -2090,6 +2111,8 @@ mod tests {
     assert_eq!(blocks.len(), 1);
     assert_eq!(blocks[0].display_range.len(), comment_line_count);
     assert_eq!(blocks[0].anchor_doc_line, Some(0));
+    assert_eq!(blocks[0].background, None);
+    assert!(!blocks[0].secondary);
     assert_eq!(
       block_map.block_at_display_line(blocks[0].display_range.start),
       Some(blocks[0])
@@ -2110,6 +2133,28 @@ mod tests {
         .count(),
       0
     );
+  }
+
+  #[test]
+  fn block_map_carries_review_comment_diff_metadata() {
+    let projection = projection_from("old\n", "new\n", true);
+    let comment = review_comment(43, "body");
+    let body_heights = HashMap::from([(comment.id, 40.0f32)]);
+    let collapsed = HashSet::new();
+    let composer_only = HashSet::new();
+    let projection = projection.with_review_comments(
+      std::slice::from_ref(&comment),
+      &layout_input(&collapsed, &body_heights, &composer_only),
+    );
+    let block_map = projection.block_map();
+    let block = block_map
+      .review_comment_blocks(None)
+      .find(|block| matches!(block.kind, ProjectionBlockKind::ReviewComment { id, .. } if id == comment.id))
+      .expect("review comment block");
+
+    assert!(block.group_id.is_some());
+    assert_eq!(block.background, Some(ReviewCommentBackground::Added));
+    assert!(!block.secondary);
   }
 
   #[test]

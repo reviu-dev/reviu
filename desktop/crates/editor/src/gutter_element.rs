@@ -12,7 +12,8 @@ use git::DiffLineKind;
 use crate::{
   editor::{ConflictLineKind, Editor, ScrollAxis},
   projection::{
-    ChangeKind, DisplayLine, HunkState, Projection, ReviewCommentBackground, ReviewCommentSide,
+    ChangeKind, DisplayLine, HunkState, Projection, ProjectionBlock, ProjectionBlockKind,
+    ReviewCommentBackground, ReviewCommentSide,
   },
 };
 
@@ -344,33 +345,48 @@ impl Element for GutterElement {
       let stripe_removed = theme.diff_gutter_removed();
       let stripe_modified = theme.diff_gutter_modified();
 
-      let is_blank_for_view = |line: &DisplayLine| match self.view {
-        GutterView::SplitLeft => {
-          matches!(
-            line,
-            DisplayLine::Doc {
-              change: Some(ChangeKind::Added),
-              ..
-            }
-          ) || matches!(
-            line,
-            DisplayLine::ReviewComment {
-              side: ReviewCommentSide::Right,
-              ..
-            }
-          )
+      let review_comment_side_for_block = |block: Option<&ProjectionBlock>| {
+        block.and_then(|block| match block.kind {
+          ProjectionBlockKind::ReviewComment { side, .. } => Some(side),
+          ProjectionBlockKind::Gap { .. } => None,
+        })
+      };
+      let review_comment_background_for_block = |block: Option<&ProjectionBlock>| {
+        let block = block?;
+        match block.background? {
+          ReviewCommentBackground::Added => Some(if block.secondary {
+            added_staged_bg
+          } else {
+            added_bg
+          }),
+          ReviewCommentBackground::Removed => Some(if block.secondary {
+            removed_staged_bg
+          } else {
+            removed_bg
+          }),
         }
-        GutterView::SplitRight => {
-          matches!(line, DisplayLine::Removed { .. })
-            || matches!(
-              line,
-              DisplayLine::ReviewComment {
-                side: ReviewCommentSide::Left,
-                ..
-              }
-            )
+      };
+
+      let is_blank_for_view = |line: Option<&DisplayLine>, block: Option<&ProjectionBlock>| {
+        let review_comment_side = review_comment_side_for_block(block);
+        match self.view {
+          GutterView::SplitLeft => {
+            line.is_some_and(|line| {
+              matches!(
+                line,
+                DisplayLine::Doc {
+                  change: Some(ChangeKind::Added),
+                  ..
+                }
+              )
+            }) || review_comment_side == Some(ReviewCommentSide::Right)
+          }
+          GutterView::SplitRight => {
+            line.is_some_and(|line| matches!(line, DisplayLine::Removed { .. }))
+              || review_comment_side == Some(ReviewCommentSide::Left)
+          }
+          GutterView::Inline => false,
         }
-        GutterView::Inline => false,
       };
 
       let group_id_for_line = |line: &DisplayLine| -> Option<Arc<str>> {
@@ -414,7 +430,8 @@ impl Element for GutterElement {
       let mut current_blank_start: Option<usize> = None;
       for display_idx in viewport.clone() {
         let display_line = editor.display_line(display_idx, doc_line_count);
-        if let Some(DisplayLine::Gap { id, .. }) = display_line.as_ref() {
+        let block = editor.block_map.block_at_display_line(display_idx);
+        if let Some(ProjectionBlockKind::Gap { id }) = block.map(|block| block.kind) {
           let is_start_gap = id.start == 0;
           let is_end_gap = id.end == doc_line_count;
           if !is_start_gap && !is_end_gap {
@@ -446,10 +463,7 @@ impl Element for GutterElement {
         };
         line_numbers.push((display_idx, line_number));
 
-        let is_blank = display_line
-          .as_ref()
-          .map(&is_blank_for_view)
-          .unwrap_or(false);
+        let is_blank = is_blank_for_view(display_line.as_ref(), block);
 
         let conflict_kind = conflict_kind_for_display_line(
           display_idx,
@@ -461,6 +475,8 @@ impl Element for GutterElement {
           None
         } else if let Some(conflict_kind) = conflict_kind {
           conflict_background(&theme, conflict_kind)
+        } else if let Some(background) = review_comment_background_for_block(block) {
+          Some(background)
         } else {
           match &display_line {
             Some(DisplayLine::Doc {
@@ -490,24 +506,6 @@ impl Element for GutterElement {
               }),
               GutterView::Inline => None,
             },
-            Some(DisplayLine::ReviewComment {
-              background: Some(ReviewCommentBackground::Added),
-              secondary,
-              ..
-            }) => Some(if *secondary {
-              added_staged_bg
-            } else {
-              added_bg
-            }),
-            Some(DisplayLine::ReviewComment {
-              background: Some(ReviewCommentBackground::Removed),
-              secondary,
-              ..
-            }) => Some(if *secondary {
-              removed_staged_bg
-            } else {
-              removed_bg
-            }),
             _ => None,
           }
         };
@@ -523,7 +521,9 @@ impl Element for GutterElement {
           ));
         }
 
-        let any_group_id: Option<Arc<str>> = display_line.as_ref().and_then(&group_id_for_any_line);
+        let any_group_id: Option<Arc<str>> = block
+          .and_then(|block| block.group_id.clone())
+          .or_else(|| display_line.as_ref().and_then(&group_id_for_any_line));
         let is_active_hunk_line = match (&active_hunk_group_id, &any_group_id) {
           (Some(active), Some(line_group)) => active.as_ref() == line_group.as_ref(),
           _ => false,
@@ -593,7 +593,9 @@ impl Element for GutterElement {
           blank_ranges.push((start, display_idx.saturating_sub(1)));
         }
 
-        let group_id: Option<Arc<str>> = display_line.as_ref().and_then(&group_id_for_line);
+        let group_id: Option<Arc<str>> = block
+          .and_then(|block| block.group_id.clone())
+          .or_else(|| display_line.as_ref().and_then(&group_id_for_line));
         if show_stripes {
           let base_stripe_color = match conflict_kind {
             Some(conflict_kind) => conflict_stripe_color(&theme, conflict_kind),
