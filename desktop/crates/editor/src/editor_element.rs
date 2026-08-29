@@ -337,9 +337,42 @@ struct WordToken {
   range: Range<usize>,
 }
 
+#[derive(Clone, Debug, Default)]
+pub(crate) struct WordDiffCache {
+  entries: HashMap<usize, WordDiffCacheEntry>,
+}
+
+impl WordDiffCache {
+  fn insert_removed(&mut self, display_idx: usize, ranges: Vec<Range<usize>>) {
+    if !ranges.is_empty() {
+      self.entries.entry(display_idx).or_default().removed_ranges = Arc::from(ranges);
+    }
+  }
+
+  fn insert_added(&mut self, display_idx: usize, ranges: Vec<Range<usize>>) {
+    if !ranges.is_empty() {
+      self.entries.entry(display_idx).or_default().added_ranges = Arc::from(ranges);
+    }
+  }
+
+  pub(crate) fn len(&self) -> usize {
+    self.entries.len()
+  }
+
+  fn get(&self, display_idx: usize) -> Option<&WordDiffCacheEntry> {
+    self.entries.get(&display_idx)
+  }
+}
+
+#[derive(Clone, Debug, Default)]
+struct WordDiffCacheEntry {
+  removed_ranges: Arc<[Range<usize>]>,
+  added_ranges: Arc<[Range<usize>]>,
+}
+
 #[derive(Clone, Debug)]
 struct WordDiffStyle {
-  ranges: Vec<Range<usize>>,
+  ranges: Arc<[Range<usize>]>,
   background: gpui::Hsla,
 }
 
@@ -650,143 +683,126 @@ fn inline_diff_kind(line: &DisplayLine) -> Option<InlineDiffKind> {
   }
 }
 
-fn inline_word_diff_style(
-  display_idx: usize,
-  display_line: &DisplayLine,
+pub(crate) fn build_word_diff_cache(projection: &Projection, document: &Document) -> WordDiffCache {
+  let mut cache = WordDiffCache::default();
+
+  for (display_idx, display_line) in projection.lines.iter().enumerate() {
+    if let DisplayLine::Modified {
+      old_text, doc_line, ..
+    } = display_line
+    {
+      let old_text = clean_line_text(old_text);
+      let new_text = document
+        .line_content(*doc_line)
+        .map(|cow| clean_line_text(&cow))
+        .unwrap_or_default();
+      let (removed_ranges, added_ranges) = word_diff_ranges(&old_text, &new_text);
+      cache.insert_removed(display_idx, removed_ranges);
+      cache.insert_added(display_idx, added_ranges);
+    }
+  }
+
+  let mut idx = 0;
+  while idx < projection.lines.len() {
+    let Some(key) = projection.lines.get(idx).and_then(inline_diff_key) else {
+      idx += 1;
+      continue;
+    };
+    if projection
+      .lines
+      .get(idx)
+      .and_then(inline_diff_kind)
+      .is_none()
+    {
+      idx += 1;
+      continue;
+    }
+    let start = idx;
+    while idx < projection.lines.len()
+      && projection.lines.get(idx).and_then(inline_diff_key) == Some(key)
+      && projection
+        .lines
+        .get(idx)
+        .and_then(inline_diff_kind)
+        .is_some()
+    {
+      idx += 1;
+    }
+    fill_inline_word_diff_cache(start..idx, projection, document, &mut cache);
+  }
+
+  cache
+}
+
+fn fill_inline_word_diff_cache(
+  display_range: Range<usize>,
   projection: &Projection,
   document: &Document,
-  theme: &Theme,
-) -> Option<WordDiffStyle> {
-  let key = inline_diff_key(display_line)?;
-  let kind = inline_diff_kind(display_line)?;
-
-  let mut start = display_idx;
-  while start > 0 {
-    let prev = projection.lines.get(start - 1)?;
-    if inline_diff_key(prev) != Some(key) {
-      break;
-    }
-    if inline_diff_kind(prev).is_none() {
-      break;
-    }
-    start = start.saturating_sub(1);
-  }
-
-  let mut end = display_idx;
-  while end + 1 < projection.lines.len() {
-    let next = projection.lines.get(end + 1)?;
-    if inline_diff_key(next) != Some(key) {
-      break;
-    }
-    if inline_diff_kind(next).is_none() {
-      break;
-    }
-    end += 1;
-  }
-
+  cache: &mut WordDiffCache,
+) {
   let mut removed_indices = Vec::new();
   let mut added_indices = Vec::new();
-  for idx in start..=end {
-    let line = projection.lines.get(idx)?;
-    match inline_diff_kind(line) {
-      Some(InlineDiffKind::Removed) => removed_indices.push(idx),
-      Some(InlineDiffKind::Added) => added_indices.push(idx),
+  for display_idx in display_range {
+    match projection.lines.get(display_idx).and_then(inline_diff_kind) {
+      Some(InlineDiffKind::Removed) => removed_indices.push(display_idx),
+      Some(InlineDiffKind::Added) => added_indices.push(display_idx),
       None => {}
     }
   }
 
-  let pair_count = removed_indices.len().min(added_indices.len());
-  if pair_count == 0 {
-    return None;
+  for (removed_idx, added_idx) in removed_indices.into_iter().zip(added_indices) {
+    let removed_text = match projection.lines.get(removed_idx) {
+      Some(DisplayLine::Removed { text, .. }) => clean_line_text(text),
+      _ => continue,
+    };
+    let added_text = match projection.lines.get(added_idx) {
+      Some(DisplayLine::Doc { doc_line, .. }) => document
+        .line_content(*doc_line)
+        .map(|cow| clean_line_text(&cow))
+        .unwrap_or_default(),
+      _ => continue,
+    };
+    let (removed_ranges, added_ranges) = word_diff_ranges(&removed_text, &added_text);
+    cache.insert_removed(removed_idx, removed_ranges);
+    cache.insert_added(added_idx, added_ranges);
   }
-
-  let pair_index = match kind {
-    InlineDiffKind::Removed => removed_indices.iter().position(|idx| *idx == display_idx)?,
-    InlineDiffKind::Added => added_indices.iter().position(|idx| *idx == display_idx)?,
-  };
-
-  if pair_index >= pair_count {
-    return None;
-  }
-
-  let removed_idx = removed_indices[pair_index];
-  let added_idx = added_indices[pair_index];
-
-  let removed_text = match projection.lines.get(removed_idx)? {
-    DisplayLine::Removed { text, .. } => clean_line_text(text),
-    _ => return None,
-  };
-
-  let added_text = match projection.lines.get(added_idx)? {
-    DisplayLine::Doc { doc_line, .. } => document
-      .line_content(*doc_line)
-      .map(|cow| clean_line_text(&cow))
-      .unwrap_or_default(),
-    _ => return None,
-  };
-
-  let (removed_ranges, added_ranges) = word_diff_ranges(&removed_text, &added_text);
-  let (ranges, background) = match kind {
-    InlineDiffKind::Removed => (removed_ranges, theme.diff_word_removed_background()),
-    InlineDiffKind::Added => (added_ranges, theme.diff_word_added_background()),
-  };
-
-  if ranges.is_empty() {
-    return None;
-  }
-
-  Some(WordDiffStyle { ranges, background })
-}
-
-fn modified_word_diff_style(
-  old_text: &str,
-  new_text: &str,
-  diff_view: DiffElementView,
-  theme: &Theme,
-) -> Option<WordDiffStyle> {
-  let (removed_ranges, added_ranges) = word_diff_ranges(old_text, new_text);
-  let (ranges, background) = match diff_view {
-    DiffElementView::SplitLeft => (removed_ranges, theme.diff_word_removed_background()),
-    DiffElementView::SplitRight => (added_ranges, theme.diff_word_added_background()),
-    DiffElementView::Inline => return None,
-  };
-
-  if ranges.is_empty() {
-    return None;
-  }
-
-  Some(WordDiffStyle { ranges, background })
 }
 
 fn word_diff_for_line(
   display_idx: usize,
   display_line: &DisplayLine,
   diff_view: DiffElementView,
-  projection: Option<&Projection>,
-  document: &Document,
+  cache: &WordDiffCache,
   theme: &Theme,
 ) -> Option<WordDiffStyle> {
+  let entry = cache.get(display_idx)?;
   match display_line {
-    DisplayLine::Modified {
-      old_text, doc_line, ..
-    } => {
-      if matches!(diff_view, DiffElementView::Inline) {
-        return None;
-      }
-      let old_text = clean_line_text(old_text);
-      let new_text = document
-        .line_content(*doc_line)
-        .map(|cow| clean_line_text(&cow))
-        .unwrap_or_default();
-      modified_word_diff_style(&old_text, &new_text, diff_view, theme)
+    DisplayLine::Modified { .. } => match diff_view {
+      DiffElementView::SplitLeft if !entry.removed_ranges.is_empty() => Some(WordDiffStyle {
+        ranges: Arc::clone(&entry.removed_ranges),
+        background: theme.diff_word_removed_background(),
+      }),
+      DiffElementView::SplitRight if !entry.added_ranges.is_empty() => Some(WordDiffStyle {
+        ranges: Arc::clone(&entry.added_ranges),
+        background: theme.diff_word_added_background(),
+      }),
+      _ => None,
+    },
+    DisplayLine::Removed { .. } if matches!(diff_view, DiffElementView::Inline) => {
+      (!entry.removed_ranges.is_empty()).then(|| WordDiffStyle {
+        ranges: Arc::clone(&entry.removed_ranges),
+        background: theme.diff_word_removed_background(),
+      })
     }
-    DisplayLine::Removed { .. }
-    | DisplayLine::Doc {
+    DisplayLine::Doc {
       change: Some(ChangeKind::Added),
       ..
-    } if matches!(diff_view, DiffElementView::Inline) => projection.and_then(|projection| {
-      inline_word_diff_style(display_idx, display_line, projection, document, theme)
-    }),
+    } if matches!(diff_view, DiffElementView::Inline) => {
+      (!entry.added_ranges.is_empty()).then(|| WordDiffStyle {
+        ranges: Arc::clone(&entry.added_ranges),
+        background: theme.diff_word_added_background(),
+      })
+    }
     _ => None,
   }
 }
@@ -794,22 +810,14 @@ fn word_diff_for_line(
 fn collect_word_diffs_for_viewport(
   viewport_lines: &[(usize, DisplayLine)],
   diff_view: DiffElementView,
-  projection: Option<&Projection>,
-  document: &Document,
+  cache: &WordDiffCache,
   theme: &Theme,
 ) -> HashMap<usize, WordDiffStyle> {
   viewport_lines
     .iter()
     .filter_map(|(display_idx, display_line)| {
-      word_diff_for_line(
-        *display_idx,
-        display_line,
-        diff_view,
-        projection,
-        document,
-        theme,
-      )
-      .map(|word_diff| (*display_idx, word_diff))
+      word_diff_for_line(*display_idx, display_line, diff_view, cache, theme)
+        .map(|word_diff| (*display_idx, word_diff))
     })
     .collect()
 }
@@ -1163,12 +1171,11 @@ impl Element for EditorElement {
     let document_entity = self.editor.read(cx).document().clone();
     let mut newly_shaped = Vec::new();
     let word_diffs_by_display = {
-      let document = document_entity.read(cx);
+      let editor = self.editor.read(cx);
       collect_word_diffs_for_viewport(
         &viewport_lines,
         self.diff_view,
-        projection.as_deref(),
-        document,
+        &editor.word_diff_cache,
         &theme,
       )
     };
@@ -1579,7 +1586,7 @@ impl Element for EditorElement {
         && let Some((_, shaped)) = shaped_lines.iter().find(|(idx, _)| *idx == *display_idx)
       {
         let y = line_y(bounds.top(), line_height, *display_idx, scroll_offset);
-        for range in &word_diff.ranges {
+        for range in word_diff.ranges.iter() {
           if range.start >= range.end {
             continue;
           }
@@ -2734,11 +2741,23 @@ mod tests {
     )];
 
     let styles = document.read_with(cx, |document, _| {
+      let projection = Projection {
+        lines: viewport_lines
+          .iter()
+          .map(|(_, line)| line.clone())
+          .collect(),
+        display_to_doc: vec![Some(0)],
+        doc_to_display: vec![Some(0)],
+        visible_doc_lines: vec![0],
+        start_gap: None,
+        end_gap: None,
+        groups: HashMap::new(),
+      };
+      let cache = build_word_diff_cache(&projection, document);
       collect_word_diffs_for_viewport(
         &viewport_lines,
         DiffElementView::SplitRight,
-        None,
-        document,
+        &cache,
         &Theme::dark(),
       )
     });

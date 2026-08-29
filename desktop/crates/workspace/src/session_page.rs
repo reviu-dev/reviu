@@ -1163,6 +1163,7 @@ impl SessionPage {
         "scroll_offset_y": editor.scroll_offset_y,
         "line_layout_cache_size": editor.line_layouts.len(),
         "virtual_line_layout_cache_size": editor.virtual_line_layouts.len(),
+        "word_diff_cache_size": editor.word_diff_cache_size(),
       })
     })
   }

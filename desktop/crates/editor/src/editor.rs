@@ -48,7 +48,7 @@ use crate::{
   boundaries::{line_range_at_offset, word_range_at_offset, word_range_in_text},
   cursor_blink::CursorBlink,
   document::Document,
-  editor_element::{EditorElement, PositionMap},
+  editor_element::{EditorElement, PositionMap, WordDiffCache, build_word_diff_cache},
   gutter_element::GutterElement,
   projection::{
     ChangeKind, DisplayLine, GapId, GapReveal, HunkState, NO_NEWLINE_MARKER_TEXT, Projection,
@@ -814,6 +814,7 @@ pub struct Editor {
   pub line_layouts: HashMap<usize, Arc<ShapedLine>>,
   pub virtual_line_layouts: HashMap<usize, Arc<ShapedLine>>,
   pub(crate) last_layout_font_size: Pixels,
+  pub(crate) word_diff_cache: WordDiffCache,
 
   pub scroll_offset_y: f32, // Vertical scroll offset in lines (0.0 = top, 1.5 = 1.5 lines down)
   pub editor_line_height: Pixels,
@@ -1259,6 +1260,7 @@ impl Editor {
       line_layouts: HashMap::new(),
       virtual_line_layouts: HashMap::new(),
       last_layout_font_size: px(0.0),
+      word_diff_cache: WordDiffCache::default(),
       scroll_offset_y: 0.0,
       editor_line_height: px(DEFAULT_EDITOR_LINE_HEIGHT),
       editor_char_width: px(REVIEW_COMMENT_CHAR_WIDTH_PX),
@@ -1437,11 +1439,16 @@ impl Editor {
 
   pub fn set_projection(&mut self, projection: Option<Projection>) {
     self.projection = projection.map(Arc::new);
+    self.word_diff_cache = WordDiffCache::default();
     self.virtual_line_layouts.clear();
   }
 
   pub fn projection(&self) -> Option<&Projection> {
     self.projection.as_deref()
+  }
+
+  pub fn word_diff_cache_size(&self) -> usize {
+    self.word_diff_cache.len()
   }
 
   pub fn diff_view_mode(&self) -> DiffViewMode {
@@ -1481,6 +1488,7 @@ impl Editor {
   pub fn reset_after_replace(&mut self) {
     self.line_layouts.clear();
     self.virtual_line_layouts.clear();
+    self.word_diff_cache = WordDiffCache::default();
     self.expanded_gaps.clear();
     self.hovered_group_id = None;
     self.hovered_conflict_start_line = None;
@@ -6055,6 +6063,9 @@ impl Editor {
     cx: &mut Context<Self>,
   ) {
     self.set_projection(Some(projection));
+    if let Some(projection) = self.projection.as_ref() {
+      self.word_diff_cache = build_word_diff_cache(projection, self.document.read(cx));
+    }
 
     if let Some(conflict_start_line) = self.pending_conflict_reveal_start_line.take() {
       self.reveal_conflict_start_line(conflict_start_line, cx);
@@ -6712,6 +6723,7 @@ impl Editor {
     self.mark_conflict_cache_dirty();
     self.line_layouts.clear();
     self.virtual_line_layouts.clear();
+    self.word_diff_cache = WordDiffCache::default();
     self.expanded_gaps.clear();
     self.undo_stack.clear();
     self.redo_stack.clear();
@@ -7440,6 +7452,7 @@ impl Editor {
   /// Invalidate a single line in the cache
   pub(crate) fn invalidate_line(&mut self, line: usize) {
     self.line_layouts.remove(&line);
+    self.word_diff_cache = WordDiffCache::default();
   }
 
   pub(crate) fn invalidate_layout_cache_if_font_size_changed(&mut self, font_size: Pixels) -> bool {
@@ -7465,6 +7478,7 @@ impl Editor {
     self
       .line_layouts
       .retain(|&line_idx, _| line_idx < start_line);
+    self.word_diff_cache = WordDiffCache::default();
   }
 
   pub fn ensure_cache_size(&mut self, viewport: Range<usize>) {
@@ -10884,6 +10898,7 @@ pub mod tests {
           line_layouts: HashMap::new(),
           virtual_line_layouts: HashMap::new(),
           last_layout_font_size: px(0.0),
+          word_diff_cache: WordDiffCache::default(),
           scroll_offset_y: 0.0,
           editor_line_height: px(DEFAULT_EDITOR_LINE_HEIGHT),
           editor_char_width: px(REVIEW_COMMENT_CHAR_WIDTH_PX),
@@ -12472,6 +12487,35 @@ pub mod tests {
       editor.can_insert_review_comment_suggestion(cx)
     });
     assert!(!allowed);
+  }
+
+  #[gpui::test]
+  fn test_apply_projection_result_populates_word_diff_cache(cx: &mut TestAppContext) {
+    let mut ctx =
+      EditorTestContext::with_text(cx.clone(), "const getLastDataNotification = value;");
+
+    ctx.editor.update(&mut ctx.cx, |editor, cx| {
+      let projection = Projection {
+        lines: vec![DisplayLine::Modified {
+          old_text: Arc::from("const getLastNotification = value;"),
+          doc_line: 0,
+          old_line: 0,
+          hunk: HunkState::Unstaged,
+          group_id: None,
+          secondary: false,
+        }],
+        display_to_doc: vec![Some(0)],
+        doc_to_display: vec![Some(0)],
+        visible_doc_lines: vec![0],
+        start_gap: None,
+        end_gap: None,
+        groups: HashMap::new(),
+      };
+
+      editor.apply_projection_result(projection, 1, cx);
+
+      assert_eq!(editor.word_diff_cache_size(), 1);
+    });
   }
 
   #[gpui::test]
