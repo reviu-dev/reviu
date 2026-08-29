@@ -2292,47 +2292,40 @@ mod tests {
   }
 
   fn projection_with_review_comment_line() -> Arc<Projection> {
-    Arc::new(Projection {
-      lines: vec![
-        DisplayLine::Doc {
-          doc_line: 0,
-          old_line: Some(0),
-          change: None,
-          hunk: None,
-          group_id: None,
-          secondary: false,
-        },
-        DisplayLine::ReviewComment {
-          id: 1,
-          side: ReviewCommentSide::Right,
-          group_id: None,
-          background: None,
-          secondary: false,
-          text: Arc::from("comment"),
-          is_header: true,
-        },
-        DisplayLine::Doc {
-          doc_line: 1,
-          old_line: Some(1),
-          change: None,
-          hunk: None,
-          group_id: None,
-          secondary: false,
-        },
-      ],
-      display_to_doc: vec![Some(0), None, Some(1)],
-      doc_to_display: vec![Some(0), Some(2)],
-      visible_doc_lines: vec![0, 1],
-      start_gap: None,
-      end_gap: None,
-      groups: HashMap::new(),
-    })
+    let lines = vec![
+      DisplayLine::Doc {
+        doc_line: 0,
+        old_line: Some(0),
+        change: None,
+        hunk: None,
+        group_id: None,
+        secondary: false,
+      },
+      DisplayLine::ReviewComment {
+        id: 1,
+        side: ReviewCommentSide::Right,
+        group_id: None,
+        background: None,
+        secondary: false,
+        text: Arc::from("comment"),
+        is_header: true,
+      },
+      DisplayLine::Doc {
+        doc_line: 1,
+        old_line: Some(1),
+        change: None,
+        hunk: None,
+        group_id: None,
+        secondary: false,
+      },
+    ];
+    Arc::new(Projection::from_lines(2, lines, HashMap::new(), None, None))
   }
 
   fn test_position_map(projection: Option<Arc<Projection>>) -> PositionMap {
     let block_map = projection
       .as_ref()
-      .map(|projection| projection.block_map())
+      .map(|projection| projection.block_map().clone())
       .unwrap_or_default();
     PositionMap {
       shaped_lines: Vec::new(),
@@ -2772,6 +2765,7 @@ mod tests {
 
     let styles = document.read_with(cx, |document, _| {
       let projection = Projection {
+        block_map: ProjectionBlockMap::default(),
         lines: viewport_lines
           .iter()
           .map(|(_, line)| line.clone())

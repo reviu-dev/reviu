@@ -136,6 +136,7 @@ pub enum DisplayLine {
 #[derive(Clone, Debug)]
 pub struct Projection {
   pub lines: Vec<DisplayLine>,
+  pub(crate) block_map: ProjectionBlockMap,
   pub display_to_doc: Vec<Option<usize>>,
   pub doc_to_display: Vec<Option<usize>>,
   pub visible_doc_lines: Vec<usize>,
@@ -794,8 +795,8 @@ impl Projection {
     self.doc_to_display.get(doc_line).and_then(|value| *value)
   }
 
-  pub fn block_map(&self) -> ProjectionBlockMap {
-    ProjectionBlockMap::from_lines(&self.lines)
+  pub fn block_map(&self) -> &ProjectionBlockMap {
+    &self.block_map
   }
 
   pub fn previous_visible_doc_line(&self, doc_line: usize) -> Option<usize> {
@@ -816,7 +817,7 @@ impl Projection {
     }
   }
 
-  fn from_lines(
+  pub(crate) fn from_lines(
     doc_line_count: usize,
     lines: Vec<DisplayLine>,
     groups: HashMap<Arc<str>, ChangeGroup>,
@@ -842,8 +843,11 @@ impl Projection {
     visible_doc_lines.sort_unstable();
     visible_doc_lines.dedup();
 
+    let block_map = ProjectionBlockMap::from_lines(&lines);
+
     Projection {
       lines,
+      block_map,
       display_to_doc,
       doc_to_display,
       visible_doc_lines,

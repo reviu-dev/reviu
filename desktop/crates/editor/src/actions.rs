@@ -784,69 +784,55 @@ mod tests {
   use std::{collections::HashMap, sync::Arc};
 
   fn editable_projection() -> Arc<Projection> {
-    Arc::new(Projection {
-      lines: vec![
-        DisplayLine::Doc {
-          doc_line: 0,
-          old_line: Some(0),
-          change: None,
-          hunk: None,
-          group_id: None,
-          secondary: false,
-        },
-        DisplayLine::Doc {
-          doc_line: 1,
-          old_line: Some(1),
-          change: None,
-          hunk: None,
-          group_id: None,
-          secondary: false,
-        },
-      ],
-      display_to_doc: vec![Some(0), Some(1)],
-      doc_to_display: vec![Some(0), Some(1)],
-      visible_doc_lines: vec![0, 1],
-      start_gap: None,
-      end_gap: None,
-      groups: HashMap::new(),
-    })
+    let lines = vec![
+      DisplayLine::Doc {
+        doc_line: 0,
+        old_line: Some(0),
+        change: None,
+        hunk: None,
+        group_id: None,
+        secondary: false,
+      },
+      DisplayLine::Doc {
+        doc_line: 1,
+        old_line: Some(1),
+        change: None,
+        hunk: None,
+        group_id: None,
+        secondary: false,
+      },
+    ];
+    Arc::new(Projection::from_lines(2, lines, HashMap::new(), None, None))
   }
 
   fn projection_with_removed_line() -> Arc<Projection> {
-    Arc::new(Projection {
-      lines: vec![
-        DisplayLine::Doc {
-          doc_line: 0,
-          old_line: Some(0),
-          change: None,
-          hunk: None,
-          group_id: None,
-          secondary: false,
-        },
-        DisplayLine::Removed {
-          text: "removed".into(),
-          anchor_line: 0,
-          old_line: 0,
-          hunk: HunkState::Unstaged,
-          group_id: None,
-          secondary: false,
-        },
-        DisplayLine::Doc {
-          doc_line: 1,
-          old_line: Some(1),
-          change: None,
-          hunk: None,
-          group_id: None,
-          secondary: false,
-        },
-      ],
-      display_to_doc: vec![Some(0), None, Some(1)],
-      doc_to_display: vec![Some(0), Some(2)],
-      visible_doc_lines: vec![0, 1],
-      start_gap: None,
-      end_gap: None,
-      groups: HashMap::new(),
-    })
+    let lines = vec![
+      DisplayLine::Doc {
+        doc_line: 0,
+        old_line: Some(0),
+        change: None,
+        hunk: None,
+        group_id: None,
+        secondary: false,
+      },
+      DisplayLine::Removed {
+        text: "removed".into(),
+        anchor_line: 0,
+        old_line: 0,
+        hunk: HunkState::Unstaged,
+        group_id: None,
+        secondary: false,
+      },
+      DisplayLine::Doc {
+        doc_line: 1,
+        old_line: Some(1),
+        change: None,
+        hunk: None,
+        group_id: None,
+        secondary: false,
+      },
+    ];
+    Arc::new(Projection::from_lines(2, lines, HashMap::new(), None, None))
   }
 
   #[gpui::test]

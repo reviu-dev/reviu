@@ -1039,50 +1039,43 @@ mod tests {
   #[test]
   fn group_id_for_gutter_display_line_uses_block_map_for_review_comment_rows() {
     let group_id: Arc<str> = Arc::from("group-1");
-    let projection = Projection {
-      lines: vec![
-        DisplayLine::Doc {
-          doc_line: 0,
-          old_line: Some(0),
-          change: Some(ChangeKind::Added),
-          hunk: Some(HunkState::Unstaged),
-          group_id: Some(group_id.clone()),
-          secondary: false,
-        },
-        DisplayLine::ReviewComment {
-          id: 1,
-          side: ReviewCommentSide::Right,
-          group_id: Some(group_id.clone()),
-          background: None,
-          secondary: false,
-          text: Arc::from("comment"),
-          is_header: true,
-        },
-        DisplayLine::ReviewComment {
-          id: 1,
-          side: ReviewCommentSide::Right,
-          group_id: Some(group_id.clone()),
-          background: None,
-          secondary: false,
-          text: Arc::from(""),
-          is_header: false,
-        },
-        DisplayLine::Doc {
-          doc_line: 1,
-          old_line: Some(1),
-          change: Some(ChangeKind::Added),
-          hunk: Some(HunkState::Unstaged),
-          group_id: Some(group_id.clone()),
-          secondary: false,
-        },
-      ],
-      display_to_doc: vec![Some(0), None, None, Some(1)],
-      doc_to_display: vec![Some(0), Some(3)],
-      visible_doc_lines: vec![0, 1],
-      start_gap: None,
-      end_gap: None,
-      groups: HashMap::new(),
-    };
+    let lines = vec![
+      DisplayLine::Doc {
+        doc_line: 0,
+        old_line: Some(0),
+        change: Some(ChangeKind::Added),
+        hunk: Some(HunkState::Unstaged),
+        group_id: Some(group_id.clone()),
+        secondary: false,
+      },
+      DisplayLine::ReviewComment {
+        id: 1,
+        side: ReviewCommentSide::Right,
+        group_id: Some(group_id.clone()),
+        background: None,
+        secondary: false,
+        text: Arc::from("comment"),
+        is_header: true,
+      },
+      DisplayLine::ReviewComment {
+        id: 1,
+        side: ReviewCommentSide::Right,
+        group_id: Some(group_id.clone()),
+        background: None,
+        secondary: false,
+        text: Arc::from(""),
+        is_header: false,
+      },
+      DisplayLine::Doc {
+        doc_line: 1,
+        old_line: Some(1),
+        change: Some(ChangeKind::Added),
+        hunk: Some(HunkState::Unstaged),
+        group_id: Some(group_id.clone()),
+        secondary: false,
+      },
+    ];
+    let projection = Projection::from_lines(2, lines, HashMap::new(), None, None);
     let block_map = projection.block_map();
 
     assert_eq!(
@@ -1090,15 +1083,15 @@ mod tests {
       None
     );
     assert_eq!(
-      group_id_for_gutter_display_line(1, Some(&projection), &block_map, false).as_deref(),
+      group_id_for_gutter_display_line(1, Some(&projection), block_map, false).as_deref(),
       Some(group_id.as_ref())
     );
     assert_eq!(
-      group_id_for_gutter_display_line(2, Some(&projection), &block_map, false).as_deref(),
+      group_id_for_gutter_display_line(2, Some(&projection), block_map, false).as_deref(),
       Some(group_id.as_ref())
     );
     assert_eq!(
-      group_id_for_gutter_display_line(3, Some(&projection), &block_map, false).as_deref(),
+      group_id_for_gutter_display_line(3, Some(&projection), block_map, false).as_deref(),
       Some(group_id.as_ref())
     );
   }

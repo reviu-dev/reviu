@@ -1483,7 +1483,7 @@ impl Editor {
 
   pub fn set_projection(&mut self, projection: Option<Projection>) {
     if let Some(projection) = projection {
-      self.block_map = projection.block_map();
+      self.block_map = projection.block_map().clone();
       self.projection = Some(Arc::new(projection));
     } else {
       self.block_map = ProjectionBlockMap::default();
@@ -11231,6 +11231,7 @@ pub mod tests {
 
   fn projection_with_removed_middle_line() -> Arc<Projection> {
     Arc::new(Projection {
+      block_map: ProjectionBlockMap::default(),
       lines: vec![
         DisplayLine::Doc {
           doc_line: 0,
@@ -11270,6 +11271,7 @@ pub mod tests {
     let group_id = Arc::<str>::from("hunk-0");
     (
       Arc::new(Projection {
+        block_map: ProjectionBlockMap::default(),
         lines: vec![
           DisplayLine::Removed {
             text: "old".into(),
@@ -11311,6 +11313,7 @@ pub mod tests {
     let group_id = Arc::<str>::from("hunk-0");
     (
       Arc::new(Projection {
+        block_map: ProjectionBlockMap::default(),
         lines: vec![
           DisplayLine::Doc {
             doc_line: 0,
@@ -11359,48 +11362,47 @@ pub mod tests {
   fn projection_with_hidden_start_and_end() -> Arc<Projection> {
     let start_gap = GapId { start: 0, end: 1 };
     let end_gap = GapId { start: 4, end: 5 };
-    Arc::new(Projection {
-      lines: vec![
-        DisplayLine::Gap {
-          id: start_gap,
-          hidden_range: 0..1,
-        },
-        DisplayLine::Doc {
-          doc_line: 1,
-          old_line: Some(1),
-          change: None,
-          hunk: None,
-          group_id: None,
-          secondary: false,
-        },
-        DisplayLine::Doc {
-          doc_line: 2,
-          old_line: Some(2),
-          change: None,
-          hunk: None,
-          group_id: None,
-          secondary: false,
-        },
-        DisplayLine::Doc {
-          doc_line: 3,
-          old_line: Some(3),
-          change: None,
-          hunk: None,
-          group_id: None,
-          secondary: false,
-        },
-        DisplayLine::Gap {
-          id: end_gap,
-          hidden_range: 4..5,
-        },
-      ],
-      display_to_doc: vec![None, Some(1), Some(2), Some(3), None],
-      doc_to_display: vec![None, Some(1), Some(2), Some(3), None],
-      visible_doc_lines: vec![1, 2, 3],
-      start_gap: Some(start_gap),
-      end_gap: Some(end_gap),
-      groups: HashMap::new(),
-    })
+    let lines = vec![
+      DisplayLine::Gap {
+        id: start_gap,
+        hidden_range: 0..1,
+      },
+      DisplayLine::Doc {
+        doc_line: 1,
+        old_line: Some(1),
+        change: None,
+        hunk: None,
+        group_id: None,
+        secondary: false,
+      },
+      DisplayLine::Doc {
+        doc_line: 2,
+        old_line: Some(2),
+        change: None,
+        hunk: None,
+        group_id: None,
+        secondary: false,
+      },
+      DisplayLine::Doc {
+        doc_line: 3,
+        old_line: Some(3),
+        change: None,
+        hunk: None,
+        group_id: None,
+        secondary: false,
+      },
+      DisplayLine::Gap {
+        id: end_gap,
+        hidden_range: 4..5,
+      },
+    ];
+    Arc::new(Projection::from_lines(
+      5,
+      lines,
+      HashMap::new(),
+      Some(start_gap),
+      Some(end_gap),
+    ))
   }
 
   fn projection_with_large_middle_gap() -> Arc<Projection> {
@@ -11408,52 +11410,51 @@ pub mod tests {
       start: 12,
       end: 49_990,
     };
-    Arc::new(Projection {
-      lines: vec![
-        DisplayLine::Doc {
-          doc_line: 10,
-          old_line: Some(10),
-          change: None,
-          hunk: None,
-          group_id: None,
-          secondary: false,
-        },
-        DisplayLine::Doc {
-          doc_line: 11,
-          old_line: Some(11),
-          change: None,
-          hunk: None,
-          group_id: None,
-          secondary: false,
-        },
-        DisplayLine::Gap {
-          id: gap,
-          hidden_range: 12..49_990,
-        },
-        DisplayLine::Doc {
-          doc_line: 49_990,
-          old_line: Some(49_990),
-          change: None,
-          hunk: None,
-          group_id: None,
-          secondary: false,
-        },
-        DisplayLine::Doc {
-          doc_line: 49_991,
-          old_line: Some(49_991),
-          change: None,
-          hunk: None,
-          group_id: None,
-          secondary: false,
-        },
-      ],
-      display_to_doc: vec![Some(10), Some(11), None, Some(49_990), Some(49_991)],
-      doc_to_display: Vec::new(),
-      visible_doc_lines: vec![10, 11, 49_990, 49_991],
-      start_gap: None,
-      end_gap: None,
-      groups: HashMap::new(),
-    })
+    let lines = vec![
+      DisplayLine::Doc {
+        doc_line: 10,
+        old_line: Some(10),
+        change: None,
+        hunk: None,
+        group_id: None,
+        secondary: false,
+      },
+      DisplayLine::Doc {
+        doc_line: 11,
+        old_line: Some(11),
+        change: None,
+        hunk: None,
+        group_id: None,
+        secondary: false,
+      },
+      DisplayLine::Gap {
+        id: gap,
+        hidden_range: 12..49_990,
+      },
+      DisplayLine::Doc {
+        doc_line: 49_990,
+        old_line: Some(49_990),
+        change: None,
+        hunk: None,
+        group_id: None,
+        secondary: false,
+      },
+      DisplayLine::Doc {
+        doc_line: 49_991,
+        old_line: Some(49_991),
+        change: None,
+        hunk: None,
+        group_id: None,
+        secondary: false,
+      },
+    ];
+    Arc::new(Projection::from_lines(
+      49_992,
+      lines,
+      HashMap::new(),
+      None,
+      None,
+    ))
   }
 
   fn projection_with_visible_doc_segments(
@@ -11515,15 +11516,7 @@ pub mod tests {
       display_to_doc.push(None);
     }
 
-    Projection {
-      lines,
-      display_to_doc,
-      doc_to_display,
-      visible_doc_lines,
-      start_gap,
-      end_gap,
-      groups: HashMap::new(),
-    }
+    Projection::from_lines(doc_line_count, lines, HashMap::new(), start_gap, end_gap)
   }
 
   fn projection_with_review_lines_before_doc(
@@ -11566,15 +11559,7 @@ pub mod tests {
       visible_doc_lines.push(doc_line);
     }
 
-    Projection {
-      lines,
-      display_to_doc,
-      doc_to_display,
-      visible_doc_lines,
-      start_gap: None,
-      end_gap: None,
-      groups: HashMap::new(),
-    }
+    Projection::from_lines(line_count, lines, HashMap::new(), None, None)
   }
 
   fn projection_with_doc_lines(line_count: usize) -> Projection {
@@ -11597,15 +11582,7 @@ pub mod tests {
       visible_doc_lines.push(line);
     }
 
-    Projection {
-      lines,
-      display_to_doc,
-      doc_to_display,
-      visible_doc_lines,
-      start_gap: None,
-      end_gap: None,
-      groups: HashMap::new(),
-    }
+    Projection::from_lines(line_count, lines, HashMap::new(), None, None)
   }
 
   fn projection_with_two_hunks(line_count: usize, hunk_lines: &[usize]) -> Projection {
@@ -11634,15 +11611,7 @@ pub mod tests {
       visible_doc_lines.push(line);
     }
 
-    Projection {
-      lines,
-      display_to_doc,
-      doc_to_display,
-      visible_doc_lines,
-      start_gap: None,
-      end_gap: None,
-      groups: HashMap::new(),
-    }
+    Projection::from_lines(line_count, lines, HashMap::new(), None, None)
   }
 
   #[gpui::test]
@@ -12747,57 +12716,56 @@ pub mod tests {
         column_end: 3,
         doc_range: 0..3,
       }];
-      editor.set_projection(Some(Projection {
-        lines: vec![
-          DisplayLine::Doc {
-            doc_line: 0,
-            old_line: None,
-            change: Some(ChangeKind::Added),
-            hunk: Some(HunkState::Unstaged),
-            group_id: None,
-            secondary: false,
-          },
-          DisplayLine::Doc {
-            doc_line: 1,
-            old_line: None,
-            change: Some(ChangeKind::Added),
-            hunk: Some(HunkState::Unstaged),
-            group_id: None,
-            secondary: false,
-          },
-          DisplayLine::Modified {
-            old_text: Arc::from("old modified"),
-            doc_line: 2,
-            old_line: 2,
-            hunk: HunkState::Unstaged,
-            group_id: None,
-            secondary: false,
-          },
-          DisplayLine::ReviewComment {
-            id: 1,
-            side: ReviewCommentSide::Right,
-            group_id: None,
-            background: None,
-            secondary: false,
-            text: Arc::from("comment"),
-            is_header: true,
-          },
-          DisplayLine::Doc {
-            doc_line: 3,
-            old_line: Some(3),
-            change: None,
-            hunk: None,
-            group_id: None,
-            secondary: false,
-          },
-        ],
-        display_to_doc: vec![Some(0), Some(1), Some(2), None, Some(3)],
-        doc_to_display: vec![Some(0), Some(1), Some(2), Some(4)],
-        visible_doc_lines: vec![0, 1, 2, 3],
-        start_gap: None,
-        end_gap: None,
-        groups: HashMap::new(),
-      }));
+      let lines = vec![
+        DisplayLine::Doc {
+          doc_line: 0,
+          old_line: None,
+          change: Some(ChangeKind::Added),
+          hunk: Some(HunkState::Unstaged),
+          group_id: None,
+          secondary: false,
+        },
+        DisplayLine::Doc {
+          doc_line: 1,
+          old_line: None,
+          change: Some(ChangeKind::Added),
+          hunk: Some(HunkState::Unstaged),
+          group_id: None,
+          secondary: false,
+        },
+        DisplayLine::Modified {
+          old_text: Arc::from("old modified"),
+          doc_line: 2,
+          old_line: 2,
+          hunk: HunkState::Unstaged,
+          group_id: None,
+          secondary: false,
+        },
+        DisplayLine::ReviewComment {
+          id: 1,
+          side: ReviewCommentSide::Right,
+          group_id: None,
+          background: None,
+          secondary: false,
+          text: Arc::from("comment"),
+          is_header: true,
+        },
+        DisplayLine::Doc {
+          doc_line: 3,
+          old_line: Some(3),
+          change: None,
+          hunk: None,
+          group_id: None,
+          secondary: false,
+        },
+      ];
+      editor.set_projection(Some(Projection::from_lines(
+        4,
+        lines,
+        HashMap::new(),
+        None,
+        None,
+      )));
 
       let markers = editor.scrollbar_markers(cx);
 
@@ -12962,6 +12930,7 @@ pub mod tests {
 
     ctx.editor.update(&mut ctx.cx, |editor, cx| {
       let projection = Projection {
+        block_map: ProjectionBlockMap::default(),
         lines: vec![DisplayLine::Modified {
           old_text: Arc::from("const getLastNotification = value;"),
           doc_line: 0,
