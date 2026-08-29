@@ -280,19 +280,27 @@ impl AgentChatPanel {
   }
 
   pub(crate) fn flush_pending_agent(&mut self) {
-    self.pending_md_state = None;
+    let markdown_state = self.pending_md_state.take();
     if self.pending_agent.trim().is_empty() {
       self.pending_agent.clear();
-      self.pending_md_state = None;
       return;
     }
-    let text = sanitize_agent_markdown(&std::mem::take(&mut self.pending_agent));
+    let raw_text = std::mem::take(&mut self.pending_agent);
+    let sanitized_text = sanitize_agent_markdown(&raw_text);
+    let text = SharedString::from(sanitized_text);
+    let item_idx = self.items.len();
+    let can_reuse_markdown_state = raw_text == text.as_str() && agent_message_needs_markdown(&text);
     self.items.push(ChatItem::Message(ChatMessage {
       role: ChatRole::Agent,
-      text: text.into(),
+      text: text.clone(),
       images: 0,
       image_data: Vec::new(),
     }));
+    if can_reuse_markdown_state && let Some(state) = markdown_state {
+      self
+        .settled_md_states
+        .insert(item_idx, SettledMarkdownState { text, state });
+    }
   }
 
   /// Close the streaming buffers at the end of a turn, thought first.
@@ -435,6 +443,7 @@ impl AgentChatPanel {
       |item| matches!(item, ChatItem::Message(m) if m.role == ChatRole::User && m.text == text),
     ) {
       self.items.remove(idx);
+      self.settled_md_states.clear();
       self.rebuild_tool_index();
     }
   }

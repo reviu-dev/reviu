@@ -111,7 +111,7 @@ pub(crate) fn markdown_view_with_label_headings(
   markdown_text_view(id, source, extensions, true, cx)
 }
 
-fn agent_message_needs_markdown(source: &str) -> bool {
+pub(crate) fn agent_message_needs_markdown(source: &str) -> bool {
   source.lines().any(|line| {
     let trimmed = line.trim_start();
     trimmed.starts_with('#')
@@ -3291,7 +3291,13 @@ impl AgentChatPanel {
         }
         ChatRole::Agent => {
           let text = m.text.clone();
-          let message = if agent_message_needs_markdown(&text) {
+          let message = if let Some(markdown_state) = self
+            .settled_md_states
+            .get(&idx)
+            .filter(|markdown_state| markdown_state.text == text)
+          {
+            stateful_markdown_view(&markdown_state.state, &self.markdown_extensions, cx)
+          } else if agent_message_needs_markdown(&text) {
             markdown_view(
               ("agent-chat-md", idx),
               text.clone(),

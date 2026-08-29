@@ -692,6 +692,44 @@ async fn a_burst_of_chunks_lands_as_one_update(cx: &mut gpui::TestAppContext) {
 }
 
 #[gpui::test]
+async fn a_streamed_markdown_reply_reuses_its_state_after_settling(cx: &mut gpui::TestAppContext) {
+  let (panel, cx) = add_panel_window(cx);
+
+  panel.update(cx, |panel, cx| {
+    panel.on_event(text_chunk("### Title\n\n"), cx);
+    panel.on_event(text_chunk("- item with `code`\n"), cx);
+    let streaming_state = panel
+      .pending_md_state
+      .as_ref()
+      .expect("streaming markdown state")
+      .clone();
+
+    panel.flush_pending_agent();
+
+    let cached = panel
+      .settled_md_states
+      .get(&0)
+      .expect("settled markdown state");
+    assert_eq!(cached.state.entity_id(), streaming_state.entity_id());
+  });
+}
+
+#[gpui::test]
+async fn sanitized_streamed_markdown_is_reparsed_after_settling(cx: &mut gpui::TestAppContext) {
+  let (panel, cx) = add_panel_window(cx);
+
+  panel.update(cx, |panel, cx| {
+    panel.on_event(text_chunk("```text\nmessage\n```Noté : done"), cx);
+    panel.flush_pending_agent();
+
+    assert!(
+      panel.settled_md_states.is_empty(),
+      "the streaming state still contains the unsanitized source"
+    );
+  });
+}
+
+#[gpui::test]
 async fn a_scheduled_persist_waits_for_the_throttle_window(cx: &mut gpui::TestAppContext) {
   let dir = temp_dir("agent-persist-throttle");
   let (panel, cx) = add_panel_window(cx);

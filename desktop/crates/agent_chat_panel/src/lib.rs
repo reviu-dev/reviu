@@ -68,7 +68,7 @@ use gpui_component::{
   scroll::ScrollableElement as _,
   skeleton::Skeleton,
   tag::Tag,
-  text::{TextView, TextViewStyle},
+  text::{TextView, TextViewState, TextViewStyle},
   v_flex,
 };
 use syntax::{HighlightSpan, SyntaxHighlighter, SyntaxTheme, highlights_to_text_runs, languages};
@@ -98,6 +98,11 @@ struct PendingModelSelection {
   model_id: ModelId,
   previous_model_id: Option<ModelId>,
   generation: u64,
+}
+
+struct SettledMarkdownState {
+  text: SharedString,
+  state: Entity<TextViewState>,
 }
 
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
@@ -821,7 +826,8 @@ pub struct AgentChatPanel {
   staged_images: Vec<std::sync::Arc<gpui::Image>>,
   /// Incremental markdown state for the streaming reply: chunks append via
   /// push_str so a chunk costs O(delta), not a full document re-parse.
-  pending_md_state: Option<gpui::Entity<gpui_component::text::TextViewState>>,
+  pending_md_state: Option<Entity<TextViewState>>,
+  settled_md_states: HashMap<usize, SettledMarkdownState>,
   /// Expand/collapse pins per tool group, keyed by the group's first tool id.
   tool_group_pins: HashMap<ToolCallId, bool>,
   /// Permission requests are answered with their allow option automatically.
@@ -940,6 +946,7 @@ impl AgentChatPanel {
       supports_steering: false,
       staged_images: Vec::new(),
       pending_md_state: None,
+      settled_md_states: HashMap::new(),
       tool_group_pins: HashMap::new(),
       auto_approve: false,
       terminal_store: None,
@@ -1223,6 +1230,7 @@ impl AgentChatPanel {
     self.auto_approve = auto_approve;
     self.pending_agent.clear();
     self.pending_md_state = None;
+    self.settled_md_states.clear();
     self.pending_thought.clear();
     self.reset_composer_history();
     self.clear_runway();
@@ -1557,6 +1565,7 @@ impl AgentChatPanel {
       supports_steering: false,
       staged_images: Vec::new(),
       pending_md_state: None,
+      settled_md_states: HashMap::new(),
       tool_group_pins: HashMap::new(),
       auto_approve: false,
       terminal_store: None,
@@ -2763,6 +2772,7 @@ impl AgentChatPanel {
       created_at_secs: now_secs(),
     });
     place_checkpoint_marker(&mut self.items, marker);
+    self.settled_md_states.clear();
     self.rebuild_tool_index();
     self.persist_state(cx);
     self.sync_list_count();
@@ -2784,6 +2794,7 @@ impl AgentChatPanel {
       self.resubmit_after_connect = Some(text);
     }
     self.items.truncate(keep_len);
+    self.settled_md_states.clear();
     self.rebuild_tool_index();
     self.pending_agent.clear();
     self.pending_md_state = None;
