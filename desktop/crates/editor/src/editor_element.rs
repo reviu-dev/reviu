@@ -1203,52 +1203,57 @@ impl Element for EditorElement {
     {
       let document = document_entity.read(cx);
       for (display_idx, display_line) in lines_to_shape {
-        let (line_text, doc_line, base_color, allow_highlights) = match &display_line {
-          DisplayLine::Doc { doc_line, .. } => {
-            let content = document
-              .line_content(*doc_line)
-              .map(|cow| clean_line_text(&cow))
-              .unwrap_or_default();
-            let base_color = style.color;
-            (content, Some(*doc_line), base_color, true)
-          }
-          DisplayLine::Modified {
-            old_text, doc_line, ..
-          } => match self.diff_view {
-            DiffElementView::SplitLeft => {
-              let old_text = clean_line_text(old_text);
-              (old_text, None, theme.diff_removed_text(), false)
-            }
-            DiffElementView::SplitRight => {
-              let content = document
-                .line_content(*doc_line)
-                .map(|cow| clean_line_text(&cow))
-                .unwrap_or_default();
-              (content, Some(*doc_line), style.color, true)
-            }
-            DiffElementView::Inline => {
-              let content = document
-                .line_content(*doc_line)
-                .map(|cow| clean_line_text(&cow))
-                .unwrap_or_default();
-              (content, Some(*doc_line), style.color, true)
-            }
-          },
-          DisplayLine::Removed { text, .. } => {
-            let color = theme.diff_removed_text();
-            (clean_line_text(text), None, color, false)
-          }
-          DisplayLine::Gap { .. } => (String::new(), None, cx.theme().muted_foreground, false),
-          DisplayLine::NoNewline { .. } => (
-            NO_NEWLINE_MARKER_TEXT.to_string(),
-            None,
-            cx.theme().muted_foreground,
-            false,
-          ),
-          DisplayLine::ReviewComment { .. } => {
+        let (line_text, doc_line, base_color, allow_highlights) =
+          if block_map.is_gap_display_line(display_idx) {
             (String::new(), None, cx.theme().muted_foreground, false)
-          }
-        };
+          } else {
+            match &display_line {
+              DisplayLine::Doc { doc_line, .. } => {
+                let content = document
+                  .line_content(*doc_line)
+                  .map(|cow| clean_line_text(&cow))
+                  .unwrap_or_default();
+                let base_color = style.color;
+                (content, Some(*doc_line), base_color, true)
+              }
+              DisplayLine::Modified {
+                old_text, doc_line, ..
+              } => match self.diff_view {
+                DiffElementView::SplitLeft => {
+                  let old_text = clean_line_text(old_text);
+                  (old_text, None, theme.diff_removed_text(), false)
+                }
+                DiffElementView::SplitRight => {
+                  let content = document
+                    .line_content(*doc_line)
+                    .map(|cow| clean_line_text(&cow))
+                    .unwrap_or_default();
+                  (content, Some(*doc_line), style.color, true)
+                }
+                DiffElementView::Inline => {
+                  let content = document
+                    .line_content(*doc_line)
+                    .map(|cow| clean_line_text(&cow))
+                    .unwrap_or_default();
+                  (content, Some(*doc_line), style.color, true)
+                }
+              },
+              DisplayLine::Removed { text, .. } => {
+                let color = theme.diff_removed_text();
+                (clean_line_text(text), None, color, false)
+              }
+              DisplayLine::NoNewline { .. } => (
+                NO_NEWLINE_MARKER_TEXT.to_string(),
+                None,
+                cx.theme().muted_foreground,
+                false,
+              ),
+              DisplayLine::ReviewComment { .. } => {
+                (String::new(), None, cx.theme().muted_foreground, false)
+              }
+              _ => (String::new(), None, cx.theme().muted_foreground, false),
+            }
+          };
 
         let runs = if allow_highlights {
           if let Some(doc_line) = doc_line

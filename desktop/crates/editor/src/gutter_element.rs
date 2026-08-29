@@ -440,22 +440,25 @@ impl Element for GutterElement {
           ));
         }
 
-        let line_number = match (self.view, &display_line) {
-          (GutterView::SplitLeft, Some(DisplayLine::Doc { old_line, .. })) => old_line
-            .map(|line| format!("{}", line + 1))
-            .unwrap_or_default(),
-          (GutterView::SplitLeft, Some(DisplayLine::Modified { old_line, .. })) => {
-            format!("{}", old_line + 1)
+        let line_number = if editor.block_map.is_gap_display_line(display_idx) {
+          String::new()
+        } else {
+          match (self.view, &display_line) {
+            (GutterView::SplitLeft, Some(DisplayLine::Doc { old_line, .. })) => old_line
+              .map(|line| format!("{}", line + 1))
+              .unwrap_or_default(),
+            (GutterView::SplitLeft, Some(DisplayLine::Modified { old_line, .. })) => {
+              format!("{}", old_line + 1)
+            }
+            (GutterView::SplitLeft, Some(DisplayLine::Removed { old_line, .. })) => {
+              format!("{}", old_line + 1)
+            }
+            (GutterView::SplitRight, Some(DisplayLine::Modified { doc_line, .. })) => {
+              format!("{}", doc_line + 1)
+            }
+            (_, Some(DisplayLine::Doc { doc_line, .. })) => format!("{}", doc_line + 1),
+            _ => String::new(),
           }
-          (GutterView::SplitLeft, Some(DisplayLine::Removed { old_line, .. })) => {
-            format!("{}", old_line + 1)
-          }
-          (GutterView::SplitRight, Some(DisplayLine::Modified { doc_line, .. })) => {
-            format!("{}", doc_line + 1)
-          }
-          (_, Some(DisplayLine::Doc { doc_line, .. })) => format!("{}", doc_line + 1),
-          (_, Some(DisplayLine::Gap { .. })) => String::new(),
-          _ => String::new(),
         };
         line_numbers.push((display_idx, line_number));
 
