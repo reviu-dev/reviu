@@ -147,6 +147,7 @@ pub struct Projection {
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct ProjectionBlockMap {
   blocks: Vec<ProjectionBlock>,
+  display_to_block: Vec<Option<usize>>,
 }
 
 impl ProjectionBlockMap {
@@ -155,10 +156,11 @@ impl ProjectionBlockMap {
   }
 
   pub fn block_at_display_line(&self, display_line: usize) -> Option<&ProjectionBlock> {
-    self
-      .blocks
-      .iter()
-      .find(|block| block.display_range.contains(&display_line))
+    let block_idx = self
+      .display_to_block
+      .get(display_line)
+      .and_then(|value| *value)?;
+    self.blocks.get(block_idx)
   }
 
   fn from_lines(lines: &[DisplayLine]) -> Self {
@@ -201,7 +203,19 @@ impl ProjectionBlockMap {
       }
     }
 
-    Self { blocks }
+    let mut display_to_block = vec![None; lines.len()];
+    for (block_idx, block) in blocks.iter().enumerate() {
+      for display_line in block.display_range.clone() {
+        if let Some(slot) = display_to_block.get_mut(display_line) {
+          *slot = Some(block_idx);
+        }
+      }
+    }
+
+    Self {
+      blocks,
+      display_to_block,
+    }
   }
 }
 
@@ -2009,6 +2023,10 @@ mod tests {
       block_map.block_at_display_line(gap_block.display_range.start),
       Some(gap_block)
     );
+    assert_eq!(
+      block_map.block_at_display_line(gap_block.display_range.end),
+      None
+    );
   }
 
   #[test]
@@ -2043,6 +2061,11 @@ mod tests {
       block_map.block_at_display_line(blocks[0].display_range.start),
       Some(blocks[0])
     );
+    assert_eq!(
+      block_map.block_at_display_line(blocks[0].display_range.end - 1),
+      Some(blocks[0])
+    );
+    assert_eq!(block_map.block_at_display_line(0), None);
   }
 
   #[test]
