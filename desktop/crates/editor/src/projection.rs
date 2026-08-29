@@ -115,7 +115,6 @@ pub enum DisplayLine {
   },
   Gap {
     id: GapId,
-    hidden_range: Range<usize>,
   },
   NoNewline {
     hunk: Option<HunkState>,
@@ -252,12 +251,18 @@ impl ProjectionBlockMap {
     })
   }
 
-  fn from_lines(lines: &[DisplayLine], start_gap: Option<GapId>, end_gap: Option<GapId>) -> Self {
+  fn from_lines(
+    lines: &[DisplayLine],
+    start_gap: Option<GapId>,
+    end_gap: Option<GapId>,
+    gap_hidden_ranges: &HashMap<GapId, Range<usize>>,
+  ) -> Self {
     let mut blocks = Vec::new();
     if let Some(id) = start_gap {
       blocks.push(ProjectionBlock {
         display_range: 0..0,
         height_lines: 0,
+        hidden_range: Some(id.start..id.end),
         anchor_doc_line: Some(id.start),
         group_id: None,
         background: None,
@@ -269,10 +274,15 @@ impl ProjectionBlockMap {
 
     while display_idx < lines.len() {
       match &lines[display_idx] {
-        DisplayLine::Gap { id, hidden_range } => {
+        DisplayLine::Gap { id } => {
+          let hidden_range = gap_hidden_ranges
+            .get(id)
+            .cloned()
+            .unwrap_or(id.start..id.end);
           blocks.push(ProjectionBlock {
             display_range: display_idx..display_idx + 1,
             height_lines: 1,
+            hidden_range: Some(hidden_range.clone()),
             anchor_doc_line: Some(hidden_range.start),
             group_id: None,
             background: None,
@@ -312,6 +322,7 @@ impl ProjectionBlockMap {
           blocks.push(ProjectionBlock {
             display_range: start..display_idx,
             height_lines: display_idx.saturating_sub(start),
+            hidden_range: None,
             anchor_doc_line: nearest_doc_line_for_block(lines, start, display_idx),
             group_id,
             background,
@@ -328,6 +339,7 @@ impl ProjectionBlockMap {
       blocks.push(ProjectionBlock {
         display_range: display_line..display_line,
         height_lines: 0,
+        hidden_range: Some(id.start..id.end),
         anchor_doc_line: Some(id.start),
         group_id: None,
         background: None,
@@ -356,6 +368,7 @@ impl ProjectionBlockMap {
 pub struct ProjectionBlock {
   pub display_range: Range<usize>,
   pub height_lines: usize,
+  pub hidden_range: Option<Range<usize>>,
   pub anchor_doc_line: Option<usize>,
   pub group_id: Option<Arc<str>>,
   pub background: Option<ReviewCommentBackground>,
@@ -390,6 +403,14 @@ impl ProjectionBlock {
     match self.kind {
       ProjectionBlockKind::Gap { id } => Some(id),
       ProjectionBlockKind::ReviewComment { .. } => None,
+    }
+  }
+
+  pub fn gap_hidden_range(&self) -> Option<&Range<usize>> {
+    if self.is_gap() {
+      self.hidden_range.as_ref()
+    } else {
+      None
     }
   }
 
@@ -520,6 +541,7 @@ fn push_foldable_gap(
   lines: &mut Vec<DisplayLine>,
   start_gap: &mut Option<GapId>,
   end_gap: &mut Option<GapId>,
+  gap_hidden_ranges: &mut HashMap<GapId, Range<usize>>,
 ) {
   if gap_end <= gap_start {
     return;
@@ -573,10 +595,8 @@ fn push_foldable_gap(
         *end_gap = Some(gap_id);
       }
     } else {
-      lines.push(DisplayLine::Gap {
-        id: gap_id,
-        hidden_range: head_end..tail_start,
-      });
+      gap_hidden_ranges.insert(gap_id, head_end..tail_start);
+      lines.push(DisplayLine::Gap { id: gap_id });
     }
   } else {
     push_doc_range(head_end..tail_start, lines);
@@ -626,6 +646,7 @@ impl Projection {
     let mut last_visible_doc_line: Option<usize> = None;
     let mut start_gap: Option<GapId> = None;
     let mut end_gap: Option<GapId> = None;
+    let mut gap_hidden_ranges = HashMap::new();
 
     let mut push_gap = |gap_start: usize,
                         gap_end: usize,
@@ -641,6 +662,7 @@ impl Projection {
         lines,
         &mut start_gap,
         &mut end_gap,
+        &mut gap_hidden_ranges,
       );
     };
 
@@ -731,7 +753,14 @@ impl Projection {
       assign_group_id(&mut lines, &pending.display_indices, &group_id);
     }
 
-    Projection::from_lines(doc_line_count, lines, groups, start_gap, end_gap)
+    Projection::from_lines_with_gap_hidden_ranges(
+      doc_line_count,
+      lines,
+      groups,
+      start_gap,
+      end_gap,
+      gap_hidden_ranges,
+    )
   }
 
   pub fn full(doc_line_count: usize) -> Self {
@@ -788,13 +817,15 @@ impl Projection {
     let mut lines = Vec::new();
     let mut start_gap: Option<GapId> = None;
     let mut end_gap: Option<GapId> = None;
+    let mut gap_hidden_ranges = HashMap::new();
     let mut cursor: usize = 0;
 
     let push = |gap_start: usize,
                 gap_end: usize,
                 lines: &mut Vec<DisplayLine>,
                 start_gap: &mut Option<GapId>,
-                end_gap: &mut Option<GapId>| {
+                end_gap: &mut Option<GapId>,
+                gap_hidden_ranges: &mut HashMap<GapId, Range<usize>>| {
       let reveal = expanded_gaps
         .get(&GapId {
           start: gap_start,
@@ -811,6 +842,7 @@ impl Projection {
         lines,
         start_gap,
         end_gap,
+        gap_hidden_ranges,
       );
     };
 
@@ -824,6 +856,7 @@ impl Projection {
           &mut lines,
           &mut start_gap,
           &mut end_gap,
+          &mut gap_hidden_ranges,
         );
       }
       for doc_line in region_start..region_end {
@@ -846,10 +879,18 @@ impl Projection {
         &mut lines,
         &mut start_gap,
         &mut end_gap,
+        &mut gap_hidden_ranges,
       );
     }
 
-    Projection::from_lines(doc_line_count, lines, HashMap::new(), start_gap, end_gap)
+    Projection::from_lines_with_gap_hidden_ranges(
+      doc_line_count,
+      lines,
+      HashMap::new(),
+      start_gap,
+      end_gap,
+      gap_hidden_ranges,
+    )
   }
 
   pub fn display_to_doc_line(&self, display_line: usize) -> Option<usize> {
@@ -892,6 +933,24 @@ impl Projection {
     start_gap: Option<GapId>,
     end_gap: Option<GapId>,
   ) -> Self {
+    Self::from_lines_with_gap_hidden_ranges(
+      doc_line_count,
+      lines,
+      groups,
+      start_gap,
+      end_gap,
+      HashMap::new(),
+    )
+  }
+
+  fn from_lines_with_gap_hidden_ranges(
+    doc_line_count: usize,
+    lines: Vec<DisplayLine>,
+    groups: HashMap<Arc<str>, ChangeGroup>,
+    start_gap: Option<GapId>,
+    end_gap: Option<GapId>,
+    gap_hidden_ranges: HashMap<GapId, Range<usize>>,
+  ) -> Self {
     let mut display_to_doc = Vec::with_capacity(lines.len());
     let mut doc_to_display = vec![None; doc_line_count];
     let mut visible_doc_lines = Vec::new();
@@ -911,7 +970,7 @@ impl Projection {
     visible_doc_lines.sort_unstable();
     visible_doc_lines.dedup();
 
-    let block_map = ProjectionBlockMap::from_lines(&lines, start_gap, end_gap);
+    let block_map = ProjectionBlockMap::from_lines(&lines, start_gap, end_gap, &gap_hidden_ranges);
 
     Projection {
       lines,
@@ -935,8 +994,20 @@ impl Projection {
     let doc_line_count = self.doc_to_display.len();
     let start_gap = self.block_map.start_gap_id();
     let end_gap = self.block_map.end_gap_id();
+    let gap_hidden_ranges: HashMap<_, _> = self
+      .block_map
+      .gap_blocks()
+      .filter_map(|block| Some((block.gap_id()?, block.gap_hidden_range()?.clone())))
+      .collect();
     let lines = insert_review_comments(self.lines, comments, layout);
-    Projection::from_lines(doc_line_count, lines, self.groups, start_gap, end_gap)
+    Projection::from_lines_with_gap_hidden_ranges(
+      doc_line_count,
+      lines,
+      self.groups,
+      start_gap,
+      end_gap,
+      gap_hidden_ranges,
+    )
   }
 }
 
@@ -2244,6 +2315,21 @@ mod tests {
       gap_block.gap_id()
     );
     assert!(block_map.is_ui_block_display_line(gap_block.display_range.start));
+  }
+
+  #[test]
+  fn block_map_carries_folded_gap_hidden_range() {
+    let gap_id = GapId { start: 15, end: 27 };
+    let expanded_gaps = HashMap::from([(gap_id, GapReveal { head: 2, tail: 3 })]);
+    let projection = Projection::from_conflict_regions(40, &[10..12, 30..32], &expanded_gaps);
+    let block = projection
+      .block_map()
+      .interior_gap_blocks()
+      .find(|block| block.gap_id() == Some(gap_id))
+      .expect("interior gap block");
+
+    assert_eq!(block.gap_hidden_range(), Some(&(17..24)));
+    assert_eq!(block.anchor_doc_line, Some(17));
   }
 
   #[test]
