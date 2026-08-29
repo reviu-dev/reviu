@@ -9,12 +9,12 @@ Reviu should keep `Projection` as the diff-line model and move inline UI-only ro
 - folded gaps
 - review comment blocks, coalesced across their reserved display lines
 
-Each block carries its display range, kind, and nearest document anchor. Existing rendering still reads `Projection::lines`, but callers can now ask the block map whether a display line belongs to a UI block without matching every display-line variant directly.
+Each block carries its display range, kind, and nearest document anchor. `Editor` stores the derived map next to the active projection. Existing rendering still reads `Projection::lines`, but hit testing, scrollbar review markers, and gap controls can now ask the block map whether a display line belongs to a UI block without matching every display-line variant directly.
 
 ## Migration plan
 
-1. Keep deriving `ProjectionBlockMap` from `Projection::lines` while call sites move to block queries.
-2. Store the block map on `Projection` once enough call sites depend on it and projection rebuild profiles show repeated derivation cost.
+1. Keep deriving `ProjectionBlockMap` from `Projection::lines` while remaining call sites move to block queries.
+2. Store the block map on `Projection` itself if projection rebuild profiles show repeated derivation cost outside `Editor`.
 3. Move review comment heights into block metadata so comment or composer height changes can update block ranges without rebuilding diff lines.
 4. Move folded gaps to blocks after review comments prove the model, keeping diff hunks and doc-line mapping in `Projection`.
 

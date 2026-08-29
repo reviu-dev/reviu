@@ -7614,15 +7614,16 @@ impl Editor {
     };
 
     let mut controls = Vec::new();
-    for (display_idx, line) in projection.lines.iter().enumerate() {
-      let DisplayLine::Gap { id, .. } = line else {
+    for block in self.block_map.blocks() {
+      let ProjectionBlockKind::Gap { id } = block.kind else {
         continue;
       };
+      let display_idx = block.display_range.start;
 
       if display_idx > 0 {
         controls.push(GapControl {
           display_line: display_idx.saturating_sub(1),
-          gap_id: *id,
+          gap_id: id,
           direction: GapExpandDirection::Down,
         });
       }
@@ -7630,7 +7631,7 @@ impl Editor {
       if display_idx + 1 < projection.lines.len() {
         controls.push(GapControl {
           display_line: display_idx + 1,
-          gap_id: *id,
+          gap_id: id,
           direction: GapExpandDirection::Up,
         });
       }
@@ -12847,6 +12848,29 @@ pub mod tests {
       assert!(markers.contains(&ScrollbarMarker {
         range: 0..1,
         kind: ScrollbarMarkerKind::Conflict,
+      }));
+    });
+  }
+
+  #[gpui::test]
+  fn test_gap_controls_use_projection_block_map(cx: &mut TestAppContext) {
+    let mut ctx = EditorTestContext::with_lines(cx.clone(), 5);
+
+    ctx.editor.update(&mut ctx.cx, |editor, _| {
+      let projection = projection_with_hidden_start_and_end();
+      editor.set_projection(Some(projection.as_ref().clone()));
+
+      let controls = editor.gap_controls();
+
+      assert!(controls.iter().any(|control| {
+        control.gap_id == GapId { start: 0, end: 1 }
+          && control.display_line == 1
+          && control.direction == GapExpandDirection::Up
+      }));
+      assert!(controls.iter().any(|control| {
+        control.gap_id == GapId { start: 4, end: 5 }
+          && control.display_line == 3
+          && control.direction == GapExpandDirection::Down
       }));
     });
   }
