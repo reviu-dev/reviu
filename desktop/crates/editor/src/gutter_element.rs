@@ -428,17 +428,16 @@ impl Element for GutterElement {
       for display_idx in viewport.clone() {
         let display_line = editor.display_line(display_idx, doc_line_count);
         let block = editor.block_map.block_at_display_line(display_idx);
-        if let Some(id) = block.and_then(ProjectionBlock::gap_id) {
-          let is_start_gap = id.start == 0;
-          let is_end_gap = id.end == doc_line_count;
-          if !is_start_gap && !is_end_gap {
-            let y =
-              line_y(bounds.top(), line_height, display_idx, scroll_offset) + line_height * 0.5;
-            gap_separators.push(fill(
-              Bounds::new(point(bounds.left(), y), size(bounds.size.width, px(1.0))),
-              cx.theme().muted_foreground.opacity(0.35),
-            ));
-          }
+        if editor
+          .block_map
+          .interior_gap_id_for_display_line(display_idx)
+          .is_some()
+        {
+          let y = line_y(bounds.top(), line_height, display_idx, scroll_offset) + line_height * 0.5;
+          gap_separators.push(fill(
+            Bounds::new(point(bounds.left(), y), size(bounds.size.width, px(1.0))),
+            cx.theme().muted_foreground.opacity(0.35),
+          ));
         }
 
         let line_number = match (self.view, &display_line) {

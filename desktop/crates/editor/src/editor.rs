@@ -7605,7 +7605,7 @@ impl Editor {
     };
 
     let mut controls = Vec::new();
-    for block in self.block_map.gap_blocks() {
+    for block in self.block_map.interior_gap_blocks() {
       let Some(id) = block.gap_id() else {
         continue;
       };
@@ -7629,7 +7629,7 @@ impl Editor {
     }
 
     if !projection.lines.is_empty() {
-      if let Some(gap_id) = projection.start_gap {
+      if let Some(gap_id) = self.block_map.start_gap_id() {
         controls.push(GapControl {
           display_line: 0,
           gap_id,
@@ -7637,7 +7637,7 @@ impl Editor {
         });
       }
 
-      if let Some(gap_id) = projection.end_gap {
+      if let Some(gap_id) = self.block_map.end_gap_id() {
         controls.push(GapControl {
           display_line: projection.lines.len().saturating_sub(1),
           gap_id,

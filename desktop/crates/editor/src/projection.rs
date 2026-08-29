@@ -168,6 +168,29 @@ impl ProjectionBlockMap {
     self.block_at_display_line(display_line)?.gap_id()
   }
 
+  pub fn interior_gap_id_for_display_line(&self, display_line: usize) -> Option<GapId> {
+    let block = self.block_at_display_line(display_line)?;
+    if block.is_edge_gap(self.display_to_block.len()) {
+      None
+    } else {
+      block.gap_id()
+    }
+  }
+
+  pub fn start_gap_id(&self) -> Option<GapId> {
+    self
+      .gap_blocks()
+      .find(|block| block.is_start_gap())
+      .and_then(ProjectionBlock::gap_id)
+  }
+
+  pub fn end_gap_id(&self) -> Option<GapId> {
+    self
+      .gap_blocks()
+      .find(|block| block.is_end_gap(self.display_to_block.len()))
+      .and_then(ProjectionBlock::gap_id)
+  }
+
   pub fn review_comment_side_for_display_line(
     &self,
     display_line: usize,
@@ -196,10 +219,14 @@ impl ProjectionBlockMap {
   }
 
   pub fn gap_blocks(&self) -> impl Iterator<Item = &ProjectionBlock> {
+    self.blocks.iter().filter(|block| block.is_gap())
+  }
+
+  pub fn interior_gap_blocks(&self) -> impl Iterator<Item = &ProjectionBlock> {
+    let display_line_count = self.display_to_block.len();
     self
-      .blocks
-      .iter()
-      .filter(|block| matches!(block.kind, ProjectionBlockKind::Gap { .. }))
+      .gap_blocks()
+      .filter(move |block| !block.is_edge_gap(display_line_count))
   }
 
   pub fn review_comment_blocks(
@@ -227,8 +254,19 @@ impl ProjectionBlockMap {
     })
   }
 
-  fn from_lines(lines: &[DisplayLine]) -> Self {
+  fn from_lines(lines: &[DisplayLine], start_gap: Option<GapId>, end_gap: Option<GapId>) -> Self {
     let mut blocks = Vec::new();
+    if let Some(id) = start_gap {
+      blocks.push(ProjectionBlock {
+        display_range: 0..0,
+        height_lines: 0,
+        anchor_doc_line: Some(id.start),
+        group_id: None,
+        background: None,
+        secondary: false,
+        kind: ProjectionBlockKind::Gap { id },
+      });
+    }
     let mut display_idx = 0;
 
     while display_idx < lines.len() {
@@ -287,6 +325,19 @@ impl ProjectionBlockMap {
       }
     }
 
+    if let Some(id) = end_gap {
+      let display_line = lines.len();
+      blocks.push(ProjectionBlock {
+        display_range: display_line..display_line,
+        height_lines: 0,
+        anchor_doc_line: Some(id.start),
+        group_id: None,
+        background: None,
+        secondary: false,
+        kind: ProjectionBlockKind::Gap { id },
+      });
+    }
+
     let mut display_to_block = vec![None; lines.len()];
     for (block_idx, block) in blocks.iter().enumerate() {
       for display_line in block.display_range.clone() {
@@ -323,6 +374,18 @@ pub enum ProjectionBlockKind {
 impl ProjectionBlock {
   pub fn height_lines(&self) -> usize {
     self.height_lines
+  }
+
+  pub fn is_start_gap(&self) -> bool {
+    self.is_gap() && self.display_range.is_empty() && self.display_range.start == 0
+  }
+
+  pub fn is_end_gap(&self, display_line_count: usize) -> bool {
+    self.is_gap() && self.display_range.is_empty() && self.display_range.start == display_line_count
+  }
+
+  pub fn is_edge_gap(&self, display_line_count: usize) -> bool {
+    self.is_start_gap() || self.is_end_gap(display_line_count)
   }
 
   pub fn gap_id(&self) -> Option<GapId> {
@@ -850,7 +913,7 @@ impl Projection {
     visible_doc_lines.sort_unstable();
     visible_doc_lines.dedup();
 
-    let block_map = ProjectionBlockMap::from_lines(&lines);
+    let block_map = ProjectionBlockMap::from_lines(&lines, start_gap, end_gap);
 
     Projection {
       lines,
@@ -2051,12 +2114,12 @@ mod tests {
     );
 
     assert!(
-      projection.start_gap.is_some(),
-      "leading context above the first conflict should fold into start_gap"
+      projection.block_map().start_gap_id().is_some(),
+      "leading context above the first conflict should fold into a start block"
     );
     assert!(
-      projection.end_gap.is_some(),
-      "trailing context after the last conflict should fold into end_gap"
+      projection.block_map().end_gap_id().is_some(),
+      "trailing context after the last conflict should fold into an end block"
     );
   }
 
@@ -2144,11 +2207,7 @@ mod tests {
   fn block_map_indexes_folded_gaps() {
     let projection = Projection::from_conflict_regions(200, &[80..90, 150..160], &HashMap::new());
     let block_map = projection.block_map();
-    let gap_block = block_map
-      .blocks()
-      .iter()
-      .find(|block| matches!(block.kind, ProjectionBlockKind::Gap { .. }))
-      .expect("gap block");
+    let gap_block = block_map.interior_gap_blocks().next().expect("gap block");
 
     assert_eq!(gap_block.display_range.len(), 1);
     assert_eq!(gap_block.height_lines(), 1);
@@ -2161,7 +2220,10 @@ mod tests {
       block_map.block_at_display_line(gap_block.display_range.end),
       None
     );
-    assert_eq!(block_map.gap_blocks().count(), 1);
+    assert_eq!(block_map.interior_gap_blocks().count(), 1);
+    assert_eq!(block_map.gap_blocks().count(), 3);
+    assert!(block_map.start_gap_id().is_some());
+    assert!(block_map.end_gap_id().is_some());
     assert!(block_map.is_gap_display_line(gap_block.display_range.start));
     assert_eq!(
       block_map.gap_id_for_display_line(gap_block.display_range.start),
