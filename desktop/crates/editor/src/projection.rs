@@ -140,8 +140,6 @@ pub struct Projection {
   pub display_to_doc: Vec<Option<usize>>,
   pub doc_to_display: Vec<Option<usize>>,
   pub visible_doc_lines: Vec<usize>,
-  pub start_gap: Option<GapId>,
-  pub end_gap: Option<GapId>,
   pub groups: HashMap<Arc<str>, ChangeGroup>,
 }
 
@@ -921,8 +919,6 @@ impl Projection {
       display_to_doc,
       doc_to_display,
       visible_doc_lines,
-      start_gap,
-      end_gap,
       groups,
     }
   }
@@ -937,14 +933,10 @@ impl Projection {
     }
 
     let doc_line_count = self.doc_to_display.len();
+    let start_gap = self.block_map.start_gap_id();
+    let end_gap = self.block_map.end_gap_id();
     let lines = insert_review_comments(self.lines, comments, layout);
-    Projection::from_lines(
-      doc_line_count,
-      lines,
-      self.groups,
-      self.start_gap,
-      self.end_gap,
-    )
+    Projection::from_lines(doc_line_count, lines, self.groups, start_gap, end_gap)
   }
 }
 
@@ -2121,6 +2113,28 @@ mod tests {
       projection.block_map().end_gap_id().is_some(),
       "trailing context after the last conflict should fold into an end block"
     );
+  }
+
+  #[test]
+  fn review_comments_preserve_edge_gap_blocks() {
+    let doc_line_count = 200;
+    let conflicts = vec![80..90, 150..160];
+    let projection = Projection::from_conflict_regions(doc_line_count, &conflicts, &HashMap::new());
+    let start_gap = projection.block_map().start_gap_id();
+    let end_gap = projection.block_map().end_gap_id();
+    let mut comment = review_comment(44, "body");
+    comment.line = 80;
+    let body_heights = HashMap::from([(comment.id, 40.0f32)]);
+    let collapsed = HashSet::new();
+    let composer_only = HashSet::new();
+
+    let projection = projection.with_review_comments(
+      &[comment],
+      &layout_input(&collapsed, &body_heights, &composer_only),
+    );
+
+    assert_eq!(projection.block_map().start_gap_id(), start_gap);
+    assert_eq!(projection.block_map().end_gap_id(), end_gap);
   }
 
   #[test]

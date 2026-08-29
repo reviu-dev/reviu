@@ -11261,8 +11261,6 @@ pub mod tests {
       display_to_doc: vec![Some(0), None, Some(1)],
       doc_to_display: vec![Some(0), Some(2)],
       visible_doc_lines: vec![0, 1],
-      start_gap: None,
-      end_gap: None,
       groups: HashMap::new(),
     })
   }
@@ -11301,8 +11299,6 @@ pub mod tests {
         display_to_doc: vec![None, Some(0), Some(1)],
         doc_to_display: vec![Some(1), Some(2)],
         visible_doc_lines: vec![0, 1],
-        start_gap: None,
-        end_gap: None,
         groups: HashMap::new(),
       }),
       group_id,
@@ -11351,8 +11347,6 @@ pub mod tests {
         display_to_doc: vec![Some(0), None, None, Some(1)],
         doc_to_display: vec![Some(0), Some(3)],
         visible_doc_lines: vec![0, 1],
-        start_gap: None,
-        end_gap: None,
         groups: HashMap::new(),
       }),
       group_id,
@@ -12942,8 +12936,6 @@ pub mod tests {
         display_to_doc: vec![Some(0)],
         doc_to_display: vec![Some(0)],
         visible_doc_lines: vec![0],
-        start_gap: None,
-        end_gap: None,
         groups: HashMap::new(),
       };
 

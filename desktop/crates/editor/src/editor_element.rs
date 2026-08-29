@@ -2771,8 +2771,6 @@ mod tests {
         display_to_doc: vec![Some(0)],
         doc_to_display: vec![Some(0)],
         visible_doc_lines: vec![0],
-        start_gap: None,
-        end_gap: None,
         groups: HashMap::new(),
       };
       let cache = build_word_diff_cache(&projection, document);
