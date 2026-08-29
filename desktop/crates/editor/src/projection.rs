@@ -285,6 +285,23 @@ pub enum ProjectionBlockKind {
   ReviewComment { id: u64, side: ReviewCommentSide },
 }
 
+impl ProjectionBlock {
+  pub fn is_gap(&self) -> bool {
+    matches!(self.kind, ProjectionBlockKind::Gap { .. })
+  }
+
+  pub fn is_review_comment(&self) -> bool {
+    matches!(self.kind, ProjectionBlockKind::ReviewComment { .. })
+  }
+
+  pub fn review_comment_side(&self) -> Option<ReviewCommentSide> {
+    match self.kind {
+      ProjectionBlockKind::ReviewComment { side, .. } => Some(side),
+      ProjectionBlockKind::Gap { .. } => None,
+    }
+  }
+}
+
 #[derive(Clone, Debug)]
 pub struct ChangeGroup {
   pub id: Arc<str>,

@@ -22,8 +22,8 @@ use crate::{
     REVIEW_COMMENT_COMPOSER_LINE_HEIGHT_REMS, REVIEW_COMMENT_UI_FONT_FAMILY, ScrollAxis,
   },
   projection::{
-    ChangeKind, DisplayLine, HunkState, NO_NEWLINE_MARKER_TEXT, Projection, ProjectionBlockKind,
-    ProjectionBlockMap, ReviewCommentBackground, ReviewCommentSide,
+    ChangeKind, DisplayLine, HunkState, NO_NEWLINE_MARKER_TEXT, Projection, ProjectionBlock,
+    ProjectionBlockKind, ProjectionBlockMap, ReviewCommentBackground, ReviewCommentSide,
   },
   settings::indent_rainbow_enabled,
   text_offsets::{byte_offset_to_char_offset, char_offset_to_byte_offset},
@@ -311,7 +311,7 @@ fn position_hits_review_comment_line(position_map: &PositionMap, position: Point
   position_map
     .block_map
     .block_at_display_line(display_line)
-    .is_some_and(|block| matches!(block.kind, ProjectionBlockKind::ReviewComment { .. }))
+    .is_some_and(ProjectionBlock::is_review_comment)
 }
 
 pub(crate) fn highlights_to_text_runs(
@@ -839,6 +839,27 @@ enum LineVisibility {
   Blank,
 }
 
+fn group_id_for_display_line<'a>(
+  display_idx: usize,
+  projection: Option<&'a Projection>,
+  block_map: &'a ProjectionBlockMap,
+) -> Option<&'a Arc<str>> {
+  block_map
+    .block_at_display_line(display_idx)
+    .and_then(|block| block.group_id.as_ref())
+    .or_else(|| {
+      projection
+        .and_then(|projection| projection.lines.get(display_idx))
+        .and_then(|line| match line {
+          DisplayLine::Doc { group_id, .. } => group_id.as_ref(),
+          DisplayLine::Modified { group_id, .. } => group_id.as_ref(),
+          DisplayLine::Removed { group_id, .. } => group_id.as_ref(),
+          DisplayLine::NoNewline { group_id, .. } => group_id.as_ref(),
+          _ => None,
+        })
+    })
+}
+
 fn display_line_text_for_view(
   display_line: &DisplayLine,
   diff_view: DiffElementView,
@@ -934,7 +955,12 @@ impl EditorElement {
     self.role == EditorElementRole::Primary
   }
 
-  fn line_visibility(&self, display_line: &DisplayLine) -> LineVisibility {
+  fn line_visibility(
+    &self,
+    display_line: &DisplayLine,
+    block: Option<&ProjectionBlock>,
+  ) -> LineVisibility {
+    let review_comment_side = block.and_then(ProjectionBlock::review_comment_side);
     match self.diff_view {
       DiffElementView::Inline => LineVisibility::Text,
       DiffElementView::SplitLeft => match display_line {
@@ -942,18 +968,12 @@ impl EditorElement {
           change: Some(ChangeKind::Added),
           ..
         } => LineVisibility::Blank,
-        DisplayLine::ReviewComment {
-          side: ReviewCommentSide::Right,
-          ..
-        } => LineVisibility::Blank,
+        _ if review_comment_side == Some(ReviewCommentSide::Right) => LineVisibility::Blank,
         _ => LineVisibility::Text,
       },
       DiffElementView::SplitRight => match display_line {
         DisplayLine::Removed { .. } => LineVisibility::Blank,
-        DisplayLine::ReviewComment {
-          side: ReviewCommentSide::Left,
-          ..
-        } => LineVisibility::Blank,
+        _ if review_comment_side == Some(ReviewCommentSide::Left) => LineVisibility::Blank,
         _ => LineVisibility::Text,
       },
     }
@@ -1302,7 +1322,8 @@ impl Element for EditorElement {
       let rainbow = theme.indent_rainbow_colors();
       let border_width = px(INDENT_GUIDE_BORDER_WIDTH);
       for (display_idx, display_line) in &viewport_lines {
-        if self.line_visibility(display_line) != LineVisibility::Text {
+        let block = block_map.block_at_display_line(*display_idx);
+        if self.line_visibility(display_line, block) != LineVisibility::Text {
           continue;
         }
         let Some(text) = line_texts.get(display_idx) else {
@@ -1365,6 +1386,28 @@ impl Element for EditorElement {
     let added_staged_bg = theme.diff_added_staged_background();
     let removed_bg = theme.diff_removed_background();
     let removed_staged_bg = theme.diff_removed_staged_background();
+    let review_comment_background_for_block = |block: Option<&ProjectionBlock>| {
+      let block = block?;
+      match block.background? {
+        ReviewCommentBackground::Added if !matches!(self.diff_view, DiffElementView::SplitLeft) => {
+          Some(if block.secondary {
+            added_staged_bg
+          } else {
+            added_bg
+          })
+        }
+        ReviewCommentBackground::Removed
+          if !matches!(self.diff_view, DiffElementView::SplitRight) =>
+        {
+          Some(if block.secondary {
+            removed_staged_bg
+          } else {
+            removed_bg
+          })
+        }
+        _ => None,
+      }
+    };
     let conflict_line_kinds = self.editor.read(cx).conflict_line_kinds(cx);
     let active_hunk_group_id = self.editor.read(cx).highlighted_hunk_group_id(cx);
     let active_hunk_focus_color = theme.hunk_focused_border();
@@ -1431,14 +1474,16 @@ impl Element for EditorElement {
     let mut blank_line_set = HashSet::new();
     if !matches!(self.diff_view, DiffElementView::Inline) {
       for (display_idx, display_line) in &viewport_lines {
-        if self.line_visibility(display_line) == LineVisibility::Blank {
+        let block = block_map.block_at_display_line(*display_idx);
+        if self.line_visibility(display_line, block) == LineVisibility::Blank {
           blank_line_set.insert(*display_idx);
         }
       }
     }
 
     for (display_idx, display_line) in &viewport_lines {
-      if let DisplayLine::Gap { id, .. } = display_line {
+      let block = block_map.block_at_display_line(*display_idx);
+      if let Some(ProjectionBlockKind::Gap { id }) = block.map(|block| block.kind) {
         let is_start_gap = id.start == 0;
         let is_end_gap = id.end == doc_line_count;
         if !is_start_gap && !is_end_gap {
@@ -1458,11 +1503,13 @@ impl Element for EditorElement {
         &conflict_line_kinds,
       );
       let background = if let Some(conflict_kind) = conflict_kind {
-        if self.line_visibility(display_line) == LineVisibility::Blank {
+        if self.line_visibility(display_line, block) == LineVisibility::Blank {
           None
         } else {
           conflict_background(&theme, conflict_kind)
         }
+      } else if let Some(background) = review_comment_background_for_block(block) {
+        Some(background)
       } else {
         match display_line {
           DisplayLine::Doc {
@@ -1496,24 +1543,6 @@ impl Element for EditorElement {
             }),
             DiffElementView::Inline => None,
           },
-          DisplayLine::ReviewComment {
-            background: Some(ReviewCommentBackground::Added),
-            secondary,
-            ..
-          } if !matches!(self.diff_view, DiffElementView::SplitLeft) => Some(if *secondary {
-            added_staged_bg
-          } else {
-            added_bg
-          }),
-          DisplayLine::ReviewComment {
-            background: Some(ReviewCommentBackground::Removed),
-            secondary,
-            ..
-          } if !matches!(self.diff_view, DiffElementView::SplitRight) => Some(if *secondary {
-            removed_staged_bg
-          } else {
-            removed_bg
-          }),
           _ => None,
         }
       };
@@ -1607,14 +1636,7 @@ impl Element for EditorElement {
         }
       }
 
-      let group_id = match display_line {
-        DisplayLine::Doc { group_id, .. } => group_id.as_ref(),
-        DisplayLine::Modified { group_id, .. } => group_id.as_ref(),
-        DisplayLine::Removed { group_id, .. } => group_id.as_ref(),
-        DisplayLine::NoNewline { group_id, .. } => group_id.as_ref(),
-        DisplayLine::ReviewComment { group_id, .. } => group_id.as_ref(),
-        _ => None,
-      };
+      let group_id = group_id_for_display_line(*display_idx, projection.as_deref(), &block_map);
 
       if conflict_kind.is_none()
         && let (Some(projection), Some(group_id)) = (projection.as_ref(), group_id)
@@ -1631,26 +1653,9 @@ impl Element for EditorElement {
           };
           let prev_group = display_idx
             .checked_sub(1)
-            .and_then(|idx| projection.lines.get(idx))
-            .and_then(|line| match line {
-              DisplayLine::Doc { group_id, .. } => group_id.as_ref(),
-              DisplayLine::Modified { group_id, .. } => group_id.as_ref(),
-              DisplayLine::Removed { group_id, .. } => group_id.as_ref(),
-              DisplayLine::NoNewline { group_id, .. } => group_id.as_ref(),
-              DisplayLine::ReviewComment { group_id, .. } => group_id.as_ref(),
-              _ => None,
-            });
-          let next_group = projection
-            .lines
-            .get(display_idx + 1)
-            .and_then(|line| match line {
-              DisplayLine::Doc { group_id, .. } => group_id.as_ref(),
-              DisplayLine::Modified { group_id, .. } => group_id.as_ref(),
-              DisplayLine::Removed { group_id, .. } => group_id.as_ref(),
-              DisplayLine::NoNewline { group_id, .. } => group_id.as_ref(),
-              DisplayLine::ReviewComment { group_id, .. } => group_id.as_ref(),
-              _ => None,
-            });
+            .and_then(|idx| group_id_for_display_line(idx, Some(projection.as_ref()), &block_map));
+          let next_group =
+            group_id_for_display_line(display_idx + 1, Some(projection.as_ref()), &block_map);
 
           let is_top = prev_group.map(|id| id.as_ref()) != Some(group_id.as_ref());
           let is_bottom = next_group.map(|id| id.as_ref()) != Some(group_id.as_ref());
@@ -2390,6 +2395,23 @@ mod tests {
     let position = point(px(8.0), px(24.0));
 
     assert!(!position_hits_review_comment_line(&position_map, position));
+  }
+
+  #[gpui::test]
+  fn test_line_visibility_uses_block_map_for_review_comments(cx: &mut TestAppContext) {
+    let element = EditorElement::split_left(test_editor(cx));
+    let projection = projection_with_review_comment_line();
+    let block_map = projection.block_map();
+    let display_line = &projection.lines[1];
+
+    assert_eq!(
+      element.line_visibility(display_line, block_map.block_at_display_line(1)),
+      LineVisibility::Blank
+    );
+    assert_eq!(
+      element.line_visibility(display_line, None),
+      LineVisibility::Text
+    );
   }
 
   #[gpui::test]
