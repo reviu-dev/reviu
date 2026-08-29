@@ -4361,9 +4361,15 @@ impl Editor {
     };
 
     let display_line_for_comment = |id: u64| {
-      projection.lines.iter().position(
-        |line| matches!(line, DisplayLine::ReviewComment { id: line_id, .. } if *line_id == id),
-      )
+      self.block_map.blocks().iter().find_map(|block| {
+        if let ProjectionBlockKind::ReviewComment { id: block_id, .. } = block.kind
+          && block_id == id
+        {
+          Some(block.display_range.start)
+        } else {
+          None
+        }
+      })
     };
 
     let Some(display_line) = display_line_for_comment(comment_id).or_else(|| {
@@ -4438,20 +4444,26 @@ impl Editor {
 
     let mut spans_by_comment: HashMap<u64, (usize, usize)> = HashMap::new();
 
-    for (idx, line) in projection.lines.iter().enumerate() {
-      let DisplayLine::ReviewComment { id, side, .. } = line else {
+    for block in self.block_map.blocks() {
+      let ProjectionBlockKind::ReviewComment { id, side } = block.kind else {
         continue;
       };
       if let Some(filter) = side_filter
-        && *side != filter
+        && side != filter
       {
         continue;
       }
-      let entry = spans_by_comment.entry(*id).or_insert((idx, 0));
-      if idx < entry.0 {
-        entry.0 = idx;
+      let count = block.display_range.len();
+      if count == 0 {
+        continue;
       }
-      entry.1 = entry.1.saturating_add(1);
+      let entry = spans_by_comment
+        .entry(id)
+        .or_insert((block.display_range.start, 0));
+      if block.display_range.start < entry.0 {
+        entry.0 = block.display_range.start;
+      }
+      entry.1 = entry.1.saturating_add(count);
     }
 
     if spans_by_comment.is_empty() {
@@ -12849,6 +12861,70 @@ pub mod tests {
         range: 0..1,
         kind: ScrollbarMarkerKind::Conflict,
       }));
+    });
+  }
+
+  #[gpui::test]
+  fn test_review_comment_layouts_use_projection_block_map(cx: &mut TestAppContext) {
+    let mut ctx = EditorTestContext::with_lines(cx.clone(), 10);
+
+    ctx.editor.update(&mut ctx.cx, |editor, cx| {
+      let mut comment = review_comment_fixture(1);
+      comment.line = 7;
+      let collapsed = HashSet::new();
+      let body_heights = HashMap::from([(comment.id, 40.0f32)]);
+      let composer_only = HashSet::new();
+      let projection = Projection::full(10).with_review_comments(
+        std::slice::from_ref(&comment),
+        &ReviewCommentLayoutInput {
+          collapsed: &collapsed,
+          editor_line_height_px: 20.0,
+          markdown_line_height_px: 20.0,
+          body_heights_px: &body_heights,
+          composer_only_ids: &composer_only,
+          local_notes: false,
+        },
+      );
+      editor.set_review_comments(vec![comment], cx);
+      editor.set_projection(Some(projection));
+
+      let layouts = editor.review_comment_layouts(None, px(20.0));
+
+      assert_eq!(layouts.len(), 1);
+      assert_eq!(layouts[0].id, 1);
+      assert_eq!(layouts[0].top, px(160.0));
+    });
+  }
+
+  #[gpui::test]
+  fn test_scroll_to_review_comment_uses_projection_block_map(cx: &mut TestAppContext) {
+    let mut ctx = EditorTestContext::with_lines(cx.clone(), 10);
+
+    ctx.editor.update(&mut ctx.cx, |editor, cx| {
+      editor.viewport_height = px(100.0);
+      editor.editor_line_height = px(20.0);
+      let mut comment = review_comment_fixture(1);
+      comment.line = 7;
+      let collapsed = HashSet::new();
+      let body_heights = HashMap::from([(comment.id, 40.0f32)]);
+      let composer_only = HashSet::new();
+      let projection = Projection::full(10).with_review_comments(
+        std::slice::from_ref(&comment),
+        &ReviewCommentLayoutInput {
+          collapsed: &collapsed,
+          editor_line_height_px: 20.0,
+          markdown_line_height_px: 20.0,
+          body_heights_px: &body_heights,
+          composer_only_ids: &composer_only,
+          local_notes: false,
+        },
+      );
+      editor.set_review_comments(vec![comment], cx);
+      editor.set_projection(Some(projection));
+      editor.scroll_offset_y = 5.0;
+
+      assert!(editor.scroll_to_review_comment(1, px(20.0), cx));
+      assert_eq!(editor.scroll_offset_y, 5.0);
     });
   }
 
