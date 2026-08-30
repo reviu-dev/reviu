@@ -370,26 +370,6 @@ fn compute_diff(repo: &Repository, rel_path: &Path, kind: DiffKind) -> Result<Fi
   })
 }
 
-/// Split text into lines preserving the trailing `\n` on each line (matching imara-diff's tokenizer).
-/// The last line may or may not have a trailing `\n`.
-fn split_lines_borrowed(text: &str) -> Vec<&str> {
-  let mut lines = Vec::new();
-  let mut rest = text;
-  while !rest.is_empty() {
-    match rest.find('\n') {
-      Some(pos) => {
-        lines.push(&rest[..=pos]);
-        rest = &rest[pos + 1..];
-      }
-      None => {
-        lines.push(rest);
-        break;
-      }
-    }
-  }
-  lines
-}
-
 /// Strip leading whitespace from a line while preserving the trailing newline.
 fn trim_leading_whitespace(line: &str) -> String {
   if line.ends_with('\n') {
@@ -455,8 +435,8 @@ pub fn compute_buffer_diff(
   let trailing_change = trailing_newline_change(base_text, buffer_text);
 
   // When ignoring whitespace, we diff on trimmed lines but keep original lines for content.
-  let base_original: Vec<&str> = split_lines_borrowed(base_text);
-  let buffer_original: Vec<&str> = split_lines_borrowed(buffer_text);
+  let base_original = diff_core::split_lines_preserving_newline(base_text);
+  let buffer_original = diff_core::split_lines_preserving_newline(buffer_text);
 
   let base_trimmed: String;
   let buffer_trimmed: String;

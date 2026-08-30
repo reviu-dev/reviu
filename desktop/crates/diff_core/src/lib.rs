@@ -202,6 +202,29 @@ fn word_diff_ranges_impl(
   (merge_ranges(removed), merge_ranges(added))
 }
 
+fn strip_line_ending(line: &str) -> &str {
+  let without_lf = line.strip_suffix('\n').unwrap_or(line);
+  without_lf.strip_suffix('\r').unwrap_or(without_lf)
+}
+
+pub fn split_lines_preserving_newline(text: &str) -> Vec<&str> {
+  let mut lines = Vec::new();
+  let mut rest = text;
+  while !rest.is_empty() {
+    match rest.find('\n') {
+      Some(pos) => {
+        lines.push(&rest[..=pos]);
+        rest = &rest[pos + 1..];
+      }
+      None => {
+        lines.push(rest);
+        break;
+      }
+    }
+  }
+  lines
+}
+
 pub fn line_hunks(old: &str, new: &str) -> Vec<LineHunk> {
   use imara_diff::{Algorithm, Diff, InternedInput};
 
@@ -306,8 +329,8 @@ pub fn line_hunk_groups_with_context(
     return Vec::new();
   }
 
-  let old_line_count = old.lines().count();
-  let new_line_count = new.lines().count();
+  let old_line_count = split_lines_preserving_newline(old).len();
+  let new_line_count = split_lines_preserving_newline(new).len();
   let mut groups: Vec<LineHunkGroup> = Vec::new();
 
   for hunk in hunks {
@@ -332,8 +355,8 @@ pub fn line_hunk_groups_with_context(
 }
 
 pub fn diff_rows_with_context(old: &str, new: &str, context_lines: usize) -> Vec<DiffRow> {
-  let old_lines: Vec<&str> = old.lines().collect();
-  let new_lines: Vec<&str> = new.lines().collect();
+  let old_lines = split_lines_preserving_newline(old);
+  let new_lines = split_lines_preserving_newline(new);
   let mut rows = Vec::new();
   for group in line_hunk_groups_with_context(old, new, context_lines) {
     if !rows.is_empty() {
@@ -365,11 +388,7 @@ fn push_context_rows(
       kind: DiffRowKind::Context,
       old_line: Some(old_line as u32),
       new_line: Some(new_line as u32),
-      text: old_lines
-        .get(*old_cursor)
-        .copied()
-        .unwrap_or_default()
-        .to_string(),
+      text: strip_line_ending(old_lines.get(*old_cursor).copied().unwrap_or_default()).to_string(),
       word_diff_ranges: Vec::new(),
     });
     *old_cursor += 1;
@@ -399,12 +418,12 @@ fn push_group_rows(
     let removed: Vec<&str> = hunk
       .old
       .clone()
-      .filter_map(|idx| old_lines.get(idx as usize).copied())
+      .filter_map(|idx| old_lines.get(idx as usize).copied().map(strip_line_ending))
       .collect();
     let added: Vec<&str> = hunk
       .new
       .clone()
-      .filter_map(|idx| new_lines.get(idx as usize).copied())
+      .filter_map(|idx| new_lines.get(idx as usize).copied().map(strip_line_ending))
       .collect();
     let paired = removed.len().min(added.len());
     let word_pairs: Vec<_> = (0..paired)
@@ -454,6 +473,14 @@ fn push_group_rows(
 #[cfg(test)]
 mod tests {
   use super::*;
+
+  #[test]
+  fn split_lines_preserving_newline_matches_diff_line_tokens() {
+    assert_eq!(split_lines_preserving_newline(""), Vec::<&str>::new());
+    assert_eq!(split_lines_preserving_newline("a"), vec!["a"]);
+    assert_eq!(split_lines_preserving_newline("a\n"), vec!["a\n"]);
+    assert_eq!(split_lines_preserving_newline("a\n\n"), vec!["a\n", "\n"]);
+  }
 
   #[test]
   fn word_tokens_split_identifier_subwords() {
