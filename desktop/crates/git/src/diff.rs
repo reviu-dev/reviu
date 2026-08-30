@@ -176,7 +176,7 @@ pub fn apply_hunk(
 }
 
 pub fn apply_hunk_to_text(base_text: &str, hunk: &DiffHunk, reverse: bool) -> Result<String> {
-  let (base_lines, mut trailing_newline) = split_lines(base_text);
+  let base_lines = split_text_lines(base_text);
   let mut output = Vec::new();
 
   let base_start = if reverse {
@@ -209,67 +209,59 @@ pub fn apply_hunk_to_text(base_text: &str, hunk: &DiffHunk, reverse: bool) -> Re
       };
     }
 
-    if line.no_newline {
-      match kind {
-        DiffLineKind::Add => trailing_newline = false,
-        DiffLineKind::Remove => trailing_newline = true,
-        DiffLineKind::Context => {}
-      }
-    }
-
     match kind {
       DiffLineKind::Context => {
         let Some(existing) = base_lines.get(old_idx) else {
           bail!("context line out of range at {}", old_idx + 1);
         };
-        if existing.as_str() != line.content.as_ref() {
+        if existing.content.as_str() != line.content.as_ref() {
           bail!(
             "context mismatch at {}: expected {:?}, found {:?}",
             old_idx + 1,
             line.content,
-            existing
+            existing.content
           );
         }
         output.push(existing.clone());
         old_idx += 1;
       }
       DiffLineKind::Remove => {
-        // An empty Remove represents stripping the trailing newline, it doesn't
-        // correspond to an actual line in base_lines, just the trailing_newline flag.
         if line.content.is_empty() && old_idx >= base_lines.len() {
-          trailing_newline = false;
+          if let Some(last) = output.last_mut() {
+            last.has_newline = false;
+          }
         } else {
           let Some(existing) = base_lines.get(old_idx) else {
             bail!("remove line out of range at {}", old_idx + 1);
           };
-          if existing.as_str() != line.content.as_ref() {
+          if existing.content.as_str() != line.content.as_ref() {
             bail!(
               "remove mismatch at {}: expected {:?}, found {:?}",
               old_idx + 1,
               line.content,
-              existing
+              existing.content
             );
           }
           old_idx += 1;
         }
       }
       DiffLineKind::Add => {
-        // An empty Add represents adding a trailing newline.
         if line.content.is_empty() && old_idx >= base_lines.len() {
-          trailing_newline = true;
+          if let Some(last) = output.last_mut() {
+            last.has_newline = true;
+          }
         } else {
-          output.push(line.content.to_string());
+          output.push(TextLine {
+            content: line.content.to_string(),
+            has_newline: !line.no_newline,
+          });
         }
       }
     }
   }
 
   output.extend_from_slice(&base_lines[old_idx..]);
-  let mut result = output.join("\n");
-  if trailing_newline {
-    result.push('\n');
-  }
-  Ok(result)
+  Ok(join_text_lines(&output))
 }
 
 pub fn write_index_content(repo_file: &RepoFile, content: &str) -> Result<()> {
@@ -412,19 +404,45 @@ fn trim_leading_whitespace(line: &str) -> String {
   }
 }
 
-fn split_lines(text: &str) -> (Vec<String>, bool) {
-  if text.is_empty() {
-    return (Vec::new(), false);
+#[derive(Clone)]
+struct TextLine {
+  content: String,
+  has_newline: bool,
+}
+
+fn split_text_lines(text: &str) -> Vec<TextLine> {
+  let mut lines = Vec::new();
+  let mut rest = text;
+  while !rest.is_empty() {
+    match rest.find('\n') {
+      Some(pos) => {
+        lines.push(TextLine {
+          content: rest[..pos].to_string(),
+          has_newline: true,
+        });
+        rest = &rest[pos + 1..];
+      }
+      None => {
+        lines.push(TextLine {
+          content: rest.to_string(),
+          has_newline: false,
+        });
+        break;
+      }
+    }
   }
-  let trailing_newline = text.ends_with('\n');
-  let mut lines: Vec<String> = text.split('\n').map(|s| s.to_string()).collect();
-  if trailing_newline {
-    lines.pop();
+  lines
+}
+
+fn join_text_lines(lines: &[TextLine]) -> String {
+  let mut text = String::new();
+  for line in lines {
+    text.push_str(&line.content);
+    if line.has_newline {
+      text.push('\n');
+    }
   }
-  if lines.len() == 1 && lines[0].is_empty() && !trailing_newline {
-    lines.clear();
-  }
-  (lines, trailing_newline)
+  text
 }
 
 pub fn compute_buffer_diff(
@@ -748,7 +766,8 @@ fn normalize_no_newline_hunk(hunk: &mut DiffHunk, trailing_change: Option<Traili
       let should_normalize = remove.kind == DiffLineKind::Remove
         && add.kind == DiffLineKind::Add
         && content_matches
-        && (no_newline_diff || (pair_is_last_change && trailing_change.is_some()));
+        && pair_is_last_change
+        && (no_newline_diff || trailing_change.is_some());
       if should_normalize {
         changed = true;
         normalized.push(DiffLine {
@@ -1445,6 +1464,40 @@ index 1111111..0000000
     .expect("diff");
 
     assert_eq!(diff.hunks.len(), 1);
+    let staged = apply_hunk_to_text(base, &diff.hunks[0], false).expect("apply forward");
+    assert_eq!(staged, buffer);
+    let unstaged = apply_hunk_to_text(&staged, &diff.hunks[0], true).expect("apply reverse");
+    assert_eq!(unstaged, base);
+  }
+
+  #[test]
+  fn apply_hunk_roundtrip_added_line_after_no_newline() {
+    let base = "line1\nline2";
+    let buffer = "line1\nline2\nline3";
+    let diff = compute_buffer_diff(
+      DiffKind::Uncommitted,
+      Some(base),
+      buffer,
+      Path::new("test.txt"),
+      false,
+    )
+    .expect("diff");
+
+    assert_eq!(diff.hunks.len(), 1);
+    let changed_lines = diff.hunks[0]
+      .lines
+      .iter()
+      .filter(|line| line.kind != DiffLineKind::Context)
+      .map(|line| (line.kind, line.content.as_ref(), line.no_newline))
+      .collect::<Vec<_>>();
+    assert_eq!(
+      changed_lines,
+      vec![
+        (DiffLineKind::Remove, "line2", true),
+        (DiffLineKind::Add, "line2", false),
+        (DiffLineKind::Add, "line3", true),
+      ]
+    );
     let staged = apply_hunk_to_text(base, &diff.hunks[0], false).expect("apply forward");
     assert_eq!(staged, buffer);
     let unstaged = apply_hunk_to_text(&staged, &diff.hunks[0], true).expect("apply reverse");
