@@ -1,7 +1,7 @@
 use std::{path::Path, process::Command};
 
 use anyhow::{Context, Result, bail};
-use git2::{BranchType, PushOptions, Repository, RepositoryState, ResetType, Signature};
+use git2::{BranchType, Oid, PushOptions, Repository, RepositoryState, ResetType, Signature};
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct HeadCommitStatus {
@@ -159,14 +159,40 @@ pub fn push(repo_root: &Path, force: bool) -> Result<()> {
   let Some((info, should_set_upstream)) = push_target_info(&repo)? else {
     bail!("no upstream configured and no publish remote available");
   };
+  let expected_remote_oid = if force && !should_set_upstream {
+    Some(expected_remote_oid_for_lease(&repo, &info)?)
+  } else {
+    None
+  };
 
   {
     let mut remote = repo.find_remote(&info.remote)?;
     let mut options = PushOptions::new();
-    options.remote_callbacks(crate::remote_auth::remote_callbacks(&repo)?);
+    let mut callbacks = crate::remote_auth::remote_callbacks(&repo)?;
 
     let local_ref = format!("refs/heads/{}", info.local_branch);
     let remote_ref = format!("refs/heads/{}", info.remote_branch);
+    if let Some(expected_remote_oid) = expected_remote_oid {
+      let remote_ref = remote_ref.clone();
+      callbacks.push_negotiation(move |updates| {
+        let Some(update) = updates
+          .iter()
+          .find(|update| update.dst_refname().ok() == Some(remote_ref.as_str()))
+        else {
+          return Err(git2::Error::from_str(
+            "force-with-lease could not verify the remote branch",
+          ));
+        };
+        if update.src() != expected_remote_oid {
+          return Err(git2::Error::from_str(
+            "remote branch changed since the last fetch; fetch before force pushing",
+          ));
+        }
+        Ok(())
+      });
+    }
+    options.remote_callbacks(callbacks);
+
     let refspec = if force {
       format!("+{}:{}", local_ref, remote_ref)
     } else {
@@ -182,6 +208,22 @@ pub fn push(repo_root: &Path, force: bool) -> Result<()> {
     local_branch.set_upstream(Some(&upstream_ref))?;
   }
   Ok(())
+}
+
+fn expected_remote_oid_for_lease(repo: &Repository, info: &UpstreamInfo) -> Result<Oid> {
+  let local_branch = repo.find_branch(&info.local_branch, BranchType::Local)?;
+  let upstream = local_branch.upstream().with_context(|| {
+    format!(
+      "find upstream branch {}/{}",
+      info.remote, info.remote_branch
+    )
+  })?;
+  upstream.get().target().with_context(|| {
+    format!(
+      "read upstream branch {}/{}",
+      info.remote, info.remote_branch
+    )
+  })
 }
 
 struct UpstreamInfo {
@@ -275,6 +317,7 @@ fn default_publish_remote(repo: &Repository) -> Result<Option<String>> {
 #[cfg(test)]
 mod tests {
   use super::*;
+  use crate::branch::fetch;
   use crate::test_support::{TempBareRepo, TempDir, TempRepo, commit_text_file};
   use git2::{Cred, RemoteCallbacks};
 
@@ -603,10 +646,9 @@ mod tests {
   }
 
   #[test]
-  fn push_force_overwrites_remote_after_non_fast_forward_rejection() {
-    let source = TempRepo::init("commit-push-force-source");
-    let remote = TempBareRepo::init("commit-push-force-remote");
-    let peer_dir = TempDir::new("commit-push-force-peer");
+  fn force_push_rewrites_remote_when_the_lease_still_matches() {
+    let source = TempRepo::init("commit-push-lease-success-source");
+    let remote = TempBareRepo::init("commit-push-lease-success-remote");
     let rel_path = Path::new("README.md");
 
     commit_text_file(&source.path, rel_path, "v1\n", "initial");
@@ -624,6 +666,46 @@ mod tests {
       &format!("origin/{local_branch}"),
     );
     set_remote_head(&remote.path, &local_branch);
+    fetch(&source.path).expect("fetch initial lease");
+
+    commit_text_file(&source.path, rel_path, "v2-original\n", "original change");
+    push(&source.path, false).expect("push original commit");
+    fetch(&source.path).expect("fetch lease for original commit");
+
+    undo_last_commit(&source.path).expect("undo original commit");
+    commit_text_file(&source.path, rel_path, "v2-rewritten\n", "rewritten change");
+    let rewritten_head = head_oid(&source.path);
+
+    push(&source.path, true).expect("force push with matching lease");
+    assert_eq!(
+      remote_branch_oid(&remote.path, &local_branch),
+      rewritten_head
+    );
+  }
+
+  #[test]
+  fn force_push_refuses_to_overwrite_remote_when_the_lease_is_stale() {
+    let source = TempRepo::init("commit-push-lease-stale-source");
+    let remote = TempBareRepo::init("commit-push-lease-stale-remote");
+    let peer_dir = TempDir::new("commit-push-lease-stale-peer");
+    let rel_path = Path::new("README.md");
+
+    commit_text_file(&source.path, rel_path, "v1\n", "initial");
+
+    let source_repo = Repository::open(&source.path).expect("open source");
+    source_repo
+      .remote("origin", remote.path.to_str().expect("remote path utf8"))
+      .expect("add origin");
+
+    let local_branch = branch_name(&source.path);
+    push_branch_to_remote(&source.path, &local_branch, "origin");
+    set_upstream(
+      &source.path,
+      &local_branch,
+      &format!("origin/{local_branch}"),
+    );
+    set_remote_head(&remote.path, &local_branch);
+    fetch(&source.path).expect("fetch initial lease");
 
     let _peer_repo = Repository::clone(
       remote.path.to_str().expect("remote path utf8"),
@@ -635,6 +717,7 @@ mod tests {
     let source_head = head_oid(&source.path);
 
     commit_text_file(&peer_dir.path, rel_path, "v2-peer\n", "peer change");
+    let peer_head = head_oid(&peer_dir.path);
     push_branch_to_remote(&peer_dir.path, &local_branch, "origin");
 
     let err = push(&source.path, false).err();
@@ -643,7 +726,17 @@ mod tests {
       "non-fast-forward push should fail without force"
     );
 
-    push(&source.path, true).expect("force push");
+    let err = push(&source.path, true).expect_err("stale lease should refuse the force push");
+    assert!(
+      err
+        .to_string()
+        .contains("remote branch changed since the last fetch"),
+      "unexpected error: {err}"
+    );
+    assert_eq!(remote_branch_oid(&remote.path, &local_branch), peer_head);
+
+    fetch(&source.path).expect("refresh stale lease");
+    push(&source.path, true).expect("force push after refreshing the lease");
     assert_eq!(remote_branch_oid(&remote.path, &local_branch), source_head);
   }
 
