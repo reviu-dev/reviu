@@ -56,6 +56,10 @@ pub(crate) fn populate_syntax_spans(view: &mut ToolCallView) {
       continue;
     };
     for line in &mut d.lines {
+      if line.kind == DiffLineKind::Gap {
+        line.syntax_spans.clear();
+        continue;
+      }
       let mut h = SyntaxHighlighter::new(cfg);
       line.syntax_spans = h.highlight_text(&line.text).unwrap_or_default();
     }

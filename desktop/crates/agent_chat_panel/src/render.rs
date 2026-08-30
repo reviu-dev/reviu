@@ -986,6 +986,7 @@ pub(crate) fn render_tool_call(
           let diff_gutter = |line: &crate::diff::DiffLine| {
             let number = match line.kind {
               DiffLineKind::Context | DiffLineKind::Added => line.new_line.or(line.old_line),
+              DiffLineKind::Gap => None,
               DiffLineKind::Removed => line.old_line,
             };
             SharedString::from(format!(
@@ -999,6 +1000,7 @@ pub(crate) fn render_tool_call(
           for line in d.lines.iter().take(visible) {
             let (bg, fg, hl_bg) = match line.kind {
               DiffLineKind::Context => (theme.background, theme.foreground, theme.background),
+              DiffLineKind::Gap => (theme.background, theme.muted_foreground, theme.background),
               DiffLineKind::Added => (
                 ui_theme.diff_added_background(),
                 theme.foreground,

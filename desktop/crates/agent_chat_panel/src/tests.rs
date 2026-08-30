@@ -2433,9 +2433,9 @@ async fn the_auto_approve_flag_survives_a_conversation_reload(cx: &mut gpui::Tes
 }
 
 #[test]
-fn persisted_tools_backfill_line_numbers_and_highlights_on_load() {
+fn persisted_tools_restore_highlights_on_load() {
   let dir = temp_dir("agent-tool-reload");
-  let conv_id = "legacy-lines";
+  let conv_id = "tool-highlights";
   let path = dir.join(format!("{conv_id}.json"));
   let conversation = PersistedConversation {
     version: crate::persistence::CONVERSATION_FORMAT_VERSION,
@@ -2443,7 +2443,7 @@ fn persisted_tools_backfill_line_numbers_and_highlights_on_load() {
       id: conv_id.to_string(),
       started_at_secs: 0,
       updated_at_secs: 0,
-      title: "legacy".to_string(),
+      title: "highlight reload".to_string(),
       message_count: 1,
       agent_id: default_agent_id(),
       session_id: None,
@@ -2463,7 +2463,7 @@ fn persisted_tools_backfill_line_numbers_and_highlights_on_load() {
         lines: vec![
           crate::diff::DiffLine {
             kind: DiffLineKind::Removed,
-            old_line: None,
+            old_line: Some(12),
             new_line: None,
             text: "fn old() {}".to_string(),
             spans: Vec::new(),
@@ -2472,7 +2472,7 @@ fn persisted_tools_backfill_line_numbers_and_highlights_on_load() {
           crate::diff::DiffLine {
             kind: DiffLineKind::Added,
             old_line: None,
-            new_line: None,
+            new_line: Some(12),
             text: "fn new() {}".to_string(),
             spans: Vec::new(),
             syntax_spans: Vec::new(),
@@ -2503,10 +2503,6 @@ fn persisted_tools_backfill_line_numbers_and_highlights_on_load() {
   let ChatItem::Tool(tool) = &items[0] else {
     panic!("tool item");
   };
-  assert_eq!(tool.diffs[0].lines[0].old_line, Some(12));
-  assert_eq!(tool.diffs[0].lines[0].new_line, None);
-  assert_eq!(tool.diffs[0].lines[1].old_line, None);
-  assert_eq!(tool.diffs[0].lines[1].new_line, Some(12));
   assert!(
     !tool.diffs[0].lines[0].syntax_spans.is_empty(),
     "diff syntax is restored after serde skipped it"

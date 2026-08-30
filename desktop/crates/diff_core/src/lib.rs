@@ -8,6 +8,7 @@ pub const DEFAULT_CONTEXT_LINES: usize = 3;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum DiffRowKind {
   Context,
+  Gap,
   Added,
   Removed,
 }
@@ -312,6 +313,15 @@ pub fn diff_rows_with_context(old: &str, new: &str, context_lines: usize) -> Vec
 
   let mut rows = Vec::new();
   for group in groups {
+    if !rows.is_empty() {
+      rows.push(DiffRow {
+        kind: DiffRowKind::Gap,
+        old_line: None,
+        new_line: None,
+        text: "...".to_string(),
+        word_diff_ranges: Vec::new(),
+      });
+    }
     push_group_rows(&group, &old_lines, &new_lines, &mut rows);
   }
   rows
@@ -488,6 +498,13 @@ mod tests {
         .iter()
         .any(|row| row.kind == DiffRowKind::Context && row.text == "c")
     );
+  }
+
+  #[test]
+  fn separated_hunks_get_gap_rows() {
+    let rows = diff_rows_with_context("a\nb\nc\nd\ne\n", "A\nb\nc\nd\nE\n", 0);
+
+    assert!(rows.iter().any(|row| row.kind == DiffRowKind::Gap));
   }
 
   #[test]
