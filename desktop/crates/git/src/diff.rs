@@ -302,6 +302,7 @@ fn compute_diff(repo: &Repository, rel_path: &Path, kind: DiffKind) -> Result<Fi
     .patience(true)
     .indent_heuristic(true)
     .include_untracked(true)
+    .recurse_untracked_dirs(true)
     .show_untracked_content(true);
 
   let diff = match kind {
@@ -1014,6 +1015,7 @@ fn format_hunk_range(start: usize, lines: usize) -> String {
 #[cfg(test)]
 mod tests {
   use super::*;
+  use crate::test_support::TempRepo;
   use std::path::Path;
 
   fn diff_kinds(lines: &[DiffLine]) -> Vec<(DiffLineKind, String)> {
@@ -1021,6 +1023,38 @@ mod tests {
       .iter()
       .map(|line| (line.kind, line.content.to_string()))
       .collect()
+  }
+
+  #[test]
+  fn compute_file_diffs_marks_untracked_file_added_in_unborn_repo() {
+    let repo = TempRepo::init("diff-untracked-unborn");
+    let rel_path = Path::new("scripts/check-bundle.ts");
+    std::fs::create_dir_all(repo.path.join("scripts")).expect("create scripts dir");
+    std::fs::write(
+      repo.path.join(rel_path),
+      "import process from 'node:process'\nconst maxFileBytes = 30 * 1024 * 1024\n",
+    )
+    .expect("write untracked file");
+
+    let repo_file = RepoFile::new(&repo.path, repo.path.join(rel_path)).expect("repo file");
+    let diffs = compute_file_diffs(&repo_file).expect("diffs");
+
+    assert_eq!(diffs.uncommitted.hunks.len(), 1);
+    assert_eq!(
+      diff_kinds(&diffs.uncommitted.hunks[0].lines),
+      vec![
+        (
+          DiffLineKind::Add,
+          "import process from 'node:process'".to_string()
+        ),
+        (
+          DiffLineKind::Add,
+          "const maxFileBytes = 30 * 1024 * 1024".to_string()
+        ),
+      ]
+    );
+    assert_eq!(diffs.unstaged.hunks.len(), 1);
+    assert!(diffs.staged.hunks.is_empty());
   }
 
   #[test]
