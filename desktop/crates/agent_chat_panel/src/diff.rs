@@ -17,11 +17,35 @@ pub(crate) struct DiffSummary {
 
 impl DiffSummary {
   pub(crate) fn first_changed_line(&self) -> Option<u32> {
-    self.lines.iter().find_map(|line| match line.kind {
-      DiffLineKind::Added => line.snapshot_line(),
-      DiffLineKind::Removed => line.snapshot_line(),
-      DiffLineKind::Context | DiffLineKind::Gap => None,
-    })
+    self
+      .lines
+      .iter()
+      .position(|line| matches!(line.kind, DiffLineKind::Added | DiffLineKind::Removed))
+      .and_then(|row_ix| self.snapshot_line_for_row(row_ix))
+  }
+
+  pub(crate) fn snapshot_line_for_row(&self, row_ix: usize) -> Option<u32> {
+    let line = self.lines.get(row_ix)?;
+    if let Some(new_line) = line.new_line {
+      return Some(new_line);
+    }
+    if !matches!(line.kind, DiffLineKind::Removed) {
+      return line.snapshot_line();
+    }
+    self
+      .lines
+      .iter()
+      .skip(row_ix + 1)
+      .find_map(|line| line.new_line)
+      .or_else(|| {
+        self
+          .lines
+          .iter()
+          .take(row_ix)
+          .rev()
+          .find_map(|line| line.new_line)
+      })
+      .or(line.old_line)
   }
 }
 
@@ -500,6 +524,48 @@ mod tests {
     };
 
     assert_eq!(summary.first_changed_line(), Some(2));
+  }
+
+  #[test]
+  fn diff_summary_reveals_deletions_at_their_new_snapshot_position() {
+    let lines = build_diff_lines("a\nb\nc\n", "a\nc\n");
+    let removed_ix = lines
+      .iter()
+      .position(|line| line.kind == DiffLineKind::Removed && line.text == "b")
+      .expect("removed row");
+    let summary = DiffSummary {
+      path: "src/main.rs".to_string(),
+      old_text: Some("a\nb\nc\n".to_string()),
+      new_text: "a\nc\n".to_string(),
+      added: 0,
+      removed: 1,
+      lines,
+      expanded: false,
+    };
+
+    assert_eq!(summary.first_changed_line(), Some(2));
+    assert_eq!(summary.snapshot_line_for_row(removed_ix), Some(2));
+  }
+
+  #[test]
+  fn diff_summary_reveals_trailing_deletions_near_previous_context() {
+    let lines = build_diff_lines("a\nb\n", "a\n");
+    let removed_ix = lines
+      .iter()
+      .position(|line| line.kind == DiffLineKind::Removed && line.text == "b")
+      .expect("removed row");
+    let summary = DiffSummary {
+      path: "src/main.rs".to_string(),
+      old_text: Some("a\nb\n".to_string()),
+      new_text: "a\n".to_string(),
+      added: 0,
+      removed: 1,
+      lines,
+      expanded: false,
+    };
+
+    assert_eq!(summary.first_changed_line(), Some(1));
+    assert_eq!(summary.snapshot_line_for_row(removed_ix), Some(1));
   }
 
   #[test]

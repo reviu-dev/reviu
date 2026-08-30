@@ -1016,7 +1016,7 @@ pub(crate) fn render_tool_call(
           let mut gutter_lines = Vec::with_capacity(visible);
           let mut selection_text = String::new();
           let mut row_ranges = Vec::with_capacity(visible);
-          for line in d.lines.iter().take(visible) {
+          for (row_ix, line) in d.lines.iter().take(visible).enumerate() {
             let (bg, fg, hl_bg) = match line.kind {
               DiffLineKind::Context => (theme.background, theme.foreground, theme.background),
               DiffLineKind::Gap => (theme.background, theme.muted_foreground, theme.background),
@@ -1031,8 +1031,7 @@ pub(crate) fn render_tool_call(
                 ui_theme.diff_word_removed_background(),
               ),
             };
-            let gutter_line = line.snapshot_line();
-            gutter_lines.push(gutter_line);
+            gutter_lines.push(d.snapshot_line_for_row(row_ix));
             let gutter = show_line_numbers.then(|| diff_gutter(line));
             if !selection_text.is_empty() {
               selection_text.push('\n');
