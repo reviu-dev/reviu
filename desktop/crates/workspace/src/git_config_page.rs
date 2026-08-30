@@ -13,6 +13,7 @@ use gpui::{
 use gpui_component::{
   ActiveTheme as _, Disableable, IconName, Sizable as _,
   button::{Button, ButtonVariants},
+  dialog::DialogFooter,
   h_flex,
 };
 
@@ -26,6 +27,9 @@ use crate::{ShowCommandPalette, auth_state::AuthStateStore, file_view::render_fi
 const GIT_CONFIG_DIALOG_MAX_WIDTH: f32 = 1120.0;
 const GIT_CONFIG_DIALOG_MAX_HEIGHT: f32 = 780.0;
 const GIT_CONFIG_DIALOG_MARGIN: f32 = 64.0;
+const GIT_CONFIG_UNSAVED_SAVE_DEBUG_SELECTOR: &str = "git-config-unsaved-save";
+const GIT_CONFIG_UNSAVED_DISCARD_DEBUG_SELECTOR: &str = "git-config-unsaved-discard";
+const GIT_CONFIG_UNSAVED_CANCEL_DEBUG_SELECTOR: &str = "git-config-unsaved-cancel";
 
 #[derive(Clone, Default)]
 struct GitConfigDialogState {
@@ -146,6 +150,103 @@ impl GitConfigPage {
     crate::palette_actions::handle_global_command_palette_action(action, window, cx)
   }
 
+  fn editor_is_dirty(&self, cx: &App) -> bool {
+    self
+      .editor
+      .as_ref()
+      .is_some_and(|editor| editor.read(cx).is_dirty)
+  }
+
+  fn close_dialog_after_alert(window: &mut Window, cx: &mut App) {
+    window.close_dialog(cx);
+  }
+
+  fn request_close(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    if self.editor_is_dirty(cx) {
+      self.open_unsaved_changes_dialog(window, cx);
+      return;
+    }
+    window.close_dialog(cx);
+  }
+
+  fn close_action(&mut self, _: &editor::CloseFind, window: &mut Window, cx: &mut Context<Self>) {
+    self.request_close(window, cx);
+    cx.stop_propagation();
+  }
+
+  fn open_unsaved_changes_dialog(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    let view = cx.entity();
+    let editor = self.editor.clone();
+
+    window.open_alert_dialog(cx, move |alert, _, _| {
+      let save_view = view.clone();
+      let discard_view = view.clone();
+      let save_editor = editor.clone();
+      alert
+        .title("Save Git config changes?")
+        .description(div().child("Save your edits before closing, or discard them permanently."))
+        .close_button(true)
+        .footer(
+          DialogFooter::new()
+            .child(
+              Button::new(GIT_CONFIG_UNSAVED_CANCEL_DEBUG_SELECTOR)
+                .debug_selector(|| GIT_CONFIG_UNSAVED_CANCEL_DEBUG_SELECTOR.to_string())
+                .label("Cancel")
+                .ghost()
+                .on_click(|_, window, cx| {
+                  window.close_dialog(cx);
+                }),
+            )
+            .child(
+              Button::new(GIT_CONFIG_UNSAVED_DISCARD_DEBUG_SELECTOR)
+                .debug_selector(|| GIT_CONFIG_UNSAVED_DISCARD_DEBUG_SELECTOR.to_string())
+                .label("Discard")
+                .danger()
+                .on_click(move |_, window, cx| {
+                  window.close_dialog(cx);
+                  if cx.has_global::<GitConfigDialogState>() {
+                    cx.global_mut::<GitConfigDialogState>().view = None;
+                  }
+                  discard_view.update(cx, |view, _| {
+                    view.editor = None;
+                  });
+                  Self::close_dialog_after_alert(window, cx);
+                }),
+            )
+            .child(
+              Button::new(GIT_CONFIG_UNSAVED_SAVE_DEBUG_SELECTOR)
+                .debug_selector(|| GIT_CONFIG_UNSAVED_SAVE_DEBUG_SELECTOR.to_string())
+                .label("Save")
+                .primary()
+                .on_click(move |_, window, cx| {
+                  let window_handle = window.window_handle();
+                  window.close_dialog(cx);
+                  if let Some(editor) = save_editor.clone() {
+                    let save_view = save_view.clone();
+                    editor.update(cx, |editor, cx| {
+                      editor.save_with_completion(
+                        cx,
+                        Some(Box::new(move |cx| {
+                          let save_view = save_view.clone();
+                          let _ = cx.update_window(window_handle, move |_, window, cx| {
+                            if cx.has_global::<GitConfigDialogState>() {
+                              cx.global_mut::<GitConfigDialogState>().view = None;
+                            }
+                            save_view.update(cx, |view, _| {
+                              view.editor = None;
+                            });
+                            Self::close_dialog_after_alert(window, cx);
+                          });
+                        })),
+                      );
+                    });
+                  }
+                }),
+            ),
+        )
+    });
+  }
+
   fn render_editor_header(&self, editor: &Entity<Editor>, cx: &mut Context<Self>) -> AnyElement {
     let theme = cx.theme().clone();
     let editor_state = editor.read(cx);
@@ -163,13 +264,12 @@ impl GitConfigPage {
       });
 
     let close_button = Button::new("git-config-close")
+      .debug_selector(|| "git-config-close".to_string())
       .icon(IconName::Close)
       .ghost()
       .compact()
       .tooltip("Close")
-      .on_click(|_, window, cx| {
-        window.close_dialog(cx);
-      });
+      .on_click(cx.listener(|this, _, window, cx| this.request_close(window, cx)));
 
     div()
       .h(px(PAGE_HEADER_HEIGHT))
@@ -242,13 +342,12 @@ impl Render for GitConfigPage {
             )
             .child(
               Button::new("git-config-close")
+                .debug_selector(|| "git-config-close".to_string())
                 .icon(IconName::Close)
                 .ghost()
                 .compact()
                 .tooltip("Close")
-                .on_click(|_, window, cx| {
-                  window.close_dialog(cx);
-                }),
+                .on_click(cx.listener(|this, _, window, cx| this.request_close(window, cx))),
             ),
         )
         .child(
@@ -267,6 +366,7 @@ impl Render for GitConfigPage {
       .key_context(crate::shortcuts::WORKSPACE_CONTEXT)
       .track_focus(&self.focus_handle(cx))
       .on_action(cx.listener(GitConfigPage::show_command_palette_action))
+      .on_action(cx.listener(GitConfigPage::close_action))
       .child(body)
   }
 }
@@ -307,6 +407,7 @@ fn open_git_config_dialog_with_view(
 
   let view_for_overlay = view.clone();
   let view_for_focus = view.clone();
+  let view_for_cancel = view.clone();
   window.open_dialog(cx, move |dialog, window, _| {
     let viewport = window.viewport_size();
     let width = px(
@@ -325,6 +426,19 @@ fn open_git_config_dialog_with_view(
       .h(height)
       .keyboard(true)
       .close_button(false)
+      .on_cancel({
+        let view_for_cancel = view_for_cancel.clone();
+        move |_, window, cx| {
+          view_for_cancel.update(cx, |view, cx| {
+            if view.editor_is_dirty(cx) {
+              view.open_unsaved_changes_dialog(window, cx);
+              false
+            } else {
+              true
+            }
+          })
+        }
+      })
       .on_close(|_, _, cx| {
         if cx.has_global::<GitConfigDialogState>() {
           cx.global_mut::<GitConfigDialogState>().is_open = false;
@@ -363,6 +477,18 @@ mod tests {
     cx
   }
 
+  fn dirty_editor(view: &Entity<GitConfigPage>, cx: &mut VisualTestContext) {
+    let editor = view
+      .read_with(cx, |view, _| view.editor.clone())
+      .expect("git config editor");
+    editor.update(cx, |editor, cx| {
+      editor.document.update(cx, |document, cx| {
+        document.replace_all("changed\n", cx);
+      });
+      editor.is_dirty = true;
+    });
+  }
+
   #[gpui::test]
   async fn escape_closes_git_config_dialog(cx: &mut TestAppContext) {
     let cx = dialog_host(cx);
@@ -383,6 +509,47 @@ mod tests {
     cx.run_until_parked();
 
     assert!(!cx.update(|window, cx| window.has_active_dialog(cx)));
+    let _ = std::fs::remove_file(&path);
+  }
+
+  #[gpui::test]
+  async fn closing_dirty_git_config_asks_before_discarding(cx: &mut TestAppContext) {
+    let cx = dialog_host(cx);
+    let path = std::env::temp_dir().join(format!(
+      "reviu-git-config-dirty-dialog-{}.gitconfig",
+      std::process::id()
+    ));
+    std::fs::write(&path, "original\n").expect("write git config");
+
+    let view = cx.update(|window, cx| {
+      let view = cx.new(|cx| GitConfigPage::new_for_path(path.clone(), cx));
+      open_git_config_dialog_with_view(view.clone(), window, cx);
+      view
+    });
+    cx.run_until_parked();
+    dirty_editor(&view, cx);
+
+    let close = cx.debug_bounds("git-config-close").expect("close button");
+    cx.simulate_click(close.center(), gpui::Modifiers::default());
+    cx.run_until_parked();
+
+    assert!(
+      cx.debug_bounds(GIT_CONFIG_UNSAVED_DISCARD_DEBUG_SELECTOR)
+        .is_some()
+    );
+    assert!(cx.update(|window, cx| window.has_active_dialog(cx)));
+
+    let discard = cx
+      .debug_bounds(GIT_CONFIG_UNSAVED_DISCARD_DEBUG_SELECTOR)
+      .expect("discard button");
+    cx.simulate_click(discard.center(), gpui::Modifiers::default());
+    cx.run_until_parked();
+
+    assert!(!cx.update(|window, cx| window.has_active_dialog(cx)));
+    assert_eq!(
+      std::fs::read_to_string(&path).expect("read git config"),
+      "original\n"
+    );
     let _ = std::fs::remove_file(&path);
   }
 }

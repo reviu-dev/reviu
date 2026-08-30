@@ -18,7 +18,8 @@ use gpui::{
   Render, SharedString, Task, Window, div, prelude::*, px,
 };
 use gpui_component::{
-  ActiveTheme as _, Disableable as _, Sizable as _, h_flex, notification::Notification, v_flex,
+  ActiveTheme as _, Disableable as _, Sizable as _, dialog::DialogFooter, h_flex,
+  notification::Notification, v_flex,
 };
 
 use crate::agent_chat_state::{
@@ -43,7 +44,7 @@ use crate::navigation::NavigationHistory;
 use crate::open_intent::OpenIntent;
 use crate::review_destination::{AgentReviewHandlers, ReviewDestination, configure_review};
 use crate::session_list::{SessionList, SessionListEvent, SessionStatus};
-use crate::session_page::file_viewer::OpenedSnapshot;
+use crate::session_page::file_viewer::{OpenedSnapshot, UnsavedEditorAction};
 use git::{InteractiveRebaseTarget, RepoStatusKind};
 
 use crate::git_telemetry::{self, GitTelemetry};
@@ -97,6 +98,9 @@ const DIFF_EDITOR_DEBUG_SELECTOR: &str = "session-diff-editor";
 const PREVIEW_PANE_DEBUG_SELECTOR: &str = "session-preview-pane";
 const REPO_CONTEXT_DEBUG_SELECTOR: &str = "session-repo-context";
 const OPEN_REPOSITORY_ROW_DEBUG_SELECTOR: &str = "session-open-repository";
+const UNSAVED_EDITOR_SAVE_DEBUG_SELECTOR: &str = "session-unsaved-editor-save";
+const UNSAVED_EDITOR_DISCARD_DEBUG_SELECTOR: &str = "session-unsaved-editor-discard";
+const UNSAVED_EDITOR_CANCEL_DEBUG_SELECTOR: &str = "session-unsaved-editor-cancel";
 const REPO_AHEAD_DEBUG_SELECTOR: &str = "session-repo-ahead";
 const REPO_BEHIND_DEBUG_SELECTOR: &str = "session-repo-behind";
 
@@ -694,6 +698,14 @@ impl SessionPage {
       .or_else(|| self.fallback_repo.clone())
   }
 
+  pub(super) fn target_checkout_differs_from_editor(
+    &self,
+    target_checkout: &Path,
+    cx: &App,
+  ) -> bool {
+    self.checkout_root(cx).as_deref() != Some(target_checkout)
+  }
+
   /// The pin holds only while the session it was set on stays shown.
   fn active_checkout_override(&self, cx: &App) -> Option<PathBuf> {
     let pin = self.checkout_override.as_ref()?;
@@ -773,6 +785,19 @@ impl SessionPage {
     window: &mut Window,
     cx: &mut Context<Self>,
   ) {
+    if self.editor_is_dirty(cx) && self.target_checkout_differs_from_editor(&path, cx) {
+      self.open_unsaved_editor_dialog(UnsavedEditorAction::PinCheckout { path }, window, cx);
+      return;
+    }
+    self.pin_checkout_without_unsaved_prompt(path, window, cx);
+  }
+
+  pub(super) fn pin_checkout_without_unsaved_prompt(
+    &mut self,
+    path: PathBuf,
+    window: &mut Window,
+    cx: &mut Context<Self>,
+  ) {
     let session_checkout = self
       .agent_chat_view
       .as_ref()
@@ -795,6 +820,26 @@ impl SessionPage {
   }
 
   pub(super) fn follow_session_checkout(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    let session_checkout = self
+      .agent_chat_view
+      .as_ref()
+      .map(|panel| panel.read(cx).cwd().to_path_buf())
+      .or_else(|| self.fallback_repo.clone());
+    if let Some(session_checkout) = session_checkout
+      && self.editor_is_dirty(cx)
+      && self.target_checkout_differs_from_editor(&session_checkout, cx)
+    {
+      self.open_unsaved_editor_dialog(UnsavedEditorAction::FollowSessionCheckout, window, cx);
+      return;
+    }
+    self.follow_session_checkout_without_unsaved_prompt(window, cx);
+  }
+
+  pub(super) fn follow_session_checkout_without_unsaved_prompt(
+    &mut self,
+    window: &mut Window,
+    cx: &mut Context<Self>,
+  ) {
     if self.checkout_override.take().is_none() {
       return;
     }

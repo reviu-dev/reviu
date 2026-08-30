@@ -4,7 +4,7 @@ use super::*;
 use crate::github_notifications::GithubNotificationsStore;
 use crate::workspace::WorkspaceApi;
 use editor::{ReviewCommentMode, ReviewCommentSide};
-use gpui::TestAppContext;
+use gpui::{Context, IntoElement, Render, TestAppContext, Window, div};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -17,6 +17,19 @@ pub(super) fn isolate_config_store_for_test() {
   ));
   let _ = std::fs::remove_file(&db_path);
   ConfigStore::set_test_db_path(Some(db_path));
+}
+
+struct SessionPageTestHost {
+  page: Entity<SessionPage>,
+}
+
+impl Render for SessionPageTestHost {
+  fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    div()
+      .size_full()
+      .child(self.page.clone())
+      .children(gpui_component::Root::render_dialog_layer(window, cx))
+  }
 }
 
 /// Mounts the page for real. The agent is only connected by `activate`, which
@@ -48,7 +61,8 @@ pub(crate) fn add_session_page_window(
   let (_root, cx) = cx.add_window_view(|window, cx| {
     let page = cx.new(|cx| SessionPage::new(window, cx));
     mounted = Some(page.clone());
-    gpui_component::Root::new(page, window, cx)
+    let host = cx.new(|_| SessionPageTestHost { page });
+    gpui_component::Root::new(host, window, cx)
   });
   let page = mounted.expect("session page");
   page.update(cx, |page, cx| {
@@ -88,7 +102,8 @@ pub(crate) fn add_session_page_window_without_repo(
   let (_root, cx) = cx.add_window_view(|window, cx| {
     let page = cx.new(|cx| SessionPage::new(window, cx));
     mounted = Some(page.clone());
-    gpui_component::Root::new(page, window, cx)
+    let host = cx.new(|_| SessionPageTestHost { page });
+    gpui_component::Root::new(host, window, cx)
   });
   (mounted.expect("session page"), cx)
 }

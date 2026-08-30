@@ -292,6 +292,23 @@ impl SessionPage {
     window: &mut Window,
     cx: &mut Context<Self>,
   ) -> Result<(), SharedString> {
+    if self.editor_is_dirty(cx) {
+      self.open_unsaved_editor_dialog(
+        UnsavedEditorAction::RunBranchCommand { command },
+        window,
+        cx,
+      );
+      return Ok(());
+    }
+    self.run_branch_command_without_unsaved_prompt(command, window, cx)
+  }
+
+  pub(super) fn run_branch_command_without_unsaved_prompt(
+    &mut self,
+    command: RepoCommand,
+    window: &mut Window,
+    cx: &mut Context<Self>,
+  ) -> Result<(), SharedString> {
     if let Some(checkout) = self.checkout_root(cx)
       && self.agent_turn_in_flight_at(&checkout, cx)
     {
@@ -547,6 +564,18 @@ mod tests {
     })
   }
 
+  fn dirty_active_editor(page: &Entity<SessionPage>, cx: &mut gpui::VisualTestContext) {
+    let editor = page
+      .read_with(cx, |page, _| page.editor.clone())
+      .expect("editor");
+    editor.update(cx, |editor, cx| {
+      editor.document.update(cx, |document, cx| {
+        document.replace_all("unsaved\n", cx);
+      });
+      editor.is_dirty = true;
+    });
+  }
+
   #[gpui::test]
   async fn amending_and_undoing_reach_the_last_commit(cx: &mut TestAppContext) {
     let repo = TempRepo::init("session-page-amend");
@@ -793,6 +822,65 @@ mod tests {
     task.expect("command task").await;
     cx.run_until_parked();
     assert!(repo.path.join("b.txt").exists());
+  }
+
+  #[gpui::test]
+  async fn a_branch_switch_waits_for_dirty_file_choice(cx: &mut TestAppContext) {
+    let repo = TempRepo::init("session-page-branch-switch-dirty");
+    commit_text_file(&repo.path, Path::new("a.txt"), "v1\n", "initial");
+    git::create_branch(&repo.path, "feature").expect("create branch");
+
+    let (page, cx) = add_session_page_window(repo.path.clone(), cx);
+    cx.run_until_parked();
+    page.update_in(cx, |page, window, cx| {
+      page.open_diff(PathBuf::from("a.txt"), None, OpenIntent::Open, window, cx);
+    });
+    await_open_file(&page, cx).await;
+    dirty_active_editor(&page, cx);
+
+    page.update_in(cx, |page, window, cx| {
+      page
+        .handle_command_palette_action(
+          CommandPaletteAction::SwitchBranch(ui::CommandPaletteBranch {
+            name: "feature".into(),
+            kind: ui::CommandPaletteBranchKind::Local,
+          }),
+          window,
+          cx,
+        )
+        .expect("modal opens")
+    });
+    cx.run_until_parked();
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+
+    assert!(cx.update(|window, cx| window.has_active_dialog(cx)));
+    assert!(
+      cx.debug_bounds(UNSAVED_EDITOR_DISCARD_DEBUG_SELECTOR)
+        .is_some()
+    );
+    assert_eq!(
+      git::current_branch_status(&repo.path)
+        .expect("branch status")
+        .name,
+      "main"
+    );
+
+    let discard = cx
+      .debug_bounds(UNSAVED_EDITOR_DISCARD_DEBUG_SELECTOR)
+      .expect("discard button");
+    cx.simulate_click(discard.center(), gpui::Modifiers::default());
+    let task = page.update(cx, |page, _| {
+      page._repo_command_task.take().expect("command task")
+    });
+    task.await;
+    cx.run_until_parked();
+
+    assert_eq!(
+      git::current_branch_status(&repo.path)
+        .expect("branch status")
+        .name,
+      "feature"
+    );
   }
 
   #[gpui::test]

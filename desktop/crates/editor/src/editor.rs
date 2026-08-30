@@ -201,6 +201,8 @@ pub enum ReviewCommentDisplayMode {
   LocalNote,
 }
 
+pub type SaveCompletion = Box<dyn FnOnce(&mut App) + 'static>;
+
 #[derive(Clone, Debug)]
 pub struct EditorFileLoad {
   pub content: String,
@@ -6618,6 +6620,10 @@ impl Editor {
   }
 
   pub fn save(&mut self, cx: &mut Context<Self>) {
+    self.save_with_completion(cx, None);
+  }
+
+  pub fn save_with_completion(&mut self, cx: &mut Context<Self>, on_saved: Option<SaveCompletion>) {
     if self.is_read_only {
       return;
     }
@@ -6674,6 +6680,9 @@ impl Editor {
           editor.reload_git_bases(cx);
           editor.schedule_diff_recompute(cx);
           cx.notify();
+          if let Some(on_saved) = on_saved {
+            on_saved(cx);
+          }
         }
         Err(err) => {
           log::warn!("[editor] save failed: {:?}", err);

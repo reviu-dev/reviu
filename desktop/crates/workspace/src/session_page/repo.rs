@@ -25,6 +25,23 @@ impl SessionPage {
       return Ok(());
     }
 
+    if self.editor_is_dirty(cx) && self.target_checkout_differs_from_editor(&repo_root, cx) {
+      self.open_unsaved_editor_dialog(
+        UnsavedEditorAction::SetFallbackRepo { repo_root },
+        window,
+        cx,
+      );
+      return Ok(());
+    }
+    self.set_fallback_repo_without_unsaved_prompt(repo_root, window, cx)
+  }
+
+  pub(super) fn set_fallback_repo_without_unsaved_prompt(
+    &mut self,
+    repo_root: PathBuf,
+    window: &mut Window,
+    cx: &mut Context<Self>,
+  ) -> Result<(), SharedString> {
     ConfigStore::persist_recent_repository(&repo_root);
     self.apply_fallback_repo(Some(repo_root.clone()), window, cx);
     // Switching repository means going to work there: reopen the session you
@@ -45,7 +62,7 @@ impl SessionPage {
           self.select_session(&id, window, cx);
         }
       }
-      None => self.new_session_in(repo_root, window, cx),
+      None => self.new_session_in_without_unsaved_prompt(repo_root, window, cx),
     }
     Ok(())
   }
@@ -81,6 +98,31 @@ impl SessionPage {
   }
 
   pub(super) fn forget_repository(
+    &mut self,
+    repo_root: PathBuf,
+    window: &mut Window,
+    cx: &mut Context<Self>,
+  ) -> Result<(), SharedString> {
+    if self.agent_turn_in_flight_for_repo(&repo_root, cx) {
+      return Err("Wait for the agent to finish before forgetting this repository.".into());
+    }
+    let forgetting_active_checkout = self
+      .agent_chat_view
+      .as_ref()
+      .is_some_and(|panel| panel.read(cx).repo_root() == repo_root.as_path())
+      || self.fallback_repo.as_deref() == Some(repo_root.as_path());
+    if self.editor_is_dirty(cx) && forgetting_active_checkout {
+      self.open_unsaved_editor_dialog(
+        UnsavedEditorAction::ForgetRepository { repo_root },
+        window,
+        cx,
+      );
+      return Ok(());
+    }
+    self.forget_repository_without_unsaved_prompt(repo_root, window, cx)
+  }
+
+  pub(super) fn forget_repository_without_unsaved_prompt(
     &mut self,
     repo_root: PathBuf,
     window: &mut Window,
@@ -172,6 +214,64 @@ mod tests {
   use crate::test_support::{TempRepo, commit_text_file};
   use gpui::TestAppContext;
   use std::path::Path;
+
+  #[gpui::test]
+  async fn switching_repository_waits_for_dirty_file_choice(cx: &mut TestAppContext) {
+    let repo = TempRepo::init("session-page-dirty-repo-switch");
+    let other = TempRepo::init("session-page-dirty-repo-switch-b");
+    commit_text_file(&repo.path, Path::new("README.md"), "v1\n", "initial");
+    commit_text_file(&other.path, Path::new("README.md"), "other\n", "initial");
+    std::fs::write(repo.path.join("README.md"), "v2\n").expect("update file");
+
+    let (page, cx) = add_session_page_window(repo.path.clone(), cx);
+    cx.run_until_parked();
+    page.update_in(cx, |page, window, cx| {
+      page.open_diff(
+        PathBuf::from("README.md"),
+        None,
+        OpenIntent::Open,
+        window,
+        cx,
+      );
+    });
+    await_open_file(&page, cx).await;
+    let editor = page
+      .read_with(cx, |page, _| page.editor.clone())
+      .expect("editor");
+    editor.update(cx, |editor, cx| {
+      editor.document.update(cx, |document, cx| {
+        document.replace_all("unsaved\n", cx);
+      });
+      editor.is_dirty = true;
+    });
+
+    page.update_in(cx, |page, window, cx| {
+      page
+        .set_fallback_repo(other.path.clone(), window, cx)
+        .expect("set repo");
+    });
+    cx.run_until_parked();
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+
+    assert!(cx.update(|window, cx| window.has_active_dialog(cx)));
+    assert!(
+      cx.debug_bounds(UNSAVED_EDITOR_DISCARD_DEBUG_SELECTOR)
+        .is_some()
+    );
+    page.read_with(cx, |page, _| {
+      assert_eq!(page.fallback_repo.as_deref(), Some(repo.path.as_path()));
+    });
+
+    let discard = cx
+      .debug_bounds(UNSAVED_EDITOR_DISCARD_DEBUG_SELECTOR)
+      .expect("discard button");
+    cx.simulate_click(discard.center(), gpui::Modifiers::default());
+    cx.run_until_parked();
+
+    page.read_with(cx, |page, _| {
+      assert_eq!(page.fallback_repo.as_deref(), Some(other.path.as_path()));
+    });
+  }
 
   #[gpui::test]
   async fn a_batch_on_disk_reaches_the_panel_without_opening_a_file(cx: &mut TestAppContext) {

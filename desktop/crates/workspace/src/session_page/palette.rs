@@ -333,7 +333,7 @@ impl SessionPage {
         self.run_repo_command(RepoCommand::UndoLastCommit, window, cx)
       }
       CommandPaletteAction::CheckoutDetached { target } => {
-        self.run_repo_command(RepoCommand::CheckoutDetached { target }, window, cx)
+        self.run_branch_command(RepoCommand::CheckoutDetached { target }, window, cx)
       }
       CommandPaletteAction::SwitchBranch(branch) => self.run_branch_command(
         RepoCommand::SwitchBranch(branch_ref_from_palette(&branch)),

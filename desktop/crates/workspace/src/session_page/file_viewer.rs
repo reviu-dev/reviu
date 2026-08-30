@@ -18,6 +18,58 @@ pub(crate) enum OpenedSnapshot {
   },
 }
 
+#[derive(Clone)]
+pub(super) enum UnsavedEditorAction {
+  CloseDiff,
+  SelectSession {
+    id: String,
+  },
+  NewSessionIn {
+    repo_root: PathBuf,
+  },
+  NewWorktreeSessionIn {
+    repo_root: PathBuf,
+    base: Option<String>,
+  },
+  SetFallbackRepo {
+    repo_root: PathBuf,
+  },
+  PinCheckout {
+    path: PathBuf,
+  },
+  FollowSessionCheckout,
+  ForgetRepository {
+    repo_root: PathBuf,
+  },
+  RunBranchCommand {
+    command: RepoCommand,
+  },
+  OpenDiff {
+    rel_path: PathBuf,
+    reveal_line: Option<u32>,
+    intent: OpenIntent,
+  },
+  AgentDiffSnapshot {
+    rel_path: PathBuf,
+    old_text: Option<String>,
+    new_text: String,
+    reveal_line: Option<u32>,
+    intent: OpenIntent,
+  },
+  CommitFile {
+    commit_oid: String,
+    rel_path: PathBuf,
+    intent: OpenIntent,
+  },
+  PullRequestFile {
+    base_oid: String,
+    head_oid: String,
+    rel_path: PathBuf,
+    reveal_line: Option<u32>,
+    intent: OpenIntent,
+  },
+}
+
 fn agent_snapshot_diff_set(
   old_text: Option<&str>,
   new_text: &str,
@@ -41,6 +93,29 @@ fn agent_snapshot_diff_set(
 
 impl SessionPage {
   pub(super) fn open_diff(
+    &mut self,
+    rel_path: PathBuf,
+    reveal_line: Option<u32>,
+    intent: OpenIntent,
+    window: &mut Window,
+    cx: &mut Context<Self>,
+  ) {
+    if self.should_prompt_before_opening(&rel_path, cx) {
+      self.open_unsaved_editor_dialog(
+        UnsavedEditorAction::OpenDiff {
+          rel_path,
+          reveal_line,
+          intent,
+        },
+        window,
+        cx,
+      );
+      return;
+    }
+    self.open_diff_without_unsaved_prompt(rel_path, reveal_line, intent, window, cx);
+  }
+
+  fn open_diff_without_unsaved_prompt(
     &mut self,
     rel_path: PathBuf,
     reveal_line: Option<u32>,
@@ -167,6 +242,41 @@ impl SessionPage {
     window: &mut Window,
     cx: &mut Context<Self>,
   ) {
+    if self.should_prompt_before_replacing_editor(cx) {
+      self.open_unsaved_editor_dialog(
+        UnsavedEditorAction::AgentDiffSnapshot {
+          rel_path,
+          old_text,
+          new_text,
+          reveal_line,
+          intent,
+        },
+        window,
+        cx,
+      );
+      return;
+    }
+    self.open_agent_diff_snapshot_without_unsaved_prompt(
+      rel_path,
+      old_text,
+      new_text,
+      reveal_line,
+      intent,
+      window,
+      cx,
+    );
+  }
+
+  fn open_agent_diff_snapshot_without_unsaved_prompt(
+    &mut self,
+    rel_path: PathBuf,
+    old_text: Option<String>,
+    new_text: String,
+    reveal_line: Option<u32>,
+    intent: OpenIntent,
+    window: &mut Window,
+    cx: &mut Context<Self>,
+  ) {
     let Some(repo_root) = self.checkout_root(cx) else {
       return;
     };
@@ -266,6 +376,29 @@ impl SessionPage {
     window: &mut Window,
     cx: &mut Context<Self>,
   ) {
+    if self.should_prompt_before_replacing_editor(cx) {
+      self.open_unsaved_editor_dialog(
+        UnsavedEditorAction::CommitFile {
+          commit_oid,
+          rel_path,
+          intent,
+        },
+        window,
+        cx,
+      );
+      return;
+    }
+    self.open_commit_file_without_unsaved_prompt(commit_oid, rel_path, intent, window, cx);
+  }
+
+  fn open_commit_file_without_unsaved_prompt(
+    &mut self,
+    commit_oid: String,
+    rel_path: PathBuf,
+    intent: OpenIntent,
+    window: &mut Window,
+    cx: &mut Context<Self>,
+  ) {
     let Some(repo_root) = self.checkout_root(cx) else {
       return;
     };
@@ -328,6 +461,41 @@ impl SessionPage {
   /// read-only. Comments on it go to GitHub, never to the agent, because the
   /// agent edits the working tree and that is a different content.
   pub(super) fn open_pull_request_file(
+    &mut self,
+    base_oid: String,
+    head_oid: String,
+    rel_path: PathBuf,
+    reveal_line: Option<u32>,
+    intent: OpenIntent,
+    window: &mut Window,
+    cx: &mut Context<Self>,
+  ) {
+    if self.should_prompt_before_replacing_editor(cx) {
+      self.open_unsaved_editor_dialog(
+        UnsavedEditorAction::PullRequestFile {
+          base_oid,
+          head_oid,
+          rel_path,
+          reveal_line,
+          intent,
+        },
+        window,
+        cx,
+      );
+      return;
+    }
+    self.open_pull_request_file_without_unsaved_prompt(
+      base_oid,
+      head_oid,
+      rel_path,
+      reveal_line,
+      intent,
+      window,
+      cx,
+    );
+  }
+
+  fn open_pull_request_file_without_unsaved_prompt(
     &mut self,
     base_oid: String,
     head_oid: String,
@@ -807,11 +975,204 @@ impl SessionPage {
     if self.center != CenterView::Diff {
       return;
     }
+    if self.editor_is_dirty(cx) {
+      self.open_unsaved_editor_dialog(UnsavedEditorAction::CloseDiff, window, cx);
+      return;
+    }
+    self.close_diff_without_unsaved_prompt(window, cx);
+  }
+
+  fn close_diff_without_unsaved_prompt(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    if self.center != CenterView::Diff {
+      return;
+    }
     self.center = CenterView::Conversation;
     self.diff_chat_open = true;
     self.sync_agent_chat_close_control(cx);
     self.focus_agent_input_on_next_frame(window, cx);
     cx.notify();
+  }
+
+  pub(super) fn editor_is_dirty(&self, cx: &App) -> bool {
+    self
+      .editor
+      .as_ref()
+      .is_some_and(|editor| editor.read(cx).is_dirty)
+  }
+
+  fn should_prompt_before_opening(&self, rel_path: &Path, cx: &App) -> bool {
+    self.editor_is_dirty(cx) && self.selected_file.as_deref() != Some(rel_path)
+  }
+
+  fn should_prompt_before_replacing_editor(&self, cx: &App) -> bool {
+    self.editor_is_dirty(cx)
+  }
+
+  fn discard_active_editor(&mut self) {
+    self.editor = None;
+    self.binary_preview = None;
+    self.open_file_task = None;
+    self.open_file_generation = self.open_file_generation.wrapping_add(1);
+  }
+
+  fn perform_unsaved_editor_action(
+    &mut self,
+    action: UnsavedEditorAction,
+    window: &mut Window,
+    cx: &mut Context<Self>,
+  ) {
+    match action {
+      UnsavedEditorAction::CloseDiff => self.close_diff_without_unsaved_prompt(window, cx),
+      UnsavedEditorAction::SelectSession { id } => {
+        self.select_session_without_unsaved_prompt(&id, window, cx)
+      }
+      UnsavedEditorAction::NewSessionIn { repo_root } => {
+        self.new_session_in_without_unsaved_prompt(repo_root, window, cx)
+      }
+      UnsavedEditorAction::NewWorktreeSessionIn { repo_root, base } => {
+        self.new_worktree_session_in_without_unsaved_prompt(repo_root, base, window, cx)
+      }
+      UnsavedEditorAction::SetFallbackRepo { repo_root } => {
+        if let Err(error) = self.set_fallback_repo_without_unsaved_prompt(repo_root, window, cx) {
+          window.push_notification(Notification::warning(error), cx);
+        }
+      }
+      UnsavedEditorAction::PinCheckout { path } => {
+        self.pin_checkout_without_unsaved_prompt(path, window, cx)
+      }
+      UnsavedEditorAction::FollowSessionCheckout => {
+        self.follow_session_checkout_without_unsaved_prompt(window, cx)
+      }
+      UnsavedEditorAction::ForgetRepository { repo_root } => {
+        if let Err(error) = self.forget_repository_without_unsaved_prompt(repo_root, window, cx) {
+          window.push_notification(Notification::warning(error), cx);
+        }
+      }
+      UnsavedEditorAction::RunBranchCommand { command } => {
+        if let Err(error) = self.run_branch_command_without_unsaved_prompt(command, window, cx) {
+          window.push_notification(Notification::warning(error), cx);
+        }
+      }
+      UnsavedEditorAction::OpenDiff {
+        rel_path,
+        reveal_line,
+        intent,
+      } => self.open_diff_without_unsaved_prompt(rel_path, reveal_line, intent, window, cx),
+      UnsavedEditorAction::AgentDiffSnapshot {
+        rel_path,
+        old_text,
+        new_text,
+        reveal_line,
+        intent,
+      } => self.open_agent_diff_snapshot_without_unsaved_prompt(
+        rel_path,
+        old_text,
+        new_text,
+        reveal_line,
+        intent,
+        window,
+        cx,
+      ),
+      UnsavedEditorAction::CommitFile {
+        commit_oid,
+        rel_path,
+        intent,
+      } => self.open_commit_file_without_unsaved_prompt(commit_oid, rel_path, intent, window, cx),
+      UnsavedEditorAction::PullRequestFile {
+        base_oid,
+        head_oid,
+        rel_path,
+        reveal_line,
+        intent,
+      } => self.open_pull_request_file_without_unsaved_prompt(
+        base_oid,
+        head_oid,
+        rel_path,
+        reveal_line,
+        intent,
+        window,
+        cx,
+      ),
+    }
+  }
+
+  pub(super) fn open_unsaved_editor_dialog(
+    &mut self,
+    action: UnsavedEditorAction,
+    window: &mut Window,
+    cx: &mut Context<Self>,
+  ) {
+    let view = cx.entity();
+    let editor = self.editor.clone();
+    let window_handle = window.window_handle();
+
+    window.open_alert_dialog(cx, move |alert, _, _| {
+      let save_view = view.clone();
+      let discard_view = view.clone();
+      let save_editor = editor.clone();
+      let save_action = action.clone();
+      let discard_action = action.clone();
+
+      alert
+        .title("Save file changes?")
+        .description(div().child("Save your edits before closing, or discard them permanently."))
+        .close_button(true)
+        .footer(
+          DialogFooter::new()
+            .child(
+              Button::new(UNSAVED_EDITOR_CANCEL_DEBUG_SELECTOR)
+                .debug_selector(|| UNSAVED_EDITOR_CANCEL_DEBUG_SELECTOR.to_string())
+                .label("Cancel")
+                .ghost()
+                .on_click(|_, window, cx| {
+                  window.close_dialog(cx);
+                }),
+            )
+            .child(
+              Button::new(UNSAVED_EDITOR_DISCARD_DEBUG_SELECTOR)
+                .debug_selector(|| UNSAVED_EDITOR_DISCARD_DEBUG_SELECTOR.to_string())
+                .label("Discard")
+                .danger()
+                .on_click(move |_, window, cx| {
+                  window.close_dialog(cx);
+                  let discard_action = discard_action.clone();
+                  discard_view.update(cx, move |view, cx| {
+                    view.discard_active_editor();
+                    view.perform_unsaved_editor_action(discard_action, window, cx);
+                  });
+                }),
+            )
+            .child(
+              Button::new(UNSAVED_EDITOR_SAVE_DEBUG_SELECTOR)
+                .debug_selector(|| UNSAVED_EDITOR_SAVE_DEBUG_SELECTOR.to_string())
+                .label("Save")
+                .primary()
+                .on_click(move |_, window, cx| {
+                  window.close_dialog(cx);
+                  if let Some(editor) = save_editor.clone() {
+                    let save_view = save_view.clone();
+                    let save_action = save_action.clone();
+                    editor.update(cx, |editor, cx| {
+                      editor.save_with_completion(
+                        cx,
+                        Some(Box::new(move |cx| {
+                          let save_view = save_view.clone();
+                          let save_action = save_action.clone();
+                          let _ = cx.update_window(window_handle, move |_, window, _cx| {
+                            window.on_next_frame(move |window, cx| {
+                              save_view.update(cx, move |view, cx| {
+                                view.perform_unsaved_editor_action(save_action, window, cx);
+                              });
+                            });
+                          });
+                        })),
+                      );
+                    });
+                  }
+                }),
+            ),
+        )
+    });
   }
 
   /// The centre follows a browse, the keyboard does not: only a file the user
@@ -924,6 +1285,18 @@ mod tests {
         .iter()
         .any(|line| line.kind == git::DiffLineKind::Add && line.content.as_ref() == "new")
     );
+  }
+
+  fn dirty_active_editor(page: &Entity<SessionPage>, cx: &mut gpui::VisualTestContext, text: &str) {
+    let editor = page
+      .read_with(cx, |page, _| page.editor.clone())
+      .expect("editor");
+    editor.update(cx, |editor, cx| {
+      editor.document.update(cx, |document, cx| {
+        document.replace_all(text, cx);
+      });
+      editor.is_dirty = true;
+    });
   }
 
   fn snapshot_changed_line_count(
@@ -1163,6 +1536,118 @@ mod tests {
       // Editor kept for instant reopen of the same file.
       assert!(page.editor.is_some());
     });
+  }
+
+  #[gpui::test]
+  async fn closing_a_dirty_file_asks_before_discarding(cx: &mut TestAppContext) {
+    let repo = TempRepo::init("session-page-dirty-close");
+    commit_text_file(&repo.path, Path::new("README.md"), "v1\n", "initial");
+    std::fs::write(repo.path.join("README.md"), "v2\n").expect("update file");
+
+    let (page, cx) = add_session_page_window(repo.path.clone(), cx);
+    cx.run_until_parked();
+    page.update_in(cx, |page, window, cx| {
+      page.open_diff(
+        PathBuf::from("README.md"),
+        None,
+        OpenIntent::Open,
+        window,
+        cx,
+      );
+    });
+    await_open_file(&page, cx).await;
+    dirty_active_editor(&page, cx, "unsaved\n");
+
+    page.update_in(cx, |page, window, cx| {
+      page.close_workspace_page_action(&CloseWorkspacePage, window, cx);
+    });
+    cx.run_until_parked();
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+
+    assert!(cx.update(|window, cx| window.has_active_dialog(cx)));
+    assert!(
+      cx.debug_bounds(UNSAVED_EDITOR_DISCARD_DEBUG_SELECTOR)
+        .is_some()
+    );
+    page.read_with(cx, |page, _| {
+      assert_eq!(page.center, CenterView::Diff);
+      assert!(page.editor.is_some());
+    });
+
+    let discard = cx
+      .debug_bounds(UNSAVED_EDITOR_DISCARD_DEBUG_SELECTOR)
+      .expect("discard button");
+    cx.simulate_click(discard.center(), gpui::Modifiers::default());
+    cx.run_until_parked();
+
+    page.read_with(cx, |page, _| {
+      assert_eq!(page.center, CenterView::Conversation);
+      assert!(page.editor.is_none());
+    });
+    assert_eq!(
+      std::fs::read_to_string(repo.path.join("README.md")).expect("read file"),
+      "v2\n"
+    );
+  }
+
+  #[gpui::test]
+  async fn opening_another_file_asks_before_discarding_dirty_edits(cx: &mut TestAppContext) {
+    let repo = TempRepo::init("session-page-dirty-open-other");
+    commit_text_file(&repo.path, Path::new("README.md"), "v1\n", "initial");
+    commit_text_file(&repo.path, Path::new("other.md"), "a\n", "other");
+    std::fs::write(repo.path.join("README.md"), "v2\n").expect("update file");
+    std::fs::write(repo.path.join("other.md"), "b\n").expect("update other");
+
+    let (page, cx) = add_session_page_window(repo.path.clone(), cx);
+    cx.run_until_parked();
+    page.update_in(cx, |page, window, cx| {
+      page.open_diff(
+        PathBuf::from("README.md"),
+        None,
+        OpenIntent::Open,
+        window,
+        cx,
+      );
+    });
+    await_open_file(&page, cx).await;
+    dirty_active_editor(&page, cx, "unsaved\n");
+
+    page.update_in(cx, |page, window, cx| {
+      page.open_diff(
+        PathBuf::from("other.md"),
+        None,
+        OpenIntent::Open,
+        window,
+        cx,
+      );
+    });
+    cx.run_until_parked();
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+
+    assert!(cx.update(|window, cx| window.has_active_dialog(cx)));
+    assert!(
+      cx.debug_bounds(UNSAVED_EDITOR_DISCARD_DEBUG_SELECTOR)
+        .is_some()
+    );
+    page.read_with(cx, |page, _| {
+      assert_eq!(page.selected_file, Some(PathBuf::from("README.md")));
+    });
+
+    let discard = cx
+      .debug_bounds(UNSAVED_EDITOR_DISCARD_DEBUG_SELECTOR)
+      .expect("discard button");
+    cx.simulate_click(discard.center(), gpui::Modifiers::default());
+    await_open_file(&page, cx).await;
+
+    page.read_with(cx, |page, _| {
+      assert_eq!(page.center, CenterView::Diff);
+      assert_eq!(page.selected_file, Some(PathBuf::from("other.md")));
+      assert!(page.editor.is_some());
+    });
+    assert_eq!(
+      std::fs::read_to_string(repo.path.join("README.md")).expect("read first file"),
+      "v2\n"
+    );
   }
 
   #[gpui::test]

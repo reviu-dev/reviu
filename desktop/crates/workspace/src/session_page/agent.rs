@@ -1130,6 +1130,19 @@ impl SessionPage {
     window: &mut Window,
     cx: &mut Context<Self>,
   ) {
+    if self.editor_is_dirty(cx) && self.target_checkout_differs_from_editor(&repo_root, cx) {
+      self.open_unsaved_editor_dialog(UnsavedEditorAction::NewSessionIn { repo_root }, window, cx);
+      return;
+    }
+    self.new_session_in_without_unsaved_prompt(repo_root, window, cx);
+  }
+
+  pub(super) fn new_session_in_without_unsaved_prompt(
+    &mut self,
+    repo_root: PathBuf,
+    window: &mut Window,
+    cx: &mut Context<Self>,
+  ) {
     prune_agent_chat_state_once();
     self.ensure_chat_store(cx);
     let store = self
@@ -1213,6 +1226,24 @@ impl SessionPage {
   /// The section buttons name their repo explicitly: a worktree session is
   /// always created in a repo the user pointed at.
   pub(super) fn new_worktree_session_in(
+    &mut self,
+    repo_root: PathBuf,
+    base: Option<String>,
+    window: &mut Window,
+    cx: &mut Context<Self>,
+  ) {
+    if self.editor_is_dirty(cx) {
+      self.open_unsaved_editor_dialog(
+        UnsavedEditorAction::NewWorktreeSessionIn { repo_root, base },
+        window,
+        cx,
+      );
+      return;
+    }
+    self.new_worktree_session_in_without_unsaved_prompt(repo_root, base, window, cx);
+  }
+
+  pub(super) fn new_worktree_session_in_without_unsaved_prompt(
     &mut self,
     repo_root: PathBuf,
     base: Option<String>,
@@ -1342,7 +1373,48 @@ impl SessionPage {
     self.focus_agent_input_on_next_frame(window, cx);
   }
 
+  fn session_checkout_for_id(&self, id: &str, cx: &App) -> Option<PathBuf> {
+    self
+      .agent_chat_view
+      .iter()
+      .chain(self.background_chat_panels.iter().map(|(_, panel)| panel))
+      .find_map(|panel| {
+        let panel = panel.read(cx);
+        (panel.current_conversation().id == id).then(|| panel.cwd().to_path_buf())
+      })
+      .or_else(|| {
+        let (repo_root, store, _) = self.conversation_hub.find_conversation(id, cx)?;
+        store
+          .read(cx)
+          .worktree(id)
+          .map(|binding| binding.path)
+          .or(Some(repo_root))
+      })
+  }
+
   pub(super) fn select_session(&mut self, id: &str, window: &mut Window, cx: &mut Context<Self>) {
+    let target_checkout = self.session_checkout_for_id(id, cx);
+    if self.editor_is_dirty(cx)
+      && target_checkout
+        .as_deref()
+        .is_none_or(|target| self.target_checkout_differs_from_editor(target, cx))
+    {
+      self.open_unsaved_editor_dialog(
+        UnsavedEditorAction::SelectSession { id: id.to_string() },
+        window,
+        cx,
+      );
+      return;
+    }
+    self.select_session_without_unsaved_prompt(id, window, cx);
+  }
+
+  pub(super) fn select_session_without_unsaved_prompt(
+    &mut self,
+    id: &str,
+    window: &mut Window,
+    cx: &mut Context<Self>,
+  ) {
     prune_agent_chat_state_once();
     self.ensure_chat_store(cx);
     if let Some(active) = self.agent_chat_view.as_ref()
@@ -2267,6 +2339,184 @@ mod tests {
         "a relaunch would reopen the switched-to conversation"
       );
     });
+  }
+
+  #[gpui::test]
+  async fn selecting_another_repo_session_waits_for_dirty_file_choice(cx: &mut TestAppContext) {
+    let (repo, page, cx) = page_with_agent_panel("session-page-dirty-switch", cx).await;
+    let (other, other_state) = seed_second_repo("session-page-dirty-switch-b", "other-session");
+
+    page.update_in(cx, |page, window, cx| {
+      page
+        .set_fallback_repo(other.path.clone(), window, cx)
+        .expect("track the other repo");
+      page
+        .set_fallback_repo(repo.path.clone(), window, cx)
+        .expect("switch back to the first repo");
+    });
+    cx.run_until_parked();
+    let current_id =
+      active_panel(&page, cx).read_with(cx, |panel, _| panel.current_conversation().id.clone());
+
+    page.update_in(cx, |page, window, cx| {
+      page.open_diff(
+        PathBuf::from("README.md"),
+        None,
+        OpenIntent::Open,
+        window,
+        cx,
+      );
+    });
+    await_open_file(&page, cx).await;
+    let editor = page
+      .read_with(cx, |page, _| page.editor.clone())
+      .expect("editor");
+    editor.update(cx, |editor, cx| {
+      editor.document.update(cx, |document, cx| {
+        document.replace_all("unsaved\n", cx);
+      });
+      editor.is_dirty = true;
+    });
+
+    page.update_in(cx, |page, window, cx| {
+      page.select_session("other-session", window, cx)
+    });
+    cx.run_until_parked();
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+
+    assert!(cx.update(|window, cx| window.has_active_dialog(cx)));
+    assert!(
+      cx.debug_bounds(UNSAVED_EDITOR_DISCARD_DEBUG_SELECTOR)
+        .is_some()
+    );
+    assert_eq!(
+      active_panel(&page, cx).read_with(cx, |panel, _| panel.current_conversation().id.clone()),
+      current_id,
+      "the session should not switch before the modal choice"
+    );
+
+    let discard = cx
+      .debug_bounds(UNSAVED_EDITOR_DISCARD_DEBUG_SELECTOR)
+      .expect("discard button");
+    cx.simulate_click(discard.center(), gpui::Modifiers::default());
+    cx.run_until_parked();
+
+    assert_eq!(
+      active_panel(&page, cx).read_with(cx, |panel, _| panel.current_conversation().id.clone()),
+      "other-session"
+    );
+    let _ = std::fs::remove_dir_all(&other_state);
+  }
+
+  #[gpui::test]
+  async fn selecting_a_same_checkout_session_keeps_dirty_file_without_prompt(
+    cx: &mut TestAppContext,
+  ) {
+    let (_repo, page, cx) = page_with_agent_panel("session-page-dirty-same-checkout", cx).await;
+
+    let first = active_panel(&page, cx);
+    first.update(cx, |panel, cx| {
+      panel.seed_user_message_for_test("first", cx)
+    });
+    cx.run_until_parked();
+    let first_id = first.read_with(cx, |panel, _| panel.current_conversation().id.clone());
+
+    page.update_in(cx, |page, window, cx| page.new_session(window, cx));
+    cx.run_until_parked();
+    let second_id =
+      active_panel(&page, cx).read_with(cx, |panel, _| panel.current_conversation().id.clone());
+
+    page.update_in(cx, |page, window, cx| {
+      page.open_diff(
+        PathBuf::from("README.md"),
+        None,
+        OpenIntent::Open,
+        window,
+        cx,
+      );
+    });
+    await_open_file(&page, cx).await;
+    let editor = page
+      .read_with(cx, |page, _| page.editor.clone())
+      .expect("editor");
+    editor.update(cx, |editor, cx| {
+      editor.document.update(cx, |document, cx| {
+        document.replace_all("unsaved\n", cx);
+      });
+      editor.is_dirty = true;
+    });
+
+    page.update_in(cx, |page, window, cx| {
+      page.select_session(&first_id, window, cx)
+    });
+    cx.run_until_parked();
+
+    assert!(!cx.update(|window, cx| window.has_active_dialog(cx)));
+    assert_eq!(
+      active_panel(&page, cx).read_with(cx, |panel, _| panel.current_conversation().id.clone()),
+      first_id
+    );
+    assert_ne!(first_id, second_id);
+    page.read_with(cx, |page, cx| {
+      assert!(page.editor.as_ref().expect("editor").read(cx).is_dirty);
+    });
+  }
+
+  #[gpui::test]
+  async fn starting_a_worktree_session_waits_for_dirty_file_choice(cx: &mut TestAppContext) {
+    let (repo, page, cx) = page_with_agent_panel("session-page-dirty-worktree", cx).await;
+    let first_id =
+      active_panel(&page, cx).read_with(cx, |panel, _| panel.current_conversation().id.clone());
+
+    page.update_in(cx, |page, window, cx| {
+      page.open_diff(
+        PathBuf::from("README.md"),
+        None,
+        OpenIntent::Open,
+        window,
+        cx,
+      );
+    });
+    await_open_file(&page, cx).await;
+    let editor = page
+      .read_with(cx, |page, _| page.editor.clone())
+      .expect("editor");
+    editor.update(cx, |editor, cx| {
+      editor.document.update(cx, |document, cx| {
+        document.replace_all("unsaved\n", cx);
+      });
+      editor.is_dirty = true;
+    });
+
+    page.update_in(cx, |page, window, cx| {
+      page.new_worktree_session_in(repo.path.clone(), None, window, cx)
+    });
+    cx.run_until_parked();
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+
+    assert!(cx.update(|window, cx| window.has_active_dialog(cx)));
+    assert!(
+      cx.debug_bounds(UNSAVED_EDITOR_DISCARD_DEBUG_SELECTOR)
+        .is_some()
+    );
+    assert_eq!(
+      active_panel(&page, cx).read_with(cx, |panel, _| panel.current_conversation().id.clone()),
+      first_id,
+      "the worktree session should not start before the modal choice"
+    );
+
+    let discard = cx
+      .debug_bounds(UNSAVED_EDITOR_DISCARD_DEBUG_SELECTOR)
+      .expect("discard button");
+    cx.simulate_click(discard.center(), gpui::Modifiers::default());
+    cx.run_until_parked();
+
+    let panel = active_panel(&page, cx);
+    panel.read_with(cx, |panel, _| {
+      assert_ne!(panel.current_conversation().id, first_id);
+      assert_ne!(panel.cwd(), repo.path.as_path());
+    });
+    cleanup_worktrees_root(&repo.path);
   }
 
   #[gpui::test]
