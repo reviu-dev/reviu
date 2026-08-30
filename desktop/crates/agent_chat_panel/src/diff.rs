@@ -18,8 +18,8 @@ pub(crate) struct DiffSummary {
 impl DiffSummary {
   pub(crate) fn first_changed_line(&self) -> Option<u32> {
     self.lines.iter().find_map(|line| match line.kind {
-      DiffLineKind::Added => line.new_line,
-      DiffLineKind::Removed => line.old_line,
+      DiffLineKind::Added => line.snapshot_line(),
+      DiffLineKind::Removed => line.snapshot_line(),
       DiffLineKind::Context | DiffLineKind::Gap => None,
     })
   }
@@ -223,6 +223,16 @@ pub(crate) struct DiffLine {
   pub spans: Vec<InlineSpan>,
   #[serde(skip)]
   pub syntax_spans: Vec<HighlightSpan>,
+}
+
+impl DiffLine {
+  pub(crate) fn snapshot_line(&self) -> Option<u32> {
+    match self.kind {
+      DiffLineKind::Context | DiffLineKind::Added => self.new_line.or(self.old_line),
+      DiffLineKind::Gap => None,
+      DiffLineKind::Removed => self.old_line,
+    }
+  }
 }
 
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
@@ -490,6 +500,38 @@ mod tests {
     };
 
     assert_eq!(summary.first_changed_line(), Some(2));
+  }
+
+  #[test]
+  fn diff_line_snapshot_line_targets_the_visible_snapshot_position() {
+    let added = DiffLine {
+      kind: DiffLineKind::Added,
+      old_line: None,
+      new_line: Some(4),
+      text: "added".to_string(),
+      spans: Vec::new(),
+      syntax_spans: Vec::new(),
+    };
+    let removed = DiffLine {
+      kind: DiffLineKind::Removed,
+      old_line: Some(7),
+      new_line: None,
+      text: "removed".to_string(),
+      spans: Vec::new(),
+      syntax_spans: Vec::new(),
+    };
+    let gap = DiffLine {
+      kind: DiffLineKind::Gap,
+      old_line: None,
+      new_line: None,
+      text: "...".to_string(),
+      spans: Vec::new(),
+      syntax_spans: Vec::new(),
+    };
+
+    assert_eq!(added.snapshot_line(), Some(4));
+    assert_eq!(removed.snapshot_line(), Some(7));
+    assert_eq!(gap.snapshot_line(), None);
   }
 
   #[test]

@@ -944,6 +944,9 @@ pub(crate) fn render_tool_call(
         let snapshot_old_text = d.old_text.clone();
         let snapshot_new_text = d.new_text.clone();
         let snapshot_line = d.first_changed_line();
+        let header_snapshot_path = snapshot_path.clone();
+        let header_snapshot_old_text = snapshot_old_text.clone();
+        let header_snapshot_new_text = snapshot_new_text.clone();
         let mut block = v_flex().gap_0p5().child(
           h_flex()
             .gap_2()
@@ -957,9 +960,9 @@ pub(crate) fn render_tool_call(
                 .child(d.path.clone())
                 .on_click(cx.listener(move |_panel, _ev, _window, cx| {
                   cx.emit(AgentChatPanelEvent::OpenDiffSnapshot {
-                    path: snapshot_path.clone(),
-                    old_text: snapshot_old_text.clone(),
-                    new_text: snapshot_new_text.clone(),
+                    path: header_snapshot_path.clone(),
+                    old_text: header_snapshot_old_text.clone(),
+                    new_text: header_snapshot_new_text.clone(),
                     line: snapshot_line,
                   });
                 })),
@@ -1010,6 +1013,7 @@ pub(crate) fn render_tool_call(
             ))
           };
           let mut rows = Vec::with_capacity(visible);
+          let mut gutter_lines = Vec::with_capacity(visible);
           let mut selection_text = String::new();
           let mut row_ranges = Vec::with_capacity(visible);
           for line in d.lines.iter().take(visible) {
@@ -1027,6 +1031,8 @@ pub(crate) fn render_tool_call(
                 ui_theme.diff_word_removed_background(),
               ),
             };
+            let gutter_line = line.snapshot_line();
+            gutter_lines.push(gutter_line);
             let gutter = show_line_numbers.then(|| diff_gutter(line));
             if !selection_text.is_empty() {
               selection_text.push('\n');
@@ -1074,6 +1080,10 @@ pub(crate) fn render_tool_call(
             });
           }
           let gutter_width = if show_line_numbers { px(54.) } else { px(0.) };
+          let gutter_snapshot_path = snapshot_path.clone();
+          let gutter_snapshot_old_text = snapshot_old_text.clone();
+          let gutter_snapshot_new_text = snapshot_new_text.clone();
+          let entity = cx.entity().downgrade();
           let body = mini_code_block(theme).child(
             code_lines::CodeLines::new(
               rows,
@@ -1088,6 +1098,19 @@ pub(crate) fn render_tool_call(
               row_ranges,
               text_id: item_id_base | 0x0200_0000 | ((diff_idx as u64) << 12),
               registry: registry.clone(),
+            })
+            .gutter_clickable(code_lines::GutterClickSpec {
+              row_lines: gutter_lines,
+              on_click: std::rc::Rc::new(move |line, _window, cx| {
+                let _ = entity.update(cx, |_, cx| {
+                  cx.emit(AgentChatPanelEvent::OpenDiffSnapshot {
+                    path: gutter_snapshot_path.clone(),
+                    old_text: gutter_snapshot_old_text.clone(),
+                    new_text: gutter_snapshot_new_text.clone(),
+                    line: Some(line),
+                  });
+                });
+              }),
             }),
           );
           block = block.child(body);

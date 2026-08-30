@@ -38,6 +38,13 @@ pub(crate) struct SelectionSpec {
   pub registry: SelectionRegistry,
 }
 
+type GutterClickHandler = Rc<dyn Fn(u32, &mut Window, &mut App)>;
+
+pub(crate) struct GutterClickSpec {
+  pub row_lines: Vec<Option<u32>>,
+  pub on_click: GutterClickHandler,
+}
+
 pub(crate) struct CodeLines {
   rows: Rc<Vec<CodeLineRow>>,
   gutter_width: Pixels,
@@ -46,6 +53,7 @@ pub(crate) struct CodeLines {
   default_color: Hsla,
   font: gpui::Font,
   selection: Option<Rc<SelectionSpec>>,
+  gutter_click: Option<Rc<GutterClickSpec>>,
   layout: Rc<RefCell<Option<CodeLinesLayout>>>,
 }
 
@@ -115,6 +123,22 @@ fn index_for_position(
   spec.row_ranges.last().map(|r| r.end).unwrap_or(0)
 }
 
+fn row_index_for_position(
+  layout: &CodeLinesLayout,
+  bounds: Bounds<Pixels>,
+  position: Point<Pixels>,
+) -> Option<usize> {
+  let mut y = bounds.origin.y;
+  for (row_ix, row_layout) in layout.rows.iter().enumerate() {
+    let row_bottom = y + row_layout.height;
+    if position.y < row_bottom {
+      return Some(row_ix);
+    }
+    y = row_bottom;
+  }
+  None
+}
+
 impl CodeLines {
   pub(crate) fn new(
     rows: Vec<CodeLineRow>,
@@ -132,12 +156,18 @@ impl CodeLines {
       default_color,
       font,
       selection: None,
+      gutter_click: None,
       layout: Rc::new(RefCell::new(None)),
     }
   }
 
   pub(crate) fn selectable(mut self, spec: SelectionSpec) -> Self {
     self.selection = Some(Rc::new(spec));
+    self
+  }
+
+  pub(crate) fn gutter_clickable(mut self, spec: GutterClickSpec) -> Self {
+    self.gutter_click = Some(Rc::new(spec));
     self
   }
 
@@ -158,6 +188,85 @@ impl CodeLines {
     selection_range(&active, spec.text.as_ref())
   }
 
+  fn is_in_clickable_gutter(&self, bounds: Bounds<Pixels>, position: Point<Pixels>) -> bool {
+    self.gutter_click.is_some()
+      && self.has_gutter()
+      && position.x >= bounds.origin.x
+      && position.x < bounds.origin.x + self.gutter_width
+  }
+
+  fn paint_gutter_click_handlers(
+    &self,
+    hitbox: &Hitbox,
+    spec: Rc<GutterClickSpec>,
+    bounds: Bounds<Pixels>,
+    window: &mut Window,
+    _cx: &mut App,
+  ) {
+    let layout = self.layout.clone();
+    let gutter_width = self.gutter_width;
+    let in_gutter = self.is_in_clickable_gutter(bounds, window.mouse_position());
+    if hitbox.is_hovered(window) && in_gutter {
+      window.set_cursor_style(CursorStyle::PointingHand, hitbox);
+    }
+
+    let pressed_row = Rc::new(RefCell::new(None));
+
+    let hitbox_down = hitbox.clone();
+    let layout_down = layout.clone();
+    let pressed_row_down = pressed_row.clone();
+    window.on_mouse_event(move |event: &MouseDownEvent, phase, window, cx| {
+      if phase != DispatchPhase::Bubble
+        || event.button != MouseButton::Left
+        || !hitbox_down.is_hovered(window)
+        || event.position.x < bounds.origin.x
+        || event.position.x >= bounds.origin.x + gutter_width
+      {
+        return;
+      }
+      let row_ix = {
+        let borrowed = layout_down.borrow();
+        borrowed
+          .as_ref()
+          .and_then(|computed| row_index_for_position(computed, bounds, event.position))
+      };
+      pressed_row_down.replace(row_ix);
+      cx.stop_propagation();
+    });
+
+    let hitbox_up = hitbox.clone();
+    let layout_up = layout.clone();
+    let pressed_row_up = pressed_row.clone();
+    window.on_mouse_event(move |event: &MouseUpEvent, phase, window, cx| {
+      if phase != DispatchPhase::Bubble
+        || event.button != MouseButton::Left
+        || !hitbox_up.is_hovered(window)
+        || event.position.x < bounds.origin.x
+        || event.position.x >= bounds.origin.x + gutter_width
+      {
+        return;
+      }
+      let pressed_row = pressed_row_up.take();
+      let row_ix = {
+        let borrowed = layout_up.borrow();
+        borrowed
+          .as_ref()
+          .and_then(|computed| row_index_for_position(computed, bounds, event.position))
+      };
+      let Some(row_ix) = row_ix else {
+        return;
+      };
+      if pressed_row != Some(row_ix) {
+        return;
+      }
+      let Some(line) = spec.row_lines.get(row_ix).and_then(|line| *line) else {
+        return;
+      };
+      (spec.on_click)(line, window, cx);
+      cx.stop_propagation();
+    });
+  }
+
   /// Same drag/word/line/copy behavior as SelectableText, mapped through the
   /// block's per-row layout.
   fn paint_selection_handlers(
@@ -168,7 +277,14 @@ impl CodeLines {
     window: &mut Window,
     _cx: &mut App,
   ) {
-    if hitbox.is_hovered(window) {
+    let clickable_gutter_width =
+      (self.gutter_click.is_some() && self.has_gutter()).then_some(self.gutter_width);
+    let in_clickable_gutter = move |position: Point<Pixels>| {
+      clickable_gutter_width.is_some_and(|gutter_width| {
+        position.x >= bounds.origin.x && position.x < bounds.origin.x + gutter_width
+      })
+    };
+    if hitbox.is_hovered(window) && !in_clickable_gutter(window.mouse_position()) {
       window.set_cursor_style(CursorStyle::IBeam, hitbox);
     }
     let text_origin_x = bounds.origin.x + self.gutter_width + CELL_PADDING_X;
@@ -193,6 +309,7 @@ impl CodeLines {
       if phase != DispatchPhase::Bubble
         || event.button != MouseButton::Left
         || !hitbox_down.is_hovered(window)
+        || in_clickable_gutter(event.position)
       {
         return;
       }
@@ -444,9 +561,7 @@ impl Element for CodeLines {
     window: &mut Window,
     _cx: &mut App,
   ) -> Self::PrepaintState {
-    self
-      .selection
-      .is_some()
+    (self.selection.is_some() || self.gutter_click.is_some())
       .then(|| window.insert_hitbox(bounds, HitboxBehavior::Normal))
   }
 
@@ -460,6 +575,9 @@ impl Element for CodeLines {
     window: &mut Window,
     cx: &mut App,
   ) {
+    if let (Some(hitbox), Some(spec)) = (hitbox.as_ref(), self.gutter_click.clone()) {
+      self.paint_gutter_click_handlers(hitbox, spec, bounds, window, cx);
+    }
     if let (Some(hitbox), Some(spec)) = (hitbox.as_ref(), self.selection.clone()) {
       self.paint_selection_handlers(hitbox, spec, bounds, window, cx);
     }
