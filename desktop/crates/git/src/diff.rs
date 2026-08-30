@@ -477,8 +477,11 @@ pub fn compute_buffer_diff(
     (base_text, buffer_text)
   };
 
-  let context_lines = 3;
-  let hunk_groups = diff_core::line_hunk_groups_with_context(diff_base, diff_buffer, context_lines);
+  let hunk_groups = diff_core::line_hunk_groups_with_context(
+    diff_base,
+    diff_buffer,
+    diff_core::DEFAULT_CONTEXT_LINES,
+  );
 
   if hunk_groups.is_empty() {
     return Ok(FileDiff {
