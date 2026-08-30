@@ -55,13 +55,31 @@ pub(crate) fn populate_syntax_spans(view: &mut ToolCallView) {
     else {
       continue;
     };
+    let old_line_spans = d
+      .old_text
+      .as_deref()
+      .and_then(|text| syntax::highlight_text_to_line_spans(text, cfg).ok());
+    let new_line_spans = syntax::highlight_text_to_line_spans(&d.new_text, cfg).ok();
     for line in &mut d.lines {
       if line.kind == DiffLineKind::Gap {
         line.syntax_spans.clear();
         continue;
       }
-      let mut h = SyntaxHighlighter::new(cfg);
-      line.syntax_spans = h.highlight_text(&line.text).unwrap_or_default();
+      let (line_number, line_spans) = match line.kind {
+        DiffLineKind::Removed => (line.old_line, old_line_spans.as_ref()),
+        DiffLineKind::Context | DiffLineKind::Added => {
+          (line.new_line.or(line.old_line), new_line_spans.as_ref())
+        }
+        DiffLineKind::Gap => (None, None),
+      };
+      let spans = line_number
+        .and_then(|line_number| line_number.checked_sub(1))
+        .and_then(|line_index| line_spans.and_then(|spans| spans.get(line_index as usize)))
+        .map(|spans| spans.to_vec());
+      line.syntax_spans = spans.unwrap_or_else(|| {
+        let mut h = SyntaxHighlighter::new(cfg);
+        h.highlight_text(&line.text).unwrap_or_default()
+      });
     }
   }
 }

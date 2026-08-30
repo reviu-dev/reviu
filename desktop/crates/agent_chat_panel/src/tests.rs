@@ -2437,6 +2437,48 @@ async fn the_auto_approve_flag_survives_a_conversation_reload(cx: &mut gpui::Tes
 }
 
 #[test]
+fn diff_syntax_uses_full_snapshot_context() {
+  let old_text = "fn main() {\n/*\nold inside\n*/\n}\n";
+  let new_text = "fn main() {\n/*\nnew inside\n*/\n}\n";
+  let mut view = ToolCallView {
+    id: ToolCallId::new(std::sync::Arc::from("tool-1")),
+    title: "Edit src/main.rs".to_string(),
+    kind: ToolKind::Edit,
+    status: ToolCallStatus::Completed,
+    tool_name: None,
+    locations: Vec::new(),
+    diffs: vec![DiffSummary {
+      path: "src/main.rs".to_string(),
+      old_text: Some(old_text.to_string()),
+      new_text: new_text.to_string(),
+      added: 1,
+      removed: 1,
+      lines: crate::diff::build_diff_lines(old_text, new_text),
+      expanded: false,
+    }],
+    outputs: Vec::new(),
+    terminals: Vec::new(),
+    read_start_line: None,
+    content_fp: 0,
+  };
+
+  populate_syntax_spans(&mut view);
+
+  let added_inside_comment = view.diffs[0]
+    .lines
+    .iter()
+    .find(|line| line.kind == DiffLineKind::Added && line.text == "new inside")
+    .expect("added line inside block comment");
+  assert!(
+    added_inside_comment
+      .syntax_spans
+      .iter()
+      .any(|span| span.token_type == syntax::TokenType::Comment),
+    "diff syntax should be highlighted in whole-file context"
+  );
+}
+
+#[test]
 fn persisted_tools_restore_highlights_on_load() {
   let dir = temp_dir("agent-tool-reload");
   let conv_id = "tool-highlights";
