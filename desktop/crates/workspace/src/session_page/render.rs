@@ -51,14 +51,16 @@ impl SessionPage {
     count: usize,
     color: gpui::Hsla,
     tooltip: &'static str,
+    enabled: bool,
     in_flight: bool,
     command: RepoCommand,
     cx: &mut Context<Self>,
   ) -> AnyElement {
-    let color = if in_flight {
-      cx.theme().muted_foreground
-    } else {
+    let enabled = enabled && !in_flight;
+    let color = if enabled {
       color
+    } else {
+      cx.theme().muted_foreground
     };
 
     h_flex()
@@ -67,27 +69,87 @@ impl SessionPage {
       .items_center()
       .gap_1()
       .flex_shrink_0()
-      .when(!in_flight, |this| {
-        this
-          .cursor_pointer()
-          .tooltip(move |window, cx| {
-            gpui_component::tooltip::Tooltip::new(tooltip).build(window, cx)
-          })
-          .on_click(cx.listener(move |this, _, window, cx| {
-            // The row switches repository; the counter runs its command instead.
-            cx.stop_propagation();
-            let result = if command == RepoCommand::ForcePush {
-              this.confirm_force_push(window, cx)
-            } else {
-              this.run_repo_command(command.clone(), window, cx)
-            };
-            if let Err(error) = result {
-              window.push_notification(Notification::warning(error), cx);
-            }
-          }))
-      })
+      .tooltip(move |window, cx| gpui_component::tooltip::Tooltip::new(tooltip).build(window, cx))
+      .on_click(cx.listener(move |this, _, window, cx| {
+        // The row switches repository; the counter runs its command instead.
+        cx.stop_propagation();
+        if !enabled {
+          return;
+        }
+        let result = if command == RepoCommand::ForcePush {
+          this.confirm_force_push(window, cx)
+        } else {
+          this.run_repo_command(command.clone(), window, cx)
+        };
+        if let Err(error) = result {
+          window.push_notification(Notification::warning(error), cx);
+        }
+      }))
+      .when(enabled, |this| this.cursor_pointer())
       .child(gpui_component::Icon::new(icon).size_3().text_color(color))
       .child(div().text_xs().text_color(color).child(count.to_string()))
+      .into_any_element()
+  }
+
+  pub(super) fn render_publish_action(
+    &self,
+    in_flight: bool,
+    cx: &mut Context<Self>,
+  ) -> AnyElement {
+    let theme = cx.theme().clone();
+    let color = if in_flight {
+      theme.muted_foreground
+    } else {
+      theme.status_green()
+    };
+
+    h_flex()
+      .id("session-repo-publish")
+      .debug_selector(|| REPO_PUBLISH_DEBUG_SELECTOR.to_string())
+      .items_center()
+      .gap_1()
+      .flex_shrink_0()
+      .tooltip(|window, cx| {
+        gpui_component::tooltip::Tooltip::new("Publish branch").build(window, cx)
+      })
+      .on_click(cx.listener(move |this, _, window, cx| {
+        cx.stop_propagation();
+        if in_flight {
+          return;
+        }
+        if let Err(error) = this.run_repo_command(RepoCommand::Push, window, cx) {
+          window.push_notification(Notification::warning(error), cx);
+        }
+      }))
+      .when(!in_flight, |this| this.cursor_pointer())
+      .child(
+        gpui_component::Icon::new(gpui_component::IconName::ArrowUp)
+          .size_3()
+          .text_color(color),
+      )
+      .child(div().text_xs().text_color(color).child("Publish"))
+      .into_any_element()
+  }
+
+  pub(super) fn render_sync_loading(
+    &self,
+    label: &'static str,
+    cx: &mut Context<Self>,
+  ) -> AnyElement {
+    h_flex()
+      .id("session-repo-sync-loading")
+      .debug_selector(|| REPO_SYNC_LOADING_DEBUG_SELECTOR.to_string())
+      .items_center()
+      .gap_1()
+      .flex_shrink_0()
+      .on_click(|_, _, cx| cx.stop_propagation())
+      .child(gpui_component::spinner::Spinner::new().xsmall())
+      .child(
+        div()
+          .text_xs()
+          .text_color(cx.theme().muted_foreground)
+          .child(label),
+      )
       .into_any_element()
   }
 
@@ -102,7 +164,10 @@ impl SessionPage {
       .map(|name| name.to_string_lossy().into_owned());
 
     let branch_status = self.repo_snapshot.read(cx).branch_status().cloned();
-    let sync_in_flight = self.repo_command_in_flight;
+    let sync_label = self
+      .repo_command_in_flight
+      .and_then(|command| command.sync_label());
+    let command_in_flight = self.repo_command_in_flight.is_some();
 
     let repo_context = match repo_name {
       None => Some(self.render_open_repository_row(cx).into_any_element()),
@@ -156,46 +221,67 @@ impl SessionPage {
                 ),
             )
           })
-          .when_some(branch_status, |this, status| {
-            let (_, can_force_push) = push_flags(
-              Some(&status),
-              self.dock_panel.read(cx).head_status().has_head_commit,
-              false,
-            );
-            let (push_color, push_tooltip, push_command) = if can_force_push {
-              (
-                theme.status_orange(),
-                "Force push (with lease)",
-                RepoCommand::ForcePush,
-              )
-            } else {
-              (theme.status_green(), "Push", RepoCommand::Push)
-            };
-            this
-              .when(status.behind > 0, |this| {
-                this.child(self.render_sync_counter(
-                  REPO_BEHIND_DEBUG_SELECTOR,
-                  gpui_component::IconName::ArrowDown,
-                  status.behind,
-                  theme.status_red(),
-                  "Pull",
-                  sync_in_flight,
-                  RepoCommand::Pull,
-                  cx,
-                ))
-              })
-              .when(status.ahead > 0, |this| {
-                this.child(self.render_sync_counter(
-                  REPO_AHEAD_DEBUG_SELECTOR,
-                  gpui_component::IconName::ArrowUp,
-                  status.ahead,
-                  push_color,
-                  push_tooltip,
-                  sync_in_flight,
-                  push_command,
-                  cx,
-                ))
-              })
+          .when_some(sync_label, |this, label| {
+            this.child(self.render_sync_loading(label, cx))
+          })
+          .when(sync_label.is_none(), |this| {
+            this.when_some(branch_status, |this, status| {
+              let panel = self.dock_panel.read(cx);
+              let has_head_commit = panel.head_status().has_head_commit;
+              let pull_allowed = !panel.rebase_in_progress()
+                && !panel.merge_in_progress()
+                && self.fallback_repo.is_some();
+              let push_allowed = !panel.rebase_in_progress() && self.fallback_repo.is_some();
+              if status.has_upstream {
+                let (_, can_force_push) = push_flags(Some(&status), has_head_commit, false);
+                let (push_color, push_tooltip, push_command) = if can_force_push {
+                  (
+                    theme.status_orange(),
+                    "Force push (with lease)",
+                    RepoCommand::ForcePush,
+                  )
+                } else {
+                  (theme.status_green(), "Push", RepoCommand::Push)
+                };
+                let pull_tooltip = if status.behind > 0 {
+                  "Pull"
+                } else {
+                  "Nothing to pull"
+                };
+                let push_tooltip = if status.ahead > 0 {
+                  push_tooltip
+                } else {
+                  "Nothing to push"
+                };
+                this
+                  .child(self.render_sync_counter(
+                    REPO_BEHIND_DEBUG_SELECTOR,
+                    gpui_component::IconName::ArrowDown,
+                    status.behind,
+                    theme.status_red(),
+                    pull_tooltip,
+                    status.behind > 0 && pull_allowed,
+                    command_in_flight,
+                    RepoCommand::Pull,
+                    cx,
+                  ))
+                  .child(self.render_sync_counter(
+                    REPO_AHEAD_DEBUG_SELECTOR,
+                    gpui_component::IconName::ArrowUp,
+                    status.ahead,
+                    push_color,
+                    push_tooltip,
+                    status.ahead > 0 && push_allowed,
+                    command_in_flight,
+                    push_command,
+                    cx,
+                  ))
+              } else if push_allowed && should_publish_branch(Some(&status), has_head_commit) {
+                this.child(self.render_publish_action(command_in_flight, cx))
+              } else {
+                this
+              }
+            })
           })
           .into_any_element(),
       ),
@@ -1113,7 +1199,7 @@ mod tests {
   }
 
   #[gpui::test]
-  async fn sync_counters_are_painted_only_when_there_is_something_to_sync(cx: &mut TestAppContext) {
+  async fn sync_counters_stay_visible_when_a_tracked_branch_is_clean(cx: &mut TestAppContext) {
     let repo = TempRepo::init("session-page-counter-paint");
     commit_text_file(&repo.path, Path::new("README.md"), "v1\n", "initial");
     let _remote = publish_to_new_remote(&repo.path, "session-page-counter-paint");
@@ -1127,10 +1213,13 @@ mod tests {
     cx.run_until_parked();
 
     assert!(
-      cx.debug_bounds(REPO_AHEAD_DEBUG_SELECTOR).is_none(),
-      "nothing to push, no counter"
+      cx.debug_bounds(REPO_AHEAD_DEBUG_SELECTOR).is_some(),
+      "the push counter stays visible at zero"
     );
-    assert!(cx.debug_bounds(REPO_BEHIND_DEBUG_SELECTOR).is_none());
+    assert!(
+      cx.debug_bounds(REPO_BEHIND_DEBUG_SELECTOR).is_some(),
+      "the pull counter stays visible at zero"
+    );
 
     commit_text_file(&repo.path, Path::new("README.md"), "v2\n", "second");
     page.update(cx, |page, cx| page.refresh_branch(cx));
@@ -1140,8 +1229,51 @@ mod tests {
 
     assert!(
       cx.debug_bounds(REPO_AHEAD_DEBUG_SELECTOR).is_some(),
-      "one commit to push, the counter shows up"
+      "one commit to push, the counter is still there"
     );
+    assert!(cx.debug_bounds(REPO_BEHIND_DEBUG_SELECTOR).is_some());
+  }
+
+  #[gpui::test]
+  async fn an_untracked_branch_gets_a_publish_action(cx: &mut TestAppContext) {
+    let repo = TempRepo::init("session-page-publish-action");
+    commit_text_file(&repo.path, Path::new("README.md"), "v1\n", "initial");
+
+    let (page, cx) = add_session_page_window(repo.path.clone(), cx);
+    let refresh = page.update(cx, |page, cx| {
+      page.refresh_branch(cx);
+      page.dock_panel.update(cx, |panel, cx| {
+        panel.refresh(cx);
+        panel._refresh_task.take().expect("refresh task")
+      })
+    });
+    refresh.await;
+    await_branch_refresh(&page, cx).await;
+    page.update(cx, |_, cx| cx.notify());
+    cx.run_until_parked();
+
+    assert!(cx.debug_bounds(REPO_PUBLISH_DEBUG_SELECTOR).is_some());
+    assert!(cx.debug_bounds(REPO_AHEAD_DEBUG_SELECTOR).is_none());
+    assert!(cx.debug_bounds(REPO_BEHIND_DEBUG_SELECTOR).is_none());
+  }
+
+  #[gpui::test]
+  async fn sync_loading_replaces_the_sidebar_counters(cx: &mut TestAppContext) {
+    let repo = TempRepo::init("session-page-sync-loading");
+    commit_text_file(&repo.path, Path::new("README.md"), "v1\n", "initial");
+    let _remote = publish_to_new_remote(&repo.path, "session-page-sync-loading");
+
+    let (page, cx) = add_session_page_window(repo.path.clone(), cx);
+    page.update(cx, |page, cx| page.refresh_branch(cx));
+    await_branch_refresh(&page, cx).await;
+    page.update(cx, |page, cx| {
+      page.repo_command_in_flight = Some(RepoCommandInFlight::Fetch);
+      cx.notify();
+    });
+    cx.run_until_parked();
+
+    assert!(cx.debug_bounds(REPO_SYNC_LOADING_DEBUG_SELECTOR).is_some());
+    assert!(cx.debug_bounds(REPO_AHEAD_DEBUG_SELECTOR).is_none());
     assert!(cx.debug_bounds(REPO_BEHIND_DEBUG_SELECTOR).is_none());
   }
 

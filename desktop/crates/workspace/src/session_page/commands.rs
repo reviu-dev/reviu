@@ -410,11 +410,14 @@ impl SessionPage {
     let Some(repo_root) = self.checkout_root(cx) else {
       return Err("No repository selected.".into());
     };
-    if self.repo_command_in_flight {
+    if self.repo_command_in_flight.is_some() {
       return Err("Another git command is still running.".into());
     }
 
-    self.repo_command_in_flight = true;
+    self.repo_command_in_flight = Some(RepoCommandInFlight::for_command(
+      &command,
+      self.repo_snapshot.read(cx).branch_status(),
+    ));
     cx.notify();
     let checked_out_for_link = matches!(command, RepoCommand::SwitchToBranchName { .. });
     let telemetry_key = command.telemetry_key();
@@ -429,7 +432,7 @@ impl SessionPage {
         .await;
       let _ = cx.update_window(window_handle, |_, window, cx| {
         let _ = this.update(cx, |this, cx| {
-          this.repo_command_in_flight = false;
+          this.repo_command_in_flight = None;
           this
             .git_telemetry(cx)
             .report_outcome(telemetry_key, git_telemetry::outcome_report(&result));
@@ -1496,7 +1499,9 @@ mod tests {
     cx.run_until_parked();
 
     // Another git command is already running: the publish is refused up front.
-    page.update(cx, |page, _| page.repo_command_in_flight = true);
+    page.update(cx, |page, _| {
+      page.repo_command_in_flight = Some(RepoCommandInFlight::Other)
+    });
     let context = GithubBranchContext {
       owner: "acme".to_string(),
       repo: "widget".to_string(),
@@ -1514,7 +1519,7 @@ mod tests {
     assert!(!cx.update(|window, cx| window.has_active_dialog(cx)));
 
     // An unrelated push must not inherit the form that was never opened.
-    page.update(cx, |page, _| page.repo_command_in_flight = false);
+    page.update(cx, |page, _| page.repo_command_in_flight = None);
     page.update_in(cx, |page, window, cx| {
       page
         .run_repo_command(RepoCommand::Push, window, cx)
@@ -1583,7 +1588,7 @@ mod tests {
     cx.run_until_parked();
 
     let error = page.update_in(cx, |page, window, cx| {
-      page.repo_command_in_flight = true;
+      page.repo_command_in_flight = Some(RepoCommandInFlight::Other);
       page
         .run_repo_command(RepoCommand::Fetch, window, cx)
         .expect_err("refused while busy")

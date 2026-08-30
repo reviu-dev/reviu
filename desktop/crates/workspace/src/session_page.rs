@@ -66,7 +66,9 @@ use crate::palette_branches::{
 use crate::pull_request_dialog::{GithubBranchContext, open_create_pull_request_dialog};
 use crate::repo_command::{RepoCommand, RepoCommandOutcome, branch_ref_from_palette};
 use crate::repo_snapshot::{RepoSnapshot, RepoSnapshotEvent};
-use crate::repo_state::{PaletteCommand, RepoState, can_accept_all_conflicts, push_flags};
+use crate::repo_state::{
+  PaletteCommand, RepoState, can_accept_all_conflicts, push_flags, should_publish_branch,
+};
 use crate::review_list::{ReviewSection, review_panel_comments};
 use crate::status_poll;
 use crate::svg_preview::SvgPreview;
@@ -103,6 +105,8 @@ const UNSAVED_EDITOR_DISCARD_DEBUG_SELECTOR: &str = "session-unsaved-editor-disc
 const UNSAVED_EDITOR_CANCEL_DEBUG_SELECTOR: &str = "session-unsaved-editor-cancel";
 const REPO_AHEAD_DEBUG_SELECTOR: &str = "session-repo-ahead";
 const REPO_BEHIND_DEBUG_SELECTOR: &str = "session-repo-behind";
+const REPO_PUBLISH_DEBUG_SELECTOR: &str = "session-repo-publish";
+const REPO_SYNC_LOADING_DEBUG_SELECTOR: &str = "session-repo-sync-loading";
 
 const SESSIONS_SIDEBAR_DEFAULT_WIDTH: f32 = 250.0;
 const SESSIONS_SIDEBAR_MIN_WIDTH: f32 = 200.0;
@@ -121,6 +125,42 @@ enum CenterView {
   Diff,
   /// The todo of an interactive rebase, waiting to be applied.
   InteractiveRebase,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum RepoCommandInFlight {
+  Push,
+  ForcePush,
+  Publish,
+  Pull,
+  Fetch,
+  Other,
+}
+
+impl RepoCommandInFlight {
+  fn for_command(command: &RepoCommand, branch_status: Option<&git::BranchStatus>) -> Self {
+    match command {
+      RepoCommand::Push if branch_status.is_some_and(|status| !status.has_upstream) => {
+        Self::Publish
+      }
+      RepoCommand::Push => Self::Push,
+      RepoCommand::ForcePush => Self::ForcePush,
+      RepoCommand::Pull => Self::Pull,
+      RepoCommand::Fetch => Self::Fetch,
+      _ => Self::Other,
+    }
+  }
+
+  fn sync_label(self) -> Option<&'static str> {
+    match self {
+      Self::Push => Some("Pushing..."),
+      Self::ForcePush => Some("Force pushing..."),
+      Self::Publish => Some("Publishing..."),
+      Self::Pull => Some("Pulling..."),
+      Self::Fetch => Some("Fetching..."),
+      Self::Other => None,
+    }
+  }
 }
 
 /// Global entry point so other pages can route work into the sessions shell.
@@ -245,7 +285,7 @@ pub struct SessionPage {
   svg_preview: Entity<SvgPreview>,
   // Review export waiting for the agent connection to become ready.
   pending_review_export: Option<String>,
-  repo_command_in_flight: bool,
+  repo_command_in_flight: Option<RepoCommandInFlight>,
   /// Set while pushing an unpublished branch on the way to the pull request form.
   pending_pull_request: Option<GithubBranchContext>,
   dock_open: bool,
@@ -488,7 +528,7 @@ impl SessionPage {
       show_preview: false,
       svg_preview,
       pending_review_export: None,
-      repo_command_in_flight: false,
+      repo_command_in_flight: None,
       pending_pull_request: None,
       dock_open: true,
       dock_width: DOCK_PANEL_DEFAULT_WIDTH,
@@ -553,7 +593,7 @@ impl SessionPage {
           if !status_poll::should_poll(
             this.poll_window_active,
             checkout.as_deref(),
-            this.repo_command_in_flight,
+            this.repo_command_in_flight.is_some(),
           ) {
             return;
           }
