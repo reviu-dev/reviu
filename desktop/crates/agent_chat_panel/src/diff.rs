@@ -5,6 +5,8 @@ use syntax::HighlightSpan;
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub(crate) struct DiffSummary {
   pub path: String,
+  pub old_text: Option<String>,
+  pub new_text: String,
   pub added: u32,
   pub removed: u32,
   #[serde(default)]
@@ -341,6 +343,8 @@ pub(crate) fn extract_diffs(
         let lines = build_diff_lines(d.old_text.as_deref().unwrap_or(""), &d.new_text);
         Some(DiffSummary {
           path: relativize_path(&d.path, cwd),
+          old_text: d.old_text.clone(),
+          new_text: d.new_text.clone(),
           added,
           removed,
           lines,
@@ -745,7 +749,11 @@ mod tests {
     let diffs = extract_diffs(&content, test_cwd());
     assert_eq!(diffs.len(), 2);
     assert_eq!(diffs[0].path, "foo.rs");
+    assert_eq!(diffs[0].old_text, None);
+    assert_eq!(diffs[0].new_text, "new\n");
     assert_eq!(diffs[0].added, 1);
+    assert_eq!(diffs[1].old_text.as_deref(), Some("before\n"));
+    assert_eq!(diffs[1].new_text, "after\n");
     assert_eq!(diffs[1].added, 1);
     assert_eq!(diffs[1].removed, 1);
   }

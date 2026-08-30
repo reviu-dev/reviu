@@ -292,6 +292,24 @@ impl SessionPage {
           let rel_path = agent_path_to_repo_relative(path.clone(), Some(checkout.as_path()));
           this.open_diff(rel_path, *line, OpenIntent::Open, window, cx);
         }
+        AgentChatPanelEvent::OpenDiffSnapshot {
+          path,
+          old_text,
+          new_text,
+          line,
+        } => {
+          let checkout = panel.read(cx).cwd().to_path_buf();
+          let rel_path = agent_path_to_repo_relative(path.clone(), Some(checkout.as_path()));
+          this.open_agent_diff_snapshot(
+            rel_path,
+            old_text.clone(),
+            new_text.clone(),
+            *line,
+            OpenIntent::Open,
+            window,
+            cx,
+          );
+        }
         AgentChatPanelEvent::TurnStarted => {
           this.create_turn_checkpoint(panel.clone(), cx);
         }

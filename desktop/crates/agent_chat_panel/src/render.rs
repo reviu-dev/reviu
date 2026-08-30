@@ -940,14 +940,28 @@ pub(crate) fn render_tool_call(
     .when(!t.diffs.is_empty(), |this| {
       let mut diff_col = v_flex().gap_2();
       for (diff_idx, d) in t.diffs.iter().enumerate() {
+        let snapshot_path = PathBuf::from(d.path.clone());
+        let snapshot_old_text = d.old_text.clone();
+        let snapshot_new_text = d.new_text.clone();
         let mut block = v_flex().gap_0p5().child(
           h_flex()
             .gap_2()
             .child(
               div()
+                .id(format!("agent-chat-diff-path-{item_id_base}-{diff_idx}"))
                 .text_xs()
                 .text_color(theme.foreground)
-                .child(d.path.clone()),
+                .cursor_pointer()
+                .hover(|this| this.text_color(theme.accent_foreground))
+                .child(d.path.clone())
+                .on_click(cx.listener(move |_panel, _ev, _window, cx| {
+                  cx.emit(AgentChatPanelEvent::OpenDiffSnapshot {
+                    path: snapshot_path.clone(),
+                    old_text: snapshot_old_text.clone(),
+                    new_text: snapshot_new_text.clone(),
+                    line: None,
+                  });
+                })),
             )
             .child(
               div()

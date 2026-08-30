@@ -779,6 +779,13 @@ impl TurnGate {
 pub enum AgentChatPanelEvent {
   /// User clicked a tool-call file location; open it in the diff view.
   OpenPath { path: PathBuf, line: Option<u32> },
+  /// User clicked a tool-call diff; open the exact snapshot the agent reported.
+  OpenDiffSnapshot {
+    path: PathBuf,
+    old_text: Option<String>,
+    new_text: String,
+    line: Option<u32>,
+  },
   /// A prompt was dispatched; the host may snapshot the working tree.
   TurnStarted,
   /// The agent finished a turn; the working tree may have changed. `completed`

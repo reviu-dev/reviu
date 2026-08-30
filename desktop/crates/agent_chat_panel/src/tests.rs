@@ -227,6 +227,8 @@ fn edit_tool(id: &str, diffs: Vec<(&str, u32, u32)>) -> ChatItem {
       .into_iter()
       .map(|(path, added, removed)| DiffSummary {
         path: path.to_string(),
+        old_text: None,
+        new_text: String::new(),
         added,
         removed,
         lines: Vec::new(),
@@ -479,6 +481,8 @@ fn bench_diff_tool(id: &str, lines: usize) -> ChatItem {
     locations: Vec::new(),
     diffs: vec![DiffSummary {
       path: "src/main.rs".to_string(),
+      old_text: None,
+      new_text: String::new(),
       added: (lines * 2 / 3) as u32,
       removed: (lines / 3) as u32,
       lines: diff_lines,
@@ -2458,6 +2462,8 @@ fn persisted_tools_restore_highlights_on_load() {
       locations: vec![(PathBuf::from("src/main.rs"), Some(12))],
       diffs: vec![DiffSummary {
         path: "src/main.rs".to_string(),
+        old_text: Some("fn old() {}".to_string()),
+        new_text: "fn new() {}".to_string(),
         added: 1,
         removed: 1,
         lines: vec![

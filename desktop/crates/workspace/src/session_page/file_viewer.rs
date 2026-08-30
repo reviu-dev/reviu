@@ -10,6 +10,29 @@ pub(crate) enum OpenedSnapshot {
   Commit(String),
   /// What a pull request proposes: its merge base against its head.
   PullRequestRange { base: String, head: String },
+  /// The exact old/new text an agent reported for a tool call.
+  AgentTool,
+}
+
+fn agent_snapshot_diff_set(
+  old_text: Option<&str>,
+  new_text: &str,
+  rel_path: &Path,
+  ignore_whitespace: bool,
+) -> Option<git::DiffSet> {
+  let unstaged = git::compute_buffer_diff(
+    git::DiffKind::Unstaged,
+    old_text,
+    new_text,
+    rel_path,
+    ignore_whitespace,
+  )
+  .ok()?;
+  Some(git::DiffSet {
+    uncommitted: unstaged.clone_with_kind(git::DiffKind::Uncommitted),
+    unstaged,
+    staged: git::FileDiff::empty(git::DiffKind::Staged),
+  })
 }
 
 impl SessionPage {
@@ -130,6 +153,88 @@ impl SessionPage {
 
   /// Split needs two sides to compare: a whole-file change or a binary preview
   /// falls back to inline.
+  pub(super) fn open_agent_diff_snapshot(
+    &mut self,
+    rel_path: PathBuf,
+    old_text: Option<String>,
+    new_text: String,
+    reveal_line: Option<u32>,
+    intent: OpenIntent,
+    window: &mut Window,
+    cx: &mut Context<Self>,
+  ) {
+    let Some(repo_root) = self.checkout_root(cx) else {
+      return;
+    };
+    self.show_preview = false;
+    self.center = CenterView::Diff;
+    self.sync_agent_chat_close_control(cx);
+    self.open_file_generation = self.open_file_generation.wrapping_add(1);
+    let generation = self.open_file_generation;
+    self.selected_file = Some(rel_path.clone());
+    self.opened_snapshot = Some(OpenedSnapshot::AgentTool);
+    self.editor = None;
+    self.binary_preview = None;
+    self.svg_preview.update(cx, |preview, _| preview.clear());
+    self
+      .dock_panel
+      .read(cx)
+      .changes_list()
+      .update(cx, |list, cx| {
+        list.select_path(Some(rel_path.as_path()), cx);
+      });
+
+    let file_path = repo_root.join(&rel_path);
+    let diff_view = self.effective_diff_view(&rel_path, cx);
+    let hide_whitespace = self.hide_whitespace;
+    let reveal_doc_line = reveal_line.map(|line| line.saturating_sub(1) as usize);
+    let task = cx.spawn(async move |this, cx| {
+      let diff_rel_path = rel_path.clone();
+      let diff_old_text = old_text.clone();
+      let diff_new_text = new_text.clone();
+      let diff_set = cx
+        .background_spawn(async move {
+          agent_snapshot_diff_set(
+            diff_old_text.as_deref(),
+            &diff_new_text,
+            &diff_rel_path,
+            hide_whitespace,
+          )
+        })
+        .await;
+      let _ = this.update(cx, move |this, cx| {
+        if this.open_file_generation != generation {
+          return;
+        }
+        if this.selected_file.as_ref() != Some(&rel_path) {
+          return;
+        }
+        let editor = cx.new(|cx| Editor::new_with_paths(repo_root.clone(), file_path, cx));
+        editor.update(cx, |editor, cx| {
+          editor.load_readonly_snapshot(new_text, diff_set, cx);
+          editor.set_diff_view_mode(diff_view, cx);
+          editor.set_ignore_whitespace(hide_whitespace, cx);
+          if let Some(doc_line) = reveal_doc_line {
+            editor.reveal_source_line(doc_line, cx);
+          }
+        });
+        configure_review(&editor, ReviewDestination::None, cx);
+        this.editor = Some(editor.clone());
+        this.sync_git_telemetry(cx);
+        if this.center == CenterView::Diff && intent.takes_focus() {
+          let _ = cx.update_window(this.window_handle, |_, window, cx| {
+            let focus_handle = editor.read(cx).focus_handle(cx);
+            window.focus(&focus_handle, cx);
+          });
+        }
+        cx.notify();
+      });
+    });
+    self.open_file_task = Some(task);
+    self.focus_editor_if_asked(intent, window, cx);
+    cx.notify();
+  }
+
   /// A file as it was in a commit: a read-only snapshot with its own patch.
   pub(super) fn open_commit_file(
     &mut self,
@@ -729,9 +834,32 @@ impl SessionPage {
 mod tests {
   use super::super::test_support::*;
   use super::super::*;
+  use super::agent_snapshot_diff_set;
   use crate::test_support::{TempRepo, commit_text_file};
   use gpui::TestAppContext;
   use std::path::Path;
+
+  #[test]
+  fn agent_snapshot_diff_set_uses_reported_old_and_new_text() {
+    let diff_set = agent_snapshot_diff_set(Some("old\n"), "new\n", Path::new("src/main.rs"), false)
+      .expect("diff set");
+
+    assert_eq!(diff_set.uncommitted.hunks.len(), 1);
+    assert_eq!(diff_set.unstaged.hunks.len(), 1);
+    assert!(diff_set.staged.hunks.is_empty());
+    assert!(
+      diff_set.unstaged.hunks[0]
+        .lines
+        .iter()
+        .any(|line| line.kind == git::DiffLineKind::Remove && line.content.as_ref() == "old")
+    );
+    assert!(
+      diff_set.unstaged.hunks[0]
+        .lines
+        .iter()
+        .any(|line| line.kind == git::DiffLineKind::Add && line.content.as_ref() == "new")
+    );
+  }
 
   #[gpui::test]
   async fn the_conversation_stays_visible_next_to_an_open_diff(cx: &mut TestAppContext) {
