@@ -11,7 +11,11 @@ pub(crate) enum OpenedSnapshot {
   /// What a pull request proposes: its merge base against its head.
   PullRequestRange { base: String, head: String },
   /// The exact old/new text an agent reported for a tool call.
-  AgentTool { whole_file_change: bool },
+  AgentTool {
+    old_text: Option<String>,
+    new_text: String,
+    whole_file_change: bool,
+  },
 }
 
 fn agent_snapshot_diff_set(
@@ -169,11 +173,22 @@ impl SessionPage {
     self.show_preview = false;
     self.center = CenterView::Diff;
     self.sync_agent_chat_close_control(cx);
+    let app_settings = crate::config::AppSettings::get(cx);
+    self.diff_view = if app_settings.split_diff_view {
+      DiffViewMode::Split
+    } else {
+      DiffViewMode::Inline
+    };
+    if self.selected_file.is_none() {
+      self.hide_whitespace = app_settings.hide_whitespace;
+    }
     self.open_file_generation = self.open_file_generation.wrapping_add(1);
     let generation = self.open_file_generation;
     self.selected_file = Some(rel_path.clone());
     let agent_whole_file_change = old_text.is_none() || new_text.is_empty();
     self.opened_snapshot = Some(OpenedSnapshot::AgentTool {
+      old_text: old_text.clone(),
+      new_text: new_text.clone(),
       whole_file_change: agent_whole_file_change,
     });
     self.editor = None;
@@ -491,7 +506,10 @@ impl SessionPage {
   }
 
   pub(super) fn whole_file_change(&self, path: &Path, cx: &App) -> bool {
-    if let Some(OpenedSnapshot::AgentTool { whole_file_change }) = self.opened_snapshot.as_ref() {
+    if let Some(OpenedSnapshot::AgentTool {
+      whole_file_change, ..
+    }) = self.opened_snapshot.as_ref()
+    {
       return *whole_file_change;
     }
 
@@ -707,8 +725,44 @@ impl SessionPage {
       return;
     }
     self.hide_whitespace = !self.hide_whitespace;
-    if let Some(editor) = self.editor.as_ref() {
-      let value = self.hide_whitespace;
+    let value = self.hide_whitespace;
+    if let Some(OpenedSnapshot::AgentTool {
+      old_text, new_text, ..
+    }) = self.opened_snapshot.as_ref()
+      && let (Some(rel_path), Some(editor)) = (self.selected_file.clone(), self.editor.clone())
+    {
+      self.open_file_generation = self.open_file_generation.wrapping_add(1);
+      let generation = self.open_file_generation;
+      let old_text = old_text.clone();
+      let new_text = new_text.clone();
+      let task = cx.spawn(async move |this, cx| {
+        let diff_rel_path = rel_path.clone();
+        let diff_old_text = old_text.clone();
+        let diff_new_text = new_text.clone();
+        let diff_set = cx
+          .background_spawn(async move {
+            agent_snapshot_diff_set(
+              diff_old_text.as_deref(),
+              &diff_new_text,
+              &diff_rel_path,
+              value,
+            )
+          })
+          .await;
+        let _ = this.update(cx, move |this, cx| {
+          if this.open_file_generation != generation
+            || this.selected_file.as_ref() != Some(&rel_path)
+          {
+            return;
+          }
+          editor.update(cx, |editor, cx| {
+            editor.set_diffs(diff_set, cx);
+            editor.set_ignore_whitespace(value, cx);
+          });
+        });
+      });
+      self.open_file_task = Some(task);
+    } else if let Some(editor) = self.editor.as_ref() {
       editor.update(cx, |editor, cx| editor.set_ignore_whitespace(value, cx));
     }
     cx.notify();
@@ -870,6 +924,66 @@ mod tests {
         .iter()
         .any(|line| line.kind == git::DiffLineKind::Add && line.content.as_ref() == "new")
     );
+  }
+
+  fn snapshot_changed_line_count(
+    page: &Entity<SessionPage>,
+    cx: &mut gpui::VisualTestContext,
+  ) -> usize {
+    page.read_with(cx, |page, cx| {
+      page
+        .editor
+        .as_ref()
+        .expect("editor")
+        .read(cx)
+        .projection
+        .as_ref()
+        .map(|projection| {
+          projection
+            .lines
+            .iter()
+            .filter(|line| {
+              matches!(
+                line,
+                editor::DisplayLine::Modified { .. }
+                  | editor::DisplayLine::Removed { .. }
+                  | editor::DisplayLine::Doc {
+                    change: Some(editor::ChangeKind::Added),
+                    ..
+                  }
+              )
+            })
+            .count()
+        })
+        .unwrap_or_default()
+    })
+  }
+
+  #[gpui::test]
+  async fn agent_snapshot_hide_whitespace_toggle_rebuilds_the_snapshot_diff(
+    cx: &mut TestAppContext,
+  ) {
+    let repo = TempRepo::init("session-agent-snapshot-whitespace");
+    let (page, cx) = add_session_page_window(repo.path.clone(), cx);
+
+    page.update_in(cx, |page, window, cx| {
+      page.open_agent_diff_snapshot(
+        PathBuf::from("main.rs"),
+        Some("fn main() {\n  value();\n}\n".to_string()),
+        "fn main() {\n    value();\n}\n".to_string(),
+        None,
+        OpenIntent::Open,
+        window,
+        cx,
+      );
+    });
+    await_open_file(&page, cx).await;
+    assert!(snapshot_changed_line_count(&page, cx) > 0);
+
+    page.update(cx, |page, cx| page.toggle_hide_whitespace(cx));
+    await_open_file(&page, cx).await;
+
+    assert_eq!(snapshot_changed_line_count(&page, cx), 0);
   }
 
   #[gpui::test]
