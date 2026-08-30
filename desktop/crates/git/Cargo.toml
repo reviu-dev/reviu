@@ -10,8 +10,8 @@ test-support = []
 [dependencies]
 anyhow = { workspace = true }
 blake3 = { workspace = true }
+diff_core = { workspace = true }
 git2 = { workspace = true }
-imara-diff = { workspace = true }
 
 [dev-dependencies]
 criterion = { workspace = true }

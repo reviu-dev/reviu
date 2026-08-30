@@ -202,35 +202,47 @@ fn word_diff_ranges_impl(
   (merge_ranges(removed), merge_ranges(added))
 }
 
-fn diff_hunks(old: &str, new: &str) -> Vec<(Range<u32>, Range<u32>)> {
+pub fn line_hunks(old: &str, new: &str) -> Vec<LineHunk> {
   use imara_diff::{Algorithm, Diff, InternedInput};
 
   let input = InternedInput::new(old, new);
   let mut diff = Diff::compute(Algorithm::Histogram, &input);
   diff.postprocess_lines(&input);
-  diff.hunks().map(|hunk| (hunk.before, hunk.after)).collect()
+  diff
+    .hunks()
+    .map(|hunk| LineHunk {
+      old: hunk.before,
+      new: hunk.after,
+    })
+    .collect()
 }
 
 pub fn line_diff_counts(old: &str, new: &str) -> (u32, u32) {
   let mut added = 0u32;
   let mut removed = 0u32;
-  for (before, after) in diff_hunks(old, new) {
-    added += after.end - after.start;
-    removed += before.end - before.start;
+  for hunk in line_hunks(old, new) {
+    added += hunk.new.end - hunk.new.start;
+    removed += hunk.old.end - hunk.old.start;
   }
   (added, removed)
 }
 
-#[derive(Clone, Debug)]
-struct HunkGroup {
-  old_context_start: usize,
-  new_context_start: usize,
-  old_context_end: usize,
-  new_context_end: usize,
-  hunks: Vec<(Range<u32>, Range<u32>)>,
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct LineHunk {
+  pub old: Range<u32>,
+  pub new: Range<u32>,
 }
 
-impl HunkGroup {
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct LineHunkGroup {
+  pub old_context_start: usize,
+  pub new_context_start: usize,
+  pub old_context_end: usize,
+  pub new_context_end: usize,
+  pub hunks: Vec<LineHunk>,
+}
+
+impl LineHunkGroup {
   fn new(
     before: Range<u32>,
     after: Range<u32>,
@@ -247,7 +259,10 @@ impl HunkGroup {
       new_context_end: (after.end as usize)
         .saturating_add(context_lines)
         .min(new_len),
-      hunks: vec![(before, after)],
+      hunks: vec![LineHunk {
+        old: before,
+        new: after,
+      }],
     }
   }
 
@@ -270,7 +285,10 @@ impl HunkGroup {
     self.new_context_end = (after.end as usize)
       .saturating_add(context_lines)
       .min(new_len);
-    self.hunks.push((before, after));
+    self.hunks.push(LineHunk {
+      old: before,
+      new: after,
+    });
   }
 }
 
@@ -278,40 +296,46 @@ pub fn diff_rows(old: &str, new: &str) -> Vec<DiffRow> {
   diff_rows_with_context(old, new, DEFAULT_CONTEXT_LINES)
 }
 
-pub fn diff_rows_with_context(old: &str, new: &str, context_lines: usize) -> Vec<DiffRow> {
-  let hunks = diff_hunks(old, new);
+pub fn line_hunk_groups_with_context(
+  old: &str,
+  new: &str,
+  context_lines: usize,
+) -> Vec<LineHunkGroup> {
+  let hunks = line_hunks(old, new);
   if hunks.is_empty() {
     return Vec::new();
   }
 
-  let old_lines: Vec<&str> = old.lines().collect();
-  let new_lines: Vec<&str> = new.lines().collect();
-  let mut groups: Vec<HunkGroup> = Vec::new();
+  let old_line_count = old.lines().count();
+  let new_line_count = new.lines().count();
+  let mut groups: Vec<LineHunkGroup> = Vec::new();
 
-  for (before, after) in hunks {
+  for hunk in hunks {
+    let before = hunk.old;
+    let after = hunk.new;
     if let Some(group) = groups.last_mut()
       && group.overlaps(&before, &after, context_lines)
     {
-      group.push(
-        before,
-        after,
-        old_lines.len(),
-        new_lines.len(),
-        context_lines,
-      );
+      group.push(before, after, old_line_count, new_line_count, context_lines);
       continue;
     }
-    groups.push(HunkGroup::new(
+    groups.push(LineHunkGroup::new(
       before,
       after,
-      old_lines.len(),
-      new_lines.len(),
+      old_line_count,
+      new_line_count,
       context_lines,
     ));
   }
 
+  groups
+}
+
+pub fn diff_rows_with_context(old: &str, new: &str, context_lines: usize) -> Vec<DiffRow> {
+  let old_lines: Vec<&str> = old.lines().collect();
+  let new_lines: Vec<&str> = new.lines().collect();
   let mut rows = Vec::new();
-  for group in groups {
+  for group in line_hunk_groups_with_context(old, new, context_lines) {
     if !rows.is_empty() {
       rows.push(DiffRow {
         kind: DiffRowKind::Gap,
@@ -354,7 +378,7 @@ fn push_context_rows(
 }
 
 fn push_group_rows(
-  group: &HunkGroup,
+  group: &LineHunkGroup,
   old_lines: &[&str],
   new_lines: &[&str],
   rows: &mut Vec<DiffRow>,
@@ -362,21 +386,23 @@ fn push_group_rows(
   let mut old_cursor = group.old_context_start;
   let mut new_cursor = group.new_context_start;
 
-  for (before, after) in &group.hunks {
+  for hunk in &group.hunks {
     push_context_rows(
       &mut old_cursor,
       &mut new_cursor,
-      before.start as usize,
-      after.start as usize,
+      hunk.old.start as usize,
+      hunk.new.start as usize,
       old_lines,
       rows,
     );
 
-    let removed: Vec<&str> = before
+    let removed: Vec<&str> = hunk
+      .old
       .clone()
       .filter_map(|idx| old_lines.get(idx as usize).copied())
       .collect();
-    let added: Vec<&str> = after
+    let added: Vec<&str> = hunk
+      .new
       .clone()
       .filter_map(|idx| new_lines.get(idx as usize).copied())
       .collect();
@@ -388,7 +414,7 @@ fn push_group_rows(
     for (offset, line) in removed.iter().enumerate() {
       rows.push(DiffRow {
         kind: DiffRowKind::Removed,
-        old_line: Some(before.start + offset as u32 + 1),
+        old_line: Some(hunk.old.start + offset as u32 + 1),
         new_line: None,
         text: (*line).to_string(),
         word_diff_ranges: word_pairs
@@ -402,7 +428,7 @@ fn push_group_rows(
       rows.push(DiffRow {
         kind: DiffRowKind::Added,
         old_line: None,
-        new_line: Some(after.start + offset as u32 + 1),
+        new_line: Some(hunk.new.start + offset as u32 + 1),
         text: (*line).to_string(),
         word_diff_ranges: word_pairs
           .get(offset)
@@ -411,8 +437,8 @@ fn push_group_rows(
       });
     }
 
-    old_cursor = before.end as usize;
-    new_cursor = after.end as usize;
+    old_cursor = hunk.old.end as usize;
+    new_cursor = hunk.new.end as usize;
   }
 
   push_context_rows(

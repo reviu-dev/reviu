@@ -5,11 +5,9 @@ use std::{
   sync::Arc,
 };
 
+use crate::GitFileBases;
 use anyhow::{Context, Result, bail};
 use git2::{ApplyLocation, Diff, DiffLineType, DiffOptions, Repository};
-use imara_diff::{Algorithm, Diff as ImaraDiff, InternedInput};
-
-use crate::GitFileBases;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum DiffKind {
@@ -479,15 +477,10 @@ pub fn compute_buffer_diff(
     (base_text, buffer_text)
   };
 
-  let input = InternedInput::new(diff_base, diff_buffer);
-  let mut diff = ImaraDiff::compute(Algorithm::Histogram, &input);
-  diff.postprocess_lines(&input);
+  let context_lines = 3;
+  let hunk_groups = diff_core::line_hunk_groups_with_context(diff_base, diff_buffer, context_lines);
 
-  let context_lines: u32 = 3;
-  let before_len = input.before.len() as u32;
-  let raw_hunks: Vec<_> = diff.hunks().collect();
-
-  if raw_hunks.is_empty() {
+  if hunk_groups.is_empty() {
     return Ok(FileDiff {
       kind,
       hunks: Vec::new(),
@@ -500,24 +493,18 @@ pub fn compute_buffer_diff(
     (Arc::from(trimmed), !had_newline)
   };
 
-  // Get original line content (with indentation) regardless of ignore_whitespace mode.
   let get_before_line =
     |idx: u32| -> (Arc<str>, bool) { strip_newline(base_original[idx as usize]) };
   let get_after_line =
     |idx: u32| -> (Arc<str>, bool) { strip_newline(buffer_original[idx as usize]) };
 
   let mut hunks = Vec::new();
-  let mut group_lines: Vec<DiffLine> = Vec::new();
-  let first = &raw_hunks[0];
-  let mut group_before_start = first.before.start.saturating_sub(context_lines);
-  let mut group_after_start = first.after.start.saturating_sub(context_lines);
-  let mut group_before_pos = group_before_start;
+  for group in hunk_groups {
+    let mut group_lines = Vec::new();
+    let mut group_before_pos = group.old_context_start as u32;
 
-  for (i, raw_hunk) in raw_hunks.iter().enumerate() {
-    // Check if this hunk is far enough from the previous to start a new group
-    if i > 0 && raw_hunk.before.start.saturating_sub(group_before_pos) > 2 * context_lines {
-      let trailing_end = (group_before_pos + context_lines).min(before_len);
-      for idx in group_before_pos..trailing_end {
+    for hunk in &group.hunks {
+      for idx in group_before_pos..hunk.old.start {
         let (content, no_newline) = get_before_line(idx);
         group_lines.push(DiffLine {
           kind: DiffLineKind::Context,
@@ -526,27 +513,28 @@ pub fn compute_buffer_diff(
         });
       }
 
-      let mut diff_hunk = DiffHunk {
-        id: String::new(),
-        old_start: group_before_start as usize + 1,
-        old_lines: 0,
-        new_start: group_after_start as usize + 1,
-        new_lines: 0,
-        lines: std::mem::take(&mut group_lines),
-      };
-      let (old_lines, new_lines) = count_hunk_line_counts(&diff_hunk);
-      diff_hunk.old_lines = old_lines;
-      diff_hunk.new_lines = new_lines;
-      normalize_no_newline_hunk(&mut diff_hunk, trailing_change);
-      diff_hunk.id = compute_hunk_id(&diff_hunk);
-      hunks.push(diff_hunk);
+      for idx in hunk.old.clone() {
+        let (content, no_newline) = get_before_line(idx);
+        group_lines.push(DiffLine {
+          kind: DiffLineKind::Remove,
+          content,
+          no_newline,
+        });
+      }
 
-      group_before_start = raw_hunk.before.start.saturating_sub(context_lines);
-      group_after_start = raw_hunk.after.start.saturating_sub(context_lines);
-      group_before_pos = group_before_start;
+      for idx in hunk.new.clone() {
+        let (content, no_newline) = get_after_line(idx);
+        group_lines.push(DiffLine {
+          kind: DiffLineKind::Add,
+          content,
+          no_newline,
+        });
+      }
+
+      group_before_pos = hunk.old.end;
     }
 
-    for idx in group_before_pos..raw_hunk.before.start {
+    for idx in group_before_pos..group.old_context_end as u32 {
       let (content, no_newline) = get_before_line(idx);
       group_lines.push(DiffLine {
         kind: DiffLineKind::Context,
@@ -555,51 +543,21 @@ pub fn compute_buffer_diff(
       });
     }
 
-    for idx in raw_hunk.before.start..raw_hunk.before.end {
-      let (content, no_newline) = get_before_line(idx);
-      group_lines.push(DiffLine {
-        kind: DiffLineKind::Remove,
-        content,
-        no_newline,
-      });
-    }
-
-    for idx in raw_hunk.after.start..raw_hunk.after.end {
-      let (content, no_newline) = get_after_line(idx);
-      group_lines.push(DiffLine {
-        kind: DiffLineKind::Add,
-        content,
-        no_newline,
-      });
-    }
-
-    group_before_pos = raw_hunk.before.end;
+    let mut diff_hunk = DiffHunk {
+      id: String::new(),
+      old_start: group.old_context_start + 1,
+      old_lines: 0,
+      new_start: group.new_context_start + 1,
+      new_lines: 0,
+      lines: group_lines,
+    };
+    let (old_lines, new_lines) = count_hunk_line_counts(&diff_hunk);
+    diff_hunk.old_lines = old_lines;
+    diff_hunk.new_lines = new_lines;
+    normalize_no_newline_hunk(&mut diff_hunk, trailing_change);
+    diff_hunk.id = compute_hunk_id(&diff_hunk);
+    hunks.push(diff_hunk);
   }
-
-  let trailing_end = (group_before_pos + context_lines).min(before_len);
-  for idx in group_before_pos..trailing_end {
-    let (content, no_newline) = get_before_line(idx);
-    group_lines.push(DiffLine {
-      kind: DiffLineKind::Context,
-      content,
-      no_newline,
-    });
-  }
-
-  let mut diff_hunk = DiffHunk {
-    id: String::new(),
-    old_start: group_before_start as usize + 1,
-    old_lines: 0,
-    new_start: group_after_start as usize + 1,
-    new_lines: 0,
-    lines: group_lines,
-  };
-  let (old_lines, new_lines) = count_hunk_line_counts(&diff_hunk);
-  diff_hunk.old_lines = old_lines;
-  diff_hunk.new_lines = new_lines;
-  normalize_no_newline_hunk(&mut diff_hunk, trailing_change);
-  diff_hunk.id = compute_hunk_id(&diff_hunk);
-  hunks.push(diff_hunk);
 
   Ok(FileDiff { kind, hunks })
 }

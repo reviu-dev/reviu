@@ -3272,8 +3272,8 @@ dependencies = [
  "anyhow",
  "blake3",
  "criterion",
+ "diff_core",
  "git2",
- "imara-diff",
 ]
 
 [[package]]
