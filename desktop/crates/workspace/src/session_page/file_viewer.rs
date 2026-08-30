@@ -11,7 +11,7 @@ pub(crate) enum OpenedSnapshot {
   /// What a pull request proposes: its merge base against its head.
   PullRequestRange { base: String, head: String },
   /// The exact old/new text an agent reported for a tool call.
-  AgentTool,
+  AgentTool { whole_file_change: bool },
 }
 
 fn agent_snapshot_diff_set(
@@ -172,7 +172,10 @@ impl SessionPage {
     self.open_file_generation = self.open_file_generation.wrapping_add(1);
     let generation = self.open_file_generation;
     self.selected_file = Some(rel_path.clone());
-    self.opened_snapshot = Some(OpenedSnapshot::AgentTool);
+    let agent_whole_file_change = old_text.is_none() || new_text.is_empty();
+    self.opened_snapshot = Some(OpenedSnapshot::AgentTool {
+      whole_file_change: agent_whole_file_change,
+    });
     self.editor = None;
     self.binary_preview = None;
     self.svg_preview.update(cx, |preview, _| preview.clear());
@@ -185,7 +188,11 @@ impl SessionPage {
       });
 
     let file_path = repo_root.join(&rel_path);
-    let diff_view = self.effective_diff_view(&rel_path, cx);
+    let diff_view = if agent_whole_file_change {
+      DiffViewMode::Inline
+    } else {
+      self.effective_diff_view(&rel_path, cx)
+    };
     let hide_whitespace = self.hide_whitespace;
     let reveal_doc_line = reveal_line.map(|line| line.saturating_sub(1) as usize);
     let task = cx.spawn(async move |this, cx| {
@@ -484,6 +491,10 @@ impl SessionPage {
   }
 
   pub(super) fn whole_file_change(&self, path: &Path, cx: &App) -> bool {
+    if let Some(OpenedSnapshot::AgentTool { whole_file_change }) = self.opened_snapshot.as_ref() {
+      return *whole_file_change;
+    }
+
     self
       .dock_panel
       .read(cx)
@@ -859,6 +870,41 @@ mod tests {
         .iter()
         .any(|line| line.kind == git::DiffLineKind::Add && line.content.as_ref() == "new")
     );
+  }
+
+  #[gpui::test]
+  async fn agent_snapshot_for_a_new_file_stays_inline(cx: &mut TestAppContext) {
+    let repo = TempRepo::init("session-agent-snapshot-new-file-inline");
+    let (page, cx) = add_session_page_window(repo.path.clone(), cx);
+    page.update(cx, |_, cx| {
+      crate::config::AppSettings::update(cx, |settings| settings.split_diff_view = true);
+    });
+
+    page.update_in(cx, |page, window, cx| {
+      page.open_agent_diff_snapshot(
+        PathBuf::from("new.txt"),
+        None,
+        "created\n".to_string(),
+        None,
+        OpenIntent::Open,
+        window,
+        cx,
+      );
+    });
+    await_open_file(&page, cx).await;
+
+    page.read_with(cx, |page, cx| {
+      assert!(page.split_disabled(cx));
+      assert_eq!(
+        page
+          .editor
+          .as_ref()
+          .expect("editor")
+          .read(cx)
+          .diff_view_mode(),
+        DiffViewMode::Inline
+      );
+    });
   }
 
   #[gpui::test]
