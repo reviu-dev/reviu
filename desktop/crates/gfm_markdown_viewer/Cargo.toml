@@ -5,6 +5,7 @@ edition = "2024"
 publish = false
 
 [dependencies]
+diff_core.workspace = true
 gpui.workspace = true
 gpui-component.workspace = true
 comrak.workspace = true
@@ -14,7 +15,6 @@ base64.workspace = true
 selectable_text.workspace = true
 syntax.workspace = true
 ui.workspace = true
-unicode-segmentation.workspace = true
 tree-sitter.workspace = true
 tree-sitter-html.workspace = true
 

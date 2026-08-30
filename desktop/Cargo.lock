@@ -379,18 +379,17 @@ dependencies = [
  "async-process",
  "base64 0.23.1",
  "blake3",
+ "diff_core",
  "dirs 5.0.1",
  "futures",
  "gpui",
  "gpui-component",
- "imara-diff",
  "log",
  "selectable_text",
  "serde",
  "serde_json",
  "syntax",
  "ui",
- "unicode-segmentation",
 ]
 
 [[package]]
@@ -2269,6 +2268,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "diff_core"
+version = "0.18.0"
+dependencies = [
+ "imara-diff",
+ "unicode-segmentation",
+]
+
+[[package]]
 name = "digest"
 version = "0.10.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2422,6 +2429,7 @@ dependencies = [
  "blake3",
  "buffer",
  "criterion",
+ "diff_core",
  "gfm_markdown_viewer",
  "git",
  "gpui",
@@ -3187,6 +3195,7 @@ version = "0.1.0"
 dependencies = [
  "base64 0.23.1",
  "comrak",
+ "diff_core",
  "gpui",
  "gpui-component",
  "once_cell",
@@ -3196,7 +3205,6 @@ dependencies = [
  "tree-sitter",
  "tree-sitter-html",
  "ui",
- "unicode-segmentation",
 ]
 
 [[package]]

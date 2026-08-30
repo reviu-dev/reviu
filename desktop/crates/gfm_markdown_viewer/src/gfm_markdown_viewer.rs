@@ -23,6 +23,7 @@ pub use crate::types::{
   GithubIssueReferenceContext, Inline, LinkAction, List, MarkdownRenderState, ParsedMarkdown,
   SuggestionActionContext, SuggestionContext, Table,
 };
+use diff_core::{merge_ranges, word_diff_ranges};
 use gpui::{
   AnyElement, App, CursorStyle, Div, MouseButton, SharedString, Window, div, prelude::*, px,
 };
@@ -34,12 +35,9 @@ use gpui_component::{
 use syntax::TokenType;
 use syntax::{HighlightSpan, SyntaxHighlighter, languages};
 use ui::{ScrollAxes, restrict_scroll_to_wheel_axis, scrollable_node};
-use unicode_segmentation::UnicodeSegmentation;
-
 type SuggestionActionRenderFn = dyn Fn(SuggestionActionContext, &App) -> AnyElement + Send + Sync;
 pub(crate) type LinkHandlerFn = dyn Fn(&str, &mut Window, &mut App) -> LinkAction + Send + Sync;
 pub type AssetUrlResolverFn = dyn Fn(&str) -> Option<String> + Send + Sync;
-const WORD_DIFF_MAX_COMBINED_BYTES: usize = 2_048;
 
 #[derive(Clone, Default)]
 pub struct MarkdownRenderOptions {
@@ -157,186 +155,6 @@ fn github_diff_line_background(kind: GithubDiffLineKind, cx: &App) -> gpui::Hsla
 struct DiffWordHighlight {
   ranges: Vec<Range<usize>>,
   background: InlineBackground,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum IdentifierCharKind {
-  Lower,
-  Upper,
-  Digit,
-  Underscore,
-  Other,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-struct WordToken {
-  text: String,
-  range: Range<usize>,
-}
-
-fn identifier_char_kind(ch: char) -> IdentifierCharKind {
-  if ch == '_' {
-    IdentifierCharKind::Underscore
-  } else if ch.is_lowercase() {
-    IdentifierCharKind::Lower
-  } else if ch.is_uppercase() {
-    IdentifierCharKind::Upper
-  } else if ch.is_numeric() {
-    IdentifierCharKind::Digit
-  } else {
-    IdentifierCharKind::Other
-  }
-}
-
-fn split_identifier_token_ranges(segment: &str) -> Vec<Range<usize>> {
-  let chars: Vec<_> = segment.char_indices().collect();
-  if chars.is_empty() {
-    return Vec::new();
-  }
-
-  let mut ranges = Vec::new();
-  let mut start = 0usize;
-
-  for idx in 1..chars.len() {
-    let (byte_offset, current) = chars[idx];
-    let (_, previous) = chars[idx - 1];
-    let previous_kind = identifier_char_kind(previous);
-    let current_kind = identifier_char_kind(current);
-    let next_kind = chars
-      .get(idx + 1)
-      .map(|(_, next)| identifier_char_kind(*next));
-
-    let should_split = match (previous_kind, current_kind) {
-      (IdentifierCharKind::Underscore, _) | (_, IdentifierCharKind::Underscore) => true,
-      (IdentifierCharKind::Digit, IdentifierCharKind::Digit) => false,
-      (IdentifierCharKind::Digit, _) | (_, IdentifierCharKind::Digit) => true,
-      (IdentifierCharKind::Lower, IdentifierCharKind::Upper) => true,
-      (IdentifierCharKind::Upper, IdentifierCharKind::Upper) => {
-        next_kind == Some(IdentifierCharKind::Lower)
-      }
-      _ => false,
-    };
-
-    if should_split {
-      ranges.push(start..byte_offset);
-      start = byte_offset;
-    }
-  }
-
-  ranges.push(start..segment.len());
-  ranges
-}
-
-fn word_tokens(text: &str, include_whitespace: bool) -> Vec<WordToken> {
-  let mut tokens = Vec::new();
-  for (idx, segment) in text.split_word_bound_indices() {
-    if !include_whitespace && segment.trim().is_empty() {
-      continue;
-    }
-    let subranges = split_identifier_token_ranges(segment);
-    if subranges.is_empty() {
-      tokens.push(WordToken {
-        text: segment.to_string(),
-        range: idx..idx + segment.len(),
-      });
-      continue;
-    }
-
-    for subrange in subranges {
-      tokens.push(WordToken {
-        text: segment[subrange.clone()].to_string(),
-        range: idx + subrange.start..idx + subrange.end,
-      });
-    }
-  }
-  tokens
-}
-
-fn merge_ranges(mut ranges: Vec<Range<usize>>) -> Vec<Range<usize>> {
-  ranges.sort_by_key(|range| range.start);
-  let mut merged: Vec<Range<usize>> = Vec::new();
-  for range in ranges {
-    if let Some(last) = merged.last_mut()
-      && range.start <= last.end
-    {
-      last.end = last.end.max(range.end);
-      continue;
-    }
-    merged.push(range);
-  }
-  merged
-}
-
-fn word_diff_ranges(old_text: &str, new_text: &str) -> (Vec<Range<usize>>, Vec<Range<usize>>) {
-  if old_text == new_text {
-    return (Vec::new(), Vec::new());
-  }
-
-  if old_text.len().saturating_add(new_text.len()) > WORD_DIFF_MAX_COMBINED_BYTES {
-    return (Vec::new(), Vec::new());
-  }
-
-  let (removed, added) = word_diff_ranges_impl(old_text, new_text, false);
-  if removed.is_empty() && added.is_empty() && old_text != new_text {
-    return word_diff_ranges_impl(old_text, new_text, true);
-  }
-  (removed, added)
-}
-
-fn word_diff_ranges_impl(
-  old_text: &str,
-  new_text: &str,
-  include_whitespace: bool,
-) -> (Vec<Range<usize>>, Vec<Range<usize>>) {
-  let old_tokens = word_tokens(old_text, include_whitespace);
-  let new_tokens = word_tokens(new_text, include_whitespace);
-
-  let old_len = old_tokens.len();
-  let new_len = new_tokens.len();
-  if old_len == 0 && new_len == 0 {
-    return (Vec::new(), Vec::new());
-  }
-
-  let mut dp = vec![vec![0usize; new_len + 1]; old_len + 1];
-  for i in 0..old_len {
-    for j in 0..new_len {
-      if old_tokens[i].text == new_tokens[j].text {
-        dp[i + 1][j + 1] = dp[i][j] + 1;
-      } else {
-        dp[i + 1][j + 1] = dp[i][j + 1].max(dp[i + 1][j]);
-      }
-    }
-  }
-
-  let mut matched_old = vec![false; old_len];
-  let mut matched_new = vec![false; new_len];
-  let mut i = old_len;
-  let mut j = new_len;
-  while i > 0 && j > 0 {
-    if old_tokens[i - 1].text == new_tokens[j - 1].text {
-      matched_old[i - 1] = true;
-      matched_new[j - 1] = true;
-      i -= 1;
-      j -= 1;
-    } else if dp[i - 1][j] >= dp[i][j - 1] {
-      i -= 1;
-    } else {
-      j -= 1;
-    }
-  }
-
-  let removed = old_tokens
-    .iter()
-    .enumerate()
-    .filter_map(|(idx, token)| (!matched_old[idx]).then_some(token.range.clone()))
-    .collect();
-  let added = new_tokens
-    .iter()
-    .enumerate()
-    .filter_map(|(idx, token)| (!matched_new[idx]).then_some(token.range.clone()))
-    .collect();
-
-  (merge_ranges(removed), merge_ranges(added))
 }
 
 fn apply_inline_background_ranges(

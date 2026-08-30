@@ -974,18 +974,23 @@ pub(crate) fn render_tool_call(
           let mono_font = mono_font_for(theme);
           // A created-empty file is one blank added line: a bare green band
           // reads as a glitch, so name the emptiness.
-          let empty_creation =
-            d.lines.len() == 1 && d.removed == 0 && d.lines[0].text.trim().is_empty();
+          let empty_creation = d.lines.len() == 1
+            && d.removed == 0
+            && d.lines[0].kind == DiffLineKind::Added
+            && d.lines[0].text.trim().is_empty();
           let show_line_numbers = d
             .lines
             .iter()
             .take(visible)
             .any(|line| line.old_line.is_some() || line.new_line.is_some());
-          let diff_gutter = |old_line: Option<u32>, new_line: Option<u32>| {
+          let diff_gutter = |line: &crate::diff::DiffLine| {
+            let number = match line.kind {
+              DiffLineKind::Context | DiffLineKind::Added => line.new_line.or(line.old_line),
+              DiffLineKind::Removed => line.old_line,
+            };
             SharedString::from(format!(
-              "{:>4} {:>4}",
-              old_line.map(|n| n.to_string()).unwrap_or_default(),
-              new_line.map(|n| n.to_string()).unwrap_or_default()
+              "{:>5}",
+              number.map(|n| n.to_string()).unwrap_or_default()
             ))
           };
           let mut rows = Vec::with_capacity(visible);
@@ -993,6 +998,7 @@ pub(crate) fn render_tool_call(
           let mut row_ranges = Vec::with_capacity(visible);
           for line in d.lines.iter().take(visible) {
             let (bg, fg, hl_bg) = match line.kind {
+              DiffLineKind::Context => (theme.background, theme.foreground, theme.background),
               DiffLineKind::Added => (
                 ui_theme.diff_added_background(),
                 theme.foreground,
@@ -1000,11 +1006,11 @@ pub(crate) fn render_tool_call(
               ),
               DiffLineKind::Removed => (
                 ui_theme.diff_removed_background(),
-                theme.foreground,
+                ui_theme.diff_removed_text(),
                 ui_theme.diff_word_removed_background(),
               ),
             };
-            let gutter = show_line_numbers.then(|| diff_gutter(line.old_line, line.new_line));
+            let gutter = show_line_numbers.then(|| diff_gutter(line));
             if !selection_text.is_empty() {
               selection_text.push('\n');
             }
@@ -1050,7 +1056,7 @@ pub(crate) fn render_tool_call(
               band: bg,
             });
           }
-          let gutter_width = if show_line_numbers { px(70.) } else { px(0.) };
+          let gutter_width = if show_line_numbers { px(54.) } else { px(0.) };
           let body = mini_code_block(theme).child(
             code_lines::CodeLines::new(
               rows,

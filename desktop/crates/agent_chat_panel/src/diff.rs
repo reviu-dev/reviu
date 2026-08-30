@@ -1,4 +1,5 @@
 use agent_client_protocol::schema::{ContentBlock, ToolCallContent};
+use diff_core::{DiffRowKind, diff_rows, line_diff_counts};
 use syntax::HighlightSpan;
 
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
@@ -214,6 +215,7 @@ pub(crate) struct DiffLine {
 
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
 pub(crate) enum DiffLineKind {
+  Context,
   Added,
   Removed,
 }
@@ -230,229 +232,91 @@ pub(crate) struct InlineSpan {
   pub text: String,
 }
 
-pub(crate) const WORD_DIFF_MAX_COMBINED_BYTES: usize = 2_048;
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum IdentifierCharKind {
-  Lower,
-  Upper,
-  Digit,
-  Underscore,
-  Other,
-}
-
-fn identifier_char_kind(ch: char) -> IdentifierCharKind {
-  if ch == '_' {
-    IdentifierCharKind::Underscore
-  } else if ch.is_lowercase() {
-    IdentifierCharKind::Lower
-  } else if ch.is_uppercase() {
-    IdentifierCharKind::Upper
-  } else if ch.is_numeric() {
-    IdentifierCharKind::Digit
-  } else {
-    IdentifierCharKind::Other
-  }
-}
-
-fn split_identifier_token_ranges(segment: &str) -> Vec<std::ops::Range<usize>> {
-  let chars: Vec<_> = segment.char_indices().collect();
-  if chars.is_empty() {
+fn spans_from_ranges(text: &str, ranges: &[std::ops::Range<usize>]) -> Vec<InlineSpan> {
+  if text.is_empty() {
     return Vec::new();
   }
-  let mut ranges = Vec::new();
-  let mut start = 0usize;
-  for idx in 1..chars.len() {
-    let (byte_offset, current) = chars[idx];
-    let (_, previous) = chars[idx - 1];
-    let previous_kind = identifier_char_kind(previous);
-    let current_kind = identifier_char_kind(current);
-    let next_kind = chars
-      .get(idx + 1)
-      .map(|(_, next)| identifier_char_kind(*next));
-    let should_split = match (previous_kind, current_kind) {
-      (IdentifierCharKind::Underscore, _) | (_, IdentifierCharKind::Underscore) => true,
-      (IdentifierCharKind::Digit, IdentifierCharKind::Digit) => false,
-      (IdentifierCharKind::Digit, _) | (_, IdentifierCharKind::Digit) => true,
-      (IdentifierCharKind::Lower, IdentifierCharKind::Upper) => true,
-      (IdentifierCharKind::Upper, IdentifierCharKind::Upper) => {
-        next_kind == Some(IdentifierCharKind::Lower)
-      }
-      _ => false,
-    };
-    if should_split {
-      ranges.push(start..byte_offset);
-      start = byte_offset;
-    }
-  }
-  ranges.push(start..segment.len());
-  ranges
-}
 
-fn word_tokens(text: &str, include_whitespace: bool) -> Vec<&str> {
-  use unicode_segmentation::UnicodeSegmentation;
-  let mut tokens = Vec::new();
-  for (_idx, segment) in text.split_word_bound_indices() {
-    if !include_whitespace && segment.trim().is_empty() {
+  let mut spans = Vec::new();
+  let mut cursor = 0usize;
+  for range in ranges {
+    let start = range.start.min(text.len());
+    let end = range.end.min(text.len());
+    if start >= end {
       continue;
     }
-    let subranges = split_identifier_token_ranges(segment);
-    if subranges.is_empty() {
-      tokens.push(segment);
-      continue;
+    if cursor < start
+      && let Some(slice) = text.get(cursor..start)
+    {
+      spans.push(InlineSpan {
+        kind: InlineSpanKind::Same,
+        text: slice.to_string(),
+      });
     }
-    for subrange in subranges {
-      tokens.push(&segment[subrange]);
+    if let Some(slice) = text.get(start..end) {
+      spans.push(InlineSpan {
+        kind: InlineSpanKind::Diff,
+        text: slice.to_string(),
+      });
     }
+    cursor = end;
   }
-  tokens
+
+  if cursor < text.len()
+    && let Some(slice) = text.get(cursor..)
+  {
+    spans.push(InlineSpan {
+      kind: InlineSpanKind::Same,
+      text: slice.to_string(),
+    });
+  }
+
+  if spans.is_empty() {
+    spans.push(InlineSpan {
+      kind: InlineSpanKind::Same,
+      text: text.to_string(),
+    });
+  }
+  spans
 }
 
+#[cfg(test)]
 pub(crate) fn word_diff_spans(old: &str, new: &str) -> (Vec<InlineSpan>, Vec<InlineSpan>) {
-  if old == new {
-    let same_old = vec![InlineSpan {
-      kind: InlineSpanKind::Same,
-      text: old.to_string(),
-    }];
-    let same_new = vec![InlineSpan {
-      kind: InlineSpanKind::Same,
-      text: new.to_string(),
-    }];
-    return (same_old, same_new);
-  }
-  if old.len().saturating_add(new.len()) > WORD_DIFF_MAX_COMBINED_BYTES {
+  if old != new && old.len().saturating_add(new.len()) > diff_core::WORD_DIFF_MAX_COMBINED_BYTES {
     return (Vec::new(), Vec::new());
   }
-  word_diff_spans_impl(old, new)
-}
 
-fn word_diff_spans_impl(old: &str, new: &str) -> (Vec<InlineSpan>, Vec<InlineSpan>) {
-  let a = word_tokens(old, true);
-  let b = word_tokens(new, true);
-  let n = a.len();
-  let m = b.len();
-  let mut dp = vec![vec![0u32; m + 1]; n + 1];
-  for i in 0..n {
-    for j in 0..m {
-      dp[i + 1][j + 1] = if a[i] == b[j] {
-        dp[i][j] + 1
-      } else {
-        dp[i + 1][j].max(dp[i][j + 1])
-      };
-    }
-  }
-  let mut old_spans: Vec<InlineSpan> = Vec::new();
-  let mut new_spans: Vec<InlineSpan> = Vec::new();
-  let mut i = n;
-  let mut j = m;
-  while i > 0 || j > 0 {
-    if i > 0 && j > 0 && a[i - 1] == b[j - 1] {
-      old_spans.push(InlineSpan {
-        kind: InlineSpanKind::Same,
-        text: a[i - 1].to_string(),
-      });
-      new_spans.push(InlineSpan {
-        kind: InlineSpanKind::Same,
-        text: b[j - 1].to_string(),
-      });
-      i -= 1;
-      j -= 1;
-    } else if j > 0 && (i == 0 || dp[i][j - 1] >= dp[i - 1][j]) {
-      new_spans.push(InlineSpan {
-        kind: InlineSpanKind::Diff,
-        text: b[j - 1].to_string(),
-      });
-      j -= 1;
-    } else {
-      old_spans.push(InlineSpan {
-        kind: InlineSpanKind::Diff,
-        text: a[i - 1].to_string(),
-      });
-      i -= 1;
-    }
-  }
-  old_spans.reverse();
-  new_spans.reverse();
+  let (removed_ranges, added_ranges) = diff_core::word_diff_ranges(old, new);
   (
-    merge_adjacent_spans(old_spans),
-    merge_adjacent_spans(new_spans),
+    spans_from_ranges(old, &removed_ranges),
+    spans_from_ranges(new, &added_ranges),
   )
 }
 
-fn merge_adjacent_spans(spans: Vec<InlineSpan>) -> Vec<InlineSpan> {
-  let mut out: Vec<InlineSpan> = Vec::new();
-  for s in spans {
-    if let Some(last) = out.last_mut()
-      && last.kind == s.kind
-    {
-      last.text.push_str(&s.text);
-      continue;
-    }
-    out.push(s);
-  }
-  out
-}
-
 pub(crate) fn build_diff_lines(old: &str, new: &str) -> Vec<DiffLine> {
-  use imara_diff::{Algorithm, Diff, InternedInput};
-  let input = InternedInput::new(old, new);
-  let diff = Diff::compute(Algorithm::Histogram, &input);
-  let old_lines: Vec<&str> = old.lines().collect();
-  let new_lines: Vec<&str> = new.lines().collect();
-  let mut out = Vec::new();
-  for hunk in diff.hunks() {
-    let removed: Vec<&str> = hunk
-      .before
-      .clone()
-      .filter_map(|i| old_lines.get(i as usize).copied())
-      .collect();
-    let added: Vec<&str> = hunk
-      .after
-      .clone()
-      .filter_map(|i| new_lines.get(i as usize).copied())
-      .collect();
-    let paired = removed.len().min(added.len());
-    for k in 0..paired {
-      let (old_spans, new_spans) = word_diff_spans(removed[k], added[k]);
-      out.push(DiffLine {
-        kind: DiffLineKind::Removed,
-        old_line: Some(hunk.before.start + k as u32 + 1),
-        new_line: None,
-        text: removed[k].to_string(),
-        spans: old_spans,
+  diff_rows(old, new)
+    .into_iter()
+    .map(|row| {
+      let kind = match row.kind {
+        DiffRowKind::Context => DiffLineKind::Context,
+        DiffRowKind::Added => DiffLineKind::Added,
+        DiffRowKind::Removed => DiffLineKind::Removed,
+      };
+      let spans = if kind == DiffLineKind::Context || row.word_diff_ranges.is_empty() {
+        Vec::new()
+      } else {
+        spans_from_ranges(&row.text, &row.word_diff_ranges)
+      };
+      DiffLine {
+        kind,
+        old_line: row.old_line,
+        new_line: row.new_line,
+        text: row.text,
+        spans,
         syntax_spans: Vec::new(),
-      });
-      out.push(DiffLine {
-        kind: DiffLineKind::Added,
-        old_line: None,
-        new_line: Some(hunk.after.start + k as u32 + 1),
-        text: added[k].to_string(),
-        spans: new_spans,
-        syntax_spans: Vec::new(),
-      });
-    }
-    for (offset, line) in removed.iter().enumerate().skip(paired) {
-      out.push(DiffLine {
-        kind: DiffLineKind::Removed,
-        old_line: Some(hunk.before.start + offset as u32 + 1),
-        new_line: None,
-        text: (*line).to_string(),
-        spans: Vec::new(),
-        syntax_spans: Vec::new(),
-      });
-    }
-    for (offset, line) in added.iter().enumerate().skip(paired) {
-      out.push(DiffLine {
-        kind: DiffLineKind::Added,
-        old_line: None,
-        new_line: Some(hunk.after.start + offset as u32 + 1),
-        text: (*line).to_string(),
-        spans: Vec::new(),
-        syntax_spans: Vec::new(),
-      });
-    }
-  }
-  out
+      }
+    })
+    .collect()
 }
 
 pub(crate) fn backfill_legacy_line_numbers(summary: &mut DiffSummary, start_line: Option<u32>) {
@@ -471,6 +335,12 @@ pub(crate) fn backfill_legacy_line_numbers(summary: &mut DiffSummary, start_line
   let mut new_line = start_line;
   for line in &mut summary.lines {
     match line.kind {
+      DiffLineKind::Context => {
+        line.old_line = Some(old_line);
+        line.new_line = Some(new_line);
+        old_line += 1;
+        new_line += 1;
+      }
       DiffLineKind::Removed => {
         line.old_line = Some(old_line);
         old_line += 1;
@@ -484,16 +354,8 @@ pub(crate) fn backfill_legacy_line_numbers(summary: &mut DiffSummary, start_line
 }
 
 pub(crate) fn diff_line_counts(old_text: Option<&str>, new_text: &str) -> (u32, u32) {
-  use imara_diff::{Algorithm, Diff, InternedInput};
   let old = old_text.unwrap_or("");
-  let input = InternedInput::new(old, new_text);
-  let diff = Diff::compute(Algorithm::Histogram, &input);
-  let mut added = 0u32;
-  let mut removed = 0u32;
-  for hunk in diff.hunks() {
-    added += hunk.after.end - hunk.after.start;
-    removed += hunk.before.end - hunk.before.start;
-  }
+  let (added, removed) = line_diff_counts(old, new_text);
   (added, removed)
 }
 
@@ -592,8 +454,8 @@ mod tests {
 
   #[test]
   fn word_diff_skipped_above_byte_cap() {
-    let old = "x".repeat(WORD_DIFF_MAX_COMBINED_BYTES);
-    let new = "y".repeat(WORD_DIFF_MAX_COMBINED_BYTES);
+    let old = "x".repeat(diff_core::WORD_DIFF_MAX_COMBINED_BYTES);
+    let new = "y".repeat(diff_core::WORD_DIFF_MAX_COMBINED_BYTES);
     let (old_spans, new_spans) = word_diff_spans(&old, &new);
     assert!(old_spans.is_empty());
     assert!(new_spans.is_empty());
@@ -653,6 +515,21 @@ mod tests {
     assert_eq!(added.new_line, Some(2));
     assert_eq!(trailing.old_line, None);
     assert_eq!(trailing.new_line, Some(4));
+  }
+
+  #[test]
+  fn build_diff_lines_includes_editor_style_context() {
+    let lines = build_diff_lines("a\nb\nc\nd\ne\n", "a\nB\nc\nd\nE\n");
+
+    assert_eq!(
+      lines.first().map(|line| line.kind.clone()),
+      Some(DiffLineKind::Context)
+    );
+    assert!(
+      lines
+        .iter()
+        .any(|line| line.kind == DiffLineKind::Context && line.text == "c")
+    );
   }
 
   #[test]

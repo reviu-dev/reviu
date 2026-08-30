@@ -6,6 +6,7 @@ members = [
   "crates/buffer",
   "crates/syntax",
   "crates/editor",
+  "crates/diff_core",
   "crates/git",
   "crates/gfm_markdown_viewer",
   "crates/terminal",
@@ -149,6 +150,7 @@ app_log = { path = "crates/app_log" }
 buffer = { path = "crates/buffer" }
 syntax = { path = "crates/syntax" }
 editor = { path = "crates/editor" }
+diff_core = { path = "crates/diff_core" }
 git = { path = "crates/git" }
 gfm_markdown_viewer = { path = "crates/gfm_markdown_viewer" }
 terminal = { path = "crates/terminal" }

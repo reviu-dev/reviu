@@ -13,6 +13,7 @@ use std::{
   time::{Duration, Instant},
 };
 
+use diff_core::{merge_ranges, word_diff_ranges};
 use git::DiffLineKind;
 
 use crate::{
@@ -31,7 +32,6 @@ use crate::{
 use gpui_component::ActiveTheme as _;
 use syntax::HighlightSpan;
 use ui::Theme;
-use unicode_segmentation::UnicodeSegmentation;
 
 const NEWLINE_SELECTION_WIDTH: f32 = 4.0;
 const PIXEL_SCROLL_DIVISOR: f32 = 20.0;
@@ -44,7 +44,6 @@ const DIAGONAL_STRIPE_WIDTH: f32 = 1.0;
 const INDENT_GUIDE_BORDER_WIDTH: f32 = 1.0;
 const INDENT_RAINBOW_BLOCK_COLUMNS: usize = 2;
 const CONFLICT_MARKER_ALPHA_MULTIPLIER: f32 = 1.35;
-const WORD_DIFF_MAX_COMBINED_BYTES: usize = 2_048;
 const EDITOR_CHAR_WIDTH_SAMPLE: &str =
   "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_";
 const REVIEW_COMMENT_CHAR_WIDTH_SAMPLE: &str =
@@ -328,12 +327,6 @@ pub(crate) fn highlights_to_text_runs(
   )
 }
 
-#[derive(Clone, Debug)]
-struct WordToken {
-  text: String,
-  range: Range<usize>,
-}
-
 #[derive(Clone, Debug, Default)]
 pub(crate) struct WordDiffCache {
   entries: HashMap<usize, WordDiffCacheEntry>,
@@ -374,15 +367,6 @@ struct WordDiffStyle {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum IdentifierCharKind {
-  Lower,
-  Upper,
-  Digit,
-  Underscore,
-  Other,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum InlineDiffKind {
   Added,
   Removed,
@@ -396,183 +380,12 @@ fn clean_line_text(text: &str) -> String {
   }
 }
 
-fn identifier_char_kind(ch: char) -> IdentifierCharKind {
-  if ch == '_' {
-    IdentifierCharKind::Underscore
-  } else if ch.is_lowercase() {
-    IdentifierCharKind::Lower
-  } else if ch.is_uppercase() {
-    IdentifierCharKind::Upper
-  } else if ch.is_numeric() {
-    IdentifierCharKind::Digit
-  } else {
-    IdentifierCharKind::Other
-  }
-}
-
-fn split_identifier_token_ranges(segment: &str) -> Vec<Range<usize>> {
-  let chars: Vec<_> = segment.char_indices().collect();
-  if chars.is_empty() {
-    return Vec::new();
-  }
-
-  let mut ranges = Vec::new();
-  let mut start = 0usize;
-
-  for idx in 1..chars.len() {
-    let (byte_offset, current) = chars[idx];
-    let (_, previous) = chars[idx - 1];
-    let previous_kind = identifier_char_kind(previous);
-    let current_kind = identifier_char_kind(current);
-    let next_kind = chars
-      .get(idx + 1)
-      .map(|(_, next)| identifier_char_kind(*next));
-
-    let should_split = match (previous_kind, current_kind) {
-      (IdentifierCharKind::Underscore, _) | (_, IdentifierCharKind::Underscore) => true,
-      (IdentifierCharKind::Digit, IdentifierCharKind::Digit) => false,
-      (IdentifierCharKind::Digit, _) | (_, IdentifierCharKind::Digit) => true,
-      (IdentifierCharKind::Lower, IdentifierCharKind::Upper) => true,
-      (IdentifierCharKind::Upper, IdentifierCharKind::Upper) => {
-        next_kind == Some(IdentifierCharKind::Lower)
-      }
-      _ => false,
-    };
-
-    if should_split {
-      ranges.push(start..byte_offset);
-      start = byte_offset;
-    }
-  }
-
-  ranges.push(start..segment.len());
-  ranges
-}
-
-fn word_tokens(text: &str, include_whitespace: bool) -> Vec<WordToken> {
-  let mut tokens = Vec::new();
-  for (idx, segment) in text.split_word_bound_indices() {
-    if !include_whitespace && segment.trim().is_empty() {
-      continue;
-    }
-    let subranges = split_identifier_token_ranges(segment);
-    if subranges.is_empty() {
-      tokens.push(WordToken {
-        text: segment.to_string(),
-        range: idx..idx + segment.len(),
-      });
-      continue;
-    }
-
-    for subrange in subranges {
-      tokens.push(WordToken {
-        text: segment[subrange.clone()].to_string(),
-        range: idx + subrange.start..idx + subrange.end,
-      });
-    }
-  }
-  tokens
-}
-
-fn merge_ranges(mut ranges: Vec<Range<usize>>) -> Vec<Range<usize>> {
-  ranges.sort_by_key(|range| range.start);
-  let mut merged: Vec<Range<usize>> = Vec::new();
-  for range in ranges {
-    if let Some(last) = merged.last_mut()
-      && range.start <= last.end
-    {
-      last.end = last.end.max(range.end);
-      continue;
-    }
-    merged.push(range);
-  }
-  merged
-}
-
-fn word_diff_ranges(old_text: &str, new_text: &str) -> (Vec<Range<usize>>, Vec<Range<usize>>) {
-  if old_text == new_text {
-    return (Vec::new(), Vec::new());
-  }
-
-  // The current LCS implementation is quadratic in token count. On very long
-  // HTML or generated lines, skipping word-level diffing keeps scrolling and
-  // diff rendering responsive while preserving line-level changes.
-  if old_text.len().saturating_add(new_text.len()) > WORD_DIFF_MAX_COMBINED_BYTES {
-    return (Vec::new(), Vec::new());
-  }
-
-  let (removed, added) = word_diff_ranges_impl(old_text, new_text, false);
-  if removed.is_empty() && added.is_empty() && old_text != new_text {
-    return word_diff_ranges_impl(old_text, new_text, true);
-  }
-  (removed, added)
-}
-
 #[doc(hidden)]
 pub fn benchmark_word_diff_ranges(
   old_text: &str,
   new_text: &str,
 ) -> (Vec<Range<usize>>, Vec<Range<usize>>) {
   word_diff_ranges(old_text, new_text)
-}
-
-fn word_diff_ranges_impl(
-  old_text: &str,
-  new_text: &str,
-  include_whitespace: bool,
-) -> (Vec<Range<usize>>, Vec<Range<usize>>) {
-  let old_tokens = word_tokens(old_text, include_whitespace);
-  let new_tokens = word_tokens(new_text, include_whitespace);
-
-  let old_len = old_tokens.len();
-  let new_len = new_tokens.len();
-  if old_len == 0 && new_len == 0 {
-    return (Vec::new(), Vec::new());
-  }
-
-  let mut dp = vec![vec![0usize; new_len + 1]; old_len + 1];
-  for i in 0..old_len {
-    for j in 0..new_len {
-      if old_tokens[i].text == new_tokens[j].text {
-        dp[i + 1][j + 1] = dp[i][j] + 1;
-      } else {
-        dp[i + 1][j + 1] = dp[i][j + 1].max(dp[i + 1][j]);
-      }
-    }
-  }
-
-  let mut matched_old = vec![false; old_len];
-  let mut matched_new = vec![false; new_len];
-  let mut i = old_len;
-  let mut j = new_len;
-  while i > 0 && j > 0 {
-    if old_tokens[i - 1].text == new_tokens[j - 1].text {
-      matched_old[i - 1] = true;
-      matched_new[j - 1] = true;
-      i -= 1;
-      j -= 1;
-    } else if dp[i - 1][j] >= dp[i][j - 1] {
-      i -= 1;
-    } else {
-      j -= 1;
-    }
-  }
-
-  let mut removed = Vec::new();
-  for (idx, token) in old_tokens.iter().enumerate() {
-    if !matched_old[idx] {
-      removed.push(token.range.clone());
-    }
-  }
-
-  let mut added = Vec::new();
-  for (idx, token) in new_tokens.iter().enumerate() {
-    if !matched_new[idx] {
-      added.push(token.range.clone());
-    }
-  }
-
-  (merge_ranges(removed), merge_ranges(added))
 }
 
 fn apply_background_ranges(
@@ -2795,19 +2608,6 @@ mod tests {
   }
 
   #[test]
-  fn test_word_tokens_split_identifier_subwords() {
-    let tokens = word_tokens("getLastDataNotification_v2", false)
-      .into_iter()
-      .map(|token| token.text)
-      .collect::<Vec<_>>();
-
-    assert_eq!(
-      tokens,
-      vec!["get", "Last", "Data", "Notification", "_", "v", "2"]
-    );
-  }
-
-  #[test]
   fn test_word_diff_ranges_highlight_added_camel_case_segment() {
     let old_text = "const getLastNotification = () => \"You have a new message!\";";
     let new_text = "const getLastDataNotification = () => \"You have a new message!\";";
@@ -2828,16 +2628,6 @@ mod tests {
       benchmark_word_diff_ranges(old_text, new_text),
       word_diff_ranges(old_text, new_text)
     );
-  }
-
-  #[test]
-  fn test_word_tokens_preserve_acronym_boundaries() {
-    let tokens = word_tokens("getHTTPServerResponse", false)
-      .into_iter()
-      .map(|token| token.text)
-      .collect::<Vec<_>>();
-
-    assert_eq!(tokens, vec!["get", "HTTP", "Server", "Response"]);
   }
 
   #[test]

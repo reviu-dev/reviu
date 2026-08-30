@@ -1,0 +1,12 @@
+[package]
+name = "diff_core"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[dependencies]
+imara-diff = { workspace = true }
+unicode-segmentation = { workspace = true }
+
+[lints]
+workspace = true
