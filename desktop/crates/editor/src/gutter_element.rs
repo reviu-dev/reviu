@@ -1,8 +1,7 @@
 use gpui::{
-  App, Bounds, ContentMask, DispatchPhase, ElementId, Entity, GlobalElementId, Hitbox,
-  HitboxBehavior, InspectorElementId, LayoutId, MouseMoveEvent, PaintQuad, Path, PathBuilder,
-  Pixels, ScrollDelta, ScrollWheelEvent, Style, TextAlign, TextRun, Window, fill, point,
-  prelude::*, px, relative, size,
+  App, Bounds, DispatchPhase, ElementId, Entity, GlobalElementId, Hitbox, HitboxBehavior,
+  InspectorElementId, LayoutId, MouseMoveEvent, PaintQuad, Pixels, ScrollDelta, ScrollWheelEvent,
+  Style, TextAlign, TextRun, Window, fill, point, prelude::*, px, relative, size,
 };
 use gpui_component::ActiveTheme as _;
 use std::{collections::HashMap, sync::Arc};
@@ -17,8 +16,6 @@ use crate::{
   },
 };
 
-const DIAGONAL_STRIPE_SPACING: f32 = 6.0;
-const DIAGONAL_STRIPE_WIDTH: f32 = 1.0;
 const PIXEL_SCROLL_DIVISOR: f32 = 20.0;
 const LINE_SCROLL_MULTIPLIER: f32 = 3.0;
 const SCROLL_AXIS_RATIO: f32 = 1.1;
@@ -234,13 +231,20 @@ pub struct GutterPrepaintState {
   line_backgrounds: Vec<PaintQuad>,
   gap_separators: Vec<PaintQuad>,
   stripe_quads: Vec<PaintQuad>,
-  diag_paths: Vec<Path<Pixels>>,
   conflict_borders: Vec<PaintQuad>,
   group_borders: Vec<PaintQuad>,
   scroll_hitbox: Hitbox,
 }
 
 impl GutterElement {
+  fn review_comment_side(&self) -> Option<ReviewCommentSide> {
+    match self.view {
+      GutterView::SplitLeft => Some(ReviewCommentSide::Left),
+      GutterView::SplitRight => Some(ReviewCommentSide::Right),
+      GutterView::Inline => None,
+    }
+  }
+
   pub fn new(editor: Entity<Editor>) -> Self {
     Self {
       editor,
@@ -316,7 +320,6 @@ impl Element for GutterElement {
       line_backgrounds,
       gap_separators,
       stripe_quads,
-      diag_paths,
       conflict_borders,
       group_borders,
       scroll_hitbox,
@@ -329,7 +332,7 @@ impl Element for GutterElement {
       let total_lines = editor.display_line_count(doc_line_count);
       let theme = editor.theme.clone();
       let projection = editor.projection.clone();
-      let show_stripes = matches!(self.view, GutterView::Inline);
+      let show_stripes = true;
       let scroll_hitbox = window.insert_hitbox(bounds, HitboxBehavior::Normal);
       let line_number_right_padding = editor.gutter_line_number_right_padding();
 
@@ -433,11 +436,22 @@ impl Element for GutterElement {
       let mut line_backgrounds = Vec::new();
       let mut gap_separators = Vec::new();
       let mut stripe_quads = Vec::new();
-      let mut diag_paths = Vec::new();
       let mut conflict_borders = Vec::new();
       let mut group_borders = Vec::new();
-      let mut blank_ranges = Vec::new();
-      let mut current_blank_start: Option<usize> = None;
+      let group_id_for_visible_display_line = |display_idx: usize| {
+        let display_line = editor.display_line(display_idx, doc_line_count);
+        let block = editor.block_map.block_at_display_line(display_idx);
+        if is_blank_for_view(display_line.as_ref(), block) {
+          None
+        } else {
+          group_id_for_gutter_display_line(
+            display_idx,
+            projection.as_deref(),
+            &editor.block_map,
+            false,
+          )
+        }
+      };
       for display_idx in viewport.clone() {
         let display_line = editor.display_line(display_idx, doc_line_count);
         let block = editor.block_map.block_at_display_line(display_idx);
@@ -600,14 +614,6 @@ impl Element for GutterElement {
           }
         }
 
-        if is_blank {
-          if current_blank_start.is_none() {
-            current_blank_start = Some(display_idx);
-          }
-        } else if let Some(start) = current_blank_start.take() {
-          blank_ranges.push((start, display_idx.saturating_sub(1)));
-        }
-
         let group_id = group_id_for_gutter_display_line(
           display_idx,
           projection.as_deref(),
@@ -615,15 +621,23 @@ impl Element for GutterElement {
           false,
         );
         if show_stripes {
-          let base_stripe_color = match conflict_kind {
-            Some(conflict_kind) => conflict_stripe_color(&theme, conflict_kind),
-            None => group_id.as_ref().and_then(|group_id| {
-              group_kinds.get(group_id).map(|kind| match kind {
-                GroupKind::Added => stripe_added,
-                GroupKind::Removed => stripe_removed,
-                GroupKind::Mixed => stripe_modified,
-              })
-            }),
+          let base_stripe_color = if is_blank {
+            None
+          } else {
+            match conflict_kind {
+              Some(conflict_kind) => conflict_stripe_color(&theme, conflict_kind),
+              None => group_id.as_ref().and_then(|group_id| {
+                group_kinds.get(group_id).map(|kind| match self.view {
+                  GutterView::Inline => match kind {
+                    GroupKind::Added => stripe_added,
+                    GroupKind::Removed => stripe_removed,
+                    GroupKind::Mixed => stripe_modified,
+                  },
+                  GutterView::SplitLeft => stripe_removed,
+                  GutterView::SplitRight => stripe_added,
+                })
+              }),
+            }
           };
 
           let stripe_color = if (is_active_hunk_line && conflict_kind.is_none())
@@ -643,9 +657,10 @@ impl Element for GutterElement {
           }
         }
 
-        if conflict_kind.is_none()
+        if !is_blank
+          && conflict_kind.is_none()
           && let Some(group_id) = group_id
-          && let Some(projection) = projection.as_ref()
+          && projection.is_some()
         {
           let border_colors = if is_active_hunk_line {
             Some((active_hunk_focus_color, active_hunk_focus_color))
@@ -654,20 +669,10 @@ impl Element for GutterElement {
           };
 
           if let Some((top_color, bottom_color)) = border_colors {
-            let previous_group = display_idx.checked_sub(1).and_then(|idx| {
-              group_id_for_gutter_display_line(
-                idx,
-                Some(projection.as_ref()),
-                &editor.block_map,
-                false,
-              )
-            });
-            let next_group = group_id_for_gutter_display_line(
-              display_idx + 1,
-              Some(projection.as_ref()),
-              &editor.block_map,
-              false,
-            );
+            let previous_group = display_idx
+              .checked_sub(1)
+              .and_then(group_id_for_visible_display_line);
+            let next_group = group_id_for_visible_display_line(display_idx + 1);
 
             let is_top = previous_group.as_deref() != Some(group_id.as_ref());
             let is_bottom = next_group.as_deref() != Some(group_id.as_ref());
@@ -701,37 +706,6 @@ impl Element for GutterElement {
         }
       }
 
-      if let Some(start) = current_blank_start.take()
-        && viewport.start < viewport.end
-      {
-        blank_ranges.push((start, viewport.end.saturating_sub(1)));
-      }
-
-      if !blank_ranges.is_empty() {
-        let stripe_spacing = px(DIAGONAL_STRIPE_SPACING);
-        let stripe_width = px(DIAGONAL_STRIPE_WIDTH);
-        for (start, end) in blank_ranges {
-          let y = line_y(bounds.top(), line_height, start, scroll_offset);
-          let height = line_height * (end - start + 1) as f32;
-          let top = y;
-          let bottom = y + height;
-          let left = bounds.left();
-          let right = bounds.right();
-          let mut builder = PathBuilder::stroke(stripe_width);
-          let start_n = ((left - height + bottom) / stripe_spacing).floor();
-          let mut x = start_n * stripe_spacing - bottom;
-          let end_x = right + height;
-          while x < end_x {
-            builder.move_to(point(x, bottom));
-            builder.line_to(point(x + height, top));
-            x += stripe_spacing;
-          }
-          if let Ok(path) = builder.build() {
-            diag_paths.push(path);
-          }
-        }
-      }
-
       let line_number_color = editor.theme.line_number();
 
       (
@@ -743,7 +717,6 @@ impl Element for GutterElement {
         line_backgrounds,
         gap_separators,
         stripe_quads,
-        diag_paths,
         conflict_borders,
         group_borders,
         scroll_hitbox,
@@ -763,7 +736,6 @@ impl Element for GutterElement {
       line_backgrounds,
       gap_separators,
       stripe_quads,
-      diag_paths,
       conflict_borders,
       group_borders,
       scroll_hitbox,
@@ -796,16 +768,6 @@ impl Element for GutterElement {
       window.paint_quad(quad.clone());
     }
 
-    if !prepaint.diag_paths.is_empty() {
-      let stripe_color = cx.theme().muted_foreground.opacity(0.35);
-      let mask = ContentMask { bounds };
-      window.with_content_mask(Some(mask), |window| {
-        for path in &prepaint.diag_paths {
-          window.paint_path(path.clone(), stripe_color);
-        }
-      });
-    }
-
     for quad in &prepaint.conflict_borders {
       window.paint_quad(quad.clone());
     }
@@ -817,6 +779,7 @@ impl Element for GutterElement {
     window.on_mouse_event({
       let editor = self.editor.clone();
       let line_height = prepaint.line_height;
+      let review_comment_side = self.review_comment_side();
       // The gutter hover belongs to its pane, like the text hover does.
       let is_primary = !matches!(self.view, GutterView::SplitLeft);
       move |event: &MouseMoveEvent, phase, _window, cx| {
@@ -842,13 +805,17 @@ impl Element for GutterElement {
             let doc_line_count = editor.document().read(cx).len_lines();
             let total_lines = editor.display_line_count(doc_line_count);
             if display_line < total_lines {
-              editor.group_id_for_modified_display_line(display_line)
+              editor.group_id_for_hunk_action_display_line(display_line, review_comment_side)
             } else {
               None
             }
           });
 
-          editor.update_review_comment_create_drag_from_display_line(display_line, cx);
+          editor.update_review_comment_create_drag_from_display_line_on_side(
+            display_line,
+            review_comment_side,
+            cx,
+          );
 
           if editor.hovered_group_id.as_deref() != hovered.as_deref() {
             editor.hovered_group_id = hovered;

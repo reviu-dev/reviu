@@ -895,6 +895,7 @@ pub struct Editor {
   review_comment_create_input: Option<Entity<TextareaState>>,
   review_comment_create_draft: Option<ReviewCommentCreateDraft>,
   review_comment_create_drag_start_display_line: Option<usize>,
+  review_comment_create_drag_side: Option<ReviewCommentSide>,
   review_comment_create_drag_active: bool,
   review_comment_create_submitting: bool,
   review_comment_create_error: Option<Arc<str>>,
@@ -906,6 +907,7 @@ pub struct Editor {
   review_comment_reply_error: Option<Arc<str>>,
   review_comment_reply_preview_open: bool,
   hovered_review_comment_create_display_line: Option<usize>,
+  hovered_review_comment_create_side: Option<ReviewCommentSide>,
   collapsed_review_comments: HashSet<u64>,
   review_comment_scroll_epoch: usize,
   find_panel_open: bool,
@@ -1382,6 +1384,7 @@ impl Editor {
       review_comment_create_input: None,
       review_comment_create_draft: None,
       review_comment_create_drag_start_display_line: None,
+      review_comment_create_drag_side: None,
       review_comment_create_drag_active: false,
       review_comment_create_submitting: false,
       review_comment_create_error: None,
@@ -1393,6 +1396,7 @@ impl Editor {
       review_comment_reply_error: None,
       review_comment_reply_preview_open: false,
       hovered_review_comment_create_display_line: None,
+      hovered_review_comment_create_side: None,
       collapsed_review_comments: HashSet::new(),
       review_comment_scroll_epoch: 0,
       find_panel_open: false,
@@ -1646,6 +1650,29 @@ impl Editor {
 
   pub fn diff_view_mode(&self) -> DiffViewMode {
     self.diff_view_mode
+  }
+
+  pub fn suppress_selected_hunk_actions(&self) -> bool {
+    self.last_mouse_position.is_some()
+      && self.hovered_group_id.is_none()
+      && self.hovered_conflict_start_line.is_none()
+  }
+
+  pub fn hunk_actions_align_left(&self) -> bool {
+    if self.diff_view_mode != DiffViewMode::Split {
+      return false;
+    }
+    if !self.hovered_from_primary && self.hovered_group_id.is_some() {
+      return true;
+    }
+    self.hovered_group_id.is_none()
+      && self
+        .selected_hunk_group_id
+        .as_ref()
+        .is_some_and(|group_id| {
+          !self.group_has_review_comment_side(group_id, ReviewCommentSide::Right)
+            && self.group_has_review_comment_side(group_id, ReviewCommentSide::Left)
+        })
   }
 
   pub fn set_diff_view_mode(&mut self, mode: DiffViewMode, cx: &mut Context<Self>) {
@@ -2751,11 +2778,13 @@ impl Editor {
   fn clear_review_comment_create_state(&mut self) {
     self.review_comment_create_draft = None;
     self.review_comment_create_drag_start_display_line = None;
+    self.review_comment_create_drag_side = None;
     self.review_comment_create_drag_active = false;
     self.review_comment_create_submitting = false;
     self.review_comment_create_error = None;
     self.review_comment_create_preview_open = false;
     self.hovered_review_comment_create_display_line = None;
+    self.hovered_review_comment_create_side = None;
   }
 
   fn clear_review_comment_reply_state(&mut self) {
@@ -3302,21 +3331,73 @@ impl Editor {
     display_line: usize,
     cx: &App,
   ) -> Option<ReviewCommentCreateTarget> {
+    self.review_comment_create_target_for_display_line_on_side(display_line, None, cx)
+  }
+
+  fn review_comment_create_target_for_display_line_on_side(
+    &self,
+    display_line: usize,
+    side: Option<ReviewCommentSide>,
+    cx: &App,
+  ) -> Option<ReviewCommentCreateTarget> {
     let doc_line_count = self.document.read(cx).len_lines();
     match self.display_line(display_line, doc_line_count)? {
-      DisplayLine::Doc { doc_line, .. } | DisplayLine::Modified { doc_line, .. } => {
-        Some(ReviewCommentCreateTarget {
+      DisplayLine::Doc {
+        doc_line, old_line, ..
+      } => match side {
+        Some(ReviewCommentSide::Left) => Some(ReviewCommentCreateTarget {
+          display_line,
+          line: old_line?,
+          side: ReviewCommentSide::Left,
+        }),
+        Some(ReviewCommentSide::Right) | None => Some(ReviewCommentCreateTarget {
           display_line,
           line: doc_line,
           side: ReviewCommentSide::Right,
+        }),
+      },
+      DisplayLine::Modified {
+        doc_line, old_line, ..
+      } => match side {
+        Some(ReviewCommentSide::Left) => Some(ReviewCommentCreateTarget {
+          display_line,
+          line: old_line,
+          side: ReviewCommentSide::Left,
+        }),
+        Some(ReviewCommentSide::Right) | None => Some(ReviewCommentCreateTarget {
+          display_line,
+          line: doc_line,
+          side: ReviewCommentSide::Right,
+        }),
+      },
+      DisplayLine::Removed { old_line, .. } if side != Some(ReviewCommentSide::Right) => {
+        Some(ReviewCommentCreateTarget {
+          display_line,
+          line: old_line,
+          side: ReviewCommentSide::Left,
         })
       }
-      DisplayLine::Removed { old_line, .. } => Some(ReviewCommentCreateTarget {
-        display_line,
-        line: old_line,
-        side: ReviewCommentSide::Left,
-      }),
       _ => None,
+    }
+  }
+
+  fn review_comment_create_target_in_drag_range(
+    &self,
+    start_display_line: usize,
+    current_display_line: usize,
+    side: ReviewCommentSide,
+    cx: &App,
+  ) -> Option<ReviewCommentCreateTarget> {
+    if start_display_line <= current_display_line {
+      (start_display_line..=current_display_line)
+        .rev()
+        .find_map(|line| {
+          self.review_comment_create_target_for_display_line_on_side(line, Some(side), cx)
+        })
+    } else {
+      (current_display_line..=start_display_line).find_map(|line| {
+        self.review_comment_create_target_for_display_line_on_side(line, Some(side), cx)
+      })
     }
   }
 
@@ -3395,6 +3476,7 @@ impl Editor {
   fn set_review_comment_create_hover_from_display_line(
     &mut self,
     display_line: Option<usize>,
+    side: Option<ReviewCommentSide>,
     cx: &mut Context<Self>,
   ) {
     if self.review_comment_create_drag_active || self.review_comment_create_draft.is_some() {
@@ -3403,16 +3485,31 @@ impl Editor {
 
     let hovered = display_line.and_then(|line| {
       self
-        .review_comment_create_target_for_display_line(line, cx)
-        .map(|target| target.display_line)
+        .review_comment_create_target_for_display_line_on_side(line, side, cx)
+        .map(|target| (target.display_line, target.side))
     });
-    if self.hovered_review_comment_create_display_line != hovered {
-      self.hovered_review_comment_create_display_line = hovered;
+    let (hovered_display_line, hovered_side) = hovered
+      .map(|(display_line, side)| (Some(display_line), Some(side)))
+      .unwrap_or((None, None));
+    if self.hovered_review_comment_create_display_line != hovered_display_line
+      || self.hovered_review_comment_create_side != hovered_side
+    {
+      self.hovered_review_comment_create_display_line = hovered_display_line;
+      self.hovered_review_comment_create_side = hovered_side;
       cx.notify();
     }
   }
 
   fn start_review_comment_create_drag(&mut self, display_line: usize, cx: &mut Context<Self>) {
+    self.start_review_comment_create_drag_on_side(display_line, None, cx);
+  }
+
+  fn start_review_comment_create_drag_on_side(
+    &mut self,
+    display_line: usize,
+    side: Option<ReviewCommentSide>,
+    cx: &mut Context<Self>,
+  ) {
     if self.review_comment_create_handler.is_none()
       || self.editing_review_comment_id.is_some()
       || self.review_comment_edit_submitting_id.is_some()
@@ -3423,13 +3520,16 @@ impl Editor {
     {
       return;
     }
-    let Some(target) = self.review_comment_create_target_for_display_line(display_line, cx) else {
+    let Some(target) =
+      self.review_comment_create_target_for_display_line_on_side(display_line, side, cx)
+    else {
       return;
     };
 
     self.is_selecting = false;
     self.display_selection = None;
     self.review_comment_create_drag_start_display_line = Some(target.display_line);
+    self.review_comment_create_drag_side = Some(target.side);
     self.review_comment_create_drag_active = true;
     self.review_comment_create_draft = Some(ReviewCommentCreateDraft {
       first_display_line: target.display_line,
@@ -3441,6 +3541,7 @@ impl Editor {
     });
     self.review_comment_create_error = None;
     self.hovered_review_comment_create_display_line = Some(target.display_line);
+    self.hovered_review_comment_create_side = Some(target.side);
     cx.notify();
   }
 
@@ -3449,8 +3550,17 @@ impl Editor {
     display_line: Option<usize>,
     cx: &mut Context<Self>,
   ) {
+    self.update_review_comment_create_drag_from_display_line_on_side(display_line, None, cx);
+  }
+
+  pub(crate) fn update_review_comment_create_drag_from_display_line_on_side(
+    &mut self,
+    display_line: Option<usize>,
+    side: Option<ReviewCommentSide>,
+    cx: &mut Context<Self>,
+  ) {
     if !self.review_comment_create_drag_active {
-      self.set_review_comment_create_hover_from_display_line(display_line, cx);
+      self.set_review_comment_create_hover_from_display_line(display_line, side, cx);
       return;
     }
 
@@ -3460,14 +3570,26 @@ impl Editor {
     let Some(current_display_line) = display_line else {
       return;
     };
-    let Some(start_target) =
-      self.review_comment_create_target_for_display_line(start_display_line, cx)
-    else {
+    let Some(start_side) = self.review_comment_create_drag_side.or_else(|| {
+      self
+        .review_comment_create_target_for_display_line(start_display_line, cx)
+        .map(|target| target.side)
+    }) else {
       return;
     };
-    let Some(current_target) =
-      self.review_comment_create_target_for_display_line(current_display_line, cx)
-    else {
+    let Some(start_target) = self.review_comment_create_target_for_display_line_on_side(
+      start_display_line,
+      Some(start_side),
+      cx,
+    ) else {
+      return;
+    };
+    let Some(current_target) = self.review_comment_create_target_in_drag_range(
+      start_display_line,
+      current_display_line,
+      start_side,
+      cx,
+    ) else {
       return;
     };
 
@@ -3510,6 +3632,7 @@ impl Editor {
     }
     self.review_comment_create_drag_active = false;
     self.review_comment_create_drag_start_display_line = None;
+    self.review_comment_create_drag_side = None;
 
     if self.review_comment_create_draft.is_none() {
       self.clear_review_comment_create_state();
@@ -6990,6 +7113,49 @@ impl Editor {
     }
   }
 
+  pub(crate) fn group_id_for_hunk_action_display_line(
+    &self,
+    display_line: usize,
+    side: Option<ReviewCommentSide>,
+  ) -> Option<Arc<str>> {
+    let group_id = self.group_id_for_modified_display_line(display_line)?;
+    if let Some(side) = side
+      && !self.group_has_review_comment_side(&group_id, side)
+    {
+      return None;
+    }
+    Some(group_id)
+  }
+
+  fn group_has_review_comment_side(&self, group_id: &Arc<str>, side: ReviewCommentSide) -> bool {
+    let Some(projection) = self.projection.as_ref() else {
+      return false;
+    };
+    projection.lines.iter().any(|line| match (side, line) {
+      (
+        ReviewCommentSide::Right,
+        DisplayLine::Doc {
+          change: Some(_),
+          group_id: Some(id),
+          ..
+        }
+        | DisplayLine::Modified {
+          group_id: Some(id), ..
+        },
+      ) => id.as_ref() == group_id.as_ref(),
+      (
+        ReviewCommentSide::Left,
+        DisplayLine::Removed {
+          group_id: Some(id), ..
+        }
+        | DisplayLine::Modified {
+          group_id: Some(id), ..
+        },
+      ) => id.as_ref() == group_id.as_ref(),
+      _ => false,
+    })
+  }
+
   pub fn first_display_line_for_group(&self, group_id: &Arc<str>) -> Option<usize> {
     let projection = self.projection.as_ref()?;
     projection.lines.iter().position(|line| match line {
@@ -9144,6 +9310,7 @@ impl Editor {
     position_map: &PositionMap,
     is_occluded: bool,
     is_primary: bool,
+    review_comment_side: Option<ReviewCommentSide>,
     cx: &mut Context<Self>,
   ) {
     let in_bounds = !is_occluded && position_map.bounds.contains(&event.position);
@@ -9178,9 +9345,14 @@ impl Editor {
     self.last_mouse_position = Some(event.position);
     self.hovered_from_primary = is_primary;
     let display_line = position_map.display_line_for_position(event.position);
-    self.update_review_comment_create_drag_from_display_line(display_line, cx);
+    self.update_review_comment_create_drag_from_display_line_on_side(
+      display_line,
+      review_comment_side,
+      cx,
+    );
 
-    let hovered = display_line.and_then(|line| self.group_id_for_modified_display_line(line));
+    let hovered = display_line
+      .and_then(|line| self.group_id_for_hunk_action_display_line(line, review_comment_side));
     let hovered_conflict =
       display_line.and_then(|line| self.conflict_start_line_for_display_line(line, cx));
     let mut did_change = false;
@@ -9538,15 +9710,44 @@ impl Render for Editor {
     let gutter_background = self.theme.gutter_background();
     let gutter_width = self.gutter_width();
     let scroll_offset_y = self.scroll_offset_y;
-    let review_comment_create_button_target = (if self.review_comment_create_drag_active {
+    let review_comment_create_button_display_line = if self.review_comment_create_drag_active {
       self.review_comment_create_drag_start_display_line
     } else {
       self.hovered_review_comment_create_display_line
-    })
-    .and_then(|display_line| self.review_comment_create_target_for_display_line(display_line, cx));
+    };
+    let review_comment_create_button_side = if self.review_comment_create_drag_active {
+      self.review_comment_create_drag_side
+    } else {
+      self.hovered_review_comment_create_side
+    };
     let show_review_comment_create_button = self.review_comment_create_handler.is_some()
       && self.replying_to_review_comment_id.is_none()
       && (self.review_comment_create_draft.is_none() || self.review_comment_create_drag_active);
+    let (
+      left_review_comment_create_button_target,
+      right_review_comment_create_button_target,
+      inline_review_comment_create_button_target,
+    ) = {
+      let resolve_target = |side_filter: Option<ReviewCommentSide>| {
+        review_comment_create_button_display_line.and_then(|display_line| {
+          if let (Some(filter), Some(side)) = (side_filter, review_comment_create_button_side)
+            && filter != side
+          {
+            return None;
+          }
+          self.review_comment_create_target_for_display_line_on_side(
+            display_line,
+            side_filter.or(review_comment_create_button_side),
+            cx,
+          )
+        })
+      };
+      (
+        resolve_target(Some(ReviewCommentSide::Left)),
+        resolve_target(Some(ReviewCommentSide::Right)),
+        resolve_target(None),
+      )
+    };
     let find_panel = self.render_find_panel(editor_entity.clone(), window, cx);
     let focus_handle = self.focus_handle.clone();
     let external_input_focused =
@@ -9561,7 +9762,7 @@ impl Render for Editor {
 
     let build_gutter = |gutter_element: GutterElement,
                         view_suffix: &'static str,
-                        side_filter: Option<ReviewCommentSide>,
+                        review_comment_create_button_target: Option<ReviewCommentCreateTarget>,
                         editor_entity: Entity<Editor>| {
       let mut gutter = div()
         .w(gutter_width)
@@ -9616,7 +9817,6 @@ impl Render for Editor {
 
       if show_review_comment_create_button
         && let Some(target) = review_comment_create_button_target
-        && side_filter.is_none_or(|filter| filter == target.side)
         && viewport.contains(&target.display_line)
       {
         let y = line_height * (target.display_line as f32 - scroll_offset_y);
@@ -9639,7 +9839,11 @@ impl Render for Editor {
             .on_mouse_down(MouseButton::Left, move |_, _, cx| {
               cx.stop_propagation();
               editor_entity.update(cx, |editor, cx| {
-                editor.start_review_comment_create_drag(display_line, cx);
+                editor.start_review_comment_create_drag_on_side(
+                  display_line,
+                  Some(target.side),
+                  cx,
+                );
               });
             })
             .child(
@@ -9689,7 +9893,7 @@ impl Render for Editor {
         .child(build_gutter(
           GutterElement::split_left(editor_entity.clone()),
           "left",
-          Some(ReviewCommentSide::Left),
+          left_review_comment_create_button_target,
           editor_entity.clone(),
         ))
         .child(
@@ -9724,7 +9928,7 @@ impl Render for Editor {
         .child(build_gutter(
           GutterElement::split_right(editor_entity.clone()),
           "right",
-          Some(ReviewCommentSide::Right),
+          right_review_comment_create_button_target,
           editor_entity.clone(),
         ))
         .child(
@@ -9770,7 +9974,7 @@ impl Render for Editor {
         .child(build_gutter(
           GutterElement::new(editor_entity.clone()),
           "inline",
-          None,
+          inline_review_comment_create_button_target,
           editor_entity.clone(),
         ))
         .child(
@@ -11131,6 +11335,7 @@ pub mod tests {
           review_comment_create_input: None,
           review_comment_create_draft: None,
           review_comment_create_drag_start_display_line: None,
+          review_comment_create_drag_side: None,
           review_comment_create_drag_active: false,
           review_comment_create_submitting: false,
           review_comment_create_error: None,
@@ -11142,6 +11347,7 @@ pub mod tests {
           review_comment_reply_error: None,
           review_comment_reply_preview_open: false,
           hovered_review_comment_create_display_line: None,
+          hovered_review_comment_create_side: None,
           collapsed_review_comments: HashSet::new(),
           review_comment_scroll_epoch: 0,
           find_panel_open: false,
@@ -12346,8 +12552,10 @@ pub mod tests {
         start_side: Some(ReviewCommentSide::Right),
       });
       editor.review_comment_create_drag_start_display_line = Some(0);
+      editor.review_comment_create_drag_side = Some(ReviewCommentSide::Right);
       editor.review_comment_create_drag_active = true;
       editor.hovered_review_comment_create_display_line = Some(1);
+      editor.hovered_review_comment_create_side = Some(ReviewCommentSide::Right);
 
       editor.cancel_review_comment_create(cx);
 
@@ -12357,8 +12565,10 @@ pub mod tests {
           .review_comment_create_drag_start_display_line
           .is_none()
       );
+      assert!(editor.review_comment_create_drag_side.is_none());
       assert!(!editor.review_comment_create_drag_active);
       assert!(editor.hovered_review_comment_create_display_line.is_none());
+      assert!(editor.hovered_review_comment_create_side.is_none());
     });
   }
 
@@ -12438,6 +12648,149 @@ pub mod tests {
     });
 
     assert_eq!(range, Some((1, 2)));
+  }
+
+  #[gpui::test]
+  fn test_hunk_action_hover_requires_real_lines_on_split_side(cx: &mut TestAppContext) {
+    let mut ctx = EditorTestContext::with_text(cx.clone(), "a\nb");
+    let (mixed_projection, mixed_group_id) = projection_with_mixed_review_hunk();
+
+    ctx.editor.update(&mut ctx.cx, |editor, _| {
+      editor.set_projection(Some((*mixed_projection).clone()));
+      assert_eq!(
+        editor.group_id_for_hunk_action_display_line(0, Some(ReviewCommentSide::Right)),
+        Some(mixed_group_id.clone())
+      );
+      assert_eq!(
+        editor.group_id_for_hunk_action_display_line(1, Some(ReviewCommentSide::Left)),
+        Some(mixed_group_id)
+      );
+    });
+
+    let (deleted_projection, deleted_group_id) = projection_with_deleted_review_hunk();
+    ctx.editor.update(&mut ctx.cx, |editor, _| {
+      editor.set_projection(Some((*deleted_projection).clone()));
+      assert_eq!(
+        editor.group_id_for_hunk_action_display_line(1, Some(ReviewCommentSide::Left)),
+        Some(deleted_group_id)
+      );
+      assert_eq!(
+        editor.group_id_for_hunk_action_display_line(1, Some(ReviewCommentSide::Right)),
+        None
+      );
+    });
+  }
+
+  #[gpui::test]
+  fn test_review_comment_create_hover_respects_split_side(cx: &mut TestAppContext) {
+    let mut ctx = EditorTestContext::with_text(cx.clone(), "a\nb");
+    let projection = projection_with_removed_middle_line();
+
+    ctx.editor.update(&mut ctx.cx, |editor, cx| {
+      let handler: ReviewCommentCreateHandler = Arc::new(|_, _, _| {});
+      editor.set_review_comment_create_handler(Some(handler), cx);
+      editor.set_projection(Some((*projection).clone()));
+
+      editor.update_review_comment_create_drag_from_display_line_on_side(
+        Some(1),
+        Some(ReviewCommentSide::Right),
+        cx,
+      );
+      assert!(editor.hovered_review_comment_create_display_line.is_none());
+      assert!(editor.hovered_review_comment_create_side.is_none());
+
+      editor.update_review_comment_create_drag_from_display_line_on_side(
+        Some(1),
+        Some(ReviewCommentSide::Left),
+        cx,
+      );
+      assert_eq!(editor.hovered_review_comment_create_display_line, Some(1));
+      assert_eq!(
+        editor.hovered_review_comment_create_side,
+        Some(ReviewCommentSide::Left)
+      );
+    });
+  }
+
+  #[gpui::test]
+  fn test_review_comment_create_drag_locks_side_across_split_fillers(cx: &mut TestAppContext) {
+    let mut ctx = EditorTestContext::with_text(cx.clone(), "new\nnext");
+    let group_id = Arc::<str>::from("hunk-0");
+    let projection = Projection {
+      block_map: ProjectionBlockMap::default(),
+      lines: vec![
+        DisplayLine::Modified {
+          old_text: Arc::from("old"),
+          doc_line: 0,
+          old_line: 0,
+          hunk: HunkState::Unstaged,
+          group_id: Some(group_id.clone()),
+          secondary: false,
+        },
+        DisplayLine::Removed {
+          text: Arc::from("removed"),
+          anchor_line: 0,
+          old_line: 1,
+          hunk: HunkState::Unstaged,
+          group_id: Some(group_id),
+          secondary: false,
+        },
+        DisplayLine::Doc {
+          doc_line: 1,
+          old_line: Some(2),
+          change: None,
+          hunk: None,
+          group_id: None,
+          secondary: false,
+        },
+      ],
+      display_to_doc: vec![Some(0), None, Some(1)],
+      doc_to_display: vec![Some(0), Some(2)],
+      visible_doc_lines: vec![0, 1],
+      groups: HashMap::new(),
+    };
+
+    ctx.editor.update(&mut ctx.cx, |editor, cx| {
+      let handler: ReviewCommentCreateHandler = Arc::new(|_, _, _| {});
+      editor.set_review_comment_create_handler(Some(handler), cx);
+      editor.set_projection(Some(projection));
+      editor.start_review_comment_create_drag_on_side(0, Some(ReviewCommentSide::Right), cx);
+      editor.update_review_comment_create_drag_from_display_line_on_side(
+        Some(1),
+        Some(ReviewCommentSide::Right),
+        cx,
+      );
+
+      assert_eq!(
+        editor.review_comment_create_draft,
+        Some(ReviewCommentCreateDraft {
+          first_display_line: 0,
+          last_display_line: 0,
+          line: 0,
+          side: ReviewCommentSide::Right,
+          start_line: None,
+          start_side: None,
+        })
+      );
+
+      editor.update_review_comment_create_drag_from_display_line_on_side(
+        Some(2),
+        Some(ReviewCommentSide::Right),
+        cx,
+      );
+
+      assert_eq!(
+        editor.review_comment_create_draft,
+        Some(ReviewCommentCreateDraft {
+          first_display_line: 0,
+          last_display_line: 2,
+          line: 1,
+          side: ReviewCommentSide::Right,
+          start_line: Some(0),
+          start_side: Some(ReviewCommentSide::Right),
+        })
+      );
+    });
   }
 
   #[gpui::test]

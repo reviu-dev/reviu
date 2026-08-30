@@ -3,7 +3,8 @@
 use editor::{ConflictResolution, Editor, HunkAction, HunkState};
 use git::RepoStatusKind;
 use gpui::{
-  AnyElement, App, Entity, InteractiveElement, ParentElement, Pixels, Styled, div, prelude::*, px,
+  AnyElement, App, CursorStyle, Entity, InteractiveElement, ParentElement, Pixels, Styled, div,
+  prelude::*, px, relative,
 };
 use gpui_component::{ActiveTheme as _, Disableable as _, IconName, Sizable as _, Theme};
 use ui::Button;
@@ -47,13 +48,16 @@ pub(crate) fn render_hunk_actions(
       .find(|overlay| overlay.id.as_ref() == id.as_ref())
       .map(|overlay| (id.clone(), overlay))
   });
-  let selected = editor_state.highlighted_hunk_group_id(cx).and_then(|id| {
-    editor_state
-      .visible_groups
-      .iter()
-      .find(|overlay| overlay.id.as_ref() == id.as_ref())
-      .map(|overlay| (id, overlay))
-  });
+  let selected = (!editor_state.suppress_selected_hunk_actions())
+    .then(|| editor_state.highlighted_hunk_group_id(cx))
+    .flatten()
+    .and_then(|id| {
+      editor_state
+        .visible_groups
+        .iter()
+        .find(|overlay| overlay.id.as_ref() == id.as_ref())
+        .map(|overlay| (id, overlay))
+    });
   let (group_id, overlay) = hovered.or(selected)?;
 
   let anchor_display_line = editor_state
@@ -72,7 +76,15 @@ pub(crate) fn render_hunk_actions(
   let file_dirty = editor_state.is_dirty;
   let group_id = overlay.id.clone();
   let state = overlay.state;
-  let mut actions = div().flex().items_center();
+  let mut actions = div()
+    .flex()
+    .items_center()
+    .cursor(CursorStyle::Arrow)
+    .bg(theme.background)
+    .border_1()
+    .border_color(theme.border)
+    .rounded_md()
+    .shadow_md();
 
   match state {
     HunkState::Unstaged => {
@@ -87,7 +99,7 @@ pub(crate) fn render_hunk_actions(
           .tooltip(if file_dirty {
             "File not saved"
           } else {
-            "Stage hunk"
+            "Stage Hunk (shift-enter)"
           })
           .rounded_t_none()
           .rounded_br_none()
@@ -113,7 +125,7 @@ pub(crate) fn render_hunk_actions(
           .tooltip(if file_dirty {
             "File not saved"
           } else {
-            "Unstage hunk"
+            "Unstage Hunk (shift-enter)"
           })
           .rounded_t_none()
           .bg(theme.background)
@@ -139,7 +151,7 @@ pub(crate) fn render_hunk_actions(
         .tooltip(if file_dirty {
           "File not saved"
         } else {
-          "Restore hunk"
+          "Restore Hunk (shift-backspace)"
         })
         .rounded_t_none()
         .rounded_bl_none()
@@ -159,6 +171,7 @@ pub(crate) fn render_hunk_actions(
     actions
       .debug_selector(|| HUNK_ACTIONS_DEBUG_SELECTOR.to_string())
       .into_any_element(),
+    editor_state.hunk_actions_align_left(),
   ))
 }
 
@@ -190,6 +203,11 @@ fn render_conflict_actions(
   let actions = div()
     .flex()
     .items_center()
+    .bg(theme.background)
+    .border_1()
+    .border_color(theme.border)
+    .rounded_md()
+    .shadow_md()
     .child(
       side(
         "accept-current-conflict",
@@ -222,6 +240,7 @@ fn render_conflict_actions(
     actions
       .debug_selector(|| CONFLICT_ACTIONS_DEBUG_SELECTOR.to_string())
       .into_any_element(),
+    false,
   ))
 }
 
@@ -245,13 +264,20 @@ fn visible_action_top(
   Some(top.max(px(0.0)))
 }
 
-fn floating(top: Pixels, actions: AnyElement) -> AnyElement {
-  div()
-    .absolute()
-    .top(top)
-    .right(px(30.0))
-    .child(actions)
-    .into_any_element()
+fn floating(top: Pixels, actions: AnyElement, align_left_split: bool) -> AnyElement {
+  let container = div().absolute().top(top).cursor(CursorStyle::Arrow);
+  if align_left_split {
+    container
+      .left(px(0.0))
+      .w(relative(0.5))
+      .pr(px(30.0))
+      .flex()
+      .justify_end()
+      .child(actions)
+      .into_any_element()
+  } else {
+    container.right(px(30.0)).child(actions).into_any_element()
+  }
 }
 
 /// `shift-enter`: stage or unstage the hunk under the cursor, accept the

@@ -838,6 +838,49 @@ enum LineVisibility {
   Blank,
 }
 
+fn line_visibility_for_view(
+  diff_view: DiffElementView,
+  display_line: &DisplayLine,
+  block: Option<&ProjectionBlock>,
+) -> LineVisibility {
+  let review_comment_side = block.and_then(ProjectionBlock::review_comment_side);
+  match diff_view {
+    DiffElementView::Inline => LineVisibility::Text,
+    DiffElementView::SplitLeft => match display_line {
+      DisplayLine::Doc {
+        change: Some(ChangeKind::Added),
+        ..
+      } => LineVisibility::Blank,
+      _ if review_comment_side == Some(ReviewCommentSide::Right) => LineVisibility::Blank,
+      _ => LineVisibility::Text,
+    },
+    DiffElementView::SplitRight => match display_line {
+      DisplayLine::Removed { .. } => LineVisibility::Blank,
+      _ if review_comment_side == Some(ReviewCommentSide::Left) => LineVisibility::Blank,
+      _ => LineVisibility::Text,
+    },
+  }
+}
+
+fn position_hits_blank_line(
+  position_map: &PositionMap,
+  position: Point<Pixels>,
+  diff_view: DiffElementView,
+) -> bool {
+  let Some(display_line) = position_map.display_line_for_position(position) else {
+    return false;
+  };
+  let Some(line) = position_map
+    .projection
+    .as_ref()
+    .and_then(|projection| projection.lines.get(display_line))
+  else {
+    return false;
+  };
+  let block = position_map.block_map.block_at_display_line(display_line);
+  line_visibility_for_view(diff_view, line, block) == LineVisibility::Blank
+}
+
 fn group_id_for_display_line<'a>(
   display_idx: usize,
   projection: Option<&'a Projection>,
@@ -1004,23 +1047,7 @@ impl EditorElement {
     display_line: &DisplayLine,
     block: Option<&ProjectionBlock>,
   ) -> LineVisibility {
-    let review_comment_side = block.and_then(ProjectionBlock::review_comment_side);
-    match self.diff_view {
-      DiffElementView::Inline => LineVisibility::Text,
-      DiffElementView::SplitLeft => match display_line {
-        DisplayLine::Doc {
-          change: Some(ChangeKind::Added),
-          ..
-        } => LineVisibility::Blank,
-        _ if review_comment_side == Some(ReviewCommentSide::Right) => LineVisibility::Blank,
-        _ => LineVisibility::Text,
-      },
-      DiffElementView::SplitRight => match display_line {
-        DisplayLine::Removed { .. } => LineVisibility::Blank,
-        _ if review_comment_side == Some(ReviewCommentSide::Left) => LineVisibility::Blank,
-        _ => LineVisibility::Text,
-      },
-    }
+    line_visibility_for_view(self.diff_view, display_line, block)
   }
 }
 
@@ -1487,6 +1514,16 @@ impl Element for EditorElement {
       }
     }
 
+    let group_id_for_visible_display_line = |display_idx: usize| {
+      let line = projection.as_ref()?.lines.get(display_idx)?;
+      let block = block_map.block_at_display_line(display_idx);
+      if self.line_visibility(line, block) == LineVisibility::Blank {
+        None
+      } else {
+        group_id_for_display_line(display_idx, projection.as_deref(), &block_map).cloned()
+      }
+    };
+
     for (display_idx, display_line) in &viewport_lines {
       let block = block_map.block_at_display_line(*display_idx);
       if block_map
@@ -1640,9 +1677,9 @@ impl Element for EditorElement {
         }
       }
 
-      let group_id = group_id_for_display_line(*display_idx, projection.as_deref(), &block_map);
+      let group_id = group_id_for_visible_display_line(*display_idx);
       if conflict_kind.is_none()
-        && let (Some(projection), Some(group_id)) = (projection.as_ref(), group_id)
+        && let Some(group_id) = group_id
       {
         let is_active_hunk = active_hunk_group_id.as_deref() == Some(group_id.as_ref());
         let border_colors = if is_active_hunk {
@@ -1654,11 +1691,10 @@ impl Element for EditorElement {
         if let Some((top_color, bottom_color)) = border_colors {
           let previous_group = display_idx
             .checked_sub(1)
-            .and_then(|idx| group_id_for_display_line(idx, Some(projection.as_ref()), &block_map));
-          let next_group =
-            group_id_for_display_line(display_idx + 1, Some(projection.as_ref()), &block_map);
-          let is_top = previous_group.map(|id| id.as_ref()) != Some(group_id.as_ref());
-          let is_bottom = next_group.map(|id| id.as_ref()) != Some(group_id.as_ref());
+            .and_then(group_id_for_visible_display_line);
+          let next_group = group_id_for_visible_display_line(display_idx + 1);
+          let is_top = previous_group.as_deref() != Some(group_id.as_ref());
+          let is_bottom = next_group.as_deref() != Some(group_id.as_ref());
           let border_thickness = px(1.0);
           let y = line_y(bounds.top(), line_height, *display_idx, scroll_offset);
 
@@ -1792,7 +1828,13 @@ impl Element for EditorElement {
         if display_line >= viewport.end {
           display_line = viewport.end.saturating_sub(1);
         }
-        let hovered = editor.group_id_for_modified_display_line(display_line);
+        let review_comment_side = match self.diff_view {
+          DiffElementView::SplitLeft => Some(ReviewCommentSide::Left),
+          DiffElementView::SplitRight => Some(ReviewCommentSide::Right),
+          DiffElementView::Inline => None,
+        };
+        let hovered =
+          editor.group_id_for_hunk_action_display_line(display_line, review_comment_side);
         let hovered_conflict = editor.conflict_start_line_for_display_line(display_line, cx);
         let mut did_change = false;
         if editor.hovered_group_id.as_deref() != hovered.as_deref() {
@@ -2048,8 +2090,9 @@ impl Element for EditorElement {
     if prepaint.bounds.contains(&mouse_position)
       && prepaint.scroll_hitbox.should_handle_scroll(window)
       && !position_hits_review_comment_line(&position_map, mouse_position)
+      && position_hits_blank_line(&position_map, mouse_position, self.diff_view)
     {
-      window.set_window_cursor_style(CursorStyle::IBeam);
+      window.set_window_cursor_style(CursorStyle::Arrow);
     }
 
     if is_primary {
@@ -2063,6 +2106,7 @@ impl Element for EditorElement {
         let editor = self.editor.clone();
         let position_map = Rc::clone(&position_map);
         let scroll_hitbox = prepaint.scroll_hitbox.clone();
+        let diff_view = self.diff_view;
         move |event: &MouseDownEvent, phase, window, cx| {
           // The laid-out bounds can outgrow the visible column; the hitbox
           // carries the clip, so a press under an overlay never selects.
@@ -2070,6 +2114,10 @@ impl Element for EditorElement {
             && event.button == MouseButton::Left
             && scroll_hitbox.is_hovered(window)
           {
+            if position_hits_blank_line(&position_map, event.position, diff_view) {
+              cx.stop_propagation();
+              return;
+            }
             editor.update(cx, |editor, cx| {
               editor.mouse_left_down(event, &position_map, window, cx);
             });
@@ -2095,6 +2143,11 @@ impl Element for EditorElement {
         let editor = self.editor.clone();
         let position_map = Rc::clone(&position_map);
         let scroll_hitbox = prepaint.scroll_hitbox.clone();
+        let review_comment_side = match self.diff_view {
+          DiffElementView::SplitLeft => Some(ReviewCommentSide::Left),
+          DiffElementView::SplitRight => Some(ReviewCommentSide::Right),
+          DiffElementView::Inline => None,
+        };
         move |event: &MouseMoveEvent, phase, window, cx| {
           if phase == DispatchPhase::Bubble {
             let is_selecting = editor.read(cx).is_selecting;
@@ -2105,7 +2158,14 @@ impl Element for EditorElement {
             } else {
               let is_occluded = !scroll_hitbox.is_hovered(window);
               editor.update(cx, |editor, cx| {
-                editor.mouse_moved(event, &position_map, is_occluded, is_primary, cx);
+                editor.mouse_moved(
+                  event,
+                  &position_map,
+                  is_occluded,
+                  is_primary,
+                  review_comment_side,
+                  cx,
+                );
               });
             }
           }
