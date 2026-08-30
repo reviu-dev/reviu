@@ -9,7 +9,7 @@ use gfm_markdown_viewer::SuggestionContext;
 use git::{DiffHunk, DiffLine, DiffLineKind, FileDiff};
 
 const GAP_THRESHOLD_LINES: usize = 6;
-pub const NO_NEWLINE_MARKER_TEXT: &str = "\\ No newline at end of file";
+pub const NO_NEWLINE_MARKER_TEXT: &str = diff_core::NO_NEWLINE_MARKER_TEXT;
 const REVIEW_COMMENT_COLLAPSED_LINES: usize = 2;
 pub const REVIEW_COMMENT_HEADER_HEIGHT_LINES: f32 = 1.0;
 pub const REVIEW_COMMENT_CARD_BORDER_PX: f32 = 1.0;

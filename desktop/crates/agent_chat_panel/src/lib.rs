@@ -24,8 +24,7 @@ use std::sync::Arc;
 
 use crate::diff::{
   DiffLineKind, DiffSummary, InlineSpan, InlineSpanKind, MAX_DIFF_LINES_COLLAPSED,
-  MAX_TOOL_OUTPUT_LINES_COLLAPSED, NO_NEWLINE_MARKER_TEXT, extract_diffs,
-  extract_outputs_with_fallback, extract_terminals,
+  MAX_TOOL_OUTPUT_LINES_COLLAPSED, extract_diffs, extract_outputs_with_fallback, extract_terminals,
 };
 use crate::mention::{DiffMention, MentionCandidate, MentionTrigger, ResolvedMention};
 use crate::message_sanitizer::sanitize_agent_markdown;
@@ -51,6 +50,7 @@ use agent_client_protocol::schema::{
   SessionConfigValueId, SessionMode, SessionModeId,
 };
 use agent_registry::{AgentId, Registry, RegistryAgent};
+use diff_core::NO_NEWLINE_MARKER_TEXT;
 use futures::future::BoxFuture;
 use gpui::Anchor;
 use gpui::{

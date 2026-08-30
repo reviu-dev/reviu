@@ -2,8 +2,6 @@ use agent_client_protocol::schema::{ContentBlock, ToolCallContent};
 use diff_core::{DiffRowKind, diff_rows, line_diff_counts};
 use syntax::HighlightSpan;
 
-pub(crate) const NO_NEWLINE_MARKER_TEXT: &str = "\\ No newline at end of file";
-
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub(crate) struct DiffSummary {
   pub path: String,

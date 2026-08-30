@@ -4,6 +4,7 @@ use unicode_segmentation::UnicodeSegmentation;
 
 pub const WORD_DIFF_MAX_COMBINED_BYTES: usize = 2_048;
 pub const DEFAULT_CONTEXT_LINES: usize = 3;
+pub const NO_NEWLINE_MARKER_TEXT: &str = "\\ No newline at end of file";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum DiffRowKind {
