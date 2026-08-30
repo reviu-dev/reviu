@@ -7,7 +7,7 @@ use editor::{Copy, Cut, Paste, Quit, Redo, SelectAll, Undo, set_indent_rainbow_e
 use gpui::Keystroke;
 use gpui::{
   AnyWindowHandle, App, Context, Decorations, Entity, FocusHandle, Focusable, Global, Menu,
-  MenuItem, Render, Subscription, Task, Window, WindowButton, div, prelude::*, px,
+  MenuItem, Render, Subscription, Task, Window, WindowButton, div, img, prelude::*, px,
 };
 use gpui_component::{
   ActiveTheme as _, Disableable, Icon, IconName, Sizable as _, Theme, ThemeMode, h_flex, kbd::Kbd,
@@ -35,8 +35,9 @@ use crate::shortcuts::{self, ShortcutId};
 use crate::workspace_window::WorkspaceWindow;
 use crate::{ShowCommandPalette, ShowFileSearch};
 use ui::{
-  Button, ButtonVariants as _, GLOBAL_BAR_HEIGHT, StatusThemeExt, UiIconName, UserMenuConfig,
-  UserMenuPage, UserMenuState, UserMenuUser, WindowExt, user_menu,
+  Button, ButtonVariants as _, GLOBAL_BAR_HEIGHT, REVIU_WORDMARK_WIDTH_PX, StatusThemeExt,
+  UiIconName, UserMenuConfig, UserMenuPage, UserMenuState, UserMenuUser, WindowExt,
+  reviu_logo_path, user_menu,
 };
 
 type NavigateFn = dyn Fn(&mut Window, &mut App);
@@ -872,10 +873,7 @@ impl Render for WorkspaceView {
 
     if matches!(auth_state, AuthState::Unknown) {
       let theme = cx.theme().clone();
-      let version = format!(
-        "Reviu v{}",
-        resolved_build_version(env!("CARGO_PKG_VERSION"))
-      );
+      let version = format!("v{}", resolved_build_version(env!("CARGO_PKG_VERSION")));
       return div()
         .size_full()
         .flex()
@@ -884,6 +882,11 @@ impl Render for WorkspaceView {
         .justify_center()
         .gap_3()
         .bg(theme.background)
+        .child(
+          img(reviu_logo_path(theme.mode.is_dark()))
+            .w(px(REVIU_WORDMARK_WIDTH_PX))
+            .h_auto(),
+        )
         .child(
           div()
             .text_sm()

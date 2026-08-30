@@ -1,11 +1,11 @@
-use gpui::{App, Context, Render, Task, Window, div, prelude::*, px};
+use gpui::{App, Context, Render, Task, Window, div, img, prelude::*, px};
 use gpui_component::{
   ActiveTheme as _, Disableable as _, IconName, Sizable as _,
   button::{Button, ButtonVariants as _},
-  dialog::{DialogDescription, DialogFooter, DialogHeader, DialogTitle},
+  dialog::{DialogDescription, DialogFooter, DialogHeader},
   h_flex,
 };
-use ui::{StatusThemeExt, UiIconName, WindowExt};
+use ui::{REVIU_WORDMARK_WIDTH_PX, StatusThemeExt, UiIconName, WindowExt, reviu_logo_path};
 
 const CHANGELOG_URL: &str = "https://reviu.dev/changelog";
 
@@ -233,10 +233,22 @@ impl Render for AboutContent {
       .flex_col()
       .child(
         DialogHeader::new()
-          .p_4()
-          .child(DialogTitle::new().child("Reviu Desktop"))
+          .px_5()
+          .pt_5()
+          .pb_4()
+          .items_center()
+          .gap_3()
           .child(
-            DialogDescription::new().child(format!("Version {client_version} · {system_label}")),
+            div().w_full().flex().justify_center().child(
+              img(reviu_logo_path(theme.mode.is_dark()))
+                .w(px(REVIU_WORDMARK_WIDTH_PX))
+                .h_auto(),
+            ),
+          )
+          .child(
+            DialogDescription::new()
+              .text_center()
+              .child(format!("Version {client_version} · {system_label}")),
           ),
       )
       .when_some(notice, |this, (message, tone)| {
@@ -247,7 +259,7 @@ impl Render for AboutContent {
         };
         this.child(
           div()
-            .px_4()
+            .px_5()
             .pb_4()
             .text_sm()
             .text_color(color)
@@ -256,8 +268,8 @@ impl Render for AboutContent {
       })
       .child(
         DialogFooter::new()
-          .px_4()
-          .pb_4()
+          .px_5()
+          .pb_5()
           .pt_1()
           .justify_between()
           .child(h_flex().gap_2().child(changelog_button).child(check_button))

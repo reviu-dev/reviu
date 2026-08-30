@@ -19,7 +19,7 @@ pub const GLOBAL_BAR_HEIGHT: f32 = 36.0;
 pub const PAGE_HEADER_HEIGHT: f32 = 45.0;
 pub const DETAILS_PAGE_CONTAINER_MAX_WIDTH: f32 = 900.0;
 
-pub use assets::{AppAssets, set_runtime_asset_dir};
+pub use assets::{AppAssets, REVIU_WORDMARK_WIDTH_PX, reviu_logo_path, set_runtime_asset_dir};
 pub use command_palette::{
   COMMAND_PALETTE_CONTEXT, CommandPalette, CommandPaletteAction, CommandPaletteBranch,
   CommandPaletteBranchKind, CommandPaletteCommand, CommandPaletteCommandId, CommandPaletteConfig,

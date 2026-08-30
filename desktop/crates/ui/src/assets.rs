@@ -12,6 +12,9 @@ struct UiAssets;
 /// Assets under this prefix are read from a directory the app fills at runtime
 /// (agent icons fetched from the ACP registry) rather than from the binary.
 const RUNTIME_PREFIX: &str = "agent-icons/";
+pub const REVIU_LOGO_DARK_PATH: &str = "logos/reviu-logo-dark.svg";
+pub const REVIU_LOGO_LIGHT_PATH: &str = "logos/reviu-logo-light.svg";
+pub const REVIU_WORDMARK_WIDTH_PX: f32 = 164.0;
 
 static RUNTIME_DIR: OnceLock<PathBuf> = OnceLock::new();
 
@@ -32,6 +35,14 @@ fn runtime_asset_file(path: &str) -> Option<PathBuf> {
     return None;
   }
   Some(RUNTIME_DIR.get()?.join(name))
+}
+
+pub fn reviu_logo_path(is_dark_mode: bool) -> &'static str {
+  if is_dark_mode {
+    REVIU_LOGO_LIGHT_PATH
+  } else {
+    REVIU_LOGO_DARK_PATH
+  }
 }
 
 pub struct AppAssets;
@@ -73,6 +84,23 @@ impl AssetSource for AppAssets {
 #[cfg(test)]
 mod tests {
   use super::*;
+
+  #[test]
+  fn reviu_logo_path_matches_the_theme() {
+    assert_eq!(reviu_logo_path(false), REVIU_LOGO_DARK_PATH);
+    assert_eq!(reviu_logo_path(true), REVIU_LOGO_LIGHT_PATH);
+  }
+
+  #[test]
+  fn reviu_logos_are_embedded() {
+    for path in [REVIU_LOGO_DARK_PATH, REVIU_LOGO_LIGHT_PATH] {
+      let data = AppAssets
+        .load(path)
+        .unwrap_or_else(|err| panic!("loading embedded logo {path} failed: {err}"))
+        .unwrap_or_else(|| panic!("embedded logo {path} is missing"));
+      assert!(!data.is_empty(), "embedded logo {path} is empty");
+    }
+  }
 
   #[test]
   fn runtime_asset_paths_cannot_escape_their_directory() {
