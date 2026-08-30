@@ -12,7 +12,7 @@ use git::DiffLineKind;
 use crate::{
   editor::{ConflictLineKind, Editor, ScrollAxis},
   projection::{
-    ChangeKind, DisplayLine, Projection, ProjectionBlock, ProjectionBlockMap,
+    ChangeKind, DisplayLine, HunkState, Projection, ProjectionBlock, ProjectionBlockMap,
     ReviewCommentBackground, ReviewCommentSide,
   },
 };
@@ -180,6 +180,51 @@ enum GutterView {
   SplitRight,
 }
 
+fn hunk_border_colors_for_kinds(
+  theme: &ui::Theme,
+  view: GutterView,
+  kinds: impl IntoIterator<Item = DiffLineKind>,
+) -> Option<(gpui::Hsla, gpui::Hsla)> {
+  let mut has_add = false;
+  let mut has_remove = false;
+  let mut first_kind = None;
+  let mut last_kind = None;
+
+  for kind in kinds {
+    match kind {
+      DiffLineKind::Add => {
+        has_add = true;
+        first_kind.get_or_insert(kind);
+        last_kind = Some(kind);
+      }
+      DiffLineKind::Remove => {
+        has_remove = true;
+        first_kind.get_or_insert(kind);
+        last_kind = Some(kind);
+      }
+      DiffLineKind::Context => {}
+    }
+  }
+
+  if has_add && has_remove {
+    let removed = theme.diff_gutter_removed();
+    let added = theme.diff_gutter_added();
+    return Some(match view {
+      GutterView::SplitLeft => (removed, removed),
+      GutterView::SplitRight => (added, added),
+      GutterView::Inline => (removed, added),
+    });
+  }
+
+  let color_for_kind = |kind| match kind {
+    DiffLineKind::Add => theme.diff_gutter_added(),
+    DiffLineKind::Remove => theme.diff_gutter_removed(),
+    DiffLineKind::Context => theme.diff_gutter_modified(),
+  };
+
+  Some((color_for_kind(first_kind?), color_for_kind(last_kind?)))
+}
+
 pub struct GutterPrepaintState {
   line_numbers: Vec<(usize, String)>,
   line_height: Pixels,
@@ -191,6 +236,7 @@ pub struct GutterPrepaintState {
   stripe_quads: Vec<PaintQuad>,
   diag_paths: Vec<Path<Pixels>>,
   conflict_borders: Vec<PaintQuad>,
+  group_borders: Vec<PaintQuad>,
   scroll_hitbox: Hitbox,
 }
 
@@ -272,6 +318,7 @@ impl Element for GutterElement {
       stripe_quads,
       diag_paths,
       conflict_borders,
+      group_borders,
       scroll_hitbox,
     ) = {
       let editor = self.editor.read(cx);
@@ -294,6 +341,7 @@ impl Element for GutterElement {
       );
 
       let mut group_kinds = HashMap::new();
+      let mut group_border_colors = HashMap::new();
       if let Some(projection) = projection.as_ref() {
         for (group_id, group) in &projection.groups {
           let mut has_add = false;
@@ -315,6 +363,15 @@ impl Element for GutterElement {
 
           if let Some(kind) = kind {
             group_kinds.insert(group_id.clone(), kind);
+          }
+          if group.state == HunkState::Staged
+            && let Some(colors) = hunk_border_colors_for_kinds(
+              &theme,
+              self.view,
+              group.hunk.lines.iter().map(|line| line.kind),
+            )
+          {
+            group_border_colors.insert(group_id.clone(), colors);
           }
         }
       }
@@ -378,6 +435,7 @@ impl Element for GutterElement {
       let mut stripe_quads = Vec::new();
       let mut diag_paths = Vec::new();
       let mut conflict_borders = Vec::new();
+      let mut group_borders = Vec::new();
       let mut blank_ranges = Vec::new();
       let mut current_blank_start: Option<usize> = None;
       for display_idx in viewport.clone() {
@@ -584,6 +642,63 @@ impl Element for GutterElement {
             ));
           }
         }
+
+        if conflict_kind.is_none()
+          && let Some(group_id) = group_id
+          && let Some(projection) = projection.as_ref()
+        {
+          let border_colors = if is_active_hunk_line {
+            Some((active_hunk_focus_color, active_hunk_focus_color))
+          } else {
+            group_border_colors.get(&group_id).copied()
+          };
+
+          if let Some((top_color, bottom_color)) = border_colors {
+            let previous_group = display_idx.checked_sub(1).and_then(|idx| {
+              group_id_for_gutter_display_line(
+                idx,
+                Some(projection.as_ref()),
+                &editor.block_map,
+                false,
+              )
+            });
+            let next_group = group_id_for_gutter_display_line(
+              display_idx + 1,
+              Some(projection.as_ref()),
+              &editor.block_map,
+              false,
+            );
+
+            let is_top = previous_group.as_deref() != Some(group_id.as_ref());
+            let is_bottom = next_group.as_deref() != Some(group_id.as_ref());
+            let border_thickness = px(1.0);
+            let stripe_width = if show_stripes { px(4.0) } else { px(0.0) };
+            let width = if bounds.size.width > stripe_width {
+              bounds.size.width - stripe_width
+            } else {
+              px(0.0)
+            };
+            let x = bounds.left() + stripe_width;
+            let y = line_y(bounds.top(), line_height, display_idx, scroll_offset);
+
+            if is_top {
+              group_borders.push(fill(
+                Bounds::new(point(x, y), size(width, border_thickness)),
+                top_color,
+              ));
+            }
+
+            if is_bottom {
+              group_borders.push(fill(
+                Bounds::new(
+                  point(x, y + line_height - border_thickness),
+                  size(width, border_thickness),
+                ),
+                bottom_color,
+              ));
+            }
+          }
+        }
       }
 
       if let Some(start) = current_blank_start.take()
@@ -630,6 +745,7 @@ impl Element for GutterElement {
         stripe_quads,
         diag_paths,
         conflict_borders,
+        group_borders,
         scroll_hitbox,
       )
     };
@@ -649,6 +765,7 @@ impl Element for GutterElement {
       stripe_quads,
       diag_paths,
       conflict_borders,
+      group_borders,
       scroll_hitbox,
     }
   }
@@ -690,6 +807,10 @@ impl Element for GutterElement {
     }
 
     for quad in &prepaint.conflict_borders {
+      window.paint_quad(quad.clone());
+    }
+
+    for quad in &prepaint.group_borders {
       window.paint_quad(quad.clone());
     }
 
