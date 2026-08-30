@@ -4983,25 +4983,74 @@ async fn a_truncate_for_another_checkpoint_never_resubmits(cx: &mut gpui::TestAp
 
 #[test]
 fn tool_headers_never_stutter_the_kind() {
+  let cwd = Path::new("/repo");
   let mut view = tool_view("t", ToolKind::Edit, ToolCallStatus::Completed);
   // The title carries the verb: the bold label steps aside.
   view.title = "Editing files".to_string();
   assert_eq!(
-    tool_header_parts(&view),
+    tool_header_parts(&view, cwd, cwd),
     (None, "Editing files".to_string())
   );
   view.title = "Edit src/main.rs".to_string();
   assert_eq!(
-    tool_header_parts(&view),
+    tool_header_parts(&view, cwd, cwd),
     (Some("Edit"), "src/main.rs".to_string())
   );
   view.title = "Edit".to_string();
-  assert_eq!(tool_header_parts(&view), (Some("Edit"), String::new()));
+  assert_eq!(
+    tool_header_parts(&view, cwd, cwd),
+    (Some("Edit"), String::new())
+  );
   view.title = "Reformat everything".to_string();
   assert_eq!(
-    tool_header_parts(&view),
+    tool_header_parts(&view, cwd, cwd),
     (Some("Edit"), "Reformat everything".to_string())
   );
+}
+
+#[test]
+fn tool_headers_use_project_relative_location_paths_without_line_labels() {
+  let cwd = Path::new("/Users/joris/workspace/reviu");
+  let mut view = tool_view("t", ToolKind::Read, ToolCallStatus::Completed);
+  view.locations = vec![(
+    PathBuf::from("/Users/joris/workspace/reviu/CHANGELOG.md"),
+    Some(920),
+  )];
+
+  assert_eq!(
+    tool_header_parts(&view, cwd, cwd),
+    (Some("Read"), "CHANGELOG.md".to_string())
+  );
+}
+
+#[test]
+fn single_edit_diff_is_promoted_to_the_tool_header() {
+  let mut view = tool_view("t", ToolKind::Edit, ToolCallStatus::Completed);
+  view.diffs = vec![DiffSummary {
+    path: "desktop/crates/workspace/src/about_dialog.rs".to_string(),
+    old_text: Some("old\n".to_string()),
+    new_text: "new\n".to_string(),
+    added: 9,
+    removed: 7,
+    lines: Vec::new(),
+    expanded: false,
+  }];
+
+  assert_eq!(
+    tool_header_diff(&view).map(|diff| (diff.path.as_str(), diff.added, diff.removed)),
+    Some(("desktop/crates/workspace/src/about_dialog.rs", 9, 7))
+  );
+
+  view.diffs.push(DiffSummary {
+    path: "desktop/crates/workspace/src/other.rs".to_string(),
+    old_text: None,
+    new_text: "new\n".to_string(),
+    added: 1,
+    removed: 0,
+    lines: Vec::new(),
+    expanded: false,
+  });
+  assert!(tool_header_diff(&view).is_none());
 }
 
 #[test]

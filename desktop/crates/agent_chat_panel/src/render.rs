@@ -200,18 +200,14 @@ pub(crate) fn timeline_row_with_color(
 
 /// The bold kind label and the detail line of a tool header. The label hides
 /// when the title itself opens with the verb: "Editing files" needs no "Edit".
-pub(crate) fn tool_header_parts(t: &ToolCallView) -> (Option<&'static str>, String) {
+pub(crate) fn tool_header_parts(
+  t: &ToolCallView,
+  cwd: &Path,
+  repo_root: &Path,
+) -> (Option<&'static str>, String) {
   let kind = tool_kind_label(&t.kind);
-  if let Some((path, line)) = t.locations.first() {
-    let name = path
-      .file_name()
-      .and_then(|s| s.to_str())
-      .unwrap_or_else(|| path.to_str().unwrap_or(""));
-    let detail = match line {
-      Some(l) => format!("{name} (line {l})"),
-      None => name.to_string(),
-    };
-    return (Some(kind), detail);
+  if let Some((path, _)) = t.locations.first() {
+    return (Some(kind), tool_header_path(path, cwd, repo_root));
   }
   match t.title.strip_prefix(kind) {
     Some(rest) if rest.is_empty() || rest.starts_with(char::is_whitespace) => {
@@ -220,6 +216,40 @@ pub(crate) fn tool_header_parts(t: &ToolCallView) -> (Option<&'static str>, Stri
     Some(_) => (None, t.title.clone()),
     None => (Some(kind), t.title.clone()),
   }
+}
+
+pub(crate) fn tool_header_diff(t: &ToolCallView) -> Option<&DiffSummary> {
+  if matches!(t.kind, ToolKind::Edit) && t.diffs.len() == 1 {
+    t.diffs.first()
+  } else {
+    None
+  }
+}
+
+fn tool_header_path(path: &Path, cwd: &Path, repo_root: &Path) -> String {
+  if path.is_absolute() {
+    for root in [repo_root, cwd] {
+      if let Ok(stripped) = path.strip_prefix(root) {
+        return stripped.display().to_string();
+      }
+      if let (Ok(path), Ok(root)) = (path.canonicalize(), root.canonicalize())
+        && let Ok(stripped) = path.strip_prefix(root)
+      {
+        return stripped.display().to_string();
+      }
+    }
+  }
+  path.display().to_string()
+}
+
+fn diff_count_pair(added: u32, removed: u32, added_color: Hsla, removed_color: Hsla) -> AnyElement {
+  h_flex()
+    .flex_shrink_0()
+    .gap_1()
+    .text_xs()
+    .child(div().text_color(added_color).child(format!("+{added}")))
+    .child(div().text_color(removed_color).child(format!("-{removed}")))
+    .into_any_element()
 }
 
 pub(crate) fn strip_markdown_code_fence(text: &str) -> &str {
@@ -870,49 +900,105 @@ pub(crate) fn render_tool_call(
   item_id_base: u64,
   registry: &selectable_text::SelectionRegistry,
   terminal_store: Option<&std::sync::Arc<agent_acp::TerminalStore>>,
+  cwd: &Path,
+  repo_root: &Path,
   cx: &mut Context<AgentChatPanel>,
 ) -> gpui::AnyElement {
   let title_color = match t.status {
     ToolCallStatus::Failed => theme.danger,
     _ => theme.foreground,
   };
-  let (kind_label, detail) = tool_header_parts(t);
+  let (mut kind_label, detail) = tool_header_parts(t, cwd, repo_root);
   let tool_id = t.id.clone();
+  let header_diff = tool_header_diff(t);
+  if header_diff.is_some() && kind_label.is_none() {
+    kind_label = Some(tool_kind_label(&t.kind));
+  }
   let detail_color = if kind_label.is_some() {
     theme.muted_foreground
   } else {
     title_color
   };
-  let detail_first_line: SharedString =
-    detail.lines().next().unwrap_or_default().to_string().into();
-  let detail_full: SharedString = detail.clone().into();
-  let show_command_copy = matches!(t.kind, ToolKind::Execute) && !detail.is_empty();
-  let detail_el = (!detail.is_empty()).then(|| match t.locations.first().cloned() {
-    Some((path, line)) => div()
-      .id(("agent-tool-location", item_id_base as usize))
-      .flex_1()
-      .min_w_0()
-      .truncate()
-      .text_sm()
-      .text_color(detail_color)
-      .cursor_pointer()
-      .hover(|this| this.text_color(theme.foreground))
-      .child(detail_first_line.clone())
-      .on_click(cx.listener(move |_panel, _ev, _window, cx| {
-        cx.emit(AgentChatPanelEvent::OpenPath {
-          path: path.clone(),
-          line,
-        });
-      }))
-      .into_any_element(),
-    None => div()
-      .id(("agent-tool-detail", item_id_base as usize))
-      .min_w_0()
-      .truncate()
-      .text_sm()
-      .text_color(detail_color)
-      .child(detail_first_line.clone())
-      .into_any_element(),
+  let detail_text = header_diff
+    .map(|diff| tool_header_path(Path::new(&diff.path), cwd, repo_root))
+    .unwrap_or_else(|| detail.clone());
+  let detail_first_line: SharedString = detail_text
+    .lines()
+    .next()
+    .unwrap_or_default()
+    .to_string()
+    .into();
+  let detail_full: SharedString = detail_text.clone().into();
+  let show_command_copy =
+    header_diff.is_none() && matches!(t.kind, ToolKind::Execute) && !detail_text.is_empty();
+  let detail_el = if let Some(diff) = header_diff {
+    let snapshot_path = PathBuf::from(diff.path.clone());
+    let snapshot_old_text = diff.old_text.clone();
+    let snapshot_new_text = diff.new_text.clone();
+    let snapshot_line = diff.first_changed_line();
+    Some(
+      div()
+        .id(("agent-tool-diff-location", item_id_base as usize))
+        .min_w_0()
+        .flex_shrink_1()
+        .overflow_hidden()
+        .text_ellipsis_start()
+        .whitespace_nowrap()
+        .text_sm()
+        .text_color(detail_color)
+        .cursor_pointer()
+        .hover(|this| this.text_color(theme.foreground))
+        .child(detail_first_line.clone())
+        .on_click(cx.listener(move |_panel, _ev, _window, cx| {
+          cx.emit(AgentChatPanelEvent::OpenDiffSnapshot {
+            path: snapshot_path.clone(),
+            old_text: snapshot_old_text.clone(),
+            new_text: snapshot_new_text.clone(),
+            line: snapshot_line,
+          });
+        }))
+        .into_any_element(),
+    )
+  } else if !detail_text.is_empty() {
+    Some(match t.locations.first().cloned() {
+      Some((path, line)) => div()
+        .id(("agent-tool-location", item_id_base as usize))
+        .min_w_0()
+        .flex_shrink_1()
+        .overflow_hidden()
+        .text_ellipsis_start()
+        .whitespace_nowrap()
+        .text_sm()
+        .text_color(detail_color)
+        .cursor_pointer()
+        .hover(|this| this.text_color(theme.foreground))
+        .child(detail_first_line.clone())
+        .on_click(cx.listener(move |_panel, _ev, _window, cx| {
+          cx.emit(AgentChatPanelEvent::OpenPath {
+            path: path.clone(),
+            line,
+          });
+        }))
+        .into_any_element(),
+      None => div()
+        .id(("agent-tool-detail", item_id_base as usize))
+        .min_w_0()
+        .truncate()
+        .text_sm()
+        .text_color(detail_color)
+        .child(detail_first_line.clone())
+        .into_any_element(),
+    })
+  } else {
+    None
+  };
+  let diff_stats_el = header_diff.map(|diff| {
+    diff_count_pair(
+      diff.added,
+      diff.removed,
+      theme.status_green(),
+      theme.status_red(),
+    )
   });
   let command_copy_el = show_command_copy.then(|| {
     div()
@@ -960,6 +1046,7 @@ pub(crate) fn render_tool_call(
             .child(label.to_string())
         }))
         .children(detail_el)
+        .children(diff_stats_el)
         .children(command_copy_el),
     )
     .when(!t.terminals.is_empty(), |mut this| {
@@ -986,39 +1073,41 @@ pub(crate) fn render_tool_call(
         let header_snapshot_path = snapshot_path.clone();
         let header_snapshot_old_text = snapshot_old_text.clone();
         let header_snapshot_new_text = snapshot_new_text.clone();
-        let mut block = v_flex().gap_0p5().child(
-          h_flex()
-            .gap_2()
-            .child(
-              div()
-                .id(format!("agent-chat-diff-path-{item_id_base}-{diff_idx}"))
-                .text_xs()
-                .text_color(theme.foreground)
-                .cursor_pointer()
-                .hover(|this| this.text_color(theme.accent_foreground))
-                .child(d.path.clone())
-                .on_click(cx.listener(move |_panel, _ev, _window, cx| {
-                  cx.emit(AgentChatPanelEvent::OpenDiffSnapshot {
-                    path: header_snapshot_path.clone(),
-                    old_text: header_snapshot_old_text.clone(),
-                    new_text: header_snapshot_new_text.clone(),
-                    line: snapshot_line,
-                  });
-                })),
-            )
-            .child(
-              div()
-                .text_xs()
-                .text_color(theme.status_green())
-                .child(format!("+{}", d.added)),
-            )
-            .child(
-              div()
-                .text_xs()
-                .text_color(theme.status_red())
-                .child(format!("-{}", d.removed)),
-            ),
-        );
+        let mut block = v_flex().gap_0p5().when(header_diff.is_none(), |this| {
+          this.child(
+            h_flex()
+              .gap_2()
+              .min_w_0()
+              .child(
+                div()
+                  .id(format!("agent-chat-diff-path-{item_id_base}-{diff_idx}"))
+                  .min_w_0()
+                  .flex_shrink_1()
+                  .overflow_hidden()
+                  .text_ellipsis_start()
+                  .whitespace_nowrap()
+                  .text_xs()
+                  .text_color(theme.foreground)
+                  .cursor_pointer()
+                  .hover(|this| this.text_color(theme.accent_foreground))
+                  .child(d.path.clone())
+                  .on_click(cx.listener(move |_panel, _ev, _window, cx| {
+                    cx.emit(AgentChatPanelEvent::OpenDiffSnapshot {
+                      path: header_snapshot_path.clone(),
+                      old_text: header_snapshot_old_text.clone(),
+                      new_text: header_snapshot_new_text.clone(),
+                      line: snapshot_line,
+                    });
+                  })),
+              )
+              .child(diff_count_pair(
+                d.added,
+                d.removed,
+                theme.status_green(),
+                theme.status_red(),
+              )),
+          )
+        });
         if !d.lines.is_empty() {
           let total = d.lines.len();
           let visible = if d.expanded {
@@ -1584,12 +1673,12 @@ pub(crate) fn render_permission(
               .text_color(theme.muted_foreground)
               .child(path.clone()),
           )
-          .child(
-            div()
-              .text_color(theme.status_green())
-              .child(format!("+{added}")),
-          )
-          .child(div().text_color(theme.danger).child(format!("-{removed}"))),
+          .child(diff_count_pair(
+            *added,
+            *removed,
+            theme.status_green(),
+            theme.danger,
+          )),
       );
     }
   } else if let Some(path) = &detail.path {
@@ -3581,6 +3670,8 @@ impl AgentChatPanel {
                   item_id_base,
                   &registry,
                   terminal_store.as_ref(),
+                  &self.cwd,
+                  &self.repo_root,
                   cx,
                 ))
                 .into_any_element()
@@ -3597,6 +3688,8 @@ impl AgentChatPanel {
                 item_id_base,
                 &registry,
                 terminal_store.as_ref(),
+                &self.cwd,
+                &self.repo_root,
                 cx,
               ),
               theme,
@@ -3614,6 +3707,8 @@ impl AgentChatPanel {
               item_id_base,
               &registry,
               terminal_store.as_ref(),
+              &self.cwd,
+              &self.repo_root,
               cx,
             ),
             theme,
@@ -3832,13 +3927,7 @@ impl AgentChatPanel {
               .text_color(theme.foreground)
               .child(title),
           )
-          .child(
-            h_flex()
-              .gap_1()
-              .text_xs()
-              .child(div().text_color(stat_green).child(format!("+{added}")))
-              .child(div().text_color(stat_red).child(format!("-{removed}"))),
-          ),
+          .child(diff_count_pair(added, removed, stat_green, stat_red)),
       )
       .when(undone, |this| {
         this.child(
@@ -3965,22 +4054,12 @@ impl AgentChatPanel {
               .text_color(row_text)
               .child(file.path.clone()),
           )
-          .child(
-            h_flex()
-              .flex_shrink_0()
-              .gap_1()
-              .text_xs()
-              .child(
-                div()
-                  .text_color(stat_green)
-                  .child(format!("+{}", file.added)),
-              )
-              .child(
-                div()
-                  .text_color(stat_red)
-                  .child(format!("-{}", file.removed)),
-              ),
-          ),
+          .child(diff_count_pair(
+            file.added,
+            file.removed,
+            stat_green,
+            stat_red,
+          )),
       );
     }
 
