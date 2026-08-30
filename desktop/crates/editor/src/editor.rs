@@ -7477,6 +7477,7 @@ impl Editor {
       let target_offset = self.document.read(cx).line_to_char(clamped);
       self.move_to(target_offset, cx);
     }
+    self.hovered_group_id = None;
     self.hovered_conflict_start_line = None;
     self.last_mouse_position = None;
     let center_line = self.hunk_center_display_line(display_line);

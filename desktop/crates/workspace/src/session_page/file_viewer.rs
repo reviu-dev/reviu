@@ -435,6 +435,7 @@ impl SessionPage {
     editor.update(cx, |editor, cx| {
       navigate_annotation(editor, file_status, direction, cx)
     });
+    cx.notify();
     cx.stop_propagation();
   }
 

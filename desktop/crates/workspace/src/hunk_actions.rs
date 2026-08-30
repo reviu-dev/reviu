@@ -40,14 +40,24 @@ pub(crate) fn render_hunk_actions(
     return render_conflict_actions(editor, editor_state, &theme, cx);
   }
 
-  let hovered_id = editor_state.hovered_group_id.as_ref()?;
-  let overlay = editor_state
-    .visible_groups
-    .iter()
-    .find(|overlay| overlay.id.as_ref() == hovered_id.as_ref())?;
+  let hovered = editor_state.hovered_group_id.as_ref().and_then(|id| {
+    editor_state
+      .visible_groups
+      .iter()
+      .find(|overlay| overlay.id.as_ref() == id.as_ref())
+      .map(|overlay| (id.clone(), overlay))
+  });
+  let selected = editor_state.highlighted_hunk_group_id(cx).and_then(|id| {
+    editor_state
+      .visible_groups
+      .iter()
+      .find(|overlay| overlay.id.as_ref() == id.as_ref())
+      .map(|overlay| (id, overlay))
+  });
+  let (group_id, overlay) = hovered.or(selected)?;
 
   let anchor_display_line = editor_state
-    .first_display_line_for_group(hovered_id)
+    .first_display_line_for_group(&group_id)
     .unwrap_or(overlay.display_line);
   let top = visible_action_top(editor_state, anchor_display_line, cx)?;
 

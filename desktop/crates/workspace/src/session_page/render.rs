@@ -3474,6 +3474,68 @@ mod tests {
   }
 
   #[gpui::test]
+  async fn walking_to_a_hunk_shows_its_floating_actions(cx: &mut TestAppContext) {
+    let repo = TempRepo::init("session-page-selected-hunk-actions");
+    let original = (1..=60)
+      .map(|line| format!("line {line}\n"))
+      .collect::<String>();
+    commit_text_file(&repo.path, Path::new("README.md"), &original, "initial");
+    let modified = original
+      .replace("line 5\n", "line 5 changed\n")
+      .replace("line 50\n", "line 50 changed\n");
+    std::fs::write(repo.path.join("README.md"), modified).expect("update file");
+
+    let (page, cx) = add_session_page_window(repo.path.clone(), cx);
+    cx.run_until_parked();
+
+    page.update_in(cx, |page, window, cx| {
+      page.open_diff(
+        PathBuf::from("README.md"),
+        None,
+        OpenIntent::Open,
+        window,
+        cx,
+      );
+    });
+    await_open_file(&page, cx).await;
+    await_editor_diff(&page, cx).await;
+
+    page.update(cx, |_, cx| cx.notify());
+    cx.run_until_parked();
+    assert!(
+      cx.debug_bounds(crate::hunk_actions::HUNK_ACTIONS_DEBUG_SELECTOR)
+        .is_none(),
+      "no hunk actions appear before hover or explicit navigation"
+    );
+
+    page.update(cx, |page, cx| {
+      page.navigate_change(AnnotationDirection::Next, cx);
+    });
+    cx.run_until_parked();
+
+    page.read_with(cx, |page, cx| {
+      let state = page
+        .editor
+        .as_ref()
+        .expect("editor")
+        .read(cx)
+        .hunk_navigation_state(cx)
+        .expect("hunk navigation state");
+      assert_eq!(state.active_index, 1);
+    });
+    assert!(
+      cx.debug_bounds(crate::hunk_actions::HUNK_ACTIONS_DEBUG_SELECTOR)
+        .is_some(),
+      "the selected hunk carries its actions after walking changes"
+    );
+    assert!(
+      cx.debug_bounds(crate::hunk_actions::STAGE_HUNK_DEBUG_SELECTOR)
+        .is_some(),
+      "the selected unstaged hunk can be staged without hovering it first"
+    );
+  }
+
+  #[gpui::test]
   async fn the_active_tab_shortcut_toggles_the_dock_closed(cx: &mut TestAppContext) {
     let repo = TempRepo::init("session-dock-toggle");
     commit_text_file(&repo.path, Path::new("README.md"), "v1\n", "initial");
