@@ -1,4 +1,5 @@
 use super::*;
+use crate::diff::DiffLine;
 use crate::persistence::{list_conversations_in, load_conversation_file};
 use agent_acp::PermissionPromptOption;
 use agent_client_protocol::schema::{
@@ -5420,6 +5421,59 @@ async fn a_single_tool_call_keeps_its_plain_row(cx: &mut gpui::TestAppContext) {
 
   assert!(cx.debug_bounds("agent-tool-group").is_none());
   assert!(cx.debug_bounds("agent-tool-card").is_some());
+}
+
+#[gpui::test]
+async fn collapsed_tool_preview_footer_touches_the_preview_card(cx: &mut gpui::TestAppContext) {
+  let (panel, cx) = add_panel_window(cx);
+  let lines: Vec<DiffLine> = (0..=MAX_DIFF_LINES_COLLAPSED)
+    .map(|ix| DiffLine {
+      kind: DiffLineKind::Added,
+      old_line: None,
+      new_line: Some(ix as u32 + 1),
+      text: format!("line {ix}"),
+      spans: Vec::new(),
+      no_newline: false,
+      syntax_spans: Vec::new(),
+    })
+    .collect();
+  let new_text = lines
+    .iter()
+    .map(|line| line.text.as_str())
+    .collect::<Vec<_>>()
+    .join("\n");
+  let mut tool = tool_view("long-diff", ToolKind::Edit, ToolCallStatus::Completed);
+  tool.diffs = vec![DiffSummary {
+    path: "src/lib.rs".to_string(),
+    old_text: None,
+    new_text,
+    added: lines.len() as u32,
+    removed: 0,
+    lines,
+    expanded: false,
+  }];
+
+  panel.update(cx, |panel, cx| {
+    panel.status = Status::Ready;
+    panel.items = vec![user_message("go"), ChatItem::Tool(tool)];
+    panel.sync_list_count();
+    cx.notify();
+  });
+  cx.run_until_parked();
+
+  let preview = cx
+    .debug_bounds("agent-chat-lines-preview")
+    .expect("collapsed preview painted");
+  let footer = cx
+    .debug_bounds("agent-chat-lines-footer")
+    .expect("line footer painted");
+  let vertical_gap = (footer.origin.y - (preview.origin.y + preview.size.height))
+    .as_f32()
+    .abs();
+
+  assert!(vertical_gap <= 0.5, "footer is attached to the preview");
+  assert_eq!(footer.origin.x, preview.origin.x);
+  assert_eq!(footer.size.width, preview.size.width);
 }
 
 #[gpui::test]

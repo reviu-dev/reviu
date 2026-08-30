@@ -60,7 +60,7 @@ use gpui::{
 };
 use gpui_component::{
   ActiveTheme as _, ColorName, Disableable as _, IconName, Selectable as _, Sizable as _,
-  button::{Button, ButtonVariants as _},
+  button::{Button, ButtonCustomVariant, ButtonVariants as _},
   clipboard::Clipboard,
   h_flex,
   input::{self, InputEvent, Textarea, TextareaState},

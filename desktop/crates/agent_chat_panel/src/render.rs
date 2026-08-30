@@ -768,6 +768,44 @@ fn mini_code_block(theme: &gpui_component::Theme) -> gpui::Div {
     .overflow_hidden()
 }
 
+fn mini_code_block_with_line_footer(theme: &gpui_component::Theme, has_footer: bool) -> gpui::Div {
+  mini_code_block(theme).when(has_footer, |this| {
+    this
+      .debug_selector(|| "agent-chat-lines-preview".to_string())
+      .rounded_bl(px(0.))
+      .rounded_br(px(0.))
+  })
+}
+
+fn line_footer_button(
+  id: SharedString,
+  label: SharedString,
+  theme: &gpui_component::Theme,
+  cx: &App,
+) -> Button {
+  Button::new(id)
+    .debug_selector(|| "agent-chat-lines-footer".to_string())
+    .label(label)
+    .xsmall()
+    .custom(
+      ButtonCustomVariant::new(cx)
+        .color(theme.secondary.opacity(0.55))
+        .foreground(theme.foreground)
+        .hover(theme.secondary.opacity(0.85))
+        .active(theme.secondary),
+    )
+    .w_full()
+    .h(px(24.))
+    .border_l_1()
+    .border_r_1()
+    .border_b_1()
+    .border_color(theme.border)
+    .rounded_tl(px(0.))
+    .rounded_tr(px(0.))
+    .rounded_bl(px(3.))
+    .rounded_br(px(3.))
+}
+
 fn render_numbered_tool_output(
   output: &ToolOutput,
   start_line: u32,
@@ -775,6 +813,7 @@ fn render_numbered_tool_output(
   text_id_base: u64,
   registry: &selectable_text::SelectionRegistry,
   theme: &gpui_component::Theme,
+  has_footer: bool,
 ) -> gpui::AnyElement {
   let ui_theme = ui::Theme::new(theme.is_dark());
   let syntax_theme = ui_theme.syntax();
@@ -804,7 +843,7 @@ fn render_numbered_tool_output(
     });
   }
 
-  mini_code_block(theme)
+  mini_code_block_with_line_footer(theme, has_footer)
     .py_1()
     .child(
       code_lines::CodeLines::new(
@@ -1105,7 +1144,8 @@ pub(crate) fn render_tool_call(
           let gutter_snapshot_old_text = snapshot_old_text.clone();
           let gutter_snapshot_new_text = snapshot_new_text.clone();
           let entity = cx.entity().downgrade();
-          let body = mini_code_block(theme).child(
+          let has_footer = total > MAX_DIFF_LINES_COLLAPSED;
+          let body = mini_code_block_with_line_footer(theme, has_footer).child(
             code_lines::CodeLines::new(
               rows,
               gutter_width,
@@ -1134,8 +1174,8 @@ pub(crate) fn render_tool_call(
               }),
             }),
           );
-          block = block.child(body);
-          if total > MAX_DIFF_LINES_COLLAPSED {
+          let mut preview = v_flex().gap_0().child(body);
+          if has_footer {
             let remaining = total.saturating_sub(visible);
             let label: SharedString = if d.expanded {
               "Show less".into()
@@ -1149,16 +1189,13 @@ pub(crate) fn render_tool_call(
             let button_id =
               SharedString::from(format!("agent-chat-diff-expand-{}-{diff_idx}", tool_id.0));
             let tool_id = tool_id.clone();
-            block = block.child(
-              Button::new(button_id)
-                .label(label)
-                .xsmall()
-                .ghost()
-                .on_click(cx.listener(move |panel, _, _, cx| {
-                  panel.toggle_diff_expanded(tool_id.clone(), diff_idx, cx);
-                })),
-            );
+            preview = preview.child(line_footer_button(button_id, label, theme, cx).on_click(
+              cx.listener(move |panel, _, _, cx| {
+                panel.toggle_diff_expanded(tool_id.clone(), diff_idx, cx);
+              }),
+            ));
           }
+          block = block.child(preview);
         }
         diff_col = diff_col.child(block);
       }
@@ -1199,6 +1236,7 @@ pub(crate) fn render_tool_call(
           .start_line
           .or(t.read_start_line)
           .or_else(|| read_tool_output_start_line(&t.kind, &t.locations));
+        let has_footer = total > MAX_TOOL_OUTPUT_LINES_COLLAPSED;
         let content_div = if let Some(start_line) = output_start_line {
           render_numbered_tool_output(
             output,
@@ -1207,6 +1245,7 @@ pub(crate) fn render_tool_call(
             item_id_base | 0x0100_0000 | ((out_idx as u64) << 20),
             registry,
             theme,
+            has_footer,
           )
         } else if let Some((rows, selection_text, row_ranges)) = ansi_output_rows(
           &body_text,
@@ -1215,7 +1254,7 @@ pub(crate) fn render_tool_call(
           theme.is_dark(),
           theme.background,
         ) {
-          mini_code_block(theme)
+          mini_code_block_with_line_footer(theme, has_footer)
             .py_1()
             .text_color(theme.foreground)
             .child(
@@ -1243,7 +1282,7 @@ pub(crate) fn render_tool_call(
             mono_font.clone(),
             &syntax_theme,
           );
-          mini_code_block(theme)
+          mini_code_block_with_line_footer(theme, has_footer)
             .px_2()
             .py_1()
             .text_color(theme.foreground)
@@ -1256,8 +1295,8 @@ pub(crate) fn render_tool_call(
             ))
             .into_any_element()
         };
-        let mut block = v_flex().gap_0p5().child(content_div);
-        if total > MAX_TOOL_OUTPUT_LINES_COLLAPSED {
+        let mut block = v_flex().gap_0().child(content_div);
+        if has_footer {
           let remaining = total.saturating_sub(visible);
           let label: SharedString = if output.expanded {
             "Show less".into()
@@ -1271,15 +1310,11 @@ pub(crate) fn render_tool_call(
           let button_id =
             SharedString::from(format!("agent-chat-output-expand-{}-{out_idx}", tool_id.0));
           let tool_id_for_click = tool_id.clone();
-          block = block.child(
-            Button::new(button_id)
-              .label(label)
-              .xsmall()
-              .ghost()
-              .on_click(cx.listener(move |panel, _, _, cx| {
-                panel.toggle_output_expanded(tool_id_for_click.clone(), out_idx, cx);
-              })),
-          );
+          block = block.child(line_footer_button(button_id, label, theme, cx).on_click(
+            cx.listener(move |panel, _, _, cx| {
+              panel.toggle_output_expanded(tool_id_for_click.clone(), out_idx, cx);
+            }),
+          ));
         }
         out_col = out_col.child(block);
       }
