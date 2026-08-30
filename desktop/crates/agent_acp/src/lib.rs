@@ -23,7 +23,7 @@ use std::process::Stdio;
 use std::sync::Arc;
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 pub use terminal::{TerminalSnapshot, TerminalStore};
 
 pub use agent_client_protocol::schema::PermissionOptionKind;
@@ -60,6 +60,13 @@ pub struct PermissionPrompt {
 
 type PermissionReplyMap = Arc<Mutex<HashMap<u64, oneshot::Sender<Option<String>>>>>;
 type StderrBuffer = Arc<Mutex<VecDeque<String>>>;
+type LastSessionUpdateState = Arc<Mutex<Option<LastSessionUpdate>>>;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct LastSessionUpdate {
+  received_at: Instant,
+  kind: &'static str,
+}
 
 #[derive(Clone, Debug)]
 pub struct BackendConfig {
@@ -605,6 +612,39 @@ fn is_replayable_content(update: &AgentEvent) -> bool {
   )
 }
 
+fn session_update_kind(update: &AgentEvent) -> &'static str {
+  match update {
+    AgentEvent::UserMessageChunk(_) => "user_message_chunk",
+    AgentEvent::AgentMessageChunk(_) => "agent_message_chunk",
+    AgentEvent::AgentThoughtChunk(_) => "agent_thought_chunk",
+    AgentEvent::ToolCall(_) => "tool_call",
+    AgentEvent::ToolCallUpdate(_) => "tool_call_update",
+    AgentEvent::Plan(_) => "plan",
+    AgentEvent::AvailableCommandsUpdate(_) => "available_commands_update",
+    AgentEvent::CurrentModeUpdate(_) => "current_mode_update",
+    AgentEvent::ConfigOptionUpdate(_) => "config_option_update",
+    AgentEvent::SessionInfoUpdate(_) => "session_info_update",
+    AgentEvent::UsageUpdate(_) => "usage_update",
+    _ => "unknown",
+  }
+}
+
+fn prompt_response_log_label(
+  response: &std::result::Result<
+    agent_client_protocol::schema::PromptResponse,
+    agent_client_protocol::Error,
+  >,
+) -> String {
+  match response {
+    Ok(response) => format!("stop_reason={:?}", response.stop_reason),
+    Err(error) => format!("error_code={:?}", error.code),
+  }
+}
+
+fn trace_last_session_update(trace: &LastSessionUpdateState) -> Option<LastSessionUpdate> {
+  trace.lock().ok().and_then(|trace| *trace)
+}
+
 fn pick_default_permission_option(
   options: &[PermissionOption],
 ) -> Option<agent_client_protocol::schema::PermissionOptionId> {
@@ -732,6 +772,8 @@ async fn run_driver(
   // host already holds the transcript, so replayed content must not reach it.
   let replaying = Arc::new(std::sync::atomic::AtomicBool::new(false));
   let replaying_gate = replaying.clone();
+  let last_session_update: LastSessionUpdateState = Arc::new(Mutex::new(None));
+  let last_session_update_for_notifications = last_session_update.clone();
   let term_meta = terminal_store.clone();
   let result = Client
     .builder()
@@ -741,6 +783,14 @@ async fn run_driver(
         // through tool-call metadata; feed it into the terminal store even
         // during a replay, so reloaded conversations keep their output.
         crate::terminal::inspect_session_update(&term_meta, &notification.update);
+        let kind = session_update_kind(&notification.update);
+        if let Ok(mut last) = last_session_update_for_notifications.lock() {
+          *last = Some(LastSessionUpdate {
+            received_at: Instant::now(),
+            kind,
+          });
+        }
+        log::debug!("[acp] session/update kind={kind}");
         if replaying_gate.load(Ordering::Relaxed) && is_replayable_content(&notification.update) {
           return Ok(());
         }
@@ -1077,6 +1127,7 @@ async fn run_driver(
         })
       };
 
+      let mut prompt_counter = 0_u64;
       'outer: while let Ok(cmd) = cmd_rx.recv().await {
         match cmd {
           // A steer landing outside a turn: nothing to inject into.
@@ -1084,6 +1135,13 @@ async fn run_driver(
             let _ = reply.send(Ok(SteerOutcome::PromptRequired));
           }
           DriverCmd::Prompt { blocks, reply } => {
+            prompt_counter = prompt_counter.wrapping_add(1);
+            let prompt_id = prompt_counter;
+            let prompt_started_at = Instant::now();
+            if let Ok(mut last) = last_session_update.lock() {
+              *last = None;
+            }
+            log::info!("[acp] prompt #{prompt_id} sent");
             let prompt_fut = connection
               .send_request(PromptRequest::new(session_id.clone(), blocks))
               .block_task()
@@ -1103,6 +1161,7 @@ async fn run_driver(
                 next_cmd = cmd_rx.recv().fuse() => {
                   match next_cmd {
                     Ok(DriverCmd::Cancel) => {
+                      log::info!("[acp] prompt #{prompt_id} cancel sent");
                       let _ = connection
                         .send_notification(CancelNotification::new(session_id.clone()));
                     }
@@ -1177,15 +1236,27 @@ async fn run_driver(
                   let _ = steer_reply.send(mapped);
                 }
                 response = prompt_fut => {
+                  let elapsed_ms = prompt_started_at.elapsed().as_millis();
+                  let last_update = trace_last_session_update(&last_session_update);
+                  let (last_update_kind, since_last_update_ms) = last_update
+                    .map(|last| (last.kind, last.received_at.elapsed().as_millis().to_string()))
+                    .unwrap_or(("none", "none".to_string()));
+                  log::info!(
+                    "[acp] prompt #{prompt_id} response received {} elapsed_ms={elapsed_ms} last_update={last_update_kind} since_last_update_ms={since_last_update_ms}",
+                    prompt_response_log_label(&response),
+                  );
                   response_opt = Some(response);
                 },
               }
             }
             if let Some(response) = response_opt {
+              let elapsed_ms = prompt_started_at.elapsed().as_millis();
+              log::debug!("[acp] prompt #{prompt_id} reply delivered elapsed_ms={elapsed_ms}");
               let _ = reply.send(map_prompt_response(response));
             }
           }
           DriverCmd::Cancel => {
+            log::info!("[acp] cancel sent while idle");
             let _ = connection.send_notification(CancelNotification::new(session_id.clone()));
           }
           DriverCmd::Stop => break,
@@ -1244,6 +1315,42 @@ mod tests {
 
   fn opt(id: &str, kind: PermissionOptionKind) -> PermissionOption {
     PermissionOption::new(PermissionOptionId::new(id), id.to_string(), kind)
+  }
+
+  #[test]
+  fn session_update_kind_names_updates_for_turn_diagnostics() {
+    use agent_client_protocol::schema::{
+      ContentChunk, PromptResponse, ToolCall, ToolCallId, ToolCallUpdate, ToolCallUpdateFields,
+    };
+
+    let chunk = || ContentChunk::new(ContentBlock::Text(TextContent::new("x")));
+
+    assert_eq!(
+      session_update_kind(&AgentEvent::AgentMessageChunk(chunk())),
+      "agent_message_chunk"
+    );
+    assert_eq!(
+      session_update_kind(&AgentEvent::AgentThoughtChunk(chunk())),
+      "agent_thought_chunk"
+    );
+    assert_eq!(
+      session_update_kind(&AgentEvent::ToolCall(ToolCall::new(
+        ToolCallId::new("tool"),
+        "Run command".to_string(),
+      ))),
+      "tool_call"
+    );
+    assert_eq!(
+      session_update_kind(&AgentEvent::ToolCallUpdate(ToolCallUpdate::new(
+        ToolCallId::new("tool"),
+        ToolCallUpdateFields::new(),
+      ))),
+      "tool_call_update"
+    );
+    assert_eq!(
+      prompt_response_log_label(&Ok(PromptResponse::new(StopReason::EndTurn))),
+      "stop_reason=EndTurn"
+    );
   }
 
   #[test]

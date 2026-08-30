@@ -342,6 +342,7 @@ impl AgentChatPanel {
     self.drain_pending_events(cx);
     self.flush_turn_buffers();
     let images = std::mem::take(&mut self.staged_images);
+    let role_label = format!("{role:?}");
     self.items.push(ChatItem::Message(ChatMessage {
       role,
       text: text.clone().into(),
@@ -350,6 +351,20 @@ impl AgentChatPanel {
     }));
     cx.emit(AgentChatPanelEvent::TurnStarted);
     self.start_turn(cx);
+    let session_id = session
+      .init_info()
+      .session_id
+      .as_deref()
+      .unwrap_or("unknown");
+    log::info!(
+      "[agent-turn] started backend={} conversation={} session={} role={} images={} queued={}",
+      self.backend_kind.0,
+      self.current_conv.id,
+      session_id,
+      role_label,
+      images.len(),
+      self.queued_prompts.len(),
+    );
     self.persist_state(cx);
     self.sync_list_count();
     self.arm_runway();
@@ -455,6 +470,14 @@ impl AgentChatPanel {
     result: anyhow::Result<agent_client_protocol::schema::StopReason>,
     cx: &mut Context<Self>,
   ) {
+    let elapsed_ms = self
+      .turn_started_at
+      .map(|started_at| started_at.elapsed().as_millis())
+      .unwrap_or(0);
+    log::info!(
+      "[agent-turn] prompt response reached panel {} elapsed_ms={elapsed_ms}",
+      prompt_result_log_label(&result),
+    );
     {
       let panel = self;
       {
@@ -560,6 +583,10 @@ Its provider may have refused it (credits, usage limit) without reporting an err
           }
         }
         panel.end_turn();
+        log::info!(
+          "[agent-turn] settled completed={completed} elapsed_ms={elapsed_ms} queued={}",
+          panel.queued_prompts.len(),
+        );
         let apply_model_before_queue = panel.pending_model_selection.take().and_then(|pending| {
           let session = panel.session.clone()?;
           Some((session, pending))

@@ -157,6 +157,15 @@ fn working_word_seed(conversation_id: &str) -> u64 {
   hash
 }
 
+fn prompt_result_log_label(
+  result: &anyhow::Result<agent_client_protocol::schema::StopReason>,
+) -> String {
+  match result {
+    Ok(stop_reason) => format!("stop_reason={stop_reason:?}"),
+    Err(error) => format!("error={error}"),
+  }
+}
+
 fn review_export_label(text: &str) -> String {
   let count = text
     .lines()

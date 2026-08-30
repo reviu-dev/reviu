@@ -3397,6 +3397,14 @@ fn config_customized_is_false_without_a_recorded_default() {
 }
 
 #[test]
+fn prompt_result_log_label_names_completed_turns() {
+  assert_eq!(
+    prompt_result_log_label(&Ok(agent_client_protocol::schema::StopReason::EndTurn)),
+    "stop_reason=EndTurn"
+  );
+}
+
+#[test]
 fn working_word_holds_for_seven_seconds_then_moves_on() {
   let seed = working_word_seed("conv-1");
 
