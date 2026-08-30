@@ -206,10 +206,9 @@ fn diff_hunks(old: &str, new: &str) -> Vec<(Range<u32>, Range<u32>)> {
   use imara_diff::{Algorithm, Diff, InternedInput};
 
   let input = InternedInput::new(old, new);
-  Diff::compute(Algorithm::Histogram, &input)
-    .hunks()
-    .map(|hunk| (hunk.before, hunk.after))
-    .collect()
+  let mut diff = Diff::compute(Algorithm::Histogram, &input);
+  diff.postprocess_lines(&input);
+  diff.hunks().map(|hunk| (hunk.before, hunk.after)).collect()
 }
 
 pub fn line_diff_counts(old: &str, new: &str) -> (u32, u32) {
