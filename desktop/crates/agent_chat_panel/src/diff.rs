@@ -15,6 +15,16 @@ pub(crate) struct DiffSummary {
   pub expanded: bool,
 }
 
+impl DiffSummary {
+  pub(crate) fn first_changed_line(&self) -> Option<u32> {
+    self.lines.iter().find_map(|line| match line.kind {
+      DiffLineKind::Added => line.new_line,
+      DiffLineKind::Removed => line.old_line,
+      DiffLineKind::Context | DiffLineKind::Gap => None,
+    })
+  }
+}
+
 /// Visible diff lines per block when collapsed. Beyond this, an expander button is shown.
 pub(crate) const MAX_DIFF_LINES_COLLAPSED: usize = 40;
 
@@ -440,6 +450,46 @@ mod tests {
     let (old, new) = word_diff_spans("same line", "same line");
     assert!(old.iter().all(|s| s.kind == InlineSpanKind::Same));
     assert!(new.iter().all(|s| s.kind == InlineSpanKind::Same));
+  }
+
+  #[test]
+  fn diff_summary_reveals_the_first_changed_line() {
+    let summary = DiffSummary {
+      path: "src/main.rs".to_string(),
+      old_text: Some("a\nb\n".to_string()),
+      new_text: "a\nB\n".to_string(),
+      added: 1,
+      removed: 1,
+      lines: vec![
+        DiffLine {
+          kind: DiffLineKind::Context,
+          old_line: Some(1),
+          new_line: Some(1),
+          text: "a".to_string(),
+          spans: Vec::new(),
+          syntax_spans: Vec::new(),
+        },
+        DiffLine {
+          kind: DiffLineKind::Removed,
+          old_line: Some(2),
+          new_line: None,
+          text: "b".to_string(),
+          spans: Vec::new(),
+          syntax_spans: Vec::new(),
+        },
+        DiffLine {
+          kind: DiffLineKind::Added,
+          old_line: None,
+          new_line: Some(2),
+          text: "B".to_string(),
+          spans: Vec::new(),
+          syntax_spans: Vec::new(),
+        },
+      ],
+      expanded: false,
+    };
+
+    assert_eq!(summary.first_changed_line(), Some(2));
   }
 
   #[test]

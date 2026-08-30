@@ -943,6 +943,7 @@ pub(crate) fn render_tool_call(
         let snapshot_path = PathBuf::from(d.path.clone());
         let snapshot_old_text = d.old_text.clone();
         let snapshot_new_text = d.new_text.clone();
+        let snapshot_line = d.first_changed_line();
         let mut block = v_flex().gap_0p5().child(
           h_flex()
             .gap_2()
@@ -959,7 +960,7 @@ pub(crate) fn render_tool_call(
                     path: snapshot_path.clone(),
                     old_text: snapshot_old_text.clone(),
                     new_text: snapshot_new_text.clone(),
-                    line: None,
+                    line: snapshot_line,
                   });
                 })),
             )
