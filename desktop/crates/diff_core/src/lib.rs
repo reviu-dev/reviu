@@ -20,6 +20,7 @@ pub struct DiffRow {
   pub new_line: Option<u32>,
   pub text: String,
   pub word_diff_ranges: Vec<Range<usize>>,
+  pub no_newline: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -207,6 +208,10 @@ fn strip_line_ending(line: &str) -> &str {
   without_lf.strip_suffix('\r').unwrap_or(without_lf)
 }
 
+fn line_has_no_newline(line: &str) -> bool {
+  !line.ends_with('\n')
+}
+
 pub fn split_lines_preserving_newline(text: &str) -> Vec<&str> {
   let mut lines = Vec::new();
   let mut rest = text;
@@ -366,6 +371,7 @@ pub fn diff_rows_with_context(old: &str, new: &str, context_lines: usize) -> Vec
         new_line: None,
         text: "...".to_string(),
         word_diff_ranges: Vec::new(),
+        no_newline: false,
       });
     }
     push_group_rows(&group, &old_lines, &new_lines, &mut rows);
@@ -390,6 +396,9 @@ fn push_context_rows(
       new_line: Some(new_line as u32),
       text: strip_line_ending(old_lines.get(*old_cursor).copied().unwrap_or_default()).to_string(),
       word_diff_ranges: Vec::new(),
+      no_newline: old_lines
+        .get(*old_cursor)
+        .is_some_and(|line| line_has_no_newline(line)),
     });
     *old_cursor += 1;
     *new_cursor += 1;
@@ -415,22 +424,32 @@ fn push_group_rows(
       rows,
     );
 
-    let removed: Vec<&str> = hunk
+    let removed: Vec<(&str, bool)> = hunk
       .old
       .clone()
-      .filter_map(|idx| old_lines.get(idx as usize).copied().map(strip_line_ending))
+      .filter_map(|idx| {
+        old_lines
+          .get(idx as usize)
+          .copied()
+          .map(|line| (strip_line_ending(line), line_has_no_newline(line)))
+      })
       .collect();
-    let added: Vec<&str> = hunk
+    let added: Vec<(&str, bool)> = hunk
       .new
       .clone()
-      .filter_map(|idx| new_lines.get(idx as usize).copied().map(strip_line_ending))
+      .filter_map(|idx| {
+        new_lines
+          .get(idx as usize)
+          .copied()
+          .map(|line| (strip_line_ending(line), line_has_no_newline(line)))
+      })
       .collect();
     let paired = removed.len().min(added.len());
     let word_pairs: Vec<_> = (0..paired)
-      .map(|idx| word_diff_ranges(removed[idx], added[idx]))
+      .map(|idx| word_diff_ranges(removed[idx].0, added[idx].0))
       .collect();
 
-    for (offset, line) in removed.iter().enumerate() {
+    for (offset, (line, no_newline)) in removed.iter().enumerate() {
       rows.push(DiffRow {
         kind: DiffRowKind::Removed,
         old_line: Some(hunk.old.start + offset as u32 + 1),
@@ -440,10 +459,11 @@ fn push_group_rows(
           .get(offset)
           .map(|(removed, _)| removed.clone())
           .unwrap_or_default(),
+        no_newline: *no_newline,
       });
     }
 
-    for (offset, line) in added.iter().enumerate() {
+    for (offset, (line, no_newline)) in added.iter().enumerate() {
       rows.push(DiffRow {
         kind: DiffRowKind::Added,
         old_line: None,
@@ -453,6 +473,7 @@ fn push_group_rows(
           .get(offset)
           .map(|(_, added)| added.clone())
           .unwrap_or_default(),
+        no_newline: *no_newline,
       });
     }
 
@@ -526,6 +547,22 @@ mod tests {
   #[test]
   fn line_counts_ignore_context() {
     assert_eq!(line_diff_counts("same\nold\n", "same\nnew\n"), (1, 1));
+  }
+
+  #[test]
+  fn diff_rows_mark_lines_without_trailing_newlines() {
+    let rows = diff_rows_with_context("same\nold", "same\nnew\n", 1);
+    let removed = rows
+      .iter()
+      .find(|row| row.kind == DiffRowKind::Removed)
+      .expect("removed row");
+    let added = rows
+      .iter()
+      .find(|row| row.kind == DiffRowKind::Added)
+      .expect("added row");
+
+    assert!(removed.no_newline);
+    assert!(!added.no_newline);
   }
 
   #[test]

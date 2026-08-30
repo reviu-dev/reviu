@@ -469,6 +469,7 @@ fn bench_diff_tool(id: &str, lines: usize) -> ChatItem {
       new_line: Some(i as u32 + 10),
       text: format!("let value_{i} = compute_something(input_{i}, {i});"),
       spans: Vec::new(),
+      no_newline: false,
       syntax_spans: Vec::new(),
     })
     .collect();
@@ -2515,6 +2516,7 @@ fn persisted_tools_restore_highlights_on_load() {
             new_line: None,
             text: "fn old() {}".to_string(),
             spans: Vec::new(),
+            no_newline: false,
             syntax_spans: Vec::new(),
           },
           crate::diff::DiffLine {
@@ -2523,6 +2525,7 @@ fn persisted_tools_restore_highlights_on_load() {
             new_line: Some(12),
             text: "fn new() {}".to_string(),
             spans: Vec::new(),
+            no_newline: false,
             syntax_spans: Vec::new(),
           },
         ],

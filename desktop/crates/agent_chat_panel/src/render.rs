@@ -1060,23 +1060,45 @@ pub(crate) fn render_tool_call(
                 }],
                 band: bg,
               });
-              continue;
+            } else {
+              let runs = build_text_runs(
+                &line.text,
+                &line.spans,
+                &line.syntax_spans,
+                &syntax_theme,
+                fg,
+                Some(hl_bg),
+                &mono_font,
+              );
+              rows.push(code_lines::CodeLineRow {
+                gutter,
+                text: mini_diff_line_text_for_layout(&line.text),
+                runs,
+                band: bg,
+              });
             }
-            let runs = build_text_runs(
-              &line.text,
-              &line.spans,
-              &line.syntax_spans,
-              &syntax_theme,
-              fg,
-              Some(hl_bg),
-              &mono_font,
-            );
-            rows.push(code_lines::CodeLineRow {
-              gutter,
-              text: mini_diff_line_text_for_layout(&line.text),
-              runs,
-              band: bg,
-            });
+            if line.no_newline {
+              if !selection_text.is_empty() {
+                selection_text.push('\n');
+              }
+              let marker_start = selection_text.len();
+              selection_text.push_str(NO_NEWLINE_MARKER_TEXT);
+              row_ranges.push(marker_start..selection_text.len());
+              gutter_lines.push(None);
+              rows.push(code_lines::CodeLineRow {
+                gutter: None,
+                text: NO_NEWLINE_MARKER_TEXT.into(),
+                runs: vec![TextRun {
+                  len: NO_NEWLINE_MARKER_TEXT.len(),
+                  font: mono_font.clone(),
+                  color: theme.muted_foreground,
+                  background_color: None,
+                  underline: None,
+                  strikethrough: None,
+                }],
+                band: bg,
+              });
+            }
           }
           let gutter_width = if show_line_numbers { px(54.) } else { px(0.) };
           let gutter_snapshot_path = snapshot_path.clone();

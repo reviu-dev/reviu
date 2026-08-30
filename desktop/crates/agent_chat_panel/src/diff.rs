@@ -2,6 +2,8 @@ use agent_client_protocol::schema::{ContentBlock, ToolCallContent};
 use diff_core::{DiffRowKind, diff_rows, line_diff_counts};
 use syntax::HighlightSpan;
 
+pub(crate) const NO_NEWLINE_MARKER_TEXT: &str = "\\ No newline at end of file";
+
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub(crate) struct DiffSummary {
   pub path: String,
@@ -245,6 +247,8 @@ pub(crate) struct DiffLine {
   pub text: String,
   #[serde(default)]
   pub spans: Vec<InlineSpan>,
+  #[serde(default)]
+  pub no_newline: bool,
   #[serde(skip)]
   pub syntax_spans: Vec<HighlightSpan>,
 }
@@ -363,6 +367,7 @@ pub(crate) fn build_diff_lines(old: &str, new: &str) -> Vec<DiffLine> {
         new_line: row.new_line,
         text: row.text,
         spans,
+        no_newline: row.no_newline,
         syntax_spans: Vec::new(),
       }
     })
@@ -501,6 +506,7 @@ mod tests {
           new_line: Some(1),
           text: "a".to_string(),
           spans: Vec::new(),
+          no_newline: false,
           syntax_spans: Vec::new(),
         },
         DiffLine {
@@ -509,6 +515,7 @@ mod tests {
           new_line: None,
           text: "b".to_string(),
           spans: Vec::new(),
+          no_newline: false,
           syntax_spans: Vec::new(),
         },
         DiffLine {
@@ -517,6 +524,7 @@ mod tests {
           new_line: Some(2),
           text: "B".to_string(),
           spans: Vec::new(),
+          no_newline: false,
           syntax_spans: Vec::new(),
         },
       ],
@@ -576,6 +584,7 @@ mod tests {
       new_line: Some(4),
       text: "added".to_string(),
       spans: Vec::new(),
+      no_newline: false,
       syntax_spans: Vec::new(),
     };
     let removed = DiffLine {
@@ -584,6 +593,7 @@ mod tests {
       new_line: None,
       text: "removed".to_string(),
       spans: Vec::new(),
+      no_newline: false,
       syntax_spans: Vec::new(),
     };
     let gap = DiffLine {
@@ -592,12 +602,29 @@ mod tests {
       new_line: None,
       text: "...".to_string(),
       spans: Vec::new(),
+      no_newline: false,
       syntax_spans: Vec::new(),
     };
 
     assert_eq!(added.snapshot_line(), Some(4));
     assert_eq!(removed.snapshot_line(), Some(7));
     assert_eq!(gap.snapshot_line(), None);
+  }
+
+  #[test]
+  fn build_diff_lines_marks_missing_trailing_newlines() {
+    let lines = build_diff_lines("same\nold", "same\nnew\n");
+    let removed = lines
+      .iter()
+      .find(|line| line.kind == DiffLineKind::Removed)
+      .expect("removed row");
+    let added = lines
+      .iter()
+      .find(|line| line.kind == DiffLineKind::Added)
+      .expect("added row");
+
+    assert!(removed.no_newline);
+    assert!(!added.no_newline);
   }
 
   #[test]
