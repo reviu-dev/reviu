@@ -2,6 +2,6 @@
 //! `git` crate's `test-support` feature.
 
 pub(crate) use git::test_support::{
-  TempBareRepo, TempRepo, commit_text_file, head_oid, push_branch_to_remote, remote_branch_oid,
-  set_remote_head, set_upstream, temp_path,
+  TempBareRepo, TempDir, TempRepo, commit_text_file, head_oid, push_branch_to_remote,
+  remote_branch_oid, set_remote_head, set_upstream, temp_path,
 };

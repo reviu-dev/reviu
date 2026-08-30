@@ -229,6 +229,29 @@ pub(super) fn publish_to_new_remote(repo_root: &Path, prefix: &str) -> PathBuf {
   remote_root
 }
 
+pub(super) fn diverge_current_branch(repo_root: &Path, remote_root: &Path) {
+  let branch = git::current_branch_status(repo_root)
+    .expect("branch status")
+    .name;
+  crate::test_support::set_remote_head(remote_root, &branch);
+  let peer_dir = crate::test_support::TempDir::new("session-page-diverged-peer");
+  git2::Repository::clone(
+    remote_root.to_str().expect("remote path utf8"),
+    &peer_dir.path,
+  )
+  .expect("clone remote into peer");
+
+  crate::test_support::commit_text_file(repo_root, Path::new("README.md"), "v2-local\n", "local");
+  crate::test_support::commit_text_file(
+    &peer_dir.path,
+    Path::new("README.md"),
+    "v2-peer\n",
+    "peer",
+  );
+  crate::test_support::push_branch_to_remote(&peer_dir.path, &branch, "origin");
+  git::fetch(repo_root).expect("fetch remote change");
+}
+
 pub(super) async fn await_branch_refresh(
   _page: &Entity<SessionPage>,
   cx: &mut gpui::VisualTestContext,

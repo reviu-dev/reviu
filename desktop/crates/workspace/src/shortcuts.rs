@@ -458,7 +458,7 @@ const SHORTCUT_DEFINITIONS: [ShortcutDefinition; 32] = [
   ShortcutDefinition {
     id: ShortcutId::ForcePushChanges,
     title: "Force Push Changes",
-    description: "Force push the current branch to its upstream remote.",
+    description: "Force push the current branch to its upstream remote with lease.",
     scope_label: "Sessions",
     category: ShortcutCategory::LocalGit,
     keystroke: "cmd-shift-y",

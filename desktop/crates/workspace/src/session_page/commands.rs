@@ -49,9 +49,47 @@ impl SessionPage {
     if !self.repo_state("", cx).allows(rule) {
       return;
     }
-    if let Err(error) = self.run_repo_command(command, window, cx) {
+    let result = if command == RepoCommand::ForcePush {
+      self.confirm_force_push(window, cx)
+    } else {
+      self.run_repo_command(command, window, cx)
+    };
+    if let Err(error) = result {
       window.push_notification(Notification::warning(error), cx);
     }
+  }
+
+  pub(super) fn confirm_force_push(
+    &mut self,
+    window: &mut Window,
+    cx: &mut Context<Self>,
+  ) -> Result<(), SharedString> {
+    if !self.repo_state("", cx).allows(PaletteCommand::ForcePush) {
+      return Err("Force push is currently disabled.".into());
+    }
+
+    let view = cx.entity();
+    window.open_alert_dialog(cx, move |alert, _, _| {
+      let view = view.clone();
+      ConfirmDialog::new(
+        SharedString::from("Force push this branch?"),
+        div().child(
+          "This rewrites the remote branch. Reviu will only continue if the remote still matches your last fetch.",
+        ),
+      )
+      .confirm_text("Force push")
+      .cancel_text("Cancel")
+      .on_confirm(move |_, window, cx| {
+        view.update(cx, |view, cx| {
+          if let Err(error) = view.run_repo_command(RepoCommand::ForcePush, window, cx) {
+            window.push_notification(Notification::warning(error), cx);
+          }
+        });
+        true
+      })
+      .build(alert)
+    });
+    Ok(())
   }
 
   /// Runs a repo command in the background, then refreshes the changes panel.
@@ -259,7 +297,7 @@ impl SessionPage {
         self.run_repo_command(RepoCommand::UndoLastCommit, window, cx)
       }
       CommitMenuCommand::Push => self.run_repo_command(RepoCommand::Push, window, cx),
-      CommitMenuCommand::ForcePush => self.run_repo_command(RepoCommand::ForcePush, window, cx),
+      CommitMenuCommand::ForcePush => self.confirm_force_push(window, cx),
     }
   }
 
@@ -377,6 +415,7 @@ impl SessionPage {
     }
 
     self.repo_command_in_flight = true;
+    cx.notify();
     let checked_out_for_link = matches!(command, RepoCommand::SwitchToBranchName { .. });
     let telemetry_key = command.telemetry_key();
     let analytics_event = command.analytics_event();
@@ -1021,6 +1060,33 @@ mod tests {
         .len(),
       1
     );
+  }
+
+  #[gpui::test]
+  async fn the_commit_menu_asks_before_force_pushing(cx: &mut TestAppContext) {
+    let repo = TempRepo::init("session-page-commit-menu-force-push-confirm");
+    commit_text_file(&repo.path, Path::new("README.md"), "v1\n", "initial");
+    let remote = publish_to_new_remote(&repo.path, "session-page-commit-menu-force-push-confirm");
+    diverge_current_branch(&repo.path, &remote);
+
+    let (page, cx) = add_session_page_window(repo.path.clone(), cx);
+    page.update(cx, |page, cx| page.refresh_branch(cx));
+    await_branch_refresh(&page, cx).await;
+
+    page.update_in(cx, |page, window, cx| {
+      page
+        .run_commit_menu_command(CommitMenuCommand::ForcePush, window, cx)
+        .expect("force push is allowed")
+    });
+    cx.run_until_parked();
+
+    assert!(cx.update(|window, cx| window.has_active_dialog(cx)));
+    page.read_with(cx, |page, _| {
+      assert!(
+        page._repo_command_task.is_none(),
+        "force push waits for confirmation"
+      );
+    });
   }
 
   #[gpui::test]

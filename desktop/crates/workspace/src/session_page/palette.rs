@@ -327,7 +327,7 @@ impl SessionPage {
         Ok(())
       }
       CommandPaletteAction::Push => self.run_repo_command(RepoCommand::Push, window, cx),
-      CommandPaletteAction::ForcePush => self.run_repo_command(RepoCommand::ForcePush, window, cx),
+      CommandPaletteAction::ForcePush => self.confirm_force_push(window, cx),
       CommandPaletteAction::Amend => self.amend_last_commit(window, cx),
       CommandPaletteAction::UndoLastCommit => {
         self.run_repo_command(RepoCommand::UndoLastCommit, window, cx)
@@ -1062,6 +1062,33 @@ mod tests {
         .collect::<Vec<_>>();
       assert!(ids.contains(&CommandPaletteCommandId::ForcePush));
       assert!(!ids.contains(&CommandPaletteCommandId::Push));
+    });
+  }
+
+  #[gpui::test]
+  async fn the_palette_asks_before_force_pushing(cx: &mut TestAppContext) {
+    let repo = TempRepo::init("session-page-palette-force-push-confirm");
+    commit_text_file(&repo.path, Path::new("README.md"), "v1\n", "initial");
+    let remote = publish_to_new_remote(&repo.path, "session-page-palette-force-push-confirm");
+    diverge_current_branch(&repo.path, &remote);
+
+    let (page, cx) = add_session_page_window(repo.path.clone(), cx);
+    page.update(cx, |page, cx| page.refresh_branch(cx));
+    await_branch_refresh(&page, cx).await;
+
+    page.update_in(cx, |page, window, cx| {
+      page
+        .handle_command_palette_action(CommandPaletteAction::ForcePush, window, cx)
+        .expect("force push is allowed");
+    });
+    cx.run_until_parked();
+
+    assert!(cx.update(|window, cx| window.has_active_dialog(cx)));
+    page.read_with(cx, |page, _| {
+      assert!(
+        page._repo_command_task.is_none(),
+        "force push waits for confirmation"
+      );
     });
   }
 

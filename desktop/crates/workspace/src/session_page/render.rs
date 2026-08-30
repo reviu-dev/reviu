@@ -76,7 +76,12 @@ impl SessionPage {
           .on_click(cx.listener(move |this, _, window, cx| {
             // The row switches repository; the counter runs its command instead.
             cx.stop_propagation();
-            if let Err(error) = this.run_repo_command(command.clone(), window, cx) {
+            let result = if command == RepoCommand::ForcePush {
+              this.confirm_force_push(window, cx)
+            } else {
+              this.run_repo_command(command.clone(), window, cx)
+            };
+            if let Err(error) = result {
               window.push_notification(Notification::warning(error), cx);
             }
           }))
@@ -152,6 +157,20 @@ impl SessionPage {
             )
           })
           .when_some(branch_status, |this, status| {
+            let (_, can_force_push) = push_flags(
+              Some(&status),
+              self.dock_panel.read(cx).head_status().has_head_commit,
+              false,
+            );
+            let (push_color, push_tooltip, push_command) = if can_force_push {
+              (
+                theme.status_orange(),
+                "Force push (with lease)",
+                RepoCommand::ForcePush,
+              )
+            } else {
+              (theme.status_green(), "Push", RepoCommand::Push)
+            };
             this
               .when(status.behind > 0, |this| {
                 this.child(self.render_sync_counter(
@@ -170,10 +189,10 @@ impl SessionPage {
                   REPO_AHEAD_DEBUG_SELECTOR,
                   gpui_component::IconName::ArrowUp,
                   status.ahead,
-                  theme.status_green(),
-                  "Push",
+                  push_color,
+                  push_tooltip,
                   sync_in_flight,
-                  RepoCommand::Push,
+                  push_command,
                   cx,
                 ))
               })
@@ -1124,6 +1143,35 @@ mod tests {
       "one commit to push, the counter shows up"
     );
     assert!(cx.debug_bounds(REPO_BEHIND_DEBUG_SELECTOR).is_none());
+  }
+
+  #[gpui::test]
+  async fn clicking_a_diverged_ahead_counter_asks_before_force_pushing(cx: &mut TestAppContext) {
+    let repo = TempRepo::init("session-page-diverged-counter-click");
+    commit_text_file(&repo.path, Path::new("README.md"), "v1\n", "initial");
+    let remote = publish_to_new_remote(&repo.path, "session-page-diverged-counter-click");
+    diverge_current_branch(&repo.path, &remote);
+
+    let (page, cx) = add_session_page_window(repo.path.clone(), cx);
+    page.update(cx, |page, cx| page.refresh_branch(cx));
+    await_branch_refresh(&page, cx).await;
+    page.update(cx, |_, cx| cx.notify());
+    cx.run_until_parked();
+
+    assert!(cx.debug_bounds(REPO_BEHIND_DEBUG_SELECTOR).is_some());
+    let counter = cx
+      .debug_bounds(REPO_AHEAD_DEBUG_SELECTOR)
+      .expect("ahead counter bounds");
+    cx.simulate_click(counter.center(), gpui::Modifiers::default());
+    cx.run_until_parked();
+
+    assert!(cx.update(|window, cx| window.has_active_dialog(cx)));
+    page.read_with(cx, |page, _| {
+      assert!(
+        page._repo_command_task.is_none(),
+        "force push waits for confirmation"
+      );
+    });
   }
 
   #[gpui::test]
