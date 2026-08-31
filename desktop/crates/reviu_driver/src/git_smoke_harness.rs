@@ -40,6 +40,8 @@ pub(crate) struct GitSmokeArgs {
   pub(crate) driver_bin: Option<PathBuf>,
   pub(crate) scenarios: Vec<String>,
   pub(crate) keep_temp: bool,
+  pub(crate) fail_fast: bool,
+  pub(crate) list: bool,
 }
 
 impl Default for GitSmokeArgs {
@@ -52,6 +54,8 @@ impl Default for GitSmokeArgs {
         .map(|scenario| scenario.to_string())
         .collect(),
       keep_temp: false,
+      fail_fast: false,
+      list: false,
     }
   }
 }
@@ -70,6 +74,8 @@ pub(crate) fn parse_args(args: impl IntoIterator<Item = String>) -> Result<GitSm
         &required_value(&mut args, "--scenario")?,
       )?,
       "--keep-temp" => parsed.keep_temp = true,
+      "--fail-fast" => parsed.fail_fast = true,
+      "--list" => parsed.list = true,
       "--help" | "-h" => bail!(usage()),
       other if other.starts_with("--backend=") => {
         parsed.backend = other.trim_start_matches("--backend=").to_string();
@@ -114,12 +120,19 @@ fn push_scenarios(target: &mut Vec<String>, value: &str) -> Result<()> {
 
 fn usage() -> String {
   format!(
-    "usage: reviu-git-smoke [--backend test|visual] [--driver-bin PATH] [--scenario {}] [--keep-temp]",
+    "usage: reviu-git-smoke [--backend test|visual] [--driver-bin PATH] [--scenario {}] [--keep-temp] [--fail-fast] [--list]",
     SCENARIOS.join(",")
   )
 }
 
 pub(crate) fn run(args: GitSmokeArgs) -> Result<()> {
+  if args.list {
+    for scenario in SCENARIOS {
+      println!("{scenario}");
+    }
+    return Ok(());
+  }
+
   let mut run_dir = TempRunDir::new(args.keep_temp)?;
   println!("git smoke temp: {}", run_dir.path.display());
 
@@ -137,7 +150,16 @@ pub(crate) fn run(args: GitSmokeArgs) -> Result<()> {
       Err(error) => {
         println!("FAILED ({:?})", started.elapsed());
         eprintln!("{error:?}");
+        eprintln!("rerun: {}", rerun_command(&args, scenario));
+        eprintln!(
+          "{}",
+          scenario_diagnostics(&run_dir.path.join(scenario))
+            .unwrap_or_else(|error| format!("failed to collect diagnostics: {error:#}"))
+        );
         results.push((scenario.clone(), false));
+        if args.fail_fast {
+          break;
+        }
       }
     }
   }
@@ -154,6 +176,124 @@ pub(crate) fn run(args: GitSmokeArgs) -> Result<()> {
   }
 
   Ok(())
+}
+
+fn rerun_command(args: &GitSmokeArgs, scenario: &str) -> String {
+  let mut parts = vec!["target/debug/reviu-git-smoke".to_string()];
+  parts.push("--backend".to_string());
+  parts.push(shell_quote(&args.backend));
+  if let Some(driver_bin) = &args.driver_bin {
+    parts.push("--driver-bin".to_string());
+    parts.push(shell_quote(&driver_bin.display().to_string()));
+  }
+  parts.push("--scenario".to_string());
+  parts.push(shell_quote(scenario));
+  parts.push("--keep-temp".to_string());
+  parts.join(" ")
+}
+
+fn shell_quote(value: &str) -> String {
+  if value
+    .chars()
+    .all(|character| character.is_ascii_alphanumeric() || "_./:-".contains(character))
+  {
+    return value.to_string();
+  }
+  format!("'{}'", value.replace('\'', "'\\''"))
+}
+
+fn scenario_diagnostics(scenario_dir: &Path) -> Result<String> {
+  let mut diagnostics = String::new();
+  diagnostics.push_str("diagnostics:\n");
+
+  let repo = scenario_dir.join("repo");
+  if repo.exists() {
+    append_diagnostic_section(
+      &mut diagnostics,
+      "git status --short --branch",
+      diagnostic_git_output(&repo, ["status", "--short", "--branch"]),
+    );
+    append_diagnostic_section(
+      &mut diagnostics,
+      "git log --oneline --decorate --graph --all -8",
+      diagnostic_git_output(
+        &repo,
+        ["log", "--oneline", "--decorate", "--graph", "--all", "-8"],
+      ),
+    );
+    append_diagnostic_section(
+      &mut diagnostics,
+      "git stash list",
+      diagnostic_git_output(&repo, ["stash", "list"]),
+    );
+  } else {
+    diagnostics.push_str(&format!("repo missing: {}\n", repo.display()));
+  }
+
+  let remote = scenario_dir.join("remote.git");
+  if remote.exists() {
+    append_diagnostic_section(
+      &mut diagnostics,
+      "remote heads",
+      diagnostic_git_bare_output(&remote, ["show-ref", "--heads"]),
+    );
+  }
+
+  let stderr_log = scenario_dir.join("driver.stderr.log");
+  if stderr_log.exists() {
+    append_diagnostic_section(
+      &mut diagnostics,
+      "driver stderr tail",
+      Ok(tail_file(&stderr_log, 80)?),
+    );
+  }
+
+  Ok(diagnostics)
+}
+
+fn append_diagnostic_section(
+  diagnostics: &mut String,
+  title: &str,
+  output: Result<String, anyhow::Error>,
+) {
+  diagnostics.push_str("\n--- ");
+  diagnostics.push_str(title);
+  diagnostics.push_str(" ---\n");
+  match output {
+    Ok(output) if output.trim().is_empty() => diagnostics.push_str("(empty)\n"),
+    Ok(output) => {
+      diagnostics.push_str(output.trim());
+      diagnostics.push('\n');
+    }
+    Err(error) => {
+      diagnostics.push_str(&format!("failed: {error:#}\n"));
+    }
+  }
+}
+
+fn tail_file(path: &Path, line_count: usize) -> Result<String> {
+  let contents = fs::read_to_string(path)?;
+  let lines = contents.lines().collect::<Vec<_>>();
+  let start = lines.len().saturating_sub(line_count);
+  Ok(lines[start..].join("\n"))
+}
+
+fn diagnostic_git_output<const N: usize>(repo: &Path, args: [&str; N]) -> Result<String> {
+  let output = Command::new("git")
+    .args(["-C", repo.to_str().context("repo path")?])
+    .args(args)
+    .output()
+    .context("run diagnostic git")?;
+  Ok(command_output_details(&output))
+}
+
+fn diagnostic_git_bare_output<const N: usize>(repo: &Path, args: [&str; N]) -> Result<String> {
+  let output = Command::new("git")
+    .args(["--git-dir", repo.to_str().context("repo path")?])
+    .args(args)
+    .output()
+    .context("run diagnostic git")?;
+  Ok(command_output_details(&output))
 }
 
 fn run_one(args: &GitSmokeArgs, run_root: &Path, scenario: &str) -> Result<()> {
@@ -1067,7 +1207,7 @@ impl DriverProcess {
       .and_then(serde_json::Value::as_bool)
       .unwrap_or(false)
     {
-      bail!("driver command failed: {response}");
+      bail!("driver command failed:\n{}", pretty_json(&response));
     }
     Ok(response)
   }
@@ -1123,8 +1263,12 @@ fn wait_for_state(
     }
     Err(_) => false,
   })
-  .with_context(|| format!("last git_state: {last}"))?;
+  .with_context(|| format!("last git_state:\n{}", pretty_json(&last)))?;
   Ok(last)
+}
+
+fn pretty_json(value: &serde_json::Value) -> String {
+  serde_json::to_string_pretty(value).unwrap_or_else(|_| value.to_string())
 }
 
 fn wait_until(timeout: Duration, mut predicate: impl FnMut() -> bool) -> Result<()> {
@@ -1348,6 +1492,8 @@ mod tests {
     assert_eq!(args.scenarios, SCENARIOS);
     assert_eq!(args.driver_bin, None);
     assert!(!args.keep_temp);
+    assert!(!args.fail_fast);
+    assert!(!args.list);
   }
 
   #[test]
@@ -1359,6 +1505,8 @@ mod tests {
       "--scenario".to_string(),
       "stash_pop,merge_conflict_abort".to_string(),
       "--keep-temp".to_string(),
+      "--fail-fast".to_string(),
+      "--list".to_string(),
     ])
     .expect("args");
 
@@ -1366,6 +1514,25 @@ mod tests {
     assert_eq!(args.driver_bin, Some(PathBuf::from("/tmp/reviu-driver")));
     assert_eq!(args.scenarios, ["stash_pop", "merge_conflict_abort"]);
     assert!(args.keep_temp);
+    assert!(args.fail_fast);
+    assert!(args.list);
+  }
+
+  #[test]
+  fn rerun_command_includes_repro_flags() {
+    let args = GitSmokeArgs {
+      backend: "test".to_string(),
+      driver_bin: Some(PathBuf::from("/tmp/reviu driver")),
+      scenarios: vec!["stash_pop".to_string()],
+      keep_temp: false,
+      fail_fast: false,
+      list: false,
+    };
+
+    assert_eq!(
+      rerun_command(&args, "stash_pop"),
+      "target/debug/reviu-git-smoke --backend test --driver-bin '/tmp/reviu driver' --scenario stash_pop --keep-temp"
+    );
   }
 
   #[test]
