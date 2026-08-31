@@ -57,10 +57,11 @@ impl SessionPage {
     cx: &mut Context<Self>,
   ) -> AnyElement {
     let enabled = enabled && !in_flight;
+    let theme = cx.theme().clone();
     let color = if enabled {
       color
     } else {
-      cx.theme().muted_foreground
+      theme.muted_foreground
     };
 
     h_flex()
@@ -69,23 +70,25 @@ impl SessionPage {
       .items_center()
       .gap_1()
       .flex_shrink_0()
+      .px_1()
+      .py_1()
+      .rounded(px(6.0))
       .tooltip(move |window, cx| gpui_component::tooltip::Tooltip::new(tooltip).build(window, cx))
-      .on_click(cx.listener(move |this, _, window, cx| {
-        // The row switches repository; the counter runs its command instead.
-        cx.stop_propagation();
-        if !enabled {
-          return;
-        }
-        let result = if command == RepoCommand::ForcePush {
-          this.confirm_force_push(window, cx)
-        } else {
-          this.run_repo_command(command.clone(), window, cx)
-        };
-        if let Err(error) = result {
-          window.push_notification(Notification::warning(error), cx);
-        }
-      }))
-      .when(enabled, |this| this.cursor_pointer())
+      .when(enabled, |this| {
+        this
+          .cursor_pointer()
+          .hover(|this| this.bg(theme.secondary_hover))
+          .on_click(cx.listener(move |this, _, window, cx| {
+            let result = if command == RepoCommand::ForcePush {
+              this.confirm_force_push(window, cx)
+            } else {
+              this.run_repo_command(command.clone(), window, cx)
+            };
+            if let Err(error) = result {
+              window.push_notification(Notification::warning(error), cx);
+            }
+          }))
+      })
       .child(gpui_component::Icon::new(icon).size_3().text_color(color))
       .child(div().text_xs().text_color(color).child(count.to_string()))
       .into_any_element()
@@ -109,19 +112,22 @@ impl SessionPage {
       .items_center()
       .gap_1()
       .flex_shrink_0()
+      .px_1()
+      .py_1()
+      .rounded(px(6.0))
       .tooltip(|window, cx| {
         gpui_component::tooltip::Tooltip::new("Publish branch").build(window, cx)
       })
-      .on_click(cx.listener(move |this, _, window, cx| {
-        cx.stop_propagation();
-        if in_flight {
-          return;
-        }
-        if let Err(error) = this.run_repo_command(RepoCommand::Push, window, cx) {
-          window.push_notification(Notification::warning(error), cx);
-        }
-      }))
-      .when(!in_flight, |this| this.cursor_pointer())
+      .when(!in_flight, |this| {
+        this
+          .cursor_pointer()
+          .hover(|this| this.bg(theme.secondary_hover))
+          .on_click(cx.listener(move |this, _, window, cx| {
+            if let Err(error) = this.run_repo_command(RepoCommand::Push, window, cx) {
+              window.push_notification(Notification::warning(error), cx);
+            }
+          }))
+      })
       .child(
         gpui_component::Icon::new(gpui_component::IconName::ArrowUp)
           .size_3()
@@ -142,7 +148,8 @@ impl SessionPage {
       .items_center()
       .gap_1()
       .flex_shrink_0()
-      .on_click(|_, _, cx| cx.stop_propagation())
+      .px_1()
+      .py_1()
       .child(gpui_component::spinner::Spinner::new().xsmall())
       .child(
         div()
@@ -176,51 +183,67 @@ impl SessionPage {
           .id("session-repo-context")
           .debug_selector(|| REPO_CONTEXT_DEBUG_SELECTOR.to_string())
           .items_center()
-          .gap_2()
-          .px_3()
-          .py_2()
+          .gap_1()
+          .px_1()
+          .py_1()
           .border_t_1()
           .border_color(theme.border)
-          .cursor_pointer()
-          .hover(|this| this.bg(theme.secondary_hover))
-          .tooltip(|window, cx| {
-            gpui_component::tooltip::Tooltip::new("Switch repository").build(window, cx)
-          })
-          .on_click(cx.listener(|this, _, window, cx| {
-            this.open_command_palette_with_screen(
-              Some(CommandPaletteInitialScreen::SwitchRepository),
-              window,
-              cx,
-            );
-          }))
           .child(
-            div()
-              .text_xs()
-              .text_color(theme.foreground)
-              .truncate()
-              .child(name),
-          )
-          .when_some(branch_status.clone(), |this, status| {
-            this.child(
-              h_flex()
-                .items_center()
-                .gap_1()
-                .min_w(px(0.0))
-                .flex_1()
-                .child(
-                  gpui_component::Icon::new(UiIconName::GitBranch)
-                    .size_3()
-                    .text_color(theme.muted_foreground),
+            h_flex()
+              .id("session-repo-switch")
+              .debug_selector(|| REPO_SWITCH_DEBUG_SELECTOR.to_string())
+              .items_center()
+              .gap_2()
+              .min_w(px(0.0))
+              .flex_shrink_1()
+              .px_2()
+              .py_1()
+              .rounded(px(6.0))
+              .cursor_pointer()
+              .hover(|this| this.bg(theme.secondary_hover))
+              .tooltip(|window, cx| {
+                gpui_component::tooltip::Tooltip::new("Switch repository").build(window, cx)
+              })
+              .on_click(cx.listener(|this, _, window, cx| {
+                this.open_command_palette_with_screen(
+                  Some(CommandPaletteInitialScreen::SwitchRepository),
+                  window,
+                  cx,
+                );
+              }))
+              .child(
+                div()
+                  .min_w(px(0.0))
+                  .flex_shrink_1()
+                  .text_xs()
+                  .text_color(theme.foreground)
+                  .truncate()
+                  .child(name),
+              )
+              .when_some(branch_status.clone(), |this, status| {
+                this.child(
+                  h_flex()
+                    .items_center()
+                    .gap_1()
+                    .min_w(px(0.0))
+                    .flex_shrink_1()
+                    .child(
+                      gpui_component::Icon::new(UiIconName::GitBranch)
+                        .size_3()
+                        .text_color(theme.muted_foreground),
+                    )
+                    .child(
+                      div()
+                        .min_w(px(0.0))
+                        .text_xs()
+                        .text_color(theme.muted_foreground)
+                        .truncate()
+                        .child(SharedString::from(status.name)),
+                    ),
                 )
-                .child(
-                  div()
-                    .text_xs()
-                    .text_color(theme.muted_foreground)
-                    .truncate()
-                    .child(SharedString::from(status.name)),
-                ),
-            )
-          })
+              }),
+          )
+          .child(div().flex_1().min_w(px(0.0)))
           .when_some(sync_label, |this, label| {
             this.child(self.render_sync_loading(label, cx))
           })
@@ -1175,10 +1198,29 @@ impl Render for SessionPage {
 mod tests {
   use super::super::test_support::*;
   use super::*;
-  use crate::test_support::{TempRepo, commit_text_file};
+  use crate::test_support::{TempDir, TempRepo, commit_text_file};
   use gpui::TestAppContext;
-  use std::path::Path;
+  use std::path::{Path, PathBuf};
   use ui::CommandPaletteCommandId;
+
+  fn init_repo_named(prefix: &str, name: &str) -> (TempDir, PathBuf) {
+    let temp_dir = TempDir::new(prefix);
+    let path = temp_dir.path.join(name);
+    std::fs::create_dir_all(&path).expect("create named temp repo dir");
+    let path = path
+      .canonicalize()
+      .expect("canonicalize named temp repo dir");
+    let repo = git2::Repository::init(&path).expect("init named temp repo");
+    let mut config = repo.config().expect("open git config");
+    config
+      .set_str("user.name", "Reviu Tests")
+      .expect("set git user.name");
+    config
+      .set_str("user.email", "tests@reviu.local")
+      .expect("set git user.email");
+    (temp_dir, path)
+  }
+
   #[gpui::test]
   async fn the_repo_line_is_painted_without_connecting_an_agent(cx: &mut TestAppContext) {
     let repo = TempRepo::init("session-page-repo-line");
@@ -1255,6 +1297,56 @@ mod tests {
     assert!(cx.debug_bounds(REPO_PUBLISH_DEBUG_SELECTOR).is_some());
     assert!(cx.debug_bounds(REPO_AHEAD_DEBUG_SELECTOR).is_none());
     assert!(cx.debug_bounds(REPO_BEHIND_DEBUG_SELECTOR).is_none());
+  }
+
+  #[gpui::test]
+  async fn the_repository_context_only_opens_from_the_repo_label(cx: &mut TestAppContext) {
+    let (_temp_dir, repo_path) = init_repo_named("session-page-repo-click-zones", "r");
+    commit_text_file(&repo_path, Path::new("README.md"), "v1\n", "initial");
+
+    let (page, cx) = add_session_page_window(repo_path, cx);
+    let refresh = page.update(cx, |page, cx| {
+      page.refresh_branch(cx);
+      page.dock_panel.update(cx, |panel, cx| {
+        panel.refresh(cx);
+        panel._refresh_task.take().expect("refresh task")
+      })
+    });
+    refresh.await;
+    await_branch_refresh(&page, cx).await;
+    page.update(cx, |_, cx| cx.notify());
+    cx.run_until_parked();
+
+    let row = cx
+      .debug_bounds(REPO_CONTEXT_DEBUG_SELECTOR)
+      .expect("repository context row");
+    let switcher = cx
+      .debug_bounds(REPO_SWITCH_DEBUG_SELECTOR)
+      .expect("repository switcher");
+    let publish = cx
+      .debug_bounds(REPO_PUBLISH_DEBUG_SELECTOR)
+      .expect("publish action");
+    assert!(
+      switcher.right() + gpui::px(8.) < publish.left(),
+      "repo switcher and publish action should leave non-clickable space between them"
+    );
+
+    let blank_space = gpui::point(switcher.right() + gpui::px(4.), row.center().y);
+    cx.simulate_click(blank_space, gpui::Modifiers::default());
+    cx.run_until_parked();
+
+    assert!(!cx.update(|window, cx| window.has_active_dialog(cx)));
+    page.read_with(cx, |page, _| {
+      assert!(
+        page._repo_command_task.is_none(),
+        "blank space should not publish the branch"
+      );
+    });
+
+    cx.simulate_click(switcher.center(), gpui::Modifiers::default());
+    cx.run_until_parked();
+
+    assert!(cx.update(|window, cx| window.has_active_dialog(cx)));
   }
 
   #[gpui::test]

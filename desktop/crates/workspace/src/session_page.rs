@@ -99,6 +99,7 @@ const INTERACTIVE_REBASE_DEBUG_SELECTOR: &str = "session-interactive-rebase";
 const DIFF_EDITOR_DEBUG_SELECTOR: &str = "session-diff-editor";
 const PREVIEW_PANE_DEBUG_SELECTOR: &str = "session-preview-pane";
 const REPO_CONTEXT_DEBUG_SELECTOR: &str = "session-repo-context";
+const REPO_SWITCH_DEBUG_SELECTOR: &str = "session-repo-switch";
 const OPEN_REPOSITORY_ROW_DEBUG_SELECTOR: &str = "session-open-repository";
 const UNSAVED_EDITOR_SAVE_DEBUG_SELECTOR: &str = "session-unsaved-editor-save";
 const UNSAVED_EDITOR_DISCARD_DEBUG_SELECTOR: &str = "session-unsaved-editor-discard";
