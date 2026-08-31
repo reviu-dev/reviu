@@ -271,6 +271,8 @@ pub struct SessionPage {
   /// A test has no agent to send to: the export a send built lands here.
   #[cfg(test)]
   last_review_export: Option<String>,
+  #[cfg(any(test, feature = "test-support"))]
+  driver_notifications: Vec<crate::DriverNotification>,
   open_file_generation: u64,
   open_file_task: Option<Task<()>>,
   agent_review: AgentReviewComments,
@@ -520,6 +522,8 @@ impl SessionPage {
       pretend_agent_turn_in_flight: false,
       #[cfg(test)]
       last_review_export: None,
+      #[cfg(any(test, feature = "test-support"))]
+      driver_notifications: Vec::new(),
       open_file_generation: 0,
       open_file_task: None,
       agent_review: AgentReviewComments::new(),

@@ -14,6 +14,9 @@ const SCENARIOS: &[&str] = &[
   "branch_create_switch_delete",
   "branch_switch_dirty_compatible",
   "push_pull_publish",
+  "push_rejected_non_fast_forward",
+  "fetch_updates_remote_refs",
+  "pull_fast_forward",
   "stash_pop",
   "stash_untracked_pop",
   "apply_stash_conflict",
@@ -307,6 +310,11 @@ fn run_one(args: &GitSmokeArgs, run_root: &Path, scenario: &str) -> Result<()> {
       scenario_branch_switch_dirty_compatible(args, &scenario_dir)
     }
     "push_pull_publish" => scenario_push_pull_publish(args, &scenario_dir),
+    "push_rejected_non_fast_forward" => {
+      scenario_push_rejected_non_fast_forward(args, &scenario_dir)
+    }
+    "fetch_updates_remote_refs" => scenario_fetch_updates_remote_refs(args, &scenario_dir),
+    "pull_fast_forward" => scenario_pull_fast_forward(args, &scenario_dir),
     "stash_pop" => scenario_stash_pop(args, &scenario_dir),
     "stash_untracked_pop" => scenario_stash_untracked_pop(args, &scenario_dir),
     "apply_stash_conflict" => scenario_apply_stash_conflict(args, &scenario_dir),
@@ -513,6 +521,130 @@ fn scenario_push_pull_publish(args: &GitSmokeArgs, dir: &Path) -> Result<()> {
   driver.run_git_action(serde_json::json!({ "action": "pull" }))?;
   wait_for_state(&mut driver, |state| status_count(state) == Some(0))?;
   expect_file(&repo, "remote.txt", "remote\n")?;
+  driver.quit()
+}
+
+fn scenario_push_rejected_non_fast_forward(args: &GitSmokeArgs, dir: &Path) -> Result<()> {
+  let repo = init_repo(&dir.join("repo"))?;
+  let remote = dir.join("remote.git");
+  git_no_dir(["init", "--bare", remote.to_str().context("remote path")?])?;
+  commit_file(&repo, "a.txt", "v1\n", "initial")?;
+  git(
+    &repo,
+    [
+      "remote",
+      "add",
+      "origin",
+      remote.to_str().context("remote path")?,
+    ],
+  )?;
+  git(&repo, ["push", "-u", "origin", "main"])?;
+
+  let other = dir.join("other");
+  clone_main(&remote, &other)?;
+  commit_file(&other, "remote.txt", "remote\n", "remote work")?;
+  git(&other, ["push"])?;
+  let remote_head = git_bare_output(&remote, ["rev-parse", "refs/heads/main"])?;
+  commit_file(&repo, "local.txt", "local\n", "local work")?;
+
+  let mut driver = DriverProcess::spawn(args.driver_bin.as_deref(), &args.backend, dir)?;
+  driver.open_repo(&repo)?;
+  driver.run_git_action(serde_json::json!({ "action": "push" }))?;
+  wait_for_state(&mut driver, |state| {
+    bool_field(state, "command_in_flight") == Some(false)
+  })?;
+  assert_eq_str(
+    &git_bare_output(&remote, ["rev-parse", "refs/heads/main"])?,
+    &remote_head,
+  )?;
+  let notifications = driver.notification_log()?;
+  if !has_logged_notification(&notifications, "error", "push") {
+    bail!(
+      "push rejection did not report the expected notification:\n{}",
+      pretty_json(&notifications)
+    );
+  }
+  driver.quit()
+}
+
+fn scenario_fetch_updates_remote_refs(args: &GitSmokeArgs, dir: &Path) -> Result<()> {
+  let repo = init_repo(&dir.join("repo"))?;
+  let remote = dir.join("remote.git");
+  git_no_dir(["init", "--bare", remote.to_str().context("remote path")?])?;
+  commit_file(&repo, "a.txt", "v1\n", "initial")?;
+  git(
+    &repo,
+    [
+      "remote",
+      "add",
+      "origin",
+      remote.to_str().context("remote path")?,
+    ],
+  )?;
+  git(&repo, ["push", "-u", "origin", "main"])?;
+
+  let other = dir.join("other");
+  clone_main(&remote, &other)?;
+  commit_file(&other, "remote.txt", "remote\n", "remote work")?;
+  git(&other, ["push"])?;
+  let remote_head = git_bare_output(&remote, ["rev-parse", "refs/heads/main"])?;
+
+  let mut driver = DriverProcess::spawn(args.driver_bin.as_deref(), &args.backend, dir)?;
+  driver.open_repo(&repo)?;
+  driver.run_git_action(serde_json::json!({ "action": "fetch" }))?;
+  wait_until(DEFAULT_TIMEOUT, || {
+    git_output(&repo, ["rev-parse", "refs/remotes/origin/main"])
+      .map(|head| head == remote_head)
+      .unwrap_or(false)
+  })?;
+  let notifications = driver.notification_log()?;
+  if !has_logged_notification(&notifications, "success", "Fetched from remotes") {
+    bail!(
+      "fetch did not report the expected notification:\n{}",
+      pretty_json(&notifications)
+    );
+  }
+  driver.quit()
+}
+
+fn scenario_pull_fast_forward(args: &GitSmokeArgs, dir: &Path) -> Result<()> {
+  let repo = init_repo(&dir.join("repo"))?;
+  let remote = dir.join("remote.git");
+  git_no_dir(["init", "--bare", remote.to_str().context("remote path")?])?;
+  commit_file(&repo, "a.txt", "v1\n", "initial")?;
+  git(
+    &repo,
+    [
+      "remote",
+      "add",
+      "origin",
+      remote.to_str().context("remote path")?,
+    ],
+  )?;
+  git(&repo, ["push", "-u", "origin", "main"])?;
+
+  let other = dir.join("other");
+  clone_main(&remote, &other)?;
+  commit_file(&other, "remote.txt", "remote\n", "remote work")?;
+  git(&other, ["push"])?;
+  let remote_head = git_bare_output(&remote, ["rev-parse", "refs/heads/main"])?;
+
+  let mut driver = DriverProcess::spawn(args.driver_bin.as_deref(), &args.backend, dir)?;
+  driver.open_repo(&repo)?;
+  driver.run_git_action(serde_json::json!({ "action": "pull" }))?;
+  wait_until(DEFAULT_TIMEOUT, || {
+    git_output(&repo, ["rev-parse", "HEAD"])
+      .map(|head| head == remote_head)
+      .unwrap_or(false)
+  })?;
+  expect_file(&repo, "remote.txt", "remote\n")?;
+  let notifications = driver.notification_log()?;
+  if !has_logged_notification(&notifications, "success", "Pulled from the remote branch") {
+    bail!(
+      "pull did not report the expected notification:\n{}",
+      pretty_json(&notifications)
+    );
+  }
   driver.quit()
 }
 
@@ -955,9 +1087,12 @@ fn scenario_stale_force_push_lease(args: &GitSmokeArgs, dir: &Path) -> Result<()
   if git_bare_output(&remote, ["rev-parse", "refs/heads/main"])? == local_head {
     bail!("stale force push overwrote the remote");
   }
-  let notifications = driver.command(serde_json::json!({ "cmd": "notification_stats" }))?;
-  if usize_field(&notifications, "count").unwrap_or(0) == 0 {
-    bail!("stale force push did not report a notification");
+  let notifications = driver.notification_log()?;
+  if !has_logged_notification(&notifications, "error", "fetch before force pushing") {
+    bail!(
+      "stale force push did not report the expected notification:\n{}",
+      pretty_json(&notifications)
+    );
   }
   driver.quit()
 }
@@ -985,9 +1120,12 @@ fn scenario_branch_switch_dirty_conflict(args: &GitSmokeArgs, dir: &Path) -> Res
     "main",
   )?;
   expect_file(&repo, "a.txt", "dirty\n")?;
-  let notifications = driver.command(serde_json::json!({ "cmd": "notification_stats" }))?;
-  if usize_field(&notifications, "count").unwrap_or(0) == 0 {
-    bail!("dirty branch switch failure did not surface a notification");
+  let notifications = driver.notification_log()?;
+  if !has_logged_notification(&notifications, "error", "checkout target tree") {
+    bail!(
+      "dirty branch switch failure did not report the expected notification:\n{}",
+      pretty_json(&notifications)
+    );
   }
   driver.quit()
 }
@@ -1035,9 +1173,12 @@ fn scenario_pull_dirty_conflict(args: &GitSmokeArgs, dir: &Path) -> Result<()> {
     "main",
   )?;
   expect_file(&repo, "a.txt", "dirty\n")?;
-  let notifications = driver.command(serde_json::json!({ "cmd": "notification_stats" }))?;
-  if usize_field(&notifications, "count").unwrap_or(0) == 0 {
-    bail!("dirty pull failure did not report a notification");
+  let notifications = driver.notification_log()?;
+  if !has_logged_notification(&notifications, "error", "local changes") {
+    bail!(
+      "dirty pull failure did not report the expected notification:\n{}",
+      pretty_json(&notifications)
+    );
   }
   driver.quit()
 }
@@ -1193,6 +1334,10 @@ impl DriverProcess {
     self.command(serde_json::json!({ "cmd": "git_state" }))
   }
 
+  fn notification_log(&mut self) -> Result<serde_json::Value> {
+    self.command(serde_json::json!({ "cmd": "notification_log" }))
+  }
+
   fn quit(&mut self) -> Result<()> {
     self.command(serde_json::json!({ "cmd": "quit" }))?;
     Ok(())
@@ -1296,6 +1441,19 @@ fn init_repo(path: &Path) -> Result<PathBuf> {
   git(path, ["config", "user.name", "Reviu Smoke"])?;
   git(path, ["config", "user.email", "smoke@reviu.test"])?;
   Ok(path.to_path_buf())
+}
+
+fn clone_main(remote: &Path, destination: &Path) -> Result<()> {
+  git_no_dir([
+    "clone",
+    "--branch",
+    "main",
+    remote.to_str().context("remote path")?,
+    destination.to_str().context("clone path")?,
+  ])?;
+  git(destination, ["config", "user.name", "Reviu Smoke"])?;
+  git(destination, ["config", "user.email", "smoke@reviu.test"])?;
+  Ok(())
 }
 
 fn setup_merge_conflict(repo: &Path) -> Result<()> {
@@ -1422,6 +1580,20 @@ fn stash_count(state: &serde_json::Value) -> Option<usize> {
   state.get("stashes")?.as_array().map(Vec::len)
 }
 
+fn has_logged_notification(log: &serde_json::Value, kind: &str, message_part: &str) -> bool {
+  let message_part = message_part.to_lowercase();
+  log
+    .get("notifications")
+    .and_then(serde_json::Value::as_array)
+    .is_some_and(|notifications| {
+      notifications.iter().any(|notification| {
+        string_field(notification, "kind") == Some(kind)
+          && string_field(notification, "message")
+            .is_some_and(|message| message.to_lowercase().contains(&message_part))
+      })
+    })
+}
+
 fn current_branch(state: &serde_json::Value) -> Option<&str> {
   state
     .get("branch_status")
@@ -1472,13 +1644,6 @@ fn string_field<'a>(value: &'a serde_json::Value, key: &str) -> Option<&'a str> 
 
 fn bool_field(value: &serde_json::Value, key: &str) -> Option<bool> {
   value.get(key)?.as_bool()
-}
-
-fn usize_field(value: &serde_json::Value, key: &str) -> Option<usize> {
-  value
-    .get(key)?
-    .as_u64()
-    .and_then(|value| value.try_into().ok())
 }
 
 #[cfg(test)]
@@ -1550,6 +1715,9 @@ mod tests {
       ],
       "stashes": [
         { "index": 0, "name": "wip" }
+      ],
+      "notifications": [
+        { "kind": "error", "message": "local changes would be overwritten" }
       ]
     });
 
@@ -1557,5 +1725,6 @@ mod tests {
     assert_eq!(status_count(&state), Some(1));
     assert_eq!(stash_count(&state), Some(1));
     assert!(has_status(&state, "a.txt", "Conflicted"));
+    assert!(has_logged_notification(&state, "error", "local changes"));
   }
 }

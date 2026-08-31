@@ -9,7 +9,7 @@
 //! on test or point on both), `type`, `key`, `clock` (virtual ms), `wait` (real
 //! ms), `park`, `path_prompt`, `open_file`, `scroll`, `screenshot`
 //! (visual backend only), `show_changes`, `hide_dock`, `submit_prompt`,
-//! `agent_stats`, `editor_stats`, `quit`.
+//! `agent_stats`, `editor_stats`, `notification_log`, `quit`.
 //!
 //! Usage: `cargo run -p reviu_driver -- --backend test` then e.g.
 //! `{"cmd":"bounds","selector":"session-repo-context"}`
@@ -189,6 +189,8 @@ enum Command {
   CancelDialog,
   /// Count active notifications.
   NotificationStats,
+  /// Expose notifications recorded through driver-supported flows.
+  NotificationLog,
   /// Run a Git action through the same path as the command palette.
   RunGitAction {
     action: workspace::DriverGitAction,
@@ -446,6 +448,10 @@ fn handle_test_command(
     Command::ConfirmDialog => confirm_dialog(cx, "enter"),
     Command::CancelDialog => confirm_dialog(cx, "escape"),
     Command::NotificationStats => respond(ok(notification_stats(cx))),
+    Command::NotificationLog => {
+      let log = view.read_with(cx, |view, cx| view.notification_log_for_driver(cx));
+      respond(ok(log));
+    }
     Command::RunGitAction { action } => {
       let result = cx.update(|window, cx| {
         view.update(cx, |view, cx| {
@@ -688,6 +694,10 @@ fn handle_visual_command(
       Ok(stats) => respond(ok(stats)),
       Err(error) => respond(err(error)),
     },
+    Command::NotificationLog => match notification_log_directly(cx, view) {
+      Ok(log) => respond(ok(log)),
+      Err(error) => respond(err(error)),
+    },
     Command::RunGitAction { action } => match run_git_action_directly(cx, window, view, action) {
       Ok(()) => respond(ok(serde_json::json!({}))),
       Err(error) => respond(err(error)),
@@ -897,6 +907,14 @@ fn notification_stats_directly(
 }
 
 #[cfg(target_os = "macos")]
+fn notification_log_directly(
+  cx: &mut VisualTestAppContext,
+  view: &Entity<WorkspaceView>,
+) -> Result<serde_json::Value, String> {
+  Ok(view.read_with(cx, |view, cx| view.notification_log_for_driver(cx)))
+}
+
+#[cfg(target_os = "macos")]
 fn run_git_action_directly(
   cx: &mut VisualTestAppContext,
   window: AnyWindowHandle,
@@ -1071,6 +1089,10 @@ mod tests {
       serde_json::from_str::<Command>(r#"{"cmd":"notification_stats"}"#)
         .expect("notification stats"),
       Command::NotificationStats
+    ));
+    assert!(matches!(
+      serde_json::from_str::<Command>(r#"{"cmd":"notification_log"}"#).expect("notification log"),
+      Command::NotificationLog
     ));
     match serde_json::from_str::<Command>(
       r#"{"cmd":"run_git_action","action":{"action":"stash","include_untracked":false,"message":"wip"}}"#,

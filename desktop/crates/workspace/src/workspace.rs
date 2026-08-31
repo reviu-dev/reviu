@@ -344,6 +344,14 @@ impl WorkspaceView {
 
   #[cfg(any(test, feature = "test-support"))]
   #[doc(hidden)]
+  pub fn notification_log_for_driver(&self, cx: &App) -> serde_json::Value {
+    self
+      .session_page
+      .read_with(cx, |page, _| page.notification_log_for_driver())
+  }
+
+  #[cfg(any(test, feature = "test-support"))]
+  #[doc(hidden)]
   pub fn run_git_action_for_driver(
     &mut self,
     action: crate::DriverGitAction,

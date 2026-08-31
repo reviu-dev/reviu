@@ -2,6 +2,27 @@ use super::*;
 
 impl SessionPage {
   #[cfg(any(test, feature = "test-support"))]
+  pub(super) fn record_notification_for_driver(
+    &mut self,
+    kind: crate::DriverNotificationKind,
+    message: impl Into<String>,
+  ) {
+    self.driver_notifications.push(crate::DriverNotification {
+      kind,
+      title: None,
+      message: message.into(),
+    });
+  }
+
+  #[cfg(any(test, feature = "test-support"))]
+  #[doc(hidden)]
+  pub fn notification_log_for_driver(&self) -> serde_json::Value {
+    serde_json::json!({
+      "notifications": self.driver_notifications,
+    })
+  }
+
+  #[cfg(any(test, feature = "test-support"))]
   #[doc(hidden)]
   pub fn git_state_for_driver(&self, cx: &App) -> serde_json::Value {
     let repo_root = self.checkout_root(cx);

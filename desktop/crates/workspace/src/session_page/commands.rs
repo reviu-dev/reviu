@@ -253,6 +253,11 @@ impl SessionPage {
         let _ = this.update(cx, |this, cx| {
           match (&result, stopped_on_conflict) {
             (Ok(()), false) => {
+              #[cfg(any(test, feature = "test-support"))]
+              this.record_notification_for_driver(
+                crate::DriverNotificationKind::Success,
+                success_message.clone(),
+              );
               window.push_notification(Notification::success(success_message.clone()), cx);
               this
                 .dock_panel
@@ -260,10 +265,13 @@ impl SessionPage {
             }
             // A rebase that stopped on a conflict is not a failure.
             (Err(error), false) => {
-              window.push_notification(
-                Notification::error(format!("Interactive rebase failed: {error}")),
-                cx,
+              let message = format!("Interactive rebase failed: {error}");
+              #[cfg(any(test, feature = "test-support"))]
+              this.record_notification_for_driver(
+                crate::DriverNotificationKind::Error,
+                message.clone(),
               );
+              window.push_notification(Notification::error(message), cx);
             }
             _ => {}
           }
@@ -441,10 +449,20 @@ impl SessionPage {
               match outcome {
                 RepoCommandOutcome::Done { message } => {
                   if let Some(message) = message {
+                    #[cfg(any(test, feature = "test-support"))]
+                    this.record_notification_for_driver(
+                      crate::DriverNotificationKind::Success,
+                      message.clone(),
+                    );
                     window.push_notification(Notification::success(message), cx);
                   }
                 }
                 RepoCommandOutcome::UpToDate { message } => {
+                  #[cfg(any(test, feature = "test-support"))]
+                  this.record_notification_for_driver(
+                    crate::DriverNotificationKind::Info,
+                    message.clone(),
+                  );
                   window.push_notification(Notification::info(message), cx);
                 }
                 RepoCommandOutcome::Conflicted {
@@ -452,10 +470,13 @@ impl SessionPage {
                   commit_message,
                   ..
                 } => {
-                  window.push_notification(
-                    Notification::warning(format!("Resolve the conflicts in {}", path.display())),
-                    cx,
+                  let message = format!("Resolve the conflicts in {}", path.display());
+                  #[cfg(any(test, feature = "test-support"))]
+                  this.record_notification_for_driver(
+                    crate::DriverNotificationKind::Warning,
+                    message.clone(),
                   );
+                  window.push_notification(Notification::warning(message), cx);
                   if let Some(message) = commit_message {
                     this.dock_panel.update(cx, |panel, cx| {
                       panel.set_commit_message(&message, window, cx)
@@ -476,7 +497,13 @@ impl SessionPage {
               if checked_out_for_link {
                 crate::pull_request_surface::PullRequestSurfaceHandle::forget(cx);
               }
-              window.push_notification(Notification::error(error.to_string()), cx);
+              let message = error.to_string();
+              #[cfg(any(test, feature = "test-support"))]
+              this.record_notification_for_driver(
+                crate::DriverNotificationKind::Error,
+                message.clone(),
+              );
+              window.push_notification(Notification::error(message), cx);
             }
           }
           cx.notify();

@@ -1,4 +1,20 @@
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DriverNotificationKind {
+  Info,
+  Success,
+  Warning,
+  Error,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct DriverNotification {
+  pub kind: DriverNotificationKind,
+  pub title: Option<String>,
+  pub message: String,
+}
 
 #[derive(Clone, Debug, Deserialize)]
 #[serde(rename_all = "snake_case")]
