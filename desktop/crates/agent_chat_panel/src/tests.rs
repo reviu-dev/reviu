@@ -5160,6 +5160,35 @@ fn mini_diff_blank_lines_keep_text_height() {
 }
 
 #[test]
+fn removed_mini_diff_lines_render_without_syntax_spans() {
+  let syntax_spans = vec![HighlightSpan {
+    byte_range: 0..3,
+    token_type: syntax::TokenType::Keyword,
+  }];
+  let removed = DiffLine {
+    kind: DiffLineKind::Removed,
+    old_line: Some(1),
+    new_line: None,
+    text: "pub fn old() {}".to_string(),
+    spans: Vec::new(),
+    no_newline: false,
+    syntax_spans: syntax_spans.clone(),
+  };
+  let added = DiffLine {
+    kind: DiffLineKind::Added,
+    old_line: None,
+    new_line: Some(1),
+    text: "pub fn new() {}".to_string(),
+    spans: Vec::new(),
+    no_newline: false,
+    syntax_spans,
+  };
+
+  assert!(diff_line_syntax_spans_for_render(&removed).is_empty());
+  assert_eq!(diff_line_syntax_spans_for_render(&added).len(), 1);
+}
+
+#[test]
 fn old_conversations_load_with_zero_images() {
   let message: ChatMessage =
     serde_json::from_str(r#"{"role":"User","text":"hi"}"#).expect("legacy message loads");

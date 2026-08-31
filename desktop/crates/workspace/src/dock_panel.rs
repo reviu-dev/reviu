@@ -67,13 +67,13 @@ pub(crate) const DOCK_PANEL_CHECKOUT_SELECTOR_DEBUG_SELECTOR: &str = "dock-panel
 pub(crate) const DOCK_PANEL_CHECKOUT_FOLLOW_DEBUG_SELECTOR: &str = "dock-panel-checkout-follow";
 use std::rc::Rc;
 
+#[cfg(any(test, feature = "test-support"))]
+use crate::api::GithubPullRequestReviewEvent;
 use crate::api::{
   GithubPullRequest, GithubPullRequestChecksRollupState, GithubPullRequestChecksSummary,
   GithubPullRequestMergeMethod, GithubPullRequestMergeReadiness, GithubPullRequestReview,
   GithubPullRequestReviewComment,
 };
-#[cfg(any(test, feature = "test-support"))]
-use crate::api::GithubPullRequestReviewEvent;
 use crate::auth_state::AuthStateStore;
 use crate::github_navigation::{github_pull_request_url, open_compare_target};
 use crate::github_shared::{pull_request_status_color, pull_request_status_label};

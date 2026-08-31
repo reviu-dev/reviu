@@ -431,6 +431,14 @@ pub(crate) fn syntax_spans_for_range(
     .collect()
 }
 
+pub(crate) fn diff_line_syntax_spans_for_render(line: &crate::diff::DiffLine) -> &[HighlightSpan] {
+  if matches!(line.kind, DiffLineKind::Removed) {
+    &[]
+  } else {
+    &line.syntax_spans
+  }
+}
+
 pub(crate) fn build_text_runs(
   text: &str,
   word_spans: &[InlineSpan],
@@ -1280,7 +1288,7 @@ pub(crate) fn render_tool_call(
               let runs = build_text_runs(
                 &line.text,
                 &line.spans,
-                &line.syntax_spans,
+                diff_line_syntax_spans_for_render(line),
                 &syntax_theme,
                 fg,
                 Some(hl_bg),
