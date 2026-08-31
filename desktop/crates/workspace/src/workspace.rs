@@ -352,6 +352,30 @@ impl WorkspaceView {
 
   #[cfg(any(test, feature = "test-support"))]
   #[doc(hidden)]
+  pub fn auth_state_for_driver(&self, cx: &App) -> serde_json::Value {
+    let state = AuthStateStore::get(cx);
+    let github_access = AuthStateStore::github_access_state(cx);
+    serde_json::json!({
+      "status": match &state {
+        AuthState::Unknown => "unknown",
+        AuthState::Unauthenticated => "unauthenticated",
+        AuthState::Authenticated(_) => "authenticated",
+      },
+      "github_access": match github_access {
+        crate::auth_state::GithubAccessState::NeedsSignIn => "needs_sign_in",
+        crate::auth_state::GithubAccessState::NeedsSubscription => "needs_subscription",
+        crate::auth_state::GithubAccessState::Available => "available",
+      },
+      "signed_in": AuthStateStore::is_signed_in(cx),
+      "has_subscription": AuthStateStore::has_subscription(cx),
+      "has_github_access": AuthStateStore::has_github_access(cx),
+      "github_login": state.github_login(),
+      "app_profile": if AppProfile::current().is_dev() { "dev" } else { "prod" },
+    })
+  }
+
+  #[cfg(any(test, feature = "test-support"))]
+  #[doc(hidden)]
   pub fn run_git_action_for_driver(
     &mut self,
     action: crate::DriverGitAction,

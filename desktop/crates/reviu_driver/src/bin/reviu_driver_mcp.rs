@@ -453,6 +453,7 @@ fn command_for_tool(tool_name: &str, arguments: Value) -> Result<Value> {
     "cancel_dialog" => json!({ "cmd": "cancel_dialog" }),
     "notification_stats" => json!({ "cmd": "notification_stats" }),
     "notification_log" => json!({ "cmd": "notification_log" }),
+    "auth_state" => json!({ "cmd": "auth_state" }),
     "run_git_action" => json!({
       "cmd": "run_git_action",
       "action": required_value_field(&arguments, "action")?,
@@ -663,6 +664,11 @@ fn tools() -> Vec<Value> {
       empty_schema(),
     ),
     tool(
+      "auth_state",
+      "Return Reviu auth state for diagnostics.",
+      empty_schema(),
+    ),
+    tool(
       "run_git_action",
       "Run a Git action through the same path as the command palette.",
       object_schema(vec![value_property(
@@ -832,6 +838,7 @@ mod tests {
       "screenshot",
       "git_state",
       "notification_log",
+      "auth_state",
       "quit",
     ] {
       assert!(names.contains(&name));

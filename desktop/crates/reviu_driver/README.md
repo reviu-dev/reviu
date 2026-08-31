@@ -101,7 +101,7 @@ Core tools:
 
 - lifecycle: `start`, `restart`, `status`, `quit`
 - UI input: `bounds`, `click`, `type`, `key`, `clock`, `wait`, `park`, `scroll`
-- app state: `path_prompt`, `open_file`, `show_changes`, `hide_dock`, `agent_stats`, `editor_stats`
+- app state: `path_prompt`, `open_file`, `show_changes`, `hide_dock`, `agent_stats`, `editor_stats`, `auth_state`
 - Git/debug: `git_state`, `dialog_state`, `confirm_dialog`, `cancel_dialog`, `notification_stats`, `notification_log`, `run_git_action`
 - visual: `screenshot` with `--backend visual` on macOS
 
@@ -195,6 +195,7 @@ Current scope is intentionally non-destructive:
 - verifies `gh` can read the private GitHub fixture repo
 - verifies the stable fixture PR exists
 - opens the live checkout through `reviu-driver --backend test`
+- prints Reviu auth diagnostics with `auth_state`
 - uses your normal local Git/Reviu environment so private GitHub credentials are available
 - verifies Reviu detects the GitHub remote
 - verifies Reviu resolves the current branch to the stable fixture PR

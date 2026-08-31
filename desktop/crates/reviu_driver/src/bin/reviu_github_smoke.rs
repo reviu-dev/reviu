@@ -120,6 +120,20 @@ fn run_live_github_smoke(args: &GithubSmokeArgs, run_dir: &std::path::Path) -> R
   let fixture_pr_number = ensure_open_fixture_pr(args)?;
 
   let mut driver = DriverProcess::spawn(args.driver_bin.as_deref(), "test", run_dir, false)?;
+  let auth = wait_for_auth_state(&mut driver)?;
+  println!(
+    "Reviu auth: status={}, github_access={}, login={}",
+    string_field(&auth, "status").unwrap_or("unknown"),
+    string_field(&auth, "github_access").unwrap_or("unknown"),
+    string_field(&auth, "github_login").unwrap_or("none")
+  );
+  if auth.get("has_github_access").and_then(Value::as_bool) != Some(true) {
+    bail!(
+      "Reviu GitHub auth is not available:\n{}",
+      pretty_json(&auth)
+    );
+  }
+
   driver.open_repo(&args.repo)?;
   let state = wait_for_driver_state(&mut driver, |state| {
     github_remote_matches(state, &args.owner, &args.name)
@@ -143,11 +157,15 @@ fn run_live_github_smoke(args: &GithubSmokeArgs, run_dir: &std::path::Path) -> R
       }
       println!("Reviu branch PR: #{}", fixture_pr_number);
     }
-    Some("no_access") => bail!(
-      "Reviu GitHub auth missing or does not have access to {}/{}",
-      args.owner,
-      args.name
-    ),
+    Some("no_access") => {
+      let auth = driver.command(json!({ "cmd": "auth_state" }))?;
+      bail!(
+        "Reviu GitHub auth missing or does not have access to {}/{}:\n{}",
+        args.owner,
+        args.name,
+        pretty_json(&auth)
+      )
+    }
     Some(status) => bail!(
       "expected Reviu to find the branch pull request, got {status}:\n{}",
       pretty_json(&pull_request)
@@ -244,6 +262,21 @@ fn gh_json<const N: usize>(args: [&str; N]) -> Result<Value> {
     bail!("gh failed: {}", command_output_details(&output));
   }
   serde_json::from_slice(&output.stdout).context("parse gh JSON")
+}
+
+fn wait_for_auth_state(driver: &mut DriverProcess) -> Result<Value> {
+  let mut last = Value::Null;
+  wait_until(DEFAULT_TIMEOUT, || {
+    match driver.command(json!({ "cmd": "auth_state" })) {
+      Ok(state) => {
+        last = state;
+        string_field(&last, "status").is_some_and(|status| status != "unknown")
+      }
+      Err(_) => false,
+    }
+  })
+  .with_context(|| format!("last auth_state:\n{}", pretty_json(&last)))?;
+  Ok(last)
 }
 
 fn wait_for_driver_state(

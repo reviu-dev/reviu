@@ -191,6 +191,8 @@ enum Command {
   NotificationStats,
   /// Expose notifications recorded through driver-supported flows.
   NotificationLog,
+  /// Expose Reviu auth state for driver diagnostics.
+  AuthState,
   /// Run a Git action through the same path as the command palette.
   RunGitAction {
     action: workspace::DriverGitAction,
@@ -452,6 +454,10 @@ fn handle_test_command(
       let log = view.read_with(cx, |view, cx| view.notification_log_for_driver(cx));
       respond(ok(log));
     }
+    Command::AuthState => {
+      let state = view.read_with(cx, |view, cx| view.auth_state_for_driver(cx));
+      respond(ok(state));
+    }
     Command::RunGitAction { action } => {
       let result = cx.update(|window, cx| {
         view.update(cx, |view, cx| {
@@ -698,6 +704,10 @@ fn handle_visual_command(
       Ok(log) => respond(ok(log)),
       Err(error) => respond(err(error)),
     },
+    Command::AuthState => match auth_state_directly(cx, view) {
+      Ok(state) => respond(ok(state)),
+      Err(error) => respond(err(error)),
+    },
     Command::RunGitAction { action } => match run_git_action_directly(cx, window, view, action) {
       Ok(()) => respond(ok(serde_json::json!({}))),
       Err(error) => respond(err(error)),
@@ -915,6 +925,14 @@ fn notification_log_directly(
 }
 
 #[cfg(target_os = "macos")]
+fn auth_state_directly(
+  cx: &mut VisualTestAppContext,
+  view: &Entity<WorkspaceView>,
+) -> Result<serde_json::Value, String> {
+  Ok(view.read_with(cx, |view, cx| view.auth_state_for_driver(cx)))
+}
+
+#[cfg(target_os = "macos")]
 fn run_git_action_directly(
   cx: &mut VisualTestAppContext,
   window: AnyWindowHandle,
@@ -1093,6 +1111,10 @@ mod tests {
     assert!(matches!(
       serde_json::from_str::<Command>(r#"{"cmd":"notification_log"}"#).expect("notification log"),
       Command::NotificationLog
+    ));
+    assert!(matches!(
+      serde_json::from_str::<Command>(r#"{"cmd":"auth_state"}"#).expect("auth state"),
+      Command::AuthState
     ));
     match serde_json::from_str::<Command>(
       r#"{"cmd":"run_git_action","action":{"action":"stash","include_untracked":false,"message":"wip"}}"#,
