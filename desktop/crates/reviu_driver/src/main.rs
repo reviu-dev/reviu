@@ -155,6 +155,10 @@ enum Command {
   OpenFile {
     path: String,
   },
+  /// Open a Pull Request file in the center diff editor.
+  OpenPullRequestFile {
+    path: Option<String>,
+  },
   /// Simulate a mouse wheel scroll at an absolute point or the window center.
   Scroll {
     delta_x: Option<f32>,
@@ -393,6 +397,18 @@ fn handle_test_command(
       let result = cx.update(|window, cx| {
         view.update(cx, |view, cx| {
           view.open_file_for_driver(PathBuf::from(path), window, cx)
+        })
+      });
+      cx.run_until_parked();
+      match result {
+        Ok(()) => respond(ok(serde_json::json!({}))),
+        Err(error) => respond(err(error)),
+      }
+    }
+    Command::OpenPullRequestFile { path } => {
+      let result = cx.update(|window, cx| {
+        view.update(cx, |view, cx| {
+          view.open_pull_request_file_for_driver(path.map(PathBuf::from), window, cx)
         })
       });
       cx.run_until_parked();
@@ -664,6 +680,12 @@ fn handle_visual_command(
       Ok(()) => respond(ok(serde_json::json!({}))),
       Err(error) => respond(err(error)),
     },
+    Command::OpenPullRequestFile { path } => {
+      match open_pull_request_file_directly(cx, window, view, path) {
+        Ok(()) => respond(ok(serde_json::json!({}))),
+        Err(error) => respond(err(error)),
+      }
+    }
     Command::Scroll {
       delta_x,
       delta_y,
@@ -793,6 +815,24 @@ fn open_file_directly(
     .update_window(window, |_, window, cx| {
       view.update(cx, |view, cx| {
         view.open_file_for_driver(PathBuf::from(path), window, cx)
+      })
+    })
+    .map_err(|error| error.to_string())?;
+  cx.run_until_parked();
+  result.map_err(|error| error.to_string())
+}
+
+#[cfg(target_os = "macos")]
+fn open_pull_request_file_directly(
+  cx: &mut VisualTestAppContext,
+  window: AnyWindowHandle,
+  view: &Entity<WorkspaceView>,
+  path: Option<String>,
+) -> Result<(), String> {
+  let result = cx
+    .update_window(window, |_, window, cx| {
+      view.update(cx, |view, cx| {
+        view.open_pull_request_file_for_driver(path.map(PathBuf::from), window, cx)
       })
     })
     .map_err(|error| error.to_string())?;
@@ -1114,6 +1154,14 @@ mod tests {
     {
       Command::OpenFile { path } => assert_eq!(path, "src/main.rs"),
       _ => panic!("expected open file command"),
+    }
+    match serde_json::from_str::<Command>(
+      r#"{"cmd":"open_pull_request_file","path":"src/main.rs"}"#,
+    )
+    .expect("open pull request file")
+    {
+      Command::OpenPullRequestFile { path } => assert_eq!(path.as_deref(), Some("src/main.rs")),
+      _ => panic!("expected open pull request file command"),
     }
     match serde_json::from_str::<Command>(r#"{"cmd":"scroll","delta_y":-640.0,"steps":3}"#)
       .expect("scroll")

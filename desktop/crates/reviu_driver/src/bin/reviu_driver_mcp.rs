@@ -427,6 +427,10 @@ fn command_for_tool(tool_name: &str, arguments: Value) -> Result<Value> {
       "cmd": "open_file",
       "path": required_string(&arguments, "path")?,
     }),
+    "open_pull_request_file" => json!({
+      "cmd": "open_pull_request_file",
+      "path": optional_string(&arguments, "path")?,
+    }),
     "scroll" => json!({
       "cmd": "scroll",
       "delta_x": optional_f64(&arguments, "delta_x")?,
@@ -607,6 +611,14 @@ fn tools() -> Vec<Value> {
       "open_file",
       "Open a repository-relative file path in the center editor.",
       object_schema(vec![string_property("path", "Repository-relative path.")]).required(["path"]),
+    ),
+    tool(
+      "open_pull_request_file",
+      "Open a loaded Pull Request file in the center editor. Omitting path opens the first file.",
+      object_schema(vec![string_property(
+        "path",
+        "Repository-relative PR file path.",
+      )]),
     ),
     tool(
       "scroll",
@@ -850,6 +862,7 @@ mod tests {
       "bounds",
       "click",
       "path_prompt",
+      "open_pull_request_file",
       "screenshot",
       "git_state",
       "notification_log",
@@ -872,6 +885,11 @@ mod tests {
       command_for_tool("run_git_action", json!({ "action": { "action": "push" } }))
         .expect("git action command"),
       json!({ "cmd": "run_git_action", "action": { "action": "push" } })
+    );
+    assert_eq!(
+      command_for_tool("open_pull_request_file", json!({ "path": "src/lib.rs" }))
+        .expect("open pull request file command"),
+      json!({ "cmd": "open_pull_request_file", "path": "src/lib.rs" })
     );
     assert_eq!(
       command_for_tool("show_pull_request", json!({})).expect("show pull request"),

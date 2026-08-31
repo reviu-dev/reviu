@@ -1172,6 +1172,25 @@ impl SessionPage {
 
   #[cfg(any(test, feature = "test-support"))]
   #[doc(hidden)]
+  pub fn open_pull_request_file_for_driver(
+    &mut self,
+    rel_path: Option<PathBuf>,
+    window: &mut Window,
+    cx: &mut Context<Self>,
+  ) -> Result<(), SharedString> {
+    let Some((base, head, path)) = self
+      .dock_panel
+      .read(cx)
+      .pull_request_file_target_for_driver(rel_path.as_deref())
+    else {
+      return Err("No loaded pull request file matches the driver request.".into());
+    };
+    self.open_pull_request_file(base, head, path, None, OpenIntent::Open, window, cx);
+    Ok(())
+  }
+
+  #[cfg(any(test, feature = "test-support"))]
+  #[doc(hidden)]
   pub fn show_changes_for_driver(&mut self, window: &mut Window, cx: &mut Context<Self>) {
     self.show_dock_tab(DockPanelTab::Changes, window, cx);
   }
@@ -1262,6 +1281,7 @@ impl SessionPage {
         "line_layout_cache_size": editor.line_layouts.len(),
         "virtual_line_layout_cache_size": editor.virtual_line_layouts.len(),
         "word_diff_cache_size": editor.word_diff_cache_size(),
+        "review_comment_ids": editor.review_comment_ids(),
       })
     })
   }

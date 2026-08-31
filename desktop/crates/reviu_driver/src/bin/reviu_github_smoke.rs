@@ -292,6 +292,15 @@ fn run_live_github_driver_smoke(
       .and_then(Value::as_u64)
       .unwrap_or_default()
   );
+  if let Some(comment) = bot_review_comment {
+    let file = fixture_pr
+      .changed_files
+      .first()
+      .context("fixture PR changed file")?;
+    driver.command(json!({ "cmd": "open_pull_request_file", "path": file }))?;
+    wait_for_editor_review_comment(&mut driver, file, comment.id)?;
+    println!("PR diff: review comment #{} visible", comment.id);
+  }
 
   driver.run_git_action(json!({ "action": "fetch" }))?;
   wait_for_driver_state(&mut driver, |state| {
@@ -590,6 +599,27 @@ fn wait_for_pull_request_panel(
   Ok(panel)
 }
 
+fn wait_for_editor_review_comment(
+  driver: &mut DriverProcess,
+  path: &str,
+  comment_id: u64,
+) -> Result<Value> {
+  let mut last = Value::Null;
+  wait_until(DEFAULT_TIMEOUT, || {
+    match driver.command(json!({ "cmd": "editor_stats" })) {
+      Ok(stats) => {
+        last = stats;
+        string_field(&last, "selected_file").is_some_and(|selected| selected.ends_with(path))
+          && last.get("ready").and_then(Value::as_bool) == Some(true)
+          && editor_has_review_comment(&last, comment_id)
+      }
+      Err(_) => false,
+    }
+  })
+  .with_context(|| format!("last editor_stats:\n{}", pretty_json(&last)))?;
+  Ok(last)
+}
+
 fn wait_for_driver_state(
   driver: &mut DriverProcess,
   predicate: impl Fn(&Value) -> bool,
@@ -668,6 +698,13 @@ fn pull_request_panel_has_review_comment(panel: &Value, marker: &str) -> bool {
         .iter()
         .any(|comment| string_field(comment, "body").is_some_and(|body| body.contains(marker)))
     })
+}
+
+fn editor_has_review_comment(stats: &Value, comment_id: u64) -> bool {
+  stats
+    .get("review_comment_ids")
+    .and_then(Value::as_array)
+    .is_some_and(|ids| ids.iter().any(|id| id.as_u64() == Some(comment_id)))
 }
 
 fn has_logged_notification(log: &Value, kind: &str, message_part: &str) -> bool {

@@ -336,6 +336,19 @@ impl WorkspaceView {
 
   #[cfg(any(test, feature = "test-support"))]
   #[doc(hidden)]
+  pub fn open_pull_request_file_for_driver(
+    &mut self,
+    rel_path: Option<PathBuf>,
+    window: &mut Window,
+    cx: &mut Context<Self>,
+  ) -> Result<(), gpui::SharedString> {
+    self.session_page.update(cx, |page, cx| {
+      page.open_pull_request_file_for_driver(rel_path, window, cx)
+    })
+  }
+
+  #[cfg(any(test, feature = "test-support"))]
+  #[doc(hidden)]
   pub fn git_state_for_driver(&self, cx: &App) -> serde_json::Value {
     self
       .session_page

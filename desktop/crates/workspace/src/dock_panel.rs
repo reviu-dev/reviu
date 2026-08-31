@@ -1487,6 +1487,19 @@ impl DockPanel {
     })
   }
 
+  #[cfg(any(test, feature = "test-support"))]
+  pub(crate) fn pull_request_file_target_for_driver(
+    &self,
+    rel_path: Option<&std::path::Path>,
+  ) -> Option<(String, String, PathBuf)> {
+    let range = self.pr_range.as_ref()?;
+    let file = match rel_path {
+      Some(path) => self.pr_files.iter().find(|file| file.path == path)?,
+      None => self.pr_files.first()?,
+    };
+    Some((range.base.clone(), range.head.clone(), file.path.clone()))
+  }
+
   /// Whether a new comment would join something: GitHub refuses a standalone
   /// comment while an unsubmitted review is open.
   pub(crate) fn has_pending_pull_request_review(&self) -> bool {
