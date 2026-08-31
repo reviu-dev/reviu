@@ -557,6 +557,40 @@ fn pull_request_identity(state: &BranchPrState) -> Option<(String, String, u64)>
   }
 }
 
+#[cfg(any(test, feature = "test-support"))]
+fn driver_dock_tab(tab: DockPanelTab) -> &'static str {
+  match tab {
+    DockPanelTab::Changes => "changes",
+    DockPanelTab::Review => "review",
+    DockPanelTab::Files => "files",
+    DockPanelTab::History => "history",
+    DockPanelTab::PullRequest => "pull_request",
+    DockPanelTab::Terminal => "terminal",
+  }
+}
+
+#[cfg(any(test, feature = "test-support"))]
+fn driver_pr_file(file: &git::CommitChangedFile) -> serde_json::Value {
+  serde_json::json!({
+    "path": file.path.display().to_string(),
+    "old_path": file.old_path.as_ref().map(|path| path.display().to_string()),
+    "kind": driver_pr_file_kind(file.kind),
+  })
+}
+
+#[cfg(any(test, feature = "test-support"))]
+fn driver_pr_file_kind(kind: git::CommitFileChangeKind) -> &'static str {
+  match kind {
+    git::CommitFileChangeKind::Added => "added",
+    git::CommitFileChangeKind::Deleted => "deleted",
+    git::CommitFileChangeKind::Modified => "modified",
+    git::CommitFileChangeKind::Renamed => "renamed",
+    git::CommitFileChangeKind::Copied => "copied",
+    git::CommitFileChangeKind::Typechange => "typechange",
+    git::CommitFileChangeKind::Conflicted => "conflicted",
+  }
+}
+
 /// One checkout of the shown session's repo, ready for the header selector.
 #[derive(Clone, PartialEq)]
 pub(crate) struct CheckoutOption {
@@ -1415,6 +1449,28 @@ impl DockPanel {
         "title": pull_request.title,
       }),
     }
+  }
+
+  #[cfg(any(test, feature = "test-support"))]
+  pub(crate) fn pull_request_panel_state_for_driver(&self) -> serde_json::Value {
+    serde_json::json!({
+      "active_tab": driver_dock_tab(self.active_tab),
+      "files_loading": self.pr_files_loading,
+      "files_error": self.pr_files_error.as_ref().map(|error| error.to_string()),
+      "files": self.pr_files.iter().map(driver_pr_file).collect::<Vec<_>>(),
+      "range": self.pr_range.as_ref().map(|range| serde_json::json!({
+        "base": range.base.as_str(),
+        "head": range.head.as_str(),
+        "base_ref": range.base_ref.as_str(),
+        "head_ref": range.head_ref.as_str(),
+      })),
+      "author_login": self.pr_author_login.as_deref(),
+      "reviewers": self.pr_reviewers.len(),
+      "review_comments": self.pr_review_comments.len(),
+      "checks_loading": self.pr_checks_loading,
+      "has_checks": self.pr_checks.is_some(),
+      "merge_readiness_loaded": self.pr_merge_readiness.is_some(),
+    })
   }
 
   /// Whether a new comment would join something: GitHub refuses a standalone

@@ -21,6 +21,11 @@ const DEFAULT_REPO: &str = "reviu-github-smoke";
 const DEFAULT_PR_BRANCH: &str = "smoke/pr-open";
 const DEFAULT_AUTH_TOKEN_ENV: &str = "REVIU_AUTH_TOKEN";
 
+struct FixturePullRequest {
+  number: u64,
+  changed_files: Vec<String>,
+}
+
 #[derive(Debug, PartialEq, Eq)]
 struct GithubSmokeArgs {
   repo: PathBuf,
@@ -140,7 +145,7 @@ fn run(args: GithubSmokeArgs) -> Result<()> {
 fn run_live_github_smoke(args: &GithubSmokeArgs, run_dir: &std::path::Path) -> Result<()> {
   ensure_expected_remote(args)?;
   ensure_gh_can_read_repo(args)?;
-  let fixture_pr_number = ensure_open_fixture_pr(args)?;
+  let fixture_pr = ensure_open_fixture_pr(args)?;
 
   let mut driver = DriverProcess::spawn(args.driver_bin.as_deref(), &args.backend, run_dir, false)?;
   if let Some(token) = std::env::var(&args.auth_token_env)
@@ -178,13 +183,14 @@ fn run_live_github_smoke(args: &GithubSmokeArgs, run_dir: &std::path::Path) -> R
   match branch_pull_request_status(&pull_request) {
     Some("found") => {
       let number = pull_request.get("number").and_then(Value::as_u64);
-      if number != Some(fixture_pr_number) {
+      if number != Some(fixture_pr.number) {
         bail!(
-          "expected Reviu to find PR #{fixture_pr_number}, got:\n{}",
+          "expected Reviu to find PR #{}, got:\n{}",
+          fixture_pr.number,
           pretty_json(&pull_request)
         );
       }
-      println!("Reviu branch PR: #{}", fixture_pr_number);
+      println!("Reviu branch PR: #{}", fixture_pr.number);
     }
     Some("no_access") => {
       let auth = driver.command(json!({ "cmd": "auth_state" }))?;
@@ -201,6 +207,17 @@ fn run_live_github_smoke(args: &GithubSmokeArgs, run_dir: &std::path::Path) -> R
     ),
     None => bail!("missing branch_pull_request in driver state"),
   }
+
+  driver.command(json!({ "cmd": "show_pull_request" }))?;
+  let pull_request_panel = wait_for_pull_request_panel(&mut driver, &fixture_pr)?;
+  println!(
+    "PR panel: {} changed file(s)",
+    pull_request_panel
+      .get("files")
+      .and_then(Value::as_array)
+      .map(Vec::len)
+      .unwrap_or_default()
+  );
 
   driver.run_git_action(json!({ "action": "fetch" }))?;
   wait_for_driver_state(&mut driver, |state| {
@@ -244,7 +261,7 @@ fn ensure_gh_can_read_repo(args: &GithubSmokeArgs) -> Result<()> {
   Ok(())
 }
 
-fn ensure_open_fixture_pr(args: &GithubSmokeArgs) -> Result<u64> {
+fn ensure_open_fixture_pr(args: &GithubSmokeArgs) -> Result<FixturePullRequest> {
   let repo = format!("{}/{}", args.owner, args.name);
   let pull_requests = gh_json([
     "pr",
@@ -270,12 +287,35 @@ fn ensure_open_fixture_pr(args: &GithubSmokeArgs) -> Result<u64> {
     .get("number")
     .and_then(Value::as_u64)
     .context("fixture PR number")?;
+  let number_text = number.to_string();
+  let details = gh_json([
+    "pr",
+    "view",
+    &number_text,
+    "--repo",
+    &repo,
+    "--json",
+    "files",
+  ])?;
+  let changed_files = details
+    .get("files")
+    .and_then(Value::as_array)
+    .into_iter()
+    .flatten()
+    .filter_map(|file| string_field(file, "path").map(ToString::to_string))
+    .collect::<Vec<_>>();
+  if changed_files.is_empty() {
+    bail!("fixture PR has no changed files: {}", pretty_json(&details));
+  }
   println!(
     "fixture PR: #{} {}",
     number,
     string_field(pull_request, "url").unwrap_or("unknown")
   );
-  Ok(number)
+  Ok(FixturePullRequest {
+    number,
+    changed_files,
+  })
 }
 
 fn gh_json<const N: usize>(args: [&str; N]) -> Result<Value> {
@@ -306,6 +346,31 @@ fn wait_for_auth_state(driver: &mut DriverProcess) -> Result<Value> {
   })
   .with_context(|| format!("last auth_state:\n{}", pretty_json(&last)))?;
   Ok(last)
+}
+
+fn wait_for_pull_request_panel(
+  driver: &mut DriverProcess,
+  fixture_pr: &FixturePullRequest,
+) -> Result<Value> {
+  let state = wait_for_driver_state(driver, |state| {
+    let Some(panel) = state.get("pull_request_panel") else {
+      return false;
+    };
+    string_field(panel, "active_tab") == Some("pull_request")
+      && panel.get("files_loading").and_then(Value::as_bool) == Some(false)
+      && panel.get("files_error").is_none_or(Value::is_null)
+      && fixture_pr
+        .changed_files
+        .iter()
+        .all(|path| pull_request_panel_has_file(panel, path))
+  })?;
+  let Some(panel) = state.get("pull_request_panel").cloned() else {
+    bail!(
+      "driver state is missing pull_request_panel: {}",
+      pretty_json(&state)
+    );
+  };
+  Ok(panel)
 }
 
 fn wait_for_driver_state(
@@ -363,6 +428,17 @@ fn has_branch(state: &Value, name: &str) -> bool {
       branches
         .iter()
         .any(|branch| string_field(branch, "name") == Some(name))
+    })
+}
+
+fn pull_request_panel_has_file(panel: &Value, path: &str) -> bool {
+  panel
+    .get("files")
+    .and_then(Value::as_array)
+    .is_some_and(|files| {
+      files
+        .iter()
+        .any(|file| string_field(file, "path") == Some(path))
     })
 }
 
@@ -457,6 +533,10 @@ mod tests {
       "branch_pull_request": { "status": "found", "number": 1 },
       "palette_commands": ["show_pull_request"],
       "branches": [{ "name": "origin/smoke/pr-open" }],
+      "pull_request_panel": {
+        "active_tab": "pull_request",
+        "files": [{ "path": "fixtures/pr-open.txt", "kind": "modified" }]
+      },
       "notifications": [{ "kind": "success", "message": "Fetched from remotes" }]
     });
 
@@ -468,6 +548,10 @@ mod tests {
     assert_eq!(branch_pull_request_status(&state), Some("found"));
     assert!(palette_has_command(&state, "show_pull_request"));
     assert!(has_branch(&state, "origin/smoke/pr-open"));
+    assert!(pull_request_panel_has_file(
+      state.get("pull_request_panel").expect("pull request panel"),
+      "fixtures/pr-open.txt"
+    ));
     assert!(has_logged_notification(&state, "success", "fetched"));
   }
 }

@@ -1178,6 +1178,12 @@ impl SessionPage {
 
   #[cfg(any(test, feature = "test-support"))]
   #[doc(hidden)]
+  pub fn show_pull_request_for_driver(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    self.show_dock_tab(DockPanelTab::PullRequest, window, cx);
+  }
+
+  #[cfg(any(test, feature = "test-support"))]
+  #[doc(hidden)]
   pub fn hide_dock_for_driver(&mut self, window: &mut Window, cx: &mut Context<Self>) {
     self.close_dock(window, cx);
   }

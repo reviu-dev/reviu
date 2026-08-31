@@ -57,6 +57,7 @@ impl SessionPage {
       "repo_root": repo_root.display().to_string(),
       "selected_file": self.selected_file.as_ref().map(|path| path.display().to_string()),
       "center": format!("{:?}", self.center),
+      "dock_open": self.dock_open,
       "command_in_flight": self.repo_command_in_flight.is_some(),
       "merge_in_progress": merge_in_progress,
       "rebase_in_progress": rebase_in_progress,
@@ -79,6 +80,7 @@ impl SessionPage {
         "repo": remote.repo,
       })),
       "branch_pull_request": panel.branch_pull_request_state_for_driver(),
+      "pull_request_panel": panel.pull_request_panel_state_for_driver(),
       "branches": branches.into_iter().map(driver_branch_json).collect::<Vec<_>>(),
       "status_entries": status_entries.into_iter().map(driver_status_json).collect::<Vec<_>>(),
       "stashes": stashes.into_iter().map(|stash| serde_json::json!({

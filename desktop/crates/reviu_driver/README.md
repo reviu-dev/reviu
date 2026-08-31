@@ -101,7 +101,7 @@ Core tools:
 
 - lifecycle: `start`, `restart`, `status`, `quit`
 - UI input: `bounds`, `click`, `type`, `key`, `clock`, `wait`, `park`, `scroll`
-- app state: `path_prompt`, `open_file`, `show_changes`, `hide_dock`, `agent_stats`, `editor_stats`, `auth_state`
+- app state: `path_prompt`, `open_file`, `show_changes`, `show_pull_request`, `hide_dock`, `agent_stats`, `editor_stats`, `auth_state`
 - Git/debug: `git_state`, `dialog_state`, `confirm_dialog`, `cancel_dialog`, `notification_stats`, `notification_log`, `run_git_action`
 - visual: `screenshot` with `--backend visual` on macOS
 
@@ -202,6 +202,7 @@ Current scope is intentionally non-destructive:
 - uses `REVIU_AUTH_TOKEN` when provided so local and future CI runs do not depend on platform keychain access
 - verifies Reviu detects the GitHub remote
 - verifies Reviu resolves the current branch to the stable fixture PR
+- opens the Pull Request dock tab and verifies the changed files match the fixture PR
 - fetches and verifies the fixture PR branch is available locally
 
 Useful options:

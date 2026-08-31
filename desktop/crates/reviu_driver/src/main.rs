@@ -169,6 +169,8 @@ enum Command {
   },
   /// Direct driver hook for perf runs: open the Changes dock tab.
   ShowChanges,
+  /// Direct driver hook: open the Pull Request dock tab.
+  ShowPullRequest,
   /// Direct driver hook for perf runs: close the right dock.
   HideDock,
   /// Direct driver hook for perf runs: fill and submit the agent composer.
@@ -415,6 +417,13 @@ fn handle_test_command(
     Command::ShowChanges => {
       cx.update(|window, cx| {
         view.update(cx, |view, cx| view.show_changes_for_driver(window, cx));
+      });
+      cx.run_until_parked();
+      respond(ok(serde_json::json!({})));
+    }
+    Command::ShowPullRequest => {
+      cx.update(|window, cx| {
+        view.update(cx, |view, cx| view.show_pull_request_for_driver(window, cx));
       });
       cx.run_until_parked();
       respond(ok(serde_json::json!({})));
@@ -675,6 +684,10 @@ fn handle_visual_command(
       Ok(()) => respond(ok(serde_json::json!({}))),
       Err(error) => respond(err(error)),
     },
+    Command::ShowPullRequest => match show_pull_request_directly(cx, window, view) {
+      Ok(()) => respond(ok(serde_json::json!({}))),
+      Err(error) => respond(err(error)),
+    },
     Command::HideDock => match hide_dock_directly(cx, window, view) {
       Ok(()) => respond(ok(serde_json::json!({}))),
       Err(error) => respond(err(error)),
@@ -826,6 +839,20 @@ fn show_changes_directly(
 ) -> Result<(), String> {
   cx.update_window(window, |_, window, cx| {
     view.update(cx, |view, cx| view.show_changes_for_driver(window, cx));
+  })
+  .map_err(|error| error.to_string())?;
+  cx.run_until_parked();
+  Ok(())
+}
+
+#[cfg(target_os = "macos")]
+fn show_pull_request_directly(
+  cx: &mut VisualTestAppContext,
+  window: AnyWindowHandle,
+  view: &Entity<WorkspaceView>,
+) -> Result<(), String> {
+  cx.update_window(window, |_, window, cx| {
+    view.update(cx, |view, cx| view.show_pull_request_for_driver(window, cx));
   })
   .map_err(|error| error.to_string())?;
   cx.run_until_parked();
@@ -1106,6 +1133,10 @@ mod tests {
     assert!(matches!(
       serde_json::from_str::<Command>(r#"{"cmd":"show_changes"}"#).expect("show changes"),
       Command::ShowChanges
+    ));
+    assert!(matches!(
+      serde_json::from_str::<Command>(r#"{"cmd":"show_pull_request"}"#).expect("show pull request"),
+      Command::ShowPullRequest
     ));
     assert!(matches!(
       serde_json::from_str::<Command>(r#"{"cmd":"hide_dock"}"#).expect("hide dock"),

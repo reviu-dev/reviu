@@ -440,6 +440,7 @@ fn command_for_tool(tool_name: &str, arguments: Value) -> Result<Value> {
       "path": required_string(&arguments, "path")?,
     }),
     "show_changes" => json!({ "cmd": "show_changes" }),
+    "show_pull_request" => json!({ "cmd": "show_pull_request" }),
     "hide_dock" => json!({ "cmd": "hide_dock" }),
     "submit_prompt" => json!({
       "cmd": "submit_prompt",
@@ -625,6 +626,11 @@ fn tools() -> Vec<Value> {
       object_schema(vec![string_property("path", "Output PNG path.")]).required(["path"]),
     ),
     tool("show_changes", "Open the Changes dock tab.", empty_schema()),
+    tool(
+      "show_pull_request",
+      "Open the Pull Request dock tab.",
+      empty_schema(),
+    ),
     tool("hide_dock", "Close the right dock.", empty_schema()),
     tool(
       "submit_prompt",
@@ -847,6 +853,7 @@ mod tests {
       "screenshot",
       "git_state",
       "notification_log",
+      "show_pull_request",
       "auth_state",
       "set_auth_token",
       "quit",
@@ -865,6 +872,10 @@ mod tests {
       command_for_tool("run_git_action", json!({ "action": { "action": "push" } }))
         .expect("git action command"),
       json!({ "cmd": "run_git_action", "action": { "action": "push" } })
+    );
+    assert_eq!(
+      command_for_tool("show_pull_request", json!({})).expect("show pull request"),
+      json!({ "cmd": "show_pull_request" })
     );
   }
 
