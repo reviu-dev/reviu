@@ -10,8 +10,10 @@ use agent_chat_panel::{AgentChatPanel, AgentChatPanelEvent, ConversationStore, T
 use editor::{
   ConflictResolution, DiffViewMode, Editor, EditorEvent, ReviewCommentCancelHandler,
   ReviewCommentCreateHandler, ReviewCommentCreateRequest, ReviewCommentDeleteHandler,
-  ReviewCommentEditHandler, ReviewCommentMode, ReviewCommentSendHandler, ReviewCommentSide,
+  ReviewCommentEditHandler, ReviewCommentSendHandler,
 };
+#[cfg(any(test, feature = "test-support"))]
+use editor::{ReviewCommentMode, ReviewCommentSide};
 use gpui::AnimationExt as _;
 use gpui::{
   AnyElement, AnyWindowHandle, App, Context, Entity, FocusHandle, Focusable, PathPromptOptions,

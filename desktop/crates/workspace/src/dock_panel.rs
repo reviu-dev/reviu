@@ -70,8 +70,10 @@ use std::rc::Rc;
 use crate::api::{
   GithubPullRequest, GithubPullRequestChecksRollupState, GithubPullRequestChecksSummary,
   GithubPullRequestMergeMethod, GithubPullRequestMergeReadiness, GithubPullRequestReview,
-  GithubPullRequestReviewComment, GithubPullRequestReviewEvent,
+  GithubPullRequestReviewComment,
 };
+#[cfg(any(test, feature = "test-support"))]
+use crate::api::GithubPullRequestReviewEvent;
 use crate::auth_state::AuthStateStore;
 use crate::github_navigation::{github_pull_request_url, open_compare_target};
 use crate::github_shared::{pull_request_status_color, pull_request_status_label};
