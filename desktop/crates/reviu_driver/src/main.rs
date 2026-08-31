@@ -183,6 +183,10 @@ enum Command {
     line: usize,
     body: String,
   },
+  /// Direct driver hook: submit the pending pull request review as a comment review.
+  SubmitPullRequestReview {
+    body: String,
+  },
   /// Direct driver hook: open the discard pending pull request review confirmation.
   DiscardPullRequestReview,
   /// Direct driver hook for perf runs: close the right dock.
@@ -465,6 +469,18 @@ fn handle_test_command(
       let result = cx.update(|_, cx| {
         view.update(cx, |view, cx| {
           view.create_pull_request_review_comment_for_driver(PathBuf::from(path), line, body, cx)
+        })
+      });
+      cx.run_until_parked();
+      match result {
+        Ok(()) => respond(ok(serde_json::json!({}))),
+        Err(error) => respond(err(error)),
+      }
+    }
+    Command::SubmitPullRequestReview { body } => {
+      let result = cx.update(|_, cx| {
+        view.update(cx, |view, cx| {
+          view.submit_pull_request_review_for_driver(body, cx)
         })
       });
       cx.run_until_parked();
@@ -758,6 +774,12 @@ fn handle_visual_command(
         Err(error) => respond(err(error)),
       }
     }
+    Command::SubmitPullRequestReview { body } => {
+      match submit_pull_request_review_directly(cx, window, view, body) {
+        Ok(()) => respond(ok(serde_json::json!({}))),
+        Err(error) => respond(err(error)),
+      }
+    }
     Command::DiscardPullRequestReview => {
       match discard_pull_request_review_directly(cx, window, view) {
         Ok(()) => respond(ok(serde_json::json!({}))),
@@ -980,6 +1002,24 @@ fn create_pull_request_review_comment_directly(
     .update_window(window, |_, _, cx| {
       view.update(cx, |view, cx| {
         view.create_pull_request_review_comment_for_driver(PathBuf::from(path), line, body, cx)
+      })
+    })
+    .map_err(|error| error.to_string())?;
+  cx.run_until_parked();
+  result.map_err(|error| error.to_string())
+}
+
+#[cfg(target_os = "macos")]
+fn submit_pull_request_review_directly(
+  cx: &mut VisualTestAppContext,
+  window: AnyWindowHandle,
+  view: &Entity<WorkspaceView>,
+  body: String,
+) -> Result<(), String> {
+  let result = cx
+    .update_window(window, |_, _, cx| {
+      view.update(cx, |view, cx| {
+        view.submit_pull_request_review_for_driver(body, cx)
       })
     })
     .map_err(|error| error.to_string())?;
@@ -1305,6 +1345,14 @@ mod tests {
         assert_eq!(body, "note");
       }
       _ => panic!("expected create pull request review comment command"),
+    }
+    match serde_json::from_str::<Command>(
+      r#"{"cmd":"submit_pull_request_review","body":"looks good"}"#,
+    )
+    .expect("submit pull request review")
+    {
+      Command::SubmitPullRequestReview { body } => assert_eq!(body, "looks good"),
+      _ => panic!("expected submit pull request review command"),
     }
     assert!(matches!(
       serde_json::from_str::<Command>(r#"{"cmd":"discard_pull_request_review"}"#)

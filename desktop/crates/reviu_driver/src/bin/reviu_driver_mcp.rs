@@ -452,6 +452,10 @@ fn command_for_tool(tool_name: &str, arguments: Value) -> Result<Value> {
       "line": required_u64(&arguments, "line")?,
       "body": required_string(&arguments, "body")?,
     }),
+    "submit_pull_request_review" => json!({
+      "cmd": "submit_pull_request_review",
+      "body": required_string(&arguments, "body")?,
+    }),
     "discard_pull_request_review" => json!({ "cmd": "discard_pull_request_review" }),
     "hide_dock" => json!({ "cmd": "hide_dock" }),
     "submit_prompt" => json!({
@@ -661,6 +665,11 @@ fn tools() -> Vec<Value> {
         string_property("body", "Comment body."),
       ])
       .required(["path", "line", "body"]),
+    ),
+    tool(
+      "submit_pull_request_review",
+      "Submit the pending pull request review as a comment review.",
+      object_schema(vec![string_property("body", "Review body.")]).required(["body"]),
     ),
     tool(
       "discard_pull_request_review",
@@ -893,6 +902,7 @@ mod tests {
       "show_pull_request",
       "show_review",
       "create_pull_request_review_comment",
+      "submit_pull_request_review",
       "discard_pull_request_review",
       "auth_state",
       "set_auth_token",
@@ -930,6 +940,14 @@ mod tests {
         "line": 0,
         "body": "note"
       })
+    );
+    assert_eq!(
+      command_for_tool(
+        "submit_pull_request_review",
+        json!({ "body": "looks good" })
+      )
+      .expect("submit pull request review command"),
+      json!({ "cmd": "submit_pull_request_review", "body": "looks good" })
     );
     assert_eq!(
       command_for_tool("show_pull_request", json!({})).expect("show pull request"),

@@ -447,6 +447,18 @@ impl WorkspaceView {
 
   #[cfg(any(test, feature = "test-support"))]
   #[doc(hidden)]
+  pub fn submit_pull_request_review_for_driver(
+    &mut self,
+    body: String,
+    cx: &mut Context<Self>,
+  ) -> Result<(), gpui::SharedString> {
+    self.session_page.update(cx, |page, cx| {
+      page.submit_pull_request_review_for_driver(body, cx)
+    })
+  }
+
+  #[cfg(any(test, feature = "test-support"))]
+  #[doc(hidden)]
   pub fn discard_pull_request_review_for_driver(
     &mut self,
     window: &mut Window,

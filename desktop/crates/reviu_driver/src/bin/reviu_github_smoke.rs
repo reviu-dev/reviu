@@ -11,7 +11,7 @@ use serde_json::{Value, json};
 mod driver_harness;
 
 use crate::driver_harness::{
-  DriverProcess, TempRunDir, git_output, pretty_json, scenario_diagnostics, wait_until,
+  DriverProcess, TempRunDir, git, git_output, pretty_json, scenario_diagnostics, wait_until,
 };
 
 const DEFAULT_TIMEOUT: Duration = Duration::from_secs(15);
@@ -37,6 +37,12 @@ struct BotActor {
 struct BotReviewComment {
   id: u64,
   marker: String,
+}
+
+struct TempPullRequest {
+  number: u64,
+  branch: String,
+  path: String,
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -178,27 +184,40 @@ fn run_live_github_smoke(args: &GithubSmokeArgs, run_dir: &std::path::Path) -> R
   ensure_gh_can_read_repo(args)?;
   let fixture_pr = ensure_open_fixture_pr(args)?;
   let bot_actor = resolve_bot_actor(args)?;
-  let bot_review_comment = match &bot_actor {
+  let (bot_review_comment, temp_pull_request) = match &bot_actor {
     Some(bot_actor) => {
       let comment = create_bot_review_comment(args, &fixture_pr, bot_actor)?;
       println!(
         "bot actor: {} created PR review comment #{}",
         bot_actor.login, comment.id
       );
-      Some(comment)
+      let pull_request = create_temp_submit_pull_request(args, bot_actor)?;
+      println!(
+        "bot actor: created submit-review fixture PR #{}",
+        pull_request.number
+      );
+      (Some(comment), Some(pull_request))
     }
     None => {
       println!("bot actor: skipped; no bot credentials available");
-      None
+      (None, None)
     }
   };
 
-  let result =
-    run_live_github_driver_smoke(args, run_dir, &fixture_pr, bot_review_comment.as_ref());
-  let cleanup = match (&bot_actor, &bot_review_comment) {
-    (Some(bot_actor), Some(comment)) => delete_bot_review_comment(args, bot_actor, comment.id),
-    _ => Ok(()),
-  };
+  git(&args.repo, ["checkout", &args.pr_branch])?;
+  let result = run_live_github_driver_smoke(
+    args,
+    run_dir,
+    &fixture_pr,
+    bot_review_comment.as_ref(),
+    temp_pull_request.as_ref(),
+  );
+  let cleanup = cleanup_live_github_smoke(
+    args,
+    bot_actor.as_ref(),
+    bot_review_comment.as_ref(),
+    temp_pull_request.as_ref(),
+  );
   if result.is_ok() {
     cleanup?;
   } else {
@@ -212,6 +231,7 @@ fn run_live_github_driver_smoke(
   run_dir: &std::path::Path,
   fixture_pr: &FixturePullRequest,
   bot_review_comment: Option<&BotReviewComment>,
+  temp_pull_request: Option<&TempPullRequest>,
 ) -> Result<()> {
   let mut driver = DriverProcess::spawn(args.driver_bin.as_deref(), &args.backend, run_dir, false)?;
   if let Some(token) = std::env::var(&args.auth_token_env)
@@ -302,7 +322,12 @@ fn run_live_github_driver_smoke(
     println!("PR diff: review comment #{} visible", comment.id);
   }
 
-  run_pending_review_smoke(&mut driver, open_file)?;
+  run_pending_review_discard_smoke(&mut driver, open_file)?;
+  if let Some(temp_pull_request) = temp_pull_request {
+    run_submit_review_smoke(&mut driver, args, temp_pull_request)?;
+  } else {
+    println!("Review submit: skipped; no bot-created fixture PR available");
+  }
 
   driver.run_git_action(json!({ "action": "fetch" }))?;
   wait_for_driver_state(&mut driver, |state| {
@@ -497,9 +522,176 @@ fn create_bot_review_comment(
   Ok(BotReviewComment { id, marker })
 }
 
+fn create_temp_submit_pull_request(
+  args: &GithubSmokeArgs,
+  bot_actor: &BotActor,
+) -> Result<TempPullRequest> {
+  let suffix = std::time::SystemTime::now()
+    .duration_since(std::time::UNIX_EPOCH)
+    .map(|duration| duration.as_secs())
+    .unwrap_or_default();
+  let branch = format!("smoke/submit-review-{suffix}");
+  let path = format!("fixtures/submit-review-{suffix}.txt");
+  let main_ref = gh_json_vec_with_token(
+    vec![
+      "api".to_string(),
+      format!("repos/{}/{}/git/ref/heads/main", args.owner, args.name),
+    ],
+    Some(&bot_actor.token),
+  )?;
+  let main_sha = main_ref
+    .get("object")
+    .and_then(|object| object.get("sha"))
+    .and_then(Value::as_str)
+    .context("main ref sha")?;
+  gh_json_vec_with_token(
+    vec![
+      "api".to_string(),
+      format!("repos/{}/{}/git/refs", args.owner, args.name),
+      "-X".to_string(),
+      "POST".to_string(),
+      "-f".to_string(),
+      format!("ref=refs/heads/{branch}"),
+      "-f".to_string(),
+      format!("sha={main_sha}"),
+    ],
+    Some(&bot_actor.token),
+  )?;
+  gh_json_vec_with_token(
+    vec![
+      "api".to_string(),
+      format!("repos/{}/{}/contents/{}", args.owner, args.name, path),
+      "-X".to_string(),
+      "PUT".to_string(),
+      "-f".to_string(),
+      "message=test: add submit review fixture".to_string(),
+      "-f".to_string(),
+      format!(
+        "content={}",
+        base64_encode(format!("submit-review-{suffix}\n").as_bytes())
+      ),
+      "-f".to_string(),
+      format!("branch={branch}"),
+    ],
+    Some(&bot_actor.token),
+  )?;
+  let pull_request = gh_json_vec_with_token(
+    vec![
+      "api".to_string(),
+      format!("repos/{}/{}/pulls", args.owner, args.name),
+      "-X".to_string(),
+      "POST".to_string(),
+      "-f".to_string(),
+      format!("title=Smoke submit review {suffix}"),
+      "-f".to_string(),
+      format!("head={branch}"),
+      "-f".to_string(),
+      "base=main".to_string(),
+      "-f".to_string(),
+      "body=Temporary PR for Reviu submit review smoke.".to_string(),
+    ],
+    Some(&bot_actor.token),
+  )?;
+  let number = pull_request
+    .get("number")
+    .and_then(Value::as_u64)
+    .with_context(|| format!("created PR has no number: {}", pretty_json(&pull_request)))?;
+  git(&args.repo, ["fetch", "origin", &branch])?;
+  git(
+    &args.repo,
+    ["checkout", "-B", &branch, &format!("origin/{branch}")],
+  )?;
+  Ok(TempPullRequest {
+    number,
+    branch,
+    path,
+  })
+}
+
+fn base64_encode(bytes: &[u8]) -> String {
+  const TABLE: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+  let mut output = String::new();
+  for chunk in bytes.chunks(3) {
+    let first = chunk[0];
+    let second = *chunk.get(1).unwrap_or(&0);
+    let third = *chunk.get(2).unwrap_or(&0);
+    output.push(TABLE[(first >> 2) as usize] as char);
+    output.push(TABLE[(((first & 0b0000_0011) << 4) | (second >> 4)) as usize] as char);
+    if chunk.len() > 1 {
+      output.push(TABLE[(((second & 0b0000_1111) << 2) | (third >> 6)) as usize] as char);
+    } else {
+      output.push('=');
+    }
+    if chunk.len() > 2 {
+      output.push(TABLE[(third & 0b0011_1111) as usize] as char);
+    } else {
+      output.push('=');
+    }
+  }
+  output
+}
+
+fn cleanup_live_github_smoke(
+  args: &GithubSmokeArgs,
+  bot_actor: Option<&BotActor>,
+  bot_review_comment: Option<&BotReviewComment>,
+  temp_pull_request: Option<&TempPullRequest>,
+) -> Result<()> {
+  if let (Some(bot_actor), Some(comment)) = (bot_actor, bot_review_comment) {
+    delete_bot_review_comment(args, bot_actor, comment.id)?;
+  }
+  if let (Some(bot_actor), Some(pull_request)) = (bot_actor, temp_pull_request) {
+    close_temp_pull_request(args, bot_actor, pull_request.number)?;
+    delete_temp_branch(args, bot_actor, &pull_request.branch)?;
+    git(&args.repo, ["checkout", &args.pr_branch])?;
+    let _ = git(&args.repo, ["branch", "-D", &pull_request.branch]);
+  }
+  Ok(())
+}
+
+fn close_temp_pull_request(
+  args: &GithubSmokeArgs,
+  bot_actor: &BotActor,
+  number: u64,
+) -> Result<()> {
+  gh_json_vec_with_token(
+    vec![
+      "api".to_string(),
+      format!("repos/{}/{}/pulls/{number}", args.owner, args.name),
+      "-X".to_string(),
+      "PATCH".to_string(),
+      "-f".to_string(),
+      "state=closed".to_string(),
+    ],
+    Some(&bot_actor.token),
+  )?;
+  Ok(())
+}
+
+fn delete_temp_branch(args: &GithubSmokeArgs, bot_actor: &BotActor, branch: &str) -> Result<()> {
+  gh_json_vec_with_token(
+    vec![
+      "api".to_string(),
+      format!("repos/{}/{}/git/refs/heads/{branch}", args.owner, args.name),
+      "-X".to_string(),
+      "DELETE".to_string(),
+    ],
+    Some(&bot_actor.token),
+  )?;
+  Ok(())
+}
+
 fn delete_bot_review_comment(
   args: &GithubSmokeArgs,
   bot_actor: &BotActor,
+  comment_id: u64,
+) -> Result<()> {
+  delete_github_review_comment(args, Some(&bot_actor.token), comment_id)
+}
+
+fn delete_github_review_comment(
+  args: &GithubSmokeArgs,
+  token: Option<&str>,
   comment_id: u64,
 ) -> Result<()> {
   gh_json_vec_with_token(
@@ -512,9 +704,32 @@ fn delete_bot_review_comment(
       "-X".to_string(),
       "DELETE".to_string(),
     ],
-    Some(&bot_actor.token),
+    token,
   )?;
   Ok(())
+}
+
+fn wait_for_github_review_comment(
+  args: &GithubSmokeArgs,
+  comment_id: u64,
+  marker: &str,
+) -> Result<Value> {
+  let mut last = Value::Null;
+  wait_until(DEFAULT_TIMEOUT, || {
+    let endpoint = format!(
+      "repos/{}/{}/pulls/comments/{}",
+      args.owner, args.name, comment_id
+    );
+    match gh_json_vec_with_token(vec!["api".to_string(), endpoint], None) {
+      Ok(comment) => {
+        last = comment;
+        string_field(&last, "body").is_some_and(|body| body.contains(marker))
+      }
+      Err(_) => false,
+    }
+  })
+  .with_context(|| format!("last GitHub review comment:\n{}", pretty_json(&last)))?;
+  Ok(last)
 }
 
 fn gh_json<const N: usize>(args: [&str; N]) -> Result<Value> {
@@ -601,9 +816,9 @@ fn wait_for_pull_request_panel(
   Ok(panel)
 }
 
-fn run_pending_review_smoke(driver: &mut DriverProcess, path: &str) -> Result<()> {
+fn run_pending_review_discard_smoke(driver: &mut DriverProcess, path: &str) -> Result<()> {
   let marker = format!(
-    "reviu-github-smoke primary pending {}",
+    "reviu-github-smoke primary discard {}",
     std::time::SystemTime::now()
       .duration_since(std::time::UNIX_EPOCH)
       .map(|duration| duration.as_secs())
@@ -626,6 +841,64 @@ fn run_pending_review_smoke(driver: &mut DriverProcess, path: &str) -> Result<()
   driver.command(json!({ "cmd": "confirm_dialog" }))?;
   wait_for_pending_review_comment_removed(driver, &marker)?;
   println!("Review panel: pending PR review discarded");
+  Ok(())
+}
+
+fn run_submit_review_smoke(
+  driver: &mut DriverProcess,
+  args: &GithubSmokeArgs,
+  temp_pull_request: &TempPullRequest,
+) -> Result<()> {
+  driver.run_git_action(json!({
+    "action": "switch_branch",
+    "branch": { "name": temp_pull_request.branch, "kind": "local" },
+  }))?;
+  wait_for_branch_name(driver, &temp_pull_request.branch)?;
+  let pull_request = wait_for_branch_pull_request(driver)?;
+  if pull_request.get("number").and_then(Value::as_u64) != Some(temp_pull_request.number) {
+    bail!(
+      "expected temporary PR #{}, got:\n{}",
+      temp_pull_request.number,
+      pretty_json(&pull_request)
+    );
+  }
+  driver.command(json!({ "cmd": "show_pull_request" }))?;
+  wait_for_pull_request_panel(
+    driver,
+    &FixturePullRequest {
+      number: temp_pull_request.number,
+      head_oid: String::new(),
+      changed_files: vec![temp_pull_request.path.clone()],
+    },
+    None,
+  )?;
+  driver.command(json!({
+    "cmd": "open_pull_request_file",
+    "path": temp_pull_request.path,
+  }))?;
+  let marker = format!(
+    "reviu-github-smoke primary submit {}",
+    std::time::SystemTime::now()
+      .duration_since(std::time::UNIX_EPOCH)
+      .map(|duration| duration.as_secs())
+      .unwrap_or_default()
+  );
+  driver.command(json!({
+    "cmd": "create_pull_request_review_comment",
+    "path": temp_pull_request.path,
+    "line": 0,
+    "body": marker,
+  }))?;
+  let state = wait_for_pull_request_pending_comment(driver, &marker)?;
+  let comment_id = pending_pull_request_comment_id(&state, &marker)
+    .context("submitted smoke pending comment id")?;
+  driver.command(json!({
+    "cmd": "submit_pull_request_review",
+    "body": "Reviu smoke review submission",
+  }))?;
+  wait_for_github_review_comment(args, comment_id, &marker)?;
+  println!("Review submit: comment #{} published on GitHub", comment_id);
+  delete_github_review_comment(args, None, comment_id)?;
   Ok(())
 }
 
@@ -716,6 +989,10 @@ fn wait_for_branch_pull_request(driver: &mut DriverProcess) -> Result<Value> {
     .context("branch_pull_request state")
 }
 
+fn wait_for_branch_name(driver: &mut DriverProcess, branch_name: &str) -> Result<Value> {
+  wait_for_driver_state(driver, |state| current_branch(state) == Some(branch_name))
+}
+
 fn branch_pull_request_status(state: &Value) -> Option<&str> {
   state
     .get("branch_pull_request")
@@ -780,6 +1057,20 @@ fn pull_request_panel_has_pending_review_comment(panel: &Value, marker: &str) ->
           && string_field(comment, "body").is_some_and(|body| body.contains(marker))
       })
     })
+}
+
+fn pending_pull_request_comment_id(state: &Value, marker: &str) -> Option<u64> {
+  state
+    .get("pull_request_panel")?
+    .get("review_comment_details")?
+    .as_array()?
+    .iter()
+    .find(|comment| {
+      comment.get("is_pending").and_then(Value::as_bool) == Some(true)
+        && string_field(comment, "body").is_some_and(|body| body.contains(marker))
+    })?
+    .get("id")?
+    .as_u64()
 }
 
 fn review_panel_has_pull_request_comment(panel: &Value, marker: &str) -> bool {

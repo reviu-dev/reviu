@@ -70,7 +70,7 @@ use std::rc::Rc;
 use crate::api::{
   GithubPullRequest, GithubPullRequestChecksRollupState, GithubPullRequestChecksSummary,
   GithubPullRequestMergeMethod, GithubPullRequestMergeReadiness, GithubPullRequestReview,
-  GithubPullRequestReviewComment,
+  GithubPullRequestReviewComment, GithubPullRequestReviewEvent,
 };
 use crate::auth_state::AuthStateStore;
 use crate::github_navigation::{github_pull_request_url, open_compare_target};
@@ -1669,6 +1669,54 @@ impl DockPanel {
 
   /// Deleting the review pending on GitHub is confirmed first: nobody else has
   /// seen it, but it lives on their servers and its comments go with it.
+  #[cfg(any(test, feature = "test-support"))]
+  pub(crate) fn submit_pull_request_review_for_driver(
+    &mut self,
+    body: String,
+    cx: &mut Context<Self>,
+  ) -> Result<(), SharedString> {
+    let BranchPrState::Found(context, pull_request) = &self.branch_pr else {
+      return Err("No pull request is loaded.".into());
+    };
+    let review_id = pending_review_id(&self.pr_review_comments)
+      .ok_or_else(|| SharedString::from("No pending pull request review is loaded."))?;
+    let owner = context.owner.clone();
+    let repo = context.repo.clone();
+    let number = pull_request.number;
+    let api = WorkspaceApi::global(cx).api.clone();
+    let panel = cx.entity().downgrade();
+    let task = cx.spawn(async move |_, cx| {
+      let result = cx
+        .background_spawn(async move {
+          api.submit_pending_review(
+            &owner,
+            &repo,
+            number,
+            &review_id,
+            GithubPullRequestReviewEvent::Comment,
+            &body,
+          )
+        })
+        .await;
+      let _ = panel.update(cx, |panel, cx| match result {
+        Ok(review) => {
+          panel.note_submitted_review(review, cx);
+          panel.refresh_branch_pull_request(PullRequestRefresh::Now, cx);
+        }
+        Err(error) => {
+          let _ = cx.update_window(panel.window_handle, |_, window, cx| {
+            window.push_notification(
+              Notification::error(format!("Review submit failed: {error}")),
+              cx,
+            );
+          });
+        }
+      });
+    });
+    self._pr_review_comments_task = Some(task);
+    Ok(())
+  }
+
   pub(crate) fn discard_pull_request_review(
     &mut self,
     window: &mut Window,
