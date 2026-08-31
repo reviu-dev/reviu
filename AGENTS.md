@@ -157,8 +157,7 @@ Other entities can then register a callback to handle these events by doing `cx.
 ## Required workflow
 
 - Add tests for each feature/fix.
-- For desktop changes, run the same formatting and lint checks as CI before finishing:
-  - `cd desktop && cargo fmt -- --check`
-  - `cd desktop && cargo clippy --all-targets -- -D warnings`
+- For desktop changes, prefer `just verify` before finishing. It runs the CI-safe desktop checks and local Git smoke suite. If `just` is unavailable, run the equivalent commands from `Justfile` manually.
+- For GitHub integration or pull request surface changes, also run `just github-smoke` when the local backend and credentials are available. If it cannot run, say why in the final reply.
 - Blanket lint exceptions live in `desktop/Cargo.toml` under `[workspace.lints.clippy]`, so local and CI clippy agree. A one-off false positive gets `#[allow(...)]` at the site with a line saying why, never a new blanket allow.
 - **Changelog**: after each feature, add an entry to `CHANGELOG.md`. Use the next unreleased version section (create it if it doesn't exist). Follow the existing format: `## X.Y.Z` heading, then `### Feature Title` with a short paragraph. Keep changelog copy user-facing and outcome-focused. Do not describe internal implementation details unless they matter to users.
