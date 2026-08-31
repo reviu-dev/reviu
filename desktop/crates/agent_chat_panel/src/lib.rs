@@ -2194,6 +2194,13 @@ impl AgentChatPanel {
   }
 
   fn set_model(&mut self, model_id: ModelId, cx: &mut Context<Self>) {
+    if let Some((config_id, value_id)) =
+      model_config_selection_for_model(&self.config_options, &model_id)
+    {
+      self.set_config_option(config_id, value_id, cx);
+      return;
+    }
+
     let same_pending = self
       .pending_model_selection
       .as_ref()
@@ -2298,6 +2305,18 @@ impl AgentChatPanel {
     let Some(saved) = load_model_choice(&self.backend_kind) else {
       return;
     };
+    let saved_model_id = ModelId::new(saved.clone());
+    if let Some((config_id, value_id)) =
+      model_config_selection_for_model(&self.config_options, &saved_model_id)
+    {
+      if model_config_selector(&self.config_options)
+        .is_some_and(|selector| selector.current_value == value_id)
+      {
+        return;
+      }
+      self.set_config_option(config_id, value_id, cx);
+      return;
+    }
     if self
       .current_model_id
       .as_ref()
@@ -2316,6 +2335,8 @@ impl AgentChatPanel {
   }
 
   fn set_config_options(&mut self, options: Vec<SessionConfigOption>) {
+    let current_model_id =
+      model_config_selector(&options).map(|selector| ModelId::new(selector.current_value.0));
     for option in &options {
       let SessionConfigKind::Select(sel) = &option.kind else {
         continue;
@@ -2326,6 +2347,9 @@ impl AgentChatPanel {
         .or_insert_with(|| sel.current_value.clone());
     }
     self.config_options = options;
+    if let Some(model_id) = current_model_id {
+      self.current_model_id = Some(model_id);
+    }
   }
 
   fn set_config_option(
@@ -2337,12 +2361,19 @@ impl AgentChatPanel {
     let Some(session) = self.session.clone() else {
       return;
     };
+    let is_model_config = self.config_options.iter().any(|option| {
+      option.id == config_id && matches!(option.category, Some(SessionConfigOptionCategory::Model))
+    });
     for opt in self.config_options.iter_mut() {
       if opt.id == config_id
         && let SessionConfigKind::Select(sel) = &mut opt.kind
       {
         sel.current_value = value_id.clone();
       }
+    }
+    if is_model_config {
+      persist_model_choice(&self.backend_kind, value_id.0.as_ref());
+      self.current_model_id = Some(ModelId::new(value_id.0.clone()));
     }
     cx.notify();
     cx.spawn(async move |_, _| {

@@ -3299,6 +3299,24 @@ fn dedicated_config_selectors_find_model_mode_and_reasoning() {
 }
 
 #[test]
+fn model_config_selection_matches_model_values() {
+  let options = vec![select_option(
+    "model",
+    "Model",
+    "openai/gpt-5.6-sol",
+    &["openai/gpt-5.6-sol", "anthropic/claude-sonnet-4.5"],
+    Some(SessionConfigOptionCategory::Model),
+  )];
+
+  let (config_id, value_id) =
+    model_config_selection_for_model(&options, &ModelId::new("anthropic/claude-sonnet-4.5"))
+      .unwrap();
+
+  assert_eq!(config_id.0.as_ref(), "model");
+  assert_eq!(value_id.0.as_ref(), "anthropic/claude-sonnet-4.5");
+}
+
+#[test]
 fn access_config_selector_claims_native_permission_policies() {
   let options = vec![
     select_option(
@@ -3653,6 +3671,26 @@ async fn native_access_control_hides_reviu_auto_approve(cx: &mut gpui::TestAppCo
 
   assert!(cx.debug_bounds("agent-chat-access").is_some());
   assert!(cx.debug_bounds("agent-chat-auto-approve").is_none());
+}
+
+#[gpui::test]
+async fn model_config_options_drive_current_model_id(cx: &mut gpui::TestAppContext) {
+  let (panel, cx) = add_panel_window(cx);
+  panel.update(cx, |panel, _| {
+    panel.current_model_id = Some(ModelId::new("legacy-model"));
+    panel.set_config_options(vec![select_option(
+      "model",
+      "Model",
+      "openai/gpt-5.6-sol",
+      &["openai/gpt-5.6-sol", "anthropic/claude-sonnet-4.5"],
+      Some(SessionConfigOptionCategory::Model),
+    )]);
+
+    assert_eq!(
+      panel.current_model_id.as_ref().map(|id| id.0.as_ref()),
+      Some("openai/gpt-5.6-sol")
+    );
+  });
 }
 
 #[gpui::test]

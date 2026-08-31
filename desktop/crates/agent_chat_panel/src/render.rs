@@ -2699,18 +2699,20 @@ impl AgentChatPanel {
     let brand_icon = crate::backend_icon(&self.backend_kind);
     let can_switch = self.can_switch_model();
 
+    if let Some(selector) = model_config_selector(&self.config_options) {
+      return Some(self.render_config_control(
+        "agent-chat-model",
+        Some(brand_icon),
+        "Select a model",
+        selector,
+        !can_switch,
+        false,
+        cx,
+      ));
+    }
+
     if models.is_empty() {
-      return model_config_selector(&self.config_options).map(|selector| {
-        self.render_config_control(
-          "agent-chat-model",
-          Some(brand_icon),
-          "Select a model",
-          selector,
-          !can_switch || self.in_flight,
-          false,
-          cx,
-        )
-      });
+      return None;
     }
 
     let current_label: SharedString = current_id

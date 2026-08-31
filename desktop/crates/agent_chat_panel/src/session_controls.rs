@@ -62,6 +62,18 @@ pub(crate) fn model_config_selector(options: &[SessionConfigOption]) -> Option<C
     .and_then(config_selector_from_option)
 }
 
+pub(crate) fn model_config_selection_for_model(
+  options: &[SessionConfigOption],
+  model_id: &ModelId,
+) -> Option<(SessionConfigId, SessionConfigValueId)> {
+  let selector = model_config_selector(options)?;
+  selector
+    .values
+    .iter()
+    .find(|(value_id, _, _)| value_id.0.as_ref() == model_id.0.as_ref())
+    .map(|(value_id, _, _)| (selector.id.clone(), value_id.clone()))
+}
+
 pub(crate) fn mode_config_selector(options: &[SessionConfigOption]) -> Option<ConfigSelector> {
   options
     .iter()
