@@ -870,6 +870,9 @@ mod tests {
   async fn a_branch_switch_waits_for_dirty_file_choice(cx: &mut TestAppContext) {
     let repo = TempRepo::init("session-page-branch-switch-dirty");
     commit_text_file(&repo.path, Path::new("a.txt"), "v1\n", "initial");
+    let initial_branch = git::current_branch_status(&repo.path)
+      .expect("branch status")
+      .name;
     git::create_branch(&repo.path, "feature").expect("create branch");
 
     let (page, cx) = add_session_page_window(repo.path.clone(), cx);
@@ -904,7 +907,7 @@ mod tests {
       git::current_branch_status(&repo.path)
         .expect("branch status")
         .name,
-      "main"
+      initial_branch
     );
 
     let discard = cx

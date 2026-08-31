@@ -1015,6 +1015,18 @@ impl SessionPage {
     self.open_file_generation = self.open_file_generation.wrapping_add(1);
   }
 
+  #[cfg(test)]
+  pub(super) fn discard_unsaved_editor_for_test(
+    &mut self,
+    action: UnsavedEditorAction,
+    window: &mut Window,
+    cx: &mut Context<Self>,
+  ) {
+    window.close_dialog(cx);
+    self.discard_active_editor();
+    self.perform_unsaved_editor_action(action, window, cx);
+  }
+
   fn perform_unsaved_editor_action(
     &mut self,
     action: UnsavedEditorAction,

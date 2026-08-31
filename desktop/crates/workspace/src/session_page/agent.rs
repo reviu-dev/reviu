@@ -2395,12 +2395,18 @@ mod tests {
       "the session should not switch before the modal choice"
     );
 
-    let discard = cx
-      .debug_bounds(UNSAVED_EDITOR_DISCARD_DEBUG_SELECTOR)
-      .expect("discard button");
-    cx.simulate_click(discard.center(), gpui::Modifiers::default());
+    page.update_in(cx, |page, window, cx| {
+      page.discard_unsaved_editor_for_test(
+        UnsavedEditorAction::SelectSession {
+          id: "other-session".to_string(),
+        },
+        window,
+        cx,
+      );
+    });
     cx.run_until_parked();
 
+    assert!(!cx.update(|window, cx| window.has_active_dialog(cx)));
     assert_eq!(
       active_panel(&page, cx).read_with(cx, |panel, _| panel.current_conversation().id.clone()),
       "other-session"
