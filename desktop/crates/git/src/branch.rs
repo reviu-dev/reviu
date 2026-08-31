@@ -735,15 +735,14 @@ pub fn checkout_detached_target(repo_root: &Path, target: &str) -> Result<()> {
     .peel_to_commit()
     .with_context(|| format!("resolve commit for detached target {target:?}"))?;
 
-  repo
-    .set_head_detached(target_commit.id())
-    .context("set HEAD to detached")?;
-
   let mut checkout = CheckoutBuilder::new();
   checkout.safe();
   repo
-    .checkout_head(Some(&mut checkout))
-    .context("checkout detached HEAD")?;
+    .checkout_tree(target_commit.as_object(), Some(&mut checkout))
+    .context("checkout detached target")?;
+  repo
+    .set_head_detached(target_commit.id())
+    .context("set HEAD to detached")?;
   Ok(())
 }
 
@@ -1519,11 +1518,20 @@ mod tests {
   fn checkout_detached_target_switches_to_detached_head_for_commit_hash() {
     let repo = TempRepo::init("branch-checkout-detached");
     let oid = commit_text_file(&repo.path, Path::new("README.md"), "hello\n", "initial");
+    commit_text_file(&repo.path, Path::new("README.md"), "changed\n", "second");
 
     checkout_detached_target(&repo.path, &oid.to_string()).expect("checkout detached");
 
     let status = current_branch_status(&repo.path).expect("branch status");
     assert_eq!(status.name, "HEAD");
+    assert_eq!(
+      std::fs::read_to_string(repo.path.join("README.md")).expect("read file"),
+      "hello\n"
+    );
+    assert!(
+      list_repo_status(&repo.path).expect("status").is_empty(),
+      "detached checkout should leave the index and worktree clean"
+    );
   }
 
   #[test]

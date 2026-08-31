@@ -10,10 +10,20 @@ const DEFAULT_BACKEND: &str = "test";
 const DEFAULT_TIMEOUT: Duration = Duration::from_secs(10);
 const SCENARIOS: &[&str] = &[
   "stash_pop",
+  "stash_untracked_pop",
+  "apply_stash_conflict",
+  "pop_stash_conflict",
   "merge_conflict_abort",
+  "merge_conflict_commit",
   "rebase_conflict_continue",
+  "rebase_conflict_skip",
+  "rebase_conflict_abort",
   "force_push_dialog",
+  "stale_force_push_lease",
   "branch_switch_dirty_conflict",
+  "pull_dirty_conflict",
+  "detached_checkout",
+  "cherry_pick",
 ];
 
 #[derive(Debug, PartialEq, Eq)]
@@ -143,10 +153,20 @@ fn run_one(args: &GitSmokeArgs, run_root: &Path, scenario: &str) -> Result<()> {
   fs::create_dir_all(&scenario_dir)?;
   match scenario {
     "stash_pop" => scenario_stash_pop(args, &scenario_dir),
+    "stash_untracked_pop" => scenario_stash_untracked_pop(args, &scenario_dir),
+    "apply_stash_conflict" => scenario_apply_stash_conflict(args, &scenario_dir),
+    "pop_stash_conflict" => scenario_pop_stash_conflict(args, &scenario_dir),
     "merge_conflict_abort" => scenario_merge_conflict_abort(args, &scenario_dir),
+    "merge_conflict_commit" => scenario_merge_conflict_commit(args, &scenario_dir),
     "rebase_conflict_continue" => scenario_rebase_conflict_continue(args, &scenario_dir),
+    "rebase_conflict_skip" => scenario_rebase_conflict_skip(args, &scenario_dir),
+    "rebase_conflict_abort" => scenario_rebase_conflict_abort(args, &scenario_dir),
     "force_push_dialog" => scenario_force_push_dialog(args, &scenario_dir),
+    "stale_force_push_lease" => scenario_stale_force_push_lease(args, &scenario_dir),
     "branch_switch_dirty_conflict" => scenario_branch_switch_dirty_conflict(args, &scenario_dir),
+    "pull_dirty_conflict" => scenario_pull_dirty_conflict(args, &scenario_dir),
+    "detached_checkout" => scenario_detached_checkout(args, &scenario_dir),
+    "cherry_pick" => scenario_cherry_pick(args, &scenario_dir),
     _ => bail!("unknown scenario: {scenario}"),
   }
 }
@@ -183,6 +203,82 @@ fn scenario_stash_pop(args: &GitSmokeArgs, dir: &Path) -> Result<()> {
   driver.quit()
 }
 
+fn scenario_stash_untracked_pop(args: &GitSmokeArgs, dir: &Path) -> Result<()> {
+  let repo = init_repo(&dir.join("repo"))?;
+  commit_file(&repo, "a.txt", "v1\n", "initial")?;
+
+  let mut driver = DriverProcess::spawn(args.driver_bin.as_deref(), &args.backend, dir)?;
+  driver.open_repo(&repo)?;
+
+  fs::write(repo.join("untracked.txt"), "new\n")?;
+  wait_for_state(&mut driver, |state| status_count(state) == Some(1))?;
+
+  driver.run_git_action(serde_json::json!({
+    "action": "stash",
+    "include_untracked": true,
+    "message": "untracked"
+  }))?;
+  wait_for_state(&mut driver, |state| {
+    status_count(state) == Some(0) && stash_count(state) == Some(1)
+  })?;
+  if repo.join("untracked.txt").exists() {
+    bail!("untracked file stayed in the worktree after stash");
+  }
+
+  driver.run_git_action(serde_json::json!({
+    "action": "pop_stash",
+    "index": 0,
+    "name": "untracked"
+  }))?;
+  wait_for_state(&mut driver, |state| {
+    status_count(state) == Some(1) && stash_count(state) == Some(0)
+  })?;
+  expect_file(&repo, "untracked.txt", "new\n")?;
+  driver.quit()
+}
+
+fn scenario_apply_stash_conflict(args: &GitSmokeArgs, dir: &Path) -> Result<()> {
+  let repo = init_repo(&dir.join("repo"))?;
+  setup_stash_conflict(&repo)?;
+
+  let mut driver = DriverProcess::spawn(args.driver_bin.as_deref(), &args.backend, dir)?;
+  driver.open_repo(&repo)?;
+  driver.run_git_action(serde_json::json!({
+    "action": "apply_stash",
+    "index": 0,
+    "name": "stashed"
+  }))?;
+  wait_for_state(&mut driver, |state| {
+    has_status(state, "a.txt", "Conflicted") && stash_count(state) == Some(1)
+  })?;
+  let contents = fs::read_to_string(repo.join("a.txt"))?;
+  if !contents.contains("<<<<<<<") {
+    bail!("applying the stash did not leave conflict markers");
+  }
+  driver.quit()
+}
+
+fn scenario_pop_stash_conflict(args: &GitSmokeArgs, dir: &Path) -> Result<()> {
+  let repo = init_repo(&dir.join("repo"))?;
+  setup_stash_conflict(&repo)?;
+
+  let mut driver = DriverProcess::spawn(args.driver_bin.as_deref(), &args.backend, dir)?;
+  driver.open_repo(&repo)?;
+  driver.run_git_action(serde_json::json!({
+    "action": "pop_stash",
+    "index": 0,
+    "name": "stashed"
+  }))?;
+  wait_for_state(&mut driver, |state| {
+    has_status(state, "a.txt", "Conflicted") && stash_count(state) == Some(1)
+  })?;
+  let contents = fs::read_to_string(repo.join("a.txt"))?;
+  if !contents.contains("<<<<<<<") {
+    bail!("popping the stash did not leave conflict markers");
+  }
+  driver.quit()
+}
+
 fn scenario_merge_conflict_abort(args: &GitSmokeArgs, dir: &Path) -> Result<()> {
   let repo = init_repo(&dir.join("repo"))?;
   setup_merge_conflict(&repo)?;
@@ -204,6 +300,39 @@ fn scenario_merge_conflict_abort(args: &GitSmokeArgs, dir: &Path) -> Result<()> 
     bool_field(state, "merge_in_progress") == Some(false) && status_count(state) == Some(0)
   })?;
   expect_file(&repo, "a.txt", "main\n")?;
+  driver.quit()
+}
+
+fn scenario_merge_conflict_commit(args: &GitSmokeArgs, dir: &Path) -> Result<()> {
+  let repo = init_repo(&dir.join("repo"))?;
+  setup_merge_conflict(&repo)?;
+
+  let mut driver = DriverProcess::spawn(args.driver_bin.as_deref(), &args.backend, dir)?;
+  driver.open_repo(&repo)?;
+  driver.run_git_action(serde_json::json!({
+    "action": "merge_branch",
+    "branch": { "name": "feature", "kind": "local" }
+  }))?;
+  wait_for_state(&mut driver, |state| {
+    bool_field(state, "merge_in_progress") == Some(true) && has_status(state, "a.txt", "Conflicted")
+  })?;
+
+  fs::write(repo.join("a.txt"), "resolved\n")?;
+  driver.run_git_action(serde_json::json!({ "action": "stage_all" }))?;
+  confirm_active_dialog(&mut driver)?;
+  wait_for_state(&mut driver, |state| has_stage(state, "a.txt", "Staged"))?;
+  driver.run_git_action(serde_json::json!({
+    "action": "commit",
+    "message": "merge feature"
+  }))?;
+  wait_for_state(&mut driver, |state| {
+    bool_field(state, "merge_in_progress") == Some(false) && status_count(state) == Some(0)
+  })?;
+  assert_eq_str(
+    &git_output(&repo, ["log", "-1", "--pretty=%s"])?,
+    "merge feature",
+  )?;
+  expect_file(&repo, "a.txt", "resolved\n")?;
   driver.quit()
 }
 
@@ -231,6 +360,60 @@ fn scenario_rebase_conflict_continue(args: &GitSmokeArgs, dir: &Path) -> Result<
     bool_field(state, "rebase_in_progress") == Some(false) && status_count(state) == Some(0)
   })?;
   expect_file(&repo, "a.txt", "resolved\n")?;
+  assert_eq_str(
+    &git_output(&repo, ["rev-parse", "--abbrev-ref", "HEAD"])?,
+    "feature",
+  )?;
+  driver.quit()
+}
+
+fn scenario_rebase_conflict_skip(args: &GitSmokeArgs, dir: &Path) -> Result<()> {
+  let repo = init_repo(&dir.join("repo"))?;
+  setup_rebase_conflict(&repo)?;
+
+  let mut driver = DriverProcess::spawn(args.driver_bin.as_deref(), &args.backend, dir)?;
+  driver.open_repo(&repo)?;
+  driver.run_git_action(serde_json::json!({
+    "action": "rebase_branch",
+    "branch": { "name": "main", "kind": "local" }
+  }))?;
+  wait_for_state(&mut driver, |state| {
+    bool_field(state, "rebase_in_progress") == Some(true)
+      && has_status(state, "a.txt", "Conflicted")
+  })?;
+
+  driver.run_git_action(serde_json::json!({ "action": "skip_rebase" }))?;
+  wait_for_state(&mut driver, |state| {
+    bool_field(state, "rebase_in_progress") == Some(false) && status_count(state) == Some(0)
+  })?;
+  expect_file(&repo, "a.txt", "main\n")?;
+  assert_eq_str(
+    &git_output(&repo, ["rev-parse", "--abbrev-ref", "HEAD"])?,
+    "feature",
+  )?;
+  driver.quit()
+}
+
+fn scenario_rebase_conflict_abort(args: &GitSmokeArgs, dir: &Path) -> Result<()> {
+  let repo = init_repo(&dir.join("repo"))?;
+  setup_rebase_conflict(&repo)?;
+
+  let mut driver = DriverProcess::spawn(args.driver_bin.as_deref(), &args.backend, dir)?;
+  driver.open_repo(&repo)?;
+  driver.run_git_action(serde_json::json!({
+    "action": "rebase_branch",
+    "branch": { "name": "main", "kind": "local" }
+  }))?;
+  wait_for_state(&mut driver, |state| {
+    bool_field(state, "rebase_in_progress") == Some(true)
+      && has_status(state, "a.txt", "Conflicted")
+  })?;
+
+  driver.run_git_action(serde_json::json!({ "action": "abort_rebase" }))?;
+  wait_for_state(&mut driver, |state| {
+    bool_field(state, "rebase_in_progress") == Some(false) && status_count(state) == Some(0)
+  })?;
+  expect_file(&repo, "a.txt", "feature\n")?;
   assert_eq_str(
     &git_output(&repo, ["rev-parse", "--abbrev-ref", "HEAD"])?,
     "feature",
@@ -295,6 +478,69 @@ fn scenario_force_push_dialog(args: &GitSmokeArgs, dir: &Path) -> Result<()> {
   driver.quit()
 }
 
+fn scenario_stale_force_push_lease(args: &GitSmokeArgs, dir: &Path) -> Result<()> {
+  let repo = init_repo(&dir.join("repo"))?;
+  let remote = dir.join("remote.git");
+  git_no_dir(["init", "--bare", remote.to_str().context("remote path")?])?;
+  commit_file(&repo, "a.txt", "v1\n", "initial")?;
+  git(
+    &repo,
+    [
+      "remote",
+      "add",
+      "origin",
+      remote.to_str().context("remote path")?,
+    ],
+  )?;
+  git(&repo, ["push", "-u", "origin", "main"])?;
+
+  let other = dir.join("other");
+  git_no_dir([
+    "clone",
+    remote.to_str().context("remote path")?,
+    other.to_str().context("other path")?,
+  ])?;
+  git(&other, ["config", "user.name", "Reviu Smoke"])?;
+  git(&other, ["config", "user.email", "smoke@reviu.test"])?;
+  commit_file(&other, "a.txt", "remote v2\n", "remote v2")?;
+  git(&other, ["push"])?;
+
+  git(&repo, ["fetch"])?;
+  commit_file(&repo, "a.txt", "local rewrite\n", "local rewrite")?;
+  let local_head = git_output(&repo, ["rev-parse", "HEAD"])?;
+
+  commit_file(&other, "a.txt", "remote v3\n", "remote v3")?;
+  git(&other, ["push"])?;
+  let remote_after_stale = git_bare_output(&remote, ["rev-parse", "refs/heads/main"])?;
+
+  let mut driver = DriverProcess::spawn(args.driver_bin.as_deref(), &args.backend, dir)?;
+  driver.open_repo(&repo)?;
+  wait_for_state(&mut driver, |state| {
+    state
+      .get("palette_commands")
+      .and_then(serde_json::Value::as_array)
+      .is_some_and(|commands| commands.iter().any(|command| command == "force_push"))
+  })?;
+
+  driver.run_git_action(serde_json::json!({ "action": "force_push" }))?;
+  driver.command(serde_json::json!({ "cmd": "confirm_dialog" }))?;
+  wait_for_state(&mut driver, |state| {
+    bool_field(state, "command_in_flight") == Some(false)
+  })?;
+  assert_eq_str(
+    &git_bare_output(&remote, ["rev-parse", "refs/heads/main"])?,
+    &remote_after_stale,
+  )?;
+  if git_bare_output(&remote, ["rev-parse", "refs/heads/main"])? == local_head {
+    bail!("stale force push overwrote the remote");
+  }
+  let notifications = driver.command(serde_json::json!({ "cmd": "notification_stats" }))?;
+  if usize_field(&notifications, "count").unwrap_or(0) == 0 {
+    bail!("stale force push did not report a notification");
+  }
+  driver.quit()
+}
+
 fn scenario_branch_switch_dirty_conflict(args: &GitSmokeArgs, dir: &Path) -> Result<()> {
   let repo = init_repo(&dir.join("repo"))?;
   commit_file(&repo, "a.txt", "base\n", "initial")?;
@@ -322,6 +568,98 @@ fn scenario_branch_switch_dirty_conflict(args: &GitSmokeArgs, dir: &Path) -> Res
   if usize_field(&notifications, "count").unwrap_or(0) == 0 {
     bail!("dirty branch switch failure did not surface a notification");
   }
+  driver.quit()
+}
+
+fn scenario_pull_dirty_conflict(args: &GitSmokeArgs, dir: &Path) -> Result<()> {
+  let repo = init_repo(&dir.join("repo"))?;
+  let remote = dir.join("remote.git");
+  git_no_dir(["init", "--bare", remote.to_str().context("remote path")?])?;
+  commit_file(&repo, "a.txt", "v1\n", "initial")?;
+  git(
+    &repo,
+    [
+      "remote",
+      "add",
+      "origin",
+      remote.to_str().context("remote path")?,
+    ],
+  )?;
+  git(&repo, ["push", "-u", "origin", "main"])?;
+
+  let other = dir.join("other");
+  git_no_dir([
+    "clone",
+    remote.to_str().context("remote path")?,
+    other.to_str().context("other path")?,
+  ])?;
+  git(&other, ["config", "user.name", "Reviu Smoke"])?;
+  git(&other, ["config", "user.email", "smoke@reviu.test"])?;
+  commit_file(&other, "a.txt", "remote\n", "remote")?;
+  git(&other, ["push"])?;
+  fs::write(repo.join("a.txt"), "dirty\n")?;
+
+  let mut driver = DriverProcess::spawn(args.driver_bin.as_deref(), &args.backend, dir)?;
+  driver.open_repo(&repo)?;
+  wait_for_state(&mut driver, |state| status_count(state) == Some(1))?;
+  driver.run_git_action(serde_json::json!({ "action": "pull" }))?;
+  wait_for_state(&mut driver, |state| {
+    bool_field(state, "command_in_flight") == Some(false)
+  })?;
+
+  assert_eq_str(
+    &git_output(&repo, ["rev-parse", "--abbrev-ref", "HEAD"])?,
+    "main",
+  )?;
+  expect_file(&repo, "a.txt", "dirty\n")?;
+  let notifications = driver.command(serde_json::json!({ "cmd": "notification_stats" }))?;
+  if usize_field(&notifications, "count").unwrap_or(0) == 0 {
+    bail!("dirty pull failure did not report a notification");
+  }
+  driver.quit()
+}
+
+fn scenario_detached_checkout(args: &GitSmokeArgs, dir: &Path) -> Result<()> {
+  let repo = init_repo(&dir.join("repo"))?;
+  commit_file(&repo, "a.txt", "v1\n", "initial")?;
+  let first = git_output(&repo, ["rev-parse", "HEAD"])?;
+  commit_file(&repo, "a.txt", "v2\n", "second")?;
+
+  let mut driver = DriverProcess::spawn(args.driver_bin.as_deref(), &args.backend, dir)?;
+  driver.open_repo(&repo)?;
+  driver.run_git_action(serde_json::json!({
+    "action": "checkout_detached",
+    "target": first
+  }))?;
+  wait_for_state(&mut driver, |state| {
+    state
+      .get("branch_status")
+      .and_then(|status| status.get("name"))
+      .and_then(serde_json::Value::as_str)
+      == Some("HEAD")
+      && status_count(state) == Some(0)
+  })?;
+  expect_file(&repo, "a.txt", "v1\n")?;
+  driver.quit()
+}
+
+fn scenario_cherry_pick(args: &GitSmokeArgs, dir: &Path) -> Result<()> {
+  let repo = init_repo(&dir.join("repo"))?;
+  commit_file(&repo, "a.txt", "v1\n", "initial")?;
+  git(&repo, ["switch", "-c", "feature"])?;
+  commit_file(&repo, "b.txt", "picked\n", "pick me")?;
+  let picked = git_output(&repo, ["rev-parse", "HEAD"])?;
+  git(&repo, ["switch", "main"])?;
+
+  let mut driver = DriverProcess::spawn(args.driver_bin.as_deref(), &args.backend, dir)?;
+  driver.open_repo(&repo)?;
+  driver.run_git_action(serde_json::json!({
+    "action": "cherry_pick",
+    "commit_hashes": [picked]
+  }))?;
+  wait_for_state(&mut driver, |state| status_count(state) == Some(0))?;
+  expect_file(&repo, "b.txt", "picked\n")?;
+  assert_eq_str(&git_output(&repo, ["log", "-1", "--pretty=%s"])?, "pick me")?;
   driver.quit()
 }
 
@@ -478,6 +816,14 @@ fn workspace_root() -> PathBuf {
     .unwrap_or_else(|| PathBuf::from("."))
 }
 
+fn confirm_active_dialog(driver: &mut DriverProcess) -> Result<()> {
+  let dialog = driver.command(serde_json::json!({ "cmd": "dialog_state" }))?;
+  if bool_field(&dialog, "active") == Some(true) {
+    driver.command(serde_json::json!({ "cmd": "confirm_dialog" }))?;
+  }
+  Ok(())
+}
+
 fn wait_for_state(
   driver: &mut DriverProcess,
   predicate: impl Fn(&serde_json::Value) -> bool,
@@ -537,6 +883,14 @@ fn setup_rebase_conflict(repo: &Path) -> Result<()> {
   git(repo, ["switch", "main"])?;
   commit_file(repo, "a.txt", "main\n", "main work")?;
   git(repo, ["switch", "feature"])?;
+  Ok(())
+}
+
+fn setup_stash_conflict(repo: &Path) -> Result<()> {
+  commit_file(repo, "a.txt", "base\n", "initial")?;
+  fs::write(repo.join("a.txt"), "stashed\n")?;
+  git(repo, ["stash", "push", "-m", "stashed"])?;
+  commit_file(repo, "a.txt", "main\n", "main work")?;
   Ok(())
 }
 
@@ -635,6 +989,17 @@ fn has_status(state: &serde_json::Value, path: &str, status: &str) -> bool {
     .is_some_and(|entries| {
       entries.iter().any(|entry| {
         string_field(entry, "path") == Some(path) && string_field(entry, "status") == Some(status)
+      })
+    })
+}
+
+fn has_stage(state: &serde_json::Value, path: &str, stage: &str) -> bool {
+  state
+    .get("status_entries")
+    .and_then(serde_json::Value::as_array)
+    .is_some_and(|entries| {
+      entries.iter().any(|entry| {
+        string_field(entry, "path") == Some(path) && string_field(entry, "stage") == Some(stage)
       })
     })
 }
