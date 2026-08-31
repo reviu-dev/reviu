@@ -157,8 +157,8 @@ impl GitConfigPage {
       .is_some_and(|editor| editor.read(cx).is_dirty)
   }
 
-  fn close_dialog_after_alert(window: &mut Window, cx: &mut App) {
-    window.close_dialog(cx);
+  fn close_git_config_dialogs(window: &mut Window, cx: &mut App) {
+    window.close_all_dialogs(cx);
   }
 
   fn request_close(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -210,7 +210,7 @@ impl GitConfigPage {
                   discard_view.update(cx, |view, _| {
                     view.editor = None;
                   });
-                  Self::close_dialog_after_alert(window, cx);
+                  Self::close_git_config_dialogs(window, cx);
                 }),
             )
             .child(
@@ -235,7 +235,7 @@ impl GitConfigPage {
                             save_view.update(cx, |view, _| {
                               view.editor = None;
                             });
-                            Self::close_dialog_after_alert(window, cx);
+                            Self::close_git_config_dialogs(window, cx);
                           });
                         })),
                       );
@@ -546,6 +546,7 @@ mod tests {
     cx.run_until_parked();
 
     assert!(!cx.update(|window, cx| window.has_active_dialog(cx)));
+    assert!(view.read_with(cx, |view, _| view.editor.is_none()));
     assert_eq!(
       std::fs::read_to_string(&path).expect("read git config"),
       "original\n"
