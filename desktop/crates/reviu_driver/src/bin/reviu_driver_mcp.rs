@@ -470,6 +470,16 @@ fn command_for_tool(tool_name: &str, arguments: Value) -> Result<Value> {
     "cancel_dialog" => json!({ "cmd": "cancel_dialog" }),
     "notification_stats" => json!({ "cmd": "notification_stats" }),
     "notification_log" => json!({ "cmd": "notification_log" }),
+    "refresh_github_notifications" => json!({ "cmd": "refresh_github_notifications" }),
+    "github_notifications" => json!({ "cmd": "github_notifications" }),
+    "open_github_notification" => json!({
+      "cmd": "open_github_notification",
+      "id": required_string(&arguments, "id")?,
+    }),
+    "mark_github_notification_done" => json!({
+      "cmd": "mark_github_notification_done",
+      "id": required_string(&arguments, "id")?,
+    }),
     "auth_state" => json!({ "cmd": "auth_state" }),
     "set_auth_token" => json!({
       "cmd": "set_auth_token",
@@ -719,6 +729,34 @@ fn tools() -> Vec<Value> {
       empty_schema(),
     ),
     tool(
+      "refresh_github_notifications",
+      "Fetch GitHub inbox notifications through the Reviu API.",
+      empty_schema(),
+    ),
+    tool(
+      "github_notifications",
+      "Return GitHub inbox notification state.",
+      empty_schema(),
+    ),
+    tool(
+      "open_github_notification",
+      "Open a GitHub inbox notification by thread id.",
+      object_schema(vec![string_property(
+        "id",
+        "GitHub notification thread id.",
+      )])
+      .required(["id"]),
+    ),
+    tool(
+      "mark_github_notification_done",
+      "Mark a GitHub inbox notification done by thread id.",
+      object_schema(vec![string_property(
+        "id",
+        "GitHub notification thread id.",
+      )])
+      .required(["id"]),
+    ),
+    tool(
       "auth_state",
       "Return Reviu auth state for diagnostics.",
       empty_schema(),
@@ -899,6 +937,10 @@ mod tests {
       "screenshot",
       "git_state",
       "notification_log",
+      "refresh_github_notifications",
+      "github_notifications",
+      "open_github_notification",
+      "mark_github_notification_done",
       "show_pull_request",
       "show_review",
       "create_pull_request_review_comment",
@@ -948,6 +990,25 @@ mod tests {
       )
       .expect("submit pull request review command"),
       json!({ "cmd": "submit_pull_request_review", "body": "looks good" })
+    );
+    assert_eq!(
+      command_for_tool("github_notifications", json!({})).expect("github notifications command"),
+      json!({ "cmd": "github_notifications" })
+    );
+    assert_eq!(
+      command_for_tool("refresh_github_notifications", json!({}))
+        .expect("refresh github notifications command"),
+      json!({ "cmd": "refresh_github_notifications" })
+    );
+    assert_eq!(
+      command_for_tool("open_github_notification", json!({ "id": "thread-1" }))
+        .expect("open github notification command"),
+      json!({ "cmd": "open_github_notification", "id": "thread-1" })
+    );
+    assert_eq!(
+      command_for_tool("mark_github_notification_done", json!({ "id": "thread-1" }))
+        .expect("mark github notification done command"),
+      json!({ "cmd": "mark_github_notification_done", "id": "thread-1" })
     );
     assert_eq!(
       command_for_tool("show_pull_request", json!({})).expect("show pull request"),

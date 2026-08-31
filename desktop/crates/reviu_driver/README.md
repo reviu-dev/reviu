@@ -57,6 +57,10 @@ Common commands:
 {"cmd":"show_review"}
 {"cmd":"submit_pull_request_review","body":"looks good"}
 {"cmd":"discard_pull_request_review"}
+{"cmd":"refresh_github_notifications"}
+{"cmd":"github_notifications"}
+{"cmd":"open_github_notification","id":"thread-id"}
+{"cmd":"mark_github_notification_done","id":"thread-id"}
 {"cmd":"dialog_state"}
 {"cmd":"confirm_dialog"}
 {"cmd":"notification_log"}
@@ -106,8 +110,8 @@ Core tools:
 
 - lifecycle: `start`, `restart`, `status`, `quit`
 - UI input: `bounds`, `click`, `type`, `key`, `clock`, `wait`, `park`, `scroll`
-- app state: `path_prompt`, `open_file`, `open_pull_request_file`, `show_changes`, `show_pull_request`, `show_review`, `hide_dock`, `agent_stats`, `editor_stats`, `auth_state`
-- Git/debug: `git_state`, `dialog_state`, `confirm_dialog`, `cancel_dialog`, `notification_stats`, `notification_log`, `run_git_action`, `create_pull_request_review_comment`, `submit_pull_request_review`, `discard_pull_request_review`
+- app state: `path_prompt`, `open_file`, `open_pull_request_file`, `show_changes`, `show_pull_request`, `show_review`, `hide_dock`, `agent_stats`, `editor_stats`, `auth_state`, `github_notifications`
+- Git/debug: `git_state`, `dialog_state`, `confirm_dialog`, `cancel_dialog`, `notification_stats`, `notification_log`, `refresh_github_notifications`, `open_github_notification`, `mark_github_notification_done`, `run_git_action`, `create_pull_request_review_comment`, `submit_pull_request_review`, `discard_pull_request_review`
 - visual: `screenshot` with `--backend visual` on macOS
 
 Like the raw driver, the MCP wrapper talks to real repositories. Point it at temporary repos unless you deliberately want to inspect a live checkout.
@@ -199,7 +203,7 @@ REVIU_PROFILE=dev API_BASE_URL=http://localhost:3001 REVIU_GITHUB_SMOKE=1 \
   --require-bot
 ```
 
-Current scope is intentionally safe for the fixture repo. The multi-actor path creates one temporary review comment with the bot account and deletes it before exiting.
+Current scope is intentionally safe for the fixture repo. The multi-actor path creates temporary bot comments and a temporary submit-review PR, then deletes or closes them before exiting.
 
 - verifies `gh` can read the private GitHub fixture repo
 - verifies the stable fixture PR exists
@@ -210,6 +214,7 @@ Current scope is intentionally safe for the fixture repo. The multi-actor path c
 - verifies Reviu resolves the current branch to the stable fixture PR
 - opens the Pull Request dock tab and verifies the changed files match the fixture PR
 - when bot credentials are available, creates a temporary review comment as `joris-gallot-bot` and verifies Reviu sees it as the primary user
+- when bot credentials are available, creates a temporary PR conversation comment, verifies it appears in the GitHub inbox, opens it, verifies it navigates to the PR, then marks the notification done
 - creates a pending PR review comment as the primary Reviu user, verifies the Review panel lists it, discards the pending review, and verifies it disappears
 - creates another pending PR review comment, submits it as a review, verifies GitHub published the review comment, then deletes that comment
 - fetches and verifies the fixture PR branch is available locally

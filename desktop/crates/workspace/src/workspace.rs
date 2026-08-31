@@ -99,6 +99,33 @@ fn update_button_tooltip(state: Option<&AppUpdateState>) -> String {
   }
 }
 
+#[cfg(any(test, feature = "test-support"))]
+fn github_notification_json(notification: crate::api::GithubNotification) -> serde_json::Value {
+  serde_json::json!({
+    "id": notification.id,
+    "repository": {
+      "name": notification.repository.name,
+      "full_name": notification.repository.full_name,
+      "owner": notification.repository.owner.map(|owner| serde_json::json!({
+        "login": owner.login,
+        "avatar_url": owner.avatar_url,
+      })),
+    },
+    "subject": {
+      "title": notification.subject.title,
+      "type": notification.subject.subject_type,
+      "url": notification.subject.url,
+      "latest_comment_url": notification.subject.latest_comment_url,
+    },
+    "reason": notification.reason,
+    "unread": notification.unread,
+    "updated_at": notification.updated_at,
+    "last_read_at": notification.last_read_at,
+    "url": notification.url,
+    "subscription_url": notification.subscription_url,
+  })
+}
+
 pub fn build_app_menus() -> Vec<Menu> {
   build_app_menus_with_subscription(false)
 }
@@ -361,6 +388,65 @@ impl WorkspaceView {
     self
       .session_page
       .read_with(cx, |page, _| page.notification_log_for_driver())
+  }
+
+  #[cfg(any(test, feature = "test-support"))]
+  #[doc(hidden)]
+  pub fn github_notifications_for_driver(&self, cx: &App) -> serde_json::Value {
+    let notifications = GithubNotificationsStore::list(cx);
+    serde_json::json!({
+      "unread_count": GithubNotificationsStore::unread_count(cx),
+      "notifications": notifications.into_iter().map(github_notification_json).collect::<Vec<_>>(),
+    })
+  }
+
+  #[cfg(any(test, feature = "test-support"))]
+  #[doc(hidden)]
+  pub fn refresh_github_notifications_for_driver(
+    &self,
+    cx: &mut App,
+  ) -> Result<(), gpui::SharedString> {
+    let notifications = WorkspaceApi::global(cx)
+      .api
+      .fetch_github_notifications()
+      .map_err(|error| format!("Fetching GitHub notifications failed: {error}"))?;
+    GithubNotificationsStore::set(cx, notifications);
+    cx.refresh_windows();
+    Ok(())
+  }
+
+  #[cfg(any(test, feature = "test-support"))]
+  #[doc(hidden)]
+  pub fn open_github_notification_for_driver(
+    &self,
+    id: String,
+    cx: &mut App,
+  ) -> Result<(), gpui::SharedString> {
+    let notification = GithubNotificationsStore::list(cx)
+      .into_iter()
+      .find(|notification| notification.id == id)
+      .ok_or_else(|| format!("GitHub notification not found: {id}"))?;
+    github_notifications::open_notification(&notification, cx);
+    cx.refresh_windows();
+    Ok(())
+  }
+
+  #[cfg(any(test, feature = "test-support"))]
+  #[doc(hidden)]
+  pub fn mark_github_notification_done_for_driver(
+    &self,
+    id: String,
+    cx: &mut App,
+  ) -> Result<(), gpui::SharedString> {
+    let exists = GithubNotificationsStore::list(cx)
+      .iter()
+      .any(|notification| notification.id == id);
+    if !exists {
+      return Err(format!("GitHub notification not found: {id}").into());
+    }
+    github_notifications::mark_notification_done(id, cx);
+    cx.refresh_windows();
+    Ok(())
   }
 
   #[cfg(any(test, feature = "test-support"))]

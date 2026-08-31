@@ -39,6 +39,10 @@ struct BotReviewComment {
   marker: String,
 }
 
+struct BotIssueComment {
+  id: u64,
+}
+
 struct TempPullRequest {
   number: u64,
   branch: String,
@@ -184,25 +188,46 @@ fn run_live_github_smoke(args: &GithubSmokeArgs, run_dir: &std::path::Path) -> R
   ensure_gh_can_read_repo(args)?;
   let fixture_pr = ensure_open_fixture_pr(args)?;
   let bot_actor = resolve_bot_actor(args)?;
-  let (bot_review_comment, temp_pull_request) = match &bot_actor {
-    Some(bot_actor) => {
-      let comment = create_bot_review_comment(args, &fixture_pr, bot_actor)?;
+  let mut bot_review_comment = None;
+  let mut bot_issue_comment = None;
+  let mut temp_pull_request = None;
+  if let Some(bot_actor) = &bot_actor {
+    let setup_result = (|| -> Result<()> {
+      let review_comment = create_bot_review_comment(args, &fixture_pr, bot_actor)?;
       println!(
         "bot actor: {} created PR review comment #{}",
-        bot_actor.login, comment.id
+        bot_actor.login, review_comment.id
       );
+      bot_review_comment = Some(review_comment);
+
+      let issue_comment = create_bot_issue_comment(args, &fixture_pr, bot_actor)?;
+      println!(
+        "bot actor: {} created PR conversation comment #{}",
+        bot_actor.login, issue_comment.id
+      );
+      bot_issue_comment = Some(issue_comment);
+
       let pull_request = create_temp_submit_pull_request(args, bot_actor)?;
       println!(
         "bot actor: created submit-review fixture PR #{}",
         pull_request.number
       );
-      (Some(comment), Some(pull_request))
+      temp_pull_request = Some(pull_request);
+      Ok(())
+    })();
+    if let Err(error) = setup_result {
+      let _ = cleanup_live_github_smoke(
+        args,
+        Some(bot_actor),
+        bot_review_comment.as_ref(),
+        bot_issue_comment.as_ref(),
+        temp_pull_request.as_ref(),
+      );
+      return Err(error);
     }
-    None => {
-      println!("bot actor: skipped; no bot credentials available");
-      (None, None)
-    }
-  };
+  } else {
+    println!("bot actor: skipped; no bot credentials available");
+  }
 
   git(&args.repo, ["checkout", &args.pr_branch])?;
   let result = run_live_github_driver_smoke(
@@ -210,12 +235,14 @@ fn run_live_github_smoke(args: &GithubSmokeArgs, run_dir: &std::path::Path) -> R
     run_dir,
     &fixture_pr,
     bot_review_comment.as_ref(),
+    bot_issue_comment.as_ref(),
     temp_pull_request.as_ref(),
   );
   let cleanup = cleanup_live_github_smoke(
     args,
     bot_actor.as_ref(),
     bot_review_comment.as_ref(),
+    bot_issue_comment.as_ref(),
     temp_pull_request.as_ref(),
   );
   if result.is_ok() {
@@ -231,6 +258,7 @@ fn run_live_github_driver_smoke(
   run_dir: &std::path::Path,
   fixture_pr: &FixturePullRequest,
   bot_review_comment: Option<&BotReviewComment>,
+  bot_issue_comment: Option<&BotIssueComment>,
   temp_pull_request: Option<&TempPullRequest>,
 ) -> Result<()> {
   let mut driver = DriverProcess::spawn(args.driver_bin.as_deref(), &args.backend, run_dir, false)?;
@@ -320,6 +348,11 @@ fn run_live_github_driver_smoke(
   if let Some(comment) = bot_review_comment {
     wait_for_editor_review_comment(&mut driver, open_file, comment.id)?;
     println!("PR diff: review comment #{} visible", comment.id);
+  }
+  if let Some(comment) = bot_issue_comment {
+    run_github_notification_smoke(&mut driver, fixture_pr, comment)?;
+  } else {
+    println!("GitHub inbox: skipped; no bot-created notification fixture available");
   }
 
   run_pending_review_discard_smoke(&mut driver, open_file)?;
@@ -522,6 +555,41 @@ fn create_bot_review_comment(
   Ok(BotReviewComment { id, marker })
 }
 
+fn create_bot_issue_comment(
+  args: &GithubSmokeArgs,
+  fixture_pr: &FixturePullRequest,
+  bot_actor: &BotActor,
+) -> Result<BotIssueComment> {
+  let marker = format!(
+    "reviu-github-smoke bot inbox {}",
+    std::time::SystemTime::now()
+      .duration_since(std::time::UNIX_EPOCH)
+      .map(|duration| duration.as_secs())
+      .unwrap_or_default()
+  );
+  let comment = gh_json_vec_with_token(
+    vec![
+      "api".to_string(),
+      format!(
+        "repos/{}/{}/issues/{}/comments",
+        args.owner, args.name, fixture_pr.number
+      ),
+      "-X".to_string(),
+      "POST".to_string(),
+      "-f".to_string(),
+      format!("body={marker}\n\nTemporary inbox navigation smoke comment."),
+    ],
+    Some(&bot_actor.token),
+  )?;
+  let id = comment.get("id").and_then(Value::as_u64).with_context(|| {
+    format!(
+      "created bot issue comment has no id: {}",
+      pretty_json(&comment)
+    )
+  })?;
+  Ok(BotIssueComment { id })
+}
+
 fn create_temp_submit_pull_request(
   args: &GithubSmokeArgs,
   bot_actor: &BotActor,
@@ -635,10 +703,14 @@ fn cleanup_live_github_smoke(
   args: &GithubSmokeArgs,
   bot_actor: Option<&BotActor>,
   bot_review_comment: Option<&BotReviewComment>,
+  bot_issue_comment: Option<&BotIssueComment>,
   temp_pull_request: Option<&TempPullRequest>,
 ) -> Result<()> {
   if let (Some(bot_actor), Some(comment)) = (bot_actor, bot_review_comment) {
     delete_bot_review_comment(args, bot_actor, comment.id)?;
+  }
+  if let (Some(bot_actor), Some(comment)) = (bot_actor, bot_issue_comment) {
+    delete_bot_issue_comment(args, bot_actor, comment.id)?;
   }
   if let (Some(bot_actor), Some(pull_request)) = (bot_actor, temp_pull_request) {
     close_temp_pull_request(args, bot_actor, pull_request.number)?;
@@ -687,6 +759,26 @@ fn delete_bot_review_comment(
   comment_id: u64,
 ) -> Result<()> {
   delete_github_review_comment(args, Some(&bot_actor.token), comment_id)
+}
+
+fn delete_bot_issue_comment(
+  args: &GithubSmokeArgs,
+  bot_actor: &BotActor,
+  comment_id: u64,
+) -> Result<()> {
+  gh_json_vec_with_token(
+    vec![
+      "api".to_string(),
+      format!(
+        "repos/{}/{}/issues/comments/{}",
+        args.owner, args.name, comment_id
+      ),
+      "-X".to_string(),
+      "DELETE".to_string(),
+    ],
+    Some(&bot_actor.token),
+  )?;
+  Ok(())
 }
 
 fn delete_github_review_comment(
@@ -771,6 +863,101 @@ fn gh_output_json(output: std::process::Output) -> Result<Value> {
     return Ok(Value::Null);
   }
   serde_json::from_slice(&output.stdout).context("parse gh JSON")
+}
+
+fn run_github_notification_smoke(
+  driver: &mut DriverProcess,
+  fixture_pr: &FixturePullRequest,
+  comment: &BotIssueComment,
+) -> Result<()> {
+  let notification = wait_for_github_notification(driver, comment.id)?;
+  let notification_id = string_field(&notification, "id")
+    .context("github notification id")?
+    .to_string();
+  println!("GitHub inbox: bot comment visible as thread {notification_id}");
+
+  driver.command(json!({ "cmd": "show_changes" }))?;
+  driver.command(json!({
+    "cmd": "open_github_notification",
+    "id": notification_id,
+  }))?;
+  wait_for_pull_request_panel(driver, fixture_pr, None)?;
+  println!(
+    "GitHub inbox: notification opened PR #{}",
+    fixture_pr.number
+  );
+
+  let notifications = driver.command(json!({ "cmd": "github_notifications" }))?;
+  if github_notification_for_comment(&notifications, comment.id)
+    .and_then(|notification| notification.get("unread").and_then(Value::as_bool))
+    != Some(false)
+  {
+    bail!(
+      "opened notification was not marked read locally:\n{}",
+      pretty_json(&notifications)
+    );
+  }
+  driver.command(json!({
+    "cmd": "mark_github_notification_done",
+    "id": string_field(&notification, "id").context("github notification id")?,
+  }))?;
+  wait_for_github_notification_removed(driver, comment.id)?;
+  println!("GitHub inbox: smoke notification marked done");
+  Ok(())
+}
+
+fn wait_for_github_notification(driver: &mut DriverProcess, comment_id: u64) -> Result<Value> {
+  let mut last = Value::Null;
+  wait_until(Duration::from_secs(45), || {
+    let _ = driver.command(json!({ "cmd": "refresh_github_notifications" }));
+    match driver.command(json!({ "cmd": "github_notifications" })) {
+      Ok(state) => {
+        last = state;
+        github_notification_for_comment(&last, comment_id).is_some()
+      }
+      Err(_) => false,
+    }
+  })
+  .with_context(|| format!("last github_notifications:\n{}", pretty_json(&last)))?;
+  github_notification_for_comment(&last, comment_id).with_context(|| {
+    format!(
+      "GitHub notification for issue comment #{comment_id} not found:\n{}",
+      pretty_json(&last)
+    )
+  })
+}
+
+fn wait_for_github_notification_removed(
+  driver: &mut DriverProcess,
+  comment_id: u64,
+) -> Result<Value> {
+  let mut last = Value::Null;
+  wait_until(DEFAULT_TIMEOUT, || {
+    match driver.command(json!({ "cmd": "github_notifications" })) {
+      Ok(state) => {
+        last = state;
+        github_notification_for_comment(&last, comment_id).is_none()
+      }
+      Err(_) => false,
+    }
+  })
+  .with_context(|| format!("last github_notifications:\n{}", pretty_json(&last)))?;
+  Ok(last)
+}
+
+fn github_notification_for_comment(state: &Value, comment_id: u64) -> Option<Value> {
+  let suffix = format!("/issues/comments/{comment_id}");
+  state
+    .get("notifications")?
+    .as_array()?
+    .iter()
+    .find(|notification| {
+      notification
+        .get("subject")
+        .and_then(|subject| string_field(subject, "latest_comment_url"))
+        .is_some_and(|url| url.ends_with(&suffix))
+    })
+    .cloned()
 }
 
 fn wait_for_auth_state(driver: &mut DriverProcess) -> Result<Value> {

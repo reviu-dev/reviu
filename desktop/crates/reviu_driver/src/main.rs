@@ -9,7 +9,7 @@
 //! on test or point on both), `type`, `key`, `clock` (virtual ms), `wait` (real
 //! ms), `park`, `path_prompt`, `open_file`, `scroll`, `screenshot`
 //! (visual backend only), `show_changes`, `hide_dock`, `submit_prompt`,
-//! `agent_stats`, `editor_stats`, `notification_log`, `quit`.
+//! `agent_stats`, `editor_stats`, `notification_log`, `github_notifications`, `quit`.
 //!
 //! Usage: `cargo run -p reviu_driver -- --backend test` then e.g.
 //! `{"cmd":"bounds","selector":"session-repo-context"}`
@@ -211,6 +211,18 @@ enum Command {
   NotificationStats,
   /// Expose notifications recorded through driver-supported flows.
   NotificationLog,
+  /// Refresh GitHub inbox notifications through the Reviu API.
+  RefreshGithubNotifications,
+  /// Expose GitHub inbox notification state.
+  GithubNotifications,
+  /// Open a GitHub inbox notification by thread id.
+  OpenGithubNotification {
+    id: String,
+  },
+  /// Mark a GitHub inbox notification done by thread id.
+  MarkGithubNotificationDone {
+    id: String,
+  },
   /// Expose Reviu auth state for driver diagnostics.
   AuthState,
   /// Set an in-memory Reviu API bearer token, then refresh auth state.
@@ -537,6 +549,46 @@ fn handle_test_command(
       let log = view.read_with(cx, |view, cx| view.notification_log_for_driver(cx));
       respond(ok(log));
     }
+    Command::RefreshGithubNotifications => {
+      let result = cx.update(|_, cx| {
+        view.update(cx, |view, cx| {
+          view.refresh_github_notifications_for_driver(cx)
+        })
+      });
+      cx.run_until_parked();
+      match result {
+        Ok(()) => respond(ok(serde_json::json!({}))),
+        Err(error) => respond(err(error)),
+      }
+    }
+    Command::GithubNotifications => {
+      let state = view.read_with(cx, |view, cx| view.github_notifications_for_driver(cx));
+      respond(ok(state));
+    }
+    Command::OpenGithubNotification { id } => {
+      let result = cx.update(|_, cx| {
+        view.update(cx, |view, cx| {
+          view.open_github_notification_for_driver(id, cx)
+        })
+      });
+      cx.run_until_parked();
+      match result {
+        Ok(()) => respond(ok(serde_json::json!({}))),
+        Err(error) => respond(err(error)),
+      }
+    }
+    Command::MarkGithubNotificationDone { id } => {
+      let result = cx.update(|_, cx| {
+        view.update(cx, |view, cx| {
+          view.mark_github_notification_done_for_driver(id, cx)
+        })
+      });
+      cx.run_until_parked();
+      match result {
+        Ok(()) => respond(ok(serde_json::json!({}))),
+        Err(error) => respond(err(error)),
+      }
+    }
     Command::AuthState => {
       let state = view.read_with(cx, |view, cx| view.auth_state_for_driver(cx));
       respond(ok(state));
@@ -826,6 +878,28 @@ fn handle_visual_command(
       Ok(log) => respond(ok(log)),
       Err(error) => respond(err(error)),
     },
+    Command::RefreshGithubNotifications => {
+      match refresh_github_notifications_directly(cx, window, view) {
+        Ok(()) => respond(ok(serde_json::json!({}))),
+        Err(error) => respond(err(error)),
+      }
+    }
+    Command::GithubNotifications => match github_notifications_directly(cx, view) {
+      Ok(state) => respond(ok(state)),
+      Err(error) => respond(err(error)),
+    },
+    Command::OpenGithubNotification { id } => {
+      match open_github_notification_directly(cx, window, view, id) {
+        Ok(()) => respond(ok(serde_json::json!({}))),
+        Err(error) => respond(err(error)),
+      }
+    }
+    Command::MarkGithubNotificationDone { id } => {
+      match mark_github_notification_done_directly(cx, window, view, id) {
+        Ok(()) => respond(ok(serde_json::json!({}))),
+        Err(error) => respond(err(error)),
+      }
+    }
     Command::AuthState => match auth_state_directly(cx, view) {
       Ok(state) => respond(ok(state)),
       Err(error) => respond(err(error)),
@@ -1159,6 +1233,67 @@ fn auth_state_directly(
 }
 
 #[cfg(target_os = "macos")]
+fn refresh_github_notifications_directly(
+  cx: &mut VisualTestAppContext,
+  window: AnyWindowHandle,
+  view: &Entity<WorkspaceView>,
+) -> Result<(), String> {
+  let result = cx
+    .update_window(window, |_, _, cx| {
+      view.update(cx, |view, cx| {
+        view.refresh_github_notifications_for_driver(cx)
+      })
+    })
+    .map_err(|error| error.to_string())?;
+  cx.run_until_parked();
+  result.map_err(|error| error.to_string())
+}
+
+#[cfg(target_os = "macos")]
+fn github_notifications_directly(
+  cx: &mut VisualTestAppContext,
+  view: &Entity<WorkspaceView>,
+) -> Result<serde_json::Value, String> {
+  Ok(view.read_with(cx, |view, cx| view.github_notifications_for_driver(cx)))
+}
+
+#[cfg(target_os = "macos")]
+fn open_github_notification_directly(
+  cx: &mut VisualTestAppContext,
+  window: AnyWindowHandle,
+  view: &Entity<WorkspaceView>,
+  id: String,
+) -> Result<(), String> {
+  let result = cx
+    .update_window(window, |_, _, cx| {
+      view.update(cx, |view, cx| {
+        view.open_github_notification_for_driver(id, cx)
+      })
+    })
+    .map_err(|error| error.to_string())?;
+  cx.run_until_parked();
+  result.map_err(|error| error.to_string())
+}
+
+#[cfg(target_os = "macos")]
+fn mark_github_notification_done_directly(
+  cx: &mut VisualTestAppContext,
+  window: AnyWindowHandle,
+  view: &Entity<WorkspaceView>,
+  id: String,
+) -> Result<(), String> {
+  let result = cx
+    .update_window(window, |_, _, cx| {
+      view.update(cx, |view, cx| {
+        view.mark_github_notification_done_for_driver(id, cx)
+      })
+    })
+    .map_err(|error| error.to_string())?;
+  cx.run_until_parked();
+  result.map_err(|error| error.to_string())
+}
+
+#[cfg(target_os = "macos")]
 fn set_auth_token_directly(
   cx: &mut VisualTestAppContext,
   window: AnyWindowHandle,
@@ -1394,6 +1529,28 @@ mod tests {
       serde_json::from_str::<Command>(r#"{"cmd":"notification_log"}"#).expect("notification log"),
       Command::NotificationLog
     ));
+    assert!(matches!(
+      serde_json::from_str::<Command>(r#"{"cmd":"refresh_github_notifications"}"#)
+        .expect("refresh github notifications"),
+      Command::RefreshGithubNotifications
+    ));
+    assert!(matches!(
+      serde_json::from_str::<Command>(r#"{"cmd":"github_notifications"}"#)
+        .expect("github notifications"),
+      Command::GithubNotifications
+    ));
+    match serde_json::from_str::<Command>(r#"{"cmd":"open_github_notification","id":"1"}"#)
+      .expect("open github notification")
+    {
+      Command::OpenGithubNotification { id } => assert_eq!(id, "1"),
+      _ => panic!("expected open github notification command"),
+    }
+    match serde_json::from_str::<Command>(r#"{"cmd":"mark_github_notification_done","id":"1"}"#)
+      .expect("mark github notification done")
+    {
+      Command::MarkGithubNotificationDone { id } => assert_eq!(id, "1"),
+      _ => panic!("expected mark github notification done command"),
+    }
     assert!(matches!(
       serde_json::from_str::<Command>(r#"{"cmd":"auth_state"}"#).expect("auth state"),
       Command::AuthState
