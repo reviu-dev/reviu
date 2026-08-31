@@ -2955,6 +2955,11 @@ mod tests {
     page.update_in(cx, |page, window, cx| {
       page.restore_file_action(&crate::RestoreFile, window, cx)
     });
+    cx.run_until_parked();
+    assert!(cx.update(|window, cx| window.has_active_dialog(cx)));
+    assert!(changes_task(&page, cx).is_none());
+
+    cx.simulate_keystrokes("enter");
     changes_task(&page, cx).expect("restore task").await;
     cx.run_until_parked();
     assert_eq!(

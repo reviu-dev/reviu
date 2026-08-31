@@ -1494,7 +1494,7 @@ impl SessionPage {
     };
     let changes_list = self.dock_panel.read(cx).changes_list();
     changes_list.update(cx, |list, cx| {
-      list.restore_file(entry.path.clone(), entry.status, window, cx)
+      list.confirm_restore_file(entry.path.clone(), entry.status, window, cx)
     });
   }
 
