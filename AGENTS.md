@@ -150,8 +150,8 @@ Other entities can then register a callback to handle these events by doing `cx.
 
 ## Driving the real app (reviu_driver)
 
-- `desktop/crates/reviu_driver`: mounts the real `WorkspaceView` in a test window and takes JSON-lines commands on stdin. Use it to verify UI behavior live without launching the app.
-- See `desktop/crates/reviu_driver/README.md` for driver commands, Git smoke scenarios, perf runs, backend choices, and CI/debugging notes.
+- `desktop/crates/reviu_driver`: mounts the real `WorkspaceView` in a test window and takes JSON-lines commands on stdin. `reviu-driver-mcp` wraps the same protocol as MCP tools for agent-driven exploration. Use them to verify UI behavior live without launching the app.
+- See `desktop/crates/reviu_driver/README.md` for driver commands, MCP setup, Git smoke scenarios, perf runs, backend choices, and CI/debugging notes.
 - Limits: it reads and writes real repositories, so point it at temporary repos for repeatable tests. Animations do not run to completion under the test scheduler; judge end states.
 
 ## Required workflow
