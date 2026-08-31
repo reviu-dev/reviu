@@ -262,10 +262,15 @@ mod tests {
       assert_eq!(page.fallback_repo.as_deref(), Some(repo.path.as_path()));
     });
 
-    let discard = cx
-      .debug_bounds(UNSAVED_EDITOR_DISCARD_DEBUG_SELECTOR)
-      .expect("discard button");
-    cx.simulate_click(discard.center(), gpui::Modifiers::default());
+    page.update_in(cx, |page, window, cx| {
+      page.discard_unsaved_editor_for_test(
+        UnsavedEditorAction::SetFallbackRepo {
+          repo_root: other.path.clone(),
+        },
+        window,
+        cx,
+      );
+    });
     cx.run_until_parked();
 
     page.read_with(cx, |page, _| {

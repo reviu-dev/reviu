@@ -910,10 +910,18 @@ mod tests {
       initial_branch
     );
 
-    let discard = cx
-      .debug_bounds(UNSAVED_EDITOR_DISCARD_DEBUG_SELECTOR)
-      .expect("discard button");
-    cx.simulate_click(discard.center(), gpui::Modifiers::default());
+    page.update_in(cx, |page, window, cx| {
+      page.discard_unsaved_editor_for_test(
+        UnsavedEditorAction::RunBranchCommand {
+          command: RepoCommand::SwitchBranch(git::BranchRef {
+            name: "feature".to_string(),
+            kind: git::BranchKind::Local,
+          }),
+        },
+        window,
+        cx,
+      );
+    });
     let task = page.update(cx, |page, _| {
       page._repo_command_task.take().expect("command task")
     });

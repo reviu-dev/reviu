@@ -2511,10 +2511,16 @@ mod tests {
       "the worktree session should not start before the modal choice"
     );
 
-    let discard = cx
-      .debug_bounds(UNSAVED_EDITOR_DISCARD_DEBUG_SELECTOR)
-      .expect("discard button");
-    cx.simulate_click(discard.center(), gpui::Modifiers::default());
+    page.update_in(cx, |page, window, cx| {
+      page.discard_unsaved_editor_for_test(
+        UnsavedEditorAction::NewWorktreeSessionIn {
+          repo_root: repo.path.clone(),
+          base: None,
+        },
+        window,
+        cx,
+      );
+    });
     cx.run_until_parked();
 
     let panel = active_panel(&page, cx);

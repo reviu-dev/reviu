@@ -1586,10 +1586,9 @@ mod tests {
       assert!(page.editor.is_some());
     });
 
-    let discard = cx
-      .debug_bounds(UNSAVED_EDITOR_DISCARD_DEBUG_SELECTOR)
-      .expect("discard button");
-    cx.simulate_click(discard.center(), gpui::Modifiers::default());
+    page.update_in(cx, |page, window, cx| {
+      page.discard_unsaved_editor_for_test(UnsavedEditorAction::CloseDiff, window, cx);
+    });
     cx.run_until_parked();
 
     page.read_with(cx, |page, _| {
@@ -1645,10 +1644,17 @@ mod tests {
       assert_eq!(page.selected_file, Some(PathBuf::from("README.md")));
     });
 
-    let discard = cx
-      .debug_bounds(UNSAVED_EDITOR_DISCARD_DEBUG_SELECTOR)
-      .expect("discard button");
-    cx.simulate_click(discard.center(), gpui::Modifiers::default());
+    page.update_in(cx, |page, window, cx| {
+      page.discard_unsaved_editor_for_test(
+        UnsavedEditorAction::OpenDiff {
+          rel_path: PathBuf::from("other.md"),
+          reveal_line: None,
+          intent: OpenIntent::Open,
+        },
+        window,
+        cx,
+      );
+    });
     await_open_file(&page, cx).await;
 
     page.read_with(cx, |page, _| {
