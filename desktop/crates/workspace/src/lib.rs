@@ -68,6 +68,8 @@ mod date_format;
 mod diff_toolbar;
 mod diff_view_policy;
 mod dock_panel;
+#[cfg(any(test, feature = "test-support"))]
+mod driver_support;
 mod feedback_dialog;
 mod file_preview;
 mod file_search_palette;
@@ -126,5 +128,7 @@ pub use crash_report::{
   StartupCrashReport, install_crash_reporter, show_startup_crash_report_notification,
   take_pending_startup_crash_report,
 };
+#[cfg(any(test, feature = "test-support"))]
+pub use driver_support::{DriverBranchKind, DriverBranchRef, DriverGitAction};
 pub use shortcuts::{SHOW_COMMAND_PALETTE_SHORTCUT, install_app_key_bindings};
 pub use workspace::{WorkspaceView, build_app_menus};

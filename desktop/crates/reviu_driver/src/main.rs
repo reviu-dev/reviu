@@ -30,7 +30,7 @@ use gpui::{
   App, AppContext as _, Context, Entity, FocusHandle, Focusable, IntoElement, Render, ScrollDelta,
   ScrollWheelEvent, TestAppContext, TestDispatcher, TouchPhase, Window, div, point, prelude::*, px,
 };
-use gpui_component::Root;
+use gpui_component::{Root, WindowExt as _};
 use workspace::WorkspaceView;
 
 /// Same shape as the app's root in `crates/reviu/src/app_root.rs`: the view
@@ -179,6 +179,20 @@ enum Command {
   AgentStats,
   /// Direct driver hook for perf runs: expose the active editor state.
   EditorStats,
+  /// Expose the active repository and Git/UI state as JSON.
+  GitState,
+  /// Expose whether a dialog is active.
+  DialogState,
+  /// Confirm the active dialog by pressing Enter.
+  ConfirmDialog,
+  /// Cancel the active dialog by pressing Escape.
+  CancelDialog,
+  /// Count active notifications.
+  NotificationStats,
+  /// Run a Git action through the same path as the command palette.
+  RunGitAction {
+    action: workspace::DriverGitAction,
+  },
   Quit,
 }
 
@@ -424,6 +438,26 @@ fn handle_test_command(
       let stats = view.read_with(cx, |view, cx| view.editor_stats_for_driver(cx));
       respond(ok(stats));
     }
+    Command::GitState => {
+      let state = view.read_with(cx, |view, cx| view.git_state_for_driver(cx));
+      respond(ok(state));
+    }
+    Command::DialogState => respond(ok(dialog_state(cx))),
+    Command::ConfirmDialog => confirm_dialog(cx, "enter"),
+    Command::CancelDialog => confirm_dialog(cx, "escape"),
+    Command::NotificationStats => respond(ok(notification_stats(cx))),
+    Command::RunGitAction { action } => {
+      let result = cx.update(|window, cx| {
+        view.update(cx, |view, cx| {
+          view.run_git_action_for_driver(action, window, cx)
+        })
+      });
+      cx.run_until_parked();
+      match result {
+        Ok(()) => respond(ok(serde_json::json!({}))),
+        Err(error) => respond(err(error)),
+      }
+    }
     Command::Quit => quit_now(),
   }
 }
@@ -466,6 +500,32 @@ fn wait_test(cx: &mut gpui::VisualTestContext, ms: u64) {
     std::thread::sleep(Duration::from_millis(5));
   }
   cx.run_until_parked();
+}
+
+fn dialog_state(cx: &mut gpui::VisualTestContext) -> serde_json::Value {
+  cx.update(|window, cx| {
+    serde_json::json!({
+      "active": window.has_active_dialog(cx),
+    })
+  })
+}
+
+fn confirm_dialog(cx: &mut gpui::VisualTestContext, keystrokes: &str) {
+  if !cx.update(|window, cx| window.has_active_dialog(cx)) {
+    respond(err("no active dialog"));
+    return;
+  }
+  cx.simulate_keystrokes(keystrokes);
+  cx.run_until_parked();
+  respond(ok(serde_json::json!({})));
+}
+
+fn notification_stats(cx: &mut gpui::VisualTestContext) -> serde_json::Value {
+  cx.update(|window, cx| {
+    serde_json::json!({
+      "count": Root::read(window, cx).notification.read(cx).notifications().len(),
+    })
+  })
 }
 
 #[cfg(not(target_os = "macos"))]
@@ -606,6 +666,30 @@ fn handle_visual_command(
     },
     Command::EditorStats => match editor_stats_directly(cx, view) {
       Ok(stats) => respond(ok(stats)),
+      Err(error) => respond(err(error)),
+    },
+    Command::GitState => match git_state_directly(cx, view) {
+      Ok(state) => respond(ok(state)),
+      Err(error) => respond(err(error)),
+    },
+    Command::DialogState => match dialog_state_directly(cx, window) {
+      Ok(state) => respond(ok(state)),
+      Err(error) => respond(err(error)),
+    },
+    Command::ConfirmDialog => match confirm_dialog_directly(cx, window, "enter") {
+      Ok(()) => respond(ok(serde_json::json!({}))),
+      Err(error) => respond(err(error)),
+    },
+    Command::CancelDialog => match confirm_dialog_directly(cx, window, "escape") {
+      Ok(()) => respond(ok(serde_json::json!({}))),
+      Err(error) => respond(err(error)),
+    },
+    Command::NotificationStats => match notification_stats_directly(cx, window) {
+      Ok(stats) => respond(ok(stats)),
+      Err(error) => respond(err(error)),
+    },
+    Command::RunGitAction { action } => match run_git_action_directly(cx, window, view, action) {
+      Ok(()) => respond(ok(serde_json::json!({}))),
       Err(error) => respond(err(error)),
     },
     Command::Quit => quit_now(),
@@ -762,6 +846,75 @@ fn editor_stats_directly(
 }
 
 #[cfg(target_os = "macos")]
+fn git_state_directly(
+  cx: &mut VisualTestAppContext,
+  view: &Entity<WorkspaceView>,
+) -> Result<serde_json::Value, String> {
+  Ok(view.read_with(cx, |view, cx| view.git_state_for_driver(cx)))
+}
+
+#[cfg(target_os = "macos")]
+fn dialog_state_directly(
+  cx: &mut VisualTestAppContext,
+  window: AnyWindowHandle,
+) -> Result<serde_json::Value, String> {
+  cx.update_window(window, |_, window, cx| {
+    serde_json::json!({
+      "active": window.has_active_dialog(cx),
+    })
+  })
+  .map_err(|error| error.to_string())
+}
+
+#[cfg(target_os = "macos")]
+fn confirm_dialog_directly(
+  cx: &mut VisualTestAppContext,
+  window: AnyWindowHandle,
+  keystrokes: &str,
+) -> Result<(), String> {
+  let active = cx
+    .update_window(window, |_, window, cx| window.has_active_dialog(cx))
+    .map_err(|error| error.to_string())?;
+  if !active {
+    return Err("no active dialog".to_string());
+  }
+  cx.simulate_keystrokes(window, keystrokes);
+  cx.run_until_parked();
+  Ok(())
+}
+
+#[cfg(target_os = "macos")]
+fn notification_stats_directly(
+  cx: &mut VisualTestAppContext,
+  window: AnyWindowHandle,
+) -> Result<serde_json::Value, String> {
+  cx.update_window(window, |_, window, cx| {
+    serde_json::json!({
+      "count": Root::read(window, cx).notification.read(cx).notifications().len(),
+    })
+  })
+  .map_err(|error| error.to_string())
+}
+
+#[cfg(target_os = "macos")]
+fn run_git_action_directly(
+  cx: &mut VisualTestAppContext,
+  window: AnyWindowHandle,
+  view: &Entity<WorkspaceView>,
+  action: workspace::DriverGitAction,
+) -> Result<(), String> {
+  let result = cx
+    .update_window(window, |_, window, cx| {
+      view.update(cx, |view, cx| {
+        view.run_git_action_for_driver(action, window, cx)
+      })
+    })
+    .map_err(|error| error.to_string())?;
+  cx.run_until_parked();
+  result.map_err(|error| error.to_string())
+}
+
+#[cfg(target_os = "macos")]
 fn save_screenshot(
   cx: &mut VisualTestAppContext,
   window: AnyWindowHandle,
@@ -906,5 +1059,34 @@ mod tests {
       serde_json::from_str::<Command>(r#"{"cmd":"editor_stats"}"#).expect("editor stats"),
       Command::EditorStats
     ));
+    assert!(matches!(
+      serde_json::from_str::<Command>(r#"{"cmd":"git_state"}"#).expect("git state"),
+      Command::GitState
+    ));
+    assert!(matches!(
+      serde_json::from_str::<Command>(r#"{"cmd":"dialog_state"}"#).expect("dialog state"),
+      Command::DialogState
+    ));
+    assert!(matches!(
+      serde_json::from_str::<Command>(r#"{"cmd":"notification_stats"}"#)
+        .expect("notification stats"),
+      Command::NotificationStats
+    ));
+    match serde_json::from_str::<Command>(
+      r#"{"cmd":"run_git_action","action":{"action":"stash","include_untracked":false,"message":"wip"}}"#,
+    )
+    .expect("run git action")
+    {
+      Command::RunGitAction {
+        action: workspace::DriverGitAction::Stash {
+          include_untracked,
+          message,
+        },
+      } => {
+        assert!(!include_untracked);
+        assert_eq!(message.as_deref(), Some("wip"));
+      }
+      _ => panic!("expected run git action"),
+    }
   }
 }

@@ -309,6 +309,8 @@ pub struct SessionPage {
 
 mod agent;
 mod commands;
+#[cfg(any(test, feature = "test-support"))]
+mod driver;
 mod file_viewer;
 mod palette;
 mod pull_request_link;

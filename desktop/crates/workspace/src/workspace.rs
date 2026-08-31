@@ -336,6 +336,27 @@ impl WorkspaceView {
 
   #[cfg(any(test, feature = "test-support"))]
   #[doc(hidden)]
+  pub fn git_state_for_driver(&self, cx: &App) -> serde_json::Value {
+    self
+      .session_page
+      .read_with(cx, |page, cx| page.git_state_for_driver(cx))
+  }
+
+  #[cfg(any(test, feature = "test-support"))]
+  #[doc(hidden)]
+  pub fn run_git_action_for_driver(
+    &mut self,
+    action: crate::DriverGitAction,
+    window: &mut Window,
+    cx: &mut Context<Self>,
+  ) -> Result<(), gpui::SharedString> {
+    self.session_page.update(cx, |page, cx| {
+      page.run_git_action_for_driver(action, window, cx)
+    })
+  }
+
+  #[cfg(any(test, feature = "test-support"))]
+  #[doc(hidden)]
   pub fn show_changes_for_driver(&mut self, window: &mut Window, cx: &mut Context<Self>) {
     self
       .session_page
