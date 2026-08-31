@@ -14,6 +14,23 @@ pub struct DriverBranchRef {
 }
 
 #[derive(Clone, Debug, Deserialize)]
+#[serde(tag = "target", rename_all = "snake_case")]
+pub enum DriverInteractiveRebaseTarget {
+  Branch { branch: DriverBranchRef },
+  BranchInPlace { branch: DriverBranchRef },
+  HeadCount { count: usize },
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DriverInteractiveRebaseAction {
+  Pick,
+  Squash,
+  Fixup,
+  Drop,
+}
+
+#[derive(Clone, Debug, Deserialize)]
 #[serde(tag = "action", rename_all = "snake_case")]
 pub enum DriverGitAction {
   StageAll,
@@ -73,6 +90,10 @@ pub enum DriverGitAction {
   },
   CherryPick {
     commit_hashes: Vec<String>,
+  },
+  InteractiveRebase {
+    target: DriverInteractiveRebaseTarget,
+    actions: Vec<DriverInteractiveRebaseAction>,
   },
   RestoreAll,
 }

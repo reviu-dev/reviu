@@ -129,6 +129,9 @@ pub use crash_report::{
   take_pending_startup_crash_report,
 };
 #[cfg(any(test, feature = "test-support"))]
-pub use driver_support::{DriverBranchKind, DriverBranchRef, DriverGitAction};
+pub use driver_support::{
+  DriverBranchKind, DriverBranchRef, DriverGitAction, DriverInteractiveRebaseAction,
+  DriverInteractiveRebaseTarget,
+};
 pub use shortcuts::{SHOW_COMMAND_PALETTE_SHORTCUT, install_app_key_bindings};
 pub use workspace::{WorkspaceView, build_app_menus};

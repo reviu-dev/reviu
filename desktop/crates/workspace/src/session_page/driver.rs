@@ -195,6 +195,33 @@ impl SessionPage {
         window,
         cx,
       ),
+      DriverGitAction::InteractiveRebase { target, actions } => {
+        let Some(repo_root) = self.checkout_root(cx) else {
+          return Err("No repository selected.".into());
+        };
+        let target = driver_interactive_rebase_target(target);
+        let preview = interactive_rebase::prepare_commits(&repo_root, &target)?;
+        if preview.commits.len() != actions.len() {
+          return Err(
+            format!(
+              "Interactive rebase expected {} actions, got {}.",
+              preview.commits.len(),
+              actions.len()
+            )
+            .into(),
+          );
+        }
+        let todo_entries = preview
+          .commits
+          .into_iter()
+          .zip(actions)
+          .map(|(commit, action)| git::InteractiveRebaseTodoEntry {
+            oid: commit.oid,
+            action: driver_interactive_rebase_action(action),
+          })
+          .collect();
+        self.apply_interactive_rebase(target, todo_entries, window, cx)
+      }
       DriverGitAction::RestoreAll => {
         self.handle_command_palette_action(CommandPaletteAction::RestoreAll, window, cx)
       }
@@ -209,6 +236,46 @@ fn driver_palette_branch(branch: crate::DriverBranchRef) -> ui::CommandPaletteBr
     kind: match branch.kind {
       crate::DriverBranchKind::Local => ui::CommandPaletteBranchKind::Local,
       crate::DriverBranchKind::Remote => ui::CommandPaletteBranchKind::Remote,
+    },
+  }
+}
+
+#[cfg(any(test, feature = "test-support"))]
+fn driver_interactive_rebase_target(
+  target: crate::DriverInteractiveRebaseTarget,
+) -> git::InteractiveRebaseTarget {
+  match target {
+    crate::DriverInteractiveRebaseTarget::Branch { branch } => {
+      git::InteractiveRebaseTarget::Branch(driver_git_branch(branch))
+    }
+    crate::DriverInteractiveRebaseTarget::BranchInPlace { branch } => {
+      git::InteractiveRebaseTarget::BranchInPlace(driver_git_branch(branch))
+    }
+    crate::DriverInteractiveRebaseTarget::HeadCount { count } => {
+      git::InteractiveRebaseTarget::HeadCount(count)
+    }
+  }
+}
+
+#[cfg(any(test, feature = "test-support"))]
+fn driver_interactive_rebase_action(
+  action: crate::DriverInteractiveRebaseAction,
+) -> git::InteractiveRebaseAction {
+  match action {
+    crate::DriverInteractiveRebaseAction::Pick => git::InteractiveRebaseAction::Pick,
+    crate::DriverInteractiveRebaseAction::Squash => git::InteractiveRebaseAction::Squash,
+    crate::DriverInteractiveRebaseAction::Fixup => git::InteractiveRebaseAction::Fixup,
+    crate::DriverInteractiveRebaseAction::Drop => git::InteractiveRebaseAction::Drop,
+  }
+}
+
+#[cfg(any(test, feature = "test-support"))]
+fn driver_git_branch(branch: crate::DriverBranchRef) -> git::BranchRef {
+  git::BranchRef {
+    name: branch.name,
+    kind: match branch.kind {
+      crate::DriverBranchKind::Local => git::BranchKind::Local,
+      crate::DriverBranchKind::Remote => git::BranchKind::Remote,
     },
   }
 }

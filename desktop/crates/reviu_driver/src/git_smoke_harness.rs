@@ -18,6 +18,9 @@ const SCENARIOS: &[&str] = &[
   "rebase_conflict_continue",
   "rebase_conflict_skip",
   "rebase_conflict_abort",
+  "interactive_rebase_drop",
+  "interactive_rebase_squash",
+  "interactive_rebase_branch_conflict",
   "force_push_dialog",
   "stale_force_push_lease",
   "branch_switch_dirty_conflict",
@@ -161,6 +164,11 @@ fn run_one(args: &GitSmokeArgs, run_root: &Path, scenario: &str) -> Result<()> {
     "rebase_conflict_continue" => scenario_rebase_conflict_continue(args, &scenario_dir),
     "rebase_conflict_skip" => scenario_rebase_conflict_skip(args, &scenario_dir),
     "rebase_conflict_abort" => scenario_rebase_conflict_abort(args, &scenario_dir),
+    "interactive_rebase_drop" => scenario_interactive_rebase_drop(args, &scenario_dir),
+    "interactive_rebase_squash" => scenario_interactive_rebase_squash(args, &scenario_dir),
+    "interactive_rebase_branch_conflict" => {
+      scenario_interactive_rebase_branch_conflict(args, &scenario_dir)
+    }
     "force_push_dialog" => scenario_force_push_dialog(args, &scenario_dir),
     "stale_force_push_lease" => scenario_stale_force_push_lease(args, &scenario_dir),
     "branch_switch_dirty_conflict" => scenario_branch_switch_dirty_conflict(args, &scenario_dir),
@@ -418,6 +426,80 @@ fn scenario_rebase_conflict_abort(args: &GitSmokeArgs, dir: &Path) -> Result<()>
     &git_output(&repo, ["rev-parse", "--abbrev-ref", "HEAD"])?,
     "feature",
   )?;
+  driver.quit()
+}
+
+fn scenario_interactive_rebase_drop(args: &GitSmokeArgs, dir: &Path) -> Result<()> {
+  let repo = init_repo(&dir.join("repo"))?;
+  commit_file(&repo, "a.txt", "first\n", "first")?;
+  commit_file(&repo, "b.txt", "second\n", "second")?;
+  commit_file(&repo, "c.txt", "third\n", "third")?;
+
+  let mut driver = DriverProcess::spawn(args.driver_bin.as_deref(), &args.backend, dir)?;
+  driver.open_repo(&repo)?;
+  driver.run_git_action(serde_json::json!({
+    "action": "interactive_rebase",
+    "target": { "target": "head_count", "count": 2 },
+    "actions": ["pick", "drop"]
+  }))?;
+  wait_until(DEFAULT_TIMEOUT, || {
+    git_lines(&repo, ["log", "--pretty=%s", "--reverse"])
+      .map(|summaries| summaries == ["first", "second"])
+      .unwrap_or(false)
+  })?;
+  if repo.join("c.txt").exists() {
+    bail!("dropped commit file still exists");
+  }
+  driver.quit()
+}
+
+fn scenario_interactive_rebase_squash(args: &GitSmokeArgs, dir: &Path) -> Result<()> {
+  let repo = init_repo(&dir.join("repo"))?;
+  commit_file(&repo, "a.txt", "first\n", "first")?;
+  commit_file(&repo, "b.txt", "second\n", "second")?;
+  commit_file(&repo, "c.txt", "third\n", "third")?;
+
+  let mut driver = DriverProcess::spawn(args.driver_bin.as_deref(), &args.backend, dir)?;
+  driver.open_repo(&repo)?;
+  driver.run_git_action(serde_json::json!({
+    "action": "interactive_rebase",
+    "target": { "target": "head_count", "count": 2 },
+    "actions": ["pick", "squash"]
+  }))?;
+  wait_until(DEFAULT_TIMEOUT, || {
+    git_lines(&repo, ["log", "--pretty=%s", "--reverse"])
+      .map(|summaries| summaries.len() == 2)
+      .unwrap_or(false)
+  })?;
+  let summaries = git_lines(&repo, ["log", "--pretty=%s", "--reverse"])?;
+  if summaries != ["first", "second"] {
+    bail!("unexpected squashed history: {summaries:?}");
+  }
+  expect_file(&repo, "b.txt", "second\n")?;
+  expect_file(&repo, "c.txt", "third\n")?;
+  driver.quit()
+}
+
+fn scenario_interactive_rebase_branch_conflict(args: &GitSmokeArgs, dir: &Path) -> Result<()> {
+  let repo = init_repo(&dir.join("repo"))?;
+  setup_rebase_conflict(&repo)?;
+
+  let mut driver = DriverProcess::spawn(args.driver_bin.as_deref(), &args.backend, dir)?;
+  driver.open_repo(&repo)?;
+  driver.run_git_action(serde_json::json!({
+    "action": "interactive_rebase",
+    "target": {
+      "target": "branch",
+      "branch": { "name": "main", "kind": "local" }
+    },
+    "actions": ["pick"]
+  }))?;
+  wait_for_state(&mut driver, |state| {
+    bool_field(state, "rebase_in_progress") == Some(true)
+      && selected_file(state) == Some("a.txt")
+      && has_status(state, "a.txt", "Conflicted")
+      && string_field(state, "commit_message") == Some("feature work")
+  })?;
   driver.quit()
 }
 
@@ -950,6 +1032,15 @@ fn git_output<const N: usize>(repo: &Path, args: [&str; N]) -> Result<String> {
     bail!("git failed: {}", command_output_details(&output));
   }
   Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
+}
+
+fn git_lines<const N: usize>(repo: &Path, args: [&str; N]) -> Result<Vec<String>> {
+  Ok(
+    git_output(repo, args)?
+      .lines()
+      .map(ToString::to_string)
+      .collect(),
+  )
 }
 
 fn git_bare_output<const N: usize>(repo: &Path, args: [&str; N]) -> Result<String> {

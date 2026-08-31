@@ -1078,15 +1078,26 @@ mod tests {
     .expect("run git action")
     {
       Command::RunGitAction {
-        action: workspace::DriverGitAction::Stash {
-          include_untracked,
-          message,
-        },
+        action:
+          workspace::DriverGitAction::Stash {
+            include_untracked,
+            message,
+          },
       } => {
         assert!(!include_untracked);
         assert_eq!(message.as_deref(), Some("wip"));
       }
       _ => panic!("expected run git action"),
+    }
+    match serde_json::from_str::<Command>(
+      r#"{"cmd":"run_git_action","action":{"action":"interactive_rebase","target":{"target":"head_count","count":2},"actions":["pick","drop"]}}"#,
+    )
+    .expect("run interactive rebase action")
+    {
+      Command::RunGitAction {
+        action: workspace::DriverGitAction::InteractiveRebase { actions, .. },
+      } => assert_eq!(actions.len(), 2),
+      _ => panic!("expected interactive rebase action"),
     }
   }
 }
