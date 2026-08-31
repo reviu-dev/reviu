@@ -56,6 +56,7 @@ const REVIEW_ANNOTATION_CONTEXT: &str = "WorkspaceSession";
 const HUNK_ACTION_CONTEXT: &str = "WorkspaceSession";
 const HUNK_ACTION_SESSION_CONTEXT: &str = "WorkspaceSession";
 const HUNK_ACTION_DESCENDANT_FOCUS: &str = "List || Editor";
+const RESTORE_FILE_DESCENDANT_FOCUS: &str = "List";
 const COMMENT_HUNK_CONTEXT: &str = "WorkspaceSession";
 const COMMENT_HUNK_DESCENDANT_FOCUS: &str = "List || Editor || Tree";
 
@@ -373,7 +374,7 @@ const SHORTCUT_DEFINITIONS: [ShortcutDefinition; 32] = [
     description: "Discard all changes in the selected file.",
     scope_label: "Sessions",
     category: ShortcutCategory::LocalGit,
-    keystroke: "cmd-backspace",
+    keystroke: "cmd-shift-backspace",
     context: HUNK_ACTION_CONTEXT,
     display_context: WORKSPACE_SESSION_CONTEXT,
     active_contexts: &SESSION_ONLY_ACTIVE_CONTEXTS,
@@ -817,10 +818,10 @@ impl ShortcutDefinition {
       ShortcutId::ToggleHunkStage
       | ShortcutId::RestoreHunk
       | ShortcutId::ToggleFileStage
-      | ShortcutId::RestoreFile
       | ShortcutId::AcceptBothConflict => {
         format!("({}) > ({})", base, HUNK_ACTION_DESCENDANT_FOCUS)
       }
+      ShortcutId::RestoreFile => format!("({}) > ({})", base, RESTORE_FILE_DESCENDANT_FOCUS),
       ShortcutId::CommitChanges => {
         format!("({}) > ({})", base, COMMIT_CHANGES_DESCENDANT_FOCUS)
       }
@@ -1424,6 +1425,27 @@ mod tests {
     has_binding_with_bindings(pathname, keystroke, workspace_key_bindings())
   }
 
+  fn app_and_workspace_key_bindings() -> Vec<KeyBinding> {
+    let mut bindings = default_app_key_bindings();
+    bindings.extend(workspace_key_bindings());
+    bindings
+  }
+
+  fn first_binding_action_name(
+    pathname: &str,
+    extra_contexts: &[&str],
+    keystroke: &str,
+    bindings: Vec<KeyBinding>,
+  ) -> Option<&'static str> {
+    let mut keymap = Keymap::default();
+    keymap.add_bindings(bindings);
+    let input = [Keystroke::parse(keystroke).unwrap()];
+    let (bindings, pending) =
+      keymap.bindings_for_input(&input, &context_stack_with_extra(pathname, extra_contexts));
+    assert!(!pending);
+    bindings.first().map(|binding| binding.action().name())
+  }
+
   fn overrides(entries: &[(ShortcutId, &str)]) -> ShortcutOverrides {
     ShortcutOverrides {
       entries: entries
@@ -1766,9 +1788,49 @@ mod tests {
       );
     }
 
-    // Staging a file needs the list or the editor focused.
-    for keystroke in ["cmd-enter", "cmd-backspace"] {
-      assert!(bound_in("/session", keystroke));
+    assert!(bound_in("/session", "cmd-enter"));
+    assert!(!bound_in("/session", "cmd-shift-backspace"));
+    assert!(has_binding_with_bindings_in_contexts(
+      "/session",
+      &["List"],
+      "cmd-shift-backspace",
+      workspace_key_bindings(),
+    ));
+  }
+
+  #[test]
+  fn restore_file_shortcut_does_not_shadow_editor_backspace_all() {
+    assert_eq!(
+      first_binding_action_name(
+        "/session",
+        &["Editor"],
+        "cmd-backspace",
+        app_and_workspace_key_bindings(),
+      ),
+      Some(<BackspaceAll as Action>::name_for_type())
+    );
+    assert_eq!(
+      first_binding_action_name(
+        "/session",
+        &["List"],
+        "cmd-shift-backspace",
+        app_and_workspace_key_bindings(),
+      ),
+      Some(<RestoreFile as Action>::name_for_type())
+    );
+  }
+
+  #[test]
+  fn default_workspace_shortcuts_do_not_reuse_reserved_app_bindings() {
+    for definition in shortcut_definitions() {
+      assert!(
+        RESERVED_APP_BINDINGS
+          .iter()
+          .all(|binding| binding.keystroke != definition.keystroke),
+        "{} reuses the reserved {} shortcut",
+        definition.title,
+        definition.keystroke
+      );
     }
   }
 

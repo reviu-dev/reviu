@@ -2944,7 +2944,7 @@ mod tests {
       git::RepoStage::Unstaged
     );
 
-    // `cmd-backspace` throws the change away.
+    // `cmd-shift-backspace` throws the change away from the changes list.
     let refresh = page.update(cx, |page, cx| {
       page.dock_panel.update(cx, |panel, cx| {
         panel.refresh(cx);
