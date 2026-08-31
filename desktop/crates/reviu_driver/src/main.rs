@@ -175,6 +175,16 @@ enum Command {
   ShowChanges,
   /// Direct driver hook: open the Pull Request dock tab.
   ShowPullRequest,
+  /// Direct driver hook: open the Review dock tab.
+  ShowReview,
+  /// Direct driver hook: create a pending pull request review comment on the open PR file.
+  CreatePullRequestReviewComment {
+    path: String,
+    line: usize,
+    body: String,
+  },
+  /// Direct driver hook: open the discard pending pull request review confirmation.
+  DiscardPullRequestReview,
   /// Direct driver hook for perf runs: close the right dock.
   HideDock,
   /// Direct driver hook for perf runs: fill and submit the agent composer.
@@ -440,6 +450,34 @@ fn handle_test_command(
     Command::ShowPullRequest => {
       cx.update(|window, cx| {
         view.update(cx, |view, cx| view.show_pull_request_for_driver(window, cx));
+      });
+      cx.run_until_parked();
+      respond(ok(serde_json::json!({})));
+    }
+    Command::ShowReview => {
+      cx.update(|window, cx| {
+        view.update(cx, |view, cx| view.show_review_for_driver(window, cx));
+      });
+      cx.run_until_parked();
+      respond(ok(serde_json::json!({})));
+    }
+    Command::CreatePullRequestReviewComment { path, line, body } => {
+      let result = cx.update(|_, cx| {
+        view.update(cx, |view, cx| {
+          view.create_pull_request_review_comment_for_driver(PathBuf::from(path), line, body, cx)
+        })
+      });
+      cx.run_until_parked();
+      match result {
+        Ok(()) => respond(ok(serde_json::json!({}))),
+        Err(error) => respond(err(error)),
+      }
+    }
+    Command::DiscardPullRequestReview => {
+      cx.update(|window, cx| {
+        view.update(cx, |view, cx| {
+          view.discard_pull_request_review_for_driver(window, cx)
+        });
       });
       cx.run_until_parked();
       respond(ok(serde_json::json!({})));
@@ -710,6 +748,22 @@ fn handle_visual_command(
       Ok(()) => respond(ok(serde_json::json!({}))),
       Err(error) => respond(err(error)),
     },
+    Command::ShowReview => match show_review_directly(cx, window, view) {
+      Ok(()) => respond(ok(serde_json::json!({}))),
+      Err(error) => respond(err(error)),
+    },
+    Command::CreatePullRequestReviewComment { path, line, body } => {
+      match create_pull_request_review_comment_directly(cx, window, view, path, line, body) {
+        Ok(()) => respond(ok(serde_json::json!({}))),
+        Err(error) => respond(err(error)),
+      }
+    }
+    Command::DiscardPullRequestReview => {
+      match discard_pull_request_review_directly(cx, window, view) {
+        Ok(()) => respond(ok(serde_json::json!({}))),
+        Err(error) => respond(err(error)),
+      }
+    }
     Command::HideDock => match hide_dock_directly(cx, window, view) {
       Ok(()) => respond(ok(serde_json::json!({}))),
       Err(error) => respond(err(error)),
@@ -893,6 +947,56 @@ fn show_pull_request_directly(
 ) -> Result<(), String> {
   cx.update_window(window, |_, window, cx| {
     view.update(cx, |view, cx| view.show_pull_request_for_driver(window, cx));
+  })
+  .map_err(|error| error.to_string())?;
+  cx.run_until_parked();
+  Ok(())
+}
+
+#[cfg(target_os = "macos")]
+fn show_review_directly(
+  cx: &mut VisualTestAppContext,
+  window: AnyWindowHandle,
+  view: &Entity<WorkspaceView>,
+) -> Result<(), String> {
+  cx.update_window(window, |_, window, cx| {
+    view.update(cx, |view, cx| view.show_review_for_driver(window, cx));
+  })
+  .map_err(|error| error.to_string())?;
+  cx.run_until_parked();
+  Ok(())
+}
+
+#[cfg(target_os = "macos")]
+fn create_pull_request_review_comment_directly(
+  cx: &mut VisualTestAppContext,
+  window: AnyWindowHandle,
+  view: &Entity<WorkspaceView>,
+  path: String,
+  line: usize,
+  body: String,
+) -> Result<(), String> {
+  let result = cx
+    .update_window(window, |_, _, cx| {
+      view.update(cx, |view, cx| {
+        view.create_pull_request_review_comment_for_driver(PathBuf::from(path), line, body, cx)
+      })
+    })
+    .map_err(|error| error.to_string())?;
+  cx.run_until_parked();
+  result.map_err(|error| error.to_string())
+}
+
+#[cfg(target_os = "macos")]
+fn discard_pull_request_review_directly(
+  cx: &mut VisualTestAppContext,
+  window: AnyWindowHandle,
+  view: &Entity<WorkspaceView>,
+) -> Result<(), String> {
+  cx.update_window(window, |_, window, cx| {
+    view.update(cx, |view, cx| {
+      view.discard_pull_request_review_for_driver(window, cx)
+    });
   })
   .map_err(|error| error.to_string())?;
   cx.run_until_parked();
@@ -1185,6 +1289,27 @@ mod tests {
     assert!(matches!(
       serde_json::from_str::<Command>(r#"{"cmd":"show_pull_request"}"#).expect("show pull request"),
       Command::ShowPullRequest
+    ));
+    assert!(matches!(
+      serde_json::from_str::<Command>(r#"{"cmd":"show_review"}"#).expect("show review"),
+      Command::ShowReview
+    ));
+    match serde_json::from_str::<Command>(
+      r#"{"cmd":"create_pull_request_review_comment","path":"src/main.rs","line":0,"body":"note"}"#,
+    )
+    .expect("create pull request review comment")
+    {
+      Command::CreatePullRequestReviewComment { path, line, body } => {
+        assert_eq!(path, "src/main.rs");
+        assert_eq!(line, 0);
+        assert_eq!(body, "note");
+      }
+      _ => panic!("expected create pull request review comment command"),
+    }
+    assert!(matches!(
+      serde_json::from_str::<Command>(r#"{"cmd":"discard_pull_request_review"}"#)
+        .expect("discard pull request review"),
+      Command::DiscardPullRequestReview
     ));
     assert!(matches!(
       serde_json::from_str::<Command>(r#"{"cmd":"hide_dock"}"#).expect("hide dock"),

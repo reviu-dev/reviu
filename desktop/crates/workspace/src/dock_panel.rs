@@ -604,6 +604,31 @@ fn driver_pr_review_comment(comment: &GithubPullRequestReviewComment) -> serde_j
   })
 }
 
+#[cfg(any(test, feature = "test-support"))]
+fn driver_review_panel_comment(
+  comment: &crate::review_list::ReviewPanelComment,
+) -> serde_json::Value {
+  serde_json::json!({
+    "id": comment.id,
+    "path": comment.path.display().to_string(),
+    "line": comment.line,
+    "line_label": comment.line_label,
+    "excerpt": comment.excerpt,
+    "status": driver_review_row_status(comment.status),
+    "sendable": comment.sendable,
+  })
+}
+
+#[cfg(any(test, feature = "test-support"))]
+fn driver_review_row_status(status: crate::review_list::ReviewRowStatus) -> &'static str {
+  match status {
+    crate::review_list::ReviewRowStatus::Draft => "draft",
+    crate::review_list::ReviewRowStatus::Sent => "sent",
+    crate::review_list::ReviewRowStatus::Pending => "pending",
+    crate::review_list::ReviewRowStatus::Outdated => "outdated",
+  }
+}
+
 /// One checkout of the shown session's repo, ready for the header selector.
 #[derive(Clone, PartialEq)]
 pub(crate) struct CheckoutOption {
@@ -1484,6 +1509,18 @@ impl DockPanel {
       "checks_loading": self.pr_checks_loading,
       "has_checks": self.pr_checks.is_some(),
       "merge_readiness_loaded": self.pr_merge_readiness.is_some(),
+    })
+  }
+
+  #[cfg(any(test, feature = "test-support"))]
+  pub(crate) fn review_panel_state_for_driver(&self, cx: &App) -> serde_json::Value {
+    let list = self.review_list.read(cx);
+    let agent_comments = list.comments(ReviewSection::Agent);
+    let pull_request_comments = list.comments(ReviewSection::PullRequest);
+    serde_json::json!({
+      "active_tab": driver_dock_tab(self.active_tab),
+      "agent_comments": agent_comments.iter().map(driver_review_panel_comment).collect::<Vec<_>>(),
+      "pull_request_comments": pull_request_comments.iter().map(driver_review_panel_comment).collect::<Vec<_>>(),
     })
   }
 

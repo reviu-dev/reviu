@@ -292,15 +292,17 @@ fn run_live_github_driver_smoke(
       .and_then(Value::as_u64)
       .unwrap_or_default()
   );
+  let open_file = fixture_pr
+    .changed_files
+    .first()
+    .context("fixture PR changed file")?;
+  driver.command(json!({ "cmd": "open_pull_request_file", "path": open_file }))?;
   if let Some(comment) = bot_review_comment {
-    let file = fixture_pr
-      .changed_files
-      .first()
-      .context("fixture PR changed file")?;
-    driver.command(json!({ "cmd": "open_pull_request_file", "path": file }))?;
-    wait_for_editor_review_comment(&mut driver, file, comment.id)?;
+    wait_for_editor_review_comment(&mut driver, open_file, comment.id)?;
     println!("PR diff: review comment #{} visible", comment.id);
   }
+
+  run_pending_review_smoke(&mut driver, open_file)?;
 
   driver.run_git_action(json!({ "action": "fetch" }))?;
   wait_for_driver_state(&mut driver, |state| {
@@ -599,6 +601,34 @@ fn wait_for_pull_request_panel(
   Ok(panel)
 }
 
+fn run_pending_review_smoke(driver: &mut DriverProcess, path: &str) -> Result<()> {
+  let marker = format!(
+    "reviu-github-smoke primary pending {}",
+    std::time::SystemTime::now()
+      .duration_since(std::time::UNIX_EPOCH)
+      .map(|duration| duration.as_secs())
+      .unwrap_or_default()
+  );
+  driver.command(json!({
+    "cmd": "create_pull_request_review_comment",
+    "path": path,
+    "line": 0,
+    "body": marker,
+  }))?;
+  wait_for_pull_request_pending_comment(driver, &marker)?;
+  println!("Review panel: pending PR comment created");
+
+  driver.command(json!({ "cmd": "show_review" }))?;
+  wait_for_review_panel_pending_comment(driver, &marker)?;
+  println!("Review panel: pending PR comment visible");
+
+  driver.command(json!({ "cmd": "discard_pull_request_review" }))?;
+  driver.command(json!({ "cmd": "confirm_dialog" }))?;
+  wait_for_pending_review_comment_removed(driver, &marker)?;
+  println!("Review panel: pending PR review discarded");
+  Ok(())
+}
+
 fn wait_for_editor_review_comment(
   driver: &mut DriverProcess,
   path: &str,
@@ -618,6 +648,46 @@ fn wait_for_editor_review_comment(
   })
   .with_context(|| format!("last editor_stats:\n{}", pretty_json(&last)))?;
   Ok(last)
+}
+
+fn wait_for_pull_request_pending_comment(
+  driver: &mut DriverProcess,
+  marker: &str,
+) -> Result<Value> {
+  let state = wait_for_driver_state(driver, |state| {
+    state
+      .get("pull_request_panel")
+      .is_some_and(|panel| pull_request_panel_has_pending_review_comment(panel, marker))
+  })?;
+  Ok(state)
+}
+
+fn wait_for_review_panel_pending_comment(
+  driver: &mut DriverProcess,
+  marker: &str,
+) -> Result<Value> {
+  let state = wait_for_driver_state(driver, |state| {
+    state
+      .get("review_panel")
+      .is_some_and(|panel| review_panel_has_pull_request_comment(panel, marker))
+  })?;
+  Ok(state)
+}
+
+fn wait_for_pending_review_comment_removed(
+  driver: &mut DriverProcess,
+  marker: &str,
+) -> Result<Value> {
+  let state = wait_for_driver_state(driver, |state| {
+    let pull_request_clear = state
+      .get("pull_request_panel")
+      .is_none_or(|panel| !pull_request_panel_has_pending_review_comment(panel, marker));
+    let review_clear = state
+      .get("review_panel")
+      .is_none_or(|panel| !review_panel_has_pull_request_comment(panel, marker));
+    pull_request_clear && review_clear
+  })?;
+  Ok(state)
 }
 
 fn wait_for_driver_state(
@@ -697,6 +767,30 @@ fn pull_request_panel_has_review_comment(panel: &Value, marker: &str) -> bool {
       comments
         .iter()
         .any(|comment| string_field(comment, "body").is_some_and(|body| body.contains(marker)))
+    })
+}
+
+fn pull_request_panel_has_pending_review_comment(panel: &Value, marker: &str) -> bool {
+  panel
+    .get("review_comment_details")
+    .and_then(Value::as_array)
+    .is_some_and(|comments| {
+      comments.iter().any(|comment| {
+        comment.get("is_pending").and_then(Value::as_bool) == Some(true)
+          && string_field(comment, "body").is_some_and(|body| body.contains(marker))
+      })
+    })
+}
+
+fn review_panel_has_pull_request_comment(panel: &Value, marker: &str) -> bool {
+  panel
+    .get("pull_request_comments")
+    .and_then(Value::as_array)
+    .is_some_and(|comments| {
+      comments.iter().any(|comment| {
+        string_field(comment, "status") == Some("pending")
+          && string_field(comment, "excerpt").is_some_and(|excerpt| excerpt.contains(marker))
+      })
     })
 }
 

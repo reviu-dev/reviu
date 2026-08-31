@@ -425,6 +425,40 @@ impl WorkspaceView {
 
   #[cfg(any(test, feature = "test-support"))]
   #[doc(hidden)]
+  pub fn show_review_for_driver(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    self
+      .session_page
+      .update(cx, |page, cx| page.show_review_for_driver(window, cx));
+  }
+
+  #[cfg(any(test, feature = "test-support"))]
+  #[doc(hidden)]
+  pub fn create_pull_request_review_comment_for_driver(
+    &mut self,
+    rel_path: PathBuf,
+    line: usize,
+    body: String,
+    cx: &mut Context<Self>,
+  ) -> Result<(), gpui::SharedString> {
+    self.session_page.update(cx, |page, cx| {
+      page.create_pull_request_review_comment_for_driver(rel_path, line, body, cx)
+    })
+  }
+
+  #[cfg(any(test, feature = "test-support"))]
+  #[doc(hidden)]
+  pub fn discard_pull_request_review_for_driver(
+    &mut self,
+    window: &mut Window,
+    cx: &mut Context<Self>,
+  ) {
+    self.session_page.update(cx, |page, cx| {
+      page.discard_pull_request_review_for_driver(window, cx)
+    });
+  }
+
+  #[cfg(any(test, feature = "test-support"))]
+  #[doc(hidden)]
   pub fn hide_dock_for_driver(&mut self, window: &mut Window, cx: &mut Context<Self>) {
     self
       .session_page

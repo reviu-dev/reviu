@@ -445,6 +445,14 @@ fn command_for_tool(tool_name: &str, arguments: Value) -> Result<Value> {
     }),
     "show_changes" => json!({ "cmd": "show_changes" }),
     "show_pull_request" => json!({ "cmd": "show_pull_request" }),
+    "show_review" => json!({ "cmd": "show_review" }),
+    "create_pull_request_review_comment" => json!({
+      "cmd": "create_pull_request_review_comment",
+      "path": required_string(&arguments, "path")?,
+      "line": required_u64(&arguments, "line")?,
+      "body": required_string(&arguments, "body")?,
+    }),
+    "discard_pull_request_review" => json!({ "cmd": "discard_pull_request_review" }),
     "hide_dock" => json!({ "cmd": "hide_dock" }),
     "submit_prompt" => json!({
       "cmd": "submit_prompt",
@@ -641,6 +649,22 @@ fn tools() -> Vec<Value> {
     tool(
       "show_pull_request",
       "Open the Pull Request dock tab.",
+      empty_schema(),
+    ),
+    tool("show_review", "Open the Review dock tab.", empty_schema()),
+    tool(
+      "create_pull_request_review_comment",
+      "Create a pending pull request review comment on the open PR file.",
+      object_schema(vec![
+        string_property("path", "Repository-relative PR file path."),
+        integer_property("line", "Zero-based line number."),
+        string_property("body", "Comment body."),
+      ])
+      .required(["path", "line", "body"]),
+    ),
+    tool(
+      "discard_pull_request_review",
+      "Open the discard pending pull request review confirmation.",
       empty_schema(),
     ),
     tool("hide_dock", "Close the right dock.", empty_schema()),
@@ -867,6 +891,9 @@ mod tests {
       "git_state",
       "notification_log",
       "show_pull_request",
+      "show_review",
+      "create_pull_request_review_comment",
+      "discard_pull_request_review",
       "auth_state",
       "set_auth_token",
       "quit",
@@ -890,6 +917,19 @@ mod tests {
       command_for_tool("open_pull_request_file", json!({ "path": "src/lib.rs" }))
         .expect("open pull request file command"),
       json!({ "cmd": "open_pull_request_file", "path": "src/lib.rs" })
+    );
+    assert_eq!(
+      command_for_tool(
+        "create_pull_request_review_comment",
+        json!({ "path": "src/lib.rs", "line": 0, "body": "note" })
+      )
+      .expect("create pull request review comment command"),
+      json!({
+        "cmd": "create_pull_request_review_comment",
+        "path": "src/lib.rs",
+        "line": 0,
+        "body": "note"
+      })
     );
     assert_eq!(
       command_for_tool("show_pull_request", json!({})).expect("show pull request"),

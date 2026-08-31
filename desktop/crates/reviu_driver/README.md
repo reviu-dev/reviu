@@ -52,6 +52,10 @@ Common commands:
 {"cmd":"path_prompt","path":"/tmp/repo"}
 {"cmd":"git_state"}
 {"cmd":"run_git_action","action":{"action":"push"}}
+{"cmd":"open_pull_request_file","path":"fixtures/pr-open.txt"}
+{"cmd":"create_pull_request_review_comment","path":"fixtures/pr-open.txt","line":0,"body":"note"}
+{"cmd":"show_review"}
+{"cmd":"discard_pull_request_review"}
 {"cmd":"dialog_state"}
 {"cmd":"confirm_dialog"}
 {"cmd":"notification_log"}
@@ -101,8 +105,8 @@ Core tools:
 
 - lifecycle: `start`, `restart`, `status`, `quit`
 - UI input: `bounds`, `click`, `type`, `key`, `clock`, `wait`, `park`, `scroll`
-- app state: `path_prompt`, `open_file`, `show_changes`, `show_pull_request`, `hide_dock`, `agent_stats`, `editor_stats`, `auth_state`
-- Git/debug: `git_state`, `dialog_state`, `confirm_dialog`, `cancel_dialog`, `notification_stats`, `notification_log`, `run_git_action`
+- app state: `path_prompt`, `open_file`, `open_pull_request_file`, `show_changes`, `show_pull_request`, `show_review`, `hide_dock`, `agent_stats`, `editor_stats`, `auth_state`
+- Git/debug: `git_state`, `dialog_state`, `confirm_dialog`, `cancel_dialog`, `notification_stats`, `notification_log`, `run_git_action`, `create_pull_request_review_comment`, `discard_pull_request_review`
 - visual: `screenshot` with `--backend visual` on macOS
 
 Like the raw driver, the MCP wrapper talks to real repositories. Point it at temporary repos unless you deliberately want to inspect a live checkout.
@@ -205,6 +209,7 @@ Current scope is intentionally safe for the fixture repo. The multi-actor path c
 - verifies Reviu resolves the current branch to the stable fixture PR
 - opens the Pull Request dock tab and verifies the changed files match the fixture PR
 - when bot credentials are available, creates a temporary review comment as `joris-gallot-bot` and verifies Reviu sees it as the primary user
+- creates a pending PR review comment as the primary Reviu user, verifies the Review panel lists it, discards the pending review, and verifies it disappears
 - fetches and verifies the fixture PR branch is available locally
 
 Useful options:

@@ -81,6 +81,7 @@ impl SessionPage {
       })),
       "branch_pull_request": panel.branch_pull_request_state_for_driver(),
       "pull_request_panel": panel.pull_request_panel_state_for_driver(),
+      "review_panel": panel.review_panel_state_for_driver(cx),
       "branches": branches.into_iter().map(driver_branch_json).collect::<Vec<_>>(),
       "status_entries": status_entries.into_iter().map(driver_status_json).collect::<Vec<_>>(),
       "stashes": stashes.into_iter().map(|stash| serde_json::json!({

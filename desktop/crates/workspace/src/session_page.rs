@@ -10,7 +10,7 @@ use agent_chat_panel::{AgentChatPanel, AgentChatPanelEvent, ConversationStore, T
 use editor::{
   ConflictResolution, DiffViewMode, Editor, EditorEvent, ReviewCommentCancelHandler,
   ReviewCommentCreateHandler, ReviewCommentCreateRequest, ReviewCommentDeleteHandler,
-  ReviewCommentEditHandler, ReviewCommentSendHandler,
+  ReviewCommentEditHandler, ReviewCommentMode, ReviewCommentSendHandler, ReviewCommentSide,
 };
 use gpui::AnimationExt as _;
 use gpui::{
@@ -1199,6 +1199,54 @@ impl SessionPage {
   #[doc(hidden)]
   pub fn show_pull_request_for_driver(&mut self, window: &mut Window, cx: &mut Context<Self>) {
     self.show_dock_tab(DockPanelTab::PullRequest, window, cx);
+  }
+
+  #[cfg(any(test, feature = "test-support"))]
+  #[doc(hidden)]
+  pub fn show_review_for_driver(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    self.show_dock_tab(DockPanelTab::Review, window, cx);
+  }
+
+  #[cfg(any(test, feature = "test-support"))]
+  #[doc(hidden)]
+  pub fn create_pull_request_review_comment_for_driver(
+    &mut self,
+    rel_path: PathBuf,
+    line: usize,
+    body: String,
+    cx: &mut Context<Self>,
+  ) -> Result<(), SharedString> {
+    let Some(selected_file) = self.selected_file.as_ref() else {
+      return Err("No pull request file is open.".into());
+    };
+    if selected_file != &rel_path {
+      return Err(format!("Pull request file is not open: {}", rel_path.display()).into());
+    }
+    let request = ReviewCommentCreateRequest {
+      line,
+      side: ReviewCommentSide::Right,
+      start_line: None,
+      start_side: None,
+      in_reply_to_id: None,
+      body: Arc::from(body),
+      mode: ReviewCommentMode::PendingReview,
+    };
+    self.dock_panel.update(cx, |panel, cx| {
+      panel.create_pull_request_review_comment(request, rel_path, cx)
+    });
+    Ok(())
+  }
+
+  #[cfg(any(test, feature = "test-support"))]
+  #[doc(hidden)]
+  pub fn discard_pull_request_review_for_driver(
+    &mut self,
+    window: &mut Window,
+    cx: &mut Context<Self>,
+  ) {
+    self.dock_panel.update(cx, |panel, cx| {
+      panel.discard_pull_request_review(window, cx)
+    });
   }
 
   #[cfg(any(test, feature = "test-support"))]
