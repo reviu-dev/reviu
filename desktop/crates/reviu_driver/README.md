@@ -16,6 +16,7 @@ This builds:
 - `target/debug/reviu-driver-mcp`
 - `target/debug/reviu-git-smoke`
 - `target/debug/reviu-perf`
+- `target/debug/reviu-visual-smoke`
 
 ## `reviu-driver`
 
@@ -149,6 +150,25 @@ On failure, the runner keeps the temp directory and prints:
 - the tail of `driver.stderr.log`
 
 CI runs the smoke suite on Unix runners. Windows is skipped because the existing desktop tests assume Unix-style paths.
+
+## `reviu-visual-smoke`
+
+`reviu-visual-smoke` is a macOS-only local smoke check for the visual backend. It creates a temporary repo, opens it through `reviu-driver --backend visual`, triggers the force-push confirmation dialog, captures a screenshot, confirms the dialog, and verifies the force push landed.
+
+Run it from `desktop/`:
+
+```sh
+cargo build -p reviu_driver --bins
+target/debug/reviu-visual-smoke --driver-bin target/debug/reviu-driver
+```
+
+Useful options:
+
+- `--driver-bin <path>`: use a prebuilt driver binary instead of `cargo run`.
+- `--screenshot <path>`: write the dialog screenshot to a specific path.
+- `--keep-temp`: keep the temporary repository and driver logs.
+
+This is intentionally not wired into CI yet.
 
 ## `reviu-perf`
 
