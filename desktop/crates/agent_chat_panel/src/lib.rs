@@ -654,7 +654,7 @@ pub fn backend_config_for(agent: &RegistryAgent) -> BackendConfig {
   let (command, args) = agent
     .command()
     .unwrap_or_else(|| (String::new(), Vec::new()));
-  BackendConfig::new(agent.name.clone(), command, args)
+  BackendConfig::new(agent.display_name(), command, args)
     .env(agent.env().to_vec())
     .cli_executable(agent.required_cli())
     .install_hint(agent.install_hint())

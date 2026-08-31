@@ -1930,7 +1930,7 @@ impl Render for AgentChatPanel {
                     let id = agent.id.clone();
                     let entity = entity.clone();
                     let is_current = id == current;
-                    let label_text: SharedString = agent.name.clone().into();
+                    let label_text: SharedString = agent.display_name().into();
                     let selector_id = id.to_string();
                     let icon_id = id.clone();
                     menu = menu.item(

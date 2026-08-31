@@ -62,6 +62,16 @@ fn checkpoint_marker(ref_name: &str) -> ChatItem {
 }
 
 #[test]
+fn backend_config_uses_registry_display_name() {
+  let registry = agent_registry::Registry::embedded();
+  let agent = registry
+    .get(&AgentId::new("claude-acp"))
+    .expect("claude-acp");
+
+  assert_eq!(backend_config_for(agent).label, "Claude Code");
+}
+
+#[test]
 fn checkpoint_insert_index_lands_before_last_user_prompt() {
   let items = vec![
     user_message("first"),

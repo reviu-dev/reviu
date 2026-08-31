@@ -95,6 +95,17 @@ impl RegistryAgent {
     matches!(self.distribution, Distribution::Command { .. })
   }
 
+  pub fn display_name(&self) -> &str {
+    match self.id.as_str() {
+      "claude-acp" => "Claude Code",
+      "deepagents" => "Deep Agents",
+      "fast-agent" => "Fast Agent",
+      "glm-acp-agent" => "GLM",
+      "pi-acp" => "Pi",
+      _ => &self.name,
+    }
+  }
+
   /// The program and args to spawn, for a runnable agent.
   pub fn command(&self) -> Option<(String, Vec<String>)> {
     let Distribution::Command {

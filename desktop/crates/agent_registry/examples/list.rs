@@ -6,7 +6,7 @@ fn main() {
     println!(
       "{:<22} {:<22} {} {}",
       agent.id.as_str(),
-      agent.name,
+      agent.display_name(),
       program,
       args.join(" ")
     );

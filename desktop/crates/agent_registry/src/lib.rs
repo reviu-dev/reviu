@@ -73,7 +73,13 @@ impl Registry {
   /// Agents Reviu can actually launch, in display order.
   pub fn runnable(&self) -> Vec<&RegistryAgent> {
     let mut agents: Vec<&RegistryAgent> = self.agents.iter().filter(|a| a.is_runnable()).collect();
-    agents.sort_by_key(|agent| agent.name.to_lowercase());
+    agents.sort_by(|left, right| {
+      left
+        .display_name()
+        .to_lowercase()
+        .cmp(&right.display_name().to_lowercase())
+        .then_with(|| left.id.as_str().cmp(right.id.as_str()))
+    });
     agents
   }
 
@@ -286,6 +292,47 @@ mod tests {
         .unwrap_or_else(|| panic!("{id} is in the snapshot"));
       assert!(agent.is_runnable(), "{id} launches through a command");
     }
+  }
+
+  #[test]
+  fn selected_registry_names_are_cleaned_for_display() {
+    let registry = Registry::embedded();
+    let expected = [
+      ("claude-acp", "Claude Code"),
+      ("deepagents", "Deep Agents"),
+      ("fast-agent", "Fast Agent"),
+      ("glm-acp-agent", "GLM"),
+      ("pi-acp", "Pi"),
+    ];
+
+    for (id, display_name) in expected {
+      let agent = registry.get(&AgentId::new(id)).expect(id);
+      assert_eq!(agent.display_name(), display_name);
+    }
+  }
+
+  #[test]
+  fn runnable_agents_sort_by_display_name() {
+    let json = r#"{
+      "version": "1.0.0",
+      "agents": [
+        {"id": "pi-acp", "name": "pi ACP", "distribution": {"npx": {"package": "pi@1"}}},
+        {"id": "codex-acp", "name": "Codex", "distribution": {"npx": {"package": "codex@1"}}},
+        {"id": "claude-acp", "name": "Claude Agent", "distribution": {"npx": {"package": "claude@1"}}}
+      ]
+    }"#;
+    let agents = parse_registry(json).expect("valid");
+    let registry = Registry {
+      agents,
+      source: RegistrySource::Snapshot,
+    };
+
+    let names: Vec<&str> = registry
+      .runnable()
+      .into_iter()
+      .map(|agent| agent.display_name())
+      .collect();
+    assert_eq!(names, vec!["Claude Code", "Codex", "Pi"]);
   }
 
   #[test]
