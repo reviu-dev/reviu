@@ -150,10 +150,9 @@ Other entities can then register a callback to handle these events by doing `cx.
 
 ## Driving the real app (reviu_driver)
 
-- `desktop/crates/reviu_driver`: mounts the real `WorkspaceView` in a test window and takes JSON-lines commands on stdin, one response per line on stdout. Use it to verify UI behavior live without launching the app.
-- Run: `cargo run -p reviu_driver` (from `desktop/`). Add `--agent-command <path>` to plug a fake agent; `cargo build -p agent_acp --features test-support --bin stub_agent` builds the stub (minimal ACP agent that acks every prompt) at `target/debug/stub_agent`.
-- Verbs: `bounds` (painted bounds of a `debug_selector`), `click` (selector or point), `type`, `key` (e.g. `{"cmd":"key","keystrokes":"cmd-p"}`), `clock` (virtual ms, timers/debounces), `wait` (real ms, live processes), `park`, `path_prompt`, `quit`.
-- Limits: it reads and writes the real config store and repositories (point it at a temp repo via `path_prompt`); no screenshots (macOS visual backend planned); animations do not run to completion under the test scheduler, judge end states.
+- `desktop/crates/reviu_driver`: mounts the real `WorkspaceView` in a test window and takes JSON-lines commands on stdin. Use it to verify UI behavior live without launching the app.
+- See `desktop/crates/reviu_driver/README.md` for driver commands, Git smoke scenarios, perf runs, backend choices, and CI/debugging notes.
+- Limits: it reads and writes real repositories, so point it at temporary repos for repeatable tests. Animations do not run to completion under the test scheduler; judge end states.
 
 ## Required workflow
 
