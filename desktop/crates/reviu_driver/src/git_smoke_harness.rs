@@ -17,6 +17,9 @@ const SCENARIOS: &[&str] = &[
   "push_rejected_non_fast_forward",
   "fetch_updates_remote_refs",
   "pull_fast_forward",
+  "create_branch_from_remote",
+  "delete_remote_branch",
+  "merge_remote_branch",
   "stash_pop",
   "stash_untracked_pop",
   "apply_stash_conflict",
@@ -315,6 +318,9 @@ fn run_one(args: &GitSmokeArgs, run_root: &Path, scenario: &str) -> Result<()> {
     }
     "fetch_updates_remote_refs" => scenario_fetch_updates_remote_refs(args, &scenario_dir),
     "pull_fast_forward" => scenario_pull_fast_forward(args, &scenario_dir),
+    "create_branch_from_remote" => scenario_create_branch_from_remote(args, &scenario_dir),
+    "delete_remote_branch" => scenario_delete_remote_branch(args, &scenario_dir),
+    "merge_remote_branch" => scenario_merge_remote_branch(args, &scenario_dir),
     "stash_pop" => scenario_stash_pop(args, &scenario_dir),
     "stash_untracked_pop" => scenario_stash_untracked_pop(args, &scenario_dir),
     "apply_stash_conflict" => scenario_apply_stash_conflict(args, &scenario_dir),
@@ -642,6 +648,89 @@ fn scenario_pull_fast_forward(args: &GitSmokeArgs, dir: &Path) -> Result<()> {
   if !has_logged_notification(&notifications, "success", "Pulled from the remote branch") {
     bail!(
       "pull did not report the expected notification:\n{}",
+      pretty_json(&notifications)
+    );
+  }
+  driver.quit()
+}
+
+fn scenario_create_branch_from_remote(args: &GitSmokeArgs, dir: &Path) -> Result<()> {
+  let repo = init_repo(&dir.join("repo"))?;
+  let remote = dir.join("remote.git");
+  setup_remote_feature_branch(&repo, &remote, dir)?;
+
+  let mut driver = DriverProcess::spawn(args.driver_bin.as_deref(), &args.backend, dir)?;
+  driver.open_repo(&repo)?;
+  driver.run_git_action(serde_json::json!({ "action": "fetch" }))?;
+  wait_for_state(&mut driver, |state| has_branch(state, "origin/feature"))?;
+  driver.run_git_action(serde_json::json!({
+    "action": "create_branch_from",
+    "name": "local-feature",
+    "base": { "name": "origin/feature", "kind": "remote" }
+  }))?;
+  wait_for_branch(&mut driver, "local-feature")?;
+  expect_file(&repo, "feature.txt", "feature\n")?;
+  let notifications = driver.notification_log()?;
+  if !has_logged_notification(&notifications, "success", "Created branch local-feature") {
+    bail!(
+      "remote branch creation did not report the expected notification:\n{}",
+      pretty_json(&notifications)
+    );
+  }
+  driver.quit()
+}
+
+fn scenario_delete_remote_branch(args: &GitSmokeArgs, dir: &Path) -> Result<()> {
+  let repo = init_repo(&dir.join("repo"))?;
+  let remote = dir.join("remote.git");
+  setup_remote_feature_branch(&repo, &remote, dir)?;
+
+  let mut driver = DriverProcess::spawn(args.driver_bin.as_deref(), &args.backend, dir)?;
+  driver.open_repo(&repo)?;
+  driver.run_git_action(serde_json::json!({ "action": "fetch" }))?;
+  wait_for_state(&mut driver, |state| has_branch(state, "origin/feature"))?;
+  driver.run_git_action(serde_json::json!({
+    "action": "delete_branch",
+    "branch": { "name": "origin/feature", "kind": "remote" }
+  }))?;
+  wait_until(DEFAULT_TIMEOUT, || {
+    git_bare_output(&remote, ["rev-parse", "refs/heads/feature"]).is_err()
+  })?;
+  wait_for_state(&mut driver, |state| !has_branch(state, "origin/feature"))?;
+  let notifications = driver.notification_log()?;
+  if !has_logged_notification(&notifications, "success", "Deleted branch origin/feature") {
+    bail!(
+      "remote branch deletion did not report the expected notification:\n{}",
+      pretty_json(&notifications)
+    );
+  }
+  driver.quit()
+}
+
+fn scenario_merge_remote_branch(args: &GitSmokeArgs, dir: &Path) -> Result<()> {
+  let repo = init_repo(&dir.join("repo"))?;
+  let remote = dir.join("remote.git");
+  setup_remote_feature_branch(&repo, &remote, dir)?;
+  commit_file(&repo, "local.txt", "local\n", "local work")?;
+
+  let mut driver = DriverProcess::spawn(args.driver_bin.as_deref(), &args.backend, dir)?;
+  driver.open_repo(&repo)?;
+  driver.run_git_action(serde_json::json!({ "action": "fetch" }))?;
+  wait_for_state(&mut driver, |state| has_branch(state, "origin/feature"))?;
+  driver.run_git_action(serde_json::json!({
+    "action": "merge_branch",
+    "branch": { "name": "origin/feature", "kind": "remote" }
+  }))?;
+  wait_for_state(&mut driver, |state| status_count(state) == Some(0))?;
+  expect_file(&repo, "feature.txt", "feature\n")?;
+  assert_eq_str(
+    &git_output(&repo, ["log", "-1", "--pretty=%s"])?,
+    "Merge branch 'origin/feature'",
+  )?;
+  let notifications = driver.notification_log()?;
+  if !has_logged_notification(&notifications, "success", "Merged origin/feature") {
+    bail!(
+      "remote branch merge did not report the expected notification:\n{}",
       pretty_json(&notifications)
     );
   }
@@ -1453,6 +1542,28 @@ fn clone_main(remote: &Path, destination: &Path) -> Result<()> {
   ])?;
   git(destination, ["config", "user.name", "Reviu Smoke"])?;
   git(destination, ["config", "user.email", "smoke@reviu.test"])?;
+  Ok(())
+}
+
+fn setup_remote_feature_branch(repo: &Path, remote: &Path, dir: &Path) -> Result<()> {
+  git_no_dir(["init", "--bare", remote.to_str().context("remote path")?])?;
+  commit_file(repo, "a.txt", "v1\n", "initial")?;
+  git(
+    repo,
+    [
+      "remote",
+      "add",
+      "origin",
+      remote.to_str().context("remote path")?,
+    ],
+  )?;
+  git(repo, ["push", "-u", "origin", "main"])?;
+
+  let other = dir.join("remote-feature-source");
+  clone_main(remote, &other)?;
+  git(&other, ["switch", "-c", "feature"])?;
+  commit_file(&other, "feature.txt", "feature\n", "feature work")?;
+  git(&other, ["push", "-u", "origin", "feature"])?;
   Ok(())
 }
 
