@@ -13,6 +13,7 @@ cargo build -p reviu_driver --bins
 This builds:
 
 - `target/debug/reviu-driver`
+- `target/debug/reviu-driver-mcp`
 - `target/debug/reviu-git-smoke`
 - `target/debug/reviu-perf`
 
@@ -58,6 +59,51 @@ Common commands:
 The test backend also supports selector-driven commands such as `bounds`, `click`, `type`, `key`, `clock`, `wait`, and `park`. The visual backend supports point clicks and `screenshot`.
 
 The driver reads and writes real repositories. Use temporary repositories for repeatable tests.
+
+## `reviu-driver-mcp`
+
+`reviu-driver-mcp` is a thin MCP stdio wrapper around `reviu-driver`. It keeps one driver process alive, starts it lazily on the first tool call, restarts it if it dies before a command, and maps MCP tools to the existing JSON-lines commands.
+
+Run it from `desktop/`:
+
+```sh
+cargo build -p reviu_driver --bins
+target/debug/reviu-driver-mcp --driver-bin target/debug/reviu-driver --backend test
+```
+
+Example MCP config:
+
+```json
+{
+  "mcpServers": {
+    "reviu-driver": {
+      "command": "/path/to/reviu/desktop/target/debug/reviu-driver-mcp",
+      "args": [
+        "--driver-bin",
+        "/path/to/reviu/desktop/target/debug/reviu-driver",
+        "--backend",
+        "test"
+      ]
+    }
+  }
+}
+```
+
+Useful options:
+
+- `--backend test|visual`: default backend for the wrapped driver.
+- `--driver-bin <path>`: path to a prebuilt `reviu-driver`; if omitted, the wrapper looks for a sibling binary and then falls back to `cargo run`.
+- `--agent-command <path>`: forwarded to `reviu-driver`.
+
+Core tools:
+
+- lifecycle: `start`, `restart`, `status`, `quit`
+- UI input: `bounds`, `click`, `type`, `key`, `clock`, `wait`, `park`, `scroll`
+- app state: `path_prompt`, `open_file`, `show_changes`, `hide_dock`, `agent_stats`, `editor_stats`
+- Git/debug: `git_state`, `dialog_state`, `confirm_dialog`, `cancel_dialog`, `notification_stats`, `notification_log`, `run_git_action`
+- visual: `screenshot` with `--backend visual` on macOS
+
+Like the raw driver, the MCP wrapper talks to real repositories. Point it at temporary repos unless you deliberately want to inspect a live checkout.
 
 ## `reviu-git-smoke`
 

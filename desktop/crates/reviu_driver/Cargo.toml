@@ -29,5 +29,9 @@ path = "src/bin/reviu_perf.rs"
 name = "reviu-git-smoke"
 path = "src/bin/reviu_git_smoke.rs"
 
+[[bin]]
+name = "reviu-driver-mcp"
+path = "src/bin/reviu_driver_mcp.rs"
+
 [lints]
 workspace = true
