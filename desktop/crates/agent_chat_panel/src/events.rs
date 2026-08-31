@@ -246,7 +246,7 @@ impl AgentChatPanel {
         }
       }
       AgentEvent::UsageUpdate(usage) => {
-        self.usage = Some((usage.used, usage.size));
+        self.usage = Some(UsageSnapshot::from_update(&usage));
       }
       AgentEvent::CurrentModeUpdate(u) => {
         self.current_mode_id = Some(u.current_mode_id);

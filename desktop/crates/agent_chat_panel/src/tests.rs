@@ -3,8 +3,8 @@ use crate::diff::DiffLine;
 use crate::persistence::{list_conversations_in, load_conversation_file};
 use agent_acp::PermissionPromptOption;
 use agent_client_protocol::schema::{
-  Diff, ImageContent, ResourceLink, SessionConfigSelect, SessionConfigSelectOption,
-  ToolCallContent, ToolCallLocation, ToolCallUpdateFields,
+  Cost, Diff, ImageContent, ResourceLink, SessionConfigSelect, SessionConfigSelectOption,
+  ToolCallContent, ToolCallLocation, ToolCallUpdateFields, UsageUpdate,
 };
 use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -3544,6 +3544,42 @@ async fn connecting_panel_shows_loading_controls(cx: &mut gpui::TestAppContext) 
 
   assert!(cx.debug_bounds("agent-chat-controls-loading").is_some());
   assert!(cx.debug_bounds("agent-chat-auto-approve").is_none());
+}
+
+#[gpui::test]
+async fn usage_update_paints_header_status(cx: &mut gpui::TestAppContext) {
+  let (panel, cx) = add_panel_window(cx);
+  panel.update(cx, |panel, cx| {
+    panel.inject_event_for_test(
+      AgentEvent::UsageUpdate(UsageUpdate::new(247_000, 272_000).cost(Cost::new(28.2, "USD"))),
+      cx,
+    );
+    cx.notify();
+  });
+  cx.run_until_parked();
+
+  assert!(cx.debug_bounds("agent-chat-usage").is_some());
+  panel.read_with(cx, |panel, _| {
+    let usage = panel.usage.as_ref().expect("usage snapshot");
+    assert_eq!(format_usage_header_label(usage), "90.8% / 272k");
+    assert_eq!(
+      format_usage_cost(usage.cost.as_ref().expect("cost")),
+      "28.20 USD"
+    );
+  });
+}
+
+#[test]
+fn usage_header_formats_context_percentage() {
+  let usage = UsageSnapshot {
+    used: 90_700,
+    size: 272_000,
+    cost: None,
+  };
+
+  assert_eq!(format_usage_header_label(&usage), "33.3% / 272k");
+  assert_eq!(humanize_token_count(1_500), "1.5k");
+  assert_eq!(humanize_token_count(46_000_000), "46M");
 }
 
 #[gpui::test]

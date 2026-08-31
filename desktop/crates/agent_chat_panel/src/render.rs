@@ -17,6 +17,94 @@ pub(crate) fn pulse_opacity(min: f32, max: f32) -> f32 {
   min + (max - min) * wave
 }
 
+pub(crate) fn humanize_token_count(tokens: u64) -> String {
+  if tokens >= 1_000_000 {
+    let millions = tokens as f64 / 1_000_000.0;
+    if tokens.is_multiple_of(1_000_000) {
+      format!("{millions:.0}M")
+    } else {
+      format!("{millions:.1}M")
+    }
+  } else if tokens >= 10_000 {
+    format!("{:.0}k", tokens as f64 / 1_000.0)
+  } else if tokens >= 1_000 {
+    format!("{:.1}k", tokens as f64 / 1_000.0)
+  } else {
+    tokens.to_string()
+  }
+}
+
+pub(crate) fn format_usage_header_label(usage: &UsageSnapshot) -> String {
+  usage
+    .ratio()
+    .map(|ratio| {
+      format!(
+        "{:.1}% / {}",
+        ratio * 100.0,
+        humanize_token_count(usage.size)
+      )
+    })
+    .unwrap_or_else(|| humanize_token_count(usage.used))
+}
+
+pub(crate) fn format_usage_cost(cost: &UsageCost) -> String {
+  let precision = if cost.amount > 0.0 && cost.amount < 0.01 {
+    4
+  } else {
+    2
+  };
+  format!("{:.precision$} {}", cost.amount, cost.currency)
+}
+
+fn usage_context_color(usage: &UsageSnapshot, theme: &gpui_component::Theme) -> Hsla {
+  match usage.ratio() {
+    Some(ratio) if ratio >= 0.95 => theme.danger,
+    Some(ratio) if ratio >= 0.85 => theme.warning,
+    _ => theme.muted_foreground,
+  }
+}
+
+fn render_usage_tooltip(usage: UsageSnapshot, cx: &mut App) -> gpui::AnyElement {
+  let theme = cx.theme().clone();
+  let context_value = usage
+    .ratio()
+    .map(|ratio| {
+      format!(
+        "{:.1}% - {} of {} tokens",
+        ratio * 100.0,
+        humanize_token_count(usage.used),
+        humanize_token_count(usage.size)
+      )
+    })
+    .unwrap_or_else(|| format!("{} tokens", humanize_token_count(usage.used)));
+
+  let mut rows = vec![("Context", context_value)];
+  if let Some(cost) = usage.cost.as_ref() {
+    rows.push(("Cost", format_usage_cost(cost)));
+  }
+
+  v_flex()
+    .gap_1()
+    .min_w(px(190.))
+    .child(
+      div()
+        .text_xs()
+        .font_weight(FontWeight::BOLD)
+        .text_color(theme.foreground)
+        .child("Session usage"),
+    )
+    .children(rows.into_iter().map(|(label, value)| {
+      h_flex()
+        .gap_3()
+        .justify_between()
+        .text_xs()
+        .child(div().text_color(theme.muted_foreground).child(label))
+        .child(div().text_color(theme.foreground).child(value))
+        .into_any_element()
+    }))
+    .into_any_element()
+}
+
 pub(crate) fn render_selector_item(
   name: SharedString,
   description: Option<SharedString>,
@@ -1783,11 +1871,7 @@ impl Render for AgentChatPanel {
 
     let _ = SharedString::from("");
 
-    let usage_text: Option<SharedString> = self.usage.map(|(used, size)| {
-      let used_k = used as f64 / 1000.0;
-      let size_k = size as f64 / 1000.0;
-      format!("{used_k:.1}k / {size_k:.0}k").into()
-    });
+    let usage_status = self.render_usage_status(theme);
 
     let center_state = self.render_center_state(theme, cx);
 
@@ -1897,9 +1981,7 @@ impl Render for AgentChatPanel {
             h_flex()
               .gap_3()
               .items_center()
-              .when_some(usage_text, |this, t| {
-                this.child(div().text_xs().text_color(theme.muted_foreground).child(t))
-              })
+              .when_some(usage_status, |this, usage| this.child(usage))
               .when(self.show_close_control, |this| {
                 this.child(
                   Button::new("agent-chat-close")
@@ -2543,6 +2625,36 @@ impl AgentChatPanel {
       );
     }
     Some(strip.into_any_element())
+  }
+
+  fn render_usage_status(&self, theme: &gpui_component::Theme) -> Option<gpui::AnyElement> {
+    let usage = self.usage.clone()?;
+    let color = usage_context_color(&usage, theme);
+    let tooltip_usage = usage.clone();
+
+    Some(
+      div()
+        .id("agent-chat-usage")
+        .debug_selector(|| "agent-chat-usage".to_string())
+        .px_1p5()
+        .py(px(2.))
+        .rounded_full()
+        .border_1()
+        .border_color(color.opacity(0.35))
+        .bg(color.opacity(0.08))
+        .text_xs()
+        .line_height(gpui::relative(1.))
+        .text_color(color)
+        .child(format_usage_header_label(&usage))
+        .tooltip(move |window, cx| {
+          let usage = tooltip_usage.clone();
+          gpui_component::tooltip::Tooltip::element(move |_, cx| {
+            render_usage_tooltip(usage.clone(), cx)
+          })
+          .build(window, cx)
+        })
+        .into_any_element(),
+    )
   }
 
   fn render_composer_controls(&self, cx: &mut Context<Self>) -> gpui::AnyElement {

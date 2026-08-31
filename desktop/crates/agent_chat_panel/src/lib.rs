@@ -35,6 +35,7 @@ use crate::persistence::{
 pub use crate::persistence::{ConversationMeta, WorktreeBinding, state_dir_for_repo};
 pub use crate::store::ConversationStore;
 use crate::store::SaveRequest;
+
 use agent_acp::{
   AgentEvent, AgentSession, AuthMethodInfo, BackendAvailability, BackendConfig,
   PermissionOptionKind, PermissionPrompt,
@@ -42,7 +43,7 @@ use agent_acp::{
 use agent_client_protocol::schema::{
   ContentBlock, EmbeddedResource, EmbeddedResourceResource, Plan, PlanEntryPriority,
   PlanEntryStatus, ResourceLink, SessionInfoUpdate, TextContent, TextResourceContents, ToolCall,
-  ToolCallContent, ToolCallId, ToolCallStatus, ToolCallUpdate, ToolKind,
+  ToolCallContent, ToolCallId, ToolCallStatus, ToolCallUpdate, ToolKind, UsageUpdate,
 };
 use agent_client_protocol::schema::{
   ModelId, ModelInfo, SessionConfigId, SessionConfigKind, SessionConfigOption,
@@ -73,6 +74,36 @@ use gpui_component::{
 };
 use syntax::{HighlightSpan, SyntaxHighlighter, SyntaxTheme, highlights_to_text_runs, languages};
 use ui::{StatusThemeExt as _, UiIconName};
+
+#[derive(Clone, Debug)]
+struct UsageSnapshot {
+  used: u64,
+  size: u64,
+  cost: Option<UsageCost>,
+}
+
+#[derive(Clone, Debug)]
+struct UsageCost {
+  amount: f64,
+  currency: String,
+}
+
+impl UsageSnapshot {
+  fn from_update(update: &UsageUpdate) -> Self {
+    Self {
+      used: update.used,
+      size: update.size,
+      cost: update.cost.as_ref().map(|cost| UsageCost {
+        amount: cost.amount,
+        currency: cost.currency.clone(),
+      }),
+    }
+  }
+
+  fn ratio(&self) -> Option<f64> {
+    (self.size > 0).then_some(self.used as f64 / self.size as f64)
+  }
+}
 
 #[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 enum ChatRole {
@@ -883,7 +914,7 @@ pub struct AgentChatPanel {
   turn_started_at: Option<std::time::Instant>,
   _tick_task: Option<Task<()>>,
   messages_list: gpui::ListState,
-  usage: Option<(u64, u64)>,
+  usage: Option<UsageSnapshot>,
   agent_version: Option<String>,
   auth_methods: Vec<AuthMethodInfo>,
   auth_required: bool,
