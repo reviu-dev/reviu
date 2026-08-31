@@ -776,6 +776,10 @@ fn editor_actions_enabled(
     && !external_input_focused
 }
 
+fn editor_caret_actions_enabled(editor_actions_enabled: bool, is_read_only: bool) -> bool {
+  editor_actions_enabled && !is_read_only
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct ReviewCommentCreateTarget {
   display_line: usize,
@@ -10023,43 +10027,48 @@ impl Render for Editor {
       .size_full()
       .relative()
       .overflow_hidden()
+      .when(
+        editor_caret_actions_enabled(editor_actions_enabled, self.is_read_only),
+        |el| {
+          el.on_action(cx.listener(crate::actions::enter))
+            .on_action(cx.listener(crate::actions::tab))
+            .on_action(cx.listener(crate::actions::backspace))
+            .on_action(cx.listener(crate::actions::backspace_word))
+            .on_action(cx.listener(crate::actions::backspace_all))
+            .on_action(cx.listener(crate::actions::delete))
+            .on_action(cx.listener(crate::actions::up))
+            .on_action(cx.listener(crate::actions::down))
+            .on_action(cx.listener(crate::actions::left))
+            .on_action(cx.listener(crate::actions::alt_left))
+            .on_action(cx.listener(crate::actions::cmd_left))
+            .on_action(cx.listener(crate::actions::right))
+            .on_action(cx.listener(crate::actions::alt_right))
+            .on_action(cx.listener(crate::actions::cmd_right))
+            .on_action(cx.listener(crate::actions::cmd_up))
+            .on_action(cx.listener(crate::actions::cmd_down))
+            .on_action(cx.listener(crate::actions::select_cmd_left))
+            .on_action(cx.listener(crate::actions::select_cmd_right))
+            .on_action(cx.listener(crate::actions::select_cmd_up))
+            .on_action(cx.listener(crate::actions::select_cmd_down))
+            .on_action(cx.listener(crate::actions::select_up))
+            .on_action(cx.listener(crate::actions::select_down))
+            .on_action(cx.listener(crate::actions::select_left))
+            .on_action(cx.listener(crate::actions::select_word_left))
+            .on_action(cx.listener(crate::actions::select_right))
+            .on_action(cx.listener(crate::actions::select_word_right))
+            .on_action(cx.listener(crate::actions::home))
+            .on_action(cx.listener(crate::actions::end))
+            .on_action(cx.listener(crate::actions::show_character_palette))
+            .on_action(cx.listener(crate::actions::paste))
+            .on_action(cx.listener(crate::actions::cut))
+            .on_action(cx.listener(crate::actions::undo))
+            .on_action(cx.listener(crate::actions::redo))
+            .on_action(cx.listener(crate::actions::save))
+        },
+      )
       .when(editor_actions_enabled, |el| {
-        el.on_action(cx.listener(crate::actions::enter))
-          .on_action(cx.listener(crate::actions::tab))
-          .on_action(cx.listener(crate::actions::backspace))
-          .on_action(cx.listener(crate::actions::backspace_word))
-          .on_action(cx.listener(crate::actions::backspace_all))
-          .on_action(cx.listener(crate::actions::delete))
-          .on_action(cx.listener(crate::actions::up))
-          .on_action(cx.listener(crate::actions::down))
-          .on_action(cx.listener(crate::actions::left))
-          .on_action(cx.listener(crate::actions::alt_left))
-          .on_action(cx.listener(crate::actions::cmd_left))
-          .on_action(cx.listener(crate::actions::right))
-          .on_action(cx.listener(crate::actions::alt_right))
-          .on_action(cx.listener(crate::actions::cmd_right))
-          .on_action(cx.listener(crate::actions::cmd_up))
-          .on_action(cx.listener(crate::actions::cmd_down))
-          .on_action(cx.listener(crate::actions::select_cmd_left))
-          .on_action(cx.listener(crate::actions::select_cmd_right))
-          .on_action(cx.listener(crate::actions::select_cmd_up))
-          .on_action(cx.listener(crate::actions::select_cmd_down))
-          .on_action(cx.listener(crate::actions::select_up))
-          .on_action(cx.listener(crate::actions::select_down))
-          .on_action(cx.listener(crate::actions::select_left))
-          .on_action(cx.listener(crate::actions::select_word_left))
-          .on_action(cx.listener(crate::actions::select_right))
-          .on_action(cx.listener(crate::actions::select_word_right))
-          .on_action(cx.listener(crate::actions::select_all))
-          .on_action(cx.listener(crate::actions::home))
-          .on_action(cx.listener(crate::actions::end))
-          .on_action(cx.listener(crate::actions::show_character_palette))
-          .on_action(cx.listener(crate::actions::paste))
-          .on_action(cx.listener(crate::actions::cut))
+        el.on_action(cx.listener(crate::actions::select_all))
           .on_action(cx.listener(crate::actions::copy))
-          .on_action(cx.listener(crate::actions::undo))
-          .on_action(cx.listener(crate::actions::redo))
-          .on_action(cx.listener(crate::actions::save))
           .on_action(cx.listener(crate::actions::find))
       })
       .on_action(cx.listener(crate::actions::close_find))
@@ -10992,6 +11001,13 @@ pub mod tests {
     assert!(!editor_actions_enabled(false, false, false, true, false));
     assert!(!editor_actions_enabled(false, false, false, false, true));
     assert!(!editor_actions_enabled(true, true, true, true, true));
+  }
+
+  #[gpui::test]
+  fn test_read_only_disables_caret_actions(_cx: &mut TestAppContext) {
+    assert!(editor_caret_actions_enabled(true, false));
+    assert!(!editor_caret_actions_enabled(true, true));
+    assert!(!editor_caret_actions_enabled(false, false));
   }
 
   #[gpui::test]

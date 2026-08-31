@@ -191,6 +191,15 @@ fn conflict_kind_for_display_line(
   conflict_line_kinds.get(&doc_line).copied()
 }
 
+fn should_paint_text_caret(
+  is_primary: bool,
+  is_focused: bool,
+  cursor_visible: bool,
+  is_read_only: bool,
+) -> bool {
+  is_primary && is_focused && cursor_visible && !is_read_only
+}
+
 /// Encapsulates layout information for mouse position -> text offset conversion
 #[derive(Clone)]
 pub struct PositionMap {
@@ -964,6 +973,7 @@ impl Element for EditorElement {
       viewport_lines,
       projection,
       block_map,
+      is_read_only,
     ) = {
       let editor = self.editor.read(cx);
       let document = editor.document().read(cx);
@@ -1031,6 +1041,7 @@ impl Element for EditorElement {
         viewport_lines,
         projection,
         block_map,
+        editor.is_read_only,
       )
     };
 
@@ -1837,7 +1848,11 @@ impl Element for EditorElement {
       }
     }
 
-    let cursor_quad = if is_primary { cursor_quad } else { None };
+    let cursor_quad = if is_primary && !is_read_only {
+      cursor_quad
+    } else {
+      None
+    };
     let selection_quads = if is_primary {
       selection_quads
     } else {
@@ -2137,10 +2152,10 @@ impl Element for EditorElement {
         .ok();
     }
 
-    let cursor_visible = self.editor.read(cx).cursor_blink.read(cx).visible();
-    if is_primary
-      && is_focused
-      && cursor_visible
+    let editor = self.editor.read(cx);
+    let cursor_visible = editor.cursor_blink.read(cx).visible();
+    let is_read_only = editor.is_read_only;
+    if should_paint_text_caret(is_primary, is_focused, cursor_visible, is_read_only)
       && let Some(cursor_quad) = &prepaint.cursor_quad
     {
       window.paint_quad(cursor_quad.clone());
@@ -2278,6 +2293,15 @@ mod tests {
       element.line_visibility(display_line, None),
       LineVisibility::Text
     );
+  }
+
+  #[test]
+  fn read_only_editor_does_not_paint_text_caret() {
+    assert!(should_paint_text_caret(true, true, true, false));
+    assert!(!should_paint_text_caret(true, true, true, true));
+    assert!(!should_paint_text_caret(false, true, true, false));
+    assert!(!should_paint_text_caret(true, false, true, false));
+    assert!(!should_paint_text_caret(true, true, false, false));
   }
 
   #[test]
