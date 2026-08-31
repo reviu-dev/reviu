@@ -36,6 +36,7 @@ actions!(
     OpenGitConfigPage,
     OpenSettingsPage,
     OpenAboutPage,
+    OpenBrowserExtensions,
   ]
 );
 

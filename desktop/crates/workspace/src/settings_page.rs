@@ -307,19 +307,14 @@ impl SettingsPage {
     default_menu_bar_icon: bool,
   ) -> Vec<SettingGroup> {
     #[cfg(target_os = "macos")]
-    let title = "Menu Bar";
+    let title = "GitHub Notifications in Menu Bar";
     #[cfg(not(target_os = "macos"))]
-    let title = "System Tray";
+    let title = "GitHub Notifications in System Tray";
+    let label = "Show unread GitHub notifications";
     #[cfg(target_os = "macos")]
-    let label = "Show in Menu Bar";
+    let description = "Show a Reviu menu bar icon with unread GitHub notification counts.";
     #[cfg(not(target_os = "macos"))]
-    let label = "Show in System Tray";
-    #[cfg(target_os = "macos")]
-    let description =
-      "Show the Reviu icon in the macOS menu bar with unread GitHub notification counts.";
-    #[cfg(not(target_os = "macos"))]
-    let description =
-      "Show the Reviu icon in the system tray with unread GitHub notification counts.";
+    let description = "Show a Reviu system tray icon with unread GitHub notification counts.";
 
     vec![SettingGroup::new().title(title).items(vec![
         SettingItem::new(
@@ -341,6 +336,13 @@ impl SettingsPage {
                   val,
                   crate::workspace::STATUS_BAR_ICON_PNG,
                 );
+                if val {
+                  let notifications =
+                    crate::github_notifications::GithubNotificationsStore::list(cx);
+                  let unread =
+                    crate::github_notifications::GithubNotificationsStore::unread_count(cx);
+                  crate::status_bar::update_status_bar(unread, &notifications);
+                }
               }
             },
           )
@@ -589,7 +591,7 @@ impl SettingsPage {
 
   fn rebuild_app_key_bindings(&self, cx: &mut Context<Self>) {
     crate::install_app_key_bindings(cx);
-    cx.set_menus(crate::build_app_menus());
+    cx.set_menus(crate::workspace::build_app_menus_for_current_auth(cx));
   }
 
   fn is_recording_shortcut(&self, shortcut_id: ShortcutId) -> bool {

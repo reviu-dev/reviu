@@ -100,14 +100,19 @@ fn update_button_tooltip(state: Option<&AppUpdateState>) -> String {
 }
 
 pub fn build_app_menus() -> Vec<Menu> {
-  let navigate_items = vec![
-    MenuItem::action("Back", crate::NavigateBack),
-    MenuItem::separator(),
-    MenuItem::action("Sessions", crate::OpenSessionPage),
-    MenuItem::separator(),
-    MenuItem::action("Git Config", crate::OpenGitConfigPage),
-    MenuItem::action("Billing", crate::OpenBillingPage),
-  ];
+  build_app_menus_with_subscription(false)
+}
+
+pub(crate) fn build_app_menus_for_current_auth(cx: &App) -> Vec<Menu> {
+  build_app_menus_with_subscription(AuthStateStore::has_subscription(cx))
+}
+
+fn build_app_menus_with_subscription(has_subscription: bool) -> Vec<Menu> {
+  let billing_label = if has_subscription {
+    "Billing"
+  } else {
+    "Reviu Pro"
+  };
 
   vec![
     Menu {
@@ -117,14 +122,13 @@ pub fn build_app_menus() -> Vec<Menu> {
         MenuItem::action("About Reviu", crate::OpenAboutPage),
         MenuItem::separator(),
         MenuItem::action("Settings...", crate::OpenSettingsPage),
+        MenuItem::action("Git Config...", crate::OpenGitConfigPage),
+        MenuItem::action("Browser Extension...", crate::OpenBrowserExtensions),
+        MenuItem::separator(),
+        MenuItem::action(billing_label, crate::OpenBillingPage),
         MenuItem::separator(),
         MenuItem::action("Quit Reviu", Quit),
       ],
-    },
-    Menu {
-      name: "Navigate".into(),
-      disabled: false,
-      items: navigate_items,
     },
     Menu {
       name: "Edit".into(),
@@ -201,7 +205,7 @@ impl WorkspaceView {
   }
 
   fn sync_app_menus(cx: &mut App) {
-    cx.set_menus(build_app_menus());
+    cx.set_menus(build_app_menus_for_current_auth(cx));
   }
 
   pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
@@ -485,10 +489,6 @@ impl WorkspaceView {
 
         let _ = this.update(cx, |_, cx| {
           if let Ok(notifications) = result {
-            let unread = notifications.iter().filter(|n| n.unread).count();
-            if PersistedSettings::get(cx).menu_bar_icon {
-              crate::status_bar::update_status_bar(unread, &notifications);
-            }
             GithubNotificationsStore::set(cx, notifications);
             cx.refresh_windows();
           }
@@ -940,6 +940,11 @@ impl Render for WorkspaceView {
       .on_action(cx.listener(|_, _: &crate::OpenAboutPage, window, cx| {
         open_about_dialog(window, cx);
       }))
+      .on_action(
+        cx.listener(|_, _: &crate::OpenBrowserExtensions, window, cx| {
+          crate::browser_extensions_dialog::open_browser_extensions_dialog(window, cx);
+        }),
+      )
       .child(ui::scroll_dispatcher())
       .child(self.render_global_bar(window, page, &pathname, cx))
       .child(div().flex_1().min_h_0().child(session_page))
@@ -956,7 +961,7 @@ impl Focusable for WorkspaceView {
 #[cfg(test)]
 mod tests {
   use super::{
-    WorkspacePage, WorkspaceView, build_app_menus, page_has_file_search,
+    WorkspacePage, WorkspaceView, build_app_menus_with_subscription, page_has_file_search,
     should_activate_session_page, should_run_scheduled_update_check, update_button_tooltip,
     user_menu_page_for_workspace_page, workspace_page_from_pathname,
   };
@@ -1018,17 +1023,48 @@ mod tests {
   }
 
   #[test]
-  fn build_app_menus_offers_billing_to_everyone() {
-    let menus = build_app_menus();
-    let navigate_menu = menus
+  fn build_app_menus_keep_workspace_actions_out_of_the_app_menu() {
+    let menus = build_app_menus_with_subscription(false);
+    let app_menu = menus
       .iter()
-      .find(|menu| menu.name == "Navigate")
-      .expect("navigate menu");
+      .find(|menu| menu.name == "Reviu")
+      .expect("app menu");
 
-    // Someone with nothing to manage yet is exactly who the dialog is for.
     assert_eq!(
-      action_menu_item_names(navigate_menu),
-      vec!["Back", "Sessions", "Git Config", "Billing"]
+      action_menu_item_names(app_menu),
+      vec![
+        "About Reviu",
+        "Settings...",
+        "Git Config...",
+        "Browser Extension...",
+        "Reviu Pro",
+        "Quit Reviu"
+      ]
+    );
+    assert!(
+      menus.iter().all(|menu| menu.name != "File"),
+      "workspace actions live in the workspace UI and palette"
+    );
+  }
+
+  #[test]
+  fn build_app_menus_names_billing_for_subscribers() {
+    let menus = build_app_menus_with_subscription(true);
+    let app_menu = menus
+      .iter()
+      .find(|menu| menu.name == "Reviu")
+      .expect("app menu");
+
+    assert_eq!(
+      action_menu_item_names(app_menu),
+      vec![
+        "About Reviu",
+        "Settings...",
+        "Git Config...",
+        "Browser Extension...",
+        "Billing",
+        "Quit Reviu"
+      ]
     );
   }
 

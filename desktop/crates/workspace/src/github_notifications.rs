@@ -3,6 +3,7 @@ use std::sync::{Arc, Mutex};
 use gpui::{App, AppContext as _, Global};
 
 use crate::api::GithubNotification;
+use crate::config::AppSettings;
 use crate::dock_badge::set_dock_badge;
 use crate::github_navigation::{PullRequestFallback, open_pull_request_target, open_repo_target};
 use crate::workspace::WorkspaceApi;
@@ -32,13 +33,12 @@ impl GithubNotificationsStore {
       .unwrap_or(0)
   }
 
-  /// Replaces the stored notifications and syncs the dock badge.
+  /// Replaces the stored notifications and syncs the app notification surfaces.
   pub fn set(cx: &mut App, notifications: Vec<GithubNotification>) {
-    let unread = unread_count(&notifications);
     if let Ok(mut guard) = cx.global::<Self>().notifications.lock() {
       *guard = notifications;
     }
-    set_dock_badge(unread);
+    sync_notification_surfaces(cx);
   }
 
   pub fn clear(cx: &mut App) {
@@ -62,14 +62,26 @@ impl GithubNotificationsStore {
   }
 
   fn update(cx: &mut App, edit: impl FnOnce(&mut Vec<GithubNotification>)) {
-    let unread = {
+    {
       let Ok(mut guard) = cx.global::<Self>().notifications.lock() else {
         return;
       };
       edit(&mut guard);
-      unread_count(&guard)
-    };
-    set_dock_badge(unread);
+    }
+    sync_notification_surfaces(cx);
+  }
+}
+
+fn sync_notification_surfaces(cx: &App) {
+  let notifications = GithubNotificationsStore::list(cx);
+  let unread = unread_count(&notifications);
+  set_dock_badge(unread);
+
+  if cx
+    .try_global::<AppSettings>()
+    .is_some_and(|settings| settings.menu_bar_icon)
+  {
+    crate::status_bar::update_status_bar(unread, &notifications);
   }
 }
 
@@ -178,6 +190,7 @@ pub(crate) fn open_notification(notification: &GithubNotification, cx: &mut App)
 
 pub(crate) fn mark_notification_read(thread_id: String, cx: &mut App) {
   GithubNotificationsStore::mark_read(cx, &thread_id);
+  cx.refresh_windows();
   let api = WorkspaceApi::global(cx).api.clone();
   cx.background_spawn(async move {
     let _ = api.mark_notification_read(&thread_id);
@@ -187,6 +200,7 @@ pub(crate) fn mark_notification_read(thread_id: String, cx: &mut App) {
 
 pub(crate) fn mark_notification_done(thread_id: String, cx: &mut App) {
   GithubNotificationsStore::remove(cx, &thread_id);
+  cx.refresh_windows();
   let api = WorkspaceApi::global(cx).api.clone();
   cx.background_spawn(async move {
     let _ = api.mark_notification_done(&thread_id);
