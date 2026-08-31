@@ -55,8 +55,8 @@ const TOGGLE_DIFF_VIEW_CONTEXT: &str = "WorkspaceSession";
 const REVIEW_ANNOTATION_CONTEXT: &str = "WorkspaceSession";
 const HUNK_ACTION_CONTEXT: &str = "WorkspaceSession";
 const HUNK_ACTION_SESSION_CONTEXT: &str = "WorkspaceSession";
-const HUNK_ACTION_DESCENDANT_FOCUS: &str = "List || Editor";
-const RESTORE_FILE_DESCENDANT_FOCUS: &str = "List";
+const HUNK_OR_CONFLICT_ACTION_FOCUS: &str = "List || Editor";
+const FILE_ACTION_FOCUS: &str = "List";
 const COMMENT_HUNK_CONTEXT: &str = "WorkspaceSession";
 const COMMENT_HUNK_DESCENDANT_FOCUS: &str = "List || Editor || Tree";
 
@@ -811,21 +811,10 @@ const RESERVED_APP_BINDINGS: [ReservedAppBinding; 39] = [
 impl ShortcutDefinition {
   fn key_binding_with_keystroke(self, keystroke: &str, generation: u32) -> KeyBinding {
     let base = shortcut_binding_context(&guarded_shortcut_context(self.context), generation);
-    let context = match self.id {
-      ShortcutId::CommentHunk => {
-        format!("({}) > ({})", base, COMMENT_HUNK_DESCENDANT_FOCUS)
-      }
-      ShortcutId::ToggleHunkStage
-      | ShortcutId::RestoreHunk
-      | ShortcutId::ToggleFileStage
-      | ShortcutId::AcceptBothConflict => {
-        format!("({}) > ({})", base, HUNK_ACTION_DESCENDANT_FOCUS)
-      }
-      ShortcutId::RestoreFile => format!("({}) > ({})", base, RESTORE_FILE_DESCENDANT_FOCUS),
-      ShortcutId::CommitChanges => {
-        format!("({}) > ({})", base, COMMIT_CHANGES_DESCENDANT_FOCUS)
-      }
-      _ => base,
+    let context = if let Some(descendant_focus) = self.descendant_focus() {
+      format!("({}) > ({})", base, descendant_focus)
+    } else {
+      base
     };
 
     match self.id {
@@ -889,6 +878,18 @@ impl ShortcutDefinition {
       ShortcutId::AcceptBothConflict => {
         KeyBinding::new(keystroke, AcceptBothConflict, Some(&context))
       }
+    }
+  }
+
+  fn descendant_focus(self) -> Option<&'static str> {
+    match self.id {
+      ShortcutId::CommentHunk => Some(COMMENT_HUNK_DESCENDANT_FOCUS),
+      ShortcutId::ToggleHunkStage | ShortcutId::RestoreHunk | ShortcutId::AcceptBothConflict => {
+        Some(HUNK_OR_CONFLICT_ACTION_FOCUS)
+      }
+      ShortcutId::ToggleFileStage | ShortcutId::RestoreFile => Some(FILE_ACTION_FOCUS),
+      ShortcutId::CommitChanges => Some(COMMIT_CHANGES_DESCENDANT_FOCUS),
+      _ => None,
     }
   }
 
@@ -1788,18 +1789,28 @@ mod tests {
       );
     }
 
-    assert!(bound_in("/session", "cmd-enter"));
-    assert!(!bound_in("/session", "cmd-shift-backspace"));
-    assert!(has_binding_with_bindings_in_contexts(
-      "/session",
-      &["List"],
-      "cmd-shift-backspace",
-      workspace_key_bindings(),
-    ));
+    for keystroke in ["shift-enter", "shift-backspace", "cmd-shift-enter"] {
+      assert!(has_binding_with_bindings_in_contexts(
+        "/session",
+        &["List"],
+        keystroke,
+        workspace_key_bindings(),
+      ));
+    }
+
+    for keystroke in ["cmd-enter", "cmd-shift-backspace"] {
+      assert!(!bound_in("/session", keystroke));
+      assert!(has_binding_with_bindings_in_contexts(
+        "/session",
+        &["List"],
+        keystroke,
+        workspace_key_bindings(),
+      ));
+    }
   }
 
   #[test]
-  fn restore_file_shortcut_does_not_shadow_editor_backspace_all() {
+  fn file_level_git_shortcuts_stay_out_of_the_editor() {
     assert_eq!(
       first_binding_action_name(
         "/session",
@@ -1808,6 +1819,33 @@ mod tests {
         app_and_workspace_key_bindings(),
       ),
       Some(<BackspaceAll as Action>::name_for_type())
+    );
+    assert_eq!(
+      first_binding_action_name(
+        "/session",
+        &["Editor"],
+        "cmd-enter",
+        app_and_workspace_key_bindings(),
+      ),
+      None
+    );
+    assert_eq!(
+      first_binding_action_name(
+        "/session",
+        &["Editor"],
+        "cmd-shift-backspace",
+        app_and_workspace_key_bindings(),
+      ),
+      None
+    );
+    assert_eq!(
+      first_binding_action_name(
+        "/session",
+        &["List"],
+        "cmd-enter",
+        app_and_workspace_key_bindings(),
+      ),
+      Some(<ToggleFileStage as Action>::name_for_type())
     );
     assert_eq!(
       first_binding_action_name(

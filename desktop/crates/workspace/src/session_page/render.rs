@@ -2886,7 +2886,7 @@ mod tests {
   }
 
   #[gpui::test]
-  async fn the_file_shortcuts_stage_and_restore_what_is_open(cx: &mut TestAppContext) {
+  async fn the_file_actions_stage_and_restore_what_is_open(cx: &mut TestAppContext) {
     let repo = TempRepo::init("session-render-file-shortcuts");
     commit_text_file(&repo.path, Path::new("a.txt"), "v1\n", "initial");
     std::fs::write(repo.path.join("a.txt"), "v2\n").expect("update file");
@@ -2916,7 +2916,7 @@ mod tests {
       })
     };
 
-    // `cmd-enter` stages the open file, and stages it back off.
+    // The file-level action stages the selected file, and stages it back off.
     page.update_in(cx, |page, window, cx| {
       page.toggle_file_stage_action(&crate::ToggleFileStage, window, cx)
     });
