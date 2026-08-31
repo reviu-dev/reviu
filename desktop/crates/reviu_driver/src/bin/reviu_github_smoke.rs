@@ -117,7 +117,7 @@ fn run(args: GithubSmokeArgs) -> Result<()> {
 fn run_live_github_smoke(args: &GithubSmokeArgs, run_dir: &std::path::Path) -> Result<()> {
   ensure_expected_remote(args)?;
   ensure_gh_can_read_repo(args)?;
-  ensure_open_fixture_pr(args)?;
+  let fixture_pr_number = ensure_open_fixture_pr(args)?;
 
   let mut driver = DriverProcess::spawn(args.driver_bin.as_deref(), "test", run_dir, false)?;
   driver.open_repo(&args.repo)?;
@@ -130,6 +130,30 @@ fn run_live_github_smoke(args: &GithubSmokeArgs, run_dir: &std::path::Path) -> R
     "opened branch: {}",
     current_branch(&state).unwrap_or("unknown")
   );
+
+  let pull_request = wait_for_branch_pull_request(&mut driver)?;
+  match branch_pull_request_status(&pull_request) {
+    Some("found") => {
+      let number = pull_request.get("number").and_then(Value::as_u64);
+      if number != Some(fixture_pr_number) {
+        bail!(
+          "expected Reviu to find PR #{fixture_pr_number}, got:\n{}",
+          pretty_json(&pull_request)
+        );
+      }
+      println!("Reviu branch PR: #{}", fixture_pr_number);
+    }
+    Some("no_access") => bail!(
+      "Reviu GitHub auth missing or does not have access to {}/{}",
+      args.owner,
+      args.name
+    ),
+    Some(status) => bail!(
+      "expected Reviu to find the branch pull request, got {status}:\n{}",
+      pretty_json(&pull_request)
+    ),
+    None => bail!("missing branch_pull_request in driver state"),
+  }
 
   driver.run_git_action(json!({ "action": "fetch" }))?;
   wait_for_driver_state(&mut driver, |state| {
@@ -173,7 +197,7 @@ fn ensure_gh_can_read_repo(args: &GithubSmokeArgs) -> Result<()> {
   Ok(())
 }
 
-fn ensure_open_fixture_pr(args: &GithubSmokeArgs) -> Result<()> {
+fn ensure_open_fixture_pr(args: &GithubSmokeArgs) -> Result<u64> {
   let repo = format!("{}/{}", args.owner, args.name);
   let pull_requests = gh_json([
     "pr",
@@ -195,15 +219,16 @@ fn ensure_open_fixture_pr(args: &GithubSmokeArgs) -> Result<()> {
   {
     bail!("unexpected fixture PR: {}", pretty_json(pull_request));
   }
+  let number = pull_request
+    .get("number")
+    .and_then(Value::as_u64)
+    .context("fixture PR number")?;
   println!(
     "fixture PR: #{} {}",
-    pull_request
-      .get("number")
-      .and_then(Value::as_u64)
-      .unwrap_or_default(),
+    number,
     string_field(pull_request, "url").unwrap_or("unknown")
   );
-  Ok(())
+  Ok(number)
 }
 
 fn gh_json<const N: usize>(args: [&str; N]) -> Result<Value> {
@@ -235,6 +260,24 @@ fn wait_for_driver_state(
   })
   .with_context(|| format!("last git_state:\n{}", pretty_json(&last)))?;
   Ok(last)
+}
+
+fn wait_for_branch_pull_request(driver: &mut DriverProcess) -> Result<Value> {
+  let state = wait_for_driver_state(driver, |state| {
+    branch_pull_request_status(state).is_some_and(|status| status != "loading")
+  })?;
+  state
+    .get("branch_pull_request")
+    .cloned()
+    .context("branch_pull_request state")
+}
+
+fn branch_pull_request_status(state: &Value) -> Option<&str> {
+  state
+    .get("branch_pull_request")
+    .unwrap_or(state)
+    .get("status")
+    .and_then(Value::as_str)
 }
 
 fn github_remote_matches(state: &Value, owner: &str, name: &str) -> bool {
@@ -332,6 +375,7 @@ mod tests {
   fn github_remote_helper_reads_driver_state() {
     let state = json!({
       "github_remote": { "owner": "reviu-dev", "repo": "reviu-github-smoke" },
+      "branch_pull_request": { "status": "found", "number": 1 },
       "palette_commands": ["show_pull_request"],
       "branches": [{ "name": "origin/smoke/pr-open" }],
       "notifications": [{ "kind": "success", "message": "Fetched from remotes" }]
@@ -342,6 +386,7 @@ mod tests {
       "reviu-dev",
       "reviu-github-smoke"
     ));
+    assert_eq!(branch_pull_request_status(&state), Some("found"));
     assert!(palette_has_command(&state, "show_pull_request"));
     assert!(has_branch(&state, "origin/smoke/pr-open"));
     assert!(has_logged_notification(&state, "success", "fetched"));

@@ -78,6 +78,7 @@ impl SessionPage {
         "owner": remote.owner,
         "repo": remote.repo,
       })),
+      "branch_pull_request": panel.branch_pull_request_state_for_driver(),
       "branches": branches.into_iter().map(driver_branch_json).collect::<Vec<_>>(),
       "status_entries": status_entries.into_iter().map(driver_status_json).collect::<Vec<_>>(),
       "stashes": stashes.into_iter().map(|stash| serde_json::json!({

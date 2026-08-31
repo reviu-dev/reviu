@@ -197,6 +197,7 @@ Current scope is intentionally non-destructive:
 - opens the live checkout through `reviu-driver --backend test`
 - uses your normal local Git/Reviu environment so private GitHub credentials are available
 - verifies Reviu detects the GitHub remote
+- verifies Reviu resolves the current branch to the stable fixture PR
 - fetches and verifies the fixture PR branch is available locally
 
 Useful options:

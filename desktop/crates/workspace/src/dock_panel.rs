@@ -1394,6 +1394,29 @@ impl DockPanel {
     }
   }
 
+  #[cfg(any(test, feature = "test-support"))]
+  pub(crate) fn branch_pull_request_state_for_driver(&self) -> serde_json::Value {
+    match &self.branch_pr {
+      BranchPrState::NoAccess => serde_json::json!({ "status": "no_access" }),
+      BranchPrState::NoRemote => serde_json::json!({ "status": "no_remote" }),
+      BranchPrState::Loading => serde_json::json!({ "status": "loading" }),
+      BranchPrState::Missing(context) => serde_json::json!({
+        "status": "missing",
+        "owner": context.owner,
+        "repo": context.repo,
+        "branch": context.branch,
+      }),
+      BranchPrState::Found(context, pull_request) => serde_json::json!({
+        "status": "found",
+        "owner": context.owner,
+        "repo": context.repo,
+        "branch": context.branch,
+        "number": pull_request.number,
+        "title": pull_request.title,
+      }),
+    }
+  }
+
   /// Whether a new comment would join something: GitHub refuses a standalone
   /// comment while an unsubmitted review is open.
   pub(crate) fn has_pending_pull_request_review(&self) -> bool {
