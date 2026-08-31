@@ -1,3 +1,5 @@
+#[path = "../driver_harness.rs"]
+mod driver_harness;
 #[path = "../git_smoke_harness.rs"]
 mod git_smoke_harness;
 
