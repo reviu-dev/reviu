@@ -75,6 +75,13 @@ jobs:
         working-directory: desktop
         run: cargo nextest run
 
+      - name: Git smoke tests
+        if: runner.os != 'Windows'
+        working-directory: desktop
+        run: |
+          cargo build -p reviu_driver --bins
+          target/debug/reviu-git-smoke --driver-bin target/debug/reviu-driver
+
   website:
     name: Website
     runs-on: ubuntu-latest
