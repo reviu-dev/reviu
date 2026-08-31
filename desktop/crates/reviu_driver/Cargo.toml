@@ -25,5 +25,9 @@ path = "src/main.rs"
 name = "reviu-perf"
 path = "src/bin/reviu_perf.rs"
 
+[[bin]]
+name = "reviu-git-smoke"
+path = "src/bin/reviu_git_smoke.rs"
+
 [lints]
 workspace = true
