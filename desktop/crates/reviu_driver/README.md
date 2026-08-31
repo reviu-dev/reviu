@@ -190,10 +190,11 @@ REVIU_PROFILE=dev API_BASE_URL=http://localhost:3001 REVIU_GITHUB_SMOKE=1 \
   target/debug/reviu-github-smoke \
   --backend test \
   --driver-bin target/debug/reviu-driver \
-  --repo /Users/joris/workspace/reviu-github-smoke
+  --repo /Users/joris/workspace/reviu-github-smoke \
+  --require-bot
 ```
 
-Current scope is intentionally non-destructive:
+Current scope is intentionally safe for the fixture repo. The multi-actor path creates one temporary review comment with the bot account and deletes it before exiting.
 
 - verifies `gh` can read the private GitHub fixture repo
 - verifies the stable fixture PR exists
@@ -203,6 +204,7 @@ Current scope is intentionally non-destructive:
 - verifies Reviu detects the GitHub remote
 - verifies Reviu resolves the current branch to the stable fixture PR
 - opens the Pull Request dock tab and verifies the changed files match the fixture PR
+- when bot credentials are available, creates a temporary review comment as `joris-gallot-bot` and verifies Reviu sees it as the primary user
 - fetches and verifies the fixture PR branch is available locally
 
 Useful options:
@@ -211,6 +213,9 @@ Useful options:
 - `--backend test|visual`: driver backend. `test` is enough when `REVIU_AUTH_TOKEN` is set; `visual` is useful for screenshot-oriented local debugging.
 - `--driver-bin <path>`: use a prebuilt driver binary instead of `cargo run`.
 - `--auth-token-env <env>`: environment variable containing a Reviu API bearer token, default `REVIU_AUTH_TOKEN`. On macOS dev builds, you can usually populate it from `security find-internet-password -s reviu_auth.dev -a bearer -w`.
+- `--bot-token-env <env>`: environment variable containing the bot GitHub token, default `REVIU_GITHUB_BOT_TOKEN`. If it is missing, the runner tries `gh auth token --user joris-gallot-bot`.
+- `--bot-gh-user <user>`: expected bot login, default `joris-gallot-bot`.
+- `--require-bot`: fail if the bot credential is unavailable instead of skipping the multi-actor check.
 - `--owner <owner>` and `--name <repo>`: override the expected GitHub repository.
 - `--pr-branch <branch>`: override the expected open PR branch.
 - `--keep-temp`: keep temporary driver config and logs.

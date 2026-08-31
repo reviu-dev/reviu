@@ -20,10 +20,23 @@ const DEFAULT_OWNER: &str = "reviu-dev";
 const DEFAULT_REPO: &str = "reviu-github-smoke";
 const DEFAULT_PR_BRANCH: &str = "smoke/pr-open";
 const DEFAULT_AUTH_TOKEN_ENV: &str = "REVIU_AUTH_TOKEN";
+const DEFAULT_BOT_TOKEN_ENV: &str = "REVIU_GITHUB_BOT_TOKEN";
+const DEFAULT_BOT_GH_USER: &str = "joris-gallot-bot";
 
 struct FixturePullRequest {
   number: u64,
+  head_oid: String,
   changed_files: Vec<String>,
+}
+
+struct BotActor {
+  token: String,
+  login: String,
+}
+
+struct BotReviewComment {
+  id: u64,
+  marker: String,
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -35,6 +48,9 @@ struct GithubSmokeArgs {
   name: String,
   pr_branch: String,
   auth_token_env: String,
+  bot_token_env: String,
+  bot_gh_user: String,
+  require_bot: bool,
   keep_temp: bool,
 }
 
@@ -51,6 +67,9 @@ fn parse_args(args: impl IntoIterator<Item = String>) -> Result<GithubSmokeArgs>
   let mut name = DEFAULT_REPO.to_string();
   let mut pr_branch = DEFAULT_PR_BRANCH.to_string();
   let mut auth_token_env = DEFAULT_AUTH_TOKEN_ENV.to_string();
+  let mut bot_token_env = DEFAULT_BOT_TOKEN_ENV.to_string();
+  let mut bot_gh_user = DEFAULT_BOT_GH_USER.to_string();
+  let mut require_bot = false;
   let mut keep_temp = false;
   let mut args = args.into_iter();
 
@@ -65,6 +84,9 @@ fn parse_args(args: impl IntoIterator<Item = String>) -> Result<GithubSmokeArgs>
       "--name" => name = required_value(&mut args, "--name")?,
       "--pr-branch" => pr_branch = required_value(&mut args, "--pr-branch")?,
       "--auth-token-env" => auth_token_env = required_value(&mut args, "--auth-token-env")?,
+      "--bot-token-env" => bot_token_env = required_value(&mut args, "--bot-token-env")?,
+      "--bot-gh-user" => bot_gh_user = required_value(&mut args, "--bot-gh-user")?,
+      "--require-bot" => require_bot = true,
       "--keep-temp" => keep_temp = true,
       "--help" | "-h" => bail!(usage()),
       other if other.starts_with("--repo=") => {
@@ -88,6 +110,12 @@ fn parse_args(args: impl IntoIterator<Item = String>) -> Result<GithubSmokeArgs>
       other if other.starts_with("--auth-token-env=") => {
         auth_token_env = other.trim_start_matches("--auth-token-env=").to_string();
       }
+      other if other.starts_with("--bot-token-env=") => {
+        bot_token_env = other.trim_start_matches("--bot-token-env=").to_string();
+      }
+      other if other.starts_with("--bot-gh-user=") => {
+        bot_gh_user = other.trim_start_matches("--bot-gh-user=").to_string();
+      }
       other => bail!("unknown argument: {other}\n{}", usage()),
     }
   }
@@ -102,6 +130,9 @@ fn parse_args(args: impl IntoIterator<Item = String>) -> Result<GithubSmokeArgs>
     name,
     pr_branch,
     auth_token_env,
+    bot_token_env,
+    bot_gh_user,
+    require_bot,
     keep_temp,
   })
 }
@@ -118,7 +149,7 @@ fn validate_backend(backend: &str) -> Result<()> {
 }
 
 fn usage() -> &'static str {
-  "usage: REVIU_GITHUB_SMOKE=1 reviu-github-smoke --repo PATH [--backend test|visual] [--driver-bin PATH] [--owner OWNER] [--name REPO] [--pr-branch BRANCH] [--auth-token-env ENV] [--keep-temp]"
+  "usage: REVIU_GITHUB_SMOKE=1 reviu-github-smoke --repo PATH [--backend test|visual] [--driver-bin PATH] [--owner OWNER] [--name REPO] [--pr-branch BRANCH] [--auth-token-env ENV] [--bot-token-env ENV] [--bot-gh-user USER] [--require-bot] [--keep-temp]"
 }
 
 fn run(args: GithubSmokeArgs) -> Result<()> {
@@ -146,7 +177,42 @@ fn run_live_github_smoke(args: &GithubSmokeArgs, run_dir: &std::path::Path) -> R
   ensure_expected_remote(args)?;
   ensure_gh_can_read_repo(args)?;
   let fixture_pr = ensure_open_fixture_pr(args)?;
+  let bot_actor = resolve_bot_actor(args)?;
+  let bot_review_comment = match &bot_actor {
+    Some(bot_actor) => {
+      let comment = create_bot_review_comment(args, &fixture_pr, bot_actor)?;
+      println!(
+        "bot actor: {} created PR review comment #{}",
+        bot_actor.login, comment.id
+      );
+      Some(comment)
+    }
+    None => {
+      println!("bot actor: skipped; no bot credentials available");
+      None
+    }
+  };
 
+  let result =
+    run_live_github_driver_smoke(args, run_dir, &fixture_pr, bot_review_comment.as_ref());
+  let cleanup = match (&bot_actor, &bot_review_comment) {
+    (Some(bot_actor), Some(comment)) => delete_bot_review_comment(args, bot_actor, comment.id),
+    _ => Ok(()),
+  };
+  if result.is_ok() {
+    cleanup?;
+  } else {
+    let _ = cleanup;
+  }
+  result
+}
+
+fn run_live_github_driver_smoke(
+  args: &GithubSmokeArgs,
+  run_dir: &std::path::Path,
+  fixture_pr: &FixturePullRequest,
+  bot_review_comment: Option<&BotReviewComment>,
+) -> Result<()> {
   let mut driver = DriverProcess::spawn(args.driver_bin.as_deref(), &args.backend, run_dir, false)?;
   if let Some(token) = std::env::var(&args.auth_token_env)
     .ok()
@@ -209,13 +275,21 @@ fn run_live_github_smoke(args: &GithubSmokeArgs, run_dir: &std::path::Path) -> R
   }
 
   driver.command(json!({ "cmd": "show_pull_request" }))?;
-  let pull_request_panel = wait_for_pull_request_panel(&mut driver, &fixture_pr)?;
+  let pull_request_panel = wait_for_pull_request_panel(
+    &mut driver,
+    fixture_pr,
+    bot_review_comment.map(|comment| comment.marker.as_str()),
+  )?;
   println!(
-    "PR panel: {} changed file(s)",
+    "PR panel: {} changed file(s), {} review comment(s)",
     pull_request_panel
       .get("files")
       .and_then(Value::as_array)
       .map(Vec::len)
+      .unwrap_or_default(),
+    pull_request_panel
+      .get("review_comments")
+      .and_then(Value::as_u64)
       .unwrap_or_default()
   );
 
@@ -295,8 +369,11 @@ fn ensure_open_fixture_pr(args: &GithubSmokeArgs) -> Result<FixturePullRequest> 
     "--repo",
     &repo,
     "--json",
-    "files",
+    "files,headRefOid",
   ])?;
+  let head_oid = string_field(&details, "headRefOid")
+    .context("fixture PR headRefOid")?
+    .to_string();
   let changed_files = details
     .get("files")
     .and_then(Value::as_array)
@@ -314,21 +391,158 @@ fn ensure_open_fixture_pr(args: &GithubSmokeArgs) -> Result<FixturePullRequest> 
   );
   Ok(FixturePullRequest {
     number,
+    head_oid,
     changed_files,
   })
 }
 
+fn resolve_bot_actor(args: &GithubSmokeArgs) -> Result<Option<BotActor>> {
+  if let Some(token) = std::env::var(&args.bot_token_env)
+    .ok()
+    .filter(|token| !token.is_empty())
+  {
+    return bot_actor_from_token(token, args).map(Some);
+  }
+
+  let output = gh_command(["auth", "token", "--user", &args.bot_gh_user], None)?;
+  if !output.status.success() {
+    if args.require_bot {
+      bail!(
+        "missing bot credentials: {}",
+        command_output_details(&output)
+      );
+    }
+    return Ok(None);
+  }
+
+  let token = String::from_utf8_lossy(&output.stdout).trim().to_string();
+  if token.is_empty() {
+    if args.require_bot {
+      bail!("gh returned an empty token for {}", args.bot_gh_user);
+    }
+    return Ok(None);
+  }
+
+  bot_actor_from_token(token, args).map(Some)
+}
+
+fn bot_actor_from_token(token: String, args: &GithubSmokeArgs) -> Result<BotActor> {
+  let user = gh_json_with_token(["api", "user"], Some(&token))?;
+  let login = string_field(&user, "login")
+    .context("bot token user login")?
+    .to_string();
+  if login != args.bot_gh_user {
+    bail!(
+      "bot token belongs to {login}, expected {}",
+      args.bot_gh_user
+    );
+  }
+  Ok(BotActor { token, login })
+}
+
+fn create_bot_review_comment(
+  args: &GithubSmokeArgs,
+  fixture_pr: &FixturePullRequest,
+  bot_actor: &BotActor,
+) -> Result<BotReviewComment> {
+  let marker = format!(
+    "reviu-github-smoke bot comment {}",
+    std::time::SystemTime::now()
+      .duration_since(std::time::UNIX_EPOCH)
+      .map(|duration| duration.as_secs())
+      .unwrap_or_default()
+  );
+  let endpoint = format!(
+    "repos/{}/{}/pulls/{}/comments",
+    args.owner, args.name, fixture_pr.number
+  );
+  let body =
+    format!("{marker}\n\nThis temporary comment is created and deleted by Reviu smoke tests.");
+  let path = fixture_pr
+    .changed_files
+    .first()
+    .context("fixture PR changed file")?;
+  let comment = gh_json_vec_with_token(
+    vec![
+      "api".to_string(),
+      endpoint,
+      "-X".to_string(),
+      "POST".to_string(),
+      "-f".to_string(),
+      format!("body={body}"),
+      "-f".to_string(),
+      format!("commit_id={}", fixture_pr.head_oid),
+      "-f".to_string(),
+      format!("path={path}"),
+      "-F".to_string(),
+      "position=1".to_string(),
+    ],
+    Some(&bot_actor.token),
+  )?;
+  let id = comment
+    .get("id")
+    .and_then(Value::as_u64)
+    .with_context(|| format!("created bot comment has no id: {}", pretty_json(&comment)))?;
+  Ok(BotReviewComment { id, marker })
+}
+
+fn delete_bot_review_comment(
+  args: &GithubSmokeArgs,
+  bot_actor: &BotActor,
+  comment_id: u64,
+) -> Result<()> {
+  gh_json_vec_with_token(
+    vec![
+      "api".to_string(),
+      format!(
+        "repos/{}/{}/pulls/comments/{}",
+        args.owner, args.name, comment_id
+      ),
+      "-X".to_string(),
+      "DELETE".to_string(),
+    ],
+    Some(&bot_actor.token),
+  )?;
+  Ok(())
+}
+
 fn gh_json<const N: usize>(args: [&str; N]) -> Result<Value> {
-  let output = Command::new("gh")
+  gh_json_with_token(args, None)
+}
+
+fn gh_json_with_token<const N: usize>(args: [&str; N], token: Option<&str>) -> Result<Value> {
+  let output = gh_command(args, token)?;
+  gh_output_json(output)
+}
+
+fn gh_json_vec_with_token(args: Vec<String>, token: Option<&str>) -> Result<Value> {
+  let output = gh_command(args, token)?;
+  gh_output_json(output)
+}
+
+fn gh_command(
+  args: impl IntoIterator<Item = impl AsRef<std::ffi::OsStr>>,
+  token: Option<&str>,
+) -> Result<std::process::Output> {
+  let mut command = Command::new("gh");
+  command
     .env("NO_COLOR", "1")
     .env("CLICOLOR", "0")
     .env_remove("FORCE_COLOR")
     .env_remove("CLICOLOR_FORCE")
-    .args(args)
-    .output()
-    .context("run gh")?;
+    .args(args);
+  if let Some(token) = token {
+    command.env("GH_TOKEN", token);
+  }
+  command.output().context("run gh")
+}
+
+fn gh_output_json(output: std::process::Output) -> Result<Value> {
   if !output.status.success() {
     bail!("gh failed: {}", command_output_details(&output));
+  }
+  if output.stdout.iter().all(|byte| byte.is_ascii_whitespace()) {
+    return Ok(Value::Null);
   }
   serde_json::from_slice(&output.stdout).context("parse gh JSON")
 }
@@ -351,6 +565,7 @@ fn wait_for_auth_state(driver: &mut DriverProcess) -> Result<Value> {
 fn wait_for_pull_request_panel(
   driver: &mut DriverProcess,
   fixture_pr: &FixturePullRequest,
+  expected_comment_marker: Option<&str>,
 ) -> Result<Value> {
   let state = wait_for_driver_state(driver, |state| {
     let Some(panel) = state.get("pull_request_panel") else {
@@ -363,6 +578,8 @@ fn wait_for_pull_request_panel(
         .changed_files
         .iter()
         .all(|path| pull_request_panel_has_file(panel, path))
+      && expected_comment_marker
+        .is_none_or(|marker| pull_request_panel_has_review_comment(panel, marker))
   })?;
   let Some(panel) = state.get("pull_request_panel").cloned() else {
     bail!(
@@ -442,6 +659,17 @@ fn pull_request_panel_has_file(panel: &Value, path: &str) -> bool {
     })
 }
 
+fn pull_request_panel_has_review_comment(panel: &Value, marker: &str) -> bool {
+  panel
+    .get("review_comment_details")
+    .and_then(Value::as_array)
+    .is_some_and(|comments| {
+      comments
+        .iter()
+        .any(|comment| string_field(comment, "body").is_some_and(|body| body.contains(marker)))
+    })
+}
+
 fn has_logged_notification(log: &Value, kind: &str, message_part: &str) -> bool {
   let message_part = message_part.to_lowercase();
   log
@@ -501,6 +729,11 @@ mod tests {
       "smoke/pr".to_string(),
       "--auth-token-env".to_string(),
       "TOKEN_ENV".to_string(),
+      "--bot-token-env".to_string(),
+      "BOT_TOKEN_ENV".to_string(),
+      "--bot-gh-user".to_string(),
+      "octo-bot".to_string(),
+      "--require-bot".to_string(),
       "--keep-temp".to_string(),
     ])
     .expect("args");
@@ -512,6 +745,9 @@ mod tests {
     assert_eq!(args.name, "widget");
     assert_eq!(args.pr_branch, "smoke/pr");
     assert_eq!(args.auth_token_env, "TOKEN_ENV");
+    assert_eq!(args.bot_token_env, "BOT_TOKEN_ENV");
+    assert_eq!(args.bot_gh_user, "octo-bot");
+    assert!(args.require_bot);
     assert!(args.keep_temp);
   }
 
@@ -535,7 +771,9 @@ mod tests {
       "branches": [{ "name": "origin/smoke/pr-open" }],
       "pull_request_panel": {
         "active_tab": "pull_request",
-        "files": [{ "path": "fixtures/pr-open.txt", "kind": "modified" }]
+        "files": [{ "path": "fixtures/pr-open.txt", "kind": "modified" }],
+        "review_comments": 1,
+        "review_comment_details": [{ "body": "hello reviu-github-smoke bot comment", "user_login": "octo-bot" }]
       },
       "notifications": [{ "kind": "success", "message": "Fetched from remotes" }]
     });
@@ -548,9 +786,11 @@ mod tests {
     assert_eq!(branch_pull_request_status(&state), Some("found"));
     assert!(palette_has_command(&state, "show_pull_request"));
     assert!(has_branch(&state, "origin/smoke/pr-open"));
-    assert!(pull_request_panel_has_file(
-      state.get("pull_request_panel").expect("pull request panel"),
-      "fixtures/pr-open.txt"
+    let panel = state.get("pull_request_panel").expect("pull request panel");
+    assert!(pull_request_panel_has_file(panel, "fixtures/pr-open.txt"));
+    assert!(pull_request_panel_has_review_comment(
+      panel,
+      "reviu-github-smoke bot comment"
     ));
     assert!(has_logged_notification(&state, "success", "fetched"));
   }

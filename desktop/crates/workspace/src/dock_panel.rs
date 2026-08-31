@@ -591,6 +591,19 @@ fn driver_pr_file_kind(kind: git::CommitFileChangeKind) -> &'static str {
   }
 }
 
+#[cfg(any(test, feature = "test-support"))]
+fn driver_pr_review_comment(comment: &GithubPullRequestReviewComment) -> serde_json::Value {
+  serde_json::json!({
+    "id": comment.id,
+    "path": comment.path,
+    "line": comment.line.or(comment.original_line),
+    "user_login": comment.user.login,
+    "body": comment.body,
+    "is_pending": comment.is_pending,
+    "is_outdated": comment.is_outdated,
+  })
+}
+
 /// One checkout of the shown session's repo, ready for the header selector.
 #[derive(Clone, PartialEq)]
 pub(crate) struct CheckoutOption {
@@ -1467,6 +1480,7 @@ impl DockPanel {
       "author_login": self.pr_author_login.as_deref(),
       "reviewers": self.pr_reviewers.len(),
       "review_comments": self.pr_review_comments.len(),
+      "review_comment_details": self.pr_review_comments.iter().map(driver_pr_review_comment).collect::<Vec<_>>(),
       "checks_loading": self.pr_checks_loading,
       "has_checks": self.pr_checks.is_some(),
       "merge_readiness_loaded": self.pr_merge_readiness.is_some(),
