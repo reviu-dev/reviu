@@ -1,0 +1,349 @@
+use std::path::PathBuf;
+use std::process::Command;
+use std::time::Duration;
+
+use anyhow::{Context as _, Result, bail};
+use serde_json::{Value, json};
+
+// The live GitHub smoke runner shares the broader Git smoke harness but uses only a subset.
+#[allow(dead_code)]
+#[path = "../driver_harness.rs"]
+mod driver_harness;
+
+use crate::driver_harness::{
+  DriverProcess, TempRunDir, git_output, pretty_json, scenario_diagnostics, wait_until,
+};
+
+const DEFAULT_TIMEOUT: Duration = Duration::from_secs(15);
+const ENABLE_ENV: &str = "REVIU_GITHUB_SMOKE";
+const DEFAULT_OWNER: &str = "reviu-dev";
+const DEFAULT_REPO: &str = "reviu-github-smoke";
+const DEFAULT_PR_BRANCH: &str = "smoke/pr-open";
+
+#[derive(Debug, PartialEq, Eq)]
+struct GithubSmokeArgs {
+  repo: PathBuf,
+  driver_bin: Option<PathBuf>,
+  owner: String,
+  name: String,
+  pr_branch: String,
+  keep_temp: bool,
+}
+
+fn main() -> Result<()> {
+  let args = parse_args(std::env::args().skip(1))?;
+  run(args)
+}
+
+fn parse_args(args: impl IntoIterator<Item = String>) -> Result<GithubSmokeArgs> {
+  let mut repo = None;
+  let mut driver_bin = None;
+  let mut owner = DEFAULT_OWNER.to_string();
+  let mut name = DEFAULT_REPO.to_string();
+  let mut pr_branch = DEFAULT_PR_BRANCH.to_string();
+  let mut keep_temp = false;
+  let mut args = args.into_iter();
+
+  while let Some(arg) = args.next() {
+    match arg.as_str() {
+      "--repo" => repo = Some(PathBuf::from(required_value(&mut args, "--repo")?)),
+      "--driver-bin" => {
+        driver_bin = Some(PathBuf::from(required_value(&mut args, "--driver-bin")?))
+      }
+      "--owner" => owner = required_value(&mut args, "--owner")?,
+      "--name" => name = required_value(&mut args, "--name")?,
+      "--pr-branch" => pr_branch = required_value(&mut args, "--pr-branch")?,
+      "--keep-temp" => keep_temp = true,
+      "--help" | "-h" => bail!(usage()),
+      other if other.starts_with("--repo=") => {
+        repo = Some(PathBuf::from(other.trim_start_matches("--repo=")));
+      }
+      other if other.starts_with("--driver-bin=") => {
+        driver_bin = Some(PathBuf::from(other.trim_start_matches("--driver-bin=")));
+      }
+      other if other.starts_with("--owner=") => {
+        owner = other.trim_start_matches("--owner=").to_string();
+      }
+      other if other.starts_with("--name=") => {
+        name = other.trim_start_matches("--name=").to_string();
+      }
+      other if other.starts_with("--pr-branch=") => {
+        pr_branch = other.trim_start_matches("--pr-branch=").to_string();
+      }
+      other => bail!("unknown argument: {other}\n{}", usage()),
+    }
+  }
+
+  let repo = repo.context("--repo is required")?;
+  Ok(GithubSmokeArgs {
+    repo,
+    driver_bin,
+    owner,
+    name,
+    pr_branch,
+    keep_temp,
+  })
+}
+
+fn required_value(args: &mut impl Iterator<Item = String>, flag: &str) -> Result<String> {
+  args.next().with_context(|| format!("{flag} needs a value"))
+}
+
+fn usage() -> &'static str {
+  "usage: REVIU_GITHUB_SMOKE=1 reviu-github-smoke --repo PATH [--driver-bin PATH] [--owner OWNER] [--name REPO] [--pr-branch BRANCH] [--keep-temp]"
+}
+
+fn run(args: GithubSmokeArgs) -> Result<()> {
+  if std::env::var(ENABLE_ENV).ok().as_deref() != Some("1") {
+    bail!("set {ENABLE_ENV}=1 to run live GitHub smoke checks");
+  }
+
+  let mut run_dir = TempRunDir::new("reviu-github-smoke", args.keep_temp)?;
+  println!("github smoke temp: {}", run_dir.path.display());
+  let result = run_live_github_smoke(&args, &run_dir.path);
+  if let Err(error) = result {
+    run_dir.keep = true;
+    eprintln!(
+      "{}",
+      scenario_diagnostics(&run_dir.path)
+        .unwrap_or_else(|error| format!("failed to collect diagnostics: {error:#}"))
+    );
+    eprintln!("kept github smoke temp: {}", run_dir.path.display());
+    return Err(error);
+  }
+  Ok(())
+}
+
+fn run_live_github_smoke(args: &GithubSmokeArgs, run_dir: &std::path::Path) -> Result<()> {
+  ensure_expected_remote(args)?;
+  ensure_gh_can_read_repo(args)?;
+  ensure_open_fixture_pr(args)?;
+
+  let mut driver = DriverProcess::spawn(args.driver_bin.as_deref(), "test", run_dir, false)?;
+  driver.open_repo(&args.repo)?;
+  let state = wait_for_driver_state(&mut driver, |state| {
+    github_remote_matches(state, &args.owner, &args.name)
+      && palette_has_command(state, "show_pull_request")
+  })?;
+  println!("github remote: {}/{}", args.owner, args.name);
+  println!(
+    "opened branch: {}",
+    current_branch(&state).unwrap_or("unknown")
+  );
+
+  driver.run_git_action(json!({ "action": "fetch" }))?;
+  wait_for_driver_state(&mut driver, |state| {
+    has_branch(state, &format!("origin/{}", args.pr_branch))
+      && state.get("command_in_flight").and_then(Value::as_bool) == Some(false)
+  })?;
+  let notifications = driver.notification_log()?;
+  if !has_logged_notification(&notifications, "success", "Fetched from remotes") {
+    bail!(
+      "fetch did not report the expected notification:\n{}",
+      pretty_json(&notifications)
+    );
+  }
+  driver.quit()?;
+  Ok(())
+}
+
+fn ensure_expected_remote(args: &GithubSmokeArgs) -> Result<()> {
+  let remote = git_output(&args.repo, ["remote", "get-url", "origin"])?;
+  let expected_https = format!("github.com/{}/{}.git", args.owner, args.name);
+  let expected_ssh = format!("github.com:{}/{}.git", args.owner, args.name);
+  if !remote.contains(&expected_https) && !remote.contains(&expected_ssh) {
+    bail!(
+      "origin remote does not point at {}/{}: {remote}",
+      args.owner,
+      args.name
+    );
+  }
+  Ok(())
+}
+
+fn ensure_gh_can_read_repo(args: &GithubSmokeArgs) -> Result<()> {
+  let repo = format!("{}/{}", args.owner, args.name);
+  let output = gh_json(["repo", "view", &repo, "--json", "nameWithOwner,isPrivate"])?;
+  if string_field(&output, "nameWithOwner") != Some(repo.as_str()) {
+    bail!("gh read the wrong repository: {}", pretty_json(&output));
+  }
+  if output.get("isPrivate").and_then(Value::as_bool) != Some(true) {
+    bail!("expected {repo} to be private: {}", pretty_json(&output));
+  }
+  Ok(())
+}
+
+fn ensure_open_fixture_pr(args: &GithubSmokeArgs) -> Result<()> {
+  let repo = format!("{}/{}", args.owner, args.name);
+  let pull_requests = gh_json([
+    "pr",
+    "list",
+    "--repo",
+    &repo,
+    "--state",
+    "open",
+    "--head",
+    &args.pr_branch,
+    "--json",
+    "number,title,headRefName,baseRefName,url",
+  ])?;
+  let Some(pull_request) = pull_requests.as_array().and_then(|items| items.first()) else {
+    bail!("expected one open fixture PR from {}", args.pr_branch);
+  };
+  if string_field(pull_request, "headRefName") != Some(args.pr_branch.as_str())
+    || string_field(pull_request, "baseRefName") != Some("main")
+  {
+    bail!("unexpected fixture PR: {}", pretty_json(pull_request));
+  }
+  println!(
+    "fixture PR: #{} {}",
+    pull_request
+      .get("number")
+      .and_then(Value::as_u64)
+      .unwrap_or_default(),
+    string_field(pull_request, "url").unwrap_or("unknown")
+  );
+  Ok(())
+}
+
+fn gh_json<const N: usize>(args: [&str; N]) -> Result<Value> {
+  let output = Command::new("gh")
+    .env("NO_COLOR", "1")
+    .env("CLICOLOR", "0")
+    .env_remove("FORCE_COLOR")
+    .env_remove("CLICOLOR_FORCE")
+    .args(args)
+    .output()
+    .context("run gh")?;
+  if !output.status.success() {
+    bail!("gh failed: {}", command_output_details(&output));
+  }
+  serde_json::from_slice(&output.stdout).context("parse gh JSON")
+}
+
+fn wait_for_driver_state(
+  driver: &mut DriverProcess,
+  predicate: impl Fn(&Value) -> bool,
+) -> Result<Value> {
+  let mut last = Value::Null;
+  wait_until(DEFAULT_TIMEOUT, || match driver.git_state() {
+    Ok(state) => {
+      last = state;
+      predicate(&last)
+    }
+    Err(_) => false,
+  })
+  .with_context(|| format!("last git_state:\n{}", pretty_json(&last)))?;
+  Ok(last)
+}
+
+fn github_remote_matches(state: &Value, owner: &str, name: &str) -> bool {
+  state.get("github_remote").is_some_and(|remote| {
+    string_field(remote, "owner") == Some(owner) && string_field(remote, "repo") == Some(name)
+  })
+}
+
+fn palette_has_command(state: &Value, command_id: &str) -> bool {
+  state
+    .get("palette_commands")
+    .and_then(Value::as_array)
+    .is_some_and(|commands| commands.iter().any(|command| command == command_id))
+}
+
+fn has_branch(state: &Value, name: &str) -> bool {
+  state
+    .get("branches")
+    .and_then(Value::as_array)
+    .is_some_and(|branches| {
+      branches
+        .iter()
+        .any(|branch| string_field(branch, "name") == Some(name))
+    })
+}
+
+fn has_logged_notification(log: &Value, kind: &str, message_part: &str) -> bool {
+  let message_part = message_part.to_lowercase();
+  log
+    .get("notifications")
+    .and_then(Value::as_array)
+    .is_some_and(|notifications| {
+      notifications.iter().any(|notification| {
+        string_field(notification, "kind") == Some(kind)
+          && string_field(notification, "message")
+            .is_some_and(|message| message.to_lowercase().contains(&message_part))
+      })
+    })
+}
+
+fn current_branch(state: &Value) -> Option<&str> {
+  state
+    .get("branch_status")
+    .and_then(|status| status.get("name"))
+    .and_then(Value::as_str)
+}
+
+fn string_field<'a>(value: &'a Value, key: &str) -> Option<&'a str> {
+  value.get(key)?.as_str()
+}
+
+fn command_output_details(output: &std::process::Output) -> String {
+  let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+  let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+  [stderr, stdout]
+    .into_iter()
+    .filter(|part| !part.is_empty())
+    .collect::<Vec<_>>()
+    .join("\n")
+}
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+
+  #[test]
+  fn parse_args_requires_repo() {
+    assert!(parse_args([]).is_err());
+  }
+
+  #[test]
+  fn parse_args_accepts_overrides() {
+    let args = parse_args([
+      "--repo=/tmp/repo".to_string(),
+      "--driver-bin".to_string(),
+      "/tmp/reviu-driver".to_string(),
+      "--owner".to_string(),
+      "acme".to_string(),
+      "--name=widget".to_string(),
+      "--pr-branch".to_string(),
+      "smoke/pr".to_string(),
+      "--keep-temp".to_string(),
+    ])
+    .expect("args");
+
+    assert_eq!(args.repo, PathBuf::from("/tmp/repo"));
+    assert_eq!(args.driver_bin, Some(PathBuf::from("/tmp/reviu-driver")));
+    assert_eq!(args.owner, "acme");
+    assert_eq!(args.name, "widget");
+    assert_eq!(args.pr_branch, "smoke/pr");
+    assert!(args.keep_temp);
+  }
+
+  #[test]
+  fn github_remote_helper_reads_driver_state() {
+    let state = json!({
+      "github_remote": { "owner": "reviu-dev", "repo": "reviu-github-smoke" },
+      "palette_commands": ["show_pull_request"],
+      "branches": [{ "name": "origin/smoke/pr-open" }],
+      "notifications": [{ "kind": "success", "message": "Fetched from remotes" }]
+    });
+
+    assert!(github_remote_matches(
+      &state,
+      "reviu-dev",
+      "reviu-github-smoke"
+    ));
+    assert!(palette_has_command(&state, "show_pull_request"));
+    assert!(has_branch(&state, "origin/smoke/pr-open"));
+    assert!(has_logged_notification(&state, "success", "fetched"));
+  }
+}

@@ -47,6 +47,7 @@ impl SessionPage {
     let branches = git::list_branches(&repo_root).unwrap_or_default();
     let upstream_branch = git::current_branch_upstream(&repo_root).ok().flatten();
     let default_branch = git::default_remote_branch(&repo_root).ok().flatten();
+    let github_remote = git::current_github_remote_repo(&repo_root).ok().flatten();
     let stashes = git::list_stashes(&repo_root).unwrap_or_default();
     let merge_in_progress = git::is_merge_in_progress(&repo_root).unwrap_or(false);
     let rebase_in_progress = git::is_rebase_in_progress(&repo_root).unwrap_or(false);
@@ -73,6 +74,10 @@ impl SessionPage {
       })),
       "upstream_branch": upstream_branch.map(driver_branch_json),
       "default_branch": default_branch.map(driver_branch_json),
+      "github_remote": github_remote.map(|remote| serde_json::json!({
+        "owner": remote.owner,
+        "repo": remote.repo,
+      })),
       "branches": branches.into_iter().map(driver_branch_json).collect::<Vec<_>>(),
       "status_entries": status_entries.into_iter().map(driver_status_json).collect::<Vec<_>>(),
       "stashes": stashes.into_iter().map(|stash| serde_json::json!({

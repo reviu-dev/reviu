@@ -260,7 +260,7 @@ fn scenario_stage_unstage_restore(args: &GitSmokeArgs, dir: &Path) -> Result<()>
   let repo = init_repo(&dir.join("repo"))?;
   commit_file(&repo, "a.txt", "v1\n", "initial")?;
 
-  let mut driver = DriverProcess::spawn(args.driver_bin.as_deref(), &args.backend, dir)?;
+  let mut driver = DriverProcess::spawn(args.driver_bin.as_deref(), &args.backend, dir, true)?;
   driver.open_repo(&repo)?;
 
   fs::write(repo.join("a.txt"), "v2\n")?;
@@ -291,7 +291,7 @@ fn scenario_commit_amend_undo(args: &GitSmokeArgs, dir: &Path) -> Result<()> {
   let repo = init_repo(&dir.join("repo"))?;
   commit_file(&repo, "a.txt", "v1\n", "initial")?;
 
-  let mut driver = DriverProcess::spawn(args.driver_bin.as_deref(), &args.backend, dir)?;
+  let mut driver = DriverProcess::spawn(args.driver_bin.as_deref(), &args.backend, dir, true)?;
   driver.open_repo(&repo)?;
 
   fs::write(repo.join("a.txt"), "v2\n")?;
@@ -333,7 +333,7 @@ fn scenario_branch_create_switch_delete(args: &GitSmokeArgs, dir: &Path) -> Resu
   let repo = init_repo(&dir.join("repo"))?;
   commit_file(&repo, "a.txt", "v1\n", "initial")?;
 
-  let mut driver = DriverProcess::spawn(args.driver_bin.as_deref(), &args.backend, dir)?;
+  let mut driver = DriverProcess::spawn(args.driver_bin.as_deref(), &args.backend, dir, true)?;
   driver.open_repo(&repo)?;
   driver.run_git_action(serde_json::json!({
     "action": "create_branch",
@@ -378,7 +378,7 @@ fn scenario_branch_switch_dirty_compatible(args: &GitSmokeArgs, dir: &Path) -> R
   git(&repo, ["switch", "main"])?;
   fs::write(repo.join("a.txt"), "dirty\n")?;
 
-  let mut driver = DriverProcess::spawn(args.driver_bin.as_deref(), &args.backend, dir)?;
+  let mut driver = DriverProcess::spawn(args.driver_bin.as_deref(), &args.backend, dir, true)?;
   driver.open_repo(&repo)?;
   wait_for_state(&mut driver, |state| status_count(state) == Some(1))?;
   driver.run_git_action(serde_json::json!({
@@ -409,7 +409,7 @@ fn scenario_push_pull_publish(args: &GitSmokeArgs, dir: &Path) -> Result<()> {
   git(&repo, ["switch", "-c", "feature"])?;
   commit_file(&repo, "feature.txt", "feature\n", "feature work")?;
 
-  let mut driver = DriverProcess::spawn(args.driver_bin.as_deref(), &args.backend, dir)?;
+  let mut driver = DriverProcess::spawn(args.driver_bin.as_deref(), &args.backend, dir, true)?;
   driver.open_repo(&repo)?;
   driver.run_git_action(serde_json::json!({ "action": "push" }))?;
   wait_until(DEFAULT_TIMEOUT, || {
@@ -464,7 +464,7 @@ fn scenario_push_rejected_non_fast_forward(args: &GitSmokeArgs, dir: &Path) -> R
   let remote_head = git_bare_output(&remote, ["rev-parse", "refs/heads/main"])?;
   commit_file(&repo, "local.txt", "local\n", "local work")?;
 
-  let mut driver = DriverProcess::spawn(args.driver_bin.as_deref(), &args.backend, dir)?;
+  let mut driver = DriverProcess::spawn(args.driver_bin.as_deref(), &args.backend, dir, true)?;
   driver.open_repo(&repo)?;
   driver.run_git_action(serde_json::json!({ "action": "push" }))?;
   wait_for_state(&mut driver, |state| {
@@ -506,7 +506,7 @@ fn scenario_fetch_updates_remote_refs(args: &GitSmokeArgs, dir: &Path) -> Result
   git(&other, ["push"])?;
   let remote_head = git_bare_output(&remote, ["rev-parse", "refs/heads/main"])?;
 
-  let mut driver = DriverProcess::spawn(args.driver_bin.as_deref(), &args.backend, dir)?;
+  let mut driver = DriverProcess::spawn(args.driver_bin.as_deref(), &args.backend, dir, true)?;
   driver.open_repo(&repo)?;
   driver.run_git_action(serde_json::json!({ "action": "fetch" }))?;
   wait_until(DEFAULT_TIMEOUT, || {
@@ -546,7 +546,7 @@ fn scenario_pull_fast_forward(args: &GitSmokeArgs, dir: &Path) -> Result<()> {
   git(&other, ["push"])?;
   let remote_head = git_bare_output(&remote, ["rev-parse", "refs/heads/main"])?;
 
-  let mut driver = DriverProcess::spawn(args.driver_bin.as_deref(), &args.backend, dir)?;
+  let mut driver = DriverProcess::spawn(args.driver_bin.as_deref(), &args.backend, dir, true)?;
   driver.open_repo(&repo)?;
   driver.run_git_action(serde_json::json!({ "action": "pull" }))?;
   wait_until(DEFAULT_TIMEOUT, || {
@@ -570,7 +570,7 @@ fn scenario_create_branch_from_remote(args: &GitSmokeArgs, dir: &Path) -> Result
   let remote = dir.join("remote.git");
   setup_remote_feature_branch(&repo, &remote, dir)?;
 
-  let mut driver = DriverProcess::spawn(args.driver_bin.as_deref(), &args.backend, dir)?;
+  let mut driver = DriverProcess::spawn(args.driver_bin.as_deref(), &args.backend, dir, true)?;
   driver.open_repo(&repo)?;
   driver.run_git_action(serde_json::json!({ "action": "fetch" }))?;
   wait_for_state(&mut driver, |state| has_branch(state, "origin/feature"))?;
@@ -596,7 +596,7 @@ fn scenario_delete_remote_branch(args: &GitSmokeArgs, dir: &Path) -> Result<()> 
   let remote = dir.join("remote.git");
   setup_remote_feature_branch(&repo, &remote, dir)?;
 
-  let mut driver = DriverProcess::spawn(args.driver_bin.as_deref(), &args.backend, dir)?;
+  let mut driver = DriverProcess::spawn(args.driver_bin.as_deref(), &args.backend, dir, true)?;
   driver.open_repo(&repo)?;
   driver.run_git_action(serde_json::json!({ "action": "fetch" }))?;
   wait_for_state(&mut driver, |state| has_branch(state, "origin/feature"))?;
@@ -624,7 +624,7 @@ fn scenario_merge_remote_branch(args: &GitSmokeArgs, dir: &Path) -> Result<()> {
   setup_remote_feature_branch(&repo, &remote, dir)?;
   commit_file(&repo, "local.txt", "local\n", "local work")?;
 
-  let mut driver = DriverProcess::spawn(args.driver_bin.as_deref(), &args.backend, dir)?;
+  let mut driver = DriverProcess::spawn(args.driver_bin.as_deref(), &args.backend, dir, true)?;
   driver.open_repo(&repo)?;
   driver.run_git_action(serde_json::json!({ "action": "fetch" }))?;
   wait_for_state(&mut driver, |state| has_branch(state, "origin/feature"))?;
@@ -652,7 +652,7 @@ fn scenario_stash_pop(args: &GitSmokeArgs, dir: &Path) -> Result<()> {
   let repo = init_repo(&dir.join("repo"))?;
   commit_file(&repo, "a.txt", "v1\n", "initial")?;
 
-  let mut driver = DriverProcess::spawn(args.driver_bin.as_deref(), &args.backend, dir)?;
+  let mut driver = DriverProcess::spawn(args.driver_bin.as_deref(), &args.backend, dir, true)?;
   driver.open_repo(&repo)?;
 
   fs::write(repo.join("a.txt"), "v2\n")?;
@@ -684,7 +684,7 @@ fn scenario_stash_untracked_pop(args: &GitSmokeArgs, dir: &Path) -> Result<()> {
   let repo = init_repo(&dir.join("repo"))?;
   commit_file(&repo, "a.txt", "v1\n", "initial")?;
 
-  let mut driver = DriverProcess::spawn(args.driver_bin.as_deref(), &args.backend, dir)?;
+  let mut driver = DriverProcess::spawn(args.driver_bin.as_deref(), &args.backend, dir, true)?;
   driver.open_repo(&repo)?;
 
   fs::write(repo.join("untracked.txt"), "new\n")?;
@@ -718,7 +718,7 @@ fn scenario_apply_stash_conflict(args: &GitSmokeArgs, dir: &Path) -> Result<()> 
   let repo = init_repo(&dir.join("repo"))?;
   setup_stash_conflict(&repo)?;
 
-  let mut driver = DriverProcess::spawn(args.driver_bin.as_deref(), &args.backend, dir)?;
+  let mut driver = DriverProcess::spawn(args.driver_bin.as_deref(), &args.backend, dir, true)?;
   driver.open_repo(&repo)?;
   driver.run_git_action(serde_json::json!({
     "action": "apply_stash",
@@ -739,7 +739,7 @@ fn scenario_pop_stash_conflict(args: &GitSmokeArgs, dir: &Path) -> Result<()> {
   let repo = init_repo(&dir.join("repo"))?;
   setup_stash_conflict(&repo)?;
 
-  let mut driver = DriverProcess::spawn(args.driver_bin.as_deref(), &args.backend, dir)?;
+  let mut driver = DriverProcess::spawn(args.driver_bin.as_deref(), &args.backend, dir, true)?;
   driver.open_repo(&repo)?;
   driver.run_git_action(serde_json::json!({
     "action": "pop_stash",
@@ -760,7 +760,7 @@ fn scenario_merge_conflict_abort(args: &GitSmokeArgs, dir: &Path) -> Result<()> 
   let repo = init_repo(&dir.join("repo"))?;
   setup_merge_conflict(&repo)?;
 
-  let mut driver = DriverProcess::spawn(args.driver_bin.as_deref(), &args.backend, dir)?;
+  let mut driver = DriverProcess::spawn(args.driver_bin.as_deref(), &args.backend, dir, true)?;
   driver.open_repo(&repo)?;
   driver.run_git_action(serde_json::json!({
     "action": "merge_branch",
@@ -784,7 +784,7 @@ fn scenario_merge_conflict_commit(args: &GitSmokeArgs, dir: &Path) -> Result<()>
   let repo = init_repo(&dir.join("repo"))?;
   setup_merge_conflict(&repo)?;
 
-  let mut driver = DriverProcess::spawn(args.driver_bin.as_deref(), &args.backend, dir)?;
+  let mut driver = DriverProcess::spawn(args.driver_bin.as_deref(), &args.backend, dir, true)?;
   driver.open_repo(&repo)?;
   driver.run_git_action(serde_json::json!({
     "action": "merge_branch",
@@ -817,7 +817,7 @@ fn scenario_rebase_conflict_continue(args: &GitSmokeArgs, dir: &Path) -> Result<
   let repo = init_repo(&dir.join("repo"))?;
   setup_rebase_conflict(&repo)?;
 
-  let mut driver = DriverProcess::spawn(args.driver_bin.as_deref(), &args.backend, dir)?;
+  let mut driver = DriverProcess::spawn(args.driver_bin.as_deref(), &args.backend, dir, true)?;
   driver.open_repo(&repo)?;
   driver.run_git_action(serde_json::json!({
     "action": "rebase_branch",
@@ -848,7 +848,7 @@ fn scenario_rebase_conflict_skip(args: &GitSmokeArgs, dir: &Path) -> Result<()> 
   let repo = init_repo(&dir.join("repo"))?;
   setup_rebase_conflict(&repo)?;
 
-  let mut driver = DriverProcess::spawn(args.driver_bin.as_deref(), &args.backend, dir)?;
+  let mut driver = DriverProcess::spawn(args.driver_bin.as_deref(), &args.backend, dir, true)?;
   driver.open_repo(&repo)?;
   driver.run_git_action(serde_json::json!({
     "action": "rebase_branch",
@@ -875,7 +875,7 @@ fn scenario_rebase_conflict_abort(args: &GitSmokeArgs, dir: &Path) -> Result<()>
   let repo = init_repo(&dir.join("repo"))?;
   setup_rebase_conflict(&repo)?;
 
-  let mut driver = DriverProcess::spawn(args.driver_bin.as_deref(), &args.backend, dir)?;
+  let mut driver = DriverProcess::spawn(args.driver_bin.as_deref(), &args.backend, dir, true)?;
   driver.open_repo(&repo)?;
   driver.run_git_action(serde_json::json!({
     "action": "rebase_branch",
@@ -904,7 +904,7 @@ fn scenario_interactive_rebase_drop(args: &GitSmokeArgs, dir: &Path) -> Result<(
   commit_file(&repo, "b.txt", "second\n", "second")?;
   commit_file(&repo, "c.txt", "third\n", "third")?;
 
-  let mut driver = DriverProcess::spawn(args.driver_bin.as_deref(), &args.backend, dir)?;
+  let mut driver = DriverProcess::spawn(args.driver_bin.as_deref(), &args.backend, dir, true)?;
   driver.open_repo(&repo)?;
   driver.run_git_action(serde_json::json!({
     "action": "interactive_rebase",
@@ -928,7 +928,7 @@ fn scenario_interactive_rebase_squash(args: &GitSmokeArgs, dir: &Path) -> Result
   commit_file(&repo, "b.txt", "second\n", "second")?;
   commit_file(&repo, "c.txt", "third\n", "third")?;
 
-  let mut driver = DriverProcess::spawn(args.driver_bin.as_deref(), &args.backend, dir)?;
+  let mut driver = DriverProcess::spawn(args.driver_bin.as_deref(), &args.backend, dir, true)?;
   driver.open_repo(&repo)?;
   driver.run_git_action(serde_json::json!({
     "action": "interactive_rebase",
@@ -953,7 +953,7 @@ fn scenario_interactive_rebase_branch_conflict(args: &GitSmokeArgs, dir: &Path) 
   let repo = init_repo(&dir.join("repo"))?;
   setup_rebase_conflict(&repo)?;
 
-  let mut driver = DriverProcess::spawn(args.driver_bin.as_deref(), &args.backend, dir)?;
+  let mut driver = DriverProcess::spawn(args.driver_bin.as_deref(), &args.backend, dir, true)?;
   driver.open_repo(&repo)?;
   driver.run_git_action(serde_json::json!({
     "action": "interactive_rebase",
@@ -994,7 +994,7 @@ fn scenario_force_push_dialog(args: &GitSmokeArgs, dir: &Path) -> Result<()> {
   let remote_before = git_bare_output(&remote, ["rev-parse", "refs/heads/main"])?;
   let local_after_rewrite = git_output(&repo, ["rev-parse", "HEAD"])?;
 
-  let mut driver = DriverProcess::spawn(args.driver_bin.as_deref(), &args.backend, dir)?;
+  let mut driver = DriverProcess::spawn(args.driver_bin.as_deref(), &args.backend, dir, true)?;
   driver.open_repo(&repo)?;
   wait_for_state(&mut driver, |state| {
     state
@@ -1066,7 +1066,7 @@ fn scenario_stale_force_push_lease(args: &GitSmokeArgs, dir: &Path) -> Result<()
   git(&other, ["push"])?;
   let remote_after_stale = git_bare_output(&remote, ["rev-parse", "refs/heads/main"])?;
 
-  let mut driver = DriverProcess::spawn(args.driver_bin.as_deref(), &args.backend, dir)?;
+  let mut driver = DriverProcess::spawn(args.driver_bin.as_deref(), &args.backend, dir, true)?;
   driver.open_repo(&repo)?;
   wait_for_state(&mut driver, |state| {
     state
@@ -1105,7 +1105,7 @@ fn scenario_branch_switch_dirty_conflict(args: &GitSmokeArgs, dir: &Path) -> Res
   git(&repo, ["switch", "main"])?;
   fs::write(repo.join("a.txt"), "dirty\n")?;
 
-  let mut driver = DriverProcess::spawn(args.driver_bin.as_deref(), &args.backend, dir)?;
+  let mut driver = DriverProcess::spawn(args.driver_bin.as_deref(), &args.backend, dir, true)?;
   driver.open_repo(&repo)?;
   driver.run_git_action(serde_json::json!({
     "action": "switch_branch",
@@ -1160,7 +1160,7 @@ fn scenario_pull_dirty_conflict(args: &GitSmokeArgs, dir: &Path) -> Result<()> {
   git(&other, ["push"])?;
   fs::write(repo.join("a.txt"), "dirty\n")?;
 
-  let mut driver = DriverProcess::spawn(args.driver_bin.as_deref(), &args.backend, dir)?;
+  let mut driver = DriverProcess::spawn(args.driver_bin.as_deref(), &args.backend, dir, true)?;
   driver.open_repo(&repo)?;
   wait_for_state(&mut driver, |state| status_count(state) == Some(1))?;
   driver.run_git_action(serde_json::json!({ "action": "pull" }))?;
@@ -1189,7 +1189,7 @@ fn scenario_detached_checkout(args: &GitSmokeArgs, dir: &Path) -> Result<()> {
   let first = git_output(&repo, ["rev-parse", "HEAD"])?;
   commit_file(&repo, "a.txt", "v2\n", "second")?;
 
-  let mut driver = DriverProcess::spawn(args.driver_bin.as_deref(), &args.backend, dir)?;
+  let mut driver = DriverProcess::spawn(args.driver_bin.as_deref(), &args.backend, dir, true)?;
   driver.open_repo(&repo)?;
   driver.run_git_action(serde_json::json!({
     "action": "checkout_detached",
@@ -1215,7 +1215,7 @@ fn scenario_cherry_pick(args: &GitSmokeArgs, dir: &Path) -> Result<()> {
   let picked = git_output(&repo, ["rev-parse", "HEAD"])?;
   git(&repo, ["switch", "main"])?;
 
-  let mut driver = DriverProcess::spawn(args.driver_bin.as_deref(), &args.backend, dir)?;
+  let mut driver = DriverProcess::spawn(args.driver_bin.as_deref(), &args.backend, dir, true)?;
   driver.open_repo(&repo)?;
   driver.run_git_action(serde_json::json!({
     "action": "cherry_pick",

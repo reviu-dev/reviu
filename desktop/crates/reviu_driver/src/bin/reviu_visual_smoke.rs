@@ -113,7 +113,7 @@ fn run_force_push_dialog_visual(args: &VisualSmokeArgs, run_dir: &Path) -> Resul
     .clone()
     .unwrap_or_else(|| run_dir.join("force-push-dialog.png"));
 
-  let mut driver = DriverProcess::spawn(args.driver_bin.as_deref(), "visual", run_dir)?;
+  let mut driver = DriverProcess::spawn(args.driver_bin.as_deref(), "visual", run_dir, true)?;
   driver.command(json!({ "cmd": "path_prompt", "path": repo }))?;
   wait_for_driver_state(&mut driver, |state| {
     palette_has_command(state, "force_push")

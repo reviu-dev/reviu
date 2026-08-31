@@ -39,16 +39,12 @@ pub(crate) struct DriverProcess {
 }
 
 impl DriverProcess {
-  pub(crate) fn spawn(driver_bin: Option<&Path>, backend: &str, run_dir: &Path) -> Result<Self> {
-    let home = run_dir.join("home");
-    let config = run_dir.join("config");
-    fs::create_dir_all(&home)?;
-    fs::create_dir_all(config.join("reviu.dev"))?;
-    fs::write(
-      config.join("reviu.dev/settings.json"),
-      json!({ "agent_notifications": false }).to_string(),
-    )?;
-
+  pub(crate) fn spawn(
+    driver_bin: Option<&Path>,
+    backend: &str,
+    run_dir: &Path,
+    isolate_config: bool,
+  ) -> Result<Self> {
     let mut command = match driver_bin {
       Some(driver_bin) => Command::new(driver_bin),
       None => {
@@ -68,12 +64,22 @@ impl DriverProcess {
         cargo
       }
     };
+    command.arg("--backend").arg(backend);
+    if isolate_config {
+      let home = run_dir.join("home");
+      let config = run_dir.join("config");
+      fs::create_dir_all(&home)?;
+      fs::create_dir_all(config.join("reviu.dev"))?;
+      fs::write(
+        config.join("reviu.dev/settings.json"),
+        json!({ "agent_notifications": false }).to_string(),
+      )?;
+      command
+        .env("HOME", &home)
+        .env("XDG_CONFIG_HOME", &config)
+        .env("REVIU_PROFILE", "dev");
+    }
     command
-      .arg("--backend")
-      .arg(backend)
-      .env("HOME", &home)
-      .env("XDG_CONFIG_HOME", &config)
-      .env("REVIU_PROFILE", "dev")
       .stdin(Stdio::piped())
       .stdout(Stdio::piped())
       .stderr(Stdio::from(fs::File::create(

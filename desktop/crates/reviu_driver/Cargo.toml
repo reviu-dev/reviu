@@ -37,5 +37,9 @@ path = "src/bin/reviu_driver_mcp.rs"
 name = "reviu-visual-smoke"
 path = "src/bin/reviu_visual_smoke.rs"
 
+[[bin]]
+name = "reviu-github-smoke"
+path = "src/bin/reviu_github_smoke.rs"
+
 [lints]
 workspace = true

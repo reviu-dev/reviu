@@ -15,6 +15,7 @@ This builds:
 - `target/debug/reviu-driver`
 - `target/debug/reviu-driver-mcp`
 - `target/debug/reviu-git-smoke`
+- `target/debug/reviu-github-smoke`
 - `target/debug/reviu-perf`
 - `target/debug/reviu-visual-smoke`
 
@@ -169,6 +170,42 @@ Useful options:
 - `--keep-temp`: keep the temporary repository and driver logs.
 
 This is intentionally not wired into CI yet.
+
+## `reviu-github-smoke`
+
+`reviu-github-smoke` is an opt-in live GitHub smoke check. It is not wired into CI and refuses to run unless `REVIU_GITHUB_SMOKE=1` is set.
+
+Default fixture expectations:
+
+- repository: `reviu-dev/reviu-github-smoke`
+- visibility: private
+- stable open PR: `smoke/pr-open` -> `main`
+
+Run it from `desktop/`:
+
+```sh
+cargo build -p reviu_driver --bins
+REVIU_GITHUB_SMOKE=1 target/debug/reviu-github-smoke \
+  --driver-bin target/debug/reviu-driver \
+  --repo /Users/joris/workspace/reviu-github-smoke
+```
+
+Current scope is intentionally non-destructive:
+
+- verifies `gh` can read the private GitHub fixture repo
+- verifies the stable fixture PR exists
+- opens the live checkout through `reviu-driver --backend test`
+- uses your normal local Git/Reviu environment so private GitHub credentials are available
+- verifies Reviu detects the GitHub remote
+- fetches and verifies the fixture PR branch is available locally
+
+Useful options:
+
+- `--repo <path>`: local checkout of the fixture repo, required.
+- `--driver-bin <path>`: use a prebuilt driver binary instead of `cargo run`.
+- `--owner <owner>` and `--name <repo>`: override the expected GitHub repository.
+- `--pr-branch <branch>`: override the expected open PR branch.
+- `--keep-temp`: keep temporary driver config and logs.
 
 ## `reviu-perf`
 
