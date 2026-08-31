@@ -1159,7 +1159,7 @@ impl SessionPage {
         && !panel.needs_reconnect()
         && panel.repo_root() == repo_root.as_path()
       {
-        self.focus_agent_input_on_next_frame(window, cx);
+        self.reveal_active_session_chat(window, cx);
         return;
       }
     }
@@ -1171,7 +1171,7 @@ impl SessionPage {
     self.sync_agent_chat_close_control(cx);
     self.refresh_session_list(cx);
     self.sync_active_checkout(window, cx);
-    self.focus_agent_input_on_next_frame(window, cx);
+    self.reveal_active_session_chat(window, cx);
     cx.notify();
   }
 
@@ -1293,7 +1293,7 @@ impl SessionPage {
             this.sync_agent_chat_close_control(cx);
             this.refresh_session_list(cx);
             this.sync_active_checkout(window, cx);
-            this.focus_agent_input_on_next_frame(window, cx);
+            this.reveal_active_session_chat(window, cx);
           }
           Err(error) => {
             window.push_notification(
@@ -1364,7 +1364,7 @@ impl SessionPage {
     cx.notify();
   }
 
-  fn reveal_selected_session_chat(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+  fn reveal_active_session_chat(&mut self, window: &mut Window, cx: &mut Context<Self>) {
     if self.center == CenterView::Diff && !self.diff_chat_open {
       self.diff_chat_open = true;
       self.sync_agent_chat_close_control(cx);
@@ -1420,7 +1420,7 @@ impl SessionPage {
     if let Some(active) = self.agent_chat_view.as_ref()
       && active.read(cx).current_conversation().id == id
     {
-      self.reveal_selected_session_chat(window, cx);
+      self.reveal_active_session_chat(window, cx);
       return;
     }
     self.park_active_chat_panel(cx);
@@ -1455,7 +1455,7 @@ impl SessionPage {
     self.sync_agent_chat_close_control(cx);
     self.refresh_session_list(cx);
     self.sync_active_checkout(window, cx);
-    self.reveal_selected_session_chat(window, cx);
+    self.reveal_active_session_chat(window, cx);
     cx.notify();
   }
 
@@ -3267,6 +3267,96 @@ mod tests {
     });
 
     let _ = first_id;
+    cleanup_worktrees_root(&repo.path);
+  }
+
+  #[gpui::test]
+  async fn starting_a_same_checkout_session_reopens_the_chat_without_closing_the_editor(
+    cx: &mut TestAppContext,
+  ) {
+    let (repo, page, cx) = page_with_agent_panel("session-page-new-session-chat", cx).await;
+    std::fs::write(repo.path.join("README.md"), "v2\n").expect("dirty the main checkout");
+
+    let first = active_panel(&page, cx);
+    first.update(cx, |panel, cx| {
+      panel.seed_user_message_for_test("first", cx)
+    });
+    cx.run_until_parked();
+    let first_id = first.read_with(cx, |panel, _| panel.current_conversation().id.clone());
+
+    page.update_in(cx, |page, window, cx| {
+      page.open_diff(
+        PathBuf::from("README.md"),
+        None,
+        OpenIntent::Open,
+        window,
+        cx,
+      );
+    });
+    await_open_file(&page, cx).await;
+    page.update_in(cx, |page, window, cx| page.hide_diff_chat(window, cx));
+    cx.run_until_parked();
+
+    page.update_in(cx, |page, window, cx| page.new_session(window, cx));
+    cx.run_until_parked();
+
+    page.read_with(cx, |page, cx| {
+      assert_eq!(page.center, CenterView::Diff);
+      assert!(page.diff_chat_open);
+      assert_eq!(page.selected_file.as_deref(), Some(Path::new("README.md")));
+      assert!(page.editor.is_some());
+      assert_ne!(
+        page
+          .agent_chat_view
+          .as_ref()
+          .expect("active chat")
+          .read(cx)
+          .current_conversation()
+          .id
+          .as_str(),
+        first_id.as_str()
+      );
+    });
+    assert!(cx.debug_bounds("session-conversation-pane").is_some());
+    assert!(cx.debug_bounds("session-diff-editor").is_some());
+
+    cleanup_worktrees_root(&repo.path);
+  }
+
+  #[gpui::test]
+  async fn starting_a_worktree_session_from_a_hidden_chat_shows_the_conversation(
+    cx: &mut TestAppContext,
+  ) {
+    let (repo, page, cx) = page_with_agent_panel("session-page-worktree-chat", cx).await;
+    std::fs::write(repo.path.join("README.md"), "v2\n").expect("dirty the main checkout");
+
+    page.update_in(cx, |page, window, cx| {
+      page.open_diff(
+        PathBuf::from("README.md"),
+        None,
+        OpenIntent::Open,
+        window,
+        cx,
+      );
+    });
+    await_open_file(&page, cx).await;
+    page.update_in(cx, |page, window, cx| page.hide_diff_chat(window, cx));
+    cx.run_until_parked();
+
+    page.update_in(cx, |page, window, cx| {
+      page.new_worktree_session_in(repo.path.clone(), None, window, cx)
+    });
+    cx.run_until_parked();
+
+    let cwd = active_panel(&page, cx).read_with(cx, |panel, _| panel.cwd().to_path_buf());
+    page.read_with(cx, |page, _| {
+      assert_eq!(page.center, CenterView::Conversation);
+      assert!(page.diff_chat_open);
+      assert!(page.editor.is_none());
+      assert!(page.selected_file.is_none());
+      assert_ne!(cwd, repo.path);
+    });
+
     cleanup_worktrees_root(&repo.path);
   }
 
