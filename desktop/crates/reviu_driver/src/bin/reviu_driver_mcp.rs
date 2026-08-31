@@ -454,6 +454,10 @@ fn command_for_tool(tool_name: &str, arguments: Value) -> Result<Value> {
     "notification_stats" => json!({ "cmd": "notification_stats" }),
     "notification_log" => json!({ "cmd": "notification_log" }),
     "auth_state" => json!({ "cmd": "auth_state" }),
+    "set_auth_token" => json!({
+      "cmd": "set_auth_token",
+      "token": required_string(&arguments, "token")?,
+    }),
     "run_git_action" => json!({
       "cmd": "run_git_action",
       "action": required_value_field(&arguments, "action")?,
@@ -669,6 +673,11 @@ fn tools() -> Vec<Value> {
       empty_schema(),
     ),
     tool(
+      "set_auth_token",
+      "Set an in-memory Reviu API bearer token, then refresh auth state.",
+      object_schema(vec![string_property("token", "Reviu API bearer token.")]).required(["token"]),
+    ),
+    tool(
       "run_git_action",
       "Run a Git action through the same path as the command palette.",
       object_schema(vec![value_property(
@@ -839,6 +848,7 @@ mod tests {
       "git_state",
       "notification_log",
       "auth_state",
+      "set_auth_token",
       "quit",
     ] {
       assert!(names.contains(&name));

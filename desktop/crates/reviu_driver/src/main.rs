@@ -193,6 +193,10 @@ enum Command {
   NotificationLog,
   /// Expose Reviu auth state for driver diagnostics.
   AuthState,
+  /// Set an in-memory Reviu API bearer token, then refresh auth state.
+  SetAuthToken {
+    token: String,
+  },
   /// Run a Git action through the same path as the command palette.
   RunGitAction {
     action: workspace::DriverGitAction,
@@ -458,6 +462,13 @@ fn handle_test_command(
       let state = view.read_with(cx, |view, cx| view.auth_state_for_driver(cx));
       respond(ok(state));
     }
+    Command::SetAuthToken { token } => {
+      cx.update(|_, cx| {
+        view.update(cx, |view, cx| view.set_auth_token_for_driver(token, cx));
+      });
+      cx.run_until_parked();
+      respond(ok(serde_json::json!({})));
+    }
     Command::RunGitAction { action } => {
       let result = cx.update(|window, cx| {
         view.update(cx, |view, cx| {
@@ -708,6 +719,10 @@ fn handle_visual_command(
       Ok(state) => respond(ok(state)),
       Err(error) => respond(err(error)),
     },
+    Command::SetAuthToken { token } => match set_auth_token_directly(cx, window, view, token) {
+      Ok(()) => respond(ok(serde_json::json!({}))),
+      Err(error) => respond(err(error)),
+    },
     Command::RunGitAction { action } => match run_git_action_directly(cx, window, view, action) {
       Ok(()) => respond(ok(serde_json::json!({}))),
       Err(error) => respond(err(error)),
@@ -933,6 +948,21 @@ fn auth_state_directly(
 }
 
 #[cfg(target_os = "macos")]
+fn set_auth_token_directly(
+  cx: &mut VisualTestAppContext,
+  window: AnyWindowHandle,
+  view: &Entity<WorkspaceView>,
+  token: String,
+) -> Result<(), String> {
+  cx.update_window(window, |_, _, cx| {
+    view.update(cx, |view, cx| view.set_auth_token_for_driver(token, cx));
+  })
+  .map_err(|error| error.to_string())?;
+  cx.run_until_parked();
+  Ok(())
+}
+
+#[cfg(target_os = "macos")]
 fn run_git_action_directly(
   cx: &mut VisualTestAppContext,
   window: AnyWindowHandle,
@@ -1116,6 +1146,12 @@ mod tests {
       serde_json::from_str::<Command>(r#"{"cmd":"auth_state"}"#).expect("auth state"),
       Command::AuthState
     ));
+    match serde_json::from_str::<Command>(r#"{"cmd":"set_auth_token","token":"tok"}"#)
+      .expect("set auth token")
+    {
+      Command::SetAuthToken { token } => assert_eq!(token, "tok"),
+      _ => panic!("expected set auth token"),
+    }
     match serde_json::from_str::<Command>(
       r#"{"cmd":"run_git_action","action":{"action":"stash","include_untracked":false,"message":"wip"}}"#,
     )

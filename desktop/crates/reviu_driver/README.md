@@ -185,7 +185,10 @@ Run it from `desktop/`:
 
 ```sh
 cargo build -p reviu_driver --bins
-REVIU_GITHUB_SMOKE=1 target/debug/reviu-github-smoke \
+REVIU_PROFILE=dev API_BASE_URL=http://localhost:3001 REVIU_GITHUB_SMOKE=1 \
+  REVIU_AUTH_TOKEN="$(security find-internet-password -s reviu_auth.dev -a bearer -w)" \
+  target/debug/reviu-github-smoke \
+  --backend test \
   --driver-bin target/debug/reviu-driver \
   --repo /Users/joris/workspace/reviu-github-smoke
 ```
@@ -194,9 +197,9 @@ Current scope is intentionally non-destructive:
 
 - verifies `gh` can read the private GitHub fixture repo
 - verifies the stable fixture PR exists
-- opens the live checkout through `reviu-driver --backend test`
+- opens the live checkout through `reviu-driver --backend test|visual`
 - prints Reviu auth diagnostics with `auth_state`
-- uses your normal local Git/Reviu environment so private GitHub credentials are available
+- uses `REVIU_AUTH_TOKEN` when provided so local and future CI runs do not depend on platform keychain access
 - verifies Reviu detects the GitHub remote
 - verifies Reviu resolves the current branch to the stable fixture PR
 - fetches and verifies the fixture PR branch is available locally
@@ -204,7 +207,9 @@ Current scope is intentionally non-destructive:
 Useful options:
 
 - `--repo <path>`: local checkout of the fixture repo, required.
+- `--backend test|visual`: driver backend. `test` is enough when `REVIU_AUTH_TOKEN` is set; `visual` is useful for screenshot-oriented local debugging.
 - `--driver-bin <path>`: use a prebuilt driver binary instead of `cargo run`.
+- `--auth-token-env <env>`: environment variable containing a Reviu API bearer token, default `REVIU_AUTH_TOKEN`. On macOS dev builds, you can usually populate it from `security find-internet-password -s reviu_auth.dev -a bearer -w`.
 - `--owner <owner>` and `--name <repo>`: override the expected GitHub repository.
 - `--pr-branch <branch>`: override the expected open PR branch.
 - `--keep-temp`: keep temporary driver config and logs.

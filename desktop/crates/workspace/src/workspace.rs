@@ -352,6 +352,13 @@ impl WorkspaceView {
 
   #[cfg(any(test, feature = "test-support"))]
   #[doc(hidden)]
+  pub fn set_auth_token_for_driver(&self, token: String, cx: &mut App) {
+    WorkspaceApi::global(cx).api.set_bearer_token(token);
+    crate::auth_flow::refresh_me(cx);
+  }
+
+  #[cfg(any(test, feature = "test-support"))]
+  #[doc(hidden)]
   pub fn auth_state_for_driver(&self, cx: &App) -> serde_json::Value {
     let state = AuthStateStore::get(cx);
     let github_access = AuthStateStore::github_access_state(cx);

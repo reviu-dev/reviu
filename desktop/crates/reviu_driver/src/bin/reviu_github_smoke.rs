@@ -19,14 +19,17 @@ const ENABLE_ENV: &str = "REVIU_GITHUB_SMOKE";
 const DEFAULT_OWNER: &str = "reviu-dev";
 const DEFAULT_REPO: &str = "reviu-github-smoke";
 const DEFAULT_PR_BRANCH: &str = "smoke/pr-open";
+const DEFAULT_AUTH_TOKEN_ENV: &str = "REVIU_AUTH_TOKEN";
 
 #[derive(Debug, PartialEq, Eq)]
 struct GithubSmokeArgs {
   repo: PathBuf,
   driver_bin: Option<PathBuf>,
+  backend: String,
   owner: String,
   name: String,
   pr_branch: String,
+  auth_token_env: String,
   keep_temp: bool,
 }
 
@@ -38,9 +41,11 @@ fn main() -> Result<()> {
 fn parse_args(args: impl IntoIterator<Item = String>) -> Result<GithubSmokeArgs> {
   let mut repo = None;
   let mut driver_bin = None;
+  let mut backend = "test".to_string();
   let mut owner = DEFAULT_OWNER.to_string();
   let mut name = DEFAULT_REPO.to_string();
   let mut pr_branch = DEFAULT_PR_BRANCH.to_string();
+  let mut auth_token_env = DEFAULT_AUTH_TOKEN_ENV.to_string();
   let mut keep_temp = false;
   let mut args = args.into_iter();
 
@@ -50,9 +55,11 @@ fn parse_args(args: impl IntoIterator<Item = String>) -> Result<GithubSmokeArgs>
       "--driver-bin" => {
         driver_bin = Some(PathBuf::from(required_value(&mut args, "--driver-bin")?))
       }
+      "--backend" => backend = required_value(&mut args, "--backend")?,
       "--owner" => owner = required_value(&mut args, "--owner")?,
       "--name" => name = required_value(&mut args, "--name")?,
       "--pr-branch" => pr_branch = required_value(&mut args, "--pr-branch")?,
+      "--auth-token-env" => auth_token_env = required_value(&mut args, "--auth-token-env")?,
       "--keep-temp" => keep_temp = true,
       "--help" | "-h" => bail!(usage()),
       other if other.starts_with("--repo=") => {
@@ -60,6 +67,9 @@ fn parse_args(args: impl IntoIterator<Item = String>) -> Result<GithubSmokeArgs>
       }
       other if other.starts_with("--driver-bin=") => {
         driver_bin = Some(PathBuf::from(other.trim_start_matches("--driver-bin=")));
+      }
+      other if other.starts_with("--backend=") => {
+        backend = other.trim_start_matches("--backend=").to_string();
       }
       other if other.starts_with("--owner=") => {
         owner = other.trim_start_matches("--owner=").to_string();
@@ -70,17 +80,23 @@ fn parse_args(args: impl IntoIterator<Item = String>) -> Result<GithubSmokeArgs>
       other if other.starts_with("--pr-branch=") => {
         pr_branch = other.trim_start_matches("--pr-branch=").to_string();
       }
+      other if other.starts_with("--auth-token-env=") => {
+        auth_token_env = other.trim_start_matches("--auth-token-env=").to_string();
+      }
       other => bail!("unknown argument: {other}\n{}", usage()),
     }
   }
 
+  validate_backend(&backend)?;
   let repo = repo.context("--repo is required")?;
   Ok(GithubSmokeArgs {
     repo,
     driver_bin,
+    backend,
     owner,
     name,
     pr_branch,
+    auth_token_env,
     keep_temp,
   })
 }
@@ -89,8 +105,15 @@ fn required_value(args: &mut impl Iterator<Item = String>, flag: &str) -> Result
   args.next().with_context(|| format!("{flag} needs a value"))
 }
 
+fn validate_backend(backend: &str) -> Result<()> {
+  match backend {
+    "test" | "visual" => Ok(()),
+    other => bail!("unknown backend: {other}"),
+  }
+}
+
 fn usage() -> &'static str {
-  "usage: REVIU_GITHUB_SMOKE=1 reviu-github-smoke --repo PATH [--driver-bin PATH] [--owner OWNER] [--name REPO] [--pr-branch BRANCH] [--keep-temp]"
+  "usage: REVIU_GITHUB_SMOKE=1 reviu-github-smoke --repo PATH [--backend test|visual] [--driver-bin PATH] [--owner OWNER] [--name REPO] [--pr-branch BRANCH] [--auth-token-env ENV] [--keep-temp]"
 }
 
 fn run(args: GithubSmokeArgs) -> Result<()> {
@@ -119,7 +142,13 @@ fn run_live_github_smoke(args: &GithubSmokeArgs, run_dir: &std::path::Path) -> R
   ensure_gh_can_read_repo(args)?;
   let fixture_pr_number = ensure_open_fixture_pr(args)?;
 
-  let mut driver = DriverProcess::spawn(args.driver_bin.as_deref(), "test", run_dir, false)?;
+  let mut driver = DriverProcess::spawn(args.driver_bin.as_deref(), &args.backend, run_dir, false)?;
+  if let Some(token) = std::env::var(&args.auth_token_env)
+    .ok()
+    .filter(|token| !token.is_empty())
+  {
+    driver.command(json!({ "cmd": "set_auth_token", "token": token }))?;
+  }
   let auth = wait_for_auth_state(&mut driver)?;
   println!(
     "Reviu auth: status={}, github_access={}, login={}",
@@ -387,21 +416,38 @@ mod tests {
       "--repo=/tmp/repo".to_string(),
       "--driver-bin".to_string(),
       "/tmp/reviu-driver".to_string(),
+      "--backend".to_string(),
+      "visual".to_string(),
       "--owner".to_string(),
       "acme".to_string(),
       "--name=widget".to_string(),
       "--pr-branch".to_string(),
       "smoke/pr".to_string(),
+      "--auth-token-env".to_string(),
+      "TOKEN_ENV".to_string(),
       "--keep-temp".to_string(),
     ])
     .expect("args");
 
     assert_eq!(args.repo, PathBuf::from("/tmp/repo"));
     assert_eq!(args.driver_bin, Some(PathBuf::from("/tmp/reviu-driver")));
+    assert_eq!(args.backend, "visual");
     assert_eq!(args.owner, "acme");
     assert_eq!(args.name, "widget");
     assert_eq!(args.pr_branch, "smoke/pr");
+    assert_eq!(args.auth_token_env, "TOKEN_ENV");
     assert!(args.keep_temp);
+  }
+
+  #[test]
+  fn parse_args_rejects_unknown_backend() {
+    assert!(
+      parse_args([
+        "--repo=/tmp/repo".to_string(),
+        "--backend=other".to_string()
+      ])
+      .is_err()
+    );
   }
 
   #[test]
