@@ -47,6 +47,7 @@ pub(super) enum UnsavedEditorAction {
   OpenDiff {
     rel_path: PathBuf,
     reveal_line: Option<u32>,
+    reveal_column: Option<u32>,
     intent: OpenIntent,
   },
   AgentDiffSnapshot {
@@ -100,11 +101,24 @@ impl SessionPage {
     window: &mut Window,
     cx: &mut Context<Self>,
   ) {
+    self.open_diff_at_position(rel_path, reveal_line, None, intent, window, cx);
+  }
+
+  pub(super) fn open_diff_at_position(
+    &mut self,
+    rel_path: PathBuf,
+    reveal_line: Option<u32>,
+    reveal_column: Option<u32>,
+    intent: OpenIntent,
+    window: &mut Window,
+    cx: &mut Context<Self>,
+  ) {
     if self.should_prompt_before_opening(&rel_path, cx) {
       self.open_unsaved_editor_dialog(
         UnsavedEditorAction::OpenDiff {
           rel_path,
           reveal_line,
+          reveal_column,
           intent,
         },
         window,
@@ -112,13 +126,14 @@ impl SessionPage {
       );
       return;
     }
-    self.open_diff_without_unsaved_prompt(rel_path, reveal_line, intent, window, cx);
+    self.open_diff_without_unsaved_prompt(rel_path, reveal_line, reveal_column, intent, window, cx);
   }
 
   fn open_diff_without_unsaved_prompt(
     &mut self,
     rel_path: PathBuf,
     reveal_line: Option<u32>,
+    reveal_column: Option<u32>,
     intent: OpenIntent,
     window: &mut Window,
     cx: &mut Context<Self>,
@@ -141,16 +156,25 @@ impl SessionPage {
       self.hide_whitespace = app_settings.hide_whitespace;
     }
     let hide_whitespace = self.hide_whitespace;
-    // Agent line numbers are 1-based; the editor reveals by 0-based doc line.
-    let reveal_doc_line = reveal_line.map(|line| line.saturating_sub(1) as usize);
+    // External file positions are 1-based; the editor reveals by 0-based position.
+    let reveal_doc_position = reveal_line.map(|line| {
+      (
+        line.saturating_sub(1) as usize,
+        reveal_column.map_or(0, |column| column.saturating_sub(1) as usize),
+      )
+    });
 
     self.center = CenterView::Diff;
     self.sync_agent_chat_close_control(cx);
     // Same path, but the snapshot of a commit is not the working-tree file.
     if !left_commit_file && self.selected_file.as_ref() == Some(&rel_path) && self.editor.is_some()
     {
-      if let (Some(doc_line), Some(editor)) = (reveal_doc_line, self.editor.clone()) {
-        editor.update(cx, |editor, cx| editor.reveal_source_line(doc_line, cx));
+      if let (Some((doc_line, doc_column)), Some(editor)) =
+        (reveal_doc_position, self.editor.clone())
+      {
+        editor.update(cx, |editor, cx| {
+          editor.reveal_source_position(doc_line, doc_column, cx)
+        });
       }
       self.record_recent_file(&repo_root, &rel_path);
       self.focus_editor_if_asked(intent, window, cx);
@@ -196,8 +220,8 @@ impl SessionPage {
         editor.update(cx, |editor, cx| {
           editor.set_diff_view_mode(diff_view, cx);
           editor.set_ignore_whitespace(hide_whitespace, cx);
-          if let Some(doc_line) = reveal_doc_line {
-            editor.reveal_source_line(doc_line, cx);
+          if let Some((doc_line, doc_column)) = reveal_doc_position {
+            editor.reveal_source_position(doc_line, doc_column, cx);
           }
         });
         this.binary_preview = binary_preview;
@@ -1070,8 +1094,16 @@ impl SessionPage {
       UnsavedEditorAction::OpenDiff {
         rel_path,
         reveal_line,
+        reveal_column,
         intent,
-      } => self.open_diff_without_unsaved_prompt(rel_path, reveal_line, intent, window, cx),
+      } => self.open_diff_without_unsaved_prompt(
+        rel_path,
+        reveal_line,
+        reveal_column,
+        intent,
+        window,
+        cx,
+      ),
       UnsavedEditorAction::AgentDiffSnapshot {
         rel_path,
         old_text,
@@ -1409,6 +1441,42 @@ mod tests {
   }
 
   #[gpui::test]
+  async fn opening_a_file_position_reveals_its_line_and_column(cx: &mut TestAppContext) {
+    let repo = TempRepo::init("session-file-position");
+    commit_text_file(
+      &repo.path,
+      Path::new("position.txt"),
+      "first\nsecond\n",
+      "initial",
+    );
+    let (page, cx) = add_session_page_window(repo.path.clone(), cx);
+
+    page.update_in(cx, |page, window, cx| {
+      page.open_diff_at_position(
+        PathBuf::from("position.txt"),
+        Some(2),
+        Some(4),
+        OpenIntent::Open,
+        window,
+        cx,
+      );
+    });
+    await_open_file(&page, cx).await;
+
+    page.read_with(cx, |page, cx| {
+      assert_eq!(
+        page
+          .editor
+          .as_ref()
+          .expect("editor")
+          .read(cx)
+          .cursor_offset(),
+        9
+      );
+    });
+  }
+
+  #[gpui::test]
   async fn the_conversation_stays_visible_next_to_an_open_diff(cx: &mut TestAppContext) {
     let repo = TempRepo::init("session-page-split-view");
     commit_text_file(&repo.path, Path::new("README.md"), "v1\n", "initial");
@@ -1651,6 +1719,7 @@ mod tests {
         UnsavedEditorAction::OpenDiff {
           rel_path: PathBuf::from("other.md"),
           reveal_line: None,
+          reveal_column: None,
           intent: OpenIntent::Open,
         },
         window,

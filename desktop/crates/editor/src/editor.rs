@@ -7331,13 +7331,28 @@ impl Editor {
 
   /// Center and place the cursor on a document line (0-based), clamped to the file.
   pub fn reveal_source_line(&mut self, doc_line: usize, cx: &mut Context<Self>) {
-    let line_count = self.document.read(cx).len_lines();
+    self.reveal_source_position(doc_line, 0, cx);
+  }
+
+  /// Center and place the cursor at a document position (0-based), clamped to its line.
+  pub fn reveal_source_position(
+    &mut self,
+    doc_line: usize,
+    doc_column: usize,
+    cx: &mut Context<Self>,
+  ) {
+    let document = self.document.read(cx);
+    let line_count = document.len_lines();
     if line_count == 0 {
       return;
     }
     let doc_line = doc_line.min(line_count - 1);
+    let line_start = document.line_to_char(doc_line);
+    let line_length = document
+      .line_content(doc_line)
+      .map_or(0, |line| line.chars().count());
+    let target_offset = line_start + doc_column.min(line_length);
     let target_display_line = self.doc_to_display_line(doc_line).unwrap_or(doc_line);
-    let target_offset = self.document.read(cx).line_to_char(doc_line);
     let total_lines = self.display_line_count(line_count);
 
     self.move_to(target_offset, cx);
@@ -13556,6 +13571,21 @@ pub mod tests {
 
     ctx.set_cursor(11);
     assert_eq!(ctx.cursor_offset(), 11);
+  }
+
+  #[gpui::test]
+  fn reveal_source_position_clamps_the_line_and_column(cx: &mut TestAppContext) {
+    let mut ctx = EditorTestContext::with_text(cx.clone(), "first\nsecond\n");
+
+    ctx.editor.update(&mut ctx.cx, |editor, cx| {
+      editor.reveal_source_position(1, 3, cx);
+    });
+    assert_eq!(ctx.cursor_offset(), 9);
+
+    ctx.editor.update(&mut ctx.cx, |editor, cx| {
+      editor.reveal_source_position(99, 99, cx);
+    });
+    assert_eq!(ctx.cursor_offset(), 13);
   }
 
   #[gpui::test]

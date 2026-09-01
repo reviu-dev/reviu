@@ -1556,7 +1556,14 @@ impl SessionPage {
     let view = cx.entity();
     let handler: SearchFileHandler = Arc::new(move |request, window, cx| {
       view.update(cx, |view, cx| {
-        view.open_diff(request.path, request.line, OpenIntent::Open, window, cx);
+        view.open_diff_at_position(
+          request.path,
+          request.line,
+          request.column,
+          OpenIntent::Open,
+          window,
+          cx,
+        );
       });
       Ok(())
     });
