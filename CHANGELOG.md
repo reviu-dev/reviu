@@ -126,7 +126,7 @@ A collapsible block leads with the bad news: a failing suite or a requested chan
 
 The merge button names its method and lists only the methods the repository allows, remembered per repository. Confirming opens a form prefilled with exactly what GitHub would generate for the commit title and message, down to the squash bullets and Co-authored-by trailers; clear a field to let GitHub write it. The button stays disabled until Reviu knows the pull request can merge.
 
-### Review A Pull Request Without Leaving
+### Review A Pull Request
 
 The Review panel splits comments by destination: "To the agent" and "To this pull request", the latter read back from GitHub, so a review started in the browser is there when you come back. Write on a line of the pull request's diff and it joins your review, or goes out on its own; existing conversations show on their lines, with replies, resolving, editing and deleting. Submit asks for the decision and message, says how many comments go out, refuses an empty message where GitHub would, and your row in the reviewers block flips immediately. Discard deletes the pending review and its comments on GitHub after a confirmation. Not there yet: the preview tab, images in comments, applying suggestions, links out of comment bodies.
 
@@ -153,10 +153,6 @@ Everything with a shortcut is a command, showing its key as you rebound it; a co
 ### Walking A List Is Not Choosing From It
 
 Arrows show what a row holds and leave the keyboard in the list; Enter or a click opens the file and hands the editor the focus. Left and right fold, in every tree, and files load only when you stop on them.
-
-### Push With Saved Git Credentials
-
-HTTPS pushes and fetches use the credentials already saved in your Git credential helper, such as the macOS keychain: if `git push` works in your terminal, the same remote works from Reviu.
 
 ### Settings And Keybindings In Plain Files
 
