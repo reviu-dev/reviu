@@ -35,6 +35,6 @@ impl Render for AppRoot {
       .child(self.view.clone())
       .children(sheet_layer)
       .children(dialog_layer)
-      .children(notification_layer)
+      .children(notification_layer.map(gpui::deferred))
   }
 }

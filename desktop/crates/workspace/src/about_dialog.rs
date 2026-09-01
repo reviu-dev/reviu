@@ -1,6 +1,6 @@
 use gpui::{App, Context, Render, Task, Window, div, img, prelude::*, px};
 use gpui_component::{
-  ActiveTheme as _, Disableable as _, IconName, Sizable as _,
+  ActiveTheme as _, Disableable as _, Icon, IconName, Sizable as _,
   button::{Button, ButtonVariants as _},
   dialog::{DialogDescription, DialogFooter, DialogHeader},
   h_flex,
@@ -201,6 +201,14 @@ impl Render for AboutContent {
     let update_state = AppUpdateStore::try_state(cx);
     let has_update = AppUpdateStore::try_available_update(cx).is_some();
     let download_in_progress = AppUpdateStore::is_downloading(cx);
+    let show_download_icon = matches!(
+      update_state.as_ref(),
+      Some(AppUpdateState::Available(_))
+        | Some(AppUpdateState::Error {
+          update: Some(_),
+          ..
+        })
+    );
 
     let changelog_button = Button::new("about-changelog")
       .small()
@@ -221,11 +229,15 @@ impl Render for AboutContent {
     let download_button = Button::new("about-download-update")
       .small()
       .primary()
-      .icon(UiIconName::Download)
       .label(update_action_label(update_state))
       .loading(download_in_progress)
       .disabled(download_in_progress)
       .on_click(cx.listener(Self::download_action));
+    let download_button = if show_download_icon {
+      download_button.child(Icon::new(UiIconName::Download).size_3())
+    } else {
+      download_button
+    };
 
     div()
       .id("about-dialog")
@@ -272,17 +284,12 @@ impl Render for AboutContent {
           .pb_5()
           .pt_1()
           .justify_between()
-          .child(h_flex().gap_2().child(changelog_button).child(check_button))
+          .child(changelog_button)
           .child(
             h_flex()
               .gap_2()
-              .when(has_update, |this| this.child(download_button))
-              .child(
-                Button::new("about-close")
-                  .label("Close")
-                  .primary()
-                  .on_click(|_, window, cx| window.close_dialog(cx)),
-              ),
+              .child(check_button)
+              .when(has_update, |this| this.child(download_button)),
           ),
       )
   }

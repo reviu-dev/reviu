@@ -302,7 +302,10 @@ pub fn update_action_label(state: Option<AppUpdateState>) -> &'static str {
   match state {
     Some(AppUpdateState::Downloading(_)) => "Downloading...",
     Some(AppUpdateState::ReadyToInstall(_)) => ready_update_button_label(),
-    _ => "New version available",
+    Some(AppUpdateState::Error {
+      update: Some(_), ..
+    }) => "Retry update",
+    _ => "Update",
   }
 }
 
@@ -956,10 +959,10 @@ mod tests {
       },
     };
 
-    assert_eq!(update_action_label(None), "New version available");
+    assert_eq!(update_action_label(None), "Update");
     assert_eq!(
       update_action_label(Some(AppUpdateState::Available(update.clone()))),
-      "New version available"
+      "Update"
     );
     assert_eq!(
       update_action_label(Some(AppUpdateState::Downloading(update.clone()))),
@@ -968,12 +971,19 @@ mod tests {
     assert_eq!(
       update_action_label(Some(AppUpdateState::ReadyToInstall(
         ReadyToInstallAppUpdate {
-          update,
+          update: update.clone(),
           artifact_path: PathBuf::from("/tmp/reviu-installer.dmg"),
           restart_binary_path: None,
         }
       ))),
       ready_update_button_label()
+    );
+    assert_eq!(
+      update_action_label(Some(AppUpdateState::Error {
+        update: Some(update),
+        message: "checksum mismatch".to_string(),
+      })),
+      "Retry update"
     );
   }
 
