@@ -85,6 +85,10 @@ fn conflict_block_kind(kind: ConflictLineKind) -> Option<ConflictBlockKind> {
   }
 }
 
+fn conflict_kind_has_stripe(kind: Option<ConflictLineKind>) -> bool {
+  kind.is_some_and(|kind| !matches!(kind, ConflictLineKind::Divider))
+}
+
 fn conflict_border_color(theme: &ui::Theme, kind: ConflictLineKind) -> Option<gpui::Hsla> {
   match conflict_block_kind(kind)? {
     ConflictBlockKind::Current => Some(theme.current_conflict_stripe()),
@@ -641,7 +645,7 @@ impl Element for GutterElement {
           };
 
           let stripe_color = if (is_active_hunk_line && conflict_kind.is_none())
-            || (is_active_conflict_line && conflict_kind.is_some())
+            || (is_active_conflict_line && conflict_kind_has_stripe(conflict_kind))
           {
             Some(active_hunk_focus_color)
           } else {
@@ -973,6 +977,14 @@ mod tests {
       conflict_stripe_color(&theme, ConflictLineKind::Divider),
       None
     );
+  }
+
+  #[test]
+  fn conflict_kind_has_stripe_keeps_divider_neutral() {
+    assert!(conflict_kind_has_stripe(Some(ConflictLineKind::Current)));
+    assert!(conflict_kind_has_stripe(Some(ConflictLineKind::Incoming)));
+    assert!(!conflict_kind_has_stripe(Some(ConflictLineKind::Divider)));
+    assert!(!conflict_kind_has_stripe(None));
   }
 
   #[test]
