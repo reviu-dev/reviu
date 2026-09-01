@@ -4264,6 +4264,14 @@ async fn the_answered_permission_card_shows_a_status_row(cx: &mut gpui::TestAppC
 }
 
 #[test]
+fn thought_activity_lines_remove_blank_lines_and_markdown_noise() {
+  assert_eq!(
+    thought_activity_lines("**Adding new file**\n\n\n\nnext `step`"),
+    ["Adding new file", "next step"]
+  );
+}
+
+#[test]
 fn thought_peek_tail_keeps_short_activities_whole() {
   let (activities, truncated) = thought_peek_tail("one\ntwo\nthree");
   assert_eq!(activities, ["one", "two", "three"]);
@@ -4324,6 +4332,23 @@ fn thought_peek_tail_respects_char_boundaries() {
       .first()
       .is_some_and(|activity| activity.chars().all(|character| character == 'é'))
   );
+}
+
+#[gpui::test]
+async fn expanded_thought_uses_the_compact_activity_rows(cx: &mut gpui::TestAppContext) {
+  let (panel, cx) = add_panel_window(cx);
+  panel.update(cx, |panel, cx| {
+    panel.status = Status::Ready;
+    panel.items = vec![ChatItem::Thought(ThoughtView {
+      text: "**Adding recent files tracking**\n\nRefining `search` grouping".to_string(),
+      collapsed: false,
+    })];
+    panel.sync_list_count();
+    cx.notify();
+  });
+  cx.run_until_parked();
+
+  assert!(cx.debug_bounds("agent-chat-thought-activities").is_some());
 }
 
 #[gpui::test]

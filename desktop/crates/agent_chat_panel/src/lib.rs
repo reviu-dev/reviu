@@ -705,6 +705,19 @@ const THINKING_PEEK_MAX_HEIGHT_PX: f32 = 180.0;
 const THINKING_PEEK_TAIL_BYTES: usize = 4096;
 const THINKING_PEEK_MAX_ACTIVITIES: usize = 6;
 
+fn clean_thought_activity_line(line: &str) -> Option<String> {
+  let cleaned = line.replace("**", "").replace('`', "");
+  let cleaned = cleaned.trim();
+  (!cleaned.is_empty()).then(|| cleaned.to_string())
+}
+
+fn thought_activity_lines(text: &str) -> Vec<String> {
+  text
+    .lines()
+    .filter_map(clean_thought_activity_line)
+    .collect()
+}
+
 /// Visible activities from the tail of the streaming thought, plus whether
 /// older content was dropped. Bounding keeps per-chunk text work flat.
 fn thought_peek_tail(text: &str) -> (Vec<String>, bool) {
@@ -722,12 +735,7 @@ fn thought_peek_tail(text: &str) -> (Vec<String>, bool) {
     slice = &slice[newline + 1..];
   }
 
-  let mut activities: Vec<String> = slice
-    .lines()
-    .map(|line| line.replace("**", "").replace('`', ""))
-    .map(|line| line.trim().to_string())
-    .filter(|line| !line.is_empty())
-    .collect();
+  let mut activities = thought_activity_lines(slice);
   if activities.len() > THINKING_PEEK_MAX_ACTIVITIES {
     activities.drain(..activities.len() - THINKING_PEEK_MAX_ACTIVITIES);
     truncated = true;

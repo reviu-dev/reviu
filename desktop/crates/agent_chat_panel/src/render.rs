@@ -596,17 +596,77 @@ pub(crate) fn render_plan(plan: &PlanView, theme: &gpui_component::Theme) -> gpu
 
 /// First non-empty line of a thought, cleaned of markdown emphasis markers.
 pub(crate) fn thought_preview(text: &str) -> Option<String> {
-  let line = text.lines().map(str::trim).find(|line| !line.is_empty())?;
-  let cleaned = line.replace("**", "").replace('`', "");
-  let preview: String = cleaned.trim().chars().take(80).collect();
+  let preview: String = text
+    .lines()
+    .filter_map(clean_thought_activity_line)
+    .next()?
+    .chars()
+    .take(80)
+    .collect();
   (!preview.is_empty()).then_some(preview)
+}
+
+fn render_thought_activity_rows(
+  activities: Vec<String>,
+  theme: &gpui_component::Theme,
+  latest_prominent: bool,
+  selectable: Option<(&selectable_text::SelectionRegistry, u64)>,
+) -> gpui::AnyElement {
+  let latest_activity = activities.len().saturating_sub(1);
+  let activity_rows = activities.into_iter().enumerate().map(|(index, activity)| {
+    let color = if latest_prominent && index != latest_activity {
+      theme.muted_foreground.opacity(0.62)
+    } else {
+      theme.muted_foreground
+    };
+    let activity: SharedString = activity.into();
+    let content = match selectable {
+      Some((registry, text_id_base)) => selectable_text::SelectableText::new(
+        text_id_base | 0x0800_0000 | index as u64,
+        activity,
+        Vec::new(),
+        registry.clone(),
+      )
+      .into_any_element(),
+      None => div().child(activity).into_any_element(),
+    };
+    h_flex()
+      .items_start()
+      .gap_1p5()
+      .child(
+        div()
+          .mt(px(6.))
+          .size(px(3.))
+          .flex_shrink_0()
+          .rounded_full()
+          .bg(color),
+      )
+      .child(
+        div()
+          .min_w_0()
+          .flex_1()
+          .text_xs()
+          .line_height(gpui::relative(1.3))
+          .text_color(color)
+          .whitespace_normal()
+          .child(content),
+      )
+  });
+
+  v_flex()
+    .debug_selector(|| "agent-chat-thought-activities".to_string())
+    .pl_4()
+    .gap_1()
+    .children(activity_rows)
+    .into_any_element()
 }
 
 pub(crate) fn render_thought(
   idx: usize,
   thought: &ThoughtView,
   theme: &gpui_component::Theme,
-  extensions: &gpui_component::text::MarkdownExtensions,
+  item_id_base: u64,
+  registry: &selectable_text::SelectionRegistry,
   cx: &mut Context<AgentChatPanel>,
 ) -> gpui::AnyElement {
   let collapsed = thought.collapsed;
@@ -615,7 +675,6 @@ pub(crate) fn render_thought(
     (true, Some(preview)) => format!("Thought · {preview}").into(),
     _ => "Thought".into(),
   };
-  let body_text = thought.text.trim().to_string();
   v_flex()
     .gap_1()
     .child(
@@ -635,19 +694,16 @@ pub(crate) fn render_thought(
         )
         .into_any_element(),
     )
-    .when(!collapsed && !body_text.is_empty(), |this| {
-      this.child(
-        div()
-          .pl_4()
-          .text_xs()
-          .text_color(theme.muted_foreground)
-          .child(markdown_view(
-            ("agent-chat-thought-md", idx),
-            &body_text,
-            extensions,
-            cx,
-          )),
-      )
+    .when(!collapsed, |this| {
+      let activities = thought_activity_lines(&thought.text);
+      this.when(!activities.is_empty(), |this| {
+        this.child(render_thought_activity_rows(
+          activities,
+          theme,
+          false,
+          Some((registry, item_id_base)),
+        ))
+      })
     })
     .into_any_element()
 }
@@ -3314,35 +3370,6 @@ impl AgentChatPanel {
     _cx: &mut Context<Self>,
   ) -> gpui::AnyElement {
     let (activities, truncated) = thought_peek_tail(&self.pending_thought);
-    let latest_activity = activities.len().saturating_sub(1);
-    let activity_rows = activities.into_iter().enumerate().map(|(index, activity)| {
-      let color = if index == latest_activity {
-        theme.muted_foreground
-      } else {
-        theme.muted_foreground.opacity(0.62)
-      };
-      h_flex()
-        .items_start()
-        .gap_1p5()
-        .child(
-          div()
-            .mt(px(6.))
-            .size(px(3.))
-            .flex_shrink_0()
-            .rounded_full()
-            .bg(color),
-        )
-        .child(
-          div()
-            .min_w_0()
-            .flex_1()
-            .text_xs()
-            .line_height(gpui::relative(1.3))
-            .text_color(color)
-            .whitespace_normal()
-            .child(SharedString::from(activity)),
-        )
-    });
     v_flex()
       .debug_selector(|| "agent-chat-thinking-peek".to_string())
       .gap_1()
@@ -3360,7 +3387,7 @@ impl AgentChatPanel {
           .flex()
           .flex_col()
           .justify_end()
-          .child(v_flex().pl_4().gap_1().children(activity_rows))
+          .child(render_thought_activity_rows(activities, theme, true, None))
           .when(truncated, |this| {
             this.child(
               div()
@@ -3879,7 +3906,7 @@ impl AgentChatPanel {
                 v_flex()
                   .gap_1()
                   .child(header)
-                  .child(render_thought(idx, t, theme, &self.markdown_extensions, cx))
+                  .child(render_thought(idx, t, theme, item_id_base, &registry, cx))
                   .into_any_element()
               } else {
                 header
@@ -3893,7 +3920,7 @@ impl AgentChatPanel {
               )
             } else if expanded {
               timeline_row(
-                render_thought(idx, t, theme, &self.markdown_extensions, cx),
+                render_thought(idx, t, theme, item_id_base, &registry, cx),
                 theme,
                 is_last_row,
               )
@@ -3902,7 +3929,7 @@ impl AgentChatPanel {
             }
           }
           None => timeline_row(
-            render_thought(idx, t, theme, &self.markdown_extensions, cx),
+            render_thought(idx, t, theme, item_id_base, &registry, cx),
             theme,
             is_last_row,
           ),
