@@ -2639,7 +2639,7 @@ fn a_settled_turn_folds_its_work_but_not_the_final_answer() {
   assert_eq!(hiding_turn_summary(&items, 7), None);
   assert_eq!(hiding_turn_summary(&items, 1), None, "the user message");
   assert_eq!(hiding_turn_summary(&items, 8), None, "the card itself");
-  assert_eq!(folded_step_count(&items, summary_idx), 4);
+  assert_eq!(folded_work_indices(&items, summary_idx), vec![2, 3, 4, 5]);
 
   // A turn without a card folds nothing.
   let open = vec![
@@ -2661,11 +2661,11 @@ fn format_turn_duration_reads_naturally() {
 }
 
 #[gpui::test]
-async fn expanded_turn_work_opens_nested_tool_groups_unless_the_user_pinned_them(
+async fn expanded_turn_work_renders_inside_the_summary_without_group_disclosure(
   cx: &mut gpui::TestAppContext,
 ) {
   let (panel, cx) = add_panel_window(cx);
-  panel.update(cx, |panel, _| {
+  panel.update(cx, |panel, cx| {
     panel.status = Status::Ready;
     panel.items = vec![
       checkpoint_marker("cp-1"),
@@ -2679,20 +2679,31 @@ async fn expanded_turn_work_opens_nested_tool_groups_unless_the_user_pinned_them
       agent_message("done"),
       summary_item("cp-1"),
     ];
-
-    let (start, end, _) = tool_group_span(&panel.items, 2).expect("tool group");
-    assert!(!panel.tool_group_expanded(start, end));
-
-    let Some(ChatItem::TurnSummary(summary)) = panel.items.get_mut(6) else {
-      panic!("expected turn summary");
-    };
-    summary.work_expanded = true;
-    assert!(panel.tool_group_expanded(start, end));
-
-    let id = first_tool_id_in(&panel.items, start, end).expect("first tool id");
-    panel.tool_group_pins.insert(id, false);
-    assert!(!panel.tool_group_expanded(start, end));
+    panel.sync_list_count();
+    cx.notify();
   });
+  cx.run_until_parked();
+
+  assert!(cx.debug_bounds("turn-summary-work-details").is_none());
+  let work = cx
+    .debug_bounds("turn-summary-work")
+    .expect("the folded-work row is painted");
+  cx.simulate_click(work.center(), gpui::Modifiers::default());
+  cx.run_until_parked();
+
+  assert!(cx.debug_bounds("turn-summary-work-details").is_some());
+  assert!(cx.debug_bounds("agent-tool-card").is_some());
+  assert!(
+    cx.debug_bounds("agent-tool-group").is_none(),
+    "the details open directly instead of revealing another disclosure"
+  );
+
+  let collapse = cx
+    .debug_bounds("turn-summary-work-collapse")
+    .expect("the bottom collapse row is painted");
+  cx.simulate_click(collapse.center(), gpui::Modifiers::default());
+  cx.run_until_parked();
+  assert!(cx.debug_bounds("turn-summary-work-details").is_none());
 }
 
 #[gpui::test]

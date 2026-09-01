@@ -34,7 +34,7 @@ The agent's narration appears where it happened, thinking streams as a dimmed li
 
 ### The Turn Closes With A Receipt
 
-A turn that touched files ends with a summary card: files edited, added and removed lines, per file. Each row opens its diff, Review jumps into the diff view, and Undo reverts the turn's changes while keeping the conversation. The rest of the turn folds behind the card: your question, the final answer and a "Worked for 2m 5s · 8 steps" row that unfolds on click.
+A turn that touched files ends with a summary card: files edited, added and removed lines, per file. Each row opens its diff, Review jumps into the diff view, and Undo reverts the turn's changes while keeping the conversation. Agent work sits in its own drawer under the file receipt, so opening it shows the detailed steps in place and can be closed again from the bottom.
 
 ### Checkpoints: Roll Back Any Turn
 

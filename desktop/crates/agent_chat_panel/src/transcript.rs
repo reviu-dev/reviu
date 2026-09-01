@@ -404,9 +404,8 @@ pub(crate) fn hiding_turn_summary(items: &[ChatItem], idx: usize) -> Option<usiz
   if trailing_prose { None } else { Some(j) }
 }
 
-/// The number of items a card folds away.
-pub(crate) fn folded_step_count(items: &[ChatItem], summary_idx: usize) -> usize {
-  (0..summary_idx)
+pub(crate) fn folded_work_indices(items: &[ChatItem], summary_idx: usize) -> Vec<usize> {
+  let mut indices: Vec<usize> = (0..summary_idx)
     .rev()
     .take_while(|&i| {
       !matches!(
@@ -420,7 +419,9 @@ pub(crate) fn folded_step_count(items: &[ChatItem], summary_idx: usize) -> usize
       )
     })
     .filter(|&i| hiding_turn_summary(items, i) == Some(summary_idx))
-    .count()
+    .collect();
+  indices.reverse();
+  indices
 }
 
 /// Whether this summary card closes the latest turn. Undoing an older turn's

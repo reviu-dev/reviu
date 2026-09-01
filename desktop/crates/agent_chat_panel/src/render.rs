@@ -3448,13 +3448,7 @@ impl AgentChatPanel {
     theme: &gpui_component::Theme,
     cx: &mut Context<Self>,
   ) -> gpui::AnyElement {
-    // A settled turn's work lives folded behind its summary card.
-    if let Some(summary_idx) = hiding_turn_summary(&self.items, idx)
-      && !matches!(
-        self.items.get(summary_idx),
-        Some(ChatItem::TurnSummary(s)) if s.work_expanded
-      )
-    {
+    if hiding_turn_summary(&self.items, idx).is_some() {
       return Empty.into_any_element();
     }
     let has_continuation_trailer =
@@ -4016,6 +4010,81 @@ impl AgentChatPanel {
     div().px_3().child(element).into_any_element()
   }
 
+  fn render_turn_work_item(
+    &self,
+    idx: usize,
+    item: &ChatItem,
+    theme: &gpui_component::Theme,
+    cx: &mut Context<Self>,
+  ) -> gpui::AnyElement {
+    let registry = self.selection_registry.clone();
+    let terminal_store = self.terminal_store.clone();
+    let item_id_base = ((idx as u64) << 32) | 0x1000_0000;
+    let content = match item {
+      ChatItem::Message(message) if message.role == ChatRole::Agent => {
+        let text = message.text.clone();
+        if agent_message_needs_markdown(&text) {
+          markdown_view(
+            ("turn-summary-work-md", idx),
+            text,
+            &self.markdown_extensions,
+            cx,
+          )
+        } else {
+          div()
+            .text_sm()
+            .text_color(theme.foreground)
+            .child(selectable_text::SelectableText::new(
+              item_id_base,
+              text,
+              Vec::new(),
+              registry,
+            ))
+            .into_any_element()
+        }
+      }
+      ChatItem::Tool(tool) => render_tool_call(
+        tool,
+        theme,
+        item_id_base,
+        &registry,
+        terminal_store.as_ref(),
+        &self.cwd,
+        &self.repo_root,
+        cx,
+      ),
+      ChatItem::Permission(permission) => render_permission(permission, theme, &registry, cx),
+      ChatItem::Plan(plan) => render_plan(plan, theme),
+      ChatItem::Thought(thought) => {
+        let activities = thought_activity_lines(&thought.text);
+        v_flex()
+          .debug_selector(|| "turn-summary-work-thought".to_string())
+          .gap_1()
+          .child(
+            div()
+              .text_xs()
+              .text_color(theme.muted_foreground)
+              .child("Thought"),
+          )
+          .when(!activities.is_empty(), |this| {
+            this.child(render_thought_activity_rows(
+              activities,
+              theme,
+              false,
+              Some((&registry, item_id_base)),
+            ))
+          })
+          .into_any_element()
+      }
+      _ => return Empty.into_any_element(),
+    };
+
+    div()
+      .debug_selector(|| "turn-summary-work-detail-item".to_string())
+      .child(content)
+      .into_any_element()
+  }
+
   fn render_turn_summary(
     &self,
     idx: usize,
@@ -4154,46 +4223,8 @@ impl AgentChatPanel {
       .overflow_hidden()
       .child(header);
 
-    let steps = folded_step_count(&self.items, idx);
-    if steps > 0 {
-      let work_expanded = view.work_expanded;
-      let mut label = String::new();
-      if let Some(secs) = view.duration_secs {
-        label.push_str(&format!("Worked for {}", format_turn_duration(secs)));
-        label.push_str(" · ");
-      }
-      label.push_str(&format!(
-        "{steps} {}",
-        if steps == 1 { "step" } else { "steps" }
-      ));
-      card = card.child(
-        h_flex()
-          .id(("turn-summary-work", idx))
-          .debug_selector(|| "turn-summary-work".to_string())
-          .items_center()
-          .gap_1()
-          .px_3()
-          .py_1p5()
-          .border_t_1()
-          .border_color(theme.border.opacity(0.6))
-          .cursor_pointer()
-          .text_xs()
-          .text_color(theme.muted_foreground)
-          .hover(|s| s.bg(theme.secondary_hover))
-          .on_click(cx.listener(move |panel, _, _, cx| {
-            panel.toggle_turn_work(idx, cx);
-          }))
-          .child(label)
-          .child(
-            gpui_component::Icon::new(if work_expanded {
-              IconName::ChevronDown
-            } else {
-              IconName::ChevronRight
-            })
-            .size_3(),
-          ),
-      );
-    }
+    let folded_indices = folded_work_indices(&self.items, idx);
+    let steps = folded_indices.len();
 
     for (row_ix, file) in view.files.iter().take(visible).enumerate() {
       let path = PathBuf::from(&file.path);
@@ -4246,7 +4277,8 @@ impl AgentChatPanel {
         h_flex()
           .id(("turn-summary-toggle", idx))
           .items_center()
-          .gap_1()
+          .justify_between()
+          .gap_2()
           .px_3()
           .py_1p5()
           .border_t_1()
@@ -4263,7 +4295,7 @@ impl AgentChatPanel {
               cx.notify();
             }
           }))
-          .child(label)
+          .child(div().min_w_0().truncate().child(label))
           .child(
             gpui_component::Icon::new(if expanded {
               IconName::ChevronUp
@@ -4273,6 +4305,91 @@ impl AgentChatPanel {
             .size_3(),
           ),
       );
+    }
+
+    if steps > 0 {
+      let mut details = Vec::new();
+      if let Some(secs) = view.duration_secs {
+        details.push(format_turn_duration(secs));
+      }
+      details.push(format!(
+        "{steps} {}",
+        if steps == 1 { "step" } else { "steps" }
+      ));
+      let label = format!(
+        "{} · {}",
+        if view.work_expanded {
+          "Hide agent work"
+        } else {
+          "Show agent work"
+        },
+        details.join(" · ")
+      );
+      card = card.child(
+        h_flex()
+          .id(("turn-summary-work", idx))
+          .debug_selector(|| "turn-summary-work".to_string())
+          .items_center()
+          .justify_between()
+          .gap_2()
+          .px_3()
+          .py_1p5()
+          .border_t_1()
+          .border_color(theme.border.opacity(0.6))
+          .cursor_pointer()
+          .text_xs()
+          .text_color(theme.muted_foreground)
+          .hover(|s| s.bg(theme.secondary_hover))
+          .on_click(cx.listener(move |panel, _, _, cx| {
+            panel.toggle_turn_work(idx, cx);
+          }))
+          .child(div().min_w_0().truncate().child(label))
+          .child(
+            gpui_component::Icon::new(if view.work_expanded {
+              IconName::ChevronUp
+            } else {
+              IconName::ChevronDown
+            })
+            .size_3(),
+          ),
+      );
+
+      if view.work_expanded {
+        let mut work = v_flex()
+          .debug_selector(|| "turn-summary-work-details".to_string())
+          .gap_2()
+          .px_3()
+          .py_2()
+          .border_t_1()
+          .border_color(theme.border.opacity(0.6))
+          .bg(theme.secondary.opacity(0.28));
+        for item_idx in folded_indices {
+          if let Some(item) = self.items.get(item_idx) {
+            work = work.child(self.render_turn_work_item(item_idx, item, theme, cx));
+          }
+        }
+        card = card.child(work).child(
+          h_flex()
+            .id(("turn-summary-work-collapse", idx))
+            .debug_selector(|| "turn-summary-work-collapse".to_string())
+            .items_center()
+            .justify_between()
+            .gap_2()
+            .px_3()
+            .py_1p5()
+            .border_t_1()
+            .border_color(theme.border.opacity(0.6))
+            .cursor_pointer()
+            .text_xs()
+            .text_color(theme.muted_foreground)
+            .hover(|s| s.bg(theme.secondary_hover))
+            .on_click(cx.listener(move |panel, _, _, cx| {
+              panel.toggle_turn_work(idx, cx);
+            }))
+            .child(div().min_w_0().truncate().child("Hide agent work"))
+            .child(gpui_component::Icon::new(IconName::ChevronUp).size_3()),
+        );
+      }
     }
 
     card.into_any_element()
