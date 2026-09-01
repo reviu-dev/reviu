@@ -3313,7 +3313,36 @@ impl AgentChatPanel {
     theme: &gpui_component::Theme,
     _cx: &mut Context<Self>,
   ) -> gpui::AnyElement {
-    let (tail, truncated) = thought_peek_tail(&self.pending_thought);
+    let (activities, truncated) = thought_peek_tail(&self.pending_thought);
+    let latest_activity = activities.len().saturating_sub(1);
+    let activity_rows = activities.into_iter().enumerate().map(|(index, activity)| {
+      let color = if index == latest_activity {
+        theme.muted_foreground
+      } else {
+        theme.muted_foreground.opacity(0.62)
+      };
+      h_flex()
+        .items_start()
+        .gap_1p5()
+        .child(
+          div()
+            .mt(px(6.))
+            .size(px(3.))
+            .flex_shrink_0()
+            .rounded_full()
+            .bg(color),
+        )
+        .child(
+          div()
+            .min_w_0()
+            .flex_1()
+            .text_xs()
+            .line_height(gpui::relative(1.3))
+            .text_color(color)
+            .whitespace_normal()
+            .child(SharedString::from(activity)),
+        )
+    });
     v_flex()
       .debug_selector(|| "agent-chat-thinking-peek".to_string())
       .gap_1()
@@ -3331,16 +3360,7 @@ impl AgentChatPanel {
           .flex()
           .flex_col()
           .justify_end()
-          .child(
-            // Plain dimmed text: rendered markdown would blast bold headings
-            // through the peek's quiet intent.
-            div()
-              .pl_4()
-              .text_xs()
-              .text_color(theme.muted_foreground)
-              .whitespace_normal()
-              .child(SharedString::from(tail)),
-          )
+          .child(v_flex().pl_4().gap_1().children(activity_rows))
           .when(truncated, |this| {
             this.child(
               div()

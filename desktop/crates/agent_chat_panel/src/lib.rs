@@ -703,12 +703,11 @@ const CONVERSATION_COLUMN_MAX_WIDTH_PX: f32 = 720.0;
 const CONVERSATION_BOTTOM_FADE_PX: f32 = 48.0;
 const THINKING_PEEK_MAX_HEIGHT_PX: f32 = 180.0;
 const THINKING_PEEK_TAIL_BYTES: usize = 4096;
-const THINKING_PEEK_TAIL_LINES: usize = 12;
+const THINKING_PEEK_MAX_ACTIVITIES: usize = 6;
 
-/// Tail of the streaming thought bounded in bytes then lines, plus whether
-/// older content was dropped. Bounding keeps the per-chunk markdown re-parse
-/// cost flat however long the think runs.
-fn thought_peek_tail(text: &str) -> (String, bool) {
+/// Visible activities from the tail of the streaming thought, plus whether
+/// older content was dropped. Bounding keeps per-chunk text work flat.
+fn thought_peek_tail(text: &str) -> (Vec<String>, bool) {
   let text = text.trim_end();
   let mut start = text.len().saturating_sub(THINKING_PEEK_TAIL_BYTES);
   while !text.is_char_boundary(start) {
@@ -716,44 +715,24 @@ fn thought_peek_tail(text: &str) -> (String, bool) {
   }
   let mut slice = &text[start..];
   let mut truncated = start > 0;
-  let lines = slice.lines().count();
-  if lines > THINKING_PEEK_TAIL_LINES {
-    let mut to_drop = lines - THINKING_PEEK_TAIL_LINES;
-    for (i, b) in slice.bytes().enumerate() {
-      if b == b'\n' {
-        to_drop -= 1;
-        if to_drop == 0 {
-          slice = &slice[i + 1..];
-          truncated = true;
-          break;
-        }
-      }
-    }
-  } else if truncated {
-    // Snap the byte cut to a line start so the peek opens on a whole line.
-    if let Some(nl) = slice.find('\n')
-      && nl + 1 < slice.len()
-    {
-      slice = &slice[nl + 1..];
-    }
+  if truncated
+    && let Some(newline) = slice.find('\n')
+    && newline + 1 < slice.len()
+  {
+    slice = &slice[newline + 1..];
   }
-  // Plain-text peek: markdown markers show literally, and runs of blank
-  // lines open holes in a box meant to be a glimpse.
-  let mut cleaned = String::with_capacity(slice.len());
-  let mut last_blank = true;
-  for line in slice.lines() {
-    let line = line.replace("**", "").replace('`', "");
-    let blank = line.trim().is_empty();
-    if blank && last_blank {
-      continue;
-    }
-    if !cleaned.is_empty() {
-      cleaned.push('\n');
-    }
-    cleaned.push_str(line.trim_end());
-    last_blank = blank;
+
+  let mut activities: Vec<String> = slice
+    .lines()
+    .map(|line| line.replace("**", "").replace('`', ""))
+    .map(|line| line.trim().to_string())
+    .filter(|line| !line.is_empty())
+    .collect();
+  if activities.len() > THINKING_PEEK_MAX_ACTIVITIES {
+    activities.drain(..activities.len() - THINKING_PEEK_MAX_ACTIVITIES);
+    truncated = true;
   }
-  (cleaned.trim().to_string(), truncated)
+  (activities, truncated)
 }
 
 /// Code selected in the Git diff view, pushed in to attach as `@selection` context.

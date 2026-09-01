@@ -4264,49 +4264,66 @@ async fn the_answered_permission_card_shows_a_status_row(cx: &mut gpui::TestAppC
 }
 
 #[test]
-fn thought_peek_tail_keeps_short_thoughts_whole() {
-  let (tail, truncated) = thought_peek_tail("one\ntwo\nthree");
-  assert_eq!(tail, "one\ntwo\nthree");
+fn thought_peek_tail_keeps_short_activities_whole() {
+  let (activities, truncated) = thought_peek_tail("one\ntwo\nthree");
+  assert_eq!(activities, ["one", "two", "three"]);
   assert!(!truncated);
 }
 
 #[test]
-fn thought_peek_tail_collapses_blank_runs_and_markdown_noise() {
-  let (tail, _) = thought_peek_tail("**Adding new file**\n\n\n\nnext `step`");
-  assert_eq!(tail, "Adding new file\n\nnext step");
+fn thought_peek_tail_removes_blank_lines_and_markdown_noise() {
+  let (activities, _) = thought_peek_tail("**Adding new file**\n\n\n\nnext `step`");
+  assert_eq!(activities, ["Adding new file", "next step"]);
   let (leading, _) = thought_peek_tail("\n\n\nAdding new file");
-  assert_eq!(leading, "Adding new file");
+  assert_eq!(leading, ["Adding new file"]);
 }
 
 #[test]
-fn thought_peek_tail_keeps_only_the_last_lines() {
+fn thought_peek_tail_keeps_only_the_latest_activities() {
   let text: String = (1..=20)
-    .map(|i| format!("line {i}\n"))
+    .map(|i| format!("activity {i}\n\n"))
     .collect::<Vec<_>>()
     .join("");
-  let (tail, truncated) = thought_peek_tail(&text);
+  let (activities, truncated) = thought_peek_tail(&text);
   assert!(truncated);
-  assert!(tail.starts_with("line 9\n"), "tail starts at {tail:?}");
-  assert!(tail.ends_with("line 20"));
-  assert_eq!(tail.lines().count(), THINKING_PEEK_TAIL_LINES);
+  assert_eq!(
+    activities,
+    [
+      "activity 15",
+      "activity 16",
+      "activity 17",
+      "activity 18",
+      "activity 19",
+      "activity 20",
+    ]
+  );
+  assert_eq!(activities.len(), THINKING_PEEK_MAX_ACTIVITIES);
 }
 
 #[test]
 fn thought_peek_tail_snaps_a_byte_cut_to_the_next_line_start() {
   // Two long lines: the byte cap lands mid line one, the peek opens on line two.
   let text = format!("{}\n{}", "a".repeat(3000), "b".repeat(3000));
-  let (tail, truncated) = thought_peek_tail(&text);
+  let (activities, truncated) = thought_peek_tail(&text);
   assert!(truncated);
-  assert!(tail.starts_with('b'), "tail starts at {:?}", &tail[..8]);
+  assert!(
+    activities
+      .first()
+      .is_some_and(|activity| activity.starts_with('b'))
+  );
 }
 
 #[test]
 fn thought_peek_tail_respects_char_boundaries() {
   // One long line of multibyte chars: the byte cut must not split a char.
   let text = "é".repeat(THINKING_PEEK_TAIL_BYTES);
-  let (tail, truncated) = thought_peek_tail(&text);
+  let (activities, truncated) = thought_peek_tail(&text);
   assert!(truncated);
-  assert!(tail.chars().all(|c| c == 'é'));
+  assert!(
+    activities
+      .first()
+      .is_some_and(|activity| activity.chars().all(|character| character == 'é'))
+  );
 }
 
 #[gpui::test]
