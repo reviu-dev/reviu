@@ -63,7 +63,8 @@ pub use scroll_routing::{
   scrollable_node,
 };
 pub use search_file_palette::{
-  SearchFileEntry, SearchFileHandler, SearchFilePalette, SearchFilePaletteConfig,
+  SearchFileEntry, SearchFileGroup, SearchFileHandler, SearchFileOpenRequest, SearchFilePalette,
+  SearchFilePaletteConfig,
 };
 pub use selectable_row::{SelectableRowStyle, selectable_list_item};
 pub use status_theme_ext::StatusThemeExt;

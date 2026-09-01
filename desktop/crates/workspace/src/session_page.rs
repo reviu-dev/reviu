@@ -4,7 +4,7 @@ use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use agent_chat_panel::{AgentChatPanel, AgentChatPanelEvent, ConversationStore, TurnGate};
 use editor::{
@@ -82,13 +82,16 @@ use crate::{
 use ui::{
   Button, ButtonVariants as _, CommandPalette, CommandPaletteAction, CommandPaletteCommand,
   CommandPaletteConfig, CommandPaletteHandler, CommandPaletteInitialScreen, CommandPalettePage,
-  CommandPaletteRepository, ConfirmDialog, SearchFileEntry, SearchFileHandler, StatusThemeExt as _,
-  UiIconName, WindowExt as _,
+  CommandPaletteRepository, ConfirmDialog, SearchFileEntry, SearchFileGroup, SearchFileHandler,
+  StatusThemeExt as _, UiIconName, WindowExt as _,
 };
 
 /// How long a browse waits before it loads. Long enough to cross a list without
 /// reading every file, short enough not to feel late when you stop.
 pub(crate) const BROWSE_DEBOUNCE: Duration = Duration::from_millis(100);
+
+const FILE_SEARCH_CACHE_TTL: Duration = Duration::from_secs(30);
+const FILE_SEARCH_RECENT_LIMIT: usize = 20;
 
 const DIFF_VIEW_TOGGLE_DEBUG_SELECTOR: &str = "session-diff-view-toggle";
 const PREVIEW_TOGGLE_DEBUG_SELECTOR: &str = "session-preview-toggle";
@@ -225,6 +228,17 @@ struct CheckoutInfo {
   branch: Option<String>,
 }
 
+struct FileSearchCache {
+  checkout_root: PathBuf,
+  paths: Arc<Vec<PathBuf>>,
+  loaded_at: Instant,
+}
+
+struct RecentFile {
+  checkout_root: PathBuf,
+  path: PathBuf,
+}
+
 pub struct SessionPage {
   focus_handle: FocusHandle,
   window_handle: AnyWindowHandle,
@@ -277,6 +291,9 @@ pub struct SessionPage {
   driver_notifications: Vec<crate::DriverNotification>,
   open_file_generation: u64,
   open_file_task: Option<Task<()>>,
+  file_search_cache: Option<FileSearchCache>,
+  recent_files: Vec<RecentFile>,
+  _file_search_task: Option<Task<()>>,
   agent_review: AgentReviewComments,
   /// Where this repository's batch is written; none without a repository.
   review_store_path: Option<PathBuf>,
@@ -528,6 +545,9 @@ impl SessionPage {
       driver_notifications: Vec::new(),
       open_file_generation: 0,
       open_file_task: None,
+      file_search_cache: None,
+      recent_files: Vec::new(),
+      _file_search_task: None,
       agent_review: AgentReviewComments::new(),
       review_store_path: None,
       review_state_dir: None,
@@ -1522,38 +1542,121 @@ impl SessionPage {
       return;
     };
 
-    let status_entries: Vec<git::RepoStatusEntry> =
-      self.dock_panel.read(cx).status_entries().to_vec();
-    let mut changed_paths = HashSet::new();
-    for entry in &status_entries {
-      changed_paths.insert(entry.path.clone());
-      if let Some(old_path) = entry.old_path.as_ref() {
-        changed_paths.insert(old_path.clone());
-      }
-    }
-
-    let file_label = |path: &PathBuf| path.to_string_lossy().replace(['\n', '\r'], "");
-    let changed = status_entries.iter().map(|entry| {
-      SearchFileEntry::new(entry.path.clone(), file_label(&entry.path)).grouped("Changed")
+    let cached_paths = self
+      .file_search_cache
+      .as_ref()
+      .filter(|cache| cache.checkout_root == repo_root)
+      .map(|cache| cache.paths.clone());
+    let cache_is_fresh = self.file_search_cache.as_ref().is_some_and(|cache| {
+      cache.checkout_root == repo_root && cache.loaded_at.elapsed() < FILE_SEARCH_CACHE_TTL
     });
-    let unchanged = git::list_repo_head_files(&repo_root)
-      .unwrap_or_default()
-      .into_iter()
-      .filter(|path| !changed_paths.contains(path))
-      .map(|path| {
-        let label = file_label(&path);
-        SearchFileEntry::new(path, label).grouped("Unchanged")
-      });
-    let entries: Vec<SearchFileEntry> = changed.chain(unchanged).collect();
+    let repository_paths = cached_paths.as_deref().map(Vec::as_slice).unwrap_or(&[]);
+    let entries = self.file_search_entries(&repo_root, repository_paths, cx);
 
     let view = cx.entity();
-    let handler: SearchFileHandler = Arc::new(move |path, window, cx| {
+    let handler: SearchFileHandler = Arc::new(move |request, window, cx| {
       view.update(cx, |view, cx| {
-        view.open_diff(path, None, OpenIntent::Open, window, cx);
+        view.open_diff(request.path, request.line, OpenIntent::Open, window, cx);
       });
       Ok(())
     });
-    open_file_search_palette(window, cx, entries, handler, false);
+    let palette = open_file_search_palette(window, cx, entries, handler, !cache_is_fresh);
+
+    if cache_is_fresh {
+      return;
+    }
+
+    let load_repo_root = repo_root.clone();
+    let palette = palette.downgrade();
+    self._file_search_task = Some(cx.spawn_in(window, async move |this, cx| {
+      let result = cx
+        .background_spawn({
+          let repo_root = load_repo_root.clone();
+          async move { git::list_repo_worktree_files(&repo_root) }
+        })
+        .await;
+
+      let _ = this.update_in(cx, |this, window, cx| match result {
+        Ok(paths) => {
+          if this.checkout_root(cx).as_deref() != Some(load_repo_root.as_path()) {
+            return;
+          }
+          let paths = Arc::new(paths);
+          this.file_search_cache = Some(FileSearchCache {
+            checkout_root: load_repo_root.clone(),
+            paths: paths.clone(),
+            loaded_at: Instant::now(),
+          });
+          let entries = this.file_search_entries(&load_repo_root, paths.as_ref(), cx);
+          let _ = palette.update(cx, |palette, cx| {
+            palette.replace_entries(entries, window, cx);
+          });
+        }
+        Err(error) => {
+          log::error!("load files for search: {error:#}");
+          let _ = palette.update(cx, |palette, cx| {
+            palette.set_loading_error("Could not load repository files", cx);
+          });
+        }
+      });
+    }));
+  }
+
+  fn file_search_entries(
+    &self,
+    repo_root: &Path,
+    repository_paths: &[PathBuf],
+    cx: &App,
+  ) -> Vec<SearchFileEntry> {
+    let status_entries = self.dock_panel.read(cx).status_entries();
+    let mut included_paths = HashSet::new();
+    let mut entries = Vec::new();
+    let file_label = |path: &Path| path.to_string_lossy().replace(['\n', '\r'], "");
+
+    for status_entry in status_entries {
+      if included_paths.insert(status_entry.path.clone()) {
+        entries.push(
+          SearchFileEntry::new(status_entry.path.clone(), file_label(&status_entry.path))
+            .in_group(SearchFileGroup::Changed),
+        );
+      }
+      if let Some(old_path) = status_entry.old_path.as_ref() {
+        included_paths.insert(old_path.clone());
+      }
+    }
+
+    for recent in &self.recent_files {
+      if recent.checkout_root == repo_root && included_paths.insert(recent.path.clone()) {
+        entries.push(
+          SearchFileEntry::new(recent.path.clone(), file_label(&recent.path))
+            .in_group(SearchFileGroup::Recent),
+        );
+      }
+    }
+
+    entries.extend(
+      repository_paths
+        .iter()
+        .filter(|path| included_paths.insert((*path).clone()))
+        .map(|path| {
+          SearchFileEntry::new(path.clone(), file_label(path)).in_group(SearchFileGroup::Repository)
+        }),
+    );
+    entries
+  }
+
+  fn record_recent_file(&mut self, repo_root: &Path, path: &Path) {
+    self
+      .recent_files
+      .retain(|recent| recent.checkout_root != repo_root || recent.path != path);
+    self.recent_files.insert(
+      0,
+      RecentFile {
+        checkout_root: repo_root.to_path_buf(),
+        path: path.to_path_buf(),
+      },
+    );
+    self.recent_files.truncate(FILE_SEARCH_RECENT_LIMIT);
   }
 }
 
@@ -1597,6 +1700,64 @@ mod tests {
   use crate::test_support::{TempRepo, commit_text_file};
   use gpui::TestAppContext;
   use std::path::Path;
+
+  #[gpui::test]
+  async fn file_search_lists_changed_then_recent_then_repository_files(cx: &mut TestAppContext) {
+    let repo = TempRepo::init("session-page-file-search-groups");
+    commit_text_file(&repo.path, Path::new("changed.rs"), "old\n", "initial");
+    commit_text_file(&repo.path, Path::new("recent.rs"), "recent\n", "recent");
+    commit_text_file(&repo.path, Path::new("other.rs"), "other\n", "other");
+    std::fs::write(repo.path.join("changed.rs"), "new\n").expect("change file");
+
+    let (page, cx) = add_session_page_window(repo.path.clone(), cx);
+    page.update(cx, |page, cx| {
+      page.dock_panel.update(cx, |panel, cx| panel.refresh(cx));
+    });
+    cx.run_until_parked();
+    page.update(cx, |page, cx| {
+      page.record_recent_file(&repo.path, Path::new("recent.rs"));
+      let entries = page.file_search_entries(
+        &repo.path,
+        &[
+          PathBuf::from("changed.rs"),
+          PathBuf::from("other.rs"),
+          PathBuf::from("recent.rs"),
+        ],
+        cx,
+      );
+      assert_eq!(entries[0].path, PathBuf::from("changed.rs"));
+      assert_eq!(entries[0].group, SearchFileGroup::Changed);
+      assert_eq!(entries[1].path, PathBuf::from("recent.rs"));
+      assert_eq!(entries[1].group, SearchFileGroup::Recent);
+      assert_eq!(entries[2].path, PathBuf::from("other.rs"));
+      assert_eq!(entries[2].group, SearchFileGroup::Repository);
+    });
+  }
+
+  #[gpui::test]
+  async fn file_search_recents_are_mru_and_bounded(cx: &mut TestAppContext) {
+    let repo = TempRepo::init("session-page-file-search-recents");
+    let (page, cx) = add_session_page_window(repo.path.clone(), cx);
+    cx.run_until_parked();
+
+    page.update(cx, |page, _| {
+      for index in 0..FILE_SEARCH_RECENT_LIMIT + 3 {
+        page.record_recent_file(&repo.path, Path::new(&format!("file-{index}.rs")));
+      }
+      page.record_recent_file(&repo.path, Path::new("file-5.rs"));
+
+      assert_eq!(page.recent_files.len(), FILE_SEARCH_RECENT_LIMIT);
+      assert_eq!(page.recent_files[0].path, PathBuf::from("file-5.rs"));
+      assert_eq!(
+        page
+          .recent_files
+          .iter()
+          .filter(|recent| recent.path == Path::new("file-5.rs"))
+          .count(),
+        1
+      );
+    });
+  }
 
   #[gpui::test]
   async fn agent_attention_pops_a_window_only_while_inactive(cx: &mut TestAppContext) {

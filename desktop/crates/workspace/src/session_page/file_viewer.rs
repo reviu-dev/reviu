@@ -152,6 +152,7 @@ impl SessionPage {
       if let (Some(doc_line), Some(editor)) = (reveal_doc_line, self.editor.clone()) {
         editor.update(cx, |editor, cx| editor.reveal_source_line(doc_line, cx));
       }
+      self.record_recent_file(&repo_root, &rel_path);
       self.focus_editor_if_asked(intent, window, cx);
       cx.notify();
       return;
@@ -159,6 +160,7 @@ impl SessionPage {
 
     self.open_file_generation = self.open_file_generation.wrapping_add(1);
     let generation = self.open_file_generation;
+    self.record_recent_file(&repo_root, &rel_path);
     self.selected_file = Some(rel_path.clone());
     self.editor = None;
     self.binary_preview = None;
