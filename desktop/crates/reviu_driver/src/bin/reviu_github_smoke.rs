@@ -223,6 +223,7 @@ fn run_live_github_smoke(args: &GithubSmokeArgs, run_dir: &std::path::Path) -> R
         bot_issue_comment.as_ref(),
         temp_pull_request.as_ref(),
       );
+      let _ = cleanup_reviu_github_notifications(args, run_dir);
       return Err(error);
     }
   } else {
@@ -245,10 +246,13 @@ fn run_live_github_smoke(args: &GithubSmokeArgs, run_dir: &std::path::Path) -> R
     bot_issue_comment.as_ref(),
     temp_pull_request.as_ref(),
   );
+  let notification_cleanup = cleanup_reviu_github_notifications(args, run_dir);
   if result.is_ok() {
     cleanup?;
+    notification_cleanup?;
   } else {
     let _ = cleanup;
+    let _ = notification_cleanup;
   }
   result
 }
@@ -718,6 +722,58 @@ fn cleanup_live_github_smoke(
     git(&args.repo, ["checkout", &args.pr_branch])?;
     let _ = git(&args.repo, ["branch", "-D", &pull_request.branch]);
   }
+  Ok(())
+}
+
+fn cleanup_reviu_github_notifications(
+  args: &GithubSmokeArgs,
+  run_dir: &std::path::Path,
+) -> Result<()> {
+  let mut driver = DriverProcess::spawn(args.driver_bin.as_deref(), &args.backend, run_dir, false)?;
+  if let Some(token) = std::env::var(&args.auth_token_env)
+    .ok()
+    .filter(|token| !token.is_empty())
+  {
+    driver.command(json!({ "cmd": "set_auth_token", "token": token }))?;
+  }
+  let auth = wait_for_auth_state(&mut driver)?;
+  if auth.get("has_github_access").and_then(Value::as_bool) != Some(true) {
+    bail!(
+      "Reviu GitHub auth is unavailable during notification cleanup:\n{}",
+      pretty_json(&auth)
+    );
+  }
+
+  let full_name = format!("{}/{}", args.owner, args.name);
+  let mut cleaned = 0;
+  for _ in 0..3 {
+    driver.command(json!({ "cmd": "refresh_github_notifications" }))?;
+    let state = driver.command(json!({ "cmd": "github_notifications" }))?;
+    let ids = github_notification_ids_for_repo(&state, &full_name);
+    if ids.is_empty() {
+      break;
+    }
+    for id in ids {
+      driver.command(json!({
+        "cmd": "mark_github_notification_done",
+        "id": id,
+      }))?;
+      cleaned += 1;
+    }
+    std::thread::sleep(Duration::from_secs(2));
+  }
+
+  driver.command(json!({ "cmd": "refresh_github_notifications" }))?;
+  let state = driver.command(json!({ "cmd": "github_notifications" }))?;
+  let remaining = github_notification_ids_for_repo(&state, &full_name);
+  driver.quit()?;
+  if !remaining.is_empty() {
+    bail!(
+      "GitHub notification cleanup left threads visible for {full_name}: {}",
+      remaining.join(", ")
+    );
+  }
+  println!("GitHub inbox: cleaned {cleaned} smoke notification(s)");
   Ok(())
 }
 
@@ -1294,6 +1350,22 @@ fn has_logged_notification(log: &Value, kind: &str, message_part: &str) -> bool 
     })
 }
 
+fn github_notification_ids_for_repo(state: &Value, full_name: &str) -> Vec<String> {
+  state
+    .get("notifications")
+    .and_then(Value::as_array)
+    .into_iter()
+    .flatten()
+    .filter(|notification| {
+      notification
+        .get("repository")
+        .and_then(|repository| string_field(repository, "full_name"))
+        == Some(full_name)
+    })
+    .filter_map(|notification| string_field(notification, "id").map(ToString::to_string))
+    .collect()
+}
+
 fn current_branch(state: &Value) -> Option<&str> {
   state
     .get("branch_status")
@@ -1369,6 +1441,22 @@ mod tests {
         "--backend=other".to_string()
       ])
       .is_err()
+    );
+  }
+
+  #[test]
+  fn github_notification_ids_are_scoped_to_the_smoke_repository() {
+    let state = json!({
+      "notifications": [
+        { "id": "1", "repository": { "full_name": "reviu-dev/reviu-github-smoke" } },
+        { "id": "2", "repository": { "full_name": "acme/widget" } },
+        { "id": "3", "repository": { "full_name": "reviu-dev/reviu-github-smoke" } }
+      ]
+    });
+
+    assert_eq!(
+      github_notification_ids_for_repo(&state, "reviu-dev/reviu-github-smoke"),
+      ["1", "3"]
     );
   }
 
