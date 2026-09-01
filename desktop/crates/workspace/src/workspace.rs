@@ -444,7 +444,11 @@ impl WorkspaceView {
     if !exists {
       return Err(format!("GitHub notification not found: {id}").into());
     }
-    github_notifications::mark_notification_done(id, cx);
+    WorkspaceApi::global(cx)
+      .api
+      .mark_notification_done(&id)
+      .map_err(|error| format!("Marking GitHub notification done failed: {error}"))?;
+    GithubNotificationsStore::remove(cx, &id);
     cx.refresh_windows();
     Ok(())
   }

@@ -933,6 +933,7 @@ fn wait_for_github_notification_removed(
 ) -> Result<Value> {
   let mut last = Value::Null;
   wait_until(DEFAULT_TIMEOUT, || {
+    let _ = driver.command(json!({ "cmd": "refresh_github_notifications" }));
     match driver.command(json!({ "cmd": "github_notifications" })) {
       Ok(state) => {
         last = state;
