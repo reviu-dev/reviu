@@ -2602,15 +2602,23 @@ impl AgentChatPanel {
     }
   }
 
-  /// A pinned group keeps the user's choice; otherwise it is open only while
-  /// the turn streams into it (trailing), and folds once the turn settles.
+  /// A pinned group keeps the user's choice; otherwise it is open while the
+  /// turn streams into it, or while its settled turn summary reveals the work.
   fn tool_group_expanded(&self, start: usize, end: usize) -> bool {
     if let Some(id) = first_tool_id_in(&self.items, start, end)
       && let Some(&pinned) = self.tool_group_pins.get(&id)
     {
       return pinned;
     }
-    self.in_flight && end + 1 == self.items.len()
+    if self.in_flight && end + 1 == self.items.len() {
+      return true;
+    }
+    hiding_turn_summary(&self.items, start).is_some_and(|summary_idx| {
+      matches!(
+        self.items.get(summary_idx),
+        Some(ChatItem::TurnSummary(summary)) if summary.work_expanded
+      )
+    })
   }
 
   fn toggle_tool_group(&mut self, idx: usize, cx: &mut Context<Self>) {

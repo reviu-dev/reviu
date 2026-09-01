@@ -2661,6 +2661,41 @@ fn format_turn_duration_reads_naturally() {
 }
 
 #[gpui::test]
+async fn expanded_turn_work_opens_nested_tool_groups_unless_the_user_pinned_them(
+  cx: &mut gpui::TestAppContext,
+) {
+  let (panel, cx) = add_panel_window(cx);
+  panel.update(cx, |panel, _| {
+    panel.status = Status::Ready;
+    panel.items = vec![
+      checkpoint_marker("cp-1"),
+      user_message("do it"),
+      ChatItem::Thought(ThoughtView {
+        text: "planning".into(),
+        collapsed: true,
+      }),
+      ChatItem::Tool(tool_view("t1", ToolKind::Read, ToolCallStatus::Completed)),
+      edit_tool("t2", vec![("a.rs", 1, 0)]),
+      agent_message("done"),
+      summary_item("cp-1"),
+    ];
+
+    let (start, end, _) = tool_group_span(&panel.items, 2).expect("tool group");
+    assert!(!panel.tool_group_expanded(start, end));
+
+    let Some(ChatItem::TurnSummary(summary)) = panel.items.get_mut(6) else {
+      panic!("expected turn summary");
+    };
+    summary.work_expanded = true;
+    assert!(panel.tool_group_expanded(start, end));
+
+    let id = first_tool_id_in(&panel.items, start, end).expect("first tool id");
+    panel.tool_group_pins.insert(id, false);
+    assert!(!panel.tool_group_expanded(start, end));
+  });
+}
+
+#[gpui::test]
 async fn clicking_the_work_row_unfolds_the_turn(cx: &mut gpui::TestAppContext) {
   let (panel, cx) = add_panel_window(cx);
   panel.update(cx, |panel, cx| {
