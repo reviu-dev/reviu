@@ -906,6 +906,47 @@ mod tests {
   }
 
   #[gpui::test]
+  async fn a_query_started_while_loading_uses_entries_when_they_arrive(
+    cx: &mut gpui::TestAppContext,
+  ) {
+    let requests = Arc::new(Mutex::new(Vec::new()));
+    let recorded = requests.clone();
+    let handler: SearchFileHandler = Arc::new(move |request, _, _| {
+      recorded.lock().expect("record request").push(request);
+      Err("keep open".into())
+    });
+    let (palette, cx) = open_test_palette(
+      cx,
+      SearchFilePaletteConfig::new(Vec::new(), handler).loading(true),
+    );
+
+    cx.simulate_input("AGENTS");
+    cx.run_until_parked();
+    palette.update_in(cx, |palette, window, cx| {
+      palette.replace_entries(
+        vec![SearchFileEntry::new(
+          PathBuf::from("AGENTS.md"),
+          "AGENTS.md",
+        )],
+        window,
+        cx,
+      );
+    });
+    cx.run_until_parked();
+    cx.simulate_keystrokes("enter");
+    cx.run_until_parked();
+
+    assert_eq!(
+      requests.lock().expect("read requests").first(),
+      Some(&SearchFileOpenRequest {
+        path: PathBuf::from("AGENTS.md"),
+        line: None,
+        column: None,
+      })
+    );
+  }
+
+  #[gpui::test]
   async fn confirming_a_position_query_passes_the_line_to_the_handler(
     cx: &mut gpui::TestAppContext,
   ) {
