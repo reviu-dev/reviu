@@ -4,6 +4,10 @@ All notable changes to Reviu are documented here.
 
 ## 1.0.0
 
+### Faster, Smarter File Search
+
+Cmd-P now ranks fuzzy matches by filename and path, keeps exact filenames above incidental folder matches, and favors changed and recently viewed files. Repository files load in the background and stay cached, matches are highlighted and capped for responsive navigation, loading failures stay visible, and queries such as `session_page.rs:1520:8` open directly at the requested position.
+
 ### Editor Scrollbar Markers
 
 The editor scrollbar now shows compact markers for changed lines, search matches, conflicts, and review comments, making large diffs easier to scan without leaving the scroll track. The active hunk accent now appears only when walking changes explicitly and stays pinned while clicking, selecting, or moving the cursor elsewhere. Walking to a hunk now also shows its floating actions, selected hunks and staged hunks get clearer outlines, split diffs get side-aware gutter markers and keep review comments on the side where the drag started, and the toolbar counter and tooltips name the hunk or conflict it is walking.
