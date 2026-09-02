@@ -119,6 +119,12 @@ fn conflict_background(theme: &Theme, kind: ConflictLineKind) -> Option<gpui::Hs
       color.a = (color.a * CONFLICT_MARKER_ALPHA_MULTIPLIER).min(1.0);
       Some(color)
     }
+    ConflictLineKind::Base => Some(theme.base_conflict_background()),
+    ConflictLineKind::BaseMarker => {
+      let mut color = theme.base_conflict_background();
+      color.a = (color.a * CONFLICT_MARKER_ALPHA_MULTIPLIER).min(1.0);
+      Some(color)
+    }
     ConflictLineKind::Divider => None,
     ConflictLineKind::Incoming => Some(theme.incoming_conflict_background()),
     ConflictLineKind::IncomingMarker => {
@@ -141,7 +147,7 @@ fn conflict_block_kind(kind: ConflictLineKind) -> Option<ConflictBlockKind> {
     ConflictLineKind::Incoming | ConflictLineKind::IncomingMarker => {
       Some(ConflictBlockKind::Incoming)
     }
-    ConflictLineKind::Divider => None,
+    ConflictLineKind::Base | ConflictLineKind::BaseMarker | ConflictLineKind::Divider => None,
   }
 }
 
@@ -2624,6 +2630,14 @@ mod tests {
     assert_eq!(
       conflict_border_edges(
         Some(ConflictLineKind::Current),
+        ConflictLineKind::BaseMarker,
+        Some(ConflictLineKind::Base),
+      ),
+      None
+    );
+    assert_eq!(
+      conflict_border_edges(
+        Some(ConflictLineKind::Base),
         ConflictLineKind::Divider,
         Some(ConflictLineKind::Incoming),
       ),

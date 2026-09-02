@@ -632,9 +632,11 @@ fn conflict_regions_from_lines(lines: &[String]) -> Vec<ConflictRegion> {
       if let Some(divider) = divider_line {
         if is_conflict_end_marker(line) {
           let current_end = base_marker_line.unwrap_or(divider);
+          let base_range = base_marker_line.map(|marker| (marker + 1)..divider);
           regions.push(ConflictRegion {
             start_line,
             current_range: (start_line + 1)..current_end,
+            base_range,
             incoming_range: (divider + 1)..scan,
             replace_end_line: scan + 1,
           });
@@ -693,9 +695,11 @@ fn conflict_regions_from_document(document: &Document) -> Vec<ConflictRegion> {
       if let Some(divider) = divider_line {
         if is_conflict_end_marker(line) {
           let current_end = base_marker_line.unwrap_or(divider);
+          let base_range = base_marker_line.map(|marker| (marker + 1)..divider);
           regions.push(ConflictRegion {
             start_line,
             current_range: (start_line + 1)..current_end,
+            base_range,
             incoming_range: (divider + 1)..scan,
             replace_end_line: scan + 1,
           });
@@ -740,6 +744,15 @@ fn conflict_line_kinds_from_regions(
 
     for doc_line in region.current_range.clone() {
       kinds.insert(doc_line, ConflictLineKind::Current);
+    }
+
+    if let Some(base_range) = region.base_range.clone() {
+      if base_range.start > 0 {
+        kinds.insert(base_range.start - 1, ConflictLineKind::BaseMarker);
+      }
+      for doc_line in base_range {
+        kinds.insert(doc_line, ConflictLineKind::Base);
+      }
     }
 
     if region.incoming_range.start > 0 {
@@ -1067,6 +1080,8 @@ pub enum HunkAction {
 pub(crate) enum ConflictLineKind {
   CurrentMarker,
   Current,
+  BaseMarker,
+  Base,
   Divider,
   Incoming,
   IncomingMarker,
@@ -1144,6 +1159,7 @@ struct GitJob {
 struct ConflictRegion {
   start_line: usize,
   current_range: Range<usize>,
+  base_range: Option<Range<usize>>,
   incoming_range: Range<usize>,
   replace_end_line: usize,
 }
@@ -10397,6 +10413,7 @@ pub mod tests {
     let region = &regions[0];
     assert_eq!(region.start_line, 1);
     assert_eq!(region.current_range, 2..3);
+    assert_eq!(region.base_range, None);
     assert_eq!(region.incoming_range, 4..5);
     assert_eq!(region.replace_end_line, 6);
   }
@@ -10423,6 +10440,7 @@ pub mod tests {
     let region = &regions[0];
     assert_eq!(region.start_line, 1);
     assert_eq!(region.current_range, 2..3);
+    assert_eq!(region.base_range, Some(4..5));
     assert_eq!(region.incoming_range, 6..7);
     assert_eq!(region.replace_end_line, 8);
   }
@@ -10442,6 +10460,33 @@ pub mod tests {
     assert_eq!(kinds.get(&2), Some(&ConflictLineKind::Divider));
     assert_eq!(kinds.get(&3), Some(&ConflictLineKind::Incoming));
     assert_eq!(kinds.get(&4), Some(&ConflictLineKind::IncomingMarker));
+  }
+
+  #[test]
+  fn conflict_line_kinds_from_regions_marks_base_for_diff3_conflicts() {
+    let lines = vec![
+      "<<<<<<< HEAD",
+      "ours",
+      "||||||| base",
+      "base",
+      "=======",
+      "theirs",
+      ">>>>>>> main",
+    ]
+    .into_iter()
+    .map(String::from)
+    .collect::<Vec<_>>();
+
+    let regions = conflict_regions_from_lines(&lines);
+    let kinds = conflict_line_kinds_from_regions(&regions);
+
+    assert_eq!(kinds.get(&0), Some(&ConflictLineKind::CurrentMarker));
+    assert_eq!(kinds.get(&1), Some(&ConflictLineKind::Current));
+    assert_eq!(kinds.get(&2), Some(&ConflictLineKind::BaseMarker));
+    assert_eq!(kinds.get(&3), Some(&ConflictLineKind::Base));
+    assert_eq!(kinds.get(&4), Some(&ConflictLineKind::Divider));
+    assert_eq!(kinds.get(&5), Some(&ConflictLineKind::Incoming));
+    assert_eq!(kinds.get(&6), Some(&ConflictLineKind::IncomingMarker));
   }
 
   #[gpui::test]

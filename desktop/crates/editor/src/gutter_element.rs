@@ -47,6 +47,12 @@ fn conflict_background(theme: &ui::Theme, kind: ConflictLineKind) -> Option<gpui
       color.a = (color.a * CONFLICT_MARKER_ALPHA_MULTIPLIER).min(1.0);
       Some(color)
     }
+    ConflictLineKind::Base => Some(theme.base_conflict_background()),
+    ConflictLineKind::BaseMarker => {
+      let mut color = theme.base_conflict_background();
+      color.a = (color.a * CONFLICT_MARKER_ALPHA_MULTIPLIER).min(1.0);
+      Some(color)
+    }
     ConflictLineKind::Divider => None,
     ConflictLineKind::Incoming => Some(theme.incoming_conflict_background()),
     ConflictLineKind::IncomingMarker => {
@@ -68,7 +74,7 @@ fn conflict_stripe_color(theme: &ui::Theme, kind: ConflictLineKind) -> Option<gp
     ConflictLineKind::Current | ConflictLineKind::CurrentMarker => {
       Some(theme.current_conflict_stripe())
     }
-    ConflictLineKind::Divider => None,
+    ConflictLineKind::Base | ConflictLineKind::BaseMarker | ConflictLineKind::Divider => None,
     ConflictLineKind::Incoming | ConflictLineKind::IncomingMarker => {
       Some(theme.incoming_conflict_stripe())
     }
@@ -81,12 +87,20 @@ fn conflict_block_kind(kind: ConflictLineKind) -> Option<ConflictBlockKind> {
     ConflictLineKind::Incoming | ConflictLineKind::IncomingMarker => {
       Some(ConflictBlockKind::Incoming)
     }
-    ConflictLineKind::Divider => None,
+    ConflictLineKind::Base | ConflictLineKind::BaseMarker | ConflictLineKind::Divider => None,
   }
 }
 
 fn conflict_kind_has_stripe(kind: Option<ConflictLineKind>) -> bool {
-  kind.is_some_and(|kind| !matches!(kind, ConflictLineKind::Divider))
+  kind.is_some_and(|kind| {
+    matches!(
+      kind,
+      ConflictLineKind::Current
+        | ConflictLineKind::CurrentMarker
+        | ConflictLineKind::Incoming
+        | ConflictLineKind::IncomingMarker
+    )
+  })
 }
 
 fn conflict_border_color(theme: &ui::Theme, kind: ConflictLineKind) -> Option<gpui::Hsla> {
@@ -971,8 +985,13 @@ mod tests {
   use crate::projection::HunkState;
 
   #[test]
-  fn conflict_stripe_color_divider_is_none() {
+  fn conflict_stripe_color_neutral_lines_are_none() {
     let theme = ui::Theme::dark();
+    assert_eq!(
+      conflict_stripe_color(&theme, ConflictLineKind::BaseMarker),
+      None
+    );
+    assert_eq!(conflict_stripe_color(&theme, ConflictLineKind::Base), None);
     assert_eq!(
       conflict_stripe_color(&theme, ConflictLineKind::Divider),
       None
@@ -983,6 +1002,10 @@ mod tests {
   fn conflict_kind_has_stripe_keeps_divider_neutral() {
     assert!(conflict_kind_has_stripe(Some(ConflictLineKind::Current)));
     assert!(conflict_kind_has_stripe(Some(ConflictLineKind::Incoming)));
+    assert!(!conflict_kind_has_stripe(Some(
+      ConflictLineKind::BaseMarker
+    )));
+    assert!(!conflict_kind_has_stripe(Some(ConflictLineKind::Base)));
     assert!(!conflict_kind_has_stripe(Some(ConflictLineKind::Divider)));
     assert!(!conflict_kind_has_stripe(None));
   }

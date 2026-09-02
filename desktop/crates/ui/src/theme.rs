@@ -352,6 +352,24 @@ impl Theme {
     }
   }
 
+  pub fn base_conflict_background(&self) -> Hsla {
+    if self.is_dark {
+      Hsla {
+        h: 0.0,
+        s: 0.0,
+        l: 0.36,
+        a: 0.28,
+      }
+    } else {
+      Hsla {
+        h: 0.0,
+        s: 0.0,
+        l: 0.82,
+        a: 0.55,
+      }
+    }
+  }
+
   pub fn incoming_conflict_background(&self) -> Hsla {
     if self.is_dark {
       Hsla {
