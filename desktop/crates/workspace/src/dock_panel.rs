@@ -57,6 +57,9 @@ pub(crate) const DOCK_PANEL_PR_PENDING_COMMENTS_DEBUG_SELECTOR: &str =
 pub(crate) const DOCK_PANEL_REVIEW_DEBUG_SELECTOR: &str = "dock-panel-review";
 const DOCK_PANEL_COMMIT_DEBUG_SELECTOR: &str = "dock-panel-commit";
 const DOCK_PANEL_COMMIT_MENU_DEBUG_SELECTOR: &str = "dock-panel-commit-menu";
+const DOCK_PANEL_CHANGES_SUMMARY_DEBUG_SELECTOR: &str = "dock-panel-changes-summary";
+const DOCK_PANEL_CHANGES_ACTION_DEBUG_SELECTOR: &str = "dock-panel-changes-action";
+const DOCK_PANEL_CHANGES_ACTION_MENU_DEBUG_SELECTOR: &str = "dock-panel-changes-action-menu";
 const DOCK_PANEL_CREATE_PR_DEBUG_SELECTOR: &str = "dock-panel-create-pr";
 const DOCK_PANEL_PUBLISH_AND_CREATE_PR_DEBUG_SELECTOR: &str = "dock-panel-publish-and-create-pr";
 const DOCK_PANEL_COMPARE_DEBUG_SELECTOR: &str = "dock-panel-compare-on-github";
@@ -118,6 +121,8 @@ pub enum DockPanelEvent {
   ContinueRebase,
   /// A command picked in the commit menu; the host owns running it.
   RunCommand(CommitMenuCommand),
+  /// A command picked in the Changes actions menu; the host owns running it.
+  RunChangesAction(ChangesActionCommand),
   /// An unpublished branch: push it, then open the pull request form.
   PublishBranchAndCreatePullRequest(GithubBranchContext),
   /// The working tree was re-read: whoever shows a file has to look again.
@@ -206,6 +211,75 @@ impl CommitMenuCommand {
       Self::UndoLastCommit => PaletteCommand::UndoLastCommit,
       Self::Push => PaletteCommand::Push,
       Self::ForcePush => PaletteCommand::ForcePush,
+    }
+  }
+}
+
+/// Repository-wide actions shown above the Changes list.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ChangesActionCommand {
+  StageAll,
+  UnstageAll,
+  RestoreAll,
+  Stash,
+  StashWithUntracked,
+  Push,
+  ForcePush,
+  Amend,
+  UndoLastCommit,
+}
+
+impl ChangesActionCommand {
+  const ALL: [Self; 9] = [
+    Self::StageAll,
+    Self::UnstageAll,
+    Self::RestoreAll,
+    Self::Stash,
+    Self::StashWithUntracked,
+    Self::Push,
+    Self::ForcePush,
+    Self::Amend,
+    Self::UndoLastCommit,
+  ];
+
+  fn label(self) -> &'static str {
+    match self {
+      Self::StageAll => "Stage All",
+      Self::UnstageAll => "Unstage All",
+      Self::RestoreAll => "Restore All Changes",
+      Self::Stash => "Stash",
+      Self::StashWithUntracked => "Stash With Untracked",
+      Self::Push => "Push",
+      Self::ForcePush => "Force Push (with Lease)",
+      Self::Amend => "Amend Last Commit",
+      Self::UndoLastCommit => "Undo last commit",
+    }
+  }
+
+  fn icon(self) -> Icon {
+    match self {
+      Self::StageAll => Icon::new(IconName::Plus),
+      Self::UnstageAll => Icon::new(UiIconName::ArrowUpFromLine),
+      Self::RestoreAll => Icon::new(IconName::Undo),
+      Self::Stash => Icon::new(UiIconName::ArrowDownFromLine),
+      Self::StashWithUntracked => Icon::new(UiIconName::ArrowDownFromLine),
+      Self::Push | Self::ForcePush => Icon::new(IconName::ArrowUp),
+      Self::Amend => Icon::new(IconName::Replace),
+      Self::UndoLastCommit => Icon::new(IconName::Undo),
+    }
+  }
+
+  fn rule(self) -> PaletteCommand {
+    match self {
+      Self::StageAll => PaletteCommand::StageAll,
+      Self::UnstageAll => PaletteCommand::UnstageAll,
+      Self::RestoreAll => PaletteCommand::RestoreAll,
+      Self::Stash => PaletteCommand::Stash,
+      Self::StashWithUntracked => PaletteCommand::StashWithUntracked,
+      Self::Push => PaletteCommand::Push,
+      Self::ForcePush => PaletteCommand::ForcePush,
+      Self::Amend => PaletteCommand::Amend,
+      Self::UndoLastCommit => PaletteCommand::UndoLastCommit,
     }
   }
 }
@@ -2485,6 +2559,103 @@ impl DockPanel {
       .into_any_element()
   }
 
+  fn render_changes_actions(&self, cx: &mut Context<Self>) -> AnyElement {
+    let theme = cx.theme().clone();
+    let commit_message = self.commit_input.read(cx).value().to_string();
+    let state = self.repo_state(&commit_message);
+    let menu_items = ChangesActionCommand::ALL
+      .into_iter()
+      .filter(|command| state.allows(command.rule()))
+      .collect::<Vec<_>>();
+    let primary_command = if state.allows(PaletteCommand::StageAll) {
+      Some(ChangesActionCommand::StageAll)
+    } else if state.allows(PaletteCommand::UnstageAll) {
+      Some(ChangesActionCommand::UnstageAll)
+    } else {
+      None
+    };
+    let file_count = self.status_entries.len();
+    let summary = match file_count {
+      0 => "No changes".to_string(),
+      1 => "1 file".to_string(),
+      count => format!("{count} files"),
+    };
+    let view = cx.entity();
+
+    h_flex()
+      .h(px(36.))
+      .min_h(px(36.))
+      .flex_shrink_0()
+      .items_center()
+      .justify_between()
+      .gap_2()
+      .border_b_1()
+      .border_color(theme.border)
+      .px_2()
+      .child(
+        div()
+          .debug_selector(|| DOCK_PANEL_CHANGES_SUMMARY_DEBUG_SELECTOR.to_string())
+          .min_w_0()
+          .truncate()
+          .text_xs()
+          .text_color(theme.muted_foreground)
+          .child(summary),
+      )
+      .child(
+        h_flex()
+          .items_center()
+          .flex_shrink_0()
+          .when_some(primary_command, |this, command| {
+            this.child(
+              Button::new("dock-panel-changes-action")
+                .label(command.label())
+                .icon(command.icon())
+                .debug_selector(|| DOCK_PANEL_CHANGES_ACTION_DEBUG_SELECTOR.to_string())
+                .with_variant(gpui_component::button::ButtonVariant::Secondary)
+                .outline()
+                .compact()
+                .small()
+                .rounded_r_none()
+                .on_click(cx.listener(move |_, _, _, cx| {
+                  cx.emit(DockPanelEvent::RunChangesAction(command));
+                })),
+            )
+          })
+          .when(!menu_items.is_empty(), |this| {
+            let menu_view = view.clone();
+            let menu_button = Button::new("dock-panel-changes-action-menu")
+              .icon(IconName::ChevronDown)
+              .debug_selector(|| DOCK_PANEL_CHANGES_ACTION_MENU_DEBUG_SELECTOR.to_string())
+              .with_variant(gpui_component::button::ButtonVariant::Secondary)
+              .outline()
+              .compact()
+              .small()
+              .tooltip("Changes actions")
+              .when(primary_command.is_some(), |button| {
+                button.rounded_l_none().border_l_0()
+              })
+              .when(primary_command.is_none(), |button| button.label("Actions"))
+              .dropdown_menu_with_anchor(Anchor::TopRight, move |menu, _, _| {
+                menu_items.iter().fold(menu, |menu, command| {
+                  let menu_view = menu_view.clone();
+                  let command = *command;
+                  menu.item(
+                    PopupMenuItem::new(command.label())
+                      .icon(command.icon())
+                      .on_click(move |_, _, cx| {
+                        menu_view.update(cx, |_, cx| {
+                          cx.emit(DockPanelEvent::RunChangesAction(command));
+                        });
+                      }),
+                  )
+                })
+              });
+            this.child(menu_button)
+          }),
+      )
+      .into_any_element()
+  }
+
   /// Opens a tab and gives it focus, loading what that tab needs the first time.
   pub(crate) fn open_tab(
     &mut self,
@@ -3601,7 +3772,7 @@ impl Render for DockPanel {
     let body = match self.active_tab {
       DockPanelTab::Files => self.render_files_tab(_window, cx),
       DockPanelTab::Changes => {
-        if self.status_entries.is_empty() {
+        let content = if self.status_entries.is_empty() {
           self.render_empty_state(cx)
         } else {
           div()
@@ -3613,7 +3784,15 @@ impl Render for DockPanel {
             .px_1()
             .child(self.changes_list.clone())
             .into_any_element()
-        }
+        };
+        v_flex()
+          .flex_1()
+          .min_h_0()
+          .when(self.repo_root.is_some(), |this| {
+            this.child(self.render_changes_actions(cx))
+          })
+          .child(content)
+          .into_any_element()
       }
       DockPanelTab::PullRequest => self.render_pr_tab(_window, cx),
       DockPanelTab::Review => self.render_review_tab(),
@@ -5611,6 +5790,16 @@ mod tests {
         .is_some(),
       "the commit button carries its menu"
     );
+    assert!(
+      cx.debug_bounds(DOCK_PANEL_CHANGES_ACTION_MENU_DEBUG_SELECTOR)
+        .is_some(),
+      "the Changes header carries the same repository actions"
+    );
+    assert!(
+      cx.debug_bounds(DOCK_PANEL_CHANGES_ACTION_DEBUG_SELECTOR)
+        .is_none(),
+      "a clean tree has no Stage All or Unstage All primary action"
+    );
 
     // Two commits and no branch handed over yet: amend and undo, no push.
     panel.read_with(cx, |panel, _| {
@@ -5656,6 +5845,59 @@ mod tests {
     };
     panel.update(cx, |_, cx| {
       cx.emit(DockPanelEvent::RunCommand(CommitMenuCommand::Amend))
+    });
+    cx.run_until_parked();
+    assert!(asked.load(Ordering::SeqCst));
+    drop(observer);
+  }
+
+  #[gpui::test]
+  async fn the_changes_actions_primary_follows_the_worktree(cx: &mut TestAppContext) {
+    cx.update(gpui_component::init);
+    let repo = TempRepo::init("dock-panel-changes-actions");
+    commit_text_file(&repo.path, Path::new("a.txt"), "v1\n", "initial");
+    std::fs::write(repo.path.join("a.txt"), "v2\n").expect("dirty the worktree");
+
+    let (panel, cx) = add_dock_panel_window(Some(repo.path.clone()), cx);
+    await_refresh(&panel, cx).await;
+    panel.update(cx, |_, cx| cx.notify());
+    cx.run_until_parked();
+
+    assert!(
+      cx.debug_bounds(DOCK_PANEL_CHANGES_ACTION_DEBUG_SELECTOR)
+        .is_some(),
+      "unstaged work gets a Stage All primary action"
+    );
+
+    git::stage_all(&repo.path).expect("stage all");
+    await_refresh(&panel, cx).await;
+    panel.update(cx, |_, cx| cx.notify());
+    cx.run_until_parked();
+
+    assert!(
+      cx.debug_bounds(DOCK_PANEL_CHANGES_ACTION_DEBUG_SELECTOR)
+        .is_some(),
+      "staged work gets an Unstage All primary action"
+    );
+
+    let asked = Arc::new(AtomicBool::new(false));
+    let observer = {
+      let asked = asked.clone();
+      cx.update(|_, cx| {
+        cx.subscribe(&panel, move |_panel, event: &DockPanelEvent, _cx| {
+          if matches!(
+            event,
+            DockPanelEvent::RunChangesAction(ChangesActionCommand::UnstageAll)
+          ) {
+            asked.store(true, Ordering::SeqCst);
+          }
+        })
+      })
+    };
+    panel.update(cx, |_, cx| {
+      cx.emit(DockPanelEvent::RunChangesAction(
+        ChangesActionCommand::UnstageAll,
+      ))
     });
     cx.run_until_parked();
     assert!(asked.load(Ordering::SeqCst));

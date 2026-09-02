@@ -36,7 +36,9 @@ use crate::auth_state::AuthStateStore;
 use crate::config::ConfigStore;
 use crate::conversation_hub::ConversationHub;
 use crate::diff_view_policy::{DiffViewInputs, effective_diff_view};
-use crate::dock_panel::{CommitMenuCommand, DockPanel, DockPanelEvent, DockPanelTab};
+use crate::dock_panel::{
+  ChangesActionCommand, CommitMenuCommand, DockPanel, DockPanelEvent, DockPanelTab,
+};
 use crate::file_search_palette::open_file_search_palette;
 use crate::file_view::{
   BinaryPreview, build_binary_preview, render_binary_preview, render_file_title_with_status,
@@ -424,6 +426,11 @@ impl SessionPage {
         }
         DockPanelEvent::RunCommand(command) => {
           if let Err(error) = this.run_commit_menu_command(*command, window, cx) {
+            window.push_notification(Notification::warning(error), cx);
+          }
+        }
+        DockPanelEvent::RunChangesAction(command) => {
+          if let Err(error) = this.run_changes_action_command(*command, window, cx) {
             window.push_notification(Notification::warning(error), cx);
           }
         }

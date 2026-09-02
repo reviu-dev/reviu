@@ -309,6 +309,51 @@ impl SessionPage {
     }
   }
 
+  pub(super) fn run_changes_action_command(
+    &mut self,
+    command: ChangesActionCommand,
+    window: &mut Window,
+    cx: &mut Context<Self>,
+  ) -> Result<(), SharedString> {
+    match command {
+      ChangesActionCommand::StageAll => self.stage_all_with_confirmation(window, cx),
+      ChangesActionCommand::UnstageAll => {
+        self.run_repo_command(RepoCommand::UnstageAll, window, cx)
+      }
+      ChangesActionCommand::RestoreAll => {
+        let changes_list = self.dock_panel.read(cx).changes_list();
+        cx.defer_in(window, move |_, window, cx| {
+          changes_list.update(cx, |list, cx| {
+            list.confirm_restore_all(window, cx);
+          });
+        });
+        Ok(())
+      }
+      ChangesActionCommand::Stash => self.run_repo_command(
+        RepoCommand::Stash {
+          include_untracked: false,
+          message: None,
+        },
+        window,
+        cx,
+      ),
+      ChangesActionCommand::StashWithUntracked => self.run_repo_command(
+        RepoCommand::Stash {
+          include_untracked: true,
+          message: None,
+        },
+        window,
+        cx,
+      ),
+      ChangesActionCommand::Push => self.run_repo_command(RepoCommand::Push, window, cx),
+      ChangesActionCommand::ForcePush => self.confirm_force_push(window, cx),
+      ChangesActionCommand::Amend => self.amend_last_commit(window, cx),
+      ChangesActionCommand::UndoLastCommit => {
+        self.run_repo_command(RepoCommand::UndoLastCommit, window, cx)
+      }
+    }
+  }
+
   /// Amending takes the message in the commit box, or keeps the old one when
   /// the box is empty.
   pub(super) fn amend_last_commit(
@@ -1088,6 +1133,70 @@ mod tests {
       page
         .run_commit_menu_command(CommitMenuCommand::UndoLastCommit, window, cx)
         .expect("undo runs")
+    });
+    let command = page.update(cx, |page, _| {
+      page._repo_command_task.take().expect("command task")
+    });
+    command.await;
+    cx.run_until_parked();
+
+    assert_eq!(
+      git::list_commit_history(&repo.path, 10)
+        .expect("history")
+        .len(),
+      1
+    );
+  }
+
+  #[gpui::test]
+  async fn the_changes_actions_menu_runs_what_it_names(cx: &mut TestAppContext) {
+    let repo = TempRepo::init("session-page-changes-actions");
+    commit_text_file(&repo.path, Path::new("a.txt"), "v1\n", "first");
+    commit_text_file(&repo.path, Path::new("b.txt"), "v1\n", "second");
+    std::fs::write(repo.path.join("a.txt"), "v2\n").expect("dirty the worktree");
+
+    let (page, cx) = add_session_page_window(repo.path.clone(), cx);
+
+    page.update_in(cx, |page, window, cx| {
+      page
+        .run_changes_action_command(ChangesActionCommand::StageAll, window, cx)
+        .expect("stage all runs")
+    });
+    let command = page.update(cx, |page, _| {
+      page._repo_command_task.take().expect("command task")
+    });
+    command.await;
+    cx.run_until_parked();
+
+    let staged = git::list_repo_status(&repo.path).expect("status");
+    assert!(
+      staged
+        .iter()
+        .all(|entry| entry.stage == git::RepoStage::Staged)
+    );
+
+    page.update_in(cx, |page, window, cx| {
+      page
+        .run_changes_action_command(ChangesActionCommand::UnstageAll, window, cx)
+        .expect("unstage all runs")
+    });
+    let command = page.update(cx, |page, _| {
+      page._repo_command_task.take().expect("command task")
+    });
+    command.await;
+    cx.run_until_parked();
+
+    let unstaged = git::list_repo_status(&repo.path).expect("status");
+    assert!(
+      unstaged
+        .iter()
+        .all(|entry| entry.stage == git::RepoStage::Unstaged)
+    );
+
+    page.update_in(cx, |page, window, cx| {
+      page
+        .run_changes_action_command(ChangesActionCommand::UndoLastCommit, window, cx)
+        .expect("undo last commit runs")
     });
     let command = page.update(cx, |page, _| {
       page._repo_command_task.take().expect("command task")

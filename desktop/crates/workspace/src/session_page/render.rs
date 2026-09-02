@@ -2621,10 +2621,10 @@ mod tests {
       stops_in_dock(&with_one_file),
       "the panel's stops are its own controls, a row is not one of them"
     );
-    // Zoom, the file list, the message box, the commit button and its menu.
+    // Changes action, changes action menu, zoom, file list, message box, commit button and commit menu.
     assert_eq!(
       stops_in_dock(&with_one_file),
-      5,
+      7,
       "and there are no others hiding in the panel"
     );
     assert_eq!(
