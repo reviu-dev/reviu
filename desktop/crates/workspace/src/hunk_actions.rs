@@ -223,7 +223,9 @@ fn render_conflict_actions(
   labels: ConflictActionLabels,
   cx: &App,
 ) -> Option<AnyElement> {
-  let conflict_start_line = editor_state.hovered_conflict_start_line?;
+  let conflict_start_line = editor_state
+    .hovered_conflict_start_line
+    .or_else(|| editor_state.highlighted_conflict_start_line(cx))?;
   let anchor_display_line = editor_state
     .first_display_line_for_conflict(conflict_start_line)
     .unwrap_or(conflict_start_line);

@@ -7323,13 +7323,21 @@ impl Editor {
       .position(|region| region.start_line == selected)
   }
 
-  pub(crate) fn highlighted_conflict_doc_range(&self, cx: &App) -> Option<Range<usize>> {
+  pub fn highlighted_conflict_start_line(&self, cx: &App) -> Option<usize> {
     let regions = self.conflict_regions(cx);
     if regions.len() <= 1 {
       return None;
     }
     let selected_index = self.selected_conflict_index(regions.as_ref())?;
-    let region = &regions[selected_index];
+    Some(regions[selected_index].start_line)
+  }
+
+  pub(crate) fn highlighted_conflict_doc_range(&self, cx: &App) -> Option<Range<usize>> {
+    let regions = self.conflict_regions(cx);
+    let selected_start_line = self.highlighted_conflict_start_line(cx)?;
+    let region = regions
+      .iter()
+      .find(|region| region.start_line == selected_start_line)?;
     Some(region.start_line..region.replace_end_line)
   }
 

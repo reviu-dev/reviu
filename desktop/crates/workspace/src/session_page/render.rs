@@ -494,34 +494,6 @@ impl SessionPage {
       ));
     }
 
-    if self.can_accept_all_conflicts(cx) {
-      let conflict_labels =
-        ConflictActionLabels::for_rebase(self.dock_panel.read(cx).rebase_in_progress());
-      toolbar = toolbar
-        .before_toggles(
-          Button::new("session-page-accept-all-current")
-            .label(conflict_labels.all_current)
-            .debug_selector(|| ACCEPT_ALL_CURRENT_DEBUG_SELECTOR.to_string())
-            .xsmall()
-            .ghost()
-            .on_click(cx.listener(|this, _, _, cx| {
-              this.resolve_all_conflicts(ConflictResolution::Current, cx)
-            }))
-            .into_any_element(),
-        )
-        .before_toggles(
-          Button::new("session-page-accept-all-incoming")
-            .label(conflict_labels.all_incoming)
-            .debug_selector(|| ACCEPT_ALL_INCOMING_DEBUG_SELECTOR.to_string())
-            .xsmall()
-            .ghost()
-            .on_click(cx.listener(|this, _, _, cx| {
-              this.resolve_all_conflicts(ConflictResolution::Incoming, cx)
-            }))
-            .into_any_element(),
-        );
-    }
-
     if let Some(state) = self
       .annotation_navigation(cx)
       .filter(|state| !previewing && shows_annotation_navigation(*state))
@@ -3523,16 +3495,21 @@ mod tests {
       assert_eq!(navigation.kind, AnnotationKind::Conflict);
     });
 
-    let accept = cx
-      .debug_bounds(ACCEPT_ALL_CURRENT_DEBUG_SELECTOR)
-      .expect("accept all current bounds");
+    cx.run_until_parked();
     assert!(
-      cx.debug_bounds(ACCEPT_ALL_INCOMING_DEBUG_SELECTOR)
+      cx.debug_bounds(crate::hunk_actions::CONFLICT_ACTIONS_DEBUG_SELECTOR)
         .is_some(),
-      "both sides are offered"
+      "the selected conflict offers current, incoming and both"
     );
     assert!(cx.debug_bounds(ANNOTATION_COUNTER_DEBUG_SELECTOR).is_some());
-    cx.simulate_click(accept.center(), gpui::Modifiers::default());
+    assert!(cx.debug_bounds("session-accept-all-current").is_none());
+    assert!(cx.debug_bounds("session-accept-all-incoming").is_none());
+
+    page.update_in(cx, |page, window, cx| {
+      page
+        .handle_command_palette_action(CommandPaletteAction::AcceptAllCurrentConflicts, window, cx)
+        .expect("accept every current side")
+    });
     cx.run_until_parked();
 
     page.read_with(cx, |page, cx| {
@@ -3549,13 +3526,10 @@ mod tests {
     page.update(cx, |_, cx| cx.notify());
     cx.run_until_parked();
     assert!(
-      cx.debug_bounds(ACCEPT_ALL_CURRENT_DEBUG_SELECTOR).is_none(),
-      "a resolved file carries no accept-all controls"
+      cx.debug_bounds("session-accept-all-current").is_none(),
+      "accept-all controls stay in the command palette"
     );
-    assert!(
-      cx.debug_bounds(ACCEPT_ALL_INCOMING_DEBUG_SELECTOR)
-        .is_none()
-    );
+    assert!(cx.debug_bounds("session-accept-all-incoming").is_none());
     // Current side of a merge is what HEAD held.
     page.read_with(cx, |page, cx| {
       let first_line = page
@@ -3662,10 +3636,12 @@ mod tests {
     page.update(cx, |_, cx| cx.notify());
     cx.run_until_parked();
 
-    assert!(
-      cx.debug_bounds(ACCEPT_ALL_CURRENT_DEBUG_SELECTOR).is_none(),
-      "a plain modified file has no side to accept"
-    );
+    page.read_with(cx, |page, cx| {
+      assert!(
+        !page.can_accept_all_conflicts(cx),
+        "a plain modified file has no side to accept"
+      );
+    });
 
     // Dispatched anyway: the file must stay as it is.
     page.update_in(cx, |page, window, cx| {

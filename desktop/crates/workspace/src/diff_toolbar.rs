@@ -58,7 +58,6 @@ pub(crate) struct DiffToolbar {
   id_prefix: &'static str,
   before_title: Vec<AnyElement>,
   title: Option<AnyElement>,
-  before_toggles: Vec<AnyElement>,
   navigation: Option<NavigationControl>,
   preview: Option<ToggleControl>,
   whitespace: Option<ToggleControl>,
@@ -73,7 +72,6 @@ impl DiffToolbar {
       id_prefix,
       before_title: Vec::new(),
       title: None,
-      before_toggles: Vec::new(),
       navigation: None,
       preview: None,
       whitespace: None,
@@ -86,12 +84,6 @@ impl DiffToolbar {
   /// A button of the host, before the file name.
   pub(crate) fn before_title(mut self, element: AnyElement) -> Self {
     self.before_title.push(element);
-    self
-  }
-
-  /// A button of the host, in the control group ahead of the shared toggles.
-  pub(crate) fn before_toggles(mut self, element: AnyElement) -> Self {
-    self.before_toggles.push(element);
     self
   }
 
@@ -130,9 +122,6 @@ impl DiffToolbar {
     let theme = cx.theme().clone();
     let mut controls = h_flex().flex_shrink_0().items_center().gap_2();
 
-    for element in self.before_toggles {
-      controls = controls.child(element);
-    }
     if let Some(navigation) = self.navigation {
       controls = controls.child(render_navigation(self.id_prefix, navigation, cx));
     }
