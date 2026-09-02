@@ -4,7 +4,7 @@ use gpui::{
   Style, TextAlign, TextRun, Window, fill, point, prelude::*, px, relative, size,
 };
 use gpui_component::ActiveTheme as _;
-use std::{collections::HashMap, sync::Arc};
+use std::{collections::HashMap, ops::Range, sync::Arc};
 
 use git::DiffLineKind;
 
@@ -91,18 +91,6 @@ fn conflict_block_kind(kind: ConflictLineKind) -> Option<ConflictBlockKind> {
   }
 }
 
-fn conflict_kind_has_stripe(kind: Option<ConflictLineKind>) -> bool {
-  kind.is_some_and(|kind| {
-    matches!(
-      kind,
-      ConflictLineKind::Current
-        | ConflictLineKind::CurrentMarker
-        | ConflictLineKind::Incoming
-        | ConflictLineKind::IncomingMarker
-    )
-  })
-}
-
 fn conflict_border_color(theme: &ui::Theme, kind: ConflictLineKind) -> Option<gpui::Hsla> {
   match conflict_block_kind(kind)? {
     ConflictBlockKind::Current => Some(theme.current_conflict_stripe()),
@@ -119,6 +107,20 @@ fn conflict_border_edges(
   Some((
     previous.and_then(conflict_block_kind) != Some(current_block),
     next.and_then(conflict_block_kind) != Some(current_block),
+  ))
+}
+
+fn active_conflict_border_edges(
+  previous: Option<usize>,
+  current: Option<usize>,
+  next: Option<usize>,
+  active_range: Option<&Range<usize>>,
+) -> Option<(bool, bool)> {
+  let active_range = active_range?;
+  current.filter(|line| active_range.contains(line))?;
+  Some((
+    previous.is_none_or(|line| !active_range.contains(&line)),
+    next.is_none_or(|line| !active_range.contains(&line)),
   ))
 }
 
@@ -583,52 +585,65 @@ impl Element for GutterElement {
           .map(|(line, range)| range.contains(&line))
           .unwrap_or(false);
 
-        if let Some(conflict_kind) = conflict_kind
-          && let Some(default_color) = conflict_border_color(&theme, conflict_kind)
-        {
-          let color = if is_active_conflict_line {
-            active_hunk_focus_color
-          } else {
-            default_color
-          };
-          let previous_conflict_kind = display_idx.checked_sub(1).and_then(|idx| {
-            conflict_kind_for_display_line(
-              idx,
-              projection.as_deref(),
-              doc_line_count,
-              &conflict_line_kinds,
-            )
+        if let Some(conflict_kind) = conflict_kind {
+          let previous_doc_line = display_idx.checked_sub(1).and_then(|idx| {
+            conflict_doc_line_for_display_line(idx, projection.as_deref(), doc_line_count)
           });
-          let next_conflict_kind = conflict_kind_for_display_line(
+          let next_doc_line = conflict_doc_line_for_display_line(
             display_idx + 1,
             projection.as_deref(),
             doc_line_count,
-            &conflict_line_kinds,
           );
-          let (is_top, is_bottom) =
+          let active_edges = active_conflict_border_edges(
+            previous_doc_line,
+            conflict_doc_line,
+            next_doc_line,
+            active_conflict_doc_range.as_ref(),
+          );
+          let inactive_edges = active_edges.is_none().then(|| {
+            let previous_conflict_kind = display_idx.checked_sub(1).and_then(|idx| {
+              conflict_kind_for_display_line(
+                idx,
+                projection.as_deref(),
+                doc_line_count,
+                &conflict_line_kinds,
+              )
+            });
+            let next_conflict_kind = conflict_kind_for_display_line(
+              display_idx + 1,
+              projection.as_deref(),
+              doc_line_count,
+              &conflict_line_kinds,
+            );
             conflict_border_edges(previous_conflict_kind, conflict_kind, next_conflict_kind)
-              .unwrap_or((false, false));
-          let border_thickness = px(1.0);
-          let y = line_y(bounds.top(), line_height, display_idx, scroll_offset);
+          });
+          let border = active_edges
+            .map(|edges| (active_hunk_focus_color, edges))
+            .or_else(|| conflict_border_color(&theme, conflict_kind).zip(inactive_edges.flatten()));
 
-          if is_top {
-            conflict_borders.push(fill(
-              Bounds::new(
-                point(bounds.left(), y),
-                size(bounds.size.width, border_thickness),
-              ),
-              color,
-            ));
-          }
+          if let Some((color, (is_top, is_bottom))) = border {
+            let border_thickness = px(1.0);
+            let y = line_y(bounds.top(), line_height, display_idx, scroll_offset);
 
-          if is_bottom {
-            conflict_borders.push(fill(
-              Bounds::new(
-                point(bounds.left(), y + line_height - border_thickness),
-                size(bounds.size.width, border_thickness),
-              ),
-              color,
-            ));
+            if is_top {
+              conflict_borders.push(fill(
+                Bounds::new(
+                  point(bounds.left(), y),
+                  size(bounds.size.width, border_thickness),
+                ),
+                color,
+              ));
+            }
+
+            if is_bottom {
+              conflict_borders.push(fill(
+                Bounds::new(
+                  point(bounds.left(), y + line_height - border_thickness),
+                  size(bounds.size.width, border_thickness),
+                ),
+                color,
+              ));
+            }
           }
         }
 
@@ -659,7 +674,7 @@ impl Element for GutterElement {
           };
 
           let stripe_color = if (is_active_hunk_line && conflict_kind.is_none())
-            || (is_active_conflict_line && conflict_kind_has_stripe(conflict_kind))
+            || (is_active_conflict_line && conflict_kind.is_some())
           {
             Some(active_hunk_focus_color)
           } else {
@@ -999,18 +1014,6 @@ mod tests {
   }
 
   #[test]
-  fn conflict_kind_has_stripe_keeps_divider_neutral() {
-    assert!(conflict_kind_has_stripe(Some(ConflictLineKind::Current)));
-    assert!(conflict_kind_has_stripe(Some(ConflictLineKind::Incoming)));
-    assert!(!conflict_kind_has_stripe(Some(
-      ConflictLineKind::BaseMarker
-    )));
-    assert!(!conflict_kind_has_stripe(Some(ConflictLineKind::Base)));
-    assert!(!conflict_kind_has_stripe(Some(ConflictLineKind::Divider)));
-    assert!(!conflict_kind_has_stripe(None));
-  }
-
-  #[test]
   fn conflict_stripe_color_current_uses_current_conflict_stripe() {
     let theme = ui::Theme::dark();
     assert_eq!(
@@ -1108,6 +1111,31 @@ mod tests {
     assert_eq!(
       group_id_for_gutter_display_line(3, Some(&projection), block_map, false).as_deref(),
       Some(group_id.as_ref())
+    );
+  }
+
+  #[test]
+  fn active_conflict_border_edges_wrap_the_whole_conflict() {
+    let active_range = 2..9;
+    assert_eq!(
+      active_conflict_border_edges(Some(1), Some(2), Some(3), Some(&active_range)),
+      Some((true, false))
+    );
+    assert_eq!(
+      active_conflict_border_edges(Some(4), Some(5), Some(6), Some(&active_range)),
+      Some((false, false))
+    );
+    assert_eq!(
+      active_conflict_border_edges(Some(7), Some(8), Some(9), Some(&active_range)),
+      Some((false, true))
+    );
+    assert_eq!(
+      active_conflict_border_edges(Some(1), Some(2), Some(3), None),
+      None
+    );
+    assert_eq!(
+      active_conflict_border_edges(Some(1), Some(9), Some(10), Some(&active_range)),
+      None
     );
   }
 

@@ -170,6 +170,20 @@ fn conflict_border_edges(
   ))
 }
 
+fn active_conflict_border_edges(
+  previous: Option<usize>,
+  current: Option<usize>,
+  next: Option<usize>,
+  active_range: Option<&Range<usize>>,
+) -> Option<(bool, bool)> {
+  let active_range = active_range?;
+  current.filter(|line| active_range.contains(line))?;
+  Some((
+    previous.is_none_or(|line| !active_range.contains(&line)),
+    next.is_none_or(|line| !active_range.contains(&line)),
+  ))
+}
+
 fn conflict_doc_line_for_display_line(
   display_line: usize,
   projection: Option<&Projection>,
@@ -1429,58 +1443,67 @@ impl Element for EditorElement {
         ));
       }
 
-      if let Some(conflict_kind) = conflict_kind
-        && let Some(default_color) = conflict_border_color(&theme, conflict_kind)
-      {
+      if let Some(conflict_kind) = conflict_kind {
         let doc_line =
           conflict_doc_line_for_display_line(*display_idx, projection.as_deref(), doc_line_count);
-        let is_active_conflict = doc_line
-          .zip(active_conflict_doc_range.as_ref())
-          .map(|(line, range)| range.contains(&line))
-          .unwrap_or(false);
-        let color = if is_active_conflict {
-          active_hunk_focus_color
-        } else {
-          default_color
-        };
-        let previous_conflict_kind = display_idx.checked_sub(1).and_then(|idx| {
-          conflict_kind_for_display_line(
-            idx,
-            projection.as_deref(),
-            doc_line_count,
-            &conflict_line_kinds,
-          )
+        let previous_doc_line = display_idx.checked_sub(1).and_then(|idx| {
+          conflict_doc_line_for_display_line(idx, projection.as_deref(), doc_line_count)
         });
-        let next_conflict_kind = conflict_kind_for_display_line(
+        let next_doc_line = conflict_doc_line_for_display_line(
           display_idx + 1,
           projection.as_deref(),
           doc_line_count,
-          &conflict_line_kinds,
         );
-        let (is_top, is_bottom) =
+        let active_edges = active_conflict_border_edges(
+          previous_doc_line,
+          doc_line,
+          next_doc_line,
+          active_conflict_doc_range.as_ref(),
+        );
+        let inactive_edges = active_edges.is_none().then(|| {
+          let previous_conflict_kind = display_idx.checked_sub(1).and_then(|idx| {
+            conflict_kind_for_display_line(
+              idx,
+              projection.as_deref(),
+              doc_line_count,
+              &conflict_line_kinds,
+            )
+          });
+          let next_conflict_kind = conflict_kind_for_display_line(
+            display_idx + 1,
+            projection.as_deref(),
+            doc_line_count,
+            &conflict_line_kinds,
+          );
           conflict_border_edges(previous_conflict_kind, conflict_kind, next_conflict_kind)
-            .unwrap_or((false, false));
-        let border_thickness = px(1.0);
-        let y = line_y(bounds.top(), line_height, *display_idx, scroll_offset);
+        });
+        let border = active_edges
+          .map(|edges| (active_hunk_focus_color, edges))
+          .or_else(|| conflict_border_color(&theme, conflict_kind).zip(inactive_edges.flatten()));
 
-        if is_top {
-          conflict_borders.push(fill(
-            Bounds::new(
-              point(bounds.left(), y),
-              size(bounds.size.width, border_thickness),
-            ),
-            color,
-          ));
-        }
+        if let Some((color, (is_top, is_bottom))) = border {
+          let border_thickness = px(1.0);
+          let y = line_y(bounds.top(), line_height, *display_idx, scroll_offset);
 
-        if is_bottom {
-          conflict_borders.push(fill(
-            Bounds::new(
-              point(bounds.left(), y + line_height - border_thickness),
-              size(bounds.size.width, border_thickness),
-            ),
-            color,
-          ));
+          if is_top {
+            conflict_borders.push(fill(
+              Bounds::new(
+                point(bounds.left(), y),
+                size(bounds.size.width, border_thickness),
+              ),
+              color,
+            ));
+          }
+
+          if is_bottom {
+            conflict_borders.push(fill(
+              Bounds::new(
+                point(bounds.left(), y + line_height - border_thickness),
+                size(bounds.size.width, border_thickness),
+              ),
+              color,
+            ));
+          }
         }
       }
 
@@ -2591,6 +2614,31 @@ mod tests {
     assert_eq!(border.l, fill_color.l);
     assert!(border.a > fill_color.a);
     assert!(border.a <= 0.28);
+  }
+
+  #[test]
+  fn test_active_conflict_border_edges_wrap_the_whole_conflict() {
+    let active_range = 2..9;
+    assert_eq!(
+      active_conflict_border_edges(Some(1), Some(2), Some(3), Some(&active_range)),
+      Some((true, false))
+    );
+    assert_eq!(
+      active_conflict_border_edges(Some(4), Some(5), Some(6), Some(&active_range)),
+      Some((false, false))
+    );
+    assert_eq!(
+      active_conflict_border_edges(Some(7), Some(8), Some(9), Some(&active_range)),
+      Some((false, true))
+    );
+    assert_eq!(
+      active_conflict_border_edges(Some(1), Some(2), Some(3), None),
+      None
+    );
+    assert_eq!(
+      active_conflict_border_edges(Some(1), Some(9), Some(10), Some(&active_range)),
+      None
+    );
   }
 
   #[test]

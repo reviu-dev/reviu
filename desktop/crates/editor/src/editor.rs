@@ -7308,6 +7308,9 @@ impl Editor {
 
   pub(crate) fn highlighted_conflict_doc_range(&self, cx: &App) -> Option<Range<usize>> {
     let regions = self.conflict_regions(cx);
+    if regions.len() <= 1 {
+      return None;
+    }
     let active_index = self.active_conflict_index(regions.as_ref(), cx)?;
     let region = &regions[active_index];
     Some(region.start_line..region.replace_end_line)
@@ -10711,6 +10714,32 @@ pub mod tests {
       assert_eq!(previous_state.active_index, 1);
       assert_eq!(previous_state.total, 2);
       assert_eq!(previous_state.active_start_line, 7);
+    });
+  }
+
+  #[gpui::test]
+  fn lone_conflict_has_no_highlighted_range(cx: &mut TestAppContext) {
+    let mut ctx = EditorTestContext::with_text(
+      cx.clone(),
+      "pre\n<<<<<<< HEAD\nours\n=======\ntheirs\n>>>>>>> branch\npost\n",
+    );
+
+    ctx.editor.update(&mut ctx.cx, |editor, cx| {
+      assert!(editor.highlighted_conflict_doc_range(cx).is_none());
+    });
+  }
+
+  #[gpui::test]
+  fn multiple_conflicts_highlight_active_range(cx: &mut TestAppContext) {
+    let mut ctx = EditorTestContext::with_text(
+      cx.clone(),
+      "pre\n<<<<<<< HEAD\nours1\n=======\ntheirs1\n>>>>>>> branch\nmid\n<<<<<<< HEAD\nours2\n=======\ntheirs2\n>>>>>>> branch\npost\n",
+    );
+
+    ctx.editor.update(&mut ctx.cx, |editor, cx| {
+      assert_eq!(editor.highlighted_conflict_doc_range(cx), Some(1..6));
+      editor.navigate_conflict(ConflictNavigationDirection::Next, cx);
+      assert_eq!(editor.highlighted_conflict_doc_range(cx), Some(7..12));
     });
   }
 
