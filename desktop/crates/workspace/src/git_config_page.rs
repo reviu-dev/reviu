@@ -489,6 +489,10 @@ mod tests {
     });
   }
 
+  fn draw_window(cx: &mut VisualTestContext) {
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+  }
+
   #[gpui::test]
   async fn escape_closes_git_config_dialog(cx: &mut TestAppContext) {
     let cx = dialog_host(cx);
@@ -528,10 +532,12 @@ mod tests {
     });
     cx.run_until_parked();
     dirty_editor(&view, cx);
+    draw_window(cx);
 
     let close = cx.debug_bounds("git-config-close").expect("close button");
     cx.simulate_click(close.center(), gpui::Modifiers::default());
     cx.run_until_parked();
+    draw_window(cx);
 
     assert!(
       cx.debug_bounds(GIT_CONFIG_UNSAVED_DISCARD_DEBUG_SELECTOR)
@@ -544,6 +550,7 @@ mod tests {
       .expect("discard button");
     cx.simulate_click(discard.center(), gpui::Modifiers::default());
     cx.run_until_parked();
+    draw_window(cx);
 
     assert!(!cx.update(|window, cx| window.has_active_dialog(cx)));
     assert!(view.read_with(cx, |view, _| view.editor.is_none()));
