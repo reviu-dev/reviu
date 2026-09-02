@@ -73,8 +73,16 @@ impl SessionPage {
         commands.push(CommandPaletteCommand::discard_pull_request_review());
       }
       if self.can_accept_all_conflicts(cx) {
-        commands.push(CommandPaletteCommand::accept_all_current_conflicts());
-        commands.push(CommandPaletteCommand::accept_all_incoming_conflicts());
+        let conflict_labels = ConflictActionLabels::for_rebase(state.rebase_in_progress);
+        let mut current = CommandPaletteCommand::accept_all_current_conflicts();
+        current.name = conflict_labels.palette_current.into();
+        current.description = Some(conflict_labels.palette_current_description.into());
+        commands.push(current);
+
+        let mut incoming = CommandPaletteCommand::accept_all_incoming_conflicts();
+        incoming.name = conflict_labels.palette_incoming.into();
+        incoming.description = Some(conflict_labels.palette_incoming_description.into());
+        commands.push(incoming);
       }
       if state.allows(PaletteCommand::ContinueRebase) {
         commands.push(CommandPaletteCommand::continue_rebase());

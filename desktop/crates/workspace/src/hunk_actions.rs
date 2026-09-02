@@ -15,6 +15,46 @@ pub(crate) const UNSTAGE_HUNK_DEBUG_SELECTOR: &str = "unstage-hunk";
 pub(crate) const RESTORE_HUNK_DEBUG_SELECTOR: &str = "restore-hunk";
 pub(crate) const CONFLICT_ACTIONS_DEBUG_SELECTOR: &str = "conflict-actions";
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct ConflictActionLabels {
+  pub(crate) current: &'static str,
+  pub(crate) incoming: &'static str,
+  pub(crate) all_current: &'static str,
+  pub(crate) all_incoming: &'static str,
+  pub(crate) palette_current: &'static str,
+  pub(crate) palette_incoming: &'static str,
+  pub(crate) palette_current_description: &'static str,
+  pub(crate) palette_incoming_description: &'static str,
+}
+
+impl ConflictActionLabels {
+  pub(crate) fn for_rebase(rebase_in_progress: bool) -> Self {
+    if rebase_in_progress {
+      Self {
+        current: "Accept Target",
+        incoming: "Accept Replayed Commit",
+        all_current: "Accept All Target",
+        all_incoming: "Accept All Replayed Commit",
+        palette_current: "Accept all target conflicts",
+        palette_incoming: "Accept all replayed commit conflicts",
+        palette_current_description: "Resolve all conflict regions by keeping the rebase target",
+        palette_incoming_description: "Resolve all conflict regions by keeping the commit being replayed",
+      }
+    } else {
+      Self {
+        current: "Accept Current",
+        incoming: "Accept Incoming",
+        all_current: "Accept All Current",
+        all_incoming: "Accept All Incoming",
+        palette_current: "Accept all current conflicts",
+        palette_incoming: "Accept all incoming conflicts",
+        palette_current_description: "Resolve all conflict regions by keeping current changes",
+        palette_incoming_description: "Resolve all conflict regions by keeping incoming changes",
+      }
+    }
+  }
+}
+
 /// Where the floating actions sit: on the first line of the block, scrolled.
 pub(crate) fn hunk_action_top(
   line_height: Pixels,
@@ -29,6 +69,7 @@ pub(crate) fn hunk_action_top(
 pub(crate) fn render_hunk_actions(
   editor: &Entity<Editor>,
   file_status: Option<RepoStatusKind>,
+  conflict_labels: ConflictActionLabels,
   cx: &mut App,
 ) -> Option<AnyElement> {
   let theme = cx.theme().clone();
@@ -38,7 +79,7 @@ pub(crate) fn render_hunk_actions(
   }
 
   if matches!(file_status, Some(RepoStatusKind::Conflicted)) {
-    return render_conflict_actions(editor, editor_state, &theme, cx);
+    return render_conflict_actions(editor, editor_state, &theme, conflict_labels, cx);
   }
 
   let hovered = editor_state.hovered_group_id.as_ref().and_then(|id| {
@@ -179,6 +220,7 @@ fn render_conflict_actions(
   editor: &Entity<Editor>,
   editor_state: &Editor,
   theme: &Theme,
+  labels: ConflictActionLabels,
   cx: &App,
 ) -> Option<AnyElement> {
   let conflict_start_line = editor_state.hovered_conflict_start_line?;
@@ -211,7 +253,7 @@ fn render_conflict_actions(
     .child(
       side(
         "accept-current-conflict",
-        "Accept Current",
+        labels.current,
         ConflictResolution::Current,
       )
       .rounded_t_none()
@@ -220,7 +262,7 @@ fn render_conflict_actions(
     .child(
       side(
         "accept-incoming-conflict",
-        "Accept Incoming",
+        labels.incoming,
         ConflictResolution::Incoming,
       )
       .rounded_none(),
@@ -354,6 +396,22 @@ pub(crate) fn resolve_active_conflict(
 #[cfg(test)]
 mod tests {
   use super::*;
+
+  #[test]
+  fn conflict_action_labels_name_rebase_sides_by_role() {
+    let standard = ConflictActionLabels::for_rebase(false);
+    assert_eq!(standard.current, "Accept Current");
+    assert_eq!(standard.incoming, "Accept Incoming");
+
+    let rebase = ConflictActionLabels::for_rebase(true);
+    assert_eq!(rebase.current, "Accept Target");
+    assert_eq!(rebase.incoming, "Accept Replayed Commit");
+    assert_eq!(rebase.palette_current, "Accept all target conflicts");
+    assert_eq!(
+      rebase.palette_incoming,
+      "Accept all replayed commit conflicts"
+    );
+  }
 
   #[test]
   fn the_actions_sit_on_the_line_of_the_block() {

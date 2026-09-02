@@ -6,7 +6,8 @@ use std::rc::Rc;
 
 use editor::DiffViewMode;
 use gpui::{
-  AnyElement, App, InteractiveElement as _, IntoElement, ParentElement, Styled, Window, div, px,
+  AnyElement, App, InteractiveElement as _, IntoElement, ParentElement, Styled, Window, div,
+  prelude::*, px,
 };
 use gpui_component::{
   ActiveTheme as _, Disableable as _, IconName, Sizable as _,
@@ -180,20 +181,22 @@ fn render_navigation(
   let on_previous = navigation.on_previous.clone();
   let on_next = navigation.on_next.clone();
   let counter_selector = navigation.counter_debug_selector;
+  let show_buttons = navigation_buttons_visible(&navigation);
 
   h_flex()
     .items_center()
     .gap_1()
-    .child(
-      Button::new(format!("{id_prefix}-navigate-previous"))
-        .icon(IconName::ArrowUp)
-        .xsmall()
-        .ghost()
-        .compact()
-        .tooltip(navigation.previous_tooltip)
-        .disabled(!navigation.enabled)
-        .on_click(move |_, window, cx| on_previous(window, cx)),
-    )
+    .when(show_buttons, |this| {
+      this.child(
+        Button::new(format!("{id_prefix}-navigate-previous"))
+          .icon(IconName::ArrowUp)
+          .xsmall()
+          .ghost()
+          .compact()
+          .tooltip(navigation.previous_tooltip)
+          .on_click(move |_, window, cx| on_previous(window, cx)),
+      )
+    })
     .child(
       div()
         .debug_selector(move || counter_selector.to_string())
@@ -205,21 +208,26 @@ fn render_navigation(
           navigation.total,
         )),
     )
-    .child(
-      Button::new(format!("{id_prefix}-navigate-next"))
-        .icon(IconName::ArrowDown)
-        .xsmall()
-        .ghost()
-        .compact()
-        .tooltip(navigation.next_tooltip)
-        .disabled(!navigation.enabled)
-        .on_click(move |_, window, cx| on_next(window, cx)),
-    )
+    .when(show_buttons, |this| {
+      this.child(
+        Button::new(format!("{id_prefix}-navigate-next"))
+          .icon(IconName::ArrowDown)
+          .xsmall()
+          .ghost()
+          .compact()
+          .tooltip(navigation.next_tooltip)
+          .on_click(move |_, window, cx| on_next(window, cx)),
+      )
+    })
     .into_any_element()
 }
 
 fn navigation_counter_text(label: &str, active_index: usize, total: usize) -> String {
   format!("{label} {}/{}", active_index + 1, total)
+}
+
+fn navigation_buttons_visible(navigation: &NavigationControl) -> bool {
+  navigation.enabled && navigation.total > 1
 }
 
 fn render_whitespace(id_prefix: &'static str, whitespace: ToggleControl) -> AnyElement {
@@ -294,6 +302,33 @@ fn render_preview(id_prefix: &'static str, preview: ToggleControl) -> AnyElement
 #[cfg(test)]
 mod tests {
   use super::*;
+
+  fn test_navigation_control(enabled: bool, total: usize) -> NavigationControl {
+    NavigationControl {
+      active_index: 0,
+      total,
+      enabled,
+      label: "Conflict",
+      previous_tooltip: "Previous conflict",
+      next_tooltip: "Next conflict",
+      counter_debug_selector: "test-counter",
+      on_previous: Rc::new(|_, _| {}),
+      on_next: Rc::new(|_, _| {}),
+    }
+  }
+
+  #[test]
+  fn navigation_buttons_are_hidden_when_the_counter_cannot_move() {
+    assert!(!navigation_buttons_visible(&test_navigation_control(
+      false, 1
+    )));
+    assert!(!navigation_buttons_visible(&test_navigation_control(
+      true, 1
+    )));
+    assert!(navigation_buttons_visible(&test_navigation_control(
+      true, 2
+    )));
+  }
 
   #[test]
   fn navigation_counter_names_the_walked_annotation() {

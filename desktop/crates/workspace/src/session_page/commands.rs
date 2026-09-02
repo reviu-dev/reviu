@@ -1375,6 +1375,21 @@ mod tests {
       assert_eq!(page.selected_file.as_deref(), Some(Path::new("a.txt")));
       assert!(page.interactive_rebase_todo_view.is_none());
       assert_eq!(page.dock_panel.read(cx).commit_message(cx), "feature work");
+
+      let commands = page.palette_commands(1, cx);
+      let current = commands
+        .iter()
+        .find(|command| command.id == CommandPaletteCommandId::AcceptAllCurrentConflicts)
+        .expect("accept target command");
+      assert_eq!(current.name.as_ref(), "Accept all target conflicts");
+      let incoming = commands
+        .iter()
+        .find(|command| command.id == CommandPaletteCommandId::AcceptAllIncomingConflicts)
+        .expect("accept replayed commit command");
+      assert_eq!(
+        incoming.name.as_ref(),
+        "Accept all replayed commit conflicts"
+      );
     });
   }
 

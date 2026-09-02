@@ -495,10 +495,12 @@ impl SessionPage {
     }
 
     if self.can_accept_all_conflicts(cx) {
+      let conflict_labels =
+        ConflictActionLabels::for_rebase(self.dock_panel.read(cx).rebase_in_progress());
       toolbar = toolbar
         .before_toggles(
           Button::new("session-page-accept-all-current")
-            .label("Accept All Current")
+            .label(conflict_labels.all_current)
             .debug_selector(|| ACCEPT_ALL_CURRENT_DEBUG_SELECTOR.to_string())
             .xsmall()
             .ghost()
@@ -509,7 +511,7 @@ impl SessionPage {
         )
         .before_toggles(
           Button::new("session-page-accept-all-incoming")
-            .label("Accept All Incoming")
+            .label(conflict_labels.all_incoming)
             .debug_selector(|| ACCEPT_ALL_INCOMING_DEBUG_SELECTOR.to_string())
             .xsmall()
             .ghost()
@@ -629,7 +631,9 @@ impl SessionPage {
       let hunk_actions = (self.opened_snapshot.is_none())
         .then(|| {
           let file_status = self.selected_file_status(cx);
-          render_hunk_actions(&editor, file_status, cx)
+          let conflict_labels =
+            ConflictActionLabels::for_rebase(self.dock_panel.read(cx).rebase_in_progress());
+          render_hunk_actions(&editor, file_status, conflict_labels, cx)
         })
         .flatten();
       let editor_pane = div()

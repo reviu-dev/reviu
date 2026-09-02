@@ -2034,8 +2034,8 @@ impl CommandPaletteCommand {
       Id::CherryPick => &["backport"],
       Id::AbortMerge | Id::AbortRebase => &["cancel", "stop"],
       Id::ContinueRebase => &["resume"],
-      Id::AcceptAllCurrentConflicts => &["ours", "mine", "resolve"],
-      Id::AcceptAllIncomingConflicts => &["theirs", "resolve"],
+      Id::AcceptAllCurrentConflicts => &["ours", "mine", "current", "target", "resolve"],
+      Id::AcceptAllIncomingConflicts => &["theirs", "incoming", "replayed", "commit", "resolve"],
       Id::CreatePullRequest | Id::OpenPullRequest => &["pr"],
       Id::SubmitPullRequestReview => &["pr", "approve"],
       Id::DiscardReview => &["clear"],
@@ -4331,6 +4331,7 @@ mod tests {
       "Accept all current conflicts"
     );
     assert!(accept_all_current_conflicts.matches("ours"));
+    assert!(accept_all_current_conflicts.matches("target"));
 
     assert_eq!(
       accept_all_incoming_conflicts.id,
@@ -4341,6 +4342,7 @@ mod tests {
       "Accept all incoming conflicts"
     );
     assert!(accept_all_incoming_conflicts.matches("theirs"));
+    assert!(accept_all_incoming_conflicts.matches("replayed"));
   }
 
   #[test]

@@ -50,7 +50,9 @@ use crate::session_page::file_viewer::{OpenedSnapshot, UnsavedEditorAction};
 use git::{InteractiveRebaseTarget, RepoStatusKind};
 
 use crate::git_telemetry::{self, GitTelemetry};
-use crate::hunk_actions::{resolve_active_conflict, restore_hunk, toggle_hunk_stage};
+use crate::hunk_actions::{
+  ConflictActionLabels, resolve_active_conflict, restore_hunk, toggle_hunk_stage,
+};
 use crate::interactive_rebase;
 use crate::interactive_rebase_todo_view::{
   InteractiveRebaseTodoView, InteractiveRebaseTodoViewCancelHandler,
