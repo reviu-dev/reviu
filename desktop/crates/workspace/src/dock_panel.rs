@@ -272,6 +272,18 @@ impl ChangesActionCommand {
   }
 }
 
+fn changes_primary_command(state: &RepoState<'_>) -> Option<ChangesActionCommand> {
+  if state.allows(PaletteCommand::StageAll) {
+    Some(ChangesActionCommand::StageAll)
+  } else if state.allows(PaletteCommand::UnstageAll) {
+    Some(ChangesActionCommand::UnstageAll)
+  } else if state.status_entries.is_empty() && state.allows(PaletteCommand::Push) {
+    Some(ChangesActionCommand::Push)
+  } else {
+    None
+  }
+}
+
 /// The files a pull request proposes, as rows the keyboard can walk.
 struct PrFilesDelegate {
   panel: WeakEntity<DockPanel>,
@@ -2638,13 +2650,7 @@ impl DockPanel {
       .into_iter()
       .filter(|command| state.allows(command.rule()))
       .collect::<Vec<_>>();
-    let primary_command = if state.allows(PaletteCommand::StageAll) {
-      Some(ChangesActionCommand::StageAll)
-    } else if state.allows(PaletteCommand::UnstageAll) {
-      Some(ChangesActionCommand::UnstageAll)
-    } else {
-      None
-    };
+    let primary_command = changes_primary_command(&state);
     let file_count = self.status_entries.len();
     let summary = match file_count {
       0 => "No changes".to_string(),
@@ -5976,6 +5982,56 @@ mod tests {
         ChangesActionCommand::UnstageAll,
       ))
     });
+    cx.run_until_parked();
+    assert!(asked.load(Ordering::SeqCst));
+    drop(observer);
+  }
+
+  #[gpui::test]
+  async fn the_changes_actions_primary_pushes_a_clean_ahead_branch(cx: &mut TestAppContext) {
+    cx.update(gpui_component::init);
+    let repo = TempRepo::init("dock-panel-changes-push-primary");
+    commit_text_file(&repo.path, Path::new("a.txt"), "v1\n", "initial");
+
+    let (panel, cx) = add_dock_panel_window(Some(repo.path.clone()), cx);
+    await_refresh(&panel, cx).await;
+    panel.update(cx, |panel, cx| {
+      panel.set_branch_status(
+        Some(git::BranchStatus {
+          name: "feature".to_string(),
+          ahead: 1,
+          behind: 0,
+          has_upstream: false,
+        }),
+        cx,
+      )
+    });
+    cx.run_until_parked();
+
+    assert!(
+      cx.debug_bounds(DOCK_PANEL_CHANGES_ACTION_DEBUG_SELECTOR)
+        .is_some(),
+      "a clean branch with commits to push gets Push as its primary action"
+    );
+
+    let asked = Arc::new(AtomicBool::new(false));
+    let observer = {
+      let asked = asked.clone();
+      cx.update(|_, cx| {
+        cx.subscribe(&panel, move |_panel, event: &DockPanelEvent, _cx| {
+          if matches!(
+            event,
+            DockPanelEvent::RunChangesAction(ChangesActionCommand::Push)
+          ) {
+            asked.store(true, Ordering::SeqCst);
+          }
+        })
+      })
+    };
+    let button = cx
+      .debug_bounds(DOCK_PANEL_CHANGES_ACTION_DEBUG_SELECTOR)
+      .expect("changes primary action bounds");
+    cx.simulate_click(button.center(), gpui::Modifiers::default());
     cx.run_until_parked();
     assert!(asked.load(Ordering::SeqCst));
     drop(observer);
