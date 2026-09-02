@@ -429,6 +429,11 @@ impl SessionPage {
             window.push_notification(Notification::warning(error), cx);
           }
         }
+        DockPanelEvent::AmendCommit => {
+          if let Err(error) = this.amend_pending_commit(window, cx) {
+            window.push_notification(Notification::warning(error), cx);
+          }
+        }
         DockPanelEvent::RunChangesAction(command) => {
           if let Err(error) = this.run_changes_action_command(*command, window, cx) {
             window.push_notification(Notification::warning(error), cx);

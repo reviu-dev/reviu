@@ -55,6 +55,24 @@ pub fn head_commit_status(repo_root: &Path) -> Result<HeadCommitStatus> {
   })
 }
 
+pub fn head_commit_message(repo_root: &Path) -> Result<Option<String>> {
+  let repo =
+    Repository::open(repo_root).with_context(|| format!("open repo at {:?}", repo_root))?;
+  let commit = match repo.head().and_then(|head| head.peel_to_commit()) {
+    Ok(commit) => commit,
+    Err(_) => return Ok(None),
+  };
+
+  Ok(
+    commit
+      .message()
+      .ok()
+      .map(str::trim_end)
+      .filter(|message| !message.is_empty())
+      .map(ToOwned::to_owned),
+  )
+}
+
 pub fn commit_changes(repo_root: &Path, message: &str) -> Result<()> {
   let message = message.trim();
   if message.is_empty() {
@@ -452,6 +470,20 @@ mod tests {
     let status = head_commit_status(&repo.path).expect("head status");
     assert!(!status.has_head_commit);
     assert!(!status.can_undo_last_commit);
+  }
+
+  #[test]
+  fn head_commit_message_reads_the_full_message() {
+    let repo = TempRepo::init("commit-head-message");
+    assert_eq!(head_commit_message(&repo.path).expect("head message"), None);
+
+    stage_text_file(&repo.path, Path::new("README.md"), "hello\n");
+    commit_changes(&repo.path, "summary\n\nbody").expect("commit changes");
+
+    assert_eq!(
+      head_commit_message(&repo.path).expect("head message"),
+      Some("summary\n\nbody".to_string())
+    );
   }
 
   #[test]

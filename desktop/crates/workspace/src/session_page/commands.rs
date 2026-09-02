@@ -300,7 +300,12 @@ impl SessionPage {
     cx: &mut Context<Self>,
   ) -> Result<(), SharedString> {
     match command {
-      CommitMenuCommand::Amend => self.amend_last_commit(window, cx),
+      CommitMenuCommand::Amend => {
+        self
+          .dock_panel
+          .update(cx, |panel, cx| panel.toggle_amend_pending(window, cx));
+        Ok(())
+      }
     }
   }
 
@@ -346,6 +351,25 @@ impl SessionPage {
         self.run_repo_command(RepoCommand::UndoLastCommit, window, cx)
       }
     }
+  }
+
+  pub(super) fn amend_pending_commit(
+    &mut self,
+    window: &mut Window,
+    cx: &mut Context<Self>,
+  ) -> Result<(), SharedString> {
+    let message = self.dock_panel.read(cx).commit_message(cx);
+    let message = message.trim().to_string();
+    if message.is_empty() {
+      return Err("Commit message is empty.".into());
+    }
+    self.run_repo_command(
+      RepoCommand::Amend {
+        message: Some(message),
+      },
+      window,
+      cx,
+    )
   }
 
   /// Amending takes the message in the commit box, or keeps the old one when
@@ -467,6 +491,7 @@ impl SessionPage {
     ));
     cx.notify();
     let checked_out_for_link = matches!(command, RepoCommand::SwitchToBranchName { .. });
+    let finishes_amend = matches!(command, RepoCommand::Amend { .. });
     let telemetry_key = command.telemetry_key();
     let analytics_event = command.analytics_event();
     self
@@ -527,7 +552,12 @@ impl SessionPage {
               if let Some(event) = analytics_event {
                 crate::analytics::track(cx, event);
               }
-              this.dock_panel.update(cx, |panel, cx| panel.refresh(cx));
+              this.dock_panel.update(cx, |panel, cx| {
+                if finishes_amend {
+                  panel.finish_amend(window, cx);
+                }
+                panel.refresh(cx);
+              });
               this.refresh_branch(cx);
               this.open_pending_pull_request_dialog(window, cx);
             }
@@ -1104,9 +1134,43 @@ mod tests {
     await_branch_refresh(&page, cx).await;
 
     page.update_in(cx, |page, window, cx| {
+      page.dock_panel.update(cx, |panel, cx| {
+        panel.set_commit_message("draft", window, cx)
+      });
       page
         .run_commit_menu_command(CommitMenuCommand::Amend, window, cx)
-        .expect("amend runs")
+        .expect("amend mode starts")
+    });
+    cx.run_until_parked();
+
+    page.read_with(cx, |page, cx| {
+      let panel = page.dock_panel.read(cx);
+      assert!(panel.amend_pending());
+      assert_eq!(panel.commit_message(cx), "second");
+    });
+
+    page.update_in(cx, |page, window, cx| {
+      page
+        .run_commit_menu_command(CommitMenuCommand::Amend, window, cx)
+        .expect("amend mode stops")
+    });
+    page.read_with(cx, |page, cx| {
+      let panel = page.dock_panel.read(cx);
+      assert!(!panel.amend_pending());
+      assert_eq!(panel.commit_message(cx), "draft");
+    });
+
+    page.update_in(cx, |page, window, cx| {
+      page
+        .run_commit_menu_command(CommitMenuCommand::Amend, window, cx)
+        .expect("amend mode starts again")
+    });
+    cx.run_until_parked();
+
+    let dock_panel = page.read_with(cx, |page, _| page.dock_panel.clone());
+    dock_panel.update_in(cx, |panel, window, cx| {
+      panel.set_commit_message("second, reworded", window, cx);
+      panel.commit(cx);
     });
     let command = page.update(cx, |page, _| {
       page._repo_command_task.take().expect("command task")
@@ -1116,10 +1180,12 @@ mod tests {
 
     let history = git::list_commit_history(&repo.path, 10).expect("history");
     assert_eq!(history.len(), 2);
-    assert_eq!(
-      history[0].summary, "second",
-      "an empty box keeps the old message"
-    );
+    assert_eq!(history[0].summary, "second, reworded");
+    page.read_with(cx, |page, cx| {
+      let panel = page.dock_panel.read(cx);
+      assert!(!panel.amend_pending());
+      assert_eq!(panel.commit_message(cx), "draft");
+    });
   }
 
   #[gpui::test]

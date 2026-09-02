@@ -9,8 +9,8 @@ use editor::ReviewCommentCreateRequest;
 
 use git::{
   HeadCommitStatus, RepoStage, RepoStatusEntry, commit_changes, current_branch_status,
-  current_github_remote_repo, head_commit_status, is_merge_in_progress, is_rebase_in_progress,
-  list_repo_status, list_repo_worktree_files, stage_all,
+  current_github_remote_repo, head_commit_message, head_commit_status, is_merge_in_progress,
+  is_rebase_in_progress, list_repo_status, list_repo_worktree_files, stage_all,
 };
 use gpui::{
   Anchor, AnyElement, AnyWindowHandle, App, Context, Entity, FocusHandle, Focusable, Render,
@@ -119,8 +119,10 @@ pub enum DockPanelEvent {
   Committed,
   /// The rebase can move on: the host runs it, it owns the conflict flow.
   ContinueRebase,
-  /// A command picked in the commit menu; the host owns running it.
+  /// A commit option changed; the host owns window-bound work.
   RunCommand(CommitMenuCommand),
+  /// The commit button should amend the pending commit.
+  AmendCommit,
   /// A command picked in the Changes actions menu; the host owns running it.
   RunChangesAction(ChangesActionCommand),
   /// An unpublished branch: push it, then open the pull request form.
@@ -185,15 +187,17 @@ pub enum CommitMenuCommand {
 }
 
 impl CommitMenuCommand {
-  fn label(self) -> &'static str {
+  fn label(self, amend_pending: bool) -> &'static str {
     match self {
-      Self::Amend => "Amend Last Commit",
+      Self::Amend if amend_pending => "Cancel Amend",
+      Self::Amend => "Amend",
     }
   }
 
-  fn icon(self) -> IconName {
+  fn icon(self, amend_pending: bool) -> Icon {
     match self {
-      Self::Amend => IconName::Replace,
+      Self::Amend if amend_pending => Icon::new(IconName::Close),
+      Self::Amend => Icon::new(IconName::Replace),
     }
   }
 
@@ -735,6 +739,8 @@ pub struct DockPanel {
   head_status: HeadCommitStatus,
   branch_status: Option<git::BranchStatus>,
   pub(crate) commit_input: Entity<TextareaState>,
+  amend_pending: bool,
+  pre_amend_commit_message: Option<String>,
   committing: bool,
   last_error: Option<SharedString>,
   active_tab: DockPanelTab,
@@ -803,6 +809,7 @@ pub struct DockPanel {
   files_loading: bool,
   pub(crate) _refresh_task: Option<Task<()>>,
   _commit_task: Option<Task<()>>,
+  _amend_message_task: Option<Task<()>>,
   _pr_task: Option<Task<()>>,
   _files_task: Option<Task<()>>,
 }
@@ -1006,6 +1013,8 @@ impl DockPanel {
       head_status: HeadCommitStatus::default(),
       branch_status: None,
       commit_input,
+      amend_pending: false,
+      pre_amend_commit_message: None,
       committing: false,
       last_error: None,
       active_tab: DockPanelTab::Changes,
@@ -1048,6 +1057,7 @@ impl DockPanel {
       files_loading: false,
       _refresh_task: None,
       _commit_task: None,
+      _amend_message_task: None,
       _pr_task: None,
       _files_task: None,
     };
@@ -2118,6 +2128,62 @@ impl DockPanel {
     self.commit_input.read(cx).value().to_string()
   }
 
+  #[cfg(test)]
+  pub(crate) fn amend_pending(&self) -> bool {
+    self.amend_pending
+  }
+
+  pub(crate) fn toggle_amend_pending(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    if self.amend_pending {
+      self.finish_amend(window, cx);
+      return;
+    }
+
+    let Some(repo_root) = self.repo_root.clone() else {
+      return;
+    };
+    if !self.head_status.has_head_commit {
+      return;
+    }
+
+    let draft = self.commit_input.read(cx).value().to_string();
+    self.pre_amend_commit_message = (!draft.trim().is_empty()).then_some(draft);
+    self.amend_pending = true;
+    self.last_error = None;
+    cx.notify();
+
+    let window_handle = self.window_handle;
+    let commit_input = self.commit_input.clone();
+    let task = cx.spawn(async move |this, cx| {
+      let message = cx
+        .background_spawn(async move { head_commit_message(&repo_root) })
+        .await;
+      let _ = cx.update_window(window_handle, |_, window, cx| {
+        let _ = this.update(cx, |this, cx| {
+          match message {
+            Ok(Some(message)) => {
+              commit_input.update(cx, |input, cx| input.set_value(&message, window, cx));
+            }
+            Ok(None) => this.last_error = Some("No commit to amend.".into()),
+            Err(error) => this.last_error = Some(format!("{error}").into()),
+          }
+          cx.notify();
+        });
+      });
+    });
+    self._amend_message_task = Some(task);
+  }
+
+  pub(crate) fn finish_amend(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    self.amend_pending = false;
+    self._amend_message_task = None;
+    let draft = self.pre_amend_commit_message.take().unwrap_or_default();
+    self
+      .commit_input
+      .update(cx, |input, cx| input.set_value(&draft, window, cx));
+    cx.notify();
+  }
+
   /// The host owns the branch; the panel needs it to know what its menu allows.
   pub(crate) fn set_checkout_selector(
     &mut self,
@@ -2289,6 +2355,9 @@ impl DockPanel {
     }
     self.repo_root = repo_root.clone();
     self.status_entries.clear();
+    self.amend_pending = false;
+    self.pre_amend_commit_message = None;
+    self._amend_message_task = None;
     self.last_error = None;
     self.changes_list.update(cx, |list, cx| {
       list.set_repo_root(repo_root.clone(), cx);
@@ -2385,10 +2454,25 @@ impl DockPanel {
     if self.committing {
       return;
     }
+    if self.rebase_in_progress {
+      if !crate::changes_list::has_conflicted_entries(&self.status_entries) {
+        cx.emit(DockPanelEvent::ContinueRebase);
+      }
+      return;
+    }
+    let message = self.commit_input.read(cx).value().to_string();
+    if self.amend_pending {
+      if self.head_status.has_head_commit
+        && !message.trim().is_empty()
+        && !crate::changes_list::has_conflicted_entries(&self.status_entries)
+      {
+        cx.emit(DockPanelEvent::AmendCommit);
+      }
+      return;
+    }
     let Some(repo_root) = self.repo_root.clone() else {
       return;
     };
-    let message = self.commit_input.read(cx).value().to_string();
     if message.trim().is_empty() || self.status_entries.is_empty() {
       return;
     }
@@ -2431,12 +2515,17 @@ impl DockPanel {
     let theme = cx.theme().clone();
     // A rebase ends by continuing it, not by writing another commit message.
     let continuing_rebase = self.rebase_in_progress;
+    let message = self.commit_input.read(cx).value();
+    let has_conflicts = crate::changes_list::has_conflicted_entries(&self.status_entries);
     let can_commit = if continuing_rebase {
-      !crate::changes_list::has_conflicted_entries(&self.status_entries)
-    } else {
+      !has_conflicts
+    } else if self.amend_pending {
       !self.committing
-        && !self.status_entries.is_empty()
-        && !self.commit_input.read(cx).value().trim().is_empty()
+        && self.head_status.has_head_commit
+        && !message.trim().is_empty()
+        && !has_conflicts
+    } else {
+      !self.committing && !self.status_entries.is_empty() && !message.trim().is_empty()
     };
     let commit_shortcut = crate::shortcuts::resolved_display_shortcut_keystroke_in(
       cx,
@@ -2479,6 +2568,7 @@ impl DockPanel {
     let menu_items =
       [CommitMenuCommand::Amend].map(|command| (command, state.allows(command.rule())));
     let menu_enabled = menu_items.iter().any(|(_, allowed)| *allowed);
+    let amend_pending = self.amend_pending;
     let view = cx.entity();
 
     h_flex()
@@ -2488,6 +2578,8 @@ impl DockPanel {
           .tab_index(2)
           .label(if continuing_rebase {
             "Continue rebase"
+          } else if self.amend_pending {
+            "Amend"
           } else {
             "Commit"
           })
@@ -2525,8 +2617,8 @@ impl DockPanel {
               let view = view.clone();
               let command = *command;
               menu.item(
-                PopupMenuItem::new(command.label())
-                  .icon(command.icon())
+                PopupMenuItem::new(command.label(amend_pending))
+                  .icon(command.icon(amend_pending))
                   .disabled(!allowed)
                   .on_click(move |_, _, cx| {
                     view.update(cx, |_, cx| cx.emit(DockPanelEvent::RunCommand(command)));
@@ -5750,6 +5842,12 @@ mod tests {
         .is_none()
     );
     assert!(cx.debug_bounds(DOCK_PANEL_COMPARE_DEBUG_SELECTOR).is_none());
+  }
+
+  #[test]
+  fn amend_menu_item_names_the_action_it_will_take() {
+    assert_eq!(CommitMenuCommand::Amend.label(false), "Amend");
+    assert_eq!(CommitMenuCommand::Amend.label(true), "Cancel Amend");
   }
 
   #[gpui::test]
