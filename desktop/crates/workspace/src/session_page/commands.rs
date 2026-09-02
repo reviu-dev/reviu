@@ -301,11 +301,6 @@ impl SessionPage {
   ) -> Result<(), SharedString> {
     match command {
       CommitMenuCommand::Amend => self.amend_last_commit(window, cx),
-      CommitMenuCommand::UndoLastCommit => {
-        self.run_repo_command(RepoCommand::UndoLastCommit, window, cx)
-      }
-      CommitMenuCommand::Push => self.run_repo_command(RepoCommand::Push, window, cx),
-      CommitMenuCommand::ForcePush => self.confirm_force_push(window, cx),
     }
   }
 
@@ -347,7 +342,6 @@ impl SessionPage {
       ),
       ChangesActionCommand::Push => self.run_repo_command(RepoCommand::Push, window, cx),
       ChangesActionCommand::ForcePush => self.confirm_force_push(window, cx),
-      ChangesActionCommand::Amend => self.amend_last_commit(window, cx),
       ChangesActionCommand::UndoLastCommit => {
         self.run_repo_command(RepoCommand::UndoLastCommit, window, cx)
       }
@@ -1109,7 +1103,6 @@ mod tests {
     refresh.await;
     await_branch_refresh(&page, cx).await;
 
-    // An empty box keeps the message of the commit being amended.
     page.update_in(cx, |page, window, cx| {
       page
         .run_commit_menu_command(CommitMenuCommand::Amend, window, cx)
@@ -1126,25 +1119,6 @@ mod tests {
     assert_eq!(
       history[0].summary, "second",
       "an empty box keeps the old message"
-    );
-
-    // The Undo entry undoes, it does not push.
-    page.update_in(cx, |page, window, cx| {
-      page
-        .run_commit_menu_command(CommitMenuCommand::UndoLastCommit, window, cx)
-        .expect("undo runs")
-    });
-    let command = page.update(cx, |page, _| {
-      page._repo_command_task.take().expect("command task")
-    });
-    command.await;
-    cx.run_until_parked();
-
-    assert_eq!(
-      git::list_commit_history(&repo.path, 10)
-        .expect("history")
-        .len(),
-      1
     );
   }
 
@@ -1213,7 +1187,7 @@ mod tests {
   }
 
   #[gpui::test]
-  async fn the_commit_menu_asks_before_force_pushing(cx: &mut TestAppContext) {
+  async fn the_changes_actions_menu_asks_before_force_pushing(cx: &mut TestAppContext) {
     let repo = TempRepo::init("session-page-commit-menu-force-push-confirm");
     commit_text_file(&repo.path, Path::new("README.md"), "v1\n", "initial");
     let remote = publish_to_new_remote(&repo.path, "session-page-commit-menu-force-push-confirm");
@@ -1225,7 +1199,7 @@ mod tests {
 
     page.update_in(cx, |page, window, cx| {
       page
-        .run_commit_menu_command(CommitMenuCommand::ForcePush, window, cx)
+        .run_changes_action_command(ChangesActionCommand::ForcePush, window, cx)
         .expect("force push is allowed")
     });
     cx.run_until_parked();

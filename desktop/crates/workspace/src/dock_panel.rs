@@ -182,35 +182,24 @@ impl gpui::EventEmitter<DockPanelEvent> for DockPanel {}
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum CommitMenuCommand {
   Amend,
-  UndoLastCommit,
-  Push,
-  ForcePush,
 }
 
 impl CommitMenuCommand {
   fn label(self) -> &'static str {
     match self {
-      Self::Amend => "Amend",
-      Self::UndoLastCommit => "Undo last commit",
-      Self::Push => "Push",
-      Self::ForcePush => "Force push (with lease)",
+      Self::Amend => "Amend Last Commit",
     }
   }
 
   fn icon(self) -> IconName {
     match self {
       Self::Amend => IconName::Replace,
-      Self::UndoLastCommit => IconName::Undo,
-      Self::Push | Self::ForcePush => IconName::ArrowUp,
     }
   }
 
   fn rule(self) -> PaletteCommand {
     match self {
       Self::Amend => PaletteCommand::Amend,
-      Self::UndoLastCommit => PaletteCommand::UndoLastCommit,
-      Self::Push => PaletteCommand::Push,
-      Self::ForcePush => PaletteCommand::ForcePush,
     }
   }
 }
@@ -225,12 +214,11 @@ pub enum ChangesActionCommand {
   StashWithUntracked,
   Push,
   ForcePush,
-  Amend,
   UndoLastCommit,
 }
 
 impl ChangesActionCommand {
-  const ALL: [Self; 9] = [
+  const ALL: [Self; 8] = [
     Self::StageAll,
     Self::UnstageAll,
     Self::RestoreAll,
@@ -238,7 +226,6 @@ impl ChangesActionCommand {
     Self::StashWithUntracked,
     Self::Push,
     Self::ForcePush,
-    Self::Amend,
     Self::UndoLastCommit,
   ];
 
@@ -251,8 +238,7 @@ impl ChangesActionCommand {
       Self::StashWithUntracked => "Stash With Untracked",
       Self::Push => "Push",
       Self::ForcePush => "Force Push (with Lease)",
-      Self::Amend => "Amend Last Commit",
-      Self::UndoLastCommit => "Undo last commit",
+      Self::UndoLastCommit => "Undo Last Commit",
     }
   }
 
@@ -264,7 +250,6 @@ impl ChangesActionCommand {
       Self::Stash => Icon::new(UiIconName::ArrowDownFromLine),
       Self::StashWithUntracked => Icon::new(UiIconName::ArrowDownFromLine),
       Self::Push | Self::ForcePush => Icon::new(IconName::ArrowUp),
-      Self::Amend => Icon::new(IconName::Replace),
       Self::UndoLastCommit => Icon::new(IconName::Undo),
     }
   }
@@ -278,7 +263,6 @@ impl ChangesActionCommand {
       Self::StashWithUntracked => PaletteCommand::StashWithUntracked,
       Self::Push => PaletteCommand::Push,
       Self::ForcePush => PaletteCommand::ForcePush,
-      Self::Amend => PaletteCommand::Amend,
       Self::UndoLastCommit => PaletteCommand::UndoLastCommit,
     }
   }
@@ -2492,13 +2476,8 @@ impl DockPanel {
   ) -> AnyElement {
     let commit_message = self.commit_input.read(cx).value().to_string();
     let state = self.repo_state(&commit_message);
-    let menu_items = [
-      CommitMenuCommand::Amend,
-      CommitMenuCommand::UndoLastCommit,
-      CommitMenuCommand::Push,
-      CommitMenuCommand::ForcePush,
-    ]
-    .map(|command| (command, state.allows(command.rule())));
+    let menu_items =
+      [CommitMenuCommand::Amend].map(|command| (command, state.allows(command.rule())));
     let menu_enabled = menu_items.iter().any(|(_, allowed)| *allowed);
     let view = cx.entity();
 
@@ -5793,7 +5772,7 @@ mod tests {
     assert!(
       cx.debug_bounds(DOCK_PANEL_CHANGES_ACTION_MENU_DEBUG_SELECTOR)
         .is_some(),
-      "the Changes header carries the same repository actions"
+      "the Changes panel carries repository actions"
     );
     assert!(
       cx.debug_bounds(DOCK_PANEL_CHANGES_ACTION_DEBUG_SELECTOR)
@@ -5801,7 +5780,7 @@ mod tests {
       "a clean tree has no Stage All or Unstage All primary action"
     );
 
-    // Two commits and no branch handed over yet: amend and undo, no push.
+    // The menus share the same rules: commit-specific amend, repository-level undo and push.
     panel.read_with(cx, |panel, _| {
       let state = panel.repo_state("");
       assert!(state.allows(PaletteCommand::Amend));
