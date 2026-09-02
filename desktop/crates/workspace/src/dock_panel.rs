@@ -64,7 +64,6 @@ const DOCK_PANEL_CREATE_PR_DEBUG_SELECTOR: &str = "dock-panel-create-pr";
 const DOCK_PANEL_PUBLISH_AND_CREATE_PR_DEBUG_SELECTOR: &str = "dock-panel-publish-and-create-pr";
 const DOCK_PANEL_COMPARE_DEBUG_SELECTOR: &str = "dock-panel-compare-on-github";
 const DOCK_PANEL_REFRESH_DEBUG_SELECTOR: &str = "dock-panel-refresh";
-pub(crate) const DOCK_PANEL_ZOOM_DEBUG_SELECTOR: &str = "dock-panel-zoom";
 pub(crate) const DOCK_PANEL_CHECKOUT_SELECTOR_DEBUG_SELECTOR: &str = "dock-panel-checkout-selector";
 pub(crate) const DOCK_PANEL_CHECKOUT_FOLLOW_DEBUG_SELECTOR: &str = "dock-panel-checkout-follow";
 use std::rc::Rc;
@@ -129,8 +128,6 @@ pub enum DockPanelEvent {
   PublishBranchAndCreatePullRequest(GithubBranchContext),
   /// The working tree was re-read: whoever shows a file has to look again.
   StatusRefreshed,
-  /// The zoom button: the host owns the layout.
-  ToggleZoom,
   /// A row of the review panel: the host owns the diff and the batch.
   OpenReviewComment {
     path: PathBuf,
@@ -758,7 +755,6 @@ pub struct DockPanel {
   committing: bool,
   last_error: Option<SharedString>,
   active_tab: DockPanelTab,
-  zoomed: bool,
   changes_list: Entity<ChangesList>,
   pub(crate) review_list: Entity<ReviewList>,
   pub(crate) history_list: Entity<HistoryList>,
@@ -1033,7 +1029,6 @@ impl DockPanel {
       committing: false,
       last_error: None,
       active_tab: DockPanelTab::Changes,
-      zoomed: false,
       changes_list,
       history_list,
       terminal_view: None,
@@ -2881,13 +2876,6 @@ impl DockPanel {
     self.terminal_view.is_some()
   }
 
-  pub(crate) fn set_zoomed(&mut self, zoomed: bool, cx: &mut Context<Self>) {
-    if self.zoomed != zoomed {
-      self.zoomed = zoomed;
-      cx.notify();
-    }
-  }
-
   pub(crate) fn active_tab(&self) -> DockPanelTab {
     self.active_tab
   }
@@ -3855,21 +3843,7 @@ impl Render for DockPanel {
                 .loading_icon(gpui_component::Icon::new(UiIconName::RefreshCw))
                 .on_click(cx.listener(|this, _, _, cx| this.refresh_requested(cx))),
             )
-          })
-          .child(
-            Button::new("dock-panel-zoom")
-              .debug_selector(|| DOCK_PANEL_ZOOM_DEBUG_SELECTOR.to_string())
-              .icon(if self.zoomed {
-                UiIconName::Minimize2
-              } else {
-                UiIconName::Maximize2
-              })
-              .ghost()
-              .compact()
-              .small()
-              .tooltip(if self.zoomed { "Restore" } else { "Expand" })
-              .on_click(cx.listener(|_, _, _, cx| cx.emit(DockPanelEvent::ToggleZoom))),
-          ),
+          }),
       );
 
     let body = match self.active_tab {

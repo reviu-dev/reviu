@@ -314,7 +314,6 @@ pub struct SessionPage {
   pending_pull_request: Option<GithubBranchContext>,
   dock_open: bool,
   dock_width: f32,
-  dock_zoomed: bool,
   diff_chat_open: bool,
   conversation_split_width: f32,
   sidebar_open: bool,
@@ -456,9 +455,6 @@ impl SessionPage {
         DockPanelEvent::FollowSessionCheckout => {
           this.follow_session_checkout(window, cx);
         }
-        DockPanelEvent::ToggleZoom => {
-          this.toggle_dock_zoom(cx);
-        }
         DockPanelEvent::OpenReviewComment { path, line, intent } => {
           let (path, line, intent) = (path.clone(), *line as u32, *intent);
           this.open_for_intent(
@@ -573,7 +569,6 @@ impl SessionPage {
       pending_pull_request: None,
       dock_open: true,
       dock_width: DOCK_PANEL_DEFAULT_WIDTH,
-      dock_zoomed: false,
       diff_chat_open: true,
       conversation_split_width: CONVERSATION_SPLIT_DEFAULT_WIDTH,
       sidebar_open: true,
@@ -1406,7 +1401,6 @@ impl SessionPage {
     }
     self.dock_open = false;
     self.dock_slide_armed = true;
-    self.set_dock_zoomed(false, cx);
     // The dock stays mounted while it slides out; focus must not stay in it.
     // The page resolves to the editor when the diff is open, the composer
     // otherwise, so shortcuts keep working right after the close.
@@ -1444,19 +1438,6 @@ impl SessionPage {
       self.sidebar_width = clamped;
       cx.notify();
     }
-  }
-
-  fn toggle_dock_zoom(&mut self, cx: &mut Context<Self>) {
-    let zoomed = !self.dock_zoomed;
-    self.set_dock_zoomed(zoomed, cx);
-    cx.notify();
-  }
-
-  fn set_dock_zoomed(&mut self, zoomed: bool, cx: &mut Context<Self>) {
-    self.dock_zoomed = zoomed;
-    self
-      .dock_panel
-      .update(cx, |panel, cx| panel.set_zoomed(zoomed, cx));
   }
 
   fn resize_dock(&mut self, width: f32, cx: &mut Context<Self>) {

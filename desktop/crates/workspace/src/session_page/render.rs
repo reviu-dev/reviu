@@ -1115,14 +1115,7 @@ impl Render for SessionPage {
           }
         },
       ))
-      .child(if self.dock_zoomed {
-        div()
-          .size_full()
-          .min_w(px(0.0))
-          .min_h_0()
-          .child(self.render_dock_panel(cx))
-          .into_any_element()
-      } else {
+      .child({
         let sidebar_rail = self.render_sidebar_rail(cx);
         let sidebar_content = self.render_sessions_sidebar(cx);
         let sidebar = self.render_side_panel(
@@ -2621,10 +2614,10 @@ mod tests {
       stops_in_dock(&with_one_file),
       "the panel's stops are its own controls, a row is not one of them"
     );
-    // Changes action, changes action menu, zoom, file list, message box, commit button and commit menu.
+    // Changes action, changes action menu, file list, message box, commit button and commit menu.
     assert_eq!(
       stops_in_dock(&with_one_file),
-      7,
+      6,
       "and there are no others hiding in the panel"
     );
     assert_eq!(
@@ -3796,7 +3789,7 @@ mod tests {
     cx.run_until_parked();
 
     assert!(
-      cx.debug_bounds("dock-panel-zoom").is_some(),
+      cx.debug_bounds("dock-panel-refresh").is_some(),
       "dock starts open"
     );
 
@@ -3827,7 +3820,7 @@ mod tests {
     cx.run_until_parked();
     page.read_with(cx, |page, _| assert!(!page.dock_open));
     assert!(
-      cx.debug_bounds("dock-panel-zoom").is_none(),
+      cx.debug_bounds("dock-panel-refresh").is_none(),
       "closed dock content is not rendered"
     );
 
@@ -3842,36 +3835,6 @@ mod tests {
       assert!(page.dock_open);
       assert_eq!(page.dock_panel.read(cx).active_tab(), DockPanelTab::History);
     });
-  }
-
-  #[gpui::test]
-  async fn zooming_the_dock_takes_the_whole_shell(cx: &mut TestAppContext) {
-    let repo = TempRepo::init("session-dock-zoom");
-    commit_text_file(&repo.path, Path::new("README.md"), "v1\n", "initial");
-    let (page, cx) = add_session_page_window(repo.path.clone(), cx);
-    cx.run_until_parked();
-
-    let zoom = cx.debug_bounds("dock-panel-zoom").expect("zoom button");
-    cx.simulate_click(zoom.center(), gpui::Modifiers::default());
-    cx.run_until_parked();
-
-    page.read_with(cx, |page, _| assert!(page.dock_zoomed));
-    assert!(
-      cx.debug_bounds(REPO_CONTEXT_DEBUG_SELECTOR).is_none(),
-      "the sidebar is hidden while the dock is zoomed"
-    );
-
-    let zoom = cx
-      .debug_bounds("dock-panel-zoom")
-      .expect("zoom button, zoomed");
-    cx.simulate_click(zoom.center(), gpui::Modifiers::default());
-    cx.run_until_parked();
-
-    page.read_with(cx, |page, _| assert!(!page.dock_zoomed));
-    assert!(
-      cx.debug_bounds(REPO_CONTEXT_DEBUG_SELECTOR).is_some(),
-      "restoring brings the shell back"
-    );
   }
 
   #[gpui::test]
