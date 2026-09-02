@@ -60,7 +60,6 @@ const DOCK_PANEL_COMMIT_MENU_DEBUG_SELECTOR: &str = "dock-panel-commit-menu";
 const DOCK_PANEL_CREATE_PR_DEBUG_SELECTOR: &str = "dock-panel-create-pr";
 const DOCK_PANEL_PUBLISH_AND_CREATE_PR_DEBUG_SELECTOR: &str = "dock-panel-publish-and-create-pr";
 const DOCK_PANEL_COMPARE_DEBUG_SELECTOR: &str = "dock-panel-compare-on-github";
-const DOCK_PANEL_OPERATION_DEBUG_SELECTOR: &str = "dock-panel-operation";
 const DOCK_PANEL_REFRESH_DEBUG_SELECTOR: &str = "dock-panel-refresh";
 pub(crate) const DOCK_PANEL_ZOOM_DEBUG_SELECTOR: &str = "dock-panel-zoom";
 pub(crate) const DOCK_PANEL_CHECKOUT_SELECTOR_DEBUG_SELECTOR: &str = "dock-panel-checkout-selector";
@@ -2399,20 +2398,6 @@ impl DockPanel {
         let commit_box = Textarea::new(&self.commit_input).w_full();
         commit_box.into_any_element()
       }))
-      .when(self.merge_in_progress || continuing_rebase, |this| {
-        let label = if continuing_rebase {
-          "Rebase in progress"
-        } else {
-          "Merge in progress"
-        };
-        this.child(
-          div()
-            .debug_selector(|| DOCK_PANEL_OPERATION_DEBUG_SELECTOR.to_string())
-            .text_xs()
-            .text_color(theme.status_orange())
-            .child(label),
-        )
-      })
       .child(h_flex().w_full().child(self.render_commit_button(
         continuing_rebase,
         can_commit,
@@ -5547,11 +5532,7 @@ mod tests {
       assert!(panel.merge_in_progress());
       assert!(!panel.rebase_in_progress(), "a merge is not a rebase");
     });
-    assert!(
-      cx.debug_bounds(DOCK_PANEL_OPERATION_DEBUG_SELECTOR)
-        .is_some(),
-      "the panel says a merge is running"
-    );
+    assert!(cx.debug_bounds("dock-panel-operation").is_none());
 
     // Unlike a rebase, the button still commits: that is how a merge ends.
     panel.update_in(cx, |panel, window, cx| {
@@ -5710,11 +5691,7 @@ mod tests {
     cx.run_until_parked();
 
     panel.read_with(cx, |panel, _| assert!(panel.rebase_in_progress()));
-    assert!(
-      cx.debug_bounds(DOCK_PANEL_OPERATION_DEBUG_SELECTOR)
-        .is_some(),
-      "the panel says a rebase is running"
-    );
+    assert!(cx.debug_bounds("dock-panel-operation").is_none());
 
     // The button now continues the rebase; the host runs it.
     let asked = Arc::new(AtomicBool::new(false));
