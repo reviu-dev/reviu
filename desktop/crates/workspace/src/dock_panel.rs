@@ -279,6 +279,8 @@ fn changes_primary_command(state: &RepoState<'_>) -> Option<ChangesActionCommand
     Some(ChangesActionCommand::UnstageAll)
   } else if state.status_entries.is_empty() && state.allows(PaletteCommand::Push) {
     Some(ChangesActionCommand::Push)
+  } else if state.status_entries.is_empty() && state.allows(PaletteCommand::ForcePush) {
+    Some(ChangesActionCommand::ForcePush)
   } else {
     None
   }
@@ -819,6 +821,7 @@ pub struct DockPanel {
   /// The tab was opened before its tree existed: focus it as soon as it does.
   focus_files_tree_when_loaded: bool,
   files_loading: bool,
+  changes_action_in_flight: Option<ChangesActionCommand>,
   pub(crate) _refresh_task: Option<Task<()>>,
   _commit_task: Option<Task<()>>,
   _amend_message_task: Option<Task<()>>,
@@ -1067,6 +1070,7 @@ impl DockPanel {
       files_loaded: false,
       focus_files_tree_when_loaded: false,
       files_loading: false,
+      changes_action_in_flight: None,
       _refresh_task: None,
       _commit_task: None,
       _amend_message_task: None,
@@ -2347,6 +2351,23 @@ impl DockPanel {
     &self.status_entries
   }
 
+  pub(crate) fn set_changes_action_in_flight(
+    &mut self,
+    command: Option<ChangesActionCommand>,
+    cx: &mut Context<Self>,
+  ) {
+    if self.changes_action_in_flight == command {
+      return;
+    }
+    self.changes_action_in_flight = command;
+    cx.notify();
+  }
+
+  #[cfg(test)]
+  pub(crate) fn changes_action_in_flight(&self) -> Option<ChangesActionCommand> {
+    self.changes_action_in_flight
+  }
+
   pub(crate) fn repo_root(&self) -> Option<&Path> {
     self.repo_root.as_deref()
   }
@@ -2367,6 +2388,7 @@ impl DockPanel {
     }
     self.repo_root = repo_root.clone();
     self.status_entries.clear();
+    self.changes_action_in_flight = None;
     self.amend_pending = false;
     self.pre_amend_commit_message = None;
     self._amend_message_task = None;
@@ -2651,6 +2673,7 @@ impl DockPanel {
       .filter(|command| state.allows(command.rule()))
       .collect::<Vec<_>>();
     let primary_command = changes_primary_command(&state);
+    let changes_action_in_flight = self.changes_action_in_flight;
     let file_count = self.status_entries.len();
     let summary = match file_count {
       0 => "No changes".to_string(),
@@ -2693,6 +2716,8 @@ impl DockPanel {
                 .compact()
                 .small()
                 .rounded_r_none()
+                .loading(changes_action_in_flight == Some(command))
+                .disabled(changes_action_in_flight.is_some())
                 .on_click(cx.listener(move |_, _, _, cx| {
                   cx.emit(DockPanelEvent::RunChangesAction(command));
                 })),
@@ -2719,6 +2744,7 @@ impl DockPanel {
                   menu.item(
                     PopupMenuItem::new(command.label())
                       .icon(command.icon())
+                      .disabled(changes_action_in_flight.is_some())
                       .on_click(move |_, _, cx| {
                         menu_view.update(cx, |_, cx| {
                           cx.emit(DockPanelEvent::RunChangesAction(command));
@@ -5848,6 +5874,77 @@ mod tests {
         .is_none()
     );
     assert!(cx.debug_bounds(DOCK_PANEL_COMPARE_DEBUG_SELECTOR).is_none());
+  }
+
+  #[test]
+  fn changes_primary_command_promotes_push_only_when_the_tree_is_clean() {
+    let push_branch = git::BranchStatus {
+      name: "feature".to_string(),
+      ahead: 1,
+      behind: 0,
+      has_upstream: true,
+    };
+    let force_push_branch = git::BranchStatus {
+      name: "feature".to_string(),
+      ahead: 1,
+      behind: 1,
+      has_upstream: true,
+    };
+    let status_entries = [git::RepoStatusEntry {
+      path: PathBuf::from("a.txt"),
+      old_path: None,
+      status: git::RepoStatusKind::Modified,
+      stage: git::RepoStage::Unstaged,
+    }];
+
+    assert_eq!(
+      changes_primary_command(&RepoState {
+        has_repo: true,
+        merge_in_progress: false,
+        rebase_in_progress: false,
+        has_head_commit: true,
+        can_push: true,
+        can_force_push: false,
+        can_undo_last_commit: true,
+        branch_status: Some(&push_branch),
+        status_entries: &[],
+        selected_entry: None,
+        commit_message: "",
+      }),
+      Some(ChangesActionCommand::Push)
+    );
+    assert_eq!(
+      changes_primary_command(&RepoState {
+        has_repo: true,
+        merge_in_progress: false,
+        rebase_in_progress: false,
+        has_head_commit: true,
+        can_push: false,
+        can_force_push: true,
+        can_undo_last_commit: true,
+        branch_status: Some(&force_push_branch),
+        status_entries: &[],
+        selected_entry: None,
+        commit_message: "",
+      }),
+      Some(ChangesActionCommand::ForcePush)
+    );
+    assert_eq!(
+      changes_primary_command(&RepoState {
+        has_repo: true,
+        merge_in_progress: false,
+        rebase_in_progress: false,
+        has_head_commit: true,
+        can_push: true,
+        can_force_push: false,
+        can_undo_last_commit: true,
+        branch_status: Some(&push_branch),
+        status_entries: &status_entries,
+        selected_entry: None,
+        commit_message: "",
+      }),
+      Some(ChangesActionCommand::StageAll)
+    );
   }
 
   #[test]

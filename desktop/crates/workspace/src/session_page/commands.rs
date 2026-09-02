@@ -2,6 +2,22 @@
 
 use super::*;
 
+fn changes_action_for_repo_command(command: &RepoCommand) -> Option<ChangesActionCommand> {
+  match command {
+    RepoCommand::StageAll => Some(ChangesActionCommand::StageAll),
+    RepoCommand::UnstageAll => Some(ChangesActionCommand::UnstageAll),
+    RepoCommand::Push => Some(ChangesActionCommand::Push),
+    RepoCommand::ForcePush => Some(ChangesActionCommand::ForcePush),
+    RepoCommand::UndoLastCommit => Some(ChangesActionCommand::UndoLastCommit),
+    RepoCommand::Stash {
+      include_untracked: true,
+      ..
+    } => Some(ChangesActionCommand::StashWithUntracked),
+    RepoCommand::Stash { .. } => Some(ChangesActionCommand::Stash),
+    _ => None,
+  }
+}
+
 impl SessionPage {
   /// Staging a conflicted file marks its conflict resolved, which deserves a
   /// question before it happens.
@@ -485,10 +501,14 @@ impl SessionPage {
       return Err("Another git command is still running.".into());
     }
 
+    let changes_action_in_flight = changes_action_for_repo_command(&command);
     self.repo_command_in_flight = Some(RepoCommandInFlight::for_command(
       &command,
       self.repo_snapshot.read(cx).branch_status(),
     ));
+    self.dock_panel.update(cx, |panel, cx| {
+      panel.set_changes_action_in_flight(changes_action_in_flight, cx);
+    });
     cx.notify();
     let checked_out_for_link = matches!(command, RepoCommand::SwitchToBranchName { .. });
     let finishes_amend = matches!(command, RepoCommand::Amend { .. });
@@ -505,6 +525,9 @@ impl SessionPage {
       let _ = cx.update_window(window_handle, |_, window, cx| {
         let _ = this.update(cx, |this, cx| {
           this.repo_command_in_flight = None;
+          this.dock_panel.update(cx, |panel, cx| {
+            panel.set_changes_action_in_flight(None, cx);
+          });
           this
             .git_telemetry(cx)
             .report_outcome(telemetry_key, git_telemetry::outcome_report(&result));
@@ -1250,6 +1273,40 @@ mod tests {
         .len(),
       1
     );
+  }
+
+  #[gpui::test]
+  async fn the_changes_primary_action_shows_push_in_flight(cx: &mut TestAppContext) {
+    let repo = TempRepo::init("session-page-changes-push-loading");
+    commit_text_file(&repo.path, Path::new("README.md"), "v1\n", "initial");
+    publish_to_new_remote(&repo.path, "session-page-changes-push-loading");
+    commit_text_file(&repo.path, Path::new("README.md"), "v2\n", "second");
+
+    let (page, cx) = add_session_page_window(repo.path.clone(), cx);
+    page.update(cx, |page, cx| page.refresh_branch(cx));
+    await_branch_refresh(&page, cx).await;
+
+    page.update_in(cx, |page, window, cx| {
+      page
+        .run_changes_action_command(ChangesActionCommand::Push, window, cx)
+        .expect("push starts")
+    });
+    page.read_with(cx, |page, cx| {
+      assert_eq!(
+        page.dock_panel.read(cx).changes_action_in_flight(),
+        Some(ChangesActionCommand::Push)
+      );
+    });
+
+    let command = page.update(cx, |page, _| {
+      page._repo_command_task.take().expect("command task")
+    });
+    command.await;
+    cx.run_until_parked();
+
+    page.read_with(cx, |page, cx| {
+      assert_eq!(page.dock_panel.read(cx).changes_action_in_flight(), None);
+    });
   }
 
   #[gpui::test]
