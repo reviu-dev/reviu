@@ -1,14 +1,15 @@
 use agent_client_protocol::schema::{
-  AuthMethod, CancelNotification, ClientCapabilities, ContentBlock, FileSystemCapabilities,
-  InitializeRequest, LoadSessionRequest, ModelId, ModelInfo, NewSessionRequest, PermissionOption,
-  PromptRequest, ProtocolVersion, ReadTextFileRequest, ReadTextFileResponse,
-  RequestPermissionOutcome, RequestPermissionRequest, RequestPermissionResponse,
-  SelectedPermissionOutcome, SessionConfigId, SessionConfigOption, SessionConfigOptionValue,
-  SessionId, SessionMode, SessionModeId, SessionNotification, SetSessionConfigOptionRequest,
-  SetSessionModeRequest, SetSessionModelRequest, StopReason, TextContent, WriteTextFileRequest,
-  WriteTextFileResponse,
+  AuthMethod, AvailableCommandsUpdate, CancelNotification, ClientCapabilities, ConfigOptionUpdate,
+  ContentBlock, CurrentModeUpdate, FileSystemCapabilities, InitializeRequest, InitializeResponse,
+  LoadSessionRequest, ModelId, ModelInfo, NewSessionRequest, PermissionOption, Plan, PromptRequest,
+  ProtocolVersion, ReadTextFileRequest, ReadTextFileResponse, RequestPermissionOutcome,
+  RequestPermissionRequest, RequestPermissionResponse, SelectedPermissionOutcome, SessionConfigId,
+  SessionConfigOption, SessionConfigOptionValue, SessionId, SessionMode, SessionModeId,
+  SessionUpdate as AcpSessionUpdate, SetSessionConfigOptionRequest, SetSessionModeRequest,
+  SetSessionModelRequest, StopReason, TextContent, ToolCall, ToolCallUpdate, UsageUpdate,
+  WriteTextFileRequest, WriteTextFileResponse,
 };
-use agent_client_protocol::{Agent, Client, ConnectionTo};
+use agent_client_protocol::{Agent, Client, ConnectionTo, Handled, UntypedMessage};
 use anyhow::{Context, Result, anyhow};
 use async_channel::{Receiver, Sender, unbounded};
 use async_process::Command;
@@ -27,7 +28,73 @@ use std::time::{Duration, Instant};
 pub use terminal::{TerminalSnapshot, TerminalStore};
 
 pub use agent_client_protocol::schema::PermissionOptionKind;
-pub use agent_client_protocol::schema::SessionUpdate as AgentEvent;
+
+#[derive(Clone, Debug, PartialEq)]
+pub enum AgentEvent {
+  UserMessageChunk(agent_client_protocol::schema::ContentChunk),
+  AgentMessageChunk(agent_client_protocol::schema::ContentChunk),
+  AgentThoughtChunk(agent_client_protocol::schema::ContentChunk),
+  ToolCall(ToolCall),
+  ToolCallUpdate(ToolCallUpdate),
+  Plan(Plan),
+  AvailableCommandsUpdate(AvailableCommandsUpdate),
+  CurrentModeUpdate(CurrentModeUpdate),
+  ConfigOptionUpdate(ConfigOptionUpdate),
+  SessionInfoUpdate(agent_client_protocol::schema::SessionInfoUpdate),
+  UsageUpdate(UsageUpdate),
+  CompactionUpdate(CompactionUpdate),
+  CompactionSummaryChunk(CompactionSummaryChunk),
+  Unknown,
+}
+
+impl From<AcpSessionUpdate> for AgentEvent {
+  fn from(update: AcpSessionUpdate) -> Self {
+    match update {
+      AcpSessionUpdate::UserMessageChunk(update) => Self::UserMessageChunk(update),
+      AcpSessionUpdate::AgentMessageChunk(update) => Self::AgentMessageChunk(update),
+      AcpSessionUpdate::AgentThoughtChunk(update) => Self::AgentThoughtChunk(update),
+      AcpSessionUpdate::ToolCall(update) => Self::ToolCall(update),
+      AcpSessionUpdate::ToolCallUpdate(update) => Self::ToolCallUpdate(update),
+      AcpSessionUpdate::Plan(update) => Self::Plan(update),
+      AcpSessionUpdate::AvailableCommandsUpdate(update) => Self::AvailableCommandsUpdate(update),
+      AcpSessionUpdate::CurrentModeUpdate(update) => Self::CurrentModeUpdate(update),
+      AcpSessionUpdate::ConfigOptionUpdate(update) => Self::ConfigOptionUpdate(update),
+      AcpSessionUpdate::SessionInfoUpdate(update) => Self::SessionInfoUpdate(update),
+      AcpSessionUpdate::UsageUpdate(update) => Self::UsageUpdate(update),
+      _ => Self::Unknown,
+    }
+  }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum CompactionStatus {
+  InProgress,
+  Completed,
+  Failed,
+  Cancelled,
+  Other(String),
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub enum CompactionPatch<T> {
+  Omitted,
+  Clear,
+  Value(T),
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct CompactionUpdate {
+  pub compaction_id: String,
+  pub status: CompactionStatus,
+  pub summary: CompactionPatch<Vec<ContentBlock>>,
+  pub error: CompactionPatch<String>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct CompactionSummaryChunk {
+  pub compaction_id: String,
+  pub content: ContentBlock,
+}
 pub use agent_client_protocol::schema::{
   ModelId as AcpModelId, ModelInfo as AcpModelInfo, SessionConfigId as AcpSessionConfigId,
   SessionConfigKind as AcpSessionConfigKind, SessionConfigOption as AcpSessionConfigOption,
@@ -598,6 +665,61 @@ fn auth_method_terminal_command(m: &AuthMethod) -> Option<TerminalAuthCommand> {
 
 // Prefer AllowOnce over AllowAlways; return None for reject-only sets so
 // destructive defaults never auto-apply.
+fn parse_compaction_status(value: &serde_json::Value) -> Option<CompactionStatus> {
+  let raw = value.as_str()?;
+  Some(match raw {
+    "in_progress" => CompactionStatus::InProgress,
+    "completed" => CompactionStatus::Completed,
+    "failed" => CompactionStatus::Failed,
+    "cancelled" | "canceled" => CompactionStatus::Cancelled,
+    other => CompactionStatus::Other(other.to_string()),
+  })
+}
+
+fn parse_content_patch(value: Option<&serde_json::Value>) -> CompactionPatch<Vec<ContentBlock>> {
+  match value {
+    None => CompactionPatch::Omitted,
+    Some(value) if value.is_null() => CompactionPatch::Clear,
+    Some(value) => serde_json::from_value::<Vec<ContentBlock>>(value.clone())
+      .map(CompactionPatch::Value)
+      .unwrap_or(CompactionPatch::Omitted),
+  }
+}
+
+fn parse_string_patch(value: Option<&serde_json::Value>) -> CompactionPatch<String> {
+  match value {
+    None => CompactionPatch::Omitted,
+    Some(value) if value.is_null() => CompactionPatch::Clear,
+    Some(value) => value
+      .as_str()
+      .map(|value| CompactionPatch::Value(value.to_string()))
+      .unwrap_or(CompactionPatch::Omitted),
+  }
+}
+
+fn agent_event_from_session_update_value(update: &serde_json::Value) -> Option<AgentEvent> {
+  let kind = update
+    .get("sessionUpdate")
+    .and_then(serde_json::Value::as_str)?;
+  match kind {
+    "compaction_update" => Some(AgentEvent::CompactionUpdate(CompactionUpdate {
+      compaction_id: update.get("compactionId")?.as_str()?.to_string(),
+      status: parse_compaction_status(update.get("status")?)?,
+      summary: parse_content_patch(update.get("summary")),
+      error: parse_string_patch(update.get("error")),
+    })),
+    "compaction_summary_chunk" => {
+      Some(AgentEvent::CompactionSummaryChunk(CompactionSummaryChunk {
+        compaction_id: update.get("compactionId")?.as_str()?.to_string(),
+        content: serde_json::from_value(update.get("content")?.clone()).ok()?,
+      }))
+    }
+    _ => serde_json::from_value::<AcpSessionUpdate>(update.clone())
+      .ok()
+      .map(AgentEvent::from),
+  }
+}
+
 /// Updates that mirror transcript content during a `session/load` replay.
 /// Config, mode, model and command updates stay useful and pass through.
 fn is_replayable_content(update: &AgentEvent) -> bool {
@@ -609,6 +731,8 @@ fn is_replayable_content(update: &AgentEvent) -> bool {
       | AgentEvent::ToolCall(_)
       | AgentEvent::ToolCallUpdate(_)
       | AgentEvent::Plan(_)
+      | AgentEvent::CompactionUpdate(_)
+      | AgentEvent::CompactionSummaryChunk(_)
   )
 }
 
@@ -625,7 +749,9 @@ fn session_update_kind(update: &AgentEvent) -> &'static str {
     AgentEvent::ConfigOptionUpdate(_) => "config_option_update",
     AgentEvent::SessionInfoUpdate(_) => "session_info_update",
     AgentEvent::UsageUpdate(_) => "usage_update",
-    _ => "unknown",
+    AgentEvent::CompactionUpdate(_) => "compaction_update",
+    AgentEvent::CompactionSummaryChunk(_) => "compaction_summary_chunk",
+    AgentEvent::Unknown => "unknown",
   }
 }
 
@@ -778,12 +904,27 @@ async fn run_driver(
   let result = Client
     .builder()
     .on_receive_notification(
-      async move |notification: SessionNotification, _cx| {
+      async move |notification: UntypedMessage, _connection: ConnectionTo<Agent>| {
+        if notification.method() != "session/update" {
+          return Ok(Handled::No {
+            message: (notification, _connection),
+            retry: false,
+          });
+        }
+        let Some(update_value) = notification.params().get("update") else {
+          return Ok(Handled::Yes);
+        };
         // Codex-style agents run commands themselves and stream the output
         // through tool-call metadata; feed it into the terminal store even
         // during a replay, so reloaded conversations keep their output.
-        crate::terminal::inspect_session_update(&term_meta, &notification.update);
-        let kind = session_update_kind(&notification.update);
+        if let Ok(update) = serde_json::from_value::<AcpSessionUpdate>(update_value.clone()) {
+          crate::terminal::inspect_session_update(&term_meta, &update);
+        }
+        let Some(event) = agent_event_from_session_update_value(update_value) else {
+          log::debug!("[acp] session/update kind=unknown");
+          return Ok(Handled::Yes);
+        };
+        let kind = session_update_kind(&event);
         if let Ok(mut last) = last_session_update_for_notifications.lock() {
           *last = Some(LastSessionUpdate {
             received_at: Instant::now(),
@@ -791,11 +932,11 @@ async fn run_driver(
           });
         }
         log::debug!("[acp] session/update kind={kind}");
-        if replaying_gate.load(Ordering::Relaxed) && is_replayable_content(&notification.update) {
-          return Ok(());
+        if replaying_gate.load(Ordering::Relaxed) && is_replayable_content(&event) {
+          return Ok(Handled::Yes);
         }
-        let _ = event_tx_inner.send(notification.update).await;
-        Ok(())
+        let _ = event_tx_inner.send(event).await;
+        Ok(Handled::Yes)
       },
       agent_client_protocol::on_receive_notification!(),
     )
@@ -1023,10 +1164,24 @@ async fn run_driver(
             .write_text_file(true),
         )
         .terminal(true);
-      let init = connection
-        .send_request(InitializeRequest::new(ProtocolVersion::V1).client_capabilities(capabilities))
-        .block_task()
-        .await?;
+      let mut initialize_params = serde_json::to_value(
+        InitializeRequest::new(ProtocolVersion::V1).client_capabilities(capabilities),
+      )?;
+      if let Some(capabilities) = initialize_params
+        .get_mut("clientCapabilities")
+        .and_then(serde_json::Value::as_object_mut)
+      {
+        capabilities.insert(
+          "session".to_string(),
+          serde_json::json!({ "compaction": {} }),
+        );
+      }
+      let init: InitializeResponse = serde_json::from_value(
+        connection
+          .send_request(UntypedMessage::new("initialize", initialize_params)?)
+          .block_task()
+          .await?,
+      )?;
       let info = AgentInitInfo {
         name: init.agent_info.as_ref().map(|i| i.name.clone()),
         version: init.agent_info.as_ref().map(|i| i.version.clone()),
@@ -1348,9 +1503,50 @@ mod tests {
       "tool_call_update"
     );
     assert_eq!(
+      session_update_kind(&AgentEvent::CompactionUpdate(CompactionUpdate {
+        compaction_id: "c1".to_string(),
+        status: CompactionStatus::InProgress,
+        summary: CompactionPatch::Omitted,
+        error: CompactionPatch::Omitted,
+      })),
+      "compaction_update"
+    );
+    assert_eq!(
       prompt_response_log_label(&Ok(PromptResponse::new(StopReason::EndTurn))),
       "stop_reason=EndTurn"
     );
+  }
+
+  #[test]
+  fn raw_compaction_updates_are_parsed_without_schema_support() {
+    let event = agent_event_from_session_update_value(&serde_json::json!({
+      "sessionUpdate": "compaction_update",
+      "compactionId": "cmp_001",
+      "status": "in_progress"
+    }))
+    .expect("compaction update");
+    assert!(matches!(
+      event,
+      AgentEvent::CompactionUpdate(CompactionUpdate {
+        compaction_id,
+        status: CompactionStatus::InProgress,
+        ..
+      }) if compaction_id == "cmp_001"
+    ));
+
+    let event = agent_event_from_session_update_value(&serde_json::json!({
+      "sessionUpdate": "compaction_summary_chunk",
+      "compactionId": "cmp_001",
+      "content": { "type": "text", "text": "summary" }
+    }))
+    .expect("compaction summary chunk");
+    assert!(matches!(
+      event,
+      AgentEvent::CompactionSummaryChunk(CompactionSummaryChunk {
+        compaction_id,
+        content: ContentBlock::Text(_),
+      }) if compaction_id == "cmp_001"
+    ));
   }
 
   #[test]

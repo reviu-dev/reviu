@@ -144,6 +144,7 @@ pub(crate) fn load_conversation_file(path: &std::path::Path) -> Option<LoadedCon
       }
       PersistedChatItem::Plan(p) => items.push(ChatItem::Plan(p)),
       PersistedChatItem::Thought(t) => items.push(ChatItem::Thought(t)),
+      PersistedChatItem::Compaction(c) => items.push(ChatItem::Compaction(c)),
       PersistedChatItem::Checkpoint(c) => items.push(ChatItem::Checkpoint(c)),
       PersistedChatItem::Permission(mut p) => {
         // The session that could answer is gone; a pending card must not

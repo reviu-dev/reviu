@@ -381,7 +381,7 @@ pub(crate) fn checkpoint_ref_before(items: &[ChatItem], idx: usize) -> Option<St
 pub(crate) fn hiding_turn_summary(items: &[ChatItem], idx: usize) -> Option<usize> {
   match items.get(idx)? {
     ChatItem::Message(m) if !matches!(m.role, ChatRole::Agent) => return None,
-    ChatItem::Checkpoint(_) | ChatItem::TurnSummary(_) => return None,
+    ChatItem::Checkpoint(_) | ChatItem::Compaction(_) | ChatItem::TurnSummary(_) => return None,
     _ => {}
   }
   let mut trailing_prose = matches!(

@@ -3643,6 +3643,75 @@ async fn usage_update_paints_header_status(cx: &mut gpui::TestAppContext) {
   });
 }
 
+#[gpui::test]
+async fn compaction_update_replaces_generating_with_loading_row(cx: &mut gpui::TestAppContext) {
+  let (panel, cx) = add_panel_window(cx);
+  panel.update(cx, |panel, cx| {
+    panel.status = Status::Ready;
+    panel.in_flight = true;
+    panel.inject_event_for_test(
+      AgentEvent::CompactionUpdate(agent_acp::CompactionUpdate {
+        compaction_id: "cmp-1".to_string(),
+        status: agent_acp::CompactionStatus::InProgress,
+        summary: agent_acp::CompactionPatch::Omitted,
+        error: agent_acp::CompactionPatch::Omitted,
+      }),
+      cx,
+    );
+    cx.notify();
+  });
+  cx.run_until_parked();
+
+  assert!(cx.debug_bounds("agent-chat-compaction").is_some());
+  assert!(
+    cx.debug_bounds("agent-chat-generating").is_none(),
+    "compaction owns the in-flight loading state"
+  );
+}
+
+#[gpui::test]
+async fn completed_compaction_can_expand_its_summary(cx: &mut gpui::TestAppContext) {
+  let (panel, cx) = add_panel_window(cx);
+  panel.update(cx, |panel, cx| {
+    panel.status = Status::Ready;
+    panel.inject_event_for_test(
+      AgentEvent::CompactionUpdate(agent_acp::CompactionUpdate {
+        compaction_id: "cmp-1".to_string(),
+        status: agent_acp::CompactionStatus::InProgress,
+        summary: agent_acp::CompactionPatch::Omitted,
+        error: agent_acp::CompactionPatch::Omitted,
+      }),
+      cx,
+    );
+    panel.inject_event_for_test(
+      AgentEvent::CompactionSummaryChunk(agent_acp::CompactionSummaryChunk {
+        compaction_id: "cmp-1".to_string(),
+        content: ContentBlock::Text(TextContent::new("Retained context")),
+      }),
+      cx,
+    );
+    panel.inject_event_for_test(
+      AgentEvent::CompactionUpdate(agent_acp::CompactionUpdate {
+        compaction_id: "cmp-1".to_string(),
+        status: agent_acp::CompactionStatus::Completed,
+        summary: agent_acp::CompactionPatch::Omitted,
+        error: agent_acp::CompactionPatch::Omitted,
+      }),
+      cx,
+    );
+    cx.notify();
+  });
+  cx.run_until_parked();
+  assert!(cx.debug_bounds("agent-chat-compaction-summary").is_none());
+
+  let toggle = cx
+    .debug_bounds("agent-chat-compaction-toggle")
+    .expect("compaction toggle");
+  cx.simulate_click(toggle.center(), gpui::Modifiers::default());
+  cx.run_until_parked();
+  assert!(cx.debug_bounds("agent-chat-compaction-summary").is_some());
+}
+
 #[test]
 fn usage_header_formats_context_percentage() {
   let usage = UsageSnapshot {
@@ -3947,6 +4016,7 @@ fn item_kinds(items: &[ChatItem]) -> Vec<&'static str> {
       ChatItem::Thought(_) => "thought",
       ChatItem::Plan(_) => "plan",
       ChatItem::Permission(_) => "permission",
+      ChatItem::Compaction(_) => "compaction",
       ChatItem::Checkpoint(_) => "checkpoint",
       ChatItem::TurnSummary(_) => "turn-summary",
     })

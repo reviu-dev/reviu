@@ -18,7 +18,11 @@ fn turn_produced_reply(items: &[ChatItem]) -> bool {
         ChatRole::Agent => return true,
         ChatRole::System => {}
       },
-      ChatItem::Tool(_) | ChatItem::Thought(_) | ChatItem::Plan(_) | ChatItem::Permission(_) => {
+      ChatItem::Tool(_)
+      | ChatItem::Thought(_)
+      | ChatItem::Plan(_)
+      | ChatItem::Permission(_)
+      | ChatItem::Compaction(_) => {
         return true;
       }
       ChatItem::Checkpoint(_) | ChatItem::TurnSummary(_) => {}
@@ -263,7 +267,15 @@ impl AgentChatPanel {
       AgentEvent::AvailableCommandsUpdate(update) => {
         self.available_commands = update.available_commands;
       }
-      _ => {}
+      AgentEvent::CompactionUpdate(update) => {
+        self.apply_compaction_update(update);
+        self.sync_list_count();
+        self.mark_last_item_changed();
+      }
+      AgentEvent::CompactionSummaryChunk(chunk) => {
+        self.apply_compaction_summary_chunk(chunk);
+      }
+      AgentEvent::UserMessageChunk(_) | AgentEvent::Unknown => {}
     }
   }
 

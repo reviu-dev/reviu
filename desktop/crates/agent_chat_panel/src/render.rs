@@ -3443,6 +3443,68 @@ impl AgentChatPanel {
     }
   }
 
+  fn render_compaction(
+    &self,
+    idx: usize,
+    compaction: &CompactionView,
+    theme: &gpui_component::Theme,
+    cx: &mut Context<Self>,
+  ) -> gpui::AnyElement {
+    let label = match compaction.status {
+      CompactionStatusView::InProgress => "Compacting context...",
+      CompactionStatusView::Completed => "Context compacted",
+      CompactionStatusView::Failed => "Compaction failed",
+      CompactionStatusView::Cancelled => "Compaction cancelled",
+      CompactionStatusView::Other => "Context compaction updated",
+    };
+    let can_expand = !compaction.summary.trim().is_empty();
+    let mut button = Button::new(("agent-chat-compaction-toggle", idx))
+      .debug_selector(|| "agent-chat-compaction-toggle".to_string())
+      .label(label)
+      .xsmall()
+      .ghost()
+      .loading(compaction.status == CompactionStatusView::InProgress)
+      .disabled(compaction.status == CompactionStatusView::InProgress || !can_expand)
+      .icon(
+        gpui_component::Icon::new(UiIconName::History)
+          .size_3()
+          .text_color(theme.muted_foreground),
+      );
+    if can_expand && compaction.status != CompactionStatusView::InProgress {
+      button = button.on_click(cx.listener(move |panel, _, _, cx| {
+        panel.toggle_compaction_expanded(idx, cx);
+      }));
+    }
+
+    v_flex()
+      .debug_selector(|| "agent-chat-compaction".to_string())
+      .gap_1()
+      .items_start()
+      .child(button)
+      .when_some(compaction.error.clone(), |this, error| {
+        this.child(div().text_xs().text_color(theme.danger).child(error))
+      })
+      .when(can_expand && compaction.expanded, |this| {
+        this.child(
+          div()
+            .debug_selector(|| "agent-chat-compaction-summary".to_string())
+            .w_full()
+            .rounded(px(6.))
+            .border_1()
+            .border_color(theme.border)
+            .bg(theme.secondary.opacity(0.35))
+            .p_2()
+            .child(markdown_view(
+              ("agent-chat-compaction-md", idx),
+              compaction.summary.clone(),
+              &self.markdown_extensions,
+              cx,
+            )),
+        )
+      })
+      .into_any_element()
+  }
+
   fn render_item_at(
     &mut self,
     idx: usize,
@@ -3467,6 +3529,7 @@ impl AgentChatPanel {
             role: ChatRole::User | ChatRole::ReviewExport,
             ..
           }) | ChatItem::Checkpoint(_)
+            | ChatItem::Compaction(_)
         )
       })
       .unwrap_or(false);
@@ -3889,6 +3952,16 @@ impl AgentChatPanel {
       ChatItem::Plan(p) => {
         timeline_row_with_color(render_plan(p, theme), theme, theme.primary, is_last_row)
       }
+      ChatItem::Compaction(compaction) => timeline_row_with_color(
+        self.render_compaction(idx, compaction, theme, cx),
+        theme,
+        if compaction.status == CompactionStatusView::InProgress {
+          theme.warning
+        } else {
+          theme.muted_foreground
+        },
+        is_last_row,
+      ),
       ChatItem::Thought(t) => {
         let span = tool_group_span(&self.items, idx);
         match span {

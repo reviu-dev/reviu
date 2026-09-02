@@ -37,8 +37,8 @@ pub use crate::store::ConversationStore;
 use crate::store::SaveRequest;
 
 use agent_acp::{
-  AgentEvent, AgentSession, AuthMethodInfo, BackendAvailability, BackendConfig,
-  PermissionOptionKind, PermissionPrompt,
+  AgentEvent, AgentSession, AuthMethodInfo, BackendAvailability, BackendConfig, CompactionPatch,
+  CompactionStatus, CompactionUpdate, PermissionOptionKind, PermissionPrompt,
 };
 use agent_client_protocol::schema::{
   ContentBlock, EmbeddedResource, EmbeddedResourceResource, Plan, PlanEntryPriority,
@@ -484,6 +484,22 @@ fn default_thought_collapsed() -> bool {
   true
 }
 
+fn content_block_text(block: &ContentBlock) -> String {
+  match block {
+    ContentBlock::Text(text) => text.text.clone(),
+    _ => String::new(),
+  }
+}
+
+fn content_blocks_text(blocks: &[ContentBlock]) -> String {
+  blocks
+    .iter()
+    .map(content_block_text)
+    .filter(|text| !text.is_empty())
+    .collect::<Vec<_>>()
+    .join("\n")
+}
+
 #[derive(Clone, Debug)]
 enum ChatItem {
   Message(ChatMessage),
@@ -491,8 +507,41 @@ enum ChatItem {
   Permission(Box<PermissionItem>),
   Plan(PlanView),
   Thought(ThoughtView),
+  Compaction(CompactionView),
   Checkpoint(CheckpointMarker),
   TurnSummary(TurnSummaryView),
+}
+
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+struct CompactionView {
+  id: String,
+  status: CompactionStatusView,
+  summary: String,
+  #[serde(default)]
+  error: Option<String>,
+  #[serde(skip)]
+  expanded: bool,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+enum CompactionStatusView {
+  InProgress,
+  Completed,
+  Failed,
+  Cancelled,
+  Other,
+}
+
+impl From<CompactionStatus> for CompactionStatusView {
+  fn from(status: CompactionStatus) -> Self {
+    match status {
+      CompactionStatus::InProgress => Self::InProgress,
+      CompactionStatus::Completed => Self::Completed,
+      CompactionStatus::Failed => Self::Failed,
+      CompactionStatus::Cancelled => Self::Cancelled,
+      CompactionStatus::Other(_) => Self::Other,
+    }
+  }
 }
 
 /// Working-tree snapshot taken before the prompt that follows it.
@@ -541,6 +590,7 @@ enum PersistedChatItem {
   Tool(ToolCallView),
   Plan(PlanView),
   Thought(ThoughtView),
+  Compaction(CompactionView),
   Checkpoint(CheckpointMarker),
   Permission(Box<PermissionItem>),
   TurnSummary(TurnSummaryView),
@@ -1992,7 +2042,8 @@ impl AgentChatPanel {
   fn extras_after_kind(&self) -> Option<ExtraAfterKind> {
     if matches!(self.status, Status::Error(_)) {
       Some(ExtraAfterKind::Error)
-    } else if matches!(self.status, Status::Connecting) || self.in_flight {
+    } else if matches!(self.status, Status::Connecting) || (self.in_flight && !self.is_compacting())
+    {
       Some(ExtraAfterKind::Generating)
     } else {
       None
@@ -2080,6 +2131,88 @@ impl AgentChatPanel {
       }
     }
     self.items.push(ChatItem::Plan(view));
+  }
+
+  fn apply_compaction_update(&mut self, update: CompactionUpdate) {
+    self.flush_turn_buffers();
+    let status = CompactionStatusView::from(update.status);
+    let summary = match update.summary {
+      CompactionPatch::Omitted => None,
+      CompactionPatch::Clear => Some(String::new()),
+      CompactionPatch::Value(blocks) => Some(content_blocks_text(&blocks)),
+    };
+    let error = match update.error {
+      CompactionPatch::Omitted => None,
+      CompactionPatch::Clear => Some(None),
+      CompactionPatch::Value(error) => Some(Some(error)),
+    };
+
+    for (ix, item) in self.items.iter_mut().enumerate().rev() {
+      let ChatItem::Compaction(compaction) = item else {
+        continue;
+      };
+      if compaction.id != update.compaction_id {
+        continue;
+      }
+      compaction.status = status;
+      if let Some(summary) = summary.as_ref() {
+        compaction.summary = summary.clone();
+      }
+      if let Some(error) = error.as_ref() {
+        compaction.error = error.clone();
+      }
+      let list_ix = self.list_ix_for_item(ix);
+      self.mark_item_changed_at(list_ix);
+      return;
+    }
+
+    self.items.push(ChatItem::Compaction(CompactionView {
+      id: update.compaction_id,
+      status,
+      summary: summary.unwrap_or_default(),
+      error: error.unwrap_or(None),
+      expanded: false,
+    }));
+  }
+
+  fn apply_compaction_summary_chunk(&mut self, chunk: agent_acp::CompactionSummaryChunk) {
+    let text = content_block_text(&chunk.content);
+    if text.is_empty() {
+      return;
+    }
+    for (ix, item) in self.items.iter_mut().enumerate().rev() {
+      let ChatItem::Compaction(compaction) = item else {
+        continue;
+      };
+      if compaction.id != chunk.compaction_id {
+        continue;
+      }
+      compaction.summary.push_str(&text);
+      let list_ix = self.list_ix_for_item(ix);
+      self.mark_item_changed_at(list_ix);
+      return;
+    }
+  }
+
+  fn toggle_compaction_expanded(&mut self, idx: usize, cx: &mut Context<Self>) {
+    if let Some(ChatItem::Compaction(compaction)) = self.items.get_mut(idx) {
+      compaction.expanded = !compaction.expanded;
+      let list_ix = self.list_ix_for_item(idx);
+      self.mark_item_changed_at(list_ix);
+      cx.notify();
+    }
+  }
+
+  fn is_compacting(&self) -> bool {
+    self.items.last().is_some_and(|item| {
+      matches!(
+        item,
+        ChatItem::Compaction(CompactionView {
+          status: CompactionStatusView::InProgress,
+          ..
+        })
+      )
+    })
   }
 
   /// Reload the mention candidates; the agent creates files as it works.
@@ -3239,6 +3372,7 @@ impl AgentChatPanel {
         ChatItem::Tool(t) => PersistedChatItem::Tool(t.clone()),
         ChatItem::Plan(p) => PersistedChatItem::Plan(p.clone()),
         ChatItem::Thought(t) => PersistedChatItem::Thought(t.clone()),
+        ChatItem::Compaction(c) => PersistedChatItem::Compaction(c.clone()),
         ChatItem::Checkpoint(c) => PersistedChatItem::Checkpoint(c.clone()),
         ChatItem::Permission(p) => PersistedChatItem::Permission(p.clone()),
         ChatItem::TurnSummary(s) => PersistedChatItem::TurnSummary(s.clone()),
