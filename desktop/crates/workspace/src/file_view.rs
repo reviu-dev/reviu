@@ -222,6 +222,7 @@ pub(crate) fn render_file_title_with_status(
     .gap_2()
     .min_w_0()
     .flex_1()
+    .overflow_hidden()
     .child(
       file_icon_path_for_path_with_theme(path, &theme)
         .map(|icon| img(icon).size(px(FILE_ICON_SIZE_PX)).into_any_element())

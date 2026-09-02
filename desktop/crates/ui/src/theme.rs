@@ -405,6 +405,24 @@ impl Theme {
       }
     }
   }
+
+  pub fn conflict_block_stripe(&self) -> Hsla {
+    if self.is_dark {
+      Hsla {
+        h: 4.0 / 360.0,
+        s: 0.72,
+        l: 0.58,
+        a: 1.0,
+      }
+    } else {
+      Hsla {
+        h: 4.0 / 360.0,
+        s: 0.72,
+        l: 0.52,
+        a: 1.0,
+      }
+    }
+  }
 }
 
 impl Default for Theme {

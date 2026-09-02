@@ -867,6 +867,7 @@ pub struct Editor {
   /// Which split pane owns the current hover state.
   pub(crate) hovered_from_primary: bool,
   pub hovered_conflict_start_line: Option<usize>,
+  selected_conflict_start_line: Option<usize>,
   pending_conflict_reveal_start_line: Option<usize>,
   conflict_cache: RwLock<ConflictCache>,
   pub last_mouse_position: Option<Point<Pixels>>,
@@ -1356,6 +1357,7 @@ impl Editor {
       hovered_group_id: None,
       hovered_from_primary: true,
       hovered_conflict_start_line: None,
+      selected_conflict_start_line: None,
       pending_conflict_reveal_start_line: None,
       conflict_cache: RwLock::new(ConflictCache::default()),
       last_mouse_position: None,
@@ -1517,6 +1519,7 @@ impl Editor {
       self.block_map = ProjectionBlockMap::default();
       self.projection = None;
       self.selected_hunk_group_id = None;
+      self.selected_conflict_start_line = None;
     }
     self.word_diff_cache = WordDiffCache::default();
     self.virtual_line_layouts.clear();
@@ -7087,6 +7090,7 @@ impl Editor {
     self.marked_range = None;
     self.hovered_group_id = None;
     self.hovered_conflict_start_line = None;
+    self.selected_conflict_start_line = None;
     self.last_mouse_position = None;
     self.git_jobs.clear();
     self.git_op_in_flight = false;
@@ -7281,9 +7285,15 @@ impl Editor {
     Some(regions.len().saturating_sub(1))
   }
 
+  fn navigated_conflict_index(&self, regions: &[ConflictRegion], cx: &App) -> Option<usize> {
+    self
+      .selected_conflict_index(regions)
+      .or_else(|| self.active_conflict_index(regions, cx))
+  }
+
   pub fn conflict_navigation_state(&self, cx: &App) -> Option<ConflictNavigationState> {
     let regions = self.conflict_regions(cx);
-    let active_index = self.active_conflict_index(regions.as_ref(), cx)?;
+    let active_index = self.navigated_conflict_index(regions.as_ref(), cx)?;
     let active_start_line = regions[active_index].start_line;
 
     Some(ConflictNavigationState {
@@ -7306,13 +7316,20 @@ impl Editor {
       .map(|region| region.start_line)
   }
 
+  fn selected_conflict_index(&self, regions: &[ConflictRegion]) -> Option<usize> {
+    let selected = self.selected_conflict_start_line?;
+    regions
+      .iter()
+      .position(|region| region.start_line == selected)
+  }
+
   pub(crate) fn highlighted_conflict_doc_range(&self, cx: &App) -> Option<Range<usize>> {
     let regions = self.conflict_regions(cx);
     if regions.len() <= 1 {
       return None;
     }
-    let active_index = self.active_conflict_index(regions.as_ref(), cx)?;
-    let region = &regions[active_index];
+    let selected_index = self.selected_conflict_index(regions.as_ref())?;
+    let region = &regions[selected_index];
     Some(region.start_line..region.replace_end_line)
   }
 
@@ -7513,6 +7530,7 @@ impl Editor {
 
     self.hovered_group_id = None;
     self.hovered_conflict_start_line = None;
+    self.selected_conflict_start_line = None;
     self.last_mouse_position = None;
     self.is_dirty = true;
     self.schedule_diff_recompute(cx);
@@ -7526,7 +7544,7 @@ impl Editor {
     cx: &mut Context<Self>,
   ) {
     let regions = self.conflict_regions(cx);
-    let Some(active_index) = self.active_conflict_index(regions.as_ref(), cx) else {
+    let Some(active_index) = self.navigated_conflict_index(regions.as_ref(), cx) else {
       return;
     };
 
@@ -7540,7 +7558,9 @@ impl Editor {
       }
       ConflictNavigationDirection::Next => (active_index + 1) % regions.len(),
     };
-    self.reveal_conflict_start_line(regions[target_index].start_line, cx);
+    let target_start_line = regions[target_index].start_line;
+    self.reveal_conflict_start_line(target_start_line, cx);
+    self.selected_conflict_start_line = Some(target_start_line);
   }
 
   fn ordered_hunk_display_lines(&self) -> Vec<(Arc<str>, usize)> {
@@ -10737,9 +10757,11 @@ pub mod tests {
     );
 
     ctx.editor.update(&mut ctx.cx, |editor, cx| {
-      assert_eq!(editor.highlighted_conflict_doc_range(cx), Some(1..6));
+      assert!(editor.highlighted_conflict_doc_range(cx).is_none());
       editor.navigate_conflict(ConflictNavigationDirection::Next, cx);
       assert_eq!(editor.highlighted_conflict_doc_range(cx), Some(7..12));
+      editor.navigate_conflict(ConflictNavigationDirection::Previous, cx);
+      assert_eq!(editor.highlighted_conflict_doc_range(cx), Some(1..6));
     });
   }
 
@@ -11510,6 +11532,7 @@ pub mod tests {
           hovered_group_id: None,
           hovered_from_primary: true,
           hovered_conflict_start_line: None,
+          selected_conflict_start_line: None,
           pending_conflict_reveal_start_line: None,
           conflict_cache: RwLock::new(ConflictCache::default()),
           last_mouse_position: None,

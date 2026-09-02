@@ -63,51 +63,23 @@ fn conflict_background(theme: &ui::Theme, kind: ConflictLineKind) -> Option<gpui
   }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum ConflictBlockKind {
-  Current,
-  Incoming,
+fn conflict_stripe_color(theme: &ui::Theme, _kind: ConflictLineKind) -> gpui::Hsla {
+  theme.conflict_block_stripe()
 }
 
-fn conflict_stripe_color(theme: &ui::Theme, kind: ConflictLineKind) -> Option<gpui::Hsla> {
-  match kind {
-    ConflictLineKind::Current | ConflictLineKind::CurrentMarker => {
-      Some(theme.current_conflict_stripe())
-    }
-    ConflictLineKind::Base | ConflictLineKind::BaseMarker | ConflictLineKind::Divider => None,
-    ConflictLineKind::Incoming | ConflictLineKind::IncomingMarker => {
-      Some(theme.incoming_conflict_stripe())
-    }
-  }
+fn inactive_conflict_border_colors(theme: &ui::Theme) -> (gpui::Hsla, gpui::Hsla) {
+  (
+    theme.current_conflict_stripe(),
+    theme.incoming_conflict_stripe(),
+  )
 }
 
-fn conflict_block_kind(kind: ConflictLineKind) -> Option<ConflictBlockKind> {
-  match kind {
-    ConflictLineKind::Current | ConflictLineKind::CurrentMarker => Some(ConflictBlockKind::Current),
-    ConflictLineKind::Incoming | ConflictLineKind::IncomingMarker => {
-      Some(ConflictBlockKind::Incoming)
-    }
-    ConflictLineKind::Base | ConflictLineKind::BaseMarker | ConflictLineKind::Divider => None,
-  }
-}
-
-fn conflict_border_color(theme: &ui::Theme, kind: ConflictLineKind) -> Option<gpui::Hsla> {
-  match conflict_block_kind(kind)? {
-    ConflictBlockKind::Current => Some(theme.current_conflict_stripe()),
-    ConflictBlockKind::Incoming => Some(theme.incoming_conflict_stripe()),
-  }
-}
-
-fn conflict_border_edges(
+fn inactive_conflict_border_edges(
   previous: Option<ConflictLineKind>,
-  current: ConflictLineKind,
+  _current: ConflictLineKind,
   next: Option<ConflictLineKind>,
-) -> Option<(bool, bool)> {
-  let current_block = conflict_block_kind(current)?;
-  Some((
-    previous.and_then(conflict_block_kind) != Some(current_block),
-    next.and_then(conflict_block_kind) != Some(current_block),
-  ))
+) -> (bool, bool) {
+  (previous.is_none(), next.is_none())
 }
 
 fn active_conflict_border_edges(
@@ -600,28 +572,34 @@ impl Element for GutterElement {
             next_doc_line,
             active_conflict_doc_range.as_ref(),
           );
-          let inactive_edges = active_edges.is_none().then(|| {
-            let previous_conflict_kind = display_idx.checked_sub(1).and_then(|idx| {
-              conflict_kind_for_display_line(
-                idx,
+          let border = active_edges
+            .map(|edges| ((active_hunk_focus_color, active_hunk_focus_color), edges))
+            .or_else(|| {
+              let previous_conflict_kind = display_idx.checked_sub(1).and_then(|idx| {
+                conflict_kind_for_display_line(
+                  idx,
+                  projection.as_deref(),
+                  doc_line_count,
+                  &conflict_line_kinds,
+                )
+              });
+              let next_conflict_kind = conflict_kind_for_display_line(
+                display_idx + 1,
                 projection.as_deref(),
                 doc_line_count,
                 &conflict_line_kinds,
-              )
+              );
+              Some((
+                inactive_conflict_border_colors(&theme),
+                inactive_conflict_border_edges(
+                  previous_conflict_kind,
+                  conflict_kind,
+                  next_conflict_kind,
+                ),
+              ))
             });
-            let next_conflict_kind = conflict_kind_for_display_line(
-              display_idx + 1,
-              projection.as_deref(),
-              doc_line_count,
-              &conflict_line_kinds,
-            );
-            conflict_border_edges(previous_conflict_kind, conflict_kind, next_conflict_kind)
-          });
-          let border = active_edges
-            .map(|edges| (active_hunk_focus_color, edges))
-            .or_else(|| conflict_border_color(&theme, conflict_kind).zip(inactive_edges.flatten()));
 
-          if let Some((color, (is_top, is_bottom))) = border {
+          if let Some(((top_color, bottom_color), (is_top, is_bottom))) = border {
             let border_thickness = px(1.0);
             let y = line_y(bounds.top(), line_height, display_idx, scroll_offset);
 
@@ -631,7 +609,7 @@ impl Element for GutterElement {
                   point(bounds.left(), y),
                   size(bounds.size.width, border_thickness),
                 ),
-                color,
+                top_color,
               ));
             }
 
@@ -641,7 +619,7 @@ impl Element for GutterElement {
                   point(bounds.left(), y + line_height - border_thickness),
                   size(bounds.size.width, border_thickness),
                 ),
-                color,
+                bottom_color,
               ));
             }
           }
@@ -658,7 +636,7 @@ impl Element for GutterElement {
             None
           } else {
             match conflict_kind {
-              Some(conflict_kind) => conflict_stripe_color(&theme, conflict_kind),
+              Some(conflict_kind) => Some(conflict_stripe_color(&theme, conflict_kind)),
               None => group_id.as_ref().and_then(|group_id| {
                 group_kinds.get(group_id).map(|kind| match self.view {
                   GutterView::Inline => match kind {
@@ -1000,43 +978,22 @@ mod tests {
   use crate::projection::HunkState;
 
   #[test]
-  fn conflict_stripe_color_neutral_lines_are_none() {
+  fn conflict_stripe_color_marks_the_whole_conflict_as_one_block() {
     let theme = ui::Theme::dark();
-    assert_eq!(
-      conflict_stripe_color(&theme, ConflictLineKind::BaseMarker),
-      None
-    );
-    assert_eq!(conflict_stripe_color(&theme, ConflictLineKind::Base), None);
-    assert_eq!(
-      conflict_stripe_color(&theme, ConflictLineKind::Divider),
-      None
-    );
-  }
-
-  #[test]
-  fn conflict_stripe_color_current_uses_current_conflict_stripe() {
-    let theme = ui::Theme::dark();
-    assert_eq!(
-      conflict_stripe_color(&theme, ConflictLineKind::Current),
-      Some(theme.current_conflict_stripe())
-    );
-    assert_eq!(
-      conflict_stripe_color(&theme, ConflictLineKind::CurrentMarker),
-      Some(theme.current_conflict_stripe())
-    );
-  }
-
-  #[test]
-  fn conflict_stripe_color_incoming_uses_incoming_conflict_stripe() {
-    let theme = ui::Theme::dark();
-    assert_eq!(
-      conflict_stripe_color(&theme, ConflictLineKind::Incoming),
-      Some(theme.incoming_conflict_stripe())
-    );
-    assert_eq!(
-      conflict_stripe_color(&theme, ConflictLineKind::IncomingMarker),
-      Some(theme.incoming_conflict_stripe())
-    );
+    for kind in [
+      ConflictLineKind::CurrentMarker,
+      ConflictLineKind::Current,
+      ConflictLineKind::BaseMarker,
+      ConflictLineKind::Base,
+      ConflictLineKind::Divider,
+      ConflictLineKind::Incoming,
+      ConflictLineKind::IncomingMarker,
+    ] {
+      assert_eq!(
+        conflict_stripe_color(&theme, kind),
+        theme.conflict_block_stripe()
+      );
+    }
   }
 
   #[test]
@@ -1049,8 +1006,8 @@ mod tests {
       ConflictLineKind::Incoming,
       ConflictLineKind::IncomingMarker,
     ] {
-      assert_eq!(conflict_stripe_color(&dark, kind).expect("dark").a, 1.0);
-      assert_eq!(conflict_stripe_color(&light, kind).expect("light").a, 1.0);
+      assert_eq!(conflict_stripe_color(&dark, kind).a, 1.0);
+      assert_eq!(conflict_stripe_color(&light, kind).a, 1.0);
     }
   }
 
@@ -1115,6 +1072,42 @@ mod tests {
   }
 
   #[test]
+  fn inactive_conflict_border_edges_wrap_the_whole_conflict() {
+    assert_eq!(
+      inactive_conflict_border_edges(
+        None,
+        ConflictLineKind::CurrentMarker,
+        Some(ConflictLineKind::Current),
+      ),
+      (true, false)
+    );
+    assert_eq!(
+      inactive_conflict_border_edges(
+        Some(ConflictLineKind::Current),
+        ConflictLineKind::BaseMarker,
+        Some(ConflictLineKind::Base),
+      ),
+      (false, false)
+    );
+    assert_eq!(
+      inactive_conflict_border_edges(
+        Some(ConflictLineKind::Divider),
+        ConflictLineKind::Incoming,
+        Some(ConflictLineKind::IncomingMarker),
+      ),
+      (false, false)
+    );
+    assert_eq!(
+      inactive_conflict_border_edges(
+        Some(ConflictLineKind::Incoming),
+        ConflictLineKind::IncomingMarker,
+        None,
+      ),
+      (false, true)
+    );
+  }
+
+  #[test]
   fn active_conflict_border_edges_wrap_the_whole_conflict() {
     let active_range = 2..9;
     assert_eq!(
@@ -1136,42 +1129,6 @@ mod tests {
     assert_eq!(
       active_conflict_border_edges(Some(1), Some(9), Some(10), Some(&active_range)),
       None
-    );
-  }
-
-  #[test]
-  fn conflict_border_edges_split_current_and_incoming_blocks() {
-    assert_eq!(
-      conflict_border_edges(
-        None,
-        ConflictLineKind::CurrentMarker,
-        Some(ConflictLineKind::Current),
-      ),
-      Some((true, false))
-    );
-    assert_eq!(
-      conflict_border_edges(
-        Some(ConflictLineKind::CurrentMarker),
-        ConflictLineKind::Current,
-        Some(ConflictLineKind::Divider),
-      ),
-      Some((false, true))
-    );
-    assert_eq!(
-      conflict_border_edges(
-        Some(ConflictLineKind::Divider),
-        ConflictLineKind::Incoming,
-        Some(ConflictLineKind::IncomingMarker),
-      ),
-      Some((true, false))
-    );
-    assert_eq!(
-      conflict_border_edges(
-        Some(ConflictLineKind::Incoming),
-        ConflictLineKind::IncomingMarker,
-        None,
-      ),
-      Some((false, true))
     );
   }
 }

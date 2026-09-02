@@ -135,39 +135,19 @@ fn conflict_background(theme: &Theme, kind: ConflictLineKind) -> Option<gpui::Hs
   }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum ConflictBlockKind {
-  Current,
-  Incoming,
+fn inactive_conflict_border_colors(theme: &Theme) -> (gpui::Hsla, gpui::Hsla) {
+  (
+    theme.current_conflict_stripe(),
+    theme.incoming_conflict_stripe(),
+  )
 }
 
-fn conflict_block_kind(kind: ConflictLineKind) -> Option<ConflictBlockKind> {
-  match kind {
-    ConflictLineKind::Current | ConflictLineKind::CurrentMarker => Some(ConflictBlockKind::Current),
-    ConflictLineKind::Incoming | ConflictLineKind::IncomingMarker => {
-      Some(ConflictBlockKind::Incoming)
-    }
-    ConflictLineKind::Base | ConflictLineKind::BaseMarker | ConflictLineKind::Divider => None,
-  }
-}
-
-fn conflict_border_color(theme: &Theme, kind: ConflictLineKind) -> Option<gpui::Hsla> {
-  match conflict_block_kind(kind)? {
-    ConflictBlockKind::Current => Some(theme.current_conflict_stripe()),
-    ConflictBlockKind::Incoming => Some(theme.incoming_conflict_stripe()),
-  }
-}
-
-fn conflict_border_edges(
+fn inactive_conflict_border_edges(
   previous: Option<ConflictLineKind>,
-  current: ConflictLineKind,
+  _current: ConflictLineKind,
   next: Option<ConflictLineKind>,
-) -> Option<(bool, bool)> {
-  let current_block = conflict_block_kind(current)?;
-  Some((
-    previous.and_then(conflict_block_kind) != Some(current_block),
-    next.and_then(conflict_block_kind) != Some(current_block),
-  ))
+) -> (bool, bool) {
+  (previous.is_none(), next.is_none())
 }
 
 fn active_conflict_border_edges(
@@ -1460,28 +1440,34 @@ impl Element for EditorElement {
           next_doc_line,
           active_conflict_doc_range.as_ref(),
         );
-        let inactive_edges = active_edges.is_none().then(|| {
-          let previous_conflict_kind = display_idx.checked_sub(1).and_then(|idx| {
-            conflict_kind_for_display_line(
-              idx,
+        let border = active_edges
+          .map(|edges| ((active_hunk_focus_color, active_hunk_focus_color), edges))
+          .or_else(|| {
+            let previous_conflict_kind = display_idx.checked_sub(1).and_then(|idx| {
+              conflict_kind_for_display_line(
+                idx,
+                projection.as_deref(),
+                doc_line_count,
+                &conflict_line_kinds,
+              )
+            });
+            let next_conflict_kind = conflict_kind_for_display_line(
+              display_idx + 1,
               projection.as_deref(),
               doc_line_count,
               &conflict_line_kinds,
-            )
+            );
+            Some((
+              inactive_conflict_border_colors(&theme),
+              inactive_conflict_border_edges(
+                previous_conflict_kind,
+                conflict_kind,
+                next_conflict_kind,
+              ),
+            ))
           });
-          let next_conflict_kind = conflict_kind_for_display_line(
-            display_idx + 1,
-            projection.as_deref(),
-            doc_line_count,
-            &conflict_line_kinds,
-          );
-          conflict_border_edges(previous_conflict_kind, conflict_kind, next_conflict_kind)
-        });
-        let border = active_edges
-          .map(|edges| (active_hunk_focus_color, edges))
-          .or_else(|| conflict_border_color(&theme, conflict_kind).zip(inactive_edges.flatten()));
 
-        if let Some((color, (is_top, is_bottom))) = border {
+        if let Some(((top_color, bottom_color), (is_top, is_bottom))) = border {
           let border_thickness = px(1.0);
           let y = line_y(bounds.top(), line_height, *display_idx, scroll_offset);
 
@@ -1491,7 +1477,7 @@ impl Element for EditorElement {
                 point(bounds.left(), y),
                 size(bounds.size.width, border_thickness),
               ),
-              color,
+              top_color,
             ));
           }
 
@@ -1501,7 +1487,7 @@ impl Element for EditorElement {
                 point(bounds.left(), y + line_height - border_thickness),
                 size(bounds.size.width, border_thickness),
               ),
-              color,
+              bottom_color,
             ));
           }
         }
@@ -2642,54 +2628,38 @@ mod tests {
   }
 
   #[test]
-  fn test_conflict_border_edges_split_current_and_incoming_blocks() {
+  fn test_inactive_conflict_border_edges_wrap_the_whole_conflict() {
     assert_eq!(
-      conflict_border_edges(
+      inactive_conflict_border_edges(
         None,
         ConflictLineKind::CurrentMarker,
         Some(ConflictLineKind::Current),
       ),
-      Some((true, false))
+      (true, false)
     );
     assert_eq!(
-      conflict_border_edges(
-        Some(ConflictLineKind::CurrentMarker),
-        ConflictLineKind::Current,
-        Some(ConflictLineKind::Divider),
-      ),
-      Some((false, true))
-    );
-    assert_eq!(
-      conflict_border_edges(
-        Some(ConflictLineKind::Divider),
-        ConflictLineKind::Incoming,
-        Some(ConflictLineKind::IncomingMarker),
-      ),
-      Some((true, false))
-    );
-    assert_eq!(
-      conflict_border_edges(
-        Some(ConflictLineKind::Incoming),
-        ConflictLineKind::IncomingMarker,
-        None,
-      ),
-      Some((false, true))
-    );
-    assert_eq!(
-      conflict_border_edges(
+      inactive_conflict_border_edges(
         Some(ConflictLineKind::Current),
         ConflictLineKind::BaseMarker,
         Some(ConflictLineKind::Base),
       ),
-      None
+      (false, false)
     );
     assert_eq!(
-      conflict_border_edges(
-        Some(ConflictLineKind::Base),
-        ConflictLineKind::Divider,
-        Some(ConflictLineKind::Incoming),
+      inactive_conflict_border_edges(
+        Some(ConflictLineKind::Divider),
+        ConflictLineKind::Incoming,
+        Some(ConflictLineKind::IncomingMarker),
       ),
-      None
+      (false, false)
+    );
+    assert_eq!(
+      inactive_conflict_border_edges(
+        Some(ConflictLineKind::Incoming),
+        ConflictLineKind::IncomingMarker,
+        None,
+      ),
+      (false, true)
     );
   }
 
