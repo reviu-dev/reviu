@@ -5676,36 +5676,13 @@ async fn a_single_tool_call_keeps_its_plain_row(cx: &mut gpui::TestAppContext) {
 #[gpui::test]
 async fn collapsed_tool_preview_footer_touches_the_preview_card(cx: &mut gpui::TestAppContext) {
   let (panel, cx) = add_panel_window(cx);
-  let lines: Vec<DiffLine> = (0..=MAX_DIFF_LINES_COLLAPSED)
-    .map(|ix| DiffLine {
-      kind: DiffLineKind::Added,
-      old_line: None,
-      new_line: Some(ix as u32 + 1),
-      text: format!("line {ix}"),
-      spans: Vec::new(),
-      no_newline: false,
-      syntax_spans: Vec::new(),
-    })
-    .collect();
-  let new_text = lines
-    .iter()
-    .map(|line| line.text.as_str())
-    .collect::<Vec<_>>()
-    .join("\n");
-  let mut tool = tool_view("long-diff", ToolKind::Edit, ToolCallStatus::Completed);
-  tool.diffs = vec![DiffSummary {
-    path: "src/lib.rs".to_string(),
-    old_text: None,
-    new_text,
-    added: lines.len() as u32,
-    removed: 0,
-    lines,
-    expanded: false,
-  }];
 
   panel.update(cx, |panel, cx| {
     panel.status = Status::Ready;
-    panel.items = vec![user_message("go"), ChatItem::Tool(tool)];
+    panel.items = vec![
+      user_message("go"),
+      ChatItem::Tool(long_diff_tool("long-diff")),
+    ];
     panel.sync_list_count();
     cx.notify();
   });
@@ -6036,6 +6013,36 @@ async fn editing_a_queued_message_swaps_it_with_the_draft(cx: &mut gpui::TestApp
   });
 }
 
+fn long_diff_tool(id: &str) -> ToolCallView {
+  let lines: Vec<DiffLine> = (0..=MAX_DIFF_LINES_COLLAPSED)
+    .map(|ix| DiffLine {
+      kind: DiffLineKind::Added,
+      old_line: None,
+      new_line: Some(ix as u32 + 1),
+      text: format!("line {ix}"),
+      spans: Vec::new(),
+      no_newline: false,
+      syntax_spans: Vec::new(),
+    })
+    .collect();
+  let new_text = lines
+    .iter()
+    .map(|line| line.text.as_str())
+    .collect::<Vec<_>>()
+    .join("\n");
+  let mut tool = tool_view(id, ToolKind::Edit, ToolCallStatus::Completed);
+  tool.diffs = vec![DiffSummary {
+    path: "src/lib.rs".to_string(),
+    old_text: None,
+    new_text,
+    added: lines.len() as u32,
+    removed: 0,
+    lines,
+    expanded: false,
+  }];
+  tool
+}
+
 #[gpui::test]
 async fn scrolling_away_shows_the_jump_to_bottom_pill(cx: &mut gpui::TestAppContext) {
   let (panel, cx) = add_panel_window(cx);
@@ -6082,6 +6089,71 @@ async fn scrolling_away_shows_the_jump_to_bottom_pill(cx: &mut gpui::TestAppCont
     cx.debug_bounds("agent-chat-jump-bottom").is_none(),
     "clicking returns to the tail and hides the pill"
   );
+}
+
+#[gpui::test]
+async fn jump_to_bottom_pill_blocks_transcript_buttons_beneath_it(cx: &mut gpui::TestAppContext) {
+  let (panel, cx) = add_panel_window(cx);
+  panel.update(cx, |panel, cx| {
+    panel.status = Status::Ready;
+    panel.items = (0..20)
+      .map(|ix| agent_message(&format!("message {ix}")))
+      .collect();
+    panel
+      .items
+      .push(ChatItem::Tool(long_diff_tool("long-diff")));
+    panel.sync_list_count();
+    cx.notify();
+  });
+  cx.run_until_parked();
+  panel.update(cx, |panel, cx| {
+    panel.messages_list.scroll_by(px(-120.));
+    cx.notify();
+  });
+  cx.run_until_parked();
+
+  for _ in 0..4 {
+    let pill = cx
+      .debug_bounds("agent-chat-jump-bottom")
+      .expect("pill painted once the reader leaves the tail");
+    let footer = cx
+      .debug_bounds("agent-chat-lines-footer")
+      .expect("line footer painted");
+    let scroll_delta = footer.center().y - pill.center().y;
+    if scroll_delta.as_f32().abs() <= 1.0 {
+      break;
+    }
+    panel.update(cx, |panel, cx| {
+      panel.messages_list.scroll_by(scroll_delta);
+      cx.notify();
+    });
+    cx.run_until_parked();
+  }
+
+  let pill_center = cx
+    .debug_bounds("agent-chat-jump-bottom")
+    .expect("pill painted")
+    .center();
+  let footer = cx
+    .debug_bounds("agent-chat-lines-footer")
+    .expect("line footer painted");
+  assert!(
+    footer.contains(&pill_center),
+    "the regression setup needs the footer under the jump pill: footer={footer:?}, pill_center={pill_center:?}"
+  );
+
+  cx.simulate_click(pill_center, gpui::Modifiers::default());
+  cx.run_until_parked();
+
+  panel.read_with(cx, |panel, _| {
+    let Some(ChatItem::Tool(tool)) = panel.items.last() else {
+      panic!("tool item remains present");
+    };
+    assert!(
+      !tool.diffs[0].expanded,
+      "clicking the jump pill must not expand the transcript button behind it"
+    );
+  });
 }
 
 #[gpui::test]

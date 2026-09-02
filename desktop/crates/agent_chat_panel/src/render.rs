@@ -2112,6 +2112,7 @@ impl Render for AgentChatPanel {
                         .rounded(px(999.))
                         .bg(theme.background)
                         .border_1()
+                        .block_mouse_except_scroll()
                         .border_color(theme.border)
                         .overflow_hidden()
                         .child(
