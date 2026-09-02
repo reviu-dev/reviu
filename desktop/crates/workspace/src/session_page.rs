@@ -16,8 +16,8 @@ use editor::{
 use editor::{ReviewCommentMode, ReviewCommentSide};
 use gpui::AnimationExt as _;
 use gpui::{
-  AnyElement, AnyWindowHandle, App, Context, Entity, FocusHandle, Focusable, PathPromptOptions,
-  Render, SharedString, Task, Window, div, prelude::*, px,
+  AnyElement, AnyWindowHandle, App, ClipboardItem, Context, Entity, FocusHandle, Focusable,
+  PathPromptOptions, Render, SharedString, Task, Window, div, prelude::*, px,
 };
 use gpui_component::{
   ActiveTheme as _, Disableable as _, Sizable as _, dialog::DialogFooter, h_flex,
@@ -379,6 +379,18 @@ impl SessionPage {
         }
         SessionListEvent::NewWorktreeSessionIn { repo_root, base } => {
           this.new_worktree_session_in(repo_root.clone(), base.clone(), window, cx)
+        }
+        SessionListEvent::RevealRepository { repo_root } => cx.reveal_path(repo_root),
+        SessionListEvent::CopyRepositoryPath { repo_root } => {
+          cx.write_to_clipboard(ClipboardItem::new_string(
+            repo_root.to_string_lossy().into_owned(),
+          ));
+          window.push_notification(Notification::info("Repository path copied"), cx);
+        }
+        SessionListEvent::RemoveRepository { repo_root } => {
+          if let Err(error) = this.forget_repository(repo_root.clone(), window, cx) {
+            window.push_notification(Notification::warning(error), cx);
+          }
         }
         SessionListEvent::Collapse => this.close_sidebar(cx),
         SessionListEvent::Selected { id } => this.select_session(id, window, cx),

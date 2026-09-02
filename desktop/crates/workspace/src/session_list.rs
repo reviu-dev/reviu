@@ -2,12 +2,15 @@
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::rc::Rc;
 
 use agent_chat_panel::ConversationMeta;
 use gpui::{
-  Anchor, Context, EventEmitter, IntoElement, Render, SharedString, Window, div, prelude::*, px,
+  Anchor, Context, DismissEvent, Entity, EventEmitter, Focusable as _, IntoElement, Render,
+  SharedString, Window, div, prelude::*, px,
 };
-use gpui_component::menu::{DropdownMenu as _, PopupMenuItem};
+use gpui_component::menu::{PopupMenu, PopupMenuItem};
+use gpui_component::popover::Popover;
 use gpui_component::scroll::ScrollableElement as _;
 use gpui_component::{ActiveTheme as _, Icon, Sizable as _, h_flex, v_flex};
 use ui::{Button, ButtonVariants as _, StatusThemeExt as _, UiIconName};
@@ -72,7 +75,7 @@ pub struct SessionRow {
 }
 
 pub enum SessionListEvent {
-  /// The section header's compose button: a session in THAT repo.
+  /// The section header's create menu: a session in THAT repo.
   NewSessionIn {
     repo_root: PathBuf,
   },
@@ -80,12 +83,21 @@ pub enum SessionListEvent {
   ToggleRepoCollapsed {
     repo_root: PathBuf,
   },
-  /// The section header's worktree button: a session whose agent works in its
-  /// own git worktree of THAT repo, started from `base`; `None` is the
-  /// repository's default branch.
+  /// The section header's create menu: a session whose agent works in its own
+  /// git worktree of THAT repo, started from `base`; `None` is the repository's
+  /// default branch.
   NewWorktreeSessionIn {
     repo_root: PathBuf,
     base: Option<String>,
+  },
+  RevealRepository {
+    repo_root: PathBuf,
+  },
+  CopyRepositoryPath {
+    repo_root: PathBuf,
+  },
+  RemoveRepository {
+    repo_root: PathBuf,
   },
   /// The collapse button in the header; the page owns the sidebar width.
   Collapse,
@@ -95,6 +107,11 @@ pub enum SessionListEvent {
   Deleted {
     id: String,
   },
+}
+
+#[derive(Default)]
+struct RepoMenuState {
+  menu: Option<Entity<PopupMenu>>,
 }
 
 pub struct SessionList {
@@ -111,6 +128,8 @@ pub struct SessionList {
   /// Every tracked repo, in stable order: sections render from this, so an
   /// emptied repo keeps its header (and its compose button).
   section_order: Vec<PathBuf>,
+  /// Keeps the section highlighted while one of its menus is open.
+  open_menu_repo: Option<PathBuf>,
 }
 
 impl SessionList {
@@ -123,6 +142,7 @@ impl SessionList {
       worktree_branches: HashMap::new(),
       collapsed_repos: std::collections::HashSet::new(),
       section_order: Vec::new(),
+      open_menu_repo: None,
     }
   }
 
@@ -265,7 +285,7 @@ impl SessionList {
 
 impl SessionList {
   /// A repo's section header: fold toggle, name, count when folded, and the
-  /// two create buttons that target THAT repo (session, worktree session).
+  /// hover actions that target THAT repo.
   fn render_repo_header(
     &self,
     repo_root: &Path,
@@ -280,15 +300,17 @@ impl SessionList {
       .unwrap_or_else(|| repo_root.to_string_lossy().into_owned())
       .into();
     let toggle_repo = repo_root.to_path_buf();
-    let compose_repo = repo_root.to_path_buf();
-    let worktree_repo = repo_root.to_path_buf();
+    let create_repo = repo_root.to_path_buf();
+    let options_repo = repo_root.to_path_buf();
     let group_name = SharedString::from(format!("repo-section-{}", repo_root.display()));
+    let menu_open = self.open_menu_repo.as_deref() == Some(repo_root);
 
     h_flex()
       .id(SharedString::from(format!(
         "session-repo-section-{}",
         repo_root.display()
       )))
+      .debug_selector(|| format!("session-repo-section-{}", repo_root.display()))
       .group(group_name.clone())
       .items_center()
       .gap_1()
@@ -298,6 +320,7 @@ impl SessionList {
       .py_1()
       .rounded(px(6.0))
       .cursor_pointer()
+      .when(menu_open, |this| this.bg(theme.secondary_hover))
       .hover(|this| this.bg(theme.secondary_hover))
       .on_click(cx.listener(move |_, _, _, cx| {
         cx.emit(SessionListEvent::ToggleRepoCollapsed {
@@ -335,119 +358,272 @@ impl SessionList {
         h_flex()
           .items_center()
           .gap_1()
-          .opacity(0.6)
-          .group_hover(group_name, |this| this.opacity(1.0))
+          .when(!menu_open, |this| this.invisible())
+          .group_hover(group_name, |this| this.visible())
           .child(
-            Button::new(SharedString::from(format!(
-              "session-repo-new-{}",
-              repo_root.display()
-            )))
-            .icon(UiIconName::SquarePen)
-            .ghost()
-            .compact()
-            .xsmall()
-            .tooltip("New session in this repository")
-            .on_click(cx.listener(move |_, _, _, cx| {
-              cx.stop_propagation();
-              cx.emit(SessionListEvent::NewSessionIn {
-                repo_root: compose_repo.clone(),
-              });
-            })),
-          )
-          .child(
-            // The wrapper keeps the dropdown's click from folding the section.
             div()
               .id(SharedString::from(format!(
-                "session-repo-worktree-wrap-{}",
-                worktree_repo.display()
+                "session-repo-create-wrap-{}",
+                create_repo.display()
               )))
               .on_click(cx.listener(|_, _, _, cx| cx.stop_propagation()))
-              .child(Self::render_worktree_button(worktree_repo, cx)),
+              .child(Self::render_create_button(create_repo, cx)),
+          )
+          .child(
+            div()
+              .id(SharedString::from(format!(
+                "session-repo-options-wrap-{}",
+                options_repo.display()
+              )))
+              .on_click(cx.listener(|_, _, _, cx| cx.stop_propagation()))
+              .child(Self::render_options_button(options_repo, cx)),
           ),
       )
       .into_any_element()
   }
 
-  /// The worktree button of one repo section: its base picker reads branches
-  /// from THAT repo, at menu-open time (always fresh, never polled).
-  fn render_worktree_button(repo_root: PathBuf, cx: &mut Context<Self>) -> impl IntoElement {
+  fn render_repo_menu_button(
+    repo_root: PathBuf,
+    menu_id: SharedString,
+    button: Button,
+    cx: &mut Context<Self>,
+    build_menu: impl Fn(PopupMenu, &mut Window, &mut Context<PopupMenu>) -> PopupMenu + 'static,
+  ) -> impl IntoElement {
     let entity = cx.entity().downgrade();
-    Button::new(SharedString::from(format!(
-      "session-repo-worktree-{}",
+    let build_menu = Rc::new(build_menu);
+    let popover_id = SharedString::from(format!(
+      "session-repo-menu-{}-{}",
+      menu_id,
+      repo_root.display()
+    ));
+    let menu_state_id = popover_id.clone();
+    let open_repo = repo_root.clone();
+
+    Popover::new(popover_id)
+      .appearance(false)
+      .overlay_closable(false)
+      .anchor(Anchor::TopLeft)
+      .trigger(button)
+      .on_open_change(move |open, _, cx| {
+        let repo_root = open_repo.clone();
+        let _ = entity.update(cx, |list, cx| {
+          if *open {
+            list.open_menu_repo = Some(repo_root);
+          } else if list.open_menu_repo.as_deref() == Some(repo_root.as_path()) {
+            list.open_menu_repo = None;
+          }
+          cx.notify();
+        });
+      })
+      .content(move |_, window, cx| {
+        let menu_state =
+          window.use_keyed_state(menu_state_id.clone(), cx, |_, _| RepoMenuState::default());
+        match menu_state.read(cx).menu.clone() {
+          Some(menu) => menu,
+          None => {
+            let build_menu = build_menu.clone();
+            let menu = PopupMenu::build(window, cx, move |menu, window, cx| {
+              build_menu(menu, window, cx)
+            });
+            menu_state.update(cx, |state, _| state.menu = Some(menu.clone()));
+            menu.focus_handle(cx).focus(window, cx);
+
+            let popover_state = cx.entity();
+            window
+              .subscribe(&menu, cx, {
+                let menu_state = menu_state.clone();
+                move |_, _: &DismissEvent, window, cx| {
+                  popover_state.update(cx, |state, cx| state.dismiss(window, cx));
+                  menu_state.update(cx, |state, _| state.menu = None);
+                }
+              })
+              .detach();
+
+            menu
+          }
+        }
+      })
+  }
+
+  /// The create menu of one repo section: the worktree base picker reads
+  /// branches from THAT repo, at menu-open time (always fresh, never polled).
+  fn render_create_button(repo_root: PathBuf, cx: &mut Context<Self>) -> impl IntoElement {
+    let entity = cx.entity().downgrade();
+    let button = Button::new(SharedString::from(format!(
+      "session-repo-create-{}",
       repo_root.display()
     )))
-    .debug_selector(|| format!("session-repo-worktree-{}", repo_root.display()))
-    .icon(UiIconName::GitBranch)
+    .debug_selector(|| format!("session-repo-create-{}", repo_root.display()))
+    .icon(gpui_component::IconName::Plus)
     .ghost()
     .compact()
     .xsmall()
-    .tooltip("New worktree session in this repository")
-    .dropdown_menu_with_anchor(Anchor::TopLeft, move |menu, _, _| {
-      let mut menu = menu.max_h(px(360.)).scrollable(true);
-      let base_candidates: Vec<SharedString> = git::list_branches(&repo_root)
-        .ok()
-        .unwrap_or_default()
-        .into_iter()
-        .filter(|branch| branch.kind == git::BranchKind::Local)
-        .map(|branch| SharedString::from(branch.name))
-        .collect();
-      let default_entity = entity.clone();
-      let default_repo = repo_root.clone();
-      menu = menu.item(
-        PopupMenuItem::element(move |_, cx| {
-          let theme = cx.theme().clone();
-          div()
-            .text_sm()
-            .text_color(theme.foreground)
-            .debug_selector(|| "session-worktree-base-default".to_string())
-            .child("Default branch")
-            .into_any_element()
-        })
-        .on_click(move |_, _, cx| {
-          let repo_root = default_repo.clone();
-          let _ = default_entity.update(cx, |_, cx| {
-            cx.emit(SessionListEvent::NewWorktreeSessionIn {
-              repo_root,
-              base: None,
-            });
-          });
-        }),
-      );
-      // Any branch is a valid base: the worktree gets a NEW branch at its
-      // commit, nothing is checked out twice.
-      for candidate in &base_candidates {
-        let label = candidate.clone();
-        let base = candidate.to_string();
-        let entity = entity.clone();
-        let item_repo = repo_root.clone();
-        menu = menu.item(
-          PopupMenuItem::element(move |_, cx| {
-            let theme = cx.theme().clone();
-            h_flex()
-              .gap_2()
-              .items_center()
-              .child(
-                Icon::new(UiIconName::GitBranch)
-                  .small()
-                  .text_color(theme.muted_foreground),
-              )
-              .child(div().text_sm().child(label.clone()))
-              .into_any_element()
-          })
-          .on_click(move |_, _, cx| {
-            let repo_root = item_repo.clone();
-            let base = base.clone();
-            let _ = entity.update(cx, |_, cx| {
-              cx.emit(SessionListEvent::NewWorktreeSessionIn {
-                repo_root,
-                base: Some(base),
+    .tooltip("New session");
+
+    Self::render_repo_menu_button(
+      repo_root.clone(),
+      "create".into(),
+      button,
+      cx,
+      move |menu, window, cx| {
+        let new_session_repo = repo_root.clone();
+        let new_session_entity = entity.clone();
+        let mut menu = menu.item(
+          PopupMenuItem::new("New session")
+            .icon(UiIconName::SquarePen)
+            .on_click(move |_, _, cx| {
+              let repo_root = new_session_repo.clone();
+              let _ = new_session_entity.update(cx, |_, cx| {
+                cx.emit(SessionListEvent::NewSessionIn { repo_root });
               });
-            });
-          }),
+            }),
         );
-      }
-      menu
-    })
+
+        let submenu_repo = repo_root.clone();
+        let submenu_entity = entity.clone();
+        menu = menu.submenu_with_icon(
+          Some(Icon::new(UiIconName::GitBranch)),
+          "New worktree session",
+          window,
+          cx,
+          move |menu, _, _| {
+            let mut menu = menu.max_h(px(360.)).scrollable(true);
+            let base_candidates: Vec<SharedString> = git::list_branches(&submenu_repo)
+              .ok()
+              .unwrap_or_default()
+              .into_iter()
+              .filter(|branch| branch.kind == git::BranchKind::Local)
+              .map(|branch| SharedString::from(branch.name))
+              .collect();
+            let default_entity = submenu_entity.clone();
+            let default_repo = submenu_repo.clone();
+            menu = menu.item(
+              PopupMenuItem::element(move |_, cx| {
+                let theme = cx.theme().clone();
+                div()
+                  .text_sm()
+                  .text_color(theme.foreground)
+                  .debug_selector(|| "session-worktree-base-default".to_string())
+                  .child("Default branch")
+                  .into_any_element()
+              })
+              .on_click(move |_, _, cx| {
+                let repo_root = default_repo.clone();
+                let _ = default_entity.update(cx, |_, cx| {
+                  cx.emit(SessionListEvent::NewWorktreeSessionIn {
+                    repo_root,
+                    base: None,
+                  });
+                });
+              }),
+            );
+            // Any branch is a valid base: the worktree gets a NEW branch at its
+            // commit, nothing is checked out twice.
+            for candidate in &base_candidates {
+              let label = candidate.clone();
+              let base = candidate.to_string();
+              let entity = submenu_entity.clone();
+              let item_repo = submenu_repo.clone();
+              menu = menu.item(
+                PopupMenuItem::element(move |_, cx| {
+                  let theme = cx.theme().clone();
+                  h_flex()
+                    .gap_2()
+                    .items_center()
+                    .child(
+                      Icon::new(UiIconName::GitBranch)
+                        .small()
+                        .text_color(theme.muted_foreground),
+                    )
+                    .child(div().text_sm().child(label.clone()))
+                    .into_any_element()
+                })
+                .on_click(move |_, _, cx| {
+                  let repo_root = item_repo.clone();
+                  let base = base.clone();
+                  let _ = entity.update(cx, |_, cx| {
+                    cx.emit(SessionListEvent::NewWorktreeSessionIn {
+                      repo_root,
+                      base: Some(base),
+                    });
+                  });
+                }),
+              );
+            }
+            menu
+          },
+        );
+        menu
+      },
+    )
+  }
+
+  fn render_options_button(repo_root: PathBuf, cx: &mut Context<Self>) -> impl IntoElement {
+    let entity = cx.entity().downgrade();
+    let button = Button::new(SharedString::from(format!(
+      "session-repo-options-{}",
+      repo_root.display()
+    )))
+    .debug_selector(|| format!("session-repo-options-{}", repo_root.display()))
+    .icon(UiIconName::EllipsisVertical)
+    .ghost()
+    .compact()
+    .xsmall()
+    .tooltip("Repository options");
+
+    Self::render_repo_menu_button(
+      repo_root.clone(),
+      "options".into(),
+      button,
+      cx,
+      move |menu, _, _| {
+        let reveal_repo = repo_root.clone();
+        let reveal_entity = entity.clone();
+        let copy_repo = repo_root.clone();
+        let copy_entity = entity.clone();
+        let remove_repo = repo_root.clone();
+        let remove_entity = entity.clone();
+        let reveal_label = if cfg!(target_os = "macos") {
+          "Reveal in Finder"
+        } else if cfg!(target_os = "windows") {
+          "Reveal in File Explorer"
+        } else {
+          "Reveal in file manager"
+        };
+        menu
+          .item(
+            PopupMenuItem::new(reveal_label)
+              .icon(gpui_component::IconName::FolderOpen)
+              .on_click(move |_, _, cx| {
+                let repo_root = reveal_repo.clone();
+                let _ = reveal_entity.update(cx, |_, cx| {
+                  cx.emit(SessionListEvent::RevealRepository { repo_root });
+                });
+              }),
+          )
+          .item(
+            PopupMenuItem::new("Copy path")
+              .icon(gpui_component::IconName::Copy)
+              .on_click(move |_, _, cx| {
+                let repo_root = copy_repo.clone();
+                let _ = copy_entity.update(cx, |_, cx| {
+                  cx.emit(SessionListEvent::CopyRepositoryPath { repo_root });
+                });
+              }),
+          )
+          .separator()
+          .item(
+            PopupMenuItem::new("Remove from sidebar")
+              .icon(UiIconName::Trash)
+              .on_click(move |_, _, cx| {
+                let repo_root = remove_repo.clone();
+                let _ = remove_entity.update(cx, |_, cx| {
+                  cx.emit(SessionListEvent::RemoveRepository { repo_root });
+                });
+              }),
+          )
+      },
+    )
   }
 }
 
@@ -792,6 +968,39 @@ mod tests {
     cx.run_until_parked();
 
     assert!(cx.debug_bounds("session-agent-icon-pi-acp").is_some());
+  }
+
+  #[gpui::test]
+  async fn repo_section_reveals_create_and_options_actions_on_hover(cx: &mut gpui::TestAppContext) {
+    cx.update(gpui_component::init);
+    let list = cx.new(|_| SessionList::new());
+    let mounted = list.clone();
+    let (_root, cx) =
+      cx.add_window_view(move |window, cx| gpui_component::Root::new(mounted.clone(), window, cx));
+    let repo = PathBuf::from("/repo");
+
+    list.update(cx, |list, cx| {
+      list.set_section_order(vec![repo.clone()], cx)
+    });
+    cx.run_until_parked();
+
+    let header = cx
+      .debug_bounds("session-repo-section-/repo")
+      .expect("repo section header");
+    cx.simulate_mouse_move(header.center(), None, gpui::Modifiers::default());
+    cx.run_until_parked();
+
+    assert!(cx.debug_bounds("session-repo-create-/repo").is_some());
+    let options = cx
+      .debug_bounds("session-repo-options-/repo")
+      .expect("repo options button");
+
+    cx.simulate_click(options.center(), gpui::Modifiers::default());
+    cx.run_until_parked();
+
+    list.read_with(cx, |list, _| {
+      assert_eq!(list.open_menu_repo.as_deref(), Some(repo.as_path()));
+    });
   }
 
   #[gpui::test]

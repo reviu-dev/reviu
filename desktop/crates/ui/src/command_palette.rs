@@ -1304,8 +1304,8 @@ impl CommandPaletteCommand {
   pub fn forget_repository() -> Self {
     Self::new(
       CommandPaletteCommandId::ForgetRepository,
-      "Forget repository",
-      "Remove a repository from the recent list",
+      "Remove repository from Reviu",
+      "Remove a repository from the sidebar and recent list",
     )
   }
 
@@ -2058,7 +2058,7 @@ impl CommandPaletteCommand {
       Id::SignIn => &["login", "connect", "github", "account"],
       Id::SignOut => &["logout", "disconnect", "account"],
       Id::OpenBrowserExtensions => &["chrome", "firefox", "addon", "browser"],
-      Id::ForgetRepository => &["remove", "recent"],
+      Id::ForgetRepository => &["remove", "recent", "sidebar"],
       Id::OpenSessionPage => &["home", "workspace", "agent", "goto"],
       Id::OpenGithubFromUrl => &["link", "paste"],
       Id::OpenSettingsPage => &["preferences", "shortcuts", "keybindings", "theme", "goto"],
@@ -3522,7 +3522,7 @@ impl CommandPalette {
   }
 
   fn render_forget_repository(&mut self, _cx: &mut Context<Self>) -> impl IntoElement {
-    self.render_search_list(&self.repositories_list, "Select repository to forget...")
+    self.render_search_list(&self.repositories_list, "Select repository to remove...")
   }
 
   fn render_switch_branch(&mut self, _cx: &mut Context<Self>) -> impl IntoElement {
@@ -3953,8 +3953,9 @@ mod tests {
     use super::CommandPaletteGroup;
     let command = CommandPaletteCommand::forget_repository();
     assert_eq!(command.id, CommandPaletteCommandId::ForgetRepository);
-    assert_eq!(command.name.as_ref(), "Forget repository");
-    assert!(command.matches("forget"));
+    assert_eq!(command.name.as_ref(), "Remove repository from Reviu");
+    assert!(command.matches("remove"));
+    assert!(command.matches("sidebar"));
     assert!(command.matches("recent"));
     assert_eq!(command.group(), CommandPaletteGroup::Repository);
   }
