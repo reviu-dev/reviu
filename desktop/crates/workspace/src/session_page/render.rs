@@ -1640,14 +1640,10 @@ mod tests {
       );
     });
 
-    // The button is painted but inert.
+    // The button is absent when split cannot show a useful second side.
     page.update(cx, |_, cx| cx.notify());
     cx.run_until_parked();
-    let toggle = cx
-      .debug_bounds(DIFF_VIEW_TOGGLE_DEBUG_SELECTOR)
-      .expect("diff view toggle bounds");
-    cx.simulate_click(toggle.center(), gpui::Modifiers::default());
-    cx.run_until_parked();
+    assert!(cx.debug_bounds(DIFF_VIEW_TOGGLE_DEBUG_SELECTOR).is_none());
 
     page.read_with(cx, |page, _| {
       assert_eq!(page.diff_view, DiffViewMode::Inline);

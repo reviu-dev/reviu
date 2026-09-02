@@ -142,7 +142,9 @@ impl DiffToolbar {
     if let Some(whitespace) = self.whitespace {
       controls = controls.child(render_whitespace(self.id_prefix, whitespace));
     }
-    if let Some(split) = self.split {
+    if let Some(split) = self.split
+      && !split.disabled
+    {
       controls = controls.child(render_split(self.id_prefix, split));
     }
     for element in self.after_toggles {

@@ -121,6 +121,10 @@ pub(crate) fn status_tooltip(kind: RepoStatusKind) -> SharedString {
   }
 }
 
+fn status_uses_warning_icon(kind: RepoStatusKind) -> bool {
+  kind == RepoStatusKind::Conflicted
+}
+
 pub(crate) fn stage_style(
   stage: RepoStage,
   theme: &gpui_component::Theme,
@@ -374,13 +378,26 @@ impl ListDelegate for ChangesRowsDelegate {
 
     let (dir, file) = split_path_label(&path);
     let status_element: AnyElement = {
+      let status_color = status_color(status_kind, &theme);
+      let status_content = if status_uses_warning_icon(status_kind) {
+        Icon::new(IconName::TriangleAlert)
+          .size_3()
+          .text_color(status_color)
+          .into_any_element()
+      } else {
+        div()
+          .text_xs()
+          .text_color(status_color)
+          .child(status_kind.short_code())
+          .into_any_element()
+      };
       let status = div()
         .id(("changes-status-letter", ix.row))
         .w(px(15.))
         .min_w(px(15.))
-        .text_xs()
-        .text_color(status_color(status_kind, &theme))
-        .child(status_kind.short_code());
+        .flex()
+        .items_center()
+        .child(status_content);
       if show_row_actions {
         let status_tip = status_tooltip(status_kind);
         status
@@ -988,6 +1005,12 @@ mod tests {
       false
     ));
     assert!(row_actions_visible(None, None, first, true));
+  }
+
+  #[test]
+  fn only_conflicted_status_uses_a_warning_icon() {
+    assert!(status_uses_warning_icon(RepoStatusKind::Conflicted));
+    assert!(!status_uses_warning_icon(RepoStatusKind::Untracked));
   }
 
   #[test]

@@ -75,10 +75,9 @@ pub(crate) fn can_navigate_annotations(state: Option<AnnotationNavigationState>)
   state.is_some_and(|state| state.total > 1)
 }
 
-/// A lone hunk needs no walker; a lone conflict keeps its counter, which falls
-/// as conflicts resolve.
+/// A lone annotation needs no walker; opening the file already shows its target.
 pub(crate) fn shows_annotation_navigation(state: AnnotationNavigationState) -> bool {
-  state.kind == AnnotationKind::Conflict || state.total > 1
+  state.total > 1
 }
 
 pub(crate) fn navigate_annotation(
@@ -101,7 +100,7 @@ mod tests {
   use super::*;
 
   #[test]
-  fn a_lone_hunk_hides_navigation_but_a_lone_conflict_keeps_it() {
+  fn lone_annotations_hide_navigation() {
     assert!(!shows_annotation_navigation(AnnotationNavigationState {
       active_index: 0,
       total: 1,
@@ -112,9 +111,14 @@ mod tests {
       total: 2,
       kind: AnnotationKind::Change,
     }));
-    assert!(shows_annotation_navigation(AnnotationNavigationState {
+    assert!(!shows_annotation_navigation(AnnotationNavigationState {
       active_index: 0,
       total: 1,
+      kind: AnnotationKind::Conflict,
+    }));
+    assert!(shows_annotation_navigation(AnnotationNavigationState {
+      active_index: 0,
+      total: 2,
       kind: AnnotationKind::Conflict,
     }));
   }

@@ -632,6 +632,9 @@ impl SessionPage {
     if !self.path_has_changes(path, cx) {
       return DiffViewMode::Inline;
     }
+    if self.path_is_conflicted(path, cx) {
+      return DiffViewMode::Inline;
+    }
     effective_diff_view(DiffViewInputs {
       preferred: self.diff_view,
       binary_preview: self.binary_preview.is_some(),
@@ -660,6 +663,15 @@ impl SessionPage {
       .status_entries()
       .iter()
       .any(|entry| entry.path == path)
+  }
+
+  fn path_is_conflicted(&self, path: &Path, cx: &App) -> bool {
+    self
+      .dock_panel
+      .read(cx)
+      .status_entries()
+      .iter()
+      .any(|entry| entry.path == path && entry.status == RepoStatusKind::Conflicted)
   }
 
   pub(super) fn selected_file_is_markdown(&self) -> bool {
@@ -696,7 +708,9 @@ impl SessionPage {
       return true;
     };
     // The preview is not a reason to refuse: asking for split closes it.
-    self.binary_preview.is_some() || self.whole_file_change(path, cx)
+    self.binary_preview.is_some()
+      || self.whole_file_change(path, cx)
+      || self.path_is_conflicted(path, cx)
   }
 
   pub(super) fn whole_file_change(&self, path: &Path, cx: &App) -> bool {
@@ -1856,6 +1870,7 @@ mod tests {
     cx.run_until_parked();
 
     page.update_in(cx, |page, window, cx| {
+      crate::config::AppSettings::update(cx, |settings| settings.split_diff_view = true);
       page.open_diff(PathBuf::from("a.txt"), None, OpenIntent::Open, window, cx);
     });
     await_open_file(&page, cx).await;
@@ -1872,6 +1887,9 @@ mod tests {
     };
 
     page.read_with(cx, |page, cx| {
+      let editor = page.editor.as_ref().expect("editor").read(cx);
+      assert_eq!(editor.diff_view_mode(), DiffViewMode::Inline);
+      assert!(page.split_disabled(cx));
       let (visible, total) = visible_and_total(page, cx);
       assert_eq!(
         visible, total,
@@ -1891,6 +1909,9 @@ mod tests {
     await_editor_diff(&page, cx).await;
 
     page.read_with(cx, |page, cx| {
+      let editor = page.editor.as_ref().expect("editor").read(cx);
+      assert_eq!(editor.diff_view_mode(), DiffViewMode::Split);
+      assert!(!page.split_disabled(cx));
       let (visible, total) = visible_and_total(page, cx);
       assert!(
         visible < total,
