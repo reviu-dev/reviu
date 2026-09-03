@@ -11,8 +11,15 @@ impl SessionPage {
       })
       .collect::<Vec<_>>();
 
-    if let Some(fallback_repo) = self.fallback_repo.as_ref() {
-      let selected = fallback_repo.to_string_lossy().replace(['\n', '\r'], "");
+    for project in ConfigStore::load_recent_projects() {
+      let path = project.path.to_string_lossy().replace(['\n', '\r'], "");
+      if !repositories.iter().any(|repo| repo.path.as_ref() == path) {
+        repositories.push(CommandPaletteRepository { path: path.into() });
+      }
+    }
+
+    if let Some(project_root) = self.project_root.as_ref() {
+      let selected = project_root.to_string_lossy().replace(['\n', '\r'], "");
       if !repositories
         .iter()
         .any(|repo| repo.path.as_ref() == selected)
@@ -43,14 +50,19 @@ impl SessionPage {
       commands.push(CommandPaletteCommand::forget_repository());
     }
 
-    // Creation lands where you are; the repo in the label says so upfront.
+    // Creation lands where you are; the project in the label says so upfront.
+    if let Some(project_root) = self.project_root(cx) {
+      let project_name = project_root
+        .file_name()
+        .map(|name| name.to_string_lossy().replace(['\n', '\r'], ""));
+      commands.push(CommandPaletteCommand::new_agent_session(
+        project_name.as_deref(),
+      ));
+    }
     if let Some(session_repo) = self.session_repo(cx) {
       let repo_name = session_repo
         .file_name()
         .map(|name| name.to_string_lossy().replace(['\n', '\r'], ""));
-      commands.push(CommandPaletteCommand::new_agent_session(
-        repo_name.as_deref(),
-      ));
       commands.push(CommandPaletteCommand::new_agent_worktree_session(
         repo_name.as_deref(),
       ));
@@ -439,7 +451,7 @@ impl SessionPage {
         if !repo_root.is_dir() {
           return Err(format!("Project not found: {}", repo_root.display()).into());
         }
-        self.set_fallback_repo(repo_root, window, cx)
+        self.set_project_root(repo_root, window, cx)
       }
       CommandPaletteAction::ForgetRepository(repository) => {
         self.forget_repository(PathBuf::from(repository.path.as_ref()), window, cx)

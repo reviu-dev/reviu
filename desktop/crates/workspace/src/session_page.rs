@@ -366,7 +366,11 @@ impl SessionPage {
     let fallback_repo = ConfigStore::load_recent_repositories()
       .first()
       .map(|repo| repo.path.clone());
-    let project_root = fallback_repo.clone();
+    let project_root = fallback_repo.clone().or_else(|| {
+      ConfigStore::load_recent_projects()
+        .first()
+        .map(|project| project.path.clone())
+    });
     let dock_panel = cx.new(|cx| DockPanel::new(fallback_repo.clone(), window, cx));
     let inbox = cx.new(|_| Inbox::new());
     let repo_snapshot = cx.new(|_| RepoSnapshot::new(fallback_repo.clone()));
@@ -635,6 +639,7 @@ impl SessionPage {
     for repo in page.initial_session_sidebar_repositories() {
       let _ = page.conversation_hub.store_for(&repo, &HashSet::new(), cx);
     }
+    page.sync_active_checkout(window, cx);
     page.reload_review_for_repo(cx);
     page.refresh_branch(cx);
     page.watch_window_activation(window, cx);
@@ -658,16 +663,30 @@ impl SessionPage {
       .filter(|path| recents.iter().any(|recent| recent.path == *path))
       .take(crate::conversation_hub::MAX_TRACKED_REPOS)
       .collect();
-    let selected_project = self.project_root.as_ref().or(self.fallback_repo.as_ref());
-    if let Some(project_root) = selected_project
-      && !visible.contains(project_root)
+    if let Some(fallback_repo) = self.fallback_repo.as_ref()
+      && !visible.contains(fallback_repo)
     {
       if visible.len() >= crate::conversation_hub::MAX_TRACKED_REPOS {
         visible.pop();
       }
-      visible.insert(0, project_root.clone());
+      visible.insert(0, fallback_repo.clone());
     }
     visible
+  }
+
+  fn initial_session_sidebar_projects(&self) -> Vec<PathBuf> {
+    let mut projects = self.initial_session_sidebar_repositories();
+    for recent in ConfigStore::load_recent_projects() {
+      if !projects.contains(&recent.path) {
+        projects.push(recent.path);
+      }
+    }
+    if let Some(project_root) = self.project_root.as_ref()
+      && !projects.contains(project_root)
+    {
+      projects.insert(0, project_root.clone());
+    }
+    projects
   }
 
   fn canonical_repo(path: &Path) -> PathBuf {
@@ -872,7 +891,7 @@ impl SessionPage {
   /// (panel created, conversation created/loaded/deleted, repo switched).
   fn refresh_session_list(&mut self, cx: &mut Context<Self>) {
     let sections = self.conversation_hub.sections(cx);
-    let section_order: Vec<PathBuf> = sections.iter().map(|(repo, _)| repo.clone()).collect();
+    let section_order = self.initial_session_sidebar_projects();
     let conversations: Vec<crate::session_list::SessionRow> = sections
       .into_iter()
       .flat_map(|(repo, metas)| {

@@ -31,6 +31,11 @@ const RECENT_REPOS_TABLE: ConfigTable = ConfigTable {
   create_sql: "CREATE TABLE IF NOT EXISTS recent_repositories (path TEXT PRIMARY KEY, last_opened INTEGER NOT NULL)",
 };
 
+const RECENT_PROJECTS_TABLE: ConfigTable = ConfigTable {
+  name: "recent_projects",
+  create_sql: "CREATE TABLE IF NOT EXISTS recent_projects (path TEXT PRIMARY KEY, last_opened INTEGER NOT NULL)",
+};
+
 const SESSION_SIDEBAR_REPOS_TABLE: ConfigTable = ConfigTable {
   name: "session_sidebar_repositories",
   create_sql: "CREATE TABLE IF NOT EXISTS session_sidebar_repositories (path TEXT PRIMARY KEY, position INTEGER NOT NULL)",
@@ -63,8 +68,9 @@ const MERGE_METHODS_TABLE: ConfigTable = ConfigTable {
 
 pub const COMMAND_USAGE_TIMESTAMP_CAP: usize = 30;
 
-const CONFIG_TABLES: [ConfigTable; 6] = [
+const CONFIG_TABLES: [ConfigTable; 7] = [
   RECENT_REPOS_TABLE,
+  RECENT_PROJECTS_TABLE,
   SESSION_SIDEBAR_REPOS_TABLE,
   SETTINGS_TABLE,
   SHORTCUT_OVERRIDES_TABLE,
@@ -81,6 +87,7 @@ const MIGRATIONS: &[Migration] = [
   migrate_v1_baseline,
   migrate_v2_merge_methods,
   migrate_v3_session_sidebar_repositories,
+  migrate_v4_recent_projects,
 ]
 .as_slice();
 
@@ -132,6 +139,11 @@ fn migrate_v2_merge_methods(conn: &Connection) -> rusqlite::Result<()> {
 
 fn migrate_v3_session_sidebar_repositories(conn: &Connection) -> rusqlite::Result<()> {
   conn.execute(SESSION_SIDEBAR_REPOS_TABLE.create_sql, [])?;
+  Ok(())
+}
+
+fn migrate_v4_recent_projects(conn: &Connection) -> rusqlite::Result<()> {
+  conn.execute(RECENT_PROJECTS_TABLE.create_sql, [])?;
   Ok(())
 }
 
@@ -227,6 +239,11 @@ pub struct ConfigStore {
 
 #[derive(Clone)]
 pub struct RecentRepository {
+  pub path: PathBuf,
+}
+
+#[derive(Clone)]
+pub struct RecentProject {
   pub path: PathBuf,
 }
 
@@ -384,6 +401,58 @@ impl ConfigStore {
     repositories
   }
 
+  pub fn load_recent_projects() -> Vec<RecentProject> {
+    let Some(store) = Self::open_with_tables() else {
+      return Vec::new();
+    };
+    store.load_recent_projects_inner()
+  }
+
+  fn load_recent_projects_inner(&self) -> Vec<RecentProject> {
+    let mut stmt = match self.conn.prepare(&format!(
+      "SELECT path FROM {} ORDER BY last_opened DESC",
+      RECENT_PROJECTS_TABLE.name
+    )) {
+      Ok(stmt) => stmt,
+      Err(err) => {
+        log::warn!("Failed to load recent projects: {}", err);
+        return Vec::new();
+      }
+    };
+
+    let rows = match stmt.query_map([], |row| row.get::<_, String>(0)) {
+      Ok(rows) => rows,
+      Err(err) => {
+        log::warn!("Failed to read recent projects: {}", err);
+        return Vec::new();
+      }
+    };
+
+    let mut projects = Vec::new();
+    let mut missing_paths: Vec<String> = Vec::new();
+    for row in rows {
+      match row {
+        Ok(path_string) => {
+          let path = PathBuf::from(&path_string);
+          if path.is_dir() && !path.join(".git").exists() {
+            projects.push(RecentProject { path });
+          } else {
+            missing_paths.push(path_string);
+          }
+        }
+        Err(err) => log::warn!("Failed to decode recent project row: {}", err),
+      }
+    }
+
+    if !missing_paths.is_empty() {
+      for path in &missing_paths {
+        self.forget_recent_project_path(path);
+      }
+    }
+
+    projects
+  }
+
   pub fn forget_recent_repository(path: &Path) {
     let Some(store) = Self::open_with_tables() else {
       return;
@@ -397,6 +466,24 @@ impl ConfigStore {
       params![path],
     ) {
       log::warn!("Failed to forget recent repository: {}", err);
+    }
+    self.forget_session_sidebar_repository_path(path);
+  }
+
+  pub fn forget_recent_project(path: &Path) {
+    let Some(store) = Self::open_with_tables() else {
+      return;
+    };
+    let path = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+    store.forget_recent_project_path(&path.to_string_lossy());
+  }
+
+  fn forget_recent_project_path(&self, path: &str) {
+    if let Err(err) = self.conn.execute(
+      &format!("DELETE FROM {} WHERE path = ?1", RECENT_PROJECTS_TABLE.name),
+      params![path],
+    ) {
+      log::warn!("Failed to forget recent project: {}", err);
     }
     self.forget_session_sidebar_repository_path(path);
   }
@@ -421,10 +508,42 @@ impl ConfigStore {
          ON CONFLICT(path) DO UPDATE SET last_opened = excluded.last_opened",
         RECENT_REPOS_TABLE.name
       ),
-      params![path_string, last_opened],
+      params![path_string.clone(), last_opened],
     ) {
       log::warn!("Failed to persist recent repository: {}", err);
     }
+    self.forget_recent_project_path(&path_string);
+    if let Ok(canonical) = path.canonicalize() {
+      self.forget_recent_project_path(&canonical.to_string_lossy());
+    }
+  }
+
+  pub fn persist_recent_project(path: &Path) {
+    let Some(store) = Self::open_with_tables() else {
+      return;
+    };
+    store.persist_recent_project_inner(path);
+  }
+
+  fn persist_recent_project_inner(&self, path: &Path) {
+    let last_opened = SystemTime::now()
+      .duration_since(UNIX_EPOCH)
+      .unwrap_or_default()
+      .as_secs() as i64;
+    let path = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+    let path_string = path.to_string_lossy().to_string();
+
+    if let Err(err) = self.conn.execute(
+      &format!(
+        "INSERT INTO {} (path, last_opened) VALUES (?1, ?2)
+         ON CONFLICT(path) DO UPDATE SET last_opened = excluded.last_opened",
+        RECENT_PROJECTS_TABLE.name
+      ),
+      params![path_string.clone(), last_opened],
+    ) {
+      log::warn!("Failed to persist recent project: {}", err);
+    }
+    self.forget_recent_repository_path(&path_string);
   }
 
   pub fn load_session_sidebar_repositories() -> Vec<PathBuf> {
@@ -822,6 +941,15 @@ mod tests {
     path
   }
 
+  fn unique_test_project_dir(label: &str) -> PathBuf {
+    static NEXT_PROJECT_ID: AtomicU64 = AtomicU64::new(1);
+    let id = NEXT_PROJECT_ID.fetch_add(1, Ordering::Relaxed);
+    let path =
+      std::env::temp_dir().join(format!("reviu-config-{label}-{}-{id}", std::process::id()));
+    fs::create_dir_all(&path).expect("create temp project dir");
+    path
+  }
+
   #[test]
   fn recent_repositories_use_test_db_override() {
     let db_path = unique_test_db_path("recent");
@@ -842,6 +970,63 @@ mod tests {
 
     let _ = fs::remove_dir_all(&repo_a);
     let _ = fs::remove_dir_all(&repo_b);
+    ConfigStore::set_test_db_path(None);
+  }
+
+  #[test]
+  fn recent_projects_are_separate_from_recent_repositories() {
+    let db_path = unique_test_db_path("recent-projects");
+    let _ = fs::remove_file(&db_path);
+    ConfigStore::set_test_db_path(Some(db_path));
+
+    let project = unique_test_project_dir("recent-project");
+    let repo = unique_test_repo_dir("recent-project-repo");
+    ConfigStore::persist_recent_project(&project);
+    ConfigStore::persist_recent_repository(&repo);
+
+    let projects: Vec<PathBuf> = ConfigStore::load_recent_projects()
+      .into_iter()
+      .map(|project| project.path)
+      .collect();
+    let repositories: Vec<PathBuf> = ConfigStore::load_recent_repositories()
+      .into_iter()
+      .map(|repo| repo.path)
+      .collect();
+    assert_eq!(
+      projects,
+      vec![project.canonicalize().expect("canonical project")]
+    );
+    assert_eq!(repositories, vec![repo.clone()]);
+
+    ConfigStore::persist_recent_repository(&project);
+    assert!(ConfigStore::load_recent_projects().is_empty());
+
+    let _ = fs::remove_dir_all(&project);
+    let _ = fs::remove_dir_all(&repo);
+    ConfigStore::set_test_db_path(None);
+  }
+
+  #[test]
+  fn forgetting_recent_project_removes_entry() {
+    let db_path = unique_test_db_path("forget-project");
+    let _ = fs::remove_file(&db_path);
+    ConfigStore::set_test_db_path(Some(db_path));
+
+    let project_a = unique_test_project_dir("forget-project-a");
+    let project_b = unique_test_project_dir("forget-project-b");
+    ConfigStore::persist_recent_project(&project_a);
+    ConfigStore::persist_recent_project(&project_b);
+    ConfigStore::forget_recent_project(&project_a);
+
+    let paths: Vec<PathBuf> = ConfigStore::load_recent_projects()
+      .into_iter()
+      .map(|project| project.path)
+      .collect();
+    assert!(!paths.contains(&project_a.canonicalize().expect("canonical project a")));
+    assert!(paths.contains(&project_b.canonicalize().expect("canonical project b")));
+
+    let _ = fs::remove_dir_all(&project_a);
+    let _ = fs::remove_dir_all(&project_b);
     ConfigStore::set_test_db_path(None);
   }
 

@@ -75,6 +75,7 @@ impl SessionPage {
     if !project_root.is_dir() {
       return Err(format!("Project not found: {}", project_root.display()).into());
     }
+    ConfigStore::persist_recent_project(&project_root);
     self.park_active_chat_panel(cx);
     self.agent_chat_view = None;
     self.chat_store = None;
@@ -164,7 +165,8 @@ impl SessionPage {
       .agent_chat_view
       .as_ref()
       .is_some_and(|panel| panel.read(cx).repo_root() == repo_root.as_path())
-      || self.fallback_repo.as_deref() == Some(repo_root.as_path());
+      || self.fallback_repo.as_deref() == Some(repo_root.as_path())
+      || self.project_root.as_deref() == Some(repo_root.as_path());
     if self.editor_is_dirty(cx) && forgetting_active_checkout {
       self.open_unsaved_editor_dialog(
         UnsavedEditorAction::ForgetRepository { repo_root },
@@ -184,6 +186,52 @@ impl SessionPage {
   ) -> Result<(), SharedString> {
     if self.agent_turn_in_flight_for_repo(&repo_root, cx) {
       return Err("Wait for the agent to finish before forgetting this project.".into());
+    }
+
+    let project_root = repo_root
+      .canonicalize()
+      .unwrap_or_else(|_| repo_root.clone());
+    let is_recent_plain_project = ConfigStore::load_recent_projects()
+      .iter()
+      .any(|recent| recent.path == project_root);
+    let forgetting_plain_project = is_recent_plain_project
+      || (self.fallback_repo.is_none()
+        && self.project_root.as_deref() == Some(project_root.as_path()));
+    if forgetting_plain_project {
+      ConfigStore::forget_recent_project(&project_root);
+      self
+        .background_chat_panels
+        .retain(|(_, panel)| panel.read(cx).repo_root() != project_root.as_path());
+      if self
+        .agent_chat_view
+        .as_ref()
+        .is_some_and(|panel| panel.read(cx).repo_root() == project_root.as_path())
+      {
+        self.agent_chat_view = None;
+      }
+      if self.project_root.as_deref() == Some(project_root.as_path()) {
+        self.project_root = None;
+        self.checkout_override = None;
+        self.chat_store = None;
+        if let Some(next_repo) = ConfigStore::load_recent_repositories()
+          .into_iter()
+          .map(|repo| repo.path)
+          .next()
+        {
+          self.apply_fallback_repo(Some(next_repo), window, cx);
+        } else if let Some(next_project) = ConfigStore::load_recent_projects()
+          .into_iter()
+          .map(|project| project.path)
+          .next()
+        {
+          self.set_project_root_without_unsaved_prompt(next_project, window, cx)?;
+        } else {
+          self.apply_fallback_repo(None, window, cx);
+        }
+      }
+      self.refresh_session_list(cx);
+      cx.notify();
+      return Ok(());
     }
 
     ConfigStore::forget_recent_repository(&repo_root);
@@ -776,6 +824,12 @@ mod tests {
       "non-Git projects are not remembered as Git repositories"
     );
     assert!(
+      ConfigStore::load_recent_projects()
+        .iter()
+        .any(|recent| recent.path == plain_folder.canonicalize().expect("canonical project")),
+      "non-Git projects are remembered separately"
+    );
+    assert!(
       list_project_files(&plain_folder)
         .expect("list project files")
         .contains(&PathBuf::from("src/main.rs")),
@@ -799,7 +853,76 @@ mod tests {
   }
 
   #[gpui::test]
-  async fn a_folder_without_a_repository_opens_as_an_unremembered_project(cx: &mut TestAppContext) {
+  async fn startup_restores_a_recent_plain_project_when_no_git_repo_is_recent(
+    cx: &mut TestAppContext,
+  ) {
+    let project = crate::test_support::temp_path("session-page-restore-plain-project");
+    std::fs::create_dir_all(&project).expect("create project");
+    isolate_config_store_for_test();
+    ConfigStore::persist_recent_project(&project);
+
+    let (page, cx) = add_session_page_window_from_config(cx);
+    cx.run_until_parked();
+
+    page.read_with(cx, |page, cx| {
+      assert_eq!(
+        page.project_root(cx).as_deref(),
+        Some(project.canonicalize().expect("canonical project").as_path())
+      );
+      assert!(page.fallback_repo.is_none());
+      assert_eq!(page.dock_panel.read(cx).repo_root(), None);
+      assert_eq!(
+        page.session_list.read(cx).section_order_for_test(),
+        &[project.canonicalize().expect("canonical project")]
+      );
+    });
+
+    let _ = std::fs::remove_dir_all(&project);
+  }
+
+  #[gpui::test]
+  async fn forgetting_a_plain_project_returns_to_the_empty_state(cx: &mut TestAppContext) {
+    let project = crate::test_support::temp_path("session-page-forget-plain-project");
+    std::fs::create_dir_all(&project).expect("create project");
+    let (page, cx) = add_session_page_window_without_repo(cx);
+    cx.run_until_parked();
+
+    page.update_in(cx, |page, window, cx| {
+      page
+        .set_project_root(project.clone(), window, cx)
+        .expect("open plain project");
+      page
+        .forget_repository(
+          project.canonicalize().expect("canonical project"),
+          window,
+          cx,
+        )
+        .expect("forget plain project");
+    });
+    cx.run_until_parked();
+
+    page.read_with(cx, |page, cx| {
+      assert!(page.project_root(cx).is_none());
+      assert!(page.fallback_repo.is_none());
+      assert!(
+        page
+          .session_list
+          .read(cx)
+          .section_order_for_test()
+          .is_empty()
+      );
+    });
+    assert!(ConfigStore::load_recent_projects().is_empty());
+    assert!(
+      cx.debug_bounds(OPEN_REPOSITORY_ROW_DEBUG_SELECTOR)
+        .is_some()
+    );
+
+    let _ = std::fs::remove_dir_all(&project);
+  }
+
+  #[gpui::test]
+  async fn a_folder_without_a_repository_opens_as_a_recent_project(cx: &mut TestAppContext) {
     let repo = TempRepo::init("session-page-repo-validation");
     commit_text_file(&repo.path, Path::new("README.md"), "v1\n", "initial");
     let plain_folder = crate::test_support::temp_path("session-page-not-a-repo");
@@ -836,6 +959,12 @@ mod tests {
         .iter()
         .any(|recent| recent.path == plain_folder),
       "a non-Git project must not come back as the Git project to open next launch"
+    );
+    assert!(
+      ConfigStore::load_recent_projects()
+        .iter()
+        .any(|recent| recent.path == plain_folder.canonicalize().expect("canonical project")),
+      "a non-Git project has its own recent list"
     );
 
     // A directory inside a repository is accepted, as its root.
