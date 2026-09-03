@@ -417,10 +417,12 @@ impl SessionPage {
             .file_name()
             .map(|name| name.to_string_lossy().into_owned())
             .unwrap_or_else(|| path.to_string_lossy().into_owned());
-          let prefix = if tab.kind == CenterTabKind::Diff {
-            "Diff: "
-          } else {
-            ""
+          let prefix = match tab.snapshot() {
+            Some(CenterTabSnapshot::AgentTool { .. }) => "Agent: ",
+            Some(CenterTabSnapshot::Commit { .. }) => "Commit: ",
+            Some(CenterTabSnapshot::PullRequestRange { .. }) => "PR: ",
+            None if tab.kind == CenterTabKind::Diff => "Diff: ",
+            None => "",
           };
           let label = if dirty {
             format!("{prefix}{name} *")
@@ -442,8 +444,9 @@ impl SessionPage {
       if tab.is_closeable() {
         let close_tab = tab.clone();
         let close_label = format!(
-          "{:?}-{}",
+          "{:?}-{:?}-{}",
           tab.kind,
+          tab.snapshot(),
           tab
             .path()
             .map(|path| path.to_string_lossy().into_owned())

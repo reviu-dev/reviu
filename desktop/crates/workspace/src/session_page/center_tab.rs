@@ -9,10 +9,26 @@ pub(super) enum CenterTabKind {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub(super) enum CenterTabSnapshot {
+  AgentTool {
+    old_text: Option<String>,
+    new_text: String,
+  },
+  Commit {
+    oid: String,
+  },
+  PullRequestRange {
+    base: String,
+    head: String,
+  },
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub(super) struct CenterTab {
   pub(super) kind: CenterTabKind,
   pub(super) path: Option<PathBuf>,
   pub(super) conversation_id: Option<String>,
+  pub(super) snapshot: Option<CenterTabSnapshot>,
 }
 
 impl CenterTab {
@@ -32,6 +48,7 @@ impl CenterTab {
       kind: CenterTabKind::Chat,
       path: None,
       conversation_id: None,
+      snapshot: None,
     }
   }
 
@@ -40,6 +57,7 @@ impl CenterTab {
       kind: CenterTabKind::Chat,
       path: None,
       conversation_id: Some(conversation_id.into()),
+      snapshot: None,
     }
   }
 
@@ -48,6 +66,7 @@ impl CenterTab {
       kind: CenterTabKind::File,
       path: Some(path),
       conversation_id: None,
+      snapshot: None,
     }
   }
 
@@ -56,6 +75,34 @@ impl CenterTab {
       kind: CenterTabKind::Diff,
       path: Some(path),
       conversation_id: None,
+      snapshot: None,
+    }
+  }
+
+  pub(super) fn agent_snapshot(path: PathBuf, old_text: Option<String>, new_text: String) -> Self {
+    Self {
+      kind: CenterTabKind::Diff,
+      path: Some(path),
+      conversation_id: None,
+      snapshot: Some(CenterTabSnapshot::AgentTool { old_text, new_text }),
+    }
+  }
+
+  pub(super) fn commit_snapshot(path: PathBuf, oid: String) -> Self {
+    Self {
+      kind: CenterTabKind::Diff,
+      path: Some(path),
+      conversation_id: None,
+      snapshot: Some(CenterTabSnapshot::Commit { oid }),
+    }
+  }
+
+  pub(super) fn pull_request_snapshot(path: PathBuf, base: String, head: String) -> Self {
+    Self {
+      kind: CenterTabKind::Diff,
+      path: Some(path),
+      conversation_id: None,
+      snapshot: Some(CenterTabSnapshot::PullRequestRange { base, head }),
     }
   }
 
@@ -64,6 +111,7 @@ impl CenterTab {
       kind: CenterTabKind::InteractiveRebase,
       path: None,
       conversation_id: None,
+      snapshot: None,
     }
   }
 
@@ -73,6 +121,10 @@ impl CenterTab {
 
   pub(super) fn conversation_id(&self) -> Option<&str> {
     self.conversation_id.as_deref()
+  }
+
+  pub(super) fn snapshot(&self) -> Option<&CenterTabSnapshot> {
+    self.snapshot.as_ref()
   }
 
   pub(super) fn is_closeable(&self) -> bool {

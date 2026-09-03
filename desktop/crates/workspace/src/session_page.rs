@@ -53,7 +53,7 @@ use crate::navigation::NavigationHistory;
 use crate::open_intent::OpenIntent;
 use crate::review_destination::{AgentReviewHandlers, ReviewDestination, configure_review};
 use crate::session_list::{SessionList, SessionListEvent, SessionStatus};
-use crate::session_page::center_tab::{CenterTab, CenterTabKind};
+use crate::session_page::center_tab::{CenterTab, CenterTabKind, CenterTabSnapshot};
 use crate::session_page::file_viewer::{OpenedSnapshot, UnsavedEditorAction};
 use git::{InteractiveRebaseTarget, RepoStatusKind};
 
@@ -1526,7 +1526,18 @@ impl SessionPage {
       }
       CenterTabKind::Diff => {
         if let Some(path) = tab.path {
-          self.open_diff(path, None, intent, window, cx);
+          match tab.snapshot {
+            Some(CenterTabSnapshot::AgentTool { old_text, new_text }) => {
+              self.open_agent_diff_snapshot(path, old_text, new_text, None, intent, window, cx)
+            }
+            Some(CenterTabSnapshot::Commit { oid }) => {
+              self.open_commit_file(oid, path, intent, window, cx)
+            }
+            Some(CenterTabSnapshot::PullRequestRange { base, head }) => {
+              self.open_pull_request_file(base, head, path, None, intent, window, cx)
+            }
+            None => self.open_diff(path, None, intent, window, cx),
+          }
         }
       }
       CenterTabKind::InteractiveRebase => {

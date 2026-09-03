@@ -507,7 +507,7 @@ impl SessionPage {
     }
     self.open_file_generation = self.open_file_generation.wrapping_add(1);
     let generation = self.open_file_generation;
-    let tab = CenterTab::diff(rel_path.clone());
+    let tab = CenterTab::agent_snapshot(rel_path.clone(), old_text.clone(), new_text.clone());
     self.remember_center_tab(tab.clone());
     self.editor_tab = Some(tab);
     self.selected_file = Some(rel_path.clone());
@@ -625,7 +625,7 @@ impl SessionPage {
     self.sync_agent_chat_close_control(cx);
     self.open_file_generation = self.open_file_generation.wrapping_add(1);
     let generation = self.open_file_generation;
-    let tab = CenterTab::diff(rel_path.clone());
+    let tab = CenterTab::commit_snapshot(rel_path.clone(), commit_oid.clone());
     self.remember_center_tab(tab.clone());
     self.editor_tab = Some(tab);
     self.selected_file = Some(rel_path.clone());
@@ -754,7 +754,8 @@ impl SessionPage {
     self.leave_commit_file(cx);
     self.open_file_generation = self.open_file_generation.wrapping_add(1);
     let generation = self.open_file_generation;
-    let tab = CenterTab::diff(rel_path.clone());
+    let tab =
+      CenterTab::pull_request_snapshot(rel_path.clone(), base_oid.clone(), head_oid.clone());
     self.remember_center_tab(tab.clone());
     self.editor_tab = Some(tab);
     self.selected_file = Some(rel_path.clone());
@@ -2055,6 +2056,95 @@ mod tests {
     page.read_with(cx, |page, _| {
       assert_eq!(page.center, CenterView::Conversation);
       assert_eq!(page.active_center_tab, Some(CenterTab::chat()));
+    });
+  }
+
+  #[gpui::test]
+  async fn snapshot_and_worktree_diff_tabs_for_same_path_stay_separate(cx: &mut TestAppContext) {
+    let repo = TempRepo::init("session-page-snapshot-tab-identity");
+    commit_text_file(&repo.path, Path::new("README.md"), "v1\n", "initial");
+    std::fs::write(repo.path.join("README.md"), "v2\n").expect("update file");
+
+    let (page, cx) = add_session_page_window(repo.path.clone(), cx);
+    page.update_in(cx, |page, window, cx| {
+      page.open_diff(
+        PathBuf::from("README.md"),
+        None,
+        OpenIntent::Open,
+        window,
+        cx,
+      );
+    });
+    await_open_file(&page, cx).await;
+    await_editor_diff(&page, cx).await;
+
+    let snapshot_tab = CenterTab::agent_snapshot(
+      PathBuf::from("README.md"),
+      Some("agent before\n".to_string()),
+      "agent after\n".to_string(),
+    );
+    page.update_in(cx, |page, window, cx| {
+      page.open_agent_diff_snapshot(
+        PathBuf::from("README.md"),
+        Some("agent before\n".to_string()),
+        "agent after\n".to_string(),
+        None,
+        OpenIntent::Open,
+        window,
+        cx,
+      );
+    });
+    await_open_file(&page, cx).await;
+
+    page.read_with(cx, |page, _| {
+      assert_eq!(
+        page.center_tabs,
+        vec![
+          CenterTab::chat(),
+          CenterTab::diff(PathBuf::from("README.md")),
+          snapshot_tab.clone()
+        ]
+      );
+      assert_eq!(page.active_center_tab, Some(snapshot_tab.clone()));
+      assert!(matches!(
+        page.opened_snapshot,
+        Some(OpenedSnapshot::AgentTool { .. })
+      ));
+    });
+
+    page.update_in(cx, |page, window, cx| {
+      page.activate_center_tab(
+        CenterTab::diff(PathBuf::from("README.md")),
+        OpenIntent::Open,
+        window,
+        cx,
+      );
+    });
+    await_open_file(&page, cx).await;
+    await_editor_diff(&page, cx).await;
+
+    page.read_with(cx, |page, cx| {
+      assert!(page.opened_snapshot.is_none());
+      assert!(
+        page
+          .editor
+          .as_ref()
+          .is_some_and(|editor| editor.read(cx).projection().is_some()),
+        "the worktree diff tab keeps the live diff"
+      );
+    });
+
+    page.update_in(cx, |page, window, cx| {
+      page.activate_center_tab(snapshot_tab.clone(), OpenIntent::Open, window, cx);
+    });
+    await_open_file(&page, cx).await;
+
+    page.read_with(cx, |page, _| {
+      assert_eq!(page.active_center_tab, Some(snapshot_tab));
+      assert!(matches!(
+        page.opened_snapshot,
+        Some(OpenedSnapshot::AgentTool { .. })
+      ));
     });
   }
 
