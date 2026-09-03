@@ -1083,7 +1083,7 @@ impl SessionPage {
     window: &mut Window,
     cx: &mut Context<Self>,
   ) {
-    let Some(editor) = self.active_editor() else {
+    let Some(editor) = self.diff_editor() else {
       return;
     };
     if editor.update(cx, |editor, cx| {

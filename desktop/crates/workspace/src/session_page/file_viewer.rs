@@ -369,16 +369,34 @@ impl SessionPage {
     cx.notify();
   }
 
+  pub(super) fn warm_editor_tab(&self) -> Option<&CenterTab> {
+    self.editor_tab.as_ref()
+  }
+
+  pub(super) fn shown_editor_tab(&self) -> Option<&CenterTab> {
+    if self.center != CenterView::Diff {
+      return None;
+    }
+    self
+      .active_center_tab
+      .as_ref()
+      .filter(|tab| matches!(tab.kind, CenterTabKind::File | CenterTabKind::Diff))
+      .or_else(|| {
+        self
+          .warm_editor_tab()
+          .filter(|tab| matches!(tab.kind, CenterTabKind::File | CenterTabKind::Diff))
+      })
+  }
+
   pub(super) fn editor_tab_state(&self) -> Option<&CenterEditorState> {
     self
-      .editor_tab
-      .as_ref()
+      .warm_editor_tab()
       .and_then(|tab| self.editor_states.get(tab))
   }
 
   fn editor_tab_state_mut(&mut self) -> Option<&mut CenterEditorState> {
-    let tab = self.editor_tab.as_ref()?;
-    self.editor_states.get_mut(tab)
+    let tab = self.warm_editor_tab()?.clone();
+    self.editor_states.get_mut(&tab)
   }
 
   pub(super) fn active_editor(&self) -> Option<Entity<Editor>> {
@@ -1208,10 +1226,13 @@ impl SessionPage {
   /// The editor of the open file, unless the center shows something else or a
   /// rendered file hides the diff.
   pub(super) fn diff_editor(&self) -> Option<Entity<Editor>> {
-    if self.center != CenterView::Diff || (self.show_preview && self.previewable()) {
+    if self.show_preview && self.previewable() {
       return None;
     }
-    self.active_editor()
+    self
+      .shown_editor_tab()
+      .and_then(|tab| self.editor_states.get(tab))
+      .and_then(|state| state.editor.clone())
   }
 
   pub(super) fn toggle_hide_whitespace_action(
@@ -1344,9 +1365,8 @@ impl SessionPage {
     let tab = match self.center {
       CenterView::Conversation => self.active_chat_tab(cx),
       CenterView::Diff => self
-        .active_center_tab
-        .clone()
-        .or_else(|| self.editor_tab.clone())
+        .shown_editor_tab()
+        .cloned()
         .unwrap_or_else(CenterTab::chat),
       CenterView::InteractiveRebase => CenterTab::interactive_rebase(),
     };

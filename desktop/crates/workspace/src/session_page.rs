@@ -2045,9 +2045,7 @@ fn load_agent_review(path: Option<&Path>) -> AgentReviewComments {
 
 impl Focusable for SessionPage {
   fn focus_handle(&self, cx: &App) -> FocusHandle {
-    if self.center == CenterView::Diff
-      && let Some(editor) = self.active_editor()
-    {
+    if let Some(editor) = self.diff_editor() {
       return editor.read(cx).focus_handle(cx);
     }
     if let Some(view) = self.agent_chat_view.as_ref() {

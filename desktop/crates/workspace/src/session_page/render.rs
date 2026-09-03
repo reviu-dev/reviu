@@ -3138,7 +3138,36 @@ mod tests {
     });
     page.read_with(cx, |page, _| {
       assert_eq!(page.center, CenterView::Conversation);
+      assert!(page.warm_editor_tab().is_some());
+      assert!(page.shown_editor_tab().is_none());
     });
+
+    page.update_in(cx, |page, window, cx| {
+      page.find_action(&editor::Find, window, cx)
+    });
+    cx.run_until_parked();
+    assert!(
+      !find_open(&page, cx),
+      "cmd-f does not open search on a warm diff hidden behind chat"
+    );
+
+    page.update_in(cx, |page, window, cx| {
+      page.activate_center_tab(
+        CenterTab::diff(PathBuf::from("a.txt")),
+        OpenIntent::Open,
+        window,
+        cx,
+      );
+    });
+    await_open_file(&page, cx).await;
+    page.update_in(cx, |page, window, cx| {
+      page.find_action(&editor::Find, window, cx)
+    });
+    cx.run_until_parked();
+    assert!(
+      find_open(&page, cx),
+      "cmd-f works again once the diff is shown"
+    );
   }
 
   #[gpui::test]
