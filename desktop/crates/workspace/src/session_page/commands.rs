@@ -213,6 +213,7 @@ impl SessionPage {
     let todo_view = cx.new(|cx| InteractiveRebaseTodoView::new(window, cx, config));
     self.interactive_rebase_todo_view = Some(todo_view.clone());
     self.center = CenterView::InteractiveRebase;
+    self.remember_center_tab(CenterTab::interactive_rebase());
     cx.on_next_frame(window, move |_, window, cx| {
       todo_view.update(cx, |view, cx| view.focus_rows_list(window, cx));
     });
@@ -225,12 +226,25 @@ impl SessionPage {
     cx: &mut Context<Self>,
   ) {
     self.interactive_rebase_todo_view = None;
-    self.center = if self.editor.is_some() {
-      CenterView::Diff
+    self
+      .center_tabs
+      .retain(|tab| tab.kind != CenterTabKind::InteractiveRebase);
+    if self.editor.is_some() {
+      self.center = CenterView::Diff;
+      self.active_center_tab = self.editor_tab.clone().or_else(|| {
+        self
+          .center_tabs
+          .iter()
+          .rev()
+          .find(|tab| matches!(tab.kind, CenterTabKind::File | CenterTabKind::Diff))
+          .cloned()
+      });
+      self.focus_editor_on_next_frame(window, cx);
     } else {
-      CenterView::Conversation
-    };
-    self.focus_editor_on_next_frame(window, cx);
+      self.center = CenterView::Conversation;
+      self.active_center_tab = Some(CenterTab::chat());
+      self.focus_agent_input_on_next_frame(window, cx);
+    }
     cx.notify();
   }
 

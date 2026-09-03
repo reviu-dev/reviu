@@ -352,18 +352,33 @@ impl SessionPage {
   }
 
   pub(super) fn render_center_tabs(&self, cx: &mut Context<Self>) -> AnyElement {
-    let selected_index = match self.center {
-      CenterView::Conversation => 0,
-      CenterView::Diff => self
-        .active_center_file_tab
-        .as_ref()
-        .and_then(|active| self.center_file_tabs.iter().position(|tab| tab == active))
-        .map(|index| index + 1)
-        .unwrap_or(0),
-      CenterView::InteractiveRebase => self.center_file_tabs.len() + 1,
-    };
+    let mut tabs = CenterTab::with_chat_tab(self.center_tabs.clone());
+    if self.center == CenterView::InteractiveRebase
+      && !tabs
+        .iter()
+        .any(|tab| tab.kind == CenterTabKind::InteractiveRebase)
+    {
+      tabs.push(CenterTab::interactive_rebase());
+    }
+    let selected_tab = self
+      .active_center_tab
+      .clone()
+      .unwrap_or_else(|| match self.center {
+        CenterView::Conversation => CenterTab::chat(),
+        CenterView::Diff => tabs
+          .iter()
+          .rev()
+          .find(|tab| matches!(tab.kind, CenterTabKind::File | CenterTabKind::Diff))
+          .cloned()
+          .unwrap_or_else(CenterTab::chat),
+        CenterView::InteractiveRebase => CenterTab::interactive_rebase(),
+      });
+    let selected_index = tabs
+      .iter()
+      .position(|tab| tab == &selected_tab)
+      .unwrap_or(0);
 
-    let file_tabs = self.center_file_tabs.clone();
+    let selectable_tabs = tabs.clone();
     let mut tab_bar = TabBar::new("session-center-tabs")
       .w_full()
       .underline()
@@ -381,68 +396,80 @@ impl SessionPage {
             cx.stop_propagation();
             this.new_session(window, cx);
           })),
-      )
-      .child(
-        Tab::new()
-          .label("Chat")
-          .icon(gpui_component::Icon::new(UiIconName::MessageCircle)),
       );
 
-    for tab in &file_tabs {
-      let dirty = self.active_center_file_tab.as_ref() == Some(tab)
+    for tab in &tabs {
+      let dirty = self.editor_tab.as_ref() == Some(tab)
+        && matches!(tab.kind, CenterTabKind::File | CenterTabKind::Diff)
         && self
           .editor
           .as_ref()
           .is_some_and(|editor| editor.read(cx).is_dirty);
-      let name = tab
-        .path
-        .file_name()
-        .map(|name| name.to_string_lossy().into_owned())
-        .unwrap_or_else(|| tab.path.to_string_lossy().into_owned());
-      let prefix = match tab.kind {
-        CenterFileTabKind::File => "",
-        CenterFileTabKind::Diff => "Diff: ",
+      let (label, icon) = match tab.kind {
+        CenterTabKind::Chat => (
+          "Chat".to_string(),
+          gpui_component::Icon::new(UiIconName::MessageCircle),
+        ),
+        CenterTabKind::File | CenterTabKind::Diff => {
+          let Some(path) = tab.path() else {
+            continue;
+          };
+          let name = path
+            .file_name()
+            .map(|name| name.to_string_lossy().into_owned())
+            .unwrap_or_else(|| path.to_string_lossy().into_owned());
+          let prefix = if tab.kind == CenterTabKind::Diff {
+            "Diff: "
+          } else {
+            ""
+          };
+          let label = if dirty {
+            format!("{prefix}{name} *")
+          } else {
+            format!("{prefix}{name}")
+          };
+          (
+            label,
+            gpui_component::Icon::new(gpui_component::IconName::File),
+          )
+        }
+        CenterTabKind::InteractiveRebase => (
+          "Interactive rebase".to_string(),
+          gpui_component::Icon::new(UiIconName::GitMerge),
+        ),
       };
-      let label = if dirty {
-        format!("{prefix}{name} *")
-      } else {
-        format!("{prefix}{name}")
-      };
-      let close_tab = tab.clone();
-      let close_label = format!("{:?}-{}", tab.kind, tab.path.to_string_lossy());
-      tab_bar = tab_bar.child(
-        Tab::new()
-          .label(label)
-          .icon(gpui_component::IconName::File)
-          .suffix(
-            Button::new(format!("session-center-close-{close_label}"))
-              .debug_selector(move || format!("session-center-close-{close_label}"))
-              .icon(gpui_component::IconName::Close)
-              .ghost()
-              .compact()
-              .xsmall()
-              .tooltip("Close tab")
-              .on_click(cx.listener(move |this, _, window, cx| {
-                cx.stop_propagation();
-                this.close_center_file_tab(close_tab.clone(), window, cx);
-              })),
-          ),
-      );
-    }
 
-    if self.center == CenterView::InteractiveRebase {
-      tab_bar = tab_bar.child(
-        Tab::new()
-          .label("Interactive rebase")
-          .icon(gpui_component::Icon::new(UiIconName::GitMerge)),
-      );
+      let mut tab_element = Tab::new().label(label).icon(icon);
+      if matches!(tab.kind, CenterTabKind::File | CenterTabKind::Diff) {
+        let close_tab = tab.clone();
+        let close_label = format!(
+          "{:?}-{}",
+          tab.kind,
+          tab
+            .path()
+            .map(|path| path.to_string_lossy().into_owned())
+            .unwrap_or_default()
+        );
+        tab_element = tab_element.suffix(
+          Button::new(format!("session-center-close-{close_label}"))
+            .debug_selector(move || format!("session-center-close-{close_label}"))
+            .icon(gpui_component::IconName::Close)
+            .ghost()
+            .compact()
+            .xsmall()
+            .tooltip("Close tab")
+            .on_click(cx.listener(move |this, _, window, cx| {
+              cx.stop_propagation();
+              this.close_center_tab(close_tab.clone(), window, cx);
+            })),
+        );
+      }
+      tab_bar = tab_bar.child(tab_element);
     }
 
     tab_bar = tab_bar.on_click(cx.listener(move |this, index: &usize, window, cx| {
-      if *index == 0 {
-        this.activate_conversation_tab(window, cx);
-      } else if let Some(tab) = file_tabs.get(index.saturating_sub(1)).cloned() {
-        this.activate_center_file_tab(tab, OpenIntent::Open, window, cx);
+      if let Some(tab) = selectable_tabs.get(*index).cloned() {
+        this.activate_center_tab(tab, OpenIntent::Open, window, cx);
       }
     }));
 
@@ -567,9 +594,9 @@ impl SessionPage {
     let old_path = self.selected_file_old_path(cx);
     let previewing = self.show_preview && self.previewable();
     let showing_git_diff = self
-      .active_center_file_tab
+      .active_center_tab
       .as_ref()
-      .is_none_or(|tab| tab.kind == CenterFileTabKind::Diff);
+      .is_none_or(|tab| tab.kind == CenterTabKind::Diff);
     let has_editor = self.editor.is_some();
     // A snapshot of a commit or of a pull request cannot be written back.
     let can_save = self
@@ -717,9 +744,9 @@ impl SessionPage {
     } else if let Some(editor) = self.editor.clone() {
       // Actions of the hovered hunk or conflict float over the editor.
       let showing_git_diff = self
-        .active_center_file_tab
+        .active_center_tab
         .as_ref()
-        .is_none_or(|tab| tab.kind == CenterFileTabKind::Diff);
+        .is_none_or(|tab| tab.kind == CenterTabKind::Diff);
       let hunk_actions = (showing_git_diff && self.opened_snapshot.is_none())
         .then(|| {
           let file_status = self.selected_file_status(cx);

@@ -141,30 +141,61 @@ enum CenterView {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-enum CenterFileTabKind {
+enum CenterTabKind {
+  Chat,
   File,
   Diff,
+  InteractiveRebase,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
-struct CenterFileTab {
-  kind: CenterFileTabKind,
-  path: PathBuf,
+struct CenterTab {
+  kind: CenterTabKind,
+  path: Option<PathBuf>,
 }
 
-impl CenterFileTab {
+impl CenterTab {
+  fn default_tabs() -> Vec<Self> {
+    vec![Self::chat()]
+  }
+
+  fn with_chat_tab(mut tabs: Vec<Self>) -> Vec<Self> {
+    if !tabs.iter().any(|tab| tab.kind == CenterTabKind::Chat) {
+      tabs.insert(0, Self::chat());
+    }
+    tabs
+  }
+
+  fn chat() -> Self {
+    Self {
+      kind: CenterTabKind::Chat,
+      path: None,
+    }
+  }
+
   fn file(path: PathBuf) -> Self {
     Self {
-      kind: CenterFileTabKind::File,
-      path,
+      kind: CenterTabKind::File,
+      path: Some(path),
     }
   }
 
   fn diff(path: PathBuf) -> Self {
     Self {
-      kind: CenterFileTabKind::Diff,
-      path,
+      kind: CenterTabKind::Diff,
+      path: Some(path),
     }
+  }
+
+  fn interactive_rebase() -> Self {
+    Self {
+      kind: CenterTabKind::InteractiveRebase,
+      path: None,
+    }
+  }
+
+  fn path(&self) -> Option<&Path> {
+    self.path.as_deref()
   }
 }
 
@@ -306,10 +337,11 @@ pub struct SessionPage {
   available_checkouts: Vec<CheckoutInfo>,
   _checkout_options_task: Option<Task<()>>,
   center: CenterView,
-  center_file_tabs: Vec<CenterFileTab>,
-  center_file_tabs_by_checkout: HashMap<PathBuf, Vec<CenterFileTab>>,
-  center_active_file_by_checkout: HashMap<PathBuf, CenterFileTab>,
-  active_center_file_tab: Option<CenterFileTab>,
+  center_tabs: Vec<CenterTab>,
+  center_tabs_by_checkout: HashMap<PathBuf, Vec<CenterTab>>,
+  center_active_tab_by_checkout: HashMap<PathBuf, CenterTab>,
+  active_center_tab: Option<CenterTab>,
+  editor_tab: Option<CenterTab>,
   editor: Option<Entity<Editor>>,
   binary_preview: Option<BinaryPreview>,
   selected_file: Option<PathBuf>,
@@ -591,10 +623,11 @@ impl SessionPage {
       available_checkouts: Vec::new(),
       _checkout_options_task: None,
       center: CenterView::Conversation,
-      center_file_tabs: Vec::new(),
-      center_file_tabs_by_checkout: HashMap::new(),
-      center_active_file_by_checkout: HashMap::new(),
-      active_center_file_tab: None,
+      center_tabs: CenterTab::default_tabs(),
+      center_tabs_by_checkout: HashMap::new(),
+      center_active_tab_by_checkout: HashMap::new(),
+      active_center_tab: Some(CenterTab::chat()),
+      editor_tab: None,
       editor: None,
       binary_preview: None,
       selected_file: None,
@@ -978,34 +1011,48 @@ impl SessionPage {
       return;
     }
     if let Some(previous_checkout) = self.synced_checkout.clone() {
+      let tabs = self
+        .center_tabs
+        .iter()
+        .filter(|tab| tab.kind != CenterTabKind::InteractiveRebase)
+        .cloned()
+        .collect();
       self
-        .center_file_tabs_by_checkout
-        .insert(previous_checkout.clone(), self.center_file_tabs.clone());
-      if let Some(tab) = self.active_center_file_tab.clone() {
+        .center_tabs_by_checkout
+        .insert(previous_checkout.clone(), tabs);
+      if let Some(tab) = self
+        .active_center_tab
+        .clone()
+        .filter(|tab| tab.kind != CenterTabKind::InteractiveRebase)
+      {
         self
-          .center_active_file_by_checkout
+          .center_active_tab_by_checkout
           .insert(previous_checkout, tab);
       } else {
         self
-          .center_active_file_by_checkout
+          .center_active_tab_by_checkout
           .remove(&previous_checkout);
       }
     }
 
-    let restored_file_tabs = checkout
-      .as_ref()
-      .and_then(|checkout| self.center_file_tabs_by_checkout.get(checkout).cloned())
-      .unwrap_or_default();
+    let restored_tabs = CenterTab::with_chat_tab(
+      checkout
+        .as_ref()
+        .and_then(|checkout| self.center_tabs_by_checkout.get(checkout).cloned())
+        .unwrap_or_else(CenterTab::default_tabs),
+    );
     let restored_selected_tab = checkout
       .as_ref()
-      .and_then(|checkout| self.center_active_file_by_checkout.get(checkout).cloned())
-      .filter(|tab| restored_file_tabs.contains(tab));
+      .and_then(|checkout| self.center_active_tab_by_checkout.get(checkout).cloned())
+      .filter(|tab| restored_tabs.contains(tab))
+      .unwrap_or_else(CenterTab::chat);
 
     self.synced_checkout = checkout.clone();
     self.close_diff(window, cx);
     self.center = CenterView::Conversation;
-    self.center_file_tabs = restored_file_tabs;
-    self.active_center_file_tab = None;
+    self.center_tabs = restored_tabs;
+    self.active_center_tab = Some(CenterTab::chat());
+    self.editor_tab = None;
     self.editor = None;
     self.binary_preview = None;
     self.selected_file = None;
@@ -1030,11 +1077,7 @@ impl SessionPage {
     }
     self.refresh_checkout_options(cx);
     self.push_checkout_selector(cx);
-    if let Some(tab) = restored_selected_tab {
-      self.activate_center_file_tab(tab, OpenIntent::Browse, window, cx);
-    } else {
-      cx.notify();
-    }
+    self.activate_center_tab(restored_selected_tab, OpenIntent::Browse, window, cx);
   }
 
   /// Pins the git surfaces on one of the repo's checkouts without touching
@@ -1350,13 +1393,19 @@ impl SessionPage {
     self.window_handle
   }
 
-  fn remember_center_file_tab(&mut self, tab: CenterFileTab) {
-    self.center_file_tabs.retain(|existing| existing != &tab);
-    self.center_file_tabs.push(tab.clone());
-    self.active_center_file_tab = Some(tab);
+  fn remember_center_tab(&mut self, tab: CenterTab) {
+    if tab.kind == CenterTabKind::Chat {
+      self.center_tabs = CenterTab::with_chat_tab(self.center_tabs.clone());
+      self.active_center_tab = Some(tab);
+      return;
+    }
+    self.center_tabs.retain(|existing| existing != &tab);
+    self.center_tabs.push(tab.clone());
+    self.active_center_tab = Some(tab);
   }
 
   fn activate_conversation_tab(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    self.remember_center_tab(CenterTab::chat());
     if self.center == CenterView::Conversation {
       self.focus_agent_input_on_next_frame(window, cx);
       return;
@@ -1367,16 +1416,31 @@ impl SessionPage {
     cx.notify();
   }
 
-  fn activate_center_file_tab(
+  fn activate_center_tab(
     &mut self,
-    tab: CenterFileTab,
+    tab: CenterTab,
     intent: OpenIntent,
     window: &mut Window,
     cx: &mut Context<Self>,
   ) {
     match tab.kind {
-      CenterFileTabKind::File => self.open_file(tab.path, None, None, intent, window, cx),
-      CenterFileTabKind::Diff => self.open_diff(tab.path, None, intent, window, cx),
+      CenterTabKind::Chat => self.activate_conversation_tab(window, cx),
+      CenterTabKind::File => {
+        if let Some(path) = tab.path {
+          self.open_file(path, None, None, intent, window, cx);
+        }
+      }
+      CenterTabKind::Diff => {
+        if let Some(path) = tab.path {
+          self.open_diff(path, None, intent, window, cx);
+        }
+      }
+      CenterTabKind::InteractiveRebase => {
+        self.center = CenterView::InteractiveRebase;
+        self.active_center_tab = Some(CenterTab::interactive_rebase());
+        self.center_tabs = CenterTab::with_chat_tab(self.center_tabs.clone());
+        cx.notify();
+      }
     }
   }
 

@@ -3294,8 +3294,11 @@ mod tests {
       assert_eq!(page.center, CenterView::Diff);
       assert_eq!(page.selected_file.as_deref(), Some(Path::new("README.md")));
       assert_eq!(
-        page.center_file_tabs,
-        vec![CenterFileTab::diff(PathBuf::from("README.md"))]
+        page.center_tabs,
+        vec![
+          CenterTab::chat(),
+          CenterTab::diff(PathBuf::from("README.md"))
+        ]
       );
     });
 

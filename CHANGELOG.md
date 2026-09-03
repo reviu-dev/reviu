@@ -4,6 +4,10 @@ All notable changes to Reviu are documented here.
 
 ## 1.0.0
 
+### Editor-Style Center Tabs
+
+Chat, files, diffs, and interactive rebase now share the same center tab model. File tree opens regular file tabs, review opens diff tabs, and the same path can stay open in both forms without losing your place.
+
 ### Faster, Smarter File Search
 
 Cmd-P now ranks fuzzy matches by filename and path, keeps exact filenames above incidental folder matches, and favors changed and recently viewed files. Repository files load in the background and stay cached, matches are highlighted and capped for responsive navigation, loading failures stay visible, and queries such as `session_page.rs:1520:8` open directly at the requested position.
