@@ -376,7 +376,7 @@ impl ListDelegate for ChangesRowsDelegate {
           .into_any_element()
       });
 
-    let (dir, file) = split_path_label(&path);
+    let (parent_path, file_name) = split_path_label(&path);
     let status_element: AnyElement = {
       let status_color = status_color(status_kind, &theme);
       let status_content = if status_uses_warning_icon(status_kind) {
@@ -497,23 +497,30 @@ impl ListDelegate for ChangesRowsDelegate {
                   .overflow_hidden()
                   .text_sm()
                   .whitespace_nowrap()
-                  .when(!dir.is_empty(), |this| {
+                  .gap_1()
+                  .child(
+                    div()
+                      .debug_selector(move || {
+                        format!("changes-file-name-{}-{}", ix.section, ix.row)
+                      })
+                      .flex_shrink_0()
+                      .text_color(theme.foreground)
+                      .child(file_name),
+                  )
+                  .when(!parent_path.is_empty(), |this| {
                     this.child(
                       div()
+                        .debug_selector(move || {
+                          format!("changes-file-path-{}-{}", ix.section, ix.row)
+                        })
                         .min_w_0()
                         .overflow_hidden()
                         .whitespace_nowrap()
                         .text_ellipsis_start()
                         .text_color(theme.muted_foreground)
-                        .child(dir),
+                        .child(parent_path),
                     )
-                  })
-                  .child(
-                    div()
-                      .flex_shrink_0()
-                      .text_color(theme.foreground)
-                      .child(file),
-                  ),
+                  }),
               ),
           )
           .children(row_actions),
@@ -919,18 +926,18 @@ fn restore_entry(
   }
 }
 
-/// Splits `src/app/main.rs` into `src/app/` and `main.rs`.
+/// Splits `src/app/main.rs` into `src/app` and `main.rs`.
 pub(crate) fn split_path_label(path: &Path) -> (String, String) {
-  let file = path
+  let file_name = path
     .file_name()
     .map(|name| name.to_string_lossy().into_owned())
     .unwrap_or_else(|| path.to_string_lossy().into_owned());
-  let dir = path
+  let parent_path = path
     .parent()
     .filter(|parent| !parent.as_os_str().is_empty())
-    .map(|parent| format!("{}/", parent.to_string_lossy()))
+    .map(|parent| parent.to_string_lossy().into_owned())
     .unwrap_or_default();
-  (dir, file)
+  (parent_path, file_name)
 }
 
 #[cfg(test)]
@@ -1014,17 +1021,45 @@ mod tests {
   }
 
   #[test]
-  fn split_path_label_separates_the_folder_from_the_file() {
+  fn split_path_label_separates_the_parent_path_from_the_file() {
     assert_eq!(
       split_path_label(Path::new("crates/workspace/src/session_page.rs")),
       (
-        "crates/workspace/src/".to_string(),
+        "crates/workspace/src".to_string(),
         "session_page.rs".to_string()
       )
     );
     assert_eq!(
       split_path_label(Path::new("CHANGELOG.md")),
       (String::new(), "CHANGELOG.md".to_string())
+    );
+  }
+
+  #[gpui::test]
+  async fn rows_show_file_name_before_parent_path(cx: &mut gpui::TestAppContext) {
+    let (list, cx) = add_changes_list_window(std::env::temp_dir(), cx);
+    list.update(cx, |list, cx| {
+      list.set_entries(
+        vec![RepoStatusEntry {
+          path: PathBuf::from("src/components/Avatar.vue"),
+          old_path: None,
+          status: RepoStatusKind::Modified,
+          stage: RepoStage::Unstaged,
+        }],
+        cx,
+      );
+    });
+    cx.run_until_parked();
+
+    let file_name = cx
+      .debug_bounds("changes-file-name-0-0")
+      .expect("file name label bounds");
+    let parent_path = cx
+      .debug_bounds("changes-file-path-0-0")
+      .expect("parent path label bounds");
+    assert!(
+      f32::from(file_name.left()) < f32::from(parent_path.left()),
+      "the file name should be shown before its muted parent path"
     );
   }
 
