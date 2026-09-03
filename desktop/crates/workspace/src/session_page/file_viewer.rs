@@ -303,7 +303,7 @@ impl SessionPage {
         if this.open_file_generation != generation {
           return;
         }
-        if this.selected_file.as_ref() != Some(&rel_path) {
+        if this.active_selected_file() != Some(rel_path.as_path()) {
           return;
         }
         let binary_preview = build_binary_preview(rel_path.as_path(), loaded.binary_bytes.clone());
@@ -431,6 +431,18 @@ impl SessionPage {
 
   fn clear_editor_tab(&mut self, tab: &CenterTab) {
     self.editor_states.remove(tab);
+    if self.editor_tab.as_ref() == Some(tab) {
+      self.clear_active_editor_mirror();
+    }
+  }
+
+  fn clear_active_editor_mirror(&mut self) {
+    self.editor_tab = None;
+    self.editor_file_modified = None;
+    self.editor = None;
+    self.binary_preview = None;
+    self.selected_file = None;
+    self.opened_snapshot = None;
   }
 
   fn active_worktree_file_modified(&self, cx: &App) -> Option<SystemTime> {
@@ -440,23 +452,16 @@ impl SessionPage {
   }
 
   fn cache_active_editor(&mut self) {
-    let (Some(tab), Some(selected_file)) = (self.editor_tab.clone(), self.selected_file.clone())
-    else {
+    let Some(tab) = self.editor_tab.clone() else {
       return;
     };
     if !matches!(tab.kind, CenterTabKind::File | CenterTabKind::Diff) {
       return;
     }
-    self.set_active_editor_state(
-      tab,
-      CenterEditorState {
-        selected_file,
-        file_modified: self.editor_file_modified,
-        editor: self.editor.clone(),
-        binary_preview: self.binary_preview.clone(),
-        opened_snapshot: self.opened_snapshot.clone(),
-      },
-    );
+    let Some(state) = self.active_editor_state().cloned() else {
+      return;
+    };
+    self.set_active_editor_state(tab, state);
   }
 
   fn restore_center_editor(
@@ -928,13 +933,14 @@ impl SessionPage {
 
   /// Leaving a snapshot for a working-tree file. Returns whether there was one.
   pub(super) fn leave_commit_file(&mut self, cx: &mut Context<Self>) -> bool {
-    let Some(snapshot) = self.opened_snapshot.take() else {
+    let Some(snapshot) = self.active_opened_snapshot() else {
       return false;
     };
     if matches!(snapshot, OpenedSnapshot::Commit(_)) {
       let history = self.dock_panel.read(cx).history_list.clone();
       history.update(cx, |list, cx| list.set_opened(None, cx));
     }
+    self.opened_snapshot = None;
     true
   }
 
@@ -1459,14 +1465,11 @@ impl SessionPage {
     self
       .center_tab_history
       .retain(|candidate| candidate != &tab);
-    self.clear_editor_tab(&tab);
     let editor_closed = self.editor_tab.as_ref() == Some(&tab);
+    self.clear_editor_tab(&tab);
     if editor_closed {
-      self.discard_active_editor();
-      self.editor_tab = None;
-      self.editor_file_modified = None;
-      self.selected_file = None;
-      self.opened_snapshot = None;
+      self.open_file_task = None;
+      self.open_file_generation = self.open_file_generation.wrapping_add(1);
       self.svg_preview.update(cx, |preview, _| preview.clear());
     }
     if !selected_closed {
@@ -1506,11 +1509,9 @@ impl SessionPage {
   fn discard_active_editor(&mut self) {
     if let Some(tab) = self.editor_tab.clone() {
       self.clear_editor_tab(&tab);
+    } else {
+      self.clear_active_editor_mirror();
     }
-    self.editor_tab = None;
-    self.editor_file_modified = None;
-    self.editor = None;
-    self.binary_preview = None;
     self.open_file_task = None;
     self.open_file_generation = self.open_file_generation.wrapping_add(1);
   }
@@ -2258,7 +2259,7 @@ mod tests {
     await_open_file(&page, cx).await;
 
     page.read_with(cx, |page, _| {
-      assert_eq!(page.active_center_tab, Some(snapshot_tab));
+      assert_eq!(page.active_center_tab, Some(snapshot_tab.clone()));
       assert_eq!(
         page.active_editor().expect("snapshot editor").entity_id(),
         snapshot_editor
@@ -2267,6 +2268,25 @@ mod tests {
         page.active_opened_snapshot(),
         Some(OpenedSnapshot::AgentTool { .. })
       ));
+    });
+
+    page.update_in(cx, |page, window, cx| {
+      page.close_active_center_tab_action(&crate::CloseCenterTab, window, cx);
+    });
+    await_open_file(&page, cx).await;
+
+    page.read_with(cx, |page, _| {
+      assert_eq!(
+        page.active_center_tab,
+        Some(CenterTab::diff(PathBuf::from("README.md")))
+      );
+      assert!(!page.center_tabs.contains(&snapshot_tab));
+      assert!(!page.editor_states.contains_key(&snapshot_tab));
+      assert!(page.active_opened_snapshot().is_none());
+      assert_eq!(
+        page.active_editor().expect("worktree editor").entity_id(),
+        worktree_editor
+      );
     });
   }
 
