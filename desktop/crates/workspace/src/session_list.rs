@@ -6,13 +6,13 @@ use std::rc::Rc;
 
 use agent_chat_panel::ConversationMeta;
 use gpui::{
-  Anchor, Context, DismissEvent, DragMoveEvent, Entity, EventEmitter, Focusable as _, IntoElement,
-  Render, SharedString, Window, div, prelude::*, px,
+  Anchor, Bounds, Context, DismissEvent, DragMoveEvent, Entity, EventEmitter, Focusable as _,
+  IntoElement, MouseExitEvent, Pixels, Point, Render, SharedString, Window, div, prelude::*, px,
 };
 use gpui_component::menu::{PopupMenu, PopupMenuItem};
 use gpui_component::popover::Popover;
 use gpui_component::scroll::ScrollableElement as _;
-use gpui_component::{ActiveTheme as _, Icon, Sizable as _, h_flex, v_flex};
+use gpui_component::{ActiveTheme as _, ElementExt as _, Icon, Sizable as _, h_flex, v_flex};
 use ui::{Button, ButtonVariants as _, StatusThemeExt as _, UiIconName};
 
 /// Live state of a session's agent, derived from its panel; a session with no
@@ -74,38 +74,31 @@ pub struct SessionRow {
   pub repo_root: PathBuf,
 }
 
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum RepoDropPosition {
-  Before,
-  After,
-}
-
-impl RepoDropPosition {
-  fn gap(self, row: usize) -> usize {
-    match self {
-      Self::Before => row,
-      Self::After => row + 1,
-    }
-  }
-}
-
 #[derive(Clone)]
 struct DraggedRepoSection {
   repo_root: PathBuf,
   name: SharedString,
+  cursor_offset: Point<Pixels>,
 }
 
 impl Render for DraggedRepoSection {
   fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
     div()
-      .px_2()
-      .py_1()
-      .text_sm()
-      .bg(cx.theme().accent)
-      .text_color(cx.theme().accent_foreground)
-      .rounded(cx.theme().radius)
-      .shadow_md()
-      .child(self.name.clone())
+      .ml(self.cursor_offset.x - px(90.0))
+      .mt(self.cursor_offset.y - px(14.0))
+      .child(
+        div()
+          .w(px(180.0))
+          .px_2()
+          .py_1()
+          .text_sm()
+          .truncate()
+          .bg(cx.theme().accent)
+          .text_color(cx.theme().accent_foreground)
+          .rounded(cx.theme().radius)
+          .shadow_md()
+          .child(self.name.clone()),
+      )
   }
 }
 
@@ -168,7 +161,8 @@ pub struct SessionList {
   section_order: Vec<PathBuf>,
   /// Keeps the section highlighted while one of its menus is open.
   open_menu_repo: Option<PathBuf>,
-  drop_target: Option<(PathBuf, RepoDropPosition)>,
+  repo_header_bounds: HashMap<PathBuf, Bounds<Pixels>>,
+  drop_gap: Option<usize>,
 }
 
 impl SessionList {
@@ -182,7 +176,8 @@ impl SessionList {
       collapsed_repos: std::collections::HashSet::new(),
       section_order: Vec::new(),
       open_menu_repo: None,
-      drop_target: None,
+      repo_header_bounds: HashMap::new(),
+      drop_gap: None,
     }
   }
 
@@ -322,55 +317,70 @@ impl SessionList {
     }
   }
 
-  fn update_drop_target(
-    &mut self,
-    repo_root: &Path,
-    position: Option<RepoDropPosition>,
-    cx: &mut Context<Self>,
-  ) {
-    let repo_root = repo_root.to_path_buf();
-    let next = position.map(|position| (repo_root.clone(), position));
-    if self.drop_target != next {
-      self.drop_target = next;
+  fn rendered_section_order(&self) -> Vec<PathBuf> {
+    let mut section_repos = self.section_order.clone();
+    for row in &self.conversations {
+      if !section_repos.contains(&row.repo_root) {
+        section_repos.push(row.repo_root.clone());
+      }
+    }
+    section_repos
+  }
+
+  fn update_repo_header_bounds(&mut self, repo_root: PathBuf, bounds: Bounds<Pixels>) {
+    self.repo_header_bounds.insert(repo_root, bounds);
+  }
+
+  fn repo_drop_gap_at(&self, y: Pixels, dragged_repo: &Path) -> Option<usize> {
+    let section_repos = self.rendered_section_order();
+    let from = section_repos.iter().position(|repo| repo == dragged_repo)?;
+    let mut gap = 0;
+    let mut found_bounds = false;
+
+    for (row, repo) in section_repos.iter().enumerate() {
+      let Some(bounds) = self.repo_header_bounds.get(repo) else {
+        continue;
+      };
+      found_bounds = true;
+      if y < bounds.center().y {
+        break;
+      }
+      gap = row + 1;
+    }
+
+    if !found_bounds || gap == from || gap == from + 1 {
+      None
+    } else {
+      Some(gap)
+    }
+  }
+
+  fn update_drop_gap(&mut self, gap: Option<usize>, cx: &mut Context<Self>) {
+    if self.drop_gap != gap {
+      self.drop_gap = gap;
       cx.notify();
     }
   }
 
-  fn reorder_repo_section(
-    &mut self,
-    dragged_repo: &Path,
-    target_repo: &Path,
-    position: RepoDropPosition,
-    cx: &mut Context<Self>,
-  ) {
-    self.drop_target = None;
-    let Some(from) = self
-      .section_order
-      .iter()
-      .position(|repo| repo == dragged_repo)
-    else {
+  fn reorder_repo_section(&mut self, dragged_repo: &Path, gap: usize, cx: &mut Context<Self>) {
+    self.drop_gap = None;
+    let mut section_order = self.rendered_section_order();
+    let Some(from) = section_order.iter().position(|repo| repo == dragged_repo) else {
+      cx.notify();
       return;
     };
-    let Some(to) = self
-      .section_order
-      .iter()
-      .position(|repo| repo == target_repo)
-    else {
-      return;
-    };
-    let mut gap = position.gap(to);
+    let mut gap = gap.min(section_order.len());
     if gap == from || gap == from + 1 {
       cx.notify();
       return;
     }
 
-    let repo = self.section_order.remove(from);
+    let repo = section_order.remove(from);
     if from < gap {
       gap -= 1;
     }
-    let gap = gap.min(self.section_order.len());
-    self.section_order.insert(gap, repo);
-    let section_order = self.section_order.clone();
+    section_order.insert(gap, repo);
+    self.section_order = section_order.clone();
     cx.emit(SessionListEvent::RepoOrderChanged { section_order });
     cx.notify();
   }
@@ -382,6 +392,8 @@ impl SessionList {
   fn render_repo_header(
     &self,
     repo_root: &Path,
+    row: usize,
+    is_last: bool,
     count: usize,
     theme: &gpui_component::Theme,
     cx: &mut Context<Self>,
@@ -396,14 +408,10 @@ impl SessionList {
     let create_repo = repo_root.to_path_buf();
     let options_repo = repo_root.to_path_buf();
     let drag_repo = repo_root.to_path_buf();
-    let move_repo = repo_root.to_path_buf();
-    let drop_repo = repo_root.to_path_buf();
+    let bounds_repo = repo_root.to_path_buf();
     let group_name = SharedString::from(format!("repo-section-{}", repo_root.display()));
     let menu_open = self.open_menu_repo.as_deref() == Some(repo_root);
-    let drop_position = self
-      .drop_target
-      .as_ref()
-      .and_then(|(target, position)| (target == repo_root).then_some(*position));
+    let drop_gap = self.drop_gap.filter(|_| cx.has_active_drag());
 
     h_flex()
       .id(SharedString::from(format!(
@@ -420,57 +428,48 @@ impl SessionList {
       .px_2()
       .py_1()
       .rounded(px(6.0))
-      .cursor_pointer()
+      .cursor_move()
       .when(menu_open, |this| this.bg(theme.secondary_hover))
       .hover(|this| this.bg(theme.secondary_hover))
-      .when_some(
-        drop_position.filter(|_| cx.has_active_drag()),
-        |this, position| {
-          let line = div()
-            .absolute()
-            .left_0()
-            .right_0()
-            .h(px(2.0))
-            .rounded_full()
-            .bg(theme.status_blue());
-          this.child(match position {
-            RepoDropPosition::Before => line.top(px(-3.0)),
-            RepoDropPosition::After => line.bottom(px(-3.0)),
+      .when_some(drop_gap, |this, gap| {
+        let draws_before = gap == row;
+        let draws_after = is_last && gap == row + 1;
+        if !draws_before && !draws_after {
+          return this;
+        }
+        let line = div()
+          .absolute()
+          .left_0()
+          .right_0()
+          .h(px(2.0))
+          .rounded_full()
+          .bg(theme.status_blue());
+        this.child(if draws_after {
+          line.bottom(px(-3.0))
+        } else {
+          line.top(px(-3.0))
+        })
+      })
+      .on_prepaint({
+        let view = cx.entity().clone();
+        move |bounds, _, cx| {
+          view.update(cx, |list, _| {
+            list.update_repo_header_bounds(bounds_repo.clone(), bounds)
           })
-        },
-      )
+        }
+      })
       .on_drag(
         DraggedRepoSection {
           repo_root: drag_repo,
           name: name.clone(),
+          cursor_offset: Point::default(),
         },
-        |drag, _, _, cx| cx.new(|_| drag.clone()),
+        |drag, cursor_offset, _, cx| {
+          let mut drag = drag.clone();
+          drag.cursor_offset = cursor_offset;
+          cx.new(|_| drag)
+        },
       )
-      .on_drag_move(cx.listener(
-        move |this, event: &DragMoveEvent<DraggedRepoSection>, _, cx| {
-          let bounds = event.bounds;
-          let dragged_repo = &event.drag(cx).repo_root;
-          let position = if dragged_repo == &move_repo || !bounds.contains(&event.event.position) {
-            None
-          } else if event.event.position.y < bounds.center().y {
-            Some(RepoDropPosition::Before)
-          } else {
-            Some(RepoDropPosition::After)
-          };
-          this.update_drop_target(&move_repo, position, cx);
-        },
-      ))
-      .on_drop(cx.listener(move |this, drag: &DraggedRepoSection, _, cx| {
-        let Some(position) = this
-          .drop_target
-          .as_ref()
-          .filter(|(target, _)| target == &drop_repo)
-          .map(|(_, position)| *position)
-        else {
-          return;
-        };
-        this.reorder_repo_section(&drag.repo_root, &drop_repo, position, cx);
-      }))
       .on_click(cx.listener(move |_, _, _, cx| {
         cx.emit(SessionListEvent::ToggleRepoCollapsed {
           repo_root: toggle_repo.clone(),
@@ -814,20 +813,25 @@ impl Render for SessionList {
     // Sections come from the tracked-repo order so an empty repo keeps its
     // header; rows not yet in that order (fresh upsert) get a section at the
     // end until the next refresh settles it.
-    let mut section_repos: Vec<PathBuf> = self.section_order.clone();
-    for row in &self.conversations {
-      if !section_repos.contains(&row.repo_root) {
-        section_repos.push(row.repo_root.clone());
-      }
-    }
+    let section_repos = self.rendered_section_order();
+    self
+      .repo_header_bounds
+      .retain(|repo, _| section_repos.contains(repo));
     let mut items: Vec<gpui::AnyElement> = Vec::new();
-    for section_repo in &section_repos {
+    for (section_ix, section_repo) in section_repos.iter().enumerate() {
       let count = self
         .conversations
         .iter()
         .filter(|row| &row.repo_root == section_repo)
         .count();
-      items.push(self.render_repo_header(section_repo, count, &theme, cx));
+      items.push(self.render_repo_header(
+        section_repo,
+        section_ix,
+        section_ix + 1 == section_repos.len(),
+        count,
+        &theme,
+        cx,
+      ));
       if self.collapsed_repos.contains(section_repo) {
         continue;
       }
@@ -1029,6 +1033,27 @@ impl Render for SessionList {
         .min_h_0()
         .overflow_y_scroll()
         .py_1()
+        .on_drag_move(
+          cx.listener(|this, event: &DragMoveEvent<DraggedRepoSection>, _, cx| {
+            let drag = event.drag(cx);
+            let gap = if event.bounds.contains(&event.event.position) {
+              this.repo_drop_gap_at(event.event.position.y, &drag.repo_root)
+            } else {
+              None
+            };
+            this.update_drop_gap(gap, cx);
+          }),
+        )
+        .on_drop(cx.listener(|this, drag: &DraggedRepoSection, _, cx| {
+          let Some(gap) = this.drop_gap.take() else {
+            cx.notify();
+            return;
+          };
+          this.reorder_repo_section(&drag.repo_root, gap, cx);
+        }))
+        .on_mouse_exit(cx.listener(|this, _: &MouseExitEvent, _, cx| {
+          this.update_drop_gap(None, cx);
+        }))
         .children(rows)
         .overflow_y_scrollbar()
         .into_any_element()
@@ -1161,15 +1186,89 @@ mod tests {
 
     list.update(cx, |list, cx| {
       list.set_section_order(vec![repo_a.clone(), repo_b.clone(), repo_c.clone()], cx);
-      list.reorder_repo_section(&repo_c, &repo_a, RepoDropPosition::Before, cx);
+      list.reorder_repo_section(&repo_c, 0, cx);
       assert_eq!(
         list.section_order,
         vec![repo_c.clone(), repo_a.clone(), repo_b.clone()]
       );
 
-      list.reorder_repo_section(&repo_c, &repo_b, RepoDropPosition::After, cx);
+      list.reorder_repo_section(&repo_c, 3, cx);
       assert_eq!(list.section_order, vec![repo_a, repo_b, repo_c]);
     });
+  }
+
+  #[gpui::test]
+  async fn dragging_a_repo_section_updates_the_order(cx: &mut gpui::TestAppContext) {
+    cx.update(gpui_component::init);
+    let list = cx.new(|_| SessionList::new());
+    let mounted = list.clone();
+    let (_root, cx) =
+      cx.add_window_view(move |window, cx| gpui_component::Root::new(mounted.clone(), window, cx));
+    let repo_a = PathBuf::from("/repo-a");
+    let repo_b = PathBuf::from("/repo-b");
+    let repo_c = PathBuf::from("/repo-c");
+
+    list.update(cx, |list, cx| {
+      list.set_section_order(vec![repo_a.clone(), repo_b.clone(), repo_c.clone()], cx)
+    });
+    cx.run_until_parked();
+
+    let from = cx
+      .debug_bounds("session-repo-section-/repo-c")
+      .expect("source repo section")
+      .center();
+    let to = cx
+      .debug_bounds("session-repo-section-/repo-a")
+      .expect("target repo section")
+      .center();
+
+    cx.simulate_mouse_down(from, gpui::MouseButton::Left, gpui::Modifiers::default());
+    cx.simulate_mouse_move(
+      from + Point::new(px(0.0), px(-10.0)),
+      Some(gpui::MouseButton::Left),
+      gpui::Modifiers::default(),
+    );
+    cx.simulate_mouse_move(
+      to + Point::new(px(0.0), px(-8.0)),
+      Some(gpui::MouseButton::Left),
+      gpui::Modifiers::default(),
+    );
+    cx.simulate_mouse_up(
+      to + Point::new(px(0.0), px(-8.0)),
+      gpui::MouseButton::Left,
+      gpui::Modifiers::default(),
+    );
+    cx.run_until_parked();
+
+    list.read_with(cx, |list, _| {
+      assert_eq!(
+        list.section_order,
+        vec![repo_c.clone(), repo_a.clone(), repo_b.clone()]
+      );
+    });
+  }
+
+  #[test]
+  fn repo_drop_gap_uses_header_centers_and_skips_noops() {
+    let repo_a = PathBuf::from("/repo-a");
+    let repo_b = PathBuf::from("/repo-b");
+    let repo_c = PathBuf::from("/repo-c");
+    let mut list = SessionList::new();
+    list.section_order = vec![repo_a.clone(), repo_b.clone(), repo_c.clone()];
+    for (ix, repo) in list.section_order.clone().into_iter().enumerate() {
+      list.update_repo_header_bounds(
+        repo,
+        Bounds::new(
+          Point::new(px(0.0), px((ix * 20) as f32)),
+          gpui::Size::new(px(100.0), px(20.0)),
+        ),
+      );
+    }
+
+    assert_eq!(list.repo_drop_gap_at(px(1.0), &repo_c), Some(0));
+    assert_eq!(list.repo_drop_gap_at(px(31.0), &repo_a), Some(2));
+    assert_eq!(list.repo_drop_gap_at(px(31.0), &repo_b), None);
+    assert_eq!(list.repo_drop_gap_at(px(45.0), &repo_c), None);
   }
 
   #[gpui::test]
