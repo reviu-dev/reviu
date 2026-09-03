@@ -361,7 +361,7 @@ dependencies = [
  "shell-words",
  "smol",
  "thiserror 2.0.20",
- "which",
+ "which 8.0.6",
 ]
 
 [[package]]
@@ -3782,7 +3782,7 @@ source = "git+https://github.com/joris-gallot/zed?branch=reviu%2Ftest-window-raw
 dependencies = [
  "anyhow",
  "log",
- "which",
+ "which 6.0.3",
 ]
 
 [[package]]
@@ -10886,6 +10886,15 @@ dependencies = [
  "home",
  "rustix 0.38.44",
  "winsafe",
+]
+
+[[package]]
+name = "which"
+version = "8.0.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "bae2f2b2b816647a1cab1acc91f5bd20812d53cb344382635ec2181940c8034f"
+dependencies = [
+ "libc",
 ]
 
 [[package]]
