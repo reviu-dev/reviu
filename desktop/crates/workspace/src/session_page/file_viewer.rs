@@ -374,9 +374,7 @@ impl SessionPage {
     else {
       return;
     };
-    if self.opened_snapshot.is_some()
-      || !matches!(tab.kind, CenterTabKind::File | CenterTabKind::Diff)
-    {
+    if !matches!(tab.kind, CenterTabKind::File | CenterTabKind::Diff) {
       return;
     }
     self.editor_states.insert(
@@ -386,7 +384,7 @@ impl SessionPage {
         file_modified: self.editor_file_modified,
         editor: self.editor.clone(),
         binary_preview: self.binary_preview.clone(),
-        opened_snapshot: None,
+        opened_snapshot: self.opened_snapshot.clone(),
       },
     );
   }
@@ -406,7 +404,9 @@ impl SessionPage {
     let Some(repo_root) = self.checkout_root(cx) else {
       return false;
     };
-    if worktree_file_modified(&repo_root.join(rel_path)) != state.file_modified {
+    if state.opened_snapshot.is_none()
+      && worktree_file_modified(&repo_root.join(rel_path)) != state.file_modified
+    {
       self.editor_states.remove(tab);
       return false;
     }
@@ -435,8 +435,19 @@ impl SessionPage {
     }
     self.sync_editor_unmerged_state(cx);
     self.sync_git_telemetry(cx);
-    if tab.kind == CenterTabKind::Diff {
-      self.sync_agent_review_comments_to_editor(cx);
+    match self.opened_snapshot.as_ref() {
+      Some(OpenedSnapshot::PullRequestRange { .. }) => {
+        if let Some(editor) = self.editor.clone() {
+          self.install_github_review_handlers_for_editor(&editor, cx);
+        }
+      }
+      Some(_) => {
+        if let Some(editor) = self.editor.as_ref() {
+          configure_review(editor, ReviewDestination::None, cx);
+        }
+      }
+      None if tab.kind == CenterTabKind::Diff => self.sync_agent_review_comments_to_editor(cx),
+      None => {}
     }
     self.focus_editor_if_asked(intent, window, cx);
     cx.notify();
@@ -490,6 +501,7 @@ impl SessionPage {
     window: &mut Window,
     cx: &mut Context<Self>,
   ) {
+    self.cache_active_editor();
     let Some(repo_root) = self.checkout_root(cx) else {
       return;
     };
@@ -505,9 +517,13 @@ impl SessionPage {
     if self.selected_file.is_none() {
       self.hide_whitespace = app_settings.hide_whitespace;
     }
+    let tab = CenterTab::agent_snapshot(rel_path.clone(), old_text.clone(), new_text.clone());
+    let reveal_doc_position = reveal_line.map(|line| (line.saturating_sub(1) as usize, 0));
+    if self.restore_center_editor(&tab, &rel_path, reveal_doc_position, intent, window, cx) {
+      return;
+    }
     self.open_file_generation = self.open_file_generation.wrapping_add(1);
     let generation = self.open_file_generation;
-    let tab = CenterTab::agent_snapshot(rel_path.clone(), old_text.clone(), new_text.clone());
     self.remember_center_tab(tab.clone());
     self.editor_tab = Some(tab);
     self.selected_file = Some(rel_path.clone());
@@ -570,6 +586,7 @@ impl SessionPage {
         configure_review(&editor, ReviewDestination::None, cx);
         this.editor_file_modified = None;
         this.editor = Some(editor.clone());
+        this.cache_active_editor();
         this.sync_git_telemetry(cx);
         if this.center == CenterView::Diff && intent.takes_focus() {
           let _ = cx.update_window(this.window_handle, |_, window, cx| {
@@ -617,15 +634,19 @@ impl SessionPage {
     window: &mut Window,
     cx: &mut Context<Self>,
   ) {
+    self.cache_active_editor();
     let Some(repo_root) = self.checkout_root(cx) else {
       return;
     };
     self.show_preview = false;
     self.center = CenterView::Diff;
     self.sync_agent_chat_close_control(cx);
+    let tab = CenterTab::commit_snapshot(rel_path.clone(), commit_oid.clone());
+    if self.restore_center_editor(&tab, &rel_path, None, intent, window, cx) {
+      return;
+    }
     self.open_file_generation = self.open_file_generation.wrapping_add(1);
     let generation = self.open_file_generation;
-    let tab = CenterTab::commit_snapshot(rel_path.clone(), commit_oid.clone());
     self.remember_center_tab(tab.clone());
     self.editor_tab = Some(tab);
     self.selected_file = Some(rel_path.clone());
@@ -671,6 +692,7 @@ impl SessionPage {
           build_binary_preview(rel_path.as_path(), commit_file.binary_bytes.clone());
         this.editor_file_modified = None;
         this.editor = Some(editor);
+        this.cache_active_editor();
         this.svg_preview.update(cx, |preview, _| preview.clear());
         cx.notify();
       });
@@ -728,6 +750,7 @@ impl SessionPage {
     window: &mut Window,
     cx: &mut Context<Self>,
   ) {
+    self.cache_active_editor();
     let Some(repo_root) = self.checkout_root(cx) else {
       return;
     };
@@ -752,10 +775,14 @@ impl SessionPage {
       return;
     }
     self.leave_commit_file(cx);
-    self.open_file_generation = self.open_file_generation.wrapping_add(1);
-    let generation = self.open_file_generation;
     let tab =
       CenterTab::pull_request_snapshot(rel_path.clone(), base_oid.clone(), head_oid.clone());
+    let reveal_doc_position = reveal_line.map(|line| (line.saturating_sub(1) as usize, 0));
+    if self.restore_center_editor(&tab, &rel_path, reveal_doc_position, intent, window, cx) {
+      return;
+    }
+    self.open_file_generation = self.open_file_generation.wrapping_add(1);
+    let generation = self.open_file_generation;
     self.remember_center_tab(tab.clone());
     self.editor_tab = Some(tab);
     self.selected_file = Some(rel_path.clone());
@@ -806,6 +833,7 @@ impl SessionPage {
           build_binary_preview(rel_path.as_path(), range_file.binary_bytes.clone());
         this.editor_file_modified = None;
         this.editor = Some(editor.clone());
+        this.cache_active_editor();
         // The comments sync through the page's editor: install after it lands,
         // or they hang on the one this replaces.
         this.install_github_review_handlers_for_editor(&editor, cx);
@@ -2077,6 +2105,9 @@ mod tests {
     });
     await_open_file(&page, cx).await;
     await_editor_diff(&page, cx).await;
+    let worktree_editor = page.read_with(cx, |page, _| {
+      page.editor.as_ref().expect("worktree editor").entity_id()
+    });
 
     let snapshot_tab = CenterTab::agent_snapshot(
       PathBuf::from("README.md"),
@@ -2095,6 +2126,9 @@ mod tests {
       );
     });
     await_open_file(&page, cx).await;
+    let snapshot_editor = page.read_with(cx, |page, _| {
+      page.editor.as_ref().expect("snapshot editor").entity_id()
+    });
 
     page.read_with(cx, |page, _| {
       assert_eq!(
@@ -2125,6 +2159,10 @@ mod tests {
 
     page.read_with(cx, |page, cx| {
       assert!(page.opened_snapshot.is_none());
+      assert_eq!(
+        page.editor.as_ref().expect("worktree editor").entity_id(),
+        worktree_editor
+      );
       assert!(
         page
           .editor
@@ -2141,6 +2179,10 @@ mod tests {
 
     page.read_with(cx, |page, _| {
       assert_eq!(page.active_center_tab, Some(snapshot_tab));
+      assert_eq!(
+        page.editor.as_ref().expect("snapshot editor").entity_id(),
+        snapshot_editor
+      );
       assert!(matches!(
         page.opened_snapshot,
         Some(OpenedSnapshot::AgentTool { .. })
