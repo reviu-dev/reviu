@@ -103,10 +103,6 @@ impl Render for DraggedRepoSection {
 }
 
 pub enum SessionListEvent {
-  /// The section header's create menu: a session in THAT repo.
-  NewSessionIn {
-    repo_root: PathBuf,
-  },
   /// The section header itself: fold or unfold a repo's sessions.
   ToggleRepoCollapsed {
     repo_root: PathBuf,
@@ -606,7 +602,7 @@ impl SessionList {
     .ghost()
     .compact()
     .xsmall()
-    .tooltip("New session");
+    .tooltip("New worktree");
 
     Self::render_repo_menu_button(
       repo_root.clone(),
@@ -614,24 +610,11 @@ impl SessionList {
       button,
       cx,
       move |menu, window, cx| {
-        let new_session_repo = repo_root.clone();
-        let new_session_entity = entity.clone();
-        let mut menu = menu.item(
-          PopupMenuItem::new("New session")
-            .icon(UiIconName::SquarePen)
-            .on_click(move |_, _, cx| {
-              let repo_root = new_session_repo.clone();
-              let _ = new_session_entity.update(cx, |_, cx| {
-                cx.emit(SessionListEvent::NewSessionIn { repo_root });
-              });
-            }),
-        );
-
         let submenu_repo = repo_root.clone();
         let submenu_entity = entity.clone();
-        menu = menu.submenu_with_icon(
+        menu.submenu_with_icon(
           Some(Icon::new(UiIconName::GitBranch)),
-          "New worktree session",
+          "New worktree",
           window,
           cx,
           move |menu, _, _| {
@@ -700,8 +683,7 @@ impl SessionList {
             }
             menu
           },
-        );
-        menu
+        )
       },
     )
   }
@@ -797,7 +779,7 @@ impl Render for SessionList {
           .text_xs()
           .font_weight(gpui::FontWeight::SEMIBOLD)
           .text_color(theme.muted_foreground)
-          .child("Sessions"),
+          .child("Projects"),
       )
       .child(
         Button::new("session-sidebar-collapse")
@@ -1016,14 +998,14 @@ impl Render for SessionList {
           div()
             .text_sm()
             .text_color(theme.muted_foreground)
-            .child("No sessions yet"),
+            .child("No projects yet"),
         )
         .child(
           div()
             .text_xs()
             .text_center()
             .text_color(theme.muted_foreground.opacity(0.8))
-            .child("Message the agent to start one"),
+            .child("Open a repository to start working"),
         )
         .into_any_element()
     } else {

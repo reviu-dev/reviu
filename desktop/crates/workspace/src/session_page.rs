@@ -20,8 +20,12 @@ use gpui::{
   PathPromptOptions, Render, SharedString, Task, Window, div, prelude::*, px,
 };
 use gpui_component::{
-  ActiveTheme as _, Disableable as _, Sizable as _, dialog::DialogFooter, h_flex,
-  notification::Notification, v_flex,
+  ActiveTheme as _, Disableable as _, Sizable as _,
+  dialog::DialogFooter,
+  h_flex,
+  notification::Notification,
+  tab::{Tab, TabBar},
+  v_flex,
 };
 
 use crate::agent_chat_state::{
@@ -273,6 +277,7 @@ pub struct SessionPage {
   available_checkouts: Vec<CheckoutInfo>,
   _checkout_options_task: Option<Task<()>>,
   center: CenterView,
+  center_file_tabs: Vec<PathBuf>,
   editor: Option<Entity<Editor>>,
   binary_preview: Option<BinaryPreview>,
   selected_file: Option<PathBuf>,
@@ -368,9 +373,6 @@ impl SessionPage {
       &session_list,
       window,
       |this, _list, event: &SessionListEvent, window, cx| match event {
-        SessionListEvent::NewSessionIn { repo_root } => {
-          this.new_session_in(repo_root.clone(), window, cx)
-        }
         SessionListEvent::ToggleRepoCollapsed { repo_root } => {
           let repo_root = repo_root.clone();
           this
@@ -554,6 +556,7 @@ impl SessionPage {
       available_checkouts: Vec::new(),
       _checkout_options_task: None,
       center: CenterView::Conversation,
+      center_file_tabs: Vec::new(),
       editor: None,
       binary_preview: None,
       selected_file: None,
@@ -940,6 +943,7 @@ impl SessionPage {
     // The open diff belongs to the checkout being left.
     self.close_diff(window, cx);
     self.center = CenterView::Conversation;
+    self.center_file_tabs.clear();
     self.editor = None;
     self.binary_preview = None;
     self.selected_file = None;
@@ -1278,6 +1282,31 @@ impl SessionPage {
 
   pub(crate) fn window_handle(&self) -> AnyWindowHandle {
     self.window_handle
+  }
+
+  fn remember_center_file_tab(&mut self, path: PathBuf) {
+    self.center_file_tabs.retain(|existing| existing != &path);
+    self.center_file_tabs.push(path);
+  }
+
+  fn activate_conversation_tab(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    if self.center == CenterView::Conversation {
+      self.focus_agent_input_on_next_frame(window, cx);
+      return;
+    }
+    self.center = CenterView::Conversation;
+    self.sync_agent_chat_close_control(cx);
+    self.focus_agent_input_on_next_frame(window, cx);
+    cx.notify();
+  }
+
+  fn activate_center_file_tab(
+    &mut self,
+    path: PathBuf,
+    window: &mut Window,
+    cx: &mut Context<Self>,
+  ) {
+    self.open_diff(path, None, OpenIntent::Open, window, cx);
   }
 
   /// Opens the dock on a tab without the toggle: something outside asked for

@@ -185,6 +185,7 @@ impl SessionPage {
     self.open_file_generation = self.open_file_generation.wrapping_add(1);
     let generation = self.open_file_generation;
     self.record_recent_file(&repo_root, &rel_path);
+    self.remember_center_file_tab(rel_path.clone());
     self.selected_file = Some(rel_path.clone());
     self.editor = None;
     self.binary_preview = None;
@@ -320,6 +321,7 @@ impl SessionPage {
     }
     self.open_file_generation = self.open_file_generation.wrapping_add(1);
     let generation = self.open_file_generation;
+    self.remember_center_file_tab(rel_path.clone());
     self.selected_file = Some(rel_path.clone());
     let agent_whole_file_change = old_text.is_none() || new_text.is_empty();
     self.opened_snapshot = Some(OpenedSnapshot::AgentTool {
@@ -433,6 +435,7 @@ impl SessionPage {
     self.sync_agent_chat_close_control(cx);
     self.open_file_generation = self.open_file_generation.wrapping_add(1);
     let generation = self.open_file_generation;
+    self.remember_center_file_tab(rel_path.clone());
     self.selected_file = Some(rel_path.clone());
     self.opened_snapshot = Some(OpenedSnapshot::Commit(commit_oid.clone()));
     self.editor = None;
@@ -557,6 +560,7 @@ impl SessionPage {
     self.leave_commit_file(cx);
     self.open_file_generation = self.open_file_generation.wrapping_add(1);
     let generation = self.open_file_generation;
+    self.remember_center_file_tab(rel_path.clone());
     self.selected_file = Some(rel_path.clone());
     self.opened_snapshot = Some(OpenedSnapshot::PullRequestRange {
       base: base_oid.clone(),
@@ -1557,6 +1561,58 @@ mod tests {
       cx.debug_bounds("session-conversation-pane").is_some(),
       "closing the file gives the conversation the full center back"
     );
+  }
+
+  #[gpui::test]
+  async fn opened_files_are_kept_as_center_tabs(cx: &mut TestAppContext) {
+    let repo = TempRepo::init("session-page-center-tabs");
+    commit_text_file(&repo.path, Path::new("README.md"), "v1\n", "initial");
+    commit_text_file(&repo.path, Path::new("other.md"), "one\n", "second");
+    std::fs::write(repo.path.join("README.md"), "v2\n").expect("update file");
+    std::fs::write(repo.path.join("other.md"), "two\n").expect("update other");
+
+    let (page, cx) = add_session_page_window(repo.path.clone(), cx);
+    page.update_in(cx, |page, window, cx| {
+      page.open_diff(
+        PathBuf::from("README.md"),
+        None,
+        OpenIntent::Open,
+        window,
+        cx,
+      );
+    });
+    await_open_file(&page, cx).await;
+    page.update_in(cx, |page, window, cx| {
+      page.open_diff(
+        PathBuf::from("other.md"),
+        None,
+        OpenIntent::Open,
+        window,
+        cx,
+      );
+    });
+    await_open_file(&page, cx).await;
+
+    page.read_with(cx, |page, _| {
+      assert_eq!(
+        page.center_file_tabs,
+        vec![PathBuf::from("README.md"), PathBuf::from("other.md")]
+      );
+      assert_eq!(page.selected_file.as_deref(), Some(Path::new("other.md")));
+    });
+
+    page.update_in(cx, |page, window, cx| {
+      page.activate_center_file_tab(PathBuf::from("README.md"), window, cx);
+    });
+    await_open_file(&page, cx).await;
+
+    page.read_with(cx, |page, _| {
+      assert_eq!(page.selected_file.as_deref(), Some(Path::new("README.md")));
+      assert_eq!(
+        page.center_file_tabs,
+        vec![PathBuf::from("other.md"), PathBuf::from("README.md")]
+      );
+    });
   }
 
   #[gpui::test]

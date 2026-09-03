@@ -351,6 +351,73 @@ impl SessionPage {
       .into_any_element()
   }
 
+  pub(super) fn render_center_tabs(&self, cx: &mut Context<Self>) -> AnyElement {
+    let selected_index = match self.center {
+      CenterView::Conversation => 0,
+      CenterView::Diff => self
+        .selected_file
+        .as_ref()
+        .and_then(|path| self.center_file_tabs.iter().position(|tab| tab == path))
+        .map(|index| index + 1)
+        .unwrap_or(0),
+      CenterView::InteractiveRebase => self.center_file_tabs.len() + 1,
+    };
+
+    let file_tabs = self.center_file_tabs.clone();
+    let mut tab_bar = TabBar::new("session-center-tabs")
+      .w_full()
+      .underline()
+      .menu(true)
+      .selected_index(selected_index)
+      .child(
+        Tab::new()
+          .label("Chat")
+          .icon(gpui_component::Icon::new(UiIconName::MessageCircle)),
+      );
+
+    for path in &file_tabs {
+      let dirty = self
+        .selected_file
+        .as_ref()
+        .is_some_and(|selected| selected == path)
+        && self
+          .editor
+          .as_ref()
+          .is_some_and(|editor| editor.read(cx).is_dirty);
+      let name = path
+        .file_name()
+        .map(|name| name.to_string_lossy().into_owned())
+        .unwrap_or_else(|| path.to_string_lossy().into_owned());
+      let label = if dirty { format!("{name} *") } else { name };
+      tab_bar = tab_bar.child(Tab::new().label(label).icon(gpui_component::IconName::File));
+    }
+
+    if self.center == CenterView::InteractiveRebase {
+      tab_bar = tab_bar.child(
+        Tab::new()
+          .label("Interactive rebase")
+          .icon(gpui_component::Icon::new(UiIconName::GitMerge)),
+      );
+    }
+
+    tab_bar = tab_bar.on_click(cx.listener(move |this, index: &usize, window, cx| {
+      if *index == 0 {
+        this.activate_conversation_tab(window, cx);
+      } else if let Some(path) = file_tabs.get(index.saturating_sub(1)).cloned() {
+        this.activate_center_file_tab(path, window, cx);
+      }
+    }));
+
+    div()
+      .id("session-center-tabs-wrap")
+      .debug_selector(|| "session-center-tabs".to_string())
+      .border_b_1()
+      .border_color(cx.theme().border)
+      .bg(cx.theme().background)
+      .child(tab_bar)
+      .into_any_element()
+  }
+
   pub(super) fn render_center(
     &mut self,
     window: &mut Window,
@@ -384,16 +451,23 @@ impl SessionPage {
         )
       }
     };
-    div()
+    v_flex()
       .size_full()
       .min_w(px(0.0))
       .min_h_0()
-      .child(view)
-      .with_animation(
-        id,
-        gpui::Animation::new(std::time::Duration::from_millis(CENTER_SWAP_FADE_MS))
-          .with_easing(gpui::ease_out_quint()),
-        |view, delta| view.opacity(delta),
+      .child(self.render_center_tabs(cx))
+      .child(
+        div()
+          .flex_1()
+          .min_w(px(0.0))
+          .min_h_0()
+          .child(view)
+          .with_animation(
+            id,
+            gpui::Animation::new(std::time::Duration::from_millis(CENTER_SWAP_FADE_MS))
+              .with_easing(gpui::ease_out_quint()),
+            |view, delta| view.opacity(delta),
+          ),
       )
       .into_any_element()
   }
