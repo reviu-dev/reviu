@@ -171,9 +171,11 @@ pub struct SessionList {
   displayed_checkout: Option<PathBuf>,
   /// Folded repo sections; folding IS the filter now.
   collapsed_repos: HashSet<PathBuf>,
-  /// Every tracked repo, in stable order: sections render from this, so an
-  /// emptied repo keeps its header (and its compose button).
+  /// Every tracked project, in stable order: sections render from this, so an
+  /// emptied project keeps its header.
   section_order: Vec<PathBuf>,
+  /// Projects that have Git. Only these can create worktree checkouts.
+  git_repositories: HashSet<PathBuf>,
   /// Keeps the section highlighted while one of its menus is open.
   open_menu_repo: Option<PathBuf>,
   repo_header_bounds: HashMap<PathBuf, Bounds<Pixels>>,
@@ -191,6 +193,7 @@ impl SessionList {
       displayed_checkout: None,
       collapsed_repos: HashSet::new(),
       section_order: Vec::new(),
+      git_repositories: HashSet::new(),
       open_menu_repo: None,
       repo_header_bounds: HashMap::new(),
       drop_gap: None,
@@ -200,6 +203,17 @@ impl SessionList {
   pub fn set_section_order(&mut self, section_order: Vec<PathBuf>, cx: &mut Context<Self>) {
     if self.section_order != section_order {
       self.section_order = section_order;
+      cx.notify();
+    }
+  }
+
+  pub fn set_git_repositories(
+    &mut self,
+    git_repositories: HashSet<PathBuf>,
+    cx: &mut Context<Self>,
+  ) {
+    if self.git_repositories != git_repositories {
+      self.git_repositories = git_repositories;
       cx.notify();
     }
   }
@@ -364,6 +378,9 @@ impl SessionList {
       title: "Main checkout".into(),
       subtitle: "Default working tree".into(),
     }];
+    if !self.git_repositories.contains(repo_root) {
+      return rows;
+    }
     let mut checkouts = Vec::new();
     for row in self
       .conversations
@@ -392,6 +409,9 @@ impl SessionList {
   }
 
   fn checkout_path_for_session(&self, row: &SessionRow) -> PathBuf {
+    if !self.git_repositories.contains(&row.repo_root) {
+      return row.repo_root.clone();
+    }
     self
       .worktree_checkouts
       .get(&row.meta.id)
@@ -496,6 +516,7 @@ impl SessionList {
     let group_name = SharedString::from(format!("repo-section-{}", repo_root.display()));
     let menu_open = self.open_menu_repo.as_deref() == Some(repo_root);
     let drop_gap = self.drop_gap.filter(|_| cx.has_active_drag());
+    let git_backed = self.git_repositories.contains(repo_root);
 
     h_flex()
       .id(SharedString::from(format!(
@@ -592,15 +613,17 @@ impl SessionList {
           .gap_1()
           .when(!menu_open, |this| this.invisible())
           .group_hover(group_name, |this| this.visible())
-          .child(
-            div()
-              .id(SharedString::from(format!(
-                "session-repo-create-wrap-{}",
-                create_repo.display()
-              )))
-              .on_click(cx.listener(|_, _, _, cx| cx.stop_propagation()))
-              .child(Self::render_create_button(create_repo, cx)),
-          )
+          .when(git_backed, |this| {
+            this.child(
+              div()
+                .id(SharedString::from(format!(
+                  "session-repo-create-wrap-{}",
+                  create_repo.display()
+                )))
+                .on_click(cx.listener(|_, _, _, cx| cx.stop_propagation()))
+                .child(Self::render_create_button(create_repo, cx)),
+            )
+          })
           .child(
             div()
               .id(SharedString::from(format!(
@@ -1282,6 +1305,7 @@ mod tests {
       let mut worktree = meta("worktree-chat", 1);
       worktree.repo_root = repo.clone();
       list.set_section_order(vec![repo.clone()], cx);
+      list.set_git_repositories(HashSet::from([repo.clone()]), cx);
       list.set_conversations(vec![main, worktree], "worktree-chat".into(), cx);
       list.set_worktree_checkouts(worktree_checkouts, cx);
       list.set_displayed_checkout(Some(worktree_path.clone()), cx);
@@ -1328,9 +1352,84 @@ mod tests {
     assert_eq!(selected.borrow().as_slice(), &["main-chat".to_string()]);
   }
 
+  #[gpui::test]
+  async fn plain_project_sections_keep_the_main_checkout_without_worktree_actions(
+    cx: &mut gpui::TestAppContext,
+  ) {
+    cx.update(gpui_component::init);
+    let list = cx.new(|_| SessionList::new());
+    let mounted = list.clone();
+    let (_root, cx) =
+      cx.add_window_view(move |window, cx| gpui_component::Root::new(mounted.clone(), window, cx));
+    let project = PathBuf::from("/plain-project");
+
+    list.update(cx, |list, cx| {
+      let mut row = meta("plain-chat", 1);
+      row.repo_root = project.clone();
+      list.set_section_order(vec![project.clone()], cx);
+      list.set_conversations(vec![row], "plain-chat".into(), cx);
+      list.worktree_checkouts.insert(
+        "plain-chat".to_string(),
+        worktree_binding("/plain-project/.worktrees/ignored", "ignored"),
+      );
+      list.set_displayed_checkout(Some(project.clone()), cx);
+    });
+    cx.run_until_parked();
+
+    assert!(
+      cx.debug_bounds("session-repo-section-/plain-project")
+        .is_some()
+    );
+    assert!(
+      cx.debug_bounds("session-checkout-main-/plain-project")
+        .is_some()
+    );
+    assert!(cx.debug_bounds("session-chat-row-plain-chat").is_some());
+    assert!(
+      cx.debug_bounds("session-checkout-worktree-/plain-project-ignored")
+        .is_none()
+    );
+
+    let header = cx
+      .debug_bounds("session-repo-section-/plain-project")
+      .expect("plain project section header");
+    cx.simulate_mouse_move(header.center(), None, gpui::Modifiers::default());
+    cx.run_until_parked();
+    assert!(
+      cx.debug_bounds("session-repo-create-/plain-project")
+        .is_none(),
+      "plain projects cannot create worktrees"
+    );
+    assert!(
+      cx.debug_bounds("session-repo-options-/plain-project")
+        .is_some(),
+      "plain projects still have project options"
+    );
+  }
+
+  #[test]
+  fn plain_project_checkout_rows_ignore_worktree_bindings() {
+    let mut list = SessionList::new();
+    list.conversations = vec![meta("plain-chat", 1)];
+    list.worktree_checkouts.insert(
+      "plain-chat".to_string(),
+      worktree_binding("/repo/.worktrees/ignored", "ignored"),
+    );
+    assert_eq!(
+      list.checkout_rows_for_repo(Path::new("/repo")),
+      vec![CheckoutRow {
+        kind: CheckoutKind::Main,
+        path: PathBuf::from("/repo"),
+        title: "Main checkout".into(),
+        subtitle: "Default working tree".into(),
+      }]
+    );
+  }
+
   #[test]
   fn checkout_rows_follow_known_worktree_branches() {
     let mut list = SessionList::new();
+    list.git_repositories.insert(PathBuf::from("/repo"));
     list.conversations = vec![meta("main-chat", 2), meta("worktree-chat", 1)];
     list.worktree_checkouts.insert(
       "worktree-chat".to_string(),
@@ -1396,7 +1495,8 @@ mod tests {
     let repo = PathBuf::from("/repo");
 
     list.update(cx, |list, cx| {
-      list.set_section_order(vec![repo.clone()], cx)
+      list.set_section_order(vec![repo.clone()], cx);
+      list.set_git_repositories(HashSet::from([repo.clone()]), cx);
     });
     cx.run_until_parked();
 

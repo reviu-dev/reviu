@@ -891,6 +891,11 @@ impl SessionPage {
   /// (panel created, conversation created/loaded/deleted, repo switched).
   fn refresh_session_list(&mut self, cx: &mut Context<Self>) {
     let sections = self.conversation_hub.sections(cx);
+    let mut git_repositories: HashSet<PathBuf> = self
+      .initial_session_sidebar_repositories()
+      .into_iter()
+      .collect();
+    git_repositories.extend(sections.iter().map(|(repo, _)| repo.clone()));
     let section_order = self.initial_session_sidebar_projects();
     let conversations: Vec<crate::session_list::SessionRow> = sections
       .into_iter()
@@ -915,6 +920,7 @@ impl SessionPage {
     self.session_list.update(cx, |list, cx| {
       list.set_conversations(conversations, current_id, cx);
       list.set_section_order(section_order, cx);
+      list.set_git_repositories(git_repositories, cx);
       list.set_statuses(statuses, cx);
       list.set_worktree_checkouts(worktree_checkouts, cx);
       list.set_displayed_checkout(displayed_checkout, cx);
