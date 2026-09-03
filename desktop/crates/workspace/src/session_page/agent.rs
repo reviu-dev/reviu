@@ -3299,6 +3299,42 @@ mod tests {
   }
 
   #[gpui::test]
+  async fn sidebar_checkout_rows_pin_the_dock_without_switching_chat(cx: &mut TestAppContext) {
+    let (repo, page, cx) = page_with_agent_panel("session-page-sidebar-checkout", cx).await;
+
+    page.update_in(cx, |page, window, cx| {
+      page.new_worktree_session_in(repo.path.clone(), None, window, cx)
+    });
+    cx.run_until_parked();
+    let worktree_panel = active_panel(&page, cx);
+    let worktree_id =
+      worktree_panel.read_with(cx, |panel, _| panel.current_conversation().id.clone());
+    let worktree_cwd = worktree_panel.read_with(cx, |panel, _| panel.cwd().to_path_buf());
+    assert_ne!(worktree_cwd, repo.path);
+
+    let selector =
+      Box::leak(format!("session-checkout-main-{}", repo.path.display()).into_boxed_str());
+    let main_checkout = cx.debug_bounds(selector).expect("main checkout row");
+    cx.simulate_click(main_checkout.center(), gpui::Modifiers::default());
+    cx.run_until_parked();
+
+    assert_eq!(
+      active_panel(&page, cx).read_with(cx, |panel, _| panel.current_conversation().id.clone()),
+      worktree_id,
+      "choosing a checkout does not switch the chat"
+    );
+    page.read_with(cx, |page, cx| {
+      assert_eq!(page.checkout_root(cx).as_deref(), Some(repo.path.as_path()));
+      assert_eq!(
+        page.dock_panel.read(cx).repo_root(),
+        Some(repo.path.as_path())
+      );
+    });
+
+    cleanup_worktrees_root(&repo.path);
+  }
+
+  #[gpui::test]
   async fn the_git_surfaces_follow_the_active_sessions_checkout(cx: &mut TestAppContext) {
     let (repo, page, cx) = page_with_agent_panel("session-page-checkout-follow", cx).await;
 

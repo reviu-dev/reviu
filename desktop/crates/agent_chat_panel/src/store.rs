@@ -103,6 +103,11 @@ impl ConversationStore {
       .collect()
   }
 
+  /// Checkout bindings by conversation id, for sidebar checkout rows.
+  pub fn worktree_checkouts(&self) -> HashMap<String, WorktreeBinding> {
+    self.worktrees.clone()
+  }
+
   /// Bindings change on discrete gestures (create, delete): written right away.
   pub fn set_worktree(
     &mut self,

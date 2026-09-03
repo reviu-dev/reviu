@@ -4,7 +4,7 @@ use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 
-use agent_chat_panel::ConversationMeta;
+use agent_chat_panel::{ConversationMeta, WorktreeBinding};
 use gpui::{
   Anchor, Bounds, Context, DismissEvent, DragMoveEvent, Entity, EventEmitter, Focusable as _,
   IntoElement, MouseExitEvent, Pixels, Point, Render, SharedString, Window, div, prelude::*, px,
@@ -83,6 +83,7 @@ enum CheckoutKind {
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct CheckoutRow {
   kind: CheckoutKind,
+  path: PathBuf,
   title: SharedString,
   subtitle: SharedString,
 }
@@ -127,6 +128,10 @@ pub enum SessionListEvent {
     repo_root: PathBuf,
     base: Option<String>,
   },
+  SelectedCheckout {
+    repo_root: PathBuf,
+    checkout_root: PathBuf,
+  },
   RevealRepository {
     repo_root: PathBuf,
   },
@@ -161,8 +166,9 @@ pub struct SessionList {
   loading_id: Option<String>,
   /// Live agent state by conversation id; absent rows are Idle.
   statuses: HashMap<String, SessionStatus>,
-  /// Worktree branch by conversation id, shown under the row.
-  worktree_branches: HashMap<String, String>,
+  /// Worktree checkout by conversation id, shown under checkout and chat rows.
+  worktree_checkouts: HashMap<String, WorktreeBinding>,
+  displayed_checkout: Option<PathBuf>,
   /// Folded repo sections; folding IS the filter now.
   collapsed_repos: HashSet<PathBuf>,
   /// Every tracked repo, in stable order: sections render from this, so an
@@ -181,7 +187,8 @@ impl SessionList {
       current_id: String::new(),
       loading_id: None,
       statuses: HashMap::new(),
-      worktree_branches: HashMap::new(),
+      worktree_checkouts: HashMap::new(),
+      displayed_checkout: None,
       collapsed_repos: HashSet::new(),
       section_order: Vec::new(),
       open_menu_repo: None,
@@ -230,13 +237,24 @@ impl SessionList {
     }
   }
 
-  pub fn set_worktree_branches(
+  pub fn set_worktree_checkouts(
     &mut self,
-    worktree_branches: HashMap<String, String>,
+    worktree_checkouts: HashMap<String, WorktreeBinding>,
     cx: &mut Context<Self>,
   ) {
-    if self.worktree_branches != worktree_branches {
-      self.worktree_branches = worktree_branches;
+    if self.worktree_checkouts != worktree_checkouts {
+      self.worktree_checkouts = worktree_checkouts;
+      cx.notify();
+    }
+  }
+
+  pub fn set_displayed_checkout(
+    &mut self,
+    displayed_checkout: Option<PathBuf>,
+    cx: &mut Context<Self>,
+  ) {
+    if self.displayed_checkout != displayed_checkout {
+      self.displayed_checkout = displayed_checkout;
       cx.notify();
     }
   }
@@ -261,7 +279,10 @@ impl SessionList {
 
   #[cfg(test)]
   pub(crate) fn worktree_branch_of(&self, id: &str) -> Option<&str> {
-    self.worktree_branches.get(id).map(String::as_str)
+    self
+      .worktree_checkouts
+      .get(id)
+      .map(|binding| binding.branch.as_str())
   }
 
   pub fn set_conversations(
@@ -339,46 +360,35 @@ impl SessionList {
   fn checkout_rows_for_repo(&self, repo_root: &Path) -> Vec<CheckoutRow> {
     let mut rows = vec![CheckoutRow {
       kind: CheckoutKind::Main,
+      path: repo_root.to_path_buf(),
       title: "Main checkout".into(),
       subtitle: "Default working tree".into(),
     }];
-    let mut branches = Vec::new();
+    let mut checkouts = Vec::new();
     for row in self
       .conversations
       .iter()
       .filter(|row| row.repo_root == repo_root)
     {
-      let Some(branch) = self.worktree_branches.get(&row.meta.id) else {
+      let Some(binding) = self.worktree_checkouts.get(&row.meta.id) else {
         continue;
       };
-      if !branches.contains(branch) {
-        branches.push(branch.clone());
+      if !checkouts
+        .iter()
+        .any(|existing: &WorktreeBinding| existing.path == binding.path)
+      {
+        checkouts.push(binding.clone());
       }
     }
-    rows.extend(branches.into_iter().map(|branch| CheckoutRow {
+    rows.extend(checkouts.into_iter().map(|binding| CheckoutRow {
       kind: CheckoutKind::Worktree {
-        branch: branch.clone(),
+        branch: binding.branch.clone(),
       },
-      title: branch.into(),
+      path: binding.path,
+      title: binding.branch.into(),
       subtitle: "Worktree checkout".into(),
     }));
     rows
-  }
-
-  fn active_checkout_kind_for_repo(&self, repo_root: &Path) -> Option<CheckoutKind> {
-    let row = self
-      .conversations
-      .iter()
-      .find(|row| row.meta.id == self.current_id && row.repo_root == repo_root)?;
-    Some(
-      self
-        .worktree_branches
-        .get(&row.meta.id)
-        .map(|branch| CheckoutKind::Worktree {
-          branch: branch.clone(),
-        })
-        .unwrap_or(CheckoutKind::Main),
-    )
   }
 
   fn update_repo_header_bounds(&mut self, repo_root: PathBuf, bounds: Bounds<Pixels>) {
@@ -590,6 +600,7 @@ impl SessionList {
     row: &CheckoutRow,
     active: bool,
     theme: &gpui_component::Theme,
+    cx: &mut Context<Self>,
   ) -> gpui::AnyElement {
     let selector = match &row.kind {
       CheckoutKind::Main => format!("session-checkout-main-{}", repo_root.display()),
@@ -597,6 +608,8 @@ impl SessionList {
         format!("session-checkout-worktree-{}-{branch}", repo_root.display())
       }
     };
+    let checkout_repo = repo_root.to_path_buf();
+    let checkout_root = row.path.clone();
     let icon = match row.kind {
       CheckoutKind::Main => Icon::new(gpui_component::IconName::FolderOpen)
         .size(px(12.))
@@ -609,13 +622,22 @@ impl SessionList {
     };
 
     div()
+      .id(SharedString::from(selector.clone()))
       .debug_selector(move || selector.clone())
       .mx_2()
       .ml_4()
       .px_2()
       .py_1p5()
       .rounded(px(6.0))
+      .cursor_pointer()
       .when(active, |this| this.bg(theme.secondary_active))
+      .hover(|this| this.bg(theme.secondary_hover))
+      .on_click(cx.listener(move |_, _, _, cx| {
+        cx.emit(SessionListEvent::SelectedCheckout {
+          repo_root: checkout_repo.clone(),
+          checkout_root: checkout_root.clone(),
+        });
+      }))
       .child(
         h_flex().items_center().gap_2().child(icon).child(
           v_flex()
@@ -932,10 +954,9 @@ impl Render for SessionList {
       if self.collapsed_repos.contains(section_repo) {
         continue;
       }
-      let active_checkout = self.active_checkout_kind_for_repo(section_repo);
       for checkout in self.checkout_rows_for_repo(section_repo) {
-        let active = active_checkout.as_ref() == Some(&checkout.kind);
-        items.push(self.render_checkout_row(section_repo, &checkout, active, &theme));
+        let active = self.displayed_checkout.as_deref() == Some(checkout.path.as_path());
+        items.push(self.render_checkout_row(section_repo, &checkout, active, &theme, cx));
       }
       for (ix, row) in self
         .conversations
@@ -955,9 +976,9 @@ impl Render for SessionList {
             SessionStatus::Failed => theme.status_red(),
           };
           let worktree_branch = self
-            .worktree_branches
+            .worktree_checkouts
             .get(&meta.id)
-            .map(|branch| SharedString::from(branch.clone()));
+            .map(|binding| SharedString::from(binding.branch.clone()));
           let id = meta.id.clone();
           let selector_id = meta.id.clone();
           let delete_id = meta.id.clone();
@@ -1214,6 +1235,13 @@ mod tests {
     );
   }
 
+  fn worktree_binding(path: &str, branch: &str) -> WorktreeBinding {
+    WorktreeBinding {
+      path: PathBuf::from(path),
+      branch: branch.to_string(),
+    }
+  }
+
   fn meta(id: &str, updated: u64) -> SessionRow {
     SessionRow {
       meta: ConversationMeta {
@@ -1238,8 +1266,15 @@ mod tests {
     let (_root, cx) =
       cx.add_window_view(move |window, cx| gpui_component::Root::new(mounted.clone(), window, cx));
     let repo = PathBuf::from("/repo");
-    let mut worktree_branches = HashMap::new();
-    worktree_branches.insert("worktree-chat".to_string(), "feature/sidebar".to_string());
+    let worktree_path = PathBuf::from("/repo/.worktrees/feature-sidebar");
+    let mut worktree_checkouts = HashMap::new();
+    worktree_checkouts.insert(
+      "worktree-chat".to_string(),
+      WorktreeBinding {
+        path: worktree_path.clone(),
+        branch: "feature/sidebar".to_string(),
+      },
+    );
 
     list.update(cx, |list, cx| {
       let mut main = meta("main-chat", 2);
@@ -1248,7 +1283,8 @@ mod tests {
       worktree.repo_root = repo.clone();
       list.set_section_order(vec![repo.clone()], cx);
       list.set_conversations(vec![main, worktree], "worktree-chat".into(), cx);
-      list.set_worktree_branches(worktree_branches, cx);
+      list.set_worktree_checkouts(worktree_checkouts, cx);
+      list.set_displayed_checkout(Some(worktree_path.clone()), cx);
     });
     cx.run_until_parked();
 
@@ -1262,15 +1298,26 @@ mod tests {
     assert!(cx.debug_bounds("session-chat-row-worktree-chat").is_some());
 
     let selected = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+    let selected_checkouts = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
     let seen = selected.clone();
+    let seen_checkouts = selected_checkouts.clone();
     cx.update(|_, cx| {
-      cx.subscribe(&list, move |_, event: &SessionListEvent, _| {
-        if let SessionListEvent::Selected { id } = event {
-          seen.borrow_mut().push(id.clone());
+      cx.subscribe(&list, move |_, event: &SessionListEvent, _| match event {
+        SessionListEvent::Selected { id } => seen.borrow_mut().push(id.clone()),
+        SessionListEvent::SelectedCheckout { checkout_root, .. } => {
+          seen_checkouts.borrow_mut().push(checkout_root.clone())
         }
+        _ => {}
       })
       .detach();
     });
+
+    let worktree_checkout = cx
+      .debug_bounds("session-checkout-worktree-/repo-feature/sidebar")
+      .expect("worktree checkout row");
+    cx.simulate_click(worktree_checkout.center(), gpui::Modifiers::default());
+    cx.run_until_parked();
+    assert_eq!(selected_checkouts.borrow().as_slice(), &[worktree_path]);
 
     let main_chat = cx
       .debug_bounds("session-chat-row-main-chat")
@@ -1285,15 +1332,16 @@ mod tests {
   fn checkout_rows_follow_known_worktree_branches() {
     let mut list = SessionList::new();
     list.conversations = vec![meta("main-chat", 2), meta("worktree-chat", 1)];
-    list.current_id = "main-chat".into();
-    list
-      .worktree_branches
-      .insert("worktree-chat".to_string(), "feature/sidebar".to_string());
+    list.worktree_checkouts.insert(
+      "worktree-chat".to_string(),
+      worktree_binding("/repo/.worktrees/feature-sidebar", "feature/sidebar"),
+    );
     assert_eq!(
       list.checkout_rows_for_repo(Path::new("/repo")),
       vec![
         CheckoutRow {
           kind: CheckoutKind::Main,
+          path: PathBuf::from("/repo"),
           title: "Main checkout".into(),
           subtitle: "Default working tree".into(),
         },
@@ -1301,21 +1349,11 @@ mod tests {
           kind: CheckoutKind::Worktree {
             branch: "feature/sidebar".to_string(),
           },
+          path: PathBuf::from("/repo/.worktrees/feature-sidebar"),
           title: "feature/sidebar".into(),
           subtitle: "Worktree checkout".into(),
         },
       ]
-    );
-    assert_eq!(
-      list.active_checkout_kind_for_repo(Path::new("/repo")),
-      Some(CheckoutKind::Main)
-    );
-    list.current_id = "worktree-chat".into();
-    assert_eq!(
-      list.active_checkout_kind_for_repo(Path::new("/repo")),
-      Some(CheckoutKind::Worktree {
-        branch: "feature/sidebar".to_string(),
-      })
     );
   }
 
@@ -1487,7 +1525,7 @@ mod tests {
     // map must cost nothing.
     list.update(cx, |list, cx| list.set_statuses(statuses.clone(), cx));
     list.update(cx, |list, cx| {
-      list.set_worktree_branches(HashMap::new(), cx)
+      list.set_worktree_checkouts(HashMap::new(), cx)
     });
     cx.run_until_parked();
     assert_eq!(repaints.get(), 1, "no-op updates never repaint");

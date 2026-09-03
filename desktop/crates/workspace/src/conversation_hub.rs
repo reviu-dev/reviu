@@ -136,12 +136,12 @@ impl ConversationHub {
     })
   }
 
-  /// Worktree branch by conversation id, merged across repos.
-  pub fn worktree_branches(&self, cx: &App) -> HashMap<String, String> {
+  /// Worktree checkout bindings by conversation id, merged across repos.
+  pub fn worktree_checkouts(&self, cx: &App) -> HashMap<String, agent_chat_panel::WorktreeBinding> {
     self
       .stores
       .iter()
-      .flat_map(|(_, store)| store.read(cx).worktree_branches())
+      .flat_map(|(_, store)| store.read(cx).worktree_checkouts())
       .collect()
   }
 
