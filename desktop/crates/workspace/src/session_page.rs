@@ -280,6 +280,7 @@ pub struct SessionPage {
   _checkout_options_task: Option<Task<()>>,
   center: CenterView,
   center_tabs: Vec<CenterTab>,
+  center_tab_history: Vec<CenterTab>,
   center_tabs_by_checkout: HashMap<PathBuf, Vec<CenterTab>>,
   center_active_tab_by_checkout: HashMap<PathBuf, CenterTab>,
   active_center_tab: Option<CenterTab>,
@@ -567,6 +568,7 @@ impl SessionPage {
       _checkout_options_task: None,
       center: CenterView::Conversation,
       center_tabs: CenterTab::default_tabs(),
+      center_tab_history: CenterTab::default_tabs(),
       center_tabs_by_checkout: HashMap::new(),
       center_active_tab_by_checkout: HashMap::new(),
       active_center_tab: Some(CenterTab::chat()),
@@ -996,6 +998,7 @@ impl SessionPage {
     self.close_diff(window, cx);
     self.center = CenterView::Conversation;
     self.center_tabs = restored_tabs;
+    self.center_tab_history = CenterTab::default_tabs();
     self.active_center_tab = Some(CenterTab::chat());
     self.editor_tab = None;
     self.editor = None;
@@ -1370,6 +1373,7 @@ impl SessionPage {
       tab.kind == CenterTabKind::Chat && tab.conversation_id.as_deref() == Some(conversation_id)
     };
     self.center_tabs.retain(|tab| !is_removed_chat(tab));
+    self.center_tab_history.retain(|tab| !is_removed_chat(tab));
     for tabs in self.center_tabs_by_checkout.values_mut() {
       tabs.retain(|tab| !is_removed_chat(tab));
     }
@@ -1378,19 +1382,57 @@ impl SessionPage {
       .retain(|_, tab| !is_removed_chat(tab));
     if self.active_center_tab.as_ref().is_some_and(is_removed_chat) {
       self.active_center_tab = Some(CenterTab::chat());
+      self.remember_center_tab_visit(CenterTab::chat());
     }
   }
 
+  fn remember_center_tab_visit(&mut self, tab: CenterTab) {
+    self.center_tab_history.retain(|existing| existing != &tab);
+    self.center_tab_history.push(tab);
+  }
+
+  fn center_tabs_for_navigation(&self) -> Vec<CenterTab> {
+    let mut tabs = CenterTab::with_chat_tab(self.center_tabs.clone());
+    if self.center == CenterView::InteractiveRebase
+      && !tabs
+        .iter()
+        .any(|tab| tab.kind == CenterTabKind::InteractiveRebase)
+    {
+      tabs.push(CenterTab::interactive_rebase());
+    }
+    tabs
+  }
+
+  fn selected_center_tab_from(&self, tabs: &[CenterTab]) -> CenterTab {
+    self
+      .active_center_tab
+      .clone()
+      .unwrap_or_else(|| match self.center {
+        CenterView::Conversation => CenterTab::chat(),
+        CenterView::Diff => tabs
+          .iter()
+          .rev()
+          .find(|tab| matches!(tab.kind, CenterTabKind::File | CenterTabKind::Diff))
+          .cloned()
+          .unwrap_or_else(CenterTab::chat),
+        CenterView::InteractiveRebase => CenterTab::interactive_rebase(),
+      })
+  }
+
   fn remember_center_tab(&mut self, tab: CenterTab) {
-    self.center_tabs.retain(|existing| {
-      existing != &tab
-        && !(tab.kind == CenterTabKind::Chat
-          && tab.conversation_id.is_some()
-          && existing.kind == CenterTabKind::Chat
-          && existing.conversation_id.is_none())
-    });
-    self.center_tabs.push(tab.clone());
-    self.active_center_tab = Some(tab);
+    if tab.kind == CenterTabKind::Chat && tab.conversation_id.is_some() {
+      self.center_tabs.retain(|existing| {
+        !(existing.kind == CenterTabKind::Chat && existing.conversation_id.is_none())
+      });
+      self.center_tab_history.retain(|existing| {
+        !(existing.kind == CenterTabKind::Chat && existing.conversation_id.is_none())
+      });
+    }
+    if !self.center_tabs.contains(&tab) {
+      self.center_tabs.push(tab.clone());
+    }
+    self.active_center_tab = Some(tab.clone());
+    self.remember_center_tab_visit(tab);
   }
 
   fn activate_conversation_tab(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -1403,6 +1445,48 @@ impl SessionPage {
     self.sync_agent_chat_close_control(cx);
     self.focus_agent_input_on_next_frame(window, cx);
     cx.notify();
+  }
+
+  fn activate_adjacent_center_tab(
+    &mut self,
+    offset: isize,
+    window: &mut Window,
+    cx: &mut Context<Self>,
+  ) {
+    let tabs = self.center_tabs_for_navigation();
+    if tabs.len() <= 1 {
+      cx.propagate();
+      return;
+    }
+    let selected_tab = self.selected_center_tab_from(&tabs);
+    let Some(selected_index) = tabs.iter().position(|tab| tab == &selected_tab) else {
+      cx.propagate();
+      return;
+    };
+    let tab_count = tabs.len() as isize;
+    let next_index = (selected_index as isize + offset).rem_euclid(tab_count) as usize;
+    if let Some(tab) = tabs.get(next_index).cloned() {
+      self.activate_center_tab(tab, OpenIntent::Open, window, cx);
+      cx.stop_propagation();
+    }
+  }
+
+  fn activate_next_center_tab_action(
+    &mut self,
+    _: &crate::NextCenterTab,
+    window: &mut Window,
+    cx: &mut Context<Self>,
+  ) {
+    self.activate_adjacent_center_tab(1, window, cx);
+  }
+
+  fn activate_previous_center_tab_action(
+    &mut self,
+    _: &crate::PreviousCenterTab,
+    window: &mut Window,
+    cx: &mut Context<Self>,
+  ) {
+    self.activate_adjacent_center_tab(-1, window, cx);
   }
 
   fn activate_center_tab(

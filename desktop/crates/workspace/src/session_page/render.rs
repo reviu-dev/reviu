@@ -370,27 +370,8 @@ impl SessionPage {
   }
 
   pub(super) fn render_center_tabs(&self, cx: &mut Context<Self>) -> AnyElement {
-    let mut tabs = CenterTab::with_chat_tab(self.center_tabs.clone());
-    if self.center == CenterView::InteractiveRebase
-      && !tabs
-        .iter()
-        .any(|tab| tab.kind == CenterTabKind::InteractiveRebase)
-    {
-      tabs.push(CenterTab::interactive_rebase());
-    }
-    let selected_tab = self
-      .active_center_tab
-      .clone()
-      .unwrap_or_else(|| match self.center {
-        CenterView::Conversation => CenterTab::chat(),
-        CenterView::Diff => tabs
-          .iter()
-          .rev()
-          .find(|tab| matches!(tab.kind, CenterTabKind::File | CenterTabKind::Diff))
-          .cloned()
-          .unwrap_or_else(CenterTab::chat),
-        CenterView::InteractiveRebase => CenterTab::interactive_rebase(),
-      });
+    let tabs = self.center_tabs_for_navigation();
+    let selected_tab = self.selected_center_tab_from(&tabs);
     let selected_index = tabs
       .iter()
       .position(|tab| tab == &selected_tab)
@@ -1231,6 +1212,8 @@ impl Render for SessionPage {
       .track_focus(&self.focus_handle)
       .on_action(cx.listener(Self::close_workspace_page_action))
       .on_action(cx.listener(Self::close_active_center_tab_action))
+      .on_action(cx.listener(Self::activate_next_center_tab_action))
+      .on_action(cx.listener(Self::activate_previous_center_tab_action))
       .on_action(cx.listener(Self::close_file_view_action))
       .on_action(cx.listener(Self::find_action))
       .on_action(cx.listener(Self::add_selection_to_agent_action))

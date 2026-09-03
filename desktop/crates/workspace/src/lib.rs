@@ -6,6 +6,8 @@ actions!(
     NavigateBack,
     CloseWorkspacePage,
     CloseCenterTab,
+    NextCenterTab,
+    PreviousCenterTab,
     OpenSessionPage,
     ToggleTerminalSidebar,
     ShowBranchSwitcher,

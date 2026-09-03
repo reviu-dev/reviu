@@ -1183,7 +1183,13 @@ impl SessionPage {
       return;
     };
     let selected_closed = self.active_center_tab.as_ref() == Some(&tab);
+    let next_tab = selected_closed
+      .then(|| self.next_center_tab_after_closing(&tab))
+      .flatten();
     self.center_tabs.retain(|candidate| candidate != &tab);
+    self
+      .center_tab_history
+      .retain(|candidate| candidate != &tab);
     if !selected_closed {
       cx.notify();
       return;
@@ -1196,16 +1202,33 @@ impl SessionPage {
     {
       self.park_active_chat_panel(cx);
     }
-    if self.center_tabs.is_empty() {
-      self.new_session(window, cx);
+    if let Some(next_tab) = next_tab {
+      self.activate_center_tab(next_tab, OpenIntent::Open, window, cx);
       return;
     }
-    let next_tab = self
-      .center_tabs
-      .last()
+    self.new_session(window, cx);
+  }
+
+  fn next_center_tab_after_closing(&self, closing_tab: &CenterTab) -> Option<CenterTab> {
+    let tabs = self.center_tabs_for_navigation();
+    if let Some(tab) = self
+      .center_tab_history
+      .iter()
+      .rev()
+      .find(|candidate| *candidate != closing_tab && tabs.iter().any(|tab| tab == *candidate))
+    {
+      return Some(tab.clone());
+    }
+
+    let closing_index = tabs.iter().position(|tab| tab == closing_tab)?;
+    let remaining_tabs = tabs
+      .into_iter()
+      .filter(|tab| tab != closing_tab)
+      .collect::<Vec<_>>();
+    remaining_tabs
+      .get(closing_index)
+      .or_else(|| remaining_tabs.last())
       .cloned()
-      .unwrap_or_else(CenterTab::chat);
-    self.activate_center_tab(next_tab, OpenIntent::Open, window, cx);
   }
 
   fn close_center_tab_without_unsaved_prompt(
@@ -1214,8 +1237,14 @@ impl SessionPage {
     window: &mut Window,
     cx: &mut Context<Self>,
   ) {
-    self.center_tabs.retain(|candidate| candidate != &tab);
     let selected_closed = self.active_center_tab.as_ref() == Some(&tab);
+    let next_tab = selected_closed
+      .then(|| self.next_center_tab_after_closing(&tab))
+      .flatten();
+    self.center_tabs.retain(|candidate| candidate != &tab);
+    self
+      .center_tab_history
+      .retain(|candidate| candidate != &tab);
     let editor_closed = self.editor_tab.as_ref() == Some(&tab);
     if editor_closed {
       self.discard_active_editor();
@@ -1231,9 +1260,7 @@ impl SessionPage {
 
     self.active_center_tab = None;
 
-    if self.center == CenterView::Diff
-      && let Some(next_tab) = self.center_tabs.last().cloned()
-    {
+    if let Some(next_tab) = next_tab {
       self.activate_center_tab(next_tab, OpenIntent::Open, window, cx);
       return;
     }
@@ -1846,8 +1873,129 @@ mod tests {
         page.center_tabs,
         vec![
           CenterTab::chat(),
-          CenterTab::diff(PathBuf::from("other.md")),
-          CenterTab::diff(PathBuf::from("README.md"))
+          CenterTab::diff(PathBuf::from("README.md")),
+          CenterTab::diff(PathBuf::from("other.md"))
+        ]
+      );
+    });
+  }
+
+  #[gpui::test]
+  async fn center_tab_shortcuts_walk_the_open_tab_order(cx: &mut TestAppContext) {
+    let repo = TempRepo::init("session-page-center-tab-navigation");
+    commit_text_file(&repo.path, Path::new("README.md"), "v1\n", "initial");
+    commit_text_file(&repo.path, Path::new("other.md"), "one\n", "second");
+    std::fs::write(repo.path.join("README.md"), "v2\n").expect("update file");
+    std::fs::write(repo.path.join("other.md"), "two\n").expect("update other");
+
+    let (page, cx) = add_session_page_window(repo.path.clone(), cx);
+    page.update_in(cx, |page, window, cx| {
+      page.open_diff(
+        PathBuf::from("README.md"),
+        None,
+        OpenIntent::Open,
+        window,
+        cx,
+      );
+    });
+    await_open_file(&page, cx).await;
+    page.update_in(cx, |page, window, cx| {
+      page.open_diff(
+        PathBuf::from("other.md"),
+        None,
+        OpenIntent::Open,
+        window,
+        cx,
+      );
+    });
+    await_open_file(&page, cx).await;
+
+    page.update_in(cx, |page, window, cx| {
+      page.activate_next_center_tab_action(&crate::NextCenterTab, window, cx);
+    });
+    cx.run_until_parked();
+    page.read_with(cx, |page, _| {
+      assert_eq!(page.center, CenterView::Conversation);
+      assert_eq!(page.active_center_tab, Some(CenterTab::chat()));
+    });
+
+    page.update_in(cx, |page, window, cx| {
+      page.activate_next_center_tab_action(&crate::NextCenterTab, window, cx);
+    });
+    await_open_file(&page, cx).await;
+    page.read_with(cx, |page, _| {
+      assert_eq!(page.center, CenterView::Diff);
+      assert_eq!(page.selected_file.as_deref(), Some(Path::new("README.md")));
+      assert_eq!(
+        page.center_tabs,
+        vec![
+          CenterTab::chat(),
+          CenterTab::diff(PathBuf::from("README.md")),
+          CenterTab::diff(PathBuf::from("other.md"))
+        ]
+      );
+    });
+
+    page.update_in(cx, |page, window, cx| {
+      page.activate_previous_center_tab_action(&crate::PreviousCenterTab, window, cx);
+    });
+    cx.run_until_parked();
+    page.read_with(cx, |page, _| {
+      assert_eq!(page.center, CenterView::Conversation);
+      assert_eq!(page.active_center_tab, Some(CenterTab::chat()));
+    });
+  }
+
+  #[gpui::test]
+  async fn closing_the_active_center_tab_returns_to_the_previous_tab(cx: &mut TestAppContext) {
+    let repo = TempRepo::init("session-page-center-tab-close-previous");
+    commit_text_file(&repo.path, Path::new("README.md"), "v1\n", "initial");
+    commit_text_file(&repo.path, Path::new("other.md"), "one\n", "second");
+    std::fs::write(repo.path.join("README.md"), "v2\n").expect("update file");
+    std::fs::write(repo.path.join("other.md"), "two\n").expect("update other");
+
+    let (page, cx) = add_session_page_window(repo.path.clone(), cx);
+    page.update_in(cx, |page, window, cx| {
+      page.open_diff(
+        PathBuf::from("README.md"),
+        None,
+        OpenIntent::Open,
+        window,
+        cx,
+      );
+    });
+    await_open_file(&page, cx).await;
+    page.update_in(cx, |page, window, cx| {
+      page.open_diff(
+        PathBuf::from("other.md"),
+        None,
+        OpenIntent::Open,
+        window,
+        cx,
+      );
+    });
+    await_open_file(&page, cx).await;
+    page.update_in(cx, |page, window, cx| {
+      page.activate_center_tab(
+        CenterTab::diff(PathBuf::from("README.md")),
+        OpenIntent::Open,
+        window,
+        cx,
+      );
+    });
+    await_open_file(&page, cx).await;
+
+    cx.dispatch_action(crate::CloseCenterTab);
+    await_open_file(&page, cx).await;
+
+    page.read_with(cx, |page, _| {
+      assert_eq!(page.center, CenterView::Diff);
+      assert_eq!(page.selected_file.as_deref(), Some(Path::new("other.md")));
+      assert_eq!(
+        page.center_tabs,
+        vec![
+          CenterTab::chat(),
+          CenterTab::diff(PathBuf::from("other.md"))
         ]
       );
     });

@@ -18,11 +18,12 @@ use crate::config::ConfigStore;
 use crate::{
   AcceptBothConflict, AddSelectionToAgent, CommentHunk, CommitChanges, ForcePushChanges,
   JumpToLatestMessage, NavigateBack, NewAgentSession, NewAgentWorktreeSession, NextAnnotation,
-  OpenFilesSidebar, OpenGitChangesSidebar, OpenGitHistorySidebar, OpenPullRequestSidebar,
-  OpenRepository, OpenReviewSidebar, OpenSessionPage, OpenSettingsPage, PreviousAnnotation,
-  PullChanges, PushChanges, RestoreFile, RestoreHunk, ReturnFocusToEditor,
-  SendReviewCommentsToAgent, ShowBranchSwitcher, ShowCommandPalette, ShowFileSearch,
-  ToggleDiffView, ToggleFileStage, ToggleHideWhitespace, ToggleHunkStage, ToggleTerminalSidebar,
+  NextCenterTab, OpenFilesSidebar, OpenGitChangesSidebar, OpenGitHistorySidebar,
+  OpenPullRequestSidebar, OpenRepository, OpenReviewSidebar, OpenSessionPage, OpenSettingsPage,
+  PreviousAnnotation, PreviousCenterTab, PullChanges, PushChanges, RestoreFile, RestoreHunk,
+  ReturnFocusToEditor, SendReviewCommentsToAgent, ShowBranchSwitcher, ShowCommandPalette,
+  ShowFileSearch, ToggleDiffView, ToggleFileStage, ToggleHideWhitespace, ToggleHunkStage,
+  ToggleTerminalSidebar,
 };
 
 pub const SHOW_COMMAND_PALETTE_SHORTCUT: &str = "cmd-k";
@@ -44,6 +45,7 @@ const FORCE_PUSH_CHANGES_CONTEXT: &str = "WorkspaceSession";
 const OPEN_SETTINGS_CONTEXT: &str = "Workspace";
 const NAVIGATE_BACK_CONTEXT: &str = "Workspace";
 const OPEN_SESSION_PAGE_CONTEXT: &str = "Workspace";
+const CENTER_TAB_CONTEXT: &str = "WorkspaceSession";
 const TOGGLE_TERMINAL_CONTEXT: &str = "WorkspaceSession";
 const SHOW_BRANCH_SWITCHER_CONTEXT: &str = "WorkspaceSession";
 const OPEN_GIT_HISTORY_SIDEBAR_CONTEXT: &str = "WorkspaceSession";
@@ -73,6 +75,8 @@ pub enum ShortcutId {
   ShowCommandPalette,
   NavigateBack,
   OpenSessionPage,
+  NextCenterTab,
+  PreviousCenterTab,
   ShowFileSearch,
   OpenRepository,
   CommitChanges,
@@ -110,6 +114,8 @@ impl ShortcutId {
       ShortcutId::ShowCommandPalette => "show_command_palette",
       ShortcutId::NavigateBack => "navigate_back",
       ShortcutId::OpenSessionPage => "open_session_page",
+      ShortcutId::NextCenterTab => "next_center_tab",
+      ShortcutId::PreviousCenterTab => "previous_center_tab",
       ShortcutId::ShowFileSearch => "show_file_search",
       ShortcutId::OpenRepository => "open_repository",
       ShortcutId::CommitChanges => "commit_changes",
@@ -147,6 +153,8 @@ impl ShortcutId {
       "show_command_palette" => Some(ShortcutId::ShowCommandPalette),
       "navigate_back" => Some(ShortcutId::NavigateBack),
       "open_session_page" => Some(ShortcutId::OpenSessionPage),
+      "next_center_tab" => Some(ShortcutId::NextCenterTab),
+      "previous_center_tab" => Some(ShortcutId::PreviousCenterTab),
       "show_file_search" => Some(ShortcutId::ShowFileSearch),
       "open_repository" => Some(ShortcutId::OpenRepository),
       "commit_changes" => Some(ShortcutId::CommitChanges),
@@ -202,7 +210,7 @@ pub struct ShortcutDefinition {
   pub active_contexts: &'static [&'static str],
 }
 
-const SHORTCUT_DEFINITIONS: [ShortcutDefinition; 32] = [
+const SHORTCUT_DEFINITIONS: [ShortcutDefinition; 34] = [
   ShortcutDefinition {
     id: ShortcutId::ShowCommandPalette,
     title: "Command Palette",
@@ -235,6 +243,28 @@ const SHORTCUT_DEFINITIONS: [ShortcutDefinition; 32] = [
     context: OPEN_SESSION_PAGE_CONTEXT,
     display_context: WORKSPACE_SESSION_CONTEXT,
     active_contexts: &ALL_WORKSPACE_ACTIVE_CONTEXTS,
+  },
+  ShortcutDefinition {
+    id: ShortcutId::NextCenterTab,
+    title: "Next Tab",
+    description: "Activate the next center tab.",
+    scope_label: "Workspace",
+    category: ShortcutCategory::Core,
+    keystroke: "cmd-shift-]",
+    context: CENTER_TAB_CONTEXT,
+    display_context: WORKSPACE_SESSION_CONTEXT,
+    active_contexts: &SESSION_ONLY_ACTIVE_CONTEXTS,
+  },
+  ShortcutDefinition {
+    id: ShortcutId::PreviousCenterTab,
+    title: "Previous Tab",
+    description: "Activate the previous center tab.",
+    scope_label: "Workspace",
+    category: ShortcutCategory::Core,
+    keystroke: "cmd-shift-[",
+    context: CENTER_TAB_CONTEXT,
+    display_context: WORKSPACE_SESSION_CONTEXT,
+    active_contexts: &SESSION_ONLY_ACTIVE_CONTEXTS,
   },
   ShortcutDefinition {
     id: ShortcutId::ShowFileSearch,
@@ -823,6 +853,10 @@ impl ShortcutDefinition {
       }
       ShortcutId::NavigateBack => KeyBinding::new(keystroke, NavigateBack, Some(&context)),
       ShortcutId::OpenSessionPage => KeyBinding::new(keystroke, OpenSessionPage, Some(&context)),
+      ShortcutId::NextCenterTab => KeyBinding::new(keystroke, NextCenterTab, Some(&context)),
+      ShortcutId::PreviousCenterTab => {
+        KeyBinding::new(keystroke, PreviousCenterTab, Some(&context))
+      }
       ShortcutId::ShowFileSearch => KeyBinding::new(keystroke, ShowFileSearch, Some(&context)),
       ShortcutId::OpenRepository => KeyBinding::new(keystroke, OpenRepository, Some(&context)),
       ShortcutId::CommitChanges => KeyBinding::new(keystroke, CommitChanges, Some(&context)),
@@ -1309,6 +1343,8 @@ fn with_shortcut_action<T>(id: ShortcutId, f: impl FnOnce(&dyn Action) -> T) -> 
     ShortcutId::ShowCommandPalette => f(&ShowCommandPalette),
     ShortcutId::NavigateBack => f(&NavigateBack),
     ShortcutId::OpenSessionPage => f(&OpenSessionPage),
+    ShortcutId::NextCenterTab => f(&NextCenterTab),
+    ShortcutId::PreviousCenterTab => f(&PreviousCenterTab),
     ShortcutId::ShowFileSearch => f(&ShowFileSearch),
     ShortcutId::OpenRepository => f(&OpenRepository),
     ShortcutId::CommitChanges => f(&CommitChanges),
@@ -1655,6 +1691,8 @@ mod tests {
     for pathname in ["/session", "/github", "/settings"] {
       assert!(has_binding(pathname, "cmd-["));
       assert!(has_binding(pathname, "cmd-1"));
+      assert!(has_binding(pathname, "cmd-shift-]"));
+      assert!(has_binding(pathname, "cmd-shift-["));
     }
   }
 
