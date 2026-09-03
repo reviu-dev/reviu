@@ -222,7 +222,7 @@ impl SessionPage {
     window: &mut Window,
     cx: &mut Context<Self>,
   ) {
-    self.cache_active_editor();
+    self.cache_warm_editor();
     let Some(repo_root) = self.checkout_root(cx) else {
       return;
     };
@@ -236,7 +236,7 @@ impl SessionPage {
       DiffViewMode::Inline
     };
     // Reading preference for the session, seeded from the settings once.
-    if self.active_selected_file().is_none() {
+    if self.warm_selected_file().is_none() {
       self.hide_whitespace = app_settings.hide_whitespace;
     }
     let hide_whitespace = self.hide_whitespace;
@@ -253,7 +253,7 @@ impl SessionPage {
     // Same path, but the snapshot of a commit is not the working-tree file.
     if !left_commit_file
       && self.editor_tab.as_ref() == Some(&tab)
-      && let Some(editor) = self.active_editor()
+      && let Some(editor) = self.warm_editor()
     {
       if let Some((doc_line, doc_column)) = reveal_doc_position {
         editor.update(cx, |editor, cx| {
@@ -302,7 +302,7 @@ impl SessionPage {
         if this.open_file_generation != generation {
           return;
         }
-        if this.active_selected_file() != Some(rel_path.as_path()) {
+        if this.warm_selected_file() != Some(rel_path.as_path()) {
           return;
         }
         let binary_preview = build_binary_preview(rel_path.as_path(), loaded.binary_bytes.clone());
@@ -348,11 +348,11 @@ impl SessionPage {
           &editor,
           |this, _editor, event: &EditorEvent, cx| match event {
             EditorEvent::Saved => {
-              let file_modified = this.active_worktree_file_modified(cx);
+              let file_modified = this.warm_worktree_file_modified(cx);
               if let Some(state) = this.editor_tab_state_mut() {
                 state.file_modified = file_modified;
               }
-              this.cache_active_editor();
+              this.cache_warm_editor();
               this.dock_panel.update(cx, |panel, cx| panel.refresh(cx));
             }
             EditorEvent::HunkStagingChanged => {
@@ -399,20 +399,42 @@ impl SessionPage {
     self.editor_states.get_mut(&tab)
   }
 
-  pub(super) fn active_editor(&self) -> Option<Entity<Editor>> {
+  pub(super) fn warm_editor(&self) -> Option<Entity<Editor>> {
     self.editor_tab_state()?.editor.clone()
   }
 
-  pub(super) fn active_selected_file(&self) -> Option<&Path> {
+  pub(super) fn warm_selected_file(&self) -> Option<&Path> {
     Some(self.editor_tab_state()?.selected_file.as_path())
   }
 
-  pub(super) fn active_binary_preview(&self) -> Option<&BinaryPreview> {
+  pub(super) fn warm_binary_preview(&self) -> Option<&BinaryPreview> {
     self.editor_tab_state()?.binary_preview.as_ref()
   }
 
-  pub(super) fn active_opened_snapshot(&self) -> Option<&OpenedSnapshot> {
+  pub(super) fn warm_opened_snapshot(&self) -> Option<&OpenedSnapshot> {
     self.editor_tab_state()?.opened_snapshot.as_ref()
+  }
+
+  fn shown_editor_state(&self) -> Option<&CenterEditorState> {
+    self
+      .shown_editor_tab()
+      .and_then(|tab| self.editor_states.get(tab))
+  }
+
+  pub(super) fn shown_editor(&self) -> Option<Entity<Editor>> {
+    self.shown_editor_state()?.editor.clone()
+  }
+
+  pub(super) fn shown_selected_file(&self) -> Option<&Path> {
+    Some(self.shown_editor_state()?.selected_file.as_path())
+  }
+
+  pub(super) fn shown_binary_preview(&self) -> Option<&BinaryPreview> {
+    self.shown_editor_state()?.binary_preview.as_ref()
+  }
+
+  pub(super) fn shown_opened_snapshot(&self) -> Option<&OpenedSnapshot> {
+    self.shown_editor_state()?.opened_snapshot.as_ref()
   }
 
   fn set_editor_tab_state(&mut self, tab: CenterTab, state: CenterEditorState) {
@@ -449,13 +471,13 @@ impl SessionPage {
     self.editor_tab = None;
   }
 
-  fn active_worktree_file_modified(&self, cx: &App) -> Option<SystemTime> {
+  fn warm_worktree_file_modified(&self, cx: &App) -> Option<SystemTime> {
     let repo_root = self.checkout_root(cx)?;
-    let selected_file = self.active_selected_file()?;
+    let selected_file = self.warm_selected_file()?;
     worktree_file_modified(&repo_root.join(selected_file))
   }
 
-  fn cache_active_editor(&mut self) {
+  fn cache_warm_editor(&mut self) {
     let Some(tab) = self.editor_tab.clone() else {
       return;
     };
@@ -502,7 +524,7 @@ impl SessionPage {
       .update(cx, |list, cx| {
         list.select_path(Some(rel_path), cx);
       });
-    let active_editor = self.active_editor();
+    let active_editor = self.warm_editor();
     if let (Some((doc_line, doc_column)), Some(editor)) =
       (reveal_doc_position, active_editor.clone())
     {
@@ -512,7 +534,7 @@ impl SessionPage {
     }
     self.sync_editor_unmerged_state(cx);
     self.sync_git_telemetry(cx);
-    match self.active_opened_snapshot() {
+    match self.warm_opened_snapshot() {
       Some(OpenedSnapshot::PullRequestRange { .. }) => {
         if let Some(editor) = active_editor {
           self.install_github_review_handlers_for_editor(&editor, cx);
@@ -578,7 +600,7 @@ impl SessionPage {
     window: &mut Window,
     cx: &mut Context<Self>,
   ) {
-    self.cache_active_editor();
+    self.cache_warm_editor();
     let Some(repo_root) = self.checkout_root(cx) else {
       return;
     };
@@ -591,7 +613,7 @@ impl SessionPage {
     } else {
       DiffViewMode::Inline
     };
-    if self.active_selected_file().is_none() {
+    if self.warm_selected_file().is_none() {
       self.hide_whitespace = app_settings.hide_whitespace;
     }
     let tab = CenterTab::agent_snapshot(rel_path.clone(), old_text.clone(), new_text.clone());
@@ -645,7 +667,7 @@ impl SessionPage {
         if this.open_file_generation != generation {
           return;
         }
-        if this.active_selected_file() != Some(rel_path.as_path()) {
+        if this.warm_selected_file() != Some(rel_path.as_path()) {
           return;
         }
         let editor = cx.new(|cx| Editor::new_with_paths(repo_root.clone(), file_path, cx));
@@ -715,7 +737,7 @@ impl SessionPage {
     window: &mut Window,
     cx: &mut Context<Self>,
   ) {
-    self.cache_active_editor();
+    self.cache_warm_editor();
     let Some(repo_root) = self.checkout_root(cx) else {
       return;
     };
@@ -835,7 +857,7 @@ impl SessionPage {
     window: &mut Window,
     cx: &mut Context<Self>,
   ) {
-    self.cache_active_editor();
+    self.cache_warm_editor();
     let Some(repo_root) = self.checkout_root(cx) else {
       return;
     };
@@ -844,13 +866,13 @@ impl SessionPage {
     self.center = CenterView::Diff;
     self.sync_agent_chat_close_control(cx);
     // Another comment on the file already open: reveal, do not reload.
-    if self.active_opened_snapshot()
+    if self.warm_opened_snapshot()
       == Some(&OpenedSnapshot::PullRequestRange {
         base: base_oid.clone(),
         head: head_oid.clone(),
       })
-      && self.active_selected_file() == Some(rel_path.as_path())
-      && let Some(editor) = self.active_editor()
+      && self.warm_selected_file() == Some(rel_path.as_path())
+      && let Some(editor) = self.warm_editor()
     {
       if let Some(doc_line) = reveal_doc_line {
         editor.update(cx, |editor, cx| editor.reveal_source_line(doc_line, cx));
@@ -937,7 +959,7 @@ impl SessionPage {
 
   /// Leaving a snapshot for a working-tree file. Returns whether there was one.
   pub(super) fn leave_commit_file(&mut self, cx: &mut Context<Self>) -> bool {
-    let Some(snapshot) = self.active_opened_snapshot() else {
+    let Some(snapshot) = self.warm_opened_snapshot() else {
       return false;
     };
     if matches!(snapshot, OpenedSnapshot::Commit(_)) {
@@ -949,7 +971,7 @@ impl SessionPage {
 
   pub(super) fn effective_diff_view(&self, path: &Path, cx: &App) -> DiffViewMode {
     // A clean file has no other side: the split preference must not follow it.
-    if !self.path_has_changes(path, cx) {
+    if !self.path_has_changes(path, self.warm_opened_snapshot().is_some(), cx) {
       return DiffViewMode::Inline;
     }
     if self.path_is_conflicted(path, cx) {
@@ -957,7 +979,7 @@ impl SessionPage {
     }
     effective_diff_view(DiffViewInputs {
       preferred: self.diff_view,
-      binary_preview: self.active_binary_preview().is_some(),
+      binary_preview: self.warm_binary_preview().is_some(),
       previewing: self.show_preview && self.previewable(),
       whole_file_change: self.whole_file_change(path, cx),
     })
@@ -965,16 +987,24 @@ impl SessionPage {
 
   /// A file opened from the Files tab with no pending change has nothing to
   /// compare: the toggle would show the same content twice.
+  #[cfg(test)]
   pub(super) fn selected_file_has_changes(&self, cx: &App) -> bool {
-    let Some(path) = self.active_selected_file() else {
+    let Some(path) = self.warm_selected_file() else {
       return false;
     };
-    self.path_has_changes(path, cx)
+    self.path_has_changes(path, self.warm_opened_snapshot().is_some(), cx)
   }
 
-  fn path_has_changes(&self, path: &Path, cx: &App) -> bool {
+  pub(super) fn shown_file_has_changes(&self, cx: &App) -> bool {
+    let Some(path) = self.shown_selected_file() else {
+      return false;
+    };
+    self.path_has_changes(path, self.shown_opened_snapshot().is_some(), cx)
+  }
+
+  fn path_has_changes(&self, path: &Path, snapshot_open: bool, cx: &App) -> bool {
     // A snapshot always carries its own patch.
-    if self.active_opened_snapshot().is_some() {
+    if snapshot_open {
       return true;
     }
     self
@@ -996,13 +1026,25 @@ impl SessionPage {
 
   pub(super) fn selected_file_is_markdown(&self) -> bool {
     self
-      .active_selected_file()
+      .warm_selected_file()
       .is_some_and(crate::file_preview::is_markdown_path)
   }
 
   pub(super) fn selected_file_is_svg(&self) -> bool {
     self
-      .active_selected_file()
+      .warm_selected_file()
+      .is_some_and(crate::file_preview::is_svg_path)
+  }
+
+  pub(super) fn shown_file_is_markdown(&self) -> bool {
+    self
+      .shown_selected_file()
+      .is_some_and(crate::file_preview::is_markdown_path)
+  }
+
+  pub(super) fn shown_file_is_svg(&self) -> bool {
+    self
+      .shown_selected_file()
       .is_some_and(crate::file_preview::is_svg_path)
   }
 
@@ -1010,8 +1052,12 @@ impl SessionPage {
     self.selected_file_is_markdown() || self.selected_file_is_svg()
   }
 
+  pub(super) fn shown_previewable(&self) -> bool {
+    self.shown_file_is_markdown() || self.shown_file_is_svg()
+  }
+
   pub(super) fn toggle_preview(&mut self, cx: &mut Context<Self>) {
-    if !self.previewable() {
+    if !self.shown_previewable() {
       self.show_preview = false;
       return;
     }
@@ -1022,19 +1068,32 @@ impl SessionPage {
   }
 
   pub(super) fn split_disabled(&self, cx: &App) -> bool {
-    let Some(path) = self.active_selected_file() else {
+    let Some(path) = self.shown_selected_file() else {
       return true;
     };
     // The preview is not a reason to refuse: asking for split closes it.
-    self.active_binary_preview().is_some()
-      || self.whole_file_change(path, cx)
+    self.shown_binary_preview().is_some()
+      || self.shown_whole_file_change(path, cx)
       || self.path_is_conflicted(path, cx)
   }
 
   pub(super) fn whole_file_change(&self, path: &Path, cx: &App) -> bool {
+    self.whole_file_change_for(path, self.warm_opened_snapshot(), cx)
+  }
+
+  fn shown_whole_file_change(&self, path: &Path, cx: &App) -> bool {
+    self.whole_file_change_for(path, self.shown_opened_snapshot(), cx)
+  }
+
+  fn whole_file_change_for(
+    &self,
+    path: &Path,
+    opened_snapshot: Option<&OpenedSnapshot>,
+    cx: &App,
+  ) -> bool {
     if let Some(OpenedSnapshot::AgentTool {
       whole_file_change, ..
-    }) = self.active_opened_snapshot()
+    }) = opened_snapshot
     {
       return *whole_file_change;
     }
@@ -1084,14 +1143,10 @@ impl SessionPage {
   }
 
   pub(super) fn navigate_change(&mut self, direction: AnnotationDirection, cx: &mut Context<Self>) {
-    // A rendered file has nothing to walk.
-    if self.center != CenterView::Diff || (self.show_preview && self.previewable()) {
-      return;
-    }
-    let Some(editor) = self.active_editor() else {
+    let Some(editor) = self.diff_editor() else {
       return;
     };
-    let file_status = self.selected_file_status(cx);
+    let file_status = self.shown_file_status(cx);
     editor.update(cx, |editor, cx| {
       navigate_annotation(editor, file_status, direction, cx)
     });
@@ -1099,12 +1154,23 @@ impl SessionPage {
     cx.stop_propagation();
   }
 
-  /// The status of the open file, unless it is a snapshot: those have none.
+  /// The status of the warm editor file, unless it is a snapshot: those have none.
   pub(super) fn selected_file_status(&self, cx: &App) -> Option<RepoStatusKind> {
-    if self.active_opened_snapshot().is_some() {
+    if self.warm_opened_snapshot().is_some() {
       return None;
     }
-    let path = self.active_selected_file()?;
+    self.status_for_path(self.warm_selected_file()?, cx)
+  }
+
+  /// The status of the shown editor file, unless it is a snapshot: those have none.
+  pub(super) fn shown_file_status(&self, cx: &App) -> Option<RepoStatusKind> {
+    if self.shown_opened_snapshot().is_some() {
+      return None;
+    }
+    self.status_for_path(self.shown_selected_file()?, cx)
+  }
+
+  fn status_for_path(&self, path: &Path, cx: &App) -> Option<RepoStatusKind> {
     self
       .dock_panel
       .read(cx)
@@ -1117,7 +1183,7 @@ impl SessionPage {
   /// A conflicted file is shown whole: once its markers are resolved there is no
   /// diff left to read, only the file.
   pub(super) fn sync_editor_unmerged_state(&mut self, cx: &mut Context<Self>) {
-    let Some(editor) = self.active_editor() else {
+    let Some(editor) = self.warm_editor() else {
       return;
     };
     let is_unmerged = matches!(
@@ -1128,11 +1194,14 @@ impl SessionPage {
   }
 
   /// The path a renamed file came from, so the diff header can name both sides.
-  pub(super) fn selected_file_old_path(&self, cx: &App) -> Option<PathBuf> {
-    if self.active_opened_snapshot().is_some() {
+  pub(super) fn shown_selected_file_old_path(&self, cx: &App) -> Option<PathBuf> {
+    if self.shown_opened_snapshot().is_some() {
       return None;
     }
-    let path = self.active_selected_file()?;
+    self.old_path_for(self.shown_selected_file()?, cx)
+  }
+
+  fn old_path_for(&self, path: &Path, cx: &App) -> Option<PathBuf> {
     self
       .dock_panel
       .read(cx)
@@ -1143,8 +1212,8 @@ impl SessionPage {
   }
 
   pub(super) fn annotation_navigation(&self, cx: &App) -> Option<AnnotationNavigationState> {
-    let editor = self.active_editor()?;
-    let file_status = self.selected_file_status(cx);
+    let editor = self.diff_editor()?;
+    let file_status = self.shown_file_status(cx);
     editor.read_with(cx, |editor, cx| {
       annotation_navigation_state_for(file_status, editor, cx)
     })
@@ -1152,8 +1221,8 @@ impl SessionPage {
 
   /// Accepting every conflict at once needs a conflicted file still holding markers.
   pub(super) fn can_accept_all_conflicts(&self, cx: &App) -> bool {
-    let file_status = self.selected_file_status(cx);
-    self.active_editor().is_some_and(|editor| {
+    let file_status = self.shown_file_status(cx);
+    self.diff_editor().is_some_and(|editor| {
       editor.read_with(cx, |editor, cx| {
         can_accept_all_conflicts(
           file_status,
@@ -1172,7 +1241,7 @@ impl SessionPage {
     if !self.can_accept_all_conflicts(cx) {
       return;
     }
-    let Some(editor) = self.active_editor() else {
+    let Some(editor) = self.diff_editor() else {
       return;
     };
     editor.update(cx, |editor, cx| {
@@ -1190,7 +1259,7 @@ impl SessionPage {
     let Some(editor) = self.diff_editor() else {
       return;
     };
-    let file_status = self.selected_file_status(cx);
+    let file_status = self.shown_file_status(cx);
     toggle_hunk_stage(&editor, file_status, cx);
     cx.stop_propagation();
   }
@@ -1204,7 +1273,7 @@ impl SessionPage {
     let Some(editor) = self.diff_editor() else {
       return;
     };
-    let file_status = self.selected_file_status(cx);
+    let file_status = self.shown_file_status(cx);
     restore_hunk(&editor, file_status, cx);
     cx.stop_propagation();
   }
@@ -1218,7 +1287,7 @@ impl SessionPage {
     let Some(editor) = self.diff_editor() else {
       return;
     };
-    let file_status = self.selected_file_status(cx);
+    let file_status = self.shown_file_status(cx);
     resolve_active_conflict(&editor, file_status, ConflictResolution::Both, cx);
     cx.stop_propagation();
   }
@@ -1226,13 +1295,10 @@ impl SessionPage {
   /// The editor of the open file, unless the center shows something else or a
   /// rendered file hides the diff.
   pub(super) fn diff_editor(&self) -> Option<Entity<Editor>> {
-    if self.show_preview && self.previewable() {
+    if self.show_preview && self.shown_previewable() {
       return None;
     }
-    self
-      .shown_editor_tab()
-      .and_then(|tab| self.editor_states.get(tab))
-      .and_then(|state| state.editor.clone())
+    self.shown_editor()
   }
 
   pub(super) fn toggle_hide_whitespace_action(
@@ -1248,8 +1314,8 @@ impl SessionPage {
   pub(super) fn toggle_hide_whitespace(&mut self, cx: &mut Context<Self>) {
     // No diff on screen, nothing to hide: rendered file, or a file with no change.
     if self.center != CenterView::Diff
-      || (self.show_preview && self.previewable())
-      || !self.selected_file_has_changes(cx)
+      || (self.show_preview && self.shown_previewable())
+      || !self.shown_file_has_changes(cx)
     {
       return;
     }
@@ -1257,10 +1323,10 @@ impl SessionPage {
     let value = self.hide_whitespace;
     if let Some(OpenedSnapshot::AgentTool {
       old_text, new_text, ..
-    }) = self.active_opened_snapshot().cloned()
+    }) = self.shown_opened_snapshot().cloned()
       && let (Some(rel_path), Some(editor)) = (
-        self.active_selected_file().map(Path::to_path_buf),
-        self.active_editor(),
+        self.shown_selected_file().map(Path::to_path_buf),
+        self.diff_editor(),
       )
     {
       self.open_file_generation = self.open_file_generation.wrapping_add(1);
@@ -1281,7 +1347,7 @@ impl SessionPage {
           .await;
         let _ = this.update(cx, move |this, cx| {
           if this.open_file_generation != generation
-            || this.active_selected_file() != Some(rel_path.as_path())
+            || this.shown_selected_file() != Some(rel_path.as_path())
           {
             return;
           }
@@ -1292,7 +1358,7 @@ impl SessionPage {
         });
       });
       self.open_file_task = Some(task);
-    } else if let Some(editor) = self.active_editor() {
+    } else if let Some(editor) = self.diff_editor() {
       editor.update(cx, |editor, cx| editor.set_ignore_whitespace(value, cx));
     }
     cx.notify();
@@ -1302,9 +1368,9 @@ impl SessionPage {
     // While the rendered file holds the pane there is no diff to switch, and a
     // clean file must not flip the shared preference from a dead toggle.
     if self.center != CenterView::Diff
-      || (self.show_preview && self.previewable())
+      || (self.show_preview && self.shown_previewable())
       || self.split_disabled(cx)
-      || !self.selected_file_has_changes(cx)
+      || !self.shown_file_has_changes(cx)
     {
       return;
     }
@@ -1323,10 +1389,10 @@ impl SessionPage {
   }
 
   pub(super) fn sync_diff_view(&mut self, cx: &mut Context<Self>) {
-    let Some(editor) = self.active_editor() else {
+    let Some(editor) = self.warm_editor() else {
       return;
     };
-    let Some(path) = self.active_selected_file().map(Path::to_path_buf) else {
+    let Some(path) = self.warm_selected_file().map(Path::to_path_buf) else {
       return;
     };
     let diff_view = self.effective_diff_view(&path, cx);
@@ -1498,7 +1564,7 @@ impl SessionPage {
 
   pub(super) fn editor_is_dirty(&self, cx: &App) -> bool {
     self
-      .active_editor()
+      .warm_editor()
       .as_ref()
       .is_some_and(|editor| editor.read(cx).is_dirty)
   }
@@ -1511,7 +1577,7 @@ impl SessionPage {
     self.editor_is_dirty(cx)
   }
 
-  fn discard_active_editor(&mut self) {
+  fn discard_warm_editor(&mut self) {
     if let Some(tab) = self.editor_tab.clone() {
       self.clear_editor_tab(&tab);
     } else {
@@ -1529,7 +1595,7 @@ impl SessionPage {
     cx: &mut Context<Self>,
   ) {
     window.close_dialog(cx);
-    self.discard_active_editor();
+    self.discard_warm_editor();
     self.perform_unsaved_editor_action(action, window, cx);
   }
 
@@ -1645,7 +1711,7 @@ impl SessionPage {
     cx: &mut Context<Self>,
   ) {
     let view = cx.entity();
-    let editor = self.active_editor();
+    let editor = self.warm_editor();
     let window_handle = window.window_handle();
 
     window.open_alert_dialog(cx, move |alert, _, _| {
@@ -1679,7 +1745,7 @@ impl SessionPage {
                   window.close_dialog(cx);
                   let discard_action = discard_action.clone();
                   discard_view.update(cx, move |view, cx| {
-                    view.discard_active_editor();
+                    view.discard_warm_editor();
                     view.perform_unsaved_editor_action(discard_action, window, cx);
                   });
                 }),
@@ -1729,7 +1795,7 @@ impl SessionPage {
     let view = cx.entity().downgrade();
     window.on_next_frame(move |window, cx| {
       let _ = view.update(cx, |this, cx| {
-        if let Some(editor) = this.active_editor() {
+        if let Some(editor) = this.warm_editor() {
           let focus_handle = editor.read(cx).focus_handle(cx);
           window.focus(&focus_handle, cx);
         }
@@ -1775,7 +1841,7 @@ impl SessionPage {
       return Err("Select code in the diff first");
     };
     let path = self
-      .active_selected_file()
+      .warm_selected_file()
       .map(|path| path.to_string_lossy().to_string())
       .unwrap_or_else(|| "selection".to_string());
     Ok((path, text))
@@ -1828,9 +1894,9 @@ mod tests {
     );
   }
 
-  fn dirty_active_editor(page: &Entity<SessionPage>, cx: &mut gpui::VisualTestContext, text: &str) {
+  fn dirty_warm_editor(page: &Entity<SessionPage>, cx: &mut gpui::VisualTestContext, text: &str) {
     let editor = page
-      .read_with(cx, |page, _| page.active_editor())
+      .read_with(cx, |page, _| page.warm_editor())
       .expect("editor");
     editor.update(cx, |editor, cx| {
       editor.document.update(cx, |document, cx| {
@@ -1846,7 +1912,7 @@ mod tests {
   ) -> usize {
     page.read_with(cx, |page, cx| {
       page
-        .active_editor()
+        .warm_editor()
         .as_ref()
         .expect("editor")
         .read(cx)
@@ -1925,7 +1991,7 @@ mod tests {
       assert!(page.split_disabled(cx));
       assert_eq!(
         page
-          .active_editor()
+          .warm_editor()
           .as_ref()
           .expect("editor")
           .read(cx)
@@ -1961,7 +2027,7 @@ mod tests {
     page.read_with(cx, |page, cx| {
       assert_eq!(
         page
-          .active_editor()
+          .warm_editor()
           .as_ref()
           .expect("editor")
           .read(cx)
@@ -2079,7 +2145,7 @@ mod tests {
           CenterTab::diff(PathBuf::from("other.md"))
         ]
       );
-      assert_eq!(page.active_selected_file(), Some(Path::new("other.md")));
+      assert_eq!(page.warm_selected_file(), Some(Path::new("other.md")));
     });
 
     page.update_in(cx, |page, window, cx| {
@@ -2093,7 +2159,7 @@ mod tests {
     await_open_file(&page, cx).await;
 
     page.read_with(cx, |page, _| {
-      assert_eq!(page.active_selected_file(), Some(Path::new("README.md")));
+      assert_eq!(page.warm_selected_file(), Some(Path::new("README.md")));
       assert_eq!(
         page.center_tabs,
         vec![
@@ -2150,7 +2216,7 @@ mod tests {
     await_open_file(&page, cx).await;
     page.read_with(cx, |page, _| {
       assert_eq!(page.center, CenterView::Diff);
-      assert_eq!(page.active_selected_file(), Some(Path::new("README.md")));
+      assert_eq!(page.warm_selected_file(), Some(Path::new("README.md")));
       assert_eq!(
         page.center_tabs,
         vec![
@@ -2191,7 +2257,7 @@ mod tests {
     await_editor_diff(&page, cx).await;
     let worktree_editor = page.read_with(cx, |page, _| {
       page
-        .active_editor()
+        .warm_editor()
         .as_ref()
         .expect("worktree editor")
         .entity_id()
@@ -2216,7 +2282,7 @@ mod tests {
     await_open_file(&page, cx).await;
     let snapshot_editor = page.read_with(cx, |page, _| {
       page
-        .active_editor()
+        .warm_editor()
         .as_ref()
         .expect("snapshot editor")
         .entity_id()
@@ -2232,9 +2298,9 @@ mod tests {
         ]
       );
       assert_eq!(page.active_center_tab, Some(snapshot_tab.clone()));
-      assert_eq!(page.active_selected_file(), Some(Path::new("README.md")));
+      assert_eq!(page.warm_selected_file(), Some(Path::new("README.md")));
       assert!(matches!(
-        page.active_opened_snapshot(),
+        page.warm_opened_snapshot(),
         Some(OpenedSnapshot::AgentTool { .. })
       ));
     });
@@ -2251,15 +2317,15 @@ mod tests {
     await_editor_diff(&page, cx).await;
 
     page.read_with(cx, |page, cx| {
-      assert!(page.active_opened_snapshot().is_none());
-      assert_eq!(page.active_selected_file(), Some(Path::new("README.md")));
+      assert!(page.warm_opened_snapshot().is_none());
+      assert_eq!(page.warm_selected_file(), Some(Path::new("README.md")));
       assert_eq!(
-        page.active_editor().expect("worktree editor").entity_id(),
+        page.warm_editor().expect("worktree editor").entity_id(),
         worktree_editor
       );
       assert!(
         page
-          .active_editor()
+          .warm_editor()
           .as_ref()
           .is_some_and(|editor| editor.read(cx).projection().is_some()),
         "the worktree diff tab keeps the live diff"
@@ -2274,11 +2340,11 @@ mod tests {
     page.read_with(cx, |page, _| {
       assert_eq!(page.active_center_tab, Some(snapshot_tab.clone()));
       assert_eq!(
-        page.active_editor().expect("snapshot editor").entity_id(),
+        page.warm_editor().expect("snapshot editor").entity_id(),
         snapshot_editor
       );
       assert!(matches!(
-        page.active_opened_snapshot(),
+        page.warm_opened_snapshot(),
         Some(OpenedSnapshot::AgentTool { .. })
       ));
     });
@@ -2295,9 +2361,9 @@ mod tests {
       );
       assert!(!page.center_tabs.contains(&snapshot_tab));
       assert!(!page.editor_states.contains_key(&snapshot_tab));
-      assert!(page.active_opened_snapshot().is_none());
+      assert!(page.warm_opened_snapshot().is_none());
       assert_eq!(
-        page.active_editor().expect("worktree editor").entity_id(),
+        page.warm_editor().expect("worktree editor").entity_id(),
         worktree_editor
       );
     });
@@ -2325,12 +2391,12 @@ mod tests {
       );
     });
     page.read_with(cx, |page, _| {
-      assert_eq!(page.active_selected_file(), Some(Path::new("README.md")));
-      assert!(page.active_opened_snapshot().is_some());
+      assert_eq!(page.warm_selected_file(), Some(Path::new("README.md")));
+      assert!(page.warm_opened_snapshot().is_some());
     });
     await_open_file(&page, cx).await;
     page.read_with(cx, |page, cx| {
-      assert!(page.active_opened_snapshot().is_some());
+      assert!(page.warm_opened_snapshot().is_some());
       assert!(page.selected_file_has_changes(cx));
     });
 
@@ -2345,19 +2411,19 @@ mod tests {
       );
     });
     page.read_with(cx, |page, _| {
-      assert_eq!(page.active_selected_file(), Some(Path::new("clean.txt")));
-      assert!(page.active_opened_snapshot().is_none());
+      assert_eq!(page.warm_selected_file(), Some(Path::new("clean.txt")));
+      assert!(page.warm_opened_snapshot().is_none());
     });
     await_open_file(&page, cx).await;
 
     page.read_with(cx, |page, cx| {
-      assert_eq!(page.active_selected_file(), Some(Path::new("clean.txt")));
-      assert!(page.active_opened_snapshot().is_none());
+      assert_eq!(page.warm_selected_file(), Some(Path::new("clean.txt")));
+      assert!(page.warm_opened_snapshot().is_none());
       assert!(page.selected_file_status(cx).is_none());
       assert!(!page.selected_file_has_changes(cx));
       assert_eq!(
         page
-          .active_editor()
+          .warm_editor()
           .expect("clean editor")
           .read(cx)
           .diff_view_mode(),
@@ -2387,7 +2453,7 @@ mod tests {
     await_open_file(&page, cx).await;
     let first_editor = page.read_with(cx, |page, _| {
       page
-        .active_editor()
+        .warm_editor()
         .as_ref()
         .expect("first editor")
         .entity_id()
@@ -2405,7 +2471,7 @@ mod tests {
     await_open_file(&page, cx).await;
     let second_editor = page.read_with(cx, |page, _| {
       page
-        .active_editor()
+        .warm_editor()
         .as_ref()
         .expect("second editor")
         .entity_id()
@@ -2423,10 +2489,10 @@ mod tests {
     await_open_file(&page, cx).await;
 
     page.read_with(cx, |page, _| {
-      assert_eq!(page.active_selected_file(), Some(Path::new("README.md")));
+      assert_eq!(page.warm_selected_file(), Some(Path::new("README.md")));
       assert_eq!(
         page
-          .active_editor()
+          .warm_editor()
           .as_ref()
           .expect("restored editor")
           .entity_id(),
@@ -2481,7 +2547,7 @@ mod tests {
 
     page.read_with(cx, |page, _| {
       assert_eq!(page.center, CenterView::Diff);
-      assert_eq!(page.active_selected_file(), Some(Path::new("other.md")));
+      assert_eq!(page.warm_selected_file(), Some(Path::new("other.md")));
       assert_eq!(
         page.center_tabs,
         vec![
@@ -2525,7 +2591,7 @@ mod tests {
       );
       assert!(
         page
-          .active_editor()
+          .warm_editor()
           .as_ref()
           .is_some_and(|editor| editor.read(cx).projection().is_none()),
         "plain file tabs do not show git diffs"
@@ -2559,7 +2625,7 @@ mod tests {
       );
       assert!(
         page
-          .active_editor()
+          .warm_editor()
           .as_ref()
           .is_some_and(|editor| editor.read(cx).projection().is_some()),
         "diff tabs show git diffs"
@@ -2583,7 +2649,7 @@ mod tests {
       );
       assert!(
         page
-          .active_editor()
+          .warm_editor()
           .as_ref()
           .is_some_and(|editor| editor.read(cx).projection().is_none()),
         "returning to the file tab hides git diffs again"
@@ -2628,7 +2694,7 @@ mod tests {
 
     page.read_with(cx, |page, _| {
       assert_eq!(page.center, CenterView::Diff);
-      assert_eq!(page.active_selected_file(), Some(Path::new("README.md")));
+      assert_eq!(page.warm_selected_file(), Some(Path::new("README.md")));
       assert_eq!(
         page.center_tabs,
         vec![
@@ -2646,7 +2712,7 @@ mod tests {
     page.read_with(cx, |page, _| {
       assert_eq!(page.center, CenterView::Conversation);
       assert_eq!(page.center_tabs, vec![CenterTab::chat()]);
-      assert!(page.active_selected_file().is_none());
+      assert!(page.warm_selected_file().is_none());
     });
   }
 
@@ -2711,8 +2777,8 @@ mod tests {
     await_open_file(&page, cx).await;
 
     page.read_with(cx, |page, _| {
-      assert!(page.active_editor().is_some());
-      assert_eq!(page.active_selected_file(), Some(Path::new("README.md")));
+      assert!(page.warm_editor().is_some());
+      assert_eq!(page.warm_selected_file(), Some(Path::new("README.md")));
     });
 
     page.update_in(cx, |page, window, cx| {
@@ -2721,7 +2787,7 @@ mod tests {
     page.read_with(cx, |page, _| {
       assert_eq!(page.center, CenterView::Conversation);
       // Editor kept for instant reopen of the same file.
-      assert!(page.active_editor().is_some());
+      assert!(page.warm_editor().is_some());
     });
   }
 
@@ -2743,7 +2809,7 @@ mod tests {
       );
     });
     await_open_file(&page, cx).await;
-    dirty_active_editor(&page, cx, "unsaved\n");
+    dirty_warm_editor(&page, cx, "unsaved\n");
 
     page.update_in(cx, |page, window, cx| {
       page.close_workspace_page_action(&CloseWorkspacePage, window, cx);
@@ -2758,7 +2824,7 @@ mod tests {
     );
     page.read_with(cx, |page, _| {
       assert_eq!(page.center, CenterView::Diff);
-      assert!(page.active_editor().is_some());
+      assert!(page.warm_editor().is_some());
     });
 
     page.update_in(cx, |page, window, cx| {
@@ -2768,7 +2834,7 @@ mod tests {
 
     page.read_with(cx, |page, _| {
       assert_eq!(page.center, CenterView::Conversation);
-      assert!(page.active_editor().is_none());
+      assert!(page.warm_editor().is_none());
     });
     assert_eq!(
       std::fs::read_to_string(repo.path.join("README.md")).expect("read file"),
@@ -2796,7 +2862,7 @@ mod tests {
       );
     });
     await_open_file(&page, cx).await;
-    dirty_active_editor(&page, cx, "unsaved\n");
+    dirty_warm_editor(&page, cx, "unsaved\n");
 
     page.update_in(cx, |page, window, cx| {
       page.open_diff(
@@ -2816,7 +2882,7 @@ mod tests {
         .is_some()
     );
     page.read_with(cx, |page, _| {
-      assert_eq!(page.active_selected_file(), Some(Path::new("README.md")));
+      assert_eq!(page.warm_selected_file(), Some(Path::new("README.md")));
     });
 
     page.update_in(cx, |page, window, cx| {
@@ -2835,8 +2901,8 @@ mod tests {
 
     page.read_with(cx, |page, _| {
       assert_eq!(page.center, CenterView::Diff);
-      assert_eq!(page.active_selected_file(), Some(Path::new("other.md")));
-      assert!(page.active_editor().is_some());
+      assert_eq!(page.warm_selected_file(), Some(Path::new("other.md")));
+      assert!(page.warm_editor().is_some());
     });
     assert_eq!(
       std::fs::read_to_string(repo.path.join("README.md")).expect("read first file"),
@@ -2869,10 +2935,10 @@ mod tests {
     page.read_with(cx, |page, cx| {
       assert_eq!(page.center, CenterView::Diff);
       assert_eq!(
-        page.active_opened_snapshot(),
+        page.warm_opened_snapshot(),
         Some(&OpenedSnapshot::Commit(first.clone()))
       );
-      let editor = page.active_editor().as_ref().expect("editor").read(cx);
+      let editor = page.warm_editor().as_ref().expect("editor").read(cx);
       // A snapshot has no working-tree status, so it is walked change by change.
       assert!(page.selected_file_status(cx).is_none());
       // The commit content, not what the worktree holds now.
@@ -2893,8 +2959,8 @@ mod tests {
     await_open_file(&page, cx).await;
 
     page.read_with(cx, |page, cx| {
-      assert!(page.active_opened_snapshot().is_none());
-      let editor = page.active_editor().as_ref().expect("editor").read(cx);
+      assert!(page.warm_opened_snapshot().is_none());
+      let editor = page.warm_editor().as_ref().expect("editor").read(cx);
       let first_line = editor
         .document()
         .read(cx)
@@ -2969,7 +3035,7 @@ mod tests {
 
     // Whole file: every document line is visible, nothing is folded away.
     let visible_and_total = |page: &SessionPage, cx: &App| {
-      let editor = page.active_editor().as_ref().expect("editor").read(cx);
+      let editor = page.warm_editor().as_ref().expect("editor").read(cx);
       let projection = editor.projection().expect("projection");
       (
         projection.visible_doc_lines.len(),
@@ -2978,7 +3044,7 @@ mod tests {
     };
 
     page.read_with(cx, |page, cx| {
-      let editor = page.active_editor().as_ref().expect("editor").read(cx);
+      let editor = page.warm_editor().as_ref().expect("editor").read(cx);
       assert_eq!(editor.diff_view_mode(), DiffViewMode::Inline);
       assert!(page.split_disabled(cx));
       let (visible, total) = visible_and_total(page, cx);
@@ -3000,7 +3066,7 @@ mod tests {
     await_editor_diff(&page, cx).await;
 
     page.read_with(cx, |page, cx| {
-      let editor = page.active_editor().as_ref().expect("editor").read(cx);
+      let editor = page.warm_editor().as_ref().expect("editor").read(cx);
       assert_eq!(editor.diff_view_mode(), DiffViewMode::Split);
       assert!(!page.split_disabled(cx));
       let (visible, total) = visible_and_total(page, cx);
@@ -3064,7 +3130,7 @@ mod tests {
     await_editor_diff(&page, cx).await;
 
     let visible_and_total = |page: &SessionPage, cx: &App| {
-      let editor = page.active_editor().as_ref().expect("editor").read(cx);
+      let editor = page.warm_editor().as_ref().expect("editor").read(cx);
       let projection = editor.projection().expect("projection");
       (
         projection.visible_doc_lines.len(),
@@ -3072,7 +3138,7 @@ mod tests {
       )
     };
     page.read_with(cx, |page, cx| {
-      let editor = page.active_editor().as_ref().expect("editor").read(cx);
+      let editor = page.warm_editor().as_ref().expect("editor").read(cx);
       assert!(!editor.is_unmerged(), "a clean file is read as a diff");
       let (visible, total) = visible_and_total(page, cx);
       assert_eq!(visible, total, "and a file without changes shows in full");
@@ -3089,7 +3155,7 @@ mod tests {
     await_editor_diff(&page, cx).await;
 
     page.read_with(cx, |page, cx| {
-      let editor = page.active_editor().as_ref().expect("editor").read(cx);
+      let editor = page.warm_editor().as_ref().expect("editor").read(cx);
       assert!(
         editor.is_unmerged(),
         "the file the merge just broke is read whole, without reopening it"
@@ -3125,7 +3191,7 @@ mod tests {
     page.read_with(cx, |page, cx| {
       assert_eq!(
         page
-          .active_editor()
+          .warm_editor()
           .as_ref()
           .expect("editor")
           .read(cx)
@@ -3148,7 +3214,7 @@ mod tests {
     page.read_with(cx, |page, cx| {
       assert_eq!(
         page
-          .active_editor()
+          .warm_editor()
           .as_ref()
           .expect("editor")
           .read(cx)
@@ -3164,7 +3230,7 @@ mod tests {
       assert!(crate::config::AppSettings::get(cx).split_diff_view);
       assert_eq!(
         page
-          .active_editor()
+          .warm_editor()
           .as_ref()
           .expect("editor")
           .read(cx)
@@ -3194,7 +3260,7 @@ mod tests {
     page.read_with(cx, |page, cx| {
       assert_eq!(
         page
-          .active_editor()
+          .warm_editor()
           .as_ref()
           .expect("editor")
           .read(cx)
@@ -3212,7 +3278,7 @@ mod tests {
     page.read_with(cx, |page, cx| {
       assert_eq!(
         page
-          .active_editor()
+          .warm_editor()
           .as_ref()
           .expect("editor")
           .read(cx)
@@ -3231,7 +3297,7 @@ mod tests {
     page.read_with(cx, |page, cx| {
       assert_eq!(
         page
-          .active_editor()
+          .warm_editor()
           .as_ref()
           .expect("editor")
           .read(cx)

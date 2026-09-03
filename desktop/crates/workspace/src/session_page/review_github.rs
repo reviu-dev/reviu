@@ -22,7 +22,7 @@ impl SessionPage {
       let view = view.clone();
       move |request, _window, cx| {
         let _ = view.update(cx, |this, cx| {
-          let Some(path) = this.active_selected_file().map(Path::to_path_buf) else {
+          let Some(path) = this.warm_selected_file().map(Path::to_path_buf) else {
             return;
           };
           this.dock_panel.update(cx, |panel, cx| {
@@ -139,12 +139,12 @@ impl SessionPage {
 
   /// What GitHub holds on the open file, hung on the lines it talks about.
   pub(super) fn sync_github_review_comments(&mut self, cx: &mut Context<Self>) {
-    let Some(OpenedSnapshot::PullRequestRange { .. }) = self.active_opened_snapshot() else {
+    let Some(OpenedSnapshot::PullRequestRange { .. }) = self.warm_opened_snapshot() else {
       return;
     };
     let (Some(editor), Some(path)) = (
-      self.active_editor(),
-      self.active_selected_file().map(Path::to_path_buf),
+      self.warm_editor(),
+      self.warm_selected_file().map(Path::to_path_buf),
     ) else {
       return;
     };
@@ -172,7 +172,7 @@ impl SessionPage {
     window: &mut Window,
     cx: &mut Context<Self>,
   ) {
-    let Some(editor) = self.active_editor() else {
+    let Some(editor) = self.warm_editor() else {
       return;
     };
     let failed = error.is_some();
@@ -265,7 +265,7 @@ mod tests {
 
     let capabilities = page.read_with(cx, |page, cx| {
       page
-        .active_editor()
+        .warm_editor()
         .as_ref()
         .expect("editor")
         .read(cx)
@@ -322,7 +322,7 @@ mod tests {
     cx.run_until_parked();
 
     page.read_with(cx, |page, cx| {
-      let editor = page.active_editor().as_ref().expect("editor").read(cx);
+      let editor = page.warm_editor().as_ref().expect("editor").read(cx);
       assert_eq!(editor.review_comment_ids(), vec![1]);
       // Written but not submitted: the composer must offer to join the review.
       assert!(editor.has_pending_review());
@@ -343,7 +343,7 @@ mod tests {
     await_open_file(&page, cx).await;
 
     page.read_with(cx, |page, cx| {
-      let editor = page.active_editor().as_ref().expect("editor").read(cx);
+      let editor = page.warm_editor().as_ref().expect("editor").read(cx);
       assert_eq!(editor.review_comment_ids(), vec![1]);
     });
   }
@@ -359,7 +359,7 @@ mod tests {
     page.update(cx, |page, cx| page.sync_agent_review_comments_to_editor(cx));
 
     page.read_with(cx, |page, cx| {
-      let editor = page.active_editor().as_ref().expect("editor").read(cx);
+      let editor = page.warm_editor().as_ref().expect("editor").read(cx);
       assert_eq!(editor.review_comment_ids(), vec![1]);
     });
   }
@@ -379,14 +379,14 @@ mod tests {
     open_file(&page, &pull_request, "b.txt", cx);
     await_open_file(&page, cx).await;
     page.read_with(cx, |page, cx| {
-      let editor = page.active_editor().as_ref().expect("editor").read(cx);
+      let editor = page.warm_editor().as_ref().expect("editor").read(cx);
       assert!(editor.review_comment_ids().is_empty());
     });
 
     open_file(&page, &pull_request, "a.txt", cx);
     await_open_file(&page, cx).await;
     page.read_with(cx, |page, cx| {
-      let editor = page.active_editor().as_ref().expect("editor").read(cx);
+      let editor = page.warm_editor().as_ref().expect("editor").read(cx);
       assert_eq!(editor.review_comment_ids(), vec![1]);
     });
   }

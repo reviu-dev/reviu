@@ -329,7 +329,7 @@ impl SessionPage {
             this.notify_agent_attention("Reviu agent finished", Some(panel), window, cx);
           }
           this.dock_panel.update(cx, |panel, cx| panel.refresh(cx));
-          if let Some(editor) = this.active_editor() {
+          if let Some(editor) = this.warm_editor() {
             editor.update(cx, |editor, cx| editor.refresh_git_state(cx));
           }
           this.consume_sent_review_comments(*completed);
@@ -618,7 +618,7 @@ impl SessionPage {
               });
             }
             this.dock_panel.update(cx, |panel, cx| panel.refresh(cx));
-            if let Some(editor) = this.active_editor() {
+            if let Some(editor) = this.warm_editor() {
               editor.update(cx, |editor, cx| editor.refresh_git_state(cx));
             }
             this.sync_agent_review_comments_to_editor(cx);
@@ -681,7 +681,7 @@ impl SessionPage {
               });
             }
             this.dock_panel.update(cx, |panel, cx| panel.refresh(cx));
-            if let Some(editor) = this.active_editor() {
+            if let Some(editor) = this.warm_editor() {
               editor.update(cx, |editor, cx| editor.refresh_git_state(cx));
             }
             this.sync_agent_review_comments_to_editor(cx);
@@ -779,8 +779,8 @@ impl SessionPage {
     window: &mut Window,
     cx: &mut Context<Self>,
   ) {
-    let active_editor = self.active_editor();
-    let selected_file = self.active_selected_file().map(Path::to_path_buf);
+    let active_editor = self.warm_editor();
+    let selected_file = self.warm_selected_file().map(Path::to_path_buf);
     let original = original_lines_for_request(active_editor.as_ref(), &request, cx);
     let created = self
       .agent_review
@@ -810,7 +810,7 @@ impl SessionPage {
     error: Option<Arc<str>>,
     cx: &mut Context<Self>,
   ) {
-    if let Some(editor) = self.active_editor() {
+    if let Some(editor) = self.warm_editor() {
       editor.update(cx, |editor, cx| {
         editor.finish_review_comment_create_submission(error, cx);
       });
@@ -829,7 +829,7 @@ impl SessionPage {
     }
 
     self.sync_agent_review_comments_to_editor(cx);
-    if let Some(editor) = self.active_editor() {
+    if let Some(editor) = self.warm_editor() {
       editor.update(cx, |editor, cx| {
         editor.finish_review_comment_edit_submission(comment_id, None, cx);
       });
@@ -851,7 +851,7 @@ impl SessionPage {
   }
 
   pub(super) fn delete_agent_review_comment(&mut self, comment_id: u64, cx: &mut Context<Self>) {
-    if let Some(editor) = self.active_editor() {
+    if let Some(editor) = self.warm_editor() {
       editor.update(cx, |editor, cx| {
         editor.start_review_comment_delete_submission(comment_id, cx);
       });
@@ -860,7 +860,7 @@ impl SessionPage {
     self.agent_review.delete(comment_id);
     self.sync_agent_review_comments_to_editor(cx);
 
-    if let Some(editor) = self.active_editor() {
+    if let Some(editor) = self.warm_editor() {
       editor.update(cx, |editor, cx| {
         editor.finish_review_comment_delete_submission(comment_id, cx);
       });
@@ -870,11 +870,11 @@ impl SessionPage {
 
   pub(super) fn sync_agent_review_comments_to_editor(&mut self, cx: &mut Context<Self>) {
     let editor = self
-      .active_opened_snapshot()
+      .warm_opened_snapshot()
       .is_none()
-      .then(|| self.active_editor())
+      .then(|| self.warm_editor())
       .flatten();
-    let selected_file = self.active_selected_file().map(Path::to_path_buf);
+    let selected_file = self.warm_selected_file().map(Path::to_path_buf);
     sync_comments_to_editor(
       &self.agent_review,
       editor.as_ref(),
@@ -1641,7 +1641,7 @@ mod tests {
 
     let mode = page.read_with(cx, |page, cx| {
       page
-        .active_editor()
+        .warm_editor()
         .as_ref()
         .expect("editor")
         .read(cx)
@@ -1838,7 +1838,7 @@ mod tests {
     });
     cx.run_until_parked();
     page.read_with(cx, |page, _| {
-      assert_eq!(page.active_selected_file(), Some(Path::new("README.md")));
+      assert_eq!(page.warm_selected_file(), Some(Path::new("README.md")));
     });
 
     // And its delete button takes the comment out of the batch.
@@ -1982,7 +1982,7 @@ mod tests {
     await_open_file(&page, cx).await;
     await_editor_diff(&page, cx).await;
 
-    let editor = page.read_with(cx, |page, _| page.active_editor().expect("editor"));
+    let editor = page.read_with(cx, |page, _| page.warm_editor().expect("editor"));
     let editor_handle = editor.read_with(cx, |editor, cx| editor.focus_handle(cx));
     // Park the focus off the diff, the way the open composer does.
     let dock_handle = page.read_with(cx, |page, cx| page.dock_panel.read(cx).focus_handle(cx));
@@ -2135,7 +2135,7 @@ mod tests {
     await_open_file(&page, cx).await;
     await_editor_diff(&page, cx).await;
 
-    let editor = page.read_with(cx, |page, _| page.active_editor().expect("editor"));
+    let editor = page.read_with(cx, |page, _| page.warm_editor().expect("editor"));
     let editor_handle = editor.read_with(cx, |editor, cx| editor.focus_handle(cx));
     // Park the focus off the diff, the way the open composer does.
     let dock_handle = page.read_with(cx, |page, cx| page.dock_panel.read(cx).focus_handle(cx));
@@ -2501,7 +2501,7 @@ mod tests {
     });
     await_open_file(&page, cx).await;
     let editor = page
-      .read_with(cx, |page, _| page.active_editor())
+      .read_with(cx, |page, _| page.warm_editor())
       .expect("editor");
     editor.update(cx, |editor, cx| {
       editor.document.update(cx, |document, cx| {
@@ -2575,7 +2575,7 @@ mod tests {
     });
     await_open_file(&page, cx).await;
     let editor = page
-      .read_with(cx, |page, _| page.active_editor())
+      .read_with(cx, |page, _| page.warm_editor())
       .expect("editor");
     editor.update(cx, |editor, cx| {
       editor.document.update(cx, |document, cx| {
@@ -2598,7 +2598,7 @@ mod tests {
     page.read_with(cx, |page, cx| {
       assert!(
         page
-          .active_editor()
+          .warm_editor()
           .as_ref()
           .expect("editor")
           .read(cx)
@@ -2624,7 +2624,7 @@ mod tests {
     });
     await_open_file(&page, cx).await;
     let editor = page
-      .read_with(cx, |page, _| page.active_editor())
+      .read_with(cx, |page, _| page.warm_editor())
       .expect("editor");
     editor.update(cx, |editor, cx| {
       editor.document.update(cx, |document, cx| {
@@ -3388,7 +3388,7 @@ mod tests {
     cx.run_until_parked();
     page.read_with(cx, |page, _| {
       assert_eq!(page.center, CenterView::Conversation);
-      assert!(page.active_editor().is_some(), "the diff editor stays warm");
+      assert!(page.warm_editor().is_some(), "the diff editor stays warm");
       assert!(
         page
           .center_tabs
@@ -3404,8 +3404,8 @@ mod tests {
     cx.run_until_parked();
     page.read_with(cx, |page, _| {
       assert_eq!(page.center, CenterView::Conversation);
-      assert!(page.active_editor().is_none());
-      assert!(page.active_selected_file().is_none());
+      assert!(page.warm_editor().is_none());
+      assert!(page.warm_selected_file().is_none());
     });
 
     page.update_in(cx, |page, window, cx| {
@@ -3433,7 +3433,7 @@ mod tests {
     await_open_file(&page, cx).await;
     page.read_with(cx, |page, _| {
       assert_eq!(page.center, CenterView::Diff);
-      assert_eq!(page.active_selected_file(), Some(Path::new("README.md")));
+      assert_eq!(page.warm_selected_file(), Some(Path::new("README.md")));
     });
 
     cleanup_worktrees_root(&repo.path);
@@ -3472,8 +3472,8 @@ mod tests {
     page.read_with(cx, |page, cx| {
       assert_eq!(page.center, CenterView::Conversation);
       assert!(page.diff_chat_open);
-      assert_eq!(page.active_selected_file(), Some(Path::new("README.md")));
-      assert!(page.active_editor().is_some());
+      assert_eq!(page.warm_selected_file(), Some(Path::new("README.md")));
+      assert!(page.warm_editor().is_some());
       assert_ne!(
         page
           .agent_chat_view
@@ -3521,8 +3521,8 @@ mod tests {
     page.read_with(cx, |page, _| {
       assert_eq!(page.center, CenterView::Conversation);
       assert!(page.diff_chat_open);
-      assert!(page.active_editor().is_none());
-      assert!(page.active_selected_file().is_none());
+      assert!(page.warm_editor().is_none());
+      assert!(page.warm_selected_file().is_none());
       assert_ne!(cwd, repo.path);
     });
 
@@ -3562,7 +3562,7 @@ mod tests {
     page.read_with(cx, |page, _| {
       assert_eq!(page.center, CenterView::Conversation);
       assert!(page.diff_chat_open);
-      assert!(page.active_editor().is_some());
+      assert!(page.warm_editor().is_some());
     });
 
     page.update_in(cx, |page, window, cx| {
@@ -3573,8 +3573,8 @@ mod tests {
     page.read_with(cx, |page, cx| {
       assert_eq!(page.center, CenterView::Conversation);
       assert!(page.diff_chat_open);
-      assert_eq!(page.active_selected_file(), Some(Path::new("README.md")));
-      assert!(page.active_editor().is_some());
+      assert_eq!(page.warm_selected_file(), Some(Path::new("README.md")));
+      assert!(page.warm_editor().is_some());
       assert_eq!(
         page
           .agent_chat_view
@@ -3600,7 +3600,7 @@ mod tests {
     page.read_with(cx, |page, _| {
       assert_eq!(page.center, CenterView::Conversation);
       assert!(page.diff_chat_open);
-      assert!(page.active_editor().is_some());
+      assert!(page.warm_editor().is_some());
     });
 
     cleanup_worktrees_root(&repo.path);

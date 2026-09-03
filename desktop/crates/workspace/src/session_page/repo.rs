@@ -243,7 +243,7 @@ mod tests {
     });
     await_open_file(&page, cx).await;
     let editor = page
-      .read_with(cx, |page, _| page.active_editor())
+      .read_with(cx, |page, _| page.warm_editor())
       .expect("editor");
     editor.update(cx, |editor, cx| {
       editor.document.update(cx, |document, cx| {
@@ -498,8 +498,8 @@ mod tests {
       assert!(!panel.read(cx).has_persistable_content());
       // The open diff and its draft comments belong to the previous repo.
       assert_eq!(page.center, CenterView::Conversation);
-      assert!(page.active_editor().is_none());
-      assert!(page.active_selected_file().is_none());
+      assert!(page.warm_editor().is_none());
+      assert!(page.warm_selected_file().is_none());
       assert!(page.agent_review.is_empty());
       assert_eq!(
         page.dock_panel.read(cx).repo_root(),
@@ -643,7 +643,7 @@ mod tests {
 
     page.read_with(cx, |page, _| {
       assert_eq!(page.center, CenterView::Diff);
-      assert!(page.active_editor().is_some());
+      assert!(page.warm_editor().is_some());
     });
   }
 

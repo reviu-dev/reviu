@@ -1151,12 +1151,12 @@ impl SessionPage {
   fn git_telemetry<'a>(&'a self, cx: &'a App) -> GitTelemetry<'a> {
     GitTelemetry {
       repo_root: self.synced_checkout.as_deref(),
-      selected_file: self.active_selected_file(),
+      selected_file: self.shown_selected_file(),
       branch: self.repo_snapshot.read(cx).current_branch_name(),
       tab: git_telemetry::dock_tab_tag(self.dock_panel.read(cx).active_tab()),
       diff_view: git_telemetry::diff_view_tag(
         self.diff_view,
-        self.show_preview && self.previewable(),
+        self.show_preview && self.shown_previewable(),
       ),
     }
   }
@@ -1610,7 +1610,7 @@ impl SessionPage {
     body: String,
     cx: &mut Context<Self>,
   ) -> Result<(), SharedString> {
-    let Some(selected_file) = self.active_selected_file() else {
+    let Some(selected_file) = self.warm_selected_file() else {
       return Err("No pull request file is open.".into());
     };
     if selected_file != rel_path.as_path() {
@@ -1713,9 +1713,9 @@ impl SessionPage {
   #[doc(hidden)]
   pub fn editor_stats_for_driver(&self, cx: &App) -> serde_json::Value {
     let selected_file = self
-      .active_selected_file()
+      .warm_selected_file()
       .map(|path| path.display().to_string());
-    let Some(editor) = self.active_editor() else {
+    let Some(editor) = self.warm_editor() else {
       return serde_json::json!({
         "ready": false,
         "selected_file": selected_file,

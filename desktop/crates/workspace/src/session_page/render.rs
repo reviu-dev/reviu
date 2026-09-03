@@ -503,7 +503,7 @@ impl SessionPage {
       ),
       CenterView::Diff => {
         let file = self
-          .active_selected_file()
+          .shown_selected_file()
           .map(|path| path.to_string_lossy().into_owned())
           .unwrap_or_default();
         // The conversation stays alongside the diff until the reviewer hides it.
@@ -588,14 +588,14 @@ impl SessionPage {
   }
 
   pub(super) fn render_diff_header(&self, cx: &mut Context<Self>) -> AnyElement {
-    let active_editor = self.active_editor();
-    let active_binary_preview = self.active_binary_preview();
+    let active_editor = self.shown_editor();
+    let active_binary_preview = self.shown_binary_preview();
     let file_dirty = active_editor
       .as_ref()
       .is_some_and(|editor| editor.read(cx).is_dirty);
-    let file_status = self.selected_file_status(cx);
-    let old_path = self.selected_file_old_path(cx);
-    let previewing = self.show_preview && self.previewable();
+    let file_status = self.shown_file_status(cx);
+    let old_path = self.shown_selected_file_old_path(cx);
+    let previewing = self.show_preview && self.shown_previewable();
     let showing_git_diff = self
       .active_center_tab
       .as_ref()
@@ -629,7 +629,7 @@ impl SessionPage {
         .into_any_element()
     });
 
-    if let Some(path) = self.active_selected_file().map(Path::to_path_buf) {
+    if let Some(path) = self.shown_selected_file().map(Path::to_path_buf) {
       toolbar = toolbar.title(render_file_title_with_status(
         &path,
         old_path.as_deref(),
@@ -678,7 +678,7 @@ impl SessionPage {
       });
     }
 
-    if has_editor && self.previewable() {
+    if has_editor && self.shown_previewable() {
       let view = cx.entity();
       toolbar = toolbar.preview(ToggleControl {
         active: self.show_preview,
@@ -690,7 +690,7 @@ impl SessionPage {
       });
     }
 
-    if showing_git_diff && has_editor && self.selected_file_has_changes(cx) && !previewing {
+    if showing_git_diff && has_editor && self.shown_file_has_changes(cx) && !previewing {
       if active_binary_preview.is_none() {
         let view = cx.entity();
         toolbar = toolbar.whitespace(ToggleControl {
@@ -741,8 +741,8 @@ impl SessionPage {
     cx: &mut Context<Self>,
   ) -> AnyElement {
     let theme = cx.theme().clone();
-    let active_editor = self.active_editor();
-    let body: AnyElement = if let Some(preview) = self.active_binary_preview() {
+    let active_editor = self.shown_editor();
+    let body: AnyElement = if let Some(preview) = self.shown_binary_preview() {
       render_binary_preview(preview, cx)
     } else if let Some(editor) = active_editor.clone() {
       // Actions of the hovered hunk or conflict float over the editor.
@@ -750,9 +750,9 @@ impl SessionPage {
         .active_center_tab
         .as_ref()
         .is_none_or(|tab| tab.kind == CenterTabKind::Diff);
-      let hunk_actions = (showing_git_diff && self.active_opened_snapshot().is_none())
+      let hunk_actions = (showing_git_diff && self.shown_opened_snapshot().is_none())
         .then(|| {
-          let file_status = self.selected_file_status(cx);
+          let file_status = self.shown_file_status(cx);
           let conflict_labels =
             ConflictActionLabels::for_rebase(self.dock_panel.read(cx).rebase_in_progress());
           render_hunk_actions(&editor, file_status, conflict_labels, cx)
@@ -771,14 +771,14 @@ impl SessionPage {
         .children(hunk_actions)
         .into_any_element();
 
-      if self.show_preview && self.previewable() {
+      if self.show_preview && self.shown_previewable() {
         // A toggle, not a split: the rendered file takes the pane. Its children
         // size themselves with flex_1, hence the flex column here.
         let preview_pane = crate::file_preview::render_preview_pane(
           "session-preview-text",
           &editor,
           &self.svg_preview,
-          self.selected_file_is_svg(),
+          self.shown_file_is_svg(),
           window,
           cx,
         );
@@ -1656,7 +1656,7 @@ mod tests {
       assert!(crate::config::AppSettings::get(cx).split_diff_view);
       assert_eq!(
         page
-          .active_editor()
+          .warm_editor()
           .as_ref()
           .expect("editor")
           .read(cx)
@@ -1748,7 +1748,7 @@ mod tests {
       assert!(page.split_disabled(cx));
       assert_eq!(
         page
-          .active_editor()
+          .warm_editor()
           .as_ref()
           .expect("editor")
           .read(cx)
@@ -1852,7 +1852,7 @@ mod tests {
     });
     await_open_file(&page, cx).await;
     page.read_with(cx, |page, cx| {
-      let editor = page.active_editor().as_ref().expect("editor").read(cx);
+      let editor = page.warm_editor().as_ref().expect("editor").read(cx);
       let first_line = editor
         .document()
         .read(cx)
@@ -1868,8 +1868,8 @@ mod tests {
     });
     cx.run_until_parked();
     page.read_with(cx, |page, _| {
-      assert!(page.active_editor().is_none());
-      assert!(page.active_selected_file().is_none());
+      assert!(page.warm_editor().is_none());
+      assert!(page.warm_selected_file().is_none());
     });
 
     // The same path now reads the pinned worktree's file, and the dock lists
@@ -1886,7 +1886,7 @@ mod tests {
     await_open_file(&page, cx).await;
     await_editor_diff(&page, cx).await;
     page.read_with(cx, |page, cx| {
-      let editor = page.active_editor().as_ref().expect("editor").read(cx);
+      let editor = page.warm_editor().as_ref().expect("editor").read(cx);
       let first_line = editor
         .document()
         .read(cx)
@@ -1983,7 +1983,7 @@ mod tests {
     cx.run_until_parked();
     assert!(cx.debug_bounds(ANNOTATION_COUNTER_DEBUG_SELECTOR).is_none());
     page.read_with(cx, |page, cx| {
-      let editor = page.active_editor().as_ref().expect("editor").read(cx);
+      let editor = page.warm_editor().as_ref().expect("editor").read(cx);
       assert!(editor.highlighted_hunk_group_id(cx).is_none());
       assert!(editor.active_hunk_group_id(cx).is_some());
     });
@@ -2026,7 +2026,7 @@ mod tests {
     cx.run_until_parked();
     assert!(cx.debug_bounds(ANNOTATION_COUNTER_DEBUG_SELECTOR).is_some());
     page.read_with(cx, |page, cx| {
-      let editor = page.active_editor().as_ref().expect("editor").read(cx);
+      let editor = page.warm_editor().as_ref().expect("editor").read(cx);
       assert!(editor.highlighted_hunk_group_id(cx).is_none());
     });
   }
@@ -2398,7 +2398,7 @@ mod tests {
       assert!(!page.hide_whitespace);
       assert!(
         !page
-          .active_editor()
+          .warm_editor()
           .as_ref()
           .expect("editor")
           .read(cx)
@@ -2416,7 +2416,7 @@ mod tests {
       assert!(page.hide_whitespace);
       assert!(
         page
-          .active_editor()
+          .warm_editor()
           .as_ref()
           .expect("editor")
           .read(cx)
@@ -2434,7 +2434,7 @@ mod tests {
       assert!(page.hide_whitespace);
       assert!(
         page
-          .active_editor()
+          .warm_editor()
           .as_ref()
           .expect("editor")
           .read(cx)
@@ -2465,7 +2465,7 @@ mod tests {
       assert!(page.hide_whitespace);
       assert!(
         page
-          .active_editor()
+          .warm_editor()
           .as_ref()
           .expect("editor")
           .read(cx)
@@ -2503,7 +2503,7 @@ mod tests {
     cx.run_until_parked();
     page.read_with(cx, |page, cx| {
       let state = page
-        .active_editor()
+        .warm_editor()
         .as_ref()
         .expect("editor")
         .read(cx)
@@ -2516,7 +2516,7 @@ mod tests {
     cx.run_until_parked();
     page.read_with(cx, |page, cx| {
       let state = page
-        .active_editor()
+        .warm_editor()
         .as_ref()
         .expect("editor")
         .read(cx)
@@ -2531,7 +2531,7 @@ mod tests {
       assert!(page.hide_whitespace);
       assert!(
         page
-          .active_editor()
+          .warm_editor()
           .as_ref()
           .expect("editor")
           .read(cx)
@@ -2572,7 +2572,7 @@ mod tests {
 
     page.update_in(cx, |page, window, cx| {
       assert!(
-        page.active_selected_file().is_some(),
+        page.warm_selected_file().is_some(),
         "walking the list shows what the row holds"
       );
       assert!(
@@ -2591,8 +2591,8 @@ mod tests {
     cx.simulate_keystrokes("enter");
     cx.run_until_parked();
     page.update_in(cx, |page, window, cx| {
-      assert_eq!(page.active_selected_file(), Some(Path::new("b.txt")));
-      let editor = page.active_editor().expect("editor");
+      assert_eq!(page.warm_selected_file(), Some(Path::new("b.txt")));
+      let editor = page.warm_editor().expect("editor");
       assert!(
         editor.read(cx).focus_handle(cx).is_focused(window),
         "Enter is the gesture that hands the keyboard over"
@@ -2624,7 +2624,7 @@ mod tests {
     cx.run_until_parked();
     page.read_with(cx, |page, _| {
       assert!(
-        page.active_selected_file().is_none(),
+        page.warm_selected_file().is_none(),
         "a row crossed on the way is not a row to load"
       );
     });
@@ -2634,7 +2634,7 @@ mod tests {
     cx.run_until_parked();
     page.read_with(cx, |page, _| {
       assert_eq!(
-        page.active_selected_file(),
+        page.warm_selected_file(),
         Some(Path::new("b.txt")),
         "the row it stopped on is the one that loads"
       );
@@ -3093,6 +3093,13 @@ mod tests {
     std::fs::write(repo.path.join("a.txt"), "v2\n").expect("update file");
 
     let (page, cx) = add_session_page_window(repo.path.clone(), cx);
+    let refresh = page.update(cx, |page, cx| {
+      page.dock_panel.update(cx, |panel, cx| {
+        panel.refresh(cx);
+        panel._refresh_task.take().expect("refresh task")
+      })
+    });
+    refresh.await;
     cx.run_until_parked();
 
     page.update_in(cx, |page, window, cx| {
@@ -3103,7 +3110,7 @@ mod tests {
     let find_open = |page: &Entity<SessionPage>, cx: &mut gpui::VisualTestContext| {
       page.read_with(cx, |page, cx| {
         page
-          .active_editor()
+          .warm_editor()
           .as_ref()
           .expect("editor")
           .read(cx)
@@ -3120,7 +3127,7 @@ mod tests {
 
     // Escape closes the search, and the file stays open.
     page.update_in(cx, |page, window, cx| {
-      let editor = page.active_editor().expect("editor");
+      let editor = page.warm_editor().expect("editor");
       editor.update(cx, |editor, cx| {
         editor::close_find(editor, &editor::CloseFind, window, cx)
       });
@@ -3129,7 +3136,7 @@ mod tests {
     assert!(!find_open(&page, cx));
     page.read_with(cx, |page, _| {
       assert_eq!(page.center, CenterView::Diff);
-      assert!(page.active_selected_file().is_some());
+      assert!(page.warm_selected_file().is_some());
     });
 
     // With no search left to close, escape closes the file.
@@ -3150,6 +3157,21 @@ mod tests {
       !find_open(&page, cx),
       "cmd-f does not open search on a warm diff hidden behind chat"
     );
+    page.update(cx, |page, cx| {
+      assert!(page.annotation_navigation(cx).is_none());
+      page.toggle_hide_whitespace(cx);
+    });
+    cx.run_until_parked();
+    page.read_with(cx, |page, cx| {
+      assert!(
+        !page
+          .warm_editor()
+          .expect("editor")
+          .read(cx)
+          .ignore_whitespace(),
+        "diff toggles do not reach a warm diff hidden behind chat"
+      );
+    });
 
     page.update_in(cx, |page, window, cx| {
       page.activate_center_tab(
@@ -3160,6 +3182,21 @@ mod tests {
       );
     });
     await_open_file(&page, cx).await;
+    page.update(cx, |page, cx| {
+      assert!(page.diff_editor().is_some());
+      page.toggle_hide_whitespace(cx);
+    });
+    cx.run_until_parked();
+    page.read_with(cx, |page, cx| {
+      assert!(
+        page
+          .warm_editor()
+          .expect("editor")
+          .read(cx)
+          .ignore_whitespace(),
+        "diff toggles work again once the diff is shown"
+      );
+    });
     page.update_in(cx, |page, window, cx| {
       page.find_action(&editor::Find, window, cx)
     });
@@ -3208,7 +3245,7 @@ mod tests {
 
     // With a selection, the file and its text are what travels to the agent.
     page.update_in(cx, |page, window, cx| {
-      let editor = page.active_editor().expect("editor");
+      let editor = page.warm_editor().expect("editor");
       editor.update(cx, |editor, cx| {
         editor::select_all(editor, &editor::SelectAll, window, cx)
       });
@@ -3261,7 +3298,7 @@ mod tests {
     );
     let hunk_line = page.read_with(cx, |page, cx| {
       page
-        .active_editor()
+        .warm_editor()
         .as_ref()
         .expect("editor")
         .read(cx)
@@ -3271,7 +3308,7 @@ mod tests {
     });
     let line_height = page.read_with(cx, |page, cx| {
       page
-        .active_editor()
+        .warm_editor()
         .as_ref()
         .expect("editor")
         .read(cx)
@@ -3534,7 +3571,7 @@ mod tests {
     cx.run_until_parked();
     let conflict_line = page.read_with(cx, |page, cx| {
       page
-        .active_editor()
+        .warm_editor()
         .as_ref()
         .expect("editor")
         .read(cx)
@@ -3544,7 +3581,7 @@ mod tests {
     });
     let line_height = page.read_with(cx, |page, cx| {
       page
-        .active_editor()
+        .warm_editor()
         .as_ref()
         .expect("editor")
         .read(cx)
@@ -3575,7 +3612,7 @@ mod tests {
     await_editor_diff(&page, cx).await;
 
     page.read_with(cx, |page, cx| {
-      let editor = page.active_editor().as_ref().expect("editor").read(cx);
+      let editor = page.warm_editor().as_ref().expect("editor").read(cx);
       assert!(
         editor.has_unresolved_conflict_markers(cx),
         "the second conflict is still waiting"
@@ -3688,7 +3725,7 @@ mod tests {
     cx.run_until_parked();
 
     page.read_with(cx, |page, cx| {
-      let editor = page.active_editor().as_ref().expect("editor").read(cx);
+      let editor = page.warm_editor().as_ref().expect("editor").read(cx);
       assert!(
         !editor.has_unresolved_conflict_markers(cx),
         "accepting a side resolves every conflict of the file"
@@ -3708,7 +3745,7 @@ mod tests {
     // Current side of a merge is what HEAD held.
     page.read_with(cx, |page, cx| {
       let first_line = page
-        .active_editor()
+        .warm_editor()
         .as_ref()
         .expect("editor")
         .read(cx)
@@ -3776,7 +3813,7 @@ mod tests {
 
     // Incoming is what the merged branch held.
     page.read_with(cx, |page, cx| {
-      let editor = page.active_editor().as_ref().expect("editor").read(cx);
+      let editor = page.warm_editor().as_ref().expect("editor").read(cx);
       assert!(!editor.has_unresolved_conflict_markers(cx));
       let first_line = editor
         .document()
@@ -3827,7 +3864,7 @@ mod tests {
     cx.run_until_parked();
 
     page.read_with(cx, |page, cx| {
-      let editor = page.active_editor().as_ref().expect("editor").read(cx);
+      let editor = page.warm_editor().as_ref().expect("editor").read(cx);
       assert!(!editor.is_dirty, "nothing was rewritten");
       let first_line = editor
         .document()
@@ -3869,7 +3906,7 @@ mod tests {
 
     let hunk_state = |page: &SessionPage, cx: &App| {
       page
-        .active_editor()
+        .warm_editor()
         .as_ref()
         .expect("editor")
         .read(cx)
@@ -3943,7 +3980,7 @@ mod tests {
 
     page.read_with(cx, |page, cx| {
       let state = page
-        .active_editor()
+        .warm_editor()
         .as_ref()
         .expect("editor")
         .read(cx)
@@ -4255,7 +4292,7 @@ mod tests {
     cx.run_until_parked();
     let editor_handle = page.read_with(cx, |page, cx| {
       page
-        .active_editor()
+        .warm_editor()
         .as_ref()
         .expect("editor")
         .focus_handle(cx)
@@ -4479,7 +4516,7 @@ mod tests {
 
     page.read_with(cx, |page, cx| {
       let selection = page
-        .active_editor()
+        .warm_editor()
         .as_ref()
         .expect("editor")
         .read(cx)
@@ -4525,7 +4562,7 @@ mod tests {
         cx.run_until_parked();
         let hovered = page.read_with(cx, |page, cx| {
           page
-            .active_editor()
+            .warm_editor()
             .as_ref()
             .expect("editor")
             .read(cx)
