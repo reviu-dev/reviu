@@ -49,6 +49,7 @@ use crate::file_view::{BinaryPreview, build_binary_preview, render_binary_previe
 use crate::inbox::Inbox;
 use crate::navigation::NavigationHistory;
 use crate::open_intent::OpenIntent;
+use crate::project_files::list_project_files;
 use crate::review_destination::{AgentReviewHandlers, ReviewDestination, configure_review};
 use crate::session_list::{SessionList, SessionListEvent, SessionStatus};
 use crate::session_page::center_tab::{CenterTab, CenterTabKind, CenterTabSnapshot};
@@ -101,7 +102,6 @@ pub(crate) const BROWSE_DEBOUNCE: Duration = Duration::from_millis(100);
 
 const FILE_SEARCH_CACHE_TTL: Duration = Duration::from_secs(30);
 const FILE_SEARCH_RECENT_LIMIT: usize = 20;
-const PROJECT_FILE_SEARCH_LIMIT: usize = 20_000;
 
 const DIFF_VIEW_TOGGLE_DEBUG_SELECTOR: &str = "session-diff-view-toggle";
 const PREVIEW_TOGGLE_DEBUG_SELECTOR: &str = "session-preview-toggle";
@@ -132,34 +132,6 @@ const CONVERSATION_SPLIT_MAX_WIDTH: f32 = 640.0;
 const DOCK_PANEL_DEFAULT_WIDTH: f32 = 320.0;
 const DOCK_PANEL_MIN_WIDTH: f32 = 240.0;
 const DOCK_PANEL_MAX_WIDTH: f32 = 560.0;
-
-fn list_project_files(project_root: &Path) -> anyhow::Result<Vec<PathBuf>> {
-  let mut files = Vec::new();
-  let mut dirs = vec![PathBuf::new()];
-  while let Some(rel_dir) = dirs.pop() {
-    for entry in std::fs::read_dir(project_root.join(&rel_dir))? {
-      let entry = entry?;
-      let name = entry.file_name();
-      let name = name.to_string_lossy();
-      if matches!(name.as_ref(), ".git" | "node_modules" | "target") {
-        continue;
-      }
-      let rel_path = rel_dir.join(name.as_ref());
-      let file_type = entry.file_type()?;
-      if file_type.is_dir() {
-        dirs.push(rel_path);
-      } else if file_type.is_file() {
-        files.push(rel_path);
-        if files.len() >= PROJECT_FILE_SEARCH_LIMIT {
-          files.sort();
-          return Ok(files);
-        }
-      }
-    }
-  }
-  files.sort();
-  Ok(files)
-}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum CenterView {
@@ -1000,6 +972,7 @@ impl SessionPage {
       self.checkout_override = None;
     }
     let checkout = self.checkout_root(cx);
+    let project_checkout = checkout.clone();
     let git_checkout = checkout.clone().filter(|_| self.fallback_repo.is_some());
     // The memo alone is not trusted: a fixture or future code may assign
     // `fallback_repo` directly, so the dock's actual root double-checks it.
@@ -1061,7 +1034,7 @@ impl SessionPage {
       snapshot.set_repo_root(git_checkout.clone(), cx)
     });
     self.dock_panel.update(cx, |panel, cx| {
-      panel.set_repo_root(git_checkout.clone(), cx);
+      panel.set_project_and_repo_roots(project_checkout.clone(), git_checkout.clone(), cx);
       panel.refresh(cx);
     });
     self.refresh_branch(cx);

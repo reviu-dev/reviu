@@ -759,6 +759,10 @@ mod tests {
         )
       );
       assert!(page.fallback_repo.is_none());
+      assert_eq!(
+        page.dock_panel.read(cx).project_root(),
+        page.project_root(cx).as_deref()
+      );
       assert_eq!(page.dock_panel.read(cx).repo_root(), None);
     });
     assert!(cx.debug_bounds(REPO_CONTEXT_DEBUG_SELECTOR).is_some());
@@ -821,6 +825,10 @@ mod tests {
         )
       );
       assert!(page.fallback_repo.is_none());
+      assert_eq!(
+        page.dock_panel.read(cx).project_root(),
+        page.project_root(cx).as_deref()
+      );
       assert_eq!(page.dock_panel.read(cx).repo_root(), None);
     });
     assert!(

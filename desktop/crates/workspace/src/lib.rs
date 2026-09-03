@@ -96,6 +96,7 @@ mod palette_actions;
 mod palette_branches;
 mod pricing_copy;
 mod pro_promise;
+mod project_files;
 mod pull_request_checks;
 mod pull_request_dialog;
 mod pull_request_merge;

@@ -32,6 +32,7 @@ use crate::file_tree::{
 use crate::file_view::{file_dir_label, file_name_label, render_file_name_with_status};
 use crate::history_list::{HistoryList, HistoryListEvent, history_change_kind_to_repo_status};
 use crate::pro_promise::{ProPromiseSurface, render_pro_promise};
+use crate::project_files::list_project_files;
 use crate::pull_request_refresh::{
   PullRequestRefresh, branch_switched_since_lookup, should_read_pull_request,
 };
@@ -746,6 +747,7 @@ fn branch_pr_state_for_lookup(
 pub struct DockPanel {
   focus_handle: FocusHandle,
   window_handle: AnyWindowHandle,
+  project_root: Option<PathBuf>,
   repo_root: Option<PathBuf>,
   /// The checkouts the header selector offers; the host computes them.
   checkout_options: Vec<CheckoutOption>,
@@ -1024,6 +1026,7 @@ impl DockPanel {
       review_list,
       focus_handle: cx.focus_handle(),
       window_handle: window.window_handle(),
+      project_root: repo_root.clone(),
       repo_root,
       checkout_options: Vec::new(),
       checkout_pinned: false,
@@ -1085,20 +1088,34 @@ impl DockPanel {
     panel
   }
 
-  fn load_worktree_files(&mut self, cx: &mut Context<Self>) {
-    let Some(repo_root) = self.repo_root.clone() else {
+  fn load_project_files(&mut self, cx: &mut Context<Self>) {
+    let Some(project_root) = self.project_root.clone() else {
       return;
     };
     if self.files_loading {
       return;
     }
     self.files_loading = true;
+    let repo_root = self.repo_root.clone();
+    let load_project_root = project_root.clone();
+    let load_repo_root = repo_root.clone();
 
     let task = cx.spawn(async move |this, cx| {
       let files = cx
-        .background_spawn(async move { list_repo_worktree_files(&repo_root) })
+        .background_spawn(async move {
+          if let Some(repo_root) = load_repo_root {
+            list_repo_worktree_files(&repo_root)
+          } else {
+            list_project_files(&load_project_root)
+          }
+        })
         .await;
       let _ = this.update(cx, |this, cx| {
+        if this.project_root.as_deref() != Some(project_root.as_path())
+          || this.repo_root != repo_root
+        {
+          return;
+        }
         this.files_loading = false;
         if let Ok(files) = files {
           let paths = files
@@ -1141,7 +1158,7 @@ impl DockPanel {
     self.refresh_status(cx);
     self.refresh_branch_pull_request(refresh, cx);
     if self.files_loaded {
-      self.load_worktree_files(cx);
+      self.load_project_files(cx);
     }
   }
 
@@ -1150,6 +1167,10 @@ impl DockPanel {
   pub(crate) fn refresh_status(&mut self, cx: &mut Context<Self>) {
     let Some(repo_root) = self.repo_root.clone() else {
       self.status_entries.clear();
+      self.merge_in_progress = false;
+      self.rebase_in_progress = false;
+      self.head_status = HeadCommitStatus::default();
+      self.branch_status = None;
       cx.notify();
       return;
     };
@@ -2372,11 +2393,22 @@ impl DockPanel {
     self.changes_action_in_flight
   }
 
+  #[cfg(test)]
+  pub(crate) fn project_root(&self) -> Option<&Path> {
+    self.project_root.as_deref()
+  }
+
   pub(crate) fn repo_root(&self) -> Option<&Path> {
     self.repo_root.as_deref()
   }
 
-  pub(crate) fn set_repo_root(&mut self, repo_root: Option<PathBuf>, cx: &mut Context<Self>) {
+  pub(crate) fn set_project_and_repo_roots(
+    &mut self,
+    project_root: Option<PathBuf>,
+    repo_root: Option<PathBuf>,
+    cx: &mut Context<Self>,
+  ) {
+    let project_changed = self.project_root != project_root;
     // Another checkout means another pull request: what is on screen or still
     // in flight answers for the one we left, and the staleness window or a
     // same-named branch would keep it alive. Drop it all before moving.
@@ -2390,7 +2422,16 @@ impl DockPanel {
       self.reset_pull_request_details(cx);
       self.set_branch_pr(BranchPrState::Loading, cx);
     }
+    self.project_root = project_root.clone();
     self.repo_root = repo_root.clone();
+    if project_changed {
+      self.files_loaded = false;
+      self.files_loading = false;
+      self._files_task = None;
+      self.files_tree_state.update(cx, |state, cx| {
+        state.set_items(Vec::new(), cx);
+      });
+    }
     self.status_entries.clear();
     self.changes_action_in_flight = None;
     self.amend_pending = false;
@@ -2405,9 +2446,14 @@ impl DockPanel {
     });
     if let Some(terminal) = self.terminal_view.clone() {
       terminal.update(cx, |terminal, cx| {
-        terminal.set_working_directory(repo_root, cx);
+        terminal.set_working_directory(project_root, cx);
       });
     }
+  }
+
+  #[cfg(test)]
+  pub(crate) fn set_repo_root(&mut self, repo_root: Option<PathBuf>, cx: &mut Context<Self>) {
+    self.set_project_and_repo_roots(repo_root.clone(), repo_root, cx);
   }
 
   /// The history is only worth loading once its tab is opened.
@@ -2451,7 +2497,7 @@ impl DockPanel {
     if self.terminal_view.is_some() {
       return;
     }
-    let working_directory = self.repo_root.clone();
+    let working_directory = self.project_root.clone();
     self.terminal_view = Some(cx.new(|cx| TerminalView::new(working_directory, cx)));
   }
 
@@ -2902,8 +2948,11 @@ impl DockPanel {
     }
 
     if !self.files_loaded {
+      if self.project_root.is_none() {
+        return self.render_empty_state(cx);
+      }
       if !self.files_loading {
-        self.load_worktree_files(cx);
+        self.load_project_files(cx);
       }
       return v_flex()
         .flex_1()
@@ -3022,6 +3071,9 @@ impl DockPanel {
   }
 
   fn render_pr_tab(&mut self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
+    if self.repo_root.is_none() {
+      return self.render_pr_message("No Git repository", cx);
+    }
     let theme = cx.theme().clone();
     match &self.branch_pr {
       // Nothing to show, so this is where Reviu says what it could show.
@@ -3693,6 +3745,8 @@ impl DockPanel {
       .child(div().text_sm().text_color(theme.muted_foreground).child(
         if self.repo_root.is_some() {
           "No changes"
+        } else if self.project_root.is_some() {
+          "No Git repository"
         } else {
           "No project"
         },
@@ -4331,6 +4385,67 @@ mod tests {
       )),
       "Enter chooses it"
     );
+  }
+
+  #[gpui::test]
+  async fn non_git_project_files_and_terminal_use_the_project_root(cx: &mut TestAppContext) {
+    cx.update(gpui_component::init);
+    let project = crate::test_support::temp_path("dock-files-non-git");
+    std::fs::create_dir_all(&project).expect("create project");
+    std::fs::write(project.join("main.rs"), "fn main() {}\n").expect("write file");
+
+    let (panel, cx) = add_dock_panel_window(None, cx);
+    panel.update(cx, |panel, cx| {
+      panel.set_project_and_repo_roots(Some(project.clone()), None, cx)
+    });
+    await_refresh(&panel, cx).await;
+
+    panel.read_with(cx, |panel, _| {
+      assert_eq!(panel.project_root(), Some(project.as_path()));
+      assert_eq!(panel.repo_root(), None);
+      assert!(panel.status_entries().is_empty());
+    });
+
+    panel.update_in(cx, |panel, window, cx| {
+      panel.open_tab(DockPanelTab::Files, window, cx)
+    });
+    let files = panel.update(cx, |panel, _| panel._files_task.take());
+    if let Some(files) = files {
+      files.await;
+    }
+    cx.run_until_parked();
+
+    let opened = Rc::new(std::cell::RefCell::new(Vec::new()));
+    let seen = opened.clone();
+    cx.update(|_, cx| {
+      cx.subscribe(&panel, move |_panel, event: &DockPanelEvent, _cx| {
+        if let DockPanelEvent::OpenFile { path, intent, mode } = event {
+          seen.borrow_mut().push((path.clone(), *intent, *mode));
+        }
+      })
+      .detach();
+    });
+    cx.simulate_keystrokes("down");
+    cx.run_until_parked();
+    assert_eq!(
+      opened.borrow().as_slice(),
+      &[(
+        PathBuf::from("main.rs"),
+        OpenIntent::Browse,
+        DockPanelOpenFileMode::File,
+      )]
+    );
+
+    panel.update(cx, |panel, cx| panel.ensure_terminal(cx));
+    panel.read_with(cx, |panel, cx| {
+      let terminal = panel.terminal_view.as_ref().expect("terminal view");
+      assert_eq!(
+        terminal.read(cx).working_directory(),
+        Some(project.as_path())
+      );
+    });
+
+    let _ = std::fs::remove_dir_all(&project);
   }
 
   #[gpui::test]
