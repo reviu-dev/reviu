@@ -1130,6 +1130,29 @@ impl SessionPage {
     cx.notify();
   }
 
+  pub(super) fn close_active_center_tab_action(
+    &mut self,
+    _: &crate::CloseCenterTab,
+    window: &mut Window,
+    cx: &mut Context<Self>,
+  ) {
+    let tab = match self.center {
+      CenterView::Conversation => self.active_chat_tab(cx),
+      CenterView::Diff => self
+        .active_center_tab
+        .clone()
+        .or_else(|| self.editor_tab.clone())
+        .unwrap_or_else(CenterTab::chat),
+      CenterView::InteractiveRebase => CenterTab::interactive_rebase(),
+    };
+    if !tab.is_closeable() {
+      cx.propagate();
+      return;
+    }
+    self.close_center_tab(tab, window, cx);
+    cx.stop_propagation();
+  }
+
   pub(super) fn close_center_tab(
     &mut self,
     tab: CenterTab,

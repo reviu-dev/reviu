@@ -1230,6 +1230,7 @@ impl Render for SessionPage {
       .min_h_0()
       .track_focus(&self.focus_handle)
       .on_action(cx.listener(Self::close_workspace_page_action))
+      .on_action(cx.listener(Self::close_active_center_tab_action))
       .on_action(cx.listener(Self::close_file_view_action))
       .on_action(cx.listener(Self::find_action))
       .on_action(cx.listener(Self::add_selection_to_agent_action))

@@ -2404,9 +2404,7 @@ mod tests {
     cx.run_until_parked();
     let second_id = second.read_with(cx, |panel, _| panel.current_conversation().id.clone());
 
-    page.update_in(cx, |page, window, cx| {
-      page.close_center_tab(CenterTab::chat_for(second_id.clone()), window, cx)
-    });
+    cx.dispatch_action(crate::CloseCenterTab);
     cx.run_until_parked();
 
     assert_eq!(active_panel(&page, cx).entity_id(), first.entity_id());
