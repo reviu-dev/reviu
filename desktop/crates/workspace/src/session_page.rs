@@ -275,6 +275,9 @@ pub struct SessionPage {
   dock_panel: Entity<DockPanel>,
   inbox: Entity<Inbox>,
   session_list: Entity<SessionList>,
+  /// The project selected in the UI: file tree/search/editor can eventually
+  /// stand on this even when there is no Git repository.
+  project_root: Option<PathBuf>,
   /// The repository's identity: recents, persistence keys, GitHub. The dock
   /// and the diff follow `checkout_root` instead, which may be a worktree.
   fallback_repo: Option<PathBuf>,
@@ -362,6 +365,7 @@ impl SessionPage {
     let fallback_repo = ConfigStore::load_recent_repositories()
       .first()
       .map(|repo| repo.path.clone());
+    let project_root = fallback_repo.clone();
     let dock_panel = cx.new(|cx| DockPanel::new(fallback_repo.clone(), window, cx));
     let inbox = cx.new(|_| Inbox::new());
     let repo_snapshot = cx.new(|_| RepoSnapshot::new(fallback_repo.clone()));
@@ -571,6 +575,7 @@ impl SessionPage {
       inbox,
       session_list,
       synced_checkout: fallback_repo.clone(),
+      project_root,
       fallback_repo,
       checkout_override: None,
       available_checkouts: Vec::new(),
@@ -901,10 +906,20 @@ impl SessionPage {
       .update(cx, |snapshot, cx| snapshot.refresh(cx));
   }
 
-  /// The checkout the git surfaces should show: a pinned one first, else the
-  /// active session's worktree when it has one, the main checkout otherwise.
+  /// The project the UI is standing on: the shown session's repository, or
+  /// the project selected from recents when no session is shown.
+  pub(crate) fn project_root(&self, cx: &App) -> Option<PathBuf> {
+    self
+      .agent_chat_view
+      .as_ref()
+      .map(|panel| panel.read(cx).repo_root().to_path_buf())
+      .or_else(|| self.project_root.clone())
+  }
+
+  /// The checkout the file and git surfaces should show: a pinned one first,
+  /// else the active session's worktree when it has one, the project root otherwise.
   pub(crate) fn checkout_root(&self, cx: &App) -> Option<PathBuf> {
-    self.fallback_repo.as_ref()?;
+    self.project_root.as_ref()?;
     if let Some(pinned) = self.active_checkout_override(cx) {
       return Some(pinned);
     }
@@ -912,7 +927,7 @@ impl SessionPage {
       .agent_chat_view
       .as_ref()
       .map(|panel| panel.read(cx).cwd().to_path_buf())
-      .or_else(|| self.fallback_repo.clone())
+      .or_else(|| self.project_root.clone())
   }
 
   pub(super) fn target_checkout_differs_from_editor(
@@ -934,8 +949,7 @@ impl SessionPage {
   }
 
   /// The repo the shown session belongs to; the fallback repo only fills in
-  /// while nothing is on screen. Everything that follows "where you are"
-  /// (review batch, session creation, context row) derives from this one place.
+  /// while nothing is on screen. GitHub and review state derive from this.
   pub(super) fn session_repo(&self, cx: &App) -> Option<PathBuf> {
     self
       .agent_chat_view

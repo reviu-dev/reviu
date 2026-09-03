@@ -66,6 +66,7 @@ pub(crate) fn add_session_page_window(
   });
   let page = mounted.expect("session page");
   page.update(cx, |page, cx| {
+    page.project_root = Some(repo_root.clone());
     page.fallback_repo = Some(repo_root.clone());
     page.repo_snapshot.update(cx, |snapshot, cx| {
       snapshot.set_repo_root(Some(repo_root.clone()), cx)

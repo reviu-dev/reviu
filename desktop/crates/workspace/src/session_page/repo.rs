@@ -83,6 +83,7 @@ impl SessionPage {
     window: &mut Window,
     cx: &mut Context<Self>,
   ) {
+    self.project_root = repo_root.clone();
     self.fallback_repo = repo_root;
     // The fallback repo's store takes over; its first visit sweeps its
     // orphaned worktrees.
@@ -760,13 +761,15 @@ mod tests {
       .expect("a folder inside a repository is accepted");
     cx.run_until_parked();
 
-    page.read_with(cx, |page, _| {
-      let selected = page.fallback_repo.clone().expect("selected repository");
+    page.read_with(cx, |page, cx| {
+      let selected = page.fallback_repo.clone().expect("selected project");
+      let project_root = page.project_root(cx).expect("project root");
       assert_eq!(
         selected.canonicalize().expect("canonical selection"),
         other.path.canonicalize().expect("canonical repo"),
         "the root is selected, not the folder that was picked"
       );
+      assert_eq!(project_root, selected);
     });
 
     let _ = std::fs::remove_dir_all(&plain_folder);
@@ -931,6 +934,7 @@ mod tests {
     });
 
     page.read_with(cx, |page, cx| {
+      assert!(page.project_root(cx).is_none());
       assert!(page.fallback_repo.is_none());
       assert!(page.dock_panel.read(cx).repo_root().is_none());
       assert!(page.repo_snapshot.read(cx).branch_status().is_none());

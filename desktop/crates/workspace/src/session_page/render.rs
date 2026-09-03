@@ -163,9 +163,9 @@ impl SessionPage {
   pub(super) fn render_sessions_sidebar(&mut self, cx: &mut Context<Self>) -> AnyElement {
     let theme = cx.theme().clone();
 
-    // The context row names where you ARE: the shown session's repo.
-    let context_repo = self.session_repo(cx);
-    let repo_name = context_repo
+    // The context row names where you ARE: the shown session's project.
+    let context_project = self.project_root(cx);
+    let project_name = context_project
       .as_deref()
       .and_then(|path| path.file_name())
       .map(|name| name.to_string_lossy().into_owned());
@@ -176,7 +176,7 @@ impl SessionPage {
       .and_then(|command| command.sync_label());
     let command_in_flight = self.repo_command_in_flight.is_some();
 
-    let repo_context = match repo_name {
+    let repo_context = match project_name {
       None => Some(self.render_open_repository_row(cx).into_any_element()),
       Some(name) => Some(
         h_flex()
