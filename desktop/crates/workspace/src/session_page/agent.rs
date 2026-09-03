@@ -427,7 +427,7 @@ impl SessionPage {
   }
 
   /// Moves the shown panel to the background without stopping its agent.
-  fn park_active_chat_panel(&mut self, cx: &mut Context<Self>) {
+  pub(super) fn park_active_chat_panel(&mut self, cx: &mut Context<Self>) {
     let Some(panel) = self.agent_chat_view.take() else {
       return;
     };
@@ -2381,6 +2381,50 @@ mod tests {
     page.read_with(cx, |page, _| {
       assert_eq!(page.active_center_tab, Some(CenterTab::chat_for(first_id)));
       assert!(page.center_tabs.contains(&CenterTab::chat_for(second_id)));
+    });
+  }
+
+  #[gpui::test]
+  async fn closing_a_chat_center_tab_returns_to_the_previous_chat(cx: &mut TestAppContext) {
+    let (_repo, page, cx) = page_with_agent_panel("session-page-close-chat-tab", cx).await;
+
+    let first = active_panel(&page, cx);
+    first.update(cx, |panel, cx| {
+      panel.seed_user_message_for_test("first", cx)
+    });
+    cx.run_until_parked();
+    let first_id = first.read_with(cx, |panel, _| panel.current_conversation().id.clone());
+
+    page.update_in(cx, |page, window, cx| page.new_session(window, cx));
+    cx.run_until_parked();
+    let second = active_panel(&page, cx);
+    second.update(cx, |panel, cx| {
+      panel.seed_user_message_for_test("second", cx)
+    });
+    cx.run_until_parked();
+    let second_id = second.read_with(cx, |panel, _| panel.current_conversation().id.clone());
+
+    page.update_in(cx, |page, window, cx| {
+      page.close_center_tab(CenterTab::chat_for(second_id.clone()), window, cx)
+    });
+    cx.run_until_parked();
+
+    assert_eq!(active_panel(&page, cx).entity_id(), first.entity_id());
+    page.read_with(cx, |page, cx| {
+      assert_eq!(page.active_center_tab, Some(CenterTab::chat_for(first_id)));
+      assert!(
+        !page
+          .center_tabs
+          .contains(&CenterTab::chat_for(second_id.clone()))
+      );
+      assert!(
+        page
+          .session_list
+          .read(cx)
+          .conversation_ids()
+          .contains(&second_id),
+        "closing a tab does not delete its session"
+      );
     });
   }
 

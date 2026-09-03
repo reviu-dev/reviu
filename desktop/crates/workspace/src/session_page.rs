@@ -53,6 +53,7 @@ use crate::navigation::NavigationHistory;
 use crate::open_intent::OpenIntent;
 use crate::review_destination::{AgentReviewHandlers, ReviewDestination, configure_review};
 use crate::session_list::{SessionList, SessionListEvent, SessionStatus};
+use crate::session_page::center_tab::{CenterTab, CenterTabKind};
 use crate::session_page::file_viewer::{OpenedSnapshot, UnsavedEditorAction};
 use git::{InteractiveRebaseTarget, RepoStatusKind};
 
@@ -138,82 +139,6 @@ enum CenterView {
   Diff,
   /// The todo of an interactive rebase, waiting to be applied.
   InteractiveRebase,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-enum CenterTabKind {
-  Chat,
-  File,
-  Diff,
-  InteractiveRebase,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
-struct CenterTab {
-  kind: CenterTabKind,
-  path: Option<PathBuf>,
-  conversation_id: Option<String>,
-}
-
-impl CenterTab {
-  fn default_tabs() -> Vec<Self> {
-    vec![Self::chat()]
-  }
-
-  fn with_chat_tab(mut tabs: Vec<Self>) -> Vec<Self> {
-    if !tabs.iter().any(|tab| tab.kind == CenterTabKind::Chat) {
-      tabs.insert(0, Self::chat());
-    }
-    tabs
-  }
-
-  fn chat() -> Self {
-    Self {
-      kind: CenterTabKind::Chat,
-      path: None,
-      conversation_id: None,
-    }
-  }
-
-  fn chat_for(conversation_id: impl Into<String>) -> Self {
-    Self {
-      kind: CenterTabKind::Chat,
-      path: None,
-      conversation_id: Some(conversation_id.into()),
-    }
-  }
-
-  fn file(path: PathBuf) -> Self {
-    Self {
-      kind: CenterTabKind::File,
-      path: Some(path),
-      conversation_id: None,
-    }
-  }
-
-  fn diff(path: PathBuf) -> Self {
-    Self {
-      kind: CenterTabKind::Diff,
-      path: Some(path),
-      conversation_id: None,
-    }
-  }
-
-  fn interactive_rebase() -> Self {
-    Self {
-      kind: CenterTabKind::InteractiveRebase,
-      path: None,
-      conversation_id: None,
-    }
-  }
-
-  fn path(&self) -> Option<&Path> {
-    self.path.as_deref()
-  }
-
-  fn conversation_id(&self) -> Option<&str> {
-    self.conversation_id.as_deref()
-  }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -416,6 +341,7 @@ pub struct SessionPage {
 }
 
 mod agent;
+mod center_tab;
 mod commands;
 #[cfg(any(test, feature = "test-support"))]
 mod driver;

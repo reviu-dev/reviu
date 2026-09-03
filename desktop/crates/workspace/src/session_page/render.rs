@@ -458,7 +458,7 @@ impl SessionPage {
       };
 
       let mut tab_element = Tab::new().label(label).icon(icon);
-      if matches!(tab.kind, CenterTabKind::File | CenterTabKind::Diff) {
+      if tab.is_closeable() {
         let close_tab = tab.clone();
         let close_label = format!(
           "{:?}-{}",
@@ -466,6 +466,7 @@ impl SessionPage {
           tab
             .path()
             .map(|path| path.to_string_lossy().into_owned())
+            .or_else(|| tab.conversation_id().map(ToOwned::to_owned))
             .unwrap_or_default()
         );
         tab_element = tab_element.suffix(

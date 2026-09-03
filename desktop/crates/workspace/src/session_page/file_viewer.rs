@@ -1138,7 +1138,7 @@ impl SessionPage {
   ) {
     match tab.kind {
       CenterTabKind::Chat => {
-        self.activate_conversation_tab(window, cx);
+        self.close_center_chat_tab(tab, window, cx);
         return;
       }
       CenterTabKind::InteractiveRebase => {
@@ -1154,6 +1154,37 @@ impl SessionPage {
     self.close_center_tab_without_unsaved_prompt(tab, window, cx);
   }
 
+  fn close_center_chat_tab(&mut self, tab: CenterTab, window: &mut Window, cx: &mut Context<Self>) {
+    let Some(conversation_id) = tab.conversation_id().map(ToOwned::to_owned) else {
+      self.activate_conversation_tab(window, cx);
+      return;
+    };
+    let selected_closed = self.active_center_tab.as_ref() == Some(&tab);
+    self.center_tabs.retain(|candidate| candidate != &tab);
+    if !selected_closed {
+      cx.notify();
+      return;
+    }
+
+    if self
+      .agent_chat_view
+      .as_ref()
+      .is_some_and(|panel| panel.read(cx).current_conversation().id == conversation_id)
+    {
+      self.park_active_chat_panel(cx);
+    }
+    if self.center_tabs.is_empty() {
+      self.new_session(window, cx);
+      return;
+    }
+    let next_tab = self
+      .center_tabs
+      .last()
+      .cloned()
+      .unwrap_or_else(CenterTab::chat);
+    self.activate_center_tab(next_tab, OpenIntent::Open, window, cx);
+  }
+
   fn close_center_tab_without_unsaved_prompt(
     &mut self,
     tab: CenterTab,
@@ -1162,17 +1193,20 @@ impl SessionPage {
   ) {
     self.center_tabs.retain(|candidate| candidate != &tab);
     let selected_closed = self.active_center_tab.as_ref() == Some(&tab);
+    let editor_closed = self.editor_tab.as_ref() == Some(&tab);
+    if editor_closed {
+      self.discard_active_editor();
+      self.editor_tab = None;
+      self.selected_file = None;
+      self.opened_snapshot = None;
+      self.svg_preview.update(cx, |preview, _| preview.clear());
+    }
     if !selected_closed {
       cx.notify();
       return;
     }
 
-    self.discard_active_editor();
     self.active_center_tab = None;
-    self.editor_tab = None;
-    self.selected_file = None;
-    self.opened_snapshot = None;
-    self.svg_preview.update(cx, |preview, _| preview.clear());
 
     if self.center == CenterView::Diff
       && let Some(next_tab) = self.center_tabs.last().cloned()
