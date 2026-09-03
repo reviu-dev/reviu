@@ -48,8 +48,12 @@ impl SessionPage {
       None => None,
     };
     prune_agent_chat_state_once();
-    if let Some(evicted_repo) = self.ensure_chat_store(cx) {
+    if self.fallback_repo.is_some()
+      && let Some(evicted_repo) = self.ensure_chat_store(cx)
+    {
       self.push_repo_hidden_notification(&evicted_repo, window, cx);
+    } else if self.fallback_repo.is_none() {
+      self.chat_store = None;
     }
     let resume = match reconnect_resume {
       Some(meta) => meta,
@@ -69,14 +73,14 @@ impl SessionPage {
   /// Points `chat_store` at the FALLBACK repo's store; sessions of other
   /// repos reach their own store through their panel or the hub.
   pub(super) fn ensure_chat_store(&mut self, cx: &mut Context<Self>) -> Option<PathBuf> {
-    let repo = self
-      .fallback_repo
-      .clone()
-      .unwrap_or_else(|| PathBuf::from("."));
+    let Some(repo) = self.fallback_repo.clone() else {
+      self.chat_store = None;
+      return None;
+    };
     let access = self.chat_store_for_repo(&repo, cx)?;
     let evicted_repo = access.evicted_repo.clone();
     self.chat_store = Some(access.store.clone());
-    if self.fallback_repo.is_some() && self.swept_repos.insert(repo.clone()) {
+    if self.swept_repos.insert(repo.clone()) {
       self.sweep_orphan_worktrees(repo, access.store, cx);
     }
     evicted_repo
@@ -232,10 +236,13 @@ impl SessionPage {
     cx: &mut Context<Self>,
   ) -> Entity<AgentChatPanel> {
     let repo = self
-      .fallback_repo
-      .clone()
+      .session_repo(cx)
+      .or_else(|| self.project_root(cx))
       .unwrap_or_else(|| PathBuf::from("."));
-    let store = self.chat_store.clone();
+    let store = self
+      .chat_store
+      .clone()
+      .filter(|_| self.fallback_repo.is_some());
     self.build_chat_panel(repo, store, resume, window, cx)
   }
 
@@ -1093,13 +1100,19 @@ impl SessionPage {
     }
   }
 
-  /// Creation lands where you are: the shown session's repo, else the fallback.
-  fn creation_repo(&self, cx: &App) -> PathBuf {
-    self.session_repo(cx).unwrap_or_else(|| PathBuf::from("."))
+  /// Creation lands where you are: the shown session's repo, else the selected project.
+  fn creation_root(&self, cx: &App) -> Option<PathBuf> {
+    self.session_repo(cx).or_else(|| self.project_root(cx))
   }
 
   pub(super) fn new_session(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-    let repo_root = self.creation_repo(cx);
+    let Some(repo_root) = self.creation_root(cx) else {
+      window.push_notification(
+        Notification::warning("Open a project before starting a chat."),
+        cx,
+      );
+      return;
+    };
     self.new_session_in(repo_root, window, cx);
   }
 
@@ -1109,7 +1122,7 @@ impl SessionPage {
     window: &mut Window,
     cx: &mut Context<Self>,
   ) {
-    if self.session_repo(cx).is_none() {
+    if self.creation_root(cx).is_none() {
       window.push_notification(
         Notification::warning("Open a project before starting a chat."),
         cx,
@@ -1155,17 +1168,23 @@ impl SessionPage {
     cx: &mut Context<Self>,
   ) {
     prune_agent_chat_state_once();
-    if let Some(evicted_repo) = self.ensure_chat_store(cx) {
-      self.push_repo_hidden_notification(&evicted_repo, window, cx);
-    }
-    let access = self.chat_store_for_repo(&repo_root, cx);
-    if let Some(evicted_repo) = access
-      .as_ref()
-      .and_then(|access| access.evicted_repo.as_ref())
-    {
-      self.push_repo_hidden_notification(evicted_repo, window, cx);
-    }
-    let store = access.map(|access| access.store);
+    let git_backed = git::discover_repository_root(&repo_root).is_some();
+    let store = if git_backed {
+      if let Some(evicted_repo) = self.ensure_chat_store(cx) {
+        self.push_repo_hidden_notification(&evicted_repo, window, cx);
+      }
+      let access = self.chat_store_for_repo(&repo_root, cx);
+      if let Some(evicted_repo) = access
+        .as_ref()
+        .and_then(|access| access.evicted_repo.as_ref())
+      {
+        self.push_repo_hidden_notification(evicted_repo, window, cx);
+      }
+      access.map(|access| access.store)
+    } else {
+      self.chat_store = None;
+      None
+    };
     if let Some(panel) = self.agent_chat_view.as_ref() {
       // The shown conversation is still blank: it already is the new session.
       // Not while hydrating (its transcript may be about to land) and not when
@@ -2949,6 +2968,34 @@ mod tests {
 
     let _ = std::fs::remove_dir_all(&other_state);
     cleanup_worktrees_root(&repo.path);
+  }
+
+  #[gpui::test]
+  async fn the_new_session_action_starts_in_a_non_git_project(cx: &mut TestAppContext) {
+    let project = crate::test_support::temp_path("session-page-non-git-chat");
+    std::fs::create_dir_all(&project).expect("create project");
+    let (page, cx) = add_session_page_window_without_repo(cx);
+    cx.run_until_parked();
+
+    page.update_in(cx, |page, window, cx| {
+      page
+        .set_project_root(project.clone(), window, cx)
+        .expect("open plain project");
+      page.new_agent_session_action(&crate::NewAgentSession, window, cx);
+    });
+    cx.run_until_parked();
+
+    let panel = active_panel(&page, cx);
+    let project = project.canonicalize().expect("canonical project");
+    panel.read_with(cx, |panel, cx| {
+      assert_eq!(panel.repo_root(), project.as_path());
+      assert_eq!(panel.cwd(), project.as_path());
+      assert!(panel.store().is_none());
+      assert!(!panel.current_conversation().id.is_empty());
+      assert_eq!(page.read(cx).dock_panel.read(cx).repo_root(), None);
+    });
+
+    let _ = std::fs::remove_dir_all(&project);
   }
 
   #[gpui::test]
