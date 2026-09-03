@@ -277,12 +277,7 @@ impl SessionPage {
     let generation = self.open_file_generation;
     self.record_recent_file(&repo_root, &rel_path);
     self.remember_center_tab(tab.clone());
-    self.editor_tab = Some(tab.clone());
-    self.selected_file = Some(rel_path.clone());
-    self.editor = None;
-    self.editor_file_modified = None;
-    self.binary_preview = None;
-    self.opened_snapshot = None;
+    self.set_active_editor_loading(tab.clone(), rel_path.clone(), None);
     let diff_view = self.effective_diff_view(&rel_path, cx);
     // Wherever the open came from (chat recap, palette, review row), the
     // Changes list highlights the file it is now showing.
@@ -297,6 +292,7 @@ impl SessionPage {
     let file_path = repo_root.join(&rel_path);
     let load_repo_root = repo_root.clone();
     let load_file_path = file_path.clone();
+    let load_tab = tab.clone();
     let task = cx.spawn(async move |this, cx| {
       let loaded = cx
         .background_spawn(
@@ -322,10 +318,16 @@ impl SessionPage {
             editor.reveal_source_position(doc_line, doc_column, cx);
           }
         });
-        this.binary_preview = binary_preview;
-        this.editor_file_modified = file_modified;
-        this.editor = Some(editor.clone());
-        this.cache_active_editor();
+        this.set_active_editor_state(
+          load_tab,
+          CenterEditorState {
+            selected_file: rel_path.clone(),
+            file_modified,
+            editor: Some(editor.clone()),
+            binary_preview,
+            opened_snapshot: None,
+          },
+        );
         this.sync_editor_unmerged_state(cx);
         this.sync_git_telemetry(cx);
         // Focus once loaded: the requester (file tree, list, search) may still hold
@@ -382,31 +384,19 @@ impl SessionPage {
   }
 
   pub(super) fn active_editor(&self) -> Option<Entity<Editor>> {
-    self
-      .active_editor_state()
-      .and_then(|state| state.editor.clone())
-      .or_else(|| self.editor.clone())
+    self.active_editor_state()?.editor.clone()
   }
 
   pub(super) fn active_selected_file(&self) -> Option<&Path> {
-    self
-      .active_editor_state()
-      .map(|state| state.selected_file.as_path())
-      .or(self.selected_file.as_deref())
+    Some(self.active_editor_state()?.selected_file.as_path())
   }
 
   pub(super) fn active_binary_preview(&self) -> Option<&BinaryPreview> {
-    self
-      .active_editor_state()
-      .and_then(|state| state.binary_preview.as_ref())
-      .or(self.binary_preview.as_ref())
+    self.active_editor_state()?.binary_preview.as_ref()
   }
 
   pub(super) fn active_opened_snapshot(&self) -> Option<&OpenedSnapshot> {
-    self
-      .active_editor_state()
-      .and_then(|state| state.opened_snapshot.as_ref())
-      .or(self.opened_snapshot.as_ref())
+    self.active_editor_state()?.opened_snapshot.as_ref()
   }
 
   fn set_active_editor_state(&mut self, tab: CenterTab, state: CenterEditorState) {
@@ -418,6 +408,25 @@ impl SessionPage {
       self.opened_snapshot = state.opened_snapshot.clone();
     }
     self.editor_states.insert(tab, state);
+  }
+
+  fn set_active_editor_loading(
+    &mut self,
+    tab: CenterTab,
+    selected_file: PathBuf,
+    opened_snapshot: Option<OpenedSnapshot>,
+  ) {
+    self.editor_tab = Some(tab.clone());
+    self.set_active_editor_state(
+      tab,
+      CenterEditorState {
+        selected_file,
+        file_modified: None,
+        editor: None,
+        binary_preview: None,
+        opened_snapshot,
+      },
+    );
   }
 
   fn clear_editor_tab(&mut self, tab: &CenterTab) {
@@ -584,17 +593,13 @@ impl SessionPage {
     self.open_file_generation = self.open_file_generation.wrapping_add(1);
     let generation = self.open_file_generation;
     self.remember_center_tab(tab.clone());
-    self.editor_tab = Some(tab);
-    self.selected_file = Some(rel_path.clone());
     let agent_whole_file_change = old_text.is_none() || new_text.is_empty();
-    self.opened_snapshot = Some(OpenedSnapshot::AgentTool {
+    let opened_snapshot = OpenedSnapshot::AgentTool {
       old_text: old_text.clone(),
       new_text: new_text.clone(),
       whole_file_change: agent_whole_file_change,
-    });
-    self.editor = None;
-    self.editor_file_modified = None;
-    self.binary_preview = None;
+    };
+    self.set_active_editor_loading(tab.clone(), rel_path.clone(), Some(opened_snapshot.clone()));
     self.svg_preview.update(cx, |preview, _| preview.clear());
     self
       .dock_panel
@@ -612,6 +617,7 @@ impl SessionPage {
     };
     let hide_whitespace = self.hide_whitespace;
     let reveal_doc_line = reveal_line.map(|line| line.saturating_sub(1) as usize);
+    let load_tab = tab.clone();
     let task = cx.spawn(async move |this, cx| {
       let diff_rel_path = rel_path.clone();
       let diff_old_text = old_text.clone();
@@ -630,7 +636,7 @@ impl SessionPage {
         if this.open_file_generation != generation {
           return;
         }
-        if this.selected_file.as_ref() != Some(&rel_path) {
+        if this.active_selected_file() != Some(rel_path.as_path()) {
           return;
         }
         let editor = cx.new(|cx| Editor::new_with_paths(repo_root.clone(), file_path, cx));
@@ -643,9 +649,16 @@ impl SessionPage {
           }
         });
         configure_review(&editor, ReviewDestination::None, cx);
-        this.editor_file_modified = None;
-        this.editor = Some(editor.clone());
-        this.cache_active_editor();
+        this.set_active_editor_state(
+          load_tab,
+          CenterEditorState {
+            selected_file: rel_path.clone(),
+            file_modified: None,
+            editor: Some(editor.clone()),
+            binary_preview: None,
+            opened_snapshot: Some(opened_snapshot),
+          },
+        );
         this.sync_git_telemetry(cx);
         if this.center == CenterView::Diff && intent.takes_focus() {
           let _ = cx.update_window(this.window_handle, |_, window, cx| {
@@ -707,14 +720,11 @@ impl SessionPage {
     self.open_file_generation = self.open_file_generation.wrapping_add(1);
     let generation = self.open_file_generation;
     self.remember_center_tab(tab.clone());
-    self.editor_tab = Some(tab);
-    self.selected_file = Some(rel_path.clone());
-    self.opened_snapshot = Some(OpenedSnapshot::Commit(commit_oid.clone()));
-    self.editor = None;
-    self.editor_file_modified = None;
-    self.binary_preview = None;
+    let opened_snapshot = OpenedSnapshot::Commit(commit_oid.clone());
+    self.set_active_editor_loading(tab.clone(), rel_path.clone(), Some(opened_snapshot.clone()));
     let hide_whitespace = self.hide_whitespace;
     let diff_view = self.effective_diff_view(&rel_path, cx);
+    let load_tab = tab.clone();
 
     let task = cx.spawn(async move |this, cx| {
       let load_repo_root = repo_root.clone();
@@ -747,11 +757,18 @@ impl SessionPage {
         });
         // A commit is history: a comment on it would have nowhere to go.
         configure_review(&editor, ReviewDestination::None, cx);
-        this.binary_preview =
+        let binary_preview =
           build_binary_preview(rel_path.as_path(), commit_file.binary_bytes.clone());
-        this.editor_file_modified = None;
-        this.editor = Some(editor);
-        this.cache_active_editor();
+        this.set_active_editor_state(
+          load_tab,
+          CenterEditorState {
+            selected_file: rel_path.clone(),
+            file_modified: None,
+            editor: Some(editor),
+            binary_preview,
+            opened_snapshot: Some(opened_snapshot),
+          },
+        );
         this.svg_preview.update(cx, |preview, _| preview.clear());
         cx.notify();
       });
@@ -843,17 +860,14 @@ impl SessionPage {
     self.open_file_generation = self.open_file_generation.wrapping_add(1);
     let generation = self.open_file_generation;
     self.remember_center_tab(tab.clone());
-    self.editor_tab = Some(tab);
-    self.selected_file = Some(rel_path.clone());
-    self.opened_snapshot = Some(OpenedSnapshot::PullRequestRange {
+    let opened_snapshot = OpenedSnapshot::PullRequestRange {
       base: base_oid.clone(),
       head: head_oid.clone(),
-    });
-    self.editor = None;
-    self.editor_file_modified = None;
-    self.binary_preview = None;
+    };
+    self.set_active_editor_loading(tab.clone(), rel_path.clone(), Some(opened_snapshot.clone()));
     let hide_whitespace = self.hide_whitespace;
     let diff_view = self.effective_diff_view(&rel_path, cx);
+    let load_tab = tab.clone();
 
     let task = cx.spawn(async move |this, cx| {
       let load_repo_root = repo_root.clone();
@@ -888,11 +902,18 @@ impl SessionPage {
             editor.reveal_source_line(doc_line, cx);
           }
         });
-        this.binary_preview =
+        let binary_preview =
           build_binary_preview(rel_path.as_path(), range_file.binary_bytes.clone());
-        this.editor_file_modified = None;
-        this.editor = Some(editor.clone());
-        this.cache_active_editor();
+        this.set_active_editor_state(
+          load_tab,
+          CenterEditorState {
+            selected_file: rel_path.clone(),
+            file_modified: None,
+            editor: Some(editor.clone()),
+            binary_preview,
+            opened_snapshot: Some(opened_snapshot),
+          },
+        );
         // The comments sync through the page's editor: install after it lands,
         // or they hang on the one this replaces.
         this.install_github_review_handlers_for_editor(&editor, cx);
@@ -2270,6 +2291,10 @@ mod tests {
         cx,
       );
     });
+    page.read_with(cx, |page, _| {
+      assert_eq!(page.active_selected_file(), Some(Path::new("README.md")));
+      assert!(page.active_opened_snapshot().is_some());
+    });
     await_open_file(&page, cx).await;
     page.read_with(cx, |page, cx| {
       assert!(page.active_opened_snapshot().is_some());
@@ -2285,6 +2310,10 @@ mod tests {
         window,
         cx,
       );
+    });
+    page.read_with(cx, |page, _| {
+      assert_eq!(page.active_selected_file(), Some(Path::new("clean.txt")));
+      assert!(page.active_opened_snapshot().is_none());
     });
     await_open_file(&page, cx).await;
 
