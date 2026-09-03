@@ -1,4 +1,4 @@
-//! The projects sidebar: pick, create and delete conversations by repository.
+//! The projects sidebar: browse project checkouts and their conversations.
 
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -391,6 +391,26 @@ impl SessionList {
     rows
   }
 
+  fn checkout_path_for_session(&self, row: &SessionRow) -> PathBuf {
+    self
+      .worktree_checkouts
+      .get(&row.meta.id)
+      .map(|binding| binding.path.clone())
+      .unwrap_or_else(|| row.repo_root.clone())
+  }
+
+  #[cfg(test)]
+  fn conversation_ids_for_checkout(&self, repo_root: &Path, checkout_root: &Path) -> Vec<String> {
+    self
+      .conversations
+      .iter()
+      .filter(|row| {
+        row.repo_root == repo_root && self.checkout_path_for_session(row) == checkout_root
+      })
+      .map(|row| row.meta.id.clone())
+      .collect()
+  }
+
   fn update_repo_header_bounds(&mut self, repo_root: PathBuf, bounds: Bounds<Pixels>) {
     self.repo_header_bounds.insert(repo_root, bounds);
   }
@@ -659,6 +679,144 @@ impl SessionList {
             ),
         ),
       )
+      .into_any_element()
+  }
+
+  fn render_chat_row(
+    &self,
+    ix: usize,
+    row: &SessionRow,
+    now: u64,
+    theme: &gpui_component::Theme,
+    cx: &mut Context<Self>,
+  ) -> gpui::AnyElement {
+    let meta = &row.meta;
+    let is_current = meta.id == self.current_id;
+    let is_loading = self.loading_id.as_deref() == Some(meta.id.as_str());
+    let status = self.statuses.get(&meta.id).copied().unwrap_or_default();
+    let status_color = match status {
+      SessionStatus::Idle => theme.muted_foreground,
+      SessionStatus::Working => theme.status_amber(),
+      SessionStatus::Waiting => theme.status_blue(),
+      SessionStatus::Failed => theme.status_red(),
+    };
+    let id = meta.id.clone();
+    let selector_id = meta.id.clone();
+    let delete_id = meta.id.clone();
+    let title = session_row_title(meta);
+    let preview = meta.preview.clone();
+    let time = format_relative_secs(meta.updated_at_secs, now);
+    let agent_id = meta.agent_id.clone();
+    let agent_icon_id = agent_id.clone();
+    let group_name = SharedString::from(format!("session-row-{}", meta.id));
+
+    div()
+      .id(("session-page-session-row", ix))
+      .debug_selector(move || format!("session-chat-row-{selector_id}"))
+      .group(group_name.clone())
+      .mx_2()
+      .ml_8()
+      .px_2()
+      .py_1()
+      .rounded(px(6.0))
+      .cursor_pointer()
+      .when(is_current, |this| this.bg(theme.secondary_active))
+      .hover(|s| s.bg(theme.secondary_hover))
+      .on_click(cx.listener(move |_, _, _, cx| {
+        cx.emit(SessionListEvent::Selected { id: id.clone() });
+      }))
+      .child(
+        h_flex()
+          .items_center()
+          .gap_2()
+          .child(
+            div()
+              .flex_shrink_0()
+              .debug_selector(move || format!("session-agent-icon-{agent_icon_id}"))
+              .child(
+                agent_chat_panel::backend_icon(&agent_id)
+                  .xsmall()
+                  .text_color(theme.muted_foreground),
+              ),
+          )
+          .child(
+            div()
+              .flex_1()
+              .min_w(px(0.0))
+              .text_xs()
+              .truncate()
+              .text_color(theme.foreground)
+              .child(title),
+          )
+          .child(
+            div()
+              .relative()
+              .flex_shrink_0()
+              .min_w(px(22.))
+              .flex()
+              .justify_end()
+              .items_center()
+              .child(if is_loading {
+                div()
+                  .child(gpui_component::spinner::Spinner::new().xsmall())
+                  .into_any_element()
+              } else {
+                h_flex()
+                  .items_center()
+                  .gap_1p5()
+                  .group_hover(group_name.clone(), |this| this.opacity(0.0))
+                  .when_some(status.label(), |this, label| {
+                    this.child(
+                      div()
+                        .id(("session-status-dot", ix))
+                        .size(px(7.))
+                        .rounded_full()
+                        .bg(status_color.opacity(0.9))
+                        .tooltip(move |window, cx| {
+                          gpui_component::tooltip::Tooltip::new(label).build(window, cx)
+                        }),
+                    )
+                  })
+                  .child(
+                    div()
+                      .text_xs()
+                      .text_color(theme.muted_foreground)
+                      .child(time),
+                  )
+                  .into_any_element()
+              })
+              .child(
+                div()
+                  .absolute()
+                  .right(px(-2.))
+                  .top(px(-3.))
+                  .opacity(0.0)
+                  .group_hover(group_name.clone(), |this| this.opacity(1.0))
+                  .child(
+                    Button::new(("session-page-session-delete", ix))
+                      .icon(UiIconName::Trash)
+                      .xsmall()
+                      .ghost()
+                      .tooltip("Delete chat")
+                      .on_click(cx.listener(move |_, _, _, cx| {
+                        cx.stop_propagation();
+                        cx.emit(SessionListEvent::Deleted {
+                          id: delete_id.clone(),
+                        });
+                      })),
+                  ),
+              ),
+          ),
+      )
+      .when(!preview.is_empty(), |this| {
+        this.child(
+          div()
+            .text_xs()
+            .truncate()
+            .text_color(theme.muted_foreground)
+            .child(preview),
+        )
+      })
       .into_any_element()
   }
 
@@ -957,169 +1115,11 @@ impl Render for SessionList {
       for checkout in self.checkout_rows_for_repo(section_repo) {
         let active = self.displayed_checkout.as_deref() == Some(checkout.path.as_path());
         items.push(self.render_checkout_row(section_repo, &checkout, active, &theme, cx));
-      }
-      for (ix, row) in self
-        .conversations
-        .iter()
-        .enumerate()
-        .filter(|(_, row)| &row.repo_root == section_repo)
-      {
-        items.push({
-          let meta = &row.meta;
-          let is_current = meta.id == self.current_id;
-          let is_loading = self.loading_id.as_deref() == Some(meta.id.as_str());
-          let status = self.statuses.get(&meta.id).copied().unwrap_or_default();
-          let status_color = match status {
-            SessionStatus::Idle => theme.muted_foreground,
-            SessionStatus::Working => theme.status_amber(),
-            SessionStatus::Waiting => theme.status_blue(),
-            SessionStatus::Failed => theme.status_red(),
-          };
-          let worktree_branch = self
-            .worktree_checkouts
-            .get(&meta.id)
-            .map(|binding| SharedString::from(binding.branch.clone()));
-          let id = meta.id.clone();
-          let selector_id = meta.id.clone();
-          let delete_id = meta.id.clone();
-          let title = session_row_title(meta);
-          let preview = meta.preview.clone();
-          let time = format_relative_secs(meta.updated_at_secs, now);
-          let agent_id = meta.agent_id.clone();
-          let agent_icon_id = agent_id.clone();
-          let group_name = SharedString::from(format!("session-row-{}", meta.id));
-
-          div()
-            .id(("session-page-session-row", ix))
-            .debug_selector(move || format!("session-chat-row-{selector_id}"))
-            .group(group_name.clone())
-            .mx_2()
-            .px_2()
-            .py_1p5()
-            .rounded(px(6.0))
-            .cursor_pointer()
-            .when(is_current, |this| this.bg(theme.secondary_active))
-            .hover(|s| s.bg(theme.secondary_hover))
-            .on_click(cx.listener(move |_, _, _, cx| {
-              cx.emit(SessionListEvent::Selected { id: id.clone() });
-            }))
-            .child(
-              h_flex()
-                .items_center()
-                .gap_2()
-                .child(
-                  div()
-                    .flex_shrink_0()
-                    .debug_selector(move || format!("session-agent-icon-{agent_icon_id}"))
-                    .child(
-                      agent_chat_panel::backend_icon(&agent_id)
-                        .xsmall()
-                        .text_color(theme.muted_foreground),
-                    ),
-                )
-                .child(
-                  div()
-                    .flex_1()
-                    .min_w(px(0.0))
-                    .text_sm()
-                    .truncate()
-                    .text_color(theme.foreground)
-                    .child(title),
-                )
-                .child(
-                  // One trailing slot: the time sits flush right, the delete
-                  // button takes its place on hover instead of reserving width.
-                  div()
-                    .relative()
-                    .flex_shrink_0()
-                    .min_w(px(22.))
-                    .flex()
-                    .justify_end()
-                    .items_center()
-                    .child(if is_loading {
-                      div()
-                        .child(gpui_component::spinner::Spinner::new().xsmall())
-                        .into_any_element()
-                    } else {
-                      // A dot says the live state without eating the title or
-                      // the timestamp; the word lives in its tooltip.
-                      h_flex()
-                        .items_center()
-                        .gap_1p5()
-                        .group_hover(group_name.clone(), |this| this.opacity(0.0))
-                        .when_some(status.label(), |this, label| {
-                          this.child(
-                            div()
-                              .id(("session-status-dot", ix))
-                              .size(px(7.))
-                              .rounded_full()
-                              .bg(status_color.opacity(0.9))
-                              .tooltip(move |window, cx| {
-                                gpui_component::tooltip::Tooltip::new(label).build(window, cx)
-                              }),
-                          )
-                        })
-                        .child(
-                          div()
-                            .text_xs()
-                            .text_color(theme.muted_foreground)
-                            .child(time),
-                        )
-                        .into_any_element()
-                    })
-                    .child(
-                      div()
-                        .absolute()
-                        .right(px(-2.))
-                        .top(px(-3.))
-                        .opacity(0.0)
-                        .group_hover(group_name.clone(), |this| this.opacity(1.0))
-                        .child(
-                          Button::new(("session-page-session-delete", ix))
-                            .icon(UiIconName::Trash)
-                            .xsmall()
-                            .ghost()
-                            .tooltip("Delete chat")
-                            .on_click(cx.listener(move |_, _, _, cx| {
-                              cx.stop_propagation();
-                              cx.emit(SessionListEvent::Deleted {
-                                id: delete_id.clone(),
-                              });
-                            })),
-                        ),
-                    ),
-                ),
-            )
-            .when(!preview.is_empty(), |this| {
-              this.child(
-                div()
-                  .text_xs()
-                  .truncate()
-                  .text_color(theme.muted_foreground)
-                  .child(preview),
-              )
-            })
-            .when_some(worktree_branch, |this, branch| {
-              this.child(
-                h_flex()
-                  .items_center()
-                  .gap_1()
-                  .child(
-                    Icon::new(UiIconName::GitBranch)
-                      .size(px(10.))
-                      .text_color(theme.muted_foreground.opacity(0.8)),
-                  )
-                  .child(
-                    div()
-                      .text_xs()
-                      .truncate()
-                      .text_color(theme.muted_foreground.opacity(0.8))
-                      .child(branch),
-                  ),
-              )
-            })
-            .into_any_element()
-        });
+        for (ix, row) in self.conversations.iter().enumerate().filter(|(_, row)| {
+          row.repo_root == *section_repo && self.checkout_path_for_session(row) == checkout.path
+        }) {
+          items.push(self.render_chat_row(ix, row, now, &theme, cx));
+        }
       }
     }
     let rows = items;
@@ -1354,6 +1354,17 @@ mod tests {
           subtitle: "Worktree checkout".into(),
         },
       ]
+    );
+    assert_eq!(
+      list.conversation_ids_for_checkout(Path::new("/repo"), Path::new("/repo")),
+      vec!["main-chat".to_string()]
+    );
+    assert_eq!(
+      list.conversation_ids_for_checkout(
+        Path::new("/repo"),
+        Path::new("/repo/.worktrees/feature-sidebar")
+      ),
+      vec!["worktree-chat".to_string()]
     );
   }
 
