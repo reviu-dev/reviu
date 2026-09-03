@@ -284,7 +284,7 @@ impl SessionPage {
       }
       CommandPaletteAction::Commit => {
         if self.fallback_repo.is_none() {
-          return Err("No repository selected.".into());
+          return Err("No project selected.".into());
         }
         self.dock_panel.update(cx, |panel, cx| panel.commit(cx));
         Ok(())
@@ -437,7 +437,7 @@ impl SessionPage {
       CommandPaletteAction::SwitchRepository(repository) => {
         let repo_root = PathBuf::from(repository.path.as_ref());
         if !repo_root.is_dir() {
-          return Err(format!("Repository not found: {}", repo_root.display()).into());
+          return Err(format!("Project not found: {}", repo_root.display()).into());
         }
         self.set_fallback_repo(repo_root, window, cx)
       }
@@ -687,7 +687,7 @@ mod tests {
 
     page.read_with(cx, |page, _| {
       let repositories = page.palette_repositories();
-      // The open repository is not in the recents yet, it still leads the list.
+      // The open project is not in the recents yet, it still leads the list.
       assert_eq!(
         repositories.first().map(|repo| repo.path.to_string()),
         Some(repo.path.to_string_lossy().to_string())

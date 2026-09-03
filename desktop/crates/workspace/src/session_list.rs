@@ -993,7 +993,7 @@ impl SessionList {
     .ghost()
     .compact()
     .xsmall()
-    .tooltip("Repository options");
+    .tooltip("Project options");
 
     Self::render_repo_menu_button(
       repo_root.clone(),
@@ -1148,7 +1148,7 @@ impl Render for SessionList {
             .text_xs()
             .text_center()
             .text_color(theme.muted_foreground.opacity(0.8))
-            .child("Open a repository to start working"),
+            .child("Open a project to start working"),
         )
         .into_any_element()
     } else {

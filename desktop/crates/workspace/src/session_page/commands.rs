@@ -139,7 +139,7 @@ impl SessionPage {
     cx: &mut Context<Self>,
   ) -> Result<(), SharedString> {
     let Some(repo_root) = self.checkout_root(cx) else {
-      return Err("No repository selected.".into());
+      return Err("No project selected.".into());
     };
     if !self
       .repo_state("", cx)
@@ -255,7 +255,7 @@ impl SessionPage {
     cx: &mut Context<Self>,
   ) -> Result<(), SharedString> {
     let Some(repo_root) = self.checkout_root(cx) else {
-      return Err("No repository selected.".into());
+      return Err("No project selected.".into());
     };
     self.close_interactive_rebase_todo(window, cx);
 
@@ -508,7 +508,7 @@ impl SessionPage {
     cx: &mut Context<Self>,
   ) -> Result<(), SharedString> {
     let Some(repo_root) = self.checkout_root(cx) else {
-      return Err("No repository selected.".into());
+      return Err("No project selected.".into());
     };
     if self.repo_command_in_flight.is_some() {
       return Err("Another git command is still running.".into());

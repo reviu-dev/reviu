@@ -404,7 +404,7 @@ impl SessionPage {
           cx.write_to_clipboard(ClipboardItem::new_string(
             repo_root.to_string_lossy().into_owned(),
           ));
-          window.push_notification(Notification::info("Repository path copied"), cx);
+          window.push_notification(Notification::info("Project path copied"), cx);
         }
         SessionListEvent::RemoveRepository { repo_root } => {
           if let Err(error) = this.forget_repository(repo_root.clone(), window, cx) {
@@ -732,9 +732,9 @@ impl SessionPage {
       .unwrap_or_else(|| repo_root.to_string_lossy().into_owned());
     window.push_notification(
       Notification::info(format!(
-        "{repo_name} was hidden from the sidebar and remains in Recent Repositories."
+        "{repo_name} was hidden from the sidebar and remains in Recent Projects."
       ))
-      .title("Added repository to sidebar"),
+      .title("Added project to sidebar"),
       cx,
     );
   }
@@ -1567,7 +1567,7 @@ impl SessionPage {
     cx: &mut Context<Self>,
   ) -> Result<(), SharedString> {
     if self.checkout_root(cx).is_none() {
-      return Err("No repository selected.".into());
+      return Err("No project selected.".into());
     }
     self.open_diff(rel_path, None, OpenIntent::Open, window, cx);
     Ok(())
@@ -1968,7 +1968,7 @@ impl SessionPage {
         Err(error) => {
           log::error!("load files for search: {error:#}");
           let _ = palette.update(cx, |palette, cx| {
-            palette.set_loading_error("Could not load repository files", cx);
+            palette.set_loading_error("Could not load project files", cx);
           });
         }
       });
@@ -2073,7 +2073,7 @@ mod tests {
   use std::path::Path;
 
   #[gpui::test]
-  async fn file_search_lists_changed_then_recent_then_repository_files(cx: &mut TestAppContext) {
+  async fn file_search_lists_changed_then_recent_then_project_files(cx: &mut TestAppContext) {
     let repo = TempRepo::init("session-page-file-search-groups");
     commit_text_file(&repo.path, Path::new("changed.rs"), "old\n", "initial");
     commit_text_file(&repo.path, Path::new("recent.rs"), "recent\n", "recent");
@@ -2302,11 +2302,11 @@ mod tests {
     page.read_with(cx, |page, _| assert!(page.fallback_repo.is_none()));
     assert!(
       cx.debug_bounds(REPO_CONTEXT_DEBUG_SELECTOR).is_none(),
-      "there is no repository to name yet"
+      "there is no project to name yet"
     );
     let row = cx
       .debug_bounds(OPEN_REPOSITORY_ROW_DEBUG_SELECTOR)
-      .expect("the sidebar offers to open a repository");
+      .expect("the sidebar offers to open a project");
 
     // Closing the picker changes nothing.
     cx.simulate_click(row.center(), gpui::Modifiers::default());
@@ -2334,13 +2334,13 @@ mod tests {
           .repo_root()
           .map(|path| path.to_path_buf()),
         Some(repo.path.clone()),
-        "the dock follows the repository that was just opened"
+        "the dock follows the project that was just opened"
       );
     });
     assert!(
       cx.debug_bounds(OPEN_REPOSITORY_ROW_DEBUG_SELECTOR)
         .is_none(),
-      "the row goes back to naming the repository"
+      "the row goes back to naming the project"
     );
     assert!(cx.debug_bounds(REPO_CONTEXT_DEBUG_SELECTOR).is_some());
   }

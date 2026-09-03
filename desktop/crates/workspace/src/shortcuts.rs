@@ -444,8 +444,8 @@ const SHORTCUT_DEFINITIONS: [ShortcutDefinition; 34] = [
   },
   ShortcutDefinition {
     id: ShortcutId::OpenRepository,
-    title: "Open Repository",
-    description: "Open a local repository.",
+    title: "Open Project",
+    description: "Open a local project.",
     scope_label: "Projects",
     category: ShortcutCategory::LocalGit,
     keystroke: "cmd-o",
@@ -544,7 +544,7 @@ const SHORTCUT_DEFINITIONS: [ShortcutDefinition; 34] = [
   ShortcutDefinition {
     id: ShortcutId::OpenFilesSidebar,
     title: "Show Files",
-    description: "Switch the right panel to the repository file tree.",
+    description: "Switch the right panel to the project file tree.",
     scope_label: "Projects",
     category: ShortcutCategory::LocalGit,
     keystroke: "cmd-shift-f",

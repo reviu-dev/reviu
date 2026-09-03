@@ -7,7 +7,7 @@ use crate::hunk_actions::render_hunk_actions;
 use gpui_component::Selectable as _;
 
 impl SessionPage {
-  /// Without a repository half the shell has nothing to show, so the row that
+  /// Without a project half the shell has nothing to show, so the row that
   /// normally names it asks for one instead.
   pub(super) fn render_open_repository_row(&self, cx: &mut Context<Self>) -> AnyElement {
     let theme = cx.theme().clone();
@@ -23,7 +23,7 @@ impl SessionPage {
       .cursor_pointer()
       .hover(|this| this.bg(theme.secondary_hover))
       .tooltip(|window, cx| {
-        gpui_component::tooltip::Tooltip::new("Open a repository").build(window, cx)
+        gpui_component::tooltip::Tooltip::new("Open a project").build(window, cx)
       })
       .on_click(cx.listener(|this, _, window, cx| {
         this.start_open_repository(window, cx);
@@ -38,7 +38,7 @@ impl SessionPage {
           .text_xs()
           .text_color(theme.foreground)
           .truncate()
-          .child("Open repository"),
+          .child("Open project"),
       )
       .into_any_element()
   }
@@ -202,7 +202,7 @@ impl SessionPage {
               .cursor_pointer()
               .hover(|this| this.bg(theme.secondary_hover))
               .tooltip(|window, cx| {
-                gpui_component::tooltip::Tooltip::new("Switch repository").build(window, cx)
+                gpui_component::tooltip::Tooltip::new("Switch project").build(window, cx)
               })
               .on_click(cx.listener(|this, _, window, cx| {
                 this.open_command_palette_with_screen(

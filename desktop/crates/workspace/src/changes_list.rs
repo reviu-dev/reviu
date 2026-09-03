@@ -846,7 +846,7 @@ impl ChangesList {
     let message: SharedString = if has_untracked_entries(&self.entries) {
       "Discard all tracked changes and delete all untracked files?".into()
     } else {
-      "Discard all changes in the repository?".into()
+      "Discard all changes in the project?".into()
     };
     let view = cx.entity();
 

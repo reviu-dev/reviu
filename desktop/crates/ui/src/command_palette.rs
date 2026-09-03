@@ -1241,7 +1241,7 @@ impl CommandPaletteGroup {
       Self::RebaseMergeProgress => "In progress",
       Self::Stash => "Stash",
       Self::PullRequest => "Pull request",
-      Self::Repository => "Repository",
+      Self::Repository => "Project",
       Self::Github => "GitHub",
       Self::Panels => "Panels",
       Self::Navigation => "Navigation",
@@ -1296,16 +1296,16 @@ impl CommandPaletteCommand {
   pub fn switch_repository() -> Self {
     Self::new(
       CommandPaletteCommandId::SwitchRepository,
-      "Switch repository",
-      "Switch to another recent repository",
+      "Switch project",
+      "Switch to another recent project",
     )
   }
 
   pub fn forget_repository() -> Self {
     Self::new(
       CommandPaletteCommandId::ForgetRepository,
-      "Remove repository from Reviu",
-      "Remove a repository from the sidebar and recent list",
+      "Remove project from Reviu",
+      "Remove a project from the sidebar and recent list",
     )
   }
 
@@ -1640,8 +1640,8 @@ impl CommandPaletteCommand {
   pub fn open_repository() -> Self {
     Self::new(
       CommandPaletteCommandId::OpenRepository,
-      "Open repository",
-      "Pick and open a local repository",
+      "Open project",
+      "Pick and open a local project",
     )
   }
 
@@ -1738,7 +1738,7 @@ impl CommandPaletteCommand {
     Self::new(
       CommandPaletteCommandId::ShowFiles,
       "Files panel",
-      "Switch the right panel to the repository file tree",
+      "Switch the right panel to the project file tree",
     )
   }
 
@@ -1762,7 +1762,7 @@ impl CommandPaletteCommand {
     Self::new(
       CommandPaletteCommandId::ShowFileSearch,
       "File search",
-      "Find a file of the repository by name",
+      "Find a file of the project by name",
     )
   }
 
@@ -3518,11 +3518,11 @@ impl CommandPalette {
   }
 
   fn render_switch_repository(&mut self, _cx: &mut Context<Self>) -> impl IntoElement {
-    self.render_search_list(&self.repositories_list, "Search repositories...")
+    self.render_search_list(&self.repositories_list, "Search projects...")
   }
 
   fn render_forget_repository(&mut self, _cx: &mut Context<Self>) -> impl IntoElement {
-    self.render_search_list(&self.repositories_list, "Select repository to remove...")
+    self.render_search_list(&self.repositories_list, "Select project to remove...")
   }
 
   fn render_switch_branch(&mut self, _cx: &mut Context<Self>) -> impl IntoElement {
@@ -3936,16 +3936,16 @@ mod tests {
   fn open_repository_command_is_available_with_expected_metadata() {
     let command = CommandPaletteCommand::open_repository();
     assert_eq!(command.id, CommandPaletteCommandId::OpenRepository);
-    assert_eq!(command.name.as_ref(), "Open repository");
-    assert!(command.matches("open repo"));
+    assert_eq!(command.name.as_ref(), "Open project");
+    assert!(command.matches("open project"));
   }
 
   #[test]
   fn switch_repository_command_is_available_with_expected_metadata() {
     let command = CommandPaletteCommand::switch_repository();
     assert_eq!(command.id, CommandPaletteCommandId::SwitchRepository);
-    assert_eq!(command.name.as_ref(), "Switch repository");
-    assert!(command.matches("recent repository"));
+    assert_eq!(command.name.as_ref(), "Switch project");
+    assert!(command.matches("recent project"));
   }
 
   #[test]
@@ -3953,7 +3953,7 @@ mod tests {
     use super::CommandPaletteGroup;
     let command = CommandPaletteCommand::forget_repository();
     assert_eq!(command.id, CommandPaletteCommandId::ForgetRepository);
-    assert_eq!(command.name.as_ref(), "Remove repository from Reviu");
+    assert_eq!(command.name.as_ref(), "Remove project from Reviu");
     assert!(command.matches("remove"));
     assert!(command.matches("sidebar"));
     assert!(command.matches("recent"));
@@ -4613,18 +4613,18 @@ mod tests {
 
   #[test]
   fn the_weakest_word_decides_the_quality() {
-    // "repository" is in the name, "recent" only in the keywords.
+    // "project" is in the name, "recent" only in the keywords.
     assert_eq!(
       quality(
         &CommandPaletteCommand::switch_repository(),
-        "recent repository"
+        "recent project"
       ),
       Some(MatchQuality::Keyword)
     );
     assert_eq!(
       quality(
         &CommandPaletteCommand::switch_repository(),
-        "switch repository"
+        "switch project"
       ),
       Some(MatchQuality::NamePrefix)
     );

@@ -20,8 +20,8 @@ enum CheckoutRefusal {
 impl CheckoutRefusal {
   fn title(&self) -> SharedString {
     match self {
-      Self::NoRepository => "No repository open".into(),
-      Self::OtherRepository { .. } => "Another repository is open".into(),
+      Self::NoRepository => "No project open".into(),
+      Self::OtherRepository { .. } => "Another project is open".into(),
       Self::Unreachable => "GitHub did not answer".into(),
     }
   }
@@ -35,7 +35,7 @@ impl CheckoutRefusal {
         format!("Reviu has {open} open, and #{number} belongs to {owner}/{repo}.")
       }
       Self::OtherRepository { open: None } => {
-        format!("The open repository is not {owner}/{repo}.")
+        format!("The open project is not {owner}/{repo}.")
       }
       Self::Unreachable => format!("Reviu could not read #{number} on GitHub."),
     }
@@ -55,7 +55,7 @@ impl SessionPage {
     });
   }
 
-  /// The link named a pull request of the open repository: find its branch and
+  /// The link named a pull request of the open project: find its branch and
   /// offer the checkout. Anything else belongs to github.com.
   pub(crate) fn offer_pull_request_checkout(
     &mut self,

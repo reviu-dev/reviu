@@ -1,4 +1,4 @@
-//! Which repository the shell works on: switch, open and forget.
+//! Which project the shell works on: switch, open and forget.
 
 use super::*;
 
@@ -15,7 +15,7 @@ impl SessionPage {
     // A folder that is not a repository would be remembered as the one to open
     // on the next launch, so it is refused before anything is stored.
     let Some(repo_root) = git::discover_repository_root(&repo_root) else {
-      return Err("This folder is not a git repository.".into());
+      return Err("This project is not a Git repository yet.".into());
     };
     let shown_elsewhere = self
       .agent_chat_view
@@ -106,7 +106,7 @@ impl SessionPage {
     cx: &mut Context<Self>,
   ) -> Result<(), SharedString> {
     if self.agent_turn_in_flight_for_repo(&repo_root, cx) {
-      return Err("Wait for the agent to finish before forgetting this repository.".into());
+      return Err("Wait for the agent to finish before forgetting this project.".into());
     }
     let forgetting_active_checkout = self
       .agent_chat_view
@@ -131,7 +131,7 @@ impl SessionPage {
     cx: &mut Context<Self>,
   ) -> Result<(), SharedString> {
     if self.agent_turn_in_flight_for_repo(&repo_root, cx) {
-      return Err("Wait for the agent to finish before forgetting this repository.".into());
+      return Err("Wait for the agent to finish before forgetting this project.".into());
     }
 
     ConfigStore::forget_recent_repository(&repo_root);
@@ -193,7 +193,7 @@ impl SessionPage {
       files: false,
       directories: true,
       multiple: false,
-      prompt: Some("Select a repository".into()),
+      prompt: Some("Select a project".into()),
     });
 
     cx.spawn_in(window, async move |this, cx| {
@@ -592,7 +592,7 @@ mod tests {
       forget
         .expect_err("forgetting a repo with a running agent is refused")
         .as_ref(),
-      "Wait for the agent to finish before forgetting this repository."
+      "Wait for the agent to finish before forgetting this project."
     );
     assert!(
       ConfigStore::load_recent_repositories()
@@ -689,7 +689,7 @@ mod tests {
 
     let row = cx
       .debug_bounds(OPEN_REPOSITORY_ROW_DEBUG_SELECTOR)
-      .expect("the sidebar offers to open a repository");
+      .expect("the sidebar offers to open a project");
     let picked = plain_folder.clone();
     cx.simulate_click(row.center(), gpui::Modifiers::default());
     cx.simulate_path_prompt_response(move |_| Some(vec![picked]));
@@ -704,7 +704,7 @@ mod tests {
     assert!(
       cx.debug_bounds(OPEN_REPOSITORY_ROW_DEBUG_SELECTOR)
         .is_some(),
-      "the sidebar still asks for a repository"
+      "the sidebar still asks for a project"
     );
     assert!(
       ConfigStore::load_recent_repositories().is_empty(),
@@ -729,20 +729,20 @@ mod tests {
     });
     assert_eq!(
       refused.expect_err("a plain folder is refused").as_ref(),
-      "This folder is not a git repository."
+      "This project is not a Git repository yet."
     );
     page.read_with(cx, |page, _| {
       assert_eq!(
         page.fallback_repo.as_deref(),
         Some(repo.path.as_path()),
-        "the shell stays on the repository it had"
+        "the shell stays on the project it had"
       );
     });
     assert!(
       !ConfigStore::load_recent_repositories()
         .iter()
         .any(|recent| recent.path == plain_folder),
-      "a refused folder must not come back as the repository to open next launch"
+      "a refused folder must not come back as the project to open next launch"
     );
 
     // A directory inside a repository is accepted, as its root.
@@ -819,7 +819,7 @@ mod tests {
         .expect_err("missing repository")
     });
 
-    assert!(error.contains("Repository not found"), "{error}");
+    assert!(error.contains("Project not found"), "{error}");
     page.read_with(cx, |page, _| {
       assert_eq!(page.fallback_repo.as_deref(), Some(repo.path.as_path()));
     });
@@ -860,7 +860,7 @@ mod tests {
       let hidden = recent
         .iter()
         .find(|repo| !visible.contains(repo))
-        .expect("a hidden recent repository")
+        .expect("a hidden recent project")
         .clone();
       let fallback = page.fallback_repo.as_ref().expect("fallback repo");
       let removed = visible

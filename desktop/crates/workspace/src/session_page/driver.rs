@@ -227,7 +227,7 @@ impl SessionPage {
       ),
       DriverGitAction::InteractiveRebase { target, actions } => {
         let Some(repo_root) = self.checkout_root(cx) else {
-          return Err("No repository selected.".into());
+          return Err("No project selected.".into());
         };
         let target = driver_interactive_rebase_target(target);
         let preview = interactive_rebase::prepare_commits(&repo_root, &target)?;

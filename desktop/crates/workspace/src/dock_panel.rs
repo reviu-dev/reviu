@@ -3694,7 +3694,7 @@ impl DockPanel {
         if self.repo_root.is_some() {
           "No changes"
         } else {
-          "No repository"
+          "No project"
         },
       ))
       .into_any_element()

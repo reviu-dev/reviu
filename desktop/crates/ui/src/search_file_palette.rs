@@ -18,7 +18,7 @@ use gpui_component::{
 };
 
 const MAX_SEARCH_RESULTS: usize = 100;
-const INITIAL_REPOSITORY_RESULTS_LIMIT: usize = 100;
+const INITIAL_PROJECT_RESULTS_LIMIT: usize = 100;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum SearchFileGroup {
@@ -33,7 +33,7 @@ impl SearchFileGroup {
     match self {
       Self::Changed => "Changed",
       Self::Recent => "Recent",
-      Self::Repository => "Repository",
+      Self::Repository => "Project",
     }
   }
 
@@ -218,7 +218,7 @@ fn build_initial_sections(files: &[Arc<SearchFileEntry>]) -> Vec<SearchFileSecti
     .into_iter()
     .filter_map(|group| {
       let limit = match group {
-        SearchFileGroup::Repository => INITIAL_REPOSITORY_RESULTS_LIMIT,
+        SearchFileGroup::Repository => INITIAL_PROJECT_RESULTS_LIMIT,
         SearchFileGroup::Changed | SearchFileGroup::Recent => usize::MAX,
       };
       let files = files
@@ -544,7 +544,7 @@ impl ListDelegate for SearchFileListDelegate {
         .text_sm()
         .text_color(cx.theme().muted_foreground)
         .child(Spinner::new().small())
-        .child("Loading repository files...")
+        .child("Loading project files...")
         .into_any_element();
     }
     palette_empty(cx)
@@ -733,7 +733,7 @@ impl Render for SearchFilePalette {
               .text_xs()
               .text_color(theme.muted_foreground)
               .child(Spinner::new().small())
-              .child("Refreshing repository files..."),
+              .child("Refreshing project files..."),
           )
         },
       )
@@ -766,7 +766,7 @@ mod tests {
     assert_eq!(sections.len(), 3);
     assert_eq!(sections[0].label.as_deref(), Some("Changed"));
     assert_eq!(sections[1].label.as_deref(), Some("Recent"));
-    assert_eq!(sections[2].label.as_deref(), Some("Repository"));
+    assert_eq!(sections[2].label.as_deref(), Some("Project"));
   }
 
   #[test]
@@ -816,7 +816,7 @@ mod tests {
     assert_eq!(rank_file_matches(&files, "file").len(), MAX_SEARCH_RESULTS);
     assert_eq!(
       build_initial_sections(&files)[0].files.len(),
-      INITIAL_REPOSITORY_RESULTS_LIMIT
+      INITIAL_PROJECT_RESULTS_LIMIT
     );
   }
 

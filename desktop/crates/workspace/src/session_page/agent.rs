@@ -4520,7 +4520,7 @@ mod tests {
       ConfigStore::load_recent_repositories()
         .into_iter()
         .any(|recent| recent.path == repo.path),
-      "the hidden repo remains in Recent Repositories"
+      "the hidden project remains in Recent Projects"
     );
     extra_repos.push(overflow);
   }

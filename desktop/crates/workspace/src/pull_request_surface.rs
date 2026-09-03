@@ -152,7 +152,7 @@ impl PullRequestSurfaceHandle {
   }
 
   /// Shows the pull request panel when the link names the pull request of the
-  /// branch in the open repository, and takes the diff to the review comment it
+  /// branch in the open project, and takes the diff to the review comment it
   /// named. Returns whether it did.
   pub(crate) fn show(
     owner: &str,
