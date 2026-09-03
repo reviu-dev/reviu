@@ -17,7 +17,7 @@ use editor::{ReviewCommentMode, ReviewCommentSide};
 use gpui::AnimationExt as _;
 use gpui::{
   AnyElement, AnyWindowHandle, App, ClipboardItem, Context, Entity, FocusHandle, Focusable,
-  PathPromptOptions, Render, SharedString, Task, Window, div, prelude::*, px,
+  PathPromptOptions, Render, SharedString, Task, Window, div, img, prelude::*, px,
 };
 use gpui_component::{
   ActiveTheme as _, Disableable as _, Sizable as _,
@@ -92,8 +92,9 @@ use crate::{
 use ui::{
   Button, ButtonVariants as _, CommandPalette, CommandPaletteAction, CommandPaletteCommand,
   CommandPaletteConfig, CommandPaletteHandler, CommandPaletteInitialScreen, CommandPalettePage,
-  CommandPaletteRepository, ConfirmDialog, SearchFileEntry, SearchFileGroup, SearchFileHandler,
-  StatusThemeExt as _, UiIconName, WindowExt as _,
+  CommandPaletteRepository, ConfirmDialog, FILE_ICON_SIZE_PX, SearchFileEntry, SearchFileGroup,
+  SearchFileHandler, StatusThemeExt as _, UiIconName, WindowExt as _,
+  file_icon_path_for_path_with_theme,
 };
 
 /// How long a browse waits before it loads. Long enough to cross a list without

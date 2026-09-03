@@ -369,7 +369,61 @@ impl SessionPage {
       .unwrap_or_else(|| "New chat".to_string())
   }
 
+  fn center_chat_tab_icon(&self, tab: &CenterTab, cx: &App) -> gpui_component::Icon {
+    if let Some(id) = tab.conversation_id() {
+      if let Some(icon) = self
+        .agent_chat_view
+        .iter()
+        .chain(self.background_chat_panels.iter().map(|(_, panel)| panel))
+        .find_map(|panel| {
+          let panel = panel.read(cx);
+          (panel.current_conversation().id == id)
+            .then(|| agent_chat_panel::backend_icon(panel.backend_kind()))
+        })
+      {
+        return icon;
+      }
+      if let Some(meta) = self.conversation_meta(id, cx) {
+        return agent_chat_panel::backend_icon(&meta.agent_id);
+      }
+    }
+
+    self
+      .agent_chat_view
+      .as_ref()
+      .map(|panel| agent_chat_panel::backend_icon(panel.read(cx).backend_kind()))
+      .unwrap_or_else(|| agent_chat_panel::backend_icon(&agent_chat_panel::default_agent_id()))
+  }
+
+  fn center_file_tab_icon(&self, path: &Path, cx: &App) -> AnyElement {
+    let theme = cx.theme().clone();
+    file_icon_path_for_path_with_theme(path, &theme)
+      .map(|path| img(path).size(px(FILE_ICON_SIZE_PX)).into_any_element())
+      .unwrap_or_else(|| {
+        gpui_component::Icon::new(gpui_component::IconName::File)
+          .size_3()
+          .text_color(theme.muted_foreground)
+          .into_any_element()
+      })
+  }
+
+  fn center_tab_debug_selector(tab: &CenterTab) -> String {
+    let path_name = || {
+      tab
+        .path()
+        .map(|path| path.to_string_lossy().replace(['/', '\\', ':'], "_"))
+        .unwrap_or_default()
+    };
+    match tab.kind {
+      CenterTabKind::Chat => "session-center-tab-chat".to_string(),
+      CenterTabKind::File => format!("session-center-tab-file-{}", path_name()),
+      CenterTabKind::Diff => format!("session-center-tab-diff-{}", path_name()),
+      CenterTabKind::InteractiveRebase => "session-center-tab-rebase".to_string(),
+    }
+  }
+
   pub(super) fn render_center_tabs(&self, cx: &mut Context<Self>) -> AnyElement {
+    let theme = cx.theme().clone();
     let tabs = self.center_tabs_for_navigation();
     let selected_tab = self.selected_center_tab_from(&tabs);
     let selected_index = tabs
@@ -407,7 +461,11 @@ impl SessionPage {
       let (label, icon) = match tab.kind {
         CenterTabKind::Chat => (
           self.center_chat_tab_label(tab, cx),
-          gpui_component::Icon::new(UiIconName::MessageCircle),
+          self
+            .center_chat_tab_icon(tab, cx)
+            .size_3()
+            .text_color(theme.muted_foreground)
+            .into_any_element(),
         ),
         CenterTabKind::File | CenterTabKind::Diff => {
           let Some(path) = tab.path() else {
@@ -429,18 +487,52 @@ impl SessionPage {
           } else {
             format!("{prefix}{name}")
           };
-          (
-            label,
-            gpui_component::Icon::new(gpui_component::IconName::File),
-          )
+          (label, self.center_file_tab_icon(path, cx))
         }
         CenterTabKind::InteractiveRebase => (
           "Interactive rebase".to_string(),
-          gpui_component::Icon::new(UiIconName::GitMerge),
+          gpui_component::Icon::new(UiIconName::GitMerge)
+            .size_3()
+            .text_color(theme.muted_foreground)
+            .into_any_element(),
         ),
       };
 
-      let mut tab_element = Tab::new().label(label).icon(icon);
+      let accessibility_label = label.clone();
+      let tab_debug_selector = Self::center_tab_debug_selector(tab);
+      let icon_debug_selector = match tab.kind {
+        CenterTabKind::Chat => "session-center-tab-agent-icon",
+        CenterTabKind::File | CenterTabKind::Diff => "session-center-tab-file-icon",
+        CenterTabKind::InteractiveRebase => "session-center-tab-rebase-icon",
+      };
+      let tab_content = h_flex()
+        .debug_selector(move || tab_debug_selector.clone())
+        .h(px(22.0))
+        .min_w_0()
+        .items_center()
+        .gap_1p5()
+        .rounded(px(6.0))
+        .px_2()
+        .hover(|this| this.bg(theme.secondary_hover))
+        .child(
+          div()
+            .debug_selector(move || icon_debug_selector.to_string())
+            .flex_shrink_0()
+            .child(icon),
+        )
+        .child(
+          div()
+            .debug_selector(|| "session-center-tab-label".to_string())
+            .max_w(px(180.0))
+            .min_w_0()
+            .truncate()
+            .text_xs()
+            .child(label),
+        );
+
+      let mut tab_element = Tab::new()
+        .aria_label(accessibility_label)
+        .child(tab_content);
       if tab.is_closeable() {
         let close_tab = tab.clone();
         let close_label = format!(
@@ -3084,6 +3176,37 @@ mod tests {
       std::fs::read_to_string(repo.path.join("a.txt")).expect("read file"),
       "v1\n"
     );
+  }
+
+  #[gpui::test]
+  async fn center_tabs_show_chat_agent_and_file_icons(cx: &mut TestAppContext) {
+    let repo = TempRepo::init("session-render-center-tab-icons");
+    commit_text_file(&repo.path, Path::new("package.json"), "{}\n", "initial");
+
+    let (page, cx) = add_session_page_window(repo.path.clone(), cx);
+    cx.run_until_parked();
+
+    page.update_in(cx, |page, window, cx| {
+      page.open_file(
+        PathBuf::from("package.json"),
+        None,
+        None,
+        OpenIntent::Open,
+        window,
+        cx,
+      );
+    });
+    await_open_file(&page, cx).await;
+    cx.run_until_parked();
+
+    assert!(cx.debug_bounds("session-center-tab-chat").is_some());
+    assert!(cx.debug_bounds("session-center-tab-agent-icon").is_some());
+    assert!(
+      cx.debug_bounds("session-center-tab-file-package.json")
+        .is_some()
+    );
+    assert!(cx.debug_bounds("session-center-tab-file-icon").is_some());
+    assert!(cx.debug_bounds("session-center-tab-label").is_some());
   }
 
   #[gpui::test]
