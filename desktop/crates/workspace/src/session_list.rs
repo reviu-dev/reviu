@@ -1,6 +1,6 @@
 //! The projects sidebar: pick, create and delete conversations by repository.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 
@@ -72,6 +72,19 @@ pub(crate) fn session_row_title(meta: &ConversationMeta) -> SharedString {
 pub struct SessionRow {
   pub meta: ConversationMeta,
   pub repo_root: PathBuf,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum CheckoutKind {
+  Main,
+  Worktree { branch: String },
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct CheckoutRow {
+  kind: CheckoutKind,
+  title: SharedString,
+  subtitle: SharedString,
 }
 
 #[derive(Clone)]
@@ -151,7 +164,7 @@ pub struct SessionList {
   /// Worktree branch by conversation id, shown under the row.
   worktree_branches: HashMap<String, String>,
   /// Folded repo sections; folding IS the filter now.
-  collapsed_repos: std::collections::HashSet<PathBuf>,
+  collapsed_repos: HashSet<PathBuf>,
   /// Every tracked repo, in stable order: sections render from this, so an
   /// emptied repo keeps its header (and its compose button).
   section_order: Vec<PathBuf>,
@@ -169,7 +182,7 @@ impl SessionList {
       loading_id: None,
       statuses: HashMap::new(),
       worktree_branches: HashMap::new(),
-      collapsed_repos: std::collections::HashSet::new(),
+      collapsed_repos: HashSet::new(),
       section_order: Vec::new(),
       open_menu_repo: None,
       repo_header_bounds: HashMap::new(),
@@ -321,6 +334,51 @@ impl SessionList {
       }
     }
     section_repos
+  }
+
+  fn checkout_rows_for_repo(&self, repo_root: &Path) -> Vec<CheckoutRow> {
+    let mut rows = vec![CheckoutRow {
+      kind: CheckoutKind::Main,
+      title: "Main checkout".into(),
+      subtitle: "Default working tree".into(),
+    }];
+    let mut branches = Vec::new();
+    for row in self
+      .conversations
+      .iter()
+      .filter(|row| row.repo_root == repo_root)
+    {
+      let Some(branch) = self.worktree_branches.get(&row.meta.id) else {
+        continue;
+      };
+      if !branches.contains(branch) {
+        branches.push(branch.clone());
+      }
+    }
+    rows.extend(branches.into_iter().map(|branch| CheckoutRow {
+      kind: CheckoutKind::Worktree {
+        branch: branch.clone(),
+      },
+      title: branch.into(),
+      subtitle: "Worktree checkout".into(),
+    }));
+    rows
+  }
+
+  fn active_checkout_kind_for_repo(&self, repo_root: &Path) -> Option<CheckoutKind> {
+    let row = self
+      .conversations
+      .iter()
+      .find(|row| row.meta.id == self.current_id && row.repo_root == repo_root)?;
+    Some(
+      self
+        .worktree_branches
+        .get(&row.meta.id)
+        .map(|branch| CheckoutKind::Worktree {
+          branch: branch.clone(),
+        })
+        .unwrap_or(CheckoutKind::Main),
+    )
   }
 
   fn update_repo_header_bounds(&mut self, repo_root: PathBuf, bounds: Bounds<Pixels>) {
@@ -522,6 +580,62 @@ impl SessionList {
               .on_click(cx.listener(|_, _, _, cx| cx.stop_propagation()))
               .child(Self::render_options_button(options_repo, cx)),
           ),
+      )
+      .into_any_element()
+  }
+
+  fn render_checkout_row(
+    &self,
+    repo_root: &Path,
+    row: &CheckoutRow,
+    active: bool,
+    theme: &gpui_component::Theme,
+  ) -> gpui::AnyElement {
+    let selector = match &row.kind {
+      CheckoutKind::Main => format!("session-checkout-main-{}", repo_root.display()),
+      CheckoutKind::Worktree { branch } => {
+        format!("session-checkout-worktree-{}-{branch}", repo_root.display())
+      }
+    };
+    let icon = match row.kind {
+      CheckoutKind::Main => Icon::new(gpui_component::IconName::FolderOpen)
+        .size(px(12.))
+        .text_color(theme.muted_foreground)
+        .into_any_element(),
+      CheckoutKind::Worktree { .. } => Icon::new(UiIconName::GitBranch)
+        .size(px(12.))
+        .text_color(theme.muted_foreground)
+        .into_any_element(),
+    };
+
+    div()
+      .debug_selector(move || selector.clone())
+      .mx_2()
+      .ml_4()
+      .px_2()
+      .py_1p5()
+      .rounded(px(6.0))
+      .when(active, |this| this.bg(theme.secondary_active))
+      .child(
+        h_flex().items_center().gap_2().child(icon).child(
+          v_flex()
+            .min_w(px(0.0))
+            .gap_0p5()
+            .child(
+              div()
+                .text_xs()
+                .truncate()
+                .text_color(theme.foreground)
+                .child(row.title.clone()),
+            )
+            .child(
+              div()
+                .text_xs()
+                .truncate()
+                .text_color(theme.muted_foreground.opacity(0.75))
+                .child(row.subtitle.clone()),
+            ),
+        ),
       )
       .into_any_element()
   }
@@ -776,6 +890,7 @@ impl Render for SessionList {
       .border_color(theme.border)
       .child(
         div()
+          .debug_selector(|| "session-sidebar-projects-header".to_string())
           .text_xs()
           .font_weight(gpui::FontWeight::SEMIBOLD)
           .text_color(theme.muted_foreground)
@@ -817,6 +932,11 @@ impl Render for SessionList {
       if self.collapsed_repos.contains(section_repo) {
         continue;
       }
+      let active_checkout = self.active_checkout_kind_for_repo(section_repo);
+      for checkout in self.checkout_rows_for_repo(section_repo) {
+        let active = active_checkout.as_ref() == Some(&checkout.kind);
+        items.push(self.render_checkout_row(section_repo, &checkout, active, &theme));
+      }
       for (ix, row) in self
         .conversations
         .iter()
@@ -839,6 +959,7 @@ impl Render for SessionList {
             .get(&meta.id)
             .map(|branch| SharedString::from(branch.clone()));
           let id = meta.id.clone();
+          let selector_id = meta.id.clone();
           let delete_id = meta.id.clone();
           let title = session_row_title(meta);
           let preview = meta.preview.clone();
@@ -849,6 +970,7 @@ impl Render for SessionList {
 
           div()
             .id(("session-page-session-row", ix))
+            .debug_selector(move || format!("session-chat-row-{selector_id}"))
             .group(group_name.clone())
             .mx_2()
             .px_2()
@@ -1106,6 +1228,95 @@ mod tests {
       },
       repo_root: PathBuf::from("/repo"),
     }
+  }
+
+  #[gpui::test]
+  async fn project_checkout_rows_render_above_existing_chats(cx: &mut gpui::TestAppContext) {
+    cx.update(gpui_component::init);
+    let list = cx.new(|_| SessionList::new());
+    let mounted = list.clone();
+    let (_root, cx) =
+      cx.add_window_view(move |window, cx| gpui_component::Root::new(mounted.clone(), window, cx));
+    let repo = PathBuf::from("/repo");
+    let mut worktree_branches = HashMap::new();
+    worktree_branches.insert("worktree-chat".to_string(), "feature/sidebar".to_string());
+
+    list.update(cx, |list, cx| {
+      let mut main = meta("main-chat", 2);
+      main.repo_root = repo.clone();
+      let mut worktree = meta("worktree-chat", 1);
+      worktree.repo_root = repo.clone();
+      list.set_section_order(vec![repo.clone()], cx);
+      list.set_conversations(vec![main, worktree], "worktree-chat".into(), cx);
+      list.set_worktree_branches(worktree_branches, cx);
+    });
+    cx.run_until_parked();
+
+    assert!(cx.debug_bounds("session-sidebar-projects-header").is_some());
+    assert!(cx.debug_bounds("session-checkout-main-/repo").is_some());
+    assert!(
+      cx.debug_bounds("session-checkout-worktree-/repo-feature/sidebar")
+        .is_some()
+    );
+    assert!(cx.debug_bounds("session-chat-row-main-chat").is_some());
+    assert!(cx.debug_bounds("session-chat-row-worktree-chat").is_some());
+
+    let selected = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+    let seen = selected.clone();
+    cx.update(|_, cx| {
+      cx.subscribe(&list, move |_, event: &SessionListEvent, _| {
+        if let SessionListEvent::Selected { id } = event {
+          seen.borrow_mut().push(id.clone());
+        }
+      })
+      .detach();
+    });
+
+    let main_chat = cx
+      .debug_bounds("session-chat-row-main-chat")
+      .expect("main chat row");
+    cx.simulate_click(main_chat.center(), gpui::Modifiers::default());
+    cx.run_until_parked();
+
+    assert_eq!(selected.borrow().as_slice(), &["main-chat".to_string()]);
+  }
+
+  #[test]
+  fn checkout_rows_follow_known_worktree_branches() {
+    let mut list = SessionList::new();
+    list.conversations = vec![meta("main-chat", 2), meta("worktree-chat", 1)];
+    list.current_id = "main-chat".into();
+    list
+      .worktree_branches
+      .insert("worktree-chat".to_string(), "feature/sidebar".to_string());
+    assert_eq!(
+      list.checkout_rows_for_repo(Path::new("/repo")),
+      vec![
+        CheckoutRow {
+          kind: CheckoutKind::Main,
+          title: "Main checkout".into(),
+          subtitle: "Default working tree".into(),
+        },
+        CheckoutRow {
+          kind: CheckoutKind::Worktree {
+            branch: "feature/sidebar".to_string(),
+          },
+          title: "feature/sidebar".into(),
+          subtitle: "Worktree checkout".into(),
+        },
+      ]
+    );
+    assert_eq!(
+      list.active_checkout_kind_for_repo(Path::new("/repo")),
+      Some(CheckoutKind::Main)
+    );
+    list.current_id = "worktree-chat".into();
+    assert_eq!(
+      list.active_checkout_kind_for_repo(Path::new("/repo")),
+      Some(CheckoutKind::Worktree {
+        branch: "feature/sidebar".to_string(),
+      })
+    );
   }
 
   #[gpui::test]
