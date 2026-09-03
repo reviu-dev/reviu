@@ -120,7 +120,7 @@ pub(super) async fn await_editor_diff(
   cx: &mut gpui::VisualTestContext,
 ) {
   loop {
-    let Some(editor) = page.read_with(cx, |page, _| page.editor.clone()) else {
+    let Some(editor) = page.read_with(cx, |page, _| page.active_editor()) else {
       return;
     };
     let (bases_task, diff_task, git_task) = editor.update(cx, |editor, _| {

@@ -295,14 +295,6 @@ pub struct SessionPage {
   active_center_tab: Option<CenterTab>,
   editor_tab: Option<CenterTab>,
   editor_states: HashMap<CenterTab, CenterEditorState>,
-  editor_file_modified: Option<SystemTime>,
-  editor: Option<Entity<Editor>>,
-  binary_preview: Option<BinaryPreview>,
-  selected_file: Option<PathBuf>,
-  /// Set while the center shows a file as it was in a commit.
-  /// The centre shows a read-only snapshot instead of a working-tree file:
-  /// no staging, no hunk actions, no git status.
-  opened_snapshot: Option<OpenedSnapshot>,
   interactive_rebase_todo_view: Option<Entity<InteractiveRebaseTodoView>>,
   _interactive_rebase_task: Option<Task<()>>,
   pub(crate) _merge_base_task: Option<Task<()>>,
@@ -585,11 +577,6 @@ impl SessionPage {
       active_center_tab: Some(CenterTab::chat()),
       editor_tab: None,
       editor_states: HashMap::new(),
-      editor_file_modified: None,
-      editor: None,
-      binary_preview: None,
-      selected_file: None,
-      opened_snapshot: None,
       interactive_rebase_todo_view: None,
       _interactive_rebase_task: None,
       _merge_base_task: None,
@@ -1015,11 +1002,6 @@ impl SessionPage {
     self.active_center_tab = Some(CenterTab::chat());
     self.editor_tab = None;
     self.editor_states.clear();
-    self.editor_file_modified = None;
-    self.editor = None;
-    self.binary_preview = None;
-    self.selected_file = None;
-    self.opened_snapshot = None;
     self.open_file_task = None;
     self.open_file_generation = self.open_file_generation.wrapping_add(1);
     self.repo_snapshot.update(cx, |snapshot, cx| {

@@ -126,8 +126,7 @@ impl SessionPage {
       branch_status,
       status_entries,
       selected_entry: self
-        .selected_file
-        .as_deref()
+        .active_selected_file()
         .and_then(|path| status_entries.iter().find(|entry| entry.path == path)),
       commit_message,
     }
@@ -229,7 +228,7 @@ impl SessionPage {
     self
       .center_tabs
       .retain(|tab| tab.kind != CenterTabKind::InteractiveRebase);
-    if self.editor.is_some() {
+    if self.active_editor().is_some() {
       self.center = CenterView::Diff;
       self.active_center_tab = self.editor_tab.clone().or_else(|| {
         self
@@ -457,7 +456,7 @@ impl SessionPage {
   }
 
   pub(super) fn selected_status_entry(&self, cx: &App) -> Option<git::RepoStatusEntry> {
-    let path = self.selected_file.as_deref()?;
+    let path = self.active_selected_file()?;
     self
       .dock_panel
       .read(cx)
@@ -476,7 +475,7 @@ impl SessionPage {
       return Err("No file selected.".into());
     };
     // A conflicted file with markers left asks before being marked resolved.
-    let has_markers = self.editor.as_ref().is_none_or(|editor| {
+    let has_markers = self.active_editor().as_ref().is_none_or(|editor| {
       editor.read_with(cx, |editor, cx| editor.has_unresolved_conflict_markers(cx))
     });
     let changes_list = self.dock_panel.read(cx).changes_list();
@@ -741,7 +740,7 @@ mod tests {
 
   fn dirty_active_editor(page: &Entity<SessionPage>, cx: &mut gpui::VisualTestContext) {
     let editor = page
-      .read_with(cx, |page, _| page.editor.clone())
+      .read_with(cx, |page, _| page.active_editor())
       .expect("editor");
     editor.update(cx, |editor, cx| {
       editor.document.update(cx, |document, cx| {
@@ -1592,7 +1591,7 @@ mod tests {
     assert!(git::is_rebase_in_progress(&repo.path).expect("rebase state"));
     page.read_with(cx, |page, cx| {
       assert_eq!(page.center, CenterView::Diff);
-      assert_eq!(page.selected_file.as_deref(), Some(Path::new("a.txt")));
+      assert_eq!(page.active_selected_file(), Some(Path::new("a.txt")));
       assert!(page.interactive_rebase_todo_view.is_none());
       assert_eq!(page.dock_panel.read(cx).commit_message(cx), "feature work");
 
@@ -2085,7 +2084,7 @@ mod tests {
 
     // The conflict is a stop to resolve, not an error: the file is on screen.
     page.read_with(cx, |page, cx| {
-      assert_eq!(page.selected_file.as_deref(), Some(Path::new("a.txt")));
+      assert_eq!(page.active_selected_file(), Some(Path::new("a.txt")));
       assert_eq!(page.center, CenterView::Diff);
       // Git prepared the merge message; the box carries it.
       assert_eq!(

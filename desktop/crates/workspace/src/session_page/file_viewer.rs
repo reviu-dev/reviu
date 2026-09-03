@@ -260,7 +260,6 @@ impl SessionPage {
           editor.reveal_source_position(doc_line, doc_column, cx)
         });
       }
-      self.selected_file = Some(rel_path.clone());
       self.active_center_tab = Some(tab.clone());
       self.editor_tab = Some(tab.clone());
       self.record_recent_file(&repo_root, &rel_path);
@@ -349,8 +348,7 @@ impl SessionPage {
           &editor,
           |this, _editor, event: &EditorEvent, cx| match event {
             EditorEvent::Saved => {
-              this.editor_file_modified = this.active_worktree_file_modified(cx);
-              let file_modified = this.editor_file_modified;
+              let file_modified = this.active_worktree_file_modified(cx);
               if let Some(state) = this.active_editor_state_mut() {
                 state.file_modified = file_modified;
               }
@@ -400,13 +398,6 @@ impl SessionPage {
   }
 
   fn set_active_editor_state(&mut self, tab: CenterTab, state: CenterEditorState) {
-    if self.editor_tab.as_ref() == Some(&tab) {
-      self.selected_file = Some(state.selected_file.clone());
-      self.editor_file_modified = state.file_modified;
-      self.editor = state.editor.clone();
-      self.binary_preview = state.binary_preview.clone();
-      self.opened_snapshot = state.opened_snapshot.clone();
-    }
     self.editor_states.insert(tab, state);
   }
 
@@ -438,11 +429,6 @@ impl SessionPage {
 
   fn clear_active_editor_mirror(&mut self) {
     self.editor_tab = None;
-    self.editor_file_modified = None;
-    self.editor = None;
-    self.binary_preview = None;
-    self.selected_file = None;
-    self.opened_snapshot = None;
   }
 
   fn active_worktree_file_modified(&self, cx: &App) -> Option<SystemTime> {
@@ -940,7 +926,6 @@ impl SessionPage {
       let history = self.dock_panel.read(cx).history_list.clone();
       history.update(cx, |list, cx| list.set_opened(None, cx));
     }
-    self.opened_snapshot = None;
     true
   }
 
@@ -1825,7 +1810,7 @@ mod tests {
 
   fn dirty_active_editor(page: &Entity<SessionPage>, cx: &mut gpui::VisualTestContext, text: &str) {
     let editor = page
-      .read_with(cx, |page, _| page.editor.clone())
+      .read_with(cx, |page, _| page.active_editor())
       .expect("editor");
     editor.update(cx, |editor, cx| {
       editor.document.update(cx, |document, cx| {
@@ -1841,7 +1826,7 @@ mod tests {
   ) -> usize {
     page.read_with(cx, |page, cx| {
       page
-        .editor
+        .active_editor()
         .as_ref()
         .expect("editor")
         .read(cx)
@@ -1920,7 +1905,7 @@ mod tests {
       assert!(page.split_disabled(cx));
       assert_eq!(
         page
-          .editor
+          .active_editor()
           .as_ref()
           .expect("editor")
           .read(cx)
@@ -1956,7 +1941,7 @@ mod tests {
     page.read_with(cx, |page, cx| {
       assert_eq!(
         page
-          .editor
+          .active_editor()
           .as_ref()
           .expect("editor")
           .read(cx)
@@ -2074,7 +2059,7 @@ mod tests {
           CenterTab::diff(PathBuf::from("other.md"))
         ]
       );
-      assert_eq!(page.selected_file.as_deref(), Some(Path::new("other.md")));
+      assert_eq!(page.active_selected_file(), Some(Path::new("other.md")));
     });
 
     page.update_in(cx, |page, window, cx| {
@@ -2088,7 +2073,7 @@ mod tests {
     await_open_file(&page, cx).await;
 
     page.read_with(cx, |page, _| {
-      assert_eq!(page.selected_file.as_deref(), Some(Path::new("README.md")));
+      assert_eq!(page.active_selected_file(), Some(Path::new("README.md")));
       assert_eq!(
         page.center_tabs,
         vec![
@@ -2145,7 +2130,7 @@ mod tests {
     await_open_file(&page, cx).await;
     page.read_with(cx, |page, _| {
       assert_eq!(page.center, CenterView::Diff);
-      assert_eq!(page.selected_file.as_deref(), Some(Path::new("README.md")));
+      assert_eq!(page.active_selected_file(), Some(Path::new("README.md")));
       assert_eq!(
         page.center_tabs,
         vec![
@@ -2185,7 +2170,11 @@ mod tests {
     await_open_file(&page, cx).await;
     await_editor_diff(&page, cx).await;
     let worktree_editor = page.read_with(cx, |page, _| {
-      page.editor.as_ref().expect("worktree editor").entity_id()
+      page
+        .active_editor()
+        .as_ref()
+        .expect("worktree editor")
+        .entity_id()
     });
 
     let snapshot_tab = CenterTab::agent_snapshot(
@@ -2206,7 +2195,11 @@ mod tests {
     });
     await_open_file(&page, cx).await;
     let snapshot_editor = page.read_with(cx, |page, _| {
-      page.editor.as_ref().expect("snapshot editor").entity_id()
+      page
+        .active_editor()
+        .as_ref()
+        .expect("snapshot editor")
+        .entity_id()
     });
 
     page.read_with(cx, |page, _| {
@@ -2246,7 +2239,7 @@ mod tests {
       );
       assert!(
         page
-          .editor
+          .active_editor()
           .as_ref()
           .is_some_and(|editor| editor.read(cx).projection().is_some()),
         "the worktree diff tab keeps the live diff"
@@ -2373,7 +2366,11 @@ mod tests {
     });
     await_open_file(&page, cx).await;
     let first_editor = page.read_with(cx, |page, _| {
-      page.editor.as_ref().expect("first editor").entity_id()
+      page
+        .active_editor()
+        .as_ref()
+        .expect("first editor")
+        .entity_id()
     });
 
     page.update_in(cx, |page, window, cx| {
@@ -2387,7 +2384,11 @@ mod tests {
     });
     await_open_file(&page, cx).await;
     let second_editor = page.read_with(cx, |page, _| {
-      page.editor.as_ref().expect("second editor").entity_id()
+      page
+        .active_editor()
+        .as_ref()
+        .expect("second editor")
+        .entity_id()
     });
     assert_ne!(first_editor, second_editor);
 
@@ -2402,9 +2403,13 @@ mod tests {
     await_open_file(&page, cx).await;
 
     page.read_with(cx, |page, _| {
-      assert_eq!(page.selected_file.as_deref(), Some(Path::new("README.md")));
+      assert_eq!(page.active_selected_file(), Some(Path::new("README.md")));
       assert_eq!(
-        page.editor.as_ref().expect("restored editor").entity_id(),
+        page
+          .active_editor()
+          .as_ref()
+          .expect("restored editor")
+          .entity_id(),
         first_editor
       );
     });
@@ -2456,7 +2461,7 @@ mod tests {
 
     page.read_with(cx, |page, _| {
       assert_eq!(page.center, CenterView::Diff);
-      assert_eq!(page.selected_file.as_deref(), Some(Path::new("other.md")));
+      assert_eq!(page.active_selected_file(), Some(Path::new("other.md")));
       assert_eq!(
         page.center_tabs,
         vec![
@@ -2500,7 +2505,7 @@ mod tests {
       );
       assert!(
         page
-          .editor
+          .active_editor()
           .as_ref()
           .is_some_and(|editor| editor.read(cx).projection().is_none()),
         "plain file tabs do not show git diffs"
@@ -2534,7 +2539,7 @@ mod tests {
       );
       assert!(
         page
-          .editor
+          .active_editor()
           .as_ref()
           .is_some_and(|editor| editor.read(cx).projection().is_some()),
         "diff tabs show git diffs"
@@ -2558,7 +2563,7 @@ mod tests {
       );
       assert!(
         page
-          .editor
+          .active_editor()
           .as_ref()
           .is_some_and(|editor| editor.read(cx).projection().is_none()),
         "returning to the file tab hides git diffs again"
@@ -2603,7 +2608,7 @@ mod tests {
 
     page.read_with(cx, |page, _| {
       assert_eq!(page.center, CenterView::Diff);
-      assert_eq!(page.selected_file.as_deref(), Some(Path::new("README.md")));
+      assert_eq!(page.active_selected_file(), Some(Path::new("README.md")));
       assert_eq!(
         page.center_tabs,
         vec![
@@ -2621,7 +2626,7 @@ mod tests {
     page.read_with(cx, |page, _| {
       assert_eq!(page.center, CenterView::Conversation);
       assert_eq!(page.center_tabs, vec![CenterTab::chat()]);
-      assert!(page.selected_file.is_none());
+      assert!(page.active_selected_file().is_none());
     });
   }
 
@@ -2686,8 +2691,8 @@ mod tests {
     await_open_file(&page, cx).await;
 
     page.read_with(cx, |page, _| {
-      assert!(page.editor.is_some());
-      assert_eq!(page.selected_file, Some(PathBuf::from("README.md")));
+      assert!(page.active_editor().is_some());
+      assert_eq!(page.active_selected_file(), Some(Path::new("README.md")));
     });
 
     page.update_in(cx, |page, window, cx| {
@@ -2696,7 +2701,7 @@ mod tests {
     page.read_with(cx, |page, _| {
       assert_eq!(page.center, CenterView::Conversation);
       // Editor kept for instant reopen of the same file.
-      assert!(page.editor.is_some());
+      assert!(page.active_editor().is_some());
     });
   }
 
@@ -2733,7 +2738,7 @@ mod tests {
     );
     page.read_with(cx, |page, _| {
       assert_eq!(page.center, CenterView::Diff);
-      assert!(page.editor.is_some());
+      assert!(page.active_editor().is_some());
     });
 
     page.update_in(cx, |page, window, cx| {
@@ -2743,7 +2748,7 @@ mod tests {
 
     page.read_with(cx, |page, _| {
       assert_eq!(page.center, CenterView::Conversation);
-      assert!(page.editor.is_none());
+      assert!(page.active_editor().is_none());
     });
     assert_eq!(
       std::fs::read_to_string(repo.path.join("README.md")).expect("read file"),
@@ -2791,7 +2796,7 @@ mod tests {
         .is_some()
     );
     page.read_with(cx, |page, _| {
-      assert_eq!(page.selected_file, Some(PathBuf::from("README.md")));
+      assert_eq!(page.active_selected_file(), Some(Path::new("README.md")));
     });
 
     page.update_in(cx, |page, window, cx| {
@@ -2810,8 +2815,8 @@ mod tests {
 
     page.read_with(cx, |page, _| {
       assert_eq!(page.center, CenterView::Diff);
-      assert_eq!(page.selected_file, Some(PathBuf::from("other.md")));
-      assert!(page.editor.is_some());
+      assert_eq!(page.active_selected_file(), Some(Path::new("other.md")));
+      assert!(page.active_editor().is_some());
     });
     assert_eq!(
       std::fs::read_to_string(repo.path.join("README.md")).expect("read first file"),
@@ -2844,10 +2849,10 @@ mod tests {
     page.read_with(cx, |page, cx| {
       assert_eq!(page.center, CenterView::Diff);
       assert_eq!(
-        page.opened_snapshot,
-        Some(OpenedSnapshot::Commit(first.clone()))
+        page.active_opened_snapshot(),
+        Some(&OpenedSnapshot::Commit(first.clone()))
       );
-      let editor = page.editor.as_ref().expect("editor").read(cx);
+      let editor = page.active_editor().as_ref().expect("editor").read(cx);
       // A snapshot has no working-tree status, so it is walked change by change.
       assert!(page.selected_file_status(cx).is_none());
       // The commit content, not what the worktree holds now.
@@ -2868,8 +2873,8 @@ mod tests {
     await_open_file(&page, cx).await;
 
     page.read_with(cx, |page, cx| {
-      assert!(page.opened_snapshot.is_none());
-      let editor = page.editor.as_ref().expect("editor").read(cx);
+      assert!(page.active_opened_snapshot().is_none());
+      let editor = page.active_editor().as_ref().expect("editor").read(cx);
       let first_line = editor
         .document()
         .read(cx)
@@ -2944,7 +2949,7 @@ mod tests {
 
     // Whole file: every document line is visible, nothing is folded away.
     let visible_and_total = |page: &SessionPage, cx: &App| {
-      let editor = page.editor.as_ref().expect("editor").read(cx);
+      let editor = page.active_editor().as_ref().expect("editor").read(cx);
       let projection = editor.projection().expect("projection");
       (
         projection.visible_doc_lines.len(),
@@ -2953,7 +2958,7 @@ mod tests {
     };
 
     page.read_with(cx, |page, cx| {
-      let editor = page.editor.as_ref().expect("editor").read(cx);
+      let editor = page.active_editor().as_ref().expect("editor").read(cx);
       assert_eq!(editor.diff_view_mode(), DiffViewMode::Inline);
       assert!(page.split_disabled(cx));
       let (visible, total) = visible_and_total(page, cx);
@@ -2975,7 +2980,7 @@ mod tests {
     await_editor_diff(&page, cx).await;
 
     page.read_with(cx, |page, cx| {
-      let editor = page.editor.as_ref().expect("editor").read(cx);
+      let editor = page.active_editor().as_ref().expect("editor").read(cx);
       assert_eq!(editor.diff_view_mode(), DiffViewMode::Split);
       assert!(!page.split_disabled(cx));
       let (visible, total) = visible_and_total(page, cx);
@@ -3039,7 +3044,7 @@ mod tests {
     await_editor_diff(&page, cx).await;
 
     let visible_and_total = |page: &SessionPage, cx: &App| {
-      let editor = page.editor.as_ref().expect("editor").read(cx);
+      let editor = page.active_editor().as_ref().expect("editor").read(cx);
       let projection = editor.projection().expect("projection");
       (
         projection.visible_doc_lines.len(),
@@ -3047,7 +3052,7 @@ mod tests {
       )
     };
     page.read_with(cx, |page, cx| {
-      let editor = page.editor.as_ref().expect("editor").read(cx);
+      let editor = page.active_editor().as_ref().expect("editor").read(cx);
       assert!(!editor.is_unmerged(), "a clean file is read as a diff");
       let (visible, total) = visible_and_total(page, cx);
       assert_eq!(visible, total, "and a file without changes shows in full");
@@ -3064,7 +3069,7 @@ mod tests {
     await_editor_diff(&page, cx).await;
 
     page.read_with(cx, |page, cx| {
-      let editor = page.editor.as_ref().expect("editor").read(cx);
+      let editor = page.active_editor().as_ref().expect("editor").read(cx);
       assert!(
         editor.is_unmerged(),
         "the file the merge just broke is read whole, without reopening it"
@@ -3100,7 +3105,7 @@ mod tests {
     page.read_with(cx, |page, cx| {
       assert_eq!(
         page
-          .editor
+          .active_editor()
           .as_ref()
           .expect("editor")
           .read(cx)
@@ -3123,7 +3128,7 @@ mod tests {
     page.read_with(cx, |page, cx| {
       assert_eq!(
         page
-          .editor
+          .active_editor()
           .as_ref()
           .expect("editor")
           .read(cx)
@@ -3139,7 +3144,7 @@ mod tests {
       assert!(crate::config::AppSettings::get(cx).split_diff_view);
       assert_eq!(
         page
-          .editor
+          .active_editor()
           .as_ref()
           .expect("editor")
           .read(cx)
@@ -3169,7 +3174,7 @@ mod tests {
     page.read_with(cx, |page, cx| {
       assert_eq!(
         page
-          .editor
+          .active_editor()
           .as_ref()
           .expect("editor")
           .read(cx)
@@ -3187,7 +3192,7 @@ mod tests {
     page.read_with(cx, |page, cx| {
       assert_eq!(
         page
-          .editor
+          .active_editor()
           .as_ref()
           .expect("editor")
           .read(cx)
@@ -3206,7 +3211,7 @@ mod tests {
     page.read_with(cx, |page, cx| {
       assert_eq!(
         page
-          .editor
+          .active_editor()
           .as_ref()
           .expect("editor")
           .read(cx)

@@ -398,11 +398,11 @@ impl SessionPage {
       );
 
     for tab in &tabs {
-      let dirty = self.editor_tab.as_ref() == Some(tab)
-        && matches!(tab.kind, CenterTabKind::File | CenterTabKind::Diff)
+      let dirty = matches!(tab.kind, CenterTabKind::File | CenterTabKind::Diff)
         && self
-          .editor
-          .as_ref()
+          .editor_states
+          .get(tab)
+          .and_then(|state| state.editor.as_ref())
           .is_some_and(|editor| editor.read(cx).is_dirty);
       let (label, icon) = match tab.kind {
         CenterTabKind::Chat => (
@@ -503,8 +503,7 @@ impl SessionPage {
       ),
       CenterView::Diff => {
         let file = self
-          .selected_file
-          .as_deref()
+          .active_selected_file()
           .map(|path| path.to_string_lossy().into_owned())
           .unwrap_or_default();
         // The conversation stays alongside the diff until the reviewer hides it.
@@ -1657,7 +1656,7 @@ mod tests {
       assert!(crate::config::AppSettings::get(cx).split_diff_view);
       assert_eq!(
         page
-          .editor
+          .active_editor()
           .as_ref()
           .expect("editor")
           .read(cx)
@@ -1749,7 +1748,7 @@ mod tests {
       assert!(page.split_disabled(cx));
       assert_eq!(
         page
-          .editor
+          .active_editor()
           .as_ref()
           .expect("editor")
           .read(cx)
@@ -1853,7 +1852,7 @@ mod tests {
     });
     await_open_file(&page, cx).await;
     page.read_with(cx, |page, cx| {
-      let editor = page.editor.as_ref().expect("editor").read(cx);
+      let editor = page.active_editor().as_ref().expect("editor").read(cx);
       let first_line = editor
         .document()
         .read(cx)
@@ -1869,8 +1868,8 @@ mod tests {
     });
     cx.run_until_parked();
     page.read_with(cx, |page, _| {
-      assert!(page.editor.is_none());
-      assert!(page.selected_file.is_none());
+      assert!(page.active_editor().is_none());
+      assert!(page.active_selected_file().is_none());
     });
 
     // The same path now reads the pinned worktree's file, and the dock lists
@@ -1887,7 +1886,7 @@ mod tests {
     await_open_file(&page, cx).await;
     await_editor_diff(&page, cx).await;
     page.read_with(cx, |page, cx| {
-      let editor = page.editor.as_ref().expect("editor").read(cx);
+      let editor = page.active_editor().as_ref().expect("editor").read(cx);
       let first_line = editor
         .document()
         .read(cx)
@@ -1984,7 +1983,7 @@ mod tests {
     cx.run_until_parked();
     assert!(cx.debug_bounds(ANNOTATION_COUNTER_DEBUG_SELECTOR).is_none());
     page.read_with(cx, |page, cx| {
-      let editor = page.editor.as_ref().expect("editor").read(cx);
+      let editor = page.active_editor().as_ref().expect("editor").read(cx);
       assert!(editor.highlighted_hunk_group_id(cx).is_none());
       assert!(editor.active_hunk_group_id(cx).is_some());
     });
@@ -2027,7 +2026,7 @@ mod tests {
     cx.run_until_parked();
     assert!(cx.debug_bounds(ANNOTATION_COUNTER_DEBUG_SELECTOR).is_some());
     page.read_with(cx, |page, cx| {
-      let editor = page.editor.as_ref().expect("editor").read(cx);
+      let editor = page.active_editor().as_ref().expect("editor").read(cx);
       assert!(editor.highlighted_hunk_group_id(cx).is_none());
     });
   }
@@ -2399,7 +2398,7 @@ mod tests {
       assert!(!page.hide_whitespace);
       assert!(
         !page
-          .editor
+          .active_editor()
           .as_ref()
           .expect("editor")
           .read(cx)
@@ -2417,7 +2416,7 @@ mod tests {
       assert!(page.hide_whitespace);
       assert!(
         page
-          .editor
+          .active_editor()
           .as_ref()
           .expect("editor")
           .read(cx)
@@ -2435,7 +2434,7 @@ mod tests {
       assert!(page.hide_whitespace);
       assert!(
         page
-          .editor
+          .active_editor()
           .as_ref()
           .expect("editor")
           .read(cx)
@@ -2466,7 +2465,7 @@ mod tests {
       assert!(page.hide_whitespace);
       assert!(
         page
-          .editor
+          .active_editor()
           .as_ref()
           .expect("editor")
           .read(cx)
@@ -2504,7 +2503,7 @@ mod tests {
     cx.run_until_parked();
     page.read_with(cx, |page, cx| {
       let state = page
-        .editor
+        .active_editor()
         .as_ref()
         .expect("editor")
         .read(cx)
@@ -2517,7 +2516,7 @@ mod tests {
     cx.run_until_parked();
     page.read_with(cx, |page, cx| {
       let state = page
-        .editor
+        .active_editor()
         .as_ref()
         .expect("editor")
         .read(cx)
@@ -2532,7 +2531,7 @@ mod tests {
       assert!(page.hide_whitespace);
       assert!(
         page
-          .editor
+          .active_editor()
           .as_ref()
           .expect("editor")
           .read(cx)
@@ -2573,7 +2572,7 @@ mod tests {
 
     page.update_in(cx, |page, window, cx| {
       assert!(
-        page.selected_file.is_some(),
+        page.active_selected_file().is_some(),
         "walking the list shows what the row holds"
       );
       assert!(
@@ -2592,8 +2591,8 @@ mod tests {
     cx.simulate_keystrokes("enter");
     cx.run_until_parked();
     page.update_in(cx, |page, window, cx| {
-      assert_eq!(page.selected_file.as_deref(), Some(Path::new("b.txt")));
-      let editor = page.editor.clone().expect("editor");
+      assert_eq!(page.active_selected_file(), Some(Path::new("b.txt")));
+      let editor = page.active_editor().expect("editor");
       assert!(
         editor.read(cx).focus_handle(cx).is_focused(window),
         "Enter is the gesture that hands the keyboard over"
@@ -2625,7 +2624,7 @@ mod tests {
     cx.run_until_parked();
     page.read_with(cx, |page, _| {
       assert!(
-        page.selected_file.is_none(),
+        page.active_selected_file().is_none(),
         "a row crossed on the way is not a row to load"
       );
     });
@@ -2635,7 +2634,7 @@ mod tests {
     cx.run_until_parked();
     page.read_with(cx, |page, _| {
       assert_eq!(
-        page.selected_file.as_deref(),
+        page.active_selected_file(),
         Some(Path::new("b.txt")),
         "the row it stopped on is the one that loads"
       );
@@ -3104,7 +3103,7 @@ mod tests {
     let find_open = |page: &Entity<SessionPage>, cx: &mut gpui::VisualTestContext| {
       page.read_with(cx, |page, cx| {
         page
-          .editor
+          .active_editor()
           .as_ref()
           .expect("editor")
           .read(cx)
@@ -3121,7 +3120,7 @@ mod tests {
 
     // Escape closes the search, and the file stays open.
     page.update_in(cx, |page, window, cx| {
-      let editor = page.editor.clone().expect("editor");
+      let editor = page.active_editor().expect("editor");
       editor.update(cx, |editor, cx| {
         editor::close_find(editor, &editor::CloseFind, window, cx)
       });
@@ -3130,7 +3129,7 @@ mod tests {
     assert!(!find_open(&page, cx));
     page.read_with(cx, |page, _| {
       assert_eq!(page.center, CenterView::Diff);
-      assert!(page.selected_file.is_some());
+      assert!(page.active_selected_file().is_some());
     });
 
     // With no search left to close, escape closes the file.
@@ -3180,7 +3179,7 @@ mod tests {
 
     // With a selection, the file and its text are what travels to the agent.
     page.update_in(cx, |page, window, cx| {
-      let editor = page.editor.clone().expect("editor");
+      let editor = page.active_editor().expect("editor");
       editor.update(cx, |editor, cx| {
         editor::select_all(editor, &editor::SelectAll, window, cx)
       });
@@ -3233,7 +3232,7 @@ mod tests {
     );
     let hunk_line = page.read_with(cx, |page, cx| {
       page
-        .editor
+        .active_editor()
         .as_ref()
         .expect("editor")
         .read(cx)
@@ -3243,7 +3242,7 @@ mod tests {
     });
     let line_height = page.read_with(cx, |page, cx| {
       page
-        .editor
+        .active_editor()
         .as_ref()
         .expect("editor")
         .read(cx)
@@ -3506,7 +3505,7 @@ mod tests {
     cx.run_until_parked();
     let conflict_line = page.read_with(cx, |page, cx| {
       page
-        .editor
+        .active_editor()
         .as_ref()
         .expect("editor")
         .read(cx)
@@ -3516,7 +3515,7 @@ mod tests {
     });
     let line_height = page.read_with(cx, |page, cx| {
       page
-        .editor
+        .active_editor()
         .as_ref()
         .expect("editor")
         .read(cx)
@@ -3547,7 +3546,7 @@ mod tests {
     await_editor_diff(&page, cx).await;
 
     page.read_with(cx, |page, cx| {
-      let editor = page.editor.as_ref().expect("editor").read(cx);
+      let editor = page.active_editor().as_ref().expect("editor").read(cx);
       assert!(
         editor.has_unresolved_conflict_markers(cx),
         "the second conflict is still waiting"
@@ -3660,7 +3659,7 @@ mod tests {
     cx.run_until_parked();
 
     page.read_with(cx, |page, cx| {
-      let editor = page.editor.as_ref().expect("editor").read(cx);
+      let editor = page.active_editor().as_ref().expect("editor").read(cx);
       assert!(
         !editor.has_unresolved_conflict_markers(cx),
         "accepting a side resolves every conflict of the file"
@@ -3680,7 +3679,7 @@ mod tests {
     // Current side of a merge is what HEAD held.
     page.read_with(cx, |page, cx| {
       let first_line = page
-        .editor
+        .active_editor()
         .as_ref()
         .expect("editor")
         .read(cx)
@@ -3748,7 +3747,7 @@ mod tests {
 
     // Incoming is what the merged branch held.
     page.read_with(cx, |page, cx| {
-      let editor = page.editor.as_ref().expect("editor").read(cx);
+      let editor = page.active_editor().as_ref().expect("editor").read(cx);
       assert!(!editor.has_unresolved_conflict_markers(cx));
       let first_line = editor
         .document()
@@ -3799,7 +3798,7 @@ mod tests {
     cx.run_until_parked();
 
     page.read_with(cx, |page, cx| {
-      let editor = page.editor.as_ref().expect("editor").read(cx);
+      let editor = page.active_editor().as_ref().expect("editor").read(cx);
       assert!(!editor.is_dirty, "nothing was rewritten");
       let first_line = editor
         .document()
@@ -3841,7 +3840,7 @@ mod tests {
 
     let hunk_state = |page: &SessionPage, cx: &App| {
       page
-        .editor
+        .active_editor()
         .as_ref()
         .expect("editor")
         .read(cx)
@@ -3915,7 +3914,7 @@ mod tests {
 
     page.read_with(cx, |page, cx| {
       let state = page
-        .editor
+        .active_editor()
         .as_ref()
         .expect("editor")
         .read(cx)
@@ -4226,7 +4225,11 @@ mod tests {
     });
     cx.run_until_parked();
     let editor_handle = page.read_with(cx, |page, cx| {
-      page.editor.as_ref().expect("editor").focus_handle(cx)
+      page
+        .active_editor()
+        .as_ref()
+        .expect("editor")
+        .focus_handle(cx)
     });
     let focused = cx.update(|window, cx| window.focused(cx));
     assert_eq!(
@@ -4447,7 +4450,7 @@ mod tests {
 
     page.read_with(cx, |page, cx| {
       let selection = page
-        .editor
+        .active_editor()
         .as_ref()
         .expect("editor")
         .read(cx)
@@ -4493,7 +4496,7 @@ mod tests {
         cx.run_until_parked();
         let hovered = page.read_with(cx, |page, cx| {
           page
-            .editor
+            .active_editor()
             .as_ref()
             .expect("editor")
             .read(cx)

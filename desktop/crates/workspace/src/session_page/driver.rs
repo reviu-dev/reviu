@@ -55,7 +55,7 @@ impl SessionPage {
     serde_json::json!({
       "has_repo": true,
       "repo_root": repo_root.display().to_string(),
-      "selected_file": self.selected_file.as_ref().map(|path| path.display().to_string()),
+      "selected_file": self.active_selected_file().map(|path| path.display().to_string()),
       "center": format!("{:?}", self.center),
       "dock_open": self.dock_open,
       "command_in_flight": self.repo_command_in_flight.is_some(),
