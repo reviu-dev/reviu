@@ -86,6 +86,14 @@ impl ConversationHub {
       .map(|(index, _)| index)
   }
 
+  pub fn tracked_repositories(&self) -> Vec<PathBuf> {
+    self.stores.iter().map(|(repo, _)| repo.clone()).collect()
+  }
+
+  pub fn tracked_len(&self) -> usize {
+    self.stores.len()
+  }
+
   pub fn reorder(&mut self, ordered_repos: &[PathBuf]) {
     let positions: HashMap<PathBuf, usize> = ordered_repos
       .iter()

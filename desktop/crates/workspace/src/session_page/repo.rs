@@ -161,6 +161,7 @@ impl SessionPage {
 
     let forgetting_fallback = self.fallback_repo.as_deref() == Some(repo_root.as_path());
     if !forgetting_fallback {
+      let _ = self.backfill_session_sidebar_repository(cx);
       // The shown session may have gone with the repo: a fresh fallback-repo
       // session takes over so the centre and the git surfaces never point at
       // a dead checkout.
@@ -180,6 +181,10 @@ impl SessionPage {
       .map(|repo| repo.path)
       .find(|path| path != &repo_root);
     self.apply_fallback_repo(next_repo, window, cx);
+    if self.backfill_session_sidebar_repository(cx) {
+      self.refresh_session_list(cx);
+      cx.notify();
+    }
     Ok(())
   }
 
@@ -818,6 +823,72 @@ mod tests {
     page.read_with(cx, |page, _| {
       assert_eq!(page.fallback_repo.as_deref(), Some(repo.path.as_path()));
     });
+  }
+
+  #[gpui::test]
+  async fn removing_a_visible_repository_backfills_from_hidden_recents(cx: &mut TestAppContext) {
+    agent_chat_panel::set_backend_command_override(Some("/nonexistent-agent-binary".to_string()));
+    let repos = (0..=crate::conversation_hub::MAX_TRACKED_REPOS)
+      .map(|index| {
+        let repo = TempRepo::init(&format!("session-page-forget-backfill-{index}"));
+        commit_text_file(&repo.path, Path::new("README.md"), "v1\n", "initial");
+        repo
+      })
+      .collect::<Vec<_>>();
+    let (page, cx) = add_session_page_window(repos[0].path.clone(), cx);
+    cx.run_until_parked();
+
+    page.update_in(cx, |page, window, cx| {
+      ConfigStore::persist_recent_repository(&repos[0].path);
+      page.apply_fallback_repo(Some(repos[0].path.clone()), window, cx);
+      for repo in repos.iter().skip(1) {
+        page
+          .set_fallback_repo(repo.path.clone(), window, cx)
+          .expect("switch repository");
+      }
+    });
+    cx.run_until_parked();
+
+    let (hidden_repo, removed_repo) = page.read_with(cx, |page, cx| {
+      let visible = page.session_list.read(cx).section_order_for_test().to_vec();
+      assert_eq!(visible.len(), crate::conversation_hub::MAX_TRACKED_REPOS);
+      let recent = ConfigStore::load_recent_repositories()
+        .into_iter()
+        .map(|repo| repo.path)
+        .collect::<Vec<_>>();
+      assert_eq!(recent.len(), crate::conversation_hub::MAX_TRACKED_REPOS + 1);
+      let hidden = recent
+        .iter()
+        .find(|repo| !visible.contains(repo))
+        .expect("a hidden recent repository")
+        .clone();
+      let fallback = page.fallback_repo.as_ref().expect("fallback repo");
+      let removed = visible
+        .into_iter()
+        .find(|repo| repo != fallback)
+        .expect("visible non-fallback repo");
+      (hidden, removed)
+    });
+
+    page.update_in(cx, |page, window, cx| {
+      page
+        .forget_repository_without_unsaved_prompt(removed_repo.clone(), window, cx)
+        .expect("remove repository");
+    });
+    cx.run_until_parked();
+
+    page.read_with(cx, |page, cx| {
+      let visible = page.session_list.read(cx).section_order_for_test();
+      assert_eq!(visible.len(), crate::conversation_hub::MAX_TRACKED_REPOS);
+      assert!(visible.contains(&hidden_repo));
+      assert!(!visible.contains(&removed_repo));
+    });
+    let recent = ConfigStore::load_recent_repositories()
+      .into_iter()
+      .map(|repo| repo.path)
+      .collect::<Vec<_>>();
+    assert!(recent.contains(&hidden_repo));
+    assert!(!recent.contains(&removed_repo));
   }
 
   #[gpui::test]

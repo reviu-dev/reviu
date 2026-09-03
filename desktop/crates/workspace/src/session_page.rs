@@ -668,6 +668,38 @@ impl SessionPage {
     self.conversation_hub.store_for(repo_root, &protected, cx)
   }
 
+  fn backfill_session_sidebar_repository(&mut self, cx: &mut Context<Self>) -> bool {
+    if self.conversation_hub.tracked_len() >= crate::conversation_hub::MAX_TRACKED_REPOS {
+      return false;
+    }
+
+    let tracked: HashSet<PathBuf> = self
+      .conversation_hub
+      .tracked_repositories()
+      .into_iter()
+      .map(|repo| Self::canonical_repo(&repo))
+      .collect();
+    let Some(repo) = self
+      .initial_session_sidebar_repositories()
+      .into_iter()
+      .find(|repo| !tracked.contains(&Self::canonical_repo(repo)))
+    else {
+      return false;
+    };
+
+    let protected = self.protected_chat_repos(cx);
+    if self
+      .conversation_hub
+      .store_for(&repo, &protected, cx)
+      .is_none()
+    {
+      return false;
+    }
+    let order = self.initial_session_sidebar_repositories();
+    self.conversation_hub.reorder(&order);
+    true
+  }
+
   fn push_repo_hidden_notification(&self, repo_root: &Path, window: &mut Window, cx: &mut App) {
     let repo_name = repo_root
       .file_name()
