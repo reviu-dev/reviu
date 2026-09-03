@@ -1,5 +1,5 @@
-//! The one place that reads across per-repo conversation stores. Everything
-//! multi-repo goes through here, so a future storage backend (#587) swaps
+//! The one place that reads across per-project conversation stores. Everything
+//! multi-project goes through here, so a future storage backend (#587) swaps
 //! inside this facade without touching the shell.
 
 use std::collections::{HashMap, HashSet};
@@ -16,7 +16,7 @@ use crate::config::ConfigStore;
 pub(crate) const MAX_TRACKED_REPOS: usize = 8;
 
 pub(crate) struct ConversationHub {
-  /// Keyed by canonicalized repo root; insertion order is meaningless.
+  /// Keyed by canonicalized project root; insertion order is meaningless.
   stores: Vec<(PathBuf, Entity<ConversationStore>)>,
 }
 
@@ -34,7 +34,7 @@ impl ConversationHub {
     Self { stores: Vec::new() }
   }
 
-  /// The store for a repo, created on first sight.
+  /// The store for a project, created on first sight.
   pub fn store_for(
     &mut self,
     repo_root: &Path,
@@ -71,11 +71,18 @@ impl ConversationHub {
   }
 
   fn eviction_candidate(&self, protected_repos: &HashSet<PathBuf>) -> Option<usize> {
-    let recent_positions: HashMap<PathBuf, usize> = ConfigStore::load_recent_repositories()
+    let mut recent_positions: HashMap<PathBuf, usize> = ConfigStore::load_recent_repositories()
       .into_iter()
       .enumerate()
       .map(|(index, repo)| (canonical(&repo.path), index))
       .collect();
+    let offset = recent_positions.len();
+    recent_positions.extend(
+      ConfigStore::load_recent_projects()
+        .into_iter()
+        .enumerate()
+        .map(|(index, project)| (canonical(&project.path), offset + index)),
+    );
 
     self
       .stores
@@ -105,10 +112,10 @@ impl ConversationHub {
       .sort_by_key(|(repo, _)| positions.get(repo).copied().unwrap_or(usize::MAX));
   }
 
-  /// Every tracked repo's conversations, grouped by repo in a STABLE order
+  /// Every tracked project's conversations, grouped in a STABLE order
   /// (tracking order, never resorted) and newest-created first inside each
   /// group: rows must not dance while sessions stream. Conversation ids are
-  /// unique across repos by construction (millis + pid + counter).
+  /// unique across projects by construction (millis + pid + counter).
   pub fn sections(&self, cx: &App) -> Vec<(PathBuf, Vec<ConversationMeta>)> {
     self
       .stores

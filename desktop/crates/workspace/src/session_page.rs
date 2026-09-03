@@ -634,10 +634,12 @@ impl SessionPage {
       _poll_task: None,
     };
     SessionPageHandle::register(cx);
-    // Bounded aggregation: the recent repos get their stores up front so the
-    // all-repos sidebar can list them without touching anything else.
-    for repo in page.initial_session_sidebar_repositories() {
-      let _ = page.conversation_hub.store_for(&repo, &HashSet::new(), cx);
+    // Bounded aggregation: the recent projects get their stores up front so the
+    // sidebar can list them without touching anything else.
+    for project in page.initial_session_sidebar_projects() {
+      let _ = page
+        .conversation_hub
+        .store_for(&project, &HashSet::new(), cx);
     }
     page.sync_active_checkout(window, cx);
     page.reload_review_for_repo(cx);
@@ -895,7 +897,12 @@ impl SessionPage {
       .initial_session_sidebar_repositories()
       .into_iter()
       .collect();
-    git_repositories.extend(sections.iter().map(|(repo, _)| repo.clone()));
+    git_repositories.extend(
+      sections
+        .iter()
+        .filter(|(repo, _)| git::discover_repository_root(repo).is_some())
+        .map(|(repo, _)| repo.clone()),
+    );
     let section_order = self.initial_session_sidebar_projects();
     let conversations: Vec<crate::session_list::SessionRow> = sections
       .into_iter()

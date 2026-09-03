@@ -48,12 +48,8 @@ impl SessionPage {
       None => None,
     };
     prune_agent_chat_state_once();
-    if self.fallback_repo.is_some()
-      && let Some(evicted_repo) = self.ensure_chat_store(cx)
-    {
+    if let Some(evicted_repo) = self.ensure_chat_store(cx) {
       self.push_repo_hidden_notification(&evicted_repo, window, cx);
-    } else if self.fallback_repo.is_none() {
-      self.chat_store = None;
     }
     let resume = match reconnect_resume {
       Some(meta) => meta,
@@ -70,18 +66,18 @@ impl SessionPage {
     self.sync_active_checkout(window, cx);
   }
 
-  /// Points `chat_store` at the FALLBACK repo's store; sessions of other
-  /// repos reach their own store through their panel or the hub.
+  /// Points `chat_store` at the selected project's store. Git projects sweep
+  /// Reviu-managed worktrees; plain projects only persist conversations.
   pub(super) fn ensure_chat_store(&mut self, cx: &mut Context<Self>) -> Option<PathBuf> {
-    let Some(repo) = self.fallback_repo.clone() else {
+    let Some(project) = self.fallback_repo.clone().or_else(|| self.project_root(cx)) else {
       self.chat_store = None;
       return None;
     };
-    let access = self.chat_store_for_repo(&repo, cx)?;
+    let access = self.chat_store_for_repo(&project, cx)?;
     let evicted_repo = access.evicted_repo.clone();
     self.chat_store = Some(access.store.clone());
-    if self.swept_repos.insert(repo.clone()) {
-      self.sweep_orphan_worktrees(repo, access.store, cx);
+    if self.fallback_repo.is_some() && self.swept_repos.insert(project.clone()) {
+      self.sweep_orphan_worktrees(project, access.store, cx);
     }
     evicted_repo
   }
@@ -239,10 +235,7 @@ impl SessionPage {
       .session_repo(cx)
       .or_else(|| self.project_root(cx))
       .unwrap_or_else(|| PathBuf::from("."));
-    let store = self
-      .chat_store
-      .clone()
-      .filter(|_| self.fallback_repo.is_some());
+    let store = self.chat_store.clone();
     self.build_chat_panel(repo, store, resume, window, cx)
   }
 
@@ -1168,23 +1161,21 @@ impl SessionPage {
     cx: &mut Context<Self>,
   ) {
     prune_agent_chat_state_once();
-    let git_backed = git::discover_repository_root(&repo_root).is_some();
-    let store = if git_backed {
-      if let Some(evicted_repo) = self.ensure_chat_store(cx) {
-        self.push_repo_hidden_notification(&evicted_repo, window, cx);
-      }
-      let access = self.chat_store_for_repo(&repo_root, cx);
-      if let Some(evicted_repo) = access
-        .as_ref()
-        .and_then(|access| access.evicted_repo.as_ref())
-      {
-        self.push_repo_hidden_notification(evicted_repo, window, cx);
-      }
-      access.map(|access| access.store)
-    } else {
-      self.chat_store = None;
-      None
-    };
+    if let Some(evicted_repo) = self.ensure_chat_store(cx) {
+      self.push_repo_hidden_notification(&evicted_repo, window, cx);
+    }
+    let access = self.chat_store_for_repo(&repo_root, cx);
+    if let Some(evicted_repo) = access
+      .as_ref()
+      .and_then(|access| access.evicted_repo.as_ref())
+    {
+      self.push_repo_hidden_notification(evicted_repo, window, cx);
+    }
+    let store = access.map(|access| access.store);
+    if self.fallback_repo.is_none() && self.project_root(cx).as_deref() == Some(repo_root.as_path())
+    {
+      self.chat_store = store.clone();
+    }
     if let Some(panel) = self.agent_chat_view.as_ref() {
       // The shown conversation is still blank: it already is the new session.
       // Not while hydrating (its transcript may be about to land) and not when
@@ -2990,11 +2981,69 @@ mod tests {
     panel.read_with(cx, |panel, cx| {
       assert_eq!(panel.repo_root(), project.as_path());
       assert_eq!(panel.cwd(), project.as_path());
-      assert!(panel.store().is_none());
+      assert!(panel.store().is_some());
       assert!(!panel.current_conversation().id.is_empty());
       assert_eq!(page.read(cx).dock_panel.read(cx).repo_root(), None);
     });
 
+    let _ = std::fs::remove_dir_all(&project);
+  }
+
+  #[gpui::test]
+  async fn non_git_project_chats_persist_and_restore(cx: &mut TestAppContext) {
+    let project = crate::test_support::temp_path("session-page-non-git-chat-persist");
+    std::fs::create_dir_all(&project).expect("create project");
+    let (page, cx) = add_session_page_window_without_repo(cx);
+    cx.run_until_parked();
+
+    page.update_in(cx, |page, window, cx| {
+      page
+        .set_project_root(project.clone(), window, cx)
+        .expect("open plain project");
+      page.new_agent_session_action(&crate::NewAgentSession, window, cx);
+    });
+    cx.run_until_parked();
+
+    let first_panel = active_panel(&page, cx);
+    let conversation_id =
+      first_panel.read_with(cx, |panel, _| panel.current_conversation().id.clone());
+    first_panel.update(cx, |panel, cx| {
+      panel.seed_user_message_for_test("remember me", cx);
+      panel.persist_now(cx);
+      if let Some(store) = panel.store() {
+        store.update(cx, |store, _| store.flush_on_quit());
+      }
+    });
+    cx.run_until_parked();
+
+    let (restored_page, cx) = add_session_page_window_from_config(cx);
+    cx.run_until_parked();
+    restored_page.read_with(cx, |page, cx| {
+      assert!(
+        page
+          .session_list
+          .read(cx)
+          .conversation_ids()
+          .contains(&conversation_id)
+      );
+    });
+
+    restored_page.update_in(cx, |page, window, cx| {
+      page.select_session(&conversation_id, window, cx)
+    });
+    cx.run_until_parked();
+    let restored_panel = active_panel(&restored_page, cx);
+    let project = project.canonicalize().expect("canonical project");
+    restored_panel.read_with(cx, |panel, _| {
+      assert_eq!(panel.repo_root(), project.as_path());
+      assert_eq!(panel.cwd(), project.as_path());
+      assert!(panel.store().is_some());
+    });
+
+    let state_dir = agent_chat_state_dir()
+      .map(|dir| AgentChatPanel::state_dir_for_repo(&dir, &project))
+      .expect("agent chat state dir");
+    let _ = std::fs::remove_dir_all(&state_dir);
     let _ = std::fs::remove_dir_all(&project);
   }
 
