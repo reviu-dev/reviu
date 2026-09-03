@@ -2,13 +2,14 @@
 //! multi-repo goes through here, so a future storage backend (#587) swaps
 //! inside this facade without touching the shell.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
 use agent_chat_panel::{AgentChatPanel, ConversationMeta, ConversationStore};
 use gpui::{App, AppContext as _, Entity};
 
 use crate::agent_chat_state::agent_chat_state_dir;
+use crate::config::ConfigStore;
 
 /// Bounds the aggregation: recents beyond this never get a store, which is
 /// what keeps the per-folder index model (#583) sufficient and #587 closed.
@@ -33,17 +34,20 @@ impl ConversationHub {
   pub fn store_for(
     &mut self,
     repo_root: &Path,
+    protected_repos: &HashSet<PathBuf>,
     cx: &mut App,
   ) -> Option<(Entity<ConversationStore>, bool)> {
     let key = canonical(repo_root);
     if let Some((_, store)) = self.stores.iter().find(|(existing, _)| *existing == key) {
       return Some((store.clone(), false));
     }
-    if self.stores.len() >= MAX_TRACKED_REPOS {
+    if self.stores.len() >= MAX_TRACKED_REPOS
+      && let Some(evicted_index) = self.eviction_candidate(protected_repos)
+    {
       // Make room instead of silently handing out no store (sessions created
       // without one would never persist). Evicting only drops the repo from
       // the aggregation: live panels hold their own handle to its store.
-      let evicted = self.stores.remove(0);
+      let evicted = self.stores.remove(evicted_index);
       evicted.1.update(cx, |store, _| store.flush_on_quit());
     }
     let state_dir =
@@ -52,6 +56,33 @@ impl ConversationHub {
     store.update(cx, |store, cx| store.arm_quit_flush(cx));
     self.stores.push((key, store.clone()));
     Some((store, true))
+  }
+
+  fn eviction_candidate(&self, protected_repos: &HashSet<PathBuf>) -> Option<usize> {
+    let recent_positions: HashMap<PathBuf, usize> = ConfigStore::load_recent_repositories()
+      .into_iter()
+      .enumerate()
+      .map(|(index, repo)| (canonical(&repo.path), index))
+      .collect();
+
+    self
+      .stores
+      .iter()
+      .enumerate()
+      .filter(|(_, (repo, _))| !protected_repos.contains(repo))
+      .max_by_key(|(_, (repo, _))| recent_positions.get(repo).copied().unwrap_or(usize::MAX))
+      .map(|(index, _)| index)
+  }
+
+  pub fn reorder(&mut self, ordered_repos: &[PathBuf]) {
+    let positions: HashMap<PathBuf, usize> = ordered_repos
+      .iter()
+      .enumerate()
+      .map(|(index, repo)| (canonical(repo), index))
+      .collect();
+    self
+      .stores
+      .sort_by_key(|(repo, _)| positions.get(repo).copied().unwrap_or(usize::MAX));
   }
 
   /// Every tracked repo's conversations, grouped by repo in a STABLE order

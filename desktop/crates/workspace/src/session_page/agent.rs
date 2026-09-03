@@ -70,7 +70,7 @@ impl SessionPage {
       .fallback_repo
       .clone()
       .unwrap_or_else(|| PathBuf::from("."));
-    let Some((store, _)) = self.conversation_hub.store_for(&repo, cx) else {
+    let Some((store, _)) = self.chat_store_for_repo(&repo, cx) else {
       return;
     };
     self.chat_store = Some(store.clone());
@@ -1146,8 +1146,7 @@ impl SessionPage {
     prune_agent_chat_state_once();
     self.ensure_chat_store(cx);
     let store = self
-      .conversation_hub
-      .store_for(&repo_root, cx)
+      .chat_store_for_repo(&repo_root, cx)
       .map(|(store, _)| store);
     if let Some(panel) = self.agent_chat_view.as_ref() {
       // The shown conversation is still blank: it already is the new session.
@@ -1253,8 +1252,7 @@ impl SessionPage {
     prune_agent_chat_state_once();
     self.ensure_chat_store(cx);
     let target_store = self
-      .conversation_hub
-      .store_for(&repo_root, cx)
+      .chat_store_for_repo(&repo_root, cx)
       .map(|(store, _)| store);
     cx.spawn_in(window, async move |this, cx| {
       let create_root = repo_root.clone();
@@ -1349,8 +1347,7 @@ impl SessionPage {
       self.agent_chat_view = None;
       // You were working in that repo: the fresh session stays there.
       let repo = self
-        .conversation_hub
-        .store_for(&deleted_repo, cx)
+        .chat_store_for_repo(&deleted_repo, cx)
         .map(|(store, _)| (deleted_repo.clone(), Some(store)));
       let view = match repo {
         Some((repo_root, store)) => self.build_chat_panel(repo_root, store, None, window, cx),

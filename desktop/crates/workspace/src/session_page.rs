@@ -392,6 +392,10 @@ impl SessionPage {
             window.push_notification(Notification::warning(error), cx);
           }
         }
+        SessionListEvent::RepoOrderChanged { section_order } => {
+          this.conversation_hub.reorder(section_order);
+          ConfigStore::persist_session_sidebar_repositories(section_order);
+        }
         SessionListEvent::Collapse => this.close_sidebar(cx),
         SessionListEvent::Selected { id } => this.select_session(id, window, cx),
         SessionListEvent::Deleted { id } => this.delete_session(id, window, cx),
@@ -597,11 +601,8 @@ impl SessionPage {
     SessionPageHandle::register(cx);
     // Bounded aggregation: the recent repos get their stores up front so the
     // all-repos sidebar can list them without touching anything else.
-    for recent in ConfigStore::load_recent_repositories()
-      .into_iter()
-      .take(crate::conversation_hub::MAX_TRACKED_REPOS)
-    {
-      let _ = page.conversation_hub.store_for(&recent.path, cx);
+    for repo in page.initial_session_sidebar_repositories() {
+      let _ = page.conversation_hub.store_for(&repo, &HashSet::new(), cx);
     }
     page.reload_review_for_repo(cx);
     page.refresh_branch(cx);
@@ -610,6 +611,61 @@ impl SessionPage {
     // A link to a pull request has to find this shell, deep link included.
     crate::pull_request_surface::PullRequestSurfaceHandle::register(cx);
     page
+  }
+
+  fn initial_session_sidebar_repositories(&self) -> Vec<PathBuf> {
+    let recents = ConfigStore::load_recent_repositories();
+    let mut ordered = ConfigStore::load_session_sidebar_repositories();
+    for recent in &recents {
+      if !ordered.contains(&recent.path) {
+        ordered.push(recent.path.clone());
+      }
+    }
+
+    let mut visible: Vec<PathBuf> = ordered
+      .into_iter()
+      .filter(|path| recents.iter().any(|recent| recent.path == *path))
+      .take(crate::conversation_hub::MAX_TRACKED_REPOS)
+      .collect();
+    if let Some(fallback_repo) = self.fallback_repo.as_ref()
+      && !visible.contains(fallback_repo)
+    {
+      if visible.len() >= crate::conversation_hub::MAX_TRACKED_REPOS {
+        visible.pop();
+      }
+      visible.insert(0, fallback_repo.clone());
+    }
+    visible
+  }
+
+  fn canonical_repo(path: &Path) -> PathBuf {
+    std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf())
+  }
+
+  fn protected_chat_repos(&self, cx: &App) -> HashSet<PathBuf> {
+    let mut protected = HashSet::new();
+    if let Some(repo) = self.fallback_repo.as_ref() {
+      protected.insert(Self::canonical_repo(repo));
+    }
+    if let Some(panel) = self.agent_chat_view.as_ref() {
+      protected.insert(Self::canonical_repo(panel.read(cx).repo_root()));
+    }
+    for (_, panel) in &self.background_chat_panels {
+      let panel = panel.read(cx);
+      if panel.is_turn_in_flight() || panel.awaiting_permission() {
+        protected.insert(Self::canonical_repo(panel.repo_root()));
+      }
+    }
+    protected
+  }
+
+  fn chat_store_for_repo(
+    &mut self,
+    repo_root: &Path,
+    cx: &mut Context<Self>,
+  ) -> Option<(Entity<ConversationStore>, bool)> {
+    let protected = self.protected_chat_repos(cx);
+    self.conversation_hub.store_for(repo_root, &protected, cx)
   }
 
   /// Coming back to the window is the moment the working tree is most likely to

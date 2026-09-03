@@ -6,8 +6,8 @@ use std::rc::Rc;
 
 use agent_chat_panel::ConversationMeta;
 use gpui::{
-  Anchor, Context, DismissEvent, Entity, EventEmitter, Focusable as _, IntoElement, Render,
-  SharedString, Window, div, prelude::*, px,
+  Anchor, Context, DismissEvent, DragMoveEvent, Entity, EventEmitter, Focusable as _, IntoElement,
+  Render, SharedString, Window, div, prelude::*, px,
 };
 use gpui_component::menu::{PopupMenu, PopupMenuItem};
 use gpui_component::popover::Popover;
@@ -74,6 +74,41 @@ pub struct SessionRow {
   pub repo_root: PathBuf,
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum RepoDropPosition {
+  Before,
+  After,
+}
+
+impl RepoDropPosition {
+  fn gap(self, row: usize) -> usize {
+    match self {
+      Self::Before => row,
+      Self::After => row + 1,
+    }
+  }
+}
+
+#[derive(Clone)]
+struct DraggedRepoSection {
+  repo_root: PathBuf,
+  name: SharedString,
+}
+
+impl Render for DraggedRepoSection {
+  fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    div()
+      .px_2()
+      .py_1()
+      .text_sm()
+      .bg(cx.theme().accent)
+      .text_color(cx.theme().accent_foreground)
+      .rounded(cx.theme().radius)
+      .shadow_md()
+      .child(self.name.clone())
+  }
+}
+
 pub enum SessionListEvent {
   /// The section header's create menu: a session in THAT repo.
   NewSessionIn {
@@ -98,6 +133,9 @@ pub enum SessionListEvent {
   },
   RemoveRepository {
     repo_root: PathBuf,
+  },
+  RepoOrderChanged {
+    section_order: Vec<PathBuf>,
   },
   /// The collapse button in the header; the page owns the sidebar width.
   Collapse,
@@ -130,6 +168,7 @@ pub struct SessionList {
   section_order: Vec<PathBuf>,
   /// Keeps the section highlighted while one of its menus is open.
   open_menu_repo: Option<PathBuf>,
+  drop_target: Option<(PathBuf, RepoDropPosition)>,
 }
 
 impl SessionList {
@@ -143,6 +182,7 @@ impl SessionList {
       collapsed_repos: std::collections::HashSet::new(),
       section_order: Vec::new(),
       open_menu_repo: None,
+      drop_target: None,
     }
   }
 
@@ -281,6 +321,59 @@ impl SessionList {
       cx.notify();
     }
   }
+
+  fn update_drop_target(
+    &mut self,
+    repo_root: &Path,
+    position: Option<RepoDropPosition>,
+    cx: &mut Context<Self>,
+  ) {
+    let repo_root = repo_root.to_path_buf();
+    let next = position.map(|position| (repo_root.clone(), position));
+    if self.drop_target != next {
+      self.drop_target = next;
+      cx.notify();
+    }
+  }
+
+  fn reorder_repo_section(
+    &mut self,
+    dragged_repo: &Path,
+    target_repo: &Path,
+    position: RepoDropPosition,
+    cx: &mut Context<Self>,
+  ) {
+    self.drop_target = None;
+    let Some(from) = self
+      .section_order
+      .iter()
+      .position(|repo| repo == dragged_repo)
+    else {
+      return;
+    };
+    let Some(to) = self
+      .section_order
+      .iter()
+      .position(|repo| repo == target_repo)
+    else {
+      return;
+    };
+    let mut gap = position.gap(to);
+    if gap == from || gap == from + 1 {
+      cx.notify();
+      return;
+    }
+
+    let repo = self.section_order.remove(from);
+    if from < gap {
+      gap -= 1;
+    }
+    let gap = gap.min(self.section_order.len());
+    self.section_order.insert(gap, repo);
+    let section_order = self.section_order.clone();
+    cx.emit(SessionListEvent::RepoOrderChanged { section_order });
+    cx.notify();
+  }
 }
 
 impl SessionList {
@@ -302,8 +395,15 @@ impl SessionList {
     let toggle_repo = repo_root.to_path_buf();
     let create_repo = repo_root.to_path_buf();
     let options_repo = repo_root.to_path_buf();
+    let drag_repo = repo_root.to_path_buf();
+    let move_repo = repo_root.to_path_buf();
+    let drop_repo = repo_root.to_path_buf();
     let group_name = SharedString::from(format!("repo-section-{}", repo_root.display()));
     let menu_open = self.open_menu_repo.as_deref() == Some(repo_root);
+    let drop_position = self
+      .drop_target
+      .as_ref()
+      .and_then(|(target, position)| (target == repo_root).then_some(*position));
 
     h_flex()
       .id(SharedString::from(format!(
@@ -312,6 +412,7 @@ impl SessionList {
       )))
       .debug_selector(|| format!("session-repo-section-{}", repo_root.display()))
       .group(group_name.clone())
+      .relative()
       .items_center()
       .gap_1()
       .mx_2()
@@ -322,6 +423,54 @@ impl SessionList {
       .cursor_pointer()
       .when(menu_open, |this| this.bg(theme.secondary_hover))
       .hover(|this| this.bg(theme.secondary_hover))
+      .when_some(
+        drop_position.filter(|_| cx.has_active_drag()),
+        |this, position| {
+          let line = div()
+            .absolute()
+            .left_0()
+            .right_0()
+            .h(px(2.0))
+            .rounded_full()
+            .bg(theme.status_blue());
+          this.child(match position {
+            RepoDropPosition::Before => line.top(px(-3.0)),
+            RepoDropPosition::After => line.bottom(px(-3.0)),
+          })
+        },
+      )
+      .on_drag(
+        DraggedRepoSection {
+          repo_root: drag_repo,
+          name: name.clone(),
+        },
+        |drag, _, _, cx| cx.new(|_| drag.clone()),
+      )
+      .on_drag_move(cx.listener(
+        move |this, event: &DragMoveEvent<DraggedRepoSection>, _, cx| {
+          let bounds = event.bounds;
+          let dragged_repo = &event.drag(cx).repo_root;
+          let position = if dragged_repo == &move_repo || !bounds.contains(&event.event.position) {
+            None
+          } else if event.event.position.y < bounds.center().y {
+            Some(RepoDropPosition::Before)
+          } else {
+            Some(RepoDropPosition::After)
+          };
+          this.update_drop_target(&move_repo, position, cx);
+        },
+      ))
+      .on_drop(cx.listener(move |this, drag: &DraggedRepoSection, _, cx| {
+        let Some(position) = this
+          .drop_target
+          .as_ref()
+          .filter(|(target, _)| target == &drop_repo)
+          .map(|(_, position)| *position)
+        else {
+          return;
+        };
+        this.reorder_repo_section(&drag.repo_root, &drop_repo, position, cx);
+      }))
       .on_click(cx.listener(move |_, _, _, cx| {
         cx.emit(SessionListEvent::ToggleRepoCollapsed {
           repo_root: toggle_repo.clone(),
@@ -1000,6 +1149,26 @@ mod tests {
 
     list.read_with(cx, |list, _| {
       assert_eq!(list.open_menu_repo.as_deref(), Some(repo.as_path()));
+    });
+  }
+
+  #[gpui::test]
+  async fn dropping_a_repo_section_reorders_sections(cx: &mut gpui::TestAppContext) {
+    let list = cx.new(|_| SessionList::new());
+    let repo_a = PathBuf::from("/repo-a");
+    let repo_b = PathBuf::from("/repo-b");
+    let repo_c = PathBuf::from("/repo-c");
+
+    list.update(cx, |list, cx| {
+      list.set_section_order(vec![repo_a.clone(), repo_b.clone(), repo_c.clone()], cx);
+      list.reorder_repo_section(&repo_c, &repo_a, RepoDropPosition::Before, cx);
+      assert_eq!(
+        list.section_order,
+        vec![repo_c.clone(), repo_a.clone(), repo_b.clone()]
+      );
+
+      list.reorder_repo_section(&repo_c, &repo_b, RepoDropPosition::After, cx);
+      assert_eq!(list.section_order, vec![repo_a, repo_b, repo_c]);
     });
   }
 

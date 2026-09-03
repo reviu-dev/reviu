@@ -31,6 +31,11 @@ const RECENT_REPOS_TABLE: ConfigTable = ConfigTable {
   create_sql: "CREATE TABLE IF NOT EXISTS recent_repositories (path TEXT PRIMARY KEY, last_opened INTEGER NOT NULL)",
 };
 
+const SESSION_SIDEBAR_REPOS_TABLE: ConfigTable = ConfigTable {
+  name: "session_sidebar_repositories",
+  create_sql: "CREATE TABLE IF NOT EXISTS session_sidebar_repositories (path TEXT PRIMARY KEY, position INTEGER NOT NULL)",
+};
+
 const SETTINGS_TABLE: ConfigTable = ConfigTable {
   name: "settings",
   create_sql: "CREATE TABLE IF NOT EXISTS settings (id INTEGER PRIMARY KEY CHECK (id = 1), auto_switch_theme INTEGER NOT NULL DEFAULT 1, dark_mode INTEGER NOT NULL DEFAULT 0, indent_rainbow INTEGER NOT NULL DEFAULT 0)",
@@ -58,8 +63,9 @@ const MERGE_METHODS_TABLE: ConfigTable = ConfigTable {
 
 pub const COMMAND_USAGE_TIMESTAMP_CAP: usize = 30;
 
-const CONFIG_TABLES: [ConfigTable; 5] = [
+const CONFIG_TABLES: [ConfigTable; 6] = [
   RECENT_REPOS_TABLE,
+  SESSION_SIDEBAR_REPOS_TABLE,
   SETTINGS_TABLE,
   SHORTCUT_OVERRIDES_TABLE,
   COMMAND_USAGES_TABLE,
@@ -71,7 +77,12 @@ type Migration = fn(&Connection) -> rusqlite::Result<()>;
 /// Ordered config-database migrations. The vector index + 1 is the migration's `user_version`.
 /// Only append; never reorder or edit a shipped migration. v1 is an idempotent baseline so any
 /// pre-existing database (which has `user_version` 0) converges to the current schema.
-const MIGRATIONS: &[Migration] = &[migrate_v1_baseline, migrate_v2_merge_methods];
+const MIGRATIONS: &[Migration] = [
+  migrate_v1_baseline,
+  migrate_v2_merge_methods,
+  migrate_v3_session_sidebar_repositories,
+]
+.as_slice();
 
 fn schema_version(conn: &Connection) -> rusqlite::Result<i64> {
   conn.query_row("PRAGMA user_version", [], |row| row.get(0))
@@ -116,6 +127,11 @@ fn migrate_v1_baseline(conn: &Connection) -> rusqlite::Result<()> {
 
 fn migrate_v2_merge_methods(conn: &Connection) -> rusqlite::Result<()> {
   conn.execute(MERGE_METHODS_TABLE.create_sql, [])?;
+  Ok(())
+}
+
+fn migrate_v3_session_sidebar_repositories(conn: &Connection) -> rusqlite::Result<()> {
+  conn.execute(SESSION_SIDEBAR_REPOS_TABLE.create_sql, [])?;
   Ok(())
 }
 
@@ -382,6 +398,7 @@ impl ConfigStore {
     ) {
       log::warn!("Failed to forget recent repository: {}", err);
     }
+    self.forget_session_sidebar_repository_path(path);
   }
 
   pub fn persist_recent_repository(path: &Path) {
@@ -407,6 +424,104 @@ impl ConfigStore {
       params![path_string, last_opened],
     ) {
       log::warn!("Failed to persist recent repository: {}", err);
+    }
+  }
+
+  pub fn load_session_sidebar_repositories() -> Vec<PathBuf> {
+    let Some(store) = Self::open_with_tables() else {
+      return Vec::new();
+    };
+    store.load_session_sidebar_repositories_inner()
+  }
+
+  fn load_session_sidebar_repositories_inner(&self) -> Vec<PathBuf> {
+    let mut stmt = match self.conn.prepare(&format!(
+      "SELECT path FROM {} ORDER BY position ASC",
+      SESSION_SIDEBAR_REPOS_TABLE.name
+    )) {
+      Ok(stmt) => stmt,
+      Err(err) => {
+        log::warn!("Failed to load session sidebar repositories: {}", err);
+        return Vec::new();
+      }
+    };
+
+    let rows = match stmt.query_map([], |row| row.get::<_, String>(0)) {
+      Ok(rows) => rows,
+      Err(err) => {
+        log::warn!("Failed to read session sidebar repositories: {}", err);
+        return Vec::new();
+      }
+    };
+
+    let mut repositories = Vec::new();
+    let mut missing_paths = Vec::new();
+    for row in rows {
+      match row {
+        Ok(path_string) => {
+          let path = PathBuf::from(&path_string);
+          if path.is_dir() && path.join(".git").exists() {
+            repositories.push(path);
+          } else {
+            missing_paths.push(path_string);
+          }
+        }
+        Err(err) => log::warn!("Failed to decode session sidebar repository row: {}", err),
+      }
+    }
+
+    if !missing_paths.is_empty() {
+      for path in &missing_paths {
+        self.forget_session_sidebar_repository_path(path);
+      }
+    }
+
+    repositories
+  }
+
+  pub fn persist_session_sidebar_repositories(paths: &[PathBuf]) {
+    let Some(store) = Self::open_with_tables() else {
+      return;
+    };
+    store.persist_session_sidebar_repositories_inner(paths);
+  }
+
+  fn persist_session_sidebar_repositories_inner(&self, paths: &[PathBuf]) {
+    let applied = self.conn.execute_batch("BEGIN").and_then(|()| {
+      self.conn.execute(
+        &format!("DELETE FROM {}", SESSION_SIDEBAR_REPOS_TABLE.name),
+        [],
+      )?;
+      for (position, path) in paths.iter().enumerate() {
+        self.conn.execute(
+          &format!(
+            "INSERT INTO {} (path, position) VALUES (?1, ?2)",
+            SESSION_SIDEBAR_REPOS_TABLE.name
+          ),
+          params![path.to_string_lossy().to_string(), position as i64],
+        )?;
+      }
+      self.conn.execute_batch("COMMIT")
+    });
+
+    if let Err(err) = applied {
+      self
+        .conn
+        .execute_batch("ROLLBACK")
+        .log_err_context("rolling back a failed session sidebar repository write");
+      log::warn!("Failed to persist session sidebar repositories: {}", err);
+    }
+  }
+
+  fn forget_session_sidebar_repository_path(&self, path: &str) {
+    if let Err(err) = self.conn.execute(
+      &format!(
+        "DELETE FROM {} WHERE path = ?1",
+        SESSION_SIDEBAR_REPOS_TABLE.name
+      ),
+      params![path],
+    ) {
+      log::warn!("Failed to forget session sidebar repository: {}", err);
     }
   }
 
@@ -786,6 +901,32 @@ mod tests {
       .collect();
     assert!(!paths.contains(&repo_a));
     assert!(paths.contains(&repo_b));
+
+    let _ = fs::remove_dir_all(&repo_a);
+    let _ = fs::remove_dir_all(&repo_b);
+    ConfigStore::set_test_db_path(None);
+  }
+
+  #[test]
+  fn session_sidebar_repository_order_round_trips_and_forget_removes_it() {
+    let db_path = unique_test_db_path("session-sidebar-order");
+    let _ = fs::remove_file(&db_path);
+    ConfigStore::set_test_db_path(Some(db_path));
+
+    let repo_a = unique_test_repo_dir("session-sidebar-order-a");
+    let repo_b = unique_test_repo_dir("session-sidebar-order-b");
+    ConfigStore::persist_session_sidebar_repositories(&[repo_b.clone(), repo_a.clone()]);
+
+    assert_eq!(
+      ConfigStore::load_session_sidebar_repositories(),
+      vec![repo_b.clone(), repo_a.clone()]
+    );
+
+    ConfigStore::forget_recent_repository(&repo_b);
+    assert_eq!(
+      ConfigStore::load_session_sidebar_repositories(),
+      vec![repo_a.clone()]
+    );
 
     let _ = fs::remove_dir_all(&repo_a);
     let _ = fs::remove_dir_all(&repo_b);
