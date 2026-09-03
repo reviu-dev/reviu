@@ -276,7 +276,7 @@ impl SessionPage {
     let generation = self.open_file_generation;
     self.record_recent_file(&repo_root, &rel_path);
     self.remember_center_tab(tab.clone());
-    self.set_active_editor_loading(tab.clone(), rel_path.clone(), None);
+    self.set_editor_tab_loading(tab.clone(), rel_path.clone(), None);
     let diff_view = self.effective_diff_view(&rel_path, cx);
     // Wherever the open came from (chat recap, palette, review row), the
     // Changes list highlights the file it is now showing.
@@ -317,7 +317,7 @@ impl SessionPage {
             editor.reveal_source_position(doc_line, doc_column, cx);
           }
         });
-        this.set_active_editor_state(
+        this.set_editor_tab_state(
           load_tab,
           CenterEditorState {
             selected_file: rel_path.clone(),
@@ -349,7 +349,7 @@ impl SessionPage {
           |this, _editor, event: &EditorEvent, cx| match event {
             EditorEvent::Saved => {
               let file_modified = this.active_worktree_file_modified(cx);
-              if let Some(state) = this.active_editor_state_mut() {
+              if let Some(state) = this.editor_tab_state_mut() {
                 state.file_modified = file_modified;
               }
               this.cache_active_editor();
@@ -369,46 +369,46 @@ impl SessionPage {
     cx.notify();
   }
 
-  pub(super) fn active_editor_state(&self) -> Option<&CenterEditorState> {
+  pub(super) fn editor_tab_state(&self) -> Option<&CenterEditorState> {
     self
       .editor_tab
       .as_ref()
       .and_then(|tab| self.editor_states.get(tab))
   }
 
-  fn active_editor_state_mut(&mut self) -> Option<&mut CenterEditorState> {
+  fn editor_tab_state_mut(&mut self) -> Option<&mut CenterEditorState> {
     let tab = self.editor_tab.as_ref()?;
     self.editor_states.get_mut(tab)
   }
 
   pub(super) fn active_editor(&self) -> Option<Entity<Editor>> {
-    self.active_editor_state()?.editor.clone()
+    self.editor_tab_state()?.editor.clone()
   }
 
   pub(super) fn active_selected_file(&self) -> Option<&Path> {
-    Some(self.active_editor_state()?.selected_file.as_path())
+    Some(self.editor_tab_state()?.selected_file.as_path())
   }
 
   pub(super) fn active_binary_preview(&self) -> Option<&BinaryPreview> {
-    self.active_editor_state()?.binary_preview.as_ref()
+    self.editor_tab_state()?.binary_preview.as_ref()
   }
 
   pub(super) fn active_opened_snapshot(&self) -> Option<&OpenedSnapshot> {
-    self.active_editor_state()?.opened_snapshot.as_ref()
+    self.editor_tab_state()?.opened_snapshot.as_ref()
   }
 
-  fn set_active_editor_state(&mut self, tab: CenterTab, state: CenterEditorState) {
+  fn set_editor_tab_state(&mut self, tab: CenterTab, state: CenterEditorState) {
     self.editor_states.insert(tab, state);
   }
 
-  fn set_active_editor_loading(
+  fn set_editor_tab_loading(
     &mut self,
     tab: CenterTab,
     selected_file: PathBuf,
     opened_snapshot: Option<OpenedSnapshot>,
   ) {
     self.editor_tab = Some(tab.clone());
-    self.set_active_editor_state(
+    self.set_editor_tab_state(
       tab,
       CenterEditorState {
         selected_file,
@@ -423,11 +423,11 @@ impl SessionPage {
   fn clear_editor_tab(&mut self, tab: &CenterTab) {
     self.editor_states.remove(tab);
     if self.editor_tab.as_ref() == Some(tab) {
-      self.clear_active_editor_mirror();
+      self.clear_editor_tab_selection();
     }
   }
 
-  fn clear_active_editor_mirror(&mut self) {
+  fn clear_editor_tab_selection(&mut self) {
     self.editor_tab = None;
   }
 
@@ -444,10 +444,10 @@ impl SessionPage {
     if !matches!(tab.kind, CenterTabKind::File | CenterTabKind::Diff) {
       return;
     }
-    let Some(state) = self.active_editor_state().cloned() else {
+    let Some(state) = self.editor_tab_state().cloned() else {
       return;
     };
-    self.set_active_editor_state(tab, state);
+    self.set_editor_tab_state(tab, state);
   }
 
   fn restore_center_editor(
@@ -475,7 +475,7 @@ impl SessionPage {
     self.open_file_task = None;
     self.remember_center_tab(tab.clone());
     self.editor_tab = Some(tab.clone());
-    self.set_active_editor_state(tab.clone(), state);
+    self.set_editor_tab_state(tab.clone(), state);
     self.svg_preview.update(cx, |preview, _| preview.clear());
     self
       .dock_panel
@@ -590,7 +590,7 @@ impl SessionPage {
       new_text: new_text.clone(),
       whole_file_change: agent_whole_file_change,
     };
-    self.set_active_editor_loading(tab.clone(), rel_path.clone(), Some(opened_snapshot.clone()));
+    self.set_editor_tab_loading(tab.clone(), rel_path.clone(), Some(opened_snapshot.clone()));
     self.svg_preview.update(cx, |preview, _| preview.clear());
     self
       .dock_panel
@@ -640,7 +640,7 @@ impl SessionPage {
           }
         });
         configure_review(&editor, ReviewDestination::None, cx);
-        this.set_active_editor_state(
+        this.set_editor_tab_state(
           load_tab,
           CenterEditorState {
             selected_file: rel_path.clone(),
@@ -712,7 +712,7 @@ impl SessionPage {
     let generation = self.open_file_generation;
     self.remember_center_tab(tab.clone());
     let opened_snapshot = OpenedSnapshot::Commit(commit_oid.clone());
-    self.set_active_editor_loading(tab.clone(), rel_path.clone(), Some(opened_snapshot.clone()));
+    self.set_editor_tab_loading(tab.clone(), rel_path.clone(), Some(opened_snapshot.clone()));
     let hide_whitespace = self.hide_whitespace;
     let diff_view = self.effective_diff_view(&rel_path, cx);
     let load_tab = tab.clone();
@@ -750,7 +750,7 @@ impl SessionPage {
         configure_review(&editor, ReviewDestination::None, cx);
         let binary_preview =
           build_binary_preview(rel_path.as_path(), commit_file.binary_bytes.clone());
-        this.set_active_editor_state(
+        this.set_editor_tab_state(
           load_tab,
           CenterEditorState {
             selected_file: rel_path.clone(),
@@ -855,7 +855,7 @@ impl SessionPage {
       base: base_oid.clone(),
       head: head_oid.clone(),
     };
-    self.set_active_editor_loading(tab.clone(), rel_path.clone(), Some(opened_snapshot.clone()));
+    self.set_editor_tab_loading(tab.clone(), rel_path.clone(), Some(opened_snapshot.clone()));
     let hide_whitespace = self.hide_whitespace;
     let diff_view = self.effective_diff_view(&rel_path, cx);
     let load_tab = tab.clone();
@@ -895,7 +895,7 @@ impl SessionPage {
         });
         let binary_preview =
           build_binary_preview(rel_path.as_path(), range_file.binary_bytes.clone());
-        this.set_active_editor_state(
+        this.set_editor_tab_state(
           load_tab,
           CenterEditorState {
             selected_file: rel_path.clone(),
@@ -1495,7 +1495,7 @@ impl SessionPage {
     if let Some(tab) = self.editor_tab.clone() {
       self.clear_editor_tab(&tab);
     } else {
-      self.clear_active_editor_mirror();
+      self.clear_editor_tab_selection();
     }
     self.open_file_task = None;
     self.open_file_generation = self.open_file_generation.wrapping_add(1);
