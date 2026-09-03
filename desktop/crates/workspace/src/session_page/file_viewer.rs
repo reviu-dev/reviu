@@ -235,9 +235,8 @@ impl SessionPage {
     } else {
       DiffViewMode::Inline
     };
-    let diff_view = self.effective_diff_view(&rel_path, cx);
     // Reading preference for the session, seeded from the settings once.
-    if self.selected_file.is_none() {
+    if self.active_selected_file().is_none() {
       self.hide_whitespace = app_settings.hide_whitespace;
     }
     let hide_whitespace = self.hide_whitespace;
@@ -252,10 +251,11 @@ impl SessionPage {
     self.center = CenterView::Diff;
     self.sync_agent_chat_close_control(cx);
     // Same path, but the snapshot of a commit is not the working-tree file.
-    if !left_commit_file && self.editor_tab.as_ref() == Some(&tab) && self.editor.is_some() {
-      if let (Some((doc_line, doc_column)), Some(editor)) =
-        (reveal_doc_position, self.editor.clone())
-      {
+    if !left_commit_file
+      && self.editor_tab.as_ref() == Some(&tab)
+      && let Some(editor) = self.active_editor()
+    {
+      if let Some((doc_line, doc_column)) = reveal_doc_position {
         editor.update(cx, |editor, cx| {
           editor.reveal_source_position(doc_line, doc_column, cx)
         });
@@ -282,6 +282,8 @@ impl SessionPage {
     self.editor = None;
     self.editor_file_modified = None;
     self.binary_preview = None;
+    self.opened_snapshot = None;
+    let diff_view = self.effective_diff_view(&rel_path, cx);
     // Wherever the open came from (chat recap, palette, review row), the
     // Changes list highlights the file it is now showing.
     self
@@ -408,6 +410,13 @@ impl SessionPage {
   }
 
   fn set_active_editor_state(&mut self, tab: CenterTab, state: CenterEditorState) {
+    if self.editor_tab.as_ref() == Some(&tab) {
+      self.selected_file = Some(state.selected_file.clone());
+      self.editor_file_modified = state.file_modified;
+      self.editor = state.editor.clone();
+      self.binary_preview = state.binary_preview.clone();
+      self.opened_snapshot = state.opened_snapshot.clone();
+    }
     self.editor_states.insert(tab, state);
   }
 
@@ -466,11 +475,7 @@ impl SessionPage {
     self.open_file_task = None;
     self.remember_center_tab(tab.clone());
     self.editor_tab = Some(tab.clone());
-    self.selected_file = Some(state.selected_file);
-    self.editor_file_modified = state.file_modified;
-    self.editor = state.editor.clone();
-    self.binary_preview = state.binary_preview;
-    self.opened_snapshot = state.opened_snapshot;
+    self.set_active_editor_state(tab.clone(), state);
     self.svg_preview.update(cx, |preview, _| preview.clear());
     self
       .dock_panel
@@ -479,7 +484,9 @@ impl SessionPage {
       .update(cx, |list, cx| {
         list.select_path(Some(rel_path), cx);
       });
-    if let (Some((doc_line, doc_column)), Some(editor)) = (reveal_doc_position, self.editor.clone())
+    let active_editor = self.active_editor();
+    if let (Some((doc_line, doc_column)), Some(editor)) =
+      (reveal_doc_position, active_editor.clone())
     {
       editor.update(cx, |editor, cx| {
         editor.reveal_source_position(doc_line, doc_column, cx)
@@ -487,14 +494,14 @@ impl SessionPage {
     }
     self.sync_editor_unmerged_state(cx);
     self.sync_git_telemetry(cx);
-    match self.opened_snapshot.as_ref() {
+    match self.active_opened_snapshot() {
       Some(OpenedSnapshot::PullRequestRange { .. }) => {
-        if let Some(editor) = self.editor.clone() {
+        if let Some(editor) = active_editor {
           self.install_github_review_handlers_for_editor(&editor, cx);
         }
       }
       Some(_) => {
-        if let Some(editor) = self.editor.as_ref() {
+        if let Some(editor) = active_editor.as_ref() {
           configure_review(editor, ReviewDestination::None, cx);
         }
       }
@@ -566,7 +573,7 @@ impl SessionPage {
     } else {
       DiffViewMode::Inline
     };
-    if self.selected_file.is_none() {
+    if self.active_selected_file().is_none() {
       self.hide_whitespace = app_settings.hide_whitespace;
     }
     let tab = CenterTab::agent_snapshot(rel_path.clone(), old_text.clone(), new_text.clone());
@@ -811,13 +818,13 @@ impl SessionPage {
     self.center = CenterView::Diff;
     self.sync_agent_chat_close_control(cx);
     // Another comment on the file already open: reveal, do not reload.
-    if self.opened_snapshot
-      == Some(OpenedSnapshot::PullRequestRange {
+    if self.active_opened_snapshot()
+      == Some(&OpenedSnapshot::PullRequestRange {
         base: base_oid.clone(),
         head: head_oid.clone(),
       })
-      && self.selected_file.as_ref() == Some(&rel_path)
-      && let Some(editor) = self.editor.clone()
+      && self.active_selected_file() == Some(rel_path.as_path())
+      && let Some(editor) = self.active_editor()
     {
       if let Some(doc_line) = reveal_doc_line {
         editor.update(cx, |editor, cx| editor.reveal_source_line(doc_line, cx));
@@ -997,7 +1004,7 @@ impl SessionPage {
   pub(super) fn whole_file_change(&self, path: &Path, cx: &App) -> bool {
     if let Some(OpenedSnapshot::AgentTool {
       whole_file_change, ..
-    }) = self.opened_snapshot.as_ref()
+    }) = self.active_opened_snapshot()
     {
       return *whole_file_change;
     }
@@ -1241,7 +1248,7 @@ impl SessionPage {
           .await;
         let _ = this.update(cx, move |this, cx| {
           if this.open_file_generation != generation
-            || this.selected_file.as_ref() != Some(&rel_path)
+            || this.active_selected_file() != Some(rel_path.as_path())
           {
             return;
           }
@@ -1462,7 +1469,7 @@ impl SessionPage {
 
   pub(super) fn editor_is_dirty(&self, cx: &App) -> bool {
     self
-      .editor
+      .active_editor()
       .as_ref()
       .is_some_and(|editor| editor.read(cx).is_dirty)
   }
@@ -1611,7 +1618,7 @@ impl SessionPage {
     cx: &mut Context<Self>,
   ) {
     let view = cx.entity();
-    let editor = self.editor.clone();
+    let editor = self.active_editor();
     let window_handle = window.window_handle();
 
     window.open_alert_dialog(cx, move |alert, _, _| {
@@ -1695,7 +1702,7 @@ impl SessionPage {
     let view = cx.entity().downgrade();
     window.on_next_frame(move |window, cx| {
       let _ = view.update(cx, |this, cx| {
-        if let Some(editor) = this.editor.as_ref() {
+        if let Some(editor) = this.active_editor() {
           let focus_handle = editor.read(cx).focus_handle(cx);
           window.focus(&focus_handle, cx);
         }
@@ -1741,8 +1748,7 @@ impl SessionPage {
       return Err("Select code in the diff first");
     };
     let path = self
-      .selected_file
-      .as_ref()
+      .active_selected_file()
       .map(|path| path.to_string_lossy().to_string())
       .unwrap_or_else(|| "selection".to_string());
     Ok((path, text))
@@ -2240,6 +2246,61 @@ mod tests {
         page.active_opened_snapshot(),
         Some(OpenedSnapshot::AgentTool { .. })
       ));
+    });
+  }
+
+  #[gpui::test]
+  async fn opening_a_clean_file_after_a_snapshot_uses_the_file_tab_state(cx: &mut TestAppContext) {
+    let repo = TempRepo::init("session-page-snapshot-to-clean-file");
+    commit_text_file(&repo.path, Path::new("README.md"), "v1\n", "initial");
+    commit_text_file(&repo.path, Path::new("clean.txt"), "clean\n", "clean");
+    let (page, cx) = add_session_page_window(repo.path.clone(), cx);
+    page.update(cx, |_, cx| {
+      crate::config::AppSettings::update(cx, |settings| settings.split_diff_view = true);
+    });
+
+    page.update_in(cx, |page, window, cx| {
+      page.open_agent_diff_snapshot(
+        PathBuf::from("README.md"),
+        Some("agent before\n".to_string()),
+        "agent after\n".to_string(),
+        None,
+        OpenIntent::Open,
+        window,
+        cx,
+      );
+    });
+    await_open_file(&page, cx).await;
+    page.read_with(cx, |page, cx| {
+      assert!(page.active_opened_snapshot().is_some());
+      assert!(page.selected_file_has_changes(cx));
+    });
+
+    page.update_in(cx, |page, window, cx| {
+      page.open_file(
+        PathBuf::from("clean.txt"),
+        None,
+        None,
+        OpenIntent::Open,
+        window,
+        cx,
+      );
+    });
+    await_open_file(&page, cx).await;
+
+    page.read_with(cx, |page, cx| {
+      assert_eq!(page.active_selected_file(), Some(Path::new("clean.txt")));
+      assert!(page.active_opened_snapshot().is_none());
+      assert!(page.selected_file_status(cx).is_none());
+      assert!(!page.selected_file_has_changes(cx));
+      assert_eq!(
+        page
+          .active_editor()
+          .expect("clean editor")
+          .read(cx)
+          .diff_view_mode(),
+        DiffViewMode::Inline
+      );
     });
   }
 
