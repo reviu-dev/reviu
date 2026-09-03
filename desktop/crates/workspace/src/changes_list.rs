@@ -517,6 +517,7 @@ impl ListDelegate for ChangesRowsDelegate {
                         .overflow_hidden()
                         .whitespace_nowrap()
                         .text_ellipsis_start()
+                        .text_xs()
                         .text_color(theme.muted_foreground)
                         .child(parent_path),
                     )
