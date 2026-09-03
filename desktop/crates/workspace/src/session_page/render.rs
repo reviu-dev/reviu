@@ -679,6 +679,95 @@ impl SessionPage {
     container.into_any_element()
   }
 
+  fn editor_header_path_label(path: &Path) -> String {
+    path.to_string_lossy().into_owned()
+  }
+
+  fn render_editor_path_title(
+    &self,
+    path: &Path,
+    old_path: Option<&Path>,
+    status: Option<RepoStatusKind>,
+    is_dirty: bool,
+    cx: &App,
+  ) -> AnyElement {
+    let theme = cx.theme().clone();
+    let path_label = Self::editor_header_path_label(path);
+
+    let title = if status == Some(RepoStatusKind::Renamed) {
+      let old_path_label = old_path
+        .map(Self::editor_header_path_label)
+        .unwrap_or_else(|| path_label.clone());
+      h_flex()
+        .min_w_0()
+        .items_center()
+        .gap_1()
+        .child(
+          div()
+            .debug_selector(|| crate::file_view::FILE_TITLE_OLD_NAME_DEBUG_SELECTOR.to_string())
+            .min_w_0()
+            .overflow_hidden()
+            .text_ellipsis_start()
+            .text_color(theme.muted_foreground)
+            .line_through()
+            .child(old_path_label),
+        )
+        .child(
+          gpui_component::Icon::new(gpui_component::IconName::ArrowRight)
+            .size_3()
+            .text_color(theme.muted_foreground),
+        )
+        .child(
+          div()
+            .min_w_0()
+            .text_ellipsis_start()
+            .child(path.to_string_lossy().into_owned()),
+        )
+        .into_any_element()
+    } else {
+      div()
+        .debug_selector(|| "session-page-editor-path-title".to_string())
+        .min_w_0()
+        .overflow_hidden()
+        .text_ellipsis_start()
+        .when(status == Some(RepoStatusKind::Deleted), |this| {
+          this.line_through()
+        })
+        .child(path_label)
+        .into_any_element()
+    };
+
+    h_flex()
+      .items_center()
+      .gap_2()
+      .min_w_0()
+      .flex_1()
+      .overflow_hidden()
+      .child(
+        div()
+          .debug_selector(|| "session-page-editor-title-icon".to_string())
+          .flex_shrink_0()
+          .child(self.center_file_tab_icon(path, cx)),
+      )
+      .child(
+        div()
+          .min_w_0()
+          .text_sm()
+          .text_color(theme.foreground)
+          .child(title),
+      )
+      .when(is_dirty, |this| {
+        this.child(
+          div()
+            .size_2()
+            .rounded_full()
+            .bg(theme.foreground)
+            .flex_shrink_0(),
+        )
+      })
+      .into_any_element()
+  }
+
   pub(super) fn render_diff_header(&self, cx: &mut Context<Self>) -> AnyElement {
     let active_editor = self.shown_editor();
     let active_binary_preview = self.shown_binary_preview();
@@ -698,31 +787,10 @@ impl SessionPage {
       .as_ref()
       .is_some_and(|editor| !editor.read(cx).is_read_only);
 
-    let mut toolbar = DiffToolbar::new("session-page").before_title(if self.diff_chat_open {
-      Button::new("session-page-close-editor")
-        .debug_selector(|| "session-page-close-editor".to_string())
-        .icon(gpui_component::IconName::Close)
-        .ghost()
-        .compact()
-        .small()
-        .tooltip("Close editor (Esc)")
-        .on_click(cx.listener(|this, _, window, cx| this.close_diff(window, cx)))
-        .into_any_element()
-    } else {
-      Button::new("session-page-show-chat")
-        .debug_selector(|| "session-page-show-chat".to_string())
-        .label("Chat")
-        .icon(UiIconName::MessageCircle)
-        .ghost()
-        .compact()
-        .small()
-        .tooltip("Back to the conversation (Esc)")
-        .on_click(cx.listener(|this, _, window, cx| this.close_diff(window, cx)))
-        .into_any_element()
-    });
+    let mut toolbar = DiffToolbar::new("session-page");
 
     if let Some(path) = self.shown_selected_file().map(Path::to_path_buf) {
-      toolbar = toolbar.title(render_file_title_with_status(
+      toolbar = toolbar.title(self.render_editor_path_title(
         &path,
         old_path.as_deref(),
         file_status,
@@ -4226,17 +4294,42 @@ mod tests {
     );
   }
 
+  #[test]
+  fn editor_header_path_label_keeps_the_filename() {
+    assert_eq!(
+      SessionPage::editor_header_path_label(Path::new(
+        "desktop/crates/workspace/src/session_page/center_tab.rs"
+      )),
+      "desktop/crates/workspace/src/session_page/center_tab.rs"
+    );
+    assert_eq!(
+      SessionPage::editor_header_path_label(Path::new("README.md")),
+      "README.md"
+    );
+  }
+
   #[gpui::test]
-  async fn editor_header_keeps_one_center_pane(cx: &mut TestAppContext) {
-    let repo = TempRepo::init("session-chat-editor-close-buttons");
-    commit_text_file(&repo.path, Path::new("README.md"), "v1\n", "initial");
-    std::fs::write(repo.path.join("README.md"), "v2\n").expect("modify file");
+  async fn editor_header_shows_path_without_chat_button(cx: &mut TestAppContext) {
+    let repo = TempRepo::init("session-editor-path-header");
+    commit_text_file(
+      &repo.path,
+      Path::new("desktop/crates/workspace/src/session_page/center_tab.rs"),
+      "v1\n",
+      "initial",
+    );
+    std::fs::write(
+      repo
+        .path
+        .join("desktop/crates/workspace/src/session_page/center_tab.rs"),
+      "v2\n",
+    )
+    .expect("modify file");
     let (page, cx) = add_session_page_window(repo.path.clone(), cx);
     cx.run_until_parked();
 
     page.update_in(cx, |page, window, cx| {
       page.open_diff(
-        PathBuf::from("README.md"),
+        PathBuf::from("desktop/crates/workspace/src/session_page/center_tab.rs"),
         None,
         OpenIntent::Open,
         window,
@@ -4245,32 +4338,11 @@ mod tests {
     });
     await_open_file(&page, cx).await;
 
-    assert!(cx.debug_bounds("session-page-close-editor").is_some());
-    assert!(cx.debug_bounds("session-page-show-chat").is_none());
-
-    let close_editor = cx
-      .debug_bounds("session-page-close-editor")
-      .expect("close editor");
-    cx.simulate_click(close_editor.center(), gpui::Modifiers::default());
-    cx.run_until_parked();
-
-    page.read_with(cx, |page, _| {
-      assert_eq!(page.center, CenterView::Conversation);
-      assert!(page.diff_chat_open);
-    });
     assert!(cx.debug_bounds("session-page-close-editor").is_none());
     assert!(cx.debug_bounds("session-page-show-chat").is_none());
+    assert!(cx.debug_bounds("session-page-editor-title-icon").is_some());
+    assert!(cx.debug_bounds("session-page-editor-path-title").is_some());
 
-    page.update_in(cx, |page, window, cx| {
-      page.open_diff(
-        PathBuf::from("README.md"),
-        None,
-        OpenIntent::Open,
-        window,
-        cx,
-      );
-    });
-    await_open_file(&page, cx).await;
     page.update_in(cx, |page, window, cx| page.hide_diff_chat(window, cx));
     cx.run_until_parked();
 
@@ -4279,20 +4351,9 @@ mod tests {
       assert!(!page.diff_chat_open);
     });
     assert!(cx.debug_bounds("session-page-close-editor").is_none());
-    assert!(cx.debug_bounds("session-page-show-chat").is_some());
-
-    let show_chat = cx
-      .debug_bounds("session-page-show-chat")
-      .expect("show chat");
-    cx.simulate_click(show_chat.center(), gpui::Modifiers::default());
-    cx.run_until_parked();
-
-    page.read_with(cx, |page, _| {
-      assert_eq!(page.center, CenterView::Conversation);
-      assert!(page.diff_chat_open);
-    });
-    assert!(cx.debug_bounds("session-page-close-editor").is_none());
     assert!(cx.debug_bounds("session-page-show-chat").is_none());
+    assert!(cx.debug_bounds("session-page-editor-title-icon").is_some());
+    assert!(cx.debug_bounds("session-page-editor-path-title").is_some());
   }
 
   #[gpui::test]

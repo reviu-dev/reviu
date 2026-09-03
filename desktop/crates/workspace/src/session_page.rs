@@ -45,9 +45,7 @@ use crate::dock_panel::{
   DockPanelTab,
 };
 use crate::file_search_palette::open_file_search_palette;
-use crate::file_view::{
-  BinaryPreview, build_binary_preview, render_binary_preview, render_file_title_with_status,
-};
+use crate::file_view::{BinaryPreview, build_binary_preview, render_binary_preview};
 use crate::inbox::Inbox;
 use crate::navigation::NavigationHistory;
 use crate::open_intent::OpenIntent;

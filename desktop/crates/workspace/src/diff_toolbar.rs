@@ -1,6 +1,6 @@
 //! The row above a diff: which file, where you are in it, and how it is shown.
 //! The shell's diff and the pull request's Changes tab render the same one, with
-//! their own buttons on either side of it.
+//! host-specific controls after the shared toggles.
 
 use std::rc::Rc;
 
@@ -56,7 +56,6 @@ pub(crate) struct SplitControl {
 pub(crate) struct DiffToolbar {
   /// Element ids are namespaced per host: both toolbars can be mounted at once.
   id_prefix: &'static str,
-  before_title: Vec<AnyElement>,
   title: Option<AnyElement>,
   navigation: Option<NavigationControl>,
   preview: Option<ToggleControl>,
@@ -70,7 +69,6 @@ impl DiffToolbar {
   pub(crate) fn new(id_prefix: &'static str) -> Self {
     Self {
       id_prefix,
-      before_title: Vec::new(),
       title: None,
       navigation: None,
       preview: None,
@@ -79,12 +77,6 @@ impl DiffToolbar {
       after_toggles: Vec::new(),
       filled: false,
     }
-  }
-
-  /// A button of the host, before the file name.
-  pub(crate) fn before_title(mut self, element: AnyElement) -> Self {
-    self.before_title.push(element);
-    self
   }
 
   pub(crate) fn title(mut self, title: AnyElement) -> Self {
@@ -152,9 +144,6 @@ impl DiffToolbar {
       .border_color(theme.border);
     if self.filled {
       row = row.bg(theme.sidebar);
-    }
-    for element in self.before_title {
-      row = row.child(element);
     }
     if let Some(title) = self.title {
       row = row.child(title);
