@@ -152,6 +152,7 @@ enum CenterTabKind {
 struct CenterTab {
   kind: CenterTabKind,
   path: Option<PathBuf>,
+  conversation_id: Option<String>,
 }
 
 impl CenterTab {
@@ -170,6 +171,15 @@ impl CenterTab {
     Self {
       kind: CenterTabKind::Chat,
       path: None,
+      conversation_id: None,
+    }
+  }
+
+  fn chat_for(conversation_id: impl Into<String>) -> Self {
+    Self {
+      kind: CenterTabKind::Chat,
+      path: None,
+      conversation_id: Some(conversation_id.into()),
     }
   }
 
@@ -177,6 +187,7 @@ impl CenterTab {
     Self {
       kind: CenterTabKind::File,
       path: Some(path),
+      conversation_id: None,
     }
   }
 
@@ -184,6 +195,7 @@ impl CenterTab {
     Self {
       kind: CenterTabKind::Diff,
       path: Some(path),
+      conversation_id: None,
     }
   }
 
@@ -191,11 +203,16 @@ impl CenterTab {
     Self {
       kind: CenterTabKind::InteractiveRebase,
       path: None,
+      conversation_id: None,
     }
   }
 
   fn path(&self) -> Option<&Path> {
     self.path.as_deref()
+  }
+
+  fn conversation_id(&self) -> Option<&str> {
+    self.conversation_id.as_deref()
   }
 }
 
@@ -1014,17 +1031,19 @@ impl SessionPage {
       let tabs = self
         .center_tabs
         .iter()
-        .filter(|tab| tab.kind != CenterTabKind::InteractiveRebase)
+        .filter(|tab| {
+          tab.kind != CenterTabKind::InteractiveRebase
+            && self.center_tab_belongs_to_checkout(tab, &previous_checkout, cx)
+        })
         .cloned()
         .collect();
       self
         .center_tabs_by_checkout
         .insert(previous_checkout.clone(), tabs);
-      if let Some(tab) = self
-        .active_center_tab
-        .clone()
-        .filter(|tab| tab.kind != CenterTabKind::InteractiveRebase)
-      {
+      if let Some(tab) = self.active_center_tab.clone().filter(|tab| {
+        tab.kind != CenterTabKind::InteractiveRebase
+          && self.center_tab_belongs_to_checkout(tab, &previous_checkout, cx)
+      }) {
         self
           .center_active_tab_by_checkout
           .insert(previous_checkout, tab);
@@ -1393,19 +1412,63 @@ impl SessionPage {
     self.window_handle
   }
 
-  fn remember_center_tab(&mut self, tab: CenterTab) {
-    if tab.kind == CenterTabKind::Chat {
-      self.center_tabs = CenterTab::with_chat_tab(self.center_tabs.clone());
-      self.active_center_tab = Some(tab);
-      return;
+  fn center_tab_belongs_to_checkout(&self, tab: &CenterTab, checkout: &Path, cx: &App) -> bool {
+    match tab.kind {
+      CenterTabKind::Chat => tab
+        .conversation_id()
+        .and_then(|id| self.session_checkout_for_id(id, cx))
+        .is_none_or(|path| path == checkout),
+      CenterTabKind::File | CenterTabKind::Diff => true,
+      CenterTabKind::InteractiveRebase => false,
     }
-    self.center_tabs.retain(|existing| existing != &tab);
+  }
+
+  fn chat_tab_for_panel(panel: &Entity<AgentChatPanel>, cx: &App) -> CenterTab {
+    CenterTab::chat_for(panel.read(cx).current_conversation().id.clone())
+  }
+
+  fn active_chat_tab(&self, cx: &App) -> CenterTab {
+    self
+      .agent_chat_view
+      .as_ref()
+      .map(|panel| Self::chat_tab_for_panel(panel, cx))
+      .unwrap_or_else(CenterTab::chat)
+  }
+
+  fn remember_active_chat_tab(&mut self, cx: &App) {
+    self.remember_center_tab(self.active_chat_tab(cx));
+  }
+
+  fn forget_center_chat_tab(&mut self, conversation_id: &str) {
+    let is_removed_chat = |tab: &CenterTab| {
+      tab.kind == CenterTabKind::Chat && tab.conversation_id.as_deref() == Some(conversation_id)
+    };
+    self.center_tabs.retain(|tab| !is_removed_chat(tab));
+    for tabs in self.center_tabs_by_checkout.values_mut() {
+      tabs.retain(|tab| !is_removed_chat(tab));
+    }
+    self
+      .center_active_tab_by_checkout
+      .retain(|_, tab| !is_removed_chat(tab));
+    if self.active_center_tab.as_ref().is_some_and(is_removed_chat) {
+      self.active_center_tab = Some(CenterTab::chat());
+    }
+  }
+
+  fn remember_center_tab(&mut self, tab: CenterTab) {
+    self.center_tabs.retain(|existing| {
+      existing != &tab
+        && !(tab.kind == CenterTabKind::Chat
+          && tab.conversation_id.is_some()
+          && existing.kind == CenterTabKind::Chat
+          && existing.conversation_id.is_none())
+    });
     self.center_tabs.push(tab.clone());
     self.active_center_tab = Some(tab);
   }
 
   fn activate_conversation_tab(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-    self.remember_center_tab(CenterTab::chat());
+    self.remember_active_chat_tab(cx);
     if self.center == CenterView::Conversation {
       self.focus_agent_input_on_next_frame(window, cx);
       return;
@@ -1424,7 +1487,13 @@ impl SessionPage {
     cx: &mut Context<Self>,
   ) {
     match tab.kind {
-      CenterTabKind::Chat => self.activate_conversation_tab(window, cx),
+      CenterTabKind::Chat => {
+        if let Some(id) = tab.conversation_id {
+          self.select_session(&id, window, cx);
+        } else {
+          self.activate_conversation_tab(window, cx);
+        }
+      }
       CenterTabKind::File => {
         if let Some(path) = tab.path {
           self.open_file(path, None, None, intent, window, cx);

@@ -61,6 +61,7 @@ impl SessionPage {
     let view = self.build_fallback_chat_panel(resume, window, cx);
     view.update(cx, |panel, _| panel.set_active_conversation(true));
     self.agent_chat_view = Some(view);
+    self.remember_active_chat_tab(cx);
     self.refresh_session_list(cx);
     self.sync_active_checkout(window, cx);
   }
@@ -184,7 +185,11 @@ impl SessionPage {
       .collect()
   }
 
-  fn conversation_meta(&self, id: &str, cx: &App) -> Option<agent_chat_panel::ConversationMeta> {
+  pub(super) fn conversation_meta(
+    &self,
+    id: &str,
+    cx: &App,
+  ) -> Option<agent_chat_panel::ConversationMeta> {
     self
       .conversation_hub
       .find_conversation(id, cx)
@@ -440,6 +445,7 @@ impl SessionPage {
       if let Some(store) = store {
         self.cleanup_session_worktree(repo_root, store, &id, cx);
       }
+      self.forget_center_chat_tab(&id);
       return;
     }
     let id = panel.read(cx).current_conversation().id.clone();
@@ -1175,6 +1181,7 @@ impl SessionPage {
     let view = self.build_chat_panel(repo_root, store, None, window, cx);
     view.update(cx, |panel, _| panel.set_active_conversation(true));
     self.agent_chat_view = Some(view);
+    self.remember_active_chat_tab(cx);
     self.evict_parked_chat_panels(cx);
     self.sync_agent_chat_close_control(cx);
     self.refresh_session_list(cx);
@@ -1291,6 +1298,7 @@ impl SessionPage {
             view.update(cx, |panel, _| panel.set_active_conversation(true));
             let conversation_id = view.read(cx).current_conversation().id.clone();
             this.agent_chat_view = Some(view);
+            this.remember_active_chat_tab(cx);
             if let Some(store) = target_store.clone() {
               store.update(cx, |store, cx| {
                 store.set_worktree(
@@ -1376,22 +1384,26 @@ impl SessionPage {
       };
       view.update(cx, |panel, _| panel.set_active_conversation(true));
       self.agent_chat_view = Some(view);
+      self.remember_active_chat_tab(cx);
     }
+    self.forget_center_chat_tab(id);
     self.refresh_session_list(cx);
     self.sync_active_checkout(window, cx);
     cx.notify();
   }
 
   fn reveal_active_session_chat(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-    if self.center == CenterView::Diff && !self.diff_chat_open {
-      self.diff_chat_open = true;
+    self.remember_active_chat_tab(cx);
+    self.diff_chat_open = true;
+    if self.center != CenterView::Conversation {
+      self.center = CenterView::Conversation;
       self.sync_agent_chat_close_control(cx);
       cx.notify();
     }
     self.focus_agent_input_on_next_frame(window, cx);
   }
 
-  fn session_checkout_for_id(&self, id: &str, cx: &App) -> Option<PathBuf> {
+  pub(super) fn session_checkout_for_id(&self, id: &str, cx: &App) -> Option<PathBuf> {
     self
       .agent_chat_view
       .iter()
@@ -1440,6 +1452,7 @@ impl SessionPage {
     if let Some(active) = self.agent_chat_view.as_ref()
       && active.read(cx).current_conversation().id == id
     {
+      self.remember_active_chat_tab(cx);
       self.reveal_active_session_chat(window, cx);
       return;
     }
@@ -1471,6 +1484,7 @@ impl SessionPage {
       store.update(cx, |store, cx| store.set_active(Some(id.to_string()), cx));
     }
     self.agent_chat_view = Some(panel);
+    self.remember_active_chat_tab(cx);
     self.evict_parked_chat_panels(cx);
     self.sync_agent_chat_close_control(cx);
     self.refresh_session_list(cx);
@@ -2313,6 +2327,60 @@ mod tests {
           .as_deref(),
         Some("pi-acp")
       );
+    });
+  }
+
+  #[gpui::test]
+  async fn chat_sessions_stay_open_as_center_tabs(cx: &mut TestAppContext) {
+    let (_repo, page, cx) = page_with_agent_panel("session-page-chat-tabs", cx).await;
+
+    let first = active_panel(&page, cx);
+    first.update(cx, |panel, cx| {
+      panel.seed_user_message_for_test("first", cx)
+    });
+    cx.run_until_parked();
+    let first_id = first.read_with(cx, |panel, _| panel.current_conversation().id.clone());
+
+    page.update_in(cx, |page, window, cx| page.new_session(window, cx));
+    cx.run_until_parked();
+    let second = active_panel(&page, cx);
+    second.update(cx, |panel, cx| {
+      panel.seed_user_message_for_test("second", cx)
+    });
+    cx.run_until_parked();
+    let second_id = second.read_with(cx, |panel, _| panel.current_conversation().id.clone());
+
+    page.read_with(cx, |page, _| {
+      assert!(
+        page
+          .center_tabs
+          .contains(&CenterTab::chat_for(first_id.clone()))
+      );
+      assert!(
+        page
+          .center_tabs
+          .contains(&CenterTab::chat_for(second_id.clone()))
+      );
+      assert_eq!(
+        page.active_center_tab,
+        Some(CenterTab::chat_for(second_id.clone()))
+      );
+    });
+
+    page.update_in(cx, |page, window, cx| {
+      page.activate_center_tab(
+        CenterTab::chat_for(first_id.clone()),
+        OpenIntent::Open,
+        window,
+        cx,
+      )
+    });
+    cx.run_until_parked();
+
+    assert_eq!(active_panel(&page, cx).entity_id(), first.entity_id());
+    page.read_with(cx, |page, _| {
+      assert_eq!(page.active_center_tab, Some(CenterTab::chat_for(first_id)));
+      assert!(page.center_tabs.contains(&CenterTab::chat_for(second_id)));
     });
   }
 
@@ -3264,14 +3332,17 @@ mod tests {
     });
     await_open_file(&page, cx).await;
 
-    // Another MAIN-checkout session: same checkout, the diff stays.
+    // Another MAIN-checkout session: same checkout, the chat tab opens but the diff tab stays.
     page.update_in(cx, |page, window, cx| page.new_session(window, cx));
     cx.run_until_parked();
     page.read_with(cx, |page, _| {
-      assert_eq!(
-        page.center,
-        CenterView::Diff,
-        "same checkout keeps the diff"
+      assert_eq!(page.center, CenterView::Conversation);
+      assert!(page.editor.is_some(), "the diff editor stays warm");
+      assert!(
+        page
+          .center_tabs
+          .contains(&CenterTab::diff(PathBuf::from("README.md"))),
+        "same checkout keeps the diff tab"
       );
     });
 
@@ -3289,17 +3360,29 @@ mod tests {
     page.update_in(cx, |page, window, cx| {
       page.select_session(&first_id, window, cx)
     });
+    cx.run_until_parked();
+    page.read_with(cx, |page, _| {
+      assert_eq!(page.center, CenterView::Conversation);
+      assert!(
+        page
+          .center_tabs
+          .contains(&CenterTab::diff(PathBuf::from("README.md"))),
+        "returning to the checkout restores its diff tab"
+      );
+    });
+
+    page.update_in(cx, |page, window, cx| {
+      page.activate_center_tab(
+        CenterTab::diff(PathBuf::from("README.md")),
+        OpenIntent::Open,
+        window,
+        cx,
+      )
+    });
     await_open_file(&page, cx).await;
     page.read_with(cx, |page, _| {
       assert_eq!(page.center, CenterView::Diff);
       assert_eq!(page.selected_file.as_deref(), Some(Path::new("README.md")));
-      assert_eq!(
-        page.center_tabs,
-        vec![
-          CenterTab::chat(),
-          CenterTab::diff(PathBuf::from("README.md"))
-        ]
-      );
     });
 
     cleanup_worktrees_root(&repo.path);
@@ -3336,7 +3419,7 @@ mod tests {
     cx.run_until_parked();
 
     page.read_with(cx, |page, cx| {
-      assert_eq!(page.center, CenterView::Diff);
+      assert_eq!(page.center, CenterView::Conversation);
       assert!(page.diff_chat_open);
       assert_eq!(page.selected_file.as_deref(), Some(Path::new("README.md")));
       assert!(page.editor.is_some());
@@ -3353,7 +3436,7 @@ mod tests {
       );
     });
     assert!(cx.debug_bounds("session-conversation-pane").is_some());
-    assert!(cx.debug_bounds("session-diff-editor").is_some());
+    assert!(cx.debug_bounds("session-diff-editor").is_none());
 
     cleanup_worktrees_root(&repo.path);
   }
@@ -3426,8 +3509,8 @@ mod tests {
     cx.run_until_parked();
 
     page.read_with(cx, |page, _| {
-      assert_eq!(page.center, CenterView::Diff);
-      assert!(!page.diff_chat_open);
+      assert_eq!(page.center, CenterView::Conversation);
+      assert!(page.diff_chat_open);
       assert!(page.editor.is_some());
     });
 
@@ -3437,7 +3520,7 @@ mod tests {
     cx.run_until_parked();
 
     page.read_with(cx, |page, cx| {
-      assert_eq!(page.center, CenterView::Diff);
+      assert_eq!(page.center, CenterView::Conversation);
       assert!(page.diff_chat_open);
       assert_eq!(page.selected_file.as_deref(), Some(Path::new("README.md")));
       assert!(page.editor.is_some());
@@ -3454,7 +3537,7 @@ mod tests {
       );
     });
     assert!(cx.debug_bounds("session-conversation-pane").is_some());
-    assert!(cx.debug_bounds("session-diff-editor").is_some());
+    assert!(cx.debug_bounds("session-diff-editor").is_none());
 
     page.update_in(cx, |page, window, cx| page.hide_diff_chat(window, cx));
     cx.run_until_parked();
@@ -3464,7 +3547,7 @@ mod tests {
     cx.run_until_parked();
 
     page.read_with(cx, |page, _| {
-      assert_eq!(page.center, CenterView::Diff);
+      assert_eq!(page.center, CenterView::Conversation);
       assert!(page.diff_chat_open);
       assert!(page.editor.is_some());
     });

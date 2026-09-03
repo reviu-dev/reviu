@@ -242,7 +242,7 @@ impl SessionPage {
       self.focus_editor_on_next_frame(window, cx);
     } else {
       self.center = CenterView::Conversation;
-      self.active_center_tab = Some(CenterTab::chat());
+      self.remember_active_chat_tab(cx);
       self.focus_agent_input_on_next_frame(window, cx);
     }
     cx.notify();

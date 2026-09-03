@@ -1123,8 +1123,7 @@ impl SessionPage {
       return;
     }
     self.center = CenterView::Conversation;
-    self.active_center_tab = Some(CenterTab::chat());
-    self.center_tabs = CenterTab::with_chat_tab(self.center_tabs.clone());
+    self.remember_active_chat_tab(cx);
     self.diff_chat_open = true;
     self.sync_agent_chat_close_control(cx);
     self.focus_agent_input_on_next_frame(window, cx);

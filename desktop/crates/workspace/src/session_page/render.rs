@@ -351,6 +351,24 @@ impl SessionPage {
       .into_any_element()
   }
 
+  fn center_chat_tab_label(&self, tab: &CenterTab, cx: &App) -> String {
+    let Some(id) = tab.conversation_id() else {
+      return "Chat".to_string();
+    };
+    let title = self
+      .agent_chat_view
+      .iter()
+      .chain(self.background_chat_panels.iter().map(|(_, panel)| panel))
+      .find_map(|panel| {
+        let panel = panel.read(cx);
+        (panel.current_conversation().id == id).then(|| panel.current_conversation().title.clone())
+      })
+      .or_else(|| self.conversation_meta(id, cx).map(|meta| meta.title));
+    title
+      .filter(|title| !title.trim().is_empty())
+      .unwrap_or_else(|| "New chat".to_string())
+  }
+
   pub(super) fn render_center_tabs(&self, cx: &mut Context<Self>) -> AnyElement {
     let mut tabs = CenterTab::with_chat_tab(self.center_tabs.clone());
     if self.center == CenterView::InteractiveRebase
@@ -407,7 +425,7 @@ impl SessionPage {
           .is_some_and(|editor| editor.read(cx).is_dirty);
       let (label, icon) = match tab.kind {
         CenterTabKind::Chat => (
-          "Chat".to_string(),
+          self.center_chat_tab_label(tab, cx),
           gpui_component::Icon::new(UiIconName::MessageCircle),
         ),
         CenterTabKind::File | CenterTabKind::Diff => {
