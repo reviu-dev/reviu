@@ -344,7 +344,12 @@ impl SessionPage {
         cx.subscribe(
           &editor,
           |this, _editor, event: &EditorEvent, cx| match event {
-            EditorEvent::Saved | EditorEvent::HunkStagingChanged => {
+            EditorEvent::Saved => {
+              this.editor_file_modified = this.active_worktree_file_modified(cx);
+              this.cache_active_editor();
+              this.dock_panel.update(cx, |panel, cx| panel.refresh(cx));
+            }
+            EditorEvent::HunkStagingChanged => {
               this.dock_panel.update(cx, |panel, cx| panel.refresh(cx));
             }
           },
@@ -356,6 +361,12 @@ impl SessionPage {
     self.open_file_task = Some(task);
     self.focus_editor_if_asked(intent, window, cx);
     cx.notify();
+  }
+
+  fn active_worktree_file_modified(&self, cx: &App) -> Option<SystemTime> {
+    let repo_root = self.checkout_root(cx)?;
+    let selected_file = self.selected_file.as_ref()?;
+    worktree_file_modified(&repo_root.join(selected_file))
   }
 
   fn cache_active_editor(&mut self) {
