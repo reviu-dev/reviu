@@ -80,6 +80,12 @@ pub(super) enum UnsavedEditorAction {
   },
 }
 
+fn worktree_file_modified(path: &Path) -> Option<SystemTime> {
+  std::fs::metadata(path)
+    .and_then(|metadata| metadata.modified())
+    .ok()
+}
+
 fn agent_snapshot_diff_set(
   old_text: Option<&str>,
   new_text: &str,
@@ -216,6 +222,7 @@ impl SessionPage {
     window: &mut Window,
     cx: &mut Context<Self>,
   ) {
+    self.cache_active_editor();
     let Some(repo_root) = self.checkout_root(cx) else {
       return;
     };
@@ -262,6 +269,10 @@ impl SessionPage {
       return;
     }
 
+    if self.restore_center_editor(&tab, &rel_path, reveal_doc_position, intent, window, cx) {
+      return;
+    }
+
     self.open_file_generation = self.open_file_generation.wrapping_add(1);
     let generation = self.open_file_generation;
     self.record_recent_file(&repo_root, &rel_path);
@@ -269,6 +280,7 @@ impl SessionPage {
     self.editor_tab = Some(tab.clone());
     self.selected_file = Some(rel_path.clone());
     self.editor = None;
+    self.editor_file_modified = None;
     self.binary_preview = None;
     // Wherever the open came from (chat recap, palette, review row), the
     // Changes list highlights the file it is now showing.
@@ -297,6 +309,7 @@ impl SessionPage {
           return;
         }
         let binary_preview = build_binary_preview(rel_path.as_path(), loaded.binary_bytes.clone());
+        let file_modified = worktree_file_modified(&file_path);
         let editor =
           cx.new(move |cx| Editor::new_with_loaded_file(repo_root, file_path, loaded, cx));
         editor.update(cx, |editor, cx| {
@@ -308,7 +321,9 @@ impl SessionPage {
           }
         });
         this.binary_preview = binary_preview;
+        this.editor_file_modified = file_modified;
         this.editor = Some(editor.clone());
+        this.cache_active_editor();
         this.sync_editor_unmerged_state(cx);
         this.sync_git_telemetry(cx);
         // Focus once loaded: the requester (file tree, list, search) may still hold
@@ -341,6 +356,80 @@ impl SessionPage {
     self.open_file_task = Some(task);
     self.focus_editor_if_asked(intent, window, cx);
     cx.notify();
+  }
+
+  fn cache_active_editor(&mut self) {
+    let (Some(tab), Some(selected_file)) = (self.editor_tab.clone(), self.selected_file.clone())
+    else {
+      return;
+    };
+    if self.opened_snapshot.is_some()
+      || !matches!(tab.kind, CenterTabKind::File | CenterTabKind::Diff)
+    {
+      return;
+    }
+    self.editor_states.insert(
+      tab,
+      CenterEditorState {
+        selected_file,
+        file_modified: self.editor_file_modified,
+        editor: self.editor.clone(),
+        binary_preview: self.binary_preview.clone(),
+        opened_snapshot: None,
+      },
+    );
+  }
+
+  fn restore_center_editor(
+    &mut self,
+    tab: &CenterTab,
+    rel_path: &Path,
+    reveal_doc_position: Option<(usize, usize)>,
+    intent: OpenIntent,
+    window: &mut Window,
+    cx: &mut Context<Self>,
+  ) -> bool {
+    let Some(state) = self.editor_states.get(tab).cloned() else {
+      return false;
+    };
+    let Some(repo_root) = self.checkout_root(cx) else {
+      return false;
+    };
+    if worktree_file_modified(&repo_root.join(rel_path)) != state.file_modified {
+      self.editor_states.remove(tab);
+      return false;
+    }
+    self.open_file_generation = self.open_file_generation.wrapping_add(1);
+    self.open_file_task = None;
+    self.remember_center_tab(tab.clone());
+    self.editor_tab = Some(tab.clone());
+    self.selected_file = Some(state.selected_file);
+    self.editor_file_modified = state.file_modified;
+    self.editor = state.editor.clone();
+    self.binary_preview = state.binary_preview;
+    self.opened_snapshot = state.opened_snapshot;
+    self.svg_preview.update(cx, |preview, _| preview.clear());
+    self
+      .dock_panel
+      .read(cx)
+      .changes_list()
+      .update(cx, |list, cx| {
+        list.select_path(Some(rel_path), cx);
+      });
+    if let (Some((doc_line, doc_column)), Some(editor)) = (reveal_doc_position, self.editor.clone())
+    {
+      editor.update(cx, |editor, cx| {
+        editor.reveal_source_position(doc_line, doc_column, cx)
+      });
+    }
+    self.sync_editor_unmerged_state(cx);
+    self.sync_git_telemetry(cx);
+    if tab.kind == CenterTabKind::Diff {
+      self.sync_agent_review_comments_to_editor(cx);
+    }
+    self.focus_editor_if_asked(intent, window, cx);
+    cx.notify();
+    true
   }
 
   /// Split needs two sides to compare: a whole-file change or a binary preview
@@ -418,6 +507,7 @@ impl SessionPage {
       whole_file_change: agent_whole_file_change,
     });
     self.editor = None;
+    self.editor_file_modified = None;
     self.binary_preview = None;
     self.svg_preview.update(cx, |preview, _| preview.clear());
     self
@@ -467,6 +557,7 @@ impl SessionPage {
           }
         });
         configure_review(&editor, ReviewDestination::None, cx);
+        this.editor_file_modified = None;
         this.editor = Some(editor.clone());
         this.sync_git_telemetry(cx);
         if this.center == CenterView::Diff && intent.takes_focus() {
@@ -529,6 +620,7 @@ impl SessionPage {
     self.selected_file = Some(rel_path.clone());
     self.opened_snapshot = Some(OpenedSnapshot::Commit(commit_oid.clone()));
     self.editor = None;
+    self.editor_file_modified = None;
     self.binary_preview = None;
     let hide_whitespace = self.hide_whitespace;
     let diff_view = self.effective_diff_view(&rel_path, cx);
@@ -566,6 +658,7 @@ impl SessionPage {
         configure_review(&editor, ReviewDestination::None, cx);
         this.binary_preview =
           build_binary_preview(rel_path.as_path(), commit_file.binary_bytes.clone());
+        this.editor_file_modified = None;
         this.editor = Some(editor);
         this.svg_preview.update(cx, |preview, _| preview.clear());
         cx.notify();
@@ -659,6 +752,7 @@ impl SessionPage {
       head: head_oid.clone(),
     });
     self.editor = None;
+    self.editor_file_modified = None;
     self.binary_preview = None;
     let hide_whitespace = self.hide_whitespace;
     let diff_view = self.effective_diff_view(&rel_path, cx);
@@ -698,6 +792,7 @@ impl SessionPage {
         });
         this.binary_preview =
           build_binary_preview(rel_path.as_path(), range_file.binary_bytes.clone());
+        this.editor_file_modified = None;
         this.editor = Some(editor.clone());
         // The comments sync through the page's editor: install after it lands,
         // or they hang on the one this replaces.
@@ -1245,10 +1340,12 @@ impl SessionPage {
     self
       .center_tab_history
       .retain(|candidate| candidate != &tab);
+    self.editor_states.remove(&tab);
     let editor_closed = self.editor_tab.as_ref() == Some(&tab);
     if editor_closed {
       self.discard_active_editor();
       self.editor_tab = None;
+      self.editor_file_modified = None;
       self.selected_file = None;
       self.opened_snapshot = None;
       self.svg_preview.update(cx, |preview, _| preview.clear());
@@ -1288,7 +1385,11 @@ impl SessionPage {
   }
 
   fn discard_active_editor(&mut self) {
+    if let Some(tab) = self.editor_tab.as_ref() {
+      self.editor_states.remove(tab);
+    }
     self.editor_tab = None;
+    self.editor_file_modified = None;
     self.editor = None;
     self.binary_preview = None;
     self.open_file_task = None;
@@ -1947,6 +2048,63 @@ mod tests {
   }
 
   #[gpui::test]
+  async fn file_and_diff_tabs_keep_their_editor_entities(cx: &mut TestAppContext) {
+    let repo = TempRepo::init("session-page-center-tab-editor-cache");
+    commit_text_file(&repo.path, Path::new("README.md"), "v1\n", "initial");
+    commit_text_file(&repo.path, Path::new("other.md"), "one\n", "second");
+    std::fs::write(repo.path.join("README.md"), "v2\n").expect("update file");
+    std::fs::write(repo.path.join("other.md"), "two\n").expect("update other");
+
+    let (page, cx) = add_session_page_window(repo.path.clone(), cx);
+    page.update_in(cx, |page, window, cx| {
+      page.open_diff(
+        PathBuf::from("README.md"),
+        None,
+        OpenIntent::Open,
+        window,
+        cx,
+      );
+    });
+    await_open_file(&page, cx).await;
+    let first_editor = page.read_with(cx, |page, _| {
+      page.editor.as_ref().expect("first editor").entity_id()
+    });
+
+    page.update_in(cx, |page, window, cx| {
+      page.open_diff(
+        PathBuf::from("other.md"),
+        None,
+        OpenIntent::Open,
+        window,
+        cx,
+      );
+    });
+    await_open_file(&page, cx).await;
+    let second_editor = page.read_with(cx, |page, _| {
+      page.editor.as_ref().expect("second editor").entity_id()
+    });
+    assert_ne!(first_editor, second_editor);
+
+    page.update_in(cx, |page, window, cx| {
+      page.activate_center_tab(
+        CenterTab::diff(PathBuf::from("README.md")),
+        OpenIntent::Open,
+        window,
+        cx,
+      );
+    });
+    await_open_file(&page, cx).await;
+
+    page.read_with(cx, |page, _| {
+      assert_eq!(page.selected_file.as_deref(), Some(Path::new("README.md")));
+      assert_eq!(
+        page.editor.as_ref().expect("restored editor").entity_id(),
+        first_editor
+      );
+    });
+  }
+
+  #[gpui::test]
   async fn closing_the_active_center_tab_returns_to_the_previous_tab(cx: &mut TestAppContext) {
     let repo = TempRepo::init("session-page-center-tab-close-previous");
     commit_text_file(&repo.path, Path::new("README.md"), "v1\n", "initial");
@@ -1985,7 +2143,9 @@ mod tests {
     });
     await_open_file(&page, cx).await;
 
-    cx.dispatch_action(crate::CloseCenterTab);
+    page.update_in(cx, |page, window, cx| {
+      page.close_active_center_tab_action(&crate::CloseCenterTab, window, cx);
+    });
     await_open_file(&page, cx).await;
 
     page.read_with(cx, |page, _| {

@@ -4,7 +4,7 @@ use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime};
 
 use agent_chat_panel::{AgentChatPanel, AgentChatPanelEvent, ConversationStore, TurnGate};
 use editor::{
@@ -139,6 +139,15 @@ enum CenterView {
   Diff,
   /// The todo of an interactive rebase, waiting to be applied.
   InteractiveRebase,
+}
+
+#[derive(Clone)]
+struct CenterEditorState {
+  selected_file: PathBuf,
+  file_modified: Option<SystemTime>,
+  editor: Option<Entity<Editor>>,
+  binary_preview: Option<BinaryPreview>,
+  opened_snapshot: Option<OpenedSnapshot>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -285,6 +294,8 @@ pub struct SessionPage {
   center_active_tab_by_checkout: HashMap<PathBuf, CenterTab>,
   active_center_tab: Option<CenterTab>,
   editor_tab: Option<CenterTab>,
+  editor_states: HashMap<CenterTab, CenterEditorState>,
+  editor_file_modified: Option<SystemTime>,
   editor: Option<Entity<Editor>>,
   binary_preview: Option<BinaryPreview>,
   selected_file: Option<PathBuf>,
@@ -573,6 +584,8 @@ impl SessionPage {
       center_active_tab_by_checkout: HashMap::new(),
       active_center_tab: Some(CenterTab::chat()),
       editor_tab: None,
+      editor_states: HashMap::new(),
+      editor_file_modified: None,
       editor: None,
       binary_preview: None,
       selected_file: None,
@@ -1001,6 +1014,8 @@ impl SessionPage {
     self.center_tab_history = CenterTab::default_tabs();
     self.active_center_tab = Some(CenterTab::chat());
     self.editor_tab = None;
+    self.editor_states.clear();
+    self.editor_file_modified = None;
     self.editor = None;
     self.binary_preview = None;
     self.selected_file = None;
