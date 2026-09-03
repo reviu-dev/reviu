@@ -1,6 +1,6 @@
 //! Agent-first shell: sessions sidebar, conversation center, right dock.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::sync::Arc;
@@ -278,6 +278,8 @@ pub struct SessionPage {
   _checkout_options_task: Option<Task<()>>,
   center: CenterView,
   center_file_tabs: Vec<PathBuf>,
+  center_file_tabs_by_checkout: HashMap<PathBuf, Vec<PathBuf>>,
+  center_active_file_by_checkout: HashMap<PathBuf, PathBuf>,
   editor: Option<Entity<Editor>>,
   binary_preview: Option<BinaryPreview>,
   selected_file: Option<PathBuf>,
@@ -557,6 +559,8 @@ impl SessionPage {
       _checkout_options_task: None,
       center: CenterView::Conversation,
       center_file_tabs: Vec::new(),
+      center_file_tabs_by_checkout: HashMap::new(),
+      center_active_file_by_checkout: HashMap::new(),
       editor: None,
       binary_preview: None,
       selected_file: None,
@@ -939,11 +943,34 @@ impl SessionPage {
     {
       return;
     }
+    if let Some(previous_checkout) = self.synced_checkout.clone() {
+      self
+        .center_file_tabs_by_checkout
+        .insert(previous_checkout.clone(), self.center_file_tabs.clone());
+      if let Some(selected_file) = self.selected_file.clone() {
+        self
+          .center_active_file_by_checkout
+          .insert(previous_checkout, selected_file);
+      } else {
+        self
+          .center_active_file_by_checkout
+          .remove(&previous_checkout);
+      }
+    }
+
+    let restored_file_tabs = checkout
+      .as_ref()
+      .and_then(|checkout| self.center_file_tabs_by_checkout.get(checkout).cloned())
+      .unwrap_or_default();
+    let restored_selected_file = checkout
+      .as_ref()
+      .and_then(|checkout| self.center_active_file_by_checkout.get(checkout).cloned())
+      .filter(|path| restored_file_tabs.contains(path));
+
     self.synced_checkout = checkout.clone();
-    // The open diff belongs to the checkout being left.
     self.close_diff(window, cx);
     self.center = CenterView::Conversation;
-    self.center_file_tabs.clear();
+    self.center_file_tabs = restored_file_tabs;
     self.editor = None;
     self.binary_preview = None;
     self.selected_file = None;
@@ -954,7 +981,7 @@ impl SessionPage {
       snapshot.set_repo_root(checkout.clone(), cx)
     });
     self.dock_panel.update(cx, |panel, cx| {
-      panel.set_repo_root(checkout, cx);
+      panel.set_repo_root(checkout.clone(), cx);
       panel.refresh(cx);
     });
     self.refresh_branch(cx);
@@ -968,7 +995,11 @@ impl SessionPage {
     }
     self.refresh_checkout_options(cx);
     self.push_checkout_selector(cx);
-    cx.notify();
+    if let Some(path) = restored_selected_file {
+      self.open_diff(path, None, OpenIntent::Browse, window, cx);
+    } else {
+      cx.notify();
+    }
   }
 
   /// Pins the git surfaces on one of the repo's checkouts without touching

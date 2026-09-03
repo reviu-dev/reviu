@@ -3240,7 +3240,7 @@ mod tests {
   }
 
   #[gpui::test]
-  async fn an_open_diff_survives_a_same_checkout_switch_and_closes_on_a_checkout_change(
+  async fn an_open_diff_survives_a_same_checkout_switch_and_restores_after_a_checkout_change(
     cx: &mut TestAppContext,
   ) {
     let (repo, page, cx) = page_with_agent_panel("session-page-checkout-diff", cx).await;
@@ -3275,7 +3275,7 @@ mod tests {
       );
     });
 
-    // A worktree session changes the checkout: the diff belongs to the one left.
+    // A worktree session changes the checkout: that checkout has no file tabs yet.
     page.update_in(cx, |page, window, cx| {
       page.new_worktree_session_in(repo.path.clone(), None, window, cx)
     });
@@ -3286,7 +3286,16 @@ mod tests {
       assert!(page.selected_file.is_none());
     });
 
-    let _ = first_id;
+    page.update_in(cx, |page, window, cx| {
+      page.select_session(&first_id, window, cx)
+    });
+    await_open_file(&page, cx).await;
+    page.read_with(cx, |page, _| {
+      assert_eq!(page.center, CenterView::Diff);
+      assert_eq!(page.selected_file.as_deref(), Some(Path::new("README.md")));
+      assert_eq!(page.center_file_tabs, vec![PathBuf::from("README.md")]);
+    });
+
     cleanup_worktrees_root(&repo.path);
   }
 
