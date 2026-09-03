@@ -20,6 +20,11 @@ pub(crate) struct ConversationHub {
   stores: Vec<(PathBuf, Entity<ConversationStore>)>,
 }
 
+pub(crate) struct ConversationStoreAccess {
+  pub store: Entity<ConversationStore>,
+  pub evicted_repo: Option<PathBuf>,
+}
+
 fn canonical(path: &Path) -> PathBuf {
   std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf())
 }
@@ -29,18 +34,21 @@ impl ConversationHub {
     Self { stores: Vec::new() }
   }
 
-  /// The store for a repo, created on first sight. `true` = newly created,
-  /// the caller's cue for one-time housekeeping (orphan sweep).
+  /// The store for a repo, created on first sight.
   pub fn store_for(
     &mut self,
     repo_root: &Path,
     protected_repos: &HashSet<PathBuf>,
     cx: &mut App,
-  ) -> Option<(Entity<ConversationStore>, bool)> {
+  ) -> Option<ConversationStoreAccess> {
     let key = canonical(repo_root);
     if let Some((_, store)) = self.stores.iter().find(|(existing, _)| *existing == key) {
-      return Some((store.clone(), false));
+      return Some(ConversationStoreAccess {
+        store: store.clone(),
+        evicted_repo: None,
+      });
     }
+    let mut evicted_repo = None;
     if self.stores.len() >= MAX_TRACKED_REPOS
       && let Some(evicted_index) = self.eviction_candidate(protected_repos)
     {
@@ -49,13 +57,17 @@ impl ConversationHub {
       // the aggregation: live panels hold their own handle to its store.
       let evicted = self.stores.remove(evicted_index);
       evicted.1.update(cx, |store, _| store.flush_on_quit());
+      evicted_repo = Some(evicted.0);
     }
     let state_dir =
       agent_chat_state_dir().map(|dir| AgentChatPanel::state_dir_for_repo(&dir, repo_root))?;
     let store = cx.new(|_| ConversationStore::new(state_dir));
     store.update(cx, |store, cx| store.arm_quit_flush(cx));
     self.stores.push((key, store.clone()));
-    Some((store, true))
+    Some(ConversationStoreAccess {
+      store,
+      evicted_repo,
+    })
   }
 
   fn eviction_candidate(&self, protected_repos: &HashSet<PathBuf>) -> Option<usize> {

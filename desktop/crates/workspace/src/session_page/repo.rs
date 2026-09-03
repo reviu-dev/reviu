@@ -87,8 +87,10 @@ impl SessionPage {
     // The fallback repo's store takes over; its first visit sweeps its
     // orphaned worktrees.
     self.chat_store = None;
-    if self.fallback_repo.is_some() {
-      self.ensure_chat_store(cx);
+    if self.fallback_repo.is_some()
+      && let Some(evicted_repo) = self.ensure_chat_store(cx)
+    {
+      self.push_repo_hidden_notification(&evicted_repo, window, cx);
     }
     self.refresh_session_list(cx);
     // With no session on screen the git surfaces follow the fallback repo;

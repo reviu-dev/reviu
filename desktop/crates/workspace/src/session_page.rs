@@ -34,7 +34,7 @@ use crate::agent_review_store::{read_review, review_path_for_repo, write_review}
 use crate::agent_settings::AgentSettings;
 use crate::auth_state::AuthStateStore;
 use crate::config::ConfigStore;
-use crate::conversation_hub::ConversationHub;
+use crate::conversation_hub::{ConversationHub, ConversationStoreAccess};
 use crate::diff_view_policy::{DiffViewInputs, effective_diff_view};
 use crate::dock_panel::{
   ChangesActionCommand, CommitMenuCommand, DockPanel, DockPanelEvent, DockPanelTab,
@@ -663,9 +663,23 @@ impl SessionPage {
     &mut self,
     repo_root: &Path,
     cx: &mut Context<Self>,
-  ) -> Option<(Entity<ConversationStore>, bool)> {
+  ) -> Option<ConversationStoreAccess> {
     let protected = self.protected_chat_repos(cx);
     self.conversation_hub.store_for(repo_root, &protected, cx)
+  }
+
+  fn push_repo_hidden_notification(&self, repo_root: &Path, window: &mut Window, cx: &mut App) {
+    let repo_name = repo_root
+      .file_name()
+      .map(|name| name.to_string_lossy().into_owned())
+      .unwrap_or_else(|| repo_root.to_string_lossy().into_owned());
+    window.push_notification(
+      Notification::info(format!(
+        "{repo_name} was hidden from the sidebar and remains in Recent Repositories."
+      ))
+      .title("Added repository to sidebar"),
+      cx,
+    );
   }
 
   /// Coming back to the window is the moment the working tree is most likely to

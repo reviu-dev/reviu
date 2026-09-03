@@ -48,7 +48,9 @@ impl SessionPage {
       None => None,
     };
     prune_agent_chat_state_once();
-    self.ensure_chat_store(cx);
+    if let Some(evicted_repo) = self.ensure_chat_store(cx) {
+      self.push_repo_hidden_notification(&evicted_repo, window, cx);
+    }
     let resume = match reconnect_resume {
       Some(meta) => meta,
       None => self
@@ -65,18 +67,18 @@ impl SessionPage {
 
   /// Points `chat_store` at the FALLBACK repo's store; sessions of other
   /// repos reach their own store through their panel or the hub.
-  pub(super) fn ensure_chat_store(&mut self, cx: &mut Context<Self>) {
+  pub(super) fn ensure_chat_store(&mut self, cx: &mut Context<Self>) -> Option<PathBuf> {
     let repo = self
       .fallback_repo
       .clone()
       .unwrap_or_else(|| PathBuf::from("."));
-    let Some((store, _)) = self.chat_store_for_repo(&repo, cx) else {
-      return;
-    };
-    self.chat_store = Some(store.clone());
+    let access = self.chat_store_for_repo(&repo, cx)?;
+    let evicted_repo = access.evicted_repo.clone();
+    self.chat_store = Some(access.store.clone());
     if self.fallback_repo.is_some() && self.swept_repos.insert(repo.clone()) {
-      self.sweep_orphan_worktrees(repo, store, cx);
+      self.sweep_orphan_worktrees(repo, access.store, cx);
     }
+    evicted_repo
   }
 
   /// Boot-time housekeeping for the checkouts we created: a crash between the
@@ -1144,10 +1146,17 @@ impl SessionPage {
     cx: &mut Context<Self>,
   ) {
     prune_agent_chat_state_once();
-    self.ensure_chat_store(cx);
-    let store = self
-      .chat_store_for_repo(&repo_root, cx)
-      .map(|(store, _)| store);
+    if let Some(evicted_repo) = self.ensure_chat_store(cx) {
+      self.push_repo_hidden_notification(&evicted_repo, window, cx);
+    }
+    let access = self.chat_store_for_repo(&repo_root, cx);
+    if let Some(evicted_repo) = access
+      .as_ref()
+      .and_then(|access| access.evicted_repo.as_ref())
+    {
+      self.push_repo_hidden_notification(evicted_repo, window, cx);
+    }
+    let store = access.map(|access| access.store);
     if let Some(panel) = self.agent_chat_view.as_ref() {
       // The shown conversation is still blank: it already is the new session.
       // Not while hydrating (its transcript may be about to land) and not when
@@ -1250,10 +1259,17 @@ impl SessionPage {
     cx: &mut Context<Self>,
   ) {
     prune_agent_chat_state_once();
-    self.ensure_chat_store(cx);
-    let target_store = self
-      .chat_store_for_repo(&repo_root, cx)
-      .map(|(store, _)| store);
+    if let Some(evicted_repo) = self.ensure_chat_store(cx) {
+      self.push_repo_hidden_notification(&evicted_repo, window, cx);
+    }
+    let access = self.chat_store_for_repo(&repo_root, cx);
+    if let Some(evicted_repo) = access
+      .as_ref()
+      .and_then(|access| access.evicted_repo.as_ref())
+    {
+      self.push_repo_hidden_notification(evicted_repo, window, cx);
+    }
+    let target_store = access.map(|access| access.store);
     cx.spawn_in(window, async move |this, cx| {
       let create_root = repo_root.clone();
       let created = cx
@@ -1346,9 +1362,14 @@ impl SessionPage {
       store.update(cx, |store, cx| store.set_active(None, cx));
       self.agent_chat_view = None;
       // You were working in that repo: the fresh session stays there.
-      let repo = self
-        .chat_store_for_repo(&deleted_repo, cx)
-        .map(|(store, _)| (deleted_repo.clone(), Some(store)));
+      let access = self.chat_store_for_repo(&deleted_repo, cx);
+      if let Some(evicted_repo) = access
+        .as_ref()
+        .and_then(|access| access.evicted_repo.as_ref())
+      {
+        self.push_repo_hidden_notification(evicted_repo, window, cx);
+      }
+      let repo = access.map(|access| (deleted_repo.clone(), Some(access.store)));
       let view = match repo {
         Some((repo_root, store)) => self.build_chat_panel(repo_root, store, None, window, cx),
         None => self.build_fallback_chat_panel(None, window, cx),
@@ -1413,7 +1434,9 @@ impl SessionPage {
     cx: &mut Context<Self>,
   ) {
     prune_agent_chat_state_once();
-    self.ensure_chat_store(cx);
+    if let Some(evicted_repo) = self.ensure_chat_store(cx) {
+      self.push_repo_hidden_notification(&evicted_repo, window, cx);
+    }
     if let Some(active) = self.agent_chat_view.as_ref()
       && active.read(cx).current_conversation().id == id
     {
@@ -4258,14 +4281,23 @@ mod tests {
     cleanup_worktrees_root(&repo.path);
   }
 
+  fn notifications(cx: &mut gpui::VisualTestContext) -> Vec<gpui::Entity<Notification>> {
+    cx.update(|window, cx| {
+      gpui_component::Root::read(window, cx)
+        .notification
+        .read(cx)
+        .notifications()
+        .to_vec()
+    })
+  }
+
   #[gpui::test]
   async fn the_hub_evicts_an_old_store_instead_of_refusing_the_ninth_repo(cx: &mut TestAppContext) {
-    let (_repo, page, cx) = page_with_agent_panel("session-page-hub-cap", cx).await;
+    let (repo, page, cx) = page_with_agent_panel("session-page-hub-cap", cx).await;
+    ConfigStore::persist_recent_repository(&repo.path);
 
-    // Track repos up to and past the cap; every fallback visit must get a store,
-    // or its new sessions would silently never persist.
     let mut extra_repos = Vec::new();
-    for index in 0..crate::conversation_hub::MAX_TRACKED_REPOS + 1 {
+    for index in 0..crate::conversation_hub::MAX_TRACKED_REPOS - 1 {
       let extra = TempRepo::init(&format!("session-page-hub-cap-{index}"));
       commit_text_file(&extra.path, Path::new("README.md"), "v1\n", "initial");
       page.update_in(cx, |page, window, cx| {
@@ -4281,6 +4313,31 @@ mod tests {
       });
       extra_repos.push(extra);
     }
+    assert!(notifications(cx).is_empty());
+
+    let overflow = TempRepo::init("session-page-hub-cap-overflow");
+    commit_text_file(&overflow.path, Path::new("README.md"), "v1\n", "initial");
+    page.update_in(cx, |page, window, cx| {
+      page
+        .set_fallback_repo(overflow.path.clone(), window, cx)
+        .expect("switch to the overflow repo");
+    });
+    cx.run_until_parked();
+
+    page.read_with(cx, |page, _| {
+      assert!(
+        page.chat_store.is_some(),
+        "the overflow repo still gets a store"
+      );
+    });
+    assert_eq!(notifications(cx).len(), 1);
+    assert!(
+      ConfigStore::load_recent_repositories()
+        .into_iter()
+        .any(|recent| recent.path == repo.path),
+      "the hidden repo remains in Recent Repositories"
+    );
+    extra_repos.push(overflow);
   }
 
   #[gpui::test]
