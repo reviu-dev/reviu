@@ -346,6 +346,10 @@ impl SessionPage {
           |this, _editor, event: &EditorEvent, cx| match event {
             EditorEvent::Saved => {
               this.editor_file_modified = this.active_worktree_file_modified(cx);
+              let file_modified = this.editor_file_modified;
+              if let Some(state) = this.active_editor_state_mut() {
+                state.file_modified = file_modified;
+              }
               this.cache_active_editor();
               this.dock_panel.update(cx, |panel, cx| panel.refresh(cx));
             }
@@ -363,9 +367,57 @@ impl SessionPage {
     cx.notify();
   }
 
+  pub(super) fn active_editor_state(&self) -> Option<&CenterEditorState> {
+    self
+      .editor_tab
+      .as_ref()
+      .and_then(|tab| self.editor_states.get(tab))
+  }
+
+  fn active_editor_state_mut(&mut self) -> Option<&mut CenterEditorState> {
+    let tab = self.editor_tab.as_ref()?;
+    self.editor_states.get_mut(tab)
+  }
+
+  pub(super) fn active_editor(&self) -> Option<Entity<Editor>> {
+    self
+      .active_editor_state()
+      .and_then(|state| state.editor.clone())
+      .or_else(|| self.editor.clone())
+  }
+
+  pub(super) fn active_selected_file(&self) -> Option<&Path> {
+    self
+      .active_editor_state()
+      .map(|state| state.selected_file.as_path())
+      .or(self.selected_file.as_deref())
+  }
+
+  pub(super) fn active_binary_preview(&self) -> Option<&BinaryPreview> {
+    self
+      .active_editor_state()
+      .and_then(|state| state.binary_preview.as_ref())
+      .or(self.binary_preview.as_ref())
+  }
+
+  pub(super) fn active_opened_snapshot(&self) -> Option<&OpenedSnapshot> {
+    self
+      .active_editor_state()
+      .and_then(|state| state.opened_snapshot.as_ref())
+      .or(self.opened_snapshot.as_ref())
+  }
+
+  fn set_active_editor_state(&mut self, tab: CenterTab, state: CenterEditorState) {
+    self.editor_states.insert(tab, state);
+  }
+
+  fn clear_editor_tab(&mut self, tab: &CenterTab) {
+    self.editor_states.remove(tab);
+  }
+
   fn active_worktree_file_modified(&self, cx: &App) -> Option<SystemTime> {
     let repo_root = self.checkout_root(cx)?;
-    let selected_file = self.selected_file.as_ref()?;
+    let selected_file = self.active_selected_file()?;
     worktree_file_modified(&repo_root.join(selected_file))
   }
 
@@ -377,7 +429,7 @@ impl SessionPage {
     if !matches!(tab.kind, CenterTabKind::File | CenterTabKind::Diff) {
       return;
     }
-    self.editor_states.insert(
+    self.set_active_editor_state(
       tab,
       CenterEditorState {
         selected_file,
@@ -407,7 +459,7 @@ impl SessionPage {
     if state.opened_snapshot.is_none()
       && worktree_file_modified(&repo_root.join(rel_path)) != state.file_modified
     {
-      self.editor_states.remove(tab);
+      self.clear_editor_tab(tab);
       return false;
     }
     self.open_file_generation = self.open_file_generation.wrapping_add(1);
@@ -868,7 +920,7 @@ impl SessionPage {
     }
     effective_diff_view(DiffViewInputs {
       preferred: self.diff_view,
-      binary_preview: self.binary_preview.is_some(),
+      binary_preview: self.active_binary_preview().is_some(),
       previewing: self.show_preview && self.previewable(),
       whole_file_change: self.whole_file_change(path, cx),
     })
@@ -877,7 +929,7 @@ impl SessionPage {
   /// A file opened from the Files tab with no pending change has nothing to
   /// compare: the toggle would show the same content twice.
   pub(super) fn selected_file_has_changes(&self, cx: &App) -> bool {
-    let Some(path) = self.selected_file.as_deref() else {
+    let Some(path) = self.active_selected_file() else {
       return false;
     };
     self.path_has_changes(path, cx)
@@ -885,7 +937,7 @@ impl SessionPage {
 
   fn path_has_changes(&self, path: &Path, cx: &App) -> bool {
     // A snapshot always carries its own patch.
-    if self.opened_snapshot.is_some() {
+    if self.active_opened_snapshot().is_some() {
       return true;
     }
     self
@@ -907,15 +959,13 @@ impl SessionPage {
 
   pub(super) fn selected_file_is_markdown(&self) -> bool {
     self
-      .selected_file
-      .as_deref()
+      .active_selected_file()
       .is_some_and(crate::file_preview::is_markdown_path)
   }
 
   pub(super) fn selected_file_is_svg(&self) -> bool {
     self
-      .selected_file
-      .as_deref()
+      .active_selected_file()
       .is_some_and(crate::file_preview::is_svg_path)
   }
 
@@ -935,11 +985,11 @@ impl SessionPage {
   }
 
   pub(super) fn split_disabled(&self, cx: &App) -> bool {
-    let Some(path) = self.selected_file.as_deref() else {
+    let Some(path) = self.active_selected_file() else {
       return true;
     };
     // The preview is not a reason to refuse: asking for split closes it.
-    self.binary_preview.is_some()
+    self.active_binary_preview().is_some()
       || self.whole_file_change(path, cx)
       || self.path_is_conflicted(path, cx)
   }
@@ -1001,7 +1051,7 @@ impl SessionPage {
     if self.center != CenterView::Diff || (self.show_preview && self.previewable()) {
       return;
     }
-    let Some(editor) = self.editor.clone() else {
+    let Some(editor) = self.active_editor() else {
       return;
     };
     let file_status = self.selected_file_status(cx);
@@ -1014,10 +1064,10 @@ impl SessionPage {
 
   /// The status of the open file, unless it is a snapshot: those have none.
   pub(super) fn selected_file_status(&self, cx: &App) -> Option<RepoStatusKind> {
-    if self.opened_snapshot.is_some() {
+    if self.active_opened_snapshot().is_some() {
       return None;
     }
-    let path = self.selected_file.as_deref()?;
+    let path = self.active_selected_file()?;
     self
       .dock_panel
       .read(cx)
@@ -1030,7 +1080,7 @@ impl SessionPage {
   /// A conflicted file is shown whole: once its markers are resolved there is no
   /// diff left to read, only the file.
   pub(super) fn sync_editor_unmerged_state(&mut self, cx: &mut Context<Self>) {
-    let Some(editor) = self.editor.clone() else {
+    let Some(editor) = self.active_editor() else {
       return;
     };
     let is_unmerged = matches!(
@@ -1042,10 +1092,10 @@ impl SessionPage {
 
   /// The path a renamed file came from, so the diff header can name both sides.
   pub(super) fn selected_file_old_path(&self, cx: &App) -> Option<PathBuf> {
-    if self.opened_snapshot.is_some() {
+    if self.active_opened_snapshot().is_some() {
       return None;
     }
-    let path = self.selected_file.as_deref()?;
+    let path = self.active_selected_file()?;
     self
       .dock_panel
       .read(cx)
@@ -1056,7 +1106,7 @@ impl SessionPage {
   }
 
   pub(super) fn annotation_navigation(&self, cx: &App) -> Option<AnnotationNavigationState> {
-    let editor = self.editor.as_ref()?;
+    let editor = self.active_editor()?;
     let file_status = self.selected_file_status(cx);
     editor.read_with(cx, |editor, cx| {
       annotation_navigation_state_for(file_status, editor, cx)
@@ -1066,7 +1116,7 @@ impl SessionPage {
   /// Accepting every conflict at once needs a conflicted file still holding markers.
   pub(super) fn can_accept_all_conflicts(&self, cx: &App) -> bool {
     let file_status = self.selected_file_status(cx);
-    self.editor.as_ref().is_some_and(|editor| {
+    self.active_editor().is_some_and(|editor| {
       editor.read_with(cx, |editor, cx| {
         can_accept_all_conflicts(
           file_status,
@@ -1085,7 +1135,7 @@ impl SessionPage {
     if !self.can_accept_all_conflicts(cx) {
       return;
     }
-    let Some(editor) = self.editor.clone() else {
+    let Some(editor) = self.active_editor() else {
       return;
     };
     editor.update(cx, |editor, cx| {
@@ -1142,7 +1192,7 @@ impl SessionPage {
     if self.center != CenterView::Diff || (self.show_preview && self.previewable()) {
       return None;
     }
-    self.editor.clone()
+    self.active_editor()
   }
 
   pub(super) fn toggle_hide_whitespace_action(
@@ -1167,13 +1217,14 @@ impl SessionPage {
     let value = self.hide_whitespace;
     if let Some(OpenedSnapshot::AgentTool {
       old_text, new_text, ..
-    }) = self.opened_snapshot.as_ref()
-      && let (Some(rel_path), Some(editor)) = (self.selected_file.clone(), self.editor.clone())
+    }) = self.active_opened_snapshot().cloned()
+      && let (Some(rel_path), Some(editor)) = (
+        self.active_selected_file().map(Path::to_path_buf),
+        self.active_editor(),
+      )
     {
       self.open_file_generation = self.open_file_generation.wrapping_add(1);
       let generation = self.open_file_generation;
-      let old_text = old_text.clone();
-      let new_text = new_text.clone();
       let task = cx.spawn(async move |this, cx| {
         let diff_rel_path = rel_path.clone();
         let diff_old_text = old_text.clone();
@@ -1201,7 +1252,7 @@ impl SessionPage {
         });
       });
       self.open_file_task = Some(task);
-    } else if let Some(editor) = self.editor.as_ref() {
+    } else if let Some(editor) = self.active_editor() {
       editor.update(cx, |editor, cx| editor.set_ignore_whitespace(value, cx));
     }
     cx.notify();
@@ -1232,10 +1283,10 @@ impl SessionPage {
   }
 
   pub(super) fn sync_diff_view(&mut self, cx: &mut Context<Self>) {
-    let Some(editor) = self.editor.clone() else {
+    let Some(editor) = self.active_editor() else {
       return;
     };
-    let Some(path) = self.selected_file.clone() else {
+    let Some(path) = self.active_selected_file().map(Path::to_path_buf) else {
       return;
     };
     let diff_view = self.effective_diff_view(&path, cx);
@@ -1380,7 +1431,7 @@ impl SessionPage {
     self
       .center_tab_history
       .retain(|candidate| candidate != &tab);
-    self.editor_states.remove(&tab);
+    self.clear_editor_tab(&tab);
     let editor_closed = self.editor_tab.as_ref() == Some(&tab);
     if editor_closed {
       self.discard_active_editor();
@@ -1425,8 +1476,8 @@ impl SessionPage {
   }
 
   fn discard_active_editor(&mut self) {
-    if let Some(tab) = self.editor_tab.as_ref() {
-      self.editor_states.remove(tab);
+    if let Some(tab) = self.editor_tab.clone() {
+      self.clear_editor_tab(&tab);
     }
     self.editor_tab = None;
     self.editor_file_modified = None;
@@ -2140,8 +2191,9 @@ mod tests {
         ]
       );
       assert_eq!(page.active_center_tab, Some(snapshot_tab.clone()));
+      assert_eq!(page.active_selected_file(), Some(Path::new("README.md")));
       assert!(matches!(
-        page.opened_snapshot,
+        page.active_opened_snapshot(),
         Some(OpenedSnapshot::AgentTool { .. })
       ));
     });
@@ -2158,9 +2210,10 @@ mod tests {
     await_editor_diff(&page, cx).await;
 
     page.read_with(cx, |page, cx| {
-      assert!(page.opened_snapshot.is_none());
+      assert!(page.active_opened_snapshot().is_none());
+      assert_eq!(page.active_selected_file(), Some(Path::new("README.md")));
       assert_eq!(
-        page.editor.as_ref().expect("worktree editor").entity_id(),
+        page.active_editor().expect("worktree editor").entity_id(),
         worktree_editor
       );
       assert!(
@@ -2180,11 +2233,11 @@ mod tests {
     page.read_with(cx, |page, _| {
       assert_eq!(page.active_center_tab, Some(snapshot_tab));
       assert_eq!(
-        page.editor.as_ref().expect("snapshot editor").entity_id(),
+        page.active_editor().expect("snapshot editor").entity_id(),
         snapshot_editor
       );
       assert!(matches!(
-        page.opened_snapshot,
+        page.active_opened_snapshot(),
         Some(OpenedSnapshot::AgentTool { .. })
       ));
     });

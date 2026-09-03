@@ -1169,7 +1169,7 @@ impl SessionPage {
   fn git_telemetry<'a>(&'a self, cx: &'a App) -> GitTelemetry<'a> {
     GitTelemetry {
       repo_root: self.synced_checkout.as_deref(),
-      selected_file: self.selected_file.as_deref(),
+      selected_file: self.active_selected_file(),
       branch: self.repo_snapshot.read(cx).current_branch_name(),
       tab: git_telemetry::dock_tab_tag(self.dock_panel.read(cx).active_tab()),
       diff_view: git_telemetry::diff_view_tag(
@@ -1628,10 +1628,10 @@ impl SessionPage {
     body: String,
     cx: &mut Context<Self>,
   ) -> Result<(), SharedString> {
-    let Some(selected_file) = self.selected_file.as_ref() else {
+    let Some(selected_file) = self.active_selected_file() else {
       return Err("No pull request file is open.".into());
     };
-    if selected_file != &rel_path {
+    if selected_file != rel_path.as_path() {
       return Err(format!("Pull request file is not open: {}", rel_path.display()).into());
     }
     let request = ReviewCommentCreateRequest {
@@ -1731,10 +1731,9 @@ impl SessionPage {
   #[doc(hidden)]
   pub fn editor_stats_for_driver(&self, cx: &App) -> serde_json::Value {
     let selected_file = self
-      .selected_file
-      .as_ref()
+      .active_selected_file()
       .map(|path| path.display().to_string());
-    let Some(editor) = self.editor.as_ref() else {
+    let Some(editor) = self.active_editor() else {
       return serde_json::json!({
         "ready": false,
         "selected_file": selected_file,
@@ -2065,7 +2064,7 @@ fn load_agent_review(path: Option<&Path>) -> AgentReviewComments {
 impl Focusable for SessionPage {
   fn focus_handle(&self, cx: &App) -> FocusHandle {
     if self.center == CenterView::Diff
-      && let Some(editor) = self.editor.as_ref()
+      && let Some(editor) = self.active_editor()
     {
       return editor.read(cx).focus_handle(cx);
     }

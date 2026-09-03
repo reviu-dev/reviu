@@ -589,8 +589,9 @@ impl SessionPage {
   }
 
   pub(super) fn render_diff_header(&self, cx: &mut Context<Self>) -> AnyElement {
-    let file_dirty = self
-      .editor
+    let active_editor = self.active_editor();
+    let active_binary_preview = self.active_binary_preview();
+    let file_dirty = active_editor
       .as_ref()
       .is_some_and(|editor| editor.read(cx).is_dirty);
     let file_status = self.selected_file_status(cx);
@@ -600,10 +601,9 @@ impl SessionPage {
       .active_center_tab
       .as_ref()
       .is_none_or(|tab| tab.kind == CenterTabKind::Diff);
-    let has_editor = self.editor.is_some();
+    let has_editor = active_editor.is_some();
     // A snapshot of a commit or of a pull request cannot be written back.
-    let can_save = self
-      .editor
+    let can_save = active_editor
       .as_ref()
       .is_some_and(|editor| !editor.read(cx).is_read_only);
 
@@ -630,7 +630,7 @@ impl SessionPage {
         .into_any_element()
     });
 
-    if let Some(path) = self.selected_file.clone() {
+    if let Some(path) = self.active_selected_file().map(Path::to_path_buf) {
       toolbar = toolbar.title(render_file_title_with_status(
         &path,
         old_path.as_deref(),
@@ -692,7 +692,7 @@ impl SessionPage {
     }
 
     if showing_git_diff && has_editor && self.selected_file_has_changes(cx) && !previewing {
-      if self.binary_preview.is_none() {
+      if active_binary_preview.is_none() {
         let view = cx.entity();
         toolbar = toolbar.whitespace(ToggleControl {
           active: self.hide_whitespace,
@@ -716,7 +716,7 @@ impl SessionPage {
     }
 
     if can_save && !previewing {
-      let save_editor = self.editor.clone();
+      let save_editor = active_editor.clone();
       toolbar = toolbar.after_toggles(
         Button::new("session-page-save-file")
           .debug_selector(|| SAVE_BUTTON_DEBUG_SELECTOR.to_string())
@@ -742,15 +742,16 @@ impl SessionPage {
     cx: &mut Context<Self>,
   ) -> AnyElement {
     let theme = cx.theme().clone();
-    let body: AnyElement = if let Some(preview) = self.binary_preview.as_ref() {
+    let active_editor = self.active_editor();
+    let body: AnyElement = if let Some(preview) = self.active_binary_preview() {
       render_binary_preview(preview, cx)
-    } else if let Some(editor) = self.editor.clone() {
+    } else if let Some(editor) = active_editor.clone() {
       // Actions of the hovered hunk or conflict float over the editor.
       let showing_git_diff = self
         .active_center_tab
         .as_ref()
         .is_none_or(|tab| tab.kind == CenterTabKind::Diff);
-      let hunk_actions = (showing_git_diff && self.opened_snapshot.is_none())
+      let hunk_actions = (showing_git_diff && self.active_opened_snapshot().is_none())
         .then(|| {
           let file_status = self.selected_file_status(cx);
           let conflict_labels =
