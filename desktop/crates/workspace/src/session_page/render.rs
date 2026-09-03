@@ -355,9 +355,9 @@ impl SessionPage {
     let selected_index = match self.center {
       CenterView::Conversation => 0,
       CenterView::Diff => self
-        .selected_file
+        .active_center_file_tab
         .as_ref()
-        .and_then(|path| self.center_file_tabs.iter().position(|tab| tab == path))
+        .and_then(|active| self.center_file_tabs.iter().position(|tab| tab == active))
         .map(|index| index + 1)
         .unwrap_or(0),
       CenterView::InteractiveRebase => self.center_file_tabs.len() + 1,
@@ -388,22 +388,28 @@ impl SessionPage {
           .icon(gpui_component::Icon::new(UiIconName::MessageCircle)),
       );
 
-    for path in &file_tabs {
-      let dirty = self
-        .selected_file
-        .as_ref()
-        .is_some_and(|selected| selected == path)
+    for tab in &file_tabs {
+      let dirty = self.active_center_file_tab.as_ref() == Some(tab)
         && self
           .editor
           .as_ref()
           .is_some_and(|editor| editor.read(cx).is_dirty);
-      let name = path
+      let name = tab
+        .path
         .file_name()
         .map(|name| name.to_string_lossy().into_owned())
-        .unwrap_or_else(|| path.to_string_lossy().into_owned());
-      let label = if dirty { format!("{name} *") } else { name };
-      let close_path = path.clone();
-      let close_label = path.to_string_lossy().into_owned();
+        .unwrap_or_else(|| tab.path.to_string_lossy().into_owned());
+      let prefix = match tab.kind {
+        CenterFileTabKind::File => "",
+        CenterFileTabKind::Diff => "Diff: ",
+      };
+      let label = if dirty {
+        format!("{prefix}{name} *")
+      } else {
+        format!("{prefix}{name}")
+      };
+      let close_tab = tab.clone();
+      let close_label = format!("{:?}-{}", tab.kind, tab.path.to_string_lossy());
       tab_bar = tab_bar.child(
         Tab::new()
           .label(label)
@@ -418,7 +424,7 @@ impl SessionPage {
               .tooltip("Close tab")
               .on_click(cx.listener(move |this, _, window, cx| {
                 cx.stop_propagation();
-                this.close_center_file_tab(close_path.clone(), window, cx);
+                this.close_center_file_tab(close_tab.clone(), window, cx);
               })),
           ),
       );
@@ -435,8 +441,8 @@ impl SessionPage {
     tab_bar = tab_bar.on_click(cx.listener(move |this, index: &usize, window, cx| {
       if *index == 0 {
         this.activate_conversation_tab(window, cx);
-      } else if let Some(path) = file_tabs.get(index.saturating_sub(1)).cloned() {
-        this.activate_center_file_tab(path, window, cx);
+      } else if let Some(tab) = file_tabs.get(index.saturating_sub(1)).cloned() {
+        this.activate_center_file_tab(tab, OpenIntent::Open, window, cx);
       }
     }));
 
@@ -560,6 +566,10 @@ impl SessionPage {
     let file_status = self.selected_file_status(cx);
     let old_path = self.selected_file_old_path(cx);
     let previewing = self.show_preview && self.previewable();
+    let showing_git_diff = self
+      .active_center_file_tab
+      .as_ref()
+      .is_none_or(|tab| tab.kind == CenterFileTabKind::Diff);
     let has_editor = self.editor.is_some();
     // A snapshot of a commit or of a pull request cannot be written back.
     let can_save = self
@@ -651,7 +661,7 @@ impl SessionPage {
       });
     }
 
-    if has_editor && self.selected_file_has_changes(cx) && !previewing {
+    if showing_git_diff && has_editor && self.selected_file_has_changes(cx) && !previewing {
       if self.binary_preview.is_none() {
         let view = cx.entity();
         toolbar = toolbar.whitespace(ToggleControl {
@@ -706,7 +716,11 @@ impl SessionPage {
       render_binary_preview(preview, cx)
     } else if let Some(editor) = self.editor.clone() {
       // Actions of the hovered hunk or conflict float over the editor.
-      let hunk_actions = (self.opened_snapshot.is_none())
+      let showing_git_diff = self
+        .active_center_file_tab
+        .as_ref()
+        .is_none_or(|tab| tab.kind == CenterFileTabKind::Diff);
+      let hunk_actions = (showing_git_diff && self.opened_snapshot.is_none())
         .then(|| {
           let file_status = self.selected_file_status(cx);
           let conflict_labels =

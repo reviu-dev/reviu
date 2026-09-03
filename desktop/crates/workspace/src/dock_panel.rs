@@ -102,11 +102,18 @@ use ui::{
   StatusThemeExt as _, Textarea, TextareaState, UiIconName, WindowExt as _, selectable_list_item,
 };
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DockPanelOpenFileMode {
+  File,
+  Diff,
+}
+
 #[derive(Clone, Debug)]
 pub enum DockPanelEvent {
   OpenFile {
     path: PathBuf,
     intent: OpenIntent,
+    mode: DockPanelOpenFileMode,
   },
   /// A file as it was in a commit, read-only.
   OpenCommitFile {
@@ -862,6 +869,7 @@ impl DockPanel {
           cx.emit(DockPanelEvent::OpenFile {
             path: path.clone(),
             intent: *intent,
+            mode: DockPanelOpenFileMode::Diff,
           });
         }
         ChangesListEvent::Changed => this.refresh(cx),
@@ -940,6 +948,7 @@ impl DockPanel {
       cx.emit(DockPanelEvent::OpenFile {
         path: PathBuf::from(id.as_ref()),
         intent,
+        mode: DockPanelOpenFileMode::File,
       });
     })
     .detach();
@@ -4290,8 +4299,8 @@ mod tests {
     let seen = opened.clone();
     cx.update(|_, cx| {
       cx.subscribe(&panel, move |_panel, event: &DockPanelEvent, _cx| {
-        if let DockPanelEvent::OpenFile { path, intent } = event {
-          seen.borrow_mut().push((path.clone(), *intent));
+        if let DockPanelEvent::OpenFile { path, intent, mode } = event {
+          seen.borrow_mut().push((path.clone(), *intent, *mode));
         }
       })
       .detach();
@@ -4303,7 +4312,11 @@ mod tests {
     cx.run_until_parked();
     assert_eq!(
       opened.borrow().as_slice(),
-      &[(PathBuf::from("b.txt"), OpenIntent::Browse)],
+      &[(
+        PathBuf::from("b.txt"),
+        OpenIntent::Browse,
+        DockPanelOpenFileMode::File,
+      )],
       "walking the tree shows the file, it does not choose it"
     );
 
@@ -4311,7 +4324,11 @@ mod tests {
     cx.run_until_parked();
     assert_eq!(
       opened.borrow().last(),
-      Some(&(PathBuf::from("b.txt"), OpenIntent::Open)),
+      Some(&(
+        PathBuf::from("b.txt"),
+        OpenIntent::Open,
+        DockPanelOpenFileMode::File,
+      )),
       "Enter chooses it"
     );
   }
@@ -4339,8 +4356,8 @@ mod tests {
     let seen = opened.clone();
     cx.update(|_, cx| {
       cx.subscribe(&panel, move |_panel, event: &DockPanelEvent, _cx| {
-        if let DockPanelEvent::OpenFile { path, intent } = event {
-          seen.borrow_mut().push((path.clone(), *intent));
+        if let DockPanelEvent::OpenFile { path, intent, mode } = event {
+          seen.borrow_mut().push((path.clone(), *intent, *mode));
         }
       })
       .detach();
@@ -4366,7 +4383,11 @@ mod tests {
     cx.run_until_parked();
     assert_eq!(
       opened.borrow().as_slice(),
-      &[(PathBuf::from("two/b.txt"), OpenIntent::Browse)],
+      &[(
+        PathBuf::from("two/b.txt"),
+        OpenIntent::Browse,
+        DockPanelOpenFileMode::File,
+      )],
       "the file inside it still shows"
     );
   }

@@ -3293,7 +3293,10 @@ mod tests {
     page.read_with(cx, |page, _| {
       assert_eq!(page.center, CenterView::Diff);
       assert_eq!(page.selected_file.as_deref(), Some(Path::new("README.md")));
-      assert_eq!(page.center_file_tabs, vec![PathBuf::from("README.md")]);
+      assert_eq!(
+        page.center_file_tabs,
+        vec![CenterFileTab::diff(PathBuf::from("README.md"))]
+      );
     });
 
     cleanup_worktrees_root(&repo.path);

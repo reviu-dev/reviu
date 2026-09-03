@@ -50,6 +50,12 @@ pub(super) enum UnsavedEditorAction {
     reveal_column: Option<u32>,
     intent: OpenIntent,
   },
+  OpenFile {
+    rel_path: PathBuf,
+    reveal_line: Option<u32>,
+    reveal_column: Option<u32>,
+    intent: OpenIntent,
+  },
   AgentDiffSnapshot {
     rel_path: PathBuf,
     old_text: Option<String>,
@@ -70,7 +76,7 @@ pub(super) enum UnsavedEditorAction {
     intent: OpenIntent,
   },
   CloseCenterFileTab {
-    rel_path: PathBuf,
+    tab: CenterFileTab,
   },
 }
 
@@ -116,7 +122,7 @@ impl SessionPage {
     window: &mut Window,
     cx: &mut Context<Self>,
   ) {
-    if self.should_prompt_before_opening(&rel_path, cx) {
+    if self.should_prompt_before_opening(&CenterFileTab::diff(rel_path.clone()), cx) {
       self.open_unsaved_editor_dialog(
         UnsavedEditorAction::OpenDiff {
           rel_path,
@@ -132,12 +138,81 @@ impl SessionPage {
     self.open_diff_without_unsaved_prompt(rel_path, reveal_line, reveal_column, intent, window, cx);
   }
 
+  pub(super) fn open_file(
+    &mut self,
+    rel_path: PathBuf,
+    reveal_line: Option<u32>,
+    reveal_column: Option<u32>,
+    intent: OpenIntent,
+    window: &mut Window,
+    cx: &mut Context<Self>,
+  ) {
+    if self.should_prompt_before_opening(&CenterFileTab::file(rel_path.clone()), cx) {
+      self.open_unsaved_editor_dialog(
+        UnsavedEditorAction::OpenFile {
+          rel_path,
+          reveal_line,
+          reveal_column,
+          intent,
+        },
+        window,
+        cx,
+      );
+      return;
+    }
+    self.open_file_without_unsaved_prompt(rel_path, reveal_line, reveal_column, intent, window, cx);
+  }
+
   fn open_diff_without_unsaved_prompt(
     &mut self,
     rel_path: PathBuf,
     reveal_line: Option<u32>,
     reveal_column: Option<u32>,
     intent: OpenIntent,
+    window: &mut Window,
+    cx: &mut Context<Self>,
+  ) {
+    self.open_worktree_file_without_unsaved_prompt(
+      CenterFileTab::diff(rel_path.clone()),
+      rel_path,
+      reveal_line,
+      reveal_column,
+      intent,
+      true,
+      window,
+      cx,
+    );
+  }
+
+  fn open_file_without_unsaved_prompt(
+    &mut self,
+    rel_path: PathBuf,
+    reveal_line: Option<u32>,
+    reveal_column: Option<u32>,
+    intent: OpenIntent,
+    window: &mut Window,
+    cx: &mut Context<Self>,
+  ) {
+    self.open_worktree_file_without_unsaved_prompt(
+      CenterFileTab::file(rel_path.clone()),
+      rel_path,
+      reveal_line,
+      reveal_column,
+      intent,
+      false,
+      window,
+      cx,
+    );
+  }
+
+  fn open_worktree_file_without_unsaved_prompt(
+    &mut self,
+    tab: CenterFileTab,
+    rel_path: PathBuf,
+    reveal_line: Option<u32>,
+    reveal_column: Option<u32>,
+    intent: OpenIntent,
+    show_git_diff: bool,
     window: &mut Window,
     cx: &mut Context<Self>,
   ) {
@@ -170,7 +245,9 @@ impl SessionPage {
     self.center = CenterView::Diff;
     self.sync_agent_chat_close_control(cx);
     // Same path, but the snapshot of a commit is not the working-tree file.
-    if !left_commit_file && self.selected_file.as_ref() == Some(&rel_path) && self.editor.is_some()
+    if !left_commit_file
+      && self.active_center_file_tab.as_ref() == Some(&tab)
+      && self.editor.is_some()
     {
       if let (Some((doc_line, doc_column)), Some(editor)) =
         (reveal_doc_position, self.editor.clone())
@@ -179,6 +256,8 @@ impl SessionPage {
           editor.reveal_source_position(doc_line, doc_column, cx)
         });
       }
+      self.selected_file = Some(rel_path.clone());
+      self.active_center_file_tab = Some(tab.clone());
       self.record_recent_file(&repo_root, &rel_path);
       self.focus_editor_if_asked(intent, window, cx);
       cx.notify();
@@ -188,7 +267,7 @@ impl SessionPage {
     self.open_file_generation = self.open_file_generation.wrapping_add(1);
     let generation = self.open_file_generation;
     self.record_recent_file(&repo_root, &rel_path);
-    self.remember_center_file_tab(rel_path.clone());
+    self.remember_center_file_tab(tab.clone());
     self.selected_file = Some(rel_path.clone());
     self.editor = None;
     self.binary_preview = None;
@@ -222,6 +301,7 @@ impl SessionPage {
         let editor =
           cx.new(move |cx| Editor::new_with_loaded_file(repo_root, file_path, loaded, cx));
         editor.update(cx, |editor, cx| {
+          editor.set_git_diff_enabled(show_git_diff, cx);
           editor.set_diff_view_mode(diff_view, cx);
           editor.set_ignore_whitespace(hide_whitespace, cx);
           if let Some((doc_line, doc_column)) = reveal_doc_position {
@@ -241,8 +321,12 @@ impl SessionPage {
             window.focus(&focus_handle, cx);
           });
         }
-        this.install_agent_review_handlers_for_editor(&editor, cx);
-        this.sync_agent_review_comments_to_editor(cx);
+        if show_git_diff {
+          this.install_agent_review_handlers_for_editor(&editor, cx);
+          this.sync_agent_review_comments_to_editor(cx);
+        } else {
+          configure_review(&editor, ReviewDestination::None, cx);
+        }
         cx.subscribe(
           &editor,
           |this, _editor, event: &EditorEvent, cx| match event {
@@ -324,7 +408,7 @@ impl SessionPage {
     }
     self.open_file_generation = self.open_file_generation.wrapping_add(1);
     let generation = self.open_file_generation;
-    self.remember_center_file_tab(rel_path.clone());
+    self.remember_center_file_tab(CenterFileTab::diff(rel_path.clone()));
     self.selected_file = Some(rel_path.clone());
     let agent_whole_file_change = old_text.is_none() || new_text.is_empty();
     self.opened_snapshot = Some(OpenedSnapshot::AgentTool {
@@ -438,7 +522,7 @@ impl SessionPage {
     self.sync_agent_chat_close_control(cx);
     self.open_file_generation = self.open_file_generation.wrapping_add(1);
     let generation = self.open_file_generation;
-    self.remember_center_file_tab(rel_path.clone());
+    self.remember_center_file_tab(CenterFileTab::diff(rel_path.clone()));
     self.selected_file = Some(rel_path.clone());
     self.opened_snapshot = Some(OpenedSnapshot::Commit(commit_oid.clone()));
     self.editor = None;
@@ -563,7 +647,7 @@ impl SessionPage {
     self.leave_commit_file(cx);
     self.open_file_generation = self.open_file_generation.wrapping_add(1);
     let generation = self.open_file_generation;
-    self.remember_center_file_tab(rel_path.clone());
+    self.remember_center_file_tab(CenterFileTab::diff(rel_path.clone()));
     self.selected_file = Some(rel_path.clone());
     self.opened_snapshot = Some(OpenedSnapshot::PullRequestRange {
       base: base_oid.clone(),
@@ -1042,43 +1126,40 @@ impl SessionPage {
 
   pub(super) fn close_center_file_tab(
     &mut self,
-    rel_path: PathBuf,
+    tab: CenterFileTab,
     window: &mut Window,
     cx: &mut Context<Self>,
   ) {
-    if self.editor_is_dirty(cx) && self.selected_file.as_deref() == Some(rel_path.as_path()) {
-      self.open_unsaved_editor_dialog(
-        UnsavedEditorAction::CloseCenterFileTab { rel_path },
-        window,
-        cx,
-      );
+    if self.editor_is_dirty(cx) && self.active_center_file_tab.as_ref() == Some(&tab) {
+      self.open_unsaved_editor_dialog(UnsavedEditorAction::CloseCenterFileTab { tab }, window, cx);
       return;
     }
-    self.close_center_file_tab_without_unsaved_prompt(rel_path, window, cx);
+    self.close_center_file_tab_without_unsaved_prompt(tab, window, cx);
   }
 
   fn close_center_file_tab_without_unsaved_prompt(
     &mut self,
-    rel_path: PathBuf,
+    tab: CenterFileTab,
     window: &mut Window,
     cx: &mut Context<Self>,
   ) {
-    self.center_file_tabs.retain(|path| path != &rel_path);
-    let selected_closed = self.selected_file.as_deref() == Some(rel_path.as_path());
+    self.center_file_tabs.retain(|candidate| candidate != &tab);
+    let selected_closed = self.active_center_file_tab.as_ref() == Some(&tab);
     if !selected_closed {
       cx.notify();
       return;
     }
 
     self.discard_active_editor();
+    self.active_center_file_tab = None;
     self.selected_file = None;
     self.opened_snapshot = None;
     self.svg_preview.update(cx, |preview, _| preview.clear());
 
     if self.center == CenterView::Diff
-      && let Some(next_path) = self.center_file_tabs.last().cloned()
+      && let Some(next_tab) = self.center_file_tabs.last().cloned()
     {
-      self.open_diff(next_path, None, OpenIntent::Open, window, cx);
+      self.activate_center_file_tab(next_tab, OpenIntent::Open, window, cx);
       return;
     }
 
@@ -1096,8 +1177,8 @@ impl SessionPage {
       .is_some_and(|editor| editor.read(cx).is_dirty)
   }
 
-  fn should_prompt_before_opening(&self, rel_path: &Path, cx: &App) -> bool {
-    self.editor_is_dirty(cx) && self.selected_file.as_deref() != Some(rel_path)
+  fn should_prompt_before_opening(&self, tab: &CenterFileTab, cx: &App) -> bool {
+    self.editor_is_dirty(cx) && self.active_center_file_tab.as_ref() != Some(tab)
   }
 
   fn should_prompt_before_replacing_editor(&self, cx: &App) -> bool {
@@ -1174,6 +1255,19 @@ impl SessionPage {
         window,
         cx,
       ),
+      UnsavedEditorAction::OpenFile {
+        rel_path,
+        reveal_line,
+        reveal_column,
+        intent,
+      } => self.open_file_without_unsaved_prompt(
+        rel_path,
+        reveal_line,
+        reveal_column,
+        intent,
+        window,
+        cx,
+      ),
       UnsavedEditorAction::AgentDiffSnapshot {
         rel_path,
         old_text,
@@ -1209,8 +1303,8 @@ impl SessionPage {
         window,
         cx,
       ),
-      UnsavedEditorAction::CloseCenterFileTab { rel_path } => {
-        self.close_center_file_tab_without_unsaved_prompt(rel_path, window, cx)
+      UnsavedEditorAction::CloseCenterFileTab { tab } => {
+        self.close_center_file_tab_without_unsaved_prompt(tab, window, cx)
       }
     }
   }
@@ -1651,13 +1745,21 @@ mod tests {
     page.read_with(cx, |page, _| {
       assert_eq!(
         page.center_file_tabs,
-        vec![PathBuf::from("README.md"), PathBuf::from("other.md")]
+        vec![
+          CenterFileTab::diff(PathBuf::from("README.md")),
+          CenterFileTab::diff(PathBuf::from("other.md"))
+        ]
       );
       assert_eq!(page.selected_file.as_deref(), Some(Path::new("other.md")));
     });
 
     page.update_in(cx, |page, window, cx| {
-      page.activate_center_file_tab(PathBuf::from("README.md"), window, cx);
+      page.activate_center_file_tab(
+        CenterFileTab::diff(PathBuf::from("README.md")),
+        OpenIntent::Open,
+        window,
+        cx,
+      );
     });
     await_open_file(&page, cx).await;
 
@@ -1665,7 +1767,105 @@ mod tests {
       assert_eq!(page.selected_file.as_deref(), Some(Path::new("README.md")));
       assert_eq!(
         page.center_file_tabs,
-        vec![PathBuf::from("other.md"), PathBuf::from("README.md")]
+        vec![
+          CenterFileTab::diff(PathBuf::from("other.md")),
+          CenterFileTab::diff(PathBuf::from("README.md"))
+        ]
+      );
+    });
+  }
+
+  #[gpui::test]
+  async fn file_and_diff_tabs_for_same_path_keep_separate_diff_modes(cx: &mut TestAppContext) {
+    let repo = TempRepo::init("session-page-file-and-diff-tabs");
+    commit_text_file(&repo.path, Path::new("README.md"), "v1\n", "initial");
+    std::fs::write(repo.path.join("README.md"), "v2\n").expect("update file");
+
+    let (page, cx) = add_session_page_window(repo.path.clone(), cx);
+    page.update_in(cx, |page, window, cx| {
+      page.open_file(
+        PathBuf::from("README.md"),
+        None,
+        None,
+        OpenIntent::Open,
+        window,
+        cx,
+      );
+    });
+    await_open_file(&page, cx).await;
+
+    page.read_with(cx, |page, cx| {
+      assert_eq!(
+        page.center_file_tabs,
+        vec![CenterFileTab::file(PathBuf::from("README.md"))]
+      );
+      assert_eq!(
+        page.active_center_file_tab,
+        Some(CenterFileTab::file(PathBuf::from("README.md")))
+      );
+      assert!(
+        page
+          .editor
+          .as_ref()
+          .is_some_and(|editor| editor.read(cx).projection().is_none()),
+        "plain file tabs do not show git diffs"
+      );
+    });
+
+    page.update_in(cx, |page, window, cx| {
+      page.open_diff(
+        PathBuf::from("README.md"),
+        None,
+        OpenIntent::Open,
+        window,
+        cx,
+      );
+    });
+    await_open_file(&page, cx).await;
+    await_editor_diff(&page, cx).await;
+
+    page.read_with(cx, |page, cx| {
+      assert_eq!(
+        page.center_file_tabs,
+        vec![
+          CenterFileTab::file(PathBuf::from("README.md")),
+          CenterFileTab::diff(PathBuf::from("README.md"))
+        ]
+      );
+      assert_eq!(
+        page.active_center_file_tab,
+        Some(CenterFileTab::diff(PathBuf::from("README.md")))
+      );
+      assert!(
+        page
+          .editor
+          .as_ref()
+          .is_some_and(|editor| editor.read(cx).projection().is_some()),
+        "diff tabs show git diffs"
+      );
+    });
+
+    page.update_in(cx, |page, window, cx| {
+      page.activate_center_file_tab(
+        CenterFileTab::file(PathBuf::from("README.md")),
+        OpenIntent::Open,
+        window,
+        cx,
+      );
+    });
+    await_open_file(&page, cx).await;
+
+    page.read_with(cx, |page, cx| {
+      assert_eq!(
+        page.active_center_file_tab,
+        Some(CenterFileTab::file(PathBuf::from("README.md")))
+      );
+      assert!(
+        page
+          .editor
+          .as_ref()
+          .is_some_and(|editor| editor.read(cx).projection().is_none()),
+        "returning to the file tab hides git diffs again"
       );
     });
   }
@@ -1701,18 +1901,21 @@ mod tests {
     await_open_file(&page, cx).await;
 
     page.update_in(cx, |page, window, cx| {
-      page.close_center_file_tab(PathBuf::from("other.md"), window, cx);
+      page.close_center_file_tab(CenterFileTab::diff(PathBuf::from("other.md")), window, cx);
     });
     await_open_file(&page, cx).await;
 
     page.read_with(cx, |page, _| {
       assert_eq!(page.center, CenterView::Diff);
       assert_eq!(page.selected_file.as_deref(), Some(Path::new("README.md")));
-      assert_eq!(page.center_file_tabs, vec![PathBuf::from("README.md")]);
+      assert_eq!(
+        page.center_file_tabs,
+        vec![CenterFileTab::diff(PathBuf::from("README.md"))]
+      );
     });
 
     page.update_in(cx, |page, window, cx| {
-      page.close_center_file_tab(PathBuf::from("README.md"), window, cx);
+      page.close_center_file_tab(CenterFileTab::diff(PathBuf::from("README.md")), window, cx);
     });
     cx.run_until_parked();
 

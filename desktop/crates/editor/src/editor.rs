@@ -955,6 +955,7 @@ pub struct Editor {
 
   diff_view_mode: DiffViewMode,
   ignore_whitespace: bool,
+  git_diff_enabled: bool,
   pub is_read_only: bool,
   is_unmerged: bool,
 
@@ -1447,6 +1448,7 @@ impl Editor {
       optimistic_unstaged_groups: HashSet::new(),
       diff_view_mode: DiffViewMode::Inline,
       ignore_whitespace: false,
+      git_diff_enabled: true,
       is_read_only: loaded.is_read_only,
       is_unmerged: false,
     };
@@ -6175,12 +6177,32 @@ impl Editor {
 
   fn init(&mut self, cx: &mut Context<Self>) {
     if self.repo_file.is_some() {
-      self.reload_git_bases(cx);
+      if self.git_diff_enabled {
+        self.reload_git_bases(cx);
+      }
       self.start_polling(cx);
     }
   }
 
+  pub fn set_git_diff_enabled(&mut self, enabled: bool, cx: &mut Context<Self>) {
+    if self.git_diff_enabled == enabled {
+      return;
+    }
+    self.git_diff_enabled = enabled;
+    if enabled {
+      self.reload_git_bases(cx);
+    } else {
+      self.git_state = BufferGitState::default();
+      self.bases_task = None;
+      self.diff_task = None;
+      self.set_diffs(None, cx);
+    }
+  }
+
   fn reload_git_bases(&mut self, cx: &mut Context<Self>) {
+    if !self.git_diff_enabled {
+      return;
+    }
     let Some(repo_file) = self.repo_file.clone() else {
       return;
     };
@@ -6228,6 +6250,9 @@ impl Editor {
   }
 
   pub fn schedule_diff_recompute(&mut self, cx: &mut Context<Self>) {
+    if !self.git_diff_enabled {
+      return;
+    }
     let Some(repo_file) = self.repo_file.clone() else {
       return;
     };
@@ -6700,8 +6725,10 @@ impl Editor {
               editor.git_state.op_id = store.op_id();
             }
           }
-          editor.reload_git_bases(cx);
-          editor.schedule_diff_recompute(cx);
+          if editor.git_diff_enabled {
+            editor.reload_git_bases(cx);
+            editor.schedule_diff_recompute(cx);
+          }
           cx.notify();
           if let Some(on_saved) = on_saved {
             on_saved(cx);
@@ -7061,8 +7088,10 @@ impl Editor {
             }
             if index_changed {
               editor.index_mtime = index_mtime;
-              editor.reload_git_bases(cx);
-            } else {
+              if editor.git_diff_enabled {
+                editor.reload_git_bases(cx);
+              }
+            } else if editor.git_diff_enabled {
               editor.schedule_diff_recompute(cx);
             }
           });
@@ -11566,6 +11595,7 @@ pub mod tests {
           save_task: None,
           diff_view_mode: DiffViewMode::Inline,
           ignore_whitespace: false,
+          git_diff_enabled: true,
           is_read_only: false,
           is_unmerged: false,
           last_highlights_version: 0,

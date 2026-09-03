@@ -41,7 +41,8 @@ use crate::config::ConfigStore;
 use crate::conversation_hub::{ConversationHub, ConversationStoreAccess};
 use crate::diff_view_policy::{DiffViewInputs, effective_diff_view};
 use crate::dock_panel::{
-  ChangesActionCommand, CommitMenuCommand, DockPanel, DockPanelEvent, DockPanelTab,
+  ChangesActionCommand, CommitMenuCommand, DockPanel, DockPanelEvent, DockPanelOpenFileMode,
+  DockPanelTab,
 };
 use crate::file_search_palette::open_file_search_palette;
 use crate::file_view::{
@@ -137,6 +138,34 @@ enum CenterView {
   Diff,
   /// The todo of an interactive rebase, waiting to be applied.
   InteractiveRebase,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+enum CenterFileTabKind {
+  File,
+  Diff,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+struct CenterFileTab {
+  kind: CenterFileTabKind,
+  path: PathBuf,
+}
+
+impl CenterFileTab {
+  fn file(path: PathBuf) -> Self {
+    Self {
+      kind: CenterFileTabKind::File,
+      path,
+    }
+  }
+
+  fn diff(path: PathBuf) -> Self {
+    Self {
+      kind: CenterFileTabKind::Diff,
+      path,
+    }
+  }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -277,9 +306,10 @@ pub struct SessionPage {
   available_checkouts: Vec<CheckoutInfo>,
   _checkout_options_task: Option<Task<()>>,
   center: CenterView,
-  center_file_tabs: Vec<PathBuf>,
-  center_file_tabs_by_checkout: HashMap<PathBuf, Vec<PathBuf>>,
-  center_active_file_by_checkout: HashMap<PathBuf, PathBuf>,
+  center_file_tabs: Vec<CenterFileTab>,
+  center_file_tabs_by_checkout: HashMap<PathBuf, Vec<CenterFileTab>>,
+  center_active_file_by_checkout: HashMap<PathBuf, CenterFileTab>,
+  active_center_file_tab: Option<CenterFileTab>,
   editor: Option<Entity<Editor>>,
   binary_preview: Option<BinaryPreview>,
   selected_file: Option<PathBuf>,
@@ -413,11 +443,14 @@ impl SessionPage {
       &dock_panel,
       window,
       |this, _panel, event: &DockPanelEvent, window, cx| match event {
-        DockPanelEvent::OpenFile { path, intent } => {
-          let (path, intent) = (path.clone(), *intent);
+        DockPanelEvent::OpenFile { path, intent, mode } => {
+          let (path, intent, mode) = (path.clone(), *intent, *mode);
           this.open_for_intent(
             intent,
-            move |this, window, cx| this.open_diff(path, None, intent, window, cx),
+            move |this, window, cx| match mode {
+              DockPanelOpenFileMode::File => this.open_file(path, None, None, intent, window, cx),
+              DockPanelOpenFileMode::Diff => this.open_diff(path, None, intent, window, cx),
+            },
             window,
             cx,
           );
@@ -561,6 +594,7 @@ impl SessionPage {
       center_file_tabs: Vec::new(),
       center_file_tabs_by_checkout: HashMap::new(),
       center_active_file_by_checkout: HashMap::new(),
+      active_center_file_tab: None,
       editor: None,
       binary_preview: None,
       selected_file: None,
@@ -947,10 +981,10 @@ impl SessionPage {
       self
         .center_file_tabs_by_checkout
         .insert(previous_checkout.clone(), self.center_file_tabs.clone());
-      if let Some(selected_file) = self.selected_file.clone() {
+      if let Some(tab) = self.active_center_file_tab.clone() {
         self
           .center_active_file_by_checkout
-          .insert(previous_checkout, selected_file);
+          .insert(previous_checkout, tab);
       } else {
         self
           .center_active_file_by_checkout
@@ -962,15 +996,16 @@ impl SessionPage {
       .as_ref()
       .and_then(|checkout| self.center_file_tabs_by_checkout.get(checkout).cloned())
       .unwrap_or_default();
-    let restored_selected_file = checkout
+    let restored_selected_tab = checkout
       .as_ref()
       .and_then(|checkout| self.center_active_file_by_checkout.get(checkout).cloned())
-      .filter(|path| restored_file_tabs.contains(path));
+      .filter(|tab| restored_file_tabs.contains(tab));
 
     self.synced_checkout = checkout.clone();
     self.close_diff(window, cx);
     self.center = CenterView::Conversation;
     self.center_file_tabs = restored_file_tabs;
+    self.active_center_file_tab = None;
     self.editor = None;
     self.binary_preview = None;
     self.selected_file = None;
@@ -995,8 +1030,8 @@ impl SessionPage {
     }
     self.refresh_checkout_options(cx);
     self.push_checkout_selector(cx);
-    if let Some(path) = restored_selected_file {
-      self.open_diff(path, None, OpenIntent::Browse, window, cx);
+    if let Some(tab) = restored_selected_tab {
+      self.activate_center_file_tab(tab, OpenIntent::Browse, window, cx);
     } else {
       cx.notify();
     }
@@ -1315,9 +1350,10 @@ impl SessionPage {
     self.window_handle
   }
 
-  fn remember_center_file_tab(&mut self, path: PathBuf) {
-    self.center_file_tabs.retain(|existing| existing != &path);
-    self.center_file_tabs.push(path);
+  fn remember_center_file_tab(&mut self, tab: CenterFileTab) {
+    self.center_file_tabs.retain(|existing| existing != &tab);
+    self.center_file_tabs.push(tab.clone());
+    self.active_center_file_tab = Some(tab);
   }
 
   fn activate_conversation_tab(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -1333,11 +1369,15 @@ impl SessionPage {
 
   fn activate_center_file_tab(
     &mut self,
-    path: PathBuf,
+    tab: CenterFileTab,
+    intent: OpenIntent,
     window: &mut Window,
     cx: &mut Context<Self>,
   ) {
-    self.open_diff(path, None, OpenIntent::Open, window, cx);
+    match tab.kind {
+      CenterFileTabKind::File => self.open_file(tab.path, None, None, intent, window, cx),
+      CenterFileTabKind::Diff => self.open_diff(tab.path, None, intent, window, cx),
+    }
   }
 
   /// Opens the dock on a tab without the toggle: something outside asked for
@@ -1723,7 +1763,7 @@ impl SessionPage {
     let view = cx.entity();
     let handler: SearchFileHandler = Arc::new(move |request, window, cx| {
       view.update(cx, |view, cx| {
-        view.open_diff_at_position(
+        view.open_file(
           request.path,
           request.line,
           request.column,
