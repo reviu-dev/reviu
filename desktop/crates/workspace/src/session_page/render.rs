@@ -369,6 +369,19 @@ impl SessionPage {
       .underline()
       .menu(true)
       .selected_index(selected_index)
+      .suffix(
+        Button::new("session-center-new-chat")
+          .debug_selector(|| "session-center-new-chat".to_string())
+          .icon(gpui_component::IconName::Plus)
+          .ghost()
+          .compact()
+          .xsmall()
+          .tooltip("New chat")
+          .on_click(cx.listener(|this, _, window, cx| {
+            cx.stop_propagation();
+            this.new_session(window, cx);
+          })),
+      )
       .child(
         Tab::new()
           .label("Chat")
@@ -389,7 +402,26 @@ impl SessionPage {
         .map(|name| name.to_string_lossy().into_owned())
         .unwrap_or_else(|| path.to_string_lossy().into_owned());
       let label = if dirty { format!("{name} *") } else { name };
-      tab_bar = tab_bar.child(Tab::new().label(label).icon(gpui_component::IconName::File));
+      let close_path = path.clone();
+      let close_label = path.to_string_lossy().into_owned();
+      tab_bar = tab_bar.child(
+        Tab::new()
+          .label(label)
+          .icon(gpui_component::IconName::File)
+          .suffix(
+            Button::new(format!("session-center-close-{close_label}"))
+              .debug_selector(move || format!("session-center-close-{close_label}"))
+              .icon(gpui_component::IconName::Close)
+              .ghost()
+              .compact()
+              .xsmall()
+              .tooltip("Close tab")
+              .on_click(cx.listener(move |this, _, window, cx| {
+                cx.stop_propagation();
+                this.close_center_file_tab(close_path.clone(), window, cx);
+              })),
+          ),
+      );
     }
 
     if self.center == CenterView::InteractiveRebase {

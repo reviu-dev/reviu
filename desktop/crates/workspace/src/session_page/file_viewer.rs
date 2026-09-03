@@ -69,6 +69,9 @@ pub(super) enum UnsavedEditorAction {
     reveal_line: Option<u32>,
     intent: OpenIntent,
   },
+  CloseCenterFileTab {
+    rel_path: PathBuf,
+  },
 }
 
 fn agent_snapshot_diff_set(
@@ -1037,6 +1040,55 @@ impl SessionPage {
     cx.notify();
   }
 
+  pub(super) fn close_center_file_tab(
+    &mut self,
+    rel_path: PathBuf,
+    window: &mut Window,
+    cx: &mut Context<Self>,
+  ) {
+    if self.editor_is_dirty(cx) && self.selected_file.as_deref() == Some(rel_path.as_path()) {
+      self.open_unsaved_editor_dialog(
+        UnsavedEditorAction::CloseCenterFileTab { rel_path },
+        window,
+        cx,
+      );
+      return;
+    }
+    self.close_center_file_tab_without_unsaved_prompt(rel_path, window, cx);
+  }
+
+  fn close_center_file_tab_without_unsaved_prompt(
+    &mut self,
+    rel_path: PathBuf,
+    window: &mut Window,
+    cx: &mut Context<Self>,
+  ) {
+    self.center_file_tabs.retain(|path| path != &rel_path);
+    let selected_closed = self.selected_file.as_deref() == Some(rel_path.as_path());
+    if !selected_closed {
+      cx.notify();
+      return;
+    }
+
+    self.discard_active_editor();
+    self.selected_file = None;
+    self.opened_snapshot = None;
+    self.svg_preview.update(cx, |preview, _| preview.clear());
+
+    if self.center == CenterView::Diff
+      && let Some(next_path) = self.center_file_tabs.last().cloned()
+    {
+      self.open_diff(next_path, None, OpenIntent::Open, window, cx);
+      return;
+    }
+
+    self.center = CenterView::Conversation;
+    self.diff_chat_open = true;
+    self.sync_agent_chat_close_control(cx);
+    self.focus_agent_input_on_next_frame(window, cx);
+    cx.notify();
+  }
+
   pub(super) fn editor_is_dirty(&self, cx: &App) -> bool {
     self
       .editor
@@ -1157,6 +1209,9 @@ impl SessionPage {
         window,
         cx,
       ),
+      UnsavedEditorAction::CloseCenterFileTab { rel_path } => {
+        self.close_center_file_tab_without_unsaved_prompt(rel_path, window, cx)
+      }
     }
   }
 
@@ -1612,6 +1667,59 @@ mod tests {
         page.center_file_tabs,
         vec![PathBuf::from("other.md"), PathBuf::from("README.md")]
       );
+    });
+  }
+
+  #[gpui::test]
+  async fn closing_a_center_file_tab_activates_the_previous_file(cx: &mut TestAppContext) {
+    let repo = TempRepo::init("session-page-center-tab-close");
+    commit_text_file(&repo.path, Path::new("README.md"), "v1\n", "initial");
+    commit_text_file(&repo.path, Path::new("other.md"), "one\n", "second");
+    std::fs::write(repo.path.join("README.md"), "v2\n").expect("update file");
+    std::fs::write(repo.path.join("other.md"), "two\n").expect("update other");
+
+    let (page, cx) = add_session_page_window(repo.path.clone(), cx);
+    page.update_in(cx, |page, window, cx| {
+      page.open_diff(
+        PathBuf::from("README.md"),
+        None,
+        OpenIntent::Open,
+        window,
+        cx,
+      );
+    });
+    await_open_file(&page, cx).await;
+    page.update_in(cx, |page, window, cx| {
+      page.open_diff(
+        PathBuf::from("other.md"),
+        None,
+        OpenIntent::Open,
+        window,
+        cx,
+      );
+    });
+    await_open_file(&page, cx).await;
+
+    page.update_in(cx, |page, window, cx| {
+      page.close_center_file_tab(PathBuf::from("other.md"), window, cx);
+    });
+    await_open_file(&page, cx).await;
+
+    page.read_with(cx, |page, _| {
+      assert_eq!(page.center, CenterView::Diff);
+      assert_eq!(page.selected_file.as_deref(), Some(Path::new("README.md")));
+      assert_eq!(page.center_file_tabs, vec![PathBuf::from("README.md")]);
+    });
+
+    page.update_in(cx, |page, window, cx| {
+      page.close_center_file_tab(PathBuf::from("README.md"), window, cx);
+    });
+    cx.run_until_parked();
+
+    page.read_with(cx, |page, _| {
+      assert_eq!(page.center, CenterView::Conversation);
+      assert!(page.center_file_tabs.is_empty());
+      assert!(page.selected_file.is_none());
     });
   }
 
