@@ -3,17 +3,47 @@
 use super::*;
 
 impl SessionPage {
-  /// Switches the FALLBACK repo: what the app stands on when no session is
-  /// shown, and the repo reopened next launch. Running sessions are untouched
-  /// (the repo is an attribute of each session, not a mode of the app).
+  /// Switches the selected project. Git folders keep the repository-backed
+  /// behavior; plain folders stand up file/editor surfaces without Git.
+  pub(super) fn set_project_root(
+    &mut self,
+    project_root: PathBuf,
+    window: &mut Window,
+    cx: &mut Context<Self>,
+  ) -> Result<(), SharedString> {
+    if let Some(repo_root) = git::discover_repository_root(&project_root) {
+      return self.set_fallback_repo(repo_root, window, cx);
+    }
+    let project_root = project_root
+      .canonicalize()
+      .map_err(|_| SharedString::from(format!("Project not found: {}", project_root.display())))?;
+    if !project_root.is_dir() {
+      return Err(format!("Project not found: {}", project_root.display()).into());
+    }
+    if self.project_root.as_deref() == Some(project_root.as_path())
+      && self.fallback_repo.is_none()
+      && self.agent_chat_view.is_none()
+    {
+      return Ok(());
+    }
+    if self.editor_is_dirty(cx) && self.target_checkout_differs_from_editor(&project_root, cx) {
+      self.open_unsaved_editor_dialog(
+        UnsavedEditorAction::SetProjectRoot { project_root },
+        window,
+        cx,
+      );
+      return Ok(());
+    }
+    self.set_project_root_without_unsaved_prompt(project_root, window, cx)
+  }
+
+  /// Switches the fallback Git repository: recents, persistence, review, and GitHub.
   pub(super) fn set_fallback_repo(
     &mut self,
     repo_root: PathBuf,
     window: &mut Window,
     cx: &mut Context<Self>,
   ) -> Result<(), SharedString> {
-    // A folder that is not a repository would be remembered as the one to open
-    // on the next launch, so it is refused before anything is stored.
     let Some(repo_root) = git::discover_repository_root(&repo_root) else {
       return Err("This project is not a Git repository yet.".into());
     };
@@ -34,6 +64,27 @@ impl SessionPage {
       return Ok(());
     }
     self.set_fallback_repo_without_unsaved_prompt(repo_root, window, cx)
+  }
+
+  pub(super) fn set_project_root_without_unsaved_prompt(
+    &mut self,
+    project_root: PathBuf,
+    window: &mut Window,
+    cx: &mut Context<Self>,
+  ) -> Result<(), SharedString> {
+    if !project_root.is_dir() {
+      return Err(format!("Project not found: {}", project_root.display()).into());
+    }
+    self.park_active_chat_panel(cx);
+    self.agent_chat_view = None;
+    self.chat_store = None;
+    self.checkout_override = None;
+    self.project_root = Some(project_root);
+    self.fallback_repo = None;
+    self.refresh_session_list(cx);
+    self.sync_active_checkout(window, cx);
+    cx.notify();
+    Ok(())
   }
 
   pub(super) fn set_fallback_repo_without_unsaved_prompt(
@@ -74,7 +125,7 @@ impl SessionPage {
     window: &mut Window,
     cx: &mut Context<Self>,
   ) -> Result<(), SharedString> {
-    self.set_fallback_repo(repo_root, window, cx)
+    self.set_project_root(repo_root, window, cx)
   }
 
   pub(super) fn apply_fallback_repo(
@@ -206,7 +257,7 @@ impl SessionPage {
       };
 
       let _ = this.update_in(cx, |this, window, cx| {
-        if let Err(error) = this.set_fallback_repo(path, window, cx) {
+        if let Err(error) = this.set_project_root(path, window, cx) {
           window.push_notification(Notification::warning(error), cx);
         }
       });
@@ -679,11 +730,12 @@ mod tests {
   }
 
   #[gpui::test]
-  async fn picking_a_folder_that_is_not_a_repository_leaves_the_shell_empty(
+  async fn picking_a_folder_that_is_not_a_repository_opens_a_project_without_git(
     cx: &mut TestAppContext,
   ) {
     let plain_folder = crate::test_support::temp_path("session-page-picker-not-a-repo");
-    std::fs::create_dir_all(&plain_folder).expect("create plain folder");
+    std::fs::create_dir_all(plain_folder.join("src")).expect("create plain folder");
+    std::fs::write(plain_folder.join("src/main.rs"), "fn main() {}\n").expect("write file");
 
     let (page, cx) = add_session_page_window_without_repo(cx);
     cx.run_until_parked();
@@ -696,27 +748,54 @@ mod tests {
     cx.simulate_path_prompt_response(move |_| Some(vec![picked]));
     cx.run_until_parked();
 
-    page.read_with(cx, |page, _| {
-      assert!(
-        page.fallback_repo.is_none(),
-        "a folder without a repository is not selected"
+    page.read_with(cx, |page, cx| {
+      assert_eq!(
+        page.project_root(cx).as_deref(),
+        Some(
+          plain_folder
+            .canonicalize()
+            .expect("canonical project")
+            .as_path()
+        )
       );
+      assert!(page.fallback_repo.is_none());
+      assert_eq!(page.dock_panel.read(cx).repo_root(), None);
     });
+    assert!(cx.debug_bounds(REPO_CONTEXT_DEBUG_SELECTOR).is_some());
     assert!(
       cx.debug_bounds(OPEN_REPOSITORY_ROW_DEBUG_SELECTOR)
-        .is_some(),
-      "the sidebar still asks for a project"
+        .is_none(),
+      "the project row replaces the empty state"
     );
     assert!(
       ConfigStore::load_recent_repositories().is_empty(),
-      "and nothing was remembered"
+      "non-Git projects are not remembered as Git repositories"
     );
+    assert!(
+      list_project_files(&plain_folder)
+        .expect("list project files")
+        .contains(&PathBuf::from("src/main.rs")),
+      "plain projects still feed file search"
+    );
+
+    page.update_in(cx, |page, window, cx| {
+      page.open_file(
+        PathBuf::from("src/main.rs"),
+        None,
+        None,
+        OpenIntent::Open,
+        window,
+        cx,
+      );
+    });
+    cx.run_until_parked();
+    page.read_with(cx, |page, _| assert!(page.shown_editor().is_some()));
 
     let _ = std::fs::remove_dir_all(&plain_folder);
   }
 
   #[gpui::test]
-  async fn a_folder_without_a_repository_is_refused_and_not_remembered(cx: &mut TestAppContext) {
+  async fn a_folder_without_a_repository_opens_as_an_unremembered_project(cx: &mut TestAppContext) {
     let repo = TempRepo::init("session-page-repo-validation");
     commit_text_file(&repo.path, Path::new("README.md"), "v1\n", "initial");
     let plain_folder = crate::test_support::temp_path("session-page-not-a-repo");
@@ -725,25 +804,30 @@ mod tests {
     let (page, cx) = add_session_page_window(repo.path.clone(), cx);
     cx.run_until_parked();
 
-    let refused = page.update_in(cx, |page, window, cx| {
-      page.set_fallback_repo(plain_folder.clone(), window, cx)
-    });
-    assert_eq!(
-      refused.expect_err("a plain folder is refused").as_ref(),
-      "This project is not a Git repository yet."
-    );
-    page.read_with(cx, |page, _| {
+    page
+      .update_in(cx, |page, window, cx| {
+        page.set_project_root(plain_folder.clone(), window, cx)
+      })
+      .expect("a plain folder opens as a project");
+    cx.run_until_parked();
+    page.read_with(cx, |page, cx| {
       assert_eq!(
-        page.fallback_repo.as_deref(),
-        Some(repo.path.as_path()),
-        "the shell stays on the project it had"
+        page.project_root(cx).as_deref(),
+        Some(
+          plain_folder
+            .canonicalize()
+            .expect("canonical project")
+            .as_path()
+        )
       );
+      assert!(page.fallback_repo.is_none());
+      assert_eq!(page.dock_panel.read(cx).repo_root(), None);
     });
     assert!(
       !ConfigStore::load_recent_repositories()
         .iter()
         .any(|recent| recent.path == plain_folder),
-      "a refused folder must not come back as the project to open next launch"
+      "a non-Git project must not come back as the Git project to open next launch"
     );
 
     // A directory inside a repository is accepted, as its root.

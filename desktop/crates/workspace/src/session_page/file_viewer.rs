@@ -34,6 +34,9 @@ pub(super) enum UnsavedEditorAction {
   SetFallbackRepo {
     repo_root: PathBuf,
   },
+  SetProjectRoot {
+    project_root: PathBuf,
+  },
   PinCheckout {
     path: PathBuf,
   },
@@ -1618,6 +1621,11 @@ impl SessionPage {
       }
       UnsavedEditorAction::SetFallbackRepo { repo_root } => {
         if let Err(error) = self.set_fallback_repo_without_unsaved_prompt(repo_root, window, cx) {
+          window.push_notification(Notification::warning(error), cx);
+        }
+      }
+      UnsavedEditorAction::SetProjectRoot { project_root } => {
+        if let Err(error) = self.set_project_root_without_unsaved_prompt(project_root, window, cx) {
           window.push_notification(Notification::warning(error), cx);
         }
       }

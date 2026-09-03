@@ -101,6 +101,7 @@ pub(crate) const BROWSE_DEBOUNCE: Duration = Duration::from_millis(100);
 
 const FILE_SEARCH_CACHE_TTL: Duration = Duration::from_secs(30);
 const FILE_SEARCH_RECENT_LIMIT: usize = 20;
+const PROJECT_FILE_SEARCH_LIMIT: usize = 20_000;
 
 const DIFF_VIEW_TOGGLE_DEBUG_SELECTOR: &str = "session-diff-view-toggle";
 const PREVIEW_TOGGLE_DEBUG_SELECTOR: &str = "session-preview-toggle";
@@ -131,6 +132,34 @@ const CONVERSATION_SPLIT_MAX_WIDTH: f32 = 640.0;
 const DOCK_PANEL_DEFAULT_WIDTH: f32 = 320.0;
 const DOCK_PANEL_MIN_WIDTH: f32 = 240.0;
 const DOCK_PANEL_MAX_WIDTH: f32 = 560.0;
+
+fn list_project_files(project_root: &Path) -> anyhow::Result<Vec<PathBuf>> {
+  let mut files = Vec::new();
+  let mut dirs = vec![PathBuf::new()];
+  while let Some(rel_dir) = dirs.pop() {
+    for entry in std::fs::read_dir(project_root.join(&rel_dir))? {
+      let entry = entry?;
+      let name = entry.file_name();
+      let name = name.to_string_lossy();
+      if matches!(name.as_ref(), ".git" | "node_modules" | "target") {
+        continue;
+      }
+      let rel_path = rel_dir.join(name.as_ref());
+      let file_type = entry.file_type()?;
+      if file_type.is_dir() {
+        dirs.push(rel_path);
+      } else if file_type.is_file() {
+        files.push(rel_path);
+        if files.len() >= PROJECT_FILE_SEARCH_LIMIT {
+          files.sort();
+          return Ok(files);
+        }
+      }
+    }
+  }
+  files.sort();
+  Ok(files)
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum CenterView {
@@ -657,13 +686,14 @@ impl SessionPage {
       .filter(|path| recents.iter().any(|recent| recent.path == *path))
       .take(crate::conversation_hub::MAX_TRACKED_REPOS)
       .collect();
-    if let Some(fallback_repo) = self.fallback_repo.as_ref()
-      && !visible.contains(fallback_repo)
+    let selected_project = self.project_root.as_ref().or(self.fallback_repo.as_ref());
+    if let Some(project_root) = selected_project
+      && !visible.contains(project_root)
     {
       if visible.len() >= crate::conversation_hub::MAX_TRACKED_REPOS {
         visible.pop();
       }
-      visible.insert(0, fallback_repo.clone());
+      visible.insert(0, project_root.clone());
     }
     visible
   }
@@ -970,10 +1000,11 @@ impl SessionPage {
       self.checkout_override = None;
     }
     let checkout = self.checkout_root(cx);
+    let git_checkout = checkout.clone().filter(|_| self.fallback_repo.is_some());
     // The memo alone is not trusted: a fixture or future code may assign
     // `fallback_repo` directly, so the dock's actual root double-checks it.
     if self.synced_checkout == checkout
-      && self.dock_panel.read(cx).repo_root() == checkout.as_deref()
+      && self.dock_panel.read(cx).repo_root() == git_checkout.as_deref()
     {
       return;
     }
@@ -1027,10 +1058,10 @@ impl SessionPage {
     self.open_file_task = None;
     self.open_file_generation = self.open_file_generation.wrapping_add(1);
     self.repo_snapshot.update(cx, |snapshot, cx| {
-      snapshot.set_repo_root(checkout.clone(), cx)
+      snapshot.set_repo_root(git_checkout.clone(), cx)
     });
     self.dock_panel.update(cx, |panel, cx| {
-      panel.set_repo_root(checkout.clone(), cx);
+      panel.set_repo_root(git_checkout.clone(), cx);
       panel.refresh(cx);
     });
     self.refresh_branch(cx);
@@ -1954,12 +1985,19 @@ impl SessionPage {
     }
 
     let load_repo_root = repo_root.clone();
+    let load_git_files = self.fallback_repo.is_some();
     let palette = palette.downgrade();
     self._file_search_task = Some(cx.spawn_in(window, async move |this, cx| {
       let result = cx
         .background_spawn({
           let repo_root = load_repo_root.clone();
-          async move { git::list_repo_worktree_files(&repo_root) }
+          async move {
+            if load_git_files {
+              git::list_repo_worktree_files(&repo_root)
+            } else {
+              list_project_files(&repo_root)
+            }
+          }
         })
         .await;
 
