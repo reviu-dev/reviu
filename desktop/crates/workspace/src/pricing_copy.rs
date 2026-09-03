@@ -13,5 +13,5 @@ pub(crate) const PRO_TRIAL: &str = "14-day free trial. Cancel anytime.";
 pub(crate) const PRO_BENEFITS: [&str; 3] = [
   "Pull requests for your branch, in the dock.",
   "Review and submit without leaving Reviu.",
-  "GitHub notifications in the inbox, next to your sessions.",
+  "GitHub notifications in the inbox, next to your projects.",
 ];

@@ -1195,7 +1195,7 @@ impl SessionPage {
             Self::rail_button(
               "sidebar-rail-new-session",
               gpui_component::Icon::new(UiIconName::SquarePen),
-              "New session",
+              "New chat",
             )
             .on_click(cx.listener(|this, _, window, cx| {
               this.open_sidebar(cx);

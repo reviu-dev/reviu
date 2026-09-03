@@ -824,6 +824,6 @@ mod tests {
 
     assert!(description.contains("Open file search"));
     assert!(description.contains("Shortcut: cmd-p."));
-    assert!(description.contains("PR Changes and Sessions"));
+    assert!(description.contains("PR Changes and Projects"));
   }
 }

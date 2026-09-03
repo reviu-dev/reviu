@@ -1648,8 +1648,8 @@ impl CommandPaletteCommand {
   pub fn open_session_page() -> Self {
     Self::new(
       CommandPaletteCommandId::OpenSessionPage,
-      "Sessions",
-      "Go to the sessions workspace",
+      "Projects",
+      "Go to your projects",
     )
   }
 
@@ -1800,25 +1800,25 @@ impl CommandPaletteCommand {
 
   pub fn new_agent_session(repo_name: Option<&str>) -> Self {
     let name = match repo_name {
-      Some(repo) => format!("New session in {repo}"),
-      None => "New session".to_string(),
+      Some(repo) => format!("New chat in {repo}"),
+      None => "New chat".to_string(),
     };
     Self::new(
       CommandPaletteCommandId::NewAgentSession,
       name,
-      "Start an agent session in the current repository",
+      "Start an agent chat in the current project",
     )
   }
 
   pub fn new_agent_worktree_session(repo_name: Option<&str>) -> Self {
     let name = match repo_name {
-      Some(repo) => format!("New worktree session in {repo}"),
-      None => "New worktree session".to_string(),
+      Some(repo) => format!("New worktree chat in {repo}"),
+      None => "New worktree chat".to_string(),
     };
     Self::new(
       CommandPaletteCommandId::NewAgentWorktreeSession,
       name,
-      "Start an agent session in its own git worktree",
+      "Start an agent chat in its own git worktree",
     )
   }
 
@@ -2053,13 +2053,13 @@ impl CommandPaletteCommand {
       Id::ToggleHideWhitespace => &["blank", "spaces", "indent"],
       Id::SendSelectionToAgent => &["context", "attach", "prompt"],
       Id::JumpToLatestMessage => &["bottom", "newest", "tail", "conversation"],
-      Id::NewAgentSession => &["session", "conversation", "agent", "start", "create"],
-      Id::NewAgentWorktreeSession => &["session", "worktree", "branch", "parallel", "create"],
+      Id::NewAgentSession => &["chat", "conversation", "agent", "start", "create"],
+      Id::NewAgentWorktreeSession => &["chat", "worktree", "branch", "parallel", "create"],
       Id::SignIn => &["login", "connect", "github", "account"],
       Id::SignOut => &["logout", "disconnect", "account"],
       Id::OpenBrowserExtensions => &["chrome", "firefox", "addon", "browser"],
       Id::ForgetRepository => &["remove", "recent", "sidebar"],
-      Id::OpenSessionPage => &["home", "workspace", "agent", "goto"],
+      Id::OpenSessionPage => &["home", "project", "agent", "goto"],
       Id::OpenGithubFromUrl => &["link", "paste"],
       Id::OpenSettingsPage => &["preferences", "shortcuts", "keybindings", "theme", "goto"],
       Id::OpenGitConfigPage => &["gitconfig", "identity", "email", "username", "goto"],

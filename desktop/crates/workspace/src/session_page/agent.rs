@@ -506,7 +506,7 @@ impl SessionPage {
     let caption = panel
       .map(|panel| panel.read(cx).current_conversation().title.clone())
       .filter(|title| !title.is_empty())
-      .unwrap_or_else(|| "Agent session".to_string());
+      .unwrap_or_else(|| "Agent chat".to_string());
     let main_window = self.window_handle;
     let title = title.to_string();
     let agent_id = panel
@@ -1111,7 +1111,7 @@ impl SessionPage {
   ) {
     if self.session_repo(cx).is_none() {
       window.push_notification(
-        Notification::warning("Open a repository before starting a session."),
+        Notification::warning("Open a project before starting a chat."),
         cx,
       );
       return;
@@ -1127,7 +1127,7 @@ impl SessionPage {
   ) {
     let Some(repo_root) = self.session_repo(cx) else {
       window.push_notification(
-        Notification::warning("Open a repository before starting a worktree session."),
+        Notification::warning("Open a project before starting a worktree chat."),
         cx,
       );
       return;
@@ -1216,7 +1216,7 @@ impl SessionPage {
       if let Err(error) = removed {
         let _ = cx.update_window(window_handle, |_, window, cx| {
           window.push_notification(
-            Notification::error(format!("Removing the session worktree failed: {error}")),
+            Notification::error(format!("Removing the worktree failed: {error}")),
             cx,
           );
         });

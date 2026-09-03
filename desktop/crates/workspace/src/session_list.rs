@@ -1,4 +1,4 @@
-//! The sidebar's session list: pick, create and delete conversations.
+//! The projects sidebar: pick, create and delete conversations by repository.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -60,7 +60,7 @@ fn now_secs() -> u64 {
 pub(crate) fn session_row_title(meta: &ConversationMeta) -> SharedString {
   let trimmed = meta.title.trim();
   if trimmed.is_empty() {
-    "New session".into()
+    "New chat".into()
   } else {
     trimmed.to_string().into()
   }
@@ -936,7 +936,7 @@ impl Render for SessionList {
                             .icon(UiIconName::Trash)
                             .xsmall()
                             .ghost()
-                            .tooltip("Delete session")
+                            .tooltip("Delete chat")
                             .on_click(cx.listener(move |_, _, _, cx| {
                               cx.stop_propagation();
                               cx.emit(SessionListEvent::Deleted {
@@ -1084,8 +1084,8 @@ mod tests {
 
   #[test]
   fn session_row_title_falls_back_when_empty() {
-    assert_eq!(session_row_title(&meta_with_title("")), "New session");
-    assert_eq!(session_row_title(&meta_with_title("   ")), "New session");
+    assert_eq!(session_row_title(&meta_with_title("")), "New chat");
+    assert_eq!(session_row_title(&meta_with_title("   ")), "New chat");
     assert_eq!(
       session_row_title(&meta_with_title("Fix scroll")),
       "Fix scroll"
