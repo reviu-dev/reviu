@@ -94,6 +94,7 @@ const MIGRATIONS: &[Migration] = [
   migrate_v4_recent_projects,
   migrate_v5_projects,
   migrate_v6_drop_legacy_project_tables,
+  migrate_v7_drop_retired_github_home_tables,
 ]
 .as_slice();
 
@@ -212,6 +213,12 @@ fn migrate_v6_drop_legacy_project_tables(conn: &Connection) -> rusqlite::Result<
     ),
     [],
   )?;
+  Ok(())
+}
+
+fn migrate_v7_drop_retired_github_home_tables(conn: &Connection) -> rusqlite::Result<()> {
+  conn.execute("DROP TABLE IF EXISTS pinned_repos", [])?;
+  conn.execute("DROP TABLE IF EXISTS github_home_pull_request_tabs", [])?;
   Ok(())
 }
 
@@ -1530,6 +1537,8 @@ mod tests {
     "session_sidebar_repositories",
   ];
 
+  const RETIRED_GITHUB_HOME_TABLES: &[&str] = &["pinned_repos", "github_home_pull_request_tabs"];
+
   const ALL_SETTINGS_COLUMNS: &[&str] = &[
     "auto_switch_theme",
     "dark_mode",
@@ -1566,6 +1575,12 @@ mod tests {
         "legacy table {table} should be gone"
       );
     }
+    for table in RETIRED_GITHUB_HOME_TABLES {
+      assert!(
+        !tables.contains(*table),
+        "retired table {table} should be gone"
+      );
+    }
 
     ConfigStore::set_test_db_path(None);
   }
@@ -1585,6 +1600,40 @@ mod tests {
 
     assert_eq!(db_user_version(&db_path), MIGRATIONS.len() as i64);
     assert!(reloaded.dark_mode);
+
+    ConfigStore::set_test_db_path(None);
+  }
+
+  #[test]
+  fn migrations_drop_retired_github_home_tables_from_existing_db() {
+    let db_path = unique_test_db_path("retired-github-home-tables");
+    let _ = fs::remove_file(&db_path);
+
+    {
+      let conn = Connection::open(&db_path).expect("open db");
+      create_baseline_tables(&conn).expect("baseline tables");
+      ensure_default_rows(&conn).expect("default row");
+      ensure_settings_columns(&conn).expect("settings columns");
+      conn
+        .execute_batch(
+          "CREATE TABLE pinned_repos (full_name TEXT PRIMARY KEY, pinned_at INTEGER NOT NULL); \
+           CREATE TABLE github_home_pull_request_tabs (id TEXT PRIMARY KEY, name TEXT NOT NULL, position INTEGER NOT NULL, filters_json TEXT NOT NULL, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL);",
+        )
+        .expect("retired tables");
+      set_schema_version(&conn, 6).expect("stamp previous version");
+    }
+
+    ConfigStore::set_test_db_path(Some(db_path.clone()));
+    let _ = ConfigStore::load_app_settings();
+
+    assert_eq!(db_user_version(&db_path), MIGRATIONS.len() as i64);
+    let tables = table_names(&db_path);
+    for table in RETIRED_GITHUB_HOME_TABLES {
+      assert!(
+        !tables.contains(*table),
+        "retired table {table} should be gone"
+      );
+    }
 
     ConfigStore::set_test_db_path(None);
   }
