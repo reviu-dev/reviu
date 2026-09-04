@@ -26,12 +26,12 @@ struct ConfigTable {
   create_sql: &'static str,
 }
 
-const RECENT_REPOS_TABLE: ConfigTable = ConfigTable {
+const LEGACY_RECENT_REPOS_TABLE: ConfigTable = ConfigTable {
   name: "recent_repositories",
   create_sql: "CREATE TABLE IF NOT EXISTS recent_repositories (path TEXT PRIMARY KEY, last_opened INTEGER NOT NULL)",
 };
 
-const RECENT_PROJECTS_TABLE: ConfigTable = ConfigTable {
+const LEGACY_RECENT_PROJECTS_TABLE: ConfigTable = ConfigTable {
   name: "recent_projects",
   create_sql: "CREATE TABLE IF NOT EXISTS recent_projects (path TEXT PRIMARY KEY, last_opened INTEGER NOT NULL)",
 };
@@ -41,7 +41,7 @@ const PROJECTS_TABLE: ConfigTable = ConfigTable {
   create_sql: "CREATE TABLE IF NOT EXISTS projects (path TEXT PRIMARY KEY, kind TEXT NOT NULL, last_opened INTEGER NOT NULL, sidebar_position INTEGER)",
 };
 
-const SESSION_SIDEBAR_PROJECTS_TABLE: ConfigTable = ConfigTable {
+const LEGACY_SESSION_SIDEBAR_PROJECTS_TABLE: ConfigTable = ConfigTable {
   name: "session_sidebar_repositories",
   create_sql: "CREATE TABLE IF NOT EXISTS session_sidebar_repositories (path TEXT PRIMARY KEY, position INTEGER NOT NULL)",
 };
@@ -73,15 +73,13 @@ const MERGE_METHODS_TABLE: ConfigTable = ConfigTable {
 
 pub const COMMAND_USAGE_TIMESTAMP_CAP: usize = 30;
 
-const CONFIG_TABLES: [ConfigTable; 8] = [
-  RECENT_REPOS_TABLE,
-  RECENT_PROJECTS_TABLE,
+const CONFIG_TABLES: [ConfigTable; 6] = [
   PROJECTS_TABLE,
-  SESSION_SIDEBAR_PROJECTS_TABLE,
   SETTINGS_TABLE,
   SHORTCUT_OVERRIDES_TABLE,
   COMMAND_USAGES_TABLE,
   ANALYTICS_META_TABLE,
+  MERGE_METHODS_TABLE,
 ];
 
 type Migration = fn(&Connection) -> rusqlite::Result<()>;
@@ -95,6 +93,7 @@ const MIGRATIONS: &[Migration] = [
   migrate_v3_session_sidebar_repositories,
   migrate_v4_recent_projects,
   migrate_v5_projects,
+  migrate_v6_drop_legacy_project_tables,
 ]
 .as_slice();
 
@@ -145,22 +144,23 @@ fn migrate_v2_merge_methods(conn: &Connection) -> rusqlite::Result<()> {
 }
 
 fn migrate_v3_session_sidebar_repositories(conn: &Connection) -> rusqlite::Result<()> {
-  conn.execute(SESSION_SIDEBAR_PROJECTS_TABLE.create_sql, [])?;
+  conn.execute(LEGACY_SESSION_SIDEBAR_PROJECTS_TABLE.create_sql, [])?;
   Ok(())
 }
 
 fn migrate_v4_recent_projects(conn: &Connection) -> rusqlite::Result<()> {
-  conn.execute(RECENT_PROJECTS_TABLE.create_sql, [])?;
+  conn.execute(LEGACY_RECENT_PROJECTS_TABLE.create_sql, [])?;
   Ok(())
 }
 
 fn migrate_v5_projects(conn: &Connection) -> rusqlite::Result<()> {
   conn.execute(PROJECTS_TABLE.create_sql, [])?;
+  conn.execute(LEGACY_RECENT_REPOS_TABLE.create_sql, [])?;
   conn.execute(
     &format!(
       "INSERT OR IGNORE INTO {} (path, kind, last_opened)
        SELECT path, 'plain', last_opened FROM {}",
-      PROJECTS_TABLE.name, RECENT_PROJECTS_TABLE.name
+      PROJECTS_TABLE.name, LEGACY_RECENT_PROJECTS_TABLE.name
     ),
     [],
   )?;
@@ -168,7 +168,7 @@ fn migrate_v5_projects(conn: &Connection) -> rusqlite::Result<()> {
     &format!(
       "INSERT OR REPLACE INTO {} (path, kind, last_opened)
        SELECT path, 'git', last_opened FROM {}",
-      PROJECTS_TABLE.name, RECENT_REPOS_TABLE.name
+      PROJECTS_TABLE.name, LEGACY_RECENT_REPOS_TABLE.name
     ),
     [],
   )?;
@@ -176,7 +176,7 @@ fn migrate_v5_projects(conn: &Connection) -> rusqlite::Result<()> {
     &format!(
       "INSERT OR IGNORE INTO {} (path, kind, last_opened)
        SELECT path, 'git', 0 FROM {}",
-      PROJECTS_TABLE.name, SESSION_SIDEBAR_PROJECTS_TABLE.name
+      PROJECTS_TABLE.name, LEGACY_SESSION_SIDEBAR_PROJECTS_TABLE.name
     ),
     [],
   )?;
@@ -186,10 +186,29 @@ fn migrate_v5_projects(conn: &Connection) -> rusqlite::Result<()> {
          SELECT position FROM {} WHERE {}.path = {}.path
        ) WHERE path IN (SELECT path FROM {})",
       PROJECTS_TABLE.name,
-      SESSION_SIDEBAR_PROJECTS_TABLE.name,
-      SESSION_SIDEBAR_PROJECTS_TABLE.name,
+      LEGACY_SESSION_SIDEBAR_PROJECTS_TABLE.name,
+      LEGACY_SESSION_SIDEBAR_PROJECTS_TABLE.name,
       PROJECTS_TABLE.name,
-      SESSION_SIDEBAR_PROJECTS_TABLE.name
+      LEGACY_SESSION_SIDEBAR_PROJECTS_TABLE.name
+    ),
+    [],
+  )?;
+  Ok(())
+}
+
+fn migrate_v6_drop_legacy_project_tables(conn: &Connection) -> rusqlite::Result<()> {
+  conn.execute(
+    &format!("DROP TABLE IF EXISTS {}", LEGACY_RECENT_REPOS_TABLE.name),
+    [],
+  )?;
+  conn.execute(
+    &format!("DROP TABLE IF EXISTS {}", LEGACY_RECENT_PROJECTS_TABLE.name),
+    [],
+  )?;
+  conn.execute(
+    &format!(
+      "DROP TABLE IF EXISTS {}",
+      LEGACY_SESSION_SIDEBAR_PROJECTS_TABLE.name
     ),
     [],
   )?;
@@ -1097,17 +1116,17 @@ mod tests {
     let _ = fs::remove_file(&db_path);
     let conn = Connection::open(&db_path).expect("open legacy db");
     conn
-      .execute(RECENT_REPOS_TABLE.create_sql, [])
+      .execute(LEGACY_RECENT_REPOS_TABLE.create_sql, [])
       .expect("create old recents");
     conn
-      .execute(SESSION_SIDEBAR_PROJECTS_TABLE.create_sql, [])
+      .execute(LEGACY_SESSION_SIDEBAR_PROJECTS_TABLE.create_sql, [])
       .expect("create old sidebar order");
     let repo = unique_test_repo_dir("legacy-recent-repository");
     conn
       .execute(
         &format!(
           "INSERT INTO {} (path, last_opened) VALUES (?1, 42)",
-          RECENT_REPOS_TABLE.name
+          LEGACY_RECENT_REPOS_TABLE.name
         ),
         params![repo.to_string_lossy().to_string()],
       )
@@ -1116,14 +1135,14 @@ mod tests {
       .execute(
         &format!(
           "INSERT INTO {} (path, position) VALUES (?1, 0)",
-          SESSION_SIDEBAR_PROJECTS_TABLE.name
+          LEGACY_SESSION_SIDEBAR_PROJECTS_TABLE.name
         ),
         params![repo.to_string_lossy().to_string()],
       )
       .expect("insert legacy sidebar order");
     set_schema_version(&conn, 3).expect("set legacy schema version");
     drop(conn);
-    ConfigStore::set_test_db_path(Some(db_path));
+    ConfigStore::set_test_db_path(Some(db_path.clone()));
 
     assert_eq!(
       ConfigStore::load_recent_project_entries(),
@@ -1133,6 +1152,13 @@ mod tests {
       }]
     );
     assert_eq!(ConfigStore::load_sidebar_projects(), vec![repo.clone()]);
+    let tables = table_names(&db_path);
+    for table in LEGACY_PROJECT_TABLES {
+      assert!(
+        !tables.contains(*table),
+        "legacy table {table} should be gone"
+      );
+    }
 
     let _ = fs::remove_dir_all(&repo);
     ConfigStore::set_test_db_path(None);
@@ -1478,6 +1504,32 @@ mod tests {
       .expect("user_version")
   }
 
+  fn table_names(db_path: &Path) -> std::collections::HashSet<String> {
+    let conn = Connection::open(db_path).expect("open db");
+    let mut stmt = conn
+      .prepare("SELECT name FROM sqlite_master WHERE type = 'table'")
+      .expect("table names");
+    let rows = stmt
+      .query_map([], |row| row.get::<_, String>(0))
+      .expect("query table names");
+    rows.map(|row| row.expect("table name")).collect()
+  }
+
+  const FINAL_CONFIG_TABLES: &[&str] = &[
+    "projects",
+    "settings",
+    "shortcut_overrides",
+    "command_usages",
+    "analytics_meta",
+    "merge_methods",
+  ];
+
+  const LEGACY_PROJECT_TABLES: &[&str] = &[
+    "recent_repositories",
+    "recent_projects",
+    "session_sidebar_repositories",
+  ];
+
   const ALL_SETTINGS_COLUMNS: &[&str] = &[
     "auto_switch_theme",
     "dark_mode",
@@ -1503,6 +1555,16 @@ mod tests {
     let columns = settings_columns(&db_path);
     for column in ALL_SETTINGS_COLUMNS {
       assert!(columns.contains(*column), "missing column {column}");
+    }
+    let tables = table_names(&db_path);
+    for table in FINAL_CONFIG_TABLES {
+      assert!(tables.contains(*table), "missing table {table}");
+    }
+    for table in LEGACY_PROJECT_TABLES {
+      assert!(
+        !tables.contains(*table),
+        "legacy table {table} should be gone"
+      );
     }
 
     ConfigStore::set_test_db_path(None);
