@@ -252,6 +252,7 @@ impl SessionPage {
     });
 
     self.center = CenterView::Diff;
+    self.diff_chat_open = false;
     self.sync_agent_chat_close_control(cx);
     // Same path, but the snapshot of a commit is not the working-tree file.
     if !left_commit_file
@@ -609,6 +610,7 @@ impl SessionPage {
     };
     self.show_preview = false;
     self.center = CenterView::Diff;
+    self.diff_chat_open = false;
     self.sync_agent_chat_close_control(cx);
     let app_settings = crate::config::AppSettings::get(cx);
     self.diff_view = if app_settings.split_diff_view {
@@ -746,6 +748,7 @@ impl SessionPage {
     };
     self.show_preview = false;
     self.center = CenterView::Diff;
+    self.diff_chat_open = false;
     self.sync_agent_chat_close_control(cx);
     let tab = CenterTab::commit_snapshot(rel_path.clone(), commit_oid.clone());
     if self.restore_center_editor(&tab, &rel_path, None, intent, window, cx) {
@@ -867,6 +870,7 @@ impl SessionPage {
     let reveal_doc_line = reveal_line.map(|line| line.saturating_sub(1) as usize);
     self.show_preview = false;
     self.center = CenterView::Diff;
+    self.diff_chat_open = false;
     self.sync_agent_chat_close_control(cx);
     // Another comment on the file already open: reveal, do not reload.
     if self.warm_opened_snapshot()
@@ -2046,8 +2050,8 @@ mod tests {
   }
 
   #[gpui::test]
-  async fn the_conversation_stays_visible_next_to_an_open_diff(cx: &mut TestAppContext) {
-    let repo = TempRepo::init("session-page-split-view");
+  async fn opening_a_diff_shows_only_the_file_in_the_center(cx: &mut TestAppContext) {
+    let repo = TempRepo::init("session-page-file-only-center");
     commit_text_file(&repo.path, Path::new("README.md"), "v1\n", "initial");
     std::fs::write(repo.path.join("README.md"), "v2\n").expect("update file");
 
@@ -2071,19 +2075,20 @@ mod tests {
     page.update(cx, |_, cx| cx.notify());
     cx.run_until_parked();
 
-    let conversation = cx
-      .debug_bounds("session-conversation-pane")
-      .expect("conversation still painted next to the diff");
-    let editor = cx
-      .debug_bounds("session-diff-editor")
-      .expect("diff editor painted");
+    assert!(cx.debug_bounds("session-diff-editor").is_some());
     assert!(
-      conversation.right() <= editor.left() + gpui::px(1.),
-      "conversation sits left of the diff: {conversation:?} vs {editor:?}"
+      cx.debug_bounds("session-conversation-pane").is_none(),
+      "opening a file should not keep the conversation beside it"
     );
+    page.read_with(cx, |page, _| {
+      assert_eq!(page.center, CenterView::Diff);
+      assert!(!page.diff_chat_open);
+      assert_eq!(
+        page.active_center_tab,
+        Some(CenterTab::diff(PathBuf::from("README.md")))
+      );
+    });
 
-    // Swapping to another file remounts the split; the conversation pane
-    // must ride along.
     commit_text_file(&repo.path, Path::new("other.md"), "one\n", "second file");
     std::fs::write(repo.path.join("other.md"), "two\n").expect("update other");
     page.update_in(cx, |page, window, cx| {
@@ -2098,11 +2103,8 @@ mod tests {
     await_open_file(&page, cx).await;
     page.update(cx, |_, cx| cx.notify());
     cx.run_until_parked();
-    assert!(
-      cx.debug_bounds("session-conversation-pane").is_some(),
-      "the conversation survives a file swap"
-    );
     assert!(cx.debug_bounds("session-diff-editor").is_some());
+    assert!(cx.debug_bounds("session-conversation-pane").is_none());
 
     page.update_in(cx, |page, window, cx| {
       page.close_workspace_page_action(&CloseWorkspacePage, window, cx);

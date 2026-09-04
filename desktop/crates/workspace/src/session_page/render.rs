@@ -598,7 +598,6 @@ impl SessionPage {
           .shown_selected_file()
           .map(|path| path.to_string_lossy().into_owned())
           .unwrap_or_default();
-        // The conversation stays alongside the diff until the reviewer hides it.
         let view = if self.diff_chat_open {
           self.render_conversation_diff_split(window, cx)
         } else {
@@ -4357,8 +4356,8 @@ mod tests {
   }
 
   #[gpui::test]
-  async fn dragging_the_conversation_split_handle_resizes_the_chat(cx: &mut TestAppContext) {
-    let repo = TempRepo::init("session-conversation-split-drag");
+  async fn opening_a_diff_keeps_the_center_single_pane(cx: &mut TestAppContext) {
+    let repo = TempRepo::init("session-conversation-split-removed");
     commit_text_file(&repo.path, Path::new("README.md"), "v1\n", "initial");
     std::fs::write(repo.path.join("README.md"), "v2\n").expect("modify file");
     let (page, cx) = add_session_page_window(repo.path.clone(), cx);
@@ -4374,43 +4373,14 @@ mod tests {
       );
     });
     await_open_file(&page, cx).await;
-
-    let start_width = page.read_with(cx, |page, _| page.conversation_split_width);
-    let handle = cx
-      .debug_bounds(CONVERSATION_SPLIT_RESIZE_HANDLE_DEBUG_SELECTOR)
-      .expect("conversation split resize handle");
-    let from = handle.center();
-    let to = gpui::point(from.x + px(80.0), from.y);
-
-    cx.simulate_event(gpui::MouseDownEvent {
-      position: from,
-      button: gpui::MouseButton::Left,
-      modifiers: gpui::Modifiers::default(),
-      click_count: 1,
-      first_mouse: false,
-    });
-    cx.simulate_event(gpui::MouseMoveEvent {
-      position: gpui::point(from.x + px(10.0), from.y),
-      pressed_button: Some(gpui::MouseButton::Left),
-      modifiers: gpui::Modifiers::default(),
-    });
-    cx.simulate_event(gpui::MouseMoveEvent {
-      position: to,
-      pressed_button: Some(gpui::MouseButton::Left),
-      modifiers: gpui::Modifiers::default(),
-    });
-    cx.simulate_event(gpui::MouseUpEvent {
-      position: to,
-      button: gpui::MouseButton::Left,
-      modifiers: gpui::Modifiers::default(),
-      click_count: 1,
-    });
+    page.update(cx, |_, cx| cx.notify());
     cx.run_until_parked();
 
-    let width = page.read_with(cx, |page, _| page.conversation_split_width);
+    assert!(cx.debug_bounds("session-diff-editor").is_some());
+    assert!(cx.debug_bounds("session-conversation-pane").is_none());
     assert!(
-      (width - (start_width + 80.0)).abs() < 5.0,
-      "dragging 80px right widens the chat: {start_width} -> {width}"
+      cx.debug_bounds(CONVERSATION_SPLIT_RESIZE_HANDLE_DEBUG_SELECTOR)
+        .is_none()
     );
   }
 
