@@ -38,7 +38,7 @@ impl SessionPage {
     };
 
     let palette_commands = self
-      .palette_commands(self.palette_repositories().len(), cx)
+      .palette_commands(self.palette_projects().len(), cx)
       .into_iter()
       .map(|command| command.id.as_str())
       .collect::<Vec<_>>();

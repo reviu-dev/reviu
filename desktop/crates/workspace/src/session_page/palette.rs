@@ -3,51 +3,51 @@
 use super::*;
 
 impl SessionPage {
-  pub(super) fn palette_repositories(&self) -> Vec<CommandPaletteRepository> {
-    let mut repositories = ConfigStore::load_recent_repositories()
+  pub(super) fn palette_projects(&self) -> Vec<CommandPaletteProject> {
+    let mut projects = ConfigStore::load_recent_repositories()
       .into_iter()
-      .map(|repo| CommandPaletteRepository {
+      .map(|repo| CommandPaletteProject {
         path: repo.path.to_string_lossy().replace(['\n', '\r'], "").into(),
       })
       .collect::<Vec<_>>();
 
     for project in ConfigStore::load_recent_projects() {
       let path = project.path.to_string_lossy().replace(['\n', '\r'], "");
-      if !repositories.iter().any(|repo| repo.path.as_ref() == path) {
-        repositories.push(CommandPaletteRepository { path: path.into() });
+      if !projects.iter().any(|project| project.path.as_ref() == path) {
+        projects.push(CommandPaletteProject { path: path.into() });
       }
     }
 
     if let Some(project_root) = self.project_root.as_ref() {
       let selected = project_root.to_string_lossy().replace(['\n', '\r'], "");
-      if !repositories
+      if !projects
         .iter()
-        .any(|repo| repo.path.as_ref() == selected)
+        .any(|project| project.path.as_ref() == selected)
       {
-        repositories.insert(
+        projects.insert(
           0,
-          CommandPaletteRepository {
+          CommandPaletteProject {
             path: selected.into(),
           },
         );
       }
     }
 
-    repositories
+    projects
   }
 
   pub(super) fn palette_commands(
     &self,
-    repositories_len: usize,
+    projects_len: usize,
     cx: &App,
   ) -> Vec<CommandPaletteCommand> {
     let mut commands = Vec::new();
-    if repositories_len > 1 {
-      commands.push(CommandPaletteCommand::switch_repository());
+    if projects_len > 1 {
+      commands.push(CommandPaletteCommand::switch_project());
     }
     commands.push(CommandPaletteCommand::open_repository());
-    if repositories_len > 0 {
-      commands.push(CommandPaletteCommand::forget_repository());
+    if projects_len > 0 {
+      commands.push(CommandPaletteCommand::forget_project());
     }
 
     // Creation lands where you are; the project in the label says so upfront.
@@ -234,9 +234,9 @@ impl SessionPage {
     window: &mut Window,
     cx: &mut Context<Self>,
   ) {
-    let repositories = self.palette_repositories();
+    let projects = self.palette_projects();
     let commands = crate::shortcuts::with_palette_keybindings(
-      self.palette_commands(repositories.len(), cx),
+      self.palette_commands(projects.len(), cx),
       window,
       cx,
     );
@@ -253,7 +253,7 @@ impl SessionPage {
     let stashes = palette_stashes(snapshot.stashes());
     let default_stash_message = snapshot.default_stash_message();
     let mut config = CommandPaletteConfig::new(branches, commands, handler)
-      .with_repositories(repositories)
+      .with_projects(projects)
       .with_rebase_branches(self.rebase_branch_targets(cx))
       .with_delete_branches(self.delete_branch_targets(cx))
       .with_stashes(stashes);
@@ -446,15 +446,15 @@ impl SessionPage {
         self.start_open_repository(window, cx);
         Ok(())
       }
-      CommandPaletteAction::SwitchRepository(repository) => {
-        let repo_root = PathBuf::from(repository.path.as_ref());
-        if !repo_root.is_dir() {
-          return Err(format!("Project not found: {}", repo_root.display()).into());
+      CommandPaletteAction::SwitchProject(project) => {
+        let project_root = PathBuf::from(project.path.as_ref());
+        if !project_root.is_dir() {
+          return Err(format!("Project not found: {}", project_root.display()).into());
         }
-        self.set_project_root(repo_root, window, cx)
+        self.set_project_root(project_root, window, cx)
       }
-      CommandPaletteAction::ForgetRepository(repository) => {
-        self.forget_repository(PathBuf::from(repository.path.as_ref()), window, cx)
+      CommandPaletteAction::ForgetProject(project) => {
+        self.forget_repository(PathBuf::from(project.path.as_ref()), window, cx)
       }
       CommandPaletteAction::ToggleTerminal => {
         self.open_dock_tab(DockPanelTab::Terminal, window, cx);
@@ -688,7 +688,7 @@ mod tests {
   }
 
   #[gpui::test]
-  async fn palette_repositories_put_the_open_repository_first(cx: &mut TestAppContext) {
+  async fn palette_projects_put_the_open_project_first(cx: &mut TestAppContext) {
     let repo = TempRepo::init("session-page-palette-repos");
     commit_text_file(&repo.path, Path::new("README.md"), "v1\n", "initial");
     let other = TempRepo::init("session-page-palette-repos-other");
@@ -698,23 +698,23 @@ mod tests {
     ConfigStore::persist_recent_repository(&other.path);
 
     page.read_with(cx, |page, _| {
-      let repositories = page.palette_repositories();
+      let projects = page.palette_projects();
       // The open project is not in the recents yet, it still leads the list.
       assert_eq!(
-        repositories.first().map(|repo| repo.path.to_string()),
+        projects.first().map(|project| project.path.to_string()),
         Some(repo.path.to_string_lossy().to_string())
       );
-      assert_eq!(repositories.len(), 2);
+      assert_eq!(projects.len(), 2);
     });
 
     // Once it is a recent too, it must not be listed twice. Order is left to the
     // recents, whose timestamps have a one-second granularity.
     ConfigStore::persist_recent_repository(&repo.path);
     page.read_with(cx, |page, _| {
-      let repositories = page.palette_repositories();
-      assert_eq!(repositories.len(), 2);
+      let projects = page.palette_projects();
+      assert_eq!(projects.len(), 2);
       assert_eq!(
-        repositories
+        projects
           .iter()
           .filter(|entry| entry.path.as_ref() == repo.path.to_string_lossy())
           .count(),

@@ -1034,7 +1034,7 @@ mod tests {
     let error = page.update_in(cx, |page, window, cx| {
       page
         .handle_command_palette_action(
-          CommandPaletteAction::SwitchRepository(ui::CommandPaletteRepository {
+          CommandPaletteAction::SwitchProject(ui::CommandPaletteProject {
             path: missing.to_string_lossy().to_string().into(),
           }),
           window,

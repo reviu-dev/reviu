@@ -24,7 +24,7 @@ pub use command_palette::{
   COMMAND_PALETTE_CONTEXT, CommandPalette, CommandPaletteAction, CommandPaletteBranch,
   CommandPaletteBranchKind, CommandPaletteCommand, CommandPaletteCommandId, CommandPaletteConfig,
   CommandPaletteGithubRepoTab, CommandPaletteGroup, CommandPaletteHandler,
-  CommandPaletteInitialScreen, CommandPalettePage, CommandPaletteRepository, CommandPaletteStash,
+  CommandPaletteInitialScreen, CommandPalettePage, CommandPaletteProject, CommandPaletteStash,
   CommandPaletteUsageRecorder, CommandPaletteUsageRecorderGlobal, CommandPaletteUsageScorer,
   CommandPaletteUsageScorerGlobal, GlobalCommandsContext,
 };

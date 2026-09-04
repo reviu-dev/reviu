@@ -1091,8 +1091,8 @@ fn palette_command_shortcut(command: CommandPaletteCommandId) -> Option<Shortcut
     Command::JumpToLatestMessage => Some(ShortcutId::JumpToLatestMessage),
     Command::NewAgentSession => Some(ShortcutId::NewAgentSession),
     Command::NewAgentWorktreeSession => Some(ShortcutId::NewAgentWorktreeSession),
-    Command::SwitchRepository
-    | Command::ForgetRepository
+    Command::SwitchProject
+    | Command::ForgetProject
     | Command::CheckoutDetached
     | Command::ContinueRebase
     | Command::SkipRebase

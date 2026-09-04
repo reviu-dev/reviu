@@ -206,7 +206,7 @@ impl SessionPage {
               })
               .on_click(cx.listener(|this, _, window, cx| {
                 this.open_command_palette_with_screen(
-                  Some(CommandPaletteInitialScreen::SwitchRepository),
+                  Some(CommandPaletteInitialScreen::SwitchProject),
                   window,
                   cx,
                 );

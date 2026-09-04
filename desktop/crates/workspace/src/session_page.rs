@@ -91,7 +91,7 @@ use crate::{
 use ui::{
   Button, ButtonVariants as _, CommandPalette, CommandPaletteAction, CommandPaletteCommand,
   CommandPaletteConfig, CommandPaletteHandler, CommandPaletteInitialScreen, CommandPalettePage,
-  CommandPaletteRepository, ConfirmDialog, FILE_ICON_SIZE_PX, SearchFileEntry, SearchFileGroup,
+  CommandPaletteProject, ConfirmDialog, FILE_ICON_SIZE_PX, SearchFileEntry, SearchFileGroup,
   SearchFileHandler, StatusThemeExt as _, UiIconName, WindowExt as _,
   file_icon_path_for_path_with_theme,
 };

@@ -87,7 +87,7 @@ fn palette_row(
     })
 }
 
-fn repository_path_label(path: &str) -> (String, String) {
+fn project_path_label(path: &str) -> (String, String) {
   let path = Path::new(path);
   let name = path
     .file_name()
@@ -108,12 +108,12 @@ fn repository_path_label(path: &str) -> (String, String) {
   (dir, name)
 }
 
-fn repository_palette_row(
+fn project_palette_row(
   icon: Icon,
-  repository: &CommandPaletteRepository,
+  project: &CommandPaletteProject,
   theme: &gpui_component::Theme,
 ) -> impl IntoElement {
-  let (dir, name) = repository_path_label(repository.path.as_ref());
+  let (dir, name) = project_path_label(project.path.as_ref());
 
   h_flex()
     .w_full()
@@ -272,11 +272,11 @@ impl CommandPaletteBranch {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct CommandPaletteRepository {
+pub struct CommandPaletteProject {
   pub path: SharedString,
 }
 
-impl CommandPaletteRepository {
+impl CommandPaletteProject {
   fn matches(&self, query: &str) -> bool {
     if query.is_empty() {
       return true;
@@ -308,8 +308,8 @@ impl CommandPaletteStash {
 
 #[derive(Clone, Debug)]
 pub enum CommandPaletteAction {
-  SwitchRepository(CommandPaletteRepository),
-  ForgetRepository(CommandPaletteRepository),
+  SwitchProject(CommandPaletteProject),
+  ForgetProject(CommandPaletteProject),
   SwitchBranch(CommandPaletteBranch),
   CheckoutDetached {
     target: String,
@@ -504,35 +504,35 @@ impl ListDelegate for BranchesListDelegate {
   }
 }
 
-struct RepositoriesListDelegate {
-  _repositories: Vec<Rc<CommandPaletteRepository>>,
-  matched_repositories: Vec<Rc<CommandPaletteRepository>>,
+struct ProjectsListDelegate {
+  _projects: Vec<Rc<CommandPaletteProject>>,
+  matched_projects: Vec<Rc<CommandPaletteProject>>,
   selected_index: Option<IndexPath>,
   query: SharedString,
 }
 
-impl RepositoriesListDelegate {
+impl ProjectsListDelegate {
   fn prepare(&mut self, query: impl Into<SharedString>) {
     self.query = query.into();
 
     let q = self.query.as_ref().to_lowercase();
 
-    let repositories: Vec<Rc<CommandPaletteRepository>> = self
-      ._repositories
+    let projects: Vec<Rc<CommandPaletteProject>> = self
+      ._projects
       .iter()
-      .filter(|repository| repository.matches(&q))
+      .filter(|project| project.matches(&q))
       .cloned()
       .collect();
 
-    self.matched_repositories = repositories;
+    self.matched_projects = projects;
   }
 }
 
-impl ListDelegate for RepositoriesListDelegate {
+impl ListDelegate for ProjectsListDelegate {
   type Item = ListItem;
 
   fn items_count(&self, _section: usize, _cx: &App) -> usize {
-    self.matched_repositories.len()
+    self.matched_projects.len()
   }
 
   fn render_item(
@@ -543,10 +543,10 @@ impl ListDelegate for RepositoriesListDelegate {
   ) -> Option<Self::Item> {
     let theme = cx.theme().clone();
 
-    self.matched_repositories.get(ix.row).map(|repository| {
-      palette_list_item(ix, self.selected_index).child(repository_palette_row(
+    self.matched_projects.get(ix.row).map(|project| {
+      palette_list_item(ix, self.selected_index).child(project_palette_row(
         Icon::new(IconName::FolderOpen),
-        repository,
+        project,
         &theme,
       ))
     })
@@ -971,13 +971,13 @@ pub type CommandPaletteHandler = Arc<
 pub enum CommandPaletteInitialScreen {
   Root,
   SwitchBranch,
-  SwitchRepository,
+  SwitchProject,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum CommandPaletteCommandId {
-  SwitchRepository,
-  ForgetRepository,
+  SwitchProject,
+  ForgetProject,
   SwitchBranch,
   CheckoutDetached,
   Commit,
@@ -1050,8 +1050,8 @@ pub enum CommandPaletteCommandId {
 impl CommandPaletteCommandId {
   pub fn as_str(self) -> &'static str {
     match self {
-      Self::SwitchRepository => "switch_repository",
-      Self::ForgetRepository => "forget_repository",
+      Self::SwitchProject => "switch_project",
+      Self::ForgetProject => "forget_project",
       Self::SwitchBranch => "switch_branch",
       Self::CheckoutDetached => "checkout_detached",
       Self::Commit => "commit",
@@ -1124,8 +1124,8 @@ impl CommandPaletteCommandId {
 
   pub fn parse(value: &str) -> Option<Self> {
     match value {
-      "switch_repository" => Some(Self::SwitchRepository),
-      "forget_repository" => Some(Self::ForgetRepository),
+      "switch_project" | "switch_repository" => Some(Self::SwitchProject),
+      "forget_project" | "forget_repository" => Some(Self::ForgetProject),
       "switch_branch" => Some(Self::SwitchBranch),
       "checkout_detached" => Some(Self::CheckoutDetached),
       "commit" => Some(Self::Commit),
@@ -1221,7 +1221,7 @@ pub enum CommandPaletteGroup {
   RebaseMergeProgress,
   Stash,
   PullRequest,
-  Repository,
+  Project,
   Github,
   Panels,
   Navigation,
@@ -1241,7 +1241,7 @@ impl CommandPaletteGroup {
       Self::RebaseMergeProgress => "In progress",
       Self::Stash => "Stash",
       Self::PullRequest => "Pull request",
-      Self::Repository => "Project",
+      Self::Project => "Project",
       Self::Github => "GitHub",
       Self::Panels => "Panels",
       Self::Navigation => "Navigation",
@@ -1293,17 +1293,17 @@ impl CommandPaletteCommand {
     self.disabled_reason.is_some()
   }
 
-  pub fn switch_repository() -> Self {
+  pub fn switch_project() -> Self {
     Self::new(
-      CommandPaletteCommandId::SwitchRepository,
+      CommandPaletteCommandId::SwitchProject,
       "Switch project",
       "Switch to another recent project",
     )
   }
 
-  pub fn forget_repository() -> Self {
+  pub fn forget_project() -> Self {
     Self::new(
-      CommandPaletteCommandId::ForgetRepository,
+      CommandPaletteCommandId::ForgetProject,
       "Remove project from Reviu",
       "Remove a project from the sidebar and recent list",
     )
@@ -1961,14 +1961,14 @@ impl CommandPaletteCommand {
         CommandPaletteGroup::PullRequest
       }
 
-      CommandPaletteCommandId::SwitchRepository
-      | CommandPaletteCommandId::ForgetRepository
-      | CommandPaletteCommandId::OpenRepository => CommandPaletteGroup::Repository,
+      CommandPaletteCommandId::SwitchProject
+      | CommandPaletteCommandId::ForgetProject
+      | CommandPaletteCommandId::OpenRepository => CommandPaletteGroup::Project,
 
       CommandPaletteCommandId::OpenGithubFromUrl => CommandPaletteGroup::PullRequest,
 
       CommandPaletteCommandId::NewAgentSession
-      | CommandPaletteCommandId::NewAgentWorktreeSession => CommandPaletteGroup::Repository,
+      | CommandPaletteCommandId::NewAgentWorktreeSession => CommandPaletteGroup::Project,
 
       CommandPaletteCommandId::OpenSessionPage
       | CommandPaletteCommandId::OpenGitConfigPage
@@ -2041,7 +2041,7 @@ impl CommandPaletteCommand {
       Id::DiscardReview => &["clear"],
       Id::DiscardPullRequestReview => &["pr", "delete", "clear"],
       Id::OpenRepository => &["folder", "project"],
-      Id::SwitchRepository => &["recent"],
+      Id::SwitchProject => &["recent"],
       Id::ToggleTerminal => &["shell", "console", "toggle"],
       Id::ShowChanges => &["staged", "working", "show"],
       Id::ShowReview => &["comments", "show"],
@@ -2058,7 +2058,7 @@ impl CommandPaletteCommand {
       Id::SignIn => &["login", "connect", "github", "account"],
       Id::SignOut => &["logout", "disconnect", "account"],
       Id::OpenBrowserExtensions => &["chrome", "firefox", "addon", "browser"],
-      Id::ForgetRepository => &["remove", "recent", "sidebar"],
+      Id::ForgetProject => &["remove", "recent", "sidebar"],
       Id::OpenSessionPage => &["home", "project", "agent", "goto"],
       Id::OpenGithubFromUrl => &["link", "paste"],
       Id::OpenSettingsPage => &["preferences", "shortcuts", "keybindings", "theme", "goto"],
@@ -2081,8 +2081,8 @@ impl CommandPaletteCommand {
 
   fn icon(&self) -> Icon {
     match self.id {
-      CommandPaletteCommandId::SwitchRepository => Icon::new(IconName::FolderOpen),
-      CommandPaletteCommandId::ForgetRepository => Icon::new(UiIconName::Trash),
+      CommandPaletteCommandId::SwitchProject => Icon::new(IconName::FolderOpen),
+      CommandPaletteCommandId::ForgetProject => Icon::new(UiIconName::Trash),
       CommandPaletteCommandId::SwitchBranch => Icon::new(UiIconName::GitBranch),
       CommandPaletteCommandId::CheckoutDetached => Icon::new(UiIconName::GitBranch),
       CommandPaletteCommandId::Commit => Icon::new(IconName::Check),
@@ -2221,7 +2221,7 @@ pub struct CommandPaletteConfig {
   pub delete_branches: Vec<CommandPaletteBranch>,
   pub stashes: Vec<CommandPaletteStash>,
   pub default_stash_message: Option<SharedString>,
-  pub repositories: Vec<CommandPaletteRepository>,
+  pub projects: Vec<CommandPaletteProject>,
   pub commands: Vec<CommandPaletteCommand>,
   pub initial_screen: CommandPaletteInitialScreen,
   pub on_action: CommandPaletteHandler,
@@ -2239,7 +2239,7 @@ impl CommandPaletteConfig {
       delete_branches: Vec::new(),
       stashes: Vec::new(),
       default_stash_message: None,
-      repositories: Vec::new(),
+      projects: Vec::new(),
       commands,
       initial_screen: CommandPaletteInitialScreen::Root,
       on_action,
@@ -2251,8 +2251,8 @@ impl CommandPaletteConfig {
     self
   }
 
-  pub fn with_repositories(mut self, repositories: Vec<CommandPaletteRepository>) -> Self {
-    self.repositories = repositories;
+  pub fn with_projects(mut self, projects: Vec<CommandPaletteProject>) -> Self {
+    self.projects = projects;
     self
   }
 
@@ -2283,8 +2283,8 @@ impl CommandPaletteConfig {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum CommandPaletteScreen {
   Root,
-  SwitchRepository,
-  ForgetRepository,
+  SwitchProject,
+  ForgetProject,
   SwitchBranch,
   CheckoutDetached,
   CreateBranch,
@@ -2310,7 +2310,7 @@ impl From<CommandPaletteInitialScreen> for CommandPaletteScreen {
     match value {
       CommandPaletteInitialScreen::Root => CommandPaletteScreen::Root,
       CommandPaletteInitialScreen::SwitchBranch => CommandPaletteScreen::SwitchBranch,
-      CommandPaletteInitialScreen::SwitchRepository => CommandPaletteScreen::SwitchRepository,
+      CommandPaletteInitialScreen::SwitchProject => CommandPaletteScreen::SwitchProject,
     }
   }
 }
@@ -2320,7 +2320,7 @@ pub struct CommandPalette {
   screen: CommandPaletteScreen,
   commands_list: Entity<ListState<CommandListDelegate>>,
   interactive_rebase_mode_list: Entity<ListState<CommandListDelegate>>,
-  repositories_list: Entity<ListState<RepositoriesListDelegate>>,
+  projects_list: Entity<ListState<ProjectsListDelegate>>,
   branches_list: Entity<ListState<BranchesListDelegate>>,
   rebase_branches_list: Entity<ListState<BranchesListDelegate>>,
   delete_branches_list: Entity<ListState<BranchesListDelegate>>,
@@ -2420,18 +2420,18 @@ impl CommandPalette {
       cx.new(|cx| InputState::new(window, cx).placeholder("Paste a pull request URL..."));
     let default_stash_message = config.default_stash_message.clone().unwrap_or_default();
 
-    let default_repositories: Vec<Rc<CommandPaletteRepository>> =
-      config.repositories.iter().cloned().map(Rc::new).collect();
+    let default_projects: Vec<Rc<CommandPaletteProject>> =
+      config.projects.iter().cloned().map(Rc::new).collect();
 
-    let repositories_list_delegate = RepositoriesListDelegate {
-      _repositories: default_repositories.clone(),
-      matched_repositories: default_repositories.clone(),
+    let projects_list_delegate = ProjectsListDelegate {
+      _projects: default_projects.clone(),
+      matched_projects: default_projects.clone(),
       selected_index: None,
       query: "".into(),
     };
 
-    let repositories_list =
-      cx.new(|cx| ListState::new(repositories_list_delegate, window, cx).searchable(true));
+    let projects_list =
+      cx.new(|cx| ListState::new(projects_list_delegate, window, cx).searchable(true));
 
     let default_branches: Vec<Rc<CommandPaletteBranch>> =
       config.branches.iter().cloned().map(Rc::new).collect();
@@ -2587,24 +2587,24 @@ impl CommandPalette {
         },
       ),
       cx.subscribe_in(
-        &repositories_list,
+        &projects_list,
         window,
         |command_palette, list_state, ev: &ListEvent, window, cx| {
           if let ListEvent::Confirm(ix) = ev {
-            let repository = {
+            let project = {
               let list = list_state.read(cx);
-              list.delegate().matched_repositories.get(ix.row).cloned()
+              list.delegate().matched_projects.get(ix.row).cloned()
             };
 
-            if let Some(repository) = repository {
+            if let Some(project) = project {
               let (id, action) = match command_palette.screen {
-                CommandPaletteScreen::ForgetRepository => (
-                  CommandPaletteCommandId::ForgetRepository,
-                  CommandPaletteAction::ForgetRepository((*repository).clone()),
+                CommandPaletteScreen::ForgetProject => (
+                  CommandPaletteCommandId::ForgetProject,
+                  CommandPaletteAction::ForgetProject((*project).clone()),
                 ),
                 _ => (
-                  CommandPaletteCommandId::SwitchRepository,
-                  CommandPaletteAction::SwitchRepository((*repository).clone()),
+                  CommandPaletteCommandId::SwitchProject,
+                  CommandPaletteAction::SwitchProject((*project).clone()),
                 ),
               };
               command_palette.trigger_action(id, action, window, cx);
@@ -2808,7 +2808,7 @@ impl CommandPalette {
       screen: config.initial_screen.into(),
       commands_list,
       interactive_rebase_mode_list,
-      repositories_list,
+      projects_list,
       branches_list,
       delete_branches_list,
       rebase_branches_list,
@@ -3016,8 +3016,8 @@ impl CommandPalette {
 
   pub fn focus_screen_input(&self, window: &mut Window, cx: &mut Context<Self>) {
     match self.screen {
-      CommandPaletteScreen::SwitchRepository | CommandPaletteScreen::ForgetRepository => {
-        self.repositories_list.update(cx, |state, cx| {
+      CommandPaletteScreen::SwitchProject | CommandPaletteScreen::ForgetProject => {
+        self.projects_list.update(cx, |state, cx| {
           state.focus(window, cx);
         });
       }
@@ -3139,11 +3139,11 @@ impl CommandPalette {
     window: &mut Window,
   ) {
     match command {
-      CommandPaletteCommandId::SwitchRepository => {
-        self.set_screen(CommandPaletteScreen::SwitchRepository, cx, window);
+      CommandPaletteCommandId::SwitchProject => {
+        self.set_screen(CommandPaletteScreen::SwitchProject, cx, window);
       }
-      CommandPaletteCommandId::ForgetRepository => {
-        self.set_screen(CommandPaletteScreen::ForgetRepository, cx, window);
+      CommandPaletteCommandId::ForgetProject => {
+        self.set_screen(CommandPaletteScreen::ForgetProject, cx, window);
       }
       CommandPaletteCommandId::SwitchBranch => {
         self.set_screen(CommandPaletteScreen::SwitchBranch, cx, window);
@@ -3517,12 +3517,12 @@ impl CommandPalette {
     self.render_search_list(&self.commands_list, "Search commands...")
   }
 
-  fn render_switch_repository(&mut self, _cx: &mut Context<Self>) -> impl IntoElement {
-    self.render_search_list(&self.repositories_list, "Search projects...")
+  fn render_switch_project(&mut self, _cx: &mut Context<Self>) -> impl IntoElement {
+    self.render_search_list(&self.projects_list, "Search projects...")
   }
 
-  fn render_forget_repository(&mut self, _cx: &mut Context<Self>) -> impl IntoElement {
-    self.render_search_list(&self.repositories_list, "Select project to remove...")
+  fn render_forget_project(&mut self, _cx: &mut Context<Self>) -> impl IntoElement {
+    self.render_search_list(&self.projects_list, "Select project to remove...")
   }
 
   fn render_switch_branch(&mut self, _cx: &mut Context<Self>) -> impl IntoElement {
@@ -3624,8 +3624,8 @@ impl CommandPalette {
   fn footer_key_hints(screen: CommandPaletteScreen) -> (bool, &'static str) {
     match screen {
       CommandPaletteScreen::Root => (true, "run"),
-      CommandPaletteScreen::SwitchRepository
-      | CommandPaletteScreen::ForgetRepository
+      CommandPaletteScreen::SwitchProject
+      | CommandPaletteScreen::ForgetProject
       | CommandPaletteScreen::SwitchBranch
       | CommandPaletteScreen::DeleteBranch
       | CommandPaletteScreen::MergeBranch
@@ -3665,12 +3665,8 @@ impl Render for CommandPalette {
 
     let content = match self.screen {
       CommandPaletteScreen::Root => self.render_root(cx).into_any_element(),
-      CommandPaletteScreen::SwitchRepository => {
-        self.render_switch_repository(cx).into_any_element()
-      }
-      CommandPaletteScreen::ForgetRepository => {
-        self.render_forget_repository(cx).into_any_element()
-      }
+      CommandPaletteScreen::SwitchProject => self.render_switch_project(cx).into_any_element(),
+      CommandPaletteScreen::ForgetProject => self.render_forget_project(cx).into_any_element(),
       CommandPaletteScreen::SwitchBranch => self.render_switch_branch(cx).into_any_element(),
       CommandPaletteScreen::CheckoutDetached => {
         self.render_checkout_detached(cx).into_any_element()
@@ -3720,7 +3716,7 @@ mod tests {
     CommandPalette, CommandPaletteBranch, CommandPaletteBranchKind, CommandPaletteCommand,
     CommandPaletteCommandId, CommandPaletteConfig, CommandPaletteGroup, CommandPaletteHandler,
     CommandPaletteInitialScreen, CommandPaletteScreen, GlobalCommandsContext, MatchQuality,
-    RowHint, repository_path_label,
+    RowHint, project_path_label,
   };
   use gpui::AppContext as _;
   use gpui::TestAppContext;
@@ -3921,13 +3917,13 @@ mod tests {
   }
 
   #[test]
-  fn repository_path_label_keeps_the_repository_name_separate() {
+  fn project_path_label_splits_parent_and_name() {
     assert_eq!(
-      repository_path_label("/Users/joris/workspace/reviu"),
+      project_path_label("/Users/joris/workspace/reviu"),
       ("/Users/joris/workspace/".to_string(), "reviu".to_string())
     );
     assert_eq!(
-      repository_path_label("reviu"),
+      project_path_label("reviu"),
       (String::new(), "reviu".to_string())
     );
   }
@@ -3941,23 +3937,23 @@ mod tests {
   }
 
   #[test]
-  fn switch_repository_command_is_available_with_expected_metadata() {
-    let command = CommandPaletteCommand::switch_repository();
-    assert_eq!(command.id, CommandPaletteCommandId::SwitchRepository);
+  fn switch_project_command_is_available_with_expected_metadata() {
+    let command = CommandPaletteCommand::switch_project();
+    assert_eq!(command.id, CommandPaletteCommandId::SwitchProject);
     assert_eq!(command.name.as_ref(), "Switch project");
     assert!(command.matches("recent project"));
   }
 
   #[test]
-  fn forget_repository_command_is_available_with_expected_metadata() {
+  fn forget_project_command_is_available_with_expected_metadata() {
     use super::CommandPaletteGroup;
-    let command = CommandPaletteCommand::forget_repository();
-    assert_eq!(command.id, CommandPaletteCommandId::ForgetRepository);
+    let command = CommandPaletteCommand::forget_project();
+    assert_eq!(command.id, CommandPaletteCommandId::ForgetProject);
     assert_eq!(command.name.as_ref(), "Remove project from Reviu");
     assert!(command.matches("remove"));
     assert!(command.matches("sidebar"));
     assert!(command.matches("recent"));
-    assert_eq!(command.group(), CommandPaletteGroup::Repository);
+    assert_eq!(command.group(), CommandPaletteGroup::Project);
   }
 
   #[test]
@@ -4009,8 +4005,8 @@ mod tests {
       CommandPaletteGroup::PullRequest
     );
     assert_eq!(
-      CommandPaletteCommand::switch_repository().group(),
-      CommandPaletteGroup::Repository
+      CommandPaletteCommand::switch_project().group(),
+      CommandPaletteGroup::Project
     );
     assert_eq!(
       CommandPaletteCommand::open_github_from_url().group(),
@@ -4052,7 +4048,7 @@ mod tests {
       CommandPaletteGroup::Navigation,
       CommandPaletteGroup::Panels,
       CommandPaletteGroup::Github,
-      CommandPaletteGroup::Repository,
+      CommandPaletteGroup::Project,
       CommandPaletteGroup::PullRequest,
       CommandPaletteGroup::Stash,
       CommandPaletteGroup::RebaseMergeProgress,
@@ -4076,7 +4072,7 @@ mod tests {
         CommandPaletteGroup::RebaseMergeProgress,
         CommandPaletteGroup::Stash,
         CommandPaletteGroup::PullRequest,
-        CommandPaletteGroup::Repository,
+        CommandPaletteGroup::Project,
         CommandPaletteGroup::Github,
         CommandPaletteGroup::Panels,
         CommandPaletteGroup::Navigation,
@@ -4369,8 +4365,8 @@ mod tests {
   #[test]
   fn command_palette_command_id_string_round_trip() {
     let all_ids = [
-      CommandPaletteCommandId::SwitchRepository,
-      CommandPaletteCommandId::ForgetRepository,
+      CommandPaletteCommandId::SwitchProject,
+      CommandPaletteCommandId::ForgetProject,
       CommandPaletteCommandId::SwitchBranch,
       CommandPaletteCommandId::CheckoutDetached,
       CommandPaletteCommandId::Commit,
@@ -4435,6 +4431,14 @@ mod tests {
     keys.dedup();
     assert_eq!(keys.len(), len_before_dedup, "duplicate as_str keys");
 
+    assert_eq!(
+      CommandPaletteCommandId::parse("switch_repository"),
+      Some(CommandPaletteCommandId::SwitchProject)
+    );
+    assert_eq!(
+      CommandPaletteCommandId::parse("forget_repository"),
+      Some(CommandPaletteCommandId::ForgetProject)
+    );
     assert_eq!(CommandPaletteCommandId::parse("nonexistent"), None);
   }
 
@@ -4606,7 +4610,7 @@ mod tests {
       Some(MatchQuality::Keyword)
     );
     assert_eq!(
-      quality(&CommandPaletteCommand::switch_repository(), "recent"),
+      quality(&CommandPaletteCommand::switch_project(), "recent"),
       Some(MatchQuality::Keyword)
     );
   }
@@ -4615,17 +4619,11 @@ mod tests {
   fn the_weakest_word_decides_the_quality() {
     // "project" is in the name, "recent" only in the keywords.
     assert_eq!(
-      quality(
-        &CommandPaletteCommand::switch_repository(),
-        "recent project"
-      ),
+      quality(&CommandPaletteCommand::switch_project(), "recent project"),
       Some(MatchQuality::Keyword)
     );
     assert_eq!(
-      quality(
-        &CommandPaletteCommand::switch_repository(),
-        "switch project"
-      ),
+      quality(&CommandPaletteCommand::switch_project(), "switch project"),
       Some(MatchQuality::NamePrefix)
     );
   }
