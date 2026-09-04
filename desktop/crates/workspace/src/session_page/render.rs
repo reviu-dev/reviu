@@ -1,6 +1,6 @@
 //! Everything the shell paints: sidebar, center, diff header, dock.
 
-use super::center_layout::CenterNode;
+use super::center_layout::{CenterDropTarget, CenterNode, CenterPane, CenterPaneId};
 use super::*;
 use crate::annotations::{AnnotationKind, shows_annotation_navigation};
 use crate::diff_toolbar::{DiffToolbar, NavigationControl, SplitControl, ToggleControl};
@@ -609,42 +609,7 @@ impl SessionPage {
           .min_w(px(0.0))
           .min_h_0()
           .debug_selector(|| CENTER_CONTENT_DEBUG_SELECTOR.to_string())
-          .group(CENTER_DROP_GROUP)
-          .on_drag_move(cx.listener(
-            |this, event: &gpui::DragMoveEvent<DraggedCenterTab>, _, cx| {
-              let width = f32::from(event.bounds.size.width);
-              let height = f32::from(event.bounds.size.height);
-              let edge_size = width.min(height) * CENTER_DROP_EDGE_FRACTION;
-              let relative_x = f32::from(event.event.position.x - event.bounds.left());
-              let relative_y = f32::from(event.event.position.y - event.bounds.top());
-              let direction = if relative_x < edge_size
-                || relative_x > width - edge_size
-                || relative_y < edge_size
-                || relative_y > height - edge_size
-              {
-                [
-                  (CenterSplitDirection::Up, relative_y),
-                  (CenterSplitDirection::Right, width - relative_x),
-                  (CenterSplitDirection::Down, height - relative_y),
-                  (CenterSplitDirection::Left, relative_x),
-                ]
-                .into_iter()
-                .min_by(|(_, a), (_, b)| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal))
-                .map(|(direction, _)| direction)
-              } else {
-                None
-              };
-              if this.center_drag_direction != direction {
-                this.center_drag_direction = direction;
-                cx.notify();
-              }
-            },
-          ))
-          .on_drop(cx.listener(|this, drag: &DraggedCenterTab, window, cx| {
-            this.drop_center_tab(drag.tab.clone(), window, cx);
-          }))
           .child(view)
-          .child(self.render_center_drop_overlay(cx))
           .with_animation(
             Self::center_surface_animation_id(&active_surface),
             gpui::Animation::new(std::time::Duration::from_millis(CENTER_SWAP_FADE_MS))
@@ -681,7 +646,7 @@ impl SessionPage {
     cx: &mut Context<Self>,
   ) -> AnyElement {
     match node {
-      CenterNode::Pane(pane) => self.render_center_surface(pane.active_surface(), window, cx),
+      CenterNode::Pane(pane) => self.render_center_pane(pane, window, cx),
       CenterNode::Split(split) => {
         let theme = cx.theme().clone();
         let first = self.render_center_node(split.first(), window, cx);
@@ -722,6 +687,77 @@ impl SessionPage {
     }
   }
 
+  fn render_center_pane(
+    &mut self,
+    pane: &CenterPane,
+    window: &mut Window,
+    cx: &mut Context<Self>,
+  ) -> AnyElement {
+    let pane_id = pane.id();
+    let view = self.render_center_surface(pane.active_surface(), window, cx);
+    div()
+      .relative()
+      .size_full()
+      .min_w(px(0.0))
+      .min_h_0()
+      .group(CENTER_DROP_GROUP)
+      .on_drag_move(cx.listener(
+        move |this, event: &gpui::DragMoveEvent<DraggedCenterTab>, _, cx| {
+          if !Self::center_drag_event_contains_pointer(event) {
+            return;
+          }
+          let target = CenterDropTarget {
+            pane_id,
+            direction: Self::center_drop_direction(event),
+          };
+          if this.center_drag_target != Some(target) {
+            this.center_drag_target = Some(target);
+            cx.notify();
+          }
+        },
+      ))
+      .on_drop(cx.listener(|this, drag: &DraggedCenterTab, window, cx| {
+        this.drop_center_tab(drag.tab.clone(), window, cx);
+      }))
+      .child(view)
+      .child(self.render_center_drop_overlay(pane_id, cx))
+      .into_any_element()
+  }
+
+  fn center_drag_event_contains_pointer(event: &gpui::DragMoveEvent<DraggedCenterTab>) -> bool {
+    event.event.position.x >= event.bounds.left()
+      && event.event.position.x <= event.bounds.right()
+      && event.event.position.y >= event.bounds.top()
+      && event.event.position.y <= event.bounds.bottom()
+  }
+
+  fn center_drop_direction(
+    event: &gpui::DragMoveEvent<DraggedCenterTab>,
+  ) -> Option<CenterSplitDirection> {
+    let width = f32::from(event.bounds.size.width);
+    let height = f32::from(event.bounds.size.height);
+    let edge_size = width.min(height) * CENTER_DROP_EDGE_FRACTION;
+    let relative_x = f32::from(event.event.position.x - event.bounds.left());
+    let relative_y = f32::from(event.event.position.y - event.bounds.top());
+    if relative_x >= edge_size
+      && relative_x <= width - edge_size
+      && relative_y >= edge_size
+      && relative_y <= height - edge_size
+    {
+      return None;
+    }
+
+    [
+      (CenterSplitDirection::Up, relative_y),
+      (CenterSplitDirection::Right, width - relative_x),
+      (CenterSplitDirection::Down, height - relative_y),
+      (CenterSplitDirection::Left, relative_x),
+    ]
+    .into_iter()
+    .min_by(|(_, a), (_, b)| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal))
+    .map(|(direction, _)| direction)
+  }
+
   fn render_center_surface(
     &mut self,
     surface: &CenterSurface,
@@ -744,10 +780,22 @@ impl SessionPage {
     }
   }
 
-  fn render_center_drop_overlay(&self, cx: &mut Context<Self>) -> AnyElement {
-    let Some(direction) = self.center_drag_direction else {
+  fn render_center_drop_overlay(
+    &self,
+    pane_id: CenterPaneId,
+    cx: &mut Context<Self>,
+  ) -> AnyElement {
+    let Some(CenterDropTarget {
+      pane_id: target_pane_id,
+      direction: Some(direction),
+    }) = self.center_drag_target
+    else {
       return gpui::Empty.into_any_element();
     };
+    if target_pane_id != pane_id {
+      return gpui::Empty.into_any_element();
+    }
+
     let half = gpui::DefiniteLength::Fraction(0.5);
     div()
       .debug_selector(|| CENTER_DROP_TARGET_DEBUG_SELECTOR.to_string())
@@ -776,15 +824,20 @@ impl SessionPage {
   }
 
   fn drop_center_tab(&mut self, tab: CenterTab, window: &mut Window, cx: &mut Context<Self>) {
-    let Some(direction) = self.center_drag_direction.take() else {
+    let Some(target) = self.center_drag_target.take() else {
       cx.notify();
       return;
     };
-    if !self.center_layout.contains_tab(&tab)
-      && self
+    let surface = CenterSurface::from_tab(tab.clone());
+    let changed = match target.direction {
+      Some(direction) => self
         .center_layout
-        .split_active(CenterSurface::from_tab(tab.clone()), direction)
-    {
+        .split_pane(target.pane_id, surface, direction),
+      None => self
+        .center_layout
+        .add_surface_to_pane(target.pane_id, surface),
+    };
+    if changed {
       self.set_active_center_tab(tab.clone());
       self.center = Self::center_view_for_tab(&tab);
       self.sync_agent_chat_close_control(cx);
@@ -4533,7 +4586,7 @@ mod tests {
   }
 
   #[gpui::test]
-  async fn dragging_a_center_tab_to_the_middle_shows_no_split_target(cx: &mut TestAppContext) {
+  async fn dragging_a_center_tab_to_the_middle_merges_it_into_the_pane(cx: &mut TestAppContext) {
     let repo = TempRepo::init("session-center-tab-drag-middle");
     commit_text_file(&repo.path, Path::new("README.md"), "v1\n", "initial");
     std::fs::write(repo.path.join("README.md"), "v2\n").expect("modify file");
@@ -4593,8 +4646,17 @@ mod tests {
     });
     cx.run_until_parked();
 
-    assert!(cx.debug_bounds("session-conversation-pane").is_some());
-    assert!(cx.debug_bounds("session-diff-editor").is_none());
+    assert!(cx.debug_bounds("session-conversation-pane").is_none());
+    assert!(cx.debug_bounds("session-diff-editor").is_some());
+    page.read_with(cx, |page, _| {
+      let CenterNode::Pane(pane) = page.center_layout.root() else {
+        panic!("drop in the middle should merge into the existing pane");
+      };
+      assert_eq!(
+        pane.active_surface().tab(),
+        &CenterTab::diff(PathBuf::from("README.md"))
+      );
+    });
   }
 
   #[gpui::test]
@@ -4673,6 +4735,90 @@ mod tests {
     assert!(
       editor.right() <= conversation.left() + px(1.0),
       "dragging the chat tab to the right edge should put it right of the editor: {editor:?} vs {conversation:?}"
+    );
+  }
+
+  #[gpui::test]
+  async fn dragging_an_existing_center_tab_targets_the_hovered_pane(cx: &mut TestAppContext) {
+    let repo = TempRepo::init("session-center-tab-drag-existing-pane");
+    commit_text_file(&repo.path, Path::new("README.md"), "v1\n", "initial");
+    std::fs::write(repo.path.join("README.md"), "v2\n").expect("modify file");
+    let (page, cx) = add_session_page_window(repo.path.clone(), cx);
+    cx.run_until_parked();
+
+    page.update_in(cx, |page, window, cx| {
+      page.open_diff(
+        PathBuf::from("README.md"),
+        None,
+        OpenIntent::Open,
+        window,
+        cx,
+      );
+    });
+    await_open_file(&page, cx).await;
+    page.update(cx, |page, cx| {
+      let CenterNode::Pane(pane) = page.center_layout.root() else {
+        panic!("layout should start as a single pane");
+      };
+      assert!(page.center_layout.split_pane(
+        pane.id(),
+        CenterSurface::from_tab(CenterTab::chat()),
+        CenterSplitDirection::Right,
+      ));
+      page.active_center_tab = Some(CenterTab::chat());
+      page.center = CenterView::Conversation;
+      cx.notify();
+    });
+    cx.run_until_parked();
+
+    let tab = cx
+      .debug_bounds("session-center-tab-chat")
+      .expect("chat tab");
+    let editor = cx.debug_bounds("session-diff-editor").expect("diff editor");
+    let from = tab.center();
+    let to = gpui::point(editor.left() + px(4.0), editor.center().y);
+
+    cx.simulate_event(gpui::MouseDownEvent {
+      position: from,
+      button: gpui::MouseButton::Left,
+      modifiers: gpui::Modifiers::default(),
+      click_count: 1,
+      first_mouse: false,
+    });
+    cx.simulate_event(gpui::MouseMoveEvent {
+      position: gpui::point(from.x + px(10.0), from.y),
+      pressed_button: Some(gpui::MouseButton::Left),
+      modifiers: gpui::Modifiers::default(),
+    });
+    cx.simulate_event(gpui::MouseMoveEvent {
+      position: to,
+      pressed_button: Some(gpui::MouseButton::Left),
+      modifiers: gpui::Modifiers::default(),
+    });
+    cx.run_until_parked();
+    let overlay = cx
+      .debug_bounds(CENTER_DROP_TARGET_DEBUG_SELECTOR)
+      .expect("center drop target");
+    assert!(
+      overlay.right() <= editor.center().x + px(1.0),
+      "overlay should stay in the hovered editor pane's left half: {overlay:?} vs {editor:?}"
+    );
+
+    cx.simulate_event(gpui::MouseUpEvent {
+      position: to,
+      button: gpui::MouseButton::Left,
+      modifiers: gpui::Modifiers::default(),
+      click_count: 1,
+    });
+    cx.run_until_parked();
+
+    let conversation = cx
+      .debug_bounds("session-conversation-pane")
+      .expect("conversation pane");
+    let editor = cx.debug_bounds("session-diff-editor").expect("diff editor");
+    assert!(
+      conversation.right() <= editor.left() + px(1.0),
+      "dragging chat to the editor pane's left edge should move it left of the editor: {conversation:?} vs {editor:?}"
     );
   }
 
