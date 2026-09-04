@@ -13,7 +13,7 @@ use crate::config::ConfigStore;
 
 /// Bounds the aggregation: recents beyond this never get a store, which is
 /// what keeps the per-folder index model (#583) sufficient and #587 closed.
-pub(crate) const MAX_TRACKED_REPOS: usize = 8;
+pub(crate) const MAX_TRACKED_PROJECTS: usize = 8;
 
 pub(crate) struct ConversationHub {
   /// Keyed by canonicalized project root; insertion order is meaningless.
@@ -22,7 +22,7 @@ pub(crate) struct ConversationHub {
 
 pub(crate) struct ConversationStoreAccess {
   pub store: Entity<ConversationStore>,
-  pub evicted_repo: Option<PathBuf>,
+  pub evicted_project: Option<PathBuf>,
 }
 
 fn canonical(path: &Path) -> PathBuf {
@@ -35,42 +35,42 @@ impl ConversationHub {
   }
 
   /// The store for a project, created on first sight.
-  pub fn store_for(
+  pub fn store_for_project(
     &mut self,
-    repo_root: &Path,
-    protected_repos: &HashSet<PathBuf>,
+    project_root: &Path,
+    protected_projects: &HashSet<PathBuf>,
     cx: &mut App,
   ) -> Option<ConversationStoreAccess> {
-    let key = canonical(repo_root);
+    let key = canonical(project_root);
     if let Some((_, store)) = self.stores.iter().find(|(existing, _)| *existing == key) {
       return Some(ConversationStoreAccess {
         store: store.clone(),
-        evicted_repo: None,
+        evicted_project: None,
       });
     }
-    let mut evicted_repo = None;
-    if self.stores.len() >= MAX_TRACKED_REPOS
-      && let Some(evicted_index) = self.eviction_candidate(protected_repos)
+    let mut evicted_project = None;
+    if self.stores.len() >= MAX_TRACKED_PROJECTS
+      && let Some(evicted_index) = self.eviction_candidate(protected_projects)
     {
       // Make room instead of silently handing out no store (sessions created
-      // without one would never persist). Evicting only drops the repo from
+      // without one would never persist). Evicting only drops the project from
       // the aggregation: live panels hold their own handle to its store.
       let evicted = self.stores.remove(evicted_index);
       evicted.1.update(cx, |store, _| store.flush_on_quit());
-      evicted_repo = Some(evicted.0);
+      evicted_project = Some(evicted.0);
     }
     let state_dir =
-      agent_chat_state_dir().map(|dir| AgentChatPanel::state_dir_for_repo(&dir, repo_root))?;
+      agent_chat_state_dir().map(|dir| AgentChatPanel::state_dir_for_repo(&dir, project_root))?;
     let store = cx.new(|_| ConversationStore::new(state_dir));
     store.update(cx, |store, cx| store.arm_quit_flush(cx));
     self.stores.push((key, store.clone()));
     Some(ConversationStoreAccess {
       store,
-      evicted_repo,
+      evicted_project,
     })
   }
 
-  fn eviction_candidate(&self, protected_repos: &HashSet<PathBuf>) -> Option<usize> {
+  fn eviction_candidate(&self, protected_projects: &HashSet<PathBuf>) -> Option<usize> {
     let mut recent_positions: HashMap<PathBuf, usize> = ConfigStore::load_recent_repositories()
       .into_iter()
       .enumerate()
@@ -88,42 +88,46 @@ impl ConversationHub {
       .stores
       .iter()
       .enumerate()
-      .filter(|(_, (repo, _))| !protected_repos.contains(repo))
-      .max_by_key(|(_, (repo, _))| recent_positions.get(repo).copied().unwrap_or(usize::MAX))
+      .filter(|(_, (project, _))| !protected_projects.contains(project))
+      .max_by_key(|(_, (project, _))| recent_positions.get(project).copied().unwrap_or(usize::MAX))
       .map(|(index, _)| index)
   }
 
-  pub fn tracked_repositories(&self) -> Vec<PathBuf> {
-    self.stores.iter().map(|(repo, _)| repo.clone()).collect()
+  pub fn tracked_projects(&self) -> Vec<PathBuf> {
+    self
+      .stores
+      .iter()
+      .map(|(project, _)| project.clone())
+      .collect()
   }
 
-  pub fn tracked_len(&self) -> usize {
+  pub fn tracked_project_len(&self) -> usize {
     self.stores.len()
   }
 
-  pub fn reorder(&mut self, ordered_repos: &[PathBuf]) {
-    let positions: HashMap<PathBuf, usize> = ordered_repos
+  pub fn reorder(&mut self, ordered_projects: &[PathBuf]) {
+    let positions: HashMap<PathBuf, usize> = ordered_projects
       .iter()
       .enumerate()
-      .map(|(index, repo)| (canonical(repo), index))
+      .map(|(index, project)| (canonical(project), index))
       .collect();
     self
       .stores
-      .sort_by_key(|(repo, _)| positions.get(repo).copied().unwrap_or(usize::MAX));
+      .sort_by_key(|(project, _)| positions.get(project).copied().unwrap_or(usize::MAX));
   }
 
   /// Every tracked project's conversations, grouped in a STABLE order
   /// (tracking order, never resorted) and newest-created first inside each
   /// group: rows must not dance while sessions stream. Conversation ids are
   /// unique across projects by construction (millis + pid + counter).
-  pub fn sections(&self, cx: &App) -> Vec<(PathBuf, Vec<ConversationMeta>)> {
+  pub fn project_sections(&self, cx: &App) -> Vec<(PathBuf, Vec<ConversationMeta>)> {
     self
       .stores
       .iter()
-      .map(|(repo, store)| {
+      .map(|(project, store)| {
         let mut metas = store.read(cx).list();
         metas.sort_by_key(|meta| std::cmp::Reverse(meta.started_at_secs));
-        (repo.clone(), metas)
+        (project.clone(), metas)
       })
       .collect()
   }
@@ -133,17 +137,17 @@ impl ConversationHub {
     conversation_id: &str,
     cx: &App,
   ) -> Option<(PathBuf, Entity<ConversationStore>, ConversationMeta)> {
-    self.stores.iter().find_map(|(repo, store)| {
+    self.stores.iter().find_map(|(project, store)| {
       store
         .read(cx)
         .list()
         .into_iter()
         .find(|meta| meta.id == conversation_id)
-        .map(|meta| (repo.clone(), store.clone(), meta))
+        .map(|meta| (project.clone(), store.clone(), meta))
     })
   }
 
-  /// Worktree checkout bindings by conversation id, merged across repos.
+  /// Worktree checkout bindings by conversation id, merged across projects.
   pub fn worktree_checkouts(&self, cx: &App) -> HashMap<String, agent_chat_panel::WorktreeBinding> {
     self
       .stores
@@ -152,10 +156,10 @@ impl ConversationHub {
       .collect()
   }
 
-  /// Stops tracking a repo: queued writes land, the store goes away. The
+  /// Stops tracking a project: queued writes land, the store goes away. The
   /// files on disk stay.
-  pub fn drop_store(&mut self, repo_root: &Path, cx: &mut App) {
-    let key = canonical(repo_root);
+  pub fn drop_project(&mut self, project_root: &Path, cx: &mut App) {
+    let key = canonical(project_root);
     self.stores.retain(|(existing, store)| {
       if *existing == key {
         store.update(cx, |store, _| store.flush_on_quit());

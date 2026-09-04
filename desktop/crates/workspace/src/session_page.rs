@@ -639,7 +639,7 @@ impl SessionPage {
     for project in page.initial_session_sidebar_projects() {
       let _ = page
         .conversation_hub
-        .store_for(&project, &HashSet::new(), cx);
+        .store_for_project(&project, &HashSet::new(), cx);
     }
     page.sync_active_checkout(window, cx);
     page.reload_review_for_repo(cx);
@@ -663,12 +663,12 @@ impl SessionPage {
     let mut visible: Vec<PathBuf> = ordered
       .into_iter()
       .filter(|path| recents.iter().any(|recent| recent.path == *path))
-      .take(crate::conversation_hub::MAX_TRACKED_REPOS)
+      .take(crate::conversation_hub::MAX_TRACKED_PROJECTS)
       .collect();
     if let Some(fallback_repo) = self.fallback_repo.as_ref()
       && !visible.contains(fallback_repo)
     {
-      if visible.len() >= crate::conversation_hub::MAX_TRACKED_REPOS {
+      if visible.len() >= crate::conversation_hub::MAX_TRACKED_PROJECTS {
         visible.pop();
       }
       visible.insert(0, fallback_repo.clone());
@@ -695,7 +695,7 @@ impl SessionPage {
     std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf())
   }
 
-  fn protected_chat_repos(&self, cx: &App) -> HashSet<PathBuf> {
+  fn protected_chat_projects(&self, cx: &App) -> HashSet<PathBuf> {
     let mut protected = HashSet::new();
     if let Some(repo) = self.fallback_repo.as_ref() {
       protected.insert(Self::canonical_repo(repo));
@@ -712,23 +712,26 @@ impl SessionPage {
     protected
   }
 
-  fn chat_store_for_repo(
+  fn chat_store_for_project(
     &mut self,
-    repo_root: &Path,
+    project_root: &Path,
     cx: &mut Context<Self>,
   ) -> Option<ConversationStoreAccess> {
-    let protected = self.protected_chat_repos(cx);
-    self.conversation_hub.store_for(repo_root, &protected, cx)
+    let protected = self.protected_chat_projects(cx);
+    self
+      .conversation_hub
+      .store_for_project(project_root, &protected, cx)
   }
 
   fn backfill_session_sidebar_repository(&mut self, cx: &mut Context<Self>) -> bool {
-    if self.conversation_hub.tracked_len() >= crate::conversation_hub::MAX_TRACKED_REPOS {
+    if self.conversation_hub.tracked_project_len() >= crate::conversation_hub::MAX_TRACKED_PROJECTS
+    {
       return false;
     }
 
     let tracked: HashSet<PathBuf> = self
       .conversation_hub
-      .tracked_repositories()
+      .tracked_projects()
       .into_iter()
       .map(|repo| Self::canonical_repo(&repo))
       .collect();
@@ -740,10 +743,10 @@ impl SessionPage {
       return false;
     };
 
-    let protected = self.protected_chat_repos(cx);
+    let protected = self.protected_chat_projects(cx);
     if self
       .conversation_hub
-      .store_for(&repo, &protected, cx)
+      .store_for_project(&repo, &protected, cx)
       .is_none()
     {
       return false;
@@ -753,14 +756,19 @@ impl SessionPage {
     true
   }
 
-  fn push_repo_hidden_notification(&self, repo_root: &Path, window: &mut Window, cx: &mut App) {
-    let repo_name = repo_root
+  fn push_project_hidden_notification(
+    &self,
+    project_root: &Path,
+    window: &mut Window,
+    cx: &mut App,
+  ) {
+    let project_name = project_root
       .file_name()
       .map(|name| name.to_string_lossy().into_owned())
-      .unwrap_or_else(|| repo_root.to_string_lossy().into_owned());
+      .unwrap_or_else(|| project_root.to_string_lossy().into_owned());
     window.push_notification(
       Notification::info(format!(
-        "{repo_name} was hidden from the sidebar and remains in Recent Projects."
+        "{project_name} was hidden from the sidebar and remains in Recent Projects."
       ))
       .title("Added project to sidebar"),
       cx,
@@ -892,7 +900,7 @@ impl SessionPage {
   /// Full refresh from the store's meta index, for lifecycle changes
   /// (panel created, conversation created/loaded/deleted, repo switched).
   fn refresh_session_list(&mut self, cx: &mut Context<Self>) {
-    let sections = self.conversation_hub.sections(cx);
+    let sections = self.conversation_hub.project_sections(cx);
     let mut git_repositories: HashSet<PathBuf> = self
       .initial_session_sidebar_repositories()
       .into_iter()

@@ -141,9 +141,9 @@ impl SessionPage {
     // orphaned worktrees.
     self.chat_store = None;
     if self.fallback_repo.is_some()
-      && let Some(evicted_repo) = self.ensure_chat_store(cx)
+      && let Some(evicted_project) = self.ensure_chat_store(cx)
     {
-      self.push_repo_hidden_notification(&evicted_repo, window, cx);
+      self.push_project_hidden_notification(&evicted_project, window, cx);
     }
     self.refresh_session_list(cx);
     // With no session on screen the git surfaces follow the fallback repo;
@@ -256,7 +256,7 @@ impl SessionPage {
     for panel in doomed_panels {
       panel.update(cx, |panel, cx| panel.persist_now(cx));
     }
-    self.conversation_hub.drop_store(&repo_root, cx);
+    self.conversation_hub.drop_project(&repo_root, cx);
     self.swept_repos.remove(&repo_root);
 
     let forgetting_fallback = self.fallback_repo.as_deref() == Some(repo_root.as_path());
@@ -1052,7 +1052,7 @@ mod tests {
   #[gpui::test]
   async fn removing_a_visible_repository_backfills_from_hidden_recents(cx: &mut TestAppContext) {
     agent_chat_panel::set_backend_command_override(Some("/nonexistent-agent-binary".to_string()));
-    let repos = (0..=crate::conversation_hub::MAX_TRACKED_REPOS)
+    let repos = (0..=crate::conversation_hub::MAX_TRACKED_PROJECTS)
       .map(|index| {
         let repo = TempRepo::init(&format!("session-page-forget-backfill-{index}"));
         commit_text_file(&repo.path, Path::new("README.md"), "v1\n", "initial");
@@ -1075,12 +1075,15 @@ mod tests {
 
     let (hidden_repo, removed_repo) = page.read_with(cx, |page, cx| {
       let visible = page.session_list.read(cx).project_order_for_test().to_vec();
-      assert_eq!(visible.len(), crate::conversation_hub::MAX_TRACKED_REPOS);
+      assert_eq!(visible.len(), crate::conversation_hub::MAX_TRACKED_PROJECTS);
       let recent = ConfigStore::load_recent_repositories()
         .into_iter()
         .map(|repo| repo.path)
         .collect::<Vec<_>>();
-      assert_eq!(recent.len(), crate::conversation_hub::MAX_TRACKED_REPOS + 1);
+      assert_eq!(
+        recent.len(),
+        crate::conversation_hub::MAX_TRACKED_PROJECTS + 1
+      );
       let hidden = recent
         .iter()
         .find(|repo| !visible.contains(repo))
@@ -1103,7 +1106,7 @@ mod tests {
 
     page.read_with(cx, |page, cx| {
       let visible = page.session_list.read(cx).project_order_for_test();
-      assert_eq!(visible.len(), crate::conversation_hub::MAX_TRACKED_REPOS);
+      assert_eq!(visible.len(), crate::conversation_hub::MAX_TRACKED_PROJECTS);
       assert!(visible.contains(&hidden_repo));
       assert!(!visible.contains(&removed_repo));
     });

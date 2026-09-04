@@ -48,8 +48,8 @@ impl SessionPage {
       None => None,
     };
     prune_agent_chat_state_once();
-    if let Some(evicted_repo) = self.ensure_chat_store(cx) {
-      self.push_repo_hidden_notification(&evicted_repo, window, cx);
+    if let Some(evicted_project) = self.ensure_chat_store(cx) {
+      self.push_project_hidden_notification(&evicted_project, window, cx);
     }
     let resume = match reconnect_resume {
       Some(meta) => meta,
@@ -73,13 +73,13 @@ impl SessionPage {
       self.chat_store = None;
       return None;
     };
-    let access = self.chat_store_for_repo(&project, cx)?;
-    let evicted_repo = access.evicted_repo.clone();
+    let access = self.chat_store_for_project(&project, cx)?;
+    let evicted_project = access.evicted_project.clone();
     self.chat_store = Some(access.store.clone());
     if self.fallback_repo.is_some() && self.swept_repos.insert(project.clone()) {
       self.sweep_orphan_worktrees(project, access.store, cx);
     }
-    evicted_repo
+    evicted_project
   }
 
   /// Boot-time housekeeping for the checkouts we created: a crash between the
@@ -1161,15 +1161,15 @@ impl SessionPage {
     cx: &mut Context<Self>,
   ) {
     prune_agent_chat_state_once();
-    if let Some(evicted_repo) = self.ensure_chat_store(cx) {
-      self.push_repo_hidden_notification(&evicted_repo, window, cx);
+    if let Some(evicted_project) = self.ensure_chat_store(cx) {
+      self.push_project_hidden_notification(&evicted_project, window, cx);
     }
-    let access = self.chat_store_for_repo(&repo_root, cx);
-    if let Some(evicted_repo) = access
+    let access = self.chat_store_for_project(&repo_root, cx);
+    if let Some(evicted_project) = access
       .as_ref()
-      .and_then(|access| access.evicted_repo.as_ref())
+      .and_then(|access| access.evicted_project.as_ref())
     {
-      self.push_repo_hidden_notification(evicted_repo, window, cx);
+      self.push_project_hidden_notification(evicted_project, window, cx);
     }
     let store = access.map(|access| access.store);
     if self.fallback_repo.is_none() && self.project_root(cx).as_deref() == Some(repo_root.as_path())
@@ -1279,15 +1279,15 @@ impl SessionPage {
     cx: &mut Context<Self>,
   ) {
     prune_agent_chat_state_once();
-    if let Some(evicted_repo) = self.ensure_chat_store(cx) {
-      self.push_repo_hidden_notification(&evicted_repo, window, cx);
+    if let Some(evicted_project) = self.ensure_chat_store(cx) {
+      self.push_project_hidden_notification(&evicted_project, window, cx);
     }
-    let access = self.chat_store_for_repo(&repo_root, cx);
-    if let Some(evicted_repo) = access
+    let access = self.chat_store_for_project(&repo_root, cx);
+    if let Some(evicted_project) = access
       .as_ref()
-      .and_then(|access| access.evicted_repo.as_ref())
+      .and_then(|access| access.evicted_project.as_ref())
     {
-      self.push_repo_hidden_notification(evicted_repo, window, cx);
+      self.push_project_hidden_notification(evicted_project, window, cx);
     }
     let target_store = access.map(|access| access.store);
     cx.spawn_in(window, async move |this, cx| {
@@ -1383,12 +1383,12 @@ impl SessionPage {
       store.update(cx, |store, cx| store.set_active(None, cx));
       self.agent_chat_view = None;
       // You were working in that repo: the fresh session stays there.
-      let access = self.chat_store_for_repo(&deleted_repo, cx);
-      if let Some(evicted_repo) = access
+      let access = self.chat_store_for_project(&deleted_repo, cx);
+      if let Some(evicted_project) = access
         .as_ref()
-        .and_then(|access| access.evicted_repo.as_ref())
+        .and_then(|access| access.evicted_project.as_ref())
       {
-        self.push_repo_hidden_notification(evicted_repo, window, cx);
+        self.push_project_hidden_notification(evicted_project, window, cx);
       }
       let repo = access.map(|access| (deleted_repo.clone(), Some(access.store)));
       let view = match repo {
@@ -1459,8 +1459,8 @@ impl SessionPage {
     cx: &mut Context<Self>,
   ) {
     prune_agent_chat_state_once();
-    if let Some(evicted_repo) = self.ensure_chat_store(cx) {
-      self.push_repo_hidden_notification(&evicted_repo, window, cx);
+    if let Some(evicted_project) = self.ensure_chat_store(cx) {
+      self.push_project_hidden_notification(&evicted_project, window, cx);
     }
     if let Some(active) = self.agent_chat_view.as_ref()
       && active.read(cx).current_conversation().id == id
@@ -4578,7 +4578,7 @@ mod tests {
     ConfigStore::persist_recent_repository(&repo.path);
 
     let mut extra_repos = Vec::new();
-    for index in 0..crate::conversation_hub::MAX_TRACKED_REPOS - 1 {
+    for index in 0..crate::conversation_hub::MAX_TRACKED_PROJECTS - 1 {
       let extra = TempRepo::init(&format!("session-page-hub-cap-{index}"));
       commit_text_file(&extra.path, Path::new("README.md"), "v1\n", "initial");
       page.update_in(cx, |page, window, cx| {
@@ -4732,7 +4732,7 @@ mod tests {
       page.select_session(
         &page
           .conversation_hub
-          .sections(cx)
+          .project_sections(cx)
           .iter()
           .find(|(section_repo, _)| section_repo == &repo.path)
           .and_then(|(_, metas)| metas.first().cloned())
