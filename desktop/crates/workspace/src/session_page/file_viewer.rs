@@ -1457,6 +1457,17 @@ impl SessionPage {
     window: &mut Window,
     cx: &mut Context<Self>,
   ) {
+    let closes_active_group =
+      self.active_center_tab.as_ref() == Some(&tab) && self.center_layout.surface_count() > 1;
+    let closes_saved_group = self
+      .center_layouts_by_tab
+      .get(&tab)
+      .is_some_and(|layout| layout.surface_count() > 1);
+    if closes_active_group || closes_saved_group {
+      self.close_center_layout_tab_without_unsaved_prompt(tab, window, cx);
+      return;
+    }
+
     match tab.kind {
       CenterTabKind::Chat => {
         self.close_center_chat_tab(tab, window, cx);
@@ -1527,6 +1538,65 @@ impl SessionPage {
       .get(closing_index)
       .or_else(|| remaining_tabs.last())
       .cloned()
+  }
+
+  fn close_center_layout_tab_without_unsaved_prompt(
+    &mut self,
+    tab: CenterTab,
+    window: &mut Window,
+    cx: &mut Context<Self>,
+  ) {
+    let selected_closed = self.active_center_tab.as_ref() == Some(&tab);
+    let next_tab = selected_closed
+      .then(|| self.next_center_tab_after_closing(&tab))
+      .flatten();
+    let layout = if selected_closed {
+      self.center_layout.clone()
+    } else {
+      self
+        .center_layouts_by_tab
+        .remove(&tab)
+        .unwrap_or_else(|| CenterLayout::single(CenterSurface::from_tab(tab.clone())))
+    };
+    let layout_tabs = layout.tabs();
+
+    self.center_tabs.retain(|candidate| candidate != &tab);
+    self
+      .center_tab_history
+      .retain(|candidate| candidate != &tab);
+    self.center_layouts_by_tab.remove(&tab);
+    for layout_tab in layout_tabs {
+      if layout_tab != tab {
+        self
+          .center_tabs
+          .retain(|candidate| candidate != &layout_tab);
+        self
+          .center_tab_history
+          .retain(|candidate| candidate != &layout_tab);
+        self.center_layouts_by_tab.remove(&layout_tab);
+      }
+      if matches!(layout_tab.kind, CenterTabKind::File | CenterTabKind::Diff) {
+        self.clear_editor_tab(&layout_tab);
+      }
+    }
+
+    if !selected_closed {
+      cx.notify();
+      return;
+    }
+    if let Some(next_tab) = next_tab {
+      self.activate_center_tab(next_tab, OpenIntent::Open, window, cx);
+      return;
+    }
+
+    self.center = CenterView::Conversation;
+    self.center_layout = CenterLayout::single(CenterSurface::from_tab(CenterTab::chat()));
+    self.active_center_tab = Some(CenterTab::chat());
+    self.remember_active_chat_tab(cx);
+    self.diff_chat_open = true;
+    self.sync_agent_chat_close_control(cx);
+    self.focus_agent_input_on_next_frame(window, cx);
+    cx.notify();
   }
 
   fn close_center_tab_without_unsaved_prompt(

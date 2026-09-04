@@ -76,10 +76,7 @@ impl CenterPane {
   }
 
   fn set_active_surface(&mut self, surface: CenterSurface) {
-    if !self.contains_tab(surface.tab()) {
-      self.surfaces = vec![surface.clone()];
-    }
-    self.active_surface = surface;
+    self.add_surface(surface);
   }
 
   fn close_surface(&mut self, tab: &CenterTab) -> bool {
@@ -178,6 +175,23 @@ impl CenterNode {
     }
   }
 
+  fn collect_tabs(&self, tabs: &mut Vec<CenterTab>) {
+    match self {
+      Self::Pane(pane) => {
+        for surface in &pane.surfaces {
+          let tab = surface.tab();
+          if !tabs.iter().any(|existing| existing == tab) {
+            tabs.push(tab.clone());
+          }
+        }
+      }
+      Self::Split(split) => {
+        split.first.collect_tabs(tabs);
+        split.second.collect_tabs(tabs);
+      }
+    }
+  }
+
   fn pane_contains_tab(&self, pane_id: CenterPaneId, tab: &CenterTab) -> bool {
     match self {
       Self::Pane(pane) => pane.id == pane_id && pane.contains_tab(tab),
@@ -214,10 +228,26 @@ impl CenterNode {
     }
   }
 
+  fn activate_surface(&mut self, surface: CenterSurface) -> bool {
+    match self {
+      Self::Pane(pane) => {
+        if pane.contains_tab(surface.tab()) {
+          pane.set_active_surface(surface);
+          true
+        } else {
+          false
+        }
+      }
+      Self::Split(split) => {
+        split.first.activate_surface(surface.clone()) || split.second.activate_surface(surface)
+      }
+    }
+  }
+
   fn set_active_surface(&mut self, current_active_tab: &CenterTab, surface: CenterSurface) -> bool {
     match self {
       Self::Pane(pane) => {
-        if pane.contains_tab(surface.tab()) || pane.contains_tab(current_active_tab) {
+        if pane.contains_tab(current_active_tab) {
           pane.set_active_surface(surface);
           true
         } else {
@@ -373,11 +403,22 @@ impl CenterLayout {
     self.root.contains_tab(tab)
   }
 
+  pub(super) fn tabs(&self) -> Vec<CenterTab> {
+    let mut tabs = Vec::new();
+    self.root.collect_tabs(&mut tabs);
+    tabs
+  }
+
+  pub(super) fn surface_count(&self) -> usize {
+    self.root.surface_count()
+  }
+
   pub(super) fn set_active_surface(&mut self, surface: CenterSurface) {
     let tab = surface.tab().clone();
-    if !self
-      .root
-      .set_active_surface(&self.active_tab, surface.clone())
+    if !self.root.activate_surface(surface.clone())
+      && !self
+        .root
+        .set_active_surface(&self.active_tab, surface.clone())
     {
       self.root = CenterNode::Pane(CenterPane::new(self.allocate_pane_id(), surface));
     }

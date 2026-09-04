@@ -1,6 +1,6 @@
 //! Everything the shell paints: sidebar, center, diff header, dock.
 
-use super::center_layout::{CenterDropTarget, CenterNode, CenterPane, CenterPaneId};
+use super::center_layout::{CenterDropTarget, CenterLayout, CenterNode, CenterPane, CenterPaneId};
 use super::*;
 use crate::annotations::{AnnotationKind, shows_annotation_navigation};
 use crate::diff_toolbar::{DiffToolbar, NavigationControl, SplitControl, ToggleControl};
@@ -423,17 +423,122 @@ impl SessionPage {
     }
   }
 
-  pub(super) fn render_center_tabs(&self, cx: &mut Context<Self>) -> AnyElement {
+  fn center_tab_group_layout(&self, tab: &CenterTab) -> Option<&CenterLayout> {
+    if self.active_center_tab.as_ref() == Some(tab) && self.center_layout.surface_count() > 1 {
+      return Some(&self.center_layout);
+    }
+    self
+      .center_layouts_by_tab
+      .get(tab)
+      .filter(|layout| layout.surface_count() > 1)
+  }
+
+  fn center_tab_label_source(&self, tab: &CenterTab) -> CenterTab {
+    self
+      .center_tab_group_layout(tab)
+      .map(|layout| layout.active_tab().clone())
+      .unwrap_or_else(|| tab.clone())
+  }
+
+  fn center_tab_icon_sources(&self, tab: &CenterTab) -> Vec<CenterTab> {
+    self
+      .center_tab_group_layout(tab)
+      .map(CenterLayout::tabs)
+      .unwrap_or_else(|| vec![tab.clone()])
+  }
+
+  fn center_tab_label(
+    &self,
+    tab: &CenterTab,
+    dirty: bool,
+    cx: &mut Context<Self>,
+  ) -> Option<String> {
+    match tab.kind {
+      CenterTabKind::Chat => Some(self.center_chat_tab_label(tab, cx)),
+      CenterTabKind::File | CenterTabKind::Diff => {
+        let path = tab.path()?;
+        let name = path
+          .file_name()
+          .map(|name| name.to_string_lossy().into_owned())
+          .unwrap_or_else(|| path.to_string_lossy().into_owned());
+        let prefix = match tab.snapshot() {
+          Some(CenterTabSnapshot::AgentTool { .. }) => "Agent: ",
+          Some(CenterTabSnapshot::Commit { .. }) => "Commit: ",
+          Some(CenterTabSnapshot::PullRequestRange { .. }) => "PR: ",
+          None if tab.kind == CenterTabKind::Diff => "Diff: ",
+          None => "",
+        };
+        Some(if dirty {
+          format!("{prefix}{name} *")
+        } else {
+          format!("{prefix}{name}")
+        })
+      }
+      CenterTabKind::InteractiveRebase => Some("Interactive rebase".to_string()),
+    }
+  }
+
+  fn center_tab_icon(&self, tab: &CenterTab, cx: &mut Context<Self>) -> Option<AnyElement> {
     let theme = cx.theme().clone();
+    Some(match tab.kind {
+      CenterTabKind::Chat => self
+        .center_chat_tab_icon(tab, cx)
+        .size_3()
+        .text_color(theme.muted_foreground)
+        .into_any_element(),
+      CenterTabKind::File | CenterTabKind::Diff => self.center_file_tab_icon(tab.path()?, cx),
+      CenterTabKind::InteractiveRebase => gpui_component::Icon::new(UiIconName::GitMerge)
+        .size_3()
+        .text_color(theme.muted_foreground)
+        .into_any_element(),
+    })
+  }
+
+  fn center_tab_icon_debug_selector(tab: &CenterTab) -> &'static str {
+    match tab.kind {
+      CenterTabKind::Chat => "session-center-tab-agent-icon",
+      CenterTabKind::File | CenterTabKind::Diff => "session-center-tab-file-icon",
+      CenterTabKind::InteractiveRebase => "session-center-tab-rebase-icon",
+    }
+  }
+
+  fn render_center_tab_icons(&self, tabs: &[CenterTab], cx: &mut Context<Self>) -> AnyElement {
+    let mut icons = h_flex().flex_shrink_0().items_center().gap_0p5();
+    for tab in tabs {
+      let selector = Self::center_tab_icon_debug_selector(tab);
+      if let Some(icon) = self.center_tab_icon(tab, cx) {
+        icons = icons.child(
+          div()
+            .debug_selector(move || selector.to_string())
+            .flex_shrink_0()
+            .child(icon),
+        );
+      }
+    }
+    icons.into_any_element()
+  }
+
+  pub(super) fn render_center_tabs(&self, cx: &mut Context<Self>) -> AnyElement {
     let tabs = self.center_tabs_for_navigation();
     let selected_tab = self.selected_center_tab_from(&tabs);
+    self.render_center_tab_bar("session-center-tabs".to_string(), tabs, selected_tab, cx)
+  }
+
+  fn render_center_tab_bar(
+    &self,
+    id: String,
+    tabs: Vec<CenterTab>,
+    selected_tab: CenterTab,
+    cx: &mut Context<Self>,
+  ) -> AnyElement {
+    let theme = cx.theme().clone();
     let selected_index = tabs
       .iter()
       .position(|tab| tab == &selected_tab)
       .unwrap_or(0);
 
     let selectable_tabs = tabs.clone();
-    let mut tab_bar = TabBar::new("session-center-tabs")
+    let mut tab_bar = TabBar::new(id.clone())
       .w_full()
       .underline()
       .menu(true)
@@ -453,59 +558,20 @@ impl SessionPage {
       );
 
     for tab in &tabs {
-      let dirty = matches!(tab.kind, CenterTabKind::File | CenterTabKind::Diff)
+      let label_tab = self.center_tab_label_source(tab);
+      let icon_tabs = self.center_tab_icon_sources(tab);
+      let dirty = matches!(label_tab.kind, CenterTabKind::File | CenterTabKind::Diff)
         && self
           .editor_states
-          .get(tab)
+          .get(&label_tab)
           .and_then(|state| state.editor.as_ref())
           .is_some_and(|editor| editor.read(cx).is_dirty);
-      let (label, icon) = match tab.kind {
-        CenterTabKind::Chat => (
-          self.center_chat_tab_label(tab, cx),
-          self
-            .center_chat_tab_icon(tab, cx)
-            .size_3()
-            .text_color(theme.muted_foreground)
-            .into_any_element(),
-        ),
-        CenterTabKind::File | CenterTabKind::Diff => {
-          let Some(path) = tab.path() else {
-            continue;
-          };
-          let name = path
-            .file_name()
-            .map(|name| name.to_string_lossy().into_owned())
-            .unwrap_or_else(|| path.to_string_lossy().into_owned());
-          let prefix = match tab.snapshot() {
-            Some(CenterTabSnapshot::AgentTool { .. }) => "Agent: ",
-            Some(CenterTabSnapshot::Commit { .. }) => "Commit: ",
-            Some(CenterTabSnapshot::PullRequestRange { .. }) => "PR: ",
-            None if tab.kind == CenterTabKind::Diff => "Diff: ",
-            None => "",
-          };
-          let label = if dirty {
-            format!("{prefix}{name} *")
-          } else {
-            format!("{prefix}{name}")
-          };
-          (label, self.center_file_tab_icon(path, cx))
-        }
-        CenterTabKind::InteractiveRebase => (
-          "Interactive rebase".to_string(),
-          gpui_component::Icon::new(UiIconName::GitMerge)
-            .size_3()
-            .text_color(theme.muted_foreground)
-            .into_any_element(),
-        ),
+      let Some(label) = self.center_tab_label(&label_tab, dirty, cx) else {
+        continue;
       };
 
       let accessibility_label = label.clone();
       let tab_debug_selector = Self::center_tab_debug_selector(tab);
-      let icon_debug_selector = match tab.kind {
-        CenterTabKind::Chat => "session-center-tab-agent-icon",
-        CenterTabKind::File | CenterTabKind::Diff => "session-center-tab-file-icon",
-        CenterTabKind::InteractiveRebase => "session-center-tab-rebase-icon",
-      };
       let tab_content = h_flex()
         .debug_selector(move || tab_debug_selector.clone())
         .h(px(22.0))
@@ -515,12 +581,7 @@ impl SessionPage {
         .rounded(px(6.0))
         .px_2()
         .hover(|this| this.bg(theme.secondary_hover))
-        .child(
-          div()
-            .debug_selector(move || icon_debug_selector.to_string())
-            .flex_shrink_0()
-            .child(icon),
-        )
+        .child(self.render_center_tab_icons(&icon_tabs, cx))
         .child(
           div()
             .debug_selector(|| "session-center-tab-label".to_string())
@@ -580,7 +641,7 @@ impl SessionPage {
     }));
 
     div()
-      .id("session-center-tabs-wrap")
+      .id(format!("{id}-wrap"))
       .debug_selector(|| "session-center-tabs".to_string())
       .border_b_1()
       .border_color(cx.theme().border)
@@ -694,6 +755,7 @@ impl SessionPage {
     cx: &mut Context<Self>,
   ) -> AnyElement {
     let pane_id = pane.id();
+    let focus_tab = pane.active_surface().tab().clone();
     let view = self.render_center_surface(pane.active_surface(), window, cx);
     div()
       .relative()
@@ -701,6 +763,24 @@ impl SessionPage {
       .min_w(px(0.0))
       .min_h_0()
       .group(CENTER_DROP_GROUP)
+      .on_mouse_down(
+        gpui::MouseButton::Left,
+        cx.listener(move |this, _, _, cx| {
+          if this.center_layout.active_tab() == &focus_tab {
+            return;
+          }
+          this
+            .center_layout
+            .set_active_surface(CenterSurface::from_tab(focus_tab.clone()));
+          this.center = Self::center_view_for_tab(&focus_tab);
+          if let Some(active_tab) = this.active_center_tab.clone() {
+            this
+              .center_layouts_by_tab
+              .insert(active_tab, this.center_layout.clone());
+          }
+          cx.notify();
+        }),
+      )
       .on_drag_move(cx.listener(
         move |this, event: &gpui::DragMoveEvent<DraggedCenterTab>, _, cx| {
           if !Self::center_drag_event_contains_pointer(event) {
@@ -838,7 +918,7 @@ impl SessionPage {
         .add_surface_to_pane(target.pane_id, surface),
     };
     if changed {
-      self.set_active_center_tab(tab.clone());
+      self.remember_center_layout_tab(tab.clone());
       self.center = Self::center_view_for_tab(&tab);
       self.sync_agent_chat_close_control(cx);
       cx.notify();
@@ -4586,6 +4666,120 @@ mod tests {
   }
 
   #[gpui::test]
+  async fn center_tab_groups_restore_their_split_layout(cx: &mut TestAppContext) {
+    let repo = TempRepo::init("session-center-tab-group-restore");
+    commit_text_file(&repo.path, Path::new("analytics.ts"), "one\n", "initial");
+    commit_text_file(&repo.path, Path::new("base.css"), "two\n", "second");
+    let (page, cx) = add_session_page_window(repo.path.clone(), cx);
+    cx.run_until_parked();
+
+    let analytics = CenterTab::file(PathBuf::from("analytics.ts"));
+    let base = CenterTab::file(PathBuf::from("base.css"));
+    page.update_in(cx, |page, window, cx| {
+      page.open_file(
+        PathBuf::from("analytics.ts"),
+        None,
+        None,
+        OpenIntent::Open,
+        window,
+        cx,
+      );
+    });
+    await_open_file(&page, cx).await;
+
+    page.update(cx, |page, cx| {
+      let CenterNode::Pane(pane) = page.center_layout.root() else {
+        panic!("layout should start as a single pane");
+      };
+      let pane_id = pane.id();
+      assert!(page.center_layout.split_pane(
+        pane_id,
+        CenterSurface::from_tab(CenterTab::chat()),
+        CenterSplitDirection::Left,
+      ));
+      page
+        .center_layout
+        .set_active_surface(CenterSurface::from_tab(analytics.clone()));
+      page.remember_center_layout_tab(analytics.clone());
+      page.center = CenterView::Diff;
+      cx.notify();
+    });
+    cx.run_until_parked();
+    assert!(cx.debug_bounds("session-center-tab-chat").is_none());
+    assert!(
+      cx.debug_bounds("session-center-tab-file-analytics.ts")
+        .is_some()
+    );
+    assert!(cx.debug_bounds("session-center-tab-agent-icon").is_some());
+    assert!(cx.debug_bounds("session-center-tab-file-icon").is_some());
+
+    page.update_in(cx, |page, window, cx| {
+      page.open_file(
+        PathBuf::from("base.css"),
+        None,
+        None,
+        OpenIntent::Open,
+        window,
+        cx,
+      );
+    });
+    await_open_file(&page, cx).await;
+    cx.run_until_parked();
+    assert!(
+      cx.debug_bounds("session-center-tab-file-analytics.ts")
+        .is_some()
+    );
+    assert!(
+      cx.debug_bounds("session-center-tab-file-base.css")
+        .is_some()
+    );
+    assert!(cx.debug_bounds("session-conversation-pane").is_none());
+
+    page.update_in(cx, |page, window, cx| {
+      page.activate_center_tab(analytics.clone(), OpenIntent::Open, window, cx);
+    });
+    await_open_file(&page, cx).await;
+    cx.run_until_parked();
+    page.read_with(cx, |page, _| {
+      assert!(page.center_layout.contains_tab(&CenterTab::chat()));
+      assert!(page.center_layout.contains_tab(&analytics));
+    });
+    let conversation = cx
+      .debug_bounds("session-conversation-pane")
+      .expect("conversation pane");
+    assert!(cx.debug_bounds("session-diff-editor").is_some());
+    cx.simulate_event(gpui::MouseDownEvent {
+      position: conversation.center(),
+      button: gpui::MouseButton::Left,
+      modifiers: gpui::Modifiers::default(),
+      click_count: 1,
+      first_mouse: false,
+    });
+    cx.run_until_parked();
+    page.read_with(cx, |page, _| {
+      assert_eq!(page.center_layout.active_tab(), &CenterTab::chat());
+      assert_eq!(page.center_tab_label_source(&analytics), CenterTab::chat());
+    });
+    assert!(
+      cx.debug_bounds("session-center-tab-file-analytics.ts")
+        .is_some()
+    );
+    assert!(cx.debug_bounds("session-center-tab-chat").is_none());
+
+    page.update_in(cx, |page, window, cx| {
+      page.close_center_tab(analytics.clone(), window, cx);
+    });
+    await_open_file(&page, cx).await;
+    cx.run_until_parked();
+    page.read_with(cx, |page, _| {
+      assert_eq!(page.active_center_tab.as_ref(), Some(&base));
+      assert!(!page.center_layout.contains_tab(&analytics));
+    });
+    assert!(cx.debug_bounds("session-conversation-pane").is_none());
+    assert!(cx.debug_bounds("session-diff-editor").is_some());
+  }
+
+  #[gpui::test]
   async fn dragging_a_center_tab_to_the_middle_merges_it_into_the_pane(cx: &mut TestAppContext) {
     let repo = TempRepo::init("session-center-tab-drag-middle");
     commit_text_file(&repo.path, Path::new("README.md"), "v1\n", "initial");
@@ -4646,6 +4840,11 @@ mod tests {
     });
     cx.run_until_parked();
 
+    assert!(cx.debug_bounds("session-center-tab-chat").is_none());
+    assert!(
+      cx.debug_bounds("session-center-tab-diff-README.md")
+        .is_some()
+    );
     assert!(cx.debug_bounds("session-conversation-pane").is_none());
     assert!(cx.debug_bounds("session-diff-editor").is_some());
     page.read_with(cx, |page, _| {

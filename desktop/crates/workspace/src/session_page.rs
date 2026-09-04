@@ -292,6 +292,7 @@ pub struct SessionPage {
   _checkout_options_task: Option<Task<()>>,
   center: CenterView,
   center_layout: CenterLayout,
+  center_layouts_by_tab: HashMap<CenterTab, CenterLayout>,
   center_drag_target: Option<CenterDropTarget>,
   center_tabs: Vec<CenterTab>,
   center_tab_history: Vec<CenterTab>,
@@ -592,6 +593,7 @@ impl SessionPage {
       _checkout_options_task: None,
       center: CenterView::Conversation,
       center_layout: CenterLayout::single(CenterSurface::from_tab(CenterTab::chat())),
+      center_layouts_by_tab: HashMap::new(),
       center_drag_target: None,
       center_tabs: CenterTab::default_tabs(),
       center_tab_history: CenterTab::default_tabs(),
@@ -1474,6 +1476,57 @@ impl SessionPage {
     }
   }
 
+  fn save_active_center_layout(&mut self) {
+    let Some(tab) = self.active_center_tab.clone() else {
+      return;
+    };
+    self
+      .center_layouts_by_tab
+      .insert(tab, self.center_layout.clone());
+  }
+
+  fn restore_center_layout_for_tab(&mut self, tab: &CenterTab) {
+    self.center_layout = self
+      .center_layouts_by_tab
+      .get(tab)
+      .cloned()
+      .unwrap_or_else(|| CenterLayout::single(CenterSurface::from_tab(tab.clone())));
+  }
+
+  fn remember_center_layout_tab(&mut self, representative: CenterTab) {
+    let layout_tabs = self.center_layout.tabs();
+    self.center_tabs.retain(|tab| {
+      tab == &representative || !layout_tabs.iter().any(|layout_tab| layout_tab == tab)
+    });
+    self.center_tab_history.retain(|tab| {
+      tab == &representative || !layout_tabs.iter().any(|layout_tab| layout_tab == tab)
+    });
+    for layout_tab in layout_tabs {
+      if layout_tab != representative {
+        self.center_layouts_by_tab.remove(&layout_tab);
+      }
+    }
+    if !self.center_tabs.contains(&representative) {
+      self.center_tabs.push(representative.clone());
+    }
+    self
+      .center_layouts_by_tab
+      .insert(representative.clone(), self.center_layout.clone());
+    self.active_center_tab = Some(representative.clone());
+    self.remember_center_tab_visit(representative);
+  }
+
+  fn center_tab_embedded_in_layout(&self, tab: &CenterTab) -> bool {
+    self
+      .center_layouts_by_tab
+      .iter()
+      .any(|(layout_tab, layout)| layout_tab != tab && layout.contains_tab(tab))
+      || self
+        .active_center_tab
+        .as_ref()
+        .is_some_and(|active_tab| active_tab != tab && self.center_layout.contains_tab(tab))
+  }
+
   fn set_active_center_tab(&mut self, tab: CenterTab) {
     self
       .center_layout
@@ -1487,7 +1540,11 @@ impl SessionPage {
   }
 
   fn center_tabs_for_navigation(&self) -> Vec<CenterTab> {
-    let mut tabs = CenterTab::with_chat_tab(self.center_tabs.clone());
+    let mut tabs = self.center_tabs.clone();
+    let chat_tab = CenterTab::chat();
+    if !tabs.iter().any(|tab| tab == &chat_tab) && !self.center_tab_embedded_in_layout(&chat_tab) {
+      tabs.insert(0, chat_tab);
+    }
     if self.center == CenterView::InteractiveRebase
       && !tabs
         .iter()
@@ -1528,9 +1585,12 @@ impl SessionPage {
         !(existing.kind == CenterTabKind::Chat && existing.conversation_id.is_none())
       });
     }
+    self.save_active_center_layout();
+    self.center_layouts_by_tab.remove(&tab);
     if !self.center_tabs.contains(&tab) {
       self.center_tabs.push(tab.clone());
     }
+    self.center_layout = CenterLayout::single(CenterSurface::from_tab(tab.clone()));
     self.set_active_center_tab(tab.clone());
     self.remember_center_tab_visit(tab);
   }
@@ -1596,6 +1656,29 @@ impl SessionPage {
     window: &mut Window,
     cx: &mut Context<Self>,
   ) {
+    let has_saved_split_layout = self
+      .center_layouts_by_tab
+      .get(&tab)
+      .is_some_and(|layout| layout.surface_count() > 1);
+    self.save_active_center_layout();
+    self.restore_center_layout_for_tab(&tab);
+    if has_saved_split_layout {
+      self.active_center_tab = Some(tab.clone());
+      let focused_tab = self.center_layout.active_tab();
+      self.center = match focused_tab.kind {
+        CenterTabKind::Chat => CenterView::Conversation,
+        CenterTabKind::File | CenterTabKind::Diff => CenterView::Diff,
+        CenterTabKind::InteractiveRebase => CenterView::InteractiveRebase,
+      };
+      self.sync_agent_chat_close_control(cx);
+      match self.center {
+        CenterView::Conversation => self.focus_agent_input_on_next_frame(window, cx),
+        CenterView::Diff if intent.takes_focus() => self.focus_editor_on_next_frame(window, cx),
+        CenterView::Diff | CenterView::InteractiveRebase => {}
+      }
+      cx.notify();
+      return;
+    }
     match tab.kind {
       CenterTabKind::Chat => {
         if let Some(id) = tab.conversation_id {
