@@ -125,7 +125,7 @@ mod test_support;
 mod workspace;
 mod workspace_window;
 
-pub use actions::{CommitChanges, OpenRepository, SaveFile, ShowCommandPalette, ShowFileSearch};
+pub use actions::{CommitChanges, OpenProject, SaveFile, ShowCommandPalette, ShowFileSearch};
 pub use app_profile::{AppProfile, URL_SCHEME_PROD};
 pub use auth_state::AuthStateStore;
 pub use crash_report::{

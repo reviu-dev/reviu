@@ -12,7 +12,7 @@ impl SessionPage {
   pub(super) fn render_open_project_row(&self, cx: &mut Context<Self>) -> AnyElement {
     let theme = cx.theme().clone();
     h_flex()
-      .id("session-open-repository")
+      .id("session-open-project")
       .debug_selector(|| OPEN_PROJECT_ROW_DEBUG_SELECTOR.to_string())
       .items_center()
       .gap_2()

@@ -5,7 +5,7 @@ use gpui::actions;
 actions!(
   workspace,
   [
-    OpenRepository,
+    OpenProject,
     SaveFile,
     ShowCommandPalette,
     ShowFileSearch,

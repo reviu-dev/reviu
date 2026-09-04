@@ -1124,8 +1124,8 @@ impl CommandPaletteCommandId {
 
   pub fn parse(value: &str) -> Option<Self> {
     match value {
-      "switch_project" | "switch_repository" => Some(Self::SwitchProject),
-      "forget_project" | "forget_repository" => Some(Self::ForgetProject),
+      "switch_project" => Some(Self::SwitchProject),
+      "forget_project" => Some(Self::ForgetProject),
       "switch_branch" => Some(Self::SwitchBranch),
       "checkout_detached" => Some(Self::CheckoutDetached),
       "commit" => Some(Self::Commit),
@@ -1163,7 +1163,7 @@ impl CommandPaletteCommandId {
       "apply_stash" => Some(Self::ApplyStash),
       "drop_stash" => Some(Self::DropStash),
       "pop_stash" => Some(Self::PopStash),
-      "open_project" | "open_repository" => Some(Self::OpenProject),
+      "open_project" => Some(Self::OpenProject),
       "open_session_page" => Some(Self::OpenSessionPage),
       "open_github_from_url" => Some(Self::OpenGithubFromUrl),
       "open_git_config_page" => Some(Self::OpenGitConfigPage),
@@ -4431,18 +4431,6 @@ mod tests {
     keys.dedup();
     assert_eq!(keys.len(), len_before_dedup, "duplicate as_str keys");
 
-    assert_eq!(
-      CommandPaletteCommandId::parse("switch_repository"),
-      Some(CommandPaletteCommandId::SwitchProject)
-    );
-    assert_eq!(
-      CommandPaletteCommandId::parse("forget_repository"),
-      Some(CommandPaletteCommandId::ForgetProject)
-    );
-    assert_eq!(
-      CommandPaletteCommandId::parse("open_repository"),
-      Some(CommandPaletteCommandId::OpenProject)
-    );
     assert_eq!(CommandPaletteCommandId::parse("nonexistent"), None);
   }
 

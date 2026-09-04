@@ -113,7 +113,7 @@ const DIFF_EDITOR_DEBUG_SELECTOR: &str = "session-diff-editor";
 const PREVIEW_PANE_DEBUG_SELECTOR: &str = "session-preview-pane";
 const REPO_CONTEXT_DEBUG_SELECTOR: &str = "session-repo-context";
 const REPO_SWITCH_DEBUG_SELECTOR: &str = "session-repo-switch";
-const OPEN_PROJECT_ROW_DEBUG_SELECTOR: &str = "session-open-repository";
+const OPEN_PROJECT_ROW_DEBUG_SELECTOR: &str = "session-open-project";
 const UNSAVED_EDITOR_SAVE_DEBUG_SELECTOR: &str = "session-unsaved-editor-save";
 const UNSAVED_EDITOR_DISCARD_DEBUG_SELECTOR: &str = "session-unsaved-editor-discard";
 const UNSAVED_EDITOR_CANCEL_DEBUG_SELECTOR: &str = "session-unsaved-editor-cancel";
@@ -1269,7 +1269,7 @@ impl SessionPage {
 
   fn open_project_action(
     &mut self,
-    _: &crate::OpenRepository,
+    _: &crate::OpenProject,
     window: &mut Window,
     cx: &mut Context<Self>,
   ) {
@@ -2379,7 +2379,7 @@ mod tests {
 
   #[gpui::test]
   async fn without_a_repository_the_sidebar_asks_for_one(cx: &mut TestAppContext) {
-    let repo = TempRepo::init("session-open-repository");
+    let repo = TempRepo::init("session-open-project");
     commit_text_file(&repo.path, Path::new("README.md"), "v1\n", "initial");
 
     let (page, cx) = add_session_page_window_without_repo(cx);

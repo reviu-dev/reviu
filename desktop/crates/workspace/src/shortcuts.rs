@@ -18,12 +18,11 @@ use crate::config::ConfigStore;
 use crate::{
   AcceptBothConflict, AddSelectionToAgent, CommentHunk, CommitChanges, ForcePushChanges,
   JumpToLatestMessage, NavigateBack, NewAgentSession, NewAgentWorktreeSession, NextAnnotation,
-  NextCenterTab, OpenFilesSidebar, OpenGitChangesSidebar, OpenGitHistorySidebar,
-  OpenPullRequestSidebar, OpenRepository, OpenReviewSidebar, OpenSessionPage, OpenSettingsPage,
-  PreviousAnnotation, PreviousCenterTab, PullChanges, PushChanges, RestoreFile, RestoreHunk,
-  ReturnFocusToEditor, SendReviewCommentsToAgent, ShowBranchSwitcher, ShowCommandPalette,
-  ShowFileSearch, ToggleDiffView, ToggleFileStage, ToggleHideWhitespace, ToggleHunkStage,
-  ToggleTerminalSidebar,
+  NextCenterTab, OpenFilesSidebar, OpenGitChangesSidebar, OpenGitHistorySidebar, OpenProject,
+  OpenPullRequestSidebar, OpenReviewSidebar, OpenSessionPage, OpenSettingsPage, PreviousAnnotation,
+  PreviousCenterTab, PullChanges, PushChanges, RestoreFile, RestoreHunk, ReturnFocusToEditor,
+  SendReviewCommentsToAgent, ShowBranchSwitcher, ShowCommandPalette, ShowFileSearch,
+  ToggleDiffView, ToggleFileStage, ToggleHideWhitespace, ToggleHunkStage, ToggleTerminalSidebar,
 };
 
 pub const SHOW_COMMAND_PALETTE_SHORTCUT: &str = "cmd-k";
@@ -36,7 +35,7 @@ pub const DOCK_PANEL_CONTEXT: &str = "DockPanel";
 pub const WORKSPACE_SESSION_CONTEXT: &str = "Workspace WorkspaceSession";
 
 const FILE_SEARCH_CONTEXT: &str = "WorkspaceSession";
-const OPEN_REPOSITORY_CONTEXT: &str = "WorkspaceSession";
+const OPEN_PROJECT_CONTEXT: &str = "WorkspaceSession";
 const COMMIT_CHANGES_CONTEXT: &str = "WorkspaceSession";
 const COMMIT_CHANGES_DESCENDANT_FOCUS: &str = "CommitInput";
 const PULL_CHANGES_CONTEXT: &str = "WorkspaceSession";
@@ -78,7 +77,7 @@ pub enum ShortcutId {
   NextCenterTab,
   PreviousCenterTab,
   ShowFileSearch,
-  OpenRepository,
+  OpenProject,
   CommitChanges,
   PullChanges,
   PushChanges,
@@ -117,7 +116,7 @@ impl ShortcutId {
       ShortcutId::NextCenterTab => "next_center_tab",
       ShortcutId::PreviousCenterTab => "previous_center_tab",
       ShortcutId::ShowFileSearch => "show_file_search",
-      ShortcutId::OpenRepository => "open_repository",
+      ShortcutId::OpenProject => "open_project",
       ShortcutId::CommitChanges => "commit_changes",
       ShortcutId::PullChanges => "pull_changes",
       ShortcutId::PushChanges => "push_changes",
@@ -156,7 +155,7 @@ impl ShortcutId {
       "next_center_tab" => Some(ShortcutId::NextCenterTab),
       "previous_center_tab" => Some(ShortcutId::PreviousCenterTab),
       "show_file_search" => Some(ShortcutId::ShowFileSearch),
-      "open_repository" => Some(ShortcutId::OpenRepository),
+      "open_project" => Some(ShortcutId::OpenProject),
       "commit_changes" => Some(ShortcutId::CommitChanges),
       "pull_changes" => Some(ShortcutId::PullChanges),
       "push_changes" => Some(ShortcutId::PushChanges),
@@ -443,13 +442,13 @@ const SHORTCUT_DEFINITIONS: [ShortcutDefinition; 34] = [
     active_contexts: &COMMENT_HUNK_ACTIVE_CONTEXTS,
   },
   ShortcutDefinition {
-    id: ShortcutId::OpenRepository,
+    id: ShortcutId::OpenProject,
     title: "Open Project",
     description: "Open a local project.",
     scope_label: "Projects",
     category: ShortcutCategory::LocalGit,
     keystroke: "cmd-o",
-    context: OPEN_REPOSITORY_CONTEXT,
+    context: OPEN_PROJECT_CONTEXT,
     display_context: WORKSPACE_SESSION_CONTEXT,
     active_contexts: &SESSION_ONLY_ACTIVE_CONTEXTS,
   },
@@ -858,7 +857,7 @@ impl ShortcutDefinition {
         KeyBinding::new(keystroke, PreviousCenterTab, Some(&context))
       }
       ShortcutId::ShowFileSearch => KeyBinding::new(keystroke, ShowFileSearch, Some(&context)),
-      ShortcutId::OpenRepository => KeyBinding::new(keystroke, OpenRepository, Some(&context)),
+      ShortcutId::OpenProject => KeyBinding::new(keystroke, OpenProject, Some(&context)),
       ShortcutId::CommitChanges => KeyBinding::new(keystroke, CommitChanges, Some(&context)),
       ShortcutId::PullChanges => KeyBinding::new(keystroke, PullChanges, Some(&context)),
       ShortcutId::PushChanges => KeyBinding::new(keystroke, PushChanges, Some(&context)),
@@ -1072,7 +1071,7 @@ fn palette_command_shortcut(command: CommandPaletteCommandId) -> Option<Shortcut
     Command::ForcePush => Some(ShortcutId::ForcePushChanges),
     Command::Pull => Some(ShortcutId::PullChanges),
     Command::SwitchBranch => Some(ShortcutId::ShowBranchSwitcher),
-    Command::OpenProject => Some(ShortcutId::OpenRepository),
+    Command::OpenProject => Some(ShortcutId::OpenProject),
     Command::OpenSessionPage => Some(ShortcutId::OpenSessionPage),
     Command::OpenSettingsPage => Some(ShortcutId::OpenSettingsPage),
     Command::SendReview => Some(ShortcutId::SendReviewCommentsToAgent),
@@ -1346,7 +1345,7 @@ fn with_shortcut_action<T>(id: ShortcutId, f: impl FnOnce(&dyn Action) -> T) -> 
     ShortcutId::NextCenterTab => f(&NextCenterTab),
     ShortcutId::PreviousCenterTab => f(&PreviousCenterTab),
     ShortcutId::ShowFileSearch => f(&ShowFileSearch),
-    ShortcutId::OpenRepository => f(&OpenRepository),
+    ShortcutId::OpenProject => f(&OpenProject),
     ShortcutId::CommitChanges => f(&CommitChanges),
     ShortcutId::PullChanges => f(&PullChanges),
     ShortcutId::PushChanges => f(&PushChanges),
@@ -2046,7 +2045,7 @@ mod tests {
   fn validate_shortcut_override_allows_non_overlapping_shortcuts() {
     let overrides = ShortcutOverrides::default();
     let result = validate_shortcut_override(
-      ShortcutId::OpenRepository,
+      ShortcutId::OpenProject,
       &Keystroke::parse("cmd-w").unwrap(),
       &overrides,
     );
