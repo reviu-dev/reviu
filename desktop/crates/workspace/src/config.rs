@@ -36,6 +36,11 @@ const RECENT_PROJECTS_TABLE: ConfigTable = ConfigTable {
   create_sql: "CREATE TABLE IF NOT EXISTS recent_projects (path TEXT PRIMARY KEY, last_opened INTEGER NOT NULL)",
 };
 
+const PROJECTS_TABLE: ConfigTable = ConfigTable {
+  name: "projects",
+  create_sql: "CREATE TABLE IF NOT EXISTS projects (path TEXT PRIMARY KEY, kind TEXT NOT NULL, last_opened INTEGER NOT NULL, sidebar_position INTEGER)",
+};
+
 const SESSION_SIDEBAR_PROJECTS_TABLE: ConfigTable = ConfigTable {
   name: "session_sidebar_repositories",
   create_sql: "CREATE TABLE IF NOT EXISTS session_sidebar_repositories (path TEXT PRIMARY KEY, position INTEGER NOT NULL)",
@@ -68,9 +73,10 @@ const MERGE_METHODS_TABLE: ConfigTable = ConfigTable {
 
 pub const COMMAND_USAGE_TIMESTAMP_CAP: usize = 30;
 
-const CONFIG_TABLES: [ConfigTable; 7] = [
+const CONFIG_TABLES: [ConfigTable; 8] = [
   RECENT_REPOS_TABLE,
   RECENT_PROJECTS_TABLE,
+  PROJECTS_TABLE,
   SESSION_SIDEBAR_PROJECTS_TABLE,
   SETTINGS_TABLE,
   SHORTCUT_OVERRIDES_TABLE,
@@ -88,6 +94,7 @@ const MIGRATIONS: &[Migration] = [
   migrate_v2_merge_methods,
   migrate_v3_session_sidebar_repositories,
   migrate_v4_recent_projects,
+  migrate_v5_projects,
 ]
 .as_slice();
 
@@ -144,6 +151,48 @@ fn migrate_v3_session_sidebar_repositories(conn: &Connection) -> rusqlite::Resul
 
 fn migrate_v4_recent_projects(conn: &Connection) -> rusqlite::Result<()> {
   conn.execute(RECENT_PROJECTS_TABLE.create_sql, [])?;
+  Ok(())
+}
+
+fn migrate_v5_projects(conn: &Connection) -> rusqlite::Result<()> {
+  conn.execute(PROJECTS_TABLE.create_sql, [])?;
+  conn.execute(
+    &format!(
+      "INSERT OR IGNORE INTO {} (path, kind, last_opened)
+       SELECT path, 'plain', last_opened FROM {}",
+      PROJECTS_TABLE.name, RECENT_PROJECTS_TABLE.name
+    ),
+    [],
+  )?;
+  conn.execute(
+    &format!(
+      "INSERT OR REPLACE INTO {} (path, kind, last_opened)
+       SELECT path, 'git', last_opened FROM {}",
+      PROJECTS_TABLE.name, RECENT_REPOS_TABLE.name
+    ),
+    [],
+  )?;
+  conn.execute(
+    &format!(
+      "INSERT OR IGNORE INTO {} (path, kind, last_opened)
+       SELECT path, 'git', 0 FROM {}",
+      PROJECTS_TABLE.name, SESSION_SIDEBAR_PROJECTS_TABLE.name
+    ),
+    [],
+  )?;
+  conn.execute(
+    &format!(
+      "UPDATE {} SET sidebar_position = (
+         SELECT position FROM {} WHERE {}.path = {}.path
+       ) WHERE path IN (SELECT path FROM {})",
+      PROJECTS_TABLE.name,
+      SESSION_SIDEBAR_PROJECTS_TABLE.name,
+      SESSION_SIDEBAR_PROJECTS_TABLE.name,
+      PROJECTS_TABLE.name,
+      SESSION_SIDEBAR_PROJECTS_TABLE.name
+    ),
+    [],
+  )?;
   Ok(())
 }
 
@@ -237,11 +286,13 @@ pub struct ConfigStore {
   conn: Connection,
 }
 
+#[cfg(test)]
 #[derive(Clone)]
 pub struct RecentRepository {
   pub path: PathBuf,
 }
 
+#[cfg(test)]
 #[derive(Clone)]
 pub struct RecentProject {
   pub path: PathBuf,
@@ -257,6 +308,23 @@ pub enum RecentProjectKind {
 pub struct RecentProjectEntry {
   pub path: PathBuf,
   pub kind: RecentProjectKind,
+}
+
+impl RecentProjectKind {
+  fn as_storage(self) -> &'static str {
+    match self {
+      Self::Git => "git",
+      Self::Plain => "plain",
+    }
+  }
+
+  fn from_storage(value: &str) -> Option<Self> {
+    match value {
+      "git" => Some(Self::Git),
+      "plain" => Some(Self::Plain),
+      _ => None,
+    }
+  }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -361,65 +429,20 @@ impl ConfigStore {
 
   #[cfg(test)]
   pub fn load_recent_repositories() -> Vec<RecentRepository> {
-    let Some(store) = Self::open_with_tables() else {
-      return Vec::new();
-    };
-    store.load_recent_repositories_inner()
-  }
-
-  fn load_recent_repositories_inner(&self) -> Vec<RecentRepository> {
-    let mut stmt = match self.conn.prepare(&format!(
-      "SELECT path FROM {} ORDER BY last_opened DESC",
-      RECENT_REPOS_TABLE.name
-    )) {
-      Ok(stmt) => stmt,
-      Err(err) => {
-        log::warn!("Failed to load recent repositories: {}", err);
-        return Vec::new();
-      }
-    };
-
-    let rows = match stmt.query_map([], |row| row.get::<_, String>(0)) {
-      Ok(rows) => rows,
-      Err(err) => {
-        log::warn!("Failed to read recent repositories: {}", err);
-        return Vec::new();
-      }
-    };
-
-    let mut repositories = Vec::new();
-    let mut missing_paths: Vec<String> = Vec::new();
-    for row in rows {
-      match row {
-        Ok(path_string) => {
-          let path = PathBuf::from(&path_string);
-          // A folder that stopped being a repository would otherwise come back
-          // as the one to open on the next launch.
-          if path.is_dir() && path.join(".git").exists() {
-            repositories.push(RecentRepository { path });
-          } else {
-            missing_paths.push(path_string);
-          }
-        }
-        Err(err) => log::warn!("Failed to decode recent repository row: {}", err),
-      }
-    }
-
-    if !missing_paths.is_empty() {
-      for path in &missing_paths {
-        self.forget_recent_repository_path(path);
-      }
-    }
-
-    repositories
+    Self::load_recent_project_entries()
+      .into_iter()
+      .filter(|project| project.kind == RecentProjectKind::Git)
+      .map(|project| RecentRepository { path: project.path })
+      .collect()
   }
 
   #[cfg(test)]
   pub fn load_recent_projects() -> Vec<RecentProject> {
-    let Some(store) = Self::open_with_tables() else {
-      return Vec::new();
-    };
-    store.load_recent_projects_inner()
+    Self::load_recent_project_entries()
+      .into_iter()
+      .filter(|project| project.kind == RecentProjectKind::Plain)
+      .map(|project| RecentProject { path: project.path })
+      .collect()
   }
 
   pub fn load_recent_project_entries() -> Vec<RecentProjectEntry> {
@@ -430,29 +453,9 @@ impl ConfigStore {
   }
 
   fn load_recent_project_entries_inner(&self) -> Vec<RecentProjectEntry> {
-    let mut entries = self
-      .load_recent_repositories_inner()
-      .into_iter()
-      .map(|repo| RecentProjectEntry {
-        path: repo.path,
-        kind: RecentProjectKind::Git,
-      })
-      .collect::<Vec<_>>();
-    for project in self.load_recent_projects_inner() {
-      if !entries.iter().any(|entry| entry.path == project.path) {
-        entries.push(RecentProjectEntry {
-          path: project.path,
-          kind: RecentProjectKind::Plain,
-        });
-      }
-    }
-    entries
-  }
-
-  fn load_recent_projects_inner(&self) -> Vec<RecentProject> {
     let mut stmt = match self.conn.prepare(&format!(
-      "SELECT path FROM {} ORDER BY last_opened DESC",
-      RECENT_PROJECTS_TABLE.name
+      "SELECT path, kind FROM {} ORDER BY last_opened DESC",
+      PROJECTS_TABLE.name
     )) {
       Ok(stmt) => stmt,
       Err(err) => {
@@ -461,7 +464,9 @@ impl ConfigStore {
       }
     };
 
-    let rows = match stmt.query_map([], |row| row.get::<_, String>(0)) {
+    let rows = match stmt.query_map([], |row| {
+      Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+    }) {
       Ok(rows) => rows,
       Err(err) => {
         log::warn!("Failed to read recent projects: {}", err);
@@ -470,13 +475,17 @@ impl ConfigStore {
     };
 
     let mut projects = Vec::new();
-    let mut missing_paths: Vec<String> = Vec::new();
+    let mut missing_paths = Vec::new();
     for row in rows {
       match row {
-        Ok(path_string) => {
+        Ok((path_string, kind_string)) => {
           let path = PathBuf::from(&path_string);
-          if path.is_dir() && !path.join(".git").exists() {
-            projects.push(RecentProject { path });
+          let Some(kind) = RecentProjectKind::from_storage(&kind_string) else {
+            missing_paths.push(path_string);
+            continue;
+          };
+          if Self::project_path_matches_kind(&path, kind) {
+            projects.push(RecentProjectEntry { path, kind });
           } else {
             missing_paths.push(path_string);
           }
@@ -485,67 +494,19 @@ impl ConfigStore {
       }
     }
 
-    if !missing_paths.is_empty() {
-      for path in &missing_paths {
-        self.forget_recent_project_path(path);
-      }
+    for path in missing_paths {
+      self.forget_recent_project_path(&path);
     }
 
     projects
   }
 
-  #[cfg(test)]
-  pub fn forget_recent_repository(path: &Path) {
+  pub fn persist_recent_project_root(path: &Path) {
     let Some(store) = Self::open_with_tables() else {
       return;
     };
-    store.forget_recent_repository_path(&path.to_string_lossy());
-  }
-
-  pub fn forget_recent_project_root(path: &Path) {
-    let Some(store) = Self::open_with_tables() else {
-      return;
-    };
-    let mut paths = vec![path.to_string_lossy().to_string()];
-    if let Ok(canonical) = path.canonicalize() {
-      let canonical = canonical.to_string_lossy().to_string();
-      if !paths.contains(&canonical) {
-        paths.push(canonical);
-      }
-    }
-    for path in paths {
-      store.forget_recent_repository_path(&path);
-      store.forget_recent_project_path(&path);
-    }
-  }
-
-  fn forget_recent_repository_path(&self, path: &str) {
-    if let Err(err) = self.conn.execute(
-      &format!("DELETE FROM {} WHERE path = ?1", RECENT_REPOS_TABLE.name),
-      params![path],
-    ) {
-      log::warn!("Failed to forget recent repository: {}", err);
-    }
-    self.forget_sidebar_project_path(path);
-  }
-
-  #[cfg(test)]
-  pub fn forget_recent_project(path: &Path) {
-    let Some(store) = Self::open_with_tables() else {
-      return;
-    };
-    let path = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
-    store.forget_recent_project_path(&path.to_string_lossy());
-  }
-
-  fn forget_recent_project_path(&self, path: &str) {
-    if let Err(err) = self.conn.execute(
-      &format!("DELETE FROM {} WHERE path = ?1", RECENT_PROJECTS_TABLE.name),
-      params![path],
-    ) {
-      log::warn!("Failed to forget recent project: {}", err);
-    }
-    self.forget_sidebar_project_path(path);
+    let kind = Self::project_kind_for_path(path);
+    store.persist_recent_project_entry(path, kind);
   }
 
   #[cfg(test)]
@@ -553,41 +514,7 @@ impl ConfigStore {
     let Some(store) = Self::open_with_tables() else {
       return;
     };
-    store.persist_recent_repository_inner(path);
-  }
-
-  pub fn persist_recent_project_root(path: &Path) {
-    let Some(store) = Self::open_with_tables() else {
-      return;
-    };
-    if path.join(".git").exists() {
-      store.persist_recent_repository_inner(path);
-    } else {
-      store.persist_recent_project_inner(path);
-    }
-  }
-
-  fn persist_recent_repository_inner(&self, path: &Path) {
-    let last_opened = SystemTime::now()
-      .duration_since(UNIX_EPOCH)
-      .unwrap_or_default()
-      .as_secs() as i64;
-    let path_string = path.to_string_lossy().to_string();
-
-    if let Err(err) = self.conn.execute(
-      &format!(
-        "INSERT INTO {} (path, last_opened) VALUES (?1, ?2)
-         ON CONFLICT(path) DO UPDATE SET last_opened = excluded.last_opened",
-        RECENT_REPOS_TABLE.name
-      ),
-      params![path_string.clone(), last_opened],
-    ) {
-      log::warn!("Failed to persist recent repository: {}", err);
-    }
-    self.forget_recent_project_path(&path_string);
-    if let Ok(canonical) = path.canonicalize() {
-      self.forget_recent_project_path(&canonical.to_string_lossy());
-    }
+    store.persist_recent_project_entry(path, RecentProjectKind::Git);
   }
 
   #[cfg(test)]
@@ -595,28 +522,63 @@ impl ConfigStore {
     let Some(store) = Self::open_with_tables() else {
       return;
     };
-    store.persist_recent_project_inner(path);
+    store.persist_recent_project_entry(path, RecentProjectKind::Plain);
   }
 
-  fn persist_recent_project_inner(&self, path: &Path) {
+  fn persist_recent_project_entry(&self, path: &Path, kind: RecentProjectKind) {
     let last_opened = SystemTime::now()
       .duration_since(UNIX_EPOCH)
       .unwrap_or_default()
       .as_secs() as i64;
-    let path = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+    let variants = Self::project_path_variants(path);
+    let path = Self::project_storage_path(path, kind);
     let path_string = path.to_string_lossy().to_string();
+    for variant in variants {
+      if variant != path_string {
+        self.forget_recent_project_path(&variant);
+      }
+    }
 
     if let Err(err) = self.conn.execute(
       &format!(
-        "INSERT INTO {} (path, last_opened) VALUES (?1, ?2)
-         ON CONFLICT(path) DO UPDATE SET last_opened = excluded.last_opened",
-        RECENT_PROJECTS_TABLE.name
+        "INSERT INTO {} (path, kind, last_opened) VALUES (?1, ?2, ?3)
+         ON CONFLICT(path) DO UPDATE SET
+           kind = excluded.kind,
+           last_opened = excluded.last_opened",
+        PROJECTS_TABLE.name
       ),
-      params![path_string.clone(), last_opened],
+      params![path_string, kind.as_storage(), last_opened],
     ) {
       log::warn!("Failed to persist recent project: {}", err);
     }
-    self.forget_recent_repository_path(&path_string);
+  }
+
+  pub fn forget_recent_project_root(path: &Path) {
+    let Some(store) = Self::open_with_tables() else {
+      return;
+    };
+    for path in Self::project_path_variants(path) {
+      store.forget_recent_project_path(&path);
+    }
+  }
+
+  #[cfg(test)]
+  pub fn forget_recent_repository(path: &Path) {
+    Self::forget_recent_project_root(path);
+  }
+
+  #[cfg(test)]
+  pub fn forget_recent_project(path: &Path) {
+    Self::forget_recent_project_root(path);
+  }
+
+  fn forget_recent_project_path(&self, path: &str) {
+    if let Err(err) = self.conn.execute(
+      &format!("DELETE FROM {} WHERE path = ?1", PROJECTS_TABLE.name),
+      params![path],
+    ) {
+      log::warn!("Failed to forget recent project: {}", err);
+    }
   }
 
   pub fn load_sidebar_projects() -> Vec<PathBuf> {
@@ -628,8 +590,8 @@ impl ConfigStore {
 
   fn load_sidebar_projects_inner(&self) -> Vec<PathBuf> {
     let mut stmt = match self.conn.prepare(&format!(
-      "SELECT path FROM {} ORDER BY position ASC",
-      SESSION_SIDEBAR_PROJECTS_TABLE.name
+      "SELECT path FROM {} WHERE sidebar_position IS NOT NULL ORDER BY sidebar_position ASC",
+      PROJECTS_TABLE.name
     )) {
       Ok(stmt) => stmt,
       Err(err) => {
@@ -662,10 +624,8 @@ impl ConfigStore {
       }
     }
 
-    if !missing_paths.is_empty() {
-      for path in &missing_paths {
-        self.forget_sidebar_project_path(path);
-      }
+    for path in missing_paths {
+      self.forget_recent_project_path(&path);
     }
 
     projects
@@ -681,16 +641,25 @@ impl ConfigStore {
   fn persist_sidebar_projects_inner(&self, paths: &[PathBuf]) {
     let applied = self.conn.execute_batch("BEGIN").and_then(|()| {
       self.conn.execute(
-        &format!("DELETE FROM {}", SESSION_SIDEBAR_PROJECTS_TABLE.name),
+        &format!("UPDATE {} SET sidebar_position = NULL", PROJECTS_TABLE.name),
         [],
       )?;
       for (position, path) in paths.iter().enumerate() {
+        let kind = Self::project_kind_for_path(path);
+        let path = Self::project_storage_path(path, kind);
         self.conn.execute(
           &format!(
-            "INSERT INTO {} (path, position) VALUES (?1, ?2)",
-            SESSION_SIDEBAR_PROJECTS_TABLE.name
+            "INSERT INTO {} (path, kind, last_opened, sidebar_position) VALUES (?1, ?2, 0, ?3)
+             ON CONFLICT(path) DO UPDATE SET
+               kind = excluded.kind,
+               sidebar_position = excluded.sidebar_position",
+            PROJECTS_TABLE.name
           ),
-          params![path.to_string_lossy().to_string(), position as i64],
+          params![
+            path.to_string_lossy().to_string(),
+            kind.as_storage(),
+            position as i64
+          ],
         )?;
       }
       self.conn.execute_batch("COMMIT")
@@ -709,19 +678,55 @@ impl ConfigStore {
     let Some(store) = Self::open_with_tables() else {
       return;
     };
-    store.forget_sidebar_project_path(&path.to_string_lossy());
+    for path in Self::project_path_variants(path) {
+      store.forget_sidebar_project_path(&path);
+    }
   }
 
   fn forget_sidebar_project_path(&self, path: &str) {
     if let Err(err) = self.conn.execute(
       &format!(
-        "DELETE FROM {} WHERE path = ?1",
-        SESSION_SIDEBAR_PROJECTS_TABLE.name
+        "UPDATE {} SET sidebar_position = NULL WHERE path = ?1",
+        PROJECTS_TABLE.name
       ),
       params![path],
     ) {
       log::warn!("Failed to forget sidebar project: {}", err);
     }
+  }
+
+  fn project_path_matches_kind(path: &Path, kind: RecentProjectKind) -> bool {
+    path.is_dir()
+      && match kind {
+        RecentProjectKind::Git => path.join(".git").exists(),
+        RecentProjectKind::Plain => !path.join(".git").exists(),
+      }
+  }
+
+  fn project_kind_for_path(path: &Path) -> RecentProjectKind {
+    if path.join(".git").exists() {
+      RecentProjectKind::Git
+    } else {
+      RecentProjectKind::Plain
+    }
+  }
+
+  fn project_storage_path(path: &Path, kind: RecentProjectKind) -> PathBuf {
+    match kind {
+      RecentProjectKind::Git => path.to_path_buf(),
+      RecentProjectKind::Plain => path.canonicalize().unwrap_or_else(|_| path.to_path_buf()),
+    }
+  }
+
+  fn project_path_variants(path: &Path) -> Vec<String> {
+    let mut paths = vec![path.to_string_lossy().to_string()];
+    if let Ok(canonical) = path.canonicalize() {
+      let canonical = canonical.to_string_lossy().to_string();
+      if !paths.contains(&canonical) {
+        paths.push(canonical);
+      }
+    }
+    paths
   }
 
   /// The merge method last used on this repository, GitHub's own memory being
@@ -1087,6 +1092,53 @@ mod tests {
   }
 
   #[test]
+  fn legacy_recent_repositories_migrate_to_project_entries() {
+    let db_path = unique_test_db_path("legacy-recent-repositories");
+    let _ = fs::remove_file(&db_path);
+    let conn = Connection::open(&db_path).expect("open legacy db");
+    conn
+      .execute(RECENT_REPOS_TABLE.create_sql, [])
+      .expect("create old recents");
+    conn
+      .execute(SESSION_SIDEBAR_PROJECTS_TABLE.create_sql, [])
+      .expect("create old sidebar order");
+    let repo = unique_test_repo_dir("legacy-recent-repository");
+    conn
+      .execute(
+        &format!(
+          "INSERT INTO {} (path, last_opened) VALUES (?1, 42)",
+          RECENT_REPOS_TABLE.name
+        ),
+        params![repo.to_string_lossy().to_string()],
+      )
+      .expect("insert legacy recent");
+    conn
+      .execute(
+        &format!(
+          "INSERT INTO {} (path, position) VALUES (?1, 0)",
+          SESSION_SIDEBAR_PROJECTS_TABLE.name
+        ),
+        params![repo.to_string_lossy().to_string()],
+      )
+      .expect("insert legacy sidebar order");
+    set_schema_version(&conn, 3).expect("set legacy schema version");
+    drop(conn);
+    ConfigStore::set_test_db_path(Some(db_path));
+
+    assert_eq!(
+      ConfigStore::load_recent_project_entries(),
+      vec![RecentProjectEntry {
+        path: repo.clone(),
+        kind: RecentProjectKind::Git,
+      }]
+    );
+    assert_eq!(ConfigStore::load_sidebar_projects(), vec![repo.clone()]);
+
+    let _ = fs::remove_dir_all(&repo);
+    ConfigStore::set_test_db_path(None);
+  }
+
+  #[test]
   fn recent_project_entries_cover_git_and_plain_projects() {
     let db_path = unique_test_db_path("recent-project-entries");
     let _ = fs::remove_file(&db_path);
@@ -1212,11 +1264,12 @@ mod tests {
 
     let repo = unique_test_repo_dir("sidebar-project-order-repo");
     let project = unique_test_project_dir("sidebar-project-order-project");
+    let canonical_project = project.canonicalize().expect("canonical project");
     ConfigStore::persist_sidebar_projects(&[project.clone(), repo.clone()]);
 
     assert_eq!(
       ConfigStore::load_sidebar_projects(),
-      vec![project.clone(), repo.clone()]
+      vec![canonical_project.clone(), repo.clone()]
     );
     ConfigStore::forget_sidebar_project(&project);
     assert_eq!(ConfigStore::load_sidebar_projects(), vec![repo.clone()]);
