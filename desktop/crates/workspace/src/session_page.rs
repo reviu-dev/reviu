@@ -422,7 +422,7 @@ impl SessionPage {
         }
         SessionListEvent::ProjectOrderChanged { project_order } => {
           this.conversation_hub.reorder(project_order);
-          ConfigStore::persist_session_sidebar_repositories(project_order);
+          ConfigStore::persist_sidebar_projects(project_order);
         }
         SessionListEvent::Collapse => this.close_sidebar(cx),
         SessionListEvent::Selected { id } => this.select_session(id, window, cx),
@@ -651,9 +651,9 @@ impl SessionPage {
     page
   }
 
-  fn initial_session_sidebar_repositories(&self) -> Vec<PathBuf> {
+  fn initial_session_sidebar_git_projects(&self) -> Vec<PathBuf> {
     let recents = ConfigStore::load_recent_repositories();
-    let mut ordered = ConfigStore::load_session_sidebar_repositories();
+    let mut ordered = ConfigStore::load_sidebar_projects();
     for recent in &recents {
       if !ordered.contains(&recent.path) {
         ordered.push(recent.path.clone());
@@ -677,15 +677,34 @@ impl SessionPage {
   }
 
   fn initial_session_sidebar_projects(&self) -> Vec<PathBuf> {
-    let mut projects = self.initial_session_sidebar_repositories();
+    let mut recents = ConfigStore::load_recent_repositories()
+      .into_iter()
+      .map(|repo| repo.path)
+      .collect::<Vec<_>>();
     for recent in ConfigStore::load_recent_projects() {
-      if !projects.contains(&recent.path) {
-        projects.push(recent.path);
+      if !recents.contains(&recent.path) {
+        recents.push(recent.path);
       }
     }
+
+    let mut ordered = ConfigStore::load_sidebar_projects();
+    for recent in &recents {
+      if !ordered.contains(recent) {
+        ordered.push(recent.clone());
+      }
+    }
+
+    let mut projects = ordered
+      .into_iter()
+      .filter(|path| recents.contains(path))
+      .take(crate::conversation_hub::MAX_TRACKED_PROJECTS)
+      .collect::<Vec<_>>();
     if let Some(project_root) = self.project_root.as_ref()
       && !projects.contains(project_root)
     {
+      if projects.len() >= crate::conversation_hub::MAX_TRACKED_PROJECTS {
+        projects.pop();
+      }
       projects.insert(0, project_root.clone());
     }
     projects
@@ -723,7 +742,7 @@ impl SessionPage {
       .store_for_project(project_root, &protected, cx)
   }
 
-  fn backfill_session_sidebar_repository(&mut self, cx: &mut Context<Self>) -> bool {
+  fn backfill_session_sidebar_git_project(&mut self, cx: &mut Context<Self>) -> bool {
     if self.conversation_hub.tracked_project_len() >= crate::conversation_hub::MAX_TRACKED_PROJECTS
     {
       return false;
@@ -736,7 +755,7 @@ impl SessionPage {
       .map(|repo| Self::canonical_repo(&repo))
       .collect();
     let Some(repo) = self
-      .initial_session_sidebar_repositories()
+      .initial_session_sidebar_git_projects()
       .into_iter()
       .find(|repo| !tracked.contains(&Self::canonical_repo(repo)))
     else {
@@ -751,7 +770,7 @@ impl SessionPage {
     {
       return false;
     }
-    let order = self.initial_session_sidebar_repositories();
+    let order = self.initial_session_sidebar_git_projects();
     self.conversation_hub.reorder(&order);
     true
   }
@@ -902,7 +921,7 @@ impl SessionPage {
   fn refresh_session_list(&mut self, cx: &mut Context<Self>) {
     let sections = self.conversation_hub.project_sections(cx);
     let mut git_repositories: HashSet<PathBuf> = self
-      .initial_session_sidebar_repositories()
+      .initial_session_sidebar_git_projects()
       .into_iter()
       .collect();
     git_repositories.extend(

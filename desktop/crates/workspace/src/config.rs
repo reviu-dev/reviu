@@ -36,7 +36,7 @@ const RECENT_PROJECTS_TABLE: ConfigTable = ConfigTable {
   create_sql: "CREATE TABLE IF NOT EXISTS recent_projects (path TEXT PRIMARY KEY, last_opened INTEGER NOT NULL)",
 };
 
-const SESSION_SIDEBAR_REPOS_TABLE: ConfigTable = ConfigTable {
+const SESSION_SIDEBAR_PROJECTS_TABLE: ConfigTable = ConfigTable {
   name: "session_sidebar_repositories",
   create_sql: "CREATE TABLE IF NOT EXISTS session_sidebar_repositories (path TEXT PRIMARY KEY, position INTEGER NOT NULL)",
 };
@@ -71,7 +71,7 @@ pub const COMMAND_USAGE_TIMESTAMP_CAP: usize = 30;
 const CONFIG_TABLES: [ConfigTable; 7] = [
   RECENT_REPOS_TABLE,
   RECENT_PROJECTS_TABLE,
-  SESSION_SIDEBAR_REPOS_TABLE,
+  SESSION_SIDEBAR_PROJECTS_TABLE,
   SETTINGS_TABLE,
   SHORTCUT_OVERRIDES_TABLE,
   COMMAND_USAGES_TABLE,
@@ -138,7 +138,7 @@ fn migrate_v2_merge_methods(conn: &Connection) -> rusqlite::Result<()> {
 }
 
 fn migrate_v3_session_sidebar_repositories(conn: &Connection) -> rusqlite::Result<()> {
-  conn.execute(SESSION_SIDEBAR_REPOS_TABLE.create_sql, [])?;
+  conn.execute(SESSION_SIDEBAR_PROJECTS_TABLE.create_sql, [])?;
   Ok(())
 }
 
@@ -467,7 +467,7 @@ impl ConfigStore {
     ) {
       log::warn!("Failed to forget recent repository: {}", err);
     }
-    self.forget_session_sidebar_repository_path(path);
+    self.forget_sidebar_project_path(path);
   }
 
   pub fn forget_recent_project(path: &Path) {
@@ -485,7 +485,7 @@ impl ConfigStore {
     ) {
       log::warn!("Failed to forget recent project: {}", err);
     }
-    self.forget_session_sidebar_repository_path(path);
+    self.forget_sidebar_project_path(path);
   }
 
   pub fn persist_recent_repository(path: &Path) {
@@ -546,21 +546,21 @@ impl ConfigStore {
     self.forget_recent_repository_path(&path_string);
   }
 
-  pub fn load_session_sidebar_repositories() -> Vec<PathBuf> {
+  pub fn load_sidebar_projects() -> Vec<PathBuf> {
     let Some(store) = Self::open_with_tables() else {
       return Vec::new();
     };
-    store.load_session_sidebar_repositories_inner()
+    store.load_sidebar_projects_inner()
   }
 
-  fn load_session_sidebar_repositories_inner(&self) -> Vec<PathBuf> {
+  fn load_sidebar_projects_inner(&self) -> Vec<PathBuf> {
     let mut stmt = match self.conn.prepare(&format!(
       "SELECT path FROM {} ORDER BY position ASC",
-      SESSION_SIDEBAR_REPOS_TABLE.name
+      SESSION_SIDEBAR_PROJECTS_TABLE.name
     )) {
       Ok(stmt) => stmt,
       Err(err) => {
-        log::warn!("Failed to load session sidebar repositories: {}", err);
+        log::warn!("Failed to load sidebar projects: {}", err);
         return Vec::new();
       }
     };
@@ -568,54 +568,54 @@ impl ConfigStore {
     let rows = match stmt.query_map([], |row| row.get::<_, String>(0)) {
       Ok(rows) => rows,
       Err(err) => {
-        log::warn!("Failed to read session sidebar repositories: {}", err);
+        log::warn!("Failed to read sidebar projects: {}", err);
         return Vec::new();
       }
     };
 
-    let mut repositories = Vec::new();
+    let mut projects = Vec::new();
     let mut missing_paths = Vec::new();
     for row in rows {
       match row {
         Ok(path_string) => {
           let path = PathBuf::from(&path_string);
-          if path.is_dir() && path.join(".git").exists() {
-            repositories.push(path);
+          if path.is_dir() {
+            projects.push(path);
           } else {
             missing_paths.push(path_string);
           }
         }
-        Err(err) => log::warn!("Failed to decode session sidebar repository row: {}", err),
+        Err(err) => log::warn!("Failed to decode sidebar project row: {}", err),
       }
     }
 
     if !missing_paths.is_empty() {
       for path in &missing_paths {
-        self.forget_session_sidebar_repository_path(path);
+        self.forget_sidebar_project_path(path);
       }
     }
 
-    repositories
+    projects
   }
 
-  pub fn persist_session_sidebar_repositories(paths: &[PathBuf]) {
+  pub fn persist_sidebar_projects(paths: &[PathBuf]) {
     let Some(store) = Self::open_with_tables() else {
       return;
     };
-    store.persist_session_sidebar_repositories_inner(paths);
+    store.persist_sidebar_projects_inner(paths);
   }
 
-  fn persist_session_sidebar_repositories_inner(&self, paths: &[PathBuf]) {
+  fn persist_sidebar_projects_inner(&self, paths: &[PathBuf]) {
     let applied = self.conn.execute_batch("BEGIN").and_then(|()| {
       self.conn.execute(
-        &format!("DELETE FROM {}", SESSION_SIDEBAR_REPOS_TABLE.name),
+        &format!("DELETE FROM {}", SESSION_SIDEBAR_PROJECTS_TABLE.name),
         [],
       )?;
       for (position, path) in paths.iter().enumerate() {
         self.conn.execute(
           &format!(
             "INSERT INTO {} (path, position) VALUES (?1, ?2)",
-            SESSION_SIDEBAR_REPOS_TABLE.name
+            SESSION_SIDEBAR_PROJECTS_TABLE.name
           ),
           params![path.to_string_lossy().to_string(), position as i64],
         )?;
@@ -627,20 +627,27 @@ impl ConfigStore {
       self
         .conn
         .execute_batch("ROLLBACK")
-        .log_err_context("rolling back a failed session sidebar repository write");
-      log::warn!("Failed to persist session sidebar repositories: {}", err);
+        .log_err_context("rolling back a failed sidebar project write");
+      log::warn!("Failed to persist sidebar projects: {}", err);
     }
   }
 
-  fn forget_session_sidebar_repository_path(&self, path: &str) {
+  pub fn forget_sidebar_project(path: &Path) {
+    let Some(store) = Self::open_with_tables() else {
+      return;
+    };
+    store.forget_sidebar_project_path(&path.to_string_lossy());
+  }
+
+  fn forget_sidebar_project_path(&self, path: &str) {
     if let Err(err) = self.conn.execute(
       &format!(
         "DELETE FROM {} WHERE path = ?1",
-        SESSION_SIDEBAR_REPOS_TABLE.name
+        SESSION_SIDEBAR_PROJECTS_TABLE.name
       ),
       params![path],
     ) {
-      log::warn!("Failed to forget session sidebar repository: {}", err);
+      log::warn!("Failed to forget sidebar project: {}", err);
     }
   }
 
@@ -1093,28 +1100,27 @@ mod tests {
   }
 
   #[test]
-  fn session_sidebar_repository_order_round_trips_and_forget_removes_it() {
-    let db_path = unique_test_db_path("session-sidebar-order");
+  fn sidebar_project_order_round_trips_and_forget_removes_it() {
+    let db_path = unique_test_db_path("sidebar-project-order");
     let _ = fs::remove_file(&db_path);
     ConfigStore::set_test_db_path(Some(db_path));
 
-    let repo_a = unique_test_repo_dir("session-sidebar-order-a");
-    let repo_b = unique_test_repo_dir("session-sidebar-order-b");
-    ConfigStore::persist_session_sidebar_repositories(&[repo_b.clone(), repo_a.clone()]);
+    let repo = unique_test_repo_dir("sidebar-project-order-repo");
+    let project = unique_test_project_dir("sidebar-project-order-project");
+    ConfigStore::persist_sidebar_projects(&[project.clone(), repo.clone()]);
 
     assert_eq!(
-      ConfigStore::load_session_sidebar_repositories(),
-      vec![repo_b.clone(), repo_a.clone()]
+      ConfigStore::load_sidebar_projects(),
+      vec![project.clone(), repo.clone()]
     );
+    ConfigStore::forget_sidebar_project(&project);
+    assert_eq!(ConfigStore::load_sidebar_projects(), vec![repo.clone()]);
 
-    ConfigStore::forget_recent_repository(&repo_b);
-    assert_eq!(
-      ConfigStore::load_session_sidebar_repositories(),
-      vec![repo_a.clone()]
-    );
+    ConfigStore::forget_recent_repository(&repo);
+    assert!(ConfigStore::load_sidebar_projects().is_empty());
 
-    let _ = fs::remove_dir_all(&repo_a);
-    let _ = fs::remove_dir_all(&repo_b);
+    let _ = fs::remove_dir_all(&repo);
+    let _ = fs::remove_dir_all(&project);
     ConfigStore::set_test_db_path(None);
   }
 

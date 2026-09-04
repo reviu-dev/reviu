@@ -201,6 +201,7 @@ impl SessionPage {
         && self.project_root.as_deref() == Some(project_root.as_path()));
     if forgetting_plain_project {
       ConfigStore::forget_recent_project(&project_root);
+      ConfigStore::forget_sidebar_project(&project_root);
       self
         .background_chat_panels
         .retain(|(_, panel)| panel.read(cx).project_root() != project_root.as_path());
@@ -237,6 +238,7 @@ impl SessionPage {
     }
 
     ConfigStore::forget_recent_repository(&repo_root);
+    ConfigStore::forget_sidebar_project(&repo_root);
     // Its sessions stop here (conversations stay on disk); a forgotten repo
     // keeps nothing running.
     let mut doomed_panels: Vec<Entity<AgentChatPanel>> = Vec::new();
@@ -263,7 +265,7 @@ impl SessionPage {
 
     let forgetting_fallback = self.fallback_repo.as_deref() == Some(repo_root.as_path());
     if !forgetting_fallback {
-      let _ = self.backfill_session_sidebar_repository(cx);
+      let _ = self.backfill_session_sidebar_git_project(cx);
       // The shown session may have gone with the repo: a fresh fallback-repo
       // session takes over so the centre and the git surfaces never point at
       // a dead checkout.
@@ -283,7 +285,7 @@ impl SessionPage {
       .map(|repo| repo.path)
       .find(|path| path != &repo_root);
     self.apply_fallback_repo(next_repo, window, cx);
-    if self.backfill_session_sidebar_repository(cx) {
+    if self.backfill_session_sidebar_git_project(cx) {
       self.refresh_session_list(cx);
       cx.notify();
     }
