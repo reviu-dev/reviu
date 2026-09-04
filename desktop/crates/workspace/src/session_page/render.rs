@@ -736,11 +736,7 @@ impl SessionPage {
         let previous_active_tab = self.active_center_tab.clone();
         self.center = CenterView::Diff;
         self.active_center_tab = Some(tab.clone());
-        let view = if self.diff_chat_open {
-          self.render_conversation_diff_split(window, cx)
-        } else {
-          self.render_diff_view(window, cx)
-        };
+        let view = self.render_diff_view(window, cx);
         self.center = previous_center;
         self.active_center_tab = previous_active_tab;
         view
@@ -749,6 +745,9 @@ impl SessionPage {
   }
 
   fn render_center_drop_overlay(&self, cx: &mut Context<Self>) -> AnyElement {
+    let Some(direction) = self.center_drag_direction else {
+      return gpui::Empty.into_any_element();
+    };
     let half = gpui::DefiniteLength::Fraction(0.5);
     div()
       .debug_selector(|| CENTER_DROP_TARGET_DEBUG_SELECTOR.to_string())
@@ -756,12 +755,11 @@ impl SessionPage {
       .absolute()
       .bg(cx.theme().drop_target)
       .group_drag_over::<DraggedCenterTab>(CENTER_DROP_GROUP, |this| this.visible())
-      .map(|this| match self.center_drag_direction {
-        Some(CenterSplitDirection::Up) => this.top_0().left_0().right_0().h(half),
-        Some(CenterSplitDirection::Down) => this.left_0().bottom_0().right_0().h(half),
-        Some(CenterSplitDirection::Left) => this.top_0().left_0().bottom_0().w(half),
-        Some(CenterSplitDirection::Right) => this.top_0().bottom_0().right_0().w(half),
-        None => this.top_0().right_0().bottom_0().left_0(),
+      .map(|this| match direction {
+        CenterSplitDirection::Up => this.top_0().left_0().right_0().h(half),
+        CenterSplitDirection::Down => this.left_0().bottom_0().right_0().h(half),
+        CenterSplitDirection::Left => this.top_0().left_0().bottom_0().w(half),
+        CenterSplitDirection::Right => this.top_0().bottom_0().right_0().w(half),
       })
       .on_drop(cx.listener(|this, drag: &DraggedCenterTab, window, cx| {
         this.drop_center_tab(drag.tab.clone(), window, cx);
@@ -778,9 +776,11 @@ impl SessionPage {
   }
 
   fn drop_center_tab(&mut self, tab: CenterTab, window: &mut Window, cx: &mut Context<Self>) {
-    let direction = self.center_drag_direction.take();
-    if let Some(direction) = direction
-      && !self.center_layout.contains_tab(&tab)
+    let Some(direction) = self.center_drag_direction.take() else {
+      cx.notify();
+      return;
+    };
+    if !self.center_layout.contains_tab(&tab)
       && self
         .center_layout
         .split_active(CenterSurface::from_tab(tab.clone()), direction)
@@ -793,40 +793,6 @@ impl SessionPage {
     }
 
     self.activate_center_tab(tab, OpenIntent::Open, window, cx);
-  }
-
-  pub(super) fn render_conversation_diff_split(
-    &mut self,
-    window: &mut Window,
-    cx: &mut Context<Self>,
-  ) -> AnyElement {
-    let theme = cx.theme().clone();
-    h_flex()
-      .id("session-conversation-diff-split")
-      .size_full()
-      .min_w(px(0.0))
-      .min_h_0()
-      .child(
-        div()
-          .relative()
-          .flex_none()
-          .w(px(self.conversation_split_width))
-          .h_full()
-          .min_w(px(CONVERSATION_SPLIT_MIN_WIDTH))
-          .max_w(px(CONVERSATION_SPLIT_MAX_WIDTH))
-          .border_r_1()
-          .border_color(theme.border)
-          .child(self.render_conversation(cx))
-          .child(self.render_conversation_split_resize_handle(cx)),
-      )
-      .child(
-        div()
-          .flex_1()
-          .min_w(px(0.0))
-          .h_full()
-          .child(self.render_diff_view(window, cx)),
-      )
-      .into_any_element()
   }
 
   pub(super) fn render_conversation(&mut self, cx: &mut Context<Self>) -> AnyElement {
@@ -1154,8 +1120,6 @@ impl SessionPage {
 
 pub(super) const DOCK_RESIZE_HANDLE_DEBUG_SELECTOR: &str = "session-dock-resize-handle";
 pub(super) const SIDEBAR_RESIZE_HANDLE_DEBUG_SELECTOR: &str = "session-sidebar-resize-handle";
-pub(super) const CONVERSATION_SPLIT_RESIZE_HANDLE_DEBUG_SELECTOR: &str =
-  "session-conversation-diff-resize-handle";
 const CENTER_CONTENT_DEBUG_SELECTOR: &str = "session-center-content";
 const CENTER_DROP_TARGET_DEBUG_SELECTOR: &str = "session-center-drop-target";
 const CENTER_DROP_GROUP: &str = "session-center-drop";
@@ -1173,7 +1137,6 @@ enum PanelSide {
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum ResizeTarget {
   SidePanel(PanelSide),
-  ConversationSplit,
 }
 
 /// Payload of a resize drag; the ghost renders nothing.
@@ -1269,37 +1232,6 @@ impl SessionPage {
       PanelSide::Right => handle.left(px(-2.0)),
     })
     .into_any_element()
-  }
-
-  fn render_conversation_split_resize_handle(&self, cx: &mut Context<Self>) -> AnyElement {
-    let theme = cx.theme().clone();
-    let handle = div()
-      .id("session-conversation-diff-resize-handle")
-      .debug_selector(|| CONVERSATION_SPLIT_RESIZE_HANDLE_DEBUG_SELECTOR.to_string())
-      .absolute()
-      .top_0()
-      .w(px(5.0))
-      .h_full()
-      .occlude()
-      .cursor_col_resize()
-      .hover(|this| this.bg(theme.border))
-      .on_drag(
-        DraggedPanel(ResizeTarget::ConversationSplit),
-        move |_, _, _, cx| {
-          cx.stop_propagation();
-          cx.new(|_| DraggedPanel(ResizeTarget::ConversationSplit))
-        },
-      )
-      .on_mouse_up(
-        gpui::MouseButton::Left,
-        cx.listener(move |this, event: &gpui::MouseUpEvent, _, cx| {
-          if event.click_count == 2 {
-            this.resize_conversation_split(CONVERSATION_SPLIT_DEFAULT_WIDTH, cx);
-            cx.stop_propagation();
-          }
-        }),
-      );
-    gpui::deferred(handle.right(px(-2.0))).into_any_element()
   }
 
   /// A side panel that slides between its width and its icon rail. The rail
@@ -1596,14 +1528,6 @@ impl Render for SessionPage {
             // The permanent rail sits between the panel and the window edge.
             let width = window.viewport_size().width - event.event.position.x - px(SIDE_RAIL_WIDTH);
             this.resize_dock(f32::from(width), cx);
-          }
-          ResizeTarget::ConversationSplit => {
-            let center_left = if this.sidebar_open {
-              this.sidebar_width
-            } else {
-              SIDE_RAIL_WIDTH
-            };
-            this.resize_conversation_split(f32::from(event.event.position.x) - center_left, cx);
           }
         },
       ))
@@ -4559,7 +4483,7 @@ mod tests {
     assert!(cx.debug_bounds("session-diff-editor").is_some());
     assert!(cx.debug_bounds("session-conversation-pane").is_none());
     assert!(
-      cx.debug_bounds(CONVERSATION_SPLIT_RESIZE_HANDLE_DEBUG_SELECTOR)
+      cx.debug_bounds("session-conversation-diff-resize-handle")
         .is_none()
     );
   }
@@ -4584,6 +4508,7 @@ mod tests {
     await_open_file(&page, cx).await;
 
     page.update(cx, |page, cx| {
+      page.diff_chat_open = true;
       assert!(page.center_layout.split_active(
         CenterSurface::from_tab(CenterTab::chat()),
         CenterSplitDirection::Left,
@@ -4593,6 +4518,10 @@ mod tests {
     });
     cx.run_until_parked();
 
+    assert!(
+      cx.debug_bounds("session-conversation-diff-resize-handle")
+        .is_none()
+    );
     let conversation = cx
       .debug_bounds("session-conversation-pane")
       .expect("conversation pane");
@@ -4601,6 +4530,71 @@ mod tests {
       conversation.right() <= editor.left() + px(1.0),
       "conversation should render left of the editor: {conversation:?} vs {editor:?}"
     );
+  }
+
+  #[gpui::test]
+  async fn dragging_a_center_tab_to_the_middle_shows_no_split_target(cx: &mut TestAppContext) {
+    let repo = TempRepo::init("session-center-tab-drag-middle");
+    commit_text_file(&repo.path, Path::new("README.md"), "v1\n", "initial");
+    std::fs::write(repo.path.join("README.md"), "v2\n").expect("modify file");
+    let (page, cx) = add_session_page_window(repo.path.clone(), cx);
+    cx.run_until_parked();
+
+    page.update_in(cx, |page, window, cx| {
+      page.open_diff(
+        PathBuf::from("README.md"),
+        None,
+        OpenIntent::Open,
+        window,
+        cx,
+      );
+    });
+    await_open_file(&page, cx).await;
+    page.update_in(cx, |page, window, cx| {
+      page.activate_center_tab(CenterTab::chat(), OpenIntent::Open, window, cx);
+    });
+    cx.run_until_parked();
+
+    let tab = cx
+      .debug_bounds("session-center-tab-diff-README.md")
+      .expect("diff tab");
+    let center = cx
+      .debug_bounds(CENTER_CONTENT_DEBUG_SELECTOR)
+      .expect("center content");
+    let from = tab.center();
+    let to = center.center();
+
+    cx.simulate_event(gpui::MouseDownEvent {
+      position: from,
+      button: gpui::MouseButton::Left,
+      modifiers: gpui::Modifiers::default(),
+      click_count: 1,
+      first_mouse: false,
+    });
+    cx.simulate_event(gpui::MouseMoveEvent {
+      position: gpui::point(from.x + px(10.0), from.y),
+      pressed_button: Some(gpui::MouseButton::Left),
+      modifiers: gpui::Modifiers::default(),
+    });
+    cx.simulate_event(gpui::MouseMoveEvent {
+      position: to,
+      pressed_button: Some(gpui::MouseButton::Left),
+      modifiers: gpui::Modifiers::default(),
+    });
+    cx.run_until_parked();
+
+    assert!(cx.debug_bounds(CENTER_DROP_TARGET_DEBUG_SELECTOR).is_none());
+
+    cx.simulate_event(gpui::MouseUpEvent {
+      position: to,
+      button: gpui::MouseButton::Left,
+      modifiers: gpui::Modifiers::default(),
+      click_count: 1,
+    });
+    cx.run_until_parked();
+
+    assert!(cx.debug_bounds("session-conversation-pane").is_some());
+    assert!(cx.debug_bounds("session-diff-editor").is_none());
   }
 
   #[gpui::test]
