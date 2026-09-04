@@ -1092,6 +1092,7 @@ impl Render for SessionList {
     let now = now_secs();
 
     let header = h_flex()
+      .debug_selector(|| "session-sidebar-header".to_string())
       .h(px(40.))
       .min_h(px(40.))
       .max_h(px(40.))

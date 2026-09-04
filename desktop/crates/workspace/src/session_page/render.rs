@@ -557,6 +557,7 @@ impl SessionPage {
     let selectable_tabs = tabs.clone();
     let mut tab_bar = TabBar::new(id.clone())
       .w_full()
+      .h_full()
       .underline()
       .menu(true)
       .selected_index(selected_index)
@@ -660,6 +661,10 @@ impl SessionPage {
     div()
       .id(format!("{id}-wrap"))
       .debug_selector(|| "session-center-tabs".to_string())
+      .h(px(40.0))
+      .min_h(px(40.0))
+      .max_h(px(40.0))
+      .flex_shrink_0()
       .border_b_1()
       .border_color(cx.theme().border)
       .bg(cx.theme().background)
@@ -3506,6 +3511,24 @@ mod tests {
       std::fs::read_to_string(repo.path.join("a.txt")).expect("read file"),
       "v1\n"
     );
+  }
+
+  #[gpui::test]
+  async fn center_tabs_align_with_side_panel_headers(cx: &mut TestAppContext) {
+    let repo = TempRepo::init("session-render-header-alignment");
+    let (_page, cx) = add_session_page_window(repo.path.clone(), cx);
+    cx.run_until_parked();
+
+    let sidebar_header = cx
+      .debug_bounds("session-sidebar-header")
+      .expect("sidebar header");
+    let center_tabs = cx.debug_bounds("session-center-tabs").expect("center tabs");
+    let dock_header = cx.debug_bounds("dock-panel-header").expect("dock header");
+
+    assert_eq!(center_tabs.origin.y, sidebar_header.origin.y);
+    assert_eq!(center_tabs.origin.y, dock_header.origin.y);
+    assert_eq!(center_tabs.size.height, sidebar_header.size.height);
+    assert_eq!(center_tabs.size.height, dock_header.size.height);
   }
 
   #[gpui::test]

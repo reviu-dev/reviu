@@ -3722,6 +3722,7 @@ impl Render for DockPanel {
     let theme = cx.theme().clone();
 
     let header = h_flex()
+      .debug_selector(|| "dock-panel-header".to_string())
       .h(px(40.))
       .min_h(px(40.))
       .max_h(px(40.))
