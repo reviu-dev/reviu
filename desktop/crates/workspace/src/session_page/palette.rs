@@ -4,19 +4,16 @@ use super::*;
 
 impl SessionPage {
   pub(super) fn palette_projects(&self) -> Vec<CommandPaletteProject> {
-    let mut projects = ConfigStore::load_recent_repositories()
+    let mut projects = ConfigStore::load_recent_project_entries()
       .into_iter()
-      .map(|repo| CommandPaletteProject {
-        path: repo.path.to_string_lossy().replace(['\n', '\r'], "").into(),
+      .map(|project| CommandPaletteProject {
+        path: project
+          .path
+          .to_string_lossy()
+          .replace(['\n', '\r'], "")
+          .into(),
       })
       .collect::<Vec<_>>();
-
-    for project in ConfigStore::load_recent_projects() {
-      let path = project.path.to_string_lossy().replace(['\n', '\r'], "");
-      if !projects.iter().any(|project| project.path.as_ref() == path) {
-        projects.push(CommandPaletteProject { path: path.into() });
-      }
-    }
 
     if let Some(project_root) = self.project_root.as_ref() {
       let selected = project_root.to_string_lossy().replace(['\n', '\r'], "");

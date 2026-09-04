@@ -75,7 +75,7 @@ impl SessionPage {
     if !project_root.is_dir() {
       return Err(format!("Project not found: {}", project_root.display()).into());
     }
-    ConfigStore::persist_recent_project(&project_root);
+    ConfigStore::persist_recent_project_root(&project_root);
     self.park_active_chat_panel(cx);
     self.agent_chat_view = None;
     self.chat_store = None;
@@ -94,7 +94,7 @@ impl SessionPage {
     window: &mut Window,
     cx: &mut Context<Self>,
   ) -> Result<(), SharedString> {
-    ConfigStore::persist_recent_repository(&repo_root);
+    ConfigStore::persist_recent_project_root(&repo_root);
     self.apply_fallback_repo(Some(repo_root.clone()), window, cx);
     // Switching repository means going to work there: reopen the session you
     // left active in it, or open a blank one so the screen, the git surfaces
@@ -193,14 +193,14 @@ impl SessionPage {
     let project_root = repo_root
       .canonicalize()
       .unwrap_or_else(|_| repo_root.clone());
-    let is_recent_plain_project = ConfigStore::load_recent_projects()
+    let is_recent_plain_project = ConfigStore::load_recent_project_entries()
       .iter()
-      .any(|recent| recent.path == project_root);
+      .any(|recent| recent.kind == RecentProjectKind::Plain && recent.path == project_root);
     let forgetting_plain_project = is_recent_plain_project
       || (self.fallback_repo.is_none()
         && self.project_root.as_deref() == Some(project_root.as_path()));
     if forgetting_plain_project {
-      ConfigStore::forget_recent_project(&project_root);
+      ConfigStore::forget_recent_project_root(&project_root);
       ConfigStore::forget_sidebar_project(&project_root);
       self
         .background_chat_panels
@@ -216,16 +216,17 @@ impl SessionPage {
         self.project_root = None;
         self.checkout_override = None;
         self.chat_store = None;
-        if let Some(next_repo) = ConfigStore::load_recent_repositories()
-          .into_iter()
-          .map(|repo| repo.path)
-          .next()
+        let recents = ConfigStore::load_recent_project_entries();
+        if let Some(next_repo) = recents
+          .iter()
+          .find(|project| project.kind == RecentProjectKind::Git)
+          .map(|project| project.path.clone())
         {
           self.apply_fallback_repo(Some(next_repo), window, cx);
-        } else if let Some(next_project) = ConfigStore::load_recent_projects()
-          .into_iter()
-          .map(|project| project.path)
-          .next()
+        } else if let Some(next_project) = recents
+          .iter()
+          .find(|project| project.kind == RecentProjectKind::Plain)
+          .map(|project| project.path.clone())
         {
           self.set_project_root_without_unsaved_prompt(next_project, window, cx)?;
         } else {
@@ -237,7 +238,7 @@ impl SessionPage {
       return Ok(());
     }
 
-    ConfigStore::forget_recent_repository(&repo_root);
+    ConfigStore::forget_recent_project_root(&repo_root);
     ConfigStore::forget_sidebar_project(&repo_root);
     // Its sessions stop here (conversations stay on disk); a forgotten repo
     // keeps nothing running.
@@ -280,9 +281,10 @@ impl SessionPage {
       return Ok(());
     }
 
-    let next_repo = ConfigStore::load_recent_repositories()
+    let next_repo = ConfigStore::load_recent_project_entries()
       .into_iter()
-      .map(|repo| repo.path)
+      .filter(|project| project.kind == RecentProjectKind::Git)
+      .map(|project| project.path)
       .find(|path| path != &repo_root);
     self.apply_fallback_repo(next_repo, window, cx);
     if self.backfill_session_sidebar_git_project(cx) {

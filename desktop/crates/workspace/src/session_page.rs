@@ -37,7 +37,7 @@ use crate::agent_review::{
 use crate::agent_review_store::{read_review, review_path_for_repo, write_review};
 use crate::agent_settings::AgentSettings;
 use crate::auth_state::AuthStateStore;
-use crate::config::ConfigStore;
+use crate::config::{ConfigStore, RecentProjectKind};
 use crate::conversation_hub::{ConversationHub, ConversationStoreAccess};
 use crate::diff_view_policy::{DiffViewInputs, effective_diff_view};
 use crate::dock_panel::{
@@ -363,12 +363,15 @@ pub(crate) mod test_support;
 
 impl SessionPage {
   pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
-    let fallback_repo = ConfigStore::load_recent_repositories()
-      .first()
-      .map(|repo| repo.path.clone());
+    let recent_projects = ConfigStore::load_recent_project_entries();
+    let fallback_repo = recent_projects
+      .iter()
+      .find(|project| project.kind == RecentProjectKind::Git)
+      .map(|project| project.path.clone());
     let project_root = fallback_repo.clone().or_else(|| {
-      ConfigStore::load_recent_projects()
-        .first()
+      recent_projects
+        .iter()
+        .find(|project| project.kind == RecentProjectKind::Plain)
         .map(|project| project.path.clone())
     });
     let dock_panel = cx.new(|cx| DockPanel::new(fallback_repo.clone(), window, cx));
@@ -652,17 +655,21 @@ impl SessionPage {
   }
 
   fn initial_session_sidebar_git_projects(&self) -> Vec<PathBuf> {
-    let recents = ConfigStore::load_recent_repositories();
+    let recents = ConfigStore::load_recent_project_entries()
+      .into_iter()
+      .filter(|project| project.kind == RecentProjectKind::Git)
+      .map(|project| project.path)
+      .collect::<Vec<_>>();
     let mut ordered = ConfigStore::load_sidebar_projects();
     for recent in &recents {
-      if !ordered.contains(&recent.path) {
-        ordered.push(recent.path.clone());
+      if !ordered.contains(recent) {
+        ordered.push(recent.clone());
       }
     }
 
     let mut visible: Vec<PathBuf> = ordered
       .into_iter()
-      .filter(|path| recents.iter().any(|recent| recent.path == *path))
+      .filter(|path| recents.contains(path))
       .take(crate::conversation_hub::MAX_TRACKED_PROJECTS)
       .collect();
     if let Some(fallback_repo) = self.fallback_repo.as_ref()
@@ -677,15 +684,10 @@ impl SessionPage {
   }
 
   fn initial_session_sidebar_projects(&self) -> Vec<PathBuf> {
-    let mut recents = ConfigStore::load_recent_repositories()
+    let recents = ConfigStore::load_recent_project_entries()
       .into_iter()
-      .map(|repo| repo.path)
+      .map(|project| project.path)
       .collect::<Vec<_>>();
-    for recent in ConfigStore::load_recent_projects() {
-      if !recents.contains(&recent.path) {
-        recents.push(recent.path);
-      }
-    }
 
     let mut ordered = ConfigStore::load_sidebar_projects();
     for recent in &recents {

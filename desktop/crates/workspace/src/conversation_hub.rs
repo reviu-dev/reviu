@@ -71,18 +71,11 @@ impl ConversationHub {
   }
 
   fn eviction_candidate(&self, protected_projects: &HashSet<PathBuf>) -> Option<usize> {
-    let mut recent_positions: HashMap<PathBuf, usize> = ConfigStore::load_recent_repositories()
+    let recent_positions: HashMap<PathBuf, usize> = ConfigStore::load_recent_project_entries()
       .into_iter()
       .enumerate()
-      .map(|(index, repo)| (canonical(&repo.path), index))
+      .map(|(index, project)| (canonical(&project.path), index))
       .collect();
-    let offset = recent_positions.len();
-    recent_positions.extend(
-      ConfigStore::load_recent_projects()
-        .into_iter()
-        .enumerate()
-        .map(|(index, project)| (canonical(&project.path), offset + index)),
-    );
 
     self
       .stores

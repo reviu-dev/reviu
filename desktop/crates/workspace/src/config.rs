@@ -247,6 +247,18 @@ pub struct RecentProject {
   pub path: PathBuf,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RecentProjectKind {
+  Git,
+  Plain,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RecentProjectEntry {
+  pub path: PathBuf,
+  pub kind: RecentProjectKind,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct AppSettings {
   pub auto_switch_theme: bool,
@@ -347,6 +359,7 @@ impl ConfigStore {
     Some(store)
   }
 
+  #[cfg(test)]
   pub fn load_recent_repositories() -> Vec<RecentRepository> {
     let Some(store) = Self::open_with_tables() else {
       return Vec::new();
@@ -401,11 +414,39 @@ impl ConfigStore {
     repositories
   }
 
+  #[cfg(test)]
   pub fn load_recent_projects() -> Vec<RecentProject> {
     let Some(store) = Self::open_with_tables() else {
       return Vec::new();
     };
     store.load_recent_projects_inner()
+  }
+
+  pub fn load_recent_project_entries() -> Vec<RecentProjectEntry> {
+    let Some(store) = Self::open_with_tables() else {
+      return Vec::new();
+    };
+    store.load_recent_project_entries_inner()
+  }
+
+  fn load_recent_project_entries_inner(&self) -> Vec<RecentProjectEntry> {
+    let mut entries = self
+      .load_recent_repositories_inner()
+      .into_iter()
+      .map(|repo| RecentProjectEntry {
+        path: repo.path,
+        kind: RecentProjectKind::Git,
+      })
+      .collect::<Vec<_>>();
+    for project in self.load_recent_projects_inner() {
+      if !entries.iter().any(|entry| entry.path == project.path) {
+        entries.push(RecentProjectEntry {
+          path: project.path,
+          kind: RecentProjectKind::Plain,
+        });
+      }
+    }
+    entries
   }
 
   fn load_recent_projects_inner(&self) -> Vec<RecentProject> {
@@ -453,11 +494,29 @@ impl ConfigStore {
     projects
   }
 
+  #[cfg(test)]
   pub fn forget_recent_repository(path: &Path) {
     let Some(store) = Self::open_with_tables() else {
       return;
     };
     store.forget_recent_repository_path(&path.to_string_lossy());
+  }
+
+  pub fn forget_recent_project_root(path: &Path) {
+    let Some(store) = Self::open_with_tables() else {
+      return;
+    };
+    let mut paths = vec![path.to_string_lossy().to_string()];
+    if let Ok(canonical) = path.canonicalize() {
+      let canonical = canonical.to_string_lossy().to_string();
+      if !paths.contains(&canonical) {
+        paths.push(canonical);
+      }
+    }
+    for path in paths {
+      store.forget_recent_repository_path(&path);
+      store.forget_recent_project_path(&path);
+    }
   }
 
   fn forget_recent_repository_path(&self, path: &str) {
@@ -470,6 +529,7 @@ impl ConfigStore {
     self.forget_sidebar_project_path(path);
   }
 
+  #[cfg(test)]
   pub fn forget_recent_project(path: &Path) {
     let Some(store) = Self::open_with_tables() else {
       return;
@@ -488,11 +548,23 @@ impl ConfigStore {
     self.forget_sidebar_project_path(path);
   }
 
+  #[cfg(test)]
   pub fn persist_recent_repository(path: &Path) {
     let Some(store) = Self::open_with_tables() else {
       return;
     };
     store.persist_recent_repository_inner(path);
+  }
+
+  pub fn persist_recent_project_root(path: &Path) {
+    let Some(store) = Self::open_with_tables() else {
+      return;
+    };
+    if path.join(".git").exists() {
+      store.persist_recent_repository_inner(path);
+    } else {
+      store.persist_recent_project_inner(path);
+    }
   }
 
   fn persist_recent_repository_inner(&self, path: &Path) {
@@ -518,6 +590,7 @@ impl ConfigStore {
     }
   }
 
+  #[cfg(test)]
   pub fn persist_recent_project(path: &Path) {
     let Some(store) = Self::open_with_tables() else {
       return;
@@ -1007,6 +1080,38 @@ mod tests {
 
     ConfigStore::persist_recent_repository(&project);
     assert!(ConfigStore::load_recent_projects().is_empty());
+
+    let _ = fs::remove_dir_all(&project);
+    let _ = fs::remove_dir_all(&repo);
+    ConfigStore::set_test_db_path(None);
+  }
+
+  #[test]
+  fn recent_project_entries_cover_git_and_plain_projects() {
+    let db_path = unique_test_db_path("recent-project-entries");
+    let _ = fs::remove_file(&db_path);
+    ConfigStore::set_test_db_path(Some(db_path));
+
+    let project = unique_test_project_dir("recent-project-entry-project");
+    let repo = unique_test_repo_dir("recent-project-entry-repo");
+    let canonical_project = project.canonicalize().expect("canonical project");
+    ConfigStore::persist_recent_project_root(&project);
+    ConfigStore::persist_recent_project_root(&repo);
+
+    let entries = ConfigStore::load_recent_project_entries();
+    assert!(entries.contains(&RecentProjectEntry {
+      path: repo.clone(),
+      kind: RecentProjectKind::Git,
+    }));
+    assert!(entries.contains(&RecentProjectEntry {
+      path: canonical_project.clone(),
+      kind: RecentProjectKind::Plain,
+    }));
+
+    ConfigStore::forget_recent_project_root(&project);
+    let entries = ConfigStore::load_recent_project_entries();
+    assert!(!entries.iter().any(|entry| entry.path == canonical_project));
+    assert!(entries.iter().any(|entry| entry.path == repo));
 
     let _ = fs::remove_dir_all(&project);
     let _ = fs::remove_dir_all(&repo);
