@@ -441,10 +441,16 @@ impl SessionPage {
   }
 
   fn center_tab_icon_sources(&self, tab: &CenterTab) -> Vec<CenterTab> {
-    self
+    let mut tabs = self
       .center_tab_group_layout(tab)
       .map(CenterLayout::tabs)
-      .unwrap_or_else(|| vec![tab.clone()])
+      .unwrap_or_else(|| vec![tab.clone()]);
+    let active_tab = self.center_tab_label_source(tab);
+    if let Some(index) = tabs.iter().position(|tab| tab == &active_tab) {
+      tabs.remove(index);
+      tabs.push(active_tab);
+    }
+    tabs
   }
 
   fn center_tab_label(
@@ -503,14 +509,25 @@ impl SessionPage {
   }
 
   fn render_center_tab_icons(&self, tabs: &[CenterTab], cx: &mut Context<Self>) -> AnyElement {
-    let mut icons = h_flex().flex_shrink_0().items_center().gap_0p5();
-    for tab in tabs {
+    const CENTER_TAB_ICON_OVERLAP_PX: f32 = 4.0;
+    let icon_count = tabs.len().max(1) as f32;
+    let icon_group_width =
+      FILE_ICON_SIZE_PX + (icon_count - 1.0) * (FILE_ICON_SIZE_PX - CENTER_TAB_ICON_OVERLAP_PX);
+    let mut icons = h_flex()
+      .w(px(icon_group_width))
+      .flex_shrink_0()
+      .items_center();
+    for (index, tab) in tabs.iter().enumerate() {
       let selector = Self::center_tab_icon_debug_selector(tab);
       if let Some(icon) = self.center_tab_icon(tab, cx) {
         icons = icons.child(
-          div()
+          h_flex()
             .debug_selector(move || selector.to_string())
+            .size(px(FILE_ICON_SIZE_PX))
             .flex_shrink_0()
+            .items_center()
+            .justify_center()
+            .when(index > 0, |this| this.ml(px(-CENTER_TAB_ICON_OVERLAP_PX)))
             .child(icon),
         );
       }
@@ -4736,6 +4753,10 @@ mod tests {
       assert!(!tabs.contains(&CenterTab::chat()));
       assert!(!tabs.contains(&chat_tab));
       assert!(tabs.contains(&analytics));
+      assert_eq!(
+        page.center_tab_icon_sources(&analytics).last(),
+        Some(&analytics)
+      );
     });
     assert!(
       cx.debug_bounds("session-center-tab-file-analytics.ts")
@@ -4790,6 +4811,10 @@ mod tests {
     page.read_with(cx, |page, _| {
       assert_eq!(page.center_layout.active_tab(), &chat_tab);
       assert_eq!(page.center_tab_label_source(&analytics), chat_tab);
+      assert_eq!(
+        page.center_tab_icon_sources(&analytics).last(),
+        Some(&chat_tab)
+      );
     });
     assert!(
       cx.debug_bounds("session-center-tab-file-analytics.ts")
