@@ -27,7 +27,7 @@
   "devDependencies": {
     "@astrojs/check": "^0.9.10",
     "@julr/vite-plugin-validate-env": "^2.2.2",
-    "typescript": "^6.0.3",
+    "typescript": "^7.0.2",
     "zod": "^4.5.4"
   }
 }
