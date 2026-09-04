@@ -1,5 +1,6 @@
 //! Everything the shell paints: sidebar, center, diff header, dock.
 
+use super::center_layout::{CenterNode, CenterSplitDirection};
 use super::*;
 use crate::annotations::{AnnotationKind, shows_annotation_navigation};
 use crate::diff_toolbar::{DiffToolbar, NavigationControl, SplitControl, ToggleControl};
@@ -583,33 +584,9 @@ impl SessionPage {
     window: &mut Window,
     cx: &mut Context<Self>,
   ) -> AnyElement {
-    // Keyed on what is shown, so every swap remounts and replays the fade.
     let active_surface = self.center_layout.active_surface().clone();
-    let (id, view) = match active_surface {
-      CenterSurface::Chat(_) => (
-        SharedString::from("session-center-conversation"),
-        self.render_conversation(cx),
-      ),
-      CenterSurface::InteractiveRebase(_) => (
-        SharedString::from("session-center-interactive-rebase"),
-        self.render_interactive_rebase(cx),
-      ),
-      CenterSurface::Editor(_) => {
-        let file = self
-          .shown_selected_file()
-          .map(|path| path.to_string_lossy().into_owned())
-          .unwrap_or_default();
-        let view = if self.diff_chat_open {
-          self.render_conversation_diff_split(window, cx)
-        } else {
-          self.render_diff_view(window, cx)
-        };
-        (
-          SharedString::from(format!("session-center-diff-{file}")),
-          view,
-        )
-      }
-    };
+    let root = self.center_layout.root().clone();
+    let view = self.render_center_node(&root, window, cx);
     v_flex()
       .size_full()
       .min_w(px(0.0))
@@ -622,13 +599,106 @@ impl SessionPage {
           .min_h_0()
           .child(view)
           .with_animation(
-            id,
+            Self::center_surface_animation_id(&active_surface),
             gpui::Animation::new(std::time::Duration::from_millis(CENTER_SWAP_FADE_MS))
               .with_easing(gpui::ease_out_quint()),
             |view, delta| view.opacity(delta),
           ),
       )
       .into_any_element()
+  }
+
+  fn center_surface_animation_id(surface: &CenterSurface) -> SharedString {
+    match surface {
+      CenterSurface::Chat(tab) => SharedString::from(format!(
+        "session-center-conversation-{}",
+        tab.conversation_id().unwrap_or_default()
+      )),
+      CenterSurface::InteractiveRebase(_) => {
+        SharedString::from("session-center-interactive-rebase")
+      }
+      CenterSurface::Editor(tab) => SharedString::from(format!(
+        "session-center-editor-{}",
+        tab
+          .path()
+          .map(|path| path.to_string_lossy().into_owned())
+          .unwrap_or_default()
+      )),
+    }
+  }
+
+  fn render_center_node(
+    &mut self,
+    node: &CenterNode,
+    window: &mut Window,
+    cx: &mut Context<Self>,
+  ) -> AnyElement {
+    match node {
+      CenterNode::Pane(pane) => self.render_center_surface(pane.active_surface(), window, cx),
+      CenterNode::Split(split) => {
+        let theme = cx.theme().clone();
+        let first = self.render_center_node(split.first(), window, cx);
+        let second = self.render_center_node(split.second(), window, cx);
+        match split.direction() {
+          CenterSplitDirection::Left | CenterSplitDirection::Right => h_flex()
+            .size_full()
+            .min_w(px(0.0))
+            .min_h_0()
+            .child(div().flex_1().min_w(px(0.0)).h_full().child(first))
+            .child(
+              div()
+                .flex_1()
+                .min_w(px(0.0))
+                .h_full()
+                .border_l_1()
+                .border_color(theme.border)
+                .child(second),
+            )
+            .into_any_element(),
+          CenterSplitDirection::Up | CenterSplitDirection::Down => v_flex()
+            .size_full()
+            .min_w(px(0.0))
+            .min_h_0()
+            .child(div().flex_1().min_h_0().w_full().child(first))
+            .child(
+              div()
+                .flex_1()
+                .min_h_0()
+                .w_full()
+                .border_t_1()
+                .border_color(theme.border)
+                .child(second),
+            )
+            .into_any_element(),
+        }
+      }
+    }
+  }
+
+  fn render_center_surface(
+    &mut self,
+    surface: &CenterSurface,
+    window: &mut Window,
+    cx: &mut Context<Self>,
+  ) -> AnyElement {
+    match surface {
+      CenterSurface::Chat(_) => self.render_conversation(cx),
+      CenterSurface::InteractiveRebase(_) => self.render_interactive_rebase(cx),
+      CenterSurface::Editor(tab) => {
+        let previous_center = self.center;
+        let previous_active_tab = self.active_center_tab.clone();
+        self.center = CenterView::Diff;
+        self.active_center_tab = Some(tab.clone());
+        let view = if self.diff_chat_open {
+          self.render_conversation_diff_split(window, cx)
+        } else {
+          self.render_diff_view(window, cx)
+        };
+        self.center = previous_center;
+        self.active_center_tab = previous_active_tab;
+        view
+      }
+    }
   }
 
   pub(super) fn render_conversation_diff_split(
@@ -4382,6 +4452,45 @@ mod tests {
     assert!(
       cx.debug_bounds(CONVERSATION_SPLIT_RESIZE_HANDLE_DEBUG_SELECTOR)
         .is_none()
+    );
+  }
+
+  #[gpui::test]
+  async fn center_layout_renders_split_surfaces(cx: &mut TestAppContext) {
+    let repo = TempRepo::init("session-center-layout-render-split");
+    commit_text_file(&repo.path, Path::new("README.md"), "v1\n", "initial");
+    std::fs::write(repo.path.join("README.md"), "v2\n").expect("modify file");
+    let (page, cx) = add_session_page_window(repo.path.clone(), cx);
+    cx.run_until_parked();
+
+    page.update_in(cx, |page, window, cx| {
+      page.open_diff(
+        PathBuf::from("README.md"),
+        None,
+        OpenIntent::Open,
+        window,
+        cx,
+      );
+    });
+    await_open_file(&page, cx).await;
+
+    page.update(cx, |page, cx| {
+      assert!(page.center_layout.split_active(
+        CenterSurface::from_tab(CenterTab::chat()),
+        CenterSplitDirection::Left,
+      ));
+      page.active_center_tab = Some(CenterTab::chat());
+      cx.notify();
+    });
+    cx.run_until_parked();
+
+    let conversation = cx
+      .debug_bounds("session-conversation-pane")
+      .expect("conversation pane");
+    let editor = cx.debug_bounds("session-diff-editor").expect("diff editor");
+    assert!(
+      conversation.right() <= editor.left() + px(1.0),
+      "conversation should render left of the editor: {conversation:?} vs {editor:?}"
     );
   }
 

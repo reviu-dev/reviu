@@ -47,7 +47,7 @@ impl CenterPane {
     }
   }
 
-  fn active_surface(&self) -> &CenterSurface {
+  pub(super) fn active_surface(&self) -> &CenterSurface {
     &self.active_surface
   }
 
@@ -107,6 +107,18 @@ impl CenterSplit {
       first: Box::new(first),
       second: Box::new(second),
     }
+  }
+
+  pub(super) fn direction(&self) -> CenterSplitDirection {
+    self.direction
+  }
+
+  pub(super) fn first(&self) -> &CenterNode {
+    &self.first
+  }
+
+  pub(super) fn second(&self) -> &CenterNode {
+    &self.second
   }
 }
 
@@ -237,6 +249,10 @@ impl CenterLayout {
       root: CenterNode::Pane(CenterPane::new(active_surface)),
       active_tab,
     }
+  }
+
+  pub(super) fn root(&self) -> &CenterNode {
+    &self.root
   }
 
   pub(super) fn active_surface(&self) -> &CenterSurface {
