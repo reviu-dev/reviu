@@ -672,30 +672,41 @@ impl SessionPage {
     window: &mut Window,
     cx: &mut Context<Self>,
   ) -> AnyElement {
-    let active_surface = self.center_layout.active_surface().clone();
+    let animation_id = self.center_content_animation_id();
     let root = self.center_layout.root().clone();
     let view = self.render_center_node(&root, window, cx);
+    let center_content = div()
+      .relative()
+      .flex_1()
+      .min_w(px(0.0))
+      .min_h_0()
+      .debug_selector(|| CENTER_CONTENT_DEBUG_SELECTOR.to_string())
+      .child(view);
+    let center_content = if let Some(animation_id) = animation_id {
+      center_content
+        .with_animation(
+          animation_id,
+          gpui::Animation::new(std::time::Duration::from_millis(CENTER_SWAP_FADE_MS))
+            .with_easing(gpui::ease_out_quint()),
+          |view, delta| view.opacity(delta),
+        )
+        .into_any_element()
+    } else {
+      center_content.into_any_element()
+    };
+
     v_flex()
       .size_full()
       .min_w(px(0.0))
       .min_h_0()
       .child(self.render_center_tabs(cx))
-      .child(
-        div()
-          .relative()
-          .flex_1()
-          .min_w(px(0.0))
-          .min_h_0()
-          .debug_selector(|| CENTER_CONTENT_DEBUG_SELECTOR.to_string())
-          .child(view)
-          .with_animation(
-            Self::center_surface_animation_id(&active_surface),
-            gpui::Animation::new(std::time::Duration::from_millis(CENTER_SWAP_FADE_MS))
-              .with_easing(gpui::ease_out_quint()),
-            |view, delta| view.opacity(delta),
-          ),
-      )
+      .child(center_content)
       .into_any_element()
+  }
+
+  fn center_content_animation_id(&self) -> Option<SharedString> {
+    (self.center_layout.surface_count() <= 1)
+      .then(|| Self::center_surface_animation_id(self.center_layout.active_surface()))
   }
 
   fn center_surface_animation_id(surface: &CenterSurface) -> SharedString {
@@ -4679,6 +4690,9 @@ mod tests {
       );
     });
     await_open_file(&page, cx).await;
+    page.read_with(cx, |page, _| {
+      assert!(page.center_content_animation_id().is_some());
+    });
 
     page.update(cx, |page, cx| {
       page.diff_chat_open = true;
@@ -4691,6 +4705,9 @@ mod tests {
     });
     cx.run_until_parked();
 
+    page.read_with(cx, |page, _| {
+      assert!(page.center_content_animation_id().is_none());
+    });
     assert!(
       cx.debug_bounds("session-conversation-diff-resize-handle")
         .is_none()
