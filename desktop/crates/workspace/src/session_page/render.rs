@@ -2243,9 +2243,9 @@ mod tests {
       );
     });
 
-    // Follow: back to the session's checkout.
+    // Picking the session's checkout again clears the pin.
     page.update_in(cx, |page, window, cx| {
-      page.follow_session_checkout(window, cx);
+      page.pin_checkout(repo.path.clone(), window, cx);
     });
     cx.run_until_parked();
     page.read_with(cx, |page, cx| {
@@ -2357,34 +2357,17 @@ mod tests {
   }
 
   #[gpui::test]
-  async fn the_dock_offers_the_checkouts_and_wears_its_pin(cx: &mut TestAppContext) {
-    let repo = TempRepo::init("session-page-checkout-selector");
+  async fn the_dock_header_does_not_switch_checkouts(cx: &mut TestAppContext) {
+    let repo = TempRepo::init("session-page-no-checkout-selector");
     commit_text_file(&repo.path, Path::new("README.md"), "v1\n", "initial");
+    let worktree = git::create_worktree(&repo.path, None).expect("create worktree");
 
     let (page, cx) = add_session_page_window(repo.path.clone(), cx);
     page.update(cx, |page, cx| {
       page.dock_panel.update(cx, |panel, cx| panel.refresh(cx))
     });
     cx.run_until_parked();
-    // One checkout only: nothing to pick, no selector.
-    assert!(
-      cx.debug_bounds(crate::dock_panel::DOCK_PANEL_CHECKOUT_SELECTOR_DEBUG_SELECTOR)
-        .is_none()
-    );
-
-    let worktree = git::create_worktree(&repo.path, None).expect("create worktree");
-    page.update(cx, |page, cx| page.refresh_checkout_options(cx));
-    cx.run_until_parked();
-    page.update(cx, |_, cx| cx.notify());
-    cx.run_until_parked();
-    assert!(
-      cx.debug_bounds(crate::dock_panel::DOCK_PANEL_CHECKOUT_SELECTOR_DEBUG_SELECTOR)
-        .is_some()
-    );
-    assert!(
-      cx.debug_bounds(crate::dock_panel::DOCK_PANEL_CHECKOUT_FOLLOW_DEBUG_SELECTOR)
-        .is_none()
-    );
+    assert!(cx.debug_bounds("dock-panel-checkout-selector").is_none());
 
     page.update_in(cx, |page, window, cx| {
       page.pin_checkout(worktree.path.clone(), window, cx);
@@ -2392,18 +2375,7 @@ mod tests {
     cx.run_until_parked();
     page.update(cx, |_, cx| cx.notify());
     cx.run_until_parked();
-    let follow = cx
-      .debug_bounds(crate::dock_panel::DOCK_PANEL_CHECKOUT_FOLLOW_DEBUG_SELECTOR)
-      .expect("follow control while pinned");
-    cx.simulate_click(follow.center(), gpui::Modifiers::default());
-    cx.run_until_parked();
-    page.read_with(cx, |page, cx| {
-      assert_eq!(page.checkout_root(cx).as_deref(), Some(repo.path.as_path()));
-    });
-    assert!(
-      cx.debug_bounds(crate::dock_panel::DOCK_PANEL_CHECKOUT_FOLLOW_DEBUG_SELECTOR)
-        .is_none()
-    );
+    assert!(cx.debug_bounds("dock-panel-checkout-selector").is_none());
   }
 
   #[gpui::test]

@@ -239,12 +239,6 @@ struct CheckoutOverride {
   path: PathBuf,
 }
 
-#[derive(Clone)]
-struct CheckoutInfo {
-  path: PathBuf,
-  branch: Option<String>,
-}
-
 struct FileSearchCache {
   checkout_root: PathBuf,
   paths: Arc<Vec<PathBuf>>,
@@ -284,12 +278,9 @@ pub struct SessionPage {
   fallback_repo: Option<PathBuf>,
   /// What the git surfaces currently point at; compared to detect switches.
   synced_checkout: Option<PathBuf>,
-  /// A checkout pinned from the dock header; view state, dies with the pinned
+  /// A checkout picked from the sidebar; view state, dies with the pinned
   /// session and never persists.
   checkout_override: Option<CheckoutOverride>,
-  /// The shown session's repo checkouts (main first), refreshed in background.
-  available_checkouts: Vec<CheckoutInfo>,
-  _checkout_options_task: Option<Task<()>>,
   center: CenterView,
   center_layout: CenterLayout,
   center_layouts_by_tab: HashMap<CenterTab, CenterLayout>,
@@ -500,13 +491,6 @@ impl SessionPage {
           // must follow what the file can actually show.
           this.sync_diff_view(cx);
           this.sync_git_telemetry(cx);
-          this.refresh_checkout_options(cx);
-        }
-        DockPanelEvent::PinCheckout { path } => {
-          this.pin_checkout(path.clone(), window, cx);
-        }
-        DockPanelEvent::FollowSessionCheckout => {
-          this.follow_session_checkout(window, cx);
         }
         DockPanelEvent::OpenReviewComment { path, line, intent } => {
           let (path, line, intent) = (path.clone(), *line as u32, *intent);
@@ -589,8 +573,6 @@ impl SessionPage {
       project_root,
       fallback_repo,
       checkout_override: None,
-      available_checkouts: Vec::new(),
-      _checkout_options_task: None,
       center: CenterView::Conversation,
       center_layout: CenterLayout::single(CenterSurface::from_tab(CenterTab::chat())),
       center_layouts_by_tab: HashMap::new(),
@@ -1112,8 +1094,6 @@ impl SessionPage {
       self.reviewed_repo = review_repo;
       self.reload_review_for_repo(cx);
     }
-    self.refresh_checkout_options(cx);
-    self.push_checkout_selector(cx);
     self.refresh_session_list(cx);
     self.activate_center_tab(restored_selected_tab, OpenIntent::Browse, window, cx);
   }
@@ -1154,90 +1134,7 @@ impl SessionPage {
       self.checkout_override = Some(CheckoutOverride { session_id, path });
     }
     self.sync_active_checkout(window, cx);
-    // The sync may no-op when the pin lands on the shown checkout; the
-    // selector's pinned state still has to repaint.
-    self.push_checkout_selector(cx);
     cx.notify();
-  }
-
-  pub(super) fn follow_session_checkout(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-    let session_checkout = self
-      .agent_chat_view
-      .as_ref()
-      .map(|panel| panel.read(cx).cwd().to_path_buf())
-      .or_else(|| self.fallback_repo.clone());
-    if let Some(session_checkout) = session_checkout
-      && self.editor_is_dirty(cx)
-      && self.target_checkout_differs_from_editor(&session_checkout, cx)
-    {
-      self.open_unsaved_editor_dialog(UnsavedEditorAction::FollowSessionCheckout, window, cx);
-      return;
-    }
-    self.follow_session_checkout_without_unsaved_prompt(window, cx);
-  }
-
-  pub(super) fn follow_session_checkout_without_unsaved_prompt(
-    &mut self,
-    window: &mut Window,
-    cx: &mut Context<Self>,
-  ) {
-    if self.checkout_override.take().is_none() {
-      return;
-    }
-    self.sync_active_checkout(window, cx);
-    self.push_checkout_selector(cx);
-    cx.notify();
-  }
-
-  /// Lists the shown session's repo checkouts off the UI thread; the selector
-  /// repaints when the listing lands.
-  pub(super) fn refresh_checkout_options(&mut self, cx: &mut Context<Self>) {
-    let Some(repo) = self.session_repo(cx) else {
-      self.available_checkouts = Vec::new();
-      self.push_checkout_selector(cx);
-      return;
-    };
-    let list_repo = repo.clone();
-    self._checkout_options_task = Some(cx.spawn(async move |this, cx| {
-      let (main_branch, worktrees) = cx
-        .background_spawn(async move {
-          let main_branch = git::current_branch_status(&list_repo)
-            .ok()
-            .map(|status| status.name);
-          let worktrees = git::list_worktrees(&list_repo).unwrap_or_default();
-          (main_branch, worktrees)
-        })
-        .await;
-      let _ = this.update(cx, |this, cx| {
-        let mut checkouts = vec![CheckoutInfo {
-          path: repo,
-          branch: main_branch,
-        }];
-        checkouts.extend(worktrees.into_iter().map(|worktree| CheckoutInfo {
-          path: worktree.path,
-          branch: worktree.branch,
-        }));
-        this.available_checkouts = checkouts;
-        this.push_checkout_selector(cx);
-      });
-    }));
-  }
-
-  fn push_checkout_selector(&mut self, cx: &mut Context<Self>) {
-    let displayed = self.checkout_root(cx);
-    let pinned = self.active_checkout_override(cx).is_some();
-    let options: Vec<crate::dock_panel::CheckoutOption> = self
-      .available_checkouts
-      .iter()
-      .map(|checkout| crate::dock_panel::CheckoutOption {
-        path: checkout.path.clone(),
-        branch: checkout.branch.clone().map(SharedString::from),
-        is_displayed: displayed.as_deref() == Some(checkout.path.as_path()),
-      })
-      .collect();
-    self.dock_panel.update(cx, |panel, cx| {
-      panel.set_checkout_selector(options, pinned, cx);
-    });
   }
 
   /// What a crash or a git error should carry about where the user was.

@@ -40,7 +40,6 @@ pub(super) enum UnsavedEditorAction {
   PinCheckout {
     path: PathBuf,
   },
-  FollowSessionCheckout,
   ForgetProject {
     project_root: PathBuf,
   },
@@ -1789,9 +1788,6 @@ impl SessionPage {
       }
       UnsavedEditorAction::PinCheckout { path } => {
         self.pin_checkout_without_unsaved_prompt(path, window, cx)
-      }
-      UnsavedEditorAction::FollowSessionCheckout => {
-        self.follow_session_checkout_without_unsaved_prompt(window, cx)
       }
       UnsavedEditorAction::ForgetProject { project_root } => {
         if let Err(error) = self.forget_project_without_unsaved_prompt(project_root, window, cx) {
