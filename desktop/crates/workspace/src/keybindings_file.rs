@@ -87,16 +87,20 @@ pub(crate) fn load() -> HashMap<ShortcutId, String> {
   let path = keybindings_file_path();
   match std::fs::read_to_string(&path) {
     Ok(raw) => match serde_json::from_str::<Document>(&raw) {
-      Ok(document) => overrides_from_document(&document),
+      Ok(document) => {
+        ConfigStore::drop_legacy_shortcut_overrides_from_db();
+        overrides_from_document(&document)
+      }
       Err(err) => {
         record_error("keybindings.parse", &err, true);
         HashMap::new()
       }
     },
     Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
-      // One-time import: the file takes over from the sqlite rows.
       let overrides = ConfigStore::load_shortcut_overrides_from_db();
-      write_document(&document_from_overrides(&overrides));
+      if write_document(&document_from_overrides(&overrides)) {
+        ConfigStore::drop_legacy_shortcut_overrides_from_db();
+      }
       overrides
     }
     Err(err) => {
@@ -143,20 +147,20 @@ fn edit_document(edit: impl FnOnce(&mut Document)) {
   write_document(&document);
 }
 
-fn write_document(document: &Document) {
+fn write_document(document: &Document) -> bool {
   let path = keybindings_file_path();
   if let Some(parent) = path.parent()
     && let Err(err) = std::fs::create_dir_all(parent)
   {
     record_error("keybindings.write", &err, false);
-    return;
+    return false;
   }
 
   let json = match serde_json::to_string_pretty(document) {
     Ok(json) => json,
     Err(err) => {
       record_error("keybindings.serialize", &err, false);
-      return;
+      return false;
     }
   };
 
@@ -166,7 +170,9 @@ fn write_document(document: &Document) {
     std::fs::write(&tmp, format!("{json}\n")).and_then(|()| std::fs::rename(&tmp, &path));
   if let Err(err) = written {
     record_error("keybindings.write", &err, false);
+    return false;
   }
+  true
 }
 
 #[cfg(test)]

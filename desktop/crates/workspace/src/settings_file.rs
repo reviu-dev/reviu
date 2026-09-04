@@ -133,16 +133,20 @@ pub(crate) fn load() -> AppSettings {
   let path = settings_file_path();
   match std::fs::read_to_string(&path) {
     Ok(raw) => match serde_json::from_str::<SettingsDoc>(&raw) {
-      Ok(doc) => doc.resolve(),
+      Ok(doc) => {
+        ConfigStore::drop_legacy_app_settings_from_db();
+        doc.resolve()
+      }
       Err(err) => {
         record_error("settings.parse", &err, true);
         AppSettings::default()
       }
     },
     Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
-      // One-time import: the file takes over from the sqlite columns.
       let settings = ConfigStore::load_app_settings_from_db();
-      persist(settings);
+      if persist(settings) {
+        ConfigStore::drop_legacy_app_settings_from_db();
+      }
       settings
     }
     Err(err) => {
@@ -152,20 +156,20 @@ pub(crate) fn load() -> AppSettings {
   }
 }
 
-pub(crate) fn persist(settings: AppSettings) {
+pub(crate) fn persist(settings: AppSettings) -> bool {
   let path = settings_file_path();
   if let Some(parent) = path.parent()
     && let Err(err) = std::fs::create_dir_all(parent)
   {
     record_error("settings.write", &err, false);
-    return;
+    return false;
   }
 
   let json = match serde_json::to_string_pretty(&SettingsDoc::from(settings)) {
     Ok(json) => json,
     Err(err) => {
       record_error("settings.serialize", &err, false);
-      return;
+      return false;
     }
   };
 
@@ -175,7 +179,9 @@ pub(crate) fn persist(settings: AppSettings) {
     std::fs::write(&tmp, format!("{json}\n")).and_then(|()| std::fs::rename(&tmp, &path));
   if let Err(err) = written {
     record_error("settings.write", &err, false);
+    return false;
   }
+  true
 }
 
 #[cfg(test)]

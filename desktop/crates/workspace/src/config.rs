@@ -73,10 +73,8 @@ const MERGE_METHODS_TABLE: ConfigTable = ConfigTable {
 
 pub const COMMAND_USAGE_TIMESTAMP_CAP: usize = 30;
 
-const CONFIG_TABLES: [ConfigTable; 6] = [
+const CONFIG_TABLES: [ConfigTable; 4] = [
   PROJECTS_TABLE,
-  SETTINGS_TABLE,
-  SHORTCUT_OVERRIDES_TABLE,
   COMMAND_USAGES_TABLE,
   ANALYTICS_META_TABLE,
   MERGE_METHODS_TABLE,
@@ -95,6 +93,7 @@ const MIGRATIONS: &[Migration] = [
   migrate_v5_projects,
   migrate_v6_drop_legacy_project_tables,
   migrate_v7_drop_retired_github_home_tables,
+  migrate_v8_ensure_final_config_tables,
 ]
 .as_slice();
 
@@ -105,6 +104,14 @@ fn schema_version(conn: &Connection) -> rusqlite::Result<i64> {
 fn set_schema_version(conn: &Connection, version: i64) -> rusqlite::Result<()> {
   // PRAGMA cannot be parameterized; `version` is a controlled integer, not user input.
   conn.execute_batch(&format!("PRAGMA user_version = {version}"))
+}
+
+fn table_exists(conn: &Connection, table: &ConfigTable) -> rusqlite::Result<bool> {
+  conn.query_row(
+    "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?1)",
+    params![table.name],
+    |row| row.get::<_, bool>(0),
+  )
 }
 
 fn run_migrations(conn: &Connection) -> rusqlite::Result<()> {
@@ -134,8 +141,6 @@ fn run_migrations(conn: &Connection) -> rusqlite::Result<()> {
 
 fn migrate_v1_baseline(conn: &Connection) -> rusqlite::Result<()> {
   create_baseline_tables(conn)?;
-  ensure_default_rows(conn)?;
-  ensure_settings_columns(conn)?;
   Ok(())
 }
 
@@ -220,6 +225,10 @@ fn migrate_v7_drop_retired_github_home_tables(conn: &Connection) -> rusqlite::Re
   conn.execute("DROP TABLE IF EXISTS pinned_repos", [])?;
   conn.execute("DROP TABLE IF EXISTS github_home_pull_request_tabs", [])?;
   Ok(())
+}
+
+fn migrate_v8_ensure_final_config_tables(conn: &Connection) -> rusqlite::Result<()> {
+  create_baseline_tables(conn)
 }
 
 fn merge_method_storage_key(method: GithubPullRequestMergeMethod) -> &'static str {
@@ -435,7 +444,19 @@ impl ConfigStore {
       return None;
     }
 
-    match Connection::open(&path) {
+    Self::open_path(&path)
+  }
+
+  fn open_existing() -> Option<Self> {
+    let path = Self::db_path();
+    if !path.exists() {
+      return None;
+    }
+    Self::open_path(&path)
+  }
+
+  fn open_path(path: &Path) -> Option<Self> {
+    match Connection::open(path) {
       Ok(conn) => Some(Self { conn }),
       Err(err) => {
         log::warn!("Failed to open config database {}: {}", path.display(), err);
@@ -796,13 +817,35 @@ impl ConfigStore {
   /// Read of the legacy sqlite columns, kept for the one-time import into the
   /// settings file. The columns are never written any more.
   pub(crate) fn load_app_settings_from_db() -> AppSettings {
-    let Some(store) = Self::open_with_tables() else {
+    let Some(store) = Self::open_existing() else {
       return AppSettings::default();
     };
     store.load_app_settings_inner()
   }
 
+  pub(crate) fn drop_legacy_app_settings_from_db() {
+    let Some(store) = Self::open_existing() else {
+      return;
+    };
+    store.drop_table_if_exists(SETTINGS_TABLE);
+  }
+
   fn load_app_settings_inner(&self) -> AppSettings {
+    match table_exists(&self.conn, &SETTINGS_TABLE) {
+      Ok(true) => {}
+      Ok(false) => return AppSettings::default(),
+      Err(err) => {
+        log::warn!("Failed to inspect app settings table: {}", err);
+        return AppSettings::default();
+      }
+    }
+    if let Err(err) =
+      ensure_default_rows(&self.conn).and_then(|()| ensure_settings_columns(&self.conn))
+    {
+      log::warn!("Failed to prepare app settings import: {}", err);
+      return AppSettings::default();
+    }
+
     let settings = self.conn.query_row(
       &format!(
         "SELECT auto_switch_theme, dark_mode, indent_rainbow, font_size, git_unified_file_view, split_diff_view, hide_whitespace, menu_bar_icon, analytics_enabled FROM {} WHERE id = 1",
@@ -958,13 +1001,29 @@ impl ConfigStore {
   /// Read of the legacy sqlite rows, kept for the one-time import into the
   /// keybindings file. The rows are never written any more.
   pub(crate) fn load_shortcut_overrides_from_db() -> HashMap<ShortcutId, String> {
-    let Some(store) = Self::open_with_tables() else {
+    let Some(store) = Self::open_existing() else {
       return HashMap::default();
     };
     store.load_shortcut_overrides_inner()
   }
 
+  pub(crate) fn drop_legacy_shortcut_overrides_from_db() {
+    let Some(store) = Self::open_existing() else {
+      return;
+    };
+    store.drop_table_if_exists(SHORTCUT_OVERRIDES_TABLE);
+  }
+
   fn load_shortcut_overrides_inner(&self) -> HashMap<ShortcutId, String> {
+    match table_exists(&self.conn, &SHORTCUT_OVERRIDES_TABLE) {
+      Ok(true) => {}
+      Ok(false) => return HashMap::default(),
+      Err(err) => {
+        log::warn!("Failed to inspect shortcut overrides table: {}", err);
+        return HashMap::default();
+      }
+    }
+
     let mut stmt = match self.conn.prepare(&format!(
       "SELECT shortcut_id, keystroke FROM {} ORDER BY shortcut_id ASC",
       SHORTCUT_OVERRIDES_TABLE.name
@@ -1009,6 +1068,15 @@ impl ConfigStore {
 
   pub fn clear_shortcut_override(shortcut_id: ShortcutId) {
     crate::keybindings_file::remove(shortcut_id);
+  }
+
+  fn drop_table_if_exists(&self, table: ConfigTable) {
+    if let Err(err) = self
+      .conn
+      .execute(&format!("DROP TABLE IF EXISTS {}", table.name), [])
+    {
+      log::warn!("Failed to drop legacy {} table: {}", table.name, err);
+    }
   }
 }
 
@@ -1413,6 +1481,60 @@ mod tests {
   }
 
   #[test]
+  fn settings_file_load_drops_legacy_settings_table() {
+    let db_path = unique_test_db_path("settings-json-drops-legacy");
+    let _ = fs::remove_file(&db_path);
+    fs::write(
+      db_path.with_extension("settings.json"),
+      r#"{ "dark_mode": true }"#,
+    )
+    .expect("write settings file");
+
+    {
+      let conn = Connection::open(&db_path).expect("open db");
+      conn.execute(SETTINGS_TABLE.create_sql, []).expect("create");
+      ensure_default_rows(&conn).expect("default row");
+    }
+
+    ConfigStore::set_test_db_path(Some(db_path.clone()));
+    let settings = ConfigStore::load_app_settings();
+
+    assert!(settings.dark_mode);
+    assert!(!table_names(&db_path).contains("settings"));
+
+    ConfigStore::set_test_db_path(None);
+  }
+
+  #[test]
+  fn keybindings_file_load_drops_legacy_shortcut_table() {
+    let db_path = unique_test_db_path("keybindings-json-drops-legacy");
+    let _ = fs::remove_file(&db_path);
+    fs::write(
+      db_path.with_extension("keybindings.json"),
+      r#"{ "commit_changes": "cmd-j" }"#,
+    )
+    .expect("write keybindings file");
+
+    {
+      let conn = Connection::open(&db_path).expect("open db");
+      conn
+        .execute(SHORTCUT_OVERRIDES_TABLE.create_sql, [])
+        .expect("create");
+    }
+
+    ConfigStore::set_test_db_path(Some(db_path.clone()));
+    let overrides = ConfigStore::load_shortcut_overrides();
+
+    assert_eq!(
+      overrides.get(&ShortcutId::CommitChanges),
+      Some(&"cmd-j".to_string())
+    );
+    assert!(!table_names(&db_path).contains("shortcut_overrides"));
+
+    ConfigStore::set_test_db_path(None);
+  }
+
+  #[test]
   fn shortcut_overrides_round_trip() {
     let db_path = unique_test_db_path("shortcut-overrides");
     let _ = fs::remove_file(&db_path);
@@ -1493,17 +1615,6 @@ mod tests {
     ConfigStore::set_test_db_path(None);
   }
 
-  fn settings_columns(db_path: &Path) -> std::collections::HashSet<String> {
-    let conn = Connection::open(db_path).expect("open db");
-    let mut stmt = conn
-      .prepare(&format!("PRAGMA table_info({})", SETTINGS_TABLE.name))
-      .expect("table_info");
-    let rows = stmt
-      .query_map([], |row| row.get::<_, String>(1))
-      .expect("query columns");
-    rows.map(|row| row.expect("column name")).collect()
-  }
-
   fn db_user_version(db_path: &Path) -> i64 {
     Connection::open(db_path)
       .expect("open db")
@@ -1524,8 +1635,6 @@ mod tests {
 
   const FINAL_CONFIG_TABLES: &[&str] = &[
     "projects",
-    "settings",
-    "shortcut_overrides",
     "command_usages",
     "analytics_meta",
     "merge_methods",
@@ -1539,17 +1648,7 @@ mod tests {
 
   const RETIRED_GITHUB_HOME_TABLES: &[&str] = &["pinned_repos", "github_home_pull_request_tabs"];
 
-  const ALL_SETTINGS_COLUMNS: &[&str] = &[
-    "auto_switch_theme",
-    "dark_mode",
-    "indent_rainbow",
-    "font_size",
-    "git_unified_file_view",
-    "split_diff_view",
-    "hide_whitespace",
-    "menu_bar_icon",
-    "analytics_enabled",
-  ];
+  const LEGACY_JSON_TABLES: &[&str] = &["settings", "shortcut_overrides"];
 
   #[test]
   fn migrations_stamp_version_and_full_schema_on_fresh_db() {
@@ -1557,14 +1656,9 @@ mod tests {
     let _ = fs::remove_file(&db_path);
     ConfigStore::set_test_db_path(Some(db_path.clone()));
 
-    // Triggers open_with_tables -> run_migrations on an empty database.
-    let _ = ConfigStore::load_app_settings();
+    let _ = ConfigStore::load_recent_project_entries();
 
     assert_eq!(db_user_version(&db_path), MIGRATIONS.len() as i64);
-    let columns = settings_columns(&db_path);
-    for column in ALL_SETTINGS_COLUMNS {
-      assert!(columns.contains(*column), "missing column {column}");
-    }
     let tables = table_names(&db_path);
     for table in FINAL_CONFIG_TABLES {
       assert!(tables.contains(*table), "missing table {table}");
@@ -1581,6 +1675,12 @@ mod tests {
         "retired table {table} should be gone"
       );
     }
+    for table in LEGACY_JSON_TABLES {
+      assert!(
+        !tables.contains(*table),
+        "legacy table {table} should not be created"
+      );
+    }
 
     ConfigStore::set_test_db_path(None);
   }
@@ -1591,15 +1691,49 @@ mod tests {
     let _ = fs::remove_file(&db_path);
     ConfigStore::set_test_db_path(Some(db_path.clone()));
 
-    let _ = ConfigStore::load_app_settings();
-    let mut settings = ConfigStore::load_app_settings();
-    settings.dark_mode = true;
-    ConfigStore::persist_app_settings(settings);
-    // Second open must not re-run v1 or disturb stored data.
-    let reloaded = ConfigStore::load_app_settings();
+    ConfigStore::persist_command_usage("commit", &[1_000, 2_000]);
+    ConfigStore::persist_command_usage("commit", &[1_000, 2_000, 3_000]);
+    let usages = ConfigStore::load_command_usages();
 
     assert_eq!(db_user_version(&db_path), MIGRATIONS.len() as i64);
-    assert!(reloaded.dark_mode);
+    assert_eq!(usages.get("commit"), Some(&vec![1_000, 2_000, 3_000]));
+
+    ConfigStore::set_test_db_path(None);
+  }
+
+  #[test]
+  fn migrations_repair_config_tables_missed_by_pre_v1_migration_churn() {
+    let db_path = unique_test_db_path("repair-final-tables");
+    let _ = fs::remove_file(&db_path);
+
+    {
+      let conn = Connection::open(&db_path).expect("open db");
+      conn
+        .execute(PROJECTS_TABLE.create_sql, [])
+        .expect("projects");
+      conn
+        .execute(COMMAND_USAGES_TABLE.create_sql, [])
+        .expect("command usages");
+      conn
+        .execute(ANALYTICS_META_TABLE.create_sql, [])
+        .expect("analytics meta");
+      set_schema_version(&conn, 7).expect("stamp v7");
+    }
+
+    ConfigStore::set_test_db_path(Some(db_path.clone()));
+    let _ = ConfigStore::load_recent_project_entries();
+
+    assert_eq!(db_user_version(&db_path), MIGRATIONS.len() as i64);
+    let tables = table_names(&db_path);
+    for table in FINAL_CONFIG_TABLES {
+      assert!(tables.contains(*table), "missing table {table}");
+    }
+    for table in LEGACY_JSON_TABLES {
+      assert!(
+        !tables.contains(*table),
+        "legacy table {table} should not be recreated"
+      );
+    }
 
     ConfigStore::set_test_db_path(None);
   }
@@ -1612,8 +1746,6 @@ mod tests {
     {
       let conn = Connection::open(&db_path).expect("open db");
       create_baseline_tables(&conn).expect("baseline tables");
-      ensure_default_rows(&conn).expect("default row");
-      ensure_settings_columns(&conn).expect("settings columns");
       conn
         .execute_batch(
           "CREATE TABLE pinned_repos (full_name TEXT PRIMARY KEY, pinned_at INTEGER NOT NULL); \
@@ -1624,7 +1756,7 @@ mod tests {
     }
 
     ConfigStore::set_test_db_path(Some(db_path.clone()));
-    let _ = ConfigStore::load_app_settings();
+    let _ = ConfigStore::load_recent_project_entries();
 
     assert_eq!(db_user_version(&db_path), MIGRATIONS.len() as i64);
     let tables = table_names(&db_path);
@@ -1638,10 +1770,8 @@ mod tests {
     ConfigStore::set_test_db_path(None);
   }
 
-  /// A database already stamped at the current version keeps its values and is
-  /// not migrated again.
   #[test]
-  fn an_already_versioned_db_is_left_alone() {
+  fn an_already_versioned_db_imports_legacy_settings_without_migrating() {
     let db_path = unique_test_db_path("migrate-versioned");
     let _ = fs::remove_file(&db_path);
 
@@ -1661,14 +1791,13 @@ mod tests {
 
     assert!(settings.dark_mode, "stored value must survive the open");
     assert_eq!(db_user_version(&db_path), MIGRATIONS.len() as i64);
+    assert!(!table_names(&db_path).contains("settings"));
 
     ConfigStore::set_test_db_path(None);
   }
 
-  /// A retired setting leaves its column behind on existing installs; reads and
-  /// writes name their columns, so the extra one is simply ignored.
   #[test]
-  fn a_db_carrying_a_retired_setting_column_still_loads_and_saves() {
+  fn a_db_carrying_a_retired_setting_column_imports_and_drops_settings() {
     let db_path = unique_test_db_path("retired-column");
     let _ = fs::remove_file(&db_path);
 
@@ -1688,7 +1817,7 @@ mod tests {
     ConfigStore::persist_app_settings(settings);
 
     assert_eq!(ConfigStore::load_app_settings().font_size, 18.0);
-    assert!(settings_columns(&db_path).contains("home_page"));
+    assert!(!table_names(&db_path).contains("settings"));
 
     ConfigStore::set_test_db_path(None);
   }
@@ -1714,16 +1843,16 @@ mod tests {
 
     ConfigStore::set_test_db_path(Some(db_path.clone()));
     let settings = ConfigStore::load_app_settings();
+    let _ = ConfigStore::load_recent_project_entries();
 
-    // Pre-existing value preserved, schema brought up to date, version stamped.
     assert!(settings.dark_mode, "legacy value must survive migration");
     assert_eq!(db_user_version(&db_path), MIGRATIONS.len() as i64);
-    let columns = settings_columns(&db_path);
-    for column in ALL_SETTINGS_COLUMNS {
-      assert!(columns.contains(*column), "missing column {column}");
+    let tables = table_names(&db_path);
+    for table in FINAL_CONFIG_TABLES {
+      assert!(tables.contains(*table), "missing table {table}");
     }
+    assert!(!tables.contains("settings"));
 
-    // The load imported the sqlite values into the settings file.
     assert!(db_path.with_extension("settings.json").exists());
     assert!(ConfigStore::load_app_settings().dark_mode);
 
@@ -1756,7 +1885,7 @@ mod tests {
         .expect("seed retired row");
     }
 
-    ConfigStore::set_test_db_path(Some(db_path));
+    ConfigStore::set_test_db_path(Some(db_path.clone()));
     let overrides = ConfigStore::load_shortcut_overrides();
 
     assert_eq!(
@@ -1764,6 +1893,7 @@ mod tests {
       Some(&"cmd-j".to_string())
     );
     assert!(file_path.exists(), "import must stamp the keybindings file");
+    assert!(!table_names(&db_path).contains("shortcut_overrides"));
     let raw = fs::read_to_string(&file_path).expect("read keybindings file");
     assert!(!raw.contains("close_workspace_page"));
     assert_eq!(
