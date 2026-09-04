@@ -1,5 +1,3 @@
-#![allow(dead_code)] // Split operations are staged before DnD and recursive rendering call them.
-
 use super::center_tab::{CenterTab, CenterTabKind};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -151,6 +149,13 @@ impl CenterNode {
     }
   }
 
+  fn contains_tab(&self, tab: &CenterTab) -> bool {
+    match self {
+      Self::Pane(pane) => pane.contains_tab(tab),
+      Self::Split(split) => split.first.contains_tab(tab) || split.second.contains_tab(tab),
+    }
+  }
+
   fn set_active_surface(&mut self, current_active_tab: &CenterTab, surface: CenterSurface) -> bool {
     match self {
       Self::Pane(pane) => {
@@ -264,6 +269,10 @@ impl CenterLayout {
 
   pub(super) fn active_tab(&self) -> &CenterTab {
     self.active_surface().tab()
+  }
+
+  pub(super) fn contains_tab(&self, tab: &CenterTab) -> bool {
+    self.root.contains_tab(tab)
   }
 
   pub(super) fn set_active_surface(&mut self, surface: CenterSurface) {

@@ -1543,6 +1543,7 @@ impl SessionPage {
     self
       .center_tab_history
       .retain(|candidate| candidate != &tab);
+    self.center_layout.close_surface(&tab);
     let editor_closed = self.editor_tab.as_ref() == Some(&tab);
     self.clear_editor_tab(&tab);
     if editor_closed {

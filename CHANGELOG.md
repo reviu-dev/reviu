@@ -4,6 +4,10 @@ All notable changes to Reviu are documented here.
 
 ## 1.0.0
 
+### Split Center Tabs
+
+Center tabs can now be dragged to a center edge to split the view, with a blue drop target showing where the tab will land. This starts the path toward mixed center layouts for chat, files and terminal surfaces.
+
 ### Editor-Style Center Tabs
 
 Chat, files, diffs, and interactive rebase now share the same center tab model. File tree opens regular file tabs, review opens diff tabs, and the same path can stay open in both forms without losing your place.

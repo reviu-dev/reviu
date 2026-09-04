@@ -52,7 +52,7 @@ use crate::open_intent::OpenIntent;
 use crate::project_files::list_project_files;
 use crate::review_destination::{AgentReviewHandlers, ReviewDestination, configure_review};
 use crate::session_list::{SessionList, SessionListEvent, SessionStatus};
-use crate::session_page::center_layout::{CenterLayout, CenterSurface};
+use crate::session_page::center_layout::{CenterLayout, CenterSplitDirection, CenterSurface};
 use crate::session_page::center_tab::{CenterTab, CenterTabKind, CenterTabSnapshot};
 use crate::session_page::file_viewer::{OpenedSnapshot, UnsavedEditorAction};
 use git::{InteractiveRebaseTarget, RepoStatusKind};
@@ -293,6 +293,7 @@ pub struct SessionPage {
   _checkout_options_task: Option<Task<()>>,
   center: CenterView,
   center_layout: CenterLayout,
+  center_drag_direction: Option<CenterSplitDirection>,
   center_tabs: Vec<CenterTab>,
   center_tab_history: Vec<CenterTab>,
   center_tabs_by_checkout: HashMap<PathBuf, Vec<CenterTab>>,
@@ -593,6 +594,7 @@ impl SessionPage {
       _checkout_options_task: None,
       center: CenterView::Conversation,
       center_layout: CenterLayout::single(CenterSurface::from_tab(CenterTab::chat())),
+      center_drag_direction: None,
       center_tabs: CenterTab::default_tabs(),
       center_tab_history: CenterTab::default_tabs(),
       center_tabs_by_checkout: HashMap::new(),
