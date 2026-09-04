@@ -1944,23 +1944,24 @@ impl Render for AgentChatPanel {
       .flex_col()
       .size_full()
       .bg(theme.sidebar)
-      .child(
-        h_flex()
-          .h(px(40.))
-          .min_h(px(40.))
-          .max_h(px(40.))
-          .flex_shrink_0()
-          .px_3()
-          .items_center()
-          .justify_between()
-          .bg(theme.sidebar)
-          .border_b_1()
-          .border_color(theme.border)
-          .child({
-            let current = self.backend_kind.clone();
-            let label = self.backend.label.clone();
-            let brand_icon = crate::backend_icon(&current);
-            if !self.can_switch_backend() {
+      .when(self.show_header, |this| {
+        this.child(
+          h_flex()
+            .debug_selector(|| "agent-chat-header".to_string())
+            .h(px(40.))
+            .min_h(px(40.))
+            .max_h(px(40.))
+            .flex_shrink_0()
+            .px_3()
+            .items_center()
+            .justify_between()
+            .bg(theme.sidebar)
+            .border_b_1()
+            .border_color(theme.border)
+            .child({
+              let current = self.backend_kind.clone();
+              let label = self.backend.label.clone();
+              let brand_icon = crate::backend_icon(&current);
               h_flex()
                 .h_6()
                 .px_2()
@@ -1976,91 +1977,27 @@ impl Render for AgentChatPanel {
                     .line_height(gpui::relative(1.))
                     .child(label),
                 )
-                .into_any_element()
-            } else {
-              let entity = cx.entity().downgrade();
-              Button::new("agent-chat-backend")
-                .label(label)
-                .icon(brand_icon)
-                .dropdown_caret(true)
-                .small()
-                .ghost()
-                .debug_selector(|| "agent-chat-backend".to_string())
-                .dropdown_menu_with_anchor(Anchor::TopLeft, move |menu, _, _| {
-                  // The registry serves more agents than fit on screen.
-                  let mut menu = menu.max_h(px(360.)).scrollable(true);
-                  let registry = agent_registry::global();
-                  for agent in registry.runnable() {
-                    let id = agent.id.clone();
-                    let entity = entity.clone();
-                    let is_current = id == current;
-                    let label_text: SharedString = agent.display_name().into();
-                    let selector_id = id.to_string();
-                    let icon_id = id.clone();
-                    menu = menu.item(
-                      PopupMenuItem::element(move |_, cx| {
-                        let theme = cx.theme().clone();
-                        h_flex()
-                          .w_full()
-                          .gap_2()
-                          .items_center()
-                          .debug_selector({
-                            let selector_id = selector_id.clone();
-                            move || format!("agent-chat-backend-item-{selector_id}")
-                          })
-                          .child(
-                            crate::backend_icon(&icon_id)
-                              .small()
-                              .text_color(theme.foreground),
-                          )
-                          .child(
-                            div()
-                              .flex_1()
-                              .text_sm()
-                              .when(is_current, |this| this.font_weight(gpui::FontWeight::BOLD))
-                              .child(label_text.clone()),
-                          )
-                          .when(is_current, |this| {
-                            this.child(
-                              gpui_component::Icon::new(UiIconName::Check)
-                                .small()
-                                .text_color(theme.foreground),
-                            )
-                          })
-                          .into_any_element()
-                      })
-                      .on_click(move |_, _, cx| {
-                        persist_choice(&id);
-                        let id = id.clone();
-                        let _ = entity.update(cx, |panel, cx| panel.switch_backend(id, cx));
-                      }),
-                    );
-                  }
-                  menu
-                })
-                .into_any_element()
-            }
-          })
-          .child(
-            h_flex()
-              .gap_3()
-              .items_center()
-              .when_some(usage_status, |this, usage| this.child(usage))
-              .when(self.show_close_control, |this| {
-                this.child(
-                  Button::new("agent-chat-close")
-                    .debug_selector(|| "agent-chat-close".to_string())
-                    .icon(IconName::Close)
-                    .small()
-                    .ghost()
-                    .tooltip("Close chat")
-                    .on_click(
-                      cx.listener(|_, _, _, cx| cx.emit(AgentChatPanelEvent::CloseRequested)),
-                    ),
-                )
-              }),
-          ),
-      )
+            })
+            .child(
+              h_flex()
+                .gap_3()
+                .items_center()
+                .when_some(usage_status, |this, usage| this.child(usage))
+                .when(self.show_close_control, |this| {
+                  this.child(
+                    Button::new("agent-chat-close")
+                      .debug_selector(|| "agent-chat-close".to_string())
+                      .icon(IconName::Close)
+                      .small()
+                      .ghost()
+                      .on_click(
+                        cx.listener(|_, _, _, cx| cx.emit(AgentChatPanelEvent::CloseRequested)),
+                      ),
+                  )
+                }),
+            ),
+        )
+      })
       .map(|this| {
         if let Some(center_state) = center_state {
           this.child(center_state)

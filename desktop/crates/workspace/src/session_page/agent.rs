@@ -285,9 +285,10 @@ impl SessionPage {
         cx,
       )
     });
-    let close_control_visible = self.center == CenterView::Diff && self.diff_chat_open;
+    let show_split_chrome = self.center_layout.surface_count() > 1;
     view.update(cx, |panel, cx| {
-      panel.set_close_control_visible(close_control_visible, cx);
+      panel.set_header_visible(show_split_chrome, cx);
+      panel.set_close_control_visible(show_split_chrome, cx);
     });
     // Sidebar reads conversation state from the panel. The panel already
     // notifies itself, so avoid repainting the whole page on stream chunks.
@@ -361,7 +362,8 @@ impl SessionPage {
           this.refresh_session_list(cx);
         }
         AgentChatPanelEvent::CloseRequested => {
-          this.hide_diff_chat(window, cx);
+          let tab = Self::chat_tab_for_panel(panel, cx);
+          this.close_center_surface(tab, window, cx);
         }
       },
     )

@@ -923,7 +923,7 @@ impl SessionPage {
       .into_any_element()
   }
 
-  fn center_view_for_tab(tab: &CenterTab) -> CenterView {
+  pub(super) fn center_view_for_tab(tab: &CenterTab) -> CenterView {
     match tab.kind {
       CenterTabKind::Chat => CenterView::Conversation,
       CenterTabKind::File | CenterTabKind::Diff => CenterView::Diff,
@@ -1178,6 +1178,32 @@ impl SessionPage {
             if let Some(editor) = save_editor.clone() {
               editor.update(cx, |editor, cx| editor.save(cx));
             }
+          })
+          .into_any_element(),
+      );
+    }
+
+    if self.center_layout.surface_count() > 1
+      && let Some(tab) = self.shown_editor_tab().cloned()
+    {
+      let close_button_id = format!(
+        "session-page-close-center-surface-{}",
+        tab
+          .path()
+          .map(|path| path.to_string_lossy().replace(['/', '\\', ':'], "_"))
+          .unwrap_or_default()
+      );
+      let page = cx.entity().clone();
+      toolbar = toolbar.after_toggles(
+        Button::new(close_button_id)
+          .debug_selector(|| "session-page-close-center-surface".to_string())
+          .icon(gpui_component::IconName::Close)
+          .xsmall()
+          .ghost()
+          .on_click(move |_, window, cx| {
+            page.update(cx, |page, cx| {
+              page.close_center_surface(tab.clone(), window, cx);
+            });
           })
           .into_any_element(),
       );
@@ -4667,6 +4693,10 @@ mod tests {
     assert!(cx.debug_bounds("session-diff-editor").is_some());
     assert!(cx.debug_bounds("session-conversation-pane").is_none());
     assert!(
+      cx.debug_bounds("session-page-close-center-surface")
+        .is_none()
+    );
+    assert!(
       cx.debug_bounds("session-conversation-diff-resize-handle")
         .is_none()
     );
@@ -4701,6 +4731,7 @@ mod tests {
         CenterSplitDirection::Left,
       ));
       page.active_center_tab = Some(CenterTab::chat());
+      page.sync_agent_chat_close_control(cx);
       cx.notify();
     });
     cx.run_until_parked();
@@ -4708,6 +4739,10 @@ mod tests {
     page.read_with(cx, |page, _| {
       assert!(page.center_content_animation_id().is_none());
     });
+    assert!(
+      cx.debug_bounds("session-page-close-center-surface")
+        .is_some()
+    );
     assert!(
       cx.debug_bounds("session-conversation-diff-resize-handle")
         .is_none()
@@ -4720,6 +4755,115 @@ mod tests {
       conversation.right() <= editor.left() + px(1.0),
       "conversation should render left of the editor: {conversation:?} vs {editor:?}"
     );
+  }
+
+  #[gpui::test]
+  async fn split_chat_header_close_closes_only_the_chat_pane(cx: &mut TestAppContext) {
+    let repo = TempRepo::init("session-center-chat-pane-close");
+    commit_text_file(&repo.path, Path::new("README.md"), "v1\n", "initial");
+    let (page, cx) = add_session_page_window(repo.path.clone(), cx);
+    cx.run_until_parked();
+
+    page.update_in(cx, |page, window, cx| page.new_session(window, cx));
+    cx.run_until_parked();
+    assert!(cx.debug_bounds("agent-chat-header").is_none());
+    let chat_tab = page.read_with(cx, |page, cx| page.active_chat_tab(cx));
+    let readme = CenterTab::file(PathBuf::from("README.md"));
+
+    page.update_in(cx, |page, window, cx| {
+      page.open_file(
+        PathBuf::from("README.md"),
+        None,
+        None,
+        OpenIntent::Open,
+        window,
+        cx,
+      );
+    });
+    await_open_file(&page, cx).await;
+    page.update(cx, |page, cx| {
+      let CenterNode::Pane(pane) = page.center_layout.root() else {
+        panic!("layout should start as a single pane");
+      };
+      assert!(page.center_layout.split_pane(
+        pane.id(),
+        CenterSurface::from_tab(chat_tab.clone()),
+        CenterSplitDirection::Left,
+      ));
+      page.remember_center_layout_tab(readme.clone());
+      page.center = CenterView::Diff;
+      page.sync_agent_chat_close_control(cx);
+      cx.notify();
+    });
+    cx.run_until_parked();
+
+    let close = cx.debug_bounds("agent-chat-close").expect("chat close");
+    cx.simulate_click(close.center(), gpui::Modifiers::default());
+    cx.run_until_parked();
+
+    page.read_with(cx, |page, _| {
+      assert_eq!(page.active_center_tab.as_ref(), Some(&readme));
+      assert!(!page.center_layout.contains_tab(&chat_tab));
+      assert_eq!(page.center_layout.surface_count(), 1);
+    });
+    assert!(cx.debug_bounds("agent-chat-header").is_none());
+    assert!(cx.debug_bounds("session-conversation-pane").is_none());
+    assert!(cx.debug_bounds("session-diff-editor").is_some());
+  }
+
+  #[gpui::test]
+  async fn split_diff_header_close_closes_only_the_file_pane(cx: &mut TestAppContext) {
+    let repo = TempRepo::init("session-center-file-pane-close");
+    commit_text_file(&repo.path, Path::new("README.md"), "v1\n", "initial");
+    let (page, cx) = add_session_page_window(repo.path.clone(), cx);
+    cx.run_until_parked();
+
+    page.update_in(cx, |page, window, cx| page.new_session(window, cx));
+    cx.run_until_parked();
+    let chat_tab = page.read_with(cx, |page, cx| page.active_chat_tab(cx));
+    let readme = CenterTab::file(PathBuf::from("README.md"));
+
+    page.update_in(cx, |page, window, cx| {
+      page.open_file(
+        PathBuf::from("README.md"),
+        None,
+        None,
+        OpenIntent::Open,
+        window,
+        cx,
+      );
+    });
+    await_open_file(&page, cx).await;
+    page.update(cx, |page, cx| {
+      let CenterNode::Pane(pane) = page.center_layout.root() else {
+        panic!("layout should start as a single pane");
+      };
+      assert!(page.center_layout.split_pane(
+        pane.id(),
+        CenterSurface::from_tab(chat_tab.clone()),
+        CenterSplitDirection::Left,
+      ));
+      page.remember_center_layout_tab(readme.clone());
+      page.center = CenterView::Diff;
+      page.sync_agent_chat_close_control(cx);
+      cx.notify();
+    });
+    cx.run_until_parked();
+
+    let close = cx
+      .debug_bounds("session-page-close-center-surface")
+      .expect("file pane close");
+    cx.simulate_click(close.center(), gpui::Modifiers::default());
+    cx.run_until_parked();
+
+    page.read_with(cx, |page, _| {
+      assert_eq!(page.active_center_tab.as_ref(), Some(&chat_tab));
+      assert!(!page.center_layout.contains_tab(&readme));
+      assert_eq!(page.center_layout.surface_count(), 1);
+    });
+    assert!(cx.debug_bounds("agent-chat-header").is_none());
+    assert!(cx.debug_bounds("session-conversation-pane").is_some());
+    assert!(cx.debug_bounds("session-diff-editor").is_none());
   }
 
   #[gpui::test]

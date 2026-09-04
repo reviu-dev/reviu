@@ -81,6 +81,9 @@ pub(super) enum UnsavedEditorAction {
   CloseCenterTab {
     tab: CenterTab,
   },
+  CloseCenterSurface {
+    tab: CenterTab,
+  },
 }
 
 fn worktree_file_modified(path: &Path) -> Option<SystemTime> {
@@ -1451,6 +1454,87 @@ impl SessionPage {
     cx.stop_propagation();
   }
 
+  pub(super) fn close_center_surface(
+    &mut self,
+    tab: CenterTab,
+    window: &mut Window,
+    cx: &mut Context<Self>,
+  ) {
+    if self.center_layout.surface_count() <= 1 || !self.center_layout.contains_tab(&tab) {
+      self.close_center_tab(tab, window, cx);
+      return;
+    }
+    if self.editor_is_dirty(cx) && self.editor_tab.as_ref() == Some(&tab) {
+      self.open_unsaved_editor_dialog(UnsavedEditorAction::CloseCenterSurface { tab }, window, cx);
+      return;
+    }
+    self.close_center_surface_without_unsaved_prompt(tab, window, cx);
+  }
+
+  fn close_center_surface_without_unsaved_prompt(
+    &mut self,
+    tab: CenterTab,
+    window: &mut Window,
+    cx: &mut Context<Self>,
+  ) {
+    let old_representative = self.active_center_tab.clone();
+    if !self.center_layout.close_surface(&tab) {
+      cx.notify();
+      return;
+    }
+
+    if matches!(tab.kind, CenterTabKind::File | CenterTabKind::Diff) {
+      let editor_closed = self.editor_tab.as_ref() == Some(&tab);
+      self.clear_editor_tab(&tab);
+      if editor_closed {
+        self.open_file_task = None;
+        self.open_file_generation = self.open_file_generation.wrapping_add(1);
+        self.svg_preview.update(cx, |preview, _| preview.clear());
+      }
+    }
+
+    self.center_tabs.retain(|candidate| candidate != &tab);
+    self
+      .center_tab_history
+      .retain(|candidate| candidate != &tab);
+    self.center_layouts_by_tab.remove(&tab);
+
+    let remaining_tab = self.center_layout.active_tab().clone();
+    let representative = if old_representative.as_ref() == Some(&tab) {
+      if let Some(old_representative) = old_representative.as_ref() {
+        self
+          .center_tabs
+          .retain(|candidate| candidate != old_representative);
+        self
+          .center_tab_history
+          .retain(|candidate| candidate != old_representative);
+        self.center_layouts_by_tab.remove(old_representative);
+      }
+      remaining_tab.clone()
+    } else {
+      old_representative.unwrap_or_else(|| remaining_tab.clone())
+    };
+
+    self.center = Self::center_view_for_tab(&remaining_tab);
+    if self.center_layout.surface_count() > 1 {
+      self.remember_center_layout_tab(representative);
+    } else {
+      self.active_center_tab = Some(remaining_tab.clone());
+      self.center_layouts_by_tab.remove(&remaining_tab);
+      if !self.center_tabs.contains(&remaining_tab) {
+        self.center_tabs.push(remaining_tab.clone());
+      }
+      self.remember_center_tab_visit(remaining_tab);
+    }
+    self.sync_agent_chat_close_control(cx);
+    match self.center {
+      CenterView::Conversation => self.focus_agent_input_on_next_frame(window, cx),
+      CenterView::Diff => self.focus_editor_on_next_frame(window, cx),
+      CenterView::InteractiveRebase => {}
+    }
+    cx.notify();
+  }
+
   pub(super) fn close_center_tab(
     &mut self,
     tab: CenterTab,
@@ -1782,6 +1866,9 @@ impl SessionPage {
       ),
       UnsavedEditorAction::CloseCenterTab { tab } => {
         self.close_center_tab_without_unsaved_prompt(tab, window, cx)
+      }
+      UnsavedEditorAction::CloseCenterSurface { tab } => {
+        self.close_center_surface_without_unsaved_prompt(tab, window, cx)
       }
     }
   }

@@ -985,6 +985,7 @@ pub struct AgentChatPanel {
   _permission_task: Option<Task<()>>,
   _input_sub: Option<gpui::Subscription>,
   show_close_control: bool,
+  show_header: bool,
 }
 
 impl AgentChatPanel {
@@ -1088,6 +1089,7 @@ impl AgentChatPanel {
       _permission_task: None,
       _input_sub: Some(input_sub),
       show_close_control: false,
+      show_header: true,
     };
 
     panel.refresh_project_files(cx);
@@ -1707,6 +1709,7 @@ impl AgentChatPanel {
       _permission_task: None,
       _input_sub: Some(input_sub),
       show_close_control: false,
+      show_header: true,
     };
     panel.install_runway_release(cx);
     panel.sync_list_count();
@@ -3116,6 +3119,14 @@ impl AgentChatPanel {
       return;
     }
     self.show_close_control = visible;
+    cx.notify();
+  }
+
+  pub fn set_header_visible(&mut self, visible: bool, cx: &mut Context<Self>) {
+    if self.show_header == visible {
+      return;
+    }
+    self.show_header = visible;
     cx.notify();
   }
 

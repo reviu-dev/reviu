@@ -2063,6 +2063,7 @@ impl SessionPage {
     }
   }
 
+  #[cfg(test)]
   fn hide_diff_chat(&mut self, window: &mut Window, cx: &mut Context<Self>) {
     if self.center != CenterView::Diff || !self.diff_chat_open {
       return;
@@ -2077,8 +2078,11 @@ impl SessionPage {
     let Some(panel) = self.agent_chat_view.clone() else {
       return;
     };
-    let visible = self.center == CenterView::Diff && self.diff_chat_open;
-    panel.update(cx, |panel, cx| panel.set_close_control_visible(visible, cx));
+    let show_split_chrome = self.center_layout.surface_count() > 1;
+    panel.update(cx, |panel, cx| {
+      panel.set_header_visible(show_split_chrome, cx);
+      panel.set_close_control_visible(show_split_chrome, cx);
+    });
   }
 
   fn toggle_file_stage_action(
