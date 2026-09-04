@@ -872,7 +872,7 @@ mod tests {
       assert!(page.fallback_repo.is_none());
       assert_eq!(page.dock_panel.read(cx).repo_root(), None);
       assert_eq!(
-        page.session_list.read(cx).section_order_for_test(),
+        page.session_list.read(cx).project_order_for_test(),
         &[project.canonicalize().expect("canonical project")]
       );
     });
@@ -908,7 +908,7 @@ mod tests {
         page
           .session_list
           .read(cx)
-          .section_order_for_test()
+          .project_order_for_test()
           .is_empty()
       );
     });
@@ -1074,7 +1074,7 @@ mod tests {
     cx.run_until_parked();
 
     let (hidden_repo, removed_repo) = page.read_with(cx, |page, cx| {
-      let visible = page.session_list.read(cx).section_order_for_test().to_vec();
+      let visible = page.session_list.read(cx).project_order_for_test().to_vec();
       assert_eq!(visible.len(), crate::conversation_hub::MAX_TRACKED_REPOS);
       let recent = ConfigStore::load_recent_repositories()
         .into_iter()
@@ -1102,7 +1102,7 @@ mod tests {
     cx.run_until_parked();
 
     page.read_with(cx, |page, cx| {
-      let visible = page.session_list.read(cx).section_order_for_test();
+      let visible = page.session_list.read(cx).project_order_for_test();
       assert_eq!(visible.len(), crate::conversation_hub::MAX_TRACKED_REPOS);
       assert!(visible.contains(&hidden_repo));
       assert!(!visible.contains(&removed_repo));

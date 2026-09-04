@@ -392,37 +392,37 @@ impl SessionPage {
       &session_list,
       window,
       |this, _list, event: &SessionListEvent, window, cx| match event {
-        SessionListEvent::ToggleRepoCollapsed { repo_root } => {
-          let repo_root = repo_root.clone();
-          this
-            .session_list
-            .update(cx, |list, cx| list.toggle_repo_collapsed(&repo_root, cx));
+        SessionListEvent::ToggleProjectCollapsed { project_root } => {
+          let project_root = project_root.clone();
+          this.session_list.update(cx, |list, cx| {
+            list.toggle_project_collapsed(&project_root, cx)
+          });
         }
-        SessionListEvent::NewWorktreeSessionIn { repo_root, base } => {
-          this.new_worktree_session_in(repo_root.clone(), base.clone(), window, cx)
+        SessionListEvent::NewWorktreeSessionIn { project_root, base } => {
+          this.new_worktree_session_in(project_root.clone(), base.clone(), window, cx)
         }
         SessionListEvent::SelectedCheckout {
-          repo_root,
+          project_root,
           checkout_root,
         } => {
-          let _repo_root = repo_root;
+          let _project_root = project_root;
           this.pin_checkout(checkout_root.clone(), window, cx)
         }
-        SessionListEvent::RevealRepository { repo_root } => cx.reveal_path(repo_root),
-        SessionListEvent::CopyRepositoryPath { repo_root } => {
+        SessionListEvent::RevealProject { project_root } => cx.reveal_path(project_root),
+        SessionListEvent::CopyProjectPath { project_root } => {
           cx.write_to_clipboard(ClipboardItem::new_string(
-            repo_root.to_string_lossy().into_owned(),
+            project_root.to_string_lossy().into_owned(),
           ));
           window.push_notification(Notification::info("Project path copied"), cx);
         }
-        SessionListEvent::RemoveRepository { repo_root } => {
-          if let Err(error) = this.forget_repository(repo_root.clone(), window, cx) {
+        SessionListEvent::RemoveProject { project_root } => {
+          if let Err(error) = this.forget_repository(project_root.clone(), window, cx) {
             window.push_notification(Notification::warning(error), cx);
           }
         }
-        SessionListEvent::RepoOrderChanged { section_order } => {
-          this.conversation_hub.reorder(section_order);
-          ConfigStore::persist_session_sidebar_repositories(section_order);
+        SessionListEvent::ProjectOrderChanged { project_order } => {
+          this.conversation_hub.reorder(project_order);
+          ConfigStore::persist_session_sidebar_repositories(project_order);
         }
         SessionListEvent::Collapse => this.close_sidebar(cx),
         SessionListEvent::Selected { id } => this.select_session(id, window, cx),
@@ -848,7 +848,7 @@ impl SessionPage {
     let current = (panel.has_persistable_content() || existing_current_row)
       .then(|| panel.current_conversation().clone());
     let current = current.map(|meta| crate::session_list::SessionRow {
-      repo_root: panel.repo_root().to_path_buf(),
+      project_root: panel.repo_root().to_path_buf(),
       meta,
     });
     let statuses = self.session_statuses(cx);
@@ -903,14 +903,14 @@ impl SessionPage {
         .filter(|(repo, _)| git::discover_repository_root(repo).is_some())
         .map(|(repo, _)| repo.clone()),
     );
-    let section_order = self.initial_session_sidebar_projects();
+    let project_order = self.initial_session_sidebar_projects();
     let conversations: Vec<crate::session_list::SessionRow> = sections
       .into_iter()
       .flat_map(|(repo, metas)| {
         metas
           .into_iter()
           .map(move |meta| crate::session_list::SessionRow {
-            repo_root: repo.clone(),
+            project_root: repo.clone(),
             meta,
           })
           .collect::<Vec<_>>()
@@ -926,7 +926,7 @@ impl SessionPage {
     let displayed_checkout = self.checkout_root(cx);
     self.session_list.update(cx, |list, cx| {
       list.set_conversations(conversations, current_id, cx);
-      list.set_section_order(section_order, cx);
+      list.set_project_order(project_order, cx);
       list.set_git_repositories(git_repositories, cx);
       list.set_statuses(statuses, cx);
       list.set_worktree_checkouts(worktree_checkouts, cx);

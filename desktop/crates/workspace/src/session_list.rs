@@ -66,12 +66,12 @@ pub(crate) fn session_row_title(meta: &ConversationMeta) -> SharedString {
   }
 }
 
-/// One sidebar row: the conversation and the repo it belongs to. Rows arrive
-/// grouped by repo (stable section order) and render under section headers.
+/// One sidebar row: the conversation and the project it belongs to. Rows arrive
+/// grouped by project (stable project order) and render under section headers.
 #[derive(Clone, Debug, PartialEq)]
 pub struct SessionRow {
   pub meta: ConversationMeta,
-  pub repo_root: PathBuf,
+  pub project_root: PathBuf,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -89,13 +89,13 @@ struct CheckoutRow {
 }
 
 #[derive(Clone)]
-struct DraggedRepoSection {
-  repo_root: PathBuf,
+struct DraggedProjectSection {
+  project_root: PathBuf,
   name: SharedString,
   cursor_offset: Point<Pixels>,
 }
 
-impl Render for DraggedRepoSection {
+impl Render for DraggedProjectSection {
   fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
     div()
       .ml(self.cursor_offset.x - px(90.0))
@@ -117,32 +117,32 @@ impl Render for DraggedRepoSection {
 }
 
 pub enum SessionListEvent {
-  /// The section header itself: fold or unfold a repo's sessions.
-  ToggleRepoCollapsed {
-    repo_root: PathBuf,
+  /// The section header itself: fold or unfold a project's chats.
+  ToggleProjectCollapsed {
+    project_root: PathBuf,
   },
   /// The section header's create menu: a session whose agent works in its own
-  /// git worktree of THAT repo, started from `base`; `None` is the repository's
+  /// git worktree of THAT project, started from `base`; `None` is the repository's
   /// default branch.
   NewWorktreeSessionIn {
-    repo_root: PathBuf,
+    project_root: PathBuf,
     base: Option<String>,
   },
   SelectedCheckout {
-    repo_root: PathBuf,
+    project_root: PathBuf,
     checkout_root: PathBuf,
   },
-  RevealRepository {
-    repo_root: PathBuf,
+  RevealProject {
+    project_root: PathBuf,
   },
-  CopyRepositoryPath {
-    repo_root: PathBuf,
+  CopyProjectPath {
+    project_root: PathBuf,
   },
-  RemoveRepository {
-    repo_root: PathBuf,
+  RemoveProject {
+    project_root: PathBuf,
   },
-  RepoOrderChanged {
-    section_order: Vec<PathBuf>,
+  ProjectOrderChanged {
+    project_order: Vec<PathBuf>,
   },
   /// The collapse button in the header; the page owns the sidebar width.
   Collapse,
@@ -155,7 +155,7 @@ pub enum SessionListEvent {
 }
 
 #[derive(Default)]
-struct RepoMenuState {
+struct ProjectMenuState {
   menu: Option<Entity<PopupMenu>>,
 }
 
@@ -169,16 +169,16 @@ pub struct SessionList {
   /// Worktree checkout by conversation id, shown under checkout and chat rows.
   worktree_checkouts: HashMap<String, WorktreeBinding>,
   displayed_checkout: Option<PathBuf>,
-  /// Folded repo sections; folding IS the filter now.
-  collapsed_repos: HashSet<PathBuf>,
+  /// Folded project sections; folding IS the filter now.
+  collapsed_projects: HashSet<PathBuf>,
   /// Every tracked project, in stable order: sections render from this, so an
   /// emptied project keeps its header.
-  section_order: Vec<PathBuf>,
+  project_order: Vec<PathBuf>,
   /// Projects that have Git. Only these can create worktree checkouts.
   git_repositories: HashSet<PathBuf>,
   /// Keeps the section highlighted while one of its menus is open.
-  open_menu_repo: Option<PathBuf>,
-  repo_header_bounds: HashMap<PathBuf, Bounds<Pixels>>,
+  open_menu_project: Option<PathBuf>,
+  project_header_bounds: HashMap<PathBuf, Bounds<Pixels>>,
   drop_gap: Option<usize>,
 }
 
@@ -191,18 +191,18 @@ impl SessionList {
       statuses: HashMap::new(),
       worktree_checkouts: HashMap::new(),
       displayed_checkout: None,
-      collapsed_repos: HashSet::new(),
-      section_order: Vec::new(),
+      collapsed_projects: HashSet::new(),
+      project_order: Vec::new(),
       git_repositories: HashSet::new(),
-      open_menu_repo: None,
-      repo_header_bounds: HashMap::new(),
+      open_menu_project: None,
+      project_header_bounds: HashMap::new(),
       drop_gap: None,
     }
   }
 
-  pub fn set_section_order(&mut self, section_order: Vec<PathBuf>, cx: &mut Context<Self>) {
-    if self.section_order != section_order {
-      self.section_order = section_order;
+  pub fn set_project_order(&mut self, project_order: Vec<PathBuf>, cx: &mut Context<Self>) {
+    if self.project_order != project_order {
+      self.project_order = project_order;
       cx.notify();
     }
   }
@@ -219,20 +219,20 @@ impl SessionList {
   }
 
   #[cfg(test)]
-  pub(crate) fn section_order_for_test(&self) -> &[PathBuf] {
-    &self.section_order
+  pub(crate) fn project_order_for_test(&self) -> &[PathBuf] {
+    &self.project_order
   }
 
-  pub fn toggle_repo_collapsed(&mut self, repo_root: &Path, cx: &mut Context<Self>) {
-    if !self.collapsed_repos.remove(repo_root) {
-      self.collapsed_repos.insert(repo_root.to_path_buf());
+  pub fn toggle_project_collapsed(&mut self, repo_root: &Path, cx: &mut Context<Self>) {
+    if !self.collapsed_projects.remove(repo_root) {
+      self.collapsed_projects.insert(repo_root.to_path_buf());
     }
     cx.notify();
   }
 
   #[cfg(test)]
-  pub(crate) fn is_repo_collapsed(&self, repo_root: &Path) -> bool {
-    self.collapsed_repos.contains(repo_root)
+  pub(crate) fn is_project_collapsed(&self, repo_root: &Path) -> bool {
+    self.collapsed_projects.contains(repo_root)
   }
 
   pub fn set_loading(&mut self, loading_id: Option<String>, cx: &mut Context<Self>) {
@@ -343,13 +343,13 @@ impl SessionList {
           changed = true;
         }
         None => {
-          // A fresh conversation heads its repo's section (newest-created
-          // first); an unknown repo opens a section at the end until the
+          // A fresh conversation heads its project's section (newest-created
+          // first); an unknown project opens a section at the end until the
           // next full refresh settles the order.
           let at = self
             .conversations
             .iter()
-            .position(|existing| existing.repo_root == row.repo_root)
+            .position(|existing| existing.project_root == row.project_root)
             .unwrap_or(self.conversations.len());
           self.conversations.insert(at, row);
           changed = true;
@@ -361,17 +361,17 @@ impl SessionList {
     }
   }
 
-  fn rendered_section_order(&self) -> Vec<PathBuf> {
-    let mut section_repos = self.section_order.clone();
+  fn rendered_project_order(&self) -> Vec<PathBuf> {
+    let mut section_repos = self.project_order.clone();
     for row in &self.conversations {
-      if !section_repos.contains(&row.repo_root) {
-        section_repos.push(row.repo_root.clone());
+      if !section_repos.contains(&row.project_root) {
+        section_repos.push(row.project_root.clone());
       }
     }
     section_repos
   }
 
-  fn checkout_rows_for_repo(&self, repo_root: &Path) -> Vec<CheckoutRow> {
+  fn checkout_rows_for_project(&self, repo_root: &Path) -> Vec<CheckoutRow> {
     let mut rows = vec![CheckoutRow {
       kind: CheckoutKind::Main,
       path: repo_root.to_path_buf(),
@@ -385,7 +385,7 @@ impl SessionList {
     for row in self
       .conversations
       .iter()
-      .filter(|row| row.repo_root == repo_root)
+      .filter(|row| row.project_root == repo_root)
     {
       let Some(binding) = self.worktree_checkouts.get(&row.meta.id) else {
         continue;
@@ -409,14 +409,14 @@ impl SessionList {
   }
 
   fn checkout_path_for_session(&self, row: &SessionRow) -> PathBuf {
-    if !self.git_repositories.contains(&row.repo_root) {
-      return row.repo_root.clone();
+    if !self.git_repositories.contains(&row.project_root) {
+      return row.project_root.clone();
     }
     self
       .worktree_checkouts
       .get(&row.meta.id)
       .map(|binding| binding.path.clone())
-      .unwrap_or_else(|| row.repo_root.clone())
+      .unwrap_or_else(|| row.project_root.clone())
   }
 
   #[cfg(test)]
@@ -425,24 +425,24 @@ impl SessionList {
       .conversations
       .iter()
       .filter(|row| {
-        row.repo_root == repo_root && self.checkout_path_for_session(row) == checkout_root
+        row.project_root == repo_root && self.checkout_path_for_session(row) == checkout_root
       })
       .map(|row| row.meta.id.clone())
       .collect()
   }
 
-  fn update_repo_header_bounds(&mut self, repo_root: PathBuf, bounds: Bounds<Pixels>) {
-    self.repo_header_bounds.insert(repo_root, bounds);
+  fn update_project_header_bounds(&mut self, project_root: PathBuf, bounds: Bounds<Pixels>) {
+    self.project_header_bounds.insert(project_root, bounds);
   }
 
-  fn repo_drop_gap_at(&self, y: Pixels, dragged_repo: &Path) -> Option<usize> {
-    let section_repos = self.rendered_section_order();
+  fn project_drop_gap_at(&self, y: Pixels, dragged_repo: &Path) -> Option<usize> {
+    let section_repos = self.rendered_project_order();
     let from = section_repos.iter().position(|repo| repo == dragged_repo)?;
     let mut gap = 0;
     let mut found_bounds = false;
 
     for (row, repo) in section_repos.iter().enumerate() {
-      let Some(bounds) = self.repo_header_bounds.get(repo) else {
+      let Some(bounds) = self.project_header_bounds.get(repo) else {
         continue;
       };
       found_bounds = true;
@@ -466,34 +466,34 @@ impl SessionList {
     }
   }
 
-  fn reorder_repo_section(&mut self, dragged_repo: &Path, gap: usize, cx: &mut Context<Self>) {
+  fn reorder_project_section(&mut self, dragged_repo: &Path, gap: usize, cx: &mut Context<Self>) {
     self.drop_gap = None;
-    let mut section_order = self.rendered_section_order();
-    let Some(from) = section_order.iter().position(|repo| repo == dragged_repo) else {
+    let mut project_order = self.rendered_project_order();
+    let Some(from) = project_order.iter().position(|repo| repo == dragged_repo) else {
       cx.notify();
       return;
     };
-    let mut gap = gap.min(section_order.len());
+    let mut gap = gap.min(project_order.len());
     if gap == from || gap == from + 1 {
       cx.notify();
       return;
     }
 
-    let repo = section_order.remove(from);
+    let repo = project_order.remove(from);
     if from < gap {
       gap -= 1;
     }
-    section_order.insert(gap, repo);
-    self.section_order = section_order.clone();
-    cx.emit(SessionListEvent::RepoOrderChanged { section_order });
+    project_order.insert(gap, repo);
+    self.project_order = project_order.clone();
+    cx.emit(SessionListEvent::ProjectOrderChanged { project_order });
     cx.notify();
   }
 }
 
 impl SessionList {
-  /// A repo's section header: fold toggle, name, count when folded, and the
-  /// hover actions that target THAT repo.
-  fn render_repo_header(
+  /// A project's section header: fold toggle, name, count when folded, and the
+  /// hover actions that target that project.
+  fn render_project_header(
     &self,
     repo_root: &Path,
     row: usize,
@@ -502,7 +502,7 @@ impl SessionList {
     theme: &gpui_component::Theme,
     cx: &mut Context<Self>,
   ) -> gpui::AnyElement {
-    let collapsed = self.collapsed_repos.contains(repo_root);
+    let collapsed = self.collapsed_projects.contains(repo_root);
     let name: SharedString = repo_root
       .file_name()
       .map(|name| name.to_string_lossy().into_owned())
@@ -514,7 +514,7 @@ impl SessionList {
     let drag_repo = repo_root.to_path_buf();
     let bounds_repo = repo_root.to_path_buf();
     let group_name = SharedString::from(format!("repo-section-{}", repo_root.display()));
-    let menu_open = self.open_menu_repo.as_deref() == Some(repo_root);
+    let menu_open = self.open_menu_project.as_deref() == Some(repo_root);
     let drop_gap = self.drop_gap.filter(|_| cx.has_active_drag());
     let git_backed = self.git_repositories.contains(repo_root);
 
@@ -559,13 +559,13 @@ impl SessionList {
         let view = cx.entity().clone();
         move |bounds, _, cx| {
           view.update(cx, |list, _| {
-            list.update_repo_header_bounds(bounds_repo.clone(), bounds)
+            list.update_project_header_bounds(bounds_repo.clone(), bounds)
           })
         }
       })
       .on_drag(
-        DraggedRepoSection {
-          repo_root: drag_repo,
+        DraggedProjectSection {
+          project_root: drag_repo,
           name: name.clone(),
           cursor_offset: Point::default(),
         },
@@ -576,8 +576,8 @@ impl SessionList {
         },
       )
       .on_click(cx.listener(move |_, _, _, cx| {
-        cx.emit(SessionListEvent::ToggleRepoCollapsed {
-          repo_root: toggle_repo.clone(),
+        cx.emit(SessionListEvent::ToggleProjectCollapsed {
+          project_root: toggle_repo.clone(),
         });
       }))
       .child(
@@ -677,7 +677,7 @@ impl SessionList {
       .hover(|this| this.bg(theme.secondary_hover))
       .on_click(cx.listener(move |_, _, _, cx| {
         cx.emit(SessionListEvent::SelectedCheckout {
-          repo_root: checkout_repo.clone(),
+          project_root: checkout_repo.clone(),
           checkout_root: checkout_root.clone(),
         });
       }))
@@ -843,13 +843,14 @@ impl SessionList {
       .into_any_element()
   }
 
-  fn render_repo_menu_button(
-    repo_root: PathBuf,
+  fn render_project_menu_button(
+    project_root: PathBuf,
     menu_id: SharedString,
     button: Button,
     cx: &mut Context<Self>,
     build_menu: impl Fn(PopupMenu, &mut Window, &mut Context<PopupMenu>) -> PopupMenu + 'static,
   ) -> impl IntoElement {
+    let repo_root = project_root;
     let entity = cx.entity().downgrade();
     let build_menu = Rc::new(build_menu);
     let popover_id = SharedString::from(format!(
@@ -869,16 +870,17 @@ impl SessionList {
         let repo_root = open_repo.clone();
         let _ = entity.update(cx, |list, cx| {
           if *open {
-            list.open_menu_repo = Some(repo_root);
-          } else if list.open_menu_repo.as_deref() == Some(repo_root.as_path()) {
-            list.open_menu_repo = None;
+            list.open_menu_project = Some(repo_root);
+          } else if list.open_menu_project.as_deref() == Some(repo_root.as_path()) {
+            list.open_menu_project = None;
           }
           cx.notify();
         });
       })
       .content(move |_, window, cx| {
-        let menu_state =
-          window.use_keyed_state(menu_state_id.clone(), cx, |_, _| RepoMenuState::default());
+        let menu_state = window.use_keyed_state(menu_state_id.clone(), cx, |_, _| {
+          ProjectMenuState::default()
+        });
         match menu_state.read(cx).menu.clone() {
           Some(menu) => menu,
           None => {
@@ -906,9 +908,10 @@ impl SessionList {
       })
   }
 
-  /// The create menu of one repo section: the worktree base picker reads
-  /// branches from THAT repo, at menu-open time (always fresh, never polled).
-  fn render_create_button(repo_root: PathBuf, cx: &mut Context<Self>) -> impl IntoElement {
+  /// The create menu of one Git project section: the worktree base picker reads
+  /// branches from that repository at menu-open time.
+  fn render_create_button(project_root: PathBuf, cx: &mut Context<Self>) -> impl IntoElement {
+    let repo_root = project_root;
     let entity = cx.entity().downgrade();
     let button = Button::new(SharedString::from(format!(
       "session-repo-create-{}",
@@ -921,7 +924,7 @@ impl SessionList {
     .xsmall()
     .tooltip("New worktree");
 
-    Self::render_repo_menu_button(
+    Self::render_project_menu_button(
       repo_root.clone(),
       "create".into(),
       button,
@@ -959,7 +962,7 @@ impl SessionList {
                 let repo_root = default_repo.clone();
                 let _ = default_entity.update(cx, |_, cx| {
                   cx.emit(SessionListEvent::NewWorktreeSessionIn {
-                    repo_root,
+                    project_root: repo_root,
                     base: None,
                   });
                 });
@@ -991,7 +994,7 @@ impl SessionList {
                   let base = base.clone();
                   let _ = entity.update(cx, |_, cx| {
                     cx.emit(SessionListEvent::NewWorktreeSessionIn {
-                      repo_root,
+                      project_root: repo_root,
                       base: Some(base),
                     });
                   });
@@ -1005,7 +1008,8 @@ impl SessionList {
     )
   }
 
-  fn render_options_button(repo_root: PathBuf, cx: &mut Context<Self>) -> impl IntoElement {
+  fn render_options_button(project_root: PathBuf, cx: &mut Context<Self>) -> impl IntoElement {
+    let repo_root = project_root;
     let entity = cx.entity().downgrade();
     let button = Button::new(SharedString::from(format!(
       "session-repo-options-{}",
@@ -1018,7 +1022,7 @@ impl SessionList {
     .xsmall()
     .tooltip("Project options");
 
-    Self::render_repo_menu_button(
+    Self::render_project_menu_button(
       repo_root.clone(),
       "options".into(),
       button,
@@ -1044,7 +1048,9 @@ impl SessionList {
               .on_click(move |_, _, cx| {
                 let repo_root = reveal_repo.clone();
                 let _ = reveal_entity.update(cx, |_, cx| {
-                  cx.emit(SessionListEvent::RevealRepository { repo_root });
+                  cx.emit(SessionListEvent::RevealProject {
+                    project_root: repo_root,
+                  });
                 });
               }),
           )
@@ -1054,7 +1060,9 @@ impl SessionList {
               .on_click(move |_, _, cx| {
                 let repo_root = copy_repo.clone();
                 let _ = copy_entity.update(cx, |_, cx| {
-                  cx.emit(SessionListEvent::CopyRepositoryPath { repo_root });
+                  cx.emit(SessionListEvent::CopyProjectPath {
+                    project_root: repo_root,
+                  });
                 });
               }),
           )
@@ -1065,7 +1073,9 @@ impl SessionList {
               .on_click(move |_, _, cx| {
                 let repo_root = remove_repo.clone();
                 let _ = remove_entity.update(cx, |_, cx| {
-                  cx.emit(SessionListEvent::RemoveRepository { repo_root });
+                  cx.emit(SessionListEvent::RemoveProject {
+                    project_root: repo_root,
+                  });
                 });
               }),
           )
@@ -1110,21 +1120,21 @@ impl Render for SessionList {
           .on_click(cx.listener(|_, _, _, cx| cx.emit(SessionListEvent::Collapse))),
       );
 
-    // Sections come from the tracked-repo order so an empty repo keeps its
+    // Sections come from the tracked-project order so an empty project keeps its
     // header; rows not yet in that order (fresh upsert) get a section at the
     // end until the next refresh settles it.
-    let section_repos = self.rendered_section_order();
+    let section_repos = self.rendered_project_order();
     self
-      .repo_header_bounds
+      .project_header_bounds
       .retain(|repo, _| section_repos.contains(repo));
     let mut items: Vec<gpui::AnyElement> = Vec::new();
     for (section_ix, section_repo) in section_repos.iter().enumerate() {
       let count = self
         .conversations
         .iter()
-        .filter(|row| &row.repo_root == section_repo)
+        .filter(|row| &row.project_root == section_repo)
         .count();
-      items.push(self.render_repo_header(
+      items.push(self.render_project_header(
         section_repo,
         section_ix,
         section_ix + 1 == section_repos.len(),
@@ -1132,14 +1142,14 @@ impl Render for SessionList {
         &theme,
         cx,
       ));
-      if self.collapsed_repos.contains(section_repo) {
+      if self.collapsed_projects.contains(section_repo) {
         continue;
       }
-      for checkout in self.checkout_rows_for_repo(section_repo) {
+      for checkout in self.checkout_rows_for_project(section_repo) {
         let active = self.displayed_checkout.as_deref() == Some(checkout.path.as_path());
         items.push(self.render_checkout_row(section_repo, &checkout, active, &theme, cx));
         for (ix, row) in self.conversations.iter().enumerate().filter(|(_, row)| {
-          row.repo_root == *section_repo && self.checkout_path_for_session(row) == checkout.path
+          row.project_root == *section_repo && self.checkout_path_for_session(row) == checkout.path
         }) {
           items.push(self.render_chat_row(ix, row, now, &theme, cx));
         }
@@ -1181,23 +1191,23 @@ impl Render for SessionList {
         .min_h_0()
         .overflow_y_scroll()
         .py_1()
-        .on_drag_move(
-          cx.listener(|this, event: &DragMoveEvent<DraggedRepoSection>, _, cx| {
+        .on_drag_move(cx.listener(
+          |this, event: &DragMoveEvent<DraggedProjectSection>, _, cx| {
             let drag = event.drag(cx);
             let gap = if event.bounds.contains(&event.event.position) {
-              this.repo_drop_gap_at(event.event.position.y, &drag.repo_root)
+              this.project_drop_gap_at(event.event.position.y, &drag.project_root)
             } else {
               None
             };
             this.update_drop_gap(gap, cx);
-          }),
-        )
-        .on_drop(cx.listener(|this, drag: &DraggedRepoSection, _, cx| {
+          },
+        ))
+        .on_drop(cx.listener(|this, drag: &DraggedProjectSection, _, cx| {
           let Some(gap) = this.drop_gap.take() else {
             cx.notify();
             return;
           };
-          this.reorder_repo_section(&drag.repo_root, gap, cx);
+          this.reorder_project_section(&drag.project_root, gap, cx);
         }))
         .on_mouse_exit(cx.listener(|this, _: &MouseExitEvent, _, cx| {
           this.update_drop_gap(None, cx);
@@ -1277,7 +1287,7 @@ mod tests {
         session_id: None,
         preview: String::new(),
       },
-      repo_root: PathBuf::from("/repo"),
+      project_root: PathBuf::from("/repo"),
     }
   }
 
@@ -1301,10 +1311,10 @@ mod tests {
 
     list.update(cx, |list, cx| {
       let mut main = meta("main-chat", 2);
-      main.repo_root = repo.clone();
+      main.project_root = repo.clone();
       let mut worktree = meta("worktree-chat", 1);
-      worktree.repo_root = repo.clone();
-      list.set_section_order(vec![repo.clone()], cx);
+      worktree.project_root = repo.clone();
+      list.set_project_order(vec![repo.clone()], cx);
       list.set_git_repositories(HashSet::from([repo.clone()]), cx);
       list.set_conversations(vec![main, worktree], "worktree-chat".into(), cx);
       list.set_worktree_checkouts(worktree_checkouts, cx);
@@ -1365,8 +1375,8 @@ mod tests {
 
     list.update(cx, |list, cx| {
       let mut row = meta("plain-chat", 1);
-      row.repo_root = project.clone();
-      list.set_section_order(vec![project.clone()], cx);
+      row.project_root = project.clone();
+      list.set_project_order(vec![project.clone()], cx);
       list.set_conversations(vec![row], "plain-chat".into(), cx);
       list.worktree_checkouts.insert(
         "plain-chat".to_string(),
@@ -1416,7 +1426,7 @@ mod tests {
       worktree_binding("/repo/.worktrees/ignored", "ignored"),
     );
     assert_eq!(
-      list.checkout_rows_for_repo(Path::new("/repo")),
+      list.checkout_rows_for_project(Path::new("/repo")),
       vec![CheckoutRow {
         kind: CheckoutKind::Main,
         path: PathBuf::from("/repo"),
@@ -1436,7 +1446,7 @@ mod tests {
       worktree_binding("/repo/.worktrees/feature-sidebar", "feature/sidebar"),
     );
     assert_eq!(
-      list.checkout_rows_for_repo(Path::new("/repo")),
+      list.checkout_rows_for_project(Path::new("/repo")),
       vec![
         CheckoutRow {
           kind: CheckoutKind::Main,
@@ -1486,7 +1496,9 @@ mod tests {
   }
 
   #[gpui::test]
-  async fn repo_section_reveals_create_and_options_actions_on_hover(cx: &mut gpui::TestAppContext) {
+  async fn project_section_reveals_create_and_options_actions_on_hover(
+    cx: &mut gpui::TestAppContext,
+  ) {
     cx.update(gpui_component::init);
     let list = cx.new(|_| SessionList::new());
     let mounted = list.clone();
@@ -1495,14 +1507,14 @@ mod tests {
     let repo = PathBuf::from("/repo");
 
     list.update(cx, |list, cx| {
-      list.set_section_order(vec![repo.clone()], cx);
+      list.set_project_order(vec![repo.clone()], cx);
       list.set_git_repositories(HashSet::from([repo.clone()]), cx);
     });
     cx.run_until_parked();
 
     let header = cx
       .debug_bounds("session-repo-section-/repo")
-      .expect("repo section header");
+      .expect("project section header");
     cx.simulate_mouse_move(header.center(), None, gpui::Modifiers::default());
     cx.run_until_parked();
 
@@ -1515,32 +1527,32 @@ mod tests {
     cx.run_until_parked();
 
     list.read_with(cx, |list, _| {
-      assert_eq!(list.open_menu_repo.as_deref(), Some(repo.as_path()));
+      assert_eq!(list.open_menu_project.as_deref(), Some(repo.as_path()));
     });
   }
 
   #[gpui::test]
-  async fn dropping_a_repo_section_reorders_sections(cx: &mut gpui::TestAppContext) {
+  async fn dropping_a_project_section_reorders_projects(cx: &mut gpui::TestAppContext) {
     let list = cx.new(|_| SessionList::new());
     let repo_a = PathBuf::from("/repo-a");
     let repo_b = PathBuf::from("/repo-b");
     let repo_c = PathBuf::from("/repo-c");
 
     list.update(cx, |list, cx| {
-      list.set_section_order(vec![repo_a.clone(), repo_b.clone(), repo_c.clone()], cx);
-      list.reorder_repo_section(&repo_c, 0, cx);
+      list.set_project_order(vec![repo_a.clone(), repo_b.clone(), repo_c.clone()], cx);
+      list.reorder_project_section(&repo_c, 0, cx);
       assert_eq!(
-        list.section_order,
+        list.project_order,
         vec![repo_c.clone(), repo_a.clone(), repo_b.clone()]
       );
 
-      list.reorder_repo_section(&repo_c, 3, cx);
-      assert_eq!(list.section_order, vec![repo_a, repo_b, repo_c]);
+      list.reorder_project_section(&repo_c, 3, cx);
+      assert_eq!(list.project_order, vec![repo_a, repo_b, repo_c]);
     });
   }
 
   #[gpui::test]
-  async fn dragging_a_repo_section_updates_the_order(cx: &mut gpui::TestAppContext) {
+  async fn dragging_a_project_section_updates_the_order(cx: &mut gpui::TestAppContext) {
     cx.update(gpui_component::init);
     let list = cx.new(|_| SessionList::new());
     let mounted = list.clone();
@@ -1551,17 +1563,17 @@ mod tests {
     let repo_c = PathBuf::from("/repo-c");
 
     list.update(cx, |list, cx| {
-      list.set_section_order(vec![repo_a.clone(), repo_b.clone(), repo_c.clone()], cx)
+      list.set_project_order(vec![repo_a.clone(), repo_b.clone(), repo_c.clone()], cx)
     });
     cx.run_until_parked();
 
     let from = cx
       .debug_bounds("session-repo-section-/repo-c")
-      .expect("source repo section")
+      .expect("source project section")
       .center();
     let to = cx
       .debug_bounds("session-repo-section-/repo-a")
-      .expect("target repo section")
+      .expect("target project section")
       .center();
 
     cx.simulate_mouse_down(from, gpui::MouseButton::Left, gpui::Modifiers::default());
@@ -1584,21 +1596,21 @@ mod tests {
 
     list.read_with(cx, |list, _| {
       assert_eq!(
-        list.section_order,
+        list.project_order,
         vec![repo_c.clone(), repo_a.clone(), repo_b.clone()]
       );
     });
   }
 
   #[test]
-  fn repo_drop_gap_uses_header_centers_and_skips_noops() {
+  fn project_drop_gap_uses_header_centers_and_skips_noops() {
     let repo_a = PathBuf::from("/repo-a");
     let repo_b = PathBuf::from("/repo-b");
     let repo_c = PathBuf::from("/repo-c");
     let mut list = SessionList::new();
-    list.section_order = vec![repo_a.clone(), repo_b.clone(), repo_c.clone()];
-    for (ix, repo) in list.section_order.clone().into_iter().enumerate() {
-      list.update_repo_header_bounds(
+    list.project_order = vec![repo_a.clone(), repo_b.clone(), repo_c.clone()];
+    for (ix, repo) in list.project_order.clone().into_iter().enumerate() {
+      list.update_project_header_bounds(
         repo,
         Bounds::new(
           Point::new(px(0.0), px((ix * 20) as f32)),
@@ -1607,10 +1619,10 @@ mod tests {
       );
     }
 
-    assert_eq!(list.repo_drop_gap_at(px(1.0), &repo_c), Some(0));
-    assert_eq!(list.repo_drop_gap_at(px(31.0), &repo_a), Some(2));
-    assert_eq!(list.repo_drop_gap_at(px(31.0), &repo_b), None);
-    assert_eq!(list.repo_drop_gap_at(px(45.0), &repo_c), None);
+    assert_eq!(list.project_drop_gap_at(px(1.0), &repo_c), Some(0));
+    assert_eq!(list.project_drop_gap_at(px(31.0), &repo_a), Some(2));
+    assert_eq!(list.project_drop_gap_at(px(31.0), &repo_b), None);
+    assert_eq!(list.project_drop_gap_at(px(45.0), &repo_c), None);
   }
 
   #[gpui::test]
@@ -1664,7 +1676,7 @@ mod tests {
       );
       assert_eq!(list.conversations[1].meta.updated_at_secs, 30);
 
-      // A row not yet on disk heads its repo's section.
+      // A row not yet on disk heads its project's section.
       list.upsert_current(Some(meta("c", 40)), "c".into(), cx);
       assert_eq!(
         list.conversation_ids(),
@@ -1676,12 +1688,12 @@ mod tests {
       assert_eq!(list.current_id, "b");
       assert_eq!(list.conversations.len(), 3);
 
-      // Folding a repo is list state, not data: rows stay.
-      list.toggle_repo_collapsed(Path::new("/repo"), cx);
-      assert!(list.is_repo_collapsed(Path::new("/repo")));
+      // Folding a project is list state, not data: rows stay.
+      list.toggle_project_collapsed(Path::new("/repo"), cx);
+      assert!(list.is_project_collapsed(Path::new("/repo")));
       assert_eq!(list.conversations.len(), 3);
-      list.toggle_repo_collapsed(Path::new("/repo"), cx);
-      assert!(!list.is_repo_collapsed(Path::new("/repo")));
+      list.toggle_project_collapsed(Path::new("/repo"), cx);
+      assert!(!list.is_project_collapsed(Path::new("/repo")));
     });
   }
 }

@@ -2316,7 +2316,7 @@ mod tests {
           .expect("active panel")
           .read(cx);
         crate::session_list::SessionRow {
-          repo_root: panel.repo_root().to_path_buf(),
+          project_root: panel.repo_root().to_path_buf(),
           meta: panel.current_conversation().clone(),
         }
       };
@@ -4694,7 +4694,7 @@ mod tests {
       assert!(list.conversation_ids().is_empty(), "no rows left");
       assert!(
         list
-          .section_order_for_test()
+          .project_order_for_test()
           .iter()
           .any(|section| section == &repo.path),
         "the emptied repo keeps its section header"
