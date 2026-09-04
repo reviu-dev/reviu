@@ -21,7 +21,7 @@ pub(crate) struct StoredReview {
 
 /// The batch sits in the same per-repo directory as that repo's conversations.
 pub(crate) fn review_path_for_repo(state_dir: &Path, repo: &Path) -> PathBuf {
-  AgentChatPanel::state_dir_for_repo(state_dir, repo).join(REVIEW_FILE_NAME)
+  AgentChatPanel::state_dir_for_project(state_dir, repo).join(REVIEW_FILE_NAME)
 }
 
 pub(crate) fn read_review(path: &Path) -> Option<StoredReview> {
@@ -374,7 +374,7 @@ mod tests {
     );
     assert_eq!(
       path.parent(),
-      Some(AgentChatPanel::state_dir_for_repo(&state_dir, &repo).as_path())
+      Some(AgentChatPanel::state_dir_for_project(&state_dir, &repo).as_path())
     );
   }
 }

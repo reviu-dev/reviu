@@ -59,8 +59,8 @@ impl ConversationHub {
       evicted.1.update(cx, |store, _| store.flush_on_quit());
       evicted_project = Some(evicted.0);
     }
-    let state_dir =
-      agent_chat_state_dir().map(|dir| AgentChatPanel::state_dir_for_repo(&dir, project_root))?;
+    let state_dir = agent_chat_state_dir()
+      .map(|dir| AgentChatPanel::state_dir_for_project(&dir, project_root))?;
     let store = cx.new(|_| ConversationStore::new(state_dir));
     store.update(cx, |store, cx| store.arm_quit_flush(cx));
     self.stores.push((key, store.clone()));

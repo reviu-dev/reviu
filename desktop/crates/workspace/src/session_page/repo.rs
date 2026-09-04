@@ -50,7 +50,7 @@ impl SessionPage {
     let shown_elsewhere = self
       .agent_chat_view
       .as_ref()
-      .is_some_and(|panel| panel.read(cx).repo_root() != repo_root.as_path());
+      .is_some_and(|panel| panel.read(cx).project_root() != repo_root.as_path());
     if self.fallback_repo.as_deref() == Some(repo_root.as_path()) && !shown_elsewhere {
       return Ok(());
     }
@@ -164,7 +164,7 @@ impl SessionPage {
     let forgetting_active_checkout = self
       .agent_chat_view
       .as_ref()
-      .is_some_and(|panel| panel.read(cx).repo_root() == repo_root.as_path())
+      .is_some_and(|panel| panel.read(cx).project_root() == repo_root.as_path())
       || self.fallback_repo.as_deref() == Some(repo_root.as_path())
       || self.project_root.as_deref() == Some(repo_root.as_path());
     if self.editor_is_dirty(cx) && forgetting_active_checkout {
@@ -201,11 +201,11 @@ impl SessionPage {
       ConfigStore::forget_recent_project(&project_root);
       self
         .background_chat_panels
-        .retain(|(_, panel)| panel.read(cx).repo_root() != project_root.as_path());
+        .retain(|(_, panel)| panel.read(cx).project_root() != project_root.as_path());
       if self
         .agent_chat_view
         .as_ref()
-        .is_some_and(|panel| panel.read(cx).repo_root() == project_root.as_path())
+        .is_some_and(|panel| panel.read(cx).project_root() == project_root.as_path())
       {
         self.agent_chat_view = None;
       }
@@ -239,7 +239,7 @@ impl SessionPage {
     // keeps nothing running.
     let mut doomed_panels: Vec<Entity<AgentChatPanel>> = Vec::new();
     self.background_chat_panels.retain(|(_, panel)| {
-      if panel.read(cx).repo_root() == repo_root.as_path() {
+      if panel.read(cx).project_root() == repo_root.as_path() {
         doomed_panels.push(panel.clone());
         false
       } else {
@@ -249,7 +249,7 @@ impl SessionPage {
     let active_was_doomed = self
       .agent_chat_view
       .as_ref()
-      .is_some_and(|panel| panel.read(cx).repo_root() == repo_root.as_path());
+      .is_some_and(|panel| panel.read(cx).project_root() == repo_root.as_path());
     if active_was_doomed && let Some(panel) = self.agent_chat_view.take() {
       doomed_panels.push(panel);
     }
@@ -594,7 +594,7 @@ mod tests {
       // No session was active there: a blank one opens so the screen, the
       // git surfaces and New Session all agree on where you are.
       let panel = page.agent_chat_view.as_ref().expect("a session is shown");
-      assert_eq!(panel.read(cx).repo_root(), other.path.as_path());
+      assert_eq!(panel.read(cx).project_root(), other.path.as_path());
       assert!(!panel.read(cx).has_persistable_content());
       // The open diff and its draft comments belong to the previous repo.
       assert_eq!(page.center, CenterView::Conversation);
@@ -620,7 +620,7 @@ mod tests {
     commit_text_file(&other.path, Path::new("README.md"), "other\n", "initial");
 
     let state_dir = agent_chat_state_dir()
-      .map(|dir| AgentChatPanel::state_dir_for_repo(&dir, &other.path))
+      .map(|dir| AgentChatPanel::state_dir_for_project(&dir, &other.path))
       .expect("agent chat state dir");
     let _ = std::fs::remove_dir_all(&state_dir);
     std::fs::create_dir_all(&state_dir).expect("create agent chat state dir");

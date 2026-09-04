@@ -4,7 +4,7 @@ use super::*;
 
 /// Blocking on purpose: runs on the background executor, where the test
 /// scheduler can track it (async-process's reactor thread cannot be).
-pub(crate) fn list_repo_files(cwd: PathBuf) -> Vec<String> {
+pub(crate) fn list_project_files(cwd: PathBuf) -> Vec<String> {
   let output = std::process::Command::new("git")
     .args(["ls-files", "--cached", "--others", "--exclude-standard"])
     .current_dir(&cwd)

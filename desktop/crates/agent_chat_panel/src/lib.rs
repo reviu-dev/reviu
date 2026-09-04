@@ -32,7 +32,7 @@ use crate::persistence::{
   CONVERSATION_FORMAT_VERSION, LoadedConversation, new_conversation_meta, now_secs, preview_of,
   truncate_title,
 };
-pub use crate::persistence::{ConversationMeta, WorktreeBinding, state_dir_for_repo};
+pub use crate::persistence::{ConversationMeta, WorktreeBinding, state_dir_for_project};
 pub use crate::store::ConversationStore;
 use crate::store::SaveRequest;
 
@@ -886,12 +886,12 @@ impl Drop for AgentChatPanel {
 pub struct AgentChatPanel {
   backend_kind: AgentId,
   backend: BackendConfig,
-  /// The repository this session belongs to; `cwd` may be one of its worktrees.
-  repo_root: PathBuf,
+  /// The project this session belongs to; `cwd` may be one of its worktrees.
+  project_root: PathBuf,
   cwd: PathBuf,
   status: Status,
   items: Vec<ChatItem>,
-  repo_files: Arc<Vec<String>>,
+  project_files: Arc<Vec<String>>,
   active_selection: Option<SelectionContext>,
   mention_selected_ix: usize,
   mention_dismissed: Option<MentionTrigger>,
@@ -993,7 +993,7 @@ impl AgentChatPanel {
   #[allow(clippy::too_many_arguments)]
   pub fn new(
     backend_kind: AgentId,
-    repo_root: PathBuf,
+    project_root: PathBuf,
     cwd: PathBuf,
     store: Option<Entity<ConversationStore>>,
     resume: Option<ConversationMeta>,
@@ -1012,11 +1012,11 @@ impl AgentChatPanel {
     let mut panel = Self {
       backend_kind,
       backend: backend.clone(),
-      repo_root,
+      project_root,
       cwd: cwd.clone(),
       status: Status::Connecting,
       items: Vec::new(),
-      repo_files: Arc::new(Vec::new()),
+      project_files: Arc::new(Vec::new()),
       active_selection: None,
       mention_selected_ix: 0,
       mention_dismissed: None,
@@ -1090,7 +1090,7 @@ impl AgentChatPanel {
       show_close_control: false,
     };
 
-    panel.refresh_repo_files(cx);
+    panel.refresh_project_files(cx);
     panel.install_runway_release(cx);
     panel.sync_list_count();
 
@@ -1631,11 +1631,11 @@ impl AgentChatPanel {
     let mut panel = Self {
       backend: resolve_backend_config(&backend_kind),
       backend_kind,
-      repo_root: cwd.clone(),
+      project_root: cwd.clone(),
       cwd,
       status: Status::Connecting,
       items: Vec::new(),
-      repo_files: Arc::new(Vec::new()),
+      project_files: Arc::new(Vec::new()),
       active_selection: None,
       mention_selected_ix: 0,
       mention_dismissed: None,
@@ -2216,13 +2216,13 @@ impl AgentChatPanel {
   }
 
   /// Reload the mention candidates; the agent creates files as it works.
-  fn refresh_repo_files(&mut self, cx: &mut Context<Self>) {
+  fn refresh_project_files(&mut self, cx: &mut Context<Self>) {
     let files_cwd = self.cwd.clone();
-    let listing = cx.background_spawn(async move { list_repo_files(files_cwd) });
+    let listing = cx.background_spawn(async move { list_project_files(files_cwd) });
     cx.spawn(async move |this, cx| {
       let files = listing.await;
       let _ = this.update(cx, |panel, cx| {
-        panel.repo_files = Arc::new(files);
+        panel.project_files = Arc::new(files);
         cx.notify();
       });
     })
@@ -2524,7 +2524,7 @@ impl AgentChatPanel {
     }
     let candidates = mention::matching_mentions(
       &trigger.query,
-      self.repo_files.as_slice(),
+      self.project_files.as_slice(),
       self.active_selection.is_some(),
       MENTION_MENU_MAX_ITEMS,
     );
@@ -3398,26 +3398,26 @@ impl AgentChatPanel {
     &self.current_conv
   }
 
-  /// The checkout this session's agent works in: a worktree or the main repo.
+  /// The checkout this session's agent works in: a worktree or the main project.
   pub fn cwd(&self) -> &Path {
     &self.cwd
   }
 
-  /// The repository this session belongs to, whatever checkout it works in.
-  pub fn repo_root(&self) -> &Path {
-    &self.repo_root
+  /// The project this session belongs to, whatever checkout it works in.
+  pub fn project_root(&self) -> &Path {
+    &self.project_root
   }
 
-  /// The per-repo store this session persists into.
+  /// The per-project store this session persists into.
   pub fn store(&self) -> Option<Entity<ConversationStore>> {
     self.store.clone()
   }
 
-  pub fn state_dir_for_repo(state_dir: &std::path::Path, repo: &std::path::Path) -> PathBuf {
-    state_dir_for_repo(state_dir, repo)
+  pub fn state_dir_for_project(state_dir: &std::path::Path, project: &std::path::Path) -> PathBuf {
+    state_dir_for_project(state_dir, project)
   }
 
-  /// The per-repo files that hold state ABOUT conversations rather than a
+  /// The per-project files that hold state ABOUT conversations rather than a
   /// conversation itself. Their mtime says nothing about staleness: an old
   /// `worktrees.json` may still bind live checkouts, and pruning it would
   /// orphan them.

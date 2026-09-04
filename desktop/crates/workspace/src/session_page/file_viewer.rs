@@ -25,7 +25,7 @@ pub(super) enum UnsavedEditorAction {
     id: String,
   },
   NewSessionIn {
-    repo_root: PathBuf,
+    project_root: PathBuf,
   },
   NewWorktreeSessionIn {
     repo_root: PathBuf,
@@ -1613,8 +1613,8 @@ impl SessionPage {
       UnsavedEditorAction::SelectSession { id } => {
         self.select_session_without_unsaved_prompt(&id, window, cx)
       }
-      UnsavedEditorAction::NewSessionIn { repo_root } => {
-        self.new_session_in_without_unsaved_prompt(repo_root, window, cx)
+      UnsavedEditorAction::NewSessionIn { project_root } => {
+        self.new_session_in_without_unsaved_prompt(project_root, window, cx)
       }
       UnsavedEditorAction::NewWorktreeSessionIn { repo_root, base } => {
         self.new_worktree_session_in_without_unsaved_prompt(repo_root, base, window, cx)

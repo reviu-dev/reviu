@@ -260,10 +260,10 @@ pub struct SessionPage {
   focus_handle: FocusHandle,
   window_handle: AnyWindowHandle,
   agent_chat_view: Option<Entity<AgentChatPanel>>,
-  /// All per-repo stores live here; everything cross-repo reads through it.
+  /// All per-project stores live here; everything cross-project reads through it.
   conversation_hub: ConversationHub,
-  /// The FALLBACK repo's store: where sessions land when nothing on screen
-  /// names a repo. Sessions of other repos carry their own store handle.
+  /// The selected project's store: where sessions land when nothing on screen
+  /// names another project. Other projects' sessions carry their own store handle.
   chat_store: Option<Entity<ConversationStore>>,
   /// Repos already swept for orphaned worktrees this run.
   swept_repos: HashSet<PathBuf>,
@@ -701,12 +701,12 @@ impl SessionPage {
       protected.insert(Self::canonical_repo(repo));
     }
     if let Some(panel) = self.agent_chat_view.as_ref() {
-      protected.insert(Self::canonical_repo(panel.read(cx).repo_root()));
+      protected.insert(Self::canonical_repo(panel.read(cx).project_root()));
     }
     for (_, panel) in &self.background_chat_panels {
       let panel = panel.read(cx);
       if panel.is_turn_in_flight() || panel.awaiting_permission() {
-        protected.insert(Self::canonical_repo(panel.repo_root()));
+        protected.insert(Self::canonical_repo(panel.project_root()));
       }
     }
     protected
@@ -856,7 +856,7 @@ impl SessionPage {
     let current = (panel.has_persistable_content() || existing_current_row)
       .then(|| panel.current_conversation().clone());
     let current = current.map(|meta| crate::session_list::SessionRow {
-      project_root: panel.repo_root().to_path_buf(),
+      project_root: panel.project_root().to_path_buf(),
       meta,
     });
     let statuses = self.session_statuses(cx);
@@ -954,7 +954,7 @@ impl SessionPage {
     self
       .agent_chat_view
       .as_ref()
-      .map(|panel| panel.read(cx).repo_root().to_path_buf())
+      .map(|panel| panel.read(cx).project_root().to_path_buf())
       .or_else(|| self.project_root.clone())
   }
 
@@ -996,7 +996,7 @@ impl SessionPage {
     self
       .agent_chat_view
       .as_ref()
-      .map(|panel| panel.read(cx).repo_root().to_path_buf())
+      .map(|panel| panel.read(cx).project_root().to_path_buf())
       .or_else(|| self.fallback_repo.clone())
   }
 
@@ -2396,7 +2396,7 @@ mod tests {
         page
           .dock_panel
           .read(cx)
-          .repo_root()
+          .project_root()
           .map(|path| path.to_path_buf()),
         Some(repo.path.clone()),
         "the dock follows the project that was just opened"

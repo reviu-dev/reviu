@@ -85,9 +85,11 @@ pub(crate) fn truncate_title(text: &str) -> String {
   }
 }
 
-/// Per-repo directory hosting one file per conversation + an `active.txt` pointer.
-pub fn state_dir_for_repo(state_dir: &std::path::Path, repo: &std::path::Path) -> PathBuf {
-  let canonical = repo.canonicalize().unwrap_or_else(|_| repo.to_path_buf());
+/// Per-project directory hosting one file per conversation + an `active.txt` pointer.
+pub fn state_dir_for_project(state_dir: &std::path::Path, project: &std::path::Path) -> PathBuf {
+  let canonical = project
+    .canonicalize()
+    .unwrap_or_else(|_| project.to_path_buf());
   let hash = blake3::hash(canonical.to_string_lossy().as_bytes());
   let hex = hash.to_hex();
   state_dir.join(&hex.as_str()[..16])

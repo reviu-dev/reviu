@@ -291,11 +291,11 @@ pub(crate) fn timeline_row_with_color(
 pub(crate) fn tool_header_parts(
   t: &ToolCallView,
   cwd: &Path,
-  repo_root: &Path,
+  project_root: &Path,
 ) -> (Option<&'static str>, String) {
   let kind = tool_kind_label(&t.kind);
   if let Some((path, _)) = t.locations.first() {
-    return (Some(kind), tool_header_path(path, cwd, repo_root));
+    return (Some(kind), tool_header_path(path, cwd, project_root));
   }
   match t.title.strip_prefix(kind) {
     Some(rest) if rest.is_empty() || rest.starts_with(char::is_whitespace) => {
@@ -314,9 +314,9 @@ pub(crate) fn tool_header_diff(t: &ToolCallView) -> Option<&DiffSummary> {
   }
 }
 
-fn tool_header_path(path: &Path, cwd: &Path, repo_root: &Path) -> String {
+fn tool_header_path(path: &Path, cwd: &Path, project_root: &Path) -> String {
   if path.is_absolute() {
-    for root in [repo_root, cwd] {
+    for root in [project_root, cwd] {
       if let Ok(stripped) = path.strip_prefix(root) {
         return stripped.display().to_string();
       }
@@ -1053,14 +1053,14 @@ pub(crate) fn render_tool_call(
   registry: &selectable_text::SelectionRegistry,
   terminal_store: Option<&std::sync::Arc<agent_acp::TerminalStore>>,
   cwd: &Path,
-  repo_root: &Path,
+  project_root: &Path,
   cx: &mut Context<AgentChatPanel>,
 ) -> gpui::AnyElement {
   let title_color = match t.status {
     ToolCallStatus::Failed => theme.danger,
     _ => theme.foreground,
   };
-  let (mut kind_label, detail) = tool_header_parts(t, cwd, repo_root);
+  let (mut kind_label, detail) = tool_header_parts(t, cwd, project_root);
   let tool_id = t.id.clone();
   let header_diff = tool_header_diff(t);
   if header_diff.is_some() && kind_label.is_none() {
@@ -1072,7 +1072,7 @@ pub(crate) fn render_tool_call(
     title_color
   };
   let detail_text = header_diff
-    .map(|diff| tool_header_path(Path::new(&diff.path), cwd, repo_root))
+    .map(|diff| tool_header_path(Path::new(&diff.path), cwd, project_root))
     .unwrap_or_else(|| detail.clone());
   let detail_first_line: SharedString = detail_text
     .lines()
@@ -3898,7 +3898,7 @@ impl AgentChatPanel {
                   &registry,
                   terminal_store.as_ref(),
                   &self.cwd,
-                  &self.repo_root,
+                  &self.project_root,
                   cx,
                 ))
                 .into_any_element()
@@ -3916,7 +3916,7 @@ impl AgentChatPanel {
                 &registry,
                 terminal_store.as_ref(),
                 &self.cwd,
-                &self.repo_root,
+                &self.project_root,
                 cx,
               ),
               theme,
@@ -3935,7 +3935,7 @@ impl AgentChatPanel {
               &registry,
               terminal_store.as_ref(),
               &self.cwd,
-              &self.repo_root,
+              &self.project_root,
               cx,
             ),
             theme,
@@ -4124,7 +4124,7 @@ impl AgentChatPanel {
         &registry,
         terminal_store.as_ref(),
         &self.cwd,
-        &self.repo_root,
+        &self.project_root,
         cx,
       ),
       ChatItem::Permission(permission) => render_permission(permission, theme, &registry, cx),

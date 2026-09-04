@@ -383,7 +383,7 @@ impl AgentChatPanel {
     cx.notify();
 
     let cwd = self.cwd.clone();
-    let files = self.repo_files.clone();
+    let files = self.project_files.clone();
     let selection = self.active_selection.take();
     cx.spawn(async move |this, cx| {
       let blocks = build_prompt_blocks(text, files, selection, images, cwd).await;
@@ -424,7 +424,7 @@ impl AgentChatPanel {
     cx.notify();
 
     let cwd = self.cwd.clone();
-    let files = self.repo_files.clone();
+    let files = self.project_files.clone();
     cx.spawn(async move |this, cx| {
       let blocks = build_prompt_blocks(text.clone(), files, None, Vec::new(), cwd).await;
       let result = session.steer_prompt_blocks(blocks).await;
@@ -626,7 +626,7 @@ Its provider may have refused it (credits, usage limit) without reporting an err
         panel.persist_state(cx);
         panel.sync_list_count();
         cx.emit(AgentChatPanelEvent::TurnFinished { completed });
-        panel.refresh_repo_files(cx);
+        panel.refresh_project_files(cx);
         cx.notify();
       }
     }

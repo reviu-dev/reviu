@@ -231,37 +231,37 @@ impl SessionPage {
     window: &mut Window,
     cx: &mut Context<Self>,
   ) -> Entity<AgentChatPanel> {
-    let repo = self
+    let project_root = self
       .session_repo(cx)
       .or_else(|| self.project_root(cx))
       .unwrap_or_else(|| PathBuf::from("."));
     let store = self.chat_store.clone();
-    self.build_chat_panel(repo, store, resume, window, cx)
+    self.build_chat_panel(project_root, store, resume, window, cx)
   }
 
   /// One panel per conversation: process, transcript and composer live and die
   /// with it. The shell only decides which one is on screen.
   fn build_chat_panel(
     &mut self,
-    repo_root: PathBuf,
+    project_root: PathBuf,
     store: Option<Entity<ConversationStore>>,
     resume: Option<agent_chat_panel::ConversationMeta>,
     window: &mut Window,
     cx: &mut Context<Self>,
   ) -> Entity<AgentChatPanel> {
     let cwd = self.session_cwd_for(
-      &repo_root,
+      &project_root,
       store.as_ref(),
       resume.as_ref().map(|meta| meta.id.as_str()),
       cx,
     );
-    self.build_chat_panel_at(repo_root, cwd, store, resume, window, cx)
+    self.build_chat_panel_at(project_root, cwd, store, resume, window, cx)
   }
 
   #[allow(clippy::too_many_arguments)]
   fn build_chat_panel_at(
     &mut self,
-    repo_root: PathBuf,
+    project_root: PathBuf,
     cwd: PathBuf,
     store: Option<Entity<ConversationStore>>,
     resume: Option<agent_chat_panel::ConversationMeta>,
@@ -275,7 +275,14 @@ impl SessionPage {
     let turn_gate = self.turn_gate.clone();
     let view = cx.new(|cx| {
       AgentChatPanel::new(
-        backend, repo_root, cwd, store, resume, turn_gate, window, cx,
+        backend,
+        project_root,
+        cwd,
+        store,
+        resume,
+        turn_gate,
+        window,
+        cx,
       )
     });
     let close_control_visible = self.center == CenterView::Diff && self.diff_chat_open;
@@ -373,7 +380,7 @@ impl SessionPage {
   ) {
     use app_log::ResultExt as _;
 
-    let repo_root = panel.read(cx).repo_root().to_path_buf();
+    let repo_root = panel.read(cx).project_root().to_path_buf();
     let Some(store) = panel.read(cx).store() else {
       return;
     };
@@ -439,7 +446,7 @@ impl SessionPage {
     };
     if !keep {
       let id = panel.read(cx).current_conversation().id.clone();
-      let repo_root = panel.read(cx).repo_root().to_path_buf();
+      let repo_root = panel.read(cx).project_root().to_path_buf();
       let store = panel.read(cx).store();
       drop(panel);
       if let Some(store) = store {
@@ -1093,20 +1100,20 @@ impl SessionPage {
     }
   }
 
-  /// Creation lands where you are: the shown session's repo, else the selected project.
+  /// Creation lands where you are: the shown session's project, else the selected project.
   fn creation_root(&self, cx: &App) -> Option<PathBuf> {
     self.session_repo(cx).or_else(|| self.project_root(cx))
   }
 
   pub(super) fn new_session(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-    let Some(repo_root) = self.creation_root(cx) else {
+    let Some(project_root) = self.creation_root(cx) else {
       window.push_notification(
         Notification::warning("Open a project before starting a chat."),
         cx,
       );
       return;
     };
-    self.new_session_in(repo_root, window, cx);
+    self.new_session_in(project_root, window, cx);
   }
 
   pub(super) fn new_agent_session_action(
@@ -1143,20 +1150,24 @@ impl SessionPage {
 
   pub(super) fn new_session_in(
     &mut self,
-    repo_root: PathBuf,
+    project_root: PathBuf,
     window: &mut Window,
     cx: &mut Context<Self>,
   ) {
-    if self.editor_is_dirty(cx) && self.target_checkout_differs_from_editor(&repo_root, cx) {
-      self.open_unsaved_editor_dialog(UnsavedEditorAction::NewSessionIn { repo_root }, window, cx);
+    if self.editor_is_dirty(cx) && self.target_checkout_differs_from_editor(&project_root, cx) {
+      self.open_unsaved_editor_dialog(
+        UnsavedEditorAction::NewSessionIn { project_root },
+        window,
+        cx,
+      );
       return;
     }
-    self.new_session_in_without_unsaved_prompt(repo_root, window, cx);
+    self.new_session_in_without_unsaved_prompt(project_root, window, cx);
   }
 
   pub(super) fn new_session_in_without_unsaved_prompt(
     &mut self,
-    repo_root: PathBuf,
+    project_root: PathBuf,
     window: &mut Window,
     cx: &mut Context<Self>,
   ) {
@@ -1164,7 +1175,7 @@ impl SessionPage {
     if let Some(evicted_project) = self.ensure_chat_store(cx) {
       self.push_project_hidden_notification(&evicted_project, window, cx);
     }
-    let access = self.chat_store_for_project(&repo_root, cx);
+    let access = self.chat_store_for_project(&project_root, cx);
     if let Some(evicted_project) = access
       .as_ref()
       .and_then(|access| access.evicted_project.as_ref())
@@ -1172,7 +1183,8 @@ impl SessionPage {
       self.push_project_hidden_notification(evicted_project, window, cx);
     }
     let store = access.map(|access| access.store);
-    if self.fallback_repo.is_none() && self.project_root(cx).as_deref() == Some(repo_root.as_path())
+    if self.fallback_repo.is_none()
+      && self.project_root(cx).as_deref() == Some(project_root.as_path())
     {
       self.chat_store = store.clone();
     }
@@ -1184,14 +1196,14 @@ impl SessionPage {
       if !panel.has_persistable_content()
         && panel.loading_conversation_id().is_none()
         && !panel.needs_reconnect()
-        && panel.repo_root() == repo_root.as_path()
+        && panel.project_root() == project_root.as_path()
       {
         self.reveal_active_session_chat(window, cx);
         return;
       }
     }
     self.park_active_chat_panel(cx);
-    let view = self.build_chat_panel(repo_root, store, None, window, cx);
+    let view = self.build_chat_panel(project_root, store, None, window, cx);
     view.update(cx, |panel, _| panel.set_active_conversation(true));
     self.agent_chat_view = Some(view);
     self.remember_active_chat_tab(cx);
@@ -1357,7 +1369,7 @@ impl SessionPage {
           let panel = panel.read(cx);
           panel
             .store()
-            .map(|store| (panel.repo_root().to_path_buf(), store))
+            .map(|store| (panel.project_root().to_path_buf(), store))
         })
     };
     let Some((repo_root, store)) = found
@@ -1546,7 +1558,7 @@ impl SessionPage {
     }
     let busy = |panel: &Entity<AgentChatPanel>| {
       let panel = panel.read(cx);
-      panel.is_turn_in_flight() && panel.repo_root() == repo_root
+      panel.is_turn_in_flight() && panel.project_root() == repo_root
     };
     self.agent_chat_view.iter().any(&busy)
       || self
@@ -2265,7 +2277,7 @@ mod tests {
     let repo = TempRepo::init(name);
     commit_text_file(&repo.path, Path::new("README.md"), "v1\n", "initial");
     let state_dir = agent_chat_state_dir()
-      .map(|dir| AgentChatPanel::state_dir_for_repo(&dir, &repo.path))
+      .map(|dir| AgentChatPanel::state_dir_for_project(&dir, &repo.path))
       .expect("agent chat state dir");
     let _ = std::fs::remove_dir_all(&state_dir);
     let (page, cx) = add_session_page_window(repo.path.clone(), cx);
@@ -2316,7 +2328,7 @@ mod tests {
           .expect("active panel")
           .read(cx);
         crate::session_list::SessionRow {
-          project_root: panel.repo_root().to_path_buf(),
+          project_root: panel.project_root().to_path_buf(),
           meta: panel.current_conversation().clone(),
         }
       };
@@ -2804,7 +2816,7 @@ mod tests {
     let repo = TempRepo::init("session-page-resume-active");
     commit_text_file(&repo.path, Path::new("README.md"), "v1\n", "initial");
     let state_dir = agent_chat_state_dir()
-      .map(|dir| AgentChatPanel::state_dir_for_repo(&dir, &repo.path))
+      .map(|dir| AgentChatPanel::state_dir_for_project(&dir, &repo.path))
       .expect("agent chat state dir");
     let _ = std::fs::remove_dir_all(&state_dir);
     std::fs::create_dir_all(&state_dir).expect("create state dir");
@@ -2950,7 +2962,7 @@ mod tests {
     let panel = active_panel(&page, cx);
     panel.read_with(cx, |panel, _| {
       assert_eq!(
-        panel.repo_root(),
+        panel.project_root(),
         other.path.as_path(),
         "creation lands in the SHOWN session's repo, not the fallback"
       );
@@ -2979,7 +2991,7 @@ mod tests {
     let panel = active_panel(&page, cx);
     let project = project.canonicalize().expect("canonical project");
     panel.read_with(cx, |panel, cx| {
-      assert_eq!(panel.repo_root(), project.as_path());
+      assert_eq!(panel.project_root(), project.as_path());
       assert_eq!(panel.cwd(), project.as_path());
       assert!(panel.store().is_some());
       assert!(!panel.current_conversation().id.is_empty());
@@ -3035,13 +3047,13 @@ mod tests {
     let restored_panel = active_panel(&restored_page, cx);
     let project = project.canonicalize().expect("canonical project");
     restored_panel.read_with(cx, |panel, _| {
-      assert_eq!(panel.repo_root(), project.as_path());
+      assert_eq!(panel.project_root(), project.as_path());
       assert_eq!(panel.cwd(), project.as_path());
       assert!(panel.store().is_some());
     });
 
     let state_dir = agent_chat_state_dir()
-      .map(|dir| AgentChatPanel::state_dir_for_repo(&dir, &project))
+      .map(|dir| AgentChatPanel::state_dir_for_project(&dir, &project))
       .expect("agent chat state dir");
     let _ = std::fs::remove_dir_all(&state_dir);
     let _ = std::fs::remove_dir_all(&project);
@@ -3058,7 +3070,7 @@ mod tests {
 
     let panel = active_panel(&page, cx);
     panel.read_with(cx, |panel, _| {
-      assert_eq!(panel.repo_root(), repo.path.as_path());
+      assert_eq!(panel.project_root(), repo.path.as_path());
       assert_ne!(panel.cwd(), repo.path.as_path(), "its own checkout");
       assert!(panel.cwd().join(".git").is_file());
     });
@@ -3088,7 +3100,7 @@ mod tests {
     let other = TempRepo::init("session-page-worktree-cross-b");
     commit_text_file(&other.path, Path::new("README.md"), "other\n", "initial");
     let other_state = agent_chat_state_dir()
-      .map(|dir| AgentChatPanel::state_dir_for_repo(&dir, &other.path))
+      .map(|dir| AgentChatPanel::state_dir_for_project(&dir, &other.path))
       .expect("agent chat state dir");
     let _ = std::fs::remove_dir_all(&other_state);
 
@@ -3100,7 +3112,7 @@ mod tests {
     let panel = active_panel(&page, cx);
     panel.read_with(cx, |panel, _| {
       assert_eq!(
-        panel.repo_root(),
+        panel.project_root(),
         other.path.as_path(),
         "the session belongs to the section's repo, not the fallback"
       );
@@ -3280,7 +3292,7 @@ mod tests {
     // No commit: `git worktree add` has no base to start from.
     let repo = TempRepo::init("session-page-worktree-empty");
     let state_dir = agent_chat_state_dir()
-      .map(|dir| AgentChatPanel::state_dir_for_repo(&dir, &repo.path))
+      .map(|dir| AgentChatPanel::state_dir_for_project(&dir, &repo.path))
       .expect("agent chat state dir");
     let _ = std::fs::remove_dir_all(&state_dir);
     let (page, cx) = add_session_page_window(repo.path.clone(), cx);
@@ -3328,7 +3340,7 @@ mod tests {
 
     // What a previous run left behind: a worktree session marked active.
     let state_dir = agent_chat_state_dir()
-      .map(|dir| AgentChatPanel::state_dir_for_repo(&dir, &repo.path))
+      .map(|dir| AgentChatPanel::state_dir_for_project(&dir, &repo.path))
       .expect("agent chat state dir");
     let _ = std::fs::remove_dir_all(&state_dir);
     std::fs::create_dir_all(&state_dir).expect("create state dir");
@@ -3877,7 +3889,7 @@ mod tests {
     // conversation still bound to its generated branch.
     let worktree = git::create_worktree(&repo.path, None).expect("create worktree");
     let state_dir = agent_chat_state_dir()
-      .map(|dir| AgentChatPanel::state_dir_for_repo(&dir, &repo.path))
+      .map(|dir| AgentChatPanel::state_dir_for_project(&dir, &repo.path))
       .expect("agent chat state dir");
     let _ = std::fs::remove_dir_all(&state_dir);
     std::fs::create_dir_all(&state_dir).expect("create state dir");
@@ -4095,7 +4107,7 @@ mod tests {
       .expect("rename the claimed branch");
 
     let state_dir = agent_chat_state_dir()
-      .map(|dir| AgentChatPanel::state_dir_for_repo(&dir, &repo.path))
+      .map(|dir| AgentChatPanel::state_dir_for_project(&dir, &repo.path))
       .expect("agent chat state dir");
     let _ = std::fs::remove_dir_all(&state_dir);
     std::fs::create_dir_all(&state_dir).expect("create state dir");
@@ -4194,7 +4206,7 @@ mod tests {
 
     // The binding survived a prune that took its conversation away.
     let state_dir = agent_chat_state_dir()
-      .map(|dir| AgentChatPanel::state_dir_for_repo(&dir, &repo.path))
+      .map(|dir| AgentChatPanel::state_dir_for_project(&dir, &repo.path))
       .expect("agent chat state dir");
     let _ = std::fs::remove_dir_all(&state_dir);
     std::fs::create_dir_all(&state_dir).expect("create state dir");
@@ -4239,7 +4251,7 @@ mod tests {
     let repo = TempRepo::init(name);
     commit_text_file(&repo.path, Path::new("README.md"), "other\n", "initial");
     let state_dir = agent_chat_state_dir()
-      .map(|dir| AgentChatPanel::state_dir_for_repo(&dir, &repo.path))
+      .map(|dir| AgentChatPanel::state_dir_for_project(&dir, &repo.path))
       .expect("agent chat state dir");
     let _ = std::fs::remove_dir_all(&state_dir);
     std::fs::create_dir_all(&state_dir).expect("create state dir");
@@ -4296,7 +4308,7 @@ mod tests {
 
     // You went to the other repo; the running session keeps working behind.
     active_panel(&page, cx).read_with(cx, |panel, _| {
-      assert_eq!(panel.repo_root(), other.path.as_path());
+      assert_eq!(panel.project_root(), other.path.as_path());
     });
     page.read_with(cx, |page, cx| {
       assert!(
@@ -4314,7 +4326,7 @@ mod tests {
     });
     running.read_with(cx, |panel, _| {
       assert!(panel.is_turn_in_flight(), "its turn never stopped");
-      assert_eq!(panel.repo_root(), repo.path.as_path());
+      assert_eq!(panel.project_root(), repo.path.as_path());
     });
 
     let _ = std::fs::remove_dir_all(&other_state);
@@ -4377,7 +4389,7 @@ mod tests {
     panel.read_with(cx, |panel, _| {
       assert_eq!(panel.current_conversation().id, "cross-b-conversation");
       assert_eq!(
-        panel.repo_root(),
+        panel.project_root(),
         other.path.as_path(),
         "the session runs in ITS repo, wherever the fallback points"
       );
@@ -4541,7 +4553,7 @@ mod tests {
       // The shown session died with its repo: a fresh fallback session took over
       // and the git surfaces left the dead checkout.
       let panel = page.agent_chat_view.as_ref().expect("a panel is shown");
-      assert_eq!(panel.read(cx).repo_root(), repo.path.as_path());
+      assert_eq!(panel.read(cx).project_root(), repo.path.as_path());
       assert_eq!(
         page.dock_panel.read(cx).repo_root(),
         Some(repo.path.as_path())
@@ -4652,7 +4664,7 @@ mod tests {
 
     active_panel(&page, cx).read_with(cx, |panel, _| {
       assert_eq!(
-        panel.repo_root(),
+        panel.project_root(),
         other.path.as_path(),
         "the session belongs to its own repo"
       );
@@ -4708,7 +4720,7 @@ mod tests {
     });
     cx.run_until_parked();
     active_panel(&page, cx).read_with(cx, |panel, _| {
-      assert_eq!(panel.repo_root(), repo.path.as_path());
+      assert_eq!(panel.project_root(), repo.path.as_path());
     });
 
     cleanup_worktrees_root(&repo.path);
@@ -4747,7 +4759,7 @@ mod tests {
     cx.run_until_parked();
     active_panel(&page, cx).read_with(cx, |panel, _| {
       assert_eq!(
-        panel.repo_root(),
+        panel.project_root(),
         repo.path.as_path(),
         "a new session lands in the shown session's repo"
       );
@@ -4760,7 +4772,7 @@ mod tests {
     cx.run_until_parked();
     active_panel(&page, cx).read_with(cx, |panel, _| {
       assert_eq!(
-        panel.repo_root(),
+        panel.project_root(),
         other.path.as_path(),
         "the per-section compose creates in that section's repo"
       );
