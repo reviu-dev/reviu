@@ -1516,15 +1516,59 @@ impl SessionPage {
     self.remember_center_tab_visit(representative);
   }
 
-  fn center_tab_embedded_in_layout(&self, tab: &CenterTab) -> bool {
+  fn is_placeholder_chat_tab(tab: &CenterTab) -> bool {
+    tab.kind == CenterTabKind::Chat && tab.conversation_id.is_none()
+  }
+
+  fn is_real_chat_tab(tab: &CenterTab) -> bool {
+    tab.kind == CenterTabKind::Chat && tab.conversation_id.is_some()
+  }
+
+  fn center_layout_contains_real_chat(layout: &CenterLayout) -> bool {
+    layout.tabs().iter().any(Self::is_real_chat_tab)
+  }
+
+  fn center_has_real_chat_tab(&self) -> bool {
+    self.center_tabs.iter().any(Self::is_real_chat_tab)
+      || self
+        .center_layouts_by_tab
+        .keys()
+        .any(Self::is_real_chat_tab)
+      || Self::center_layout_contains_real_chat(&self.center_layout)
+      || self
+        .center_layouts_by_tab
+        .values()
+        .any(Self::center_layout_contains_real_chat)
+  }
+
+  fn center_layout_representative_for_tab(&self, tab: &CenterTab) -> Option<CenterTab> {
+    if let Some(active_tab) = self.active_center_tab.as_ref()
+      && active_tab != tab
+      && self.center_layout.contains_tab(tab)
+    {
+      return Some(active_tab.clone());
+    }
     self
       .center_layouts_by_tab
       .iter()
-      .any(|(layout_tab, layout)| layout_tab != tab && layout.contains_tab(tab))
-      || self
-        .active_center_tab
-        .as_ref()
-        .is_some_and(|active_tab| active_tab != tab && self.center_layout.contains_tab(tab))
+      .find(|(layout_tab, layout)| *layout_tab != tab && layout.contains_tab(tab))
+      .map(|(layout_tab, _)| layout_tab.clone())
+  }
+
+  fn center_tab_embedded_in_layout(&self, tab: &CenterTab) -> bool {
+    self.center_layout_representative_for_tab(tab).is_some()
+  }
+
+  fn forget_placeholder_chat_tab(&mut self) {
+    let placeholder_chat_tab = CenterTab::chat();
+    self.center_tabs.retain(|tab| tab != &placeholder_chat_tab);
+    self
+      .center_tab_history
+      .retain(|tab| tab != &placeholder_chat_tab);
+    for tabs in self.center_tabs_by_checkout.values_mut() {
+      tabs.retain(|tab| tab != &placeholder_chat_tab);
+    }
+    self.center_layouts_by_tab.remove(&placeholder_chat_tab);
   }
 
   fn set_active_center_tab(&mut self, tab: CenterTab) {
@@ -1541,16 +1585,23 @@ impl SessionPage {
 
   fn center_tabs_for_navigation(&self) -> Vec<CenterTab> {
     let mut tabs = self.center_tabs.clone();
-    let chat_tab = CenterTab::chat();
-    if !tabs.iter().any(|tab| tab == &chat_tab) && !self.center_tab_embedded_in_layout(&chat_tab) {
-      tabs.insert(0, chat_tab);
-    }
     if self.center == CenterView::InteractiveRebase
       && !tabs
         .iter()
         .any(|tab| tab.kind == CenterTabKind::InteractiveRebase)
     {
       tabs.push(CenterTab::interactive_rebase());
+    }
+
+    let placeholder_chat_tab = CenterTab::chat();
+    let show_placeholder_chat_tab = !self.center_has_real_chat_tab()
+      && !self.center_tab_embedded_in_layout(&placeholder_chat_tab);
+    if show_placeholder_chat_tab {
+      if !tabs.iter().any(|tab| tab == &placeholder_chat_tab) {
+        tabs.insert(0, placeholder_chat_tab);
+      }
+    } else {
+      tabs.retain(|tab| !Self::is_placeholder_chat_tab(tab));
     }
     tabs
   }
@@ -1577,15 +1628,10 @@ impl SessionPage {
   }
 
   fn remember_center_tab(&mut self, tab: CenterTab) {
-    if tab.kind == CenterTabKind::Chat && tab.conversation_id.is_some() {
-      self.center_tabs.retain(|existing| {
-        !(existing.kind == CenterTabKind::Chat && existing.conversation_id.is_none())
-      });
-      self.center_tab_history.retain(|existing| {
-        !(existing.kind == CenterTabKind::Chat && existing.conversation_id.is_none())
-      });
-    }
     self.save_active_center_layout();
+    if Self::is_real_chat_tab(&tab) {
+      self.forget_placeholder_chat_tab();
+    }
     self.center_layouts_by_tab.remove(&tab);
     if !self.center_tabs.contains(&tab) {
       self.center_tabs.push(tab.clone());
@@ -1656,12 +1702,31 @@ impl SessionPage {
     window: &mut Window,
     cx: &mut Context<Self>,
   ) {
+    let requested_tab = if Self::is_placeholder_chat_tab(&tab) {
+      let active_chat_tab = self.active_chat_tab(cx);
+      if Self::is_real_chat_tab(&active_chat_tab) {
+        active_chat_tab
+      } else {
+        tab
+      }
+    } else {
+      tab
+    };
+    let tab = self
+      .center_layout_representative_for_tab(&requested_tab)
+      .unwrap_or_else(|| requested_tab.clone());
     let has_saved_split_layout = self
       .center_layouts_by_tab
       .get(&tab)
       .is_some_and(|layout| layout.surface_count() > 1);
     self.save_active_center_layout();
     self.restore_center_layout_for_tab(&tab);
+    if requested_tab != tab && self.center_layout.contains_tab(&requested_tab) {
+      self
+        .center_layout
+        .set_active_surface(CenterSurface::from_tab(requested_tab));
+    }
+    self.active_center_tab = Some(tab.clone());
     if has_saved_split_layout {
       self.active_center_tab = Some(tab.clone());
       let focused_tab = self.center_layout.active_tab();

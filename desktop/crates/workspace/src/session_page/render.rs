@@ -3483,7 +3483,7 @@ mod tests {
   }
 
   #[gpui::test]
-  async fn center_tabs_show_chat_agent_and_file_icons(cx: &mut TestAppContext) {
+  async fn center_tabs_keep_the_placeholder_chat_until_a_session_exists(cx: &mut TestAppContext) {
     let repo = TempRepo::init("session-render-center-tab-icons");
     commit_text_file(&repo.path, Path::new("package.json"), "{}\n", "initial");
 
@@ -3503,6 +3503,11 @@ mod tests {
     await_open_file(&page, cx).await;
     cx.run_until_parked();
 
+    page.read_with(cx, |page, _| {
+      let tabs = page.center_tabs_for_navigation();
+      assert!(tabs.contains(&CenterTab::chat()));
+      assert!(tabs.contains(&CenterTab::file(PathBuf::from("package.json"))));
+    });
     assert!(cx.debug_bounds("session-center-tab-chat").is_some());
     assert!(cx.debug_bounds("session-center-tab-agent-icon").is_some());
     assert!(
@@ -3511,6 +3516,24 @@ mod tests {
     );
     assert!(cx.debug_bounds("session-center-tab-file-icon").is_some());
     assert!(cx.debug_bounds("session-center-tab-label").is_some());
+  }
+
+  #[gpui::test]
+  async fn center_tabs_hide_the_placeholder_chat_when_a_session_exists(cx: &mut TestAppContext) {
+    let repo = TempRepo::init("session-render-center-tab-real-chat");
+    let (page, cx) = add_session_page_window(repo.path.clone(), cx);
+    cx.run_until_parked();
+
+    page.update_in(cx, |page, window, cx| page.new_session(window, cx));
+    cx.run_until_parked();
+
+    page.read_with(cx, |page, cx| {
+      let active_chat_tab = page.active_chat_tab(cx);
+      let tabs = page.center_tabs_for_navigation();
+      assert_ne!(active_chat_tab, CenterTab::chat());
+      assert!(!tabs.contains(&CenterTab::chat()));
+      assert!(tabs.contains(&active_chat_tab));
+    });
   }
 
   #[gpui::test]
@@ -4673,6 +4696,9 @@ mod tests {
     let (page, cx) = add_session_page_window(repo.path.clone(), cx);
     cx.run_until_parked();
 
+    page.update_in(cx, |page, window, cx| page.new_session(window, cx));
+    cx.run_until_parked();
+    let chat_tab = page.read_with(cx, |page, cx| page.active_chat_tab(cx));
     let analytics = CenterTab::file(PathBuf::from("analytics.ts"));
     let base = CenterTab::file(PathBuf::from("base.css"));
     page.update_in(cx, |page, window, cx| {
@@ -4694,7 +4720,7 @@ mod tests {
       let pane_id = pane.id();
       assert!(page.center_layout.split_pane(
         pane_id,
-        CenterSurface::from_tab(CenterTab::chat()),
+        CenterSurface::from_tab(chat_tab.clone()),
         CenterSplitDirection::Left,
       ));
       page
@@ -4705,7 +4731,12 @@ mod tests {
       cx.notify();
     });
     cx.run_until_parked();
-    assert!(cx.debug_bounds("session-center-tab-chat").is_none());
+    page.read_with(cx, |page, _| {
+      let tabs = page.center_tabs_for_navigation();
+      assert!(!tabs.contains(&CenterTab::chat()));
+      assert!(!tabs.contains(&chat_tab));
+      assert!(tabs.contains(&analytics));
+    });
     assert!(
       cx.debug_bounds("session-center-tab-file-analytics.ts")
         .is_some()
@@ -4741,7 +4772,7 @@ mod tests {
     await_open_file(&page, cx).await;
     cx.run_until_parked();
     page.read_with(cx, |page, _| {
-      assert!(page.center_layout.contains_tab(&CenterTab::chat()));
+      assert!(page.center_layout.contains_tab(&chat_tab));
       assert!(page.center_layout.contains_tab(&analytics));
     });
     let conversation = cx
@@ -4757,14 +4788,30 @@ mod tests {
     });
     cx.run_until_parked();
     page.read_with(cx, |page, _| {
-      assert_eq!(page.center_layout.active_tab(), &CenterTab::chat());
-      assert_eq!(page.center_tab_label_source(&analytics), CenterTab::chat());
+      assert_eq!(page.center_layout.active_tab(), &chat_tab);
+      assert_eq!(page.center_tab_label_source(&analytics), chat_tab);
     });
     assert!(
       cx.debug_bounds("session-center-tab-file-analytics.ts")
         .is_some()
     );
-    assert!(cx.debug_bounds("session-center-tab-chat").is_none());
+    page.read_with(cx, |page, _| {
+      let tabs = page.center_tabs_for_navigation();
+      assert!(!tabs.contains(&CenterTab::chat()));
+      assert!(!tabs.contains(&chat_tab));
+      assert!(tabs.contains(&analytics));
+    });
+
+    page.update_in(cx, |page, window, cx| {
+      page.activate_center_tab(CenterTab::chat(), OpenIntent::Open, window, cx);
+    });
+    cx.run_until_parked();
+    page.read_with(cx, |page, _| {
+      assert_eq!(page.active_center_tab.as_ref(), Some(&analytics));
+      assert_eq!(page.center_layout.active_tab(), &chat_tab);
+      assert!(page.center_layout.contains_tab(&analytics));
+      assert!(page.center_layout.contains_tab(&chat_tab));
+    });
 
     page.update_in(cx, |page, window, cx| {
       page.close_center_tab(analytics.clone(), window, cx);
