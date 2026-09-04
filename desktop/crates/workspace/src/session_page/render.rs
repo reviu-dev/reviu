@@ -584,16 +584,17 @@ impl SessionPage {
     cx: &mut Context<Self>,
   ) -> AnyElement {
     // Keyed on what is shown, so every swap remounts and replays the fade.
-    let (id, view) = match self.center {
-      CenterView::Conversation => (
+    let active_surface = self.center_layout.active_surface().clone();
+    let (id, view) = match active_surface {
+      CenterSurface::Chat(_) => (
         SharedString::from("session-center-conversation"),
         self.render_conversation(cx),
       ),
-      CenterView::InteractiveRebase => (
+      CenterSurface::InteractiveRebase(_) => (
         SharedString::from("session-center-interactive-rebase"),
         self.render_interactive_rebase(cx),
       ),
-      CenterView::Diff => {
+      CenterSurface::Editor(_) => {
         let file = self
           .shown_selected_file()
           .map(|path| path.to_string_lossy().into_owned())

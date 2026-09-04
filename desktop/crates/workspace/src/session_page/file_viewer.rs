@@ -264,7 +264,7 @@ impl SessionPage {
           editor.reveal_source_position(doc_line, doc_column, cx)
         });
       }
-      self.active_center_tab = Some(tab.clone());
+      self.set_active_center_tab(tab.clone());
       self.editor_tab = Some(tab.clone());
       self.record_recent_file(&repo_root, &rel_path);
       self.focus_editor_if_asked(intent, window, cx);
@@ -1555,14 +1555,13 @@ impl SessionPage {
       return;
     }
 
-    self.active_center_tab = None;
-
     if let Some(next_tab) = next_tab {
       self.activate_center_tab(next_tab, OpenIntent::Open, window, cx);
       return;
     }
 
     self.center = CenterView::Conversation;
+    self.remember_active_chat_tab(cx);
     self.diff_chat_open = true;
     self.sync_agent_chat_close_control(cx);
     self.focus_agent_input_on_next_frame(window, cx);

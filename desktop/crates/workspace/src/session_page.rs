@@ -52,6 +52,7 @@ use crate::open_intent::OpenIntent;
 use crate::project_files::list_project_files;
 use crate::review_destination::{AgentReviewHandlers, ReviewDestination, configure_review};
 use crate::session_list::{SessionList, SessionListEvent, SessionStatus};
+use crate::session_page::center_layout::{CenterLayout, CenterSurface};
 use crate::session_page::center_tab::{CenterTab, CenterTabKind, CenterTabSnapshot};
 use crate::session_page::file_viewer::{OpenedSnapshot, UnsavedEditorAction};
 use git::{InteractiveRebaseTarget, RepoStatusKind};
@@ -291,6 +292,7 @@ pub struct SessionPage {
   available_checkouts: Vec<CheckoutInfo>,
   _checkout_options_task: Option<Task<()>>,
   center: CenterView,
+  center_layout: CenterLayout,
   center_tabs: Vec<CenterTab>,
   center_tab_history: Vec<CenterTab>,
   center_tabs_by_checkout: HashMap<PathBuf, Vec<CenterTab>>,
@@ -348,6 +350,7 @@ pub struct SessionPage {
 }
 
 mod agent;
+mod center_layout;
 mod center_tab;
 mod commands;
 #[cfg(any(test, feature = "test-support"))]
@@ -589,6 +592,7 @@ impl SessionPage {
       available_checkouts: Vec::new(),
       _checkout_options_task: None,
       center: CenterView::Conversation,
+      center_layout: CenterLayout::single(CenterSurface::from_tab(CenterTab::chat())),
       center_tabs: CenterTab::default_tabs(),
       center_tab_history: CenterTab::default_tabs(),
       center_tabs_by_checkout: HashMap::new(),
@@ -1086,7 +1090,7 @@ impl SessionPage {
     self.center = CenterView::Conversation;
     self.center_tabs = restored_tabs;
     self.center_tab_history = CenterTab::default_tabs();
-    self.active_center_tab = Some(CenterTab::chat());
+    self.set_active_center_tab(CenterTab::chat());
     self.editor_tab = None;
     self.editor_states.clear();
     self.open_file_task = None;
@@ -1466,9 +1470,16 @@ impl SessionPage {
       .center_active_tab_by_checkout
       .retain(|_, tab| !is_removed_chat(tab));
     if self.active_center_tab.as_ref().is_some_and(is_removed_chat) {
-      self.active_center_tab = Some(CenterTab::chat());
+      self.set_active_center_tab(CenterTab::chat());
       self.remember_center_tab_visit(CenterTab::chat());
     }
+  }
+
+  fn set_active_center_tab(&mut self, tab: CenterTab) {
+    self
+      .center_layout
+      .set_active_surface(CenterSurface::from_tab(tab.clone()));
+    self.active_center_tab = Some(tab);
   }
 
   fn remember_center_tab_visit(&mut self, tab: CenterTab) {
@@ -1489,6 +1500,11 @@ impl SessionPage {
   }
 
   fn selected_center_tab_from(&self, tabs: &[CenterTab]) -> CenterTab {
+    let layout_tab = self.center_layout.active_tab();
+    if tabs.iter().any(|tab| tab == layout_tab) {
+      return layout_tab.clone();
+    }
+
     self
       .active_center_tab
       .clone()
@@ -1516,7 +1532,7 @@ impl SessionPage {
     if !self.center_tabs.contains(&tab) {
       self.center_tabs.push(tab.clone());
     }
-    self.active_center_tab = Some(tab.clone());
+    self.set_active_center_tab(tab.clone());
     self.remember_center_tab_visit(tab);
   }
 
@@ -1612,7 +1628,7 @@ impl SessionPage {
       }
       CenterTabKind::InteractiveRebase => {
         self.center = CenterView::InteractiveRebase;
-        self.active_center_tab = Some(CenterTab::interactive_rebase());
+        self.set_active_center_tab(CenterTab::interactive_rebase());
         self.center_tabs = CenterTab::with_chat_tab(self.center_tabs.clone());
         cx.notify();
       }

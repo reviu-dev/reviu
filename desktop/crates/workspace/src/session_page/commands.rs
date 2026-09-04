@@ -230,14 +230,16 @@ impl SessionPage {
       .retain(|tab| tab.kind != CenterTabKind::InteractiveRebase);
     if self.warm_editor().is_some() {
       self.center = CenterView::Diff;
-      self.active_center_tab = self.editor_tab.clone().or_else(|| {
+      if let Some(tab) = self.editor_tab.clone().or_else(|| {
         self
           .center_tabs
           .iter()
           .rev()
           .find(|tab| matches!(tab.kind, CenterTabKind::File | CenterTabKind::Diff))
           .cloned()
-      });
+      }) {
+        self.set_active_center_tab(tab);
+      }
       self.focus_editor_on_next_frame(window, cx);
     } else {
       self.center = CenterView::Conversation;
