@@ -4544,7 +4544,7 @@ mod tests {
 
     page.update_in(cx, |page, window, cx| {
       page
-        .forget_repository(other.path.clone(), window, cx)
+        .forget_project(other.path.clone(), window, cx)
         .expect("forget the other repo");
     });
     cx.run_until_parked();

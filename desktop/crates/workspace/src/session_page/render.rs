@@ -9,11 +9,11 @@ use gpui_component::Selectable as _;
 impl SessionPage {
   /// Without a project half the shell has nothing to show, so the row that
   /// normally names it asks for one instead.
-  pub(super) fn render_open_repository_row(&self, cx: &mut Context<Self>) -> AnyElement {
+  pub(super) fn render_open_project_row(&self, cx: &mut Context<Self>) -> AnyElement {
     let theme = cx.theme().clone();
     h_flex()
       .id("session-open-repository")
-      .debug_selector(|| OPEN_REPOSITORY_ROW_DEBUG_SELECTOR.to_string())
+      .debug_selector(|| OPEN_PROJECT_ROW_DEBUG_SELECTOR.to_string())
       .items_center()
       .gap_2()
       .px_3()
@@ -26,7 +26,7 @@ impl SessionPage {
         gpui_component::tooltip::Tooltip::new("Open a project").build(window, cx)
       })
       .on_click(cx.listener(|this, _, window, cx| {
-        this.start_open_repository(window, cx);
+        this.start_open_project(window, cx);
       }))
       .child(
         gpui_component::Icon::new(gpui_component::IconName::FolderOpen)
@@ -177,7 +177,7 @@ impl SessionPage {
     let command_in_flight = self.repo_command_in_flight.is_some();
 
     let repo_context = match project_name {
-      None => Some(self.render_open_repository_row(cx).into_any_element()),
+      None => Some(self.render_open_project_row(cx).into_any_element()),
       Some(name) => Some(
         h_flex()
           .id("session-repo-context")
@@ -1394,7 +1394,7 @@ impl Render for SessionPage {
       .on_action(cx.listener(Self::toggle_hunk_stage_action))
       .on_action(cx.listener(Self::restore_hunk_action))
       .on_action(cx.listener(Self::accept_both_conflict_action))
-      .on_action(cx.listener(Self::open_repository_action))
+      .on_action(cx.listener(Self::open_project_action))
       .on_action(cx.listener(Self::pull_changes_action))
       .on_action(cx.listener(Self::push_changes_action))
       .on_action(cx.listener(Self::force_push_changes_action))

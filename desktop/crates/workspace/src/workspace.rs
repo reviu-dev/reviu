@@ -322,14 +322,14 @@ impl WorkspaceView {
   }
 
   #[doc(hidden)]
-  pub fn open_repository_for_driver(
+  pub fn open_project_for_driver(
     &mut self,
-    repo_root: PathBuf,
+    project_root: PathBuf,
     window: &mut Window,
     cx: &mut Context<Self>,
   ) -> Result<(), gpui::SharedString> {
     self.session_page.update(cx, |page, cx| {
-      page.open_repository_for_driver(repo_root, window, cx)
+      page.open_project_for_driver(project_root, window, cx)
     })
   }
 

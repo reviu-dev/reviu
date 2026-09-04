@@ -1072,7 +1072,7 @@ fn palette_command_shortcut(command: CommandPaletteCommandId) -> Option<Shortcut
     Command::ForcePush => Some(ShortcutId::ForcePushChanges),
     Command::Pull => Some(ShortcutId::PullChanges),
     Command::SwitchBranch => Some(ShortcutId::ShowBranchSwitcher),
-    Command::OpenRepository => Some(ShortcutId::OpenRepository),
+    Command::OpenProject => Some(ShortcutId::OpenRepository),
     Command::OpenSessionPage => Some(ShortcutId::OpenSessionPage),
     Command::OpenSettingsPage => Some(ShortcutId::OpenSettingsPage),
     Command::SendReview => Some(ShortcutId::SendReviewCommentsToAgent),

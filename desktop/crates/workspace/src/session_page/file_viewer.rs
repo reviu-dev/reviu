@@ -41,8 +41,8 @@ pub(super) enum UnsavedEditorAction {
     path: PathBuf,
   },
   FollowSessionCheckout,
-  ForgetRepository {
-    repo_root: PathBuf,
+  ForgetProject {
+    project_root: PathBuf,
   },
   RunBranchCommand {
     command: RepoCommand,
@@ -1635,8 +1635,8 @@ impl SessionPage {
       UnsavedEditorAction::FollowSessionCheckout => {
         self.follow_session_checkout_without_unsaved_prompt(window, cx)
       }
-      UnsavedEditorAction::ForgetRepository { repo_root } => {
-        if let Err(error) = self.forget_repository_without_unsaved_prompt(repo_root, window, cx) {
+      UnsavedEditorAction::ForgetProject { project_root } => {
+        if let Err(error) = self.forget_project_without_unsaved_prompt(project_root, window, cx) {
           window.push_notification(Notification::warning(error), cx);
         }
       }

@@ -410,7 +410,7 @@ fn handle_test_command(
       }
       let result = cx.update(|window, cx| {
         view.update(cx, |view, cx| {
-          view.open_repository_for_driver(PathBuf::from(path), window, cx)
+          view.open_project_for_driver(PathBuf::from(path), window, cx)
         })
       });
       cx.run_until_parked();
@@ -778,7 +778,7 @@ fn handle_visual_command(
       cx.run_until_parked();
       respond(ok(serde_json::json!({})));
     }
-    Command::PathPrompt { path } => match open_repository_directly(cx, window, view, path) {
+    Command::PathPrompt { path } => match open_project_directly(cx, window, view, path) {
       Ok(()) => respond(ok(serde_json::json!({}))),
       Err(error) => respond(err(error)),
     },
@@ -936,7 +936,7 @@ fn wait_visual(cx: &mut VisualTestAppContext, window: AnyWindowHandle, ms: u64) 
 }
 
 #[cfg(target_os = "macos")]
-fn open_repository_directly(
+fn open_project_directly(
   cx: &mut VisualTestAppContext,
   window: AnyWindowHandle,
   view: &Entity<WorkspaceView>,
@@ -946,7 +946,7 @@ fn open_repository_directly(
   let result = cx
     .update_window(window, |_, window, cx| {
       view.update(cx, |view, cx| {
-        view.open_repository_for_driver(path, window, cx)
+        view.open_project_for_driver(path, window, cx)
       })
     })
     .map_err(|error| error.to_string())?;

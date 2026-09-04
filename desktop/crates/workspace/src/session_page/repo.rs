@@ -120,13 +120,13 @@ impl SessionPage {
   }
 
   #[doc(hidden)]
-  pub fn open_repository_for_driver(
+  pub fn open_project_for_driver(
     &mut self,
-    repo_root: PathBuf,
+    project_root: PathBuf,
     window: &mut Window,
     cx: &mut Context<Self>,
   ) -> Result<(), SharedString> {
-    self.set_project_root(repo_root, window, cx)
+    self.set_project_root(project_root, window, cx)
   }
 
   pub(super) fn apply_fallback_repo(
@@ -152,7 +152,7 @@ impl SessionPage {
     cx.notify();
   }
 
-  pub(super) fn forget_repository(
+  pub(super) fn forget_project(
     &mut self,
     repo_root: PathBuf,
     window: &mut Window,
@@ -169,16 +169,18 @@ impl SessionPage {
       || self.project_root.as_deref() == Some(repo_root.as_path());
     if self.editor_is_dirty(cx) && forgetting_active_checkout {
       self.open_unsaved_editor_dialog(
-        UnsavedEditorAction::ForgetRepository { repo_root },
+        UnsavedEditorAction::ForgetProject {
+          project_root: repo_root,
+        },
         window,
         cx,
       );
       return Ok(());
     }
-    self.forget_repository_without_unsaved_prompt(repo_root, window, cx)
+    self.forget_project_without_unsaved_prompt(repo_root, window, cx)
   }
 
-  pub(super) fn forget_repository_without_unsaved_prompt(
+  pub(super) fn forget_project_without_unsaved_prompt(
     &mut self,
     repo_root: PathBuf,
     window: &mut Window,
@@ -288,7 +290,7 @@ impl SessionPage {
     Ok(())
   }
 
-  pub(super) fn start_open_repository(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+  pub(super) fn start_open_project(&mut self, window: &mut Window, cx: &mut Context<Self>) {
     let receiver = cx.prompt_for_paths(PathPromptOptions {
       files: false,
       directories: true,
@@ -686,7 +688,7 @@ mod tests {
 
     // Forgetting a repo tears its sessions down, so a running one refuses.
     let forget = page.update_in(cx, |page, window, cx| {
-      page.forget_repository(repo.path.clone(), window, cx)
+      page.forget_project(repo.path.clone(), window, cx)
     });
     assert_eq!(
       forget
@@ -705,7 +707,7 @@ mod tests {
     page.update(cx, |page, _| page.pretend_agent_turn_in_flight = false);
     page.update_in(cx, |page, window, cx| {
       page
-        .forget_repository(repo.path.clone(), window, cx)
+        .forget_project(repo.path.clone(), window, cx)
         .expect("forgetting once the agent is idle")
     });
     assert!(
@@ -763,7 +765,7 @@ mod tests {
 
     page.update_in(cx, |page, window, cx| {
       page
-        .forget_repository(repo.path.clone(), window, cx)
+        .forget_project(repo.path.clone(), window, cx)
         .expect("forget repository");
     });
 
@@ -789,7 +791,7 @@ mod tests {
     cx.run_until_parked();
 
     let row = cx
-      .debug_bounds(OPEN_REPOSITORY_ROW_DEBUG_SELECTOR)
+      .debug_bounds(OPEN_PROJECT_ROW_DEBUG_SELECTOR)
       .expect("the sidebar offers to open a project");
     let picked = plain_folder.clone();
     cx.simulate_click(row.center(), gpui::Modifiers::default());
@@ -815,8 +817,7 @@ mod tests {
     });
     assert!(cx.debug_bounds(REPO_CONTEXT_DEBUG_SELECTOR).is_some());
     assert!(
-      cx.debug_bounds(OPEN_REPOSITORY_ROW_DEBUG_SELECTOR)
-        .is_none(),
+      cx.debug_bounds(OPEN_PROJECT_ROW_DEBUG_SELECTOR).is_none(),
       "the project row replaces the empty state"
     );
     assert!(
@@ -892,7 +893,7 @@ mod tests {
         .set_project_root(project.clone(), window, cx)
         .expect("open plain project");
       page
-        .forget_repository(
+        .forget_project(
           project.canonicalize().expect("canonical project"),
           window,
           cx,
@@ -913,10 +914,7 @@ mod tests {
       );
     });
     assert!(ConfigStore::load_recent_projects().is_empty());
-    assert!(
-      cx.debug_bounds(OPEN_REPOSITORY_ROW_DEBUG_SELECTOR)
-        .is_some()
-    );
+    assert!(cx.debug_bounds(OPEN_PROJECT_ROW_DEBUG_SELECTOR).is_some());
 
     let _ = std::fs::remove_dir_all(&project);
   }
@@ -1009,15 +1007,14 @@ mod tests {
 
     page.update_in(cx, |page, window, cx| {
       page
-        .forget_repository(repo.path.clone(), window, cx)
+        .forget_project(repo.path.clone(), window, cx)
         .expect("forget repository");
     });
     cx.run_until_parked();
 
     page.read_with(cx, |page, _| assert!(page.fallback_repo.is_none()));
     assert!(
-      cx.debug_bounds(OPEN_REPOSITORY_ROW_DEBUG_SELECTOR)
-        .is_some(),
+      cx.debug_bounds(OPEN_PROJECT_ROW_DEBUG_SELECTOR).is_some(),
       "forgetting the last repository must not leave the shell without a way back"
     );
   }
@@ -1099,7 +1096,7 @@ mod tests {
 
     page.update_in(cx, |page, window, cx| {
       page
-        .forget_repository_without_unsaved_prompt(removed_repo.clone(), window, cx)
+        .forget_project_without_unsaved_prompt(removed_repo.clone(), window, cx)
         .expect("remove repository");
     });
     cx.run_until_parked();
@@ -1131,7 +1128,7 @@ mod tests {
 
     page.update_in(cx, |page, window, cx| {
       page
-        .forget_repository(other.path.clone(), window, cx)
+        .forget_project(other.path.clone(), window, cx)
         .expect("forget repository");
     });
 
@@ -1153,7 +1150,7 @@ mod tests {
 
     page.update_in(cx, |page, window, cx| {
       page
-        .forget_repository(repo.path.clone(), window, cx)
+        .forget_project(repo.path.clone(), window, cx)
         .expect("forget repository");
     });
 

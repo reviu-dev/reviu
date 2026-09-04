@@ -113,7 +113,7 @@ const DIFF_EDITOR_DEBUG_SELECTOR: &str = "session-diff-editor";
 const PREVIEW_PANE_DEBUG_SELECTOR: &str = "session-preview-pane";
 const REPO_CONTEXT_DEBUG_SELECTOR: &str = "session-repo-context";
 const REPO_SWITCH_DEBUG_SELECTOR: &str = "session-repo-switch";
-const OPEN_REPOSITORY_ROW_DEBUG_SELECTOR: &str = "session-open-repository";
+const OPEN_PROJECT_ROW_DEBUG_SELECTOR: &str = "session-open-repository";
 const UNSAVED_EDITOR_SAVE_DEBUG_SELECTOR: &str = "session-unsaved-editor-save";
 const UNSAVED_EDITOR_DISCARD_DEBUG_SELECTOR: &str = "session-unsaved-editor-discard";
 const UNSAVED_EDITOR_CANCEL_DEBUG_SELECTOR: &str = "session-unsaved-editor-cancel";
@@ -416,7 +416,7 @@ impl SessionPage {
           window.push_notification(Notification::info("Project path copied"), cx);
         }
         SessionListEvent::RemoveProject { project_root } => {
-          if let Err(error) = this.forget_repository(project_root.clone(), window, cx) {
+          if let Err(error) = this.forget_project(project_root.clone(), window, cx) {
             window.push_notification(Notification::warning(error), cx);
           }
         }
@@ -1246,13 +1246,13 @@ impl SessionPage {
     NavigationHistory::navigate_back(cx);
   }
 
-  fn open_repository_action(
+  fn open_project_action(
     &mut self,
     _: &crate::OpenRepository,
     window: &mut Window,
     cx: &mut Context<Self>,
   ) {
-    self.start_open_repository(window, cx);
+    self.start_open_project(window, cx);
     cx.stop_propagation();
   }
 
@@ -2370,7 +2370,7 @@ mod tests {
       "there is no project to name yet"
     );
     let row = cx
-      .debug_bounds(OPEN_REPOSITORY_ROW_DEBUG_SELECTOR)
+      .debug_bounds(OPEN_PROJECT_ROW_DEBUG_SELECTOR)
       .expect("the sidebar offers to open a project");
 
     // Closing the picker changes nothing.
@@ -2379,8 +2379,7 @@ mod tests {
     cx.run_until_parked();
     page.read_with(cx, |page, _| assert!(page.fallback_repo.is_none()));
     assert!(
-      cx.debug_bounds(OPEN_REPOSITORY_ROW_DEBUG_SELECTOR)
-        .is_some(),
+      cx.debug_bounds(OPEN_PROJECT_ROW_DEBUG_SELECTOR).is_some(),
       "a cancelled picker leaves the row where it was"
     );
 
@@ -2403,8 +2402,7 @@ mod tests {
       );
     });
     assert!(
-      cx.debug_bounds(OPEN_REPOSITORY_ROW_DEBUG_SELECTOR)
-        .is_none(),
+      cx.debug_bounds(OPEN_PROJECT_ROW_DEBUG_SELECTOR).is_none(),
       "the row goes back to naming the project"
     );
     assert!(cx.debug_bounds(REPO_CONTEXT_DEBUG_SELECTOR).is_some());

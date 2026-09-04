@@ -45,7 +45,7 @@ impl SessionPage {
     if projects_len > 1 {
       commands.push(CommandPaletteCommand::switch_project());
     }
-    commands.push(CommandPaletteCommand::open_repository());
+    commands.push(CommandPaletteCommand::open_project());
     if projects_len > 0 {
       commands.push(CommandPaletteCommand::forget_project());
     }
@@ -442,8 +442,8 @@ impl SessionPage {
       }
       CommandPaletteAction::Pull => self.run_repo_command(RepoCommand::Pull, window, cx),
       CommandPaletteAction::Fetch => self.run_repo_command(RepoCommand::Fetch, window, cx),
-      CommandPaletteAction::OpenRepository => {
-        self.start_open_repository(window, cx);
+      CommandPaletteAction::OpenProject => {
+        self.start_open_project(window, cx);
         Ok(())
       }
       CommandPaletteAction::SwitchProject(project) => {
@@ -454,7 +454,7 @@ impl SessionPage {
         self.set_project_root(project_root, window, cx)
       }
       CommandPaletteAction::ForgetProject(project) => {
-        self.forget_repository(PathBuf::from(project.path.as_ref()), window, cx)
+        self.forget_project(PathBuf::from(project.path.as_ref()), window, cx)
       }
       CommandPaletteAction::ToggleTerminal => {
         self.open_dock_tab(DockPanelTab::Terminal, window, cx);

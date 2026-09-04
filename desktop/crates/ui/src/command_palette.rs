@@ -371,7 +371,7 @@ pub enum CommandPaletteAction {
   ApplyStash(CommandPaletteStash),
   DropStash(CommandPaletteStash),
   PopStash(CommandPaletteStash),
-  OpenRepository,
+  OpenProject,
   OpenSessionPage,
   NewAgentSession,
   NewAgentWorktreeSession,
@@ -1019,7 +1019,7 @@ pub enum CommandPaletteCommandId {
   ApplyStash,
   DropStash,
   PopStash,
-  OpenRepository,
+  OpenProject,
   OpenSessionPage,
   OpenGithubFromUrl,
   OpenGitConfigPage,
@@ -1093,7 +1093,7 @@ impl CommandPaletteCommandId {
       Self::ApplyStash => "apply_stash",
       Self::DropStash => "drop_stash",
       Self::PopStash => "pop_stash",
-      Self::OpenRepository => "open_repository",
+      Self::OpenProject => "open_project",
       Self::OpenSessionPage => "open_session_page",
       Self::OpenGithubFromUrl => "open_github_from_url",
       Self::OpenGitConfigPage => "open_git_config_page",
@@ -1163,7 +1163,7 @@ impl CommandPaletteCommandId {
       "apply_stash" => Some(Self::ApplyStash),
       "drop_stash" => Some(Self::DropStash),
       "pop_stash" => Some(Self::PopStash),
-      "open_repository" => Some(Self::OpenRepository),
+      "open_project" | "open_repository" => Some(Self::OpenProject),
       "open_session_page" => Some(Self::OpenSessionPage),
       "open_github_from_url" => Some(Self::OpenGithubFromUrl),
       "open_git_config_page" => Some(Self::OpenGitConfigPage),
@@ -1637,9 +1637,9 @@ impl CommandPaletteCommand {
     )
   }
 
-  pub fn open_repository() -> Self {
+  pub fn open_project() -> Self {
     Self::new(
-      CommandPaletteCommandId::OpenRepository,
+      CommandPaletteCommandId::OpenProject,
       "Open project",
       "Pick and open a local project",
     )
@@ -1963,7 +1963,7 @@ impl CommandPaletteCommand {
 
       CommandPaletteCommandId::SwitchProject
       | CommandPaletteCommandId::ForgetProject
-      | CommandPaletteCommandId::OpenRepository => CommandPaletteGroup::Project,
+      | CommandPaletteCommandId::OpenProject => CommandPaletteGroup::Project,
 
       CommandPaletteCommandId::OpenGithubFromUrl => CommandPaletteGroup::PullRequest,
 
@@ -2040,7 +2040,7 @@ impl CommandPaletteCommand {
       Id::SubmitPullRequestReview => &["pr", "approve"],
       Id::DiscardReview => &["clear"],
       Id::DiscardPullRequestReview => &["pr", "delete", "clear"],
-      Id::OpenRepository => &["folder", "project"],
+      Id::OpenProject => &["folder", "project"],
       Id::SwitchProject => &["recent"],
       Id::ToggleTerminal => &["shell", "console", "toggle"],
       Id::ShowChanges => &["staged", "working", "show"],
@@ -2122,7 +2122,7 @@ impl CommandPaletteCommand {
       }
       CommandPaletteCommandId::DropStash => Icon::new(UiIconName::Trash),
       CommandPaletteCommandId::DeleteBranch => Icon::new(UiIconName::Trash),
-      CommandPaletteCommandId::OpenRepository => Icon::new(IconName::FolderOpen),
+      CommandPaletteCommandId::OpenProject => Icon::new(IconName::FolderOpen),
       CommandPaletteCommandId::CreateBranch | CommandPaletteCommandId::CreateBranchFrom => {
         Icon::new(IconName::Plus)
       }
@@ -3310,8 +3310,8 @@ impl CommandPalette {
       CommandPaletteCommandId::CreateBranchFrom => {
         self.set_screen(CommandPaletteScreen::CreateBranchFrom, cx, window);
       }
-      CommandPaletteCommandId::OpenRepository => {
-        self.trigger_action(command, CommandPaletteAction::OpenRepository, window, cx);
+      CommandPaletteCommandId::OpenProject => {
+        self.trigger_action(command, CommandPaletteAction::OpenProject, window, cx);
       }
       CommandPaletteCommandId::OpenSessionPage => {
         self.trigger_action(command, CommandPaletteAction::OpenSessionPage, window, cx);
@@ -3929,9 +3929,9 @@ mod tests {
   }
 
   #[test]
-  fn open_repository_command_is_available_with_expected_metadata() {
-    let command = CommandPaletteCommand::open_repository();
-    assert_eq!(command.id, CommandPaletteCommandId::OpenRepository);
+  fn open_project_command_is_available_with_expected_metadata() {
+    let command = CommandPaletteCommand::open_project();
+    assert_eq!(command.id, CommandPaletteCommandId::OpenProject);
     assert_eq!(command.name.as_ref(), "Open project");
     assert!(command.matches("open project"));
   }
@@ -4403,7 +4403,7 @@ mod tests {
       CommandPaletteCommandId::ApplyStash,
       CommandPaletteCommandId::DropStash,
       CommandPaletteCommandId::PopStash,
-      CommandPaletteCommandId::OpenRepository,
+      CommandPaletteCommandId::OpenProject,
       CommandPaletteCommandId::OpenSessionPage,
       CommandPaletteCommandId::OpenGithubFromUrl,
       CommandPaletteCommandId::OpenGitConfigPage,
@@ -4438,6 +4438,10 @@ mod tests {
     assert_eq!(
       CommandPaletteCommandId::parse("forget_repository"),
       Some(CommandPaletteCommandId::ForgetProject)
+    );
+    assert_eq!(
+      CommandPaletteCommandId::parse("open_repository"),
+      Some(CommandPaletteCommandId::OpenProject)
     );
     assert_eq!(CommandPaletteCommandId::parse("nonexistent"), None);
   }
