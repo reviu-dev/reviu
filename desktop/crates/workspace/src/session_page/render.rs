@@ -5,7 +5,11 @@ use super::*;
 use crate::annotations::{AnnotationKind, shows_annotation_navigation};
 use crate::diff_toolbar::{DiffToolbar, NavigationControl, SplitControl, ToggleControl};
 use crate::hunk_actions::render_hunk_actions;
-use gpui_component::{Selectable as _, scroll::ScrollableElement as _};
+use gpui_component::{
+  Selectable as _,
+  menu::{ContextMenuExt as _, PopupMenu, PopupMenuItem},
+  scroll::ScrollableElement as _,
+};
 
 #[derive(Clone)]
 struct CenterConversationHistoryItem {
@@ -520,6 +524,139 @@ impl SessionPage {
     }
   }
 
+  fn build_center_tab_context_menu(
+    mut menu: PopupMenu,
+    page: Entity<Self>,
+    tab: CenterTab,
+    tabs: Vec<CenterTab>,
+  ) -> PopupMenu {
+    let tab_index = tabs.iter().position(|candidate| candidate == &tab);
+    if tab.is_closeable() {
+      let close_page = page.clone();
+      let close_tab = tab.clone();
+      menu = menu.item(
+        PopupMenuItem::new("Close tab").on_click(move |_, window, cx| {
+          let tab = close_tab.clone();
+          close_page.update(cx, |page, cx| {
+            page.close_center_tab(tab, window, cx);
+          });
+        }),
+      );
+    }
+
+    if tabs
+      .iter()
+      .any(|candidate| candidate != &tab && candidate.is_closeable())
+    {
+      let close_page = page.clone();
+      let keep_tab = tab.clone();
+      menu = menu.item(
+        PopupMenuItem::new("Close Others").on_click(move |_, window, cx| {
+          let keep_tab = keep_tab.clone();
+          close_page.update(cx, |page, cx| {
+            page.close_center_tabs_except(keep_tab, window, cx);
+          });
+        }),
+      );
+    }
+
+    if tab_index.is_some_and(|index| tabs.iter().take(index).any(CenterTab::is_closeable)) {
+      let close_page = page.clone();
+      let anchor_tab = tab.clone();
+      menu = menu.item(
+        PopupMenuItem::new("Close Left").on_click(move |_, window, cx| {
+          let anchor_tab = anchor_tab.clone();
+          close_page.update(cx, |page, cx| {
+            page.close_center_tabs_to_left(anchor_tab, window, cx);
+          });
+        }),
+      );
+    }
+
+    if tab_index.is_some_and(|index| tabs.iter().skip(index + 1).any(CenterTab::is_closeable)) {
+      let close_page = page.clone();
+      let anchor_tab = tab.clone();
+      menu = menu.item(
+        PopupMenuItem::new("Close Right").on_click(move |_, window, cx| {
+          let anchor_tab = anchor_tab.clone();
+          close_page.update(cx, |page, cx| {
+            page.close_center_tabs_to_right(anchor_tab, window, cx);
+          });
+        }),
+      );
+    }
+
+    if let Some(path) = tab.path().map(Path::to_path_buf) {
+      if !menu.is_empty() {
+        menu = menu.separator();
+      }
+      menu = menu.item(PopupMenuItem::new("Copy path").on_click(move |_, _, cx| {
+        cx.write_to_clipboard(ClipboardItem::new_string(
+          path.to_string_lossy().into_owned(),
+        ));
+      }));
+    }
+
+    menu
+  }
+
+  fn close_center_tabs_except(
+    &mut self,
+    keep_tab: CenterTab,
+    window: &mut Window,
+    cx: &mut Context<Self>,
+  ) {
+    let tabs = self.center_tabs_for_navigation();
+    for tab in tabs {
+      if tab != keep_tab && tab.is_closeable() {
+        self.close_center_tab(tab, window, cx);
+        if window.has_active_dialog(cx) {
+          break;
+        }
+      }
+    }
+  }
+
+  fn close_center_tabs_to_left(
+    &mut self,
+    anchor_tab: CenterTab,
+    window: &mut Window,
+    cx: &mut Context<Self>,
+  ) {
+    let tabs = self.center_tabs_for_navigation();
+    let Some(anchor_index) = tabs.iter().position(|tab| tab == &anchor_tab) else {
+      return;
+    };
+    for tab in tabs.into_iter().take(anchor_index) {
+      if tab.is_closeable() {
+        self.close_center_tab(tab, window, cx);
+        if window.has_active_dialog(cx) {
+          break;
+        }
+      }
+    }
+  }
+
+  fn close_center_tabs_to_right(
+    &mut self,
+    anchor_tab: CenterTab,
+    window: &mut Window,
+    cx: &mut Context<Self>,
+  ) {
+    let tabs = self.center_tabs_for_navigation();
+    let Some(anchor_index) = tabs.iter().position(|tab| tab == &anchor_tab) else {
+      return;
+    };
+    for tab in tabs.into_iter().skip(anchor_index + 1) {
+      if tab.is_closeable() {
+        self.close_center_tab(tab, window, cx);
+        if window.has_active_dialog(cx) {
+          break;
+        }
+      }
+    }
+  }
+
   fn render_center_tab_icons(&self, tabs: &[CenterTab], cx: &mut Context<Self>) -> AnyElement {
     const CENTER_TAB_ICON_OVERLAP_PX: f32 = 4.0;
     let icon_count = tabs.len().max(1) as f32;
@@ -873,6 +1010,9 @@ impl SessionPage {
 
       let accessibility_label = label.clone();
       let tab_debug_selector = Self::center_tab_debug_selector(tab);
+      let page = cx.entity().clone();
+      let menu_tab = tab.clone();
+      let menu_tabs = tabs.clone();
       let tab_content = h_flex()
         .debug_selector(move || tab_debug_selector.clone())
         .h(px(CENTER_TAB_CONTENT_HEIGHT_PX))
@@ -893,7 +1033,15 @@ impl SessionPage {
             .text_xs()
             .line_height(px(CENTER_TAB_LABEL_HEIGHT_PX))
             .child(label),
-        );
+        )
+        .context_menu(move |menu, _, _| {
+          Self::build_center_tab_context_menu(
+            menu,
+            page.clone(),
+            menu_tab.clone(),
+            menu_tabs.clone(),
+          )
+        });
 
       let drag_tab = tab.clone();
       let mut tab_element = Tab::new()
@@ -4021,6 +4169,126 @@ mod tests {
       .expect("center tab label");
 
     assert!(label.size.height >= gpui::px(CENTER_TAB_LABEL_HEIGHT_PX));
+  }
+
+  fn open_center_tab_context_menu(cx: &mut gpui::VisualTestContext, selector: &'static str) {
+    let tab = cx.debug_bounds(selector).expect("center tab bounds");
+    cx.simulate_event(gpui::MouseDownEvent {
+      button: gpui::MouseButton::Right,
+      position: tab.center(),
+      modifiers: gpui::Modifiers::default(),
+      click_count: 1,
+      first_mouse: false,
+    });
+    cx.run_until_parked();
+    cx.update(|window, cx| {
+      let _ = window.draw(cx);
+    });
+  }
+
+  #[gpui::test]
+  async fn center_tab_context_menu_copies_file_path(cx: &mut TestAppContext) {
+    let repo = TempRepo::init("session-render-tab-context-copy");
+    commit_text_file(&repo.path, Path::new("package.json"), "{}\n", "initial");
+
+    let (page, cx) = add_session_page_window(repo.path.clone(), cx);
+    page.update_in(cx, |page, window, cx| {
+      page.open_file(
+        PathBuf::from("package.json"),
+        None,
+        None,
+        OpenIntent::Open,
+        window,
+        cx,
+      );
+    });
+    await_open_file(&page, cx).await;
+    cx.run_until_parked();
+
+    open_center_tab_context_menu(cx, "session-center-tab-file-package.json");
+    cx.simulate_keystrokes("down down enter");
+    cx.run_until_parked();
+
+    let copied = cx
+      .update(|_, cx| cx.read_from_clipboard())
+      .and_then(|item| item.text());
+    assert_eq!(copied.as_deref(), Some("package.json"));
+  }
+
+  #[gpui::test]
+  async fn center_tab_context_menu_closes_tabs_to_the_left(cx: &mut TestAppContext) {
+    let repo = TempRepo::init("session-render-tab-context-close-left");
+    commit_text_file(&repo.path, Path::new("a.txt"), "a\n", "a");
+    commit_text_file(&repo.path, Path::new("b.txt"), "b\n", "b");
+    commit_text_file(&repo.path, Path::new("c.txt"), "c\n", "c");
+
+    let (page, cx) = add_session_page_window(repo.path.clone(), cx);
+    for path in ["a.txt", "b.txt", "c.txt"] {
+      page.update_in(cx, |page, window, cx| {
+        page.open_file(
+          PathBuf::from(path),
+          None,
+          None,
+          OpenIntent::Open,
+          window,
+          cx,
+        );
+      });
+      await_open_file(&page, cx).await;
+    }
+    cx.run_until_parked();
+
+    open_center_tab_context_menu(cx, "session-center-tab-file-b.txt");
+    cx.simulate_keystrokes("down down down enter");
+    cx.run_until_parked();
+
+    page.read_with(cx, |page, _| {
+      assert_eq!(
+        page.center_tabs_for_navigation(),
+        vec![
+          CenterTab::file(PathBuf::from("b.txt")),
+          CenterTab::file(PathBuf::from("c.txt")),
+        ]
+      );
+    });
+  }
+
+  #[gpui::test]
+  async fn center_tab_context_menu_closes_tabs_to_the_right(cx: &mut TestAppContext) {
+    let repo = TempRepo::init("session-render-tab-context-close-right");
+    commit_text_file(&repo.path, Path::new("a.txt"), "a\n", "a");
+    commit_text_file(&repo.path, Path::new("b.txt"), "b\n", "b");
+    commit_text_file(&repo.path, Path::new("c.txt"), "c\n", "c");
+
+    let (page, cx) = add_session_page_window(repo.path.clone(), cx);
+    for path in ["a.txt", "b.txt", "c.txt"] {
+      page.update_in(cx, |page, window, cx| {
+        page.open_file(
+          PathBuf::from(path),
+          None,
+          None,
+          OpenIntent::Open,
+          window,
+          cx,
+        );
+      });
+      await_open_file(&page, cx).await;
+    }
+    cx.run_until_parked();
+
+    open_center_tab_context_menu(cx, "session-center-tab-file-b.txt");
+    cx.simulate_keystrokes("down down down down enter");
+    cx.run_until_parked();
+
+    page.read_with(cx, |page, _| {
+      assert_eq!(
+        page.center_tabs_for_navigation(),
+        vec![
+          CenterTab::file(PathBuf::from("a.txt")),
+          CenterTab::file(PathBuf::from("b.txt")),
+        ]
+      );
+    });
   }
 
   #[gpui::test]
