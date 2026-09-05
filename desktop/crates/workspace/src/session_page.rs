@@ -461,6 +461,29 @@ impl SessionPage {
             cx,
           );
         }
+        DockPanelEvent::CheckoutCommit { commit_oid } => {
+          if let Err(error) = this.run_branch_command(
+            RepoCommand::CheckoutDetached {
+              target: commit_oid.clone(),
+            },
+            window,
+            cx,
+          ) {
+            window.push_notification(Notification::warning(error), cx);
+          }
+        }
+        DockPanelEvent::CreateBranchFromCommit { commit_oid, name } => {
+          if let Err(error) = this.run_branch_command(
+            RepoCommand::CreateBranchFromCommit {
+              name: name.clone(),
+              commit_oid: commit_oid.clone(),
+            },
+            window,
+            cx,
+          ) {
+            window.push_notification(Notification::warning(error), cx);
+          }
+        }
         DockPanelEvent::Committed => {
           this.refresh_branch(cx);
         }

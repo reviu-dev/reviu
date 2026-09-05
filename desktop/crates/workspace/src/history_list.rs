@@ -9,15 +9,22 @@ use git::{
 };
 use gpui::{
   AnyElement, App, Context, Entity, EventEmitter, FocusHandle, Focusable, InteractiveElement,
-  ParentElement, Render, SharedString, Styled, Task, Window, div, img, prelude::*, px,
+  ParentElement, Render, SharedString, Styled, Task, WeakEntity, Window, div, img, prelude::*, px,
 };
 use gpui_component::{
-  ActiveTheme as _, Icon, IconName, Sizable as _, h_flex,
+  ActiveTheme as _, Icon, IconName, Sizable as _,
+  dialog::{DialogDescription, DialogFooter, DialogHeader, DialogTitle},
+  h_flex,
+  input::{Input, InputState},
+  menu::{PopupMenu, PopupMenuItem},
+  notification::Notification,
   spinner::Spinner,
   tree::{TreeEvent, TreeItem, TreeState, tree},
+  v_flex,
 };
 use ui::{
-  FILE_ICON_SIZE_PX, SelectableRowStyle, file_icon_path_for_path_with_theme, selectable_list_item,
+  Button, ButtonVariants as _, FILE_ICON_SIZE_PX, SelectableRowStyle, WindowExt as _,
+  file_icon_path_for_path_with_theme, selectable_list_item,
 };
 
 use crate::open_intent::OpenIntent;
@@ -84,6 +91,121 @@ pub(crate) enum HistoryListEvent {
     path: PathBuf,
     intent: OpenIntent,
   },
+  CheckoutCommit {
+    commit_oid: String,
+  },
+  CreateBranchFromCommit {
+    commit_oid: String,
+    name: String,
+  },
+}
+
+struct HistoryBranchNameDialog {
+  commit_oid: String,
+  input: Entity<InputState>,
+  list: WeakEntity<HistoryList>,
+}
+
+impl HistoryBranchNameDialog {
+  fn new(
+    commit_oid: String,
+    list: WeakEntity<HistoryList>,
+    window: &mut Window,
+    cx: &mut Context<Self>,
+  ) -> Self {
+    let input = cx.new(|cx| InputState::new(window, cx).placeholder("Branch name"));
+    cx.subscribe_in(
+      &input,
+      window,
+      |this, _input, event: &gpui_component::input::InputEvent, window, cx| {
+        if matches!(event, gpui_component::input::InputEvent::PressEnter { .. }) {
+          this.confirm(window, cx);
+        }
+      },
+    )
+    .detach();
+    Self {
+      commit_oid,
+      input,
+      list,
+    }
+  }
+
+  fn input_focus_handle(&self, cx: &App) -> FocusHandle {
+    self.input.read(cx).focus_handle(cx)
+  }
+
+  fn confirm(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    let name = self.input.read(cx).value().trim().to_string();
+    if name.is_empty() {
+      window.push_notification(Notification::error("Enter a branch name"), cx);
+      return;
+    }
+    let commit_oid = self.commit_oid.clone();
+    let _ = self.list.update(cx, |_, cx| {
+      cx.emit(HistoryListEvent::CreateBranchFromCommit { commit_oid, name });
+    });
+    window.close_dialog(cx);
+  }
+}
+
+impl Render for HistoryBranchNameDialog {
+  fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    div()
+      .id("history-branch-name-dialog")
+      .flex()
+      .flex_col()
+      .child(
+        DialogHeader::new()
+          .p_4()
+          .child(DialogTitle::new().child("Create Branch from Commit"))
+          .child(DialogDescription::new().child("Enter a name for the new branch.")),
+      )
+      .child(
+        v_flex()
+          .px_4()
+          .pb_4()
+          .child(Input::new(&self.input).w_full()),
+      )
+      .child(
+        DialogFooter::new()
+          .px_4()
+          .pb_4()
+          .pt_1()
+          .justify_end()
+          .child(
+            Button::new("history-branch-name-cancel")
+              .label("Cancel")
+              .outline()
+              .on_click(|_, window, cx| window.close_dialog(cx)),
+          )
+          .child(
+            Button::new("history-branch-name-confirm")
+              .label("Create")
+              .primary()
+              .on_click(cx.listener(|this, _, window, cx| this.confirm(window, cx))),
+          ),
+      )
+  }
+}
+
+fn open_history_branch_name_dialog(
+  commit_oid: String,
+  list: WeakEntity<HistoryList>,
+  window: &mut Window,
+  cx: &mut App,
+) {
+  let dialog = cx.new(|cx| HistoryBranchNameDialog::new(commit_oid, list, window, cx));
+  let dialog_for_overlay = dialog.clone();
+  let dialog_for_focus = dialog.clone();
+
+  window.open_dialog(cx, move |overlay, _, _| {
+    overlay.p_0().w(px(360.0)).child(dialog_for_overlay.clone())
+  });
+
+  window.on_next_frame(move |window, cx| {
+    window.focus(&dialog_for_focus.read(cx).input_focus_handle(cx), cx);
+  });
 }
 
 pub(crate) struct HistoryList {
@@ -382,6 +504,111 @@ impl HistoryList {
     cx.notify();
   }
 
+  fn build_context_menu(
+    &self,
+    menu: PopupMenu,
+    node: HistoryTreeNode,
+    window: &mut Window,
+    cx: &mut Context<Self>,
+  ) -> PopupMenu {
+    match node {
+      HistoryTreeNode::Commit { oid } => self.build_commit_context_menu(menu, oid, window, cx),
+      HistoryTreeNode::File { commit_oid, file } => {
+        self.build_file_context_menu(menu, commit_oid, file, cx)
+      }
+      HistoryTreeNode::LoadHint { .. } | HistoryTreeNode::Placeholder => menu,
+    }
+  }
+
+  fn build_commit_context_menu(
+    &self,
+    menu: PopupMenu,
+    commit_oid: String,
+    _window: &mut Window,
+    cx: &mut Context<Self>,
+  ) -> PopupMenu {
+    let Some(commit) = self
+      .rows
+      .iter()
+      .find(|row| row.commit.oid == commit_oid)
+      .map(|row| row.commit.clone())
+    else {
+      return menu;
+    };
+    let list = cx.entity().downgrade();
+    let copy_oid = commit.oid.clone();
+    let copy_message = commit.summary.clone();
+    let checkout_oid = commit.oid.clone();
+    let checkout_list = list.clone();
+    let branch_oid = commit.oid;
+
+    menu
+      .item(PopupMenuItem::new("Copy SHA").on_click(move |_, _, cx| {
+        cx.write_to_clipboard(gpui::ClipboardItem::new_string(copy_oid.clone()));
+      }))
+      .item(
+        PopupMenuItem::new("Copy Message").on_click(move |_, _, cx| {
+          cx.write_to_clipboard(gpui::ClipboardItem::new_string(copy_message.clone()));
+        }),
+      )
+      .separator()
+      .item(
+        PopupMenuItem::new("Checkout Commit").on_click(move |_, _, cx| {
+          let commit_oid = checkout_oid.clone();
+          let _ = checkout_list.update(cx, |_, cx| {
+            cx.emit(HistoryListEvent::CheckoutCommit { commit_oid });
+          });
+        }),
+      )
+      .item(
+        PopupMenuItem::new("Create Branch from Commit").on_click(move |_, window, cx| {
+          let commit_oid = branch_oid.clone();
+          let list = list.clone();
+          open_history_branch_name_dialog(commit_oid, list, window, cx);
+        }),
+      )
+  }
+
+  fn build_file_context_menu(
+    &self,
+    menu: PopupMenu,
+    commit_oid: String,
+    file: HistoryCommitFileRow,
+    cx: &mut Context<Self>,
+  ) -> PopupMenu {
+    let list = cx.entity().downgrade();
+    let open_commit_oid = commit_oid.clone();
+    let open_path = file.path.clone();
+    let copy_path = self
+      .repo_root
+      .as_ref()
+      .map(|repo_root| repo_root.join(&file.path))
+      .unwrap_or_else(|| file.path.clone());
+    let copy_relative_path = file.path;
+
+    menu
+      .item(PopupMenuItem::new("Open").on_click(move |_, _, cx| {
+        let commit_oid = open_commit_oid.clone();
+        let path = open_path.clone();
+        let _ = list.update(cx, |list, cx| {
+          list.open_commit_file(commit_oid, path, OpenIntent::Open, cx);
+        });
+      }))
+      .separator()
+      .item(PopupMenuItem::new("Copy Path").on_click(move |_, _, cx| {
+        cx.write_to_clipboard(gpui::ClipboardItem::new_string(
+          copy_path.to_string_lossy().into_owned(),
+        ));
+      }))
+      .item(
+        PopupMenuItem::new("Copy Relative Path").on_click(move |_, _, cx| {
+          cx.write_to_clipboard(gpui::ClipboardItem::new_string(
+            copy_relative_path.to_string_lossy().into_owned(),
+          ));
+        }),
+      )
+  }
+
   /// The tree says where the user is and what they chose; the rows say nothing,
   /// so a click and a keystroke arrive here by the same road.
   fn on_tree_event(&mut self, event: &TreeEvent, cx: &mut Context<Self>) {
@@ -406,8 +633,10 @@ impl HistoryList {
 
   fn render_tree(&mut self, cx: &mut Context<Self>) -> AnyElement {
     let view = cx.entity();
+    let row_view = view.clone();
+    let menu_view = view;
     tree(&self.tree, move |ix, entry, selected, window, cx| {
-      view.update(cx, |this, cx| {
+      row_view.update(cx, |this, cx| {
         let theme = cx.theme().clone();
         let item = entry.item();
         let indent = px(12.) + px(16.) * entry.depth();
@@ -453,6 +682,7 @@ impl HistoryList {
               .w_full()
               .pr_2()
               .pl(indent)
+              .debug_selector(move || format!("history-commit-{ix}"))
               .child(
                 h_flex()
                   .w_full()
@@ -563,6 +793,18 @@ impl HistoryList {
                 .child(item.label.clone()),
             ),
         }
+      })
+    })
+    .context_menu(move |_ix, entry, menu, window, cx| {
+      let node = {
+        let item = entry.item();
+        menu_view.read(cx).tree_nodes.get(item.id.as_ref()).cloned()
+      };
+      let Some(node) = node else {
+        return menu;
+      };
+      menu_view.update(cx, |this, cx| {
+        this.build_context_menu(menu, node, window, cx)
       })
     })
     .pb_1()
@@ -777,6 +1019,109 @@ mod tests {
     (list, cx)
   }
 
+  fn open_history_context_menu(cx: &mut gpui::VisualTestContext, selector: &'static str) {
+    let row = cx.debug_bounds(selector).expect("history row bounds");
+    cx.simulate_event(gpui::MouseDownEvent {
+      button: gpui::MouseButton::Right,
+      position: row.center(),
+      modifiers: gpui::Modifiers::default(),
+      click_count: 1,
+      first_mouse: false,
+    });
+    cx.run_until_parked();
+    cx.update(|window, cx| {
+      let _ = window.draw(cx);
+    });
+  }
+
+  #[gpui::test]
+  async fn commit_context_menu_copies_the_sha(cx: &mut TestAppContext) {
+    let repo = TempRepo::init("history-list-context-copy-sha");
+    commit_text_file(&repo.path, Path::new("a.txt"), "v1\n", "first");
+
+    let (list, cx) = add_history_list_window(Some(repo.path.clone()), cx);
+    await_history(&list, cx).await;
+    let head = list.read_with(cx, |list, _| list.commits[0].oid.clone());
+
+    open_history_context_menu(cx, "history-commit-0");
+    cx.simulate_keystrokes("down enter");
+    cx.run_until_parked();
+
+    let copied = cx
+      .update(|_, cx| cx.read_from_clipboard())
+      .and_then(|item| item.text());
+    assert_eq!(copied.as_deref(), Some(head.as_str()));
+  }
+
+  #[gpui::test]
+  async fn commit_context_menu_can_checkout_the_commit(cx: &mut TestAppContext) {
+    let repo = TempRepo::init("history-list-context-checkout");
+    commit_text_file(&repo.path, Path::new("a.txt"), "v1\n", "first");
+
+    let (list, cx) = add_history_list_window(Some(repo.path.clone()), cx);
+    await_history(&list, cx).await;
+    let head = list.read_with(cx, |list, _| list.commits[0].oid.clone());
+
+    let checked_out = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+    let seen = checked_out.clone();
+    cx.update(|_, cx| {
+      cx.subscribe(&list, move |_list, event: &HistoryListEvent, _cx| {
+        if let HistoryListEvent::CheckoutCommit { commit_oid } = event {
+          seen.borrow_mut().push(commit_oid.clone());
+        }
+      })
+      .detach();
+    });
+
+    open_history_context_menu(cx, "history-commit-0");
+    cx.simulate_keystrokes("down down down enter");
+    cx.run_until_parked();
+
+    assert_eq!(checked_out.borrow().as_slice(), &[head]);
+  }
+
+  #[gpui::test]
+  async fn file_context_menu_opens_and_copies_relative_path(cx: &mut TestAppContext) {
+    let repo = TempRepo::init("history-list-context-file");
+    commit_text_file(&repo.path, Path::new("src/main.rs"), "v1\n", "first");
+
+    let (list, cx) = add_history_list_window(Some(repo.path.clone()), cx);
+    await_history(&list, cx).await;
+    let head = list.read_with(cx, |list, _| list.commits[0].oid.clone());
+    list.update(cx, |list, cx| {
+      list.expanded_commits.insert(head.clone());
+      list.load_commit_files(head.clone(), cx);
+    });
+    await_history(&list, cx).await;
+
+    let opened = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+    let seen = opened.clone();
+    cx.update(|_, cx| {
+      cx.subscribe(&list, move |_list, event: &HistoryListEvent, _cx| {
+        if let HistoryListEvent::OpenCommitFile { path, intent, .. } = event {
+          seen.borrow_mut().push((path.clone(), *intent));
+        }
+      })
+      .detach();
+    });
+
+    open_history_context_menu(cx, "history-file-1");
+    cx.simulate_keystrokes("down enter");
+    cx.run_until_parked();
+    assert_eq!(
+      opened.borrow().as_slice(),
+      &[(PathBuf::from("src/main.rs"), OpenIntent::Open)]
+    );
+
+    open_history_context_menu(cx, "history-file-1");
+    cx.simulate_keystrokes("down down down enter");
+    cx.run_until_parked();
+    let copied = cx
+      .update(|_, cx| cx.read_from_clipboard())
+      .and_then(|item| item.text());
+    assert_eq!(copied.as_deref(), Some("src/main.rs"));
+  }
+
   #[gpui::test]
   async fn focusing_the_list_hands_the_keyboard_to_the_commit_tree(cx: &mut TestAppContext) {
     let repo = TempRepo::init("history-list-keyboard");
@@ -810,8 +1155,9 @@ mod tests {
     let seen = opened.clone();
     cx.update(|_, cx| {
       cx.subscribe(&list, move |_list, event: &HistoryListEvent, _cx| {
-        let HistoryListEvent::OpenCommitFile { path, intent, .. } = event;
-        seen.borrow_mut().push((path.clone(), *intent));
+        if let HistoryListEvent::OpenCommitFile { path, intent, .. } = event {
+          seen.borrow_mut().push((path.clone(), *intent));
+        }
       })
       .detach();
     });
@@ -976,10 +1322,12 @@ mod tests {
     let seen = opened.clone();
     cx.update(|_, cx| {
       cx.subscribe(&list, move |_list, event: &HistoryListEvent, _cx| {
-        let HistoryListEvent::OpenCommitFile {
+        if let HistoryListEvent::OpenCommitFile {
           commit_oid, path, ..
-        } = event;
-        seen.borrow_mut().push((commit_oid.clone(), path.clone()));
+        } = event
+        {
+          seen.borrow_mut().push((commit_oid.clone(), path.clone()));
+        }
       })
       .detach();
     });

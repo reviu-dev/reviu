@@ -123,6 +123,13 @@ pub enum DockPanelEvent {
     path: PathBuf,
     intent: OpenIntent,
   },
+  CheckoutCommit {
+    commit_oid: String,
+  },
+  CreateBranchFromCommit {
+    commit_oid: String,
+    name: String,
+  },
   /// A commit landed: whoever shows the branch state has to refresh it.
   Committed,
   /// The rebase can move on: the host runs it, it owns the conflict flow.
@@ -1226,6 +1233,17 @@ impl DockPanel {
             commit_oid: commit_oid.clone(),
             path: path.clone(),
             intent: *intent,
+          });
+        }
+        HistoryListEvent::CheckoutCommit { commit_oid } => {
+          cx.emit(DockPanelEvent::CheckoutCommit {
+            commit_oid: commit_oid.clone(),
+          });
+        }
+        HistoryListEvent::CreateBranchFromCommit { commit_oid, name } => {
+          cx.emit(DockPanelEvent::CreateBranchFromCommit {
+            commit_oid: commit_oid.clone(),
+            name: name.clone(),
           });
         }
       },

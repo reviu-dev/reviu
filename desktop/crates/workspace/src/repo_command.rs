@@ -5,10 +5,11 @@ use std::path::{Path, PathBuf};
 use git::{
   BranchKind, BranchRef, MergeBranchOutcome, PullOutcome, RebaseBranchOutcome, RepoStatusKind,
   abort_merge, abort_rebase, amend_commit, apply_stash, checkout_detached_target,
-  cherry_pick_commits, continue_rebase, create_branch, create_branch_from, create_stash,
-  current_branch_status, current_rebase_commit_message, delete_branch, drop_stash, fetch,
-  list_repo_status, merge_branch, pop_stash, pull, push, rebase_branch, skip_rebase, stage_all,
-  switch_branch, switch_to_branch_name, undo_last_commit, unstage_all,
+  cherry_pick_commits, continue_rebase, create_branch, create_branch_from,
+  create_branch_from_commit, create_stash, current_branch_status, current_rebase_commit_message,
+  delete_branch, drop_stash, fetch, list_repo_status, merge_branch, pop_stash, pull, push,
+  rebase_branch, skip_rebase, stage_all, switch_branch, switch_to_branch_name, undo_last_commit,
+  unstage_all,
 };
 use gpui::SharedString;
 use ui::{CommandPaletteBranch, CommandPaletteBranchKind};
@@ -41,6 +42,10 @@ pub(crate) enum RepoCommand {
   CreateBranchFrom {
     name: String,
     base: BranchRef,
+  },
+  CreateBranchFromCommit {
+    name: String,
+    commit_oid: String,
   },
   DeleteBranch(BranchRef),
   MergeBranch(BranchRef),
@@ -145,6 +150,15 @@ impl RepoCommand {
           .and_then(|()| switch_branch(repo_root, &created))
           .map(|()| RepoCommandOutcome::done(format!("Created branch {name}")))
       }
+      Self::CreateBranchFromCommit { name, commit_oid } => {
+        let created = BranchRef {
+          name: name.clone(),
+          kind: BranchKind::Local,
+        };
+        create_branch_from_commit(repo_root, name, commit_oid)
+          .and_then(|()| switch_branch(repo_root, &created))
+          .map(|()| RepoCommandOutcome::done(format!("Created branch {name}")))
+      }
       Self::DeleteBranch(branch) => delete_branch(repo_root, branch)
         .map(|()| RepoCommandOutcome::done(format!("Deleted branch {}", branch.name))),
       Self::MergeBranch(branch) => match merge_branch(repo_root, branch) {
@@ -216,7 +230,9 @@ impl RepoCommand {
       Self::Amend { .. } => "git.amend",
       Self::CheckoutDetached { .. } => "git.checkout_detached",
       Self::SwitchBranch(_) | Self::SwitchToBranchName { .. } => "git.switch_branch",
-      Self::CreateBranch { .. } | Self::CreateBranchFrom { .. } => "git.create_branch",
+      Self::CreateBranch { .. }
+      | Self::CreateBranchFrom { .. }
+      | Self::CreateBranchFromCommit { .. } => "git.create_branch",
       Self::DeleteBranch(_) => "git.delete_branch",
       Self::MergeBranch(_) => "git.merge",
       Self::AbortMerge => "git.merge.abort",
@@ -245,7 +261,9 @@ impl RepoCommand {
       Self::Amend { .. } => "Amend",
       Self::CheckoutDetached { .. } => "Checkout detached",
       Self::SwitchBranch(_) | Self::SwitchToBranchName { .. } => "Switch branch",
-      Self::CreateBranch { .. } | Self::CreateBranchFrom { .. } => "Create branch",
+      Self::CreateBranch { .. }
+      | Self::CreateBranchFrom { .. }
+      | Self::CreateBranchFromCommit { .. } => "Create branch",
       Self::DeleteBranch(_) => "Delete branch",
       Self::MergeBranch(_) => "Merge",
       Self::AbortMerge => "Abort merge",
@@ -279,6 +297,7 @@ impl RepoCommand {
       | Self::SwitchToBranchName { .. }
       | Self::CreateBranch { .. }
       | Self::CreateBranchFrom { .. }
+      | Self::CreateBranchFromCommit { .. }
       | Self::DeleteBranch(_)
       | Self::MergeBranch(_)
       | Self::AbortMerge
@@ -450,6 +469,32 @@ mod tests {
     assert!(
       !repo.path.join("b.txt").exists(),
       "the branch starts from the base, not from the current branch"
+    );
+  }
+
+  #[test]
+  fn creating_a_branch_from_a_commit_starts_at_that_commit() {
+    let repo = TempRepo::init("repo-command-branch-from-commit");
+    let first = commit_text_file(&repo.path, Path::new("a.txt"), "v1\n", "initial");
+    commit_text_file(&repo.path, Path::new("b.txt"), "only on head\n", "second");
+
+    run(
+      &repo.path,
+      RepoCommand::CreateBranchFromCommit {
+        name: "from-first".to_string(),
+        commit_oid: first.to_string(),
+      },
+    );
+
+    assert_eq!(
+      current_branch_status(&repo.path)
+        .expect("branch status")
+        .name,
+      "from-first"
+    );
+    assert!(
+      !repo.path.join("b.txt").exists(),
+      "the branch starts from the commit, not from the previous HEAD"
     );
   }
 

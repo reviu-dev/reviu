@@ -3,7 +3,7 @@ use std::{path::Path, process::Command};
 use anyhow::{Context, Result, bail};
 use git2::build::CheckoutBuilder;
 use git2::{
-  BranchType, CherrypickOptions, ErrorCode, FetchOptions, PushOptions, Rebase, Repository,
+  BranchType, CherrypickOptions, ErrorCode, FetchOptions, Oid, PushOptions, Rebase, Repository,
   RepositoryState, ResetType, Signature, StatusOptions,
 };
 
@@ -768,6 +768,17 @@ pub fn create_branch_from(repo_root: &Path, name: &str, base: &BranchRef) -> Res
     .refname_to_id(&refname)
     .with_context(|| format!("resolve branch {:?}", base.name))?;
   let commit = repo.find_commit(oid)?;
+  repo.branch(name, &commit, false)?;
+  Ok(())
+}
+
+pub fn create_branch_from_commit(repo_root: &Path, name: &str, commit_oid: &str) -> Result<()> {
+  let repo =
+    Repository::open(repo_root).with_context(|| format!("open repo at {:?}", repo_root))?;
+  let oid = Oid::from_str(commit_oid).with_context(|| format!("parse commit {commit_oid}"))?;
+  let commit = repo
+    .find_commit(oid)
+    .with_context(|| format!("find commit {commit_oid}"))?;
   repo.branch(name, &commit, false)?;
   Ok(())
 }
