@@ -845,7 +845,7 @@ impl SessionPage {
       let tab_debug_selector = Self::center_tab_debug_selector(tab);
       let tab_content = h_flex()
         .debug_selector(move || tab_debug_selector.clone())
-        .h(px(22.0))
+        .h(px(CENTER_TAB_CONTENT_HEIGHT_PX))
         .min_w_0()
         .items_center()
         .gap_1p5()
@@ -858,8 +858,10 @@ impl SessionPage {
             .debug_selector(|| "session-center-tab-label".to_string())
             .max_w(px(180.0))
             .min_w_0()
+            .h(px(CENTER_TAB_LABEL_HEIGHT_PX))
             .truncate()
             .text_xs()
+            .line_height(px(CENTER_TAB_LABEL_HEIGHT_PX))
             .child(label),
         );
 
@@ -914,16 +916,37 @@ impl SessionPage {
     div()
       .id(format!("{id}-wrap"))
       .debug_selector(|| "session-center-tabs".to_string())
-      .h(px(40.0))
-      .min_h(px(40.0))
-      .max_h(px(40.0))
+      .h(px(CENTER_TAB_BAR_HEIGHT_PX))
+      .min_h(px(CENTER_TAB_BAR_HEIGHT_PX))
+      .max_h(px(CENTER_TAB_BAR_HEIGHT_PX))
       .flex_shrink_0()
+      .relative()
       .bg(cx.theme().background)
+      .child(
+        div()
+          .debug_selector(|| "session-center-tab-header-border".to_string())
+          .absolute()
+          .left_0()
+          .right_0()
+          .bottom_0()
+          .h(px(1.0))
+          .border_b_1()
+          .border_color(theme.border),
+      )
       .child(
         div()
           .debug_selector(|| "session-center-tab-bar".to_string())
           .size_full()
-          .child(tab_bar),
+          .child(
+            div()
+              .debug_selector(|| "session-center-tab-bar-underline-frame".to_string())
+              .w_full()
+              .h(px(
+                CENTER_TAB_BAR_HEIGHT_PX + CENTER_TAB_UNDERLINE_OFFSET_PX,
+              ))
+              .pt(px(CENTER_TAB_UNDERLINE_OFFSET_PX))
+              .child(tab_bar),
+          ),
       )
       .into_any_element()
   }
@@ -1726,6 +1749,10 @@ impl SessionPage {
 
 pub(super) const DOCK_RESIZE_HANDLE_DEBUG_SELECTOR: &str = "session-dock-resize-handle";
 pub(super) const SIDEBAR_RESIZE_HANDLE_DEBUG_SELECTOR: &str = "session-sidebar-resize-handle";
+const CENTER_TAB_BAR_HEIGHT_PX: f32 = 40.0;
+const CENTER_TAB_CONTENT_HEIGHT_PX: f32 = 26.0;
+const CENTER_TAB_LABEL_HEIGHT_PX: f32 = 18.0;
+const CENTER_TAB_UNDERLINE_OFFSET_PX: f32 = 1.0;
 const CENTER_CONTENT_DEBUG_SELECTOR: &str = "session-center-content";
 const CENTER_DROP_TARGET_DEBUG_SELECTOR: &str = "session-center-drop-target";
 const CENTER_DROP_GROUP: &str = "session-center-drop";
@@ -3911,6 +3938,59 @@ mod tests {
     assert_eq!(center_tabs.size.height, dock_header.size.height);
     assert_eq!(center_tab_bar.origin.y, center_tabs.origin.y);
     assert_eq!(center_tab_bar.size.height, center_tabs.size.height);
+  }
+
+  #[gpui::test]
+  async fn center_tab_bar_keeps_header_border(cx: &mut TestAppContext) {
+    let repo = TempRepo::init("session-render-tab-header-border");
+    let (_page, cx) = add_session_page_window(repo.path.clone(), cx);
+    cx.run_until_parked();
+
+    let center_tab_bar = cx
+      .debug_bounds("session-center-tab-bar")
+      .expect("center tab bar");
+    let header_border = cx
+      .debug_bounds("session-center-tab-header-border")
+      .expect("center tab header border");
+    let underline_frame = cx
+      .debug_bounds("session-center-tab-bar-underline-frame")
+      .expect("underline frame");
+
+    assert_eq!(
+      underline_frame.size.height,
+      center_tab_bar.size.height + gpui::px(CENTER_TAB_UNDERLINE_OFFSET_PX)
+    );
+    assert_eq!(header_border.size.height, gpui::px(1.0));
+    assert_eq!(
+      header_border.origin.y + header_border.size.height,
+      center_tab_bar.origin.y + center_tab_bar.size.height
+    );
+  }
+
+  #[gpui::test]
+  async fn center_tab_label_keeps_descender_room(cx: &mut TestAppContext) {
+    let repo = TempRepo::init("session-render-tab-descender-room");
+    commit_text_file(&repo.path, Path::new("package.json"), "{}\n", "initial");
+
+    let (page, cx) = add_session_page_window(repo.path.clone(), cx);
+    page.update_in(cx, |page, window, cx| {
+      page.open_file(
+        PathBuf::from("package.json"),
+        None,
+        None,
+        OpenIntent::Open,
+        window,
+        cx,
+      );
+    });
+    await_open_file(&page, cx).await;
+    cx.run_until_parked();
+
+    let label = cx
+      .debug_bounds("session-center-tab-label")
+      .expect("center tab label");
+
+    assert!(label.size.height >= gpui::px(CENTER_TAB_LABEL_HEIGHT_PX));
   }
 
   #[gpui::test]
