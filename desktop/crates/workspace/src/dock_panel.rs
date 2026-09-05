@@ -17,9 +17,12 @@ use gpui::{
   SharedString, Task, WeakEntity, Window, div, img, prelude::*, px,
 };
 use gpui_component::{
-  ActiveTheme as _, Disableable as _, Icon, IconName, IndexPath, Sizable as _, h_flex,
+  ActiveTheme as _, Disableable as _, Icon, IconName, IndexPath, Sizable as _,
+  dialog::{DialogDescription, DialogFooter, DialogHeader, DialogTitle},
+  h_flex,
+  input::{Input, InputState},
   list::{List, ListDelegate, ListEvent, ListItem, ListState},
-  menu::{DropdownMenu as _, PopupMenuItem},
+  menu::{ContextMenuExt as _, DropdownMenu as _, PopupMenu, PopupMenuItem},
   tree::{TreeEvent, TreeState, tree},
   v_flex,
 };
@@ -176,6 +179,233 @@ pub enum DockPanelEvent {
 }
 
 impl gpui::EventEmitter<DockPanelEvent> for DockPanel {}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct FilesContextTarget {
+  relative_path: Option<PathBuf>,
+  is_folder: bool,
+}
+
+impl FilesContextTarget {
+  fn root() -> Self {
+    Self {
+      relative_path: None,
+      is_folder: true,
+    }
+  }
+
+  fn entry(relative_path: PathBuf, is_folder: bool) -> Self {
+    Self {
+      relative_path: Some(relative_path),
+      is_folder,
+    }
+  }
+}
+
+type FilesNameConfirmedHandler = Rc<dyn Fn(String, &mut Window, &mut App) -> bool>;
+
+struct FilesNameDialog {
+  title: SharedString,
+  description: SharedString,
+  input: Entity<InputState>,
+  confirm_label: SharedString,
+  on_confirmed: FilesNameConfirmedHandler,
+}
+
+impl FilesNameDialog {
+  fn new(
+    title: impl Into<SharedString>,
+    description: impl Into<SharedString>,
+    initial_value: impl Into<SharedString>,
+    confirm_label: impl Into<SharedString>,
+    on_confirmed: FilesNameConfirmedHandler,
+    window: &mut Window,
+    cx: &mut Context<Self>,
+  ) -> Self {
+    let input = cx.new(|cx| InputState::new(window, cx));
+    let initial_value = initial_value.into();
+    if !initial_value.is_empty() {
+      input.update(cx, |input, cx| {
+        input.set_value(initial_value.as_ref(), window, cx)
+      });
+    }
+    cx.subscribe_in(
+      &input,
+      window,
+      |this, _input, event: &gpui_component::input::InputEvent, window, cx| {
+        if matches!(event, gpui_component::input::InputEvent::PressEnter { .. }) {
+          this.confirm(window, cx);
+        }
+      },
+    )
+    .detach();
+    Self {
+      title: title.into(),
+      description: description.into(),
+      input,
+      confirm_label: confirm_label.into(),
+      on_confirmed,
+    }
+  }
+
+  fn input_focus_handle(&self, cx: &App) -> FocusHandle {
+    self.input.read(cx).focus_handle(cx)
+  }
+
+  fn confirm(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    let value = self.input.read(cx).value().to_string();
+    if (self.on_confirmed)(value, window, cx) {
+      window.close_dialog(cx);
+    }
+  }
+}
+
+impl Render for FilesNameDialog {
+  fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    div()
+      .id("files-name-dialog")
+      .flex()
+      .flex_col()
+      .child(
+        DialogHeader::new()
+          .p_4()
+          .child(DialogTitle::new().child(self.title.clone()))
+          .child(DialogDescription::new().child(self.description.clone())),
+      )
+      .child(
+        v_flex()
+          .px_4()
+          .pb_4()
+          .child(Input::new(&self.input).w_full()),
+      )
+      .child(
+        DialogFooter::new()
+          .px_4()
+          .pb_4()
+          .pt_1()
+          .justify_end()
+          .child(
+            Button::new("files-name-dialog-cancel")
+              .label("Cancel")
+              .outline()
+              .on_click(|_, window, cx| window.close_dialog(cx)),
+          )
+          .child(
+            Button::new("files-name-dialog-confirm")
+              .debug_selector(|| FILES_NAME_DIALOG_CONFIRM_DEBUG_SELECTOR.to_string())
+              .label(self.confirm_label.clone())
+              .primary()
+              .on_click(cx.listener(|this, _, window, cx| this.confirm(window, cx))),
+          ),
+      )
+  }
+}
+
+const FILES_NAME_DIALOG_CONFIRM_DEBUG_SELECTOR: &str = "files-name-dialog-confirm";
+
+fn open_files_name_dialog(
+  title: impl Into<SharedString>,
+  description: impl Into<SharedString>,
+  initial_value: impl Into<SharedString>,
+  confirm_label: impl Into<SharedString>,
+  on_confirmed: FilesNameConfirmedHandler,
+  window: &mut Window,
+  cx: &mut App,
+) {
+  let dialog = cx.new(|cx| {
+    FilesNameDialog::new(
+      title,
+      description,
+      initial_value,
+      confirm_label,
+      on_confirmed,
+      window,
+      cx,
+    )
+  });
+  let dialog_for_overlay = dialog.clone();
+  let dialog_for_focus = dialog.clone();
+
+  window.open_dialog(cx, move |overlay, _, _| {
+    overlay.p_0().w(px(360.0)).child(dialog_for_overlay.clone())
+  });
+
+  window.on_next_frame(move |window, cx| {
+    window.focus(&dialog_for_focus.read(cx).input_focus_handle(cx), cx);
+  });
+}
+
+fn child_relative_path(base: Option<&Path>, input: &str) -> anyhow::Result<PathBuf> {
+  let child = validate_relative_input(input)?;
+  Ok(match base {
+    Some(base) => base.join(child),
+    None => child,
+  })
+}
+
+fn validate_relative_input(input: &str) -> anyhow::Result<PathBuf> {
+  let trimmed = input.trim();
+  if trimmed.is_empty() {
+    return Err(anyhow::anyhow!("Enter a name"));
+  }
+  let path = Path::new(trimmed);
+  if path.is_absolute() {
+    return Err(anyhow::anyhow!("Use a relative path"));
+  }
+  let mut clean = PathBuf::new();
+  for component in path.components() {
+    match component {
+      std::path::Component::Normal(part) => clean.push(part),
+      std::path::Component::CurDir => {}
+      _ => return Err(anyhow::anyhow!("Path cannot leave the project")),
+    }
+  }
+  if clean.as_os_str().is_empty() {
+    return Err(anyhow::anyhow!("Enter a name"));
+  }
+  Ok(clean)
+}
+
+fn validate_file_name(input: &str) -> anyhow::Result<String> {
+  let path = validate_relative_input(input)?;
+  if path.components().count() != 1 {
+    return Err(anyhow::anyhow!("Enter a name, not a path"));
+  }
+  Ok(path.to_string_lossy().into_owned())
+}
+
+fn next_duplicate_path(root: &Path, relative_path: &Path) -> Option<PathBuf> {
+  let parent = relative_path
+    .parent()
+    .filter(|path| !path.as_os_str().is_empty());
+  let file_name = relative_path.file_name()?.to_string_lossy();
+  let (stem, extension) = match relative_path.extension() {
+    Some(extension) => {
+      let stem = relative_path
+        .file_stem()
+        .map(|stem| stem.to_string_lossy().into_owned())
+        .unwrap_or_else(|| file_name.to_string());
+      (stem, Some(extension.to_string_lossy().into_owned()))
+    }
+    None => (file_name.to_string(), None),
+  };
+
+  for suffix in 1.. {
+    let name = match (&extension, suffix) {
+      (Some(extension), 1) => format!("{stem} copy.{extension}"),
+      (Some(extension), suffix) => format!("{stem} copy {suffix}.{extension}"),
+      (None, 1) => format!("{stem} copy"),
+      (None, suffix) => format!("{stem} copy {suffix}"),
+    };
+    let candidate = parent
+      .map(|parent| parent.join(&name))
+      .unwrap_or_else(|| PathBuf::from(&name));
+    if !root.join(&candidate).exists() {
+      return Some(root.join(candidate));
+    }
+  }
+  None
+}
 
 /// What the menu next to the commit button offers.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -811,6 +1041,7 @@ pub struct DockPanel {
   _amend_message_task: Option<Task<()>>,
   _pr_task: Option<Task<()>>,
   _files_task: Option<Task<()>>,
+  _file_operation_task: Option<Task<()>>,
 }
 
 impl DockPanel {
@@ -1060,6 +1291,7 @@ impl DockPanel {
       _amend_message_task: None,
       _pr_task: None,
       _files_task: None,
+      _file_operation_task: None,
     };
     panel.refresh(cx);
     panel
@@ -1118,6 +1350,416 @@ impl DockPanel {
       });
     });
     self._files_task = Some(task);
+  }
+
+  fn build_files_context_menu(
+    menu: PopupMenu,
+    panel: WeakEntity<Self>,
+    target: FilesContextTarget,
+  ) -> PopupMenu {
+    let new_file_target = target.clone();
+    let new_file_panel = panel.clone();
+    let new_folder_target = target.clone();
+    let new_folder_panel = panel.clone();
+    let reveal_target = target.clone();
+    let reveal_panel = panel.clone();
+    let copy_path_target = target.clone();
+    let copy_path_panel = panel.clone();
+    let copy_relative_target = target.clone();
+    let copy_relative_panel = panel.clone();
+    let duplicate_target = target.clone();
+    let duplicate_panel = panel.clone();
+    let rename_target = target.clone();
+    let rename_panel = panel.clone();
+    let delete_target = target;
+    let delete_panel = panel;
+
+    menu
+      .item(
+        PopupMenuItem::new("New File").on_click(move |_, window, cx| {
+          let target = new_file_target.clone();
+          let _ = new_file_panel.update(cx, |panel, cx| {
+            panel.open_new_file_dialog(target, window, cx);
+          });
+        }),
+      )
+      .item(
+        PopupMenuItem::new("New Folder").on_click(move |_, window, cx| {
+          let target = new_folder_target.clone();
+          let _ = new_folder_panel.update(cx, |panel, cx| {
+            panel.open_new_folder_dialog(target, window, cx);
+          });
+        }),
+      )
+      .separator()
+      .item(
+        PopupMenuItem::new("Reveal in Finder").on_click(move |_, _, cx| {
+          let target = reveal_target.clone();
+          let _ = reveal_panel.update(cx, |panel, cx| {
+            panel.reveal_files_context_target(&target, cx);
+          });
+        }),
+      )
+      .item(PopupMenuItem::new("Copy Path").on_click(move |_, _, cx| {
+        let target = copy_path_target.clone();
+        let _ = copy_path_panel.update(cx, |panel, cx| {
+          panel.copy_files_context_path(&target, false, cx);
+        });
+      }))
+      .item(
+        PopupMenuItem::new("Copy Relative Path").on_click(move |_, _, cx| {
+          let target = copy_relative_target.clone();
+          let _ = copy_relative_panel.update(cx, |panel, cx| {
+            panel.copy_files_context_path(&target, true, cx);
+          });
+        }),
+      )
+      .when(
+        duplicate_target.relative_path.is_some() && !duplicate_target.is_folder,
+        |menu| {
+          menu
+            .separator()
+            .item(PopupMenuItem::new("Duplicate").on_click(move |_, _, cx| {
+              let target = duplicate_target.clone();
+              let _ = duplicate_panel.update(cx, |panel, cx| {
+                panel.duplicate_file_from_context(target, cx);
+              });
+            }))
+        },
+      )
+      .when(rename_target.relative_path.is_some(), |menu| {
+        menu
+          .separator()
+          .item(PopupMenuItem::new("Rename").on_click(move |_, window, cx| {
+            let target = rename_target.clone();
+            let _ = rename_panel.update(cx, |panel, cx| {
+              panel.open_rename_file_dialog(target, window, cx);
+            });
+          }))
+          .item(PopupMenuItem::new("Delete").on_click(move |_, window, cx| {
+            let target = delete_target.clone();
+            let _ = delete_panel.update(cx, |panel, cx| {
+              panel.confirm_delete_file_context_target(target, window, cx);
+            });
+          }))
+      })
+  }
+
+  fn reload_project_files_after_operation(&mut self, cx: &mut Context<Self>) {
+    self.files_loaded = false;
+    self.files_loading = false;
+    self._files_task = None;
+    self.files_tree_state.update(cx, |state, cx| {
+      state.set_items(Vec::new(), cx);
+    });
+    self.load_project_files(cx);
+    self.refresh_status(cx);
+    cx.notify();
+  }
+
+  fn run_file_operation<F>(
+    &mut self,
+    failure_label: &'static str,
+    operation: F,
+    cx: &mut Context<Self>,
+  ) where
+    F: FnOnce() -> anyhow::Result<()> + Send + 'static,
+  {
+    let window_handle = self.window_handle;
+    let task = cx.spawn(async move |this, cx| {
+      let result = cx.background_spawn(async move { operation() }).await;
+      let _ = this.update(cx, |this, cx| match result {
+        Ok(()) => this.reload_project_files_after_operation(cx),
+        Err(error) => {
+          let _ = cx.update_window(window_handle, |_, window, cx| {
+            window.push_notification(Notification::error(format!("{failure_label}: {error}")), cx);
+          });
+        }
+      });
+    });
+    self._file_operation_task = Some(task);
+  }
+
+  fn absolute_files_context_path(&self, target: &FilesContextTarget) -> Option<PathBuf> {
+    let root = self.project_root.as_ref()?;
+    Some(match target.relative_path.as_ref() {
+      Some(relative_path) => root.join(relative_path),
+      None => root.clone(),
+    })
+  }
+
+  fn files_context_directory(&self, target: &FilesContextTarget) -> Option<PathBuf> {
+    let mut directory = target.relative_path.clone().filter(|_| target.is_folder);
+    if directory.is_none() {
+      directory = target
+        .relative_path
+        .as_ref()
+        .and_then(|path| path.parent().map(Path::to_path_buf));
+    }
+    directory.filter(|path| !path.as_os_str().is_empty())
+  }
+
+  fn reveal_files_context_target(&self, target: &FilesContextTarget, cx: &mut Context<Self>) {
+    let Some(path) = self.absolute_files_context_path(target) else {
+      return;
+    };
+    cx.reveal_path(path.as_path());
+  }
+
+  fn copy_files_context_path(
+    &self,
+    target: &FilesContextTarget,
+    relative: bool,
+    cx: &mut Context<Self>,
+  ) {
+    let path = if relative {
+      target
+        .relative_path
+        .clone()
+        .unwrap_or_else(|| PathBuf::from("."))
+    } else {
+      let Some(path) = self.absolute_files_context_path(target) else {
+        return;
+      };
+      path
+    };
+    cx.write_to_clipboard(gpui::ClipboardItem::new_string(
+      path.to_string_lossy().into_owned(),
+    ));
+  }
+
+  fn open_new_file_dialog(
+    &self,
+    target: FilesContextTarget,
+    window: &mut Window,
+    cx: &mut Context<Self>,
+  ) {
+    self.open_create_file_entry_dialog(target, false, window, cx);
+  }
+
+  fn open_new_folder_dialog(
+    &self,
+    target: FilesContextTarget,
+    window: &mut Window,
+    cx: &mut Context<Self>,
+  ) {
+    self.open_create_file_entry_dialog(target, true, window, cx);
+  }
+
+  fn open_create_file_entry_dialog(
+    &self,
+    target: FilesContextTarget,
+    is_folder: bool,
+    window: &mut Window,
+    cx: &mut Context<Self>,
+  ) {
+    let directory = self.files_context_directory(&target);
+    let description_directory = directory.clone();
+    let panel = cx.entity().downgrade();
+    let on_confirmed: FilesNameConfirmedHandler = Rc::new(move |name, window, cx| {
+      let directory = directory.clone();
+      panel
+        .update(cx, |panel, cx| {
+          panel.create_file_entry(directory, name, is_folder, window, cx)
+        })
+        .unwrap_or(false)
+    });
+    let title = if is_folder { "New Folder" } else { "New File" };
+    let description = description_directory
+      .as_ref()
+      .map(|path| format!("Create inside {}", path.to_string_lossy()))
+      .unwrap_or_else(|| "Create at the project root".to_string());
+    open_files_name_dialog(title, description, "", "Create", on_confirmed, window, cx);
+  }
+
+  fn create_file_entry(
+    &mut self,
+    directory: Option<PathBuf>,
+    name: String,
+    is_folder: bool,
+    window: &mut Window,
+    cx: &mut Context<Self>,
+  ) -> bool {
+    let Some(root) = self.project_root.clone() else {
+      return false;
+    };
+    let result = child_relative_path(directory.as_deref(), &name);
+    let relative_path = match result {
+      Ok(path) => path,
+      Err(error) => {
+        window.push_notification(Notification::error(error.to_string()), cx);
+        return false;
+      }
+    };
+    let path = root.join(relative_path);
+    self.run_file_operation(
+      if is_folder {
+        "Creating folder failed"
+      } else {
+        "Creating file failed"
+      },
+      move || {
+        if is_folder {
+          if path.exists() {
+            return Err(anyhow::anyhow!("{} already exists", path.display()));
+          }
+          std::fs::create_dir_all(&path)?;
+        } else {
+          if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent)?;
+          }
+          std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&path)?;
+        }
+        Ok(())
+      },
+      cx,
+    );
+    true
+  }
+
+  fn open_rename_file_dialog(
+    &self,
+    target: FilesContextTarget,
+    window: &mut Window,
+    cx: &mut Context<Self>,
+  ) {
+    let Some(relative_path) = target.relative_path.clone() else {
+      return;
+    };
+    let initial_value = relative_path
+      .file_name()
+      .map(|name| name.to_string_lossy().into_owned())
+      .unwrap_or_default();
+    let panel = cx.entity().downgrade();
+    let on_confirmed: FilesNameConfirmedHandler = Rc::new(move |name, window, cx| {
+      let relative_path = relative_path.clone();
+      panel
+        .update(cx, |panel, cx| {
+          panel.rename_file_entry(relative_path, name, window, cx)
+        })
+        .unwrap_or(false)
+    });
+    open_files_name_dialog(
+      "Rename",
+      "Enter a new name for this item",
+      initial_value,
+      "Rename",
+      on_confirmed,
+      window,
+      cx,
+    );
+  }
+
+  fn rename_file_entry(
+    &mut self,
+    relative_path: PathBuf,
+    name: String,
+    window: &mut Window,
+    cx: &mut Context<Self>,
+  ) -> bool {
+    let Some(root) = self.project_root.clone() else {
+      return false;
+    };
+    let new_name = match validate_file_name(&name) {
+      Ok(name) => name,
+      Err(error) => {
+        window.push_notification(Notification::error(error.to_string()), cx);
+        return false;
+      }
+    };
+    let new_relative_path = relative_path
+      .parent()
+      .filter(|path| !path.as_os_str().is_empty())
+      .map(|parent| parent.join(&new_name))
+      .unwrap_or_else(|| PathBuf::from(&new_name));
+    let from = root.join(relative_path);
+    let to = root.join(new_relative_path);
+    self.run_file_operation(
+      "Renaming failed",
+      move || {
+        if to.exists() {
+          return Err(anyhow::anyhow!("{} already exists", to.display()));
+        }
+        std::fs::rename(&from, &to)?;
+        Ok(())
+      },
+      cx,
+    );
+    true
+  }
+
+  fn duplicate_file_from_context(&mut self, target: FilesContextTarget, cx: &mut Context<Self>) {
+    let (Some(root), Some(relative_path)) = (self.project_root.clone(), target.relative_path)
+    else {
+      return;
+    };
+    let from = root.join(&relative_path);
+    let Some(to) = next_duplicate_path(&root, &relative_path) else {
+      return;
+    };
+    self.run_file_operation(
+      "Duplicating failed",
+      move || {
+        std::fs::copy(&from, &to)?;
+        Ok(())
+      },
+      cx,
+    );
+  }
+
+  fn confirm_delete_file_context_target(
+    &mut self,
+    target: FilesContextTarget,
+    window: &mut Window,
+    cx: &mut Context<Self>,
+  ) {
+    let (Some(path), Some(relative_path)) = (
+      self.absolute_files_context_path(&target),
+      target.relative_path.clone(),
+    ) else {
+      return;
+    };
+    let view = cx.entity();
+    let message: SharedString = format!(
+      "Delete {} permanently? This cannot be undone.",
+      relative_path.to_string_lossy()
+    )
+    .into();
+    window.open_alert_dialog(cx, move |alert, _, _| {
+      let view = view.clone();
+      let path = path.clone();
+      ConfirmDialog::new("Delete item?", div().child(message.clone()))
+        .confirm_text("Delete")
+        .cancel_text("Cancel")
+        .destructive()
+        .on_confirm(move |_, _, cx| {
+          let path = path.clone();
+          view.update(cx, |panel, cx| {
+            panel.delete_file_entry(path, cx);
+          });
+          true
+        })
+        .build(alert)
+    });
+  }
+
+  fn delete_file_entry(&mut self, path: PathBuf, cx: &mut Context<Self>) {
+    self.run_file_operation(
+      "Deleting failed",
+      move || {
+        let metadata = std::fs::metadata(&path)?;
+        if metadata.is_dir() {
+          std::fs::remove_dir_all(&path)?;
+        } else {
+          std::fs::remove_file(&path)?;
+        }
+        Ok(())
+      },
+      cx,
+    );
   }
 
   pub fn refresh(&mut self, cx: &mut Context<Self>) {
@@ -2935,68 +3577,93 @@ impl DockPanel {
       .map(|entry| entry.path.clone())
       .collect();
 
-    div()
+    let panel = cx.entity().downgrade();
+    let tree_menu_panel = panel.clone();
+    let root_menu_panel = panel.clone();
+    let root_target = FilesContextTarget::root();
+
+    v_flex()
+      .debug_selector(|| "dock-panel-files-empty-space".to_string())
       .flex_1()
       .min_h_0()
       .py_1()
       .px_1()
-      .child(tree(
-        &self.files_tree_state,
-        move |ix, entry, selected, _window, cx| {
-          let theme = cx.theme().clone();
-          let item = entry.item();
-          let is_folder = entry.is_folder();
-          let icon: AnyElement = if is_folder {
-            Icon::new(if entry.is_expanded() {
-              IconName::FolderOpen
-            } else {
-              IconName::Folder
-            })
-            .size_3()
-            .text_color(theme.muted_foreground)
-            .into_any_element()
-          } else {
-            ui::file_icon_path_for_name_with_theme(item.label.as_ref(), &theme)
-              .map(|path| img(path).size(px(ui::FILE_ICON_SIZE_PX)).into_any_element())
-              .unwrap_or_else(|| {
-                Icon::new(IconName::File)
-                  .size_3()
-                  .text_color(theme.muted_foreground)
-                  .into_any_element()
+      .context_menu(move |menu, _, _| {
+        Self::build_files_context_menu(menu, root_menu_panel.clone(), root_target.clone())
+      })
+      .child(
+        tree(
+          &self.files_tree_state,
+          move |ix, entry, selected, _window, cx| {
+            let theme = cx.theme().clone();
+            let item = entry.item();
+            let is_folder = entry.is_folder();
+            let icon: AnyElement = if is_folder {
+              Icon::new(if entry.is_expanded() {
+                IconName::FolderOpen
+              } else {
+                IconName::Folder
               })
-          };
-          let is_modified = !is_folder && modified.contains(&PathBuf::from(item.id.as_ref()));
+              .size_3()
+              .text_color(theme.muted_foreground)
+              .into_any_element()
+            } else {
+              ui::file_icon_path_for_name_with_theme(item.label.as_ref(), &theme)
+                .map(|path| img(path).size(px(ui::FILE_ICON_SIZE_PX)).into_any_element())
+                .unwrap_or_else(|| {
+                  Icon::new(IconName::File)
+                    .size_3()
+                    .text_color(theme.muted_foreground)
+                    .into_any_element()
+                })
+            };
+            let is_modified = !is_folder && modified.contains(&PathBuf::from(item.id.as_ref()));
 
-          let indent = px(8.) + px(14.) * entry.depth();
-          ui::selectable_list_item(ix, selected, ui::SelectableRowStyle::Inset, &theme)
-            .w_full()
-            .px_2()
-            .pl(indent)
-            .child(
-              h_flex()
-                .items_center()
-                .gap_2()
-                .child(icon)
-                .child(
-                  div()
-                    .flex_1()
-                    .overflow_hidden()
-                    .text_ellipsis()
-                    .text_sm()
-                    .child(item.label.clone()),
-                )
-                .when(is_modified, |this| {
-                  this.child(
+            let indent = px(8.) + px(14.) * entry.depth();
+            ui::selectable_list_item(ix, selected, ui::SelectableRowStyle::Inset, &theme)
+              .w_full()
+              .px_2()
+              .pl(indent)
+              .child(
+                h_flex()
+                  .id(format!("dock-panel-file-context-{}", item.id.as_ref()))
+                  .debug_selector({
+                    let id = item.id.clone();
+                    move || format!("dock-panel-file-{id}")
+                  })
+                  .w_full()
+                  .items_center()
+                  .gap_2()
+                  .child(icon)
+                  .child(
                     div()
-                      .text_xs()
-                      .font_weight(gpui::FontWeight::BOLD)
-                      .text_color(theme.status_amber())
-                      .child("M"),
+                      .flex_1()
+                      .overflow_hidden()
+                      .text_ellipsis()
+                      .text_sm()
+                      .child(item.label.clone()),
                   )
-                }),
-            )
-        },
-      ))
+                  .when(is_modified, |this| {
+                    this.child(
+                      div()
+                        .text_xs()
+                        .font_weight(gpui::FontWeight::BOLD)
+                        .text_color(theme.status_amber())
+                        .child("M"),
+                    )
+                  }),
+              )
+          },
+        )
+        .context_menu(move |_ix, entry, menu, _window, _cx| {
+          let item = entry.item();
+          Self::build_files_context_menu(
+            menu,
+            tree_menu_panel.clone(),
+            FilesContextTarget::entry(PathBuf::from(item.id.as_ref()), entry.is_folder()),
+          )
+        }),
+      )
       .into_any_element()
   }
 
@@ -4244,6 +4911,149 @@ mod tests {
       )),
       "Enter chooses it"
     );
+  }
+
+  fn open_files_context_menu(cx: &mut gpui::VisualTestContext, selector: &'static str) {
+    let row = cx.debug_bounds(selector).expect("file row bounds");
+    cx.simulate_event(gpui::MouseDownEvent {
+      button: gpui::MouseButton::Right,
+      position: row.center(),
+      modifiers: gpui::Modifiers::default(),
+      click_count: 1,
+      first_mouse: false,
+    });
+    cx.run_until_parked();
+    cx.update(|window, cx| {
+      let _ = window.draw(cx);
+    });
+  }
+
+  async fn await_files_loaded(panel: &Entity<DockPanel>, cx: &mut gpui::VisualTestContext) {
+    let files = panel.update(cx, |panel, _| panel._files_task.take());
+    if let Some(files) = files {
+      files.await;
+    }
+    cx.run_until_parked();
+  }
+
+  async fn await_file_operation(panel: &Entity<DockPanel>, cx: &mut gpui::VisualTestContext) {
+    let operation = panel.update(cx, |panel, _| panel._file_operation_task.take());
+    if let Some(operation) = operation {
+      operation.await;
+    }
+    await_refresh(panel, cx).await;
+    await_files_loaded(panel, cx).await;
+  }
+
+  async fn open_files_tab_and_wait(panel: &Entity<DockPanel>, cx: &mut gpui::VisualTestContext) {
+    panel.update_in(cx, |panel, window, cx| {
+      panel.open_tab(DockPanelTab::Files, window, cx)
+    });
+    await_files_loaded(panel, cx).await;
+  }
+
+  #[gpui::test]
+  async fn file_context_menu_copies_relative_path(cx: &mut TestAppContext) {
+    cx.update(gpui_component::init);
+    let repo = TempRepo::init("dock-files-context-copy-relative");
+    commit_text_file(&repo.path, Path::new("README.md"), "v1\n", "first");
+
+    let (panel, cx) = add_dock_panel_window(Some(repo.path.clone()), cx);
+    await_refresh(&panel, cx).await;
+    open_files_tab_and_wait(&panel, cx).await;
+
+    open_files_context_menu(cx, "dock-panel-file-README.md");
+    cx.simulate_keystrokes("down down down down down enter");
+    cx.run_until_parked();
+
+    let copied = cx
+      .update(|_, cx| cx.read_from_clipboard())
+      .and_then(|item| item.text());
+    assert_eq!(copied.as_deref(), Some("README.md"));
+  }
+
+  #[gpui::test]
+  async fn empty_files_panel_context_menu_copies_project_relative_path(cx: &mut TestAppContext) {
+    cx.update(gpui_component::init);
+    let repo = TempRepo::init("dock-files-context-empty-copy-relative");
+    commit_text_file(&repo.path, Path::new("README.md"), "v1\n", "first");
+
+    let (panel, cx) = add_dock_panel_window(Some(repo.path.clone()), cx);
+    await_refresh(&panel, cx).await;
+    open_files_tab_and_wait(&panel, cx).await;
+
+    open_files_context_menu(cx, "dock-panel-files-empty-space");
+    cx.simulate_keystrokes("down down down down down enter");
+    cx.run_until_parked();
+
+    let copied = cx
+      .update(|_, cx| cx.read_from_clipboard())
+      .and_then(|item| item.text());
+    assert_eq!(copied.as_deref(), Some("."));
+  }
+
+  #[gpui::test]
+  async fn file_context_actions_create_duplicate_rename_and_delete(cx: &mut TestAppContext) {
+    cx.update(gpui_component::init);
+    let repo = TempRepo::init("dock-files-context-actions");
+    commit_text_file(&repo.path, Path::new("README.md"), "v1\n", "first");
+    std::fs::create_dir_all(repo.path.join("src")).expect("create src");
+
+    let (panel, cx) = add_dock_panel_window(Some(repo.path.clone()), cx);
+    await_refresh(&panel, cx).await;
+    open_files_tab_and_wait(&panel, cx).await;
+
+    panel.update_in(cx, |panel, window, cx| {
+      assert!(panel.create_file_entry(
+        Some(PathBuf::from("src")),
+        "main.rs".to_string(),
+        false,
+        window,
+        cx,
+      ));
+    });
+    await_file_operation(&panel, cx).await;
+    assert!(repo.path.join("src/main.rs").is_file());
+
+    panel.update_in(cx, |panel, window, cx| {
+      assert!(panel.create_file_entry(None, "assets".to_string(), true, window, cx));
+    });
+    await_file_operation(&panel, cx).await;
+    assert!(repo.path.join("assets").is_dir());
+
+    panel.update(cx, |panel, cx| {
+      panel.duplicate_file_from_context(
+        FilesContextTarget::entry(PathBuf::from("README.md"), false),
+        cx,
+      );
+    });
+    await_file_operation(&panel, cx).await;
+    assert!(repo.path.join("README copy.md").is_file());
+
+    panel.update_in(cx, |panel, window, cx| {
+      assert!(panel.rename_file_entry(
+        PathBuf::from("README copy.md"),
+        "COPY.md".to_string(),
+        window,
+        cx,
+      ));
+    });
+    await_file_operation(&panel, cx).await;
+    assert!(repo.path.join("COPY.md").is_file());
+    assert!(!repo.path.join("README copy.md").exists());
+
+    panel.update_in(cx, |panel, window, cx| {
+      assert!(panel.rename_file_entry(PathBuf::from("assets"), "static".to_string(), window, cx,));
+    });
+    await_file_operation(&panel, cx).await;
+    assert!(repo.path.join("static").is_dir());
+    assert!(!repo.path.join("assets").exists());
+
+    panel.update(cx, |panel, cx| {
+      panel.delete_file_entry(repo.path.join("static"), cx);
+    });
+    await_file_operation(&panel, cx).await;
+    assert!(!repo.path.join("static").exists());
   }
 
   #[gpui::test]
