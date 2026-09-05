@@ -567,6 +567,9 @@ impl ListDelegate for PrFilesDelegate {
       .map(|selected| selected.eq_row(ix))
       .unwrap_or(false);
 
+    let context_path = path.clone();
+    let context_panel = self.panel.clone();
+
     Some(
       selectable_list_item(ix, selected, SelectableRowStyle::Inset, &theme)
         .w_full()
@@ -578,6 +581,7 @@ impl ListDelegate for PrFilesDelegate {
         })
         .child(
           h_flex()
+            .id(format!("pr-file-context-{}", path.to_string_lossy()))
             .w_full()
             .items_center()
             .gap_2()
@@ -625,7 +629,14 @@ impl ListDelegate for PrFilesDelegate {
                 .text_xs()
                 .text_color(status_color(status, &theme))
                 .child(status.short_code()),
-            ),
+            )
+            .context_menu(move |menu, _, _| {
+              DockPanel::build_pr_file_context_menu(
+                menu,
+                context_panel.clone(),
+                context_path.clone(),
+              )
+            }),
         ),
     )
   }
@@ -1368,6 +1379,98 @@ impl DockPanel {
       });
     });
     self._files_task = Some(task);
+  }
+
+  fn build_pr_file_context_menu(
+    menu: PopupMenu,
+    panel: WeakEntity<Self>,
+    path: PathBuf,
+  ) -> PopupMenu {
+    let open_path = path.clone();
+    let open_panel = panel.clone();
+    let copy_path = path.clone();
+    let copy_path_panel = panel.clone();
+    let copy_relative_path = path.clone();
+    let copy_relative_panel = panel.clone();
+    let github_panel = panel;
+
+    menu
+      .item(PopupMenuItem::new("Open").on_click(move |_, _, cx| {
+        let path = open_path.clone();
+        let _ = open_panel.update(cx, |panel, cx| {
+          panel.open_pull_request_file_from_context(path, OpenIntent::Open, cx);
+        });
+      }))
+      .separator()
+      .item(PopupMenuItem::new("Copy Path").on_click(move |_, _, cx| {
+        let path = copy_path.clone();
+        let _ = copy_path_panel.update(cx, |panel, cx| {
+          panel.copy_pr_file_context_path(path, false, cx);
+        });
+      }))
+      .item(
+        PopupMenuItem::new("Copy Relative Path").on_click(move |_, _, cx| {
+          let path = copy_relative_path.clone();
+          let _ = copy_relative_panel.update(cx, |panel, cx| {
+            panel.copy_pr_file_context_path(path, true, cx);
+          });
+        }),
+      )
+      .separator()
+      .item(
+        PopupMenuItem::new("View PR Files on GitHub").on_click(move |_, _, cx| {
+          let _ = github_panel.update(cx, |panel, cx| {
+            panel.open_pr_file_on_github(cx);
+          });
+        }),
+      )
+  }
+
+  fn open_pull_request_file_from_context(
+    &mut self,
+    path: PathBuf,
+    intent: OpenIntent,
+    cx: &mut Context<Self>,
+  ) {
+    let Some(range) = self.pr_range.clone() else {
+      return;
+    };
+    cx.emit(DockPanelEvent::OpenPullRequestFile {
+      base_oid: range.base,
+      head_oid: range.head,
+      path,
+      line: None,
+      intent,
+    });
+  }
+
+  fn copy_pr_file_context_path(&self, path: PathBuf, relative: bool, cx: &mut Context<Self>) {
+    let path = if relative {
+      path
+    } else {
+      self
+        .project_root
+        .as_ref()
+        .or(self.repo_root.as_ref())
+        .map(|root| root.join(&path))
+        .unwrap_or(path)
+    };
+    cx.write_to_clipboard(gpui::ClipboardItem::new_string(
+      path.to_string_lossy().into_owned(),
+    ));
+  }
+
+  fn open_pr_file_on_github(&self, cx: &mut Context<Self>) {
+    let BranchPrState::Found(context, pull_request) = &self.branch_pr else {
+      return;
+    };
+    cx.open_url(&github_pull_request_url(
+      &context.owner,
+      &context.repo,
+      pull_request.number,
+      true,
+      None,
+    ));
   }
 
   fn build_files_context_menu(
@@ -5304,6 +5407,79 @@ mod tests {
   }
 
   #[gpui::test]
+  async fn pull_request_file_context_menu_opens_the_file(cx: &mut TestAppContext) {
+    let (panel, cx) = pull_request_panel(
+      cx,
+      vec![changed_file(
+        "src/main.rs",
+        git::CommitFileChangeKind::Modified,
+      )],
+    );
+
+    let opened = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+    let seen = opened.clone();
+    cx.update(|_, cx| {
+      cx.subscribe(&panel, move |_panel, event: &DockPanelEvent, _cx| {
+        if let DockPanelEvent::OpenPullRequestFile { path, intent, .. } = event {
+          seen.borrow_mut().push((path.clone(), *intent));
+        }
+      })
+      .detach();
+    });
+
+    open_files_context_menu(cx, "pr-file-src/main.rs");
+    cx.simulate_keystrokes("down enter");
+    cx.run_until_parked();
+
+    assert_eq!(
+      opened.borrow().as_slice(),
+      &[(PathBuf::from("src/main.rs"), OpenIntent::Open)]
+    );
+  }
+
+  #[gpui::test]
+  async fn pull_request_file_context_menu_copies_relative_path(cx: &mut TestAppContext) {
+    let (_panel, cx) = pull_request_panel(
+      cx,
+      vec![changed_file(
+        "src/main.rs",
+        git::CommitFileChangeKind::Modified,
+      )],
+    );
+
+    open_files_context_menu(cx, "pr-file-src/main.rs");
+    cx.simulate_keystrokes("down down down enter");
+    cx.run_until_parked();
+
+    let copied = cx
+      .update(|_, cx| cx.read_from_clipboard())
+      .and_then(|item| item.text());
+    assert_eq!(copied.as_deref(), Some("src/main.rs"));
+  }
+
+  #[gpui::test]
+  async fn pull_request_file_context_menu_opens_github(cx: &mut TestAppContext) {
+    {
+      let (_panel, window) = pull_request_panel(
+        cx,
+        vec![changed_file(
+          "src/main.rs",
+          git::CommitFileChangeKind::Modified,
+        )],
+      );
+
+      open_files_context_menu(window, "pr-file-src/main.rs");
+      window.simulate_keystrokes("down down down down enter");
+      window.run_until_parked();
+    }
+
+    assert_eq!(
+      cx.opened_url().as_deref(),
+      Some("https://github.com/acme/widget/pull/42/files")
+    );
+  }
+
+  #[gpui::test]
   async fn the_checks_block_opens_on_demand_and_costs_one_line_closed(cx: &mut TestAppContext) {
     let (panel, cx) = pull_request_panel(
       cx,
@@ -7527,6 +7703,7 @@ mod tests {
             path: PathBuf::from("src/main.rs"),
             line: 2,
             line_label: "L2".to_string(),
+            body: "here".to_string(),
             excerpt: "here".to_string(),
             status: crate::review_list::ReviewRowStatus::Draft,
             sendable: true,

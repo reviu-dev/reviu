@@ -100,6 +100,7 @@ pub(crate) fn pending_review_rows(
       path: PathBuf::from(comment.path.as_str()),
       line: comment_line(comment),
       line_label: comment_line_label(comment),
+      body: comment.body.clone(),
       excerpt: review_comment_excerpt(comment.body.as_str()),
       status: if comment.is_outdated {
         ReviewRowStatus::Outdated

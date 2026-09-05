@@ -14,6 +14,7 @@ use gpui_component::{
   checkbox::Checkbox,
   h_flex,
   list::{List, ListDelegate, ListEvent, ListItem, ListState},
+  menu::{ContextMenuExt as _, PopupMenu, PopupMenuItem},
   tag::Tag,
   v_flex,
 };
@@ -132,6 +133,7 @@ pub(crate) struct ReviewPanelComment {
   pub path: PathBuf,
   pub line: usize,
   pub line_label: String,
+  pub body: String,
   pub excerpt: String,
   pub status: ReviewRowStatus,
   /// Whether this row takes part in a partial send. Only the agent's do: GitHub
@@ -178,6 +180,7 @@ pub(crate) fn review_panel_comments(
       // The line a reader would name, which is what opening the row asks for.
       line: comment.line.saturating_add(1),
       line_label: agent_review_line_label(comment),
+      body: comment.body.to_string(),
       excerpt: review_comment_excerpt(comment.body.as_ref()),
       status: agent_row_status(&comment.state),
       sendable: agent_review_state_is_sendable(&comment.state),
@@ -622,6 +625,57 @@ impl ReviewList {
     cx.notify();
   }
 
+  fn build_comment_context_menu(
+    menu: PopupMenu,
+    owner: WeakEntity<Self>,
+    comment: ReviewPanelComment,
+  ) -> PopupMenu {
+    let open_owner = owner.clone();
+    let open_comment = comment.clone();
+    let copy_comment_body = comment.body.clone();
+    let copy_path = comment.path.clone();
+    let delete_owner = owner;
+    let delete_section = comment.section;
+    let delete_id = comment.id;
+
+    menu
+      .item(
+        PopupMenuItem::new("Open in Diff").on_click(move |_, _, cx| {
+          let comment = open_comment.clone();
+          let _ = open_owner.update(cx, |_, cx| {
+            cx.emit(ReviewListEvent::OpenComment {
+              section: comment.section,
+              path: comment.path,
+              line: comment.line,
+              intent: OpenIntent::Open,
+            });
+          });
+        }),
+      )
+      .separator()
+      .item(
+        PopupMenuItem::new("Copy Comment").on_click(move |_, _, cx| {
+          cx.write_to_clipboard(gpui::ClipboardItem::new_string(copy_comment_body.clone()));
+        }),
+      )
+      .item(PopupMenuItem::new("Copy Path").on_click(move |_, _, cx| {
+        cx.write_to_clipboard(gpui::ClipboardItem::new_string(
+          copy_path.to_string_lossy().into_owned(),
+        ));
+      }))
+      .separator()
+      .item(
+        PopupMenuItem::new("Delete Comment").on_click(move |_, _, cx| {
+          let _ = delete_owner.update(cx, |_, cx| {
+            cx.emit(ReviewListEvent::DeleteComment {
+              section: delete_section,
+              id: delete_id,
+            });
+          });
+        }),
+      )
+  }
+
   fn render_file_header(
     &self,
     section: ReviewSection,
@@ -704,6 +758,8 @@ impl ReviewList {
     let select_id = comment.id;
     let sendable = comment.sendable;
     let is_selected = self.selected.contains(&comment.id);
+    let context_owner = cx.entity().downgrade();
+    let context_comment = comment.clone();
 
     h_flex()
       .id((
@@ -790,6 +846,9 @@ impl ReviewList {
               })),
           ),
       )
+      .context_menu(move |menu, _, _| {
+        Self::build_comment_context_menu(menu, context_owner.clone(), context_comment.clone())
+      })
       .into_any_element()
   }
 
@@ -1050,6 +1109,7 @@ mod tests {
       path: PathBuf::from(path),
       line,
       line_label: format!("L{line}"),
+      body: "pending".to_string(),
       excerpt: "pending".to_string(),
       status: ReviewRowStatus::Pending,
       sendable: false,
@@ -1155,6 +1215,21 @@ mod tests {
     (mounted.expect("review list"), cx)
   }
 
+  fn open_review_context_menu(cx: &mut gpui::VisualTestContext, selector: &'static str) {
+    let row = cx.debug_bounds(selector).expect("review row bounds");
+    cx.simulate_event(gpui::MouseDownEvent {
+      button: gpui::MouseButton::Right,
+      position: row.center(),
+      modifiers: gpui::Modifiers::default(),
+      click_count: 1,
+      first_mouse: false,
+    });
+    cx.run_until_parked();
+    cx.update(|window, cx| {
+      let _ = window.draw(cx);
+    });
+  }
+
   fn batch() -> Vec<ReviewPanelComment> {
     review_panel_comments(&[
       comment(
@@ -1180,6 +1255,102 @@ mod tests {
       ),
       comment(4, "src/b.rs", 7, "gone", LocalAgentReviewCommentState::Sent),
     ])
+  }
+
+  #[gpui::test]
+  async fn comment_context_menu_opens_the_comment(cx: &mut gpui::TestAppContext) {
+    let (list, cx) = add_review_list_window(cx);
+    list.update(cx, |list, cx| {
+      list.set_comments(ReviewSection::Agent, batch(), cx)
+    });
+    cx.run_until_parked();
+
+    let opened = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+    let seen = opened.clone();
+    cx.update(|_, cx| {
+      cx.subscribe(&list, move |_list, event: &ReviewListEvent, _cx| {
+        if let ReviewListEvent::OpenComment {
+          section,
+          path,
+          line,
+          intent,
+        } = event
+        {
+          seen
+            .borrow_mut()
+            .push((*section, path.clone(), *line, *intent));
+        }
+      })
+      .detach();
+    });
+
+    open_review_context_menu(cx, "review-comment-agent-1");
+    cx.simulate_keystrokes("down enter");
+    cx.run_until_parked();
+
+    assert_eq!(
+      opened.borrow().as_slice(),
+      &[(
+        ReviewSection::Agent,
+        PathBuf::from("src/a.rs"),
+        2,
+        OpenIntent::Open,
+      )]
+    );
+  }
+
+  #[gpui::test]
+  async fn comment_context_menu_copies_the_full_comment(cx: &mut gpui::TestAppContext) {
+    let (list, cx) = add_review_list_window(cx);
+    list.update(cx, |list, cx| {
+      list.set_comments(
+        ReviewSection::Agent,
+        review_panel_comments(&[comment(
+          1,
+          "src/a.rs",
+          1,
+          "first line\nsecond line",
+          LocalAgentReviewCommentState::Draft,
+        )]),
+        cx,
+      )
+    });
+    cx.run_until_parked();
+
+    open_review_context_menu(cx, "review-comment-agent-1");
+    cx.simulate_keystrokes("down down enter");
+    cx.run_until_parked();
+
+    let copied = cx
+      .update(|_, cx| cx.read_from_clipboard())
+      .and_then(|item| item.text());
+    assert_eq!(copied.as_deref(), Some("first line\nsecond line"));
+  }
+
+  #[gpui::test]
+  async fn comment_context_menu_deletes_the_comment(cx: &mut gpui::TestAppContext) {
+    let (list, cx) = add_review_list_window(cx);
+    list.update(cx, |list, cx| {
+      list.set_comments(ReviewSection::Agent, batch(), cx)
+    });
+    cx.run_until_parked();
+
+    let deleted = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+    let seen = deleted.clone();
+    cx.update(|_, cx| {
+      cx.subscribe(&list, move |_list, event: &ReviewListEvent, _cx| {
+        if let ReviewListEvent::DeleteComment { section, id } = event {
+          seen.borrow_mut().push((*section, *id));
+        }
+      })
+      .detach();
+    });
+
+    open_review_context_menu(cx, "review-comment-agent-1");
+    cx.simulate_keystrokes("down down down down enter");
+    cx.run_until_parked();
+
+    assert_eq!(deleted.borrow().as_slice(), &[(ReviewSection::Agent, 1)]);
   }
 
   #[gpui::test]

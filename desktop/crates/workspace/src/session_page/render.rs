@@ -534,14 +534,12 @@ impl SessionPage {
     if tab.is_closeable() {
       let close_page = page.clone();
       let close_tab = tab.clone();
-      menu = menu.item(
-        PopupMenuItem::new("Close tab").on_click(move |_, window, cx| {
-          let tab = close_tab.clone();
-          close_page.update(cx, |page, cx| {
-            page.close_center_tab(tab, window, cx);
-          });
-        }),
-      );
+      menu = menu.item(PopupMenuItem::new("Close").on_click(move |_, window, cx| {
+        let tab = close_tab.clone();
+        close_page.update(cx, |page, cx| {
+          page.close_center_tab(tab, window, cx);
+        });
+      }));
     }
 
     if tabs
