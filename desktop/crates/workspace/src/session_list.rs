@@ -13,7 +13,10 @@ use gpui_component::menu::{PopupMenu, PopupMenuItem};
 use gpui_component::popover::Popover;
 use gpui_component::scroll::ScrollableElement as _;
 use gpui_component::{ActiveTheme as _, ElementExt as _, Icon, Sizable as _, h_flex, v_flex};
-use ui::{Button, ButtonVariants as _, StatusThemeExt as _, UiIconName};
+use ui::{
+  Button, ButtonVariants as _, SelectableRowStyle, StatusThemeExt as _, UiIconName,
+  selectable_list_item,
+};
 
 /// Live state of a session's agent, derived from its panel; a session with no
 /// panel alive is Idle. Deliberately NOT animated: a repeating per-row
@@ -695,63 +698,63 @@ impl SessionList {
       })
     });
 
-    div()
-      .id(SharedString::from(selector.clone()))
-      .debug_selector(move || selector.clone())
-      .mx_2()
-      .ml_4()
-      .px_2()
-      .py_1p5()
-      .rounded(px(6.0))
-      .cursor_pointer()
-      .when(active, |this| this.bg(theme.secondary_active))
-      .hover(|this| this.bg(theme.secondary_hover))
-      .on_click(cx.listener(move |_, _, _, cx| {
-        cx.emit(SessionListEvent::SelectedCheckout {
-          project_root: checkout_repo.clone(),
-          checkout_root: checkout_root.clone(),
-        });
-      }))
-      .child(
-        h_flex()
-          .items_center()
-          .gap_2()
-          .child(icon)
-          .child(
-            v_flex()
-              .flex_1()
-              .min_w(px(0.0))
-              .gap_0p5()
-              .child(
-                div()
-                  .text_xs()
-                  .truncate()
-                  .text_color(theme.foreground)
-                  .child(row.title.clone()),
-              )
-              .child(
-                div()
-                  .text_xs()
-                  .truncate()
-                  .text_color(theme.muted_foreground.opacity(0.75))
-                  .child(row.subtitle.clone()),
-              ),
-          )
-          .when_some(status_color.zip(status_label), |this, (color, label)| {
-            this.child(
+    selectable_list_item(
+      SharedString::from(selector.clone()),
+      active,
+      SelectableRowStyle::Inset,
+      theme,
+    )
+    .debug_selector(move || selector.clone())
+    .mx_2()
+    .px_2()
+    .py_1()
+    .cursor_pointer()
+    .on_click(cx.listener(move |_, _, _, cx| {
+      cx.emit(SessionListEvent::SelectedCheckout {
+        project_root: checkout_repo.clone(),
+        checkout_root: checkout_root.clone(),
+      });
+    }))
+    .child(
+      h_flex()
+        .items_center()
+        .gap_2()
+        .child(icon)
+        .child(
+          v_flex()
+            .flex_1()
+            .min_w(px(0.0))
+            .gap_0p5()
+            .child(
               div()
-                .id("session-checkout-status-dot")
-                .debug_selector(|| "session-checkout-status-dot".to_string())
-                .size(px(7.))
-                .rounded_full()
-                .bg(color.opacity(0.9))
-                .tooltip(move |window, cx| {
-                  gpui_component::tooltip::Tooltip::new(label.clone()).build(window, cx)
-                }),
+                .text_xs()
+                .truncate()
+                .text_color(theme.foreground)
+                .child(row.title.clone()),
             )
-          }),
-      )
-      .into_any_element()
+            .child(
+              div()
+                .text_xs()
+                .truncate()
+                .text_color(theme.muted_foreground.opacity(0.75))
+                .child(row.subtitle.clone()),
+            ),
+        )
+        .when_some(status_color.zip(status_label), |this, (color, label)| {
+          this.child(
+            div()
+              .id("session-checkout-status-dot")
+              .debug_selector(|| "session-checkout-status-dot".to_string())
+              .size(px(7.))
+              .rounded_full()
+              .bg(color.opacity(0.9))
+              .tooltip(move |window, cx| {
+                gpui_component::tooltip::Tooltip::new(label.clone()).build(window, cx)
+              }),
+          )
+        }),
+    )
+    .into_any_element()
   }
 
   fn render_project_menu_button(
@@ -1214,7 +1217,17 @@ mod tests {
     cx.run_until_parked();
 
     assert!(cx.debug_bounds("session-sidebar-projects-header").is_some());
-    assert!(cx.debug_bounds("session-checkout-main-/repo").is_some());
+    let section = cx
+      .debug_bounds("session-repo-section-/repo")
+      .expect("project section");
+    let main_checkout = cx
+      .debug_bounds("session-checkout-main-/repo")
+      .expect("main checkout row");
+    assert_eq!(main_checkout.origin.x, section.origin.x);
+    assert_eq!(
+      main_checkout.origin.x + main_checkout.size.width,
+      section.origin.x + section.size.width
+    );
     assert!(
       cx.debug_bounds("session-checkout-worktree-/repo-feature/sidebar")
         .is_some()
