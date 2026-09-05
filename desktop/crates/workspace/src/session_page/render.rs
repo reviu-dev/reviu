@@ -637,7 +637,9 @@ impl SessionPage {
       .content(move |_, _window, cx| {
         let popover = cx.entity().clone();
         let theme = cx.theme().clone();
-        let mut list = v_flex().max_h(px(360.0)).overflow_y_scrollbar();
+        let visible_rows = items.len().clamp(1, 8) as f32;
+        let list_height = px((visible_rows * 48.0).min(360.0));
+        let mut list = v_flex();
         if items.is_empty() {
           list = list.child(
             div()
@@ -663,13 +665,16 @@ impl SessionPage {
             SessionStatus::Failed => theme.status_red(),
           };
           let selector_id = item.id.clone();
+          let group_name = SharedString::from(format!("session-history-row-{selector_id}"));
           list = list.child(
             h_flex()
               .id(SharedString::from(format!(
                 "session-history-chat-row-{selector_id}"
               )))
               .debug_selector(move || format!("session-history-chat-row-{selector_id}"))
+              .group(group_name.clone())
               .items_center()
+              .flex_shrink_0()
               .gap_2()
               .px_3()
               .py_2()
@@ -726,27 +731,46 @@ impl SessionPage {
                   })
                   .child(
                     div()
-                      .text_xs()
-                      .text_color(theme.muted_foreground)
-                      .child(item.time.clone()),
-                  )
-                  .child(
-                    Button::new(SharedString::from(format!(
-                      "session-history-delete-{}",
-                      delete_id
-                    )))
-                    .debug_selector(|| "session-history-delete".to_string())
-                    .icon(UiIconName::Trash)
-                    .ghost()
-                    .compact()
-                    .xsmall()
-                    .tooltip("Delete chat")
-                    .on_click(move |_, window, cx| {
-                      cx.stop_propagation();
-                      delete_page.update(cx, |page, cx| {
-                        page.delete_session(&delete_id, window, cx);
-                      });
-                    }),
+                      .relative()
+                      .w(px(34.0))
+                      .h(px(20.0))
+                      .child(
+                        div()
+                          .absolute()
+                          .right_0()
+                          .top(px(2.0))
+                          .text_xs()
+                          .text_color(theme.muted_foreground)
+                          .group_hover(group_name.clone(), |this| this.invisible())
+                          .debug_selector(|| "session-history-time".to_string())
+                          .child(item.time.clone()),
+                      )
+                      .child(
+                        div()
+                          .absolute()
+                          .right(px(-4.0))
+                          .top(px(-2.0))
+                          .invisible()
+                          .group_hover(group_name, |this| this.visible())
+                          .child(
+                            Button::new(SharedString::from(format!(
+                              "session-history-delete-{}",
+                              delete_id
+                            )))
+                            .debug_selector(|| "session-history-delete".to_string())
+                            .icon(UiIconName::Trash)
+                            .ghost()
+                            .compact()
+                            .xsmall()
+                            .tooltip("Delete chat")
+                            .on_click(move |_, window, cx| {
+                              cx.stop_propagation();
+                              delete_page.update(cx, |page, cx| {
+                                page.delete_session(&delete_id, window, cx);
+                              });
+                            }),
+                          ),
+                      ),
                   ),
               ),
           );
@@ -765,6 +789,7 @@ impl SessionPage {
             h_flex()
               .items_center()
               .justify_between()
+              .flex_shrink_0()
               .px_3()
               .py_2()
               .border_b_1()
@@ -783,7 +808,13 @@ impl SessionPage {
                   .child(items.len().to_string()),
               ),
           )
-          .child(list)
+          .child(
+            div()
+              .debug_selector(|| "session-center-history-list".to_string())
+              .h(list_height)
+              .overflow_hidden()
+              .child(list.size_full().overflow_y_scrollbar()),
+          )
       })
       .into_any_element()
   }
@@ -4110,6 +4141,114 @@ mod tests {
       assert_eq!(page.session_list.read(cx).current_id(), first_id);
       assert_eq!(page.active_chat_tab(cx), CenterTab::chat_for(first_id));
     });
+  }
+
+  #[gpui::test]
+  async fn center_history_scrolls_when_it_overflows(cx: &mut TestAppContext) {
+    let repo = TempRepo::init("session-center-history-scroll");
+    commit_text_file(&repo.path, Path::new("README.md"), "v1\n", "initial");
+    let (page, cx) = add_session_page_window(repo.path.clone(), cx);
+    cx.run_until_parked();
+
+    let mut ids = Vec::new();
+    for ix in 0..12 {
+      page.update_in(cx, |page, window, cx| page.new_session(window, cx));
+      cx.run_until_parked();
+      let panel = page.read_with(cx, |page, _| {
+        page.agent_chat_view.clone().expect("active panel")
+      });
+      panel.update(cx, |panel, cx| {
+        panel.seed_user_message_for_test(format!("chat {ix}"), cx)
+      });
+      cx.run_until_parked();
+      ids.push(panel.read_with(cx, |panel, _| panel.current_conversation().id.clone()));
+    }
+
+    let history = cx
+      .debug_bounds("session-center-history")
+      .expect("history button");
+    cx.simulate_click(history.center(), gpui::Modifiers::default());
+    cx.run_until_parked();
+
+    let oldest_selector = Box::leak(
+      format!(
+        "session-history-chat-row-{}",
+        ids.first().expect("seeded ids")
+      )
+      .into_boxed_str(),
+    );
+    let oldest_initial_y = cx
+      .debug_bounds(oldest_selector)
+      .expect("oldest conversation in history")
+      .origin
+      .y;
+    let list = cx
+      .debug_bounds("session-center-history-list")
+      .expect("history list");
+    assert!(
+      list.size.height <= px(360.0),
+      "the popover body is bounded before it scrolls"
+    );
+
+    cx.simulate_event(gpui::ScrollWheelEvent {
+      position: list.center(),
+      delta: gpui::ScrollDelta::Pixels(gpui::point(gpui::px(0.), gpui::px(-180.))),
+      ..Default::default()
+    });
+    cx.run_until_parked();
+
+    let oldest_scrolled_y = cx
+      .debug_bounds(oldest_selector)
+      .expect("oldest conversation after scroll")
+      .origin
+      .y;
+    assert!(
+      oldest_scrolled_y < oldest_initial_y,
+      "the history list responds to wheel scrolling"
+    );
+  }
+
+  #[gpui::test]
+  async fn center_history_reveals_delete_in_the_time_slot_on_hover(cx: &mut TestAppContext) {
+    let repo = TempRepo::init("session-center-history-hover-delete");
+    commit_text_file(&repo.path, Path::new("README.md"), "v1\n", "initial");
+    let (page, cx) = add_session_page_window(repo.path.clone(), cx);
+    cx.run_until_parked();
+
+    page.update_in(cx, |page, window, cx| page.new_session(window, cx));
+    cx.run_until_parked();
+    let panel = page.read_with(cx, |page, _| {
+      page.agent_chat_view.clone().expect("active panel")
+    });
+    panel.update(cx, |panel, cx| {
+      panel.seed_user_message_for_test("hover delete", cx)
+    });
+    cx.run_until_parked();
+    let id = panel.read_with(cx, |panel, _| panel.current_conversation().id.clone());
+
+    let history = cx
+      .debug_bounds("session-center-history")
+      .expect("history button");
+    cx.simulate_click(history.center(), gpui::Modifiers::default());
+    cx.run_until_parked();
+
+    let row_selector = Box::leak(format!("session-history-chat-row-{id}").into_boxed_str());
+    let row = cx
+      .debug_bounds(row_selector)
+      .expect("conversation in history");
+    let time = cx.debug_bounds("session-history-time").expect("time label");
+    assert!(cx.debug_bounds("session-history-delete").is_none());
+
+    cx.simulate_mouse_move(row.center(), None, gpui::Modifiers::default());
+    cx.run_until_parked();
+
+    let delete = cx
+      .debug_bounds("session-history-delete")
+      .expect("delete button on hover");
+    assert!(
+      (delete.center().x.as_f32() - time.center().x.as_f32()).abs() <= 12.0,
+      "delete replaces the timestamp slot"
+    );
   }
 
   #[gpui::test]
