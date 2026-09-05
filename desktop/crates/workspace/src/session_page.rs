@@ -421,7 +421,6 @@ impl SessionPage {
           this.conversation_hub.reorder(project_order);
           ConfigStore::persist_sidebar_projects(project_order);
         }
-        SessionListEvent::Collapse => this.close_sidebar(cx),
         SessionListEvent::Selected { id } => this.select_session(id, window, cx),
         SessionListEvent::Deleted { id } => this.delete_session(id, window, cx),
       },
@@ -1893,6 +1892,18 @@ impl SessionPage {
       });
     });
     cx.notify();
+  }
+
+  pub(crate) fn sidebar_open(&self) -> bool {
+    self.sidebar_open
+  }
+
+  pub(crate) fn toggle_sidebar(&mut self, cx: &mut Context<Self>) {
+    if self.sidebar_open {
+      self.close_sidebar(cx);
+    } else {
+      self.open_sidebar(cx);
+    }
   }
 
   fn close_sidebar(&mut self, cx: &mut Context<Self>) {

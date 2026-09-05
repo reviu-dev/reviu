@@ -1573,8 +1573,7 @@ impl SessionPage {
     .into_any_element()
   }
 
-  /// A side panel that slides between its width and its icon rail. The rail
-  /// keeps every surface one click away instead of hiding them.
+  /// A side panel that slides between its open width and no layout width.
   #[allow(clippy::too_many_arguments)]
   fn render_side_panel(
     &self,
@@ -1582,18 +1581,12 @@ impl SessionPage {
     open: bool,
     slide_armed: bool,
     width: f32,
-    rail: AnyElement,
+    rail: Option<AnyElement>,
     content: AnyElement,
     cx: &mut Context<Self>,
   ) -> AnyElement {
     let theme = cx.theme().clone();
-    // A permanent rail sits beside the panel, so the content slides to zero;
-    // a replacing rail keeps its own width on screen.
-    let collapsed_width = if side == PanelSide::Right {
-      0.0
-    } else {
-      SIDE_RAIL_WIDTH
-    };
+    let collapsed_width = 0.0;
     let (from, to) = if open {
       (collapsed_width, width)
     } else {
@@ -1606,19 +1599,13 @@ impl SessionPage {
       })
       .h_full()
       .overflow_hidden();
-    let clipped = match side {
-      PanelSide::Left => clipped.border_r_1().border_color(theme.border),
-      PanelSide::Right => clipped.border_l_1().border_color(theme.border),
+    let clipped = match (side, open) {
+      (PanelSide::Left, true) => clipped.border_r_1().border_color(theme.border),
+      (PanelSide::Right, true) => clipped.border_l_1().border_color(theme.border),
+      _ => clipped,
     };
-    // Right: the rail sits beside the panel for good. Left: it replaces it.
-    let (replacing_rail, side_rail) = match side {
-      PanelSide::Left => (Some(rail), None),
-      PanelSide::Right => (None, Some(rail)),
-    };
-    let clipped = clipped.child(match replacing_rail {
-      Some(rail) if !open => div().w(px(SIDE_RAIL_WIDTH)).h_full().child(rail),
-      _ => div().w(px(width)).h_full().child(content),
-    });
+    let side_rail = (side == PanelSide::Right).then_some(rail).flatten();
+    let clipped = clipped.child(div().w(px(width)).h_full().child(content));
     let clipped: AnyElement = if slide_armed {
       clipped
         .with_animation(
@@ -1781,40 +1768,6 @@ impl SessionPage {
       .child(rail)
       .into_any_element()
   }
-
-  fn render_sidebar_rail(&self, cx: &mut Context<Self>) -> AnyElement {
-    let theme = cx.theme().clone();
-    div()
-      .size_full()
-      .bg(theme.sidebar)
-      .child(
-        v_flex()
-          .items_center()
-          .gap_1()
-          .pt_2()
-          .w_full()
-          .child(
-            Self::rail_button(
-              "sidebar-rail-open",
-              gpui_component::Icon::new(gpui_component::IconName::PanelLeft),
-              "Open sidebar",
-            )
-            .on_click(cx.listener(|this, _, _, cx| this.open_sidebar(cx))),
-          )
-          .child(
-            Self::rail_button(
-              "sidebar-rail-new-session",
-              gpui_component::Icon::new(UiIconName::SquarePen),
-              "New chat",
-            )
-            .on_click(cx.listener(|this, _, window, cx| {
-              this.open_sidebar(cx);
-              this.new_session(window, cx);
-            })),
-          ),
-      )
-      .into_any_element()
-  }
 }
 
 impl Render for SessionPage {
@@ -1871,14 +1824,13 @@ impl Render for SessionPage {
         },
       ))
       .child({
-        let sidebar_rail = self.render_sidebar_rail(cx);
         let sidebar_content = self.render_sessions_sidebar(cx);
         let sidebar = self.render_side_panel(
           PanelSide::Left,
           self.sidebar_open,
           self.sidebar_slide_armed,
           self.sidebar_width,
-          sidebar_rail,
+          None,
           sidebar_content,
           cx,
         );
@@ -1893,7 +1845,7 @@ impl Render for SessionPage {
           self.dock_open,
           self.dock_slide_armed,
           self.dock_width,
-          dock_rail,
+          Some(dock_rail),
           dock_content,
           cx,
         );
@@ -5668,16 +5620,13 @@ mod tests {
   }
 
   #[gpui::test]
-  async fn the_sidebar_collapses_to_a_rail_and_comes_back(cx: &mut TestAppContext) {
-    let repo = TempRepo::init("session-sidebar-rail");
+  async fn the_sidebar_collapses_without_a_rail(cx: &mut TestAppContext) {
+    let repo = TempRepo::init("session-sidebar-no-rail");
     commit_text_file(&repo.path, Path::new("README.md"), "v1\n", "initial");
     let (page, cx) = add_session_page_window(repo.path.clone(), cx);
     cx.run_until_parked();
 
-    let collapse = cx
-      .debug_bounds("session-sidebar-collapse")
-      .expect("collapse button");
-    cx.simulate_click(collapse.center(), gpui::Modifiers::default());
+    page.update(cx, |page, cx| page.toggle_sidebar(cx));
     cx.run_until_parked();
     page.read_with(cx, |page, _| assert!(!page.sidebar_open));
 
@@ -5687,10 +5636,14 @@ mod tests {
       cx.notify();
     });
     cx.run_until_parked();
-    let open = cx
-      .debug_bounds("sidebar-rail-open")
-      .expect("the collapsed sidebar shows its rail");
-    cx.simulate_click(open.center(), gpui::Modifiers::default());
+
+    if let Some(sidebar) = cx.debug_bounds("session-sidebar-container") {
+      assert_eq!(sidebar.size.width, px(0.0));
+    }
+    assert!(cx.debug_bounds("sidebar-rail-open").is_none());
+    assert!(cx.debug_bounds("sidebar-rail-new-session").is_none());
+
+    page.update(cx, |page, cx| page.toggle_sidebar(cx));
     cx.run_until_parked();
     page.read_with(cx, |page, _| assert!(page.sidebar_open));
   }

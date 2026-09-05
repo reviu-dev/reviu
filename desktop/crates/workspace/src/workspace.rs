@@ -1002,6 +1002,25 @@ impl WorkspaceView {
         window.dispatch_action(Box::new(ShowCommandPalette), cx);
       });
 
+    let sidebar_open = self.session_page.read(cx).sidebar_open();
+    let sidebar_toggle_button = Button::new("workspace-global-sidebar-toggle")
+      .debug_selector(|| "workspace-global-sidebar-toggle".to_string())
+      .icon(IconName::PanelLeft)
+      .ghost()
+      .compact()
+      .small()
+      .tooltip(if sidebar_open {
+        "Collapse sidebar"
+      } else {
+        "Open sidebar"
+      })
+      .on_click({
+        let session_page = self.session_page.clone();
+        move |_, _, cx| {
+          session_page.update(cx, |page, cx| page.toggle_sidebar(cx));
+        }
+      });
+
     let bar = div()
       .h(px(GLOBAL_BAR_HEIGHT))
       .max_h(px(GLOBAL_BAR_HEIGHT))
@@ -1042,7 +1061,8 @@ impl WorkspaceView {
 
     let left = h_flex()
       .items_center()
-      .gap_3()
+      .gap_2()
+      .child(sidebar_toggle_button)
       .when_some(AppProfile::current().header_tag_label(), |this, label| {
         this.child(Tag::secondary().small().rounded_full().child(label))
       });
@@ -1172,15 +1192,19 @@ impl Focusable for WorkspaceView {
 #[cfg(test)]
 mod tests {
   use super::{
-    WorkspacePage, WorkspaceView, build_app_menus_with_subscription, page_has_file_search,
-    should_activate_session_page, should_run_scheduled_update_check,
+    WorkspaceApi, WorkspacePage, WorkspaceView, build_app_menus_with_subscription,
+    page_has_file_search, should_activate_session_page, should_run_scheduled_update_check,
     user_menu_page_for_workspace_page, workspace_page_from_pathname,
   };
   use crate::app_update::{
-    AppUpdateState, AvailableAppUpdate, ReadyToInstallAppUpdate, UpdateArtifact,
+    AppUpdateState, AppUpdateStore, AvailableAppUpdate, ReadyToInstallAppUpdate, UpdateArtifact,
   };
+  use crate::auth_state::{AuthState, AuthStateStore};
+  use crate::github_notifications::GithubNotificationsStore;
+  use crate::navigation::NavigationHistory;
+  use crate::session_page::SessionPage;
   use crate::shortcuts::{self, ShortcutId};
-  use gpui::{Menu, MenuItem};
+  use gpui::{AppContext as _, Menu, MenuItem, TestAppContext};
   use std::path::PathBuf;
   use ui::UserMenuPage;
 
@@ -1207,6 +1231,61 @@ mod tests {
         size: 123,
       },
     }
+  }
+
+  #[gpui::test]
+  async fn app_bar_sidebar_toggle_hides_and_shows_the_sidebar(cx: &mut TestAppContext) {
+    cx.update(|cx| {
+      gpui_component::init(cx);
+      gpui_router::init(cx);
+      NavigationHistory::init(cx);
+      NavigationHistory::navigate_replace("/session", cx);
+      cx.set_global(crate::config::AppSettings::default());
+      cx.set_global(WorkspaceApi::new());
+      cx.set_global(AuthStateStore::default());
+      AuthStateStore::set(cx, AuthState::Unauthenticated);
+      cx.set_global(AppUpdateStore::default());
+      cx.set_global(GithubNotificationsStore::default());
+      cx.set_global(shortcuts::ShortcutOverrides::default());
+    });
+
+    let mut session_page = None;
+    let (_workspace, cx) = cx.add_window_view(|window, cx| {
+      let page = cx.new(|cx| SessionPage::new(window, cx));
+      session_page = Some(page.clone());
+      WorkspaceView {
+        session_page: page,
+        window_handle: window.window_handle(),
+        last_page: None,
+        _update_check_task: None,
+        _periodic_update_check_task: None,
+        _notification_poll_task: None,
+        #[cfg(any(target_os = "linux", target_os = "windows"))]
+        _status_bar_event_task: None,
+        _subscriptions: Vec::new(),
+      }
+    });
+    let page = session_page.expect("session page");
+    cx.run_until_parked();
+
+    assert!(cx.debug_bounds("session-sidebar-collapse").is_none());
+    assert!(cx.debug_bounds("sidebar-rail-open").is_none());
+
+    let toggle = cx
+      .debug_bounds("workspace-global-sidebar-toggle")
+      .expect("sidebar toggle");
+    cx.simulate_click(toggle.center(), gpui::Modifiers::default());
+    cx.run_until_parked();
+    page.read_with(cx, |page, _| assert!(!page.sidebar_open()));
+
+    assert!(cx.debug_bounds("sidebar-rail-open").is_none());
+
+    let toggle = cx
+      .debug_bounds("workspace-global-sidebar-toggle")
+      .expect("sidebar toggle");
+    cx.simulate_click(toggle.center(), gpui::Modifiers::default());
+    cx.run_until_parked();
+    page.read_with(cx, |page, _| assert!(page.sidebar_open()));
   }
 
   #[test]

@@ -144,8 +144,6 @@ pub enum SessionListEvent {
   ProjectOrderChanged {
     project_order: Vec<PathBuf>,
   },
-  /// The collapse button in the header; the page owns the sidebar width.
-  Collapse,
   Selected {
     id: String,
   },
@@ -1098,7 +1096,6 @@ impl Render for SessionList {
       .max_h(px(40.))
       .flex_shrink_0()
       .items_center()
-      .justify_between()
       .px_3()
       .border_b_1()
       .border_color(theme.border)
@@ -1109,16 +1106,6 @@ impl Render for SessionList {
           .font_weight(gpui::FontWeight::SEMIBOLD)
           .text_color(theme.muted_foreground)
           .child("Projects"),
-      )
-      .child(
-        Button::new("session-sidebar-collapse")
-          .debug_selector(|| "session-sidebar-collapse".to_string())
-          .icon(gpui_component::IconName::PanelLeft)
-          .ghost()
-          .compact()
-          .small()
-          .tooltip("Collapse sidebar")
-          .on_click(cx.listener(|_, _, _, cx| cx.emit(SessionListEvent::Collapse))),
       );
 
     // Sections come from the tracked-project order so an empty project keeps its
