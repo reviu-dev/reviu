@@ -3088,12 +3088,10 @@ impl AgentChatPanel {
 
   /// Shows or hides the folded work above this turn's summary card.
   fn toggle_turn_work(&mut self, summary_idx: usize, cx: &mut Context<Self>) {
+    let list_ix = self.list_ix_for_item(summary_idx);
     if let Some(ChatItem::TurnSummary(s)) = self.items.get_mut(summary_idx) {
       s.work_expanded = !s.work_expanded;
-    }
-    let count = self.messages_list.item_count();
-    if count > 0 {
-      self.messages_list.remeasure_items(0..count);
+      self.mark_item_changed_at(list_ix);
     }
     cx.notify();
   }

@@ -2749,6 +2749,46 @@ async fn clicking_the_work_row_unfolds_the_turn(cx: &mut gpui::TestAppContext) {
 }
 
 #[gpui::test]
+async fn toggling_turn_work_remeasures_only_the_summary_row(cx: &mut gpui::TestAppContext) {
+  let (panel, cx) = add_panel_window(cx);
+  panel.update(cx, |panel, cx| {
+    panel.status = Status::Ready;
+    panel.items = vec![
+      user_message("do it"),
+      edit_tool("t1", vec![("a.rs", 1, 0)]),
+      agent_message("done"),
+      summary_item("cp-1"),
+    ];
+    panel.sync_list_count();
+    cx.notify();
+  });
+  cx.run_until_parked();
+
+  panel.update(cx, |panel, cx| {
+    let user_list_ix = panel.list_ix_for_item(0);
+    let summary_idx = panel.items.len() - 1;
+    let summary_list_ix = panel.list_ix_for_item(summary_idx);
+    assert!(panel.messages_list.bounds_for_item(user_list_ix).is_some());
+    assert!(
+      panel
+        .messages_list
+        .bounds_for_item(summary_list_ix)
+        .is_some()
+    );
+
+    panel.toggle_turn_work(summary_idx, cx);
+
+    assert!(panel.messages_list.bounds_for_item(user_list_ix).is_some());
+    assert!(
+      panel
+        .messages_list
+        .bounds_for_item(summary_list_ix)
+        .is_none()
+    );
+  });
+}
+
+#[gpui::test]
 async fn a_turn_with_edits_appends_a_summary_card(cx: &mut gpui::TestAppContext) {
   let (panel, cx) = add_panel_window(cx);
   panel.update(cx, |panel, _| {
