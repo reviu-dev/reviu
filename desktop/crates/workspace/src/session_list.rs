@@ -1,4 +1,4 @@
-//! The projects sidebar: browse project checkouts and their conversations.
+//! The projects sidebar: browse projects and their checkouts.
 
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -48,13 +48,6 @@ pub(crate) fn format_relative_secs(updated_at_secs: u64, now_secs: u64) -> Strin
     3_600..=86_399 => format!("{}h", delta / 3_600),
     _ => format!("{}d", delta / 86_400),
   }
-}
-
-fn now_secs() -> u64 {
-  std::time::SystemTime::now()
-    .duration_since(std::time::UNIX_EPOCH)
-    .map(|d| d.as_secs())
-    .unwrap_or(0)
 }
 
 pub(crate) fn session_row_title(meta: &ConversationMeta) -> SharedString {
@@ -117,7 +110,7 @@ impl Render for DraggedProjectSection {
 }
 
 pub enum SessionListEvent {
-  /// The section header itself: fold or unfold a project's chats.
+  /// The section header itself: fold or unfold a project's checkouts.
   ToggleProjectCollapsed {
     project_root: PathBuf,
   },
@@ -143,12 +136,6 @@ pub enum SessionListEvent {
   },
   ProjectOrderChanged {
     project_order: Vec<PathBuf>,
-  },
-  Selected {
-    id: String,
-  },
-  Deleted {
-    id: String,
   },
 }
 
@@ -422,6 +409,30 @@ impl SessionList {
       .unwrap_or_else(|| row.project_root.clone())
   }
 
+  fn checkout_status(
+    &self,
+    repo_root: &Path,
+    checkout_root: &Path,
+  ) -> Option<(SessionStatus, usize)> {
+    let mut status = SessionStatus::Idle;
+    let mut count = 0;
+    for row in self.conversations.iter().filter(|row| {
+      row.project_root == repo_root && self.checkout_path_for_session(row) == checkout_root
+    }) {
+      let row_status = self.statuses.get(&row.meta.id).copied().unwrap_or_default();
+      if row_status == SessionStatus::Idle {
+        continue;
+      }
+      count += 1;
+      status = match (status, row_status) {
+        (SessionStatus::Waiting, _) | (_, SessionStatus::Waiting) => SessionStatus::Waiting,
+        (SessionStatus::Failed, _) | (_, SessionStatus::Failed) => SessionStatus::Failed,
+        _ => SessionStatus::Working,
+      };
+    }
+    (count > 0).then_some((status, count))
+  }
+
   #[cfg(test)]
   fn conversation_ids_for_checkout(&self, repo_root: &Path, checkout_root: &Path) -> Vec<String> {
     self
@@ -667,6 +678,23 @@ impl SessionList {
         .into_any_element(),
     };
 
+    let status = self.checkout_status(repo_root, row.path.as_path());
+    let status_color = status.map(|(status, _)| match status {
+      SessionStatus::Idle => theme.muted_foreground,
+      SessionStatus::Working => theme.status_amber(),
+      SessionStatus::Waiting => theme.status_blue(),
+      SessionStatus::Failed => theme.status_red(),
+    });
+    let status_label = status.and_then(|(status, count)| {
+      status.label().map(|label| {
+        if count > 1 {
+          format!("{count} {label}")
+        } else {
+          label.to_string()
+        }
+      })
+    });
+
     div()
       .id(SharedString::from(selector.clone()))
       .debug_selector(move || selector.clone())
@@ -685,164 +713,44 @@ impl SessionList {
         });
       }))
       .child(
-        h_flex().items_center().gap_2().child(icon).child(
-          v_flex()
-            .min_w(px(0.0))
-            .gap_0p5()
-            .child(
-              div()
-                .text_xs()
-                .truncate()
-                .text_color(theme.foreground)
-                .child(row.title.clone()),
-            )
-            .child(
-              div()
-                .text_xs()
-                .truncate()
-                .text_color(theme.muted_foreground.opacity(0.75))
-                .child(row.subtitle.clone()),
-            ),
-        ),
-      )
-      .into_any_element()
-  }
-
-  fn render_chat_row(
-    &self,
-    ix: usize,
-    row: &SessionRow,
-    now: u64,
-    theme: &gpui_component::Theme,
-    cx: &mut Context<Self>,
-  ) -> gpui::AnyElement {
-    let meta = &row.meta;
-    let is_current = meta.id == self.current_id;
-    let is_loading = self.loading_id.as_deref() == Some(meta.id.as_str());
-    let status = self.statuses.get(&meta.id).copied().unwrap_or_default();
-    let status_color = match status {
-      SessionStatus::Idle => theme.muted_foreground,
-      SessionStatus::Working => theme.status_amber(),
-      SessionStatus::Waiting => theme.status_blue(),
-      SessionStatus::Failed => theme.status_red(),
-    };
-    let id = meta.id.clone();
-    let selector_id = meta.id.clone();
-    let delete_id = meta.id.clone();
-    let title = session_row_title(meta);
-    let preview = meta.preview.clone();
-    let time = format_relative_secs(meta.updated_at_secs, now);
-    let agent_id = meta.agent_id.clone();
-    let agent_icon_id = agent_id.clone();
-    let group_name = SharedString::from(format!("session-row-{}", meta.id));
-
-    div()
-      .id(("session-page-session-row", ix))
-      .debug_selector(move || format!("session-chat-row-{selector_id}"))
-      .group(group_name.clone())
-      .mx_2()
-      .ml_8()
-      .px_2()
-      .py_1()
-      .rounded(px(6.0))
-      .cursor_pointer()
-      .when(is_current, |this| this.bg(theme.secondary_active))
-      .hover(|s| s.bg(theme.secondary_hover))
-      .on_click(cx.listener(move |_, _, _, cx| {
-        cx.emit(SessionListEvent::Selected { id: id.clone() });
-      }))
-      .child(
         h_flex()
           .items_center()
           .gap_2()
+          .child(icon)
           .child(
-            div()
-              .flex_shrink_0()
-              .debug_selector(move || format!("session-agent-icon-{agent_icon_id}"))
-              .child(
-                agent_chat_panel::backend_icon(&agent_id)
-                  .xsmall()
-                  .text_color(theme.muted_foreground),
-              ),
-          )
-          .child(
-            div()
+            v_flex()
               .flex_1()
               .min_w(px(0.0))
-              .text_xs()
-              .truncate()
-              .text_color(theme.foreground)
-              .child(title),
-          )
-          .child(
-            div()
-              .relative()
-              .flex_shrink_0()
-              .min_w(px(22.))
-              .flex()
-              .justify_end()
-              .items_center()
-              .child(if is_loading {
-                div()
-                  .child(gpui_component::spinner::Spinner::new().xsmall())
-                  .into_any_element()
-              } else {
-                h_flex()
-                  .items_center()
-                  .gap_1p5()
-                  .group_hover(group_name.clone(), |this| this.opacity(0.0))
-                  .when_some(status.label(), |this, label| {
-                    this.child(
-                      div()
-                        .id(("session-status-dot", ix))
-                        .size(px(7.))
-                        .rounded_full()
-                        .bg(status_color.opacity(0.9))
-                        .tooltip(move |window, cx| {
-                          gpui_component::tooltip::Tooltip::new(label).build(window, cx)
-                        }),
-                    )
-                  })
-                  .child(
-                    div()
-                      .text_xs()
-                      .text_color(theme.muted_foreground)
-                      .child(time),
-                  )
-                  .into_any_element()
-              })
+              .gap_0p5()
               .child(
                 div()
-                  .absolute()
-                  .right(px(-2.))
-                  .top(px(-3.))
-                  .opacity(0.0)
-                  .group_hover(group_name.clone(), |this| this.opacity(1.0))
-                  .child(
-                    Button::new(("session-page-session-delete", ix))
-                      .icon(UiIconName::Trash)
-                      .xsmall()
-                      .ghost()
-                      .tooltip("Delete chat")
-                      .on_click(cx.listener(move |_, _, _, cx| {
-                        cx.stop_propagation();
-                        cx.emit(SessionListEvent::Deleted {
-                          id: delete_id.clone(),
-                        });
-                      })),
-                  ),
+                  .text_xs()
+                  .truncate()
+                  .text_color(theme.foreground)
+                  .child(row.title.clone()),
+              )
+              .child(
+                div()
+                  .text_xs()
+                  .truncate()
+                  .text_color(theme.muted_foreground.opacity(0.75))
+                  .child(row.subtitle.clone()),
               ),
-          ),
+          )
+          .when_some(status_color.zip(status_label), |this, (color, label)| {
+            this.child(
+              div()
+                .id("session-checkout-status-dot")
+                .debug_selector(|| "session-checkout-status-dot".to_string())
+                .size(px(7.))
+                .rounded_full()
+                .bg(color.opacity(0.9))
+                .tooltip(move |window, cx| {
+                  gpui_component::tooltip::Tooltip::new(label.clone()).build(window, cx)
+                }),
+            )
+          }),
       )
-      .when(!preview.is_empty(), |this| {
-        this.child(
-          div()
-            .text_xs()
-            .truncate()
-            .text_color(theme.muted_foreground)
-            .child(preview),
-        )
-      })
       .into_any_element()
   }
 
@@ -1092,7 +1000,6 @@ impl EventEmitter<SessionListEvent> for SessionList {}
 impl Render for SessionList {
   fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
     let theme = cx.theme().clone();
-    let now = now_secs();
 
     let header = h_flex()
       .debug_selector(|| "session-sidebar-header".to_string())
@@ -1122,11 +1029,7 @@ impl Render for SessionList {
       .retain(|repo, _| section_repos.contains(repo));
     let mut items: Vec<gpui::AnyElement> = Vec::new();
     for (section_ix, section_repo) in section_repos.iter().enumerate() {
-      let count = self
-        .conversations
-        .iter()
-        .filter(|row| &row.project_root == section_repo)
-        .count();
+      let count = self.checkout_rows_for_project(section_repo).len();
       items.push(self.render_project_header(
         section_repo,
         section_ix,
@@ -1141,11 +1044,6 @@ impl Render for SessionList {
       for checkout in self.checkout_rows_for_project(section_repo) {
         let active = self.displayed_checkout.as_deref() == Some(checkout.path.as_path());
         items.push(self.render_checkout_row(section_repo, &checkout, active, &theme, cx));
-        for (ix, row) in self.conversations.iter().enumerate().filter(|(_, row)| {
-          row.project_root == *section_repo && self.checkout_path_for_session(row) == checkout.path
-        }) {
-          items.push(self.render_chat_row(ix, row, now, &theme, cx));
-        }
       }
     }
     let rows = items;
@@ -1285,7 +1183,7 @@ mod tests {
   }
 
   #[gpui::test]
-  async fn project_checkout_rows_render_above_existing_chats(cx: &mut gpui::TestAppContext) {
+  async fn project_checkout_rows_replace_sidebar_chat_rows(cx: &mut gpui::TestAppContext) {
     cx.update(gpui_component::init);
     let list = cx.new(|_| SessionList::new());
     let mounted = list.clone();
@@ -1321,20 +1219,16 @@ mod tests {
       cx.debug_bounds("session-checkout-worktree-/repo-feature/sidebar")
         .is_some()
     );
-    assert!(cx.debug_bounds("session-chat-row-main-chat").is_some());
-    assert!(cx.debug_bounds("session-chat-row-worktree-chat").is_some());
+    assert!(cx.debug_bounds("session-chat-row-main-chat").is_none());
+    assert!(cx.debug_bounds("session-chat-row-worktree-chat").is_none());
 
-    let selected = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
     let selected_checkouts = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
-    let seen = selected.clone();
     let seen_checkouts = selected_checkouts.clone();
     cx.update(|_, cx| {
-      cx.subscribe(&list, move |_, event: &SessionListEvent, _| match event {
-        SessionListEvent::Selected { id } => seen.borrow_mut().push(id.clone()),
-        SessionListEvent::SelectedCheckout { checkout_root, .. } => {
-          seen_checkouts.borrow_mut().push(checkout_root.clone())
+      cx.subscribe(&list, move |_, event: &SessionListEvent, _| {
+        if let SessionListEvent::SelectedCheckout { checkout_root, .. } = event {
+          seen_checkouts.borrow_mut().push(checkout_root.clone());
         }
-        _ => {}
       })
       .detach();
     });
@@ -1345,14 +1239,6 @@ mod tests {
     cx.simulate_click(worktree_checkout.center(), gpui::Modifiers::default());
     cx.run_until_parked();
     assert_eq!(selected_checkouts.borrow().as_slice(), &[worktree_path]);
-
-    let main_chat = cx
-      .debug_bounds("session-chat-row-main-chat")
-      .expect("main chat row");
-    cx.simulate_click(main_chat.center(), gpui::Modifiers::default());
-    cx.run_until_parked();
-
-    assert_eq!(selected.borrow().as_slice(), &["main-chat".to_string()]);
   }
 
   #[gpui::test]
@@ -1387,7 +1273,7 @@ mod tests {
       cx.debug_bounds("session-checkout-main-/plain-project")
         .is_some()
     );
-    assert!(cx.debug_bounds("session-chat-row-plain-chat").is_some());
+    assert!(cx.debug_bounds("session-chat-row-plain-chat").is_none());
     assert!(
       cx.debug_bounds("session-checkout-worktree-/plain-project-ignored")
         .is_none()
@@ -1471,21 +1357,28 @@ mod tests {
   }
 
   #[gpui::test]
-  async fn session_rows_show_their_agent_icon(cx: &mut gpui::TestAppContext) {
+  async fn checkout_rows_show_agent_status(cx: &mut gpui::TestAppContext) {
     cx.update(gpui_component::init);
     let list = cx.new(|_| SessionList::new());
     let mounted = list.clone();
     let (_root, cx) =
       cx.add_window_view(move |window, cx| gpui_component::Root::new(mounted.clone(), window, cx));
+    let repo = PathBuf::from("/repo");
 
     list.update(cx, |list, cx| {
-      let mut row = meta("pi-session", 1);
-      row.meta.agent_id = agent_registry::AgentId::new("pi-acp");
-      list.set_conversations(vec![row], "pi-session".into(), cx);
+      let mut row = meta("working-session", 1);
+      row.project_root = repo.clone();
+      list.set_project_order(vec![repo.clone()], cx);
+      list.set_git_repositories(HashSet::from([repo.clone()]), cx);
+      list.set_conversations(vec![row], "working-session".into(), cx);
+      list.set_statuses(
+        HashMap::from([("working-session".to_string(), SessionStatus::Working)]),
+        cx,
+      );
     });
     cx.run_until_parked();
 
-    assert!(cx.debug_bounds("session-agent-icon-pi-acp").is_some());
+    assert!(cx.debug_bounds("session-checkout-status-dot").is_some());
   }
 
   #[gpui::test]

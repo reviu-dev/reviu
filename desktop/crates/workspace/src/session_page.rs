@@ -51,7 +51,9 @@ use crate::navigation::NavigationHistory;
 use crate::open_intent::OpenIntent;
 use crate::project_files::list_project_files;
 use crate::review_destination::{AgentReviewHandlers, ReviewDestination, configure_review};
-use crate::session_list::{SessionList, SessionListEvent, SessionStatus};
+use crate::session_list::{
+  SessionList, SessionListEvent, SessionStatus, format_relative_secs, session_row_title,
+};
 use crate::session_page::center_layout::{
   CenterDropTarget, CenterLayout, CenterSplitDirection, CenterSurface,
 };
@@ -421,8 +423,6 @@ impl SessionPage {
           this.conversation_hub.reorder(project_order);
           ConfigStore::persist_sidebar_projects(project_order);
         }
-        SessionListEvent::Selected { id } => this.select_session(id, window, cx),
-        SessionListEvent::Deleted { id } => this.delete_session(id, window, cx),
       },
     )
     .detach();

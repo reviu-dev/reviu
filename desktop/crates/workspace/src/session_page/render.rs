@@ -5,7 +5,19 @@ use super::*;
 use crate::annotations::{AnnotationKind, shows_annotation_navigation};
 use crate::diff_toolbar::{DiffToolbar, NavigationControl, SplitControl, ToggleControl};
 use crate::hunk_actions::render_hunk_actions;
-use gpui_component::Selectable as _;
+use gpui_component::{Selectable as _, scroll::ScrollableElement as _};
+
+#[derive(Clone)]
+struct CenterConversationHistoryItem {
+  id: String,
+  title: SharedString,
+  subtitle: String,
+  updated_at_secs: u64,
+  time: String,
+  agent_id: agent_registry::AgentId,
+  status: SessionStatus,
+  selected: bool,
+}
 
 impl SessionPage {
   /// Without a project half the shell has nothing to show, so the row that
@@ -541,6 +553,241 @@ impl SessionPage {
     self.render_center_tab_bar("session-center-tabs".to_string(), tabs, selected_tab, cx)
   }
 
+  fn center_conversation_history_items(
+    &self,
+    cx: &mut Context<Self>,
+  ) -> Vec<CenterConversationHistoryItem> {
+    let now = std::time::SystemTime::now()
+      .duration_since(std::time::UNIX_EPOCH)
+      .map(|duration| duration.as_secs())
+      .unwrap_or(0);
+    let statuses = self.session_statuses(cx);
+    let active_id = self
+      .agent_chat_view
+      .as_ref()
+      .map(|panel| panel.read(cx).current_conversation().id.clone());
+    let worktrees = self.conversation_hub.worktree_checkouts(cx);
+    let mut items = self
+      .conversation_hub
+      .project_sections(cx)
+      .into_iter()
+      .flat_map(|(project_root, metas)| {
+        let project_name = project_root
+          .file_name()
+          .map(|name| name.to_string_lossy().into_owned())
+          .filter(|name| !name.is_empty())
+          .unwrap_or_else(|| project_root.display().to_string());
+        let worktrees = worktrees.clone();
+        let active_id = active_id.clone();
+        let statuses = statuses.clone();
+        metas.into_iter().map(move |meta| {
+          let subtitle = worktrees
+            .get(&meta.id)
+            .map(|binding| format!("{project_name} - {}", binding.branch))
+            .unwrap_or_else(|| format!("{project_name} - Main checkout"));
+          CenterConversationHistoryItem {
+            id: meta.id.clone(),
+            title: session_row_title(&meta),
+            subtitle,
+            updated_at_secs: meta.updated_at_secs,
+            time: format_relative_secs(meta.updated_at_secs, now),
+            agent_id: meta.agent_id.clone(),
+            status: statuses.get(&meta.id).copied().unwrap_or_default(),
+            selected: active_id.as_deref() == Some(meta.id.as_str()),
+          }
+        })
+      })
+      .collect::<Vec<_>>();
+    items.sort_by_key(|item| std::cmp::Reverse(item.updated_at_secs));
+    items
+  }
+
+  fn center_history_status_label(status: SessionStatus) -> Option<&'static str> {
+    match status {
+      SessionStatus::Idle => None,
+      SessionStatus::Working => Some("Working"),
+      SessionStatus::Waiting => Some("Waiting"),
+      SessionStatus::Failed => Some("Failed"),
+    }
+  }
+
+  fn render_center_history_button(&self, cx: &mut Context<Self>) -> AnyElement {
+    let items = self.center_conversation_history_items(cx);
+    let attention_count = items
+      .iter()
+      .filter(|item| item.status != SessionStatus::Idle)
+      .count();
+    let page = cx.entity().clone();
+    let mut trigger = Button::new("session-center-history")
+      .debug_selector(|| "session-center-history".to_string())
+      .icon(UiIconName::History)
+      .ghost()
+      .compact()
+      .xsmall()
+      .tooltip("Chat history");
+    if attention_count > 0 {
+      trigger = trigger.label(attention_count.to_string());
+    }
+
+    ui::Popover::new("session-center-history-popover")
+      .anchor(gpui::Anchor::TopRight)
+      .appearance(false)
+      .overlay_closable(true)
+      .trigger(trigger)
+      .content(move |_, _window, cx| {
+        let popover = cx.entity().clone();
+        let theme = cx.theme().clone();
+        let mut list = v_flex().max_h(px(360.0)).overflow_y_scrollbar();
+        if items.is_empty() {
+          list = list.child(
+            div()
+              .px_3()
+              .py_3()
+              .text_xs()
+              .text_color(theme.muted_foreground)
+              .child("No chat history yet"),
+          );
+        }
+        for item in items.clone() {
+          let tab = CenterTab::chat_for(item.id.clone());
+          let open_page = page.clone();
+          let delete_page = page.clone();
+          let popover = popover.clone();
+          let delete_id = item.id.clone();
+          let status = item.status;
+          let status_label = Self::center_history_status_label(status);
+          let status_color = match status {
+            SessionStatus::Idle => theme.muted_foreground,
+            SessionStatus::Working => theme.status_amber(),
+            SessionStatus::Waiting => theme.status_blue(),
+            SessionStatus::Failed => theme.status_red(),
+          };
+          let selector_id = item.id.clone();
+          list = list.child(
+            h_flex()
+              .id(SharedString::from(format!(
+                "session-history-chat-row-{selector_id}"
+              )))
+              .debug_selector(move || format!("session-history-chat-row-{selector_id}"))
+              .items_center()
+              .gap_2()
+              .px_3()
+              .py_2()
+              .min_w(px(300.0))
+              .cursor_pointer()
+              .when(item.selected, |this| this.bg(theme.secondary_active))
+              .hover(|this| this.bg(theme.secondary_hover))
+              .on_click(move |_, window, cx| {
+                open_page.update(cx, |page, cx| {
+                  page.activate_center_tab(tab.clone(), OpenIntent::Open, window, cx);
+                });
+                popover.update(cx, |state, cx| state.dismiss(window, cx));
+              })
+              .child(
+                agent_chat_panel::backend_icon(&item.agent_id)
+                  .xsmall()
+                  .text_color(theme.muted_foreground),
+              )
+              .child(
+                v_flex()
+                  .flex_1()
+                  .min_w(px(0.0))
+                  .gap_0p5()
+                  .child(
+                    div()
+                      .text_xs()
+                      .truncate()
+                      .text_color(theme.foreground)
+                      .child(item.title.clone()),
+                  )
+                  .child(
+                    div()
+                      .text_xs()
+                      .truncate()
+                      .text_color(theme.muted_foreground.opacity(0.75))
+                      .child(item.subtitle.clone()),
+                  ),
+              )
+              .child(
+                h_flex()
+                  .items_center()
+                  .gap_1p5()
+                  .when_some(status_label, |this, label| {
+                    this.child(
+                      div()
+                        .id("session-history-status-dot")
+                        .size(px(7.0))
+                        .rounded_full()
+                        .bg(status_color.opacity(0.9))
+                        .tooltip(move |window, cx| {
+                          gpui_component::tooltip::Tooltip::new(label).build(window, cx)
+                        }),
+                    )
+                  })
+                  .child(
+                    div()
+                      .text_xs()
+                      .text_color(theme.muted_foreground)
+                      .child(item.time.clone()),
+                  )
+                  .child(
+                    Button::new(SharedString::from(format!(
+                      "session-history-delete-{}",
+                      delete_id
+                    )))
+                    .debug_selector(|| "session-history-delete".to_string())
+                    .icon(UiIconName::Trash)
+                    .ghost()
+                    .compact()
+                    .xsmall()
+                    .tooltip("Delete chat")
+                    .on_click(move |_, window, cx| {
+                      cx.stop_propagation();
+                      delete_page.update(cx, |page, cx| {
+                        page.delete_session(&delete_id, window, cx);
+                      });
+                    }),
+                  ),
+              ),
+          );
+        }
+
+        v_flex()
+          .debug_selector(|| "session-center-history-popover".to_string())
+          .w(px(360.0))
+          .bg(theme.background)
+          .border_1()
+          .border_color(theme.border)
+          .rounded(theme.radius)
+          .shadow_md()
+          .overflow_hidden()
+          .child(
+            h_flex()
+              .items_center()
+              .justify_between()
+              .px_3()
+              .py_2()
+              .border_b_1()
+              .border_color(theme.border)
+              .child(
+                div()
+                  .text_xs()
+                  .font_weight(gpui::FontWeight::SEMIBOLD)
+                  .text_color(theme.muted_foreground)
+                  .child("Chat history"),
+              )
+              .child(
+                div()
+                  .text_xs()
+                  .text_color(theme.muted_foreground)
+                  .child(items.len().to_string()),
+              ),
+          )
+          .child(list)
+      })
+      .into_any_element()
+  }
+
   fn render_center_tab_bar(
     &self,
     id: String,
@@ -562,17 +809,23 @@ impl SessionPage {
       .menu(true)
       .selected_index(selected_index)
       .suffix(
-        Button::new("session-center-new-chat")
-          .debug_selector(|| "session-center-new-chat".to_string())
-          .icon(gpui_component::IconName::Plus)
-          .ghost()
-          .compact()
-          .xsmall()
-          .tooltip("New chat")
-          .on_click(cx.listener(|this, _, window, cx| {
-            cx.stop_propagation();
-            this.new_session(window, cx);
-          })),
+        h_flex()
+          .items_center()
+          .gap_1()
+          .child(self.render_center_history_button(cx))
+          .child(
+            Button::new("session-center-new-chat")
+              .debug_selector(|| "session-center-new-chat".to_string())
+              .icon(gpui_component::IconName::Plus)
+              .ghost()
+              .compact()
+              .xsmall()
+              .tooltip("New chat")
+              .on_click(cx.listener(|this, _, window, cx| {
+                cx.stop_propagation();
+                this.new_session(window, cx);
+              })),
+          ),
       );
 
     for tab in &tabs {
@@ -3708,6 +3961,65 @@ mod tests {
     );
     assert!(cx.debug_bounds("session-center-empty-new-chat").is_none());
     assert!(cx.debug_bounds("session-center-tab-chat").is_none());
+  }
+
+  #[gpui::test]
+  async fn center_history_lists_conversations_removed_from_sidebar(cx: &mut TestAppContext) {
+    let repo = TempRepo::init("session-center-history");
+    commit_text_file(&repo.path, Path::new("README.md"), "v1\n", "initial");
+    let (page, cx) = add_session_page_window(repo.path.clone(), cx);
+    cx.run_until_parked();
+
+    page.update_in(cx, |page, window, cx| page.new_session(window, cx));
+    cx.run_until_parked();
+    let first_panel = page.read_with(cx, |page, _| {
+      page.agent_chat_view.clone().expect("active panel")
+    });
+    first_panel.update(cx, |panel, cx| {
+      panel.seed_user_message_for_test("first", cx)
+    });
+    cx.run_until_parked();
+    let first_id = first_panel.read_with(cx, |panel, _| panel.current_conversation().id.clone());
+
+    page.update_in(cx, |page, window, cx| page.new_session(window, cx));
+    cx.run_until_parked();
+    let second_panel = page.read_with(cx, |page, _| {
+      page.agent_chat_view.clone().expect("active panel")
+    });
+    second_panel.update(cx, |panel, cx| {
+      panel.seed_user_message_for_test("second", cx)
+    });
+    cx.run_until_parked();
+    let second_id = second_panel.read_with(cx, |panel, _| panel.current_conversation().id.clone());
+
+    let first_sidebar_selector = Box::leak(format!("session-chat-row-{first_id}").into_boxed_str());
+    let second_sidebar_selector =
+      Box::leak(format!("session-chat-row-{second_id}").into_boxed_str());
+    assert!(cx.debug_bounds(first_sidebar_selector).is_none());
+    assert!(cx.debug_bounds(second_sidebar_selector).is_none());
+
+    let history = cx
+      .debug_bounds("session-center-history")
+      .expect("history button");
+    cx.simulate_click(history.center(), gpui::Modifiers::default());
+    cx.run_until_parked();
+
+    let first_history_selector =
+      Box::leak(format!("session-history-chat-row-{first_id}").into_boxed_str());
+    let second_history_selector =
+      Box::leak(format!("session-history-chat-row-{second_id}").into_boxed_str());
+    let first_history_row = cx
+      .debug_bounds(first_history_selector)
+      .expect("first conversation in history");
+    assert!(cx.debug_bounds(second_history_selector).is_some());
+
+    cx.simulate_click(first_history_row.center(), gpui::Modifiers::default());
+    cx.run_until_parked();
+
+    page.read_with(cx, |page, cx| {
+      assert_eq!(page.session_list.read(cx).current_id(), first_id);
+      assert_eq!(page.active_chat_tab(cx), CenterTab::chat_for(first_id));
+    });
   }
 
   #[gpui::test]
