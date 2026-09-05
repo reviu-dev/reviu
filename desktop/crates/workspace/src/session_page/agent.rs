@@ -3457,6 +3457,50 @@ mod tests {
   }
 
   #[gpui::test]
+  async fn sidebar_checkout_rows_switch_project_context_across_repos(cx: &mut TestAppContext) {
+    let (repo, page, cx) = page_with_agent_panel("session-page-sidebar-cross-checkout", cx).await;
+    let (other, other_state) =
+      seed_second_repo("session-page-sidebar-cross-checkout-b", "checkout-b");
+
+    page.update_in(cx, |page, window, cx| {
+      page
+        .set_fallback_repo(other.path.clone(), window, cx)
+        .expect("track the other repo");
+      page
+        .set_fallback_repo(repo.path.clone(), window, cx)
+        .expect("switch back");
+    });
+    cx.run_until_parked();
+
+    let selector =
+      Box::leak(format!("session-checkout-main-{}", other.path.display()).into_boxed_str());
+    let other_checkout = cx.debug_bounds(selector).expect("other repo checkout row");
+    cx.simulate_click(other_checkout.center(), gpui::Modifiers::default());
+    cx.run_until_parked();
+
+    active_panel(&page, cx).read_with(cx, |panel, _| {
+      assert_eq!(panel.project_root(), other.path.as_path());
+    });
+    page.read_with(cx, |page, cx| {
+      assert_eq!(page.project_root(cx).as_deref(), Some(other.path.as_path()));
+      assert_eq!(page.fallback_repo.as_deref(), Some(other.path.as_path()));
+      assert_eq!(
+        page.checkout_root(cx).as_deref(),
+        Some(other.path.as_path())
+      );
+      assert_eq!(
+        page.dock_panel.read(cx).repo_root(),
+        Some(other.path.as_path()),
+        "the selected row, project footer and dock agree"
+      );
+      assert!(page.checkout_override.is_none());
+    });
+
+    let _ = std::fs::remove_dir_all(&other_state);
+    cleanup_worktrees_root(&repo.path);
+  }
+
+  #[gpui::test]
   async fn sidebar_checkout_rows_pin_the_dock_without_switching_chat(cx: &mut TestAppContext) {
     let (repo, page, cx) = page_with_agent_panel("session-page-sidebar-checkout", cx).await;
 

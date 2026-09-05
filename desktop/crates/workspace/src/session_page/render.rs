@@ -2600,7 +2600,9 @@ mod tests {
 
     // Pin: the git surfaces move, the session does not.
     page.update_in(cx, |page, window, cx| {
-      page.pin_checkout(worktree.path.clone(), window, cx);
+      page
+        .select_checkout(repo.path.clone(), worktree.path.clone(), window, cx)
+        .expect("select worktree checkout");
     });
     cx.run_until_parked();
     page.read_with(cx, |page, cx| {
@@ -2616,7 +2618,9 @@ mod tests {
 
     // Picking the session's checkout again clears the pin.
     page.update_in(cx, |page, window, cx| {
-      page.pin_checkout(repo.path.clone(), window, cx);
+      page
+        .select_checkout(repo.path.clone(), repo.path.clone(), window, cx)
+        .expect("select main checkout");
     });
     cx.run_until_parked();
     page.read_with(cx, |page, cx| {
@@ -2638,7 +2642,9 @@ mod tests {
 
     // A pin pointing at a deleted worktree unpins on the next sync.
     page.update_in(cx, |page, window, cx| {
-      page.pin_checkout(worktree.path.clone(), window, cx);
+      page
+        .select_checkout(repo.path.clone(), worktree.path.clone(), window, cx)
+        .expect("select worktree checkout");
     });
     cx.run_until_parked();
     std::fs::remove_dir_all(&worktree.path).expect("remove worktree");
@@ -2685,7 +2691,9 @@ mod tests {
 
     // The open diff belongs to the checkout being left: pinning closes it.
     page.update_in(cx, |page, window, cx| {
-      page.pin_checkout(worktree.path.clone(), window, cx);
+      page
+        .select_checkout(repo.path.clone(), worktree.path.clone(), window, cx)
+        .expect("select worktree checkout");
     });
     cx.run_until_parked();
     page.read_with(cx, |page, _| {
@@ -2741,7 +2749,9 @@ mod tests {
     assert!(cx.debug_bounds("dock-panel-checkout-selector").is_none());
 
     page.update_in(cx, |page, window, cx| {
-      page.pin_checkout(worktree.path.clone(), window, cx);
+      page
+        .select_checkout(repo.path.clone(), worktree.path.clone(), window, cx)
+        .expect("select worktree checkout");
     });
     cx.run_until_parked();
     page.update(cx, |_, cx| cx.notify());

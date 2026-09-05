@@ -404,8 +404,11 @@ impl SessionPage {
           project_root,
           checkout_root,
         } => {
-          let _project_root = project_root;
-          this.pin_checkout(checkout_root.clone(), window, cx)
+          if let Err(error) =
+            this.select_checkout(project_root.clone(), checkout_root.clone(), window, cx)
+          {
+            window.push_notification(Notification::warning(error), cx);
+          }
         }
         SessionListEvent::RevealProject { project_root } => cx.reveal_path(project_root),
         SessionListEvent::CopyProjectPath { project_root } => {
@@ -1097,21 +1100,49 @@ impl SessionPage {
     self.activate_center_tab(restored_selected_tab, OpenIntent::Browse, window, cx);
   }
 
-  /// Pins the git surfaces on one of the repo's checkouts without touching
-  /// the session; picking the session's own checkout just unpins.
-  pub(super) fn pin_checkout(
+  /// Selects a sidebar checkout and keeps the project context, footer and git
+  /// surfaces on the same project.
+  pub(super) fn select_checkout(
     &mut self,
-    path: PathBuf,
+    project_root: PathBuf,
+    checkout_root: PathBuf,
     window: &mut Window,
     cx: &mut Context<Self>,
-  ) {
-    if self.editor_is_dirty(cx) && self.target_checkout_differs_from_editor(&path, cx) {
-      self.open_unsaved_editor_dialog(UnsavedEditorAction::PinCheckout { path }, window, cx);
-      return;
+  ) -> Result<(), SharedString> {
+    if self.editor_is_dirty(cx) && self.target_checkout_differs_from_editor(&checkout_root, cx) {
+      self.open_unsaved_editor_dialog(
+        UnsavedEditorAction::SelectCheckout {
+          project_root,
+          checkout_root,
+        },
+        window,
+        cx,
+      );
+      return Ok(());
     }
-    self.pin_checkout_without_unsaved_prompt(path, window, cx);
+    self.select_checkout_without_unsaved_prompt(project_root, checkout_root, window, cx)
   }
 
+  pub(super) fn select_checkout_without_unsaved_prompt(
+    &mut self,
+    project_root: PathBuf,
+    checkout_root: PathBuf,
+    window: &mut Window,
+    cx: &mut Context<Self>,
+  ) -> Result<(), SharedString> {
+    if self.project_root(cx).as_deref() != Some(project_root.as_path()) {
+      if git::discover_repository_root(&project_root).is_some() {
+        self.set_fallback_repo_without_unsaved_prompt(project_root.clone(), window, cx)?;
+      } else {
+        self.set_project_root_without_unsaved_prompt(project_root.clone(), window, cx)?;
+      }
+    }
+    self.pin_checkout_without_unsaved_prompt(checkout_root, window, cx);
+    Ok(())
+  }
+
+  /// Pins the git surfaces on one of the repo's checkouts without touching
+  /// the session; picking the session's own checkout just unpins.
   pub(super) fn pin_checkout_without_unsaved_prompt(
     &mut self,
     path: PathBuf,
@@ -1122,7 +1153,8 @@ impl SessionPage {
       .agent_chat_view
       .as_ref()
       .map(|panel| panel.read(cx).cwd().to_path_buf())
-      .or_else(|| self.fallback_repo.clone());
+      .or_else(|| self.fallback_repo.clone())
+      .or_else(|| self.project_root.clone());
     if session_checkout.as_deref() == Some(path.as_path()) {
       self.checkout_override = None;
     } else {

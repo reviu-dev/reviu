@@ -37,8 +37,9 @@ pub(super) enum UnsavedEditorAction {
   SetProjectRoot {
     project_root: PathBuf,
   },
-  PinCheckout {
-    path: PathBuf,
+  SelectCheckout {
+    project_root: PathBuf,
+    checkout_root: PathBuf,
   },
   ForgetProject {
     project_root: PathBuf,
@@ -1792,8 +1793,15 @@ impl SessionPage {
           window.push_notification(Notification::warning(error), cx);
         }
       }
-      UnsavedEditorAction::PinCheckout { path } => {
-        self.pin_checkout_without_unsaved_prompt(path, window, cx)
+      UnsavedEditorAction::SelectCheckout {
+        project_root,
+        checkout_root,
+      } => {
+        if let Err(error) =
+          self.select_checkout_without_unsaved_prompt(project_root, checkout_root, window, cx)
+        {
+          window.push_notification(Notification::warning(error), cx);
+        }
       }
       UnsavedEditorAction::ForgetProject { project_root } => {
         if let Err(error) = self.forget_project_without_unsaved_prompt(project_root, window, cx) {
