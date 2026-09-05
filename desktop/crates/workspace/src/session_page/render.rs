@@ -665,10 +665,13 @@ impl SessionPage {
       .min_h(px(40.0))
       .max_h(px(40.0))
       .flex_shrink_0()
-      .border_b_1()
-      .border_color(cx.theme().border)
       .bg(cx.theme().background)
-      .child(tab_bar)
+      .child(
+        div()
+          .debug_selector(|| "session-center-tab-bar".to_string())
+          .size_full()
+          .child(tab_bar),
+      )
       .into_any_element()
   }
 
@@ -3669,10 +3672,16 @@ mod tests {
     let center_tabs = cx.debug_bounds("session-center-tabs").expect("center tabs");
     let dock_header = cx.debug_bounds("dock-panel-header").expect("dock header");
 
+    let center_tab_bar = cx
+      .debug_bounds("session-center-tab-bar")
+      .expect("center tab bar");
+
     assert_eq!(center_tabs.origin.y, sidebar_header.origin.y);
     assert_eq!(center_tabs.origin.y, dock_header.origin.y);
     assert_eq!(center_tabs.size.height, sidebar_header.size.height);
     assert_eq!(center_tabs.size.height, dock_header.size.height);
+    assert_eq!(center_tab_bar.origin.y, center_tabs.origin.y);
+    assert_eq!(center_tab_bar.size.height, center_tabs.size.height);
   }
 
   #[gpui::test]
