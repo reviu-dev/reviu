@@ -1457,12 +1457,37 @@ impl SessionPage {
       .map(|(layout_tab, _)| layout_tab.clone())
   }
 
+  fn center_layout_chat_ids(&self) -> HashSet<String> {
+    self
+      .center_layout
+      .tabs()
+      .into_iter()
+      .filter_map(|tab| tab.conversation_id().map(ToOwned::to_owned))
+      .collect()
+  }
+
   fn center_layout_chat_id(&self) -> Option<String> {
     self
       .center_layout
       .tabs()
       .into_iter()
       .find_map(|tab| tab.conversation_id().map(ToOwned::to_owned))
+  }
+
+  fn chat_panel_for_id(&self, id: &str, cx: &App) -> Option<Entity<AgentChatPanel>> {
+    self
+      .agent_chat_view
+      .iter()
+      .chain(self.background_chat_panels.iter().map(|(_, panel)| panel))
+      .find(|panel| panel.read(cx).current_conversation().id == id)
+      .cloned()
+  }
+
+  fn chat_panel_for_tab(&self, tab: &CenterTab, cx: &App) -> Option<Entity<AgentChatPanel>> {
+    tab
+      .conversation_id()
+      .and_then(|id| self.chat_panel_for_id(id, cx))
+      .or_else(|| self.agent_chat_view.clone())
   }
 
   fn forget_placeholder_chat_tab(&mut self) {
@@ -1625,7 +1650,12 @@ impl SessionPage {
     self.active_center_tab = Some(tab.clone());
     if has_saved_split_layout {
       let focused_tab = self.center_layout.active_tab().clone();
-      if let Some(conversation_id) = self.center_layout_chat_id() {
+      self.ensure_center_layout_chat_panels(window, cx);
+      let active_chat_id = focused_tab
+        .conversation_id()
+        .map(ToOwned::to_owned)
+        .or_else(|| self.center_layout_chat_id());
+      if let Some(conversation_id) = active_chat_id {
         self.activate_session_panel(&conversation_id, window, cx);
       }
       self.active_center_tab = Some(tab.clone());
@@ -1986,14 +2016,20 @@ impl SessionPage {
   }
 
   fn sync_agent_chat_close_control(&mut self, cx: &mut Context<Self>) {
-    let Some(panel) = self.agent_chat_view.clone() else {
-      return;
-    };
+    let visible_chat_ids = self.center_layout_chat_ids();
     let show_split_chrome = self.center_layout.surface_count() > 1;
-    panel.update(cx, |panel, cx| {
-      panel.set_header_visible(show_split_chrome, cx);
-      panel.set_close_control_visible(show_split_chrome, cx);
-    });
+    for panel in self
+      .agent_chat_view
+      .iter()
+      .chain(self.background_chat_panels.iter().map(|(_, panel)| panel))
+    {
+      let conversation_id = panel.read(cx).current_conversation().id.clone();
+      let show_chrome = show_split_chrome && visible_chat_ids.contains(&conversation_id);
+      panel.update(cx, |panel, cx| {
+        panel.set_header_visible(show_chrome, cx);
+        panel.set_close_control_visible(show_chrome, cx);
+      });
+    }
   }
 
   fn toggle_file_stage_action(

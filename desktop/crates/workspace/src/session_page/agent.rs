@@ -469,10 +469,12 @@ impl SessionPage {
   /// stops their agent process. Running sessions are never evicted.
   fn evict_parked_chat_panels(&mut self, cx: &mut Context<Self>) {
     const MAX_PARKED_CHAT_PANELS: usize = 5;
+    let visible_chat_ids = self.center_layout_chat_ids();
     let mut kept = 0;
     let mut index = 0;
     while index < self.background_chat_panels.len() {
-      if !self.background_chat_panels[index].1.read(cx).is_parked() {
+      let (id, panel) = &self.background_chat_panels[index];
+      if visible_chat_ids.contains(id) || !panel.read(cx).is_parked() {
         index += 1;
         continue;
       }
@@ -1504,28 +1506,10 @@ impl SessionPage {
       return;
     }
     self.park_active_chat_panel(cx);
-    let panel = match self
-      .background_chat_panels
-      .iter()
-      .position(|(panel_id, _)| panel_id == id)
-    {
-      // The session was live in the background: back on screen as it is,
-      // reviving its connection if it died while parked.
-      Some(position) => {
-        let panel = self.background_chat_panels.remove(position).1;
-        if panel.read(cx).needs_reconnect() {
-          panel.update(cx, |panel, cx| panel.reconnect(cx));
-        }
-        panel
-      }
-      None => match self.conversation_hub.find_conversation(id, cx) {
-        Some((repo_root, store, meta)) => {
-          self.build_chat_panel(repo_root, Some(store), Some(meta), window, cx)
-        }
-        // Unknown id (stale click): a fresh fallback session is the least wrong.
-        None => self.build_fallback_chat_panel(None, window, cx),
-      },
-    };
+    let panel = self
+      .take_background_chat_panel(id, cx)
+      .or_else(|| self.build_chat_panel_for_id(id, window, cx))
+      .unwrap_or_else(|| self.build_fallback_chat_panel(None, window, cx));
     panel.update(cx, |panel, _| panel.set_active_conversation(true));
     if let Some(store) = panel.read(cx).store() {
       store.update(cx, |store, cx| store.set_active(Some(id.to_string()), cx));
@@ -1536,6 +1520,52 @@ impl SessionPage {
     self.refresh_session_list(cx);
     self.sync_active_checkout(window, cx);
     cx.notify();
+  }
+
+  fn take_background_chat_panel(
+    &mut self,
+    id: &str,
+    cx: &mut Context<Self>,
+  ) -> Option<Entity<AgentChatPanel>> {
+    let position = self
+      .background_chat_panels
+      .iter()
+      .position(|(panel_id, _)| panel_id == id)?;
+    let panel = self.background_chat_panels.remove(position).1;
+    if panel.read(cx).needs_reconnect() {
+      panel.update(cx, |panel, cx| panel.reconnect(cx));
+    }
+    Some(panel)
+  }
+
+  fn build_chat_panel_for_id(
+    &mut self,
+    id: &str,
+    window: &mut Window,
+    cx: &mut Context<Self>,
+  ) -> Option<Entity<AgentChatPanel>> {
+    let (repo_root, store, meta) = self.conversation_hub.find_conversation(id, cx)?;
+    Some(self.build_chat_panel(repo_root, Some(store), Some(meta), window, cx))
+  }
+
+  pub(super) fn ensure_center_layout_chat_panels(
+    &mut self,
+    window: &mut Window,
+    cx: &mut Context<Self>,
+  ) {
+    for id in self.center_layout_chat_ids() {
+      if self.chat_panel_for_id(&id, cx).is_some() {
+        continue;
+      }
+      let Some(panel) = self.build_chat_panel_for_id(&id, window, cx) else {
+        continue;
+      };
+      panel.update(cx, |panel, cx| {
+        panel.set_active_conversation(false);
+        panel.persist_now(cx);
+      });
+      self.background_chat_panels.insert(0, (id, panel));
+    }
   }
 
   pub(super) fn focus_agent_input_on_next_frame(

@@ -801,13 +801,16 @@ impl SessionPage {
       .group(CENTER_DROP_GROUP)
       .on_mouse_down(
         gpui::MouseButton::Left,
-        cx.listener(move |this, _, _, cx| {
+        cx.listener(move |this, _, window, cx| {
           if this.center_layout.active_tab() == &focus_tab {
             return;
           }
           this
             .center_layout
             .set_active_surface(CenterSurface::from_tab(focus_tab.clone()));
+          if let Some(conversation_id) = focus_tab.conversation_id() {
+            this.activate_session_panel(conversation_id, window, cx);
+          }
           this.center = Self::center_view_for_tab(&focus_tab);
           if let Some(active_tab) = this.active_center_tab.clone() {
             this
@@ -881,7 +884,7 @@ impl SessionPage {
     cx: &mut Context<Self>,
   ) -> AnyElement {
     match surface {
-      CenterSurface::Chat(_) => self.render_conversation(cx),
+      CenterSurface::Chat(tab) => self.render_conversation(Some(tab), cx),
       CenterSurface::InteractiveRebase(_) => self.render_interactive_rebase(cx),
       CenterSurface::Editor(tab) => {
         let previous_center = self.center;
@@ -954,6 +957,10 @@ impl SessionPage {
         .add_surface_to_pane(target.pane_id, surface),
     };
     if changed {
+      if let Some(conversation_id) = tab.conversation_id() {
+        self.activate_session_panel(conversation_id, window, cx);
+      }
+      self.ensure_center_layout_chat_panels(window, cx);
       self.remember_center_layout_tab(tab.clone());
       self.center = Self::center_view_for_tab(&tab);
       self.sync_agent_chat_close_control(cx);
@@ -964,7 +971,11 @@ impl SessionPage {
     self.activate_center_tab(tab, OpenIntent::Open, window, cx);
   }
 
-  pub(super) fn render_conversation(&mut self, cx: &mut Context<Self>) -> AnyElement {
+  pub(super) fn render_conversation(
+    &mut self,
+    tab: Option<&CenterTab>,
+    cx: &mut Context<Self>,
+  ) -> AnyElement {
     let theme = cx.theme().clone();
     let mut container = div()
       .debug_selector(|| "session-conversation-pane".to_string())
@@ -972,7 +983,10 @@ impl SessionPage {
       .min_w(px(0.0))
       .min_h_0()
       .bg(theme.background);
-    if let Some(view) = self.agent_chat_view.clone() {
+    let view = tab
+      .and_then(|tab| self.chat_panel_for_tab(tab, cx))
+      .or_else(|| self.agent_chat_view.clone());
+    if let Some(view) = view {
       container = container.child(view);
     } else {
       container = container.child(self.render_center_empty_state(cx));
@@ -5229,6 +5243,86 @@ mod tests {
     });
     assert!(cx.debug_bounds("session-conversation-pane").is_some());
     assert!(cx.debug_bounds("session-diff-editor").is_some());
+  }
+
+  #[gpui::test]
+  async fn split_layouts_can_hold_two_distinct_chat_panels(cx: &mut TestAppContext) {
+    let repo = TempRepo::init("session-two-chat-split");
+    commit_text_file(&repo.path, Path::new("README.md"), "v1\n", "initial");
+    let (page, cx) = add_session_page_window(repo.path.clone(), cx);
+    cx.run_until_parked();
+
+    page.update_in(cx, |page, window, cx| page.new_session(window, cx));
+    cx.run_until_parked();
+    let first_panel = page.read_with(cx, |page, _| {
+      page.agent_chat_view.clone().expect("active panel")
+    });
+    first_panel.update(cx, |panel, cx| {
+      panel.seed_user_message_for_test("first", cx)
+    });
+    cx.run_until_parked();
+    let first_chat_tab = page.read_with(cx, |page, cx| page.active_chat_tab(cx));
+
+    page.update_in(cx, |page, window, cx| page.new_session(window, cx));
+    cx.run_until_parked();
+    let second_panel = page.read_with(cx, |page, _| {
+      page.agent_chat_view.clone().expect("active panel")
+    });
+    second_panel.update(cx, |panel, cx| {
+      panel.seed_user_message_for_test("second", cx)
+    });
+    cx.run_until_parked();
+    let second_chat_tab = page.read_with(cx, |page, cx| page.active_chat_tab(cx));
+
+    page.update_in(cx, |page, window, cx| {
+      let CenterNode::Pane(pane) = page.center_layout.root() else {
+        panic!("layout should start as a single pane");
+      };
+      assert!(page.center_layout.split_pane(
+        pane.id(),
+        CenterSurface::from_tab(first_chat_tab.clone()),
+        CenterSplitDirection::Left,
+      ));
+      page
+        .center_layout
+        .set_active_surface(CenterSurface::from_tab(second_chat_tab.clone()));
+      page.remember_center_layout_tab(second_chat_tab.clone());
+      page.ensure_center_layout_chat_panels(window, cx);
+      page.sync_agent_chat_close_control(cx);
+      cx.notify();
+    });
+    cx.run_until_parked();
+
+    page.read_with(cx, |page, cx| {
+      assert_eq!(
+        page
+          .chat_panel_for_tab(&first_chat_tab, cx)
+          .expect("first panel")
+          .entity_id(),
+        first_panel.entity_id()
+      );
+      assert_eq!(
+        page
+          .chat_panel_for_tab(&second_chat_tab, cx)
+          .expect("second panel")
+          .entity_id(),
+        second_panel.entity_id()
+      );
+      assert!(page.center_layout.contains_tab(&first_chat_tab));
+      assert!(page.center_layout.contains_tab(&second_chat_tab));
+    });
+
+    page.update_in(cx, |page, window, cx| {
+      page.activate_center_tab(first_chat_tab.clone(), OpenIntent::Open, window, cx)
+    });
+    cx.run_until_parked();
+    page.read_with(cx, |page, cx| {
+      assert_eq!(page.center_layout.active_tab(), &first_chat_tab);
+      assert_eq!(
+        page.session_list.read(cx).current_id(),
+        first_chat_tab.conversation_id().expect("chat id")
+      );
+    });
   }
 
   #[gpui::test]
