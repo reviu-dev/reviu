@@ -1434,6 +1434,29 @@ impl SessionPage {
       .map(|(layout_tab, _)| layout_tab.clone())
   }
 
+  fn center_split_representative_for_tab(&self, tab: &CenterTab) -> Option<CenterTab> {
+    if self.center_layout.surface_count() > 1
+      && self.center_layout.contains_tab(tab)
+      && let Some(active_tab) = self.active_center_tab.as_ref()
+    {
+      return Some(active_tab.clone());
+    }
+    if self
+      .center_layouts_by_tab
+      .get(tab)
+      .is_some_and(|layout| layout.surface_count() > 1 && layout.contains_tab(tab))
+    {
+      return Some(tab.clone());
+    }
+    self
+      .center_layouts_by_tab
+      .iter()
+      .find(|(layout_tab, layout)| {
+        *layout_tab != tab && layout.surface_count() > 1 && layout.contains_tab(tab)
+      })
+      .map(|(layout_tab, _)| layout_tab.clone())
+  }
+
   fn forget_placeholder_chat_tab(&mut self) {
     let placeholder_chat_tab = CenterTab::chat();
     self.center_tabs.retain(|tab| tab != &placeholder_chat_tab);

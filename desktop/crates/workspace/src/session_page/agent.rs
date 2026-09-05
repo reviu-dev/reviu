@@ -1420,14 +1420,25 @@ impl SessionPage {
   }
 
   fn reveal_active_session_chat(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-    self.remember_active_chat_tab(cx);
-    self.diff_chat_open = true;
-    if self.center != CenterView::Conversation {
-      self.center = CenterView::Conversation;
-      self.sync_agent_chat_close_control(cx);
-      cx.notify();
+    let chat_tab = self.active_chat_tab(cx);
+    if let Some(representative) = self.center_split_representative_for_tab(&chat_tab) {
+      self.save_active_center_layout();
+      self.restore_center_layout_for_tab(&representative);
+      if self.center_layout.contains_tab(&chat_tab) {
+        self
+          .center_layout
+          .set_active_surface(CenterSurface::from_tab(chat_tab));
+      }
+      self.active_center_tab = Some(representative.clone());
+      self.remember_center_tab_visit(representative);
+    } else {
+      self.remember_center_tab(chat_tab);
     }
+    self.diff_chat_open = true;
+    self.center = CenterView::Conversation;
+    self.sync_agent_chat_close_control(cx);
     self.focus_agent_input_on_next_frame(window, cx);
+    cx.notify();
   }
 
   pub(super) fn session_checkout_for_id(&self, id: &str, cx: &App) -> Option<PathBuf> {
@@ -1479,7 +1490,6 @@ impl SessionPage {
     if let Some(active) = self.agent_chat_view.as_ref()
       && active.read(cx).current_conversation().id == id
     {
-      self.remember_active_chat_tab(cx);
       self.reveal_active_session_chat(window, cx);
       return;
     }
@@ -1511,7 +1521,6 @@ impl SessionPage {
       store.update(cx, |store, cx| store.set_active(Some(id.to_string()), cx));
     }
     self.agent_chat_view = Some(panel);
-    self.remember_active_chat_tab(cx);
     self.evict_parked_chat_panels(cx);
     self.sync_agent_chat_close_control(cx);
     self.refresh_session_list(cx);
