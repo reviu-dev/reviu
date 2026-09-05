@@ -545,7 +545,7 @@ impl SessionList {
       .relative()
       .items_center()
       .gap_1()
-      .mx_2()
+      .mx_1()
       .mt_1()
       .px_2()
       .py_1()
@@ -705,7 +705,7 @@ impl SessionList {
       theme,
     )
     .debug_selector(move || selector.clone())
-    .mx_2()
+    .mx_1()
     .px_2()
     .py_1()
     .cursor_pointer()
@@ -1081,6 +1081,7 @@ impl Render for SessionList {
     } else {
       div()
         .id("session-page-session-list")
+        .debug_selector(|| "session-page-session-list".to_string())
         .flex_1()
         .min_h_0()
         .overflow_y_scroll()
@@ -1217,12 +1218,16 @@ mod tests {
     cx.run_until_parked();
 
     assert!(cx.debug_bounds("session-sidebar-projects-header").is_some());
+    let list_body = cx
+      .debug_bounds("session-page-session-list")
+      .expect("list body");
     let section = cx
       .debug_bounds("session-repo-section-/repo")
       .expect("project section");
     let main_checkout = cx
       .debug_bounds("session-checkout-main-/repo")
       .expect("main checkout row");
+    assert_eq!(main_checkout.origin.x, list_body.origin.x + px(4.0));
     assert_eq!(main_checkout.origin.x, section.origin.x);
     assert_eq!(
       main_checkout.origin.x + main_checkout.size.width,
