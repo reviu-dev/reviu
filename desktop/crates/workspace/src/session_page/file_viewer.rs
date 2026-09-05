@@ -1423,8 +1423,26 @@ impl SessionPage {
     if self.center != CenterView::Diff {
       return;
     }
+    self.show_conversation_or_empty(window, cx);
+  }
+
+  fn show_conversation_or_empty(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    if self.agent_chat_view.is_none() {
+      self.show_empty_center(window, cx);
+      return;
+    }
     self.center = CenterView::Conversation;
     self.remember_active_chat_tab(cx);
+    self.diff_chat_open = true;
+    self.sync_agent_chat_close_control(cx);
+    self.focus_agent_input_on_next_frame(window, cx);
+    cx.notify();
+  }
+
+  fn show_empty_center(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    self.center = CenterView::Conversation;
+    self.center_layout = CenterLayout::single(CenterSurface::from_tab(CenterTab::chat()));
+    self.active_center_tab = Some(CenterTab::chat());
     self.diff_chat_open = true;
     self.sync_agent_chat_close_control(cx);
     self.focus_agent_input_on_next_frame(window, cx);
@@ -1598,7 +1616,7 @@ impl SessionPage {
       self.activate_center_tab(next_tab, OpenIntent::Open, window, cx);
       return;
     }
-    self.new_session(window, cx);
+    self.show_empty_center(window, cx);
   }
 
   fn next_center_tab_after_closing(&self, closing_tab: &CenterTab) -> Option<CenterTab> {
@@ -1672,14 +1690,7 @@ impl SessionPage {
       return;
     }
 
-    self.center = CenterView::Conversation;
-    self.center_layout = CenterLayout::single(CenterSurface::from_tab(CenterTab::chat()));
-    self.active_center_tab = Some(CenterTab::chat());
-    self.remember_active_chat_tab(cx);
-    self.diff_chat_open = true;
-    self.sync_agent_chat_close_control(cx);
-    self.focus_agent_input_on_next_frame(window, cx);
-    cx.notify();
+    self.show_conversation_or_empty(window, cx);
   }
 
   fn close_center_tab_without_unsaved_prompt(
@@ -1714,12 +1725,7 @@ impl SessionPage {
       return;
     }
 
-    self.center = CenterView::Conversation;
-    self.remember_active_chat_tab(cx);
-    self.diff_chat_open = true;
-    self.sync_agent_chat_close_control(cx);
-    self.focus_agent_input_on_next_frame(window, cx);
-    cx.notify();
+    self.show_conversation_or_empty(window, cx);
   }
 
   pub(super) fn editor_is_dirty(&self, cx: &App) -> bool {
@@ -2367,10 +2373,10 @@ mod tests {
     page.update_in(cx, |page, window, cx| {
       page.activate_next_center_tab_action(&crate::NextCenterTab, window, cx);
     });
-    cx.run_until_parked();
+    await_open_file(&page, cx).await;
     page.read_with(cx, |page, _| {
-      assert_eq!(page.center, CenterView::Conversation);
-      assert_eq!(page.active_center_tab, Some(CenterTab::chat()));
+      assert_eq!(page.center, CenterView::Diff);
+      assert_eq!(page.warm_selected_file(), Some(Path::new("README.md")));
     });
 
     page.update_in(cx, |page, window, cx| {
@@ -2379,7 +2385,7 @@ mod tests {
     await_open_file(&page, cx).await;
     page.read_with(cx, |page, _| {
       assert_eq!(page.center, CenterView::Diff);
-      assert_eq!(page.warm_selected_file(), Some(Path::new("README.md")));
+      assert_eq!(page.warm_selected_file(), Some(Path::new("other.md")));
       assert_eq!(
         page.center_tabs,
         vec![
@@ -2393,10 +2399,10 @@ mod tests {
     page.update_in(cx, |page, window, cx| {
       page.activate_previous_center_tab_action(&crate::PreviousCenterTab, window, cx);
     });
-    cx.run_until_parked();
+    await_open_file(&page, cx).await;
     page.read_with(cx, |page, _| {
-      assert_eq!(page.center, CenterView::Conversation);
-      assert_eq!(page.active_center_tab, Some(CenterTab::chat()));
+      assert_eq!(page.center, CenterView::Diff);
+      assert_eq!(page.warm_selected_file(), Some(Path::new("README.md")));
     });
   }
 

@@ -971,8 +971,152 @@ impl SessionPage {
       .bg(theme.background);
     if let Some(view) = self.agent_chat_view.clone() {
       container = container.child(view);
+    } else {
+      container = container.child(self.render_center_empty_state(cx));
     }
     container.into_any_element()
+  }
+
+  fn render_center_empty_state(&self, cx: &mut Context<Self>) -> AnyElement {
+    let theme = cx.theme().clone();
+    let has_project = self.project_root(cx).is_some();
+    let title = self
+      .project_root(cx)
+      .and_then(|path| {
+        path
+          .file_name()
+          .map(|name| name.to_string_lossy().into_owned())
+      })
+      .filter(|name| !name.is_empty())
+      .unwrap_or_else(|| "Reviu".to_string());
+    let subtitle = if has_project {
+      "Choose a place to start"
+    } else {
+      "Open a project to start reviewing"
+    };
+
+    let mut actions = h_flex()
+      .debug_selector(|| "session-center-empty-actions".to_string())
+      .max_w(px(560.0))
+      .w_full()
+      .gap_3()
+      .flex_wrap()
+      .justify_center();
+
+    if has_project {
+      actions = actions
+        .child(self.render_center_empty_action(
+          "session-center-empty-new-chat",
+          gpui_component::Icon::new(UiIconName::SquarePen),
+          "Start chat",
+          "Ask an agent to work in this project",
+          cx.listener(|this, _, window, cx| this.new_session(window, cx)),
+          cx,
+        ))
+        .child(self.render_center_empty_action(
+          "session-center-empty-open-file",
+          gpui_component::Icon::new(UiIconName::Search),
+          "Open file",
+          "Search the current checkout",
+          cx.listener(|this, _, window, cx| this.open_file_search(window, cx)),
+          cx,
+        ))
+        .child(self.render_center_empty_action(
+          "session-center-empty-terminal",
+          gpui_component::Icon::new(UiIconName::SquareTerminal),
+          "Terminal",
+          "Open a shell for the project",
+          cx.listener(|this, _, window, cx| this.open_dock_tab(DockPanelTab::Terminal, window, cx)),
+          cx,
+        ));
+    } else {
+      actions = actions.child(self.render_center_empty_action(
+        "session-center-empty-open-project",
+        gpui_component::Icon::new(gpui_component::IconName::FolderOpen),
+        "Open project",
+        "Choose a repository or folder",
+        cx.listener(|this, _, window, cx| this.start_open_project(window, cx)),
+        cx,
+      ));
+    }
+
+    v_flex()
+      .debug_selector(|| "session-center-empty-state".to_string())
+      .size_full()
+      .items_center()
+      .justify_center()
+      .gap_6()
+      .px_6()
+      .pb_12()
+      .child(
+        v_flex()
+          .items_center()
+          .gap_1()
+          .child(
+            div()
+              .text_size(px(30.0))
+              .font_weight(gpui::FontWeight::BOLD)
+              .text_color(theme.foreground)
+              .child(title),
+          )
+          .child(
+            div()
+              .text_sm()
+              .text_color(theme.muted_foreground)
+              .child(subtitle),
+          ),
+      )
+      .child(actions)
+      .into_any_element()
+  }
+
+  fn render_center_empty_action(
+    &self,
+    id: &'static str,
+    icon: gpui_component::Icon,
+    title: &'static str,
+    subtitle: &'static str,
+    on_click: impl Fn(&gpui::ClickEvent, &mut Window, &mut App) + 'static,
+    cx: &mut Context<Self>,
+  ) -> AnyElement {
+    let theme = cx.theme().clone();
+    h_flex()
+      .id(id)
+      .debug_selector(move || id.to_string())
+      .w(px(176.0))
+      .min_h(px(82.0))
+      .items_center()
+      .gap_3()
+      .rounded(px(12.0))
+      .border_1()
+      .border_color(theme.border)
+      .bg(theme.secondary)
+      .px_4()
+      .py_3()
+      .cursor_pointer()
+      .hover(|this| this.bg(theme.secondary_hover))
+      .on_click(on_click)
+      .child(icon.size_4().text_color(theme.foreground))
+      .child(
+        v_flex()
+          .min_w_0()
+          .gap_1()
+          .child(
+            div()
+              .text_sm()
+              .font_weight(gpui::FontWeight::SEMIBOLD)
+              .text_color(theme.foreground)
+              .child(title),
+          )
+          .child(
+            div()
+              .text_xs()
+              .text_color(theme.muted_foreground)
+              .line_height(px(16.0))
+              .child(subtitle),
+          ),
+      )
+      .into_any_element()
   }
 
   fn editor_header_path_label(path: &Path) -> String {
@@ -3532,12 +3676,22 @@ mod tests {
   }
 
   #[gpui::test]
-  async fn center_tabs_keep_the_placeholder_chat_until_a_session_exists(cx: &mut TestAppContext) {
-    let repo = TempRepo::init("session-render-center-tab-icons");
+  async fn center_empty_state_replaces_placeholder_chat(cx: &mut TestAppContext) {
+    let repo = TempRepo::init("session-render-center-empty");
     commit_text_file(&repo.path, Path::new("package.json"), "{}\n", "initial");
 
     let (page, cx) = add_session_page_window(repo.path.clone(), cx);
     cx.run_until_parked();
+
+    page.read_with(cx, |page, _| {
+      let tabs = page.center_tabs_for_navigation();
+      assert!(!tabs.contains(&CenterTab::chat()));
+    });
+    assert!(cx.debug_bounds("session-center-empty-state").is_some());
+    assert!(cx.debug_bounds("session-center-empty-new-chat").is_some());
+    assert!(cx.debug_bounds("session-center-empty-open-file").is_some());
+    assert!(cx.debug_bounds("session-center-empty-terminal").is_some());
+    assert!(cx.debug_bounds("session-center-tab-chat").is_none());
 
     page.update_in(cx, |page, window, cx| {
       page.open_file(
@@ -3554,17 +3708,31 @@ mod tests {
 
     page.read_with(cx, |page, _| {
       let tabs = page.center_tabs_for_navigation();
-      assert!(tabs.contains(&CenterTab::chat()));
+      assert!(!tabs.contains(&CenterTab::chat()));
       assert!(tabs.contains(&CenterTab::file(PathBuf::from("package.json"))));
     });
-    assert!(cx.debug_bounds("session-center-tab-chat").is_some());
-    assert!(cx.debug_bounds("session-center-tab-agent-icon").is_some());
+    assert!(cx.debug_bounds("session-center-empty-state").is_none());
+    assert!(cx.debug_bounds("session-center-tab-chat").is_none());
     assert!(
       cx.debug_bounds("session-center-tab-file-package.json")
         .is_some()
     );
     assert!(cx.debug_bounds("session-center-tab-file-icon").is_some());
     assert!(cx.debug_bounds("session-center-tab-label").is_some());
+  }
+
+  #[gpui::test]
+  async fn center_empty_state_without_project_offers_open_project(cx: &mut TestAppContext) {
+    let (_page, cx) = add_session_page_window_without_repo(cx);
+    cx.run_until_parked();
+
+    assert!(cx.debug_bounds("session-center-empty-state").is_some());
+    assert!(
+      cx.debug_bounds("session-center-empty-open-project")
+        .is_some()
+    );
+    assert!(cx.debug_bounds("session-center-empty-new-chat").is_none());
+    assert!(cx.debug_bounds("session-center-tab-chat").is_none());
   }
 
   #[gpui::test]
@@ -3583,6 +3751,30 @@ mod tests {
       assert!(!tabs.contains(&CenterTab::chat()));
       assert!(tabs.contains(&active_chat_tab));
     });
+    assert!(cx.debug_bounds("session-center-empty-state").is_none());
+  }
+
+  #[gpui::test]
+  async fn closing_the_last_chat_returns_to_the_center_empty_state(cx: &mut TestAppContext) {
+    let repo = TempRepo::init("session-render-close-last-chat-empty");
+    let (page, cx) = add_session_page_window(repo.path.clone(), cx);
+    cx.run_until_parked();
+
+    page.update_in(cx, |page, window, cx| page.new_session(window, cx));
+    cx.run_until_parked();
+    assert!(cx.debug_bounds("session-center-empty-state").is_none());
+
+    page.update_in(cx, |page, window, cx| {
+      page.close_active_center_tab_action(&crate::CloseCenterTab, window, cx)
+    });
+    cx.run_until_parked();
+
+    page.read_with(cx, |page, _| {
+      assert!(page.center_tabs_for_navigation().is_empty());
+      assert_eq!(page.active_center_tab, Some(CenterTab::chat()));
+    });
+    assert!(cx.debug_bounds("session-center-empty-state").is_some());
+    assert!(cx.debug_bounds("session-center-tab-chat").is_none());
   }
 
   #[gpui::test]
@@ -5094,6 +5286,9 @@ mod tests {
     let (page, cx) = add_session_page_window(repo.path.clone(), cx);
     cx.run_until_parked();
 
+    page.update_in(cx, |page, window, cx| page.new_session(window, cx));
+    cx.run_until_parked();
+
     page.update_in(cx, |page, window, cx| {
       page.open_diff(
         PathBuf::from("README.md"),
@@ -5148,7 +5343,8 @@ mod tests {
     cx.run_until_parked();
 
     page.read_with(cx, |page, _| {
-      assert_eq!(page.center_layout.active_tab(), &CenterTab::chat());
+      assert_eq!(page.center_layout.active_tab().kind, CenterTabKind::Chat);
+      assert!(page.center_layout.active_tab().conversation_id().is_some());
       assert!(
         page
           .center_layout
@@ -5173,6 +5369,9 @@ mod tests {
     let (page, cx) = add_session_page_window(repo.path.clone(), cx);
     cx.run_until_parked();
 
+    page.update_in(cx, |page, window, cx| page.new_session(window, cx));
+    cx.run_until_parked();
+
     page.update_in(cx, |page, window, cx| {
       page.open_diff(
         PathBuf::from("README.md"),
@@ -5187,12 +5386,13 @@ mod tests {
       let CenterNode::Pane(pane) = page.center_layout.root() else {
         panic!("layout should start as a single pane");
       };
+      let chat_tab = page.active_chat_tab(cx);
       assert!(page.center_layout.split_pane(
         pane.id(),
-        CenterSurface::from_tab(CenterTab::chat()),
+        CenterSurface::from_tab(chat_tab.clone()),
         CenterSplitDirection::Right,
       ));
-      page.active_center_tab = Some(CenterTab::chat());
+      page.active_center_tab = Some(chat_tab);
       page.center = CenterView::Conversation;
       cx.notify();
     });

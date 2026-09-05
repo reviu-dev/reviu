@@ -1421,23 +1421,6 @@ impl SessionPage {
     tab.kind == CenterTabKind::Chat && tab.conversation_id.is_some()
   }
 
-  fn center_layout_contains_real_chat(layout: &CenterLayout) -> bool {
-    layout.tabs().iter().any(Self::is_real_chat_tab)
-  }
-
-  fn center_has_real_chat_tab(&self) -> bool {
-    self.center_tabs.iter().any(Self::is_real_chat_tab)
-      || self
-        .center_layouts_by_tab
-        .keys()
-        .any(Self::is_real_chat_tab)
-      || Self::center_layout_contains_real_chat(&self.center_layout)
-      || self
-        .center_layouts_by_tab
-        .values()
-        .any(Self::center_layout_contains_real_chat)
-  }
-
   fn center_layout_representative_for_tab(&self, tab: &CenterTab) -> Option<CenterTab> {
     if let Some(active_tab) = self.active_center_tab.as_ref()
       && active_tab != tab
@@ -1450,10 +1433,6 @@ impl SessionPage {
       .iter()
       .find(|(layout_tab, layout)| *layout_tab != tab && layout.contains_tab(tab))
       .map(|(layout_tab, _)| layout_tab.clone())
-  }
-
-  fn center_tab_embedded_in_layout(&self, tab: &CenterTab) -> bool {
-    self.center_layout_representative_for_tab(tab).is_some()
   }
 
   fn forget_placeholder_chat_tab(&mut self) {
@@ -1482,23 +1461,13 @@ impl SessionPage {
 
   fn center_tabs_for_navigation(&self) -> Vec<CenterTab> {
     let mut tabs = self.center_tabs.clone();
+    tabs.retain(|tab| !Self::is_placeholder_chat_tab(tab));
     if self.center == CenterView::InteractiveRebase
       && !tabs
         .iter()
         .any(|tab| tab.kind == CenterTabKind::InteractiveRebase)
     {
       tabs.push(CenterTab::interactive_rebase());
-    }
-
-    let placeholder_chat_tab = CenterTab::chat();
-    let show_placeholder_chat_tab = !self.center_has_real_chat_tab()
-      && !self.center_tab_embedded_in_layout(&placeholder_chat_tab);
-    if show_placeholder_chat_tab {
-      if !tabs.iter().any(|tab| tab == &placeholder_chat_tab) {
-        tabs.insert(0, placeholder_chat_tab);
-      }
-    } else {
-      tabs.retain(|tab| !Self::is_placeholder_chat_tab(tab));
     }
     tabs
   }
