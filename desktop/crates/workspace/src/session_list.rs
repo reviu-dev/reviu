@@ -7,9 +7,10 @@ use std::rc::Rc;
 use agent_chat_panel::{ConversationMeta, WorktreeBinding};
 use gpui::{
   Anchor, Bounds, Context, DismissEvent, DragMoveEvent, Entity, EventEmitter, Focusable as _,
-  IntoElement, MouseExitEvent, Pixels, Point, Render, SharedString, Window, div, prelude::*, px,
+  IntoElement, MouseExitEvent, Pixels, Point, Render, SharedString, WeakEntity, Window, div,
+  prelude::*, px,
 };
-use gpui_component::menu::{PopupMenu, PopupMenuItem};
+use gpui_component::menu::{ContextMenuExt as _, PopupMenu, PopupMenuItem};
 use gpui_component::popover::Popover;
 use gpui_component::scroll::ScrollableElement as _;
 use gpui_component::{ActiveTheme as _, ElementExt as _, Icon, Sizable as _, h_flex, v_flex};
@@ -528,8 +529,10 @@ impl SessionList {
     let toggle_repo = repo_root.to_path_buf();
     let create_repo = repo_root.to_path_buf();
     let options_repo = repo_root.to_path_buf();
+    let context_repo = repo_root.to_path_buf();
     let drag_repo = repo_root.to_path_buf();
     let bounds_repo = repo_root.to_path_buf();
+    let context_entity = cx.entity().downgrade();
     let group_name = SharedString::from(format!("repo-section-{}", repo_root.display()));
     let menu_open = self.open_menu_project.as_deref() == Some(repo_root);
     let drop_gap = self.drop_gap.filter(|_| cx.has_active_drag());
@@ -651,6 +654,21 @@ impl SessionList {
               .child(Self::render_options_button(options_repo, cx)),
           ),
       )
+      .context_menu(move |menu, window, cx| {
+        let menu = if git_backed {
+          Self::build_project_create_menu(
+            menu,
+            context_repo.clone(),
+            context_entity.clone(),
+            window,
+            cx,
+          )
+          .separator()
+        } else {
+          menu
+        };
+        Self::build_project_options_menu(menu, context_repo.clone(), context_entity.clone())
+      })
       .into_any_element()
   }
 
@@ -824,6 +842,148 @@ impl SessionList {
 
   /// The create menu of one Git project section: the worktree base picker reads
   /// branches from that repository at menu-open time.
+  fn build_project_create_menu(
+    menu: PopupMenu,
+    repo_root: PathBuf,
+    entity: WeakEntity<SessionList>,
+    window: &mut Window,
+    cx: &mut Context<PopupMenu>,
+  ) -> PopupMenu {
+    let submenu_repo = repo_root;
+    let submenu_entity = entity;
+    menu.submenu_with_icon(
+      Some(Icon::new(UiIconName::GitBranch)),
+      "New worktree",
+      window,
+      cx,
+      move |menu, _, _| {
+        let mut menu = menu.max_h(px(360.)).scrollable(true);
+        let base_candidates: Vec<SharedString> = git::list_branches(&submenu_repo)
+          .ok()
+          .unwrap_or_default()
+          .into_iter()
+          .filter(|branch| branch.kind == git::BranchKind::Local)
+          .map(|branch| SharedString::from(branch.name))
+          .collect();
+        let default_entity = submenu_entity.clone();
+        let default_repo = submenu_repo.clone();
+        menu = menu.item(
+          PopupMenuItem::element(move |_, cx| {
+            let theme = cx.theme().clone();
+            div()
+              .text_sm()
+              .text_color(theme.foreground)
+              .debug_selector(|| "session-worktree-base-default".to_string())
+              .child("Default branch")
+              .into_any_element()
+          })
+          .on_click(move |_, _, cx| {
+            let repo_root = default_repo.clone();
+            let _ = default_entity.update(cx, |_, cx| {
+              cx.emit(SessionListEvent::NewWorktreeSessionIn {
+                project_root: repo_root,
+                base: None,
+              });
+            });
+          }),
+        );
+        // Any branch is a valid base: the worktree gets a NEW branch at its
+        // commit, nothing is checked out twice.
+        for candidate in &base_candidates {
+          let label = candidate.clone();
+          let base = candidate.to_string();
+          let entity = submenu_entity.clone();
+          let item_repo = submenu_repo.clone();
+          menu = menu.item(
+            PopupMenuItem::element(move |_, cx| {
+              let theme = cx.theme().clone();
+              h_flex()
+                .gap_2()
+                .items_center()
+                .child(
+                  Icon::new(UiIconName::GitBranch)
+                    .small()
+                    .text_color(theme.muted_foreground),
+                )
+                .child(div().text_sm().child(label.clone()))
+                .into_any_element()
+            })
+            .on_click(move |_, _, cx| {
+              let repo_root = item_repo.clone();
+              let base = base.clone();
+              let _ = entity.update(cx, |_, cx| {
+                cx.emit(SessionListEvent::NewWorktreeSessionIn {
+                  project_root: repo_root,
+                  base: Some(base),
+                });
+              });
+            }),
+          );
+        }
+        menu
+      },
+    )
+  }
+
+  fn build_project_options_menu(
+    menu: PopupMenu,
+    repo_root: PathBuf,
+    entity: WeakEntity<SessionList>,
+  ) -> PopupMenu {
+    let reveal_repo = repo_root.clone();
+    let reveal_entity = entity.clone();
+    let copy_repo = repo_root.clone();
+    let copy_entity = entity.clone();
+    let remove_repo = repo_root;
+    let remove_entity = entity;
+    let reveal_label = if cfg!(target_os = "macos") {
+      "Reveal in Finder"
+    } else if cfg!(target_os = "windows") {
+      "Reveal in File Explorer"
+    } else {
+      "Reveal in file manager"
+    };
+
+    menu
+      .item(
+        PopupMenuItem::new(reveal_label)
+          .icon(gpui_component::IconName::FolderOpen)
+          .on_click(move |_, _, cx| {
+            let repo_root = reveal_repo.clone();
+            let _ = reveal_entity.update(cx, |_, cx| {
+              cx.emit(SessionListEvent::RevealProject {
+                project_root: repo_root,
+              });
+            });
+          }),
+      )
+      .item(
+        PopupMenuItem::new("Copy path")
+          .icon(gpui_component::IconName::Copy)
+          .on_click(move |_, _, cx| {
+            let repo_root = copy_repo.clone();
+            let _ = copy_entity.update(cx, |_, cx| {
+              cx.emit(SessionListEvent::CopyProjectPath {
+                project_root: repo_root,
+              });
+            });
+          }),
+      )
+      .separator()
+      .item(
+        PopupMenuItem::new("Remove from sidebar")
+          .icon(UiIconName::Trash)
+          .on_click(move |_, _, cx| {
+            let repo_root = remove_repo.clone();
+            let _ = remove_entity.update(cx, |_, cx| {
+              cx.emit(SessionListEvent::RemoveProject {
+                project_root: repo_root,
+              });
+            });
+          }),
+      )
+  }
+
   fn render_create_button(project_root: PathBuf, cx: &mut Context<Self>) -> impl IntoElement {
     let repo_root = project_root;
     let entity = cx.entity().downgrade();
@@ -844,80 +1004,7 @@ impl SessionList {
       button,
       cx,
       move |menu, window, cx| {
-        let submenu_repo = repo_root.clone();
-        let submenu_entity = entity.clone();
-        menu.submenu_with_icon(
-          Some(Icon::new(UiIconName::GitBranch)),
-          "New worktree",
-          window,
-          cx,
-          move |menu, _, _| {
-            let mut menu = menu.max_h(px(360.)).scrollable(true);
-            let base_candidates: Vec<SharedString> = git::list_branches(&submenu_repo)
-              .ok()
-              .unwrap_or_default()
-              .into_iter()
-              .filter(|branch| branch.kind == git::BranchKind::Local)
-              .map(|branch| SharedString::from(branch.name))
-              .collect();
-            let default_entity = submenu_entity.clone();
-            let default_repo = submenu_repo.clone();
-            menu = menu.item(
-              PopupMenuItem::element(move |_, cx| {
-                let theme = cx.theme().clone();
-                div()
-                  .text_sm()
-                  .text_color(theme.foreground)
-                  .debug_selector(|| "session-worktree-base-default".to_string())
-                  .child("Default branch")
-                  .into_any_element()
-              })
-              .on_click(move |_, _, cx| {
-                let repo_root = default_repo.clone();
-                let _ = default_entity.update(cx, |_, cx| {
-                  cx.emit(SessionListEvent::NewWorktreeSessionIn {
-                    project_root: repo_root,
-                    base: None,
-                  });
-                });
-              }),
-            );
-            // Any branch is a valid base: the worktree gets a NEW branch at its
-            // commit, nothing is checked out twice.
-            for candidate in &base_candidates {
-              let label = candidate.clone();
-              let base = candidate.to_string();
-              let entity = submenu_entity.clone();
-              let item_repo = submenu_repo.clone();
-              menu = menu.item(
-                PopupMenuItem::element(move |_, cx| {
-                  let theme = cx.theme().clone();
-                  h_flex()
-                    .gap_2()
-                    .items_center()
-                    .child(
-                      Icon::new(UiIconName::GitBranch)
-                        .small()
-                        .text_color(theme.muted_foreground),
-                    )
-                    .child(div().text_sm().child(label.clone()))
-                    .into_any_element()
-                })
-                .on_click(move |_, _, cx| {
-                  let repo_root = item_repo.clone();
-                  let base = base.clone();
-                  let _ = entity.update(cx, |_, cx| {
-                    cx.emit(SessionListEvent::NewWorktreeSessionIn {
-                      project_root: repo_root,
-                      base: Some(base),
-                    });
-                  });
-                }),
-              );
-            }
-            menu
-          },
-        )
+        Self::build_project_create_menu(menu, repo_root.clone(), entity.clone(), window, cx)
       },
     )
   }
@@ -941,59 +1028,7 @@ impl SessionList {
       "options".into(),
       button,
       cx,
-      move |menu, _, _| {
-        let reveal_repo = repo_root.clone();
-        let reveal_entity = entity.clone();
-        let copy_repo = repo_root.clone();
-        let copy_entity = entity.clone();
-        let remove_repo = repo_root.clone();
-        let remove_entity = entity.clone();
-        let reveal_label = if cfg!(target_os = "macos") {
-          "Reveal in Finder"
-        } else if cfg!(target_os = "windows") {
-          "Reveal in File Explorer"
-        } else {
-          "Reveal in file manager"
-        };
-        menu
-          .item(
-            PopupMenuItem::new(reveal_label)
-              .icon(gpui_component::IconName::FolderOpen)
-              .on_click(move |_, _, cx| {
-                let repo_root = reveal_repo.clone();
-                let _ = reveal_entity.update(cx, |_, cx| {
-                  cx.emit(SessionListEvent::RevealProject {
-                    project_root: repo_root,
-                  });
-                });
-              }),
-          )
-          .item(
-            PopupMenuItem::new("Copy path")
-              .icon(gpui_component::IconName::Copy)
-              .on_click(move |_, _, cx| {
-                let repo_root = copy_repo.clone();
-                let _ = copy_entity.update(cx, |_, cx| {
-                  cx.emit(SessionListEvent::CopyProjectPath {
-                    project_root: repo_root,
-                  });
-                });
-              }),
-          )
-          .separator()
-          .item(
-            PopupMenuItem::new("Remove from sidebar")
-              .icon(UiIconName::Trash)
-              .on_click(move |_, _, cx| {
-                let repo_root = remove_repo.clone();
-                let _ = remove_entity.update(cx, |_, cx| {
-                  cx.emit(SessionListEvent::RemoveProject {
-                    project_root: repo_root,
-                  });
-                });
-              }),
-          )
-      },
+      move |menu, _, _| Self::build_project_options_menu(menu, repo_root.clone(), entity.clone()),
     )
   }
 }
@@ -1433,6 +1468,92 @@ mod tests {
     list.read_with(cx, |list, _| {
       assert_eq!(list.open_menu_project.as_deref(), Some(repo.as_path()));
     });
+  }
+
+  fn open_project_context_menu(cx: &mut gpui::VisualTestContext, selector: &'static str) {
+    let header = cx.debug_bounds(selector).expect("project section header");
+    cx.simulate_event(gpui::MouseDownEvent {
+      button: gpui::MouseButton::Right,
+      position: header.center(),
+      modifiers: gpui::Modifiers::default(),
+      click_count: 1,
+      first_mouse: false,
+    });
+    cx.run_until_parked();
+    cx.update(|window, cx| {
+      let _ = window.draw(cx);
+    });
+  }
+
+  #[gpui::test]
+  async fn project_context_menu_copies_the_project_path(cx: &mut gpui::TestAppContext) {
+    cx.update(gpui_component::init);
+    let list = cx.new(|_| SessionList::new());
+    let mounted = list.clone();
+    let (_root, cx) =
+      cx.add_window_view(move |window, cx| gpui_component::Root::new(mounted.clone(), window, cx));
+    let project = PathBuf::from("/plain-project");
+
+    list.update(cx, |list, cx| {
+      list.set_project_order(vec![project.clone()], cx);
+    });
+    cx.run_until_parked();
+
+    let copied = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+    let seen = copied.clone();
+    let observer = cx.update(|_, cx| {
+      cx.subscribe(&list, move |_, event: &SessionListEvent, _| {
+        if let SessionListEvent::CopyProjectPath { project_root } = event {
+          seen.borrow_mut().push(project_root.clone());
+        }
+      })
+    });
+
+    open_project_context_menu(cx, "session-repo-section-/plain-project");
+    cx.simulate_keystrokes("down down enter");
+    cx.run_until_parked();
+    drop(observer);
+
+    assert_eq!(
+      copied.borrow().as_slice(),
+      &[PathBuf::from("/plain-project")]
+    );
+  }
+
+  #[gpui::test]
+  async fn git_project_context_menu_can_start_a_worktree(cx: &mut gpui::TestAppContext) {
+    cx.update(gpui_component::init);
+    let list = cx.new(|_| SessionList::new());
+    let mounted = list.clone();
+    let (_root, cx) =
+      cx.add_window_view(move |window, cx| gpui_component::Root::new(mounted.clone(), window, cx));
+    let repo = PathBuf::from("/repo");
+
+    list.update(cx, |list, cx| {
+      list.set_project_order(vec![repo.clone()], cx);
+      list.set_git_repositories(HashSet::from([repo.clone()]), cx);
+    });
+    cx.run_until_parked();
+
+    let starts = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+    let seen = starts.clone();
+    let observer = cx.update(|_, cx| {
+      cx.subscribe(&list, move |_, event: &SessionListEvent, _| {
+        if let SessionListEvent::NewWorktreeSessionIn { project_root, base } = event {
+          seen.borrow_mut().push((project_root.clone(), base.clone()));
+        }
+      })
+    });
+
+    open_project_context_menu(cx, "session-repo-section-/repo");
+    cx.simulate_keystrokes("down right enter");
+    cx.run_until_parked();
+    drop(observer);
+
+    assert_eq!(
+      starts.borrow().as_slice(),
+      &[(PathBuf::from("/repo"), None)]
+    );
   }
 
   #[gpui::test]
