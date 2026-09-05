@@ -837,7 +837,6 @@ impl SessionPage {
       .w_full()
       .h_full()
       .underline()
-      .menu(true)
       .selected_index(selected_index)
       .suffix(
         h_flex()
