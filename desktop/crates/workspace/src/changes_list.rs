@@ -8,14 +8,15 @@ use git::{
   restore_renamed_file, stage_file, unstage_file,
 };
 use gpui::{
-  AnyElement, App, Context, Entity, EventEmitter, Focusable as _, IntoElement, ParentElement,
-  SharedString, Styled, Task, WeakEntity, Window, div, img, prelude::*, px,
+  AnyElement, App, ClipboardItem, Context, Entity, EventEmitter, Focusable as _, IntoElement,
+  ParentElement, SharedString, Styled, Task, WeakEntity, Window, div, img, prelude::*, px,
 };
 use gpui_component::{
   ActiveTheme as _, Icon, IconName, IndexPath, Sizable as _,
   button::{Button, ButtonGroup},
   h_flex,
   list::{List, ListDelegate, ListEvent, ListItem, ListState},
+  menu::{ContextMenuExt as _, PopupMenu, PopupMenuItem},
   notification::Notification,
   tooltip::Tooltip,
 };
@@ -253,6 +254,78 @@ impl ChangesRowsDelegate {
   fn shows_row_actions(&self, ix: IndexPath) -> bool {
     row_actions_visible(self.selected_index, self.hovered_index, ix, cfg!(test))
   }
+
+  fn build_context_menu(
+    menu: PopupMenu,
+    list: WeakEntity<ChangesList>,
+    path: PathBuf,
+    status_kind: RepoStatusKind,
+    toggle: FileStageButtonAction,
+    restorable: bool,
+  ) -> PopupMenu {
+    let open_path = path.clone();
+    let open_list = list.clone();
+    let action_path = path.clone();
+    let action_list = list.clone();
+    let discard_path = path.clone();
+    let discard_list = list.clone();
+    let copy_path = path;
+    let (toggle_label, toggle_icon) = match toggle {
+      FileStageButtonAction::Stage => ("Stage file", IconName::Plus),
+      FileStageButtonAction::Unstage => ("Unstage file", IconName::Minus),
+    };
+
+    menu
+      .item(
+        PopupMenuItem::new("Open")
+          .icon(IconName::File)
+          .on_click(move |_, _, cx| {
+            let path = open_path.clone();
+            let _ = open_list.update(cx, |_, cx| {
+              cx.emit(ChangesListEvent::OpenFile {
+                path,
+                intent: OpenIntent::Open,
+              });
+            });
+          }),
+      )
+      .separator()
+      .item(
+        PopupMenuItem::new(toggle_label)
+          .icon(toggle_icon)
+          .on_click(move |_, window, cx| {
+            let path = action_path.clone();
+            let _ = action_list.update(cx, |list, cx| match toggle {
+              FileStageButtonAction::Stage => {
+                list.stage_file_with_confirmation(path, status_kind, window, cx)
+              }
+              FileStageButtonAction::Unstage => list.unstage_file(path, window, cx),
+            });
+          }),
+      )
+      .when(restorable, |menu| {
+        menu.item(
+          PopupMenuItem::new("Discard changes")
+            .icon(IconName::Undo)
+            .on_click(move |_, window, cx| {
+              let path = discard_path.clone();
+              let _ = discard_list.update(cx, |list, cx| {
+                list.confirm_restore_file(path, status_kind, window, cx);
+              });
+            }),
+        )
+      })
+      .separator()
+      .item(
+        PopupMenuItem::new("Copy path")
+          .icon(IconName::Copy)
+          .on_click(move |_, _, cx| {
+            cx.write_to_clipboard(ClipboardItem::new_string(
+              copy_path.to_string_lossy().into_owned(),
+            ));
+          }),
+      )
+  }
 }
 
 fn row_actions_visible(
@@ -407,18 +480,18 @@ impl ListDelegate for ChangesRowsDelegate {
         status.into_any_element()
       }
     };
+    let is_staged_section = self
+      .sections
+      .get(ix.section)
+      .map(|section| section.is_staged)
+      .unwrap_or(false);
+    let toggle = toggle_stage_action(entry.stage, self.split_sections, is_staged_section);
+    let (toggle_icon, toggle_tooltip) = match toggle {
+      FileStageButtonAction::Stage => (IconName::Plus, "Stage file"),
+      FileStageButtonAction::Unstage => (IconName::Minus, "Unstage file"),
+    };
+    let restorable = can_restore(entry.stage);
     let row_actions = show_row_actions.then(|| {
-      let is_staged_section = self
-        .sections
-        .get(ix.section)
-        .map(|section| section.is_staged)
-        .unwrap_or(false);
-      let toggle = toggle_stage_action(entry.stage, self.split_sections, is_staged_section);
-      let (toggle_icon, toggle_tooltip) = match toggle {
-        FileStageButtonAction::Stage => (IconName::Plus, "Stage file"),
-        FileStageButtonAction::Unstage => (IconName::Minus, "Unstage file"),
-      };
-      let restorable = can_restore(entry.stage);
       let list = self.list.clone();
       let path = path.clone();
       div()
@@ -474,59 +547,66 @@ impl ListDelegate for ChangesRowsDelegate {
         .into_any_element()
     });
 
-    Some(
-      base.px_2().py_1().child(
+    let menu_list = self.list.clone();
+    let menu_path = path.clone();
+    let row_content = h_flex()
+      .id(format!("changes-row-content-{}-{}", ix.section, ix.row))
+      .group("changes-row")
+      .size_full()
+      .items_center()
+      .relative()
+      .gap_2()
+      .child(
         h_flex()
-          .group("changes-row")
-          .size_full()
           .items_center()
-          .relative()
+          .min_w_0()
           .gap_2()
+          .child(status_element)
+          .child(stage_element)
+          .child(file_icon)
           .child(
             h_flex()
-              .items_center()
-              .min_w_0()
-              .gap_2()
-              .child(status_element)
-              .child(stage_element)
-              .child(file_icon)
+              .flex_1()
+              .min_w(px(0.0))
+              .overflow_hidden()
+              .text_sm()
+              .whitespace_nowrap()
+              .gap_1()
               .child(
-                h_flex()
-                  .flex_1()
-                  .min_w(px(0.0))
-                  .overflow_hidden()
-                  .text_sm()
-                  .whitespace_nowrap()
-                  .gap_1()
-                  .child(
-                    div()
-                      .debug_selector(move || {
-                        format!("changes-file-name-{}-{}", ix.section, ix.row)
-                      })
-                      .flex_shrink_0()
-                      .text_color(theme.foreground)
-                      .child(file_name),
-                  )
-                  .when(!parent_path.is_empty(), |this| {
-                    this.child(
-                      div()
-                        .debug_selector(move || {
-                          format!("changes-file-path-{}-{}", ix.section, ix.row)
-                        })
-                        .min_w_0()
-                        .overflow_hidden()
-                        .whitespace_nowrap()
-                        .text_ellipsis_start()
-                        .text_xs()
-                        .text_color(theme.muted_foreground)
-                        .child(parent_path),
-                    )
-                  }),
-              ),
-          )
-          .children(row_actions),
-      ),
-    )
+                div()
+                  .debug_selector(move || format!("changes-file-name-{}-{}", ix.section, ix.row))
+                  .flex_shrink_0()
+                  .text_color(theme.foreground)
+                  .child(file_name),
+              )
+              .when(!parent_path.is_empty(), |this| {
+                this.child(
+                  div()
+                    .debug_selector(move || format!("changes-file-path-{}-{}", ix.section, ix.row))
+                    .min_w_0()
+                    .overflow_hidden()
+                    .whitespace_nowrap()
+                    .text_ellipsis_start()
+                    .text_xs()
+                    .text_color(theme.muted_foreground)
+                    .child(parent_path),
+                )
+              }),
+          ),
+      )
+      .children(row_actions)
+      .context_menu(move |menu, _window, _cx| {
+        Self::build_context_menu(
+          menu,
+          menu_list.clone(),
+          menu_path.clone(),
+          status_kind,
+          toggle,
+          restorable,
+        )
+      });
+
+    Some(base.px_2().py_1().child(row_content))
   }
 
   fn set_selected_index(
@@ -1171,6 +1251,72 @@ mod tests {
       opened.lock().unwrap().clone(),
       Some(PathBuf::from("README.md"))
     );
+
+    let _ = std::fs::remove_dir_all(&repo_root);
+  }
+
+  fn open_row_context_menu(cx: &mut gpui::VisualTestContext, selector: &'static str) {
+    let row = cx.debug_bounds(selector).expect("row bounds");
+    cx.simulate_event(gpui::MouseDownEvent {
+      button: gpui::MouseButton::Right,
+      position: row.center(),
+      modifiers: gpui::Modifiers::default(),
+      click_count: 1,
+      first_mouse: false,
+    });
+    cx.run_until_parked();
+    cx.update(|window, cx| {
+      let _ = window.draw(cx);
+    });
+  }
+
+  #[gpui::test]
+  async fn row_context_menu_can_open_the_file(cx: &mut gpui::TestAppContext) {
+    let repo_root = temp_repo("changes-list-context-open");
+    let (list, cx) = add_changes_list_window(repo_root.clone(), cx);
+    set_entries_from_disk(&list, cx, &repo_root);
+
+    let opened = std::sync::Arc::new(std::sync::Mutex::new(Vec::<(PathBuf, OpenIntent)>::new()));
+    let observer = {
+      let opened = opened.clone();
+      cx.update(|_, cx| {
+        cx.subscribe(&list, move |_, event: &ChangesListEvent, _| {
+          if let ChangesListEvent::OpenFile { path, intent } = event {
+            opened.lock().unwrap().push((path.clone(), *intent));
+          }
+        })
+      })
+    };
+
+    open_row_context_menu(cx, "changes-row-0-0");
+    cx.simulate_keystrokes("down enter");
+    cx.run_until_parked();
+    drop(observer);
+
+    assert_eq!(
+      opened.lock().unwrap().clone(),
+      vec![(PathBuf::from("README.md"), OpenIntent::Open)]
+    );
+
+    let _ = std::fs::remove_dir_all(&repo_root);
+  }
+
+  #[gpui::test]
+  async fn row_context_menu_can_stage_the_file(cx: &mut gpui::TestAppContext) {
+    let repo_root = temp_repo("changes-list-context-stage");
+    let (list, cx) = add_changes_list_window(repo_root.clone(), cx);
+    set_entries_from_disk(&list, cx, &repo_root);
+
+    open_row_context_menu(cx, "changes-row-0-0");
+    cx.simulate_keystrokes("down down enter");
+    cx.run_until_parked();
+    let task = list.update(cx, |list, _| list._action_task.take().expect("stage task"));
+    task.await;
+    cx.run_until_parked();
+
+    let entries = list_repo_status(&repo_root).expect("status");
+    assert_eq!(entries.len(), 1);
+    assert_eq!(entries[0].stage, RepoStage::Staged);
 
     let _ = std::fs::remove_dir_all(&repo_root);
   }
