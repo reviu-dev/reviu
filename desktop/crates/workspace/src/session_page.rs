@@ -1457,6 +1457,14 @@ impl SessionPage {
       .map(|(layout_tab, _)| layout_tab.clone())
   }
 
+  fn center_layout_chat_id(&self) -> Option<String> {
+    self
+      .center_layout
+      .tabs()
+      .into_iter()
+      .find_map(|tab| tab.conversation_id().map(ToOwned::to_owned))
+  }
+
   fn forget_placeholder_chat_tab(&mut self) {
     let placeholder_chat_tab = CenterTab::chat();
     self.center_tabs.retain(|tab| tab != &placeholder_chat_tab);
@@ -1616,8 +1624,11 @@ impl SessionPage {
     }
     self.active_center_tab = Some(tab.clone());
     if has_saved_split_layout {
+      let focused_tab = self.center_layout.active_tab().clone();
+      if let Some(conversation_id) = self.center_layout_chat_id() {
+        self.activate_session_panel(&conversation_id, window, cx);
+      }
       self.active_center_tab = Some(tab.clone());
-      let focused_tab = self.center_layout.active_tab();
       self.center = match focused_tab.kind {
         CenterTabKind::Chat => CenterView::Conversation,
         CenterTabKind::File | CenterTabKind::Diff => CenterView::Diff,

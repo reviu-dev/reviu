@@ -309,6 +309,11 @@ impl SessionList {
   }
 
   #[cfg(test)]
+  pub(crate) fn current_id(&self) -> &str {
+    &self.current_id
+  }
+
+  #[cfg(test)]
   pub(crate) fn conversation_ids(&self) -> Vec<String> {
     self
       .conversations

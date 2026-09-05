@@ -1483,6 +1483,16 @@ impl SessionPage {
     window: &mut Window,
     cx: &mut Context<Self>,
   ) {
+    self.activate_session_panel(id, window, cx);
+    self.reveal_active_session_chat(window, cx);
+  }
+
+  pub(super) fn activate_session_panel(
+    &mut self,
+    id: &str,
+    window: &mut Window,
+    cx: &mut Context<Self>,
+  ) {
     prune_agent_chat_state_once();
     if let Some(evicted_project) = self.ensure_chat_store(cx) {
       self.push_project_hidden_notification(&evicted_project, window, cx);
@@ -1490,7 +1500,7 @@ impl SessionPage {
     if let Some(active) = self.agent_chat_view.as_ref()
       && active.read(cx).current_conversation().id == id
     {
-      self.reveal_active_session_chat(window, cx);
+      self.refresh_session_list(cx);
       return;
     }
     self.park_active_chat_panel(cx);
@@ -1525,7 +1535,6 @@ impl SessionPage {
     self.sync_agent_chat_close_control(cx);
     self.refresh_session_list(cx);
     self.sync_active_checkout(window, cx);
-    self.reveal_active_session_chat(window, cx);
     cx.notify();
   }
 

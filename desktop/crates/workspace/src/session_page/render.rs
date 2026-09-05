@@ -5232,6 +5232,87 @@ mod tests {
   }
 
   #[gpui::test]
+  async fn activating_a_split_tab_group_selects_its_chat_in_the_sidebar(cx: &mut TestAppContext) {
+    let repo = TempRepo::init("session-split-tab-group-selects-chat");
+    commit_text_file(&repo.path, Path::new("analytics.ts"), "one\n", "initial");
+    let (page, cx) = add_session_page_window(repo.path.clone(), cx);
+    cx.run_until_parked();
+
+    page.update_in(cx, |page, window, cx| page.new_session(window, cx));
+    cx.run_until_parked();
+    let first_panel = page.read_with(cx, |page, _| {
+      page.agent_chat_view.clone().expect("active panel")
+    });
+    first_panel.update(cx, |panel, cx| {
+      panel.seed_user_message_for_test("first", cx)
+    });
+    cx.run_until_parked();
+    let first_id = first_panel.read_with(cx, |panel, _| panel.current_conversation().id.clone());
+    let first_chat_tab = page.read_with(cx, |page, cx| page.active_chat_tab(cx));
+    let analytics = CenterTab::file(PathBuf::from("analytics.ts"));
+
+    page.update_in(cx, |page, window, cx| {
+      page.open_file(
+        PathBuf::from("analytics.ts"),
+        None,
+        None,
+        OpenIntent::Open,
+        window,
+        cx,
+      );
+    });
+    await_open_file(&page, cx).await;
+    page.update(cx, |page, cx| {
+      let CenterNode::Pane(pane) = page.center_layout.root() else {
+        panic!("layout should start as a single pane");
+      };
+      assert!(page.center_layout.split_pane(
+        pane.id(),
+        CenterSurface::from_tab(first_chat_tab.clone()),
+        CenterSplitDirection::Left,
+      ));
+      page
+        .center_layout
+        .set_active_surface(CenterSurface::from_tab(analytics.clone()));
+      page.remember_center_layout_tab(analytics.clone());
+      page.center = CenterView::Diff;
+      cx.notify();
+    });
+    cx.run_until_parked();
+
+    page.update_in(cx, |page, window, cx| page.new_session(window, cx));
+    cx.run_until_parked();
+    let second_panel = page.read_with(cx, |page, _| {
+      page.agent_chat_view.clone().expect("active panel")
+    });
+    second_panel.update(cx, |panel, cx| {
+      panel.seed_user_message_for_test("second", cx)
+    });
+    cx.run_until_parked();
+    let second_id = second_panel.read_with(cx, |panel, _| panel.current_conversation().id.clone());
+    page.read_with(cx, |page, cx| {
+      assert_eq!(page.session_list.read(cx).current_id(), second_id);
+    });
+
+    page.update_in(cx, |page, window, cx| {
+      page.activate_center_tab(analytics.clone(), OpenIntent::Open, window, cx)
+    });
+    await_open_file(&page, cx).await;
+    cx.run_until_parked();
+
+    let restored_panel = page.read_with(cx, |page, _| {
+      page.agent_chat_view.clone().expect("active panel")
+    });
+    assert_eq!(restored_panel.entity_id(), first_panel.entity_id());
+    page.read_with(cx, |page, cx| {
+      assert_eq!(page.session_list.read(cx).current_id(), first_id);
+      assert_eq!(page.active_center_tab.as_ref(), Some(&analytics));
+      assert!(page.center_layout.contains_tab(&analytics));
+      assert!(page.center_layout.contains_tab(&first_chat_tab));
+    });
+  }
+
+  #[gpui::test]
   async fn dragging_a_center_tab_to_the_middle_merges_it_into_the_pane(cx: &mut TestAppContext) {
     let repo = TempRepo::init("session-center-tab-drag-middle");
     commit_text_file(&repo.path, Path::new("README.md"), "v1\n", "initial");
