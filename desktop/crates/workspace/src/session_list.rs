@@ -10,6 +10,7 @@ use gpui::{
   IntoElement, MouseExitEvent, Pixels, Point, Render, SharedString, Task, WeakEntity, Window, div,
   prelude::*, px,
 };
+use gpui_component::avatar::Avatar;
 use gpui_component::menu::{ContextMenuExt as _, PopupMenu, PopupMenuItem};
 use gpui_component::popover::Popover;
 use gpui_component::scroll::ScrollableElement as _;
@@ -112,6 +113,11 @@ fn format_relative_age(updated_at_secs: u64, now_secs: u64) -> String {
   }
 }
 
+fn github_owner_avatar_url(remote: &git::GithubRemoteRepo) -> Option<String> {
+  let owner = remote.owner.trim();
+  (!owner.is_empty()).then(|| format!("https://github.com/{owner}.png?size=40"))
+}
+
 #[derive(Clone)]
 struct DraggedProjectSection {
   project_root: PathBuf,
@@ -193,6 +199,7 @@ pub struct SessionList {
   /// Projects that have Git. Only these can create worktree checkouts.
   git_repositories: HashSet<PathBuf>,
   checkout_git_summaries: HashMap<PathBuf, CheckoutGitSummary>,
+  project_avatar_urls: HashMap<PathBuf, String>,
   checkout_summary_roots: HashSet<PathBuf>,
   _checkout_summary_task: Option<Task<()>>,
   /// Keeps the section highlighted while one of its menus is open.
@@ -214,6 +221,7 @@ impl SessionList {
       project_order: Vec::new(),
       git_repositories: HashSet::new(),
       checkout_git_summaries: HashMap::new(),
+      project_avatar_urls: HashMap::new(),
       checkout_summary_roots: HashSet::new(),
       _checkout_summary_task: None,
       open_menu_project: None,
@@ -427,19 +435,28 @@ impl SessionList {
     }
 
     self.checkout_summary_roots = paths.clone();
+    let project_roots = self
+      .rendered_project_order()
+      .into_iter()
+      .filter(|repo_root| self.git_repositories.contains(repo_root))
+      .collect::<HashSet<_>>();
     self
       .checkout_git_summaries
       .retain(|path, _| paths.contains(path));
+    self
+      .project_avatar_urls
+      .retain(|path, _| project_roots.contains(path));
     if paths.is_empty() {
       self._checkout_summary_task = None;
       return;
     }
 
     let requested_paths = paths.clone();
+    let requested_projects = project_roots.clone();
     let task = cx.spawn(async move |this, cx| {
-      let summaries = cx
+      let (summaries, avatar_urls) = cx
         .background_spawn(async move {
-          requested_paths
+          let summaries = requested_paths
             .iter()
             .filter_map(|path| {
               let summary = CheckoutGitSummary {
@@ -449,15 +466,27 @@ impl SessionList {
               };
               (!summary.is_empty()).then(|| (path.clone(), summary))
             })
-            .collect::<HashMap<_, _>>()
+            .collect::<HashMap<_, _>>();
+          let avatar_urls = requested_projects
+            .iter()
+            .filter_map(|repo_root| {
+              let remote = git::current_github_remote_repo(repo_root).ok().flatten()?;
+              Some((repo_root.clone(), github_owner_avatar_url(&remote)?))
+            })
+            .collect::<HashMap<_, _>>();
+          (summaries, avatar_urls)
         })
         .await;
 
       let _ = this.update(cx, |this, cx| {
-        if this.checkout_summary_roots != paths || this.checkout_git_summaries == summaries {
+        if this.checkout_summary_roots != paths {
+          return;
+        }
+        if this.checkout_git_summaries == summaries && this.project_avatar_urls == avatar_urls {
           return;
         }
         this.checkout_git_summaries = summaries;
+        this.project_avatar_urls = avatar_urls;
         cx.notify();
       });
     });
@@ -693,6 +722,7 @@ impl SessionList {
     let menu_open = self.open_menu_project.as_deref() == Some(repo_root);
     let drop_gap = self.drop_gap.filter(|_| cx.has_active_drag());
     let git_backed = self.git_repositories.contains(repo_root);
+    let avatar_url = self.project_avatar_urls.get(repo_root).cloned();
     let active_project = self.displayed_checkout.as_deref().is_some_and(|checkout| {
       self
         .checkout_rows_for_project(repo_root)
@@ -766,36 +796,51 @@ impl SessionList {
         });
       }))
       .child(
-        Icon::new(if collapsed {
-          gpui_component::IconName::ChevronRight
-        } else {
-          gpui_component::IconName::ChevronDown
-        })
-        .size(px(12.))
-        .text_color(theme.muted_foreground),
-      )
-      .child(
-        Icon::new(gpui_component::IconName::FolderOpen)
-          .size(px(12.))
-          .text_color(if active_project {
-            theme.foreground
-          } else {
-            theme.muted_foreground
+        div()
+          .debug_selector(|| format!("session-repo-avatar-{}", repo_root.display()))
+          .child({
+            let avatar = Avatar::new().name(name.clone()).xsmall();
+            if let Some(url) = avatar_url {
+              avatar.src(url)
+            } else {
+              avatar
+            }
           }),
       )
       .child(
-        div()
+        h_flex()
           .flex_1()
           .min_w(px(0.0))
-          .text_xs()
-          .font_weight(gpui::FontWeight::SEMIBOLD)
-          .truncate()
-          .text_color(if active_project {
-            theme.foreground
-          } else {
-            theme.muted_foreground
-          })
-          .child(name),
+          .items_center()
+          .gap_1()
+          .child(
+            div()
+              .min_w(px(0.0))
+              .text_xs()
+              .font_weight(gpui::FontWeight::SEMIBOLD)
+              .truncate()
+              .text_color(if active_project {
+                theme.foreground
+              } else {
+                theme.muted_foreground
+              })
+              .child(name),
+          )
+          .child(
+            div()
+              .debug_selector(|| format!("session-repo-chevron-{}", repo_root.display()))
+              .when(!(menu_open || active_project), |this| this.invisible())
+              .group_hover(group_name.clone(), |this| this.visible())
+              .child(
+                Icon::new(if collapsed {
+                  gpui_component::IconName::ChevronRight
+                } else {
+                  gpui_component::IconName::ChevronDown
+                })
+                .size(px(12.))
+                .text_color(theme.muted_foreground),
+              ),
+          ),
       )
       .child(
         h_flex()
@@ -1428,6 +1473,18 @@ mod tests {
   }
 
   #[test]
+  fn github_owner_avatar_url_uses_the_remote_owner() {
+    assert_eq!(
+      github_owner_avatar_url(&git::GithubRemoteRepo {
+        owner: "earendil-works".to_string(),
+        repo: "reviu".to_string(),
+      })
+      .as_deref(),
+      Some("https://github.com/earendil-works.png?size=40")
+    );
+  }
+
+  #[test]
   fn session_row_title_falls_back_when_empty() {
     assert_eq!(session_row_title(&meta_with_title("")), "New chat");
     assert_eq!(session_row_title(&meta_with_title("   ")), "New chat");
@@ -1690,6 +1747,10 @@ mod tests {
     use crate::test_support::{TempRepo, commit_text_file};
 
     let repo = TempRepo::init("session-list-checkout-summary");
+    git2::Repository::open(&repo.path)
+      .expect("open repo")
+      .remote("origin", "https://github.com/earendil-works/reviu.git")
+      .expect("add remote");
     commit_text_file(&repo.path, Path::new("README.md"), "v1\n", "initial");
     std::fs::write(repo.path.join("README.md"), "v1\nv2\n").expect("modify file");
     let expected_branch = git::current_branch_status(&repo.path)
@@ -1725,6 +1786,10 @@ mod tests {
           .get(&repo.path)
           .and_then(|summary| summary.head_updated_at_secs)
           .is_some()
+      );
+      assert_eq!(
+        list.project_avatar_urls.get(&repo.path).map(String::as_str),
+        Some("https://github.com/earendil-works.png?size=40")
       );
     });
   }
@@ -1869,12 +1934,14 @@ mod tests {
     });
     cx.run_until_parked();
 
+    assert!(cx.debug_bounds("session-repo-avatar-/repo").is_some());
     let header = cx
       .debug_bounds("session-repo-section-/repo")
       .expect("project section header");
     cx.simulate_mouse_move(header.center(), None, gpui::Modifiers::default());
     cx.run_until_parked();
 
+    assert!(cx.debug_bounds("session-repo-chevron-/repo").is_some());
     assert!(cx.debug_bounds("session-repo-create-/repo").is_some());
     let options = cx
       .debug_bounds("session-repo-options-/repo")
