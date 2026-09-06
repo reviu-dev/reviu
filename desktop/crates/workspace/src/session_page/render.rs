@@ -1386,12 +1386,18 @@ impl SessionPage {
           if !Self::center_drag_event_contains_pointer(event) {
             return;
           }
-          let target = CenterDropTarget {
-            pane_id,
-            direction: Self::center_drop_direction(event),
-          };
-          if this.center_drag_target != Some(target) {
-            this.center_drag_target = Some(target);
+          let previous_direction = this
+            .center_drag_target
+            .filter(|target| target.pane_id == pane_id)
+            .and_then(|target| target.direction);
+          let target = Self::center_drop_direction(event, previous_direction).map(|direction| {
+            CenterDropTarget {
+              pane_id,
+              direction: Some(direction),
+            }
+          });
+          if this.center_drag_target != target {
+            this.center_drag_target = target;
             cx.notify();
           }
         },
@@ -1405,20 +1411,31 @@ impl SessionPage {
   }
 
   fn center_drag_event_contains_pointer(event: &gpui::DragMoveEvent<DraggedCenterTab>) -> bool {
-    event.event.position.x >= event.bounds.left()
-      && event.event.position.x <= event.bounds.right()
-      && event.event.position.y >= event.bounds.top()
-      && event.event.position.y <= event.bounds.bottom()
+    let tolerance = px(CENTER_DROP_POINTER_TOLERANCE_PX);
+    event.event.position.x >= event.bounds.left() - tolerance
+      && event.event.position.x <= event.bounds.right() + tolerance
+      && event.event.position.y >= event.bounds.top() - tolerance
+      && event.event.position.y <= event.bounds.bottom() + tolerance
   }
 
   fn center_drop_direction(
     event: &gpui::DragMoveEvent<DraggedCenterTab>,
+    previous_direction: Option<CenterSplitDirection>,
   ) -> Option<CenterSplitDirection> {
     let width = f32::from(event.bounds.size.width);
     let height = f32::from(event.bounds.size.height);
     let edge_size = width.min(height) * CENTER_DROP_EDGE_FRACTION;
-    let relative_x = f32::from(event.event.position.x - event.bounds.left());
-    let relative_y = f32::from(event.event.position.y - event.bounds.top());
+    let sticky_edge_size = width.min(height) * CENTER_DROP_STICKY_EDGE_FRACTION;
+    let relative_x = f32::from(event.event.position.x - event.bounds.left()).clamp(0.0, width);
+    let relative_y = f32::from(event.event.position.y - event.bounds.top()).clamp(0.0, height);
+
+    if let Some(direction) = previous_direction
+      && Self::center_drop_distance_to_edge(direction, relative_x, relative_y, width, height)
+        <= sticky_edge_size
+    {
+      return Some(direction);
+    }
+
     if relative_x >= edge_size
       && relative_x <= width - edge_size
       && relative_y >= edge_size
@@ -1436,6 +1453,21 @@ impl SessionPage {
     .into_iter()
     .min_by(|(_, a), (_, b)| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal))
     .map(|(direction, _)| direction)
+  }
+
+  fn center_drop_distance_to_edge(
+    direction: CenterSplitDirection,
+    relative_x: f32,
+    relative_y: f32,
+    width: f32,
+    height: f32,
+  ) -> f32 {
+    match direction {
+      CenterSplitDirection::Up => relative_y,
+      CenterSplitDirection::Down => height - relative_y,
+      CenterSplitDirection::Left => relative_x,
+      CenterSplitDirection::Right => width - relative_x,
+    }
   }
 
   fn render_center_surface(
@@ -1476,18 +1508,28 @@ impl SessionPage {
       return gpui::Empty.into_any_element();
     }
 
+    let theme = cx.theme().clone();
+    let mut background = theme.status_blue();
+    background.a = if theme.mode.is_dark() { 0.16 } else { 0.10 };
+    let mut border = theme.status_blue();
+    border.a = if theme.mode.is_dark() { 0.72 } else { 0.52 };
     let half = gpui::DefiniteLength::Fraction(0.5);
+    let inset = px(CENTER_DROP_TARGET_INSET_PX);
     div()
       .debug_selector(|| CENTER_DROP_TARGET_DEBUG_SELECTOR.to_string())
       .invisible()
       .absolute()
-      .bg(cx.theme().drop_target)
+      .rounded(px(CENTER_DROP_TARGET_RADIUS_PX))
+      .border_1()
+      .border_color(border)
+      .bg(background)
+      .shadow_lg()
       .group_drag_over::<DraggedCenterTab>(CENTER_DROP_GROUP, |this| this.visible())
       .map(|this| match direction {
-        CenterSplitDirection::Up => this.top_0().left_0().right_0().h(half),
-        CenterSplitDirection::Down => this.left_0().bottom_0().right_0().h(half),
-        CenterSplitDirection::Left => this.top_0().left_0().bottom_0().w(half),
-        CenterSplitDirection::Right => this.top_0().bottom_0().right_0().w(half),
+        CenterSplitDirection::Up => this.top(inset).left(inset).right(inset).h(half),
+        CenterSplitDirection::Down => this.left(inset).bottom(inset).right(inset).h(half),
+        CenterSplitDirection::Left => this.top(inset).left(inset).bottom(inset).w(half),
+        CenterSplitDirection::Right => this.top(inset).bottom(inset).right(inset).w(half),
       })
       .on_drop(cx.listener(|this, drag: &DraggedCenterTab, window, cx| {
         this.drop_center_tab(drag.tab.clone(), window, cx);
@@ -1508,15 +1550,14 @@ impl SessionPage {
       cx.notify();
       return;
     };
-    let surface = CenterSurface::from_tab(tab.clone());
-    let changed = match target.direction {
-      Some(direction) => self
-        .center_layout
-        .split_pane(target.pane_id, surface, direction),
-      None => self
-        .center_layout
-        .add_surface_to_pane(target.pane_id, surface),
+    let Some(direction) = target.direction else {
+      cx.notify();
+      return;
     };
+    let surface = CenterSurface::from_tab(tab.clone());
+    let changed = self
+      .center_layout
+      .split_pane(target.pane_id, surface, direction);
     if changed {
       if let Some(conversation_id) = tab.conversation_id() {
         self.activate_session_panel(conversation_id, window, cx);
@@ -2041,7 +2082,11 @@ const CENTER_TAB_UNDERLINE_OFFSET_PX: f32 = 1.0;
 const CENTER_CONTENT_DEBUG_SELECTOR: &str = "session-center-content";
 const CENTER_DROP_TARGET_DEBUG_SELECTOR: &str = "session-center-drop-target";
 const CENTER_DROP_GROUP: &str = "session-center-drop";
-const CENTER_DROP_EDGE_FRACTION: f32 = 0.25;
+const CENTER_DROP_EDGE_FRACTION: f32 = 0.30;
+const CENTER_DROP_STICKY_EDGE_FRACTION: f32 = 0.38;
+const CENTER_DROP_POINTER_TOLERANCE_PX: f32 = 2.0;
+const CENTER_DROP_TARGET_INSET_PX: f32 = 8.0;
+const CENTER_DROP_TARGET_RADIUS_PX: f32 = 14.0;
 
 /// Width of a collapsed side panel: just enough for its icon rail.
 pub(super) const SIDE_RAIL_WIDTH: f32 = 40.0;
@@ -6508,7 +6553,7 @@ mod tests {
   }
 
   #[gpui::test]
-  async fn dragging_a_center_tab_to_the_middle_merges_it_into_the_pane(cx: &mut TestAppContext) {
+  async fn dragging_a_center_tab_to_the_middle_does_nothing(cx: &mut TestAppContext) {
     let repo = TempRepo::init("session-center-tab-drag-middle");
     commit_text_file(&repo.path, Path::new("README.md"), "v1\n", "initial");
     std::fs::write(repo.path.join("README.md"), "v2\n").expect("modify file");
@@ -6568,21 +6613,17 @@ mod tests {
     });
     cx.run_until_parked();
 
-    assert!(cx.debug_bounds("session-center-tab-chat").is_none());
     assert!(
       cx.debug_bounds("session-center-tab-diff-README.md")
         .is_some()
     );
-    assert!(cx.debug_bounds("session-conversation-pane").is_none());
-    assert!(cx.debug_bounds("session-diff-editor").is_some());
+    assert!(cx.debug_bounds("session-conversation-pane").is_some());
+    assert!(cx.debug_bounds("session-diff-editor").is_none());
     page.read_with(cx, |page, _| {
       let CenterNode::Pane(pane) = page.center_layout.root() else {
-        panic!("drop in the middle should merge into the existing pane");
+        panic!("drop in the middle should leave the layout unchanged");
       };
-      assert_eq!(
-        pane.active_surface().tab(),
-        &CenterTab::diff(PathBuf::from("README.md"))
-      );
+      assert_eq!(pane.active_surface().tab(), &CenterTab::chat());
     });
   }
 
@@ -6640,10 +6681,27 @@ mod tests {
     let overlay = cx
       .debug_bounds(CENTER_DROP_TARGET_DEBUG_SELECTOR)
       .expect("center drop target");
-    assert!(overlay.left() >= center.center().x - px(1.0));
+    assert!(overlay.left() >= center.center().x - px(CENTER_DROP_TARGET_INSET_PX + 1.0));
+
+    let sticky_distance =
+      f32::from(center.size.width.min(center.size.height)) * (CENTER_DROP_EDGE_FRACTION + 0.04);
+    let sticky_to = gpui::point(center.right() - px(sticky_distance), center.center().y);
+    cx.simulate_event(gpui::MouseMoveEvent {
+      position: sticky_to,
+      pressed_button: Some(gpui::MouseButton::Left),
+      modifiers: gpui::Modifiers::default(),
+    });
+    cx.run_until_parked();
+    let overlay = cx
+      .debug_bounds(CENTER_DROP_TARGET_DEBUG_SELECTOR)
+      .expect("sticky center drop target");
+    assert!(
+      overlay.left() >= center.center().x - px(CENTER_DROP_TARGET_INSET_PX + 1.0),
+      "the right split target should not flicker off while staying near the right edge: {overlay:?} vs {center:?}"
+    );
 
     cx.simulate_event(gpui::MouseUpEvent {
-      position: to,
+      position: sticky_to,
       button: gpui::MouseButton::Left,
       modifiers: gpui::Modifiers::default(),
       click_count: 1,
@@ -6735,7 +6793,7 @@ mod tests {
       .debug_bounds(CENTER_DROP_TARGET_DEBUG_SELECTOR)
       .expect("center drop target");
     assert!(
-      overlay.right() <= editor.center().x + px(1.0),
+      overlay.right() <= editor.center().x + px(CENTER_DROP_TARGET_INSET_PX + 1.0),
       "overlay should stay in the hovered editor pane's left half: {overlay:?} vs {editor:?}"
     );
 

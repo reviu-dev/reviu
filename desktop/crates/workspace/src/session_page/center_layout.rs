@@ -211,23 +211,6 @@ impl CenterNode {
     }
   }
 
-  fn add_surface_to_pane(&mut self, pane_id: CenterPaneId, surface: CenterSurface) -> bool {
-    match self {
-      Self::Pane(pane) => {
-        if pane.id == pane_id {
-          pane.add_surface(surface);
-          true
-        } else {
-          false
-        }
-      }
-      Self::Split(split) => {
-        split.first.add_surface_to_pane(pane_id, surface.clone())
-          || split.second.add_surface_to_pane(pane_id, surface)
-      }
-    }
-  }
-
   fn activate_surface(&mut self, surface: CenterSurface) -> bool {
     match self {
       Self::Pane(pane) => {
@@ -425,28 +408,6 @@ impl CenterLayout {
     self.active_tab = tab;
   }
 
-  pub(super) fn add_surface_to_pane(
-    &mut self,
-    pane_id: CenterPaneId,
-    surface: CenterSurface,
-  ) -> bool {
-    let tab = surface.tab().clone();
-    if self.root.pane_contains_tab(pane_id, &tab) {
-      self.root.add_surface_to_pane(pane_id, surface);
-      self.active_tab = tab;
-      return true;
-    }
-    if self.contains_tab(&tab) && !self.close_surface(&tab) {
-      return false;
-    }
-    if self.root.add_surface_to_pane(pane_id, surface) {
-      self.active_tab = tab;
-      true
-    } else {
-      false
-    }
-  }
-
   pub(super) fn split_pane(
     &mut self,
     pane_id: CenterPaneId,
@@ -552,22 +513,6 @@ mod tests {
   }
 
   #[test]
-  fn add_surface_to_pane_merges_tabs_without_splitting() {
-    let mut layout = CenterLayout::single(CenterSurface::from_tab(CenterTab::chat()));
-    let pane_id = root_pane_id(&layout);
-    let readme = CenterTab::diff(PathBuf::from("README.md"));
-
-    assert!(layout.add_surface_to_pane(pane_id, CenterSurface::from_tab(readme.clone())));
-    assert_eq!(layout.active_tab(), &readme);
-    let CenterNode::Pane(pane) = &layout.root else {
-      panic!("layout should remain a single pane");
-    };
-    assert_eq!(pane.surface_count(), 2);
-    assert!(pane.contains_tab(&CenterTab::chat()));
-    assert!(pane.contains_tab(&readme));
-  }
-
-  #[test]
   fn split_pane_targets_the_requested_pane() {
     let readme = CenterTab::file(PathBuf::from("README.md"));
     let lib = CenterTab::file(PathBuf::from("src/lib.rs"));
@@ -602,36 +547,6 @@ mod tests {
     assert_eq!(left_split.first.first_active_surface().tab(), &readme);
     assert_eq!(left_split.second.first_active_surface().tab(), &license);
     assert_eq!(split.second.first_active_surface().tab(), &lib);
-  }
-
-  #[test]
-  fn add_surface_to_pane_moves_existing_tabs_between_panes() {
-    let readme = CenterTab::file(PathBuf::from("README.md"));
-    let lib = CenterTab::file(PathBuf::from("src/lib.rs"));
-    let mut layout = CenterLayout::single(CenterSurface::from_tab(readme.clone()));
-    let first_pane_id = root_pane_id(&layout);
-    assert!(layout.split_pane(
-      first_pane_id,
-      CenterSurface::from_tab(lib.clone()),
-      CenterSplitDirection::Right,
-    ));
-    let CenterNode::Split(split) = &layout.root else {
-      panic!("layout should be split");
-    };
-    let left_pane_id = match split.first.as_ref() {
-      CenterNode::Pane(pane) => pane.id,
-      CenterNode::Split(_) => panic!("left side should be a pane"),
-    };
-
-    assert!(layout.add_surface_to_pane(left_pane_id, CenterSurface::from_tab(lib.clone()),));
-    assert_eq!(layout.active_tab(), &lib);
-    let CenterNode::Pane(pane) = &layout.root else {
-      panic!("moving into the remaining pane should collapse the split");
-    };
-    assert_eq!(pane.id, left_pane_id);
-    assert_eq!(pane.surface_count(), 2);
-    assert!(pane.contains_tab(&readme));
-    assert!(pane.contains_tab(&lib));
   }
 
   #[test]
