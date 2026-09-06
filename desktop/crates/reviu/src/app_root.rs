@@ -2,6 +2,7 @@ use gpui::{
   App, Context, Entity, FocusHandle, Focusable, IntoElement, Render, Window, div, prelude::*,
 };
 use gpui_component::Root;
+use ui::render_dialog_backdrop;
 use workspace::WorkspaceView;
 
 pub struct AppRoot {
@@ -29,10 +30,13 @@ impl Render for AppRoot {
     let sheet_layer = Root::render_sheet_layer(window, cx);
     let dialog_layer = Root::render_dialog_layer(window, cx);
     let notification_layer = Root::render_notification_layer(window, cx);
+    let dialog_backdrop = render_dialog_backdrop(window, cx);
 
     div()
+      .relative()
       .size_full()
       .child(self.view.clone())
+      .children(dialog_backdrop)
       .children(sheet_layer)
       .children(dialog_layer)
       .children(notification_layer.map(gpui::deferred))

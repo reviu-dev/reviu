@@ -1,6 +1,7 @@
 mod assets;
 mod command_palette;
 mod confirm_dialog;
+mod dialog_backdrop;
 mod dropdown_select;
 mod github_emoji_completion;
 mod github_url;
@@ -29,6 +30,7 @@ pub use command_palette::{
   CommandPaletteUsageScorerGlobal, GlobalCommandsContext,
 };
 pub use confirm_dialog::ConfirmDialog;
+pub use dialog_backdrop::render_dialog_backdrop;
 pub use dropdown_select::{
   DropdownSelectConfig, DropdownSelectItem, DropdownSelectOption, dropdown_select,
 };
