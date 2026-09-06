@@ -82,13 +82,14 @@ struct CheckoutRow {
   kind: CheckoutKind,
   path: PathBuf,
   title: SharedString,
-  subtitle: SharedString,
+  updated_at_secs: Option<u64>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct CheckoutGitSummary {
   branch_status: Option<git::BranchStatus>,
   working_tree_stats: Option<git::WorkingTreeDiffStats>,
+  head_updated_at_secs: Option<u64>,
 }
 
 impl CheckoutGitSummary {
@@ -98,7 +99,16 @@ impl CheckoutGitSummary {
   }
 
   fn is_empty(&self) -> bool {
-    self.branch_status.is_none() && self.working_tree_stats.is_none()
+    self.branch_status.is_none()
+      && self.working_tree_stats.is_none()
+      && self.head_updated_at_secs.is_none()
+  }
+}
+
+fn format_relative_age(updated_at_secs: u64, now_secs: u64) -> String {
+  match format_relative_secs(updated_at_secs, now_secs).as_str() {
+    "now" => "now".to_string(),
+    label => format!("{label} ago"),
   }
 }
 
@@ -435,6 +445,7 @@ impl SessionList {
               let summary = CheckoutGitSummary {
                 branch_status: git::current_branch_status(path).ok(),
                 working_tree_stats: git::working_tree_diff_stats(path).ok(),
+                head_updated_at_secs: git::current_head_updated_at_secs(path).ok().flatten(),
               };
               (!summary.is_empty()).then(|| (path.clone(), summary))
             })
@@ -458,6 +469,7 @@ impl SessionList {
     checkout_root: Option<&Path>,
     branch_status: Option<git::BranchStatus>,
     working_tree_stats: Option<git::WorkingTreeDiffStats>,
+    head_updated_at_secs: Option<u64>,
     cx: &mut Context<Self>,
   ) {
     let Some(checkout_root) = checkout_root else {
@@ -471,9 +483,11 @@ impl SessionList {
       .unwrap_or(CheckoutGitSummary {
         branch_status: None,
         working_tree_stats: None,
+        head_updated_at_secs: None,
       });
     next.branch_status = branch_status;
     next.working_tree_stats = working_tree_stats;
+    next.head_updated_at_secs = head_updated_at_secs;
     if self.checkout_git_summaries.get(&checkout_root) == Some(&next) {
       return;
     }
@@ -493,14 +507,7 @@ impl SessionList {
       title: main_summary
         .and_then(CheckoutGitSummary::branch_title)
         .unwrap_or_else(|| "Main checkout".into()),
-      subtitle: if main_summary
-        .and_then(CheckoutGitSummary::branch_title)
-        .is_some()
-      {
-        "Main checkout".into()
-      } else {
-        "Default working tree".into()
-      },
+      updated_at_secs: main_summary.and_then(|summary| summary.head_updated_at_secs),
     }];
     if !self.git_repositories.contains(repo_root) {
       return rows;
@@ -521,13 +528,19 @@ impl SessionList {
         checkouts.push(binding.clone());
       }
     }
-    rows.extend(checkouts.into_iter().map(|binding| CheckoutRow {
-      kind: CheckoutKind::Worktree {
-        branch: binding.branch.clone(),
-      },
-      path: binding.path,
-      title: binding.branch.into(),
-      subtitle: "Worktree checkout".into(),
+    rows.extend(checkouts.into_iter().map(|binding| {
+      let updated_at_secs = self
+        .checkout_git_summaries
+        .get(binding.path.as_path())
+        .and_then(|summary| summary.head_updated_at_secs);
+      CheckoutRow {
+        kind: CheckoutKind::Worktree {
+          branch: binding.branch.clone(),
+        },
+        path: binding.path,
+        title: binding.branch.into(),
+        updated_at_secs,
+      }
     }));
     rows
   }
@@ -874,6 +887,7 @@ impl SessionList {
     repo_root: &Path,
     row: &CheckoutRow,
     active: bool,
+    now_secs: u64,
     theme: &gpui_component::Theme,
     cx: &mut Context<Self>,
   ) -> gpui::AnyElement {
@@ -886,11 +900,13 @@ impl SessionList {
     let checkout_repo = repo_root.to_path_buf();
     let checkout_root = row.path.clone();
     let icon = match row.kind {
-      CheckoutKind::Main => Icon::new(gpui_component::IconName::FolderOpen)
-        .size(px(12.))
-        .text_color(theme.muted_foreground)
-        .into_any_element(),
-      CheckoutKind::Worktree { .. } => Icon::new(UiIconName::GitBranch)
+      CheckoutKind::Main if !self.git_repositories.contains(repo_root) => {
+        Icon::new(gpui_component::IconName::FolderOpen)
+          .size(px(12.))
+          .text_color(theme.muted_foreground)
+          .into_any_element()
+      }
+      CheckoutKind::Main | CheckoutKind::Worktree { .. } => Icon::new(UiIconName::GitBranch)
         .size(px(12.))
         .text_color(theme.muted_foreground)
         .into_any_element(),
@@ -926,7 +942,8 @@ impl SessionList {
     )
     .debug_selector(move || selector.clone())
     .mx_1()
-    .px_2()
+    .pl(px(18.0))
+    .pr_2()
     .py_1()
     .cursor_pointer()
     .on_click(cx.listener(move |_, _, _, cx| {
@@ -957,13 +974,15 @@ impl SessionList {
                 .text_color(theme.foreground)
                 .child(row.title.clone()),
             )
-            .child(
-              div()
-                .text_xs()
-                .truncate()
-                .text_color(theme.muted_foreground.opacity(0.75))
-                .child(row.subtitle.clone()),
-            ),
+            .when_some(row.updated_at_secs, |this, updated_at_secs| {
+              this.child(
+                div()
+                  .text_size(px(10.0))
+                  .truncate()
+                  .text_color(theme.muted_foreground.opacity(0.75))
+                  .child(format_relative_age(updated_at_secs, now_secs)),
+              )
+            }),
         )
         .when_some(diff_stats, |this, stats| {
           this.child(Self::render_checkout_diff_stats(
@@ -1280,6 +1299,10 @@ impl Render for SessionList {
     self
       .project_header_bounds
       .retain(|repo, _| section_repos.contains(repo));
+    let now_secs = std::time::SystemTime::now()
+      .duration_since(std::time::UNIX_EPOCH)
+      .map(|duration| duration.as_secs())
+      .unwrap_or(0);
     let mut items: Vec<gpui::AnyElement> = Vec::new();
     for (section_ix, section_repo) in section_repos.iter().enumerate() {
       items.push(self.render_project_header(
@@ -1291,7 +1314,7 @@ impl Render for SessionList {
       ));
       for checkout in self.visible_checkout_rows_for_project(section_repo) {
         let active = self.displayed_checkout.as_deref() == Some(checkout.path.as_path());
-        items.push(self.render_checkout_row(section_repo, &checkout, active, &theme, cx));
+        items.push(self.render_checkout_row(section_repo, &checkout, active, now_secs, &theme, cx));
       }
     }
     let rows = items;
@@ -1396,6 +1419,12 @@ mod tests {
   #[test]
   fn format_relative_secs_clamps_future_timestamps() {
     assert_eq!(format_relative_secs(200, 100), "now");
+  }
+
+  #[test]
+  fn format_relative_age_adds_context_to_elapsed_time() {
+    assert_eq!(format_relative_age(100, 100), "now");
+    assert_eq!(format_relative_age(100, 100 + 60), "1m ago");
   }
 
   #[test]
@@ -1590,7 +1619,7 @@ mod tests {
         kind: CheckoutKind::Main,
         path: PathBuf::from("/repo"),
         title: "Main checkout".into(),
-        subtitle: "Default working tree".into(),
+        updated_at_secs: None,
       }]
     );
   }
@@ -1611,7 +1640,7 @@ mod tests {
           kind: CheckoutKind::Main,
           path: PathBuf::from("/repo"),
           title: "Main checkout".into(),
-          subtitle: "Default working tree".into(),
+          updated_at_secs: None,
         },
         CheckoutRow {
           kind: CheckoutKind::Worktree {
@@ -1619,7 +1648,7 @@ mod tests {
           },
           path: PathBuf::from("/repo/.worktrees/feature-sidebar"),
           title: "feature/sidebar".into(),
-          subtitle: "Worktree checkout".into(),
+          updated_at_secs: None,
         },
       ]
     );
@@ -1646,13 +1675,14 @@ mod tests {
       CheckoutGitSummary {
         branch_status: Some(branch_status("feature/sidebar", 2, 1)),
         working_tree_stats: None,
+        head_updated_at_secs: Some(123),
       },
     );
 
     let rows = list.checkout_rows_for_project(&repo);
 
     assert_eq!(rows[0].title, "feature/sidebar");
-    assert_eq!(rows[0].subtitle, "Main checkout");
+    assert_eq!(rows[0].updated_at_secs, Some(123));
   }
 
   #[gpui::test]
@@ -1689,7 +1719,40 @@ mod tests {
           deletions: 0,
         })
       );
+      assert!(
+        list
+          .checkout_git_summaries
+          .get(&repo.path)
+          .and_then(|summary| summary.head_updated_at_secs)
+          .is_some()
+      );
     });
+  }
+
+  #[test]
+  fn checkout_rows_carry_worktree_head_times() {
+    let mut list = SessionList::new();
+    let repo = PathBuf::from("/repo");
+    let worktree_path = PathBuf::from("/repo/.worktrees/feature-sidebar");
+    list.git_repositories.insert(repo.clone());
+    list.conversations = vec![meta("worktree-chat", 1)];
+    list.worktree_checkouts.insert(
+      "worktree-chat".to_string(),
+      worktree_binding("/repo/.worktrees/feature-sidebar", "feature/sidebar"),
+    );
+    list.checkout_git_summaries.insert(
+      worktree_path.clone(),
+      CheckoutGitSummary {
+        branch_status: Some(branch_status("feature/sidebar", 0, 0)),
+        working_tree_stats: None,
+        head_updated_at_secs: Some(456),
+      },
+    );
+
+    assert_eq!(
+      list.checkout_rows_for_project(&repo)[1].updated_at_secs,
+      Some(456)
+    );
   }
 
   #[test]
@@ -1714,7 +1777,7 @@ mod tests {
         },
         path: worktree_path,
         title: "feature/sidebar".into(),
-        subtitle: "Worktree checkout".into(),
+        updated_at_secs: None,
       }]
     );
 
@@ -1725,7 +1788,7 @@ mod tests {
         kind: CheckoutKind::Main,
         path: repo.clone(),
         title: "Main checkout".into(),
-        subtitle: "Default working tree".into(),
+        updated_at_secs: None,
       }]
     );
 
@@ -1753,6 +1816,7 @@ mod tests {
         CheckoutGitSummary {
           branch_status: Some(branch_status("main", 2, 1)),
           working_tree_stats: Some(working_tree_stats(281, 9)),
+          head_updated_at_secs: None,
         },
       );
       cx.notify();

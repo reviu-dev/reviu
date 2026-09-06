@@ -89,6 +89,14 @@ pub fn list_branches(repo_root: &Path) -> Result<Vec<BranchRef>> {
   Ok(branches)
 }
 
+pub fn current_head_updated_at_secs(repo_root: &Path) -> Result<Option<u64>> {
+  let repo =
+    Repository::open(repo_root).with_context(|| format!("open repo at {:?}", repo_root))?;
+  let head = repo.head()?;
+  let commit = head.peel_to_commit()?;
+  Ok(commit.time().seconds().try_into().ok())
+}
+
 pub fn current_branch_status(repo_root: &Path) -> Result<BranchStatus> {
   let repo =
     Repository::open(repo_root).with_context(|| format!("open repo at {:?}", repo_root))?;
@@ -1610,6 +1618,16 @@ mod tests {
     let label = detached_head_label(&repo.path).expect("detached head label");
     let expected = oid.to_string().chars().take(7).collect::<String>();
     assert_eq!(label, expected);
+  }
+
+  #[test]
+  fn current_head_updated_at_secs_reads_the_head_commit_time() {
+    let repo = TempRepo::init("branch-head-updated-at");
+    commit_text_file(&repo.path, Path::new("README.md"), "hello\n", "initial");
+
+    let updated_at = current_head_updated_at_secs(&repo.path).expect("head updated at");
+
+    assert!(updated_at.is_some());
   }
 
   #[test]

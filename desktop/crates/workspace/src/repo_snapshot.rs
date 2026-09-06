@@ -9,6 +9,7 @@ pub struct RepoSnapshot {
   repo_root: Option<PathBuf>,
   branch_status: Option<git::BranchStatus>,
   working_tree_stats: Option<git::WorkingTreeDiffStats>,
+  head_updated_at_secs: Option<u64>,
   branches: Vec<git::BranchRef>,
   upstream_branch: Option<git::BranchRef>,
   default_branch: Option<git::BranchRef>,
@@ -29,6 +30,7 @@ impl RepoSnapshot {
       repo_root,
       branch_status: None,
       working_tree_stats: None,
+      head_updated_at_secs: None,
       branches: Vec::new(),
       upstream_branch: None,
       default_branch: None,
@@ -44,6 +46,7 @@ impl RepoSnapshot {
     self.repo_root = repo_root;
     self.branch_status = None;
     self.working_tree_stats = None;
+    self.head_updated_at_secs = None;
     self.branches = Vec::new();
     self.upstream_branch = None;
     self.default_branch = None;
@@ -61,6 +64,7 @@ impl RepoSnapshot {
       let (
         status,
         working_tree_stats,
+        head_updated_at_secs,
         branches,
         upstream,
         default_branch,
@@ -71,6 +75,7 @@ impl RepoSnapshot {
           (
             git::current_branch_status(&load_root),
             git::working_tree_diff_stats(&load_root),
+            git::current_head_updated_at_secs(&load_root),
             git::list_branches(&load_root),
             git::current_branch_upstream(&load_root),
             git::default_remote_branch(&load_root),
@@ -86,6 +91,7 @@ impl RepoSnapshot {
         }
         this.branch_status = status.ok();
         this.working_tree_stats = working_tree_stats.ok();
+        this.head_updated_at_secs = head_updated_at_secs.ok().flatten();
         this.branches = branches.unwrap_or_default();
         this.upstream_branch = upstream.ok().flatten();
         this.default_branch = default_branch.ok().flatten();
@@ -108,6 +114,10 @@ impl RepoSnapshot {
 
   pub fn working_tree_stats(&self) -> Option<git::WorkingTreeDiffStats> {
     self.working_tree_stats
+  }
+
+  pub fn head_updated_at_secs(&self) -> Option<u64> {
+    self.head_updated_at_secs
   }
 
   pub fn branches(&self) -> &[git::BranchRef] {
@@ -165,6 +175,7 @@ mod tests {
           deletions: 0,
         }
       );
+      assert!(snapshot.head_updated_at_secs().is_some());
       assert!(!snapshot.branches().is_empty());
       assert_eq!(
         snapshot.current_branch_name(),
@@ -189,6 +200,7 @@ mod tests {
     snapshot.read_with(cx, |snapshot, _| {
       assert!(snapshot.branch_status().is_none());
       assert!(snapshot.working_tree_stats().is_none());
+      assert!(snapshot.head_updated_at_secs().is_none());
       assert!(snapshot.branches().is_empty());
     });
   }
