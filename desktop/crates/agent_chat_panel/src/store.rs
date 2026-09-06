@@ -8,9 +8,9 @@ use gpui::{App, Context, Task};
 
 use crate::PersistedConversation;
 use crate::persistence::{
-  ConversationMeta, LoadedConversation, WorktreeBinding, list_conversations_in,
-  load_conversation_file, read_drafts, read_index, read_scrolls, read_worktrees, write_drafts,
-  write_index, write_scrolls, write_worktrees,
+  ConversationMeta, LoadedConversation, WorktreeBinding, conversation_meta_has_listing_content,
+  list_conversations_in, load_conversation_file, read_drafts, read_index, read_scrolls,
+  read_worktrees, write_drafts, write_index, write_scrolls, write_worktrees,
 };
 use app_log::ResultExt;
 use std::collections::HashMap;
@@ -59,6 +59,7 @@ pub struct ConversationStore {
 impl ConversationStore {
   pub fn new(dir: PathBuf) -> Self {
     let mut metas = read_index(&dir).unwrap_or_else(|| list_conversations_in(&dir));
+    metas.retain(|meta| conversation_meta_has_listing_content(&dir, meta));
     metas.sort_by_key(|m| std::cmp::Reverse(m.updated_at_secs));
     let drafts = read_drafts(&dir);
     let scrolls = read_scrolls(&dir);
@@ -204,7 +205,12 @@ impl ConversationStore {
   }
 
   pub fn list(&self) -> Vec<ConversationMeta> {
-    self.metas.clone()
+    self
+      .metas
+      .iter()
+      .filter(|meta| conversation_meta_has_listing_content(&self.dir, meta))
+      .cloned()
+      .collect()
   }
 
   #[cfg(any(test, feature = "test-support"))]
@@ -276,7 +282,12 @@ impl ConversationStore {
 
   pub fn active_meta(&self) -> Option<ConversationMeta> {
     let active_id = self.active_id.as_deref()?;
-    self.metas.iter().find(|meta| meta.id == active_id).cloned()
+    self
+      .metas
+      .iter()
+      .find(|meta| meta.id == active_id)
+      .filter(|meta| conversation_meta_has_listing_content(&self.dir, meta))
+      .cloned()
   }
 
   pub(crate) fn load(&self, id: &str, cx: &App) -> Task<Option<LoadedConversation>> {

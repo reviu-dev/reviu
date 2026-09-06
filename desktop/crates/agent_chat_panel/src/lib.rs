@@ -29,8 +29,8 @@ use crate::diff::{
 use crate::mention::{DiffMention, MentionCandidate, MentionTrigger, ResolvedMention};
 use crate::message_sanitizer::sanitize_agent_markdown;
 use crate::persistence::{
-  CONVERSATION_FORMAT_VERSION, LoadedConversation, new_conversation_meta, now_secs, preview_of,
-  truncate_title,
+  CONVERSATION_FORMAT_VERSION, LoadedConversation, chat_items_have_persistable_content,
+  new_conversation_meta, now_secs, preview_of, truncate_title,
 };
 pub use crate::persistence::{ConversationMeta, WorktreeBinding, state_dir_for_project};
 pub use crate::store::ConversationStore;
@@ -3323,7 +3323,7 @@ impl AgentChatPanel {
 
   /// Whether the conversation has user-visible content worth writing to disk.
   pub fn has_persistable_content(&self) -> bool {
-    !self.items.is_empty() || !self.pending_agent.is_empty()
+    chat_items_have_persistable_content(&self.items, &self.pending_agent)
   }
 
   /// Throttled persist for the streaming path: the store coalesces snapshots

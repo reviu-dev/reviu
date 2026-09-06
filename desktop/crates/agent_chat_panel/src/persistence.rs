@@ -74,6 +74,58 @@ pub(crate) fn preview_of(items: &[ChatItem]) -> String {
     .unwrap_or_default()
 }
 
+pub(crate) fn chat_items_have_persistable_content(items: &[ChatItem], pending_agent: &str) -> bool {
+  !pending_agent.trim().is_empty() || items.iter().any(chat_item_has_persistable_content)
+}
+
+fn chat_message_has_persistable_content(message: &ChatMessage) -> bool {
+  !matches!(message.role, ChatRole::System)
+    && (!message.text.trim().is_empty() || message.images > 0 || !message.image_data.is_empty())
+}
+
+fn chat_item_has_persistable_content(item: &ChatItem) -> bool {
+  match item {
+    ChatItem::Message(message) => chat_message_has_persistable_content(message),
+    ChatItem::Tool(_) | ChatItem::Permission(_) => true,
+    ChatItem::Plan(plan) => !plan.entries.is_empty(),
+    ChatItem::Thought(thought) => !thought.text.trim().is_empty(),
+    ChatItem::Compaction(compaction) => {
+      !compaction.summary.trim().is_empty() || compaction.error.is_some()
+    }
+    ChatItem::Checkpoint(_) | ChatItem::TurnSummary(_) => false,
+  }
+}
+
+fn persisted_chat_items_have_persistable_content(items: &[PersistedChatItem]) -> bool {
+  items.iter().any(|item| match item {
+    PersistedChatItem::Message(message) => chat_message_has_persistable_content(message),
+    PersistedChatItem::Tool(_) | PersistedChatItem::Permission(_) => true,
+    PersistedChatItem::Plan(plan) => !plan.entries.is_empty(),
+    PersistedChatItem::Thought(thought) => !thought.text.trim().is_empty(),
+    PersistedChatItem::Compaction(compaction) => {
+      !compaction.summary.trim().is_empty() || compaction.error.is_some()
+    }
+    PersistedChatItem::Checkpoint(_) | PersistedChatItem::TurnSummary(_) => false,
+  })
+}
+
+fn conversation_file_has_persistable_content(path: &std::path::Path) -> bool {
+  std::fs::read_to_string(path)
+    .ok()
+    .and_then(|raw| serde_json::from_str::<PersistedConversation>(&raw).ok())
+    .is_some_and(|conversation| persisted_chat_items_have_persistable_content(&conversation.items))
+}
+
+pub(crate) fn conversation_meta_has_listing_content(
+  dir: &std::path::Path,
+  meta: &ConversationMeta,
+) -> bool {
+  let title = meta.title.trim();
+  !meta.preview.trim().is_empty()
+    || (!title.is_empty() && title != "New chat")
+    || conversation_file_has_persistable_content(&dir.join(format!("{}.json", meta.id)))
+}
+
 pub(crate) fn truncate_title(text: &str) -> String {
   let trimmed = text.trim().lines().next().unwrap_or("").trim();
   let max = 80;
@@ -295,7 +347,7 @@ pub(crate) fn list_conversations_in(dir: &std::path::Path) -> Vec<ConversationMe
       }
       let raw = std::fs::read_to_string(&path).ok()?;
       let parsed: PersistedConversationMetaOnly = serde_json::from_str(&raw).ok()?;
-      Some(parsed.meta)
+      conversation_meta_has_listing_content(dir, &parsed.meta).then_some(parsed.meta)
     })
     .collect();
   metas.sort_by_key(|m| std::cmp::Reverse(m.updated_at_secs));

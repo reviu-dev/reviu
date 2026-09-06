@@ -866,6 +866,106 @@ async fn the_listing_comes_from_the_index_without_reading_transcripts(
 }
 
 #[gpui::test]
+async fn system_only_conversations_are_not_persisted(cx: &mut gpui::TestAppContext) {
+  let dir = temp_dir("agent-system-only");
+  let (panel, cx) = add_panel_window(cx);
+  panel.update(cx, |panel, cx| {
+    panel.store = Some(cx.new(|_| crate::store::ConversationStore::new(dir.clone())));
+    panel.items = vec![ChatItem::Message(ChatMessage {
+      role: ChatRole::System,
+      text: "Agent disconnected.".into(),
+      images: 0,
+      image_data: Vec::new(),
+    })];
+    panel.persist_state(cx);
+  });
+  cx.run_until_parked();
+  let conv_id = panel.read_with(cx, |panel, _| panel.current_conv.id.clone());
+  assert!(
+    !dir.join(format!("{conv_id}.json")).exists(),
+    "system-only notices must not create empty chats in history"
+  );
+  assert!(
+    crate::store::ConversationStore::new(dir.clone())
+      .list()
+      .is_empty()
+  );
+  std::fs::remove_dir_all(&dir).ok();
+}
+
+#[gpui::test]
+async fn blank_index_rows_are_hidden_from_history(_cx: &mut gpui::TestAppContext) {
+  let dir = temp_dir("agent-blank-index-row");
+  let blank = ConversationMeta {
+    id: "blank".to_string(),
+    started_at_secs: 1,
+    updated_at_secs: 2,
+    title: String::new(),
+    message_count: 0,
+    agent_id: default_agent_id(),
+    session_id: Some("orphan-session".to_string()),
+    preview: String::new(),
+  };
+  let generic_title = ConversationMeta {
+    id: "generic-title".to_string(),
+    started_at_secs: 2,
+    updated_at_secs: 3,
+    title: "New chat".to_string(),
+    message_count: 0,
+    agent_id: default_agent_id(),
+    session_id: Some("generic-session".to_string()),
+    preview: String::new(),
+  };
+  let system_only = ConversationMeta {
+    id: "system-only".to_string(),
+    started_at_secs: 3,
+    updated_at_secs: 4,
+    title: String::new(),
+    message_count: 1,
+    agent_id: default_agent_id(),
+    session_id: Some("dead-session".to_string()),
+    preview: String::new(),
+  };
+  let visible = ConversationMeta {
+    id: "visible".to_string(),
+    started_at_secs: 4,
+    updated_at_secs: 5,
+    title: "Visible chat".to_string(),
+    message_count: 1,
+    agent_id: default_agent_id(),
+    session_id: None,
+    preview: "hello".to_string(),
+  };
+  let system_notice = PersistedConversation {
+    version: CONVERSATION_FORMAT_VERSION,
+    meta: system_only.clone(),
+    items: vec![PersistedChatItem::Message(ChatMessage {
+      role: ChatRole::System,
+      text: "Agent disconnected.".into(),
+      images: 0,
+      image_data: Vec::new(),
+    })],
+    group_pins: HashMap::new(),
+    auto_approve: false,
+  };
+  std::fs::write(
+    dir.join("system-only.json"),
+    serde_json::to_string(&system_notice).expect("serialize system-only conversation"),
+  )
+  .expect("write system-only conversation");
+  crate::persistence::write_index(&dir, &[blank, generic_title, system_only, visible]);
+
+  std::fs::write(dir.join("active.txt"), "generic-title").expect("write active pointer");
+
+  let store = crate::store::ConversationStore::new(dir.clone());
+  let listed = store.list();
+  assert_eq!(listed.len(), 1);
+  assert_eq!(listed[0].id, "visible");
+  assert_eq!(store.active_meta(), None);
+  std::fs::remove_dir_all(&dir).ok();
+}
+
+#[gpui::test]
 async fn coalesced_saves_land_the_last_snapshot(cx: &mut gpui::TestAppContext) {
   let dir = temp_dir("agent-store-lastwins");
   let (panel, cx) = add_panel_window(cx);
