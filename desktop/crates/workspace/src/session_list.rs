@@ -402,6 +402,20 @@ impl SessionList {
     rows
   }
 
+  fn visible_checkout_rows_for_project(&self, repo_root: &Path) -> Vec<CheckoutRow> {
+    let rows = self.checkout_rows_for_project(repo_root);
+    if !self.collapsed_projects.contains(repo_root) {
+      return rows;
+    }
+    let Some(displayed_checkout) = self.displayed_checkout.as_deref() else {
+      return Vec::new();
+    };
+    rows
+      .into_iter()
+      .filter(|row| row.path.as_path() == displayed_checkout)
+      .collect()
+  }
+
   fn checkout_path_for_session(&self, row: &SessionRow) -> PathBuf {
     if !self.git_repositories.contains(&row.project_root) {
       return row.project_root.clone();
@@ -1065,10 +1079,7 @@ impl Render for SessionList {
         &theme,
         cx,
       ));
-      if self.collapsed_projects.contains(section_repo) {
-        continue;
-      }
-      for checkout in self.checkout_rows_for_project(section_repo) {
+      for checkout in self.visible_checkout_rows_for_project(section_repo) {
         let active = self.displayed_checkout.as_deref() == Some(checkout.path.as_path());
         items.push(self.render_checkout_row(section_repo, &checkout, active, &theme, cx));
       }
@@ -1396,6 +1407,47 @@ mod tests {
       ),
       vec!["worktree-chat".to_string()]
     );
+  }
+
+  #[test]
+  fn collapsed_project_keeps_only_the_selected_checkout_visible() {
+    let mut list = SessionList::new();
+    let repo = PathBuf::from("/repo");
+    let worktree_path = PathBuf::from("/repo/.worktrees/feature-sidebar");
+    list.git_repositories.insert(repo.clone());
+    list.collapsed_projects.insert(repo.clone());
+    list.conversations = vec![meta("main-chat", 2), meta("worktree-chat", 1)];
+    list.worktree_checkouts.insert(
+      "worktree-chat".to_string(),
+      worktree_binding("/repo/.worktrees/feature-sidebar", "feature/sidebar"),
+    );
+
+    list.displayed_checkout = Some(worktree_path.clone());
+    assert_eq!(
+      list.visible_checkout_rows_for_project(&repo),
+      vec![CheckoutRow {
+        kind: CheckoutKind::Worktree {
+          branch: "feature/sidebar".to_string(),
+        },
+        path: worktree_path,
+        title: "feature/sidebar".into(),
+        subtitle: "Worktree checkout".into(),
+      }]
+    );
+
+    list.displayed_checkout = Some(repo.clone());
+    assert_eq!(
+      list.visible_checkout_rows_for_project(&repo),
+      vec![CheckoutRow {
+        kind: CheckoutKind::Main,
+        path: repo.clone(),
+        title: "Main checkout".into(),
+        subtitle: "Default working tree".into(),
+      }]
+    );
+
+    list.displayed_checkout = Some(PathBuf::from("/other"));
+    assert!(list.visible_checkout_rows_for_project(&repo).is_empty());
   }
 
   #[gpui::test]
