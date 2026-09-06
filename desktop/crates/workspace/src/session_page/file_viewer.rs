@@ -2032,18 +2032,36 @@ impl SessionPage {
     Ok((path, text))
   }
 
+  pub(super) fn close_active_center_pane_action(
+    &mut self,
+    _: &crate::CloseCenterPane,
+    window: &mut Window,
+    cx: &mut Context<Self>,
+  ) {
+    if self.center_layout.surface_count() <= 1 {
+      cx.propagate();
+      return;
+    }
+    let tab = self.center_layout.active_tab().clone();
+    self.close_center_surface(tab, window, cx);
+    cx.stop_propagation();
+  }
+
   /// Escape is bound to the editor's CloseFind; it bubbles up here when there was
-  /// no find panel to close, which is our cue to close the file view.
+  /// no find panel to close, which is our cue to close a split pane.
   pub(super) fn close_file_view_action(
     &mut self,
     _: &editor::CloseFind,
     window: &mut Window,
     cx: &mut Context<Self>,
   ) {
-    if self.center != CenterView::Diff {
+    if self.center != CenterView::Diff || self.center_layout.surface_count() <= 1 {
       return;
     }
-    self.close_diff(window, cx);
+    let Some(tab) = self.shown_editor_tab().cloned() else {
+      return;
+    };
+    self.close_center_surface(tab, window, cx);
     cx.stop_propagation();
   }
 }

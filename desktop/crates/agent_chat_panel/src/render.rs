@@ -2152,6 +2152,14 @@ impl Render for AgentChatPanel {
                         panel.slash_on_escape(cx);
                         panel.mention_on_escape(cx);
                       }))
+                      .on_action(cx.listener(|panel, _: &input::Escape, _, cx| {
+                        if panel.show_close_control {
+                          cx.emit(AgentChatPanelEvent::CloseRequested);
+                          cx.stop_propagation();
+                        } else {
+                          cx.propagate();
+                        }
+                      }))
                       .child(Textarea::new(&self.input).appearance(false).w_full())
                       .child(self.render_mention_overlay(cx))
                       .child(self.render_slash_overlay(cx)),

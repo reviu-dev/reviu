@@ -2401,6 +2401,7 @@ impl Render for SessionPage {
       .min_h_0()
       .track_focus(&self.focus_handle)
       .on_action(cx.listener(Self::close_workspace_page_action))
+      .on_action(cx.listener(Self::close_active_center_pane_action))
       .on_action(cx.listener(Self::close_active_center_tab_action))
       .on_action(cx.listener(Self::activate_next_center_tab_action))
       .on_action(cx.listener(Self::activate_previous_center_tab_action))
@@ -4946,24 +4947,19 @@ mod tests {
       assert!(page.warm_selected_file().is_some());
     });
 
-    // With no search left to close, escape closes the file.
+    // With no search left to close, escape leaves a single-pane file in place.
     page.update_in(cx, |page, window, cx| {
       page.close_file_view_action(&editor::CloseFind, window, cx)
     });
     page.read_with(cx, |page, _| {
-      assert_eq!(page.center, CenterView::Conversation);
+      assert_eq!(page.center, CenterView::Diff);
       assert!(page.warm_editor_tab().is_some());
-      assert!(page.shown_editor_tab().is_none());
+      assert!(page.shown_editor_tab().is_some());
     });
 
     page.update_in(cx, |page, window, cx| {
-      page.find_action(&editor::Find, window, cx)
+      page.close_workspace_page_action(&CloseWorkspacePage, window, cx);
     });
-    cx.run_until_parked();
-    assert!(
-      !find_open(&page, cx),
-      "cmd-f does not open search on a warm diff hidden behind chat"
-    );
     page.update(cx, |page, cx| {
       assert!(page.annotation_navigation(cx).is_none());
       page.toggle_hide_whitespace(cx);
@@ -6172,6 +6168,119 @@ mod tests {
     assert!(cx.debug_bounds("agent-chat-header").is_none());
     assert!(cx.debug_bounds("session-conversation-pane").is_some());
     assert!(cx.debug_bounds("session-diff-editor").is_none());
+  }
+
+  #[gpui::test]
+  async fn escape_in_split_file_closes_only_the_file_pane(cx: &mut TestAppContext) {
+    let repo = TempRepo::init("session-center-file-pane-escape");
+    commit_text_file(&repo.path, Path::new("README.md"), "v1\n", "initial");
+    let (page, cx) = add_session_page_window(repo.path.clone(), cx);
+    cx.run_until_parked();
+
+    page.update_in(cx, |page, window, cx| page.new_session(window, cx));
+    cx.run_until_parked();
+    let chat_tab = page.read_with(cx, |page, cx| page.active_chat_tab(cx));
+    let readme = CenterTab::file(PathBuf::from("README.md"));
+
+    page.update_in(cx, |page, window, cx| {
+      page.open_file(
+        PathBuf::from("README.md"),
+        None,
+        None,
+        OpenIntent::Open,
+        window,
+        cx,
+      );
+    });
+    await_open_file(&page, cx).await;
+    page.update_in(cx, |page, window, cx| {
+      let CenterNode::Pane(pane) = page.center_layout.root() else {
+        panic!("layout should start as a single pane");
+      };
+      assert!(page.center_layout.split_pane(
+        pane.id(),
+        CenterSurface::from_tab(chat_tab.clone()),
+        CenterSplitDirection::Left,
+      ));
+      page.remember_center_layout_tab(readme.clone());
+      page.center = CenterView::Diff;
+      page.sync_agent_chat_close_control(cx);
+      page.focus_editor_on_next_frame(window, cx);
+      cx.notify();
+    });
+    cx.run_until_parked();
+    cx.update(|_, cx| {
+      cx.bind_keys([gpui::KeyBinding::new(
+        "escape",
+        editor::CloseFind,
+        Some("Editor"),
+      )]);
+    });
+
+    cx.simulate_keystrokes("escape");
+    cx.run_until_parked();
+
+    page.read_with(cx, |page, _| {
+      assert_eq!(page.active_center_tab.as_ref(), Some(&chat_tab));
+      assert!(!page.center_layout.contains_tab(&readme));
+      assert_eq!(page.center_layout.surface_count(), 1);
+    });
+    assert!(cx.debug_bounds("session-conversation-pane").is_some());
+    assert!(cx.debug_bounds("session-diff-editor").is_none());
+  }
+
+  #[gpui::test]
+  async fn escape_in_split_chat_closes_only_the_chat_pane(cx: &mut TestAppContext) {
+    let repo = TempRepo::init("session-center-chat-pane-escape");
+    commit_text_file(&repo.path, Path::new("README.md"), "v1\n", "initial");
+    let (page, cx) = add_session_page_window(repo.path.clone(), cx);
+    cx.run_until_parked();
+
+    page.update_in(cx, |page, window, cx| page.new_session(window, cx));
+    cx.run_until_parked();
+    let chat_tab = page.read_with(cx, |page, cx| page.active_chat_tab(cx));
+    let readme = CenterTab::file(PathBuf::from("README.md"));
+
+    page.update_in(cx, |page, window, cx| {
+      page.open_file(
+        PathBuf::from("README.md"),
+        None,
+        None,
+        OpenIntent::Open,
+        window,
+        cx,
+      );
+    });
+    await_open_file(&page, cx).await;
+    page.update_in(cx, |page, window, cx| {
+      let CenterNode::Pane(pane) = page.center_layout.root() else {
+        panic!("layout should start as a single pane");
+      };
+      assert!(page.center_layout.split_pane(
+        pane.id(),
+        CenterSurface::from_tab(chat_tab.clone()),
+        CenterSplitDirection::Left,
+      ));
+      page.remember_center_layout_tab(readme.clone());
+      page.center = CenterView::Diff;
+      page.sync_agent_chat_close_control(cx);
+      window.focus(&page.focus_handle, cx);
+      cx.notify();
+    });
+    cx.run_until_parked();
+    cx.update(|_, cx| cx.bind_keys(crate::shortcuts::workspace_key_bindings()));
+
+    cx.simulate_keystrokes("escape");
+    cx.run_until_parked();
+
+    page.read_with(cx, |page, _| {
+      assert_eq!(page.active_center_tab.as_ref(), Some(&readme));
+      assert!(!page.center_layout.contains_tab(&chat_tab));
+      assert_eq!(page.center_layout.surface_count(), 1);
+    });
+    assert!(cx.debug_bounds("agent-chat-header").is_none());
+    assert!(cx.debug_bounds("session-conversation-pane").is_none());
+    assert!(cx.debug_bounds("session-diff-editor").is_some());
   }
 
   #[gpui::test]

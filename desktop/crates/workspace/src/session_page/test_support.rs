@@ -27,6 +27,7 @@ impl Render for SessionPageTestHost {
   fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
     div()
       .size_full()
+      .key_context(crate::shortcuts::WORKSPACE_SESSION_CONTEXT)
       .child(self.page.clone())
       .children(gpui_component::Root::render_dialog_layer(window, cx))
   }

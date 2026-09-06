@@ -5,6 +5,7 @@ actions!(
   [
     NavigateBack,
     CloseWorkspacePage,
+    CloseCenterPane,
     CloseCenterTab,
     NextCenterTab,
     PreviousCenterTab,

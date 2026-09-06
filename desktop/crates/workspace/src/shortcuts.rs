@@ -16,13 +16,14 @@ use std::collections::HashSet;
 
 use crate::config::ConfigStore;
 use crate::{
-  AcceptBothConflict, AddSelectionToAgent, CommentHunk, CommitChanges, ForcePushChanges,
-  JumpToLatestMessage, NavigateBack, NewAgentSession, NewAgentWorktreeSession, NextAnnotation,
-  NextCenterTab, OpenFilesSidebar, OpenGitChangesSidebar, OpenGitHistorySidebar, OpenProject,
-  OpenPullRequestSidebar, OpenReviewSidebar, OpenSessionPage, OpenSettingsPage, PreviousAnnotation,
-  PreviousCenterTab, PullChanges, PushChanges, RestoreFile, RestoreHunk, ReturnFocusToEditor,
-  SendReviewCommentsToAgent, ShowBranchSwitcher, ShowCommandPalette, ShowFileSearch,
-  ToggleDiffView, ToggleFileStage, ToggleHideWhitespace, ToggleHunkStage, ToggleTerminalSidebar,
+  AcceptBothConflict, AddSelectionToAgent, CloseCenterPane, CommentHunk, CommitChanges,
+  ForcePushChanges, JumpToLatestMessage, NavigateBack, NewAgentSession, NewAgentWorktreeSession,
+  NextAnnotation, NextCenterTab, OpenFilesSidebar, OpenGitChangesSidebar, OpenGitHistorySidebar,
+  OpenProject, OpenPullRequestSidebar, OpenReviewSidebar, OpenSessionPage, OpenSettingsPage,
+  PreviousAnnotation, PreviousCenterTab, PullChanges, PushChanges, RestoreFile, RestoreHunk,
+  ReturnFocusToEditor, SendReviewCommentsToAgent, ShowBranchSwitcher, ShowCommandPalette,
+  ShowFileSearch, ToggleDiffView, ToggleFileStage, ToggleHideWhitespace, ToggleHunkStage,
+  ToggleTerminalSidebar,
 };
 
 pub const SHOW_COMMAND_PALETTE_SHORTCUT: &str = "cmd-k";
@@ -1206,7 +1207,11 @@ fn workspace_key_bindings_with_overrides_and_generation(
 }
 
 fn fixed_workspace_key_bindings() -> Vec<KeyBinding> {
-  Vec::new()
+  vec![KeyBinding::new(
+    "escape",
+    CloseCenterPane,
+    Some(&guarded_shortcut_context(CENTER_TAB_CONTEXT)),
+  )]
 }
 
 pub fn key_context_for_pathname(_pathname: &str) -> &'static str {
@@ -1655,13 +1660,16 @@ mod tests {
 
   #[test]
   fn escape_no_longer_closes_workspace_pages() {
-    assert!(!has_binding("/settings", "escape"));
-    assert!(!has_binding("/git-config", "escape"));
-    assert!(!has_binding("/session", "escape"));
-    assert!(!has_binding("/github", "escape"));
-    assert!(!has_binding("/github/owner/repo", "escape"));
     assert!(!has_binding("/settings", "cmd-w"));
     assert!(!has_binding("/git-config", "cmd-w"));
+  }
+
+  #[test]
+  fn escape_can_close_center_panes_from_the_session() {
+    assert_eq!(
+      first_binding_action_name("/session", &[], "escape", workspace_key_bindings(),),
+      Some("workspace::CloseCenterPane")
+    );
   }
 
   #[test]
