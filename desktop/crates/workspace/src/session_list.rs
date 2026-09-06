@@ -509,14 +509,13 @@ impl SessionList {
 }
 
 impl SessionList {
-  /// A project's section header: fold toggle, name, count when folded, and the
-  /// hover actions that target that project.
+  /// A project's section header: fold toggle, name, and the hover actions that
+  /// target that project.
   fn render_project_header(
     &self,
     repo_root: &Path,
     row: usize,
     is_last: bool,
-    count: usize,
     theme: &gpui_component::Theme,
     cx: &mut Context<Self>,
   ) -> gpui::AnyElement {
@@ -619,14 +618,6 @@ impl SessionList {
           .text_color(theme.muted_foreground)
           .child(name),
       )
-      .when(collapsed, |this| {
-        this.child(
-          div()
-            .text_xs()
-            .text_color(theme.muted_foreground.opacity(0.8))
-            .child(count.to_string()),
-        )
-      })
       .child(
         h_flex()
           .items_center()
@@ -1067,12 +1058,10 @@ impl Render for SessionList {
       .retain(|repo, _| section_repos.contains(repo));
     let mut items: Vec<gpui::AnyElement> = Vec::new();
     for (section_ix, section_repo) in section_repos.iter().enumerate() {
-      let count = self.checkout_rows_for_project(section_repo).len();
       items.push(self.render_project_header(
         section_repo,
         section_ix,
         section_ix + 1 == section_repos.len(),
-        count,
         &theme,
         cx,
       ));
