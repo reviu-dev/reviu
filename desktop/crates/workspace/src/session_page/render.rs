@@ -469,7 +469,7 @@ impl SessionPage {
     tabs
   }
 
-  fn open_center_chat_ids(&self) -> HashSet<String> {
+  pub(super) fn open_center_chat_ids(&self) -> HashSet<String> {
     fn collect(ids: &mut HashSet<String>, tab: &CenterTab) {
       if let Some(id) = tab.conversation_id() {
         ids.insert(id.to_string());
@@ -872,6 +872,11 @@ impl SessionPage {
       .content(move |_, _window, cx| {
         let popover = cx.entity().clone();
         let theme = cx.theme().clone();
+        let clear_ids = items
+          .iter()
+          .filter(|item| !matches!(item.status, SessionStatus::Working | SessionStatus::Waiting))
+          .map(|item| item.id.clone())
+          .collect::<Vec<_>>();
         let visible_rows = items.len().clamp(1, 8) as f32;
         let list_height = px((visible_rows * 48.0).min(360.0));
         let mut list = v_flex();
@@ -1031,12 +1036,38 @@ impl SessionPage {
                   .text_color(theme.muted_foreground)
                   .child("Chat history"),
               )
-              .child(
-                div()
-                  .text_xs()
-                  .text_color(theme.muted_foreground)
-                  .child(items.len().to_string()),
-              ),
+              .child({
+                let clear_page = page.clone();
+                let clear_popover = popover.clone();
+                let clear_ids = clear_ids.clone();
+                h_flex()
+                  .items_center()
+                  .gap_2()
+                  .child(
+                    div()
+                      .text_xs()
+                      .text_color(theme.muted_foreground)
+                      .child(items.len().to_string()),
+                  )
+                  .when(!clear_ids.is_empty(), |this| {
+                    this.child(
+                      Button::new("session-history-clear-closed")
+                        .debug_selector(|| "session-history-clear-closed".to_string())
+                        .label("Clear")
+                        .ghost()
+                        .compact()
+                        .xsmall()
+                        .tooltip("Delete all closed chats")
+                        .on_click(move |_, window, cx| {
+                          cx.stop_propagation();
+                          clear_popover.update(cx, |state, cx| state.dismiss(window, cx));
+                          clear_page.update(cx, |page, cx| {
+                            page.confirm_delete_closed_sessions(clear_ids.clone(), window, cx);
+                          });
+                        }),
+                    )
+                  })
+              }),
           )
           .child(
             div()
@@ -4679,6 +4710,65 @@ mod tests {
     page.read_with(cx, |page, cx| {
       assert_eq!(page.session_list.read(cx).current_id(), first_id);
       assert_eq!(page.active_chat_tab(cx), CenterTab::chat_for(first_id));
+    });
+  }
+
+  #[gpui::test]
+  async fn center_history_clear_deletes_all_closed_chats_after_confirmation(
+    cx: &mut TestAppContext,
+  ) {
+    let repo = TempRepo::init("session-center-history-clear");
+    commit_text_file(&repo.path, Path::new("README.md"), "v1\n", "initial");
+    let (page, cx) = add_session_page_window(repo.path.clone(), cx);
+    cx.run_until_parked();
+
+    let now = std::time::SystemTime::now()
+      .duration_since(std::time::UNIX_EPOCH)
+      .map(|duration| duration.as_secs())
+      .unwrap_or(0);
+    let store = page.update(cx, |page, cx| {
+      let access = page
+        .chat_store_for_project(&repo.path, cx)
+        .expect("chat store");
+      page.chat_store = Some(access.store.clone());
+      access.store
+    });
+    for id in ["history-clear-a", "history-clear-b"] {
+      store.update(cx, |store, _| {
+        store.insert_meta_for_test(agent_chat_panel::ConversationMeta {
+          id: id.to_string(),
+          started_at_secs: now,
+          updated_at_secs: now,
+          title: id.to_string(),
+          message_count: 1,
+          agent_id: agent_chat_panel::default_agent_id(),
+          session_id: None,
+          preview: id.to_string(),
+        });
+      });
+    }
+    page.update(cx, |_, cx| cx.notify());
+    cx.run_until_parked();
+
+    let history = cx
+      .debug_bounds("session-center-history")
+      .expect("history button");
+    cx.simulate_click(history.center(), gpui::Modifiers::default());
+    cx.run_until_parked();
+
+    let clear = cx
+      .debug_bounds("session-history-clear-closed")
+      .expect("clear history button");
+    cx.simulate_click(clear.center(), gpui::Modifiers::default());
+    cx.run_until_parked();
+    assert!(cx.update(|window, cx| window.has_active_dialog(cx)));
+
+    cx.simulate_keystrokes("enter");
+    cx.run_until_parked();
+
+    page.read_with(cx, |page, cx| {
+      let store = page.chat_store.as_ref().expect("store").read(cx);
+      assert!(store.list().is_empty(), "all closed chats were deleted");
     });
   }
 

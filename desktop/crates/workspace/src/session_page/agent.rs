@@ -1419,6 +1419,61 @@ impl SessionPage {
     });
   }
 
+  pub(super) fn confirm_delete_closed_sessions(
+    &mut self,
+    ids: Vec<String>,
+    window: &mut Window,
+    cx: &mut Context<Self>,
+  ) {
+    let ids = self.deletable_closed_session_ids(ids, cx);
+    if ids.is_empty() {
+      return;
+    }
+    let count = ids.len();
+    let message = if count == 1 {
+      "Delete this closed chat? This cannot be undone.".to_string()
+    } else {
+      format!("Delete {count} closed chats? This cannot be undone.")
+    };
+    let view = cx.entity();
+    window.open_alert_dialog(cx, move |alert, _, _| {
+      let ids = ids.clone();
+      let view = view.clone();
+      ConfirmDialog::new("Delete closed chats?", div().child(message.clone()))
+        .confirm_text(if count == 1 { "Delete" } else { "Delete All" })
+        .cancel_text("Cancel")
+        .on_confirm(move |_, window, cx| {
+          view.update(cx, |this, cx| {
+            for id in ids.clone() {
+              this.delete_session_confirmed(&id, window, cx);
+            }
+          });
+          true
+        })
+        .build(alert)
+    });
+  }
+
+  fn deletable_closed_session_ids(&self, ids: Vec<String>, cx: &App) -> Vec<String> {
+    let open_chat_ids = self.open_center_chat_ids();
+    let active_id = self
+      .agent_chat_view
+      .as_ref()
+      .map(|panel| panel.read(cx).current_conversation().id.clone());
+    let statuses = self.session_statuses(cx);
+    ids
+      .into_iter()
+      .filter(|id| active_id.as_deref() != Some(id.as_str()))
+      .filter(|id| !open_chat_ids.contains(id))
+      .filter(|id| {
+        !matches!(
+          statuses.get(id).copied().unwrap_or_default(),
+          SessionStatus::Working | SessionStatus::Waiting
+        )
+      })
+      .collect()
+  }
+
   pub(super) fn delete_session(&mut self, id: &str, window: &mut Window, cx: &mut Context<Self>) {
     let status = self
       .session_statuses(cx)
