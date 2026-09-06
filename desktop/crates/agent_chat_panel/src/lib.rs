@@ -843,6 +843,15 @@ impl TurnGate {
   }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AgentChatPaneAction {
+  MoveLeft,
+  MoveRight,
+  MoveUp,
+  MoveDown,
+  Separate,
+}
+
 /// Emitted so the host can act on panel interactions.
 #[derive(Clone, Debug)]
 pub enum AgentChatPanelEvent {
@@ -872,6 +881,8 @@ pub enum AgentChatPanelEvent {
   TurnFailed { message: String },
   /// User asked the host to hide the chat pane.
   CloseRequested,
+  /// User asked the host to rearrange the split pane holding this chat.
+  PaneActionRequested(AgentChatPaneAction),
 }
 
 impl gpui::EventEmitter<AgentChatPanelEvent> for AgentChatPanel {}

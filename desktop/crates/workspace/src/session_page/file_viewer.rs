@@ -1553,6 +1553,89 @@ impl SessionPage {
     cx.notify();
   }
 
+  pub(super) fn move_center_surface_to_edge(
+    &mut self,
+    tab: CenterTab,
+    direction: CenterSplitDirection,
+    window: &mut Window,
+    cx: &mut Context<Self>,
+  ) {
+    if !self.center_layout.move_surface_to_edge(&tab, direction) {
+      cx.notify();
+      return;
+    }
+
+    self.center = Self::center_view_for_tab(&tab);
+    if let Some(conversation_id) = tab.conversation_id() {
+      self.activate_session_panel(conversation_id, window, cx);
+    }
+    self.ensure_center_layout_chat_panels(window, cx);
+    self.remember_center_layout_tab(tab.clone());
+    self.sync_agent_chat_close_control(cx);
+    match self.center {
+      CenterView::Conversation => self.focus_agent_input_on_next_frame(window, cx),
+      CenterView::Diff => self.focus_editor_on_next_frame(window, cx),
+      CenterView::InteractiveRebase => {}
+    }
+    cx.notify();
+  }
+
+  pub(super) fn separate_center_surface(
+    &mut self,
+    tab: CenterTab,
+    window: &mut Window,
+    cx: &mut Context<Self>,
+  ) {
+    let old_layout_tabs = self.center_layout.tabs();
+    let old_representative = self.active_center_tab.clone();
+    let Some(surface) = self.center_layout.extract_surface(&tab) else {
+      cx.notify();
+      return;
+    };
+    let remaining_tab = self.center_layout.active_tab().clone();
+
+    self
+      .center_tabs
+      .retain(|candidate| !old_layout_tabs.iter().any(|tab| tab == candidate));
+    self
+      .center_tab_history
+      .retain(|candidate| !old_layout_tabs.iter().any(|tab| tab == candidate));
+    for layout_tab in &old_layout_tabs {
+      self.center_layouts_by_tab.remove(layout_tab);
+    }
+
+    if self.center_layout.surface_count() > 1 {
+      let representative = old_representative
+        .filter(|representative| {
+          representative != &tab && self.center_layout.contains_tab(representative)
+        })
+        .unwrap_or_else(|| remaining_tab.clone());
+      self.center_tabs.push(representative.clone());
+      self
+        .center_layouts_by_tab
+        .insert(representative, self.center_layout.clone());
+    } else {
+      self.center_tabs.push(remaining_tab);
+    }
+
+    self.center_layout = CenterLayout::single(surface);
+    self.center = Self::center_view_for_tab(&tab);
+    self.active_center_tab = Some(tab.clone());
+    self.center_tabs.push(tab.clone());
+    self.remember_center_tab_visit(tab.clone());
+    if let Some(conversation_id) = tab.conversation_id() {
+      self.activate_session_panel(conversation_id, window, cx);
+    }
+    self.ensure_center_layout_chat_panels(window, cx);
+    self.sync_agent_chat_close_control(cx);
+    match self.center {
+      CenterView::Conversation => self.focus_agent_input_on_next_frame(window, cx),
+      CenterView::Diff => self.focus_editor_on_next_frame(window, cx),
+      CenterView::InteractiveRebase => {}
+    }
+    cx.notify();
+  }
+
   pub(super) fn close_center_tab(
     &mut self,
     tab: CenterTab,

@@ -1984,16 +1984,71 @@ impl Render for AgentChatPanel {
                 .items_center()
                 .when_some(usage_status, |this, usage| this.child(usage))
                 .when(self.show_close_control, |this| {
-                  this.child(
-                    Button::new("agent-chat-close")
-                      .debug_selector(|| "agent-chat-close".to_string())
-                      .icon(IconName::Close)
-                      .xsmall()
-                      .ghost()
-                      .on_click(
-                        cx.listener(|_, _, _, cx| cx.emit(AgentChatPanelEvent::CloseRequested)),
-                      ),
-                  )
+                  let panel = cx.entity().clone();
+                  this
+                    .child(
+                      Button::new("agent-chat-pane-actions")
+                        .debug_selector(|| "agent-chat-pane-actions".to_string())
+                        .icon(IconName::Ellipsis)
+                        .xsmall()
+                        .ghost()
+                        .dropdown_menu(move |menu, _, _| {
+                          let move_left = panel.clone();
+                          let move_right = panel.clone();
+                          let move_up = panel.clone();
+                          let move_down = panel.clone();
+                          let separate = panel.clone();
+                          menu
+                            .item(PopupMenuItem::new("Move Left").on_click(move |_, _, cx| {
+                              move_left.update(cx, |_, cx| {
+                                cx.emit(AgentChatPanelEvent::PaneActionRequested(
+                                  AgentChatPaneAction::MoveLeft,
+                                ));
+                              });
+                            }))
+                            .item(PopupMenuItem::new("Move Right").on_click(move |_, _, cx| {
+                              move_right.update(cx, |_, cx| {
+                                cx.emit(AgentChatPanelEvent::PaneActionRequested(
+                                  AgentChatPaneAction::MoveRight,
+                                ));
+                              });
+                            }))
+                            .item(PopupMenuItem::new("Move Up").on_click(move |_, _, cx| {
+                              move_up.update(cx, |_, cx| {
+                                cx.emit(AgentChatPanelEvent::PaneActionRequested(
+                                  AgentChatPaneAction::MoveUp,
+                                ));
+                              });
+                            }))
+                            .item(PopupMenuItem::new("Move Down").on_click(move |_, _, cx| {
+                              move_down.update(cx, |_, cx| {
+                                cx.emit(AgentChatPanelEvent::PaneActionRequested(
+                                  AgentChatPaneAction::MoveDown,
+                                ));
+                              });
+                            }))
+                            .separator()
+                            .item(PopupMenuItem::new("Separate Tab from Split").on_click(
+                              move |_, _, cx| {
+                                separate.update(cx, |_, cx| {
+                                  cx.emit(AgentChatPanelEvent::PaneActionRequested(
+                                    AgentChatPaneAction::Separate,
+                                  ));
+                                });
+                              },
+                            ))
+                        }),
+                    )
+                    .child(
+                      Button::new("agent-chat-close")
+                        .debug_selector(|| "agent-chat-close".to_string())
+                        .icon(IconName::Close)
+                        .xsmall()
+                        .ghost()
+                        .on_click(
+                          cx.listener(|_, _, _, cx| cx.emit(AgentChatPanelEvent::CloseRequested)),
+                        ),
+                    )
                 }),
             ),
         )

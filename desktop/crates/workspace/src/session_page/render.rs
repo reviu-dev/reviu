@@ -7,7 +7,7 @@ use crate::diff_toolbar::{DiffToolbar, NavigationControl, SplitControl, ToggleCo
 use crate::hunk_actions::render_hunk_actions;
 use gpui_component::{
   Selectable as _,
-  menu::{ContextMenuExt as _, PopupMenu, PopupMenuItem},
+  menu::{ContextMenuExt as _, DropdownMenu as _, PopupMenu, PopupMenuItem},
   scroll::ScrollableElement as _,
 };
 
@@ -1827,6 +1827,120 @@ impl SessionPage {
       .into_any_element()
   }
 
+  fn center_surface_control_id(prefix: &str, tab: &CenterTab) -> String {
+    format!(
+      "{prefix}-{}",
+      tab
+        .path()
+        .map(|path| path.to_string_lossy().replace(['/', '\\', ':'], "_"))
+        .or_else(|| tab.conversation_id().map(ToOwned::to_owned))
+        .unwrap_or_default()
+    )
+  }
+
+  fn render_center_surface_actions(&self, tab: CenterTab, cx: &mut Context<Self>) -> AnyElement {
+    let page = cx.entity().clone();
+    let move_left_enabled = self
+      .center_layout
+      .can_move_surface_to_edge(&tab, CenterSplitDirection::Left);
+    let move_right_enabled = self
+      .center_layout
+      .can_move_surface_to_edge(&tab, CenterSplitDirection::Right);
+    let move_up_enabled = self
+      .center_layout
+      .can_move_surface_to_edge(&tab, CenterSplitDirection::Up);
+    let move_down_enabled = self
+      .center_layout
+      .can_move_surface_to_edge(&tab, CenterSplitDirection::Down);
+
+    Button::new(Self::center_surface_control_id(
+      "session-page-center-surface-actions",
+      &tab,
+    ))
+    .debug_selector(|| "session-page-center-surface-actions".to_string())
+    .icon(gpui_component::IconName::Ellipsis)
+    .xsmall()
+    .ghost()
+    .dropdown_menu(move |menu, _, _| {
+      let move_left_page = page.clone();
+      let move_left_tab = tab.clone();
+      let move_right_page = page.clone();
+      let move_right_tab = tab.clone();
+      let move_up_page = page.clone();
+      let move_up_tab = tab.clone();
+      let move_down_page = page.clone();
+      let move_down_tab = tab.clone();
+      let separate_page = page.clone();
+      let separate_tab = tab.clone();
+      menu
+        .item(
+          PopupMenuItem::new("Move Left")
+            .disabled(!move_left_enabled)
+            .on_click(move |_, window, cx| {
+              move_left_page.update(cx, |page, cx| {
+                page.move_center_surface_to_edge(
+                  move_left_tab.clone(),
+                  CenterSplitDirection::Left,
+                  window,
+                  cx,
+                );
+              });
+            }),
+        )
+        .item(
+          PopupMenuItem::new("Move Right")
+            .disabled(!move_right_enabled)
+            .on_click(move |_, window, cx| {
+              move_right_page.update(cx, |page, cx| {
+                page.move_center_surface_to_edge(
+                  move_right_tab.clone(),
+                  CenterSplitDirection::Right,
+                  window,
+                  cx,
+                );
+              });
+            }),
+        )
+        .item(
+          PopupMenuItem::new("Move Up")
+            .disabled(!move_up_enabled)
+            .on_click(move |_, window, cx| {
+              move_up_page.update(cx, |page, cx| {
+                page.move_center_surface_to_edge(
+                  move_up_tab.clone(),
+                  CenterSplitDirection::Up,
+                  window,
+                  cx,
+                );
+              });
+            }),
+        )
+        .item(
+          PopupMenuItem::new("Move Down")
+            .disabled(!move_down_enabled)
+            .on_click(move |_, window, cx| {
+              move_down_page.update(cx, |page, cx| {
+                page.move_center_surface_to_edge(
+                  move_down_tab.clone(),
+                  CenterSplitDirection::Down,
+                  window,
+                  cx,
+                );
+              });
+            }),
+        )
+        .separator()
+        .item(
+          PopupMenuItem::new("Separate Tab from Split").on_click(move |_, window, cx| {
+            separate_page.update(cx, |page, cx| {
+              page.separate_center_surface(separate_tab.clone(), window, cx);
+            });
+          }),
+        )
+    })
+    .into_any_element()
+  }
+
   pub(super) fn render_diff_header(&self, cx: &mut Context<Self>) -> AnyElement {
     let active_editor = self.shown_editor();
     let active_binary_preview = self.shown_binary_preview();
@@ -1954,27 +2068,24 @@ impl SessionPage {
     if self.center_layout.surface_count() > 1
       && let Some(tab) = self.shown_editor_tab().cloned()
     {
-      let close_button_id = format!(
-        "session-page-close-center-surface-{}",
-        tab
-          .path()
-          .map(|path| path.to_string_lossy().replace(['/', '\\', ':'], "_"))
-          .unwrap_or_default()
-      );
+      let close_button_id =
+        Self::center_surface_control_id("session-page-close-center-surface", &tab);
       let page = cx.entity().clone();
-      toolbar = toolbar.after_toggles(
-        Button::new(close_button_id)
-          .debug_selector(|| "session-page-close-center-surface".to_string())
-          .icon(gpui_component::IconName::Close)
-          .xsmall()
-          .ghost()
-          .on_click(move |_, window, cx| {
-            page.update(cx, |page, cx| {
-              page.close_center_surface(tab.clone(), window, cx);
-            });
-          })
-          .into_any_element(),
-      );
+      toolbar = toolbar
+        .after_toggles(self.render_center_surface_actions(tab.clone(), cx))
+        .after_toggles(
+          Button::new(close_button_id)
+            .debug_selector(|| "session-page-close-center-surface".to_string())
+            .icon(gpui_component::IconName::Close)
+            .xsmall()
+            .ghost()
+            .on_click(move |_, window, cx| {
+              page.update(cx, |page, cx| {
+                page.close_center_surface(tab.clone(), window, cx);
+              });
+            })
+            .into_any_element(),
+        );
     }
 
     toolbar.render(cx)
@@ -6168,6 +6279,116 @@ mod tests {
     assert!(cx.debug_bounds("agent-chat-header").is_none());
     assert!(cx.debug_bounds("session-conversation-pane").is_some());
     assert!(cx.debug_bounds("session-diff-editor").is_none());
+  }
+
+  #[gpui::test]
+  async fn split_diff_header_shows_pane_actions(cx: &mut TestAppContext) {
+    let repo = TempRepo::init("session-center-pane-actions");
+    commit_text_file(&repo.path, Path::new("README.md"), "v1\n", "initial");
+    let (page, cx) = add_session_page_window(repo.path.clone(), cx);
+    cx.run_until_parked();
+
+    page.update_in(cx, |page, window, cx| page.new_session(window, cx));
+    cx.run_until_parked();
+    let chat_tab = page.read_with(cx, |page, cx| page.active_chat_tab(cx));
+    let readme = CenterTab::file(PathBuf::from("README.md"));
+
+    page.update_in(cx, |page, window, cx| {
+      page.open_file(
+        PathBuf::from("README.md"),
+        None,
+        None,
+        OpenIntent::Open,
+        window,
+        cx,
+      );
+    });
+    await_open_file(&page, cx).await;
+    page.update(cx, |page, cx| {
+      let CenterNode::Pane(pane) = page.center_layout.root() else {
+        panic!("layout should start as a single pane");
+      };
+      assert!(page.center_layout.split_pane(
+        pane.id(),
+        CenterSurface::from_tab(chat_tab.clone()),
+        CenterSplitDirection::Left,
+      ));
+      page.remember_center_layout_tab(readme.clone());
+      page.center = CenterView::Diff;
+      page.sync_agent_chat_close_control(cx);
+      cx.notify();
+    });
+    cx.run_until_parked();
+
+    assert!(
+      cx.debug_bounds("session-page-center-surface-actions")
+        .is_some()
+    );
+  }
+
+  #[gpui::test]
+  async fn split_center_surface_can_move_and_separate(cx: &mut TestAppContext) {
+    let repo = TempRepo::init("session-center-pane-move-separate");
+    commit_text_file(&repo.path, Path::new("README.md"), "v1\n", "initial");
+    let (page, cx) = add_session_page_window(repo.path.clone(), cx);
+    cx.run_until_parked();
+
+    page.update_in(cx, |page, window, cx| page.new_session(window, cx));
+    cx.run_until_parked();
+    let chat_tab = page.read_with(cx, |page, cx| page.active_chat_tab(cx));
+    let readme = CenterTab::file(PathBuf::from("README.md"));
+
+    page.update_in(cx, |page, window, cx| {
+      page.open_file(
+        PathBuf::from("README.md"),
+        None,
+        None,
+        OpenIntent::Open,
+        window,
+        cx,
+      );
+    });
+    await_open_file(&page, cx).await;
+    page.update(cx, |page, cx| {
+      let CenterNode::Pane(pane) = page.center_layout.root() else {
+        panic!("layout should start as a single pane");
+      };
+      assert!(page.center_layout.split_pane(
+        pane.id(),
+        CenterSurface::from_tab(chat_tab.clone()),
+        CenterSplitDirection::Left,
+      ));
+      page.remember_center_layout_tab(readme.clone());
+      page.center = CenterView::Diff;
+      page.sync_agent_chat_close_control(cx);
+      cx.notify();
+    });
+    cx.run_until_parked();
+
+    page.update_in(cx, |page, window, cx| {
+      page.move_center_surface_to_edge(readme.clone(), CenterSplitDirection::Left, window, cx);
+      let CenterNode::Split(split) = page.center_layout.root() else {
+        panic!("layout should stay split");
+      };
+      assert_eq!(split.direction(), CenterSplitDirection::Left);
+      let CenterNode::Pane(first) = split.first() else {
+        panic!("first side should be a pane");
+      };
+      let CenterNode::Pane(second) = split.second() else {
+        panic!("second side should be a pane");
+      };
+      assert_eq!(first.active_surface().tab(), &readme);
+      assert_eq!(second.active_surface().tab(), &chat_tab);
+    });
+
+    page.update_in(cx, |page, window, cx| {
+      page.separate_center_surface(readme.clone(), window, cx);
+    });
+    page.read_with(cx, |page, _| {
+      assert_eq!(page.active_center_tab.as_ref(), Some(&readme));
+      assert_eq!(page.center_layout.surface_count(), 1);
+      assert_eq!(page.center_tabs_for_navigation(), vec![chat_tab, readme]);
+    });
   }
 
   #[gpui::test]

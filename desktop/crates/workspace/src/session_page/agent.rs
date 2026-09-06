@@ -365,6 +365,24 @@ impl SessionPage {
           let tab = Self::chat_tab_for_panel(panel, cx);
           this.close_center_surface(tab, window, cx);
         }
+        AgentChatPanelEvent::PaneActionRequested(action) => {
+          let tab = Self::chat_tab_for_panel(panel, cx);
+          match action {
+            AgentChatPaneAction::MoveLeft => {
+              this.move_center_surface_to_edge(tab, CenterSplitDirection::Left, window, cx)
+            }
+            AgentChatPaneAction::MoveRight => {
+              this.move_center_surface_to_edge(tab, CenterSplitDirection::Right, window, cx)
+            }
+            AgentChatPaneAction::MoveUp => {
+              this.move_center_surface_to_edge(tab, CenterSplitDirection::Up, window, cx)
+            }
+            AgentChatPaneAction::MoveDown => {
+              this.move_center_surface_to_edge(tab, CenterSplitDirection::Down, window, cx)
+            }
+            AgentChatPaneAction::Separate => this.separate_center_surface(tab, window, cx),
+          }
+        }
       },
     )
     .detach();

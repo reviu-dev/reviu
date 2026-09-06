@@ -4028,16 +4028,19 @@ async fn close_control_is_host_controlled(cx: &mut gpui::TestAppContext) {
   cx.run_until_parked();
 
   assert!(cx.debug_bounds("agent-chat-close").is_none());
+  assert!(cx.debug_bounds("agent-chat-pane-actions").is_none());
 
   panel.update(cx, |panel, cx| panel.set_close_control_visible(true, cx));
   cx.run_until_parked();
 
   assert!(cx.debug_bounds("agent-chat-close").is_some());
+  assert!(cx.debug_bounds("agent-chat-pane-actions").is_some());
 
   panel.update(cx, |panel, cx| panel.set_close_control_visible(false, cx));
   cx.run_until_parked();
 
   assert!(cx.debug_bounds("agent-chat-close").is_none());
+  assert!(cx.debug_bounds("agent-chat-pane-actions").is_none());
 }
 
 #[gpui::test]

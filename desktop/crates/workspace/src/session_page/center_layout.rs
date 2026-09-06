@@ -91,14 +91,27 @@ impl CenterPane {
       return true;
     }
 
-    self.surfaces.remove(index);
-    if self.active_surface.tab() == tab {
+    self.remove_surface_at(index);
+    true
+  }
+
+  fn remove_surface(&mut self, tab: &CenterTab) -> Option<CenterSurface> {
+    let index = self
+      .surfaces
+      .iter()
+      .position(|surface| surface.tab() == tab)?;
+    Some(self.remove_surface_at(index))
+  }
+
+  fn remove_surface_at(&mut self, index: usize) -> CenterSurface {
+    let surface = self.surfaces.remove(index);
+    if self.active_surface.tab() == surface.tab() {
       let next_index = index.min(self.surfaces.len().saturating_sub(1));
       if let Some(next_surface) = self.surfaces.get(next_index).cloned() {
         self.active_surface = next_surface;
       }
     }
-    true
+    surface
   }
 
   fn surface_count(&self) -> usize {
@@ -147,6 +160,11 @@ pub(super) enum CenterNode {
 
 struct CloseResult {
   removed: bool,
+  prune_node: bool,
+}
+
+struct ExtractResult {
+  surface: Option<CenterSurface>,
   prune_node: bool,
 }
 
@@ -336,6 +354,60 @@ impl CenterNode {
     }
   }
 
+  fn extract_surface(&mut self, tab: &CenterTab) -> ExtractResult {
+    match self {
+      Self::Pane(pane) => {
+        let surface = pane.remove_surface(tab);
+        ExtractResult {
+          prune_node: surface.is_some() && pane.surface_count() == 0,
+          surface,
+        }
+      }
+      Self::Split(split) => {
+        let first_result = split.first.extract_surface(tab);
+        if first_result.surface.is_some() {
+          if first_result.prune_node {
+            *self = split.second.as_ref().clone();
+          }
+          return ExtractResult {
+            surface: first_result.surface,
+            prune_node: false,
+          };
+        }
+
+        let second_result = split.second.extract_surface(tab);
+        if second_result.surface.is_some() && second_result.prune_node {
+          *self = split.first.as_ref().clone();
+        }
+        ExtractResult {
+          surface: second_result.surface,
+          prune_node: false,
+        }
+      }
+    }
+  }
+
+  fn surface_at_edge(&self, tab: &CenterTab, direction: CenterSplitDirection) -> bool {
+    match self {
+      Self::Pane(pane) => pane.contains_tab(tab),
+      Self::Split(split) => match (split.direction, direction) {
+        (CenterSplitDirection::Left | CenterSplitDirection::Right, CenterSplitDirection::Left) => {
+          split.first.surface_at_edge(tab, direction)
+        }
+        (CenterSplitDirection::Left | CenterSplitDirection::Right, CenterSplitDirection::Right) => {
+          split.second.surface_at_edge(tab, direction)
+        }
+        (CenterSplitDirection::Up | CenterSplitDirection::Down, CenterSplitDirection::Up) => {
+          split.first.surface_at_edge(tab, direction)
+        }
+        (CenterSplitDirection::Up | CenterSplitDirection::Down, CenterSplitDirection::Down) => {
+          split.second.surface_at_edge(tab, direction)
+        }
+        _ => false,
+      },
+    }
+  }
+
   fn surface_count(&self) -> usize {
     match self {
       Self::Pane(pane) => pane.surface_count(),
@@ -455,6 +527,46 @@ impl CenterLayout {
     } else {
       false
     }
+  }
+
+  pub(super) fn can_move_surface_to_edge(
+    &self,
+    tab: &CenterTab,
+    direction: CenterSplitDirection,
+  ) -> bool {
+    self.root.surface_count() > 1
+      && self.root.contains_tab(tab)
+      && !self.root.surface_at_edge(tab, direction)
+  }
+
+  pub(super) fn move_surface_to_edge(
+    &mut self,
+    tab: &CenterTab,
+    direction: CenterSplitDirection,
+  ) -> bool {
+    if !self.can_move_surface_to_edge(tab, direction) {
+      return false;
+    }
+    let Some(surface) = self.extract_surface(tab) else {
+      return false;
+    };
+    let old_node = self.root.clone();
+    let new_node = CenterNode::Pane(CenterPane::new(self.allocate_pane_id(), surface));
+    self.root = CenterNode::Split(CenterSplit::new(old_node, new_node, direction));
+    self.active_tab = tab.clone();
+    true
+  }
+
+  pub(super) fn extract_surface(&mut self, tab: &CenterTab) -> Option<CenterSurface> {
+    if self.root.surface_count() <= 1 {
+      return None;
+    }
+    let result = self.root.extract_surface(tab);
+    let surface = result.surface?;
+    if &self.active_tab == tab {
+      self.active_tab = self.root.first_active_surface().tab().clone();
+    }
+    Some(surface)
   }
 
   pub(super) fn close_surface(&mut self, tab: &CenterTab) -> bool {
@@ -599,6 +711,59 @@ mod tests {
 
     assert!(!layout.close_surface(&readme));
     assert_eq!(layout.active_tab(), &readme);
+  }
+
+  #[test]
+  fn extract_surface_collapses_the_split_without_closing_the_tab() {
+    let readme = CenterTab::file(PathBuf::from("README.md"));
+    let lib = CenterTab::file(PathBuf::from("src/lib.rs"));
+    let mut layout = CenterLayout::single(CenterSurface::from_tab(readme.clone()));
+    assert!(layout.split_active(
+      CenterSurface::from_tab(lib.clone()),
+      CenterSplitDirection::Right
+    ));
+
+    let extracted = layout.extract_surface(&lib).expect("extracted surface");
+
+    assert_eq!(extracted.tab(), &lib);
+    assert_eq!(layout.active_tab(), &readme);
+    assert_eq!(
+      layout.root,
+      CenterNode::Pane(CenterPane::new(CenterPaneId(0), file("README.md")))
+    );
+  }
+
+  #[test]
+  fn move_surface_to_edge_reorders_a_split() {
+    let readme = CenterTab::file(PathBuf::from("README.md"));
+    let lib = CenterTab::file(PathBuf::from("src/lib.rs"));
+    let mut layout = CenterLayout::single(CenterSurface::from_tab(readme.clone()));
+    assert!(layout.split_active(
+      CenterSurface::from_tab(lib.clone()),
+      CenterSplitDirection::Right
+    ));
+
+    assert!(layout.can_move_surface_to_edge(&readme, CenterSplitDirection::Right));
+    assert!(layout.move_surface_to_edge(&readme, CenterSplitDirection::Right));
+
+    assert_eq!(layout.active_tab(), &readme);
+    assert!(!layout.can_move_surface_to_edge(&readme, CenterSplitDirection::Right));
+    assert_split_tabs(&layout, CenterSplitDirection::Right, &lib, &readme);
+  }
+
+  #[test]
+  fn move_surface_to_edge_can_change_split_orientation() {
+    let readme = CenterTab::file(PathBuf::from("README.md"));
+    let lib = CenterTab::file(PathBuf::from("src/lib.rs"));
+    let mut layout = CenterLayout::single(CenterSurface::from_tab(readme.clone()));
+    assert!(layout.split_active(
+      CenterSurface::from_tab(lib.clone()),
+      CenterSplitDirection::Right
+    ));
+
+    assert!(layout.move_surface_to_edge(&lib, CenterSplitDirection::Up));
+
+    assert_split_tabs(&layout, CenterSplitDirection::Up, &lib, &readme);
   }
 
   #[test]

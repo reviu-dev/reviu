@@ -6,7 +6,9 @@ use std::rc::Rc;
 use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime};
 
-use agent_chat_panel::{AgentChatPanel, AgentChatPanelEvent, ConversationStore, TurnGate};
+use agent_chat_panel::{
+  AgentChatPaneAction, AgentChatPanel, AgentChatPanelEvent, ConversationStore, TurnGate,
+};
 use editor::{
   ConflictResolution, DiffViewMode, Editor, EditorEvent, ReviewCommentCancelHandler,
   ReviewCommentCreateHandler, ReviewCommentCreateRequest, ReviewCommentDeleteHandler,
