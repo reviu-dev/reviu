@@ -213,6 +213,17 @@ impl ConversationStore {
       .collect()
   }
 
+  pub fn conversation_ids_beyond_limit(&self, limit: usize) -> Vec<String> {
+    let mut metas = self.list();
+    metas.sort_by_key(|meta| {
+      (
+        std::cmp::Reverse(meta.updated_at_secs),
+        std::cmp::Reverse(meta.started_at_secs),
+      )
+    });
+    metas.into_iter().skip(limit).map(|meta| meta.id).collect()
+  }
+
   pub fn conversation_ids_older_than(&self, max_age: std::time::Duration) -> Vec<String> {
     let now = std::time::SystemTime::now();
     let cutoff = now_secs().saturating_sub(max_age.as_secs());

@@ -31,7 +31,8 @@ use gpui_component::{
 };
 
 use crate::agent_chat_state::{
-  AGENT_CHAT_STATE_MAX_AGE, agent_chat_state_dir, agent_path_to_repo_relative,
+  AGENT_CHAT_STATE_MAX_AGE, AGENT_CHAT_STATE_MAX_CONVERSATIONS_PER_PROJECT, agent_chat_state_dir,
+  agent_path_to_repo_relative,
 };
 use crate::agent_review::{
   AgentReviewComments, ReviewSend, original_lines_for_request, sync_comments_to_editor,

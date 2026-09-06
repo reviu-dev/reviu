@@ -1380,12 +1380,19 @@ impl SessionPage {
     store: Entity<ConversationStore>,
     cx: &mut Context<Self>,
   ) {
-    let live_ids = self.live_chat_panel_ids(cx);
-    let stale_ids = store
+    let mut protected_ids = self.live_chat_panel_ids(cx);
+    protected_ids.extend(self.open_center_chat_ids());
+    let mut stale_ids = store
       .read(cx)
       .conversation_ids_older_than(AGENT_CHAT_STATE_MAX_AGE);
+    stale_ids.extend(
+      store
+        .read(cx)
+        .conversation_ids_beyond_limit(AGENT_CHAT_STATE_MAX_CONVERSATIONS_PER_PROJECT),
+    );
+    let mut seen_ids = std::collections::HashSet::new();
     for id in stale_ids {
-      if live_ids.contains(&id) {
+      if protected_ids.contains(&id) || !seen_ids.insert(id.clone()) {
         continue;
       }
       self.delete_session_storage_and_resources(repo_root.to_path_buf(), store.clone(), &id, cx);
@@ -4622,6 +4629,59 @@ mod tests {
 
     let _ = std::fs::remove_dir_all(&state_dir);
     cleanup_worktrees_root(&repo.path);
+  }
+
+  #[gpui::test]
+  async fn conversation_pruning_caps_history_per_project(cx: &mut TestAppContext) {
+    agent_chat_panel::set_backend_command_override(Some("/nonexistent-agent-binary".to_string()));
+    let repo = TempRepo::init("session-page-prune-cap");
+    commit_text_file(&repo.path, Path::new("README.md"), "v1\n", "initial");
+    let state_dir = agent_chat_state_dir()
+      .map(|dir| AgentChatPanel::state_dir_for_project(&dir, &repo.path))
+      .expect("agent chat state dir");
+    let _ = std::fs::remove_dir_all(&state_dir);
+    std::fs::create_dir_all(&state_dir).expect("create state dir");
+    let conversations = (0..AGENT_CHAT_STATE_MAX_CONVERSATIONS_PER_PROJECT + 5)
+      .map(|index| {
+        serde_json::json!({
+          "id": format!("cap-{index:03}"),
+          "started_at_secs": index,
+          "updated_at_secs": index,
+          "title": format!("Chat {index}"),
+          "message_count": 1,
+          "session_id": null,
+          "preview": "hello"
+        })
+      })
+      .collect::<Vec<_>>();
+    std::fs::write(
+      state_dir.join("index.json"),
+      serde_json::json!({ "version": 1, "conversations": conversations }).to_string(),
+    )
+    .expect("write index");
+
+    let (page, cx) = add_session_page_window(repo.path.clone(), cx);
+    cx.run_until_parked();
+    page.update_in(cx, |page, window, cx| page.activate(window, cx));
+    cx.run_until_parked();
+
+    page.read_with(cx, |page, cx| {
+      let ids = page
+        .chat_store
+        .as_ref()
+        .expect("store")
+        .read(cx)
+        .list()
+        .into_iter()
+        .map(|meta| meta.id)
+        .collect::<std::collections::HashSet<_>>();
+      assert_eq!(ids.len(), AGENT_CHAT_STATE_MAX_CONVERSATIONS_PER_PROJECT);
+      assert!(!ids.contains("cap-004"), "the oldest chats were pruned");
+      assert!(ids.contains("cap-005"), "the first retained chat stayed");
+      assert!(ids.contains("cap-204"), "the newest chat stayed");
+    });
+
+    let _ = std::fs::remove_dir_all(&state_dir);
   }
 
   /// A second repo with one conversation already on disk, tracked by the hub

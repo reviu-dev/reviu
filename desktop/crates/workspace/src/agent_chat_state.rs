@@ -4,6 +4,7 @@ use std::path::{Path, PathBuf};
 
 pub(crate) const AGENT_CHAT_STATE_MAX_AGE: std::time::Duration =
   std::time::Duration::from_secs(60 * 60 * 24 * 30);
+pub(crate) const AGENT_CHAT_STATE_MAX_CONVERSATIONS_PER_PROJECT: usize = 200;
 
 pub(crate) fn agent_chat_state_dir() -> Option<std::path::PathBuf> {
   Some(dirs::config_dir()?.join("reviu").join("agent-chats"))
