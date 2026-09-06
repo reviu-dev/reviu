@@ -47,7 +47,6 @@ impl SessionPage {
       Some(_) => return,
       None => None,
     };
-    prune_agent_chat_state_once();
     if let Some(evicted_project) = self.ensure_chat_store(cx) {
       self.push_project_hidden_notification(&evicted_project, window, cx);
     }
@@ -1193,7 +1192,6 @@ impl SessionPage {
     window: &mut Window,
     cx: &mut Context<Self>,
   ) {
-    prune_agent_chat_state_once();
     if let Some(evicted_project) = self.ensure_chat_store(cx) {
       self.push_project_hidden_notification(&evicted_project, window, cx);
     }
@@ -1312,7 +1310,6 @@ impl SessionPage {
     window: &mut Window,
     cx: &mut Context<Self>,
   ) {
-    prune_agent_chat_state_once();
     if let Some(evicted_project) = self.ensure_chat_store(cx) {
       self.push_project_hidden_notification(&evicted_project, window, cx);
     }
@@ -1375,6 +1372,51 @@ impl SessionPage {
       });
     })
     .detach();
+  }
+
+  pub(super) fn prune_old_project_sessions(
+    &mut self,
+    repo_root: &Path,
+    store: Entity<ConversationStore>,
+    cx: &mut Context<Self>,
+  ) {
+    let live_ids = self.live_chat_panel_ids(cx);
+    let stale_ids = store
+      .read(cx)
+      .conversation_ids_older_than(AGENT_CHAT_STATE_MAX_AGE);
+    for id in stale_ids {
+      if live_ids.contains(&id) {
+        continue;
+      }
+      self.delete_session_storage_and_resources(repo_root.to_path_buf(), store.clone(), &id, cx);
+    }
+  }
+
+  fn live_chat_panel_ids(&self, cx: &App) -> std::collections::HashSet<String> {
+    self
+      .agent_chat_view
+      .iter()
+      .chain(self.background_chat_panels.iter().map(|(_, panel)| panel))
+      .map(|panel| panel.read(cx).current_conversation().id.clone())
+      .collect()
+  }
+
+  fn delete_session_storage_and_resources(
+    &mut self,
+    repo_root: PathBuf,
+    store: Entity<ConversationStore>,
+    id: &str,
+    cx: &mut Context<Self>,
+  ) {
+    let clear_active = store.read(cx).active_id() == Some(id);
+    self.cleanup_session_worktree(repo_root.clone(), store.clone(), id, cx);
+    self.cleanup_session_checkpoints(repo_root, id, cx);
+    store.update(cx, |store, cx| {
+      store.delete(id, cx);
+      if clear_active {
+        store.set_active(None, cx);
+      }
+    });
   }
 
   pub(super) fn delete_session(&mut self, id: &str, window: &mut Window, cx: &mut Context<Self>) {
@@ -1457,10 +1499,7 @@ impl SessionPage {
       return;
     };
     let deleted_repo = repo_root.clone();
-    // Bindings are read before the delete scrubs them.
-    self.cleanup_session_worktree(repo_root.clone(), store.clone(), id, cx);
-    self.cleanup_session_checkpoints(repo_root, id, cx);
-    store.update(cx, |store, cx| store.delete(id, cx));
+    self.delete_session_storage_and_resources(repo_root, store.clone(), id, cx);
     // Dropping the panel stops its agent process.
     self
       .background_chat_panels
@@ -1470,7 +1509,6 @@ impl SessionPage {
       .as_ref()
       .is_some_and(|panel| panel.read(cx).current_conversation().id == id);
     if deleting_active {
-      store.update(cx, |store, cx| store.set_active(None, cx));
       self.agent_chat_view = None;
       // You were working in that repo: the fresh session stays there.
       let access = self.chat_store_for_project(&deleted_repo, cx);
@@ -1569,7 +1607,6 @@ impl SessionPage {
     window: &mut Window,
     cx: &mut Context<Self>,
   ) {
-    prune_agent_chat_state_once();
     if let Some(evicted_project) = self.ensure_chat_store(cx) {
       self.push_project_hidden_notification(&evicted_project, window, cx);
     }
@@ -4440,6 +4477,93 @@ mod tests {
         "the dangling binding was dropped"
       );
     });
+
+    let _ = std::fs::remove_dir_all(&state_dir);
+    cleanup_worktrees_root(&repo.path);
+  }
+
+  #[gpui::test]
+  async fn old_conversation_pruning_cleans_up_stale_history_rows(cx: &mut TestAppContext) {
+    agent_chat_panel::set_backend_command_override(Some("/nonexistent-agent-binary".to_string()));
+    let repo = TempRepo::init("session-page-prune-delete-cleanup");
+    commit_text_file(&repo.path, Path::new("README.md"), "v1\n", "initial");
+    let worktree = git::create_worktree(&repo.path, None).expect("create worktree");
+    let state_dir = agent_chat_state_dir()
+      .map(|dir| AgentChatPanel::state_dir_for_project(&dir, &repo.path))
+      .expect("agent chat state dir");
+    let _ = std::fs::remove_dir_all(&state_dir);
+    std::fs::create_dir_all(&state_dir).expect("create state dir");
+    let meta = serde_json::json!({
+      "id": "old-conversation",
+      "started_at_secs": 1,
+      "updated_at_secs": 1,
+      "title": "Old chat",
+      "message_count": 1,
+      "session_id": null,
+      "preview": "hello"
+    });
+    std::fs::write(
+      state_dir.join("index.json"),
+      serde_json::json!({ "version": 1, "conversations": [meta.clone()] }).to_string(),
+    )
+    .expect("write index");
+    std::fs::write(
+      state_dir.join("drafts.json"),
+      serde_json::json!({ "old-conversation": "draft" }).to_string(),
+    )
+    .expect("write drafts");
+    std::fs::write(
+      state_dir.join("scroll.json"),
+      serde_json::json!({ "old-conversation": [3, 0.5] }).to_string(),
+    )
+    .expect("write scroll");
+    std::fs::write(
+      state_dir.join("worktrees.json"),
+      serde_json::json!({
+        "old-conversation": { "path": worktree.path, "branch": worktree.branch }
+      })
+      .to_string(),
+    )
+    .expect("write bindings");
+    std::fs::write(state_dir.join("active.txt"), "old-conversation").expect("write active");
+    let stale_time =
+      std::time::SystemTime::now() - std::time::Duration::from_secs(60 * 60 * 24 * 31);
+    let file_times = std::fs::FileTimes::new().set_modified(stale_time);
+    std::fs::File::options()
+      .write(true)
+      .open(state_dir.join("index.json"))
+      .expect("open index")
+      .set_times(file_times)
+      .expect("age index");
+
+    let (page, cx) = add_session_page_window(repo.path.clone(), cx);
+    cx.run_until_parked();
+    page.update_in(cx, |page, window, cx| page.activate(window, cx));
+    cx.run_until_parked();
+
+    page.read_with(cx, |page, cx| {
+      let store = page.chat_store.as_ref().expect("store").read(cx);
+      assert!(store.list().is_empty(), "the stale row left the index");
+      assert_eq!(store.active_id(), None);
+    });
+    let index: serde_json::Value = serde_json::from_str(
+      &std::fs::read_to_string(state_dir.join("index.json")).expect("read index"),
+    )
+    .expect("parse index");
+    assert_eq!(index["conversations"], serde_json::json!([]));
+    assert!(!state_dir.join("old-conversation.json").exists());
+    assert!(!state_dir.join("active.txt").exists());
+    for name in ["drafts.json", "scroll.json", "worktrees.json"] {
+      let json: serde_json::Value = serde_json::from_str(
+        &std::fs::read_to_string(state_dir.join(name)).expect("read state file"),
+      )
+      .expect("parse state file");
+      assert!(
+        json.get("old-conversation").is_none(),
+        "{name} was scrubbed"
+      );
+    }
+    assert!(!worktree.path.exists(), "the bound checkout was removed");
 
     let _ = std::fs::remove_dir_all(&state_dir);
     cleanup_worktrees_root(&repo.path);

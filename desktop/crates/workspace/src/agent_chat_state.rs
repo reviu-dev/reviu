@@ -2,7 +2,8 @@
 
 use std::path::{Path, PathBuf};
 
-use agent_chat_panel::AgentChatPanel;
+pub(crate) const AGENT_CHAT_STATE_MAX_AGE: std::time::Duration =
+  std::time::Duration::from_secs(60 * 60 * 24 * 30);
 
 pub(crate) fn agent_chat_state_dir() -> Option<std::path::PathBuf> {
   Some(dirs::config_dir()?.join("reviu").join("agent-chats"))
@@ -14,17 +15,6 @@ pub(crate) fn agent_path_to_repo_relative(path: PathBuf, repo_root: Option<&Path
     .map(Path::to_path_buf)
     .unwrap_or(path)
 }
-pub(crate) fn prune_agent_chat_state_once() {
-  use std::sync::OnceLock;
-  static PRUNED: OnceLock<()> = OnceLock::new();
-  PRUNED.get_or_init(|| {
-    if let Some(dir) = agent_chat_state_dir() {
-      let _ =
-        AgentChatPanel::prune_old_state(&dir, std::time::Duration::from_secs(60 * 60 * 24 * 30));
-    }
-  });
-}
-
 #[cfg(test)]
 mod tests {
   use super::*;

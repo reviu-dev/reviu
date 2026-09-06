@@ -31,7 +31,7 @@ use gpui_component::{
 };
 
 use crate::agent_chat_state::{
-  agent_chat_state_dir, agent_path_to_repo_relative, prune_agent_chat_state_once,
+  AGENT_CHAT_STATE_MAX_AGE, agent_chat_state_dir, agent_path_to_repo_relative,
 };
 use crate::agent_review::{
   AgentReviewComments, ReviewSend, original_lines_for_request, sync_comments_to_editor,
@@ -753,9 +753,11 @@ impl SessionPage {
     cx: &mut Context<Self>,
   ) -> Option<ConversationStoreAccess> {
     let protected = self.protected_chat_projects(cx);
-    self
+    let access = self
       .conversation_hub
-      .store_for_project(project_root, &protected, cx)
+      .store_for_project(project_root, &protected, cx)?;
+    self.prune_old_project_sessions(project_root, access.store.clone(), cx);
+    Some(access)
   }
 
   fn backfill_session_sidebar_git_project(&mut self, cx: &mut Context<Self>) -> bool {

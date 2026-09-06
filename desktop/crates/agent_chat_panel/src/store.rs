@@ -9,8 +9,8 @@ use gpui::{App, Context, Task};
 use crate::PersistedConversation;
 use crate::persistence::{
   ConversationMeta, LoadedConversation, WorktreeBinding, conversation_meta_has_listing_content,
-  list_conversations_in, load_conversation_file, read_drafts, read_index, read_scrolls,
-  read_worktrees, write_drafts, write_index, write_scrolls, write_worktrees,
+  index_path, list_conversations_in, load_conversation_file, now_secs, read_drafts, read_index,
+  read_scrolls, read_worktrees, write_drafts, write_index, write_scrolls, write_worktrees,
 };
 use app_log::ResultExt;
 use std::collections::HashMap;
@@ -210,6 +210,28 @@ impl ConversationStore {
       .iter()
       .filter(|meta| conversation_meta_has_listing_content(&self.dir, meta))
       .cloned()
+      .collect()
+  }
+
+  pub fn conversation_ids_older_than(&self, max_age: std::time::Duration) -> Vec<String> {
+    let now = std::time::SystemTime::now();
+    let cutoff = now_secs().saturating_sub(max_age.as_secs());
+    let index_is_stale = std::fs::metadata(index_path(&self.dir))
+      .and_then(|metadata| metadata.modified())
+      .ok()
+      .and_then(|modified| now.duration_since(modified).ok())
+      .is_some_and(|age| age > max_age);
+    self
+      .list()
+      .into_iter()
+      .filter(|meta| {
+        let path = self.dir.join(format!("{}.json", meta.id));
+        match std::fs::metadata(path).and_then(|metadata| metadata.modified()) {
+          Ok(modified) => now.duration_since(modified).is_ok_and(|age| age > max_age),
+          Err(_) => index_is_stale && meta.updated_at_secs < cutoff,
+        }
+      })
+      .map(|meta| meta.id)
       .collect()
   }
 
