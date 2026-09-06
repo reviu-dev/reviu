@@ -1601,6 +1601,13 @@ impl SessionPage {
     self
       .center_tab_history
       .retain(|candidate| candidate != &tab);
+    self.center_layouts_by_tab.remove(&tab);
+    for tabs in self.center_tabs_by_checkout.values_mut() {
+      tabs.retain(|candidate| candidate != &tab);
+    }
+    self
+      .center_active_tab_by_checkout
+      .retain(|_, candidate| candidate != &tab);
     if !selected_closed {
       cx.notify();
       return;

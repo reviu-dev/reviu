@@ -469,6 +469,95 @@ impl SessionPage {
     tabs
   }
 
+  fn open_center_chat_ids(&self) -> HashSet<String> {
+    fn collect(ids: &mut HashSet<String>, tab: &CenterTab) {
+      if let Some(id) = tab.conversation_id() {
+        ids.insert(id.to_string());
+      }
+    }
+
+    let mut ids = HashSet::new();
+    for tab in &self.center_tabs {
+      collect(&mut ids, tab);
+    }
+    for tab in self.center_layout.tabs() {
+      collect(&mut ids, &tab);
+    }
+    for layout in self.center_layouts_by_tab.values() {
+      for tab in layout.tabs() {
+        collect(&mut ids, &tab);
+      }
+    }
+    for tabs in self.center_tabs_by_checkout.values() {
+      for tab in tabs {
+        collect(&mut ids, tab);
+      }
+    }
+    for tab in self.center_active_tab_by_checkout.values() {
+      collect(&mut ids, tab);
+    }
+    ids
+  }
+
+  fn merged_session_status(current: SessionStatus, next: SessionStatus) -> SessionStatus {
+    match (current, next) {
+      (SessionStatus::Waiting, _) | (_, SessionStatus::Waiting) => SessionStatus::Waiting,
+      (SessionStatus::Failed, _) | (_, SessionStatus::Failed) => SessionStatus::Failed,
+      (SessionStatus::Working, _) | (_, SessionStatus::Working) => SessionStatus::Working,
+      _ => SessionStatus::Idle,
+    }
+  }
+
+  fn center_tab_status(
+    tabs: &[CenterTab],
+    statuses: &HashMap<String, SessionStatus>,
+  ) -> Option<SessionStatus> {
+    let mut status = SessionStatus::Idle;
+    for tab in tabs {
+      let Some(conversation_id) = tab.conversation_id() else {
+        continue;
+      };
+      status = Self::merged_session_status(
+        status,
+        statuses.get(conversation_id).copied().unwrap_or_default(),
+      );
+    }
+    (status != SessionStatus::Idle).then_some(status)
+  }
+
+  fn center_status_label(status: SessionStatus) -> Option<&'static str> {
+    match status {
+      SessionStatus::Idle => None,
+      SessionStatus::Working => Some("Working"),
+      SessionStatus::Waiting => Some("Waiting"),
+      SessionStatus::Failed => Some("Failed"),
+    }
+  }
+
+  fn center_status_color(status: SessionStatus, theme: &gpui_component::Theme) -> gpui::Hsla {
+    match status {
+      SessionStatus::Idle => theme.muted_foreground,
+      SessionStatus::Working => theme.status_amber(),
+      SessionStatus::Waiting => theme.status_blue(),
+      SessionStatus::Failed => theme.status_red(),
+    }
+  }
+
+  fn render_center_tab_status(status: SessionStatus, theme: &gpui_component::Theme) -> AnyElement {
+    let Some(label) = Self::center_status_label(status) else {
+      return gpui::Empty.into_any_element();
+    };
+    div()
+      .id("session-center-tab-status-dot")
+      .debug_selector(|| "session-center-tab-status-dot".to_string())
+      .size(px(7.0))
+      .flex_shrink_0()
+      .rounded_full()
+      .bg(Self::center_status_color(status, theme).opacity(0.9))
+      .tooltip(move |window, cx| gpui_component::tooltip::Tooltip::new(label).build(window, cx))
+      .into_any_element()
+  }
+
   fn center_tab_label(
     &self,
     tab: &CenterTab,
@@ -529,6 +618,7 @@ impl SessionPage {
     page: Entity<Self>,
     tab: CenterTab,
     tabs: Vec<CenterTab>,
+    delete_chat_id: Option<String>,
   ) -> PopupMenu {
     let tab_index = tabs.iter().position(|candidate| candidate == &tab);
     if tab.is_closeable() {
@@ -579,6 +669,20 @@ impl SessionPage {
           let anchor_tab = anchor_tab.clone();
           close_page.update(cx, |page, cx| {
             page.close_center_tabs_to_right(anchor_tab, window, cx);
+          });
+        }),
+      );
+    }
+
+    if let Some(conversation_id) = delete_chat_id {
+      if !menu.is_empty() {
+        menu = menu.separator();
+      }
+      let delete_page = page.clone();
+      menu = menu.item(
+        PopupMenuItem::new("Delete Chat").on_click(move |_, window, cx| {
+          delete_page.update(cx, |page, cx| {
+            page.delete_session(&conversation_id, window, cx);
           });
         }),
       );
@@ -701,6 +805,7 @@ impl SessionPage {
       .agent_chat_view
       .as_ref()
       .map(|panel| panel.read(cx).current_conversation().id.clone());
+    let open_chat_ids = self.open_center_chat_ids();
     let worktrees = self.conversation_hub.worktree_checkouts(cx);
     let mut items = self
       .conversation_hub
@@ -715,35 +820,30 @@ impl SessionPage {
         let worktrees = worktrees.clone();
         let active_id = active_id.clone();
         let statuses = statuses.clone();
-        metas.into_iter().map(move |meta| {
-          let subtitle = worktrees
-            .get(&meta.id)
-            .map(|binding| format!("{project_name} - {}", binding.branch))
-            .unwrap_or_else(|| format!("{project_name} - Main checkout"));
-          CenterConversationHistoryItem {
-            id: meta.id.clone(),
-            title: session_row_title(&meta),
-            subtitle,
-            updated_at_secs: meta.updated_at_secs,
-            time: format_relative_secs(meta.updated_at_secs, now),
-            agent_id: meta.agent_id.clone(),
-            status: statuses.get(&meta.id).copied().unwrap_or_default(),
-            selected: active_id.as_deref() == Some(meta.id.as_str()),
-          }
-        })
+        let open_chat_ids = open_chat_ids.clone();
+        metas
+          .into_iter()
+          .filter(move |meta| !open_chat_ids.contains(&meta.id))
+          .map(move |meta| {
+            let subtitle = worktrees
+              .get(&meta.id)
+              .map(|binding| format!("{project_name} - {}", binding.branch))
+              .unwrap_or_else(|| format!("{project_name} - Main checkout"));
+            CenterConversationHistoryItem {
+              id: meta.id.clone(),
+              title: session_row_title(&meta),
+              subtitle,
+              updated_at_secs: meta.updated_at_secs,
+              time: format_relative_secs(meta.updated_at_secs, now),
+              agent_id: meta.agent_id.clone(),
+              status: statuses.get(&meta.id).copied().unwrap_or_default(),
+              selected: active_id.as_deref() == Some(meta.id.as_str()),
+            }
+          })
       })
       .collect::<Vec<_>>();
     items.sort_by_key(|item| std::cmp::Reverse(item.updated_at_secs));
     items
-  }
-
-  fn center_history_status_label(status: SessionStatus) -> Option<&'static str> {
-    match status {
-      SessionStatus::Idle => None,
-      SessionStatus::Working => Some("Working"),
-      SessionStatus::Waiting => Some("Waiting"),
-      SessionStatus::Failed => Some("Failed"),
-    }
   }
 
   fn render_center_history_button(&self, cx: &mut Context<Self>) -> AnyElement {
@@ -792,13 +892,8 @@ impl SessionPage {
           let popover = popover.clone();
           let delete_id = item.id.clone();
           let status = item.status;
-          let status_label = Self::center_history_status_label(status);
-          let status_color = match status {
-            SessionStatus::Idle => theme.muted_foreground,
-            SessionStatus::Working => theme.status_amber(),
-            SessionStatus::Waiting => theme.status_blue(),
-            SessionStatus::Failed => theme.status_red(),
-          };
+          let status_label = Self::center_status_label(status);
+          let status_color = Self::center_status_color(status, &theme);
           let selector_id = item.id.clone();
           let group_name = SharedString::from(format!("session-history-row-{selector_id}"));
           list = list.child(
@@ -968,6 +1063,7 @@ impl SessionPage {
       .unwrap_or(0);
 
     let selectable_tabs = tabs.clone();
+    let statuses = self.session_statuses(cx);
     let mut tab_bar = TabBar::new(id.clone())
       .w_full()
       .h_full()
@@ -1005,12 +1101,22 @@ impl SessionPage {
       let Some(label) = self.center_tab_label(&label_tab, dirty, cx) else {
         continue;
       };
+      let status = Self::center_tab_status(&icon_tabs, &statuses);
+      let icon_chat_ids = icon_tabs
+        .iter()
+        .filter_map(|tab| tab.conversation_id().map(ToOwned::to_owned))
+        .collect::<Vec<_>>();
+      let delete_chat_id = label_tab
+        .conversation_id()
+        .map(ToOwned::to_owned)
+        .or_else(|| (icon_chat_ids.len() == 1).then(|| icon_chat_ids[0].clone()));
 
       let accessibility_label = label.clone();
       let tab_debug_selector = Self::center_tab_debug_selector(tab);
       let page = cx.entity().clone();
       let menu_tab = tab.clone();
       let menu_tabs = tabs.clone();
+      let menu_delete_chat_id = delete_chat_id.clone();
       let tab_content = h_flex()
         .debug_selector(move || tab_debug_selector.clone())
         .h(px(CENTER_TAB_CONTENT_HEIGHT_PX))
@@ -1032,12 +1138,16 @@ impl SessionPage {
             .line_height(px(CENTER_TAB_LABEL_HEIGHT_PX))
             .child(label),
         )
+        .when_some(status, |this, status| {
+          this.child(Self::render_center_tab_status(status, &theme))
+        })
         .context_menu(move |menu, _, _| {
           Self::build_center_tab_context_menu(
             menu,
             page.clone(),
             menu_tab.clone(),
             menu_tabs.clone(),
+            menu_delete_chat_id.clone(),
           )
         });
 
@@ -4350,7 +4460,7 @@ mod tests {
   }
 
   #[gpui::test]
-  async fn center_history_lists_conversations_removed_from_sidebar(cx: &mut TestAppContext) {
+  async fn center_history_lists_closed_conversations_removed_from_sidebar(cx: &mut TestAppContext) {
     let repo = TempRepo::init("session-center-history");
     commit_text_file(&repo.path, Path::new("README.md"), "v1\n", "initial");
     let (page, cx) = add_session_page_window(repo.path.clone(), cx);
@@ -4378,6 +4488,11 @@ mod tests {
     cx.run_until_parked();
     let second_id = second_panel.read_with(cx, |panel, _| panel.current_conversation().id.clone());
 
+    page.update_in(cx, |page, window, cx| {
+      page.close_center_tab(CenterTab::chat_for(first_id.clone()), window, cx)
+    });
+    cx.run_until_parked();
+
     let first_sidebar_selector = Box::leak(format!("session-chat-row-{first_id}").into_boxed_str());
     let second_sidebar_selector =
       Box::leak(format!("session-chat-row-{second_id}").into_boxed_str());
@@ -4396,8 +4511,11 @@ mod tests {
       Box::leak(format!("session-history-chat-row-{second_id}").into_boxed_str());
     let first_history_row = cx
       .debug_bounds(first_history_selector)
-      .expect("first conversation in history");
-    assert!(cx.debug_bounds(second_history_selector).is_some());
+      .expect("closed conversation in history");
+    assert!(
+      cx.debug_bounds(second_history_selector).is_none(),
+      "open chat tabs stay out of history"
+    );
 
     cx.simulate_click(first_history_row.center(), gpui::Modifiers::default());
     cx.run_until_parked();
@@ -4491,6 +4609,104 @@ mod tests {
   }
 
   #[gpui::test]
+  async fn center_chat_tabs_show_agent_status(cx: &mut TestAppContext) {
+    let repo = TempRepo::init("session-center-tab-status");
+    let (page, cx) = add_session_page_window(repo.path.clone(), cx);
+    cx.run_until_parked();
+
+    page.update_in(cx, |page, window, cx| page.new_session(window, cx));
+    cx.run_until_parked();
+    let panel = page.read_with(cx, |page, _| {
+      page.agent_chat_view.clone().expect("active panel")
+    });
+    panel.update(cx, |panel, cx| {
+      panel.seed_user_message_for_test("busy", cx);
+      panel.pretend_turn_in_flight_for_test(cx);
+    });
+    cx.run_until_parked();
+
+    assert!(cx.debug_bounds("session-center-tab-status-dot").is_some());
+  }
+
+  #[gpui::test]
+  async fn center_split_tab_groups_show_chat_status(cx: &mut TestAppContext) {
+    let repo = TempRepo::init("session-center-split-tab-status");
+    commit_text_file(&repo.path, Path::new("README.md"), "v1\n", "initial");
+    let (page, cx) = add_session_page_window(repo.path.clone(), cx);
+    cx.run_until_parked();
+
+    page.update_in(cx, |page, window, cx| page.new_session(window, cx));
+    cx.run_until_parked();
+    let chat_tab = page.read_with(cx, |page, cx| page.active_chat_tab(cx));
+    let panel = page.read_with(cx, |page, _| {
+      page.agent_chat_view.clone().expect("active panel")
+    });
+    panel.update(cx, |panel, cx| {
+      panel.seed_user_message_for_test("busy", cx);
+      panel.pretend_turn_in_flight_for_test(cx);
+    });
+    page.update_in(cx, |page, window, cx| {
+      page.open_file(
+        PathBuf::from("README.md"),
+        None,
+        None,
+        OpenIntent::Open,
+        window,
+        cx,
+      );
+    });
+    await_open_file(&page, cx).await;
+    page.update_in(cx, |page, window, cx| {
+      let readme = CenterTab::file(PathBuf::from("README.md"));
+      let CenterNode::Pane(pane) = page.center_layout.root() else {
+        panic!("single pane before split");
+      };
+      assert!(page.center_layout.split_pane(
+        pane.id(),
+        CenterSurface::from_tab(chat_tab.clone()),
+        CenterSplitDirection::Left,
+      ));
+      page.remember_center_layout_tab(readme);
+      page.ensure_center_layout_chat_panels(window, cx);
+      page.sync_agent_chat_close_control(cx);
+      cx.notify();
+    });
+    cx.run_until_parked();
+
+    page.read_with(cx, |page, _| {
+      assert!(page.center_layout.surface_count() > 1)
+    });
+    assert!(cx.debug_bounds("session-center-tab-status-dot").is_some());
+  }
+
+  #[gpui::test]
+  async fn center_chat_tab_context_menu_deletes_the_chat(cx: &mut TestAppContext) {
+    let repo = TempRepo::init("session-center-chat-tab-delete");
+    let (page, cx) = add_session_page_window(repo.path.clone(), cx);
+    cx.run_until_parked();
+
+    page.update_in(cx, |page, window, cx| page.new_session(window, cx));
+    cx.run_until_parked();
+    let panel = page.read_with(cx, |page, _| {
+      page.agent_chat_view.clone().expect("active panel")
+    });
+    panel.update(cx, |panel, cx| {
+      panel.seed_user_message_for_test("delete me", cx)
+    });
+    cx.run_until_parked();
+    let id = panel.read_with(cx, |panel, _| panel.current_conversation().id.clone());
+
+    open_center_tab_context_menu(cx, "session-center-tab-chat");
+    cx.simulate_keystrokes("down down enter");
+    cx.run_until_parked();
+
+    page.read_with(cx, |page, cx| {
+      assert!(page.conversation_meta(&id, cx).is_none());
+      assert!(!page.center_tabs.contains(&CenterTab::chat_for(id)));
+    });
+  }
+
+  #[gpui::test]
   async fn center_history_reveals_delete_in_the_time_slot_on_hover(cx: &mut TestAppContext) {
     let repo = TempRepo::init("session-center-history-hover-delete");
     commit_text_file(&repo.path, Path::new("README.md"), "v1\n", "initial");
@@ -4507,6 +4723,10 @@ mod tests {
     });
     cx.run_until_parked();
     let id = panel.read_with(cx, |panel, _| panel.current_conversation().id.clone());
+    page.update_in(cx, |page, window, cx| {
+      page.close_center_tab(CenterTab::chat_for(id.clone()), window, cx)
+    });
+    cx.run_until_parked();
 
     let history = cx
       .debug_bounds("session-center-history")
