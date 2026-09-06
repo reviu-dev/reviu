@@ -1183,7 +1183,6 @@ impl SessionPage {
             .ghost()
             .compact()
             .xsmall()
-            .tooltip("Close tab")
             .on_click(cx.listener(move |this, _, window, cx| {
               cx.stop_propagation();
               this.close_center_tab(close_tab.clone(), window, cx);

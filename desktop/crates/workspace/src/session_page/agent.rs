@@ -1360,6 +1360,62 @@ impl SessionPage {
   }
 
   pub(super) fn delete_session(&mut self, id: &str, window: &mut Window, cx: &mut Context<Self>) {
+    let status = self
+      .session_statuses(cx)
+      .get(id)
+      .copied()
+      .unwrap_or_default();
+    if matches!(status, SessionStatus::Working | SessionStatus::Waiting) {
+      self.confirm_delete_running_session(id.to_string(), status, window, cx);
+      return;
+    }
+    self.delete_session_confirmed(id, window, cx);
+  }
+
+  fn confirm_delete_running_session(
+    &mut self,
+    id: String,
+    status: SessionStatus,
+    window: &mut Window,
+    cx: &mut Context<Self>,
+  ) {
+    let message = match status {
+      SessionStatus::Waiting => {
+        "The agent is waiting for a decision. Stop it and delete this chat? This cannot be undone."
+      }
+      _ => "The agent is still working. Stop it and delete this chat? This cannot be undone.",
+    };
+    let view = cx.entity();
+    window.open_alert_dialog(cx, move |alert, _, _| {
+      let view = view.clone();
+      let id = id.clone();
+      ConfirmDialog::new("Stop and delete chat?", div().child(message))
+        .confirm_text("Stop and Delete")
+        .cancel_text("Cancel")
+        .on_confirm(move |_, window, cx| {
+          view.update(cx, |this, cx| {
+            this.stop_session_process(&id, cx);
+            this.delete_session_confirmed(&id, window, cx);
+          });
+          true
+        })
+        .build(alert)
+    });
+  }
+
+  fn stop_session_process(&mut self, id: &str, cx: &mut Context<Self>) {
+    for panel in self
+      .agent_chat_view
+      .iter()
+      .chain(self.background_chat_panels.iter().map(|(_, panel)| panel))
+    {
+      if panel.read(cx).current_conversation().id == id {
+        panel.update(cx, |panel, cx| panel.stop_session(cx));
+      }
+    }
+  }
+
+  fn delete_session_confirmed(&mut self, id: &str, window: &mut Window, cx: &mut Context<Self>) {
     // The session's own repo and store, which may not be the fallback's: a row
     // of another repo can be deleted straight from the aggregated sidebar.
     let found = self.conversation_hub.find_conversation(id, cx);
@@ -2765,6 +2821,38 @@ mod tests {
       assert!(store.list().is_empty(), "the conversation left the index");
       assert_eq!(store.active_id(), None);
       assert!(page.background_chat_panels.is_empty());
+    });
+  }
+
+  #[gpui::test]
+  async fn deleting_a_working_session_asks_before_stopping_it(cx: &mut TestAppContext) {
+    let (_repo, page, cx) = page_with_agent_panel("session-page-delete-working", cx).await;
+
+    let panel = active_panel(&page, cx);
+    panel.update(cx, |panel, cx| {
+      panel.seed_user_message_for_test("busy", cx);
+      panel.pretend_turn_in_flight_for_test(cx);
+    });
+    cx.run_until_parked();
+    let id = panel.read_with(cx, |panel, _| panel.current_conversation().id.clone());
+
+    page.update_in(cx, |page, window, cx| page.delete_session(&id, window, cx));
+    cx.run_until_parked();
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+
+    assert!(cx.update(|window, cx| window.has_active_dialog(cx)));
+    page.read_with(cx, |page, cx| {
+      assert!(page.conversation_meta(&id, cx).is_some());
+      assert!(page.agent_turn_in_flight(cx));
+    });
+
+    cx.simulate_keystrokes("enter");
+    cx.run_until_parked();
+
+    assert!(!cx.update(|window, cx| window.has_active_dialog(cx)));
+    page.read_with(cx, |page, cx| {
+      assert!(page.conversation_meta(&id, cx).is_none());
+      assert!(!page.agent_turn_in_flight(cx));
     });
   }
 

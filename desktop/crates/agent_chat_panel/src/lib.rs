@@ -2514,6 +2514,15 @@ impl AgentChatPanel {
     cx.notify();
   }
 
+  pub fn stop_session(&mut self, cx: &mut Context<Self>) {
+    if let Some(session) = self.session.take() {
+      session.stop();
+    }
+    self.end_turn();
+    self.clear_runway();
+    cx.notify();
+  }
+
   fn mention_snapshot(&self, cx: &App) -> Option<(MentionTrigger, Vec<MentionCandidate>)> {
     let input = self.input.read(cx);
     let cursor = input.base_state().read(cx).cursor();

@@ -540,6 +540,11 @@ impl AgentSession {
     let _ = self.cmd_tx.try_send(DriverCmd::Cancel);
   }
 
+  /// Stop the driver and kill the agent process (best effort).
+  pub fn stop(&self) {
+    let _ = self.cmd_tx.try_send(DriverCmd::Stop);
+  }
+
   /// Set the active session mode (e.g. Plan/Build for Claude, reasoning effort for Codex).
   pub async fn set_mode(&self, mode_id: SessionModeId) -> Result<()> {
     let (tx, rx) = oneshot::channel();
