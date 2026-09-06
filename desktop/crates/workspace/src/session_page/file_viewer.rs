@@ -1597,6 +1597,10 @@ impl SessionPage {
     let next_tab = selected_closed
       .then(|| self.next_center_tab_after_closing(&tab))
       .flatten();
+    let active_chat_closed = self
+      .agent_chat_view
+      .as_ref()
+      .is_some_and(|panel| panel.read(cx).current_conversation().id == conversation_id);
     self.center_tabs.retain(|candidate| candidate != &tab);
     self
       .center_tab_history
@@ -1608,17 +1612,12 @@ impl SessionPage {
     self
       .center_active_tab_by_checkout
       .retain(|_, candidate| candidate != &tab);
+    if active_chat_closed {
+      self.park_active_chat_panel(cx);
+    }
     if !selected_closed {
       cx.notify();
       return;
-    }
-
-    if self
-      .agent_chat_view
-      .as_ref()
-      .is_some_and(|panel| panel.read(cx).current_conversation().id == conversation_id)
-    {
-      self.park_active_chat_panel(cx);
     }
     if let Some(next_tab) = next_tab {
       self.activate_center_tab(next_tab, OpenIntent::Open, window, cx);

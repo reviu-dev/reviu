@@ -4628,6 +4628,60 @@ mod tests {
   }
 
   #[gpui::test]
+  async fn closing_an_inactive_working_chat_tab_parks_the_panel(cx: &mut TestAppContext) {
+    let repo = TempRepo::init("session-close-inactive-working-chat");
+    commit_text_file(&repo.path, Path::new("README.md"), "v1\n", "initial");
+    std::fs::write(repo.path.join("README.md"), "v2\n").expect("dirty the checkout");
+    let (page, cx) = add_session_page_window(repo.path.clone(), cx);
+    cx.run_until_parked();
+
+    page.update_in(cx, |page, window, cx| page.new_session(window, cx));
+    cx.run_until_parked();
+    let panel = page.read_with(cx, |page, _| {
+      page.agent_chat_view.clone().expect("active panel")
+    });
+    panel.update(cx, |panel, cx| {
+      panel.seed_user_message_for_test("busy", cx);
+      panel.pretend_turn_in_flight_for_test(cx);
+    });
+    cx.run_until_parked();
+    let id = panel.read_with(cx, |panel, _| panel.current_conversation().id.clone());
+    let chat_tab = CenterTab::chat_for(id.clone());
+
+    page.update_in(cx, |page, window, cx| {
+      page.open_diff(
+        PathBuf::from("README.md"),
+        None,
+        OpenIntent::Open,
+        window,
+        cx,
+      );
+    });
+    await_open_file(&page, cx).await;
+    page.read_with(cx, |page, _| {
+      assert_eq!(page.center, CenterView::Diff);
+      assert!(page.center_tabs.contains(&chat_tab));
+    });
+
+    page.update_in(cx, |page, window, cx| {
+      page.close_center_tab(chat_tab.clone(), window, cx)
+    });
+    cx.run_until_parked();
+
+    page.read_with(cx, |page, _| {
+      assert!(page.agent_chat_view.is_none());
+      assert!(
+        page
+          .background_chat_panels
+          .iter()
+          .any(|(panel_id, _)| panel_id == &id)
+      );
+      assert_eq!(page.center, CenterView::Diff);
+      assert!(!page.center_tabs.contains(&chat_tab));
+    });
+  }
+
+  #[gpui::test]
   async fn center_split_tab_groups_show_chat_status(cx: &mut TestAppContext) {
     let repo = TempRepo::init("session-center-split-tab-status");
     commit_text_file(&repo.path, Path::new("README.md"), "v1\n", "initial");
