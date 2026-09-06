@@ -7,7 +7,7 @@ use std::rc::Rc;
 use agent_chat_panel::{ConversationMeta, WorktreeBinding};
 use gpui::{
   Anchor, Bounds, Context, DismissEvent, DragMoveEvent, Entity, EventEmitter, Focusable as _,
-  IntoElement, MouseExitEvent, Pixels, Point, Render, SharedString, WeakEntity, Window, div,
+  IntoElement, MouseExitEvent, Pixels, Point, Render, SharedString, Task, WeakEntity, Window, div,
   prelude::*, px,
 };
 use gpui_component::menu::{ContextMenuExt as _, PopupMenu, PopupMenuItem};
@@ -83,6 +83,23 @@ struct CheckoutRow {
   path: PathBuf,
   title: SharedString,
   subtitle: SharedString,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct CheckoutGitSummary {
+  branch_status: Option<git::BranchStatus>,
+  working_tree_stats: Option<git::WorkingTreeDiffStats>,
+}
+
+impl CheckoutGitSummary {
+  fn branch_title(&self) -> Option<SharedString> {
+    let name = self.branch_status.as_ref()?.name.trim();
+    (!name.is_empty()).then(|| name.to_string().into())
+  }
+
+  fn is_empty(&self) -> bool {
+    self.branch_status.is_none() && self.working_tree_stats.is_none()
+  }
 }
 
 #[derive(Clone)]
@@ -165,6 +182,9 @@ pub struct SessionList {
   project_order: Vec<PathBuf>,
   /// Projects that have Git. Only these can create worktree checkouts.
   git_repositories: HashSet<PathBuf>,
+  checkout_git_summaries: HashMap<PathBuf, CheckoutGitSummary>,
+  checkout_summary_roots: HashSet<PathBuf>,
+  _checkout_summary_task: Option<Task<()>>,
   /// Keeps the section highlighted while one of its menus is open.
   open_menu_project: Option<PathBuf>,
   project_header_bounds: HashMap<PathBuf, Bounds<Pixels>>,
@@ -183,6 +203,9 @@ impl SessionList {
       collapsed_projects: HashSet::new(),
       project_order: Vec::new(),
       git_repositories: HashSet::new(),
+      checkout_git_summaries: HashMap::new(),
+      checkout_summary_roots: HashSet::new(),
+      _checkout_summary_task: None,
       open_menu_project: None,
       project_header_bounds: HashMap::new(),
       drop_gap: None,
@@ -192,6 +215,7 @@ impl SessionList {
   pub fn set_project_order(&mut self, project_order: Vec<PathBuf>, cx: &mut Context<Self>) {
     if self.project_order != project_order {
       self.project_order = project_order;
+      self.refresh_checkout_summaries_if_needed(cx);
       cx.notify();
     }
   }
@@ -203,6 +227,7 @@ impl SessionList {
   ) {
     if self.git_repositories != git_repositories {
       self.git_repositories = git_repositories;
+      self.refresh_checkout_summaries_if_needed(cx);
       cx.notify();
     }
   }
@@ -247,6 +272,7 @@ impl SessionList {
   ) {
     if self.worktree_checkouts != worktree_checkouts {
       self.worktree_checkouts = worktree_checkouts;
+      self.refresh_checkout_summaries_if_needed(cx);
       cx.notify();
     }
   }
@@ -296,6 +322,7 @@ impl SessionList {
   ) {
     self.conversations = conversations;
     self.current_id = current_id;
+    self.refresh_checkout_summaries_if_needed(cx);
     cx.notify();
   }
 
@@ -365,12 +392,115 @@ impl SessionList {
     section_repos
   }
 
+  fn checkout_summary_paths(&self) -> HashSet<PathBuf> {
+    let mut paths = HashSet::new();
+    for repo_root in self.rendered_project_order() {
+      if self.git_repositories.contains(&repo_root) {
+        paths.insert(repo_root);
+      }
+    }
+    for row in &self.conversations {
+      if !self.git_repositories.contains(&row.project_root) {
+        continue;
+      }
+      if let Some(binding) = self.worktree_checkouts.get(&row.meta.id) {
+        paths.insert(binding.path.clone());
+      }
+    }
+    paths
+  }
+
+  fn refresh_checkout_summaries_if_needed(&mut self, cx: &mut Context<Self>) {
+    let paths = self.checkout_summary_paths();
+    if self.checkout_summary_roots == paths {
+      return;
+    }
+
+    self.checkout_summary_roots = paths.clone();
+    self
+      .checkout_git_summaries
+      .retain(|path, _| paths.contains(path));
+    if paths.is_empty() {
+      self._checkout_summary_task = None;
+      return;
+    }
+
+    let requested_paths = paths.clone();
+    let task = cx.spawn(async move |this, cx| {
+      let summaries = cx
+        .background_spawn(async move {
+          requested_paths
+            .iter()
+            .filter_map(|path| {
+              let summary = CheckoutGitSummary {
+                branch_status: git::current_branch_status(path).ok(),
+                working_tree_stats: git::working_tree_diff_stats(path).ok(),
+              };
+              (!summary.is_empty()).then(|| (path.clone(), summary))
+            })
+            .collect::<HashMap<_, _>>()
+        })
+        .await;
+
+      let _ = this.update(cx, |this, cx| {
+        if this.checkout_summary_roots != paths || this.checkout_git_summaries == summaries {
+          return;
+        }
+        this.checkout_git_summaries = summaries;
+        cx.notify();
+      });
+    });
+    self._checkout_summary_task = Some(task);
+  }
+
+  pub(crate) fn set_checkout_git_summary(
+    &mut self,
+    checkout_root: Option<&Path>,
+    branch_status: Option<git::BranchStatus>,
+    working_tree_stats: Option<git::WorkingTreeDiffStats>,
+    cx: &mut Context<Self>,
+  ) {
+    let Some(checkout_root) = checkout_root else {
+      return;
+    };
+    let checkout_root = checkout_root.to_path_buf();
+    let mut next = self
+      .checkout_git_summaries
+      .get(&checkout_root)
+      .cloned()
+      .unwrap_or(CheckoutGitSummary {
+        branch_status: None,
+        working_tree_stats: None,
+      });
+    next.branch_status = branch_status;
+    next.working_tree_stats = working_tree_stats;
+    if self.checkout_git_summaries.get(&checkout_root) == Some(&next) {
+      return;
+    }
+    if next.is_empty() {
+      self.checkout_git_summaries.remove(&checkout_root);
+    } else {
+      self.checkout_git_summaries.insert(checkout_root, next);
+    }
+    cx.notify();
+  }
+
   fn checkout_rows_for_project(&self, repo_root: &Path) -> Vec<CheckoutRow> {
+    let main_summary = self.checkout_git_summaries.get(repo_root);
     let mut rows = vec![CheckoutRow {
       kind: CheckoutKind::Main,
       path: repo_root.to_path_buf(),
-      title: "Main checkout".into(),
-      subtitle: "Default working tree".into(),
+      title: main_summary
+        .and_then(CheckoutGitSummary::branch_title)
+        .unwrap_or_else(|| "Main checkout".into()),
+      subtitle: if main_summary
+        .and_then(CheckoutGitSummary::branch_title)
+        .is_some()
+      {
+        "Main checkout".into()
+      } else {
+        "Default working tree".into()
+      },
     }];
     if !self.git_repositories.contains(repo_root) {
       return rows;
@@ -550,6 +680,12 @@ impl SessionList {
     let menu_open = self.open_menu_project.as_deref() == Some(repo_root);
     let drop_gap = self.drop_gap.filter(|_| cx.has_active_drag());
     let git_backed = self.git_repositories.contains(repo_root);
+    let active_project = self.displayed_checkout.as_deref().is_some_and(|checkout| {
+      self
+        .checkout_rows_for_project(repo_root)
+        .iter()
+        .any(|row| row.path.as_path() == checkout)
+    });
 
     h_flex()
       .id(SharedString::from(format!(
@@ -567,6 +703,9 @@ impl SessionList {
       .py_1()
       .rounded(px(6.0))
       .cursor_move()
+      .when(active_project, |this| {
+        this.bg(theme.secondary_hover.opacity(0.45))
+      })
       .when(menu_open, |this| this.bg(theme.secondary_hover))
       .hover(|this| this.bg(theme.secondary_hover))
       .when_some(drop_gap, |this, gap| {
@@ -623,20 +762,33 @@ impl SessionList {
         .text_color(theme.muted_foreground),
       )
       .child(
+        Icon::new(gpui_component::IconName::FolderOpen)
+          .size(px(12.))
+          .text_color(if active_project {
+            theme.foreground
+          } else {
+            theme.muted_foreground
+          }),
+      )
+      .child(
         div()
           .flex_1()
           .min_w(px(0.0))
           .text_xs()
           .font_weight(gpui::FontWeight::SEMIBOLD)
           .truncate()
-          .text_color(theme.muted_foreground)
+          .text_color(if active_project {
+            theme.foreground
+          } else {
+            theme.muted_foreground
+          })
           .child(name),
       )
       .child(
         h_flex()
           .items_center()
           .gap_1()
-          .when(!menu_open, |this| this.invisible())
+          .when(!(menu_open || active_project), |this| this.invisible())
           .group_hover(group_name, |this| this.visible())
           .when(git_backed, |this| {
             this.child(
@@ -677,6 +829,46 @@ impl SessionList {
       .into_any_element()
   }
 
+  fn render_checkout_diff_stats(
+    additions: usize,
+    deletions: usize,
+    active: bool,
+    theme: &gpui_component::Theme,
+  ) -> gpui::AnyElement {
+    let weight = if active {
+      gpui::FontWeight::MEDIUM
+    } else {
+      gpui::FontWeight::NORMAL
+    };
+    h_flex()
+      .items_center()
+      .gap_1()
+      .flex_shrink_0()
+      .when(additions > 0, |this| {
+        this.child(
+          div()
+            .id("session-checkout-additions")
+            .debug_selector(|| "session-checkout-additions".to_string())
+            .text_size(px(10.0))
+            .font_weight(weight)
+            .text_color(theme.status_green())
+            .child(format!("+{additions}")),
+        )
+      })
+      .when(deletions > 0, |this| {
+        this.child(
+          div()
+            .id("session-checkout-deletions")
+            .debug_selector(|| "session-checkout-deletions".to_string())
+            .text_size(px(10.0))
+            .font_weight(weight)
+            .text_color(theme.status_red())
+            .child(format!("-{deletions}")),
+        )
+      })
+      .into_any_element()
+  }
+
   fn render_checkout_row(
     &self,
     repo_root: &Path,
@@ -704,6 +896,11 @@ impl SessionList {
         .into_any_element(),
     };
 
+    let diff_stats = self
+      .checkout_git_summaries
+      .get(row.path.as_path())
+      .and_then(|summary| summary.working_tree_stats)
+      .filter(|stats| stats.additions > 0 || stats.deletions > 0);
     let status = self.checkout_status(repo_root, row.path.as_path());
     let status_color = status.map(|(status, _)| match status {
       SessionStatus::Idle => theme.muted_foreground,
@@ -751,6 +948,11 @@ impl SessionList {
             .child(
               div()
                 .text_xs()
+                .font_weight(if active {
+                  gpui::FontWeight::SEMIBOLD
+                } else {
+                  gpui::FontWeight::NORMAL
+                })
                 .truncate()
                 .text_color(theme.foreground)
                 .child(row.title.clone()),
@@ -763,6 +965,14 @@ impl SessionList {
                 .child(row.subtitle.clone()),
             ),
         )
+        .when_some(diff_stats, |this, stats| {
+          this.child(Self::render_checkout_diff_stats(
+            stats.additions,
+            stats.deletions,
+            active,
+            theme,
+          ))
+        })
         .when_some(status_color.zip(status_label), |this, (color, label)| {
           this.child(
             div()
@@ -1205,6 +1415,23 @@ mod tests {
     }
   }
 
+  fn branch_status(name: &str, ahead: usize, behind: usize) -> git::BranchStatus {
+    git::BranchStatus {
+      name: name.to_string(),
+      ahead,
+      behind,
+      has_upstream: true,
+    }
+  }
+
+  fn working_tree_stats(additions: usize, deletions: usize) -> git::WorkingTreeDiffStats {
+    git::WorkingTreeDiffStats {
+      files: 1,
+      additions,
+      deletions,
+    }
+  }
+
   fn meta(id: &str, updated: u64) -> SessionRow {
     SessionRow {
       meta: ConversationMeta {
@@ -1410,6 +1637,62 @@ mod tests {
   }
 
   #[test]
+  fn loaded_main_checkout_rows_use_their_branch_name() {
+    let mut list = SessionList::new();
+    let repo = PathBuf::from("/repo");
+    list.git_repositories.insert(repo.clone());
+    list.checkout_git_summaries.insert(
+      repo.clone(),
+      CheckoutGitSummary {
+        branch_status: Some(branch_status("feature/sidebar", 2, 1)),
+        working_tree_stats: None,
+      },
+    );
+
+    let rows = list.checkout_rows_for_project(&repo);
+
+    assert_eq!(rows[0].title, "feature/sidebar");
+    assert_eq!(rows[0].subtitle, "Main checkout");
+  }
+
+  #[gpui::test]
+  async fn git_checkout_summaries_load_in_the_background(cx: &mut gpui::TestAppContext) {
+    use crate::test_support::{TempRepo, commit_text_file};
+
+    let repo = TempRepo::init("session-list-checkout-summary");
+    commit_text_file(&repo.path, Path::new("README.md"), "v1\n", "initial");
+    std::fs::write(repo.path.join("README.md"), "v1\nv2\n").expect("modify file");
+    let expected_branch = git::current_branch_status(&repo.path)
+      .expect("branch status")
+      .name;
+    let list = cx.new(|_| SessionList::new());
+
+    list.update(cx, |list, cx| {
+      list.set_project_order(vec![repo.path.clone()], cx);
+      list.set_git_repositories(HashSet::from([repo.path.clone()]), cx);
+    });
+    cx.run_until_parked();
+
+    list.read_with(cx, |list, _| {
+      assert_eq!(
+        list.checkout_rows_for_project(&repo.path)[0].title,
+        expected_branch.as_str()
+      );
+      assert_eq!(
+        list
+          .checkout_git_summaries
+          .get(&repo.path)
+          .and_then(|summary| summary.working_tree_stats),
+        Some(git::WorkingTreeDiffStats {
+          files: 1,
+          additions: 1,
+          deletions: 0,
+        })
+      );
+    });
+  }
+
+  #[test]
   fn collapsed_project_keeps_only_the_selected_checkout_visible() {
     let mut list = SessionList::new();
     let repo = PathBuf::from("/repo");
@@ -1448,6 +1731,36 @@ mod tests {
 
     list.displayed_checkout = Some(PathBuf::from("/other"));
     assert!(list.visible_checkout_rows_for_project(&repo).is_empty());
+  }
+
+  #[gpui::test]
+  async fn checkout_rows_show_working_tree_diff_stats(cx: &mut gpui::TestAppContext) {
+    cx.update(gpui_component::init);
+    let list = cx.new(|_| SessionList::new());
+    let mounted = list.clone();
+    let (_root, cx) =
+      cx.add_window_view(move |window, cx| gpui_component::Root::new(mounted.clone(), window, cx));
+    let repo = PathBuf::from("/repo");
+
+    list.update(cx, |list, cx| {
+      list.set_project_order(vec![repo.clone()], cx);
+      list.set_git_repositories(HashSet::from([repo.clone()]), cx);
+    });
+    cx.run_until_parked();
+    list.update(cx, |list, cx| {
+      list.checkout_git_summaries.insert(
+        repo.clone(),
+        CheckoutGitSummary {
+          branch_status: Some(branch_status("main", 2, 1)),
+          working_tree_stats: Some(working_tree_stats(281, 9)),
+        },
+      );
+      cx.notify();
+    });
+    cx.run_until_parked();
+
+    assert!(cx.debug_bounds("session-checkout-additions").is_some());
+    assert!(cx.debug_bounds("session-checkout-deletions").is_some());
   }
 
   #[gpui::test]

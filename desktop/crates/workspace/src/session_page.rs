@@ -380,10 +380,25 @@ impl SessionPage {
       &repo_snapshot,
       |this, snapshot, event: &RepoSnapshotEvent, cx| match event {
         RepoSnapshotEvent::Refreshed => {
-          let branch_status = snapshot.read(cx).branch_status().cloned();
-          this
-            .dock_panel
-            .update(cx, |panel, cx| panel.set_branch_status(branch_status, cx));
+          let (checkout_root, branch_status, working_tree_stats) =
+            snapshot.read_with(cx, |snapshot, _| {
+              (
+                snapshot.repo_root().cloned(),
+                snapshot.branch_status().cloned(),
+                snapshot.working_tree_stats(),
+              )
+            });
+          this.dock_panel.update(cx, |panel, cx| {
+            panel.set_branch_status(branch_status.clone(), cx)
+          });
+          this.session_list.update(cx, |list, cx| {
+            list.set_checkout_git_summary(
+              checkout_root.as_deref(),
+              branch_status,
+              working_tree_stats,
+              cx,
+            )
+          });
           cx.notify();
         }
       },

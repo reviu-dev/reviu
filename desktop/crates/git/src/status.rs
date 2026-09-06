@@ -4,7 +4,9 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 use git2::build::CheckoutBuilder;
-use git2::{ErrorCode, IndexAddOption, ObjectType, Repository, Status, StatusOptions, Tree};
+use git2::{
+  DiffOptions, ErrorCode, IndexAddOption, ObjectType, Repository, Status, StatusOptions, Tree,
+};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum RepoStage {
@@ -44,6 +46,13 @@ pub struct RepoStatusEntry {
   pub old_path: Option<PathBuf>,
   pub status: RepoStatusKind,
   pub stage: RepoStage,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct WorkingTreeDiffStats {
+  pub files: usize,
+  pub additions: usize,
+  pub deletions: usize,
 }
 
 /// The root of the repository that owns `path`: a directory inside a working
@@ -93,6 +102,26 @@ pub fn list_repo_status(repo_root: &Path) -> Result<Vec<RepoStatusEntry>> {
 
   entries.sort_by(|a, b| a.path.cmp(&b.path));
   Ok(entries)
+}
+
+pub fn working_tree_diff_stats(repo_root: &Path) -> Result<WorkingTreeDiffStats> {
+  let repo =
+    Repository::open(repo_root).with_context(|| format!("open repo at {:?}", repo_root))?;
+  let head_tree = repo.head().ok().and_then(|head| head.peel_to_tree().ok());
+  let mut opts = DiffOptions::new();
+  opts
+    .include_untracked(true)
+    .recurse_untracked_dirs(true)
+    .show_untracked_content(true)
+    .include_typechange(true);
+
+  let diff = repo.diff_tree_to_workdir(head_tree.as_ref(), Some(&mut opts))?;
+  let stats = diff.stats()?;
+  Ok(WorkingTreeDiffStats {
+    files: stats.files_changed(),
+    additions: stats.insertions(),
+    deletions: stats.deletions(),
+  })
 }
 
 pub fn list_repo_worktree_files(repo_root: &Path) -> Result<Vec<PathBuf>> {
@@ -499,6 +528,34 @@ mod tests {
     assert_eq!(entries[0].path, rel_path);
     assert_eq!(entries[0].status, RepoStatusKind::Modified);
     assert_eq!(entries[0].stage, RepoStage::Unstaged);
+  }
+
+  #[test]
+  fn working_tree_diff_stats_count_changed_lines() {
+    let temp = TempDir::new("status-working-tree-diff-stats");
+    init_repo(&temp.path);
+    let rel_path = Path::new("README.md");
+    commit_file(&temp.path, rel_path, "old\nstay\nremove\n", "initial");
+    std::fs::write(temp.path.join(rel_path), "new\nstay\nadded\n").expect("modify file");
+
+    let stats = working_tree_diff_stats(&temp.path).expect("diff stats");
+
+    assert_eq!(stats.files, 1);
+    assert_eq!(stats.additions, 2);
+    assert_eq!(stats.deletions, 2);
+  }
+
+  #[test]
+  fn working_tree_diff_stats_count_untracked_content() {
+    let temp = TempDir::new("status-working-tree-diff-stats-untracked");
+    init_repo(&temp.path);
+    std::fs::write(temp.path.join("new.txt"), "one\ntwo\n").expect("write untracked");
+
+    let stats = working_tree_diff_stats(&temp.path).expect("diff stats");
+
+    assert_eq!(stats.files, 1);
+    assert_eq!(stats.additions, 2);
+    assert_eq!(stats.deletions, 0);
   }
 
   #[test]
