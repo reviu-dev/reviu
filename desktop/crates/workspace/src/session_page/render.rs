@@ -4415,19 +4415,36 @@ mod tests {
     let (page, cx) = add_session_page_window(repo.path.clone(), cx);
     cx.run_until_parked();
 
+    let now = std::time::SystemTime::now()
+      .duration_since(std::time::UNIX_EPOCH)
+      .map(|duration| duration.as_secs())
+      .unwrap_or(0);
+    let store = page.update(cx, |page, cx| {
+      let access = page
+        .chat_store_for_project(&repo.path, cx)
+        .expect("chat store");
+      page.chat_store = Some(access.store.clone());
+      access.store
+    });
     let mut ids = Vec::new();
     for ix in 0..12 {
-      page.update_in(cx, |page, window, cx| page.new_session(window, cx));
-      cx.run_until_parked();
-      let panel = page.read_with(cx, |page, _| {
-        page.agent_chat_view.clone().expect("active panel")
+      let id = format!("history-scroll-{ix}");
+      store.update(cx, |store, _| {
+        store.insert_meta_for_test(agent_chat_panel::ConversationMeta {
+          id: id.clone(),
+          started_at_secs: now.saturating_sub(12 - ix),
+          updated_at_secs: now.saturating_sub(12 - ix),
+          title: format!("chat {ix}"),
+          message_count: 1,
+          agent_id: agent_chat_panel::default_agent_id(),
+          session_id: None,
+          preview: format!("chat {ix}"),
+        });
       });
-      panel.update(cx, |panel, cx| {
-        panel.seed_user_message_for_test(format!("chat {ix}"), cx)
-      });
-      cx.run_until_parked();
-      ids.push(panel.read_with(cx, |panel, _| panel.current_conversation().id.clone()));
+      ids.push(id);
     }
+    page.update(cx, |_, cx| cx.notify());
+    cx.run_until_parked();
 
     let history = cx
       .debug_bounds("session-center-history")

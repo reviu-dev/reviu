@@ -207,6 +207,11 @@ impl ConversationStore {
     self.metas.clone()
   }
 
+  #[cfg(any(test, feature = "test-support"))]
+  pub fn insert_meta_for_test(&mut self, meta: ConversationMeta) {
+    apply_meta(&mut self.metas, &meta);
+  }
+
   /// Coalescing throttle: the first call arms the timer, later snapshots
   /// replace the pending one, one write lands per window.
   pub(crate) fn schedule_save(&mut self, request: SaveRequest, cx: &mut Context<Self>) {
