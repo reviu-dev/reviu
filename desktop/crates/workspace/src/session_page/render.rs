@@ -5783,6 +5783,11 @@ mod tests {
     cx.run_until_parked();
 
     let close = cx.debug_bounds("agent-chat-close").expect("chat close");
+    let file_close = cx
+      .debug_bounds("session-page-close-center-surface")
+      .expect("file close");
+    assert_eq!(close.size.width, file_close.size.width);
+    assert_eq!(close.size.height, file_close.size.height);
     cx.simulate_click(close.center(), gpui::Modifiers::default());
     cx.run_until_parked();
 

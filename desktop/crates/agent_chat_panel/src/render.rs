@@ -1988,7 +1988,7 @@ impl Render for AgentChatPanel {
                     Button::new("agent-chat-close")
                       .debug_selector(|| "agent-chat-close".to_string())
                       .icon(IconName::Close)
-                      .small()
+                      .xsmall()
                       .ghost()
                       .on_click(
                         cx.listener(|_, _, _, cx| cx.emit(AgentChatPanelEvent::CloseRequested)),
