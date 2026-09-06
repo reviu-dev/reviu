@@ -520,6 +520,34 @@ fn changes_primary_command(state: &RepoState<'_>) -> Option<ChangesActionCommand
   }
 }
 
+fn changes_action_menu_items(state: &RepoState<'_>) -> Vec<ChangesActionCommand> {
+  ChangesActionCommand::ALL
+    .into_iter()
+    .filter(|command| state.allows(command.rule()))
+    .collect()
+}
+
+fn build_changes_action_menu(
+  menu: PopupMenu,
+  menu_items: Vec<ChangesActionCommand>,
+  view: Entity<DockPanel>,
+  changes_action_in_flight: Option<ChangesActionCommand>,
+) -> PopupMenu {
+  menu_items.into_iter().fold(menu, |menu, command| {
+    let view = view.clone();
+    menu.item(
+      PopupMenuItem::new(command.label())
+        .icon(command.icon())
+        .disabled(changes_action_in_flight.is_some())
+        .on_click(move |_, _, cx| {
+          view.update(cx, |_, cx| {
+            cx.emit(DockPanelEvent::RunChangesAction(command));
+          });
+        }),
+    )
+  })
+}
+
 /// The files a pull request proposes, as rows the keyboard can walk.
 struct PrFilesDelegate {
   panel: WeakEntity<DockPanel>,
@@ -3443,10 +3471,7 @@ impl DockPanel {
     let theme = cx.theme().clone();
     let commit_message = self.commit_input.read(cx).value().to_string();
     let state = self.repo_state(&commit_message);
-    let menu_items = ChangesActionCommand::ALL
-      .into_iter()
-      .filter(|command| state.allows(command.rule()))
-      .collect::<Vec<_>>();
+    let menu_items = changes_action_menu_items(&state);
     let primary_command = changes_primary_command(&state);
     let changes_action_in_flight = self.changes_action_in_flight;
     let file_count = self.status_entries.len();
@@ -3513,20 +3538,12 @@ impl DockPanel {
               })
               .when(primary_command.is_none(), |button| button.label("Actions"))
               .dropdown_menu_with_anchor(Anchor::TopRight, move |menu, _, _| {
-                menu_items.iter().fold(menu, |menu, command| {
-                  let menu_view = menu_view.clone();
-                  let command = *command;
-                  menu.item(
-                    PopupMenuItem::new(command.label())
-                      .icon(command.icon())
-                      .disabled(changes_action_in_flight.is_some())
-                      .on_click(move |_, _, cx| {
-                        menu_view.update(cx, |_, cx| {
-                          cx.emit(DockPanelEvent::RunChangesAction(command));
-                        });
-                      }),
-                  )
-                })
+                build_changes_action_menu(
+                  menu,
+                  menu_items.clone(),
+                  menu_view.clone(),
+                  changes_action_in_flight,
+                )
               });
             this.child(menu_button)
           }),
@@ -4562,14 +4579,28 @@ impl Render for DockPanel {
         let content = if self.status_entries.is_empty() {
           self.render_empty_state(cx)
         } else {
+          let commit_message = self.commit_input.read(cx).value().to_string();
+          let state = self.repo_state(&commit_message);
+          let menu_items = changes_action_menu_items(&state);
+          let menu_view = cx.entity();
+          let changes_action_in_flight = self.changes_action_in_flight;
           div()
             .id("dock-panel-file-list")
+            .debug_selector(|| "dock-panel-file-list".to_string())
             .flex_1()
             .min_h_0()
             .overflow_y_scroll()
             .py_1()
             .px_1()
             .child(self.changes_list.clone())
+            .context_menu(move |menu, _, _| {
+              build_changes_action_menu(
+                menu,
+                menu_items.clone(),
+                menu_view.clone(),
+                changes_action_in_flight,
+              )
+            })
             .into_any_element()
         };
         v_flex()
@@ -5039,6 +5070,28 @@ mod tests {
     cx.simulate_event(gpui::MouseDownEvent {
       button: gpui::MouseButton::Right,
       position: row.center(),
+      modifiers: gpui::Modifiers::default(),
+      click_count: 1,
+      first_mouse: false,
+    });
+    cx.run_until_parked();
+    cx.update(|window, cx| {
+      let _ = window.draw(cx);
+    });
+  }
+
+  fn open_changes_list_empty_context_menu(cx: &mut gpui::VisualTestContext) {
+    let list = cx
+      .debug_bounds("dock-panel-file-list")
+      .expect("changes list bounds");
+    let row = cx
+      .debug_bounds("changes-row-0-0")
+      .expect("changes row bounds");
+    let position = gpui::point(list.center().x, row.bottom() + px(8.0));
+    assert!(position.y < list.bottom());
+    cx.simulate_event(gpui::MouseDownEvent {
+      button: gpui::MouseButton::Right,
+      position,
       modifiers: gpui::Modifiers::default(),
       click_count: 1,
       first_mouse: false,
@@ -7052,6 +7105,40 @@ mod tests {
         ChangesActionCommand::UnstageAll,
       ))
     });
+    cx.run_until_parked();
+    assert!(asked.load(Ordering::SeqCst));
+    drop(observer);
+  }
+
+  #[gpui::test]
+  async fn the_changes_list_empty_space_context_menu_runs_changes_actions(cx: &mut TestAppContext) {
+    cx.update(gpui_component::init);
+    let repo = TempRepo::init("dock-panel-changes-list-empty-menu");
+    commit_text_file(&repo.path, Path::new("a.txt"), "v1\n", "initial");
+    std::fs::write(repo.path.join("a.txt"), "v2\n").expect("dirty the worktree");
+
+    let (panel, cx) = add_dock_panel_window(Some(repo.path.clone()), cx);
+    await_refresh(&panel, cx).await;
+    panel.update(cx, |_, cx| cx.notify());
+    cx.run_until_parked();
+
+    let asked = Arc::new(AtomicBool::new(false));
+    let observer = {
+      let asked = asked.clone();
+      cx.update(|_, cx| {
+        cx.subscribe(&panel, move |_panel, event: &DockPanelEvent, _cx| {
+          if matches!(
+            event,
+            DockPanelEvent::RunChangesAction(ChangesActionCommand::StageAll)
+          ) {
+            asked.store(true, Ordering::SeqCst);
+          }
+        })
+      })
+    };
+
+    open_changes_list_empty_context_menu(cx);
+    cx.simulate_keystrokes("down enter");
     cx.run_until_parked();
     assert!(asked.load(Ordering::SeqCst));
     drop(observer);
