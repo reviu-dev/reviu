@@ -1077,6 +1077,7 @@ pub struct DockPanel {
   _pr_checks_task: Option<Task<()>>,
   _pr_review_comments_task: Option<Task<()>>,
   files_tree_state: Entity<TreeState>,
+  files_context_menu_target: Option<FilesContextTarget>,
   files_loaded: bool,
   /// The tab was opened before its tree existed: focus it as soon as it does.
   focus_files_tree_when_loaded: bool,
@@ -1339,6 +1340,7 @@ impl DockPanel {
       _pr_checks_task: None,
       _pr_review_comments_task: None,
       files_tree_state,
+      files_context_menu_target: None,
       files_loaded: false,
       focus_files_tree_when_loaded: false,
       files_loading: false,
@@ -3716,9 +3718,8 @@ impl DockPanel {
       .collect();
 
     let panel = cx.entity().downgrade();
-    let tree_menu_panel = panel.clone();
     let root_menu_panel = panel.clone();
-    let root_target = FilesContextTarget::root();
+    let clear_context_target_panel = panel.clone();
 
     v_flex()
       .debug_selector(|| "dock-panel-files-empty-space".to_string())
@@ -3726,82 +3727,96 @@ impl DockPanel {
       .min_h_0()
       .py_1()
       .px_1()
-      .context_menu(move |menu, _, _| {
-        Self::build_files_context_menu(menu, root_menu_panel.clone(), root_target.clone())
+      .capture_any_mouse_down(move |event, _, cx| {
+        if event.button == gpui::MouseButton::Right {
+          let _ = clear_context_target_panel.update(cx, |panel, _| {
+            panel.files_context_menu_target = None;
+          });
+        }
       })
-      .child(
-        tree(
-          &self.files_tree_state,
-          move |ix, entry, selected, _window, cx| {
-            let theme = cx.theme().clone();
-            let item = entry.item();
-            let is_folder = entry.is_folder();
-            let icon: AnyElement = if is_folder {
-              Icon::new(if entry.is_expanded() {
-                IconName::FolderOpen
-              } else {
-                IconName::Folder
-              })
-              .size_3()
-              .text_color(theme.muted_foreground)
-              .into_any_element()
-            } else {
-              ui::file_icon_path_for_name_with_theme(item.label.as_ref(), &theme)
-                .map(|path| img(path).size(px(ui::FILE_ICON_SIZE_PX)).into_any_element())
-                .unwrap_or_else(|| {
-                  Icon::new(IconName::File)
-                    .size_3()
-                    .text_color(theme.muted_foreground)
-                    .into_any_element()
-                })
-            };
-            let is_modified = !is_folder && modified.contains(&PathBuf::from(item.id.as_ref()));
-
-            let indent = px(8.) + px(14.) * entry.depth();
-            ui::selectable_list_item(ix, selected, ui::SelectableRowStyle::Inset, &theme)
-              .w_full()
-              .px_2()
-              .pl(indent)
-              .child(
-                h_flex()
-                  .id(format!("dock-panel-file-context-{}", item.id.as_ref()))
-                  .debug_selector({
-                    let id = item.id.clone();
-                    move || format!("dock-panel-file-{id}")
-                  })
-                  .w_full()
-                  .items_center()
-                  .gap_2()
-                  .child(icon)
-                  .child(
-                    div()
-                      .flex_1()
-                      .overflow_hidden()
-                      .text_ellipsis()
-                      .text_sm()
-                      .child(item.label.clone()),
-                  )
-                  .when(is_modified, |this| {
-                    this.child(
-                      div()
-                        .text_xs()
-                        .font_weight(gpui::FontWeight::BOLD)
-                        .text_color(theme.status_amber())
-                        .child("M"),
-                    )
-                  }),
-              )
-          },
-        )
-        .context_menu(move |_ix, entry, menu, _window, _cx| {
+      .context_menu(move |menu, _, cx| {
+        let target = root_menu_panel
+          .update(cx, |panel, _| {
+            panel
+              .files_context_menu_target
+              .take()
+              .unwrap_or_else(FilesContextTarget::root)
+          })
+          .unwrap_or_else(|_| FilesContextTarget::root());
+        Self::build_files_context_menu(menu, root_menu_panel.clone(), target)
+      })
+      .child(tree(
+        &self.files_tree_state,
+        move |ix, entry, selected, _window, cx| {
+          let theme = cx.theme().clone();
           let item = entry.item();
-          Self::build_files_context_menu(
-            menu,
-            tree_menu_panel.clone(),
-            FilesContextTarget::entry(PathBuf::from(item.id.as_ref()), entry.is_folder()),
-          )
-        }),
-      )
+          let is_folder = entry.is_folder();
+          let icon: AnyElement = if is_folder {
+            Icon::new(if entry.is_expanded() {
+              IconName::FolderOpen
+            } else {
+              IconName::Folder
+            })
+            .size_3()
+            .text_color(theme.muted_foreground)
+            .into_any_element()
+          } else {
+            ui::file_icon_path_for_name_with_theme(item.label.as_ref(), &theme)
+              .map(|path| img(path).size(px(ui::FILE_ICON_SIZE_PX)).into_any_element())
+              .unwrap_or_else(|| {
+                Icon::new(IconName::File)
+                  .size_3()
+                  .text_color(theme.muted_foreground)
+                  .into_any_element()
+              })
+          };
+          let relative_path = PathBuf::from(item.id.as_ref());
+          let is_modified = !is_folder && modified.contains(&relative_path);
+          let context_target = FilesContextTarget::entry(relative_path, is_folder);
+          let context_target_panel = panel.clone();
+
+          let indent = px(8.) + px(14.) * entry.depth();
+          ui::selectable_list_item(ix, selected, ui::SelectableRowStyle::Inset, &theme)
+            .on_mouse_down(gpui::MouseButton::Right, move |_, _, cx| {
+              let target = context_target.clone();
+              let _ = context_target_panel.update(cx, |panel, _| {
+                panel.files_context_menu_target = Some(target);
+              });
+            })
+            .w_full()
+            .px_2()
+            .pl(indent)
+            .child(
+              h_flex()
+                .id(format!("dock-panel-file-context-{}", item.id.as_ref()))
+                .debug_selector({
+                  let id = item.id.clone();
+                  move || format!("dock-panel-file-{id}")
+                })
+                .w_full()
+                .items_center()
+                .gap_2()
+                .child(icon)
+                .child(
+                  div()
+                    .flex_1()
+                    .overflow_hidden()
+                    .text_ellipsis()
+                    .text_sm()
+                    .child(item.label.clone()),
+                )
+                .when(is_modified, |this| {
+                  this.child(
+                    div()
+                      .text_xs()
+                      .font_weight(gpui::FontWeight::BOLD)
+                      .text_color(theme.status_amber())
+                      .child("M"),
+                  )
+                }),
+            )
+        },
+      ))
       .into_any_element()
   }
 
@@ -5144,6 +5159,31 @@ mod tests {
       .update(|_, cx| cx.read_from_clipboard())
       .and_then(|item| item.text());
     assert_eq!(copied.as_deref(), Some("README.md"));
+  }
+
+  #[gpui::test]
+  async fn file_context_menu_escape_closes_the_only_open_menu(cx: &mut TestAppContext) {
+    cx.update(gpui_component::init);
+    let repo = TempRepo::init("dock-files-context-single-menu");
+    commit_text_file(&repo.path, Path::new("README.md"), "v1\n", "first");
+
+    let (panel, cx) = add_dock_panel_window(Some(repo.path.clone()), cx);
+    await_refresh(&panel, cx).await;
+    open_files_tab_and_wait(&panel, cx).await;
+
+    cx.update(|_, cx| {
+      cx.write_to_clipboard(gpui::ClipboardItem::new_string("unchanged".to_string()))
+    });
+    open_files_context_menu(cx, "dock-panel-file-README.md");
+    cx.simulate_keystrokes("escape");
+    cx.run_until_parked();
+    cx.simulate_keystrokes("down down down down down enter");
+    cx.run_until_parked();
+
+    let copied = cx
+      .update(|_, cx| cx.read_from_clipboard())
+      .and_then(|item| item.text());
+    assert_eq!(copied.as_deref(), Some("unchanged"));
   }
 
   #[gpui::test]
