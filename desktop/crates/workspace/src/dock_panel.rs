@@ -4599,6 +4599,8 @@ impl Render for DockPanel {
           let menu_items = changes_action_menu_items(&state);
           let menu_view = cx.entity();
           let changes_action_in_flight = self.changes_action_in_flight;
+          let context_menu_changes_list = self.changes_list.clone();
+          let clear_context_menu_changes_list = self.changes_list.clone();
           div()
             .id("dock-panel-file-list")
             .debug_selector(|| "dock-panel-file-list".to_string())
@@ -4607,14 +4609,26 @@ impl Render for DockPanel {
             .overflow_y_scroll()
             .py_1()
             .px_1()
+            .capture_any_mouse_down(move |event, _, cx| {
+              if event.button == gpui::MouseButton::Right {
+                clear_context_menu_changes_list.update(cx, |list, _| {
+                  list.clear_context_menu_target();
+                });
+              }
+            })
             .child(self.changes_list.clone())
-            .context_menu(move |menu, _, _| {
-              build_changes_action_menu(
-                menu,
-                menu_items.clone(),
-                menu_view.clone(),
-                changes_action_in_flight,
-              )
+            .context_menu(move |menu, _, cx| {
+              if context_menu_changes_list.update(cx, |list, _| list.consume_context_menu_target())
+              {
+                menu
+              } else {
+                build_changes_action_menu(
+                  menu,
+                  menu_items.clone(),
+                  menu_view.clone(),
+                  changes_action_in_flight,
+                )
+              }
             })
             .into_any_element()
         };
@@ -7147,6 +7161,45 @@ mod tests {
     });
     cx.run_until_parked();
     assert!(asked.load(Ordering::SeqCst));
+    drop(observer);
+  }
+
+  #[gpui::test]
+  async fn changes_row_context_menu_does_not_leave_empty_space_menu_behind(
+    cx: &mut TestAppContext,
+  ) {
+    cx.update(gpui_component::init);
+    let repo = TempRepo::init("dock-panel-changes-row-single-menu");
+    commit_text_file(&repo.path, Path::new("a.txt"), "v1\n", "initial");
+    std::fs::write(repo.path.join("a.txt"), "v2\n").expect("dirty the worktree");
+
+    let (panel, cx) = add_dock_panel_window(Some(repo.path.clone()), cx);
+    await_refresh(&panel, cx).await;
+    panel.update(cx, |_, cx| cx.notify());
+    cx.run_until_parked();
+
+    let asked = Arc::new(AtomicBool::new(false));
+    let observer = {
+      let asked = asked.clone();
+      cx.update(|_, cx| {
+        cx.subscribe(&panel, move |_panel, event: &DockPanelEvent, _cx| {
+          if matches!(
+            event,
+            DockPanelEvent::RunChangesAction(ChangesActionCommand::StageAll)
+          ) {
+            asked.store(true, Ordering::SeqCst);
+          }
+        })
+      })
+    };
+
+    open_files_context_menu(cx, "changes-row-0-0");
+    cx.simulate_keystrokes("escape");
+    cx.run_until_parked();
+    cx.simulate_keystrokes("down enter");
+    cx.run_until_parked();
+
+    assert!(!asked.load(Ordering::SeqCst));
     drop(observer);
   }
 

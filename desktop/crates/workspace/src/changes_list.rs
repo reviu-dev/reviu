@@ -328,6 +328,14 @@ impl ChangesRowsDelegate {
   }
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct ChangesContextMenuTarget {
+  path: PathBuf,
+  status_kind: RepoStatusKind,
+  toggle: FileStageButtonAction,
+  restorable: bool,
+}
+
 fn row_actions_visible(
   _selected_index: Option<IndexPath>,
   hovered_index: Option<IndexPath>,
@@ -548,7 +556,12 @@ impl ListDelegate for ChangesRowsDelegate {
     });
 
     let menu_list = self.list.clone();
-    let menu_path = path.clone();
+    let menu_target = ChangesContextMenuTarget {
+      path: path.clone(),
+      status_kind,
+      toggle,
+      restorable,
+    };
     let row_content = h_flex()
       .id(format!("changes-row-content-{}-{}", ix.section, ix.row))
       .group("changes-row")
@@ -599,14 +612,32 @@ impl ListDelegate for ChangesRowsDelegate {
         Self::build_context_menu(
           menu,
           menu_list.clone(),
-          menu_path.clone(),
-          status_kind,
-          toggle,
-          restorable,
+          menu_target.path.clone(),
+          menu_target.status_kind,
+          menu_target.toggle,
+          menu_target.restorable,
         )
       });
 
-    Some(base.px_2().py_1().child(row_content))
+    let target_list = self.list.clone();
+    let target = ChangesContextMenuTarget {
+      path: path.clone(),
+      status_kind,
+      toggle,
+      restorable,
+    };
+    Some(
+      base
+        .on_mouse_down(gpui::MouseButton::Right, move |_, _, cx| {
+          let target = target.clone();
+          let _ = target_list.update(cx, |list, _| {
+            list.context_menu_target = Some(target);
+          });
+        })
+        .px_2()
+        .py_1()
+        .child(row_content),
+    )
   }
 
   fn set_selected_index(
@@ -625,6 +656,7 @@ pub(crate) struct ChangesList {
   entries: Vec<RepoStatusEntry>,
   list: Entity<ListState<ChangesRowsDelegate>>,
   action_in_flight: bool,
+  context_menu_target: Option<ChangesContextMenuTarget>,
   /// Set by the consumer showing the file: staging a conflict only asks while
   /// markers are still there.
   open_file_has_conflict_markers: bool,
@@ -671,6 +703,7 @@ impl ChangesList {
       entries: Vec::new(),
       list,
       action_in_flight: false,
+      context_menu_target: None,
       open_file_has_conflict_markers: false,
       _action_task: None,
     }
@@ -678,6 +711,14 @@ impl ChangesList {
 
   pub(crate) fn set_open_file_has_conflict_markers(&mut self, has_markers: bool) {
     self.open_file_has_conflict_markers = has_markers;
+  }
+
+  pub(crate) fn clear_context_menu_target(&mut self) {
+    self.context_menu_target = None;
+  }
+
+  pub(crate) fn consume_context_menu_target(&mut self) -> bool {
+    self.context_menu_target.take().is_some()
   }
 
   pub(crate) fn set_repo_root(&mut self, repo_root: Option<PathBuf>, cx: &mut Context<Self>) {
