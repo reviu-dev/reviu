@@ -217,12 +217,8 @@ fn render_whitespace(id_prefix: &'static str, whitespace: ToggleControl) -> AnyE
 
   Button::new(format!("{id_prefix}-whitespace"))
     .debug_selector(move || selector.to_string())
-    .label("Whitespace")
-    .icon(if hidden {
-      IconName::Eye
-    } else {
-      IconName::EyeOff
-    })
+    .icon(whitespace_icon(hidden))
+    .selected(hidden)
     .xsmall()
     .ghost()
     .disabled(whitespace.disabled)
@@ -233,6 +229,14 @@ fn render_whitespace(id_prefix: &'static str, whitespace: ToggleControl) -> AnyE
     })
     .on_click(move |_, window, cx| on_toggle(window, cx))
     .into_any_element()
+}
+
+fn whitespace_icon(hidden: bool) -> IconName {
+  if hidden {
+    IconName::EyeOff
+  } else {
+    IconName::Eye
+  }
 }
 
 fn render_split(id_prefix: &'static str, split: SplitControl) -> AnyElement {
@@ -344,6 +348,14 @@ mod tests {
   fn navigation_counter_names_the_walked_annotation() {
     assert_eq!(navigation_counter_text("Hunk", 1, 5), "Hunk 2/5");
     assert_eq!(navigation_counter_text("Conflict", 0, 1), "Conflict 1/1");
+  }
+
+  #[test]
+  fn whitespace_icon_reflects_the_current_filter_state() {
+    use gpui_component::IconNamed as _;
+
+    assert_eq!(whitespace_icon(false).path().as_ref(), "icons/eye.svg");
+    assert_eq!(whitespace_icon(true).path().as_ref(), "icons/eye-off.svg");
   }
 
   #[test]
