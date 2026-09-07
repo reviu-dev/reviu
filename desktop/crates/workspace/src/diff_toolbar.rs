@@ -10,8 +10,8 @@ use gpui::{
   prelude::*, px,
 };
 use gpui_component::{
-  ActiveTheme as _, Disableable as _, IconName, Sizable as _,
-  button::{Button, ButtonVariants as _},
+  ActiveTheme as _, Disableable as _, IconName, Selectable as _, Sizable as _,
+  button::{Button, ButtonGroup, ButtonVariants as _},
   h_flex,
 };
 use ui::UiIconName;
@@ -236,25 +236,55 @@ fn render_whitespace(id_prefix: &'static str, whitespace: ToggleControl) -> AnyE
 }
 
 fn render_split(id_prefix: &'static str, split: SplitControl) -> AnyElement {
-  let on_toggle = split.on_toggle.clone();
+  let inline_toggle = split.on_toggle.clone();
+  let split_toggle = split.on_toggle.clone();
+  let mode = split.mode;
   let selector = split.debug_selector;
-  // A disabled toggle offers the mode it cannot reach, not the one it is in.
-  let (label, icon) = if split.disabled || split.mode == DiffViewMode::Inline {
-    ("Split", IconName::PanelLeft)
-  } else {
-    ("Inline", IconName::PanelLeftClose)
-  };
 
-  Button::new(format!("{id_prefix}-split"))
-    .debug_selector(move || selector.to_string())
-    .label(label)
-    .icon(icon)
+  ButtonGroup::new(format!("{id_prefix}-diff-view"))
+    .outline()
+    .compact()
     .xsmall()
-    .ghost()
     .disabled(split.disabled)
-    .tooltip("Toggle inline and split diff (cmd-/)")
-    .on_click(move |_, window, cx| on_toggle(window, cx))
+    .child(
+      Button::new(format!("{id_prefix}-diff-view-inline"))
+        .icon(UiIconName::DiffInline)
+        .selected(mode == DiffViewMode::Inline)
+        .tooltip("Show inline diff (cmd-/)")
+        .when_some(
+          split_button_debug_selector(mode, DiffViewMode::Inline, selector),
+          |this, selector| this.debug_selector(move || selector.to_string()),
+        )
+        .on_click(move |_, window, cx| {
+          if mode != DiffViewMode::Inline {
+            inline_toggle(window, cx);
+          }
+        }),
+    )
+    .child(
+      Button::new(format!("{id_prefix}-diff-view-split"))
+        .icon(UiIconName::DiffSplit)
+        .selected(mode == DiffViewMode::Split)
+        .tooltip("Show split diff (cmd-/)")
+        .when_some(
+          split_button_debug_selector(mode, DiffViewMode::Split, selector),
+          |this, selector| this.debug_selector(move || selector.to_string()),
+        )
+        .on_click(move |_, window, cx| {
+          if mode != DiffViewMode::Split {
+            split_toggle(window, cx);
+          }
+        }),
+    )
     .into_any_element()
+}
+
+fn split_button_debug_selector(
+  current_mode: DiffViewMode,
+  button_mode: DiffViewMode,
+  selector: &'static str,
+) -> Option<&'static str> {
+  (current_mode != button_mode).then_some(selector)
 }
 
 fn render_preview(id_prefix: &'static str, preview: ToggleControl) -> AnyElement {
@@ -314,5 +344,25 @@ mod tests {
   fn navigation_counter_names_the_walked_annotation() {
     assert_eq!(navigation_counter_text("Hunk", 1, 5), "Hunk 2/5");
     assert_eq!(navigation_counter_text("Conflict", 0, 1), "Conflict 1/1");
+  }
+
+  #[test]
+  fn split_debug_selector_stays_on_the_mode_changing_button() {
+    assert_eq!(
+      split_button_debug_selector(DiffViewMode::Inline, DiffViewMode::Inline, "split-toggle"),
+      None
+    );
+    assert_eq!(
+      split_button_debug_selector(DiffViewMode::Inline, DiffViewMode::Split, "split-toggle"),
+      Some("split-toggle")
+    );
+    assert_eq!(
+      split_button_debug_selector(DiffViewMode::Split, DiffViewMode::Inline, "split-toggle"),
+      Some("split-toggle")
+    );
+    assert_eq!(
+      split_button_debug_selector(DiffViewMode::Split, DiffViewMode::Split, "split-toggle"),
+      None
+    );
   }
 }
