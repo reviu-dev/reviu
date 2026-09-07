@@ -209,6 +209,11 @@ impl FilesContextTarget {
   }
 }
 
+struct FilesInlineRename {
+  relative_path: PathBuf,
+  input: Entity<InputState>,
+}
+
 type FilesNameConfirmedHandler = Rc<dyn Fn(String, &mut Window, &mut App) -> bool>;
 
 struct FilesNameDialog {
@@ -1078,6 +1083,7 @@ pub struct DockPanel {
   _pr_review_comments_task: Option<Task<()>>,
   files_tree_state: Entity<TreeState>,
   files_context_menu_target: Option<FilesContextTarget>,
+  files_inline_rename: Option<FilesInlineRename>,
   files_loaded: bool,
   /// The tab was opened before its tree existed: focus it as soon as it does.
   focus_files_tree_when_loaded: bool,
@@ -1341,6 +1347,7 @@ impl DockPanel {
       _pr_review_comments_task: None,
       files_tree_state,
       files_context_menu_target: None,
+      files_inline_rename: None,
       files_loaded: false,
       focus_files_tree_when_loaded: false,
       files_loading: false,
@@ -1584,7 +1591,7 @@ impl DockPanel {
           .item(PopupMenuItem::new("Rename").on_click(move |_, window, cx| {
             let target = rename_target.clone();
             let _ = rename_panel.update(cx, |panel, cx| {
-              panel.open_rename_file_dialog(target, window, cx);
+              panel.start_inline_rename_from_context(target, window, cx);
             });
           }))
           .item(PopupMenuItem::new("Delete").on_click(move |_, window, cx| {
@@ -1771,37 +1778,103 @@ impl DockPanel {
     true
   }
 
-  fn open_rename_file_dialog(
-    &self,
+  fn start_inline_rename_from_context(
+    &mut self,
     target: FilesContextTarget,
     window: &mut Window,
     cx: &mut Context<Self>,
   ) {
-    let Some(relative_path) = target.relative_path.clone() else {
+    let Some(relative_path) = target.relative_path else {
       return;
     };
-    let initial_value = relative_path
+    self.start_inline_rename(relative_path, window, cx);
+  }
+
+  fn start_inline_rename(
+    &mut self,
+    relative_path: PathBuf,
+    window: &mut Window,
+    cx: &mut Context<Self>,
+  ) {
+    let Some(initial_value) = relative_path
       .file_name()
       .map(|name| name.to_string_lossy().into_owned())
-      .unwrap_or_default();
-    let panel = cx.entity().downgrade();
-    let on_confirmed: FilesNameConfirmedHandler = Rc::new(move |name, window, cx| {
-      let relative_path = relative_path.clone();
-      panel
-        .update(cx, |panel, cx| {
-          panel.rename_file_entry(relative_path, name, window, cx)
-        })
-        .unwrap_or(false)
+    else {
+      return;
+    };
+    let input = cx.new(|cx| InputState::new(window, cx));
+    input.update(cx, |input, cx| {
+      input.set_value(initial_value, window, cx);
+      input.select_all(window, cx);
     });
-    open_files_name_dialog(
-      "Rename",
-      "Enter a new name for this item",
-      initial_value,
-      "Rename",
-      on_confirmed,
+    cx.subscribe_in(
+      &input,
       window,
-      cx,
-    );
+      |this, _input, event: &gpui_component::input::InputEvent, window, cx| match event {
+        gpui_component::input::InputEvent::PressEnter { .. } => {
+          this.confirm_inline_rename(window, cx);
+        }
+        gpui_component::input::InputEvent::Blur => this.cancel_inline_rename(cx),
+        gpui_component::input::InputEvent::Change | gpui_component::input::InputEvent::Focus => {}
+      },
+    )
+    .detach();
+
+    self.files_inline_rename = Some(FilesInlineRename {
+      relative_path,
+      input: input.clone(),
+    });
+    window.on_next_frame(move |window, cx| {
+      input.update(cx, |input, cx| {
+        input.focus(window, cx);
+        input.select_all(window, cx);
+      });
+    });
+    cx.notify();
+  }
+
+  fn cancel_inline_rename(&mut self, cx: &mut Context<Self>) {
+    if self.files_inline_rename.take().is_some() {
+      cx.notify();
+    }
+  }
+
+  fn confirm_inline_rename(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    let Some(rename) = &self.files_inline_rename else {
+      return;
+    };
+    let relative_path = rename.relative_path.clone();
+    let name = rename.input.read(cx).value().to_string();
+    if relative_path
+      .file_name()
+      .is_some_and(|current| current.to_string_lossy() == name)
+    {
+      self.cancel_inline_rename(cx);
+      return;
+    }
+    if self.rename_file_entry(relative_path, name, window, cx) {
+      self.files_inline_rename = None;
+      cx.notify();
+    }
+  }
+
+  fn on_dock_key_down(
+    &mut self,
+    event: &gpui::KeyDownEvent,
+    window: &mut Window,
+    cx: &mut Context<Self>,
+  ) {
+    if event.keystroke.key != "escape" || event.keystroke.modifiers.modified() {
+      return;
+    }
+    let rename_focused = self
+      .files_inline_rename
+      .as_ref()
+      .is_some_and(|rename| rename.input.read(cx).focus_handle(cx).is_focused(window));
+    if rename_focused {
+      self.cancel_inline_rename(cx);
+      cx.stop_propagation();
+    }
   }
 
   fn rename_file_entry(
@@ -3718,6 +3791,10 @@ impl DockPanel {
       .collect();
 
     let panel = cx.entity().downgrade();
+    let inline_rename = self
+      .files_inline_rename
+      .as_ref()
+      .map(|rename| (rename.relative_path.clone(), rename.input.clone()));
     let root_menu_panel = panel.clone();
     let clear_context_target_panel = panel.clone();
 
@@ -3747,7 +3824,7 @@ impl DockPanel {
       })
       .child(tree(
         &self.files_tree_state,
-        move |ix, entry, selected, _window, cx| {
+        move |ix, entry, selected, window, cx| {
           let theme = cx.theme().clone();
           let item = entry.item();
           let is_folder = entry.is_folder();
@@ -3771,9 +3848,50 @@ impl DockPanel {
               })
           };
           let relative_path = PathBuf::from(item.id.as_ref());
+          let rename_input = inline_rename
+            .as_ref()
+            .filter(|(path, _)| path == &relative_path)
+            .map(|(_, input)| input.clone());
           let is_modified = !is_folder && modified.contains(&relative_path);
           let context_target = FilesContextTarget::entry(relative_path, is_folder);
           let context_target_panel = panel.clone();
+
+          let label: AnyElement = if let Some(input) = rename_input {
+            if !input.read(cx).focus_handle(cx).is_focused(window) {
+              input.update(cx, |input, cx| {
+                input.focus(window, cx);
+                input.select_all(window, cx);
+              });
+            }
+            div()
+              .debug_selector({
+                let id = item.id.clone();
+                move || format!("dock-panel-file-rename-input-{id}")
+              })
+              .h(px(22.5))
+              .min_w_0()
+              .flex_1()
+              .child(
+                Input::new(&input)
+                  .small()
+                  .appearance(false)
+                  .bordered(false)
+                  .focus_bordered(false)
+                  .w_full()
+                  .h(px(22.5))
+                  .px_0()
+                  .py_0(),
+              )
+              .into_any_element()
+          } else {
+            div()
+              .flex_1()
+              .overflow_hidden()
+              .text_ellipsis()
+              .text_sm()
+              .child(item.label.clone())
+              .into_any_element()
+          };
 
           let indent = px(8.) + px(14.) * entry.depth();
           ui::selectable_list_item(ix, selected, ui::SelectableRowStyle::Inset, &theme)
@@ -3797,14 +3915,7 @@ impl DockPanel {
                 .items_center()
                 .gap_2()
                 .child(icon)
-                .child(
-                  div()
-                    .flex_1()
-                    .overflow_hidden()
-                    .text_ellipsis()
-                    .text_sm()
-                    .child(item.label.clone()),
-                )
+                .child(label)
                 .when(is_modified, |this| {
                   this.child(
                     div()
@@ -4657,6 +4768,7 @@ impl Render for DockPanel {
       // then what the tab holds besides it.
       .tab_group()
       .key_context(crate::shortcuts::DOCK_PANEL_CONTEXT)
+      .on_key_down(cx.listener(Self::on_dock_key_down))
       .on_action(cx.listener(|this, _: &crate::CommitChanges, _, cx| this.commit(cx)))
       .child(header)
       .child(body);
@@ -5198,6 +5310,128 @@ mod tests {
       .update(|_, cx| cx.read_from_clipboard())
       .and_then(|item| item.text());
     assert_eq!(copied.as_deref(), Some("unchanged"));
+  }
+
+  #[gpui::test]
+  async fn file_context_rename_edits_inline_without_moving_the_row(cx: &mut TestAppContext) {
+    cx.update(gpui_component::init);
+    let repo = TempRepo::init("dock-files-inline-rename");
+    commit_text_file(&repo.path, Path::new("README.md"), "v1\n", "first");
+
+    let (panel, cx) = add_dock_panel_window(Some(repo.path.clone()), cx);
+    await_refresh(&panel, cx).await;
+    open_files_tab_and_wait(&panel, cx).await;
+
+    let row_before = cx
+      .debug_bounds("dock-panel-file-README.md")
+      .expect("file row before rename");
+    panel.update_in(cx, |panel, window, cx| {
+      panel.start_inline_rename_from_context(
+        FilesContextTarget::entry(PathBuf::from("README.md"), false),
+        window,
+        cx,
+      );
+    });
+    cx.run_until_parked();
+    cx.update(|window, cx| {
+      let _ = window.draw(cx);
+    });
+    cx.run_until_parked();
+
+    assert!(
+      cx.debug_bounds("dock-panel-file-rename-input-README.md")
+        .is_some(),
+      "the file row becomes an inline input"
+    );
+    let row_during = cx
+      .debug_bounds("dock-panel-file-README.md")
+      .expect("file row during rename");
+    assert_eq!(row_during.origin.y, row_before.origin.y);
+    assert_eq!(row_during.size.height, row_before.size.height);
+
+    panel.update_in(cx, |panel, window, cx| {
+      let input = panel
+        .files_inline_rename
+        .as_ref()
+        .expect("inline rename")
+        .input
+        .clone();
+      input.update(cx, |input, cx| input.set_value("NOTES.md", window, cx));
+    });
+    cx.simulate_keystrokes("enter");
+    await_file_operation(&panel, cx).await;
+
+    assert!(repo.path.join("NOTES.md").is_file());
+    assert!(!repo.path.join("README.md").exists());
+    assert!(panel.read_with(cx, |panel, _| panel.files_inline_rename.is_none()));
+  }
+
+  #[gpui::test]
+  async fn folder_context_rename_edits_inline(cx: &mut TestAppContext) {
+    cx.update(gpui_component::init);
+    let repo = TempRepo::init("dock-files-inline-folder-rename");
+    commit_text_file(&repo.path, Path::new("docs/a.txt"), "v1\n", "first");
+
+    let (panel, cx) = add_dock_panel_window(Some(repo.path.clone()), cx);
+    await_refresh(&panel, cx).await;
+    open_files_tab_and_wait(&panel, cx).await;
+
+    open_files_context_menu(cx, "dock-panel-file-docs");
+    cx.simulate_keystrokes("down down down down down down enter");
+    cx.run_until_parked();
+    cx.update(|window, cx| {
+      let _ = window.draw(cx);
+    });
+    cx.run_until_parked();
+
+    assert!(
+      cx.debug_bounds("dock-panel-file-rename-input-docs")
+        .is_some(),
+      "the folder row becomes an inline input"
+    );
+    panel.update_in(cx, |panel, window, cx| {
+      let input = panel
+        .files_inline_rename
+        .as_ref()
+        .expect("inline rename")
+        .input
+        .clone();
+      input.update(cx, |input, cx| input.set_value("src", window, cx));
+    });
+    cx.simulate_keystrokes("enter");
+    await_file_operation(&panel, cx).await;
+
+    assert!(repo.path.join("src/a.txt").is_file());
+    assert!(!repo.path.join("docs").exists());
+  }
+
+  #[gpui::test]
+  async fn file_context_inline_rename_escape_cancels(cx: &mut TestAppContext) {
+    cx.update(gpui_component::init);
+    let repo = TempRepo::init("dock-files-inline-rename-cancel");
+    commit_text_file(&repo.path, Path::new("README.md"), "v1\n", "first");
+
+    let (panel, cx) = add_dock_panel_window(Some(repo.path.clone()), cx);
+    await_refresh(&panel, cx).await;
+    open_files_tab_and_wait(&panel, cx).await;
+
+    panel.update_in(cx, |panel, window, cx| {
+      panel.start_inline_rename_from_context(
+        FilesContextTarget::entry(PathBuf::from("README.md"), false),
+        window,
+        cx,
+      );
+    });
+    cx.run_until_parked();
+    cx.update(|window, cx| {
+      let _ = window.draw(cx);
+    });
+    cx.run_until_parked();
+    cx.simulate_keystrokes("escape");
+    cx.run_until_parked();
+
+    assert!(repo.path.join("README.md").is_file());
+    assert!(panel.read_with(cx, |panel, _| panel.files_inline_rename.is_none()));
   }
 
   #[gpui::test]
