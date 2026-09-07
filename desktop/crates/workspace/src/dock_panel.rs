@@ -1,6 +1,6 @@
 //! The right dock of the shell: changes, files, history, pull request, terminal.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Instant;
@@ -23,7 +23,7 @@ use gpui_component::{
   input::{Input, InputState},
   list::{List, ListDelegate, ListEvent, ListItem, ListState},
   menu::{ContextMenuExt as _, DropdownMenu as _, PopupMenu, PopupMenuItem},
-  tree::{TreeEvent, TreeState, tree},
+  tree::{TreeEvent, TreeItem, TreeState, tree},
   v_flex,
 };
 use terminal::TerminalView;
@@ -1088,6 +1088,7 @@ pub struct DockPanel {
   /// The tab was opened before its tree existed: focus it as soon as it does.
   focus_files_tree_when_loaded: bool,
   files_loading: bool,
+  files_load_generation: u64,
   changes_action_in_flight: Option<ChangesActionCommand>,
   pub(crate) _refresh_task: Option<Task<()>>,
   _commit_task: Option<Task<()>>,
@@ -1351,6 +1352,7 @@ impl DockPanel {
       files_loaded: false,
       focus_files_tree_when_loaded: false,
       files_loading: false,
+      files_load_generation: 0,
       changes_action_in_flight: None,
       _refresh_task: None,
       _commit_task: None,
@@ -1364,6 +1366,14 @@ impl DockPanel {
   }
 
   fn load_project_files(&mut self, cx: &mut Context<Self>) {
+    self.load_project_files_with_expansion(None, cx);
+  }
+
+  fn load_project_files_with_expansion(
+    &mut self,
+    expanded_folder_paths: Option<HashSet<String>>,
+    cx: &mut Context<Self>,
+  ) {
     let Some(project_root) = self.project_root.clone() else {
       return;
     };
@@ -1371,6 +1381,8 @@ impl DockPanel {
       return;
     }
     self.files_loading = true;
+    self.files_load_generation = self.files_load_generation.wrapping_add(1);
+    let load_generation = self.files_load_generation;
     let repo_root = self.repo_root.clone();
     let load_project_root = project_root.clone();
     let load_repo_root = repo_root.clone();
@@ -1388,6 +1400,7 @@ impl DockPanel {
       let _ = this.update(cx, |this, cx| {
         if this.project_root.as_deref() != Some(project_root.as_path())
           || this.repo_root != repo_root
+          || this.files_load_generation != load_generation
         {
           return;
         }
@@ -1395,16 +1408,22 @@ impl DockPanel {
         if let Ok(files) = files {
           let paths = files
             .iter()
-            .map(|path| std::rc::Rc::new(path.to_string_lossy().into_owned()))
+            .map(|path| Rc::new(path.to_string_lossy().into_owned()))
             .collect::<Vec<_>>();
           // Only the branches holding uncommitted work open by themselves: a
           // whole repository expanded is a wall of folders.
-          let expanded = expanded_folder_paths_for_changed_files(
-            this
-              .status_entries
-              .iter()
-              .filter_map(|entry| entry.path.to_str()),
-          );
+          let expanded = expanded_folder_paths.unwrap_or_else(|| {
+            if this.files_loaded {
+              this.current_files_expanded_paths(cx)
+            } else {
+              expanded_folder_paths_for_changed_files(
+                this
+                  .status_entries
+                  .iter()
+                  .filter_map(|entry| entry.path.to_str()),
+              )
+            }
+          });
           let (items, _, _, _) =
             build_path_tree_items_with_expansion(&paths, |path| path.as_str(), Some(&expanded));
           this.files_tree_state.update(cx, |state, cx| {
@@ -1603,14 +1622,75 @@ impl DockPanel {
       })
   }
 
+  fn current_files_expanded_paths(&self, cx: &App) -> HashSet<String> {
+    let tree = self.files_tree_state.read(cx);
+    let mut expanded = HashSet::new();
+    let mut index = 0;
+    while let Some(entry) = tree.entry(index) {
+      if entry.is_folder() && entry.is_expanded() {
+        expanded.insert(entry.item().id.to_string());
+      }
+      index += 1;
+    }
+    expanded
+  }
+
+  fn apply_files_rename_to_tree(
+    &mut self,
+    old_relative_path: &Path,
+    new_relative_path: &Path,
+    cx: &mut Context<Self>,
+  ) {
+    let old_id = file_tree_path_id(old_relative_path);
+    let new_id = file_tree_path_id(new_relative_path);
+    let mut paths = Vec::new();
+    {
+      let tree = self.files_tree_state.read(cx);
+      let mut index = 0;
+      while let Some(entry) = tree.entry(index) {
+        if entry.is_root() {
+          collect_file_tree_paths(entry.item(), &mut paths);
+        }
+        index += 1;
+      }
+    }
+    if paths.is_empty() {
+      return;
+    }
+
+    let mut renamed_any = false;
+    for path in &mut paths {
+      let renamed = renamed_file_tree_path_id(path, &old_id, &new_id);
+      if renamed != *path {
+        *path = renamed;
+        renamed_any = true;
+      }
+    }
+    if !renamed_any {
+      return;
+    }
+
+    let expanded = self
+      .current_files_expanded_paths(cx)
+      .into_iter()
+      .map(|path| renamed_file_tree_path_id(&path, &old_id, &new_id))
+      .collect::<HashSet<_>>();
+    let paths = paths.into_iter().map(Rc::new).collect::<Vec<_>>();
+    let (items, _, _, _) =
+      build_path_tree_items_with_expansion(&paths, |path| path.as_str(), Some(&expanded));
+    self.files_tree_state.update(cx, |tree, cx| {
+      tree.set_items(items, cx);
+    });
+    cx.notify();
+  }
+
   fn reload_project_files_after_operation(&mut self, cx: &mut Context<Self>) {
-    self.files_loaded = false;
+    let expanded = self
+      .files_loaded
+      .then(|| self.current_files_expanded_paths(cx));
     self.files_loading = false;
     self._files_task = None;
-    self.files_tree_state.update(cx, |state, cx| {
-      state.set_items(Vec::new(), cx);
-    });
-    self.load_project_files(cx);
+    self.load_project_files_with_expansion(expanded, cx);
     self.refresh_status(cx);
     cx.notify();
   }
@@ -1623,11 +1703,27 @@ impl DockPanel {
   ) where
     F: FnOnce() -> anyhow::Result<()> + Send + 'static,
   {
+    self.run_file_operation_after_success(failure_label, operation, |_, _| {}, cx);
+  }
+
+  fn run_file_operation_after_success<F, S>(
+    &mut self,
+    failure_label: &'static str,
+    operation: F,
+    after_success: S,
+    cx: &mut Context<Self>,
+  ) where
+    F: FnOnce() -> anyhow::Result<()> + Send + 'static,
+    S: FnOnce(&mut Self, &mut Context<Self>) + 'static,
+  {
     let window_handle = self.window_handle;
     let task = cx.spawn(async move |this, cx| {
       let result = cx.background_spawn(async move { operation() }).await;
       let _ = this.update(cx, |this, cx| match result {
-        Ok(()) => this.reload_project_files_after_operation(cx),
+        Ok(()) => {
+          after_success(this, cx);
+          this.reload_project_files_after_operation(cx);
+        }
         Err(error) => {
           let _ = cx.update_window(window_handle, |_, window, cx| {
             window.push_notification(Notification::error(format!("{failure_label}: {error}")), cx);
@@ -1813,6 +1909,7 @@ impl DockPanel {
       |this, _input, event: &gpui_component::input::InputEvent, window, cx| match event {
         gpui_component::input::InputEvent::PressEnter { .. } => {
           this.confirm_inline_rename(window, cx);
+          cx.stop_propagation();
         }
         gpui_component::input::InputEvent::Blur => this.cancel_inline_rename(cx),
         gpui_component::input::InputEvent::Change | gpui_component::input::InputEvent::Focus => {}
@@ -1820,6 +1917,9 @@ impl DockPanel {
     )
     .detach();
 
+    self.files_tree_state.update(cx, |tree, cx| {
+      tree.set_selected_index(None, cx);
+    });
     self.files_inline_rename = Some(FilesInlineRename {
       relative_path,
       input: input.clone(),
@@ -1899,16 +1999,27 @@ impl DockPanel {
       .filter(|path| !path.as_os_str().is_empty())
       .map(|parent| parent.join(&new_name))
       .unwrap_or_else(|| PathBuf::from(&new_name));
+    let previous_relative_path = relative_path.clone();
+    let renamed_relative_path = new_relative_path.clone();
     let from = root.join(relative_path);
     let to = root.join(new_relative_path);
-    self.run_file_operation(
+    self.run_file_operation_after_success(
       "Renaming failed",
       move || {
+        if !from.exists() {
+          if to.exists() {
+            return Ok(());
+          }
+          return Err(anyhow::anyhow!("{} no longer exists", from.display()));
+        }
         if to.exists() {
           return Err(anyhow::anyhow!("{} already exists", to.display()));
         }
         std::fs::rename(&from, &to)?;
         Ok(())
+      },
+      move |this, cx| {
+        this.apply_files_rename_to_tree(&previous_relative_path, &renamed_relative_path, cx);
       },
       cx,
     );
@@ -3255,6 +3366,7 @@ impl DockPanel {
     if project_changed {
       self.files_loaded = false;
       self.files_loading = false;
+      self.files_load_generation = self.files_load_generation.wrapping_add(1);
       self._files_task = None;
       self.files_tree_state.update(cx, |state, cx| {
         state.set_items(Vec::new(), cx);
@@ -4785,6 +4897,35 @@ impl Focusable for DockPanel {
   }
 }
 
+fn collect_file_tree_paths(item: &TreeItem, paths: &mut Vec<String>) {
+  if item.children.is_empty() {
+    paths.push(item.id.to_string());
+    return;
+  }
+  for child in &item.children {
+    collect_file_tree_paths(child, paths);
+  }
+}
+
+fn file_tree_path_id(path: &Path) -> String {
+  path
+    .to_string_lossy()
+    .replace(std::path::MAIN_SEPARATOR, "/")
+}
+
+fn renamed_file_tree_path_id(path: &str, old_id: &str, new_id: &str) -> String {
+  if path == old_id {
+    return new_id.to_string();
+  }
+  if let Some(suffix) = path
+    .strip_prefix(old_id)
+    .and_then(|path| path.strip_prefix('/'))
+  {
+    return format!("{new_id}/{suffix}");
+  }
+  path.to_string()
+}
+
 #[cfg(test)]
 mod tests {
   use super::*;
@@ -5251,11 +5392,16 @@ mod tests {
     cx.run_until_parked();
   }
 
-  async fn await_file_operation(panel: &Entity<DockPanel>, cx: &mut gpui::VisualTestContext) {
+  async fn await_file_operation_task(panel: &Entity<DockPanel>, cx: &mut gpui::VisualTestContext) {
     let operation = panel.update(cx, |panel, _| panel._file_operation_task.take());
     if let Some(operation) = operation {
       operation.await;
     }
+    cx.run_until_parked();
+  }
+
+  async fn await_file_operation(panel: &Entity<DockPanel>, cx: &mut gpui::VisualTestContext) {
+    await_file_operation_task(panel, cx).await;
     await_refresh(panel, cx).await;
     await_files_loaded(panel, cx).await;
   }
@@ -5403,6 +5549,171 @@ mod tests {
 
     assert!(repo.path.join("src/a.txt").is_file());
     assert!(!repo.path.join("docs").exists());
+  }
+
+  #[gpui::test]
+  async fn inline_rename_preserves_current_folder_expansion(cx: &mut TestAppContext) {
+    cx.update(gpui_component::init);
+    let repo = TempRepo::init("dock-files-inline-rename-preserve-expansion");
+    commit_text_file(&repo.path, Path::new("data.json"), "{}\n", "data");
+    commit_text_file(&repo.path, Path::new("src/changed.ts"), "v1\n", "src");
+    std::fs::write(repo.path.join("src/changed.ts"), "v2\n").expect("dirty src");
+
+    let (panel, cx) = add_dock_panel_window(Some(repo.path.clone()), cx);
+    await_refresh(&panel, cx).await;
+    open_files_tab_and_wait(&panel, cx).await;
+
+    let src_expanded = panel.read_with(cx, |panel, cx| {
+      let tree = panel.files_tree_state.read(cx);
+      tree
+        .index_of(&"src".into())
+        .and_then(|index| tree.entry(index))
+        .is_some_and(|entry| entry.is_expanded())
+    });
+    if src_expanded {
+      let src = cx.debug_bounds("dock-panel-file-src").expect("src row");
+      cx.simulate_click(src.center(), gpui::Modifiers::default());
+      cx.run_until_parked();
+    }
+    panel.read_with(cx, |panel, cx| {
+      let tree = panel.files_tree_state.read(cx);
+      let src = tree
+        .index_of(&"src".into())
+        .and_then(|index| tree.entry(index))
+        .expect("src stays visible before rename");
+      assert!(!src.is_expanded());
+    });
+
+    panel.update_in(cx, |panel, window, cx| {
+      panel.start_inline_rename_from_context(
+        FilesContextTarget::entry(PathBuf::from("data.json"), false),
+        window,
+        cx,
+      );
+    });
+    cx.run_until_parked();
+    cx.update(|window, cx| {
+      let _ = window.draw(cx);
+    });
+    cx.run_until_parked();
+    panel.update_in(cx, |panel, window, cx| {
+      let input = panel
+        .files_inline_rename
+        .as_ref()
+        .expect("inline rename")
+        .input
+        .clone();
+      input.update(cx, |input, cx| input.set_value("renamed.json", window, cx));
+    });
+    cx.simulate_keystrokes("enter");
+    await_file_operation(&panel, cx).await;
+
+    assert!(repo.path.join("renamed.json").is_file());
+    panel.read_with(cx, |panel, cx| {
+      let tree = panel.files_tree_state.read(cx);
+      let src = tree
+        .index_of(&"src".into())
+        .and_then(|index| tree.entry(index))
+        .expect("src stays visible");
+      assert!(!src.is_expanded());
+    });
+  }
+
+  #[gpui::test]
+  async fn inline_rename_round_trip_refreshes_file_row(cx: &mut TestAppContext) {
+    cx.update(gpui_component::init);
+    let repo = TempRepo::init("dock-files-inline-rename-round-trip");
+    commit_text_file(&repo.path, Path::new("env.d.ts"), "v1\n", "first");
+
+    let (panel, cx) = add_dock_panel_window(Some(repo.path.clone()), cx);
+    await_refresh(&panel, cx).await;
+    open_files_tab_and_wait(&panel, cx).await;
+
+    panel.update_in(cx, |panel, window, cx| {
+      panel.start_inline_rename(PathBuf::from("env.d.ts"), window, cx);
+    });
+    panel.update_in(cx, |panel, window, cx| {
+      let input = panel
+        .files_inline_rename
+        .as_ref()
+        .expect("inline rename")
+        .input
+        .clone();
+      input.update(cx, |input, cx| input.set_value("env.d.t", window, cx));
+    });
+    cx.simulate_keystrokes("enter");
+    await_file_operation(&panel, cx).await;
+
+    assert!(repo.path.join("env.d.t").is_file());
+    panel.read_with(cx, |panel, cx| {
+      let tree = panel.files_tree_state.read(cx);
+      assert!(tree.index_of(&"env.d.t".into()).is_some());
+      assert!(tree.index_of(&"env.d.ts".into()).is_none());
+    });
+
+    panel.update_in(cx, |panel, window, cx| {
+      panel.start_inline_rename(PathBuf::from("env.d.t"), window, cx);
+    });
+    panel.update_in(cx, |panel, window, cx| {
+      let input = panel
+        .files_inline_rename
+        .as_ref()
+        .expect("inline rename")
+        .input
+        .clone();
+      input.update(cx, |input, cx| input.set_value("env.d.ts", window, cx));
+    });
+    cx.simulate_keystrokes("enter");
+    await_file_operation_task(&panel, cx).await;
+
+    assert!(repo.path.join("env.d.ts").is_file());
+    assert!(!repo.path.join("env.d.t").exists());
+    cx.update(|window, cx| {
+      let _ = window.draw(cx);
+    });
+    assert!(cx.debug_bounds("dock-panel-file-env.d.ts").is_some());
+    assert!(cx.debug_bounds("dock-panel-file-env.d.t").is_none());
+    await_refresh(&panel, cx).await;
+    await_files_loaded(&panel, cx).await;
+    panel.read_with(cx, |panel, cx| {
+      let tree = panel.files_tree_state.read(cx);
+      assert!(tree.index_of(&"env.d.ts".into()).is_some());
+      assert!(tree.index_of(&"env.d.t".into()).is_none());
+    });
+  }
+
+  #[gpui::test]
+  async fn inline_rename_stale_row_heals_when_target_already_exists(cx: &mut TestAppContext) {
+    cx.update(gpui_component::init);
+    let repo = TempRepo::init("dock-files-inline-rename-stale-row");
+    commit_text_file(&repo.path, Path::new("env.d.ts"), "v1\n", "first");
+
+    let (panel, cx) = add_dock_panel_window(Some(repo.path.clone()), cx);
+    await_refresh(&panel, cx).await;
+    open_files_tab_and_wait(&panel, cx).await;
+
+    panel.update_in(cx, |panel, window, cx| {
+      panel.rename_file_entry(PathBuf::from("env.d.ts"), "env.d.t".to_string(), window, cx);
+    });
+    await_file_operation(&panel, cx).await;
+    std::fs::rename(repo.path.join("env.d.t"), repo.path.join("env.d.ts"))
+      .expect("external rename back");
+
+    panel.update_in(cx, |panel, window, cx| {
+      assert!(panel.rename_file_entry(
+        PathBuf::from("env.d.t"),
+        "env.d.ts".to_string(),
+        window,
+        cx,
+      ));
+    });
+    await_file_operation(&panel, cx).await;
+
+    panel.read_with(cx, |panel, cx| {
+      let tree = panel.files_tree_state.read(cx);
+      assert!(tree.index_of(&"env.d.ts".into()).is_some());
+      assert!(tree.index_of(&"env.d.t".into()).is_none());
+    });
   }
 
   #[gpui::test]
