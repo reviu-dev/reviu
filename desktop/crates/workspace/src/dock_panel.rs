@@ -3251,7 +3251,14 @@ impl DockPanel {
   /// always knows what this panel is showing.
   fn set_branch_pr(&mut self, state: BranchPrState, cx: &mut Context<Self>) {
     let identity = pull_request_identity(&state);
+    let pull_request_number = match &state {
+      BranchPrState::Found(_, pull_request) => Some(pull_request.number),
+      _ => None,
+    };
     self.branch_pr = state;
+    self.review_list.update(cx, |list, cx| {
+      list.set_pull_request_number(pull_request_number, cx)
+    });
     crate::pull_request_surface::PullRequestSurfaceHandle::publish(identity, cx);
   }
 

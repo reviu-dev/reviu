@@ -61,7 +61,7 @@ pub(crate) enum ReviewSection {
 impl ReviewSection {
   pub(crate) const ALL: [Self; 2] = [Self::Agent, Self::PullRequest];
 
-  fn title(self) -> &'static str {
+  fn fallback_title(self) -> &'static str {
     match self {
       Self::Agent => "To the agent",
       Self::PullRequest => "To this pull request",
@@ -338,6 +338,7 @@ pub(crate) struct ReviewList {
   /// Which destination the footer acts on: the section of the row last walked
   /// to. One set of actions at the bottom, and it follows the keyboard.
   active_section: Option<ReviewSection>,
+  pull_request_number: Option<u64>,
   agent_list: Entity<ListState<ReviewRowsDelegate>>,
   pull_request_list: Entity<ListState<ReviewRowsDelegate>>,
   scroll_handle: gpui::ScrollHandle,
@@ -384,6 +385,7 @@ impl ReviewList {
       collapsed_files: HashSet::new(),
       selected: HashSet::new(),
       active_section: None,
+      pull_request_number: None,
       agent_list,
       pull_request_list,
       scroll_handle: gpui::ScrollHandle::new(),
@@ -431,6 +433,13 @@ impl ReviewList {
   pub(crate) fn set_pull_request_loading(&mut self, loading: bool, cx: &mut Context<Self>) {
     if self.pull_request_loading != loading {
       self.pull_request_loading = loading;
+      cx.notify();
+    }
+  }
+
+  pub(crate) fn set_pull_request_number(&mut self, number: Option<u64>, cx: &mut Context<Self>) {
+    if self.pull_request_number != number {
+      self.pull_request_number = number;
       cx.notify();
     }
   }
@@ -670,6 +679,13 @@ impl ReviewList {
 
   pub(crate) fn selected_ids(&self) -> &HashSet<u64> {
     &self.selected
+  }
+
+  fn section_title(&self, section: ReviewSection) -> String {
+    match (section, self.pull_request_number) {
+      (ReviewSection::PullRequest, Some(number)) => format!("Pull request #{number}"),
+      _ => section.fallback_title().to_string(),
+    }
   }
 
   /// Called once a send went out: what left is marked sent, so its tick has
@@ -1195,7 +1211,7 @@ impl ReviewList {
           .text_xs()
           .text_color(theme.muted_foreground)
           .truncate()
-          .child(section.title()),
+          .child(self.section_title(section)),
       )
       .child(
         div()
@@ -1248,7 +1264,7 @@ impl ReviewList {
                 .debug_selector(|| REVIEW_LIST_FOOTER_DESTINATION_DEBUG_SELECTOR.to_string())
                 .text_xs()
                 .text_color(theme.muted_foreground)
-                .child(section.title()),
+                .child(self.section_title(section)),
             )
           })
           .child({
@@ -1538,6 +1554,23 @@ mod tests {
       review_row_status_label(ReviewRowStatus::Outdated),
       Some("Outdated")
     );
+  }
+
+  #[gpui::test]
+  async fn the_pull_request_section_names_the_number_when_known(cx: &mut gpui::TestAppContext) {
+    let (list, cx) = add_review_list_window(cx);
+
+    list.update(cx, |list, cx| {
+      assert_eq!(
+        list.section_title(ReviewSection::PullRequest),
+        "To this pull request"
+      );
+      list.set_pull_request_number(Some(42), cx);
+      assert_eq!(
+        list.section_title(ReviewSection::PullRequest),
+        "Pull request #42"
+      );
+    });
   }
 
   #[test]
