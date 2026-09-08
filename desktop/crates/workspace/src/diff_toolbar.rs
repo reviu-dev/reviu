@@ -217,7 +217,7 @@ fn render_whitespace(id_prefix: &'static str, whitespace: ToggleControl) -> AnyE
 
   Button::new(format!("{id_prefix}-whitespace"))
     .debug_selector(move || selector.to_string())
-    .icon(whitespace_icon(hidden))
+    .icon(whitespace_icon())
     .selected(hidden)
     .xsmall()
     .ghost()
@@ -231,12 +231,8 @@ fn render_whitespace(id_prefix: &'static str, whitespace: ToggleControl) -> AnyE
     .into_any_element()
 }
 
-fn whitespace_icon(hidden: bool) -> IconName {
-  if hidden {
-    IconName::EyeOff
-  } else {
-    IconName::Eye
-  }
+fn whitespace_icon() -> UiIconName {
+  UiIconName::Pilcrow
 }
 
 fn render_split(id_prefix: &'static str, split: SplitControl) -> AnyElement {
@@ -308,7 +304,6 @@ fn render_preview(id_prefix: &'static str, preview: ToggleControl) -> AnyElement
     .xsmall()
     .ghost()
     .disabled(preview.disabled)
-    .tooltip("Show the rendered file")
     .on_click(move |_, window, cx| on_toggle(window, cx))
     .into_any_element()
 }
@@ -351,11 +346,10 @@ mod tests {
   }
 
   #[test]
-  fn whitespace_icon_reflects_the_current_filter_state() {
+  fn whitespace_icon_uses_a_whitespace_symbol() {
     use gpui_component::IconNamed as _;
 
-    assert_eq!(whitespace_icon(false).path().as_ref(), "icons/eye.svg");
-    assert_eq!(whitespace_icon(true).path().as_ref(), "icons/eye-off.svg");
+    assert_eq!(whitespace_icon().path().as_ref(), "icons/pilcrow.svg");
   }
 
   #[test]
