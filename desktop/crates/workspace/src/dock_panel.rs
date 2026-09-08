@@ -20,7 +20,7 @@ use gpui_component::{
   ActiveTheme as _, Disableable as _, Icon, IconName, IndexPath, Sizable as _,
   dialog::{DialogDescription, DialogFooter, DialogHeader, DialogTitle},
   h_flex,
-  input::{Input, InputState},
+  input::{self, Input, InputState},
   list::{List, ListDelegate, ListEvent, ListItem, ListState},
   menu::{ContextMenuExt as _, DropdownMenu as _, PopupMenu, PopupMenuItem},
   tree::{TreeEvent, TreeItem, TreeState, tree},
@@ -3923,6 +3923,12 @@ impl DockPanel {
           });
         }
       })
+      .on_mouse_down(gpui::MouseButton::Left, {
+        let panel = panel.clone();
+        move |_, _, cx| {
+          let _ = panel.update(cx, |panel, cx| panel.cancel_inline_rename(cx));
+        }
+      })
       .context_menu(move |menu, _, cx| {
         let target = root_menu_panel
           .update(cx, |panel, _| {
@@ -3980,6 +3986,14 @@ impl DockPanel {
                 let id = item.id.clone();
                 move || format!("dock-panel-file-rename-input-{id}")
               })
+              .capture_action({
+                let panel = panel.clone();
+                move |_: &input::Escape, _, cx| {
+                  let _ = panel.update(cx, |panel, cx| panel.cancel_inline_rename(cx));
+                  cx.stop_propagation();
+                }
+              })
+              .on_mouse_down(gpui::MouseButton::Left, |_, _, cx| cx.stop_propagation())
               .h(px(22.5))
               .min_w_0()
               .flex_1()
@@ -5742,6 +5756,49 @@ mod tests {
     cx.run_until_parked();
 
     assert!(repo.path.join("README.md").is_file());
+    assert!(panel.read_with(cx, |panel, _| panel.files_inline_rename.is_none()));
+  }
+
+  #[gpui::test]
+  async fn file_context_inline_rename_clicking_another_file_cancels(cx: &mut TestAppContext) {
+    cx.update(gpui_component::init);
+    let repo = TempRepo::init("dock-files-inline-rename-click-cancel");
+    commit_text_file(&repo.path, Path::new("README.md"), "v1\n", "first");
+    commit_text_file(&repo.path, Path::new("other.txt"), "v1\n", "second");
+
+    let (panel, cx) = add_dock_panel_window(Some(repo.path.clone()), cx);
+    await_refresh(&panel, cx).await;
+    open_files_tab_and_wait(&panel, cx).await;
+
+    panel.update_in(cx, |panel, window, cx| {
+      panel.start_inline_rename_from_context(
+        FilesContextTarget::entry(PathBuf::from("README.md"), false),
+        window,
+        cx,
+      );
+    });
+    cx.run_until_parked();
+    cx.update(|window, cx| {
+      let _ = window.draw(cx);
+    });
+    panel.update_in(cx, |panel, window, cx| {
+      let input = panel
+        .files_inline_rename
+        .as_ref()
+        .expect("inline rename")
+        .input
+        .clone();
+      input.update(cx, |input, cx| input.set_value("NOTES.md", window, cx));
+    });
+
+    let other = cx
+      .debug_bounds("dock-panel-file-other.txt")
+      .expect("other file row");
+    cx.simulate_click(other.center(), gpui::Modifiers::default());
+    cx.run_until_parked();
+
+    assert!(repo.path.join("README.md").is_file());
+    assert!(!repo.path.join("NOTES.md").exists());
     assert!(panel.read_with(cx, |panel, _| panel.files_inline_rename.is_none()));
   }
 
