@@ -13,8 +13,8 @@ use crate::api::GithubPullRequestReviewComment;
 use crate::date_format::format_relative_time;
 use crate::github_shared;
 use crate::review_list::{
-  ReviewPanelComment, ReviewRowStatus, ReviewSection, review_comment_excerpt,
-  sort_review_panel_comments,
+  ReviewPanelComment, ReviewPanelGithubComment, ReviewRowStatus, ReviewSection,
+  review_comment_excerpt, sort_review_panel_comments,
 };
 
 /// The node id of the viewer's unsubmitted review. Nothing else on the pull
@@ -107,6 +107,13 @@ pub(crate) fn pending_review_rows(
       } else {
         ReviewRowStatus::Pending
       },
+      github: Some(ReviewPanelGithubComment {
+        author: comment.user.login.clone(),
+        avatar_url: comment.user.avatar_url.clone(),
+        created_at: format_relative_time(&comment.created_at).to_string(),
+        is_reply: comment.in_reply_to_id.is_some(),
+        is_resolved: comment.is_resolved,
+      }),
       // GitHub submits a review whole: there is no subset to tick.
       sendable: false,
     })
@@ -620,6 +627,31 @@ mod tests {
     assert_eq!(rows[0].section, ReviewSection::PullRequest);
     assert_eq!(rows[0].excerpt, "still a draft");
     assert!(!rows[0].sendable);
+  }
+
+  #[test]
+  fn pending_rows_keep_github_context_for_the_panel_card() {
+    let mut draft = comment(1, "src/a.rs", Some(9), "still a draft");
+    draft.user.login = "reviewer".to_string();
+    draft.user.avatar_url = Some("https://example.com/avatar.png".to_string());
+    draft.created_at = "2026-02-15T12:00:00Z".to_string();
+    draft.in_reply_to_id = Some(99);
+    draft.is_resolved = true;
+
+    let rows = pending_review_rows(&[draft]);
+    let github = rows[0].github.as_ref().expect("github metadata");
+
+    assert_eq!(github.author, "reviewer");
+    assert_eq!(
+      github.avatar_url.as_deref(),
+      Some("https://example.com/avatar.png")
+    );
+    assert_eq!(
+      github.created_at,
+      format_relative_time("2026-02-15T12:00:00Z").to_string()
+    );
+    assert!(github.is_reply);
+    assert!(github.is_resolved);
   }
 
   #[test]

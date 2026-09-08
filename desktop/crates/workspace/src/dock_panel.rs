@@ -8488,6 +8488,7 @@ mod tests {
             body: "here".to_string(),
             excerpt: "here".to_string(),
             status: crate::review_list::ReviewRowStatus::Draft,
+            github: None,
             sendable: true,
           }],
           cx,

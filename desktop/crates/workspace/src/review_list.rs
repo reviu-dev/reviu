@@ -6,15 +6,17 @@ use std::path::{Path, PathBuf};
 use gpui::{
   AnyElement, App, AppContext as _, Context, Entity, Focusable as _, InteractiveElement,
   IntoElement, KeyDownEvent, MouseButton, ParentElement, Render, StatefulInteractiveElement as _,
-  Styled, WeakEntity, Window, div, prelude::FluentBuilder as _, px,
+  Styled, WeakEntity, Window, div, prelude::*, px,
 };
 use gpui_component::{
   ActiveTheme as _, Disableable as _, Icon, IconName, IndexPath, Sizable,
+  avatar::Avatar,
   button::{Button, ButtonVariants as _},
   checkbox::Checkbox,
   h_flex,
   list::{List, ListDelegate, ListEvent, ListItem, ListState},
   menu::{ContextMenuExt as _, PopupMenu, PopupMenuItem},
+  scroll::ScrollableElement as _,
   tag::Tag,
   v_flex,
 };
@@ -44,6 +46,9 @@ fn review_list_section_header_debug_selector(section: ReviewSection) -> &'static
 
 /// Longest excerpt shown on a row before it is cut.
 const REVIEW_EXCERPT_MAX_CHARS: usize = 120;
+const REVIEW_LIST_COMPACT_CONTENT_HEIGHT_PX: f32 = 22.5;
+const REVIEW_LIST_COMPACT_ROW_HEIGHT_PX: f32 = 30.5;
+const REVIEW_LIST_RICH_CONTENT_HEIGHT_PX: f32 = 56.0;
 
 /// Where the comments of a section go. It is the only thing that separates them,
 /// and it is what the section header says instead of a colour code.
@@ -136,9 +141,19 @@ pub(crate) struct ReviewPanelComment {
   pub body: String,
   pub excerpt: String,
   pub status: ReviewRowStatus,
+  pub github: Option<ReviewPanelGithubComment>,
   /// Whether this row takes part in a partial send. Only the agent's do: GitHub
   /// submits a review whole.
   pub sendable: bool,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct ReviewPanelGithubComment {
+  pub author: String,
+  pub avatar_url: Option<String>,
+  pub created_at: String,
+  pub is_reply: bool,
+  pub is_resolved: bool,
 }
 
 /// The first line with something on it: a row shows one line, not a paragraph.
@@ -183,6 +198,7 @@ pub(crate) fn review_panel_comments(
       body: comment.body.to_string(),
       excerpt: review_comment_excerpt(comment.body.as_ref()),
       status: agent_row_status(&comment.state),
+      github: None,
       sendable: agent_review_state_is_sendable(&comment.state),
     })
     .collect::<Vec<_>>();
@@ -287,9 +303,11 @@ impl ListDelegate for ReviewRowsDelegate {
       .unwrap_or(false);
     let content = owner.update(cx, |list, cx| match &row {
       ReviewRow::FileHeader { path, count } => list.render_file_header(section, path, *count, cx),
-      ReviewRow::Comment(comment) => list.render_comment_row(comment, cx),
+      ReviewRow::Comment(comment) => list.render_comment_row(comment, selected, cx),
     });
-    let mut item = selectable_list_item(ix, selected, SelectableRowStyle::Inset, &theme).px_2();
+    let mut item = selectable_list_item(ix, selected, SelectableRowStyle::Inset, &theme)
+      .mx_1()
+      .px_2();
     if let ReviewRow::Comment(comment) = &row {
       let (prefix, id) = (section.id_prefix(), comment.id);
       item = item.debug_selector(move || format!("review-comment-{prefix}-{id}"));
@@ -320,7 +338,9 @@ pub(crate) struct ReviewList {
   /// Which destination the footer acts on: the section of the row last walked
   /// to. One set of actions at the bottom, and it follows the keyboard.
   active_section: Option<ReviewSection>,
-  list: Entity<ListState<ReviewRowsDelegate>>,
+  agent_list: Entity<ListState<ReviewRowsDelegate>>,
+  pull_request_list: Entity<ListState<ReviewRowsDelegate>>,
+  scroll_handle: gpui::ScrollHandle,
 }
 
 impl gpui::EventEmitter<ReviewListEvent> for ReviewList {}
@@ -328,37 +348,32 @@ impl gpui::EventEmitter<ReviewListEvent> for ReviewList {}
 impl ReviewList {
   pub(crate) fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
     let owner = cx.entity().downgrade();
-    let list = cx
-      .new(|cx| ListState::new(ReviewRowsDelegate::new(owner), window, cx).reset_on_cancel(false));
+    let agent_list = cx.new(|cx| {
+      ListState::new(ReviewRowsDelegate::new(owner.clone()), window, cx).reset_on_cancel(false)
+    });
+    let pull_request_list = cx.new(|cx| {
+      ListState::new(ReviewRowsDelegate::new(owner.clone()), window, cx).reset_on_cancel(false)
+    });
 
-    let _ = list.read(cx).focus_handle(cx).tab_stop(true).tab_index(0);
+    let _ = agent_list
+      .read(cx)
+      .focus_handle(cx)
+      .tab_stop(true)
+      .tab_index(0);
+    let _ = pull_request_list
+      .read(cx)
+      .focus_handle(cx)
+      .tab_stop(true)
+      .tab_index(0);
 
-    // Walking the list shows each comment; a click or Enter hands the editor the
-    // keyboard. On a file row there is nothing to read, so both fold it.
-    cx.subscribe(&list, |this, state, event: &ListEvent, cx| {
-      let (ix, intent) = match event {
-        ListEvent::Select(ix) => (*ix, OpenIntent::Browse),
-        ListEvent::Confirm(ix) => (*ix, OpenIntent::Open),
-        _ => return,
-      };
-      let Some((section, row)) = state.read(cx).delegate().row_at(ix) else {
-        return;
-      };
-      this.active_section = Some(section);
-      cx.notify();
-      match row {
-        ReviewRow::Comment(comment) => cx.emit(ReviewListEvent::OpenComment {
-          section,
-          path: comment.path.clone(),
-          line: comment.line,
-          intent,
-        }),
-        ReviewRow::FileHeader { path, .. } => {
-          if intent.takes_focus() {
-            this.toggle_file(section, path, cx);
-          }
-        }
-      }
+    // Walking a destination list shows each comment; a click or Enter hands the
+    // editor the keyboard. On a file row there is nothing to read, so both fold it.
+    cx.subscribe(&agent_list, |this, state, event: &ListEvent, cx| {
+      Self::handle_list_event(this, &state, event, cx)
+    })
+    .detach();
+    cx.subscribe(&pull_request_list, |this, state, event: &ListEvent, cx| {
+      Self::handle_list_event(this, &state, event, cx)
     })
     .detach();
 
@@ -369,7 +384,40 @@ impl ReviewList {
       collapsed_files: HashSet::new(),
       selected: HashSet::new(),
       active_section: None,
-      list,
+      agent_list,
+      pull_request_list,
+      scroll_handle: gpui::ScrollHandle::new(),
+    }
+  }
+
+  fn handle_list_event(
+    this: &mut Self,
+    state: &Entity<ListState<ReviewRowsDelegate>>,
+    event: &ListEvent,
+    cx: &mut Context<Self>,
+  ) {
+    let (ix, intent) = match event {
+      ListEvent::Select(ix) => (*ix, OpenIntent::Browse),
+      ListEvent::Confirm(ix) => (*ix, OpenIntent::Open),
+      _ => return,
+    };
+    let Some((section, row)) = state.read(cx).delegate().row_at(ix) else {
+      return;
+    };
+    this.active_section = Some(section);
+    cx.notify();
+    match row {
+      ReviewRow::Comment(comment) => cx.emit(ReviewListEvent::OpenComment {
+        section,
+        path: comment.path.clone(),
+        line: comment.line,
+        intent,
+      }),
+      ReviewRow::FileHeader { path, .. } => {
+        if intent.takes_focus() {
+          this.toggle_file(section, path, cx);
+        }
+      }
     }
   }
 
@@ -389,51 +437,128 @@ impl ReviewList {
 
   #[cfg(test)]
   pub(crate) fn keyboard_selected_row(&self, cx: &App) -> Option<IndexPath> {
-    self.list.read(cx).delegate().selected_index
+    match self
+      .active_section
+      .or_else(|| self.sections().next())
+      .unwrap_or(ReviewSection::Agent)
+    {
+      ReviewSection::Agent => self.agent_list.read(cx).delegate().selected_index,
+      ReviewSection::PullRequest => self.pull_request_list.read(cx).delegate().selected_index,
+    }
   }
 
   pub(crate) fn is_focused(&self, window: &Window, cx: &App) -> bool {
     self
-      .list
+      .agent_list
       .read(cx)
       .focus_handle(cx)
       .contains_focused(window, cx)
+      || self
+        .pull_request_list
+        .read(cx)
+        .focus_handle(cx)
+        .contains_focused(window, cx)
   }
 
   pub(crate) fn focus(&self, window: &mut Window, cx: &mut Context<Self>) {
-    let handle = self.list.read(cx).focus_handle(cx);
+    let list = if self.comments(ReviewSection::Agent).is_empty() {
+      &self.pull_request_list
+    } else {
+      &self.agent_list
+    };
+    let handle = list.read(cx).focus_handle(cx);
     window.focus(&handle, cx);
   }
 
-  /// The rows the list walks, rebuilt whenever the comments or the folds change.
-  fn sync_rows(&mut self, cx: &mut Context<Self>) {
-    let sections = self
-      .sections()
-      .map(|section| {
-        let mut rows = Vec::new();
-        for (path, comments) in group_review_comments_by_file(self.comments(section)) {
-          rows.push(ReviewRow::FileHeader {
-            path: path.clone(),
-            count: comments.len(),
-          });
-          if self.collapsed_files.contains(&(section, path)) {
-            continue;
-          }
-          rows.extend(
-            comments
-              .into_iter()
-              .map(|comment| ReviewRow::Comment(Box::new(comment))),
-          );
-        }
-        ReviewRowsSection { section, rows }
-      })
-      .collect::<Vec<_>>();
-    let show_section_headers = sections.len() > 1;
+  fn selected_comment_id(&self, section: ReviewSection, cx: &App) -> Option<u64> {
+    let list = match section {
+      ReviewSection::Agent => &self.agent_list,
+      ReviewSection::PullRequest => &self.pull_request_list,
+    };
+    let delegate = list.read(cx).delegate();
+    let selected_index = delegate.selected_index?;
+    match delegate.row_at(selected_index)?.1 {
+      ReviewRow::Comment(comment) => Some(comment.id),
+      ReviewRow::FileHeader { .. } => None,
+    }
+  }
 
-    self.list.update(cx, |state, cx| {
+  fn select_row_by_comment_id(
+    &mut self,
+    section: ReviewSection,
+    comment_id: u64,
+    cx: &mut Context<Self>,
+  ) {
+    let list = match section {
+      ReviewSection::Agent => &self.agent_list,
+      ReviewSection::PullRequest => &self.pull_request_list,
+    };
+    list.update(cx, |state, cx| {
+      let selected_index =
+        state
+          .delegate()
+          .sections
+          .iter()
+          .enumerate()
+          .find_map(|(section_index, section)| {
+            section
+              .rows
+              .iter()
+              .enumerate()
+              .find_map(|(row_index, row)| match row {
+                ReviewRow::Comment(comment) if comment.id == comment_id => {
+                  Some(IndexPath::new(row_index).section(section_index))
+                }
+                _ => None,
+              })
+          });
+      state.delegate_mut().selected_index = selected_index;
+      cx.notify();
+    });
+    self.active_section = Some(section);
+    cx.notify();
+  }
+
+  fn rows_for_section(&self, section: ReviewSection) -> Vec<ReviewRow> {
+    let mut rows = Vec::new();
+    for (path, comments) in group_review_comments_by_file(self.comments(section)) {
+      rows.push(ReviewRow::FileHeader {
+        path: path.clone(),
+        count: comments.len(),
+      });
+      if self.collapsed_files.contains(&(section, path)) {
+        continue;
+      }
+      rows.extend(
+        comments
+          .into_iter()
+          .map(|comment| ReviewRow::Comment(Box::new(comment))),
+      );
+    }
+    rows
+  }
+
+  /// The rows the lists walk, rebuilt whenever the comments or the folds change.
+  fn sync_rows(&mut self, cx: &mut Context<Self>) {
+    let agent_rows = self.rows_for_section(ReviewSection::Agent);
+    let pull_request_rows = self.rows_for_section(ReviewSection::PullRequest);
+
+    self.agent_list.update(cx, |state, cx| {
       let delegate = state.delegate_mut();
-      delegate.sections = sections;
-      delegate.show_section_headers = show_section_headers;
+      delegate.sections = vec![ReviewRowsSection {
+        section: ReviewSection::Agent,
+        rows: agent_rows,
+      }];
+      delegate.show_section_headers = false;
+      cx.notify();
+    });
+    self.pull_request_list.update(cx, |state, cx| {
+      let delegate = state.delegate_mut();
+      delegate.sections = vec![ReviewRowsSection {
+        section: ReviewSection::PullRequest,
+        rows: pull_request_rows,
+      }];
+      delegate.show_section_headers = false;
       cx.notify();
     });
   }
@@ -450,18 +575,27 @@ impl ReviewList {
       "right" => false,
       _ => return,
     };
-    if !self
-      .list
+    let list = if self
+      .agent_list
       .read(cx)
       .focus_handle(cx)
       .contains_focused(window, cx)
     {
-      return;
-    }
-    let Some(ix) = self.list.read(cx).delegate().selected_index else {
+      &self.agent_list
+    } else if self
+      .pull_request_list
+      .read(cx)
+      .focus_handle(cx)
+      .contains_focused(window, cx)
+    {
+      &self.pull_request_list
+    } else {
       return;
     };
-    let Some((section, row)) = self.list.read(cx).delegate().row_at(ix) else {
+    let Some(ix) = list.read(cx).delegate().selected_index else {
+      return;
+    };
+    let Some((section, row)) = list.read(cx).delegate().row_at(ix) else {
       return;
     };
     let path = match row {
@@ -485,7 +619,8 @@ impl ReviewList {
   /// A tick or a count changed without moving a row: the list still has to
   /// repaint, and it does not watch its owner.
   fn notify_rows(&mut self, cx: &mut Context<Self>) {
-    self.list.update(cx, |_, cx| cx.notify());
+    self.agent_list.update(cx, |_, cx| cx.notify());
+    self.pull_request_list.update(cx, |_, cx| cx.notify());
     cx.notify();
   }
 
@@ -696,17 +831,26 @@ impl ReviewList {
     let selectable = !sendable_ids.is_empty();
     let file_is_selected = selectable && sendable_ids.iter().all(|id| self.selected.contains(id));
     let select_path = path.to_path_buf();
+    let toggle_path = path.to_path_buf();
+    let file_debug_selector = format!(
+      "review-file-{}-{}",
+      section.id_prefix(),
+      path.to_string_lossy()
+    );
 
     h_flex()
-      .id(gpui::SharedString::from(format!(
-        "review-file-{}-{}",
-        section.id_prefix(),
-        path.to_string_lossy()
-      )))
+      .id(gpui::SharedString::from(file_debug_selector.clone()))
+      .debug_selector(move || file_debug_selector.clone())
       .w_full()
       .items_center()
       .gap_1()
       .cursor_pointer()
+      .on_click(cx.listener(move |this, _, _, cx| {
+        cx.stop_propagation();
+        this.toggle_file(section, toggle_path.clone(), cx);
+      }))
+      .h(px(REVIEW_LIST_COMPACT_CONTENT_HEIGHT_PX))
+      .min_h(px(REVIEW_LIST_COMPACT_CONTENT_HEIGHT_PX))
       .when(section == ReviewSection::Agent, |this| {
         this.child(
           div()
@@ -750,7 +894,23 @@ impl ReviewList {
       .into_any_element()
   }
 
-  fn render_comment_row(&self, comment: &ReviewPanelComment, cx: &mut Context<Self>) -> AnyElement {
+  fn render_comment_row(
+    &self,
+    comment: &ReviewPanelComment,
+    selected: bool,
+    cx: &mut Context<Self>,
+  ) -> AnyElement {
+    match comment.section {
+      ReviewSection::Agent => self.render_agent_comment_row(comment, cx),
+      ReviewSection::PullRequest => self.render_pull_request_comment_card(comment, selected, cx),
+    }
+  }
+
+  fn render_agent_comment_row(
+    &self,
+    comment: &ReviewPanelComment,
+    cx: &mut Context<Self>,
+  ) -> AnyElement {
     let theme = cx.theme().clone();
     let section = comment.section;
     let delete_id = comment.id;
@@ -762,35 +922,27 @@ impl ReviewList {
     let context_comment = comment.clone();
 
     h_flex()
-      .id((
-        match section {
-          ReviewSection::Agent => "review-comment-agent",
-          ReviewSection::PullRequest => "review-comment-pull-request",
-        },
-        comment.id as usize,
-      ))
+      .id(("review-comment-agent", comment.id as usize))
       .w_full()
       .items_center()
       .gap_2()
       .pl_4()
-      // Always there in the agent section, so every row's text starts on the
-      // same column.
-      .when(section == ReviewSection::Agent, |this| {
-        this.child(
-          div()
-            .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-            .child(
-              Checkbox::new(("review-comment-select", select_id as usize))
-                .small()
-                .checked(is_selected)
-                .disabled(!sendable)
-                .on_click(cx.listener(move |this, _, _, cx| {
-                  cx.stop_propagation();
-                  this.toggle_comment(select_id, cx);
-                })),
-            ),
-        )
-      })
+      .h(px(REVIEW_LIST_COMPACT_CONTENT_HEIGHT_PX))
+      .min_h(px(REVIEW_LIST_COMPACT_CONTENT_HEIGHT_PX))
+      .child(
+        div()
+          .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+          .child(
+            Checkbox::new(("review-comment-select", select_id as usize))
+              .small()
+              .checked(is_selected)
+              .disabled(!sendable)
+              .on_click(cx.listener(move |this, _, _, cx| {
+                cx.stop_propagation();
+                this.toggle_comment(select_id, cx);
+              })),
+          ),
+      )
       .child(
         div()
           .text_xs()
@@ -845,6 +997,142 @@ impl ReviewList {
                 });
               })),
           ),
+      )
+      .context_menu(move |menu, _, _| {
+        Self::build_comment_context_menu(menu, context_owner.clone(), context_comment.clone())
+      })
+      .into_any_element()
+  }
+
+  fn render_pull_request_comment_card(
+    &self,
+    comment: &ReviewPanelComment,
+    selected: bool,
+    cx: &mut Context<Self>,
+  ) -> AnyElement {
+    let theme = cx.theme().clone();
+    let delete_id = comment.id;
+    let context_owner = cx.entity().downgrade();
+    let context_comment = comment.clone();
+    let github = comment.github.as_ref();
+    let author = github
+      .map(|github| github.author.as_str())
+      .unwrap_or("GitHub");
+    let avatar_url = github.and_then(|github| github.avatar_url.clone());
+    let created_at = github.map(|github| github.created_at.as_str());
+    let is_reply = github.is_some_and(|github| github.is_reply);
+    let is_resolved = github.is_some_and(|github| github.is_resolved);
+    let comment_id = comment.id;
+    let open_path = comment.path.clone();
+    let open_line = comment.line;
+
+    v_flex()
+      .id(("review-comment-pull-request-card", comment.id as usize))
+      .debug_selector(move || format!("review-comment-pull-request-card-{comment_id}"))
+      .w_full()
+      .min_h(px(REVIEW_LIST_RICH_CONTENT_HEIGHT_PX))
+      .gap_1()
+      .px_2()
+      .py_1p5()
+      .rounded(theme.radius)
+      .border_1()
+      .border_color(if selected {
+        theme.primary
+      } else {
+        theme.border
+      })
+      .bg(theme.background)
+      .cursor_pointer()
+      .on_click(cx.listener(move |this, _, _, cx| {
+        this.select_row_by_comment_id(ReviewSection::PullRequest, comment_id, cx);
+        cx.emit(ReviewListEvent::OpenComment {
+          section: ReviewSection::PullRequest,
+          path: open_path.clone(),
+          line: open_line,
+          intent: OpenIntent::Open,
+        });
+      }))
+      .child(
+        h_flex()
+          .w_full()
+          .items_center()
+          .gap_2()
+          .child(
+            Avatar::new()
+              .name(author.to_string())
+              .when_some(avatar_url, |this, url| this.src(url))
+              .small(),
+          )
+          .child(
+            div()
+              .debug_selector(move || format!("review-comment-pull-request-author-{comment_id}"))
+              .flex_1()
+              .min_w_0()
+              .text_xs()
+              .font_weight(gpui::FontWeight::SEMIBOLD)
+              .text_color(theme.foreground)
+              .truncate()
+              .child(author.to_string()),
+          )
+          .when_some(created_at, |this, created_at| {
+            this.child(
+              div()
+                .debug_selector(move || format!("review-comment-pull-request-time-{comment_id}"))
+                .flex_shrink_0()
+                .text_xs()
+                .text_color(theme.muted_foreground)
+                .child(created_at.to_string()),
+            )
+          })
+          .child(
+            div()
+              .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+              .child(
+                Button::new(("review-comment-delete", comment.id as usize))
+                  .ghost()
+                  .xsmall()
+                  .compact()
+                  .icon(Icon::new(UiIconName::Trash))
+                  .tooltip("Delete comment")
+                  .on_click(cx.listener(move |_, _, _, cx| {
+                    cx.stop_propagation();
+                    cx.emit(ReviewListEvent::DeleteComment {
+                      section: ReviewSection::PullRequest,
+                      id: delete_id,
+                    });
+                  })),
+              ),
+          ),
+      )
+      .child(
+        div()
+          .w_full()
+          .min_w_0()
+          .text_sm()
+          .text_color(theme.foreground)
+          .truncate()
+          .child(comment.excerpt.clone()),
+      )
+      .child(
+        h_flex()
+          .w_full()
+          .items_center()
+          .gap_1()
+          .child(
+            Tag::secondary()
+              .small()
+              .outline()
+              .child(comment.line_label.clone()),
+          )
+          .when(is_reply, |this| {
+            this.child(Tag::info().small().outline().child("Reply"))
+          })
+          .when(is_resolved, |this| {
+            this.child(Tag::success().small().outline().child("Resolved"))
+          })
+          .when_some(review_row_status_label(comment.status), |this, label| {
+            this.child(Tag::warning().small().outline().child(label))
+          }),
       )
       .context_menu(move |menu, _, _| {
         Self::build_comment_context_menu(menu, context_owner.clone(), context_comment.clone())
@@ -1007,6 +1295,95 @@ impl ReviewList {
       })
       .into_any_element()
   }
+
+  fn row_count(&self, section: ReviewSection) -> usize {
+    group_review_comments_by_file(self.comments(section))
+      .into_iter()
+      .map(|(path, comments)| {
+        1 + if self.collapsed_files.contains(&(section, path)) {
+          0
+        } else {
+          comments.len()
+        }
+      })
+      .sum()
+  }
+
+  fn render_pull_request_file_group(
+    &self,
+    path: PathBuf,
+    comments: Vec<ReviewPanelComment>,
+    cx: &mut Context<Self>,
+  ) -> AnyElement {
+    let theme = cx.theme().clone();
+    let collapsed = self
+      .collapsed_files
+      .contains(&(ReviewSection::PullRequest, path.clone()));
+    let selected_comment_id = self.selected_comment_id(ReviewSection::PullRequest, cx);
+    let file_row_id = gpui::SharedString::from(format!(
+      "review-file-row-pull-request-{}",
+      path.to_string_lossy()
+    ));
+
+    v_flex()
+      .w_full()
+      .child(
+        selectable_list_item(file_row_id, false, SelectableRowStyle::Inset, &theme)
+          .mx_1()
+          .px_2()
+          .child(self.render_file_header(ReviewSection::PullRequest, &path, comments.len(), cx)),
+      )
+      .when(!collapsed, |this| {
+        this.children(comments.into_iter().map(|comment| {
+          let id = comment.id;
+          div()
+            .debug_selector(move || format!("review-comment-pull-request-{id}"))
+            .px_2()
+            .py_1()
+            .child(self.render_pull_request_comment_card(
+              &comment,
+              selected_comment_id == Some(id),
+              cx,
+            ))
+        }))
+      })
+      .into_any_element()
+  }
+
+  fn render_destination_section(
+    &self,
+    section: ReviewSection,
+    cx: &mut Context<Self>,
+  ) -> AnyElement {
+    match section {
+      ReviewSection::Agent => {
+        let height = REVIEW_LIST_COMPACT_ROW_HEIGHT_PX * self.row_count(section) as f32;
+
+        v_flex()
+          .w_full()
+          .child(self.render_section_header(section, cx))
+          .child(
+            div().w_full().h(px(height)).min_h(px(height)).child(
+              List::new(&self.agent_list)
+                .scrollbar_visible(false)
+                .w_full()
+                .h_full()
+                .min_h_0(),
+            ),
+          )
+          .into_any_element()
+      }
+      ReviewSection::PullRequest => v_flex()
+        .w_full()
+        .child(self.render_section_header(section, cx))
+        .children(
+          group_review_comments_by_file(self.comments(section))
+            .into_iter()
+            .map(|(path, comments)| self.render_pull_request_file_group(path, comments, cx)),
+        )
+        .into_any_element(),
+    }
+  }
 }
 
 impl Render for ReviewList {
@@ -1047,25 +1424,32 @@ impl Render for ReviewList {
         .into_any_element();
     }
 
-    // A single destination pins its title above the rows; two of them carry
-    // their titles inside the list, where the rows separate them. Either way one
-    // footer sits at the bottom, for the destination the rows point at.
     let mut panel = v_flex()
       .id("review-list")
       .size_full()
       .min_h_0()
       .on_key_down(cx.listener(Self::on_key_down));
-    if let [section] = sections.as_slice() {
-      panel = panel.child(self.render_section_header(*section, cx));
-    }
     panel = panel.child(
       div()
         .id("review-list-rows")
         .flex_1()
         .min_h(px(0.0))
-        .px_1()
-        .py_1()
-        .child(List::new(&self.list).w_full().min_h_0()),
+        .relative()
+        .child(
+          v_flex()
+            .id("review-list-scroll")
+            .debug_selector(|| "review-list-scroll".to_string())
+            .size_full()
+            .overflow_y_scroll()
+            .track_scroll(&self.scroll_handle)
+            .py_1()
+            .children(
+              sections
+                .iter()
+                .map(|section| self.render_destination_section(*section, cx)),
+            ),
+        )
+        .vertical_scrollbar(&self.scroll_handle),
     );
     if let Some(section) = self.footer_section() {
       panel = panel.child(self.render_footer(section, sections.len() > 1, cx));
@@ -1112,7 +1496,22 @@ mod tests {
       body: "pending".to_string(),
       excerpt: "pending".to_string(),
       status: ReviewRowStatus::Pending,
+      github: None,
       sendable: false,
+    }
+  }
+
+  fn rich_pull_request_row(id: u64, path: &str, line: usize) -> ReviewPanelComment {
+    ReviewPanelComment {
+      github: Some(ReviewPanelGithubComment {
+        author: "octocat".to_string(),
+        avatar_url: Some("https://example.com/octocat.png".to_string()),
+        created_at: "2w ago".to_string(),
+        is_reply: true,
+        is_resolved: true,
+      }),
+      status: ReviewRowStatus::Outdated,
+      ..pull_request_row(id, path, line)
     }
   }
 
@@ -1380,11 +1779,13 @@ mod tests {
 
     let rows = |list: &gpui::Entity<ReviewList>, cx: &mut gpui::VisualTestContext| {
       list.read_with(cx, |list, cx| {
-        list.list.read(cx).delegate().items_count(0, cx)
+        list.agent_list.read(cx).delegate().items_count(0, cx)
       })
     };
     let selected = |list: &gpui::Entity<ReviewList>, cx: &mut gpui::VisualTestContext| {
-      list.read_with(cx, |list, cx| list.list.read(cx).delegate().selected_index)
+      list.read_with(cx, |list, cx| {
+        list.agent_list.read(cx).delegate().selected_index
+      })
     };
 
     // Two files, two comments each: a header row and its comments.
@@ -1762,6 +2163,163 @@ mod tests {
           .contains(&(ReviewSection::PullRequest, PathBuf::from("src/a.rs")))
       );
     });
+  }
+
+  #[gpui::test]
+  async fn pull_request_comments_render_as_cards_with_github_context(
+    cx: &mut gpui::TestAppContext,
+  ) {
+    let (list, cx) = add_review_list_window(cx);
+    list.update(cx, |list, cx| {
+      list.set_comments(
+        ReviewSection::PullRequest,
+        vec![
+          rich_pull_request_row(9, "src/a.rs", 3),
+          rich_pull_request_row(10, "src/a.rs", 4),
+        ],
+        cx,
+      );
+    });
+    cx.run_until_parked();
+
+    assert!(cx.debug_bounds("review-comment-pull-request-9").is_some());
+    let first_card = cx
+      .debug_bounds("review-comment-pull-request-card-9")
+      .expect("pull request rows should render as richer cards");
+    let second_card = cx
+      .debug_bounds("review-comment-pull-request-card-10")
+      .expect("the next pull request card should render");
+    assert!(
+      second_card.top() >= first_card.bottom(),
+      "cards should not overlap"
+    );
+    let scroll = cx
+      .debug_bounds("review-list-scroll")
+      .expect("review list scroll area");
+    assert!(
+      first_card.right() < scroll.right(),
+      "cards should keep breathing room before the scrollbar"
+    );
+    assert!(
+      cx.debug_bounds("review-comment-pull-request-author-9")
+        .is_some(),
+      "the card shows the GitHub author"
+    );
+    assert!(
+      cx.debug_bounds("review-comment-pull-request-time-9")
+        .is_some(),
+      "the card shows when GitHub created the comment"
+    );
+
+    cx.simulate_click(first_card.center(), gpui::Modifiers::default());
+    cx.run_until_parked();
+    list.read_with(cx, |list, cx| {
+      assert_eq!(
+        list.selected_comment_id(ReviewSection::PullRequest, cx),
+        Some(9),
+        "clicking a pull request card should make it the selected card"
+      );
+    });
+  }
+
+  #[gpui::test]
+  async fn local_review_rows_stay_compact_next_to_pull_request_cards(
+    cx: &mut gpui::TestAppContext,
+  ) {
+    let (list, cx) = add_review_list_window(cx);
+    list.update(cx, |list, cx| {
+      list.set_comments(ReviewSection::Agent, batch(), cx);
+      list.set_comments(
+        ReviewSection::PullRequest,
+        vec![rich_pull_request_row(9, "src/a.rs", 3)],
+        cx,
+      );
+    });
+    cx.run_until_parked();
+
+    let agent_row = cx
+      .debug_bounds("review-comment-agent-1")
+      .expect("agent row bounds");
+    let pull_request_card = cx
+      .debug_bounds("review-comment-pull-request-card-9")
+      .expect("pull request card bounds");
+
+    assert!(
+      agent_row.size.height < pull_request_card.size.height,
+      "the rich pull request comments should not force local review rows taller"
+    );
+  }
+
+  #[gpui::test]
+  async fn pull_request_file_headers_stay_compact_next_to_cards(cx: &mut gpui::TestAppContext) {
+    let (list, cx) = add_review_list_window(cx);
+    list.update(cx, |list, cx| {
+      list.set_comments(
+        ReviewSection::PullRequest,
+        vec![rich_pull_request_row(9, "src/a.rs", 3)],
+        cx,
+      );
+    });
+    cx.run_until_parked();
+
+    let file_header = cx
+      .debug_bounds("review-file-pull-request-src/a.rs")
+      .expect("pull request file header bounds");
+    let card = cx
+      .debug_bounds("review-comment-pull-request-card-9")
+      .expect("pull request card bounds");
+
+    assert!(
+      file_header.size.height < card.size.height,
+      "the collapsible file row should stay compact next to rich cards"
+    );
+
+    cx.simulate_click(file_header.center(), gpui::Modifiers::default());
+    cx.run_until_parked();
+    assert!(
+      cx.debug_bounds("review-comment-pull-request-card-9")
+        .is_none(),
+      "clicking a pull request file row should collapse its comment cards"
+    );
+  }
+
+  #[gpui::test]
+  async fn review_destinations_scroll_together(cx: &mut gpui::TestAppContext) {
+    let (list, cx) = add_review_list_window(cx);
+    let pull_request_rows = (0..32)
+      .map(|ix| rich_pull_request_row(100 + ix, "src/a.rs", ix as usize + 1))
+      .collect::<Vec<_>>();
+    list.update(cx, |list, cx| {
+      list.set_comments(ReviewSection::Agent, batch(), cx);
+      list.set_comments(ReviewSection::PullRequest, pull_request_rows, cx);
+    });
+    cx.run_until_parked();
+
+    let first_row_initial_y = cx
+      .debug_bounds("review-comment-agent-1")
+      .expect("first row before scrolling")
+      .origin
+      .y;
+    let scroll = cx
+      .debug_bounds("review-list-scroll")
+      .expect("review list scroll area");
+
+    cx.simulate_event(gpui::ScrollWheelEvent {
+      position: scroll.center(),
+      delta: gpui::ScrollDelta::Pixels(gpui::point(gpui::px(0.0), gpui::px(-220.0))),
+      ..Default::default()
+    });
+    cx.run_until_parked();
+
+    let first_row_scrolled_y = cx
+      .debug_bounds("review-comment-agent-1")
+      .expect("first row after scrolling")
+      .origin
+      .y;
+    assert!(
+      first_row_scrolled_y < first_row_initial_y,
+      "both review destination lists should live in one scrollable body"
+    );
   }
 
   #[gpui::test]
