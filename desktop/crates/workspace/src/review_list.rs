@@ -1507,26 +1507,40 @@ impl ReviewList {
       .size_full()
       .min_h_0()
       .py_1()
-      .child(
-        h_flex()
-          .w_full()
-          .items_center()
-          .gap_2()
-          .px_3()
-          .py_1()
-          .border_b_1()
-          .border_color(theme.border)
-          .child(Skeleton::new().h(px(14.0)).w(px(130.0)).rounded(px(999.0)))
-          .child(div().flex_1())
-          .child(
-            Skeleton::new()
-              .secondary()
-              .h(px(14.0))
-              .w(px(24.0))
-              .rounded(px(999.0)),
-          ),
-      )
+      .child(Self::render_loading_header(&theme))
       .children((0..3).map(|index| Self::render_loading_file_group(index, &theme)))
+      .into_any_element()
+  }
+
+  fn render_loading_pull_request_section(&self, cx: &mut Context<Self>) -> AnyElement {
+    let theme = cx.theme().clone();
+
+    v_flex()
+      .debug_selector(|| "review-list-loading-pull-request".to_string())
+      .w_full()
+      .child(self.render_section_header(ReviewSection::PullRequest, cx))
+      .children((0..2).map(|index| Self::render_loading_file_group(index, &theme)))
+      .into_any_element()
+  }
+
+  fn render_loading_header(theme: &gpui_component::Theme) -> AnyElement {
+    h_flex()
+      .w_full()
+      .items_center()
+      .gap_2()
+      .px_3()
+      .py_1()
+      .border_b_1()
+      .border_color(theme.border)
+      .child(Skeleton::new().h(px(14.0)).w(px(130.0)).rounded(px(999.0)))
+      .child(div().flex_1())
+      .child(
+        Skeleton::new()
+          .secondary()
+          .h(px(14.0))
+          .w(px(24.0))
+          .rounded(px(999.0)),
+      )
       .into_any_element()
   }
 
@@ -1658,26 +1672,29 @@ impl Render for ReviewList {
       .size_full()
       .min_h_0()
       .on_key_down(cx.listener(Self::on_key_down));
+    let mut scroll = v_flex()
+      .id("review-list-scroll")
+      .debug_selector(|| "review-list-scroll".to_string())
+      .size_full()
+      .overflow_y_scroll()
+      .track_scroll(&self.scroll_handle)
+      .py_1()
+      .children(
+        sections
+          .iter()
+          .map(|section| self.render_destination_section(*section, cx)),
+      );
+    if self.pull_request_loading && !sections.contains(&ReviewSection::PullRequest) {
+      scroll = scroll.child(self.render_loading_pull_request_section(cx));
+    }
+
     panel = panel.child(
       div()
         .id("review-list-rows")
         .flex_1()
         .min_h(px(0.0))
         .relative()
-        .child(
-          v_flex()
-            .id("review-list-scroll")
-            .debug_selector(|| "review-list-scroll".to_string())
-            .size_full()
-            .overflow_y_scroll()
-            .track_scroll(&self.scroll_handle)
-            .py_1()
-            .children(
-              sections
-                .iter()
-                .map(|section| self.render_destination_section(*section, cx)),
-            ),
-        )
+        .child(scroll)
         .vertical_scrollbar(&self.scroll_handle),
     );
     if let Some(section) = self.footer_section() {
@@ -2013,6 +2030,24 @@ mod tests {
       list.set_pull_request_loading(false, cx);
       assert!(list.is_empty());
     });
+  }
+
+  #[gpui::test]
+  async fn pull_request_loading_keeps_local_comments_visible(cx: &mut gpui::TestAppContext) {
+    let (list, cx) = add_review_list_window(cx);
+    list.update(cx, |list, cx| {
+      list.set_comments(ReviewSection::Agent, batch(), cx);
+      list.set_pull_request_loading(true, cx);
+    });
+    cx.run_until_parked();
+
+    assert!(cx.debug_bounds("review-comment-agent-1").is_some());
+    assert!(
+      cx.debug_bounds("review-list-loading-pull-request")
+        .is_some()
+    );
+    assert!(cx.debug_bounds(REVIEW_LIST_SEND_DEBUG_SELECTOR).is_some());
+    assert!(cx.debug_bounds(REVIEW_LIST_SUBMIT_DEBUG_SELECTOR).is_none());
   }
 
   #[gpui::test]
