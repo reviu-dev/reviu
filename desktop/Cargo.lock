@@ -2353,7 +2353,7 @@ version = "0.5.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ab8ecd87370524b461f8557c119c405552c396ed91fc0a8eec68679eab26f94a"
 dependencies = [
- "libloading 0.8.9",
+ "libloading 0.7.4",
 ]
 
 [[package]]
@@ -3513,7 +3513,7 @@ dependencies = [
 [[package]]
 name = "gpui-base"
 version = "0.6.1"
-source = "git+https://github.com/joris-gallot/gpui-component?branch=reviu%2Ftree-selection-events#a80fbb0e0f943df068cdf85a47e5fb428990bef7"
+source = "git+https://github.com/joris-gallot/gpui-component?branch=reviu%2Ftree-selection-events#009f7ef9838125506067c526baae3e7b5e52d793"
 dependencies = [
  "aho-corasick",
  "anyhow",
@@ -3547,7 +3547,7 @@ dependencies = [
 [[package]]
 name = "gpui-component"
 version = "0.6.1"
-source = "git+https://github.com/joris-gallot/gpui-component?branch=reviu%2Ftree-selection-events#a80fbb0e0f943df068cdf85a47e5fb428990bef7"
+source = "git+https://github.com/joris-gallot/gpui-component?branch=reviu%2Ftree-selection-events#009f7ef9838125506067c526baae3e7b5e52d793"
 dependencies = [
  "anyhow",
  "chrono",
@@ -3590,7 +3590,7 @@ dependencies = [
 [[package]]
 name = "gpui-component-macros"
 version = "0.6.1"
-source = "git+https://github.com/joris-gallot/gpui-component?branch=reviu%2Ftree-selection-events#a80fbb0e0f943df068cdf85a47e5fb428990bef7"
+source = "git+https://github.com/joris-gallot/gpui-component?branch=reviu%2Ftree-selection-events#009f7ef9838125506067c526baae3e7b5e52d793"
 dependencies = [
  "proc-macro-crate 3.5.0",
  "proc-macro2",
@@ -3601,7 +3601,7 @@ dependencies = [
 [[package]]
 name = "gpui-kit-assets"
 version = "0.6.1"
-source = "git+https://github.com/joris-gallot/gpui-component?branch=reviu%2Ftree-selection-events#a80fbb0e0f943df068cdf85a47e5fb428990bef7"
+source = "git+https://github.com/joris-gallot/gpui-component?branch=reviu%2Ftree-selection-events#009f7ef9838125506067c526baae3e7b5e52d793"
 dependencies = [
  "anyhow",
  "gpui",
@@ -4274,7 +4274,7 @@ dependencies = [
  "libc",
  "percent-encoding",
  "pin-project-lite",
- "socket2 0.6.3",
+ "socket2 0.5.10",
  "tokio",
  "tower-service",
  "tracing",
@@ -6947,7 +6947,7 @@ dependencies = [
  "quinn-udp",
  "rustc-hash 2.1.2",
  "rustls",
- "socket2 0.6.3",
+ "socket2 0.5.10",
  "thiserror 2.0.20",
  "tokio",
  "tracing",
@@ -6986,7 +6986,7 @@ dependencies = [
  "cfg_aliases",
  "libc",
  "once_cell",
- "socket2 0.6.3",
+ "socket2 0.5.10",
  "tracing",
  "windows-sys 0.60.2",
 ]
