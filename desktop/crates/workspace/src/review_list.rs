@@ -1366,6 +1366,138 @@ impl ReviewList {
       .into_any_element()
   }
 
+  fn render_empty_state(&self, cx: &mut Context<Self>) -> AnyElement {
+    let theme = cx.theme().clone();
+
+    v_flex()
+      .debug_selector(|| "review-list-empty".to_string())
+      .size_full()
+      .items_center()
+      .justify_start()
+      .px_4()
+      .pt(px(96.0))
+      .child(
+        v_flex()
+          .w_full()
+          .max_w(px(320.0))
+          .gap_3()
+          .rounded(px(16.0))
+          .border_1()
+          .border_color(theme.border.opacity(0.75))
+          .bg(theme.secondary.opacity(0.45))
+          .p_4()
+          .child(
+            h_flex()
+              .w_full()
+              .items_center()
+              .gap_3()
+              .child(
+                div()
+                  .relative()
+                  .size(px(54.0))
+                  .flex_shrink_0()
+                  .rounded(px(16.0))
+                  .border_1()
+                  .border_color(theme.primary.opacity(0.22))
+                  .bg(theme.primary.opacity(0.10))
+                  .child(
+                    div().absolute().top(px(14.0)).left(px(14.0)).child(
+                      Icon::new(UiIconName::MessageCirclePlus)
+                        .size_6()
+                        .text_color(theme.primary),
+                    ),
+                  )
+                  .child(
+                    div()
+                      .absolute()
+                      .right(px(-4.0))
+                      .top(px(-4.0))
+                      .size(px(22.0))
+                      .rounded_full()
+                      .border_1()
+                      .border_color(theme.background)
+                      .bg(theme.background)
+                      .child(
+                        h_flex().size_full().items_center().justify_center().child(
+                          Icon::new(UiIconName::Sparkles)
+                            .size_3()
+                            .text_color(theme.primary),
+                        ),
+                      ),
+                  ),
+              )
+              .child(
+                v_flex()
+                  .min_w_0()
+                  .gap_1()
+                  .child(
+                    div()
+                      .text_sm()
+                      .font_weight(gpui::FontWeight::SEMIBOLD)
+                      .text_color(theme.foreground)
+                      .truncate()
+                      .child("Ready for review"),
+                  )
+                  .child(
+                    div()
+                      .text_xs()
+                      .line_height(px(17.0))
+                      .text_color(theme.muted_foreground)
+                      .child("Select a changed line, leave a note, then send the batch."),
+                  ),
+              ),
+          )
+          .child(
+            v_flex()
+              .w_full()
+              .gap_2()
+              .child(Self::render_empty_step(
+                UiIconName::FileDiff,
+                "Select a changed line",
+                &theme,
+              ))
+              .child(Self::render_empty_step(
+                UiIconName::MessageCircle,
+                "Add a review note",
+                &theme,
+              ))
+              .child(Self::render_empty_step(
+                UiIconName::Sparkles,
+                "Send the batch",
+                &theme,
+              )),
+          ),
+      )
+      .into_any_element()
+  }
+
+  fn render_empty_step(
+    icon: UiIconName,
+    label: &'static str,
+    theme: &gpui_component::Theme,
+  ) -> AnyElement {
+    h_flex()
+      .w_full()
+      .min_w_0()
+      .items_center()
+      .gap_2()
+      .rounded(px(10.0))
+      .border_1()
+      .border_color(theme.border.opacity(0.65))
+      .bg(theme.background.opacity(0.7))
+      .px_2()
+      .py_2()
+      .child(Icon::new(icon).size_3().text_color(theme.primary))
+      .child(
+        div()
+          .min_w_0()
+          .text_xs()
+          .text_color(theme.muted_foreground)
+          .child(label),
+      )
+      .into_any_element()
+  }
+
   fn render_destination_section(
     &self,
     section: ReviewSection,
@@ -1426,18 +1558,7 @@ impl Render for ReviewList {
           )
           .into_any_element();
       }
-      return v_flex()
-        .size_full()
-        .items_center()
-        .justify_center()
-        .p_4()
-        .child(
-          div()
-            .text_sm()
-            .text_color(theme.muted_foreground)
-            .child("Comment on a diff line to start a review."),
-        )
-        .into_any_element();
+      return self.render_empty_state(cx);
     }
 
     let mut panel = v_flex()
