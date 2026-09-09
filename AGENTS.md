@@ -156,7 +156,7 @@ Other entities can then register a callback to handle these events by doing `cx.
 
 ## Required workflow
 
-- Add tests for each feature/fix.
+- Add or update tests when the change has behavior worth protecting. Skip tests for purely cosmetic, mechanical, or documentation-only changes when a test would only mirror implementation details.
 - For desktop changes, prefer `just verify` before finishing. It runs the CI-safe desktop checks and local Git smoke suite. If `just` is unavailable, run the equivalent commands from `Justfile` manually.
 - For GitHub integration, pull request surface, review, or inbox changes, also run `just github-smoke` when the local backend and credentials are available. This live smoke is intentionally manual/opt-in for now: do not require it in normal CI or wire it into workflows unless explicitly asked. If it cannot run, say why in the final reply.
 - Blanket lint exceptions live in `desktop/Cargo.toml` under `[workspace.lints.clippy]`, so local and CI clippy agree. A one-off false positive gets `#[allow(...)]` at the site with a line saying why, never a new blanket allow.

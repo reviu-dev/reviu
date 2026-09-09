@@ -176,10 +176,6 @@ fn editor_code_font_family(cx: &App) -> SharedString {
   cx.theme().mono_font_family.clone()
 }
 
-fn editor_code_font_size(cx: &App) -> Pixels {
-  cx.theme().mono_font_size
-}
-
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct VerticalScrollMetrics {
   pub viewport_lines: f32,
@@ -10111,7 +10107,7 @@ impl Render for Editor {
     };
     let content = content
       .font_family(editor_code_font_family(cx))
-      .text_size(editor_code_font_size(cx))
+      .text_size(cx.theme().mono_font_size)
       .relative()
       .child(EditorScrollbarElement::vertical(editor_entity));
 
@@ -11087,13 +11083,6 @@ pub mod tests {
         editor_code_font_family(cx),
       )
     });
-    assert_eq!(actual, expected);
-  }
-
-  #[gpui::test]
-  fn test_editor_code_font_size_matches_theme_mono_font_size(cx: &mut TestAppContext) {
-    cx.update(gpui_component::init);
-    let (expected, actual) = cx.update(|cx| (cx.theme().mono_font_size, editor_code_font_size(cx)));
     assert_eq!(actual, expected);
   }
 
