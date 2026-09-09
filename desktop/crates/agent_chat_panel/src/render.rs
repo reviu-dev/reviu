@@ -253,11 +253,17 @@ fn agent_markdown_style(label_headings: bool, cx: &App) -> TextViewStyle {
   let theme = cx.theme();
   let mut code_block = gpui::StyleRefinement::default();
   code_block.text.font_family = Some(theme.mono_font_family.clone());
-  code_block.text.font_size = Some(theme.mono_font_size.into());
+  code_block.text.font_size = Some(gpui::rems(0.875).into());
+
+  let mut inline_code = gpui::HighlightStyle::default();
+  inline_code.background_color = Some(theme.accent);
+  inline_code.color = Some(theme.foreground);
+  inline_code.font_weight = Some(FontWeight::NORMAL);
 
   let mut style = TextViewStyle::default()
     .paragraph_gap(gpui::rems(0.5))
-    .code_block(code_block);
+    .code_block(code_block)
+    .inline_code(inline_code);
   if label_headings {
     style = style.heading_font_size(|_, base| base);
   }
