@@ -1380,29 +1380,73 @@ impl Render for SessionList {
 
     let body = if rows.is_empty() {
       v_flex()
+        .debug_selector(|| "session-list-empty".to_string())
         .flex_1()
         .min_h_0()
         .items_center()
-        .justify_center()
-        .gap_2()
-        .px_4()
+        .justify_start()
+        .px_3()
+        .pt(px(96.0))
         .child(
-          Icon::new(UiIconName::FolderPlus)
-            .size_4()
-            .text_color(theme.muted_foreground),
-        )
-        .child(
-          div()
-            .text_sm()
-            .text_color(theme.muted_foreground)
-            .child("No projects yet"),
-        )
-        .child(
-          div()
-            .text_xs()
-            .text_center()
-            .text_color(theme.muted_foreground.opacity(0.8))
-            .child("Add a project to start working"),
+          v_flex()
+            .w_full()
+            .gap_3()
+            .rounded(px(16.0))
+            .border_1()
+            .border_color(theme.border.opacity(0.75))
+            .bg(theme.secondary.opacity(0.45))
+            .p_4()
+            .child(
+              h_flex()
+                .items_center()
+                .gap_3()
+                .child(
+                  h_flex()
+                    .size(px(54.0))
+                    .flex_shrink_0()
+                    .items_center()
+                    .justify_center()
+                    .rounded(px(16.0))
+                    .border_1()
+                    .border_color(theme.primary.opacity(0.22))
+                    .bg(theme.primary.opacity(0.10))
+                    .child(
+                      Icon::new(UiIconName::FolderPlus)
+                        .size_6()
+                        .text_color(theme.primary),
+                    ),
+                )
+                .child(
+                  v_flex()
+                    .min_w_0()
+                    .gap_1()
+                    .child(
+                      div()
+                        .text_sm()
+                        .font_weight(gpui::FontWeight::SEMIBOLD)
+                        .text_color(theme.foreground)
+                        .child("No projects yet"),
+                    )
+                    .child(
+                      div()
+                        .text_xs()
+                        .line_height(px(17.0))
+                        .text_color(theme.muted_foreground)
+                        .child("Add a repository or folder to start sessions and review work."),
+                    ),
+                ),
+            )
+            .child(
+              Button::new("session-list-empty-add-project")
+                .debug_selector(|| "session-list-empty-add-project".to_string())
+                .primary()
+                .small()
+                .w_full()
+                .label("Add project")
+                .on_click(cx.listener(|_, _, _, cx| {
+                  cx.emit(SessionListEvent::OpenProject);
+                })),
+            ),
         )
         .into_any_element()
     } else {
