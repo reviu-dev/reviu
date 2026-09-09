@@ -13,6 +13,7 @@ use gpui::{
 use gpui_component::{
   ActiveTheme as _, Icon, IconName, IndexPath, Sizable as _, WindowExt, h_flex,
   list::{ListDelegate, ListEvent, ListItem, ListState},
+  skeleton::Skeleton,
   spinner::Spinner,
   v_flex,
 };
@@ -423,6 +424,50 @@ fn highlighted_text(
   StyledText::new(text).with_highlights(highlights)
 }
 
+fn search_file_loading_row(index: usize) -> AnyElement {
+  let directory_width = match index % 3 {
+    0 => 160.0,
+    1 => 96.0,
+    _ => 128.0,
+  };
+
+  palette_list_item(IndexPath::new(index), None)
+    .child(
+      h_flex()
+        .items_center()
+        .gap_2()
+        .w_full()
+        .child(
+          h_flex()
+            .items_center()
+            .gap_2()
+            .min_w_0()
+            .flex_shrink(1.)
+            .child(Skeleton::new().size(px(16.0)).rounded(px(4.0)))
+            .child(
+              Skeleton::new()
+                .h(px(16.0))
+                .w(px(match index % 4 {
+                  0 => 96.0,
+                  1 => 128.0,
+                  2 => 76.0,
+                  _ => 112.0,
+                }))
+                .rounded(px(999.0)),
+            ),
+        )
+        .child(div().flex_1())
+        .child(
+          Skeleton::new()
+            .secondary()
+            .h(px(14.0))
+            .w(px(directory_width))
+            .rounded(px(999.0)),
+        ),
+    )
+    .into_any_element()
+}
+
 impl ListDelegate for SearchFileListDelegate {
   type Item = ListItem;
 
@@ -536,15 +581,12 @@ impl ListDelegate for SearchFileListDelegate {
     cx: &mut Context<ListState<Self>>,
   ) -> impl IntoElement {
     if self.loading {
-      return h_flex()
-        .justify_center()
-        .items_center()
-        .gap_2()
-        .py_8()
-        .text_sm()
-        .text_color(cx.theme().muted_foreground)
-        .child(Spinner::new().small())
-        .child("Loading project files...")
+      return v_flex()
+        .debug_selector(|| "search-file-palette-loading".to_string())
+        .w_full()
+        .gap_1()
+        .py_2()
+        .children((0..7).map(search_file_loading_row))
         .into_any_element();
     }
     palette_empty(cx)
