@@ -2370,8 +2370,7 @@ impl SessionPage {
         .min_w(px(0.0))
         .min_h_0()
         .bg(theme.background)
-        .px_2()
-        .py_1()
+        .p_3()
         .child(terminal.clone())
     };
 
