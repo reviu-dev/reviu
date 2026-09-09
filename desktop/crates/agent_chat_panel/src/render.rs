@@ -2225,38 +2225,56 @@ impl Render for AgentChatPanel {
                       .justify_between()
                       .gap_2()
                       .child(self.render_composer_controls(cx))
-                      .child(if self.in_flight {
+                      .child(
                         h_flex()
                           .gap_1()
+                          .items_center()
                           .child(
-                            Button::new("agent-chat-queue-send")
+                            Button::new("agent-chat-add-file")
+                              .icon(IconName::Plus)
+                              .small()
+                              .debug_selector(|| "agent-chat-add-file".to_string())
+                              .rounded(px(999.))
+                              .tooltip("Add files")
+                              .on_click(cx.listener(|panel, _, window, cx| {
+                                panel.prompt_for_files(window, cx);
+                              })),
+                          )
+                          .child(if self.in_flight {
+                            h_flex()
+                              .gap_1()
+                              .child(
+                                Button::new("agent-chat-queue-send")
+                                  .icon(UiIconName::ArrowUp)
+                                  .small()
+                                  .rounded(px(999.))
+                                  .tooltip("Queue for the next turn")
+                                  .on_click(
+                                    cx.listener(|panel, _, window, cx| panel.submit(window, cx)),
+                                  ),
+                              )
+                              .child(
+                                Button::new("agent-chat-stop")
+                                  .icon(UiIconName::Stop)
+                                  .small()
+                                  .rounded(px(999.))
+                                  .danger()
+                                  .on_click(cx.listener(|panel, _, _, cx| panel.cancel_turn(cx))),
+                              )
+                              .into_any_element()
+                          } else {
+                            Button::new("agent-chat-send")
                               .icon(UiIconName::ArrowUp)
                               .small()
                               .rounded(px(999.))
-                              .tooltip("Queue for the next turn")
+                              .primary()
+                              .disabled(!matches!(self.status, Status::Ready))
                               .on_click(
                                 cx.listener(|panel, _, window, cx| panel.submit(window, cx)),
-                              ),
-                          )
-                          .child(
-                            Button::new("agent-chat-stop")
-                              .icon(UiIconName::Stop)
-                              .small()
-                              .rounded(px(999.))
-                              .danger()
-                              .on_click(cx.listener(|panel, _, _, cx| panel.cancel_turn(cx))),
-                          )
-                          .into_any_element()
-                      } else {
-                        Button::new("agent-chat-send")
-                          .icon(UiIconName::ArrowUp)
-                          .small()
-                          .rounded(px(999.))
-                          .primary()
-                          .disabled(!matches!(self.status, Status::Ready))
-                          .on_click(cx.listener(|panel, _, window, cx| panel.submit(window, cx)))
-                          .into_any_element()
-                      }),
+                              )
+                              .into_any_element()
+                          }),
+                      ),
                   ),
               ),
           ),

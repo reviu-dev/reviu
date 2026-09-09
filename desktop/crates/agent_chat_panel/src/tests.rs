@@ -6061,6 +6061,48 @@ async fn dropped_paths_stage_images_and_mention_other_files(cx: &mut gpui::TestA
 }
 
 #[gpui::test]
+async fn add_file_button_picks_paths_for_the_composer(cx: &mut gpui::TestAppContext) {
+  let dir = temp_dir("agent-add-file-button");
+  let image_path = dir.join("shot.png");
+  let file_path = dir.join("src/lib.rs");
+  std::fs::create_dir_all(file_path.parent().expect("file parent")).unwrap();
+  std::fs::write(&image_path, [137, 80, 78, 71]).unwrap();
+  std::fs::write(&file_path, "fn main() {}\n").unwrap();
+
+  let (panel, cx) = add_panel_window(cx);
+  panel.update(cx, |panel, cx| {
+    panel.status = Status::Ready;
+    panel.supports_images = true;
+    panel.cwd = dir.clone();
+    cx.notify();
+  });
+  cx.run_until_parked();
+
+  let button = cx
+    .debug_bounds("agent-chat-add-file")
+    .expect("add file button");
+  cx.simulate_click(button.center(), gpui::Modifiers::default());
+  assert!(cx.did_prompt_for_paths(), "the button opened a path picker");
+
+  let picked_image = image_path.clone();
+  let picked_file = file_path.clone();
+  cx.simulate_path_prompt_response(move |options| {
+    assert!(options.files);
+    assert!(!options.directories);
+    assert!(options.multiple);
+    assert_eq!(options.prompt.as_deref(), Some("Add files"));
+    Some(vec![picked_image, picked_file])
+  });
+  cx.run_until_parked();
+
+  panel.read_with(cx, |panel, cx| {
+    assert_eq!(panel.staged_images.len(), 1, "the png staged as an image");
+    assert_eq!(panel.input.read(cx).value().trim(), "@src/lib.rs");
+  });
+  std::fs::remove_dir_all(&dir).ok();
+}
+
+#[gpui::test]
 async fn typing_enter_mid_turn_queues_the_message(cx: &mut gpui::TestAppContext) {
   let (panel, cx) = add_panel_window(cx);
   panel.update(cx, |panel, cx| {

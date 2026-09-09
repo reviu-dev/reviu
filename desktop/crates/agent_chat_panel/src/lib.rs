@@ -56,8 +56,8 @@ use futures::future::BoxFuture;
 use gpui::Anchor;
 use gpui::{
   AnyElement, App, Context, Empty, Entity, EntityInputHandler as _, FocusHandle, Focusable, Font,
-  FontStyle, FontWeight, Hsla, IntoElement, MouseButton, ParentElement, Render, SharedString,
-  Styled, Task, TextRun, Window, deferred, div, prelude::*, px,
+  FontStyle, FontWeight, Hsla, IntoElement, MouseButton, ParentElement, PathPromptOptions, Render,
+  SharedString, Styled, Task, TextRun, Window, deferred, div, prelude::*, px,
 };
 use gpui_component::{
   ActiveTheme as _, ColorName, Disableable as _, IconName, Selectable as _, Sizable as _,
@@ -2938,6 +2938,26 @@ impl AgentChatPanel {
     if staged_any {
       cx.stop_propagation();
     }
+  }
+
+  fn prompt_for_files(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    let receiver = cx.prompt_for_paths(PathPromptOptions {
+      files: true,
+      directories: false,
+      multiple: true,
+      prompt: Some("Add files".into()),
+    });
+
+    cx.spawn_in(window, async move |this, cx| {
+      let Ok(Ok(Some(paths))) = receiver.await else {
+        return;
+      };
+
+      let _ = this.update_in(cx, |this, window, cx| {
+        this.handle_dropped_paths(&paths, window, cx);
+      });
+    })
+    .detach();
   }
 
   fn handle_dropped_paths(
