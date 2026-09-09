@@ -245,7 +245,6 @@ pub struct CommandPaletteCommand {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum CommandPalettePage {
   Session,
-  GithubPrDetails,
   GitConfig,
   Settings,
 }
@@ -372,7 +371,6 @@ pub enum CommandPaletteAction {
   DropStash(CommandPaletteStash),
   PopStash(CommandPaletteStash),
   OpenProject,
-  OpenSessionPage,
   NewAgentSession,
   NewAgentWorktreeSession,
   OpenGithubRepoDetails {
@@ -1020,7 +1018,6 @@ pub enum CommandPaletteCommandId {
   DropStash,
   PopStash,
   OpenProject,
-  OpenSessionPage,
   OpenGithubFromUrl,
   OpenGitConfigPage,
   OpenSettingsPage,
@@ -1094,7 +1091,6 @@ impl CommandPaletteCommandId {
       Self::DropStash => "drop_stash",
       Self::PopStash => "pop_stash",
       Self::OpenProject => "open_project",
-      Self::OpenSessionPage => "open_session_page",
       Self::OpenGithubFromUrl => "open_github_from_url",
       Self::OpenGitConfigPage => "open_git_config_page",
       Self::OpenSettingsPage => "open_settings_page",
@@ -1164,7 +1160,6 @@ impl CommandPaletteCommandId {
       "drop_stash" => Some(Self::DropStash),
       "pop_stash" => Some(Self::PopStash),
       "open_project" => Some(Self::OpenProject),
-      "open_session_page" => Some(Self::OpenSessionPage),
       "open_github_from_url" => Some(Self::OpenGithubFromUrl),
       "open_git_config_page" => Some(Self::OpenGitConfigPage),
       "open_settings_page" => Some(Self::OpenSettingsPage),
@@ -1645,14 +1640,6 @@ impl CommandPaletteCommand {
     )
   }
 
-  pub fn open_session_page() -> Self {
-    Self::new(
-      CommandPaletteCommandId::OpenSessionPage,
-      "Projects",
-      "Go to your projects",
-    )
-  }
-
   pub fn open_github_from_url() -> Self {
     Self::new(
       CommandPaletteCommandId::OpenGithubFromUrl,
@@ -1872,10 +1859,6 @@ impl CommandPaletteCommand {
     } = context;
     let mut commands = Vec::new();
 
-    if current_page != CommandPalettePage::Session {
-      commands.push(Self::open_session_page());
-    }
-
     if include_github {
       commands.push(Self::open_github_from_url());
     }
@@ -1970,8 +1953,7 @@ impl CommandPaletteCommand {
       CommandPaletteCommandId::NewAgentSession
       | CommandPaletteCommandId::NewAgentWorktreeSession => CommandPaletteGroup::Project,
 
-      CommandPaletteCommandId::OpenSessionPage
-      | CommandPaletteCommandId::OpenGitConfigPage
+      CommandPaletteCommandId::OpenGitConfigPage
       | CommandPaletteCommandId::OpenSettingsPage
       | CommandPaletteCommandId::OpenBillingPage
       | CommandPaletteCommandId::OpenAboutPage
@@ -2059,7 +2041,6 @@ impl CommandPaletteCommand {
       Id::SignOut => &["logout", "disconnect", "account"],
       Id::OpenBrowserExtensions => &["chrome", "firefox", "addon", "browser"],
       Id::ForgetProject => &["remove", "recent", "sidebar"],
-      Id::OpenSessionPage => &["home", "project", "agent", "goto"],
       Id::OpenGithubFromUrl => &["link", "paste"],
       Id::OpenSettingsPage => &["preferences", "shortcuts", "keybindings", "theme", "goto"],
       Id::OpenGitConfigPage => &["gitconfig", "identity", "email", "username", "goto"],
@@ -2129,7 +2110,6 @@ impl CommandPaletteCommand {
       CommandPaletteCommandId::CreatePullRequest | CommandPaletteCommandId::OpenPullRequest => {
         Icon::new(UiIconName::GitPullRequestArrow)
       }
-      CommandPaletteCommandId::OpenSessionPage => Icon::new(UiIconName::MessageCircle),
       CommandPaletteCommandId::OpenGithubFromUrl => Icon::new(IconName::Github),
       CommandPaletteCommandId::OpenGitConfigPage => Self::git_config_icon(),
       CommandPaletteCommandId::OpenSettingsPage => Icon::new(IconName::Settings2),
@@ -3313,9 +3293,6 @@ impl CommandPalette {
       CommandPaletteCommandId::OpenProject => {
         self.trigger_action(command, CommandPaletteAction::OpenProject, window, cx);
       }
-      CommandPaletteCommandId::OpenSessionPage => {
-        self.trigger_action(command, CommandPaletteAction::OpenSessionPage, window, cx);
-      }
       CommandPaletteCommandId::OpenGithubFromUrl => {
         let query = self.commands_list.read(cx).delegate().query.to_string();
         if let Some(action) = parse_github_pull_request_url_action(&query) {
@@ -4405,7 +4382,6 @@ mod tests {
       CommandPaletteCommandId::DropStash,
       CommandPaletteCommandId::PopStash,
       CommandPaletteCommandId::OpenProject,
-      CommandPaletteCommandId::OpenSessionPage,
       CommandPaletteCommandId::OpenGithubFromUrl,
       CommandPaletteCommandId::OpenGitConfigPage,
       CommandPaletteCommandId::OpenSettingsPage,

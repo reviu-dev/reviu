@@ -7,10 +7,7 @@ use crate::github_navigation::{
   PullRequestFallback, open_commit_target, open_profile_target, open_pull_request_target,
   open_repo_target,
 };
-use crate::{
-  git_config_page::open_git_config_dialog, navigation::NavigationHistory,
-  settings_page::open_settings_dialog,
-};
+use crate::{git_config_page::open_git_config_dialog, settings_page::open_settings_dialog};
 
 /// Handles the navigation, GitHub link and dialog actions shared by every page.
 /// Pages match their own actions first and route the rest here.
@@ -20,10 +17,6 @@ pub(crate) fn handle_global_command_palette_action(
   cx: &mut App,
 ) -> Result<(), SharedString> {
   match action {
-    CommandPaletteAction::OpenSessionPage => {
-      NavigationHistory::navigate("/session", cx);
-      Ok(())
-    }
     CommandPaletteAction::OpenGitConfigPage => {
       open_git_config_dialog(window, cx);
       Ok(())

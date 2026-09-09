@@ -37,8 +37,7 @@
         "gpui_platform",
         "reqwest_client",
         "gpui-component",
-        "gpui-component-assets",
-        "gpui-router"
+        "gpui-component-assets"
       ],
       "automerge": false
     }

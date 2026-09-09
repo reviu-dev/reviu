@@ -17,13 +17,12 @@ use std::collections::HashSet;
 use crate::config::ConfigStore;
 use crate::{
   AcceptBothConflict, AddSelectionToAgent, CloseCenterPane, CloseCenterTab, CommentHunk,
-  CommitChanges, ForcePushChanges, JumpToLatestMessage, NavigateBack, NewAgentSession,
-  NewAgentWorktreeSession, NextAnnotation, NextCenterTab, OpenFilesSidebar, OpenGitChangesSidebar,
-  OpenGitHistorySidebar, OpenProject, OpenPullRequestSidebar, OpenReviewSidebar, OpenSessionPage,
-  OpenSettingsPage, PreviousAnnotation, PreviousCenterTab, PullChanges, PushChanges, RestoreFile,
-  RestoreHunk, ReturnFocusToEditor, SendReviewCommentsToAgent, ShowBranchSwitcher,
-  ShowCommandPalette, ShowFileSearch, ToggleDiffView, ToggleFileStage, ToggleHideWhitespace,
-  ToggleHunkStage,
+  CommitChanges, ForcePushChanges, JumpToLatestMessage, NewAgentSession, NewAgentWorktreeSession,
+  NextAnnotation, NextCenterTab, OpenFilesSidebar, OpenGitChangesSidebar, OpenGitHistorySidebar,
+  OpenProject, OpenPullRequestSidebar, OpenReviewSidebar, OpenSettingsPage, PreviousAnnotation,
+  PreviousCenterTab, PullChanges, PushChanges, RestoreFile, RestoreHunk, ReturnFocusToEditor,
+  SendReviewCommentsToAgent, ShowBranchSwitcher, ShowCommandPalette, ShowFileSearch,
+  ToggleDiffView, ToggleFileStage, ToggleHideWhitespace, ToggleHunkStage,
 };
 
 pub const SHOW_COMMAND_PALETTE_SHORTCUT: &str = "cmd-k";
@@ -43,8 +42,6 @@ const PULL_CHANGES_CONTEXT: &str = "WorkspaceSession";
 const PUSH_CHANGES_CONTEXT: &str = "WorkspaceSession";
 const FORCE_PUSH_CHANGES_CONTEXT: &str = "WorkspaceSession";
 const OPEN_SETTINGS_CONTEXT: &str = "Workspace";
-const NAVIGATE_BACK_CONTEXT: &str = "Workspace";
-const OPEN_SESSION_PAGE_CONTEXT: &str = "Workspace";
 const CENTER_TAB_CONTEXT: &str = "WorkspaceSession";
 const SHOW_BRANCH_SWITCHER_CONTEXT: &str = "WorkspaceSession";
 const OPEN_GIT_HISTORY_SIDEBAR_CONTEXT: &str = "WorkspaceSession";
@@ -72,8 +69,6 @@ const COMMENT_HUNK_ACTIVE_CONTEXTS: [&str; 1] = [WORKSPACE_SESSION_CONTEXT];
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum ShortcutId {
   ShowCommandPalette,
-  NavigateBack,
-  OpenSessionPage,
   NextCenterTab,
   PreviousCenterTab,
   CloseCenterTab,
@@ -111,8 +106,6 @@ impl ShortcutId {
   pub fn storage_key(self) -> &'static str {
     match self {
       ShortcutId::ShowCommandPalette => "show_command_palette",
-      ShortcutId::NavigateBack => "navigate_back",
-      ShortcutId::OpenSessionPage => "open_session_page",
       ShortcutId::NextCenterTab => "next_center_tab",
       ShortcutId::PreviousCenterTab => "previous_center_tab",
       ShortcutId::CloseCenterTab => "close_center_tab",
@@ -150,8 +143,6 @@ impl ShortcutId {
   pub fn from_storage_key(value: &str) -> Option<Self> {
     match value {
       "show_command_palette" => Some(ShortcutId::ShowCommandPalette),
-      "navigate_back" => Some(ShortcutId::NavigateBack),
-      "open_session_page" => Some(ShortcutId::OpenSessionPage),
       "next_center_tab" => Some(ShortcutId::NextCenterTab),
       "previous_center_tab" => Some(ShortcutId::PreviousCenterTab),
       "close_center_tab" => Some(ShortcutId::CloseCenterTab),
@@ -209,7 +200,7 @@ pub struct ShortcutDefinition {
   pub active_contexts: &'static [&'static str],
 }
 
-const SHORTCUT_DEFINITIONS: [ShortcutDefinition; 34] = [
+const SHORTCUT_DEFINITIONS: [ShortcutDefinition; 32] = [
   ShortcutDefinition {
     id: ShortcutId::ShowCommandPalette,
     title: "Command Palette",
@@ -218,28 +209,6 @@ const SHORTCUT_DEFINITIONS: [ShortcutDefinition; 34] = [
     category: ShortcutCategory::Core,
     keystroke: SHOW_COMMAND_PALETTE_SHORTCUT,
     context: WORKSPACE_CONTEXT,
-    display_context: WORKSPACE_SESSION_CONTEXT,
-    active_contexts: &ALL_WORKSPACE_ACTIVE_CONTEXTS,
-  },
-  ShortcutDefinition {
-    id: ShortcutId::NavigateBack,
-    title: "Back",
-    description: "Go back in navigation history.",
-    scope_label: "Workspace",
-    category: ShortcutCategory::Core,
-    keystroke: "cmd-[",
-    context: NAVIGATE_BACK_CONTEXT,
-    display_context: WORKSPACE_SESSION_CONTEXT,
-    active_contexts: &ALL_WORKSPACE_ACTIVE_CONTEXTS,
-  },
-  ShortcutDefinition {
-    id: ShortcutId::OpenSessionPage,
-    title: "Go to Projects",
-    description: "Focus the projects view.",
-    scope_label: "Workspace",
-    category: ShortcutCategory::Core,
-    keystroke: "cmd-1",
-    context: OPEN_SESSION_PAGE_CONTEXT,
     display_context: WORKSPACE_SESSION_CONTEXT,
     active_contexts: &ALL_WORKSPACE_ACTIVE_CONTEXTS,
   },
@@ -850,8 +819,6 @@ impl ShortcutDefinition {
       ShortcutId::ShowCommandPalette => {
         KeyBinding::new(keystroke, ShowCommandPalette, Some(&context))
       }
-      ShortcutId::NavigateBack => KeyBinding::new(keystroke, NavigateBack, Some(&context)),
-      ShortcutId::OpenSessionPage => KeyBinding::new(keystroke, OpenSessionPage, Some(&context)),
       ShortcutId::NextCenterTab => KeyBinding::new(keystroke, NextCenterTab, Some(&context)),
       ShortcutId::PreviousCenterTab => {
         KeyBinding::new(keystroke, PreviousCenterTab, Some(&context))
@@ -1070,7 +1037,6 @@ fn palette_command_shortcut(command: CommandPaletteCommandId) -> Option<Shortcut
     Command::Pull => Some(ShortcutId::PullChanges),
     Command::SwitchBranch => Some(ShortcutId::ShowBranchSwitcher),
     Command::OpenProject => Some(ShortcutId::OpenProject),
-    Command::OpenSessionPage => Some(ShortcutId::OpenSessionPage),
     Command::OpenSettingsPage => Some(ShortcutId::OpenSettingsPage),
     Command::SendReview => Some(ShortcutId::SendReviewCommentsToAgent),
     // One key toggles either way, so both rows show it.
@@ -1211,16 +1177,12 @@ fn fixed_workspace_key_bindings() -> Vec<KeyBinding> {
   )]
 }
 
-pub fn key_context_for_pathname(_pathname: &str) -> &'static str {
-  WORKSPACE_SESSION_CONTEXT
+pub fn current_workspace_key_context(cx: &App) -> String {
+  workspace_key_context_with_generation(ShortcutBindingState::current_generation(cx))
 }
 
-pub fn current_key_context_for_pathname(pathname: &str, cx: &App) -> String {
-  key_context_for_pathname_with_generation(pathname, ShortcutBindingState::current_generation(cx))
-}
-
-fn key_context_for_pathname_with_generation(pathname: &str, generation: u32) -> String {
-  key_context_with_shortcut_generation(key_context_for_pathname(pathname), generation)
+fn workspace_key_context_with_generation(generation: u32) -> String {
+  key_context_with_shortcut_generation(WORKSPACE_SESSION_CONTEXT, generation)
 }
 
 fn key_context_with_shortcut_generation(context: &str, generation: u32) -> String {
@@ -1342,8 +1304,6 @@ fn active_contexts_overlap(a: &ShortcutDefinition, b: &ShortcutDefinition) -> bo
 fn with_shortcut_action<T>(id: ShortcutId, f: impl FnOnce(&dyn Action) -> T) -> T {
   match id {
     ShortcutId::ShowCommandPalette => f(&ShowCommandPalette),
-    ShortcutId::NavigateBack => f(&NavigateBack),
-    ShortcutId::OpenSessionPage => f(&OpenSessionPage),
     ShortcutId::NextCenterTab => f(&NextCenterTab),
     ShortcutId::PreviousCenterTab => f(&PreviousCenterTab),
     ShortcutId::CloseCenterTab => f(&CloseCenterTab),
@@ -1425,12 +1385,12 @@ mod tests {
     assert_eq!(palette_command_shortcut(Command::SendFeedback), None);
   }
 
-  fn context_stack(pathname: &str) -> Vec<KeyContext> {
-    vec![KeyContext::parse(&key_context_for_pathname_with_generation(pathname, 0)).unwrap()]
+  fn context_stack(_surface: &str) -> Vec<KeyContext> {
+    vec![KeyContext::parse(&workspace_key_context_with_generation(0)).unwrap()]
   }
 
-  fn context_stack_with_extra(pathname: &str, extra_contexts: &[&str]) -> Vec<KeyContext> {
-    let mut contexts = context_stack(pathname);
+  fn context_stack_with_extra(surface: &str, extra_contexts: &[&str]) -> Vec<KeyContext> {
+    let mut contexts = context_stack(surface);
     contexts.extend(
       extra_contexts
         .iter()
@@ -1439,12 +1399,12 @@ mod tests {
     contexts
   }
 
-  fn has_binding_with_bindings(pathname: &str, keystroke: &str, bindings: Vec<KeyBinding>) -> bool {
-    has_binding_with_bindings_in_contexts(pathname, &[], keystroke, bindings)
+  fn has_binding_with_bindings(surface: &str, keystroke: &str, bindings: Vec<KeyBinding>) -> bool {
+    has_binding_with_bindings_in_contexts(surface, &[], keystroke, bindings)
   }
 
   fn has_binding_with_bindings_in_contexts(
-    pathname: &str,
+    surface: &str,
     extra_contexts: &[&str],
     keystroke: &str,
     bindings: Vec<KeyBinding>,
@@ -1453,12 +1413,12 @@ mod tests {
     keymap.add_bindings(bindings);
     let input = [Keystroke::parse(keystroke).unwrap()];
     let (bindings, pending) =
-      keymap.bindings_for_input(&input, &context_stack_with_extra(pathname, extra_contexts));
+      keymap.bindings_for_input(&input, &context_stack_with_extra(surface, extra_contexts));
     !bindings.is_empty() && !pending
   }
 
-  fn has_binding(pathname: &str, keystroke: &str) -> bool {
-    has_binding_with_bindings(pathname, keystroke, workspace_key_bindings())
+  fn has_binding(surface: &str, keystroke: &str) -> bool {
+    has_binding_with_bindings(surface, keystroke, workspace_key_bindings())
   }
 
   fn app_and_workspace_key_bindings() -> Vec<KeyBinding> {
@@ -1468,7 +1428,7 @@ mod tests {
   }
 
   fn first_binding_action_name(
-    pathname: &str,
+    surface: &str,
     extra_contexts: &[&str],
     keystroke: &str,
     bindings: Vec<KeyBinding>,
@@ -1477,7 +1437,7 @@ mod tests {
     keymap.add_bindings(bindings);
     let input = [Keystroke::parse(keystroke).unwrap()];
     let (bindings, pending) =
-      keymap.bindings_for_input(&input, &context_stack_with_extra(pathname, extra_contexts));
+      keymap.bindings_for_input(&input, &context_stack_with_extra(surface, extra_contexts));
     assert!(!pending);
     bindings.first().map(|binding| binding.action().name())
   }
@@ -1511,45 +1471,15 @@ mod tests {
   }
 
   #[test]
-  fn every_shortcut_is_scoped_to_a_page_the_workspace_still_has() {
-    // A page that goes away takes its shortcuts with it: Settings lists them
-    // all, so one left behind is a key the user presses for nothing.
+  fn every_shortcut_uses_the_workspace_context() {
     let reachable: HashSet<&str> = ALL_WORKSPACE_ACTIVE_CONTEXTS.into_iter().collect();
 
     for definition in shortcut_definitions() {
-      assert!(
-        reachable.contains(definition.display_context),
-        "{} is displayed for a page the workspace cannot route to",
-        definition.title
-      );
+      assert!(reachable.contains(definition.display_context));
       for context in definition.active_contexts {
-        assert!(
-          reachable.contains(context),
-          "{} is active on a page the workspace cannot route to",
-          definition.title
-        );
+        assert!(reachable.contains(context));
       }
     }
-  }
-
-  #[test]
-  fn the_reachable_contexts_are_the_ones_routing_can_produce() {
-    let routed: HashSet<&str> = [
-      "/session",
-      "/git-config",
-      "/settings",
-      "/github/owner/repo/pull/42",
-    ]
-    .into_iter()
-    .map(key_context_for_pathname)
-    .collect();
-
-    assert_eq!(
-      routed,
-      ALL_WORKSPACE_ACTIVE_CONTEXTS
-        .into_iter()
-        .collect::<HashSet<_>>()
-    );
   }
 
   #[test]
@@ -1564,99 +1494,64 @@ mod tests {
   }
 
   #[test]
-  fn key_context_for_pathname_matches_workspace_routes() {
+  fn workspace_key_context_appends_shortcut_generation() {
     assert_eq!(
-      key_context_for_pathname("/session"),
-      WORKSPACE_SESSION_CONTEXT
-    );
-    assert_eq!(
-      key_context_for_pathname("/github/owner/repo"),
-      WORKSPACE_SESSION_CONTEXT
-    );
-    assert_eq!(
-      key_context_for_pathname("/github/owner/repo/pull/42"),
-      WORKSPACE_SESSION_CONTEXT
-    );
-    assert_eq!(
-      key_context_for_pathname("/settings"),
-      WORKSPACE_SESSION_CONTEXT
-    );
-  }
-
-  #[test]
-  fn current_key_context_for_pathname_appends_shortcut_generation() {
-    assert_eq!(
-      key_context_for_pathname_with_generation("/session", 0),
+      workspace_key_context_with_generation(0),
       format!("{WORKSPACE_SESSION_CONTEXT} {SHORTCUT_KEYMAP_GENERATION_CONTEXT_KEY}=0")
     );
 
     assert_eq!(
-      key_context_for_pathname_with_generation("/session", 1),
+      workspace_key_context_with_generation(1),
       format!("{WORKSPACE_SESSION_CONTEXT} {SHORTCUT_KEYMAP_GENERATION_CONTEXT_KEY}=1")
     );
   }
 
   #[test]
-  fn command_palette_binding_is_available_in_all_workspace_contexts() {
-    assert!(has_binding("/session", SHOW_COMMAND_PALETTE_SHORTCUT));
-    assert!(has_binding("/github", SHOW_COMMAND_PALETTE_SHORTCUT));
-    assert!(has_binding("/settings", SHOW_COMMAND_PALETTE_SHORTCUT));
+  fn command_palette_binding_is_available_in_the_workspace() {
+    assert!(has_binding("workspace", SHOW_COMMAND_PALETTE_SHORTCUT));
   }
 
   #[test]
-  fn file_search_binding_is_available_on_old_links_that_land_in_the_shell() {
-    assert!(has_binding("/session", "cmd-p"));
-    assert!(has_binding("/settings", "cmd-p"));
+  fn file_search_binding_is_available_in_the_workspace() {
+    assert!(has_binding("workspace", "cmd-p"));
   }
 
   #[test]
-  fn session_creation_bindings_live_on_the_shell() {
-    assert!(has_binding("/session", "cmd-t"));
-    assert!(has_binding("/session", "cmd-shift-t"));
-    assert!(has_binding("/settings", "cmd-t"));
-    assert!(has_binding("/settings", "cmd-shift-t"));
+  fn session_creation_bindings_live_in_the_workspace() {
+    assert!(has_binding("workspace", "cmd-t"));
+    assert!(has_binding("workspace", "cmd-shift-t"));
   }
 
   #[test]
   fn git_shortcuts_are_scoped_to_the_repository_surfaces() {
-    assert!(has_binding("/session", "cmd-o"));
+    assert!(has_binding("workspace", "cmd-o"));
     assert!(has_binding_with_bindings_in_contexts(
-      "/session",
+      "workspace",
       &["List"],
       "cmd-enter",
       workspace_key_bindings(),
     ));
     assert!(has_binding_with_bindings_in_contexts(
-      "/session",
+      "workspace",
       &["Editor"],
       "cmd-alt-enter",
       workspace_key_bindings(),
     ));
     assert!(has_binding_with_bindings_in_contexts(
-      "/session",
+      "workspace",
       &["List"],
       "cmd-alt-enter",
       workspace_key_bindings(),
     ));
-    assert!(has_binding("/session", "cmd-u"));
-    assert!(has_binding("/session", "cmd-y"));
-    assert!(has_binding("/session", "cmd-shift-y"));
-    assert!(has_binding("/settings", "cmd-o"));
-    assert!(has_binding_with_bindings_in_contexts(
-      "/settings",
-      &["List"],
-      "cmd-enter",
-      workspace_key_bindings(),
-    ));
-    assert!(has_binding("/settings", "cmd-u"));
-    assert!(has_binding("/settings", "cmd-y"));
-    assert!(has_binding("/settings", "cmd-shift-y"));
+    assert!(has_binding("workspace", "cmd-u"));
+    assert!(has_binding("workspace", "cmd-y"));
+    assert!(has_binding("workspace", "cmd-shift-y"));
   }
 
   #[test]
   fn cmd_w_closes_the_active_center_tab() {
     assert_eq!(
-      first_binding_action_name("/session", &[], "cmd-w", workspace_key_bindings(),),
+      first_binding_action_name("workspace", &[], "cmd-w", workspace_key_bindings(),),
       Some("workspace::CloseCenterTab")
     );
   }
@@ -1664,45 +1559,25 @@ mod tests {
   #[test]
   fn escape_can_close_center_panes_from_the_session() {
     assert_eq!(
-      first_binding_action_name("/session", &[], "escape", workspace_key_bindings(),),
+      first_binding_action_name("workspace", &[], "escape", workspace_key_bindings(),),
       Some("workspace::CloseCenterPane")
     );
   }
 
   #[test]
-  fn workspace_navigation_shortcuts_are_available_across_workspace_pages() {
-    assert!(has_binding("/session", "cmd-,"));
-    assert!(has_binding("/github", "cmd-,"));
-    assert!(has_binding("/settings", "cmd-,"));
+  fn settings_shortcut_is_available_in_the_workspace() {
+    assert!(has_binding("workspace", "cmd-,"));
   }
 
   #[test]
-  fn the_shell_is_the_first_navigation_shortcut() {
-    assert_eq!(
-      shortcut_keystroke(ShortcutId::OpenSessionPage),
-      Keystroke::parse("cmd-1").expect("cmd-1 keystroke")
-    );
-    assert!(
-      !SHORTCUT_DEFINITIONS
-        .iter()
-        .any(|definition| definition.keystroke == "cmd-2"),
-      "there is no second page to switch to"
-    );
+  fn core_tab_shortcuts_are_available_in_the_workspace() {
+    assert!(has_binding("workspace", "cmd-shift-]"));
+    assert!(has_binding("workspace", "cmd-shift-["));
+    assert!(has_binding("workspace", "cmd-w"));
   }
 
   #[test]
-  fn core_navigation_shortcuts_are_available_across_workspace_pages() {
-    for pathname in ["/session", "/github", "/settings"] {
-      assert!(has_binding(pathname, "cmd-["));
-      assert!(has_binding(pathname, "cmd-1"));
-      assert!(has_binding(pathname, "cmd-shift-]"));
-      assert!(has_binding(pathname, "cmd-shift-["));
-      assert!(has_binding(pathname, "cmd-w"));
-    }
-  }
-
-  #[test]
-  fn git_keyboard_first_shortcuts_follow_old_links_to_the_shell() {
+  fn git_keyboard_first_shortcuts_reach_the_workspace() {
     for keystroke in [
       "cmd-u",
       "cmd-y",
@@ -1711,32 +1586,22 @@ mod tests {
       "cmd-shift-h",
     ] {
       assert!(
-        has_binding("/session", keystroke),
-        "{keystroke} should be active in the shell"
-      );
-      assert!(
-        has_binding("/settings", keystroke),
-        "{keystroke} should stay active when an old link lands in the shell"
+        has_binding("workspace", keystroke),
+        "{keystroke} should be active in the workspace"
       );
     }
   }
 
   #[test]
-  fn comment_hunk_shortcut_is_available_wherever_the_shell_shows_a_diff() {
+  fn comment_hunk_shortcut_is_available_wherever_the_workspace_shows_a_diff() {
     for descendant in ["List", "Editor", "Tree"] {
       assert!(has_binding_with_bindings_in_contexts(
-        "/session",
+        "workspace",
         &[descendant],
         "cmd-alt-enter",
         workspace_key_bindings(),
       ));
     }
-    assert!(has_binding_with_bindings_in_contexts(
-      "/settings",
-      &["Editor"],
-      "cmd-alt-enter",
-      workspace_key_bindings(),
-    ));
   }
 
   #[test]
@@ -1756,12 +1621,8 @@ mod tests {
         Keystroke::parse(keystroke).expect("dock keystroke")
       );
       assert!(
-        has_binding("/session", keystroke),
-        "{keystroke} should be active in the shell"
-      );
-      assert!(
-        has_binding("/settings", keystroke),
-        "{keystroke} stays active when an old link lands in the shell"
+        has_binding("workspace", keystroke),
+        "{keystroke} should be active in the workspace"
       );
     }
 
@@ -1770,27 +1631,24 @@ mod tests {
   }
 
   #[test]
-  fn review_shortcuts_follow_old_links_to_the_shell() {
+  fn review_shortcuts_reach_the_workspace() {
     for keystroke in ["cmd-/", "cmd-alt-/"] {
-      assert!(has_binding("/session", keystroke));
-      assert!(has_binding("/settings", keystroke));
+      assert!(has_binding("workspace", keystroke));
     }
   }
 
   #[test]
-  fn annotation_shortcuts_follow_old_links_to_the_shell() {
+  fn annotation_shortcuts_reach_the_workspace() {
     for keystroke in ["cmd-alt-up", "cmd-alt-down"] {
-      assert!(has_binding("/session", keystroke));
-      assert!(has_binding("/settings", keystroke));
+      assert!(has_binding("workspace", keystroke));
     }
   }
 
   #[test]
-  fn local_git_shortcuts_reach_the_shell_as_they_move_there() {
-    // Hunk actions and the selection hand-off now work on both surfaces.
-    let bound_in = |pathname: &str, keystroke: &str| {
+  fn local_git_shortcuts_reach_the_workspace() {
+    let bound_in = |surface: &str, keystroke: &str| {
       has_binding_with_bindings_in_contexts(
-        pathname,
+        surface,
         &["Editor"],
         keystroke,
         workspace_key_bindings(),
@@ -1802,14 +1660,12 @@ mod tests {
       "cmd-shift-enter",
       "cmd-shift-l",
     ] {
-      assert!(bound_in("/session", keystroke), "{keystroke} in the shell");
       assert!(
-        bound_in("/settings", keystroke),
-        "{keystroke} stays active when an old link lands in the shell"
+        bound_in("workspace", keystroke),
+        "{keystroke} in the workspace"
       );
     }
 
-    // The repository and sync shortcuts followed their commands into the shell.
     for keystroke in [
       "cmd-o",
       "cmd-u",
@@ -1820,18 +1676,14 @@ mod tests {
       "cmd-shift-e",
     ] {
       assert!(
-        has_binding("/session", keystroke),
-        "{keystroke} followed its command into the shell"
-      );
-      assert!(
-        has_binding("/settings", keystroke),
-        "{keystroke} stays active when an old link lands in the shell"
+        has_binding("workspace", keystroke),
+        "{keystroke} reaches the workspace"
       );
     }
 
     for keystroke in ["shift-enter", "shift-backspace", "cmd-shift-enter"] {
       assert!(has_binding_with_bindings_in_contexts(
-        "/session",
+        "workspace",
         &["List"],
         keystroke,
         workspace_key_bindings(),
@@ -1839,9 +1691,9 @@ mod tests {
     }
 
     for keystroke in ["cmd-enter", "cmd-shift-backspace"] {
-      assert!(!bound_in("/session", keystroke));
+      assert!(!bound_in("workspace", keystroke));
       assert!(has_binding_with_bindings_in_contexts(
-        "/session",
+        "workspace",
         &["List"],
         keystroke,
         workspace_key_bindings(),
@@ -1853,7 +1705,7 @@ mod tests {
   fn file_level_git_shortcuts_stay_out_of_the_editor() {
     assert_eq!(
       first_binding_action_name(
-        "/session",
+        "workspace",
         &["Editor"],
         "cmd-backspace",
         app_and_workspace_key_bindings(),
@@ -1862,7 +1714,7 @@ mod tests {
     );
     assert_eq!(
       first_binding_action_name(
-        "/session",
+        "workspace",
         &["Editor"],
         "cmd-enter",
         app_and_workspace_key_bindings(),
@@ -1871,7 +1723,7 @@ mod tests {
     );
     assert_eq!(
       first_binding_action_name(
-        "/session",
+        "workspace",
         &["Editor"],
         "cmd-shift-backspace",
         app_and_workspace_key_bindings(),
@@ -1880,7 +1732,7 @@ mod tests {
     );
     assert_eq!(
       first_binding_action_name(
-        "/session",
+        "workspace",
         &["List"],
         "cmd-enter",
         app_and_workspace_key_bindings(),
@@ -1889,7 +1741,7 @@ mod tests {
     );
     assert_eq!(
       first_binding_action_name(
-        "/session",
+        "workspace",
         &["List"],
         "cmd-shift-backspace",
         app_and_workspace_key_bindings(),
@@ -1918,12 +1770,7 @@ mod tests {
     let bindings = workspace_key_bindings_with_overrides(&overrides);
 
     assert!(has_binding_with_bindings(
-      "/session",
-      "cmd-shift-u",
-      bindings.clone()
-    ));
-    assert!(has_binding_with_bindings(
-      "/settings",
+      "workspace",
       "cmd-shift-u",
       bindings
     ));
@@ -1941,8 +1788,7 @@ mod tests {
       2,
     ));
 
-    let current_context =
-      [KeyContext::parse(&key_context_for_pathname_with_generation("/session", 2)).unwrap()];
+    let current_context = [KeyContext::parse(&workspace_key_context_with_generation(2)).unwrap()];
     let old_input = [Keystroke::parse("cmd-p").unwrap()];
     let new_input = [Keystroke::parse("cmd-shift-u").unwrap()];
 
@@ -1960,19 +1806,19 @@ mod tests {
     let bindings = workspace_key_bindings();
 
     assert!(!has_binding_with_bindings_in_contexts(
-      "/session",
+      "workspace",
       &[COMMAND_PALETTE_CONTEXT],
       SHOW_COMMAND_PALETTE_SHORTCUT,
       bindings.clone(),
     ));
     assert!(!has_binding_with_bindings_in_contexts(
-      "/session",
+      "workspace",
       &[COMMAND_PALETTE_CONTEXT],
       "cmd-p",
       bindings.clone(),
     ));
     assert!(!has_binding_with_bindings_in_contexts(
-      "/settings",
+      "workspace",
       &[COMMAND_PALETTE_CONTEXT],
       "escape",
       bindings,
@@ -1984,13 +1830,13 @@ mod tests {
     let bindings = workspace_key_bindings();
 
     assert!(!has_binding_with_bindings_in_contexts(
-      "/settings",
+      "workspace",
       &[WORKSPACE_SHORTCUT_RECORDING_CONTEXT],
       SHOW_COMMAND_PALETTE_SHORTCUT,
       bindings.clone(),
     ));
     assert!(!has_binding_with_bindings_in_contexts(
-      "/settings",
+      "workspace",
       &[WORKSPACE_SHORTCUT_RECORDING_CONTEXT],
       "escape",
       bindings,

@@ -27,8 +27,6 @@ use crate::billing_dialog::open_billing_dialog;
 use crate::config::{AppSettings as PersistedSettings, ConfigStore};
 use crate::git_config_page::open_git_config_dialog;
 use crate::github_notifications::{self, GithubNotificationsStore};
-use crate::navigation::NavigationHistory;
-use crate::sentry_context;
 use crate::session_page::SessionPage;
 use crate::settings_page::open_settings_dialog;
 use crate::shortcuts::{self, ShortcutId};
@@ -45,31 +43,6 @@ const UPDATE_CHECK_INTERVAL: Duration = Duration::from_secs(12 * 60 * 60);
 
 pub const STATUS_BAR_ICON_PNG: &[u8] =
   include_bytes!("../../reviu/assets/reviu_status_bar_icon.png");
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum WorkspacePage {
-  Session,
-}
-
-pub(crate) fn workspace_page_from_pathname(_pathname: &str) -> WorkspacePage {
-  WorkspacePage::Session
-}
-
-/// Returns true when the current path supports file search.
-/// The shell is the only page with files to search.
-fn page_has_file_search(pathname: &str) -> bool {
-  workspace_page_from_pathname(pathname) == WorkspacePage::Session
-}
-
-fn user_menu_page_for_workspace_page(_page: WorkspacePage) -> UserMenuPage {
-  UserMenuPage::Session
-}
-
-/// The shell connects its agent when the workspace routes to it, never while
-/// painting: entering the page is the only signal.
-fn should_activate_session_page(previous: Option<WorkspacePage>, next: WorkspacePage) -> bool {
-  next == WorkspacePage::Session && previous != Some(WorkspacePage::Session)
-}
 
 fn should_run_scheduled_update_check(state: Option<AppUpdateState>) -> bool {
   !matches!(
@@ -181,7 +154,6 @@ impl WorkspaceApi {
 pub struct WorkspaceView {
   session_page: Entity<SessionPage>,
   window_handle: AnyWindowHandle,
-  last_page: Option<WorkspacePage>,
   _update_check_task: Option<Task<()>>,
   _periodic_update_check_task: Option<Task<()>>,
   _notification_poll_task: Option<Task<()>>,
@@ -198,21 +170,21 @@ impl WorkspaceView {
     shortcuts::shortcut_keystroke(ShortcutId::ShowCommandPalette)
   }
 
-  fn command_palette_kbd(window: &Window, pathname: &str, cx: &App) -> Kbd {
+  fn command_palette_kbd(window: &Window, cx: &App) -> Kbd {
     Kbd::new(shortcuts::resolved_shortcut_keystroke_in(
       cx,
       window,
       ShortcutId::ShowCommandPalette,
-      shortcuts::key_context_for_pathname(pathname),
+      shortcuts::WORKSPACE_SESSION_CONTEXT,
     ))
   }
 
-  fn file_search_kbd(window: &Window, pathname: &str, cx: &App) -> Kbd {
+  fn file_search_kbd(window: &Window, cx: &App) -> Kbd {
     Kbd::new(shortcuts::resolved_shortcut_keystroke_in(
       cx,
       window,
       ShortcutId::ShowFileSearch,
-      shortcuts::key_context_for_pathname(pathname),
+      shortcuts::WORKSPACE_SESSION_CONTEXT,
     ))
   }
 
@@ -235,10 +207,6 @@ impl WorkspaceView {
         cx,
       );
     }
-
-    gpui_router::init(cx);
-    NavigationHistory::init(cx);
-    NavigationHistory::navigate_replace("/session", cx);
 
     cx.set_global(WorkspaceApi::new());
     cx.set_global(AuthStateStore::default());
@@ -281,11 +249,13 @@ impl WorkspaceView {
     WorkspaceWindow::register(window.window_handle(), cx);
 
     let session_page = cx.new(|cx| SessionPage::new(window, cx));
+    session_page.update(cx, |page, cx| page.activate(window, cx));
+    let focus_handle = session_page.read(cx).focus_handle(cx);
+    window.focus(&focus_handle, cx);
 
     let view = Self {
       session_page,
       window_handle: window.window_handle(),
-      last_page: None,
       _update_check_task: None,
       _periodic_update_check_task: None,
       _notification_poll_task: None,
@@ -788,15 +758,6 @@ impl WorkspaceView {
     });
   }
 
-  fn navigate_back_action(
-    &mut self,
-    _: &crate::NavigateBack,
-    _window: &mut Window,
-    cx: &mut Context<Self>,
-  ) {
-    NavigationHistory::navigate_back(cx);
-  }
-
   fn render_linux_window_controls(window: &Window, cx: &mut Context<Self>) -> impl IntoElement {
     let theme = cx.theme().clone();
     let controls = window.window_controls();
@@ -871,13 +832,7 @@ impl WorkspaceView {
     h_flex().items_center().gap_1().ml_2().children(buttons)
   }
 
-  fn render_global_bar(
-    &self,
-    window: &Window,
-    page: WorkspacePage,
-    pathname: &str,
-    cx: &mut Context<Self>,
-  ) -> impl IntoElement {
+  fn render_global_bar(&self, window: &Window, cx: &mut Context<Self>) -> impl IntoElement {
     let theme = cx.theme().clone();
     let update_state = AppUpdateStore::try_state(cx);
     let show_update_button = AppUpdateStore::try_available_update(cx).is_some();
@@ -890,7 +845,7 @@ impl WorkspaceView {
           ..
         })
     );
-    let current_page = user_menu_page_for_workspace_page(page);
+    let current_page = UserMenuPage::Session;
     let auth_state = AuthStateStore::get(cx);
     let is_unauthenticated = matches!(auth_state, AuthState::Unauthenticated);
 
@@ -981,13 +936,12 @@ impl WorkspaceView {
         crate::auth_flow::start_github_sign_in(cx, "top_bar");
       });
 
-    let show_file_search_button = page_has_file_search(pathname);
     let file_search_button = Button::new("workspace-global-file-search")
       .label("File search")
       .ghost()
       .compact()
       .small()
-      .child(Self::file_search_kbd(window, pathname, cx).ml_1())
+      .child(Self::file_search_kbd(window, cx).ml_1())
       .on_click(|_, window, cx| {
         window.dispatch_action(Box::new(ShowFileSearch), cx);
       });
@@ -997,7 +951,7 @@ impl WorkspaceView {
       .ghost()
       .compact()
       .small()
-      .child(Self::command_palette_kbd(window, pathname, cx).ml_1())
+      .child(Self::command_palette_kbd(window, cx).ml_1())
       .on_click(|_, window, cx| {
         window.dispatch_action(Box::new(ShowCommandPalette), cx);
       });
@@ -1041,9 +995,7 @@ impl WorkspaceView {
     if show_update_button {
       right = right.child(update_button);
     }
-    if show_file_search_button {
-      right = right.child(file_search_button);
-    }
+    right = right.child(file_search_button);
     right = right.child(command_palette_button);
     if is_unauthenticated {
       right = right.child(sign_in_button);
@@ -1128,37 +1080,14 @@ impl Render for WorkspaceView {
         .into_any_element();
     }
 
-    let pathname = NavigationHistory::current_pathname(cx);
-    let page = workspace_page_from_pathname(&pathname);
-
-    sentry_context::sync_workspace_route(&pathname, page);
-
-    if self.last_page != Some(page) {
-      let previous_page = self.last_page;
-      self.last_page = Some(page);
-      sentry_context::sync_workspace_page(previous_page, page);
-      let focus_handle = self.focus_handle(cx);
-      window.focus(&focus_handle, cx);
-      if should_activate_session_page(previous_page, page) {
-        self
-          .session_page
-          .update(cx, |session_page, cx| session_page.activate(window, cx));
-      }
-    }
-
     let session_page = self.session_page.clone();
-
-    let key_context = shortcuts::current_key_context_for_pathname(&pathname, cx);
+    let key_context = shortcuts::current_workspace_key_context(cx);
 
     div()
       .size_full()
       .flex()
       .flex_col()
       .key_context(key_context.as_str())
-      .on_action(cx.listener(|_, _: &crate::OpenSessionPage, _window, cx| {
-        NavigationHistory::navigate("/session", cx);
-      }))
-      .on_action(cx.listener(Self::navigate_back_action))
       .on_action(cx.listener(|_, _: &crate::OpenBillingPage, window, cx| {
         open_billing_dialog(window, cx);
       }))
@@ -1177,7 +1106,7 @@ impl Render for WorkspaceView {
         }),
       )
       .child(ui::scroll_dispatcher())
-      .child(self.render_global_bar(window, page, &pathname, cx))
+      .child(self.render_global_bar(window, cx))
       .child(div().flex_1().min_h_0().child(session_page))
       .into_any_element()
   }
@@ -1192,21 +1121,18 @@ impl Focusable for WorkspaceView {
 #[cfg(test)]
 mod tests {
   use super::{
-    WorkspaceApi, WorkspacePage, WorkspaceView, build_app_menus_with_subscription,
-    page_has_file_search, should_activate_session_page, should_run_scheduled_update_check,
-    user_menu_page_for_workspace_page, workspace_page_from_pathname,
+    WorkspaceApi, WorkspaceView, build_app_menus_with_subscription,
+    should_run_scheduled_update_check,
   };
   use crate::app_update::{
     AppUpdateState, AppUpdateStore, AvailableAppUpdate, ReadyToInstallAppUpdate, UpdateArtifact,
   };
   use crate::auth_state::{AuthState, AuthStateStore};
   use crate::github_notifications::GithubNotificationsStore;
-  use crate::navigation::NavigationHistory;
   use crate::session_page::SessionPage;
   use crate::shortcuts::{self, ShortcutId};
   use gpui::{AppContext as _, Menu, MenuItem, TestAppContext};
   use std::path::PathBuf;
-  use ui::UserMenuPage;
 
   fn action_menu_item_names(menu: &Menu) -> Vec<String> {
     menu
@@ -1237,9 +1163,6 @@ mod tests {
   async fn app_bar_sidebar_toggle_hides_and_shows_the_sidebar(cx: &mut TestAppContext) {
     cx.update(|cx| {
       gpui_component::init(cx);
-      gpui_router::init(cx);
-      NavigationHistory::init(cx);
-      NavigationHistory::navigate_replace("/session", cx);
       cx.set_global(crate::config::AppSettings::default());
       cx.set_global(WorkspaceApi::new());
       cx.set_global(AuthStateStore::default());
@@ -1256,7 +1179,6 @@ mod tests {
       WorkspaceView {
         session_page: page,
         window_handle: window.window_handle(),
-        last_page: None,
         _update_check_task: None,
         _periodic_update_check_task: None,
         _notification_poll_task: None,
@@ -1286,29 +1208,6 @@ mod tests {
     cx.simulate_click(toggle.center(), gpui::Modifiers::default());
     cx.run_until_parked();
     page.read_with(cx, |page, _| assert!(page.sidebar_open()));
-  }
-
-  #[test]
-  fn workspace_page_from_pathname_maps_static_paths() {
-    assert_eq!(
-      workspace_page_from_pathname("/session"),
-      WorkspacePage::Session
-    );
-    assert_eq!(
-      workspace_page_from_pathname("/git"),
-      WorkspacePage::Session,
-      "an old link to the deleted page lands in the shell"
-    );
-    assert_eq!(
-      workspace_page_from_pathname("/settings"),
-      WorkspacePage::Session,
-      "settings is a dialog now, so old links land in the shell"
-    );
-    assert_eq!(
-      workspace_page_from_pathname("/git-config"),
-      WorkspacePage::Session,
-      "Git config is a dialog now, so old links land in the shell"
-    );
   }
 
   #[test]
@@ -1392,64 +1291,6 @@ mod tests {
         message: "checksum mismatch".to_string(),
       }
     )));
-  }
-
-  #[test]
-  fn workspace_page_from_pathname_falls_back_for_removed_github_pages() {
-    for pathname in [
-      "/github/octocat",
-      "/github/owner/repo",
-      "/github/owner/repo/code",
-      "/github/owner/repo/issues",
-      "/github/owner/repo/commit/abc123",
-    ] {
-      assert_eq!(
-        workspace_page_from_pathname(pathname),
-        WorkspacePage::Session,
-        "{pathname} should no longer resolve to a page"
-      );
-    }
-  }
-
-  #[test]
-  fn page_has_file_search_matches_correct_paths() {
-    assert!(page_has_file_search("/session"));
-    // Removed page paths land on the shell now.
-    assert!(page_has_file_search("/github/owner/repo/pull/123/changes"));
-    assert!(page_has_file_search("/github"));
-    assert!(page_has_file_search("/github/owner/repo"));
-    assert!(page_has_file_search("/github/owner/repo/code"));
-    assert!(page_has_file_search("/github/owner/repo/pull/123"));
-    assert!(page_has_file_search("/github/owner/repo/pulls"));
-    assert!(page_has_file_search("/settings"));
-  }
-
-  #[test]
-  fn workspace_page_from_pathname_unknown_falls_back_to_session() {
-    assert_eq!(
-      workspace_page_from_pathname("/unknown"),
-      WorkspacePage::Session
-    );
-    assert_eq!(workspace_page_from_pathname("/"), WorkspacePage::Session);
-  }
-
-  #[test]
-  fn user_menu_page_for_workspace_maps_the_shell() {
-    assert_eq!(
-      user_menu_page_for_workspace_page(WorkspacePage::Session),
-      UserMenuPage::Session
-    );
-  }
-
-  #[test]
-  fn the_shell_activates_when_the_workspace_routes_to_it() {
-    // Startup on the shell, and every navigation back to it.
-    assert!(should_activate_session_page(None, WorkspacePage::Session));
-    // There is no secondary workspace page left to activate.
-    assert!(!should_activate_session_page(
-      Some(WorkspacePage::Session),
-      WorkspacePage::Session
-    ));
   }
 
   #[test]

@@ -160,7 +160,6 @@ agent_acp = { path = "crates/agent_acp" }
 agent_registry = { path = "crates/agent_registry" }
 agent_chat_panel = { path = "crates/agent_chat_panel" }
 selectable_text = { path = "crates/selectable_text" }
-gpui-router = { path = "vendor/gpui-router" }
 
 # ACP integration
 agent-client-protocol = { version = "=0.11.1", features = ["unstable"] }

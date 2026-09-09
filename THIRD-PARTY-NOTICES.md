@@ -10660,8 +10660,6 @@ SOFTWARE.
 ## MIT License
 
 Used by:
-- gpui-router 0.3.0
-- gpui-router-macros 0.3.0
 - xim-ctext 0.3.0
 - xim-parser 0.2.1
 - tree-sitter-vue 0.1.0

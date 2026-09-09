@@ -51,7 +51,6 @@ use crate::dock_panel::{
 use crate::file_search_palette::open_file_search_palette;
 use crate::file_view::{BinaryPreview, build_binary_preview, render_binary_preview};
 use crate::inbox::Inbox;
-use crate::navigation::NavigationHistory;
 use crate::open_intent::OpenIntent;
 use crate::project_files::list_project_files;
 use crate::review_destination::{AgentReviewHandlers, ReviewDestination, configure_review};
@@ -94,8 +93,7 @@ use crate::status_poll;
 use crate::svg_preview::SvgPreview;
 use crate::workspace::WorkspaceApi;
 use crate::{
-  CloseWorkspacePage, CommentHunk, JumpToLatestMessage, SendReviewCommentsToAgent,
-  ShowCommandPalette, ShowFileSearch,
+  CommentHunk, JumpToLatestMessage, SendReviewCommentsToAgent, ShowCommandPalette, ShowFileSearch,
 };
 use ui::{
   Button, ButtonVariants as _, CommandPalette, CommandPaletteAction, CommandPaletteCommand,
@@ -193,7 +191,7 @@ impl RepoCommandInFlight {
   }
 }
 
-/// Global entry point so other pages can route work into the sessions shell.
+/// Global entry point so app-wide events can reach the sessions shell.
 pub(crate) struct SessionPageHandle {
   page: Option<gpui::WeakEntity<SessionPage>>,
 }
@@ -893,8 +891,8 @@ impl SessionPage {
     self.dock_panel.update(cx, |panel, cx| panel.poll(cx));
   }
 
-  /// Connects the agent. Called when the workspace routes to the shell, never
-  /// from `render`: spawning a process while painting respawned it in a loop.
+  /// Connects the agent outside `render`: spawning a process while painting
+  /// respawned it in a loop.
   pub fn activate(&mut self, window: &mut Window, cx: &mut Context<Self>) {
     if self.agent_chat_view.is_some() {
       return;
@@ -1243,19 +1241,6 @@ impl SessionPage {
   /// Keeps the crash context in step with what the user is looking at.
   fn sync_git_telemetry(&self, cx: &App) {
     self.git_telemetry(cx).sync_or_clear();
-  }
-
-  fn close_workspace_page_action(
-    &mut self,
-    _: &CloseWorkspacePage,
-    window: &mut Window,
-    cx: &mut Context<Self>,
-  ) {
-    if self.center == CenterView::Diff {
-      self.close_diff(window, cx);
-      return;
-    }
-    NavigationHistory::navigate_back(cx);
   }
 
   fn open_project_action(

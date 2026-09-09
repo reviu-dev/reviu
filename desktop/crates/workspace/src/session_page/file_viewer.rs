@@ -2408,7 +2408,7 @@ mod tests {
     assert!(cx.debug_bounds("session-conversation-pane").is_none());
 
     page.update_in(cx, |page, window, cx| {
-      page.close_workspace_page_action(&CloseWorkspacePage, window, cx);
+      page.close_diff(window, cx);
     });
     cx.run_until_parked();
     assert!(
@@ -3093,7 +3093,7 @@ mod tests {
     });
 
     page.update_in(cx, |page, window, cx| {
-      page.close_workspace_page_action(&CloseWorkspacePage, window, cx);
+      page.close_diff(window, cx);
     });
     page.read_with(cx, |page, _| {
       assert_eq!(page.center, CenterView::Conversation);
@@ -3123,7 +3123,7 @@ mod tests {
     dirty_warm_editor(&page, cx, "unsaved\n");
 
     page.update_in(cx, |page, window, cx| {
-      page.close_workspace_page_action(&CloseWorkspacePage, window, cx);
+      page.close_diff(window, cx);
     });
     cx.run_until_parked();
     cx.update(|window, cx| window.draw(cx).clear(cx));

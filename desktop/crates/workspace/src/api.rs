@@ -2360,8 +2360,6 @@ mod tests {
         arch: "aarch64".to_string(),
         app_profile: "prod".to_string(),
         happened_at: "2026-04-03T10:00:00Z".to_string(),
-        pathname: Some("/session".to_string()),
-        workspace_page: Some("session".to_string()),
         git_context: Some(crate::sentry_context::CrashGitContext {
           repo_name: Some("reviu".to_string()),
           repo_hash: Some("abc123def456".to_string()),
@@ -2395,10 +2393,6 @@ mod tests {
     );
     assert!(
       request.contains("\"appProfile\":\"prod\""),
-      "request: {request}"
-    );
-    assert!(
-      request.contains("\"workspacePage\":\"session\""),
       "request: {request}"
     );
     assert!(

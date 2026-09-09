@@ -10,7 +10,7 @@ use sentry::protocol::{Breadcrumb, Context, Level, Map, User, Value};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
-use crate::{auth_state::AuthState, workspace::WorkspacePage};
+use crate::auth_state::AuthState;
 
 const DEDUP_WINDOW: Duration = Duration::from_secs(300);
 
@@ -69,14 +69,8 @@ pub(crate) struct CrashGithubPrContext {
 #[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct CrashContextSnapshot {
-  pub pathname: Option<String>,
-  pub workspace_page: Option<String>,
   pub git: Option<CrashGitContext>,
   pub github_pr: Option<CrashGithubPrContext>,
-}
-
-fn workspace_page_tag(_page: WorkspacePage) -> &'static str {
-  "session"
 }
 
 fn auth_state_tag(state: &AuthState) -> &'static str {
@@ -187,36 +181,6 @@ pub(crate) fn record_http_status(method: &str, route: &str, status: u16) {
     let error = std::io::Error::other(format!("unexpected HTTP status {status}"));
     capture_unexpected_error("api.http", &error, data);
   }
-}
-
-pub(crate) fn sync_workspace_page(from: Option<WorkspacePage>, to: WorkspacePage) {
-  let from_tag = from.map(workspace_page_tag);
-  let to_tag = workspace_page_tag(to);
-
-  sentry::configure_scope(|scope| {
-    scope.set_tag("workspace.page", to_tag);
-
-    let mut context = Map::new();
-    if let Some(previous) = from_tag {
-      context.insert("from".into(), previous.to_string().into());
-    }
-    context.insert("to".into(), to_tag.to_string().into());
-    scope.set_context("ui_state", to_unknown_context(context));
-  });
-
-  let mut breadcrumb_data = Map::new();
-  if let Some(previous) = from_tag {
-    breadcrumb_data.insert("from".into(), previous.to_string().into());
-  }
-  breadcrumb_data.insert("to".into(), to_tag.to_string().into());
-  add_breadcrumb("ui.navigation", "Workspace page changed", breadcrumb_data);
-}
-
-pub(crate) fn sync_workspace_route(pathname: &str, page: WorkspacePage) {
-  update_crash_snapshot(|snapshot| {
-    snapshot.pathname = Some(pathname.to_string());
-    snapshot.workspace_page = Some(workspace_page_tag(page).to_string());
-  });
 }
 
 pub(crate) fn current_crash_context_snapshot() -> CrashContextSnapshot {
@@ -404,9 +368,7 @@ pub(crate) fn clear_github_pr_context() {
 mod tests {
   use super::{
     DEDUP_WINDOW, auth_state_tag, expected_http_reason, sanitize_repo_path, should_capture_error,
-    workspace_page_tag,
   };
-  use crate::workspace::WorkspacePage;
   use crate::{
     api::{User, UserRole, UserSubscription},
     auth_state::AuthState,
@@ -421,11 +383,6 @@ mod tests {
     assert_eq!(repo_hash, "c8fb129c85f5");
     assert!(!repo_hash.contains('/'));
     assert_ne!(repo_hash, "desktop");
-  }
-
-  #[test]
-  fn workspace_page_tag_maps_pages() {
-    assert_eq!(workspace_page_tag(WorkspacePage::Session), "session");
   }
 
   #[test]

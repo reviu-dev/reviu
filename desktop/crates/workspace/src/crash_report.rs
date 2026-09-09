@@ -61,10 +61,6 @@ pub struct StartupCrashReport {
   pub app_profile: String,
   pub happened_at: String,
   #[serde(skip_serializing_if = "Option::is_none")]
-  pub pathname: Option<String>,
-  #[serde(skip_serializing_if = "Option::is_none")]
-  pub workspace_page: Option<String>,
-  #[serde(skip_serializing_if = "Option::is_none")]
   pub(crate) git_context: Option<CrashGitContext>,
   #[serde(skip_serializing_if = "Option::is_none")]
   pub(crate) github_pr_context: Option<CrashGithubPrContext>,
@@ -90,8 +86,6 @@ impl StartupCrashReport {
       arch: std::env::consts::ARCH.to_string(),
       app_profile: app_profile_label(AppProfile::current()).to_string(),
       happened_at: current_timestamp_rfc3339(),
-      pathname: snapshot.pathname,
-      workspace_page: snapshot.workspace_page,
       git_context: snapshot.git,
       github_pr_context: snapshot.github_pr,
       recent_logs: None,
@@ -142,15 +136,6 @@ impl StartupCrashReport {
       lines.push(String::new());
       lines.push("Recent logs:".to_string());
       lines.push(trim_multiline(recent_logs, CRASH_REPORT_LOG_TAIL_LIMIT));
-    }
-
-    if let Some(workspace_page) = self.workspace_page.as_deref() {
-      lines.push(String::new());
-      lines.push("UI Context:".to_string());
-      lines.push(format!("Workspace page: {}", workspace_page));
-      if let Some(pathname) = self.pathname.as_deref() {
-        lines.push(format!("Pathname: {}", pathname));
-      }
     }
 
     if let Some(git) = self.git_context.as_ref() {
@@ -546,8 +531,6 @@ mod tests {
       arch: "aarch64".to_string(),
       app_profile: "prod".to_string(),
       happened_at: "2026-04-03T10:00:00Z".to_string(),
-      pathname: Some("/session".to_string()),
-      workspace_page: Some("session".to_string()),
       git_context: Some(CrashGitContext {
         repo_name: Some("reviu".to_string()),
         repo_hash: Some("abc123def456".to_string()),
@@ -606,7 +589,6 @@ mod tests {
     assert!(details.contains("Reviu Desktop Crash Report"));
     assert!(details.contains("Crash ID: crash-123"));
     assert!(details.contains("Panic location: desktop/crates/editor/src/editor.rs:42:7"));
-    assert!(details.contains("UI Context:"));
     assert!(details.contains("Git Context:"));
     assert!(details.contains("Backtrace:"));
     assert!(details.contains("Recent logs:"));

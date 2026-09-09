@@ -2768,7 +2768,6 @@ impl Render for SessionPage {
       .size_full()
       .min_h_0()
       .track_focus(&self.focus_handle)
-      .on_action(cx.listener(Self::close_workspace_page_action))
       .on_action(cx.listener(Self::close_active_center_pane_action))
       .on_action(cx.listener(Self::close_active_center_tab_action))
       .on_action(cx.listener(Self::activate_next_center_tab_action))
@@ -5567,7 +5566,7 @@ mod tests {
     });
 
     page.update_in(cx, |page, window, cx| {
-      page.close_workspace_page_action(&CloseWorkspacePage, window, cx);
+      page.close_diff(window, cx);
     });
     page.update(cx, |page, cx| {
       assert!(page.annotation_navigation(cx).is_none());

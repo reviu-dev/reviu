@@ -3613,26 +3613,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "gpui-router"
-version = "0.3.0"
-dependencies = [
- "gpui",
- "gpui-router-macros",
- "hashbrown 0.16.1",
- "matchit",
- "smallvec",
-]
-
-[[package]]
-name = "gpui-router-macros"
-version = "0.3.0"
-dependencies = [
- "proc-macro2",
- "quote",
- "syn 2.0.117",
-]
-
-[[package]]
 name = "gpui_linux"
 version = "0.1.0"
 source = "git+https://github.com/joris-gallot/zed?branch=reviu%2Ftest-window-raw-handle#f5ee27f38752f32265e65fae61588ad1c1666246"
@@ -5337,12 +5317,6 @@ dependencies = [
  "tendril",
  "xml5ever",
 ]
-
-[[package]]
-name = "matchit"
-version = "0.8.6"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2f926ade0c4e170215ae43342bf13b9310a437609c81f29f86c5df6657582ef9"
 
 [[package]]
 name = "maybe-rayon"
@@ -11686,7 +11660,6 @@ dependencies = [
  "gpui",
  "gpui-base",
  "gpui-component",
- "gpui-router",
  "gtk",
  "image",
  "libloading 0.9.0",

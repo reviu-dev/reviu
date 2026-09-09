@@ -3,13 +3,10 @@ use gpui::actions;
 actions!(
   workspace,
   [
-    NavigateBack,
-    CloseWorkspacePage,
     CloseCenterPane,
     CloseCenterTab,
     NextCenterTab,
     PreviousCenterTab,
-    OpenSessionPage,
     ShowBranchSwitcher,
     OpenGitHistorySidebar,
     OpenGitChangesSidebar,
@@ -90,7 +87,6 @@ mod interactive_rebase;
 mod interactive_rebase_todo_view;
 mod keybindings_file;
 mod merge_dialog;
-pub mod navigation;
 mod open_intent;
 mod palette_actions;
 mod palette_branches;
