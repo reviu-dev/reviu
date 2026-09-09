@@ -819,10 +819,14 @@ impl SessionPage {
       .map(|panel| panel.read(cx).current_conversation().id.clone());
     let open_chat_ids = self.open_center_chat_ids();
     let worktrees = self.conversation_hub.worktree_checkouts(cx);
+    let current_project = self
+      .project_root(cx)
+      .map(|path| Self::canonical_repo(&path));
     let mut items = self
       .conversation_hub
       .project_sections(cx)
       .into_iter()
+      .filter(|(project_root, _)| Some(project_root) == current_project.as_ref())
       .flat_map(|(project_root, metas)| {
         let project_name = project_root
           .file_name()
@@ -5057,6 +5061,52 @@ mod tests {
       assert_eq!(page.session_list.read(cx).current_id(), first_id);
       assert_eq!(page.active_chat_tab(cx), CenterTab::chat_for(first_id));
     });
+  }
+
+  #[gpui::test]
+  async fn center_history_only_lists_the_current_project(cx: &mut TestAppContext) {
+    let repo = TempRepo::init("session-center-history-current");
+    let other = TempRepo::init("session-center-history-other");
+    commit_text_file(&repo.path, Path::new("README.md"), "v1\n", "initial");
+    commit_text_file(&other.path, Path::new("README.md"), "v1\n", "initial");
+    let (page, cx) = add_session_page_window(repo.path.clone(), cx);
+    cx.run_until_parked();
+
+    let now = std::time::SystemTime::now()
+      .duration_since(std::time::UNIX_EPOCH)
+      .map(|duration| duration.as_secs())
+      .unwrap_or(0);
+    page.update(cx, |page, cx| {
+      for (project, id) in [
+        (&repo.path, "current-project"),
+        (&other.path, "other-project"),
+      ] {
+        let access = page
+          .chat_store_for_project(project, cx)
+          .expect("chat store");
+        access.store.update(cx, |store, _| {
+          store.insert_meta_for_test(agent_chat_panel::ConversationMeta {
+            id: id.to_string(),
+            started_at_secs: now,
+            updated_at_secs: now,
+            title: id.to_string(),
+            message_count: 1,
+            agent_id: agent_chat_panel::default_agent_id(),
+            session_id: None,
+            preview: id.to_string(),
+          });
+        });
+      }
+    });
+
+    let ids = page.update(cx, |page, cx| {
+      page
+        .center_conversation_history_items(cx)
+        .into_iter()
+        .map(|item| item.id)
+        .collect::<Vec<_>>()
+    });
+    assert_eq!(ids, vec!["current-project".to_string()]);
   }
 
   #[gpui::test]
