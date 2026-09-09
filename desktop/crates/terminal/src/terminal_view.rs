@@ -698,7 +698,7 @@ impl Render for TerminalView {
     };
     let terminal_palette = TerminalPalette::themed(
       is_dark,
-      theme.sidebar,
+      theme.background,
       theme.foreground,
       cursor_color,
       selection_color,
@@ -708,7 +708,7 @@ impl Render for TerminalView {
       .debug_selector(|| TERMINAL_SCREEN_DEBUG_SELECTOR.to_string())
       .size_full()
       .overflow_hidden()
-      .bg(theme.sidebar)
+      .bg(theme.background)
       .child(
         div()
           .debug_selector(|| TERMINAL_SURFACE_DEBUG_SELECTOR.to_string())
@@ -741,7 +741,7 @@ impl Render for TerminalView {
       .size_full()
       .flex()
       .flex_col()
-      .bg(theme.sidebar)
+      .bg(theme.background)
       .on_mouse_down(
         MouseButton::Left,
         cx.listener(|this, _, window, cx| {

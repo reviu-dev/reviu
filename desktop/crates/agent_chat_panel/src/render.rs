@@ -1943,7 +1943,7 @@ impl Render for AgentChatPanel {
       .flex()
       .flex_col()
       .size_full()
-      .bg(theme.sidebar)
+      .bg(theme.background)
       .when(self.show_header, |this| {
         this.child(
           h_flex()
@@ -1955,7 +1955,7 @@ impl Render for AgentChatPanel {
             .px_3()
             .items_center()
             .justify_between()
-            .bg(theme.sidebar)
+            .bg(theme.background)
             .border_b_1()
             .border_color(theme.border)
             .child({
@@ -2082,8 +2082,8 @@ impl Render for AgentChatPanel {
                   .h(px(CONVERSATION_BOTTOM_FADE_PX))
                   .bg(gpui::linear_gradient(
                     180.,
-                    gpui::linear_color_stop(theme.sidebar.opacity(0.), 0.),
-                    gpui::linear_color_stop(theme.sidebar, 1.),
+                    gpui::linear_color_stop(theme.background.opacity(0.), 0.),
+                    gpui::linear_color_stop(theme.background, 1.),
                   )),
               )
               // Painted after the fade so the pill sits above it.
@@ -2133,7 +2133,7 @@ impl Render for AgentChatPanel {
           .justify_center()
           .px_3()
           .pb_3()
-          .bg(theme.sidebar)
+          .bg(theme.background)
           .child(
             v_flex()
               .w_full()
@@ -2154,7 +2154,7 @@ impl Render for AgentChatPanel {
                   } else {
                     theme.border
                   })
-                  .bg(theme.background)
+                  .bg(theme.sidebar)
                   .on_drop(
                     cx.listener(|panel, paths: &gpui::ExternalPaths, window, cx| {
                       panel.handle_dropped_paths(paths.paths(), window, cx);
@@ -2583,7 +2583,7 @@ impl AgentChatPanel {
           .rounded_b(px(0.))
           .border_1()
           .border_color(theme.border.opacity(0.72))
-          .bg(theme.background)
+          .bg(theme.sidebar)
           .child(
             gpui_component::Icon::new(UiIconName::MessageCirclePlus)
               .small()
