@@ -62,6 +62,7 @@ const DOCK_PANEL_COMMIT_MENU_DEBUG_SELECTOR: &str = "dock-panel-commit-menu";
 const DOCK_PANEL_CHANGES_SUMMARY_DEBUG_SELECTOR: &str = "dock-panel-changes-summary";
 const DOCK_PANEL_CHANGES_ACTION_DEBUG_SELECTOR: &str = "dock-panel-changes-action";
 const DOCK_PANEL_CHANGES_ACTION_MENU_DEBUG_SELECTOR: &str = "dock-panel-changes-action-menu";
+const DOCK_PANEL_HEADER_HEIGHT_PX: f32 = 40.0;
 const DOCK_PANEL_CREATE_PR_DEBUG_SELECTOR: &str = "dock-panel-create-pr";
 const DOCK_PANEL_PUBLISH_AND_CREATE_PR_DEBUG_SELECTOR: &str = "dock-panel-publish-and-create-pr";
 const DOCK_PANEL_COMPARE_DEBUG_SELECTOR: &str = "dock-panel-compare-on-github";
@@ -3727,8 +3728,9 @@ impl DockPanel {
     let view = cx.entity();
 
     h_flex()
-      .h(px(36.))
-      .min_h(px(36.))
+      .h(px(DOCK_PANEL_HEADER_HEIGHT_PX))
+      .min_h(px(DOCK_PANEL_HEADER_HEIGHT_PX))
+      .max_h(px(DOCK_PANEL_HEADER_HEIGHT_PX))
       .flex_shrink_0()
       .items_center()
       .justify_between()
@@ -5069,9 +5071,9 @@ impl Render for DockPanel {
 
     let header = h_flex()
       .debug_selector(|| "dock-panel-header".to_string())
-      .h(px(40.))
-      .min_h(px(40.))
-      .max_h(px(40.))
+      .h(px(DOCK_PANEL_HEADER_HEIGHT_PX))
+      .min_h(px(DOCK_PANEL_HEADER_HEIGHT_PX))
+      .max_h(px(DOCK_PANEL_HEADER_HEIGHT_PX))
       .flex_shrink_0()
       .items_center()
       .justify_between()
