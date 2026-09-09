@@ -101,7 +101,7 @@ impl Render for Inbox {
                     div()
                       .flex_1()
                       .min_w(px(0.0))
-                      .text_sm()
+                      .text_xs()
                       .truncate()
                       .text_color(theme.foreground)
                       .child(title),

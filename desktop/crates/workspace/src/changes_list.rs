@@ -582,7 +582,7 @@ impl ListDelegate for ChangesRowsDelegate {
               .flex_1()
               .min_w(px(0.0))
               .overflow_hidden()
-              .text_sm()
+              .text_xs()
               .whitespace_nowrap()
               .gap_1()
               .child(

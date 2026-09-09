@@ -3708,7 +3708,7 @@ impl DockPanel {
                 .with_variant(gpui_component::button::ButtonVariant::Secondary)
                 .outline()
                 .compact()
-                .small()
+                .xsmall()
                 .rounded_r_none()
                 .loading(changes_action_in_flight == Some(command))
                 .disabled(changes_action_in_flight.is_some())
@@ -3725,7 +3725,7 @@ impl DockPanel {
               .with_variant(gpui_component::button::ButtonVariant::Secondary)
               .outline()
               .compact()
-              .small()
+              .xsmall()
               .tooltip("Changes actions")
               .when(primary_command.is_some(), |button| {
                 button.rounded_l_none().border_l_0()
@@ -4001,17 +4001,17 @@ impl DockPanel {
                 }
               })
               .on_mouse_down(gpui::MouseButton::Left, |_, _, cx| cx.stop_propagation())
-              .h(px(22.5))
+              .h(px(19.5))
               .min_w_0()
               .flex_1()
               .child(
                 Input::new(&input)
-                  .small()
+                  .xsmall()
                   .appearance(false)
                   .bordered(false)
                   .focus_bordered(false)
                   .w_full()
-                  .h(px(22.5))
+                  .h(px(19.5))
                   .px_0()
                   .py_0(),
               )
@@ -4021,7 +4021,7 @@ impl DockPanel {
               .flex_1()
               .overflow_hidden()
               .text_ellipsis()
-              .text_sm()
+              .text_xs()
               .child(item.label.clone())
               .into_any_element()
           };
@@ -7732,10 +7732,12 @@ mod tests {
     panel.update(cx, |_, cx| cx.notify());
     cx.run_until_parked();
 
+    let action_bounds = cx
+      .debug_bounds(DOCK_PANEL_CHANGES_ACTION_DEBUG_SELECTOR)
+      .expect("unstaged work gets a Stage All primary action");
     assert!(
-      cx.debug_bounds(DOCK_PANEL_CHANGES_ACTION_DEBUG_SELECTOR)
-        .is_some(),
-      "unstaged work gets a Stage All primary action"
+      action_bounds.size.height <= px(21.0),
+      "the changes action button stays compact"
     );
 
     git::stage_all(&repo.path).expect("stage all");
