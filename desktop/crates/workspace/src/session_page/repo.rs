@@ -330,6 +330,42 @@ mod tests {
   use std::path::Path;
 
   #[gpui::test]
+  async fn switching_repository_scopes_commit_message_drafts(cx: &mut TestAppContext) {
+    let repo = TempRepo::init("session-page-commit-draft-a");
+    let other = TempRepo::init("session-page-commit-draft-b");
+    commit_text_file(&repo.path, Path::new("README.md"), "v1\n", "initial");
+    commit_text_file(&other.path, Path::new("README.md"), "other\n", "initial");
+
+    let (page, cx) = add_session_page_window(repo.path.clone(), cx);
+    cx.run_until_parked();
+    page.update_in(cx, |page, window, cx| {
+      page.dock_panel.update(cx, |panel, cx| {
+        panel.set_commit_message("repo draft", window, cx)
+      });
+      page
+        .set_fallback_repo(other.path.clone(), window, cx)
+        .expect("set repo");
+    });
+    cx.run_until_parked();
+    page.read_with(cx, |page, cx| {
+      assert_eq!(page.dock_panel.read(cx).commit_message(cx), "");
+    });
+
+    page.update_in(cx, |page, window, cx| {
+      page.dock_panel.update(cx, |panel, cx| {
+        panel.set_commit_message("other draft", window, cx)
+      });
+      page
+        .set_fallback_repo(repo.path.clone(), window, cx)
+        .expect("set repo");
+    });
+    cx.run_until_parked();
+    page.read_with(cx, |page, cx| {
+      assert_eq!(page.dock_panel.read(cx).commit_message(cx), "repo draft");
+    });
+  }
+
+  #[gpui::test]
   async fn switching_repository_waits_for_dirty_file_choice(cx: &mut TestAppContext) {
     let repo = TempRepo::init("session-page-dirty-repo-switch");
     let other = TempRepo::init("session-page-dirty-repo-switch-b");

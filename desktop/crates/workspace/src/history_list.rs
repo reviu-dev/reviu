@@ -821,7 +821,7 @@ impl HistoryList {
       .gap_2()
       .px_2()
       .py_2()
-      .children((0..7).map(|index| Self::render_loading_row(index)))
+      .children((0..7).map(Self::render_loading_row))
       .into_any_element()
   }
 

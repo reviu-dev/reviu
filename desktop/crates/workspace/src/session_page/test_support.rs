@@ -66,7 +66,7 @@ pub(crate) fn add_session_page_window(
     gpui_component::Root::new(host, window, cx)
   });
   let page = mounted.expect("session page");
-  page.update(cx, |page, cx| {
+  page.update_in(cx, |page, _window, cx| {
     page.project_root = Some(repo_root.clone());
     page.fallback_repo = Some(repo_root.clone());
     page.repo_snapshot.update(cx, |snapshot, cx| {

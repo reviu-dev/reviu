@@ -1015,6 +1015,7 @@ pub struct DockPanel {
   head_status: HeadCommitStatus,
   branch_status: Option<git::BranchStatus>,
   pub(crate) commit_input: Entity<TextareaState>,
+  commit_message_drafts: HashMap<PathBuf, String>,
   amend_pending: bool,
   pre_amend_commit_message: Option<String>,
   committing: bool,
@@ -1299,6 +1300,7 @@ impl DockPanel {
       head_status: HeadCommitStatus::default(),
       branch_status: None,
       commit_input,
+      commit_message_drafts: HashMap::new(),
       amend_pending: false,
       pre_amend_commit_message: None,
       committing: false,
@@ -3111,6 +3113,34 @@ impl DockPanel {
     self.commit_input.read(cx).value().to_string()
   }
 
+  fn remember_commit_message_draft(&mut self, cx: &App) {
+    let Some(repo_root) = self.repo_root.clone() else {
+      return;
+    };
+    let draft = if self.amend_pending {
+      self
+        .pre_amend_commit_message
+        .clone()
+        .unwrap_or_else(|| self.commit_input.read(cx).value().to_string())
+    } else {
+      self.commit_input.read(cx).value().to_string()
+    };
+    if draft.is_empty() {
+      self.commit_message_drafts.remove(&repo_root);
+    } else {
+      self.commit_message_drafts.insert(repo_root, draft);
+    }
+  }
+
+  fn current_commit_message_draft(&self) -> String {
+    self
+      .repo_root
+      .as_ref()
+      .and_then(|repo_root| self.commit_message_drafts.get(repo_root))
+      .cloned()
+      .unwrap_or_default()
+  }
+
   #[cfg(test)]
   pub(crate) fn amend_pending(&self) -> bool {
     self.amend_pending
@@ -3340,13 +3370,32 @@ impl DockPanel {
     &mut self,
     project_root: Option<PathBuf>,
     repo_root: Option<PathBuf>,
+    window: &mut Window,
     cx: &mut Context<Self>,
   ) {
+    let draft = self.set_project_and_repo_roots_state(project_root, repo_root, cx);
+    if let Some(draft) = draft {
+      self
+        .commit_input
+        .update(cx, |input, cx| input.set_value(draft, window, cx));
+    }
+  }
+
+  fn set_project_and_repo_roots_state(
+    &mut self,
+    project_root: Option<PathBuf>,
+    repo_root: Option<PathBuf>,
+    cx: &mut Context<Self>,
+  ) -> Option<String> {
     let project_changed = self.project_root != project_root;
+    let repo_changed = self.repo_root != repo_root;
+    if repo_changed {
+      self.remember_commit_message_draft(cx);
+    }
     // Another checkout means another pull request: what is on screen or still
     // in flight answers for the one we left, and the staleness window or a
     // same-named branch would keep it alive. Drop it all before moving.
-    if self.repo_root != repo_root {
+    if repo_changed {
       self._pr_task = None;
       self._pr_range_task = None;
       self._pr_checks_task = None;
@@ -3358,6 +3407,7 @@ impl DockPanel {
     }
     self.project_root = project_root.clone();
     self.repo_root = repo_root.clone();
+    let commit_message_draft = repo_changed.then(|| self.current_commit_message_draft());
     if project_changed {
       self.files_loaded = false;
       self.files_loading = false;
@@ -3379,11 +3429,18 @@ impl DockPanel {
     self.history_list.update(cx, |list, cx| {
       list.set_repo_root(repo_root.clone(), cx);
     });
+    commit_message_draft
   }
 
   #[cfg(test)]
   pub(crate) fn set_repo_root(&mut self, repo_root: Option<PathBuf>, cx: &mut Context<Self>) {
-    self.set_project_and_repo_roots(repo_root.clone(), repo_root, cx);
+    let draft = self.set_project_and_repo_roots_state(repo_root.clone(), repo_root, cx);
+    if let Some(draft) = draft {
+      let commit_input = self.commit_input.clone();
+      let _ = cx.update_window(self.window_handle, |_, window, cx| {
+        commit_input.update(cx, |input, cx| input.set_value(draft, window, cx));
+      });
+    }
   }
 
   /// The history is only worth loading once its tab is opened.
@@ -3504,6 +3561,7 @@ impl DockPanel {
 
     let window_handle = self.window_handle;
     let commit_input = self.commit_input.clone();
+    let committed_repo_root = repo_root.clone();
     let task = cx.spawn(async move |this, cx| {
       let result = cx
         .background_spawn(async move {
@@ -3518,9 +3576,12 @@ impl DockPanel {
         this.committing = false;
         match result {
           Ok(()) => {
-            let _ = cx.update_window(window_handle, |_, window, cx| {
-              commit_input.update(cx, |input, cx| input.set_value("", window, cx));
-            });
+            this.commit_message_drafts.remove(&committed_repo_root);
+            if this.repo_root.as_deref() == Some(committed_repo_root.as_path()) {
+              let _ = cx.update_window(window_handle, |_, window, cx| {
+                commit_input.update(cx, |input, cx| input.set_value("", window, cx));
+              });
+            }
             cx.emit(DockPanelEvent::Committed);
           }
           Err(error) => this.last_error = Some(format!("{error}").into()),
@@ -6117,8 +6178,8 @@ mod tests {
     std::fs::write(project.join("main.rs"), "fn main() {}\n").expect("write file");
 
     let (panel, cx) = add_dock_panel_window(None, cx);
-    panel.update(cx, |panel, cx| {
-      panel.set_project_and_repo_roots(Some(project.clone()), None, cx)
+    panel.update_in(cx, |panel, window, cx| {
+      panel.set_project_and_repo_roots(Some(project.clone()), None, window, cx)
     });
     await_refresh(&panel, cx).await;
 
@@ -7320,6 +7381,38 @@ mod tests {
       &[(PathBuf::from("src/main.rs"), Some(12), OpenIntent::Open)],
       "the link asked for the comment, so the diff opens on its lines"
     );
+  }
+
+  #[gpui::test]
+  async fn commit_message_drafts_are_scoped_to_the_checkout(cx: &mut TestAppContext) {
+    let (panel, cx) = add_dock_panel_window(Some(PathBuf::from("/repo")), cx);
+
+    panel.update_in(cx, |panel, window, cx| {
+      panel.set_commit_message("repo draft", window, cx)
+    });
+    panel.update(cx, |panel, cx| {
+      panel.set_repo_root(Some(PathBuf::from("/other")), cx)
+    });
+    panel.read_with(cx, |panel, cx| {
+      assert_eq!(panel.commit_message(cx), "");
+    });
+
+    panel.update_in(cx, |panel, window, cx| {
+      panel.set_commit_message("other draft", window, cx)
+    });
+    panel.update(cx, |panel, cx| {
+      panel.set_repo_root(Some(PathBuf::from("/repo")), cx)
+    });
+    panel.read_with(cx, |panel, cx| {
+      assert_eq!(panel.commit_message(cx), "repo draft");
+    });
+
+    panel.update(cx, |panel, cx| {
+      panel.set_repo_root(Some(PathBuf::from("/other")), cx)
+    });
+    panel.read_with(cx, |panel, cx| {
+      assert_eq!(panel.commit_message(cx), "other draft");
+    });
   }
 
   #[gpui::test]

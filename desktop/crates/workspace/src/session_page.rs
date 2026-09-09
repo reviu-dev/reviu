@@ -1142,7 +1142,7 @@ impl SessionPage {
       snapshot.set_repo_root(git_checkout.clone(), cx)
     });
     self.dock_panel.update(cx, |panel, cx| {
-      panel.set_project_and_repo_roots(project_checkout.clone(), git_checkout.clone(), cx);
+      panel.set_project_and_repo_roots(project_checkout.clone(), git_checkout.clone(), window, cx);
       panel.refresh(cx);
     });
     self.refresh_branch(cx);
