@@ -16,13 +16,14 @@ use std::collections::HashSet;
 
 use crate::config::ConfigStore;
 use crate::{
-  AcceptBothConflict, AddSelectionToAgent, CloseCenterPane, CommentHunk, CommitChanges,
-  ForcePushChanges, JumpToLatestMessage, NavigateBack, NewAgentSession, NewAgentWorktreeSession,
-  NextAnnotation, NextCenterTab, OpenFilesSidebar, OpenGitChangesSidebar, OpenGitHistorySidebar,
-  OpenProject, OpenPullRequestSidebar, OpenReviewSidebar, OpenSessionPage, OpenSettingsPage,
-  PreviousAnnotation, PreviousCenterTab, PullChanges, PushChanges, RestoreFile, RestoreHunk,
-  ReturnFocusToEditor, SendReviewCommentsToAgent, ShowBranchSwitcher, ShowCommandPalette,
-  ShowFileSearch, ToggleDiffView, ToggleFileStage, ToggleHideWhitespace, ToggleHunkStage,
+  AcceptBothConflict, AddSelectionToAgent, CloseCenterPane, CloseCenterTab, CommentHunk,
+  CommitChanges, ForcePushChanges, JumpToLatestMessage, NavigateBack, NewAgentSession,
+  NewAgentWorktreeSession, NextAnnotation, NextCenterTab, OpenFilesSidebar, OpenGitChangesSidebar,
+  OpenGitHistorySidebar, OpenProject, OpenPullRequestSidebar, OpenReviewSidebar, OpenSessionPage,
+  OpenSettingsPage, PreviousAnnotation, PreviousCenterTab, PullChanges, PushChanges, RestoreFile,
+  RestoreHunk, ReturnFocusToEditor, SendReviewCommentsToAgent, ShowBranchSwitcher,
+  ShowCommandPalette, ShowFileSearch, ToggleDiffView, ToggleFileStage, ToggleHideWhitespace,
+  ToggleHunkStage,
 };
 
 pub const SHOW_COMMAND_PALETTE_SHORTCUT: &str = "cmd-k";
@@ -75,6 +76,7 @@ pub enum ShortcutId {
   OpenSessionPage,
   NextCenterTab,
   PreviousCenterTab,
+  CloseCenterTab,
   ShowFileSearch,
   OpenProject,
   CommitChanges,
@@ -113,6 +115,7 @@ impl ShortcutId {
       ShortcutId::OpenSessionPage => "open_session_page",
       ShortcutId::NextCenterTab => "next_center_tab",
       ShortcutId::PreviousCenterTab => "previous_center_tab",
+      ShortcutId::CloseCenterTab => "close_center_tab",
       ShortcutId::ShowFileSearch => "show_file_search",
       ShortcutId::OpenProject => "open_project",
       ShortcutId::CommitChanges => "commit_changes",
@@ -151,6 +154,7 @@ impl ShortcutId {
       "open_session_page" => Some(ShortcutId::OpenSessionPage),
       "next_center_tab" => Some(ShortcutId::NextCenterTab),
       "previous_center_tab" => Some(ShortcutId::PreviousCenterTab),
+      "close_center_tab" => Some(ShortcutId::CloseCenterTab),
       "show_file_search" => Some(ShortcutId::ShowFileSearch),
       "open_project" => Some(ShortcutId::OpenProject),
       "commit_changes" => Some(ShortcutId::CommitChanges),
@@ -205,7 +209,7 @@ pub struct ShortcutDefinition {
   pub active_contexts: &'static [&'static str],
 }
 
-const SHORTCUT_DEFINITIONS: [ShortcutDefinition; 33] = [
+const SHORTCUT_DEFINITIONS: [ShortcutDefinition; 34] = [
   ShortcutDefinition {
     id: ShortcutId::ShowCommandPalette,
     title: "Command Palette",
@@ -257,6 +261,17 @@ const SHORTCUT_DEFINITIONS: [ShortcutDefinition; 33] = [
     scope_label: "Workspace",
     category: ShortcutCategory::Core,
     keystroke: "cmd-shift-[",
+    context: CENTER_TAB_CONTEXT,
+    display_context: WORKSPACE_SESSION_CONTEXT,
+    active_contexts: &SESSION_ONLY_ACTIVE_CONTEXTS,
+  },
+  ShortcutDefinition {
+    id: ShortcutId::CloseCenterTab,
+    title: "Close Tab",
+    description: "Close the active center tab.",
+    scope_label: "Workspace",
+    category: ShortcutCategory::Core,
+    keystroke: "cmd-w",
     context: CENTER_TAB_CONTEXT,
     display_context: WORKSPACE_SESSION_CONTEXT,
     active_contexts: &SESSION_ONLY_ACTIVE_CONTEXTS,
@@ -841,6 +856,7 @@ impl ShortcutDefinition {
       ShortcutId::PreviousCenterTab => {
         KeyBinding::new(keystroke, PreviousCenterTab, Some(&context))
       }
+      ShortcutId::CloseCenterTab => KeyBinding::new(keystroke, CloseCenterTab, Some(&context)),
       ShortcutId::ShowFileSearch => KeyBinding::new(keystroke, ShowFileSearch, Some(&context)),
       ShortcutId::OpenProject => KeyBinding::new(keystroke, OpenProject, Some(&context)),
       ShortcutId::CommitChanges => KeyBinding::new(keystroke, CommitChanges, Some(&context)),
@@ -1330,6 +1346,7 @@ fn with_shortcut_action<T>(id: ShortcutId, f: impl FnOnce(&dyn Action) -> T) -> 
     ShortcutId::OpenSessionPage => f(&OpenSessionPage),
     ShortcutId::NextCenterTab => f(&NextCenterTab),
     ShortcutId::PreviousCenterTab => f(&PreviousCenterTab),
+    ShortcutId::CloseCenterTab => f(&CloseCenterTab),
     ShortcutId::ShowFileSearch => f(&ShowFileSearch),
     ShortcutId::OpenProject => f(&OpenProject),
     ShortcutId::CommitChanges => f(&CommitChanges),
@@ -1637,9 +1654,11 @@ mod tests {
   }
 
   #[test]
-  fn escape_no_longer_closes_workspace_pages() {
-    assert!(!has_binding("/settings", "cmd-w"));
-    assert!(!has_binding("/git-config", "cmd-w"));
+  fn cmd_w_closes_the_active_center_tab() {
+    assert_eq!(
+      first_binding_action_name("/session", &[], "cmd-w", workspace_key_bindings(),),
+      Some("workspace::CloseCenterTab")
+    );
   }
 
   #[test]
@@ -1678,6 +1697,7 @@ mod tests {
       assert!(has_binding(pathname, "cmd-1"));
       assert!(has_binding(pathname, "cmd-shift-]"));
       assert!(has_binding(pathname, "cmd-shift-["));
+      assert!(has_binding(pathname, "cmd-w"));
     }
   }
 
@@ -2029,7 +2049,7 @@ mod tests {
     let overrides = ShortcutOverrides::default();
     let result = validate_shortcut_override(
       ShortcutId::OpenProject,
-      &Keystroke::parse("cmd-w").unwrap(),
+      &Keystroke::parse("cmd-shift-g").unwrap(),
       &overrides,
     );
 
