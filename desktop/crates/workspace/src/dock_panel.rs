@@ -4690,13 +4690,31 @@ impl DockPanel {
 
   fn render_pr_files(&mut self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
     if let Some(error) = self.pr_files_error.clone() {
-      return self.render_pr_files_message(error, cx);
+      return self.render_pr_files_message(
+        UiIconName::CircleSlash,
+        "Could not load changed files",
+        error,
+        false,
+        cx,
+      );
     }
     if self.pr_files_loading {
-      return self.render_pr_files_message("Loading changed files...".into(), cx);
+      return self.render_pr_files_message(
+        UiIconName::RefreshCw,
+        "Loading changed files",
+        "Reviu is reading the pull request diff from GitHub.",
+        true,
+        cx,
+      );
     }
     if self.pr_files.is_empty() {
-      return self.render_pr_files_message("This pull request changes nothing".into(), cx);
+      return self.render_pr_files_message(
+        UiIconName::FileDiff,
+        "No changed files",
+        "This pull request does not change any files yet.",
+        false,
+        cx,
+      );
     }
 
     // Rendering is the first moment the list exists to take the focus the tab
@@ -4717,20 +4735,80 @@ impl DockPanel {
       .into_any_element()
   }
 
-  fn render_pr_files_message(&self, message: SharedString, cx: &mut Context<Self>) -> AnyElement {
+  fn render_pr_files_message(
+    &self,
+    icon: UiIconName,
+    title: &'static str,
+    description: impl Into<SharedString>,
+    loading: bool,
+    cx: &mut Context<Self>,
+  ) -> AnyElement {
     let theme = cx.theme().clone();
+    let symbol = if loading {
+      gpui_component::spinner::Spinner::new()
+        .small()
+        .into_any_element()
+    } else {
+      Icon::new(icon)
+        .size_6()
+        .text_color(theme.primary)
+        .into_any_element()
+    };
+
     v_flex()
+      .debug_selector(|| "dock-panel-pr-files-empty-state".to_string())
       .flex_1()
       .min_h_0()
       .items_center()
-      .justify_center()
-      .p_4()
+      .justify_start()
+      .px_4()
+      .pt(px(32.0))
       .child(
-        div()
-          .text_sm()
-          .text_center()
-          .text_color(theme.muted_foreground)
-          .child(message),
+        v_flex()
+          .w_full()
+          .max_w(px(320.0))
+          .gap_3()
+          .rounded(px(16.0))
+          .border_1()
+          .border_color(theme.border.opacity(0.75))
+          .bg(theme.secondary.opacity(0.45))
+          .p_4()
+          .child(
+            h_flex()
+              .items_center()
+              .gap_3()
+              .child(
+                h_flex()
+                  .size(px(54.0))
+                  .flex_shrink_0()
+                  .items_center()
+                  .justify_center()
+                  .rounded(px(16.0))
+                  .border_1()
+                  .border_color(theme.primary.opacity(0.22))
+                  .bg(theme.primary.opacity(0.10))
+                  .child(symbol),
+              )
+              .child(
+                v_flex()
+                  .min_w_0()
+                  .gap_1()
+                  .child(
+                    div()
+                      .text_sm()
+                      .font_weight(gpui::FontWeight::SEMIBOLD)
+                      .text_color(theme.foreground)
+                      .child(title),
+                  )
+                  .child(
+                    div()
+                      .text_xs()
+                      .line_height(px(17.0))
+                      .text_color(theme.muted_foreground)
+                      .child(description.into()),
+                  ),
+              ),
+          ),
       )
       .into_any_element()
   }
