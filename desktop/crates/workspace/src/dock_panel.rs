@@ -4690,25 +4690,120 @@ impl DockPanel {
 
   fn render_empty_state(&self, cx: &mut Context<Self>) -> AnyElement {
     let theme = cx.theme().clone();
-    v_flex()
-      .flex_1()
-      .items_center()
-      .justify_center()
-      .gap_2()
-      .child(
-        Icon::new(UiIconName::CircleCheck)
-          .size_4()
-          .text_color(theme.muted_foreground),
+    let (icon, title, description, first_hint, second_hint) = if self.repo_root.is_some() {
+      (
+        UiIconName::CircleCheck,
+        "Working tree clean",
+        "Changed and staged files will appear here as soon as the checkout moves.",
+        (UiIconName::Sparkles, "Ask an agent to work"),
+        (UiIconName::FileDiff, "Edit files in this repository"),
       )
-      .child(div().text_sm().text_color(theme.muted_foreground).child(
-        if self.repo_root.is_some() {
-          "No changes"
-        } else if self.project_root.is_some() {
-          "No Git repository"
-        } else {
-          "No project"
-        },
-      ))
+    } else if self.project_root.is_some() {
+      (
+        UiIconName::CircleSlash,
+        "No Git repository",
+        "This project is a plain folder, so Reviu cannot show changes or history here.",
+        (UiIconName::FolderPlus, "Open a repository"),
+        (UiIconName::FileCode, "Browse files from the Files tab"),
+      )
+    } else {
+      (
+        UiIconName::FolderPlus,
+        "No project open",
+        "Add a project to browse files, track changes, and review an agent's work.",
+        (UiIconName::FolderPlus, "Open a folder or repository"),
+        (UiIconName::MessageCircle, "Sessions will follow it here"),
+      )
+    };
+
+    v_flex()
+      .debug_selector(|| "dock-panel-empty-state".to_string())
+      .flex_1()
+      .min_h_0()
+      .items_center()
+      .justify_start()
+      .px_4()
+      .pt(px(96.0))
+      .child(
+        v_flex()
+          .w_full()
+          .max_w(px(320.0))
+          .gap_3()
+          .rounded(px(16.0))
+          .border_1()
+          .border_color(theme.border.opacity(0.75))
+          .bg(theme.secondary.opacity(0.45))
+          .p_4()
+          .child(
+            h_flex()
+              .items_center()
+              .gap_3()
+              .child(
+                h_flex()
+                  .size(px(54.0))
+                  .flex_shrink_0()
+                  .items_center()
+                  .justify_center()
+                  .rounded(px(16.0))
+                  .border_1()
+                  .border_color(theme.primary.opacity(0.22))
+                  .bg(theme.primary.opacity(0.10))
+                  .child(Icon::new(icon).size_6().text_color(theme.primary)),
+              )
+              .child(
+                v_flex()
+                  .min_w_0()
+                  .gap_1()
+                  .child(
+                    div()
+                      .text_sm()
+                      .font_weight(gpui::FontWeight::SEMIBOLD)
+                      .text_color(theme.foreground)
+                      .child(title),
+                  )
+                  .child(
+                    div()
+                      .text_xs()
+                      .line_height(px(17.0))
+                      .text_color(theme.muted_foreground)
+                      .child(description),
+                  ),
+              ),
+          )
+          .child(
+            v_flex()
+              .w_full()
+              .gap_2()
+              .child(Self::render_empty_hint(first_hint, &theme))
+              .child(Self::render_empty_hint(second_hint, &theme)),
+          ),
+      )
+      .into_any_element()
+  }
+
+  fn render_empty_hint(
+    hint: (UiIconName, &'static str),
+    theme: &gpui_component::Theme,
+  ) -> AnyElement {
+    h_flex()
+      .w_full()
+      .min_w_0()
+      .items_center()
+      .gap_2()
+      .rounded(px(10.0))
+      .border_1()
+      .border_color(theme.border.opacity(0.65))
+      .bg(theme.background.opacity(0.7))
+      .px_2()
+      .py_2()
+      .child(Icon::new(hint.0).size_3().text_color(theme.primary))
+      .child(
+        div()
+          .min_w_0()
+          .text_xs()
+          .text_color(theme.muted_foreground)
+          .child(hint.1),
+      )
       .into_any_element()
   }
 }
