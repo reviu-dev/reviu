@@ -3,13 +3,17 @@
 use super::center_layout::{CenterDropTarget, CenterLayout, CenterNode, CenterPane, CenterPaneId};
 use super::*;
 use crate::annotations::{AnnotationKind, shows_annotation_navigation};
-use crate::diff_toolbar::{DiffToolbar, NavigationControl, SplitControl, ToggleControl};
+use crate::diff_toolbar::{
+  DIFF_TOOLBAR_HEIGHT, DiffToolbar, NavigationControl, SplitControl, ToggleControl,
+};
 use crate::hunk_actions::render_hunk_actions;
 use gpui_component::{
   Selectable as _,
   menu::{ContextMenuExt as _, DropdownMenu as _, PopupMenu, PopupMenuItem},
   scroll::ScrollableElement as _,
 };
+
+const CENTER_NEW_MENU_MAX_HEIGHT_PX: f32 = 360.0;
 
 #[derive(Clone)]
 struct CenterConversationHistoryItem {
@@ -434,6 +438,10 @@ impl SessionPage {
       CenterTabKind::File => format!("session-center-tab-file-{}", path_name()),
       CenterTabKind::Diff => format!("session-center-tab-diff-{}", path_name()),
       CenterTabKind::InteractiveRebase => "session-center-tab-rebase".to_string(),
+      CenterTabKind::Terminal => format!(
+        "session-center-tab-terminal-{}",
+        tab.terminal_id().unwrap_or_default()
+      ),
     }
   }
 
@@ -584,6 +592,7 @@ impl SessionPage {
         })
       }
       CenterTabKind::InteractiveRebase => Some("Interactive rebase".to_string()),
+      CenterTabKind::Terminal => Some(self.terminal_label(tab)),
     }
   }
 
@@ -600,6 +609,10 @@ impl SessionPage {
         .size_3()
         .text_color(theme.muted_foreground)
         .into_any_element(),
+      CenterTabKind::Terminal => gpui_component::Icon::new(UiIconName::Terminal)
+        .size_3()
+        .text_color(theme.muted_foreground)
+        .into_any_element(),
     })
   }
 
@@ -608,6 +621,7 @@ impl SessionPage {
       CenterTabKind::Chat => "session-center-tab-agent-icon",
       CenterTabKind::File | CenterTabKind::Diff => "session-center-tab-file-icon",
       CenterTabKind::InteractiveRebase => "session-center-tab-rebase-icon",
+      CenterTabKind::Terminal => "session-center-tab-terminal-icon",
     }
   }
 
@@ -1078,6 +1092,53 @@ impl SessionPage {
       .into_any_element()
   }
 
+  fn render_center_new_menu_button(&self, cx: &mut Context<Self>) -> AnyElement {
+    let page = cx.entity().clone();
+    let agents = agent_registry::global()
+      .runnable()
+      .into_iter()
+      .map(|agent| (agent.id.clone(), agent.display_name().to_string()))
+      .collect::<Vec<_>>();
+
+    Button::new("session-center-new-menu")
+      .debug_selector(|| "session-center-new-menu".to_string())
+      .icon(gpui_component::IconName::ChevronDown)
+      .ghost()
+      .compact()
+      .xsmall()
+      .tooltip("New...")
+      .dropdown_menu(move |menu, _, _| {
+        let mut menu = menu
+          .max_h(px(CENTER_NEW_MENU_MAX_HEIGHT_PX))
+          .scrollable(true);
+        for (agent_id, label) in agents.clone() {
+          let agent_page = page.clone();
+          let icon = agent_chat_panel::backend_icon(&agent_id);
+          menu = menu.item(
+            PopupMenuItem::new(label)
+              .icon(icon)
+              .on_click(move |_, window, cx| {
+                agent_page.update(cx, |page, cx| {
+                  page.new_session_with_agent(agent_id.clone(), window, cx);
+                });
+              }),
+          );
+        }
+        if !agents.is_empty() {
+          menu = menu.separator();
+        }
+        let terminal_page = page.clone();
+        menu.item(
+          PopupMenuItem::new("Terminal")
+            .icon(UiIconName::Terminal)
+            .on_click(move |_, window, cx| {
+              terminal_page.update(cx, |page, cx| page.new_terminal_tab(window, cx));
+            }),
+        )
+      })
+      .into_any_element()
+  }
+
   fn render_center_tab_bar(
     &self,
     id: String,
@@ -1102,6 +1163,7 @@ impl SessionPage {
         h_flex()
           .items_center()
           .gap_1()
+          .pr_1()
           .child(self.render_center_history_button(cx))
           .child(
             Button::new("session-center-new-chat")
@@ -1115,7 +1177,8 @@ impl SessionPage {
                 cx.stop_propagation();
                 this.new_session(window, cx);
               })),
-          ),
+          )
+          .child(self.render_center_new_menu_button(cx)),
       );
 
     for tab in &tabs {
@@ -1149,6 +1212,7 @@ impl SessionPage {
       let tab_content = h_flex()
         .debug_selector(move || tab_debug_selector.clone())
         .h(px(CENTER_TAB_CONTENT_HEIGHT_PX))
+        .ml_1()
         .min_w_0()
         .items_center()
         .gap_1p5()
@@ -1316,6 +1380,10 @@ impl SessionPage {
       CenterSurface::InteractiveRebase(_) => {
         SharedString::from("session-center-interactive-rebase")
       }
+      CenterSurface::Terminal(tab) => SharedString::from(format!(
+        "session-center-terminal-{}",
+        tab.terminal_id().unwrap_or_default()
+      )),
       CenterSurface::Editor(tab) => SharedString::from(format!(
         "session-center-editor-{}",
         tab
@@ -1402,6 +1470,9 @@ impl SessionPage {
             this.activate_session_panel(conversation_id, window, cx);
           }
           this.center = Self::center_view_for_tab(&focus_tab);
+          if focus_tab.kind == CenterTabKind::Terminal {
+            this.focus_terminal_tab(&focus_tab, window, cx);
+          }
           if let Some(active_tab) = this.active_center_tab.clone() {
             this
               .center_layouts_by_tab
@@ -1508,6 +1579,7 @@ impl SessionPage {
     match surface {
       CenterSurface::Chat(tab) => self.render_conversation(Some(tab), cx),
       CenterSurface::InteractiveRebase(_) => self.render_interactive_rebase(cx),
+      CenterSurface::Terminal(tab) => self.render_terminal_surface(tab.clone(), cx),
       CenterSurface::Editor(tab) => {
         let previous_center = self.center;
         let previous_active_tab = self.active_center_tab.clone();
@@ -1571,6 +1643,7 @@ impl SessionPage {
       CenterTabKind::Chat => CenterView::Conversation,
       CenterTabKind::File | CenterTabKind::Diff => CenterView::Diff,
       CenterTabKind::InteractiveRebase => CenterView::InteractiveRebase,
+      CenterTabKind::Terminal => CenterView::Terminal,
     }
   }
 
@@ -1590,6 +1663,9 @@ impl SessionPage {
     if changed {
       if let Some(conversation_id) = tab.conversation_id() {
         self.activate_session_panel(conversation_id, window, cx);
+      }
+      if tab.kind == CenterTabKind::Terminal {
+        self.focus_terminal_tab(&tab, window, cx);
       }
       self.ensure_center_layout_chat_panels(window, cx);
       self.remember_center_layout_tab(tab.clone());
@@ -1671,10 +1747,10 @@ impl SessionPage {
         ))
         .child(self.render_center_empty_action(
           "session-center-empty-terminal",
-          gpui_component::Icon::new(UiIconName::SquareTerminal),
+          gpui_component::Icon::new(UiIconName::Terminal),
           "Terminal",
           "Open a shell for the project",
-          cx.listener(|this, _, window, cx| this.open_dock_tab(DockPanelTab::Terminal, window, cx)),
+          cx.listener(|this, _, window, cx| this.new_terminal_tab(window, cx)),
           cx,
         ));
     } else {
@@ -1863,6 +1939,7 @@ impl SessionPage {
         .path()
         .map(|path| path.to_string_lossy().replace(['/', '\\', ':'], "_"))
         .or_else(|| tab.conversation_id().map(ToOwned::to_owned))
+        .or_else(|| tab.terminal_id().map(|id| id.to_string()))
         .unwrap_or_default()
     )
   }
@@ -2203,6 +2280,101 @@ impl SessionPage {
       .into_any_element()
   }
 
+  fn render_terminal_surface(&self, tab: CenterTab, cx: &mut Context<Self>) -> AnyElement {
+    let theme = cx.theme().clone();
+    let Some(terminal) = self.terminal_for_tab(&tab) else {
+      return v_flex()
+        .size_full()
+        .items_center()
+        .justify_center()
+        .child(
+          div()
+            .text_sm()
+            .text_color(theme.muted_foreground)
+            .child("Terminal closed"),
+        )
+        .into_any_element();
+    };
+
+    let body = || {
+      div()
+        .debug_selector(|| "session-center-terminal".to_string())
+        .size_full()
+        .min_w(px(0.0))
+        .min_h_0()
+        .bg(theme.sidebar)
+        .px_2()
+        .py_1()
+        .child(terminal.clone())
+    };
+
+    if self.center_layout.surface_count() <= 1 {
+      return body().into_any_element();
+    }
+
+    let close_button_id =
+      Self::center_surface_control_id("session-page-close-center-surface", &tab);
+    let page = cx.entity().clone();
+    v_flex()
+      .size_full()
+      .min_w(px(0.0))
+      .min_h_0()
+      .bg(theme.background)
+      .child(
+        h_flex()
+          .debug_selector(|| "session-center-terminal-header".to_string())
+          .h(px(DIFF_TOOLBAR_HEIGHT))
+          .min_h(px(DIFF_TOOLBAR_HEIGHT))
+          .max_h(px(DIFF_TOOLBAR_HEIGHT))
+          .items_center()
+          .justify_between()
+          .gap_2()
+          .border_b_1()
+          .border_color(theme.border)
+          .px_2()
+          .child(
+            h_flex()
+              .min_w(px(0.0))
+              .items_center()
+              .gap_2()
+              .child(
+                gpui_component::Icon::new(UiIconName::Terminal)
+                  .size_3()
+                  .text_color(theme.muted_foreground),
+              )
+              .child(
+                div()
+                  .min_w(px(0.0))
+                  .truncate()
+                  .text_xs()
+                  .font_weight(gpui::FontWeight::SEMIBOLD)
+                  .text_color(theme.foreground)
+                  .child(self.terminal_label(&tab)),
+              ),
+          )
+          .child(
+            h_flex()
+              .items_center()
+              .gap_1()
+              .child(self.render_center_surface_actions(tab.clone(), cx))
+              .child(
+                Button::new(close_button_id)
+                  .debug_selector(|| "session-page-close-center-surface".to_string())
+                  .icon(gpui_component::IconName::Close)
+                  .xsmall()
+                  .ghost()
+                  .on_click(move |_, window, cx| {
+                    page.update(cx, |page, cx| {
+                      page.close_center_surface(tab.clone(), window, cx);
+                    });
+                  }),
+              ),
+          ),
+      )
+      .child(div().flex_1().min_h_0().min_w(px(0.0)).child(body()))
+      .into_any_element()
+  }
+
   pub(super) fn render_dock_panel(&mut self, _cx: &mut Context<Self>) -> AnyElement {
     div()
       .size_full()
@@ -2276,10 +2448,7 @@ pub(crate) fn dock_rail_tab_has_news(
     // Work waiting to be sent, wherever it goes: the agent's drafts, or the
     // comments of an unsubmitted pull request review.
     DockPanelTab::Review => pending_review > 0 || pending_pull_request_comments > 0,
-    DockPanelTab::Files
-    | DockPanelTab::History
-    | DockPanelTab::PullRequest
-    | DockPanelTab::Terminal => false,
+    DockPanelTab::Files | DockPanelTab::History | DockPanelTab::PullRequest => false,
   }
 }
 
@@ -2432,7 +2601,7 @@ impl SessionPage {
       gpui_component::Icon,
       &'static str,
       DockPanelTab,
-    ); 6] = [
+    ); 5] = [
       (
         "dock-rail-changes",
         gpui_component::Icon::new(UiIconName::FileDiff),
@@ -2462,12 +2631,6 @@ impl SessionPage {
         gpui_component::Icon::new(UiIconName::GitPullRequest),
         "Pull request",
         DockPanelTab::PullRequest,
-      ),
-      (
-        "dock-rail-terminal",
-        gpui_component::Icon::new(UiIconName::SquareTerminal),
-        "Terminal",
-        DockPanelTab::Terminal,
       ),
     ];
     let mut rail = v_flex().items_center().gap_1().pt_2().w_full().child(
@@ -2567,7 +2730,6 @@ impl Render for SessionPage {
       .on_action(cx.listener(Self::push_changes_action))
       .on_action(cx.listener(Self::force_push_changes_action))
       .on_action(cx.listener(Self::show_branch_switcher_action))
-      .on_action(cx.listener(Self::toggle_terminal_action))
       .on_action(cx.listener(Self::open_history_action))
       .on_action(cx.listener(Self::open_changes_action))
       .on_action(cx.listener(Self::open_files_action))
@@ -4152,22 +4314,6 @@ mod tests {
     });
 
     page.update_in(cx, |page, window, cx| {
-      page.toggle_terminal_action(&crate::ToggleTerminalSidebar, window, cx)
-    });
-    cx.run_until_parked();
-    page.read_with(cx, |page, cx| {
-      let panel = page.dock_panel.read(cx);
-      assert_eq!(
-        panel.active_tab(),
-        crate::dock_panel::DockPanelTab::Terminal
-      );
-      assert!(
-        panel.has_terminal(),
-        "opening the tab starts the shell, as clicking it does"
-      );
-    });
-
-    page.update_in(cx, |page, window, cx| {
       page.open_changes_action(&crate::OpenGitChangesSidebar, window, cx)
     });
     cx.run_until_parked();
@@ -4409,6 +4555,159 @@ mod tests {
     assert_eq!(center_tabs.size.height, dock_header.size.height);
     assert_eq!(center_tab_bar.origin.y, center_tabs.origin.y);
     assert_eq!(center_tab_bar.size.height, center_tabs.size.height);
+  }
+
+  #[gpui::test]
+  async fn new_terminal_opens_distinct_center_tabs(cx: &mut TestAppContext) {
+    cx.update(gpui_component::init);
+    let repo = TempRepo::init("session-page-center-terminals");
+    commit_text_file(&repo.path, Path::new("README.md"), "v1\n", "initial");
+
+    let (page, cx) = add_session_page_window(repo.path.clone(), cx);
+    cx.run_until_parked();
+
+    page.update_in(cx, |page, window, cx| {
+      page.new_terminal_tab(window, cx);
+      page.new_terminal_tab(window, cx);
+    });
+    cx.run_until_parked();
+
+    page.read_with(cx, |page, cx| {
+      assert_eq!(page.center, CenterView::Terminal);
+      assert_eq!(page.terminal_views.len(), 2);
+      assert_eq!(
+        page.center_tabs,
+        vec![
+          CenterTab::chat(),
+          CenterTab::terminal(1),
+          CenterTab::terminal(2)
+        ]
+      );
+      assert_eq!(
+        page
+          .terminal_views
+          .get(&1)
+          .expect("first terminal")
+          .view
+          .read(cx)
+          .working_directory(),
+        Some(repo.path.as_path())
+      );
+      assert_eq!(
+        page
+          .terminal_views
+          .get(&2)
+          .expect("second terminal")
+          .view
+          .read(cx)
+          .working_directory(),
+        Some(repo.path.as_path())
+      );
+    });
+    page.update_in(cx, |page, window, cx| {
+      let terminal = page
+        .terminal_for_tab(&CenterTab::terminal(2))
+        .expect("terminal");
+      assert!(terminal.read(cx).focus_handle(cx).is_focused(window));
+    });
+    let terminal_bounds = cx
+      .debug_bounds("session-center-terminal")
+      .expect("terminal bounds");
+    assert!(
+      terminal_bounds.size.width > gpui::px(0.0) && terminal_bounds.size.height > gpui::px(0.0),
+      "the terminal should fill the center pane"
+    );
+  }
+
+  #[gpui::test]
+  async fn split_terminal_header_matches_pane_header_height(cx: &mut TestAppContext) {
+    cx.update(gpui_component::init);
+    let repo = TempRepo::init("session-page-terminal-header-height");
+    commit_text_file(&repo.path, Path::new("README.md"), "v1\n", "initial");
+
+    let (page, cx) = add_session_page_window(repo.path.clone(), cx);
+    cx.run_until_parked();
+    page.update_in(cx, |page, window, cx| page.new_terminal_tab(window, cx));
+    cx.run_until_parked();
+
+    page.update(cx, |page, cx| {
+      let CenterNode::Pane(pane) = page.center_layout.root() else {
+        panic!("layout should start as a single pane");
+      };
+      assert!(page.center_layout.split_pane(
+        pane.id(),
+        CenterSurface::from_tab(CenterTab::chat()),
+        CenterSplitDirection::Left,
+      ));
+      page.remember_center_layout_tab(CenterTab::terminal(1));
+      cx.notify();
+    });
+    cx.run_until_parked();
+
+    let header = cx
+      .debug_bounds("session-center-terminal-header")
+      .expect("terminal header");
+    assert_eq!(header.size.height, px(DIFF_TOOLBAR_HEIGHT));
+  }
+
+  #[gpui::test]
+  async fn closing_a_terminal_tab_drops_its_shell(cx: &mut TestAppContext) {
+    cx.update(gpui_component::init);
+    let repo = TempRepo::init("session-page-close-terminal");
+    commit_text_file(&repo.path, Path::new("README.md"), "v1\n", "initial");
+
+    let (page, cx) = add_session_page_window(repo.path.clone(), cx);
+    cx.run_until_parked();
+
+    page.update_in(cx, |page, window, cx| page.new_terminal_tab(window, cx));
+    cx.run_until_parked();
+    page.update_in(cx, |page, window, cx| {
+      page.close_center_tab(CenterTab::terminal(1), window, cx)
+    });
+    cx.run_until_parked();
+
+    page.read_with(cx, |page, _| {
+      assert!(page.terminal_views.is_empty());
+      assert!(!page.center_tabs.contains(&CenterTab::terminal(1)));
+    });
+  }
+
+  #[gpui::test]
+  async fn forgetting_a_project_drops_its_terminal_tabs(cx: &mut TestAppContext) {
+    cx.update(gpui_component::init);
+    let repo = TempRepo::init("session-page-forget-terminals");
+    commit_text_file(&repo.path, Path::new("README.md"), "v1\n", "initial");
+
+    let (page, cx) = add_session_page_window(repo.path.clone(), cx);
+    cx.run_until_parked();
+    page.update_in(cx, |page, window, cx| page.new_terminal_tab(window, cx));
+    cx.run_until_parked();
+
+    page.update_in(cx, |page, window, cx| {
+      page
+        .forget_project(repo.path.clone(), window, cx)
+        .expect("forget project");
+    });
+    cx.run_until_parked();
+
+    page.read_with(cx, |page, _| {
+      assert!(page.terminal_views.is_empty());
+      assert!(!page.center_tabs.contains(&CenterTab::terminal(1)));
+    });
+  }
+
+  #[gpui::test]
+  async fn center_tab_bar_has_a_new_menu_for_agents_and_terminals(cx: &mut TestAppContext) {
+    cx.update(gpui_component::init);
+    let repo = TempRepo::init("session-page-new-menu");
+    commit_text_file(&repo.path, Path::new("README.md"), "v1\n", "initial");
+
+    let (_page, cx) = add_session_page_window(repo.path.clone(), cx);
+    cx.run_until_parked();
+
+    assert!(cx.debug_bounds("session-center-new-chat").is_some());
+    assert!(cx.debug_bounds("session-center-new-menu").is_some());
+    assert!(cx.debug_bounds("dock-rail-terminal").is_none());
   }
 
   #[gpui::test]
@@ -7246,7 +7545,6 @@ mod tests {
       DockPanelTab::Files,
       DockPanelTab::History,
       DockPanelTab::PullRequest,
-      DockPanelTab::Terminal,
     ] {
       assert!(!dock_rail_tab_has_news(tab, 5, 5, 5));
     }

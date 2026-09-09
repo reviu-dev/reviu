@@ -29,6 +29,7 @@ use gpui_component::{
   tab::{Tab, TabBar},
   v_flex,
 };
+use terminal::TerminalView;
 
 use crate::agent_chat_state::{
   AGENT_CHAT_STATE_MAX_AGE, AGENT_CHAT_STATE_MAX_CONVERSATIONS_PER_PROJECT, agent_chat_state_dir,
@@ -144,6 +145,7 @@ enum CenterView {
   Diff,
   /// The todo of an interactive rebase, waiting to be applied.
   InteractiveRebase,
+  Terminal,
 }
 
 #[derive(Clone)]
@@ -244,6 +246,11 @@ struct CheckoutOverride {
   path: PathBuf,
 }
 
+struct TerminalPane {
+  project_root: PathBuf,
+  view: Entity<TerminalView>,
+}
+
 struct FileSearchCache {
   checkout_root: PathBuf,
   paths: Arc<Vec<PathBuf>>,
@@ -297,6 +304,8 @@ pub struct SessionPage {
   active_center_tab: Option<CenterTab>,
   editor_tab: Option<CenterTab>,
   editor_states: HashMap<CenterTab, CenterEditorState>,
+  terminal_views: HashMap<u64, TerminalPane>,
+  next_terminal_id: u64,
   interactive_rebase_todo_view: Option<Entity<InteractiveRebaseTodoView>>,
   _interactive_rebase_task: Option<Task<()>>,
   pub(crate) _merge_base_task: Option<Task<()>>,
@@ -357,6 +366,7 @@ mod pull_request_link;
 mod render;
 mod repo;
 mod review_github;
+mod terminal_viewer;
 #[cfg(test)]
 pub(crate) mod test_support;
 
@@ -630,6 +640,8 @@ impl SessionPage {
       active_center_tab: Some(CenterTab::chat()),
       editor_tab: None,
       editor_states: HashMap::new(),
+      terminal_views: HashMap::new(),
+      next_terminal_id: 1,
       interactive_rebase_todo_view: None,
       _interactive_rebase_task: None,
       _merge_base_task: None,
@@ -1305,15 +1317,6 @@ impl SessionPage {
     );
   }
 
-  fn toggle_terminal_action(
-    &mut self,
-    _: &crate::ToggleTerminalSidebar,
-    window: &mut Window,
-    cx: &mut Context<Self>,
-  ) {
-    self.open_dock_tab(DockPanelTab::Terminal, window, cx);
-  }
-
   fn open_history_action(
     &mut self,
     _: &crate::OpenGitHistorySidebar,
@@ -1391,11 +1394,6 @@ impl SessionPage {
     window: &mut Window,
     cx: &mut Context<Self>,
   ) {
-    // A shell owns its own escape.
-    if self.dock_panel.read(cx).active_tab() == DockPanelTab::Terminal {
-      cx.propagate();
-      return;
-    }
     let handle = self.focus_handle(cx);
     window.focus(&handle, cx);
     cx.stop_propagation();
@@ -1413,6 +1411,17 @@ impl SessionPage {
         .is_none_or(|path| path == checkout),
       CenterTabKind::File | CenterTabKind::Diff => true,
       CenterTabKind::InteractiveRebase => false,
+      CenterTabKind::Terminal => tab
+        .terminal_id()
+        .and_then(|id| self.terminal_views.get(&id))
+        .and_then(|terminal| {
+          terminal
+            .view
+            .read(cx)
+            .working_directory()
+            .map(Path::to_path_buf)
+        })
+        .is_some_and(|path| path == checkout),
     }
   }
 
@@ -1623,6 +1632,12 @@ impl SessionPage {
           .cloned()
           .unwrap_or_else(CenterTab::chat),
         CenterView::InteractiveRebase => CenterTab::interactive_rebase(),
+        CenterView::Terminal => tabs
+          .iter()
+          .rev()
+          .find(|tab| tab.kind == CenterTabKind::Terminal)
+          .cloned()
+          .unwrap_or_else(CenterTab::chat),
       })
   }
 
@@ -1741,12 +1756,14 @@ impl SessionPage {
         CenterTabKind::Chat => CenterView::Conversation,
         CenterTabKind::File | CenterTabKind::Diff => CenterView::Diff,
         CenterTabKind::InteractiveRebase => CenterView::InteractiveRebase,
+        CenterTabKind::Terminal => CenterView::Terminal,
       };
       self.sync_agent_chat_close_control(cx);
       match self.center {
         CenterView::Conversation => self.focus_agent_input_on_next_frame(window, cx),
         CenterView::Diff if intent.takes_focus() => self.focus_editor_on_next_frame(window, cx),
         CenterView::Diff | CenterView::InteractiveRebase => {}
+        CenterView::Terminal => self.focus_terminal_tab(&focused_tab, window, cx),
       }
       cx.notify();
       return;
@@ -1784,6 +1801,12 @@ impl SessionPage {
         self.center = CenterView::InteractiveRebase;
         self.set_active_center_tab(CenterTab::interactive_rebase());
         self.center_tabs = CenterTab::with_chat_tab(self.center_tabs.clone());
+        cx.notify();
+      }
+      CenterTabKind::Terminal => {
+        self.center = CenterView::Terminal;
+        self.set_active_center_tab(tab.clone());
+        self.focus_terminal_tab(&tab, window, cx);
         cx.notify();
       }
     }
@@ -2324,6 +2347,14 @@ fn load_agent_review(path: Option<&Path>) -> AgentReviewComments {
 
 impl Focusable for SessionPage {
   fn focus_handle(&self, cx: &App) -> FocusHandle {
+    if self.center == CenterView::Terminal
+      && let Some(tab) = self.active_center_tab.as_ref()
+      && let Some(terminal) = tab
+        .terminal_id()
+        .and_then(|id| self.terminal_views.get(&id))
+    {
+      return terminal.view.read(cx).focus_handle(cx);
+    }
     if let Some(editor) = self.diff_editor() {
       return editor.read(cx).focus_handle(cx);
     }

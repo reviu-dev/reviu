@@ -257,6 +257,24 @@ impl SessionPage {
     self.build_chat_panel_at(project_root, cwd, store, resume, window, cx)
   }
 
+  fn build_chat_panel_with_agent(
+    &mut self,
+    project_root: PathBuf,
+    store: Option<Entity<ConversationStore>>,
+    resume: Option<agent_chat_panel::ConversationMeta>,
+    agent_id: Option<agent_registry::AgentId>,
+    window: &mut Window,
+    cx: &mut Context<Self>,
+  ) -> Entity<AgentChatPanel> {
+    let cwd = self.session_cwd_for(
+      &project_root,
+      store.as_ref(),
+      resume.as_ref().map(|meta| meta.id.as_str()),
+      cx,
+    );
+    self.build_chat_panel_at_with_agent(project_root, cwd, store, resume, agent_id, window, cx)
+  }
+
   #[allow(clippy::too_many_arguments)]
   fn build_chat_panel_at(
     &mut self,
@@ -267,9 +285,24 @@ impl SessionPage {
     window: &mut Window,
     cx: &mut Context<Self>,
   ) -> Entity<AgentChatPanel> {
+    self.build_chat_panel_at_with_agent(project_root, cwd, store, resume, None, window, cx)
+  }
+
+  #[allow(clippy::too_many_arguments)]
+  fn build_chat_panel_at_with_agent(
+    &mut self,
+    project_root: PathBuf,
+    cwd: PathBuf,
+    store: Option<Entity<ConversationStore>>,
+    resume: Option<agent_chat_panel::ConversationMeta>,
+    agent_id: Option<agent_registry::AgentId>,
+    window: &mut Window,
+    cx: &mut Context<Self>,
+  ) -> Entity<AgentChatPanel> {
     let backend = resume
       .as_ref()
       .and_then(|meta| agent_chat_panel::resolve_agent(&agent_registry::global(), &meta.agent_id))
+      .or(agent_id)
       .unwrap_or_else(AgentSettings::load);
     let turn_gate = self.turn_gate.clone();
     let view = cx.new(|cx| {
@@ -1122,7 +1155,7 @@ impl SessionPage {
   }
 
   /// Creation lands where you are: the shown session's project, else the selected project.
-  fn creation_root(&self, cx: &App) -> Option<PathBuf> {
+  pub(super) fn creation_root(&self, cx: &App) -> Option<PathBuf> {
     self.session_repo(cx).or_else(|| self.project_root(cx))
   }
 
@@ -1135,6 +1168,22 @@ impl SessionPage {
       return;
     };
     self.new_session_in(project_root, window, cx);
+  }
+
+  pub(super) fn new_session_with_agent(
+    &mut self,
+    agent_id: agent_registry::AgentId,
+    window: &mut Window,
+    cx: &mut Context<Self>,
+  ) {
+    let Some(project_root) = self.creation_root(cx) else {
+      window.push_notification(
+        Notification::warning("Open a project before starting a chat."),
+        cx,
+      );
+      return;
+    };
+    self.new_session_in_with_agent(project_root, agent_id, window, cx);
   }
 
   pub(super) fn new_agent_session_action(
@@ -1186,9 +1235,40 @@ impl SessionPage {
     self.new_session_in_without_unsaved_prompt(project_root, window, cx);
   }
 
+  pub(super) fn new_session_in_with_agent(
+    &mut self,
+    project_root: PathBuf,
+    agent_id: agent_registry::AgentId,
+    window: &mut Window,
+    cx: &mut Context<Self>,
+  ) {
+    if self.editor_is_dirty(cx) && self.target_checkout_differs_from_editor(&project_root, cx) {
+      self.open_unsaved_editor_dialog(
+        UnsavedEditorAction::NewSessionWithAgentIn {
+          project_root,
+          agent_id,
+        },
+        window,
+        cx,
+      );
+      return;
+    }
+    self.new_session_in_with_agent_without_unsaved_prompt(project_root, Some(agent_id), window, cx);
+  }
+
   pub(super) fn new_session_in_without_unsaved_prompt(
     &mut self,
     project_root: PathBuf,
+    window: &mut Window,
+    cx: &mut Context<Self>,
+  ) {
+    self.new_session_in_with_agent_without_unsaved_prompt(project_root, None, window, cx);
+  }
+
+  pub(super) fn new_session_in_with_agent_without_unsaved_prompt(
+    &mut self,
+    project_root: PathBuf,
+    agent_id: Option<agent_registry::AgentId>,
     window: &mut Window,
     cx: &mut Context<Self>,
   ) {
@@ -1208,22 +1288,27 @@ impl SessionPage {
     {
       self.chat_store = store.clone();
     }
-    if let Some(panel) = self.agent_chat_view.as_ref() {
+    if let Some(panel) = self.agent_chat_view.clone() {
       // The shown conversation is still blank: it already is the new session.
       // Not while hydrating (its transcript may be about to land) and not when
       // its connection died (a fresh panel is the revival).
-      let panel = panel.read(cx);
-      if !panel.has_persistable_content()
-        && panel.loading_conversation_id().is_none()
-        && !panel.needs_reconnect()
-        && panel.project_root() == project_root.as_path()
-      {
+      let reusable = {
+        let panel = panel.read(cx);
+        !panel.has_persistable_content()
+          && panel.loading_conversation_id().is_none()
+          && !panel.needs_reconnect()
+          && panel.project_root() == project_root.as_path()
+      };
+      if reusable {
+        if let Some(agent_id) = agent_id {
+          panel.update(cx, |panel, cx| panel.switch_backend(agent_id, cx));
+        }
         self.reveal_active_session_chat(window, cx);
         return;
       }
     }
     self.park_active_chat_panel(cx);
-    let view = self.build_chat_panel(project_root, store, None, window, cx);
+    let view = self.build_chat_panel_with_agent(project_root, store, None, agent_id, window, cx);
     view.update(cx, |panel, _| panel.set_active_conversation(true));
     self.agent_chat_view = Some(view);
     self.remember_active_chat_tab(cx);
@@ -2574,6 +2659,28 @@ mod tests {
           .as_deref(),
         Some("pi-acp")
       );
+    });
+  }
+
+  #[gpui::test]
+  async fn new_session_with_agent_uses_the_selected_agent(cx: &mut TestAppContext) {
+    let (_repo, page, cx) = page_with_agent_panel("session-page-new-session-agent", cx).await;
+    let current_agent =
+      active_panel(&page, cx).read_with(cx, |panel, _| panel.backend_kind().clone());
+    let selected_agent = agent_registry::global()
+      .runnable()
+      .into_iter()
+      .map(|agent| agent.id.clone())
+      .find(|agent_id| agent_id != &current_agent)
+      .unwrap_or_else(|| current_agent.clone());
+
+    page.update_in(cx, |page, window, cx| {
+      page.new_session_with_agent(selected_agent.clone(), window, cx)
+    });
+    cx.run_until_parked();
+
+    active_panel(&page, cx).read_with(cx, |panel, _| {
+      assert_eq!(panel.backend_kind(), &selected_agent);
     });
   }
 

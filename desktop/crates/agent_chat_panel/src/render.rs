@@ -526,7 +526,7 @@ pub(crate) fn tool_kind_icon(kind: &ToolKind) -> UiIconName {
     ToolKind::Delete => UiIconName::Trash,
     ToolKind::Move => UiIconName::RefreshCw,
     ToolKind::Search => UiIconName::Search,
-    ToolKind::Execute => UiIconName::SquareTerminal,
+    ToolKind::Execute => UiIconName::Terminal,
     ToolKind::Think => UiIconName::Sparkles,
     ToolKind::Fetch => UiIconName::Globe,
     _ => UiIconName::Puzzle,

@@ -1,4 +1,4 @@
-//! The right dock of the shell: changes, files, history, pull request, terminal.
+//! The right dock of the shell: changes, files, history, pull request.
 
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -26,7 +26,6 @@ use gpui_component::{
   tree::{TreeEvent, TreeItem, TreeState, tree},
   v_flex,
 };
-use terminal::TerminalView;
 
 use crate::changes_list::{ChangesList, ChangesListEvent, status_color};
 use crate::file_tree::{
@@ -49,7 +48,6 @@ use crate::repo_state::{PaletteCommand, RepoState, push_flags, should_publish_br
 use crate::review_list::{ReviewList, ReviewListEvent, ReviewSection};
 use crate::review_submit_dialog::open_submit_review_dialog;
 
-const DOCK_PANEL_TERMINAL_DEBUG_SELECTOR: &str = "dock-panel-terminal";
 pub(crate) const DOCK_PANEL_HISTORY_DEBUG_SELECTOR: &str = "dock-panel-history";
 pub(crate) const DOCK_PANEL_PR_CHECKS_DEBUG_SELECTOR: &str = "dock-panel-pr-checks";
 pub(crate) const DOCK_PANEL_PR_MERGE_DEBUG_SELECTOR: &str = "dock-panel-pr-merge";
@@ -700,7 +698,6 @@ pub enum DockPanelTab {
   Files,
   History,
   PullRequest,
-  Terminal,
 }
 
 /// Exhaustive on the rollup state, so a new one has to pick its own colour
@@ -920,7 +917,6 @@ fn driver_dock_tab(tab: DockPanelTab) -> &'static str {
     DockPanelTab::Files => "files",
     DockPanelTab::History => "history",
     DockPanelTab::PullRequest => "pull_request",
-    DockPanelTab::Terminal => "terminal",
   }
 }
 
@@ -1027,9 +1023,6 @@ pub struct DockPanel {
   changes_list: Entity<ChangesList>,
   pub(crate) review_list: Entity<ReviewList>,
   pub(crate) history_list: Entity<HistoryList>,
-  /// Spawned on the first visit to the tab: a shell per session is too much
-  /// for someone who never opens it.
-  terminal_view: Option<Entity<TerminalView>>,
   branch_pr: BranchPrState,
   /// The shas and the file list of the pull request on the current branch. The
   /// identity arrives first, this follows.
@@ -1038,9 +1031,6 @@ pub struct DockPanel {
   pr_files_list: Entity<ListState<PrFilesDelegate>>,
   /// The tab was asked for before its files were there: focus them once they are.
   focus_pr_files_when_loaded: bool,
-  /// The shell is mounted by the render that follows: it cannot take the focus
-  /// before it exists.
-  focus_terminal_when_rendered: bool,
   pr_files_loading: bool,
   pr_files_error: Option<SharedString>,
   /// When GitHub was last read for this branch's pull request.
@@ -1316,13 +1306,11 @@ impl DockPanel {
       active_tab: DockPanelTab::Changes,
       changes_list,
       history_list,
-      terminal_view: None,
       branch_pr: BranchPrState::Loading,
       pr_range: None,
       pr_files: Vec::new(),
       pr_files_list,
       focus_pr_files_when_loaded: false,
-      focus_terminal_when_rendered: false,
       pr_files_loading: false,
       pr_files_error: None,
       pr_fetched_at: None,
@@ -3391,11 +3379,6 @@ impl DockPanel {
     self.history_list.update(cx, |list, cx| {
       list.set_repo_root(repo_root.clone(), cx);
     });
-    if let Some(terminal) = self.terminal_view.clone() {
-      terminal.update(cx, |terminal, cx| {
-        terminal.set_working_directory(project_root, cx);
-      });
-    }
   }
 
   #[cfg(test)]
@@ -3437,40 +3420,6 @@ impl DockPanel {
       .px_1()
       .py_1()
       .child(self.history_list.clone())
-      .into_any_element()
-  }
-
-  fn ensure_terminal(&mut self, cx: &mut Context<Self>) {
-    if self.terminal_view.is_some() {
-      return;
-    }
-    let working_directory = self.project_root.clone();
-    self.terminal_view = Some(cx.new(|cx| TerminalView::new(working_directory, cx)));
-  }
-
-  /// Shows the shell, never starts it: spawning a process while painting is the
-  /// mistake this crate already made with the agent panel.
-  fn render_terminal_tab(&mut self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
-    let Some(terminal) = self.terminal_view.clone() else {
-      return div().into_any_element();
-    };
-
-    // Rendering is the first moment the shell exists to take the keyboard the
-    // tab was opened for.
-    if self.focus_terminal_when_rendered {
-      self.focus_terminal_when_rendered = false;
-      window.focus(&terminal.read(cx).focus_handle(cx), cx);
-    }
-
-    div()
-      .id("dock-panel-terminal")
-      .debug_selector(|| DOCK_PANEL_TERMINAL_DEBUG_SELECTOR.to_string())
-      .flex_1()
-      .min_h_0()
-      .min_w(px(0.0))
-      .px_2()
-      .py_1()
-      .child(terminal)
       .into_any_element()
   }
 
@@ -3758,7 +3707,6 @@ impl DockPanel {
         DockPanelTab::PullRequest => {
           self.refresh_branch_pull_request(PullRequestRefresh::IfStale, cx)
         }
-        DockPanelTab::Terminal => self.ensure_terminal(cx),
         DockPanelTab::History => self.refresh_history(cx),
         DockPanelTab::Changes | DockPanelTab::Files | DockPanelTab::Review => {}
       }
@@ -3806,11 +3754,6 @@ impl DockPanel {
           list.update(cx, |list, cx| list.focus(window, cx));
         }
       }
-      DockPanelTab::Terminal => {
-        self.ensure_terminal(cx);
-        self.focus_terminal_when_rendered = true;
-        window.focus(&self.focus_handle, cx);
-      }
     }
     cx.notify();
   }
@@ -3843,12 +3786,6 @@ impl DockPanel {
         .read(cx)
         .focus_handle(cx)
         .contains_focused(window, cx),
-      DockPanelTab::Terminal => self.terminal_view.as_ref().is_some_and(|terminal| {
-        terminal
-          .read(cx)
-          .focus_handle(cx)
-          .contains_focused(window, cx)
-      }),
     }
   }
 
@@ -3860,11 +3797,6 @@ impl DockPanel {
     }
     self.active_tab = target;
     cx.notify();
-  }
-
-  #[cfg(test)]
-  pub(crate) fn has_terminal(&self) -> bool {
-    self.terminal_view.is_some()
   }
 
   pub(crate) fn active_tab(&self) -> DockPanelTab {
@@ -4811,26 +4743,22 @@ impl Render for DockPanel {
             DockPanelTab::Files => "Files",
             DockPanelTab::History => "History",
             DockPanelTab::PullRequest => "Pull request",
-            DockPanelTab::Terminal => "Terminal",
           }),
       )
-      .child(h_flex().min_w(px(0.0)).items_center().gap_1().when(
-        self.active_tab != DockPanelTab::Terminal,
-        |this| {
-          this.child(
-            Button::new("dock-panel-refresh")
-              .debug_selector(|| DOCK_PANEL_REFRESH_DEBUG_SELECTOR.to_string())
-              .icon(UiIconName::RefreshCw)
-              .ghost()
-              .compact()
-              .small()
-              .tooltip("Refresh")
-              .loading(self.pr_refresh_pending > 0)
-              .loading_icon(gpui_component::Icon::new(UiIconName::RefreshCw))
-              .on_click(cx.listener(|this, _, _, cx| this.refresh_requested(cx))),
-          )
-        },
-      ));
+      .child(
+        h_flex().min_w(px(0.0)).items_center().gap_1().child(
+          Button::new("dock-panel-refresh")
+            .debug_selector(|| DOCK_PANEL_REFRESH_DEBUG_SELECTOR.to_string())
+            .icon(UiIconName::RefreshCw)
+            .ghost()
+            .compact()
+            .small()
+            .tooltip("Refresh")
+            .loading(self.pr_refresh_pending > 0)
+            .loading_icon(gpui_component::Icon::new(UiIconName::RefreshCw))
+            .on_click(cx.listener(|this, _, _, cx| this.refresh_requested(cx))),
+        ),
+      );
 
     let body = match self.active_tab {
       DockPanelTab::Files => self.render_files_tab(_window, cx),
@@ -4888,7 +4816,6 @@ impl Render for DockPanel {
       DockPanelTab::PullRequest => self.render_pr_tab(_window, cx),
       DockPanelTab::Review => self.render_review_tab(),
       DockPanelTab::History => self.render_history_tab(),
-      DockPanelTab::Terminal => self.render_terminal_tab(_window, cx),
     };
 
     let mut panel = v_flex()
@@ -5894,7 +5821,7 @@ mod tests {
   }
 
   #[gpui::test]
-  async fn non_git_project_files_and_terminal_use_the_project_root(cx: &mut TestAppContext) {
+  async fn non_git_project_files_use_the_project_root(cx: &mut TestAppContext) {
     cx.update(gpui_component::init);
     let project = crate::test_support::temp_path("dock-files-non-git");
     std::fs::create_dir_all(&project).expect("create project");
@@ -5941,15 +5868,6 @@ mod tests {
         DockPanelOpenFileMode::File,
       )]
     );
-
-    panel.update(cx, |panel, cx| panel.ensure_terminal(cx));
-    panel.read_with(cx, |panel, cx| {
-      let terminal = panel.terminal_view.as_ref().expect("terminal view");
-      assert_eq!(
-        terminal.read(cx).working_directory(),
-        Some(project.as_path())
-      );
-    });
 
     let _ = std::fs::remove_dir_all(&project);
   }
@@ -7272,57 +7190,6 @@ mod tests {
     );
   }
 
-  #[gpui::test]
-  async fn tab_stays_in_the_terminal(cx: &mut TestAppContext) {
-    cx.update(|cx| {
-      gpui_component::init(cx);
-      // The terminal's claim on tab lives with the app bindings.
-      crate::shortcuts::install_workspace_shortcuts(cx);
-    });
-    let repo = TempRepo::init("dock-terminal-tab");
-    commit_text_file(&repo.path, Path::new("a.txt"), "v1\n", "first");
-
-    let (panel, cx) = add_dock_panel_window(Some(repo.path.clone()), cx);
-    await_refresh(&panel, cx).await;
-    panel.update_in(cx, |panel, window, cx| {
-      panel.open_tab(DockPanelTab::Terminal, window, cx)
-    });
-    cx.run_until_parked();
-
-    cx.simulate_keystrokes("tab");
-    cx.run_until_parked();
-    panel.update_in(cx, |panel, window, cx| {
-      let terminal = panel.terminal_view.clone().expect("terminal");
-      assert!(
-        terminal.read(cx).focus_handle(cx).is_focused(window),
-        "tab belongs to the shell, it must not walk the focus out"
-      );
-    });
-  }
-
-  #[gpui::test]
-  async fn opening_the_terminal_hands_it_the_keyboard(cx: &mut TestAppContext) {
-    cx.update(gpui_component::init);
-    let repo = TempRepo::init("dock-terminal-focus");
-    commit_text_file(&repo.path, Path::new("a.txt"), "v1\n", "first");
-
-    let (panel, cx) = add_dock_panel_window(Some(repo.path.clone()), cx);
-    await_refresh(&panel, cx).await;
-
-    panel.update_in(cx, |panel, window, cx| {
-      panel.open_tab(DockPanelTab::Terminal, window, cx)
-    });
-    cx.run_until_parked();
-
-    panel.update_in(cx, |panel, window, cx| {
-      let terminal = panel.terminal_view.clone().expect("terminal");
-      assert!(
-        terminal.read(cx).focus_handle(cx).is_focused(window),
-        "the shell takes the keyboard, without a click"
-      );
-    });
-  }
-
   #[test]
   fn branch_pr_state_requires_remote_and_branch() {
     let no_remote = branch_pr_state_for_lookup(None, Some("main".to_string()), |_| {
@@ -8058,68 +7925,6 @@ mod tests {
   }
 
   #[gpui::test]
-  async fn the_terminal_starts_only_when_its_tab_is_opened(cx: &mut TestAppContext) {
-    cx.update(gpui_component::init);
-    let repo = TempRepo::init("dock-panel-terminal-lazy");
-    commit_text_file(&repo.path, Path::new("README.md"), "v1\n", "initial");
-
-    let (panel, cx) = add_dock_panel_window(Some(repo.path.clone()), cx);
-    await_refresh(&panel, cx).await;
-
-    panel.read_with(cx, |panel, _| {
-      // No shell for someone who never opens the tab.
-      assert!(panel.terminal_view.is_none());
-      assert!(panel.active_tab != DockPanelTab::Terminal);
-    });
-
-    panel.update(cx, |panel, cx| {
-      panel.active_tab = DockPanelTab::Terminal;
-      panel.ensure_terminal(cx);
-      cx.notify();
-    });
-    cx.run_until_parked();
-
-    panel.read_with(cx, |panel, cx| {
-      let terminal = panel.terminal_view.as_ref().expect("terminal view");
-      assert_eq!(
-        terminal.read(cx).working_directory(),
-        Some(repo.path.as_path())
-      );
-    });
-    assert!(
-      cx.debug_bounds(DOCK_PANEL_TERMINAL_DEBUG_SELECTOR)
-        .is_some(),
-      "the terminal tab should be painted"
-    );
-  }
-
-  #[gpui::test]
-  async fn switching_repository_moves_a_running_terminal(cx: &mut TestAppContext) {
-    cx.update(gpui_component::init);
-    let repo = TempRepo::init("dock-panel-terminal-switch");
-    commit_text_file(&repo.path, Path::new("README.md"), "v1\n", "initial");
-    let other = TempRepo::init("dock-panel-terminal-switch-other");
-    commit_text_file(&other.path, Path::new("README.md"), "other\n", "initial");
-
-    let (panel, cx) = add_dock_panel_window(Some(repo.path.clone()), cx);
-    await_refresh(&panel, cx).await;
-
-    panel.update(cx, |panel, cx| panel.ensure_terminal(cx));
-    panel.update(cx, |panel, cx| {
-      panel.set_repo_root(Some(other.path.clone()), cx)
-    });
-    cx.run_until_parked();
-
-    panel.read_with(cx, |panel, cx| {
-      let terminal = panel.terminal_view.as_ref().expect("terminal view");
-      assert_eq!(
-        terminal.read(cx).working_directory(),
-        Some(other.path.as_path())
-      );
-    });
-  }
-
-  #[gpui::test]
   async fn the_history_tab_lists_the_commits_and_opens_one_of_their_files(cx: &mut TestAppContext) {
     cx.update(gpui_component::init);
     let repo = TempRepo::init("dock-panel-history-tab");
@@ -8183,64 +7988,6 @@ mod tests {
       opened.borrow().as_slice(),
       &[(head, PathBuf::from("README.md"))]
     );
-  }
-
-  #[gpui::test]
-  async fn clicking_the_terminal_tab_opens_a_shell(cx: &mut TestAppContext) {
-    cx.update(gpui_component::init);
-    let repo = TempRepo::init("dock-panel-terminal-click");
-    commit_text_file(&repo.path, Path::new("README.md"), "v1\n", "initial");
-
-    let (panel, cx) = add_dock_panel_window(Some(repo.path.clone()), cx);
-    await_refresh(&panel, cx).await;
-    panel.update(cx, |_, cx| cx.notify());
-    cx.run_until_parked();
-
-    assert!(
-      cx.debug_bounds(DOCK_PANEL_REFRESH_DEBUG_SELECTOR).is_some(),
-      "the refresh button belongs to the review tabs"
-    );
-
-    // The tabs live in the page's rail now; the panel exposes open_tab.
-    panel.update_in(cx, |panel, window, cx| {
-      panel.open_tab(DockPanelTab::Terminal, window, cx)
-    });
-    cx.run_until_parked();
-
-    panel.read_with(cx, |panel, _| {
-      assert_eq!(panel.active_tab, DockPanelTab::Terminal);
-      assert!(panel.terminal_view.is_some());
-    });
-    assert!(
-      cx.debug_bounds(DOCK_PANEL_TERMINAL_DEBUG_SELECTOR)
-        .is_some()
-    );
-    assert!(
-      cx.debug_bounds(DOCK_PANEL_REFRESH_DEBUG_SELECTOR).is_none(),
-      "nothing to refresh on the terminal tab"
-    );
-  }
-
-  #[gpui::test]
-  async fn reopening_the_terminal_tab_keeps_the_same_shell(cx: &mut TestAppContext) {
-    cx.update(gpui_component::init);
-    let repo = TempRepo::init("dock-panel-terminal-reuse");
-    commit_text_file(&repo.path, Path::new("README.md"), "v1\n", "initial");
-
-    let (panel, cx) = add_dock_panel_window(Some(repo.path.clone()), cx);
-    await_refresh(&panel, cx).await;
-
-    let first = panel.update(cx, |panel, cx| {
-      panel.ensure_terminal(cx);
-      panel.terminal_view.clone().expect("terminal view")
-    });
-    let second = panel.update(cx, |panel, cx| {
-      panel.ensure_terminal(cx);
-      panel.terminal_view.clone().expect("terminal view")
-    });
-
-    // A second shell would leak a process on every visit to the tab.
-    assert_eq!(first.entity_id(), second.entity_id());
   }
 
   #[gpui::test]

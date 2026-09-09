@@ -5,6 +5,7 @@ pub(super) enum CenterSurface {
   Chat(CenterTab),
   Editor(CenterTab),
   InteractiveRebase(CenterTab),
+  Terminal(CenterTab),
 }
 
 impl CenterSurface {
@@ -13,12 +14,15 @@ impl CenterSurface {
       CenterTabKind::Chat => Self::Chat(tab),
       CenterTabKind::File | CenterTabKind::Diff => Self::Editor(tab),
       CenterTabKind::InteractiveRebase => Self::InteractiveRebase(tab),
+      CenterTabKind::Terminal => Self::Terminal(tab),
     }
   }
 
   pub(super) fn tab(&self) -> &CenterTab {
     match self {
-      Self::Chat(tab) | Self::Editor(tab) | Self::InteractiveRebase(tab) => tab,
+      Self::Chat(tab) | Self::Editor(tab) | Self::InteractiveRebase(tab) | Self::Terminal(tab) => {
+        tab
+      }
     }
   }
 }

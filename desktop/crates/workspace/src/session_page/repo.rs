@@ -199,6 +199,7 @@ impl SessionPage {
     let forgetting_plain_project = is_recent_plain_project
       || (self.fallback_repo.is_none()
         && self.project_root.as_deref() == Some(project_root.as_path()));
+    self.clear_terminals_for_project(&project_root);
     if forgetting_plain_project {
       ConfigStore::forget_recent_project_root(&project_root);
       ConfigStore::forget_sidebar_project(&project_root);

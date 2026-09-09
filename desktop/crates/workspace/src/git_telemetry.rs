@@ -85,7 +85,6 @@ pub(crate) fn dock_tab_tag(tab: DockPanelTab) -> &'static str {
     DockPanelTab::Files => "files",
     DockPanelTab::History => "history",
     DockPanelTab::PullRequest => "pull_request",
-    DockPanelTab::Terminal => "terminal",
   }
 }
 
@@ -532,7 +531,6 @@ mod tests {
     assert_eq!(dock_tab_tag(DockPanelTab::Files), "files");
     assert_eq!(dock_tab_tag(DockPanelTab::History), "history");
     assert_eq!(dock_tab_tag(DockPanelTab::PullRequest), "pull_request");
-    assert_eq!(dock_tab_tag(DockPanelTab::Terminal), "terminal");
 
     assert_eq!(diff_view_tag(DiffViewMode::Inline, false), "inline");
     assert_eq!(diff_view_tag(DiffViewMode::Split, false), "split");

@@ -6,6 +6,7 @@ pub(super) enum CenterTabKind {
   File,
   Diff,
   InteractiveRebase,
+  Terminal,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
@@ -29,6 +30,7 @@ pub(super) struct CenterTab {
   pub(super) path: Option<PathBuf>,
   pub(super) conversation_id: Option<String>,
   pub(super) snapshot: Option<CenterTabSnapshot>,
+  pub(super) terminal_id: Option<u64>,
 }
 
 impl CenterTab {
@@ -49,6 +51,7 @@ impl CenterTab {
       path: None,
       conversation_id: None,
       snapshot: None,
+      terminal_id: None,
     }
   }
 
@@ -58,6 +61,7 @@ impl CenterTab {
       path: None,
       conversation_id: Some(conversation_id.into()),
       snapshot: None,
+      terminal_id: None,
     }
   }
 
@@ -67,6 +71,7 @@ impl CenterTab {
       path: Some(path),
       conversation_id: None,
       snapshot: None,
+      terminal_id: None,
     }
   }
 
@@ -76,6 +81,7 @@ impl CenterTab {
       path: Some(path),
       conversation_id: None,
       snapshot: None,
+      terminal_id: None,
     }
   }
 
@@ -85,6 +91,7 @@ impl CenterTab {
       path: Some(path),
       conversation_id: None,
       snapshot: Some(CenterTabSnapshot::AgentTool { old_text, new_text }),
+      terminal_id: None,
     }
   }
 
@@ -94,6 +101,7 @@ impl CenterTab {
       path: Some(path),
       conversation_id: None,
       snapshot: Some(CenterTabSnapshot::Commit { oid }),
+      terminal_id: None,
     }
   }
 
@@ -103,6 +111,7 @@ impl CenterTab {
       path: Some(path),
       conversation_id: None,
       snapshot: Some(CenterTabSnapshot::PullRequestRange { base, head }),
+      terminal_id: None,
     }
   }
 
@@ -112,6 +121,17 @@ impl CenterTab {
       path: None,
       conversation_id: None,
       snapshot: None,
+      terminal_id: None,
+    }
+  }
+
+  pub(super) fn terminal(id: u64) -> Self {
+    Self {
+      kind: CenterTabKind::Terminal,
+      path: None,
+      conversation_id: None,
+      snapshot: None,
+      terminal_id: Some(id),
     }
   }
 
@@ -127,10 +147,14 @@ impl CenterTab {
     self.snapshot.as_ref()
   }
 
+  pub(super) fn terminal_id(&self) -> Option<u64> {
+    self.terminal_id
+  }
+
   pub(super) fn is_closeable(&self) -> bool {
     match self.kind {
       CenterTabKind::Chat => self.conversation_id.is_some(),
-      CenterTabKind::File | CenterTabKind::Diff => true,
+      CenterTabKind::File | CenterTabKind::Diff | CenterTabKind::Terminal => true,
       CenterTabKind::InteractiveRebase => false,
     }
   }

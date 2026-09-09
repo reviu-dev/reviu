@@ -178,7 +178,7 @@ impl SessionPage {
       commands.push(CommandPaletteCommand::show_files());
       commands.push(CommandPaletteCommand::show_history());
       commands.push(CommandPaletteCommand::show_pull_request());
-      commands.push(CommandPaletteCommand::toggle_terminal());
+      commands.push(CommandPaletteCommand::new_terminal());
       commands.push(CommandPaletteCommand::show_file_search());
 
       // The two diff toggles change what an open diff shows, so they need one.
@@ -453,8 +453,8 @@ impl SessionPage {
       CommandPaletteAction::ForgetProject(project) => {
         self.forget_project(PathBuf::from(project.path.as_ref()), window, cx)
       }
-      CommandPaletteAction::ToggleTerminal => {
-        self.open_dock_tab(DockPanelTab::Terminal, window, cx);
+      CommandPaletteAction::NewTerminal => {
+        self.new_terminal_tab(window, cx);
         Ok(())
       }
       CommandPaletteAction::ShowChanges => {
@@ -541,7 +541,7 @@ mod tests {
         CommandPaletteCommandId::ShowFiles,
         CommandPaletteCommandId::ShowHistory,
         CommandPaletteCommandId::ShowPullRequest,
-        CommandPaletteCommandId::ToggleTerminal,
+        CommandPaletteCommandId::NewTerminal,
         CommandPaletteCommandId::ShowFileSearch,
       ] {
         assert!(ids.contains(&id), "{id:?} is missing from the palette");

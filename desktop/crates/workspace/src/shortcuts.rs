@@ -23,7 +23,6 @@ use crate::{
   PreviousAnnotation, PreviousCenterTab, PullChanges, PushChanges, RestoreFile, RestoreHunk,
   ReturnFocusToEditor, SendReviewCommentsToAgent, ShowBranchSwitcher, ShowCommandPalette,
   ShowFileSearch, ToggleDiffView, ToggleFileStage, ToggleHideWhitespace, ToggleHunkStage,
-  ToggleTerminalSidebar,
 };
 
 pub const SHOW_COMMAND_PALETTE_SHORTCUT: &str = "cmd-k";
@@ -46,7 +45,6 @@ const OPEN_SETTINGS_CONTEXT: &str = "Workspace";
 const NAVIGATE_BACK_CONTEXT: &str = "Workspace";
 const OPEN_SESSION_PAGE_CONTEXT: &str = "Workspace";
 const CENTER_TAB_CONTEXT: &str = "WorkspaceSession";
-const TOGGLE_TERMINAL_CONTEXT: &str = "WorkspaceSession";
 const SHOW_BRANCH_SWITCHER_CONTEXT: &str = "WorkspaceSession";
 const OPEN_GIT_HISTORY_SIDEBAR_CONTEXT: &str = "WorkspaceSession";
 const OPEN_GIT_CHANGES_SIDEBAR_CONTEXT: &str = "WorkspaceSession";
@@ -84,7 +82,6 @@ pub enum ShortcutId {
   PushChanges,
   ForcePushChanges,
   OpenSettingsPage,
-  ToggleTerminalSidebar,
   ShowBranchSwitcher,
   OpenGitHistorySidebar,
   OpenGitChangesSidebar,
@@ -123,7 +120,6 @@ impl ShortcutId {
       ShortcutId::PushChanges => "push_changes",
       ShortcutId::ForcePushChanges => "force_push_changes",
       ShortcutId::OpenSettingsPage => "open_settings_page",
-      ShortcutId::ToggleTerminalSidebar => "toggle_terminal_sidebar",
       ShortcutId::ShowBranchSwitcher => "show_branch_switcher",
       ShortcutId::OpenGitHistorySidebar => "open_git_history_sidebar",
       ShortcutId::OpenGitChangesSidebar => "open_git_changes_sidebar",
@@ -162,7 +158,6 @@ impl ShortcutId {
       "push_changes" => Some(ShortcutId::PushChanges),
       "force_push_changes" => Some(ShortcutId::ForcePushChanges),
       "open_settings_page" => Some(ShortcutId::OpenSettingsPage),
-      "toggle_terminal_sidebar" => Some(ShortcutId::ToggleTerminalSidebar),
       "show_branch_switcher" => Some(ShortcutId::ShowBranchSwitcher),
       "open_git_history_sidebar" => Some(ShortcutId::OpenGitHistorySidebar),
       "open_git_changes_sidebar" => Some(ShortcutId::OpenGitChangesSidebar),
@@ -210,7 +205,7 @@ pub struct ShortcutDefinition {
   pub active_contexts: &'static [&'static str],
 }
 
-const SHORTCUT_DEFINITIONS: [ShortcutDefinition; 34] = [
+const SHORTCUT_DEFINITIONS: [ShortcutDefinition; 33] = [
   ShortcutDefinition {
     id: ShortcutId::ShowCommandPalette,
     title: "Command Palette",
@@ -494,17 +489,6 @@ const SHORTCUT_DEFINITIONS: [ShortcutDefinition; 34] = [
     category: ShortcutCategory::LocalGit,
     keystroke: "cmd-shift-y",
     context: FORCE_PUSH_CHANGES_CONTEXT,
-    display_context: WORKSPACE_SESSION_CONTEXT,
-    active_contexts: &SESSION_ONLY_ACTIVE_CONTEXTS,
-  },
-  ShortcutDefinition {
-    id: ShortcutId::ToggleTerminalSidebar,
-    title: "Toggle Terminal",
-    description: "Show or hide the terminal.",
-    scope_label: "Projects",
-    category: ShortcutCategory::LocalGit,
-    keystroke: "cmd-j",
-    context: TOGGLE_TERMINAL_CONTEXT,
     display_context: WORKSPACE_SESSION_CONTEXT,
     active_contexts: &SESSION_ONLY_ACTIVE_CONTEXTS,
   },
@@ -864,9 +848,6 @@ impl ShortcutDefinition {
       ShortcutId::PushChanges => KeyBinding::new(keystroke, PushChanges, Some(&context)),
       ShortcutId::ForcePushChanges => KeyBinding::new(keystroke, ForcePushChanges, Some(&context)),
       ShortcutId::OpenSettingsPage => KeyBinding::new(keystroke, OpenSettingsPage, Some(&context)),
-      ShortcutId::ToggleTerminalSidebar => {
-        KeyBinding::new(keystroke, ToggleTerminalSidebar, Some(&context))
-      }
       ShortcutId::ShowBranchSwitcher => {
         KeyBinding::new(keystroke, ShowBranchSwitcher, Some(&context))
       }
@@ -1078,7 +1059,7 @@ fn palette_command_shortcut(command: CommandPaletteCommandId) -> Option<Shortcut
     Command::SendReview => Some(ShortcutId::SendReviewCommentsToAgent),
     // One key toggles either way, so both rows show it.
     Command::StageSelectedFile | Command::UnstageSelectedFile => Some(ShortcutId::ToggleFileStage),
-    Command::ToggleTerminal => Some(ShortcutId::ToggleTerminalSidebar),
+    Command::NewTerminal => None,
     Command::ShowChanges => Some(ShortcutId::OpenGitChangesSidebar),
     Command::ShowReview => Some(ShortcutId::OpenReviewSidebar),
     Command::ShowFiles => Some(ShortcutId::OpenFilesSidebar),
@@ -1356,7 +1337,6 @@ fn with_shortcut_action<T>(id: ShortcutId, f: impl FnOnce(&dyn Action) -> T) -> 
     ShortcutId::PushChanges => f(&PushChanges),
     ShortcutId::ForcePushChanges => f(&ForcePushChanges),
     ShortcutId::OpenSettingsPage => f(&OpenSettingsPage),
-    ShortcutId::ToggleTerminalSidebar => f(&ToggleTerminalSidebar),
     ShortcutId::ShowBranchSwitcher => f(&ShowBranchSwitcher),
     ShortcutId::OpenGitHistorySidebar => f(&OpenGitHistorySidebar),
     ShortcutId::OpenGitChangesSidebar => f(&OpenGitChangesSidebar),
@@ -1407,11 +1387,9 @@ mod tests {
       palette_command_shortcut(Command::UnstageSelectedFile)
     );
 
-    // The surfaces that only had a key now show it on their palette row.
-    assert_eq!(
-      palette_command_shortcut(Command::ToggleTerminal),
-      Some(ShortcutId::ToggleTerminalSidebar)
-    );
+    assert_eq!(palette_command_shortcut(Command::NewTerminal), None);
+
+    // The dock surfaces that only had a key now show it on their palette row.
     assert_eq!(
       palette_command_shortcut(Command::ShowHistory),
       Some(ShortcutId::OpenGitHistorySidebar)
@@ -1706,7 +1684,6 @@ mod tests {
   #[test]
   fn git_keyboard_first_shortcuts_follow_old_links_to_the_shell() {
     for keystroke in [
-      "cmd-j",
       "cmd-u",
       "cmd-y",
       "cmd-shift-y",
@@ -1744,14 +1721,13 @@ mod tests {
 
   #[test]
   fn every_dock_surface_has_a_key_of_its_own() {
-    // Six surfaces in the right dock, six shortcuts, none of them shared.
+    // Five surfaces in the right dock, five shortcuts, none of them shared.
     let dock = [
       (ShortcutId::OpenGitChangesSidebar, "cmd-shift-e"),
       (ShortcutId::OpenReviewSidebar, "cmd-shift-r"),
       (ShortcutId::OpenFilesSidebar, "cmd-shift-f"),
       (ShortcutId::OpenGitHistorySidebar, "cmd-shift-h"),
       (ShortcutId::OpenPullRequestSidebar, "cmd-shift-p"),
-      (ShortcutId::ToggleTerminalSidebar, "cmd-j"),
     ];
 
     for (id, keystroke) in dock {
@@ -1819,7 +1795,6 @@ mod tests {
       "cmd-u",
       "cmd-y",
       "cmd-shift-y",
-      "cmd-j",
       "cmd-shift-b",
       "cmd-shift-h",
       "cmd-shift-e",

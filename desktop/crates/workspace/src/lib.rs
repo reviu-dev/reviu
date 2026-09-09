@@ -10,7 +10,6 @@ actions!(
     NextCenterTab,
     PreviousCenterTab,
     OpenSessionPage,
-    ToggleTerminalSidebar,
     ShowBranchSwitcher,
     OpenGitHistorySidebar,
     OpenGitChangesSidebar,

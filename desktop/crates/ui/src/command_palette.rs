@@ -404,7 +404,7 @@ pub enum CommandPaletteAction {
   OpenLogs,
   RevealLogs,
   SendFeedback,
-  ToggleTerminal,
+  NewTerminal,
   ShowChanges,
   ShowReview,
   ShowFiles,
@@ -1029,7 +1029,7 @@ pub enum CommandPaletteCommandId {
   OpenLogs,
   RevealLogs,
   SendFeedback,
-  ToggleTerminal,
+  NewTerminal,
   ShowChanges,
   ShowReview,
   ShowFiles,
@@ -1103,7 +1103,7 @@ impl CommandPaletteCommandId {
       Self::OpenLogs => "open_logs",
       Self::RevealLogs => "reveal_logs",
       Self::SendFeedback => "send_feedback",
-      Self::ToggleTerminal => "toggle_terminal",
+      Self::NewTerminal => "new_terminal",
       Self::ShowChanges => "show_changes",
       Self::ShowReview => "show_review",
       Self::ShowFiles => "show_files",
@@ -1173,7 +1173,7 @@ impl CommandPaletteCommandId {
       "open_logs" => Some(Self::OpenLogs),
       "reveal_logs" => Some(Self::RevealLogs),
       "send_feedback" => Some(Self::SendFeedback),
-      "toggle_terminal" => Some(Self::ToggleTerminal),
+      "new_terminal" => Some(Self::NewTerminal),
       "show_changes" => Some(Self::ShowChanges),
       "show_review" => Some(Self::ShowReview),
       "show_files" => Some(Self::ShowFiles),
@@ -1710,11 +1710,11 @@ impl CommandPaletteCommand {
     )
   }
 
-  pub fn toggle_terminal() -> Self {
+  pub fn new_terminal() -> Self {
     Self::new(
-      CommandPaletteCommandId::ToggleTerminal,
-      "Terminal",
-      "Show the terminal in the right panel",
+      CommandPaletteCommandId::NewTerminal,
+      "New Terminal",
+      "Open a new terminal tab",
     )
   }
 
@@ -1980,7 +1980,7 @@ impl CommandPaletteCommand {
 
       CommandPaletteCommandId::SendFeedback => CommandPaletteGroup::Navigation,
 
-      CommandPaletteCommandId::ToggleTerminal
+      CommandPaletteCommandId::NewTerminal
       | CommandPaletteCommandId::ShowChanges
       | CommandPaletteCommandId::ShowReview
       | CommandPaletteCommandId::ShowFiles
@@ -2042,7 +2042,7 @@ impl CommandPaletteCommand {
       Id::DiscardPullRequestReview => &["pr", "delete", "clear"],
       Id::OpenProject => &["open", "folder", "project"],
       Id::SwitchProject => &["recent"],
-      Id::ToggleTerminal => &["shell", "console", "toggle"],
+      Id::NewTerminal => &["shell", "console", "terminal"],
       Id::ShowChanges => &["staged", "working", "show"],
       Id::ShowReview => &["comments", "show"],
       Id::ShowFiles => &["tree", "explorer", "show"],
@@ -2140,7 +2140,7 @@ impl CommandPaletteCommand {
       }
       CommandPaletteCommandId::SendFeedback => Icon::new(UiIconName::MessageCircle),
 
-      CommandPaletteCommandId::ToggleTerminal => Icon::new(UiIconName::SquareTerminal),
+      CommandPaletteCommandId::NewTerminal => Icon::new(UiIconName::Terminal),
       CommandPaletteCommandId::ShowChanges => Icon::new(UiIconName::FileDiff),
       CommandPaletteCommandId::ShowReview => Icon::new(UiIconName::MessageCircle),
       CommandPaletteCommandId::ShowFiles => Icon::new(IconName::FolderOpen),
@@ -3348,8 +3348,8 @@ impl CommandPalette {
       CommandPaletteCommandId::SendFeedback => {
         self.trigger_action(command, CommandPaletteAction::SendFeedback, window, cx);
       }
-      CommandPaletteCommandId::ToggleTerminal => {
-        self.trigger_action(command, CommandPaletteAction::ToggleTerminal, window, cx);
+      CommandPaletteCommandId::NewTerminal => {
+        self.trigger_action(command, CommandPaletteAction::NewTerminal, window, cx);
       }
       CommandPaletteCommandId::ShowChanges => {
         self.trigger_action(command, CommandPaletteAction::ShowChanges, window, cx);
@@ -4444,7 +4444,7 @@ mod tests {
     // Every one of these existed as a key and a Settings row, and nowhere the
     // palette could reach.
     for command in [
-      CommandPaletteCommand::toggle_terminal(),
+      CommandPaletteCommand::new_terminal(),
       CommandPaletteCommand::show_changes(),
       CommandPaletteCommand::show_review(),
       CommandPaletteCommand::show_files(),
@@ -4466,8 +4466,8 @@ mod tests {
 
   #[test]
   fn the_new_commands_answer_the_words_they_are_for() {
-    assert!(CommandPaletteCommand::toggle_terminal().matches("terminal"));
-    assert!(CommandPaletteCommand::toggle_terminal().matches("shell"));
+    assert!(CommandPaletteCommand::new_terminal().matches("terminal"));
+    assert!(CommandPaletteCommand::new_terminal().matches("shell"));
     assert!(CommandPaletteCommand::show_history().matches("history"));
     assert!(CommandPaletteCommand::show_history().matches("log"));
     assert!(CommandPaletteCommand::show_file_search().matches("search"));

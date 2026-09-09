@@ -27,6 +27,10 @@ pub(super) enum UnsavedEditorAction {
   NewSessionIn {
     project_root: PathBuf,
   },
+  NewSessionWithAgentIn {
+    project_root: PathBuf,
+    agent_id: agent_registry::AgentId,
+  },
   NewWorktreeSessionIn {
     repo_root: PathBuf,
     base: Option<String>,
@@ -1463,6 +1467,7 @@ impl SessionPage {
         .cloned()
         .unwrap_or_else(CenterTab::chat),
       CenterView::InteractiveRebase => CenterTab::interactive_rebase(),
+      CenterView::Terminal => self.center_layout.active_tab().clone(),
     };
     if !tab.is_closeable() {
       cx.propagate();
@@ -1510,6 +1515,9 @@ impl SessionPage {
         self.svg_preview.update(cx, |preview, _| preview.clear());
       }
     }
+    if tab.kind == CenterTabKind::Terminal {
+      self.clear_terminal_tab(&tab);
+    }
 
     self.center_tabs.retain(|candidate| candidate != &tab);
     self
@@ -1542,13 +1550,14 @@ impl SessionPage {
       if !self.center_tabs.contains(&remaining_tab) {
         self.center_tabs.push(remaining_tab.clone());
       }
-      self.remember_center_tab_visit(remaining_tab);
+      self.remember_center_tab_visit(remaining_tab.clone());
     }
     self.sync_agent_chat_close_control(cx);
     match self.center {
       CenterView::Conversation => self.focus_agent_input_on_next_frame(window, cx),
       CenterView::Diff => self.focus_editor_on_next_frame(window, cx),
       CenterView::InteractiveRebase => {}
+      CenterView::Terminal => self.focus_terminal_tab(&remaining_tab, window, cx),
     }
     cx.notify();
   }
@@ -1576,6 +1585,7 @@ impl SessionPage {
       CenterView::Conversation => self.focus_agent_input_on_next_frame(window, cx),
       CenterView::Diff => self.focus_editor_on_next_frame(window, cx),
       CenterView::InteractiveRebase => {}
+      CenterView::Terminal => self.focus_terminal_tab(&tab, window, cx),
     }
     cx.notify();
   }
@@ -1632,6 +1642,7 @@ impl SessionPage {
       CenterView::Conversation => self.focus_agent_input_on_next_frame(window, cx),
       CenterView::Diff => self.focus_editor_on_next_frame(window, cx),
       CenterView::InteractiveRebase => {}
+      CenterView::Terminal => self.focus_terminal_tab(&tab, window, cx),
     }
     cx.notify();
   }
@@ -1662,6 +1673,7 @@ impl SessionPage {
         self.close_interactive_rebase_todo(window, cx);
         return;
       }
+      CenterTabKind::Terminal => {}
       CenterTabKind::File | CenterTabKind::Diff => {}
     }
     if self.editor_is_dirty(cx) && self.editor_tab.as_ref() == Some(&tab) {
@@ -1769,6 +1781,9 @@ impl SessionPage {
       if matches!(layout_tab.kind, CenterTabKind::File | CenterTabKind::Diff) {
         self.clear_editor_tab(&layout_tab);
       }
+      if layout_tab.kind == CenterTabKind::Terminal {
+        self.clear_terminal_tab(&layout_tab);
+      }
     }
 
     if !selected_closed {
@@ -1800,6 +1815,9 @@ impl SessionPage {
     self.center_layout.close_surface(&tab);
     let editor_closed = self.editor_tab.as_ref() == Some(&tab);
     self.clear_editor_tab(&tab);
+    if tab.kind == CenterTabKind::Terminal {
+      self.clear_terminal_tab(&tab);
+    }
     if editor_closed {
       self.open_file_task = None;
       self.open_file_generation = self.open_file_generation.wrapping_add(1);
@@ -1869,6 +1887,15 @@ impl SessionPage {
       UnsavedEditorAction::NewSessionIn { project_root } => {
         self.new_session_in_without_unsaved_prompt(project_root, window, cx)
       }
+      UnsavedEditorAction::NewSessionWithAgentIn {
+        project_root,
+        agent_id,
+      } => self.new_session_in_with_agent_without_unsaved_prompt(
+        project_root,
+        Some(agent_id),
+        window,
+        cx,
+      ),
       UnsavedEditorAction::NewWorktreeSessionIn { repo_root, base } => {
         self.new_worktree_session_in_without_unsaved_prompt(repo_root, base, window, cx)
       }
