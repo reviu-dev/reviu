@@ -306,10 +306,7 @@ impl SettingsPage {
     view: gpui::Entity<Self>,
     default_menu_bar_icon: bool,
   ) -> Vec<SettingGroup> {
-    #[cfg(target_os = "macos")]
-    let title = "GitHub Notifications in Menu Bar";
-    #[cfg(not(target_os = "macos"))]
-    let title = "GitHub Notifications in System Tray";
+    let title = "GitHub Notifications";
     let label = "Show unread GitHub notifications";
     #[cfg(target_os = "macos")]
     let description = "Show a Reviu menu bar icon with unread GitHub notification counts.";
