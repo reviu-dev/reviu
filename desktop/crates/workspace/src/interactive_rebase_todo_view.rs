@@ -11,13 +11,13 @@ use gpui::{
   WeakEntity, Window, div, prelude::*, px, white,
 };
 use gpui_component::{
-  ActiveTheme as _, Disableable, IconName, IndexPath, Selectable, Sizable,
+  ActiveTheme as _, Disableable, Icon, IconName, IndexPath, Selectable, Sizable,
   button::{Button, ButtonVariant, ButtonVariants as _},
   h_flex,
   list::{List, ListDelegate, ListEvent, ListState},
   v_flex,
 };
-use ui::{DropdownSelectConfig, DropdownSelectItem, StatusThemeExt, dropdown_select};
+use ui::{DropdownSelectConfig, DropdownSelectItem, StatusThemeExt, UiIconName, dropdown_select};
 
 pub type InteractiveRebaseTodoViewHandler = Arc<
   dyn Fn(
@@ -275,15 +275,69 @@ impl ListDelegate for InteractiveRebaseTodoListDelegate {
     _window: &mut Window,
     cx: &mut Context<ListState<Self>>,
   ) -> impl IntoElement {
-    div()
+    let theme = cx.theme().clone();
+
+    v_flex()
       .id("interactive-rebase-rows-empty")
+      .debug_selector(|| "interactive-rebase-rows-empty".to_string())
       .size_full()
-      .flex()
       .items_center()
-      .justify_center()
-      .text_sm()
-      .text_color(cx.theme().muted_foreground)
-      .child("No commits available")
+      .justify_start()
+      .px_4()
+      .pt(px(56.0))
+      .child(
+        v_flex()
+          .w_full()
+          .max_w(px(360.0))
+          .gap_3()
+          .rounded(px(16.0))
+          .border_1()
+          .border_color(theme.border.opacity(0.75))
+          .bg(theme.secondary.opacity(0.45))
+          .p_4()
+          .child(
+            h_flex()
+              .items_center()
+              .gap_3()
+              .child(
+                h_flex()
+                  .size(px(54.0))
+                  .flex_shrink_0()
+                  .items_center()
+                  .justify_center()
+                  .rounded(px(16.0))
+                  .border_1()
+                  .border_color(theme.primary.opacity(0.22))
+                  .bg(theme.primary.opacity(0.10))
+                  .child(
+                    Icon::new(UiIconName::GitMerge)
+                      .size_6()
+                      .text_color(theme.primary),
+                  ),
+              )
+              .child(
+                v_flex()
+                  .min_w_0()
+                  .gap_1()
+                  .child(
+                    div()
+                      .text_sm()
+                      .font_weight(gpui::FontWeight::SEMIBOLD)
+                      .text_color(theme.foreground)
+                      .child("No commits available"),
+                  )
+                  .child(
+                    div()
+                      .text_xs()
+                      .line_height(px(17.0))
+                      .text_color(theme.muted_foreground)
+                      .child(
+                        "Pick a branch with commits ahead of its base, or increase the HEAD range.",
+                      ),
+                  ),
+              ),
+          ),
+      )
   }
 
   fn set_selected_index(
