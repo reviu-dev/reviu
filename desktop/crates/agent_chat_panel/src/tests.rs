@@ -2942,13 +2942,14 @@ fn humanize_agent_error_extracts_nested_detail() {
 }
 
 #[test]
-fn agent_settings_json_keeps_backend_and_models_independent() {
+fn agent_settings_json_keeps_default_agent_and_models_independent() {
   let settings = serde_json::json!({});
   let settings = settings_with_model(settings, "codex", "gpt-5.6-sol");
-  let settings = settings_with_backend(settings, "claude");
+  let settings = settings_with_default_agent(settings, "claude");
   let settings = settings_with_model(settings, "claude", "claude-opus-5");
 
-  assert_eq!(settings["backend"], "claude");
+  assert_eq!(settings["default_agent"], "claude");
+  assert_eq!(settings["enabled_agents"], serde_json::json!(["claude"]));
   assert_eq!(
     model_choice_from_settings(&settings, "codex").as_deref(),
     Some("gpt-5.6-sol")
@@ -6266,7 +6267,7 @@ async fn arrow_up_inside_multiline_composer_moves_the_cursor(cx: &mut gpui::Test
   panel.read_with(cx, |panel, cx| {
     let input = panel.input.read(cx);
     assert_eq!(input.value(), "top\nbottom");
-    assert_eq!(input.cursor_position(cx).line, 0);
+    assert_eq!(input.cursor_position().line, 0);
   });
 }
 

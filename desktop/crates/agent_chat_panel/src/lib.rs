@@ -1241,11 +1241,8 @@ impl AgentChatPanel {
     let line = text.matches('\n').count() as u32;
     let character = text.rsplit('\n').next().unwrap_or_default().chars().count() as u32;
     self.input.update(cx, |state, cx| {
-      let base = state.base_state().clone();
       state.set_value(text, window, cx);
-      base.update(cx, |base, cx| {
-        base.set_cursor_position(input::Position::new(line, character), window, cx);
-      });
+      state.set_cursor_position(input::Position::new(line, character), window, cx);
     });
   }
 
@@ -1264,11 +1261,11 @@ impl AgentChatPanel {
   fn browse_composer_history(&mut self, delta: i32, window: &mut Window, cx: &mut Context<Self>) {
     let (value, at_history_edge) = {
       let input = self.input.read(cx);
-      if !input.base_state().read(cx).selected_value().is_empty() {
+      if !input.selected_value().is_empty() {
         return;
       }
       let value = input.value().to_string();
-      let cursor_line = input.cursor_position(cx).line;
+      let cursor_line = input.cursor_position().line;
       let at_history_edge = if delta < 0 {
         value.is_empty() || cursor_line == 0
       } else {
@@ -2539,7 +2536,7 @@ impl AgentChatPanel {
 
   fn mention_snapshot(&self, cx: &App) -> Option<(MentionTrigger, Vec<MentionCandidate>)> {
     let input = self.input.read(cx);
-    let cursor = input.base_state().read(cx).cursor();
+    let cursor = input.cursor();
     let trigger = mention::mention_trigger_at_cursor(input.value().as_ref(), cursor)?;
     if self
       .mention_dismissed
@@ -2612,7 +2609,7 @@ impl AgentChatPanel {
       return None;
     }
     let input = self.input.read(cx);
-    let cursor = input.base_state().read(cx).cursor();
+    let cursor = input.cursor();
     let token = slash_token_at_cursor(input.value().as_ref(), cursor)?;
     if self.slash_dismissed.as_deref() == Some(token.as_str()) {
       return None;
@@ -2683,9 +2680,7 @@ impl AgentChatPanel {
     };
     let replace_range = mention::byte_range_to_utf16_range(text.as_ref(), 0..token_end);
     self.input.update(cx, |input, cx| {
-      input.base_state().clone().update(cx, |base, cx| {
-        base.replace_text_in_range(Some(replace_range), &replacement, window, cx);
-      });
+      input.replace_text_in_range(Some(replace_range), &replacement, window, cx);
       input.focus(window, cx);
     });
     self.slash_selected_ix = 0;
@@ -2706,9 +2701,7 @@ impl AgentChatPanel {
     let text = self.input.read(cx).value();
     let replace_range = mention::byte_range_to_utf16_range(text.as_ref(), trigger.range.clone());
     self.input.update(cx, |input, cx| {
-      input.base_state().clone().update(cx, |base, cx| {
-        base.replace_text_in_range(Some(replace_range), &token, window, cx);
-      });
+      input.replace_text_in_range(Some(replace_range), &token, window, cx);
       input.focus(window, cx);
     });
     self.mention_selected_ix = 0;
@@ -3083,13 +3076,7 @@ impl AgentChatPanel {
     self.active_selection = Some(SelectionContext { path, text });
 
     let value = self.input.read(cx).value().to_string();
-    let cursor = self
-      .input
-      .read(cx)
-      .base_state()
-      .read(cx)
-      .cursor()
-      .min(value.len());
+    let cursor = self.input.read(cx).cursor().min(value.len());
     let needs_space = value[..cursor]
       .chars()
       .next_back()
@@ -3101,9 +3088,7 @@ impl AgentChatPanel {
     };
     let utf16_range = mention::byte_range_to_utf16_range(&value, cursor..cursor);
     self.input.update(cx, |input, cx| {
-      input.base_state().clone().update(cx, |base, cx| {
-        base.replace_text_in_range(Some(utf16_range), &insert, window, cx);
-      });
+      input.replace_text_in_range(Some(utf16_range), &insert, window, cx);
       input.focus(window, cx);
     });
 
@@ -3558,8 +3543,19 @@ fn write_agent_settings_json(value: &serde_json::Value) {
   let _ = std::fs::write(&path, value.to_string());
 }
 
-fn settings_with_backend(mut settings: serde_json::Value, key: &str) -> serde_json::Value {
-  settings["backend"] = serde_json::Value::String(key.to_string());
+fn settings_with_default_agent(mut settings: serde_json::Value, key: &str) -> serde_json::Value {
+  settings["default_agent"] = serde_json::Value::String(key.to_string());
+  if !settings["enabled_agents"].is_array() {
+    settings["enabled_agents"] = serde_json::Value::Array(Vec::new());
+  }
+  if let Some(agents) = settings["enabled_agents"].as_array_mut()
+    && !agents.iter().any(|agent| agent.as_str() == Some(key))
+  {
+    agents.push(serde_json::Value::String(key.to_string()));
+  }
+  if let Some(object) = settings.as_object_mut() {
+    object.remove("backend");
+  }
   settings
 }
 
@@ -3584,7 +3580,7 @@ fn model_choice_from_settings(settings: &serde_json::Value, backend_key: &str) -
 }
 
 pub fn persist_choice(id: &AgentId) {
-  let settings = settings_with_backend(read_agent_settings_json(), id.as_str());
+  let settings = settings_with_default_agent(read_agent_settings_json(), id.as_str());
   write_agent_settings_json(&settings);
 }
 

@@ -190,7 +190,7 @@ impl GithubEmojiCompletionOverlay {
   fn snapshot(&self, cx: &App) -> Option<EmojiCompletionSnapshot> {
     let input = self.input.read(cx);
     let text = input.value();
-    let cursor = input.base_state().read(cx).cursor();
+    let cursor = input.cursor();
     let trigger = emoji_shortcode_trigger_at_cursor(text.as_ref(), cursor)?;
     if self
       .dismissed_trigger
@@ -280,9 +280,7 @@ impl GithubEmojiCompletionOverlay {
     let text = self.input.read(cx).value();
     let replace_range = byte_range_to_utf16_range(text.as_ref(), snapshot.trigger.range.clone());
     self.input.update(cx, |input, cx| {
-      input.base_state().clone().update(cx, |base, cx| {
-        base.replace_text_in_range(Some(replace_range), emoji.emoji, window, cx);
-      });
+      input.replace_text_in_range(Some(replace_range), emoji.emoji, window, cx);
       input.focus(window, cx);
     });
 
@@ -298,7 +296,7 @@ impl Render for GithubEmojiCompletionOverlay {
       let input = self.input.read(cx);
       (
         input.focus_handle(cx).is_focused(window),
-        input.base_state().read(cx).cursor_position(),
+        input.cursor_position(),
       )
     };
     if !is_focused {

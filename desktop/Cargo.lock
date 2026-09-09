@@ -2353,7 +2353,7 @@ version = "0.5.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ab8ecd87370524b461f8557c119c405552c396ed91fc0a8eec68679eab26f94a"
 dependencies = [
- "libloading 0.8.9",
+ "libloading 0.7.4",
 ]
 
 [[package]]
@@ -3512,17 +3512,21 @@ dependencies = [
 
 [[package]]
 name = "gpui-base"
-version = "0.5.2"
-source = "git+https://github.com/joris-gallot/gpui-component?branch=reviu%2Ftree-selection-events#79a197409e0a6e0e5bf660e070d86c7b134deea3"
+version = "0.6.1"
+source = "git+https://github.com/joris-gallot/gpui-component?branch=reviu%2Ftree-selection-events#71af03bca6cac48f2ab44a836fbd898fe9f79752"
 dependencies = [
  "aho-corasick",
  "anyhow",
  "async-channel",
  "chrono",
+ "futures",
  "gpui",
  "gpui_macros 0.1.0 (git+https://github.com/zed-industries/zed)",
+ "html5ever",
  "instant",
  "lsp-types",
+ "markdown",
+ "markup5ever_rcdom",
  "objc2 0.6.4",
  "objc2-app-kit 0.3.2",
  "objc2-foundation 0.3.2",
@@ -3542,26 +3546,23 @@ dependencies = [
 
 [[package]]
 name = "gpui-component"
-version = "0.5.2"
-source = "git+https://github.com/joris-gallot/gpui-component?branch=reviu%2Ftree-selection-events#79a197409e0a6e0e5bf660e070d86c7b134deea3"
+version = "0.6.1"
+source = "git+https://github.com/joris-gallot/gpui-component?branch=reviu%2Ftree-selection-events#71af03bca6cac48f2ab44a836fbd898fe9f79752"
 dependencies = [
  "anyhow",
  "chrono",
  "core-text",
  "enum-iterator",
- "futures",
  "gpui",
  "gpui-base",
- "gpui-component-assets",
  "gpui-component-macros",
+ "gpui-kit-assets",
  "gpui_macros 0.1.0 (git+https://github.com/zed-industries/zed)",
- "html5ever",
  "instant",
  "itertools 0.13.0",
  "log",
  "lsp-types",
  "markdown",
- "markup5ever_rcdom",
  "notify",
  "num-traits",
  "objc2 0.6.4",
@@ -3570,6 +3571,7 @@ dependencies = [
  "once_cell",
  "paste",
  "raw-window-handle",
+ "regex",
  "resvg 0.45.1",
  "ropey 2.0.0-beta.1",
  "rust-i18n",
@@ -3586,9 +3588,20 @@ dependencies = [
 ]
 
 [[package]]
-name = "gpui-component-assets"
-version = "0.5.1"
-source = "git+https://github.com/joris-gallot/gpui-component?branch=reviu%2Ftree-selection-events#79a197409e0a6e0e5bf660e070d86c7b134deea3"
+name = "gpui-component-macros"
+version = "0.6.1"
+source = "git+https://github.com/joris-gallot/gpui-component?branch=reviu%2Ftree-selection-events#71af03bca6cac48f2ab44a836fbd898fe9f79752"
+dependencies = [
+ "proc-macro-crate 3.5.0",
+ "proc-macro2",
+ "quote",
+ "syn 2.0.117",
+]
+
+[[package]]
+name = "gpui-kit-assets"
+version = "0.6.1"
+source = "git+https://github.com/joris-gallot/gpui-component?branch=reviu%2Ftree-selection-events#71af03bca6cac48f2ab44a836fbd898fe9f79752"
 dependencies = [
  "anyhow",
  "gpui",
@@ -3597,16 +3610,6 @@ dependencies = [
  "wasm-bindgen",
  "wasm-bindgen-futures",
  "zed-reqwest",
-]
-
-[[package]]
-name = "gpui-component-macros"
-version = "0.5.1"
-source = "git+https://github.com/joris-gallot/gpui-component?branch=reviu%2Ftree-selection-events#79a197409e0a6e0e5bf660e070d86c7b134deea3"
-dependencies = [
- "proc-macro2",
- "quote",
- "syn 2.0.117",
 ]
 
 [[package]]
@@ -3744,7 +3747,7 @@ dependencies = [
 [[package]]
 name = "gpui_macros"
 version = "0.1.0"
-source = "git+https://github.com/zed-industries/zed#17d71d2b6d42efe361d147fc5c3119831e0a6723"
+source = "git+https://github.com/zed-industries/zed#52b2927a1bac46be5d50ad341ac00b665e13764b"
 dependencies = [
  "heck 0.5.0",
  "proc-macro2",
@@ -4271,7 +4274,7 @@ dependencies = [
  "libc",
  "percent-encoding",
  "pin-project-lite",
- "socket2 0.6.3",
+ "socket2 0.5.10",
  "tokio",
  "tower-service",
  "tracing",
@@ -6944,7 +6947,7 @@ dependencies = [
  "quinn-udp",
  "rustc-hash 2.1.2",
  "rustls",
- "socket2 0.6.3",
+ "socket2 0.5.10",
  "thiserror 2.0.20",
  "tokio",
  "tracing",
@@ -6983,7 +6986,7 @@ dependencies = [
  "cfg_aliases",
  "libc",
  "once_cell",
- "socket2 0.6.3",
+ "socket2 0.5.10",
  "tracing",
  "windows-sys 0.60.2",
 ]
@@ -7417,7 +7420,7 @@ dependencies = [
  "embed-resource",
  "gpui",
  "gpui-component",
- "gpui-component-assets",
+ "gpui-kit-assets",
  "gpui_platform",
  "log",
  "percent-encoding",
@@ -10014,7 +10017,7 @@ dependencies = [
  "gpui",
  "gpui-base",
  "gpui-component",
- "gpui-component-assets",
+ "gpui-kit-assets",
  "log",
  "rust-embed",
  "serde",

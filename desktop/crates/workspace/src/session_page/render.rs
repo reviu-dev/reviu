@@ -1151,11 +1151,7 @@ impl SessionPage {
 
   fn render_center_new_menu_button(&self, cx: &mut Context<Self>) -> AnyElement {
     let page = cx.entity().clone();
-    let agents = agent_registry::global()
-      .runnable()
-      .into_iter()
-      .map(|agent| (agent.id.clone(), agent.display_name().to_string()))
-      .collect::<Vec<_>>();
+    let agents = crate::agent_settings::enabled_agent_choices();
 
     Button::new("session-center-new-menu")
       .debug_selector(|| "session-center-new-menu".to_string())

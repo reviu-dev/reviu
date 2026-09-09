@@ -7,9 +7,12 @@ use gpui::{
 };
 
 use gpui_component::{
-  ActiveTheme as _, IconName, Sizable, Size, Theme, ThemeMode,
+  ActiveTheme as _, Disableable, IconName, IndexPath, Sizable, Size, Theme, ThemeMode,
   button::{Button, ButtonVariants},
+  checkbox::Checkbox,
+  h_flex,
   kbd::Kbd,
+  select::{Select, SelectEvent, SelectItem, SelectState},
   setting::{NumberFieldOptions, SettingField, SettingGroup, SettingItem, SettingPage, Settings},
 };
 
@@ -46,6 +49,63 @@ struct ShortcutCaptureError {
   message: SharedString,
 }
 
+#[derive(Clone)]
+struct AgentSelectOption {
+  id: agent_registry::AgentId,
+  title: SharedString,
+  description: String,
+}
+
+impl SelectItem for AgentSelectOption {
+  type Value = agent_registry::AgentId;
+
+  fn title(&self) -> SharedString {
+    self.title.clone()
+  }
+
+  fn display_title(&self) -> Option<gpui::AnyElement> {
+    Some(
+      h_flex()
+        .gap_2()
+        .items_center()
+        .child(agent_chat_panel::backend_icon(&self.id).small())
+        .child(self.title.clone())
+        .into_any_element(),
+    )
+  }
+
+  fn render(&self, _: &mut Window, cx: &mut App) -> impl IntoElement {
+    h_flex()
+      .min_w_0()
+      .gap_2()
+      .items_center()
+      .child(agent_chat_panel::backend_icon(&self.id).small())
+      .child(
+        div()
+          .min_w_0()
+          .child(div().text_sm().child(self.title.clone()))
+          .child(
+            div()
+              .text_xs()
+              .text_color(cx.theme().muted_foreground)
+              .truncate()
+              .child(self.description.clone()),
+          ),
+      )
+  }
+
+  fn value(&self) -> &Self::Value {
+    &self.id
+  }
+
+  fn matches(&self, query: &str) -> bool {
+    let query = query.to_lowercase();
+    self.title.to_lowercase().contains(&query)
+      || self.description.to_lowercase().contains(&query)
+      || self.id.as_str().contains(&query)
+  }
+}
+
 pub struct SettingsPage {
   focus_handle: FocusHandle,
   auto_switch_theme: bool,
@@ -53,6 +113,9 @@ pub struct SettingsPage {
   git_unified_file_view: bool,
   split_diff_view: bool,
   hide_whitespace: bool,
+  default_agent: agent_registry::AgentId,
+  enabled_agents: Vec<agent_registry::AgentId>,
+  default_agent_select: Entity<SelectState<Vec<AgentSelectOption>>>,
   menu_bar_icon: bool,
   analytics_enabled: bool,
   shortcut_recording: Option<ShortcutId>,
@@ -62,13 +125,36 @@ pub struct SettingsPage {
 }
 
 impl SettingsPage {
-  pub fn new(_window: &mut Window, cx: &mut Context<Self>, settings: PersistedSettings) -> Self {
+  pub fn new(window: &mut Window, cx: &mut Context<Self>, settings: PersistedSettings) -> Self {
     let view = cx.entity();
     let shortcut_capture_subscription = cx.intercept_keystrokes(move |event, window, cx| {
       view.update(cx, |view, cx| {
         view.handle_shortcut_capture(event, window, cx);
       });
     });
+    let agent_settings = crate::agent_settings::AgentSettings::load_preferences();
+    let default_agent_options = Self::default_agent_options(&agent_settings.enabled_agents);
+    let selected_default_agent = default_agent_options
+      .iter()
+      .position(|option| option.id == agent_settings.default_agent)
+      .map(IndexPath::new);
+    let default_agent_select = cx.new(|cx| {
+      SelectState::new(default_agent_options, selected_default_agent, window, cx).searchable(true)
+    });
+    let default_agent_select_subscription = cx.subscribe(
+      &default_agent_select,
+      move |this, _, event: &SelectEvent<Vec<AgentSelectOption>>, cx| {
+        let SelectEvent::Confirm(Some(agent_id)) = event else {
+          return;
+        };
+        let updated = crate::agent_settings::AgentSettings::set_default_agent(agent_id.clone());
+        this.default_agent = updated.default_agent;
+        this.enabled_agents = updated.enabled_agents;
+        cx.notify();
+        cx.refresh_windows();
+      },
+    );
+
     Self {
       focus_handle: cx.focus_handle(),
       auto_switch_theme: settings.auto_switch_theme,
@@ -76,13 +162,57 @@ impl SettingsPage {
       git_unified_file_view: settings.git_unified_file_view,
       split_diff_view: settings.split_diff_view,
       hide_whitespace: settings.hide_whitespace,
+      default_agent: agent_settings.default_agent,
+      enabled_agents: agent_settings.enabled_agents,
+      default_agent_select,
       menu_bar_icon: settings.menu_bar_icon,
       analytics_enabled: settings.analytics_enabled,
       shortcut_recording: None,
       shortcut_error: None,
       size: Size::default(),
-      _subscriptions: vec![shortcut_capture_subscription],
+      _subscriptions: vec![
+        shortcut_capture_subscription,
+        default_agent_select_subscription,
+      ],
     }
+  }
+
+  fn default_agent_options(enabled_agents: &[agent_registry::AgentId]) -> Vec<AgentSelectOption> {
+    agent_registry::global()
+      .runnable()
+      .into_iter()
+      .filter(|agent| enabled_agents.contains(&agent.id))
+      .map(|agent| AgentSelectOption {
+        id: agent.id.clone(),
+        title: agent.display_name().into(),
+        description: if agent.description.trim().is_empty() {
+          format!("Registry id: {}", agent.id)
+        } else {
+          agent.description.clone()
+        },
+      })
+      .collect()
+  }
+
+  fn apply_agent_settings(
+    &mut self,
+    updated: crate::agent_settings::AgentSettings,
+    window: &mut Window,
+    cx: &mut Context<Self>,
+  ) {
+    self.default_agent = updated.default_agent;
+    self.enabled_agents = updated.enabled_agents;
+    self.sync_default_agent_select(window, cx);
+    cx.notify();
+  }
+
+  fn sync_default_agent_select(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    let options = Self::default_agent_options(&self.enabled_agents);
+    let default_agent = self.default_agent.clone();
+    self.default_agent_select.update(cx, |select, cx| {
+      select.set_items(options, window, cx);
+      select.set_selected_value(&default_agent, window, cx);
+    });
   }
 
   fn setting_pages(&self, window: &mut Window, cx: &mut Context<Self>) -> Vec<SettingPage> {
@@ -230,21 +360,6 @@ impl SettingsPage {
           )
           .description("Color indentation guides by level in the editor."),
         ]),
-        SettingGroup::new().title("Agent").items(vec![
-          SettingItem::new(
-            "Notify When The Agent Needs You",
-            SettingField::checkbox(
-              move |cx: &App| PersistedSettings::get(cx).agent_notifications,
-              move |val: bool, cx: &mut App| {
-                PersistedSettings::update(cx, |s| s.agent_notifications = val);
-              },
-            )
-            .default_value(true),
-          )
-          .description(
-            "Show a popup when a turn finishes or a permission is asked while the window is inactive.",
-          ),
-        ]),
         SettingGroup::new().title("Git").items(vec![
           SettingItem::new(
             "Unified File View",
@@ -297,8 +412,120 @@ impl SettingsPage {
           ),
         ]),
       ].into_iter().chain(self.menu_bar_settings_groups(view.clone(), default_menu_bar_icon))),
+      SettingPage::new("Agents")
+        .description("Choose the ACP agents Reviu shows and the default agent for new chats.")
+        .groups([self.agent_settings_group(view.clone())]),
       Self::keyboard_shortcuts_page(view.clone(), window, cx),
     ]
+  }
+
+  fn agent_settings_group(&self, view: gpui::Entity<Self>) -> SettingGroup {
+    let registry = agent_registry::global();
+    let enabled_agents = self.enabled_agents.clone();
+    let default_agent_select = self.default_agent_select.clone();
+    let mut items = vec![
+      SettingItem::new(
+        "Default Agent",
+        SettingField::render(move |_, _, _| {
+          Select::new(&default_agent_select)
+            .placeholder("Choose an agent...")
+            .small()
+            .w(px(280.))
+        }),
+      )
+      .description("New chats start with this agent."),
+    ];
+
+    for agent in registry.runnable() {
+      let agent_id = agent.id.clone();
+      let label: SharedString = agent.display_name().into();
+      let description = if agent.description.trim().is_empty() {
+        format!("Registry id: {}", agent_id)
+      } else {
+        agent.description.clone()
+      };
+      let is_enabled = enabled_agents.contains(&agent_id);
+      let only_enabled = enabled_agents.len() == 1 && is_enabled;
+      let keywords = [
+        agent_id.to_string(),
+        label.to_string(),
+        description.clone(),
+        "default agent".to_string(),
+      ];
+
+      items.push(
+        SettingItem::render({
+          let view = view.clone();
+          let agent_id = agent_id.clone();
+          move |_, _, cx: &mut App| {
+            let checkbox_view = view.clone();
+            let checkbox_agent_id = agent_id.clone();
+            h_flex()
+              .w_full()
+              .justify_between()
+              .items_center()
+              .gap_3()
+              .child(
+                h_flex()
+                  .min_w_0()
+                  .flex_1()
+                  .gap_3()
+                  .items_center()
+                  .child(
+                    Checkbox::new(format!("settings-agent-enabled-{agent_id}"))
+                      .checked(is_enabled)
+                      .disabled(only_enabled)
+                      .on_click(move |enabled, window, cx| {
+                        let updated = crate::agent_settings::AgentSettings::set_agent_enabled(
+                          checkbox_agent_id.clone(),
+                          *enabled,
+                        );
+                        checkbox_view.update(cx, |view, cx| {
+                          view.apply_agent_settings(updated, window, cx);
+                        });
+                        cx.refresh_windows();
+                      }),
+                  )
+                  .child(agent_chat_panel::backend_icon(&agent_id).small())
+                  .child(
+                    div()
+                      .min_w_0()
+                      .child(div().text_sm().child(label.clone()))
+                      .child(
+                        div()
+                          .text_sm()
+                          .text_color(cx.theme().muted_foreground)
+                          .truncate()
+                          .child(description.clone()),
+                      ),
+                  ),
+              )
+          }
+        })
+        .keywords(keywords),
+      );
+    }
+
+    items.push(
+      SettingItem::new(
+        "Notify When The Agent Needs You",
+        SettingField::checkbox(
+          move |cx: &App| PersistedSettings::get(cx).agent_notifications,
+          move |val: bool, cx: &mut App| {
+            PersistedSettings::update(cx, |s| s.agent_notifications = val);
+          },
+        )
+        .default_value(true),
+      )
+      .description(
+        "Show a popup when a turn finishes or a permission is asked while the window is inactive.",
+      ),
+    );
+
+    SettingGroup::new()
+      .title("Agent")
+      .description("Choose which ACP agents appear in quick menus and which one new chats use.")
+      .items(items)
   }
 
   fn menu_bar_settings_groups(

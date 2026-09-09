@@ -37,7 +37,7 @@ gpui_platform = { git = "https://github.com/zed-industries/zed", package = "gpui
 ] }
 gpui-component = { git = "https://github.com/longbridge/gpui-component", branch = "main" }
 gpui-base = { git = "https://github.com/longbridge/gpui-component", branch = "main" }
-gpui-component-assets = { git = "https://github.com/longbridge/gpui-component", branch = "main" }
+gpui-component-assets = { package = "gpui-kit-assets", git = "https://github.com/longbridge/gpui-component", branch = "main" }
 reqwest_client = { git = "https://github.com/zed-industries/zed", package = "reqwest_client" }
 unicode-segmentation = "1.13.3"
 ropey = "1.6.1"
@@ -190,7 +190,7 @@ reqwest_client = { git = "https://github.com/joris-gallot/zed", branch = "reviu/
 [patch."https://github.com/longbridge/gpui-component"]
 gpui-component = { git = "https://github.com/joris-gallot/gpui-component", branch = "reviu/tree-selection-events" }
 gpui-base = { git = "https://github.com/joris-gallot/gpui-component", branch = "reviu/tree-selection-events" }
-gpui-component-assets = { git = "https://github.com/joris-gallot/gpui-component", branch = "reviu/tree-selection-events" }
+gpui-kit-assets = { git = "https://github.com/joris-gallot/gpui-component", branch = "reviu/tree-selection-events" }
 
 # Strip GPL-3.0 deps (ztracing -> zlog) that gpui and sum_tree pull into the binary. See vendor/ztracing.
 [patch."https://github.com/joris-gallot/zed"]
