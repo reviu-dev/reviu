@@ -2347,7 +2347,6 @@ impl SessionPage {
                   .min_w(px(0.0))
                   .truncate()
                   .text_xs()
-                  .font_weight(gpui::FontWeight::SEMIBOLD)
                   .text_color(theme.foreground)
                   .child(self.terminal_label(&tab)),
               ),
