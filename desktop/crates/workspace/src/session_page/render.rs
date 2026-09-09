@@ -10,10 +10,13 @@ use crate::hunk_actions::render_hunk_actions;
 use gpui_component::{
   Selectable as _,
   menu::{ContextMenuExt as _, DropdownMenu as _, PopupMenu, PopupMenuItem},
+  resizable::{h_resizable, resizable_panel, v_resizable},
   scroll::ScrollableElement as _,
 };
 
 const CENTER_NEW_MENU_MAX_HEIGHT_PX: f32 = 360.0;
+const CENTER_SPLIT_MIN_WIDTH_PX: f32 = 240.0;
+const CENTER_SPLIT_MIN_HEIGHT_PX: f32 = 160.0;
 
 #[derive(Clone)]
 struct CenterConversationHistoryItem {
@@ -1461,36 +1464,50 @@ impl SessionPage {
         let first = self.render_center_node(split.first(), window, cx);
         let second = self.render_center_node(split.second(), window, cx);
         match split.direction() {
-          CenterSplitDirection::Left | CenterSplitDirection::Right => h_flex()
-            .size_full()
-            .min_w(px(0.0))
-            .min_h_0()
-            .child(div().flex_1().min_w(px(0.0)).h_full().child(first))
-            .child(
-              div()
-                .flex_1()
-                .min_w(px(0.0))
-                .h_full()
-                .border_l_1()
-                .border_color(theme.border)
-                .child(second),
-            )
-            .into_any_element(),
-          CenterSplitDirection::Up | CenterSplitDirection::Down => v_flex()
-            .size_full()
-            .min_w(px(0.0))
-            .min_h_0()
-            .child(div().flex_1().min_h_0().w_full().child(first))
-            .child(
-              div()
-                .flex_1()
-                .min_h_0()
-                .w_full()
-                .border_t_1()
-                .border_color(theme.border)
-                .child(second),
-            )
-            .into_any_element(),
+          CenterSplitDirection::Left | CenterSplitDirection::Right => {
+            h_resizable(("session-center-split", split.id().as_u64()))
+              .child(
+                resizable_panel()
+                  .size_range(px(CENTER_SPLIT_MIN_WIDTH_PX)..gpui::Pixels::MAX)
+                  .child(first),
+              )
+              .child(
+                resizable_panel()
+                  .size_range(px(CENTER_SPLIT_MIN_WIDTH_PX)..gpui::Pixels::MAX)
+                  .child(
+                    div()
+                      .size_full()
+                      .min_w(px(0.0))
+                      .min_h_0()
+                      .border_l_1()
+                      .border_color(theme.border)
+                      .child(second),
+                  ),
+              )
+              .into_any_element()
+          }
+          CenterSplitDirection::Up | CenterSplitDirection::Down => {
+            v_resizable(("session-center-split", split.id().as_u64()))
+              .child(
+                resizable_panel()
+                  .size_range(px(CENTER_SPLIT_MIN_HEIGHT_PX)..gpui::Pixels::MAX)
+                  .child(first),
+              )
+              .child(
+                resizable_panel()
+                  .size_range(px(CENTER_SPLIT_MIN_HEIGHT_PX)..gpui::Pixels::MAX)
+                  .child(
+                    div()
+                      .size_full()
+                      .min_w(px(0.0))
+                      .min_h_0()
+                      .border_t_1()
+                      .border_color(theme.border)
+                      .child(second),
+                  ),
+              )
+              .into_any_element()
+          }
         }
       }
     }
@@ -6650,6 +6667,136 @@ mod tests {
     assert!(
       conversation.right() <= editor.left() + px(1.0),
       "conversation should render left of the editor: {conversation:?} vs {editor:?}"
+    );
+  }
+
+  #[gpui::test]
+  async fn dragging_a_horizontal_center_split_resizes_the_panes(cx: &mut TestAppContext) {
+    let repo = TempRepo::init("session-center-horizontal-resize");
+    commit_text_file(&repo.path, Path::new("README.md"), "v1\n", "initial");
+    std::fs::write(repo.path.join("README.md"), "v2\n").expect("modify file");
+    let (page, cx) = add_session_page_window(repo.path.clone(), cx);
+    cx.run_until_parked();
+
+    page.update_in(cx, |page, window, cx| {
+      page.sidebar_open = false;
+      page.dock_open = false;
+      page.open_diff(
+        PathBuf::from("README.md"),
+        None,
+        OpenIntent::Open,
+        window,
+        cx,
+      );
+    });
+    await_open_file(&page, cx).await;
+    page.update(cx, |page, cx| {
+      page.diff_chat_open = true;
+      assert!(page.center_layout.split_active(
+        CenterSurface::from_tab(CenterTab::chat()),
+        CenterSplitDirection::Left,
+      ));
+      page.active_center_tab = Some(CenterTab::chat());
+      page.sync_agent_chat_close_control(cx);
+      cx.notify();
+    });
+    cx.run_until_parked();
+
+    let before = cx
+      .debug_bounds("session-conversation-pane")
+      .expect("conversation pane");
+    let boundary = before.right();
+    let y = before.center().y;
+    let to = gpui::point(boundary + px(80.0), y);
+    cx.simulate_mouse_down(
+      gpui::point(boundary - px(2.0), y),
+      gpui::MouseButton::Left,
+      gpui::Modifiers::default(),
+    );
+    cx.simulate_mouse_move(
+      gpui::point(boundary + px(10.0), y),
+      Some(gpui::MouseButton::Left),
+      gpui::Modifiers::default(),
+    );
+    cx.simulate_mouse_move(
+      to,
+      Some(gpui::MouseButton::Left),
+      gpui::Modifiers::default(),
+    );
+    cx.simulate_mouse_up(to, gpui::MouseButton::Left, gpui::Modifiers::default());
+    cx.run_until_parked();
+
+    let after = cx
+      .debug_bounds("session-conversation-pane")
+      .expect("conversation pane");
+    assert!(
+      after.size.width >= before.size.width + px(60.0),
+      "dragging right should widen the left pane: {before:?} -> {after:?}"
+    );
+  }
+
+  #[gpui::test]
+  async fn dragging_a_vertical_center_split_resizes_the_panes(cx: &mut TestAppContext) {
+    let repo = TempRepo::init("session-center-vertical-resize");
+    commit_text_file(&repo.path, Path::new("README.md"), "v1\n", "initial");
+    std::fs::write(repo.path.join("README.md"), "v2\n").expect("modify file");
+    let (page, cx) = add_session_page_window(repo.path.clone(), cx);
+    cx.run_until_parked();
+
+    page.update_in(cx, |page, window, cx| {
+      page.sidebar_open = false;
+      page.dock_open = false;
+      page.open_diff(
+        PathBuf::from("README.md"),
+        None,
+        OpenIntent::Open,
+        window,
+        cx,
+      );
+    });
+    await_open_file(&page, cx).await;
+    page.update(cx, |page, cx| {
+      page.diff_chat_open = true;
+      assert!(page.center_layout.split_active(
+        CenterSurface::from_tab(CenterTab::chat()),
+        CenterSplitDirection::Up,
+      ));
+      page.active_center_tab = Some(CenterTab::chat());
+      page.sync_agent_chat_close_control(cx);
+      cx.notify();
+    });
+    cx.run_until_parked();
+
+    let before = cx
+      .debug_bounds("session-conversation-pane")
+      .expect("conversation pane");
+    let boundary = before.bottom();
+    let x = before.center().x;
+    let to = gpui::point(x, boundary + px(60.0));
+    cx.simulate_mouse_down(
+      gpui::point(x, boundary - px(2.0)),
+      gpui::MouseButton::Left,
+      gpui::Modifiers::default(),
+    );
+    cx.simulate_mouse_move(
+      gpui::point(x, boundary + px(10.0)),
+      Some(gpui::MouseButton::Left),
+      gpui::Modifiers::default(),
+    );
+    cx.simulate_mouse_move(
+      to,
+      Some(gpui::MouseButton::Left),
+      gpui::Modifiers::default(),
+    );
+    cx.simulate_mouse_up(to, gpui::MouseButton::Left, gpui::Modifiers::default());
+    cx.run_until_parked();
+
+    let after = cx
+      .debug_bounds("session-conversation-pane")
+      .expect("conversation pane");
+    assert!(
+      after.size.height >= before.size.height + px(40.0),
+      "dragging down should make the top pane taller: {before:?} -> {after:?}"
     );
   }
 

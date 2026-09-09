@@ -39,6 +39,15 @@ pub(super) enum CenterSplitDirection {
 pub(super) struct CenterPaneId(u64);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) struct CenterSplitId(u64);
+
+impl CenterSplitId {
+  pub(super) fn as_u64(self) -> u64 {
+    self.0
+  }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) struct CenterDropTarget {
   pub(super) pane_id: CenterPaneId,
   pub(super) direction: Option<CenterSplitDirection>,
@@ -125,22 +134,33 @@ impl CenterPane {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) struct CenterSplit {
+  id: CenterSplitId,
   direction: CenterSplitDirection,
   first: Box<CenterNode>,
   second: Box<CenterNode>,
 }
 
 impl CenterSplit {
-  fn new(old_node: CenterNode, new_node: CenterNode, direction: CenterSplitDirection) -> Self {
+  fn new(
+    id: CenterSplitId,
+    old_node: CenterNode,
+    new_node: CenterNode,
+    direction: CenterSplitDirection,
+  ) -> Self {
     let (first, second) = match direction {
       CenterSplitDirection::Up | CenterSplitDirection::Left => (new_node, old_node),
       CenterSplitDirection::Down | CenterSplitDirection::Right => (old_node, new_node),
     };
     Self {
+      id,
       direction,
       first: Box::new(first),
       second: Box::new(second),
     }
+  }
+
+  pub(super) fn id(&self) -> CenterSplitId {
+    self.id
   }
 
   pub(super) fn direction(&self) -> CenterSplitDirection {
@@ -272,6 +292,7 @@ impl CenterNode {
     &mut self,
     pane_id: CenterPaneId,
     new_pane_id: CenterPaneId,
+    new_split_id: CenterSplitId,
     surface: CenterSurface,
     direction: CenterSplitDirection,
   ) -> bool {
@@ -282,16 +303,24 @@ impl CenterNode {
         }
         let old_node = self.clone();
         let new_node = Self::Pane(CenterPane::new(new_pane_id, surface));
-        *self = Self::Split(CenterSplit::new(old_node, new_node, direction));
+        *self = Self::Split(CenterSplit::new(
+          new_split_id,
+          old_node,
+          new_node,
+          direction,
+        ));
         true
       }
       Self::Split(split) => {
-        split
-          .first
-          .split_pane(pane_id, new_pane_id, surface.clone(), direction)
-          || split
-            .second
-            .split_pane(pane_id, new_pane_id, surface, direction)
+        split.first.split_pane(
+          pane_id,
+          new_pane_id,
+          new_split_id,
+          surface.clone(),
+          direction,
+        ) || split
+          .second
+          .split_pane(pane_id, new_pane_id, new_split_id, surface, direction)
       }
     }
   }
@@ -301,6 +330,7 @@ impl CenterNode {
     &mut self,
     active_tab: &CenterTab,
     new_pane_id: CenterPaneId,
+    new_split_id: CenterSplitId,
     surface: CenterSurface,
     direction: CenterSplitDirection,
   ) -> bool {
@@ -311,16 +341,24 @@ impl CenterNode {
         }
         let old_node = self.clone();
         let new_node = Self::Pane(CenterPane::new(new_pane_id, surface));
-        *self = Self::Split(CenterSplit::new(old_node, new_node, direction));
+        *self = Self::Split(CenterSplit::new(
+          new_split_id,
+          old_node,
+          new_node,
+          direction,
+        ));
         true
       }
       Self::Split(split) => {
-        split
-          .first
-          .split_active(active_tab, new_pane_id, surface.clone(), direction)
-          || split
-            .second
-            .split_active(active_tab, new_pane_id, surface, direction)
+        split.first.split_active(
+          active_tab,
+          new_pane_id,
+          new_split_id,
+          surface.clone(),
+          direction,
+        ) || split
+          .second
+          .split_active(active_tab, new_pane_id, new_split_id, surface, direction)
       }
     }
   }
@@ -503,9 +541,10 @@ impl CenterLayout {
       return false;
     }
     let new_pane_id = self.allocate_pane_id();
+    let new_split_id = CenterSplitId(new_pane_id.0);
     if self
       .root
-      .split_pane(pane_id, new_pane_id, surface, direction)
+      .split_pane(pane_id, new_pane_id, new_split_id, surface, direction)
     {
       self.active_tab = tab;
       true
@@ -522,10 +561,14 @@ impl CenterLayout {
   ) -> bool {
     let tab = surface.tab().clone();
     let new_pane_id = self.allocate_pane_id();
-    if self
-      .root
-      .split_active(&self.active_tab, new_pane_id, surface, direction)
-    {
+    let new_split_id = CenterSplitId(new_pane_id.0);
+    if self.root.split_active(
+      &self.active_tab,
+      new_pane_id,
+      new_split_id,
+      surface,
+      direction,
+    ) {
       self.active_tab = tab;
       true
     } else {
@@ -555,8 +598,14 @@ impl CenterLayout {
       return false;
     };
     let old_node = self.root.clone();
-    let new_node = CenterNode::Pane(CenterPane::new(self.allocate_pane_id(), surface));
-    self.root = CenterNode::Split(CenterSplit::new(old_node, new_node, direction));
+    let new_pane_id = self.allocate_pane_id();
+    let new_node = CenterNode::Pane(CenterPane::new(new_pane_id, surface));
+    self.root = CenterNode::Split(CenterSplit::new(
+      CenterSplitId(new_pane_id.0),
+      old_node,
+      new_node,
+      direction,
+    ));
     self.active_tab = tab.clone();
     true
   }
