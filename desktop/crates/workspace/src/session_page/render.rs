@@ -890,17 +890,14 @@ impl SessionPage {
           .map(|item| item.id.clone())
           .collect::<Vec<_>>();
         let visible_rows = items.len().clamp(1, 8) as f32;
-        let list_height = px((visible_rows * 48.0).min(360.0));
+        let list_height = if items.is_empty() {
+          px(148.0)
+        } else {
+          px((visible_rows * 48.0).min(360.0))
+        };
         let mut list = v_flex();
         if items.is_empty() {
-          list = list.child(
-            div()
-              .px_3()
-              .py_3()
-              .text_xs()
-              .text_color(theme.muted_foreground)
-              .child("No chat history yet"),
-          );
+          list = list.child(Self::render_center_history_empty(&theme));
         }
         for item in items.clone() {
           let tab = CenterTab::chat_for(item.id.clone());
@@ -1089,6 +1086,59 @@ impl SessionPage {
               .child(list.size_full().overflow_y_scrollbar()),
           )
       })
+      .into_any_element()
+  }
+
+  fn render_center_history_empty(theme: &gpui_component::Theme) -> AnyElement {
+    v_flex()
+      .debug_selector(|| "session-center-history-empty".to_string())
+      .p_3()
+      .child(
+        h_flex()
+          .w_full()
+          .items_center()
+          .gap_3()
+          .rounded(px(16.0))
+          .border_1()
+          .border_color(theme.border.opacity(0.75))
+          .bg(theme.secondary.opacity(0.45))
+          .p_4()
+          .child(
+            h_flex()
+              .size(px(54.0))
+              .flex_shrink_0()
+              .items_center()
+              .justify_center()
+              .rounded(px(16.0))
+              .border_1()
+              .border_color(theme.primary.opacity(0.22))
+              .bg(theme.primary.opacity(0.10))
+              .child(
+                gpui_component::Icon::new(UiIconName::History)
+                  .size_6()
+                  .text_color(theme.primary),
+              ),
+          )
+          .child(
+            v_flex()
+              .min_w_0()
+              .gap_1()
+              .child(
+                div()
+                  .text_sm()
+                  .font_weight(gpui::FontWeight::SEMIBOLD)
+                  .text_color(theme.foreground)
+                  .child("No chat history yet"),
+              )
+              .child(
+                div()
+                  .text_xs()
+                  .line_height(px(17.0))
+                  .text_color(theme.muted_foreground)
+                  .child("Closed chats will appear here so you can reopen them quickly."),
+              ),
+          ),
+      )
       .into_any_element()
   }
 
