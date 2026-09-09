@@ -4005,106 +4005,151 @@ impl DockPanel {
     })
   }
 
-  fn render_pr_message(&self, text: &'static str, cx: &mut Context<Self>) -> AnyElement {
+  fn render_pr_empty_state(
+    &self,
+    icon: UiIconName,
+    title: impl Into<SharedString>,
+    description: impl Into<SharedString>,
+    actions: Vec<AnyElement>,
+    cx: &mut Context<Self>,
+  ) -> AnyElement {
     let theme = cx.theme().clone();
+    let has_actions = !actions.is_empty();
+
     v_flex()
+      .debug_selector(|| "dock-panel-pr-empty-state".to_string())
       .flex_1()
+      .min_h_0()
       .items_center()
-      .justify_center()
-      .gap_2()
+      .justify_start()
       .px_4()
+      .pt(px(96.0))
       .child(
-        Icon::new(UiIconName::GitPullRequest)
-          .size_4()
-          .text_color(theme.muted_foreground),
-      )
-      .child(
-        div()
-          .text_sm()
-          .text_center()
-          .text_color(theme.muted_foreground)
-          .child(text),
+        v_flex()
+          .w_full()
+          .max_w(px(320.0))
+          .gap_3()
+          .rounded(px(16.0))
+          .border_1()
+          .border_color(theme.border.opacity(0.75))
+          .bg(theme.secondary.opacity(0.45))
+          .p_4()
+          .child(
+            h_flex()
+              .items_center()
+              .gap_3()
+              .child(
+                h_flex()
+                  .size(px(54.0))
+                  .flex_shrink_0()
+                  .items_center()
+                  .justify_center()
+                  .rounded(px(16.0))
+                  .border_1()
+                  .border_color(theme.primary.opacity(0.22))
+                  .bg(theme.primary.opacity(0.10))
+                  .child(Icon::new(icon).size_6().text_color(theme.primary)),
+              )
+              .child(
+                v_flex()
+                  .min_w_0()
+                  .gap_1()
+                  .child(
+                    div()
+                      .text_sm()
+                      .font_weight(gpui::FontWeight::SEMIBOLD)
+                      .text_color(theme.foreground)
+                      .child(title.into()),
+                  )
+                  .child(
+                    div()
+                      .text_xs()
+                      .line_height(px(17.0))
+                      .text_color(theme.muted_foreground)
+                      .child(description.into()),
+                  ),
+              ),
+          )
+          .when(has_actions, |this| {
+            this.child(v_flex().w_full().gap_2().children(actions))
+          }),
       )
       .into_any_element()
   }
 
   fn render_pr_tab(&mut self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
     if self.repo_root.is_none() {
-      return self.render_pr_message("No Git repository", cx);
+      return self.render_pr_empty_state(
+        UiIconName::GitPullRequest,
+        "No Git repository",
+        "Open a GitHub-backed repository to review pull requests here.",
+        Vec::new(),
+        cx,
+      );
     }
-    let theme = cx.theme().clone();
     match &self.branch_pr {
       // Nothing to show, so this is where Reviu says what it could show.
       BranchPrState::NoAccess => {
         let github_access = AuthStateStore::github_access_state(cx);
         match render_pro_promise(ProPromiseSurface::PullRequestPanel, github_access, cx) {
           Some(promise) => promise,
-          None => self.render_pr_message(
-            "Sign in with GitHub to link this branch to a pull request",
+          None => self.render_pr_empty_state(
+            UiIconName::Lock,
+            "GitHub is not connected",
+            "Sign in with GitHub to link this branch to a pull request.",
+            Vec::new(),
             cx,
           ),
         }
       }
-      BranchPrState::NoRemote => self.render_pr_message("No GitHub remote on this repository", cx),
-      BranchPrState::Loading => self.render_pr_message("Loading pull request...", cx),
+      BranchPrState::NoRemote => self.render_pr_empty_state(
+        UiIconName::GitPullRequest,
+        "No GitHub remote",
+        "Add a GitHub remote to connect this repository's branches to pull requests.",
+        Vec::new(),
+        cx,
+      ),
+      BranchPrState::Loading => self.render_pr_empty_state(
+        UiIconName::RefreshCw,
+        "Looking for a pull request",
+        "Reviu is checking GitHub for the current branch.",
+        Vec::new(),
+        cx,
+      ),
       BranchPrState::Missing(context) if self.branch_needs_publishing() => {
         let context = context.clone();
-        v_flex()
-          .flex_1()
-          .items_center()
-          .justify_center()
-          .gap_3()
-          .px_4()
-          .child(
-            Icon::new(UiIconName::GitPullRequestArrow)
-              .size_4()
-              .text_color(theme.muted_foreground),
-          )
-          .child(
-            div()
-              .text_sm()
-              .text_center()
-              .text_color(theme.muted_foreground)
-              .child(format!("{} is not on the remote yet", context.branch)),
-          )
-          .child(
+        self.render_pr_empty_state(
+          UiIconName::GitPullRequestArrow,
+          format!("{} is local only", context.branch),
+          "Publish the branch, then open the pull request form from here.",
+          vec![
             Button::new("dock-panel-publish-and-create-pr")
               .primary()
               .small()
+              .w_full()
               .label("Publish and create pull request")
               .debug_selector(|| DOCK_PANEL_PUBLISH_AND_CREATE_PR_DEBUG_SELECTOR.to_string())
               .on_click(cx.listener(move |_, _, _, cx| {
                 cx.emit(DockPanelEvent::PublishBranchAndCreatePullRequest(
                   context.clone(),
                 ));
-              })),
-          )
-          .into_any_element()
+              }))
+              .into_any_element(),
+          ],
+          cx,
+        )
       }
       BranchPrState::Missing(context) => {
         let context = context.clone();
-        v_flex()
-          .flex_1()
-          .items_center()
-          .justify_center()
-          .gap_3()
-          .px_4()
-          .child(
-            Icon::new(UiIconName::GitPullRequestArrow)
-              .size_4()
-              .text_color(theme.muted_foreground),
-          )
-          .child(
-            div()
-              .text_sm()
-              .text_center()
-              .text_color(theme.muted_foreground)
-              .child(format!("No pull request for {}", context.branch)),
-          )
-          .child(
+        self.render_pr_empty_state(
+          UiIconName::GitPullRequestArrow,
+          format!("No pull request for {}", context.branch),
+          "Create one in Reviu, or open GitHub compare for reviewers, labels, and projects.",
+          vec![
             Button::new("dock-panel-create-pr")
               .primary()
               .small()
+              .w_full()
               .label("Create pull request")
               .debug_selector(|| DOCK_PANEL_CREATE_PR_DEBUG_SELECTOR.to_string())
               .on_click(cx.listener({
@@ -4119,13 +4164,13 @@ impl DockPanel {
                     cx,
                   );
                 }
-              })),
-          )
-          .child(
-            // Reviewers, labels and projects live on github.com, not in our dialog.
+              }))
+              .into_any_element(),
             Button::new("dock-panel-compare-on-github")
-              .ghost()
-              .xsmall()
+              .with_variant(gpui_component::button::ButtonVariant::Secondary)
+              .outline()
+              .small()
+              .w_full()
               .label("Open compare on GitHub")
               .debug_selector(|| DOCK_PANEL_COMPARE_DEBUG_SELECTOR.to_string())
               .on_click(move |_, _, cx| {
@@ -4135,9 +4180,11 @@ impl DockPanel {
                   context.branch.clone(),
                   cx,
                 );
-              }),
-          )
-          .into_any_element()
+              })
+              .into_any_element(),
+          ],
+          cx,
+        )
       }
       BranchPrState::Found(context, pull_request) => v_flex()
         .size_full()
