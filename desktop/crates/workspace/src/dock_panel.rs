@@ -3423,6 +3423,46 @@ impl DockPanel {
       .into_any_element()
   }
 
+  fn render_files_loading_state() -> AnyElement {
+    v_flex()
+      .debug_selector(|| "dock-panel-files-loading".to_string())
+      .flex_1()
+      .min_h_0()
+      .gap_1()
+      .px_2()
+      .py_2()
+      .children((0..10).map(Self::render_files_loading_row))
+      .into_any_element()
+  }
+
+  fn render_files_loading_row(index: usize) -> AnyElement {
+    let indent = match index % 5 {
+      0 => 0.0,
+      1 | 2 => 16.0,
+      _ => 32.0,
+    };
+
+    h_flex()
+      .w_full()
+      .items_center()
+      .gap_2()
+      .pr_2()
+      .pl(px(8.0 + indent))
+      .py_1p5()
+      .child(
+        gpui_component::skeleton::Skeleton::new()
+          .size(px(16.0))
+          .rounded(px(4.0)),
+      )
+      .child(
+        gpui_component::skeleton::Skeleton::new()
+          .h(px(14.0))
+          .flex_1()
+          .rounded(px(999.0)),
+      )
+      .into_any_element()
+  }
+
   fn has_staged_changes(&self) -> bool {
     self
       .status_entries
@@ -3804,8 +3844,6 @@ impl DockPanel {
   }
 
   fn render_files_tab(&mut self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
-    let theme = cx.theme().clone();
-
     // Rendering is the first moment the tree exists to take the focus the tab
     // was opened for.
     if self.focus_files_tree_when_loaded && self.files_loaded {
@@ -3822,17 +3860,7 @@ impl DockPanel {
       if !self.files_loading {
         self.load_project_files(cx);
       }
-      return v_flex()
-        .flex_1()
-        .items_center()
-        .justify_center()
-        .child(
-          div()
-            .text_sm()
-            .text_color(theme.muted_foreground)
-            .child("Loading files..."),
-        )
-        .into_any_element();
+      return Self::render_files_loading_state();
     }
 
     let modified: std::collections::HashSet<PathBuf> = self
