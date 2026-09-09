@@ -12,18 +12,18 @@ use gpui::{
   ParentElement, Render, SharedString, Styled, Task, WeakEntity, Window, div, img, prelude::*, px,
 };
 use gpui_component::{
-  ActiveTheme as _, Icon, IconName, Sizable as _,
+  ActiveTheme as _, Icon, IconName,
   dialog::{DialogDescription, DialogFooter, DialogHeader, DialogTitle},
   h_flex,
   input::{Input, InputState},
   menu::{PopupMenu, PopupMenuItem},
   notification::Notification,
-  spinner::Spinner,
+  skeleton::Skeleton,
   tree::{TreeEvent, TreeItem, TreeState, tree},
   v_flex,
 };
 use ui::{
-  Button, ButtonVariants as _, FILE_ICON_SIZE_PX, SelectableRowStyle, WindowExt as _,
+  Button, ButtonVariants as _, FILE_ICON_SIZE_PX, SelectableRowStyle, UiIconName, WindowExt as _,
   file_icon_path_for_path_with_theme, selectable_list_item,
 };
 
@@ -812,6 +812,110 @@ impl HistoryList {
     .w_full()
     .into_any_element()
   }
+
+  fn render_loading_state(_cx: &mut Context<Self>) -> AnyElement {
+    v_flex()
+      .id("history-list-loading")
+      .debug_selector(|| "history-list-loading".to_string())
+      .size_full()
+      .gap_2()
+      .px_2()
+      .py_2()
+      .children((0..7).map(|index| Self::render_loading_row(index)))
+      .into_any_element()
+  }
+
+  fn render_loading_row(index: usize) -> AnyElement {
+    let author_width = match index % 3 {
+      0 => 72.0,
+      1 => 96.0,
+      _ => 56.0,
+    };
+
+    h_flex()
+      .w_full()
+      .items_center()
+      .gap_2()
+      .px_2()
+      .py_1p5()
+      .child(Skeleton::new().size(px(12.0)).rounded(px(3.0)))
+      .child(Skeleton::new().h(px(16.0)).flex_1().rounded(px(999.0)))
+      .child(
+        Skeleton::new()
+          .secondary()
+          .h(px(14.0))
+          .w(px(author_width))
+          .rounded(px(999.0)),
+      )
+      .into_any_element()
+  }
+
+  fn render_state(
+    id: &'static str,
+    symbol: AnyElement,
+    title: &'static str,
+    description: &'static str,
+    cx: &mut Context<Self>,
+  ) -> AnyElement {
+    let theme = cx.theme().clone();
+
+    v_flex()
+      .id(id)
+      .debug_selector(move || id.to_string())
+      .size_full()
+      .items_center()
+      .justify_start()
+      .px_4()
+      .pt(px(96.0))
+      .child(
+        v_flex()
+          .w_full()
+          .max_w(px(320.0))
+          .gap_3()
+          .rounded(px(16.0))
+          .border_1()
+          .border_color(theme.border.opacity(0.75))
+          .bg(theme.secondary.opacity(0.45))
+          .p_4()
+          .child(
+            h_flex()
+              .items_center()
+              .gap_3()
+              .child(
+                h_flex()
+                  .size(px(54.0))
+                  .flex_shrink_0()
+                  .items_center()
+                  .justify_center()
+                  .rounded(px(16.0))
+                  .border_1()
+                  .border_color(theme.primary.opacity(0.22))
+                  .bg(theme.primary.opacity(0.10))
+                  .child(symbol),
+              )
+              .child(
+                v_flex()
+                  .min_w_0()
+                  .gap_1()
+                  .child(
+                    div()
+                      .text_sm()
+                      .font_weight(gpui::FontWeight::SEMIBOLD)
+                      .text_color(theme.foreground)
+                      .child(title),
+                  )
+                  .child(
+                    div()
+                      .text_xs()
+                      .line_height(px(17.0))
+                      .text_color(theme.muted_foreground)
+                      .child(description),
+                  ),
+              ),
+          ),
+      )
+      .into_any_element()
+  }
 }
 
 impl Render for HistoryList {
@@ -819,39 +923,20 @@ impl Render for HistoryList {
     let theme = cx.theme().clone();
 
     if self.loading {
-      return div()
-        .id("history-list-loading")
-        .flex()
-        .flex_col()
-        .size_full()
-        .items_center()
-        .justify_center()
-        .gap_2()
-        .child(Spinner::new().small())
-        .child(
-          div()
-            .text_sm()
-            .text_color(theme.muted_foreground)
-            .child("Loading history..."),
-        )
-        .into_any_element();
+      return Self::render_loading_state(cx);
     }
 
     if self.commits.is_empty() {
-      return div()
-        .id("history-list-empty")
-        .flex()
-        .flex_col()
-        .size_full()
-        .items_center()
-        .justify_center()
-        .child(
-          div()
-            .text_sm()
-            .text_color(theme.muted_foreground)
-            .child("No commits to display"),
-        )
-        .into_any_element();
+      return Self::render_state(
+        "history-list-empty",
+        Icon::new(UiIconName::History)
+          .size_6()
+          .text_color(theme.primary)
+          .into_any_element(),
+        "No commits yet",
+        "Commit history will appear here once this repository has commits to review.",
+        cx,
+      );
     }
 
     div()

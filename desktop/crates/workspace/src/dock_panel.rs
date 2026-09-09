@@ -4694,25 +4694,17 @@ impl DockPanel {
         UiIconName::CircleSlash,
         "Could not load changed files",
         error,
-        false,
         cx,
       );
     }
     if self.pr_files_loading {
-      return self.render_pr_files_message(
-        UiIconName::RefreshCw,
-        "Loading changed files",
-        "Reviu is reading the pull request diff from GitHub.",
-        true,
-        cx,
-      );
+      return self.render_pr_files_loading(cx);
     }
     if self.pr_files.is_empty() {
       return self.render_pr_files_message(
         UiIconName::FileDiff,
         "No changed files",
         "This pull request does not change any files yet.",
-        false,
         cx,
       );
     }
@@ -4735,25 +4727,74 @@ impl DockPanel {
       .into_any_element()
   }
 
+  fn render_pr_files_loading(&self, cx: &mut Context<Self>) -> AnyElement {
+    let theme = cx.theme().clone();
+
+    v_flex()
+      .debug_selector(|| "dock-panel-pr-files-loading".to_string())
+      .flex_1()
+      .min_h_0()
+      .gap_2()
+      .px_2()
+      .py_2()
+      .children((0..6).map(|index| {
+        h_flex()
+          .w_full()
+          .items_center()
+          .gap_2()
+          .rounded(px(8.0))
+          .px_2()
+          .py_1p5()
+          .child(
+            gpui_component::skeleton::Skeleton::new()
+              .size(px(16.0))
+              .rounded(px(4.0)),
+          )
+          .child(
+            v_flex()
+              .flex_1()
+              .min_w_0()
+              .gap_1()
+              .child(
+                gpui_component::skeleton::Skeleton::new()
+                  .h(px(14.0))
+                  .w_full()
+                  .rounded(px(999.0)),
+              )
+              .child(
+                gpui_component::skeleton::Skeleton::new()
+                  .secondary()
+                  .h(px(10.0))
+                  .w(px(match index % 3 {
+                    0 => 160.0,
+                    1 => 120.0,
+                    _ => 190.0,
+                  }))
+                  .rounded(px(999.0)),
+              ),
+          )
+          .child(
+            gpui_component::skeleton::Skeleton::new()
+              .secondary()
+              .h(px(14.0))
+              .w(px(44.0))
+              .rounded(px(999.0)),
+          )
+          .border_b_1()
+          .border_color(theme.border.opacity(0.5))
+          .into_any_element()
+      }))
+      .into_any_element()
+  }
+
   fn render_pr_files_message(
     &self,
     icon: UiIconName,
     title: &'static str,
     description: impl Into<SharedString>,
-    loading: bool,
     cx: &mut Context<Self>,
   ) -> AnyElement {
     let theme = cx.theme().clone();
-    let symbol = if loading {
-      gpui_component::spinner::Spinner::new()
-        .small()
-        .into_any_element()
-    } else {
-      Icon::new(icon)
-        .size_6()
-        .text_color(theme.primary)
-        .into_any_element()
-    };
 
     v_flex()
       .debug_selector(|| "dock-panel-pr-files-empty-state".to_string())
@@ -4787,7 +4828,7 @@ impl DockPanel {
                   .border_1()
                   .border_color(theme.primary.opacity(0.22))
                   .bg(theme.primary.opacity(0.10))
-                  .child(symbol),
+                  .child(Icon::new(icon).size_6().text_color(theme.primary)),
               )
               .child(
                 v_flex()
