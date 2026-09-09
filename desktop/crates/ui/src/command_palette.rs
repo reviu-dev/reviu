@@ -1640,8 +1640,8 @@ impl CommandPaletteCommand {
   pub fn open_project() -> Self {
     Self::new(
       CommandPaletteCommandId::OpenProject,
-      "Open project",
-      "Pick and open a local project",
+      "Add project",
+      "Pick a local project to add to Reviu",
     )
   }
 
@@ -2040,7 +2040,7 @@ impl CommandPaletteCommand {
       Id::SubmitPullRequestReview => &["pr", "approve"],
       Id::DiscardReview => &["clear"],
       Id::DiscardPullRequestReview => &["pr", "delete", "clear"],
-      Id::OpenProject => &["folder", "project"],
+      Id::OpenProject => &["open", "folder", "project"],
       Id::SwitchProject => &["recent"],
       Id::ToggleTerminal => &["shell", "console", "toggle"],
       Id::ShowChanges => &["staged", "working", "show"],
@@ -2122,7 +2122,7 @@ impl CommandPaletteCommand {
       }
       CommandPaletteCommandId::DropStash => Icon::new(UiIconName::Trash),
       CommandPaletteCommandId::DeleteBranch => Icon::new(UiIconName::Trash),
-      CommandPaletteCommandId::OpenProject => Icon::new(IconName::FolderOpen),
+      CommandPaletteCommandId::OpenProject => Icon::new(UiIconName::FolderPlus),
       CommandPaletteCommandId::CreateBranch | CommandPaletteCommandId::CreateBranchFrom => {
         Icon::new(IconName::Plus)
       }
@@ -3932,7 +3932,8 @@ mod tests {
   fn open_project_command_is_available_with_expected_metadata() {
     let command = CommandPaletteCommand::open_project();
     assert_eq!(command.id, CommandPaletteCommandId::OpenProject);
-    assert_eq!(command.name.as_ref(), "Open project");
+    assert_eq!(command.name.as_ref(), "Add project");
+    assert!(command.matches("add project"));
     assert!(command.matches("open project"));
   }
 

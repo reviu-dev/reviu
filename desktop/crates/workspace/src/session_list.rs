@@ -147,6 +147,7 @@ impl Render for DraggedProjectSection {
 }
 
 pub enum SessionListEvent {
+  OpenProject,
   /// The section header itself: fold or unfold a project's checkouts.
   ToggleProjectCollapsed {
     project_root: PathBuf,
@@ -1335,6 +1336,19 @@ impl Render for SessionList {
           .font_weight(gpui::FontWeight::SEMIBOLD)
           .text_color(theme.muted_foreground)
           .child("Projects"),
+      )
+      .child(div().flex_1())
+      .child(
+        Button::new("session-sidebar-add-project")
+          .debug_selector(|| "session-sidebar-add-project".to_string())
+          .icon(UiIconName::FolderPlus)
+          .ghost()
+          .compact()
+          .xsmall()
+          .tooltip("Add project")
+          .on_click(cx.listener(|_, _, _, cx| {
+            cx.emit(SessionListEvent::OpenProject);
+          })),
       );
 
     // Sections come from the tracked-project order so an empty project keeps its
@@ -1373,7 +1387,7 @@ impl Render for SessionList {
         .gap_2()
         .px_4()
         .child(
-          Icon::new(UiIconName::MessageCirclePlus)
+          Icon::new(UiIconName::FolderPlus)
             .size_4()
             .text_color(theme.muted_foreground),
         )
@@ -1388,7 +1402,7 @@ impl Render for SessionList {
             .text_xs()
             .text_center()
             .text_color(theme.muted_foreground.opacity(0.8))
-            .child("Open a project to start working"),
+            .child("Add a project to start working"),
         )
         .into_any_element()
     } else {

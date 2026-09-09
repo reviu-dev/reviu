@@ -444,8 +444,8 @@ const SHORTCUT_DEFINITIONS: [ShortcutDefinition; 34] = [
   },
   ShortcutDefinition {
     id: ShortcutId::OpenProject,
-    title: "Open Project",
-    description: "Open a local project.",
+    title: "Add Project",
+    description: "Add a local project.",
     scope_label: "Projects",
     category: ShortcutCategory::LocalGit,
     keystroke: "cmd-o",

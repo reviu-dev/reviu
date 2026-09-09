@@ -411,6 +411,7 @@ impl SessionPage {
       &session_list,
       window,
       |this, _list, event: &SessionListEvent, window, cx| match event {
+        SessionListEvent::OpenProject => this.start_open_project(window, cx),
         SessionListEvent::ToggleProjectCollapsed { project_root } => {
           let project_root = project_root.clone();
           this.session_list.update(cx, |list, cx| {
@@ -2610,6 +2611,37 @@ mod tests {
       "the row goes back to naming the project"
     );
     assert!(cx.debug_bounds(REPO_CONTEXT_DEBUG_SELECTOR).is_some());
+  }
+
+  #[gpui::test]
+  async fn project_header_add_button_opens_project_picker(cx: &mut TestAppContext) {
+    let repo = TempRepo::init("session-header-add-project");
+    let other = TempRepo::init("session-header-add-project-other");
+    commit_text_file(&repo.path, Path::new("README.md"), "v1\n", "initial");
+    commit_text_file(&other.path, Path::new("README.md"), "v1\n", "initial");
+
+    let (page, cx) = add_session_page_window(repo.path.clone(), cx);
+    cx.run_until_parked();
+
+    let button = cx
+      .debug_bounds("session-sidebar-add-project")
+      .expect("the projects header offers to add a project");
+    let picked = other.path.clone();
+    cx.simulate_click(button.center(), gpui::Modifiers::default());
+    cx.simulate_path_prompt_response(move |_| Some(vec![picked]));
+    cx.run_until_parked();
+
+    page.read_with(cx, |page, cx| {
+      assert_eq!(page.fallback_repo.as_deref(), Some(other.path.as_path()));
+      assert_eq!(
+        page
+          .dock_panel
+          .read(cx)
+          .project_root()
+          .map(|path| path.to_path_buf()),
+        Some(other.path.clone())
+      );
+    });
   }
 
   #[gpui::test(iterations = 10)]

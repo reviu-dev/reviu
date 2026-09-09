@@ -39,14 +39,12 @@ impl SessionPage {
       .border_color(theme.border)
       .cursor_pointer()
       .hover(|this| this.bg(theme.secondary_hover))
-      .tooltip(|window, cx| {
-        gpui_component::tooltip::Tooltip::new("Open a project").build(window, cx)
-      })
+      .tooltip(|window, cx| gpui_component::tooltip::Tooltip::new("Add project").build(window, cx))
       .on_click(cx.listener(|this, _, window, cx| {
         this.start_open_project(window, cx);
       }))
       .child(
-        gpui_component::Icon::new(gpui_component::IconName::FolderOpen)
+        gpui_component::Icon::new(UiIconName::FolderPlus)
           .size_3()
           .text_color(theme.muted_foreground),
       )
@@ -55,7 +53,7 @@ impl SessionPage {
           .text_xs()
           .text_color(theme.foreground)
           .truncate()
-          .child("Open project"),
+          .child("Add project"),
       )
       .into_any_element()
   }
@@ -1642,7 +1640,7 @@ impl SessionPage {
     let subtitle = if has_project {
       "Choose a place to start"
     } else {
-      "Open a project to start reviewing"
+      "Add a project to start reviewing"
     };
 
     let mut actions = h_flex()
@@ -1682,8 +1680,8 @@ impl SessionPage {
     } else {
       actions = actions.child(self.render_center_empty_action(
         "session-center-empty-open-project",
-        gpui_component::Icon::new(gpui_component::IconName::FolderOpen),
-        "Open project",
+        gpui_component::Icon::new(UiIconName::FolderPlus),
+        "Add project",
         "Choose a repository or folder",
         cx.listener(|this, _, window, cx| this.start_open_project(window, cx)),
         cx,
