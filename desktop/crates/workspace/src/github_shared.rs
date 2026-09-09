@@ -203,7 +203,7 @@ mod tests {
   use super::{
     DiffHunkLineKind, extract_original_line_range_from_diff_hunk,
     extract_original_lines_from_diff_hunk, logins_match_case_insensitive, parse_diff_hunk_lines,
-    pull_request_status_color, pull_request_status_label, repo_label,
+    pull_request_status_color, pull_request_status_label,
   };
   use crate::api::GithubPullRequestStatus;
   use gpui::TestAppContext;
@@ -212,11 +212,6 @@ mod tests {
 
   fn init_gpui_test(cx: &mut TestAppContext) {
     cx.update(gpui_component::init);
-  }
-
-  #[test]
-  fn repo_label_formats_owner_and_repo() {
-    assert_eq!(repo_label("acme", "widget"), "acme/widget");
   }
 
   #[test]

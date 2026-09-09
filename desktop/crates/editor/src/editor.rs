@@ -172,10 +172,6 @@ fn ease_out_cubic(t: f32) -> f32 {
   1.0 - (1.0 - t).powi(3)
 }
 
-fn editor_code_font_family(cx: &App) -> SharedString {
-  cx.theme().mono_font_family.clone()
-}
-
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct VerticalScrollMetrics {
   pub viewport_lines: f32,
@@ -10106,7 +10102,7 @@ impl Render for Editor {
         ))
     };
     let content = content
-      .font_family(editor_code_font_family(cx))
+      .font_family(cx.theme().mono_font_family.clone())
       .text_size(cx.theme().mono_font_size)
       .relative()
       .child(EditorScrollbarElement::vertical(editor_entity));
@@ -11072,18 +11068,6 @@ pub mod tests {
       );
       assert_eq!(actual, expected);
     });
-  }
-
-  #[gpui::test]
-  fn test_editor_code_font_family_matches_theme_mono_font(cx: &mut TestAppContext) {
-    cx.update(gpui_component::init);
-    let (expected, actual) = cx.update(|cx| {
-      (
-        cx.theme().mono_font_family.clone(),
-        editor_code_font_family(cx),
-      )
-    });
-    assert_eq!(actual, expected);
   }
 
   #[gpui::test]

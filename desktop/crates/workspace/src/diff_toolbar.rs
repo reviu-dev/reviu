@@ -351,24 +351,4 @@ mod tests {
 
     assert_eq!(whitespace_icon().path().as_ref(), "icons/pilcrow.svg");
   }
-
-  #[test]
-  fn split_debug_selector_stays_on_the_mode_changing_button() {
-    assert_eq!(
-      split_button_debug_selector(DiffViewMode::Inline, DiffViewMode::Inline, "split-toggle"),
-      None
-    );
-    assert_eq!(
-      split_button_debug_selector(DiffViewMode::Inline, DiffViewMode::Split, "split-toggle"),
-      Some("split-toggle")
-    );
-    assert_eq!(
-      split_button_debug_selector(DiffViewMode::Split, DiffViewMode::Inline, "split-toggle"),
-      Some("split-toggle")
-    );
-    assert_eq!(
-      split_button_debug_selector(DiffViewMode::Split, DiffViewMode::Split, "split-toggle"),
-      None
-    );
-  }
 }

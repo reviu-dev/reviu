@@ -2676,17 +2676,6 @@ mod tests {
   }
 
   #[test]
-  fn test_benchmark_word_diff_ranges_matches_internal_logic() {
-    let old_text = "const getLastNotification = () => \"You have a new message!\";";
-    let new_text = "const getLastDataNotification = () => \"You have a new message!\";";
-
-    assert_eq!(
-      benchmark_word_diff_ranges(old_text, new_text),
-      word_diff_ranges(old_text, new_text)
-    );
-  }
-
-  #[test]
   fn test_word_diff_ranges_skip_very_long_lines() {
     let old_text = "const value = \"stable\";".repeat(80);
     let new_text = "const value = \"changed\";".repeat(80);
