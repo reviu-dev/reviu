@@ -166,13 +166,8 @@ pub(crate) fn stateful_markdown_view(
   extensions: &gpui_component::text::MarkdownExtensions,
   cx: &App,
 ) -> gpui::AnyElement {
-  let theme = cx.theme();
-  let mut style = TextViewStyle::default().paragraph_gap(gpui::rems(0.5));
-  style.highlight_theme = theme.highlight_theme.clone();
-  style.is_dark = theme.mode.is_dark();
-
   TextView::new(state)
-    .style(style)
+    .style(agent_markdown_style(false, cx))
     .markdown_extensions(extensions.clone())
     .selectable(true)
     .text_sm()
@@ -246,21 +241,29 @@ fn markdown_text_view(
   label_headings: bool,
   cx: &App,
 ) -> gpui::AnyElement {
+  TextView::markdown(id, source.into())
+    .style(agent_markdown_style(label_headings, cx))
+    .markdown_extensions(extensions.clone())
+    .selectable(true)
+    .text_sm()
+    .into_any_element()
+}
+
+fn agent_markdown_style(label_headings: bool, cx: &App) -> TextViewStyle {
   let theme = cx.theme();
-  let mut style = TextViewStyle::default().paragraph_gap(gpui::rems(0.5));
+  let mut code_block = gpui::StyleRefinement::default();
+  code_block.text.font_family = Some(theme.mono_font_family.clone());
+  code_block.text.font_size = Some(theme.mono_font_size.into());
+
+  let mut style = TextViewStyle::default()
+    .paragraph_gap(gpui::rems(0.5))
+    .code_block(code_block);
   if label_headings {
     style = style.heading_font_size(|_, base| base);
   }
   style.highlight_theme = theme.highlight_theme.clone();
   style.is_dark = theme.mode.is_dark();
-
-  TextView::markdown(id, source.into())
-    .style(style)
-    .markdown_extensions(extensions.clone())
-    .selectable(true)
-    // Body text inherits from here; headings scale off `heading_base_font_size`.
-    .text_sm()
-    .into_any_element()
+  style
 }
 
 pub(crate) fn timeline_row(
