@@ -17,6 +17,7 @@ use gpui_component::{
   list::{List, ListDelegate, ListEvent, ListItem, ListState},
   menu::{ContextMenuExt as _, PopupMenu, PopupMenuItem},
   scroll::ScrollableElement as _,
+  skeleton::Skeleton,
   tag::Tag,
   v_flex,
 };
@@ -1498,6 +1499,112 @@ impl ReviewList {
       .into_any_element()
   }
 
+  fn render_loading_state(cx: &mut Context<Self>) -> AnyElement {
+    let theme = cx.theme().clone();
+
+    v_flex()
+      .debug_selector(|| "review-list-loading".to_string())
+      .size_full()
+      .min_h_0()
+      .py_1()
+      .child(
+        h_flex()
+          .w_full()
+          .items_center()
+          .gap_2()
+          .px_3()
+          .py_1()
+          .border_b_1()
+          .border_color(theme.border)
+          .child(Skeleton::new().h(px(14.0)).w(px(130.0)).rounded(px(999.0)))
+          .child(div().flex_1())
+          .child(
+            Skeleton::new()
+              .secondary()
+              .h(px(14.0))
+              .w(px(24.0))
+              .rounded(px(999.0)),
+          ),
+      )
+      .children((0..3).map(|index| Self::render_loading_file_group(index, &theme)))
+      .into_any_element()
+  }
+
+  fn render_loading_file_group(index: usize, theme: &gpui_component::Theme) -> AnyElement {
+    let rows = if index == 0 { 2 } else { 1 };
+
+    v_flex()
+      .w_full()
+      .child(
+        h_flex()
+          .w_full()
+          .items_center()
+          .gap_2()
+          .mx_1()
+          .px_2()
+          .py_1p5()
+          .child(Skeleton::new().size(px(12.0)).rounded(px(3.0)))
+          .child(Skeleton::new().h(px(14.0)).flex_1().rounded(px(999.0)))
+          .child(
+            Skeleton::new()
+              .secondary()
+              .h(px(14.0))
+              .w(px(20.0))
+              .rounded(px(999.0)),
+          ),
+      )
+      .children((0..rows).map(|row| Self::render_loading_comment(index + row, theme)))
+      .into_any_element()
+  }
+
+  fn render_loading_comment(index: usize, theme: &gpui_component::Theme) -> AnyElement {
+    let body_width = match index % 3 {
+      0 => 210.0,
+      1 => 150.0,
+      _ => 180.0,
+    };
+
+    div()
+      .px_2()
+      .py_1()
+      .child(
+        v_flex()
+          .w_full()
+          .gap_2()
+          .rounded(px(8.0))
+          .border_1()
+          .border_color(theme.border)
+          .bg(theme.background)
+          .p_2()
+          .child(
+            Skeleton::new()
+              .h(px(14.0))
+              .w(px(body_width))
+              .max_w_full()
+              .rounded(px(999.0)),
+          )
+          .child(
+            h_flex()
+              .gap_1()
+              .child(
+                Skeleton::new()
+                  .secondary()
+                  .h(px(18.0))
+                  .w(px(44.0))
+                  .rounded(px(999.0)),
+              )
+              .child(
+                Skeleton::new()
+                  .secondary()
+                  .h(px(18.0))
+                  .w(px(64.0))
+                  .rounded(px(999.0)),
+              ),
+          ),
+      )
+      .into_any_element()
+  }
+
   fn render_destination_section(
     &self,
     section: ReviewSection,
@@ -1536,27 +1643,12 @@ impl ReviewList {
 
 impl Render for ReviewList {
   fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-    let theme = cx.theme().clone();
     let sections = self.sections().collect::<Vec<_>>();
 
     if sections.is_empty() {
       // The pull request's comments may simply not be here yet.
       if self.pull_request_loading {
-        return v_flex()
-          .debug_selector(|| "review-list-loading".to_string())
-          .size_full()
-          .items_center()
-          .justify_center()
-          .gap_2()
-          .p_4()
-          .child(gpui_component::spinner::Spinner::new().small())
-          .child(
-            div()
-              .text_sm()
-              .text_color(theme.muted_foreground)
-              .child("Loading pull request comments..."),
-          )
-          .into_any_element();
+        return Self::render_loading_state(cx);
       }
       return self.render_empty_state(cx);
     }
