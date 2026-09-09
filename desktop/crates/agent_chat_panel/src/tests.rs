@@ -6061,6 +6061,79 @@ async fn dropped_paths_stage_images_and_mention_other_files(cx: &mut gpui::TestA
 }
 
 #[gpui::test]
+async fn dropping_on_the_chat_body_adds_paths_to_the_composer(cx: &mut gpui::TestAppContext) {
+  use gpui::InputEvent as _;
+
+  let dir = temp_dir("agent-body-drop");
+  let file_path = dir.join("src/lib.rs");
+  std::fs::create_dir_all(file_path.parent().expect("file parent")).unwrap();
+  std::fs::write(&file_path, "fn main() {}\n").unwrap();
+
+  let (panel, cx) = add_panel_window(cx);
+  panel.update(cx, |panel, cx| {
+    panel.status = Status::Ready;
+    panel.cwd = dir.clone();
+    cx.notify();
+  });
+  cx.run_until_parked();
+
+  let target = cx
+    .debug_bounds("agent-chat-empty-state-icon")
+    .expect("chat body target");
+  let position = target.center();
+  let dropped_file = file_path.clone();
+  cx.update(|window, cx| {
+    window.dispatch_event(
+      gpui::FileDropEvent::Entered {
+        position,
+        paths: gpui::ExternalPaths([dropped_file].into_iter().collect()),
+      }
+      .to_platform_input(),
+      cx,
+    );
+  });
+  cx.run_until_parked();
+  assert!(
+    cx.debug_bounds("agent-chat-file-drop-overlay").is_some(),
+    "the pane-level drop affordance is painted"
+  );
+
+  cx.update(|window, cx| {
+    window.dispatch_event(
+      gpui::FileDropEvent::Submit { position }.to_platform_input(),
+      cx,
+    );
+    window.dispatch_event(gpui::FileDropEvent::Ended.to_platform_input(), cx);
+  });
+  cx.run_until_parked();
+
+  panel.read_with(cx, |panel, cx| {
+    assert_eq!(panel.input.read(cx).value().trim(), "@src/lib.rs");
+  });
+  std::fs::remove_dir_all(&dir).ok();
+}
+
+#[gpui::test]
+async fn file_drop_overlay_cancel_hides_the_affordance(cx: &mut gpui::TestAppContext) {
+  let (panel, cx) = add_panel_window(cx);
+  panel.update(cx, |panel, cx| {
+    panel.set_file_drag_over(true, cx);
+  });
+  cx.run_until_parked();
+
+  let cancel = cx
+    .debug_bounds("agent-chat-file-drop-cancel")
+    .expect("drop cancel button");
+  cx.simulate_click(cancel.center(), gpui::Modifiers::default());
+  cx.run_until_parked();
+
+  panel.read_with(cx, |panel, _| {
+    assert!(!panel.file_drag_over);
+  });
+  assert!(cx.debug_bounds("agent-chat-file-drop-overlay").is_none());
+}
+
+#[gpui::test]
 async fn add_file_button_picks_paths_for_the_composer(cx: &mut gpui::TestAppContext) {
   let dir = temp_dir("agent-add-file-button");
   let image_path = dir.join("shot.png");

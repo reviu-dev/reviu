@@ -1943,7 +1943,20 @@ impl Render for AgentChatPanel {
       .flex()
       .flex_col()
       .size_full()
+      .relative()
       .bg(theme.background)
+      .on_drag_move::<gpui::ExternalPaths>(cx.listener(
+        |panel, event: &gpui::DragMoveEvent<gpui::ExternalPaths>, _, cx| {
+          panel.set_file_drag_over(event.bounds.contains(&event.event.position), cx);
+        },
+      ))
+      .on_drop(
+        cx.listener(|panel, paths: &gpui::ExternalPaths, window, cx| {
+          panel.set_file_drag_over(false, cx);
+          panel.handle_dropped_paths(paths.paths(), window, cx);
+          cx.stop_propagation();
+        }),
+      )
       .when(self.show_header, |this| {
         this.child(
           h_flex()
@@ -2155,15 +2168,6 @@ impl Render for AgentChatPanel {
                     theme.border
                   })
                   .bg(theme.sidebar)
-                  .on_drop(
-                    cx.listener(|panel, paths: &gpui::ExternalPaths, window, cx| {
-                      panel.handle_dropped_paths(paths.paths(), window, cx);
-                    }),
-                  )
-                  .drag_over::<gpui::ExternalPaths>(|style, _, _, cx| {
-                    let theme = cx.theme();
-                    style.border_color(theme.ring).bg(theme.ring.opacity(0.06))
-                  })
                   .children(self.render_staged_images(theme, cx))
                   .child(
                     div()
@@ -2279,6 +2283,76 @@ impl Render for AgentChatPanel {
               ),
           ),
       )
+      .child(self.render_file_drop_overlay(theme, cx))
+  }
+}
+
+impl AgentChatPanel {
+  fn render_file_drop_overlay(
+    &self,
+    theme: &gpui_component::Theme,
+    cx: &mut Context<Self>,
+  ) -> gpui::AnyElement {
+    if !self.file_drag_over {
+      return Empty.into_any_element();
+    }
+
+    let mut background = theme.status_blue();
+    background.a = if theme.mode.is_dark() { 0.16 } else { 0.10 };
+    let mut border = theme.status_blue();
+    border.a = if theme.mode.is_dark() { 0.72 } else { 0.52 };
+
+    div()
+      .debug_selector(|| "agent-chat-file-drop-overlay".to_string())
+      .absolute()
+      .top(px(8.))
+      .right(px(8.))
+      .bottom(px(8.))
+      .left(px(8.))
+      .flex()
+      .items_center()
+      .justify_center()
+      .rounded(px(14.))
+      .border_1()
+      .border_color(border)
+      .bg(background)
+      .shadow_lg()
+      .child(
+        v_flex()
+          .items_center()
+          .gap_2()
+          .child(
+            h_flex()
+              .items_center()
+              .gap_2()
+              .px_3()
+              .py_2()
+              .rounded(px(999.))
+              .border_1()
+              .border_color(theme.border)
+              .bg(theme.background.opacity(0.92))
+              .text_color(theme.foreground)
+              .shadow_md()
+              .child(gpui_component::Icon::new(IconName::Plus).small())
+              .child(
+                div()
+                  .text_sm()
+                  .font_weight(FontWeight::SEMIBOLD)
+                  .child("Drop files to add to chat"),
+              ),
+          )
+          .child(
+            Button::new("agent-chat-file-drop-cancel")
+              .debug_selector(|| "agent-chat-file-drop-cancel".to_string())
+              .label("Cancel")
+              .xsmall()
+              .custom(ButtonCustomVariant::new(cx).foreground(theme.foreground))
+              .on_click(cx.listener(|panel, _, _, cx| {
+                panel.set_file_drag_over(false, cx);
+              })),
+          ),
+      )
+      .into_any_element()
   }
 }
 

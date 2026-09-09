@@ -919,6 +919,7 @@ pub struct AgentChatPanel {
   supports_steering: bool,
   /// Images staged for the next prompt (pasted or dropped).
   staged_images: Vec<std::sync::Arc<gpui::Image>>,
+  file_drag_over: bool,
   /// Incremental markdown state for the streaming reply: chunks append via
   /// push_str so a chunk costs O(delta), not a full document re-parse.
   pending_md_state: Option<Entity<TextViewState>>,
@@ -1041,6 +1042,7 @@ impl AgentChatPanel {
       supports_images: false,
       supports_steering: false,
       staged_images: Vec::new(),
+      file_drag_over: false,
       pending_md_state: None,
       settled_md_states: HashMap::new(),
       tool_group_pins: HashMap::new(),
@@ -1661,6 +1663,7 @@ impl AgentChatPanel {
       supports_images: false,
       supports_steering: false,
       staged_images: Vec::new(),
+      file_drag_over: false,
       pending_md_state: None,
       settled_md_states: HashMap::new(),
       tool_group_pins: HashMap::new(),
@@ -2937,6 +2940,13 @@ impl AgentChatPanel {
     }
     if staged_any {
       cx.stop_propagation();
+    }
+  }
+
+  fn set_file_drag_over(&mut self, over: bool, cx: &mut Context<Self>) {
+    if self.file_drag_over != over {
+      self.file_drag_over = over;
+      cx.notify();
     }
   }
 
