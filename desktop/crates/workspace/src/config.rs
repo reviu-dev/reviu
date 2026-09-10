@@ -373,6 +373,7 @@ pub struct AppSettings {
   pub hide_whitespace: bool,
   pub menu_bar_icon: bool,
   pub analytics_enabled: bool,
+  pub onboarding_done: bool,
   /// Popup when the agent finishes or asks while the window is inactive.
   pub agent_notifications: bool,
 }
@@ -404,6 +405,7 @@ impl Default for AppSettings {
       hide_whitespace: false,
       menu_bar_icon: true,
       analytics_enabled: true,
+      onboarding_done: false,
       agent_notifications: true,
     }
   }
@@ -872,6 +874,7 @@ impl ConfigStore {
           hide_whitespace: hide_whitespace != 0,
           menu_bar_icon: menu_bar_icon != 0,
           analytics_enabled: analytics_enabled != 0,
+          onboarding_done: false,
           agent_notifications: true,
         })
       },
@@ -1455,7 +1458,6 @@ mod tests {
 
     let settings = AppSettings {
       auto_switch_theme: false,
-      analytics_enabled: false,
       dark_mode: true,
       indent_rainbow: true,
       font_size: 20.0,
@@ -1463,6 +1465,8 @@ mod tests {
       split_diff_view: true,
       hide_whitespace: true,
       menu_bar_icon: false,
+      analytics_enabled: false,
+      onboarding_done: true,
       agent_notifications: false,
     };
     ConfigStore::persist_app_settings(settings);

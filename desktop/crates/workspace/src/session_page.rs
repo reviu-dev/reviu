@@ -2053,6 +2053,18 @@ impl SessionPage {
     self.sidebar_open
   }
 
+  pub(crate) fn prompt_open_project(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    self.start_open_project(window, cx);
+  }
+
+  pub(crate) fn open_workspace_command_palette(
+    &mut self,
+    window: &mut Window,
+    cx: &mut Context<Self>,
+  ) {
+    self.open_command_palette(window, cx);
+  }
+
   pub(crate) fn toggle_sidebar(&mut self, cx: &mut Context<Self>) {
     if self.sidebar_open {
       self.close_sidebar(cx);

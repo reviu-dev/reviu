@@ -77,6 +77,8 @@ struct SettingsDoc {
   #[serde(deserialize_with = "lenient")]
   analytics_enabled: Option<bool>,
   #[serde(deserialize_with = "lenient")]
+  onboarding_done: Option<bool>,
+  #[serde(deserialize_with = "lenient")]
   agent_notifications: Option<bool>,
 }
 
@@ -105,6 +107,7 @@ impl SettingsDoc {
       hide_whitespace: self.hide_whitespace.unwrap_or(defaults.hide_whitespace),
       menu_bar_icon: self.menu_bar_icon.unwrap_or(defaults.menu_bar_icon),
       analytics_enabled: self.analytics_enabled.unwrap_or(defaults.analytics_enabled),
+      onboarding_done: self.onboarding_done.unwrap_or(defaults.onboarding_done),
       agent_notifications: self
         .agent_notifications
         .unwrap_or(defaults.agent_notifications),
@@ -124,6 +127,7 @@ impl From<AppSettings> for SettingsDoc {
       hide_whitespace: Some(settings.hide_whitespace),
       menu_bar_icon: Some(settings.menu_bar_icon),
       analytics_enabled: Some(settings.analytics_enabled),
+      onboarding_done: Some(settings.onboarding_done),
       agent_notifications: Some(settings.agent_notifications),
     }
   }
@@ -233,6 +237,7 @@ mod tests {
       hide_whitespace: true,
       menu_bar_icon: false,
       analytics_enabled: false,
+      onboarding_done: true,
       agent_notifications: false,
     };
     persist(settings);

@@ -119,6 +119,7 @@ mod svg_preview;
 #[cfg(test)]
 mod test_support;
 mod workspace;
+mod workspace_onboarding;
 mod workspace_window;
 
 pub use actions::{CommitChanges, OpenProject, SaveFile, ShowCommandPalette, ShowFileSearch};

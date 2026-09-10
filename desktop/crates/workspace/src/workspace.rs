@@ -30,6 +30,7 @@ use crate::github_notifications::{self, GithubNotificationsStore};
 use crate::session_page::SessionPage;
 use crate::settings_page::open_settings_dialog;
 use crate::shortcuts::{self, ShortcutId};
+use crate::workspace_onboarding::WorkspaceOnboarding;
 use crate::workspace_window::WorkspaceWindow;
 use crate::{ShowCommandPalette, ShowFileSearch};
 use ui::{
@@ -153,6 +154,7 @@ impl WorkspaceApi {
 
 pub struct WorkspaceView {
   session_page: Entity<SessionPage>,
+  onboarding_page: Entity<WorkspaceOnboarding>,
   window_handle: AnyWindowHandle,
   _update_check_task: Option<Task<()>>,
   _periodic_update_check_task: Option<Task<()>>,
@@ -249,12 +251,18 @@ impl WorkspaceView {
     WorkspaceWindow::register(window.window_handle(), cx);
 
     let session_page = cx.new(|cx| SessionPage::new(window, cx));
+    let onboarding_page = cx.new(|cx| WorkspaceOnboarding::new(session_page.clone(), window, cx));
     session_page.update(cx, |page, cx| page.activate(window, cx));
-    let focus_handle = session_page.read(cx).focus_handle(cx);
+    let focus_handle = if settings.onboarding_done {
+      session_page.read(cx).focus_handle(cx)
+    } else {
+      onboarding_page.read(cx).focus_handle(cx)
+    };
     window.focus(&focus_handle, cx);
 
     let view = Self {
       session_page,
+      onboarding_page,
       window_handle: window.window_handle(),
       _update_check_task: None,
       _periodic_update_check_task: None,
@@ -832,6 +840,59 @@ impl WorkspaceView {
     h_flex().items_center().gap_1().ml_2().children(buttons)
   }
 
+  fn render_onboarding_bar(&self, window: &Window, cx: &mut Context<Self>) -> impl IntoElement {
+    let theme = cx.theme().clone();
+    let use_client_decorations = cfg!(target_os = "linux")
+      && matches!(window.window_decorations(), Decorations::Client { .. });
+
+    let bar = div()
+      .h(px(GLOBAL_BAR_HEIGHT))
+      .max_h(px(GLOBAL_BAR_HEIGHT))
+      .w_full()
+      .flex()
+      .items_center()
+      .justify_between()
+      .bg(theme.sidebar)
+      .border_b_1()
+      .border_color(theme.title_bar_border);
+    let bar = if cfg!(target_os = "macos") {
+      bar.pl(px(Self::GLOBAL_BAR_MACOS_LEFT_PADDING)).pr_3()
+    } else {
+      bar.px_3()
+    };
+
+    let left = h_flex()
+      .items_center()
+      .gap_2()
+      .when_some(AppProfile::current().header_tag_label(), |this, label| {
+        this.child(Tag::secondary().small().rounded_full().child(label))
+      });
+
+    let drag_area = div()
+      .id("onboarding-titlebar-drag")
+      .flex_1()
+      .h_full()
+      .on_mouse_down(gpui::MouseButton::Left, |ev, window, _cx| {
+        if ev.click_count >= 2 {
+          window.zoom_window();
+        } else if cfg!(target_os = "linux") {
+          window.start_window_move();
+        }
+      })
+      .on_mouse_down(gpui::MouseButton::Right, |ev, window, _cx| {
+        window.show_window_menu(ev.position);
+      });
+
+    let right = h_flex()
+      .items_center()
+      .gap_2()
+      .when(use_client_decorations, |this| {
+        this.child(Self::render_linux_window_controls(window, cx))
+      });
+
+    bar.child(left).child(drag_area).child(right)
+  }
+
   fn render_global_bar(&self, window: &Window, cx: &mut Context<Self>) -> impl IntoElement {
     let theme = cx.theme().clone();
     let update_state = AppUpdateStore::try_state(cx);
@@ -1080,7 +1141,9 @@ impl Render for WorkspaceView {
         .into_any_element();
     }
 
+    let show_onboarding = !PersistedSettings::get(cx).onboarding_done;
     let session_page = self.session_page.clone();
+    let onboarding_page = self.onboarding_page.clone();
     let key_context = shortcuts::current_workspace_key_context(cx);
 
     div()
@@ -1106,14 +1169,25 @@ impl Render for WorkspaceView {
         }),
       )
       .child(ui::scroll_dispatcher())
-      .child(self.render_global_bar(window, cx))
-      .child(div().flex_1().min_h_0().child(session_page))
+      .when(show_onboarding, |this| {
+        this
+          .child(self.render_onboarding_bar(window, cx))
+          .child(div().flex_1().min_h_0().child(onboarding_page))
+      })
+      .when(!show_onboarding, |this| {
+        this
+          .child(self.render_global_bar(window, cx))
+          .child(div().flex_1().min_h_0().child(session_page))
+      })
       .into_any_element()
   }
 }
 
 impl Focusable for WorkspaceView {
   fn focus_handle(&self, cx: &App) -> FocusHandle {
+    if !PersistedSettings::get(cx).onboarding_done {
+      return self.onboarding_page.read(cx).focus_handle(cx);
+    }
     self.session_page.read(cx).focus_handle(cx)
   }
 }
@@ -1131,6 +1205,7 @@ mod tests {
   use crate::github_notifications::GithubNotificationsStore;
   use crate::session_page::SessionPage;
   use crate::shortcuts::{self, ShortcutId};
+  use crate::workspace_onboarding::WorkspaceOnboarding;
   use gpui::{AppContext as _, Menu, MenuItem, TestAppContext};
   use std::path::PathBuf;
 
@@ -1160,7 +1235,7 @@ mod tests {
   }
 
   #[gpui::test]
-  async fn app_bar_sidebar_toggle_hides_and_shows_the_sidebar(cx: &mut TestAppContext) {
+  async fn fresh_settings_show_onboarding_without_workspace_chrome(cx: &mut TestAppContext) {
     cx.update(|cx| {
       gpui_component::init(cx);
       cx.set_global(crate::config::AppSettings::default());
@@ -1172,12 +1247,51 @@ mod tests {
       cx.set_global(shortcuts::ShortcutOverrides::default());
     });
 
+    let (_workspace, cx) = cx.add_window_view(|window, cx| {
+      let page = cx.new(|cx| SessionPage::new(window, cx));
+      let onboarding_page = cx.new(|cx| WorkspaceOnboarding::new(page.clone(), window, cx));
+      WorkspaceView {
+        session_page: page,
+        onboarding_page,
+        window_handle: window.window_handle(),
+        _update_check_task: None,
+        _periodic_update_check_task: None,
+        _notification_poll_task: None,
+        #[cfg(any(target_os = "linux", target_os = "windows"))]
+        _status_bar_event_task: None,
+        _subscriptions: Vec::new(),
+      }
+    });
+    cx.run_until_parked();
+
+    assert!(cx.debug_bounds("workspace-onboarding").is_some());
+    assert!(cx.debug_bounds("workspace-global-sidebar-toggle").is_none());
+  }
+
+  #[gpui::test]
+  async fn app_bar_sidebar_toggle_hides_and_shows_the_sidebar(cx: &mut TestAppContext) {
+    cx.update(|cx| {
+      gpui_component::init(cx);
+      cx.set_global(crate::config::AppSettings {
+        onboarding_done: true,
+        ..Default::default()
+      });
+      cx.set_global(WorkspaceApi::new());
+      cx.set_global(AuthStateStore::default());
+      AuthStateStore::set(cx, AuthState::Unauthenticated);
+      cx.set_global(AppUpdateStore::default());
+      cx.set_global(GithubNotificationsStore::default());
+      cx.set_global(shortcuts::ShortcutOverrides::default());
+    });
+
     let mut session_page = None;
     let (_workspace, cx) = cx.add_window_view(|window, cx| {
       let page = cx.new(|cx| SessionPage::new(window, cx));
+      let onboarding_page = cx.new(|cx| WorkspaceOnboarding::new(page.clone(), window, cx));
       session_page = Some(page.clone());
       WorkspaceView {
         session_page: page,
+        onboarding_page,
         window_handle: window.window_handle(),
         _update_check_task: None,
         _periodic_update_check_task: None,
