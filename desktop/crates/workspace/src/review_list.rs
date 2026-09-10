@@ -47,8 +47,8 @@ fn review_list_section_header_debug_selector(section: ReviewSection) -> &'static
 
 /// Longest excerpt shown on a row before it is cut.
 const REVIEW_EXCERPT_MAX_CHARS: usize = 120;
-const REVIEW_LIST_COMPACT_CONTENT_HEIGHT_PX: f32 = 22.5;
-const REVIEW_LIST_COMPACT_ROW_HEIGHT_PX: f32 = 30.5;
+const REVIEW_LIST_COMPACT_CONTENT_HEIGHT_PX: f32 = 19.5;
+const REVIEW_LIST_COMPACT_ROW_HEIGHT_PX: f32 = 27.5;
 const REVIEW_LIST_RICH_CONTENT_HEIGHT_PX: f32 = 56.0;
 
 /// Where the comments of a section go. It is the only thing that separates them,
