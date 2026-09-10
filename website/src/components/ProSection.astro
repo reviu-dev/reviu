@@ -2,119 +2,204 @@
 import prDark from "../assets/app_screenshots/pr_dark.png";
 import prLight from "../assets/app_screenshots/pr_light.png";
 import BellIcon from "@lucide/astro/icons/bell";
+import CircleCheckIcon from "@lucide/astro/icons/circle-check";
 import GitMergeIcon from "@lucide/astro/icons/git-merge";
 import GitPullRequestArrowIcon from "@lucide/astro/icons/git-pull-request-arrow";
 import GitPullRequestCreateIcon from "@lucide/astro/icons/git-pull-request-create";
 import MessageCircleReplyIcon from "@lucide/astro/icons/message-circle-reply";
 import PuzzleIcon from "@lucide/astro/icons/puzzle";
+import ShieldCheckIcon from "@lucide/astro/icons/shield-check";
 import ThemePicture from "./ThemePicture.astro";
 import { themeImageSources } from "../lib/themeImage";
 
 const sectionImage = await themeImageSources(prLight, prDark, 3020, 1894);
 
+const prStats = [
+  ["Checks", "12/12", "passed", "text-emerald-500"],
+  ["Review", "2", "threads", "text-primary"],
+  ["Merge", "ready", "squash", "text-amber-500"],
+];
+
 const features = [
   {
-    name: "The PR next to your working tree",
+    name: "The PR follows your branch",
     description:
-      "A dock tab shows the pull request for the branch you're on: description, commits, checks, and review threads, beside the actual code.",
-    icon: GitPullRequestArrowIcon,
-  },
-  {
-    name: "Open or create it in one click",
-    description:
-      "A button in the header connects your current branch to its pull request, or creates one without leaving Reviu.",
+      "Check out a branch and Reviu finds its pull request. If none exists, create it from the header, or publish the branch first.",
     icon: GitPullRequestCreateIcon,
   },
   {
-    name: "Review with inline comments",
+    name: "Review GitHub diffs locally",
     description:
-      "Comment on the PR diff - whole changeset or commit by commit - reply, resolve threads, and submit your review from the desktop.",
+      "Open PR files in the same editor, leave inline comments, reply to threads, resolve conversations, and submit a full review.",
     icon: MessageCircleReplyIcon,
   },
   {
-    name: "Checks and merge, no browser",
+    name: "Checks and merge readiness",
     description:
-      "Track checks and merge readiness as they update, and merge when the branch is green.",
+      "See required checks, skipped or failing jobs, reviewer state, mergeability, and the merge methods the repository allows.",
+    icon: CircleCheckIcon,
+  },
+  {
+    name: "Merge like GitHub would",
+    description:
+      "Squash, merge, or rebase with GitHub's generated title, message, bullets, and co-author trailers before you confirm.",
     icon: GitMergeIcon,
   },
   {
-    name: "GitHub inbox in the sidebar",
+    name: "Notifications beside sessions",
     description:
-      "Notifications land next to your sessions with an unread badge. Open one, deal with it, mark it done.",
+      "The GitHub inbox lives next to your sessions. Open a notification, jump to the right PR context, and mark it done.",
     icon: BellIcon,
   },
   {
-    name: "From github.com to a local checkout",
+    name: "Browser to local checkout",
     description:
-      "The browser extension opens a pull request in Reviu and offers to check out its branch, so you review with the whole project around it.",
+      "The extension opens a pull request from github.com in Reviu and offers to check out the branch safely.",
     icon: PuzzleIcon,
   },
 ];
 ---
 
 <section
-  class="bg-background py-24 sm:py-32"
+  class="relative isolate overflow-hidden bg-muted/30 py-24 sm:py-32 dark:bg-white/[0.02]"
   data-reveal-root
-  data-reveal-threshold="0.3"
+  data-reveal-threshold="0.25"
 >
+  <div
+    class="absolute inset-x-0 top-0 -z-10 h-px bg-linear-to-r from-transparent via-border to-transparent"
+    aria-hidden="true"
+  >
+  </div>
+  <div
+    class="absolute top-20 left-1/2 -z-10 h-120 w-180 -translate-x-1/2 rounded-full bg-primary/10 blur-3xl dark:bg-primary/20"
+    aria-hidden="true"
+  >
+  </div>
+
   <div class="mx-auto max-w-7xl px-6 lg:px-8">
-    <div class="reviu-reveal mx-auto max-w-2xl sm:text-center">
-      <h2 class="text-base/7 font-semibold text-primary">Reviu Pro</h2>
-      <p
-        class="mt-2 text-4xl font-semibold tracking-tight text-pretty text-foreground sm:text-5xl sm:text-balance"
+    <div class="reviu-reveal mx-auto max-w-4xl text-center">
+      <div class="inline-flex items-center gap-2 rounded-full border border-primary/20 bg-primary/10 px-3 py-1 text-sm font-semibold text-primary">
+        <ShieldCheckIcon class="size-4" aria-hidden="true" />
+        Reviu Pro
+      </div>
+      <h2
+        class="mt-6 text-4xl font-semibold tracking-tight text-balance text-foreground sm:text-6xl"
       >
-        Your branch's pull request, right in the dock.
-      </p>
-      <p class="mt-6 text-lg/8 text-muted-foreground">
-        Connect GitHub and the pull request follows your work: open it next to
-        the diff, review it, track checks, and merge - without a browser tab.
+        GitHub pull requests without losing your local context.
+      </h2>
+      <p class="mx-auto mt-6 max-w-3xl text-lg/8 text-muted-foreground">
+        Your branch, agent session, working tree, review comments, checks, and
+        merge button live in one window. Use GitHub when it matters, without
+        turning every review into a browser tab hunt.
       </p>
     </div>
-  </div>
-  <div class="relative overflow-hidden pt-16">
-    <div
-      class="reviu-reveal mx-auto max-w-7xl px-6 lg:px-8"
-      style="--reveal-delay: 150ms;"
-    >
-      <ThemePicture
-        sources={sectionImage}
-        alt="Reviu pull request review screenshot"
-        loading="lazy"
-        class="mb-[-12%] rounded-sm sm:rounded-xl shadow-2xl ring-1 ring-gray-900/10 dark:ring-white/10"
-      />
-      <div aria-hidden="true" class="relative">
+
+    <div class="mt-14 grid gap-6 lg:grid-cols-[1fr_0.38fr]">
+      <div
+        class="reviu-reveal relative rounded-[2rem] border border-border bg-background/75 p-2 shadow-2xl shadow-primary/10 backdrop-blur dark:bg-white/[0.04] dark:shadow-black/30"
+        style="--reveal-delay: 150ms;"
+      >
+        <ThemePicture
+          sources={sectionImage}
+          alt="Reviu Pro pull request dock with review threads, checks, and merge workflow"
+          loading="lazy"
+          class="rounded-[1.35rem] ring-1 ring-gray-900/10 dark:ring-white/10"
+        />
+        <div class="absolute top-6 left-6 hidden max-w-72 rounded-2xl border border-border bg-background/90 p-4 text-sm shadow-xl backdrop-blur md:block dark:bg-gray-950/90">
+          <p class="flex items-center gap-2 font-semibold text-foreground">
+            <GitPullRequestArrowIcon class="size-4 text-primary" aria-hidden="true" />
+            PR #48 - Add checkout discounts
+          </p>
+          <p class="mt-2 text-muted-foreground">
+            feature/checkout-discounts into main
+          </p>
+        </div>
+        <div class="absolute right-6 bottom-6 hidden w-80 rounded-2xl border border-border bg-background/90 p-4 shadow-xl backdrop-blur md:block dark:bg-gray-950/90">
+          <div class="grid grid-cols-3 gap-2 text-center text-xs">
+            {
+              prStats.map((stat) => (
+                <div class="rounded-xl border border-border bg-muted/50 px-2 py-3 dark:bg-white/[0.03]">
+                  <p class="font-semibold text-foreground">{stat[0]}</p>
+                  <p class={`mt-1 font-semibold ${stat[3]}`}>{stat[1]}</p>
+                  <p class="mt-0.5 text-muted-foreground">{stat[2]}</p>
+                </div>
+              ))
+            }
+          </div>
+        </div>
+      </div>
+
+      <div class="grid gap-4">
         <div
-          class="absolute -inset-x-20 bottom-0 bg-linear-to-t from-background pt-[7%]"
+          class="reviu-reveal rounded-3xl border border-border bg-background p-6 shadow-sm dark:bg-gray-950/40"
+          style="--reveal-delay: 250ms;"
         >
+          <div class="flex items-center gap-3">
+            <BellIcon class="size-5 text-primary" aria-hidden="true" />
+            <h3 class="font-semibold text-foreground">Inbox</h3>
+          </div>
+          <div class="mt-5 space-y-2 text-sm">
+            {[
+              ["Noah requested changes", "2m"],
+              ["CI finished for #48", "6m"],
+              ["Ava replied in discounts.ts", "14m"],
+            ].map((item) => (
+              <div class="rounded-2xl border border-border bg-muted/40 p-3 dark:bg-white/[0.03]">
+                <div class="flex items-center justify-between gap-3">
+                  <span class="font-medium text-foreground">{item[0]}</span>
+                  <span class="text-xs text-muted-foreground">{item[1]}</span>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+
+        <div
+          class="reviu-reveal rounded-3xl border border-primary/20 bg-primary/10 p-6 shadow-sm"
+          style="--reveal-delay: 350ms;"
+        >
+          <p class="text-sm font-semibold text-primary">Pro pricing</p>
+          <div class="mt-3 flex items-end gap-2">
+            <span class="text-4xl font-semibold tracking-tight text-foreground">$9</span>
+            <span class="pb-1 text-sm text-muted-foreground">/month</span>
+          </div>
+          <p class="mt-2 text-sm text-muted-foreground">
+            Or $79/year. Includes a 14-day free trial.
+          </p>
+          <a
+            href="#pricing"
+            data-umami-event="pro-section-pricing"
+            class="mt-5 inline-flex rounded-md bg-primary px-3.5 py-2.5 text-sm font-semibold text-white transition-colors hover:bg-primary/80"
+          >
+            See pricing
+          </a>
         </div>
       </div>
     </div>
-  </div>
-  <div class="mx-auto mt-16 max-w-7xl px-6 sm:mt-20 md:mt-24 lg:px-8">
-    <dl
-      class="mx-auto grid max-w-2xl grid-cols-1 gap-x-6 gap-y-10 text-base/7 text-muted-foreground sm:grid-cols-2 lg:mx-0 lg:max-w-none lg:grid-cols-3 lg:gap-x-8 lg:gap-y-16"
-    >
+
+    <div class="mt-10 grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
       {
         features.map((feature, index) => {
           const Icon = feature.icon;
 
           return (
-            <div
-              class="reviu-reveal relative pl-9"
-              style={`--reveal-delay: ${index * 80 + 200}ms;`}
+            <article
+              class="reviu-reveal rounded-3xl border border-border bg-background p-6 shadow-sm dark:bg-gray-950/40"
+              style={`--reveal-delay: ${index * 80 + 300}ms;`}
             >
-              <dt class="font-semibold text-foreground">
-                <Icon
-                  aria-hidden="true"
-                  class="absolute top-1 left-1 size-5 text-primary"
-                />
+              <div class="flex size-12 items-center justify-center rounded-2xl bg-primary/10 text-primary ring-1 ring-primary/15">
+                <Icon class="size-5" aria-hidden="true" />
+              </div>
+              <h3 class="mt-6 text-lg font-semibold text-foreground">
                 {feature.name}
-              </dt>
-              <dd class="inline text-sm">{feature.description}</dd>
-            </div>
+              </h3>
+              <p class="mt-3 text-sm/7 text-muted-foreground">
+                {feature.description}
+              </p>
+            </article>
           );
         })
       }
-    </dl>
+    </div>
   </div>
 </section>
