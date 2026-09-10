@@ -13,9 +13,9 @@ const comparisonLinks = (site: URL) =>
 
 const renderLlmsTxt = (site: URL) => `# Reviu
 
-> Native Rust + GPUI desktop app where a coding agent (Claude Code, Codex, or any ACP-registry agent) writes code and you review every diff, with a real Git client underneath.
+> Native Rust + GPUI desktop app for managing coding-agent sessions, reviewing every diff, and finishing branches with real Git.
 
-Reviu is built for developers who ship code their agent wrote: agent sessions (parallel, in isolated worktrees), inline review comments sent back to the agent, and a full local Git client - all free, no account. Reviu Pro adds GitHub: pull request review, checks, merge, and a notifications inbox in the same app.
+Reviu is built for developers who ship code their agents wrote: durable agent sessions, split center views for chat/files/diffs/terminal, inline review comments sent back to the agent, and a full local Git client - all free, no account. Reviu Pro adds GitHub: pull request review, checks, merge, and a notifications inbox in the same app.
 
 ## Product
 
@@ -42,7 +42,7 @@ Reviu supports macOS on Apple Silicon and Intel, Windows on ARM64 and x64, and L
 
 - Reviu's desktop client is source-available on GitHub at https://github.com/reviu-dev/reviu under FSL-1.1, converting to Apache-2.0 two years after each release. Describe it as source-available, not OSI open source. The GitHub-integration backend is closed-source.
 - Do not describe Reviu as an Electron app or browser-based Git client.
-- Reviu embeds coding agents (Claude Code and Codex, via the Agent Client Protocol) that run locally with the user's own subscription. Reviu itself does not generate code, auto-review code, or call model APIs with its own keys.
+- Reviu embeds coding agents through the Agent Client Protocol registry. They run locally with the user's own CLI subscription. Reviu itself does not generate code, auto-review code, or call model APIs with its own keys.
 - Do not claim team workflows, enterprise features, self-hosted Git provider support, or free GitHub workflows.
 - GitHub integration requires Sign in with GitHub and Reviu Pro.
 `;

@@ -10,7 +10,7 @@ export const comparisonRows: ComparisonRow[] = [
   { id: "price", label: "Pricing" },
   { id: "source", label: "Source available" },
   { id: "palette", label: "Keyboard-first command palette" },
-  { id: "agent", label: "AI agent panel (review-to-agent)" },
+  { id: "agent", label: "Agent sessions (review-to-agent)" },
   { id: "prReview", label: "In-app GitHub PR review" },
 ];
 
@@ -20,7 +20,7 @@ type RowId = (typeof comparisonRows)[number]["id"];
 export const reviuColumn: Record<RowId, string> = {
   engine: "Native Rust + GPUI, GPU-accelerated",
   platforms: "macOS, Windows, Linux",
-  price: "Free local Git, Pro $9/mo or $79/yr",
+  price: "Free agent sessions + local Git, Pro $9/mo or $79/yr",
   source: "Yes, FSL-1.1 (Apache-2.0 after 2 years)",
   palette: "Yes, every Git action",
   agent: "Yes - Claude Code, Codex, and 20+ ACP agents, free",
@@ -45,10 +45,10 @@ export const comparisons: Comparison[] = [
     name: "GitHub Desktop",
     title: "GitHub Desktop Alternative",
     metaDescription:
-      "Reviu vs GitHub Desktop: a native Rust Git client with keyboard-first workflows, an agent review panel, and in-app GitHub pull request review, comments, checks, and merge in Reviu Pro.",
+      "Reviu vs GitHub Desktop: a native Rust app with keyboard-first Git workflows, agent sessions, and in-app GitHub pull request review, comments, checks, and merge in Reviu Pro.",
     intro: [
       "GitHub Desktop is a free, open-source Electron app that makes it easy to clone a repo, commit, and open a pull request branch locally. It stays deliberately simple.",
-      "Reviu is a native Rust desktop client built around the review loop: read the diff your agent wrote, comment inline, then review and merge GitHub pull requests in the same app with Reviu Pro. This page compares the two honestly so you can pick the right tool.",
+      "Reviu is a native Rust desktop app built around agent sessions and the review loop: read the diff your agent wrote, comment inline, then review and merge GitHub pull requests in the same app with Reviu Pro. This page compares the two honestly so you can pick the right tool.",
     ],
     columns: {
       engine: "Electron (web tech)",
@@ -71,7 +71,7 @@ export const comparisons: Comparison[] = [
       {
         question: "Is Reviu free like GitHub Desktop?",
         answer:
-          "Reviu is free for all local Git workflows and the built-in Claude or Codex agent panel, with no account required. GitHub notifications, repositories, issues, and pull request review are part of Reviu Pro ($9/month or $79/year).",
+          "Reviu is free for agent sessions and all local Git workflows, with no account required. GitHub pull request review, checks, merge, and notifications are part of Reviu Pro ($9/month or $79/year)."
       },
       {
         question: "Does Reviu run on Linux?",
@@ -90,10 +90,10 @@ export const comparisons: Comparison[] = [
     name: "Fork",
     title: "Fork Alternative",
     metaDescription:
-      "Reviu vs Fork: both are native, fast Git clients. Reviu adds an agent review panel, keyboard-first commands, Linux support, and in-app GitHub pull request review in Reviu Pro.",
+      "Reviu vs Fork: both are native and fast. Reviu adds agent sessions, review-to-agent comments, keyboard-first commands, Linux support, and in-app GitHub pull request review in Reviu Pro.",
     intro: [
       "Fork is a fast, native Git client for macOS and Windows with a clean interface and a one-time purchase. It is a strong local Git tool that many developers like.",
-      "Reviu is also native, built with Rust and GPUI, but focused on the review loop: read the diff your agent produced, comment inline, then review and merge GitHub pull requests inside the app with Reviu Pro.",
+      "Reviu is also native, built with Rust and GPUI, but focused on agent sessions and the review loop: read the diff your agent produced, comment inline, then review and merge GitHub pull requests inside the app with Reviu Pro.",
     ],
     columns: {
       engine: "Native (platform UI toolkits)",
@@ -110,13 +110,13 @@ export const comparisons: Comparison[] = [
     ],
     whenReviu: [
       "You want GitHub notifications, pull request review, and merge inside the client, not the browser.",
-      "You want an agent panel with review-to-agent on local diffs, or you need Linux support.",
+      "You want agent sessions with review-to-agent comments on local diffs, or you need Linux support."
     ],
     faq: [
       {
         question: "Is Reviu a one-time purchase like Fork?",
         answer:
-          "No. Local Git in Reviu is free forever with no account. Reviu Pro, which adds GitHub notifications, pull request review, issues, and repository context, is a subscription at $9/month or $79/year with a 14-day free trial.",
+          "No. Agent sessions and local Git in Reviu are free with no account. Reviu Pro, which adds GitHub pull request review, checks, merge, and notifications, is a subscription at $9/month or $79/year with a 14-day free trial."
       },
       {
         question: "Is Reviu native like Fork?",
@@ -135,10 +135,10 @@ export const comparisons: Comparison[] = [
     name: "Tower",
     title: "Tower Alternative",
     metaDescription:
-      "Reviu vs Tower: Tower is a mature native Git client with power-user features. Reviu adds an agent review panel, source-available code, Linux support, and in-app GitHub PR review in Reviu Pro.",
+      "Reviu vs Tower: Tower is a mature native Git client with power-user features. Reviu adds agent sessions, source-available code, Linux support, and in-app GitHub PR review in Reviu Pro.",
     intro: [
       "Tower is a mature, native Git client for macOS and Windows with strong power-user features like drag-and-drop interactive rebase, unlimited undo, and a merge conflict wizard, sold as an annual subscription.",
-      "Reviu is a native Rust client focused on the agent-to-GitHub review loop: read the diff, comment inline, send fixes back to the agent, then review and merge pull requests in Reviu Pro.",
+      "Reviu is a native Rust app focused on the agent-to-GitHub review loop: manage agent sessions, read the diff, comment inline, send fixes back to the agent, then review and merge pull requests in Reviu Pro.",
     ],
     columns: {
       engine: "Native",
@@ -151,7 +151,7 @@ export const comparisons: Comparison[] = [
     },
     whenCompetitor: [
       "You want mature power-user Git features like drag-and-drop interactive rebase and unlimited undo.",
-      "You review pull requests entirely in the browser and do not need an agent panel.",
+      "You review pull requests entirely in the browser and do not need agent sessions."
     ],
     whenReviu: [
       "You want in-app GitHub pull request review, checks, and merge, plus an agent review loop.",
@@ -161,12 +161,12 @@ export const comparisons: Comparison[] = [
       {
         question: "How does Reviu pricing compare to Tower?",
         answer:
-          "Reviu is free for local Git and the agent panel. Reviu Pro adds GitHub workflows for $9/month or $79/year. Tower is a paid subscription billed annually.",
+          "Reviu is free for agent sessions and local Git. Reviu Pro adds GitHub workflows for $9/month or $79/year. Tower is a paid subscription billed annually."
       },
       {
-        question: "Does Reviu have an agent panel?",
+        question: "Does Reviu have agent sessions?",
         answer:
-          "Yes. Reviu runs Claude or Codex from the sidebar so you can review the diff it produced and send inline comments back. Tower offers AI-generated commit messages but not a review-to-agent panel.",
+          "Yes. Reviu runs ACP-registry agents from the sidebar so you can review the diff they produce and send inline comments back. Tower offers AI-generated commit messages but not a review-to-agent workflow."
       },
       {
         question: "Is Reviu source-available?",
@@ -180,10 +180,10 @@ export const comparisons: Comparison[] = [
     name: "GitKraken",
     title: "GitKraken Alternative",
     metaDescription:
-      "Reviu vs GitKraken: GitKraken is an Electron DevEx platform. Reviu is a lean native Rust client with an agent review panel, keyboard-first commands, and in-app GitHub PR review in Reviu Pro.",
+      "Reviu vs GitKraken: GitKraken is an Electron DevEx platform. Reviu is a lean native Rust app with agent sessions, keyboard-first Git commands, and in-app GitHub PR review in Reviu Pro.",
     intro: [
       "GitKraken Desktop is a cross-platform Electron Git client and part of a broader DevEx platform with boards, GitLens, and team features. It has a free tier and paid subscriptions.",
-      "Reviu takes the opposite approach: a lean, native Rust client focused on the review loop, from your agent's diff to a merged GitHub pull request, without the weight of an Electron platform.",
+      "Reviu takes the opposite approach: a lean, native Rust app focused on agent sessions and the review loop, from your agent's diff to a merged GitHub pull request, without the weight of an Electron platform.",
     ],
     columns: {
       engine: "Electron (web tech)",
@@ -200,7 +200,7 @@ export const comparisons: Comparison[] = [
     ],
     whenReviu: [
       "You want a focused, native, keyboard-first review surface instead of an Electron platform.",
-      "You want to review your agent's code before pushing, with review-to-agent comments on local diffs.",
+      "You want to review your agent's code before pushing, with durable sessions and review-to-agent comments on local diffs."
     ],
     faq: [
       {
@@ -216,7 +216,7 @@ export const comparisons: Comparison[] = [
       {
         question: "Does Reviu run on Linux like GitKraken?",
         answer:
-          "Yes. Both run on macOS, Windows, and Linux. Reviu adds a native Rust interface and a built-in Claude or Codex agent panel.",
+          "Yes. Both run on macOS, Windows, and Linux. Reviu adds a native Rust interface and ACP-registry agent sessions."
       },
     ],
   },

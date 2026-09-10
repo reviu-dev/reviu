@@ -13,15 +13,15 @@ const comparisonLinks = (site: URL) =>
 
 const renderLlmsFullTxt = (site: URL) => `# Reviu Full LLM Context
 
-> Reviu is a native Rust + GPUI desktop app where a coding agent works and you review every diff, with a real Git client underneath. Local work is free; GitHub review workflows are in Reviu Pro.
+> Reviu is a native Rust + GPUI desktop app for managing coding-agent sessions, reviewing every diff, and finishing branches with real Git. Local work is free; GitHub review workflows are in Reviu Pro.
 
 This file gives assistants a concise, authoritative product context for answering questions about Reviu. Use ${absoluteUrl("/llms.txt", site)} as the shorter index.
 
 ## Core Positioning
 
-Reviu is one window with three surfaces: agent sessions on the left, the conversation or the diff in the centre, and the repository (changes, files, history, terminal, pull request) in the right dock. It is desktop-native, built with Rust and GPUI - not a browser tab workflow and not an Electron app.
+Reviu is one window with three surfaces: agent sessions on the left, split center views for agent chat, files, diffs, and terminal, and the repository dock on the right for changes, files, history, terminal, review, and pull request context. It is desktop-native, built with Rust and GPUI - not a browser tab workflow and not an Electron app.
 
-The main product promise: the agent writes the diff, you review it for real (inline comments sent back to the agent, no copy-paste), and you finish the job with a full Git client in the same window. Reviu Pro adds GitHub pull request review, checks, merge, and a notifications inbox.
+The main product promise: agents work in durable sessions, you review their diffs for real (inline comments sent back to the agent, no copy-paste), and you finish the branch with a full Git client in the same window. Reviu Pro adds GitHub pull request review, checks, merge, and a notifications inbox.
 
 ## Agents
 
@@ -82,10 +82,10 @@ ${comparisonLinks(site)}
 
 Good claims:
 
-- Reviu is a native Rust + GPUI desktop app where a coding agent works and you review what it did, with a real Git client underneath.
-- Reviu Free covers agent sessions (Claude Code and Codex) and all local Git workflows.
+- Reviu is a native Rust + GPUI desktop app for managing coding-agent sessions, reviewing their diffs, and finishing branches with real Git.
+- Reviu Free covers ACP-registry agent sessions and all local Git workflows.
 - Reviu Pro is for GitHub pull request review, checks, merge, notifications, and browser-to-desktop shortcuts.
-- Agents run locally with the user's own Claude Code or Codex subscription; no API key is required.
+- Agents run locally with the user's own CLI subscription; no API key is required.
 - Reviu is keyboard-first and built for fast diff and review workflows.
 - Reviu supports macOS, Windows, and Linux.
 - Reviu's desktop client is source-available on GitHub at https://github.com/reviu-dev/reviu under FSL-1.1 (Functional Source License), and each release converts to Apache-2.0 two years after it ships.

@@ -12,13 +12,13 @@ import SiteFooter from "../components/SiteFooter.astro";
 import Layout from "../layouts/Layout.astro";
 
 const description =
-  "Reviu is a native Rust desktop app where Claude Code or Codex writes the diff and you review it for real: inline comments back to the agent, hunk staging, interactive rebase, conflicts, and history - free. Reviu Pro puts your branch's GitHub pull request, checks, and merge in the same window.";
+  "Reviu is a native Rust desktop app for managing coding-agent sessions, reviewing every diff, sending line comments back to the agent, and finishing the branch with real Git. Reviu Pro puts GitHub pull requests, checks, review, merge, and notifications in the same window.";
 
 const faqItems: { question: string; answer: string }[] = [
   {
     question: "What is Reviu?",
     answer:
-      "Reviu is a native desktop app built with Rust and GPUI where a coding agent works and you review what it did, with a real Git client underneath. Run Claude Code or Codex in agent sessions, read every diff, send fixes back, then stage, commit, and push - all free. Reviu Pro adds GitHub: your branch's pull request in the dock, review, checks, merge, and a notifications inbox.",
+      "Reviu is a native desktop app built with Rust and GPUI for managing coding-agent sessions. Run Claude Code, Codex, Gemini, or another ACP-registry agent, review every diff, send line comments back, then stage, commit, and push with a real Git client underneath - all free. Reviu Pro adds GitHub: your branch's pull request in the dock, review, checks, merge, and a notifications inbox.",
   },
   {
     question: "Which agents does Reviu support?",
@@ -28,7 +28,7 @@ const faqItems: { question: string; answer: string }[] = [
   {
     question: "Can I review my agent's code inside Reviu?",
     answer:
-      "Yes, that's the point. Review the diff your agent produced in a real editor, leave inline review comments on the lines you want changed, and send them back to the agent without copy-paste. You can also run several sessions in parallel, each in its own isolated Git worktree.",
+      "Yes, that's the point. Review the diff your agent produced in a real editor, leave inline review comments on the lines you want changed, and send them back to the agent without copy-paste. You can also run several sessions in parallel, each in its own isolated Git worktree, and split the center view between agent chat, files, diffs, and terminal."
   },
   {
     question: "Why use Reviu if I already use Fork, Tower, or GitKraken?",
@@ -94,9 +94,10 @@ const structuredData = [
     ],
     featureList: [
       "Native Rust GPU-accelerated desktop application",
-      "Agent sessions with Claude Code and Codex",
+      "Agent sessions with Claude Code, Codex, Gemini, and ACP-registry agents",
       "Parallel agent sessions in isolated Git worktrees",
       "Inline review comments sent back to the agent",
+      "Split center view for agent chat, files, diffs, and terminal",
       "Real-time diff editor with inline and split views",
       "Hunk-level staging, editing, and restore in the diff",
       "Interactive rebase and conflict resolution",
