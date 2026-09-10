@@ -1,4 +1,7 @@
 ---
+import ArrowRightIcon from "@lucide/astro/icons/arrow-right";
+import GitPullRequestIcon from "@lucide/astro/icons/git-pull-request";
+import MonitorIcon from "@lucide/astro/icons/monitor";
 import PuzzleIcon from "@lucide/astro/icons/puzzle";
 import FirefoxIcon from "../assets/icons/firefoxbrowser.svg?raw";
 import ChromeIcon from "../assets/icons/googlechrome.svg?raw";
@@ -24,26 +27,93 @@ const browsers = [
 
 <section
   id="browser-extensions"
-  class="py-24 sm:py-32"
+  class="relative isolate overflow-hidden py-24 sm:py-32"
   data-reveal-root
   data-reveal-threshold="0.2"
 >
-  <div class="mx-auto max-w-5xl px-6 lg:px-8">
-    <div class="reviu-reveal mx-auto max-w-3xl text-center">
-      <h2 class="text-base/7 font-semibold text-primary">Browser extension</h2>
-      <p
-        class="mt-2 text-4xl font-semibold tracking-tight text-balance text-foreground sm:text-5xl"
+  <div
+    class="absolute inset-x-0 top-0 -z-10 h-px bg-linear-to-r from-transparent via-border to-transparent"
+    aria-hidden="true"
+  >
+  </div>
+
+  <div class="mx-auto max-w-7xl px-6 lg:px-8">
+    <div class="grid gap-10 lg:grid-cols-[0.9fr_1.1fr] lg:items-center">
+      <div class="reviu-reveal min-w-0 max-w-2xl">
+        <div class="inline-flex items-center gap-2 rounded-full border border-primary/20 bg-primary/10 px-3 py-1 text-sm font-semibold text-primary">
+          <PuzzleIcon class="size-4" aria-hidden="true" />
+          Browser extension
+        </div>
+        <h2
+          class="mt-6 text-4xl font-semibold tracking-tight text-balance text-foreground sm:text-5xl"
+        >
+          When a PR starts in the browser, finish it in Reviu.
+        </h2>
+        <p class="mt-6 text-lg/8 text-muted-foreground">
+          The extension adds Open in Reviu to GitHub pull requests. Reviu opens
+          the desktop app, offers to check out the branch, and keeps the review
+          beside the full local project.
+        </p>
+      </div>
+
+      <div
+        class="reviu-reveal min-w-0 rounded-[2rem] border border-border bg-muted/30 p-3 shadow-2xl shadow-primary/5 dark:bg-white/[0.03] dark:shadow-black/20"
+        style="--reveal-delay: 150ms;"
       >
-        Open pull requests in Reviu, straight from your browser.
-      </p>
-      <p class="mt-6 text-lg/8 text-muted-foreground">
-        Install the Reviu extension and open the pull request you're looking at
-        in the desktop app, checked out locally and ready to review.
-      </p>
+        <div class="rounded-3xl border border-border bg-background p-5 dark:bg-gray-950/50">
+          <div class="flex items-center gap-2 border-b border-border pb-4 text-xs text-muted-foreground">
+            <span class="size-3 rounded-full bg-red-400"></span>
+            <span class="size-3 rounded-full bg-yellow-400"></span>
+            <span class="size-3 rounded-full bg-emerald-400"></span>
+            <span class="ml-3 min-w-0 flex-1 truncate rounded-full bg-muted px-3 py-1 dark:bg-white/[0.04]">
+              github.com/lumenware/checkout/pull/48
+            </span>
+          </div>
+
+          <div class="mt-6 grid gap-4 sm:grid-cols-[1fr_auto_1fr] sm:items-center">
+            <div class="rounded-3xl border border-border bg-muted/40 p-5 dark:bg-white/[0.03]">
+              <div class="flex items-center gap-3">
+                <GitPullRequestIcon class="size-5 text-primary" aria-hidden="true" />
+                <div>
+                  <p class="font-semibold text-foreground">GitHub PR #48</p>
+                  <p class="text-sm text-muted-foreground">needs local review</p>
+                </div>
+              </div>
+              <button
+                type="button"
+                class="mt-6 inline-flex rounded-md bg-primary px-3 py-2 text-sm font-semibold text-white"
+              >
+                Open in Reviu
+              </button>
+            </div>
+
+            <ArrowRightIcon
+              class="mx-auto hidden size-6 text-primary sm:block"
+              aria-hidden="true"
+            />
+
+            <div class="rounded-3xl border border-border bg-muted/40 p-5 dark:bg-white/[0.03]">
+              <div class="flex items-center gap-3">
+                <MonitorIcon class="size-5 text-primary" aria-hidden="true" />
+                <div>
+                  <p class="font-semibold text-foreground">Local checkout</p>
+                  <p class="text-sm text-muted-foreground">diff, files, terminal</p>
+                </div>
+              </div>
+              <div class="mt-6 rounded-2xl border border-border bg-background/70 p-3 text-xs dark:bg-gray-950/60">
+                <div class="flex min-w-0 items-center justify-between gap-3">
+                  <span class="shrink-0 text-muted-foreground">branch</span>
+                  <span class="min-w-0 truncate font-mono text-primary">checkout-discounts</span>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
     </div>
 
     <div
-      class="mt-12 mx-auto grid max-w-md grid-cols-1 gap-6 sm:max-w-none sm:grid-cols-2"
+      class="mt-10 grid gap-4 sm:grid-cols-2 lg:ml-auto lg:max-w-2xl"
     >
       {
         browsers.map((browser, index) => (
@@ -52,10 +122,10 @@ const browsers = [
             target="_blank"
             rel="noopener noreferrer"
             data-umami-event={browser.event}
-            class="reviu-reveal reviu-hover-lift group flex h-full items-center gap-5 rounded-3xl border border-border bg-background p-6 transition-colors hover:border-primary/40"
-            style={`--reveal-delay: ${index * 125 + 150}ms;`}
+            class="reviu-reveal reviu-hover-lift group flex h-full items-center gap-5 rounded-3xl border border-border bg-background p-5 shadow-sm transition-colors hover:border-primary/40 dark:bg-gray-950/40"
+            style={`--reveal-delay: ${index * 125 + 250}ms;`}
           >
-            <div class="inline-flex size-14 shrink-0 items-center justify-center rounded-2xl bg-muted text-foreground ring-1 ring-border">
+            <div class="inline-flex size-14 shrink-0 items-center justify-center rounded-2xl bg-muted text-foreground ring-1 ring-border dark:bg-white/[0.03]">
               <span
                 class="inline-flex size-8 [&_svg]:size-8"
                 aria-hidden="true"
@@ -70,7 +140,7 @@ const browsers = [
                 {browser.name}
               </p>
             </div>
-            <PuzzleIcon
+            <ArrowRightIcon
               class="size-5 text-muted-foreground transition-colors group-hover:text-primary"
               aria-hidden="true"
             />

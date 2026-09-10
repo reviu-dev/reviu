@@ -3,6 +3,8 @@ import CpuIcon from "@lucide/astro/icons/cpu";
 import DownloadIcon from "@lucide/astro/icons/download";
 import HardDriveIcon from "@lucide/astro/icons/hard-drive";
 import MonitorIcon from "@lucide/astro/icons/monitor";
+import ShieldCheckIcon from "@lucide/astro/icons/shield-check";
+import TerminalIcon from "@lucide/astro/icons/terminal";
 import Badge from "./Badge.astro";
 import { desktopDownloadUrls } from "../../constants";
 
@@ -12,8 +14,9 @@ const downloadPlatforms = [
   {
     id: "macos",
     title: "macOS",
-    badge: "Available now",
+    badge: "DMG",
     icon: CpuIcon,
+    description: "Native app for Apple Silicon and Intel Macs.",
     downloads: [
       {
         label: "Apple Silicon",
@@ -30,15 +33,17 @@ const downloadPlatforms = [
   {
     id: "linux",
     title: "Linux",
-    badge: "Install command",
+    badge: "Shell",
     icon: HardDriveIcon,
+    description: "Install from the terminal and keep updates simple.",
     installCommand: linuxInstallCommand,
   },
   {
     id: "windows",
     title: "Windows",
-    badge: "Available now",
+    badge: "EXE",
     icon: MonitorIcon,
+    description: "Native builds for x64 and ARM64 Windows machines.",
     downloads: [
       {
         label: "ARM64",
@@ -57,58 +62,65 @@ const downloadPlatforms = [
 
 <section
   id="downloads"
-  class="py-24 sm:py-32"
+  class="relative isolate overflow-hidden bg-muted/30 py-24 sm:py-32 dark:bg-white/[0.02]"
   data-reveal-root
   data-reveal-threshold="0.2"
 >
-  <div class="mx-auto max-w-2xl lg:max-w-7xl px-6 lg:px-8">
-    <div class="reviu-reveal mx-auto max-w-3xl text-center">
-      <h2 class="text-base/7 font-semibold text-primary">Downloads</h2>
-      <p
-        class="mt-2 text-4xl font-semibold tracking-tight text-balance text-foreground sm:text-5xl"
+  <div
+    class="absolute inset-x-0 top-0 -z-10 h-px bg-linear-to-r from-transparent via-border to-transparent"
+    aria-hidden="true"
+  >
+  </div>
+
+  <div class="mx-auto max-w-7xl px-6 lg:px-8">
+    <div class="grid gap-10 lg:grid-cols-[0.9fr_1.1fr] lg:items-end">
+      <div class="reviu-reveal max-w-3xl">
+        <p class="text-base/7 font-semibold text-primary">Downloads</p>
+        <h2
+          class="mt-2 text-4xl font-semibold tracking-tight text-balance text-foreground sm:text-6xl"
+        >
+          Install Reviu and start with a local agent session.
+        </h2>
+      </div>
+      <div
+        class="reviu-reveal rounded-3xl border border-border bg-background p-6 shadow-sm dark:bg-gray-950/40"
+        style="--reveal-delay: 120ms;"
       >
-        Pick the build that matches your machine.
-      </p>
-      <p class="mt-6 text-lg/8 text-muted-foreground">
-        Reviu runs on macOS, Linux, and Windows. Pick a native build for your
-        CPU, or install Linux with a single command.
-      </p>
+        <div class="flex items-start gap-4">
+          <ShieldCheckIcon class="mt-1 size-5 shrink-0 text-primary" aria-hidden="true" />
+          <div>
+            <p class="font-semibold text-foreground">No account required for local work</p>
+            <p class="mt-2 text-sm/7 text-muted-foreground">
+              Download the native app, open a repository, and run the agent CLI
+              you already use. Sign in only when you want Reviu Pro's GitHub
+              pull request workflow.
+            </p>
+          </div>
+        </div>
+      </div>
     </div>
 
-    <div
-      class="mt-12 mx-auto grid lg:max-w-none max-w-md grid-cols-1 gap-6 lg:grid-cols-3"
-    >
+    <div class="mt-12 grid gap-6 lg:grid-cols-3">
       {
         downloadPlatforms.map((platform, index) => (
           <article
-            class="reviu-reveal flex h-full flex-col rounded-3xl border border-border bg-background p-8"
+            class="reviu-reveal flex h-full flex-col rounded-[2rem] border border-border bg-background p-6 shadow-sm dark:bg-gray-950/40"
             style={`--reveal-delay: ${index * 125 + 150}ms;`}
           >
             <div class="flex items-start justify-between gap-4">
               <div class="inline-flex size-12 items-center justify-center rounded-2xl bg-primary/10 text-primary ring-1 ring-primary/15">
                 <platform.icon class="size-6" aria-hidden="true" />
               </div>
-              <Badge
-                variant={
-                  ("downloads" in platform && platform.downloads.length > 0) ||
-                  "installCommand" in platform
-                    ? "primary"
-                    : "muted"
-                }
-              >
-                {platform.badge}
-              </Badge>
+              <Badge variant="primary">{platform.badge}</Badge>
             </div>
 
             <div class="mt-6">
               <h3 class="text-2xl font-semibold text-foreground">
                 {platform.title}
               </h3>
-              {"description" in platform && (
-                <p class="mt-3 text-sm/7 text-muted-foreground">
-                  {platform.description}
-                </p>
-              )}
+              <p class="mt-3 text-sm/7 text-muted-foreground">
+                {platform.description}
+              </p>
             </div>
 
             <div class="mt-auto pt-8">
@@ -118,7 +130,7 @@ const downloadPlatforms = [
                     <a
                       href={download.href}
                       data-umami-event={download.event}
-                      class="reviu-hover-lift inline-flex w-full items-center justify-center gap-2 rounded-md bg-primary px-3 py-2 text-sm/6 font-semibold text-white shadow-xs transition-colors hover:bg-primary/80 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary"
+                      class="reviu-hover-lift inline-flex w-full items-center justify-center gap-2 whitespace-nowrap rounded-md bg-primary px-3 py-2 text-sm/6 font-semibold text-white shadow-xs transition-colors hover:bg-primary/80 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary"
                     >
                       <DownloadIcon class="size-4" aria-hidden="true" />
                       Download for {download.label}
@@ -126,14 +138,15 @@ const downloadPlatforms = [
                   ))}
                 </div>
               ) : "installCommand" in platform ? (
-                <div class="rounded-2xl border border-border bg-muted/40 p-4">
+                <div class="rounded-2xl border border-border bg-muted/40 p-4 dark:bg-white/[0.03]">
                   <div class="flex items-center justify-between gap-3">
-                    <p class="text-xs font-semibold uppercase tracking-[0.18em] text-primary">
+                    <p class="inline-flex items-center gap-2 text-xs font-semibold uppercase tracking-[0.18em] text-primary">
+                      <TerminalIcon class="size-3.5" aria-hidden="true" />
                       Install
                     </p>
                     <button
                       type="button"
-                      class="inline-flex shrink-0 items-center justify-center rounded-md border border-border bg-background px-2.5 py-1 text-xs font-semibold text-foreground transition-colors hover:bg-muted"
+                      class="inline-flex shrink-0 items-center justify-center rounded-md border border-border bg-background px-2.5 py-1 text-xs font-semibold text-foreground transition-colors hover:bg-muted dark:bg-gray-950/40"
                       data-umami-event="copy-linux-install-command"
                       data-copy-command
                       data-copy-value={platform.installCommand}
@@ -141,7 +154,7 @@ const downloadPlatforms = [
                       Copy
                     </button>
                   </div>
-                  <code class="mt-3 block overflow-x-auto whitespace-nowrap text-sm text-foreground">
+                  <code class="mt-3 block break-all text-xs text-foreground">
                     {platform.installCommand}
                   </code>
                 </div>
