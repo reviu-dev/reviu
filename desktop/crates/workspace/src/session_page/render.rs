@@ -853,7 +853,7 @@ impl SessionPage {
               title: session_row_title(&meta),
               subtitle,
               updated_at_secs: meta.updated_at_secs,
-              time: format_relative_secs(meta.updated_at_secs, now),
+              time: format_relative_age(meta.updated_at_secs, now),
               agent_id: meta.agent_id.clone(),
               status: statuses.get(&meta.id).copied().unwrap_or_default(),
               selected: active_id.as_deref() == Some(meta.id.as_str()),
@@ -983,7 +983,7 @@ impl SessionPage {
                   .child(
                     div()
                       .relative()
-                      .w(px(34.0))
+                      .w(px(48.0))
                       .h(px(20.0))
                       .child(
                         div()

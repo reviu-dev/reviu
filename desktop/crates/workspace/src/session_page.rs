@@ -43,6 +43,7 @@ use crate::agent_settings::AgentSettings;
 use crate::auth_state::AuthStateStore;
 use crate::config::{ConfigStore, RecentProjectKind};
 use crate::conversation_hub::{ConversationHub, ConversationStoreAccess};
+use crate::date_format::format_relative_age;
 use crate::diff_view_policy::{DiffViewInputs, effective_diff_view};
 use crate::dock_panel::{
   ChangesActionCommand, CommitMenuCommand, DockPanel, DockPanelEvent, DockPanelOpenFileMode,
@@ -54,9 +55,7 @@ use crate::inbox::Inbox;
 use crate::open_intent::OpenIntent;
 use crate::project_files::list_project_files;
 use crate::review_destination::{AgentReviewHandlers, ReviewDestination, configure_review};
-use crate::session_list::{
-  SessionList, SessionListEvent, SessionStatus, format_relative_secs, session_row_title,
-};
+use crate::session_list::{SessionList, SessionListEvent, SessionStatus, session_row_title};
 use crate::session_page::center_layout::{
   CenterDropTarget, CenterLayout, CenterSplitDirection, CenterSurface,
 };

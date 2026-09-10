@@ -26,11 +26,20 @@ pub(crate) fn format_long_date_opt(value: Option<&str>) -> SharedString {
   format_long_date(value)
 }
 
-fn pluralized_unit(value: i64, unit: &str) -> String {
-  if value == 1 {
-    format!("1 {unit} ago")
-  } else {
-    format!("{value} {unit}s ago")
+pub(crate) fn format_relative_secs(updated_at_secs: u64, now_secs: u64) -> String {
+  let delta = now_secs.saturating_sub(updated_at_secs);
+  match delta {
+    0..=59 => "now".to_string(),
+    60..=3_599 => format!("{}m", delta / 60),
+    3_600..=86_399 => format!("{}h", delta / 3_600),
+    _ => format!("{}d", delta / 86_400),
+  }
+}
+
+pub(crate) fn format_relative_age(updated_at_secs: u64, now_secs: u64) -> String {
+  match format_relative_secs(updated_at_secs, now_secs).as_str() {
+    "now" => "now".to_string(),
+    label => format!("{label} ago"),
   }
 }
 
@@ -40,36 +49,11 @@ pub(crate) fn format_relative_time_at(value: &str, now: OffsetDateTime) -> Share
     return trimmed.to_string().into();
   };
 
-  let elapsed_seconds = (now - parsed).whole_seconds();
-  if elapsed_seconds <= 60 {
-    return "just now".into();
-  }
-
-  let elapsed_minutes = elapsed_seconds / 60;
-  if elapsed_minutes < 60 {
-    return pluralized_unit(elapsed_minutes, "minute").into();
-  }
-
-  let elapsed_hours = elapsed_seconds / 3_600;
-  if elapsed_hours < 24 {
-    return pluralized_unit(elapsed_hours, "hour").into();
-  }
-
-  let elapsed_days = elapsed_seconds / 86_400;
-  if elapsed_days == 1 {
-    return "yesterday".into();
-  }
-  if elapsed_days < 30 {
-    return pluralized_unit(elapsed_days, "day").into();
-  }
-
-  let elapsed_months = elapsed_days / 30;
-  if elapsed_months < 12 {
-    return pluralized_unit(elapsed_months, "month").into();
-  }
-
-  let elapsed_years = elapsed_days / 365;
-  pluralized_unit(elapsed_years.max(1), "year").into()
+  let Some(updated_at_secs) = u64::try_from(parsed.unix_timestamp()).ok() else {
+    return "now".into();
+  };
+  let now_secs = u64::try_from(now.unix_timestamp()).unwrap_or(0);
+  format_relative_age(updated_at_secs, now_secs).into()
 }
 
 pub(crate) fn format_relative_time(value: &str) -> SharedString {
@@ -99,24 +83,45 @@ mod tests {
   }
 
   #[test]
-  fn format_relative_time_at_formats_recent_relative_timestamps() {
+  fn format_relative_secs_buckets() {
+    assert_eq!(format_relative_secs(100, 100), "now");
+    assert_eq!(format_relative_secs(100, 159), "now");
+    assert_eq!(format_relative_secs(100, 160), "1m");
+    assert_eq!(format_relative_secs(100, 100 + 3_600), "1h");
+    assert_eq!(format_relative_secs(100, 100 + 86_400), "1d");
+    assert_eq!(format_relative_secs(100, 100 + 3 * 86_400), "3d");
+  }
+
+  #[test]
+  fn format_relative_secs_clamps_future_timestamps() {
+    assert_eq!(format_relative_secs(200, 100), "now");
+  }
+
+  #[test]
+  fn format_relative_age_adds_context_to_elapsed_time() {
+    assert_eq!(format_relative_age(100, 100), "now");
+    assert_eq!(format_relative_age(100, 100 + 60), "1m ago");
+  }
+
+  #[test]
+  fn format_relative_time_at_formats_compact_relative_timestamps() {
     let now = OffsetDateTime::parse("2026-02-20T12:00:00Z", &Rfc3339).expect("parse now");
 
     assert_eq!(
       format_relative_time_at("2026-02-20T11:59:30Z", now).as_ref(),
-      "just now"
+      "now"
     );
     assert_eq!(
       format_relative_time_at("2026-02-20T10:00:00Z", now).as_ref(),
-      "2 hours ago"
+      "2h ago"
     );
     assert_eq!(
       format_relative_time_at("2026-02-19T12:00:00Z", now).as_ref(),
-      "yesterday"
+      "1d ago"
     );
     assert_eq!(
       format_relative_time_at("2026-02-17T12:00:00Z", now).as_ref(),
-      "3 days ago"
+      "3d ago"
     );
   }
 
