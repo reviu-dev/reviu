@@ -1,16 +1,13 @@
 use std::{
   collections::HashMap,
   error::Error,
-  path::Path,
   sync::{Mutex, OnceLock},
   time::{Duration, Instant},
 };
 
+use crate::auth_state::AuthState;
 use sentry::protocol::{Breadcrumb, Context, Level, Map, Value};
 use serde::{Deserialize, Serialize};
-use sha2::{Digest, Sha256};
-
-use crate::auth_state::AuthState;
 
 const DEDUP_WINDOW: Duration = Duration::from_secs(300);
 
@@ -49,7 +46,6 @@ fn should_capture_error(key: &str, now: Instant) -> bool {
 #[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct CrashGitContext {
-  pub repo_hash: Option<String>,
   pub sidebar_mode: String,
   pub diff_view: String,
 }
@@ -66,18 +62,6 @@ fn auth_state_tag(state: &AuthState) -> &'static str {
     AuthState::Authenticated(_) => "authenticated",
     AuthState::Unauthenticated => "unauthenticated",
   }
-}
-
-pub(crate) fn hash_repo_path(repo_root: &Path) -> String {
-  let display = repo_root.to_string_lossy().into_owned();
-  let mut hasher = Sha256::new();
-  hasher.update(display.as_bytes());
-  let hash: String = hasher
-    .finalize()
-    .iter()
-    .map(|byte| format!("{byte:02x}"))
-    .collect();
-  hash[..12].to_string()
 }
 
 fn to_unknown_context(map: Map<String, Value>) -> Context {
@@ -207,7 +191,7 @@ pub(crate) fn sync_auth_state(state: &AuthState) {
   add_breadcrumb("auth.state", "Auth state changed", data);
 }
 
-pub(crate) fn sync_git_context(repo_root: Option<&Path>, sidebar_mode: &str, diff_view: &str) {
+pub(crate) fn sync_git_context(sidebar_mode: &str, diff_view: &str) {
   sentry::configure_scope(|scope| {
     scope.set_tag("git.sidebar_mode", sidebar_mode);
     scope.set_tag("git.diff_view", diff_view);
@@ -215,21 +199,11 @@ pub(crate) fn sync_git_context(repo_root: Option<&Path>, sidebar_mode: &str, dif
     let mut context = Map::new();
     context.insert("sidebar_mode".into(), sidebar_mode.to_string().into());
     context.insert("diff_view".into(), diff_view.to_string().into());
-
-    if let Some(repo_root) = repo_root {
-      let repo_hash = hash_repo_path(repo_root);
-      scope.set_tag("git.repo_hash", repo_hash.as_str());
-      context.insert("repo_hash".into(), repo_hash.into());
-    } else {
-      scope.remove_tag("git.repo_hash");
-    }
-
     scope.set_context("git_state", to_unknown_context(context));
   });
 
   update_crash_snapshot(|snapshot| {
     snapshot.git = Some(CrashGitContext {
-      repo_hash: repo_root.map(hash_repo_path),
       sidebar_mode: sidebar_mode.to_string(),
       diff_view: diff_view.to_string(),
     });
@@ -238,7 +212,6 @@ pub(crate) fn sync_git_context(repo_root: Option<&Path>, sidebar_mode: &str, dif
 
 pub(crate) fn clear_git_context() {
   sentry::configure_scope(|scope| {
-    scope.remove_tag("git.repo_hash");
     scope.remove_tag("git.sidebar_mode");
     scope.remove_tag("git.diff_view");
     scope.remove_context("git_state");
@@ -251,22 +224,12 @@ pub(crate) fn clear_git_context() {
 
 #[cfg(test)]
 mod tests {
-  use super::{
-    DEDUP_WINDOW, auth_state_tag, expected_http_reason, hash_repo_path, should_capture_error,
-  };
+  use super::{DEDUP_WINDOW, auth_state_tag, expected_http_reason, should_capture_error};
   use crate::{
     api::{User, UserRole, UserSubscription},
     auth_state::AuthState,
   };
-  use std::{path::Path, time::Instant};
-
-  #[test]
-  fn hash_repo_path_returns_a_short_stable_hash() {
-    let repo_hash = hash_repo_path(Path::new("/Users/example/workspace/reviu/desktop"));
-    assert_eq!(repo_hash, "c8fb129c85f5");
-    assert!(!repo_hash.contains('/'));
-    assert_ne!(repo_hash, "desktop");
-  }
+  use std::time::Instant;
 
   #[test]
   fn expected_http_reason_flags_unauthorized_only() {

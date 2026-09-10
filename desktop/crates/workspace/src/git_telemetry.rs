@@ -15,7 +15,7 @@ pub(crate) trait TelemetrySink: Send + Sync {
   fn breadcrumb(&self, message: &str, data: Map<String, Value>);
   fn expected_error(&self, operation: &str, reason: &str, data: Map<String, Value>);
   fn unexpected_error(&self, operation: &'static str, error: &str, data: Map<String, Value>);
-  fn sync_context(&self, repo_root: Option<&Path>, tab: &'static str, diff_view: &'static str);
+  fn sync_context(&self, tab: &'static str, diff_view: &'static str);
   fn clear_context(&self);
 }
 
@@ -35,8 +35,8 @@ impl TelemetrySink for SentrySink {
     sentry_context::capture_unexpected_error(operation, &io_error, data);
   }
 
-  fn sync_context(&self, repo_root: Option<&Path>, tab: &'static str, diff_view: &'static str) {
-    sentry_context::sync_git_context(repo_root, tab, diff_view);
+  fn sync_context(&self, tab: &'static str, diff_view: &'static str) {
+    sentry_context::sync_git_context(tab, diff_view);
   }
 
   fn clear_context(&self) {
@@ -105,7 +105,7 @@ pub(crate) fn outcome_report(outcome: &anyhow::Result<RepoCommandOutcome>) -> Ou
   }
 }
 
-/// The repository path is never sent as-is: only a stable hash.
+/// The repository path never leaves the machine.
 pub(crate) struct GitTelemetry<'a> {
   pub(crate) repo_root: Option<&'a Path>,
   pub(crate) tab: &'static str,
@@ -115,12 +115,6 @@ pub(crate) struct GitTelemetry<'a> {
 impl GitTelemetry<'_> {
   pub(crate) fn data(&self) -> Map<String, Value> {
     let mut data = Map::new();
-    if let Some(repo_root) = self.repo_root {
-      data.insert(
-        "repo_hash".into(),
-        sentry_context::hash_repo_path(repo_root).into(),
-      );
-    }
     data.insert("sidebar_mode".into(), self.tab.to_string().into());
     data.insert("diff_view".into(), self.diff_view.to_string().into());
     data
@@ -128,7 +122,7 @@ impl GitTelemetry<'_> {
 
   /// The context that stays attached to whatever happens next.
   pub(crate) fn sync(&self) {
-    sink().sync_context(self.repo_root, self.tab, self.diff_view);
+    sink().sync_context(self.tab, self.diff_view);
   }
 
   /// Without a repository there is nothing to describe, and a stale context would
@@ -250,7 +244,7 @@ pub(crate) mod test_support {
       );
     }
 
-    fn sync_context(&self, _repo_root: Option<&Path>, tab: &'static str, diff_view: &'static str) {
+    fn sync_context(&self, tab: &'static str, diff_view: &'static str) {
       self.record(
         Report::ContextSynced {
           tab: tab.to_string(),
@@ -289,11 +283,7 @@ mod tests {
 
     let data = telemetry.data();
     assert_eq!(value(&data, "repo_name"), None);
-    assert_eq!(
-      value(&data, "repo_hash").map(|hash| hash.len()),
-      Some(12),
-      "the full path is replaced by a stable short hash"
-    );
+    assert_eq!(value(&data, "repo_hash"), None);
     assert!(
       !format!("{data:?}").contains("/home/someone"),
       "no absolute path anywhere in the payload"

@@ -2361,7 +2361,6 @@ mod tests {
         app_profile: "prod".to_string(),
         happened_at: "2026-04-03T10:00:00Z".to_string(),
         git_context: Some(crate::sentry_context::CrashGitContext {
-          repo_hash: Some("abc123def456".to_string()),
           sidebar_mode: "changes".to_string(),
           diff_view: "unified".to_string(),
         }),
@@ -2392,10 +2391,11 @@ mod tests {
       "request: {request}"
     );
     assert!(
-      request.contains("\"gitContext\":{\"repoHash\":\"abc123def456\""),
+      request.contains("\"gitContext\":{\"sidebarMode\":\"changes\""),
       "request: {request}"
     );
     assert!(!request.contains("\"repoName\""), "request: {request}");
+    assert!(!request.contains("\"repoHash\""), "request: {request}");
     assert!(!request.contains("\"branch\""), "request: {request}");
     assert!(!request.contains("\"selectedFile\""), "request: {request}");
     assert!(

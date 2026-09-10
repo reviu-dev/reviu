@@ -136,9 +136,6 @@ impl StartupCrashReport {
     if let Some(git) = self.git_context.as_ref() {
       lines.push(String::new());
       lines.push("Git Context:".to_string());
-      if let Some(repo_hash) = git.repo_hash.as_deref() {
-        lines.push(format!("Repo hash: {}", repo_hash));
-      }
       lines.push(format!("Sidebar mode: {}", git.sidebar_mode));
       lines.push(format!("Diff view: {}", git.diff_view));
     }
@@ -508,7 +505,6 @@ mod tests {
       app_profile: "prod".to_string(),
       happened_at: "2026-04-03T10:00:00Z".to_string(),
       git_context: Some(CrashGitContext {
-        repo_hash: Some("abc123def456".to_string()),
         sidebar_mode: "changes".to_string(),
         diff_view: "unified".to_string(),
       }),
