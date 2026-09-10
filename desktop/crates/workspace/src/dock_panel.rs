@@ -9,8 +9,9 @@ use editor::ReviewCommentCreateRequest;
 
 use git::{
   HeadCommitStatus, RepoStage, RepoStatusEntry, commit_changes, current_branch_status,
-  current_github_remote_repo, head_commit_message, head_commit_status, is_merge_in_progress,
-  is_rebase_in_progress, list_repo_status, list_repo_worktree_files, stage_all,
+  current_github_remote_repo, current_head_sha, head_commit_message, head_commit_status,
+  is_merge_in_progress, is_rebase_in_progress, list_repo_status, list_repo_worktree_files,
+  stage_all,
 };
 use gpui::{
   Anchor, AnyElement, AnyWindowHandle, App, Context, Entity, FocusHandle, Focusable, Render,
@@ -2253,7 +2254,11 @@ impl DockPanel {
   /// answer for nothing here. The same one keeps its own until the reread lands.
   fn apply_branch_pull_request(&mut self, state: BranchPrState, cx: &mut Context<Self>) {
     let found_pull_request = matches!(state, BranchPrState::Found(_, _));
-    if pull_request_identity(&state) != pull_request_identity(&self.branch_pr) {
+    if found_pull_request {
+      if pull_request_identity(&state) != pull_request_identity(&self.branch_pr) {
+        self.reset_pull_request_details(cx);
+      }
+    } else {
       self.reset_pull_request_details(cx);
     }
     self.set_branch_pr(state, cx);
@@ -2266,6 +2271,8 @@ impl DockPanel {
     if found_pull_request {
       self.load_pull_request_range(cx);
       self.load_pull_request_checks(cx);
+    } else if self.current_branch_is_default_branch() {
+      self.load_default_branch_checks(cx);
     }
     cx.notify();
   }
@@ -2380,6 +2387,44 @@ impl DockPanel {
     self.pr_merge_readiness = None;
     self.selected_merge_method = None;
     self.pr_merging = false;
+  }
+
+  fn load_default_branch_checks(&mut self, cx: &mut Context<Self>) {
+    let (Some(repo_root), BranchPrState::Missing(context)) =
+      (self.repo_root.clone(), &self.branch_pr)
+    else {
+      return;
+    };
+    if !self.current_branch_is_default_branch() {
+      return;
+    }
+
+    let owner = context.owner.clone();
+    let repo = context.repo.clone();
+    let branch = context.branch.clone();
+    let branch_for_request = branch.clone();
+    let api = WorkspaceApi::global(cx).api.clone();
+
+    self.pr_checks_loading = true;
+    let task = cx.spawn(async move |this, cx| {
+      let loaded = cx
+        .background_spawn(async move {
+          let ref_name =
+            current_head_sha(&repo_root)?.unwrap_or_else(|| branch_for_request.clone());
+          api.fetch_branch_checks(&owner, &repo, &branch_for_request, Some(&ref_name))
+        })
+        .await;
+      let _ = this.update(cx, |this, cx| {
+        if !matches!(&this.branch_pr, BranchPrState::Missing(context) if context.branch == branch) {
+          return;
+        }
+        this.pr_refresh_pending = this.pr_refresh_pending.saturating_sub(1);
+        this.pr_checks_loading = false;
+        this.pr_checks = loaded.ok();
+        cx.notify();
+      });
+    });
+    self._pr_checks_task = Some(task);
   }
 
   fn load_pull_request_checks(&mut self, cx: &mut Context<Self>) {
@@ -3227,6 +3272,13 @@ impl DockPanel {
     cx: &mut Context<Self>,
   ) {
     self.default_branch = default_branch;
+    if self.current_branch_is_default_branch()
+      && matches!(self.branch_pr, BranchPrState::Missing(_))
+      && self.pr_checks.is_none()
+      && !self.pr_checks_loading
+    {
+      self.load_default_branch_checks(cx);
+    }
     cx.notify();
   }
 
@@ -4259,19 +4311,12 @@ impl DockPanel {
         Vec::new(),
         cx,
       ),
-      BranchPrState::Missing(context) if self.current_branch_is_default_branch() => {
-        self.render_pr_empty_state_with_debug_selector(
-          DOCK_PANEL_DEFAULT_BRANCH_PR_DEBUG_SELECTOR,
-          UiIconName::GitBranch,
-          "Default branch",
-          format!(
-            "{} is the repository's default branch. Pull requests appear here when you switch to a feature branch.",
-            context.branch
-          ),
-          Vec::new(),
-          cx,
-        )
-      }
+      BranchPrState::Missing(context) if self.current_branch_is_default_branch() => v_flex()
+        .size_full()
+        .min_h_0()
+        .child(self.render_default_branch_identity(context, cx))
+        .child(self.render_branch_checks(cx))
+        .into_any_element(),
       BranchPrState::Missing(context) if self.branch_needs_publishing() => {
         let context = context.clone();
         self.render_pr_empty_state(
@@ -4351,6 +4396,53 @@ impl DockPanel {
         .child(self.render_pr_files(window, cx))
         .into_any_element(),
     }
+  }
+
+  fn render_default_branch_identity(
+    &self,
+    context: &GithubBranchContext,
+    cx: &mut Context<Self>,
+  ) -> AnyElement {
+    let theme = cx.theme().clone();
+
+    v_flex()
+      .debug_selector(|| DOCK_PANEL_DEFAULT_BRANCH_PR_DEBUG_SELECTOR.to_string())
+      .flex_shrink_0()
+      .gap_1()
+      .p_3()
+      .border_b_1()
+      .border_color(theme.border)
+      .child(
+        h_flex()
+          .items_center()
+          .gap_2()
+          .child(
+            Icon::new(UiIconName::GitBranch)
+              .size_3()
+              .text_color(theme.primary),
+          )
+          .child(
+            div()
+              .text_xs()
+              .font_weight(gpui::FontWeight::SEMIBOLD)
+              .text_color(theme.foreground)
+              .child("Default branch"),
+          ),
+      )
+      .child(
+        div()
+          .text_sm()
+          .text_color(theme.foreground)
+          .child(context.branch.clone()),
+      )
+      .child(
+        div()
+          .text_xs()
+          .line_height(px(17.0))
+          .text_color(theme.muted_foreground)
+          .child("Pull requests appear here when you switch to a feature branch."),
+      )
+      .into_any_element()
   }
 
   /// A comment written here lands in the Review tab, which is another tab: say
@@ -4489,6 +4581,20 @@ impl DockPanel {
   /// default: the file list below is what you came for. Always there even with
   /// nothing to report, because it carries what can be done to the pull request.
   fn render_pr_checks(&self, cx: &mut Context<Self>) -> AnyElement {
+    self.render_checks("No checks or reviewers", true, true, cx)
+  }
+
+  fn render_branch_checks(&self, cx: &mut Context<Self>) -> AnyElement {
+    self.render_checks("No checks have run", false, false, cx)
+  }
+
+  fn render_checks(
+    &self,
+    empty_label: &'static str,
+    show_reviewers: bool,
+    show_actions: bool,
+    cx: &mut Context<Self>,
+  ) -> AnyElement {
     let theme = cx.theme().clone();
     let checks = self
       .pr_checks
@@ -4563,15 +4669,17 @@ impl DockPanel {
                 .text_color(theme.muted_foreground)
                 .child(if self.pr_checks_loading {
                   "Loading checks...".to_string()
-                } else if self.pr_reviewers.is_empty() {
-                  "No checks or reviewers".to_string()
-                } else {
+                } else if show_reviewers && !self.pr_reviewers.is_empty() {
                   reviewers_summary_title(&self.pr_reviewers)
+                } else {
+                  empty_label.to_string()
                 }),
             )
           })
           // Closed, the avatars still say who has answered.
-          .child(render_reviewer_avatars(&self.pr_reviewers, &theme)),
+          .when(show_reviewers, |this| {
+            this.child(render_reviewer_avatars(&self.pr_reviewers, &theme))
+          }),
       );
 
     if !expanded {
@@ -4601,7 +4709,7 @@ impl DockPanel {
       );
     }
 
-    if !self.pr_reviewers.is_empty() {
+    if show_reviewers && !self.pr_reviewers.is_empty() {
       let mut list = v_flex().w_full().gap_0p5().px_1().pb_2();
       for reviewer in &self.pr_reviewers {
         list = list.child(render_reviewer_row(reviewer, &theme));
@@ -4622,7 +4730,9 @@ impl DockPanel {
       );
     }
 
-    block = block.child(self.render_pr_actions(cx));
+    if show_actions {
+      block = block.child(self.render_pr_actions(cx));
+    }
 
     block.into_any_element()
   }
@@ -5510,6 +5620,7 @@ mod tests {
     cx.run_until_parked();
     panel.update(cx, |panel, cx| {
       panel.branch_pr = BranchPrState::Missing(context);
+      panel.pr_checks = Some(crate::pull_request_checks::checks_summary_fixture());
       panel.set_default_branch(
         Some(git::BranchRef {
           name: format!("origin/{default_branch}"),
@@ -5533,6 +5644,11 @@ mod tests {
       cx.debug_bounds(DOCK_PANEL_DEFAULT_BRANCH_PR_DEBUG_SELECTOR)
         .is_some(),
       "the pull request tab explains that the current branch is the default branch"
+    );
+    assert!(
+      cx.debug_bounds(DOCK_PANEL_PR_CHECKS_DEBUG_SELECTOR)
+        .is_some(),
+      "the default branch still shows its check status"
     );
     assert!(
       cx.debug_bounds(DOCK_PANEL_CREATE_PR_DEBUG_SELECTOR)

@@ -1535,6 +1535,34 @@ impl ApiClient {
     Ok(payload.checks)
   }
 
+  pub fn fetch_branch_checks(
+    &self,
+    owner: &str,
+    repo: &str,
+    branch: &str,
+    ref_name: Option<&str>,
+  ) -> Result<GithubPullRequestChecksSummary> {
+    let route = "/github/branch/checks";
+    let mut query = vec![("org", owner), ("repo", repo), ("branch", branch)];
+    if let Some(ref_name) = ref_name {
+      query.push(("ref", ref_name));
+    }
+    let response = self
+      .authed_request(Method::GET, route)
+      .query(&query)
+      .send()?;
+    let status = response.status();
+    Self::record_http_status("GET", route, status);
+    if status == StatusCode::UNAUTHORIZED {
+      anyhow::bail!("unauthorized")
+    }
+    if !status.is_success() {
+      return Err(Self::api_error_from_response(response));
+    }
+    let payload = response.json::<GithubPullRequestChecksSummaryResponse>()?;
+    Ok(payload.checks)
+  }
+
   pub fn merge_pull_request(
     &self,
     owner: &str,
@@ -2939,6 +2967,49 @@ mod tests {
     assert_eq!(
       request_line,
       "GET /github/pr/42/checks?org=acme&repo=widget HTTP/1.1"
+    );
+  }
+
+  #[test]
+  fn fetch_branch_checks_uses_expected_route() {
+    let body = r#"{
+      "checks": {
+        "head_sha": "head123",
+        "overall_state": "success",
+        "required_state": "success",
+        "total_checks": 0,
+        "successful_checks": 0,
+        "failed_checks": 0,
+        "pending_checks": 0,
+        "required_checks_total": 0,
+        "required_checks_passed": 0,
+        "required_checks_failed": 0,
+        "required_checks_pending": 0,
+        "required_contexts": [],
+        "missing_required_contexts": [],
+        "requires_up_to_date_branch": false,
+        "actions_runs": [],
+        "other_checks": [],
+        "legacy_statuses": []
+      }
+    }"#;
+    let (base_url, request_line, handle) =
+      start_single_response_server_with_request_line("200 OK", body);
+    let api = make_test_api_client(base_url);
+
+    let _ = api
+      .fetch_branch_checks("acme", "widget", "feature/x", Some("head123"))
+      .expect("fetch branch checks");
+
+    handle.join().expect("join server thread");
+    let request_line = request_line
+      .lock()
+      .expect("lock request line")
+      .clone()
+      .unwrap_or_default();
+    assert_eq!(
+      request_line,
+      "GET /github/branch/checks?org=acme&repo=widget&branch=feature%2Fx&ref=head123 HTTP/1.1"
     );
   }
 
