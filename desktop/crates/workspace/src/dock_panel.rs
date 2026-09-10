@@ -54,6 +54,7 @@ pub(crate) const DOCK_PANEL_PR_CHECKS_DEBUG_SELECTOR: &str = "dock-panel-pr-chec
 pub(crate) const DOCK_PANEL_PR_MERGE_DEBUG_SELECTOR: &str = "dock-panel-pr-merge";
 pub(crate) const DOCK_PANEL_PR_MERGE_METHOD_DEBUG_SELECTOR: &str = "dock-panel-pr-merge-method";
 pub(crate) const DOCK_PANEL_PR_CHECKS_COUNTS_DEBUG_SELECTOR: &str = "dock-panel-pr-checks-counts";
+const DOCK_PANEL_PR_CHECKS_ROWS_DEBUG_SELECTOR: &str = "dock-panel-pr-checks-rows";
 pub(crate) const DOCK_PANEL_PR_REVIEW_DEBUG_SELECTOR: &str = "dock-panel-pr-review";
 pub(crate) const DOCK_PANEL_PR_PENDING_COMMENTS_DEBUG_SELECTOR: &str =
   "dock-panel-pr-pending-comments";
@@ -4584,11 +4585,11 @@ impl DockPanel {
   /// default: the file list below is what you came for. Always there even with
   /// nothing to report, because it carries what can be done to the pull request.
   fn render_pr_checks(&self, cx: &mut Context<Self>) -> AnyElement {
-    self.render_checks("No checks or reviewers", true, true, cx)
+    self.render_checks("No checks or reviewers", true, true, false, cx)
   }
 
   fn render_branch_checks(&self, cx: &mut Context<Self>) -> AnyElement {
-    self.render_checks("No checks have run", false, false, cx)
+    self.render_checks("No checks have run", false, false, true, cx)
   }
 
   fn render_checks(
@@ -4596,6 +4597,7 @@ impl DockPanel {
     empty_label: &'static str,
     show_reviewers: bool,
     show_actions: bool,
+    fill_available_height: bool,
     cx: &mut Context<Self>,
   ) -> AnyElement {
     let theme = cx.theme().clone();
@@ -4606,9 +4608,11 @@ impl DockPanel {
     let expanded = self.pr_details_expanded;
     let mut rows = checks.map(check_rows).unwrap_or_default();
     rows.sort_by_key(check_state_sort_key);
+    let fill_check_rows = fill_available_height && expanded && checks.is_some() && !rows.is_empty();
 
     let mut block = v_flex()
-      .flex_shrink_0()
+      .when(fill_check_rows, |this| this.flex_1().min_h_0())
+      .when(!fill_check_rows, |this| this.flex_shrink_0())
       .border_b_1()
       .border_color(theme.border)
       .child(
@@ -4690,12 +4694,12 @@ impl DockPanel {
     }
 
     if checks.is_some() && !rows.is_empty() {
-      // Six-or-so rows on screen, the rest behind a real scrollbar: a wide CI
-      // must not push the file list out of the panel.
       let mut list = v_flex()
-        .id("dock-panel-pr-checks-rows")
+        .id(DOCK_PANEL_PR_CHECKS_ROWS_DEBUG_SELECTOR)
+        .debug_selector(|| DOCK_PANEL_PR_CHECKS_ROWS_DEBUG_SELECTOR.to_string())
         .w_full()
-        .max_h(px(300.))
+        .when(fill_check_rows, |this| this.h_full())
+        .when(!fill_check_rows, |this| this.max_h(px(300.)))
         .overflow_y_scroll()
         .track_scroll(&self.pr_checks_scroll)
         .gap_0p5()
@@ -4704,12 +4708,12 @@ impl DockPanel {
       for row in rows {
         list = list.child(render_check_row(&row, &theme, cx));
       }
-      block = block.child(
-        div()
-          .relative()
-          .child(list)
-          .vertical_scrollbar(&self.pr_checks_scroll),
-      );
+      let list_container = div()
+        .relative()
+        .when(fill_check_rows, |this| this.flex_1().min_h_0())
+        .child(list)
+        .vertical_scrollbar(&self.pr_checks_scroll);
+      block = block.child(list_container);
     }
 
     if show_reviewers && !self.pr_reviewers.is_empty() {
@@ -5652,6 +5656,18 @@ mod tests {
       cx.debug_bounds(DOCK_PANEL_PR_CHECKS_DEBUG_SELECTOR)
         .is_some(),
       "the default branch still shows its check status"
+    );
+    panel.update(cx, |panel, cx| {
+      panel.pr_details_expanded = true;
+      cx.notify();
+    });
+    cx.run_until_parked();
+    let checks_rows = cx
+      .debug_bounds(DOCK_PANEL_PR_CHECKS_ROWS_DEBUG_SELECTOR)
+      .expect("the default branch expands its checks");
+    assert!(
+      checks_rows.size.height > px(300.0),
+      "default branch checks take the remaining panel height"
     );
     assert!(
       cx.debug_bounds(DOCK_PANEL_CREATE_PR_DEBUG_SELECTOR)
