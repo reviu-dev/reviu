@@ -2027,6 +2027,7 @@ impl SessionPage {
                 .debug_selector(|| UNSAVED_EDITOR_CANCEL_DEBUG_SELECTOR.to_string())
                 .label("Cancel")
                 .ghost()
+                .small()
                 .on_click(|_, window, cx| {
                   window.close_dialog(cx);
                 }),
@@ -2036,6 +2037,7 @@ impl SessionPage {
                 .debug_selector(|| UNSAVED_EDITOR_DISCARD_DEBUG_SELECTOR.to_string())
                 .label("Discard")
                 .danger()
+                .small()
                 .on_click(move |_, window, cx| {
                   window.close_dialog(cx);
                   let discard_action = discard_action.clone();
@@ -2050,6 +2052,7 @@ impl SessionPage {
                 .debug_selector(|| UNSAVED_EDITOR_SAVE_DEBUG_SELECTOR.to_string())
                 .label("Save")
                 .primary()
+                .small()
                 .on_click(move |_, window, cx| {
                   window.close_dialog(cx);
                   if let Some(editor) = save_editor.clone() {

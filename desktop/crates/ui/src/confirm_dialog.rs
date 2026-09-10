@@ -1,8 +1,9 @@
 use std::rc::Rc;
 
 use gpui::{AnyElement, App, ClickEvent, IntoElement, ParentElement as _, SharedString, Window};
-use gpui_component::button::ButtonVariant;
-use gpui_component::dialog::{AlertDialog, DialogButtonProps};
+use gpui_component::Sizable as _;
+use gpui_component::button::{Button, ButtonVariant, ButtonVariants as _};
+use gpui_component::dialog::{AlertDialog, Cancel, Confirm, DialogFooter};
 
 type ConfirmDialogHandler = dyn Fn(&ClickEvent, &mut Window, &mut App) -> bool;
 
@@ -103,25 +104,49 @@ impl ConfirmDialog {
 
   pub fn build(self, alert: AlertDialog) -> AlertDialog {
     let props = self.resolved_props();
-
-    let mut props = DialogButtonProps::default()
-      .show_cancel(true)
-      .ok_text(props.confirm_text)
-      .cancel_text(props.cancel_text)
-      .ok_variant(props.confirm_variant)
-      .cancel_variant(props.cancel_variant);
-
-    if let Some(on_confirm) = self.on_confirm {
-      props = props.on_ok(move |event, window, cx| on_confirm(event, window, cx));
-    }
-    if let Some(on_cancel) = self.on_cancel {
-      props = props.on_cancel(move |event, window, cx| on_cancel(event, window, cx));
-    }
+    let confirm_text = props.confirm_text.clone();
+    let cancel_text = props.cancel_text.clone();
+    let confirm_variant = props.confirm_variant;
+    let cancel_variant = props.cancel_variant;
+    let on_confirm = self.on_confirm.clone();
+    let on_cancel = self.on_cancel.clone();
 
     let alert = alert
       .title(self.title)
       .close_button(true)
-      .button_props(props);
+      .on_ok(move |event, window, cx| {
+        if let Some(on_confirm) = on_confirm.as_ref() {
+          on_confirm(event, window, cx)
+        } else {
+          true
+        }
+      })
+      .on_cancel(move |event, window, cx| {
+        if let Some(on_cancel) = on_cancel.as_ref() {
+          on_cancel(event, window, cx)
+        } else {
+          true
+        }
+      })
+      .footer(
+        DialogFooter::new()
+          .child(
+            Button::new("cancel")
+              .label(cancel_text)
+              .with_variant(cancel_variant)
+              .small()
+              .on_click(|_, window, cx| window.dispatch_action(Box::new(Cancel), cx)),
+          )
+          .child(
+            Button::new("ok")
+              .label(confirm_text)
+              .with_variant(confirm_variant)
+              .small()
+              .on_click(|_, window, cx| {
+                window.dispatch_action(Box::new(Confirm { secondary: false }), cx)
+              }),
+          ),
+      );
 
     match self.content_placement {
       ConfirmDialogContentPlacement::Description => alert.description(self.message),

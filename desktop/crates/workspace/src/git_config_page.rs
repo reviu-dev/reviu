@@ -193,6 +193,7 @@ impl GitConfigPage {
                 .debug_selector(|| GIT_CONFIG_UNSAVED_CANCEL_DEBUG_SELECTOR.to_string())
                 .label("Cancel")
                 .ghost()
+                .small()
                 .on_click(|_, window, cx| {
                   window.close_dialog(cx);
                 }),
@@ -202,6 +203,7 @@ impl GitConfigPage {
                 .debug_selector(|| GIT_CONFIG_UNSAVED_DISCARD_DEBUG_SELECTOR.to_string())
                 .label("Discard")
                 .danger()
+                .small()
                 .on_click(move |_, window, cx| {
                   window.close_dialog(cx);
                   if cx.has_global::<GitConfigDialogState>() {
@@ -218,6 +220,7 @@ impl GitConfigPage {
                 .debug_selector(|| GIT_CONFIG_UNSAVED_SAVE_DEBUG_SELECTOR.to_string())
                 .label("Save")
                 .primary()
+                .small()
                 .on_click(move |_, window, cx| {
                   let window_handle = window.window_handle();
                   window.close_dialog(cx);

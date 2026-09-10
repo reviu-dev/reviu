@@ -301,6 +301,7 @@ impl Render for FilesNameDialog {
             Button::new("files-name-dialog-cancel")
               .label("Cancel")
               .outline()
+              .small()
               .on_click(|_, window, cx| window.close_dialog(cx)),
           )
           .child(
@@ -308,6 +309,7 @@ impl Render for FilesNameDialog {
               .debug_selector(|| FILES_NAME_DIALOG_CONFIRM_DEBUG_SELECTOR.to_string())
               .label(self.confirm_label.clone())
               .primary()
+              .small()
               .on_click(cx.listener(|this, _, window, cx| this.confirm(window, cx))),
           ),
       )

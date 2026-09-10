@@ -676,6 +676,7 @@ impl Render for BillingDialog {
               .debug_selector(|| CLOSE_DEBUG_SELECTOR.to_string())
               .label("Close")
               .primary()
+              .small()
               .on_click(|_, window, cx| window.close_dialog(cx)),
           ),
       )

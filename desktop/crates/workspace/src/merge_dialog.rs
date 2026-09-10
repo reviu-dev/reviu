@@ -8,7 +8,7 @@ use gpui::{
   Window, div, prelude::*, px,
 };
 use gpui_component::{
-  ActiveTheme as _,
+  ActiveTheme as _, Sizable as _,
   dialog::{DialogDescription, DialogFooter, DialogHeader, DialogTitle},
   input::{Input, InputState},
   v_flex,
@@ -164,6 +164,7 @@ impl Render for MergeDialog {
             Button::new("cancel-merge")
               .label("Cancel")
               .outline()
+              .small()
               .on_click(|_, window, cx| window.close_dialog(cx)),
           )
           .child(
@@ -171,6 +172,7 @@ impl Render for MergeDialog {
               .debug_selector(|| MERGE_DIALOG_CONFIRM_DEBUG_SELECTOR.to_string())
               .label(merge_method_confirm_label(self.method))
               .primary()
+              .small()
               .on_click(cx.listener(|this, _, window, cx| this.confirm(window, cx))),
           ),
       )

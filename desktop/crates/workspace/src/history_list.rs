@@ -12,7 +12,7 @@ use gpui::{
   ParentElement, Render, SharedString, Styled, Task, WeakEntity, Window, div, img, prelude::*, px,
 };
 use gpui_component::{
-  ActiveTheme as _, Icon, IconName,
+  ActiveTheme as _, Icon, IconName, Sizable as _,
   dialog::{DialogDescription, DialogFooter, DialogHeader, DialogTitle},
   h_flex,
   input::{Input, InputState},
@@ -177,12 +177,14 @@ impl Render for HistoryBranchNameDialog {
             Button::new("history-branch-name-cancel")
               .label("Cancel")
               .outline()
+              .small()
               .on_click(|_, window, cx| window.close_dialog(cx)),
           )
           .child(
             Button::new("history-branch-name-confirm")
               .label("Create")
               .primary()
+              .small()
               .on_click(cx.listener(|this, _, window, cx| this.confirm(window, cx))),
           ),
       )

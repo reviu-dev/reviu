@@ -487,6 +487,7 @@ impl Render for CreatePullRequestDialog {
             Button::new("cancel-create-pull-request")
               .label("Cancel")
               .outline()
+              .small()
               .disabled(self.submit_loading)
               .on_click(|_, window, cx| {
                 window.close_dialog(cx);
@@ -497,6 +498,7 @@ impl Render for CreatePullRequestDialog {
               .label("Create pull request")
               .icon(UiIconName::GitPullRequestArrow)
               .primary()
+              .small()
               .loading(self.submit_loading)
               .disabled(self.submit_loading)
               .on_click(cx.listener(Self::submit_action)),

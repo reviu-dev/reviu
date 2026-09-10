@@ -1,6 +1,9 @@
 use gpui::{App, Window, div, prelude::*, px};
 use gpui_component::{
-  ActiveTheme, Icon, button::Button, dialog::DialogButtonProps, h_flex, v_flex,
+  ActiveTheme, Icon, Sizable as _,
+  button::{Button, ButtonVariants as _},
+  dialog::DialogFooter,
+  h_flex, v_flex,
 };
 use ui::{IconName, UiIconName, WindowExt};
 
@@ -41,8 +44,15 @@ fn open_browser_extensions_dialog_inner(window: &mut Window, cx: &mut App) {
             &theme,
           )),
       )
-      .show_cancel(false)
-      .button_props(DialogButtonProps::default().ok_text("Close"))
+      .footer(
+        DialogFooter::new().child(
+          Button::new("browser-extensions-close")
+            .label("Close")
+            .primary()
+            .small()
+            .on_click(|_, window, cx| window.close_dialog(cx)),
+        ),
+      )
   });
 }
 

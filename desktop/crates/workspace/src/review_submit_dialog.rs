@@ -7,7 +7,7 @@ use gpui::{
   Render, SharedString, Styled, Task, Window, div, prelude::*, px,
 };
 use gpui_component::{
-  ActiveTheme as _, Disableable as _,
+  ActiveTheme as _, Disableable as _, Sizable as _,
   dialog::{DialogDescription, DialogFooter, DialogHeader, DialogTitle},
   notification::Notification,
   radio::{Radio, RadioGroup},
@@ -232,6 +232,7 @@ impl Render for SubmitReviewDialog {
             Button::new("cancel-submit-review")
               .label("Cancel")
               .outline()
+              .small()
               .disabled(self.submitting)
               .on_click(|_, window, cx| window.close_dialog(cx)),
           )
@@ -239,6 +240,7 @@ impl Render for SubmitReviewDialog {
             Button::new("confirm-submit-review")
               .label("Submit review")
               .primary()
+              .small()
               .loading(self.submitting)
               .disabled(self.submitting)
               .on_click(cx.listener(|this, _, _, cx| this.submit(cx))),
