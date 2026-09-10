@@ -56,4 +56,4 @@ Puis dans Reviu : brancher GitHub (Pro), ouvrir la PR depuis le bouton du header
 - Remplacer les 8 PNG dans `website/src/assets/app_screenshots/` (mêmes noms).
 - Regénérer `public/og.png` à partir du nouveau hero (1200x630).
 - Les anciens `github_home_*`, `github_pr_conv_*`, `github_pr_changes_*` restent : le blog les importe encore.
-- Vidéo hero : tâche #632, même seed, même scénario ; à capturer dans la même session si le temps le permet.
+- Vidéo hero : tâche #632, même seed, même scénario ; à capturer dans la même session si le temps le permet. Préférer un MP4/WebM court avec poster PNG plutôt qu'un GIF lourd.
