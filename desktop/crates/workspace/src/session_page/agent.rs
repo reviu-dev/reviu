@@ -3441,6 +3441,22 @@ mod tests {
   }
 
   #[gpui::test]
+  async fn activating_without_a_project_keeps_the_center_empty(cx: &mut TestAppContext) {
+    let (page, cx) = add_session_page_window_without_repo(cx);
+
+    page.update_in(cx, |page, window, cx| page.activate(window, cx));
+    cx.run_until_parked();
+
+    page.read_with(cx, |page, _| {
+      assert!(
+        page.agent_chat_view.is_none(),
+        "nothing to connect without a project"
+      );
+    });
+    assert!(cx.debug_bounds("session-center-empty-state").is_some());
+  }
+
+  #[gpui::test]
   async fn session_creation_actions_refuse_without_a_repository(cx: &mut TestAppContext) {
     let (page, cx) = add_session_page_window_without_repo(cx);
     cx.run_until_parked();

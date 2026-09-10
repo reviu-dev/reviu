@@ -904,6 +904,10 @@ impl SessionPage {
     if self.agent_chat_view.is_some() {
       return;
     }
+    if self.project_root(cx).is_none() {
+      cx.notify();
+      return;
+    }
     self.ensure_agent_chat_view(window, cx);
     cx.notify();
   }
