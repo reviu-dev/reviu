@@ -109,7 +109,7 @@ export const comparisons: Comparison[] = [
       "You are happy doing all GitHub pull request review in the browser.",
     ],
     whenReviu: [
-      "You want GitHub notifications, pull request review, and merge inside the client, not the browser.",
+      "You want GitHub notifications, pull request review, and merge inside the desktop app, not the browser.",
       "You want agent sessions with review-to-agent comments on local diffs, or you need Linux support."
     ],
     faq: [
@@ -155,7 +155,7 @@ export const comparisons: Comparison[] = [
     ],
     whenReviu: [
       "You want in-app GitHub pull request review, checks, and merge, plus an agent review loop.",
-      "You want a source-available native Rust client, keyboard-first commands, or Linux support.",
+      "You want a source-available native Rust app, keyboard-first commands, or Linux support.",
     ],
     faq: [
       {
@@ -171,7 +171,7 @@ export const comparisons: Comparison[] = [
       {
         question: "Is Reviu source-available?",
         answer:
-          "Yes. The Reviu desktop client is source-available on GitHub under FSL-1.1 and converts to Apache-2.0 two years after each release. Tower is proprietary.",
+          "Yes. The Reviu desktop app is source-available on GitHub under FSL-1.1 and converts to Apache-2.0 two years after each release. Tower is proprietary.",
       },
     ],
   },
@@ -206,7 +206,7 @@ export const comparisons: Comparison[] = [
       {
         question: "Is Reviu lighter than GitKraken?",
         answer:
-          "Reviu is a native Rust and GPUI app rather than an Electron app, so it avoids the memory footprint of a bundled browser runtime. It focuses on Git and GitHub review rather than a full DevEx platform.",
+          "Reviu is a native Rust and GPUI app rather than an Electron app, so it avoids the memory footprint of a bundled browser runtime. It focuses on agent sessions, Git, and GitHub review rather than a full DevEx platform.",
       },
       {
         question: "Does Reviu do GitHub pull request review?",

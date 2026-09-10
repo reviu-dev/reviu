@@ -21,7 +21,7 @@ This file gives assistants a concise, authoritative product context for answerin
 
 Reviu is one window with three surfaces: agent sessions on the left, split center views for agent chat, files, diffs, and terminal, and the repository dock on the right for changes, files, history, terminal, review, and pull request context. It is desktop-native, built with Rust and GPUI - not a browser tab workflow and not an Electron app.
 
-The main product promise: agents work in durable sessions, you review their diffs for real (inline comments sent back to the agent, no copy-paste), and you finish the branch with a full Git client in the same window. Reviu Pro adds GitHub pull request review, checks, merge, and a notifications inbox.
+The main product promise: agents work in durable sessions, you review their diffs for real (inline comments sent back to the agent, no copy-paste), and you finish the branch with real Git in the same window. Reviu Pro adds GitHub pull request review, checks, merge, and a notifications inbox.
 
 ## Agents
 
@@ -72,7 +72,7 @@ Reviu supports macOS on Apple Silicon and Intel, Windows on ARM64 and x64, and L
 - [Changelog](${absoluteUrl("/changelog", site)}): User-facing release notes.
 - [Blog](${absoluteUrl("/blog", site)}): Articles about Git workflows and pull request review.
 - [Why GitHub PR Review Still Feels Slow](${absoluteUrl("/blog/why-github-pr-review-still-feels-slow", site)}): Article about local Git and GitHub review context.
-- [Compare Reviu](${absoluteUrl("/vs", site)}): Index of comparisons with other desktop Git clients.
+- [Compare Reviu](${absoluteUrl("/vs", site)}): Index of comparisons with traditional Git tools and GitHub Desktop.
 ${comparisonLinks(site)}
 - [Privacy Policy](${absoluteUrl("/privacy", site)}): Privacy terms for Reviu.
 - [Terms of Service](${absoluteUrl("/terms", site)}): Product and subscription terms.

@@ -18,7 +18,7 @@ const faqItems: { question: string; answer: string }[] = [
   {
     question: "What is Reviu?",
     answer:
-      "Reviu is a native desktop app built with Rust and GPUI for managing coding-agent sessions. Run Claude Code, Codex, Gemini, or another ACP-registry agent, review every diff, send line comments back, then stage, commit, and push with a real Git client underneath - all free. Reviu Pro adds GitHub: your branch's pull request in the dock, review, checks, merge, and a notifications inbox.",
+      "Reviu is a native desktop app built with Rust and GPUI for managing coding-agent sessions. Run Claude Code, Codex, Gemini, or another ACP-registry agent, review every diff, send line comments back, then stage, commit, and push with real Git underneath - all free. Reviu Pro adds GitHub: your branch's pull request in the dock, review, checks, merge, and a notifications inbox.",
   },
   {
     question: "Which agents does Reviu support?",
@@ -28,17 +28,17 @@ const faqItems: { question: string; answer: string }[] = [
   {
     question: "Can I review my agent's code inside Reviu?",
     answer:
-      "Yes, that's the point. Review the diff your agent produced in a real editor, leave inline review comments on the lines you want changed, and send them back to the agent without copy-paste. You can also run several sessions in parallel, each in its own isolated Git worktree, and split the center view between agent chat, files, diffs, and terminal."
+      "Yes, that's the point. Review the diff your agent produced in a real editor, leave inline review comments on the lines you want changed, and send them back to the agent without copy-paste. You can also run several sessions in parallel, each in its own isolated Git worktree, and split the center view between agent chat, files, diffs, and terminal.",
   },
   {
-    question: "Why use Reviu if I already use Fork, Tower, or GitKraken?",
+    question: "Where does Reviu fit if I already have Git tooling?",
     answer:
-      "Those are strong Git clients. Reviu is built for the loop that starts before the commit: the agent writes the diff in the same window, you review it and send fixes back. You still keep a full Git client - hunk staging, interactive rebase, conflicts, history - and Pro adds your branch's pull request in the dock.",
+      "Keep the tools you like. Reviu is built for the loop that starts before the commit: the agent works in a durable session, you review the diff, send fixes back from inline comments, then finish with hunk staging, interactive rebase, conflicts, history, and push in the same app. Pro adds your branch's pull request in the dock.",
   },
   {
-    question: "How is Reviu different from GitHub Desktop?",
+    question: "Where does Reviu fit next to GitHub Desktop?",
     answer:
-      "GitHub Desktop is great for opening a pull request branch locally. Reviu keeps the pull request next to your working tree: review with inline comments, reply, resolve threads, track checks, and merge from the desktop - plus the agent sessions and a deeper local Git toolset.",
+      "GitHub Desktop is great for cloning, committing, and opening a pull request branch locally. Reviu starts earlier with agent sessions and code review, then keeps the pull request next to your working tree: inline comments, replies, resolved threads, checks, and merge from the desktop.",
   },
   {
     question: "Is Reviu built with a webview?",

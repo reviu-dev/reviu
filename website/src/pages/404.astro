@@ -5,7 +5,7 @@ import { blogPosts, getBlogPostUrl } from "../lib/blog";
 import { comparisons, getComparisonUrl } from "../lib/comparisons";
 
 const links: { label: string; href: string }[] = [
-  { label: "Compare Git clients", href: "/vs" },
+  { label: "Compare Reviu", href: "/vs" },
   ...comparisons.map((comparison) => ({
     label: `Reviu vs ${comparison.name}`,
     href: getComparisonUrl(comparison.slug),
@@ -60,7 +60,7 @@ const links: { label: string; href: string }[] = [
             href="/vs"
             class="inline-flex items-center rounded-md bg-background px-3 py-2 text-sm font-semibold text-foreground hover:bg-muted/50"
           >
-            Compare Git clients
+            Compare Reviu
           </a>
         </div>
       </div>

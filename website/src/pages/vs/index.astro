@@ -4,12 +4,12 @@ import SiteFooter from "../../components/SiteFooter.astro";
 import { comparisons, getComparisonUrl } from "../../lib/comparisons";
 
 const description =
-  "Compare Reviu with GitHub Desktop, Fork, Tower, and GitKraken. See how a native Rust Git client with an agent review panel and in-app GitHub pull request review stacks up.";
+  "Compare Reviu with GitHub Desktop, Fork, Tower, and GitKraken. See how Reviu's agent-session review workflow differs from traditional Git clients.";
 
 const structuredData = {
   "@context": "https://schema.org",
   "@type": "ItemList",
-  name: "Reviu Git client comparisons",
+  name: "Reviu workflow comparisons",
   itemListElement: comparisons.map((comparison, index) => ({
     "@type": "ListItem",
     position: index + 1,
@@ -20,7 +20,7 @@ const structuredData = {
 ---
 
 <Layout
-  title="Compare Git Clients"
+  title="Compare Reviu"
   description={description}
   pathname="/vs"
   structuredData={structuredData}
@@ -44,8 +44,9 @@ const structuredData = {
           class="reviu-reveal mt-4 text-lg text-muted-foreground"
           style="--reveal-delay: 100ms;"
         >
-          Honest comparisons between Reviu and other desktop Git clients, so you
-          can pick the right tool for your workflow.
+          Honest comparisons between Reviu's agent review workflow and
+          traditional Git clients, so you can pick the right tool for your
+          workflow.
         </p>
       </div>
 

@@ -15,7 +15,7 @@ const renderLlmsTxt = (site: URL) => `# Reviu
 
 > Native Rust + GPUI desktop app for managing coding-agent sessions, reviewing every diff, and finishing branches with real Git.
 
-Reviu is built for developers who ship code their agents wrote: durable agent sessions, split center views for chat/files/diffs/terminal, inline review comments sent back to the agent, and a full local Git client - all free, no account. Reviu Pro adds GitHub: pull request review, checks, merge, and a notifications inbox in the same app.
+Reviu is built for developers who ship code their agents wrote: durable agent sessions, split center views for chat/files/diffs/terminal, inline review comments sent back to the agent, and full local Git workflows - all free, no account. Reviu Pro adds GitHub: pull request review, checks, merge, and a notifications inbox in the same app.
 
 ## Product
 
@@ -27,7 +27,7 @@ Reviu is built for developers who ship code their agents wrote: durable agent se
 
 ## Comparisons
 
-- [Compare Reviu](${absoluteUrl("/vs", site)}): Index of Reviu comparisons with other desktop Git clients.
+- [Compare Reviu](${absoluteUrl("/vs", site)}): Index of Reviu comparisons with traditional Git tools and GitHub Desktop.
 ${comparisonLinks(site)}
 
 ## Pricing
