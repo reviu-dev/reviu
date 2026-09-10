@@ -18,9 +18,7 @@ use ui::{Button, ButtonVariants as _, WindowExt};
 
 use crate::AppProfile;
 use crate::app_update::resolved_build_version;
-use crate::sentry_context::{
-  CrashGitContext, CrashGithubPrContext, current_crash_context_snapshot,
-};
+use crate::sentry_context::{CrashGitContext, current_crash_context_snapshot};
 use crate::workspace::WorkspaceApi;
 
 const CRASH_REPORTS_DIR_NAME: &str = "crash-reports";
@@ -63,8 +61,6 @@ pub struct StartupCrashReport {
   #[serde(skip_serializing_if = "Option::is_none")]
   pub(crate) git_context: Option<CrashGitContext>,
   #[serde(skip_serializing_if = "Option::is_none")]
-  pub(crate) github_pr_context: Option<CrashGithubPrContext>,
-  #[serde(skip_serializing_if = "Option::is_none")]
   pub recent_logs: Option<String>,
 }
 
@@ -87,7 +83,6 @@ impl StartupCrashReport {
       app_profile: app_profile_label(AppProfile::current()).to_string(),
       happened_at: current_timestamp_rfc3339(),
       git_context: snapshot.git,
-      github_pr_context: snapshot.github_pr,
       recent_logs: None,
     }
   }
@@ -141,30 +136,11 @@ impl StartupCrashReport {
     if let Some(git) = self.git_context.as_ref() {
       lines.push(String::new());
       lines.push("Git Context:".to_string());
-      if let Some(repo_name) = git.repo_name.as_deref() {
-        lines.push(format!("Repo: {}", repo_name));
-      }
       if let Some(repo_hash) = git.repo_hash.as_deref() {
         lines.push(format!("Repo hash: {}", repo_hash));
       }
-      if let Some(branch) = git.branch.as_deref() {
-        lines.push(format!("Branch: {}", branch));
-      }
-      if let Some(selected_file) = git.selected_file.as_deref() {
-        lines.push(format!("Selected file: {}", selected_file));
-      }
       lines.push(format!("Sidebar mode: {}", git.sidebar_mode));
       lines.push(format!("Diff view: {}", git.diff_view));
-    }
-
-    if let Some(pr) = self.github_pr_context.as_ref() {
-      lines.push(String::new());
-      lines.push("GitHub PR Context:".to_string());
-      lines.push(format!("Repository: {}/{}", pr.owner, pr.repo));
-      lines.push(format!("PR number: {}", pr.number));
-      if let Some(selected_file) = pr.selected_file.as_deref() {
-        lines.push(format!("Selected file: {}", selected_file));
-      }
     }
 
     lines.join("\n")
@@ -532,14 +508,10 @@ mod tests {
       app_profile: "prod".to_string(),
       happened_at: "2026-04-03T10:00:00Z".to_string(),
       git_context: Some(CrashGitContext {
-        repo_name: Some("reviu".to_string()),
         repo_hash: Some("abc123def456".to_string()),
-        selected_file: Some("desktop/crates/editor/src/editor.rs".to_string()),
-        branch: Some("main".to_string()),
         sidebar_mode: "changes".to_string(),
         diff_view: "unified".to_string(),
       }),
-      github_pr_context: None,
       recent_logs: None,
     }
   }

@@ -1228,8 +1228,6 @@ impl SessionPage {
   fn git_telemetry<'a>(&'a self, cx: &'a App) -> GitTelemetry<'a> {
     GitTelemetry {
       repo_root: self.synced_checkout.as_deref(),
-      selected_file: self.shown_selected_file(),
-      branch: self.repo_snapshot.read(cx).current_branch_name(),
       tab: git_telemetry::dock_tab_tag(self.dock_panel.read(cx).active_tab()),
       diff_view: git_telemetry::diff_view_tag(
         self.diff_view,

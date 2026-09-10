@@ -2361,14 +2361,10 @@ mod tests {
         app_profile: "prod".to_string(),
         happened_at: "2026-04-03T10:00:00Z".to_string(),
         git_context: Some(crate::sentry_context::CrashGitContext {
-          repo_name: Some("reviu".to_string()),
           repo_hash: Some("abc123def456".to_string()),
-          selected_file: Some("desktop/crates/editor/src/editor.rs".to_string()),
-          branch: Some("main".to_string()),
           sidebar_mode: "changes".to_string(),
           diff_view: "unified".to_string(),
         }),
-        github_pr_context: None,
         recent_logs: Some("recent log line".to_string()),
       })
       .expect("submit crash report");
@@ -2396,9 +2392,12 @@ mod tests {
       "request: {request}"
     );
     assert!(
-      request.contains("\"gitContext\":{\"repoName\":\"reviu\""),
+      request.contains("\"gitContext\":{\"repoHash\":\"abc123def456\""),
       "request: {request}"
     );
+    assert!(!request.contains("\"repoName\""), "request: {request}");
+    assert!(!request.contains("\"branch\""), "request: {request}");
+    assert!(!request.contains("\"selectedFile\""), "request: {request}");
     assert!(
       request.contains("\"recentLogs\":\"recent log line\""),
       "request: {request}"

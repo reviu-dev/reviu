@@ -109,7 +109,7 @@ const lastUpdated = "August 26, 2026";
         in the future and non-essential cookies are introduced, this policy and
         consent handling will be updated accordingly. The desktop application
         does not embed website-style page analytics or session replay; the only
-        Umami usage on the desktop is the opt-in product analytics described in
+        Umami usage on the desktop is the opt-out product analytics described in
         section 5.5.
       </p>
 
@@ -124,8 +124,8 @@ const lastUpdated = "August 26, 2026";
       <ul class="mt-3 list-disc space-y-2 pl-6 text-sm/7 text-muted-foreground">
         <li>
           The contents of your local Git repositories: working tree files, file
-          diffs, commit history, commit messages, branch and tag names, stashes,
-          and remote URLs.
+          diffs, local commit history, local commit messages, stashes, and
+          remote URLs.
         </li>
         <li>
           SSH keys and SSH agent material used for Git operations. Reviu uses
@@ -179,11 +179,13 @@ const lastUpdated = "August 26, 2026";
         When you sign in with GitHub (a paid Reviu Pro feature), GitHub
         notification, repository, pull request, issue, and review data is
         fetched through the Reviu backend rather than directly from your device.
-        The backend acts as an authenticated proxy to the GitHub API using your
-        OAuth token, and caches GitHub responses (PR metadata, commit messages,
-        file metadata, branches, contributor info, notifications) in Redis to
-        reduce GitHub rate limit usage and improve responsiveness. ETag and
-        Last-Modified headers are used so cached entries can be revalidated.
+        The desktop app may send the GitHub owner/repo and current branch name
+        needed to look up or create a pull request. The backend acts as an
+        authenticated proxy to the GitHub API using your OAuth token, and caches
+        GitHub responses (PR metadata, commit messages, file metadata,
+        branches, contributor info, notifications) in Redis to reduce GitHub
+        rate limit usage and improve responsiveness. ETag and Last-Modified
+        headers are used so cached entries can be revalidated.
       </p>
       <p class="mt-3 text-sm/7 text-muted-foreground">
         The backend persists in its database: your GitHub account data
@@ -210,17 +212,20 @@ const lastUpdated = "August 26, 2026";
         The desktop application uses Sentry for crash and error reporting.
         Reports include: stack traces, panic location, thread name, operating
         system and architecture, application version and build profile, and a
-        small amount of in-app context (current page, the name of the active
-        Git repository hashed with SHA-256, the current branch name, the
-        relative path of the selected file, and for GitHub views the
-        owner/repo/PR number).
+        small amount of in-app context (authentication state, subscription
+        role, current page or Git surface, diff view, and a short SHA-256 hash
+        of the active local repository path). We do not attach your account's
+        GitHub id, email, login, or name as Sentry user data, and reports do not
+        include GitHub owner/repo/PR identifiers, local repository names, branch
+        names, selected file paths, file contents, diffs, or commit messages.
       </p>
       <p class="mt-3 text-sm/7 text-muted-foreground">
         Authorization headers, cookies, OAuth tokens, and password-shaped
         fields are stripped from outgoing reports before sending. Startup
-        crashes are first written to
-        <code>~/.config/reviu/crash-reports/pending.json</code> so you can
-        review them on the next launch.
+        crashes also write a local pending report to
+        <code>~/.config/reviu/crash-reports/pending.json</code>, so you can
+        review that app-generated summary before optionally sending it with or
+        without logs.
       </p>
 
       <h3 class="mt-6 text-lg font-semibold text-foreground">
@@ -256,10 +261,12 @@ const lastUpdated = "August 26, 2026";
         further event collection immediately.
       </p>
       <p class="mt-6 text-sm/7 text-muted-foreground">
-        The desktop application does not contact any other third-party
-        services. It does not embed PostHog, Google Analytics, or any usage
-        analytics SDK other than the opt-in Umami integration described
-        above.
+        The desktop application may also contact Reviu update/download
+        endpoints, the Agent Client Protocol registry CDN for the agent list
+        and icons, and remote image URLs referenced by GitHub or Markdown
+        content you choose to view. It does not embed PostHog, Google
+        Analytics, or any usage analytics SDK other than the opt-out Umami
+        integration described above.
       </p>
 
       <h2 class="mt-10 text-2xl font-semibold text-foreground">

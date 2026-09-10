@@ -1,7 +1,7 @@
 //! What a crash report and its breadcrumbs need to know about the repository the
 //! user was working in when things went wrong.
 
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use editor::DiffViewMode;
 use sentry::protocol::{Map, Value};
@@ -15,14 +15,7 @@ pub(crate) trait TelemetrySink: Send + Sync {
   fn breadcrumb(&self, message: &str, data: Map<String, Value>);
   fn expected_error(&self, operation: &str, reason: &str, data: Map<String, Value>);
   fn unexpected_error(&self, operation: &'static str, error: &str, data: Map<String, Value>);
-  fn sync_context(
-    &self,
-    repo_root: Option<&Path>,
-    selected_file: Option<&Path>,
-    branch: Option<&str>,
-    tab: &'static str,
-    diff_view: &'static str,
-  );
+  fn sync_context(&self, repo_root: Option<&Path>, tab: &'static str, diff_view: &'static str);
   fn clear_context(&self);
 }
 
@@ -42,15 +35,8 @@ impl TelemetrySink for SentrySink {
     sentry_context::capture_unexpected_error(operation, &io_error, data);
   }
 
-  fn sync_context(
-    &self,
-    repo_root: Option<&Path>,
-    selected_file: Option<&Path>,
-    branch: Option<&str>,
-    tab: &'static str,
-    diff_view: &'static str,
-  ) {
-    sentry_context::sync_git_context(repo_root, selected_file, branch, tab, diff_view);
+  fn sync_context(&self, repo_root: Option<&Path>, tab: &'static str, diff_view: &'static str) {
+    sentry_context::sync_git_context(repo_root, tab, diff_view);
   }
 
   fn clear_context(&self) {
@@ -103,13 +89,8 @@ pub(crate) fn diff_view_tag(diff_view: DiffViewMode, previewing: bool) -> &'stat
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum OutcomeReport {
   Nothing,
-  Expected {
-    reason: &'static str,
-    file: Option<PathBuf>,
-  },
-  Unexpected {
-    error: String,
-  },
+  Expected { reason: &'static str },
+  Unexpected { error: String },
 }
 
 pub(crate) fn outcome_report(outcome: &anyhow::Result<RepoCommandOutcome>) -> OutcomeReport {
@@ -117,21 +98,16 @@ pub(crate) fn outcome_report(outcome: &anyhow::Result<RepoCommandOutcome>) -> Ou
     Ok(RepoCommandOutcome::Done { .. }) | Ok(RepoCommandOutcome::UpToDate { .. }) => {
       OutcomeReport::Nothing
     }
-    Ok(RepoCommandOutcome::Conflicted { path, .. }) => OutcomeReport::Expected {
-      reason: "conflict",
-      file: Some(path.clone()),
-    },
+    Ok(RepoCommandOutcome::Conflicted { .. }) => OutcomeReport::Expected { reason: "conflict" },
     Err(error) => OutcomeReport::Unexpected {
       error: error.to_string(),
     },
   }
 }
 
-/// The repository paths are never sent as-is: only a name and a stable hash.
+/// The repository path is never sent as-is: only a stable hash.
 pub(crate) struct GitTelemetry<'a> {
   pub(crate) repo_root: Option<&'a Path>,
-  pub(crate) selected_file: Option<&'a Path>,
-  pub(crate) branch: Option<&'a str>,
   pub(crate) tab: &'static str,
   pub(crate) diff_view: &'static str,
 }
@@ -140,16 +116,10 @@ impl GitTelemetry<'_> {
   pub(crate) fn data(&self) -> Map<String, Value> {
     let mut data = Map::new();
     if let Some(repo_root) = self.repo_root {
-      let (repo_name, repo_hash) = sentry_context::sanitize_repo_path(repo_root);
-      data.insert("repo_name".into(), repo_name.into());
-      data.insert("repo_hash".into(), repo_hash.into());
-    }
-    if let Some(selected_file) = self.selected_file {
-      let file = selected_file.to_string_lossy().replace(['\n', '\r'], "");
-      data.insert("selected_file".into(), file.into());
-    }
-    if let Some(branch) = self.branch {
-      data.insert("branch".into(), branch.to_string().into());
+      data.insert(
+        "repo_hash".into(),
+        sentry_context::hash_repo_path(repo_root).into(),
+      );
     }
     data.insert("sidebar_mode".into(), self.tab.to_string().into());
     data.insert("diff_view".into(), self.diff_view.to_string().into());
@@ -158,13 +128,7 @@ impl GitTelemetry<'_> {
 
   /// The context that stays attached to whatever happens next.
   pub(crate) fn sync(&self) {
-    sink().sync_context(
-      self.repo_root,
-      self.selected_file,
-      self.branch,
-      self.tab,
-      self.diff_view,
-    );
+    sink().sync_context(self.repo_root, self.tab, self.diff_view);
   }
 
   /// Without a repository there is nothing to describe, and a stale context would
@@ -199,15 +163,8 @@ impl GitTelemetry<'_> {
   pub(crate) fn report_outcome(&self, operation: &'static str, report: OutcomeReport) {
     match report {
       OutcomeReport::Nothing => {}
-      OutcomeReport::Expected { reason, file } => {
-        let mut data = Map::new();
-        if let Some(file) = file {
-          data.insert(
-            "file".into(),
-            file.to_string_lossy().replace(['\n', '\r'], "").into(),
-          );
-        }
-        self.expected_error(operation, reason, data);
+      OutcomeReport::Expected { reason } => {
+        self.expected_error(operation, reason, Map::new());
       }
       OutcomeReport::Unexpected { error } => {
         let mut data = Map::new();
@@ -293,14 +250,7 @@ pub(crate) mod test_support {
       );
     }
 
-    fn sync_context(
-      &self,
-      _repo_root: Option<&Path>,
-      _selected_file: Option<&Path>,
-      _branch: Option<&str>,
-      tab: &'static str,
-      diff_view: &'static str,
-    ) {
+    fn sync_context(&self, _repo_root: Option<&Path>, tab: &'static str, diff_view: &'static str) {
       self.record(
         Report::ContextSynced {
           tab: tab.to_string(),
@@ -320,6 +270,7 @@ pub(crate) mod test_support {
 mod tests {
   use super::test_support::{RecordingSink, Report};
   use super::*;
+  use std::path::PathBuf;
 
   fn value(data: &Map<String, Value>, key: &str) -> Option<String> {
     data
@@ -332,14 +283,12 @@ mod tests {
   fn the_repository_path_never_leaves_the_machine() {
     let telemetry = GitTelemetry {
       repo_root: Some(Path::new("/home/someone/secret-project")),
-      selected_file: None,
-      branch: None,
       tab: "changes",
       diff_view: "inline",
     };
 
     let data = telemetry.data();
-    assert_eq!(value(&data, "repo_name").as_deref(), Some("secret-project"));
+    assert_eq!(value(&data, "repo_name"), None);
     assert_eq!(
       value(&data, "repo_hash").map(|hash| hash.len()),
       Some(12),
@@ -352,22 +301,16 @@ mod tests {
   }
 
   #[test]
-  fn the_context_says_which_surface_and_file_were_open() {
+  fn the_context_only_says_which_surface_was_open() {
     let telemetry = GitTelemetry {
       repo_root: None,
-      selected_file: Some(Path::new("src/ma\nin.rs")),
-      branch: Some("feature"),
       tab: "history",
       diff_view: "split",
     };
 
     let data = telemetry.data();
-    assert_eq!(
-      value(&data, "selected_file").as_deref(),
-      Some("src/main.rs"),
-      "newlines would break the breadcrumb"
-    );
-    assert_eq!(value(&data, "branch").as_deref(), Some("feature"));
+    assert_eq!(value(&data, "selected_file"), None);
+    assert_eq!(value(&data, "branch"), None);
     assert_eq!(value(&data, "sidebar_mode").as_deref(), Some("history"));
     assert_eq!(value(&data, "diff_view").as_deref(), Some("split"));
   }
@@ -376,20 +319,18 @@ mod tests {
   fn the_caller_keeps_the_last_word_on_a_key() {
     let telemetry = GitTelemetry {
       repo_root: None,
-      selected_file: None,
-      branch: Some("main"),
       tab: "changes",
       diff_view: "inline",
     };
 
     let mut extra = Map::new();
-    extra.insert("branch".into(), "the-one-being-deleted".into());
+    extra.insert("operation".into(), "git.delete_branch".into());
     let data = telemetry.with_context(extra);
 
     assert_eq!(
-      value(&data, "branch").as_deref(),
-      Some("the-one-being-deleted"),
-      "a command that names a branch means that branch, not the current one"
+      value(&data, "operation").as_deref(),
+      Some("git.delete_branch"),
+      "a command-specific value must not be overwritten by common context"
     );
   }
 
@@ -414,10 +355,7 @@ mod tests {
         commit_message: None,
         error: "conflict".into(),
       })),
-      OutcomeReport::Expected {
-        reason: "conflict",
-        file: Some(PathBuf::from("src/main.rs")),
-      },
+      OutcomeReport::Expected { reason: "conflict" },
       "a conflict is expected: it must not be captured as a crash"
     );
     assert_eq!(
@@ -433,8 +371,6 @@ mod tests {
     let sink = RecordingSink::install();
     let telemetry = GitTelemetry {
       repo_root: Some(Path::new("/tmp/widget")),
-      selected_file: None,
-      branch: Some("feature"),
       tab: "changes",
       diff_view: "inline",
     };
@@ -456,11 +392,8 @@ mod tests {
       "a conflict never reaches Sentry as a crash"
     );
     assert_eq!(
-      sink.last_data().and_then(|data| data
-        .get("file")
-        .and_then(|file| file.as_str())
-        .map(String::from)),
-      Some("src/main.rs".to_string())
+      sink.last_data().and_then(|data| data.get("file").cloned()),
+      None
     );
 
     telemetry.report_outcome(
@@ -495,8 +428,6 @@ mod tests {
 
     GitTelemetry {
       repo_root: Some(Path::new("/tmp/widget")),
-      selected_file: None,
-      branch: None,
       tab: "changes",
       diff_view: "inline",
     }
@@ -511,8 +442,6 @@ mod tests {
 
     GitTelemetry {
       repo_root: None,
-      selected_file: None,
-      branch: None,
       tab: "changes",
       diff_view: "inline",
     }

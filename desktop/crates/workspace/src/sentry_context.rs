@@ -6,7 +6,7 @@ use std::{
   time::{Duration, Instant},
 };
 
-use sentry::protocol::{Breadcrumb, Context, Level, Map, User, Value};
+use sentry::protocol::{Breadcrumb, Context, Level, Map, Value};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
@@ -49,28 +49,15 @@ fn should_capture_error(key: &str, now: Instant) -> bool {
 #[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct CrashGitContext {
-  pub repo_name: Option<String>,
   pub repo_hash: Option<String>,
-  pub selected_file: Option<String>,
-  pub branch: Option<String>,
   pub sidebar_mode: String,
   pub diff_view: String,
-}
-
-#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
-#[serde(rename_all = "camelCase")]
-pub(crate) struct CrashGithubPrContext {
-  pub owner: String,
-  pub repo: String,
-  pub number: u64,
-  pub selected_file: Option<String>,
 }
 
 #[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct CrashContextSnapshot {
   pub git: Option<CrashGitContext>,
-  pub github_pr: Option<CrashGithubPrContext>,
 }
 
 fn auth_state_tag(state: &AuthState) -> &'static str {
@@ -81,15 +68,8 @@ fn auth_state_tag(state: &AuthState) -> &'static str {
   }
 }
 
-pub(crate) fn sanitize_repo_path(repo_root: &Path) -> (String, String) {
+pub(crate) fn hash_repo_path(repo_root: &Path) -> String {
   let display = repo_root.to_string_lossy().into_owned();
-  let name = repo_root
-    .file_name()
-    .and_then(|segment| segment.to_str())
-    .filter(|segment| !segment.is_empty())
-    .unwrap_or("repo")
-    .to_string();
-
   let mut hasher = Sha256::new();
   hasher.update(display.as_bytes());
   let hash: String = hasher
@@ -97,7 +77,7 @@ pub(crate) fn sanitize_repo_path(repo_root: &Path) -> (String, String) {
     .iter()
     .map(|byte| format!("{byte:02x}"))
     .collect();
-  (name, hash[..12].to_string())
+  hash[..12].to_string()
 }
 
 fn to_unknown_context(map: Map<String, Value>) -> Context {
@@ -196,19 +176,7 @@ pub(crate) fn sync_auth_state(state: &AuthState) {
 
     match state {
       AuthState::Authenticated(user) => {
-        let sentry_user = User {
-          id: Some(user.id.clone()),
-          email: Some(user.email.clone()),
-          username: user.github_login.clone().or_else(|| {
-            if user.name.trim().is_empty() {
-              None
-            } else {
-              Some(user.name.clone())
-            }
-          }),
-          ..Default::default()
-        };
-        scope.set_user(Some(sentry_user));
+        scope.set_user(None);
         scope.set_tag(
           "auth.subscription_active",
           if user.subscription.active_subscription.is_some() {
@@ -239,13 +207,7 @@ pub(crate) fn sync_auth_state(state: &AuthState) {
   add_breadcrumb("auth.state", "Auth state changed", data);
 }
 
-pub(crate) fn sync_git_context(
-  repo_root: Option<&Path>,
-  selected_file: Option<&Path>,
-  branch: Option<&str>,
-  sidebar_mode: &str,
-  diff_view: &str,
-) {
+pub(crate) fn sync_git_context(repo_root: Option<&Path>, sidebar_mode: &str, diff_view: &str) {
   sentry::configure_scope(|scope| {
     scope.set_tag("git.sidebar_mode", sidebar_mode);
     scope.set_tag("git.diff_view", diff_view);
@@ -255,45 +217,19 @@ pub(crate) fn sync_git_context(
     context.insert("diff_view".into(), diff_view.to_string().into());
 
     if let Some(repo_root) = repo_root {
-      let (repo_name, repo_hash) = sanitize_repo_path(repo_root);
-      scope.set_tag("git.repo_name", repo_name.as_str());
+      let repo_hash = hash_repo_path(repo_root);
       scope.set_tag("git.repo_hash", repo_hash.as_str());
-      context.insert("repo_name".into(), repo_name.into());
       context.insert("repo_hash".into(), repo_hash.into());
     } else {
-      scope.remove_tag("git.repo_name");
       scope.remove_tag("git.repo_hash");
-    }
-
-    if let Some(file) = selected_file {
-      let file = file.to_string_lossy().replace(['\n', '\r'], "");
-      context.insert("selected_file".into(), file.clone().into());
-      scope.set_tag("git.selected_file", file);
-    } else {
-      scope.remove_tag("git.selected_file");
-    }
-
-    if let Some(branch) = branch {
-      scope.set_tag("git.branch", branch);
-      context.insert("branch".into(), branch.to_string().into());
-    } else {
-      scope.remove_tag("git.branch");
     }
 
     scope.set_context("git_state", to_unknown_context(context));
   });
 
   update_crash_snapshot(|snapshot| {
-    let (repo_name, repo_hash) = repo_root
-      .map(sanitize_repo_path)
-      .map(|(name, hash)| (Some(name), Some(hash)))
-      .unwrap_or((None, None));
-
     snapshot.git = Some(CrashGitContext {
-      repo_name,
-      repo_hash,
-      selected_file: selected_file.map(|path| path.to_string_lossy().replace(['\n', '\r'], "")),
-      branch: branch.map(str::to_string),
+      repo_hash: repo_root.map(hash_repo_path),
       sidebar_mode: sidebar_mode.to_string(),
       diff_view: diff_view.to_string(),
     });
@@ -302,10 +238,7 @@ pub(crate) fn sync_git_context(
 
 pub(crate) fn clear_git_context() {
   sentry::configure_scope(|scope| {
-    scope.remove_tag("git.repo_name");
     scope.remove_tag("git.repo_hash");
-    scope.remove_tag("git.selected_file");
-    scope.remove_tag("git.branch");
     scope.remove_tag("git.sidebar_mode");
     scope.remove_tag("git.diff_view");
     scope.remove_context("git_state");
@@ -316,58 +249,10 @@ pub(crate) fn clear_git_context() {
   });
 }
 
-pub(crate) fn sync_github_pr_context(
-  owner: &str,
-  repo: &str,
-  number: u64,
-  selected_file: Option<&str>,
-) {
-  sentry::configure_scope(|scope| {
-    scope.set_tag("github.owner", owner);
-    scope.set_tag("github.repo", repo);
-    scope.set_tag("github.pr_number", number.to_string());
-
-    let mut context = Map::new();
-    context.insert("owner".into(), owner.to_string().into());
-    context.insert("repo".into(), repo.to_string().into());
-    context.insert("number".into(), number.into());
-    if let Some(file) = selected_file {
-      context.insert("selected_file".into(), file.to_string().into());
-      scope.set_tag("github.selected_file", file);
-    } else {
-      scope.remove_tag("github.selected_file");
-    }
-    scope.set_context("github_pr", to_unknown_context(context));
-  });
-
-  update_crash_snapshot(|snapshot| {
-    snapshot.github_pr = Some(CrashGithubPrContext {
-      owner: owner.to_string(),
-      repo: repo.to_string(),
-      number,
-      selected_file: selected_file.map(str::to_string),
-    });
-  });
-}
-
-pub(crate) fn clear_github_pr_context() {
-  sentry::configure_scope(|scope| {
-    scope.remove_tag("github.owner");
-    scope.remove_tag("github.repo");
-    scope.remove_tag("github.pr_number");
-    scope.remove_tag("github.selected_file");
-    scope.remove_context("github_pr");
-  });
-
-  update_crash_snapshot(|snapshot| {
-    snapshot.github_pr = None;
-  });
-}
-
 #[cfg(test)]
 mod tests {
   use super::{
-    DEDUP_WINDOW, auth_state_tag, expected_http_reason, sanitize_repo_path, should_capture_error,
+    DEDUP_WINDOW, auth_state_tag, expected_http_reason, hash_repo_path, should_capture_error,
   };
   use crate::{
     api::{User, UserRole, UserSubscription},
@@ -376,10 +261,8 @@ mod tests {
   use std::{path::Path, time::Instant};
 
   #[test]
-  fn sanitize_repo_path_returns_repo_name_and_short_hash() {
-    let (repo_name, repo_hash) =
-      sanitize_repo_path(Path::new("/Users/example/workspace/reviu/desktop"));
-    assert_eq!(repo_name, "desktop");
+  fn hash_repo_path_returns_a_short_stable_hash() {
+    let repo_hash = hash_repo_path(Path::new("/Users/example/workspace/reviu/desktop"));
     assert_eq!(repo_hash, "c8fb129c85f5");
     assert!(!repo_hash.contains('/'));
     assert_ne!(repo_hash, "desktop");

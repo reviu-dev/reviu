@@ -2266,8 +2266,6 @@ impl DockPanel {
     let repo = context.repo.clone();
     let number = pull_request.number;
     let api = WorkspaceApi::global(cx).api.clone();
-    let sentry_owner = owner.clone();
-    let sentry_repo = repo.clone();
 
     self.pr_files_loading = self.pr_files.is_empty();
     self.pr_files_error = None;
@@ -2313,12 +2311,6 @@ impl DockPanel {
         match loaded {
           Ok(loaded) => {
             this.apply_pull_request_range_load(loaded, cx);
-            crate::sentry_context::sync_github_pr_context(
-              &sentry_owner,
-              &sentry_repo,
-              number,
-              None,
-            );
           }
           Err(error) => {
             // A read that failed is not a read: the next open tries again.
@@ -2358,7 +2350,6 @@ impl DockPanel {
   /// Everything the panel knows about one pull request. Another branch means
   /// another pull request, and stale checks read as this one's.
   fn reset_pull_request_details(&mut self, cx: &mut Context<Self>) {
-    crate::sentry_context::clear_github_pr_context();
     self.awaited_review_comment = None;
     self.set_pull_request_review_comments(Vec::new(), cx);
     self.pr_author_login = None;
