@@ -5,6 +5,7 @@ import ListTodoIcon from "@lucide/astro/icons/list-todo";
 import TerminalIcon from "@lucide/astro/icons/terminal";
 import GitMergeConflictIcon from "@lucide/astro/icons/git-merge-conflict";
 import PencilLineIcon from "@lucide/astro/icons/pencil-line";
+import RotateCcwIcon from "@lucide/astro/icons/rotate-ccw";
 import ThemePicture from "./ThemePicture.astro";
 import { themeImageSources } from "../lib/themeImage";
 import gitDark from "../assets/app_screenshots/git_dark.png";
@@ -12,112 +13,202 @@ import gitLight from "../assets/app_screenshots/git_light.png";
 
 const sectionImage = await themeImageSources(gitLight, gitDark, 3020, 1894);
 
-const features = [
+const workflow = [
   {
-    name: "Edit and stage by hunk",
+    title: "Shape the diff",
     description:
-      "Edit changes directly in the diff. Stage, unstage, and restore individual hunks - or whole files - as you review, in inline or split view.",
+      "Edit files directly, stage only the hunks you trust, unstage what needs another pass, and restore the rest.",
     icon: PencilLineIcon,
+    commands: ["stage hunk", "unstage", "restore"],
   },
   {
-    name: "Interactive rebase, full width",
+    title: "Clean the branch",
     description:
-      "Reorder, squash, reword, and drop commits in a dedicated view. Clean up the agent's commits before anyone else sees them.",
+      "Squash, fixup, drop, and reorder commits in the full-width interactive rebase before the PR exists.",
     icon: ListTodoIcon,
+    commands: ["pick", "squash", "fixup", "drop"],
   },
   {
-    name: "Conflicts resolved in place",
+    title: "Recover when Git gets messy",
     description:
-      "Accept current, incoming, or both per block, walk conflicts from the keyboard, and continue the rebase or merge once clean.",
+      "Resolve conflicts, continue or abort rebases and merges, stash work, cherry-pick commits, and undo mistakes.",
     icon: GitMergeConflictIcon,
+    commands: ["conflicts", "stash", "cherry-pick"],
   },
-  {
-    name: "History next to your changes",
-    description:
-      "Browse commits in the dock and open any file as it was at any commit, without leaving your working tree.",
-    icon: GitGraphIcon,
-  },
-  {
-    name: "Built-in terminal",
-    description:
-      "Run git, build commands, and scripts without leaving Reviu. Launches in the selected repo so the working directory is always right.",
-    icon: TerminalIcon,
-  },
-  {
-    name: "Every command in the palette",
-    description:
-      "Commit, amend, undo, branch, merge, rebase, stash, cherry-pick, fetch, pull, push, force push with lease - all keyboard-first.",
-    icon: CommandIcon,
-  },
+];
+
+const dockItems = [
+  ["Changes", "12 files", "text-primary"],
+  ["History", "148 commits", "text-muted-foreground"],
+  ["Terminal", "pnpm test", "text-emerald-500"],
+  ["Review", "3 comments", "text-amber-500"],
+];
+
+const paletteCommands = [
+  "Commit",
+  "Amend commit",
+  "Fetch",
+  "Pull",
+  "Push",
+  "Force push with lease",
+  "Create branch",
+  "Merge branch",
+  "Interactive rebase",
+  "Pop stash",
 ];
 ---
 
 <section
   id="features"
-  class="bg-background py-24 sm:py-32"
+  class="relative isolate overflow-hidden py-24 sm:py-32"
   data-reveal-root
-  data-reveal-threshold="0.3"
+  data-reveal-threshold="0.25"
 >
+  <div
+    class="absolute inset-x-0 top-0 -z-10 h-px bg-linear-to-r from-transparent via-border to-transparent"
+    aria-hidden="true"
+  >
+  </div>
+  <div
+    class="absolute top-32 left-0 -z-10 h-96 w-96 rounded-full bg-cyan-400/10 blur-3xl dark:bg-cyan-400/15"
+    aria-hidden="true"
+  >
+  </div>
+
   <div class="mx-auto max-w-7xl px-6 lg:px-8">
-    <div class="reviu-reveal mx-auto max-w-2xl sm:text-center">
-      <h2 class="text-base/7 font-semibold text-primary">
-        A real Git client underneath
-      </h2>
+    <div class="grid gap-12 lg:grid-cols-[1fr_0.9fr] lg:items-end">
+      <div class="reviu-reveal max-w-3xl">
+        <p class="text-base/7 font-semibold text-primary">
+          A real Git client underneath
+        </p>
+        <h2
+          class="mt-2 text-4xl font-semibold tracking-tight text-pretty text-foreground sm:text-6xl"
+        >
+          The agent writes the code. You still own the branch.
+        </h2>
+      </div>
       <p
-        class="mt-2 text-4xl font-semibold tracking-tight text-pretty text-foreground sm:text-5xl sm:text-balance"
+        class="reviu-reveal text-lg/8 text-muted-foreground lg:pb-2"
+        style="--reveal-delay: 120ms;"
       >
-        Finish the job without switching apps.
-      </p>
-      <p class="mt-6 text-lg/8 text-muted-foreground">
-        Reviewing is half the work. Stage what's right, fix what isn't, rewrite
-        history, and push - in the same window, all from the keyboard.
+        Agent work is only useful when it turns into a clean commit. Reviu keeps
+        the Git tools close to the diff, so review decisions become staged
+        hunks, rewritten history, and a branch you can push with confidence.
       </p>
     </div>
-  </div>
-  <div class="relative overflow-hidden pt-16">
-    <div
-      class="reviu-reveal mx-auto max-w-7xl px-6 lg:px-8"
-      style="--reveal-delay: 150ms;"
-    >
-      <ThemePicture
-        sources={sectionImage}
-        alt="Reviu interactive rebase and conflict resolution screenshot"
-        loading="lazy"
-        class="mb-[-12%] rounded-sm sm:rounded-xl shadow-2xl ring-1 ring-gray-900/10 dark:ring-white/10"
-      />
-      <div aria-hidden="true" class="relative">
-        <div
-          class="absolute -inset-x-20 bottom-0 bg-linear-to-t from-background pt-[7%]"
-        >
+
+    <div class="mt-14 grid gap-6 lg:grid-cols-[1.15fr_0.85fr]">
+      <div
+        class="reviu-reveal relative rounded-[2rem] border border-border bg-background/75 p-2 shadow-2xl shadow-primary/10 backdrop-blur dark:bg-white/[0.04] dark:shadow-black/30"
+        style="--reveal-delay: 200ms;"
+      >
+        <ThemePicture
+          sources={sectionImage}
+          alt="Reviu interactive rebase, hunk staging, conflicts, and Git history screenshot"
+          loading="lazy"
+          class="rounded-[1.35rem] ring-1 ring-gray-900/10 dark:ring-white/10"
+        />
+        <div class="absolute right-6 bottom-6 hidden max-w-72 rounded-2xl border border-border bg-background/90 p-4 text-sm shadow-xl backdrop-blur md:block dark:bg-gray-950/90">
+          <p class="flex items-center gap-2 font-semibold text-foreground">
+            <GitGraphIcon class="size-4 text-primary" aria-hidden="true" />
+            Branch ready to push
+          </p>
+          <div class="mt-3 grid grid-cols-3 gap-2 text-center text-xs">
+            <div class="rounded-xl bg-emerald-500/10 px-2 py-2 text-emerald-600 dark:text-emerald-400">
+              6 staged
+            </div>
+            <div class="rounded-xl bg-amber-500/10 px-2 py-2 text-amber-600 dark:text-amber-400">
+              2 stashed
+            </div>
+            <div class="rounded-xl bg-primary/10 px-2 py-2 text-primary">
+              rebased
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="grid gap-4">
+        {
+          workflow.map((item, index) => {
+            const Icon = item.icon;
+
+            return (
+              <article
+                class="reviu-reveal rounded-3xl border border-border bg-background p-6 shadow-sm dark:bg-gray-950/40"
+                style={`--reveal-delay: ${index * 100 + 250}ms;`}
+              >
+                <div class="flex items-start gap-4">
+                  <div class="flex size-12 shrink-0 items-center justify-center rounded-2xl bg-primary/10 text-primary ring-1 ring-primary/15">
+                    <Icon class="size-5" aria-hidden="true" />
+                  </div>
+                  <div>
+                    <h3 class="text-lg font-semibold text-foreground">
+                      {item.title}
+                    </h3>
+                    <p class="mt-2 text-sm/7 text-muted-foreground">
+                      {item.description}
+                    </p>
+                  </div>
+                </div>
+                <div class="mt-5 flex flex-wrap gap-2">
+                  {item.commands.map((command) => (
+                    <span class="rounded-full border border-border bg-muted/60 px-3 py-1 text-xs font-medium text-muted-foreground dark:bg-white/[0.03]">
+                      {command}
+                    </span>
+                  ))}
+                </div>
+              </article>
+            );
+          })
+        }
+      </div>
+    </div>
+
+    <div class="mt-6 grid gap-6 lg:grid-cols-[0.8fr_1.2fr]">
+      <div
+        class="reviu-reveal rounded-3xl border border-border bg-background p-6 shadow-sm dark:bg-gray-950/40"
+        style="--reveal-delay: 450ms;"
+      >
+        <div class="flex items-center gap-3">
+          <TerminalIcon class="size-5 text-primary" aria-hidden="true" />
+          <h3 class="font-semibold text-foreground">Every surface follows the checkout</h3>
+        </div>
+        <div class="mt-5 space-y-2">
+          {
+            dockItems.map((item) => (
+              <div class="flex items-center justify-between rounded-2xl border border-border bg-muted/40 px-4 py-3 text-sm dark:bg-white/[0.03]">
+                <span class="font-medium text-foreground">{item[0]}</span>
+                <span class={`text-xs font-semibold ${item[2]}`}>{item[1]}</span>
+              </div>
+            ))
+          }
+        </div>
+      </div>
+
+      <div
+        class="reviu-reveal rounded-3xl border border-border bg-background p-6 shadow-sm dark:bg-gray-950/40"
+        style="--reveal-delay: 550ms;"
+      >
+        <div class="flex items-center gap-3">
+          <CommandIcon class="size-5 text-primary" aria-hidden="true" />
+          <h3 class="font-semibold text-foreground">Git from the command palette</h3>
+        </div>
+        <p class="mt-2 max-w-2xl text-sm/7 text-muted-foreground">
+          Commit, amend, branch, fetch, pull, push, merge, rebase, stash, and
+          cherry-pick are command-palette actions with clear disabled states and
+          keyboard shortcuts where they matter.
+        </p>
+        <div class="mt-5 grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
+          {
+            paletteCommands.map((command) => (
+              <div class="flex items-center gap-2 rounded-2xl border border-border bg-muted/40 px-3 py-2 text-sm text-foreground dark:bg-white/[0.03]">
+                <RotateCcwIcon class="size-3.5 text-primary" aria-hidden="true" />
+                {command}
+              </div>
+            ))
+          }
         </div>
       </div>
     </div>
-  </div>
-  <div class="mx-auto mt-16 max-w-7xl px-6 sm:mt-20 md:mt-24 lg:px-8">
-    <dl
-      class="mx-auto grid max-w-2xl grid-cols-1 gap-x-6 gap-y-10 text-base/7 text-muted-foreground sm:grid-cols-2 lg:mx-0 lg:max-w-none lg:grid-cols-3 lg:gap-x-8 lg:gap-y-16"
-    >
-      {
-        features.map((feature, index) => {
-          const Icon = feature.icon;
-
-          return (
-            <div
-              class="reviu-reveal relative pl-9"
-              style={`--reveal-delay: ${index * 80 + 200}ms;`}
-            >
-              <dt class="font-semibold text-foreground">
-                <Icon
-                  aria-hidden="true"
-                  class="absolute top-1 left-1 size-5 text-primary"
-                />
-                {feature.name}
-              </dt>
-              <dd class="inline text-sm">{feature.description}</dd>
-            </div>
-          );
-        })
-      }
-    </dl>
   </div>
 </section>
