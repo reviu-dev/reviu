@@ -1,12 +1,13 @@
 ---
 import sessionsDark from "../assets/app_screenshots/sessions_dark.png";
 import sessionsLight from "../assets/app_screenshots/sessions_light.png";
-import FileDiffIcon from "@lucide/astro/icons/file-diff";
+import GitBranchIcon from "@lucide/astro/icons/git-branch";
 import KeyRoundIcon from "@lucide/astro/icons/key-round";
 import LayersIcon from "@lucide/astro/icons/layers";
 import LockIcon from "@lucide/astro/icons/lock";
 import MessageCircleReplyIcon from "@lucide/astro/icons/message-circle-reply";
 import ReceiptTextIcon from "@lucide/astro/icons/receipt-text";
+import TerminalIcon from "@lucide/astro/icons/terminal";
 import ThemePicture from "./ThemePicture.astro";
 import { themeImageSources } from "../lib/themeImage";
 
@@ -17,110 +18,233 @@ const sectionImage = await themeImageSources(
   1894,
 );
 
-const features = [
+const sessionRows = [
+  ["Add percentage discounts", "working", "bg-emerald-500"],
+  ["Fix tax rounding", "waiting", "bg-amber-500"],
+  ["Write cart property tests", "review", "bg-blue-500"],
+];
+
+const cards = [
   {
-    name: "Parallel sessions, isolated worktrees",
+    name: "Parallel work without collisions",
     description:
-      "Run several agents at once, each session in its own Git worktree. They never step on each other's changes, and you switch between them as they finish.",
-    icon: LayersIcon,
+      "Start a session in the main checkout or give the agent its own worktree. Reviu keeps branch, terminal, changes, and history pointed at the selected session.",
+    icon: GitBranchIcon,
+    visual: "worktrees",
   },
   {
-    name: "Your subscription, not an API key",
+    name: "The transcript stays useful",
     description:
-      "Reviu drives the agent you already installed and signed into - Claude Code, Codex, Gemini, and twenty more from the official ACP registry. No key to paste, no separate inference bill.",
-    icon: KeyRoundIcon,
+      "Tool calls, command output, reads, edits, permissions, and failed turns are shown as reviewable events instead of a terminal wall.",
+    icon: TerminalIcon,
+    visual: "tools",
   },
   {
-    name: "The diff is always one click away",
+    name: "Review comments become instructions",
     description:
-      "Every file the agent touches lands in the Changes panel as it happens. Open it in a real diff editor, not a terminal scrollback.",
-    icon: FileDiffIcon,
-  },
-  {
-    name: "Inline comments go back to the agent",
-    description:
-      "Draft review comments on the exact lines you want changed, then send the batch to the agent in one action. No copy-paste.",
+      "Leave comments on the local diff, collect them in the Review panel, and send the selected batch back to the agent with file and line context.",
     icon: MessageCircleReplyIcon,
+    visual: "comments",
   },
   {
-    name: "Every turn ends with a receipt",
+    name: "Local by default",
     description:
-      "Files edited, lines added and removed, per file. Each row opens its diff, Review jumps into the diff view, and Undo reverts the turn.",
-    icon: ReceiptTextIcon,
-  },
-  {
-    name: "Local and private by default",
-    description:
-      "Agents run as local processes on your machine. Your code never goes through Reviu's servers.",
+      "Reviu launches your installed agent CLI with the subscription you already use. Your code and agent process stay on your machine.",
     icon: LockIcon,
+    visual: "local",
   },
 ];
 ---
 
 <section
-  class="bg-background py-24 sm:py-32"
+  class="relative isolate overflow-hidden bg-muted/30 py-24 sm:py-32 dark:bg-white/[0.02]"
   data-reveal-root
-  data-reveal-threshold="0.3"
+  data-reveal-threshold="0.2"
 >
-  <div class="mx-auto max-w-7xl px-6 lg:px-8">
-    <div class="reviu-reveal mx-auto max-w-2xl sm:text-center">
-      <h2 class="text-base/7 font-semibold text-primary">Agent sessions</h2>
-      <p
-        class="mt-2 text-4xl font-semibold tracking-tight text-pretty text-foreground sm:text-5xl sm:text-balance"
-      >
-        The agent works where you review.
-      </p>
-      <p class="mt-6 text-lg/8 text-muted-foreground">
-        One window: sessions on the left, the conversation or the diff in the
-        centre, your repository on the right. No terminal juggling, no
-        copy-paste between apps.
-      </p>
-    </div>
+  <div
+    class="absolute inset-x-0 top-0 -z-10 h-px bg-linear-to-r from-transparent via-border to-transparent"
+    aria-hidden="true"
+  >
   </div>
-  <div class="relative overflow-hidden pt-16">
-    <div
-      class="reviu-reveal mx-auto max-w-7xl px-6 lg:px-8"
-      style="--reveal-delay: 150ms;"
-    >
-      <ThemePicture
-        sources={sectionImage}
-        alt="Reviu agent sessions screenshot"
-        loading="lazy"
-        class="mb-[-12%] rounded-sm sm:rounded-xl shadow-2xl ring-1 ring-gray-900/10 dark:ring-white/10"
-      />
-      <div aria-hidden="true" class="relative">
+  <div
+    class="absolute top-24 right-0 -z-10 h-96 w-96 rounded-full bg-primary/10 blur-3xl dark:bg-primary/20"
+    aria-hidden="true"
+  >
+  </div>
+
+  <div class="mx-auto max-w-7xl px-6 lg:px-8">
+    <div class="grid items-center gap-12 lg:grid-cols-[0.9fr_1.1fr]">
+      <div>
+        <div class="reviu-reveal max-w-2xl">
+          <h2 class="text-base/7 font-semibold text-primary">Agent sessions</h2>
+          <p
+            class="mt-2 text-4xl font-semibold tracking-tight text-pretty text-foreground sm:text-5xl"
+          >
+            Manage agents like real work, not disposable chats.
+          </p>
+          <p class="mt-6 text-lg/8 text-muted-foreground">
+            Reviu turns each coding task into a session with its own state:
+            conversation, file edits, branch, terminal, checkpoints, and review
+            queue. You can leave agents running while you inspect what changed.
+          </p>
+        </div>
+
         <div
-          class="absolute -inset-x-20 bottom-0 bg-linear-to-t from-background pt-[7%]"
+          class="reviu-reveal mt-8 rounded-3xl border border-border bg-background p-4 shadow-sm dark:bg-gray-950/40"
+          style="--reveal-delay: 150ms;"
         >
+          <div class="flex items-center justify-between gap-4">
+            <div>
+              <p class="text-sm font-semibold text-foreground">Today in checkout</p>
+              <p class="text-xs text-muted-foreground">3 sessions across 2 worktrees</p>
+            </div>
+            <div class="rounded-full bg-primary/10 px-3 py-1 text-xs font-semibold text-primary">
+              live
+            </div>
+          </div>
+          <div class="mt-4 space-y-2">
+            {
+              sessionRows.map((row) => (
+                <div class="flex items-center gap-3 rounded-2xl border border-border bg-muted/40 px-3 py-2 dark:bg-white/[0.03]">
+                  <span class={`size-2.5 rounded-full ${row[2]}`} />
+                  <span class="min-w-0 flex-1 truncate text-sm font-medium text-foreground">
+                    {row[0]}
+                  </span>
+                  <span class="text-xs text-muted-foreground">{row[1]}</span>
+                </div>
+              ))
+            }
+          </div>
+        </div>
+
+        <div
+          class="reviu-reveal mt-6 grid gap-3 sm:grid-cols-3"
+          style="--reveal-delay: 250ms;"
+        >
+          <div class="rounded-2xl border border-border bg-background p-4 shadow-sm dark:bg-gray-950/40">
+            <LayersIcon class="size-5 text-primary" aria-hidden="true" />
+            <p class="mt-3 text-sm font-semibold text-foreground">Worktrees</p>
+            <p class="mt-1 text-xs text-muted-foreground">parallel by default</p>
+          </div>
+          <div class="rounded-2xl border border-border bg-background p-4 shadow-sm dark:bg-gray-950/40">
+            <ReceiptTextIcon class="size-5 text-primary" aria-hidden="true" />
+            <p class="mt-3 text-sm font-semibold text-foreground">Receipts</p>
+            <p class="mt-1 text-xs text-muted-foreground">files and line counts</p>
+          </div>
+          <div class="rounded-2xl border border-border bg-background p-4 shadow-sm dark:bg-gray-950/40">
+            <KeyRoundIcon class="size-5 text-primary" aria-hidden="true" />
+            <p class="mt-3 text-sm font-semibold text-foreground">Your agent</p>
+            <p class="mt-1 text-xs text-muted-foreground">no API key to paste</p>
+          </div>
+        </div>
+      </div>
+
+      <div
+        class="reviu-reveal relative"
+        style="--reveal-delay: 300ms;"
+      >
+        <div
+          class="absolute -inset-6 -z-10 rounded-[3rem] bg-linear-to-br from-primary/15 via-transparent to-cyan-400/10 blur-2xl dark:from-primary/25"
+          aria-hidden="true"
+        >
+        </div>
+        <div class="rounded-[2rem] border border-border bg-background/75 p-2 shadow-2xl shadow-primary/10 backdrop-blur dark:bg-white/[0.04] dark:shadow-black/30">
+          <ThemePicture
+            sources={sectionImage}
+            alt="Reviu agent sessions workspace screenshot"
+            loading="lazy"
+            class="rounded-[1.35rem] ring-1 ring-gray-900/10 dark:ring-white/10"
+          />
+        </div>
+        <div class="absolute -bottom-6 left-6 hidden max-w-72 rounded-2xl border border-border bg-background/90 p-4 text-sm shadow-xl backdrop-blur md:block dark:bg-gray-950/90">
+          <p class="flex items-center gap-2 font-semibold text-foreground">
+            <ReceiptTextIcon class="size-4 text-primary" aria-hidden="true" />
+            Turn receipt
+          </p>
+          <p class="mt-2 text-muted-foreground">
+            4 files edited, 86 lines added, 18 removed. Review opens the diff.
+          </p>
         </div>
       </div>
     </div>
-  </div>
-  <div class="mx-auto mt-16 max-w-7xl px-6 sm:mt-20 md:mt-24 lg:px-8">
-    <dl
-      class="mx-auto grid max-w-2xl grid-cols-1 gap-x-6 gap-y-10 text-base/7 text-muted-foreground sm:grid-cols-2 lg:mx-0 lg:max-w-none lg:grid-cols-3 lg:gap-x-8 lg:gap-y-16"
-    >
+
+    <div class="mt-20 grid gap-4 lg:grid-cols-4">
       {
-        features.map((feature, index) => {
-          const Icon = feature.icon;
+        cards.map((card, index) => {
+          const Icon = card.icon;
 
           return (
-            <div
-              class="reviu-reveal relative pl-9"
-              style={`--reveal-delay: ${index * 80 + 200}ms;`}
+            <article
+              class="reviu-reveal rounded-3xl border border-border bg-background p-6 shadow-sm dark:bg-gray-950/40"
+              style={`--reveal-delay: ${index * 90 + 250}ms;`}
             >
-              <dt class="font-semibold text-foreground">
-                <Icon
-                  aria-hidden="true"
-                  class="absolute top-1 left-1 size-5 text-primary"
-                />
-                {feature.name}
-              </dt>
-              <dd class="inline text-sm">{feature.description}</dd>
-            </div>
+              <div class="flex size-12 items-center justify-center rounded-2xl bg-primary/10 text-primary ring-1 ring-primary/15">
+                <Icon class="size-5" aria-hidden="true" />
+              </div>
+              <h3 class="mt-6 text-lg font-semibold text-foreground">
+                {card.name}
+              </h3>
+              <p class="mt-3 text-sm/7 text-muted-foreground">
+                {card.description}
+              </p>
+
+              {card.visual === "worktrees" && (
+                <div class="mt-6 rounded-2xl border border-border bg-muted/40 p-3 text-xs dark:bg-white/[0.03]">
+                  {[
+                    ["main", "current"],
+                    ["reviu-discounts", "agent"],
+                    ["reviu-tax-rounding", "agent"],
+                  ].map((branch) => (
+                    <div class="flex items-center justify-between rounded-lg px-2 py-1.5">
+                      <span class="font-mono text-muted-foreground">{branch[0]}</span>
+                      <span class="font-semibold text-primary">{branch[1]}</span>
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              {card.visual === "tools" && (
+                <div class="mt-6 space-y-2 rounded-2xl border border-border bg-muted/40 p-3 text-xs dark:bg-white/[0.03]">
+                  {[
+                    ["read", "src/discounts.ts"],
+                    ["edit", "+42 -8"],
+                    ["test", "vitest run"],
+                  ].map((tool) => (
+                    <div class="grid grid-cols-[3rem_1fr] gap-2 rounded-lg bg-background/70 px-2 py-1.5 dark:bg-gray-950/60">
+                      <span class="font-semibold text-primary">{tool[0]}</span>
+                      <span class="truncate text-muted-foreground">{tool[1]}</span>
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              {card.visual === "comments" && (
+                <div class="mt-6 rounded-2xl border border-primary/20 bg-primary/10 p-3 text-xs text-primary">
+                  <div class="flex items-center justify-between gap-3">
+                    <span>3 comments selected</span>
+                    <span class="rounded-full bg-primary px-2 py-1 font-semibold text-white">
+                      Send
+                    </span>
+                  </div>
+                </div>
+              )}
+
+              {card.visual === "local" && (
+                <div class="mt-6 rounded-2xl border border-border bg-muted/40 p-3 text-xs dark:bg-white/[0.03]">
+                  <div class="flex items-center justify-between gap-3">
+                    <span class="text-muted-foreground">agent process</span>
+                    <span class="font-semibold text-emerald-500">local</span>
+                  </div>
+                  <div class="mt-2 flex items-center justify-between gap-3">
+                    <span class="text-muted-foreground">subscription</span>
+                    <span class="font-semibold text-primary">yours</span>
+                  </div>
+                </div>
+              )}
+            </article>
           );
         })
       }
-    </dl>
+    </div>
   </div>
 </section>
