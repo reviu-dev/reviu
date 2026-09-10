@@ -388,16 +388,23 @@ impl SessionPage {
       &repo_snapshot,
       |this, snapshot, event: &RepoSnapshotEvent, cx| match event {
         RepoSnapshotEvent::Refreshed => {
-          let (checkout_root, branch_status, working_tree_stats, head_updated_at_secs) = snapshot
-            .read_with(cx, |snapshot, _| {
-              (
-                snapshot.repo_root().cloned(),
-                snapshot.branch_status().cloned(),
-                snapshot.working_tree_stats(),
-                snapshot.head_updated_at_secs(),
-              )
-            });
+          let (
+            checkout_root,
+            branch_status,
+            default_branch,
+            working_tree_stats,
+            head_updated_at_secs,
+          ) = snapshot.read_with(cx, |snapshot, _| {
+            (
+              snapshot.repo_root().cloned(),
+              snapshot.branch_status().cloned(),
+              snapshot.default_branch().cloned(),
+              snapshot.working_tree_stats(),
+              snapshot.head_updated_at_secs(),
+            )
+          });
           this.dock_panel.update(cx, |panel, cx| {
+            panel.set_default_branch(default_branch, cx);
             panel.set_branch_status(branch_status.clone(), cx)
           });
           this.session_list.update(cx, |list, cx| {

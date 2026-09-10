@@ -66,6 +66,7 @@ const DOCK_PANEL_HEADER_HEIGHT_PX: f32 = 40.0;
 const DOCK_PANEL_CREATE_PR_DEBUG_SELECTOR: &str = "dock-panel-create-pr";
 const DOCK_PANEL_PUBLISH_AND_CREATE_PR_DEBUG_SELECTOR: &str = "dock-panel-publish-and-create-pr";
 const DOCK_PANEL_COMPARE_DEBUG_SELECTOR: &str = "dock-panel-compare-on-github";
+const DOCK_PANEL_DEFAULT_BRANCH_PR_DEBUG_SELECTOR: &str = "dock-panel-default-branch-pr";
 const DOCK_PANEL_REFRESH_DEBUG_SELECTOR: &str = "dock-panel-refresh";
 use std::rc::Rc;
 
@@ -898,6 +899,17 @@ pub(crate) enum BranchPrState {
   Found(GithubBranchContext, Box<GithubPullRequest>),
 }
 
+fn local_branch_name(branch: &git::BranchRef) -> &str {
+  match branch.kind {
+    git::BranchKind::Local => branch.name.as_str(),
+    git::BranchKind::Remote => branch
+      .name
+      .split_once('/')
+      .map(|(_, name)| name)
+      .unwrap_or(branch.name.as_str()),
+  }
+}
+
 /// Which pull request a state is about, if any.
 fn pull_request_identity(state: &BranchPrState) -> Option<(String, String, u64)> {
   match state {
@@ -1015,6 +1027,7 @@ pub struct DockPanel {
   rebase_in_progress: bool,
   head_status: HeadCommitStatus,
   branch_status: Option<git::BranchStatus>,
+  default_branch: Option<git::BranchRef>,
   pub(crate) commit_input: Entity<TextareaState>,
   commit_message_drafts: HashMap<PathBuf, String>,
   amend_pending: bool,
@@ -1300,6 +1313,7 @@ impl DockPanel {
       rebase_in_progress: false,
       head_status: HeadCommitStatus::default(),
       branch_status: None,
+      default_branch: None,
       commit_input,
       commit_message_drafts: HashMap::new(),
       amend_pending: false,
@@ -2116,6 +2130,7 @@ impl DockPanel {
       self.rebase_in_progress = false;
       self.head_status = HeadCommitStatus::default();
       self.branch_status = None;
+      self.default_branch = None;
       cx.notify();
       return;
     };
@@ -3206,9 +3221,27 @@ impl DockPanel {
     cx.notify();
   }
 
+  pub(crate) fn set_default_branch(
+    &mut self,
+    default_branch: Option<git::BranchRef>,
+    cx: &mut Context<Self>,
+  ) {
+    self.default_branch = default_branch;
+    cx.notify();
+  }
+
   /// The palette offers the same thing as the Pull request tab, so the keyboard
   /// reaches the branch's pull request without going through the dock.
   pub(crate) fn branch_pull_request_command(&self) -> Option<CommandPaletteCommand> {
+    if self.current_branch_is_default_branch()
+      && matches!(
+        self.branch_pr,
+        BranchPrState::Loading | BranchPrState::Missing(_)
+      )
+    {
+      return None;
+    }
+
     match &self.branch_pr {
       BranchPrState::NoAccess | BranchPrState::NoRemote => None,
       BranchPrState::Loading => Some(
@@ -3228,7 +3261,7 @@ impl DockPanel {
     let BranchPrState::Missing(context) = &self.branch_pr else {
       return;
     };
-    if self.branch_needs_publishing() {
+    if self.current_branch_is_default_branch() || self.branch_needs_publishing() {
       return;
     }
     open_create_pull_request_dialog(
@@ -3283,6 +3316,14 @@ impl DockPanel {
       false,
       None,
     ));
+  }
+
+  fn current_branch_is_default_branch(&self) -> bool {
+    self
+      .branch_status
+      .as_ref()
+      .zip(self.default_branch.as_ref())
+      .is_some_and(|(status, default_branch)| status.name == local_branch_name(default_branch))
   }
 
   /// GitHub cannot open a pull request for a branch its remote has never seen.
@@ -3394,6 +3435,7 @@ impl DockPanel {
       self.pr_refresh_pending = 0;
       self.pr_fetched_at = None;
       self.pr_branch = None;
+      self.default_branch = None;
       self.reset_pull_request_details(cx);
       self.set_branch_pr(BranchPrState::Loading, cx);
     }
@@ -4095,11 +4137,30 @@ impl DockPanel {
     actions: Vec<AnyElement>,
     cx: &mut Context<Self>,
   ) -> AnyElement {
+    self.render_pr_empty_state_with_debug_selector(
+      "dock-panel-pr-empty-state",
+      icon,
+      title,
+      description,
+      actions,
+      cx,
+    )
+  }
+
+  fn render_pr_empty_state_with_debug_selector(
+    &self,
+    debug_selector: &'static str,
+    icon: UiIconName,
+    title: impl Into<SharedString>,
+    description: impl Into<SharedString>,
+    actions: Vec<AnyElement>,
+    cx: &mut Context<Self>,
+  ) -> AnyElement {
     let theme = cx.theme().clone();
     let has_actions = !actions.is_empty();
 
     v_flex()
-      .debug_selector(|| "dock-panel-pr-empty-state".to_string())
+      .debug_selector(move || debug_selector.to_string())
       .flex_1()
       .min_h_0()
       .items_center()
@@ -4198,6 +4259,19 @@ impl DockPanel {
         Vec::new(),
         cx,
       ),
+      BranchPrState::Missing(context) if self.current_branch_is_default_branch() => {
+        self.render_pr_empty_state_with_debug_selector(
+          DOCK_PANEL_DEFAULT_BRANCH_PR_DEBUG_SELECTOR,
+          UiIconName::GitBranch,
+          "Default branch",
+          format!(
+            "{} is the repository's default branch. Pull requests appear here when you switch to a feature branch.",
+            context.branch
+          ),
+          Vec::new(),
+          cx,
+        )
+      }
       BranchPrState::Missing(context) if self.branch_needs_publishing() => {
         let context = context.clone();
         self.render_pr_empty_state(
@@ -5411,6 +5485,68 @@ mod tests {
       cx.debug_bounds(DOCK_PANEL_PUBLISH_AND_CREATE_PR_DEBUG_SELECTOR)
         .is_none()
     );
+  }
+
+  #[gpui::test]
+  async fn the_default_branch_does_not_offer_a_pull_request_form(cx: &mut TestAppContext) {
+    cx.update(gpui_component::init);
+    let repo = TempRepo::init("dock-default-branch-pr");
+    commit_text_file(&repo.path, Path::new("README.md"), "v1\n", "initial");
+    let default_branch = git::current_branch_status(&repo.path)
+      .expect("default branch status")
+      .name;
+
+    let (panel, cx) = add_dock_panel_window(Some(repo.path.clone()), cx);
+    await_refresh(&panel, cx).await;
+
+    let context = GithubBranchContext {
+      owner: "acme".to_string(),
+      repo: "widget".to_string(),
+      branch: default_branch.clone(),
+    };
+    panel.update_in(cx, |panel, window, cx| {
+      panel.open_tab(DockPanelTab::PullRequest, window, cx)
+    });
+    cx.run_until_parked();
+    panel.update(cx, |panel, cx| {
+      panel.branch_pr = BranchPrState::Missing(context);
+      panel.set_default_branch(
+        Some(git::BranchRef {
+          name: format!("origin/{default_branch}"),
+          kind: git::BranchKind::Remote,
+        }),
+        cx,
+      );
+      panel.set_branch_status(
+        Some(git::BranchStatus {
+          name: default_branch,
+          ahead: 0,
+          behind: 0,
+          has_upstream: true,
+        }),
+        cx,
+      );
+    });
+    cx.run_until_parked();
+
+    assert!(
+      cx.debug_bounds(DOCK_PANEL_DEFAULT_BRANCH_PR_DEBUG_SELECTOR)
+        .is_some(),
+      "the pull request tab explains that the current branch is the default branch"
+    );
+    assert!(
+      cx.debug_bounds(DOCK_PANEL_CREATE_PR_DEBUG_SELECTOR)
+        .is_none()
+    );
+    assert!(cx.debug_bounds(DOCK_PANEL_COMPARE_DEBUG_SELECTOR).is_none());
+    panel.read_with(cx, |panel, _| {
+      assert!(panel.branch_pull_request_command().is_none());
+    });
+    panel.update_in(cx, |panel, window, cx| {
+      panel.create_branch_pull_request(window, cx)
+    });
+    cx.run_until_parked();
+    assert!(!cx.update(|window, cx| window.has_active_dialog(cx)));
   }
 
   #[gpui::test]
